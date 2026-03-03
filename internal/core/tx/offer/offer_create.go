@@ -4,7 +4,6 @@ package offer
 
 import (
 	"errors"
-	"fmt"
 	"math/big"
 	"strings"
 
@@ -401,18 +400,22 @@ func (o *OfferCreate) ApplyCreate(ctx *tx.ApplyContext) tx.Result {
 	activeSb := sb
 	if !applyMain {
 		activeSb = sbCancel
+		// sbCancel has no crossing changes, only removable offer deletions.
+		// The account balance will be read from the sandbox after applying.
 	}
 	if err := activeSb.ApplyToView(ctx.View); err != nil {
-		fmt.Printf("[OfferCreate] tefINTERNAL at ApplyToView: %v\n", err)
 		return tx.TefINTERNAL
 	}
 
-	// Re-read the account from the view to get the sandbox's OwnerCount changes
-	// (trust line creation/deletion during crossing), then add the ctx delta
-	// (offer placement/cancel). This merges both sources of OwnerCount modification.
+	// Re-read the account from the view to get the sandbox's changes.
+	// In rippled, mTxnAccount lives inside the sandbox so changes are automatic.
+	// In goXRPL, ctx.Account is separate, so we must merge:
+	//   - Balance: read directly from sandbox (crossing modifies it)
+	//   - OwnerCount: sandbox changes + ctx delta (offer placement/cancel)
 	accountKey := keylet.Account(ctx.AccountID)
 	if updatedData, readErr := ctx.View.Read(accountKey); readErr == nil && updatedData != nil {
 		if updatedAccount, parseErr := sle.ParseAccountRoot(updatedData); parseErr == nil {
+			ctx.Account.Balance = updatedAccount.Balance
 			ctx.Account.OwnerCount = uint32(int32(updatedAccount.OwnerCount) + ctxDelta)
 		}
 	}
@@ -524,6 +527,8 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 			ctx.Config.ReserveIncrement,
 			rules.Enabled(amendment.FeatureFixReducedOffersV1),
 			rules.Enabled(amendment.FeatureFixReducedOffersV2),
+			rules.Enabled(amendment.FeatureFixRmSmallIncreasedQOffers),
+			rules.Enabled(amendment.FeatureFlowSortStrands),
 		)
 
 		// Convert result amounts back
@@ -571,27 +576,17 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 			}
 		}
 
-		// Update ctx.Account.Balance to reflect XRP changes during crossing
-		// The engine writes ctx.Account after Apply(), so we must update it here
-		// Reference: The taker may pay or receive XRP for the crossing
-		if placeOffer.in.IsNative() {
-			// Taker paid XRP
-			paidDrops := uint64(placeOffer.in.Drops())
-			if ctx.Account.Balance >= paidDrops {
-				ctx.Account.Balance -= paidDrops
-			}
-		}
-		if placeOffer.out.IsNative() {
-			// Taker received XRP
-			receivedDrops := uint64(placeOffer.out.Drops())
-			ctx.Account.Balance += receivedDrops
-		}
+		// NOTE: We do NOT manually adjust ctx.Account.Balance here.
+		// In rippled, mTxnAccount lives inside the sandbox, so balance changes
+		// from crossing are applied when the sandbox is applied. In goXRPL,
+		// ctx.Account is separate, so we re-read the account balance from the
+		// view AFTER applying the sandbox (see ApplyCreate lines 421-424).
+		// Manually adjusting here would DOUBLE-COUNT the XRP changes.
 
 		// Remove unfunded/self-crossed offers that were marked during crossing.
 		// Must delete from BOTH sandboxes so that regardless of which one is applied
 		// (sb for success, sbCancel for FillOrKill failure), orphan offers are cleaned up.
 		// Reference: rippled CreateOffer.cpp lines 420-426: deletes from psb AND psbCancel.
-		fmt.Printf("[OfferCreate] Processing %d removable offers\n", len(crossResult.RemovableOffers))
 		for offerKey := range crossResult.RemovableOffers {
 			offerKeylet := keylet.Keylet{Key: offerKey}
 
@@ -602,8 +597,7 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 				if err == nil {
 					ownerID, err := sle.DecodeAccountID(offer.Account)
 					if err == nil {
-						delResult := offerDeleteInView(sb, offer)
-						fmt.Printf("[OfferCreate] RemovableOffer %x: sb offerDeleteInView=%v owner=%s\n", offerKey[:8], delResult, offer.Account)
+						offerDeleteInView(sb, offer)
 						adjustOwnerCountInView(sb, ownerID, -1)
 					}
 				}
@@ -676,23 +670,64 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 			remainingPays = saTakerPays
 		} else if bSell {
 			// Sell offer with remaining: subtract from TakerGets, calculate TakerPays by ratio
-			// Reference: rippled CreateOffer.cpp lines 474-489
-			// The fixReducedOffersV1 amendment changes the rounding direction:
-			// - Before: round UP (divRound with roundUp=true)
-			// - After: round DOWN (divRoundStrict with roundUp=false)
+			// Reference: rippled CreateOffer.cpp lines 447-489
+			// rate = Quality{takerAmount.out, takerAmount.in}.rate() = TakerGets/TakerPays
+			// afterCross.out = divRound(afterCross.in, rate, TakerPays.issue, roundUp)
+			// The fixReducedOffersV1 amendment changes the rounding:
+			// - Before: divRound with roundUp=true
+			// - After: divRoundStrict with roundUp=false
 			remainingGets = subtractAmounts(saTakerGets, placeOffer.in) // placeOffer.in is NET
-			roundUp := !rules.Enabled(amendment.FeatureFixReducedOffersV1)
-			remainingPays = multiplyByRatio(remainingGets, o.TakerPays, o.TakerGets, roundUp)
+			rate := payment.QualityFromAmounts(
+				payment.ToEitherAmount(saTakerGets),
+				payment.ToEitherAmount(saTakerPays),
+			).Rate()
+			outNative := saTakerPays.IsNative()
+			outCurrency := saTakerPays.Currency
+			outIssuer := saTakerPays.Issuer
+			if rules.Enabled(amendment.FeatureFixReducedOffersV1) {
+				remainingPays = offerDivRoundStrict(remainingGets, rate, outNative, outCurrency, outIssuer, false)
+			} else {
+				remainingPays = offerDivRound(remainingGets, rate, outNative, outCurrency, outIssuer, true)
+			}
 		} else {
 			// Non-sell offer with remaining: subtract from TakerPays, calculate TakerGets by ratio
-			// For non-sell offers, always round up
+			// Reference: rippled CreateOffer.cpp lines 497-503
+			// afterCross.in = mulRound(afterCross.out, rate, TakerGets.issue, true)
+			// For non-sell offers, always round up (mulRound, non-strict)
 			remainingPays = subtractAmounts(saTakerPays, placeOffer.out)
-			remainingGets = multiplyByRatio(remainingPays, o.TakerGets, o.TakerPays, true)
+			rate := payment.QualityFromAmounts(
+				payment.ToEitherAmount(saTakerGets),
+				payment.ToEitherAmount(saTakerPays),
+			).Rate()
+			outNative := saTakerGets.IsNative()
+			outCurrency := saTakerGets.Currency
+			outIssuer := saTakerGets.Issuer
+			remainingGets = offerMulRound(remainingPays, rate, outNative, outCurrency, outIssuer, true)
 		}
 
 		// Check if offer is fully filled
-		// Reference: lines 757-761
-		if isAmountZeroOrNegative(remainingGets) || isAmountZeroOrNegative(remainingPays) {
+		// Reference: rippled CreateOffer.cpp lines 757-761
+		fullyCrossed := isAmountZeroOrNegative(remainingGets) || isAmountZeroOrNegative(remainingPays)
+
+		// Without fixFillOrKill, FoK requires TakerGets to be fully consumed
+		// (GROSS paid >= original TakerGets), not just TakerPays fully received.
+		// The proportional remaining calculation can yield zero even when TakerGets
+		// isn't fully consumed (because TakerPays was fully satisfied at a better rate).
+		// Reference: rippled CreateOffer.cpp: pre-amendment requires full TakerGets
+		// consumption for FoK; post-amendment relaxes non-sell FoK.
+		if fullyCrossed && bFillOrKill && !rules.Enabled(amendment.FeatureFixFillOrKill) {
+			if !isAmountZeroOrNegative(remainingWithGross) {
+				// FoK not satisfied: TakerGets not fully consumed.
+				// Remaining amounts are zero from proportional calc, so we can't
+				// create a remaining offer. Return FoK failure directly.
+				if rules.Enabled(amendment.FeatureFix1578) {
+					return tx.TecKILLED, false
+				}
+				return tx.TesSUCCESS, false
+			}
+		}
+
+		if fullyCrossed {
 			// Offer fully crossed - FoK is satisfied
 			return tx.TesSUCCESS, true
 		}
@@ -705,12 +740,10 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 
 	// Sanity check: amounts should be positive
 	if isAmountZeroOrNegative(saTakerPays) || isAmountZeroOrNegative(saTakerGets) {
-		fmt.Printf("[OfferCreate] tefINTERNAL at sanity check: saTakerPays=%v saTakerGets=%v\n", saTakerPays, saTakerGets)
 		return tx.TefINTERNAL, false
 	}
 
 	if result != tx.TesSUCCESS {
-		fmt.Printf("[OfferCreate] returning non-success result: %v\n", result)
 		return result, false
 	}
 
@@ -776,7 +809,6 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
-		fmt.Printf("[OfferCreate] tefINTERNAL at DirInsert(ownerDir): %v\n", err)
 		return tx.TefINTERNAL, false
 	}
 
@@ -798,7 +830,6 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 		// Note: DomainID is stored on the offer itself, not the directory
 	})
 	if err != nil {
-		fmt.Printf("[OfferCreate] tefINTERNAL at DirInsert(bookDir): %v\n", err)
 		return tx.TefINTERNAL, false
 	}
 
@@ -849,12 +880,10 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 	// Serialize and store the offer
 	offerData, err := sle.SerializeLedgerOffer(ledgerOffer)
 	if err != nil {
-		fmt.Printf("[OfferCreate] tefINTERNAL at SerializeLedgerOffer: %v\n", err)
 		return tx.TefINTERNAL, false
 	}
 
 	if err := sb.Insert(offerKey, offerData); err != nil {
-		fmt.Printf("[OfferCreate] tefINTERNAL at Insert(offerKey): %v\n", err)
 		return tx.TefINTERNAL, false
 	}
 
@@ -1081,6 +1110,340 @@ func multiplyByRatio(a, num, den tx.Amount, roundUp bool) tx.Amount {
 	}
 
 	return tx.NewIssuedAmount(mantissa, exponent, num.Currency, num.Issuer)
+}
+
+// offerDivRound divides num by den using rippled's divRound (non-strict) algorithm
+// with native-aware canonicalization. When native=true, uses canonicalizeRound for
+// XRP drops; when native=false, uses IOU canonicalize.
+// Reference: rippled STAmount.cpp divRoundImpl with canonicalizeRound + DontAffectNumberRoundMode
+func offerDivRound(num, den tx.Amount, native bool, currency, issuer string, roundUp bool) tx.Amount {
+	if den.IsZero() || num.IsZero() {
+		if native {
+			return tx.NewXRPAmount(0)
+		}
+		return tx.NewIssuedAmount(0, -100, currency, issuer)
+	}
+
+	numVal := num.Mantissa()
+	numOff := num.Exponent()
+	denVal := den.Mantissa()
+	denOff := den.Exponent()
+
+	if num.IsNative() {
+		if numVal < 0 {
+			numVal = -numVal
+		}
+		for numVal < sle.MinMantissa {
+			numVal *= 10
+			numOff--
+		}
+	}
+	if den.IsNative() {
+		if denVal < 0 {
+			denVal = -denVal
+		}
+		for denVal < sle.MinMantissa {
+			denVal *= 10
+			denOff--
+		}
+	}
+
+	resultNegative := num.IsNegative() != den.IsNegative()
+
+	if numVal < 0 {
+		numVal = -numVal
+	}
+	if denVal < 0 {
+		denVal = -denVal
+	}
+
+	// muldiv_round: (numVal * 10^17 + rounding) / denVal
+	tenTo17 := new(big.Int).Exp(big.NewInt(10), big.NewInt(17), nil)
+	numerator := new(big.Int).Mul(big.NewInt(numVal), tenTo17)
+	if resultNegative != roundUp {
+		numerator.Add(numerator, new(big.Int).Sub(big.NewInt(denVal), big.NewInt(1)))
+	}
+	quotient := new(big.Int).Div(numerator, big.NewInt(denVal))
+	amount := quotient.Uint64()
+	offset := numOff - denOff - 17
+
+	if resultNegative != roundUp {
+		if native {
+			// canonicalizeRound for native (XRP drops)
+			drops := payment.CanonicalizeDrops(int64(amount), offset)
+			if resultNegative {
+				drops = -drops
+			}
+			return tx.NewXRPAmount(drops)
+		}
+		// canonicalizeRound for IOU
+		if amount > uint64(sle.MaxMantissa) {
+			for amount > 10*uint64(sle.MaxMantissa) {
+				amount /= 10
+				offset++
+			}
+			amount += 9
+			amount /= 10
+			offset++
+		}
+	} else if native {
+		// No canonicalize needed, but still need to convert to drops
+		drops := int64(amount)
+		for offset > 0 {
+			drops *= 10
+			offset--
+		}
+		for offset < 0 {
+			drops /= 10
+			offset++
+		}
+		if resultNegative {
+			drops = -drops
+		}
+		return tx.NewXRPAmount(drops)
+	}
+
+	// DontAffectNumberRoundMode: NO guard
+	mantissa := int64(amount)
+	if resultNegative {
+		mantissa = -mantissa
+	}
+	result := sle.NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
+
+	if roundUp && !resultNegative && result.IsZero() {
+		if native {
+			return tx.NewXRPAmount(1)
+		}
+		return sle.NewIssuedAmountFromValue(sle.MinMantissa, sle.MinExponent, currency, issuer)
+	}
+
+	return result
+}
+
+// offerDivRoundStrict divides num by den using rippled's divRoundStrict algorithm
+// with native-aware canonicalization.
+// Reference: rippled STAmount.cpp divRoundImpl with canonicalizeRoundStrict + NumberRoundModeGuard
+func offerDivRoundStrict(num, den tx.Amount, native bool, currency, issuer string, roundUp bool) tx.Amount {
+	if den.IsZero() || num.IsZero() {
+		if native {
+			return tx.NewXRPAmount(0)
+		}
+		return tx.NewIssuedAmount(0, -100, currency, issuer)
+	}
+
+	numVal := num.Mantissa()
+	numOff := num.Exponent()
+	denVal := den.Mantissa()
+	denOff := den.Exponent()
+
+	if num.IsNative() {
+		if numVal < 0 {
+			numVal = -numVal
+		}
+		for numVal < sle.MinMantissa {
+			numVal *= 10
+			numOff--
+		}
+	}
+	if den.IsNative() {
+		if denVal < 0 {
+			denVal = -denVal
+		}
+		for denVal < sle.MinMantissa {
+			denVal *= 10
+			denOff--
+		}
+	}
+
+	resultNegative := num.IsNegative() != den.IsNegative()
+
+	if numVal < 0 {
+		numVal = -numVal
+	}
+	if denVal < 0 {
+		denVal = -denVal
+	}
+
+	// muldiv_round: (numVal * 10^17 + rounding) / denVal
+	tenTo17 := new(big.Int).SetUint64(100_000_000_000_000_000) // 10^17
+	bigNum := new(big.Int).Mul(big.NewInt(numVal), tenTo17)
+	bigDen := new(big.Int).SetInt64(denVal)
+	if resultNegative != roundUp {
+		bigNum.Add(bigNum, new(big.Int).Sub(bigDen, big.NewInt(1)))
+	}
+	bigResult := new(big.Int).Div(bigNum, bigDen)
+
+	amount := bigResult.Uint64()
+	offset := numOff - denOff - 17
+
+	if resultNegative != roundUp {
+		if native {
+			// canonicalizeRoundStrict for native (XRP drops)
+			drops := payment.CanonicalizeDropsStrict(int64(amount), offset, roundUp)
+			if resultNegative {
+				drops = -drops
+			}
+			return tx.NewXRPAmount(drops)
+		}
+		// canonicalizeRoundStrict for IOU
+		if amount > uint64(sle.MaxMantissa) {
+			for amount > 10*uint64(sle.MaxMantissa) {
+				amount /= 10
+				offset++
+			}
+			amount += 9
+			amount /= 10
+			offset++
+		}
+	} else if native {
+		// No canonicalize needed (resultNegative == roundUp), just convert to drops
+		drops := int64(amount)
+		for offset > 0 {
+			drops *= 10
+			offset--
+		}
+		for offset < 0 {
+			drops /= 10
+			offset++
+		}
+		if resultNegative {
+			drops = -drops
+		}
+		return tx.NewXRPAmount(drops)
+	}
+
+	// NumberRoundModeGuard with appropriate mode
+	var mode sle.RoundingMode
+	if roundUp != resultNegative {
+		mode = sle.RoundUpward
+	} else {
+		mode = sle.RoundDownward
+	}
+	guard := sle.NewNumberRoundModeGuard(mode)
+	mantissa := int64(amount)
+	if resultNegative {
+		mantissa = -mantissa
+	}
+	result := sle.NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
+	guard.Release()
+
+	if roundUp && !resultNegative && result.IsZero() {
+		if native {
+			return tx.NewXRPAmount(1)
+		}
+		return sle.NewIssuedAmountFromValue(sle.MinMantissa, sle.MinExponent, currency, issuer)
+	}
+
+	return result
+}
+
+// offerMulRound multiplies v1 by v2 using rippled's mulRound (non-strict) algorithm
+// with native-aware canonicalization.
+// Reference: rippled STAmount.cpp mulRoundImpl with canonicalizeRound + DontAffectNumberRoundMode
+func offerMulRound(v1, v2 tx.Amount, native bool, currency, issuer string, roundUp bool) tx.Amount {
+	if v1.IsZero() || v2.IsZero() {
+		if native {
+			return tx.NewXRPAmount(0)
+		}
+		return tx.NewIssuedAmount(0, -100, currency, issuer)
+	}
+
+	value1 := v1.Mantissa()
+	offset1 := v1.Exponent()
+	value2 := v2.Mantissa()
+	offset2 := v2.Exponent()
+
+	if v1.IsNative() {
+		if value1 < 0 {
+			value1 = -value1
+		}
+		for value1 < sle.MinMantissa {
+			value1 *= 10
+			offset1--
+		}
+	}
+	if v2.IsNative() {
+		if value2 < 0 {
+			value2 = -value2
+		}
+		for value2 < sle.MinMantissa {
+			value2 *= 10
+			offset2--
+		}
+	}
+
+	resultNegative := v1.IsNegative() != v2.IsNegative()
+
+	if value1 < 0 {
+		value1 = -value1
+	}
+	if value2 < 0 {
+		value2 = -value2
+	}
+
+	// muldiv_round: (value1 * value2 + rounding) / 10^14
+	tenTo14 := new(big.Int).SetUint64(100_000_000_000_000)
+	tenTo14m1 := new(big.Int).SetUint64(99_999_999_999_999)
+	product := new(big.Int).Mul(big.NewInt(value1), big.NewInt(value2))
+	if resultNegative != roundUp {
+		product.Add(product, tenTo14m1)
+	}
+	product.Div(product, tenTo14)
+
+	amount := product.Uint64()
+	offset := offset1 + offset2 + 14
+
+	if resultNegative != roundUp {
+		if native {
+			// canonicalizeRound for native (XRP drops)
+			drops := payment.CanonicalizeDrops(int64(amount), offset)
+			if resultNegative {
+				drops = -drops
+			}
+			return tx.NewXRPAmount(drops)
+		}
+		// canonicalizeRound for IOU
+		if amount > uint64(sle.MaxMantissa) {
+			for amount > 10*uint64(sle.MaxMantissa) {
+				amount /= 10
+				offset++
+			}
+			amount += 9
+			amount /= 10
+			offset++
+		}
+	} else if native {
+		// No canonicalize needed (resultNegative == roundUp), just convert to drops
+		drops := int64(amount)
+		for offset > 0 {
+			drops *= 10
+			offset--
+		}
+		for offset < 0 {
+			drops /= 10
+			offset++
+		}
+		if resultNegative {
+			drops = -drops
+		}
+		return tx.NewXRPAmount(drops)
+	}
+
+	// DontAffectNumberRoundMode: NO guard
+	mantissa := int64(amount)
+	if resultNegative {
+		mantissa = -mantissa
+	}
+	result := sle.NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
+
+	if roundUp && !resultNegative && result.IsZero() {
+		if native {
+			return tx.NewXRPAmount(1)
+		}
+		return sle.NewIssuedAmountFromValue(sle.MinMantissa, sle.MinExponent, currency, issuer)
+	}
+
+	return result
 }
 
 // hasExpired checks if an offer has expired.

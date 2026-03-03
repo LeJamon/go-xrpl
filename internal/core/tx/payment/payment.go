@@ -1435,6 +1435,7 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 	addDefaultPath := !noDirectRipple
 
 	// Execute RippleCalculate
+	rules := ctx.Rules()
 	_, actualOut, _, sandbox, result := RippleCalculate(
 		ctx.View,
 		senderID,
@@ -1447,7 +1448,20 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 		limitQuality,
 		ctx.TxHash,
 		ctx.Config.LedgerSequence,
+		WithAmendments(
+			ctx.Config.ParentCloseTime,
+			rules.Enabled(amendment.FeatureFixReducedOffersV1),
+			rules.Enabled(amendment.FeatureFixReducedOffersV2),
+			rules.Enabled(amendment.FeatureFixRmSmallIncreasedQOffers),
+			rules.Enabled(amendment.FeatureFlowSortStrands),
+		),
 	)
+
+	// Because of its overhead, if RippleCalc fails with a retry code (ter*),
+	// claim a fee instead. Reference: rippled Payment.cpp:509-510
+	if result.IsTer() {
+		result = tx.TecPATH_DRY
+	}
 
 	// Handle result
 	if result != tx.TesSUCCESS && result != tx.TecPATH_PARTIAL {

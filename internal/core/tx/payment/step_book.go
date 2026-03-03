@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"sort"
 
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
@@ -68,6 +67,15 @@ type BookStep struct {
 	// rate worse than the original, "polluting" the order book.
 	// Reference: rippled fixReducedOffersV1 amendment + Offer.h TOffer::limitOut()
 	fixReducedOffersV1 bool
+
+	// fixRmSmallIncreasedQOffers gates removal of tiny underfunded offers whose
+	// effective quality has increased (worsened) due to partial funding.
+	// When an offer is underfunded, its effective amounts are adjusted by the owner's
+	// available funds. If the resulting input amount is at or below the minimum positive
+	// amount (1 drop for XRP, or 1e-81 for IOU) and the effective quality is worse than
+	// the offer's original quality, the offer is removed to prevent order book blocking.
+	// Reference: rippled fixRmSmallIncreasedQOffers amendment + OfferStream.cpp shouldRmSmallIncreasedQOffer()
+	fixRmSmallIncreasedQOffers bool
 
 	// inactive indicates the step is dry (too many offers consumed)
 	inactive_ bool
@@ -152,10 +160,16 @@ func (s *BookStep) Rev(
 	// Track visited offers
 	visited := make(map[[32]byte]bool)
 
-	fmt.Printf("[BookStep.Rev] book In=%s/%x Out=%s/%x remainingOut=%v\n",
-		s.book.In.Currency, s.book.In.Issuer, s.book.Out.Currency, s.book.Out.Issuer, remainingOut)
+	// Track the current quality level — forEachOffer processes one quality at a time.
+	// Reference: rippled BookStep.cpp forEachOffer lines 751-754:
+	//   if (!ofrQ) ofrQ = offer.quality();
+	//   else if (*ofrQ != offer.quality()) return false;
+	var currentQuality *Quality
+	offerAttempted := false
 
 	// Iterate through offers — combined forEachOffer + revImp callback
+	fundedCount := 0
+	unfundedCount := 0
 	for s.offersUsed_ < s.maxOffersToConsume && !remainingOut.IsZero() {
 		offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited)
 		if err != nil {
@@ -167,31 +181,92 @@ func (s *BookStep) Rev(
 
 		visited[offerKey] = true
 
-		// Self-cross detection (default path only)
-		if s.defaultPath && s.qualityLimit != nil {
-			offerOwner, ownerErr := sle.DecodeAccountID(offer.Account)
-			if ownerErr == nil {
-				offerQuality := s.offerQuality(offer)
-				if !offerQuality.WorseThan(*s.qualityLimit) &&
-					s.strandSrc == offerOwner && s.strandDst == offerOwner {
-					ofrsToRm[offerKey] = true
-					s.offersUsed_++
-					continue
-				}
-			}
+		// Get owner funds for this offer
+		ownerFunds := s.getOfferFundedAmount(sb, offer)
+
+		// Check unfunded offer — handled by FlowOfferStream in rippled BEFORE execOffer.
+		// Unfunded offers are removed transparently without affecting quality tracking.
+		if ownerFunds.IsEffectivelyZero() || offer.TakerGets.IsZero() {
+			ofrsToRm[offerKey] = true
+			s.offersUsed_++
+			unfundedCount++
+			continue
 		}
 
-		if !s.isOfferFunded(sb, offer) {
+		// Check if this is a tiny underfunded offer with degraded quality.
+		// Also handled at the OfferStream level in rippled.
+		// Reference: rippled OfferStream.cpp lines 343-404
+		if s.shouldRmSmallIncreasedQOffer(sb, offer, ownerFunds) {
+			fmt.Printf("[BOOKSTEP-REV-RMSMALL] removing small increased Q offer: TakerPays=%+v TakerGets=%+v funds=%+v\n",
+				offer.TakerPays, offer.TakerGets, ownerFunds)
 			ofrsToRm[offerKey] = true
 			s.offersUsed_++
 			continue
 		}
 
-		// Quality check
+		// === execOffer begins here (rippled BookStep.cpp forEachOffer line 748) ===
+		// Quality-level tracking: forEachOffer processes one quality level at a time.
+		// When the offer quality changes from the current level, stop iteration.
+		// This only applies to funded offers (after OfferStream filtering above).
+		// Reference: rippled BookStep.cpp forEachOffer lines 751-754:
+		//   if (!ofrQ) ofrQ = offer.quality();
+		//   else if (*ofrQ != offer.quality()) return false;
 		offerQuality := s.offerQuality(offer)
+		if currentQuality == nil {
+			currentQuality = &offerQuality
+		} else if currentQuality.Value != offerQuality.Value {
+			break
+		}
+
+		// Self-cross detection (default path only)
+		if s.defaultPath && s.qualityLimit != nil {
+			offerOwner, ownerErr := sle.DecodeAccountID(offer.Account)
+			if ownerErr == nil {
+				if !offerQuality.WorseThan(*s.qualityLimit) &&
+					s.strandSrc == offerOwner && s.strandDst == offerOwner {
+					ofrsToRm[offerKey] = true
+					s.offersUsed_++
+					// Reset quality tracking if no offers have been attempted
+					// Reference: rippled BookStep.cpp limitSelfCrossQuality lines 452-453
+					if !offerAttempted {
+						currentQuality = nil
+					}
+					continue
+				}
+			}
+		}
+
+		// Authorization check: verify offer owner can hold the input currency
+		// Reference: BookStep.cpp lines 760-790
+		if !s.book.In.IsXRP() {
+			offerOwner, ownerErr := sle.DecodeAccountID(offer.Account)
+			if ownerErr == nil && offerOwner != s.book.In.Issuer {
+				if !s.isOfferOwnerAuthorized(afView, offerOwner, s.book.In.Issuer, s.book.In.Currency) {
+					ofrsToRm[offerKey] = true
+					s.offersUsed_++
+					// Reset quality tracking if no offers have been attempted
+					// Reference: rippled BookStep.cpp forEachOffer lines 783-785
+					if !offerAttempted {
+						currentQuality = nil
+					}
+					continue
+				}
+			}
+		}
+
+		fundedCount++
+
+		// Quality check against quality limit
+		fmt.Printf("[BOOKSTEP-REV-QUALITY] offerQ=%d limitQ=%v worse=%v account=%s pays=%+v gets=%+v funds=%+v\n",
+			offerQuality.Value, s.qualityLimit, s.qualityLimit != nil && offerQuality.WorseThan(*s.qualityLimit),
+			offer.Account, offer.TakerPays, offer.TakerGets, ownerFunds)
 		if s.qualityLimit != nil && offerQuality.WorseThan(*s.qualityLimit) {
 			break
 		}
+
+		// Mark that we've attempted to cross at this quality level
+		// Reference: rippled BookStep.cpp forEachOffer line 832
+		offerAttempted = true
 
 		// === forEachOffer: compute ofrAmt, stpAmt, ownerGives ===
 		// Reference: BookStep.cpp lines 802-834
@@ -200,33 +275,40 @@ func (s *BookStep) Rev(
 		ofrIn := s.offerTakerPays(offer)
 		ofrOut := s.offerTakerGets(offer)
 
+		// Compute per-offer transfer rates (self-pay exemption in offer crossing)
+		// Reference: rippled BookOfferCrossingStep::getOfrInRate/getOfrOutRate
+		funds := ownerFunds
+		offerOwner, _ := sle.DecodeAccountID(offer.Account)
+		ofrTrIn := s.getOfrInRate(offerOwner, trIn)
+		ofrTrOut := s.getOfrOutRate(offerOwner, trOut)
+
 		// stpAmt.in = mulRatio(ofrAmt.in, ofrInRate, QUALITY_ONE, true) (GROSS input)
 		// stpAmt.out = ofrAmt.out
-		stpIn := MulRatio(ofrIn, trIn, QualityOne, true)
+		stpIn := MulRatio(ofrIn, ofrTrIn, QualityOne, true)
 		stpOut := ofrOut
 
 		// ownerGives = mulRatio(ofrAmt.out, ofrOutRate, QUALITY_ONE, false)
-		ownerGives := MulRatio(ofrOut, trOut, QualityOne, false)
+		ownerGives := MulRatio(ofrOut, ofrTrOut, QualityOne, false)
 
 		// Funding cap: if funds < ownerGives, adjust all amounts
 		// Reference: BookStep.cpp lines 816-830
-		funds := s.getOfferFundedAmount(sb, offer)
-		offerOwner, _ := sle.DecodeAccountID(offer.Account)
 		isFunded := offerOwner == s.book.Out.Issuer // offer owner is issuer = unlimited funds
 		if !isFunded {
 			if funds.Compare(ownerGives) < 0 {
 				ownerGives = funds
-				stpOut = MulRatio(ownerGives, QualityOne, trOut, false)
-				// fixReducedOffersV1: roundUp=false preserves quality (WITH fix).
-				// Without fix, roundUp=true rounds up TakerPays, degrading the remaining offer's rate.
-				// Reference: rippled Offer.h TOffer::limitOut() roundUp parameter
-				ofrIn, ofrOut = offerQuality.CeilOutStrict(ofrIn, ofrOut, stpOut, !s.fixReducedOffersV1)
-				stpIn = MulRatio(ofrIn, trIn, QualityOne, true)
+				stpOut = MulRatio(ownerGives, QualityOne, ofrTrOut, false)
+				// fixReducedOffersV1 gates strict vs non-strict rounding.
+				// With fix: CeilOutStrict (mulRoundStrict, precise, roundUp=true)
+				// Without fix: CeilOut (mulRound, non-strict "slop", always roundUp)
+				// Reference: rippled Offer.h TOffer::limitOut() + fixReducedOffersV1 amendment
+				if s.fixReducedOffersV1 {
+					ofrIn, ofrOut = offerQuality.CeilOutStrict(ofrIn, ofrOut, stpOut, false)
+				} else {
+					ofrIn, ofrOut = offerQuality.CeilOut(ofrIn, ofrOut, stpOut)
+				}
+				stpIn = MulRatio(ofrIn, ofrTrIn, QualityOne, true)
 			}
 		}
-
-		fmt.Printf("[BookStep.Rev] offer: ofrIn=%v ofrOut=%v stpIn=%v stpOut=%v ownerGives=%v\n",
-			ofrIn, ofrOut, stpIn, stpOut, ownerGives)
 
 		// === revImp callback: decide full take vs partial take ===
 		// Reference: BookStep.cpp lines 1044-1081
@@ -236,8 +318,9 @@ func (s *BookStep) Rev(
 			totalOut = totalOut.Add(stpOut)
 			remainingOut = out.Sub(totalOut)
 
-			fmt.Printf("[BookStep.Rev] full take: stpIn=%v stpOut=%v remaining=%v\n", stpIn, stpOut, remainingOut)
-			if err := s.consumeOffer(sb, offer, stpIn, ofrIn, stpOut); err != nil {
+			fmt.Printf("[REV-FULLTAKE] stpIn=%v ofrIn=%v stpOut=%v ofrOut=%v ownerGives=%v offerPays=%v offerGets=%v\n",
+				stpIn.XRP, ofrIn.XRP, stpOut.IOU.Mantissa(), ofrOut.IOU.Mantissa(), ownerGives.IOU.Mantissa(), s.offerTakerPays(offer).XRP, s.offerTakerGets(offer).IOU.Mantissa())
+			if err := s.consumeOffer(sb, offer, stpIn, ofrIn, stpOut, ownerGives); err != nil {
 				break
 			}
 		} else {
@@ -249,19 +332,22 @@ func (s *BookStep) Rev(
 
 			// limitStepOut: limit = remainingOut
 			stpAdjOut = remainingOut
-			ofrAdjIn, ofrAdjOut = offerQuality.CeilOutStrict(ofrAdjIn, ofrAdjOut, stpAdjOut, true)
-			stpAdjIn = MulRatio(ofrAdjIn, trIn, QualityOne, true)
+			// Reference: rippled Offer.h TOffer::limitOut() — gates on fixReducedOffersV1:
+			//   With fix: ceil_out_strict(ofrAmt, limit, roundUp=true) (mulRoundStrict)
+			//   Without fix: ceil_out(ofrAmt, limit) (mulRound, non-strict, always roundUp)
+			if s.fixReducedOffersV1 {
+				ofrAdjIn, ofrAdjOut = offerQuality.CeilOutStrict(ofrAdjIn, ofrAdjOut, stpAdjOut, true)
+			} else {
+				ofrAdjIn, ofrAdjOut = offerQuality.CeilOut(ofrAdjIn, ofrAdjOut, stpAdjOut)
+			}
+			stpAdjIn = MulRatio(ofrAdjIn, ofrTrIn, QualityOne, true)
+			ownerGivesAdj := MulRatio(stpAdjOut, ofrTrOut, QualityOne, false)
 
 			totalIn = totalIn.Add(stpAdjIn)
 			totalOut = out // result.out = out (force exact)
 			remainingOut = s.zeroOut()
 
-			fmt.Printf("[BookStep.Rev] partial take: trIn=%d trOut=%d\n", trIn, trOut)
-		fmt.Printf("  ofrAdjIn:  %s\n", fmtEA(ofrAdjIn))
-		fmt.Printf("  ofrAdjOut: %s\n", fmtEA(ofrAdjOut))
-		fmt.Printf("  stpAdjIn:  %s\n", fmtEA(stpAdjIn))
-		fmt.Printf("  stpAdjOut: %s\n", fmtEA(stpAdjOut))
-			if err := s.consumeOffer(sb, offer, stpAdjIn, ofrAdjIn, stpAdjOut); err != nil {
+			if err := s.consumeOffer(sb, offer, stpAdjIn, ofrAdjIn, stpAdjOut, ownerGivesAdj); err != nil {
 				break
 			}
 		}
@@ -285,7 +371,6 @@ func (s *BookStep) Rev(
 		out: totalOut,
 	}
 
-	fmt.Printf("[BookStep.Rev] returning totalIn=%v totalOut=%v\n", totalIn, totalOut)
 	return totalIn, totalOut
 }
 
@@ -326,9 +411,13 @@ func (s *BookStep) Fwd(
 	}
 
 	remainingIn := in
-	fmt.Printf("[BookStep.Fwd] START in=%v book=%v→%v trIn=%d trOut=%d\n", in, s.book.In, s.book.Out, trIn, trOut)
 
 	visited := make(map[[32]byte]bool)
+
+	// Track the current quality level — forEachOffer processes one quality at a time.
+	// Reference: rippled BookStep.cpp forEachOffer lines 751-754
+	var currentQuality *Quality
+	offerAttempted := false
 
 	for s.offersUsed_ < s.maxOffersToConsume && !remainingIn.IsZero() {
 		offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited)
@@ -341,51 +430,105 @@ func (s *BookStep) Fwd(
 
 		visited[offerKey] = true
 
+		// Get owner funds for this offer
+		ownerFunds := s.getOfferFundedAmount(sb, offer)
+
+		// Check unfunded offer — handled by FlowOfferStream in rippled BEFORE execOffer.
+		if ownerFunds.IsEffectivelyZero() || offer.TakerGets.IsZero() {
+			ofrsToRm[offerKey] = true
+			s.offersUsed_++
+			continue
+		}
+
+		// Check if this is a tiny underfunded offer with degraded quality.
+		// Also handled at the OfferStream level in rippled.
+		if s.shouldRmSmallIncreasedQOffer(sb, offer, ownerFunds) {
+			ofrsToRm[offerKey] = true
+			s.offersUsed_++
+			continue
+		}
+
+		// === execOffer begins here ===
+		// Quality-level tracking: forEachOffer processes one quality level at a time.
+		// Reference: rippled BookStep.cpp forEachOffer lines 751-754
+		offerQuality := s.offerQuality(offer)
+		if currentQuality == nil {
+			currentQuality = &offerQuality
+		} else if currentQuality.Value != offerQuality.Value {
+			break
+		}
+
 		// Self-cross detection
 		if s.defaultPath && s.qualityLimit != nil {
 			offerOwner, ownerErr := sle.DecodeAccountID(offer.Account)
 			if ownerErr == nil {
-				offerQuality := s.offerQuality(offer)
 				if !offerQuality.WorseThan(*s.qualityLimit) &&
 					s.strandSrc == offerOwner && s.strandDst == offerOwner {
 					ofrsToRm[offerKey] = true
 					s.offersUsed_++
+					// Reset quality tracking if no offers have been attempted
+					if !offerAttempted {
+						currentQuality = nil
+					}
 					continue
 				}
 			}
 		}
 
-		if !s.isOfferFunded(sb, offer) {
-			s.offersUsed_++
-			continue
+		// Authorization check: verify offer owner can hold the input currency
+		// Reference: BookStep.cpp lines 760-790
+		if !s.book.In.IsXRP() {
+			offerOwner, ownerErr := sle.DecodeAccountID(offer.Account)
+			if ownerErr == nil && offerOwner != s.book.In.Issuer {
+				if !s.isOfferOwnerAuthorized(afView, offerOwner, s.book.In.Issuer, s.book.In.Currency) {
+					ofrsToRm[offerKey] = true
+					s.offersUsed_++
+					// Reset quality tracking if no offers have been attempted
+					if !offerAttempted {
+						currentQuality = nil
+					}
+					continue
+				}
+			}
 		}
 
-		offerQuality := s.offerQuality(offer)
+		// Quality check against quality limit
 		if s.qualityLimit != nil && offerQuality.WorseThan(*s.qualityLimit) {
 			break
 		}
+
+		// Mark that we've attempted to cross at this quality level
+		offerAttempted = true
 
 		// === forEachOffer: compute ofrAmt, stpAmt, ownerGives ===
 		ofrIn := s.offerTakerPays(offer)
 		ofrOut := s.offerTakerGets(offer)
 
-		stpIn := MulRatio(ofrIn, trIn, QualityOne, true)
+		// Compute per-offer transfer rates (self-pay exemption in offer crossing)
+		funds := ownerFunds
+		offerOwner, _ := sle.DecodeAccountID(offer.Account)
+		ofrTrIn := s.getOfrInRate(offerOwner, trIn)
+		ofrTrOut := s.getOfrOutRate(offerOwner, trOut)
+
+		stpIn := MulRatio(ofrIn, ofrTrIn, QualityOne, true)
 		stpOut := ofrOut
-		ownerGives := MulRatio(ofrOut, trOut, QualityOne, false)
+		ownerGives := MulRatio(ofrOut, ofrTrOut, QualityOne, false)
 
 		// Funding cap
-		funds := s.getOfferFundedAmount(sb, offer)
-		offerOwner, _ := sle.DecodeAccountID(offer.Account)
 		isFunded := offerOwner == s.book.Out.Issuer
 		if !isFunded {
 			if funds.Compare(ownerGives) < 0 {
 				ownerGives = funds
-				stpOut = MulRatio(ownerGives, QualityOne, trOut, false)
-				// fixReducedOffersV1: roundUp=false preserves quality (WITH fix).
-				// Without fix, roundUp=true rounds up TakerPays, degrading the remaining offer's rate.
-				// Reference: rippled Offer.h TOffer::limitOut() roundUp parameter
-				ofrIn, ofrOut = offerQuality.CeilOutStrict(ofrIn, ofrOut, stpOut, !s.fixReducedOffersV1)
-				stpIn = MulRatio(ofrIn, trIn, QualityOne, true)
+				stpOut = MulRatio(ownerGives, QualityOne, ofrTrOut, false)
+				// Funding cap: roundUp=false to prevent quality degradation.
+				// Reference: rippled BookStep.cpp forEachOffer line 826:
+				//   ofrAmt = offer.limitOut(ofrAmt, stpAmt.out, /*roundUp*/ false);
+				if s.fixReducedOffersV1 {
+					ofrIn, ofrOut = offerQuality.CeilOutStrict(ofrIn, ofrOut, stpOut, false)
+				} else {
+					ofrIn, ofrOut = offerQuality.CeilOut(ofrIn, ofrOut, stpOut)
+				}
+				stpIn = MulRatio(ofrIn, ofrTrIn, QualityOne, true)
 			}
 		}
 
@@ -393,6 +536,8 @@ func (s *BookStep) Fwd(
 		// Reference: BookStep.cpp lines 1172-1252
 		if stpIn.Compare(remainingIn) <= 0 {
 			// Full take
+			fmt.Printf("[FWD-FULLTAKE] stpIn=%+v ofrIn=%+v stpOut=%+v ownerGives=%+v\n",
+				stpIn, ofrIn, stpOut, ownerGives)
 			totalIn = totalIn.Add(stpIn)
 			totalOut = totalOut.Add(stpOut)
 
@@ -402,14 +547,15 @@ func (s *BookStep) Fwd(
 				remainingCacheOut := prevCache.out.Sub(totalOut.Sub(stpOut))
 				adjOfrIn, adjOfrOut := ofrIn, ofrOut
 				adjStpOut := remainingCacheOut
-				_ = MulRatio(adjStpOut, trOut, QualityOne, false) // ownerGivesAdj
+				_ = MulRatio(adjStpOut, ofrTrOut, QualityOne, false) // ownerGivesAdj
 				adjOfrIn, adjOfrOut = offerQuality.CeilOutStrict(adjOfrIn, adjOfrOut, adjStpOut, true)
-				adjStpIn := MulRatio(adjOfrIn, trIn, QualityOne, true)
+				adjStpIn := MulRatio(adjOfrIn, ofrTrIn, QualityOne, true)
 
 				if adjStpIn.Compare(remainingIn) == 0 {
 					totalIn = in
 					totalOut = prevCache.out
-					if err := s.consumeOffer(sb, offer, adjStpIn, adjOfrIn, adjStpOut); err != nil {
+					ownerGivesAdj := MulRatio(adjStpOut, ofrTrOut, QualityOne, false)
+					if err := s.consumeOffer(sb, offer, adjStpIn, adjOfrIn, adjStpOut, ownerGivesAdj); err != nil {
 						break
 					}
 					remainingIn = s.zeroIn()
@@ -419,17 +565,18 @@ func (s *BookStep) Fwd(
 			}
 
 			remainingIn = in.Sub(totalIn)
-			if err := s.consumeOffer(sb, offer, stpIn, ofrIn, stpOut); err != nil {
+			if err := s.consumeOffer(sb, offer, stpIn, ofrIn, stpOut, ownerGives); err != nil {
 				break
 			}
 		} else {
 			// Partial take: limitStepIn
+			fmt.Printf("[FWD-PARTIAL] stpIn=%+v remainingIn=%+v ofrIn=%+v stpOut=%+v\n",
+				stpIn, remainingIn, ofrIn, stpOut)
 			// Reference: BookStep.cpp limitStepIn lines 660-685
 			stpAdjIn := remainingIn
-			inLmt := MulRatio(stpAdjIn, QualityOne, trIn, false)
-			// fixReducedOffersV2 gates ceil_in (roundUp=true, non-strict) vs
-			// ceil_in_strict (roundUp=false, strict). With the fix, rounding down
-			// the output prevents the remaining offer from having a worse rate.
+			inLmt := MulRatio(stpAdjIn, QualityOne, ofrTrIn, false)
+			// fixReducedOffersV2 gates ceil_in (non-strict, always roundUp) vs
+			// ceil_in_strict (strict, roundUp=false).
 			// Reference: rippled Offer.h TOffer::limitIn() + fixReducedOffersV2
 			var ofrAdjIn, ofrAdjOut EitherAmount
 			if s.fixReducedOffersV2 {
@@ -438,14 +585,7 @@ func (s *BookStep) Fwd(
 				ofrAdjIn, ofrAdjOut = offerQuality.CeilIn(ofrIn, ofrOut, inLmt)
 			}
 			stpAdjOut := ofrAdjOut
-			_ = MulRatio(ofrAdjOut, trOut, QualityOne, false) // ownerGivesAdj
-
-			fmt.Printf("[BookStep.Fwd] partial take: trIn=%d trOut=%d\n", trIn, trOut)
-			fmt.Printf("  stpAdjIn:  %s\n", fmtEA(stpAdjIn))
-			fmt.Printf("  inLmt:     %s\n", fmtEA(inLmt))
-			fmt.Printf("  ofrAdjIn:  %s\n", fmtEA(ofrAdjIn))
-			fmt.Printf("  ofrAdjOut: %s\n", fmtEA(ofrAdjOut))
-			fmt.Printf("  stpAdjOut: %s\n", fmtEA(stpAdjOut))
+			ownerGivesAdj := MulRatio(ofrAdjOut, ofrTrOut, QualityOne, false)
 
 			totalOut = totalOut.Add(stpAdjOut)
 			totalIn = in
@@ -456,13 +596,14 @@ func (s *BookStep) Fwd(
 				revOfrIn, revOfrOut := ofrIn, ofrOut
 				revStpOut := remainingCacheOut
 				revOfrIn, revOfrOut = offerQuality.CeilOutStrict(revOfrIn, revOfrOut, revStpOut, true)
-				revStpIn := MulRatio(revOfrIn, trIn, QualityOne, true)
+				revStpIn := MulRatio(revOfrIn, ofrTrIn, QualityOne, true)
+				revOwnerGives := MulRatio(revStpOut, ofrTrOut, QualityOne, false)
 				_ = revOfrOut
 
 				if revStpIn.Compare(remainingIn) == 0 {
 					totalIn = in
 					totalOut = prevCache.out
-					if err := s.consumeOffer(sb, offer, revStpIn, revOfrIn, revStpOut); err != nil {
+					if err := s.consumeOffer(sb, offer, revStpIn, revOfrIn, revStpOut, revOwnerGives); err != nil {
 						break
 					}
 					remainingIn = s.zeroIn()
@@ -472,7 +613,7 @@ func (s *BookStep) Fwd(
 			}
 
 			remainingIn = s.zeroIn()
-			if err := s.consumeOffer(sb, offer, stpAdjIn, ofrAdjIn, stpAdjOut); err != nil {
+			if err := s.consumeOffer(sb, offer, stpAdjIn, ofrAdjIn, stpAdjOut, ownerGivesAdj); err != nil {
 				break
 			}
 		}
@@ -494,17 +635,7 @@ func (s *BookStep) Fwd(
 		out: totalOut,
 	}
 
-	fmt.Printf("[BookStep.Fwd] DONE totalIn=%v totalOut=%v\n", totalIn, totalOut)
 	return totalIn, totalOut
-}
-
-// fmtEA formats an EitherAmount showing mantissa/exponent for IOU or drops for XRP.
-// Used for debug prints only.
-func fmtEA(a EitherAmount) string {
-	if a.IsNative {
-		return fmt.Sprintf("XRP drops=%d", a.XRP)
-	}
-	return fmt.Sprintf("IOU man=%d exp=%d", a.IOU.Mantissa(), a.IOU.Exponent())
 }
 
 // CachedIn returns the input from the last Rev() call
@@ -616,6 +747,40 @@ func (s *BookStep) transferRateOut(sb *PaymentSandbox) uint32 {
 	return s.GetAccountTransferRate(sb, s.book.Out.Issuer)
 }
 
+// getOfrInRate returns the per-offer input transfer rate.
+// In offer crossing mode, exempts transfer fee when offer owner == strand source
+// (i.e., the taker is crossing their own offer from the input side).
+// Reference: rippled BookOfferCrossingStep::getOfrInRate() (BookStep.cpp lines 491-502)
+func (s *BookStep) getOfrInRate(offerOwner [20]byte, trIn uint32) uint32 {
+	if !s.ownerPaysTransferFee {
+		return trIn // Payment mode — no exemption
+	}
+	// Offer crossing: check if offer owner == previous DirectStep's source
+	if directStep, ok := s.prevStep.(*DirectStepI); ok {
+		if offerOwner == directStep.src {
+			return QualityOne // Self-pay exemption
+		}
+	}
+	return trIn
+}
+
+// getOfrOutRate returns the per-offer output transfer rate.
+// In offer crossing mode, exempts transfer fee when offer owner == strand destination
+// AND the previous step is a BookStep (i.e., bridged crossing, second leg).
+// Reference: rippled BookOfferCrossingStep::getOfrOutRate() (BookStep.cpp lines 506-517)
+func (s *BookStep) getOfrOutRate(offerOwner [20]byte, trOut uint32) uint32 {
+	if !s.ownerPaysTransferFee {
+		return trOut // Payment mode — no exemption
+	}
+	// Offer crossing: check if previous step is BookStep AND owner == strandDst
+	if _, ok := s.prevStep.(*BookStep); ok {
+		if offerOwner == s.strandDst {
+			return QualityOne // Self-pay exemption
+		}
+	}
+	return trOut
+}
+
 // GetAccountTransferRate gets the transfer rate from an account
 func (s *BookStep) GetAccountTransferRate(sb *PaymentSandbox, issuer [20]byte) uint32 {
 	accountKey := keylet.Account(issuer)
@@ -635,151 +800,164 @@ func (s *BookStep) GetAccountTransferRate(sb *PaymentSandbox, issuer [20]byte) u
 	return account.TransferRate
 }
 
-// getNextOfferSkipVisited returns the next offer at the best quality, skipping offers in ofrsToRm and visited
+// getNextOfferSkipVisited returns the next offer at the best quality, skipping offers in ofrsToRm and visited.
+// Uses Succ() for efficient O(log n) ordered traversal of book directories.
+// Follows IndexNext chains through multi-page directories at each quality level.
+// Reference: rippled OfferStream::step() + BookTip::step()
 func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSandbox, ofrsToRm map[[32]byte]bool, visited map[[32]byte]bool) (*sle.LedgerOffer, [32]byte, error) {
-	// Get the order book directory base key
-	takerPaysCurrency := sle.GetCurrencyBytes(s.book.In.Currency)
-	takerPaysIssuer := s.book.In.Issuer
-	takerGetsCurrency := sle.GetCurrencyBytes(s.book.Out.Currency)
-	takerGetsIssuer := s.book.Out.Issuer
-	bookBase := keylet.BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer)
+	bookBase := s.bookBaseKey()
+	bookPrefix := bookBase[:24]
 
-	bookPrefix := bookBase.Key[:24]
-
-	type dirEntry struct {
-		key  [32]byte
-		data []byte
-	}
-	var dirs []dirEntry
-
-	err := sb.ForEach(func(key [32]byte, data []byte) bool {
-		if bytes.Equal(key[:24], bookPrefix) {
-			dirs = append(dirs, dirEntry{key: key, data: data})
+	// Walk through book directories in quality order using Succ.
+	// bookBase has quality=0 (bytes 24-31 zeroed), so Succ finds the first quality entry.
+	searchKey := bookBase
+	for {
+		foundKey, foundData, found, err := sb.Succ(searchKey)
+		if err != nil || !found {
+			return nil, [32]byte{}, nil
 		}
-		return true
-	})
-	if err != nil {
-		return nil, [32]byte{}, err
-	}
+		// Check if still within the book prefix
+		if !bytes.Equal(foundKey[:24], bookPrefix) {
+			return nil, [32]byte{}, nil
+		}
 
-	sort.Slice(dirs, func(i, j int) bool {
-		return bytes.Compare(dirs[i].key[24:], dirs[j].key[24:]) < 0
-	})
-
-	for _, d := range dirs {
-		dir, err := sle.ParseDirectoryNode(d.data)
-		if err != nil || len(dir.Indexes) == 0 {
+		// Iterate through all pages of this directory (root + linked pages)
+		dir, err := sle.ParseDirectoryNode(foundData)
+		if err != nil {
+			searchKey = foundKey
 			continue
 		}
 
-		for _, idx := range dir.Indexes {
-			var offerKey [32]byte
-			copy(offerKey[:], idx[:])
+		// Iterate root page + all subsequent pages via IndexNext chain
+		rootKey := foundKey
+		for {
+			for _, idx := range dir.Indexes {
+				var offerKey [32]byte
+				copy(offerKey[:], idx[:])
 
-			// Skip offers already in ofrsToRm or visited
-			if ofrsToRm != nil && ofrsToRm[offerKey] {
-				continue
-			}
-			if visited != nil && visited[offerKey] {
-				continue
+				// Skip offers already in ofrsToRm or visited
+				if ofrsToRm != nil && ofrsToRm[offerKey] {
+					continue
+				}
+				if visited != nil && visited[offerKey] {
+					continue
+				}
+
+				offerData, err := sb.Read(keylet.Keylet{Key: offerKey})
+				if err != nil || offerData == nil {
+					continue
+				}
+
+				offer, err := sle.ParseLedgerOffer(offerData)
+				if err != nil {
+					continue
+				}
+
+				// Check offer expiration
+				// Reference: rippled OfferStream.cpp lines 256-265
+				if s.parentCloseTime > 0 && offer.Expiration > 0 &&
+					offer.Expiration <= s.parentCloseTime {
+					s.removeExpiredOffer(sb, offer, offerKey)
+					if ofrsToRm != nil {
+						ofrsToRm[offerKey] = true
+					}
+					continue
+				}
+
+				return offer, offerKey, nil
 			}
 
-			offerData, err := sb.Read(keylet.Keylet{Key: offerKey})
-			if err != nil || offerData == nil {
-				continue
+			// Follow IndexNext to next page
+			if dir.IndexNext == 0 {
+				break // No more pages at this quality
 			}
-
-			offer, err := sle.ParseLedgerOffer(offerData)
+			pageKey := keylet.DirPage(rootKey, dir.IndexNext)
+			pageData, err := sb.Read(pageKey)
+			if err != nil || pageData == nil {
+				break
+			}
+			dir, err = sle.ParseDirectoryNode(pageData)
 			if err != nil {
-				continue
+				break
 			}
-
-			// Check offer expiration
-			// Reference: rippled OfferStream.cpp lines 256-265
-			if s.parentCloseTime > 0 && offer.Expiration > 0 &&
-				offer.Expiration <= s.parentCloseTime {
-				s.removeExpiredOffer(sb, offer, offerKey)
-				continue
-			}
-
-			return offer, offerKey, nil
 		}
-	}
 
-	return nil, [32]byte{}, nil
+		// All offers at this quality consumed — move to next quality
+		searchKey = foundKey
+	}
 }
 
-// getNextOffer returns the next offer at the best quality, skipping offers in ofrsToRm
+// getNextOffer returns the next offer at the best quality, skipping offers in ofrsToRm.
+// Uses Succ() for efficient O(log n) ordered traversal of book directories.
+// Follows IndexNext chains through multi-page directories at each quality level.
+// NOTE: Does NOT call removeExpiredOffer — used by Check which runs before Rev/Fwd.
 func (s *BookStep) getNextOffer(sb *PaymentSandbox, afView *PaymentSandbox, ofrsToRm map[[32]byte]bool) (*sle.LedgerOffer, [32]byte, error) {
-	// Get the order book directory base key
-	takerPaysCurrency := sle.GetCurrencyBytes(s.book.In.Currency)
-	takerPaysIssuer := s.book.In.Issuer
-	takerGetsCurrency := sle.GetCurrencyBytes(s.book.Out.Currency)
-	takerGetsIssuer := s.book.Out.Issuer
-	bookBase := keylet.BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer)
+	bookBase := s.bookBaseKey()
+	bookPrefix := bookBase[:24]
 
-	bookPrefix := bookBase.Key[:24]
-
-	type dirEntry struct {
-		key  [32]byte
-		data []byte
-	}
-	var dirs []dirEntry
-
-	err := sb.ForEach(func(key [32]byte, data []byte) bool {
-		if bytes.Equal(key[:24], bookPrefix) {
-			dirs = append(dirs, dirEntry{key: key, data: data})
+	searchKey := bookBase
+	for {
+		foundKey, foundData, found, err := sb.Succ(searchKey)
+		if err != nil || !found {
+			return nil, [32]byte{}, nil
 		}
-		return true
-	})
-	if err != nil {
-		return nil, [32]byte{}, err
-	}
+		if !bytes.Equal(foundKey[:24], bookPrefix) {
+			return nil, [32]byte{}, nil
+		}
 
-
-	sort.Slice(dirs, func(i, j int) bool {
-		return bytes.Compare(dirs[i].key[24:], dirs[j].key[24:]) < 0
-	})
-
-	for _, d := range dirs {
-		dir, err := sle.ParseDirectoryNode(d.data)
-		if err != nil || len(dir.Indexes) == 0 {
+		dir, err := sle.ParseDirectoryNode(foundData)
+		if err != nil {
+			searchKey = foundKey
 			continue
 		}
 
+		// Iterate root page + all subsequent pages via IndexNext chain
+		rootKey := foundKey
+		for {
+			for _, idx := range dir.Indexes {
+				var offerKey [32]byte
+				copy(offerKey[:], idx[:])
 
-		for _, idx := range dir.Indexes {
-			var offerKey [32]byte
-			copy(offerKey[:], idx[:])
+				if ofrsToRm != nil && ofrsToRm[offerKey] {
+					continue
+				}
 
+				offerData, err := sb.Read(keylet.Keylet{Key: offerKey})
+				if err != nil || offerData == nil {
+					continue
+				}
 
-			if ofrsToRm != nil && ofrsToRm[offerKey] {
-				continue
+				offer, err := sle.ParseLedgerOffer(offerData)
+				if err != nil {
+					continue
+				}
+
+				// Check offer expiration (but do NOT remove — used before Rev/Fwd)
+				if s.parentCloseTime > 0 && offer.Expiration > 0 &&
+					offer.Expiration <= s.parentCloseTime {
+					continue
+				}
+
+				return offer, offerKey, nil
 			}
 
-			offerData, err := sb.Read(keylet.Keylet{Key: offerKey})
-			if err != nil || offerData == nil {
-				continue
+			// Follow IndexNext to next page
+			if dir.IndexNext == 0 {
+				break
 			}
-
-			offer, err := sle.ParseLedgerOffer(offerData)
+			pageKey := keylet.DirPage(rootKey, dir.IndexNext)
+			pageData, err := sb.Read(pageKey)
+			if err != nil || pageData == nil {
+				break
+			}
+			dir, err = sle.ParseDirectoryNode(pageData)
 			if err != nil {
-				continue
+				break
 			}
-
-			// Check offer expiration
-			// Reference: rippled OfferStream.cpp lines 256-265
-			if s.parentCloseTime > 0 && offer.Expiration > 0 &&
-				offer.Expiration <= s.parentCloseTime {
-				s.removeExpiredOffer(sb, offer, offerKey)
-				continue
-			}
-
-			return offer, offerKey, nil
 		}
-	}
 
-	return nil, [32]byte{}, nil
+		searchKey = foundKey
+	}
 }
 
 // removeExpiredOffer removes an expired offer from the ledger.
@@ -808,6 +986,53 @@ func (s *BookStep) removeExpiredOffer(sb *PaymentSandbox, offer *sle.LedgerOffer
 }
 
 // isOfferFunded checks if an offer has sufficient funding
+// isOfferOwnerAuthorized checks if the offer owner is authorized to hold currency
+// from the issuer. Returns true if authorized or if no auth is required.
+// Reference: BookStep.cpp lines 760-790
+// isOfferOwnerAuthorized checks if the offer owner is authorized to hold currency
+// from the issuer. Returns true if authorized or if no auth is required.
+// Reference: BookStep.cpp lines 760-790
+func (s *BookStep) isOfferOwnerAuthorized(
+	view *PaymentSandbox, owner, issuer [20]byte, currency string,
+) bool {
+	// Read issuer account to check RequireAuth flag
+	issuerKey := keylet.Account(issuer)
+	issuerData, err := view.Read(issuerKey)
+	if err != nil || issuerData == nil {
+		return true // No issuer account = no auth check
+	}
+	issuerAccount, err := sle.ParseAccountRoot(issuerData)
+	if err != nil {
+		return true
+	}
+	if (issuerAccount.Flags & sle.LsfRequireAuth) == 0 {
+		return true // Issuer doesn't require auth
+	}
+
+	// Issuer requires auth — check if owner has authorization on trust line
+	// Reference: rippled uses lsfHighAuth/lsfLowAuth based on account ordering
+	lineKey := keylet.Line(owner, issuer, currency)
+	lineData, err := view.Read(lineKey)
+	if err != nil || lineData == nil {
+		return false // No trust line = not authorized
+	}
+	line, err := sle.ParseRippleState(lineData)
+	if err != nil {
+		return false
+	}
+
+	// Determine which auth flag to check based on account ordering
+	// Reference: rippled BookStep.cpp line 774: issuerID > ownerID ? lsfHighAuth : lsfLowAuth
+	var authFlag uint32
+	if bytes.Compare(issuer[:], owner[:]) > 0 {
+		authFlag = sle.LsfHighAuth
+	} else {
+		authFlag = sle.LsfLowAuth
+	}
+
+	return (line.Flags & authFlag) != 0
+}
+
 func (s *BookStep) isOfferFunded(sb *PaymentSandbox, offer *sle.LedgerOffer) bool {
 	if offer == nil {
 		return false
@@ -863,10 +1088,12 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *sle.LedgerOff
 			return ZeroXRPEitherAmount()
 		}
 
-		if available < offerTakerGets.XRP {
-			return NewXRPEitherAmount(available)
-		}
-		return offerTakerGets
+		// Return the raw liquid balance (not capped at offerTakerGets).
+		// Reference: rippled accountFundsHelper calls accountHolds() which returns
+		// the full available balance. The funding cap comparison (funds < ownerGives)
+		// handles the actual cap — capping here breaks ownerPaysTransferFee cases
+		// where ownerGives > offerTakerGets.
+		return NewXRPEitherAmount(available)
 	}
 
 	// For IOU TakerGets: check owner's trustline balance with issuer
@@ -882,10 +1109,11 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *sle.LedgerOff
 		return ZeroIOUEitherAmount(currency, sle.EncodeAccountIDSafe(issuer))
 	}
 
-	if ownerBalance.Compare(offerTakerGets) < 0 {
-		return ownerBalance
-	}
-	return offerTakerGets
+	// Return the raw trust line balance (not capped at offerTakerGets).
+	// Reference: rippled accountFundsHelper calls accountHolds() which returns
+	// the full trust line balance. Capping at offerTakerGets causes a false
+	// underfunded detection when ownerPaysTransferFee=true (ownerGives > offerTakerGets).
+	return ownerBalance
 }
 
 // getIOUBalance returns an account's IOU balance with an issuer
@@ -920,6 +1148,98 @@ func (s *BookStep) getIOUBalance(sb *PaymentSandbox, account, issuer [20]byte, c
 
 	// Create new Amount with correct issuer
 	return NewIOUEitherAmount(sle.NewIssuedAmountFromValue(balance.IOU().Mantissa(), balance.IOU().Exponent(), currency, issuerStr))
+}
+
+// shouldRmSmallIncreasedQOffer checks if a tiny underfunded offer should be removed
+// because its effective quality has degraded.
+//
+// When an offer is underfunded (owner has less than TakerGets), the effective amounts
+// are adjusted by the owner's funds. This can cause the effective input (TakerPays)
+// to drop to 1 drop (XRP) or the minimum IOU amount. If the effective quality is
+// worse than the offer's original quality, the offer is blocking the order book and
+// should be removed.
+//
+// This check applies when:
+//   - TakerPays is XRP (because of XRP drops granularity), OR
+//   - Both TakerPays and TakerGets are IOU and TakerPays < TakerGets
+//
+// It does NOT apply when TakerGets is XRP (the worst quality change is ~10^-81
+// TakerPays per 1 drop, which is good quality for any realistic asset).
+//
+// Reference: rippled OfferStream.cpp shouldRmSmallIncreasedQOffer() lines 141-222
+func (s *BookStep) shouldRmSmallIncreasedQOffer(sb *PaymentSandbox, offer *sle.LedgerOffer, ownerFunds EitherAmount) bool {
+	if !s.fixRmSmallIncreasedQOffers {
+		return false
+	}
+
+	inIsXRP := s.book.In.IsXRP()
+	outIsXRP := s.book.Out.IsXRP()
+
+	// If TakerGets is XRP, the worst quality change is ~10^-81 TakerPays per 1 drop.
+	// This is remarkably good quality for any realistic asset, so skip the check.
+	if outIsXRP {
+		return false
+	}
+
+	ofrIn := s.offerTakerPays(offer)
+	ofrOut := s.offerTakerGets(offer)
+
+	// For IOU/IOU: only check if TakerPays < TakerGets
+	if !inIsXRP && !outIsXRP {
+		if ofrIn.Compare(ofrOut) >= 0 {
+			return false
+		}
+	}
+
+	offerOwner, err := sle.DecodeAccountID(offer.Account)
+	if err != nil {
+		return false
+	}
+
+	// Compute effective amounts adjusted by owner funds
+	effectiveIn := ofrIn
+	effectiveOut := ofrOut
+	if offerOwner != s.book.Out.Issuer && ownerFunds.Compare(ofrOut) < 0 {
+		// Adjust amounts by owner funds using ceil_out or ceil_out_strict
+		// Reference: rippled OfferStream.cpp lines 192-207
+		offerQ := s.offerQuality(offer)
+		if s.fixReducedOffersV1 {
+			effectiveIn, effectiveOut = offerQ.CeilOutStrict(ofrIn, ofrOut, ownerFunds, false)
+		} else {
+			effectiveIn, effectiveOut = offerQ.CeilOut(ofrIn, ofrOut, ownerFunds)
+		}
+	}
+
+	// If either effective amount is zero, remove the offer.
+	// This can happen with fixReducedOffersV1 since it rounds down.
+	if s.fixReducedOffersV1 {
+		if effectiveIn.IsZero() || effectiveIn.IsNegative() ||
+			effectiveOut.IsZero() || effectiveOut.IsNegative() {
+			return true
+		}
+	}
+
+	// Check if the effective input is at or below the minimum positive amount.
+	// For XRP: 1 drop
+	// For IOU: 1e-81 (mantissa=10^15, exponent=-96)
+	if inIsXRP {
+		// XRP: minPositiveAmount = 1 drop
+		if effectiveIn.XRP > 1 {
+			return false
+		}
+	} else {
+		// IOU: minPositiveAmount = STAmount(minMantissa=10^15, minExponent=-96) = 1e-81
+		minPositive := NewIOUEitherAmount(tx.NewIssuedAmount(1000000000000000, -96, s.book.In.Currency, sle.EncodeAccountIDSafe(s.book.In.Issuer)))
+		if effectiveIn.Compare(minPositive) > 0 {
+			return false
+		}
+	}
+
+	// Compare effective quality with the offer's original quality.
+	// If effective quality is worse (higher), remove the offer.
+	effectiveQuality := QualityFromAmounts(effectiveIn, effectiveOut)
+	offerQuality := s.offerQuality(offer)
+	return effectiveQuality.WorseThan(offerQuality)
 }
 
 // offerTakerGets returns what the taker gets from this offer
@@ -1554,11 +1874,13 @@ func (s *BookStep) computeOutputFromInput(input, offerPays, offerGets EitherAmou
 }
 
 // consumeOffer reduces the offer's amounts by the consumed amounts and transfers funds.
-// consumedInGross is the GROSS amount (what taker pays, includes transfer fee)
-// consumedInNet is the NET amount (what offer owner receives, after transfer fee)
-// consumedOut is the amount the taker receives (offer's TakerGets)
-// Note: We pass both GROSS and NET to avoid rounding errors from recalculating NET from GROSS.
-func (s *BookStep) consumeOffer(sb *PaymentSandbox, offer *sle.LedgerOffer, consumedInGross, consumedInNet, consumedOut EitherAmount) error {
+// consumedInGross is the GROSS amount (what taker pays, includes trIn transfer fee)
+// consumedInNet is the NET amount (what offer owner receives, after trIn transfer fee)
+// consumedOut is the NET amount the taker receives (offer's TakerGets portion)
+// ownerGives is the GROSS amount the offer owner debits (consumedOut * trOut, includes trOut fee)
+// Note: ownerGives >= consumedOut; the difference is the transfer fee that stays with the issuer.
+// Reference: rippled BookStep.cpp consumeOffer() passes ownerGives to accountSend(owner → book.out.account)
+func (s *BookStep) consumeOffer(sb *PaymentSandbox, offer *sle.LedgerOffer, consumedInGross, consumedInNet, consumedOut, ownerGives EitherAmount) error {
 	offerOwner, err := sle.DecodeAccountID(offer.Account)
 	if err != nil {
 		return err
@@ -1579,11 +1901,13 @@ func (s *BookStep) consumeOffer(sb *PaymentSandbox, offer *sle.LedgerOffer, cons
 		return err
 	}
 
-	// 2. Transfer output currency: offer owner -> book.out issuer (for IOU) or XRP pseudo-account (for XRP)
-	//    The DirectStepI or XRPEndpointStep after BookStep handles delivery to the actual destination.
-	//    Reference: rippled BookStep.cpp - sends to book_.out.account (issuer for IOU, zero for XRP)
+	// 2. Debit ownerGives from offer owner → book.out.account (issuer for IOU, zero for XRP).
+	//    ownerGives is the GROSS amount the owner pays (consumedOut * trOut), not just consumedOut.
+	//    The difference (ownerGives - consumedOut) is the transfer fee retained by the issuer.
+	//    The DirectStepI or XRPEndpointStep after BookStep issues consumedOut to the actual destination.
+	//    Reference: rippled BookStep.cpp consumeOffer: accountSend(offer.owner(), book_.out.account, ownerGives)
 	outRecipient := s.book.Out.Issuer // For XRP: zero account; for IOU: the issuer
-	if err := s.transferFunds(sb, offerOwner, outRecipient, consumedOut, s.book.Out); err != nil {
+	if err := s.transferFunds(sb, offerOwner, outRecipient, ownerGives, s.book.Out); err != nil {
 		return err
 	}
 
@@ -1618,6 +1942,8 @@ func (s *BookStep) consumeOffer(sb *PaymentSandbox, offer *sle.LedgerOffer, cons
 		offer.TakerGets = s.eitherAmountToTxAmount(newTakerGets, s.book.Out)
 
 		remainingFunded := s.getOfferFundedAmount(sb, offer)
+		fmt.Printf("[CONSUMEOFFER-DBG] newTakerPays=%+v newTakerGets=%+v remainingFunded=%+v isEffZero=%v\n",
+			newTakerPays, newTakerGets, remainingFunded, remainingFunded.IsEffectivelyZero())
 		if remainingFunded.IsEffectivelyZero() {
 			offerData, err := sle.SerializeLedgerOffer(offer)
 			if err != nil {
@@ -1918,15 +2244,11 @@ func (s *BookStep) creditTrustline(sb *PaymentSandbox, account, issuer [20]byte,
 	}
 
 	accountIsLow := sle.CompareAccountIDsForLine(account, issuer) < 0
-	fmt.Printf("[DEBUG BookStep.creditTrustline] account=%x issuer=%x accountIsLow=%v\n", account[:4], issuer[:4], accountIsLow)
-	fmt.Printf("[DEBUG BookStep.creditTrustline] balance BEFORE: mantissa=%d exp=%d val=%s\n", rs.Balance.IOU().Mantissa(), rs.Balance.IOU().Exponent(), rs.Balance.Value())
-	fmt.Printf("[DEBUG BookStep.creditTrustline] amount: mantissa=%d exp=%d val=%s\n", amount.IOU().Mantissa(), amount.IOU().Exponent(), amount.Value())
 	if accountIsLow {
 		rs.Balance, _ = rs.Balance.Add(amount)
 	} else {
 		rs.Balance, _ = rs.Balance.Sub(amount)
 	}
-	fmt.Printf("[DEBUG BookStep.creditTrustline] balance AFTER: mantissa=%d exp=%d val=%s\n", rs.Balance.IOU().Mantissa(), rs.Balance.IOU().Exponent(), rs.Balance.Value())
 
 	rs.PreviousTxnID = txHash
 	rs.PreviousTxnLgrSeq = ledgerSeq
@@ -2227,15 +2549,45 @@ func (s *BookStep) eitherAmountToTxAmount(ea EitherAmount, issue Issue) tx.Amoun
 
 // getTipQuality gets the best quality available in the order book
 func (s *BookStep) getTipQuality(sb *PaymentSandbox) *Quality {
-	offer, _, err := s.getNextOffer(sb, sb, nil)
-	if err != nil || offer == nil {
-		fmt.Printf("[BookStep.getTipQuality] book %v→%v: no offers (err=%v)\n", s.book.In.Currency, s.book.Out.Currency, err)
+	// Find best quality in the order book using Succ() for O(log n) lookup.
+	// bookBase has quality=0 (bytes 24-31 zeroed). Succ finds the first key
+	// strictly greater, which is the first actual quality entry.
+	// Reference: rippled BookStep.cpp tip() uses view.succ(key, bookEnd).
+	bookBase := s.bookBaseKey()
+
+	foundKey, _, found, err := sb.Succ(bookBase)
+	if err != nil || !found {
 		return nil
 	}
 
-	q := s.offerQuality(offer)
-	fmt.Printf("[BookStep.getTipQuality] book %v→%v: quality=%v\n", s.book.In.Currency, s.book.Out.Currency, q)
+	// Check if the found key matches the book prefix (first 24 bytes)
+	if !bytes.Equal(foundKey[:24], bookBase[:24]) {
+		return nil
+	}
+
+	// Extract quality from the directory key (last 8 bytes)
+	q := QualityFromKey(foundKey)
 	return &q
+}
+
+// bookBaseKey computes the base key for this BookStep's order book.
+// Returns the book prefix (24 bytes) with quality bytes (24-31) zeroed.
+// This serves as the lowest possible key for this book, suitable as a
+// starting point for Succ()-based iteration.
+// Reference: rippled BookTip initializes with book base (quality=0).
+func (s *BookStep) bookBaseKey() [32]byte {
+	takerPaysCurrency := sle.GetCurrencyBytes(s.book.In.Currency)
+	takerPaysIssuer := s.book.In.Issuer
+	takerGetsCurrency := sle.GetCurrencyBytes(s.book.Out.Currency)
+	takerGetsIssuer := s.book.Out.Issuer
+	key := keylet.BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer).Key
+	// Zero out quality bytes (24-31). BookDir returns a full SHA-512Half hash,
+	// but actual book directory entries have bytes 24-31 replaced with the quality
+	// value. Zero them so Succ() finds the first quality entry.
+	for i := 24; i < 32; i++ {
+		key[i] = 0
+	}
+	return key
 }
 
 // Check validates the BookStep before use
@@ -2247,11 +2599,13 @@ func (s *BookStep) Check(sb *PaymentSandbox) tx.Result {
 		return tx.TemBAD_PATH
 	}
 
-	offer, _, err := s.getNextOffer(sb, sb, nil)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	if offer == nil {
+	// Check that the book directory exists (has any offers, even expired ones).
+	// We use getTipQuality which reads from directory keys, not individual offers.
+	// This ensures expired-only books are still considered valid for crossing
+	// (the expired offers will be cleaned up during Rev/Fwd iteration).
+	// Reference: rippled BookStep.cpp check() uses tip() which reads directory
+	tipQ := s.getTipQuality(sb)
+	if tipQ == nil {
 		return tx.TecPATH_DRY
 	}
 
@@ -2276,20 +2630,15 @@ func GetLedgerReserves(view LedgerReader) (baseReserve, incrementReserve int64) 
 	feesKey := keylet.Fees()
 	feesData, err := view.Read(feesKey)
 	if err != nil || feesData == nil {
-		fmt.Printf("[DEBUG GetLedgerReserves] Read failed or nil: err=%v data=%v\n", err, feesData == nil)
 		return defaultBase, defaultIncrement
 	}
 
 	feeSettings, err := sle.ParseFeeSettings(feesData)
 	if err != nil {
-		fmt.Printf("[DEBUG GetLedgerReserves] Parse failed: err=%v\n", err)
 		return defaultBase, defaultIncrement
 	}
 
 	base := int64(feeSettings.GetReserveBase())
 	inc := int64(feeSettings.GetReserveIncrement())
-	fmt.Printf("[DEBUG GetLedgerReserves] ReserveBaseDrops=%d ReserveIncrementDrops=%d ReserveBase=%v ReserveInc=%v → base=%d inc=%d\n",
-		feeSettings.ReserveBaseDrops, feeSettings.ReserveIncrementDrops,
-		feeSettings.ReserveBase, feeSettings.ReserveIncrement, base, inc)
 	return base, inc
 }

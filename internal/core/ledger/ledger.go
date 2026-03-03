@@ -516,6 +516,26 @@ func (l *Ledger) ForEach(fn func(key [32]byte, data []byte) bool) error {
 	})
 }
 
+// Succ returns the first state entry with key > the given key.
+// Uses SHAMap's UpperBound for O(log n) lookup.
+// Reference: rippled ReadView::succ()
+func (l *Ledger) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	it := l.stateMap.UpperBound(key)
+	if it.Valid() {
+		item := it.Item()
+		if item != nil {
+			return item.Key(), item.Data(), true, nil
+		}
+	}
+	if err := it.Err(); err != nil {
+		return [32]byte{}, nil, false, err
+	}
+	return [32]byte{}, nil, false, nil
+}
+
 // ForEachTransaction iterates over all transactions in the ledger and calls fn for each.
 // If fn returns false, iteration stops early.
 // The callback receives the transaction hash and data.

@@ -202,7 +202,6 @@ func ParseDirectoryNode(data []byte) (*DirectoryNode, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	dir := &DirectoryNode{}
 
 	if flags, ok := jsonObj["Flags"].(float64); ok {
@@ -322,7 +321,6 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, setupFun
 	if err != nil {
 		return nil, err
 	}
-
 	// Determine if this is a book directory based on setup function behavior
 	var isBookDir bool
 	testDir := &DirectoryNode{}

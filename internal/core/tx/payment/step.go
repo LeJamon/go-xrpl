@@ -1,12 +1,21 @@
 package payment
 
 import (
+	"encoding/binary"
+	"math"
 	"math/big"
 
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
 )
+
+// QualityFromKey extracts a Quality from a 32-byte book directory key.
+// The quality is stored in the last 8 bytes (24-31) as a big-endian uint64.
+// Reference: rippled's getQuality() in Indexes.cpp
+func QualityFromKey(key [32]byte) Quality {
+	return Quality{Value: binary.BigEndian.Uint64(key[24:])}
+}
 
 // DebtDirection indicates whether a step is issuing or redeeming currency
 type DebtDirection int
@@ -276,15 +285,64 @@ func (q Quality) WorseThan(other Quality) bool {
 	return q.Value > other.Value
 }
 
-// Increment returns a Quality that is slightly worse (higher value).
+// RelativeDistance computes the relative distance between two qualities.
+// Returns |a-b|/min(a,b) using the encoded mantissa and exponent.
+// Reference: rippled Quality.h relativeDistance()
+func RelativeDistance(q1, q2 Quality) float64 {
+	if q1.Value == q2.Value {
+		return 0
+	}
+
+	minV, maxV := q1.Value, q2.Value
+	if minV > maxV {
+		minV, maxV = maxV, minV
+	}
+
+	extractMantissa := func(rate uint64) uint64 {
+		return rate & ^(uint64(255) << 56)
+	}
+	extractExponent := func(rate uint64) int {
+		return int(rate>>56) - 100
+	}
+
+	minVMantissa := extractMantissa(minV)
+	maxVMantissa := extractMantissa(maxV)
+	expDiff := extractExponent(maxV) - extractExponent(minV)
+
+	minVD := float64(minVMantissa)
+	var maxVD float64
+	if expDiff != 0 {
+		maxVD = float64(maxVMantissa) * math.Pow(10, float64(expDiff))
+	} else {
+		maxVD = float64(maxVMantissa)
+	}
+
+	return (maxVD - minVD) / minVD
+}
+
+// QualityFromMantissaExp creates a Quality representing the value mantissa * 10^exponent.
+// This mirrors rippled's TheoreticalQuality_test.cpp toQuality() helper which creates
+// a Quality from STAmount(noIssue(), mantissa, exponent) / STAmount(noIssue(), 1).
+// Reference: rippled TheoreticalQuality_test.cpp lines 501-509
+func QualityFromMantissaExp(mantissa uint64, exponent int) Quality {
+	one := NewIOUEitherAmount(sle.NewIssuedAmountFromValue(1, 0, "", ""))
+	v := NewIOUEitherAmount(sle.NewIssuedAmountFromValue(int64(mantissa), exponent, "", ""))
+	return QualityFromAmounts(v, one)
+}
+
+// Increment returns a Quality that is slightly better (lower value).
 // This is used for passive offers where we only want to cross against
 // offers with STRICTLY better quality.
-// Reference: rippled CreateOffer.cpp line 364: ++threshold
+// Reference: rippled CreateOffer.cpp line 364: ++threshold (which does --m_value).
+// In rippled's Quality encoding, lower m_value = better quality. So ++threshold
+// makes the threshold better, and the check "offer >= threshold" then only passes
+// for offers that are strictly better than the original passive-offer quality.
+// Our encoding matches rippled: lower Value = better quality, so Increment() decrements.
 func (q Quality) Increment() Quality {
-	if q.Value == ^uint64(0) {
-		return q // Already at max, can't increment
+	if q.Value == 0 {
+		return q // Already at min, can't decrement
 	}
-	return Quality{Value: q.Value + 1}
+	return Quality{Value: q.Value - 1}
 }
 
 // Float64 decodes the quality value to a float64 ratio (in/out).
@@ -313,6 +371,56 @@ func (q Quality) Rate() tx.Amount {
 	exponent := int((q.Value >> 56)) - 100
 	result := tx.NewIssuedAmount(mantissa, exponent, "", "")
 	return result
+}
+
+// CeilOut limits the output amount and recalculates input using mulRound (non-strict).
+// This is the legacy version with "slop" used when fixReducedOffersV1 is NOT enabled.
+// Uses mulRound with hardcoded roundUp=true (matching rippled's ceil_out behavior).
+// Reference: rippled Quality.cpp ceil_out (non-strict) — uses mulRound, always roundUp=true
+func (q Quality) CeilOut(amtIn, amtOut EitherAmount, limit EitherAmount) (EitherAmount, EitherAmount) {
+	if amtOut.Compare(limit) <= 0 {
+		return amtIn, amtOut
+	}
+
+	qRate := q.Rate()
+
+	var limitAmt tx.Amount
+	if limit.IsNative {
+		limitAmt = sle.NewIssuedAmountFromValue(limit.XRP, 0, "", "")
+	} else {
+		limitAmt = limit.IOU
+	}
+
+	var inCurrency, inIssuer string
+	if amtIn.IsNative {
+		inCurrency = ""
+		inIssuer = ""
+	} else {
+		inCurrency = amtIn.IOU.Currency
+		inIssuer = amtIn.IOU.Issuer
+	}
+
+	var resultInEither EitherAmount
+	if amtIn.IsNative {
+		// Native output: use MulRoundNative which applies canonicalizeRound(native=true)
+		// directly, matching rippled's mulRoundImpl when the output asset is XRP.
+		// The non-native MulRound path applies IOU canonicalization first, which
+		// uses different rounding than the native path and causes off-by-one errors.
+		// Reference: rippled STAmount.cpp mulRoundImpl + canonicalizeRound(native=true)
+		resultInEither = NewXRPEitherAmount(sle.MulRoundNative(limitAmt, qRate, true))
+	} else {
+		// Non-strict: mulRound with roundUp=true (always)
+		resultIn := sle.MulRound(limitAmt, qRate, inCurrency, inIssuer, true)
+		resultInEither = NewIOUEitherAmount(tx.NewIssuedAmount(
+			resultIn.Mantissa(), resultIn.Exponent(), inCurrency, inIssuer))
+	}
+
+	// Clamp: result.in must not exceed amount.in
+	if resultInEither.Compare(amtIn) > 0 {
+		resultInEither = amtIn
+	}
+
+	return resultInEither, limit
 }
 
 // CeilOutStrict limits the output amount and recalculates input using mulRoundStrict.
@@ -347,18 +455,9 @@ func (q Quality) CeilOutStrict(amtIn, amtOut EitherAmount, limit EitherAmount, r
 
 	var resultInEither EitherAmount
 	if amtIn.IsNative {
-		// Convert IOU-style result back to XRP drops
-		drops := resultIn.Mantissa()
-		exp := resultIn.Exponent()
-		for exp > 0 {
-			drops *= 10
-			exp--
-		}
-		for exp < 0 {
-			drops /= 10
-			exp++
-		}
-		resultInEither = NewXRPEitherAmount(drops)
+		// Convert IOU-style result back to XRP drops using canonicalizeRoundStrict logic.
+		// Reference: rippled STAmount.cpp canonicalizeRoundStrict
+		resultInEither = NewXRPEitherAmount(CanonicalizeDropsStrict(resultIn.Mantissa(), resultIn.Exponent(), roundUp))
 	} else {
 		resultInEither = NewIOUEitherAmount(tx.NewIssuedAmount(
 			resultIn.Mantissa(), resultIn.Exponent(), inCurrency, inIssuer))
@@ -377,8 +476,49 @@ func (q Quality) CeilOutStrict(amtIn, amtOut EitherAmount, limit EitherAmount, r
 // Used when fixReducedOffersV2 is NOT enabled.
 // Reference: rippled Quality.cpp ceil_in (lines 100-104) uses divRound (always rounds up)
 func (q Quality) CeilIn(amtIn, amtOut EitherAmount, limit EitherAmount) (EitherAmount, EitherAmount) {
-	// Non-strict: always roundUp=true, matching rippled's divRound (DontAffectNumberRoundMode)
-	return q.CeilInStrict(amtIn, amtOut, limit, true)
+	if amtIn.Compare(limit) <= 0 {
+		return amtIn, amtOut
+	}
+
+	qRate := q.Rate()
+
+	var limitAmt tx.Amount
+	if limit.IsNative {
+		limitAmt = sle.NewIssuedAmountFromValue(limit.XRP, 0, "", "")
+	} else {
+		limitAmt = limit.IOU
+	}
+
+	var outCurrency, outIssuer string
+	if amtOut.IsNative {
+		outCurrency = ""
+		outIssuer = ""
+	} else {
+		outCurrency = amtOut.IOU.Currency
+		outIssuer = amtOut.IOU.Issuer
+	}
+
+	var resultOutEither EitherAmount
+	if amtOut.IsNative {
+		// Native output: use DivRoundNative which applies canonicalizeRound(native=true)
+		// directly, matching rippled's divRoundImpl when the output asset is XRP.
+		// The non-native DivRound path applies IOU canonicalization first, which
+		// uses different rounding than the native path and causes off-by-one errors.
+		// Reference: rippled STAmount.cpp divRoundImpl + canonicalizeRound(native=true)
+		resultOutEither = NewXRPEitherAmount(sle.DivRoundNative(limitAmt, qRate, true))
+	} else {
+		// Non-strict: divRound with roundUp=true (matching rippled's ceil_in which uses divRound)
+		resultOut := sle.DivRound(limitAmt, qRate, outCurrency, outIssuer, true)
+		resultOutEither = NewIOUEitherAmount(tx.NewIssuedAmount(
+			resultOut.Mantissa(), resultOut.Exponent(), outCurrency, outIssuer))
+	}
+
+	// Clamp: result.out must not exceed amount.out
+	if resultOutEither.Compare(amtOut) > 0 {
+		resultOutEither = amtOut
+	}
+
+	return limit, resultOutEither
 }
 
 // CeilInStrict limits the input amount and recalculates output using divRoundStrict.
@@ -412,17 +552,12 @@ func (q Quality) CeilInStrict(amtIn, amtOut EitherAmount, limit EitherAmount, ro
 
 	var resultOutEither EitherAmount
 	if amtOut.IsNative {
-		drops := resultOut.Mantissa()
-		exp := resultOut.Exponent()
-		for exp > 0 {
-			drops *= 10
-			exp--
-		}
-		for exp < 0 {
-			drops /= 10
-			exp++
-		}
-		resultOutEither = NewXRPEitherAmount(drops)
+		// Convert IOU-style result back to XRP drops using canonicalizeRound (non-strict).
+		// Reference: rippled divRoundImpl always uses canonicalizeRound (NOT canonicalizeRoundStrict)
+		// for the native drop conversion, even in divRoundStrict. The strict vs non-strict
+		// distinction in divRound only affects the NumberRoundModeGuard during STAmount normalization,
+		// not the native canonicalization step.
+		resultOutEither = NewXRPEitherAmount(CanonicalizeDrops(resultOut.Mantissa(), resultOut.Exponent()))
 	} else {
 		resultOutEither = NewIOUEitherAmount(tx.NewIssuedAmount(
 			resultOut.Mantissa(), resultOut.Exponent(), outCurrency, outIssuer))
@@ -454,6 +589,97 @@ func pow10(n int) float64 {
 		result /= 10
 	}
 	return result
+}
+
+// CanonicalizeDrops converts an IOU-style mantissa/exponent to XRP drops,
+// matching rippled's canonicalizeRound (non-strict) for native amounts.
+// Uses loop count (not actual remainder) to decide rounding: adds 10 when
+// only 1 division loop occurred, 9 when 2+ loops.
+// Reference: rippled STAmount.cpp canonicalizeRound lines 1432-1464
+func CanonicalizeDrops(mantissa int64, exponent int) int64 {
+	if mantissa == 0 {
+		return 0
+	}
+	value := mantissa
+	if value < 0 {
+		value = -value
+	}
+
+	// Scale up if exponent > 0
+	for exponent > 0 {
+		value *= 10
+		exponent--
+	}
+
+	// Scale down if exponent < 0
+	if exponent < 0 {
+		loops := 0
+		for exponent < -1 {
+			value /= 10
+			exponent++
+			loops++
+		}
+		// Non-strict: add 10 when loops < 2, add 9 when loops >= 2
+		// Reference: rippled "value += (loops >= 2) ? 9 : 10;"
+		var adder int64 = 10
+		if loops >= 2 {
+			adder = 9
+		}
+		value = (value + adder) / 10
+		exponent++
+	}
+
+	if mantissa < 0 {
+		return -value
+	}
+	return value
+}
+
+// CanonicalizeDropsStrict converts an IOU-style mantissa/exponent to XRP drops,
+// matching rippled's canonicalizeRoundStrict for native amounts.
+// Reference: rippled STAmount.cpp canonicalizeRoundStrict lines 1471-1497
+func CanonicalizeDropsStrict(mantissa int64, exponent int, roundUp bool) int64 {
+	if mantissa == 0 {
+		return 0
+	}
+	value := mantissa
+	if value < 0 {
+		value = -value
+	}
+
+	// Scale up if exponent > 0
+	for exponent > 0 {
+		value *= 10
+		exponent--
+	}
+
+	// Scale down if exponent < 0
+	// Track whether any bits were lost during intermediate divisions
+	if exponent < 0 {
+		hadRemainder := false
+		for exponent < -1 {
+			newValue := value / 10
+			if value != newValue*10 {
+				hadRemainder = true
+			}
+			value = newValue
+			exponent++
+		}
+		// Final division with proper rounding
+		// When roundUp=true and there was a remainder, add 10 to force round-up
+		// Otherwise add 9 (rounds to nearest, up on 5)
+		var adder int64 = 9
+		if hadRemainder && roundUp {
+			adder = 10
+		}
+		value = (value + adder) / 10
+		exponent++
+	}
+
+	if mantissa < 0 {
+		return -value
+	}
+	return value
 }
 
 // Compose multiplies two qualities together using exact STAmount arithmetic.

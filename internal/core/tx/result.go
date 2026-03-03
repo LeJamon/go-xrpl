@@ -98,6 +98,7 @@ const (
 	TefTOO_BIG          Result = -181
 	TefNO_TICKET        Result = -180
 	TefNFTOKEN_IS_NOT_TRANSFERABLE Result = -179
+	TefINVALID_LEDGER_FIX_TYPE     Result = -178
 
 	// telLOCAL_ERROR and related codes (-399 to -300)
 	// Local error, transaction not sent to network
@@ -353,6 +354,8 @@ func (r Result) String() string {
 		return "tefNO_TICKET"
 	case TefNFTOKEN_IS_NOT_TRANSFERABLE:
 		return "tefNFTOKEN_IS_NOT_TRANSFERABLE"
+	case TefINVALID_LEDGER_FIX_TYPE:
+		return "tefINVALID_LEDGER_FIX_TYPE"
 	case TelLOCAL_ERROR:
 		return "telLOCAL_ERROR"
 	case TelBAD_DOMAIN:
@@ -365,6 +368,10 @@ func (r Result) String() string {
 		return "telCAN_NOT_QUEUE"
 	case TelWRONG_NETWORK:
 		return "telWRONG_NETWORK"
+	case TelREQUIRES_NETWORK_ID:
+		return "telREQUIRES_NETWORK_ID"
+	case TelNETWORK_ID_MAKES_TX_NON_CANONICAL:
+		return "telNETWORK_ID_MAKES_TX_NON_CANONICAL"
 	case TemMALFORMED:
 		return "temMALFORMED"
 	case TemBAD_AMOUNT:

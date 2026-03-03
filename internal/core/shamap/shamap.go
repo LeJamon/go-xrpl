@@ -938,6 +938,7 @@ func (sm *SHAMap) snapshotBacked(mutable bool) (*SHAMap, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to flush dirty nodes: %w", err)
 	}
+
 	if len(batch.Entries) > 0 {
 		if err := sm.family.StoreBatch(batch.Entries); err != nil {
 			return nil, fmt.Errorf("failed to store flushed nodes: %w", err)
@@ -963,6 +964,7 @@ func (sm *SHAMap) snapshotBacked(mutable bool) (*SHAMap, error) {
 	}
 	newMap.state = newState
 	newMap.ledgerSeq = sm.ledgerSeq
+
 	return newMap, nil
 }
 

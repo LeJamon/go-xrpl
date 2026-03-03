@@ -61,7 +61,7 @@ const (
 	fieldCodeNFTokenMinter   = 9  // Account - authorized NFT minter
 	fieldCodeEmailHash       = 1  // Hash128
 	fieldCodeDomain          = 7  // Blob
-	fieldCodeTickSize        = 16 // UInt8 (stored as UInt16)
+	fieldCodeTickSize        = 16 // UInt8 (type code 16)
 	fieldCodeAccountTxnID    = 9  // Hash256 - last transaction ID
 	fieldCodeWalletLocator   = 7  // Hash256 - wallet locator (deprecated)
 )
@@ -320,6 +320,16 @@ func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 			}
 			offset += 32
 
+		case 16: // UInt8
+			if offset+1 > len(data) {
+				return account, nil
+			}
+			value := data[offset]
+			offset++
+			if fieldCode == fieldCodeTickSize {
+				account.TickSize = value
+			}
+
 		default:
 			// Unknown type - can't determine size, must stop parsing
 			// This shouldn't happen for valid AccountRoot entries
@@ -410,6 +420,11 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 	// Add PreviousTxnLgrSeq if set
 	if account.PreviousTxnLgrSeq > 0 {
 		jsonObj["PreviousTxnLgrSeq"] = account.PreviousTxnLgrSeq
+	}
+
+	// Add TickSize if set (non-zero)
+	if account.TickSize > 0 {
+		jsonObj["TickSize"] = account.TickSize
 	}
 
 	// Encode using the binary codec

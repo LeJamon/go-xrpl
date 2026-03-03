@@ -1,7 +1,5 @@
 package payment
 
-import "fmt"
-
 // ExecuteStrand executes a strand using the two-pass algorithm matching rippled's
 // StrandFlow.h flow() function.
 //
@@ -55,11 +53,9 @@ func ExecuteStrand(
 		step := strand[i]
 
 		actualIn, actualOut := step.Rev(sb, afView, ofrsToRm, stepOut)
-		fmt.Printf("[ExecuteStrand] Rev step[%d] %T: requested=%v → actualIn=%v actualOut=%v\n", i, step, stepOut, actualIn, actualOut)
 
 		// Check if output is zero → strand is dry
 		if step.IsZero(actualOut) {
-			fmt.Printf("[ExecuteStrand] step[%d] returned zero → dry strand\n", i)
 			return StrandResult{
 				Success:  false,
 				In:       ZeroXRPEitherAmount(),
@@ -74,16 +70,13 @@ func ExecuteStrand(
 			// Step 0 exceeded maxIn
 			// Reset sandbox and re-execute step 0 with Fwd(maxIn)
 			// Reference: rippled StrandFlow.h lines 148-178
-			fmt.Printf("[ExecuteStrand] step[0] exceeded maxIn: actualIn=%v > maxIn=%v → reset + Fwd\n", actualIn, *maxIn)
 			sb.Reset()
 			limitingStep = 0
 
 			fwdIn, fwdOut := step.Fwd(sb, afView, ofrsToRm, *maxIn)
 			limitStepOut = fwdOut
-			fmt.Printf("[ExecuteStrand] step[0] Fwd(maxIn=%v) → in=%v out=%v\n", *maxIn, fwdIn, fwdOut)
 
 			if step.IsZero(fwdOut) {
-				fmt.Printf("[ExecuteStrand] step[0] Fwd returned zero → dry\n")
 				return StrandResult{
 					Success:  false,
 					In:       ZeroXRPEitherAmount(),
@@ -101,7 +94,6 @@ func ExecuteStrand(
 			// Limiting step found — actualOut < requested stepOut
 			// Reset BOTH sandboxes and re-execute ONLY this step
 			// Reference: rippled StrandFlow.h lines 180-217
-			fmt.Printf("[ExecuteStrand] step[%d] LIMITING: actualOut=%v != requested=%v → reset + re-Rev\n", i, actualOut, stepOut)
 			sb.Reset()
 			limitingStep = i
 
@@ -109,10 +101,8 @@ func ExecuteStrand(
 			reStepOut := actualOut
 			reIn, reOut := step.Rev(sb, afView, ofrsToRm, reStepOut)
 			limitStepOut = reOut
-			fmt.Printf("[ExecuteStrand] step[%d] re-Rev(out=%v) → in=%v out=%v\n", i, reStepOut, reIn, reOut)
 
 			if step.IsZero(reOut) {
-				fmt.Printf("[ExecuteStrand] step[%d] re-Rev returned zero → dry\n", i)
 				return StrandResult{
 					Success:  false,
 					In:       ZeroXRPEitherAmount(),
@@ -136,15 +126,12 @@ func ExecuteStrand(
 	// Reference: rippled StrandFlow.h lines 224-254
 	if limitingStep < s {
 		stepIn := limitStepOut
-		fmt.Printf("[ExecuteStrand] Forward pass from step %d, initial stepIn=%v\n", limitingStep+1, stepIn)
 		for i := limitingStep + 1; i < s; i++ {
 			step := strand[i]
 
 			fwdIn, fwdOut := step.Fwd(sb, afView, ofrsToRm, stepIn)
-			fmt.Printf("[ExecuteStrand] Fwd step[%d] %T: in=%v → actualIn=%v actualOut=%v\n", i, step, stepIn, fwdIn, fwdOut)
 
 			if step.IsZero(fwdOut) {
-				fmt.Printf("[ExecuteStrand] Fwd step[%d] returned zero → dry\n", i)
 				return StrandResult{
 					Success:  false,
 					In:       ZeroXRPEitherAmount(),
@@ -185,7 +172,6 @@ func ExecuteStrand(
 		}
 	}
 
-	fmt.Printf("[ExecuteStrand] DONE: In=%v Out=%v limitingStep=%d\n", *strandIn, *strandOut, limitingStep)
 	return StrandResult{
 		Success:    true,
 		In:         *strandIn,

@@ -250,7 +250,9 @@ func TestConsecutiveNFTs(t *testing.T) {
 	issuer := jtx.NewAccount("issuer")
 	buyer := jtx.NewAccount("buyer")
 
-	env.Fund(issuer, buyer)
+	// Reserve = 200 + ownerCount*50 XRP; buyer needs ~108 OwnerCount (100 offers + pages)
+	env.FundAmount(issuer, 6000000000) // 6000 XRP
+	env.FundAmount(buyer, 6000000000)  // 6000 XRP
 	env.Close()
 
 	const nftCount = 100
@@ -307,7 +309,8 @@ func exerciseLopsided(t *testing.T, seeds []string) {
 	env := jtx.NewTestEnv(t)
 
 	buyer := jtx.NewAccount("buyer")
-	env.Fund(buyer)
+	// Reserve = 200 + ownerCount*50 XRP; buyer needs ~65 OwnerCount
+	env.FundAmount(buyer, 4000000000) // 4000 XRP
 	env.Close()
 
 	// Create accounts from seeds and fund them all in the same ledger
@@ -384,7 +387,8 @@ func TestFixNFTokenDirV1(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 
 		buyer := jtx.NewAccount("buyer")
-		env.Fund(buyer)
+		// Reserve = 200 + ownerCount*50 XRP; buyer needs ~69 OwnerCount
+		env.FundAmount(buyer, 4000000000) // 4000 XRP
 		env.Close()
 
 		// Create accounts from seeds
@@ -462,7 +466,8 @@ func TestTooManyEquivalent(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 
 	buyer := jtx.NewAccount("buyer")
-	env.Fund(buyer)
+	// Reserve = 200 + ownerCount*50 XRP; buyer needs ~66 OwnerCount
+	env.FundAmount(buyer, 4000000000) // 4000 XRP
 	env.Close()
 
 	// Create 33 accounts with identical low 32-bits
@@ -529,7 +534,8 @@ func TestConsecutivePacking(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 
 	buyer := jtx.NewAccount("buyer")
-	env.Fund(buyer)
+	// Reserve = 200 + ownerCount*50 XRP; buyer needs ~459 OwnerCount
+	env.FundAmount(buyer, 25000000000) // 25000 XRP
 	env.Close()
 
 	// Create 33 accounts with identical low 32-bits

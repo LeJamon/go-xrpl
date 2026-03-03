@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	paymentPkg "github.com/LeJamon/goXRPLd/internal/core/tx/payment"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
@@ -228,15 +227,11 @@ func testGatewayCrossCurrency(t *testing.T, disabledFeatures []string) {
 	// Amount: XXX(1) (destination amount = what bob receives)
 	// SendMax: XTS(1.5) (maximum bob is willing to send)
 	// The payment goes through alice's offer book (XTS -> XXX).
-	// Path step: {Currency: "XTS", Issuer: gw.Address} specifies going through
-	// the XTS/XXX order book.
+	// Reference: rippled uses build_path=true (server auto-pathfinding),
+	// which is equivalent to relying on the default path with the gateway
+	// as intermediary. No explicit path elements needed.
 	result = env.Submit(payment.PayIssued(bob, bob, XXX(1)).
 		SendMax(XTS(1.5)).
-		Paths([][]paymentPkg.PathStep{
-			{
-				{Currency: "XTS", Issuer: gw.Address},
-			},
-		}).
 		Build())
 	jtx.RequireTxSuccess(t, result)
 

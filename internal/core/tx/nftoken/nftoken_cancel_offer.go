@@ -116,25 +116,8 @@ func (co *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TecNO_PERMISSION
 		}
 
-		// Refund escrowed amount for buy offers
-		if offer.Flags&lsfSellNFToken == 0 && offer.Amount > 0 {
-			if offer.Owner == accountID {
-				ctx.Account.Balance += offer.Amount
-			} else {
-				ownerKey := keylet.Account(offer.Owner)
-				ownerData, err := ctx.View.Read(ownerKey)
-				if err == nil && ownerData != nil {
-					ownerAccount, err := sle.ParseAccountRoot(ownerData)
-					if err == nil {
-						ownerAccount.Balance += offer.Amount
-						ownerUpdated, _ := sle.SerializeAccountRoot(ownerAccount)
-						if ownerUpdated != nil {
-							ctx.View.Update(ownerKey, ownerUpdated)
-						}
-					}
-				}
-			}
-		}
+		// NFToken buy offers do NOT escrow XRP — no refund needed on cancellation.
+		// Reference: rippled NFTokenUtils.cpp deleteTokenOffer — no balance adjustment
 
 		// Decrease owner count
 		if offer.Owner == accountID {

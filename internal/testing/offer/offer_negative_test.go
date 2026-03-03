@@ -237,7 +237,9 @@ func testEnforceNoRipple(t *testing.T, disabledFeatures []string) {
 		jtx.RequireTxSuccess(t, result)
 
 		f := env.BaseFee()
-		jtx.RequireBalance(t, env, alice, uint64(jtx.XRP(10000-50))-f)
+		// alice pays 3 fees: 2 trust lines + 1 payment
+		// (rippled's env.trust() refunds fees, ours doesn't)
+		jtx.RequireBalance(t, env, alice, uint64(jtx.XRP(10000-50))-3*f)
 		jtx.RequireIOUBalance(t, env, bob, gw1, "USD", 100)
 		jtx.RequireIOUBalance(t, env, bob, gw2, "USD", 0)
 		jtx.RequireIOUBalance(t, env, carol, gw2, "USD", 50)

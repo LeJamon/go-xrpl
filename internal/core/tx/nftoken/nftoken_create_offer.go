@@ -273,17 +273,10 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// For buy offers, escrow XRP funds
-	if !isSellOffer && c.Amount.IsNative() {
-		amountXRP := uint64(c.Amount.Drops())
-		if amountXRP > 0 {
-			reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-			if ctx.Account.Balance < amountXRP+reserve {
-				return tx.TecINSUFFICIENT_FUNDS
-			}
-			ctx.Account.Balance -= amountXRP
-		}
-	}
+	// For buy offers, check the buyer has enough XRP for reserve but do NOT
+	// escrow/deduct the offer amount. NFToken buy offers are unfunded promises
+	// — the buyer's balance is only checked, not held.
+	// Reference: rippled NFTokenUtils.cpp tokenOfferCreateApply — no balance deduction
 
 	// Create the offer
 	sequence := c.GetCommon().SeqProxy()

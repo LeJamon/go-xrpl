@@ -9,29 +9,26 @@ import (
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/payment"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/payment"
+	paymentBuilder "github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/stretchr/testify/require"
 )
 
-// computeRate computes the quality rate (in/out) of an offer as float64.
-// Higher rate = worse quality for the taker.
-func computeRate(takerPays, takerGets tx.Amount) float64 {
-	var payVal, getVal float64
-	if takerPays.IsNative() {
-		payVal = float64(takerPays.Drops())
-	} else {
-		payVal = takerPays.Float64()
-	}
-	if takerGets.IsNative() {
-		getVal = float64(takerGets.Drops())
-	} else {
-		getVal = takerGets.Float64()
-	}
-	if getVal == 0 {
-		return 0
-	}
-	return payVal / getVal
+// qualityRate returns the Quality of an offer (TakerPays/TakerGets).
+// Uses exact integer Quality comparison matching rippled's Quality(Amounts{in, out}).rate().
+// Higher quality value = worse rate for the taker.
+func qualityRate(takerPays, takerGets tx.Amount) payment.Quality {
+	return payment.QualityFromAmounts(
+		payment.ToEitherAmount(takerPays),
+		payment.ToEitherAmount(takerGets),
+	)
+}
+
+// qualityWorseThan returns true if rate a is worse than rate b.
+// This replaces the float64 computeRate comparison which has precision issues.
+func qualityWorseThan(a, b payment.Quality) bool {
+	return a.WorseThan(b)
 }
 
 // TestReducedOffer_PartialCrossNewXrpIouQChange exercises partial cross where
@@ -70,7 +67,7 @@ func testPartialCrossNewXrpIouQChange(t *testing.T) {
 			env.Trust(bob, USD(10000000))
 			env.Close()
 
-			result := env.Submit(payment.PayIssued(gw, bob, USD(10000000)).Build())
+			result := env.Submit(paymentBuilder.PayIssued(gw, bob, USD(10000000)).Build())
 			jtx.RequireTxSuccess(t, result)
 			env.Close()
 
@@ -93,7 +90,7 @@ func testPartialCrossNewXrpIouQChange(t *testing.T) {
 				env.Close()
 
 				// bob's offer partially crosses alice's
-				initialRate := computeRate(bobTakerPays, bobTakerGets)
+				initialQuality := qualityRate(bobTakerPays, bobTakerGets)
 				bobOfferSeq := env.Seq(bob)
 				result = env.Submit(OfferCreate(bob, bobTakerPays, bobTakerGets).Sell().Build())
 				jtx.RequireTxSuccess(t, result)
@@ -112,8 +109,8 @@ func testPartialCrossNewXrpIouQChange(t *testing.T) {
 				// Check bob's remaining offer
 				bobOffer := GetOffer(env, bob, bobOfferSeq)
 				if bobOffer != nil {
-					reducedRate := computeRate(bobOffer.TakerPays, bobOffer.TakerGets)
-					if reducedRate > initialRate {
+					reducedQuality := qualityRate(bobOffer.TakerPays, bobOffer.TakerGets)
+					if qualityWorseThan(reducedQuality, initialQuality) {
 						blockedCount++
 					}
 				}
@@ -169,7 +166,7 @@ func testPartialCrossOldXrpIouQChange(t *testing.T) {
 			env.Trust(bob, USD(10000000))
 			env.Close()
 
-			result := env.Submit(payment.PayIssued(gw, alice, USD(10000000)).Build())
+			result := env.Submit(paymentBuilder.PayIssued(gw, alice, USD(10000000)).Build())
 			jtx.RequireTxSuccess(t, result)
 			env.Close()
 
@@ -183,7 +180,7 @@ func testPartialCrossOldXrpIouQChange(t *testing.T) {
 				bobUSD := tx.NewIssuedAmount(int64(aliceTakerGets.Mantissa()-int64(mantissaReduce)), aliceTakerGets.Exponent(), "USD", gw.Address)
 				bobXRP := tx.NewXRPAmount(aliceTakerPays.Drops() - 1)
 
-				initialRate := computeRate(aliceTakerPays, aliceTakerGets)
+				initialQuality := qualityRate(aliceTakerPays, aliceTakerGets)
 
 				// Put alice's offer in the ledger
 				aliceOfferSeq := env.Seq(alice)
@@ -209,8 +206,8 @@ func testPartialCrossOldXrpIouQChange(t *testing.T) {
 				// Check alice's remaining offer
 				aliceOffer := GetOffer(env, alice, aliceOfferSeq)
 				if aliceOffer != nil {
-					reducedRate := computeRate(aliceOffer.TakerPays, aliceOffer.TakerGets)
-					if reducedRate > initialRate {
+					reducedQuality := qualityRate(aliceOffer.TakerPays, aliceOffer.TakerGets)
+					if qualityWorseThan(reducedQuality, initialQuality) {
 						blockedCount++
 					}
 				}
@@ -262,6 +259,7 @@ func testUnderFundedXrpIouQChange(t *testing.T) {
 			env.Close()
 			env.Trust(alice, USD(1000))
 			env.Trust(bob, USD(1000))
+			env.Close()
 
 			var blockedOrderBookCount int
 			// Loop from USD(0.45) to USD(1) in steps of USD(0.025)
@@ -269,7 +267,7 @@ func testUnderFundedXrpIouQChange(t *testing.T) {
 				initialBobUSD := USD(initialBobUSDFloat)
 
 				// Underfund bob's offer
-				result := env.Submit(payment.PayIssued(gw, bob, initialBobUSD).Build())
+				result := env.Submit(paymentBuilder.PayIssued(gw, bob, initialBobUSD).Build())
 				jtx.RequireTxSuccess(t, result)
 				env.Close()
 
@@ -305,10 +303,10 @@ func testUnderFundedXrpIouQChange(t *testing.T) {
 
 				// Zero out balances
 				if bal := env.IOUBalance(alice, gw, "USD"); bal != nil && bal.Signum() > 0 {
-					env.Submit(payment.PayIssued(alice, gw, *bal).Build())
+					env.Submit(paymentBuilder.PayIssued(alice, gw, *bal).Build())
 				}
 				if bal := env.IOUBalance(bob, gw, "USD"); bal != nil && bal.Signum() > 0 {
-					env.Submit(payment.PayIssued(bob, gw, *bal).Build())
+					env.Submit(paymentBuilder.PayIssued(bob, gw, *bal).Build())
 				}
 				env.Close()
 			}
@@ -365,15 +363,16 @@ func testUnderFundedIouIouQChange(t *testing.T) {
 			env.Trust(bob, jtx.USD(gw, 1000))
 			env.Trust(alice, EUR(1000))
 			env.Trust(bob, EUR(1000))
+			env.Close()
 
 			var blockedOrderBookCount int
 			// Loop from tinyUSD to endLoop in increments of tinyUSD
 			currentBobUSD := tinyUSD
 			for currentBobUSD.Compare(endLoop) <= 0 {
 				// Underfund bob's offer
-				result := env.Submit(payment.PayIssued(gw, bob, currentBobUSD).Build())
+				result := env.Submit(paymentBuilder.PayIssued(gw, bob, currentBobUSD).Build())
 				jtx.RequireTxSuccess(t, result)
-				result = env.Submit(payment.PayIssued(gw, alice, EUR(100)).Build())
+				result = env.Submit(paymentBuilder.PayIssued(gw, alice, EUR(100)).Build())
 				jtx.RequireTxSuccess(t, result)
 				env.Close()
 
@@ -408,16 +407,16 @@ func testUnderFundedIouIouQChange(t *testing.T) {
 
 				// Zero out IOU balances
 				if bal := env.IOUBalance(alice, gw, "EUR"); bal != nil && bal.Signum() > 0 {
-					env.Submit(payment.PayIssued(alice, gw, *bal).Build())
+					env.Submit(paymentBuilder.PayIssued(alice, gw, *bal).Build())
 				}
 				if bal := env.IOUBalance(alice, gw, "USD"); bal != nil && bal.Signum() > 0 {
-					env.Submit(payment.PayIssued(alice, gw, *bal).Build())
+					env.Submit(paymentBuilder.PayIssued(alice, gw, *bal).Build())
 				}
 				if bal := env.IOUBalance(bob, gw, "EUR"); bal != nil && bal.Signum() > 0 {
-					env.Submit(payment.PayIssued(bob, gw, *bal).Build())
+					env.Submit(paymentBuilder.PayIssued(bob, gw, *bal).Build())
 				}
 				if bal := env.IOUBalance(bob, gw, "USD"); bal != nil && bal.Signum() > 0 {
-					env.Submit(payment.PayIssued(bob, gw, *bal).Build())
+					env.Submit(paymentBuilder.PayIssued(bob, gw, *bal).Build())
 				}
 				env.Close()
 
@@ -477,11 +476,11 @@ func testSellPartialCrossOldXrpIouQChange(t *testing.T) {
 			env.Trust(carol, USD(10000000))
 			env.Close()
 
-			result := env.Submit(payment.PayIssued(gw, alice, USD(10000000)).Build())
+			result := env.Submit(paymentBuilder.PayIssued(gw, alice, USD(10000000)).Build())
 			jtx.RequireTxSuccess(t, result)
-			result = env.Submit(payment.PayIssued(gw, bob, USD(10000000)).Build())
+			result = env.Submit(paymentBuilder.PayIssued(gw, bob, USD(10000000)).Build())
 			jtx.RequireTxSuccess(t, result)
-			result = env.Submit(payment.PayIssued(gw, carol, USD(10000000)).Build())
+			result = env.Submit(paymentBuilder.PayIssued(gw, carol, USD(10000000)).Build())
 			jtx.RequireTxSuccess(t, result)
 			env.Close()
 
@@ -499,11 +498,11 @@ func testSellPartialCrossOldXrpIouQChange(t *testing.T) {
 				jtx.RequireTxSuccess(t, result)
 				env.Close()
 
-				// Get alice's offer to compute initial rate
+				// Get alice's offer to compute initial quality
 				aliceOffer := GetOffer(env, alice, aliceOfferSeq)
-				var initialRate float64
+				var initialQuality payment.Quality
 				if aliceOffer != nil {
-					initialRate = computeRate(aliceOffer.TakerPays, aliceOffer.TakerGets)
+					initialQuality = qualityRate(aliceOffer.TakerPays, aliceOffer.TakerGets)
 				}
 
 				// bob submits a more desirable offer
@@ -526,11 +525,11 @@ func testSellPartialCrossOldXrpIouQChange(t *testing.T) {
 				if carolStillExists || bobStillExists {
 					blockedCount++
 				} else {
-					// Check alice's remaining offer rate
+					// Check alice's remaining offer quality
 					aliceReducedOffer := GetOffer(env, alice, aliceOfferSeq)
 					if aliceReducedOffer != nil {
-						reducedRate := computeRate(aliceReducedOffer.TakerPays, aliceReducedOffer.TakerGets)
-						if reducedRate > initialRate {
+						reducedQuality := qualityRate(aliceReducedOffer.TakerPays, aliceReducedOffer.TakerGets)
+						if qualityWorseThan(reducedQuality, initialQuality) {
 							blockedCount++
 						}
 					}

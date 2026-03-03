@@ -52,6 +52,9 @@ type TestEnv struct {
 	// Reference: rippled's FeatureBitset in test/jtx/Env.h
 	rulesBuilder *amendment.RulesBuilder
 
+	// NetworkID for engine configuration (0 = mainnet default, >1024 requires NetworkID in txns)
+	networkID uint32
+
 	// Optional state map family for backed SHAMaps (PebbleDB on disk).
 	// Only set when using NewTestEnvBacked() for heavy tests that would OOM otherwise.
 	// When nil, SHAMaps use unbacked mode (fast, full in-memory clones).
@@ -133,7 +136,7 @@ func NewTestEnvWithConfigBacked(t *testing.T, cfg genesis.Config) *TestEnv {
 // Must be called before any transactions are submitted.
 func (e *TestEnv) enablePebbleBacking(t *testing.T) {
 	t.Helper()
-	stateFamily, err := shamap.NewPebbleNodeStoreFamily(t.TempDir(), 2000)
+	stateFamily, err := shamap.NewPebbleNodeStoreFamily(t.TempDir(), 200000)
 	if err != nil {
 		t.Fatalf("Failed to create state family: %v", err)
 	}
@@ -619,6 +622,7 @@ func (e *TestEnv) Submit(transaction interface{}) TxResult {
 		SkipSignatureVerification: true, // Skip signatures in test mode
 		Rules:                     e.rulesBuilder.Build(),
 		ParentCloseTime:           parentCloseTime,
+		NetworkID:                 e.networkID,
 	}
 
 	// Create engine with current ledger
@@ -1019,6 +1023,14 @@ func (e *TestEnv) DisableFeature(name string) {
 	e.rulesBuilder.DisableByName(name)
 }
 
+// SetNetworkID sets the network identifier for the test environment.
+// Networks with ID > 1024 require NetworkID in transactions.
+// Networks with ID <= 1024 are legacy networks and cannot have NetworkID in transactions.
+// Reference: rippled's Config::NETWORK_ID
+func (e *TestEnv) SetNetworkID(id uint32) {
+	e.networkID = id
+}
+
 // FeatureEnabled returns true if the named amendment is currently enabled.
 // Reference: rippled's Env::enabled() in test/jtx/Env.h
 func (e *TestEnv) FeatureEnabled(name string) bool {
@@ -1246,6 +1258,7 @@ func (e *TestEnv) submitWithSigVerification(txn tx.Transaction) TxResult {
 		SkipSignatureVerification: false, // Verify signatures
 		Rules:                     e.rulesBuilder.Build(),
 		ParentCloseTime:           parentCloseTime,
+		NetworkID:                 e.networkID,
 	}
 
 	engine := tx.NewEngine(e.ledger, engineConfig)
@@ -1306,6 +1319,40 @@ func (e *TestEnv) DisableRegularKey(acc *Account) {
 	}
 }
 
+// DisableRegularKeyExpect attempts to clear the regular key and expects a specific result.
+func (e *TestEnv) DisableRegularKeyExpect(acc *Account, expectedCode string) {
+	e.t.Helper()
+
+	setKey := signerlist.NewSetRegularKey(acc.Address)
+	setKey.ClearKey()
+	setKey.Fee = formatUint64(e.baseFee)
+	seq := e.Seq(acc)
+	setKey.Sequence = &seq
+
+	result := e.Submit(setKey)
+	if result.Code != expectedCode {
+		e.t.Fatalf("DisableRegularKeyExpect: expected %s, got %s", expectedCode, result.Code)
+	}
+}
+
+// DisableMasterKey disables the master key on an account using AccountSet.
+// The account must have a regular key or signer list set first.
+func (e *TestEnv) DisableMasterKey(acc *Account) {
+	e.t.Helper()
+
+	accountSet := account.NewAccountSet(acc.Address)
+	flag := account.AccountSetFlagDisableMaster
+	accountSet.SetFlag = &flag
+	accountSet.Fee = formatUint64(e.baseFee)
+	seq := e.Seq(acc)
+	accountSet.Sequence = &seq
+
+	result := e.Submit(accountSet)
+	if !result.Success {
+		e.t.Fatalf("Failed to disable master key for %s: %s", acc.Name, result.Code)
+	}
+}
+
 // ===========================================================================
 // Phase 1c: SignerList helpers
 // ===========================================================================
@@ -1349,6 +1396,39 @@ func (e *TestEnv) RemoveSignerList(acc *Account) {
 	if !result.Success {
 		e.t.Fatalf("Failed to remove signer list for %s: %s", acc.Name, result.Code)
 	}
+}
+
+// ===========================================================================
+// Phase 1c (continued): Raw transaction helpers for multisign tests
+// ===========================================================================
+
+// NewSignerListSetTx creates a raw SignerListSet transaction without submitting.
+// Use this when you need to submit via SubmitMultiSigned or SubmitSignedWith.
+func NewSignerListSetTx(acc *Account, quorum uint32, signers []TestSigner) tx.Transaction {
+	sl := signerlist.NewSignerListSet(acc.Address, quorum)
+	for _, s := range signers {
+		sl.AddSigner(s.Account.Address, s.Weight)
+	}
+	return sl
+}
+
+// NewRemoveSignerListTx creates a raw SignerListSet transaction that removes the signer list.
+func NewRemoveSignerListTx(acc *Account) tx.Transaction {
+	return signerlist.NewSignerListSet(acc.Address, 0)
+}
+
+// NewSetRegularKeyTx creates a raw SetRegularKey transaction that sets a regular key.
+func NewSetRegularKeyTx(acc *Account, regularKey *Account) tx.Transaction {
+	setKey := signerlist.NewSetRegularKey(acc.Address)
+	setKey.SetKey(regularKey.Address)
+	return setKey
+}
+
+// NewDisableRegularKeyTx creates a raw SetRegularKey transaction that clears the regular key.
+func NewDisableRegularKeyTx(acc *Account) tx.Transaction {
+	setKey := signerlist.NewSetRegularKey(acc.Address)
+	setKey.ClearKey()
+	return setKey
 }
 
 // ===========================================================================

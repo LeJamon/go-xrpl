@@ -179,6 +179,11 @@ type LedgerView interface {
 	// ForEach iterates over all state entries
 	// If fn returns false, iteration stops early
 	ForEach(fn func(key [32]byte, data []byte) bool) error
+
+	// Succ returns the first entry with key > the given key.
+	// Returns (key, data, true, nil) if found, or ([32]byte{}, nil, false, nil) if not.
+	// Reference: rippled ReadView::succ() used for efficient ordered traversal.
+	Succ(key [32]byte) ([32]byte, []byte, bool, error)
 }
 
 // ApplyResult contains the result of applying a transaction
@@ -651,6 +656,8 @@ func parseValidationError(err error) Result {
 		"temBAD_TRANSFER_FEE":              TemBAD_TRANSFER_FEE,
 		"temBAD_NFTOKEN_TRANSFER_FEE":      TemBAD_NFTOKEN_TRANSFER_FEE,
 		"temINVALID_COUNT":                 TemINVALID_COUNT,
+		// tef (failure) codes
+		"tefINVALID_LEDGER_FIX_TYPE": TefINVALID_LEDGER_FIX_TYPE,
 		// tel (local) codes
 		"telBAD_DOMAIN":     TelBAD_DOMAIN,
 		"telBAD_PUBLIC_KEY": TelBAD_PUBLIC_KEY,
@@ -1044,6 +1051,17 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		return result
 	}
 
+	// Check for oversize metadata: if the transaction touched more than 5200
+	// entries, override the result to tecOVERSIZE. This prevents excessively
+	// large transactions from being committed.
+	// Reference: rippled Transactor.cpp lines 1111-1112:
+	//   if (ctx_.size() > oversizeMetaDataCap)
+	//       result = tecOVERSIZE;
+	const oversizeMetaDataCap = 5200
+	if table.Size() > oversizeMetaDataCap {
+		result = TecOVERSIZE
+	}
+
 	// Consume ticket on success or tec results
 	// Reference: rippled Transactor::consumeSeqProxy + ticketDelete
 	if isTicket && (result == TesSUCCESS || result.IsTec()) {
@@ -1067,9 +1085,43 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		}
 	}
 
-	// For tec results, only apply fee/sequence changes, not transaction effects
-	// Reference: rippled - tec codes claim the fee but don't apply transaction effects
+	// For tec results, only apply fee/sequence changes, not transaction effects.
+	// Reference: rippled — tec codes claim the fee but discard the apply sandbox.
 	if result.IsTec() {
+		// For tecOVERSIZE (and tecKILLED): collect deleted offers from the table
+		// BEFORE discarding, so we can re-remove them from the clean view.
+		// Reference: rippled Transactor.cpp lines 1121-1201:
+		//   ctx_.visit() collects deleted offer keys, then reset(), then removeUnfundedOffers()
+		var removedOfferKeys [][32]byte
+		if result == TecOVERSIZE {
+			for key, entry := range table.GetItems() {
+				if entry.Action == ActionErase {
+					entryType := getLedgerEntryType(entry.Original)
+					if entryType == "" && entry.Current != nil {
+						entryType = getLedgerEntryType(entry.Current)
+					}
+					if entryType == "Offer" {
+						removedOfferKeys = append(removedOfferKeys, key)
+					}
+				}
+			}
+		}
+
+		// Only apply the table for OfferCreate, which uses a cancel sandbox pattern:
+		// expired/self-crossed offer cleanup must persist even on tec (FoK failure, etc.).
+		// For all other transaction types, the table contains doApply() side effects
+		// (e.g., NFT page splits) that must NOT persist on tec — matching rippled's
+		// behavior where the view sandbox is discarded.
+		// Reference: rippled Transactor.cpp — view sandbox discarded on tec.
+		// Exception: tecOVERSIZE — do NOT apply OfferCreate table because the state
+		// is oversize. We handle offer cleanup separately below.
+		txTypeName := tx.TxType().String()
+		if txTypeName == "OfferCreate" && result != TecOVERSIZE {
+			if _, applyErr := table.Apply(); applyErr != nil {
+				_ = applyErr
+			}
+		}
+
 		// Restore account to original state, then apply only fee/sequence.
 		// This discards any changes the transaction made to OwnerCount,
 		// MintedNFTokens, BurnedNFTokens, etc.
@@ -1099,8 +1151,42 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 			return TefINTERNAL
 		}
 
+		// Overwrite the account with the fee-only restored state.
+		// This undoes any account changes table.Apply() may have written.
 		if err := e.view.Update(accountKey, updatedData); err != nil {
 			return TefINTERNAL
+		}
+
+		// Special case: tecOVERSIZE — remove unfunded offers that were found during
+		// processing. These are offers that were deleted in the (now discarded) sandbox.
+		// We re-delete them on the clean base view.
+		// Reference: rippled Transactor.cpp lines 1198-1201: removeUnfundedOffers()
+		if result == TecOVERSIZE && len(removedOfferKeys) > 0 {
+			for _, offerKey := range removedOfferKeys {
+				offerKL := keylet.Keylet{Key: offerKey}
+				offerData, readErr := e.view.Read(offerKL)
+				if readErr != nil || offerData == nil {
+					continue
+				}
+				offerObj, parseErr := sle.ParseLedgerOffer(offerData)
+				if parseErr != nil {
+					continue
+				}
+				ownerID, decodeErr := sle.DecodeAccountID(offerObj.Account)
+				if decodeErr != nil {
+					continue
+				}
+				// Remove from owner directory
+				ownerDirKey := keylet.OwnerDir(ownerID)
+				sle.DirRemove(e.view, ownerDirKey, offerObj.OwnerNode, offerKey, false)
+				// Remove from book directory
+				bookDirKey := keylet.Keylet{Type: 100, Key: offerObj.BookDirectory}
+				sle.DirRemove(e.view, bookDirKey, offerObj.BookNode, offerKey, false)
+				// Erase the offer
+				_ = e.view.Erase(offerKL)
+				// Decrement owner count
+				adjustOwnerCountOnView(e.view, ownerID, -1, txHash, e.config.LedgerSequence)
+			}
 		}
 
 		// Special case: tecEXPIRED allows side-effects (e.g., expired credential deletion)
@@ -1152,6 +1238,19 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 
 		if err := table.Update(accountKey, updatedData); err != nil {
 			return TefINTERNAL
+		}
+	}
+
+	// Run invariant checks BEFORE committing — entries are still inspectable in the table.
+	// Reference: rippled Transactor::apply() — invariant check runs before ctx_->apply().
+	{
+		txTypeName := tx.TxType().String()
+		invEntries := table.CollectEntries()
+		if violation := CheckInvariants(txTypeName, result, fee, invEntries); violation != nil {
+			// First violation: charge fee but revert all state changes (tecINVARIANT_FAILED).
+			// Reference: rippled — first pass returns tec, second would return tef.
+			_ = violation // logged in future via journal
+			return TecINVARIANT_FAILED
 		}
 	}
 
@@ -1237,4 +1336,31 @@ func (e *Engine) CheckReserveIncrease(priorBalance uint64, currentOwnerCount uin
 		return TecINSUFFICIENT_RESERVE
 	}
 	return TesSUCCESS
+}
+
+// adjustOwnerCountOnView modifies an account's OwnerCount on a LedgerView.
+// Used by the engine for tecOVERSIZE offer cleanup after the sandbox is discarded.
+// Reference: rippled removeUnfundedOffers() adjusts owner count on the base view.
+func adjustOwnerCountOnView(view LedgerView, account [20]byte, delta int, txHash [32]byte, ledgerSeq uint32) {
+	accountKey := keylet.Account(account)
+	accountData, err := view.Read(accountKey)
+	if err != nil || accountData == nil {
+		return
+	}
+	accountRoot, err := sle.ParseAccountRoot(accountData)
+	if err != nil {
+		return
+	}
+	newCount := int(accountRoot.OwnerCount) + delta
+	if newCount < 0 {
+		newCount = 0
+	}
+	accountRoot.OwnerCount = uint32(newCount)
+	accountRoot.PreviousTxnID = txHash
+	accountRoot.PreviousTxnLgrSeq = ledgerSeq
+	newData, err := sle.SerializeAccountRoot(accountRoot)
+	if err != nil {
+		return
+	}
+	_ = view.Update(accountKey, newData)
 }

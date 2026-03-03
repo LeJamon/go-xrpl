@@ -1,6 +1,7 @@
 package tx
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -209,6 +210,66 @@ func (t *ApplyStateTable) ForEach(fn func(key [32]byte, data []byte) bool) error
 	return t.base.ForEach(fn)
 }
 
+// Succ returns the first entry with key > the given key.
+// Combines local items with the base view's Succ.
+// Reference: rippled ReadView::succ()
+func (t *ApplyStateTable) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
+	var bestKey [32]byte
+	var bestData []byte
+	found := false
+
+	// Check local items for entries with key > the given key
+	for k, entry := range t.items {
+		if entry.Action == ActionErase {
+			continue
+		}
+		if bytes.Compare(k[:], key[:]) > 0 {
+			if !found || bytes.Compare(k[:], bestKey[:]) < 0 {
+				bestKey = k
+				bestData = entry.Current
+				found = true
+			}
+		}
+	}
+
+	// Check base view, looping past locally-deleted entries.
+	// When the base returns an entry that's been deleted in our overlay,
+	// we must ask for the NEXT one (using the deleted key as new search key).
+	searchBase := key
+	for {
+		baseKey, baseData, baseFound, err := t.base.Succ(searchBase)
+		if err != nil {
+			if found {
+				return bestKey, bestData, true, nil
+			}
+			return [32]byte{}, nil, false, err
+		}
+		if !baseFound {
+			break
+		}
+
+		if entry, exists := t.items[baseKey]; exists && entry.Action == ActionErase {
+			// Base entry is deleted locally — skip it and look for the next one
+			searchBase = baseKey
+			continue
+		}
+
+		// If locally modified, use local data
+		if entry, exists := t.items[baseKey]; exists {
+			baseData = entry.Current
+		}
+
+		if !found || bytes.Compare(baseKey[:], bestKey[:]) < 0 {
+			bestKey = baseKey
+			bestData = baseData
+			found = true
+		}
+		break
+	}
+
+	return bestKey, bestData, found, nil
+}
+
 // Apply commits all changes to the base view and returns generated metadata.
 // Threading is applied first (PreviousTxnID/PreviousTxnLgrSeq updates),
 // then metadata is generated from the final state.
@@ -378,6 +439,66 @@ func (t *ApplyStateTable) threadOwners(data []byte, entryType string) {
 // DropsDestroyed returns the amount of XRP destroyed
 func (t *ApplyStateTable) DropsDestroyed() XRPAmount.XRPAmount {
 	return t.drops
+}
+
+// CollectEntries returns all modified ledger entries (Insert/Modify/Erase) for invariant checking.
+// Must be called BEFORE Apply() — entries are still in the table at this point.
+func (t *ApplyStateTable) CollectEntries() []InvariantEntry {
+	var entries []InvariantEntry
+	for _, entry := range t.items {
+		if entry.Action == ActionCache {
+			continue
+		}
+		var before, after []byte
+		switch entry.Action {
+		case ActionInsert:
+			before = nil
+			after = entry.Current
+		case ActionModify:
+			before = entry.Original
+			after = entry.Current
+		case ActionErase:
+			// Original holds the state when first read; Current holds state just before deletion.
+			// Use Original as the canonical "before" state.
+			before = entry.Original
+			if before == nil {
+				before = entry.Current // direct erase without prior read sets Current = Original
+			}
+			after = nil
+		}
+		typeData := after
+		if typeData == nil {
+			typeData = before
+		}
+		entries = append(entries, InvariantEntry{
+			IsDelete:  entry.Action == ActionErase,
+			Before:    before,
+			After:     after,
+			EntryType: getLedgerEntryType(typeData),
+		})
+	}
+	return entries
+}
+
+// Size returns the number of entries that have been inserted, modified, or erased.
+// This matches rippled's ApplyStateTable::size() which counts non-cache entries.
+// Used for the oversizeMetaDataCap check (tecOVERSIZE when size > 5200).
+// Reference: rippled/src/xrpld/ledger/detail/ApplyStateTable.cpp
+func (t *ApplyStateTable) Size() int {
+	count := 0
+	for _, entry := range t.items {
+		switch entry.Action {
+		case ActionInsert, ActionModify, ActionErase:
+			count++
+		}
+	}
+	return count
+}
+
+// GetItems returns the tracked entries map for inspection.
+// Used by the engine to collect deleted offers for tecOVERSIZE handling.
+func (t *ApplyStateTable) GetItems() map[[32]byte]*TrackedEntry {
+	return t.items
 }
 
 // buildCreatedNode creates metadata for a newly created entry

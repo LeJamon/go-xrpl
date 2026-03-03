@@ -909,24 +909,8 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 
 		isSelf := offer.Owner == selfAccountID
 
-		// Refund escrowed amount for buy offers
-		if offer.Flags&lsfSellNFToken == 0 && offer.Amount > 0 {
-			if !isSelf {
-				ownerKey := keylet.Account(offer.Owner)
-				ownerData, err := view.Read(ownerKey)
-				if err == nil {
-					ownerAccount, err := sle.ParseAccountRoot(ownerData)
-					if err == nil {
-						ownerAccount.Balance += offer.Amount
-						ownerUpdated, _ := sle.SerializeAccountRoot(ownerAccount)
-						if ownerUpdated != nil {
-							view.Update(ownerKey, ownerUpdated)
-						}
-					}
-				}
-			}
-			// For self: balance refund will be handled via ctx.Account
-		}
+		// NFToken buy offers do NOT escrow XRP — no refund needed on deletion.
+		// Reference: rippled NFTokenUtils.cpp deleteTokenOffer — no balance adjustment
 
 		// Decrement owner count (only via view for non-self accounts)
 		if !isSelf {
@@ -1111,10 +1095,30 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBrokeredMode(ctx *tx.ApplyContext, acc
 			}
 		}
 	} else {
-		// XRP brokered payment path (existing logic)
+		// XRP brokered payment path — deduct from buyer, pay broker + issuer + seller
+		// Reference: rippled NFTokenAcceptOffer.cpp — uses accountSend()
 		amount := buyOffer.Amount
-		var issuerCut uint64
 
+		// Deduct full amount from buyer's account
+		buyerKey := keylet.Account(buyerID)
+		buyerData, err := ctx.View.Read(buyerKey)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		buyerAccount, err := sle.ParseAccountRoot(buyerData)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		if buyerAccount.Balance < amount {
+			return tx.TecINSUFFICIENT_FUNDS
+		}
+		buyerAccount.Balance -= amount
+		buyerUpdated, _ := sle.SerializeAccountRoot(buyerAccount)
+		if err := ctx.View.Update(buyerKey, buyerUpdated); err != nil {
+			return tx.TefINTERNAL
+		}
+
+		var issuerCut uint64
 		if transferFee != 0 && amount > 0 {
 			issuerCut = (amount - brokerFee) * uint64(transferFee) / transferFeeDivisor
 			if sellerID == nftIssuerID || buyerID == nftIssuerID {
@@ -1343,10 +1347,30 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 			}
 		}
 	} else {
-		// XRP payment path (existing logic)
+		// XRP payment path — deduct from buyer, pay issuer + seller
+		// Reference: rippled NFTokenAcceptOffer.cpp — uses accountSend()
 		amount := buyOffer.Amount
-		var issuerCut uint64
 
+		// Deduct full amount from buyer's account (buyer != ctx.Account)
+		buyerKey := keylet.Account(buyerID)
+		buyerData, err := ctx.View.Read(buyerKey)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		buyerAccount, err := sle.ParseAccountRoot(buyerData)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		if buyerAccount.Balance < amount {
+			return tx.TecINSUFFICIENT_FUNDS
+		}
+		buyerAccount.Balance -= amount
+		buyerUpdated, _ := sle.SerializeAccountRoot(buyerAccount)
+		if err := ctx.View.Update(buyerKey, buyerUpdated); err != nil {
+			return tx.TefINTERNAL
+		}
+
+		var issuerCut uint64
 		if transferFee != 0 && amount > 0 {
 			issuerCut = amount * uint64(transferFee) / transferFeeDivisor
 			if accountID == nftIssuerID || buyerID == nftIssuerID {

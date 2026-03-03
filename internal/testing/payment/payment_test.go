@@ -68,15 +68,15 @@ func TestPaymentCreatesAccount(t *testing.T) {
 	xrplgoTesting.RequireAccountNotExists(t, env, bob)
 
 	// Alice sends Bob enough to create account (reserve + some)
-	// Reserve is 10 XRP by default
-	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(15))).Build()
+	// Reserve is 200 XRP by default
+	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(250))).Build()
 	result := env.Submit(payment)
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
 
-	// Bob should now exist with 15 XRP
+	// Bob should now exist with 250 XRP
 	xrplgoTesting.RequireAccountExists(t, env, bob)
-	xrplgoTesting.RequireBalance(t, env, bob, uint64(xrplgoTesting.XRP(15)))
+	xrplgoTesting.RequireBalance(t, env, bob, uint64(xrplgoTesting.XRP(250)))
 }
 
 // TestPaymentInsufficientFunds tests payment with insufficient balance.
@@ -87,18 +87,18 @@ func TestPaymentInsufficientFunds(t *testing.T) {
 	bob := xrplgoTesting.NewAccount("bob")
 
 	// Fund accounts - alice with minimal amount
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(20))) // Just enough to exist
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(100)))
+	env.FundAmount(alice, uint64(xrplgoTesting.XRP(250))) // Just enough to exist
+	env.FundAmount(bob, uint64(xrplgoTesting.XRP(1000)))
 	env.Close()
 
 	// Alice tries to send more XRP than she has
-	// She has 20 XRP but needs to keep reserve (10 XRP), so spendable is ~10 XRP
-	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(15))).Build()
+	// She has 250 XRP but needs to keep reserve (200 XRP), so spendable is ~50 XRP
+	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).Build()
 	result := env.Submit(payment)
 	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TecUNFUNDED_PAYMENT)
 
 	// Bob's balance should be unchanged
-	xrplgoTesting.RequireBalance(t, env, bob, uint64(xrplgoTesting.XRP(100)))
+	xrplgoTesting.RequireBalance(t, env, bob, uint64(xrplgoTesting.XRP(1000)))
 }
 
 // TestPaymentSelfPayment tests that self-payment is not allowed.
@@ -289,28 +289,28 @@ func TestPaymentDrainsAccount(t *testing.T) {
 	alice := xrplgoTesting.NewAccount("alice")
 	bob := xrplgoTesting.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(100)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(100)))
+	env.FundAmount(alice, uint64(xrplgoTesting.XRP(1000)))
+	env.FundAmount(bob, uint64(xrplgoTesting.XRP(1000)))
 	env.Close()
 
 	// Alice tries to send everything except reserve and fee
-	// Reserve is 10 XRP, fee is 10 drops
-	// So max sendable is 100 - 10 - 0.00001 = ~89.99999 XRP
+	// Reserve is 200 XRP, fee is 10 drops
+	// So max sendable is 1000 - 200 - 0.00001 = ~799.99999 XRP
 	// Let's try to send exactly what should be spendable
 
 	// First calculate what alice can spend:
-	// Balance: 100 XRP
-	// Reserve: 10 XRP (base reserve, no owner objects)
-	// Spendable: 90 XRP minus fee
+	// Balance: 1000 XRP
+	// Reserve: 200 XRP (base reserve, no owner objects)
+	// Spendable: 800 XRP minus fee
 
-	// Send 89 XRP (leaving some buffer for fee)
-	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(89))).Build()
+	// Send 789 XRP (leaving some buffer for fee)
+	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(789))).Build()
 	result := env.Submit(payment)
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
 
-	// Alice should have 100 - 89 - fee = ~11 XRP - fee
-	xrplgoTesting.RequireBalance(t, env, alice, uint64(xrplgoTesting.XRP(100)-xrplgoTesting.XRP(89))-env.BaseFee())
-	// Bob should have 100 + 89 = 189 XRP
-	xrplgoTesting.RequireBalance(t, env, bob, uint64(xrplgoTesting.XRP(189)))
+	// Alice should have 1000 - 789 - fee = ~211 XRP - fee
+	xrplgoTesting.RequireBalance(t, env, alice, uint64(xrplgoTesting.XRP(1000)-xrplgoTesting.XRP(789))-env.BaseFee())
+	// Bob should have 1000 + 789 = 1789 XRP
+	xrplgoTesting.RequireBalance(t, env, bob, uint64(xrplgoTesting.XRP(1789)))
 }

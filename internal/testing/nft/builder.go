@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/ledgerstatefix"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/nftoken"
 	"github.com/LeJamon/goXRPLd/internal/testing"
 )
@@ -544,6 +545,77 @@ func (b *NFTokenModifyBuilder) Build() tx.Transaction {
 // BuildNFTokenModify is a convenience method that returns the concrete *nftoken.NFTokenModify type.
 func (b *NFTokenModifyBuilder) BuildNFTokenModify() *nftoken.NFTokenModify {
 	return b.Build().(*nftoken.NFTokenModify)
+}
+
+// LedgerStateFixBuilder provides a fluent interface for building LedgerStateFix transactions.
+// Reference: rippled ledgerStateFix::nftPageLinks()
+type LedgerStateFixBuilder struct {
+	account  *testing.Account
+	owner    *testing.Account
+	fixType  *uint8
+	fee      uint64
+	sequence *uint32
+	flags    uint32
+}
+
+// LedgerStateFixNFTPageLinks creates a new LedgerStateFixBuilder for NFToken page link repair.
+// account submits the fix; owner is the account whose pages are repaired.
+func LedgerStateFixNFTPageLinks(account, owner *testing.Account) *LedgerStateFixBuilder {
+	fixType := uint8(1) // LedgerFixTypeNFTokenPageLink
+	return &LedgerStateFixBuilder{
+		account: account,
+		owner:   owner,
+		fixType: &fixType,
+		fee:     10, // Default fee: 10 drops
+	}
+}
+
+// Fee sets the transaction fee in drops.
+func (b *LedgerStateFixBuilder) Fee(f uint64) *LedgerStateFixBuilder {
+	b.fee = f
+	return b
+}
+
+// Sequence sets the sequence number explicitly.
+func (b *LedgerStateFixBuilder) Sequence(seq uint32) *LedgerStateFixBuilder {
+	b.sequence = &seq
+	return b
+}
+
+// Flags sets explicit transaction flags.
+func (b *LedgerStateFixBuilder) Flags(flags uint32) *LedgerStateFixBuilder {
+	b.flags = flags
+	return b
+}
+
+// FixType overrides the LedgerFixType field.
+func (b *LedgerStateFixBuilder) FixType(ft uint8) *LedgerStateFixBuilder {
+	b.fixType = &ft
+	return b
+}
+
+// NoOwner removes the Owner field from the transaction.
+func (b *LedgerStateFixBuilder) NoOwner() *LedgerStateFixBuilder {
+	b.owner = nil
+	return b
+}
+
+// Build constructs the LedgerStateFix transaction.
+func (b *LedgerStateFixBuilder) Build() tx.Transaction {
+	l := ledgerstatefix.NewLedgerStateFix(b.account.Address, *b.fixType)
+	l.Fee = fmt.Sprintf("%d", b.fee)
+
+	if b.owner != nil {
+		l.Owner = b.owner.Address
+	}
+	if b.sequence != nil {
+		l.SetSequence(*b.sequence)
+	}
+	if b.flags != 0 {
+		l.SetFlags(b.flags)
+	}
+
+	return l
 }
 
 // isHexEncoded checks if a string appears to be hex-encoded.

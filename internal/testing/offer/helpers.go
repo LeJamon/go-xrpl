@@ -188,6 +188,17 @@ func amountsEqual(a, b tx.Amount) bool {
 	return a.Compare(b) == 0
 }
 
+// computeRate returns the rate of an offer as a float64 (TakerPays / TakerGets).
+// This is used for comparing offer quality degradation in reduced offer tests.
+func computeRate(takerPays, takerGets tx.Amount) float64 {
+	pays := takerPays.Float64()
+	gets := takerGets.Float64()
+	if gets == 0 {
+		return 0
+	}
+	return pays / gets
+}
+
 // CountOffersMatching counts offers with specific TakerPays and TakerGets amounts.
 // Equivalent to rippled's countOffers(env, account, takerPays, takerGets).
 func CountOffersMatching(env *jtx.TestEnv, acc *jtx.Account, takerPays, takerGets tx.Amount) uint32 {

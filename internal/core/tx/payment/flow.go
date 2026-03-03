@@ -1,24 +1,27 @@
 package payment
 
 import (
-	"fmt"
 	"sort"
 
+	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )
 
 // Flow executes payment across multiple strands, selecting the best quality paths.
 //
-// The algorithm:
-//  1. Calculate quality upper bound for each strand
-//  2. Sort strands by quality (best first)
-//  3. For each iteration:
-//     a. Execute each active strand with remaining output
-//     b. Select the strand with best actual quality
-//     c. Apply that strand's changes
-//     d. Accumulate results
-//     e. Remove exhausted strands
-//  4. Continue until output satisfied or all strands dry
+// The algorithm matches rippled's StrandFlow.h flow() function:
+//
+// With FlowSortStrands enabled:
+//  1. Each iteration re-sorts active strands by quality upper bound (best first)
+//  2. Execute strands in order; take the FIRST successful strand (break inner loop)
+//  3. Track total offers considered across ALL strands and iterations
+//  4. Stop when total offers >= 1500 (maxOffersToConsider)
+//
+// Without FlowSortStrands:
+//  1. Execute ALL active strands each iteration
+//  2. Pick the strand with the best actual quality
+//  3. No total offer limit (per-BookStep limit of 1000 still applies)
 //
 // Parameters:
 //   - baseView: PaymentSandbox with ledger state
@@ -27,6 +30,7 @@ import (
 //   - partialPayment: Whether partial payments are allowed
 //   - limitQuality: Optional quality limit (nil means no limit)
 //   - sendMax: Optional maximum input amount
+//   - flowSortStrands: Whether the FlowSortStrands amendment is enabled
 //
 // Returns: FlowResult with actual amounts and state changes
 func Flow(
@@ -36,7 +40,12 @@ func Flow(
 	partialPayment bool,
 	limitQuality *Quality,
 	sendMax *EitherAmount,
+	flowSortStrands ...bool,
 ) FlowResult {
+	sortStrands := false
+	if len(flowSortStrands) > 0 {
+		sortStrands = flowSortStrands[0]
+	}
 	if len(strands) == 0 {
 		return FlowResult{
 			In:              ZeroXRPEitherAmount(),
@@ -52,15 +61,12 @@ func Flow(
 	allOfrsToRm := make(map[[32]byte]bool)
 
 	// Initialize result accumulators
-	// totalOut matches the type of outReq (what we're delivering)
-	// totalIn matches the type of sendMax (what we're spending), or XRP if not specified
 	var totalIn, totalOut EitherAmount
 	if outReq.IsNative {
 		totalOut = ZeroXRPEitherAmount()
 	} else {
 		totalOut = ZeroIOUEitherAmount(outReq.IOU.Currency, outReq.IOU.Issuer)
 	}
-	// Initialize totalIn based on sendMax type, or default to XRP
 	if sendMax != nil {
 		if sendMax.IsNative {
 			totalIn = ZeroXRPEitherAmount()
@@ -68,7 +74,6 @@ func Flow(
 			totalIn = ZeroIOUEitherAmount(sendMax.IOU.Currency, sendMax.IOU.Issuer)
 		}
 	} else {
-		// Default to XRP if no sendMax specified
 		totalIn = ZeroXRPEitherAmount()
 	}
 
@@ -82,137 +87,215 @@ func Flow(
 		remainingIn = &ri
 	}
 
-	// Sort strands by quality upper bound
-	strandQualities := make([]strandQuality, 0, len(strands))
-	for i, strand := range strands {
-		q := GetStrandQuality(strand, baseView)
-		if q != nil {
-			strandQualities = append(strandQualities, strandQuality{
-				index:   i,
-				strand:  strand,
-				quality: *q,
-				active:  true,
-			})
-		}
+	// ActiveStrands: next holds strands to be activated on next iteration.
+	// cur holds strands being evaluated this iteration.
+	// Reference: rippled StrandFlow.h ActiveStrands class
+	next := make([]*Strand, 0, len(strands))
+	for i := range strands {
+		next = append(next, &strands[i])
 	}
 
-	// Sort by quality (lower value = better quality)
-	sort.Slice(strandQualities, func(i, j int) bool {
-		return strandQualities[i].quality.BetterThan(strandQualities[j].quality)
-	})
+	const maxTries = 1000
+	var maxOffersToConsider uint32 = 1500
+	var offersConsidered uint32
 
-	// Limit iterations to prevent infinite loops
-	const maxIterations = 2000
-	iterations := 0
+	// Saved amounts for precision: sum from smallest to largest
+	// Reference: rippled uses flat_multiset for savedIns/savedOuts
+	var savedIns []EitherAmount
+	var savedOuts []EitherAmount
 
-	// Global offer crossing limit: max 1000 offers consumed across all strands.
-	// When hit, all strands are deactivated to prevent SHAMap corruption from
-	// excessive offer deletions in a single transaction.
-	// Reference: rippled Flow.cpp / StrandFlow.h global crossing limit enforcement.
-	const maxOffersToConsume = 1000
-	var totalOffersUsed uint32
-
-	// Main flow loop
-	for !remainingOut.IsZero() && hasActiveStrands(strandQualities) && iterations < maxIterations {
-		iterations++
-
-		// Execute each active strand and find the best one
-		bestResult := StrandResult{}
-		bestIndex := -1
-		bestQuality := Quality{Value: ^uint64(0)} // Worst possible quality
-
-		for i := range strandQualities {
-			sq := &strandQualities[i]
-			if !sq.active {
-				continue
-			}
-
-			// Check quality limit
-			if limitQuality != nil && sq.quality.WorseThan(*limitQuality) {
-				fmt.Printf("[Flow] strand[%d] quality %v worse than limit %v → skip\n", sq.index, sq.quality, *limitQuality)
-				sq.active = false
-				continue
-			}
-
-			// Execute this strand
-			fmt.Printf("[Flow] executing strand[%d] quality=%v\n", sq.index, sq.quality)
-			result := ExecuteStrand(accumSandbox, sq.strand, remainingIn, remainingOut)
-
-			if !result.Success || result.Out.IsZero() {
-				sq.active = false
-				// Collect offers to remove even from failed strands
-				for k, v := range result.OffsToRm {
-					allOfrsToRm[k] = v
-				}
-				continue
-			}
-
-			// Mark as inactive if strand is exhausted
-			if result.Inactive {
-				sq.active = false
-			}
-
-			// Calculate actual quality of this execution
-			actualQuality := QualityFromAmounts(result.In, result.Out)
-
-			// Check if this is better than current best
-			if bestIndex < 0 || actualQuality.BetterThan(bestQuality) {
-				bestResult = result
-				bestIndex = i
-				bestQuality = actualQuality
-			}
+	for curTry := uint32(0); curTry < maxTries; curTry++ {
+		if remainingOut.IsZero() {
+			break
 		}
-
-		// If no strand produced output, we're done
-		if bestIndex < 0 {
+		if remainingIn != nil && (remainingIn.IsNegative() || remainingIn.IsZero()) {
 			break
 		}
 
-		// Apply the best strand's changes
-		if bestResult.Sandbox != nil {
-			bestResult.Sandbox.Apply(accumSandbox)
-		}
-
-		// Collect offers to remove
-		for k, v := range bestResult.OffsToRm {
-			allOfrsToRm[k] = v
-		}
-
-		// Track global offer consumption and enforce the 1000-offer crossing limit.
-		// Reference: rippled enforces this to prevent excessive deletions in one tx.
-		totalOffersUsed += bestResult.OffersUsed
-		if totalOffersUsed >= maxOffersToConsume {
-			for i := range strandQualities {
-				strandQualities[i].active = false
+		// activateNext: move next -> cur, optionally re-sorting by quality
+		// Reference: rippled ActiveStrands::activateNext()
+		var cur []*Strand
+		if sortStrands && len(next) > 1 {
+			// Re-sort strands by quality upper bound (higher quality = better = first)
+			type strandQ struct {
+				strand  *Strand
+				quality Quality
 			}
-		}
-
-		// Accumulate results
-		// Handle type mismatch on first accumulation: when no sendMax was specified,
-		// totalIn defaults to XRP-zero but the strand may return IOU input.
-		// Reference: rippled uses STAmount(maxValue, in) which is properly typed.
-		if totalIn.IsZero() && totalIn.IsNative != bestResult.In.IsNative {
-			totalIn = bestResult.In
+			var strandQuals []strandQ
+			for _, s := range next {
+				if s == nil {
+					continue
+				}
+				q := GetStrandQuality(*s, accumSandbox)
+				if q == nil {
+					continue
+				}
+				// Filter by limitQuality
+				if limitQuality != nil && q.WorseThan(*limitQuality) {
+					continue
+				}
+				strandQuals = append(strandQuals, strandQ{strand: s, quality: *q})
+			}
+			// Stable sort by quality (better first)
+			sort.SliceStable(strandQuals, func(i, j int) bool {
+				return strandQuals[i].quality.BetterThan(strandQuals[j].quality)
+			})
+			cur = make([]*Strand, 0, len(strandQuals))
+			for _, sq := range strandQuals {
+				cur = append(cur, sq.strand)
+			}
 		} else {
-			totalIn = totalIn.Add(bestResult.In)
+			cur = next
 		}
-		totalOut = totalOut.Add(bestResult.Out)
+		next = make([]*Strand, 0, len(cur))
 
-		// Update remaining amounts
-		remainingOut = remainingOut.Sub(bestResult.Out)
-		if remainingOut.IsNegative() {
-			// Over-delivered - shouldn't happen but handle gracefully
-			remainingOut = ZeroXRPEitherAmount()
-			if !outReq.IsNative {
-				remainingOut = ZeroIOUEitherAmount(outReq.IOU.Currency, outReq.IOU.Issuer)
+		if len(cur) == 0 {
+			break
+		}
+
+		// Collect offers to remove from ALL strands in this iteration
+		iterOfrsToRm := make(map[[32]byte]bool)
+
+		type bestStrand struct {
+			in      EitherAmount
+			out     EitherAmount
+			sandbox *PaymentSandbox
+			quality Quality
+		}
+		var best *bestStrand
+		var markInactiveOnUse int = -1
+
+		for strandIndex := 0; strandIndex < len(cur); strandIndex++ {
+			strand := cur[strandIndex]
+			if strand == nil {
+				continue
+			}
+
+			// For offer crossing with quality limit (without FlowSortStrands),
+			// check strand quality upper bound
+			// Reference: rippled StrandFlow.h lines 688-692
+			if !sortStrands && limitQuality != nil {
+				strandQ := GetStrandQuality(*strand, accumSandbox)
+				if strandQ == nil || strandQ.WorseThan(*limitQuality) {
+					continue
+				}
+			}
+
+			// Execute this strand
+			result := ExecuteStrand(accumSandbox, *strand, remainingIn, remainingOut)
+
+			// Collect offers to remove from ALL strands (even failed ones)
+			for k, v := range result.OffsToRm {
+				iterOfrsToRm[k] = v
+			}
+
+			// Track total offers considered across ALL strands
+			offersConsidered += result.OffersUsed
+
+			if !result.Success || result.Out.IsZero() {
+				continue
+			}
+
+			// Calculate actual quality
+			q := QualityFromAmounts(result.In, result.Out)
+
+			// Check quality limit
+			if limitQuality != nil && q.WorseThan(*limitQuality) {
+				continue
+			}
+
+			if sortStrands {
+				// FlowSortStrands: take the FIRST successful strand, then break
+				// Reference: rippled StrandFlow.h lines 733-741
+				if !result.Inactive {
+					next = append(next, strand)
+				}
+				best = &bestStrand{
+					in:      result.In,
+					out:     result.Out,
+					sandbox: result.Sandbox,
+					quality: q,
+				}
+				// Push remaining strands to next
+				for ri := strandIndex + 1; ri < len(cur); ri++ {
+					next = append(next, cur[ri])
+				}
+				break
+			}
+
+			// Without FlowSortStrands: evaluate all strands, keep best
+			// Reference: rippled StrandFlow.h lines 743-765
+			next = append(next, strand)
+
+			if best == nil || q.BetterThan(best.quality) ||
+				(q.Value == best.quality.Value && result.Out.Compare(best.out) > 0) {
+				if result.Inactive {
+					// Mark for removal if this ends up being best
+					markInactiveOnUse = len(next) - 1
+				} else {
+					markInactiveOnUse = -1
+				}
+				best = &bestStrand{
+					in:      result.In,
+					out:     result.Out,
+					sandbox: result.Sandbox,
+					quality: q,
+				}
 			}
 		}
 
-		if remainingIn != nil {
-			*remainingIn = remainingIn.Sub(bestResult.In)
-			if remainingIn.IsNegative() || remainingIn.IsZero() {
-				break // No more input available
+		// Determine if we should break after this iteration
+		shouldBreak := false
+		if sortStrands {
+			shouldBreak = best == nil || offersConsidered >= maxOffersToConsider
+		} else {
+			shouldBreak = best == nil
+		}
+		if best != nil {
+			// Remove inactive strand from next if it was the best
+			if markInactiveOnUse >= 0 && markInactiveOnUse < len(next) {
+				next = append(next[:markInactiveOnUse], next[markInactiveOnUse+1:]...)
+				markInactiveOnUse = -1
 			}
+
+			savedIns = append(savedIns, best.in)
+			savedOuts = append(savedOuts, best.out)
+
+			// Recalculate remaining from totals for precision
+			// Reference: rippled uses sum(savedOuts) and sum(savedIns)
+			totalOut = sumAmounts(savedOuts)
+			totalIn = sumAmounts(savedIns)
+			remainingOut = outReq.Sub(totalOut)
+			if remainingOut.IsNegative() {
+				if outReq.IsNative {
+					remainingOut = ZeroXRPEitherAmount()
+				} else {
+					remainingOut = ZeroIOUEitherAmount(outReq.IOU.Currency, outReq.IOU.Issuer)
+				}
+			}
+			if sendMax != nil {
+				ri := sendMax.Sub(totalIn)
+				remainingIn = &ri
+			}
+
+			// Apply the best strand's sandbox changes
+			if best.sandbox != nil {
+				best.sandbox.Apply(accumSandbox)
+			}
+		}
+
+		// Delete removable offers from the accumulating sandbox
+		if len(iterOfrsToRm) > 0 {
+			for k := range iterOfrsToRm {
+				allOfrsToRm[k] = true
+			}
+			for k := range iterOfrsToRm {
+				offerDeleteInSandbox(accumSandbox, k)
+			}
+		}
+
+		if shouldBreak {
+			break
 		}
 	}
 
@@ -222,7 +305,6 @@ func Flow(
 	if totalOut.IsZero() {
 		resultCode = tx.TecPATH_DRY
 	} else if totalOut.Compare(outReq) < 0 {
-		// Didn't deliver full amount
 		if !partialPayment {
 			resultCode = tx.TecPATH_PARTIAL
 		}
@@ -237,22 +319,100 @@ func Flow(
 	}
 }
 
-// strandQuality pairs a strand with its quality for sorting
-type strandQuality struct {
-	index   int
-	strand  Strand
-	quality Quality
-	active  bool
+// sumAmounts sums a slice of EitherAmounts.
+// For better precision, sorts from smallest to largest before summing.
+// Reference: rippled uses flat_multiset which auto-sorts, then std::accumulate.
+func sumAmounts(amounts []EitherAmount) EitherAmount {
+	if len(amounts) == 0 {
+		return ZeroXRPEitherAmount()
+	}
+	if len(amounts) == 1 {
+		return amounts[0]
+	}
+	// Sort ascending (smallest first) for precision
+	sorted := make([]EitherAmount, len(amounts))
+	copy(sorted, amounts)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Compare(sorted[j]) < 0
+	})
+	result := sorted[0]
+	for i := 1; i < len(sorted); i++ {
+		result = result.Add(sorted[i])
+	}
+	return result
 }
 
-// hasActiveStrands returns true if any strand is still active
-func hasActiveStrands(sq []strandQuality) bool {
-	for _, s := range sq {
-		if s.active {
-			return true
-		}
+// offerDeleteInSandbox deletes an offer from a PaymentSandbox.
+// This is the equivalent of rippled's offerDelete() called from StrandFlow.h lines 810-813
+// to permanently remove unfunded/expired/degraded-quality offers discovered during flow.
+//
+// Reference: rippled StrandFlow.h:
+//
+//	for (auto const& o : ofrsToRm)
+//	    if (auto ok = sb.peek(keylet::offer(o)))
+//	        offerDelete(sb, ok, j);
+func offerDeleteInSandbox(sb *PaymentSandbox, offerKey [32]byte) {
+	offerKL := keylet.Keylet{Key: offerKey}
+	offerData, err := sb.Read(offerKL)
+	if err != nil || offerData == nil {
+		return // Offer already deleted or not found
 	}
-	return false
+
+	offer, err := sle.ParseLedgerOffer(offerData)
+	if err != nil {
+		return
+	}
+
+	ownerID, err := sle.DecodeAccountID(offer.Account)
+	if err != nil {
+		return
+	}
+
+	txHash, ledgerSeq := sb.GetTransactionContext()
+
+	// Remove from owner directory
+	ownerDirKey := keylet.OwnerDir(ownerID)
+	sle.DirRemove(sb, ownerDirKey, offer.OwnerNode, offerKey, false)
+
+	// Remove from book directory
+	bookDirKey := keylet.Keylet{Type: 100, Key: offer.BookDirectory}
+	sle.DirRemove(sb, bookDirKey, offer.BookNode, offerKey, false)
+
+	// Erase the offer
+	sb.Erase(offerKL)
+
+	// Decrement owner count
+	adjustOwnerCountInSandbox(sb, ownerID, -1, txHash, ledgerSeq)
+}
+
+// adjustOwnerCountInSandbox modifies an account's OwnerCount by delta in a PaymentSandbox.
+// This is a standalone version used by offerDeleteInSandbox.
+func adjustOwnerCountInSandbox(sb *PaymentSandbox, account [20]byte, delta int, txHash [32]byte, ledgerSeq uint32) {
+	accountKey := keylet.Account(account)
+	accountData, err := sb.Read(accountKey)
+	if err != nil || accountData == nil {
+		return
+	}
+
+	accountRoot, err := sle.ParseAccountRoot(accountData)
+	if err != nil {
+		return
+	}
+
+	newCount := int(accountRoot.OwnerCount) + delta
+	if newCount < 0 {
+		newCount = 0
+	}
+	accountRoot.OwnerCount = uint32(newCount)
+	accountRoot.PreviousTxnID = txHash
+	accountRoot.PreviousTxnLgrSeq = ledgerSeq
+
+	newData, err := sle.SerializeAccountRoot(accountRoot)
+	if err != nil {
+		return
+	}
+
+	sb.Update(accountKey, newData)
 }
 
 // RippleCalculate is the main entry point for path-based payments.
@@ -286,26 +446,29 @@ func RippleCalculate(
 	limitQuality bool,
 	txHash [32]byte,
 	ledgerSeq uint32,
+	opts ...RippleCalculateOption,
 ) (EitherAmount, EitherAmount, map[[32]byte]bool, *PaymentSandbox, tx.Result) {
+	// Apply options
+	var rcOpts rippleCalculateOpts
+	for _, opt := range opts {
+		opt(&rcOpts)
+	}
+
 	// Create PaymentSandbox from view
 	sandbox := NewPaymentSandbox(view)
 	sandbox.SetTransactionContext(txHash, ledgerSeq)
 
 	// Convert paths to strands
 	strands, strandResult := ToStrands(sandbox, srcAccount, dstAccount, dstAmount, srcAmount, paths, addDefaultPath)
-	fmt.Printf("[RippleCalculate] ToStrands result=%v numStrands=%d dstAmount=%v srcAmount=%v\n", strandResult, len(strands), dstAmount, srcAmount)
-	for i, strand := range strands {
-		fmt.Printf("[RippleCalculate] strand[%d] steps=%d\n", i, len(strand))
-		for j, step := range strand {
-			fmt.Printf("  [%d] %T\n", j, step)
-		}
-	}
 	if strandResult != tx.TesSUCCESS || len(strands) == 0 {
 		if strandResult == tx.TesSUCCESS {
 			strandResult = tx.TecPATH_DRY
 		}
 		return ZeroXRPEitherAmount(), ZeroXRPEitherAmount(), nil, nil, strandResult
 	}
+
+	// Configure BookSteps with amendment flags for payments.
+	configureBookStepsForPayments(strands, rcOpts.parentCloseTime, rcOpts.fixReducedOffersV1, rcOpts.fixReducedOffersV2, rcOpts.fixRmSmallIncreasedQOffers)
 
 	// Convert amounts to EitherAmount
 	outReq := ToEitherAmount(dstAmount)
@@ -319,14 +482,12 @@ func RippleCalculate(
 	// Calculate limit quality if requested
 	var qualityLimit *Quality
 	if limitQuality && sendMax != nil {
-		// Limit quality is srcAmount / dstAmount
 		q := QualityFromAmounts(*sendMax, outReq)
 		qualityLimit = &q
 	}
 
-	// Execute flow
-	result := Flow(sandbox, strands, outReq, partialPayment, qualityLimit, sendMax)
-	fmt.Printf("[RippleCalculate] Flow result: In=%v Out=%v Result=%v\n", result.In, result.Out, result.Result)
+	// Execute flow with FlowSortStrands amendment flag
+	result := Flow(sandbox, strands, outReq, partialPayment, qualityLimit, sendMax, rcOpts.flowSortStrands)
 
 	// Apply flow sandbox changes back to the main sandbox
 	if result.Result == tx.TesSUCCESS || result.Result == tx.TecPATH_PARTIAL {
@@ -336,6 +497,48 @@ func RippleCalculate(
 	}
 
 	return result.In, result.Out, result.RemovableOffers, sandbox, result.Result
+}
+
+// RippleCalculateOption is a functional option for RippleCalculate
+type RippleCalculateOption func(*rippleCalculateOpts)
+
+type rippleCalculateOpts struct {
+	parentCloseTime            uint32
+	fixReducedOffersV1         bool
+	fixReducedOffersV2         bool
+	fixRmSmallIncreasedQOffers bool
+	flowSortStrands            bool
+}
+
+// WithAmendments passes amendment flags and ledger timing to RippleCalculate,
+// which configures BookSteps with the appropriate behavior flags.
+func WithAmendments(parentCloseTime uint32, fixReducedOffersV1, fixReducedOffersV2, fixRmSmallIncreasedQOffers bool, flowSortStrands ...bool) RippleCalculateOption {
+	return func(o *rippleCalculateOpts) {
+		o.parentCloseTime = parentCloseTime
+		o.fixReducedOffersV1 = fixReducedOffersV1
+		o.fixReducedOffersV2 = fixReducedOffersV2
+		o.fixRmSmallIncreasedQOffers = fixRmSmallIncreasedQOffers
+		if len(flowSortStrands) > 0 {
+			o.flowSortStrands = flowSortStrands[0]
+		}
+	}
+}
+
+// configureBookStepsForPayments sets amendment flags on BookSteps within payment strands.
+// These flags control OfferStream-level behavior during offer iteration.
+// Reference: rippled OfferStream reads rules from view_ dynamically;
+// the Go code passes them as booleans on each BookStep.
+func configureBookStepsForPayments(strands []Strand, parentCloseTime uint32, fixReducedOffersV1, fixReducedOffersV2, fixRmSmallIncreasedQOffers bool) {
+	for _, strand := range strands {
+		for _, step := range strand {
+			if bookStep, ok := step.(*BookStep); ok {
+				bookStep.parentCloseTime = parentCloseTime
+				bookStep.fixReducedOffersV1 = fixReducedOffersV1
+				bookStep.fixReducedOffersV2 = fixReducedOffersV2
+				bookStep.fixRmSmallIncreasedQOffers = fixRmSmallIncreasedQOffers
+			}
+		}
+	}
 }
 
 // FlowV2 is an alternative flow implementation that matches rippled's FlowV2.
@@ -349,7 +552,5 @@ func FlowV2(
 	sendMax *EitherAmount,
 ) FlowResult {
 	// For now, delegate to Flow
-	// A full implementation would match rippled's FlowV2 exactly
 	return Flow(baseView, strands, outReq, partialPayment, limitQuality, sendMax)
 }
-

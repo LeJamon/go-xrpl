@@ -370,8 +370,13 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// DisableMaster
+	// Reference: rippled SetAccount.cpp:402-418
 	if uSetFlag == AccountSetFlagDisableMaster && (uFlagsIn&sle.LsfDisableMaster) == 0 {
-		if account.RegularKey == "" {
+		// Account has no regular key or multi-signer signer list.
+		// Reference: rippled SetAccount.cpp:410-415
+		hasRegularKey := account.RegularKey != ""
+		hasSignerList, _ := ctx.View.Exists(keylet.SignerList(ctx.AccountID))
+		if !hasRegularKey && !hasSignerList {
 			return tx.TecNO_ALTERNATIVE_KEY
 		}
 		uFlagsOut |= sle.LsfDisableMaster

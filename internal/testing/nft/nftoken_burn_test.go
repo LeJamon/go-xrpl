@@ -367,8 +367,8 @@ func TestBurnTooManyOffers(t *testing.T) {
 		alice := jtx.NewAccount("alice")
 
 		// Need enough XRP for 501 sell offers + NFT page + fees
-		// Reserve = 10 XRP + 502 * 2 XRP = 1014 XRP, plus fees
-		env.FundAmount(alice, 2000000000) // 2000 XRP
+		// Reserve = 200 XRP + 502 * 50 XRP = 25300 XRP, plus fees
+		env.FundAmount(alice, 30000000000) // 30000 XRP
 		env.Close()
 
 		// Mint an NFT
@@ -404,7 +404,8 @@ func TestBurnTooManyOffers(t *testing.T) {
 		becky := jtx.NewAccount("becky")
 
 		// Need enough XRP for 499 sell offers + NFT page + fees
-		env.FundAmount(alice, 2000000000) // 2000 XRP
+		// Reserve = 200 XRP + 500 * 50 XRP = 25200 XRP, plus fees
+		env.FundAmount(alice, 30000000000) // 30000 XRP
 		env.Fund(becky)
 		env.Close()
 

@@ -102,10 +102,19 @@ func (s *XRPEndpointStep) Rev(
 		}
 	}
 
-	// Execute the transfer (both source and destination endpoints transfer in Rev pass).
+	// Execute the transfer.
+	// When isLast=true (destination endpoint), accountSend may fail if the requested
+	// amount exceeds the serializable range (e.g., sell-flag deliver = 9e18 drops).
+	// In rippled, STAmount doesn't validate during arithmetic so this succeeds.
+	// Our binary codec validates amounts <= MaxDrops (1e17).
+	// For destination in Rev: the sandbox will be reset when the limiting step is found
+	// (BookStep limits to actual order book depth), so the credit doesn't need to persist.
+	// If accountSend fails, we still cache the result and return — the forward pass
+	// will execute the actual credit with reasonable amounts.
 	// Reference: rippled XRPEndpointStep::revImp calls accountSend regardless of isLast_.
 	err := s.accountSend(sb, result)
-	if err != nil {
+	if err != nil && !s.isLast {
+		// Source endpoint failure is real — can't debit from account
 		return ZeroXRPEitherAmount(), ZeroXRPEitherAmount()
 	}
 

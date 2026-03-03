@@ -372,6 +372,90 @@ func (s *PaymentSandbox) ForEach(fn func(key [32]byte, data []byte) bool) error 
 	return nil
 }
 
+// Succ returns the first entry with key > the given key.
+// Combines local entries with parent/view results.
+// Reference: rippled ReadView::succ()
+func (s *PaymentSandbox) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
+	var bestKey [32]byte
+	var bestData []byte
+	found := false
+
+	// Check local insertions
+	for k, data := range s.insertions {
+		if s.deletions[k] {
+			continue
+		}
+		if bytes.Compare(k[:], key[:]) > 0 {
+			if !found || bytes.Compare(k[:], bestKey[:]) < 0 {
+				bestKey = k
+				bestData = data
+				found = true
+			}
+		}
+	}
+
+	// Check local modifications
+	for k, data := range s.modifications {
+		if s.deletions[k] {
+			continue
+		}
+		if bytes.Compare(k[:], key[:]) > 0 {
+			if !found || bytes.Compare(k[:], bestKey[:]) < 0 {
+				bestKey = k
+				bestData = data
+				found = true
+			}
+		}
+	}
+
+	// Delegate to parent or view, looping past deleted entries.
+	// When the base returns an entry that's been locally deleted,
+	// we must ask for the NEXT one (using the deleted key as new search key).
+	searchBase := key
+	for {
+		var baseKey [32]byte
+		var baseData []byte
+		var baseFound bool
+		var err error
+
+		if s.parent != nil {
+			baseKey, baseData, baseFound, err = s.parent.Succ(searchBase)
+		} else if s.view != nil {
+			baseKey, baseData, baseFound, err = s.view.Succ(searchBase)
+		}
+		if err != nil {
+			if found {
+				return bestKey, bestData, true, nil
+			}
+			return [32]byte{}, nil, false, err
+		}
+
+		if !baseFound {
+			break
+		}
+
+		if s.deletions[baseKey] {
+			// This entry was deleted locally — skip it and look for the next one
+			searchBase = baseKey
+			continue
+		}
+
+		// Check if local data overrides base data (modification)
+		if modData, ok := s.modifications[baseKey]; ok {
+			baseData = modData
+		}
+
+		if !found || bytes.Compare(baseKey[:], bestKey[:]) < 0 {
+			bestKey = baseKey
+			bestData = baseData
+			found = true
+		}
+		break
+	}
+
+	return bestKey, bestData, found, nil
+}
+
 // Credit records a credit from sender to receiver.
 // This is called when currency moves between accounts during payment execution.
 func (s *PaymentSandbox) Credit(sender, receiver [20]byte, amount tx.Amount, preCreditSenderBalance tx.Amount) {

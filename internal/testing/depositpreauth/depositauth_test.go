@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	paymentPkg "github.com/LeJamon/goXRPLd/internal/core/tx/payment"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
@@ -349,8 +350,10 @@ func TestDepositAuth_NoRipple(t *testing.T) {
 			expectedCode = "tecPATH_DRY"
 		}
 
+		// Use explicit path through gw1 (matching rippled: path(gw1))
+		gw1Path := [][]paymentPkg.PathStep{{{Account: gw1.Address}}}
 		result := env.Submit(
-			payment.PayIssued(alice, bob, usd10).Build(),
+			payment.PayIssued(alice, bob, usd10).Paths(gw1Path).Build(),
 		)
 		require.Equal(t, expectedCode, result.Code,
 			"noRipplePrev=%v noRippleNext=%v withDepositAuth=%v",
@@ -391,9 +394,12 @@ func TestDepositAuth_NoRipple(t *testing.T) {
 
 		usd1_10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw1.Address)
 		usd2_10_pay := tx.NewIssuedAmountFromFloat64(10, "USD", gw2.Address)
+		// Use explicit path through alice (matching rippled: path(alice), sendmax(USD1(10)))
+		alicePath := [][]paymentPkg.PathStep{{{Account: alice.Address}}}
 		result := env.Submit(
 			payment.PayIssued(gw1, gw2, usd2_10_pay).
 				SendMax(usd1_10).
+				Paths(alicePath).
 				Build(),
 		)
 		require.Equal(t, expectedCode, result.Code,

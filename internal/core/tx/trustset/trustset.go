@@ -2,6 +2,7 @@ package trustset
 
 import (
 	"errors"
+
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"

@@ -1759,8 +1759,8 @@ func TestPayChan_AccountDelete(t *testing.T) {
 			require.Equal(t, chanAmt, chanAmount(env, chanK))
 		}
 
-		// Resurrect bob
-		env.Pay(bob, uint64(jtx.XRP(20)))
+		// Resurrect bob (needs at least reserve base = 200 XRP)
+		env.Pay(bob, uint64(jtx.XRP(250)))
 		env.Close()
 		require.True(t, env.Exists(bob))
 

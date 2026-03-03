@@ -296,10 +296,8 @@ func testTinyOffer(t *testing.T, disabledFeatures []string) {
 		"Expected bob CNY balance = bobsCnyStartBalance - alicesCnyOffer, got mantissa=%d exp=%d",
 		bobCNYBalance.Mantissa(), bobCNYBalance.Exponent())
 
-	// bob XRP: startXrpBalance - fee + drops(1)
-	// In rippled, env(trust(...)) costs a fee that is not refunded, so the
-	// assertion is startXrpBalance - fee*2 + drops(1). In Go, env.Trust()
-	// refunds the trust fee from master, so bob only loses 1 fee (for the offer).
+	// bob XRP: startXrpBalance - fee*2 + drops(1)
+	// Bob paid 2 fees: 1 for trust(CNY) + 1 for OfferCreate.
 	// Bob received 1 drop from alice's crossed passive offer.
-	jtx.RequireBalance(t, env, bob, startXrpBalance-f+1)
+	jtx.RequireBalance(t, env, bob, startXrpBalance-2*f+1)
 }
