@@ -48,12 +48,21 @@ type Node interface {
 	String(nodeID NodeID) string
 	Invariants(isRoot bool) error
 	Clone() (Node, error)
+	IsDirty() bool
+	SetDirty(bool)
 }
 
 // BaseNode provides common functionality for all node types
 type BaseNode struct {
-	hash [32]byte
+	hash  [32]byte
+	dirty bool
 }
+
+// IsDirty returns true if the node has been created or modified since last flush.
+func (b *BaseNode) IsDirty() bool { return b.dirty }
+
+// SetDirty marks the node as dirty (modified) or clean (flushed/loaded).
+func (b *BaseNode) SetDirty(d bool) { b.dirty = d }
 
 // Hash returns the hash of the node
 func (b *BaseNode) Hash() [32]byte {

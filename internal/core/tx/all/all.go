@@ -5,6 +5,7 @@
 package all
 
 import (
+	_ "github.com/LeJamon/goXRPLd/internal/core/tx/account"
 	_ "github.com/LeJamon/goXRPLd/internal/core/tx/amm"
 	_ "github.com/LeJamon/goXRPLd/internal/core/tx/batch"
 	_ "github.com/LeJamon/goXRPLd/internal/core/tx/check"
@@ -27,4 +28,5 @@ import (
 	_ "github.com/LeJamon/goXRPLd/internal/core/tx/ticket"
 	_ "github.com/LeJamon/goXRPLd/internal/core/tx/trustset"
 	_ "github.com/LeJamon/goXRPLd/internal/core/tx/vault"
+	_ "github.com/LeJamon/goXRPLd/internal/core/tx/xchain"
 )

@@ -521,7 +521,7 @@ func insufficientBalance(view tx.LedgerView, accountID [20]byte, amount tx.Amoun
 	}
 
 	// Check account holds sufficient amount (zero if frozen)
-	held := tx.AccountFunds(view, accountID, amount, true)
+	held := tx.AccountFunds(view, accountID, amount, true, 0, 0)
 	return held.Compare(amount) < 0
 }
 

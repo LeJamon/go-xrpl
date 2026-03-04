@@ -339,15 +339,52 @@ func GetQuality(k Keylet) uint64 {
 	return binary.BigEndian.Uint64(k.Key[24:])
 }
 
-// NFTokenPage returns the keylet for an NFToken page.
-func NFTokenPage(accountID [20]byte, tokenID [32]byte) Keylet {
-	// The page key uses the high 192 bits of the token ID
-	pageKey := make([]byte, 32)
-	copy(pageKey[:20], accountID[:])
-	copy(pageKey[20:], tokenID[20:32])
+// nftPageMask is the low 96 bits (bytes 20-31) used for NFT page grouping.
+var nftPageMask = [32]byte{
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF,
+	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+}
+
+// NFTokenPageMin returns the minimum page key for an account.
+// The key is [owner_20_bytes | 0x00_12_bytes] — NOT hashed.
+// Reference: rippled Indexes.cpp nftpage_min
+func NFTokenPageMin(accountID [20]byte) Keylet {
+	var key [32]byte
+	copy(key[:20], accountID[:])
 	return Keylet{
 		Type: entry.TypeNFTokenPage,
-		Key:  indexHash(spaceNFTokenPg, pageKey),
+		Key:  key,
+	}
+}
+
+// NFTokenPageMax returns the maximum page key for an account.
+// The key is [owner_20_bytes | 0xFF_12_bytes] — NOT hashed.
+// Reference: rippled Indexes.cpp nftpage_max
+func NFTokenPageMax(accountID [20]byte) Keylet {
+	var key [32]byte
+	copy(key[:20], accountID[:])
+	for i := 20; i < 32; i++ {
+		key[i] = 0xFF
+	}
+	return Keylet{
+		Type: entry.TypeNFTokenPage,
+		Key:  key,
+	}
+}
+
+// NFTokenPageForToken returns the page key for a specific token.
+// The key is (base & ~pageMask) | (tokenID & pageMask) — NOT hashed.
+// Reference: rippled Indexes.cpp nftpage(base, token)
+func NFTokenPageForToken(base Keylet, tokenID [32]byte) Keylet {
+	var key [32]byte
+	for i := 0; i < 32; i++ {
+		key[i] = (base.Key[i] & ^nftPageMask[i]) | (tokenID[i] & nftPageMask[i])
+	}
+	return Keylet{
+		Type: entry.TypeNFTokenPage,
+		Key:  key,
 	}
 }
 

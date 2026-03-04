@@ -77,6 +77,11 @@ func SerializeLedgerOffer(offer *LedgerOffer) ([]byte, error) {
 		"PreviousTxnLgrSeq": offer.PreviousTxnLgrSeq,
 	}
 
+	// Include optional fields only when set (non-zero)
+	if offer.Expiration > 0 {
+		jsonObj["Expiration"] = offer.Expiration
+	}
+
 	hexStr, err := binarycodec.Encode(jsonObj)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode Offer: %w", err)

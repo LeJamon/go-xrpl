@@ -203,10 +203,15 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// Insert the DID - creation tracked automatically by ApplyStateTable
+	// Insert the DID into the ledger
 	if err := ctx.View.Insert(didKey, didData); err != nil {
 		return tx.TefINTERNAL
 	}
+
+	// Add to owner directory
+	// Reference: rippled DID.cpp addSLE → dirInsert
+	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
+	sle.DirInsert(ctx.View, ownerDirKey, didKey.Key, nil)
 
 	ctx.Account.OwnerCount++
 

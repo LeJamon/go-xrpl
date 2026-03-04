@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )
 
 func init() {
@@ -66,7 +67,12 @@ func (d *DIDDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecNO_ENTRY
 	}
 
-	// Delete the DID entry - deletion tracked automatically by ApplyStateTable
+	// Remove from owner directory
+	// Reference: rippled DID.cpp deleteSLE → dirRemove
+	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
+	sle.DirRemove(ctx.View, ownerDirKey, 0, didKey.Key, true)
+
+	// Delete the DID entry
 	if err := ctx.View.Erase(didKey); err != nil {
 		return tx.TefINTERNAL
 	}

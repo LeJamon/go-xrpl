@@ -20,14 +20,16 @@ type NFTokenData struct {
 
 // NFTokenOfferData represents an NFToken offer ledger entry
 type NFTokenOfferData struct {
-	Owner          [20]byte
-	NFTokenID      [32]byte
-	Amount         uint64
-	AmountIOU      *NFTIOUAmount // For IOU amounts
-	Flags          uint32
-	Destination    [20]byte
-	Expiration     uint32
-	HasDestination bool
+	Owner             [20]byte
+	NFTokenID         [32]byte
+	Amount            uint64
+	AmountIOU         *NFTIOUAmount // For IOU amounts
+	Flags             uint32
+	Destination       [20]byte
+	Expiration        uint32
+	HasDestination    bool
+	OwnerNode         uint64 // Page in owner directory where this offer is listed
+	NFTokenOfferNode  uint64 // Page in NFTBuys/NFTSells directory where this offer is listed
 }
 
 // NFTIOUAmount represents an IOU amount for NFToken offers
@@ -93,9 +95,9 @@ func ParseNFTokenPage(data []byte) (*NFTokenPageData, error) {
 				return page, nil
 			}
 			switch fieldCode {
-			case 25: // PreviousPageMin
+			case 26: // PreviousPageMin (nth=26 per definitions.json)
 				copy(page.PreviousPageMin[:], data[offset:offset+32])
-			case 26: // NextPageMin
+			case 27: // NextPageMin (nth=27 per definitions.json)
 				copy(page.NextPageMin[:], data[offset:offset+32])
 			case 10: // NFTokenID
 				if hasToken {
@@ -107,12 +109,25 @@ func ParseNFTokenPage(data []byte) (*NFTokenPageData, error) {
 			}
 			offset += 32
 
+		case FieldTypeUInt64: // 3
+			if offset+8 > len(data) {
+				return page, nil
+			}
+			offset += 8
+
 		case FieldTypeBlob:
 			if offset >= len(data) {
 				return page, nil
 			}
 			length := int(data[offset])
 			offset++
+			if length > 192 {
+				if offset >= len(data) {
+					return page, nil
+				}
+				length = 193 + ((length-193)<<8 | int(data[offset]))
+				offset++
+			}
 			if offset+length > len(data) {
 				return page, nil
 			}
@@ -120,6 +135,19 @@ func ParseNFTokenPage(data []byte) (*NFTokenPageData, error) {
 				currentToken.URI = hex.EncodeToString(data[offset : offset+length])
 			}
 			offset += length
+
+		case 8: // AccountID — 20 bytes
+			if offset+20 > len(data) {
+				return page, nil
+			}
+			offset += 20
+
+		case 14, 15:
+			// STObject (14) and STArray (15) structural markers.
+			// These include array/object start field headers (e.g., 0xFA for NFTokens)
+			// and end-of-object (0xE1) / end-of-array (0xF1) markers.
+			// They have no payload — just continue parsing inner fields.
+			continue
 
 		default:
 			if hasToken {
@@ -198,6 +226,13 @@ func ParseNFTokenOffer(data []byte) (*NFTokenOfferData, error) {
 			if offset+8 > len(data) {
 				return offer, nil
 			}
+			value := binary.BigEndian.Uint64(data[offset : offset+8])
+			switch fieldCode {
+			case 4: // OwnerNode (UInt64 nth=4)
+				offer.OwnerNode = value
+			case 12: // NFTokenOfferNode (UInt64 nth=12)
+				offer.NFTokenOfferNode = value
+			}
 			offset += 8
 
 		case FieldTypeHash256:
@@ -218,6 +253,20 @@ func ParseNFTokenOffer(data []byte) (*NFTokenOfferData, error) {
 				offer.Amount = rawAmount & 0x3FFFFFFFFFFFFFFF
 				offset += 8
 			} else {
+				// IOU amount: 8 bytes value + 20 bytes currency + 20 bytes issuer = 48 bytes
+				if offset+48 > len(data) {
+					return offer, nil
+				}
+				iouAmount, err := ParseIOUAmountBinary(data[offset : offset+48])
+				if err == nil {
+					var issuerID [20]byte
+					copy(issuerID[:], data[offset+28:offset+48])
+					offer.AmountIOU = &NFTIOUAmount{
+						Currency: iouAmount.Currency,
+						Issuer:   issuerID,
+						Value:    iouAmount.IOU().String(),
+					}
+				}
 				offset += 48
 			}
 
@@ -237,6 +286,28 @@ func ParseNFTokenOffer(data []byte) (*NFTokenOfferData, error) {
 				}
 				offset += 20
 			}
+
+		case FieldTypeBlob: // 7
+			if offset >= len(data) {
+				return offer, nil
+			}
+			length := int(data[offset])
+			offset++
+			if length > 192 {
+				if offset >= len(data) {
+					return offer, nil
+				}
+				length = 193 + ((length-193)<<8 | int(data[offset]))
+				offset++
+			}
+			if offset+length > len(data) {
+				return offer, nil
+			}
+			offset += length
+
+		case 14, 15:
+			// STObject/STArray structural markers — skip
+			continue
 
 		default:
 			return offer, nil

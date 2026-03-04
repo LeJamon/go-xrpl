@@ -4,19 +4,25 @@ package nft_test
 // Reference: rippled/src/test/app/NFTokenBurn_test.cpp
 
 import (
+	"math/rand"
+	"sort"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/nftoken"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
+	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
 	"github.com/LeJamon/goXRPLd/internal/testing/nft"
 )
 
-// TestBurnRandom exercises a number of conditions with NFT burning.
-// Creates multiple accounts with NFTs and offers, then burns them randomly
-// to test page coalescing code.
+// ===========================================================================
+// testBurnRandom
 // Reference: rippled NFTokenBurn_test.cpp testBurnRandom
+//
+// Creates multiple accounts with NFTs and offers, then burns them randomly
+// to exercise page coalescing code.
+// ===========================================================================
 func TestBurnRandom(t *testing.T) {
-	t.Skip("testBurnRandom requires full NFT lifecycle with offers and transfers")
-
 	env := jtx.NewTestEnv(t)
 
 	alice := jtx.NewAccount("alice")
@@ -26,226 +32,432 @@ func TestBurnRandom(t *testing.T) {
 	env.Fund(alice, becky, minter)
 	env.Close()
 
-	// Both alice and minter mint NFTs in case that makes any difference.
 	// Set minter as alice's authorized minter
-	// env.Submit(jtx.AccountSet(alice).AuthorizedMinter(minter).Build())
+	result := env.Submit(accountset.AccountSet(alice).AuthorizedMinter(minter).Build())
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	// Create enough NFTs that alice, becky, and minter can all have
-	// at least three pages of NFTs.  This will cause more activity in
-	// the page coalescing code.
-	//
-	// Give each NFT a pseudo-randomly chosen fee so the NFTs are
-	// distributed pseudo-randomly through the pages.
-
-	const nftCountPerAccount = 70
+	// Track NFTs by account
 	type AcctStat struct {
 		acct *jtx.Account
 		nfts []string
 	}
+	aliceStat := &AcctStat{acct: alice}
+	minterStat := &AcctStat{acct: minter}
+	beckyStat := &AcctStat{acct: becky}
 
-	aliceStat := &AcctStat{acct: alice, nfts: make([]string, 0, 105)}
-	beckyStat := &AcctStat{acct: becky, nfts: make([]string, 0, nftCountPerAccount)}
-	minterStat := &AcctStat{acct: minter, nfts: make([]string, 0, 105)}
-
-	// Mint NFTs for alice
+	// Mint 105 NFTs for alice (transferable + burnable)
 	for i := 0; i < 105; i++ {
-		mintTx := nft.NFTokenMint(alice, uint32(i)).Transferable().Burnable().Build()
-		result := env.Submit(mintTx)
+		fee := uint16(i * 100 % 50001) // pseudo-random transfer fee
+		flags := nftoken.NFTokenFlagTransferable | nftoken.NFTokenFlagBurnable
+		nftID := nft.GetNextNFTokenID(env, alice, 0, flags, fee)
+		result := env.Submit(nft.NFTokenMint(alice, 0).Transferable().Burnable().TransferFee(fee).Build())
 		if result.Success {
-			// In a real implementation, we'd extract the NFTokenID from the result
-			aliceStat.nfts = append(aliceStat.nfts, "nft_"+string(rune(i)))
+			aliceStat.nfts = append(aliceStat.nfts, nftID)
 		}
 		env.Close()
 	}
 
-	// Mint NFTs for minter (as issuer alice)
+	// Mint 105 NFTs by minter for alice (transferable + burnable)
 	for i := 0; i < 105; i++ {
-		mintTx := nft.NFTokenMint(minter, uint32(i)).Transferable().Burnable().Issuer(alice).Build()
-		result := env.Submit(mintTx)
+		fee := uint16((i + 50) * 100 % 50001) // pseudo-random transfer fee
+		flags := nftoken.NFTokenFlagTransferable | nftoken.NFTokenFlagBurnable
+		nftID := nft.GetNextNFTokenID(env, alice, 0, flags, fee)
+		result := env.Submit(nft.NFTokenMint(minter, 0).Issuer(alice).Transferable().Burnable().TransferFee(fee).Build())
 		if result.Success {
-			minterStat.nfts = append(minterStat.nfts, "nft_minter_"+string(rune(i)))
+			minterStat.nfts = append(minterStat.nfts, nftID)
 		}
 		env.Close()
 	}
 
-	// Transfer 35 NFTs each from alice and minter to becky
-	// This requires creating sell offers and having becky accept them
-	// ...
+	// Transfer 35 NFTs from alice to becky via sell offers
+	for i := 0; i < 35 && i < len(aliceStat.nfts); i++ {
+		nftID := aliceStat.nfts[i]
+		offerIndex := nft.GetOfferIndex(env, alice)
+		env.Submit(nft.NFTokenCreateSellOffer(alice, nftID, tx.NewXRPAmount(0)).Build())
+		env.Close()
 
-	t.Logf("Alice NFTs: %d, Becky NFTs: %d, Minter NFTs: %d",
+		env.Submit(nft.NFTokenAcceptSellOffer(becky, offerIndex).Build())
+		env.Close()
+	}
+	// Move IDs from alice to becky
+	beckyStat.nfts = append(beckyStat.nfts, aliceStat.nfts[:35]...)
+	aliceStat.nfts = aliceStat.nfts[35:]
+
+	// Transfer 35 NFTs from minter to becky via sell offers
+	for i := 0; i < 35 && i < len(minterStat.nfts); i++ {
+		nftID := minterStat.nfts[i]
+		offerIndex := nft.GetOfferIndex(env, minter)
+		env.Submit(nft.NFTokenCreateSellOffer(minter, nftID, tx.NewXRPAmount(0)).Build())
+		env.Close()
+
+		env.Submit(nft.NFTokenAcceptSellOffer(becky, offerIndex).Build())
+		env.Close()
+	}
+	beckyStat.nfts = append(beckyStat.nfts, minterStat.nfts[:35]...)
+	minterStat.nfts = minterStat.nfts[35:]
+
+	// Each account should have 70 NFTs
+	t.Logf("Alice: %d NFTs, Becky: %d NFTs, Minter: %d NFTs",
 		len(aliceStat.nfts), len(beckyStat.nfts), len(minterStat.nfts))
 
-	// Now each of the 270 NFTs has six offers associated with it.
-	// Randomly select an NFT out of the pile and burn it. Continue
-	// the process until all NFTs are burned.
-	// ...
-
-	t.Log("testBurnRandom passed")
-}
-
-// TestBurnSequential tests burning NFTs in sequential order.
-// Tests specific directory merging scenarios that can only be tested
-// by inserting and deleting in an ordered fashion.
-// Reference: rippled NFTokenBurn_test.cpp testBurnSequential
-func TestBurnSequential(t *testing.T) {
-	t.Skip("testBurnSequential requires full NFT page management")
-
-	env := jtx.NewTestEnv(t)
-
-	alice := jtx.NewAccount("alice")
-	env.Fund(alice)
-	env.Close()
-
-	// Generate 96 NFTs packed into three pages of 32 each
-	nfts := make([]string, 0, 96)
-
-	// By manipulating the internal form of the taxon we can force
-	// creation of NFT pages that are completely full.
-	for i := uint32(0); i < 96; i++ {
-		// In order to fill the pages we use the taxon to break them
-		// into groups of 16 entries. By having the internal
-		// representation of the taxon go 0, 3, 2, 5, 4, 7...
-		// in sets of 16 NFTs we can get each page to be fully populated.
-		intTaxon := (i / 16) + (i&0b10000)>>4*2
-		mintTx := nft.NFTokenMint(alice, intTaxon).Build()
-		result := env.Submit(mintTx)
-		if result.Success {
-			nfts = append(nfts, "nft_"+string(rune(i)))
-		}
-		env.Close()
+	// Build a combined list of all NFTs with their owners for random burning
+	type nftEntry struct {
+		id    string
+		owner *AcctStat
+	}
+	var allNFTs []nftEntry
+	for _, nftID := range aliceStat.nfts {
+		allNFTs = append(allNFTs, nftEntry{id: nftID, owner: aliceStat})
+	}
+	for _, nftID := range beckyStat.nfts {
+		allNFTs = append(allNFTs, nftEntry{id: nftID, owner: beckyStat})
+	}
+	for _, nftID := range minterStat.nfts {
+		allNFTs = append(allNFTs, nftEntry{id: nftID, owner: minterStat})
 	}
 
-	t.Logf("Created %d NFTs", len(nfts))
+	// Randomly burn all NFTs
+	rng := rand.New(rand.NewSource(42)) // deterministic randomness
+	for len(allNFTs) > 0 {
+		idx := rng.Intn(len(allNFTs))
+		entry := allNFTs[idx]
 
-	// Test 1: Burn tokens in order from first to last
-	// This exercises specific cases where coalescing pages is not possible.
-	t.Run("BurnFirstToLast", func(t *testing.T) {
-		t.Skip("Requires NFT burning implementation")
-		for _, nftID := range nfts {
-			burnTx := nft.NFTokenBurn(alice, nftID).Build()
-			env.Submit(burnTx)
+		// If owner is becky, issuer (alice) can burn it since all are burnable
+		if entry.owner == beckyStat {
+			result := env.Submit(nft.NFTokenBurn(alice, entry.id).Owner(becky).Build())
+			if !result.Success {
+				// Fallback: owner burns
+				env.Submit(nft.NFTokenBurn(becky, entry.id).Build())
+			}
+		} else {
+			result := env.Submit(nft.NFTokenBurn(entry.owner.acct, entry.id).Build())
+			_ = result
+		}
+		env.Close()
+
+		// Remove from list
+		allNFTs[idx] = allNFTs[len(allNFTs)-1]
+		allNFTs = allNFTs[:len(allNFTs)-1]
+	}
+
+	// Verify all accounts have ownerCount 0
+	jtx.RequireOwnerCount(t, env, alice, 0)
+	jtx.RequireOwnerCount(t, env, becky, 0)
+	jtx.RequireOwnerCount(t, env, minter, 0)
+}
+
+// ===========================================================================
+// testBurnSequential
+// Reference: rippled NFTokenBurn_test.cpp testBurnSequential
+//
+// Tests burning NFTs in sequential order.
+// Tests specific directory merging scenarios that can only be tested
+// by inserting and deleting in an ordered fashion.
+// ===========================================================================
+func TestBurnSequential(t *testing.T) {
+	// Helper to generate 96 NFTs packed into three pages of 32 each.
+	// Returns a sorted list of NFT IDs.
+	genPackedTokens := func(env *jtx.TestEnv, account *jtx.Account) []string {
+		nfts := make([]string, 0, 96)
+
+		for i := uint32(0); i < 96; i++ {
+			// To fill the pages we use the taxon to break them into groups
+			// of 16 entries. By having the internal representation of the
+			// taxon go 0, 3, 2, 5, 4, 7... in sets of 16 NFTs we can get
+			// each page to be fully populated.
+			intTaxon := (i / 16)
+			if i&0b10000 != 0 {
+				intTaxon += 2
+			}
+
+			// Compute external taxon that will produce the desired internal taxon
+			tokenSeq := env.MintedCount(account)
+			extTaxon := nftoken.CipheredTaxon(tokenSeq, intTaxon)
+
+			nftID := nft.GetNextNFTokenID(env, account, extTaxon, 0, 0)
+			result := env.Submit(nft.NFTokenMint(account, extTaxon).Build())
+			if result.Success {
+				nfts = append(nfts, nftID)
+			}
 			env.Close()
 		}
+
+		// Sort NFTs by storage order (not creation order)
+		sort.Strings(nfts)
+		return nfts
+	}
+
+	// Test 1: Burn tokens in order from first to last
+	t.Run("BurnFirstToLast", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		env.Fund(alice)
+		env.Close()
+
+		nfts := genPackedTokens(env, alice)
+		t.Logf("Created %d NFTs", len(nfts))
+
+		// Burn all in order
+		for _, nftID := range nfts {
+			result := env.Submit(nft.NFTokenBurn(alice, nftID).Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+		}
+
+		jtx.RequireOwnerCount(t, env, alice, 0)
 	})
 
 	// Test 2: Burn tokens from last to first
-	// This exercises different specific cases where coalescing pages is not possible.
 	t.Run("BurnLastToFirst", func(t *testing.T) {
-		t.Skip("Requires NFT burning implementation")
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		env.Fund(alice)
+		env.Close()
+
+		nfts := genPackedTokens(env, alice)
+
+		// Burn in reverse order
 		for i := len(nfts) - 1; i >= 0; i-- {
-			burnTx := nft.NFTokenBurn(alice, nfts[i]).Build()
-			env.Submit(burnTx)
+			result := env.Submit(nft.NFTokenBurn(alice, nfts[i]).Build())
+			jtx.RequireTxSuccess(t, result)
 			env.Close()
 		}
+
+		jtx.RequireOwnerCount(t, env, alice, 0)
 	})
 
 	// Test 3: Burn all tokens in the middle page
-	// This exercises the case where a page is removed between two fully populated pages.
 	t.Run("BurnMiddlePage", func(t *testing.T) {
-		t.Skip("Requires NFT burning implementation")
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		env.Fund(alice)
+		env.Close()
+
+		nfts := genPackedTokens(env, alice)
+
+		// Burn middle page tokens (indices 32-63 in sorted order)
 		for i := 32; i < 64; i++ {
-			burnTx := nft.NFTokenBurn(alice, nfts[i]).Build()
-			env.Submit(burnTx)
+			result := env.Submit(nft.NFTokenBurn(alice, nfts[i]).Build())
+			jtx.RequireTxSuccess(t, result)
 			env.Close()
 		}
+
+		// Should have 2 pages remaining
+		jtx.RequireOwnerCount(t, env, alice, 2)
+
+		// Burn remaining tokens
+		for i := 0; i < 32; i++ {
+			env.Submit(nft.NFTokenBurn(alice, nfts[i]).Build())
+			env.Close()
+		}
+		for i := 64; i < 96; i++ {
+			env.Submit(nft.NFTokenBurn(alice, nfts[i]).Build())
+			env.Close()
+		}
+
+		jtx.RequireOwnerCount(t, env, alice, 0)
 	})
 
-	// Test 4: Burn all tokens in first page followed by all in last page
+	// Test 4: Burn all tokens in first page then last page
 	t.Run("BurnFirstThenLast", func(t *testing.T) {
-		t.Skip("Requires NFT burning implementation")
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		env.Fund(alice)
+		env.Close()
+
+		nfts := genPackedTokens(env, alice)
+
 		// Burn first page
 		for i := 0; i < 32; i++ {
-			burnTx := nft.NFTokenBurn(alice, nfts[i]).Build()
-			env.Submit(burnTx)
+			result := env.Submit(nft.NFTokenBurn(alice, nfts[i]).Build())
+			jtx.RequireTxSuccess(t, result)
 			env.Close()
 		}
+
 		// Burn last page
 		for i := 64; i < 96; i++ {
-			burnTx := nft.NFTokenBurn(alice, nfts[i]).Build()
-			env.Submit(burnTx)
+			result := env.Submit(nft.NFTokenBurn(alice, nfts[i]).Build())
+			jtx.RequireTxSuccess(t, result)
 			env.Close()
 		}
-	})
 
-	t.Log("testBurnSequential passed")
+		// Burn remaining middle page
+		for i := 32; i < 64; i++ {
+			env.Submit(nft.NFTokenBurn(alice, nfts[i]).Build())
+			env.Close()
+		}
+
+		jtx.RequireOwnerCount(t, env, alice, 0)
+	})
 }
 
-// TestBurnTooManyOffers tests the case where too many offers prevents burning a token.
+// ===========================================================================
+// testBurnTooManyOffers
 // Reference: rippled NFTokenBurn_test.cpp testBurnTooManyOffers
+//
+// Tests the case where too many offers prevents burning a token.
+// ===========================================================================
 func TestBurnTooManyOffers(t *testing.T) {
-	t.Skip("testBurnTooManyOffers requires full NFT offer lifecycle")
-
-	env := jtx.NewTestEnv(t)
-
-	alice := jtx.NewAccount("alice")
-	becky := jtx.NewAccount("becky")
-
-	env.Fund(alice, becky)
-	env.Close()
-
 	const maxTokenOfferCancelCount = 500
-	const maxDeletableTokenOfferEntries = 500
 
-	// Test 1: NFT is unburnable when there are more than 500 offers
-	// before fixNonFungibleTokensV1_2 goes live
+	// Test 1: Before fixNonFungibleTokensV1_2 - burning NFT with > 500 offers
+	// should fail with tefTOO_BIG
 	t.Run("TooManyOffersBlocksBurn", func(t *testing.T) {
-		t.Skip("Requires amendment testing")
+		env := jtx.NewTestEnv(t)
+
+		alice := jtx.NewAccount("alice")
+		becky := jtx.NewAccount("becky")
+
+		env.Fund(alice, becky)
+		env.Close()
+
+		// Disable the amendment that allows burn with many offers
+		env.DisableFeature("fixNonFungibleTokensV1_2")
 
 		// Mint an NFT
-		mintTx := nft.NFTokenMint(alice, 0).Transferable().URI("u").Build()
-		result := env.Submit(mintTx)
-		if !result.Success {
-			t.Fatalf("Failed to mint NFT: %s", result.Message)
-		}
-		nftokenID := "dummy_nft_id" // Would extract from result
+		nftID := nft.GetNextNFTokenID(env, alice, 0, nftoken.NFTokenFlagTransferable, 0)
+		result := env.Submit(nft.NFTokenMint(alice, 0).Transferable().URI("u").Build())
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Create 500 buy offers from different accounts
 		offerIndexes := make([]string, 0, maxTokenOfferCancelCount)
 		for i := uint32(0); i < maxTokenOfferCancelCount; i++ {
-			acct := jtx.NewAccount("acct" + string(rune(i)))
+			acct := jtx.NewAccount("acct" + string(rune('A'+i%26)) + string(rune('0'+i/26)))
 			env.Fund(acct)
 			env.Close()
 
-			offerTx := nft.NFTokenCreateBuyOffer(acct, nftokenID, jtx.XRPTxAmount(1), alice).Build()
-			result := env.Submit(offerTx)
+			offerIdx := nft.GetOfferIndex(env, acct)
+			result := env.Submit(nft.NFTokenCreateBuyOffer(acct, nftID, tx.NewXRPAmount(1), alice).Build())
 			if result.Success {
-				offerIndexes = append(offerIndexes, "offer_"+string(rune(i)))
+				offerIndexes = append(offerIndexes, offerIdx)
 			}
 			env.Close()
 		}
 
-		// Create one more offer from becky (total 501)
-		offerTx := nft.NFTokenCreateBuyOffer(becky, nftokenID, jtx.XRPTxAmount(1), alice).Build()
-		env.Submit(offerTx)
+		// Create one more buy offer from becky (total 501)
+		beckyOfferIdx := nft.GetOfferIndex(env, becky)
+		env.Submit(nft.NFTokenCreateBuyOffer(becky, nftID, tx.NewXRPAmount(1), alice).Build())
 		env.Close()
 
 		// Attempt to burn the NFT - should fail with tefTOO_BIG
-		burnTx := nft.NFTokenBurn(alice, nftokenID).Build()
-		result = env.Submit(burnTx)
-		if result.Success {
-			t.Fatal("Burn should fail with too many offers")
-		}
-		t.Logf("Burn failed as expected: %s", result.Code)
+		result = env.Submit(nft.NFTokenBurn(alice, nftID).Build())
+		jtx.RequireTxFail(t, result, "tefTOO_BIG")
+
+		// Cancel becky's offer (back to 500)
+		env.Submit(nft.NFTokenCancelOffer(becky, beckyOfferIdx).Build())
+		env.Close()
+
+		// Now burn should succeed (exactly 500 buy offers)
+		result = env.Submit(nft.NFTokenBurn(alice, nftID).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// All should be cleaned up
+		jtx.RequireOwnerCount(t, env, alice, 0)
+		jtx.RequireOwnerCount(t, env, becky, 0)
 	})
 
-	// Test 2: After fixNonFungibleTokensV1_2, up to 500 offers can be removed when burned
+	// Test 2: With fixNonFungibleTokensV1_2 - burn removes up to 500 offers
 	t.Run("BurnWithMaxOffers", func(t *testing.T) {
-		t.Skip("Requires amendment testing")
-		// With the amendment, burning removes up to 500 offers
+		env := jtx.NewTestEnv(t)
+		env.EnableFeature("fixNonFungibleTokensV1_2")
+
+		alice := jtx.NewAccount("alice")
+
+		// Need enough XRP for 501 sell offers + NFT page + fees
+		// Reserve = 200 XRP + 502 * 50 XRP = 25300 XRP, plus fees
+		env.FundAmount(alice, 30000000000) // 30000 XRP
+		env.Close()
+
+		// Mint an NFT
+		nftID := nft.GetNextNFTokenID(env, alice, 0, nftoken.NFTokenFlagTransferable, 0)
+		result := env.Submit(nft.NFTokenMint(alice, 0).Transferable().Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// Create 501 sell offers
+		for i := uint32(0); i <= maxTokenOfferCancelCount; i++ {
+			result = env.Submit(nft.NFTokenCreateSellOffer(alice, nftID, tx.NewXRPAmount(int64(i+1))).Build())
+			if !result.Success {
+				t.Fatalf("Failed to create sell offer %d: %s", i, result.Code)
+			}
+			env.Close()
+		}
+
+		// Burn the token - should succeed but only remove 500 of 501 offers
+		result = env.Submit(nft.NFTokenBurn(alice, nftID).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// alice should have ownerCount of 1 for the orphaned sell offer
+		jtx.RequireOwnerCount(t, env, alice, 1)
 	})
 
-	t.Log("testBurnTooManyOffers passed")
+	// Test 3: With fixNonFungibleTokensV1_2 - mix of buy and sell offers
+	t.Run("BurnMixedOffers", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		env.EnableFeature("fixNonFungibleTokensV1_2")
+
+		alice := jtx.NewAccount("alice")
+		becky := jtx.NewAccount("becky")
+
+		// Need enough XRP for 499 sell offers + NFT page + fees
+		// Reserve = 200 XRP + 500 * 50 XRP = 25200 XRP, plus fees
+		env.FundAmount(alice, 30000000000) // 30000 XRP
+		env.Fund(becky)
+		env.Close()
+
+		// Mint an NFT
+		nftID := nft.GetNextNFTokenID(env, alice, 0, nftoken.NFTokenFlagTransferable, 0)
+		result := env.Submit(nft.NFTokenMint(alice, 0).Transferable().Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// Create 499 sell offers from alice
+		for i := uint32(0); i < maxTokenOfferCancelCount-1; i++ {
+			result = env.Submit(nft.NFTokenCreateSellOffer(alice, nftID, tx.NewXRPAmount(int64(i+1))).Build())
+			if !result.Success {
+				t.Fatalf("Failed to create sell offer %d: %s", i, result.Code)
+			}
+			env.Close()
+		}
+
+		// Create 2 buy offers from becky
+		env.Submit(nft.NFTokenCreateBuyOffer(becky, nftID, tx.NewXRPAmount(1), alice).Build())
+		env.Close()
+		env.Submit(nft.NFTokenCreateBuyOffer(becky, nftID, tx.NewXRPAmount(1), alice).Build())
+		env.Close()
+
+		// Burn the token
+		result = env.Submit(nft.NFTokenBurn(alice, nftID).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// All 499 sell offers should be removed + 1 of 2 buy offers = 500 total
+		// alice ownerCount should be 0 (all sell offers deleted)
+		jtx.RequireOwnerCount(t, env, alice, 0)
+
+		// becky should have ownerCount of 1 (one orphaned buy offer)
+		jtx.RequireOwnerCount(t, env, becky, 1)
+	})
 }
 
-// TestExerciseBrokenLinks exercises the case where NFT page links become broken.
-// This happens when fixNFTokenPageLinks is not enabled.
+// ===========================================================================
+// exerciseBrokenLinks
 // Reference: rippled NFTokenBurn_test.cpp exerciseBrokenLinks
+//
+// Tests the case where NFT page links become broken when
+// fixNFTokenPageLinks is not enabled.
+// ===========================================================================
 func TestExerciseBrokenLinks(t *testing.T) {
-	t.Skip("testExerciseBrokenLinks requires amendment fixNFTokenPageLinks disabled")
-
 	env := jtx.NewTestEnv(t)
+
+	// This test exercises the broken links bug that occurs without
+	// fixNFTokenPageLinks. Since our test env has it enabled by default,
+	// we disable it.
+	env.DisableFeature("fixNFTokenPageLinks")
 
 	alice := jtx.NewAccount("alice")
 	minter := jtx.NewAccount("minter")
@@ -253,38 +465,78 @@ func TestExerciseBrokenLinks(t *testing.T) {
 	env.Fund(alice, minter)
 	env.Close()
 
-	// Generate 96 NFTs packed into three pages of 32 each
+	// Generate 96 NFTs packed into three pages of 32 each.
+	// Minter creates, then transfers to alice.
 	nfts := make([]string, 0, 96)
 
 	for i := uint32(0); i < 96; i++ {
-		intTaxon := (i / 16) + (i&0b10000)>>4*2
-		mintTx := nft.NFTokenMint(minter, intTaxon).Transferable().Build()
-		result := env.Submit(mintTx)
-		if result.Success {
-			nfts = append(nfts, "nft_"+string(rune(i)))
+		// Taxon manipulation for page packing
+		intTaxon := (i / 16)
+		if i&0b10000 != 0 {
+			intTaxon += 2
 		}
+
+		tokenSeq := env.MintedCount(minter)
+		extTaxon := nftoken.CipheredTaxon(tokenSeq, intTaxon)
+
+		flags := nftoken.NFTokenFlagTransferable
+		nftID := nft.GetNextNFTokenID(env, minter, extTaxon, flags, 0)
+		env.Submit(nft.NFTokenMint(minter, extTaxon).Transferable().Build())
 		env.Close()
 
-		// Transfer to alice
-		// Create sell offer and have alice accept
-		// ...
+		// Minter creates sell offer for the NFT
+		offerIndex := nft.GetOfferIndex(env, minter)
+		env.Submit(nft.NFTokenCreateSellOffer(minter, nftID, tx.NewXRPAmount(0)).Build())
+		env.Close()
+
+		// Alice accepts the offer
+		env.Submit(nft.NFTokenAcceptSellOffer(alice, offerIndex).Build())
+		env.Close()
+
+		nfts = append(nfts, nftID)
 	}
+
+	// Sort NFTs by storage order
+	sort.Strings(nfts)
+
+	// alice should now own 96 NFTs in 3 pages
+	jtx.RequireOwnerCount(t, env, alice, 3)
 
 	// Sell all tokens in the last page back to minter
-	last32NFTs := nfts[64:96]
+	last32NFTs := make([]string, 32)
+	copy(last32NFTs, nfts[64:96])
+
 	for _, nftID := range last32NFTs {
-		// alice creates sell offer, minter accepts
-		_ = nftID
+		// alice creates sell offer
+		offerIndex := nft.GetOfferIndex(env, alice)
+		env.Submit(nft.NFTokenCreateSellOffer(alice, nftID, tx.NewXRPAmount(0)).Build())
+		env.Close()
+
+		// minter accepts
+		env.Submit(nft.NFTokenAcceptSellOffer(minter, offerIndex).Build())
+		env.Close()
 	}
 
-	// Without fixNFTokenPageLinks:
-	// Removing the last token from the last page deletes alice's last page.
-	// This is a bug. The contents of the next-to-last page should have been
-	// moved into the last page.
+	// BUG: Without fixNFTokenPageLinks, last page is deleted instead of
+	// having contents coalesced. The middle page loses its NextPageMin link.
+	// alice's ownerCount should be 2 (two remaining pages)
+	jtx.RequireOwnerCount(t, env, alice, 2)
 
-	// alice has an NFToken directory with a broken link in the middle.
-	// account_objects RPC would only show two NFT pages even though she owns more.
-	// account_nfts RPC would only return 64 NFTs although alice owns 96.
+	// minter sells the last 32 NFTs back to alice
+	for _, nftID := range last32NFTs {
+		offerIndex := nft.GetOfferIndex(env, minter)
+		env.Submit(nft.NFTokenCreateSellOffer(minter, nftID, tx.NewXRPAmount(0)).Build())
+		env.Close()
 
-	t.Log("testExerciseBrokenLinks passed")
+		env.Submit(nft.NFTokenAcceptSellOffer(alice, offerIndex).Build())
+		env.Close()
+	}
+
+	// alice should have 3 pages again, but the links are broken
+	jtx.RequireOwnerCount(t, env, alice, 3)
+
+	// The broken state: middle page has no NextPageMin, so
+	// account_nfts would only return 64 NFTs even though alice owns 96.
+	// We can't easily test RPC queries here, but the broken state is
+	// exercised by the page operations above.
 }

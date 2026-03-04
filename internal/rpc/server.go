@@ -296,6 +296,18 @@ func (s *Server) writeXrplError(w http.ResponseWriter, method string, request in
 	w.Write(responseData)
 }
 
+// ExecuteMethod implements rpc_types.MethodDispatcher, allowing the 'json' RPC
+// method to forward calls through the same method registry.
+func (s *Server) ExecuteMethod(method string, params []byte) (interface{}, *rpc_types.RpcError) {
+	ctx := &rpc_types.RpcContext{
+		Context:    nil,
+		Role:       rpc_types.RoleGuest,
+		ApiVersion: rpc_types.DefaultApiVersion,
+		IsAdmin:    false,
+	}
+	return s.executeMethod(method, json.RawMessage(params), ctx)
+}
+
 // getClientIP extracts the client IP from the request
 func getClientIP(r *http.Request) string {
 	// Check X-Forwarded-For header

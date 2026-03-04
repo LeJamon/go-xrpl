@@ -3,9 +3,12 @@ package oracle
 import (
 	"errors"
 	"fmt"
+	"sort"
+
+	"github.com/LeJamon/goXRPLd/internal/core/amendment"
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/amendment"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )
 
 func init() {
@@ -242,13 +245,375 @@ func (o *OracleSet) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeaturePriceOracle}
 }
 
+// pairEntry holds a price data pair during preclaim/doApply processing.
+type pairEntry struct {
+	baseAsset  string
+	quoteAsset string
+	price      *uint64
+	scale      *uint8
+}
+
 // Apply applies an OracleSet transaction to the ledger state.
-// Reference: rippled SetOracle.cpp SetOracle::doApply
+// Combines rippled's SetOracle::preclaim() and SetOracle::doApply().
+// Reference: rippled SetOracle.cpp
 func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
-	oracleKey := keylet.Escrow(ctx.AccountID, o.OracleDocumentID)
-	exists, _ := ctx.View.Exists(oracleKey)
-	if !exists {
-		ctx.Account.OwnerCount++
+	// --- Preclaim: Time validation ---
+	// Reference: rippled SetOracle.cpp preclaim lines 80-93
+	closeTime := ctx.Config.ParentCloseTime
+	lastUpdateTime := uint64(o.LastUpdateTime)
+
+	if lastUpdateTime < RippleEpochOffset {
+		return tx.TecINVALID_UPDATE_TIME
 	}
+	lastUpdateTimeEpoch := lastUpdateTime - RippleEpochOffset
+
+	if uint64(closeTime) < MaxLastUpdateTimeDelta {
+		return tx.TefINTERNAL
+	}
+	if lastUpdateTimeEpoch < (uint64(closeTime)-MaxLastUpdateTimeDelta) ||
+		lastUpdateTimeEpoch > (uint64(closeTime)+MaxLastUpdateTimeDelta) {
+		return tx.TecINVALID_UPDATE_TIME
+	}
+
+	// --- Read oracle SLE to determine create vs update ---
+	oracleKey := keylet.Oracle(ctx.AccountID, o.OracleDocumentID)
+	existingData, readErr := ctx.View.Read(oracleKey)
+	isUpdate := readErr == nil && existingData != nil
+
+	// --- Build pair sets from tx PriceDataSeries ---
+	// Reference: rippled SetOracle.cpp preclaim lines 98-118
+	pairs := make(map[string]pairEntry)    // pairs to add/update
+	pairsDel := make(map[string]struct{})  // pairs to delete
+
+	for _, pd := range o.PriceDataSeries {
+		entry := pd.PriceData
+
+		if entry.BaseAsset == entry.QuoteAsset {
+			return tx.TemMALFORMED
+		}
+
+		key := entry.TokenPairKey()
+		if _, exists := pairs[key]; exists {
+			return tx.TemMALFORMED
+		}
+		if _, exists := pairsDel[key]; exists {
+			return tx.TemMALFORMED
+		}
+
+		if entry.Scale != nil && *entry.Scale > MaxPriceScale {
+			return tx.TemMALFORMED
+		}
+
+		if entry.AssetPrice != nil {
+			pairs[key] = pairEntry{
+				baseAsset:  entry.BaseAsset,
+				quoteAsset: entry.QuoteAsset,
+				price:      entry.AssetPrice,
+				scale:      entry.Scale,
+			}
+		} else if isUpdate {
+			pairsDel[key] = struct{}{}
+		} else {
+			return tx.TemMALFORMED
+		}
+	}
+
+	// --- Update-specific preclaim ---
+	var existingOracle *sle.OracleData
+	var adjustReserve int
+
+	if isUpdate {
+		// Reference: rippled SetOracle.cpp preclaim lines 129-158
+		var err error
+		existingOracle, err = sle.ParseOracle(existingData)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+
+		// LastUpdateTime must be more recent than existing
+		if o.LastUpdateTime <= existingOracle.LastUpdateTime {
+			return tx.TecINVALID_UPDATE_TIME
+		}
+
+		// Check provider/assetClass consistency
+		// If field is present in tx, it must match existing value
+		if o.ProviderPresent && o.Provider != existingOracle.Provider {
+			return tx.TemMALFORMED
+		}
+		if o.AssetClassPresent && o.AssetClass != existingOracle.AssetClass {
+			return tx.TemMALFORMED
+		}
+
+		// Merge existing pairs with tx pairs
+		for _, existing := range existingOracle.PriceDataSeries {
+			key := existing.BaseAsset + "/" + existing.QuoteAsset
+			if _, inPairs := pairs[key]; !inPairs {
+				// Not in tx add set — check if it's being deleted
+				if _, inDel := pairsDel[key]; inDel {
+					delete(pairsDel, key)
+				} else {
+					// Keep existing pair (without price/scale update)
+					pairs[key] = pairEntry{
+						baseAsset:  existing.BaseAsset,
+						quoteAsset: existing.QuoteAsset,
+					}
+				}
+			}
+		}
+
+		if len(pairsDel) > 0 {
+			return tx.TecTOKEN_PAIR_NOT_FOUND
+		}
+
+		oldCount := 1
+		if len(existingOracle.PriceDataSeries) > 5 {
+			oldCount = 2
+		}
+		newCount := 1
+		if len(pairs) > 5 {
+			newCount = 2
+		}
+		adjustReserve = newCount - oldCount
+	} else {
+		// --- Create-specific preclaim ---
+		// Reference: rippled SetOracle.cpp preclaim lines 160-168
+		if !o.ProviderPresent && o.Provider == "" {
+			return tx.TemMALFORMED
+		}
+		if !o.AssetClassPresent && o.AssetClass == "" {
+			return tx.TemMALFORMED
+		}
+
+		if len(pairs) > 5 {
+			adjustReserve = 2
+		} else {
+			adjustReserve = 1
+		}
+	}
+
+	// --- Final preclaim checks ---
+	// Reference: rippled SetOracle.cpp preclaim lines 170-181
+	if len(pairs) == 0 {
+		return tx.TecARRAY_EMPTY
+	}
+	if len(pairs) > MaxOracleDataSeries {
+		return tx.TecARRAY_TOO_LARGE
+	}
+
+	// Reserve check: use prior balance (before fee deduction)
+	priorBalance := ctx.Account.Balance + ctx.Config.BaseFee
+	reserve := ctx.AccountReserve(uint32(int(ctx.Account.OwnerCount) + adjustReserve))
+	if priorBalance < reserve {
+		return tx.TecINSUFFICIENT_RESERVE
+	}
+
+	// ========== doApply ==========
+
+	if isUpdate {
+		// Reference: rippled SetOracle.cpp doApply lines 223-280
+		return o.doApplyUpdate(ctx, oracleKey, existingOracle, pairs)
+	}
+	return o.doApplyCreate(ctx, oracleKey, pairs)
+}
+
+// doApplyUpdate applies an OracleSet update to an existing oracle.
+// Reference: rippled SetOracle.cpp doApply lines 223-280
+func (o *OracleSet) doApplyUpdate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
+	existingOracle *sle.OracleData, pairs map[string]pairEntry) tx.Result {
+
+	// Build ordered pairs map from existing PriceDataSeries.
+	// Existing pairs are stored WITHOUT price/scale (just base/quote).
+	type orderedPair struct {
+		baseAsset  string
+		quoteAsset string
+		price      *uint64
+		scale      *uint8
+	}
+	orderedPairs := make(map[string]*orderedPair)
+	for _, existing := range existingOracle.PriceDataSeries {
+		key := existing.BaseAsset + "/" + existing.QuoteAsset
+		orderedPairs[key] = &orderedPair{
+			baseAsset:  existing.BaseAsset,
+			quoteAsset: existing.QuoteAsset,
+		}
+	}
+	oldCount := 1
+	if len(orderedPairs) > 5 {
+		oldCount = 2
+	}
+
+	// Apply tx changes: delete, update, or add
+	for _, pd := range o.PriceDataSeries {
+		entry := pd.PriceData
+		key := entry.TokenPairKey()
+
+		if entry.AssetPrice == nil {
+			// Delete pair
+			delete(orderedPairs, key)
+		} else if existing, ok := orderedPairs[key]; ok {
+			// Update existing pair
+			existing.price = entry.AssetPrice
+			existing.scale = entry.Scale
+		} else {
+			// Add new pair
+			orderedPairs[key] = &orderedPair{
+				baseAsset:  entry.BaseAsset,
+				quoteAsset: entry.QuoteAsset,
+				price:      entry.AssetPrice,
+				scale:      entry.Scale,
+			}
+		}
+	}
+
+	// Build updated PriceDataSeries (map iteration = sorted by key in Go maps... but Go maps are NOT ordered)
+	// In rippled, std::map sorts by key. We need sorted order.
+	keys := make([]string, 0, len(orderedPairs))
+	for k := range orderedPairs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	updatedSeries := make([]sle.OraclePriceData, 0, len(orderedPairs))
+	for _, k := range keys {
+		p := orderedPairs[k]
+		pd := sle.OraclePriceData{
+			BaseAsset:  p.baseAsset,
+			QuoteAsset: p.quoteAsset,
+		}
+		if p.price != nil {
+			pd.AssetPrice = *p.price
+			pd.HasPrice = true
+		}
+		if p.scale != nil {
+			pd.Scale = *p.scale
+			pd.HasScale = true
+		}
+		updatedSeries = append(updatedSeries, pd)
+	}
+
+	// Update oracle SLE fields
+	existingOracle.PriceDataSeries = updatedSeries
+	existingOracle.LastUpdateTime = o.LastUpdateTime
+	if o.URIPresent || o.URI != "" {
+		existingOracle.URI = o.URI
+	}
+
+	// Adjust OwnerCount
+	newCount := 1
+	if len(updatedSeries) > 5 {
+		newCount = 2
+	}
+	adjust := newCount - oldCount
+	if adjust > 0 {
+		ctx.Account.OwnerCount += uint32(adjust)
+	} else if adjust < 0 {
+		ctx.Account.OwnerCount -= uint32(-adjust)
+	}
+
+	// Serialize and write back
+	data, err := sle.SerializeOracle(existingOracle)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := ctx.View.Update(oracleKey, data); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	return tx.TesSUCCESS
+}
+
+// doApplyCreate applies an OracleSet create for a new oracle.
+// Reference: rippled SetOracle.cpp doApply lines 282-327
+func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
+	pairs map[string]pairEntry) tx.Result {
+	rules := ctx.Rules()
+
+	// Build PriceDataSeries
+	var series []sle.OraclePriceData
+
+	if !rules.Enabled(amendment.FeatureFixPriceOracleOrder) {
+		// Without fixPriceOracleOrder: use transaction order directly
+		for _, pd := range o.PriceDataSeries {
+			entry := pd.PriceData
+			spd := sle.OraclePriceData{
+				BaseAsset:  entry.BaseAsset,
+				QuoteAsset: entry.QuoteAsset,
+			}
+			if entry.AssetPrice != nil {
+				spd.AssetPrice = *entry.AssetPrice
+				spd.HasPrice = true
+			}
+			if entry.Scale != nil {
+				spd.Scale = *entry.Scale
+				spd.HasScale = true
+			}
+			series = append(series, spd)
+		}
+	} else {
+		// With fixPriceOracleOrder: sort by (BaseAsset, QuoteAsset) key
+		keys := make([]string, 0, len(pairs))
+		for k := range pairs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		for _, k := range keys {
+			p := pairs[k]
+			spd := sle.OraclePriceData{
+				BaseAsset:  p.baseAsset,
+				QuoteAsset: p.quoteAsset,
+			}
+			if p.price != nil {
+				spd.AssetPrice = *p.price
+				spd.HasPrice = true
+			}
+			if p.scale != nil {
+				spd.Scale = *p.scale
+				spd.HasScale = true
+			}
+			series = append(series, spd)
+		}
+	}
+
+	// Build oracle SLE
+	oracleData := &sle.OracleData{
+		Owner:           ctx.AccountID,
+		Provider:        o.Provider,
+		AssetClass:      o.AssetClass,
+		LastUpdateTime:  o.LastUpdateTime,
+		PriceDataSeries: series,
+	}
+	if o.URIPresent || o.URI != "" {
+		oracleData.URI = o.URI
+	}
+
+	// DirInsert into owner directory
+	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
+	dirResult, err := sle.DirInsert(ctx.View, ownerDirKey, oracleKey.Key, func(dir *sle.DirectoryNode) {
+		dir.Owner = ctx.AccountID
+	})
+	if err != nil {
+		return tx.TecDIR_FULL
+	}
+	oracleData.OwnerNode = dirResult.Page
+
+	// Serialize oracle
+	data, err := sle.SerializeOracle(oracleData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Insert oracle SLE
+	if err := ctx.View.Insert(oracleKey, data); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Adjust OwnerCount
+	count := uint32(1)
+	if len(series) > 5 {
+		count = 2
+	}
+	ctx.Account.OwnerCount += count
+
 	return tx.TesSUCCESS
 }

@@ -6,19 +6,21 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
 )
 
-// StopMethod handles the stop RPC method
+// StopMethod handles the stop RPC method.
+// Initiates a graceful server shutdown.
+// Reference: rippled Stop.cpp
 type StopMethod struct{}
 
 func (m *StopMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
-	// TODO: Implement graceful server shutdown
-	// 1. Validate admin credentials
-	// 2. Stop accepting new connections
-	// 3. Complete pending transactions
-	// 4. Close database connections
-	// 5. Shut down server components
+	if rpc_types.Services == nil || rpc_types.Services.ShutdownFunc == nil {
+		return nil, rpc_types.RpcErrorInternal("Shutdown function not available")
+	}
+
+	// Trigger shutdown asynchronously so the response can be sent first
+	rpc_types.Services.ShutdownFunc()
 
 	response := map[string]interface{}{
-		"message": "rippled server stopping",
+		"message": "ripple server stopping",
 	}
 
 	return response, nil

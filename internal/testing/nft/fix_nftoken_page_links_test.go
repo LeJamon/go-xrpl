@@ -2,283 +2,176 @@ package nft_test
 
 // FixNFTokenPageLinks_test.go - Tests for fixing broken NFT page links
 // Reference: rippled/src/test/app/FixNFTokenPageLinks_test.cpp
+//
+// Tests cover three areas:
+//   1. testLedgerStateFixErrors - error cases for preflight/preclaim
+//   2. testTokenPageLinkErrors - nothing-to-fix cases
+//   3. testFixNFTokenPageLinks - full page link repair (requires Apply implementation)
 
 import (
+	"sort"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/nftoken"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/nft"
 )
 
-// TestLedgerStateFixErrors tests error cases for the LedgerStateFix transaction.
-// Reference: rippled FixNFTokenPageLinks_test.cpp testLedgerStateFixErrors
-func TestLedgerStateFixErrors(t *testing.T) {
-	t.Skip("testLedgerStateFixErrors requires LedgerStateFix transaction support")
+// genPackedTokensForOwner generates 96 NFTs packed into three pages of 32 each.
+// The minter creates the NFTs and transfers them to the owner.
+// Returns a sorted list of NFT IDs.
+func genPackedTokensForOwner(env *jtx.TestEnv, owner, minter *jtx.Account) []string {
+	nfts := make([]string, 0, 96)
 
-	env := jtx.NewTestEnv(t)
+	for i := uint32(0); i < 96; i++ {
+		intTaxon := (i / 16)
+		if i&0b10000 != 0 {
+			intTaxon += 2
+		}
 
-	alice := jtx.NewAccount("alice")
-	env.Fund(alice)
-	env.Close()
+		tokenSeq := env.MintedCount(minter)
+		extTaxon := nftoken.CipheredTaxon(tokenSeq, intTaxon)
 
-	// Test: LedgerStateFix is disabled without fixNFTokenPageLinks amendment
-	t.Run("DisabledWithoutAmendment", func(t *testing.T) {
-		// Without amendment: temDISABLED
-		// env.Submit(ledgerStateFix.NFTPageLinks(alice, alice), ter(temDISABLED))
-	})
-
-	// With amendment enabled:
-
-	// Test: Preflight - Can't combine AccountTxnID and ticket
-	t.Run("AccountTxnIDWithTicket", func(t *testing.T) {
-		// tx with both AccountTxnID and ticket: temINVALID
-	})
-
-	// Test: Fee too low
-	t.Run("FeeTooLow", func(t *testing.T) {
-		// Fee must be at least increment: telINSUF_FEE_P
-	})
-
-	// Test: Invalid flags
-	t.Run("InvalidFlags", func(t *testing.T) {
-		// txflags(tfPassive): temINVALID_FLAG
-	})
-
-	// Test: Missing Owner field
-	t.Run("MissingOwner", func(t *testing.T) {
-		// No Owner field: temINVALID
-	})
-
-	// Test: Invalid LedgerFixType codes
-	t.Run("InvalidLedgerFixType", func(t *testing.T) {
-		// LedgerFixType = 0: tefINVALID_LEDGER_FIX_TYPE
-		// LedgerFixType = 200: tefINVALID_LEDGER_FIX_TYPE
-	})
-
-	// Test: Preclaim - Owner account doesn't exist
-	t.Run("OwnerNotFound", func(t *testing.T) {
-		// Owner not in ledger: tecOBJECT_NOT_FOUND
-	})
-
-	t.Log("testLedgerStateFixErrors passed")
-}
-
-// TestTokenPageLinkErrors tests error cases where there is nothing to fix.
-// Reference: rippled FixNFTokenPageLinks_test.cpp testTokenPageLinkErrors
-func TestTokenPageLinkErrors(t *testing.T) {
-	t.Skip("testTokenPageLinkErrors requires LedgerStateFix transaction support")
-
-	env := jtx.NewTestEnv(t)
-
-	alice := jtx.NewAccount("alice")
-	env.Fund(alice)
-	env.Close()
-
-	// Test: Owner has no pages to fix
-	t.Run("NoPagesToFix", func(t *testing.T) {
-		// No NFT pages: tecFAILED_PROCESSING
-	})
-
-	// Test: Owner has only one page (no links to fix)
-	t.Run("OnlyOnePage", func(t *testing.T) {
-		mintTx := nft.NFTokenMint(alice, 0).Transferable().Build()
-		env.Submit(mintTx)
+		flags := nftoken.NFTokenFlagTransferable
+		nftID := nft.GetNextNFTokenID(env, minter, extTaxon, flags, 0)
+		env.Submit(nft.NFTokenMint(minter, extTaxon).Transferable().Build())
 		env.Close()
 
-		// Only one page, nothing to fix: tecFAILED_PROCESSING
-	})
+		// Minter creates sell offer, owner accepts
+		offerIndex := nft.GetOfferIndex(env, minter)
+		env.Submit(nft.NFTokenCreateSellOffer(minter, nftID, tx.NewXRPAmount(0)).Build())
+		env.Close()
 
-	// Test: Owner has multiple pages but links are fine
-	t.Run("LinksAlreadyCorrect", func(t *testing.T) {
-		// Mint 65 NFTs to create at least 3 pages
-		for i := uint32(0); i < 65; i++ {
-			mintTx := nft.NFTokenMint(alice, i).Transferable().Build()
-			env.Submit(mintTx)
-			env.Close()
-		}
+		env.Submit(nft.NFTokenAcceptSellOffer(owner, offerIndex).Build())
+		env.Close()
 
-		// Links are correct: tecFAILED_PROCESSING
-	})
-
-	t.Log("testTokenPageLinkErrors passed")
-}
-
-// TestFixNFTokenPageLinks tests repairing three kinds of damaged NFToken directories.
-// Reference: rippled FixNFTokenPageLinks_test.cpp testFixNFTokenPageLinks
-func TestFixNFTokenPageLinks(t *testing.T) {
-	t.Skip("testFixNFTokenPageLinks requires full page manipulation and amendment testing")
-
-	env := jtx.NewTestEnv(t)
-
-	alice := jtx.NewAccount("alice")
-	bob := jtx.NewAccount("bob")
-	carol := jtx.NewAccount("carol")
-	daria := jtx.NewAccount("daria")
-
-	env.Fund(alice, bob, carol, daria)
-	env.Close()
-
-	// Helper to generate 96 NFTs packed into three pages of 32 each
-	genPackedTokens := func(owner *jtx.Account) []string {
-		nfts := make([]string, 0, 96)
-
-		for i := uint32(0); i < 96; i++ {
-			// Manipulate taxon to create fully packed pages
-			// intTaxon = (i / 16) + (i & 0b10000 ? 2 : 0)
-			intTaxon := (i / 16)
-			if i&0b10000 != 0 {
-				intTaxon += 2
-			}
-			// In real impl: extTaxon := internalTaxon(owner, intTaxon)
-
-			mintTx := nft.NFTokenMint(owner, intTaxon).Transferable().Build()
-			result := env.Submit(mintTx)
-			if result.Success {
-				nfts = append(nfts, "nft_"+string(rune(i)))
-			}
-			env.Close()
-		}
-
-		// Sort NFTs by storage order, not creation order
-		// sort.Slice(nfts, ...)
-
-		return nfts
+		nfts = append(nfts, nftID)
 	}
 
-	//**************************************************************************
-	// Step 1A: Create damaged directory - one page without final index
-	//**************************************************************************
-	t.Run("DamagedDirectory_OnePageNoFinalIndex", func(t *testing.T) {
-		aliceNFTs := genPackedTokens(alice)
-		t.Logf("Alice has %d NFTs in 3 pages", len(aliceNFTs))
+	sort.Strings(nfts)
+	return nfts
+}
 
-		// Burn all tokens in first and last pages
-		// This creates a bug: middle page exists but has no links
-		for i := 0; i < 32; i++ {
-			burnTx := nft.NFTokenBurn(alice, aliceNFTs[i]).Build()
-			env.Submit(burnTx)
-			env.Close()
-		}
-		for i := 64; i < 96; i++ {
-			burnTx := nft.NFTokenBurn(alice, aliceNFTs[i]).Build()
-			env.Submit(burnTx)
-			env.Close()
-		}
+// ===========================================================================
+// testLedgerStateFixErrors
+// Reference: rippled FixNFTokenPageLinks_test.cpp testLedgerStateFixErrors
+//
+// Tests error cases for the LedgerStateFix transaction.
+// ===========================================================================
+func TestLedgerStateFixErrors(t *testing.T) {
+	alice := jtx.NewAccount("alice")
 
-		// Without fixNFTokenPageLinks: last page is missing
-		// Middle page exists but has no links (PreviousPageMin, NextPageMin)
-	})
-
-	//**************************************************************************
-	// Step 1B: Create damaged directory - multiple pages, missing final page
-	//**************************************************************************
-	t.Run("DamagedDirectory_MissingFinalPage", func(t *testing.T) {
-		bobNFTs := genPackedTokens(bob)
-		t.Logf("Bob has %d NFTs in 3 pages", len(bobNFTs))
-
-		// Burn all tokens in the last page
-		for i := 64; i < 96; i++ {
-			burnTx := nft.NFTokenBurn(bob, bobNFTs[i]).Build()
-			env.Submit(burnTx)
-			env.Close()
-		}
-
-		// Without fixNFTokenPageLinks:
-		// Last page is deleted (bug - contents should move to last page)
-		// Middle page lost NextPageMin field
-	})
-
-	//**************************************************************************
-	// Step 1C: Create damaged directory - links missing in middle of chain
-	//**************************************************************************
-	t.Run("DamagedDirectory_BrokenMiddleLinks", func(t *testing.T) {
-		carolNFTs := genPackedTokens(carol)
-		t.Logf("Carol has %d NFTs in 3 pages", len(carolNFTs))
-
-		// Sell all tokens in the last page to daria
-		for i := 64; i < 96; i++ {
-			// carol creates sell offer, daria accepts
-			sellOfferTx := nft.NFTokenCreateSellOffer(carol, carolNFTs[i], jtx.XRPTxAmount(0)).Build()
-			result := env.Submit(sellOfferTx)
-			if result.Success {
-				offerID := "offer_" + carolNFTs[i]
-				acceptTx := nft.NFTokenAcceptSellOffer(daria, offerID).Build()
-				env.Submit(acceptTx)
-			}
-			env.Close()
-		}
-
-		// Same bug: last page deleted, middle page lost NextPageMin
-
-		// Now buy the NFTs back from daria to recreate the last page
-		for i := 64; i < 96; i++ {
-			buyOfferTx := nft.NFTokenCreateBuyOffer(carol, carolNFTs[i], jtx.XRPTxAmount(1), daria).Build()
-			result := env.Submit(buyOfferTx)
-			if result.Success {
-				offerID := "offer_buy_" + carolNFTs[i]
-				acceptTx := nft.NFTokenAcceptBuyOffer(daria, offerID).Build()
-				env.Submit(acceptTx)
-			}
-			env.Close()
-		}
-
-		// Carol now has 96 NFTs but only 64 reported (broken links in middle)
-		// Middle page has no NextPageMin
-		// Last page has no PreviousPageMin
-	})
-
-	//**************************************************************************
-	// Step 2: Enable fixNFTokenPageLinks amendment
-	//**************************************************************************
-	// env.EnableFeature(fixNFTokenPageLinks)
-	env.Close()
-
-	//**************************************************************************
-	// Step 3A: Repair alice's one-page directory
-	//**************************************************************************
-	t.Run("RepairAlice", func(t *testing.T) {
-		// daria fixes alice's NFToken directory
-		// env.Submit(ledgerStateFix.NFTPageLinks(daria, alice))
+	// Verify that the LedgerStateFix transaction is disabled
+	// without the fixNFTokenPageLinks amendment.
+	t.Run("temDISABLED without amendment", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		env.DisableFeature("fixNFTokenPageLinks")
+		env.Fund(alice)
 		env.Close()
 
-		// After fix:
-		// - Last page exists with no links (single page)
-		// - Middle page is gone (contents moved to last page)
-		// - nftCount(alice) == 32
-		// - ownerCount(alice) == 1
+		linkFixFee := env.ReserveIncrement()
+		result := env.Submit(
+			nft.LedgerStateFixNFTPageLinks(alice, alice).Fee(linkFixFee).Build(),
+		)
+		jtx.RequireTxFail(t, result, "temDISABLED")
 	})
 
-	//**************************************************************************
-	// Step 3B: Repair bob's two-page directory
-	//**************************************************************************
-	t.Run("RepairBob", func(t *testing.T) {
-		// daria fixes bob's NFToken directory
-		// env.Submit(ledgerStateFix.NFTPageLinks(daria, bob))
+	// Tests with amendment enabled
+	t.Run("Preflight errors", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		env.Fund(alice)
 		env.Close()
 
-		// After fix:
-		// - Last page present with PreviousPageMin link
-		// - First page has NextPageMin link to last page
-		// - Middle page is gone
-		// - nftCount(bob) == 64
-		// - ownerCount(bob) == 2
+		linkFixFee := env.ReserveIncrement()
+
+		// Fee too low.
+		// Reference: rippled LedgerStateFix.cpp — requires fees().increment as minimum fee
+		t.Run("telINSUF_FEE_P with fee below increment", func(t *testing.T) {
+			// In rippled, LedgerStateFix requires increment (50M drops) as fee.
+			// The Go engine does not enforce this minimum fee for LedgerStateFix yet.
+			t.Skip("Go engine does not enforce increment as minimum fee for LedgerStateFix")
+		})
+
+		// Invalid flags.
+		t.Run("temINVALID_FLAG with invalid flags", func(t *testing.T) {
+			result := env.Submit(
+				nft.LedgerStateFixNFTPageLinks(alice, alice).
+					Fee(linkFixFee).
+					Flags(0x00010000). // tfPassive
+					Build(),
+			)
+			jtx.RequireTxFail(t, result, "temINVALID_FLAG")
+		})
+
+		// Owner field is required for nfTokenPageLink fix.
+		t.Run("temINVALID without Owner field", func(t *testing.T) {
+			result := env.Submit(
+				nft.LedgerStateFixNFTPageLinks(alice, alice).
+					Fee(linkFixFee).
+					NoOwner().
+					Build(),
+			)
+			jtx.RequireTxFail(t, result, "temINVALID")
+		})
+
+		// Invalid LedgerFixType codes.
+		t.Run("tefINVALID_LEDGER_FIX_TYPE with type 0", func(t *testing.T) {
+			result := env.Submit(
+				nft.LedgerStateFixNFTPageLinks(alice, alice).
+					Fee(linkFixFee).
+					FixType(0).
+					Build(),
+			)
+			jtx.RequireTxFail(t, result, "tefINVALID_LEDGER_FIX_TYPE")
+		})
+
+		t.Run("tefINVALID_LEDGER_FIX_TYPE with type 200", func(t *testing.T) {
+			result := env.Submit(
+				nft.LedgerStateFixNFTPageLinks(alice, alice).
+					Fee(linkFixFee).
+					FixType(200).
+					Build(),
+			)
+			jtx.RequireTxFail(t, result, "tefINVALID_LEDGER_FIX_TYPE")
+		})
 	})
 
-	//**************************************************************************
-	// Step 3C: Repair carol's three-page directory
-	//**************************************************************************
-	t.Run("RepairCarol", func(t *testing.T) {
-		// carol fixes her own directory
-		// env.Submit(ledgerStateFix.NFTPageLinks(carol, carol))
-		env.Close()
-
-		// After fix:
-		// - Middle page now has NextPageMin to last page
-		// - Last page now has PreviousPageMin to middle page
-		// - First page has NextPageMin to middle page
-		// - nftCount(carol) == 96
-		// - ownerCount(carol) == 3
+	// Preclaim: Owner account must exist in ledger.
+	// Reference: rippled FixNFTokenPageLinks_test.cpp:192-197
+	// In rippled, preclaim checks Owner account exists → tecOBJECT_NOT_FOUND.
+	// The Go LedgerStateFix does not implement Appliable (no ApplyContext param),
+	// so the engine cannot perform preclaim checks on the Owner field.
+	t.Run("tecOBJECT_NOT_FOUND when Owner does not exist", func(t *testing.T) {
+		t.Skip("Go LedgerStateFix does not implement preclaim Owner check (no Appliable interface)")
 	})
+}
 
-	t.Log("testFixNFTokenPageLinks passed")
+// ===========================================================================
+// testTokenPageLinkErrors
+// Reference: rippled FixNFTokenPageLinks_test.cpp testTokenPageLinkErrors
+//
+// Tests error cases where there is nothing to fix in the owner's NFT pages.
+// ===========================================================================
+func TestTokenPageLinkErrors(t *testing.T) {
+	// These tests require the LedgerStateFix Apply() to actually inspect
+	// NFToken pages and return tecFAILED_PROCESSING when nothing is broken.
+	// The current Go Apply() is a stub that returns tesSUCCESS unconditionally.
+	t.Skip("Requires LedgerStateFix Apply() to inspect NFToken pages (currently a stub)")
+}
+
+// ===========================================================================
+// testFixNFTokenPageLinks
+// Reference: rippled FixNFTokenPageLinks_test.cpp testFixNFTokenPageLinks
+//
+// Tests repairing three kinds of damaged NFToken directories:
+// 1. One page without final index (alice)
+// 2. Multiple pages, missing final page (bob)
+// 3. Links missing in middle of chain (carol)
+// ===========================================================================
+func TestFixNFTokenPageLinks(t *testing.T) {
+	// This test requires the full LedgerStateFix Apply() implementation
+	// which inspects and repairs NFToken page links. The current Go
+	// implementation is a stub that returns tesSUCCESS without modifying state.
+	t.Skip("Requires full LedgerStateFix Apply() implementation (currently a stub)")
 }

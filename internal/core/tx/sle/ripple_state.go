@@ -72,10 +72,10 @@ const (
 	fieldCodeHighNode       = 8  // UInt64 field code for HighNode
 	fieldCodePrevTxnID      = 5  // Hash256 field code for PreviousTxnID
 	fieldCodePrevTxnLgrSeq  = 5  // UInt32 field code for PreviousTxnLgrSeq
-	fieldCodeLowQualityIn   = 20 // UInt32 field code for LowQualityIn
-	fieldCodeLowQualityOut  = 21 // UInt32 field code for LowQualityOut
-	fieldCodeHighQualityIn  = 22 // UInt32 field code for HighQualityIn
-	fieldCodeHighQualityOut = 23 // UInt32 field code for HighQualityOut
+	fieldCodeHighQualityIn  = 16 // UInt32 field code for HighQualityIn (nth=16 in definitions.json)
+	fieldCodeHighQualityOut = 17 // UInt32 field code for HighQualityOut (nth=17 in definitions.json)
+	fieldCodeLowQualityIn   = 18 // UInt32 field code for LowQualityIn (nth=18 in definitions.json)
+	fieldCodeLowQualityOut  = 19 // UInt32 field code for LowQualityOut (nth=19 in definitions.json)
 )
 
 // AccountOneAddress is the special issuer address used for Balance in RippleState

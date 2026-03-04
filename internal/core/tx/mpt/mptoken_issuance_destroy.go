@@ -4,8 +4,10 @@ import (
 	"encoding/hex"
 	"errors"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/amendment"
+	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )
 
 func init() {
@@ -19,7 +21,7 @@ type MPTokenIssuanceDestroy struct {
 	tx.BaseTx
 
 	// MPTokenIssuanceID is the ID of the issuance to destroy (required)
-	// 64-character hex string (32 bytes)
+	// 48-character hex string (24 bytes / Hash192)
 	MPTokenIssuanceID string `json:"MPTokenIssuanceID" xrpl:"MPTokenIssuanceID"`
 }
 
@@ -59,9 +61,9 @@ func (m *MPTokenIssuanceDestroy) Validate() error {
 		return errors.New("temMALFORMED: MPTokenIssuanceID is required")
 	}
 
-	// MPTokenIssuanceID should be 64 hex characters (32 bytes)
-	if len(m.MPTokenIssuanceID) != 64 {
-		return errors.New("temMALFORMED: MPTokenIssuanceID must be 64 hex characters")
+	// MPTokenIssuanceID should be 48 hex characters (24 bytes / Hash192)
+	if len(m.MPTokenIssuanceID) != 48 {
+		return errors.New("temMALFORMED: MPTokenIssuanceID must be 48 hex characters")
 	}
 
 	if _, err := hex.DecodeString(m.MPTokenIssuanceID); err != nil {
@@ -82,13 +84,55 @@ func (m *MPTokenIssuanceDestroy) RequiredAmendments() [][32]byte {
 }
 
 // Apply applies the MPTokenIssuanceDestroy transaction to ledger state.
+// Reference: rippled MPTokenIssuanceDestroy.cpp preclaim() + doApply()
 func (m *MPTokenIssuanceDestroy) Apply(ctx *tx.ApplyContext) tx.Result {
+	// Parse MPTokenIssuanceID
+	var mptID [24]byte
 	issuanceIDBytes, err := hex.DecodeString(m.MPTokenIssuanceID)
-	if err != nil || len(issuanceIDBytes) != 32 {
+	if err != nil || len(issuanceIDBytes) != 24 {
 		return tx.TemINVALID
 	}
+	copy(mptID[:], issuanceIDBytes)
+
+	// Preclaim: issuance must exist
+	issuanceKey := keylet.MPTIssuance(mptID)
+	issuanceRaw, err := ctx.View.Read(issuanceKey)
+	if err != nil || issuanceRaw == nil {
+		return tx.TecOBJECT_NOT_FOUND
+	}
+
+	// Parse issuance entry
+	issuance, err := sle.ParseMPTokenIssuance(issuanceRaw)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Caller must be the issuer
+	if issuance.Issuer != ctx.AccountID {
+		return tx.TecNO_PERMISSION
+	}
+
+	// Cannot destroy with outstanding balances
+	if issuance.OutstandingAmount != 0 {
+		return tx.TecHAS_OBLIGATIONS
+	}
+	if issuance.LockedAmount != nil && *issuance.LockedAmount != 0 {
+		return tx.TecHAS_OBLIGATIONS
+	}
+
+	// doApply: remove from owner directory
+	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
+	sle.DirRemove(ctx.View, ownerDirKey, issuance.OwnerNode, issuanceKey.Key, false)
+
+	// Erase the issuance
+	if err := ctx.View.Erase(issuanceKey); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Decrement owner count
 	if ctx.Account.OwnerCount > 0 {
 		ctx.Account.OwnerCount--
 	}
+
 	return tx.TesSUCCESS
 }

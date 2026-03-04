@@ -149,8 +149,8 @@ func TestDepositAuth_PayXRP_AtReserve(t *testing.T) {
 
 	// Fund alice with plenty of XRP
 	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	// Fund bob with just the minimum reserve
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10)))
+	// Fund bob with just the minimum reserve (200 XRP base reserve)
+	env.FundAmount(bob, uint64(xrplgoTesting.XRP(200)))
 	env.Close()
 
 	// bob enables DepositAuth

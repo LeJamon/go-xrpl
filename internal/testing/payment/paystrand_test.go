@@ -726,7 +726,9 @@ func TestToStrand_NoTrustLine(t *testing.T) {
 	// Alice tries to receive USD from gw - should fail because no trust line
 	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 	result := env.Submit(PayIssued(gw, alice, usd100).Build())
-	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TerNO_LINE)
+	// ter results from RippleCalc are mapped to tecPATH_DRY in Payment.Apply()
+	// Reference: rippled Payment.cpp:509-510 (isTerRetry → tecPATH_DRY)
+	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TecPATH_DRY)
 }
 
 // TestToStrand_PathDry tests that payment fails when path is dry (no liquidity).
@@ -805,10 +807,11 @@ func TestToStrand_NoRipple(t *testing.T) {
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
 
-	// Payment alice->bob should fail with terNO_RIPPLE because gw has NoRipple set
+	// Payment alice->bob should fail — NoRipple blocks rippling through gw
+	// ter results from RippleCalc are mapped to tecPATH_DRY in Payment.Apply()
 	usd50 := tx.NewIssuedAmountFromFloat64(50, "USD", gw.Address)
 	result = env.Submit(PayIssued(alice, bob, usd50).Build())
-	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TerNO_RIPPLE)
+	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TecPATH_DRY)
 }
 
 // TestToStrand_GlobalFreeze tests global freeze behavior.
@@ -855,10 +858,10 @@ func TestToStrand_GlobalFreeze(t *testing.T) {
 	env.EnableGlobalFreeze(gw)
 	env.Close()
 
-	// Transfer between alice and bob should fail with terNO_LINE
-	// (rippled returns terNO_LINE because the frozen line is treated as non-existent)
+	// Transfer between alice and bob should fail — global freeze blocks it
+	// ter results from RippleCalc are mapped to tecPATH_DRY in Payment.Apply()
 	result = env.Submit(PayIssued(alice, bob, usd10).Build())
-	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TerNO_LINE)
+	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TecPATH_DRY)
 
 	// Gateway can still issue directly to alice (issue is allowed with GlobalFreeze)
 	result = env.Submit(PayIssued(gw, alice, usd10).Build())
@@ -923,8 +926,9 @@ func TestToStrand_IndividualFreeze(t *testing.T) {
 	env.Close()
 
 	// Payment from alice should fail because her line is frozen
+	// ter results from RippleCalc are mapped to tecPATH_DRY in Payment.Apply()
 	result = env.Submit(PayIssued(alice, bob, usd10).Build())
-	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TerNO_LINE)
+	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TecPATH_DRY)
 }
 
 // TestToStrand_RequireAuth tests authorization required behavior.
@@ -975,10 +979,11 @@ func TestToStrand_RequireAuth(t *testing.T) {
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
 
-	// Payment alice->bob should fail with terNO_AUTH because bob is not authorized
+	// Payment alice->bob should fail because bob is not authorized
+	// ter results from RippleCalc are mapped to tecPATH_DRY in Payment.Apply()
 	usd50 := tx.NewIssuedAmountFromFloat64(50, "USD", gw.Address)
 	result = env.Submit(PayIssued(alice, bob, usd50).Build())
-	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TerNO_AUTH)
+	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TecPATH_DRY)
 
 	// Pure redeem (alice->gw) should still work
 	result = env.Submit(PayIssued(alice, gw, usd50).Build())
@@ -1553,9 +1558,10 @@ func TestToStrand_LastStepXRPFromOffer(t *testing.T) {
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
 
-	// Verify bob received XRP
-	bobBalance := env.Balance(bob)
-	require.Greater(t, bobBalance, uint64(xrplgoTesting.XRP(10000)), "Bob should have more XRP than initially")
+	// The rippled reference test (toStrand_test.cpp) only validates strand
+	// composition — not balances. Since bob is both the offer owner (selling XRP)
+	// and the payment destination (receiving XRP), his net XRP change is zero.
+	// The payment succeeding (checked above) is sufficient.
 }
 
 // TestPaymentSandbox_Reserve tests reserve handling.

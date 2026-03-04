@@ -128,7 +128,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 	ammKey := computeAMMKeylet(a.Asset, a.Asset2)
 
 	ammRawData, err := ctx.View.Read(ammKey)
-	if err != nil {
+	if err != nil || ammRawData == nil {
 		return TerNO_AMM
 	}
 

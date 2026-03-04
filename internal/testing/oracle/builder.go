@@ -9,6 +9,9 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 
+// XRPLEpochOffset is the XRPL epoch (Jan 1, 2000 00:00:00 UTC) in Unix seconds.
+const XRPLEpochOffset = 946684800
+
 // OracleSetBuilder provides a fluent interface for building OracleSet transactions.
 type OracleSetBuilder struct {
 	account          *testing.Account
@@ -28,7 +31,7 @@ type OracleSetBuilder struct {
 
 // OracleSet creates a new OracleSetBuilder.
 // oracleDocumentID identifies this oracle.
-// lastUpdateTime is the timestamp of the last update (Ripple epoch).
+// lastUpdateTime is the timestamp of the last update (Unix epoch, must be >= 946684800).
 func OracleSet(account *testing.Account, oracleDocumentID uint32, lastUpdateTime uint32) *OracleSetBuilder {
 	return &OracleSetBuilder{
 		account:          account,
@@ -231,4 +234,11 @@ func (b *OracleDeleteBuilder) Build() tx.Transaction {
 // BuildOracleDelete is a convenience method that returns the concrete *oracle.OracleDelete type.
 func (b *OracleDeleteBuilder) BuildOracleDelete() *oracle.OracleDelete {
 	return b.Build().(*oracle.OracleDelete)
+}
+
+// DefaultLastUpdateTime returns a valid LastUpdateTime for the given test env.
+// It uses the current env clock time as a Unix timestamp.
+// Reference: rippled Oracle.h testStartTime = epoch_offset + 10000s
+func DefaultLastUpdateTime(env *testing.TestEnv) uint32 {
+	return uint32(env.Now().Unix())
 }

@@ -78,7 +78,7 @@ func (ec *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Find the escrow
 	escrowKey := keylet.Escrow(ownerID, ec.OfferSequence)
 	escrowData, err := ctx.View.Read(escrowKey)
-	if err != nil {
+	if err != nil || escrowData == nil {
 		return tx.TecNO_TARGET
 	}
 

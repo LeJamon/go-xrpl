@@ -23,6 +23,10 @@ func ptrUint32AccountSet(v uint32) *uint32 {
 	return &v
 }
 
+func ptrStringMPT(v string) *string {
+	return &v
+}
+
 // TestMPTokenIssuanceCreateValidation tests MPTokenIssuanceCreate transaction validation.
 // Reference: rippled MPTokenIssuanceCreate.cpp preflight
 func TestMPTokenIssuanceCreateValidation(t *testing.T) {
@@ -47,7 +51,7 @@ func TestMPTokenIssuanceCreateValidation(t *testing.T) {
 				tx.AssetScale = ptrUint8MPT(2)
 				tx.MaximumAmount = ptrUint64MPT(1000000000)
 				tx.TransferFee = ptrUint16MPT(100)
-				tx.MPTokenMetadata = "48656c6c6f" // "Hello" in hex
+				tx.MPTokenMetadata = ptrStringMPT("48656c6c6f") // "Hello" in hex
 				// Need tfMPTCanTransfer for TransferFee
 				tx.Flags = ptrUint32AccountSet(MPTokenIssuanceCreateFlagCanTransfer)
 				return tx
@@ -174,7 +178,7 @@ func TestMPTokenIssuanceDestroyValidation(t *testing.T) {
 			name: "valid destroy",
 			tx: &MPTokenIssuanceDestroy{
 				BaseTx:            *tx.NewBaseTx(tx.TypeMPTokenIssuanceDestroy, "rAlice"),
-				MPTokenIssuanceID: "0000000000000000000000000000000000000000000000000000000000000001",
+				MPTokenIssuanceID: "000000000000000000000000000000000000000000000001",
 			},
 			expectError: false,
 		},
@@ -195,13 +199,13 @@ func TestMPTokenIssuanceDestroyValidation(t *testing.T) {
 				MPTokenIssuanceID: "0001", // Too short
 			},
 			expectError: true,
-			errorMsg:    "temMALFORMED: MPTokenIssuanceID must be 64 hex characters",
+			errorMsg:    "temMALFORMED: MPTokenIssuanceID must be 48 hex characters",
 		},
 		{
 			name: "invalid issuance ID hex - temMALFORMED",
 			tx: &MPTokenIssuanceDestroy{
 				BaseTx:            *tx.NewBaseTx(tx.TypeMPTokenIssuanceDestroy, "rAlice"),
-				MPTokenIssuanceID: "ZZZZ000000000000000000000000000000000000000000000000000000000001", // 64 chars but invalid hex
+				MPTokenIssuanceID: "ZZZZ00000000000000000000000000000000000000000001", // 48 chars but invalid hex
 			},
 			expectError: true,
 			errorMsg:    "temMALFORMED: MPTokenIssuanceID must be valid hex",
@@ -209,7 +213,7 @@ func TestMPTokenIssuanceDestroyValidation(t *testing.T) {
 		{
 			name: "invalid flags - temINVALID_FLAG",
 			tx: func() *MPTokenIssuanceDestroy {
-				tx := NewMPTokenIssuanceDestroy("rAlice", "0000000000000000000000000000000000000000000000000000000000000001")
+				tx := NewMPTokenIssuanceDestroy("rAlice", "000000000000000000000000000000000000000000000001")
 				tx.Flags = ptrUint32AccountSet(0x00000001) // Invalid flag
 				return tx
 			}(),
@@ -250,14 +254,14 @@ func TestMPTokenIssuanceSetValidation(t *testing.T) {
 			name: "valid set without flags",
 			tx: &MPTokenIssuanceSet{
 				BaseTx:            *tx.NewBaseTx(tx.TypeMPTokenIssuanceSet, "rAlice"),
-				MPTokenIssuanceID: "0000000000000000000000000000000000000000000000000000000000000001",
+				MPTokenIssuanceID: "000000000000000000000000000000000000000000000001",
 			},
 			expectError: false,
 		},
 		{
 			name: "valid set with tfMPTLock",
 			tx: func() *MPTokenIssuanceSet {
-				tx := NewMPTokenIssuanceSet("rAlice", "0000000000000000000000000000000000000000000000000000000000000001")
+				tx := NewMPTokenIssuanceSet("rAlice", "000000000000000000000000000000000000000000000001")
 				tx.Flags = ptrUint32AccountSet(MPTokenIssuanceSetFlagLock)
 				return tx
 			}(),
@@ -266,7 +270,7 @@ func TestMPTokenIssuanceSetValidation(t *testing.T) {
 		{
 			name: "valid set with tfMPTUnlock",
 			tx: func() *MPTokenIssuanceSet {
-				tx := NewMPTokenIssuanceSet("rAlice", "0000000000000000000000000000000000000000000000000000000000000001")
+				tx := NewMPTokenIssuanceSet("rAlice", "000000000000000000000000000000000000000000000001")
 				tx.Flags = ptrUint32AccountSet(MPTokenIssuanceSetFlagUnlock)
 				return tx
 			}(),
@@ -276,7 +280,7 @@ func TestMPTokenIssuanceSetValidation(t *testing.T) {
 			name: "valid set with holder",
 			tx: &MPTokenIssuanceSet{
 				BaseTx:            *tx.NewBaseTx(tx.TypeMPTokenIssuanceSet, "rAlice"),
-				MPTokenIssuanceID: "0000000000000000000000000000000000000000000000000000000000000001",
+				MPTokenIssuanceID: "000000000000000000000000000000000000000000000001",
 				Holder:            "rBob",
 			},
 			expectError: false,
@@ -294,7 +298,7 @@ func TestMPTokenIssuanceSetValidation(t *testing.T) {
 		{
 			name: "both lock and unlock flags - temINVALID_FLAG",
 			tx: func() *MPTokenIssuanceSet {
-				tx := NewMPTokenIssuanceSet("rAlice", "0000000000000000000000000000000000000000000000000000000000000001")
+				tx := NewMPTokenIssuanceSet("rAlice", "000000000000000000000000000000000000000000000001")
 				tx.Flags = ptrUint32AccountSet(MPTokenIssuanceSetFlagLock | MPTokenIssuanceSetFlagUnlock)
 				return tx
 			}(),
@@ -304,7 +308,7 @@ func TestMPTokenIssuanceSetValidation(t *testing.T) {
 		{
 			name: "invalid flags - temINVALID_FLAG",
 			tx: func() *MPTokenIssuanceSet {
-				tx := NewMPTokenIssuanceSet("rAlice", "0000000000000000000000000000000000000000000000000000000000000001")
+				tx := NewMPTokenIssuanceSet("rAlice", "000000000000000000000000000000000000000000000001")
 				tx.Flags = ptrUint32AccountSet(0x00000004) // Invalid flag
 				return tx
 			}(),
@@ -315,7 +319,7 @@ func TestMPTokenIssuanceSetValidation(t *testing.T) {
 			name: "holder same as account - temMALFORMED",
 			tx: &MPTokenIssuanceSet{
 				BaseTx:            *tx.NewBaseTx(tx.TypeMPTokenIssuanceSet, "rAlice"),
-				MPTokenIssuanceID: "0000000000000000000000000000000000000000000000000000000000000001",
+				MPTokenIssuanceID: "000000000000000000000000000000000000000000000001",
 				Holder:            "rAlice", // Same as Account
 			},
 			expectError: true,
@@ -355,14 +359,14 @@ func TestMPTokenAuthorizeValidation(t *testing.T) {
 			name: "valid holder authorize (create MPToken)",
 			tx: &MPTokenAuthorize{
 				BaseTx:            *tx.NewBaseTx(tx.TypeMPTokenAuthorize, "rBob"),
-				MPTokenIssuanceID: "0000000000000000000000000000000000000000000000000000000000000001",
+				MPTokenIssuanceID: "000000000000000000000000000000000000000000000001",
 			},
 			expectError: false,
 		},
 		{
 			name: "valid holder unauthorize (delete MPToken)",
 			tx: func() *MPTokenAuthorize {
-				tx := NewMPTokenAuthorize("rBob", "0000000000000000000000000000000000000000000000000000000000000001")
+				tx := NewMPTokenAuthorize("rBob", "000000000000000000000000000000000000000000000001")
 				tx.Flags = ptrUint32AccountSet(MPTokenAuthorizeFlagUnauthorize)
 				return tx
 			}(),
@@ -372,7 +376,7 @@ func TestMPTokenAuthorizeValidation(t *testing.T) {
 			name: "valid issuer authorize holder",
 			tx: &MPTokenAuthorize{
 				BaseTx:            *tx.NewBaseTx(tx.TypeMPTokenAuthorize, "rAlice"),
-				MPTokenIssuanceID: "0000000000000000000000000000000000000000000000000000000000000001",
+				MPTokenIssuanceID: "000000000000000000000000000000000000000000000001",
 				Holder:            "rBob",
 			},
 			expectError: false,
@@ -380,7 +384,7 @@ func TestMPTokenAuthorizeValidation(t *testing.T) {
 		{
 			name: "valid issuer unauthorize holder",
 			tx: func() *MPTokenAuthorize {
-				tx := NewMPTokenAuthorize("rAlice", "0000000000000000000000000000000000000000000000000000000000000001")
+				tx := NewMPTokenAuthorize("rAlice", "000000000000000000000000000000000000000000000001")
 				tx.Holder = "rBob"
 				tx.Flags = ptrUint32AccountSet(MPTokenAuthorizeFlagUnauthorize)
 				return tx
@@ -404,12 +408,12 @@ func TestMPTokenAuthorizeValidation(t *testing.T) {
 				MPTokenIssuanceID: "0001", // Too short
 			},
 			expectError: true,
-			errorMsg:    "temMALFORMED: MPTokenIssuanceID must be 64 hex characters",
+			errorMsg:    "temMALFORMED: MPTokenIssuanceID must be 48 hex characters",
 		},
 		{
 			name: "invalid flags - temINVALID_FLAG",
 			tx: func() *MPTokenAuthorize {
-				tx := NewMPTokenAuthorize("rBob", "0000000000000000000000000000000000000000000000000000000000000001")
+				tx := NewMPTokenAuthorize("rBob", "000000000000000000000000000000000000000000000001")
 				tx.Flags = ptrUint32AccountSet(0x00000002) // Invalid flag
 				return tx
 			}(),
@@ -420,7 +424,7 @@ func TestMPTokenAuthorizeValidation(t *testing.T) {
 			name: "holder same as account - temMALFORMED",
 			tx: &MPTokenAuthorize{
 				BaseTx:            *tx.NewBaseTx(tx.TypeMPTokenAuthorize, "rBob"),
-				MPTokenIssuanceID: "0000000000000000000000000000000000000000000000000000000000000001",
+				MPTokenIssuanceID: "000000000000000000000000000000000000000000000001",
 				Holder:            "rBob", // Same as Account
 			},
 			expectError: true,

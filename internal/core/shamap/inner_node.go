@@ -29,7 +29,9 @@ type InnerNode struct {
 
 // NewInnerNode creates a new empty inner node
 func NewInnerNode() *InnerNode {
-	return &InnerNode{}
+	return &InnerNode{
+		BaseNode: BaseNode{dirty: true},
+	}
 }
 
 // IsLeaf returns false - inner nodes are never leaves
@@ -107,7 +109,20 @@ func (n *InnerNode) SetChild(index int, child Node) error {
 		n.isBranch &= ^(1 << index)
 	}
 
+	n.dirty = true
 	return n.updateHashUnsafe()
+}
+
+// SetChildDirect sets the child pointer without updating hash or dirty flag.
+// Used for attaching lazily-loaded nodes from the store.
+// The caller must ensure the hash is already correct (set during deserialization).
+func (n *InnerNode) SetChildDirect(index int, child Node) {
+	if index < 0 || index >= BranchFactor {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.children[index] = child
 }
 
 // ChildHash returns the hash at a given branch index
@@ -295,6 +310,7 @@ func parseFullInnerNode(data []byte) (*InnerNode, error) {
 		return nil, fmt.Errorf("failed to update inner node hash: %w", err)
 	}
 
+	node.dirty = false // loaded from wire, not modified
 	return node, nil
 }
 
@@ -334,6 +350,7 @@ func parseCompressedInnerNode(data []byte) (*InnerNode, error) {
 		return nil, fmt.Errorf("failed to update inner node hash: %w", err)
 	}
 
+	node.dirty = false // loaded from wire, not modified
 	return node, nil
 }
 
@@ -365,9 +382,20 @@ func (n *InnerNode) Invariants(isRoot bool) error {
 	for i := 0; i < BranchFactor; i++ {
 		hasChild := n.children[i] != nil
 		hasBit := (n.isBranch & (1 << i)) != 0
+		hasHash := !isZeroHash(n.hashes[i])
 
-		if hasChild != hasBit {
-			return fmt.Errorf("branch %d inconsistency: child != bit", i)
+		// Valid states:
+		// 1. hasBit && hasChild && hasHash — expanded node
+		// 2. hasBit && !hasChild && hasHash — hash-only (lazy, backed)
+		// 3. !hasBit && !hasChild && !hasHash — empty branch
+		if hasBit && !hasHash {
+			return fmt.Errorf("branch %d: bit set but no hash", i)
+		}
+		if hasChild && !hasBit {
+			return fmt.Errorf("branch %d: child present but bit not set", i)
+		}
+		if !hasBit && hasChild {
+			return fmt.Errorf("branch %d: child present in empty branch", i)
 		}
 
 		if hasChild {
@@ -377,6 +405,9 @@ func (n *InnerNode) Invariants(isRoot bool) error {
 			if childHash != n.hashes[i] {
 				return fmt.Errorf("branch %d hash mismatch", i)
 			}
+		} else if hasBit {
+			// Hash-only branch (lazy/backed) — count it
+			count++
 		}
 	}
 
@@ -409,7 +440,7 @@ func (n *InnerNode) Clone() (Node, error) {
 	defer n.mu.RUnlock()
 
 	clone := &InnerNode{
-		BaseNode: BaseNode{hash: n.hash},
+		BaseNode: BaseNode{hash: n.hash, dirty: true},
 		isBranch: n.isBranch,
 		hashes:   n.hashes, // Copy the array
 	}

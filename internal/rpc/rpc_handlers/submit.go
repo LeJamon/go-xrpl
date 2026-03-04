@@ -10,7 +10,21 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
 )
 
-// SubmitMethod handles the submit RPC method
+// SubmitMethod handles the submit RPC method.
+// PARTIAL: Works for pre-signed tx_json submissions. Missing:
+//
+// TODO [submit]: Support tx_blob submission.
+//   - Decode hex blob via binarycodec.Decode(txBlob) → tx_json map
+//   - Then submit as normal. Reference: rippled Submit.cpp transactionSubmit()
+//
+// TODO [submit]: Support server-side signing (secret/seed/passphrase params).
+//   - When signing credentials are provided with tx_json:
+//     1. Derive keypair from secret/seed/seed_hex/passphrase + key_type
+//     2. Auto-fill missing fields: Sequence (from account), Fee (from fee escalation)
+//     3. Sign the transaction using internal/crypto
+//     4. Submit the signed transaction
+//   - Reference: rippled Submit.cpp transactionSign()
+//   - Note: This is the "sign-and-submit" mode used by rippled CLI
 type SubmitMethod struct{}
 
 func (m *SubmitMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
@@ -50,15 +64,12 @@ func (m *SubmitMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage)
 		// Submit using tx_json
 		txJSON = request.TxJson
 
-		// TODO: If signing credentials are provided, sign the transaction first
-		// For now, we assume the transaction is either pre-signed or we skip signature validation
+		// TODO [submit]: sign-and-submit when credentials provided (see type-level TODO)
 		if request.Secret != "" || request.Seed != "" || request.SeedHex != "" || request.Passphrase != "" {
-			// TODO: Implement signing
-			// For now, just use the tx_json as-is
+			// For now, just use the tx_json as-is (assumes pre-signed)
 		}
 	} else {
-		// TODO: Submit using tx_blob - decode hex to transaction
-		// For now, return error since we only support tx_json
+		// TODO [submit]: decode tx_blob via binarycodec.Decode() (see type-level TODO)
 		return nil, rpc_types.RpcErrorInvalidParams("tx_blob submission not yet implemented, use tx_json instead")
 	}
 

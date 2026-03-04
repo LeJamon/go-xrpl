@@ -167,7 +167,7 @@ func (sm *SHAMap) checkInnerNodeInvariants(inner *InnerNode, nodeID NodeID) erro
 	for branch := 0; branch < BranchFactor; branch++ {
 		// Check branch bitmap consistency
 		hasChild := !inner.IsEmptyBranch(branch)
-		child, err := inner.Child(branch)
+		child, err := sm.descend(inner, branch)
 		if err != nil {
 			return &InvariantError{
 				NodeID:      nodeID,
@@ -178,9 +178,8 @@ func (sm *SHAMap) checkInnerNodeInvariants(inner *InnerNode, nodeID NodeID) erro
 
 		// Verify bitmap matches actual children
 		if hasChild && child == nil {
-			// This can happen during sync when we have hash but no child
-			// Only report error if map is not syncing
-			if sm.state != StateSyncing {
+			// This can happen during sync or for backed maps with hash-only branches
+			if sm.state != StateSyncing && !sm.backed {
 				return &InvariantError{
 					NodeID:      nodeID,
 					Description: fmt.Sprintf("branch %d marked as non-empty but child is nil", branch),
@@ -233,7 +232,8 @@ func (sm *SHAMap) checkInnerNodeInvariants(inner *InnerNode, nodeID NodeID) erro
 	}
 
 	// Non-root inner nodes must have at least one child
-	if !nodeID.IsRoot() && childCount == 0 {
+	// For backed maps, count includes lazily loaded children
+	if !nodeID.IsRoot() && childCount == 0 && !sm.backed {
 		return &InvariantError{
 			NodeID:      nodeID,
 			Description: "non-root inner node has no children",
@@ -354,7 +354,7 @@ func (sm *SHAMap) checkInnerNodeInvariantsDetailed(inner *InnerNode, nodeID Node
 
 	for branch := 0; branch < BranchFactor; branch++ {
 		hasChild := !inner.IsEmptyBranch(branch)
-		child, err := inner.Child(branch)
+		child, err := sm.descend(inner, branch)
 		if err != nil {
 			result.Errors = append(result.Errors, &InvariantError{
 				NodeID:      nodeID,
@@ -365,7 +365,7 @@ func (sm *SHAMap) checkInnerNodeInvariantsDetailed(inner *InnerNode, nodeID Node
 		}
 
 		// Check bitmap consistency
-		if hasChild && child == nil && sm.state != StateSyncing {
+		if hasChild && child == nil && sm.state != StateSyncing && !sm.backed {
 			result.Errors = append(result.Errors, &InvariantError{
 				NodeID:      nodeID,
 				Description: fmt.Sprintf("branch %d marked as non-empty but child is nil", branch),
@@ -416,7 +416,7 @@ func (sm *SHAMap) checkInnerNodeInvariantsDetailed(inner *InnerNode, nodeID Node
 	}
 
 	// Non-root inner nodes must have at least one child
-	if !nodeID.IsRoot() && childCount == 0 {
+	if !nodeID.IsRoot() && childCount == 0 && !sm.backed {
 		result.Errors = append(result.Errors, &InvariantError{
 			NodeID:      nodeID,
 			Description: "non-root inner node has no children",
@@ -459,7 +459,7 @@ func (sm *SHAMap) verifyHashesRecursive(node Node, nodeID NodeID) error {
 		}
 
 		for branch := 0; branch < BranchFactor; branch++ {
-			child, err := inner.Child(branch)
+			child, err := sm.descend(inner, branch)
 			if err != nil {
 				return err
 			}

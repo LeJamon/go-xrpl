@@ -4,9 +4,9 @@ package paychan
 import (
 	"encoding/hex"
 	"errors"
+	"github.com/LeJamon/goXRPLd/internal/core/amendment"
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/amendment"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )
 
@@ -96,6 +96,7 @@ func (p *PaymentChannelFund) RequiredAmendments() [][32]byte {
 }
 
 // Apply applies a PaymentChannelFund transaction
+// Reference: rippled PayChan.cpp PayChanFund::doApply()
 func (pf *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Parse channel ID
 	channelID, err := hex.DecodeString(pf.Channel)
@@ -109,8 +110,8 @@ func (pf *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Read channel
 	channelData, err := ctx.View.Read(channelKey)
-	if err != nil {
-		return tx.TecNO_TARGET
+	if err != nil || channelData == nil {
+		return tx.TecNO_ENTRY
 	}
 
 	// Parse channel
@@ -119,32 +120,62 @@ func (pf *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
+	// Auto-close check: if CancelAfter or Expiration has passed
+	// Reference: rippled PayChan.cpp doApply() lines 345-360
+	closeTime := ctx.Config.ParentCloseTime
+	if (channel.CancelAfter > 0 && closeTime >= channel.CancelAfter) ||
+		(channel.Expiration > 0 && closeTime >= channel.Expiration) {
+		return closeChannel(ctx, channelKey, channel)
+	}
+
 	// Verify sender is the channel owner
 	accountID, _ := sle.DecodeAccountID(pf.Account)
 	if channel.Account != accountID {
 		return tx.TecNO_PERMISSION
 	}
 
-	// Parse amount to add
-	amount := uint64(pf.Amount.Drops())
-
-	// Check balance
-	if ctx.Account.Balance < amount {
-		return tx.TecUNFUNDED
-	}
-
-	// Deduct from account
-	ctx.Account.Balance -= amount
-
-	// Add to channel
-	channel.Amount += amount
-
-	// Update expiration if specified
+	// Handle Expiration extension
+	// Reference: rippled PayChan.cpp doApply() lines 370-381
 	if pf.Expiration != nil {
+		// minExpiration = closeTime + settleDelay
+		minExpiration := closeTime + channel.SettleDelay
+
+		// If channel already has expiration and it's less than minExpiration, use it
+		if channel.Expiration > 0 && channel.Expiration < minExpiration {
+			minExpiration = channel.Expiration
+		}
+
+		// New expiration must be >= minExpiration
+		if *pf.Expiration < minExpiration {
+			return tx.TemBAD_EXPIRATION
+		}
+
 		channel.Expiration = *pf.Expiration
 	}
 
-	// Serialize updated channel - modification tracked automatically by ApplyStateTable
+	// Reserve check
+	// Reference: rippled PayChan.cpp doApply() lines 383-387
+	amount := uint64(pf.Amount.Drops())
+	reserve := ctx.AccountReserve(ctx.Account.OwnerCount)
+	if ctx.Account.Balance < reserve {
+		return tx.TecINSUFFICIENT_RESERVE
+	}
+	if ctx.Account.Balance-reserve < amount {
+		return tx.TecUNFUNDED
+	}
+
+	// Destination must still exist
+	// Reference: rippled PayChan.cpp doApply() lines 389-390
+	destKey := keylet.Account(channel.DestinationID)
+	if exists, _ := ctx.View.Exists(destKey); !exists {
+		return tx.TecNO_DST
+	}
+
+	// Deduct from account and add to channel
+	ctx.Account.Balance -= amount
+	channel.Amount += amount
+
+	// Serialize updated channel
 	updatedChannelData, err := sle.SerializePayChannelFromData(channel)
 	if err != nil {
 		return tx.TefINTERNAL

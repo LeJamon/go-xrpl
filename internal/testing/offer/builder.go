@@ -17,6 +17,7 @@ type OfferCreateBuilder struct {
 	offerSequence *uint32
 	fee           uint64
 	sequence      *uint32
+	ticketSeq     *uint32
 	flags         uint32
 }
 
@@ -95,6 +96,21 @@ func (b *OfferCreateBuilder) Sell() *OfferCreateBuilder {
 	return b
 }
 
+// Flags sets the raw flags value, replacing any previously set flags.
+// Use this for testing malformed flag combinations.
+func (b *OfferCreateBuilder) Flags(f uint32) *OfferCreateBuilder {
+	b.flags = f
+	return b
+}
+
+// TicketSeq sets the ticket sequence and sets Sequence to 0.
+func (b *OfferCreateBuilder) TicketSeq(ticketSeq uint32) *OfferCreateBuilder {
+	b.ticketSeq = &ticketSeq
+	seq := uint32(0)
+	b.sequence = &seq
+	return b
+}
+
 // Build constructs the OfferCreate transaction.
 func (b *OfferCreateBuilder) Build() tx.Transaction {
 	o := offertx.NewOfferCreate(b.account.Address, b.takerGets, b.takerPays)
@@ -108,6 +124,9 @@ func (b *OfferCreateBuilder) Build() tx.Transaction {
 	}
 	if b.sequence != nil {
 		o.SetSequence(*b.sequence)
+	}
+	if b.ticketSeq != nil {
+		o.TicketSequence = b.ticketSeq
 	}
 	if b.flags != 0 {
 		o.SetFlags(b.flags)
@@ -123,10 +142,11 @@ func (b *OfferCreateBuilder) BuildOfferCreate() *offertx.OfferCreate {
 
 // OfferCancelBuilder provides a fluent interface for building OfferCancel transactions.
 type OfferCancelBuilder struct {
-	account  *testing.Account
-	offerSeq uint32
-	fee      uint64
-	sequence *uint32
+	account   *testing.Account
+	offerSeq  uint32
+	fee       uint64
+	sequence  *uint32
+	ticketSeq *uint32
 }
 
 // OfferCancel creates a new OfferCancelBuilder.
@@ -151,6 +171,14 @@ func (b *OfferCancelBuilder) Sequence(seq uint32) *OfferCancelBuilder {
 	return b
 }
 
+// TicketSeq sets the ticket sequence and sets Sequence to 0.
+func (b *OfferCancelBuilder) TicketSeq(ticketSeq uint32) *OfferCancelBuilder {
+	b.ticketSeq = &ticketSeq
+	seq := uint32(0)
+	b.sequence = &seq
+	return b
+}
+
 // Build constructs the OfferCancel transaction.
 func (b *OfferCancelBuilder) Build() tx.Transaction {
 	o := offertx.NewOfferCancel(b.account.Address, b.offerSeq)
@@ -158,6 +186,9 @@ func (b *OfferCancelBuilder) Build() tx.Transaction {
 
 	if b.sequence != nil {
 		o.SetSequence(*b.sequence)
+	}
+	if b.ticketSeq != nil {
+		o.TicketSequence = b.ticketSeq
 	}
 
 	return o

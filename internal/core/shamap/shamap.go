@@ -74,6 +74,7 @@ type SHAMap struct {
 	ledgerSeq uint32
 	full      bool
 	backed    bool
+	family    Family // nil for unbacked maps
 }
 
 // New creates a new empty SHAMap with the specified type
@@ -88,6 +89,114 @@ func New(mapType Type) (*SHAMap, error) {
 		full:      true,
 		backed:    false,
 	}, nil
+}
+
+// NewBacked creates a new empty backed SHAMap with the specified type and Family.
+// Unlike New(), this map will flush dirty nodes to the Family and support lazy loading.
+func NewBacked(mapType Type, family Family) (*SHAMap, error) {
+	if family == nil {
+		return nil, errors.New("family is required for backed SHAMap")
+	}
+	root := NewInnerNode()
+	return &SHAMap{
+		root:    root,
+		mapType: mapType,
+		state:   StateModifying,
+		full:    true,
+		backed:  true,
+		family:  family,
+	}, nil
+}
+
+// SetFamily sets the Family on an existing SHAMap, enabling backed mode.
+// This allows converting an unbacked map to a backed map.
+func (sm *SHAMap) SetFamily(family Family) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.family = family
+	sm.backed = family != nil
+}
+
+// NewFromRootHash creates a backed SHAMap from a root hash and a Family.
+// The root inner node is fetched from the store with child pointers nil (hash-only).
+// Children are loaded lazily on demand via descend().
+func NewFromRootHash(mapType Type, rootHash [32]byte, family Family) (*SHAMap, error) {
+	if family == nil {
+		return nil, errors.New("family is required for backed SHAMap")
+	}
+
+	// Fetch root node from store
+	data, err := family.Fetch(rootHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch root node: %w", err)
+	}
+	if data == nil {
+		return nil, fmt.Errorf("root node %x not found in store", rootHash[:8])
+	}
+
+	// Deserialize — creates InnerNode with hashes set, children nil
+	node, err := DeserializeFromPrefix(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to deserialize root node: %w", err)
+	}
+
+	root, ok := node.(*InnerNode)
+	if !ok {
+		return nil, fmt.Errorf("root node is not an InnerNode, got %T", node)
+	}
+
+	return &SHAMap{
+		root:    root,
+		mapType: mapType,
+		state:   StateModifying,
+		full:    true,
+		backed:  true,
+		family:  family,
+	}, nil
+}
+
+// descend returns the child node at the given branch of an inner node.
+// For backed maps, if the child pointer is nil but the hash is set,
+// the node is fetched from the Family and deserialized.
+// Each SHAMap gets its own deserialized copy — no shared mutable state.
+func (sm *SHAMap) descend(inner *InnerNode, branch int) (Node, error) {
+	// Fast path: child already loaded in memory
+	child := inner.ChildUnsafe(branch)
+	if child != nil {
+		return child, nil
+	}
+
+	// Not backed: nothing to lazy-load
+	if !sm.backed || sm.family == nil {
+		return nil, nil
+	}
+
+	// Check if branch has a hash (i.e., non-empty but not yet loaded)
+	hash := inner.ChildHashUnsafe(branch)
+	if isZeroHash(hash) {
+		return nil, nil
+	}
+
+	// Fetch from store
+	data, err := sm.family.Fetch(hash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch child node %x: %w", hash[:8], err)
+	}
+	if data == nil {
+		return nil, fmt.Errorf("child node %x not found in store", hash[:8])
+	}
+
+	// Deserialize (fresh copy — not shared with other SHAMaps)
+	node, err := DeserializeFromPrefix(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to deserialize child node: %w", err)
+	}
+
+	// Attach to parent for future access within this SHAMap instance.
+	// SetChildDirect doesn't update hash or dirty flag.
+	inner.SetChildDirect(branch, node)
+
+	return node, nil
 }
 
 // Type returns the map type
@@ -228,7 +337,7 @@ func (sm *SHAMap) walkToKey(key [32]byte, stack *NodeStack) (Node, error) {
 			return nil, nil // Empty slot
 		}
 
-		child, err := inner.Child(int(branch))
+		child, err := sm.descend(inner, int(branch))
 		if err != nil {
 			return nil, fmt.Errorf("failed to get child: %w", err)
 		}
@@ -536,7 +645,7 @@ func (sm *SHAMap) walkToKeyForDirty(key [32]byte, stack *NodeStack) (Node, error
 			return nil, nil
 		}
 
-		child, err := inner.Child(int(branch))
+		child, err := sm.descend(inner, int(branch))
 		if err != nil {
 			return nil, fmt.Errorf("failed to get child: %w", err)
 		}
@@ -757,7 +866,7 @@ func (sm *SHAMap) onlyBelow(node Node) (*Item, error) {
 
 		var nextNode Node = nil
 		for i := 0; i < BranchFactor; i++ {
-			child, err := inner.Child(i)
+			child, err := sm.descend(inner, i)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get child %d: %w", i, err)
 			}
@@ -790,6 +899,10 @@ func (sm *SHAMap) onlyBelow(node Node) (*Item, error) {
 
 // Snapshot creates a copy of the SHAMap
 func (sm *SHAMap) Snapshot(mutable bool) (*SHAMap, error) {
+	if sm.backed && sm.family != nil {
+		return sm.snapshotBacked(mutable)
+	}
+
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
@@ -802,7 +915,7 @@ func (sm *SHAMap) Snapshot(mutable bool) (*SHAMap, error) {
 		newState = StateModifying
 	}
 
-	// Deep clone the root node
+	// Unbacked map: deep clone (existing behavior)
 	newRoot, err := sm.cloneNodeTree(sm.root)
 	if err != nil {
 		return nil, fmt.Errorf("failed to clone tree: %w", err)
@@ -815,6 +928,44 @@ func (sm *SHAMap) Snapshot(mutable bool) (*SHAMap, error) {
 		ledgerSeq: sm.ledgerSeq,
 		full:      sm.full,
 	}, nil
+}
+
+// snapshotBacked creates a snapshot of a backed map by flushing dirty nodes
+// and creating a new SHAMap from the root hash. O(dirty nodes) instead of O(tree).
+func (sm *SHAMap) snapshotBacked(mutable bool) (*SHAMap, error) {
+	// FlushDirty takes its own write lock
+	batch, err := sm.FlushDirty(false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to flush dirty nodes: %w", err)
+	}
+
+	if len(batch.Entries) > 0 {
+		if err := sm.family.StoreBatch(batch.Entries); err != nil {
+			return nil, fmt.Errorf("failed to store flushed nodes: %w", err)
+		}
+	}
+
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	if sm.state == StateInvalid {
+		return nil, errors.New("cannot snapshot invalid map")
+	}
+
+	newState := StateImmutable
+	if mutable {
+		newState = StateModifying
+	}
+
+	rootHash := sm.root.Hash()
+	newMap, err := NewFromRootHash(sm.mapType, rootHash, sm.family)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create backed snapshot: %w", err)
+	}
+	newMap.state = newState
+	newMap.ledgerSeq = sm.ledgerSeq
+
+	return newMap, nil
 }
 
 // ForEach calls fn for every item in the tree
@@ -850,7 +1001,7 @@ func (sm *SHAMap) forEachUnsafe(node Node, fn func(*Item) bool) error {
 	}
 
 	for i := 0; i < BranchFactor; i++ {
-		child, err := inner.Child(i)
+		child, err := sm.descend(inner, i)
 		if err != nil {
 			return fmt.Errorf("failed to get child %d: %w", i, err)
 		}
@@ -1015,6 +1166,85 @@ func (sm *SHAMap) consolidateUp(startNode *InnerNode, stack *NodeStack, key [32]
 	return currentNode, nil
 }
 
+// IsBacked returns true if this SHAMap is backed by a NodeStore.
+func (sm *SHAMap) IsBacked() bool {
+	return sm.backed
+}
+
+// FlushDirty performs a post-order traversal of the tree, collecting all dirty nodes.
+// Each dirty node is serialized and added to the returned NodeBatch.
+// After serialization, nodes are marked clean (dirty=false).
+// If releaseChildren is true, inner nodes release their child pointers after flush
+// (retaining only hashes), allowing GC to reclaim memory. Children will be
+// lazily reloaded from NodeStore on next access.
+func (sm *SHAMap) FlushDirty(releaseChildren bool) (*NodeBatch, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if sm.root == nil {
+		return &NodeBatch{}, nil
+	}
+
+	batch := &NodeBatch{}
+
+	if err := sm.flushNode(sm.root, releaseChildren, batch); err != nil {
+		return nil, fmt.Errorf("failed to flush: %w", err)
+	}
+
+	return batch, nil
+}
+
+// flushNode recursively flushes a dirty node and its dirty children (post-order).
+func (sm *SHAMap) flushNode(node Node, releaseChildren bool, batch *NodeBatch) error {
+	if node == nil || !node.IsDirty() {
+		return nil
+	}
+
+	// For inner nodes: flush children first (post-order)
+	if inner, ok := node.(*InnerNode); ok {
+		inner.mu.Lock()
+		for i := 0; i < BranchFactor; i++ {
+			child := inner.children[i]
+			if child != nil && child.IsDirty() {
+				// Flush child first (recursive)
+				if err := sm.flushNode(child, releaseChildren, batch); err != nil {
+					inner.mu.Unlock()
+					return err
+				}
+			}
+		}
+		inner.mu.Unlock()
+	}
+
+	// Serialize this node
+	data, err := node.SerializeWithPrefix()
+	if err != nil {
+		return fmt.Errorf("failed to serialize node: %w", err)
+	}
+
+	hash := node.Hash()
+	batch.Entries = append(batch.Entries, FlushEntry{
+		Hash: hash,
+		Data: data,
+	})
+
+	// Mark clean
+	node.SetDirty(false)
+
+	// Release children pointers for inner nodes (retain hashes for lazy reload)
+	if releaseChildren {
+		if inner, ok := node.(*InnerNode); ok {
+			inner.mu.Lock()
+			for i := 0; i < BranchFactor; i++ {
+				inner.children[i] = nil
+			}
+			inner.mu.Unlock()
+		}
+	}
+
+	return nil
+}
+
 // cloneNodeTree deep clones a node and all its children
 func (sm *SHAMap) cloneNodeTree(node Node) (*InnerNode, error) {
 	if node == nil {
@@ -1042,7 +1272,7 @@ func (sm *SHAMap) cloneNodeTree(node Node) (*InnerNode, error) {
 
 	// Clone all children recursively
 	for i := 0; i < BranchFactor; i++ {
-		child, err := inner.Child(i)
+		child, err := sm.descend(inner, i)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get child %d: %w", i, err)
 		}
@@ -1291,7 +1521,7 @@ func (sm *SHAMap) collectAllKeysUnsafe(node Node) ([]Key, error) {
 		}
 
 		for branch := 0; branch < BranchFactor; branch++ {
-			child, err := inner.Child(branch)
+			child, err := sm.descend(inner, branch)
 			if err != nil {
 				return nil, err
 			}

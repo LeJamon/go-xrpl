@@ -6,7 +6,19 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
 )
 
-// ManifestMethod handles the manifest RPC method
+// ManifestMethod handles the manifest RPC method.
+// STUB: Returns placeholder data. Requires validator manifest infrastructure.
+//
+// TODO [validator]: Implement validator manifest retrieval.
+//   - Requires: ValidatorManifests service (stores master→ephemeral key mappings)
+//   - Reference: rippled Manifest.cpp → context.app.validatorManifests()
+//   - Steps:
+//     1. Parse public_key param (required)
+//     2. Call validatorManifests.getMasterKey(publicKey) to resolve ephemeral→master
+//     3. Call validatorManifests.getManifest(masterKey) to get raw manifest
+//     4. Decode manifest to extract: sequence, master_key, signing_key, domain, signature
+//     5. Return { details: {domain, ephemeral_key, master_key, seq}, manifest: base64, requested: key }
+//   - If key not found, return empty details + "requested" field only
 type ManifestMethod struct{}
 
 func (m *ManifestMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
@@ -20,15 +32,12 @@ func (m *ManifestMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessag
 		}
 	}
 
-	// TODO: Implement validator manifest retrieval
-	// 1. Look up manifest for specified validator public key
-	// 2. Return manifest details including ephemeral keys and signature
+	if request.PublicKey == "" {
+		return nil, rpc_types.RpcErrorInvalidParams("Missing required parameter: public_key")
+	}
 
+	// Return empty details (no validator manifest infrastructure yet)
 	response := map[string]interface{}{
-		"details": map[string]interface{}{
-			// TODO: Load actual manifest details
-		},
-		"manifest":  "MANIFEST_DATA",
 		"requested": request.PublicKey,
 	}
 

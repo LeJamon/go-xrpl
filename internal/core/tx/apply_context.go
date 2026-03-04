@@ -28,6 +28,10 @@ type ApplyContext struct {
 
 	// Engine provides access to shared helper methods (dirInsert, dirRemove, etc.)
 	Engine *Engine
+
+	// SignedWithMaster is true when the transaction was signed with the account's master key.
+	// Reference: rippled SetAccount.cpp sigWithMaster — derived from SigningPubKey.
+	SignedWithMaster bool
 }
 
 // AccountReserve calculates the total reserve required for an account with the given owner count.

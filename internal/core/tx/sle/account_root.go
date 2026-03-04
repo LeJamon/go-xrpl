@@ -61,7 +61,7 @@ const (
 	fieldCodeNFTokenMinter   = 9  // Account - authorized NFT minter
 	fieldCodeEmailHash       = 1  // Hash128
 	fieldCodeDomain          = 7  // Blob
-	fieldCodeTickSize        = 16 // UInt8 (stored as UInt16)
+	fieldCodeTickSize        = 16 // UInt8 (type code 16)
 	fieldCodeAccountTxnID    = 9  // Hash256 - last transaction ID
 	fieldCodeWalletLocator   = 7  // Hash256 - wallet locator (deprecated)
 )
@@ -257,26 +257,41 @@ func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 			offset += length
 
 		case FieldTypeBlob:
-			// Variable length blob
+			// Variable length blob — XRPL VL encoding
 			if offset >= len(data) {
 				return account, nil
 			}
-			length := int(data[offset])
+			byte1 := int(data[offset])
 			offset++
-			if length > 192 {
-				// Extended length encoding
-				if length < 241 {
-					length = 193 + int(data[offset-1]) - 193
-				} else {
-					// Even more extended - skip for now
-					offset += 2
-					continue
+			var length int
+			if byte1 <= 192 {
+				// Single-byte encoding: length = byte1
+				length = byte1
+			} else if byte1 <= 240 {
+				// Two-byte encoding: length = 193 + ((byte1 - 193) * 256) + byte2
+				if offset >= len(data) {
+					return account, nil
 				}
+				byte2 := int(data[offset])
+				offset++
+				length = 193 + (byte1-193)*256 + byte2
+			} else {
+				// Three-byte encoding: length = 12481 + ((byte1 - 241) * 65536) + (byte2 * 256) + byte3
+				if offset+2 > len(data) {
+					return account, nil
+				}
+				byte2 := int(data[offset])
+				byte3 := int(data[offset+1])
+				offset += 2
+				length = 12481 + (byte1-241)*65536 + byte2*256 + byte3
 			}
 			if offset+length > len(data) {
 				return account, nil
 			}
-			if fieldCode == 7 { // Domain field
+			switch fieldCode {
+			case 2: // MessageKey field
+				account.MessageKey = hex.EncodeToString(data[offset : offset+length])
+			case 7: // Domain field
 				account.Domain = string(data[offset : offset+length])
 			}
 			offset += length
@@ -304,6 +319,16 @@ func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 				account.WalletLocator = hex.EncodeToString(data[offset : offset+32])
 			}
 			offset += 32
+
+		case 16: // UInt8
+			if offset+1 > len(data) {
+				return account, nil
+			}
+			value := data[offset]
+			offset++
+			if fieldCode == fieldCodeTickSize {
+				account.TickSize = value
+			}
 
 		default:
 			// Unknown type - can't determine size, must stop parsing
@@ -356,6 +381,11 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 		jsonObj["EmailHash"] = strings.ToUpper(account.EmailHash)
 	}
 
+	// Add MessageKey if set
+	if account.MessageKey != "" {
+		jsonObj["MessageKey"] = strings.ToUpper(account.MessageKey)
+	}
+
 	// Add NFTokenMinter if set
 	if account.NFTokenMinter != "" {
 		jsonObj["NFTokenMinter"] = account.NFTokenMinter
@@ -390,6 +420,11 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 	// Add PreviousTxnLgrSeq if set
 	if account.PreviousTxnLgrSeq > 0 {
 		jsonObj["PreviousTxnLgrSeq"] = account.PreviousTxnLgrSeq
+	}
+
+	// Add TickSize if set (non-zero)
+	if account.TickSize > 0 {
+		jsonObj["TickSize"] = account.TickSize
 	}
 
 	// Encode using the binary codec

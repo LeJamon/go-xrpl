@@ -4,7 +4,9 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/ledgerstatefix"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/nftoken"
 	"github.com/LeJamon/goXRPLd/internal/testing"
 )
@@ -104,6 +106,14 @@ func (b *NFTokenMintBuilder) OnlyXRP() *NFTokenMintBuilder {
 // Transferable makes the token transferable by non-issuers.
 func (b *NFTokenMintBuilder) Transferable() *NFTokenMintBuilder {
 	b.flags |= nftoken.NFTokenMintFlagTransferable
+	return b
+}
+
+// TrustLine enables auto-trust line creation for the NFT.
+// When set, the NFT issuer can receive IOU transfer fees even without a pre-existing trust line.
+// Requires fixRemoveNFTokenAutoTrustLine to be DISABLED.
+func (b *NFTokenMintBuilder) TrustLine() *NFTokenMintBuilder {
+	b.flags |= nftoken.NFTokenMintFlagTrustLine
 	return b
 }
 
@@ -537,6 +547,77 @@ func (b *NFTokenModifyBuilder) BuildNFTokenModify() *nftoken.NFTokenModify {
 	return b.Build().(*nftoken.NFTokenModify)
 }
 
+// LedgerStateFixBuilder provides a fluent interface for building LedgerStateFix transactions.
+// Reference: rippled ledgerStateFix::nftPageLinks()
+type LedgerStateFixBuilder struct {
+	account  *testing.Account
+	owner    *testing.Account
+	fixType  *uint8
+	fee      uint64
+	sequence *uint32
+	flags    uint32
+}
+
+// LedgerStateFixNFTPageLinks creates a new LedgerStateFixBuilder for NFToken page link repair.
+// account submits the fix; owner is the account whose pages are repaired.
+func LedgerStateFixNFTPageLinks(account, owner *testing.Account) *LedgerStateFixBuilder {
+	fixType := uint8(1) // LedgerFixTypeNFTokenPageLink
+	return &LedgerStateFixBuilder{
+		account: account,
+		owner:   owner,
+		fixType: &fixType,
+		fee:     10, // Default fee: 10 drops
+	}
+}
+
+// Fee sets the transaction fee in drops.
+func (b *LedgerStateFixBuilder) Fee(f uint64) *LedgerStateFixBuilder {
+	b.fee = f
+	return b
+}
+
+// Sequence sets the sequence number explicitly.
+func (b *LedgerStateFixBuilder) Sequence(seq uint32) *LedgerStateFixBuilder {
+	b.sequence = &seq
+	return b
+}
+
+// Flags sets explicit transaction flags.
+func (b *LedgerStateFixBuilder) Flags(flags uint32) *LedgerStateFixBuilder {
+	b.flags = flags
+	return b
+}
+
+// FixType overrides the LedgerFixType field.
+func (b *LedgerStateFixBuilder) FixType(ft uint8) *LedgerStateFixBuilder {
+	b.fixType = &ft
+	return b
+}
+
+// NoOwner removes the Owner field from the transaction.
+func (b *LedgerStateFixBuilder) NoOwner() *LedgerStateFixBuilder {
+	b.owner = nil
+	return b
+}
+
+// Build constructs the LedgerStateFix transaction.
+func (b *LedgerStateFixBuilder) Build() tx.Transaction {
+	l := ledgerstatefix.NewLedgerStateFix(b.account.Address, *b.fixType)
+	l.Fee = fmt.Sprintf("%d", b.fee)
+
+	if b.owner != nil {
+		l.Owner = b.owner.Address
+	}
+	if b.sequence != nil {
+		l.SetSequence(*b.sequence)
+	}
+	if b.flags != 0 {
+		l.SetFlags(b.flags)
+	}
+
+	return l
+}
+
 // isHexEncoded checks if a string appears to be hex-encoded.
 // Returns true if the string has even length and contains only hex characters.
 func isHexEncoded(s string) bool {
@@ -549,4 +630,23 @@ func isHexEncoded(s string) bool {
 		}
 	}
 	return len(s) > 0
+}
+
+// GetNextNFTokenID predicts the next NFT ID that will be generated when minting.
+// Must be called BEFORE submitting the NFTokenMint transaction.
+// Reference: rippled's token::getNextID(env, issuer, taxon, flags, xferFee).
+func GetNextNFTokenID(env *testing.TestEnv, issuer *testing.Account, taxon uint32, flags uint16, transferFee uint16) string {
+	// Get the current MintedNFTokens count (this will be the sequence for the next mint)
+	tokenSeq := env.MintedCount(issuer)
+	tokenID := nftoken.GenerateNFTokenID(issuer.ID, taxon, tokenSeq, flags, transferFee)
+	return hex.EncodeToString(tokenID[:])
+}
+
+// GetOfferIndex predicts the offer index (keylet) that will be created.
+// Must be called BEFORE submitting the NFTokenCreateOffer transaction.
+// Reference: rippled's keylet::nftoffer(account, env.seq(account)).key.
+func GetOfferIndex(env *testing.TestEnv, acc *testing.Account) string {
+	seq := env.Seq(acc)
+	k := keylet.NFTokenOffer(acc.ID, seq)
+	return hex.EncodeToString(k.Key[:])
 }

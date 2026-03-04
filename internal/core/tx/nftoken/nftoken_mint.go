@@ -84,9 +84,10 @@ func (n *NFTokenMint) Validate() error {
 	}
 
 	// Check for invalid flags
-	// Note: In production, this should check based on enabled amendments
-	// For now, use the most restrictive mask (with fixRemoveNFTokenAutoTrustLine)
-	if n.GetFlags()&tfNFTokenMintMask != 0 {
+	// Use the old (permissive) mask here since Validate() has no access to Rules.
+	// The amendment-dependent check (rejecting tfTrustLine when
+	// fixRemoveNFTokenAutoTrustLine is enabled) is in Apply().
+	if n.GetFlags()&tfNFTokenMintOldMask != 0 {
 		return errors.New("temINVALID_FLAG: invalid NFTokenMint flags")
 	}
 
@@ -145,14 +146,30 @@ func (n *NFTokenMint) SetTransferable() {
 	n.SetFlags(flags)
 }
 
-// RequiredAmendments returns the amendments required for this transaction type
+// RequiredAmendments returns the amendments required for this transaction type.
+// When offer fields (Amount, Destination, Expiration) are present, also requires
+// FeatureNFTokenMintOffer.
+// Reference: rippled NFTokenMint.cpp preflight — temDISABLED when offer fields present without amendment
 func (n *NFTokenMint) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureNonFungibleTokensV1}
+	amends := [][32]byte{amendment.FeatureNonFungibleTokensV1}
+	if n.Amount != nil || n.Destination != "" || n.Expiration != nil {
+		amends = append(amends, amendment.FeatureNFTokenMintOffer)
+	}
+	return amends
 }
 
 // Apply applies the NFTokenMint transaction to the ledger.
 // Reference: rippled NFTokenMint.cpp doApply
 func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
+	// Amendment-dependent flag check: with fixRemoveNFTokenAutoTrustLine,
+	// tfTrustLine is no longer valid.
+	// Reference: rippled NFTokenMint.cpp preflight — mask depends on amendment
+	if ctx.Rules().Enabled(amendment.FeatureFixRemoveNFTokenAutoTrustLine) {
+		if m.GetFlags()&tfNFTokenMintMask != 0 {
+			return tx.TemINVALID_FLAG
+		}
+	}
+
 	accountID := ctx.AccountID
 
 	// Determine the issuer
@@ -170,7 +187,7 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Read issuer account for MintedNFTokens tracking
 		issuerKey = keylet.Account(issuerID)
 		issuerData, err := ctx.View.Read(issuerKey)
-		if err != nil {
+		if err != nil || issuerData == nil {
 			return tx.TecNO_ISSUER
 		}
 		issuerAccount, err = sle.ParseAccountRoot(issuerData)
@@ -253,12 +270,20 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Check reserve if pages were created (owner count increased)
-	if insertResult.PagesCreated > 0 {
-		reserve := ctx.AccountReserve(ctx.Account.OwnerCount)
-		if ctx.Account.Balance < reserve {
-			return tx.TecINSUFFICIENT_RESERVE
+	// If Amount field is present, create a sell offer for the newly minted token.
+	// Reference: rippled NFTokenMint.cpp doApply — tokenOfferCreateApply
+	if m.Amount != nil {
+		seqProxy := m.GetCommon().SeqProxy()
+		result := tokenOfferCreateApply(ctx, accountID, tokenID, m.Amount, m.Destination, m.Expiration, seqProxy)
+		if result != tx.TesSUCCESS {
+			return result
 		}
+	}
+
+	// Check reserve for all new objects (pages + possible offer)
+	reserve := ctx.AccountReserve(ctx.Account.OwnerCount)
+	if ctx.Account.Balance < reserve {
+		return tx.TecINSUFFICIENT_RESERVE
 	}
 
 	return tx.TesSUCCESS

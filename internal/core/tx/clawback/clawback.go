@@ -1,11 +1,13 @@
 package clawback
 
 import (
+	"encoding/hex"
 	"errors"
 
+	"github.com/LeJamon/goXRPLd/internal/core/amendment"
+	"github.com/LeJamon/goXRPLd/internal/core/ledger/entry"
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/amendment"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )
 
@@ -42,6 +44,9 @@ type Clawback struct {
 
 	// Holder is the MPToken holder (optional, for MPToken clawback only)
 	Holder string `json:"Holder,omitempty" xrpl:"Holder,omitempty"`
+
+	// MPTokenIssuanceID is the issuance ID for MPToken clawback (required when Holder is set)
+	MPTokenIssuanceID string `json:"MPTokenIssuanceID,omitempty" xrpl:"MPTokenIssuanceID,omitempty"`
 }
 
 // NewClawback creates a new Clawback transaction for IOU tokens
@@ -53,11 +58,12 @@ func NewClawback(account string, amount sle.Amount) *Clawback {
 }
 
 // NewMPTokenClawback creates a new Clawback transaction for MPTokens
-func NewMPTokenClawback(account, holder string, amount sle.Amount) *Clawback {
+func NewMPTokenClawback(account, holder, issuanceID string, amount sle.Amount) *Clawback {
 	return &Clawback{
-		BaseTx: *tx.NewBaseTx(tx.TypeClawback, account),
-		Amount: amount,
-		Holder: holder,
+		BaseTx:            *tx.NewBaseTx(tx.TypeClawback, account),
+		Amount:            amount,
+		Holder:            holder,
+		MPTokenIssuanceID: issuanceID,
 	}
 }
 
@@ -121,8 +127,143 @@ func (c *Clawback) Validate() error {
 }
 
 // Apply applies the Clawback transaction to ledger state.
-// Reference: rippled Clawback.cpp preclaim() + applyHelper<Issue>()
+// Reference: rippled Clawback.cpp preclaim() + applyHelper<Issue>() / applyHelper<MPTIssue>()
 func (c *Clawback) Apply(ctx *tx.ApplyContext) tx.Result {
+	if c.Holder != "" {
+		return c.applyMPT(ctx)
+	}
+	return c.applyIOU(ctx)
+}
+
+// applyMPT handles MPToken clawback when Holder field is set.
+// Reference: rippled Clawback.cpp preclaimHelper<MPTIssue>() + applyHelper<MPTIssue>()
+func (c *Clawback) applyMPT(ctx *tx.ApplyContext) tx.Result {
+	// Parse MPTokenIssuanceID
+	var mptID [24]byte
+	issuanceIDBytes, err := hex.DecodeString(c.MPTokenIssuanceID)
+	if err != nil || len(issuanceIDBytes) != 24 {
+		// If the ID is invalid/empty, the issuance won't be found
+		return tx.TecOBJECT_NOT_FOUND
+	}
+	copy(mptID[:], issuanceIDBytes)
+
+	// Look up the issuance
+	issuanceKey := keylet.MPTIssuance(mptID)
+	issuanceRaw, err := ctx.View.Read(issuanceKey)
+	if err != nil || issuanceRaw == nil {
+		return tx.TecOBJECT_NOT_FOUND
+	}
+
+	issuance, err := sle.ParseMPTokenIssuance(issuanceRaw)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Issuance must have CanClawback flag
+	if issuance.Flags&entry.LsfMPTCanClawback == 0 {
+		return tx.TecNO_PERMISSION
+	}
+
+	// Caller must be the issuer
+	if issuance.Issuer != ctx.AccountID {
+		return tx.TecNO_PERMISSION
+	}
+
+	// Decode holder account
+	holderID, err := sle.DecodeAccountID(c.Holder)
+	if err != nil {
+		return tx.TecNO_DST
+	}
+
+	// Look up holder's MPToken
+	tokenKey := keylet.MPToken(issuanceKey.Key, holderID)
+	tokenRaw, err := ctx.View.Read(tokenKey)
+	if err != nil || tokenRaw == nil {
+		return tx.TecOBJECT_NOT_FOUND
+	}
+
+	token, err := sle.ParseMPToken(tokenRaw)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Holder must have a positive balance
+	if token.MPTAmount == 0 {
+		return tx.TecINSUFFICIENT_FUNDS
+	}
+
+	// Extract requested amount as uint64 from the IOU-style Amount
+	requested := amountToUint64(c.Amount)
+	if requested == 0 {
+		return tx.TecINSUFFICIENT_FUNDS
+	}
+
+	// Compute actual clawback amount = min(balance, requested)
+	actual := token.MPTAmount
+	if requested < actual {
+		actual = requested
+	}
+
+	// Decrement holder's balance
+	token.MPTAmount -= actual
+
+	// Decrement issuance outstanding amount
+	if issuance.OutstandingAmount >= actual {
+		issuance.OutstandingAmount -= actual
+	} else {
+		issuance.OutstandingAmount = 0
+	}
+
+	// Serialize and update MPToken
+	updatedToken, err := sle.SerializeMPToken(token)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := ctx.View.Update(tokenKey, updatedToken); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Serialize and update issuance
+	updatedIssuance, err := sle.SerializeMPTokenIssuance(issuance)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := ctx.View.Update(issuanceKey, updatedIssuance); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	return tx.TesSUCCESS
+}
+
+// amountToUint64 converts an Amount to a uint64 integer value.
+// Prefers the raw MPT int64 value when available to avoid IOU normalization precision loss.
+func amountToUint64(a sle.Amount) uint64 {
+	if raw, ok := a.MPTRaw(); ok {
+		if raw <= 0 {
+			return 0
+		}
+		return uint64(raw)
+	}
+	mantissa := a.Mantissa()
+	if mantissa <= 0 {
+		return 0
+	}
+	exp := a.Exponent()
+	result := uint64(mantissa)
+	for exp > 0 {
+		result *= 10
+		exp--
+	}
+	for exp < 0 {
+		result /= 10
+		exp++
+	}
+	return result
+}
+
+// applyIOU handles IOU token clawback (original path).
+// Reference: rippled Clawback.cpp preclaim() + applyHelper<Issue>()
+func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 	// --- Preclaim checks ---
 
 	// 1. Decode holder from Amount.Issuer
@@ -135,7 +276,7 @@ func (c *Clawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled Clawback.cpp:206-208
 	holderAccountKey := keylet.Account(holderID)
 	holderAccountData, err := ctx.View.Read(holderAccountKey)
-	if err != nil {
+	if err != nil || holderAccountData == nil {
 		return tx.TerNO_ACCOUNT
 	}
 	holderAccount, err := sle.ParseAccountRoot(holderAccountData)
@@ -157,7 +298,7 @@ func (c *Clawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled Clawback.cpp:125-128
 	trustKey := keylet.Line(holderID, ctx.AccountID, c.Amount.Currency)
 	trustData, err := ctx.View.Read(trustKey)
-	if err != nil {
+	if err != nil || trustData == nil {
 		return tx.TecNO_LINE
 	}
 	rs, err := sle.ParseRippleState(trustData)

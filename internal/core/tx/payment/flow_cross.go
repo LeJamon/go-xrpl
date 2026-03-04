@@ -32,11 +32,13 @@ type FlowCrossResult struct {
 // FlowCross executes offer crossing for an OfferCreate transaction.
 // This is equivalent to rippled's flowCross() in CreateOffer.cpp.
 //
+// Rippled's flowCross() calls the full flow() payment engine with src=dst=taker,
+// which builds proper strands (DirectSteps + BookSteps + XRPEndpointSteps).
+// For IOU-to-IOU crossing, it also adds an XRP bridge path.
+//
 // From the taker's (offer creator's) perspective:
 //   - TakerGets = what the taker is SELLING (paying out)
 //   - TakerPays = what the taker is BUYING (receiving)
-//
-// The function finds and crosses against existing offers on the opposite book.
 //
 // Parameters:
 //   - view: The ledger view for reading/writing state
@@ -55,74 +57,61 @@ func FlowCross(
 	txHash [32]byte,
 	ledgerSeq uint32,
 	passive bool,
+	sell bool,
+	parentCloseTime uint32,
+	reserveBase, reserveIncrement uint64,
+	fixReducedOffersV1 bool,
+	fixReducedOffersV2 bool,
+	fixRmSmallIncreasedQOffers bool,
+	flowSortStrands bool,
 ) FlowCrossResult {
 
 	// Create sandbox for tracking changes
 	sandbox := NewPaymentSandbox(view)
 	sandbox.SetTransactionContext(txHash, ledgerSeq)
 
-	// Convert amounts to EitherAmount
-	// takerGets = what taker is selling (output from taker's perspective)
-	// takerPays = what taker wants (input from taker's perspective)
-	inAmt := ToEitherAmount(takerPays) // What taker receives
-
-	// Build the book step for crossing
-	// The opposite book is: TakerPays currency -> TakerGets currency
-	// i.e., offers where someone is selling what we want to buy
-	inIssue := GetIssue(takerPays)  // What we want to receive
-	outIssue := GetIssue(takerGets) // What we're paying
+	// Convert deliver amount (what taker wants to receive)
+	// Reference: rippled CreateOffer.cpp - deliver = takerAmount.out = takerPays
+	deliver := ToEitherAmount(takerPays)
 
 	// === Calculate sendMax: the maximum the taker can actually spend ===
 	// Reference: rippled CreateOffer.cpp flowCross() lines 329-367
 	//
-	// The key insight from rippled:
 	// 1. Start with takerGets (the offer amount)
-	// 2. MULTIPLY by transfer rate to get gross spend needed for that delivery
+	// 2. MULTIPLY by transfer rate to get gross spend needed
 	// 3. Limit to available balance
 	//
 	// sendMax = min(takerGets * transferRate, balance)
-	//
-	// This allows the taker to spend their full balance. The transfer rate means
-	// they'll deliver less than they spend, but they should be able to spend up
-	// to their balance.
-	//
-	// 1. Get taker's available balance for what they're selling
-	inStartBalance := tx.AccountFunds(view, takerAccount, takerGets, true)
+	inStartBalance := tx.AccountFunds(view, takerAccount, takerGets, true, reserveBase, reserveIncrement)
 
-	// 2. Calculate sendMax accounting for transfer rate
 	sendMax := ToEitherAmount(takerGets)
 
 	if !takerGets.IsNative() {
 		issuerID, err := sle.DecodeAccountID(takerGets.Issuer)
 		if err == nil && takerAccount != issuerID {
-			// Get transfer rate from issuer
 			transferRate := GetTransferRate(view, issuerID)
 			if transferRate != QualityOne {
-				// sendMax = takerGets * (transferRate / QualityOne)
-				// This is the gross spend needed to deliver takerGets amount
-				sendMax = MulRatio(sendMax, transferRate, QualityOne, true)
+				// Reference: rippled CreateOffer.cpp line 348-352:
+				//   sendMax = multiplyRound(takerAmount.in, gatewayXferRate, takerAmount.in.issue(), true)
+				// multiplyRound calls mulRound(amount, as_amount(rate), issue, roundUp)
+				// as_amount(Rate) = STAmount(noIssue(), rate.value, -9, false)
+				// This uses STAmount multiply (muldiv/10^14) NOT IOUAmount::mulRatio
+				rateAmt := rateAsAmount(transferRate)
+				result := sle.MulRound(sendMax.IOU, rateAmt, takerGets.Currency, takerGets.Issuer, true)
+				sendMax = NewIOUEitherAmount(result)
 			}
 		}
 	}
 
-	// 3. Limit sendMax to available balance
-	availableBalance := ToEitherAmount(inStartBalance)
-	if sendMax.Compare(availableBalance) > 0 {
-		sendMax = availableBalance
-	}
-
-	// Note: We pass GROSS amount (sendMax) to Flow, not NET
-	// The BookStep will handle the GROSS→NET conversion internally via computeOutputFromInputWithTransferRate
-	// Reference: rippled passes the gross available balance to flow
-	flowSendMax := sendMax
-
-	// Calculate quality limit for offer crossing
-	// Quality = what you pay / what you get (from the crossing perspective)
-	// Reference: rippled CreateOffer.cpp - Quality threshold{takerAmount.out, sendMax}
-	// The threshold uses sendMax (adjusted for transfer rate) not the original takerGets
-	// This makes the quality limit more permissive when there's a transfer rate
-	// Quality = sendMax / inAmt = what we pay / what we get
-	takerQuality := QualityFromAmounts(sendMax, inAmt)
+	// Calculate quality limit for offer crossing BEFORE capping sendMax to balance
+	// AND before modifying deliver for tfSell.
+	// Reference: rippled CreateOffer.cpp:
+	//   Line 342-353: sendMax = takerAmount.in (+ transfer rate)
+	//   Line 358: Quality threshold{takerAmount.out, sendMax};  // ORIGINAL amounts
+	//   Line 362-364: if passive, ++threshold
+	//   Line 367-368: if (sendMax > inStartBalance) sendMax = inStartBalance  // cap AFTER
+	//   Line 382-401: if (tfSell) deliver = MAX  // AFTER threshold
+	takerQuality := QualityFromAmounts(sendMax, deliver)
 
 	// For passive offers, increment the quality threshold so we only cross
 	// against offers with STRICTLY better quality (not equal)
@@ -131,22 +120,80 @@ func FlowCross(
 		takerQuality = takerQuality.Increment()
 	}
 
-	// Create a single BookStep for the opposite order book WITH quality limit
-	// For offer crossing, we search the book where:
-	//   - Book.In = takerGets (what we're paying = what matching offers TakerPays)
-	//   - Book.Out = takerPays (what we want = what matching offers TakerGets)
-	// This finds offers that are BUYING what we're SELLING (opposite side of market)
-	// Pass quality limit to only cross offers at or better than taker's quality
-	bookStep := NewBookStepWithQualityLimit(outIssue, inIssue, takerAccount, takerAccount, nil, false, &takerQuality)
+	// Now cap sendMax to available balance (AFTER threshold calculation)
+	// Reference: rippled CreateOffer.cpp lines 367-368
+	// Reference: rippled CreateOffer.cpp line 367-368
+	availableBalance := ToEitherAmount(inStartBalance)
+	if sendMax.Compare(availableBalance) > 0 {
+		sendMax = availableBalance
+	}
 
-	// Create strand with just the book step
-	strand := Strand{bookStep}
+	// With tfSell, override deliver to MAX AFTER threshold and sendMax cap.
+	// The taker wants to sell ALL their input even if they receive more than originally asked.
+	// Reference: rippled CreateOffer.cpp lines 382-401 (after threshold at line 358, after cap at 367)
+	// Note: In FlowCross, takerPays = the deliver currency (what gets delivered to the taker),
+	// so we check takerPays.IsNative() to determine the deliver type (XRP vs IOU).
+	if sell {
+		if takerPays.IsNative() {
+			// Reference: rippled STAmount::cMaxNative = 9000000000000000000
+			deliver = NewXRPEitherAmount(9000000000000000000)
+		} else {
+			// Reference: rippled uses cMaxValue/2=4999999999999999, cMaxOffset=80
+			deliver = NewIOUEitherAmount(tx.NewIssuedAmount(
+				4999999999999999, 80,
+				takerPays.Currency, takerPays.Issuer))
+		}
+	}
 
-	// Execute the flow with quality limit
-	// We want to receive up to takerPays amount
-	// Only cross offers at quality <= taker's quality
-	// Pass flowSendMax (NET limit) to limit based on taker's available funds
-	result := Flow(sandbox, []Strand{strand}, inAmt, true, &takerQuality, &flowSendMax)
+	// === Build proper strands using ToStrands ===
+	// Reference: rippled flowCross() calls flow() with src=dst=taker, addDefaultPath=true
+	// This builds complete strands with DirectSteps for IOU trust line transfers
+	// and XRPEndpointSteps for XRP transfers, surrounding the BookStep.
+	//
+	// For IOU-IOU crossing, also add an XRP bridge path.
+	// Reference: rippled CreateOffer.cpp lines 374-380
+	var paths [][]PathStep
+	if !takerPays.IsNative() && !takerGets.IsNative() {
+		// XRP bridge path for IOU-to-IOU crossing
+		paths = [][]PathStep{{
+			{Currency: "XRP", Type: int(PathTypeCurrency)},
+		}}
+	}
+
+	strands, strandResult := ToStrands(
+		sandbox,
+		takerAccount, // src (taker)
+		takerAccount, // dst (taker - payment to self)
+		takerPays,    // dstAmt (what we want to receive / deliver to self)
+		&takerGets,   // srcAmt (what we're paying, for issue info)
+		paths,        // explicit paths (XRP bridge for IOU-IOU)
+		true,         // addDefaultPath
+		true,         // offerCrossing - skip trust line checks, create lines on demand
+	)
+
+	if strandResult != tx.TesSUCCESS || len(strands) == 0 {
+		// No valid strands - no crossing possible
+		return FlowCrossResult{
+			TakerGot:        zeroCrossAmount(takerPays),
+			TakerPaid:       zeroCrossAmount(takerGets),
+			TakerPaidNet:    zeroCrossAmount(takerGets),
+			Sandbox:         sandbox,
+			RemovableOffers: nil,
+			Result:          tx.TecPATH_DRY,
+		}
+	}
+
+	// Post-process strands for offer crossing:
+	// 1. Set quality limits on BookSteps (per-offer quality filtering)
+	// 2. Enable offer crossing mode on DirectSteps (ignores trust line limits/quality,
+	//    allows trust line creation during crossing)
+	// Reference: rippled uses DirectIOfferCrossingStep instead of DirectIPaymentStep
+	configureStrandsForOfferCrossing(strands, &takerQuality, parentCloseTime, fixReducedOffersV1, fixReducedOffersV2, fixRmSmallIncreasedQOffers)
+
+	// Execute the flow
+	// Reference: rippled flowCross passes partialPayment=!(txFlags & tfFillOrKill)
+	// For now, always allow partial (FoK is handled by caller)
+	result := Flow(sandbox, strands, deliver, true, &takerQuality, &sendMax, flowSortStrands)
 
 	// Apply the flow sandbox changes to our root sandbox
 	// Reference: rippled CreateOffer.cpp line 711: psbFlow.apply(sb)
@@ -154,38 +201,90 @@ func FlowCross(
 		result.Sandbox.Apply(sandbox)
 	}
 
+	// Calculate GROSS and NET amounts for the taker's payment
 	// result.In from Flow is the GROSS amount consumed from the taker
 	// (what was debited from their balance, including transfer fees)
-	// We need to calculate NET (what was delivered to matching offers)
-	// NET = GROSS × QualityOne / transferRate
+	// NET = divideRound(GROSS, rate, issue, true)
+	// Reference: rippled CreateOffer.cpp line 458-463:
+	//   nonGatewayAmountIn = divideRound(result.actualAmountIn, gatewayXferRate,
+	//       takerAmount.in.issue(), true)
 	takerPaidGross := result.In
-	takerPaidNet := result.In // Start with GROSS, will convert to NET if needed
+	takerPaidNet := result.In
 
 	if !takerGets.IsNative() {
 		issuerID, err := sle.DecodeAccountID(takerGets.Issuer)
 		if err == nil && takerAccount != issuerID {
 			transferRate := GetTransferRate(view, issuerID)
 			if transferRate != QualityOne && transferRate > 0 {
-				// NET = GROSS * QualityOne / transferRate
-				// This is the amount that was delivered to matching offers (after transfer fee)
-				takerPaidNet = MulRatio(result.In, QualityOne, transferRate, false)
+				rateAmt := rateAsAmount(transferRate)
+				netResult := sle.DivRound(result.In.IOU, rateAmt, takerGets.Currency, takerGets.Issuer, true)
+				takerPaidNet = NewIOUEitherAmount(netResult)
 			}
 		}
 	}
 
-	// TakerPaid is the GROSS amount the taker spent (debited from their balance, including transfer fees)
-	// Use GROSS to check if offer is fully consumed: GROSS >= originalTakerGets
-	// TakerPaidNet is the NET amount delivered to matching offers (after transfer fees)
-	// Use NET to calculate remaining offer: remaining = originalTakerGets - NET
-	// Reference: rippled CreateOffer.cpp - remaining calculation uses delivered amount
 	return FlowCrossResult{
-		TakerGot:        result.Out,       // What taker received (XRP)
-		TakerPaid:       takerPaidGross,   // What taker spent (GROSS, including transfer fee)
-		TakerPaidNet:    takerPaidNet,     // What was delivered to matching offers (NET)
-		Sandbox:         sandbox,          // Return the root sandbox, not the child
+		TakerGot:        result.Out,
+		TakerPaid:       takerPaidGross,
+		TakerPaidNet:    takerPaidNet,
+		Sandbox:         sandbox,
 		RemovableOffers: result.RemovableOffers,
 		Result:          result.Result,
 	}
+}
+
+// configureStrandsForOfferCrossing sets up strands for offer crossing by:
+// 1. Setting quality limits on BookSteps in DIRECT strands (single BookStep)
+// 2. Enabling offer crossing mode on DirectSteps (ignores trust line limits/quality,
+//    allows trust line creation during crossing)
+//
+// Quality limits are NOT set on individual BookSteps in BRIDGED strands (2 BookSteps)
+// because the taker's quality is computed from the overall offer (e.g., EUR/USD), but
+// individual legs have different dimensions (EUR/XRP and XRP/USD). The combined quality
+// of the bridge is what matters, not individual leg quality.
+//
+// Reference: rippled uses DirectIOfferCrossingStep + quality threshold on BookStep
+func configureStrandsForOfferCrossing(strands []Strand, qualityLimit *Quality, parentCloseTime uint32, fixReducedOffersV1 bool, fixReducedOffersV2 bool, fixRmSmallIncreasedQOffers bool) {
+	for _, strand := range strands {
+		// Count BookSteps in the strand
+		bookStepCount := 0
+		for _, step := range strand {
+			if _, ok := step.(*BookStep); ok {
+				bookStepCount++
+			}
+		}
+
+		for _, step := range strand {
+			if bookStep, ok := step.(*BookStep); ok {
+				// Only set per-BookStep quality limits for direct strands (1 BookStep).
+				// Bridge strands (2 BookSteps) have incompatible quality dimensions.
+				if bookStepCount == 1 {
+					bookStep.qualityLimit = qualityLimit
+				}
+				bookStep.parentCloseTime = parentCloseTime
+				bookStep.fixReducedOffersV1 = fixReducedOffersV1
+				bookStep.fixReducedOffersV2 = fixReducedOffersV2
+				bookStep.fixRmSmallIncreasedQOffers = fixRmSmallIncreasedQOffers
+				// In offer crossing, the offer owner pays the transfer fee (not the path sender).
+				// This makes DebtDirection() return Issues instead of Redeems, preventing the
+				// following DirectStepI from incorrectly deducting the transfer rate from the
+				// recipient's amount.
+				// Reference: rippled BookOfferCrossingStep: ownerPaysTransferFee_ = true
+				bookStep.ownerPaysTransferFee = true
+			}
+			if directStep, ok := step.(*DirectStepI); ok {
+				directStep.offerCrossing = true
+			}
+		}
+	}
+}
+
+// zeroCrossAmount returns a zero EitherAmount matching the type of the given amount
+func zeroCrossAmount(amt tx.Amount) EitherAmount {
+	if amt.IsNative() {
+		return ZeroXRPEitherAmount()
+	}
+	return ZeroIOUEitherAmount(amt.Currency, amt.Issuer)
 }
 
 // GetTransferRate returns the transfer rate for an issuer account.
@@ -224,4 +323,13 @@ func GetTransferRateByAddress(view tx.LedgerView, issuerAddress string) uint32 {
 	}
 
 	return GetTransferRate(view, issuerID)
+}
+
+// rateAsAmount converts a uint32 transfer rate to an Amount, matching rippled's
+// detail::as_amount(Rate) which creates STAmount(noIssue(), rate.value, -9, false).
+// For example, Rate{1005000000} becomes an Amount with mantissa=1005000000, exponent=-9,
+// which normalizes to mantissa=1005000000000000, exponent=-15 (representing 1.005).
+// Reference: rippled Rate2.cpp detail::as_amount()
+func rateAsAmount(rate uint32) tx.Amount {
+	return sle.NewIssuedAmountFromValue(int64(rate), -9, "", "")
 }

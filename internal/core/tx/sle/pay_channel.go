@@ -11,18 +11,21 @@ import (
 
 // PayChannelData represents a PayChannel ledger entry
 type PayChannelData struct {
-	Account        [20]byte
-	DestinationID  [20]byte
-	Amount         uint64
-	Balance        uint64
-	SettleDelay    uint32
-	PublicKey      string
-	Expiration     uint32
-	CancelAfter    uint32
-	SourceTag      uint32
-	DestinationTag uint32
-	HasSourceTag   bool
-	HasDestTag     bool
+	Account         [20]byte
+	DestinationID   [20]byte
+	Amount          uint64
+	Balance         uint64
+	SettleDelay     uint32
+	PublicKey       string
+	Expiration      uint32
+	CancelAfter     uint32
+	SourceTag       uint32
+	DestinationTag  uint32
+	HasSourceTag    bool
+	HasDestTag      bool
+	OwnerNode       uint64
+	DestinationNode uint64
+	HasDestNode     bool
 }
 
 // SerializePayChannelFromData serializes a PayChannel ledger entry from data
@@ -44,8 +47,27 @@ func SerializePayChannelFromData(channel *PayChannelData) ([]byte, error) {
 		"Amount":          fmt.Sprintf("%d", channel.Amount),
 		"Balance":         fmt.Sprintf("%d", channel.Balance),
 		"SettleDelay":     channel.SettleDelay,
-		"OwnerNode":       "0",
+		"OwnerNode":       fmt.Sprintf("%x", channel.OwnerNode),
 		"Flags":           uint32(0),
+	}
+
+	if channel.PublicKey != "" {
+		jsonObj["PublicKey"] = channel.PublicKey
+	}
+	if channel.CancelAfter > 0 {
+		jsonObj["CancelAfter"] = channel.CancelAfter
+	}
+	if channel.Expiration > 0 {
+		jsonObj["Expiration"] = channel.Expiration
+	}
+	if channel.HasSourceTag {
+		jsonObj["SourceTag"] = channel.SourceTag
+	}
+	if channel.HasDestTag {
+		jsonObj["DestinationTag"] = channel.DestinationTag
+	}
+	if channel.HasDestNode {
+		jsonObj["DestinationNode"] = fmt.Sprintf("%x", channel.DestinationNode)
 	}
 
 	hexStr, err := binarycodec.Encode(jsonObj)
@@ -102,11 +124,11 @@ func ParsePayChannel(data []byte) (*PayChannelData, error) {
 			value := binary.BigEndian.Uint32(data[offset : offset+4])
 			offset += 4
 			switch fieldCode {
-			case 39: // SettleDelay
+			case 39: // SettleDelay (nth=39)
 				channel.SettleDelay = value
-			case 37: // CancelAfter
+			case 36: // CancelAfter (nth=36)
 				channel.CancelAfter = value
-			case 10: // Expiration
+			case 10: // Expiration (nth=10)
 				channel.Expiration = value
 			case 3: // SourceTag
 				channel.SourceTag = value
@@ -120,7 +142,15 @@ func ParsePayChannel(data []byte) (*PayChannelData, error) {
 			if offset+8 > len(data) {
 				return channel, nil
 			}
+			value := binary.BigEndian.Uint64(data[offset : offset+8])
 			offset += 8
+			switch fieldCode {
+			case 4: // OwnerNode (nth=4)
+				channel.OwnerNode = value
+			case 9: // DestinationNode (nth=9)
+				channel.DestinationNode = value
+				channel.HasDestNode = true
+			}
 
 		case FieldTypeAmount:
 			if offset+8 > len(data) {
@@ -128,9 +158,9 @@ func ParsePayChannel(data []byte) (*PayChannelData, error) {
 			}
 			rawAmount := binary.BigEndian.Uint64(data[offset : offset+8])
 			amount := rawAmount & 0x3FFFFFFFFFFFFFFF
-			if fieldCode == 1 { // Amount
+			if fieldCode == 1 { // Amount (nth=1)
 				channel.Amount = amount
-			} else if fieldCode == 5 { // Balance
+			} else if fieldCode == 2 { // Balance (nth=2)
 				channel.Balance = amount
 			}
 			offset += 8
@@ -166,7 +196,7 @@ func ParsePayChannel(data []byte) (*PayChannelData, error) {
 			if offset+length > len(data) {
 				return channel, nil
 			}
-			if fieldCode == 28 { // PublicKey
+			if fieldCode == 1 { // PublicKey (Blob, nth=1)
 				channel.PublicKey = hex.EncodeToString(data[offset : offset+length])
 			}
 			offset += length

@@ -3,11 +3,12 @@ package nftoken
 import (
 	"encoding/hex"
 	"errors"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/amendment"
+	"github.com/LeJamon/goXRPLd/internal/core/ledger/entry"
+	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )
 
 func init() {
@@ -87,7 +88,6 @@ func (co *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	accountID := ctx.AccountID
 
 	for _, offerIDHex := range co.NFTokenOffers {
-		// Parse offer ID
 		offerIDBytes, err := hex.DecodeString(offerIDHex)
 		if err != nil || len(offerIDBytes) != 32 {
 			continue
@@ -95,76 +95,52 @@ func (co *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		var offerKeyBytes [32]byte
 		copy(offerKeyBytes[:], offerIDBytes)
-		offerKey := keylet.Keylet{Key: offerKeyBytes}
+		offerKey := keylet.Keylet{Type: entry.TypeNFTokenOffer, Key: offerKeyBytes}
 
-		// Read the offer
 		offerData, err := ctx.View.Read(offerKey)
-		if err != nil {
-			// Offer doesn't exist - already consumed, skip silently
+		if err != nil || offerData == nil {
 			continue
 		}
 
-		// Parse the offer
 		offer, err := sle.ParseNFTokenOffer(offerData)
 		if err != nil {
 			continue
 		}
 
 		// Check authorization to cancel
-		// Reference: rippled NFTokenCancelOffer.cpp preclaim
 		isExpired := offer.Expiration != 0 && offer.Expiration <= ctx.Config.ParentCloseTime
 		isOwner := offer.Owner == accountID
 		isDestination := offer.HasDestination && offer.Destination == accountID
 
-		// Must be owner, destination, or expired
 		if !isOwner && !isDestination && !isExpired {
 			return tx.TecNO_PERMISSION
 		}
 
-		// Get the offer owner's account to update their owner count and potentially refund
-		var ownerAccount *sle.AccountRoot
-		var ownerKey keylet.Keylet
+		// NFToken buy offers do NOT escrow XRP — no refund needed on cancellation.
+		// Reference: rippled NFTokenUtils.cpp deleteTokenOffer — no balance adjustment
 
+		// Decrease owner count
 		if offer.Owner == accountID {
-			ownerAccount = ctx.Account
+			if ctx.Account.OwnerCount > 0 {
+				ctx.Account.OwnerCount--
+			}
 		} else {
-			ownerKey = keylet.Account(offer.Owner)
+			ownerKey := keylet.Account(offer.Owner)
 			ownerData, err := ctx.View.Read(ownerKey)
-			if err != nil {
-				return tx.TefINTERNAL
-			}
-			ownerAccount, err = sle.ParseAccountRoot(ownerData)
-			if err != nil {
-				return tx.TefINTERNAL
-			}
-		}
-
-		// If this was a buy offer, refund the escrowed amount to the owner
-		if offer.Flags&lsfSellNFToken == 0 {
-			// Buy offer - refund escrowed XRP to owner
-			ownerAccount.Balance += offer.Amount
-		}
-
-		// Decrease owner count for the deleted offer
-		if ownerAccount.OwnerCount > 0 {
-			ownerAccount.OwnerCount--
-		}
-
-		// Update owner account if different from transaction sender - tracked automatically
-		if offer.Owner != accountID {
-			ownerUpdatedData, err := sle.SerializeAccountRoot(ownerAccount)
-			if err != nil {
-				return tx.TefINTERNAL
-			}
-			if err := ctx.View.Update(ownerKey, ownerUpdatedData); err != nil {
-				return tx.TefINTERNAL
+			if err == nil && ownerData != nil {
+				ownerAccount, err := sle.ParseAccountRoot(ownerData)
+				if err == nil && ownerAccount.OwnerCount > 0 {
+					ownerAccount.OwnerCount--
+					ownerUpdated, _ := sle.SerializeAccountRoot(ownerAccount)
+					if ownerUpdated != nil {
+						ctx.View.Update(ownerKey, ownerUpdated)
+					}
+				}
 			}
 		}
 
-		// Delete the offer - tracked automatically by ApplyStateTable
-		if err := ctx.View.Erase(offerKey); err != nil {
-			return tx.TefBAD_LEDGER
-		}
+		// Delete the offer with proper directory cleanup
+		deleteTokenOffer(ctx.View, offerKey)
 	}
 
 	return tx.TesSUCCESS

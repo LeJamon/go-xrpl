@@ -3,11 +3,11 @@ package nftoken
 import (
 	"encoding/hex"
 	"errors"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/amendment"
+	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )
 
 func init() {
@@ -27,6 +27,9 @@ type NFTokenBurn struct {
 	Owner string `json:"Owner,omitempty" xrpl:"Owner,omitempty"`
 }
 
+// tfBurnNFToken is the only valid flag for NFTokenBurn (0x00000001)
+const tfBurnNFToken uint32 = 0x00000001
+
 // NewNFTokenBurn creates a new NFTokenBurn transaction
 func NewNFTokenBurn(account, nftokenID string) *NFTokenBurn {
 	return &NFTokenBurn{
@@ -41,13 +44,24 @@ func (n *NFTokenBurn) TxType() tx.Type {
 }
 
 // Validate validates the NFTokenBurn transaction
+// Reference: rippled NFTokenBurn.cpp preflight
 func (n *NFTokenBurn) Validate() error {
 	if err := n.BaseTx.Validate(); err != nil {
 		return err
 	}
 
+	// Check for invalid flags
+	if n.GetFlags()&^tfBurnNFToken != 0 {
+		return errors.New("temINVALID_FLAG: invalid NFTokenBurn flags")
+	}
+
 	if n.NFTokenID == "" {
-		return errors.New("NFTokenID is required")
+		return errors.New("temMALFORMED: NFTokenID is required")
+	}
+
+	// Owner must not be the same as Account
+	if n.Owner != "" && n.Owner == n.Account {
+		return errors.New("temMALFORMED: Owner cannot be the same as Account")
 	}
 
 	return nil
@@ -88,48 +102,33 @@ func (b *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 		ownerID = accountID
 	}
 
-	// Find the NFToken page
-	pageKey := keylet.NFTokenPage(ownerID, tokenID)
-
-	pageData, err := ctx.View.Read(pageKey)
-	if err != nil {
+	// Find the NFToken using proper page traversal
+	if _, _, _, found := findToken(ctx.View, ownerID, tokenID); !found {
 		return tx.TecNO_ENTRY
 	}
 
-	// Parse the page
-	page, err := sle.ParseNFTokenPage(pageData)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
-	// Find the token
-	found := false
-	for _, token := range page.NFTokens {
-		if token.NFTokenID == tokenID {
-			found = true
-			break
+	// Check if there are too many offers (preclaim check)
+	// Reference: rippled NFTokenBurn.cpp preclaim — notTooManyOffers
+	// Only applies when fixNonFungibleTokensV1_2 is NOT enabled
+	fixV1_2 := ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2)
+	if !fixV1_2 {
+		if r := notTooManyOffers(ctx.View, tokenID); r != tx.TesSUCCESS {
+			return r
 		}
 	}
 
-	if !found {
-		return tx.TecNO_ENTRY
-	}
-
 	// Verify burn authorization
-	// Owner can always burn, issuer can burn if flagBurnable is set
 	if ownerID != accountID {
 		nftFlags := getNFTFlagsFromID(tokenID)
 		if nftFlags&nftFlagBurnable == 0 {
 			return tx.TecNO_PERMISSION
 		}
 
-		// Check if the account is the issuer or an authorized minter
 		issuerID := getNFTIssuer(tokenID)
 		if issuerID != accountID {
-			// Not the issuer, check if authorized minter
 			issuerKey := keylet.Account(issuerID)
 			issuerData, err := ctx.View.Read(issuerKey)
-			if err != nil {
+			if err != nil || issuerData == nil {
 				return tx.TecNO_PERMISSION
 			}
 			issuerAccount, err := sle.ParseAccountRoot(issuerData)
@@ -142,55 +141,29 @@ func (b *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Find and remove the token
-	for i, token := range page.NFTokens {
-		if token.NFTokenID == tokenID {
-			page.NFTokens = append(page.NFTokens[:i], page.NFTokens[i+1:]...)
-			break
-		}
+	// Remove the token using proper page management (handles merging)
+	fixPageLinks := ctx.Rules().Enabled(amendment.FeatureFixNFTokenPageLinks)
+	result, pagesRemoved := removeToken(ctx.View, ownerID, tokenID, fixPageLinks)
+	if result != tx.TesSUCCESS {
+		return result
 	}
 
-	// Get owner account for OwnerCount update (if different from transaction account)
-	var ownerAccount *sle.AccountRoot
-	var ownerKey keylet.Keylet
+	// Update owner count for pages removed
 	if ownerID != accountID {
-		ownerKey = keylet.Account(ownerID)
+		ownerKey := keylet.Account(ownerID)
 		ownerData, err := ctx.View.Read(ownerKey)
+		if err != nil || ownerData == nil {
+			return tx.TefINTERNAL
+		}
+		ownerAccount, err := sle.ParseAccountRoot(ownerData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-		ownerAccount, err = sle.ParseAccountRoot(ownerData)
-		if err != nil {
-			return tx.TefINTERNAL
+		for i := 0; i < pagesRemoved; i++ {
+			if ownerAccount.OwnerCount > 0 {
+				ownerAccount.OwnerCount--
+			}
 		}
-	} else {
-		ownerAccount = ctx.Account
-	}
-
-	// Update or delete the page - changes tracked automatically by ApplyStateTable
-	if len(page.NFTokens) == 0 {
-		// Delete empty page
-		if err := ctx.View.Erase(pageKey); err != nil {
-			return tx.TefINTERNAL
-		}
-
-		if ownerAccount.OwnerCount > 0 {
-			ownerAccount.OwnerCount--
-		}
-	} else {
-		// Update page
-		updatedPageData, err := serializeNFTokenPage(page)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-
-		if err := ctx.View.Update(pageKey, updatedPageData); err != nil {
-			return tx.TefINTERNAL
-		}
-	}
-
-	// Update owner account if different from transaction sender
-	if ownerID != accountID {
 		ownerUpdatedData, err := sle.SerializeAccountRoot(ownerAccount)
 		if err != nil {
 			return tx.TefINTERNAL
@@ -198,28 +171,59 @@ func (b *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err := ctx.View.Update(ownerKey, ownerUpdatedData); err != nil {
 			return tx.TefINTERNAL
 		}
-	}
-
-	// Update BurnedNFTokens on the issuer - changes tracked automatically
-	issuerID := getNFTIssuer(tokenID)
-	issuerKey := keylet.Account(issuerID)
-	issuerData, err := ctx.View.Read(issuerKey)
-	if err == nil {
-		issuerAccount, err := sle.ParseAccountRoot(issuerData)
-		if err == nil {
-			issuerAccount.BurnedNFTokens++
-			issuerUpdatedData, err := sle.SerializeAccountRoot(issuerAccount)
-			if err == nil {
-				ctx.View.Update(issuerKey, issuerUpdatedData)
+	} else {
+		for i := 0; i < pagesRemoved; i++ {
+			if ctx.Account.OwnerCount > 0 {
+				ctx.Account.OwnerCount--
 			}
 		}
 	}
 
-	// Delete associated buy and sell offers (up to maxDeletableTokenOfferEntries)
+	// Update BurnedNFTokens on the issuer
+	// When issuer == sender, modify ctx.Account directly (engine writes it back).
+	// Otherwise, read/update via view.
+	issuerID := getNFTIssuer(tokenID)
+	if issuerID == ctx.AccountID {
+		ctx.Account.BurnedNFTokens++
+	} else {
+		issuerKey := keylet.Account(issuerID)
+		issuerData, err := ctx.View.Read(issuerKey)
+		if err == nil {
+			issuerAccount, err := sle.ParseAccountRoot(issuerData)
+			if err == nil {
+				issuerAccount.BurnedNFTokens++
+				issuerUpdatedData, err := sle.SerializeAccountRoot(issuerAccount)
+				if err == nil {
+					ctx.View.Update(issuerKey, issuerUpdatedData)
+				}
+			}
+		}
+	}
+
+	// Delete associated buy and sell offers
 	// Reference: rippled NFTokenBurn.cpp:108-139
-	deletedCount := deleteNFTokenOffers(tokenID, true, maxDeletableTokenOfferEntries, ctx.View)
-	if deletedCount < maxDeletableTokenOfferEntries {
-		deleteNFTokenOffers(tokenID, false, maxDeletableTokenOfferEntries-deletedCount, ctx.View)
+	selfDeleted := 0
+	if !fixV1_2 {
+		// Without fixNonFungibleTokensV1_2: delete ALL offers (no limit)
+		// notTooManyOffers was already checked above
+		r1 := deleteNFTokenOffers(tokenID, true, maxInt, ctx.View, ctx.AccountID)
+		r2 := deleteNFTokenOffers(tokenID, false, maxInt, ctx.View, ctx.AccountID)
+		selfDeleted = r1.SelfDeleted + r2.SelfDeleted
+	} else {
+		// With fixNonFungibleTokensV1_2: delete up to 500 offers
+		// Prioritize sell offers (they're typically fewer)
+		r1 := deleteNFTokenOffers(tokenID, true, maxDeletableTokenOfferEntries, ctx.View, ctx.AccountID)
+		remaining := maxDeletableTokenOfferEntries - r1.TotalDeleted
+		r2 := deleteNFTokenOffers(tokenID, false, remaining, ctx.View, ctx.AccountID)
+		selfDeleted = r1.SelfDeleted + r2.SelfDeleted
+	}
+
+	// Adjust ctx.Account for offers owned by the burner
+	// (view changes to ctx.Account are overwritten by the engine)
+	for i := 0; i < selfDeleted; i++ {
+		if ctx.Account.OwnerCount > 0 {
+			ctx.Account.OwnerCount--
+		}
 	}
 
 	return tx.TesSUCCESS

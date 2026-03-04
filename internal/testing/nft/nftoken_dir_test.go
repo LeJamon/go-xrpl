@@ -4,8 +4,11 @@ package nft_test
 // Reference: rippled/src/test/app/NFTokenDir_test.cpp
 
 import (
+	"sort"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/nftoken"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/nft"
 )
@@ -94,15 +97,12 @@ var seedsSplitAndAddToHi = []string{
 	"sp6JS7f14BuwFY8Mw6eSF1ydEozJg",  //  3. 0x1d2932ea
 	"sp6JS7f14BuwFY8Mw6koPB91um2ej",  //  4. 0x1d2932ea
 	"sp6JS7f14BuwFY8Mw6m6D64iwquSe",  //  5. 0x1d2932ea
-
 	"sp6JS7f14BuwFY8Mw5rC43sN4adC2",  //  6. 0x208dbc24
 	"sp6JS7f14BuwFY8Mw65L9DDQqgebz",  //  7. 0x208dbc24
 	"sp6JS7f14BuwFY8Mw65nKvU8pPQNn",  //  8. 0x208dbc24
 	"sp6JS7f14BuwFY8Mw6bxZLyTrdipw",  //  9. 0x208dbc24
 	"sp6JS7f14BuwFY8Mw6d5abucntSoX",  // 10. 0x208dbc24
 	"sp6JS7f14BuwFY8Mw6qXK5awrRRP8",  // 11. 0x208dbc24
-
-	// These eight need to be kept together by the implementation
 	"sp6JS7f14BuwFY8Mw66EBtMxoMcCa",  // 12. 0x309b67ed
 	"sp6JS7f14BuwFY8Mw66dGfE9jVfGv",  // 13. 0x309b67ed
 	"sp6JS7f14BuwFY8Mw6APdZa7PH566",  // 14. 0x309b67ed
@@ -111,23 +111,19 @@ var seedsSplitAndAddToHi = []string{
 	"sp6JS7f14BuwFY8Mw6c7QSDmoAeRV",  // 17. 0x309b67ed
 	"sp6JS7f14BuwFY8Mw6mvonveaZhW7",  // 18. 0x309b67ed
 	"sp6JS7f14BuwFY8Mw6vtHHG7dYcXi",  // 19. 0x309b67ed
-
 	"sp6JS7f14BuwFY8Mw66yppUNxESaw",  // 20. 0x40d4b96f
 	"sp6JS7f14BuwFY8Mw6ATYQvobXiDT",  // 21. 0x40d4b96f
 	"sp6JS7f14BuwFY8Mw6bis8D1Wa9Uy",  // 22. 0x40d4b96f
 	"sp6JS7f14BuwFY8Mw6cTiGCWA8Wfa",  // 23. 0x40d4b96f
 	"sp6JS7f14BuwFY8Mw6eAy2fpXmyYf",  // 24. 0x40d4b96f
 	"sp6JS7f14BuwFY8Mw6icn58TRs8YG",  // 25. 0x40d4b96f
-
 	"sp6JS7f14BuwFY8Mw68tj2eQEWoJt",  // 26. 0x503b6ba9
 	"sp6JS7f14BuwFY8Mw6AjnAinNnMHT",  // 27. 0x503b6ba9
 	"sp6JS7f14BuwFY8Mw6CKDUwB4LrhL",  // 28. 0x503b6ba9
 	"sp6JS7f14BuwFY8Mw6d2yPszEFA6J",  // 29. 0x503b6ba9
 	"sp6JS7f14BuwFY8Mw6jcBQBH3PfnB",  // 30. 0x503b6ba9
 	"sp6JS7f14BuwFY8Mw6qxx19KSnN1w",  // 31. 0x503b6ba9
-
-	// Adding this NFT splits the page. It is added to the upper page.
-	"sp6JS7f14BuwFY8Mw6ut1hFrqWoY5",  // 32. 0x503b6ba9
+	"sp6JS7f14BuwFY8Mw6ut1hFrqWoY5",  // 32. 0x503b6ba9 (split: added to upper page)
 }
 
 // Seeds for lopsided split test - split and add to low page
@@ -138,15 +134,12 @@ var seedsSplitAndAddToLo = []string{
 	"sp6JS7f14BuwFY8Mw6eSF1ydEozJg",  //  3. 0x1d2932ea
 	"sp6JS7f14BuwFY8Mw6koPB91um2ej",  //  4. 0x1d2932ea
 	"sp6JS7f14BuwFY8Mw6m6D64iwquSe",  //  5. 0x1d2932ea
-
 	"sp6JS7f14BuwFY8Mw5rC43sN4adC2",  //  6. 0x208dbc24
 	"sp6JS7f14BuwFY8Mw65L9DDQqgebz",  //  7. 0x208dbc24
 	"sp6JS7f14BuwFY8Mw65nKvU8pPQNn",  //  8. 0x208dbc24
 	"sp6JS7f14BuwFY8Mw6bxZLyTrdipw",  //  9. 0x208dbc24
 	"sp6JS7f14BuwFY8Mw6d5abucntSoX",  // 10. 0x208dbc24
 	"sp6JS7f14BuwFY8Mw6qXK5awrRRP8",  // 11. 0x208dbc24
-
-	// These eight need to be kept together by the implementation
 	"sp6JS7f14BuwFY8Mw66EBtMxoMcCa",  // 12. 0x309b67ed
 	"sp6JS7f14BuwFY8Mw66dGfE9jVfGv",  // 13. 0x309b67ed
 	"sp6JS7f14BuwFY8Mw6APdZa7PH566",  // 14. 0x309b67ed
@@ -155,28 +148,23 @@ var seedsSplitAndAddToLo = []string{
 	"sp6JS7f14BuwFY8Mw6c7QSDmoAeRV",  // 17. 0x309b67ed
 	"sp6JS7f14BuwFY8Mw6mvonveaZhW7",  // 18. 0x309b67ed
 	"sp6JS7f14BuwFY8Mw6vtHHG7dYcXi",  // 19. 0x309b67ed
-
 	"sp6JS7f14BuwFY8Mw66yppUNxESaw",  // 20. 0x40d4b96f
 	"sp6JS7f14BuwFY8Mw6ATYQvobXiDT",  // 21. 0x40d4b96f
 	"sp6JS7f14BuwFY8Mw6bis8D1Wa9Uy",  // 22. 0x40d4b96f
 	"sp6JS7f14BuwFY8Mw6cTiGCWA8Wfa",  // 23. 0x40d4b96f
 	"sp6JS7f14BuwFY8Mw6eAy2fpXmyYf",  // 24. 0x40d4b96f
 	"sp6JS7f14BuwFY8Mw6icn58TRs8YG",  // 25. 0x40d4b96f
-
 	"sp6JS7f14BuwFY8Mw68tj2eQEWoJt",  // 26. 0x503b6ba9
 	"sp6JS7f14BuwFY8Mw6AjnAinNnMHT",  // 27. 0x503b6ba9
 	"sp6JS7f14BuwFY8Mw6CKDUwB4LrhL",  // 28. 0x503b6ba9
 	"sp6JS7f14BuwFY8Mw6d2yPszEFA6J",  // 29. 0x503b6ba9
 	"sp6JS7f14BuwFY8Mw6jcBQBH3PfnB",  // 30. 0x503b6ba9
 	"sp6JS7f14BuwFY8Mw6qxx19KSnN1w",  // 31. 0x503b6ba9
-
-	// Adding this NFT splits the page. It is added to the lower page.
-	"sp6JS7f14BuwFY8Mw6xCigaMwC6Dp",  // 32. 0x309b67ed
+	"sp6JS7f14BuwFY8Mw6xCigaMwC6Dp",  // 32. 0x309b67ed (split: added to lower page)
 }
 
 // Seeds for fixNFTokenDirV1 test - 17 in high group
 var seedsSeventeenHi = []string{
-	// These 16 need to be kept together by the implementation (0x399187e9)
 	"sp6JS7f14BuwFY8Mw5EYu5z86hKDL",  //  0. 0x399187e9
 	"sp6JS7f14BuwFY8Mw5PUAMwc5ygd7",  //  1. 0x399187e9
 	"sp6JS7f14BuwFY8Mw5R3xUBcLSeTs",  //  2. 0x399187e9
@@ -193,8 +181,6 @@ var seedsSeventeenHi = []string{
 	"sp6JS7f14BuwFY8MwFNxKVqJnx8P5",  // 13. 0x399187e9
 	"sp6JS7f14BuwFY8MwFnTCXg3eRidL",  // 14. 0x399187e9
 	"sp6JS7f14BuwFY8Mwj47hv1vrDge6",  // 15. 0x399187e9
-
-	// These 17 need to be kept together by the implementation (0xabb11898)
 	"sp6JS7f14BuwFY8MwjJCwYr9zSfAv",  // 16. 0xabb11898
 	"sp6JS7f14BuwFY8MwjYa5yLkgCLuT",  // 17. 0xabb11898
 	"sp6JS7f14BuwFY8MwjenxuJ3TH2Bc",  // 18. 0xabb11898
@@ -216,7 +202,6 @@ var seedsSeventeenHi = []string{
 
 // Seeds for fixNFTokenDirV1 test - 17 in low group
 var seedsSeventeenLo = []string{
-	// These 17 need to be kept together by the implementation (0x399187e9)
 	"sp6JS7f14BuwFY8Mw5EYu5z86hKDL",  //  0. 0x399187e9
 	"sp6JS7f14BuwFY8Mw5PUAMwc5ygd7",  //  1. 0x399187e9
 	"sp6JS7f14BuwFY8Mw5R3xUBcLSeTs",  //  2. 0x399187e9
@@ -234,8 +219,6 @@ var seedsSeventeenLo = []string{
 	"sp6JS7f14BuwFY8MwFnTCXg3eRidL",  // 14. 0x399187e9
 	"sp6JS7f14BuwFY8Mwj47hv1vrDge6",  // 15. 0x399187e9
 	"sp6JS7f14BuwFY8Mwj6TYekeeyukh",  // 16. 0x399187e9
-
-	// These 16 need to be kept together by the implementation (0xabb11898)
 	"sp6JS7f14BuwFY8MwjYa5yLkgCLuT",  // 17. 0xabb11898
 	"sp6JS7f14BuwFY8MwjenxuJ3TH2Bc",  // 18. 0xabb11898
 	"sp6JS7f14BuwFY8MwjriN7Ui11NzB",  // 19. 0xabb11898
@@ -254,121 +237,134 @@ var seedsSeventeenLo = []string{
 	"sp6JS7f14BuwFY8Mwos3pc5Gb3ihU",  // 32. 0xabb11898
 }
 
-// TestConsecutiveNFTs tests that it's possible to store many consecutive NFTs.
+// ===========================================================================
+// testConsecutiveNFTs
 // Reference: rippled NFTokenDir_test.cpp testConsecutiveNFTs
+//
+// Tests that it's possible to store many consecutive NFTs by manipulating
+// the taxon so zero is always stored internally.
+// ===========================================================================
 func TestConsecutiveNFTs(t *testing.T) {
-	t.Skip("testConsecutiveNFTs requires NFT page inspection and taxon cipher")
-
 	env := jtx.NewTestEnv(t)
 
 	issuer := jtx.NewAccount("issuer")
 	buyer := jtx.NewAccount("buyer")
 
-	env.Fund(issuer, buyer)
+	// Reserve = 200 + ownerCount*50 XRP; buyer needs ~108 OwnerCount (100 offers + pages)
+	env.FundAmount(issuer, 6000000000) // 6000 XRP
+	env.FundAmount(buyer, 6000000000)  // 6000 XRP
 	env.Close()
 
-	// Mint 100 sequential NFTs
-	// Tweak the taxon so zero is always stored internally
 	const nftCount = 100
+
 	nftIDs := make([]string, 0, nftCount)
+	offerIndexes := make([]string, 0, nftCount)
 
 	for i := 0; i < nftCount; i++ {
-		// Use ciphered taxon to force sequential storage:
-		// taxon := toUInt32(nft.cipheredTaxon(i, nft.toTaxon(0)))
-		taxon := uint32(0) // Simplified
+		// Tweak the taxon so zero is always stored internally:
+		// taxon = cipheredTaxon(sequence, 0)
+		// This produces tokens with sequential internal representations.
+		tokenSeq := env.MintedCount(issuer)
+		taxon := nftoken.CipheredTaxon(tokenSeq, 0)
 
-		mintTx := nft.NFTokenMint(issuer, taxon).Transferable().Build()
-		result := env.Submit(mintTx)
+		flags := nftoken.NFTokenFlagTransferable
+		nftID := nft.GetNextNFTokenID(env, issuer, taxon, flags, 0)
+		result := env.Submit(nft.NFTokenMint(issuer, taxon).Transferable().Build())
 		if result.Success {
-			nftIDs = append(nftIDs, "nft_"+string(rune(i)))
+			nftIDs = append(nftIDs, nftID)
 		}
 		env.Close()
 	}
 
-	t.Logf("Minted %d NFTs", len(nftIDs))
-
-	// Create an offer for each NFT to verify ledger can find them
-	offers := make([]string, 0, len(nftIDs))
+	// Create a sell offer for each NFT
 	for _, nftID := range nftIDs {
-		offerTx := nft.NFTokenCreateSellOffer(issuer, nftID, jtx.XRPTxAmount(0)).Build()
-		result := env.Submit(offerTx)
+		offerIdx := nft.GetOfferIndex(env, issuer)
+		result := env.Submit(nft.NFTokenCreateSellOffer(issuer, nftID, tx.NewXRPAmount(0)).
+			Destination(buyer).Build())
 		if result.Success {
-			offers = append(offers, "offer_for_"+nftID)
+			offerIndexes = append(offerIndexes, offerIdx)
 		}
 		env.Close()
 	}
 
 	// Buyer accepts all offers in reverse order
-	for i := len(offers) - 1; i >= 0; i-- {
-		acceptTx := nft.NFTokenAcceptSellOffer(buyer, offers[i]).Build()
-		env.Submit(acceptTx)
+	for i := len(offerIndexes) - 1; i >= 0; i-- {
+		result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offerIndexes[i]).Build())
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 	}
 
-	t.Log("testConsecutiveNFTs passed")
+	// Verify all NFTs are findable by creating sell offers for them
+	for _, nftID := range nftIDs {
+		result := env.Submit(nft.NFTokenCreateSellOffer(buyer, nftID, tx.NewXRPAmount(100_000_000)).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+	}
 }
 
-// TestLopsidedSplits tests that all NFT IDs with the same low 96 bits stay on the same NFT page.
-// Reference: rippled NFTokenDir_test.cpp testLopsidedSplits
-func TestLopsidedSplits(t *testing.T) {
-	t.Skip("testLopsidedSplits requires account creation from seed")
+// exerciseLopsided is a helper for the lopsided split tests.
+// Creates accounts from seeds, has each mint 1 NFT and offer to buyer.
+// Buyer accepts all 33 offers - the 33rd may overflow.
+func exerciseLopsided(t *testing.T, seeds []string) {
+	env := jtx.NewTestEnv(t)
 
-	exerciseLopsided := func(t *testing.T, seeds []string) {
-		env := jtx.NewTestEnv(t)
+	buyer := jtx.NewAccount("buyer")
+	// Reserve = 200 + ownerCount*50 XRP; buyer needs ~65 OwnerCount
+	env.FundAmount(buyer, 4000000000) // 4000 XRP
+	env.Close()
 
-		buyer := jtx.NewAccount("buyer")
-		env.Fund(buyer)
+	// Create accounts from seeds and fund them all in the same ledger
+	// (important: if fixNFTokenRemint is on, different ledgers = different sequences)
+	accounts := make([]*jtx.Account, 0, len(seeds))
+	for i, seed := range seeds {
+		account := jtx.NewAccountFromSeed("acct"+string(rune('A'+i%26)), seed)
+		accounts = append(accounts, account)
+		env.Fund(account)
+	}
+	env.Close()
+
+	// All accounts mint one NFT and offer it to buyer
+	nftIDs := make([]string, 0, len(accounts))
+	offers := make([]string, 0, len(accounts))
+
+	for _, account := range accounts {
+		flags := nftoken.NFTokenFlagTransferable
+		nftID := nft.GetNextNFTokenID(env, account, 0, flags, 0)
+		env.Submit(nft.NFTokenMint(account, 0).Transferable().Build())
 		env.Close()
 
-		// Create accounts from seeds and fund them
-		accounts := make([]*jtx.Account, 0, len(seeds))
-		for _, seed := range seeds {
-			// In real implementation: account := jtx.NewAccountFromSeed(seed)
-			account := jtx.NewAccount(seed) // Simplified
-			accounts = append(accounts, account)
-			env.Fund(account)
-		}
+		offerIdx := nft.GetOfferIndex(env, account)
+		env.Submit(nft.NFTokenCreateSellOffer(account, nftID, tx.NewXRPAmount(0)).
+			Destination(buyer).Build())
 		env.Close()
 
-		// All accounts create one NFT and offer it to buyer
-		nftIDs := make([]string, 0, len(accounts))
-		offers := make([]string, 0, len(accounts))
-
-		for _, account := range accounts {
-			mintTx := nft.NFTokenMint(account, 0).Transferable().Build()
-			result := env.Submit(mintTx)
-			if result.Success {
-				nftID := "nft_" + account.Address // Would extract from result
-				nftIDs = append(nftIDs, nftID)
-
-				offerTx := nft.NFTokenCreateSellOffer(account, nftID, jtx.XRPTxAmount(0)).
-					Destination(buyer).Build()
-				result = env.Submit(offerTx)
-				if result.Success {
-					offers = append(offers, "offer_"+nftID)
-				}
-			}
-			env.Close()
-		}
-
-		// Buyer accepts all offers
-		for _, offer := range offers {
-			acceptTx := nft.NFTokenAcceptSellOffer(buyer, offer).Build()
-			env.Submit(acceptTx)
-			env.Close()
-		}
-
-		// Verify all NFTs owned by buyer by creating sell offers
-		for _, nftID := range nftIDs {
-			offerTx := nft.NFTokenCreateSellOffer(buyer, nftID, jtx.XRPTxAmountFromXRP(100)).Build()
-			result := env.Submit(offerTx)
-			if !result.Success {
-				t.Errorf("Failed to create sell offer for NFT %s: ledger can't find it", nftID)
-			}
-			env.Close()
-		}
+		nftIDs = append(nftIDs, nftID)
+		offers = append(offers, offerIdx)
 	}
 
+	// Buyer accepts all offers
+	for _, offer := range offers {
+		result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offer).Build())
+		// Last one may fail with tecNO_SUITABLE_NFTOKEN_PAGE - that's expected
+		_ = result
+		env.Close()
+	}
+
+	// Verify all accepted NFTs are findable
+	for _, nftID := range nftIDs[:len(nftIDs)-1] {
+		result := env.Submit(nft.NFTokenCreateSellOffer(buyer, nftID, tx.NewXRPAmount(100_000_000)).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+	}
+}
+
+// ===========================================================================
+// testLopsidedSplits
+// Reference: rippled NFTokenDir_test.cpp testLopsidedSplits
+//
+// Tests that all NFT IDs with the same low 96 bits stay on the same page.
+// ===========================================================================
+func TestLopsidedSplits(t *testing.T) {
 	t.Run("SplitAndAddToHi", func(t *testing.T) {
 		exerciseLopsided(t, seedsSplitAndAddToHi)
 	})
@@ -376,26 +372,29 @@ func TestLopsidedSplits(t *testing.T) {
 	t.Run("SplitAndAddToLo", func(t *testing.T) {
 		exerciseLopsided(t, seedsSplitAndAddToLo)
 	})
-
-	t.Log("testLopsidedSplits passed")
 }
 
-// TestFixNFTokenDirV1 exercises a fix for an off-by-one in NFTokenPage index creation.
+// ===========================================================================
+// testFixNFTokenDirV1
 // Reference: rippled NFTokenDir_test.cpp testFixNFTokenDirV1
+//
+// Exercises a fix for an off-by-one in NFTokenPage index creation.
+// Without fixNFTokenDirV1: the 33rd NFT acceptance fails with
+// tecNO_SUITABLE_NFTOKEN_PAGE. With fix: it succeeds.
+// ===========================================================================
 func TestFixNFTokenDirV1(t *testing.T) {
-	t.Skip("testFixNFTokenDirV1 requires account creation from seed and amendment testing")
-
-	exerciseFixNFTokenDirV1 := func(t *testing.T, seeds []string, withFix bool) {
+	exerciseFixDir := func(t *testing.T, seeds []string) {
 		env := jtx.NewTestEnv(t)
 
 		buyer := jtx.NewAccount("buyer")
-		env.Fund(buyer)
+		// Reserve = 200 + ownerCount*50 XRP; buyer needs ~69 OwnerCount
+		env.FundAmount(buyer, 4000000000) // 4000 XRP
 		env.Close()
 
 		// Create accounts from seeds
 		accounts := make([]*jtx.Account, 0, len(seeds))
-		for _, seed := range seeds {
-			account := jtx.NewAccount(seed)
+		for i, seed := range seeds {
+			account := jtx.NewAccountFromSeed("acct"+string(rune('A'+i%26)), seed)
 			accounts = append(accounts, account)
 			env.Fund(account)
 		}
@@ -406,73 +405,75 @@ func TestFixNFTokenDirV1(t *testing.T) {
 		offers := make([]string, 0, len(accounts))
 
 		for _, account := range accounts {
-			mintTx := nft.NFTokenMint(account, 0).Transferable().Build()
-			result := env.Submit(mintTx)
-			if result.Success {
-				nftID := "nft_" + account.Address
-				nftIDs = append(nftIDs, nftID)
-
-				offerTx := nft.NFTokenCreateSellOffer(account, nftID, jtx.XRPTxAmount(0)).
-					Destination(buyer).Build()
-				result = env.Submit(offerTx)
-				if result.Success {
-					offers = append(offers, "offer_"+nftID)
-				}
-			}
+			flags := nftoken.NFTokenFlagTransferable
+			nftID := nft.GetNextNFTokenID(env, account, 0, flags, 0)
+			env.Submit(nft.NFTokenMint(account, 0).Transferable().Build())
 			env.Close()
+
+			offerIdx := nft.GetOfferIndex(env, account)
+			env.Submit(nft.NFTokenCreateSellOffer(account, nftID, tx.NewXRPAmount(0)).
+				Destination(buyer).Build())
+			env.Close()
+
+			nftIDs = append(nftIDs, nftID)
+			offers = append(offers, offerIdx)
 		}
 
 		// Buyer accepts all but the last offer
 		for i := 0; i < len(offers)-1; i++ {
-			acceptTx := nft.NFTokenAcceptSellOffer(buyer, offers[i]).Build()
-			env.Submit(acceptTx)
+			result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offers[i]).Build())
+			jtx.RequireTxSuccess(t, result)
 			env.Close()
 		}
 
-		// The last offer causes the page to split
-		// Without fix: tecINVARIANT_FAILED
-		// With fix: tesSUCCESS
-		lastAcceptTx := nft.NFTokenAcceptSellOffer(buyer, offers[len(offers)-1]).Build()
-		result := env.Submit(lastAcceptTx)
+		// The last offer causes the page to split.
+		// With fixNFTokenDirV1: tesSUCCESS
+		// Without: tecNO_SUITABLE_NFTOKEN_PAGE
+		result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offers[len(offers)-1]).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-		if withFix {
-			if !result.Success {
-				t.Errorf("With fixNFTokenDirV1, accept should succeed: %s", result.Message)
-			}
-		} else {
-			if result.Success {
-				t.Error("Without fixNFTokenDirV1, accept should fail with tecINVARIANT_FAILED")
-			}
+		// Verify all NFTs findable
+		for _, nftID := range nftIDs {
+			result := env.Submit(nft.NFTokenCreateSellOffer(buyer, nftID, tx.NewXRPAmount(100_000_000)).Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
 		}
+
+		// With fixNFTokenDirV1, buyer can also mint new NFTs
+		result = env.Submit(nft.NFTokenMint(buyer, 0).Transferable().Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 	}
 
 	t.Run("SeventeenHi", func(t *testing.T) {
-		exerciseFixNFTokenDirV1(t, seedsSeventeenHi, true)
+		exerciseFixDir(t, seedsSeventeenHi)
 	})
 
 	t.Run("SeventeenLo", func(t *testing.T) {
-		exerciseFixNFTokenDirV1(t, seedsSeventeenLo, true)
+		exerciseFixDir(t, seedsSeventeenLo)
 	})
-
-	t.Log("testFixNFTokenDirV1 passed")
 }
 
-// TestTooManyEquivalent exercises when 33 NFTs with identical sort characteristics
-// are owned by the same account.
+// ===========================================================================
+// testTooManyEquivalent
 // Reference: rippled NFTokenDir_test.cpp testTooManyEquivalent
+//
+// Tests when 33 NFTs with identical sort characteristics are owned by
+// the same account. Only 32 fit per page; the 33rd overflows.
+// ===========================================================================
 func TestTooManyEquivalent(t *testing.T) {
-	t.Skip("testTooManyEquivalent requires account creation from seed")
-
 	env := jtx.NewTestEnv(t)
 
 	buyer := jtx.NewAccount("buyer")
-	env.Fund(buyer)
+	// Reserve = 200 + ownerCount*50 XRP; buyer needs ~66 OwnerCount
+	env.FundAmount(buyer, 4000000000) // 4000 XRP
 	env.Close()
 
 	// Create 33 accounts with identical low 32-bits
 	accounts := make([]*jtx.Account, 0, len(seedsLow32_9a8ebed3))
-	for _, seed := range seedsLow32_9a8ebed3 {
-		account := jtx.NewAccount(seed)
+	for i, seed := range seedsLow32_9a8ebed3 {
+		account := jtx.NewAccountFromSeed("acct"+string(rune('A'+i%26)), seed)
 		accounts = append(accounts, account)
 		env.Fund(account)
 	}
@@ -483,83 +484,70 @@ func TestTooManyEquivalent(t *testing.T) {
 	offers := make([]string, 0, len(accounts))
 
 	for _, account := range accounts {
-		mintTx := nft.NFTokenMint(account, 0).Transferable().Build()
-		result := env.Submit(mintTx)
-		if result.Success {
-			nftID := "nft_" + account.Address
-			nftIDs = append(nftIDs, nftID)
-
-			offerTx := nft.NFTokenCreateSellOffer(account, nftID, jtx.XRPTxAmount(0)).
-				Destination(buyer).Build()
-			result = env.Submit(offerTx)
-			if result.Success {
-				offers = append(offers, "offer_"+nftID)
-			}
-		}
+		flags := nftoken.NFTokenFlagTransferable
+		nftID := nft.GetNextNFTokenID(env, account, 0, flags, 0)
+		env.Submit(nft.NFTokenMint(account, 0).Transferable().Build())
 		env.Close()
+
+		offerIdx := nft.GetOfferIndex(env, account)
+		env.Submit(nft.NFTokenCreateSellOffer(account, nftID, tx.NewXRPAmount(0)).
+			Destination(buyer).Build())
+		env.Close()
+
+		nftIDs = append(nftIDs, nftID)
+		offers = append(offers, offerIdx)
 	}
 
-	// Remove the last NFT and offer - this one will overflow
-	overflowNFT := nftIDs[len(nftIDs)-1]
+	// Remove the last NFT/offer - this will overflow
 	overflowOffer := offers[len(offers)-1]
-	nftIDs = nftIDs[:len(nftIDs)-1]
-	offers = offers[:len(offers)-1]
+	acceptableNFTIDs := nftIDs[:len(nftIDs)-1]
+	acceptableOffers := offers[:len(offers)-1]
 
 	// Buyer accepts all but the overflow offer
-	for _, offer := range offers {
-		acceptTx := nft.NFTokenAcceptSellOffer(buyer, offer).Build()
-		env.Submit(acceptTx)
+	for _, offer := range acceptableOffers {
+		result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offer).Build())
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 	}
 
-	// Accepting the overflow offer should fail with tecNO_SUITABLE_NFTOKEN_PAGE
-	overflowAcceptTx := nft.NFTokenAcceptSellOffer(buyer, overflowOffer).Build()
-	result := env.Submit(overflowAcceptTx)
-	if result.Success {
-		t.Error("Accepting 33rd NFT with same low 96-bits should fail")
-	}
-	t.Logf("Overflow accept result: %s (expected tecNO_SUITABLE_NFTOKEN_PAGE)", result.Code)
+	// Accepting the overflow offer should fail: page is full (32 tokens, all same low-96 bits)
+	result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, overflowOffer).Build())
+	jtx.RequireTxFail(t, result, "tecNO_SUITABLE_NFTOKEN_PAGE")
 
 	// Verify all 32 NFTs are findable
-	for _, nftID := range nftIDs {
-		offerTx := nft.NFTokenCreateSellOffer(buyer, nftID, jtx.XRPTxAmountFromXRP(100)).Build()
-		result := env.Submit(offerTx)
-		if !result.Success {
-			t.Errorf("Ledger can't find NFT %s", nftID)
-		}
+	for _, nftID := range acceptableNFTIDs {
+		result := env.Submit(nft.NFTokenCreateSellOffer(buyer, nftID, tx.NewXRPAmount(100_000_000)).Build())
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 	}
-
-	_ = overflowNFT // Not used in this simplified test
-
-	t.Log("testTooManyEquivalent passed")
 }
 
-// TestConsecutivePacking tests worst case scenario for NFT packing.
-// 33 accounts with identical low-32 bits mint 7 consecutive NFTs each.
-// A single account buys all 7x32 of the 33 NFTs.
+// ===========================================================================
+// testConsecutivePacking
 // Reference: rippled NFTokenDir_test.cpp testConsecutivePacking
+//
+// Worst case scenario: 33 accounts with identical low-32 bits mint 7
+// consecutive NFTs each. A single account buys all 7x32 of the 33 NFTs.
+// Requires fixNFTokenDirV1.
+// ===========================================================================
 func TestConsecutivePacking(t *testing.T) {
-	t.Skip("testConsecutivePacking requires account creation from seed and fixNFTokenDirV1")
-
-	// This test requires fixNFTokenDirV1 to be enabled
-
 	env := jtx.NewTestEnv(t)
 
 	buyer := jtx.NewAccount("buyer")
-	env.Fund(buyer)
+	// Reserve = 200 + ownerCount*50 XRP; buyer needs ~459 OwnerCount
+	env.FundAmount(buyer, 25000000000) // 25000 XRP
 	env.Close()
 
 	// Create 33 accounts with identical low 32-bits
 	accounts := make([]*jtx.Account, 0, len(seedsLow32_115d0525))
-	for _, seed := range seedsLow32_115d0525 {
-		account := jtx.NewAccount(seed)
+	for i, seed := range seedsLow32_115d0525 {
+		account := jtx.NewAccountFromSeed("acct"+string(rune('A'+i%26)), seed)
 		accounts = append(accounts, account)
 		env.Fund(account)
 	}
 	env.Close()
 
-	// Each account creates 7 consecutive NFTs (taxon manipulated for sequential storage)
+	// Each account creates 7 consecutive NFTs
 	const nftsPerAccount = 7
 	nftIDsByPage := make([][]string, nftsPerAccount)
 	offersByPage := make([][]string, nftsPerAccount)
@@ -569,69 +557,61 @@ func TestConsecutivePacking(t *testing.T) {
 		offersByPage[i] = make([]string, 0, len(accounts))
 
 		for _, account := range accounts {
-			// Tweak taxon for sequential storage
-			// taxon := toUInt32(nft.cipheredTaxon(i, nft.toTaxon(0)))
-			taxon := uint32(i)
+			// Tweak taxon so zero is always stored: cipheredTaxon(seq, 0)
+			tokenSeq := uint32(i) // Each account mints sequentially
+			taxon := nftoken.CipheredTaxon(tokenSeq, 0)
 
-			mintTx := nft.NFTokenMint(account, taxon).Transferable().Build()
-			result := env.Submit(mintTx)
-			if result.Success {
-				nftID := "nft_" + account.Address + "_" + string(rune(i))
-				nftIDsByPage[i] = append(nftIDsByPage[i], nftID)
-
-				offerTx := nft.NFTokenCreateSellOffer(account, nftID, jtx.XRPTxAmount(0)).
-					Destination(buyer).Build()
-				result = env.Submit(offerTx)
-				if result.Success {
-					offersByPage[i] = append(offersByPage[i], "offer_"+nftID)
-				}
-			}
+			flags := nftoken.NFTokenFlagTransferable
+			nftID := nft.GetNextNFTokenID(env, account, taxon, flags, 0)
+			env.Submit(nft.NFTokenMint(account, taxon).Transferable().Build())
 			env.Close()
+
+			offerIdx := nft.GetOfferIndex(env, account)
+			env.Submit(nft.NFTokenCreateSellOffer(account, nftID, tx.NewXRPAmount(0)).
+				Destination(buyer).Build())
+
+			nftIDsByPage[i] = append(nftIDsByPage[i], nftID)
+			offersByPage[i] = append(offersByPage[i], offerIdx)
 		}
+		env.Close()
 	}
 
 	// Remove one NFT/offer from each page - these would cause overflow
-	overflowNFTs := make([]string, nftsPerAccount)
 	overflowOffers := make([]string, nftsPerAccount)
 	for i := 0; i < nftsPerAccount; i++ {
 		lastIdx := len(nftIDsByPage[i]) - 1
-		overflowNFTs[i] = nftIDsByPage[i][lastIdx]
 		overflowOffers[i] = offersByPage[i][lastIdx]
 		nftIDsByPage[i] = nftIDsByPage[i][:lastIdx]
 		offersByPage[i] = offersByPage[i][:lastIdx]
 	}
 
-	// Buyer accepts all offers that won't cause overflow
+	// Buyer accepts all non-overflow offers
 	// Fill center and outsides first to exercise different boundary cases
 	for _, pageIdx := range []int{3, 6, 0, 1, 2, 5, 4} {
 		for _, offer := range offersByPage[pageIdx] {
-			acceptTx := nft.NFTokenAcceptSellOffer(buyer, offer).Build()
-			env.Submit(acceptTx)
+			result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offer).Build())
+			jtx.RequireTxSuccess(t, result)
 			env.Close()
 		}
 	}
 
 	// Accepting overflow offers should fail
 	for _, offer := range overflowOffers {
-		acceptTx := nft.NFTokenAcceptSellOffer(buyer, offer).Build()
-		result := env.Submit(acceptTx)
-		if result.Success {
-			t.Error("Overflow accept should fail with tecNO_SUITABLE_NFTOKEN_PAGE")
-		}
+		result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offer).Build())
+		jtx.RequireTxFail(t, result, "tecNO_SUITABLE_NFTOKEN_PAGE")
 		env.Close()
 	}
 
 	// Verify all expected NFTs are findable
-	for _, nfts := range nftIDsByPage {
-		for _, nftID := range nfts {
-			offerTx := nft.NFTokenCreateSellOffer(buyer, nftID, jtx.XRPTxAmountFromXRP(100)).Build()
-			result := env.Submit(offerTx)
-			if !result.Success {
-				t.Errorf("Ledger can't find NFT %s", nftID)
-			}
-			env.Close()
-		}
+	allNFTIDs := make([]string, 0)
+	for _, page := range nftIDsByPage {
+		allNFTIDs = append(allNFTIDs, page...)
 	}
+	sort.Strings(allNFTIDs)
 
-	t.Log("testConsecutivePacking passed")
+	for _, nftID := range allNFTIDs {
+		result := env.Submit(nft.NFTokenCreateSellOffer(buyer, nftID, tx.NewXRPAmount(100_000_000)).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+	}
 }

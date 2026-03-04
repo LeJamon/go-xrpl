@@ -205,6 +205,6 @@ func TestNewTestEnv(t *testing.T) {
 
 	// Should have default fees
 	assert.Equal(t, uint64(10), env.BaseFee())
-	assert.Equal(t, uint64(10_000_000), env.ReserveBase())
-	assert.Equal(t, uint64(2_000_000), env.ReserveIncrement())
+	assert.Equal(t, uint64(200_000_000), env.ReserveBase())
+	assert.Equal(t, uint64(50_000_000), env.ReserveIncrement())
 }

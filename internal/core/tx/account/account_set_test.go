@@ -10,6 +10,11 @@ func ptrUint32AccountSet(v uint32) *uint32 {
 	return &v
 }
 
+// Helper function to create a string pointer
+func strPtr(v string) *string {
+	return &v
+}
+
 // Helper function to create a uint8 pointer
 func ptrUint8(v uint8) *uint8 {
 	return &v
@@ -52,7 +57,7 @@ func TestAccountSetValidation(t *testing.T) {
 			name: "valid AccountSet with Domain",
 			accountSet: &AccountSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeAccountSet, "rAlice"),
-				Domain: "6578616d706c652e636f6d", // example.com in hex
+				Domain: strPtr("6578616d706c652e636f6d"), // example.com in hex
 			},
 			expectError: false,
 		},
@@ -292,7 +297,7 @@ func TestAccountSetDomain(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			accountSet := &AccountSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeAccountSet, "rAlice"),
-				Domain: tt.domain,
+				Domain: &tt.domain,
 			}
 			err := accountSet.Validate()
 			if tt.expectError {
@@ -481,7 +486,8 @@ func TestAccountSetFlatten(t *testing.T) {
 			name: "AccountSet with Domain",
 			setup: func() *AccountSet {
 				as := NewAccountSet("rAlice")
-				as.Domain = "6578616d706c652e636f6d"
+				d := "6578616d706c652e636f6d"
+				as.Domain = &d
 				return as
 			},
 			checkMap: func(t *testing.T, m map[string]any) {

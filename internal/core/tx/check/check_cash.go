@@ -129,7 +129,7 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Read check
 	// Reference: CashCheck.cpp L85-90
 	checkData, err := ctx.View.Read(checkKey)
-	if err != nil {
+	if err != nil || checkData == nil {
 		return tx.TecNO_ENTRY
 	}
 
@@ -355,7 +355,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *sle.CheckDat
 	// Reference: CashCheck.cpp L162-185
 	// Applies to BOTH Amount and DeliverMin paths (rippled checks value > availableFunds
 	// where value is either Amount or DeliverMin).
-	srcFunds := tx.AccountFunds(ctx.View, srcID, requestedAmount, true)
+	srcFunds := tx.AccountFunds(ctx.View, srcID, requestedAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 	if requestedAmount.Compare(srcFunds) > 0 {
 		return tx.TecPATH_PARTIAL
 	}

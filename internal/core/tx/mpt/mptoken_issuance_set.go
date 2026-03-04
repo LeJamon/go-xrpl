@@ -4,8 +4,11 @@ import (
 	"encoding/hex"
 	"errors"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/amendment"
+	"github.com/LeJamon/goXRPLd/internal/core/ledger/entry"
+	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )
 
 func init() {
@@ -63,8 +66,8 @@ func (m *MPTokenIssuanceSet) Validate() error {
 		return errors.New("temMALFORMED: MPTokenIssuanceID is required")
 	}
 
-	if len(m.MPTokenIssuanceID) != 64 {
-		return errors.New("temMALFORMED: MPTokenIssuanceID must be 64 hex characters")
+	if len(m.MPTokenIssuanceID) != 48 {
+		return errors.New("temMALFORMED: MPTokenIssuanceID must be 48 hex characters")
 	}
 
 	if _, err := hex.DecodeString(m.MPTokenIssuanceID); err != nil {
@@ -90,10 +93,113 @@ func (m *MPTokenIssuanceSet) RequiredAmendments() [][32]byte {
 }
 
 // Apply applies the MPTokenIssuanceSet transaction to ledger state.
+// Reference: rippled MPTokenIssuanceSet.cpp preclaim() + doApply()
 func (m *MPTokenIssuanceSet) Apply(ctx *tx.ApplyContext) tx.Result {
+	// Parse MPTokenIssuanceID
+	var mptID [24]byte
 	issuanceIDBytes, err := hex.DecodeString(m.MPTokenIssuanceID)
-	if err != nil || len(issuanceIDBytes) != 32 {
+	if err != nil || len(issuanceIDBytes) != 24 {
 		return tx.TemINVALID
 	}
+	copy(mptID[:], issuanceIDBytes)
+
+	// Preclaim: issuance must exist
+	issuanceKey := keylet.MPTIssuance(mptID)
+	issuanceRaw, err := ctx.View.Read(issuanceKey)
+	if err != nil || issuanceRaw == nil {
+		return tx.TecOBJECT_NOT_FOUND
+	}
+
+	issuance, err := sle.ParseMPTokenIssuance(issuanceRaw)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	txFlags := m.GetFlags()
+
+	// Issuance must have CanLock capability for Set to work at all
+	// Reference: rippled MPTokenIssuanceSet.cpp preclaim() - without featureSingleAssetVault,
+	// if issuance doesn't have lsfMPTCanLock, any Set returns tecNO_PERMISSION
+	if issuance.Flags&entry.LsfMPTCanLock == 0 {
+		return tx.TecNO_PERMISSION
+	}
+
+	// Caller must be the issuer
+	if issuance.Issuer != ctx.AccountID {
+		return tx.TecNO_PERMISSION
+	}
+
+	if m.Holder != "" {
+		// Targeting a specific holder's MPToken
+		return m.setHolderToken(ctx, issuanceKey, issuance, txFlags)
+	}
+	// Targeting the issuance itself
+	return m.setIssuance(ctx, issuanceKey, issuance, txFlags)
+}
+
+// setHolderToken modifies a specific holder's MPToken (lock/unlock).
+func (m *MPTokenIssuanceSet) setHolderToken(ctx *tx.ApplyContext, issuanceKey keylet.Keylet, issuance *sle.MPTokenIssuanceData, txFlags uint32) tx.Result {
+	holderID, err := sle.DecodeAccountID(m.Holder)
+	if err != nil {
+		return tx.TemINVALID
+	}
+
+	// Holder account must exist
+	// Reference: rippled MPTokenIssuanceSet.cpp:132 — ctx.view.exists(keylet::account(...))
+	holderAcctKey := keylet.Account(holderID)
+	holderExists, err := ctx.View.Exists(holderAcctKey)
+	if err != nil || !holderExists {
+		return tx.TecNO_DST
+	}
+
+	// MPToken must exist
+	tokenKey := keylet.MPToken(issuanceKey.Key, holderID)
+	tokenRaw, err := ctx.View.Read(tokenKey)
+	if err != nil || tokenRaw == nil {
+		return tx.TecOBJECT_NOT_FOUND
+	}
+
+	token, err := sle.ParseMPToken(tokenRaw)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Toggle lock/unlock on the token
+	if txFlags&MPTokenIssuanceSetFlagLock != 0 {
+		token.Flags |= entry.LsfMPTLocked
+	} else if txFlags&MPTokenIssuanceSetFlagUnlock != 0 {
+		token.Flags &= ^entry.LsfMPTLocked
+	}
+
+	// Serialize and update
+	updatedData, err := sle.SerializeMPToken(token)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := ctx.View.Update(tokenKey, updatedData); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	return tx.TesSUCCESS
+}
+
+// setIssuance modifies the issuance itself (lock/unlock).
+func (m *MPTokenIssuanceSet) setIssuance(ctx *tx.ApplyContext, issuanceKey keylet.Keylet, issuance *sle.MPTokenIssuanceData, txFlags uint32) tx.Result {
+	// Toggle lock/unlock on the issuance
+	if txFlags&MPTokenIssuanceSetFlagLock != 0 {
+		issuance.Flags |= entry.LsfMPTLocked
+	} else if txFlags&MPTokenIssuanceSetFlagUnlock != 0 {
+		issuance.Flags &= ^entry.LsfMPTLocked
+	}
+
+	// Serialize and update
+	updatedData, err := sle.SerializeMPTokenIssuance(issuance)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := ctx.View.Update(issuanceKey, updatedData); err != nil {
+		return tx.TefINTERNAL
+	}
+
 	return tx.TesSUCCESS
 }

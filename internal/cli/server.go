@@ -197,6 +197,19 @@ func runServer(cmd *cobra.Command, args []string) {
 	// Create HTTP JSON-RPC server with 30 second timeout
 	httpServer := rpc.NewServer(30 * time.Second)
 
+	// Wire dispatcher so the 'json' RPC method can forward calls
+	rpc_types.Services.SetDispatcher(httpServer)
+
+	// Wire shutdown function for the 'stop' RPC method
+	rpc_types.Services.SetShutdownFunc(func() {
+		log.Println("Server shutdown requested via RPC stop command")
+		go func() {
+			// Small delay to allow the RPC response to be sent
+			time.Sleep(100 * time.Millisecond)
+			log.Fatal("Server stopped by admin request")
+		}()
+	})
+
 	// Create WebSocket server for real-time subscriptions
 	wsServer := rpc.NewWebSocketServer(30 * time.Second)
 	wsServer.RegisterAllMethods()

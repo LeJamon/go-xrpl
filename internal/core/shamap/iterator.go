@@ -89,7 +89,7 @@ func (it *Iterator) advance() bool {
 
 		found := false
 		for i := top.branch; i < BranchFactor; i++ {
-			child, err := inner.Child(i)
+			child, err := it.sm.descend(inner, i)
 			if err != nil {
 				it.err = err
 				return false
@@ -187,7 +187,7 @@ func (sm *SHAMap) UpperBound(id [32]byte) *Iterator {
 			break
 		}
 
-		child, err := inner.Child(int(branch))
+		child, err := sm.descend(inner, int(branch))
 		if err != nil {
 			it.err = err
 			return it
@@ -242,7 +242,7 @@ func (sm *SHAMap) UpperBound(id [32]byte) *Iterator {
 
 		startBranch := int(SelectBranch(entry.nodeID, id)) + 1
 		for branch := startBranch; branch < BranchFactor; branch++ {
-			child, err := inner.Child(branch)
+			child, err := sm.descend(inner, branch)
 			if err != nil {
 				it.err = err
 				return it
@@ -310,7 +310,7 @@ func (sm *SHAMap) LowerBound(id [32]byte) *Iterator {
 			break
 		}
 
-		child, err := inner.Child(int(branch))
+		child, err := sm.descend(inner, int(branch))
 		if err != nil {
 			it.err = err
 			return it
@@ -365,7 +365,7 @@ func (sm *SHAMap) LowerBound(id [32]byte) *Iterator {
 
 		startBranch := int(SelectBranch(entry.nodeID, id)) - 1
 		for branch := startBranch; branch >= 0; branch-- {
-			child, err := inner.Child(branch)
+			child, err := sm.descend(inner, branch)
 			if err != nil {
 				it.err = err
 				return it
@@ -405,7 +405,7 @@ func (sm *SHAMap) firstBelow(node Node, parentID NodeID, branch int) LeafNode {
 	}
 
 	for i := 0; i < BranchFactor; i++ {
-		child, err := inner.Child(i)
+		child, err := sm.descend(inner, i)
 		if err != nil {
 			return nil
 		}
@@ -440,7 +440,7 @@ func (sm *SHAMap) lastBelow(node Node, parentID NodeID, branch int) LeafNode {
 	}
 
 	for i := BranchFactor - 1; i >= 0; i-- {
-		child, err := inner.Child(i)
+		child, err := sm.descend(inner, i)
 		if err != nil {
 			return nil
 		}

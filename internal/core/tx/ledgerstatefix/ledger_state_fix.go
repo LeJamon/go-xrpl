@@ -94,7 +94,19 @@ func (l *LedgerStateFix) Validate() error {
 
 // Flatten returns a flat map of all transaction fields
 func (l *LedgerStateFix) Flatten() (map[string]any, error) {
-	return tx.ReflectFlatten(l)
+	m, err := tx.ReflectFlatten(l)
+	if err != nil {
+		return nil, err
+	}
+	// LedgerFixType is UInt16 in the binary codec but uint8 in Go.
+	// Convert to int so the codec's UInt16.FromJSON() can handle it.
+	if v, ok := m["LedgerFixType"]; ok {
+		switch val := v.(type) {
+		case uint8:
+			m["LedgerFixType"] = int(val)
+		}
+	}
+	return m, nil
 }
 
 // RequiredAmendments returns the amendments required for this transaction type

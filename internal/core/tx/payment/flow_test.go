@@ -1,6 +1,7 @@
 package payment
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/internal/core/XRPAmount"
@@ -61,6 +62,24 @@ func (m *paymentMockLedgerView) ForEach(fn func(key [32]byte, data []byte) bool)
 		}
 	}
 	return nil
+}
+
+func (m *paymentMockLedgerView) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
+	var bestKey [32]byte
+	found := false
+	for k, v := range m.data {
+		if bytes.Compare(k[:], key[:]) > 0 {
+			if !found || bytes.Compare(k[:], bestKey[:]) < 0 {
+				bestKey = k
+				found = true
+				_ = v
+			}
+		}
+	}
+	if found {
+		return bestKey, m.data[bestKey], true, nil
+	}
+	return [32]byte{}, nil, false, nil
 }
 
 // Helper to create test account with balance
@@ -355,9 +374,10 @@ func TestXRPEndpointStep_QualityUpperBound(t *testing.T) {
 	if q == nil {
 		t.Fatal("expected non-nil quality")
 	}
-	// XRP has 1:1 quality
-	if q.Value != uint64(QualityOne) {
-		t.Errorf("expected quality=%d, got %d", QualityOne, q.Value)
+	// XRP has 1:1 quality — properly encoded as STAmount-like quality
+	expectedQ := qualityFromFloat64(1.0)
+	if q.Value != expectedQ.Value {
+		t.Errorf("expected quality=%d, got %d", expectedQ.Value, q.Value)
 	}
 	if dir != DebtDirectionIssues {
 		t.Error("expected DebtDirectionIssues")
@@ -384,7 +404,7 @@ func TestDirectStepI_Basic(t *testing.T) {
 	sandbox := NewPaymentSandbox(view)
 
 	// Create direct step from alice to bob
-	step := NewDirectStepI(alice, bob, "USD", nil, false)
+	step := NewDirectStepI(alice, bob, "USD", nil, true, false)
 
 	// Check the step
 	result := step.Check(sandbox)

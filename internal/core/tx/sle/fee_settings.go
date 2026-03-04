@@ -44,9 +44,10 @@ const (
 	fieldCodeBaseFee uint8 = 5 // sfBaseFee (legacy)
 
 	// XRPAmount fields (Amount type) - modern XRPFees amendment
-	fieldCodeBaseFeeDrops          uint8 = 26 // sfBaseFeeDrops
-	fieldCodeReserveBaseDrops      uint8 = 27 // sfReserveBaseDrops
-	fieldCodeReserveIncrementDrops uint8 = 28 // sfReserveIncrementDrops
+	// Field codes from definitions.json: BaseFeeDrops=22, ReserveBaseDrops=23, ReserveIncrementDrops=24
+	fieldCodeBaseFeeDrops          uint8 = 22 // sfBaseFeeDrops
+	fieldCodeReserveBaseDrops      uint8 = 23 // sfReserveBaseDrops
+	fieldCodeReserveIncrementDrops uint8 = 24 // sfReserveIncrementDrops
 )
 
 // ParseFeeSettings parses fee settings data from binary format

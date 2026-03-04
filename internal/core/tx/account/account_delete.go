@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/credential"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/oracle"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )
 
@@ -65,7 +66,7 @@ func (a *AccountDelete) Flatten() (map[string]any, error) {
 }
 
 // Apply applies the AccountDelete transaction to ledger state.
-// Reference: rippled DeleteAccount.cpp DeleteAccount::doApply()
+// Reference: rippled DeleteAccount.cpp DeleteAccount::preclaim() + doApply()
 func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Check minimum ledger gap: account must have existed for at least 256 ledgers.
 	// Use the transaction's Sequence (pre-increment value), matching rippled's preclaim().
@@ -83,11 +84,32 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	destKey := keylet.Account(destID)
 	destData, err := ctx.View.Read(destKey)
-	if err != nil {
+	if err != nil || destData == nil {
 		return tx.TecNO_DST
 	}
 
-	// Cascade-delete all non-obligation directory entries.
+	// --- Preclaim: destination checks ---
+	// Reference: rippled DeleteAccount.cpp preclaim() lines 230-260
+	destAccount, err := sle.ParseAccountRoot(destData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Check if destination requires a destination tag
+	if (destAccount.Flags&sle.LsfRequireDestTag) != 0 && a.DestinationTag == nil {
+		return tx.TecDST_TAG_NEEDED
+	}
+
+	// Check if destination requires deposit authorization
+	if (destAccount.Flags & sle.LsfDepositAuth) != 0 {
+		preauthKey := keylet.DepositPreauth(destID, ctx.AccountID)
+		preauthExists, _ := ctx.View.Exists(preauthKey)
+		if !preauthExists {
+			return tx.TecNO_PERMISSION
+		}
+	}
+
+	// --- Cascade-delete all non-obligation directory entries ---
 	// Collect all keys first, then delete — avoids modifying directory during iteration.
 	// Reference: rippled DeleteAccount.cpp nonObligationDeleter()
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
@@ -122,6 +144,25 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 			if err := credential.DeleteSLE(ctx.View, itemKeylet, cred); err != nil {
 				return tx.TecHAS_OBLIGATIONS
 			}
+		case entry.TypeOracle:
+			oracleData, err := sle.ParseOracle(data)
+			if err != nil {
+				return tx.TecHAS_OBLIGATIONS
+			}
+			// nil ownerCount — account is being deleted, no need to adjust
+			if result := oracle.DeleteOracleFromView(ctx.View, itemKeylet, oracleData, ctx.AccountID, nil); result != tx.TesSUCCESS {
+				return tx.TecHAS_OBLIGATIONS
+			}
+		case entry.TypeSignerList:
+			// Signer lists are not obligations — cascade-delete them.
+			// Reference: rippled DeleteAccount.cpp nonObligationDeleter case ltSIGNER_LIST
+			sle.DirRemove(ctx.View, ownerDirKey, 0, itemKeylet.Key, true)
+			if err := ctx.View.Erase(itemKeylet); err != nil {
+				return tx.TecHAS_OBLIGATIONS
+			}
+			if ctx.Account.OwnerCount > 0 {
+				ctx.Account.OwnerCount--
+			}
 		default:
 			return tx.TecHAS_OBLIGATIONS
 		}
@@ -132,7 +173,12 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.View.Erase(ownerDirKey)
 	}
 
-	destAccount, err := sle.ParseAccountRoot(destData)
+	// Re-read destination in case it was modified during cascade deletions
+	destData, err = ctx.View.Read(destKey)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	destAccount, err = sle.ParseAccountRoot(destData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

@@ -6,7 +6,9 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
 )
 
-// JsonMethod handles the json RPC method
+// JsonMethod handles the json RPC method.
+// This is a proxy that forwards calls to other RPC methods.
+// Reference: rippled JSON.cpp
 type JsonMethod struct{}
 
 func (m *JsonMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
@@ -25,15 +27,25 @@ func (m *JsonMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (
 		return nil, rpc_types.RpcErrorInvalidParams("Missing required parameter: method")
 	}
 
-	// TODO: Implement JSON method proxy
-	// This method allows calling other RPC methods with JSON parameters
-	// It's essentially a wrapper that forwards the call to the specified method
-	// This can be useful for clients that need to call methods dynamically
+	if rpc_types.Services == nil || rpc_types.Services.Dispatcher == nil {
+		return nil, rpc_types.RpcErrorInternal("Method dispatcher not available")
+	}
 
-	// Forward the call to the specified method
-	// This is a recursive call through the same RPC system
-	return nil, rpc_types.NewRpcError(rpc_types.RpcNOT_SUPPORTED, "notSupported", "notSupported",
-		"json method forwarding not yet implemented")
+	// The params field in the json method can be either:
+	// - A JSON object (the params to forward directly)
+	// - A JSON array with one element (XRPL-style params: [{...}])
+	var forwardParams []byte
+	if len(request.Params) > 0 {
+		// Check if it's an array
+		var arr []json.RawMessage
+		if json.Unmarshal(request.Params, &arr) == nil && len(arr) > 0 {
+			forwardParams = arr[0]
+		} else {
+			forwardParams = request.Params
+		}
+	}
+
+	return rpc_types.Services.Dispatcher.ExecuteMethod(request.Method, forwardParams)
 }
 
 func (m *JsonMethod) RequiredRole() rpc_types.Role {

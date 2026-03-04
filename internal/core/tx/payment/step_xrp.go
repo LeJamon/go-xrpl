@@ -23,19 +23,53 @@ type XRPEndpointStep struct {
 	// isLast indicates if this is the destination endpoint (true) or source (false)
 	isLast bool
 
+	// reserveReduction adjusts the owner count when computing available XRP.
+	// For offer crossing, this is -1 when the trust line for the delivered
+	// currency doesn't exist yet. The trust line will be created by the
+	// crossing flow, so we anticipate its reserve impact.
+	// Reference: rippled XRPEndpointOfferCrossingStep::computeReserveReduction
+	reserveReduction int32
+
 	// cache holds the result from the last Rev() call
 	cache *int64
 }
 
-// NewXRPEndpointStep creates a new XRPEndpointStep
+// NewXRPEndpointStep creates a new XRPEndpointStep for payments.
 // Parameters:
 //   - account: The account that sends/receives XRP
 //   - isLast: true if destination (last step), false if source (first step)
 func NewXRPEndpointStep(account [20]byte, isLast bool) *XRPEndpointStep {
 	return &XRPEndpointStep{
-		account: account,
-		isLast:  isLast,
-		cache:   nil,
+		account:          account,
+		isLast:           isLast,
+		reserveReduction: 0,
+		cache:            nil,
+	}
+}
+
+// NewXRPEndpointStepForOfferCrossing creates a new XRPEndpointStep for offer crossing.
+// It computes the reserve reduction: if this is the first step (source) and the
+// trust line for the delivered currency doesn't exist yet, reserveReduction is -1.
+// This allows the taker to use XRP that would otherwise be locked as reserve for
+// the trust line that offer crossing will create.
+//
+// Reference: rippled XRPEndpointOfferCrossingStep::computeReserveReduction
+func NewXRPEndpointStepForOfferCrossing(account [20]byte, isLast bool, isFirst bool, deliver Issue, view *PaymentSandbox) *XRPEndpointStep {
+	reduction := int32(0)
+	if isFirst && !deliver.IsXRP() {
+		// Check if trust line for the delivered issue already exists
+		lineKey := keylet.Line(account, deliver.Issuer, deliver.Currency)
+		data, err := view.Read(lineKey)
+		if err != nil || data == nil {
+			// Trust line doesn't exist — reduce reserve by 1 owner count
+			reduction = -1
+		}
+	}
+	return &XRPEndpointStep{
+		account:          account,
+		isLast:           isLast,
+		reserveReduction: reduction,
+		cache:            nil,
 	}
 }
 
@@ -68,9 +102,19 @@ func (s *XRPEndpointStep) Rev(
 		}
 	}
 
-	// Execute the transfer in the sandbox
+	// Execute the transfer.
+	// When isLast=true (destination endpoint), accountSend may fail if the requested
+	// amount exceeds the serializable range (e.g., sell-flag deliver = 9e18 drops).
+	// In rippled, STAmount doesn't validate during arithmetic so this succeeds.
+	// Our binary codec validates amounts <= MaxDrops (1e17).
+	// For destination in Rev: the sandbox will be reset when the limiting step is found
+	// (BookStep limits to actual order book depth), so the credit doesn't need to persist.
+	// If accountSend fails, we still cache the result and return — the forward pass
+	// will execute the actual credit with reasonable amounts.
+	// Reference: rippled XRPEndpointStep::revImp calls accountSend regardless of isLast_.
 	err := s.accountSend(sb, result)
-	if err != nil {
+	if err != nil && !s.isLast {
+		// Source endpoint failure is real — can't debit from account
 		return ZeroXRPEitherAmount(), ZeroXRPEitherAmount()
 	}
 
@@ -137,9 +181,10 @@ func (s *XRPEndpointStep) DebtDirection(sb *PaymentSandbox, dir StrandDirection)
 }
 
 // QualityUpperBound returns the worst-case quality for this step.
-// XRP has 1:1 quality (QualityOne).
+// XRP endpoint has identity quality (1:1 rate).
+// Reference: rippled XRPEndpointStep::qualityUpperBound → QUALITY_ONE
 func (s *XRPEndpointStep) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirection) (*Quality, DebtDirection) {
-	q := Quality{Value: uint64(QualityOne)}
+	q := qualityFromFloat64(1.0)
 	return &q, s.DebtDirection(v, StrandDirectionForward)
 }
 
@@ -242,11 +287,20 @@ func (s *XRPEndpointStep) xrpLiquid(sb *PaymentSandbox) int64 {
 	// Use ownerCountHook to get adjusted owner count
 	ownerCount := sb.OwnerCountHook(s.account, accountRoot.OwnerCount)
 
+	// Apply reserveReduction (for offer crossing when trust line doesn't exist yet).
+	// This is rippled's confineOwnerCount: adjusted = ownerCount + reserveReduction,
+	// clamped to 0 on underflow.
+	// Reference: rippled View.cpp confineOwnerCount() + xrpLiquid()
+	adjustedOwnerCount := int32(ownerCount) + s.reserveReduction
+	if adjustedOwnerCount < 0 {
+		adjustedOwnerCount = 0
+	}
+
 	// Read reserve values from ledger's FeeSettings
 	// Reference: rippled View.cpp xrpLiquid() reads reserves from fees keylet
 	baseReserve, ownerReserve := GetLedgerReserves(sb)
 
-	reserve := uint64(baseReserve) + uint64(ownerCount)*uint64(ownerReserve)
+	reserve := uint64(baseReserve) + uint64(adjustedOwnerCount)*uint64(ownerReserve)
 
 	// Available = balance - reserve
 	if accountRoot.Balance < reserve {

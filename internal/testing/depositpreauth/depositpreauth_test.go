@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/depositpreauth"
+	paymentPkg "github.com/LeJamon/goXRPLd/internal/core/tx/payment"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/credential"
 	dp "github.com/LeJamon/goXRPLd/internal/testing/depositpreauth"
@@ -241,9 +242,9 @@ func TestDepositPreauth_Invalid(t *testing.T) {
 	// Insufficient reserve.
 	t.Run("InsufficientReserve", func(t *testing.T) {
 		// Fund carol with just below what's needed for one owner object.
-		// accountReserve(1) = reserveBase + reserveIncrement = 12,000,000
-		// priorBalance = funded amount (fee is added back), so fund < 12,000,000.
-		env.FundAmount(carol, 11_999_999)
+		// accountReserve(1) = reserveBase + reserveIncrement = 250,000,000
+		// priorBalance = funded amount (fee is added back), so fund < 250,000,000.
+		env.FundAmount(carol, 249_999_999)
 		env.Close()
 
 		result := env.Submit(dp.Auth(carol, becky).Build())
@@ -367,12 +368,14 @@ func testPayment(t *testing.T, supportsPreauth, supportsCredentials bool) {
 		env.Close()
 
 		// becky pays herself USD(10) by consuming part of alice's offer.
+		// Reference: rippled uses path(~USD) — currency-only path step
 		usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)
 		xrp10 := tx.NewXRPAmount(int64(jtx.XRP(10)))
+		usdPath := [][]paymentPkg.PathStep{{{Currency: "USD"}}}
 		result = env.Submit(
 			payment.PayIssued(becky, becky, usd10).
 				SendMax(xrp10).
-				PathsXRP().
+				Paths(usdPath).
 				Build(),
 		)
 		jtx.RequireTxSuccess(t, result)
@@ -393,7 +396,7 @@ func testPayment(t *testing.T, supportsPreauth, supportsCredentials bool) {
 		result = env.Submit(
 			payment.PayIssued(becky, becky, usd10).
 				SendMax(xrp10).
-				PathsXRP().
+				Paths(usdPath).
 				Build(),
 		)
 		require.Equal(t, expectedCode, result.Code)

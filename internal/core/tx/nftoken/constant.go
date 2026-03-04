@@ -15,6 +15,9 @@ const (
 	// Calculation: amount * transferFee / transferFeeDivisor
 	transferFeeDivisor = 100000
 
+	// transferFeeDivisor32 is the uint32 version for use with Amount.MulRatio
+	transferFeeDivisor32 uint32 = 100000
+
 	// dirMaxTokensPerPage is the maximum number of NFTs per page
 	// Reference: rippled Protocol.h - dirMaxTokensPerPage = 32
 	dirMaxTokensPerPage = 32
@@ -31,6 +34,9 @@ const (
 
 	// maxDeletableTokenOfferEntries is the max offers to delete on burn
 	maxDeletableTokenOfferEntries = 500
+
+	// maxInt is used as unlimited limit for pre-amendment offer deletion
+	maxInt = int(^uint(0) >> 1)
 
 	// maxTokenOfferCancelCount is the max offers that can be cancelled in one tx
 	maxTokenOfferCancelCount = 500

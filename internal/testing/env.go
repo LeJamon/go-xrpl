@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/core/ledger"
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/internal/core/shamap"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/account"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/depositpreauth"
@@ -34,8 +35,10 @@ type TestEnv struct {
 	// Genesis ledger reference
 	genesisLedger *ledger.Ledger
 
-	// Ledger history for verification
-	ledgerHistory map[uint32]*ledger.Ledger
+	// Lightweight ledger history: sequence → state map root hash.
+	// Matches rippled's LedgerHistory pattern — stores only hashes, not full objects.
+	// Past state can be reconstructed on demand via NewFromRootHash(hash, family).
+	ledgerRootHashes map[uint32][32]byte
 
 	// Current ledger sequence
 	currentSeq uint32
@@ -48,14 +51,25 @@ type TestEnv struct {
 	// Amendment rules - controls which amendments are enabled.
 	// Reference: rippled's FeatureBitset in test/jtx/Env.h
 	rulesBuilder *amendment.RulesBuilder
+
+	// NetworkID for engine configuration (0 = mainnet default, >1024 requires NetworkID in txns)
+	networkID uint32
+
+	// Optional state map family for backed SHAMaps (PebbleDB on disk).
+	// Only set when using NewTestEnvBacked() for heavy tests that would OOM otherwise.
+	// When nil, SHAMaps use unbacked mode (fast, full in-memory clones).
+	stateFamily *shamap.NodeStoreFamily
 }
 
 // NewTestEnv creates a new test environment with a genesis ledger.
 func NewTestEnv(t *testing.T) *TestEnv {
 	t.Helper()
 
-	// Create genesis ledger with default configuration
+	// Create genesis ledger with test configuration matching rippled's test env
+	// (200 XRP base reserve, 50 XRP increment — see rippled/src/test/jtx/impl/envconfig.cpp)
 	genesisConfig := genesis.DefaultConfig()
+	genesisConfig.Fees.ReserveBase = XRPAmount.DropsPerXRP * 200      // 200 XRP
+	genesisConfig.Fees.ReserveIncrement = XRPAmount.DropsPerXRP * 50  // 50 XRP
 	genesisResult, err := genesis.Create(genesisConfig)
 	if err != nil {
 		t.Fatalf("Failed to create genesis ledger: %v", err)
@@ -84,23 +98,58 @@ func NewTestEnv(t *testing.T) *TestEnv {
 		clock:            clock,
 		accounts:         make(map[string]*Account),
 		genesisLedger:    genesisLedger,
-		ledgerHistory:    make(map[uint32]*ledger.Ledger),
+		ledgerRootHashes: make(map[uint32][32]byte),
 		currentSeq:       2,
 		baseFee:          10,
-		reserveBase:      10_000_000, // 10 XRP
-		reserveIncrement: 2_000_000,  // 2 XRP
+		reserveBase:      200_000_000, // 200 XRP (matches rippled test env)
+		reserveIncrement: 50_000_000,  // 50 XRP (matches rippled test env)
 		// Initialize with all supported amendments enabled (like rippled's testable_amendments())
 		rulesBuilder: amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported),
 	}
-
-	// Store genesis in history
-	env.ledgerHistory[1] = genesisLedger
 
 	// Register master account
 	master := MasterAccount()
 	env.accounts[master.Name] = master
 
 	return env
+}
+
+// NewTestEnvBacked creates a test environment with PebbleDB-backed SHAMaps.
+// Use this for heavy tests (e.g., crossing_limits with 2000+ offers) that would
+// OOM with unbacked mode. Data goes to disk; only the LRU cache lives in RAM.
+func NewTestEnvBacked(t *testing.T) *TestEnv {
+	t.Helper()
+	env := NewTestEnv(t)
+	env.enablePebbleBacking(t)
+	return env
+}
+
+// NewTestEnvWithConfigBacked creates a test environment with custom config and PebbleDB backing.
+func NewTestEnvWithConfigBacked(t *testing.T, cfg genesis.Config) *TestEnv {
+	t.Helper()
+	env := NewTestEnvWithConfig(t, cfg)
+	env.enablePebbleBacking(t)
+	return env
+}
+
+// enablePebbleBacking enables PebbleDB-backed SHAMaps on the environment.
+// Must be called before any transactions are submitted.
+func (e *TestEnv) enablePebbleBacking(t *testing.T) {
+	t.Helper()
+	stateFamily, err := shamap.NewPebbleNodeStoreFamily(t.TempDir(), 200000)
+	if err != nil {
+		t.Fatalf("Failed to create state family: %v", err)
+	}
+	t.Cleanup(func() { stateFamily.Close() })
+	e.stateFamily = stateFamily
+	e.genesisLedger.SetStateMapFamily(stateFamily)
+
+	// Recreate the open ledger so it inherits the backed state map
+	openLedger, err := ledger.NewOpen(e.genesisLedger, e.clock.Now())
+	if err != nil {
+		t.Fatalf("Failed to recreate open ledger with backing: %v", err)
+	}
+	e.ledger = openLedger
 }
 
 // NewTestEnvWithConfig creates a new test environment with custom genesis configuration.
@@ -133,7 +182,7 @@ func NewTestEnvWithConfig(t *testing.T, cfg genesis.Config) *TestEnv {
 		clock:            clock,
 		accounts:         make(map[string]*Account),
 		genesisLedger:    genesisLedger,
-		ledgerHistory:    make(map[uint32]*ledger.Ledger),
+		ledgerRootHashes: make(map[uint32][32]byte),
 		currentSeq:       2,
 		baseFee:          uint64(cfg.Fees.BaseFee.Drops()),
 		reserveBase:      uint64(cfg.Fees.ReserveBase.Drops()),
@@ -141,8 +190,6 @@ func NewTestEnvWithConfig(t *testing.T, cfg genesis.Config) *TestEnv {
 		// Initialize with all supported amendments enabled (like rippled's testable_amendments())
 		rulesBuilder: amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported),
 	}
-
-	env.ledgerHistory[1] = genesisLedger
 	master := MasterAccount()
 	env.accounts[master.Name] = master
 
@@ -194,6 +241,29 @@ func (e *TestEnv) FundAmount(acc *Account, amount uint64) {
 	// Enable DefaultRipple on the account (matching rippled's test environment)
 	// This allows trust lines to be properly deleted when limits are set to 0.
 	e.enableDefaultRipple(acc)
+}
+
+// Pay sends XRP from master to an already-funded account.
+// This is useful for tests that need to top-up an account with additional XRP
+// (e.g., to meet reserve requirements). Unlike FundAmount, this does not
+// register the account or enable DefaultRipple.
+func (e *TestEnv) Pay(acc *Account, drops uint64) {
+	e.t.Helper()
+
+	master := e.accounts["master"]
+	if master == nil {
+		e.t.Fatal("Master account not found")
+	}
+
+	seq := e.Seq(master)
+	p := payment.NewPayment(master.Address, acc.Address, tx.NewXRPAmount(int64(drops)))
+	p.Fee = formatUint64(e.baseFee)
+	p.Sequence = &seq
+
+	result := e.Submit(p)
+	if !result.Success {
+		e.t.Fatalf("Failed to pay %d drops to %s: %s", drops, acc.Name, result.Code)
+	}
 }
 
 // enableDefaultRipple enables the DefaultRipple flag on an account.
@@ -354,6 +424,41 @@ func (e *TestEnv) DisableRequireAuth(acc *Account) {
 	}
 }
 
+// EnableRequireDest enables the RequireDest flag on an account.
+// When enabled, the account requires a destination tag on incoming payments.
+func (e *TestEnv) EnableRequireDest(acc *Account) {
+	e.t.Helper()
+
+	accountSet := account.NewAccountSet(acc.Address)
+	flag := account.AccountSetFlagRequireDest
+	accountSet.SetFlag = &flag
+	accountSet.Fee = formatUint64(e.baseFee)
+	seq := e.Seq(acc)
+	accountSet.Sequence = &seq
+
+	result := e.Submit(accountSet)
+	if !result.Success {
+		e.t.Fatalf("Failed to enable RequireDest for account %s: %s", acc.Name, result.Code)
+	}
+}
+
+// DisableRequireDest disables the RequireDest flag on an account.
+func (e *TestEnv) DisableRequireDest(acc *Account) {
+	e.t.Helper()
+
+	accountSet := account.NewAccountSet(acc.Address)
+	flag := account.AccountSetFlagRequireDest
+	accountSet.ClearFlag = &flag
+	accountSet.Fee = formatUint64(e.baseFee)
+	seq := e.Seq(acc)
+	accountSet.Sequence = &seq
+
+	result := e.Submit(accountSet)
+	if !result.Success {
+		e.t.Fatalf("Failed to disable RequireDest for account %s: %s", acc.Name, result.Code)
+	}
+}
+
 // Preauthorize allows owner to preauthorize authorized for deposits.
 // This creates a DepositPreauth ledger entry.
 func (e *TestEnv) Preauthorize(owner, authorized *Account) {
@@ -433,8 +538,15 @@ func (e *TestEnv) Close() {
 		e.t.Fatalf("Failed to validate ledger: %v", err)
 	}
 
-	// Store in history
-	e.ledgerHistory[e.ledger.Sequence()] = e.ledger
+	// Store lightweight state root hash in history (matching rippled's LedgerHistory pattern)
+	if h, err := e.ledger.StateMapHash(); err == nil {
+		e.ledgerRootHashes[e.ledger.Sequence()] = h
+	}
+
+	// Sweep nodestore caches if backed mode is enabled
+	if e.stateFamily != nil {
+		e.stateFamily.Sweep()
+	}
 
 	// Create new open ledger
 	newLedger, err := ledger.NewOpen(e.ledger, e.clock.Now())
@@ -444,6 +556,15 @@ func (e *TestEnv) Close() {
 
 	e.ledger = newLedger
 	e.currentSeq++
+}
+
+// CloseAt closes ledgers until the ledger reaches the target sequence.
+// If already at or past target, does nothing.
+func (e *TestEnv) CloseAt(targetSeq uint32) {
+	e.t.Helper()
+	for e.ledger.Sequence() < targetSeq {
+		e.Close()
+	}
 }
 
 // Submit submits a transaction to the current open ledger.
@@ -491,6 +612,7 @@ func (e *TestEnv) Submit(transaction interface{}) TxResult {
 
 	// Create engine config
 	// ParentCloseTime is in Ripple epoch seconds (Unix - 946684800)
+	// Current time minus Ripple epoch = Ripple epoch time
 	parentCloseTime := uint32(e.clock.Now().Unix() - 946684800)
 	engineConfig := tx.EngineConfig{
 		BaseFee:                   e.baseFee,
@@ -500,6 +622,7 @@ func (e *TestEnv) Submit(transaction interface{}) TxResult {
 		SkipSignatureVerification: true, // Skip signatures in test mode
 		Rules:                     e.rulesBuilder.Build(),
 		ParentCloseTime:           parentCloseTime,
+		NetworkID:                 e.networkID,
 	}
 
 	// Create engine with current ledger
@@ -651,6 +774,38 @@ func (e *TestEnv) TrustLineFlags(account, counterparty *Account, currency string
 	return rs.Flags
 }
 
+// ClearTrustLineAuth clears the authorization flags on a trust line between two accounts.
+// This directly modifies ledger state, simulating rippled's rawInsert for tests
+// that require unauthorized but funded trust lines.
+func (e *TestEnv) ClearTrustLineAuth(acc1, acc2 *Account, currency string) {
+	e.t.Helper()
+
+	lineKey := keylet.Line(acc1.ID, acc2.ID, currency)
+	data, err := e.ledger.Read(lineKey)
+	if err != nil {
+		e.t.Fatalf("ClearTrustLineAuth: trust line not found: %v", err)
+		return
+	}
+
+	rs, err := sle.ParseRippleState(data)
+	if err != nil {
+		e.t.Fatalf("ClearTrustLineAuth: failed to parse trust line: %v", err)
+		return
+	}
+
+	rs.Flags &^= sle.LsfLowAuth | sle.LsfHighAuth
+
+	updated, err := sle.SerializeRippleState(rs)
+	if err != nil {
+		e.t.Fatalf("ClearTrustLineAuth: failed to serialize: %v", err)
+		return
+	}
+
+	if err := e.ledger.Update(lineKey, updated); err != nil {
+		e.t.Fatalf("ClearTrustLineAuth: failed to update: %v", err)
+	}
+}
+
 // HasNoRipple checks if the account's side of the trust line has NoRipple set.
 func (e *TestEnv) HasNoRipple(account, counterparty *Account, currency string) bool {
 	e.t.Helper()
@@ -779,21 +934,61 @@ func (e *TestEnv) AccountInfo(acc *Account) *AccountInfo {
 	}
 
 	return &AccountInfo{
-		Address:    acc.Address,
-		Balance:    accountRoot.Balance,
-		Sequence:   accountRoot.Sequence,
-		OwnerCount: accountRoot.OwnerCount,
-		Flags:      accountRoot.Flags,
+		Address:        acc.Address,
+		Balance:        accountRoot.Balance,
+		Sequence:       accountRoot.Sequence,
+		OwnerCount:     accountRoot.OwnerCount,
+		Flags:          accountRoot.Flags,
+		MintedNFTokens: accountRoot.MintedNFTokens,
+		BurnedNFTokens: accountRoot.BurnedNFTokens,
+		NFTokenMinter:  accountRoot.NFTokenMinter,
+		Domain:         accountRoot.Domain,
+		EmailHash:      accountRoot.EmailHash,
+		MessageKey:     accountRoot.MessageKey,
+		WalletLocator:  accountRoot.WalletLocator,
+		AccountTxnID:   accountRoot.AccountTxnID,
+		TransferRate:   accountRoot.TransferRate,
 	}
 }
 
 // AccountInfo contains account information from the ledger.
 type AccountInfo struct {
-	Address    string
-	Balance    uint64
-	Sequence   uint32
-	OwnerCount uint32
-	Flags      uint32
+	Address        string
+	Balance        uint64
+	Sequence       uint32
+	OwnerCount     uint32
+	Flags          uint32
+	MintedNFTokens uint32
+	BurnedNFTokens uint32
+	NFTokenMinter  string
+	Domain         string
+	EmailHash      string
+	MessageKey     string
+	WalletLocator  string
+	AccountTxnID   [32]byte
+	TransferRate   uint32
+}
+
+// MintedCount returns the number of NFTokens minted by this issuer.
+// Reference: rippled's mintedCount() test helper.
+func (e *TestEnv) MintedCount(acc *Account) uint32 {
+	e.t.Helper()
+	info := e.AccountInfo(acc)
+	if info == nil {
+		return 0
+	}
+	return info.MintedNFTokens
+}
+
+// BurnedCount returns the number of NFTokens burned for this issuer.
+// Reference: rippled's burnedCount() test helper.
+func (e *TestEnv) BurnedCount(acc *Account) uint32 {
+	e.t.Helper()
+	info := e.AccountInfo(acc)
+	if info == nil {
+		return 0
+	}
+	return info.BurnedNFTokens
 }
 
 // MasterAccount returns the master account for the test environment.
@@ -826,6 +1021,14 @@ func (e *TestEnv) EnableFeature(name string) {
 // Reference: rippled's Env::disableFeature() in test/jtx/impl/Env.cpp
 func (e *TestEnv) DisableFeature(name string) {
 	e.rulesBuilder.DisableByName(name)
+}
+
+// SetNetworkID sets the network identifier for the test environment.
+// Networks with ID > 1024 require NetworkID in transactions.
+// Networks with ID <= 1024 are legacy networks and cannot have NetworkID in transactions.
+// Reference: rippled's Config::NETWORK_ID
+func (e *TestEnv) SetNetworkID(id uint32) {
+	e.networkID = id
 }
 
 // FeatureEnabled returns true if the named amendment is currently enabled.
@@ -1055,6 +1258,7 @@ func (e *TestEnv) submitWithSigVerification(txn tx.Transaction) TxResult {
 		SkipSignatureVerification: false, // Verify signatures
 		Rules:                     e.rulesBuilder.Build(),
 		ParentCloseTime:           parentCloseTime,
+		NetworkID:                 e.networkID,
 	}
 
 	engine := tx.NewEngine(e.ledger, engineConfig)
@@ -1115,6 +1319,40 @@ func (e *TestEnv) DisableRegularKey(acc *Account) {
 	}
 }
 
+// DisableRegularKeyExpect attempts to clear the regular key and expects a specific result.
+func (e *TestEnv) DisableRegularKeyExpect(acc *Account, expectedCode string) {
+	e.t.Helper()
+
+	setKey := signerlist.NewSetRegularKey(acc.Address)
+	setKey.ClearKey()
+	setKey.Fee = formatUint64(e.baseFee)
+	seq := e.Seq(acc)
+	setKey.Sequence = &seq
+
+	result := e.Submit(setKey)
+	if result.Code != expectedCode {
+		e.t.Fatalf("DisableRegularKeyExpect: expected %s, got %s", expectedCode, result.Code)
+	}
+}
+
+// DisableMasterKey disables the master key on an account using AccountSet.
+// The account must have a regular key or signer list set first.
+func (e *TestEnv) DisableMasterKey(acc *Account) {
+	e.t.Helper()
+
+	accountSet := account.NewAccountSet(acc.Address)
+	flag := account.AccountSetFlagDisableMaster
+	accountSet.SetFlag = &flag
+	accountSet.Fee = formatUint64(e.baseFee)
+	seq := e.Seq(acc)
+	accountSet.Sequence = &seq
+
+	result := e.Submit(accountSet)
+	if !result.Success {
+		e.t.Fatalf("Failed to disable master key for %s: %s", acc.Name, result.Code)
+	}
+}
+
 // ===========================================================================
 // Phase 1c: SignerList helpers
 // ===========================================================================
@@ -1158,6 +1396,39 @@ func (e *TestEnv) RemoveSignerList(acc *Account) {
 	if !result.Success {
 		e.t.Fatalf("Failed to remove signer list for %s: %s", acc.Name, result.Code)
 	}
+}
+
+// ===========================================================================
+// Phase 1c (continued): Raw transaction helpers for multisign tests
+// ===========================================================================
+
+// NewSignerListSetTx creates a raw SignerListSet transaction without submitting.
+// Use this when you need to submit via SubmitMultiSigned or SubmitSignedWith.
+func NewSignerListSetTx(acc *Account, quorum uint32, signers []TestSigner) tx.Transaction {
+	sl := signerlist.NewSignerListSet(acc.Address, quorum)
+	for _, s := range signers {
+		sl.AddSigner(s.Account.Address, s.Weight)
+	}
+	return sl
+}
+
+// NewRemoveSignerListTx creates a raw SignerListSet transaction that removes the signer list.
+func NewRemoveSignerListTx(acc *Account) tx.Transaction {
+	return signerlist.NewSignerListSet(acc.Address, 0)
+}
+
+// NewSetRegularKeyTx creates a raw SetRegularKey transaction that sets a regular key.
+func NewSetRegularKeyTx(acc *Account, regularKey *Account) tx.Transaction {
+	setKey := signerlist.NewSetRegularKey(acc.Address)
+	setKey.SetKey(regularKey.Address)
+	return setKey
+}
+
+// NewDisableRegularKeyTx creates a raw SetRegularKey transaction that clears the regular key.
+func NewDisableRegularKeyTx(acc *Account) tx.Transaction {
+	setKey := signerlist.NewSetRegularKey(acc.Address)
+	setKey.ClearKey()
+	return setKey
 }
 
 // ===========================================================================
@@ -1275,6 +1546,22 @@ func (e *TestEnv) Noop(acc *Account) {
 	}
 }
 
+// NoopWithFee submits a no-op AccountSet with a custom fee.
+// Reference: rippled's env(noop(account), fee(f))
+func (e *TestEnv) NoopWithFee(acc *Account, fee uint64) {
+	e.t.Helper()
+
+	accountSet := account.NewAccountSet(acc.Address)
+	accountSet.Fee = formatUint64(fee)
+	seq := e.Seq(acc)
+	accountSet.Sequence = &seq
+
+	result := e.Submit(accountSet)
+	if !result.Success {
+		e.t.Fatalf("Failed noop for %s: %s", acc.Name, result.Code)
+	}
+}
+
 // Trust creates a trust line and refunds the fee from master.
 // Reference: rippled's Env::trust(amount, account) in Env.h
 func (e *TestEnv) Trust(acc *Account, amount tx.Amount) {
@@ -1289,18 +1576,6 @@ func (e *TestEnv) Trust(acc *Account, amount tx.Amount) {
 	if !result.Success {
 		e.t.Fatalf("Failed to set trust line for %s: %s", acc.Name, result.Code)
 	}
-
-	// Refund the fee from master (matching rippled's behavior)
-	master := e.accounts["master"]
-	if master == nil {
-		return
-	}
-	masterSeq := e.Seq(master)
-	refund := payment.NewPayment(master.Address, acc.Address, tx.NewXRPAmount(int64(e.baseFee)))
-	refund.Fee = formatUint64(e.baseFee)
-	refund.Sequence = &masterSeq
-
-	e.Submit(refund)
 }
 
 // EnableDisallowIncomingCheck enables the DisallowIncomingCheck flag on an account.
@@ -1518,4 +1793,72 @@ func (e *TestEnv) Limit(holder, issuer *Account, currency string) float64 {
 		return rs.LowLimit.Float64()
 	}
 	return rs.HighLimit.Float64()
+}
+
+// PayIOU sends an IOU payment from sender to receiver.
+// The issuer is the gateway that issued the currency.
+// Reference: rippled's env(pay(sender, receiver, amount))
+func (e *TestEnv) PayIOU(sender, receiver *Account, issuer *Account, currency string, amount float64) {
+	e.t.Helper()
+
+	amt := tx.NewIssuedAmountFromFloat64(amount, currency, issuer.Address)
+	payTx := payment.NewPayment(sender.Address, receiver.Address, amt)
+	payTx.Fee = formatUint64(e.baseFee)
+	seq := e.Seq(sender)
+	payTx.Sequence = &seq
+
+	result := e.Submit(payTx)
+	if !result.Success {
+		e.t.Fatalf("Failed to pay %f %s from %s to %s: %s", amount, currency, sender.Name, receiver.Name, result.Code)
+	}
+}
+
+// PayIOUWithSendMax sends an IOU payment with a SendMax limit.
+// Reference: rippled's env(pay(sender, receiver, amount), sendmax(max))
+func (e *TestEnv) PayIOUWithSendMax(sender, receiver *Account, issuer *Account, currency string, amount, sendMax float64) {
+	e.t.Helper()
+
+	amt := tx.NewIssuedAmountFromFloat64(amount, currency, issuer.Address)
+	maxAmt := tx.NewIssuedAmountFromFloat64(sendMax, currency, issuer.Address)
+	payTx := payment.NewPayment(sender.Address, receiver.Address, amt)
+	payTx.SendMax = &maxAmt
+	payTx.Fee = formatUint64(e.baseFee)
+	seq := e.Seq(sender)
+	payTx.Sequence = &seq
+
+	result := e.Submit(payTx)
+	if !result.Success {
+		e.t.Fatalf("Failed to pay %f %s (sendmax %f) from %s to %s: %s",
+			amount, currency, sendMax, sender.Name, receiver.Name, result.Code)
+	}
+}
+
+// SetTransferRateDirect modifies the TransferRate directly in ledger state.
+// This bypasses transaction validation, allowing out-of-bounds rates for testing
+// legacy MainNet accounts.
+// Reference: rippled AccountSet_test.cpp lines 446-460 (env.app().openLedger().modify())
+func (e *TestEnv) SetTransferRateDirect(acc *Account, rate uint32) {
+	e.t.Helper()
+
+	accountKey := keylet.Account(acc.ID)
+	data, err := e.ledger.Read(accountKey)
+	if err != nil {
+		e.t.Fatalf("SetTransferRateDirect: failed to read account: %v", err)
+	}
+
+	accountRoot, err := sle.ParseAccountRoot(data)
+	if err != nil {
+		e.t.Fatalf("SetTransferRateDirect: failed to parse account: %v", err)
+	}
+
+	accountRoot.TransferRate = rate
+
+	updated, err := sle.SerializeAccountRoot(accountRoot)
+	if err != nil {
+		e.t.Fatalf("SetTransferRateDirect: failed to serialize: %v", err)
+	}
+
+	if err := e.ledger.Update(accountKey, updated); err != nil {
+		e.t.Fatalf("SetTransferRateDirect: failed to update: %v", err)
+	}
 }

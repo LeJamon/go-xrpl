@@ -96,6 +96,11 @@ func NewPaymentSandbox(view tx.LedgerView) *PaymentSandbox {
 	}
 }
 
+// DebugCounts returns the number of modifications, insertions, and deletions in this sandbox
+func (s *PaymentSandbox) DebugCounts() (int, int, int) {
+	return len(s.modifications), len(s.insertions), len(s.deletions)
+}
+
 // SetTransactionContext sets the current transaction hash and ledger sequence
 // for PreviousTxnID/PreviousTxnLgrSeq updates when modifying ledger objects.
 func (s *PaymentSandbox) SetTransactionContext(txHash [32]byte, ledgerSeq uint32) {
@@ -215,11 +220,30 @@ func (s *PaymentSandbox) Exists(k keylet.Keylet) (bool, error) {
 // Insert adds a new ledger entry to the sandbox
 func (s *PaymentSandbox) Insert(k keylet.Keylet, data []byte) error {
 	key := k.Key
-	// Remove from deletions if present
-	delete(s.deletions, key)
 	// Copy data to avoid external mutations
 	dataCopy := make([]byte, len(data))
 	copy(dataCopy, data)
+
+	// If re-inserting a previously deleted entry, check whether it existed
+	// in the base view. If so, this is effectively a modification (the base
+	// view still has the old entry), not a fresh insertion. Without this,
+	// ApplyToView would attempt Insert on the base view and fail with
+	// "entry already exists".
+	// Reference: rippled OpenView::insert → if erased && existed in parent → modify
+	if _, wasDeleted := s.deletions[key]; wasDeleted {
+		delete(s.deletions, key)
+		// Check if the entry existed in the base view before this sandbox
+		origData, _ := s.readOriginal(k)
+		if origData != nil {
+			// Entry exists in base → treat as modification
+			s.modifications[key] = dataCopy
+			return nil
+		}
+		// Entry was inserted+deleted within this sandbox → re-insert
+		s.insertions[key] = dataCopy
+		return nil
+	}
+
 	s.insertions[key] = dataCopy
 	return nil
 }
@@ -346,6 +370,90 @@ func (s *PaymentSandbox) ForEach(fn func(key [32]byte, data []byte) bool) error 
 	}
 
 	return nil
+}
+
+// Succ returns the first entry with key > the given key.
+// Combines local entries with parent/view results.
+// Reference: rippled ReadView::succ()
+func (s *PaymentSandbox) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
+	var bestKey [32]byte
+	var bestData []byte
+	found := false
+
+	// Check local insertions
+	for k, data := range s.insertions {
+		if s.deletions[k] {
+			continue
+		}
+		if bytes.Compare(k[:], key[:]) > 0 {
+			if !found || bytes.Compare(k[:], bestKey[:]) < 0 {
+				bestKey = k
+				bestData = data
+				found = true
+			}
+		}
+	}
+
+	// Check local modifications
+	for k, data := range s.modifications {
+		if s.deletions[k] {
+			continue
+		}
+		if bytes.Compare(k[:], key[:]) > 0 {
+			if !found || bytes.Compare(k[:], bestKey[:]) < 0 {
+				bestKey = k
+				bestData = data
+				found = true
+			}
+		}
+	}
+
+	// Delegate to parent or view, looping past deleted entries.
+	// When the base returns an entry that's been locally deleted,
+	// we must ask for the NEXT one (using the deleted key as new search key).
+	searchBase := key
+	for {
+		var baseKey [32]byte
+		var baseData []byte
+		var baseFound bool
+		var err error
+
+		if s.parent != nil {
+			baseKey, baseData, baseFound, err = s.parent.Succ(searchBase)
+		} else if s.view != nil {
+			baseKey, baseData, baseFound, err = s.view.Succ(searchBase)
+		}
+		if err != nil {
+			if found {
+				return bestKey, bestData, true, nil
+			}
+			return [32]byte{}, nil, false, err
+		}
+
+		if !baseFound {
+			break
+		}
+
+		if s.deletions[baseKey] {
+			// This entry was deleted locally — skip it and look for the next one
+			searchBase = baseKey
+			continue
+		}
+
+		// Check if local data overrides base data (modification)
+		if modData, ok := s.modifications[baseKey]; ok {
+			baseData = modData
+		}
+
+		if !found || bytes.Compare(baseKey[:], bestKey[:]) < 0 {
+			bestKey = baseKey
+			bestData = baseData
+			found = true
+		}
+		break
+	}
+
+	return bestKey, bestData, found, nil
 }
 
 // Credit records a credit from sender to receiver.

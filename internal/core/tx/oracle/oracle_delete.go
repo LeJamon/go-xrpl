@@ -2,8 +2,11 @@ package oracle
 
 import (
 	"errors"
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
+
 	"github.com/LeJamon/goXRPLd/internal/core/amendment"
+	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )
 
 func init() {
@@ -59,10 +62,54 @@ func (o *OracleDelete) RequiredAmendments() [][32]byte {
 }
 
 // Apply applies an OracleDelete transaction to the ledger state.
-// Reference: rippled DeleteOracle.cpp DeleteOracle::doApply
+// Combines rippled's DeleteOracle::preclaim() and DeleteOracle::doApply().
+// Reference: rippled DeleteOracle.cpp
 func (o *OracleDelete) Apply(ctx *tx.ApplyContext) tx.Result {
-	if ctx.Account.OwnerCount > 0 {
-		ctx.Account.OwnerCount--
+	// --- Preclaim ---
+	// Reference: rippled DeleteOracle.cpp preclaim lines 47-69
+	oracleKey := keylet.Oracle(ctx.AccountID, o.OracleDocumentID)
+	oracleData, err := ctx.View.Read(oracleKey)
+	if err != nil || oracleData == nil {
+		return tx.TecNO_ENTRY
 	}
+
+	oracle, err := sle.ParseOracle(oracleData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// --- doApply ---
+	// Reference: rippled DeleteOracle.cpp deleteOracle lines 71-102
+	return DeleteOracleFromView(ctx.View, oracleKey, oracle, ctx.AccountID, &ctx.Account.OwnerCount)
+}
+
+// DeleteOracleFromView deletes an oracle from the ledger view.
+// This is a shared helper used by both OracleDelete.Apply() and AccountDelete cascade.
+// If ownerCount is nil, the OwnerCount adjustment is skipped (account deletion case).
+// Reference: rippled DeleteOracle.cpp deleteOracle()
+func DeleteOracleFromView(view sle.LedgerView, oracleKey keylet.Keylet, oracle *sle.OracleData, accountID [20]byte, ownerCount *uint32) tx.Result {
+	// DirRemove from owner directory
+	ownerDirKey := keylet.OwnerDir(accountID)
+	_, err := sle.DirRemove(view, ownerDirKey, oracle.OwnerNode, oracleKey.Key, true)
+	if err != nil {
+		return tx.TefBAD_LEDGER
+	}
+
+	// Adjust OwnerCount
+	if ownerCount != nil {
+		count := uint32(1)
+		if len(oracle.PriceDataSeries) > 5 {
+			count = 2
+		}
+		if *ownerCount >= count {
+			*ownerCount -= count
+		}
+	}
+
+	// Erase oracle SLE
+	if err := view.Erase(oracleKey); err != nil {
+		return tx.TefINTERNAL
+	}
+
 	return tx.TesSUCCESS
 }

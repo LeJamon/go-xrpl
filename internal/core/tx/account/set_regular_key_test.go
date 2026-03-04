@@ -222,7 +222,7 @@ func TestSignerListSetValidation(t *testing.T) {
 				},
 			},
 			expectError: true,
-			errorMsg:    "cannot have SignerEntries when deleting signer list",
+			errorMsg:    "temMALFORMED: cannot have SignerEntries when deleting signer list",
 		},
 		{
 			name: "invalid: quorum>0 without entries",
@@ -232,7 +232,7 @@ func TestSignerListSetValidation(t *testing.T) {
 				SignerEntries: nil,
 			},
 			expectError: true,
-			errorMsg:    "SignerEntries is required when setting signer list",
+			errorMsg:    "temMALFORMED: too many or too few signers in signer list",
 		},
 		{
 			name: "invalid: too many signers (>32)",
@@ -249,7 +249,7 @@ func TestSignerListSetValidation(t *testing.T) {
 				return s
 			}(),
 			expectError: true,
-			errorMsg:    "cannot have more than 32 signers",
+			errorMsg:    "temMALFORMED: too many or too few signers in signer list",
 		},
 		{
 			name: "invalid: duplicate signer",
@@ -262,7 +262,7 @@ func TestSignerListSetValidation(t *testing.T) {
 				},
 			},
 			expectError: true,
-			errorMsg:    "duplicate signer account",
+			errorMsg:    "temBAD_SIGNER: duplicate signers in signer list",
 		},
 		{
 			name: "invalid: self as signer",
@@ -275,7 +275,7 @@ func TestSignerListSetValidation(t *testing.T) {
 				},
 			},
 			expectError: true,
-			errorMsg:    "cannot include self in signer list",
+			errorMsg:    "temBAD_SIGNER: a signer may not self reference account",
 		},
 		{
 			name: "invalid: zero weight signer",
@@ -288,7 +288,7 @@ func TestSignerListSetValidation(t *testing.T) {
 				},
 			},
 			expectError: true,
-			errorMsg:    "signer weight must be non-zero",
+			errorMsg:    "temBAD_WEIGHT: every signer must have a positive weight",
 		},
 		{
 			name: "invalid: weights less than quorum",
@@ -301,7 +301,7 @@ func TestSignerListSetValidation(t *testing.T) {
 				},
 			},
 			expectError: true,
-			errorMsg:    "total signer weight is less than quorum",
+			errorMsg:    "temBAD_QUORUM: quorum is unreachable",
 		},
 		{
 			name: "valid: weights equal to quorum",

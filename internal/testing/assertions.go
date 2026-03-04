@@ -165,6 +165,11 @@ const (
 	TecINVARIANT_FAILED      TxResultCode = "tecINVARIANT_FAILED"
 	TecDUPLICATE             TxResultCode = "tecDUPLICATE"
 	TecEXPIRED               TxResultCode = "tecEXPIRED"
+	TecHAS_OBLIGATIONS       TxResultCode = "tecHAS_OBLIGATIONS"
+	TecINSUFFICIENT_FUNDS    TxResultCode = "tecINSUFFICIENT_FUNDS"
+	TecOBJECT_NOT_FOUND      TxResultCode = "tecOBJECT_NOT_FOUND"
+	TecLOCKED                TxResultCode = "tecLOCKED"
+	TecKILLED                TxResultCode = "tecKILLED"
 
 	// Failure (tef) - transaction not applied, retry possible
 	TefFAILURE          TxResultCode = "tefFAILURE"
@@ -214,6 +219,7 @@ const (
 	TemBAD_SIGNATURE      TxResultCode = "temBAD_SIGNATURE"
 	TemBAD_SRC_ACCOUNT    TxResultCode = "temBAD_SRC_ACCOUNT"
 	TemBAD_TRANSFER_RATE  TxResultCode = "temBAD_TRANSFER_RATE"
+	TemBAD_TRANSFER_FEE   TxResultCode = "temBAD_TRANSFER_FEE"
 	TemDST_IS_SRC         TxResultCode = "temDST_IS_SRC"
 	TemDST_NEEDED         TxResultCode = "temDST_NEEDED"
 	TemINVALID            TxResultCode = "temINVALID"
@@ -297,9 +303,28 @@ func RequireOffers(t *testing.T, env *TestEnv, acc *Account, expected uint32) {
 		require.Fail(t, fmt.Sprintf("Account %s does not exist, expected %d offers", acc.Name, expected))
 		return
 	}
-	// TODO: Implement proper offer counting by iterating owner directory
-	// For now this is a placeholder that checks owner count
-	// In tests, you may need to track expected total owner count
+	dirKey := keylet.OwnerDir(acc.ID)
+	var count uint32
+	err := sle.DirForEach(env.ledger, dirKey, func(itemKey [32]byte) error {
+		entryKey := keylet.Keylet{Key: itemKey}
+		data, readErr := env.ledger.Read(entryKey)
+		if readErr != nil || len(data) == 0 {
+			return nil
+		}
+		entryType, typeErr := sle.GetLedgerEntryType(data)
+		if typeErr != nil {
+			return nil
+		}
+		// Offer type = 0x006f
+		if entryType == 0x006f {
+			count++
+		}
+		return nil
+	})
+	require.NoError(t, err, "Account %s: failed to iterate owner directory", acc.Name)
+	require.Equal(t, expected, count,
+		"Account %s offer count mismatch: expected %d, got %d",
+		acc.Name, expected, count)
 }
 
 // RequireFlags asserts that an account has the expected flags set.
@@ -437,4 +462,24 @@ func RequireTrustLineNotExists(t *testing.T, env *TestEnv, acc1, acc2 *Account, 
 	require.False(t, env.TrustLineExists(acc1, acc2, currency),
 		"Expected no trust line between %s and %s for %s",
 		acc1.Name, acc2.Name, currency)
+}
+
+// RequireMintedCount asserts that an account has the expected number of minted NFTokens.
+// Reference: rippled's mintedCount() test helper.
+func RequireMintedCount(t *testing.T, env *TestEnv, acc *Account, expected uint32) {
+	t.Helper()
+	actual := env.MintedCount(acc)
+	require.Equal(t, expected, actual,
+		"Account %s minted NFToken count mismatch: expected %d, got %d",
+		acc.Name, expected, actual)
+}
+
+// RequireBurnedCount asserts that an account has the expected number of burned NFTokens.
+// Reference: rippled's burnedCount() test helper.
+func RequireBurnedCount(t *testing.T, env *TestEnv, acc *Account, expected uint32) {
+	t.Helper()
+	actual := env.BurnedCount(acc)
+	require.Equal(t, expected, actual,
+		"Account %s burned NFToken count mismatch: expected %d, got %d",
+		acc.Name, expected, actual)
 }

@@ -85,9 +85,6 @@ func initMethodRegistry() *rpc_types.MethodRegistry {
 	// NFT methods
 	registry.Register("nft_buy_offers", &rpc_handlers.NftBuyOffersMethod{})
 	registry.Register("nft_sell_offers", &rpc_handlers.NftSellOffersMethod{})
-	registry.Register("nft_history", &rpc_handlers.NftHistoryMethod{})
-	registry.Register("nfts_by_issuer", &rpc_handlers.NftsByIssuerMethod{})
-	registry.Register("nft_info", &rpc_handlers.NftInfoMethod{})
 	
 	// Admin methods (require admin role)
 	registry.Register("stop", &rpc_handlers.StopMethod{})

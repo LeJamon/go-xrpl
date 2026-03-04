@@ -215,7 +215,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled AMMDeposit.cpp lines 170-176
 	ammKey := computeAMMKeylet(a.Asset, a.Asset2)
 	ammRawData, err := ctx.View.Read(ammKey)
-	if err != nil {
+	if err != nil || ammRawData == nil {
 		return TerNO_AMM
 	}
 
@@ -534,7 +534,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Skip check if depositor is the issuer (they can issue unlimited)
 		issuerID1, _ := sle.DecodeAccountID(a.Asset.Issuer)
 		if accountID != issuerID1 {
-			depositorFunds := tx.AccountFunds(ctx.View, accountID, depositAmount1, false)
+			depositorFunds := tx.AccountFunds(ctx.View, accountID, depositAmount1, false, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 			if depositorFunds.Compare(depositAmount1) < 0 {
 				return TecUNFUNDED_AMM
 			}
@@ -544,7 +544,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Check depositor has enough of asset2 (IOU)
 		issuerID2, _ := sle.DecodeAccountID(a.Asset2.Issuer)
 		if accountID != issuerID2 {
-			depositorFunds := tx.AccountFunds(ctx.View, accountID, depositAmount2, false)
+			depositorFunds := tx.AccountFunds(ctx.View, accountID, depositAmount2, false, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 			if depositorFunds.Compare(depositAmount2) < 0 {
 				return TecUNFUNDED_AMM
 			}

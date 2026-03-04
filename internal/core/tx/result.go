@@ -72,6 +72,7 @@ const (
 	TecTOKEN_PAIR_NOT_FOUND          Result = 171
 	TecARRAY_EMPTY                   Result = 172
 	TecARRAY_TOO_LARGE               Result = 173
+	TecLOCKED                        Result = 192
 	TecBAD_CREDENTIALS               Result = 193
 
 	// tefFAILURE and related codes (-199 to -100)
@@ -97,6 +98,7 @@ const (
 	TefTOO_BIG          Result = -181
 	TefNO_TICKET        Result = -180
 	TefNFTOKEN_IS_NOT_TRANSFERABLE Result = -179
+	TefINVALID_LEDGER_FIX_TYPE     Result = -178
 
 	// telLOCAL_ERROR and related codes (-399 to -300)
 	// Local error, transaction not sent to network
@@ -167,6 +169,7 @@ const (
 	TemEMPTY_DID           Result = -254
 	TemARRAY_EMPTY         Result = -253
 	TemARRAY_TOO_LARGE     Result = -252
+	TemBAD_TRANSFER_FEE    Result = -251
 
 	// terRETRY and related codes (-99 to -1)
 	// Retry later
@@ -295,6 +298,8 @@ func (r Result) String() string {
 		return "tecARRAY_EMPTY"
 	case TecARRAY_TOO_LARGE:
 		return "tecARRAY_TOO_LARGE"
+	case TecLOCKED:
+		return "tecLOCKED"
 	case TecBAD_CREDENTIALS:
 		return "tecBAD_CREDENTIALS"
 	case TecDUPLICATE:
@@ -315,6 +320,8 @@ func (r Result) String() string {
 		return "temARRAY_EMPTY"
 	case TemARRAY_TOO_LARGE:
 		return "temARRAY_TOO_LARGE"
+	case TemBAD_TRANSFER_FEE:
+		return "temBAD_TRANSFER_FEE"
 	case TefFAILURE:
 		return "tefFAILURE"
 	case TefALREADY:
@@ -335,18 +342,36 @@ func (r Result) String() string {
 		return "tefMAX_LEDGER"
 	case TefBAD_SIGNATURE:
 		return "tefBAD_SIGNATURE"
+	case TefBAD_QUORUM:
+		return "tefBAD_QUORUM"
+	case TefNOT_MULTI_SIGNING:
+		return "tefNOT_MULTI_SIGNING"
+	case TefBAD_AUTH_MASTER:
+		return "tefBAD_AUTH_MASTER"
+	case TefTOO_BIG:
+		return "tefTOO_BIG"
 	case TefNO_TICKET:
 		return "tefNO_TICKET"
+	case TefNFTOKEN_IS_NOT_TRANSFERABLE:
+		return "tefNFTOKEN_IS_NOT_TRANSFERABLE"
+	case TefINVALID_LEDGER_FIX_TYPE:
+		return "tefINVALID_LEDGER_FIX_TYPE"
 	case TelLOCAL_ERROR:
 		return "telLOCAL_ERROR"
 	case TelBAD_DOMAIN:
 		return "telBAD_DOMAIN"
+	case TelBAD_PUBLIC_KEY:
+		return "telBAD_PUBLIC_KEY"
 	case TelINSUF_FEE_P:
 		return "telINSUF_FEE_P"
 	case TelCAN_NOT_QUEUE:
 		return "telCAN_NOT_QUEUE"
 	case TelWRONG_NETWORK:
 		return "telWRONG_NETWORK"
+	case TelREQUIRES_NETWORK_ID:
+		return "telREQUIRES_NETWORK_ID"
+	case TelNETWORK_ID_MAKES_TX_NON_CANONICAL:
+		return "telNETWORK_ID_MAKES_TX_NON_CANONICAL"
 	case TemMALFORMED:
 		return "temMALFORMED"
 	case TemBAD_AMOUNT:

@@ -172,7 +172,7 @@ func (ec *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	destKey := keylet.Account(destID)
 	destData, err := ctx.View.Read(destKey)
-	if err != nil {
+	if err != nil || destData == nil {
 		return tx.TecNO_DST
 	}
 

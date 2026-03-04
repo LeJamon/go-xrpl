@@ -33,7 +33,10 @@ func NewAccountStateLeafNode(item *Item) (*AccountStateLeafNode, error) {
 		return nil, ErrNilItem
 	}
 
-	n := &AccountStateLeafNode{item: item}
+	n := &AccountStateLeafNode{
+		BaseNode: BaseNode{dirty: true},
+		item:     item,
+	}
 	if err := n.UpdateHash(); err != nil {
 		return nil, fmt.Errorf("failed to update hash: %w", err)
 	}
@@ -61,6 +64,7 @@ func (n *AccountStateLeafNode) SetItem(item *Item) (bool, error) {
 
 	oldHash := n.hash
 	n.item = item
+	n.dirty = true
 
 	if err := n.updateHashUnsafe(); err != nil {
 		return false, fmt.Errorf("failed to update hash: %w", err)
@@ -158,7 +162,12 @@ func NewAccountStateLeafFromWire(data []byte) (*AccountStateLeafNode, error) {
 	stateData := nodeData[:keyStart]
 	item := NewItem(key, stateData)
 
-	return NewAccountStateLeafNode(item)
+	node, err := NewAccountStateLeafNode(item)
+	if err != nil {
+		return nil, err
+	}
+	node.dirty = false // loaded from wire, not modified
+	return node, nil
 }
 
 func (n *AccountStateLeafNode) Invariants(isRoot bool) error {
@@ -225,7 +234,10 @@ func NewTransactionLeafNode(item *Item) (*TransactionLeafNode, error) {
 		return nil, ErrNilItem
 	}
 
-	n := &TransactionLeafNode{item: item}
+	n := &TransactionLeafNode{
+		BaseNode: BaseNode{dirty: true},
+		item:     item,
+	}
 	if err := n.UpdateHash(); err != nil {
 		return nil, fmt.Errorf("failed to update hash: %w", err)
 	}
@@ -251,6 +263,7 @@ func (n *TransactionLeafNode) SetItem(item *Item) (bool, error) {
 
 	oldHash := n.hash
 	n.item = item
+	n.dirty = true
 
 	if err := n.updateHashUnsafe(); err != nil {
 		return false, fmt.Errorf("failed to update hash: %w", err)
@@ -330,7 +343,12 @@ func NewTransactionLeafFromWire(data []byte) (*TransactionLeafNode, error) {
 	key := crypto.Sha512Half(protocol.HashPrefixTransactionID[:], nodeData)
 
 	item := NewItem(key, nodeData)
-	return NewTransactionLeafNode(item)
+	node, err := NewTransactionLeafNode(item)
+	if err != nil {
+		return nil, err
+	}
+	node.dirty = false // loaded from wire, not modified
+	return node, nil
 }
 
 func (n *TransactionLeafNode) Invariants(isRoot bool) error {
@@ -397,7 +415,10 @@ func NewTransactionWithMetaLeafNode(item *Item) (*TransactionWithMetaLeafNode, e
 		return nil, ErrNilItem
 	}
 
-	n := &TransactionWithMetaLeafNode{item: item}
+	n := &TransactionWithMetaLeafNode{
+		BaseNode: BaseNode{dirty: true},
+		item:     item,
+	}
 	if err := n.UpdateHash(); err != nil {
 		return nil, fmt.Errorf("failed to update hash: %w", err)
 	}
@@ -423,6 +444,7 @@ func (n *TransactionWithMetaLeafNode) SetItem(item *Item) (bool, error) {
 
 	oldHash := n.hash
 	n.item = item
+	n.dirty = true
 
 	if err := n.updateHashUnsafe(); err != nil {
 		return false, fmt.Errorf("failed to update hash: %w", err)
@@ -514,7 +536,12 @@ func NewTransactionWithMetaLeafFromWire(data []byte) (*TransactionWithMetaLeafNo
 	txData := nodeData[:keyStart]
 	item := NewItem(key, txData)
 
-	return NewTransactionWithMetaLeafNode(item)
+	node, err := NewTransactionWithMetaLeafNode(item)
+	if err != nil {
+		return nil, err
+	}
+	node.dirty = false // loaded from wire, not modified
+	return node, nil
 }
 
 func (n *TransactionWithMetaLeafNode) Invariants(isRoot bool) error {

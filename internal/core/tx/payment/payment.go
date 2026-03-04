@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
-	"fmt"
+	"math/big"
 	"sort"
 	"strconv"
 
 	"github.com/LeJamon/goXRPLd/internal/core/amendment"
+	"github.com/LeJamon/goXRPLd/internal/core/ledger/entry"
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/credential"
@@ -114,6 +115,10 @@ type Payment struct {
 	// via credentials.
 	// Reference: rippled sfCredentialIDs
 	CredentialIDs []string `json:"CredentialIDs,omitempty" xrpl:"CredentialIDs,omitempty"`
+
+	// MPTokenIssuanceID is the issuance ID for MPT direct payments (optional).
+	// When set, the payment follows the MPT direct path instead of IOU trust line path.
+	MPTokenIssuanceID string `json:"MPTokenIssuanceID,omitempty" xrpl:"MPTokenIssuanceID,omitempty"`
 }
 
 // PathStep represents a single step in a payment path
@@ -164,10 +169,14 @@ func (p *Payment) TxType() tx.Type {
 // RequiredAmendments returns amendments required for this transaction.
 // Reference: rippled Payment.cpp preflight() - featureCredentials check for sfCredentialIDs
 func (p *Payment) RequiredAmendments() [][32]byte {
-	if p.CredentialIDs != nil {
-		return [][32]byte{amendment.FeatureCredentials}
+	var amendments [][32]byte
+	if p.MPTokenIssuanceID != "" {
+		amendments = append(amendments, amendment.FeatureMPTokensV1)
 	}
-	return nil
+	if p.CredentialIDs != nil {
+		amendments = append(amendments, amendment.FeatureCredentials)
+	}
+	return amendments
 }
 
 // Validate validates the payment transaction
@@ -185,21 +194,56 @@ func (p *Payment) Validate() error {
 		return errors.New("temBAD_AMOUNT: Amount is required")
 	}
 
+	// Determine if this is an MPT direct payment
+	mptDirect := p.MPTokenIssuanceID != ""
+
 	// Determine if this is an XRP-to-XRP (direct) payment
 	// Reference: rippled Payment.cpp:129
 	xrpDirect := p.Amount.IsNative() && (p.SendMax == nil || p.SendMax.IsNative())
 
 	// Check flags based on payment type
 	flags := p.GetFlags()
+
+	// MPT payments use a stricter flag mask (no tfNoRippleDirect, no tfLimitQuality)
+	// Reference: rippled Payment.cpp:93-99 tfMPTPaymentMask
+	if mptDirect {
+		// tfMPTPaymentMask = ~(tfUniversal | tfPartialPayment)
+		// Only tfPartialPayment is allowed for MPT payments (beyond universal flags)
+		mptPaymentMask := ^(tx.TfUniversal | PaymentFlagPartialPayment)
+		if flags&mptPaymentMask != 0 {
+			return errors.New("temINVALID_FLAG: Invalid flags for MPT payment")
+		}
+	}
+
 	partialPaymentAllowed := (flags & PaymentFlagPartialPayment) != 0
 	limitQuality := (flags & PaymentFlagLimitQuality) != 0
 	noRippleDirect := (flags & PaymentFlagNoDirectRipple) != 0
 	hasPaths := len(p.Paths) > 0
 
-	// Cannot send XRP to self without paths (temREDUNDANT)
-	// Reference: rippled Payment.cpp:159-167
-	if p.Account == p.Destination && p.Amount.IsNative() && !hasPaths {
-		return errors.New("temREDUNDANT: cannot send XRP to self without path")
+	// MPT payments cannot have paths
+	// Reference: rippled Payment.cpp:101-102
+	if mptDirect && hasPaths {
+		return errors.New("temMALFORMED: Paths not allowed for MPT payment")
+	}
+
+	// Cannot send to self with same source/destination asset (temREDUNDANT)
+	// Reference: rippled Payment.cpp:126-127,159-167
+	// srcAsset = maxSourceAmount.asset() (SendMax if set, else Amount)
+	// dstAsset = dstAmount.asset()
+	// Only redundant if equalTokens(srcAsset, dstAsset) — same currency+issuer
+	srcAmount := p.Amount
+	if p.SendMax != nil {
+		srcAmount = *p.SendMax
+	}
+	equalTokens := (srcAmount.IsNative() && p.Amount.IsNative()) ||
+		(!srcAmount.IsNative() && !p.Amount.IsNative() &&
+			srcAmount.Currency == p.Amount.Currency &&
+			srcAmount.Issuer == p.Amount.Issuer)
+	if mptDirect {
+		equalTokens = true // MPT direct: src and dst are same issuance
+	}
+	if p.Account == p.Destination && equalTokens && !hasPaths {
+		return errors.New("temREDUNDANT: cannot send to self without path")
 	}
 
 	// XRP to XRP with SendMax is invalid (temBAD_SEND_XRP_MAX)
@@ -599,13 +643,427 @@ func (p *Payment) verifyDepositPreauth(ctx *tx.ApplyContext, srcAccountID, dstAc
 
 // Apply applies the Payment transaction to the ledger state.
 func (p *Payment) Apply(ctx *tx.ApplyContext) tx.Result {
-	// XRP-to-XRP payment (direct payment)
-	if p.Amount.IsNative() {
+	// MPT direct payment
+	if p.MPTokenIssuanceID != "" {
+		return p.applyMPTPayment(ctx)
+	}
+
+	// Determine if this is a "ripple" payment (uses the flow engine).
+	// Reference: rippled Payment.cpp:435-436:
+	//   bool const ripple = (hasPaths || sendMax || !dstAmount.native()) && !mptDirect;
+	hasPaths := len(p.Paths) > 0
+	hasSendMax := p.SendMax != nil
+	ripple := hasPaths || hasSendMax || !p.Amount.IsNative()
+
+	if !ripple {
+		// XRP-to-XRP direct payment (no paths, no SendMax, Amount is native)
 		return p.applyXRPPayment(ctx)
 	}
 
-	// IOU payment - more complex, involves trust lines and paths
+	// IOU / cross-currency payment - uses the flow engine
 	return p.applyIOUPayment(ctx)
+}
+
+// applyMPTPayment applies an MPT direct payment.
+// Reference: rippled Payment.cpp doApply() mptDirect path + View.cpp rippleSendMPT/rippleCreditMPT
+func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
+	// Parse MPTokenIssuanceID
+	issuanceIDBytes, err := hex.DecodeString(p.MPTokenIssuanceID)
+	if err != nil || len(issuanceIDBytes) != 24 {
+		return tx.TecOBJECT_NOT_FOUND
+	}
+	var mptID [24]byte
+	copy(mptID[:], issuanceIDBytes)
+
+	// Look up the issuance
+	issuanceKey := keylet.MPTIssuance(mptID)
+	issuanceRaw, err := ctx.View.Read(issuanceKey)
+	if err != nil || issuanceRaw == nil {
+		return tx.TecOBJECT_NOT_FOUND
+	}
+	issuance, err := sle.ParseMPTokenIssuance(issuanceRaw)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	issuerID := issuance.Issuer
+
+	// Decode destination
+	destAccountID, err := sle.DecodeAccountID(p.Destination)
+	if err != nil {
+		return tx.TemDST_NEEDED
+	}
+
+	// Check destination exists
+	destKey := keylet.Account(destAccountID)
+	destData, err := ctx.View.Read(destKey)
+	if err != nil || destData == nil {
+		return tx.TecNO_DST
+	}
+	destAccount, err := sle.ParseAccountRoot(destData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Check destination tag requirement
+	if (destAccount.Flags&sle.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
+		return tx.TecDST_TAG_NEEDED
+	}
+
+	// requireAuth: check sender is authorized
+	// Reference: rippled Payment.cpp:518-520
+	if issuance.Flags&entry.LsfMPTRequireAuth != 0 && ctx.AccountID != issuerID {
+		senderTokenKey := keylet.MPToken(issuanceKey.Key, ctx.AccountID)
+		senderTokenRaw, err := ctx.View.Read(senderTokenKey)
+		if err != nil || senderTokenRaw == nil {
+			return tx.TecNO_AUTH
+		}
+		senderToken, err := sle.ParseMPToken(senderTokenRaw)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		if senderToken.Flags&entry.LsfMPTAuthorized == 0 {
+			return tx.TecNO_AUTH
+		}
+	}
+
+	// requireAuth: check destination is authorized
+	// Reference: rippled Payment.cpp:522-524
+	if issuance.Flags&entry.LsfMPTRequireAuth != 0 && destAccountID != issuerID {
+		destTokenKey := keylet.MPToken(issuanceKey.Key, destAccountID)
+		destTokenRaw, err := ctx.View.Read(destTokenKey)
+		if err != nil || destTokenRaw == nil {
+			return tx.TecNO_AUTH
+		}
+		destToken, err := sle.ParseMPToken(destTokenRaw)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		if destToken.Flags&entry.LsfMPTAuthorized == 0 {
+			return tx.TecNO_AUTH
+		}
+	}
+
+	// Verify deposit preauth
+	// Reference: rippled Payment.cpp:531-539
+	if result := p.verifyDepositPreauth(ctx, ctx.AccountID, destAccountID, destAccount); result != tx.TesSUCCESS {
+		return result
+	}
+
+	// Extract the payment amount as uint64
+	dstAmount := mptAmountToUint64(p.Amount)
+	if dstAmount == 0 {
+		return tx.TemBAD_AMOUNT
+	}
+
+	senderIsIssuer := ctx.AccountID == issuerID
+	destIsIssuer := destAccountID == issuerID
+
+	// canTransfer: holder-to-holder requires CanTransfer flag
+	// Reference: rippled Payment.cpp:526-529
+	if !senderIsIssuer && !destIsIssuer {
+		if issuance.Flags&entry.LsfMPTCanTransfer == 0 {
+			return tx.TecNO_AUTH
+		}
+	}
+
+	// Compute transfer rate for holder-to-holder transfers
+	// Reference: rippled Payment.cpp:546-557, View.cpp transferRate()
+	// rate is in QUALITY_ONE format: 1_000_000_000 = 1.0
+	rate := uint64(qualityOne)
+	if !senderIsIssuer && !destIsIssuer {
+		// Check frozen (globally or individually locked)
+		if issuance.Flags&entry.LsfMPTLocked != 0 {
+			return tx.TecLOCKED
+		}
+		// Check individual locks on sender and destination
+		senderTokenKey := keylet.MPToken(issuanceKey.Key, ctx.AccountID)
+		senderTokenRaw, _ := ctx.View.Read(senderTokenKey)
+		if senderTokenRaw != nil {
+			senderToken, _ := sle.ParseMPToken(senderTokenRaw)
+			if senderToken != nil && senderToken.Flags&entry.LsfMPTLocked != 0 {
+				return tx.TecLOCKED
+			}
+		}
+		destTokenKey := keylet.MPToken(issuanceKey.Key, destAccountID)
+		destTokenRaw, _ := ctx.View.Read(destTokenKey)
+		if destTokenRaw != nil {
+			destToken, _ := sle.ParseMPToken(destTokenRaw)
+			if destToken != nil && destToken.Flags&entry.LsfMPTLocked != 0 {
+				return tx.TecLOCKED
+			}
+		}
+
+		// Transfer fee: rate = 1_000_000_000 + 10_000 * TransferFee
+		if issuance.TransferFee > 0 {
+			rate = qualityOne + 10_000*uint64(issuance.TransferFee)
+		}
+	}
+
+	// maxSourceAmount: SendMax if present, otherwise dstAmount
+	// Reference: rippled Payment.cpp:384-398 getMaxSourceAmount()
+	maxSourceAmount := dstAmount
+	if p.SendMax != nil {
+		maxSourceAmount = mptAmountToUint64(*p.SendMax)
+	}
+
+	// Amount to deliver and required source amount factoring in transfer rate
+	// Reference: rippled Payment.cpp:560-580
+	amountDeliver := dstAmount
+	requiredMaxSourceAmount := mptMultiply(dstAmount, rate)
+
+	// Partial payment: if required exceeds maxSource, adjust amountDeliver
+	isPartialPayment := p.GetFlags()&PaymentFlagPartialPayment != 0
+	if isPartialPayment && requiredMaxSourceAmount > maxSourceAmount {
+		requiredMaxSourceAmount = maxSourceAmount
+		amountDeliver = mptDivide(maxSourceAmount, rate)
+	}
+
+	// Check: source insufficient
+	if requiredMaxSourceAmount > maxSourceAmount {
+		return tx.TecPATH_PARTIAL
+	}
+
+	// Check: DeliverMin not met
+	if p.DeliverMin != nil {
+		deliverMin := mptAmountToUint64(*p.DeliverMin)
+		if deliverMin > 0 && amountDeliver < deliverMin {
+			return tx.TecPATH_PARTIAL
+		}
+	}
+
+	// Execute the actual transfer
+	// Reference: rippled Payment.cpp:582-595
+	var res tx.Result
+	if senderIsIssuer || destIsIssuer {
+		// Direct transfer (issuer involved, no transfer fee)
+		res = p.mptDirectTransfer(ctx, issuance, issuanceKey, amountDeliver, senderIsIssuer, destIsIssuer, destAccountID)
+	} else {
+		// Transit through issuer (holder-to-holder, with transfer fee)
+		res = p.mptTransitTransfer(ctx, issuance, issuanceKey, amountDeliver, rate, destAccountID)
+	}
+
+	// Map error codes per rippled Payment.cpp:593-594
+	if res == tx.TecINSUFFICIENT_FUNDS || res == tx.TecPATH_DRY {
+		res = tx.TecPATH_PARTIAL
+	}
+
+	return res
+}
+
+// mptDirectTransfer handles MPT payment where one party is the issuer.
+// No transfer fee applies. Handles MaximumAmount enforcement.
+func (p *Payment) mptDirectTransfer(ctx *tx.ApplyContext, issuance *sle.MPTokenIssuanceData,
+	issuanceKey keylet.Keylet, amount uint64, senderIsIssuer, destIsIssuer bool, destAccountID [20]byte) tx.Result {
+
+	// If sender is issuer: check MaximumAmount
+	// Reference: rippled View.cpp rippleSendMPT() lines 2044-2055
+	if senderIsIssuer {
+		maxAmount := uint64(maxMPTokenAmount)
+		if issuance.MaximumAmount != nil {
+			maxAmount = *issuance.MaximumAmount
+		}
+		if amount > maxAmount || issuance.OutstandingAmount > maxAmount-amount {
+			return tx.TecPATH_DRY
+		}
+	}
+
+	// rippleCreditMPT: sender side
+	if senderIsIssuer {
+		issuance.OutstandingAmount += amount
+	} else {
+		senderTokenKey := keylet.MPToken(issuanceKey.Key, ctx.AccountID)
+		senderTokenRaw, err := ctx.View.Read(senderTokenKey)
+		if err != nil || senderTokenRaw == nil {
+			return tx.TecNO_AUTH
+		}
+		senderToken, err := sle.ParseMPToken(senderTokenRaw)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		if senderToken.MPTAmount < amount {
+			return tx.TecINSUFFICIENT_FUNDS
+		}
+		senderToken.MPTAmount -= amount
+		updatedSenderToken, err := sle.SerializeMPToken(senderToken)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		if err := ctx.View.Update(senderTokenKey, updatedSenderToken); err != nil {
+			return tx.TefINTERNAL
+		}
+	}
+
+	// rippleCreditMPT: receiver side
+	if destIsIssuer {
+		if issuance.OutstandingAmount < amount {
+			return tx.TefINTERNAL
+		}
+		issuance.OutstandingAmount -= amount
+	} else {
+		destTokenKey := keylet.MPToken(issuanceKey.Key, destAccountID)
+		destTokenRaw, err := ctx.View.Read(destTokenKey)
+		if err != nil || destTokenRaw == nil {
+			return tx.TecNO_AUTH
+		}
+		destToken, err := sle.ParseMPToken(destTokenRaw)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		destToken.MPTAmount += amount
+		updatedDestToken, err := sle.SerializeMPToken(destToken)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		if err := ctx.View.Update(destTokenKey, updatedDestToken); err != nil {
+			return tx.TefINTERNAL
+		}
+	}
+
+	// Update issuance
+	updatedIssuance, err := sle.SerializeMPTokenIssuance(issuance)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := ctx.View.Update(issuanceKey, updatedIssuance); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	return tx.TesSUCCESS
+}
+
+// mptTransitTransfer handles holder-to-holder MPT payment via transit through issuer.
+// Transfer fee is applied: sender pays amountDeliver * rate / QUALITY_ONE.
+// Reference: rippled View.cpp rippleSendMPT() lines 2068-2085
+func (p *Payment) mptTransitTransfer(ctx *tx.ApplyContext, issuance *sle.MPTokenIssuanceData,
+	issuanceKey keylet.Keylet, amountDeliver, rate uint64, destAccountID [20]byte) tx.Result {
+
+	// Actual amount sender pays (includes transfer fee)
+	saActual := mptMultiply(amountDeliver, rate)
+
+	// Step 1: Credit receiver (issuer → receiver via rippleCreditMPT)
+	// Outstanding increases by amountDeliver
+	issuance.OutstandingAmount += amountDeliver
+
+	destTokenKey := keylet.MPToken(issuanceKey.Key, destAccountID)
+	destTokenRaw, err := ctx.View.Read(destTokenKey)
+	if err != nil || destTokenRaw == nil {
+		return tx.TecNO_AUTH
+	}
+	destToken, err := sle.ParseMPToken(destTokenRaw)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	destToken.MPTAmount += amountDeliver
+
+	// Step 2: Debit sender (sender → issuer via rippleCreditMPT)
+	// Outstanding decreases by saActual
+	senderTokenKey := keylet.MPToken(issuanceKey.Key, ctx.AccountID)
+	senderTokenRaw, err := ctx.View.Read(senderTokenKey)
+	if err != nil || senderTokenRaw == nil {
+		return tx.TecNO_AUTH
+	}
+	senderToken, err := sle.ParseMPToken(senderTokenRaw)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if senderToken.MPTAmount < saActual {
+		return tx.TecINSUFFICIENT_FUNDS
+	}
+	senderToken.MPTAmount -= saActual
+	issuance.OutstandingAmount -= saActual
+
+	// Net OutstandingAmount change: amountDeliver - saActual (negative, fee burned)
+
+	// Serialize and update all modified entries
+	updatedSenderToken, err := sle.SerializeMPToken(senderToken)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := ctx.View.Update(senderTokenKey, updatedSenderToken); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	updatedDestToken, err := sle.SerializeMPToken(destToken)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := ctx.View.Update(destTokenKey, updatedDestToken); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	updatedIssuance, err := sle.SerializeMPTokenIssuance(issuance)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := ctx.View.Update(issuanceKey, updatedIssuance); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	return tx.TesSUCCESS
+}
+
+const (
+	// qualityOne is the identity rate (1.0) in rippled's rate format
+	qualityOne = 1_000_000_000
+	// maxMPTokenAmount is the maximum MPT value (int64 max)
+	maxMPTokenAmount = 0x7FFFFFFFFFFFFFFF
+)
+
+// mptMultiply multiplies amount by rate/QUALITY_ONE using big.Int to avoid overflow.
+// Reference: rippled STAmount multiply() for MPT - "No rounding"
+func mptMultiply(amount, rate uint64) uint64 {
+	if rate == qualityOne {
+		return amount
+	}
+	result := new(big.Int).Mul(
+		new(big.Int).SetUint64(amount),
+		new(big.Int).SetUint64(rate),
+	)
+	result.Div(result, new(big.Int).SetUint64(qualityOne))
+	return result.Uint64()
+}
+
+// mptDivide divides amount by rate/QUALITY_ONE using big.Int to avoid overflow.
+// Reference: rippled STAmount divide() for MPT - "No rounding"
+func mptDivide(amount, rate uint64) uint64 {
+	if rate == qualityOne {
+		return amount
+	}
+	result := new(big.Int).Mul(
+		new(big.Int).SetUint64(amount),
+		new(big.Int).SetUint64(qualityOne),
+	)
+	result.Div(result, new(big.Int).SetUint64(rate))
+	return result.Uint64()
+}
+
+// mptAmountToUint64 converts an Amount to a uint64 integer value.
+// Prefers the raw MPT int64 value when available to avoid IOU normalization precision loss.
+func mptAmountToUint64(a tx.Amount) uint64 {
+	// Use raw MPT value if available (preserves precision for large values)
+	if raw, ok := a.MPTRaw(); ok {
+		if raw <= 0 {
+			return 0
+		}
+		return uint64(raw)
+	}
+	// Fallback: reconstruct from IOU mantissa/exponent
+	mantissa := a.Mantissa()
+	if mantissa <= 0 {
+		return 0
+	}
+	exp := a.Exponent()
+	result := uint64(mantissa)
+	for exp > 0 {
+		result *= 10
+		exp--
+	}
+	for exp < 0 {
+		result /= 10
+		exp++
+	}
+	return result
 }
 
 // applyXRPPayment applies an XRP-to-XRP payment
@@ -794,7 +1252,8 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 	return tx.TesSUCCESS
 }
 
-// applyIOUPayment applies an IOU (issued currency) payment
+// applyIOUPayment applies an IOU (issued currency) or cross-currency payment.
+// This is called for any payment with paths, SendMax, or non-native Amount.
 // Reference: rippled/src/xrpld/app/tx/detail/Payment.cpp
 func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 	// Validate the amount
@@ -816,6 +1275,14 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 		return tx.TemDST_NEEDED
 	}
 
+	// For cross-currency payments where Amount is XRP, we always need the flow engine
+	// (no issuer to decode, no direct IOU path possible)
+	if p.Amount.IsNative() {
+		// Cross-currency: Amount=XRP with SendMax=IOU or paths
+		// Always requires the flow engine
+		return p.applyRipplePayment(ctx, senderAccountID, destAccountID)
+	}
+
 	issuerAccountID, err := sle.DecodeAccountID(p.Amount.Issuer)
 	if err != nil {
 		return tx.TemBAD_ISSUER
@@ -824,54 +1291,15 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 	// Use the tx.Amount directly (no conversion needed)
 	amount := p.Amount
 
-	// Detect payments that require RippleCalc (path finding)
 	// Reference: rippled Payment.cpp:435-436:
 	// bool const ripple = (hasPaths || sendMax || !dstAmount.native()) && !mptDirect;
-	//
-	// Payments that require path finding:
-	// 1. Explicit paths in the transaction
-	// 2. SendMax with different issuer than Amount (cross-issuer)
-	//
-	// Payments that DON'T require path finding (can be handled directly):
-	// - When sender == Amount.issuer (issue): issuer creates tokens for recipient
-	// - When dest == Amount.issuer AND no SendMax with different issuer (simple redemption)
-	//
-	// For now, we only support simple direct IOU payments (no path finding).
-	// Return tecPATH_DRY for payments that require RippleCalc.
+	// Since we're in the IOU branch (past IsNative() check), !dstAmount.native() is always
+	// true, so ALL IOU payments go through the flow engine (RippleCalc).
+	requiresPathFinding := true
 
 	// Determine payment type: is this a direct payment to/from issuer?
 	senderIsIssuer := senderAccountID == issuerAccountID
 	destIsIssuer := destAccountID == issuerAccountID
-
-	requiresPathFinding := false
-
-	// Check for explicit paths
-	if p.Paths != nil && len(p.Paths) > 0 {
-		requiresPathFinding = true
-	}
-
-	// Check for SendMax with cross-issuer
-	// When SendMax.issuer == sender, it means "use my trust line balance" - rippled
-	// determines the actual issuer from the sender's trust lines.
-	// When SendMax.issuer is explicitly a different third party (not sender, not Amount.issuer),
-	// that's a true cross-issuer payment requiring path finding.
-	if p.SendMax != nil && !senderIsIssuer {
-		sendMaxIssuer := p.SendMax.Issuer
-		// True cross-issuer: SendMax.issuer is a specific third-party issuer
-		// (not the sender, not the Amount.issuer)
-		if sendMaxIssuer != "" &&
-			sendMaxIssuer != p.Amount.Issuer &&
-			sendMaxIssuer != p.Common.Account {
-			requiresPathFinding = true
-		}
-	}
-
-	// Third-party transfers (sender is not issuer AND dest is not issuer) require path finding
-	// because the payment must "ripple" through the issuer (e.g., alice -> gw -> bob)
-	// Reference: rippled Payment.cpp - when ripple=true, uses RippleCalc
-	if !senderIsIssuer && !destIsIssuer {
-		requiresPathFinding = true
-	}
 
 	// Check destination exists (needed for DepositAuth check and destination flags)
 	destKey := keylet.Account(destAccountID)
@@ -957,6 +1385,41 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 	return result
 }
 
+// applyRipplePayment handles cross-currency payments where Amount is XRP but
+// the payment goes through the order book (has SendMax or paths).
+// Reference: rippled Payment.cpp doApply() when ripple=true
+func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]byte) tx.Result {
+	// Check destination exists
+	destKey := keylet.Account(destID)
+	destData, err := ctx.View.Read(destKey)
+	if err != nil || destData == nil {
+		return tx.TecNO_DST
+	}
+	destAccount, err := sle.ParseAccountRoot(destData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Check destination tag requirement
+	if (destAccount.Flags&sle.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
+		return tx.TecDST_TAG_NEEDED
+	}
+
+	// Validate credentials
+	if result := p.validateCredentials(ctx); result != tx.TesSUCCESS {
+		return result
+	}
+
+	// Check deposit authorization
+	if result := p.verifyDepositPreauth(ctx, senderID, destID, destAccount); result != tx.TesSUCCESS {
+		return result
+	}
+
+	// Use the flow engine (issuerID is unused for XRP amount, pass zero)
+	var zeroID [20]byte
+	return p.applyIOUPaymentWithPaths(ctx, senderID, destID, zeroID)
+}
+
 // applyIOUPaymentWithPaths handles IOU payments that require path finding using the Flow Engine.
 // This is the main entry point for cross-currency payments and payments with explicit paths.
 // Reference: rippled/src/xrpld/app/paths/RippleCalc.cpp
@@ -971,6 +1434,7 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 	addDefaultPath := !noDirectRipple
 
 	// Execute RippleCalculate
+	rules := ctx.Rules()
 	_, actualOut, _, sandbox, result := RippleCalculate(
 		ctx.View,
 		senderID,
@@ -983,7 +1447,20 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 		limitQuality,
 		ctx.TxHash,
 		ctx.Config.LedgerSequence,
+		WithAmendments(
+			ctx.Config.ParentCloseTime,
+			rules.Enabled(amendment.FeatureFixReducedOffersV1),
+			rules.Enabled(amendment.FeatureFixReducedOffersV2),
+			rules.Enabled(amendment.FeatureFixRmSmallIncreasedQOffers),
+			rules.Enabled(amendment.FeatureFlowSortStrands),
+		),
 	)
+
+	// Because of its overhead, if RippleCalc fails with a retry code (ter*),
+	// claim a fee instead. Reference: rippled Payment.cpp:509-510
+	if result.IsTer() {
+		result = tx.TecPATH_DRY
+	}
 
 	// Handle result
 	if result != tx.TesSUCCESS && result != tx.TecPATH_PARTIAL {
@@ -994,6 +1471,18 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 	if sandbox != nil {
 		if err := sandbox.ApplyToView(ctx.View); err != nil {
 			return tx.TefINTERNAL
+		}
+	}
+
+	// Re-read the sender account from the view so the engine's post-Apply
+	// write-back includes balance changes made by the flow engine.
+	// Without this, ctx.Account has stale data that the engine would overwrite.
+	{
+		updatedData, err := ctx.View.Read(keylet.Account(senderID))
+		if err == nil && updatedData != nil {
+			if updated, parseErr := sle.ParseAccountRoot(updatedData); parseErr == nil {
+				*ctx.Account = *updated
+			}
 		}
 	}
 
@@ -1044,7 +1533,6 @@ func (p *Payment) applyIOUIssue(ctx *tx.ApplyContext, dest *sle.AccountRoot, sen
 	// Reference: rippled DirectStep.cpp:417-430
 	// Issuer (sender) may require auth - check if destination's trust line is authorized
 	if result := checkTrustLineAuthorization(ctx.View, senderID, destID, rippleState); result != tx.TesSUCCESS {
-		fmt.Println("passed check")
 		return result
 	}
 

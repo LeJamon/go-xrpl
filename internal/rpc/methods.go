@@ -59,6 +59,9 @@ func (s *Server) registerAllMethods() {
 	s.registry.Register("subscribe", &rpc_handlers.SubscribeMethod{})
 	s.registry.Register("unsubscribe", &rpc_handlers.UnsubscribeMethod{})
 
+	// JSON method proxy
+	s.registry.Register("json", &rpc_handlers.JsonMethod{})
+
 	// Utility Methods
 	s.registry.Register("wallet_propose", &rpc_handlers.WalletProposeMethod{})
 	s.registry.Register("deposit_authorized", &rpc_handlers.DepositAuthorizedMethod{})

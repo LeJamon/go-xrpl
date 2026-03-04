@@ -1,21 +1,20 @@
 package payment
 
-// ExecuteStrand executes a strand using the two-pass algorithm.
+// ExecuteStrand executes a strand using the two-pass algorithm matching rippled's
+// StrandFlow.h flow() function.
 //
-// The algorithm works as follows:
-// 1. Reverse Pass: Starting from the desired output, work backwards through the strand
-//    calling Rev() on each step to determine how much input is needed to produce that output.
-// 2. Find Limiting Step: The step that produces less output than requested is the "limiting" step.
-// 3. Forward Pass: Starting from the limiting step, work forwards calling Fwd() on each step
-//    to execute the actual transfer with the computed amounts.
+// The algorithm (single reverse pass with inline resets):
+//  1. Work backwards from desired output, calling Rev() on each step
+//  2. When a step limits (actualOut < requestedOut), IMMEDIATELY reset sandbox,
+//     re-execute ONLY that step, then continue backwards
+//  3. When step 0 exceeds maxIn, reset sandbox, re-execute step 0 with Fwd(maxIn)
+//  4. Forward pass runs from limitingStep+1 to end
 //
-// Parameters:
-//   - baseView: The PaymentSandbox to clone for this strand execution
-//   - strand: The sequence of steps to execute
-//   - maxIn: Optional maximum input amount (nil means unlimited)
-//   - requestedOut: The desired output amount
+// This inline-reset approach is critical because steps may create side effects
+// (e.g., trust lines that increase reserves) that would poison earlier steps
+// if not reset.
 //
-// Returns: StrandResult containing actual input/output and the sandbox with changes
+// Reference: rippled/src/xrpld/app/paths/detail/StrandFlow.h flow()
 func ExecuteStrand(
 	baseView *PaymentSandbox,
 	strand Strand,
@@ -33,210 +32,126 @@ func ExecuteStrand(
 		}
 	}
 
-	// Create a sandbox for this strand execution
-	sb := NewChildSandbox(baseView)
+	s := len(strand)
 	ofrsToRm := make(map[[32]byte]bool)
 
+	// limitingStep initialized to s (= no limiting step found)
+	// Reference: rippled StrandFlow.h line 130: size_t limitingStep = strand.size()
+	limitingStep := s
+	sb := NewChildSandbox(baseView)
+	// afView: "all funds" view — determines if offers are unfunded
+	// In rippled, this is a separate child of baseView that can be reset.
+	// We use baseView directly since we never modify it.
+	afView := baseView
+	var limitStepOut EitherAmount
+
 	// === REVERSE PASS ===
-	// Work backwards from desired output to determine required inputs
-	result := executeReversePass(sb, baseView, strand, requestedOut, ofrsToRm)
-	if !result.Success {
-		return result
-	}
-
-	// Check if we hit a maxIn limit
-	if maxIn != nil && result.In.Compare(*maxIn) > 0 {
-		// Need to re-execute with limited input
-		// Find how much output we can get with maxIn
-		result = executeWithMaxIn(baseView, strand, *maxIn, ofrsToRm)
-	}
-
-	return result
-}
-
-// executeReversePass performs the reverse pass of the two-pass algorithm
-func executeReversePass(
-	sb *PaymentSandbox,
-	afView *PaymentSandbox,
-	strand Strand,
-	requestedOut EitherAmount,
-	ofrsToRm map[[32]byte]bool,
-) StrandResult {
-	// Start with requested output at the last step
-	out := requestedOut
-	limitingStep := -1
-
-	// Work backwards through steps
-	for i := len(strand) - 1; i >= 0; i-- {
+	// Single pass backwards with inline resets when limiting steps are found.
+	// Reference: rippled StrandFlow.h lines 138-221
+	stepOut := requestedOut
+	for i := s - 1; i >= 0; i-- {
 		step := strand[i]
 
-		// Call Rev to get how much input produces this output
-		actualIn, actualOut := step.Rev(sb, afView, ofrsToRm, out)
+		actualIn, actualOut := step.Rev(sb, afView, ofrsToRm, stepOut)
 
-		// Check if this step limited the flow
-		if !step.EqualOut(actualOut, out) {
+		// Check if output is zero → strand is dry
+		if step.IsZero(actualOut) {
+			return StrandResult{
+				Success:  false,
+				In:       ZeroXRPEitherAmount(),
+				Out:      ZeroXRPEitherAmount(),
+				Sandbox:  nil,
+				OffsToRm: ofrsToRm,
+				Inactive: true,
+			}
+		}
+
+		if i == 0 && maxIn != nil && maxIn.Compare(actualIn) < 0 {
+			// Step 0 exceeded maxIn
+			// Reset sandbox and re-execute step 0 with Fwd(maxIn)
+			// Reference: rippled StrandFlow.h lines 148-178
+			sb.Reset()
+			limitingStep = 0
+
+			fwdIn, fwdOut := step.Fwd(sb, afView, ofrsToRm, *maxIn)
+			limitStepOut = fwdOut
+
+			if step.IsZero(fwdOut) {
+				return StrandResult{
+					Success:  false,
+					In:       ZeroXRPEitherAmount(),
+					Out:      ZeroXRPEitherAmount(),
+					Sandbox:  nil,
+					OffsToRm: ofrsToRm,
+					Inactive: true,
+				}
+			}
+
+			// stepOut is not used after this (loop ends at i=0)
+			_ = fwdIn
+
+		} else if !step.EqualOut(actualOut, stepOut) {
+			// Limiting step found — actualOut < requested stepOut
+			// Reset BOTH sandboxes and re-execute ONLY this step
+			// Reference: rippled StrandFlow.h lines 180-217
+			sb.Reset()
 			limitingStep = i
+
+			// Re-execute with the limited output
+			reStepOut := actualOut
+			reIn, reOut := step.Rev(sb, afView, ofrsToRm, reStepOut)
+			limitStepOut = reOut
+
+			if step.IsZero(reOut) {
+				return StrandResult{
+					Success:  false,
+					In:       ZeroXRPEitherAmount(),
+					Out:      ZeroXRPEitherAmount(),
+					Sandbox:  nil,
+					OffsToRm: ofrsToRm,
+					Inactive: true,
+				}
+			}
+
+			// Continue backwards with the re-executed input
+			stepOut = reIn
+		} else {
+			// Not limiting — continue to previous step
+			stepOut = actualIn
 		}
-
-		// The input to this step is the output for the previous step
-		out = actualIn
-	}
-
-	// Get cached results from first step
-	firstStep := strand[0]
-	cachedIn := firstStep.CachedIn()
-	if cachedIn == nil {
-		return StrandResult{
-			Success:  false,
-			In:       ZeroXRPEitherAmount(),
-			Out:      ZeroXRPEitherAmount(),
-			Sandbox:  nil,
-			OffsToRm: ofrsToRm,
-			Inactive: true,
-		}
-	}
-
-	// Get cached results from last step
-	lastStep := strand[len(strand)-1]
-	cachedOut := lastStep.CachedOut()
-	if cachedOut == nil {
-		return StrandResult{
-			Success:  false,
-			In:       ZeroXRPEitherAmount(),
-			Out:      ZeroXRPEitherAmount(),
-			Sandbox:  nil,
-			OffsToRm: ofrsToRm,
-			Inactive: true,
-		}
-	}
-
-	// If there's a limiting step, we need to re-execute with that step as starting point
-	if limitingStep >= 0 {
-		return executeWithLimitingStep(sb, afView, strand, limitingStep, ofrsToRm)
-	}
-
-	// No limiting step - Rev() already applied all changes (like rippled)
-	// Reference: rippled StrandFlow.h - when no limiting step, only Rev() runs
-	// Both DirectStep.Rev() and BookStep.Rev() apply changes via rippleCredit/consumeOffer
-
-	// Calculate total offers used
-	var offersUsed uint32
-	for _, step := range strand {
-		offersUsed += step.OffersUsed()
-	}
-
-	// Check if strand became inactive
-	inactive := false
-	for _, step := range strand {
-		if step.Inactive() {
-			inactive = true
-			break
-		}
-	}
-
-	return StrandResult{
-		Success:    true,
-		In:         *cachedIn,
-		Out:        *cachedOut,
-		Sandbox:    sb,
-		OffsToRm:   ofrsToRm,
-		OffersUsed: offersUsed,
-		Inactive:   inactive,
-	}
-}
-
-// executeWithLimitingStep re-executes when a limiting step was found
-func executeWithLimitingStep(
-	sb *PaymentSandbox,
-	afView *PaymentSandbox,
-	strand Strand,
-	limitingStep int,
-	ofrsToRm map[[32]byte]bool,
-) StrandResult {
-	// Reset sandbox state
-	sb.Reset()
-
-	// === SECOND REVERSE PASS ===
-	// Re-execute reverse pass up to the limiting step
-	limitStepCachedOut := strand[limitingStep].CachedOut()
-	if limitStepCachedOut == nil {
-		return StrandResult{
-			Success:  false,
-			In:       ZeroXRPEitherAmount(),
-			Out:      ZeroXRPEitherAmount(),
-			Sandbox:  nil,
-			OffsToRm: ofrsToRm,
-			Inactive: true,
-		}
-	}
-
-	out := *limitStepCachedOut
-
-	// Execute reverse pass from limiting step backwards
-	for i := limitingStep; i >= 0; i-- {
-		step := strand[i]
-		actualIn, _ := step.Rev(sb, afView, ofrsToRm, out)
-		out = actualIn
 	}
 
 	// === FORWARD PASS ===
-	// Execute forward from limiting step to the end
-	limitStepCachedIn := strand[limitingStep].CachedIn()
-	if limitStepCachedIn == nil {
-		return StrandResult{
-			Success:  false,
-			In:       ZeroXRPEitherAmount(),
-			Out:      ZeroXRPEitherAmount(),
-			Sandbox:  nil,
-			OffsToRm: ofrsToRm,
-			Inactive: true,
-		}
-	}
+	// Execute from limitingStep+1 to end using Fwd()
+	// Reference: rippled StrandFlow.h lines 224-254
+	if limitingStep < s {
+		stepIn := limitStepOut
+		for i := limitingStep + 1; i < s; i++ {
+			step := strand[i]
 
-	in := *limitStepCachedIn
+			fwdIn, fwdOut := step.Fwd(sb, afView, ofrsToRm, stepIn)
 
-	// Rev() already applied changes for steps 0 to limitingStep (like rippled)
-	// So we start the forward pass AFTER the limiting step
-
-	// For the limiting step, get its output to use as input for subsequent steps
-	// Reference: rippled StrandFlow.h line 225: EitherAmount stepIn(limitStepOut)
-	limitStepCachedOutAfterRev := strand[limitingStep].CachedOut()
-	if limitStepCachedOutAfterRev != nil {
-		in = *limitStepCachedOutAfterRev
-	}
-
-	// Forward pass continues AFTER the limiting step (limitingStep + 1)
-	// Reference: rippled StrandFlow.h line 226: for (auto i = limitingStep + 1; i < s; ++i)
-	// The Fwd() pass applies changes for steps after the limiting step.
-	for i := limitingStep + 1; i < len(strand); i++ {
-		step := strand[i]
-
-		// Execute forward - skip ValidFwd since we just ran Rev() with correct amounts
-		actualIn, actualOut := step.Fwd(sb, afView, ofrsToRm, in)
-
-		// Check consistency
-		if step.IsZero(actualOut) && !step.IsZero(in) {
-			return StrandResult{
-				Success:  false,
-				In:       ZeroXRPEitherAmount(),
-				Out:      ZeroXRPEitherAmount(),
-				Sandbox:  nil,
-				OffsToRm: ofrsToRm,
-				Inactive: true,
+			if step.IsZero(fwdOut) {
+				return StrandResult{
+					Success:  false,
+					In:       ZeroXRPEitherAmount(),
+					Out:      ZeroXRPEitherAmount(),
+					Sandbox:  nil,
+					OffsToRm: ofrsToRm,
+					Inactive: true,
+				}
 			}
+
+			_ = fwdIn
+			stepIn = fwdOut
 		}
-
-		_ = actualIn
-
-		// The output becomes the input for the next step
-		in = actualOut
 	}
 
-	// Get final results
-	firstCachedIn := strand[0].CachedIn()
-	lastCachedOut := strand[len(strand)-1].CachedOut()
+	// Get final results from cached values
+	strandIn := strand[0].CachedIn()
+	strandOut := strand[s-1].CachedOut()
 
-	if firstCachedIn == nil || lastCachedOut == nil {
+	if strandIn == nil || strandOut == nil {
 		return StrandResult{
 			Success:  false,
 			In:       ZeroXRPEitherAmount(),
@@ -259,8 +174,8 @@ func executeWithLimitingStep(
 
 	return StrandResult{
 		Success:    true,
-		In:         *firstCachedIn,
-		Out:        *lastCachedOut,
+		In:         *strandIn,
+		Out:        *strandOut,
 		Sandbox:    sb,
 		OffsToRm:   ofrsToRm,
 		OffersUsed: offersUsed,
@@ -268,85 +183,8 @@ func executeWithLimitingStep(
 	}
 }
 
-// executeWithMaxIn executes when we have a maximum input constraint
-func executeWithMaxIn(
-	baseView *PaymentSandbox,
-	strand Strand,
-	maxIn EitherAmount,
-	ofrsToRm map[[32]byte]bool,
-) StrandResult {
-	// Create fresh sandbox
-	sb := NewChildSandbox(baseView)
-
-	// Start forward pass from the beginning with maxIn
-	in := maxIn
-
-	for i := 0; i < len(strand); i++ {
-		step := strand[i]
-
-		// Execute forward
-		actualIn, actualOut := step.Fwd(sb, baseView, ofrsToRm, in)
-
-		// Check if step consumed all input
-		if step.IsZero(actualOut) && !step.IsZero(in) {
-			return StrandResult{
-				Success:  false,
-				In:       ZeroXRPEitherAmount(),
-				Out:      ZeroXRPEitherAmount(),
-				Sandbox:  nil,
-				OffsToRm: ofrsToRm,
-				Inactive: true,
-			}
-		}
-
-		// For the first step, record actual input consumed
-		if i == 0 {
-			// Track that we might not use all of maxIn
-			_ = actualIn
-		}
-
-		// Output becomes input for next step
-		in = actualOut
-	}
-
-	// Get final results
-	firstCachedIn := strand[0].CachedIn()
-	lastCachedOut := strand[len(strand)-1].CachedOut()
-
-	if firstCachedIn == nil || lastCachedOut == nil {
-		return StrandResult{
-			Success:  false,
-			In:       ZeroXRPEitherAmount(),
-			Out:      ZeroXRPEitherAmount(),
-			Sandbox:  nil,
-			OffsToRm: ofrsToRm,
-			Inactive: true,
-		}
-	}
-
-	// Calculate totals
-	var offersUsed uint32
-	inactive := false
-	for _, step := range strand {
-		offersUsed += step.OffersUsed()
-		if step.Inactive() {
-			inactive = true
-		}
-	}
-
-	return StrandResult{
-		Success:    true,
-		In:         *firstCachedIn,
-		Out:        *lastCachedOut,
-		Sandbox:    sb,
-		OffsToRm:   ofrsToRm,
-		OffersUsed: offersUsed,
-		Inactive:   inactive,
-	}
-}
-
-// ExecuteStrandReverse is a helper that only executes the reverse pass
-// Useful for quality estimation
+// ExecuteStrandReverse is a helper that only executes the reverse pass.
+// Useful for quality estimation.
 func ExecuteStrandReverse(
 	view *PaymentSandbox,
 	strand Strand,

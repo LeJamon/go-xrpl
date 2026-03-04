@@ -1,6 +1,7 @@
 package account
 
 import (
+	"encoding/hex"
 	"errors"
 	"strings"
 
@@ -14,6 +15,20 @@ const qualityOne uint32 = 1000000000
 
 func isZeroHash256(s string) bool {
 	return strings.Trim(s, "0") == ""
+}
+
+// isValidPublicKey checks if the bytes represent a valid XRPL public key.
+// Reference: rippled publicKeyType() — checks prefix byte and length.
+func isValidPublicKey(key []byte) bool {
+	if len(key) == 33 {
+		// secp256k1 compressed (0x02 or 0x03) or ed25519 (0xED)
+		return key[0] == 0x02 || key[0] == 0x03 || key[0] == 0xED
+	}
+	if len(key) == 65 {
+		// secp256k1 uncompressed (0x04)
+		return key[0] == 0x04
+	}
+	return false
 }
 
 func init() {
@@ -30,13 +45,15 @@ type AccountSet struct {
 	ClearFlag *uint32 `json:"ClearFlag,omitempty" xrpl:"ClearFlag,omitempty"`
 
 	// Domain is the domain associated with this account (hex-encoded)
-	Domain string `json:"Domain,omitempty" xrpl:"Domain,omitempty"`
+	// Pointer to distinguish nil (not present) from "" (present but empty, for clearing)
+	Domain *string `json:"Domain,omitempty" xrpl:"Domain,omitempty"`
 
 	// EmailHash is MD5 hash of email for Gravatar (deprecated)
 	EmailHash string `json:"EmailHash,omitempty" xrpl:"EmailHash,omitempty"`
 
 	// MessageKey is a public key for sending encrypted messages
-	MessageKey string `json:"MessageKey,omitempty" xrpl:"MessageKey,omitempty"`
+	// Pointer to distinguish nil (not present) from "" (present but empty, for clearing)
+	MessageKey *string `json:"MessageKey,omitempty" xrpl:"MessageKey,omitempty"`
 
 	// NFTokenMinter is the account allowed to mint NFTokens for this account
 	NFTokenMinter string `json:"NFTokenMinter,omitempty" xrpl:"NFTokenMinter,omitempty"`
@@ -213,10 +230,20 @@ func (a *AccountSet) Validate() error {
 		}
 	}
 
+	// MessageKey validation
+	// Reference: rippled SetAccount.cpp lines 161-168
+	// If present and non-empty, must be a valid public key (ed25519 or secp256k1).
+	if a.MessageKey != nil && *a.MessageKey != "" {
+		mkBytes, err := hex.DecodeString(*a.MessageKey)
+		if err != nil || !isValidPublicKey(mkBytes) {
+			return errors.New("telBAD_PUBLIC_KEY: invalid message key specified")
+		}
+	}
+
 	// Domain length validation
 	// Reference: rippled SetAccount.cpp:170-175
 	// Domain is stored as hex, so max hex length is 2*256 = 512
-	if len(a.Domain) > MaxDomainLength*2 {
+	if a.Domain != nil && len(*a.Domain) > MaxDomainLength*2 {
 		return errors.New("telBAD_DOMAIN: domain too long")
 	}
 
@@ -303,7 +330,23 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// RequireAuth
-	if uSetFlag == AccountSetFlagRequireAuth && (uFlagsIn&sle.LsfRequireAuth) == 0 {
+	// Reference: rippled SetAccount.cpp preclaim() lines 269-276
+	// dirIsEmpty() checks whether the owner directory has any entries.
+	bSetRequireAuth := (a.GetFlags()&AccountSetTxFlagRequireAuth != 0) ||
+		uSetFlag == AccountSetFlagRequireAuth
+	if bSetRequireAuth && (uFlagsIn&sle.LsfRequireAuth) == 0 {
+		// Owner directory must be empty to set RequireAuth
+		ownerDirKey := keylet.OwnerDir(ctx.AccountID)
+		dirExists, dirErr := ctx.View.Exists(ownerDirKey)
+		if dirErr == nil && dirExists {
+			dirData, readErr := ctx.View.Read(ownerDirKey)
+			if readErr == nil {
+				dirNode, parseErr := sle.ParseDirectoryNode(dirData)
+				if parseErr == nil && len(dirNode.Indexes) > 0 {
+					return tx.TecOWNERS
+				}
+			}
+		}
 		uFlagsOut |= sle.LsfRequireAuth
 	}
 	if uClearFlag == AccountSetFlagRequireAuth && (uFlagsIn&sle.LsfRequireAuth) != 0 {
@@ -327,8 +370,13 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// DisableMaster
+	// Reference: rippled SetAccount.cpp:402-418
 	if uSetFlag == AccountSetFlagDisableMaster && (uFlagsIn&sle.LsfDisableMaster) == 0 {
-		if account.RegularKey == "" {
+		// Account has no regular key or multi-signer signer list.
+		// Reference: rippled SetAccount.cpp:410-415
+		hasRegularKey := account.RegularKey != ""
+		hasSignerList, _ := ctx.View.Exists(keylet.SignerList(ctx.AccountID))
+		if !hasRegularKey && !hasSignerList {
 			return tx.TecNO_ALTERNATIVE_KEY
 		}
 		uFlagsOut |= sle.LsfDisableMaster
@@ -345,7 +393,12 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// NoFreeze (cannot be cleared once set)
+	// Reference: rippled SetAccount.cpp lines 444-454
+	// Must be signed with master key (unless master is already disabled)
 	if uSetFlag == AccountSetFlagNoFreeze {
+		if !ctx.SignedWithMaster && (uFlagsIn&sle.LsfDisableMaster) == 0 {
+			return tx.TecNEED_MASTER_KEY
+		}
 		uFlagsOut |= sle.LsfNoFreeze
 	}
 
@@ -425,11 +478,22 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Domain
-	if a.Domain != "" {
-		account.Domain = a.Domain
+	// Reference: rippled SetAccount.cpp lines 565-579 — isFieldPresent(sfDomain)
+	// If field present and empty → makeFieldAbsent; else → setFieldVL
+	if a.Domain != nil {
+		if *a.Domain == "" {
+			account.Domain = ""
+		} else {
+			// Domain is stored as hex in the transaction; decode to plain text
+			decoded, err := hex.DecodeString(*a.Domain)
+			if err == nil {
+				account.Domain = string(decoded)
+			}
+		}
 	}
 
 	// EmailHash
+	// Reference: rippled SetAccount.cpp lines 508-522 — zero hash → makeFieldAbsent
 	if a.EmailHash != "" {
 		if a.EmailHash == "00000000000000000000000000000000" {
 			account.EmailHash = ""
@@ -439,11 +503,17 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// MessageKey
-	if a.MessageKey != "" {
-		account.MessageKey = a.MessageKey
+	// Reference: rippled SetAccount.cpp lines 546-560 — empty blob → makeFieldAbsent
+	if a.MessageKey != nil {
+		if *a.MessageKey == "" {
+			account.MessageKey = ""
+		} else {
+			account.MessageKey = *a.MessageKey
+		}
 	}
 
 	// WalletLocator
+	// Reference: rippled SetAccount.cpp lines 527-541 — zero hash → makeFieldAbsent
 	if a.WalletLocator != "" {
 		if isZeroHash256(a.WalletLocator) {
 			account.WalletLocator = ""

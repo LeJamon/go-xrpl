@@ -3,10 +3,12 @@ package mpt
 import (
 	"encoding/hex"
 	"errors"
-	
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/entry"
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
+
 	"github.com/LeJamon/goXRPLd/internal/core/amendment"
+	"github.com/LeJamon/goXRPLd/internal/core/ledger/entry"
+	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )
 
 func init() {
@@ -30,7 +32,8 @@ type MPTokenIssuanceCreate struct {
 	TransferFee *uint16 `json:"TransferFee,omitempty" xrpl:"TransferFee,omitempty"`
 
 	// MPTokenMetadata is metadata for the token (optional, 1-1024 bytes as hex)
-	MPTokenMetadata string `json:"MPTokenMetadata,omitempty" xrpl:"MPTokenMetadata,omitempty"`
+	// Pointer type distinguishes nil (absent) from &"" (present but empty).
+	MPTokenMetadata *string `json:"MPTokenMetadata,omitempty" xrpl:"MPTokenMetadata,omitempty"`
 }
 
 // NewMPTokenIssuanceCreate creates a new MPTokenIssuanceCreate transaction
@@ -71,8 +74,8 @@ func (m *MPTokenIssuanceCreate) Validate() error {
 	}
 
 	// Validate MPTokenMetadata
-	if m.MPTokenMetadata != "" {
-		metadataBytes, err := hex.DecodeString(m.MPTokenMetadata)
+	if m.MPTokenMetadata != nil {
+		metadataBytes, err := hex.DecodeString(*m.MPTokenMetadata)
 		if err != nil {
 			return errors.New("temMALFORMED: MPTokenMetadata must be valid hex")
 		}
@@ -105,7 +108,58 @@ func (m *MPTokenIssuanceCreate) RequiredAmendments() [][32]byte {
 }
 
 // Apply applies the MPTokenIssuanceCreate transaction to ledger state.
+// Reference: rippled MPTokenIssuanceCreate.cpp doApply() / create()
 func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+	// Reserve check
+	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
+	if ctx.Account.Balance < reserve {
+		return tx.TecINSUFFICIENT_RESERVE
+	}
+
+	// Compute MPTokenIssuanceID from sequence + account
+	sequence := m.GetCommon().SeqProxy()
+	mptID := keylet.MakeMPTID(sequence, ctx.AccountID)
+	issuanceKey := keylet.MPTIssuance(mptID)
+
+	// Build the issuance entry
+	issuanceData := &sle.MPTokenIssuanceData{
+		Issuer:            ctx.AccountID,
+		Sequence:          sequence,
+		OutstandingAmount: 0,
+		Flags:             m.GetFlags() & ^tx.TfUniversal, // Strip universal flag
+	}
+
+	if m.TransferFee != nil {
+		issuanceData.TransferFee = *m.TransferFee
+	}
+	if m.AssetScale != nil {
+		issuanceData.AssetScale = *m.AssetScale
+	}
+	if m.MaximumAmount != nil {
+		issuanceData.MaximumAmount = m.MaximumAmount
+	}
+	if m.MPTokenMetadata != nil && *m.MPTokenMetadata != "" {
+		issuanceData.MPTokenMetadata = *m.MPTokenMetadata
+	}
+
+	// Serialize and insert into ledger
+	data, err := sle.SerializeMPTokenIssuance(issuanceData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := ctx.View.Insert(issuanceKey, data); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Insert into owner directory
+	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
+	_, err = sle.DirInsert(ctx.View, ownerDirKey, issuanceKey.Key, func(dir *sle.DirectoryNode) {
+		dir.Owner = ctx.AccountID
+	})
+	if err != nil {
+		return tx.TecDIR_FULL
+	}
+
 	ctx.Account.OwnerCount++
 	return tx.TesSUCCESS
 }

@@ -61,50 +61,52 @@ func (s *SignerListSet) Validate() error {
 	}
 
 	// If deleting (quorum = 0), no entries allowed
+	// Reference: rippled SetSignerList.cpp preflight()
 	if s.SignerQuorum == 0 {
 		if len(s.SignerEntries) > 0 {
-			return errors.New("cannot have SignerEntries when deleting signer list")
+			return errors.New("temMALFORMED: cannot have SignerEntries when deleting signer list")
 		}
 		return nil
 	}
 
-	// Must have at least one signer
-	if len(s.SignerEntries) == 0 {
-		return errors.New("SignerEntries is required when setting signer list")
+	// Must have at least one signer, max 32
+	// Reference: rippled SetSignerList.cpp:270-276
+	if len(s.SignerEntries) == 0 || len(s.SignerEntries) > 32 {
+		return errors.New("temMALFORMED: too many or too few signers in signer list")
 	}
 
-	// Max 32 signers
-	if len(s.SignerEntries) > 32 {
-		return errors.New("cannot have more than 32 signers")
-	}
-
-	// Check that weights sum to at least quorum
+	// Check for duplicates, self-reference, and weight validity
+	// Reference: rippled SetSignerList.cpp:279-328
 	var totalWeight uint32
 	seenAccounts := make(map[string]bool)
 
 	for _, entry := range s.SignerEntries {
-		// No duplicate accounts
-		if seenAccounts[entry.SignerEntry.Account] {
-			return errors.New("duplicate signer account")
-		}
-		seenAccounts[entry.SignerEntry.Account] = true
-
-		// Cannot include self
-		if entry.SignerEntry.Account == s.Account {
-			return errors.New("cannot include self in signer list")
-		}
-
-		// Weight must be non-zero
+		// Weight must be positive
+		// Reference: rippled SetSignerList.cpp:298-303
 		if entry.SignerEntry.SignerWeight == 0 {
-			return errors.New("signer weight must be non-zero")
+			return errors.New("temBAD_WEIGHT: every signer must have a positive weight")
 		}
 
 		totalWeight += uint32(entry.SignerEntry.SignerWeight)
+
+		// Cannot include self
+		// Reference: rippled SetSignerList.cpp:307-311
+		if entry.SignerEntry.Account == s.Account {
+			return errors.New("temBAD_SIGNER: a signer may not self reference account")
+		}
+
+		// No duplicate accounts
+		// Reference: rippled SetSignerList.cpp:284-288
+		if seenAccounts[entry.SignerEntry.Account] {
+			return errors.New("temBAD_SIGNER: duplicate signers in signer list")
+		}
+		seenAccounts[entry.SignerEntry.Account] = true
 	}
 
-	// Total weight must be >= quorum
-	if totalWeight < s.SignerQuorum {
-		return errors.New("total signer weight is less than quorum")
+	// Total weight must be >= quorum, and quorum must be positive
+	// Reference: rippled SetSignerList.cpp:324-328
+	if s.SignerQuorum == 0 || totalWeight < s.SignerQuorum {
+		return errors.New("temBAD_QUORUM: quorum is unreachable")
 	}
 
 	return nil
@@ -166,13 +168,26 @@ func (s *SetRegularKey) ClearKey() {
 }
 
 // Apply applies the SetRegularKey transaction to ledger state.
+// Reference: rippled SetRegularKey.cpp doApply()
 func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) tx.Result {
-	ctx.Account.RegularKey = s.RegularKey
-
 	if s.RegularKey != "" {
+		// Setting a regular key
 		if _, err := sle.DecodeAccountID(s.RegularKey); err != nil {
 			return tx.TemINVALID
 		}
+		ctx.Account.RegularKey = s.RegularKey
+	} else {
+		// Clearing the regular key — check that an alternative auth method exists.
+		// Reference: rippled SetRegularKey.cpp lines 86-98
+		isMasterDisabled := (ctx.Account.Flags & sle.LsfDisableMaster) != 0
+		if isMasterDisabled {
+			signerListKey := keylet.SignerList(ctx.AccountID)
+			hasSignerList, _ := ctx.View.Exists(signerListKey)
+			if !hasSignerList {
+				return tx.TecNO_ALTERNATIVE_KEY
+			}
+		}
+		ctx.Account.RegularKey = ""
 	}
 
 	return tx.TesSUCCESS
@@ -182,9 +197,25 @@ func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) tx.Result {
 func (sl *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	signerListKey := keylet.SignerList(ctx.AccountID)
 
+	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
+
 	if sl.SignerQuorum == 0 {
+		// Remove signer list
+		// Reference: rippled SetSignerList.cpp destroySignerList()
+		// Destroying the signer list is only allowed if either the master key
+		// is enabled or there is a regular key.
+		// Reference: rippled SetSignerList.cpp:411-413
+		isMasterDisabled := (ctx.Account.Flags & sle.LsfDisableMaster) != 0
+		hasRegularKey := ctx.Account.RegularKey != ""
+		if isMasterDisabled && !hasRegularKey {
+			return tx.TecNO_ALTERNATIVE_KEY
+		}
+
 		exists, _ := ctx.View.Exists(signerListKey)
 		if exists {
+			// Remove from owner directory
+			// Reference: rippled SetSignerList.cpp removeSignersFromLedger
+			sle.DirRemove(ctx.View, ownerDirKey, 0, signerListKey.Key, true)
 			if err := ctx.View.Erase(signerListKey); err != nil {
 				return tx.TefINTERNAL
 			}
@@ -214,6 +245,9 @@ func (sl *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 			if err := ctx.View.Insert(signerListKey, signerListData); err != nil {
 				return tx.TefINTERNAL
 			}
+			// Add to owner directory
+			// Reference: rippled SetSignerList.cpp applySignerEntries
+			sle.DirInsert(ctx.View, ownerDirKey, signerListKey.Key, nil)
 			ctx.Account.OwnerCount++
 		}
 	}

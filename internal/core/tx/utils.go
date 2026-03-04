@@ -106,26 +106,40 @@ func IsGlobalFrozen(view LedgerView, issuerAddress string) bool {
 	return (account.Flags & sle.LsfGlobalFreeze) != 0
 }
 
+// XRPLiquid returns the amount of XRP an account can spend (balance minus reserve).
+// Reference: rippled ledger/View.cpp xrpLiquid()
+// ownerCountAdj allows adjusting the owner count (e.g., +1 to account for a pending new object).
+func XRPLiquid(view LedgerView, accountID [20]byte, ownerCountAdj int64, reserveBase, reserveIncrement uint64) Amount {
+	accountKey := keylet.Account(accountID)
+	data, err := view.Read(accountKey)
+	if err != nil || data == nil {
+		return NewXRPAmount(0)
+	}
+
+	account, err := sle.ParseAccountRoot(data)
+	if err != nil {
+		return NewXRPAmount(0)
+	}
+
+	ownerCount := int64(account.OwnerCount) + ownerCountAdj
+	if ownerCount < 0 {
+		ownerCount = 0
+	}
+	reserve := reserveBase + uint64(ownerCount)*reserveIncrement
+	if account.Balance > reserve {
+		return NewXRPAmount(int64(account.Balance - reserve))
+	}
+	return NewXRPAmount(0)
+}
+
 // AccountFunds returns the amount of funds an account has available.
 // If fhZeroIfFrozen is true, returns zero if the asset is frozen.
+// For XRP, returns balance minus reserve (xrpLiquid). reserveBase and reserveIncrement
+// are required for XRP reserve calculation.
 // Reference: rippled ledger/View.h accountFunds()
-func AccountFunds(view LedgerView, accountID [20]byte, amount Amount, fhZeroIfFrozen bool) Amount {
+func AccountFunds(view LedgerView, accountID [20]byte, amount Amount, fhZeroIfFrozen bool, reserveBase, reserveIncrement uint64) Amount {
 	if amount.IsNative() {
-		// XRP balance
-		accountKey := keylet.Account(accountID)
-		data, err := view.Read(accountKey)
-		if err != nil || data == nil {
-			return NewXRPAmount(0)
-		}
-
-		account, err := sle.ParseAccountRoot(data)
-		if err != nil {
-			return NewXRPAmount(0)
-		}
-
-		// Return balance
-		//TODO return balance - reserve
-		return NewXRPAmount(int64(account.Balance))
+		return XRPLiquid(view, accountID, 0, reserveBase, reserveIncrement)
 	}
 
 	// IOU balance

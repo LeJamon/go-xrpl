@@ -1,6 +1,7 @@
 package tx
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -188,7 +189,13 @@ func ReflectFlatten(tx Transaction) (map[string]any, error) {
 				}
 			}
 
-			m[f.name] = val.Interface()
+			// UInt64 fields must be serialized as uppercase hex strings for the binary codec.
+			// The XRPL binary codec's UInt64.FromJSON expects a hex string representation.
+			if val.Kind() == reflect.Uint64 {
+				m[f.name] = fmt.Sprintf("%X", val.Uint())
+			} else {
+				m[f.name] = val.Interface()
+			}
 		}
 	}
 
@@ -291,6 +298,19 @@ func structToMap(v reflect.Value) map[string]any {
 			result[name] = structToMap(fv.Elem())
 		} else if fv.Kind() == reflect.Slice && fv.Len() > 0 && fv.Index(0).Kind() == reflect.Struct {
 			result[name] = flattenStructSlice(fv)
+		} else if fv.Kind() == reflect.Ptr && !fv.IsNil() {
+			// Handle pointer types — dereference and apply type-specific conversions
+			elem := fv.Elem()
+			switch elem.Kind() {
+			case reflect.Uint64:
+				// UInt64 fields must be hex strings for the binary codec
+				result[name] = fmt.Sprintf("%X", elem.Uint())
+			default:
+				result[name] = elem.Interface()
+			}
+		} else if fv.Kind() == reflect.Uint64 {
+			// UInt64 fields must be hex strings for the binary codec
+			result[name] = fmt.Sprintf("%X", fv.Uint())
 		} else {
 			result[name] = fv.Interface()
 		}

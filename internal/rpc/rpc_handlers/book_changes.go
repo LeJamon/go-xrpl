@@ -6,50 +6,34 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
 )
 
-// BookChangesMethod handles the book_changes RPC method
-// This method returns the changes to the order book for a specified ledger.
-// It computes OHLCV (open, high, low, close, volume) data for all currency pairs
-// that had offer changes in the ledger.
+// BookChangesMethod handles the book_changes RPC method.
+// STUB: Returns notImplemented. Requires transaction metadata iteration.
 //
-// Reference: rippled/src/xrpld/rpc/handlers/BookOffers.cpp (doBookChanges)
-// Reference: rippled/src/xrpld/rpc/BookChanges.h (computeBookChanges)
+// TODO [ledger]: Implement book_changes — computes OHLCV data for all currency
+//   pairs that had offer changes in a ledger.
+//   - Requires: Ability to iterate transactions in a closed ledger and access
+//     their metadata (AffectedNodes). The ledger service already stores
+//     transaction metadata via StoreTransaction().
+//   - Reference: rippled BookChanges.h (computeBookChanges)
+//   - Steps:
+//     1. Resolve target ledger from ledger_hash/ledger_index params
+//     2. Iterate all transactions in that ledger
+//     3. For each transaction, examine AffectedNodes in metadata
+//     4. For ltOFFER nodes that are Modified or Deleted (not Created):
+//        a. Compare FinalFields vs PreviousFields for TakerGets/TakerPays
+//        b. Filter out explicitly cancelled offers (not crossed)
+//        c. Compute delta in gets and pays
+//        d. Calculate exchange rate = delta_pays / delta_gets
+//     5. Accumulate OHLCV data per currency pair (keyed by "currA/currB")
+//     6. Return: { type: "bookChanges", changes: [...], ledger_index, ledger_hash,
+//        ledger_time, validated }
+//   - Each change entry: { currency_a, currency_b, volume_a, volume_b,
+//     high, low, open, close }
+//   - Dependency: LedgerService needs a method to iterate transactions in a
+//     closed ledger (e.g., GetLedgerTransactions(seq) returning tx+meta pairs)
 type BookChangesMethod struct{}
 
 func (m *BookChangesMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
-	// TODO: Implement book_changes handler
-	//
-	// Request parameters:
-	//   - ledger_hash (optional): A 20-byte hex string for the ledger version to use
-	//   - ledger_index (optional): The ledger index of the ledger to use, or a shortcut string
-	//
-	// Response fields:
-	//   - type: "bookChanges"
-	//   - validated: boolean indicating if the ledger is validated
-	//   - ledger_index: sequence number of the ledger
-	//   - ledger_hash: hash of the ledger
-	//   - ledger_time: close time of the ledger
-	//   - changes: array of book change objects, each containing:
-	//     - currency_a: first currency (e.g., "XRP_drops" or "USD/rIssuer...")
-	//     - currency_b: second currency
-	//     - volume_a: volume in currency_a
-	//     - volume_b: volume in currency_b
-	//     - high: highest exchange rate
-	//     - low: lowest exchange rate
-	//     - open: first exchange rate
-	//     - close: last exchange rate
-	//     - domain (optional): domain ID if present
-	//
-	// Implementation notes:
-	// 1. Look up the specified ledger (or use current if not specified)
-	// 2. Iterate through all transactions in the ledger
-	// 3. For each transaction, examine AffectedNodes in metadata
-	// 4. For ltOFFER nodes that are Modified or Deleted (not Created):
-	//    - Compare FinalFields vs PreviousFields for TakerGets/TakerPays
-	//    - Filter out offers explicitly cancelled (not crossed)
-	//    - Compute delta in gets and pays
-	//    - Calculate exchange rate and accumulate OHLCV data per currency pair
-	// 5. Return aggregated book changes
-
 	var request struct {
 		rpc_types.LedgerSpecifier
 	}
@@ -60,12 +44,12 @@ func (m *BookChangesMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMes
 		}
 	}
 
-	// Check if ledger service is available
 	if rpc_types.Services == nil || rpc_types.Services.Ledger == nil {
 		return nil, rpc_types.RpcErrorInternal("Ledger service not available")
 	}
 
-	return nil, rpc_types.NewRpcError(rpc_types.RpcNOT_IMPL, "notImpl", "notImpl", "book_changes not yet implemented")
+	return nil, rpc_types.NewRpcError(rpc_types.RpcNOT_IMPL, "notImpl", "notImpl",
+		"book_changes not yet implemented — requires ledger transaction iteration")
 }
 
 func (m *BookChangesMethod) RequiredRole() rpc_types.Role {

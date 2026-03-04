@@ -2,59 +2,53 @@ package rpc_handlers
 
 import (
 	"encoding/json"
+	"sort"
 
+	definitions "github.com/LeJamon/goXRPLd/internal/codec/binary-codec/definitions"
 	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
 )
 
-// ServerDefinitionsMethod handles the server_definitions RPC method
+// ServerDefinitionsMethod handles the server_definitions RPC method.
+// Returns the transaction, ledger entry, field, and result type definitions
+// used by the binary codec for serialization.
+// Reference: rippled ServerDefinitions.cpp
 type ServerDefinitionsMethod struct{}
 
 func (m *ServerDefinitionsMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
-	// TODO: Implement server definitions retrieval
-	// This method returns the transaction and ledger format definitions
-	// that the server uses, including:
-	// - Transaction types and their fields
-	// - Ledger object types and their fields
-	// - Field types and their encoding rules
-	// - Amendment status
-	// This data should come from the definitions system used by the binary codec
+	defs := definitions.Get()
+
+	// Build FIELDS array matching rippled format:
+	// Each entry is [fieldName, {nth, isVLEncoded, isSerialized, isSigningField, type}]
+	fields := make([]interface{}, 0, len(defs.Fields))
+
+	// Collect field names for deterministic ordering
+	fieldNames := make([]string, 0, len(defs.Fields))
+	for name := range defs.Fields {
+		fieldNames = append(fieldNames, name)
+	}
+	sort.Strings(fieldNames)
+
+	for _, name := range fieldNames {
+		fi := defs.Fields[name]
+		entry := []interface{}{
+			name,
+			map[string]interface{}{
+				"nth":            fi.Nth,
+				"isVLEncoded":    fi.IsVLEncoded,
+				"isSerialized":   fi.IsSerialized,
+				"isSigningField": fi.IsSigningField,
+				"type":           fi.Type,
+			},
+		}
+		fields = append(fields, entry)
+	}
 
 	response := map[string]interface{}{
-		"FIELDS": map[string]interface{}{
-			// TODO: Load actual field definitions from binary codec
-			// Example structure:
-			// "Account": [8, 1],
-			// "Destination": [8, 3],
-			// etc.
-		},
-		"TYPES": map[string]interface{}{
-			// TODO: Load actual type definitions
-			// Example structure:
-			// "UInt8": 1,
-			// "UInt16": 2,
-			// etc.
-		},
-		"TRANSACTION_RESULTS": map[string]interface{}{
-			// TODO: Load transaction result codes
-			// Example:
-			// "tesSUCCESS": 0,
-			// "tecCLAIM": 100,
-			// etc.
-		},
-		"TRANSACTION_TYPES": map[string]interface{}{
-			// TODO: Load transaction type definitions
-			// Example:
-			// "Payment": 0,
-			// "EscrowCreate": 1,
-			// etc.
-		},
-		"LEDGER_ENTRY_TYPES": map[string]interface{}{
-			// TODO: Load ledger entry type definitions
-			// Example:
-			// "AccountRoot": 97,
-			// "DirectoryNode": 100,
-			// etc.
-		},
+		"TYPES":              defs.Types,
+		"FIELDS":             fields,
+		"LEDGER_ENTRY_TYPES": defs.LedgerEntryTypes,
+		"TRANSACTION_TYPES":  defs.TransactionTypes,
+		"TRANSACTION_RESULTS": defs.TransactionResults,
 	}
 
 	return response, nil

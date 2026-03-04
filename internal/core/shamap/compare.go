@@ -87,11 +87,11 @@ func (sm *SHAMap) handleInnerComparison(ourNode, otherNode Node, other *SHAMap, 
 	var newEntries []stackEntry
 
 	for i := 0; i < BranchFactor; i++ {
-		ourChild, err := ourInner.Child(i)
+		ourChild, err := sm.descend(ourInner, i)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get our child %d: %w", i, err)
 		}
-		otherChild, err := otherInner.Child(i)
+		otherChild, err := other.descend(otherInner, i)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get other child %d: %w", i, err)
 		}
@@ -255,7 +255,7 @@ func (sm *SHAMap) walkBranch(node *InnerNode, otherMapItem *Item, isFirstMap boo
 			}
 
 			for i := 0; i < BranchFactor; i++ {
-				child, err := inner.Child(i)
+				child, err := sm.descend(inner, i)
 				if err != nil {
 					return false, fmt.Errorf("failed to get child %d: %w", i, err)
 				}
@@ -616,11 +616,11 @@ func (sm *SHAMap) handleInnerComparisonWithChannel(ourNode, otherNode Node, othe
 	var newEntries []stackEntry
 
 	for i := 0; i < BranchFactor; i++ {
-		ourChild, err := ourInner.Child(i)
+		ourChild, err := sm.descend(ourInner, i)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get our child %d: %w", i, err)
 		}
-		otherChild, err := otherInner.Child(i)
+		otherChild, err := other.descend(otherInner, i)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get other child %d: %w", i, err)
 		}
@@ -675,7 +675,7 @@ func (sm *SHAMap) walkBranchWithChannel(node *InnerNode, otherMapItem *Item, isF
 			}
 
 			for i := 0; i < BranchFactor; i++ {
-				child, err := inner.Child(i)
+				child, err := sm.descend(inner, i)
 				if err != nil {
 					return fmt.Errorf("failed to get child %d: %w", i, err)
 				}

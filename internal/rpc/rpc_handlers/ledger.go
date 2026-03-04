@@ -8,7 +8,21 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
 )
 
-// LedgerMethod handles the ledger RPC method
+// LedgerMethod handles the ledger RPC method.
+// PARTIAL: Ledger header info works. Missing:
+//
+// TODO [ledger]: Populate transactions list when transactions=true.
+//   - Requires: LedgerService.GetLedgerTransactions(seq) returning tx hashes
+//     (or full tx+meta if expand=true)
+//   - When expand=false: return array of transaction hash strings
+//   - When expand=true: return array of full tx_json objects with metadata
+//   - When binary=true + expand=true: return tx_blob + meta hex strings
+//   - Reference: rippled LedgerHandler.cpp lines 200-300
+//
+// TODO [ledger]: Populate accounts/state when accounts=true or full=true.
+//   - Requires: LedgerService.GetLedgerData() (already exists for ledger_data RPC)
+//   - When full=true: include all state objects and transactions
+//   - Reference: rippled LedgerHandler.cpp
 type LedgerMethod struct{}
 
 func (m *LedgerMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
@@ -120,7 +134,7 @@ func (m *LedgerMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage)
 		"validated":    validated,
 	}
 
-	// Add transactions if requested (placeholder - would need transaction iteration)
+	// TODO [ledger]: populate with real transactions (see type-level TODO)
 	if request.Transactions {
 		response["ledger"].(map[string]interface{})["transactions"] = []interface{}{}
 	}

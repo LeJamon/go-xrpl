@@ -81,7 +81,7 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Read check
 	// Reference: CancelCheck.cpp L55-60
 	checkData, err := ctx.View.Read(checkKey)
-	if err != nil {
+	if err != nil || checkData == nil {
 		return tx.TecNO_ENTRY
 	}
 

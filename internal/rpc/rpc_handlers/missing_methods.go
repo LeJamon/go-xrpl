@@ -8,28 +8,28 @@ import (
 )
 
 // =============================================================================
-// SKIPPED FEATURES TRACKING
+// STUB RPC HANDLERS
 // =============================================================================
 //
-// The following RPC methods have dependencies on features not yet implemented:
+// This file contains RPC methods that are stubs — either returning placeholder
+// data or notImplemented errors. Each handler has a TODO comment explaining
+// what's needed to implement it and what category it falls into:
 //
-// 1. simulate - Requires transaction dry-run in TxQ (partial implementation)
-// 2. ledger_diff - gRPC only in rippled, JSON-RPC stub provided
-// 3. owner_info - Requires NetworkOPs.getOwnerInfo (not implemented)
-// 4. can_delete - Requires SHAMapStore advisory delete (not implemented)
-// 5. ledger_cleaner - Requires LedgerCleaner service (not implemented)
-// 6. ledger_request - Requires network ledger fetching (not implemented)
+//   [network]   — Requires P2P networking layer (not needed for standalone)
+//   [admin]     — Admin/operational tool, low priority
+//   [ledger]    — Requires additional ledger query capabilities
+//   [validator] — Requires validator infrastructure
+//   [engine]    — Requires transaction engine changes
 //
-// IMPLEMENTED methods (moved to separate files):
-// - amm_info - See amm_info.go
-// - vault_info - See vault_info.go
-// - get_aggregate_price - See get_aggregate_price.go
-//
-// These methods return appropriate error responses indicating the feature
-// is not yet available.
 // =============================================================================
 
-// FetchInfoMethod handles the fetch_info RPC method
+// FetchInfoMethod handles the fetch_info RPC method.
+// STUB: Returns empty info. Network-only — not needed for standalone mode.
+//
+// TODO [network]: Implement when adding P2P networking layer.
+//   - Reference: rippled FetchInfo.cpp → context.app.getFetchPack()
+//   - Returns info about current fetch operations for missing ledger data
+//   - Params: clear (bool) — resets fetch counters
 type FetchInfoMethod struct{}
 
 func (m *FetchInfoMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
@@ -45,11 +45,9 @@ func (m *FetchInfoMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessa
 	}
 
 	response := make(map[string]interface{})
-
 	if request.Clear {
 		response["clear"] = true
 	}
-
 	response["info"] = map[string]interface{}{}
 
 	return response, nil
@@ -63,7 +61,14 @@ func (m *FetchInfoMethod) SupportedApiVersions() []int {
 	return []int{rpc_types.ApiVersion1, rpc_types.ApiVersion2, rpc_types.ApiVersion3}
 }
 
-// OwnerInfoMethod handles the owner_info RPC method
+// OwnerInfoMethod handles the owner_info RPC method.
+// STUB: Returns notImplemented. Requires NetworkOPs integration.
+//
+// TODO [ledger]: Implement owner_info.
+//   - Reference: rippled OwnerInfo.cpp → context.netOps.getOwnerInfo()
+//   - Returns: owner-specific info about offers and account objects
+//   - Params: account (required)
+//   - This is a rarely-used legacy method; low priority
 type OwnerInfoMethod struct{}
 
 func (m *OwnerInfoMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
@@ -86,12 +91,8 @@ func (m *OwnerInfoMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessa
 		return nil, rpc_types.RpcErrorInvalidParams("Missing required parameter: account")
 	}
 
-	if rpc_types.Services == nil || rpc_types.Services.Ledger == nil {
-		return nil, rpc_types.RpcErrorInternal("Ledger service not available")
-	}
-
 	return nil, rpc_types.NewRpcError(rpc_types.RpcNOT_IMPL, "notImplemented", "notImplemented",
-		"owner_info is not yet implemented - requires NetworkOPs.GetOwnerInfo")
+		"owner_info is not yet implemented — requires NetworkOPs.GetOwnerInfo")
 }
 
 func (m *OwnerInfoMethod) RequiredRole() rpc_types.Role {
@@ -102,7 +103,13 @@ func (m *OwnerInfoMethod) SupportedApiVersions() []int {
 	return []int{rpc_types.ApiVersion1, rpc_types.ApiVersion2, rpc_types.ApiVersion3}
 }
 
-// LedgerHeaderMethod handles the ledger_header RPC method
+// LedgerHeaderMethod handles the ledger_header RPC method.
+// PARTIAL: Works for ledger_index lookups. Missing ledger_hash support.
+//
+// TODO [ledger]: Support lookup by ledger_hash.
+//   - Requires: hex.DecodeString(hash) → GetLedgerByHash(hash)
+//   - Same pattern as ledger.go (which already handles hash lookup)
+//   - Low priority since ledger_header is deprecated in favor of 'ledger'
 type LedgerHeaderMethod struct{}
 
 func (m *LedgerHeaderMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
@@ -124,6 +131,7 @@ func (m *LedgerHeaderMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMe
 	var err error
 
 	if request.LedgerHash != "" {
+		// TODO [ledger]: support hash lookup (see type-level TODO)
 		return nil, rpc_types.NewRpcError(rpc_types.RpcNOT_IMPL, "notImplemented", "notImplemented",
 			"ledger_header by hash is not yet implemented")
 	} else if request.LedgerIndex != "" {
@@ -180,7 +188,13 @@ func (m *LedgerHeaderMethod) SupportedApiVersions() []int {
 	return []int{rpc_types.ApiVersion1, rpc_types.ApiVersion2, rpc_types.ApiVersion3}
 }
 
-// LedgerRequestMethod handles the ledger_request RPC method
+// LedgerRequestMethod handles the ledger_request RPC method.
+// STUB: Returns error. Network-only — requests missing ledgers from peers.
+//
+// TODO [network]: Implement when adding P2P networking layer.
+//   - Reference: rippled LedgerRequest.cpp
+//   - Triggers a fetch of a specific ledger from the network
+//   - In standalone mode, correctly returns notSynced
 type LedgerRequestMethod struct{}
 
 func (m *LedgerRequestMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
@@ -194,7 +208,7 @@ func (m *LedgerRequestMethod) Handle(ctx *rpc_types.RpcContext, params json.RawM
 	}
 
 	return nil, rpc_types.NewRpcError(rpc_types.RpcNOT_IMPL, "notImplemented", "notImplemented",
-		"ledger_request is not yet implemented - requires network ledger fetching")
+		"ledger_request is not yet implemented — requires network ledger fetching")
 }
 
 func (m *LedgerRequestMethod) RequiredRole() rpc_types.Role {
@@ -205,7 +219,14 @@ func (m *LedgerRequestMethod) SupportedApiVersions() []int {
 	return []int{rpc_types.ApiVersion1, rpc_types.ApiVersion2, rpc_types.ApiVersion3}
 }
 
-// LedgerCleanerMethod handles the ledger_cleaner RPC method
+// LedgerCleanerMethod handles the ledger_cleaner RPC method.
+// STUB: Returns error. Admin-only maintenance tool.
+//
+// TODO [admin]: Implement when adding ledger integrity checking.
+//   - Reference: rippled LedgerCleaner.cpp
+//   - Schedules verification and repair of stored ledger data
+//   - Params: ledger (sequence), max_ledger, min_ledger, full (bool)
+//   - Requires: LedgerCleaner background service
 type LedgerCleanerMethod struct{}
 
 func (m *LedgerCleanerMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
@@ -214,7 +235,7 @@ func (m *LedgerCleanerMethod) Handle(ctx *rpc_types.RpcContext, params json.RawM
 	}
 
 	return nil, rpc_types.NewRpcError(rpc_types.RpcNOT_IMPL, "notImplemented", "notImplemented",
-		"ledger_cleaner is not yet implemented - requires LedgerCleaner service")
+		"ledger_cleaner is not yet implemented — requires LedgerCleaner service")
 }
 
 func (m *LedgerCleanerMethod) RequiredRole() rpc_types.Role {
@@ -225,12 +246,17 @@ func (m *LedgerCleanerMethod) SupportedApiVersions() []int {
 	return []int{rpc_types.ApiVersion1, rpc_types.ApiVersion2, rpc_types.ApiVersion3}
 }
 
-// LedgerDiffMethod handles the ledger_diff RPC method
+// LedgerDiffMethod handles the ledger_diff RPC method.
+// STUB: Returns error. Only available via gRPC in rippled.
+//
+// NOTE: This is gRPC-only in rippled and is NOT available via JSON-RPC.
+//   It computes the state diff between two ledger versions.
+//   This stub exists for completeness but may never need implementation.
 type LedgerDiffMethod struct{}
 
 func (m *LedgerDiffMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
 	return nil, rpc_types.NewRpcError(rpc_types.RpcNOT_IMPL, "notImplemented", "notImplemented",
-		"ledger_diff is only available via gRPC in rippled - JSON-RPC not supported")
+		"ledger_diff is only available via gRPC in rippled — JSON-RPC not supported")
 }
 
 func (m *LedgerDiffMethod) RequiredRole() rpc_types.Role {
@@ -241,7 +267,13 @@ func (m *LedgerDiffMethod) SupportedApiVersions() []int {
 	return []int{rpc_types.ApiVersion1, rpc_types.ApiVersion2, rpc_types.ApiVersion3}
 }
 
-// TxReduceRelayMethod handles the tx_reduce_relay RPC method
+// TxReduceRelayMethod handles the tx_reduce_relay RPC method.
+// STUB: Returns zero counters. Network-only relay optimization.
+//
+// TODO [network]: Implement when adding P2P transaction relay.
+//   - Reference: rippled TxReduceRelay.cpp
+//   - Returns statistics about reduced transaction relay (squelching)
+//   - Requires: Transaction relay subsystem with squelch tracking
 type TxReduceRelayMethod struct{}
 
 func (m *TxReduceRelayMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
@@ -249,14 +281,12 @@ func (m *TxReduceRelayMethod) Handle(ctx *rpc_types.RpcContext, params json.RawM
 		return nil, rpc_types.RpcErrorInternal("Ledger service not available")
 	}
 
-	response := map[string]interface{}{
+	return map[string]interface{}{
 		"transactions": map[string]interface{}{
 			"total_relayed":   0,
 			"total_squelched": 0,
 		},
-	}
-
-	return response, nil
+	}, nil
 }
 
 func (m *TxReduceRelayMethod) RequiredRole() rpc_types.Role {
@@ -267,7 +297,21 @@ func (m *TxReduceRelayMethod) SupportedApiVersions() []int {
 	return []int{rpc_types.ApiVersion1, rpc_types.ApiVersion2, rpc_types.ApiVersion3}
 }
 
-// SimulateMethod handles the simulate RPC method
+// SimulateMethod handles the simulate RPC method.
+// STUB: Returns error. Requires dry-run transaction execution.
+//
+// TODO [engine]: Implement transaction simulation (dry-run).
+//   - Reference: rippled Simulate.cpp
+//   - Steps:
+//     1. Parse tx_blob or tx_json (mutually exclusive)
+//     2. Create a snapshot/sandbox of the current open ledger state
+//     3. Apply the transaction in the sandbox (full Validate→Preflight→Preclaim→Apply)
+//     4. Collect the result and metadata WITHOUT committing to the real ledger
+//     5. Return: engine_result, tx_json, metadata (same format as submit response)
+//   - Requires: Engine snapshot support — the NestedApplyStateTable/sandbox
+//     infrastructure already exists (used by payment engine).
+//     Key: run transaction through engine with a discardable view.
+//   - Binary param: if true, return tx_blob + meta as hex instead of JSON
 type SimulateMethod struct{}
 
 func (m *SimulateMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
@@ -298,7 +342,7 @@ func (m *SimulateMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessag
 	}
 
 	return nil, rpc_types.NewRpcError(rpc_types.RpcNOT_IMPL, "notImplemented", "notImplemented",
-		"simulate is not yet implemented - requires TxQ dry-run capability")
+		"simulate is not yet implemented — requires dry-run transaction execution")
 }
 
 func (m *SimulateMethod) RequiredRole() rpc_types.Role {
@@ -309,7 +353,13 @@ func (m *SimulateMethod) SupportedApiVersions() []int {
 	return []int{rpc_types.ApiVersion1, rpc_types.ApiVersion2, rpc_types.ApiVersion3}
 }
 
-// ConnectMethod handles the connect RPC method
+// ConnectMethod handles the connect RPC method.
+// STUB: Returns message without actually connecting. Network-only.
+//
+// TODO [network]: Implement when adding P2P networking layer.
+//   - Reference: rippled Connect.cpp → context.app.overlay().connect()
+//   - Params: ip (required), port (optional, default 51235)
+//   - Should initiate an outbound peer connection
 type ConnectMethod struct{}
 
 func (m *ConnectMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
@@ -342,11 +392,9 @@ func (m *ConnectMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage
 		port = 51235
 	}
 
-	response := map[string]interface{}{
+	return map[string]interface{}{
 		"message": fmt.Sprintf("attempting connection to IP:%s port:%d", request.IP, port),
-	}
-
-	return response, nil
+	}, nil
 }
 
 func (m *ConnectMethod) RequiredRole() rpc_types.Role {
@@ -357,31 +405,21 @@ func (m *ConnectMethod) SupportedApiVersions() []int {
 	return []int{rpc_types.ApiVersion1, rpc_types.ApiVersion2, rpc_types.ApiVersion3}
 }
 
-// PrintMethod handles the print RPC method
+// PrintMethod handles the print RPC method.
+// STUB: Returns acknowledgment. Admin debug tool.
+//
+// TODO [admin]: Implement internal state printing for debugging.
+//   - Reference: rippled Print.cpp → context.app.journal()
+//   - Returns internal debug information about server state
+//   - Low priority admin debugging tool
 type PrintMethod struct{}
 
 func (m *PrintMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
-	var request struct {
-		Params []string `json:"params,omitempty"`
-	}
-
-	if params != nil {
-		_ = json.Unmarshal(params, &request)
-	}
-
 	if rpc_types.Services == nil || rpc_types.Services.Ledger == nil {
 		return nil, rpc_types.RpcErrorInternal("Ledger service not available")
 	}
 
-	response := map[string]interface{}{
-		"status": "print command received",
-	}
-
-	if len(request.Params) > 0 {
-		response["filter"] = request.Params[0]
-	}
-
-	return response, nil
+	return map[string]interface{}{}, nil
 }
 
 func (m *PrintMethod) RequiredRole() rpc_types.Role {
@@ -392,14 +430,17 @@ func (m *PrintMethod) SupportedApiVersions() []int {
 	return []int{rpc_types.ApiVersion1, rpc_types.ApiVersion2, rpc_types.ApiVersion3}
 }
 
-// ValidatorInfoMethod handles the validator_info RPC method
+// ValidatorInfoMethod handles the validator_info RPC method.
+// STUB: Returns notValidator. Requires validator configuration.
+//
+// TODO [validator]: Implement when adding validator support.
+//   - Reference: rippled ValidatorInfo.cpp
+//   - Returns: master_key, ephemeral_key, seq, domain, signing_key, token
+//   - Requires: Server to be configured as a validator with keys
+//   - In standalone mode, correctly returns notValidator
 type ValidatorInfoMethod struct{}
 
 func (m *ValidatorInfoMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
-	if rpc_types.Services == nil || rpc_types.Services.Ledger == nil {
-		return nil, rpc_types.RpcErrorInternal("Ledger service not available")
-	}
-
 	return nil, rpc_types.NewRpcError(rpc_types.RpcNOT_VALIDATOR, "notValidator", "notValidator",
 		"This server is not configured as a validator")
 }
@@ -412,16 +453,18 @@ func (m *ValidatorInfoMethod) SupportedApiVersions() []int {
 	return []int{rpc_types.ApiVersion1, rpc_types.ApiVersion2, rpc_types.ApiVersion3}
 }
 
-// CanDeleteMethod handles the can_delete RPC method
+// CanDeleteMethod handles the can_delete RPC method.
+// STUB: Returns notEnabled. Requires SHAMapStore advisory delete.
+//
+// TODO [admin]: Implement when adding online delete support.
+//   - Reference: rippled CanDelete.cpp → context.app.getSHAMapStore()
+//   - Used to manage advisory deletion of old ledgers
+//   - Requires: SHAMapStore with online_delete configuration
 type CanDeleteMethod struct{}
 
 func (m *CanDeleteMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
-	if rpc_types.Services == nil || rpc_types.Services.Ledger == nil {
-		return nil, rpc_types.RpcErrorInternal("Ledger service not available")
-	}
-
 	return nil, rpc_types.NewRpcError(rpc_types.RpcNOT_ENABLED, "notEnabled", "notEnabled",
-		"Advisory delete is not enabled - requires SHAMapStore configuration")
+		"Advisory delete is not enabled — requires SHAMapStore configuration")
 }
 
 func (m *CanDeleteMethod) RequiredRole() rpc_types.Role {
@@ -432,30 +475,26 @@ func (m *CanDeleteMethod) SupportedApiVersions() []int {
 	return []int{rpc_types.ApiVersion1, rpc_types.ApiVersion2, rpc_types.ApiVersion3}
 }
 
-// NOTE: GetAggregatePriceMethod is now implemented in get_aggregate_price.go
-
-// GetCountsMethod handles the get_counts RPC method
+// GetCountsMethod handles the get_counts RPC method.
+// STUB: Returns minimal info. Admin diagnostic tool.
+//
+// TODO [admin]: Implement internal object count reporting.
+//   - Reference: rippled GetCounts.cpp
+//   - Returns: counts of internal objects (SHAMap nodes, SLE cache entries,
+//     transaction counts, memory usage, etc.)
+//   - Params: min_count (int) — only show objects above threshold
+//   - Useful for debugging memory/performance issues
 type GetCountsMethod struct{}
 
 func (m *GetCountsMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
-	var request struct {
-		MinCount int `json:"min_count,omitempty"`
-	}
-
-	if params != nil {
-		_ = json.Unmarshal(params, &request)
-	}
-
 	if rpc_types.Services == nil || rpc_types.Services.Ledger == nil {
 		return nil, rpc_types.RpcErrorInternal("Ledger service not available")
 	}
 
 	serverInfo := rpc_types.Services.Ledger.GetServerInfo()
-	response := map[string]interface{}{
+	return map[string]interface{}{
 		"standalone": serverInfo.Standalone,
-	}
-
-	return response, nil
+	}, nil
 }
 
 func (m *GetCountsMethod) RequiredRole() rpc_types.Role {
@@ -466,7 +505,15 @@ func (m *GetCountsMethod) SupportedApiVersions() []int {
 	return []int{rpc_types.ApiVersion1, rpc_types.ApiVersion2, rpc_types.ApiVersion3}
 }
 
-// LogLevelMethod handles the log_level RPC method
+// LogLevelMethod handles the log_level RPC method.
+// STUB: Accepts level changes but doesn't actually modify logging.
+//
+// TODO [admin]: Wire to actual logging framework.
+//   - Reference: rippled LogLevel.cpp
+//   - When severity is empty: return current log levels for all partitions
+//   - When severity is set: change the log level (optionally for a specific partition)
+//   - Valid levels: trace, debug, info, warning, error, fatal
+//   - Requires: Logging infrastructure with configurable levels
 type LogLevelMethod struct{}
 
 func (m *LogLevelMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
@@ -484,12 +531,11 @@ func (m *LogLevelMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessag
 	}
 
 	if request.Severity == "" {
-		response := map[string]interface{}{
+		return map[string]interface{}{
 			"levels": map[string]interface{}{
 				"base": "info",
 			},
-		}
-		return response, nil
+		}, nil
 	}
 
 	validLevels := map[string]bool{
@@ -511,7 +557,13 @@ func (m *LogLevelMethod) SupportedApiVersions() []int {
 	return []int{rpc_types.ApiVersion1, rpc_types.ApiVersion2, rpc_types.ApiVersion3}
 }
 
-// LogRotateMethod handles the log_rotate RPC method
+// LogRotateMethod handles the log_rotate RPC method (logrotate).
+// STUB: Returns acknowledgment without actually rotating.
+//
+// TODO [admin]: Wire to actual log file rotation.
+//   - Reference: rippled LogRotate.cpp
+//   - Closes and reopens log files for external log rotation tools
+//   - Requires: File-based logging with rotation support
 type LogRotateMethod struct{}
 
 func (m *LogRotateMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
@@ -532,11 +584,13 @@ func (m *LogRotateMethod) SupportedApiVersions() []int {
 	return []int{rpc_types.ApiVersion1, rpc_types.ApiVersion2, rpc_types.ApiVersion3}
 }
 
-// NOTE: AMMInfoMethod is now implemented in amm_info.go
-
-// NOTE: VaultInfoMethod is now implemented in vault_info.go
-
-// UnlListMethod handles the unl_list RPC method
+// UnlListMethod handles the unl_list RPC method.
+// STUB: Returns empty list. Network-only — tracks negative UNL.
+//
+// TODO [network]: Implement when adding UNL/consensus support.
+//   - Reference: rippled UNLList.cpp
+//   - Returns the current Unique Node List (trusted validators)
+//   - In standalone mode, there is no UNL
 type UnlListMethod struct{}
 
 func (m *UnlListMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
@@ -544,11 +598,9 @@ func (m *UnlListMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage
 		return nil, rpc_types.RpcErrorInternal("Ledger service not available")
 	}
 
-	response := map[string]interface{}{
+	return map[string]interface{}{
 		"unl": []interface{}{},
-	}
-
-	return response, nil
+	}, nil
 }
 
 func (m *UnlListMethod) RequiredRole() rpc_types.Role {
@@ -559,7 +611,13 @@ func (m *UnlListMethod) SupportedApiVersions() []int {
 	return []int{rpc_types.ApiVersion1, rpc_types.ApiVersion2, rpc_types.ApiVersion3}
 }
 
-// BlackListMethod handles the black_list RPC method
+// BlackListMethod handles the black_list (blacklist) RPC method.
+// STUB: Returns empty list. Network-only — manages IP blacklisting.
+//
+// TODO [network]: Implement when adding P2P networking layer.
+//   - Reference: rippled BlackList.cpp
+//   - Returns/manages the peer IP blacklist
+//   - Params: threshold (int) — auto-blacklist peers above this score
 type BlackListMethod struct{}
 
 func (m *BlackListMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
@@ -567,11 +625,9 @@ func (m *BlackListMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessa
 		return nil, rpc_types.RpcErrorInternal("Ledger service not available")
 	}
 
-	response := map[string]interface{}{
+	return map[string]interface{}{
 		"blacklist": []interface{}{},
-	}
-
-	return response, nil
+	}, nil
 }
 
 func (m *BlackListMethod) RequiredRole() rpc_types.Role {

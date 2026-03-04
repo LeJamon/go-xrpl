@@ -214,6 +214,13 @@ func (l *Ledger) CloseTime() time.Time {
 	return l.header.CloseTime
 }
 
+// ParentCloseTime returns the parent ledger's close time
+func (l *Ledger) ParentCloseTime() time.Time {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.header.ParentCloseTime
+}
+
 // TotalDrops returns the total XRP in existence
 func (l *Ledger) TotalDrops() uint64 {
 	l.mu.RLock()
@@ -273,7 +280,7 @@ func (l *Ledger) Read(k keylet.Keylet) ([]byte, error) {
 		return nil, err
 	}
 	if !found {
-		return nil, ErrEntryNotFound
+		return nil, nil
 	}
 
 	return item.Data(), nil
@@ -509,6 +516,26 @@ func (l *Ledger) ForEach(fn func(key [32]byte, data []byte) bool) error {
 	})
 }
 
+// Succ returns the first state entry with key > the given key.
+// Uses SHAMap's UpperBound for O(log n) lookup.
+// Reference: rippled ReadView::succ()
+func (l *Ledger) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	it := l.stateMap.UpperBound(key)
+	if it.Valid() {
+		item := it.Item()
+		if item != nil {
+			return item.Key(), item.Data(), true, nil
+		}
+	}
+	if err := it.Err(); err != nil {
+		return [32]byte{}, nil, false, err
+	}
+	return [32]byte{}, nil, false, nil
+}
+
 // ForEachTransaction iterates over all transactions in the ledger and calls fn for each.
 // If fn returns false, iteration stops early.
 // The callback receives the transaction hash and data.
@@ -529,6 +556,14 @@ func (l *Ledger) StateMapSnapshot() (*shamap.SHAMap, error) {
 	defer l.mu.RUnlock()
 
 	return l.stateMap.Snapshot(true)
+}
+
+// SetStateMapFamily sets the Family on the state map, enabling backed mode
+// with lazy loading and efficient snapshots.
+func (l *Ledger) SetStateMapFamily(family shamap.Family) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.stateMap.SetFamily(family)
 }
 
 // SerializeHeader returns the serialized ledger header bytes

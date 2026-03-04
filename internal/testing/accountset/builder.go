@@ -10,15 +10,23 @@ import (
 
 // AccountSetBuilder provides a fluent interface for building AccountSet transactions.
 type AccountSetBuilder struct {
-	account      *testing.Account
-	setFlag      *uint32
-	clearFlag    *uint32
-	domain       string
-	transferRate *uint32
-	tickSize     *uint8
-	fee          uint64
-	sequence     *uint32
-	flags        uint32
+	account              *testing.Account
+	setFlag              *uint32
+	clearFlag            *uint32
+	domain               string
+	domainPresent        bool
+	emailHash            string
+	emailHashPresent     bool
+	messageKey           string
+	messageKeyPresent    bool
+	walletLocator        string
+	walletLocatorPresent bool
+	transferRate         *uint32
+	tickSize             *uint8
+	nfTokenMinter        string
+	fee                  uint64
+	sequence             *uint32
+	flags                uint32
 }
 
 // AccountSet creates a new AccountSetBuilder.
@@ -42,8 +50,41 @@ func (b *AccountSetBuilder) ClearFlag(flag uint32) *AccountSetBuilder {
 }
 
 // Domain sets the domain for the account (as hex-encoded string).
+// Pass empty string to clear the domain field.
 func (b *AccountSetBuilder) Domain(domain string) *AccountSetBuilder {
 	b.domain = domain
+	b.domainPresent = true
+	return b
+}
+
+// EmailHash sets the email hash (128-bit MD5 hash as hex string).
+// Pass empty string to clear the field.
+func (b *AccountSetBuilder) EmailHash(hash string) *AccountSetBuilder {
+	b.emailHash = hash
+	b.emailHashPresent = true
+	return b
+}
+
+// MessageKey sets the message key (public key as hex string).
+// Pass empty string to clear the field.
+func (b *AccountSetBuilder) MessageKey(key string) *AccountSetBuilder {
+	b.messageKey = key
+	b.messageKeyPresent = true
+	return b
+}
+
+// WalletLocator sets the wallet locator (256-bit hash as hex string).
+// Pass empty string to clear the field.
+func (b *AccountSetBuilder) WalletLocator(locator string) *AccountSetBuilder {
+	b.walletLocator = locator
+	b.walletLocatorPresent = true
+	return b
+}
+
+// TxFlags sets the transaction-level flags (e.g., tfAllowXRP, tfOptionalAuth).
+// These are different from SetFlag/ClearFlag which control account-level flags.
+func (b *AccountSetBuilder) TxFlags(flags uint32) *AccountSetBuilder {
+	b.flags = flags
 	return b
 }
 
@@ -127,6 +168,23 @@ func (b *AccountSetBuilder) AllowClawback() *AccountSetBuilder {
 	return b
 }
 
+// AuthorizedMinter sets the account as an authorized NFToken minter.
+// Reference: rippled's token::setMinter(account, minter).
+func (b *AccountSetBuilder) AuthorizedMinter(minter *testing.Account) *AccountSetBuilder {
+	flag := accounttx.AccountSetFlagAuthorizedNFTokenMinter
+	b.setFlag = &flag
+	b.nfTokenMinter = minter.Address
+	return b
+}
+
+// ClearMinter clears the authorized NFToken minter.
+func (b *AccountSetBuilder) ClearMinter() *AccountSetBuilder {
+	flag := accounttx.AccountSetFlagAuthorizedNFTokenMinter
+	b.clearFlag = &flag
+	b.nfTokenMinter = ""
+	return b
+}
+
 // Build constructs the AccountSet transaction.
 func (b *AccountSetBuilder) Build() tx.Transaction {
 	as := accounttx.NewAccountSet(b.account.Address)
@@ -138,14 +196,38 @@ func (b *AccountSetBuilder) Build() tx.Transaction {
 	if b.clearFlag != nil {
 		as.ClearFlag = b.clearFlag
 	}
-	if b.domain != "" {
-		as.Domain = b.domain
+	if b.domainPresent {
+		d := b.domain
+		as.Domain = &d
+	}
+	if b.emailHashPresent {
+		if b.emailHash == "" {
+			// Clearing: send all-zeros hash (128-bit)
+			as.EmailHash = "00000000000000000000000000000000"
+		} else {
+			as.EmailHash = b.emailHash
+		}
+	}
+	if b.messageKeyPresent {
+		mk := b.messageKey
+		as.MessageKey = &mk
+	}
+	if b.walletLocatorPresent {
+		if b.walletLocator == "" {
+			// Clearing: send all-zeros hash (256-bit)
+			as.WalletLocator = "0000000000000000000000000000000000000000000000000000000000000000"
+		} else {
+			as.WalletLocator = b.walletLocator
+		}
 	}
 	if b.transferRate != nil {
 		as.TransferRate = b.transferRate
 	}
 	if b.tickSize != nil {
 		as.TickSize = b.tickSize
+	}
+	if b.nfTokenMinter != "" {
+		as.NFTokenMinter = b.nfTokenMinter
 	}
 	if b.sequence != nil {
 		as.SetSequence(*b.sequence)

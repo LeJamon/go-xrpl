@@ -1,6 +1,7 @@
 package nftoken
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 
 	addresscodec "github.com/LeJamon/goXRPLd/internal/codec/address-codec"
 	binarycodec "github.com/LeJamon/goXRPLd/internal/codec/binary-codec"
+	"github.com/LeJamon/goXRPLd/internal/core/amendment"
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
@@ -21,6 +23,16 @@ const (
 	fieldTypeHash256 = sle.FieldTypeHash256
 	fieldTypeAccount = sle.FieldTypeAccount
 	fieldTypeBlob    = sle.FieldTypeBlob
+)
+
+// NFToken ID flag constants (stored in first 2 bytes of NFTokenID).
+// These match the mint flags but are used when constructing/inspecting NFToken IDs.
+const (
+	NFTokenFlagBurnable     uint16 = 0x0001
+	NFTokenFlagOnlyXRP      uint16 = 0x0002
+	NFTokenFlagTrustLine    uint16 = 0x0004
+	NFTokenFlagTransferable uint16 = 0x0008
+	NFTokenFlagMutable      uint16 = 0x0010
 )
 
 // nftPageMask is the mask for the low 96 bits of an NFTokenID
@@ -40,12 +52,11 @@ func getNFTIssuer(nftokenID [32]byte) [20]byte {
 	return issuer
 }
 
-// getNFTokenFlags extracts the flags from an NFTokenID (first 2 bytes)
+// getNFTokenFlags extracts the flags from an NFTokenID string (first 4 hex chars)
 func getNFTokenFlags(nftokenID string) uint16 {
 	if len(nftokenID) < 4 {
 		return 0
 	}
-	// First 4 hex chars = 2 bytes = flags
 	var flags uint16
 	for i := 0; i < 4 && i < len(nftokenID); i++ {
 		flags <<= 4
@@ -72,12 +83,21 @@ func getNFTFlagsFromID(nftokenID [32]byte) uint16 {
 	return binary.BigEndian.Uint16(nftokenID[0:2])
 }
 
-// cipheredTaxon computes the ciphered taxon value
-// This matches rippled's nft::cipheredTaxon function
+// CipheredTaxon ciphers a taxon using rippled's algorithm to prevent enumeration.
+// Matching rippled: (taxon ^ ((tokenSeq ^ 384160001) * 2357503715))
+func CipheredTaxon(tokenSeq uint32, taxon uint32) uint32 {
+	return cipheredTaxon(tokenSeq, taxon)
+}
+
 func cipheredTaxon(tokenSeq uint32, taxon uint32) uint32 {
-	// Simple linear congruential generator to prevent taxon enumeration
-	// Matching rippled: (taxon ^ ((tokenSeq ^ 384160001) * 2357503715))
 	return taxon ^ ((tokenSeq ^ 384160001) * 2357503715)
+}
+
+// GenerateNFTokenID generates an NFTokenID based on the minting parameters.
+// This is the exported version of generateNFTokenID for use in tests.
+// Reference: rippled NFTokenMint.cpp createNFTokenID
+func GenerateNFTokenID(issuer [20]byte, taxon, sequence uint32, flags uint16, transferFee uint16) [32]byte {
+	return generateNFTokenID(issuer, taxon, sequence, flags, transferFee)
 }
 
 // generateNFTokenID generates an NFTokenID based on the minting parameters
@@ -96,7 +116,6 @@ func generateNFTokenID(issuer [20]byte, taxon, sequence uint32, flags uint16, tr
 	binary.BigEndian.PutUint16(tokenID[2:4], transferFee)
 	copy(tokenID[4:24], issuer[:])
 
-	// Cipher the taxon using rippled's algorithm to prevent enumeration
 	ciphered := cipheredTaxon(sequence, taxon)
 	binary.BigEndian.PutUint32(tokenID[24:28], ciphered)
 	binary.BigEndian.PutUint32(tokenID[28:32], sequence)
@@ -104,35 +123,20 @@ func generateNFTokenID(issuer [20]byte, taxon, sequence uint32, flags uint16, tr
 	return tokenID
 }
 
-// insertNFTokenSorted inserts an NFToken into the slice maintaining sorted order
-func insertNFTokenSorted(tokens []sle.NFTokenData, newToken sle.NFTokenData) []sle.NFTokenData {
-	// Find insertion point (sorted by NFTokenID)
-	pos := 0
-	for i, t := range tokens {
-		if compareNFTokenID(newToken.NFTokenID, t.NFTokenID) < 0 {
-			pos = i
-			break
-		}
-		pos = i + 1
-	}
-	// Insert at position
-	tokens = append(tokens, sle.NFTokenData{})
-	copy(tokens[pos+1:], tokens[pos:])
-	tokens[pos] = newToken
-	return tokens
-}
+// ---------------------------------------------------------------------------
+// NFToken comparison and page key helpers
+// ---------------------------------------------------------------------------
 
-// compareNFTokenID compares two NFTokenIDs lexicographically
+// compareNFTokenID compares two NFTokenIDs using rippled's sort order:
+// sort by low 96 bits first, then full 256-bit ID as tiebreaker.
+// Reference: rippled NFTokenUtils.cpp compareTokens
 func compareNFTokenID(a, b [32]byte) int {
-	for i := 0; i < 32; i++ {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
+	// Compare low 96 bits (bytes 20-31) first
+	if c := bytes.Compare(a[20:], b[20:]); c != 0 {
+		return c
 	}
-	return 0
+	// Full 256-bit comparison as tiebreaker
+	return bytes.Compare(a[:], b[:])
 }
 
 // getNFTPageKey returns the low 96 bits of an NFTokenID (for page grouping)
@@ -144,179 +148,731 @@ func getNFTPageKey(nftokenID [32]byte) [32]byte {
 	return result
 }
 
-// insertNFTokenResult contains the result of inserting an NFToken
-type insertNFTokenResult struct {
-	Result       tx.Result
-	PagesCreated int // Number of new pages created (0 or 1 or 2 in split scenarios)
+// insertNFTokenSorted inserts an NFToken into the slice maintaining sorted order
+func insertNFTokenSorted(tokens []sle.NFTokenData, newToken sle.NFTokenData) []sle.NFTokenData {
+	pos := 0
+	for i, t := range tokens {
+		if compareNFTokenID(newToken.NFTokenID, t.NFTokenID) < 0 {
+			pos = i
+			break
+		}
+		pos = i + 1
+	}
+	tokens = append(tokens, sle.NFTokenData{})
+	copy(tokens[pos+1:], tokens[pos:])
+	tokens[pos] = newToken
+	return tokens
 }
 
-// insertNFToken inserts an NFToken into the owner's token directory
-// Reference: rippled NFTokenUtils.cpp insertToken and getPageForToken
-// Returns the result and the number of new pages created (for owner count adjustment)
-func insertNFToken(ownerID [20]byte, token sle.NFTokenData, view tx.LedgerView) insertNFTokenResult {
-	// Find the appropriate page for this token
-	pageKey := keylet.NFTokenPage(ownerID, token.NFTokenID)
+// ---------------------------------------------------------------------------
+// Page traversal — replaces broken hashed-keylet approach
+// Reference: rippled NFTokenUtils.cpp locatePage, getPageForToken
+// ---------------------------------------------------------------------------
 
-	// Check if page exists
-	exists, _ := view.Exists(pageKey)
-	if !exists {
-		// Create new page
+// locatePage finds the NFToken page that should contain (or does contain)
+// the given token. It walks backwards from the max page via PreviousPageMin.
+// Returns (pageKeylet, pageData, err). If the owner has no pages, returns nil data.
+// Reference: rippled NFTokenUtils.cpp locatePage — uses view.succ() which we
+// emulate by walking the linked list from the max page.
+func locatePage(view tx.LedgerView, owner [20]byte, tokenID [32]byte) (keylet.Keylet, *sle.NFTokenPageData, error) {
+	base := keylet.NFTokenPageMin(owner)
+	first := keylet.NFTokenPageForToken(base, tokenID)
+	maxKL := keylet.NFTokenPageMax(owner)
+
+	// Start at max page
+	data, err := view.Read(maxKL)
+	if err != nil || data == nil {
+		return keylet.Keylet{}, nil, nil // No pages for this owner
+	}
+
+	currentKL := maxKL
+	currentData := data
+
+	for {
+		page, err := sle.ParseNFTokenPage(currentData)
+		if err != nil {
+			return keylet.Keylet{}, nil, err
+		}
+
+		// Check if there's a previous page
+		var emptyHash [32]byte
+		if page.PreviousPageMin == emptyHash {
+			// This is the leftmost page — token must be here (or not exist)
+			return currentKL, page, nil
+		}
+
+		// If previous page's key <= first.Key, then current page is the first
+		// page with key strictly > first — i.e., the correct page.
+		if bytes.Compare(page.PreviousPageMin[:], first.Key[:]) <= 0 {
+			return currentKL, page, nil
+		}
+
+		// Previous page's key > first, so the right page might be further back
+		prevKL := keylet.Keylet{Type: currentKL.Type, Key: page.PreviousPageMin}
+		prevData, err := view.Read(prevKL)
+		if err != nil || prevData == nil {
+			// Broken link — fall back to current page
+			return currentKL, page, nil
+		}
+
+		currentKL = prevKL
+		currentData = prevData
+	}
+}
+
+// findToken searches the owner's pages for a specific NFT ID.
+// Returns the page keylet, the page data, the index of the token within the page,
+// and whether it was found.
+func findToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte) (keylet.Keylet, *sle.NFTokenPageData, int, bool) {
+	kl, page, err := locatePage(view, owner, tokenID)
+	if err != nil || page == nil {
+		return keylet.Keylet{}, nil, -1, false
+	}
+
+	for i, t := range page.NFTokens {
+		if t.NFTokenID == tokenID {
+			return kl, page, i, true
+		}
+	}
+
+	return keylet.Keylet{}, nil, -1, false
+}
+
+// ---------------------------------------------------------------------------
+// getPageForToken — finds or creates the right page for inserting a token
+// Reference: rippled NFTokenUtils.cpp getPageForToken
+// ---------------------------------------------------------------------------
+
+type insertNFTokenResult struct {
+	Result       tx.Result
+	PagesCreated int
+}
+
+// getPageForToken finds the page for inserting a token, creating or splitting
+// pages as needed. Returns the page keylet, page data, and pages created count.
+// Reference: rippled NFTokenUtils.cpp getPageForToken
+func getPageForToken(
+	view tx.LedgerView,
+	owner [20]byte,
+	tokenID [32]byte,
+) (keylet.Keylet, *sle.NFTokenPageData, int, error) {
+	base := keylet.NFTokenPageMin(owner)
+	first := keylet.NFTokenPageForToken(base, tokenID)
+	maxKL := keylet.NFTokenPageMax(owner)
+
+	// Find the candidate page using succ-like traversal
+	cpKL, cpData, err := locatePageForInsert(view, owner, first, maxKL)
+	if err != nil {
+		return keylet.Keylet{}, nil, 0, err
+	}
+
+	// No page exists — create the max page with empty array
+	if cpData == nil {
 		page := &sle.NFTokenPageData{
-			NFTokens: []sle.NFTokenData{token},
+			NFTokens: []sle.NFTokenData{},
 		}
-
-		pageData, err := serializeNFTokenPage(page)
+		pageBytes, err := serializeNFTokenPage(page)
 		if err != nil {
-			return insertNFTokenResult{Result: tx.TefINTERNAL}
+			return keylet.Keylet{}, nil, 0, err
 		}
-
-		// Insert tracked automatically by ApplyStateTable
-		if err := view.Insert(pageKey, pageData); err != nil {
-			return insertNFTokenResult{Result: tx.TefINTERNAL}
+		if err := view.Insert(maxKL, pageBytes); err != nil {
+			return keylet.Keylet{}, nil, 0, err
 		}
-
-		return insertNFTokenResult{Result: tx.TesSUCCESS, PagesCreated: 1}
+		return maxKL, page, 1, nil
 	}
 
-	// Read existing page
-	pageData, err := view.Read(pageKey)
-	if err != nil {
-		return insertNFTokenResult{Result: tx.TefINTERNAL}
+	cp := cpData
+
+	// Page has room — return it
+	if len(cp.NFTokens) < dirMaxTokensPerPage {
+		return cpKL, cp, 0, nil
 	}
 
-	page, err := sle.ParseNFTokenPage(pageData)
-	if err != nil {
-		return insertNFTokenResult{Result: tx.TefINTERNAL}
+	// Page is full — need to split
+	// Reference: rippled NFTokenUtils.cpp getPageForToken (split logic)
+	return splitPage(view, owner, tokenID, cpKL, cp, base, first)
+}
+
+// locatePageForInsert finds the first existing page with key > first.Key,
+// or returns nil if no pages exist.
+func locatePageForInsert(view tx.LedgerView, owner [20]byte, first, maxKL keylet.Keylet) (keylet.Keylet, *sle.NFTokenPageData, error) {
+	data, err := view.Read(maxKL)
+	if err != nil || data == nil {
+		return keylet.Keylet{}, nil, nil // No pages
 	}
 
-	// Check if page has room
-	if len(page.NFTokens) < dirMaxTokensPerPage {
-		// Page has room, just add the token
-		page.NFTokens = insertNFTokenSorted(page.NFTokens, token)
+	currentKL := maxKL
+	currentData := data
 
-		updatedPageData, err := serializeNFTokenPage(page)
+	for {
+		page, err := sle.ParseNFTokenPage(currentData)
 		if err != nil {
-			return insertNFTokenResult{Result: tx.TefINTERNAL}
+			return keylet.Keylet{}, nil, err
 		}
 
-		// Update tracked automatically by ApplyStateTable
-		if err := view.Update(pageKey, updatedPageData); err != nil {
-			return insertNFTokenResult{Result: tx.TefINTERNAL}
+		var emptyHash [32]byte
+		if page.PreviousPageMin == emptyHash {
+			return currentKL, page, nil
 		}
 
-		return insertNFTokenResult{Result: tx.TesSUCCESS, PagesCreated: 0}
+		if bytes.Compare(page.PreviousPageMin[:], first.Key[:]) <= 0 {
+			return currentKL, page, nil
+		}
+
+		prevKL := keylet.Keylet{Type: currentKL.Type, Key: page.PreviousPageMin}
+		prevData, err := view.Read(prevKL)
+		if err != nil || prevData == nil {
+			return currentKL, page, nil
+		}
+
+		currentKL = prevKL
+		currentPage, err := sle.ParseNFTokenPage(prevData)
+		if err != nil {
+			return keylet.Keylet{}, nil, err
+		}
+		currentData = prevData
+		_ = currentPage
 	}
+}
 
-	// Page is full - need to split
-	// Reference: rippled NFTokenUtils.cpp getPageForToken (page splitting logic)
-	// Find the split point - try to split at halfway, but keep equivalent NFTs together
-	splitIdx := dirMaxTokensPerPage / 2
+// splitPage splits a full page and returns the right page for the new token.
+// Reference: rippled NFTokenUtils.cpp getPageForToken (split section)
+func splitPage(
+	view tx.LedgerView,
+	owner [20]byte,
+	tokenID [32]byte,
+	cpKL keylet.Keylet,
+	cp *sle.NFTokenPageData,
+	base, first keylet.Keylet,
+) (keylet.Keylet, *sle.NFTokenPageData, int, error) {
+	narr := cp.NFTokens // Will become the "left" page (lower keys)
 
-	// Check if all tokens on the page have the same low 96 bits (equivalent NFTs)
-	tokenPageKey := getNFTPageKey(token.NFTokenID)
-	firstPageKey := getNFTPageKey(page.NFTokens[0].NFTokenID)
+	// Find the split point
+	// We prefer to keep equivalent NFTs on a page boundary.
+	// Round up the boundary until there's a non-equivalent entry.
+	halfIdx := dirMaxTokensPerPage/2 - 1
+	cmp := getNFTPageKey(narr[halfIdx].NFTokenID)
 
-	// If all tokens are equivalent and new token is also equivalent, can't insert
-	allEquivalent := true
-	for _, t := range page.NFTokens {
-		if getNFTPageKey(t.NFTokenID) != firstPageKey {
-			allEquivalent = false
+	// Find the first token at or after half that has different low 96 bits
+	splitIdx := -1
+	for i := dirMaxTokensPerPage / 2; i < len(narr); i++ {
+		if getNFTPageKey(narr[i].NFTokenID) != cmp {
+			splitIdx = i
 			break
 		}
 	}
-	if allEquivalent && tokenPageKey == firstPageKey {
-		// Page is full of equivalent tokens and new token is also equivalent
-		// Cannot store this NFT
-		return insertNFTokenResult{Result: tx.TecNO_SUITABLE_NFTOKEN_PAGE}
-	}
 
-	// Add the token first (temporarily exceeding limit)
-	page.NFTokens = insertNFTokenSorted(page.NFTokens, token)
-
-	// Find split point that keeps equivalent NFTs together
-	midKey := getNFTPageKey(page.NFTokens[splitIdx].NFTokenID)
-
-	// Find first token after splitIdx that has different low 96 bits
-	actualSplitIdx := splitIdx
-	for i := splitIdx; i < len(page.NFTokens); i++ {
-		if getNFTPageKey(page.NFTokens[i].NFTokenID) != midKey {
-			actualSplitIdx = i
-			break
-		}
-		actualSplitIdx = i + 1
-	}
-
-	// If couldn't find split point in second half, try first half
-	if actualSplitIdx >= len(page.NFTokens) {
-		for i := 0; i < splitIdx; i++ {
-			if getNFTPageKey(page.NFTokens[i].NFTokenID) == midKey {
-				actualSplitIdx = i
+	// If couldn't find a split point in the second half, try the first half
+	if splitIdx == -1 {
+		for i := 0; i < len(narr); i++ {
+			if getNFTPageKey(narr[i].NFTokenID) == cmp {
+				splitIdx = i
 				break
 			}
 		}
 	}
 
-	// Split the page
-	firstHalf := make([]sle.NFTokenData, actualSplitIdx)
-	copy(firstHalf, page.NFTokens[:actualSplitIdx])
-	secondHalf := make([]sle.NFTokenData, len(page.NFTokens)-actualSplitIdx)
-	copy(secondHalf, page.NFTokens[actualSplitIdx:])
+	// If splitIdx is still -1, something is very wrong
+	if splitIdx == -1 {
+		return keylet.Keylet{}, nil, 0, fmt.Errorf("cannot find split point")
+	}
 
-	// Update current page with second half
-	page.NFTokens = secondHalf
-	updatedPageData, err := serializeNFTokenPage(page)
+	// If splitIdx == 0, entire page is equivalent tokens
+	if splitIdx == 0 {
+		tokenPageKey := getNFTPageKey(tokenID)
+		if tokenPageKey == cmp {
+			// Token belongs on this full page of equivalent tokens — cannot store
+			return keylet.Keylet{}, nil, 0, nil
+		}
+
+		if bytes.Compare(tokenPageKey[:], cmp[:]) > 0 {
+			// New token goes after these equivalent tokens — leave everything
+			// in narr (the new left page), carr (right page) gets empty
+			splitIdx = len(narr)
+		}
+		// else: new token goes before — splitIdx stays at 0, all go to carr
+	}
+
+	// Split: narr[0:splitIdx] goes to new page (left), narr[splitIdx:] stays (right)
+	leftTokens := make([]sle.NFTokenData, splitIdx)
+	copy(leftTokens, narr[:splitIdx])
+	rightTokens := make([]sle.NFTokenData, len(narr)-splitIdx)
+	copy(rightTokens, narr[splitIdx:])
+
+	// Determine the key for the new page
+	// Reference: rippled uses the last token in the full page's half, or the
+	// first token in the other half, depending on which page is full.
+	var tokenIDForNewPage [32]byte
+	if len(leftTokens) == dirMaxTokensPerPage {
+		// Left page is full — use next() of last token in left page
+		tokenIDForNewPage = uint256Next(leftTokens[dirMaxTokensPerPage-1].NFTokenID)
+	} else {
+		// Use the first token in the right page
+		tokenIDForNewPage = rightTokens[0].NFTokenID
+	}
+
+	npKL := keylet.NFTokenPageForToken(base, tokenIDForNewPage)
+
+	// Create the new page (left page = lower keys)
+	np := &sle.NFTokenPageData{
+		NFTokens:    leftTokens,
+		NextPageMin: cpKL.Key,
+	}
+
+	// Fix up links: new page inherits cp's PreviousPageMin
+	var emptyHash [32]byte
+	if cp.PreviousPageMin != emptyHash {
+		np.PreviousPageMin = cp.PreviousPageMin
+
+		// Update the old previous page's NextPageMin to point to new page
+		prevKL := keylet.Keylet{Type: cpKL.Type, Key: cp.PreviousPageMin}
+		prevData, err := view.Read(prevKL)
+		if err == nil {
+			prevPage, err := sle.ParseNFTokenPage(prevData)
+			if err == nil {
+				prevPage.NextPageMin = npKL.Key
+				prevBytes, err := serializeNFTokenPage(prevPage)
+				if err == nil {
+					view.Update(prevKL, prevBytes)
+				}
+			}
+		}
+	}
+
+	// Insert new page
+	npBytes, err := serializeNFTokenPage(np)
 	if err != nil {
-		return insertNFTokenResult{Result: tx.TefINTERNAL}
+		return keylet.Keylet{}, nil, 0, err
 	}
-	if err := view.Update(pageKey, updatedPageData); err != nil {
-		return insertNFTokenResult{Result: tx.TefINTERNAL}
-	}
-
-	// Create new page for first half
-	// Use the last token ID in first half to generate new page keylet
-	newPageTokenID := firstHalf[len(firstHalf)-1].NFTokenID
-	newPageKey := keylet.NFTokenPage(ownerID, newPageTokenID)
-
-	newPage := &sle.NFTokenPageData{
-		NFTokens:    firstHalf,
-		NextPageMin: pageKey.Key,
-	}
-	if page.PreviousPageMin != [32]byte{} {
-		newPage.PreviousPageMin = page.PreviousPageMin
+	if err := view.Insert(npKL, npBytes); err != nil {
+		return keylet.Keylet{}, nil, 0, err
 	}
 
-	// Update original page's previous pointer
-	page.PreviousPageMin = newPageKey.Key
-	updatedPageData, err = serializeNFTokenPage(page)
+	// Update current page (right page = higher keys)
+	cp.NFTokens = rightTokens
+	cp.PreviousPageMin = npKL.Key
+	cpBytes, err := serializeNFTokenPage(cp)
 	if err != nil {
-		return insertNFTokenResult{Result: tx.TefINTERNAL}
+		return keylet.Keylet{}, nil, 0, err
 	}
-	if err := view.Update(pageKey, updatedPageData); err != nil {
-		return insertNFTokenResult{Result: tx.TefINTERNAL}
+	if err := view.Update(cpKL, cpBytes); err != nil {
+		return keylet.Keylet{}, nil, 0, err
 	}
 
-	// Insert new page - changes tracked automatically by ApplyStateTable
-	newPageData, err := serializeNFTokenPage(newPage)
+	// Determine which page to return for the new token insertion
+	// Reference: rippled — with fixNFTokenDirV1: return (first.key < np.key) ? np : cp
+	if bytes.Compare(first.Key[:], npKL.Key[:]) < 0 {
+		// Re-read np since we just wrote it
+		npData, err := view.Read(npKL)
+		if err != nil {
+			return keylet.Keylet{}, nil, 0, err
+		}
+		page, err := sle.ParseNFTokenPage(npData)
+		if err != nil {
+			return keylet.Keylet{}, nil, 0, err
+		}
+		return npKL, page, 1, nil
+	}
+
+	// Re-read cp since we just wrote it
+	cpData2, err := view.Read(cpKL)
 	if err != nil {
-		return insertNFTokenResult{Result: tx.TefINTERNAL}
+		return keylet.Keylet{}, nil, 0, err
 	}
-	if err := view.Insert(newPageKey, newPageData); err != nil {
-		return insertNFTokenResult{Result: tx.TefINTERNAL}
+	page2, err := sle.ParseNFTokenPage(cpData2)
+	if err != nil {
+		return keylet.Keylet{}, nil, 0, err
 	}
-
-	// One new page created from the split
-	return insertNFTokenResult{Result: tx.TesSUCCESS, PagesCreated: 1}
+	return cpKL, page2, 1, nil
 }
 
-// deleteNFTokenOffers deletes offers for an NFToken (sell or buy offers)
-// Reference: rippled NFTokenUtils.cpp removeTokenOffersWithLimit
-// Returns the number of offers deleted
-func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.LedgerView) int {
-	if limit <= 0 {
-		return 0
+// uint256Next returns id + 1 (for page key derivation during splits)
+func uint256Next(id [32]byte) [32]byte {
+	result := id
+	for i := 31; i >= 0; i-- {
+		result[i]++
+		if result[i] != 0 {
+			break
+		}
+	}
+	return result
+}
+
+// ---------------------------------------------------------------------------
+// insertNFToken — inserts an NFToken into the owner's token directory
+// Reference: rippled NFTokenUtils.cpp insertToken
+// ---------------------------------------------------------------------------
+
+func insertNFToken(ownerID [20]byte, token sle.NFTokenData, view tx.LedgerView) insertNFTokenResult {
+	pageKL, page, pagesCreated, err := getPageForToken(view, ownerID, token.NFTokenID)
+	if err != nil {
+		return insertNFTokenResult{Result: tx.TefINTERNAL}
 	}
 
-	// Get the appropriate directory keylet
+	if page == nil {
+		return insertNFTokenResult{Result: tx.TecNO_SUITABLE_NFTOKEN_PAGE}
+	}
+
+	// Insert token in sorted position
+	page.NFTokens = insertNFTokenSorted(page.NFTokens, token)
+
+	// Serialize and update
+	pageBytes, err := serializeNFTokenPage(page)
+	if err != nil {
+		return insertNFTokenResult{Result: tx.TefINTERNAL}
+	}
+
+	if err := view.Update(pageKL, pageBytes); err != nil {
+		return insertNFTokenResult{Result: tx.TefINTERNAL}
+	}
+
+	return insertNFTokenResult{Result: tx.TesSUCCESS, PagesCreated: pagesCreated}
+}
+
+// ---------------------------------------------------------------------------
+// removeToken — removes an NFToken from the owner's directory with page merging
+// Reference: rippled NFTokenUtils.cpp removeToken
+// ---------------------------------------------------------------------------
+
+func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLinks bool) (tx.Result, int) {
+	kl, page, err := locatePage(view, owner, tokenID)
+	if err != nil || page == nil {
+		return tx.TecNO_ENTRY, 0
+	}
+
+	// Find and remove the token
+	found := false
+	for i, t := range page.NFTokens {
+		if t.NFTokenID == tokenID {
+			page.NFTokens = append(page.NFTokens[:i], page.NFTokens[i+1:]...)
+			found = true
+			break
+		}
+	}
+	if !found {
+		return tx.TecNO_ENTRY, 0
+	}
+
+	// Load prev and next pages
+	var emptyHash [32]byte
+	var prevKL keylet.Keylet
+	var prevPage *sle.NFTokenPageData
+	if page.PreviousPageMin != emptyHash {
+		prevKL = keylet.Keylet{Type: kl.Type, Key: page.PreviousPageMin}
+		prevData, err := view.Read(prevKL)
+		if err == nil {
+			prevPage, _ = sle.ParseNFTokenPage(prevData)
+		}
+	}
+
+	var nextKL keylet.Keylet
+	var nextPage *sle.NFTokenPageData
+	if page.NextPageMin != emptyHash {
+		nextKL = keylet.Keylet{Type: kl.Type, Key: page.NextPageMin}
+		nextData, err := view.Read(nextKL)
+		if err == nil {
+			nextPage, _ = sle.ParseNFTokenPage(nextData)
+		}
+	}
+
+	pagesRemoved := 0
+
+	if len(page.NFTokens) > 0 {
+		// Page not empty — update it and try to consolidate
+		pageBytes, err := serializeNFTokenPage(page)
+		if err != nil {
+			return tx.TefINTERNAL, 0
+		}
+		if err := view.Update(kl, pageBytes); err != nil {
+			return tx.TefINTERNAL, 0
+		}
+
+		// Try merging with previous page
+		if prevPage != nil {
+			if doMergePages(view, prevKL, prevPage, kl, page) {
+				pagesRemoved++
+				// After merge, "page" has been absorbed into kl (p2).
+				// Re-read kl for potential second merge
+				klData, err := view.Read(kl)
+				if err == nil {
+					page, _ = sle.ParseNFTokenPage(klData)
+				}
+			}
+		}
+
+		// Try merging with next page
+		if nextPage != nil {
+			if doMergePages(view, kl, page, nextKL, nextPage) {
+				pagesRemoved++
+			}
+		}
+
+		return tx.TesSUCCESS, pagesRemoved
+	}
+
+	// Page is empty
+
+	// Special case: if this is the max page (last page) and there's a prev page,
+	// move prev's contents to this page instead of deleting the max page.
+	// Reference: rippled's fixNFTokenPageLinks behavior
+	isMaxPage := true
+	for i := 20; i < 32; i++ {
+		if kl.Key[i] != 0xFF {
+			isMaxPage = false
+			break
+		}
+	}
+
+	if prevPage != nil && isMaxPage && fixPageLinks {
+		// Copy prev's tokens to current (max) page
+		page.NFTokens = prevPage.NFTokens
+		if prevPage.PreviousPageMin != emptyHash {
+			page.PreviousPageMin = prevPage.PreviousPageMin
+			// Fix link from prev's previous
+			ppKL := keylet.Keylet{Type: kl.Type, Key: prevPage.PreviousPageMin}
+			ppData, err := view.Read(ppKL)
+			if err == nil {
+				ppPage, err := sle.ParseNFTokenPage(ppData)
+				if err == nil {
+					ppPage.NextPageMin = kl.Key
+					ppBytes, _ := serializeNFTokenPage(ppPage)
+					if ppBytes != nil {
+						view.Update(ppKL, ppBytes)
+					}
+				}
+			}
+		} else {
+			page.PreviousPageMin = emptyHash
+		}
+		pageBytes, _ := serializeNFTokenPage(page)
+		view.Update(kl, pageBytes)
+		view.Erase(prevKL)
+		return tx.TesSUCCESS, 1
+	}
+
+	// Not the max page or no prev — unlink and remove
+	if prevPage != nil {
+		if nextPage != nil {
+			prevPage.NextPageMin = nextKL.Key
+		} else {
+			prevPage.NextPageMin = emptyHash
+		}
+		prevBytes, _ := serializeNFTokenPage(prevPage)
+		if prevBytes != nil {
+			view.Update(prevKL, prevBytes)
+		}
+	}
+
+	if nextPage != nil {
+		if prevPage != nil {
+			nextPage.PreviousPageMin = prevKL.Key
+		} else {
+			nextPage.PreviousPageMin = emptyHash
+		}
+		nextBytes, _ := serializeNFTokenPage(nextPage)
+		if nextBytes != nil {
+			view.Update(nextKL, nextBytes)
+		}
+	}
+
+	view.Erase(kl)
+	pagesRemoved = 1
+
+	// After removing the page, try merging prev and next if both exist
+	if prevPage != nil && nextPage != nil {
+		// Re-read them since they were just updated
+		prevData2, err := view.Read(prevKL)
+		if err == nil {
+			p1, _ := sle.ParseNFTokenPage(prevData2)
+			nextData2, err := view.Read(nextKL)
+			if err == nil {
+				p2, _ := sle.ParseNFTokenPage(nextData2)
+				if p1 != nil && p2 != nil && doMergePages(view, prevKL, p1, nextKL, p2) {
+					pagesRemoved++
+				}
+			}
+		}
+	}
+
+	return tx.TesSUCCESS, pagesRemoved
+}
+
+// doMergePages merges p1's tokens into p2 (p1 is lower, p2 is higher).
+// Returns true if merge happened. p1 is erased if merged.
+// Reference: rippled NFTokenUtils.cpp mergePages
+func doMergePages(
+	view tx.LedgerView,
+	p1KL keylet.Keylet, p1 *sle.NFTokenPageData,
+	p2KL keylet.Keylet, p2 *sle.NFTokenPageData,
+) bool {
+	if len(p1.NFTokens)+len(p2.NFTokens) > dirMaxTokensPerPage {
+		return false
+	}
+
+	// Merge all tokens into p2 (higher page)
+	merged := make([]sle.NFTokenData, 0, len(p1.NFTokens)+len(p2.NFTokens))
+	i, j := 0, 0
+	for i < len(p1.NFTokens) && j < len(p2.NFTokens) {
+		if compareNFTokenID(p1.NFTokens[i].NFTokenID, p2.NFTokens[j].NFTokenID) < 0 {
+			merged = append(merged, p1.NFTokens[i])
+			i++
+		} else {
+			merged = append(merged, p2.NFTokens[j])
+			j++
+		}
+	}
+	for ; i < len(p1.NFTokens); i++ {
+		merged = append(merged, p1.NFTokens[i])
+	}
+	for ; j < len(p2.NFTokens); j++ {
+		merged = append(merged, p2.NFTokens[j])
+	}
+
+	p2.NFTokens = merged
+
+	// Unlink p1: p2's PreviousPageMin = p1's PreviousPageMin
+	var emptyHash [32]byte
+	p2.PreviousPageMin = emptyHash
+
+	if p1.PreviousPageMin != emptyHash {
+		p2.PreviousPageMin = p1.PreviousPageMin
+
+		// Update p0's NextPageMin to point to p2
+		p0KL := keylet.Keylet{Type: p1KL.Type, Key: p1.PreviousPageMin}
+		p0Data, err := view.Read(p0KL)
+		if err == nil {
+			p0, err := sle.ParseNFTokenPage(p0Data)
+			if err == nil {
+				p0.NextPageMin = p2KL.Key
+				p0Bytes, _ := serializeNFTokenPage(p0)
+				if p0Bytes != nil {
+					view.Update(p0KL, p0Bytes)
+				}
+			}
+		}
+	}
+
+	p2Bytes, _ := serializeNFTokenPage(p2)
+	if p2Bytes != nil {
+		view.Update(p2KL, p2Bytes)
+	}
+	view.Erase(p1KL)
+
+	return true
+}
+
+// ---------------------------------------------------------------------------
+// transferNFToken — transfers an NFToken from one account to another
+// Reference: rippled NFTokenUtils.cpp removeToken + insertToken
+// ---------------------------------------------------------------------------
+
+// transferNFTokenResult holds the result of an NFToken transfer, including
+// page changes for both sender and recipient so callers can properly adjust
+// OwnerCount (using ctx.Account for the submitter's account).
+type transferNFTokenResult struct {
+	Result           tx.Result
+	FromPagesRemoved int
+	ToPagesCreated   int
+}
+
+func transferNFToken(from, to [20]byte, tokenID [32]byte, view tx.LedgerView, fixPageLinks bool) transferNFTokenResult {
+	// Find the token on the sender's pages
+	_, _, idx, found := findToken(view, from, tokenID)
+	if !found {
+		return transferNFTokenResult{Result: tx.TefINTERNAL}
+	}
+
+	// Re-locate to get the page data (findToken returns a copy)
+	kl, page, err := locatePage(view, from, tokenID)
+	if err != nil || page == nil {
+		return transferNFTokenResult{Result: tx.TefINTERNAL}
+	}
+	_ = kl
+
+	// Extract the token data
+	tokenData := page.NFTokens[idx]
+
+	// Remove from sender using removeToken
+	result, pagesRemoved := removeToken(view, from, tokenID, fixPageLinks)
+	if result != tx.TesSUCCESS {
+		return transferNFTokenResult{Result: result}
+	}
+
+	// Insert into recipient
+	insertResult := insertNFToken(to, tokenData, view)
+	if insertResult.Result != tx.TesSUCCESS {
+		return transferNFTokenResult{Result: insertResult.Result}
+	}
+
+	// Return page deltas — callers handle OwnerCount adjustments
+	return transferNFTokenResult{
+		Result:           tx.TesSUCCESS,
+		FromPagesRemoved: pagesRemoved,
+		ToPagesCreated:   insertResult.PagesCreated,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Offer management — deleteTokenOffer with proper directory cleanup
+// Reference: rippled NFTokenUtils.cpp deleteTokenOffer
+// ---------------------------------------------------------------------------
+
+// deleteTokenOffer deletes an NFToken offer and removes it from directories.
+// It handles:
+// 1. Reading the offer to get owner, token ID, flags
+// 2. Removing from owner's directory (using OwnerNode)
+// 3. Removing from NFTBuys/NFTSells directory (using NFTokenOfferNode)
+// 4. Erasing the offer SLE
+// 5. Decrementing owner's OwnerCount
+// 6. Refunding escrowed amount for buy offers
+func deleteTokenOffer(view tx.LedgerView, offerKL keylet.Keylet) error {
+	offerData, err := view.Read(offerKL)
+	if err != nil {
+		return err
+	}
+
+	offer, err := sle.ParseNFTokenOffer(offerData)
+	if err != nil {
+		return err
+	}
+
+	// Remove from owner's directory
+	ownerDirKey := keylet.OwnerDir(offer.Owner)
+	sle.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
+
+	// Remove from NFTBuys or NFTSells directory
+	isSellOffer := offer.Flags&lsfSellNFToken != 0
+	var tokenDirKey keylet.Keylet
+	if isSellOffer {
+		tokenDirKey = keylet.NFTSells(offer.NFTokenID)
+	} else {
+		tokenDirKey = keylet.NFTBuys(offer.NFTokenID)
+	}
+	sle.DirRemove(view, tokenDirKey, offer.NFTokenOfferNode, offerKL.Key, false)
+
+	// Erase the offer
+	view.Erase(offerKL)
+
+	return nil
+}
+
+// deleteNFTokenOffersResult holds the result of deleting NFToken offers
+type deleteNFTokenOffersResult struct {
+	TotalDeleted int
+	SelfDeleted  int // offers owned by selfAccountID
+}
+
+// deleteNFTokenOffers deletes offers for an NFToken using DirForEach.
+// selfAccountID identifies the ctx.Account — offers from this account
+// are counted separately so the caller can adjust ctx.Account.OwnerCount
+// (since the engine overwrites view changes for ctx.Account).
+// Reference: rippled NFTokenUtils.cpp removeTokenOffersWithLimit
+func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.LedgerView, selfAccountID [20]byte) deleteNFTokenOffersResult {
+	result := deleteNFTokenOffersResult{}
+	if limit <= 0 {
+		return result
+	}
+
 	var dirKey keylet.Keylet
 	if sellOffers {
 		dirKey = keylet.NFTSells(tokenID)
@@ -324,228 +880,109 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 		dirKey = keylet.NFTBuys(tokenID)
 	}
 
-	// Check if directory exists
 	exists, _ := view.Exists(dirKey)
 	if !exists {
-		return 0
+		return result
 	}
 
-	// Read the directory
-	dirData, err := view.Read(dirKey)
-	if err != nil {
-		return 0
-	}
-
-	// Parse directory to get offer indexes
-	// The directory contains a list of offer keys (Hash256 indexes)
-	offerIndexes := parseDirectoryIndexes(dirData)
-	if len(offerIndexes) == 0 {
-		return 0
-	}
-
-	deletedCount := 0
-	for _, offerIndex := range offerIndexes {
-		if deletedCount >= limit {
-			break
+	// Collect all offer keys first, then delete (can't modify during iteration)
+	var offerKeys [][32]byte
+	sle.DirForEach(view, dirKey, func(itemKey [32]byte) error {
+		if len(offerKeys) < limit {
+			offerKeys = append(offerKeys, itemKey)
 		}
+		return nil
+	})
 
-		// Create keylet for the offer
-		offerKey := keylet.Keylet{Key: offerIndex}
+	for _, offerKeyBytes := range offerKeys {
+		offerKL := keylet.Keylet{Key: offerKeyBytes}
 
-		// Read the offer
-		offerData, err := view.Read(offerKey)
+		offerData, err := view.Read(offerKL)
 		if err != nil {
 			continue
 		}
 
-		// Parse the offer to get owner info
 		offer, err := sle.ParseNFTokenOffer(offerData)
 		if err != nil {
 			continue
 		}
 
-		// Get owner account to update owner count and potentially refund
-		ownerKey := keylet.Account(offer.Owner)
-		ownerData, err := view.Read(ownerKey)
-		if err != nil {
-			continue
-		}
-		ownerAccount, err := sle.ParseAccountRoot(ownerData)
-		if err != nil {
-			continue
+		isSelf := offer.Owner == selfAccountID
+
+		// NFToken buy offers do NOT escrow XRP — no refund needed on deletion.
+		// Reference: rippled NFTokenUtils.cpp deleteTokenOffer — no balance adjustment
+
+		// Decrement owner count (only via view for non-self accounts)
+		if !isSelf {
+			adjustOwnerCountViaView(view, offer.Owner, -1)
 		}
 
-		// If this was a buy offer, refund the escrowed amount
-		if offer.Flags&lsfSellNFToken == 0 && offer.Amount > 0 {
-			ownerAccount.Balance += offer.Amount
-		}
+		// Remove from owner directory
+		ownerDirKey := keylet.OwnerDir(offer.Owner)
+		sle.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
 
-		// Decrease owner count
-		if ownerAccount.OwnerCount > 0 {
-			ownerAccount.OwnerCount--
-		}
+		// Erase the offer
+		view.Erase(offerKL)
 
-		// Update owner account
-		ownerUpdatedData, err := sle.SerializeAccountRoot(ownerAccount)
-		if err != nil {
-			continue
+		result.TotalDeleted++
+		if isSelf {
+			result.SelfDeleted++
 		}
-		if err := view.Update(ownerKey, ownerUpdatedData); err != nil {
-			continue
-		}
-
-		// Delete the offer - tracked automatically by ApplyStateTable
-		if err := view.Erase(offerKey); err != nil {
-			continue
-		}
-
-		deletedCount++
 	}
 
-	// If all offers were deleted, remove the directory - tracked automatically
-	if deletedCount == len(offerIndexes) {
-		view.Erase(dirKey)
-	}
-
-	return deletedCount
+	return result
 }
 
-// parseDirectoryIndexes parses a directory node to extract the indexes (Hash256 array)
-func parseDirectoryIndexes(data []byte) [][32]byte {
-	var indexes [][32]byte
-	offset := 0
+// notTooManyOffers checks whether the total number of buy + sell offers
+// for a token exceeds maxDeletableTokenOfferEntries.
+// Reference: rippled NFTokenUtils.cpp notTooManyOffers
+func notTooManyOffers(view tx.LedgerView, tokenID [32]byte) tx.Result {
+	totalOffers := 0
 
-	for offset < len(data) {
-		if offset+1 > len(data) {
-			break
-		}
-
-		header := data[offset]
-		offset++
-
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
+	// Count buy offers
+	buysKey := keylet.NFTBuys(tokenID)
+	if exists, _ := view.Exists(buysKey); exists {
+		sle.DirForEach(view, buysKey, func(itemKey [32]byte) error {
+			totalOffers++
+			if totalOffers > maxDeletableTokenOfferEntries {
+				return fmt.Errorf("too many")
 			}
-			typeCode = data[offset]
-			offset++
-		}
-
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = data[offset]
-			offset++
-		}
-
-		switch typeCode {
-		case fieldTypeUInt16:
-			if offset+2 > len(data) {
-				return indexes
-			}
-			offset += 2
-
-		case fieldTypeUInt32:
-			if offset+4 > len(data) {
-				return indexes
-			}
-			offset += 4
-
-		case fieldTypeUInt64:
-			if offset+8 > len(data) {
-				return indexes
-			}
-			offset += 8
-
-		case fieldTypeHash256:
-			if offset+32 > len(data) {
-				return indexes
-			}
-			offset += 32
-
-		case 19: // Vector256 (STI_VECTOR256 = 19)
-			// This is the Indexes field
-			if fieldCode == 1 { // sfIndexes
-				// Read VL length
-				if offset >= len(data) {
-					return indexes
-				}
-				length := int(data[offset])
-				offset++
-				if length > 192 {
-					// Extended length encoding
-					if offset >= len(data) {
-						return indexes
-					}
-					length = 193 + (length-193)*256 + int(data[offset])
-					offset++
-				}
-				// Each index is 32 bytes
-				numIndexes := length / 32
-				for i := 0; i < numIndexes && offset+32 <= len(data); i++ {
-					var idx [32]byte
-					copy(idx[:], data[offset:offset+32])
-					indexes = append(indexes, idx)
-					offset += 32
-				}
-			}
-
-		case fieldTypeAccount:
-			if offset >= len(data) {
-				return indexes
-			}
-			length := int(data[offset])
-			offset++
-			if offset+length > len(data) {
-				return indexes
-			}
-			offset += length
-
-		case fieldTypeBlob:
-			if offset >= len(data) {
-				return indexes
-			}
-			length := int(data[offset])
-			offset++
-			if length > 192 {
-				if offset >= len(data) {
-					return indexes
-				}
-				length = 193 + (length-193)*256 + int(data[offset])
-				offset++
-			}
-			if offset+length > len(data) {
-				return indexes
-			}
-			offset += length
-
-		default:
-			return indexes
-		}
+			return nil
+		})
 	}
 
-	return indexes
+	// Count sell offers
+	sellsKey := keylet.NFTSells(tokenID)
+	if exists, _ := view.Exists(sellsKey); exists {
+		sle.DirForEach(view, sellsKey, func(itemKey [32]byte) error {
+			totalOffers++
+			if totalOffers > maxDeletableTokenOfferEntries {
+				return fmt.Errorf("too many")
+			}
+			return nil
+		})
+	}
+
+	if totalOffers > maxDeletableTokenOfferEntries {
+		return tx.TefTOO_BIG
+	}
+
+	return tx.TesSUCCESS
 }
+
+// ---------------------------------------------------------------------------
+// Brokered mode and direct offer acceptance helpers
+// ---------------------------------------------------------------------------
 
 // acceptNFTokenBrokeredMode handles brokered NFToken sales
-// Reference: rippled NFTokenAcceptOffer.cpp doApply (brokered mode) and preclaim
+// Reference: rippled NFTokenAcceptOffer.cpp doApply (brokered mode)
 func (n *NFTokenAcceptOffer) acceptNFTokenBrokeredMode(ctx *tx.ApplyContext, accountID [20]byte,
 	buyOffer, sellOffer *sle.NFTokenOfferData, buyOfferKey, sellOfferKey keylet.Keylet) tx.Result {
 
-	// Verify both offers are for the same token
-	// Reference: rippled NFTokenAcceptOffer.cpp:103
 	if buyOffer.NFTokenID != sellOffer.NFTokenID {
 		return tx.TecNFTOKEN_BUY_SELL_MISMATCH
 	}
 
-	// Verify both offers are for the same asset (currency)
-	// Reference: rippled NFTokenAcceptOffer.cpp:107
-	// For XRP offers, both AmountIOU should be nil
-	// For IOU offers, both should have same currency
 	buyIsXRP := buyOffer.AmountIOU == nil
 	sellIsXRP := sellOffer.AmountIOU == nil
 	if buyIsXRP != sellIsXRP {
@@ -558,28 +995,29 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBrokeredMode(ctx *tx.ApplyContext, acc
 		}
 	}
 
-	// The two offers may not form a loop - buyer cannot be seller
-	// Reference: rippled NFTokenAcceptOffer.cpp:112-114 (fixNonFungibleTokensV1_2)
 	if buyOffer.Owner == sellOffer.Owner {
 		return tx.TecCANT_ACCEPT_OWN_NFTOKEN_OFFER
 	}
 
 	// Verify the seller owns the token
 	sellerID := sellOffer.Owner
-	pageKey := keylet.NFTokenPage(sellerID, sellOffer.NFTokenID)
-	if _, err := ctx.View.Read(pageKey); err != nil {
+	if _, _, _, found := findToken(ctx.View, sellerID, sellOffer.NFTokenID); !found {
 		return tx.TecNO_PERMISSION
 	}
 
-	// Verify buyer can pay at least what seller asks
-	// Reference: rippled NFTokenAcceptOffer.cpp:118
-	if buyOffer.Amount < sellOffer.Amount {
-		return tx.TecINSUFFICIENT_PAYMENT
+	// Amount comparison — IOU-aware
+	if buyIsXRP {
+		if buyOffer.Amount < sellOffer.Amount {
+			return tx.TecINSUFFICIENT_PAYMENT
+		}
+	} else {
+		buyAmount := offerIOUToAmount(buyOffer)
+		sellAmount := offerIOUToAmount(sellOffer)
+		if buyAmount.Compare(sellAmount) < 0 {
+			return tx.TecINSUFFICIENT_PAYMENT
+		}
 	}
 
-	// Check destination constraints
-	// Reference: rippled NFTokenAcceptOffer.cpp:122-147
-	// After fixNonFungibleTokensV1_2, destination must be the tx submitter
 	if buyOffer.HasDestination && buyOffer.Destination != accountID {
 		return tx.TecNO_PERMISSION
 	}
@@ -589,117 +1027,164 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBrokeredMode(ctx *tx.ApplyContext, acc
 
 	buyerID := buyOffer.Owner
 
-	// Calculate broker fee
-	// Reference: rippled NFTokenAcceptOffer.cpp:153-163
 	var brokerFee uint64
+	var brokerFeeIOU tx.Amount
 	if n.NFTokenBrokerFee != nil {
-		// Verify broker fee is in same currency as offers
-		// Reference: rippled NFTokenAcceptOffer.cpp:155
 		brokerFeeIsXRP := n.NFTokenBrokerFee.Currency == ""
 		if brokerFeeIsXRP != buyIsXRP {
 			return tx.TecNFTOKEN_BUY_SELL_MISMATCH
 		}
 
-		if brokerFeeIsXRP {
+		if buyIsXRP {
 			brokerFee = uint64(n.NFTokenBrokerFee.Drops())
-		}
-
-		// Broker fee cannot exceed or equal what buyer pays
-		// Reference: rippled NFTokenAcceptOffer.cpp:158
-		if brokerFee >= buyOffer.Amount {
-			return tx.TecINSUFFICIENT_PAYMENT
-		}
-		// Seller must still get at least what they asked for after broker fee
-		// Reference: rippled NFTokenAcceptOffer.cpp:161
-		if sellOffer.Amount > buyOffer.Amount-brokerFee {
-			return tx.TecINSUFFICIENT_PAYMENT
-		}
-	}
-
-	// Calculate amounts
-	amount := buyOffer.Amount
-	var issuerCut uint64
-
-	// Calculate issuer transfer fee if applicable
-	transferFee := getNFTTransferFee(sellOffer.NFTokenID)
-	issuerID := getNFTIssuer(sellOffer.NFTokenID)
-	if transferFee != 0 && amount > 0 {
-		// Transfer fee is in basis points (0-50000 = 0-50%)
-		// Calculate: amount * transferFee / transferFeeDivisor
-		issuerCut = (amount - brokerFee) * uint64(transferFee) / transferFeeDivisor
-		// Issuer doesn't get cut from their own sales
-		if sellerID == issuerID || buyerID == issuerID {
-			issuerCut = 0
-		}
-	}
-
-	// Pay broker fee
-	if brokerFee > 0 {
-		ctx.Account.Balance += brokerFee
-		amount -= brokerFee
-	}
-
-	// Pay issuer cut - update tracked automatically by ApplyStateTable
-	if issuerCut > 0 {
-		issuerKey := keylet.Account(issuerID)
-		issuerData, err := ctx.View.Read(issuerKey)
-		if err == nil {
-			issuerAccount, err := sle.ParseAccountRoot(issuerData)
-			if err == nil {
-				issuerAccount.Balance += issuerCut
-				issuerUpdatedData, _ := sle.SerializeAccountRoot(issuerAccount)
-				ctx.View.Update(issuerKey, issuerUpdatedData)
+			if brokerFee >= buyOffer.Amount {
+				return tx.TecINSUFFICIENT_PAYMENT
+			}
+			if sellOffer.Amount > buyOffer.Amount-brokerFee {
+				return tx.TecINSUFFICIENT_PAYMENT
+			}
+		} else {
+			brokerFeeIOU = *n.NFTokenBrokerFee
+			buyAmount := offerIOUToAmount(buyOffer)
+			sellAmount := offerIOUToAmount(sellOffer)
+			if brokerFeeIOU.Compare(buyAmount) >= 0 {
+				return tx.TecINSUFFICIENT_PAYMENT
+			}
+			remainder, _ := buyAmount.Sub(brokerFeeIOU)
+			if sellAmount.Compare(remainder) > 0 {
+				return tx.TecINSUFFICIENT_PAYMENT
 			}
 		}
-		amount -= issuerCut
 	}
 
-	// Pay seller
-	sellerKey := keylet.Account(sellerID)
-	sellerData, err := ctx.View.Read(sellerKey)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	sellerAccount, err := sle.ParseAccountRoot(sellerData)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	sellerAccount.Balance += amount
-	if sellerAccount.OwnerCount > 0 {
-		sellerAccount.OwnerCount-- // For sell offer being deleted
-	}
-	sellerUpdatedData, err := sle.SerializeAccountRoot(sellerAccount)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	if err := ctx.View.Update(sellerKey, sellerUpdatedData); err != nil {
-		return tx.TefINTERNAL
-	}
+	transferFee := getNFTTransferFee(sellOffer.NFTokenID)
+	nftIssuerID := getNFTIssuer(sellOffer.NFTokenID)
 
-	// Update buyer's owner count
-	buyerKey := keylet.Account(buyerID)
-	buyerData, err := ctx.View.Read(buyerKey)
-	if err == nil {
+	if !buyIsXRP {
+		// IOU brokered payment path
+		buyAmount := offerIOUToAmount(buyOffer)
+
+		// Step 1: Pay broker fee
+		if n.NFTokenBrokerFee != nil && !brokerFeeIOU.IsZero() {
+			if r := payIOU(ctx, buyerID, accountID, brokerFeeIOU); r != tx.TesSUCCESS {
+				return r
+			}
+			buyAmount, _ = buyAmount.Sub(brokerFeeIOU)
+		}
+
+		// Step 2: Pay issuer cut from transfer fee
+		if transferFee != 0 && !buyAmount.IsZero() && sellerID != nftIssuerID && buyerID != nftIssuerID {
+			// Check issuer trust line (fixEnforceNFTokenTrustline)
+			nftFlags := getNFTFlagsFromID(sellOffer.NFTokenID)
+			if r := checkIssuerTrustLineForAccept(ctx, nftIssuerID, buyAmount, nftFlags); r != tx.TesSUCCESS {
+				return r
+			}
+			issuerCut := buyAmount.MulRatio(uint32(transferFee), transferFeeDivisor32, true)
+			if !issuerCut.IsZero() {
+				if r := payIOU(ctx, buyerID, nftIssuerID, issuerCut); r != tx.TesSUCCESS {
+					return r
+				}
+				buyAmount, _ = buyAmount.Sub(issuerCut)
+			}
+		}
+
+		// Step 3: Pay seller remainder
+		if !buyAmount.IsZero() {
+			if r := payIOU(ctx, buyerID, sellerID, buyAmount); r != tx.TesSUCCESS {
+				return r
+			}
+		}
+	} else {
+		// XRP brokered payment path — deduct from buyer, pay broker + issuer + seller
+		// Reference: rippled NFTokenAcceptOffer.cpp — uses accountSend()
+		amount := buyOffer.Amount
+
+		// Deduct full amount from buyer's account
+		buyerKey := keylet.Account(buyerID)
+		buyerData, err := ctx.View.Read(buyerKey)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
 		buyerAccount, err := sle.ParseAccountRoot(buyerData)
-		if err == nil && buyerAccount.OwnerCount > 0 {
-			buyerAccount.OwnerCount-- // For buy offer being deleted
-			buyerUpdatedData, _ := sle.SerializeAccountRoot(buyerAccount)
-			ctx.View.Update(buyerKey, buyerUpdatedData)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		if buyerAccount.Balance < amount {
+			return tx.TecINSUFFICIENT_FUNDS
+		}
+		buyerAccount.Balance -= amount
+		buyerUpdated, _ := sle.SerializeAccountRoot(buyerAccount)
+		if err := ctx.View.Update(buyerKey, buyerUpdated); err != nil {
+			return tx.TefINTERNAL
+		}
+
+		var issuerCut uint64
+		if transferFee != 0 && amount > 0 {
+			issuerCut = (amount - brokerFee) * uint64(transferFee) / transferFeeDivisor
+			if sellerID == nftIssuerID || buyerID == nftIssuerID {
+				issuerCut = 0
+			}
+		}
+
+		// Pay broker fee
+		if brokerFee > 0 {
+			ctx.Account.Balance += brokerFee
+			amount -= brokerFee
+		}
+
+		// Pay issuer cut
+		if issuerCut > 0 {
+			issuerKey := keylet.Account(nftIssuerID)
+			issuerData, err := ctx.View.Read(issuerKey)
+			if err == nil {
+				issuerAccount, err := sle.ParseAccountRoot(issuerData)
+				if err == nil {
+					issuerAccount.Balance += issuerCut
+					issuerUpdatedData, _ := sle.SerializeAccountRoot(issuerAccount)
+					ctx.View.Update(issuerKey, issuerUpdatedData)
+				}
+			}
+			amount -= issuerCut
+		}
+
+		// Pay seller
+		sellerKey := keylet.Account(sellerID)
+		sellerData, err := ctx.View.Read(sellerKey)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		sellerAccount, err := sle.ParseAccountRoot(sellerData)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		sellerAccount.Balance += amount
+		sellerUpdatedData, err := sle.SerializeAccountRoot(sellerAccount)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		if err := ctx.View.Update(sellerKey, sellerUpdatedData); err != nil {
+			return tx.TefINTERNAL
 		}
 	}
 
 	// Transfer the NFToken from seller to buyer
-	if result := transferNFToken(sellerID, buyerID, sellOffer.NFTokenID, ctx.View); result != tx.TesSUCCESS {
-		return result
+	fixPageLinks := ctx.Rules().Enabled(amendment.FeatureFixNFTokenPageLinks)
+	xferResult := transferNFToken(sellerID, buyerID, sellOffer.NFTokenID, ctx.View, fixPageLinks)
+	if xferResult.Result != tx.TesSUCCESS {
+		return xferResult.Result
 	}
 
-	// Delete both offers - deletions tracked automatically by ApplyStateTable
-	if err := ctx.View.Erase(buyOfferKey); err != nil {
-		return tx.TefINTERNAL
-	}
-	if err := ctx.View.Erase(sellOfferKey); err != nil {
-		return tx.TefINTERNAL
-	}
+	// Adjust OwnerCount for page changes from the transfer.
+	adjustOwnerCountViaView(ctx.View, sellerID, -xferResult.FromPagesRemoved)
+	adjustOwnerCountViaView(ctx.View, buyerID, xferResult.ToPagesCreated)
+
+	// Delete both offers using proper directory cleanup
+	deleteTokenOffer(ctx.View, buyOfferKey)
+	deleteTokenOffer(ctx.View, sellOfferKey)
+
+	// Decrement owner counts for the deleted offers
+	adjustOwnerCountViaView(ctx.View, buyerID, -1)
+	adjustOwnerCountViaView(ctx.View, sellerID, -1)
 
 	return tx.TesSUCCESS
 }
@@ -708,84 +1193,112 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBrokeredMode(ctx *tx.ApplyContext, acc
 func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, accountID [20]byte,
 	sellOffer *sle.NFTokenOfferData, sellOfferKey keylet.Keylet) tx.Result {
 
-	// Check destination constraint
 	if sellOffer.HasDestination && sellOffer.Destination != accountID {
 		return tx.TecNO_PERMISSION
 	}
 
 	// Verify seller owns the token
 	sellerID := sellOffer.Owner
-	pageKey := keylet.NFTokenPage(sellerID, sellOffer.NFTokenID)
-	if _, err := ctx.View.Read(pageKey); err != nil {
+	if _, _, _, found := findToken(ctx.View, sellerID, sellOffer.NFTokenID); !found {
 		return tx.TecNO_PERMISSION
 	}
 
-	amount := sellOffer.Amount
-	var issuerCut uint64
-
-	// Calculate issuer transfer fee
 	transferFee := getNFTTransferFee(sellOffer.NFTokenID)
-	issuerID := getNFTIssuer(sellOffer.NFTokenID)
-	if transferFee != 0 && amount > 0 {
-		issuerCut = amount * uint64(transferFee) / transferFeeDivisor
-		if sellerID == issuerID || accountID == issuerID {
-			issuerCut = 0
-		}
-	}
+	nftIssuerID := getNFTIssuer(sellOffer.NFTokenID)
 
-	// Buyer pays
-	totalCost := amount
-	if ctx.Account.Balance < totalCost {
-		return tx.TecINSUFFICIENT_FUNDS
-	}
-	ctx.Account.Balance -= totalCost
+	if sellOffer.AmountIOU != nil {
+		// IOU payment path
+		sellAmount := offerIOUToAmount(sellOffer)
 
-	// Pay issuer cut
-	if issuerCut > 0 {
-		issuerKey := keylet.Account(issuerID)
-		issuerData, err := ctx.View.Read(issuerKey)
-		if err == nil {
-			issuerAccount, err := sle.ParseAccountRoot(issuerData)
-			if err == nil {
-				issuerAccount.Balance += issuerCut
-				issuerUpdatedData, _ := sle.SerializeAccountRoot(issuerAccount)
-				ctx.View.Update(issuerKey, issuerUpdatedData)
+		// Calculate issuer cut for transfer fee
+		if transferFee != 0 && !sellAmount.IsZero() && sellerID != nftIssuerID && accountID != nftIssuerID {
+			// Check issuer trust line (fixEnforceNFTokenTrustline)
+			nftFlags := getNFTFlagsFromID(sellOffer.NFTokenID)
+			if r := checkIssuerTrustLineForAccept(ctx, nftIssuerID, sellAmount, nftFlags); r != tx.TesSUCCESS {
+				return r
+			}
+			issuerCut := sellAmount.MulRatio(uint32(transferFee), transferFeeDivisor32, true)
+			if !issuerCut.IsZero() {
+				if r := payIOU(ctx, accountID, nftIssuerID, issuerCut); r != tx.TesSUCCESS {
+					return r
+				}
+				sellAmount, _ = sellAmount.Sub(issuerCut)
 			}
 		}
-		amount -= issuerCut
-	}
 
-	// Pay seller
-	sellerKey := keylet.Account(sellerID)
-	sellerData, err := ctx.View.Read(sellerKey)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	sellerAccount, err := sle.ParseAccountRoot(sellerData)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	sellerAccount.Balance += amount
-	if sellerAccount.OwnerCount > 0 {
-		sellerAccount.OwnerCount--
-	}
-	sellerUpdatedData, err := sle.SerializeAccountRoot(sellerAccount)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	if err := ctx.View.Update(sellerKey, sellerUpdatedData); err != nil {
-		return tx.TefINTERNAL
+		// Pay seller remainder
+		if !sellAmount.IsZero() {
+			if r := payIOU(ctx, accountID, sellerID, sellAmount); r != tx.TesSUCCESS {
+				return r
+			}
+		}
+	} else {
+		// XRP payment path (existing logic)
+		amount := sellOffer.Amount
+		var issuerCut uint64
+
+		if transferFee != 0 && amount > 0 {
+			issuerCut = amount * uint64(transferFee) / transferFeeDivisor
+			if sellerID == nftIssuerID || accountID == nftIssuerID {
+				issuerCut = 0
+			}
+		}
+
+		totalCost := amount
+		if ctx.Account.Balance < totalCost {
+			return tx.TecINSUFFICIENT_FUNDS
+		}
+		ctx.Account.Balance -= totalCost
+
+		if issuerCut > 0 {
+			issuerKey := keylet.Account(nftIssuerID)
+			issuerData, err := ctx.View.Read(issuerKey)
+			if err == nil {
+				issuerAccount, err := sle.ParseAccountRoot(issuerData)
+				if err == nil {
+					issuerAccount.Balance += issuerCut
+					issuerUpdatedData, _ := sle.SerializeAccountRoot(issuerAccount)
+					ctx.View.Update(issuerKey, issuerUpdatedData)
+				}
+			}
+			amount -= issuerCut
+		}
+
+		sellerKey := keylet.Account(sellerID)
+		sellerData, err := ctx.View.Read(sellerKey)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		sellerAccount, err := sle.ParseAccountRoot(sellerData)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		sellerAccount.Balance += amount
+		sellerUpdatedData, err := sle.SerializeAccountRoot(sellerAccount)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		if err := ctx.View.Update(sellerKey, sellerUpdatedData); err != nil {
+			return tx.TefINTERNAL
+		}
 	}
 
 	// Transfer the NFToken
-	if result := transferNFToken(sellerID, accountID, sellOffer.NFTokenID, ctx.View); result != tx.TesSUCCESS {
-		return result
+	fixPageLinks := ctx.Rules().Enabled(amendment.FeatureFixNFTokenPageLinks)
+	xferResult := transferNFToken(sellerID, accountID, sellOffer.NFTokenID, ctx.View, fixPageLinks)
+	if xferResult.Result != tx.TesSUCCESS {
+		return xferResult.Result
 	}
 
-	// Delete offer - tracked automatically by ApplyStateTable
-	if err := ctx.View.Erase(sellOfferKey); err != nil {
-		return tx.TefINTERNAL
-	}
+	// Adjust OwnerCount for page changes from the transfer.
+	adjustOwnerCountViaView(ctx.View, sellerID, -xferResult.FromPagesRemoved)
+	ctx.Account.OwnerCount += uint32(xferResult.ToPagesCreated)
+
+	// Delete offer with proper directory cleanup
+	deleteTokenOffer(ctx.View, sellOfferKey)
+
+	// Decrement seller's owner count for the deleted offer
+	adjustOwnerCountViaView(ctx.View, sellerID, -1)
 
 	return tx.TesSUCCESS
 }
@@ -795,172 +1308,151 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 	buyOffer *sle.NFTokenOfferData, buyOfferKey keylet.Keylet) tx.Result {
 
 	// Verify account owns the token
-	pageKey := keylet.NFTokenPage(accountID, buyOffer.NFTokenID)
-	if _, err := ctx.View.Read(pageKey); err != nil {
+	if _, _, _, found := findToken(ctx.View, accountID, buyOffer.NFTokenID); !found {
 		return tx.TecNO_PERMISSION
 	}
 
-	// Check destination constraint
 	if buyOffer.HasDestination && buyOffer.Destination != accountID {
 		return tx.TecNO_PERMISSION
 	}
 
 	buyerID := buyOffer.Owner
-	amount := buyOffer.Amount // Already escrowed
-	var issuerCut uint64
-
-	// Calculate issuer transfer fee
 	transferFee := getNFTTransferFee(buyOffer.NFTokenID)
-	issuerID := getNFTIssuer(buyOffer.NFTokenID)
-	if transferFee != 0 && amount > 0 {
-		issuerCut = amount * uint64(transferFee) / transferFeeDivisor
-		if accountID == issuerID || buyerID == issuerID {
-			issuerCut = 0
-		}
-	}
+	nftIssuerID := getNFTIssuer(buyOffer.NFTokenID)
 
-	// Pay issuer cut
-	if issuerCut > 0 {
-		issuerKey := keylet.Account(issuerID)
-		issuerData, err := ctx.View.Read(issuerKey)
-		if err == nil {
-			issuerAccount, err := sle.ParseAccountRoot(issuerData)
-			if err == nil {
-				issuerAccount.Balance += issuerCut
-				issuerUpdatedData, _ := sle.SerializeAccountRoot(issuerAccount)
-				ctx.View.Update(issuerKey, issuerUpdatedData)
+	if buyOffer.AmountIOU != nil {
+		// IOU payment path: buyer pays seller via trust lines
+		buyAmount := offerIOUToAmount(buyOffer)
+
+		// Calculate issuer cut for transfer fee
+		if transferFee != 0 && !buyAmount.IsZero() && accountID != nftIssuerID && buyerID != nftIssuerID {
+			// Check issuer trust line (fixEnforceNFTokenTrustline)
+			nftFlags := getNFTFlagsFromID(buyOffer.NFTokenID)
+			if r := checkIssuerTrustLineForAccept(ctx, nftIssuerID, buyAmount, nftFlags); r != tx.TesSUCCESS {
+				return r
+			}
+			issuerCut := buyAmount.MulRatio(uint32(transferFee), transferFeeDivisor32, true)
+			if !issuerCut.IsZero() {
+				if r := payIOU(ctx, buyerID, nftIssuerID, issuerCut); r != tx.TesSUCCESS {
+					return r
+				}
+				buyAmount, _ = buyAmount.Sub(issuerCut)
 			}
 		}
-		amount -= issuerCut
-	}
 
-	// Pay seller (the account accepting the buy offer)
-	ctx.Account.Balance += amount
-
-	// Update buyer's owner count
-	buyerKey := keylet.Account(buyerID)
-	buyerData, err := ctx.View.Read(buyerKey)
-	if err == nil {
-		buyerAccount, err := sle.ParseAccountRoot(buyerData)
-		if err == nil && buyerAccount.OwnerCount > 0 {
-			buyerAccount.OwnerCount--
-			buyerUpdatedData, _ := sle.SerializeAccountRoot(buyerAccount)
-			ctx.View.Update(buyerKey, buyerUpdatedData)
+		// Pay seller remainder
+		if !buyAmount.IsZero() {
+			if r := payIOU(ctx, buyerID, accountID, buyAmount); r != tx.TesSUCCESS {
+				return r
+			}
 		}
+	} else {
+		// XRP payment path — deduct from buyer, pay issuer + seller
+		// Reference: rippled NFTokenAcceptOffer.cpp — uses accountSend()
+		amount := buyOffer.Amount
+
+		// Deduct full amount from buyer's account (buyer != ctx.Account)
+		buyerKey := keylet.Account(buyerID)
+		buyerData, err := ctx.View.Read(buyerKey)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		buyerAccount, err := sle.ParseAccountRoot(buyerData)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		if buyerAccount.Balance < amount {
+			return tx.TecINSUFFICIENT_FUNDS
+		}
+		buyerAccount.Balance -= amount
+		buyerUpdated, _ := sle.SerializeAccountRoot(buyerAccount)
+		if err := ctx.View.Update(buyerKey, buyerUpdated); err != nil {
+			return tx.TefINTERNAL
+		}
+
+		var issuerCut uint64
+		if transferFee != 0 && amount > 0 {
+			issuerCut = amount * uint64(transferFee) / transferFeeDivisor
+			if accountID == nftIssuerID || buyerID == nftIssuerID {
+				issuerCut = 0
+			}
+		}
+
+		if issuerCut > 0 {
+			issuerKey := keylet.Account(nftIssuerID)
+			issuerData, err := ctx.View.Read(issuerKey)
+			if err == nil {
+				issuerAccount, err := sle.ParseAccountRoot(issuerData)
+				if err == nil {
+					issuerAccount.Balance += issuerCut
+					issuerUpdatedData, _ := sle.SerializeAccountRoot(issuerAccount)
+					ctx.View.Update(issuerKey, issuerUpdatedData)
+				}
+			}
+			amount -= issuerCut
+		}
+
+		// Pay seller (the account accepting the buy offer)
+		ctx.Account.Balance += amount
 	}
 
 	// Transfer the NFToken
-	if result := transferNFToken(accountID, buyerID, buyOffer.NFTokenID, ctx.View); result != tx.TesSUCCESS {
-		return result
+	fixPageLinks := ctx.Rules().Enabled(amendment.FeatureFixNFTokenPageLinks)
+	xferResult := transferNFToken(accountID, buyerID, buyOffer.NFTokenID, ctx.View, fixPageLinks)
+	if xferResult.Result != tx.TesSUCCESS {
+		return xferResult.Result
 	}
 
-	// Delete offer - tracked automatically by ApplyStateTable
-	if err := ctx.View.Erase(buyOfferKey); err != nil {
-		return tx.TefINTERNAL
+	// Adjust OwnerCount for page changes from the transfer.
+	for i := 0; i < xferResult.FromPagesRemoved; i++ {
+		if ctx.Account.OwnerCount > 0 {
+			ctx.Account.OwnerCount--
+		}
 	}
+	adjustOwnerCountViaView(ctx.View, buyerID, xferResult.ToPagesCreated)
 
-	return tx.TesSUCCESS
-}
+	// Delete offer with proper directory cleanup
+	deleteTokenOffer(ctx.View, buyOfferKey)
 
-// transferNFToken transfers an NFToken from one account to another
-func transferNFToken(from, to [20]byte, tokenID [32]byte, view tx.LedgerView) tx.Result {
-	// Remove from sender's page
-	fromPageKey := keylet.NFTokenPage(from, tokenID)
-	fromPageData, err := view.Read(fromPageKey)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	fromPage, err := sle.ParseNFTokenPage(fromPageData)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
-	var tokenData sle.NFTokenData
-	found := false
-	for i, t := range fromPage.NFTokens {
-		if t.NFTokenID == tokenID {
-			tokenData = t
-			fromPage.NFTokens = append(fromPage.NFTokens[:i], fromPage.NFTokens[i+1:]...)
-			found = true
-			break
-		}
-	}
-	if !found {
-		return tx.TefINTERNAL
-	}
-
-	// Update or delete sender's page - changes tracked automatically by ApplyStateTable
-	fromKey := keylet.Account(from)
-	if len(fromPage.NFTokens) == 0 {
-		if err := view.Erase(fromPageKey); err != nil {
-			return tx.TefINTERNAL
-		}
-		// Decrease sender's owner count
-		fromData, err := view.Read(fromKey)
-		if err == nil {
-			fromAccount, err := sle.ParseAccountRoot(fromData)
-			if err == nil && fromAccount.OwnerCount > 0 {
-				fromAccount.OwnerCount--
-				fromUpdatedData, _ := sle.SerializeAccountRoot(fromAccount)
-				view.Update(fromKey, fromUpdatedData)
-			}
-		}
-	} else {
-		fromPageUpdated, err := serializeNFTokenPage(fromPage)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		if err := view.Update(fromPageKey, fromPageUpdated); err != nil {
-			return tx.TefINTERNAL
-		}
-	}
-
-	// Add to recipient's page - changes tracked automatically by ApplyStateTable
-	toPageKey := keylet.NFTokenPage(to, tokenID)
-	exists, _ := view.Exists(toPageKey)
-	if exists {
-		toPageData, err := view.Read(toPageKey)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		toPage, err := sle.ParseNFTokenPage(toPageData)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		toPage.NFTokens = insertNFTokenSorted(toPage.NFTokens, tokenData)
-		toPageUpdated, err := serializeNFTokenPage(toPage)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		if err := view.Update(toPageKey, toPageUpdated); err != nil {
-			return tx.TefINTERNAL
-		}
-	} else {
-		newPage := &sle.NFTokenPageData{
-			NFTokens: []sle.NFTokenData{tokenData},
-		}
-		newPageData, err := serializeNFTokenPage(newPage)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		if err := view.Insert(toPageKey, newPageData); err != nil {
-			return tx.TefINTERNAL
-		}
-		// Increase recipient's owner count
-		toKey := keylet.Account(to)
-		toData, err := view.Read(toKey)
-		if err == nil {
-			toAccount, err := sle.ParseAccountRoot(toData)
-			if err == nil {
-				toAccount.OwnerCount++
-				toUpdatedData, _ := sle.SerializeAccountRoot(toAccount)
-				view.Update(toKey, toUpdatedData)
-			}
-		}
-	}
+	// Decrement buyer's owner count for the deleted offer
+	adjustOwnerCountViaView(ctx.View, buyerID, -1)
 
 	return tx.TesSUCCESS
 }
+
+// adjustOwnerCountViaView adjusts an account's OwnerCount through the view.
+// Use this for accounts that are NOT ctx.Account (the submitter).
+func adjustOwnerCountViaView(view tx.LedgerView, accountID [20]byte, delta int) {
+	if delta == 0 {
+		return
+	}
+	acctKey := keylet.Account(accountID)
+	acctData, err := view.Read(acctKey)
+	if err != nil {
+		return
+	}
+	acct, err := sle.ParseAccountRoot(acctData)
+	if err != nil {
+		return
+	}
+	if delta > 0 {
+		acct.OwnerCount += uint32(delta)
+	} else {
+		for i := 0; i < -delta; i++ {
+			if acct.OwnerCount > 0 {
+				acct.OwnerCount--
+			}
+		}
+	}
+	updated, _ := sle.SerializeAccountRoot(acct)
+	if updated != nil {
+		view.Update(acctKey, updated)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Serialization helpers
+// ---------------------------------------------------------------------------
 
 // serializeNFTokenPage serializes an NFToken page ledger entry
 func serializeNFTokenPage(page *sle.NFTokenPageData) ([]byte, error) {
@@ -978,7 +1470,6 @@ func serializeNFTokenPage(page *sle.NFTokenPageData) ([]byte, error) {
 		jsonObj["NextPageMin"] = strings.ToUpper(hex.EncodeToString(page.NextPageMin[:]))
 	}
 
-	// Build NFTokens array
 	if len(page.NFTokens) > 0 {
 		nfTokens := make([]map[string]any, len(page.NFTokens))
 		for i, token := range page.NFTokens {
@@ -1003,28 +1494,48 @@ func serializeNFTokenPage(page *sle.NFTokenPageData) ([]byte, error) {
 	return hex.DecodeString(hexStr)
 }
 
-// serializeNFTokenOffer serializes an NFToken offer ledger entry
-func serializeNFTokenOffer(nftTx *NFTokenCreateOffer, ownerID [20]byte, tokenID [32]byte, amount uint64, sequence uint32) ([]byte, error) {
+// amountToCodecFormat converts a tx.Amount to the format expected by binarycodec.Encode.
+// XRP → string of drops ("1000000"), IOU → map[string]any{"value":"10","currency":"USD","issuer":"rAddr"}
+func amountToCodecFormat(amt tx.Amount) any {
+	if amt.IsNative() {
+		return fmt.Sprintf("%d", amt.Drops())
+	}
+	return map[string]any{
+		"value":    amt.IOU().String(),
+		"currency": amt.Currency,
+		"issuer":   amt.Issuer,
+	}
+}
+
+// serializeNFTokenOfferRaw serializes an NFToken offer ledger entry from primitive parameters.
+// amount can be a string (XRP drops) or map[string]any (IOU).
+func serializeNFTokenOfferRaw(
+	ownerID [20]byte, tokenID [32]byte,
+	amount any, flags uint32,
+	ownerNode, offerNode uint64,
+	destination string, expiration *uint32,
+) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
 	}
 
 	jsonObj := map[string]any{
-		"LedgerEntryType": "NFTokenOffer",
-		"Account":         ownerAddress,
-		"Amount":          fmt.Sprintf("%d", amount),
-		"NFTokenID":       strings.ToUpper(hex.EncodeToString(tokenID[:])),
-		"OwnerNode":       "0",
-		"Flags":           nftTx.GetFlags(),
+		"LedgerEntryType":  "NFTokenOffer",
+		"Account":          ownerAddress,
+		"Amount":           amount,
+		"NFTokenID":        strings.ToUpper(hex.EncodeToString(tokenID[:])),
+		"OwnerNode":        fmt.Sprintf("%x", ownerNode),
+		"NFTokenOfferNode": fmt.Sprintf("%x", offerNode),
+		"Flags":            flags,
 	}
 
-	if nftTx.Expiration != nil {
-		jsonObj["Expiration"] = *nftTx.Expiration
+	if expiration != nil {
+		jsonObj["Expiration"] = *expiration
 	}
 
-	if nftTx.Destination != "" {
-		jsonObj["Destination"] = nftTx.Destination
+	if destination != "" {
+		jsonObj["Destination"] = destination
 	}
 
 	hexStr, err := binarycodec.Encode(jsonObj)
@@ -1033,4 +1544,74 @@ func serializeNFTokenOffer(nftTx *NFTokenCreateOffer, ownerID [20]byte, tokenID 
 	}
 
 	return hex.DecodeString(hexStr)
+}
+
+// serializeNFTokenOffer serializes an NFToken offer from an NFTokenCreateOffer transaction.
+func serializeNFTokenOffer(nftTx *NFTokenCreateOffer, ownerID [20]byte, tokenID [32]byte, sequence uint32, ownerNode uint64, offerNode uint64) ([]byte, error) {
+	return serializeNFTokenOfferRaw(
+		ownerID, tokenID,
+		amountToCodecFormat(nftTx.Amount), nftTx.GetFlags(),
+		ownerNode, offerNode,
+		nftTx.Destination, nftTx.Expiration,
+	)
+}
+
+// tokenOfferCreateApply creates a sell offer for a newly minted NFToken.
+// This is the shared logic used by both NFTokenCreateOffer and NFTokenMint (with Amount).
+// Reference: rippled NFTokenUtils.cpp tokenOfferCreateApply
+func tokenOfferCreateApply(
+	ctx *tx.ApplyContext,
+	accountID [20]byte,
+	tokenID [32]byte,
+	amount *tx.Amount,
+	destination string,
+	expiration *uint32,
+	seqProxy uint32,
+) tx.Result {
+	// Check reserve
+	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
+	if ctx.Account.Balance < reserve {
+		return tx.TecINSUFFICIENT_RESERVE
+	}
+
+	// Create offer key
+	offerKey := keylet.NFTokenOffer(accountID, seqProxy)
+
+	// Insert into owner's directory
+	ownerDirKey := keylet.OwnerDir(accountID)
+	dirResult, err := sle.DirInsert(ctx.View, ownerDirKey, offerKey.Key, nil)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	ownerNode := dirResult.Page
+
+	// Insert into NFTSells directory (mint always creates sell offers)
+	tokenDirKey := keylet.NFTSells(tokenID)
+	tokenDirResult, err := sle.DirInsert(ctx.View, tokenDirKey, offerKey.Key, nil)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	offerNode := tokenDirResult.Page
+
+	// Serialize the offer
+	flags := uint32(NFTokenCreateOfferFlagSellNFToken) // Always a sell offer
+
+	offerData, err := serializeNFTokenOfferRaw(
+		accountID, tokenID,
+		amountToCodecFormat(*amount), flags,
+		ownerNode, offerNode,
+		destination, expiration,
+	)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	if err := ctx.View.Insert(offerKey, offerData); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Increase owner count
+	ctx.Account.OwnerCount++
+
+	return tx.TesSUCCESS
 }

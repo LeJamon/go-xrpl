@@ -56,8 +56,23 @@ func (o *OfferCancel) Flatten() (map[string]any, error) {
 }
 
 // Apply applies an OfferCancel transaction to the ledger state.
-// Reference: rippled CancelOffer.cpp doApply()
+// Reference: rippled CancelOffer.cpp preclaim() + doApply()
 func (o *OfferCancel) Apply(ctx *tx.ApplyContext) tx.Result {
+	// Preclaim: Account sequence must be strictly greater than OfferSequence
+	// Reference: rippled CancelOffer.cpp preclaim() lines 59-72
+	// Note: The engine has already incremented ctx.Account.Sequence by 1 for
+	// non-ticket transactions, so we compare against (Sequence - 1) to get
+	// the original stored sequence that rippled checks in preclaim.
+	// For ticket transactions, ctx.Account.Sequence is unchanged.
+	accountSeq := ctx.Account.Sequence
+	common := o.GetCommon()
+	if common.TicketSequence == nil {
+		accountSeq-- // undo engine's pre-increment
+	}
+	if accountSeq <= o.OfferSequence {
+		return tx.TemBAD_SEQUENCE
+	}
+
 	// Find the offer
 	accountID, _ := sle.DecodeAccountID(ctx.Account.Account)
 	offerKey := keylet.Offer(accountID, o.OfferSequence)

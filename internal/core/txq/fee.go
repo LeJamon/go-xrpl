@@ -139,13 +139,20 @@ func NewFeeMetrics(cfg Config) *FeeMetrics {
 		maxTxn = targetTxn
 	}
 
+	// Ensure recentCapacity is at least 1 to prevent division by zero and index panics.
+	// Reference: rippled uses boost::circular_buffer which requires capacity > 0.
+	ledgersInQueue := cfg.LedgersInQueue
+	if ledgersInQueue == 0 {
+		ledgersInQueue = 20 // Match DefaultConfig
+	}
+
 	return &FeeMetrics{
 		minimumTxnCount:      minTxn,
 		targetTxnCount:       targetTxn,
 		maximumTxnCount:      maxTxn,
 		txnsExpected:         minTxn,
-		recentTxnCounts:      make([]uint32, cfg.LedgersInQueue),
-		recentCapacity:       int(cfg.LedgersInQueue),
+		recentTxnCounts:      make([]uint32, ledgersInQueue),
+		recentCapacity:       int(ledgersInQueue),
 		escalationMultiplier: cfg.MinimumEscalationMultiplier,
 	}
 }
@@ -244,6 +251,9 @@ func (fm *FeeMetrics) Update(feeLevels []FeeLevel, timeLeap bool, cfg Config) ui
 
 // addRecentCount adds a count to the circular buffer.
 func (fm *FeeMetrics) addRecentCount(count uint32) {
+	if fm.recentCapacity == 0 {
+		return
+	}
 	fm.recentTxnCounts[fm.recentIndex] = count
 	fm.recentIndex = (fm.recentIndex + 1) % fm.recentCapacity
 	if fm.recentSize < fm.recentCapacity {

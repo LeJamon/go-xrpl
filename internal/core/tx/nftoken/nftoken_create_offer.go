@@ -89,9 +89,10 @@ func (n *NFTokenCreateOffer) Validate() error {
 		return errors.New("temMALFORMED: Owner not allowed for sell offers")
 	}
 
-	// For buy offers, owner cannot be the account placing the offer
-	if !isSellOffer && n.Owner == n.Account {
-		return errors.New("temMALFORMED: cannot create buy offer for your own token")
+	// Owner cannot be the same as Account
+	// Reference: rippled tokenOfferCreatePreflight — "if (owner && owner == acctID)"
+	if n.Owner != "" && n.Owner == n.Account {
+		return errors.New("temMALFORMED: Owner cannot be the same as Account")
 	}
 
 	// Destination cannot be the same as the account creating the offer
@@ -160,87 +161,150 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecEXPIRED
 	}
 
-	// Check if this is a sell offer
 	isSellOffer := c.GetFlags()&NFTokenCreateOfferFlagSellNFToken != 0
 
-	// Verify token ownership
+	// Verify token ownership using findToken (proper page traversal)
 	if isSellOffer {
-		// For sell offers, verify the sender owns the token
-		pageKey := keylet.NFTokenPage(accountID, tokenID)
-		pageData, err := ctx.View.Read(pageKey)
-		if err != nil {
-			return tx.TecNO_ENTRY
-		}
-		// Verify token is on the page
-		page, err := sle.ParseNFTokenPage(pageData)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		found := false
-		for _, t := range page.NFTokens {
-			if t.NFTokenID == tokenID {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if _, _, _, found := findToken(ctx.View, accountID, tokenID); !found {
 			return tx.TecNO_ENTRY
 		}
 	} else {
-		// For buy offers, verify the owner has the token
 		var ownerID [20]byte
 		ownerID, err = sle.DecodeAccountID(c.Owner)
 		if err != nil {
 			return tx.TemINVALID
 		}
-		pageKey := keylet.NFTokenPage(ownerID, tokenID)
-		pageData, err := ctx.View.Read(pageKey)
-		if err != nil {
+		if _, _, _, found := findToken(ctx.View, ownerID, tokenID); !found {
 			return tx.TecNO_ENTRY
 		}
-		// Verify token is on the page
-		page, err := sle.ParseNFTokenPage(pageData)
+	}
+
+	// Check transferable flag for ALL offers (buy and sell)
+	// Reference: rippled tokenOfferCreatePreclaim — if issuer != account and
+	// token is not transferable, only the issuer or authorized minter may create offers
+	nftFlags := getNFTFlagsFromID(tokenID)
+	issuerID := getNFTIssuer(tokenID)
+	if issuerID != accountID && nftFlags&nftFlagTransferable == 0 {
+		// Not transferable — only issuer's authorized minter can create offers
+		issuerKey := keylet.Account(issuerID)
+		issuerData, err := ctx.View.Read(issuerKey)
+		if err != nil {
+			return tx.TefNFTOKEN_IS_NOT_TRANSFERABLE
+		}
+		issuerAccount, err := sle.ParseAccountRoot(issuerData)
+		if err != nil {
+			return tx.TefNFTOKEN_IS_NOT_TRANSFERABLE
+		}
+		if issuerAccount.NFTokenMinter != c.Account {
+			return tx.TefNFTOKEN_IS_NOT_TRANSFERABLE
+		}
+	}
+
+	// Check destination exists and doesn't disallow incoming NFT offers
+	// Reference: rippled tokenOfferCreatePreclaim
+	if c.Destination != "" {
+		destID, err := sle.DecodeAccountID(c.Destination)
+		if err != nil {
+			return tx.TemINVALID
+		}
+		destKey := keylet.Account(destID)
+		destData, err := ctx.View.Read(destKey)
+		if err != nil || destData == nil {
+			return tx.TecNO_DST
+		}
+		destAccount, err := sle.ParseAccountRoot(destData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-		found := false
-		for _, t := range page.NFTokens {
-			if t.NFTokenID == tokenID {
-				found = true
-				break
+		if destAccount.Flags&sle.LsfDisallowIncomingNFTokenOffer != 0 {
+			return tx.TecNO_PERMISSION
+		}
+	}
+
+	// IOU preclaim checks
+	// Reference: rippled tokenOfferCreatePreclaim — IOU-specific validation
+	if !c.Amount.IsNative() {
+		iouIssuerID, err := sle.DecodeAccountID(c.Amount.Issuer)
+		if err != nil {
+			return tx.TemINVALID
+		}
+
+		// Fund check for buy offers
+		// Reference: rippled tokenOfferCreatePreclaim — checks signum() <= 0,
+		// i.e., only rejects if buyer has ZERO balance, not if they can't fully afford.
+		// With fixNonFungibleTokensV1_2 uses accountFunds (allows issuer unlimited),
+		// without it uses accountHolds (issuer has no special treatment)
+		if !isSellOffer {
+			if ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
+				funds := tx.AccountFunds(ctx.View, accountID, c.Amount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+				if funds.Signum() <= 0 {
+					return tx.TecUNFUNDED_OFFER
+				}
+			} else {
+				funds := accountHoldsIOU(ctx.View, accountID, c.Amount)
+				if funds.Signum() <= 0 {
+					return tx.TecUNFUNDED_OFFER
+				}
 			}
 		}
-		if !found {
-			return tx.TecNO_ENTRY
-		}
-	}
 
-	// Parse amount
-	var amountXRP uint64
-	if c.Amount.Currency == "" {
-		// XRP amount
-		amountXRP = uint64(c.Amount.Drops())
-	}
-
-	// For buy offers, escrow the funds
-	if !isSellOffer {
-		if c.Amount.Currency == "" && amountXRP > 0 {
-			// Check if account has enough balance (including reserve)
-			reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-			if ctx.Account.Balance < amountXRP+reserve {
-				return tx.TecINSUFFICIENT_FUNDS
+		// Trust line authorization checks (with fixEnforceNFTokenTrustlineV2)
+		if ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
+			if r := checkNFTTrustlineAuthorized(ctx.View, accountID, c.Amount.Currency, iouIssuerID); r != tx.TesSUCCESS {
+				return r
 			}
-			// Escrow the funds (deduct from balance)
-			ctx.Account.Balance -= amountXRP
 		}
-		// For IOU buy offers, don't escrow but verify funds exist
+
+		// NFT issuer must have trust line if transfer fee is set
+		// Reference: rippled tokenOfferCreatePreclaim — only check trust line EXISTENCE
+		// (not authorization). Auth for NFT issuer is checked at acceptance time, not creation.
+		// With featureNFTokenMintOffer, skip check when NFT issuer == IOU issuer
+		// (issuer can receive their own IOU as transfer fee without a trust line)
+		nftIssuerID := getNFTIssuer(tokenID)
+		if getNFTTransferFee(tokenID) != 0 && nftFlags&nftFlagTrustLine == 0 {
+			skipCheck := nftIssuerID == iouIssuerID && ctx.Rules().Enabled(amendment.FeatureNFTokenMintOffer)
+			if !skipCheck {
+				trustLineKey := keylet.Line(nftIssuerID, iouIssuerID, c.Amount.Currency)
+				trustLineExists, _ := ctx.View.Exists(trustLineKey)
+				if !trustLineExists {
+					return tx.TecNO_LINE
+				}
+			}
+		}
 	}
 
-	// Create the offer using keylet based on account + sequence
+	// For buy offers, check the buyer has enough XRP for reserve but do NOT
+	// escrow/deduct the offer amount. NFToken buy offers are unfunded promises
+	// — the buyer's balance is only checked, not held.
+	// Reference: rippled NFTokenUtils.cpp tokenOfferCreateApply — no balance deduction
+
+	// Create the offer
 	sequence := c.GetCommon().SeqProxy()
 	offerKey := keylet.NFTokenOffer(accountID, sequence)
 
-	offerData, err := serializeNFTokenOffer(c, accountID, tokenID, amountXRP, sequence)
+	// Insert into owner's directory
+	ownerDirKey := keylet.OwnerDir(accountID)
+	dirResult, err := sle.DirInsert(ctx.View, ownerDirKey, offerKey.Key, nil)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	ownerNode := dirResult.Page
+
+	// Insert into NFTSells or NFTBuys directory
+	var tokenDirKey keylet.Keylet
+	if isSellOffer {
+		tokenDirKey = keylet.NFTSells(tokenID)
+	} else {
+		tokenDirKey = keylet.NFTBuys(tokenID)
+	}
+	tokenDirResult, err := sle.DirInsert(ctx.View, tokenDirKey, offerKey.Key, nil)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	offerNode := tokenDirResult.Page
+
+	// Serialize the offer with directory page numbers
+	offerData, err := serializeNFTokenOffer(c, accountID, tokenID, sequence, ownerNode, offerNode)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -257,8 +321,6 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	if ctx.Account.Balance < reserve {
 		return tx.TecINSUFFICIENT_RESERVE
 	}
-
-	// Creation tracked automatically by ApplyStateTable
 
 	return tx.TesSUCCESS
 }

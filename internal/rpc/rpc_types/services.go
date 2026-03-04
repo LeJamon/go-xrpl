@@ -5,10 +5,22 @@ package rpc_types
 // needed by RPC method handlers.
 var Services *ServiceContainer
 
+// MethodDispatcher allows forwarding RPC calls to the method registry.
+// Used by the 'json' RPC method to proxy calls.
+type MethodDispatcher interface {
+	ExecuteMethod(method string, params []byte) (interface{}, *RpcError)
+}
+
 // ServiceContainer holds references to all services needed by RPC handlers
 type ServiceContainer struct {
 	// LedgerService provides ledger operations
 	Ledger LedgerService
+
+	// Dispatcher forwards RPC calls (used by 'json' method)
+	Dispatcher MethodDispatcher
+
+	// ShutdownFunc gracefully stops the server (used by 'stop' method)
+	ShutdownFunc func()
 }
 
 // LedgerService interface for ledger operations
@@ -511,4 +523,14 @@ func InitServices(ledger LedgerService) {
 	Services = &ServiceContainer{
 		Ledger: ledger,
 	}
+}
+
+// SetDispatcher sets the method dispatcher on the service container.
+func (sc *ServiceContainer) SetDispatcher(d MethodDispatcher) {
+	sc.Dispatcher = d
+}
+
+// SetShutdownFunc sets the shutdown function on the service container.
+func (sc *ServiceContainer) SetShutdownFunc(f func()) {
+	sc.ShutdownFunc = f
 }

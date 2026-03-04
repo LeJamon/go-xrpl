@@ -6,12 +6,16 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
 )
 
-// UnsubscribeMethod handles the unsubscribe RPC command (WebSocket only)
+// UnsubscribeMethod handles the unsubscribe RPC command (WebSocket only).
+// STUB over HTTP: Returns notSupported. The real implementation is in websocket.go.
+//
+// TODO [websocket]: Same as subscribe — this HTTP stub is correct.
+//   The WebSocket server handles actual unsubscriptions.
+//   - Reference: rippled Unsubscribe.cpp
+//   - Removes subscriptions created by subscribe command
 type UnsubscribeMethod struct{}
 
 func (m *UnsubscribeMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
-	// This method should only be called through WebSocket context
-	// The actual implementation is in the WebSocket handler
 	return nil, rpc_types.NewRpcError(rpc_types.RpcNOT_SUPPORTED, "notSupported", "notSupported",
 		"unsubscribe is only available via WebSocket")
 }

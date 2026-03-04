@@ -6,7 +6,19 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
 )
 
-// AccountInfoMethod handles the account_info RPC method
+// AccountInfoMethod handles the account_info RPC method.
+// PARTIAL: Core account data works. Missing:
+//
+// TODO [account_info]: Support ledger lookup by hash.
+//   - When ledger_hash is provided, resolve the ledger by hash first,
+//     then query account info from that specific ledger state.
+//   - Requires: GetAccountInfo() to accept a ledger hash parameter,
+//     or resolve hash→sequence first via GetLedgerByHash().
+//
+// TODO [account_info]: Load actual signer lists when signer_lists=true.
+//   - Requires: Reading SignerList SLE from the account's owner directory
+//   - Reference: rippled AccountInfo.cpp lines 180-220
+//   - Should return array of signer list objects with SignerQuorum + SignerEntries
 type AccountInfoMethod struct{}
 
 func (m *AccountInfoMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMessage) (interface{}, *rpc_types.RpcError) {
@@ -18,14 +30,11 @@ func (m *AccountInfoMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMes
 		SignerLists bool `json:"signer_lists,omitempty"`
 		Strict      bool `json:"strict,omitempty"`
 	}
-	println("PARAMS:", params)
-
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
 			return nil, rpc_types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
 		}
 	}
-	println("PARAMS:", params)
 
 	if request.Account == "" {
 		return nil, rpc_types.RpcErrorInvalidParams("Missing required parameter: account")
@@ -41,7 +50,7 @@ func (m *AccountInfoMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMes
 	if request.LedgerIndex != "" {
 		ledgerIndex = request.LedgerIndex.String()
 	} else if request.LedgerHash != "" {
-		// TODO: Support lookup by hash
+		// TODO [account_info]: resolve ledger by hash (see type-level TODO)
 		ledgerIndex = "validated"
 	}
 
@@ -105,10 +114,9 @@ func (m *AccountInfoMethod) Handle(ctx *rpc_types.RpcContext, params json.RawMes
 	}
 
 	// Add signer lists if requested
+	// TODO [account_info]: load signer lists from ledger (see type-level TODO)
 	if request.SignerLists {
-		response["signer_lists"] = []interface{}{
-			// TODO: Load actual signer lists from ledger
-		}
+		response["signer_lists"] = []interface{}{}
 	}
 
 	return response, nil

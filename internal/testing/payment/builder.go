@@ -28,6 +28,7 @@ type PaymentBuilder struct {
 	flags         uint32
 	memos         []tx.MemoWrapper
 	credentialIDs []string
+	mptIssuanceID string
 }
 
 // Pay creates a new PaymentBuilder for an XRP payment.
@@ -96,17 +97,14 @@ func (b *PaymentBuilder) Paths(paths [][]payment.PathStep) *PaymentBuilder {
 
 // PathsXRP adds a single path through XRP for cross-currency payments.
 // This is a convenience method for the common case of using XRP as a bridge.
-// Note: For XRP bridging, we use an empty path - the strand builder will
-// automatically create the necessary book steps based on SendMax (XRP) and
-// Amount (destination currency) issues.
-// Reference: rippled paths(XRP) uses pathfinder which typically returns empty
-// paths when XRP is the source and destination is IOU via order book.
+// Note: For XRP bridging, this adds a path with a single {Currency: "XRP"} element.
+// This tells the strand builder to route through XRP as an intermediary currency,
+// creating two book steps: srcCurrency→XRP and XRP→dstCurrency.
+// Reference: rippled path(~XRP) creates a currency-only path element with type 0x10.
 func (b *PaymentBuilder) PathsXRP() *PaymentBuilder {
-	// Use an empty path - the strand builder adds the destination currency/issuer
-	// automatically when the source (SendMax) and destination currencies differ.
-	// An explicit {Currency: "XRP"} element would cause temBAD_PATH because
-	// it creates a redundant XRP→XRP book which is invalid.
-	b.paths = [][]payment.PathStep{{}}
+	b.paths = [][]payment.PathStep{{
+		{Currency: "XRP", Type: int(payment.PathTypeCurrency)},
+	}}
 	return b
 }
 
@@ -138,6 +136,12 @@ func (b *PaymentBuilder) Sequence(seq uint32) *PaymentBuilder {
 	return b
 }
 
+// Flags sets arbitrary transaction flags.
+func (b *PaymentBuilder) Flags(flags uint32) *PaymentBuilder {
+	b.flags |= flags
+	return b
+}
+
 // PartialPayment enables the partial payment flag.
 func (b *PaymentBuilder) PartialPayment() *PaymentBuilder {
 	b.flags |= payment.PaymentFlagPartialPayment
@@ -161,6 +165,12 @@ func (b *PaymentBuilder) LimitQuality() *PaymentBuilder {
 // Reference: rippled credentials::ids({credIdx})
 func (b *PaymentBuilder) CredentialIDs(ids []string) *PaymentBuilder {
 	b.credentialIDs = ids
+	return b
+}
+
+// MPTIssuanceID sets the MPT issuance ID for MPT direct payments.
+func (b *PaymentBuilder) MPTIssuanceID(id string) *PaymentBuilder {
+	b.mptIssuanceID = id
 	return b
 }
 
@@ -217,6 +227,9 @@ func (b *PaymentBuilder) Build() tx.Transaction {
 	}
 	if b.credentialIDs != nil {
 		payment.CredentialIDs = b.credentialIDs
+	}
+	if b.mptIssuanceID != "" {
+		payment.MPTokenIssuanceID = b.mptIssuanceID
 	}
 
 	return payment
