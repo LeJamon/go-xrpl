@@ -111,7 +111,6 @@ func Flow(
 		if remainingIn != nil && (remainingIn.IsNegative() || remainingIn.IsZero()) {
 			break
 		}
-
 		// activateNext: move next -> cur, optionally re-sorting by quality
 		// Reference: rippled ActiveStrands::activateNext()
 		var cur []*Strand

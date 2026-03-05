@@ -567,6 +567,19 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 			return result, false // Error during crossing - apply cancel sandbox
 		}
 
+		// Check if account's funds were exhausted during crossing.
+		// Reference: rippled CreateOffer.cpp lines 432-441.
+		// Must use the PaymentSandbox with BalanceHook BEFORE applying it to the view,
+		// matching rippled's accountFunds(psb, ...) call. BalanceHook subtracts
+		// DeferredCredits, returning zero for self-crossing round-trips even when the
+		// on-ledger balance is non-zero.
+		var takerInBalance tx.Amount
+		if crossResult.Sandbox != nil {
+			takerInBalance = payment.AccountFundsInSandbox(crossResult.Sandbox, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+		} else {
+			takerInBalance = tx.AccountFunds(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+		}
+
 		// Apply FlowCross sandbox changes to our main sandbox (sb)
 		// Reference: rippled CreateOffer.cpp - sandbox changes must be applied
 		// FlowCross creates a root sandbox, so we use ApplyToView with sb as the target
@@ -617,10 +630,6 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 			}
 		}
 
-		// Check if account's funds were exhausted during crossing
-		// Reference: rippled CreateOffer.cpp lines 432-441
-		// If the balance for what we're selling is now zero, don't create the offer
-		takerInBalance := tx.AccountFunds(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 		if isAmountZeroOrNegative(takerInBalance) {
 			// Account funds exhausted - offer fully consumed, no remaining offer to place
 			return tx.TesSUCCESS, true // Apply main sandbox with crossing results

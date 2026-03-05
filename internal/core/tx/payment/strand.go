@@ -162,10 +162,20 @@ func ToStrands(
 	}
 
 	dstIssue := GetIssue(dstAmt)
+	// If dstIssue has zero issuer for non-XRP currency, default to dst.
+	// RippleState balances store zero issuer; the destination account is the implied issuer.
+	// Reference: rippled treats noAccount() issuer as the destination for deliver amounts.
+	if !dstIssue.IsXRP() && dstIssue.Issuer == [20]byte{} {
+		dstIssue.Issuer = dst
+	}
 
 	var srcIssue *Issue
 	if srcAmt != nil {
 		issue := GetIssue(*srcAmt)
+		// Same fallback for source issue
+		if !issue.IsXRP() && issue.Issuer == [20]byte{} {
+			issue.Issuer = src
+		}
 		srcIssue = &issue
 	}
 

@@ -457,9 +457,18 @@ func (q Quality) CeilOutStrict(amtIn, amtOut EitherAmount, limit EitherAmount, r
 
 	var resultInEither EitherAmount
 	if amtIn.IsNative {
-		// Convert IOU-style result back to XRP drops using canonicalizeRoundStrict logic.
-		// Reference: rippled STAmount.cpp canonicalizeRoundStrict
-		drops := CanonicalizeDropsStrict(resultIn.Mantissa(), resultIn.Exponent(), roundUp)
+		var drops int64
+		if roundUp {
+			// roundUp=true: rippled calls canonicalizeRoundStrict before STAmount construction.
+			// Reference: rippled mulRoundImpl - CanonicalizeFunc called when resultNegative != roundUp
+			drops = CanonicalizeDropsStrict(resultIn.Mantissa(), resultIn.Exponent(), roundUp)
+		} else {
+			// roundUp=false (positive values): rippled does NOT call canonicalizeRoundStrict.
+			// STAmount::canonicalize() for native applies plain floor (truncation):
+			//   while (mOffset < 0) { mValue /= 10; ++mOffset; }
+			// Reference: rippled STAmount.cpp canonicalize() lines 914-918
+			drops = canonicalizeDropsFloor(resultIn.Mantissa(), resultIn.Exponent())
+		}
 		resultInEither = NewXRPEitherAmount(drops)
 	} else {
 		resultInEither = NewIOUEitherAmount(tx.NewIssuedAmount(
@@ -555,12 +564,19 @@ func (q Quality) CeilInStrict(amtIn, amtOut EitherAmount, limit EitherAmount, ro
 
 	var resultOutEither EitherAmount
 	if amtOut.IsNative {
-		// Convert IOU-style result back to XRP drops using canonicalizeRound (non-strict).
-		// Reference: rippled divRoundImpl always uses canonicalizeRound (NOT canonicalizeRoundStrict)
-		// for the native drop conversion, even in divRoundStrict. The strict vs non-strict
-		// distinction in divRound only affects the NumberRoundModeGuard during STAmount normalization,
-		// not the native canonicalization step.
-		resultOutEither = NewXRPEitherAmount(CanonicalizeDrops(resultOut.Mantissa(), resultOut.Exponent()))
+		var drops int64
+		if roundUp {
+			// roundUp=true: rippled calls canonicalizeRound before STAmount construction.
+			// Reference: rippled divRoundImpl - canonicalizeRound called when resultNegative != roundUp
+			drops = CanonicalizeDrops(resultOut.Mantissa(), resultOut.Exponent())
+		} else {
+			// roundUp=false (positive values): rippled does NOT call canonicalizeRound.
+			// STAmount::canonicalize() for native applies plain floor (truncation):
+			//   while (mOffset < 0) { mValue /= 10; ++mOffset; }
+			// Reference: rippled STAmount.cpp canonicalize() lines 914-918
+			drops = canonicalizeDropsFloor(resultOut.Mantissa(), resultOut.Exponent())
+		}
+		resultOutEither = NewXRPEitherAmount(drops)
 	} else {
 		resultOutEither = NewIOUEitherAmount(tx.NewIssuedAmount(
 			resultOut.Mantissa(), resultOut.Exponent(), outCurrency, outIssuer))
@@ -632,6 +648,35 @@ func CanonicalizeDrops(mantissa int64, exponent int) int64 {
 		exponent++
 	}
 
+	if mantissa < 0 {
+		return -value
+	}
+	return value
+}
+
+// canonicalizeDropsFloor converts an IOU-style mantissa/exponent to XRP drops
+// using plain floor (truncation toward zero).
+// This matches rippled's STAmount::canonicalize() for native amounts when
+// canonicalizeRoundStrict is NOT called (i.e., when roundUp=false for positive values).
+// Reference: rippled STAmount.cpp canonicalize() lines 914-918:
+//
+//	while (mOffset < 0) { mValue /= 10; ++mOffset; }
+func canonicalizeDropsFloor(mantissa int64, exponent int) int64 {
+	if mantissa == 0 || exponent <= -20 {
+		return 0
+	}
+	value := mantissa
+	if value < 0 {
+		value = -value
+	}
+	for exponent > 0 {
+		value *= 10
+		exponent--
+	}
+	for exponent < 0 {
+		value /= 10
+		exponent++
+	}
 	if mantissa < 0 {
 		return -value
 	}
