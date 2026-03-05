@@ -1,7 +1,6 @@
 package payment
 
 import (
-
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
@@ -599,9 +598,6 @@ func (s *DirectStepI) rippleCredit(sb *PaymentSandbox, amount tx.Amount, issuer 
 		return err
 	}
 
-	// Record pre-credit balance for deferred credits
-	preCreditBalance := rs.Balance
-
 	// Compute sender's balance BEFORE update (from sender's perspective)
 	// Reference: rippled rippleCreditIOU() line 1672-1673: if bSenderHigh, negate
 	srcIsLow := sle.CompareAccountIDs(s.src, s.dst) < 0
@@ -730,9 +726,6 @@ func (s *DirectStepI) rippleCredit(sb *PaymentSandbox, amount tx.Amount, issuer 
 	}
 
 	sb.Update(trustLineKey, newData)
-
-	// Record deferred credit
-	sb.Credit(s.src, s.dst, amount, preCreditBalance)
 
 	return nil
 }

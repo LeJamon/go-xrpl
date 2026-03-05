@@ -721,6 +721,10 @@ func (e *TestEnv) IOUBalance(holder, issuer *Account, currency string) *sle.Amou
 		balance = balance.Negate()
 	}
 
+	// RippleState Balance stores zero issuer; override with actual issuer address.
+	// This ensures amounts returned here can be used directly in payments.
+	balance.Issuer = issuer.Address
+
 	return &balance
 }
 

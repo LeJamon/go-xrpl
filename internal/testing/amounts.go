@@ -37,6 +37,10 @@ func XRPTxAmountFromXRP(xrp float64) tx.Amount {
 
 // floatToMantissaExponent converts a float64 to mantissa and exponent.
 // Returns (mantissa, exponent) where value = mantissa * 10^exponent.
+//
+// Matches rippled's jtx behavior: amounts are formatted via std::to_string(double)
+// which uses %.6f (6 decimal places), then parsed via amountFromString.
+// This means only 6 decimal digits of precision are preserved, matching C++ test behavior.
 func floatToMantissaExponent(value float64) (int64, int) {
 	if value == 0 {
 		return 0, -100 // XRPL zero exponent
@@ -46,6 +50,9 @@ func floatToMantissaExponent(value float64) (int64, int) {
 	if negative {
 		value = -value
 	}
+
+	// Round to 6 decimal places, matching rippled's std::to_string(double) = sprintf("%.6f", v)
+	value = math.Round(value*1e6) / 1e6
 
 	// Find the exponent
 	exponent := 0

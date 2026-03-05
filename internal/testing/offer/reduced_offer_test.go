@@ -6,6 +6,7 @@ package offer
 // Reference: rippled/src/test/app/ReducedOffer_test.cpp
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
@@ -289,19 +290,23 @@ func testUnderFundedXrpIouQChange(t *testing.T) {
 				aliceHasUSD := aliceBalanceUSD != nil && aliceBalanceUSD.Signum() > 0
 
 				if aliceHasUSD {
+					require.Equal(t, 0, aliceBalanceUSD.Compare(initialBobUSD),
+						"alice should have received exactly initialBobUSD, got %v", aliceBalanceUSD)
+					bobBalanceUSD := env.IOUBalance(bob, gw, "USD")
+					require.True(t, bobBalanceUSD == nil || bobBalanceUSD.Signum() == 0,
+						"bob's USD balance should be 0 after crossing")
 					require.True(t, bobsOfferGone, "bob's offer should be gone when alice got USD")
 				}
 
 				if !bobsOfferGone && !aliceHasUSD {
 					blockedOrderBookCount++
+					fmt.Printf("[UNDERFUND-DBG] BLOCKED iter=%.3f bobsOfferGone=%v aliceHasUSD=%v aliceBal=%v\n",
+						initialBobUSDFloat, bobsOfferGone, aliceHasUSD, aliceBalanceUSD)
 				}
 
-				// Clean up
+				// Clean up offers, zero out balances, then close (matching rippled order)
 				env.Submit(OfferCancel(alice, aliceOfferSeq).Build())
 				env.Submit(OfferCancel(bob, bobOfferSeq).Build())
-				env.Close()
-
-				// Zero out balances
 				if bal := env.IOUBalance(alice, gw, "USD"); bal != nil && bal.Signum() > 0 {
 					env.Submit(paymentBuilder.PayIssued(alice, gw, *bal).Build())
 				}
@@ -394,6 +399,11 @@ func testUnderFundedIouIouQChange(t *testing.T) {
 				aliceHasUSD := aliceBalanceUSD != nil && aliceBalanceUSD.Signum() > 0
 
 				if aliceHasUSD {
+					require.Equal(t, 0, aliceBalanceUSD.Compare(currentBobUSD),
+						"alice should have received exactly initialBobUSD, got %v", aliceBalanceUSD)
+					bobBalanceUSD := env.IOUBalance(bob, gw, "USD")
+					require.True(t, bobBalanceUSD == nil || bobBalanceUSD.Signum() == 0,
+						"bob's USD balance should be 0 after crossing")
 					require.True(t, bobsOfferGone, "bob's offer should be gone when alice got USD")
 				}
 
@@ -401,7 +411,7 @@ func testUnderFundedIouIouQChange(t *testing.T) {
 					blockedOrderBookCount++
 				}
 
-				// Clean up
+				// Clean up offers, zero out balances, then close (matching rippled order)
 				env.Submit(OfferCancel(alice, aliceOfferSeq).Build())
 				env.Submit(OfferCancel(bob, bobOfferSeq).Build())
 

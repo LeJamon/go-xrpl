@@ -325,6 +325,23 @@ func GetTransferRateByAddress(view tx.LedgerView, issuerAddress string) uint32 {
 	return GetTransferRate(view, issuerID)
 }
 
+// AccountFundsInSandbox returns account funds with BalanceHook applied.
+// Matches rippled's accountFunds(psb, ...) in CreateOffer.cpp line 432.
+// BalanceHook subtracts DeferredCredits so self-crossing round-trips report zero.
+func AccountFundsInSandbox(sb *PaymentSandbox, accountID [20]byte, amount tx.Amount, fhZeroIfFrozen bool, reserveBase, reserveIncrement uint64) tx.Amount {
+	rawBalance := tx.AccountFunds(sb, accountID, amount, fhZeroIfFrozen, reserveBase, reserveIncrement)
+
+	if amount.IsNative() {
+		return sb.BalanceHook(accountID, [20]byte{}, rawBalance)
+	}
+
+	issuerID, err := sle.DecodeAccountID(amount.Issuer)
+	if err != nil {
+		return rawBalance
+	}
+	return sb.BalanceHook(accountID, issuerID, rawBalance)
+}
+
 // rateAsAmount converts a uint32 transfer rate to an Amount, matching rippled's
 // detail::as_amount(Rate) which creates STAmount(noIssue(), rate.value, -9, false).
 // For example, Rate{1005000000} becomes an Amount with mantissa=1005000000, exponent=-9,
