@@ -13,7 +13,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // serializePayChannel serializes a PayChannel ledger entry from a PaymentChannelCreate transaction.
@@ -67,15 +67,15 @@ func serializePayChannel(pcTx *PaymentChannelCreate, ownerID, destID [20]byte, a
 // closeChannel closes a payment channel: removes from directories, returns remaining funds
 // to owner, decrements OwnerCount, and erases the channel SLE.
 // Reference: rippled PayChan.cpp closeChannel() (lines 116-164)
-func closeChannel(ctx *tx.ApplyContext, channelKey keylet.Keylet, channel *sle.PayChannelData) tx.Result {
+func closeChannel(ctx *tx.ApplyContext, channelKey keylet.Keylet, channel *state.PayChannelData) tx.Result {
 	// 1. Remove from owner directory
 	ownerDirKey := keylet.OwnerDir(channel.Account)
-	sle.DirRemove(ctx.View, ownerDirKey, channel.OwnerNode, channelKey.Key, false)
+	state.DirRemove(ctx.View, ownerDirKey, channel.OwnerNode, channelKey.Key, false)
 
 	// 2. Remove from destination directory (if fixPayChanRecipientOwnerDir was active when created)
 	if channel.HasDestNode {
 		destDirKey := keylet.OwnerDir(channel.DestinationID)
-		sle.DirRemove(ctx.View, destDirKey, channel.DestinationNode, channelKey.Key, false)
+		state.DirRemove(ctx.View, destDirKey, channel.DestinationNode, channelKey.Key, false)
 	}
 
 	// 3. Return remaining funds to owner and decrement OwnerCount
@@ -94,7 +94,7 @@ func closeChannel(ctx *tx.ApplyContext, channelKey keylet.Keylet, channel *sle.P
 		if err != nil || ownerData == nil {
 			return tx.TefINTERNAL
 		}
-		ownerAccount, err := sle.ParseAccountRoot(ownerData)
+		ownerAccount, err := state.ParseAccountRoot(ownerData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -102,7 +102,7 @@ func closeChannel(ctx *tx.ApplyContext, channelKey keylet.Keylet, channel *sle.P
 		if ownerAccount.OwnerCount > 0 {
 			ownerAccount.OwnerCount--
 		}
-		ownerUpdated, err := sle.SerializeAccountRoot(ownerAccount)
+		ownerUpdated, err := state.SerializeAccountRoot(ownerAccount)
 		if err != nil {
 			return tx.TefINTERNAL
 		}

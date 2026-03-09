@@ -2,7 +2,7 @@ package service
 
 import (
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // BookOffer represents an offer in an order book
@@ -71,7 +71,7 @@ func (s *Service) GetBookOffers(takerGets, takerPays tx.Amount, ledgerIndex stri
 		}
 
 		// Parse the Offer
-		offer, err := sle.ParseLedgerOfferFromBytes(data)
+		offer, err := state.ParseLedgerOfferFromBytes(data)
 		if err != nil {
 			return true
 		}

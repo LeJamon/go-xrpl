@@ -5,7 +5,7 @@ package tx
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // TestMultiSignature tests multi-signature functionality.
@@ -241,10 +241,10 @@ func TestGetTransactionSignerCount(t *testing.T) {
 	}
 }
 
-// Testsle.SignerListInfo tests the sle.SignerListInfo structure.
+// Teststate.SignerListInfo tests the state.SignerListInfo structure.
 func TestsleSignerListInfo(t *testing.T) {
 	t.Run("basic signer list", func(t *testing.T) {
-		signerList := sle.SignerListInfo{
+		signerList := state.SignerListInfo{
 			SignerQuorum: 2,
 			SignerListID: 0,
 			SignerEntries: []AccountSignerEntry{
@@ -262,7 +262,7 @@ func TestsleSignerListInfo(t *testing.T) {
 	})
 
 	t.Run("signer list with different weights", func(t *testing.T) {
-		signerList := sle.SignerListInfo{
+		signerList := state.SignerListInfo{
 			SignerQuorum: 4,
 			SignerListID: 0,
 			SignerEntries: []AccountSignerEntry{

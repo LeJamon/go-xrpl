@@ -8,7 +8,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -319,13 +319,13 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// --- Update-specific preclaim ---
-	var existingOracle *sle.OracleData
+	var existingOracle *state.OracleData
 	var adjustReserve int
 
 	if isUpdate {
 		// Reference: rippled SetOracle.cpp preclaim lines 129-158
 		var err error
-		existingOracle, err = sle.ParseOracle(existingData)
+		existingOracle, err = state.ParseOracle(existingData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -419,7 +419,7 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 // doApplyUpdate applies an OracleSet update to an existing oracle.
 // Reference: rippled SetOracle.cpp doApply lines 223-280
 func (o *OracleSet) doApplyUpdate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
-	existingOracle *sle.OracleData, pairs map[string]pairEntry) tx.Result {
+	existingOracle *state.OracleData, pairs map[string]pairEntry) tx.Result {
 
 	// Build ordered pairs map from existing PriceDataSeries.
 	// Existing pairs are stored WITHOUT price/scale (just base/quote).
@@ -473,10 +473,10 @@ func (o *OracleSet) doApplyUpdate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 	}
 	sort.Strings(keys)
 
-	updatedSeries := make([]sle.OraclePriceData, 0, len(orderedPairs))
+	updatedSeries := make([]state.OraclePriceData, 0, len(orderedPairs))
 	for _, k := range keys {
 		p := orderedPairs[k]
-		pd := sle.OraclePriceData{
+		pd := state.OraclePriceData{
 			BaseAsset:  p.baseAsset,
 			QuoteAsset: p.quoteAsset,
 		}
@@ -511,7 +511,7 @@ func (o *OracleSet) doApplyUpdate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 	}
 
 	// Serialize and write back
-	data, err := sle.SerializeOracle(existingOracle)
+	data, err := state.SerializeOracle(existingOracle)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -529,13 +529,13 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 	rules := ctx.Rules()
 
 	// Build PriceDataSeries
-	var series []sle.OraclePriceData
+	var series []state.OraclePriceData
 
 	if !rules.Enabled(amendment.FeatureFixPriceOracleOrder) {
 		// Without fixPriceOracleOrder: use transaction order directly
 		for _, pd := range o.PriceDataSeries {
 			entry := pd.PriceData
-			spd := sle.OraclePriceData{
+			spd := state.OraclePriceData{
 				BaseAsset:  entry.BaseAsset,
 				QuoteAsset: entry.QuoteAsset,
 			}
@@ -559,7 +559,7 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 
 		for _, k := range keys {
 			p := pairs[k]
-			spd := sle.OraclePriceData{
+			spd := state.OraclePriceData{
 				BaseAsset:  p.baseAsset,
 				QuoteAsset: p.quoteAsset,
 			}
@@ -576,7 +576,7 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 	}
 
 	// Build oracle SLE
-	oracleData := &sle.OracleData{
+	oracleData := &state.OracleData{
 		Owner:           ctx.AccountID,
 		Provider:        o.Provider,
 		AssetClass:      o.AssetClass,
@@ -589,7 +589,7 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 
 	// DirInsert into owner directory
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	dirResult, err := sle.DirInsert(ctx.View, ownerDirKey, oracleKey.Key, func(dir *sle.DirectoryNode) {
+	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, oracleKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
@@ -598,7 +598,7 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 	oracleData.OwnerNode = dirResult.Page
 
 	// Serialize oracle
-	data, err := sle.SerializeOracle(oracleData)
+	data, err := state.SerializeOracle(oracleData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

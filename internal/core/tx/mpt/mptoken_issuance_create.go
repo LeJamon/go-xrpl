@@ -8,7 +8,7 @@ import (
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -122,7 +122,7 @@ func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	issuanceKey := keylet.MPTIssuance(mptID)
 
 	// Build the issuance entry
-	issuanceData := &sle.MPTokenIssuanceData{
+	issuanceData := &state.MPTokenIssuanceData{
 		Issuer:            ctx.AccountID,
 		Sequence:          sequence,
 		OutstandingAmount: 0,
@@ -143,7 +143,7 @@ func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Serialize and insert into ledger
-	data, err := sle.SerializeMPTokenIssuance(issuanceData)
+	data, err := state.SerializeMPTokenIssuance(issuanceData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -153,7 +153,7 @@ func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Insert into owner directory
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	_, err = sle.DirInsert(ctx.View, ownerDirKey, issuanceKey.Key, func(dir *sle.DirectoryNode) {
+	_, err = state.DirInsert(ctx.View, ownerDirKey, issuanceKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {

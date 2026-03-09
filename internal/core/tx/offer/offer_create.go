@@ -12,7 +12,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/payment"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/permissioneddomain"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // OfferCreate flag mask - invalid flags
@@ -352,7 +352,7 @@ func (o *OfferCreate) Preclaim(ctx *tx.ApplyContext) tx.Result {
 	// Check we can accept what the taker will pay us (for non-native)
 	// Reference: lines 203-213
 	if !saTakerPays.IsNative() {
-		paysIssuerID, err := sle.DecodeAccountID(uPaysIssuerID)
+		paysIssuerID, err := state.DecodeAccountID(uPaysIssuerID)
 		if err != nil {
 			return tx.TecNO_ISSUER
 		}
@@ -423,7 +423,7 @@ func (o *OfferCreate) ApplyCreate(ctx *tx.ApplyContext) tx.Result {
 	//   - OwnerCount: sandbox changes + ctx delta (offer placement/cancel)
 	accountKey := keylet.Account(ctx.AccountID)
 	if updatedData, readErr := ctx.View.Read(accountKey); readErr == nil && updatedData != nil {
-		if updatedAccount, parseErr := sle.ParseAccountRoot(updatedData); parseErr == nil {
+		if updatedAccount, parseErr := state.ParseAccountRoot(updatedData); parseErr == nil {
 			ctx.Account.Balance = updatedAccount.Balance
 			ctx.Account.OwnerCount = uint32(int32(updatedAccount.OwnerCount) + ctxDelta)
 		}
@@ -461,7 +461,7 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 
 	// Calculate the original rate (quality) for the offer
 	// Reference: line 601
-	uRate := sle.GetRate(saTakerGets, saTakerPays)
+	uRate := state.GetRate(saTakerGets, saTakerPays)
 	result := tx.TesSUCCESS
 
 	// Process cancellation request if specified
@@ -509,7 +509,7 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 		}
 
 		// Recalculate rate after tick size
-		uRate = sle.GetRate(saTakerGets, saTakerPays)
+		uRate = state.GetRate(saTakerGets, saTakerPays)
 
 		// Perform offer crossing using the main sandbox (sb)
 		// Reference: lines 687-768
@@ -619,9 +619,9 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 			// Delete from main sandbox
 			offerData, err := sb.Read(offerKeylet)
 			if err == nil && offerData != nil {
-				offer, err := sle.ParseLedgerOffer(offerData)
+				offer, err := state.ParseLedgerOffer(offerData)
 				if err == nil {
-					ownerID, err := sle.DecodeAccountID(offer.Account)
+					ownerID, err := state.DecodeAccountID(offer.Account)
 					if err == nil {
 						offerDeleteInView(sb, offer)
 						adjustOwnerCountInView(sb, ownerID, -1)
@@ -632,9 +632,9 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 			// Delete from cancel sandbox (same offer, independent view)
 			offerDataCancel, err := sbCancel.Read(offerKeylet)
 			if err == nil && offerDataCancel != nil {
-				offer, err := sle.ParseLedgerOffer(offerDataCancel)
+				offer, err := state.ParseLedgerOffer(offerDataCancel)
 				if err == nil {
-					ownerID, err := sle.DecodeAccountID(offer.Account)
+					ownerID, err := state.DecodeAccountID(offer.Account)
 					if err == nil {
 						_ = offerDeleteInView(sbCancel, offer)
 						adjustOwnerCountInView(sbCancel, ownerID, -1)
@@ -794,7 +794,7 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 	ownerCount := ctx.Account.OwnerCount
 	accountKey := keylet.Account(ctx.AccountID)
 	if sbAccountData, sbErr := sb.Read(accountKey); sbErr == nil && sbAccountData != nil {
-		if sbAccount, pErr := sle.ParseAccountRoot(sbAccountData); pErr == nil {
+		if sbAccount, pErr := state.ParseAccountRoot(sbAccountData); pErr == nil {
 			ownerCount = sbAccount.OwnerCount
 		}
 	}
@@ -814,10 +814,10 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 	// Calculate book directory fields first (needed for both owner and book directories
 	// when SortedDirectories is not enabled)
 	// Reference: lines 857-887
-	takerPaysCurrency := sle.GetCurrencyBytes(saTakerPays.Currency)
-	takerPaysIssuer := sle.GetIssuerBytes(saTakerPays.Issuer)
-	takerGetsCurrency := sle.GetCurrencyBytes(saTakerGets.Currency)
-	takerGetsIssuer := sle.GetIssuerBytes(saTakerGets.Issuer)
+	takerPaysCurrency := state.GetCurrencyBytes(saTakerPays.Currency)
+	takerPaysIssuer := state.GetIssuerBytes(saTakerPays.Issuer)
+	takerGetsCurrency := state.GetCurrencyBytes(saTakerGets.Currency)
+	takerGetsIssuer := state.GetIssuerBytes(saTakerGets.Issuer)
 
 	// Domain offers go in a separate domain-keyed book directory.
 	// Reference: rippled Indexes.cpp getBookBase() includes domain in hash when set
@@ -832,7 +832,7 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 	// Add to owner directory
 	// Reference: lines 839-848
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	ownerDirResult, err := sle.DirInsert(sb, ownerDirKey, offerKey.Key, func(dir *sle.DirectoryNode) {
+	ownerDirResult, err := state.DirInsert(sb, ownerDirKey, offerKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
@@ -848,7 +848,7 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 
 	// Add to book directory
 	// Reference: lines 884-893
-	bookDirResult, err := sle.DirInsert(sb, bookDirKey, offerKey.Key, func(dir *sle.DirectoryNode) {
+	bookDirResult, err := state.DirInsert(sb, bookDirKey, offerKey.Key, func(dir *state.DirectoryNode) {
 		dir.TakerPaysCurrency = takerPaysCurrency
 		dir.TakerPaysIssuer = takerPaysIssuer
 		dir.TakerGetsCurrency = takerGetsCurrency
@@ -862,7 +862,7 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 
 	// Create the offer SLE
 	// Reference: lines 895-910
-	ledgerOffer := &sle.LedgerOffer{
+	ledgerOffer := &state.LedgerOffer{
 		Account:           ctx.Account.Account,
 		Sequence:          offerSequence,
 		TakerPays:         saTakerPays,
@@ -905,7 +905,7 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 	}
 
 	// Serialize and store the offer
-	offerData, err := sle.SerializeLedgerOffer(ledgerOffer)
+	offerData, err := state.SerializeLedgerOffer(ledgerOffer)
 	if err != nil {
 		return tx.TefINTERNAL, false
 	}
@@ -1160,7 +1160,7 @@ func offerDivRound(num, den tx.Amount, native bool, currency, issuer string, rou
 		if numVal < 0 {
 			numVal = -numVal
 		}
-		for numVal < sle.MinMantissa {
+		for numVal < state.MinMantissa {
 			numVal *= 10
 			numOff--
 		}
@@ -1169,7 +1169,7 @@ func offerDivRound(num, den tx.Amount, native bool, currency, issuer string, rou
 		if denVal < 0 {
 			denVal = -denVal
 		}
-		for denVal < sle.MinMantissa {
+		for denVal < state.MinMantissa {
 			denVal *= 10
 			denOff--
 		}
@@ -1204,8 +1204,8 @@ func offerDivRound(num, den tx.Amount, native bool, currency, issuer string, rou
 			return tx.NewXRPAmount(drops)
 		}
 		// canonicalizeRound for IOU
-		if amount > uint64(sle.MaxMantissa) {
-			for amount > 10*uint64(sle.MaxMantissa) {
+		if amount > uint64(state.MaxMantissa) {
+			for amount > 10*uint64(state.MaxMantissa) {
 				amount /= 10
 				offset++
 			}
@@ -1235,13 +1235,13 @@ func offerDivRound(num, den tx.Amount, native bool, currency, issuer string, rou
 	if resultNegative {
 		mantissa = -mantissa
 	}
-	result := sle.NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
+	result := state.NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
 
 	if roundUp && !resultNegative && result.IsZero() {
 		if native {
 			return tx.NewXRPAmount(1)
 		}
-		return sle.NewIssuedAmountFromValue(sle.MinMantissa, sle.MinExponent, currency, issuer)
+		return state.NewIssuedAmountFromValue(state.MinMantissa, state.MinExponent, currency, issuer)
 	}
 
 	return result
@@ -1267,7 +1267,7 @@ func offerDivRoundStrict(num, den tx.Amount, native bool, currency, issuer strin
 		if numVal < 0 {
 			numVal = -numVal
 		}
-		for numVal < sle.MinMantissa {
+		for numVal < state.MinMantissa {
 			numVal *= 10
 			numOff--
 		}
@@ -1276,7 +1276,7 @@ func offerDivRoundStrict(num, den tx.Amount, native bool, currency, issuer strin
 		if denVal < 0 {
 			denVal = -denVal
 		}
-		for denVal < sle.MinMantissa {
+		for denVal < state.MinMantissa {
 			denVal *= 10
 			denOff--
 		}
@@ -1313,8 +1313,8 @@ func offerDivRoundStrict(num, den tx.Amount, native bool, currency, issuer strin
 			return tx.NewXRPAmount(drops)
 		}
 		// canonicalizeRoundStrict for IOU
-		if amount > uint64(sle.MaxMantissa) {
-			for amount > 10*uint64(sle.MaxMantissa) {
+		if amount > uint64(state.MaxMantissa) {
+			for amount > 10*uint64(state.MaxMantissa) {
 				amount /= 10
 				offset++
 			}
@@ -1340,25 +1340,25 @@ func offerDivRoundStrict(num, den tx.Amount, native bool, currency, issuer strin
 	}
 
 	// NumberRoundModeGuard with appropriate mode
-	var mode sle.RoundingMode
+	var mode state.RoundingMode
 	if roundUp != resultNegative {
-		mode = sle.RoundUpward
+		mode = state.RoundUpward
 	} else {
-		mode = sle.RoundDownward
+		mode = state.RoundDownward
 	}
-	guard := sle.NewNumberRoundModeGuard(mode)
+	guard := state.NewNumberRoundModeGuard(mode)
 	mantissa := int64(amount)
 	if resultNegative {
 		mantissa = -mantissa
 	}
-	result := sle.NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
+	result := state.NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
 	guard.Release()
 
 	if roundUp && !resultNegative && result.IsZero() {
 		if native {
 			return tx.NewXRPAmount(1)
 		}
-		return sle.NewIssuedAmountFromValue(sle.MinMantissa, sle.MinExponent, currency, issuer)
+		return state.NewIssuedAmountFromValue(state.MinMantissa, state.MinExponent, currency, issuer)
 	}
 
 	return result
@@ -1384,7 +1384,7 @@ func offerMulRound(v1, v2 tx.Amount, native bool, currency, issuer string, round
 		if value1 < 0 {
 			value1 = -value1
 		}
-		for value1 < sle.MinMantissa {
+		for value1 < state.MinMantissa {
 			value1 *= 10
 			offset1--
 		}
@@ -1393,7 +1393,7 @@ func offerMulRound(v1, v2 tx.Amount, native bool, currency, issuer string, round
 		if value2 < 0 {
 			value2 = -value2
 		}
-		for value2 < sle.MinMantissa {
+		for value2 < state.MinMantissa {
 			value2 *= 10
 			offset2--
 		}
@@ -1430,8 +1430,8 @@ func offerMulRound(v1, v2 tx.Amount, native bool, currency, issuer string, round
 			return tx.NewXRPAmount(drops)
 		}
 		// canonicalizeRound for IOU
-		if amount > uint64(sle.MaxMantissa) {
-			for amount > 10*uint64(sle.MaxMantissa) {
+		if amount > uint64(state.MaxMantissa) {
+			for amount > 10*uint64(state.MaxMantissa) {
 				amount /= 10
 				offset++
 			}
@@ -1461,13 +1461,13 @@ func offerMulRound(v1, v2 tx.Amount, native bool, currency, issuer string, round
 	if resultNegative {
 		mantissa = -mantissa
 	}
-	result := sle.NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
+	result := state.NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
 
 	if roundUp && !resultNegative && result.IsZero() {
 		if native {
 			return tx.NewXRPAmount(1)
 		}
-		return sle.NewIssuedAmountFromValue(sle.MinMantissa, sle.MinExponent, currency, issuer)
+		return state.NewIssuedAmountFromValue(state.MinMantissa, state.MinExponent, currency, issuer)
 	}
 
 	return result
@@ -1492,7 +1492,7 @@ func checkAcceptAsset(ctx *tx.ApplyContext, issuerID [20]byte, currency string, 
 		return tx.TecNO_ISSUER
 	}
 
-	issuerAccount, err := sle.ParseAccountRoot(issuerData)
+	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
 		return tx.TecNO_ISSUER
 	}
@@ -1505,25 +1505,25 @@ func checkAcceptAsset(ctx *tx.ApplyContext, issuerID [20]byte, currency string, 
 
 	// Check RequireAuth flag on issuer
 	// Reference: lines 258-282
-	if (issuerAccount.Flags & sle.LsfRequireAuth) != 0 {
+	if (issuerAccount.Flags & state.LsfRequireAuth) != 0 {
 		trustLineKey := keylet.Line(ctx.AccountID, issuerID, currency)
 		trustLineData, err := ctx.View.Read(trustLineKey)
 		if err != nil || trustLineData == nil {
 			return tx.TecNO_LINE
 		}
 
-		rs, err := sle.ParseRippleState(trustLineData)
+		rs, err := state.ParseRippleState(trustLineData)
 		if err != nil {
 			return tx.TecNO_LINE
 		}
 
 		// Check authorization based on canonical ordering
-		canonicalGT := sle.CompareAccountIDsForLine(ctx.AccountID, issuerID) > 0
+		canonicalGT := state.CompareAccountIDsForLine(ctx.AccountID, issuerID) > 0
 		var isAuthorized bool
 		if canonicalGT {
-			isAuthorized = (rs.Flags & sle.LsfLowAuth) != 0
+			isAuthorized = (rs.Flags & state.LsfLowAuth) != 0
 		} else {
-			isAuthorized = (rs.Flags & sle.LsfHighAuth) != 0
+			isAuthorized = (rs.Flags & state.LsfHighAuth) != 0
 		}
 
 		if !isAuthorized {
@@ -1546,13 +1546,13 @@ func checkAcceptAsset(ctx *tx.ApplyContext, issuerID [20]byte, currency string, 
 		return tx.TesSUCCESS
 	}
 
-	rs, err := sle.ParseRippleState(trustLineData)
+	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
 		return tx.TesSUCCESS
 	}
 
 	// Check deep freeze
-	deepFrozen := (rs.Flags & (sle.LsfLowDeepFreeze | sle.LsfHighDeepFreeze)) != 0
+	deepFrozen := (rs.Flags & (state.LsfLowDeepFreeze | state.LsfHighDeepFreeze)) != 0
 	if deepFrozen {
 		return tx.TecFROZEN
 	}
@@ -1593,7 +1593,7 @@ func applyTickSize(view tx.LedgerView, takerPays, takerGets tx.Amount, bSell boo
 
 	// Apply tick size rounding
 	// Reference: lines 660-685
-	quality := sle.CalculateQuality(takerGets, takerPays)
+	quality := state.CalculateQuality(takerGets, takerPays)
 	roundedQuality := roundToTickSize(quality, tickSize)
 
 	if bSell {
@@ -1613,7 +1613,7 @@ func getTickSize(view tx.LedgerView, issuerAddress string) uint8 {
 		return 0
 	}
 
-	issuerID, err := sle.DecodeAccountID(issuerAddress)
+	issuerID, err := state.DecodeAccountID(issuerAddress)
 	if err != nil {
 		return 0
 	}
@@ -1624,7 +1624,7 @@ func getTickSize(view tx.LedgerView, issuerAddress string) uint8 {
 		return 0
 	}
 
-	account, err := sle.ParseAccountRoot(data)
+	account, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return 0
 	}
@@ -1864,14 +1864,14 @@ func ratToIssuedAmount(rat *big.Rat, currency, issuer string, roundUp bool) tx.A
 }
 
 // peekOffer reads an offer from the ledger without modifying it.
-func peekOffer(view tx.LedgerView, accountID [20]byte, sequence uint32) *sle.LedgerOffer {
+func peekOffer(view tx.LedgerView, accountID [20]byte, sequence uint32) *state.LedgerOffer {
 	offerKey := keylet.Offer(accountID, sequence)
 	data, err := view.Read(offerKey)
 	if err != nil || data == nil {
 		return nil
 	}
 
-	offer, err := sle.ParseLedgerOffer(data)
+	offer, err := state.ParseLedgerOffer(data)
 	if err != nil {
 		return nil
 	}
@@ -1881,7 +1881,7 @@ func peekOffer(view tx.LedgerView, accountID [20]byte, sequence uint32) *sle.Led
 
 // offerDelete removes an offer from the ledger.
 // Reference: rippled ledger/View.h offerDelete()
-func offerDelete(ctx *tx.ApplyContext, offer *sle.LedgerOffer) tx.Result {
+func offerDelete(ctx *tx.ApplyContext, offer *state.LedgerOffer) tx.Result {
 	result := offerDeleteInView(ctx.View, offer)
 	if result == tx.TesSUCCESS {
 		// Decrement owner count only on success
@@ -1894,9 +1894,9 @@ func offerDelete(ctx *tx.ApplyContext, offer *sle.LedgerOffer) tx.Result {
 
 // offerDeleteInView removes an offer from the given view without modifying account state.
 // This is used by the two-sandbox pattern to delete offers in both sandboxes.
-func offerDeleteInView(view tx.LedgerView, offer *sle.LedgerOffer) tx.Result {
+func offerDeleteInView(view tx.LedgerView, offer *state.LedgerOffer) tx.Result {
 	// Get offer key
-	accountID, err := sle.DecodeAccountID(offer.Account)
+	accountID, err := state.DecodeAccountID(offer.Account)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -1904,14 +1904,14 @@ func offerDeleteInView(view tx.LedgerView, offer *sle.LedgerOffer) tx.Result {
 
 	// Remove from owner directory
 	ownerDirKey := keylet.OwnerDir(accountID)
-	_, err = sle.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKey.Key, false)
+	_, err = state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKey.Key, false)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
 	// Remove from book directory
 	bookDirKey := keylet.Keylet{Type: 100, Key: offer.BookDirectory}
-	_, err = sle.DirRemove(view, bookDirKey, offer.BookNode, offerKey.Key, false)
+	_, err = state.DirRemove(view, bookDirKey, offer.BookNode, offerKey.Key, false)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -1935,7 +1935,7 @@ func adjustOwnerCountInView(view tx.LedgerView, accountID [20]byte, delta int) {
 		return
 	}
 
-	account, err := sle.ParseAccountRoot(data)
+	account, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return
 	}
@@ -1946,7 +1946,7 @@ func adjustOwnerCountInView(view tx.LedgerView, accountID [20]byte, delta int) {
 		account.OwnerCount++
 	}
 
-	updated, err := sle.SerializeAccountRoot(account)
+	updated, err := state.SerializeAccountRoot(account)
 	if err != nil {
 		return
 	}
@@ -1977,29 +1977,29 @@ func parseFee(ctx *tx.ApplyContext) uint64 {
 
 // applyHybrid handles hybrid offer placement for permissioned DEX.
 // Reference: rippled CreateOffer.cpp applyHybrid() lines 528-573
-func applyHybrid(ctx *tx.ApplyContext, offer *sle.LedgerOffer, offerKey keylet.Keylet, takerPays, takerGets tx.Amount, domainBookDir keylet.Keylet) tx.Result {
+func applyHybrid(ctx *tx.ApplyContext, offer *state.LedgerOffer, offerKey keylet.Keylet, takerPays, takerGets tx.Amount, domainBookDir keylet.Keylet) tx.Result {
 	return applyHybridInSandbox(ctx.View, ctx, offer, offerKey, takerPays, takerGets, domainBookDir)
 }
 
 // applyHybridInSandbox handles hybrid offer placement in a specific view/sandbox.
 // Reference: rippled CreateOffer.cpp applyHybrid() lines 528-573
-func applyHybridInSandbox(view tx.LedgerView, ctx *tx.ApplyContext, offer *sle.LedgerOffer, offerKey keylet.Keylet, takerPays, takerGets tx.Amount, domainBookDir keylet.Keylet) tx.Result {
+func applyHybridInSandbox(view tx.LedgerView, ctx *tx.ApplyContext, offer *state.LedgerOffer, offerKey keylet.Keylet, takerPays, takerGets tx.Amount, domainBookDir keylet.Keylet) tx.Result {
 	// Set hybrid flag
 	offer.Flags |= lsfHybrid
 
 	// Also place in open book (without domain)
-	takerPaysCurrency := sle.GetCurrencyBytes(takerPays.Currency)
-	takerPaysIssuer := sle.GetIssuerBytes(takerPays.Issuer)
-	takerGetsCurrency := sle.GetCurrencyBytes(takerGets.Currency)
-	takerGetsIssuer := sle.GetIssuerBytes(takerGets.Issuer)
+	takerPaysCurrency := state.GetCurrencyBytes(takerPays.Currency)
+	takerPaysIssuer := state.GetIssuerBytes(takerPays.Issuer)
+	takerGetsCurrency := state.GetCurrencyBytes(takerGets.Currency)
+	takerGetsIssuer := state.GetIssuerBytes(takerGets.Issuer)
 
-	uRate := sle.GetRate(takerGets, takerPays)
+	uRate := state.GetRate(takerGets, takerPays)
 
 	bookBase := keylet.BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer)
 	openBookDirKey := keylet.Quality(bookBase, uRate)
 
 	// Add to open book directory
-	bookDirResult, err := sle.DirInsert(view, openBookDirKey, offerKey.Key, func(dir *sle.DirectoryNode) {
+	bookDirResult, err := state.DirInsert(view, openBookDirKey, offerKey.Key, func(dir *state.DirectoryNode) {
 		dir.TakerPaysCurrency = takerPaysCurrency
 		dir.TakerPaysIssuer = takerPaysIssuer
 		dir.TakerGetsCurrency = takerGetsCurrency

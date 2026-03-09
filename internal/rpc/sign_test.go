@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
+	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
+	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,10 +16,10 @@ import (
 // =============================================================================
 
 func TestWalletPropose_RandomGeneration(t *testing.T) {
-	handler := &rpc_handlers.WalletProposeMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.WalletProposeMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Generate wallet with no parameters (random seed)
@@ -50,10 +50,10 @@ func TestWalletPropose_RandomGeneration(t *testing.T) {
 }
 
 func TestWalletPropose_RandomGenerationEd25519(t *testing.T) {
-	handler := &rpc_handlers.WalletProposeMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.WalletProposeMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{"key_type": "ed25519"}`)
@@ -70,10 +70,10 @@ func TestWalletPropose_RandomGenerationEd25519(t *testing.T) {
 }
 
 func TestWalletPropose_FromPassphrase(t *testing.T) {
-	handler := &rpc_handlers.WalletProposeMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.WalletProposeMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Using the well-known masterpassphrase
@@ -99,10 +99,10 @@ func TestWalletPropose_FromPassphrase(t *testing.T) {
 }
 
 func TestWalletPropose_FromPassphraseEd25519(t *testing.T) {
-	handler := &rpc_handlers.WalletProposeMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.WalletProposeMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -119,10 +119,10 @@ func TestWalletPropose_FromPassphraseEd25519(t *testing.T) {
 }
 
 func TestWalletPropose_FromSeed(t *testing.T) {
-	handler := &rpc_handlers.WalletProposeMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.WalletProposeMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Valid secp256k1 seed
@@ -141,10 +141,10 @@ func TestWalletPropose_FromSeed(t *testing.T) {
 }
 
 func TestWalletPropose_FromSeedHex(t *testing.T) {
-	handler := &rpc_handlers.WalletProposeMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.WalletProposeMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// 16-byte hex seed
@@ -158,52 +158,52 @@ func TestWalletPropose_FromSeedHex(t *testing.T) {
 }
 
 func TestWalletPropose_InvalidKeyType(t *testing.T) {
-	handler := &rpc_handlers.WalletProposeMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.WalletProposeMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{"key_type": "invalid"}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcBAD_KEY_TYPE, err.Code)
+	assert.Equal(t, types.RpcBAD_KEY_TYPE, err.Code)
 	assert.Equal(t, "badKeyType", err.ErrorString)
 }
 
 func TestWalletPropose_InvalidSeed(t *testing.T) {
-	handler := &rpc_handlers.WalletProposeMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.WalletProposeMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{"seed": "invalid_seed"}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcBAD_SEED, err.Code)
+	assert.Equal(t, types.RpcBAD_SEED, err.Code)
 	assert.Equal(t, "badSeed", err.ErrorString)
 }
 
 func TestWalletPropose_InvalidSeedHex(t *testing.T) {
-	handler := &rpc_handlers.WalletProposeMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.WalletProposeMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Invalid hex (not 16 bytes)
 	params := json.RawMessage(`{"seed_hex": "DEADBEEF"}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcBAD_SEED, err.Code)
+	assert.Equal(t, types.RpcBAD_SEED, err.Code)
 }
 
 func TestWalletPropose_SeedKeyTypeMismatch(t *testing.T) {
-	handler := &rpc_handlers.WalletProposeMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.WalletProposeMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Ed25519 seed with secp256k1 key_type should fail
@@ -214,14 +214,14 @@ func TestWalletPropose_SeedKeyTypeMismatch(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcBAD_SEED, err.Code)
+	assert.Equal(t, types.RpcBAD_SEED, err.Code)
 }
 
 func TestWalletPropose_LowEntropyPassphrase(t *testing.T) {
-	handler := &rpc_handlers.WalletProposeMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.WalletProposeMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Short passphrase should have low entropy warning
@@ -236,17 +236,17 @@ func TestWalletPropose_LowEntropyPassphrase(t *testing.T) {
 }
 
 func TestWalletPropose_Metadata(t *testing.T) {
-	handler := &rpc_handlers.WalletProposeMethod{}
+	handler := &handlers.WalletProposeMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, rpc_types.RoleGuest, handler.RequiredRole())
+		assert.Equal(t, types.RoleGuest, handler.RequiredRole())
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {
 		versions := handler.SupportedApiVersions()
-		assert.Contains(t, versions, rpc_types.ApiVersion1)
-		assert.Contains(t, versions, rpc_types.ApiVersion2)
-		assert.Contains(t, versions, rpc_types.ApiVersion3)
+		assert.Contains(t, versions, types.ApiVersion1)
+		assert.Contains(t, versions, types.ApiVersion2)
+		assert.Contains(t, versions, types.ApiVersion3)
 	})
 }
 
@@ -259,16 +259,16 @@ func TestSign_MissingTxJson(t *testing.T) {
 	cleanup := setupTestServices(mock)
 	defer cleanup()
 
-	handler := &rpc_handlers.SignMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{"secret": "sn3nxiW7v8KXzPzAqzyHXbSSKNuN9"}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "tx_json")
 }
 
@@ -277,10 +277,10 @@ func TestSign_MissingCredentials(t *testing.T) {
 	cleanup := setupTestServices(mock)
 	defer cleanup()
 
-	handler := &rpc_handlers.SignMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -293,7 +293,7 @@ func TestSign_MissingCredentials(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "signing credentials")
 }
 
@@ -302,10 +302,10 @@ func TestSign_InvalidKeyType(t *testing.T) {
 	cleanup := setupTestServices(mock)
 	defer cleanup()
 
-	handler := &rpc_handlers.SignMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -320,7 +320,7 @@ func TestSign_InvalidKeyType(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcBAD_KEY_TYPE, err.Code)
+	assert.Equal(t, types.RpcBAD_KEY_TYPE, err.Code)
 }
 
 func TestSign_InvalidSeed(t *testing.T) {
@@ -328,10 +328,10 @@ func TestSign_InvalidSeed(t *testing.T) {
 	cleanup := setupTestServices(mock)
 	defer cleanup()
 
-	handler := &rpc_handlers.SignMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -345,7 +345,7 @@ func TestSign_InvalidSeed(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcBAD_SEED, err.Code)
+	assert.Equal(t, types.RpcBAD_SEED, err.Code)
 }
 
 func TestSign_AccountMismatch(t *testing.T) {
@@ -353,10 +353,10 @@ func TestSign_AccountMismatch(t *testing.T) {
 	cleanup := setupTestServices(mock)
 	defer cleanup()
 
-	handler := &rpc_handlers.SignMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Account in tx_json doesn't match the key derived from seed_hex
@@ -371,20 +371,20 @@ func TestSign_AccountMismatch(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "does not match")
 }
 
 func TestSign_LedgerServiceUnavailable(t *testing.T) {
 	// Services set to nil
-	oldServices := rpc_types.Services
-	rpc_types.Services = nil
-	defer func() { rpc_types.Services = oldServices }()
+	oldServices := types.Services
+	types.Services = nil
+	defer func() { types.Services = oldServices }()
 
-	handler := &rpc_handlers.SignMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -398,20 +398,20 @@ func TestSign_LedgerServiceUnavailable(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcINTERNAL, err.Code)
+	assert.Equal(t, types.RpcINTERNAL, err.Code)
 	assert.Contains(t, err.Message, "Ledger service not available")
 }
 
 func TestSign_OfflineMode(t *testing.T) {
 	// No services needed for offline mode
-	oldServices := rpc_types.Services
-	rpc_types.Services = nil
-	defer func() { rpc_types.Services = oldServices }()
+	oldServices := types.Services
+	types.Services = nil
+	defer func() { types.Services = oldServices }()
 
-	handler := &rpc_handlers.SignMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Use passphrase and provide all required fields
@@ -444,17 +444,17 @@ func TestSign_OfflineMode(t *testing.T) {
 }
 
 func TestSign_Metadata(t *testing.T) {
-	handler := &rpc_handlers.SignMethod{}
+	handler := &handlers.SignMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, rpc_types.RoleUser, handler.RequiredRole())
+		assert.Equal(t, types.RoleUser, handler.RequiredRole())
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {
 		versions := handler.SupportedApiVersions()
-		assert.Contains(t, versions, rpc_types.ApiVersion1)
-		assert.Contains(t, versions, rpc_types.ApiVersion2)
-		assert.Contains(t, versions, rpc_types.ApiVersion3)
+		assert.Contains(t, versions, types.ApiVersion1)
+		assert.Contains(t, versions, types.ApiVersion2)
+		assert.Contains(t, versions, types.ApiVersion3)
 	})
 }
 
@@ -463,10 +463,10 @@ func TestSign_Metadata(t *testing.T) {
 // =============================================================================
 
 func TestSignFor_MissingAccount(t *testing.T) {
-	handler := &rpc_handlers.SignForMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SignForMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -484,10 +484,10 @@ func TestSignFor_MissingAccount(t *testing.T) {
 }
 
 func TestSignFor_MissingTxJson(t *testing.T) {
-	handler := &rpc_handlers.SignForMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SignForMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -500,10 +500,10 @@ func TestSignFor_MissingTxJson(t *testing.T) {
 }
 
 func TestSignFor_MissingCredentials(t *testing.T) {
-	handler := &rpc_handlers.SignForMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SignForMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -521,10 +521,10 @@ func TestSignFor_MissingCredentials(t *testing.T) {
 }
 
 func TestSignFor_InvalidAccountAddress(t *testing.T) {
-	handler := &rpc_handlers.SignForMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SignForMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -539,15 +539,15 @@ func TestSignFor_InvalidAccountAddress(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcACT_MALFORMED, err.Code)
+	assert.Equal(t, types.RpcACT_MALFORMED, err.Code)
 	assert.Equal(t, "actMalformed", err.ErrorString)
 }
 
 func TestSignFor_InvalidKeyType(t *testing.T) {
-	handler := &rpc_handlers.SignForMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SignForMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -563,24 +563,24 @@ func TestSignFor_InvalidKeyType(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcBAD_KEY_TYPE, err.Code)
+	assert.Equal(t, types.RpcBAD_KEY_TYPE, err.Code)
 }
 
 func TestSignFor_ValidMultiSign(t *testing.T) {
 	// First generate a wallet to get the signer's account address from passphrase
-	proposeHandler := &rpc_handlers.WalletProposeMethod{}
-	proposeCtx := &rpc_types.RpcContext{
+	proposeHandler := &handlers.WalletProposeMethod{}
+	proposeCtx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 	proposeResult, proposeErr := proposeHandler.Handle(proposeCtx, json.RawMessage(`{"passphrase": "masterpassphrase"}`))
 	require.Nil(t, proposeErr)
 	signerAccount := proposeResult.(map[string]interface{})["account_id"].(string)
 
-	handler := &rpc_handlers.SignForMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SignForMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	paramsMap := map[string]interface{}{
@@ -616,17 +616,17 @@ func TestSignFor_ValidMultiSign(t *testing.T) {
 }
 
 func TestSignFor_Metadata(t *testing.T) {
-	handler := &rpc_handlers.SignForMethod{}
+	handler := &handlers.SignForMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, rpc_types.RoleUser, handler.RequiredRole())
+		assert.Equal(t, types.RoleUser, handler.RequiredRole())
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {
 		versions := handler.SupportedApiVersions()
-		assert.Contains(t, versions, rpc_types.ApiVersion1)
-		assert.Contains(t, versions, rpc_types.ApiVersion2)
-		assert.Contains(t, versions, rpc_types.ApiVersion3)
+		assert.Contains(t, versions, types.ApiVersion1)
+		assert.Contains(t, versions, types.ApiVersion2)
+		assert.Contains(t, versions, types.ApiVersion3)
 	})
 }
 
@@ -639,10 +639,10 @@ func TestSubmitMultisigned_MissingTxJson(t *testing.T) {
 	cleanup := setupTestServicesSubmit(mock)
 	defer cleanup()
 
-	handler := &rpc_handlers.SubmitMultisignedMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SubmitMultisignedMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{}`)
@@ -656,10 +656,10 @@ func TestSubmitMultisigned_MissingAccount(t *testing.T) {
 	cleanup := setupTestServicesSubmit(mock)
 	defer cleanup()
 
-	handler := &rpc_handlers.SubmitMultisignedMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SubmitMultisignedMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -681,10 +681,10 @@ func TestSubmitMultisigned_NonEmptySigningPubKey(t *testing.T) {
 	cleanup := setupTestServicesSubmit(mock)
 	defer cleanup()
 
-	handler := &rpc_handlers.SubmitMultisignedMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SubmitMultisignedMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -707,10 +707,10 @@ func TestSubmitMultisigned_EmptySignersArray(t *testing.T) {
 	cleanup := setupTestServicesSubmit(mock)
 	defer cleanup()
 
-	handler := &rpc_handlers.SubmitMultisignedMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SubmitMultisignedMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -733,10 +733,10 @@ func TestSubmitMultisigned_InvalidSignerFormat(t *testing.T) {
 	cleanup := setupTestServicesSubmit(mock)
 	defer cleanup()
 
-	handler := &rpc_handlers.SubmitMultisignedMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SubmitMultisignedMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -763,10 +763,10 @@ func TestSubmitMultisigned_MissingSignerAccount(t *testing.T) {
 	cleanup := setupTestServicesSubmit(mock)
 	defer cleanup()
 
-	handler := &rpc_handlers.SubmitMultisignedMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SubmitMultisignedMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -796,10 +796,10 @@ func TestSubmitMultisigned_MissingSigningPubKey(t *testing.T) {
 	cleanup := setupTestServicesSubmit(mock)
 	defer cleanup()
 
-	handler := &rpc_handlers.SubmitMultisignedMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SubmitMultisignedMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -829,10 +829,10 @@ func TestSubmitMultisigned_MissingTxnSignature(t *testing.T) {
 	cleanup := setupTestServicesSubmit(mock)
 	defer cleanup()
 
-	handler := &rpc_handlers.SubmitMultisignedMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SubmitMultisignedMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -862,10 +862,10 @@ func TestSubmitMultisigned_SignersNotSorted(t *testing.T) {
 	cleanup := setupTestServicesSubmit(mock)
 	defer cleanup()
 
-	handler := &rpc_handlers.SubmitMultisignedMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SubmitMultisignedMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Signers not sorted by account (rP... < rH... is false alphabetically)
@@ -902,14 +902,14 @@ func TestSubmitMultisigned_SignersNotSorted(t *testing.T) {
 }
 
 func TestSubmitMultisigned_LedgerServiceUnavailable(t *testing.T) {
-	oldServices := rpc_types.Services
-	rpc_types.Services = nil
-	defer func() { rpc_types.Services = oldServices }()
+	oldServices := types.Services
+	types.Services = nil
+	defer func() { types.Services = oldServices }()
 
-	handler := &rpc_handlers.SubmitMultisignedMethod{}
-	ctx := &rpc_types.RpcContext{
+	handler := &handlers.SubmitMultisignedMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		ApiVersion: rpc_types.ApiVersion1,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -936,16 +936,16 @@ func TestSubmitMultisigned_LedgerServiceUnavailable(t *testing.T) {
 }
 
 func TestSubmitMultisigned_Metadata(t *testing.T) {
-	handler := &rpc_handlers.SubmitMultisignedMethod{}
+	handler := &handlers.SubmitMultisignedMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, rpc_types.RoleUser, handler.RequiredRole())
+		assert.Equal(t, types.RoleUser, handler.RequiredRole())
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {
 		versions := handler.SupportedApiVersions()
-		assert.Contains(t, versions, rpc_types.ApiVersion1)
-		assert.Contains(t, versions, rpc_types.ApiVersion2)
-		assert.Contains(t, versions, rpc_types.ApiVersion3)
+		assert.Contains(t, versions, types.ApiVersion1)
+		assert.Contains(t, versions, types.ApiVersion2)
+		assert.Contains(t, versions, types.ApiVersion3)
 	})
 }

@@ -7,7 +7,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -105,7 +105,7 @@ func (p *PermissionedDomainDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecNO_ENTRY
 	}
 
-	existing, err := sle.ParsePermissionedDomain(existingData)
+	existing, err := state.ParsePermissionedDomain(existingData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -119,7 +119,7 @@ func (p *PermissionedDomainDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Remove from owner directory
 	// Reference: rippled PermissionedDomainDelete.cpp doApply()
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	if _, err := sle.DirRemove(ctx.View, ownerDirKey, existing.OwnerNode, domainKeylet.Key, false); err != nil {
+	if _, err := state.DirRemove(ctx.View, ownerDirKey, existing.OwnerNode, domainKeylet.Key, false); err != nil {
 		return tx.TefBAD_LEDGER
 	}
 

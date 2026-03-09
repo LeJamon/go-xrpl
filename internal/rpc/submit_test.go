@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
+	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
+	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,7 +15,7 @@ import (
 // mockLedgerServiceSubmit extends mockLedgerService with submit-specific behavior
 type mockLedgerServiceSubmit struct {
 	*mockLedgerService
-	submitResult *rpc_types.SubmitResult
+	submitResult *types.SubmitResult
 	submitError  error
 	storedTxs    map[string][]byte
 }
@@ -24,7 +24,7 @@ func newMockLedgerServiceSubmit() *mockLedgerServiceSubmit {
 	return &mockLedgerServiceSubmit{
 		mockLedgerService: newMockLedgerService(),
 		storedTxs:         make(map[string][]byte),
-		submitResult: &rpc_types.SubmitResult{
+		submitResult: &types.SubmitResult{
 			EngineResult:        "tesSUCCESS",
 			EngineResultCode:    0,
 			EngineResultMessage: "The transaction was applied. Only final in a validated ledger.",
@@ -36,7 +36,7 @@ func newMockLedgerServiceSubmit() *mockLedgerServiceSubmit {
 	}
 }
 
-func (m *mockLedgerServiceSubmit) SubmitTransaction(txJSON []byte) (*rpc_types.SubmitResult, error) {
+func (m *mockLedgerServiceSubmit) SubmitTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	if m.submitError != nil {
 		return nil, m.submitError
 	}
@@ -52,12 +52,12 @@ func (m *mockLedgerServiceSubmit) StoreTransaction(txHash [32]byte, txData []byt
 
 // setupTestServicesSubmit initializes the Services singleton with a submit mock for testing
 func setupTestServicesSubmit(mock *mockLedgerServiceSubmit) func() {
-	oldServices := rpc_types.Services
-	rpc_types.Services = &rpc_types.ServiceContainer{
+	oldServices := types.Services
+	types.Services = &types.ServiceContainer{
 		Ledger: mock,
 	}
 	return func() {
-		rpc_types.Services = oldServices
+		types.Services = oldServices
 	}
 }
 
@@ -67,11 +67,11 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 	cleanup := setupTestServicesSubmit(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.SubmitMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.SubmitMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleUser,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	tests := []struct {
@@ -85,13 +85,13 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 			name:          "Missing tx_blob and tx_json - empty params",
 			params:        map[string]interface{}{},
 			expectedError: "Either tx_blob or tx_json must be provided",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing tx_blob and tx_json - nil params",
 			params:        nil,
 			expectedError: "Either tx_blob or tx_json must be provided",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Empty tx_blob",
@@ -99,7 +99,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 				"tx_blob": "",
 			},
 			expectedError: "Either tx_blob or tx_json must be provided",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid tx_blob type - integer",
@@ -107,7 +107,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 				"tx_blob": 12345,
 			},
 			expectedError: "Invalid parameters",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid tx_blob type - boolean",
@@ -115,7 +115,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 				"tx_blob": true,
 			},
 			expectedError: "Invalid parameters",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid tx_blob type - array",
@@ -123,7 +123,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 				"tx_blob": []string{"hex1", "hex2"},
 			},
 			expectedError: "Invalid parameters",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "tx_blob submission not implemented",
@@ -131,7 +131,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 				"tx_blob": "1200002200000000240000000161D4838D7EA4C6800000000000000000000000000055534400000000000000000000000000000000000000000000000168400000000000000A732103AB40A0490F9B7ED8DF29D246BF2D6269820A0EE7742ACDD457BEA7C7D0931EDB74473045022100",
 			},
 			expectedError: "tx_blob submission not yet implemented",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 	}
 
@@ -139,7 +139,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Reset mock state
 			mock.submitError = nil
-			mock.submitResult = &rpc_types.SubmitResult{
+			mock.submitResult = &types.SubmitResult{
 				EngineResult:        "tesSUCCESS",
 				EngineResultCode:    0,
 				EngineResultMessage: "The transaction was applied.",
@@ -181,17 +181,17 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 	cleanup := setupTestServicesSubmit(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.SubmitMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.SubmitMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleUser,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	tests := []struct {
 		name         string
 		txJson       map[string]interface{}
-		mockResult   *rpc_types.SubmitResult
+		mockResult   *types.SubmitResult
 		validateResp func(t *testing.T, resp map[string]interface{})
 	}{
 		{
@@ -206,7 +206,7 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 				"SigningPubKey":   "0330E7FC9D56BB25D6893BA3F317AE5BCF33B3291BD63DB32654A313222F7FD020",
 				"TxnSignature":    "3045022100...",
 			},
-			mockResult: &rpc_types.SubmitResult{
+			mockResult: &types.SubmitResult{
 				EngineResult:        "tesSUCCESS",
 				EngineResultCode:    0,
 				EngineResultMessage: "The transaction was applied. Only final in a validated ledger.",
@@ -232,7 +232,7 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 				"Sequence":        5,
 				"SetFlag":         8,
 			},
-			mockResult: &rpc_types.SubmitResult{
+			mockResult: &types.SubmitResult{
 				EngineResult:        "tesSUCCESS",
 				EngineResultCode:    0,
 				EngineResultMessage: "The transaction was applied.",
@@ -256,7 +256,7 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 				"Fee":      "12",
 				"Sequence": 10,
 			},
-			mockResult: &rpc_types.SubmitResult{
+			mockResult: &types.SubmitResult{
 				EngineResult:     "tesSUCCESS",
 				EngineResultCode: 0,
 				Applied:          true,
@@ -301,14 +301,14 @@ func TestSubmitMethodResponseFields(t *testing.T) {
 	cleanup := setupTestServicesSubmit(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.SubmitMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.SubmitMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleUser,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
 	}
 
-	mock.submitResult = &rpc_types.SubmitResult{
+	mock.submitResult = &types.SubmitResult{
 		EngineResult:        "tesSUCCESS",
 		EngineResultCode:    0,
 		EngineResultMessage: "The transaction was applied. Only final in a validated ledger.",
@@ -402,11 +402,11 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 	cleanup := setupTestServicesSubmit(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.SubmitMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.SubmitMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleUser,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	baseTxJson := map[string]interface{}{
@@ -536,7 +536,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			mock.submitResult = &rpc_types.SubmitResult{
+			mock.submitResult = &types.SubmitResult{
 				EngineResult:        tc.engineResult,
 				EngineResultCode:    tc.engineResultCode,
 				EngineResultMessage: tc.engineResultMsg,
@@ -581,11 +581,11 @@ func TestSubmitMethodMalformedTransaction(t *testing.T) {
 	cleanup := setupTestServicesSubmit(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.SubmitMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.SubmitMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleUser,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Note: The current implementation uses json.RawMessage for tx_json,
@@ -667,15 +667,15 @@ func TestSubmitMethodMalformedTransaction(t *testing.T) {
 
 // TestSubmitMethodServiceUnavailable tests behavior when ledger service is not available
 func TestSubmitMethodServiceUnavailable(t *testing.T) {
-	oldServices := rpc_types.Services
-	rpc_types.Services = nil
-	defer func() { rpc_types.Services = oldServices }()
+	oldServices := types.Services
+	types.Services = nil
+	defer func() { types.Services = oldServices }()
 
-	method := &rpc_handlers.SubmitMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.SubmitMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleUser,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := map[string]interface{}{
@@ -693,21 +693,21 @@ func TestSubmitMethodServiceUnavailable(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, rpc_types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
 	assert.Contains(t, rpcErr.Message, "Ledger service not available")
 }
 
 // TestSubmitMethodServiceNilLedger tests behavior when ledger service is nil
 func TestSubmitMethodServiceNilLedger(t *testing.T) {
-	oldServices := rpc_types.Services
-	rpc_types.Services = &rpc_types.ServiceContainer{Ledger: nil}
-	defer func() { rpc_types.Services = oldServices }()
+	oldServices := types.Services
+	types.Services = &types.ServiceContainer{Ledger: nil}
+	defer func() { types.Services = oldServices }()
 
-	method := &rpc_handlers.SubmitMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.SubmitMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleUser,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := map[string]interface{}{
@@ -725,7 +725,7 @@ func TestSubmitMethodServiceNilLedger(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, rpc_types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
 	assert.Contains(t, rpcErr.Message, "Ledger service not available")
 }
 
@@ -735,11 +735,11 @@ func TestSubmitMethodSubmitError(t *testing.T) {
 	cleanup := setupTestServicesSubmit(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.SubmitMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.SubmitMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleUser,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	tests := []struct {
@@ -790,18 +790,18 @@ func TestSubmitMethodSubmitError(t *testing.T) {
 
 // TestSubmitMethodMetadata tests the method's metadata functions
 func TestSubmitMethodMetadata(t *testing.T) {
-	method := &rpc_handlers.SubmitMethod{}
+	method := &handlers.SubmitMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, rpc_types.RoleUser, method.RequiredRole(),
+		assert.Equal(t, types.RoleUser, method.RequiredRole(),
 			"submit method should require user role")
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {
 		versions := method.SupportedApiVersions()
-		assert.Contains(t, versions, rpc_types.ApiVersion1)
-		assert.Contains(t, versions, rpc_types.ApiVersion2)
-		assert.Contains(t, versions, rpc_types.ApiVersion3)
+		assert.Contains(t, versions, types.ApiVersion1)
+		assert.Contains(t, versions, types.ApiVersion2)
+		assert.Contains(t, versions, types.ApiVersion3)
 	})
 }
 
@@ -811,11 +811,11 @@ func TestSubmitMethodOptionalParams(t *testing.T) {
 	cleanup := setupTestServicesSubmit(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.SubmitMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.SubmitMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleUser,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	baseTxJson := map[string]interface{}{
@@ -927,11 +927,11 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 	cleanup := setupTestServicesSubmit(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.SubmitMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.SubmitMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleUser,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// These tests document expected behavior for signing credentials

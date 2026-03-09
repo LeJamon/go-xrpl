@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func ptrUint32(v uint32) *uint32 { return &v }
@@ -19,7 +19,7 @@ func xrpAmount(drops string) tx.Amount {
 
 // Helper to create IOU amount from string value
 func iouAmount(value, currency, issuer string) tx.Amount {
-	return sle.NewIssuedAmountFromDecimalString(value, currency, issuer)
+	return state.NewIssuedAmountFromDecimalString(value, currency, issuer)
 }
 
 // TestPaymentValidation tests Payment transaction validation.

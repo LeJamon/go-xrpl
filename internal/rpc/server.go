@@ -9,19 +9,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
+	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
 // Server handles HTTP JSON-RPC requests using XRPL format
 type Server struct {
-	registry *rpc_types.MethodRegistry
+	registry *types.MethodRegistry
 	timeout  time.Duration
 }
 
 // NewServer creates a new RPC server with the given timeout
 func NewServer(timeout time.Duration) *Server {
 	server := &Server{
-		registry: rpc_types.NewMethodRegistry(),
+		registry: types.NewMethodRegistry(),
 		timeout:  timeout,
 	}
 
@@ -42,7 +42,7 @@ type XrplRequest struct {
 // These fields are at the top level, not inside the result object
 type JsonRpcResponseOptions struct {
 	Warning   string                    // "load" when approaching rate limit
-	Warnings  []rpc_types.WarningObject // Array of warning objects
+	Warnings  []types.WarningObject // Array of warning objects
 	Forwarded bool                      // True if forwarded from Clio to P2P server
 }
 
@@ -87,10 +87,10 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create RPC context
-	ctx := &rpc_types.RpcContext{
+	ctx := &types.RpcContext{
 		Context:    r.Context(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.DefaultApiVersion,
+		Role:       types.RoleGuest,
+		ApiVersion: types.DefaultApiVersion,
 		IsAdmin:    false,
 		ClientIP:   getClientIP(r),
 	}
@@ -132,10 +132,10 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create RPC context
-	ctx := &rpc_types.RpcContext{
+	ctx := &types.RpcContext{
 		Context:    r.Context(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.DefaultApiVersion,
+		Role:       types.RoleGuest,
+		ApiVersion: types.DefaultApiVersion,
 		IsAdmin:    false,
 		ClientIP:   getClientIP(r),
 	}
@@ -175,16 +175,16 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 // executeMethod executes an RPC method with the given parameters
-func (s *Server) executeMethod(method string, params json.RawMessage, ctx *rpc_types.RpcContext) (interface{}, *rpc_types.RpcError) {
+func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types.RpcContext) (interface{}, *types.RpcError) {
 	// Get method handler
 	handler, exists := s.registry.Get(method)
 	if !exists {
-		return nil, rpc_types.RpcErrorMethodNotFound(method)
+		return nil, types.RpcErrorMethodNotFound(method)
 	}
 
 	// Check role permissions
 	/*if ctx.Role < handler.RequiredRole() {
-		return nil, rpc_types.NewRpcError(rpc_types.RpcCOMMAND_UNTRUSTED, "commandUntrusted", "commandUntrusted",
+		return nil, types.NewRpcError(types.RpcCOMMAND_UNTRUSTED, "commandUntrusted", "commandUntrusted",
 			fmt.Sprintf("Method '%s' requires higher privileges", method))
 	}*/
 
@@ -199,7 +199,7 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *rpc_t
 			}
 		}
 		if !supported {
-			return nil, rpc_types.RpcErrorInvalidApiVersion(strconv.Itoa(ctx.ApiVersion))
+			return nil, types.RpcErrorInvalidApiVersion(strconv.Itoa(ctx.ApiVersion))
 		}
 	}
 
@@ -211,12 +211,12 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *rpc_t
 // Per XRPL spec:
 // - result.status = "success" or "error"
 // - warning, warnings, forwarded are at top level (outside result)
-func (s *Server) writeXrplResponse(w http.ResponseWriter, method string, request interface{}, result interface{}, rpcErr *rpc_types.RpcError) {
+func (s *Server) writeXrplResponse(w http.ResponseWriter, method string, request interface{}, result interface{}, rpcErr *types.RpcError) {
 	s.writeXrplResponseWithOptions(w, method, request, result, rpcErr, nil)
 }
 
 // writeXrplResponseWithOptions writes an XRPL format JSON-RPC response with optional fields
-func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, method string, request interface{}, result interface{}, rpcErr *rpc_types.RpcError, opts *JsonRpcResponseOptions) {
+func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, method string, request interface{}, result interface{}, rpcErr *types.RpcError, opts *JsonRpcResponseOptions) {
 	response := make(map[string]interface{})
 
 	if rpcErr != nil {
@@ -296,13 +296,13 @@ func (s *Server) writeXrplError(w http.ResponseWriter, method string, request in
 	w.Write(responseData)
 }
 
-// ExecuteMethod implements rpc_types.MethodDispatcher, allowing the 'json' RPC
+// ExecuteMethod implements types.MethodDispatcher, allowing the 'json' RPC
 // method to forward calls through the same method registry.
-func (s *Server) ExecuteMethod(method string, params []byte) (interface{}, *rpc_types.RpcError) {
-	ctx := &rpc_types.RpcContext{
+func (s *Server) ExecuteMethod(method string, params []byte) (interface{}, *types.RpcError) {
+	ctx := &types.RpcContext{
 		Context:    nil,
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.DefaultApiVersion,
+		Role:       types.RoleGuest,
+		ApiVersion: types.DefaultApiVersion,
 		IsAdmin:    false,
 	}
 	return s.executeMethod(method, json.RawMessage(params), ctx)

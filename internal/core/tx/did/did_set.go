@@ -6,7 +6,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -128,7 +128,7 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	existingData, err := ctx.View.Read(didKey)
 	if err == nil && existingData != nil {
 		// Update existing DID
-		did, err := sle.ParseDID(existingData)
+		did, err := state.ParseDID(existingData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -158,7 +158,7 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Serialize and update the DID - modification tracked automatically by ApplyStateTable
-		updatedData, err := sle.SerializeDID(did, d.Account)
+		updatedData, err := state.SerializeDID(did, d.Account)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -176,7 +176,7 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecINSUFFICIENT_RESERVE
 	}
 
-	did := &sle.DIDData{
+	did := &state.DIDData{
 		Account:   ctx.AccountID,
 		OwnerNode: 0,
 	}
@@ -198,7 +198,7 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecEMPTY_DID
 	}
 
-	didData, err := sle.SerializeDID(did, d.Account)
+	didData, err := state.SerializeDID(did, d.Account)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -211,7 +211,7 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Add to owner directory
 	// Reference: rippled DID.cpp addSLE → dirInsert
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	sle.DirInsert(ctx.View, ownerDirKey, didKey.Key, nil)
+	state.DirInsert(ctx.View, ownerDirKey, didKey.Key, nil)
 
 	ctx.Account.OwnerCount++
 

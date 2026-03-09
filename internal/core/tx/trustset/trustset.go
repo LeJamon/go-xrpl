@@ -6,7 +6,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/amm"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -167,7 +167,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Get the issuer account ID
-	issuerAccountID, err := sle.DecodeAccountID(t.LimitAmount.Issuer)
+	issuerAccountID, err := state.DecodeAccountID(t.LimitAmount.Issuer)
 	if err != nil {
 		return tx.TemBAD_ISSUER
 	}
@@ -179,16 +179,16 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	if err != nil || issuerData == nil {
 		return tx.TecNO_DST
 	}
-	issuerAccount, err := sle.ParseAccountRoot(issuerData)
+	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
 	// Get the account ID
-	accountID, _ := sle.DecodeAccountID(ctx.Account.Account)
+	accountID, _ := state.DecodeAccountID(ctx.Account.Account)
 
 	// Determine low/high accounts (for consistent trust line ordering)
-	bHigh := sle.CompareAccountIDsForLine(accountID, issuerAccountID) > 0
+	bHigh := state.CompareAccountIDsForLine(accountID, issuerAccountID) > 0
 
 	// Get or create the trust line
 	trustLineKey := keylet.Line(accountID, issuerAccountID, t.LimitAmount.Currency)
@@ -203,7 +203,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// for a non-empty AMM.
 	// Reference: rippled SetTrust.cpp lines 273-309
 	var zeroHash [32]byte
-	if (issuerAccount.Flags & sle.LsfAMM) != 0 {
+	if (issuerAccount.Flags & state.LsfAMM) != 0 {
 		if issuerAccount.AMMID != zeroHash {
 			if trustLineExists {
 				// Allow modification of existing trust lines to AMM accounts.
@@ -248,12 +248,12 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	bClearDeepFreeze := (txFlags & TrustSetFlagClearDeepFreeze) != 0
 
 	// Validate tfSetfAuth - requires issuer to have lsfRequireAuth set
-	if bSetAuth && (ctx.Account.Flags&sle.LsfRequireAuth) == 0 {
+	if bSetAuth && (ctx.Account.Flags&state.LsfRequireAuth) == 0 {
 		return tx.TefNO_AUTH_REQUIRED
 	}
 
 	// Validate freeze flags - cannot freeze if account has lsfNoFreeze set
-	bNoFreeze := (ctx.Account.Flags & sle.LsfNoFreeze) != 0
+	bNoFreeze := (ctx.Account.Flags & state.LsfNoFreeze) != 0
 	if bNoFreeze && (bSetFreeze || bSetDeepFreeze) {
 		return tx.TecNO_PERMISSION
 	}
@@ -304,8 +304,8 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// Create new RippleState
 		// Note: In RippleState, Balance.Issuer is a special "no account" address (ACCOUNT_ONE)
-		rs := &sle.RippleState{
-			Balance:           tx.NewIssuedAmount(0, -100, t.LimitAmount.Currency, sle.AccountOneAddress),
+		rs := &state.RippleState{
+			Balance:           tx.NewIssuedAmount(0, -100, t.LimitAmount.Currency, state.AccountOneAddress),
 			Flags:             0,
 			LowNode:           0,
 			HighNode:          0,
@@ -316,54 +316,54 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Set the limit based on which side this account is
 		// Note: In RippleState, LowLimit.Issuer = LOW account, HighLimit.Issuer = HIGH account
 		// The "issuer" in these Amount fields refers to which account owns that limit
-		lowAccountStr, _ := sle.EncodeAccountID(lowAccountID)
-		highAccountStr, _ := sle.EncodeAccountID(highAccountID)
+		lowAccountStr, _ := state.EncodeAccountID(lowAccountID)
+		highAccountStr, _ := state.EncodeAccountID(highAccountID)
 
 		if !bHigh {
 			// Transaction sender is LOW account
 			rs.LowLimit = tx.NewIssuedAmount(limitAmount.IOU().Mantissa(), limitAmount.IOU().Exponent(), t.LimitAmount.Currency, lowAccountStr)
 			rs.HighLimit = tx.NewIssuedAmount(0, -100, t.LimitAmount.Currency, highAccountStr)
-			rs.Flags |= sle.LsfLowReserve
+			rs.Flags |= state.LsfLowReserve
 		} else {
 			// Transaction sender is HIGH account
 			rs.LowLimit = tx.NewIssuedAmount(0, -100, t.LimitAmount.Currency, lowAccountStr)
 			rs.HighLimit = tx.NewIssuedAmount(limitAmount.IOU().Mantissa(), limitAmount.IOU().Exponent(), t.LimitAmount.Currency, highAccountStr)
-			rs.Flags |= sle.LsfHighReserve
+			rs.Flags |= state.LsfHighReserve
 		}
 
 		// Handle Auth flag for new trust line
 		if bSetAuth {
 			if bHigh {
-				rs.Flags |= sle.LsfHighAuth
+				rs.Flags |= state.LsfHighAuth
 			} else {
-				rs.Flags |= sle.LsfLowAuth
+				rs.Flags |= state.LsfLowAuth
 			}
 		}
 
 		// Handle NoRipple flag from transaction
 		if bSetNoRipple && !bClearNoRipple {
 			if bHigh {
-				rs.Flags |= sle.LsfHighNoRipple
+				rs.Flags |= state.LsfHighNoRipple
 			} else {
-				rs.Flags |= sle.LsfLowNoRipple
+				rs.Flags |= state.LsfLowNoRipple
 			}
 		}
 
 		// Handle Freeze flag for new trust line
 		if bSetFreeze && !bClearFreeze && !bNoFreeze {
 			if bHigh {
-				rs.Flags |= sle.LsfHighFreeze
+				rs.Flags |= state.LsfHighFreeze
 			} else {
-				rs.Flags |= sle.LsfLowFreeze
+				rs.Flags |= state.LsfLowFreeze
 			}
 		}
 
 		// Handle DeepFreeze flag for new trust line
 		if bSetDeepFreeze && !bClearDeepFreeze && !bNoFreeze {
 			if bHigh {
-				rs.Flags |= sle.LsfHighDeepFreeze
+				rs.Flags |= state.LsfHighDeepFreeze
 			} else {
-				rs.Flags |= sle.LsfLowDeepFreeze
+				rs.Flags |= state.LsfLowDeepFreeze
 			}
 		}
 
@@ -385,7 +385,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// Add trust line to LOW account's owner directory
 		lowDirKey := keylet.OwnerDir(lowAccountID)
-		lowDirResult, err := sle.DirInsert(ctx.View, lowDirKey, trustLineKey.Key, func(dir *sle.DirectoryNode) {
+		lowDirResult, err := state.DirInsert(ctx.View, lowDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
 			dir.Owner = lowAccountID
 		})
 		if err != nil {
@@ -394,7 +394,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// Add trust line to HIGH account's owner directory
 		highDirKey := keylet.OwnerDir(highAccountID)
-		highDirResult, err := sle.DirInsert(ctx.View, highDirKey, trustLineKey.Key, func(dir *sle.DirectoryNode) {
+		highDirResult, err := state.DirInsert(ctx.View, highDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
 			dir.Owner = highAccountID
 		})
 		if err != nil {
@@ -406,7 +406,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		rs.HighNode = highDirResult.Page
 
 		// Serialize and insert the trust line
-		trustLineData, err := sle.SerializeRippleState(rs)
+		trustLineData, err := state.SerializeRippleState(rs)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -425,7 +425,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TefINTERNAL
 		}
 
-		rs, err := sle.ParseRippleState(trustLineData)
+		rs, err := state.ParseRippleState(trustLineData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -440,9 +440,9 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Handle Auth flag (can only be set, not cleared per rippled)
 		if bSetAuth {
 			if bHigh {
-				rs.Flags |= sle.LsfHighAuth
+				rs.Flags |= state.LsfHighAuth
 			} else {
-				rs.Flags |= sle.LsfLowAuth
+				rs.Flags |= state.LsfLowAuth
 			}
 		}
 
@@ -456,46 +456,46 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 			}
 			if balanceFromPerspective {
 				if bHigh {
-					rs.Flags |= sle.LsfHighNoRipple
+					rs.Flags |= state.LsfHighNoRipple
 				} else {
-					rs.Flags |= sle.LsfLowNoRipple
+					rs.Flags |= state.LsfLowNoRipple
 				}
 			}
 		} else if bClearNoRipple && !bSetNoRipple {
 			if bHigh {
-				rs.Flags &^= sle.LsfHighNoRipple
+				rs.Flags &^= state.LsfHighNoRipple
 			} else {
-				rs.Flags &^= sle.LsfLowNoRipple
+				rs.Flags &^= state.LsfLowNoRipple
 			}
 		}
 
 		// Handle Freeze flag
 		if bSetFreeze && !bClearFreeze && !bNoFreeze {
 			if bHigh {
-				rs.Flags |= sle.LsfHighFreeze
+				rs.Flags |= state.LsfHighFreeze
 			} else {
-				rs.Flags |= sle.LsfLowFreeze
+				rs.Flags |= state.LsfLowFreeze
 			}
 		} else if bClearFreeze && !bSetFreeze {
 			if bHigh {
-				rs.Flags &^= sle.LsfHighFreeze
+				rs.Flags &^= state.LsfHighFreeze
 			} else {
-				rs.Flags &^= sle.LsfLowFreeze
+				rs.Flags &^= state.LsfLowFreeze
 			}
 		}
 
 		// Handle DeepFreeze flag
 		if bSetDeepFreeze && !bClearDeepFreeze && !bNoFreeze {
 			if bHigh {
-				rs.Flags |= sle.LsfHighDeepFreeze
+				rs.Flags |= state.LsfHighDeepFreeze
 			} else {
-				rs.Flags |= sle.LsfLowDeepFreeze
+				rs.Flags |= state.LsfLowDeepFreeze
 			}
 		} else if bClearDeepFreeze && !bSetDeepFreeze {
 			if bHigh {
-				rs.Flags &^= sle.LsfHighDeepFreeze
+				rs.Flags &^= state.LsfHighDeepFreeze
 			} else {
-				rs.Flags &^= sle.LsfLowDeepFreeze
+				rs.Flags &^= state.LsfLowDeepFreeze
 			}
 		}
 
@@ -548,30 +548,30 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Check if trust line should be deleted
-		bLowDefRipple := (issuerAccount.Flags & sle.LsfDefaultRipple) != 0
-		bHighDefRipple := (ctx.Account.Flags & sle.LsfDefaultRipple) != 0
+		bLowDefRipple := (issuerAccount.Flags & state.LsfDefaultRipple) != 0
+		bHighDefRipple := (ctx.Account.Flags & state.LsfDefaultRipple) != 0
 		if bHigh {
-			bLowDefRipple = (issuerAccount.Flags & sle.LsfDefaultRipple) != 0
-			bHighDefRipple = (ctx.Account.Flags & sle.LsfDefaultRipple) != 0
+			bLowDefRipple = (issuerAccount.Flags & state.LsfDefaultRipple) != 0
+			bHighDefRipple = (ctx.Account.Flags & state.LsfDefaultRipple) != 0
 		} else {
-			bLowDefRipple = (ctx.Account.Flags & sle.LsfDefaultRipple) != 0
-			bHighDefRipple = (issuerAccount.Flags & sle.LsfDefaultRipple) != 0
+			bLowDefRipple = (ctx.Account.Flags & state.LsfDefaultRipple) != 0
+			bHighDefRipple = (issuerAccount.Flags & state.LsfDefaultRipple) != 0
 		}
 
 		bLowReserveSet := rs.LowQualityIn != 0 || rs.LowQualityOut != 0 ||
-			((rs.Flags&sle.LsfLowNoRipple) == 0) != bLowDefRipple ||
-			(rs.Flags&sle.LsfLowFreeze) != 0 || !rs.LowLimit.IsZero() ||
+			((rs.Flags&state.LsfLowNoRipple) == 0) != bLowDefRipple ||
+			(rs.Flags&state.LsfLowFreeze) != 0 || !rs.LowLimit.IsZero() ||
 			rs.Balance.Signum() > 0
 
 		bHighReserveSet := rs.HighQualityIn != 0 || rs.HighQualityOut != 0 ||
-			((rs.Flags&sle.LsfHighNoRipple) == 0) != bHighDefRipple ||
-			(rs.Flags&sle.LsfHighFreeze) != 0 || !rs.HighLimit.IsZero() ||
+			((rs.Flags&state.LsfHighNoRipple) == 0) != bHighDefRipple ||
+			(rs.Flags&state.LsfHighFreeze) != 0 || !rs.HighLimit.IsZero() ||
 			rs.Balance.Signum() < 0
 
 		// Record previous reserve state before modifying
 		// Reference: rippled SetTrust.cpp lines 636-668
-		bLowReserved := (rs.Flags & sle.LsfLowReserve) != 0
-		bHighReserved := (rs.Flags & sle.LsfHighReserve) != 0
+		bLowReserved := (rs.Flags & state.LsfLowReserve) != 0
+		bHighReserved := (rs.Flags & state.LsfHighReserve) != 0
 
 		bDefault := !bLowReserveSet && !bHighReserveSet
 
@@ -587,9 +587,9 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 				highAccountID = accountID
 			}
 			lowDirKey := keylet.OwnerDir(lowAccountID)
-			sle.DirRemove(ctx.View, lowDirKey, rs.LowNode, trustLineKey.Key, false)
+			state.DirRemove(ctx.View, lowDirKey, rs.LowNode, trustLineKey.Key, false)
 			highDirKey := keylet.OwnerDir(highAccountID)
-			sle.DirRemove(ctx.View, highDirKey, rs.HighNode, trustLineKey.Key, false)
+			state.DirRemove(ctx.View, highDirKey, rs.HighNode, trustLineKey.Key, false)
 
 			// Delete the trust line
 			if err := ctx.View.Erase(trustLineKey); err != nil {
@@ -627,7 +627,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 			// Write issuer account back if its OwnerCount changed
 			if (bLowReserved && bHigh) || (bHighReserved && !bHigh) {
-				issuerUpdatedData, serErr := sle.SerializeAccountRoot(issuerAccount)
+				issuerUpdatedData, serErr := state.SerializeAccountRoot(issuerAccount)
 				if serErr != nil {
 					return tx.TefINTERNAL
 				}
@@ -642,7 +642,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 			// Low account reserve changes
 			if bLowReserveSet && !bLowReserved {
-				rs.Flags |= sle.LsfLowReserve
+				rs.Flags |= state.LsfLowReserve
 				if !bHigh {
 					// Low is ctx.Account
 					ctx.Account.OwnerCount++
@@ -652,7 +652,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 					issuerAccount.OwnerCount++
 				}
 			} else if !bLowReserveSet && bLowReserved {
-				rs.Flags &^= sle.LsfLowReserve
+				rs.Flags &^= state.LsfLowReserve
 				if !bHigh {
 					if ctx.Account.OwnerCount > 0 {
 						ctx.Account.OwnerCount--
@@ -666,7 +666,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 			// High account reserve changes
 			if bHighReserveSet && !bHighReserved {
-				rs.Flags |= sle.LsfHighReserve
+				rs.Flags |= state.LsfHighReserve
 				if bHigh {
 					// High is ctx.Account
 					ctx.Account.OwnerCount++
@@ -676,7 +676,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 					issuerAccount.OwnerCount++
 				}
 			} else if !bHighReserveSet && bHighReserved {
-				rs.Flags &^= sle.LsfHighReserve
+				rs.Flags &^= state.LsfHighReserve
 				if bHigh {
 					if ctx.Account.OwnerCount > 0 {
 						ctx.Account.OwnerCount--
@@ -703,7 +703,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 				(bHighReserveSet && !bHighReserved && !bHigh) ||
 				(!bHighReserveSet && bHighReserved && !bHigh)
 			if issuerChanged {
-				issuerUpdatedData, serErr := sle.SerializeAccountRoot(issuerAccount)
+				issuerUpdatedData, serErr := state.SerializeAccountRoot(issuerAccount)
 				if serErr != nil {
 					return tx.TefINTERNAL
 				}
@@ -713,7 +713,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 			}
 
 			// Update the trust line
-			updatedData, err := sle.SerializeRippleState(rs)
+			updatedData, err := state.SerializeRippleState(rs)
 			if err != nil {
 				return tx.TefINTERNAL
 			}

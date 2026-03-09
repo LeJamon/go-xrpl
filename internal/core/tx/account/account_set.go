@@ -8,7 +8,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 const qualityOne uint32 = 1000000000
@@ -305,7 +305,7 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	if ctx.Rules().Enabled(amendment.FeatureClawback) {
 		if uSetFlag == AccountSetFlagAllowTrustLineClawback {
 			// Cannot set clawback if NoFreeze is already set
-			if (uFlagsIn & sle.LsfNoFreeze) != 0 {
+			if (uFlagsIn & state.LsfNoFreeze) != 0 {
 				return tx.TecNO_PERMISSION
 			}
 			// Owner directory must be empty
@@ -314,7 +314,7 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 			if dirErr == nil && dirExists {
 				dirData, readErr := ctx.View.Read(ownerDirKey)
 				if readErr == nil {
-					dirNode, parseErr := sle.ParseDirectoryNode(dirData)
+					dirNode, parseErr := state.ParseDirectoryNode(dirData)
 					if parseErr == nil && len(dirNode.Indexes) > 0 {
 						return tx.TecOWNERS
 					}
@@ -323,7 +323,7 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 		if uSetFlag == AccountSetFlagNoFreeze {
 			// Cannot set NoFreeze if clawback is already set
-			if (uFlagsIn & sle.LsfAllowTrustLineClawback) != 0 {
+			if (uFlagsIn & state.LsfAllowTrustLineClawback) != 0 {
 				return tx.TecNO_PERMISSION
 			}
 		}
@@ -334,44 +334,44 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// dirIsEmpty() checks whether the owner directory has any entries.
 	bSetRequireAuth := (a.GetFlags()&AccountSetTxFlagRequireAuth != 0) ||
 		uSetFlag == AccountSetFlagRequireAuth
-	if bSetRequireAuth && (uFlagsIn&sle.LsfRequireAuth) == 0 {
+	if bSetRequireAuth && (uFlagsIn&state.LsfRequireAuth) == 0 {
 		// Owner directory must be empty to set RequireAuth
 		ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 		dirExists, dirErr := ctx.View.Exists(ownerDirKey)
 		if dirErr == nil && dirExists {
 			dirData, readErr := ctx.View.Read(ownerDirKey)
 			if readErr == nil {
-				dirNode, parseErr := sle.ParseDirectoryNode(dirData)
+				dirNode, parseErr := state.ParseDirectoryNode(dirData)
 				if parseErr == nil && len(dirNode.Indexes) > 0 {
 					return tx.TecOWNERS
 				}
 			}
 		}
-		uFlagsOut |= sle.LsfRequireAuth
+		uFlagsOut |= state.LsfRequireAuth
 	}
-	if uClearFlag == AccountSetFlagRequireAuth && (uFlagsIn&sle.LsfRequireAuth) != 0 {
-		uFlagsOut &^= sle.LsfRequireAuth
+	if uClearFlag == AccountSetFlagRequireAuth && (uFlagsIn&state.LsfRequireAuth) != 0 {
+		uFlagsOut &^= state.LsfRequireAuth
 	}
 
 	// RequireDestTag
-	if uSetFlag == AccountSetFlagRequireDest && (uFlagsIn&sle.LsfRequireDestTag) == 0 {
-		uFlagsOut |= sle.LsfRequireDestTag
+	if uSetFlag == AccountSetFlagRequireDest && (uFlagsIn&state.LsfRequireDestTag) == 0 {
+		uFlagsOut |= state.LsfRequireDestTag
 	}
-	if uClearFlag == AccountSetFlagRequireDest && (uFlagsIn&sle.LsfRequireDestTag) != 0 {
-		uFlagsOut &^= sle.LsfRequireDestTag
+	if uClearFlag == AccountSetFlagRequireDest && (uFlagsIn&state.LsfRequireDestTag) != 0 {
+		uFlagsOut &^= state.LsfRequireDestTag
 	}
 
 	// DisallowXRP
-	if uSetFlag == AccountSetFlagDisallowXRP && (uFlagsIn&sle.LsfDisallowXRP) == 0 {
-		uFlagsOut |= sle.LsfDisallowXRP
+	if uSetFlag == AccountSetFlagDisallowXRP && (uFlagsIn&state.LsfDisallowXRP) == 0 {
+		uFlagsOut |= state.LsfDisallowXRP
 	}
-	if uClearFlag == AccountSetFlagDisallowXRP && (uFlagsIn&sle.LsfDisallowXRP) != 0 {
-		uFlagsOut &^= sle.LsfDisallowXRP
+	if uClearFlag == AccountSetFlagDisallowXRP && (uFlagsIn&state.LsfDisallowXRP) != 0 {
+		uFlagsOut &^= state.LsfDisallowXRP
 	}
 
 	// DisableMaster
 	// Reference: rippled SetAccount.cpp:402-418
-	if uSetFlag == AccountSetFlagDisableMaster && (uFlagsIn&sle.LsfDisableMaster) == 0 {
+	if uSetFlag == AccountSetFlagDisableMaster && (uFlagsIn&state.LsfDisableMaster) == 0 {
 		// Account has no regular key or multi-signer signer list.
 		// Reference: rippled SetAccount.cpp:410-415
 		hasRegularKey := account.RegularKey != ""
@@ -379,36 +379,36 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		if !hasRegularKey && !hasSignerList {
 			return tx.TecNO_ALTERNATIVE_KEY
 		}
-		uFlagsOut |= sle.LsfDisableMaster
+		uFlagsOut |= state.LsfDisableMaster
 	}
-	if uClearFlag == AccountSetFlagDisableMaster && (uFlagsIn&sle.LsfDisableMaster) != 0 {
-		uFlagsOut &^= sle.LsfDisableMaster
+	if uClearFlag == AccountSetFlagDisableMaster && (uFlagsIn&state.LsfDisableMaster) != 0 {
+		uFlagsOut &^= state.LsfDisableMaster
 	}
 
 	// DefaultRipple
 	if uSetFlag == AccountSetFlagDefaultRipple {
-		uFlagsOut |= sle.LsfDefaultRipple
+		uFlagsOut |= state.LsfDefaultRipple
 	} else if uClearFlag == AccountSetFlagDefaultRipple {
-		uFlagsOut &^= sle.LsfDefaultRipple
+		uFlagsOut &^= state.LsfDefaultRipple
 	}
 
 	// NoFreeze (cannot be cleared once set)
 	// Reference: rippled SetAccount.cpp lines 444-454
 	// Must be signed with master key (unless master is already disabled)
 	if uSetFlag == AccountSetFlagNoFreeze {
-		if !ctx.SignedWithMaster && (uFlagsIn&sle.LsfDisableMaster) == 0 {
+		if !ctx.SignedWithMaster && (uFlagsIn&state.LsfDisableMaster) == 0 {
 			return tx.TecNEED_MASTER_KEY
 		}
-		uFlagsOut |= sle.LsfNoFreeze
+		uFlagsOut |= state.LsfNoFreeze
 	}
 
 	// GlobalFreeze
 	if uSetFlag == AccountSetFlagGlobalFreeze {
-		uFlagsOut |= sle.LsfGlobalFreeze
+		uFlagsOut |= state.LsfGlobalFreeze
 	}
 	if uSetFlag != AccountSetFlagGlobalFreeze && uClearFlag == AccountSetFlagGlobalFreeze {
-		if (uFlagsOut & sle.LsfNoFreeze) == 0 {
-			uFlagsOut &^= sle.LsfGlobalFreeze
+		if (uFlagsOut & state.LsfNoFreeze) == 0 {
+			uFlagsOut &^= state.LsfGlobalFreeze
 		}
 	}
 
@@ -427,9 +427,9 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled SetAccount.cpp:488-503 — gated behind featureDepositAuth
 	if ctx.Rules().Enabled(amendment.FeatureDepositAuth) {
 		if uSetFlag == AccountSetFlagDepositAuth {
-			uFlagsOut |= sle.LsfDepositAuth
+			uFlagsOut |= state.LsfDepositAuth
 		} else if uClearFlag == AccountSetFlagDepositAuth {
-			uFlagsOut &^= sle.LsfDepositAuth
+			uFlagsOut &^= state.LsfDepositAuth
 		}
 	}
 
@@ -447,34 +447,34 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled SetAccount.cpp L630-651
 	if ctx.Rules().Enabled(amendment.FeatureDisallowIncoming) {
 		if uSetFlag == AccountSetFlagDisallowIncomingNFTokenOffer {
-			uFlagsOut |= sle.LsfDisallowIncomingNFTokenOffer
+			uFlagsOut |= state.LsfDisallowIncomingNFTokenOffer
 		} else if uClearFlag == AccountSetFlagDisallowIncomingNFTokenOffer {
-			uFlagsOut &^= sle.LsfDisallowIncomingNFTokenOffer
+			uFlagsOut &^= state.LsfDisallowIncomingNFTokenOffer
 		}
 
 		if uSetFlag == AccountSetFlagDisallowIncomingCheck {
-			uFlagsOut |= sle.LsfDisallowIncomingCheck
+			uFlagsOut |= state.LsfDisallowIncomingCheck
 		} else if uClearFlag == AccountSetFlagDisallowIncomingCheck {
-			uFlagsOut &^= sle.LsfDisallowIncomingCheck
+			uFlagsOut &^= state.LsfDisallowIncomingCheck
 		}
 
 		if uSetFlag == AccountSetFlagDisallowIncomingPayChan {
-			uFlagsOut |= sle.LsfDisallowIncomingPayChan
+			uFlagsOut |= state.LsfDisallowIncomingPayChan
 		} else if uClearFlag == AccountSetFlagDisallowIncomingPayChan {
-			uFlagsOut &^= sle.LsfDisallowIncomingPayChan
+			uFlagsOut &^= state.LsfDisallowIncomingPayChan
 		}
 
 		if uSetFlag == AccountSetFlagDisallowIncomingTrustline {
-			uFlagsOut |= sle.LsfDisallowIncomingTrustline
+			uFlagsOut |= state.LsfDisallowIncomingTrustline
 		} else if uClearFlag == AccountSetFlagDisallowIncomingTrustline {
-			uFlagsOut &^= sle.LsfDisallowIncomingTrustline
+			uFlagsOut &^= state.LsfDisallowIncomingTrustline
 		}
 	}
 
 	// AllowTrustLineClawback (cannot be cleared once set, gated by amendment)
 	// Reference: rippled SetAccount.cpp doApply() lines 663-668
 	if ctx.Rules().Enabled(amendment.FeatureClawback) && uSetFlag == AccountSetFlagAllowTrustLineClawback {
-		uFlagsOut |= sle.LsfAllowTrustLineClawback
+		uFlagsOut |= state.LsfAllowTrustLineClawback
 	}
 
 	// Domain

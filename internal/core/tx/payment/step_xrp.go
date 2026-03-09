@@ -3,7 +3,7 @@ package payment
 import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // XRPEndpointStep handles XRP as source (first step) or destination (last step).
@@ -289,7 +289,7 @@ func (s *XRPEndpointStep) xrpLiquid(sb *PaymentSandbox) int64 {
 		return 0
 	}
 
-	accountRoot, err := sle.ParseAccountRoot(data)
+	accountRoot, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return 0
 	}
@@ -347,7 +347,7 @@ func (s *XRPEndpointStep) accountSend(sb *PaymentSandbox, drops int64) error {
 			return err
 		}
 
-		senderRoot, err := sle.ParseAccountRoot(data)
+		senderRoot, err := state.ParseAccountRoot(data)
 		if err != nil {
 			return err
 		}
@@ -355,7 +355,7 @@ func (s *XRPEndpointStep) accountSend(sb *PaymentSandbox, drops int64) error {
 		senderRoot.Balance -= uint64(drops)
 
 		// Serialize and update
-		newData, err := sle.SerializeAccountRoot(senderRoot)
+		newData, err := state.SerializeAccountRoot(senderRoot)
 		if err != nil {
 			return err
 		}
@@ -370,7 +370,7 @@ func (s *XRPEndpointStep) accountSend(sb *PaymentSandbox, drops int64) error {
 			return err
 		}
 
-		receiverRoot, err := sle.ParseAccountRoot(data)
+		receiverRoot, err := state.ParseAccountRoot(data)
 		if err != nil {
 			return err
 		}
@@ -378,7 +378,7 @@ func (s *XRPEndpointStep) accountSend(sb *PaymentSandbox, drops int64) error {
 		receiverRoot.Balance += uint64(drops)
 
 		// Serialize and update
-		newData, err := sle.SerializeAccountRoot(receiverRoot)
+		newData, err := state.SerializeAccountRoot(receiverRoot)
 		if err != nil {
 			return err
 		}

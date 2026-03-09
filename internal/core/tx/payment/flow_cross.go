@@ -3,7 +3,7 @@ package payment
 import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // FlowCrossResult contains the result of an offer crossing operation
@@ -91,7 +91,7 @@ func FlowCross(
 	sendMax := ToEitherAmount(takerGets)
 
 	if !takerGets.IsNative() {
-		issuerID, err := sle.DecodeAccountID(takerGets.Issuer)
+		issuerID, err := state.DecodeAccountID(takerGets.Issuer)
 		if err == nil && takerAccount != issuerID {
 			transferRate := GetTransferRate(view, issuerID)
 			if transferRate != QualityOne {
@@ -101,7 +101,7 @@ func FlowCross(
 				// as_amount(Rate) = STAmount(noIssue(), rate.value, -9, false)
 				// This uses STAmount multiply (muldiv/10^14) NOT IOUAmount::mulRatio
 				rateAmt := rateAsAmount(transferRate)
-				result := sle.MulRound(sendMax.IOU, rateAmt, takerGets.Currency, takerGets.Issuer, true)
+				result := state.MulRound(sendMax.IOU, rateAmt, takerGets.Currency, takerGets.Issuer, true)
 				sendMax = NewIOUEitherAmount(result)
 			}
 		}
@@ -234,12 +234,12 @@ func FlowCross(
 	takerPaidNet := result.In
 
 	if !takerGets.IsNative() {
-		issuerID, err := sle.DecodeAccountID(takerGets.Issuer)
+		issuerID, err := state.DecodeAccountID(takerGets.Issuer)
 		if err == nil && takerAccount != issuerID {
 			transferRate := GetTransferRate(view, issuerID)
 			if transferRate != QualityOne && transferRate > 0 {
 				rateAmt := rateAsAmount(transferRate)
-				netResult := sle.DivRound(result.In.IOU, rateAmt, takerGets.Currency, takerGets.Issuer, true)
+				netResult := state.DivRound(result.In.IOU, rateAmt, takerGets.Currency, takerGets.Issuer, true)
 				takerPaidNet = NewIOUEitherAmount(netResult)
 			}
 		}
@@ -321,7 +321,7 @@ func GetTransferRate(view tx.LedgerView, issuer [20]byte) uint32 {
 		return QualityOne
 	}
 
-	account, err := sle.ParseAccountRoot(data)
+	account, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return QualityOne
 	}
@@ -339,7 +339,7 @@ func GetTransferRateByAddress(view tx.LedgerView, issuerAddress string) uint32 {
 		return QualityOne
 	}
 
-	issuerID, err := sle.DecodeAccountID(issuerAddress)
+	issuerID, err := state.DecodeAccountID(issuerAddress)
 	if err != nil {
 		return QualityOne
 	}
@@ -357,7 +357,7 @@ func AccountFundsInSandbox(sb *PaymentSandbox, accountID [20]byte, amount tx.Amo
 		return sb.BalanceHook(accountID, [20]byte{}, rawBalance)
 	}
 
-	issuerID, err := sle.DecodeAccountID(amount.Issuer)
+	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
 		return rawBalance
 	}
@@ -370,5 +370,5 @@ func AccountFundsInSandbox(sb *PaymentSandbox, accountID [20]byte, amount tx.Amo
 // which normalizes to mantissa=1005000000000000, exponent=-15 (representing 1.005).
 // Reference: rippled Rate2.cpp detail::as_amount()
 func rateAsAmount(rate uint32) tx.Amount {
-	return sle.NewIssuedAmountFromValue(int64(rate), -9, "", "")
+	return state.NewIssuedAmountFromValue(int64(rate), -9, "", "")
 }

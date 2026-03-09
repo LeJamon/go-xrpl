@@ -7,7 +7,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -86,7 +86,7 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Parse check
-	check, err := sle.ParseCheck(checkData)
+	check, err := state.ParseCheck(checkData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -131,10 +131,10 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 		creatorKey := keylet.Account(check.Account)
 		creatorData, err := ctx.View.Read(creatorKey)
 		if err == nil {
-			creatorAccount, err := sle.ParseAccountRoot(creatorData)
+			creatorAccount, err := state.ParseAccountRoot(creatorData)
 			if err == nil && creatorAccount.OwnerCount > 0 {
 				creatorAccount.OwnerCount--
-				creatorUpdatedData, _ := sle.SerializeAccountRoot(creatorAccount)
+				creatorUpdatedData, _ := state.SerializeAccountRoot(creatorAccount)
 				ctx.View.Update(creatorKey, creatorUpdatedData)
 			}
 		}

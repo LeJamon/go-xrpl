@@ -10,7 +10,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	coreAmm "github.com/LeJamon/goXRPLd/internal/core/tx/amm"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	offerbuild "github.com/LeJamon/goXRPLd/internal/testing/offer"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
@@ -411,7 +411,7 @@ func (e *AMMTestEnv) CheckInvariant(asset1, asset2 tx.Asset, fixAMMv1_3 bool, sh
 
 	// Set rounding mode for the invariant check
 	if fixAMMv1_3 {
-		guard := sle.NewNumberRoundModeGuard(sle.RoundUpward)
+		guard := state.NewNumberRoundModeGuard(state.RoundUpward)
 		defer guard.Release()
 	}
 
@@ -470,12 +470,12 @@ func WithDefaultAMM(t *testing.T, callback TestAMMCallback) {
 
 // AccountOffers returns all offers owned by an account by iterating its owner directory.
 // Returns a slice of parsed LedgerOffer structs.
-func (e *AMMTestEnv) AccountOffers(acc *jtx.Account) []*sle.LedgerOffer {
+func (e *AMMTestEnv) AccountOffers(acc *jtx.Account) []*state.LedgerOffer {
 	e.T.Helper()
 
-	var offers []*sle.LedgerOffer
+	var offers []*state.LedgerOffer
 	dirKey := keylet.OwnerDir(acc.ID)
-	_ = sle.DirForEach(e.Ledger(), dirKey, func(itemKey [32]byte) error {
+	_ = state.DirForEach(e.Ledger(), dirKey, func(itemKey [32]byte) error {
 		// Read the raw entry (Read doesn't check type)
 		k := keylet.Keylet{Key: itemKey, Type: entry.TypeOffer}
 		data, err := e.Ledger().Read(k)
@@ -485,7 +485,7 @@ func (e *AMMTestEnv) AccountOffers(acc *jtx.Account) []*sle.LedgerOffer {
 		// Check if the first bytes indicate an offer SLE.
 		// Offer entries have LedgerEntryType = 0x006F.
 		// The binary codec prefix starts with type/field codes; check for offer signature.
-		offer, err := sle.ParseLedgerOfferFromBytes(data)
+		offer, err := state.ParseLedgerOfferFromBytes(data)
 		if err != nil {
 			return nil
 		}

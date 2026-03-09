@@ -6,7 +6,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -170,7 +170,7 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	} else {
 		var ownerID [20]byte
-		ownerID, err = sle.DecodeAccountID(c.Owner)
+		ownerID, err = state.DecodeAccountID(c.Owner)
 		if err != nil {
 			return tx.TemINVALID
 		}
@@ -191,7 +191,7 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err != nil {
 			return tx.TefNFTOKEN_IS_NOT_TRANSFERABLE
 		}
-		issuerAccount, err := sle.ParseAccountRoot(issuerData)
+		issuerAccount, err := state.ParseAccountRoot(issuerData)
 		if err != nil {
 			return tx.TefNFTOKEN_IS_NOT_TRANSFERABLE
 		}
@@ -203,7 +203,7 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Check destination exists and doesn't disallow incoming NFT offers
 	// Reference: rippled tokenOfferCreatePreclaim
 	if c.Destination != "" {
-		destID, err := sle.DecodeAccountID(c.Destination)
+		destID, err := state.DecodeAccountID(c.Destination)
 		if err != nil {
 			return tx.TemINVALID
 		}
@@ -212,11 +212,11 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err != nil || destData == nil {
 			return tx.TecNO_DST
 		}
-		destAccount, err := sle.ParseAccountRoot(destData)
+		destAccount, err := state.ParseAccountRoot(destData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-		if destAccount.Flags&sle.LsfDisallowIncomingNFTokenOffer != 0 {
+		if destAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
 			return tx.TecNO_PERMISSION
 		}
 	}
@@ -224,7 +224,7 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	// IOU preclaim checks
 	// Reference: rippled tokenOfferCreatePreclaim — IOU-specific validation
 	if !c.Amount.IsNative() {
-		iouIssuerID, err := sle.DecodeAccountID(c.Amount.Issuer)
+		iouIssuerID, err := state.DecodeAccountID(c.Amount.Issuer)
 		if err != nil {
 			return tx.TemINVALID
 		}
@@ -284,7 +284,7 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Insert into owner's directory
 	ownerDirKey := keylet.OwnerDir(accountID)
-	dirResult, err := sle.DirInsert(ctx.View, ownerDirKey, offerKey.Key, nil)
+	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, offerKey.Key, nil)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -297,7 +297,7 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	} else {
 		tokenDirKey = keylet.NFTBuys(tokenID)
 	}
-	tokenDirResult, err := sle.DirInsert(ctx.View, tokenDirKey, offerKey.Key, nil)
+	tokenDirResult, err := state.DirInsert(ctx.View, tokenDirKey, offerKey.Key, nil)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

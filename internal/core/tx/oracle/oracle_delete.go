@@ -6,7 +6,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -73,7 +73,7 @@ func (o *OracleDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecNO_ENTRY
 	}
 
-	oracle, err := sle.ParseOracle(oracleData)
+	oracle, err := state.ParseOracle(oracleData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -87,10 +87,10 @@ func (o *OracleDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 // This is a shared helper used by both OracleDelete.Apply() and AccountDelete cascade.
 // If ownerCount is nil, the OwnerCount adjustment is skipped (account deletion case).
 // Reference: rippled DeleteOracle.cpp deleteOracle()
-func DeleteOracleFromView(view sle.LedgerView, oracleKey keylet.Keylet, oracle *sle.OracleData, accountID [20]byte, ownerCount *uint32) tx.Result {
+func DeleteOracleFromView(view state.LedgerView, oracleKey keylet.Keylet, oracle *state.OracleData, accountID [20]byte, ownerCount *uint32) tx.Result {
 	// DirRemove from owner directory
 	ownerDirKey := keylet.OwnerDir(accountID)
-	_, err := sle.DirRemove(view, ownerDirKey, oracle.OwnerNode, oracleKey.Key, true)
+	_, err := state.DirRemove(view, ownerDirKey, oracle.OwnerNode, oracleKey.Key, true)
 	if err != nil {
 		return tx.TefBAD_LEDGER
 	}

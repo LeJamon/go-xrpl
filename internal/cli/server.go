@@ -14,7 +14,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/rpc"
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
+	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	kvpebble "github.com/LeJamon/goXRPLd/storage/kvstore/pebble"
 	"github.com/LeJamon/goXRPLd/storage/nodestore"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
@@ -176,7 +176,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 
 	// Wire up RPC services
-	rpc_types.InitServices(rpc.NewLedgerServiceAdapter(ledgerService))
+	types.InitServices(rpc.NewLedgerServiceAdapter(ledgerService))
 
 	if !quiet {
 		if standalone {
@@ -193,10 +193,10 @@ func runServer(cmd *cobra.Command, args []string) {
 	httpServer := rpc.NewServer(30 * time.Second)
 
 	// Wire dispatcher so the 'json' RPC method can forward calls
-	rpc_types.Services.SetDispatcher(httpServer)
+	types.Services.SetDispatcher(httpServer)
 
 	// Wire shutdown function for the 'stop' RPC method
-	rpc_types.Services.SetShutdownFunc(func() {
+	types.Services.SetShutdownFunc(func() {
 		log.Println("Server shutdown requested via RPC stop command")
 		go func() {
 			// Small delay to allow the RPC response to be sent

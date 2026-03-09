@@ -9,7 +9,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/credential"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -111,7 +111,7 @@ func (ef *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Get the escrow owner's account ID
-	ownerID, err := sle.DecodeAccountID(ef.Owner)
+	ownerID, err := state.DecodeAccountID(ef.Owner)
 	if err != nil {
 		return tx.TemINVALID
 	}
@@ -124,7 +124,7 @@ func (ef *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Parse escrow
-	escrowEntry, err := sle.ParseEscrow(escrowData)
+	escrowEntry, err := state.ParseEscrow(escrowData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -189,7 +189,7 @@ func (ef *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	destIsSelf := ctx.AccountID == escrowEntry.DestinationID
 
 	// Read destination account for deposit auth check
-	var destAccount *sle.AccountRoot
+	var destAccount *state.AccountRoot
 	destKey := keylet.Account(escrowEntry.DestinationID)
 	if destIsSelf {
 		destAccount = ctx.Account
@@ -198,7 +198,7 @@ func (ef *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err != nil {
 			return tx.TecNO_DST
 		}
-		destAccount, err = sle.ParseAccountRoot(destData)
+		destAccount, err = state.ParseAccountRoot(destData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -207,7 +207,7 @@ func (ef *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Deposit authorization check
 	// Reference: rippled verifyDepositPreauth() in CredentialHelpers.cpp
 	if rules.Enabled(amendment.FeatureDepositAuth) {
-		if (destAccount.Flags & sle.LsfDepositAuth) != 0 {
+		if (destAccount.Flags & state.LsfDepositAuth) != 0 {
 			if ctx.AccountID != escrowEntry.DestinationID {
 				// Check account-based DepositPreauth
 				preauthKey := keylet.DepositPreauth(escrowEntry.DestinationID, ctx.AccountID)
@@ -230,7 +230,7 @@ func (ef *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Write destination back (only if it's a separate account from the finisher)
 	if !destIsSelf {
-		destUpdatedData, err := sle.SerializeAccountRoot(destAccount)
+		destUpdatedData, err := state.SerializeAccountRoot(destAccount)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -242,12 +242,12 @@ func (ef *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Remove escrow from owner directory
 	// Reference: rippled Escrow.cpp doApply() lines 1130-1140
 	ownerDirKey := keylet.OwnerDir(escrowEntry.Account)
-	sle.DirRemove(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key, false)
+	state.DirRemove(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key, false)
 
 	// Remove escrow from destination directory (if cross-account)
 	if escrowEntry.HasDestNode {
 		destDirKey := keylet.OwnerDir(escrowEntry.DestinationID)
-		sle.DirRemove(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key, false)
+		state.DirRemove(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key, false)
 	}
 
 	// Delete the escrow
@@ -413,7 +413,7 @@ func adjustOwnerCount(ctx *tx.ApplyContext, accountID [20]byte, delta int) {
 	if err != nil {
 		return
 	}
-	acct, err := sle.ParseAccountRoot(acctData)
+	acct, err := state.ParseAccountRoot(acctData)
 	if err != nil {
 		return
 	}
@@ -424,7 +424,7 @@ func adjustOwnerCount(ctx *tx.ApplyContext, accountID [20]byte, delta int) {
 		acct.OwnerCount--
 	}
 
-	if updatedData, err := sle.SerializeAccountRoot(acct); err == nil {
+	if updatedData, err := state.SerializeAccountRoot(acct); err == nil {
 		ctx.View.Update(acctKey, updatedData)
 	}
 }

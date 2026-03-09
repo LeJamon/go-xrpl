@@ -5,7 +5,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/keylet"
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // Flow executes payment across multiple strands, selecting the best quality paths.
@@ -464,12 +464,12 @@ func offerDeleteInSandbox(sb *PaymentSandbox, offerKey [32]byte) {
 		return // Offer already deleted or not found
 	}
 
-	offer, err := sle.ParseLedgerOffer(offerData)
+	offer, err := state.ParseLedgerOffer(offerData)
 	if err != nil {
 		return
 	}
 
-	ownerID, err := sle.DecodeAccountID(offer.Account)
+	ownerID, err := state.DecodeAccountID(offer.Account)
 	if err != nil {
 		return
 	}
@@ -478,11 +478,11 @@ func offerDeleteInSandbox(sb *PaymentSandbox, offerKey [32]byte) {
 
 	// Remove from owner directory
 	ownerDirKey := keylet.OwnerDir(ownerID)
-	sle.DirRemove(sb, ownerDirKey, offer.OwnerNode, offerKey, false)
+	state.DirRemove(sb, ownerDirKey, offer.OwnerNode, offerKey, false)
 
 	// Remove from book directory
 	bookDirKey := keylet.Keylet{Type: 100, Key: offer.BookDirectory}
-	sle.DirRemove(sb, bookDirKey, offer.BookNode, offerKey, false)
+	state.DirRemove(sb, bookDirKey, offer.BookNode, offerKey, false)
 
 	// Erase the offer
 	sb.Erase(offerKL)
@@ -500,7 +500,7 @@ func adjustOwnerCountInSandbox(sb *PaymentSandbox, account [20]byte, delta int, 
 		return
 	}
 
-	accountRoot, err := sle.ParseAccountRoot(accountData)
+	accountRoot, err := state.ParseAccountRoot(accountData)
 	if err != nil {
 		return
 	}
@@ -513,7 +513,7 @@ func adjustOwnerCountInSandbox(sb *PaymentSandbox, account [20]byte, delta int, 
 	accountRoot.PreviousTxnID = txHash
 	accountRoot.PreviousTxnLgrSeq = ledgerSeq
 
-	newData, err := sle.SerializeAccountRoot(accountRoot)
+	newData, err := state.SerializeAccountRoot(accountRoot)
 	if err != nil {
 		return
 	}

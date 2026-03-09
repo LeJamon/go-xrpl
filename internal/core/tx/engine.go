@@ -13,7 +13,7 @@ import (
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	crypto "github.com/LeJamon/goXRPLd/crypto/common"
 )
 
@@ -65,8 +65,8 @@ type engineSignerListLookup struct {
 }
 
 // GetSignerList returns the signer list for an account
-func (l *engineSignerListLookup) GetSignerList(account string) (*sle.SignerListInfo, error) {
-	accountID, err := sle.DecodeAccountID(account)
+func (l *engineSignerListLookup) GetSignerList(account string) (*state.SignerListInfo, error) {
+	accountID, err := state.DecodeAccountID(account)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +87,7 @@ func (l *engineSignerListLookup) GetSignerList(account string) (*sle.SignerListI
 		return nil, err
 	}
 
-	signerList, err := sle.ParseSignerList(signerListData)
+	signerList, err := state.ParseSignerList(signerListData)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +97,7 @@ func (l *engineSignerListLookup) GetSignerList(account string) (*sle.SignerListI
 
 // GetAccountInfo returns account information needed for signer validation
 func (l *engineSignerListLookup) GetAccountInfo(account string) (flags uint32, regularKey string, err error) {
-	accountID, err := sle.DecodeAccountID(account)
+	accountID, err := state.DecodeAccountID(account)
 	if err != nil {
 		return 0, "", err
 	}
@@ -116,7 +116,7 @@ func (l *engineSignerListLookup) GetAccountInfo(account string) (flags uint32, r
 		return 0, "", err
 	}
 
-	accountRoot, err := sle.ParseAccountRoot(accountData)
+	accountRoot, err := state.ParseAccountRoot(accountData)
 	if err != nil {
 		return 0, "", err
 	}
@@ -235,8 +235,8 @@ type Metadata struct {
 	ParentBatchID *[32]byte
 }
 
-// AffectedNode is an alias for sle.AffectedNode
-type AffectedNode = sle.AffectedNode
+// AffectedNode is an alias for state.AffectedNode
+type AffectedNode = state.AffectedNode
 
 // MarshalJSON implements custom JSON marshaling for Metadata to match rippled format
 func (m Metadata) MarshalJSON() ([]byte, error) {
@@ -881,7 +881,7 @@ func (e *Engine) preclaim(tx Transaction) Result {
 	common := tx.GetCommon()
 
 	// Check that the source account exists
-	accountID, err := sle.DecodeAccountID(common.Account)
+	accountID, err := state.DecodeAccountID(common.Account)
 	if err != nil {
 		return TemBAD_SRC_ACCOUNT
 	}
@@ -902,7 +902,7 @@ func (e *Engine) preclaim(tx Transaction) Result {
 	}
 
 	// Parse account and check sequence
-	account, err := sle.ParseAccountRoot(accountData)
+	account, err := state.ParseAccountRoot(accountData)
 	if err != nil {
 		return TefINTERNAL
 	}
@@ -916,7 +916,7 @@ func (e *Engine) preclaim(tx Transaction) Result {
 			return TefBAD_AUTH
 		}
 
-		isMasterDisabled := (account.Flags & sle.LsfDisableMaster) != 0
+		isMasterDisabled := (account.Flags & state.LsfDisableMaster) != 0
 
 		if signerAddress == account.RegularKey {
 			// Signed with regular key — allowed
@@ -995,7 +995,7 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 
 	// Deduct fee from sender first (this always happens for applied transactions)
 	common := tx.GetCommon()
-	accountID, _ := sle.DecodeAccountID(common.Account)
+	accountID, _ := state.DecodeAccountID(common.Account)
 	accountKey := keylet.Account(accountID)
 
 	// Read sender account directly from view
@@ -1004,7 +1004,7 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		return TefINTERNAL
 	}
 
-	account, err := sle.ParseAccountRoot(accountData)
+	account, err := state.ParseAccountRoot(accountData)
 	if err != nil {
 		return TefINTERNAL
 	}
@@ -1038,7 +1038,7 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 	// (fee deduction, sequence increment) before calling doApply().
 	// Without this, reads during Apply() would see the pre-fee balance.
 	{
-		preApplyData, preApplyErr := sle.SerializeAccountRoot(account)
+		preApplyData, preApplyErr := state.SerializeAccountRoot(account)
 		if preApplyErr != nil {
 			return TefINTERNAL
 		}
@@ -1077,7 +1077,7 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 	// Set NumberSwitchover based on fixUniversalNumber amendment.
 	// When enabled, IOUAmount arithmetic uses Guard-based precision (XRPLNumber).
 	// Reference: rippled's setSTNumberSwitchover() in IOUAmount.cpp
-	sle.SetNumberSwitchover(ctx.Rules().Enabled(amendment.FeatureFixUniversalNumber))
+	state.SetNumberSwitchover(ctx.Rules().Enabled(amendment.FeatureFixUniversalNumber))
 
 	if appliable, ok := tx.(Appliable); ok {
 		result = appliable.Apply(ctx)
@@ -1112,7 +1112,7 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		ticketKey := keylet.Ticket(accountID, *common.TicketSequence)
 		ownerDirKey := keylet.OwnerDir(accountID)
 		// Remove ticket from owner directory (page 0)
-		sle.DirRemove(table, ownerDirKey, 0, ticketKey.Key, true)
+		state.DirRemove(table, ownerDirKey, 0, ticketKey.Key, true)
 		if err := table.Erase(ticketKey); err != nil {
 			return TefINTERNAL
 		}
@@ -1191,7 +1191,7 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		if isTicket {
 			ticketKey := keylet.Ticket(accountID, *common.TicketSequence)
 			ownerDirKey := keylet.OwnerDir(accountID)
-			sle.DirRemove(tecTable, ownerDirKey, 0, ticketKey.Key, true)
+			state.DirRemove(tecTable, ownerDirKey, 0, ticketKey.Key, true)
 			if err := tecTable.Erase(ticketKey); err != nil {
 				return TefINTERNAL
 			}
@@ -1208,7 +1208,7 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		// This discards any changes the transaction made to OwnerCount,
 		// MintedNFTokens, BurnedNFTokens, etc.
 		// Reference: rippled Transactor.cpp — restores original SLE on tec.
-		account, err = sle.ParseAccountRoot(originalAccountData)
+		account, err = state.ParseAccountRoot(originalAccountData)
 		if err != nil {
 			return TefINTERNAL
 		}
@@ -1227,7 +1227,7 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		account.PreviousTxnID = txHash
 		account.PreviousTxnLgrSeq = e.config.LedgerSequence
 
-		updatedData, err := sle.SerializeAccountRoot(account)
+		updatedData, err := state.SerializeAccountRoot(account)
 		if err != nil {
 			return TefINTERNAL
 		}
@@ -1247,20 +1247,20 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 				if readErr != nil || offerData == nil {
 					continue
 				}
-				offerObj, parseErr := sle.ParseLedgerOffer(offerData)
+				offerObj, parseErr := state.ParseLedgerOffer(offerData)
 				if parseErr != nil {
 					continue
 				}
-				ownerID, decodeErr := sle.DecodeAccountID(offerObj.Account)
+				ownerID, decodeErr := state.DecodeAccountID(offerObj.Account)
 				if decodeErr != nil {
 					continue
 				}
 				// Remove from owner directory
 				ownerDirKey := keylet.OwnerDir(ownerID)
-				sle.DirRemove(tecTable, ownerDirKey, offerObj.OwnerNode, offerKey, false)
+				state.DirRemove(tecTable, ownerDirKey, offerObj.OwnerNode, offerKey, false)
 				// Remove from book directory
 				bookDirKey := keylet.Keylet{Type: 100, Key: offerObj.BookDirectory}
-				sle.DirRemove(tecTable, bookDirKey, offerObj.BookNode, offerKey, false)
+				state.DirRemove(tecTable, bookDirKey, offerObj.BookNode, offerKey, false)
 				// Erase the offer
 				_ = tecTable.Erase(offerKL)
 				// Decrement owner count
@@ -1305,7 +1305,7 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 	// For success, apply all changes through the table
 	// Update the source account through the table (unless erased by e.g. AccountDelete)
 	if !table.IsErased(accountKey) {
-		updatedData, err := sle.SerializeAccountRoot(account)
+		updatedData, err := state.SerializeAccountRoot(account)
 		if err != nil {
 			return TefINTERNAL
 		}
@@ -1421,7 +1421,7 @@ func adjustOwnerCountOnView(view LedgerView, account [20]byte, delta int, txHash
 	if err != nil || accountData == nil {
 		return
 	}
-	accountRoot, err := sle.ParseAccountRoot(accountData)
+	accountRoot, err := state.ParseAccountRoot(accountData)
 	if err != nil {
 		return
 	}
@@ -1432,7 +1432,7 @@ func adjustOwnerCountOnView(view LedgerView, account [20]byte, delta int, txHash
 	accountRoot.OwnerCount = uint32(newCount)
 	accountRoot.PreviousTxnID = txHash
 	accountRoot.PreviousTxnLgrSeq = ledgerSeq
-	newData, err := sle.SerializeAccountRoot(accountRoot)
+	newData, err := state.SerializeAccountRoot(accountRoot)
 	if err != nil {
 		return
 	}
@@ -1449,14 +1449,14 @@ func deleteNFTokenOfferOnView(view LedgerView, offerKL keylet.Keylet, txHash [32
 		return
 	}
 
-	offer, err := sle.ParseNFTokenOffer(offerData)
+	offer, err := state.ParseNFTokenOffer(offerData)
 	if err != nil {
 		return
 	}
 
 	// Remove from owner's directory
 	ownerDirKey := keylet.OwnerDir(offer.Owner)
-	sle.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
+	state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
 
 	// Remove from NFTBuys or NFTSells directory
 	const lsfSellNFToken = 0x00000001
@@ -1467,7 +1467,7 @@ func deleteNFTokenOfferOnView(view LedgerView, offerKL keylet.Keylet, txHash [32
 	} else {
 		tokenDirKey = keylet.NFTBuys(offer.NFTokenID)
 	}
-	sle.DirRemove(view, tokenDirKey, offer.NFTokenOfferNode, offerKL.Key, false)
+	state.DirRemove(view, tokenDirKey, offer.NFTokenOfferNode, offerKL.Key, false)
 
 	// Erase the offer
 	_ = view.Erase(offerKL)

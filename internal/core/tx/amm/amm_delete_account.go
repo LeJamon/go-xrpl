@@ -4,7 +4,7 @@ import (
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // maxDeletableAMMTrustLines is the maximum number of trust lines that can be
@@ -16,13 +16,13 @@ const maxDeletableAMMTrustLines = 512
 // It removes the trust line from both accounts' owner directories, erases it,
 // and decrements the non-AMM account's OwnerCount.
 // Reference: rippled View.cpp deleteAMMTrustLine (line 2720)
-func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *sle.RippleState, ammAccountID [20]byte) tx.Result {
+func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *state.RippleState, ammAccountID [20]byte) tx.Result {
 	// Determine low and high accounts from the trust line limits
-	lowAccountID, err := sle.DecodeAccountID(rs.LowLimit.Issuer)
+	lowAccountID, err := state.DecodeAccountID(rs.LowLimit.Issuer)
 	if err != nil {
 		return tx.TecINTERNAL
 	}
-	highAccountID, err := sle.DecodeAccountID(rs.HighLimit.Issuer)
+	highAccountID, err := state.DecodeAccountID(rs.HighLimit.Issuer)
 	if err != nil {
 		return tx.TecINTERNAL
 	}
@@ -32,7 +32,7 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *sle.Rippl
 	if err != nil || lowAccountData == nil {
 		return tx.TecINTERNAL
 	}
-	lowAccount, err := sle.ParseAccountRoot(lowAccountData)
+	lowAccount, err := state.ParseAccountRoot(lowAccountData)
 	if err != nil {
 		return tx.TecINTERNAL
 	}
@@ -40,7 +40,7 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *sle.Rippl
 	if err != nil || highAccountData == nil {
 		return tx.TecINTERNAL
 	}
-	highAccount, err := sle.ParseAccountRoot(highAccountData)
+	highAccount, err := state.ParseAccountRoot(highAccountData)
 	if err != nil {
 		return tx.TecINTERNAL
 	}
@@ -66,13 +66,13 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *sle.Rippl
 	// trustDelete: remove from both owner directories and erase
 	// Reference: rippled View.cpp trustDelete (line 1534)
 	lowDirKey := keylet.OwnerDir(lowAccountID)
-	_, err = sle.DirRemove(view, lowDirKey, rs.LowNode, lineKey.Key, false)
+	_, err = state.DirRemove(view, lowDirKey, rs.LowNode, lineKey.Key, false)
 	if err != nil {
 		return tx.TefBAD_LEDGER
 	}
 
 	highDirKey := keylet.OwnerDir(highAccountID)
-	_, err = sle.DirRemove(view, highDirKey, rs.HighNode, lineKey.Key, false)
+	_, err = state.DirRemove(view, highDirKey, rs.HighNode, lineKey.Key, false)
 	if err != nil {
 		return tx.TefBAD_LEDGER
 	}
@@ -86,12 +86,12 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *sle.Rippl
 	// For LP token trust lines: the non-AMM side (LP holder) has the reserve.
 	// For IOU asset trust lines: the AMM side has the reserve.
 	// We decrement OwnerCount for any non-AMM side that has a reserve.
-	if rs.Flags&sle.LsfLowReserve != 0 && !ammLow {
+	if rs.Flags&state.LsfLowReserve != 0 && !ammLow {
 		// Low is non-AMM and has reserve
 		if lowAccount.OwnerCount > 0 {
 			lowAccount.OwnerCount--
 		}
-		lowBytes, err := sle.SerializeAccountRoot(lowAccount)
+		lowBytes, err := state.SerializeAccountRoot(lowAccount)
 		if err != nil {
 			return tx.TecINTERNAL
 		}
@@ -99,12 +99,12 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *sle.Rippl
 			return tx.TecINTERNAL
 		}
 	}
-	if rs.Flags&sle.LsfHighReserve != 0 && !ammHigh {
+	if rs.Flags&state.LsfHighReserve != 0 && !ammHigh {
 		// High is non-AMM and has reserve
 		if highAccount.OwnerCount > 0 {
 			highAccount.OwnerCount--
 		}
-		highBytes, err := sle.SerializeAccountRoot(highAccount)
+		highBytes, err := state.SerializeAccountRoot(highAccount)
 		if err != nil {
 			return tx.TecINTERNAL
 		}
@@ -129,7 +129,7 @@ func deleteAMMTrustLines(view tx.LedgerView, ammAccountID [20]byte, maxTrustline
 		return tx.TesSUCCESS // No directory = nothing to delete
 	}
 
-	root, err := sle.ParseDirectoryNode(rootData)
+	root, err := state.ParseDirectoryNode(rootData)
 	if err != nil {
 		return tx.TecINTERNAL
 	}
@@ -160,7 +160,7 @@ func deleteAMMTrustLines(view tx.LedgerView, ammAccountID [20]byte, maxTrustline
 				return tx.TefBAD_LEDGER
 			}
 
-			entryType, err := sle.GetLedgerEntryType(itemData)
+			entryType, err := state.GetLedgerEntryType(itemData)
 			if err != nil {
 				return tx.TecINTERNAL
 			}
@@ -177,7 +177,7 @@ func deleteAMMTrustLines(view tx.LedgerView, ammAccountID [20]byte, maxTrustline
 			}
 
 			// Trust line balance must be zero
-			rs, err := sle.ParseRippleState(itemData)
+			rs, err := state.ParseRippleState(itemData)
 			if err != nil {
 				return tx.TecINTERNAL
 			}
@@ -200,7 +200,7 @@ func deleteAMMTrustLines(view tx.LedgerView, ammAccountID [20]byte, maxTrustline
 				// Page was deleted (empty), move on
 				goto nextPage
 			}
-			currentPage, err = sle.ParseDirectoryNode(pageData)
+			currentPage, err = state.ParseDirectoryNode(pageData)
 			if err != nil {
 				return tx.TecINTERNAL
 			}
@@ -221,7 +221,7 @@ func deleteAMMTrustLines(view tx.LedgerView, ammAccountID [20]byte, maxTrustline
 		if err != nil || pageData == nil {
 			break
 		}
-		currentPage, err = sle.ParseDirectoryNode(pageData)
+		currentPage, err = state.ParseDirectoryNode(pageData)
 		if err != nil {
 			return tx.TecINTERNAL
 		}
@@ -266,7 +266,7 @@ func DeleteAMMAccount(view tx.LedgerView, asset, asset2 tx.Asset) tx.Result {
 	// Remove AMM SLE from the AMM account's owner directory
 	// Reference: rippled AMMUtils.cpp deleteAMMAccount line 315-323
 	ownerDirKey := keylet.OwnerDir(ammAccountID)
-	sle.DirRemove(view, ownerDirKey, amm.OwnerNode, ammKey.Key, false)
+	state.DirRemove(view, ownerDirKey, amm.OwnerNode, ammKey.Key, false)
 
 	// Delete empty owner directory if it still exists
 	// Reference: rippled AMMUtils.cpp deleteAMMAccount line 324-331
@@ -274,7 +274,7 @@ func DeleteAMMAccount(view tx.LedgerView, asset, asset2 tx.Asset) tx.Result {
 		// Read root page and check if empty
 		rootData, err := view.Read(ownerDirKey)
 		if err == nil && rootData != nil {
-			rootNode, err := sle.ParseDirectoryNode(rootData)
+			rootNode, err := state.ParseDirectoryNode(rootData)
 			if err == nil && len(rootNode.Indexes) == 0 && rootNode.IndexNext == 0 {
 				view.Erase(ownerDirKey)
 			}
@@ -298,7 +298,7 @@ func DeleteAMMAccount(view tx.LedgerView, asset, asset2 tx.Asset) tx.Result {
 // and requires AMMDelete to finish cleanup.
 // Reference: rippled AMMWithdraw.cpp deleteAMMAccountIfEmpty (line 718)
 func deleteAMMAccountIfEmpty(view tx.LedgerView, ammKey keylet.Keylet, ammAccountKey keylet.Keylet,
-	lpTokenBalance tx.Amount, asset, asset2 tx.Asset, amm *AMMData, ammAccount *sle.AccountRoot) tx.Result {
+	lpTokenBalance tx.Amount, asset, asset2 tx.Asset, amm *AMMData, ammAccount *state.AccountRoot) tx.Result {
 
 	if !lpTokenBalance.IsZero() {
 		// Not empty, just update the AMM
@@ -310,7 +310,7 @@ func deleteAMMAccountIfEmpty(view tx.LedgerView, ammKey keylet.Keylet, ammAccoun
 		if err := view.Update(ammKey, ammBytes); err != nil {
 			return tx.TefINTERNAL
 		}
-		ammAccountBytes, err := sle.SerializeAccountRoot(ammAccount)
+		ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -337,7 +337,7 @@ func deleteAMMAccountIfEmpty(view tx.LedgerView, ammKey keylet.Keylet, ammAccoun
 		if err := view.Update(ammKey, ammBytes); err != nil {
 			return tx.TefINTERNAL
 		}
-		ammAccountBytes, err := sle.SerializeAccountRoot(ammAccount)
+		ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
 		if err != nil {
 			return tx.TefINTERNAL
 		}

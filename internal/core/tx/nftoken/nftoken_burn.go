@@ -7,7 +7,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -94,7 +94,7 @@ func (b *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Determine the owner
 	var ownerID [20]byte
 	if b.Owner != "" {
-		ownerID, err = sle.DecodeAccountID(b.Owner)
+		ownerID, err = state.DecodeAccountID(b.Owner)
 		if err != nil {
 			return tx.TemINVALID
 		}
@@ -131,7 +131,7 @@ func (b *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 			if err != nil || issuerData == nil {
 				return tx.TecNO_PERMISSION
 			}
-			issuerAccount, err := sle.ParseAccountRoot(issuerData)
+			issuerAccount, err := state.ParseAccountRoot(issuerData)
 			if err != nil {
 				return tx.TefINTERNAL
 			}
@@ -155,7 +155,7 @@ func (b *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err != nil || ownerData == nil {
 			return tx.TefINTERNAL
 		}
-		ownerAccount, err := sle.ParseAccountRoot(ownerData)
+		ownerAccount, err := state.ParseAccountRoot(ownerData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -164,7 +164,7 @@ func (b *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 				ownerAccount.OwnerCount--
 			}
 		}
-		ownerUpdatedData, err := sle.SerializeAccountRoot(ownerAccount)
+		ownerUpdatedData, err := state.SerializeAccountRoot(ownerAccount)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -189,10 +189,10 @@ func (b *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 		issuerKey := keylet.Account(issuerID)
 		issuerData, err := ctx.View.Read(issuerKey)
 		if err == nil {
-			issuerAccount, err := sle.ParseAccountRoot(issuerData)
+			issuerAccount, err := state.ParseAccountRoot(issuerData)
 			if err == nil {
 				issuerAccount.BurnedNFTokens++
-				issuerUpdatedData, err := sle.SerializeAccountRoot(issuerAccount)
+				issuerUpdatedData, err := state.SerializeAccountRoot(issuerAccount)
 				if err == nil {
 					ctx.View.Update(issuerKey, issuerUpdatedData)
 				}

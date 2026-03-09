@@ -6,7 +6,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/credential"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // AccountInDomain checks if an account is a member of a permissioned domain.
@@ -22,7 +22,7 @@ func AccountInDomain(view tx.LedgerView, accountID [20]byte, domainID [32]byte, 
 	if err != nil || domData == nil {
 		return false
 	}
-	pd, err := sle.ParsePermissionedDomain(domData)
+	pd, err := state.ParsePermissionedDomain(domData)
 	if err != nil {
 		return false
 	}
@@ -58,7 +58,7 @@ func AccountInDomain(view tx.LedgerView, accountID [20]byte, domainID [32]byte, 
 // OfferInDomain checks if an offer belongs to a permissioned domain and its
 // owner is still in the domain (i.e., still holds the required credential).
 // Reference: rippled app/misc/PermissionedDEXHelpers.cpp offerInDomain()
-func OfferInDomain(view tx.LedgerView, offer *sle.LedgerOffer, domainID [32]byte, parentCloseTime uint32) bool {
+func OfferInDomain(view tx.LedgerView, offer *state.LedgerOffer, domainID [32]byte, parentCloseTime uint32) bool {
 	var zeroDomain [32]byte
 	if offer.DomainID == zeroDomain {
 		return false
@@ -67,7 +67,7 @@ func OfferInDomain(view tx.LedgerView, offer *sle.LedgerOffer, domainID [32]byte
 		return false
 	}
 
-	ownerID, err := sle.DecodeAccountID(offer.Account)
+	ownerID, err := state.DecodeAccountID(offer.Account)
 	if err != nil {
 		return false
 	}

@@ -3,7 +3,7 @@ package tx
 import (
 	"errors"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // Common errors
@@ -63,23 +63,23 @@ type BatchFeeCalculator interface {
 	CalculateMinimumFee(baseFee uint64) uint64
 }
 
-// Amount is an alias for sle.Amount — represents either XRP (as drops int64) or an issued currency amount
-type Amount = sle.Amount
+// Amount is an alias for state.Amount — represents either XRP (as drops int64) or an issued currency amount
+type Amount = state.Amount
 
 // NewXRPAmount creates an XRP amount in drops
 func NewXRPAmount(drops int64) Amount {
-	return sle.NewXRPAmountFromInt(drops)
+	return state.NewXRPAmountFromInt(drops)
 }
 
 // NewIssuedAmount creates an issued currency amount from mantissa and exponent
 func NewIssuedAmount(mantissa int64, exponent int, currency, issuer string) Amount {
-	return sle.NewIssuedAmountFromValue(mantissa, exponent, currency, issuer)
+	return state.NewIssuedAmountFromValue(mantissa, exponent, currency, issuer)
 }
 
 // NewIssuedAmountFromFloat64 creates an issued currency amount from a float64 value.
 // This is a convenience function for tests and simple use cases.
 func NewIssuedAmountFromFloat64(value float64, currency, issuer string) Amount {
-	return sle.NewIssuedAmountFromFloat64(value, currency, issuer)
+	return state.NewIssuedAmountFromFloat64(value, currency, issuer)
 }
 
 // Memo represents a memo attached to a transaction

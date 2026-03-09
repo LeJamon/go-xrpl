@@ -7,7 +7,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -242,7 +242,7 @@ func (b *Batch) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Write the outer account state (with fee deducted and sequence incremented
 	// by the engine) to the view so inner transactions see the correct state.
 	accountKey := keylet.Account(ctx.AccountID)
-	outerAccountData, err := sle.SerializeAccountRoot(ctx.Account)
+	outerAccountData, err := state.SerializeAccountRoot(ctx.Account)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -351,7 +351,7 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) tx.Resu
 	common := innerTx.GetCommon()
 
 	// Decode the inner transaction's account
-	accountID, err := sle.DecodeAccountID(common.Account)
+	accountID, err := state.DecodeAccountID(common.Account)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -373,7 +373,7 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) tx.Resu
 		return tx.TefINTERNAL
 	}
 
-	account, err := sle.ParseAccountRoot(accountData)
+	account, err := state.ParseAccountRoot(accountData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -414,7 +414,7 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) tx.Resu
 	}
 
 	// Serialize the updated account
-	updatedData, err := sle.SerializeAccountRoot(account)
+	updatedData, err := state.SerializeAccountRoot(account)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -450,7 +450,7 @@ func syncAccountFromView(ctx *tx.ApplyContext) {
 	if err != nil {
 		return
 	}
-	account, err := sle.ParseAccountRoot(data)
+	account, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return
 	}

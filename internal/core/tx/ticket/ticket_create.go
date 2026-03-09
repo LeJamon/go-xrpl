@@ -7,7 +7,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -81,13 +81,13 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled CreateTicket.cpp preclaim() lines 63-79
 	// Count existing tickets in owner directory
 	var currentTicketCount uint32
-	_ = sle.DirForEach(ctx.View, ownerDirKey, func(itemKey [32]byte) error {
+	_ = state.DirForEach(ctx.View, ownerDirKey, func(itemKey [32]byte) error {
 		entryKey := keylet.Keylet{Key: itemKey}
 		data, readErr := ctx.View.Read(entryKey)
 		if readErr != nil || len(data) == 0 {
 			return nil
 		}
-		entryType, typeErr := sle.GetLedgerEntryType(data)
+		entryType, typeErr := state.GetLedgerEntryType(data)
 		if typeErr != nil {
 			return nil
 		}
@@ -127,7 +127,7 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		ticketKey := keylet.Ticket(ctx.AccountID, ticketSeq)
 
-		ticketData, err := sle.SerializeTicket(ctx.AccountID, ticketSeq)
+		ticketData, err := state.SerializeTicket(ctx.AccountID, ticketSeq)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -137,7 +137,7 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Add ticket to owner directory
-		_, err = sle.DirInsert(ctx.View, ownerDirKey, ticketKey.Key, func(dir *sle.DirectoryNode) {
+		_, err = state.DirInsert(ctx.View, ownerDirKey, ticketKey.Key, func(dir *state.DirectoryNode) {
 			dir.Owner = ctx.AccountID
 		})
 		if err != nil {

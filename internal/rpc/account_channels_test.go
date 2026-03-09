@@ -6,23 +6,23 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
+	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
+	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // mockAccountChannelsLedgerService implements LedgerService for account_channels testing
 type mockAccountChannelsLedgerService struct {
-	accountChannelsResult *rpc_types.AccountChannelsResult
+	accountChannelsResult *types.AccountChannelsResult
 	accountChannelsErr    error
-	accountInfo           *rpc_types.AccountInfo
+	accountInfo           *types.AccountInfo
 	accountInfoErr        error
 	currentLedgerIndex    uint32
 	closedLedgerIndex     uint32
 	validatedLedgerIndex  uint32
 	standalone            bool
-	serverInfo            rpc_types.LedgerServerInfo
+	serverInfo            types.LedgerServerInfo
 }
 
 func newMockAccountChannelsLedgerService() *mockAccountChannelsLedgerService {
@@ -31,7 +31,7 @@ func newMockAccountChannelsLedgerService() *mockAccountChannelsLedgerService {
 		closedLedgerIndex:    2,
 		validatedLedgerIndex: 2,
 		standalone:           true,
-		serverInfo: rpc_types.LedgerServerInfo{
+		serverInfo: types.LedgerServerInfo{
 			Standalone:         true,
 			OpenLedgerSeq:      3,
 			ClosedLedgerSeq:    2,
@@ -46,32 +46,32 @@ func (m *mockAccountChannelsLedgerService) GetClosedLedgerIndex() uint32    { re
 func (m *mockAccountChannelsLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
 func (m *mockAccountChannelsLedgerService) AcceptLedger() (uint32, error)   { return m.closedLedgerIndex + 1, nil }
 func (m *mockAccountChannelsLedgerService) IsStandalone() bool              { return m.standalone }
-func (m *mockAccountChannelsLedgerService) GetServerInfo() rpc_types.LedgerServerInfo {
+func (m *mockAccountChannelsLedgerService) GetServerInfo() types.LedgerServerInfo {
 	return m.serverInfo
 }
 func (m *mockAccountChannelsLedgerService) GetGenesisAccount() (string, error) {
 	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
 }
-func (m *mockAccountChannelsLedgerService) GetLedgerBySequence(seq uint32) (rpc_types.LedgerReader, error) {
+func (m *mockAccountChannelsLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetLedgerByHash(hash [32]byte) (rpc_types.LedgerReader, error) {
+func (m *mockAccountChannelsLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) SubmitTransaction(txJSON []byte) (*rpc_types.SubmitResult, error) {
+func (m *mockAccountChannelsLedgerService) SubmitTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountChannelsLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
 	return 10, 10000000, 2000000
 }
-func (m *mockAccountChannelsLedgerService) GetAccountInfo(account string, ledgerIndex string) (*rpc_types.AccountInfo, error) {
+func (m *mockAccountChannelsLedgerService) GetAccountInfo(account string, ledgerIndex string) (*types.AccountInfo, error) {
 	if m.accountInfoErr != nil {
 		return nil, m.accountInfoErr
 	}
 	if m.accountInfo != nil {
 		return m.accountInfo, nil
 	}
-	return &rpc_types.AccountInfo{
+	return &types.AccountInfo{
 		Account:     account,
 		Balance:     "100000000",
 		Flags:       0,
@@ -82,40 +82,40 @@ func (m *mockAccountChannelsLedgerService) GetAccountInfo(account string, ledger
 		Validated:   true,
 	}, nil
 }
-func (m *mockAccountChannelsLedgerService) GetTransaction(txHash [32]byte) (*rpc_types.TransactionInfo, error) {
+func (m *mockAccountChannelsLedgerService) GetTransaction(txHash [32]byte) (*types.TransactionInfo, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountChannelsLedgerService) StoreTransaction(txHash [32]byte, txData []byte) error {
 	return errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetAccountLines(account string, ledgerIndex string, peer string, limit uint32) (*rpc_types.AccountLinesResult, error) {
+func (m *mockAccountChannelsLedgerService) GetAccountLines(account string, ledgerIndex string, peer string, limit uint32) (*types.AccountLinesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetAccountOffers(account string, ledgerIndex string, limit uint32) (*rpc_types.AccountOffersResult, error) {
+func (m *mockAccountChannelsLedgerService) GetAccountOffers(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetBookOffers(takerGets, takerPays rpc_types.Amount, ledgerIndex string, limit uint32) (*rpc_types.BookOffersResult, error) {
+func (m *mockAccountChannelsLedgerService) GetBookOffers(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *rpc_types.AccountTxMarker, forward bool) (*rpc_types.AccountTxResult, error) {
+func (m *mockAccountChannelsLedgerService) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetTransactionHistory(startIndex uint32) (*rpc_types.TxHistoryResult, error) {
+func (m *mockAccountChannelsLedgerService) GetTransactionHistory(startIndex uint32) (*types.TxHistoryResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetLedgerRange(minSeq, maxSeq uint32) (*rpc_types.LedgerRangeResult, error) {
+func (m *mockAccountChannelsLedgerService) GetLedgerRange(minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*rpc_types.LedgerEntryResult, error) {
+func (m *mockAccountChannelsLedgerService) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetLedgerData(ledgerIndex string, limit uint32, marker string) (*rpc_types.LedgerDataResult, error) {
+func (m *mockAccountChannelsLedgerService) GetLedgerData(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*rpc_types.AccountObjectsResult, error) {
+func (m *mockAccountChannelsLedgerService) GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*rpc_types.AccountChannelsResult, error) {
+func (m *mockAccountChannelsLedgerService) GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*types.AccountChannelsResult, error) {
 	if m.accountChannelsErr != nil {
 		return nil, m.accountChannelsErr
 	}
@@ -123,44 +123,44 @@ func (m *mockAccountChannelsLedgerService) GetAccountChannels(account string, de
 		return m.accountChannelsResult, nil
 	}
 	// Return empty channels by default
-	return &rpc_types.AccountChannelsResult{
+	return &types.AccountChannelsResult{
 		Account:     account,
-		Channels:    []rpc_types.AccountChannel{},
+		Channels:    []types.AccountChannel{},
 		LedgerIndex: m.validatedLedgerIndex,
 		LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 		Validated:   true,
 	}, nil
 }
-func (m *mockAccountChannelsLedgerService) GetAccountCurrencies(account string, ledgerIndex string) (*rpc_types.AccountCurrenciesResult, error) {
+func (m *mockAccountChannelsLedgerService) GetAccountCurrencies(account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetAccountNFTs(account string, ledgerIndex string, limit uint32) (*rpc_types.AccountNFTsResult, error) {
+func (m *mockAccountChannelsLedgerService) GetAccountNFTs(account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetGatewayBalances(account string, hotWallets []string, ledgerIndex string) (*rpc_types.GatewayBalancesResult, error) {
+func (m *mockAccountChannelsLedgerService) GetGatewayBalances(account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*rpc_types.NoRippleCheckResult, error) {
+func (m *mockAccountChannelsLedgerService) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*rpc_types.DepositAuthorizedResult, error) {
+func (m *mockAccountChannelsLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*types.DepositAuthorizedResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*rpc_types.NFTOffersResult, error) {
+func (m *mockAccountChannelsLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*rpc_types.NFTOffersResult, error) {
+func (m *mockAccountChannelsLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
 
 // setupAccountChannelsTestServices initializes the Services singleton with a mock for testing
 func setupAccountChannelsTestServices(mock *mockAccountChannelsLedgerService) func() {
-	oldServices := rpc_types.Services
-	rpc_types.Services = &rpc_types.ServiceContainer{
+	oldServices := types.Services
+	types.Services = &types.ServiceContainer{
 		Ledger: mock,
 	}
 	return func() {
-		rpc_types.Services = oldServices
+		types.Services = oldServices
 	}
 }
 
@@ -171,11 +171,11 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 	cleanup := setupAccountChannelsTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.AccountChannelsMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.AccountChannelsMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	tests := []struct {
@@ -189,13 +189,13 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 			name:          "Missing account field - empty params",
 			params:        map[string]interface{}{},
 			expectedError: "Missing required parameter: account",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
 			expectedError: "Missing required parameter: account",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - integer",
@@ -203,7 +203,7 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 				"account": 12345,
 			},
 			expectedError: "Invalid parameters:",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - boolean",
@@ -211,7 +211,7 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 				"account": true,
 			},
 			expectedError: "Invalid parameters:",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			// Test case from rippled: malformed account using node public key format
@@ -220,7 +220,7 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
 			expectedError: "Account not found.",
-			expectedCode:  rpc_types.RpcACT_NOT_FOUND,
+			expectedCode:  types.RpcACT_NOT_FOUND,
 			setupMock: func() {
 				mock.accountChannelsErr = errors.New("account not found")
 			},
@@ -232,7 +232,7 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
 			},
 			expectedError: "Account not found.",
-			expectedCode:  rpc_types.RpcACT_NOT_FOUND,
+			expectedCode:  types.RpcACT_NOT_FOUND,
 			setupMock: func() {
 				mock.accountChannelsErr = errors.New("account not found")
 			},
@@ -279,20 +279,20 @@ func TestAccountChannelsSimple(t *testing.T) {
 	cleanup := setupAccountChannelsTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.AccountChannelsMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.AccountChannelsMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	bobAccount := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
 
 	t.Run("Account with no channels returns empty array", func(t *testing.T) {
-		mock.accountChannelsResult = &rpc_types.AccountChannelsResult{
+		mock.accountChannelsResult = &types.AccountChannelsResult{
 			Account:     aliceAccount,
-			Channels:    []rpc_types.AccountChannel{},
+			Channels:    []types.AccountChannel{},
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 			Validated:   true,
@@ -321,9 +321,9 @@ func TestAccountChannelsSimple(t *testing.T) {
 
 	t.Run("Account with one channel returns channel details", func(t *testing.T) {
 		// Based on rippled's testSimple after creating a channel
-		mock.accountChannelsResult = &rpc_types.AccountChannelsResult{
+		mock.accountChannelsResult = &types.AccountChannelsResult{
 			Account: aliceAccount,
-			Channels: []rpc_types.AccountChannel{
+			Channels: []types.AccountChannel{
 				{
 					ChannelID:          "5DB01B7FFED6B67E6B0414DED11E051D2EE2B7619CE0EAA6286D67A3A4D5BDB3",
 					Account:            aliceAccount,
@@ -380,9 +380,9 @@ func TestAccountChannelsSimple(t *testing.T) {
 
 	t.Run("Channel after funding shows updated amount", func(t *testing.T) {
 		// Based on rippled's testSimple after funding the channel
-		mock.accountChannelsResult = &rpc_types.AccountChannelsResult{
+		mock.accountChannelsResult = &types.AccountChannelsResult{
 			Account: aliceAccount,
-			Channels: []rpc_types.AccountChannel{
+			Channels: []types.AccountChannel{
 				{
 					ChannelID:          "5DB01B7FFED6B67E6B0414DED11E051D2EE2B7619CE0EAA6286D67A3A4D5BDB3",
 					Account:            aliceAccount,
@@ -423,9 +423,9 @@ func TestAccountChannelsSimple(t *testing.T) {
 
 	t.Run("Channel after claim shows updated balance", func(t *testing.T) {
 		// Based on rippled's testSimple after claiming from channel
-		mock.accountChannelsResult = &rpc_types.AccountChannelsResult{
+		mock.accountChannelsResult = &types.AccountChannelsResult{
 			Account: aliceAccount,
-			Channels: []rpc_types.AccountChannel{
+			Channels: []types.AccountChannel{
 				{
 					ChannelID:          "5DB01B7FFED6B67E6B0414DED11E051D2EE2B7619CE0EAA6286D67A3A4D5BDB3",
 					Account:            aliceAccount,
@@ -472,11 +472,11 @@ func TestAccountChannelsDestinationFilter(t *testing.T) {
 	cleanup := setupAccountChannelsTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.AccountChannelsMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.AccountChannelsMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -485,9 +485,9 @@ func TestAccountChannelsDestinationFilter(t *testing.T) {
 
 	t.Run("Filter by destination returns only matching channels", func(t *testing.T) {
 		// Setup: alice has channels to both bob and carol
-		mock.accountChannelsResult = &rpc_types.AccountChannelsResult{
+		mock.accountChannelsResult = &types.AccountChannelsResult{
 			Account: aliceAccount,
-			Channels: []rpc_types.AccountChannel{
+			Channels: []types.AccountChannel{
 				{
 					ChannelID:          "CHANNEL_TO_BOB",
 					Account:            aliceAccount,
@@ -527,9 +527,9 @@ func TestAccountChannelsDestinationFilter(t *testing.T) {
 	})
 
 	t.Run("Filter by non-existent destination returns empty", func(t *testing.T) {
-		mock.accountChannelsResult = &rpc_types.AccountChannelsResult{
+		mock.accountChannelsResult = &types.AccountChannelsResult{
 			Account:     aliceAccount,
-			Channels:    []rpc_types.AccountChannel{},
+			Channels:    []types.AccountChannel{},
 			LedgerIndex: 3,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 			Validated:   true,
@@ -565,20 +565,20 @@ func TestAccountChannelsOptionalFields(t *testing.T) {
 	cleanup := setupAccountChannelsTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.AccountChannelsMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.AccountChannelsMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	bobAccount := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
 
 	t.Run("Channel with expiration shows expiration field", func(t *testing.T) {
-		mock.accountChannelsResult = &rpc_types.AccountChannelsResult{
+		mock.accountChannelsResult = &types.AccountChannelsResult{
 			Account: aliceAccount,
-			Channels: []rpc_types.AccountChannel{
+			Channels: []types.AccountChannel{
 				{
 					ChannelID:          "CHANNEL_WITH_EXPIRATION",
 					Account:            aliceAccount,
@@ -619,9 +619,9 @@ func TestAccountChannelsOptionalFields(t *testing.T) {
 	})
 
 	t.Run("Channel with cancel_after shows cancel_after field", func(t *testing.T) {
-		mock.accountChannelsResult = &rpc_types.AccountChannelsResult{
+		mock.accountChannelsResult = &types.AccountChannelsResult{
 			Account: aliceAccount,
-			Channels: []rpc_types.AccountChannel{
+			Channels: []types.AccountChannel{
 				{
 					ChannelID:          "CHANNEL_WITH_CANCEL",
 					Account:            aliceAccount,
@@ -662,9 +662,9 @@ func TestAccountChannelsOptionalFields(t *testing.T) {
 	})
 
 	t.Run("Channel with source_tag and destination_tag shows tag fields", func(t *testing.T) {
-		mock.accountChannelsResult = &rpc_types.AccountChannelsResult{
+		mock.accountChannelsResult = &types.AccountChannelsResult{
 			Account: aliceAccount,
-			Channels: []rpc_types.AccountChannel{
+			Channels: []types.AccountChannel{
 				{
 					ChannelID:          "CHANNEL_WITH_TAGS",
 					Account:            aliceAccount,
@@ -710,9 +710,9 @@ func TestAccountChannelsOptionalFields(t *testing.T) {
 	})
 
 	t.Run("Channel without optional fields excludes them from response", func(t *testing.T) {
-		mock.accountChannelsResult = &rpc_types.AccountChannelsResult{
+		mock.accountChannelsResult = &types.AccountChannelsResult{
 			Account: aliceAccount,
-			Channels: []rpc_types.AccountChannel{
+			Channels: []types.AccountChannel{
 				{
 					ChannelID:          "BASIC_CHANNEL",
 					Account:            aliceAccount,
@@ -765,11 +765,11 @@ func TestAccountChannelsLedgerSpecification(t *testing.T) {
 	cleanup := setupAccountChannelsTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.AccountChannelsMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.AccountChannelsMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -789,9 +789,9 @@ func TestAccountChannelsLedgerSpecification(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			setupMock: func() {
-				mock.accountChannelsResult = &rpc_types.AccountChannelsResult{
+				mock.accountChannelsResult = &types.AccountChannelsResult{
 					Account:     validAccount,
-					Channels:    []rpc_types.AccountChannel{},
+					Channels:    []types.AccountChannel{},
 					LedgerIndex: 2,
 					LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 					Validated:   true,
@@ -810,9 +810,9 @@ func TestAccountChannelsLedgerSpecification(t *testing.T) {
 				"ledger_index": "current",
 			},
 			setupMock: func() {
-				mock.accountChannelsResult = &rpc_types.AccountChannelsResult{
+				mock.accountChannelsResult = &types.AccountChannelsResult{
 					Account:     validAccount,
-					Channels:    []rpc_types.AccountChannel{},
+					Channels:    []types.AccountChannel{},
 					LedgerIndex: 3,
 					LedgerHash:  [32]byte{0x5B, 0xC5, 0x0C, 0x9B},
 					Validated:   false,
@@ -831,9 +831,9 @@ func TestAccountChannelsLedgerSpecification(t *testing.T) {
 				"ledger_index": 2,
 			},
 			setupMock: func() {
-				mock.accountChannelsResult = &rpc_types.AccountChannelsResult{
+				mock.accountChannelsResult = &types.AccountChannelsResult{
 					Account:     validAccount,
-					Channels:    []rpc_types.AccountChannel{},
+					Channels:    []types.AccountChannel{},
 					LedgerIndex: 2,
 					LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 					Validated:   true,
@@ -892,15 +892,15 @@ func TestAccountChannelsLedgerSpecification(t *testing.T) {
 
 // TestAccountChannelsServiceUnavailable tests behavior when ledger service is not available
 func TestAccountChannelsServiceUnavailable(t *testing.T) {
-	oldServices := rpc_types.Services
-	rpc_types.Services = nil
-	defer func() { rpc_types.Services = oldServices }()
+	oldServices := types.Services
+	types.Services = nil
+	defer func() { types.Services = oldServices }()
 
-	method := &rpc_handlers.AccountChannelsMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.AccountChannelsMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := map[string]interface{}{
@@ -913,24 +913,24 @@ func TestAccountChannelsServiceUnavailable(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, rpc_types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
 	assert.Contains(t, rpcErr.Message, "Ledger service not available")
 }
 
 // TestAccountChannelsMethodMetadata tests the method's metadata functions
 func TestAccountChannelsMethodMetadata(t *testing.T) {
-	method := &rpc_handlers.AccountChannelsMethod{}
+	method := &handlers.AccountChannelsMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, rpc_types.RoleGuest, method.RequiredRole(),
+		assert.Equal(t, types.RoleGuest, method.RequiredRole(),
 			"account_channels should be accessible to guests")
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {
 		versions := method.SupportedApiVersions()
-		assert.Contains(t, versions, rpc_types.ApiVersion1)
-		assert.Contains(t, versions, rpc_types.ApiVersion2)
-		assert.Contains(t, versions, rpc_types.ApiVersion3)
+		assert.Contains(t, versions, types.ApiVersion1)
+		assert.Contains(t, versions, types.ApiVersion2)
+		assert.Contains(t, versions, types.ApiVersion3)
 	})
 }
 
@@ -940,11 +940,11 @@ func TestAccountChannelsMultipleChannels(t *testing.T) {
 	cleanup := setupAccountChannelsTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.AccountChannelsMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.AccountChannelsMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -952,9 +952,9 @@ func TestAccountChannelsMultipleChannels(t *testing.T) {
 	carolAccount := "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9"
 
 	t.Run("Account with multiple channels to different destinations", func(t *testing.T) {
-		mock.accountChannelsResult = &rpc_types.AccountChannelsResult{
+		mock.accountChannelsResult = &types.AccountChannelsResult{
 			Account: aliceAccount,
-			Channels: []rpc_types.AccountChannel{
+			Channels: []types.AccountChannel{
 				{
 					ChannelID:          "CHANNEL_1",
 					Account:            aliceAccount,

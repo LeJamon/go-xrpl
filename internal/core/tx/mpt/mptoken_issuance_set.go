@@ -8,7 +8,7 @@ import (
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -110,7 +110,7 @@ func (m *MPTokenIssuanceSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecOBJECT_NOT_FOUND
 	}
 
-	issuance, err := sle.ParseMPTokenIssuance(issuanceRaw)
+	issuance, err := state.ParseMPTokenIssuance(issuanceRaw)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -138,8 +138,8 @@ func (m *MPTokenIssuanceSet) Apply(ctx *tx.ApplyContext) tx.Result {
 }
 
 // setHolderToken modifies a specific holder's MPToken (lock/unlock).
-func (m *MPTokenIssuanceSet) setHolderToken(ctx *tx.ApplyContext, issuanceKey keylet.Keylet, issuance *sle.MPTokenIssuanceData, txFlags uint32) tx.Result {
-	holderID, err := sle.DecodeAccountID(m.Holder)
+func (m *MPTokenIssuanceSet) setHolderToken(ctx *tx.ApplyContext, issuanceKey keylet.Keylet, issuance *state.MPTokenIssuanceData, txFlags uint32) tx.Result {
+	holderID, err := state.DecodeAccountID(m.Holder)
 	if err != nil {
 		return tx.TemINVALID
 	}
@@ -159,7 +159,7 @@ func (m *MPTokenIssuanceSet) setHolderToken(ctx *tx.ApplyContext, issuanceKey ke
 		return tx.TecOBJECT_NOT_FOUND
 	}
 
-	token, err := sle.ParseMPToken(tokenRaw)
+	token, err := state.ParseMPToken(tokenRaw)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -172,7 +172,7 @@ func (m *MPTokenIssuanceSet) setHolderToken(ctx *tx.ApplyContext, issuanceKey ke
 	}
 
 	// Serialize and update
-	updatedData, err := sle.SerializeMPToken(token)
+	updatedData, err := state.SerializeMPToken(token)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -184,7 +184,7 @@ func (m *MPTokenIssuanceSet) setHolderToken(ctx *tx.ApplyContext, issuanceKey ke
 }
 
 // setIssuance modifies the issuance itself (lock/unlock).
-func (m *MPTokenIssuanceSet) setIssuance(ctx *tx.ApplyContext, issuanceKey keylet.Keylet, issuance *sle.MPTokenIssuanceData, txFlags uint32) tx.Result {
+func (m *MPTokenIssuanceSet) setIssuance(ctx *tx.ApplyContext, issuanceKey keylet.Keylet, issuance *state.MPTokenIssuanceData, txFlags uint32) tx.Result {
 	// Toggle lock/unlock on the issuance
 	if txFlags&MPTokenIssuanceSetFlagLock != 0 {
 		issuance.Flags |= entry.LsfMPTLocked
@@ -193,7 +193,7 @@ func (m *MPTokenIssuanceSet) setIssuance(ctx *tx.ApplyContext, issuanceKey keyle
 	}
 
 	// Serialize and update
-	updatedData, err := sle.SerializeMPTokenIssuance(issuance)
+	updatedData, err := state.SerializeMPTokenIssuance(issuance)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

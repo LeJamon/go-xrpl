@@ -5,7 +5,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -174,12 +174,12 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Determine the issuer
 	var issuerID [20]byte
-	var issuerAccount *sle.AccountRoot
+	var issuerAccount *state.AccountRoot
 	var issuerKey keylet.Keylet
 
 	if m.Issuer != "" {
 		var err error
-		issuerID, err = sle.DecodeAccountID(m.Issuer)
+		issuerID, err = state.DecodeAccountID(m.Issuer)
 		if err != nil {
 			return tx.TemINVALID
 		}
@@ -190,7 +190,7 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err != nil || issuerData == nil {
 			return tx.TecNO_ISSUER
 		}
-		issuerAccount, err = sle.ParseAccountRoot(issuerData)
+		issuerAccount, err = state.ParseAccountRoot(issuerData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -243,7 +243,7 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Insert the NFToken into the owner's token directory
 	// Reference: rippled NFTokenUtils.cpp insertToken
-	newToken := sle.NFTokenData{
+	newToken := state.NFTokenData{
 		NFTokenID: tokenID,
 		URI:       m.URI,
 	}
@@ -261,7 +261,7 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// If issuer is different from minter, update the issuer account - tracked automatically
 	if m.Issuer != "" {
-		issuerUpdatedData, err := sle.SerializeAccountRoot(issuerAccount)
+		issuerUpdatedData, err := state.SerializeAccountRoot(issuerAccount)
 		if err != nil {
 			return tx.TefINTERNAL
 		}

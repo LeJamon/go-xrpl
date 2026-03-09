@@ -11,7 +11,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -165,7 +165,7 @@ func (ec *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Verify destination exists
 	// Reference: rippled Escrow.cpp:511-512
-	destID, err := sle.DecodeAccountID(ec.Destination)
+	destID, err := state.DecodeAccountID(ec.Destination)
 	if err != nil {
 		return tx.TemINVALID
 	}
@@ -176,27 +176,27 @@ func (ec *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecNO_DST
 	}
 
-	destAccount, err := sle.ParseAccountRoot(destData)
+	destAccount, err := state.ParseAccountRoot(destData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
 	// Pseudo-accounts cannot receive escrow.
 	// Reference: rippled Escrow.cpp:373-378
-	if (destAccount.Flags & sle.LsfAMM) != 0 {
+	if (destAccount.Flags & state.LsfAMM) != 0 {
 		return tx.TecNO_PERMISSION
 	}
 
 	// Destination tag check
 	// Reference: rippled Escrow.cpp:517-519
-	if (destAccount.Flags&sle.LsfRequireDestTag) != 0 && ec.DestinationTag == nil {
+	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && ec.DestinationTag == nil {
 		return tx.TecDST_TAG_NEEDED
 	}
 
 	// DisallowXRP check (only when DepositAuth amendment is NOT enabled)
 	// Reference: rippled Escrow.cpp:523-525
 	if !rules.Enabled(amendment.FeatureDepositAuth) {
-		if (destAccount.Flags & sle.LsfDisallowXRP) != 0 {
+		if (destAccount.Flags & state.LsfDisallowXRP) != 0 {
 			return tx.TecNO_TARGET
 		}
 	}
@@ -215,7 +215,7 @@ func (ec *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	ctx.Account.Balance -= uint64(amount)
 
 	// Create the escrow entry
-	accountID, _ := sle.DecodeAccountID(ec.Account)
+	accountID, _ := state.DecodeAccountID(ec.Account)
 	sequence := ec.GetCommon().SeqProxy()
 
 	escrowKey := keylet.Escrow(accountID, sequence)
@@ -234,7 +234,7 @@ func (ec *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Owner directory: insert escrow into owner's directory
 	// Reference: rippled Escrow.cpp:550-558
 	ownerDirKey := keylet.OwnerDir(accountID)
-	_, err = sle.DirInsert(ctx.View, ownerDirKey, escrowKey.Key, func(dir *sle.DirectoryNode) {
+	_, err = state.DirInsert(ctx.View, ownerDirKey, escrowKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = accountID
 	})
 	if err != nil {
@@ -246,7 +246,7 @@ func (ec *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled Escrow.cpp:560-570 + adjustOwnerCount
 	if destID != accountID {
 		destDirKey := keylet.OwnerDir(destID)
-		_, err = sle.DirInsert(ctx.View, destDirKey, escrowKey.Key, func(dir *sle.DirectoryNode) {
+		_, err = state.DirInsert(ctx.View, destDirKey, escrowKey.Key, func(dir *state.DirectoryNode) {
 			dir.Owner = destID
 		})
 		if err != nil {
@@ -255,7 +255,7 @@ func (ec *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// Increment destination's OwnerCount
 		destAccount.OwnerCount++
-		destUpdatedData2, err := sle.SerializeAccountRoot(destAccount)
+		destUpdatedData2, err := state.SerializeAccountRoot(destAccount)
 		if err != nil {
 			return tx.TefINTERNAL
 		}

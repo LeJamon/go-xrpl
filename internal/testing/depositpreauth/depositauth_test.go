@@ -7,7 +7,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	paymentPkg "github.com/LeJamon/goXRPLd/internal/core/tx/payment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
@@ -22,7 +22,7 @@ func hasDepositAuth(t *testing.T, env *jtx.TestEnv, acc *jtx.Account) bool {
 	if info == nil {
 		return false
 	}
-	return (info.Flags & sle.LsfDepositAuth) == sle.LsfDepositAuth
+	return (info.Flags & state.LsfDepositAuth) == state.LsfDepositAuth
 }
 
 // reserve returns the account reserve for the given owner count.

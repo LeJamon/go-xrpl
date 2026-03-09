@@ -2,7 +2,7 @@ package tx
 
 import (
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // ApplyContext provides all the state and helpers needed to apply a transaction.
@@ -12,7 +12,7 @@ type ApplyContext struct {
 	View LedgerView
 
 	// Account is the source account (mutable, will be written back by the engine)
-	Account *sle.AccountRoot
+	Account *state.AccountRoot
 
 	// AccountID is the decoded source account ID
 	AccountID [20]byte

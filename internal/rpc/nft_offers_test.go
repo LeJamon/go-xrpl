@@ -6,23 +6,23 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
+	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
+	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // mockNFTOffersLedgerService implements LedgerService for nft_buy_offers/nft_sell_offers testing
 type mockNFTOffersLedgerService struct {
-	nftBuyOffersResult   *rpc_types.NFTOffersResult
+	nftBuyOffersResult   *types.NFTOffersResult
 	nftBuyOffersErr      error
-	nftSellOffersResult  *rpc_types.NFTOffersResult
+	nftSellOffersResult  *types.NFTOffersResult
 	nftSellOffersErr     error
 	currentLedgerIndex   uint32
 	closedLedgerIndex    uint32
 	validatedLedgerIndex uint32
 	standalone           bool
-	serverInfo           rpc_types.LedgerServerInfo
+	serverInfo           types.LedgerServerInfo
 }
 
 func newMockNFTOffersLedgerService() *mockNFTOffersLedgerService {
@@ -31,7 +31,7 @@ func newMockNFTOffersLedgerService() *mockNFTOffersLedgerService {
 		closedLedgerIndex:    2,
 		validatedLedgerIndex: 2,
 		standalone:           true,
-		serverInfo: rpc_types.LedgerServerInfo{
+		serverInfo: types.LedgerServerInfo{
 			Standalone:         true,
 			OpenLedgerSeq:      3,
 			ClosedLedgerSeq:    2,
@@ -46,81 +46,81 @@ func (m *mockNFTOffersLedgerService) GetClosedLedgerIndex() uint32    { return m
 func (m *mockNFTOffersLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
 func (m *mockNFTOffersLedgerService) AcceptLedger() (uint32, error)   { return m.closedLedgerIndex + 1, nil }
 func (m *mockNFTOffersLedgerService) IsStandalone() bool              { return m.standalone }
-func (m *mockNFTOffersLedgerService) GetServerInfo() rpc_types.LedgerServerInfo {
+func (m *mockNFTOffersLedgerService) GetServerInfo() types.LedgerServerInfo {
 	return m.serverInfo
 }
 func (m *mockNFTOffersLedgerService) GetGenesisAccount() (string, error) {
 	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
 }
-func (m *mockNFTOffersLedgerService) GetLedgerBySequence(seq uint32) (rpc_types.LedgerReader, error) {
+func (m *mockNFTOffersLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetLedgerByHash(hash [32]byte) (rpc_types.LedgerReader, error) {
+func (m *mockNFTOffersLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) SubmitTransaction(txJSON []byte) (*rpc_types.SubmitResult, error) {
+func (m *mockNFTOffersLedgerService) SubmitTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockNFTOffersLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
 	return 10, 10000000, 2000000
 }
-func (m *mockNFTOffersLedgerService) GetAccountInfo(account string, ledgerIndex string) (*rpc_types.AccountInfo, error) {
+func (m *mockNFTOffersLedgerService) GetAccountInfo(account string, ledgerIndex string) (*types.AccountInfo, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetTransaction(txHash [32]byte) (*rpc_types.TransactionInfo, error) {
+func (m *mockNFTOffersLedgerService) GetTransaction(txHash [32]byte) (*types.TransactionInfo, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockNFTOffersLedgerService) StoreTransaction(txHash [32]byte, txData []byte) error {
 	return errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetAccountLines(account string, ledgerIndex string, peer string, limit uint32) (*rpc_types.AccountLinesResult, error) {
+func (m *mockNFTOffersLedgerService) GetAccountLines(account string, ledgerIndex string, peer string, limit uint32) (*types.AccountLinesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetAccountOffers(account string, ledgerIndex string, limit uint32) (*rpc_types.AccountOffersResult, error) {
+func (m *mockNFTOffersLedgerService) GetAccountOffers(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetBookOffers(takerGets, takerPays rpc_types.Amount, ledgerIndex string, limit uint32) (*rpc_types.BookOffersResult, error) {
+func (m *mockNFTOffersLedgerService) GetBookOffers(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *rpc_types.AccountTxMarker, forward bool) (*rpc_types.AccountTxResult, error) {
+func (m *mockNFTOffersLedgerService) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetTransactionHistory(startIndex uint32) (*rpc_types.TxHistoryResult, error) {
+func (m *mockNFTOffersLedgerService) GetTransactionHistory(startIndex uint32) (*types.TxHistoryResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetLedgerRange(minSeq, maxSeq uint32) (*rpc_types.LedgerRangeResult, error) {
+func (m *mockNFTOffersLedgerService) GetLedgerRange(minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*rpc_types.LedgerEntryResult, error) {
+func (m *mockNFTOffersLedgerService) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetLedgerData(ledgerIndex string, limit uint32, marker string) (*rpc_types.LedgerDataResult, error) {
+func (m *mockNFTOffersLedgerService) GetLedgerData(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*rpc_types.AccountObjectsResult, error) {
+func (m *mockNFTOffersLedgerService) GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*rpc_types.AccountChannelsResult, error) {
+func (m *mockNFTOffersLedgerService) GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*types.AccountChannelsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetAccountCurrencies(account string, ledgerIndex string) (*rpc_types.AccountCurrenciesResult, error) {
+func (m *mockNFTOffersLedgerService) GetAccountCurrencies(account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetAccountNFTs(account string, ledgerIndex string, limit uint32) (*rpc_types.AccountNFTsResult, error) {
+func (m *mockNFTOffersLedgerService) GetAccountNFTs(account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetGatewayBalances(account string, hotWallets []string, ledgerIndex string) (*rpc_types.GatewayBalancesResult, error) {
+func (m *mockNFTOffersLedgerService) GetGatewayBalances(account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*rpc_types.NoRippleCheckResult, error) {
+func (m *mockNFTOffersLedgerService) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*rpc_types.DepositAuthorizedResult, error) {
+func (m *mockNFTOffersLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*types.DepositAuthorizedResult, error) {
 	return nil, errors.New("not implemented")
 }
 
 // NFT offer methods
-func (m *mockNFTOffersLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*rpc_types.NFTOffersResult, error) {
+func (m *mockNFTOffersLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
 	if m.nftBuyOffersErr != nil {
 		return nil, m.nftBuyOffersErr
 	}
@@ -130,7 +130,7 @@ func (m *mockNFTOffersLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex
 	return nil, errors.New("object not found")
 }
 
-func (m *mockNFTOffersLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*rpc_types.NFTOffersResult, error) {
+func (m *mockNFTOffersLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
 	if m.nftSellOffersErr != nil {
 		return nil, m.nftSellOffersErr
 	}
@@ -142,12 +142,12 @@ func (m *mockNFTOffersLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerInde
 
 // setupNFTOffersTestServices initializes the Services singleton with a mock for testing
 func setupNFTOffersTestServices(mock *mockNFTOffersLedgerService) func() {
-	oldServices := rpc_types.Services
-	rpc_types.Services = &rpc_types.ServiceContainer{
+	oldServices := types.Services
+	types.Services = &types.ServiceContainer{
 		Ledger: mock,
 	}
 	return func() {
-		rpc_types.Services = oldServices
+		types.Services = oldServices
 	}
 }
 
@@ -162,11 +162,11 @@ func TestNftBuyOffersErrorValidation(t *testing.T) {
 	cleanup := setupNFTOffersTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.NftBuyOffersMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NftBuyOffersMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	tests := []struct {
@@ -182,28 +182,28 @@ func TestNftBuyOffersErrorValidation(t *testing.T) {
 			params:        map[string]interface{}{},
 			expectError:   true,
 			expectedError: "Missing field 'nft_id'",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Empty nft_id field",
 			params:        map[string]interface{}{"nft_id": ""},
 			expectError:   true,
 			expectedError: "Missing field 'nft_id'",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Invalid nft_id - too short",
 			params:        map[string]interface{}{"nft_id": "00081388DC1AB4E7C57F8067A3AB"},
 			expectError:   true,
 			expectedError: "Invalid field 'nft_id'",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Invalid nft_id - not hex",
 			params:        map[string]interface{}{"nft_id": "00081388DC1AB4E7C57F8067A3ABGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG"},
 			expectError:   true,
 			expectedError: "Invalid field 'nft_id'",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "NFT not found",
@@ -215,7 +215,7 @@ func TestNftBuyOffersErrorValidation(t *testing.T) {
 			},
 			expectError:   true,
 			expectedError: "The requested object was not found.",
-			expectedCode:  rpc_types.RpcOBJECT_NOT_FOUND,
+			expectedCode:  types.RpcOBJECT_NOT_FOUND,
 		},
 		{
 			name: "Invalid marker",
@@ -225,7 +225,7 @@ func TestNftBuyOffersErrorValidation(t *testing.T) {
 			},
 			expectError:   true,
 			expectedError: "Invalid marker",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 	}
 
@@ -263,17 +263,17 @@ func TestNftBuyOffersSuccess(t *testing.T) {
 	cleanup := setupNFTOffersTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.NftBuyOffersMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NftBuyOffersMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Setup mock to return some buy offers
-	mock.nftBuyOffersResult = &rpc_types.NFTOffersResult{
+	mock.nftBuyOffersResult = &types.NFTOffersResult{
 		NFTID: "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
-		Offers: []rpc_types.NFTOfferInfo{
+		Offers: []types.NFTOfferInfo{
 			{
 				NFTOfferIndex: "AAA588DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F400",
 				Flags:         0, // Buy offer has no sell flag
@@ -334,17 +334,17 @@ func TestNftBuyOffersWithIOUAmount(t *testing.T) {
 	cleanup := setupNFTOffersTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.NftBuyOffersMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NftBuyOffersMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Setup mock to return a buy offer with IOU amount
-	mock.nftBuyOffersResult = &rpc_types.NFTOffersResult{
+	mock.nftBuyOffersResult = &types.NFTOffersResult{
 		NFTID: "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
-		Offers: []rpc_types.NFTOfferInfo{
+		Offers: []types.NFTOfferInfo{
 			{
 				NFTOfferIndex: "AAA588DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F400",
 				Flags:         0,
@@ -392,17 +392,17 @@ func TestNftBuyOffersWithPagination(t *testing.T) {
 	cleanup := setupNFTOffersTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.NftBuyOffersMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NftBuyOffersMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Setup mock to return paginated results
-	mock.nftBuyOffersResult = &rpc_types.NFTOffersResult{
+	mock.nftBuyOffersResult = &types.NFTOffersResult{
 		NFTID: "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
-		Offers: []rpc_types.NFTOfferInfo{
+		Offers: []types.NFTOfferInfo{
 			{
 				NFTOfferIndex: "AAA588DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F400",
 				Flags:         0,
@@ -447,11 +447,11 @@ func TestNftSellOffersErrorValidation(t *testing.T) {
 	cleanup := setupNFTOffersTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.NftSellOffersMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NftSellOffersMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	tests := []struct {
@@ -467,21 +467,21 @@ func TestNftSellOffersErrorValidation(t *testing.T) {
 			params:        map[string]interface{}{},
 			expectError:   true,
 			expectedError: "Missing field 'nft_id'",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Empty nft_id field",
 			params:        map[string]interface{}{"nft_id": ""},
 			expectError:   true,
 			expectedError: "Missing field 'nft_id'",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Invalid nft_id - too short",
 			params:        map[string]interface{}{"nft_id": "00081388DC1AB4E7C57F8067A3AB"},
 			expectError:   true,
 			expectedError: "Invalid field 'nft_id'",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "NFT not found",
@@ -493,7 +493,7 @@ func TestNftSellOffersErrorValidation(t *testing.T) {
 			},
 			expectError:   true,
 			expectedError: "The requested object was not found.",
-			expectedCode:  rpc_types.RpcOBJECT_NOT_FOUND,
+			expectedCode:  types.RpcOBJECT_NOT_FOUND,
 		},
 	}
 
@@ -531,20 +531,20 @@ func TestNftSellOffersSuccess(t *testing.T) {
 	cleanup := setupNFTOffersTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.NftSellOffersMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NftSellOffersMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// lsfSellNFToken flag
 	const lsfSellNFToken uint32 = 0x00000001
 
 	// Setup mock to return some sell offers
-	mock.nftSellOffersResult = &rpc_types.NFTOffersResult{
+	mock.nftSellOffersResult = &types.NFTOffersResult{
 		NFTID: "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
-		Offers: []rpc_types.NFTOfferInfo{
+		Offers: []types.NFTOfferInfo{
 			{
 				NFTOfferIndex: "AAA588DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F400",
 				Flags:         lsfSellNFToken, // Sell offer has the sell flag
@@ -587,17 +587,17 @@ func TestNftSellOffersEmptyResult(t *testing.T) {
 	cleanup := setupNFTOffersTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.NftSellOffersMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NftSellOffersMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Setup mock to return empty result
-	mock.nftSellOffersResult = &rpc_types.NFTOffersResult{
+	mock.nftSellOffersResult = &types.NFTOffersResult{
 		NFTID:       "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
-		Offers:      []rpc_types.NFTOfferInfo{},
+		Offers:      []types.NFTOfferInfo{},
 		LedgerIndex: 2,
 		LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 		Validated:   true,
@@ -627,17 +627,17 @@ func TestNftSellOffersEmptyResult(t *testing.T) {
 
 // TestNftBuyOffersServiceUnavailable tests response when ledger service is unavailable
 func TestNftBuyOffersServiceUnavailable(t *testing.T) {
-	oldServices := rpc_types.Services
-	rpc_types.Services = nil
+	oldServices := types.Services
+	types.Services = nil
 	defer func() {
-		rpc_types.Services = oldServices
+		types.Services = oldServices
 	}()
 
-	method := &rpc_handlers.NftBuyOffersMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NftBuyOffersMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := map[string]interface{}{
@@ -654,17 +654,17 @@ func TestNftBuyOffersServiceUnavailable(t *testing.T) {
 
 // TestNftSellOffersServiceUnavailable tests response when ledger service is unavailable
 func TestNftSellOffersServiceUnavailable(t *testing.T) {
-	oldServices := rpc_types.Services
-	rpc_types.Services = nil
+	oldServices := types.Services
+	types.Services = nil
 	defer func() {
-		rpc_types.Services = oldServices
+		types.Services = oldServices
 	}()
 
-	method := &rpc_handlers.NftSellOffersMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NftSellOffersMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := map[string]interface{}{
@@ -685,32 +685,32 @@ func TestNftSellOffersServiceUnavailable(t *testing.T) {
 
 // TestNftBuyOffersMethodMetadata tests method metadata (role, API versions)
 func TestNftBuyOffersMethodMetadata(t *testing.T) {
-	method := &rpc_handlers.NftBuyOffersMethod{}
+	method := &handlers.NftBuyOffersMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, rpc_types.RoleGuest, method.RequiredRole())
+		assert.Equal(t, types.RoleGuest, method.RequiredRole())
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {
 		versions := method.SupportedApiVersions()
-		assert.Contains(t, versions, rpc_types.ApiVersion1)
-		assert.Contains(t, versions, rpc_types.ApiVersion2)
-		assert.Contains(t, versions, rpc_types.ApiVersion3)
+		assert.Contains(t, versions, types.ApiVersion1)
+		assert.Contains(t, versions, types.ApiVersion2)
+		assert.Contains(t, versions, types.ApiVersion3)
 	})
 }
 
 // TestNftSellOffersMethodMetadata tests method metadata (role, API versions)
 func TestNftSellOffersMethodMetadata(t *testing.T) {
-	method := &rpc_handlers.NftSellOffersMethod{}
+	method := &handlers.NftSellOffersMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, rpc_types.RoleGuest, method.RequiredRole())
+		assert.Equal(t, types.RoleGuest, method.RequiredRole())
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {
 		versions := method.SupportedApiVersions()
-		assert.Contains(t, versions, rpc_types.ApiVersion1)
-		assert.Contains(t, versions, rpc_types.ApiVersion2)
-		assert.Contains(t, versions, rpc_types.ApiVersion3)
+		assert.Contains(t, versions, types.ApiVersion1)
+		assert.Contains(t, versions, types.ApiVersion2)
+		assert.Contains(t, versions, types.ApiVersion3)
 	})
 }

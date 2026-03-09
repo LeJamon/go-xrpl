@@ -2,7 +2,7 @@ package amm
 
 import (
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // AMM constants matching rippled
@@ -72,9 +72,9 @@ const (
 
 // AccountRoot flags needed by AMMClawback
 const (
-	lsfAllowTrustLineClawback = sle.LsfAllowTrustLineClawback
-	lsfNoFreeze               = sle.LsfNoFreeze
-	lsfAMM                    = sle.LsfAMM
+	lsfAllowTrustLineClawback = state.LsfAllowTrustLineClawback
+	lsfNoFreeze               = state.LsfNoFreeze
+	lsfAMM                    = state.LsfAMM
 )
 
 // Result code aliases for AMM-specific codes

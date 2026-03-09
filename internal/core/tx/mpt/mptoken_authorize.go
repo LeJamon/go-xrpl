@@ -8,7 +8,7 @@ import (
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -130,7 +130,7 @@ func (m *MPTokenAuthorize) holderUnauthorize(ctx *tx.ApplyContext, issuanceKey, 
 		return tx.TecOBJECT_NOT_FOUND
 	}
 
-	token, err := sle.ParseMPToken(tokenRaw)
+	token, err := state.ParseMPToken(tokenRaw)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -145,7 +145,7 @@ func (m *MPTokenAuthorize) holderUnauthorize(ctx *tx.ApplyContext, issuanceKey, 
 
 	// Remove from owner directory
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	sle.DirRemove(ctx.View, ownerDirKey, token.OwnerNode, tokenKey.Key, false)
+	state.DirRemove(ctx.View, ownerDirKey, token.OwnerNode, tokenKey.Key, false)
 
 	// Erase the MPToken
 	if err := ctx.View.Erase(tokenKey); err != nil {
@@ -167,7 +167,7 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, issuanceKey, to
 		return tx.TecOBJECT_NOT_FOUND
 	}
 
-	issuance, err := sle.ParseMPTokenIssuance(issuanceRaw)
+	issuance, err := state.ParseMPTokenIssuance(issuanceRaw)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -191,7 +191,7 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, issuanceKey, to
 	}
 
 	// Build MPToken entry
-	tokenData := &sle.MPTokenData{
+	tokenData := &state.MPTokenData{
 		Account:           ctx.AccountID,
 		MPTokenIssuanceID: decodeMPTIDToHash192(m.MPTokenIssuanceID),
 		Flags:             0,
@@ -199,7 +199,7 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, issuanceKey, to
 	}
 
 	// Serialize and insert
-	data, err := sle.SerializeMPToken(tokenData)
+	data, err := state.SerializeMPToken(tokenData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -209,7 +209,7 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, issuanceKey, to
 
 	// Insert into owner directory
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	_, err = sle.DirInsert(ctx.View, ownerDirKey, tokenKey.Key, func(dir *sle.DirectoryNode) {
+	_, err = state.DirInsert(ctx.View, ownerDirKey, tokenKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
@@ -223,7 +223,7 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, issuanceKey, to
 // applyIssuerPath handles when the issuer submits MPTokenAuthorize with Holder field.
 func (m *MPTokenAuthorize) applyIssuerPath(ctx *tx.ApplyContext, issuanceKey keylet.Keylet, txFlags uint32) tx.Result {
 	// Decode holder account
-	holderID, err := sle.DecodeAccountID(m.Holder)
+	holderID, err := state.DecodeAccountID(m.Holder)
 	if err != nil {
 		return tx.TemINVALID
 	}
@@ -242,7 +242,7 @@ func (m *MPTokenAuthorize) applyIssuerPath(ctx *tx.ApplyContext, issuanceKey key
 		return tx.TecOBJECT_NOT_FOUND
 	}
 
-	issuance, err := sle.ParseMPTokenIssuance(issuanceRaw)
+	issuance, err := state.ParseMPTokenIssuance(issuanceRaw)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -264,7 +264,7 @@ func (m *MPTokenAuthorize) applyIssuerPath(ctx *tx.ApplyContext, issuanceKey key
 		return tx.TecOBJECT_NOT_FOUND
 	}
 
-	token, err := sle.ParseMPToken(tokenRaw)
+	token, err := state.ParseMPToken(tokenRaw)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -277,7 +277,7 @@ func (m *MPTokenAuthorize) applyIssuerPath(ctx *tx.ApplyContext, issuanceKey key
 	}
 
 	// Serialize and update
-	updatedData, err := sle.SerializeMPToken(token)
+	updatedData, err := state.SerializeMPToken(token)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

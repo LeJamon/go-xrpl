@@ -8,7 +8,7 @@ import (
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -115,7 +115,7 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	accountID := ctx.AccountID
 
 	// Load offers
-	var buyOffer, sellOffer *sle.NFTokenOfferData
+	var buyOffer, sellOffer *state.NFTokenOfferData
 	var buyOfferKey, sellOfferKey keylet.Keylet
 
 	if a.NFTokenBuyOffer != "" {
@@ -131,7 +131,7 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err != nil || buyOfferData == nil {
 			return tx.TecOBJECT_NOT_FOUND
 		}
-		buyOffer, err = sle.ParseNFTokenOffer(buyOfferData)
+		buyOffer, err = state.ParseNFTokenOffer(buyOfferData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -165,7 +165,7 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err != nil || sellOfferData == nil {
 			return tx.TecOBJECT_NOT_FOUND
 		}
-		sellOffer, err = sle.ParseNFTokenOffer(sellOfferData)
+		sellOffer, err = state.ParseNFTokenOffer(sellOfferData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -213,7 +213,7 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 // iouPreclaimChecks performs IOU-specific preclaim checks for NFTokenAcceptOffer.
 // Reference: rippled NFTokenAcceptOffer.cpp preclaim
 func (a *NFTokenAcceptOffer) iouPreclaimChecks(ctx *tx.ApplyContext, accountID [20]byte,
-	buyOffer, sellOffer *sle.NFTokenOfferData) tx.Result {
+	buyOffer, sellOffer *state.NFTokenOfferData) tx.Result {
 
 	fixV2 := ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2)
 
@@ -296,7 +296,7 @@ func (a *NFTokenAcceptOffer) iouPreclaimChecks(ctx *tx.ApplyContext, accountID [
 	// Brokered mode broker fee check
 	if buyOffer != nil && sellOffer != nil && a.NFTokenBrokerFee != nil && !a.NFTokenBrokerFee.IsNative() {
 		if fixV2 {
-			brokerFeeIssuerID, err := sle.DecodeAccountID(a.NFTokenBrokerFee.Issuer)
+			brokerFeeIssuerID, err := state.DecodeAccountID(a.NFTokenBrokerFee.Issuer)
 			if err == nil {
 				if r := checkNFTTrustlineAuthorized(ctx.View, accountID, a.NFTokenBrokerFee.Currency, brokerFeeIssuerID); r != tx.TesSUCCESS {
 					return r
@@ -320,7 +320,7 @@ func (a *NFTokenAcceptOffer) iouPreclaimChecks(ctx *tx.ApplyContext, accountID [
 		nftIssuerID := getNFTIssuer(tokenID)
 
 		// Determine the IOU currency/issuer from whichever offer is IOU
-		var iouOffer *sle.NFTokenOfferData
+		var iouOffer *state.NFTokenOfferData
 		if buyOffer != nil && buyOffer.AmountIOU != nil {
 			iouOffer = buyOffer
 		} else if sellOffer != nil && sellOffer.AmountIOU != nil {

@@ -2,7 +2,7 @@ package tx
 
 import (
 	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"strconv"
 )
 
@@ -24,7 +24,7 @@ func IsTrustlineFrozen(view LedgerView, accountID, issuerID [20]byte, currency s
 		return false
 	}
 
-	rs, err := sle.ParseRippleState(trustLineData)
+	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
 		return false
 	}
@@ -32,11 +32,11 @@ func IsTrustlineFrozen(view LedgerView, accountID, issuerID [20]byte, currency s
 	// Check if the ISSUER has frozen this trust line.
 	// Reference: rippled View.cpp isFrozen() - checks the issuer's freeze flag:
 	//   (issuer > account) ? lsfHighFreeze : lsfLowFreeze
-	issuerIsHigh := sle.CompareAccountIDsForLine(issuerID, accountID) > 0
+	issuerIsHigh := state.CompareAccountIDsForLine(issuerID, accountID) > 0
 	if issuerIsHigh {
-		return (rs.Flags & sle.LsfHighFreeze) != 0
+		return (rs.Flags & state.LsfHighFreeze) != 0
 	}
-	return (rs.Flags & sle.LsfLowFreeze) != 0
+	return (rs.Flags & state.LsfLowFreeze) != 0
 }
 
 // IsIndividualFrozen checks if a specific account is individually frozen for an asset.
@@ -48,7 +48,7 @@ func IsIndividualFrozen(view LedgerView, accountID [20]byte, asset Asset) bool {
 		return false
 	}
 
-	issuerID, err := sle.DecodeAccountID(asset.Issuer)
+	issuerID, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {
 		return false
 	}
@@ -64,20 +64,20 @@ func IsIndividualFrozen(view LedgerView, accountID [20]byte, asset Asset) bool {
 		return false
 	}
 
-	rs, err := sle.ParseRippleState(trustLineData)
+	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
 		return false
 	}
 
 	// Check if the issuer has frozen the account's side
 	// The issuer is on the opposite side of the account in the trustline
-	accountIsLow := sle.CompareAccountIDsForLine(accountID, issuerID) < 0
+	accountIsLow := state.CompareAccountIDsForLine(accountID, issuerID) < 0
 	if accountIsLow {
 		// Account is low, issuer is high - check if high side froze low side
-		return (rs.Flags & sle.LsfLowFreeze) != 0
+		return (rs.Flags & state.LsfLowFreeze) != 0
 	}
 	// Account is high, issuer is low - check if low side froze high side
-	return (rs.Flags & sle.LsfHighFreeze) != 0
+	return (rs.Flags & state.LsfHighFreeze) != 0
 }
 
 // IsGlobalFrozen checks if an issuer has globally frozen assets.
@@ -87,7 +87,7 @@ func IsGlobalFrozen(view LedgerView, issuerAddress string) bool {
 		return false
 	}
 
-	issuerID, err := sle.DecodeAccountID(issuerAddress)
+	issuerID, err := state.DecodeAccountID(issuerAddress)
 	if err != nil {
 		return false
 	}
@@ -98,12 +98,12 @@ func IsGlobalFrozen(view LedgerView, issuerAddress string) bool {
 		return false
 	}
 
-	account, err := sle.ParseAccountRoot(data)
+	account, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return false
 	}
 
-	return (account.Flags & sle.LsfGlobalFreeze) != 0
+	return (account.Flags & state.LsfGlobalFreeze) != 0
 }
 
 // XRPLiquid returns the amount of XRP an account can spend (balance minus reserve).
@@ -116,7 +116,7 @@ func XRPLiquid(view LedgerView, accountID [20]byte, ownerCountAdj int64, reserve
 		return NewXRPAmount(0)
 	}
 
-	account, err := sle.ParseAccountRoot(data)
+	account, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return NewXRPAmount(0)
 	}
@@ -143,7 +143,7 @@ func AccountFunds(view LedgerView, accountID [20]byte, amount Amount, fhZeroIfFr
 	}
 
 	// IOU balance
-	issuerID, err := sle.DecodeAccountID(amount.Issuer)
+	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
 		return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 	}
@@ -151,7 +151,7 @@ func AccountFunds(view LedgerView, accountID [20]byte, amount Amount, fhZeroIfFr
 	// If account is issuer, they have unlimited funds
 	if accountID == issuerID {
 		// Return a very large amount (10^15 with exponent 0)
-		return NewIssuedAmount(sle.MaxMantissa, 0, amount.Currency, amount.Issuer)
+		return NewIssuedAmount(state.MaxMantissa, 0, amount.Currency, amount.Issuer)
 	}
 
 	// Check for frozen if requested
@@ -172,13 +172,13 @@ func AccountFunds(view LedgerView, accountID [20]byte, amount Amount, fhZeroIfFr
 		return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 	}
 
-	rs, err := sle.ParseRippleState(trustLineData)
+	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
 		return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 	}
 
 	// Determine balance based on canonical ordering
-	accountIsLow := sle.CompareAccountIDsForLine(accountID, issuerID) < 0
+	accountIsLow := state.CompareAccountIDsForLine(accountID, issuerID) < 0
 	balance := rs.Balance
 	if !accountIsLow {
 		balance = balance.Negate()
@@ -189,5 +189,5 @@ func AccountFunds(view LedgerView, accountID [20]byte, amount Amount, fhZeroIfFr
 		return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 	}
 
-	return sle.NewIssuedAmountFromValue(balance.IOU().Mantissa(), balance.IOU().Exponent(), amount.Currency, amount.Issuer)
+	return state.NewIssuedAmountFromValue(balance.IOU().Mantissa(), balance.IOU().Exponent(), amount.Currency, amount.Issuer)
 }

@@ -3,7 +3,7 @@ package payment
 import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // DirectStepI handles IOU transfers between two accounts via trust lines.
@@ -104,9 +104,9 @@ func (s *DirectStepI) Rev(
 	// Determine issuer for srcToDst
 	var issuer string
 	if Redeems(srcDebtDir) {
-		issuer = sle.EncodeAccountIDSafe(s.dst)
+		issuer = state.EncodeAccountIDSafe(s.dst)
 	} else {
-		issuer = sle.EncodeAccountIDSafe(s.src)
+		issuer = state.EncodeAccountIDSafe(s.src)
 	}
 
 	zeroAmt := tx.NewIssuedAmount(0, -100, s.currency, issuer)
@@ -194,9 +194,9 @@ func (s *DirectStepI) Fwd(
 	// Determine issuer
 	var issuer string
 	if Redeems(srcDebtDir) {
-		issuer = sle.EncodeAccountIDSafe(s.dst)
+		issuer = state.EncodeAccountIDSafe(s.dst)
 	} else {
-		issuer = sle.EncodeAccountIDSafe(s.src)
+		issuer = state.EncodeAccountIDSafe(s.src)
 	}
 
 	zeroAmt := tx.NewIssuedAmount(0, -100, s.currency, issuer)
@@ -309,8 +309,8 @@ func (s *DirectStepI) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirec
 	// Quality = srcQOut / dstQIn using precise STAmount division
 	// Reference: rippled getRate(STAmount(iss, dstQIn), STAmount(iss, srcQOut))
 	// getRate(out, in) = divide(in, out) = srcQOut / dstQIn
-	srcQOutAmt := NewIOUEitherAmount(sle.NewIssuedAmountFromValue(int64(srcQOut), 0, "", ""))
-	dstQInAmt := NewIOUEitherAmount(sle.NewIssuedAmountFromValue(int64(dstQIn), 0, "", ""))
+	srcQOutAmt := NewIOUEitherAmount(state.NewIssuedAmountFromValue(int64(srcQOut), 0, "", ""))
+	dstQInAmt := NewIOUEitherAmount(state.NewIssuedAmountFromValue(int64(dstQIn), 0, "", ""))
 	q := QualityFromAmounts(srcQOutAmt, dstQInAmt)
 
 	return &q, srcDebtDir
@@ -480,14 +480,14 @@ func (s *DirectStepI) quality(sb *PaymentSandbox, isIn bool) uint32 {
 		return QualityOne
 	}
 
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	if err != nil {
 		return QualityOne
 	}
 
 	if isIn {
 		// QualityIn for dst
-		if sle.CompareAccountIDs(s.dst, s.src) < 0 {
+		if state.CompareAccountIDs(s.dst, s.src) < 0 {
 			if rs.LowQualityIn != 0 {
 				return rs.LowQualityIn
 			}
@@ -498,7 +498,7 @@ func (s *DirectStepI) quality(sb *PaymentSandbox, isIn bool) uint32 {
 		}
 	} else {
 		// QualityOut for src
-		if sle.CompareAccountIDs(s.src, s.dst) < 0 {
+		if state.CompareAccountIDs(s.src, s.dst) < 0 {
 			if rs.LowQualityOut != 0 {
 				return rs.LowQualityOut
 			}
@@ -520,7 +520,7 @@ func (s *DirectStepI) accountHolds(sb *PaymentSandbox) tx.Amount {
 		return tx.NewIssuedAmount(0, -100, s.currency, "")
 	}
 
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	if err != nil {
 		return tx.NewIssuedAmount(0, -100, s.currency, "")
 	}
@@ -530,7 +530,7 @@ func (s *DirectStepI) accountHolds(sb *PaymentSandbox) tx.Amount {
 	// Negative balance = LOW OWES HIGH (LOW has debt to HIGH)
 	balance := rs.Balance
 
-	srcIsLow := sle.CompareAccountIDs(s.src, s.dst) < 0
+	srcIsLow := state.CompareAccountIDs(s.src, s.dst) < 0
 
 	if srcIsLow {
 		// src is low account
@@ -548,13 +548,13 @@ func (s *DirectStepI) creditLimit(sb *PaymentSandbox) tx.Amount {
 		return tx.NewIssuedAmount(0, -100, s.currency, "")
 	}
 
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	if err != nil {
 		return tx.NewIssuedAmount(0, -100, s.currency, "")
 	}
 
 	// Return dst's limit (what dst allows src to owe)
-	if sle.CompareAccountIDs(s.dst, s.src) < 0 {
+	if state.CompareAccountIDs(s.dst, s.src) < 0 {
 		// dst is low account
 		return rs.LowLimit
 	}
@@ -570,7 +570,7 @@ func (s *DirectStepI) transferRate(sb *PaymentSandbox) uint32 {
 		return QualityOne
 	}
 
-	account, err := sle.ParseAccountRoot(data)
+	account, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return QualityOne
 	}
@@ -604,14 +604,14 @@ func (s *DirectStepI) rippleCredit(sb *PaymentSandbox, amount tx.Amount, issuer 
 		return s.trustCreate(sb, amount)
 	}
 
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	if err != nil {
 		return err
 	}
 
 	// Compute sender's balance BEFORE update (from sender's perspective)
 	// Reference: rippled rippleCreditIOU() line 1672-1673: if bSenderHigh, negate
-	srcIsLow := sle.CompareAccountIDs(s.src, s.dst) < 0
+	srcIsLow := state.CompareAccountIDs(s.src, s.dst) < 0
 	var saBefore tx.Amount
 	if srcIsLow {
 		saBefore = rs.Balance
@@ -653,16 +653,16 @@ func (s *DirectStepI) rippleCredit(sb *PaymentSandbox, amount tx.Amount, issuer 
 		var senderQualityIn, senderQualityOut uint32
 
 		if srcIsLow {
-			senderReserve = sle.LsfLowReserve
-			senderNoRipple = sle.LsfLowNoRipple
-			senderFreeze = sle.LsfLowFreeze
+			senderReserve = state.LsfLowReserve
+			senderNoRipple = state.LsfLowNoRipple
+			senderFreeze = state.LsfLowFreeze
 			senderLimit = rs.LowLimit
 			senderQualityIn = rs.LowQualityIn
 			senderQualityOut = rs.LowQualityOut
 		} else {
-			senderReserve = sle.LsfHighReserve
-			senderNoRipple = sle.LsfHighNoRipple
-			senderFreeze = sle.LsfHighFreeze
+			senderReserve = state.LsfHighReserve
+			senderNoRipple = state.LsfHighNoRipple
+			senderFreeze = state.LsfHighFreeze
 			senderLimit = rs.HighLimit
 			senderQualityIn = rs.HighQualityIn
 			senderQualityOut = rs.HighQualityOut
@@ -673,9 +673,9 @@ func (s *DirectStepI) rippleCredit(sb *PaymentSandbox, amount tx.Amount, issuer 
 		senderKey := keylet.Account(s.src)
 		senderData, sErr := sb.Read(senderKey)
 		if sErr == nil && senderData != nil {
-			senderAcct, pErr := sle.ParseAccountRoot(senderData)
+			senderAcct, pErr := state.ParseAccountRoot(senderData)
 			if pErr == nil {
-				senderDefaultRipple = (senderAcct.Flags & sle.LsfDefaultRipple) != 0
+				senderDefaultRipple = (senderAcct.Flags & state.LsfDefaultRipple) != 0
 			}
 		}
 
@@ -698,9 +698,9 @@ func (s *DirectStepI) rippleCredit(sb *PaymentSandbox, amount tx.Amount, issuer 
 			// Reference: rippled lines 1725-1726
 			var receiverReserve uint32
 			if srcIsLow {
-				receiverReserve = sle.LsfHighReserve
+				receiverReserve = state.LsfHighReserve
 			} else {
-				receiverReserve = sle.LsfLowReserve
+				receiverReserve = state.LsfLowReserve
 			}
 			bDelete = saBalance.Signum() == 0 && (uFlags&receiverReserve) == 0
 		}
@@ -715,7 +715,7 @@ func (s *DirectStepI) rippleCredit(sb *PaymentSandbox, amount tx.Amount, issuer 
 
 	// Serialize — want to reflect balance even if deleting (for metadata)
 	// Reference: rippled line 1734
-	newData, err := sle.SerializeRippleState(rs)
+	newData, err := state.SerializeRippleState(rs)
 	if err != nil {
 		return err
 	}
@@ -743,10 +743,10 @@ func (s *DirectStepI) rippleCredit(sb *PaymentSandbox, amount tx.Amount, issuer 
 
 // trustDeleteLine removes a trust line from the ledger, including directory removal.
 // Reference: rippled View.cpp trustDelete() lines 1534-1571
-func trustDeleteLine(sb *PaymentSandbox, lineKey keylet.Keylet, rs *sle.RippleState, lowAccount, highAccount [20]byte) error {
+func trustDeleteLine(sb *PaymentSandbox, lineKey keylet.Keylet, rs *state.RippleState, lowAccount, highAccount [20]byte) error {
 	// Remove from low account's owner directory
 	lowDirKey := keylet.OwnerDir(lowAccount)
-	lowResult, err := sle.DirRemove(sb, lowDirKey, rs.LowNode, lineKey.Key, false)
+	lowResult, err := state.DirRemove(sb, lowDirKey, rs.LowNode, lineKey.Key, false)
 	if err != nil {
 		return err
 	}
@@ -756,7 +756,7 @@ func trustDeleteLine(sb *PaymentSandbox, lineKey keylet.Keylet, rs *sle.RippleSt
 
 	// Remove from high account's owner directory
 	highDirKey := keylet.OwnerDir(highAccount)
-	highResult, err := sle.DirRemove(sb, highDirKey, rs.HighNode, lineKey.Key, false)
+	highResult, err := state.DirRemove(sb, highDirKey, rs.HighNode, lineKey.Key, false)
 	if err != nil {
 		return err
 	}
@@ -770,10 +770,10 @@ func trustDeleteLine(sb *PaymentSandbox, lineKey keylet.Keylet, rs *sle.RippleSt
 
 // applyDirRemoveResultGeneric applies directory removal changes to the sandbox.
 // This is a standalone version of BookStep.applyDirRemoveResult.
-func applyDirRemoveResultGeneric(sb *PaymentSandbox, result *sle.DirRemoveResult) {
+func applyDirRemoveResultGeneric(sb *PaymentSandbox, result *state.DirRemoveResult) {
 	for _, mod := range result.ModifiedNodes {
 		isBookDir := mod.NewState.TakerPaysCurrency != [20]byte{} || mod.NewState.TakerGetsCurrency != [20]byte{}
-		data, err := sle.SerializeDirectoryNode(mod.NewState, isBookDir)
+		data, err := state.SerializeDirectoryNode(mod.NewState, isBookDir)
 		if err != nil {
 			continue
 		}
@@ -790,7 +790,7 @@ func applyDirRemoveResultGeneric(sb *PaymentSandbox, result *sle.DirRemoveResult
 // Reference: rippled View.cpp trustCreate() lines 1329-1445
 func (s *DirectStepI) trustCreate(sb *PaymentSandbox, amount tx.Amount) error {
 	// Determine low and high accounts
-	srcIsLow := sle.CompareAccountIDs(s.src, s.dst) < 0
+	srcIsLow := state.CompareAccountIDs(s.src, s.dst) < 0
 	var lowAccountID, highAccountID [20]byte
 	if srcIsLow {
 		lowAccountID = s.src
@@ -800,8 +800,8 @@ func (s *DirectStepI) trustCreate(sb *PaymentSandbox, amount tx.Amount) error {
 		highAccountID = s.src
 	}
 
-	lowAccountStr := sle.EncodeAccountIDSafe(lowAccountID)
-	highAccountStr := sle.EncodeAccountIDSafe(highAccountID)
+	lowAccountStr := state.EncodeAccountIDSafe(lowAccountID)
+	highAccountStr := state.EncodeAccountIDSafe(highAccountID)
 
 	// Calculate the initial balance from low account's perspective
 	// When src sends to dst:
@@ -822,7 +822,7 @@ func (s *DirectStepI) trustCreate(sb *PaymentSandbox, amount tx.Amount) error {
 	dstAccountKey := keylet.Account(s.dst)
 	dstAccountData, err := sb.Read(dstAccountKey)
 	if err == nil && dstAccountData != nil {
-		dstAccount, parseErr := sle.ParseAccountRoot(dstAccountData)
+		dstAccount, parseErr := state.ParseAccountRoot(dstAccountData)
 		if parseErr == nil {
 			// NoRipple is the default unless DefaultRipple is set
 			const lsfDefaultRipple = 0x00800000
@@ -836,20 +836,20 @@ func (s *DirectStepI) trustCreate(sb *PaymentSandbox, amount tx.Amount) error {
 	if srcIsLow {
 		// dst is HIGH
 		if noRipple {
-			flags |= sle.LsfHighNoRipple
+			flags |= state.LsfHighNoRipple
 		}
-		flags |= sle.LsfHighReserve
+		flags |= state.LsfHighReserve
 	} else {
 		// dst is LOW
 		if noRipple {
-			flags |= sle.LsfLowNoRipple
+			flags |= state.LsfLowNoRipple
 		}
-		flags |= sle.LsfLowReserve
+		flags |= state.LsfLowReserve
 	}
 
 	// Create the RippleState
-	rs := &sle.RippleState{
-		Balance:           tx.NewIssuedAmount(balance.IOU().Mantissa(), balance.IOU().Exponent(), s.currency, sle.AccountOneAddress),
+	rs := &state.RippleState{
+		Balance:           tx.NewIssuedAmount(balance.IOU().Mantissa(), balance.IOU().Exponent(), s.currency, state.AccountOneAddress),
 		LowLimit:          tx.NewIssuedAmount(0, -100, s.currency, lowAccountStr),
 		HighLimit:         tx.NewIssuedAmount(0, -100, s.currency, highAccountStr),
 		Flags:             flags,
@@ -863,7 +863,7 @@ func (s *DirectStepI) trustCreate(sb *PaymentSandbox, amount tx.Amount) error {
 
 	// Insert into LOW account's owner directory
 	lowDirKey := keylet.OwnerDir(lowAccountID)
-	lowDirResult, err := sle.DirInsert(sb, lowDirKey, trustLineKey.Key, func(dir *sle.DirectoryNode) {
+	lowDirResult, err := state.DirInsert(sb, lowDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = lowAccountID
 	})
 	if err != nil {
@@ -872,7 +872,7 @@ func (s *DirectStepI) trustCreate(sb *PaymentSandbox, amount tx.Amount) error {
 
 	// Insert into HIGH account's owner directory
 	highDirKey := keylet.OwnerDir(highAccountID)
-	highDirResult, err := sle.DirInsert(sb, highDirKey, trustLineKey.Key, func(dir *sle.DirectoryNode) {
+	highDirResult, err := state.DirInsert(sb, highDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = highAccountID
 	})
 	if err != nil {
@@ -884,7 +884,7 @@ func (s *DirectStepI) trustCreate(sb *PaymentSandbox, amount tx.Amount) error {
 	rs.HighNode = highDirResult.Page
 
 	// Serialize and insert
-	trustLineData, err := sle.SerializeRippleState(rs)
+	trustLineData, err := state.SerializeRippleState(rs)
 	if err != nil {
 		return err
 	}
@@ -906,7 +906,7 @@ func (s *DirectStepI) adjustOwnerCount(sb *PaymentSandbox, account [20]byte, del
 		return err
 	}
 
-	acct, err := sle.ParseAccountRoot(data)
+	acct, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return err
 	}
@@ -917,7 +917,7 @@ func (s *DirectStepI) adjustOwnerCount(sb *PaymentSandbox, account [20]byte, del
 		acct.OwnerCount -= uint32(-delta)
 	}
 
-	newData, err := sle.SerializeAccountRoot(acct)
+	newData, err := state.SerializeAccountRoot(acct)
 	if err != nil {
 		return err
 	}
@@ -973,16 +973,16 @@ func (s *DirectStepI) Check(sb *PaymentSandbox) tx.Result {
 	//       check src's NoRipple on the src↔dst trust line
 	if s.prevStep != nil {
 		if s.prevStep.BookStepBook() != nil {
-			rs, parseErr := sle.ParseRippleState(data)
+			rs, parseErr := state.ParseRippleState(data)
 			if parseErr != nil {
 				return tx.TefINTERNAL
 			}
-			srcIsHigh := sle.CompareAccountIDs(s.src, s.dst) > 0
+			srcIsHigh := state.CompareAccountIDs(s.src, s.dst) > 0
 			var noRippleFlag uint32
 			if srcIsHigh {
-				noRippleFlag = sle.LsfHighNoRipple
+				noRippleFlag = state.LsfHighNoRipple
 			} else {
-				noRippleFlag = sle.LsfLowNoRipple
+				noRippleFlag = state.LsfLowNoRipple
 			}
 			if rs.Flags&noRippleFlag != 0 {
 				return tx.TerNO_RIPPLE
@@ -998,18 +998,18 @@ func (s *DirectStepI) Check(sb *PaymentSandbox) tx.Result {
 	//     → dst_ < src_ ? sfLowLimit : sfHighLimit
 	//   if (owed <= 0 && -owed >= limit) → tecPATH_DRY
 	{
-		rs, parseErr := sle.ParseRippleState(data)
+		rs, parseErr := state.ParseRippleState(data)
 		if parseErr == nil {
 			// creditBalance(dst_, src_): negate when dst_ < src_ (dst is low account)
 			owed := rs.Balance
-			if sle.CompareAccountIDs(s.dst, s.src) < 0 {
+			if state.CompareAccountIDs(s.dst, s.src) < 0 {
 				owed = owed.Negate()
 			}
 			zeroAmt := tx.NewIssuedAmount(0, -100, s.currency, "")
 			if owed.Compare(zeroAmt) <= 0 {
 				// creditLimit(dst_, src_): dst_ < src_ → LowLimit, else HighLimit
 				var limit tx.Amount
-				if sle.CompareAccountIDs(s.dst, s.src) < 0 {
+				if state.CompareAccountIDs(s.dst, s.src) < 0 {
 					limit = rs.LowLimit
 				} else {
 					limit = rs.HighLimit
@@ -1039,13 +1039,13 @@ func checkAuth(view *PaymentSandbox, src, dst [20]byte, currency string) tx.Resu
 		return tx.TesSUCCESS
 	}
 
-	srcAccount, err := sle.ParseAccountRoot(srcData)
+	srcAccount, err := state.ParseAccountRoot(srcData)
 	if err != nil {
 		return tx.TesSUCCESS
 	}
 
 	// Only check auth if source has RequireAuth
-	if (srcAccount.Flags & sle.LsfRequireAuth) == 0 {
+	if (srcAccount.Flags & state.LsfRequireAuth) == 0 {
 		return tx.TesSUCCESS
 	}
 
@@ -1056,7 +1056,7 @@ func checkAuth(view *PaymentSandbox, src, dst [20]byte, currency string) tx.Resu
 		return tx.TerNO_LINE
 	}
 
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -1064,12 +1064,12 @@ func checkAuth(view *PaymentSandbox, src, dst [20]byte, currency string) tx.Resu
 	// Check the source's own auth flag
 	// Reference: rippled DirectStep.cpp L420:
 	//   auto const authField = (src_ > dst_) ? lsfHighAuth : lsfLowAuth;
-	srcIsHigh := sle.CompareAccountIDs(src, dst) > 0
+	srcIsHigh := state.CompareAccountIDs(src, dst) > 0
 	var authFlag uint32
 	if srcIsHigh {
-		authFlag = sle.LsfHighAuth
+		authFlag = state.LsfHighAuth
 	} else {
-		authFlag = sle.LsfLowAuth
+		authFlag = state.LsfLowAuth
 	}
 
 	// Only block if auth flag is NOT set AND balance is zero
@@ -1092,25 +1092,25 @@ func checkFreeze(view *PaymentSandbox, src, dst [20]byte, currency string) tx.Re
 		return tx.TerNO_LINE
 	}
 
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
 	// Determine which account is low/high
-	srcIsLow := sle.CompareAccountIDs(src, dst) < 0
+	srcIsLow := state.CompareAccountIDs(src, dst) < 0
 
 	// Check individual freeze
 	// If src is low, check if high (dst) has frozen the line
 	// If src is high, check if low (dst) has frozen the line
 	if srcIsLow {
 		// dst is high, check if high has frozen
-		if (rs.Flags & sle.LsfHighFreeze) != 0 {
+		if (rs.Flags & state.LsfHighFreeze) != 0 {
 			return tx.TerNO_LINE
 		}
 	} else {
 		// dst is low, check if low has frozen
-		if (rs.Flags & sle.LsfLowFreeze) != 0 {
+		if (rs.Flags & state.LsfLowFreeze) != 0 {
 			return tx.TerNO_LINE
 		}
 	}
@@ -1121,8 +1121,8 @@ func checkFreeze(view *PaymentSandbox, src, dst [20]byte, currency string) tx.Re
 	dstData, _ := view.Read(dstKey)
 
 	if dstData != nil {
-		dstAccount, err := sle.ParseAccountRoot(dstData)
-		if err == nil && (dstAccount.Flags&sle.LsfGlobalFreeze) != 0 {
+		dstAccount, err := state.ParseAccountRoot(dstData)
+		if err == nil && (dstAccount.Flags&state.LsfGlobalFreeze) != 0 {
 			return tx.TerNO_LINE
 		}
 	}
@@ -1170,12 +1170,12 @@ func checkNoRipple(view *PaymentSandbox, prev, cur, next [20]byte, currency stri
 		return tx.TerNO_LINE
 	}
 
-	sleIn, err := sle.ParseRippleState(sleInData)
+	sleIn, err := state.ParseRippleState(sleInData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
-	sleOut, err := sle.ParseRippleState(sleOutData)
+	sleOut, err := state.ParseRippleState(sleOutData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -1183,20 +1183,20 @@ func checkNoRipple(view *PaymentSandbox, prev, cur, next [20]byte, currency stri
 	// Check NoRipple flags
 	// Reference: rippled StepChecks.h:105-106
 	// The flag to check depends on account ordering in the trust line
-	curIsHighIn := sle.CompareAccountIDs(cur, prev) > 0
-	curIsHighOut := sle.CompareAccountIDs(cur, next) > 0
+	curIsHighIn := state.CompareAccountIDs(cur, prev) > 0
+	curIsHighOut := state.CompareAccountIDs(cur, next) > 0
 
 	var noRippleIn, noRippleOut bool
 	if curIsHighIn {
-		noRippleIn = (sleIn.Flags & sle.LsfHighNoRipple) != 0
+		noRippleIn = (sleIn.Flags & state.LsfHighNoRipple) != 0
 	} else {
-		noRippleIn = (sleIn.Flags & sle.LsfLowNoRipple) != 0
+		noRippleIn = (sleIn.Flags & state.LsfLowNoRipple) != 0
 	}
 
 	if curIsHighOut {
-		noRippleOut = (sleOut.Flags & sle.LsfHighNoRipple) != 0
+		noRippleOut = (sleOut.Flags & state.LsfHighNoRipple) != 0
 	} else {
-		noRippleOut = (sleOut.Flags & sle.LsfLowNoRipple) != 0
+		noRippleOut = (sleOut.Flags & state.LsfLowNoRipple) != 0
 	}
 
 	// If BOTH sides have NoRipple set, return terNO_RIPPLE

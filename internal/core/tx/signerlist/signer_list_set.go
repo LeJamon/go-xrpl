@@ -5,7 +5,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 
 	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -172,14 +172,14 @@ func (s *SetRegularKey) ClearKey() {
 func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) tx.Result {
 	if s.RegularKey != "" {
 		// Setting a regular key
-		if _, err := sle.DecodeAccountID(s.RegularKey); err != nil {
+		if _, err := state.DecodeAccountID(s.RegularKey); err != nil {
 			return tx.TemINVALID
 		}
 		ctx.Account.RegularKey = s.RegularKey
 	} else {
 		// Clearing the regular key — check that an alternative auth method exists.
 		// Reference: rippled SetRegularKey.cpp lines 86-98
-		isMasterDisabled := (ctx.Account.Flags & sle.LsfDisableMaster) != 0
+		isMasterDisabled := (ctx.Account.Flags & state.LsfDisableMaster) != 0
 		if isMasterDisabled {
 			signerListKey := keylet.SignerList(ctx.AccountID)
 			hasSignerList, _ := ctx.View.Exists(signerListKey)
@@ -205,7 +205,7 @@ func (sl *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Destroying the signer list is only allowed if either the master key
 		// is enabled or there is a regular key.
 		// Reference: rippled SetSignerList.cpp:411-413
-		isMasterDisabled := (ctx.Account.Flags & sle.LsfDisableMaster) != 0
+		isMasterDisabled := (ctx.Account.Flags & state.LsfDisableMaster) != 0
 		hasRegularKey := ctx.Account.RegularKey != ""
 		if isMasterDisabled && !hasRegularKey {
 			return tx.TecNO_ALTERNATIVE_KEY
@@ -215,7 +215,7 @@ func (sl *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		if exists {
 			// Remove from owner directory
 			// Reference: rippled SetSignerList.cpp removeSignersFromLedger
-			sle.DirRemove(ctx.View, ownerDirKey, 0, signerListKey.Key, true)
+			state.DirRemove(ctx.View, ownerDirKey, 0, signerListKey.Key, true)
 			if err := ctx.View.Erase(signerListKey); err != nil {
 				return tx.TefINTERNAL
 			}
@@ -224,14 +224,14 @@ func (sl *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 			}
 		}
 	} else {
-		sleEntries := make([]sle.SignerEntry, len(sl.SignerEntries))
+		sleEntries := make([]state.SignerEntry, len(sl.SignerEntries))
 		for i, e := range sl.SignerEntries {
-			sleEntries[i] = sle.SignerEntry{
+			sleEntries[i] = state.SignerEntry{
 				Account:      e.SignerEntry.Account,
 				SignerWeight: e.SignerEntry.SignerWeight,
 			}
 		}
-		signerListData, err := sle.SerializeSignerList(sl.SignerQuorum, sleEntries, ctx.AccountID)
+		signerListData, err := state.SerializeSignerList(sl.SignerQuorum, sleEntries, ctx.AccountID)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -247,7 +247,7 @@ func (sl *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 			}
 			// Add to owner directory
 			// Reference: rippled SetSignerList.cpp applySignerEntries
-			sle.DirInsert(ctx.View, ownerDirKey, signerListKey.Key, nil)
+			state.DirInsert(ctx.View, ownerDirKey, signerListKey.Key, nil)
 			ctx.Account.OwnerCount++
 		}
 	}

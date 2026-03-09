@@ -6,7 +6,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -105,7 +105,7 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Verify destination exists
 	// Reference: CreateCheck.cpp L85-90
-	destID, err := sle.DecodeAccountID(c.Destination)
+	destID, err := state.DecodeAccountID(c.Destination)
 	if err != nil {
 		return tx.TemINVALID
 	}
@@ -116,14 +116,14 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecNO_DST
 	}
 
-	destAccount, err := sle.ParseAccountRoot(destData)
+	destAccount, err := state.ParseAccountRoot(destData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
 	// Pseudo-accounts cannot cash checks.
 	// Reference: rippled CreateCheck.cpp:100-105
-	if (destAccount.Flags & sle.LsfAMM) != 0 {
+	if (destAccount.Flags & state.LsfAMM) != 0 {
 		return tx.TecNO_PERMISSION
 	}
 
@@ -131,21 +131,21 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: CreateCheck.cpp L93-98
 	rules := ctx.Rules()
 	if rules.Enabled(amendment.FeatureDisallowIncoming) {
-		if destAccount.Flags&sle.LsfDisallowIncomingCheck != 0 {
+		if destAccount.Flags&state.LsfDisallowIncomingCheck != 0 {
 			return tx.TecNO_PERMISSION
 		}
 	}
 
 	// Check RequireDestTag on destination
 	// Reference: CreateCheck.cpp L107-113
-	if destAccount.Flags&sle.LsfRequireDestTag != 0 && c.DestinationTag == nil {
+	if destAccount.Flags&state.LsfRequireDestTag != 0 && c.DestinationTag == nil {
 		return tx.TecDST_TAG_NEEDED
 	}
 
 	// IOU-specific checks
 	// Reference: CreateCheck.cpp L116-161
 	if !c.SendMax.IsNative() {
-		issuerID, err := sle.DecodeAccountID(c.SendMax.Issuer)
+		issuerID, err := state.DecodeAccountID(c.SendMax.Issuer)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -157,11 +157,11 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-		issuerAccount, err := sle.ParseAccountRoot(issuerData)
+		issuerAccount, err := state.ParseAccountRoot(issuerData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-		if issuerAccount.Flags&sle.LsfGlobalFreeze != 0 {
+		if issuerAccount.Flags&state.LsfGlobalFreeze != 0 {
 			return tx.TecFROZEN
 		}
 
@@ -175,15 +175,15 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 			if srcTLExists {
 				srcTLData, err := ctx.View.Read(srcTLKey)
 				if err == nil {
-					srcTL, err := sle.ParseRippleState(srcTLData)
+					srcTL, err := state.ParseRippleState(srcTLData)
 					if err == nil {
 						srcIsLow := keylet.IsLowAccount(accountID, issuerID)
 						if srcIsLow {
-							if srcTL.Flags&sle.LsfHighFreeze != 0 {
+							if srcTL.Flags&state.LsfHighFreeze != 0 {
 								return tx.TecFROZEN
 							}
 						} else {
-							if srcTL.Flags&sle.LsfLowFreeze != 0 {
+							if srcTL.Flags&state.LsfLowFreeze != 0 {
 								return tx.TecFROZEN
 							}
 						}
@@ -201,16 +201,16 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 			if dstTLExists {
 				dstTLData, err := ctx.View.Read(dstTLKey)
 				if err == nil {
-					dstTL, err := sle.ParseRippleState(dstTLData)
+					dstTL, err := state.ParseRippleState(dstTLData)
 					if err == nil {
 						dstIsLow := keylet.IsLowAccount(destID, issuerID)
 						// Check if the destination froze their own side
 						if dstIsLow {
-							if dstTL.Flags&sle.LsfLowFreeze != 0 {
+							if dstTL.Flags&state.LsfLowFreeze != 0 {
 								return tx.TecFROZEN
 							}
 						} else {
-							if dstTL.Flags&sle.LsfHighFreeze != 0 {
+							if dstTL.Flags&state.LsfHighFreeze != 0 {
 								return tx.TecFROZEN
 							}
 						}

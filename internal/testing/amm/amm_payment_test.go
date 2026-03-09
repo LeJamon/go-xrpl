@@ -14,7 +14,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	coreAmm "github.com/LeJamon/goXRPLd/internal/core/tx/amm"
 	paymentPkg "github.com/LeJamon/goXRPLd/internal/core/tx/payment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/amm"
 	"github.com/LeJamon/goXRPLd/internal/testing/check"
@@ -275,7 +275,7 @@ func TestAMMFlags(t *testing.T) {
 
 	// rippled sets lsfDisableMaster | lsfDefaultRipple | lsfDepositAuth.
 	// goXRPL additionally sets LsfAMM for fast pseudo-account detection.
-	expectedFlags := sle.LsfDisableMaster | sle.LsfDefaultRipple | sle.LsfDepositAuth | sle.LsfAMM
+	expectedFlags := state.LsfDisableMaster | state.LsfDefaultRipple | state.LsfDepositAuth | state.LsfAMM
 	if info.Flags != expectedFlags {
 		t.Fatalf("AMM account flags mismatch: got 0x%08X, want 0x%08X (lsfDisableMaster|lsfDefaultRipple|lsfDepositAuth|lsfAMM)",
 			info.Flags, expectedFlags)
@@ -379,7 +379,7 @@ func TestAMMID(t *testing.T) {
 		t.Fatal("AMM account not found in ledger")
 	}
 
-	expectedFlags := sle.LsfDisableMaster | sle.LsfDefaultRipple | sle.LsfDepositAuth | sle.LsfAMM
+	expectedFlags := state.LsfDisableMaster | state.LsfDefaultRipple | state.LsfDepositAuth | state.LsfAMM
 	if info.Flags != expectedFlags {
 		t.Fatalf("AMM account flags mismatch: got 0x%08X, want 0x%08X",
 			info.Flags, expectedFlags)

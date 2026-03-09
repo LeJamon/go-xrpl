@@ -6,23 +6,23 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
+	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
+	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // mockAccountNFTsLedgerService implements LedgerService for account_nfts testing
 type mockAccountNFTsLedgerService struct {
-	accountNFTsResult    *rpc_types.AccountNFTsResult
+	accountNFTsResult    *types.AccountNFTsResult
 	accountNFTsErr       error
-	accountInfo          *rpc_types.AccountInfo
+	accountInfo          *types.AccountInfo
 	accountInfoErr       error
 	currentLedgerIndex   uint32
 	closedLedgerIndex    uint32
 	validatedLedgerIndex uint32
 	standalone           bool
-	serverInfo           rpc_types.LedgerServerInfo
+	serverInfo           types.LedgerServerInfo
 }
 
 func newMockAccountNFTsLedgerService() *mockAccountNFTsLedgerService {
@@ -31,7 +31,7 @@ func newMockAccountNFTsLedgerService() *mockAccountNFTsLedgerService {
 		closedLedgerIndex:    2,
 		validatedLedgerIndex: 2,
 		standalone:           true,
-		serverInfo: rpc_types.LedgerServerInfo{
+		serverInfo: types.LedgerServerInfo{
 			Standalone:         true,
 			OpenLedgerSeq:      3,
 			ClosedLedgerSeq:    2,
@@ -46,32 +46,32 @@ func (m *mockAccountNFTsLedgerService) GetClosedLedgerIndex() uint32    { return
 func (m *mockAccountNFTsLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
 func (m *mockAccountNFTsLedgerService) AcceptLedger() (uint32, error)   { return m.closedLedgerIndex + 1, nil }
 func (m *mockAccountNFTsLedgerService) IsStandalone() bool              { return m.standalone }
-func (m *mockAccountNFTsLedgerService) GetServerInfo() rpc_types.LedgerServerInfo {
+func (m *mockAccountNFTsLedgerService) GetServerInfo() types.LedgerServerInfo {
 	return m.serverInfo
 }
 func (m *mockAccountNFTsLedgerService) GetGenesisAccount() (string, error) {
 	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
 }
-func (m *mockAccountNFTsLedgerService) GetLedgerBySequence(seq uint32) (rpc_types.LedgerReader, error) {
+func (m *mockAccountNFTsLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetLedgerByHash(hash [32]byte) (rpc_types.LedgerReader, error) {
+func (m *mockAccountNFTsLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) SubmitTransaction(txJSON []byte) (*rpc_types.SubmitResult, error) {
+func (m *mockAccountNFTsLedgerService) SubmitTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountNFTsLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
 	return 10, 10000000, 2000000
 }
-func (m *mockAccountNFTsLedgerService) GetAccountInfo(account string, ledgerIndex string) (*rpc_types.AccountInfo, error) {
+func (m *mockAccountNFTsLedgerService) GetAccountInfo(account string, ledgerIndex string) (*types.AccountInfo, error) {
 	if m.accountInfoErr != nil {
 		return nil, m.accountInfoErr
 	}
 	if m.accountInfo != nil {
 		return m.accountInfo, nil
 	}
-	return &rpc_types.AccountInfo{
+	return &types.AccountInfo{
 		Account:     account,
 		Balance:     "100000000",
 		Flags:       0,
@@ -82,46 +82,46 @@ func (m *mockAccountNFTsLedgerService) GetAccountInfo(account string, ledgerInde
 		Validated:   true,
 	}, nil
 }
-func (m *mockAccountNFTsLedgerService) GetTransaction(txHash [32]byte) (*rpc_types.TransactionInfo, error) {
+func (m *mockAccountNFTsLedgerService) GetTransaction(txHash [32]byte) (*types.TransactionInfo, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountNFTsLedgerService) StoreTransaction(txHash [32]byte, txData []byte) error {
 	return errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetAccountLines(account string, ledgerIndex string, peer string, limit uint32) (*rpc_types.AccountLinesResult, error) {
+func (m *mockAccountNFTsLedgerService) GetAccountLines(account string, ledgerIndex string, peer string, limit uint32) (*types.AccountLinesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetAccountOffers(account string, ledgerIndex string, limit uint32) (*rpc_types.AccountOffersResult, error) {
+func (m *mockAccountNFTsLedgerService) GetAccountOffers(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetBookOffers(takerGets, takerPays rpc_types.Amount, ledgerIndex string, limit uint32) (*rpc_types.BookOffersResult, error) {
+func (m *mockAccountNFTsLedgerService) GetBookOffers(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *rpc_types.AccountTxMarker, forward bool) (*rpc_types.AccountTxResult, error) {
+func (m *mockAccountNFTsLedgerService) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetTransactionHistory(startIndex uint32) (*rpc_types.TxHistoryResult, error) {
+func (m *mockAccountNFTsLedgerService) GetTransactionHistory(startIndex uint32) (*types.TxHistoryResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetLedgerRange(minSeq, maxSeq uint32) (*rpc_types.LedgerRangeResult, error) {
+func (m *mockAccountNFTsLedgerService) GetLedgerRange(minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*rpc_types.LedgerEntryResult, error) {
+func (m *mockAccountNFTsLedgerService) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetLedgerData(ledgerIndex string, limit uint32, marker string) (*rpc_types.LedgerDataResult, error) {
+func (m *mockAccountNFTsLedgerService) GetLedgerData(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*rpc_types.AccountObjectsResult, error) {
+func (m *mockAccountNFTsLedgerService) GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*rpc_types.AccountChannelsResult, error) {
+func (m *mockAccountNFTsLedgerService) GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*types.AccountChannelsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetAccountCurrencies(account string, ledgerIndex string) (*rpc_types.AccountCurrenciesResult, error) {
+func (m *mockAccountNFTsLedgerService) GetAccountCurrencies(account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetAccountNFTs(account string, ledgerIndex string, limit uint32) (*rpc_types.AccountNFTsResult, error) {
+func (m *mockAccountNFTsLedgerService) GetAccountNFTs(account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
 	if m.accountNFTsErr != nil {
 		return nil, m.accountNFTsErr
 	}
@@ -129,38 +129,38 @@ func (m *mockAccountNFTsLedgerService) GetAccountNFTs(account string, ledgerInde
 		return m.accountNFTsResult, nil
 	}
 	// Return empty NFTs by default
-	return &rpc_types.AccountNFTsResult{
+	return &types.AccountNFTsResult{
 		Account:     account,
-		AccountNFTs: []rpc_types.NFTInfo{},
+		AccountNFTs: []types.NFTInfo{},
 		LedgerIndex: m.validatedLedgerIndex,
 		LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 		Validated:   true,
 	}, nil
 }
-func (m *mockAccountNFTsLedgerService) GetGatewayBalances(account string, hotWallets []string, ledgerIndex string) (*rpc_types.GatewayBalancesResult, error) {
+func (m *mockAccountNFTsLedgerService) GetGatewayBalances(account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*rpc_types.NoRippleCheckResult, error) {
+func (m *mockAccountNFTsLedgerService) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*rpc_types.DepositAuthorizedResult, error) {
+func (m *mockAccountNFTsLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*types.DepositAuthorizedResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*rpc_types.NFTOffersResult, error) {
+func (m *mockAccountNFTsLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*rpc_types.NFTOffersResult, error) {
+func (m *mockAccountNFTsLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
 
 // setupAccountNFTsTestServices initializes the Services singleton with a mock for testing
 func setupAccountNFTsTestServices(mock *mockAccountNFTsLedgerService) func() {
-	oldServices := rpc_types.Services
-	rpc_types.Services = &rpc_types.ServiceContainer{
+	oldServices := types.Services
+	types.Services = &types.ServiceContainer{
 		Ledger: mock,
 	}
 	return func() {
-		rpc_types.Services = oldServices
+		types.Services = oldServices
 	}
 }
 
@@ -171,11 +171,11 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 	cleanup := setupAccountNFTsTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.AccountNftsMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.AccountNftsMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	tests := []struct {
@@ -189,13 +189,13 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 			name:          "Missing account field - empty params",
 			params:        map[string]interface{}{},
 			expectedError: "Missing required parameter: account",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
 			expectedError: "Missing required parameter: account",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - integer",
@@ -203,7 +203,7 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 				"account": 12345,
 			},
 			expectedError: "Invalid parameters:",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - boolean",
@@ -211,7 +211,7 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 				"account": true,
 			},
 			expectedError: "Invalid parameters:",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			// Test case from rippled: malformed account using node public key format
@@ -220,7 +220,7 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  rpc_types.RpcACT_NOT_FOUND,
+			expectedCode:  types.RpcACT_NOT_FOUND,
 			setupMock: func() {
 				mock.accountNFTsErr = errors.New("invalid account address: bad address")
 			},
@@ -232,7 +232,7 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
 			},
 			expectedError: "Account not found.",
-			expectedCode:  rpc_types.RpcACT_NOT_FOUND,
+			expectedCode:  types.RpcACT_NOT_FOUND,
 			setupMock: func() {
 				mock.accountNFTsErr = errors.New("account not found")
 			},
@@ -279,11 +279,11 @@ func TestAccountNFTsInvalidAccountTypes(t *testing.T) {
 	cleanup := setupAccountNFTsTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.AccountNftsMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.AccountNftsMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// These test cases mirror rippled's testInvalidAccountParam lambda
@@ -315,7 +315,7 @@ func TestAccountNFTsInvalidAccountTypes(t *testing.T) {
 			assert.Nil(t, result, "Expected nil result for invalid account type")
 			require.NotNil(t, rpcErr, "Expected RPC error for invalid account type")
 			// Should return invalid params error
-			assert.Equal(t, rpc_types.RpcINVALID_PARAMS, rpcErr.Code,
+			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code,
 				"Expected invalidParams error code for type: %s", tc.name)
 		})
 	}
@@ -328,19 +328,19 @@ func TestAccountNFTsBasic(t *testing.T) {
 	cleanup := setupAccountNFTsTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.AccountNftsMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.AccountNftsMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	bobAccount := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
 
 	t.Run("Account with no NFTs returns empty array", func(t *testing.T) {
-		mock.accountNFTsResult = &rpc_types.AccountNFTsResult{
+		mock.accountNFTsResult = &types.AccountNFTsResult{
 			Account:     bobAccount,
-			AccountNFTs: []rpc_types.NFTInfo{},
+			AccountNFTs: []types.NFTInfo{},
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 			Validated:   true,
@@ -368,9 +368,9 @@ func TestAccountNFTsBasic(t *testing.T) {
 	})
 
 	t.Run("Account with one NFT returns NFT details", func(t *testing.T) {
-		mock.accountNFTsResult = &rpc_types.AccountNFTsResult{
+		mock.accountNFTsResult = &types.AccountNFTsResult{
 			Account: bobAccount,
-			AccountNFTs: []rpc_types.NFTInfo{
+			AccountNFTs: []types.NFTInfo{
 				{
 					Flags:        0,
 					Issuer:       bobAccount,
@@ -420,9 +420,9 @@ func TestAccountNFTsBasic(t *testing.T) {
 	})
 
 	t.Run("Account with multiple NFTs returns all", func(t *testing.T) {
-		mock.accountNFTsResult = &rpc_types.AccountNFTsResult{
+		mock.accountNFTsResult = &types.AccountNFTsResult{
 			Account: bobAccount,
-			AccountNFTs: []rpc_types.NFTInfo{
+			AccountNFTs: []types.NFTInfo{
 				{
 					Flags:        0,
 					Issuer:       bobAccount,
@@ -479,19 +479,19 @@ func TestAccountNFTsOptionalFields(t *testing.T) {
 	cleanup := setupAccountNFTsTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.AccountNftsMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.AccountNftsMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	bobAccount := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
 
 	t.Run("NFT with URI shows URI field", func(t *testing.T) {
-		mock.accountNFTsResult = &rpc_types.AccountNFTsResult{
+		mock.accountNFTsResult = &types.AccountNFTsResult{
 			Account: bobAccount,
-			AccountNFTs: []rpc_types.NFTInfo{
+			AccountNFTs: []types.NFTInfo{
 				{
 					Flags:        0,
 					Issuer:       bobAccount,
@@ -531,9 +531,9 @@ func TestAccountNFTsOptionalFields(t *testing.T) {
 	})
 
 	t.Run("NFT with TransferFee shows TransferFee field", func(t *testing.T) {
-		mock.accountNFTsResult = &rpc_types.AccountNFTsResult{
+		mock.accountNFTsResult = &types.AccountNFTsResult{
 			Account: bobAccount,
-			AccountNFTs: []rpc_types.NFTInfo{
+			AccountNFTs: []types.NFTInfo{
 				{
 					Flags:        8, // tfTransferable
 					Issuer:       bobAccount,
@@ -573,9 +573,9 @@ func TestAccountNFTsOptionalFields(t *testing.T) {
 	})
 
 	t.Run("NFT without optional fields excludes them from response", func(t *testing.T) {
-		mock.accountNFTsResult = &rpc_types.AccountNFTsResult{
+		mock.accountNFTsResult = &types.AccountNFTsResult{
 			Account: bobAccount,
-			AccountNFTs: []rpc_types.NFTInfo{
+			AccountNFTs: []types.NFTInfo{
 				{
 					Flags:        0,
 					Issuer:       bobAccount,
@@ -623,11 +623,11 @@ func TestAccountNFTsLedgerSpecification(t *testing.T) {
 	cleanup := setupAccountNFTsTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.AccountNftsMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.AccountNftsMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -647,9 +647,9 @@ func TestAccountNFTsLedgerSpecification(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			setupMock: func() {
-				mock.accountNFTsResult = &rpc_types.AccountNFTsResult{
+				mock.accountNFTsResult = &types.AccountNFTsResult{
 					Account:     validAccount,
-					AccountNFTs: []rpc_types.NFTInfo{},
+					AccountNFTs: []types.NFTInfo{},
 					LedgerIndex: 2,
 					LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 					Validated:   true,
@@ -668,9 +668,9 @@ func TestAccountNFTsLedgerSpecification(t *testing.T) {
 				"ledger_index": "current",
 			},
 			setupMock: func() {
-				mock.accountNFTsResult = &rpc_types.AccountNFTsResult{
+				mock.accountNFTsResult = &types.AccountNFTsResult{
 					Account:     validAccount,
-					AccountNFTs: []rpc_types.NFTInfo{},
+					AccountNFTs: []types.NFTInfo{},
 					LedgerIndex: 3,
 					LedgerHash:  [32]byte{0x5B, 0xC5, 0x0C, 0x9B},
 					Validated:   false,
@@ -689,9 +689,9 @@ func TestAccountNFTsLedgerSpecification(t *testing.T) {
 				"ledger_index": 2,
 			},
 			setupMock: func() {
-				mock.accountNFTsResult = &rpc_types.AccountNFTsResult{
+				mock.accountNFTsResult = &types.AccountNFTsResult{
 					Account:     validAccount,
-					AccountNFTs: []rpc_types.NFTInfo{},
+					AccountNFTs: []types.NFTInfo{},
 					LedgerIndex: 2,
 					LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 					Validated:   true,
@@ -755,20 +755,20 @@ func TestAccountNFTsPagination(t *testing.T) {
 	cleanup := setupAccountNFTsTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.AccountNftsMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.AccountNftsMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	bobAccount := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
 
 	t.Run("Limit parameter restricts result count", func(t *testing.T) {
 		// Create 10 NFTs, but limit to 4
-		nfts := make([]rpc_types.NFTInfo, 10)
+		nfts := make([]types.NFTInfo, 10)
 		for i := 0; i < 10; i++ {
-			nfts[i] = rpc_types.NFTInfo{
+			nfts[i] = types.NFTInfo{
 				Flags:        0,
 				Issuer:       bobAccount,
 				NFTokenID:    "00000000F51DFC2A09D62CBBA1DFBDD4691DAC96AD98B90000000000000000" + string(rune('0'+i)),
@@ -777,7 +777,7 @@ func TestAccountNFTsPagination(t *testing.T) {
 			}
 		}
 
-		mock.accountNFTsResult = &rpc_types.AccountNFTsResult{
+		mock.accountNFTsResult = &types.AccountNFTsResult{
 			Account:     bobAccount,
 			AccountNFTs: nfts[:4], // Only return first 4
 			LedgerIndex: 3,
@@ -811,9 +811,9 @@ func TestAccountNFTsPagination(t *testing.T) {
 
 	t.Run("Marker continues pagination", func(t *testing.T) {
 		// Starting from marker, return next batch
-		mock.accountNFTsResult = &rpc_types.AccountNFTsResult{
+		mock.accountNFTsResult = &types.AccountNFTsResult{
 			Account: bobAccount,
-			AccountNFTs: []rpc_types.NFTInfo{
+			AccountNFTs: []types.NFTInfo{
 				{
 					Flags:        0,
 					Issuer:       bobAccount,
@@ -860,15 +860,15 @@ func TestAccountNFTsPagination(t *testing.T) {
 
 // TestAccountNFTsServiceUnavailable tests behavior when ledger service is not available
 func TestAccountNFTsServiceUnavailable(t *testing.T) {
-	oldServices := rpc_types.Services
-	rpc_types.Services = nil
-	defer func() { rpc_types.Services = oldServices }()
+	oldServices := types.Services
+	types.Services = nil
+	defer func() { types.Services = oldServices }()
 
-	method := &rpc_handlers.AccountNftsMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.AccountNftsMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := map[string]interface{}{
@@ -881,24 +881,24 @@ func TestAccountNFTsServiceUnavailable(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, rpc_types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
 	assert.Contains(t, rpcErr.Message, "Ledger service not available")
 }
 
 // TestAccountNFTsMethodMetadata tests the method's metadata functions
 func TestAccountNFTsMethodMetadata(t *testing.T) {
-	method := &rpc_handlers.AccountNftsMethod{}
+	method := &handlers.AccountNftsMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, rpc_types.RoleGuest, method.RequiredRole(),
+		assert.Equal(t, types.RoleGuest, method.RequiredRole(),
 			"account_nfts should be accessible to guests")
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {
 		versions := method.SupportedApiVersions()
-		assert.Contains(t, versions, rpc_types.ApiVersion1)
-		assert.Contains(t, versions, rpc_types.ApiVersion2)
-		assert.Contains(t, versions, rpc_types.ApiVersion3)
+		assert.Contains(t, versions, types.ApiVersion1)
+		assert.Contains(t, versions, types.ApiVersion2)
+		assert.Contains(t, versions, types.ApiVersion3)
 	})
 }
 
@@ -908,18 +908,18 @@ func TestAccountNFTsResponseFields(t *testing.T) {
 	cleanup := setupAccountNFTsTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.AccountNftsMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.AccountNftsMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	bobAccount := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
 
-	mock.accountNFTsResult = &rpc_types.AccountNFTsResult{
+	mock.accountNFTsResult = &types.AccountNFTsResult{
 		Account: bobAccount,
-		AccountNFTs: []rpc_types.NFTInfo{
+		AccountNFTs: []types.NFTInfo{
 			{
 				Flags:        0,
 				Issuer:       bobAccount,

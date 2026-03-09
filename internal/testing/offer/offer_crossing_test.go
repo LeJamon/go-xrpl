@@ -9,7 +9,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/stretchr/testify/require"
@@ -27,7 +27,7 @@ func ledgerEntryStateBalance(t *testing.T, env *jtx.TestEnv, acc1, acc2 *jtx.Acc
 	require.NoError(t, err, "Failed to read trust line between %s and %s for %s", acc1.Name, acc2.Name, currency)
 	require.NotEmpty(t, data, "Trust line does not exist between %s and %s for %s", acc1.Name, acc2.Name, currency)
 
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	require.NoError(t, err, "Failed to parse trust line between %s and %s for %s", acc1.Name, acc2.Name, currency)
 
 	return rs.Balance.Value()

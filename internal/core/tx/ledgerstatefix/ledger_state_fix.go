@@ -5,7 +5,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -117,7 +117,7 @@ func (l *LedgerStateFix) RequiredAmendments() [][32]byte {
 // Apply applies the LedgerStateFix transaction to the ledger.
 func (l *LedgerStateFix) Apply() tx.Result {
 	if l.Owner != "" {
-		_, err := sle.DecodeAccountID(l.Owner)
+		_, err := state.DecodeAccountID(l.Owner)
 		if err != nil {
 			return tx.TecNO_TARGET
 		}

@@ -7,7 +7,7 @@ import (
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	crypto "github.com/LeJamon/goXRPLd/crypto/common"
 )
 
@@ -75,7 +75,7 @@ func ParseCredentialEntry(data []byte) (*CredentialEntry, error) {
 
 	// Parse Subject
 	if subject, ok := jsonObj["Subject"].(string); ok {
-		subjectID, err := sle.DecodeAccountID(subject)
+		subjectID, err := state.DecodeAccountID(subject)
 		if err == nil {
 			cred.Subject = subjectID
 		}
@@ -83,7 +83,7 @@ func ParseCredentialEntry(data []byte) (*CredentialEntry, error) {
 
 	// Parse Issuer
 	if issuer, ok := jsonObj["Issuer"].(string); ok {
-		issuerID, err := sle.DecodeAccountID(issuer)
+		issuerID, err := state.DecodeAccountID(issuer)
 		if err == nil {
 			cred.Issuer = issuerID
 		}
@@ -168,13 +168,13 @@ func serializeCredentialEntry(cred *CredentialEntry) ([]byte, error) {
 	}
 
 	// Add Subject
-	subjectStr, err := sle.EncodeAccountID(cred.Subject)
+	subjectStr, err := state.EncodeAccountID(cred.Subject)
 	if err == nil && subjectStr != "" {
 		jsonObj["Subject"] = subjectStr
 	}
 
 	// Add Issuer
-	issuerStr, err := sle.EncodeAccountID(cred.Issuer)
+	issuerStr, err := state.EncodeAccountID(cred.Issuer)
 	if err == nil && issuerStr != "" {
 		jsonObj["Issuer"] = issuerStr
 	}
@@ -241,7 +241,7 @@ func checkCredentialExpired(cred *CredentialEntry, closeTime uint32) bool {
 func DeleteSLE(view tx.LedgerView, credKey keylet.Keylet, cred *CredentialEntry) error {
 	// Remove from issuer's owner directory
 	issuerDirKey := keylet.OwnerDir(cred.Issuer)
-	_, err := sle.DirRemove(view, issuerDirKey, cred.IssuerNode, credKey.Key, false)
+	_, err := state.DirRemove(view, issuerDirKey, cred.IssuerNode, credKey.Key, false)
 	if err != nil {
 		return fmt.Errorf("failed to remove credential from issuer directory: %w", err)
 	}
@@ -258,7 +258,7 @@ func DeleteSLE(view tx.LedgerView, credKey keylet.Keylet, cred *CredentialEntry)
 	// Remove from subject's owner directory (if different from issuer)
 	if cred.Subject != cred.Issuer {
 		subjectDirKey := keylet.OwnerDir(cred.Subject)
-		_, err := sle.DirRemove(view, subjectDirKey, cred.SubjectNode, credKey.Key, false)
+		_, err := state.DirRemove(view, subjectDirKey, cred.SubjectNode, credKey.Key, false)
 		if err != nil {
 			return fmt.Errorf("failed to remove credential from subject directory: %w", err)
 		}
@@ -287,7 +287,7 @@ func adjustOwnerCount(view tx.LedgerView, accountID [20]byte, delta int) error {
 		return nil // Account doesn't exist (may have been deleted)
 	}
 
-	account, err := sle.ParseAccountRoot(data)
+	account, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return fmt.Errorf("failed to parse account root: %w", err)
 	}
@@ -298,7 +298,7 @@ func adjustOwnerCount(view tx.LedgerView, accountID [20]byte, delta int) error {
 		account.OwnerCount++
 	}
 
-	updated, err := sle.SerializeAccountRoot(account)
+	updated, err := state.SerializeAccountRoot(account)
 	if err != nil {
 		return fmt.Errorf("failed to serialize account root: %w", err)
 	}

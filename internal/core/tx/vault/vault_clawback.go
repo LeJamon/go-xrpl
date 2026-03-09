@@ -7,7 +7,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -137,7 +137,7 @@ func (v *VaultClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	if err != nil {
 		return tx.TecNO_ENTRY
 	}
-	_, err = sle.DecodeAccountID(v.Holder)
+	_, err = state.DecodeAccountID(v.Holder)
 	if err != nil {
 		return tx.TecNO_TARGET
 	}

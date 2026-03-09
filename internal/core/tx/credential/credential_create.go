@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -65,7 +65,7 @@ func (c *CredentialCreate) Validate() error {
 	if c.Subject == "" {
 		return ErrCredentialNoSubject
 	}
-	if subjectID, err := sle.DecodeAccountID(c.Subject); err == nil {
+	if subjectID, err := state.DecodeAccountID(c.Subject); err == nil {
 		var zeroAccount [20]byte
 		if subjectID == zeroAccount {
 			return ErrCredentialNoSubject
@@ -123,7 +123,7 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TemINVALID
 	}
 
-	subjectID, err := sle.DecodeAccountID(c.Subject)
+	subjectID, err := state.DecodeAccountID(c.Subject)
 	if err != nil {
 		return tx.TecNO_TARGET
 	}
@@ -198,7 +198,7 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Insert into issuer's owner directory
 	issuerDirKey := keylet.OwnerDir(ctx.AccountID)
-	issuerDirResult, err := sle.DirInsert(ctx.View, issuerDirKey, credKeylet.Key, func(dir *sle.DirectoryNode) {
+	issuerDirResult, err := state.DirInsert(ctx.View, issuerDirKey, credKeylet.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
@@ -209,7 +209,7 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Insert into subject's owner directory (if different from issuer)
 	if subjectID != ctx.AccountID {
 		subjectDirKey := keylet.OwnerDir(subjectID)
-		subjectDirResult, err := sle.DirInsert(ctx.View, subjectDirKey, credKeylet.Key, func(dir *sle.DirectoryNode) {
+		subjectDirResult, err := state.DirInsert(ctx.View, subjectDirKey, credKeylet.Key, func(dir *state.DirectoryNode) {
 			dir.Owner = subjectID
 		})
 		if err != nil {

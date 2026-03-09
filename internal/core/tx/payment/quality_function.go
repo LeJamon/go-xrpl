@@ -2,7 +2,7 @@ package payment
 
 import (
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // AuctionSlotFeeScaleFactor is the denominator for trading fee calculations.
@@ -39,12 +39,12 @@ type QualityFunction struct {
 
 // numberOne returns 1.0 as an IOU Amount for arithmetic.
 func numberOne() tx.Amount {
-	return sle.NewIssuedAmountFromValue(1e15, -15, "", "")
+	return state.NewIssuedAmountFromValue(1e15, -15, "", "")
 }
 
 // numberZero returns 0 as an IOU Amount.
 func numberZero() tx.Amount {
-	return sle.NewIssuedAmountFromValue(0, -100, "", "")
+	return state.NewIssuedAmountFromValue(0, -100, "", "")
 }
 
 // NewCLOBLikeQualityFunction creates a QualityFunction for CLOB-like offers
@@ -93,8 +93,8 @@ func NewAMMQualityFunction(poolGets, poolPays tx.Amount, tradingFee uint16) *Qua
 	if tradingFee == 0 {
 		cfee = one
 	} else {
-		feeNum := sle.NewIssuedAmountFromValue(int64(tradingFee), 0, "", "")
-		scaleFactor := sle.NewIssuedAmountFromValue(AuctionSlotFeeScaleFactor, 0, "", "")
+		feeNum := state.NewIssuedAmountFromValue(int64(tradingFee), 0, "", "")
+		scaleFactor := state.NewIssuedAmountFromValue(AuctionSlotFeeScaleFactor, 0, "", "")
 		feeFrac := feeNum.Div(scaleFactor, false) // tradingFee / 100000
 		cfee, _ = one.Sub(feeFrac)                // 1 - tradingFee/100000
 	}

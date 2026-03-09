@@ -18,7 +18,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/core/tx/offer"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/payment"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/signerlist"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/ticket"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/trustset"
 )
@@ -600,7 +600,7 @@ func (e *TestEnv) Submit(transaction interface{}) TxResult {
 			return TxResult{Code: "terNO_ACCOUNT", Success: false, Message: "Account not found"}
 		}
 
-		accountRoot, err := sle.ParseAccountRootFromBytes(data)
+		accountRoot, err := state.ParseAccountRootFromBytes(data)
 		if err != nil {
 			e.t.Fatalf("Failed to parse account root: %v", err)
 			return TxResult{Code: "temINVALID", Success: false, Message: "Failed to parse account"}
@@ -667,7 +667,7 @@ func (e *TestEnv) Balance(acc *Account) uint64 {
 	}
 
 	// Parse account root to get balance
-	accountRoot, err := sle.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRootFromBytes(data)
 	if err != nil {
 		e.t.Fatalf("Failed to parse account data: %v", err)
 		return 0
@@ -679,7 +679,7 @@ func (e *TestEnv) Balance(acc *Account) uint64 {
 // IOUBalance returns the IOU balance of an account for a specific currency and issuer.
 // The balance is returned from the perspective of the holder (not the issuer).
 // Positive means the holder has tokens, negative means they owe tokens.
-func (e *TestEnv) IOUBalance(holder, issuer *Account, currency string) *sle.Amount {
+func (e *TestEnv) IOUBalance(holder, issuer *Account, currency string) *state.Amount {
 	e.t.Helper()
 
 	// Get trust line keylet
@@ -693,7 +693,7 @@ func (e *TestEnv) IOUBalance(holder, issuer *Account, currency string) *sle.Amou
 	}
 	if !exists {
 		// No trust line = zero balance
-		zero := sle.NewIssuedAmountFromFloat64(0, currency, issuer.Address)
+		zero := state.NewIssuedAmountFromFloat64(0, currency, issuer.Address)
 		return &zero
 	}
 
@@ -705,7 +705,7 @@ func (e *TestEnv) IOUBalance(holder, issuer *Account, currency string) *sle.Amou
 	}
 
 	// Parse RippleState
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	if err != nil {
 		e.t.Fatalf("Failed to parse trust line: %v", err)
 		return nil
@@ -771,7 +771,7 @@ func (e *TestEnv) TrustLineFlags(account, counterparty *Account, currency string
 		return 0
 	}
 
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	if err != nil {
 		return 0
 	}
@@ -792,15 +792,15 @@ func (e *TestEnv) ClearTrustLineAuth(acc1, acc2 *Account, currency string) {
 		return
 	}
 
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	if err != nil {
 		e.t.Fatalf("ClearTrustLineAuth: failed to parse trust line: %v", err)
 		return
 	}
 
-	rs.Flags &^= sle.LsfLowAuth | sle.LsfHighAuth
+	rs.Flags &^= state.LsfLowAuth | state.LsfHighAuth
 
-	updated, err := sle.SerializeRippleState(rs)
+	updated, err := state.SerializeRippleState(rs)
 	if err != nil {
 		e.t.Fatalf("ClearTrustLineAuth: failed to serialize: %v", err)
 		return
@@ -826,7 +826,7 @@ func (e *TestEnv) HasNoRipple(account, counterparty *Account, currency string) b
 		return false
 	}
 
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	if err != nil {
 		return false
 	}
@@ -835,9 +835,9 @@ func (e *TestEnv) HasNoRipple(account, counterparty *Account, currency string) b
 	isLow := keylet.IsLowAccount(account.ID, counterparty.ID)
 
 	if isLow {
-		return (rs.Flags & sle.LsfLowNoRipple) != 0
+		return (rs.Flags & state.LsfLowNoRipple) != 0
 	}
-	return (rs.Flags & sle.LsfHighNoRipple) != 0
+	return (rs.Flags & state.LsfHighNoRipple) != 0
 }
 
 // Now returns the current time on the test clock.
@@ -870,7 +870,7 @@ func (e *TestEnv) Seq(acc *Account) uint32 {
 	}
 
 	// Parse account root to get sequence
-	accountRoot, err := sle.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRootFromBytes(data)
 	if err != nil {
 		e.t.Fatalf("Failed to parse account data: %v", err)
 		return 1
@@ -933,7 +933,7 @@ func (e *TestEnv) AccountInfo(acc *Account) *AccountInfo {
 		return nil
 	}
 
-	accountRoot, err := sle.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRootFromBytes(data)
 	if err != nil {
 		return nil
 	}
@@ -1233,7 +1233,7 @@ func (e *TestEnv) autoFillForSigning(txn tx.Transaction) {
 			return
 		}
 
-		accountRoot, err := sle.ParseAccountRootFromBytes(data)
+		accountRoot, err := state.ParseAccountRootFromBytes(data)
 		if err != nil {
 			e.t.Fatalf("autoFillForSigning: failed to parse account root: %v", err)
 			return
@@ -1710,7 +1710,7 @@ func (e *TestEnv) FreezeTrustLine(issuer, holder *Account, currency string) {
 	e.t.Helper()
 
 	// The issuer sets a trust line with the Freeze flag
-	amount := sle.NewIssuedAmountFromFloat64(0, currency, holder.Address)
+	amount := state.NewIssuedAmountFromFloat64(0, currency, holder.Address)
 	ts := trustset.NewTrustSet(issuer.Address, amount)
 	ts.SetFreeze()
 	ts.Fee = formatUint64(e.baseFee)
@@ -1727,7 +1727,7 @@ func (e *TestEnv) FreezeTrustLine(issuer, holder *Account, currency string) {
 func (e *TestEnv) UnfreezeTrustLine(issuer, holder *Account, currency string) {
 	e.t.Helper()
 
-	amount := sle.NewIssuedAmountFromFloat64(0, currency, holder.Address)
+	amount := state.NewIssuedAmountFromFloat64(0, currency, holder.Address)
 	ts := trustset.NewTrustSet(issuer.Address, amount)
 	ts.SetFlags(ts.GetFlags() | trustset.TrustSetFlagClearFreeze)
 	ts.Fee = formatUint64(e.baseFee)
@@ -1745,7 +1745,7 @@ func (e *TestEnv) UnfreezeTrustLine(issuer, holder *Account, currency string) {
 func (e *TestEnv) AuthorizeTrustLine(issuer, holder *Account, currency string) {
 	e.t.Helper()
 
-	amount := sle.NewIssuedAmountFromFloat64(0, currency, holder.Address)
+	amount := state.NewIssuedAmountFromFloat64(0, currency, holder.Address)
 	ts := trustset.NewTrustSet(issuer.Address, amount)
 	ts.SetFlags(ts.GetFlags() | trustset.TrustSetFlagSetfAuth)
 	ts.Fee = formatUint64(e.baseFee)
@@ -1788,7 +1788,7 @@ func (e *TestEnv) Limit(holder, issuer *Account, currency string) float64 {
 		return 0
 	}
 
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	if err != nil {
 		return 0
 	}
@@ -1852,14 +1852,14 @@ func (e *TestEnv) SetTransferRateDirect(acc *Account, rate uint32) {
 		e.t.Fatalf("SetTransferRateDirect: failed to read account: %v", err)
 	}
 
-	accountRoot, err := sle.ParseAccountRoot(data)
+	accountRoot, err := state.ParseAccountRoot(data)
 	if err != nil {
 		e.t.Fatalf("SetTransferRateDirect: failed to parse account: %v", err)
 	}
 
 	accountRoot.TransferRate = rate
 
-	updated, err := sle.SerializeAccountRoot(accountRoot)
+	updated, err := state.SerializeAccountRoot(accountRoot)
 	if err != nil {
 		e.t.Fatalf("SetTransferRateDirect: failed to serialize: %v", err)
 	}

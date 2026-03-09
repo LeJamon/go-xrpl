@@ -10,7 +10,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/credential"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -231,7 +231,7 @@ func (pcl *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Parse channel
-	channel, err := sle.ParsePayChannel(channelData)
+	channel, err := state.ParsePayChannel(channelData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -244,7 +244,7 @@ func (pcl *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 		return closeChannel(ctx, channelKey, channel)
 	}
 
-	accountID, _ := sle.DecodeAccountID(pcl.Account)
+	accountID, _ := state.DecodeAccountID(pcl.Account)
 	isOwner := channel.Account == accountID
 	isDest := channel.DestinationID == accountID
 
@@ -309,7 +309,7 @@ func (pcl *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TecNO_DST
 		}
 
-		destAccount, err := sle.ParseAccountRoot(destData)
+		destAccount, err := state.ParseAccountRoot(destData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -318,7 +318,7 @@ func (pcl *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Reference: rippled PayChan.cpp doApply() lines 546-551
 		depositAuth := rules.Enabled(amendment.FeatureDepositAuth)
 		if !depositAuth && isOwner && !isDest {
-			if destAccount.Flags&sle.LsfDisallowXRP != 0 {
+			if destAccount.Flags&state.LsfDisallowXRP != 0 {
 				return tx.TecNO_TARGET
 			}
 		}
@@ -340,7 +340,7 @@ func (pcl *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 		} else {
 			// Destination is NOT the sender — update directly
 			destAccount.Balance += transferAmount
-			destUpdatedData, err := sle.SerializeAccountRoot(destAccount)
+			destUpdatedData, err := state.SerializeAccountRoot(destAccount)
 			if err != nil {
 				return tx.TefINTERNAL
 			}
@@ -381,7 +381,7 @@ func (pcl *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Update channel SLE
-	updatedChannelData, err := sle.SerializePayChannelFromData(channel)
+	updatedChannelData, err := state.SerializePayChannelFromData(channel)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -475,9 +475,9 @@ func validateCredentials(ctx *tx.ApplyContext, credentialIDs []string) tx.Result
 
 // verifyDepositPreauth implements rippled's verifyDepositPreauth() from CredentialHelpers.cpp.
 // Reference: rippled CredentialHelpers.cpp verifyDepositPreauth() lines 357-391
-func verifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src [20]byte, dst [20]byte, destAccount *sle.AccountRoot) tx.Result {
+func verifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src [20]byte, dst [20]byte, destAccount *state.AccountRoot) tx.Result {
 	// Only check if destination has lsfDepositAuth set
-	if (destAccount.Flags & sle.LsfDepositAuth) == 0 {
+	if (destAccount.Flags & state.LsfDepositAuth) == 0 {
 		return tx.TesSUCCESS
 	}
 

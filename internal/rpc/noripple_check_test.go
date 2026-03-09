@@ -6,23 +6,23 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
+	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
+	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // mockNoRippleCheckLedgerService implements LedgerService for noripple_check testing
 type mockNoRippleCheckLedgerService struct {
-	noRippleCheckResult  *rpc_types.NoRippleCheckResult
+	noRippleCheckResult  *types.NoRippleCheckResult
 	noRippleCheckErr     error
-	accountInfo          *rpc_types.AccountInfo
+	accountInfo          *types.AccountInfo
 	accountInfoErr       error
 	currentLedgerIndex   uint32
 	closedLedgerIndex    uint32
 	validatedLedgerIndex uint32
 	standalone           bool
-	serverInfo           rpc_types.LedgerServerInfo
+	serverInfo           types.LedgerServerInfo
 }
 
 func newMockNoRippleCheckLedgerService() *mockNoRippleCheckLedgerService {
@@ -31,7 +31,7 @@ func newMockNoRippleCheckLedgerService() *mockNoRippleCheckLedgerService {
 		closedLedgerIndex:    2,
 		validatedLedgerIndex: 2,
 		standalone:           true,
-		serverInfo: rpc_types.LedgerServerInfo{
+		serverInfo: types.LedgerServerInfo{
 			Standalone:         true,
 			OpenLedgerSeq:      3,
 			ClosedLedgerSeq:    2,
@@ -46,32 +46,32 @@ func (m *mockNoRippleCheckLedgerService) GetClosedLedgerIndex() uint32    { retu
 func (m *mockNoRippleCheckLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
 func (m *mockNoRippleCheckLedgerService) AcceptLedger() (uint32, error)   { return m.closedLedgerIndex + 1, nil }
 func (m *mockNoRippleCheckLedgerService) IsStandalone() bool              { return m.standalone }
-func (m *mockNoRippleCheckLedgerService) GetServerInfo() rpc_types.LedgerServerInfo {
+func (m *mockNoRippleCheckLedgerService) GetServerInfo() types.LedgerServerInfo {
 	return m.serverInfo
 }
 func (m *mockNoRippleCheckLedgerService) GetGenesisAccount() (string, error) {
 	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
 }
-func (m *mockNoRippleCheckLedgerService) GetLedgerBySequence(seq uint32) (rpc_types.LedgerReader, error) {
+func (m *mockNoRippleCheckLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetLedgerByHash(hash [32]byte) (rpc_types.LedgerReader, error) {
+func (m *mockNoRippleCheckLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) SubmitTransaction(txJSON []byte) (*rpc_types.SubmitResult, error) {
+func (m *mockNoRippleCheckLedgerService) SubmitTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockNoRippleCheckLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
 	return 10, 10000000, 2000000
 }
-func (m *mockNoRippleCheckLedgerService) GetAccountInfo(account string, ledgerIndex string) (*rpc_types.AccountInfo, error) {
+func (m *mockNoRippleCheckLedgerService) GetAccountInfo(account string, ledgerIndex string) (*types.AccountInfo, error) {
 	if m.accountInfoErr != nil {
 		return nil, m.accountInfoErr
 	}
 	if m.accountInfo != nil {
 		return m.accountInfo, nil
 	}
-	return &rpc_types.AccountInfo{
+	return &types.AccountInfo{
 		Account:     account,
 		Balance:     "100000000",
 		Flags:       0,
@@ -82,52 +82,52 @@ func (m *mockNoRippleCheckLedgerService) GetAccountInfo(account string, ledgerIn
 		Validated:   true,
 	}, nil
 }
-func (m *mockNoRippleCheckLedgerService) GetTransaction(txHash [32]byte) (*rpc_types.TransactionInfo, error) {
+func (m *mockNoRippleCheckLedgerService) GetTransaction(txHash [32]byte) (*types.TransactionInfo, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockNoRippleCheckLedgerService) StoreTransaction(txHash [32]byte, txData []byte) error {
 	return errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetAccountLines(account string, ledgerIndex string, peer string, limit uint32) (*rpc_types.AccountLinesResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetAccountLines(account string, ledgerIndex string, peer string, limit uint32) (*types.AccountLinesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetAccountOffers(account string, ledgerIndex string, limit uint32) (*rpc_types.AccountOffersResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetAccountOffers(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetBookOffers(takerGets, takerPays rpc_types.Amount, ledgerIndex string, limit uint32) (*rpc_types.BookOffersResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetBookOffers(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *rpc_types.AccountTxMarker, forward bool) (*rpc_types.AccountTxResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetTransactionHistory(startIndex uint32) (*rpc_types.TxHistoryResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetTransactionHistory(startIndex uint32) (*types.TxHistoryResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetLedgerRange(minSeq, maxSeq uint32) (*rpc_types.LedgerRangeResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetLedgerRange(minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*rpc_types.LedgerEntryResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetLedgerData(ledgerIndex string, limit uint32, marker string) (*rpc_types.LedgerDataResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetLedgerData(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*rpc_types.AccountObjectsResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*rpc_types.AccountChannelsResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*types.AccountChannelsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetAccountCurrencies(account string, ledgerIndex string) (*rpc_types.AccountCurrenciesResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetAccountCurrencies(account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetAccountNFTs(account string, ledgerIndex string, limit uint32) (*rpc_types.AccountNFTsResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetAccountNFTs(account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetGatewayBalances(account string, hotWallets []string, ledgerIndex string) (*rpc_types.GatewayBalancesResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetGatewayBalances(account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*rpc_types.NoRippleCheckResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
 	if m.noRippleCheckErr != nil {
 		return nil, m.noRippleCheckErr
 	}
@@ -135,31 +135,31 @@ func (m *mockNoRippleCheckLedgerService) GetNoRippleCheck(account string, role s
 		return m.noRippleCheckResult, nil
 	}
 	// Return empty result by default
-	return &rpc_types.NoRippleCheckResult{
+	return &types.NoRippleCheckResult{
 		Problems:    []string{},
 		LedgerIndex: m.validatedLedgerIndex,
 		LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 		Validated:   true,
 	}, nil
 }
-func (m *mockNoRippleCheckLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*rpc_types.DepositAuthorizedResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*types.DepositAuthorizedResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*rpc_types.NFTOffersResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*rpc_types.NFTOffersResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
 
 // setupNoRippleCheckTestServices initializes the Services singleton with a mock for testing
 func setupNoRippleCheckTestServices(mock *mockNoRippleCheckLedgerService) func() {
-	oldServices := rpc_types.Services
-	rpc_types.Services = &rpc_types.ServiceContainer{
+	oldServices := types.Services
+	types.Services = &types.ServiceContainer{
 		Ledger: mock,
 	}
 	return func() {
-		rpc_types.Services = oldServices
+		types.Services = oldServices
 	}
 }
 
@@ -174,11 +174,11 @@ func TestNoRippleCheckErrorValidation(t *testing.T) {
 	cleanup := setupNoRippleCheckTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.NoRippleCheckMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NoRippleCheckMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	tests := []struct {
@@ -273,15 +273,15 @@ func TestNoRippleCheckUserRoleNoProblems(t *testing.T) {
 	cleanup := setupNoRippleCheckTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.NoRippleCheckMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NoRippleCheckMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// User with no problems: DefaultRipple not set, NoRipple set on trust lines
-	mock.noRippleCheckResult = &rpc_types.NoRippleCheckResult{
+	mock.noRippleCheckResult = &types.NoRippleCheckResult{
 		Problems:    []string{}, // No problems
 		LedgerIndex: 2,
 		LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
@@ -325,15 +325,15 @@ func TestNoRippleCheckUserRoleWithProblems(t *testing.T) {
 	cleanup := setupNoRippleCheckTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.NoRippleCheckMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NoRippleCheckMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// User with problems: DefaultRipple set (bad), NoRipple not set on trust lines (bad)
-	mock.noRippleCheckResult = &rpc_types.NoRippleCheckResult{
+	mock.noRippleCheckResult = &types.NoRippleCheckResult{
 		Problems: []string{
 			"You appear to have set your default ripple flag even though you are not a gateway. This is not recommended unless you are experimenting",
 			"You should probably set the no ripple flag on your USD line to rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -379,15 +379,15 @@ func TestNoRippleCheckGatewayRoleNoProblems(t *testing.T) {
 	cleanup := setupNoRippleCheckTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.NoRippleCheckMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NoRippleCheckMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Gateway with no problems: DefaultRipple set, NoRipple not set on trust lines
-	mock.noRippleCheckResult = &rpc_types.NoRippleCheckResult{
+	mock.noRippleCheckResult = &types.NoRippleCheckResult{
 		Problems:    []string{}, // No problems
 		LedgerIndex: 2,
 		LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
@@ -426,15 +426,15 @@ func TestNoRippleCheckGatewayRoleWithProblems(t *testing.T) {
 	cleanup := setupNoRippleCheckTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.NoRippleCheckMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NoRippleCheckMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Gateway with problems: DefaultRipple not set (bad), NoRipple set on trust lines (bad)
-	mock.noRippleCheckResult = &rpc_types.NoRippleCheckResult{
+	mock.noRippleCheckResult = &types.NoRippleCheckResult{
 		Problems: []string{
 			"You should immediately set your default ripple flag",
 			"You should clear the no ripple flag on your USD line to rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -480,19 +480,19 @@ func TestNoRippleCheckWithTransactionsUser(t *testing.T) {
 	cleanup := setupNoRippleCheckTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.NoRippleCheckMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NoRippleCheckMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// User with problems requesting transactions (only TrustSet, no AccountSet since DefaultRipple should not be set)
-	mock.noRippleCheckResult = &rpc_types.NoRippleCheckResult{
+	mock.noRippleCheckResult = &types.NoRippleCheckResult{
 		Problems: []string{
 			"You should probably set the no ripple flag on your USD line to rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 		},
-		Transactions: []rpc_types.SuggestedTransaction{
+		Transactions: []types.SuggestedTransaction{
 			{
 				TransactionType: "TrustSet",
 				Account:         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
@@ -544,20 +544,20 @@ func TestNoRippleCheckWithTransactionsGateway(t *testing.T) {
 	cleanup := setupNoRippleCheckTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.NoRippleCheckMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NoRippleCheckMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Gateway with problems requesting transactions (AccountSet + TrustSet)
-	mock.noRippleCheckResult = &rpc_types.NoRippleCheckResult{
+	mock.noRippleCheckResult = &types.NoRippleCheckResult{
 		Problems: []string{
 			"You should immediately set your default ripple flag",
 			"You should clear the no ripple flag on your USD line to rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 		},
-		Transactions: []rpc_types.SuggestedTransaction{
+		Transactions: []types.SuggestedTransaction{
 			{
 				TransactionType: "AccountSet",
 				Account:         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
@@ -624,11 +624,11 @@ func TestNoRippleCheckTransactionsFieldValidationAPIv2(t *testing.T) {
 	cleanup := setupNoRippleCheckTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.NoRippleCheckMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NoRippleCheckMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion2,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion2,
 	}
 
 	// In API v2, transactions must be a boolean, not a string
@@ -649,14 +649,14 @@ func TestNoRippleCheckTransactionsFieldAPIv1(t *testing.T) {
 	cleanup := setupNoRippleCheckTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.NoRippleCheckMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NoRippleCheckMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
-	mock.noRippleCheckResult = &rpc_types.NoRippleCheckResult{
+	mock.noRippleCheckResult = &types.NoRippleCheckResult{
 		Problems:    []string{},
 		LedgerIndex: 2,
 		LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
@@ -679,17 +679,17 @@ func TestNoRippleCheckTransactionsFieldAPIv1(t *testing.T) {
 // TestNoRippleCheckServiceUnavailable tests response when ledger service is unavailable
 func TestNoRippleCheckServiceUnavailable(t *testing.T) {
 	// Set Services to nil
-	oldServices := rpc_types.Services
-	rpc_types.Services = nil
+	oldServices := types.Services
+	types.Services = nil
 	defer func() {
-		rpc_types.Services = oldServices
+		types.Services = oldServices
 	}()
 
-	method := &rpc_handlers.NoRippleCheckMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NoRippleCheckMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := map[string]interface{}{
@@ -715,14 +715,14 @@ func TestNoRippleCheckWithLimit(t *testing.T) {
 	cleanup := setupNoRippleCheckTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.NoRippleCheckMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.NoRippleCheckMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
-	mock.noRippleCheckResult = &rpc_types.NoRippleCheckResult{
+	mock.noRippleCheckResult = &types.NoRippleCheckResult{
 		Problems:    []string{},
 		LedgerIndex: 2,
 		LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
@@ -748,16 +748,16 @@ func TestNoRippleCheckWithLimit(t *testing.T) {
 
 // TestNoRippleCheckMethodMetadata tests method metadata (role, API versions)
 func TestNoRippleCheckMethodMetadata(t *testing.T) {
-	method := &rpc_handlers.NoRippleCheckMethod{}
+	method := &handlers.NoRippleCheckMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, rpc_types.RoleGuest, method.RequiredRole())
+		assert.Equal(t, types.RoleGuest, method.RequiredRole())
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {
 		versions := method.SupportedApiVersions()
-		assert.Contains(t, versions, rpc_types.ApiVersion1)
-		assert.Contains(t, versions, rpc_types.ApiVersion2)
-		assert.Contains(t, versions, rpc_types.ApiVersion3)
+		assert.Contains(t, versions, types.ApiVersion1)
+		assert.Contains(t, versions, types.ApiVersion2)
+		assert.Contains(t, versions, types.ApiVersion3)
 	})
 }

@@ -14,7 +14,7 @@ import (
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/credential"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/permissioneddomain"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -38,7 +38,7 @@ func init() {
 //   - The trust line balance is zero (new relationship)
 //
 // Returns tesSUCCESS if authorized or if auth not required.
-func checkTrustLineAuthorization(view tx.LedgerView, issuerID, holderID [20]byte, trustLine *sle.RippleState) tx.Result {
+func checkTrustLineAuthorization(view tx.LedgerView, issuerID, holderID [20]byte, trustLine *state.RippleState) tx.Result {
 	// Read the issuer's account to check for lsfRequireAuth
 	issuerKey := keylet.Account(issuerID)
 	issuerData, err := view.Read(issuerKey)
@@ -46,13 +46,13 @@ func checkTrustLineAuthorization(view tx.LedgerView, issuerID, holderID [20]byte
 		return tx.TefINTERNAL
 	}
 
-	issuerAccount, err := sle.ParseAccountRoot(issuerData)
+	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
 	// If issuer doesn't require auth, always authorized
-	if (issuerAccount.Flags & sle.LsfRequireAuth) == 0 {
+	if (issuerAccount.Flags & state.LsfRequireAuth) == 0 {
 		return tx.TesSUCCESS
 	}
 
@@ -61,12 +61,12 @@ func checkTrustLineAuthorization(view tx.LedgerView, issuerID, holderID [20]byte
 	// Reference: rippled DirectStep.cpp:420
 	// auto const authField = (src_ > dst_) ? lsfHighAuth : lsfLowAuth;
 	var authFlag uint32
-	if sle.CompareAccountIDs(issuerID, holderID) > 0 {
+	if state.CompareAccountIDs(issuerID, holderID) > 0 {
 		// Issuer is HIGH, holder is LOW - need lsfHighAuth
-		authFlag = sle.LsfHighAuth
+		authFlag = state.LsfHighAuth
 	} else {
 		// Issuer is LOW, holder is HIGH - need lsfLowAuth
-		authFlag = sle.LsfLowAuth
+		authFlag = state.LsfLowAuth
 	}
 
 	// Check if trust line has the auth flag
@@ -623,7 +623,7 @@ func credentialPairKey(issuer [20]byte, credType []byte) string {
 
 // verifyDepositPreauth checks deposit authorization for a payment.
 // Reference: rippled verifyDepositPreauth() in Payment.cpp
-func (p *Payment) verifyDepositPreauth(ctx *tx.ApplyContext, srcAccountID, dstAccountID [20]byte, dstAccount *sle.AccountRoot) tx.Result {
+func (p *Payment) verifyDepositPreauth(ctx *tx.ApplyContext, srcAccountID, dstAccountID [20]byte, dstAccount *state.AccountRoot) tx.Result {
 	credentialsPresent := len(p.CredentialIDs) > 0
 
 	// Remove expired credentials first
@@ -634,7 +634,7 @@ func (p *Payment) verifyDepositPreauth(ctx *tx.ApplyContext, srcAccountID, dstAc
 	}
 
 	// Check if destination requires deposit authorization
-	if dstAccount != nil && (dstAccount.Flags&sle.LsfDepositAuth) != 0 {
+	if dstAccount != nil && (dstAccount.Flags&state.LsfDepositAuth) != 0 {
 		// Self-payments always allowed
 		if srcAccountID != dstAccountID {
 			// Try account-based DepositPreauth first
@@ -662,14 +662,14 @@ func (p *Payment) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TemMALFORMED
 		}
 		closeTime := ctx.Config.ParentCloseTime
-		senderID, err := sle.DecodeAccountID(p.Account)
+		senderID, err := state.DecodeAccountID(p.Account)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
 		if !permissioneddomain.AccountInDomain(ctx.View, senderID, domainID, closeTime) {
 			return tx.TecNO_PERMISSION
 		}
-		destID, err := sle.DecodeAccountID(p.Destination)
+		destID, err := state.DecodeAccountID(p.Destination)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -716,7 +716,7 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 	if err != nil || issuanceRaw == nil {
 		return tx.TecOBJECT_NOT_FOUND
 	}
-	issuance, err := sle.ParseMPTokenIssuance(issuanceRaw)
+	issuance, err := state.ParseMPTokenIssuance(issuanceRaw)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -724,7 +724,7 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 	issuerID := issuance.Issuer
 
 	// Decode destination
-	destAccountID, err := sle.DecodeAccountID(p.Destination)
+	destAccountID, err := state.DecodeAccountID(p.Destination)
 	if err != nil {
 		return tx.TemDST_NEEDED
 	}
@@ -735,13 +735,13 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 	if err != nil || destData == nil {
 		return tx.TecNO_DST
 	}
-	destAccount, err := sle.ParseAccountRoot(destData)
+	destAccount, err := state.ParseAccountRoot(destData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
 	// Check destination tag requirement
-	if (destAccount.Flags&sle.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
+	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
 		return tx.TecDST_TAG_NEEDED
 	}
 
@@ -753,7 +753,7 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 		if err != nil || senderTokenRaw == nil {
 			return tx.TecNO_AUTH
 		}
-		senderToken, err := sle.ParseMPToken(senderTokenRaw)
+		senderToken, err := state.ParseMPToken(senderTokenRaw)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -770,7 +770,7 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 		if err != nil || destTokenRaw == nil {
 			return tx.TecNO_AUTH
 		}
-		destToken, err := sle.ParseMPToken(destTokenRaw)
+		destToken, err := state.ParseMPToken(destTokenRaw)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -815,7 +815,7 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 		senderTokenKey := keylet.MPToken(issuanceKey.Key, ctx.AccountID)
 		senderTokenRaw, _ := ctx.View.Read(senderTokenKey)
 		if senderTokenRaw != nil {
-			senderToken, _ := sle.ParseMPToken(senderTokenRaw)
+			senderToken, _ := state.ParseMPToken(senderTokenRaw)
 			if senderToken != nil && senderToken.Flags&entry.LsfMPTLocked != 0 {
 				return tx.TecLOCKED
 			}
@@ -823,7 +823,7 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 		destTokenKey := keylet.MPToken(issuanceKey.Key, destAccountID)
 		destTokenRaw, _ := ctx.View.Read(destTokenKey)
 		if destTokenRaw != nil {
-			destToken, _ := sle.ParseMPToken(destTokenRaw)
+			destToken, _ := state.ParseMPToken(destTokenRaw)
 			if destToken != nil && destToken.Flags&entry.LsfMPTLocked != 0 {
 				return tx.TecLOCKED
 			}
@@ -888,7 +888,7 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 
 // mptDirectTransfer handles MPT payment where one party is the issuer.
 // No transfer fee applies. Handles MaximumAmount enforcement.
-func (p *Payment) mptDirectTransfer(ctx *tx.ApplyContext, issuance *sle.MPTokenIssuanceData,
+func (p *Payment) mptDirectTransfer(ctx *tx.ApplyContext, issuance *state.MPTokenIssuanceData,
 	issuanceKey keylet.Keylet, amount uint64, senderIsIssuer, destIsIssuer bool, destAccountID [20]byte) tx.Result {
 
 	// If sender is issuer: check MaximumAmount
@@ -912,7 +912,7 @@ func (p *Payment) mptDirectTransfer(ctx *tx.ApplyContext, issuance *sle.MPTokenI
 		if err != nil || senderTokenRaw == nil {
 			return tx.TecNO_AUTH
 		}
-		senderToken, err := sle.ParseMPToken(senderTokenRaw)
+		senderToken, err := state.ParseMPToken(senderTokenRaw)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -920,7 +920,7 @@ func (p *Payment) mptDirectTransfer(ctx *tx.ApplyContext, issuance *sle.MPTokenI
 			return tx.TecINSUFFICIENT_FUNDS
 		}
 		senderToken.MPTAmount -= amount
-		updatedSenderToken, err := sle.SerializeMPToken(senderToken)
+		updatedSenderToken, err := state.SerializeMPToken(senderToken)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -941,12 +941,12 @@ func (p *Payment) mptDirectTransfer(ctx *tx.ApplyContext, issuance *sle.MPTokenI
 		if err != nil || destTokenRaw == nil {
 			return tx.TecNO_AUTH
 		}
-		destToken, err := sle.ParseMPToken(destTokenRaw)
+		destToken, err := state.ParseMPToken(destTokenRaw)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
 		destToken.MPTAmount += amount
-		updatedDestToken, err := sle.SerializeMPToken(destToken)
+		updatedDestToken, err := state.SerializeMPToken(destToken)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -956,7 +956,7 @@ func (p *Payment) mptDirectTransfer(ctx *tx.ApplyContext, issuance *sle.MPTokenI
 	}
 
 	// Update issuance
-	updatedIssuance, err := sle.SerializeMPTokenIssuance(issuance)
+	updatedIssuance, err := state.SerializeMPTokenIssuance(issuance)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -970,7 +970,7 @@ func (p *Payment) mptDirectTransfer(ctx *tx.ApplyContext, issuance *sle.MPTokenI
 // mptTransitTransfer handles holder-to-holder MPT payment via transit through issuer.
 // Transfer fee is applied: sender pays amountDeliver * rate / QUALITY_ONE.
 // Reference: rippled View.cpp rippleSendMPT() lines 2068-2085
-func (p *Payment) mptTransitTransfer(ctx *tx.ApplyContext, issuance *sle.MPTokenIssuanceData,
+func (p *Payment) mptTransitTransfer(ctx *tx.ApplyContext, issuance *state.MPTokenIssuanceData,
 	issuanceKey keylet.Keylet, amountDeliver, rate uint64, destAccountID [20]byte) tx.Result {
 
 	// Actual amount sender pays (includes transfer fee)
@@ -985,7 +985,7 @@ func (p *Payment) mptTransitTransfer(ctx *tx.ApplyContext, issuance *sle.MPToken
 	if err != nil || destTokenRaw == nil {
 		return tx.TecNO_AUTH
 	}
-	destToken, err := sle.ParseMPToken(destTokenRaw)
+	destToken, err := state.ParseMPToken(destTokenRaw)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -998,7 +998,7 @@ func (p *Payment) mptTransitTransfer(ctx *tx.ApplyContext, issuance *sle.MPToken
 	if err != nil || senderTokenRaw == nil {
 		return tx.TecNO_AUTH
 	}
-	senderToken, err := sle.ParseMPToken(senderTokenRaw)
+	senderToken, err := state.ParseMPToken(senderTokenRaw)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -1011,7 +1011,7 @@ func (p *Payment) mptTransitTransfer(ctx *tx.ApplyContext, issuance *sle.MPToken
 	// Net OutstandingAmount change: amountDeliver - saActual (negative, fee burned)
 
 	// Serialize and update all modified entries
-	updatedSenderToken, err := sle.SerializeMPToken(senderToken)
+	updatedSenderToken, err := state.SerializeMPToken(senderToken)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -1019,7 +1019,7 @@ func (p *Payment) mptTransitTransfer(ctx *tx.ApplyContext, issuance *sle.MPToken
 		return tx.TefINTERNAL
 	}
 
-	updatedDestToken, err := sle.SerializeMPToken(destToken)
+	updatedDestToken, err := state.SerializeMPToken(destToken)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -1027,7 +1027,7 @@ func (p *Payment) mptTransitTransfer(ctx *tx.ApplyContext, issuance *sle.MPToken
 		return tx.TefINTERNAL
 	}
 
-	updatedIssuance, err := sle.SerializeMPTokenIssuance(issuance)
+	updatedIssuance, err := state.SerializeMPTokenIssuance(issuance)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -1142,7 +1142,7 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Get destination account
-	destAccountID, err := sle.DecodeAccountID(p.Destination)
+	destAccountID, err := state.DecodeAccountID(p.Destination)
 	if err != nil {
 		return tx.TemDST_NEEDED
 	}
@@ -1160,14 +1160,14 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 			return tx.TefINTERNAL
 		}
 
-		destAccount, err := sle.ParseAccountRoot(destData)
+		destAccount, err := state.ParseAccountRoot(destData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
 
 		// Check for pseudo-account (AMM accounts cannot receive direct payments)
 		// See rippled Payment.cpp:636-637: if (isPseudoAccount(sleDst)) return tecNO_PERMISSION
-		if (destAccount.Flags & sle.LsfAMM) != 0 {
+		if (destAccount.Flags & state.LsfAMM) != 0 {
 			return tx.TecNO_PERMISSION
 		}
 
@@ -1175,8 +1175,8 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 		// Per rippled, if lsfDisallowXRP is set and sender != destination, return tecNO_TARGET
 		// This allows accounts to indicate they don't want to receive XRP
 		// Reference: this matches rippled behavior for direct XRP payments
-		if (destAccount.Flags & sle.LsfDisallowXRP) != 0 {
-			senderAccountID, err := sle.DecodeAccountID(ctx.Account.Account)
+		if (destAccount.Flags & state.LsfDisallowXRP) != 0 {
+			senderAccountID, err := state.DecodeAccountID(ctx.Account.Account)
 			if err != nil {
 				return tx.TefINTERNAL
 			}
@@ -1187,7 +1187,7 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Check if destination requires a tag
-		if (destAccount.Flags&sle.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
+		if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
 			return tx.TecDST_TAG_NEEDED
 		}
 
@@ -1200,7 +1200,7 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 		// Reference: rippled Payment.cpp:641-677
 		// XRP payments have a wedge-prevention exemption: if BOTH the payment amount
 		// AND destination balance are <= base reserve, deposit preauth is NOT required.
-		if (destAccount.Flags & sle.LsfDepositAuth) != 0 {
+		if (destAccount.Flags & state.LsfDepositAuth) != 0 {
 			dstReserve := ctx.Config.ReserveBase
 
 			if amountDrops > dstReserve || destAccount.Balance > dstReserve {
@@ -1220,8 +1220,8 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 
 		// Clear PasswordSpent flag if set (lsfPasswordSpent = 0x00010000)
 		// Per rippled Payment.cpp:686-687, receiving XRP clears this flag
-		if (destAccount.Flags & sle.LsfPasswordSpent) != 0 {
-			destAccount.Flags &^= sle.LsfPasswordSpent
+		if (destAccount.Flags & state.LsfPasswordSpent) != 0 {
+			destAccount.Flags &^= state.LsfPasswordSpent
 		}
 
 		// Update PreviousTxnID and PreviousTxnLgrSeq on destination (thread the account)
@@ -1232,7 +1232,7 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 		ctx.Account.Balance -= amountDrops
 
 		// Update destination
-		updatedDestData, err := sle.SerializeAccountRoot(destAccount)
+		updatedDestData, err := state.SerializeAccountRoot(destAccount)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -1261,7 +1261,7 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 	} else {
 		accountSequence = 1
 	}
-	newAccount := &sle.AccountRoot{
+	newAccount := &state.AccountRoot{
 		Account:           p.Destination,
 		Balance:           amountDrops,
 		Sequence:          accountSequence,
@@ -1274,7 +1274,7 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 	ctx.Account.Balance -= amountDrops
 
 	// Serialize and insert new account
-	newAccountData, err := sle.SerializeAccountRoot(newAccount)
+	newAccountData, err := state.SerializeAccountRoot(newAccount)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -1300,12 +1300,12 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Get account IDs
-	senderAccountID, err := sle.DecodeAccountID(ctx.Account.Account)
+	senderAccountID, err := state.DecodeAccountID(ctx.Account.Account)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
-	destAccountID, err := sle.DecodeAccountID(p.Destination)
+	destAccountID, err := state.DecodeAccountID(p.Destination)
 	if err != nil {
 		return tx.TemDST_NEEDED
 	}
@@ -1318,7 +1318,7 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 		return p.applyRipplePayment(ctx, senderAccountID, destAccountID)
 	}
 
-	issuerAccountID, err := sle.DecodeAccountID(p.Amount.Issuer)
+	issuerAccountID, err := state.DecodeAccountID(p.Amount.Issuer)
 	if err != nil {
 		return tx.TemBAD_ISSUER
 	}
@@ -1351,13 +1351,13 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	destAccount, err := sle.ParseAccountRoot(destData)
+	destAccount, err := state.ParseAccountRoot(destData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
 	// Check destination tag requirement
-	if (destAccount.Flags&sle.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
+	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
 		return tx.TecDST_TAG_NEEDED
 	}
 
@@ -1369,7 +1369,7 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 	// Check deposit authorization for IOU payments (including path-finding payments)
 	// Reference: rippled Payment.cpp:429-464
 	depositPreauth := ctx.Rules().Enabled(amendment.FeatureDepositPreauth)
-	reqDepositAuth := (destAccount.Flags&sle.LsfDepositAuth) != 0
+	reqDepositAuth := (destAccount.Flags&state.LsfDepositAuth) != 0
 
 	// Before DepositPreauth amendment: ALL ripple payments to accounts with
 	// DepositAuth are blocked (including self-payments). This was a bug that
@@ -1442,13 +1442,13 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 	if err != nil || destData == nil {
 		return tx.TecNO_DST
 	}
-	destAccount, err := sle.ParseAccountRoot(destData)
+	destAccount, err := state.ParseAccountRoot(destData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
 	// Check destination tag requirement
-	if (destAccount.Flags&sle.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
+	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
 		return tx.TecDST_TAG_NEEDED
 	}
 
@@ -1542,7 +1542,7 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 	{
 		updatedData, err := ctx.View.Read(keylet.Account(senderID))
 		if err == nil && updatedData != nil {
-			if updated, parseErr := sle.ParseAccountRoot(updatedData); parseErr == nil {
+			if updated, parseErr := state.ParseAccountRoot(updatedData); parseErr == nil {
 				*ctx.Account = *updated
 			}
 		}
@@ -1566,7 +1566,7 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 }
 
 // applyIOUIssue handles when sender is the issuer creating new tokens
-func (p *Payment) applyIOUIssue(ctx *tx.ApplyContext, dest *sle.AccountRoot, senderID, destID [20]byte, amount tx.Amount) tx.Result {
+func (p *Payment) applyIOUIssue(ctx *tx.ApplyContext, dest *state.AccountRoot, senderID, destID [20]byte, amount tx.Amount) tx.Result {
 	// Look up the trust line between destination and issuer (sender)
 	trustLineKey := keylet.Line(destID, senderID, amount.Currency)
 
@@ -1586,7 +1586,7 @@ func (p *Payment) applyIOUIssue(ctx *tx.ApplyContext, dest *sle.AccountRoot, sen
 		return tx.TefINTERNAL
 	}
 
-	rippleState, err := sle.ParseRippleState(trustLineData)
+	rippleState, err := state.ParseRippleState(trustLineData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -1599,7 +1599,7 @@ func (p *Payment) applyIOUIssue(ctx *tx.ApplyContext, dest *sle.AccountRoot, sen
 	}
 
 	// Determine which side is low/high account
-	destIsLow := sle.CompareAccountIDsForLine(destID, senderID) < 0
+	destIsLow := state.CompareAccountIDsForLine(destID, senderID) < 0
 
 	// Get the trust limit set by the destination (recipient)
 	var trustLimit tx.Amount
@@ -1650,7 +1650,7 @@ func (p *Payment) applyIOUIssue(ctx *tx.ApplyContext, dest *sle.AccountRoot, sen
 	rippleState.PreviousTxnLgrSeq = ctx.Config.LedgerSequence
 
 	// Serialize and update
-	updatedTrustLine, err := sle.SerializeRippleState(rippleState)
+	updatedTrustLine, err := state.SerializeRippleState(rippleState)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -1668,7 +1668,7 @@ func (p *Payment) applyIOUIssue(ctx *tx.ApplyContext, dest *sle.AccountRoot, sen
 }
 
 // applyIOURedeem handles when destination is the issuer (redeeming tokens)
-func (p *Payment) applyIOURedeem(ctx *tx.ApplyContext, dest *sle.AccountRoot, senderID, destID [20]byte, amount tx.Amount) tx.Result {
+func (p *Payment) applyIOURedeem(ctx *tx.ApplyContext, dest *state.AccountRoot, senderID, destID [20]byte, amount tx.Amount) tx.Result {
 	// Look up the trust line between sender and issuer (destination)
 	trustLineKey := keylet.Line(senderID, destID, amount.Currency)
 
@@ -1688,13 +1688,13 @@ func (p *Payment) applyIOURedeem(ctx *tx.ApplyContext, dest *sle.AccountRoot, se
 		return tx.TefINTERNAL
 	}
 
-	rippleState, err := sle.ParseRippleState(trustLineData)
+	rippleState, err := state.ParseRippleState(trustLineData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
 	// Determine which side is low/high account
-	senderIsLow := sle.CompareAccountIDsForLine(senderID, destID) < 0
+	senderIsLow := state.CompareAccountIDsForLine(senderID, destID) < 0
 
 	// Get sender's current balance (how much issuer owes them)
 	// RippleState balance semantics:
@@ -1742,7 +1742,7 @@ func (p *Payment) applyIOURedeem(ctx *tx.ApplyContext, dest *sle.AccountRoot, se
 	rippleState.PreviousTxnLgrSeq = ctx.Config.LedgerSequence
 
 	// Serialize and update
-	updatedTrustLine, err := sle.SerializeRippleState(rippleState)
+	updatedTrustLine, err := state.SerializeRippleState(rippleState)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -1761,7 +1761,7 @@ func (p *Payment) applyIOURedeem(ctx *tx.ApplyContext, dest *sle.AccountRoot, se
 
 // applyIOUTransfer handles transfer between two non-issuer accounts
 // Reference: rippled Payment.cpp, DirectStep.cpp, and StepChecks.h
-func (p *Payment) applyIOUTransfer(ctx *tx.ApplyContext, dest *sle.AccountRoot, senderID, destID, issuerID [20]byte, amount tx.Amount) tx.Result {
+func (p *Payment) applyIOUTransfer(ctx *tx.ApplyContext, dest *state.AccountRoot, senderID, destID, issuerID [20]byte, amount tx.Amount) tx.Result {
 	// Both sender and destination need trust lines to the issuer
 
 	// Check if issuer has GlobalFreeze enabled
@@ -1771,11 +1771,11 @@ func (p *Payment) applyIOUTransfer(ctx *tx.ApplyContext, dest *sle.AccountRoot, 
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	issuerAccount, err := sle.ParseAccountRoot(issuerData)
+	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	if (issuerAccount.Flags & sle.LsfGlobalFreeze) != 0 {
+	if (issuerAccount.Flags & state.LsfGlobalFreeze) != 0 {
 		return tx.TerNO_LINE
 	}
 
@@ -1812,7 +1812,7 @@ func (p *Payment) applyIOUTransfer(ctx *tx.ApplyContext, dest *sle.AccountRoot, 
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	senderRippleState, err := sle.ParseRippleState(senderTrustData)
+	senderRippleState, err := state.ParseRippleState(senderTrustData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -1827,17 +1827,17 @@ func (p *Payment) applyIOUTransfer(ctx *tx.ApplyContext, dest *sle.AccountRoot, 
 	// Reference: rippled StepChecks.h checkFreeze() line 51-56
 	// checkFreeze(src, dst, currency) checks if dst has frozen their trust line with src
 	// For sender→issuer, we check if issuer has frozen
-	senderIsLowInTrustLine := sle.CompareAccountIDsForLine(senderID, issuerID) < 0
+	senderIsLowInTrustLine := state.CompareAccountIDsForLine(senderID, issuerID) < 0
 	if senderIsLowInTrustLine {
 		// Sender is LOW, issuer is HIGH
 		// Check if issuer (HIGH) has frozen sender's trust line
-		if (senderRippleState.Flags & sle.LsfHighFreeze) != 0 {
+		if (senderRippleState.Flags & state.LsfHighFreeze) != 0 {
 			return tx.TerNO_LINE
 		}
 	} else {
 		// Sender is HIGH, issuer is LOW
 		// Check if issuer (LOW) has frozen sender's trust line
-		if (senderRippleState.Flags & sle.LsfLowFreeze) != 0 {
+		if (senderRippleState.Flags & state.LsfLowFreeze) != 0 {
 			return tx.TerNO_LINE
 		}
 	}
@@ -1847,7 +1847,7 @@ func (p *Payment) applyIOUTransfer(ctx *tx.ApplyContext, dest *sle.AccountRoot, 
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	destRippleState, err := sle.ParseRippleState(destTrustData)
+	destRippleState, err := state.ParseRippleState(destTrustData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -1862,17 +1862,17 @@ func (p *Payment) applyIOUTransfer(ctx *tx.ApplyContext, dest *sle.AccountRoot, 
 	// Reference: rippled StepChecks.h checkFreeze(src, dst) line 51-56
 	// checkFreeze checks if DST has frozen their trust line with SRC
 	// For issuer→dest: checkFreeze(issuer, dest) checks DEST's freeze flag
-	destIsLowInTrustLine := sle.CompareAccountIDsForLine(destID, issuerID) < 0
+	destIsLowInTrustLine := state.CompareAccountIDsForLine(destID, issuerID) < 0
 	if destIsLowInTrustLine {
 		// Dest is LOW, issuer is HIGH
 		// Check if dest (LOW) has frozen their trust line
-		if (destRippleState.Flags & sle.LsfLowFreeze) != 0 {
+		if (destRippleState.Flags & state.LsfLowFreeze) != 0 {
 			return tx.TerNO_LINE
 		}
 	} else {
 		// Dest is HIGH, issuer is LOW
 		// Check if dest (HIGH) has frozen their trust line
-		if (destRippleState.Flags & sle.LsfHighFreeze) != 0 {
+		if (destRippleState.Flags & state.LsfHighFreeze) != 0 {
 			return tx.TerNO_LINE
 		}
 	}
@@ -1881,7 +1881,7 @@ func (p *Payment) applyIOUTransfer(ctx *tx.ApplyContext, dest *sle.AccountRoot, 
 	// RippleState balance semantics:
 	// - Negative balance = LOW owes HIGH (HIGH holds tokens)
 	// - Positive balance = HIGH owes LOW (LOW holds tokens)
-	senderIsLowWithIssuer := sle.CompareAccountIDsForLine(senderID, issuerID) < 0
+	senderIsLowWithIssuer := state.CompareAccountIDsForLine(senderID, issuerID) < 0
 	var senderBalance tx.Amount
 	if senderIsLowWithIssuer {
 		// Sender is LOW, issuer is HIGH
@@ -1899,7 +1899,7 @@ func (p *Payment) applyIOUTransfer(ctx *tx.ApplyContext, dest *sle.AccountRoot, 
 	}
 
 	// Calculate destination's current balance and trust limit
-	destIsLowWithIssuer := sle.CompareAccountIDsForLine(destID, issuerID) < 0
+	destIsLowWithIssuer := state.CompareAccountIDsForLine(destID, issuerID) < 0
 	var destBalance, destLimit tx.Amount
 	if destIsLowWithIssuer {
 		// Dest is LOW, issuer is HIGH
@@ -1957,7 +1957,7 @@ func (p *Payment) applyIOUTransfer(ctx *tx.ApplyContext, dest *sle.AccountRoot, 
 	destRippleState.PreviousTxnLgrSeq = ctx.Config.LedgerSequence
 
 	// Serialize and update sender's trust line
-	updatedSenderTrust, err := sle.SerializeRippleState(senderRippleState)
+	updatedSenderTrust, err := state.SerializeRippleState(senderRippleState)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -1966,7 +1966,7 @@ func (p *Payment) applyIOUTransfer(ctx *tx.ApplyContext, dest *sle.AccountRoot, 
 	}
 
 	// Serialize and update destination's trust line
-	updatedDestTrust, err := sle.SerializeRippleState(destRippleState)
+	updatedDestTrust, err := state.SerializeRippleState(destRippleState)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -1986,21 +1986,21 @@ func (p *Payment) applyIOUTransfer(ctx *tx.ApplyContext, dest *sle.AccountRoot, 
 // applyIOUIssueWithDelivered wraps applyIOUIssue to return the delivered amount
 // If partialPayment is true and the full amount cannot be issued, it will issue
 // as much as possible up to the destination's trust limit.
-func (p *Payment) applyIOUIssueWithDelivered(ctx *tx.ApplyContext, dest *sle.AccountRoot, senderID, destID [20]byte, amount tx.Amount, partialPayment bool) (tx.Result, tx.Amount) {
+func (p *Payment) applyIOUIssueWithDelivered(ctx *tx.ApplyContext, dest *state.AccountRoot, senderID, destID [20]byte, amount tx.Amount, partialPayment bool) (tx.Result, tx.Amount) {
 	return p.applyIOUIssuePartial(ctx, dest, senderID, destID, amount, partialPayment)
 }
 
 // applyIOURedeemWithDelivered wraps applyIOURedeem to return the delivered amount
 // If partialPayment is true and the full amount cannot be redeemed, it will redeem
 // as much as possible based on sender's balance.
-func (p *Payment) applyIOURedeemWithDelivered(ctx *tx.ApplyContext, dest *sle.AccountRoot, senderID, destID [20]byte, amount tx.Amount, partialPayment bool) (tx.Result, tx.Amount) {
+func (p *Payment) applyIOURedeemWithDelivered(ctx *tx.ApplyContext, dest *state.AccountRoot, senderID, destID [20]byte, amount tx.Amount, partialPayment bool) (tx.Result, tx.Amount) {
 	return p.applyIOURedeemPartial(ctx, dest, senderID, destID, amount, partialPayment)
 }
 
 // applyIOUTransferWithDelivered wraps applyIOUTransfer to return the delivered amount
 // If partialPayment is true and the full amount cannot be transferred, it will transfer
 // as much as possible based on sender's balance and destination's trust limit.
-func (p *Payment) applyIOUTransferWithDelivered(ctx *tx.ApplyContext, dest *sle.AccountRoot, senderID, destID, issuerID [20]byte, amount tx.Amount, partialPayment bool) (tx.Result, tx.Amount) {
+func (p *Payment) applyIOUTransferWithDelivered(ctx *tx.ApplyContext, dest *state.AccountRoot, senderID, destID, issuerID [20]byte, amount tx.Amount, partialPayment bool) (tx.Result, tx.Amount) {
 	return p.applyIOUTransferPartial(ctx, dest, senderID, destID, issuerID, amount, partialPayment)
 }
 
@@ -2010,7 +2010,7 @@ func (p *Payment) applyIOUTransferWithDelivered(ctx *tx.ApplyContext, dest *sle.
 // ============================================================================
 
 // applyIOUIssuePartial handles issuing currency with partial payment support
-func (p *Payment) applyIOUIssuePartial(ctx *tx.ApplyContext, dest *sle.AccountRoot, senderID, destID [20]byte, amount tx.Amount, partialPayment bool) (tx.Result, tx.Amount) {
+func (p *Payment) applyIOUIssuePartial(ctx *tx.ApplyContext, dest *state.AccountRoot, senderID, destID [20]byte, amount tx.Amount, partialPayment bool) (tx.Result, tx.Amount) {
 	// Look up the trust line between destination and issuer (sender)
 	trustLineKey := keylet.Line(destID, senderID, amount.Currency)
 
@@ -2029,7 +2029,7 @@ func (p *Payment) applyIOUIssuePartial(ctx *tx.ApplyContext, dest *sle.AccountRo
 		return tx.TefINTERNAL, tx.Amount{}
 	}
 
-	rippleState, err := sle.ParseRippleState(trustLineData)
+	rippleState, err := state.ParseRippleState(trustLineData)
 	if err != nil {
 		return tx.TefINTERNAL, tx.Amount{}
 	}
@@ -2040,7 +2040,7 @@ func (p *Payment) applyIOUIssuePartial(ctx *tx.ApplyContext, dest *sle.AccountRo
 	}
 
 	// Determine which side is low/high account
-	destIsLow := sle.CompareAccountIDsForLine(destID, senderID) < 0
+	destIsLow := state.CompareAccountIDsForLine(destID, senderID) < 0
 
 	// Get the current balance and trust limit
 	var currentBalance, trustLimit tx.Amount
@@ -2115,7 +2115,7 @@ func (p *Payment) applyIOUIssuePartial(ctx *tx.ApplyContext, dest *sle.AccountRo
 }
 
 // applyIOURedeemPartial handles redeeming currency with partial payment support
-func (p *Payment) applyIOURedeemPartial(ctx *tx.ApplyContext, dest *sle.AccountRoot, senderID, destID [20]byte, amount tx.Amount, partialPayment bool) (tx.Result, tx.Amount) {
+func (p *Payment) applyIOURedeemPartial(ctx *tx.ApplyContext, dest *state.AccountRoot, senderID, destID [20]byte, amount tx.Amount, partialPayment bool) (tx.Result, tx.Amount) {
 	// Look up the trust line between sender and issuer (destination)
 	trustLineKey := keylet.Line(senderID, destID, amount.Currency)
 
@@ -2134,13 +2134,13 @@ func (p *Payment) applyIOURedeemPartial(ctx *tx.ApplyContext, dest *sle.AccountR
 		return tx.TefINTERNAL, tx.Amount{}
 	}
 
-	rippleState, err := sle.ParseRippleState(trustLineData)
+	rippleState, err := state.ParseRippleState(trustLineData)
 	if err != nil {
 		return tx.TefINTERNAL, tx.Amount{}
 	}
 
 	// Determine which side is low/high account
-	senderIsLow := sle.CompareAccountIDsForLine(senderID, destID) < 0
+	senderIsLow := state.CompareAccountIDsForLine(senderID, destID) < 0
 
 	// Get sender's current balance
 	var senderBalance tx.Amount
@@ -2203,18 +2203,18 @@ func (p *Payment) applyIOURedeemPartial(ctx *tx.ApplyContext, dest *sle.AccountR
 }
 
 // applyIOUTransferPartial handles transfers between non-issuer accounts with partial payment support
-func (p *Payment) applyIOUTransferPartial(ctx *tx.ApplyContext, dest *sle.AccountRoot, senderID, destID, issuerID [20]byte, amount tx.Amount, partialPayment bool) (tx.Result, tx.Amount) {
+func (p *Payment) applyIOUTransferPartial(ctx *tx.ApplyContext, dest *state.AccountRoot, senderID, destID, issuerID [20]byte, amount tx.Amount, partialPayment bool) (tx.Result, tx.Amount) {
 	// Check if issuer has GlobalFreeze enabled
 	issuerKey := keylet.Account(issuerID)
 	issuerData, err := ctx.View.Read(issuerKey)
 	if err != nil {
 		return tx.TefINTERNAL, tx.Amount{}
 	}
-	issuerAccount, err := sle.ParseAccountRoot(issuerData)
+	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
 		return tx.TefINTERNAL, tx.Amount{}
 	}
-	if (issuerAccount.Flags & sle.LsfGlobalFreeze) != 0 {
+	if (issuerAccount.Flags & state.LsfGlobalFreeze) != 0 {
 		return tx.TerNO_LINE, tx.Amount{}
 	}
 
@@ -2246,7 +2246,7 @@ func (p *Payment) applyIOUTransferPartial(ctx *tx.ApplyContext, dest *sle.Accoun
 	if err != nil {
 		return tx.TefINTERNAL, tx.Amount{}
 	}
-	senderRippleState, err := sle.ParseRippleState(senderTrustData)
+	senderRippleState, err := state.ParseRippleState(senderTrustData)
 	if err != nil {
 		return tx.TefINTERNAL, tx.Amount{}
 	}
@@ -2257,13 +2257,13 @@ func (p *Payment) applyIOUTransferPartial(ctx *tx.ApplyContext, dest *sle.Accoun
 	}
 
 	// Check if sender's trust line is frozen
-	senderIsLowInTrustLine := sle.CompareAccountIDsForLine(senderID, issuerID) < 0
+	senderIsLowInTrustLine := state.CompareAccountIDsForLine(senderID, issuerID) < 0
 	if senderIsLowInTrustLine {
-		if (senderRippleState.Flags & sle.LsfHighFreeze) != 0 {
+		if (senderRippleState.Flags & state.LsfHighFreeze) != 0 {
 			return tx.TerNO_LINE, tx.Amount{}
 		}
 	} else {
-		if (senderRippleState.Flags & sle.LsfLowFreeze) != 0 {
+		if (senderRippleState.Flags & state.LsfLowFreeze) != 0 {
 			return tx.TerNO_LINE, tx.Amount{}
 		}
 	}
@@ -2273,7 +2273,7 @@ func (p *Payment) applyIOUTransferPartial(ctx *tx.ApplyContext, dest *sle.Accoun
 	if err != nil {
 		return tx.TefINTERNAL, tx.Amount{}
 	}
-	destRippleState, err := sle.ParseRippleState(destTrustData)
+	destRippleState, err := state.ParseRippleState(destTrustData)
 	if err != nil {
 		return tx.TefINTERNAL, tx.Amount{}
 	}
@@ -2284,19 +2284,19 @@ func (p *Payment) applyIOUTransferPartial(ctx *tx.ApplyContext, dest *sle.Accoun
 	}
 
 	// Check if destination's trust line is frozen
-	destIsLowInTrustLine := sle.CompareAccountIDsForLine(destID, issuerID) < 0
+	destIsLowInTrustLine := state.CompareAccountIDsForLine(destID, issuerID) < 0
 	if destIsLowInTrustLine {
-		if (destRippleState.Flags & sle.LsfLowFreeze) != 0 {
+		if (destRippleState.Flags & state.LsfLowFreeze) != 0 {
 			return tx.TerNO_LINE, tx.Amount{}
 		}
 	} else {
-		if (destRippleState.Flags & sle.LsfHighFreeze) != 0 {
+		if (destRippleState.Flags & state.LsfHighFreeze) != 0 {
 			return tx.TerNO_LINE, tx.Amount{}
 		}
 	}
 
 	// Calculate sender's balance with issuer
-	senderIsLowWithIssuer := sle.CompareAccountIDsForLine(senderID, issuerID) < 0
+	senderIsLowWithIssuer := state.CompareAccountIDsForLine(senderID, issuerID) < 0
 	var senderBalance tx.Amount
 	if senderIsLowWithIssuer {
 		senderBalance = senderRippleState.Balance
@@ -2305,7 +2305,7 @@ func (p *Payment) applyIOUTransferPartial(ctx *tx.ApplyContext, dest *sle.Accoun
 	}
 
 	// Calculate destination's balance and trust limit
-	destIsLowWithIssuer := sle.CompareAccountIDsForLine(destID, issuerID) < 0
+	destIsLowWithIssuer := state.CompareAccountIDsForLine(destID, issuerID) < 0
 	var destBalance, destLimit tx.Amount
 	if destIsLowWithIssuer {
 		destBalance = destRippleState.Balance
@@ -2392,7 +2392,7 @@ func (p *Payment) applyIOUTransferPartial(ctx *tx.ApplyContext, dest *sle.Accoun
 	destRippleState.PreviousTxnLgrSeq = ctx.Config.LedgerSequence
 
 	// Serialize and update sender's trust line
-	updatedSenderTrust, err := sle.SerializeRippleState(senderRippleState)
+	updatedSenderTrust, err := state.SerializeRippleState(senderRippleState)
 	if err != nil {
 		return tx.TefINTERNAL, tx.Amount{}
 	}
@@ -2401,7 +2401,7 @@ func (p *Payment) applyIOUTransferPartial(ctx *tx.ApplyContext, dest *sle.Accoun
 	}
 
 	// Serialize and update destination's trust line
-	updatedDestTrust, err := sle.SerializeRippleState(destRippleState)
+	updatedDestTrust, err := state.SerializeRippleState(destRippleState)
 	if err != nil {
 		return tx.TefINTERNAL, tx.Amount{}
 	}
@@ -2426,31 +2426,31 @@ func (p *Payment) applyIOUTransferPartial(ctx *tx.ApplyContext, dest *sle.Accoun
 //   - rs: the already-modified RippleState (balance updated, not yet serialized)
 //
 // On success, either updates or erases the trust line via ctx.View. Returns TesSUCCESS.
-func trustLineCleanup(ctx *tx.ApplyContext, dest *sle.AccountRoot, senderID, destID [20]byte, tlKey keylet.Keylet, rs *sle.RippleState) tx.Result {
-	senderIsLow := sle.CompareAccountIDsForLine(senderID, destID) < 0
+func trustLineCleanup(ctx *tx.ApplyContext, dest *state.AccountRoot, senderID, destID [20]byte, tlKey keylet.Keylet, rs *state.RippleState) tx.Result {
+	senderIsLow := state.CompareAccountIDsForLine(senderID, destID) < 0
 
 	// Get both accounts' DefaultRipple flags
 	var lowDefRipple, highDefRipple bool
 	if senderIsLow {
-		lowDefRipple = (ctx.Account.Flags & sle.LsfDefaultRipple) != 0
-		highDefRipple = (dest.Flags & sle.LsfDefaultRipple) != 0
+		lowDefRipple = (ctx.Account.Flags & state.LsfDefaultRipple) != 0
+		highDefRipple = (dest.Flags & state.LsfDefaultRipple) != 0
 	} else {
-		lowDefRipple = (dest.Flags & sle.LsfDefaultRipple) != 0
-		highDefRipple = (ctx.Account.Flags & sle.LsfDefaultRipple) != 0
+		lowDefRipple = (dest.Flags & state.LsfDefaultRipple) != 0
+		highDefRipple = (ctx.Account.Flags & state.LsfDefaultRipple) != 0
 	}
 
 	bLowReserveSet := rs.LowQualityIn != 0 || rs.LowQualityOut != 0 ||
-		((rs.Flags&sle.LsfLowNoRipple) == 0) != lowDefRipple ||
-		(rs.Flags&sle.LsfLowFreeze) != 0 || !rs.LowLimit.IsZero() ||
+		((rs.Flags&state.LsfLowNoRipple) == 0) != lowDefRipple ||
+		(rs.Flags&state.LsfLowFreeze) != 0 || !rs.LowLimit.IsZero() ||
 		rs.Balance.Signum() > 0
 
 	bHighReserveSet := rs.HighQualityIn != 0 || rs.HighQualityOut != 0 ||
-		((rs.Flags&sle.LsfHighNoRipple) == 0) != highDefRipple ||
-		(rs.Flags&sle.LsfHighFreeze) != 0 || !rs.HighLimit.IsZero() ||
+		((rs.Flags&state.LsfHighNoRipple) == 0) != highDefRipple ||
+		(rs.Flags&state.LsfHighFreeze) != 0 || !rs.HighLimit.IsZero() ||
 		rs.Balance.Signum() < 0
 
-	bLowReserved := (rs.Flags & sle.LsfLowReserve) != 0
-	bHighReserved := (rs.Flags & sle.LsfHighReserve) != 0
+	bLowReserved := (rs.Flags & state.LsfLowReserve) != 0
+	bHighReserved := (rs.Flags & state.LsfHighReserve) != 0
 
 	bDefault := !bLowReserveSet && !bHighReserveSet
 
@@ -2466,9 +2466,9 @@ func trustLineCleanup(ctx *tx.ApplyContext, dest *sle.AccountRoot, senderID, des
 			highID = senderID
 		}
 		lowDirKey := keylet.OwnerDir(lowID)
-		sle.DirRemove(ctx.View, lowDirKey, rs.LowNode, tlKey.Key, false)
+		state.DirRemove(ctx.View, lowDirKey, rs.LowNode, tlKey.Key, false)
 		highDirKey := keylet.OwnerDir(highID)
-		sle.DirRemove(ctx.View, highDirKey, rs.HighNode, tlKey.Key, false)
+		state.DirRemove(ctx.View, highDirKey, rs.HighNode, tlKey.Key, false)
 
 		// Delete the trust line
 		if err := ctx.View.Erase(tlKey); err != nil {
@@ -2503,7 +2503,7 @@ func trustLineCleanup(ctx *tx.ApplyContext, dest *sle.AccountRoot, senderID, des
 		destChanged := (bLowReserved && !senderIsLow) || (bHighReserved && senderIsLow)
 		if destChanged {
 			destKey := keylet.Account(destID)
-			destUpdatedData, serErr := sle.SerializeAccountRoot(dest)
+			destUpdatedData, serErr := state.SerializeAccountRoot(dest)
 			if serErr != nil {
 				return tx.TefINTERNAL
 			}
@@ -2514,18 +2514,18 @@ func trustLineCleanup(ctx *tx.ApplyContext, dest *sle.AccountRoot, senderID, des
 	} else {
 		// Adjust reserve flags
 		if bLowReserveSet && !bLowReserved {
-			rs.Flags |= sle.LsfLowReserve
+			rs.Flags |= state.LsfLowReserve
 		} else if !bLowReserveSet && bLowReserved {
-			rs.Flags &^= sle.LsfLowReserve
+			rs.Flags &^= state.LsfLowReserve
 		}
 		if bHighReserveSet && !bHighReserved {
-			rs.Flags |= sle.LsfHighReserve
+			rs.Flags |= state.LsfHighReserve
 		} else if !bHighReserveSet && bHighReserved {
-			rs.Flags &^= sle.LsfHighReserve
+			rs.Flags &^= state.LsfHighReserve
 		}
 
 		// Serialize and update
-		updatedData, serErr := sle.SerializeRippleState(rs)
+		updatedData, serErr := state.SerializeRippleState(rs)
 		if serErr != nil {
 			return tx.TefINTERNAL
 		}

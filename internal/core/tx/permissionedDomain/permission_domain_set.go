@@ -10,7 +10,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/credential"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -144,7 +144,7 @@ func (p *PermissionedDomainSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Preclaim: verify each issuer account exists
 	// Reference: rippled PermissionedDomainSet.cpp preclaim() lines 70-85
 	for _, cred := range p.AcceptedCredentials {
-		issuerID, err := sle.DecodeAccountID(cred.Credential.Issuer)
+		issuerID, err := state.DecodeAccountID(cred.Credential.Issuer)
 		if err != nil {
 			return tx.TemINVALID
 		}
@@ -171,7 +171,7 @@ func (p *PermissionedDomainSet) Apply(ctx *tx.ApplyContext) tx.Result {
 }
 
 // applyCreate handles domain creation.
-func (p *PermissionedDomainSet) applyCreate(ctx *tx.ApplyContext, sorted []sle.PermissionedDomainCredential) tx.Result {
+func (p *PermissionedDomainSet) applyCreate(ctx *tx.ApplyContext, sorted []state.PermissionedDomainCredential) tx.Result {
 	// Check reserve
 	// Reference: rippled PermissionedDomainSet.cpp doApply() lines 102-106
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
@@ -184,14 +184,14 @@ func (p *PermissionedDomainSet) applyCreate(ctx *tx.ApplyContext, sorted []sle.P
 	txSeq := p.Common.SeqProxy()
 	domainKeylet := keylet.PermissionedDomain(ctx.AccountID, txSeq)
 
-	pd := &sle.PermissionedDomainData{
+	pd := &state.PermissionedDomainData{
 		Owner:               ctx.AccountID,
 		Sequence:            txSeq,
 		OwnerNode:           0,
 		AcceptedCredentials: sorted,
 	}
 
-	pdData, err := sle.SerializePermissionedDomain(pd, p.Account)
+	pdData, err := state.SerializePermissionedDomain(pd, p.Account)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -202,14 +202,14 @@ func (p *PermissionedDomainSet) applyCreate(ctx *tx.ApplyContext, sorted []sle.P
 
 	// Add to owner directory
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	result, err := sle.DirInsert(ctx.View, ownerDirKey, domainKeylet.Key, nil)
+	result, err := state.DirInsert(ctx.View, ownerDirKey, domainKeylet.Key, nil)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
 	// Update OwnerNode in the stored entry
 	pd.OwnerNode = result.Page
-	pdData, err = sle.SerializePermissionedDomain(pd, p.Account)
+	pdData, err = state.SerializePermissionedDomain(pd, p.Account)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -223,7 +223,7 @@ func (p *PermissionedDomainSet) applyCreate(ctx *tx.ApplyContext, sorted []sle.P
 }
 
 // applyUpdate handles domain update.
-func (p *PermissionedDomainSet) applyUpdate(ctx *tx.ApplyContext, sorted []sle.PermissionedDomainCredential) tx.Result {
+func (p *PermissionedDomainSet) applyUpdate(ctx *tx.ApplyContext, sorted []state.PermissionedDomainCredential) tx.Result {
 	domainBytes, err := hex.DecodeString(p.DomainID)
 	if err != nil || len(domainBytes) != 32 {
 		return tx.TemINVALID
@@ -237,7 +237,7 @@ func (p *PermissionedDomainSet) applyUpdate(ctx *tx.ApplyContext, sorted []sle.P
 		return tx.TecNO_ENTRY
 	}
 
-	existing, err := sle.ParsePermissionedDomain(existingData)
+	existing, err := state.ParsePermissionedDomain(existingData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -252,7 +252,7 @@ func (p *PermissionedDomainSet) applyUpdate(ctx *tx.ApplyContext, sorted []sle.P
 	existing.AcceptedCredentials = sorted
 
 	ownerAddress := p.Account
-	updatedData, err := sle.SerializePermissionedDomain(existing, ownerAddress)
+	updatedData, err := state.SerializePermissionedDomain(existing, ownerAddress)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -266,7 +266,7 @@ func (p *PermissionedDomainSet) applyUpdate(ctx *tx.ApplyContext, sorted []sle.P
 
 // sortedCredentials converts AcceptedCredential slice to sorted PermissionedDomainCredential slice.
 // Sort order: (Issuer bytes, CredentialType bytes) ascending — matches rippled's makeSorted().
-func sortedCredentials(creds []AcceptedCredential) ([]sle.PermissionedDomainCredential, error) {
+func sortedCredentials(creds []AcceptedCredential) ([]state.PermissionedDomainCredential, error) {
 	type entry struct {
 		issuer   [20]byte
 		credType []byte
@@ -274,7 +274,7 @@ func sortedCredentials(creds []AcceptedCredential) ([]sle.PermissionedDomainCred
 
 	entries := make([]entry, 0, len(creds))
 	for _, c := range creds {
-		issuerID, err := sle.DecodeAccountID(c.Credential.Issuer)
+		issuerID, err := state.DecodeAccountID(c.Credential.Issuer)
 		if err != nil {
 			return nil, err
 		}
@@ -293,9 +293,9 @@ func sortedCredentials(creds []AcceptedCredential) ([]sle.PermissionedDomainCred
 		return bytes.Compare(entries[i].credType, entries[j].credType) < 0
 	})
 
-	result := make([]sle.PermissionedDomainCredential, len(entries))
+	result := make([]state.PermissionedDomainCredential, len(entries))
 	for i, e := range entries {
-		result[i] = sle.PermissionedDomainCredential{
+		result[i] = state.PermissionedDomainCredential{
 			Issuer:         e.issuer,
 			CredentialType: e.credType,
 		}

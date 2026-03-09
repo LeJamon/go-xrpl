@@ -4,7 +4,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -66,7 +66,7 @@ func (d *DelegateSet) RequiredAmendments() [][32]byte {
 // Apply applies the DelegateSet transaction to the ledger.
 func (d *DelegateSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	if d.Authorize != "" {
-		delegateID, err := sle.DecodeAccountID(d.Authorize)
+		delegateID, err := state.DecodeAccountID(d.Authorize)
 		if err != nil {
 			return tx.TecNO_TARGET
 		}

@@ -7,7 +7,7 @@ import (
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/keylet"
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // ============================================================================
@@ -84,13 +84,13 @@ func (m *paymentMockLedgerView) Succ(key [32]byte) ([32]byte, []byte, bool, erro
 
 // Helper to create test account with balance
 func (m *paymentMockLedgerView) createAccount(accountID [20]byte, balanceDrops uint64, ownerCount uint32) {
-	account := &sle.AccountRoot{
-		Account:    sle.EncodeAccountIDSafe(accountID),
+	account := &state.AccountRoot{
+		Account:    state.EncodeAccountIDSafe(accountID),
 		Balance:    balanceDrops,
 		OwnerCount: ownerCount,
 		Sequence:   1,
 	}
-	data, _ := sle.SerializeAccountRoot(account)
+	data, _ := state.SerializeAccountRoot(account)
 	key := keylet.Account(accountID)
 	m.data[key.Key] = data
 	m.ownerCount[accountID] = ownerCount
@@ -99,10 +99,10 @@ func (m *paymentMockLedgerView) createAccount(accountID [20]byte, balanceDrops u
 // Helper to create test trust line
 func (m *paymentMockLedgerView) createTrustLine(low, high [20]byte, currency string, balanceLow int64, limitLow, limitHigh int64) {
 	// Create a RippleState (trust line) entry
-	lowIssuer := sle.EncodeAccountIDSafe(low)
-	highIssuer := sle.EncodeAccountIDSafe(high)
+	lowIssuer := state.EncodeAccountIDSafe(low)
+	highIssuer := state.EncodeAccountIDSafe(high)
 
-	rs := &sle.RippleState{
+	rs := &state.RippleState{
 		Balance:        tx.NewIssuedAmountFromFloat64(float64(balanceLow), currency, highIssuer),
 		LowLimit:       tx.NewIssuedAmountFromFloat64(float64(limitLow), currency, lowIssuer),
 		HighLimit:      tx.NewIssuedAmountFromFloat64(float64(limitHigh), currency, highIssuer),
@@ -111,7 +111,7 @@ func (m *paymentMockLedgerView) createTrustLine(low, high [20]byte, currency str
 		HighQualityIn:  QualityOne,
 		HighQualityOut: QualityOne,
 	}
-	data, _ := sle.SerializeRippleState(rs)
+	data, _ := state.SerializeRippleState(rs)
 	key := keylet.Line(low, high, currency)
 	m.data[key.Key] = data
 }
@@ -245,21 +245,21 @@ func TestPaymentSandbox_Isolation(t *testing.T) {
 	}
 
 	// Modify in sandbox
-	account, _ := sle.ParseAccountRoot(data)
+	account, _ := state.ParseAccountRoot(data)
 	account.Balance = 50_000_000 // 50 XRP
-	newData, _ := sle.SerializeAccountRoot(account)
+	newData, _ := state.SerializeAccountRoot(account)
 	sandbox.Update(key, newData)
 
 	// Verify sandbox has modified value
 	modifiedData, _ := sandbox.Read(key)
-	modifiedAccount, _ := sle.ParseAccountRoot(modifiedData)
+	modifiedAccount, _ := state.ParseAccountRoot(modifiedData)
 	if modifiedAccount.Balance != 50_000_000 {
 		t.Errorf("expected sandbox balance=50M, got %d", modifiedAccount.Balance)
 	}
 
 	// Verify original view is unchanged
 	originalData, _ := view.Read(key)
-	originalAccount, _ := sle.ParseAccountRoot(originalData)
+	originalAccount, _ := state.ParseAccountRoot(originalData)
 	if originalAccount.Balance != 100_000_000 {
 		t.Errorf("expected original balance=100M, got %d", originalAccount.Balance)
 	}
@@ -277,21 +277,21 @@ func TestPaymentSandbox_ChildSandbox(t *testing.T) {
 	// Modify in child
 	key := keylet.Account(accountID)
 	data, _ := child.Read(key)
-	account, _ := sle.ParseAccountRoot(data)
+	account, _ := state.ParseAccountRoot(data)
 	account.Balance = 25_000_000
-	newData, _ := sle.SerializeAccountRoot(account)
+	newData, _ := state.SerializeAccountRoot(account)
 	child.Update(key, newData)
 
 	// Verify child has modification
 	childData, _ := child.Read(key)
-	childAccount, _ := sle.ParseAccountRoot(childData)
+	childAccount, _ := state.ParseAccountRoot(childData)
 	if childAccount.Balance != 25_000_000 {
 		t.Errorf("expected child balance=25M, got %d", childAccount.Balance)
 	}
 
 	// Verify parent is unchanged
 	parentData, _ := parent.Read(key)
-	parentAccount, _ := sle.ParseAccountRoot(parentData)
+	parentAccount, _ := state.ParseAccountRoot(parentData)
 	if parentAccount.Balance != 100_000_000 {
 		t.Errorf("expected parent balance=100M, got %d", parentAccount.Balance)
 	}
@@ -301,7 +301,7 @@ func TestPaymentSandbox_ChildSandbox(t *testing.T) {
 
 	// Verify parent now has modification
 	parentData2, _ := parent.Read(key)
-	parentAccount2, _ := sle.ParseAccountRoot(parentData2)
+	parentAccount2, _ := state.ParseAccountRoot(parentData2)
 	if parentAccount2.Balance != 25_000_000 {
 		t.Errorf("expected parent balance after apply=25M, got %d", parentAccount2.Balance)
 	}
@@ -457,9 +457,9 @@ func TestToStrands_WithPaths(t *testing.T) {
 	sandbox := NewPaymentSandbox(view)
 
 	// USD payment with explicit path through gateway
-	dstAmt := tx.NewIssuedAmountFromFloat64(100_000_000, "USD", sle.EncodeAccountIDSafe(gateway))
+	dstAmt := tx.NewIssuedAmountFromFloat64(100_000_000, "USD", state.EncodeAccountIDSafe(gateway))
 	paths := [][]PathStep{
-		{{Currency: "USD", Issuer: sle.EncodeAccountIDSafe(gateway)}},
+		{{Currency: "USD", Issuer: state.EncodeAccountIDSafe(gateway)}},
 	}
 
 	strands, result := ToStrands(sandbox, alice, bob, dstAmt, nil, paths, true)

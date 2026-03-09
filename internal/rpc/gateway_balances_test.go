@@ -6,23 +6,23 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
+	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
+	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // mockGatewayBalancesLedgerService implements LedgerService for gateway_balances testing
 type mockGatewayBalancesLedgerService struct {
-	gatewayBalancesResult *rpc_types.GatewayBalancesResult
+	gatewayBalancesResult *types.GatewayBalancesResult
 	gatewayBalancesErr    error
-	accountInfo           *rpc_types.AccountInfo
+	accountInfo           *types.AccountInfo
 	accountInfoErr        error
 	currentLedgerIndex    uint32
 	closedLedgerIndex     uint32
 	validatedLedgerIndex  uint32
 	standalone            bool
-	serverInfo            rpc_types.LedgerServerInfo
+	serverInfo            types.LedgerServerInfo
 }
 
 func newMockGatewayBalancesLedgerService() *mockGatewayBalancesLedgerService {
@@ -31,7 +31,7 @@ func newMockGatewayBalancesLedgerService() *mockGatewayBalancesLedgerService {
 		closedLedgerIndex:    2,
 		validatedLedgerIndex: 2,
 		standalone:           true,
-		serverInfo: rpc_types.LedgerServerInfo{
+		serverInfo: types.LedgerServerInfo{
 			Standalone:         true,
 			OpenLedgerSeq:      3,
 			ClosedLedgerSeq:    2,
@@ -46,32 +46,32 @@ func (m *mockGatewayBalancesLedgerService) GetClosedLedgerIndex() uint32    { re
 func (m *mockGatewayBalancesLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
 func (m *mockGatewayBalancesLedgerService) AcceptLedger() (uint32, error)   { return m.closedLedgerIndex + 1, nil }
 func (m *mockGatewayBalancesLedgerService) IsStandalone() bool              { return m.standalone }
-func (m *mockGatewayBalancesLedgerService) GetServerInfo() rpc_types.LedgerServerInfo {
+func (m *mockGatewayBalancesLedgerService) GetServerInfo() types.LedgerServerInfo {
 	return m.serverInfo
 }
 func (m *mockGatewayBalancesLedgerService) GetGenesisAccount() (string, error) {
 	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
 }
-func (m *mockGatewayBalancesLedgerService) GetLedgerBySequence(seq uint32) (rpc_types.LedgerReader, error) {
+func (m *mockGatewayBalancesLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetLedgerByHash(hash [32]byte) (rpc_types.LedgerReader, error) {
+func (m *mockGatewayBalancesLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) SubmitTransaction(txJSON []byte) (*rpc_types.SubmitResult, error) {
+func (m *mockGatewayBalancesLedgerService) SubmitTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockGatewayBalancesLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
 	return 10, 10000000, 2000000
 }
-func (m *mockGatewayBalancesLedgerService) GetAccountInfo(account string, ledgerIndex string) (*rpc_types.AccountInfo, error) {
+func (m *mockGatewayBalancesLedgerService) GetAccountInfo(account string, ledgerIndex string) (*types.AccountInfo, error) {
 	if m.accountInfoErr != nil {
 		return nil, m.accountInfoErr
 	}
 	if m.accountInfo != nil {
 		return m.accountInfo, nil
 	}
-	return &rpc_types.AccountInfo{
+	return &types.AccountInfo{
 		Account:     account,
 		Balance:     "100000000",
 		Flags:       0,
@@ -82,49 +82,49 @@ func (m *mockGatewayBalancesLedgerService) GetAccountInfo(account string, ledger
 		Validated:   true,
 	}, nil
 }
-func (m *mockGatewayBalancesLedgerService) GetTransaction(txHash [32]byte) (*rpc_types.TransactionInfo, error) {
+func (m *mockGatewayBalancesLedgerService) GetTransaction(txHash [32]byte) (*types.TransactionInfo, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockGatewayBalancesLedgerService) StoreTransaction(txHash [32]byte, txData []byte) error {
 	return errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetAccountLines(account string, ledgerIndex string, peer string, limit uint32) (*rpc_types.AccountLinesResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetAccountLines(account string, ledgerIndex string, peer string, limit uint32) (*types.AccountLinesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetAccountOffers(account string, ledgerIndex string, limit uint32) (*rpc_types.AccountOffersResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetAccountOffers(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetBookOffers(takerGets, takerPays rpc_types.Amount, ledgerIndex string, limit uint32) (*rpc_types.BookOffersResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetBookOffers(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *rpc_types.AccountTxMarker, forward bool) (*rpc_types.AccountTxResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetTransactionHistory(startIndex uint32) (*rpc_types.TxHistoryResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetTransactionHistory(startIndex uint32) (*types.TxHistoryResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetLedgerRange(minSeq, maxSeq uint32) (*rpc_types.LedgerRangeResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetLedgerRange(minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*rpc_types.LedgerEntryResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetLedgerData(ledgerIndex string, limit uint32, marker string) (*rpc_types.LedgerDataResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetLedgerData(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*rpc_types.AccountObjectsResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*rpc_types.AccountChannelsResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*types.AccountChannelsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetAccountCurrencies(account string, ledgerIndex string) (*rpc_types.AccountCurrenciesResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetAccountCurrencies(account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetAccountNFTs(account string, ledgerIndex string, limit uint32) (*rpc_types.AccountNFTsResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetAccountNFTs(account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetGatewayBalances(account string, hotWallets []string, ledgerIndex string) (*rpc_types.GatewayBalancesResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetGatewayBalances(account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
 	if m.gatewayBalancesErr != nil {
 		return nil, m.gatewayBalancesErr
 	}
@@ -132,34 +132,34 @@ func (m *mockGatewayBalancesLedgerService) GetGatewayBalances(account string, ho
 		return m.gatewayBalancesResult, nil
 	}
 	// Return empty result by default
-	return &rpc_types.GatewayBalancesResult{
+	return &types.GatewayBalancesResult{
 		Account:     account,
 		LedgerIndex: m.validatedLedgerIndex,
 		LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 		Validated:   true,
 	}, nil
 }
-func (m *mockGatewayBalancesLedgerService) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*rpc_types.NoRippleCheckResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*rpc_types.DepositAuthorizedResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*types.DepositAuthorizedResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*rpc_types.NFTOffersResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*rpc_types.NFTOffersResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
 
 // setupGatewayBalancesTestServices initializes the Services singleton with a mock for testing
 func setupGatewayBalancesTestServices(mock *mockGatewayBalancesLedgerService) func() {
-	oldServices := rpc_types.Services
-	rpc_types.Services = &rpc_types.ServiceContainer{
+	oldServices := types.Services
+	types.Services = &types.ServiceContainer{
 		Ledger: mock,
 	}
 	return func() {
-		rpc_types.Services = oldServices
+		types.Services = oldServices
 	}
 }
 
@@ -170,11 +170,11 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 	cleanup := setupGatewayBalancesTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.GatewayBalancesMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.GatewayBalancesMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	tests := []struct {
@@ -188,13 +188,13 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 			name:          "Missing account field - empty params",
 			params:        map[string]interface{}{},
 			expectedError: "Missing required parameter: account",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
 			expectedError: "Missing required parameter: account",
-			expectedCode:  rpc_types.RpcINVALID_PARAMS,
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Account not found",
@@ -202,7 +202,7 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
 			},
 			expectedError: "Account not found.",
-			expectedCode:  rpc_types.RpcACT_NOT_FOUND,
+			expectedCode:  types.RpcACT_NOT_FOUND,
 			setupMock: func() {
 				mock.gatewayBalancesErr = errors.New("account not found")
 			},
@@ -213,7 +213,7 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  rpc_types.RpcACT_NOT_FOUND,
+			expectedCode:  types.RpcACT_NOT_FOUND,
 			setupMock: func() {
 				mock.gatewayBalancesErr = errors.New("invalid account address: bad address")
 			},
@@ -260,17 +260,17 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 	cleanup := setupGatewayBalancesTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.GatewayBalancesMethod{}
+	method := &handlers.GatewayBalancesMethod{}
 
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
 	t.Run("Invalid hotwallet - api version 1 returns invalidHotwallet error", func(t *testing.T) {
 		mock.gatewayBalancesErr = errors.New("invalid hotwallet address: asdf")
 
-		ctx := &rpc_types.RpcContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
-			Role:       rpc_types.RoleGuest,
-			ApiVersion: rpc_types.ApiVersion1,
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
 		}
 
 		params := map[string]interface{}{
@@ -290,10 +290,10 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 	t.Run("Invalid hotwallet - api version 2 returns invalidParams error", func(t *testing.T) {
 		mock.gatewayBalancesErr = errors.New("invalid hotwallet address: asdf")
 
-		ctx := &rpc_types.RpcContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
-			Role:       rpc_types.RoleGuest,
-			ApiVersion: rpc_types.ApiVersion2,
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion2,
 		}
 
 		params := map[string]interface{}{
@@ -307,7 +307,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, rpc_types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 }
 
@@ -318,11 +318,11 @@ func TestGatewayBalancesBasic(t *testing.T) {
 	cleanup := setupGatewayBalancesTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.GatewayBalancesMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.GatewayBalancesMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -332,7 +332,7 @@ func TestGatewayBalancesBasic(t *testing.T) {
 	daveAccount := "rPu2ffWSxEXMHZgsCWdQnpL5fYMKGfx4JH"
 
 	t.Run("Gateway with no issued currency returns empty obligations", func(t *testing.T) {
-		mock.gatewayBalancesResult = &rpc_types.GatewayBalancesResult{
+		mock.gatewayBalancesResult = &types.GatewayBalancesResult{
 			Account:     aliceAccount,
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
@@ -367,7 +367,7 @@ func TestGatewayBalancesBasic(t *testing.T) {
 		// bob: USD 50
 		// charley: CNY 250, JPY 250
 		// dave: CNY 30 (frozen)
-		mock.gatewayBalancesResult = &rpc_types.GatewayBalancesResult{
+		mock.gatewayBalancesResult = &types.GatewayBalancesResult{
 			Account: aliceAccount,
 			Obligations: map[string]string{
 				"CNY": "250", // charley only (dave is frozen)
@@ -404,9 +404,9 @@ func TestGatewayBalancesBasic(t *testing.T) {
 
 	t.Run("Gateway with hotwallet returns balances", func(t *testing.T) {
 		// Based on rippled test: hotwallet (hw) holds USD 5000 and JPY 5000
-		mock.gatewayBalancesResult = &rpc_types.GatewayBalancesResult{
+		mock.gatewayBalancesResult = &types.GatewayBalancesResult{
 			Account: aliceAccount,
-			Balances: map[string][]rpc_types.CurrencyBalance{
+			Balances: map[string][]types.CurrencyBalance{
 				hwAccount: {
 					{Currency: "USD", Value: "5000"},
 					{Currency: "JPY", Value: "5000"},
@@ -457,9 +457,9 @@ func TestGatewayBalancesBasic(t *testing.T) {
 
 	t.Run("Gateway with frozen balances returns frozen_balances", func(t *testing.T) {
 		// Based on rippled test: dave's trust line is frozen, CNY 30
-		mock.gatewayBalancesResult = &rpc_types.GatewayBalancesResult{
+		mock.gatewayBalancesResult = &types.GatewayBalancesResult{
 			Account: aliceAccount,
-			FrozenBalances: map[string][]rpc_types.CurrencyBalance{
+			FrozenBalances: map[string][]types.CurrencyBalance{
 				daveAccount: {
 					{Currency: "CNY", Value: "30"},
 				},
@@ -502,9 +502,9 @@ func TestGatewayBalancesBasic(t *testing.T) {
 
 	t.Run("Gateway with assets returns assets", func(t *testing.T) {
 		// Based on rippled test: charley sent USD 10 to alice (unusual case)
-		mock.gatewayBalancesResult = &rpc_types.GatewayBalancesResult{
+		mock.gatewayBalancesResult = &types.GatewayBalancesResult{
 			Account: aliceAccount,
-			Assets: map[string][]rpc_types.CurrencyBalance{
+			Assets: map[string][]types.CurrencyBalance{
 				charleyAccount: {
 					{Currency: "USD", Value: "10"},
 				},
@@ -550,18 +550,18 @@ func TestGatewayBalancesHotwalletFormats(t *testing.T) {
 	cleanup := setupGatewayBalancesTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.GatewayBalancesMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.GatewayBalancesMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	hwAccount := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
 
 	t.Run("Single hotwallet as string", func(t *testing.T) {
-		mock.gatewayBalancesResult = &rpc_types.GatewayBalancesResult{
+		mock.gatewayBalancesResult = &types.GatewayBalancesResult{
 			Account:     aliceAccount,
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
@@ -582,7 +582,7 @@ func TestGatewayBalancesHotwalletFormats(t *testing.T) {
 	})
 
 	t.Run("Multiple hotwallets as array", func(t *testing.T) {
-		mock.gatewayBalancesResult = &rpc_types.GatewayBalancesResult{
+		mock.gatewayBalancesResult = &types.GatewayBalancesResult{
 			Account:     aliceAccount,
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
@@ -606,7 +606,7 @@ func TestGatewayBalancesHotwalletFormats(t *testing.T) {
 	})
 
 	t.Run("Empty hotwallet array", func(t *testing.T) {
-		mock.gatewayBalancesResult = &rpc_types.GatewayBalancesResult{
+		mock.gatewayBalancesResult = &types.GatewayBalancesResult{
 			Account:     aliceAccount,
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
@@ -629,15 +629,15 @@ func TestGatewayBalancesHotwalletFormats(t *testing.T) {
 
 // TestGatewayBalancesServiceUnavailable tests behavior when ledger service is not available
 func TestGatewayBalancesServiceUnavailable(t *testing.T) {
-	oldServices := rpc_types.Services
-	rpc_types.Services = nil
-	defer func() { rpc_types.Services = oldServices }()
+	oldServices := types.Services
+	types.Services = nil
+	defer func() { types.Services = oldServices }()
 
-	method := &rpc_handlers.GatewayBalancesMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.GatewayBalancesMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := map[string]interface{}{
@@ -650,24 +650,24 @@ func TestGatewayBalancesServiceUnavailable(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, rpc_types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
 	assert.Contains(t, rpcErr.Message, "Ledger service not available")
 }
 
 // TestGatewayBalancesMethodMetadata tests the method's metadata functions
 func TestGatewayBalancesMethodMetadata(t *testing.T) {
-	method := &rpc_handlers.GatewayBalancesMethod{}
+	method := &handlers.GatewayBalancesMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, rpc_types.RoleGuest, method.RequiredRole(),
+		assert.Equal(t, types.RoleGuest, method.RequiredRole(),
 			"gateway_balances should be accessible to guests")
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {
 		versions := method.SupportedApiVersions()
-		assert.Contains(t, versions, rpc_types.ApiVersion1)
-		assert.Contains(t, versions, rpc_types.ApiVersion2)
-		assert.Contains(t, versions, rpc_types.ApiVersion3)
+		assert.Contains(t, versions, types.ApiVersion1)
+		assert.Contains(t, versions, types.ApiVersion2)
+		assert.Contains(t, versions, types.ApiVersion3)
 	})
 }
 
@@ -677,14 +677,14 @@ func TestGatewayBalancesResponseFields(t *testing.T) {
 	cleanup := setupGatewayBalancesTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.GatewayBalancesMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.GatewayBalancesMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
-	mock.gatewayBalancesResult = &rpc_types.GatewayBalancesResult{
+	mock.gatewayBalancesResult = &types.GatewayBalancesResult{
 		Account:     "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		Obligations: map[string]string{"USD": "100"},
 		LedgerIndex: 2,

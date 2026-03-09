@@ -11,7 +11,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	paymenttx "github.com/LeJamon/goXRPLd/internal/core/tx/payment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/amm"
 	offerbuild "github.com/LeJamon/goXRPLd/internal/testing/offer"
@@ -375,7 +375,7 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 			for i := 0; i < 10; i++ {
 				// ben: deposit 1e-10 USD
 				mustSubmit(amm.AMMDeposit(ben, xrpAsset, usdAsset).
-					Amount(sle.NewIssuedAmountFromValue(1, -10, "USD", env.GW.Address)).
+					Amount(state.NewIssuedAmountFromValue(1, -10, "USD", env.GW.Address)).
 					SingleAsset().Build())
 				mustSubmit(amm.AMMWithdraw(ben, xrpAsset, usdAsset).
 					Amount(amm.IOUAmount(env.GW, "USD", 0)).
@@ -456,7 +456,7 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 			// Pool USD: STAmount{USD, UINT64_C(10'000'0000000003), -10}
 			// = 100000000000003e-10 → normalized {1000000000000030, -11}
 			poolUSD := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
-			expectedPoolUSD := sle.NewIssuedAmountFromValue(100000000000003, -10, "USD", env.GW.Address)
+			expectedPoolUSD := state.NewIssuedAmountFromValue(100000000000003, -10, "USD", env.GW.Address)
 			if poolUSD.Mantissa() != expectedPoolUSD.Mantissa() || poolUSD.Exponent() != expectedPoolUSD.Exponent() {
 				t.Errorf("Pool USD: got %de%d, want %de%d",
 					poolUSD.Mantissa(), poolUSD.Exponent(),
@@ -471,7 +471,7 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					t.Errorf("%s: no USD balance", acct.Name)
 					continue
 				}
-				exp := sle.NewIssuedAmountFromValue(15, 5, "USD", env.GW.Address)
+				exp := state.NewIssuedAmountFromValue(15, 5, "USD", env.GW.Address)
 				if bal.Mantissa() != exp.Mantissa() || bal.Exponent() != exp.Exponent() {
 					t.Errorf("%s USD: got %de%d, want %de%d",
 						acct.Name, bal.Mantissa(), bal.Exponent(),
@@ -484,7 +484,7 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 			if carolBal == nil {
 				t.Error("carol: no USD balance")
 			} else {
-				exp := sle.NewIssuedAmountFromValue(3, 4, "USD", env.GW.Address)
+				exp := state.NewIssuedAmountFromValue(3, 4, "USD", env.GW.Address)
 				if carolBal.Mantissa() != exp.Mantissa() || carolBal.Exponent() != exp.Exponent() {
 					t.Errorf("carol USD: got %de%d, want %de%d",
 						carolBal.Mantissa(), carolBal.Exponent(),
@@ -499,7 +499,7 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					t.Errorf("%s: no USD balance", acct.Name)
 					continue
 				}
-				exp := sle.NewIssuedAmountFromValue(15, 5, "USD", env.GW.Address)
+				exp := state.NewIssuedAmountFromValue(15, 5, "USD", env.GW.Address)
 				if bal.Mantissa() != exp.Mantissa() || bal.Exponent() != exp.Exponent() {
 					t.Errorf("%s USD: got %de%d, want %de%d",
 						acct.Name, bal.Mantissa(), bal.Exponent(),
@@ -520,7 +520,7 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 			if aliceUSD == nil {
 				t.Error("alice: no USD balance")
 			} else {
-				exp := sle.NewIssuedAmountFromValue(300000000000003, -10, "USD", env.GW.Address)
+				exp := state.NewIssuedAmountFromValue(300000000000003, -10, "USD", env.GW.Address)
 				if aliceUSD.Mantissa() != exp.Mantissa() || aliceUSD.Exponent() != exp.Exponent() {
 					t.Errorf("alice USD: got %de%d, want %de%d",
 						aliceUSD.Mantissa(), aliceUSD.Exponent(),
@@ -929,9 +929,9 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 	// toAmount rounding is at STAmount precision. Our Amount arithmetic delegates to XRPLNumber
 	// when switchover is on, which changes the quadratic solver's precision.
 	// Use switchover=false to match the pre-fix path's expected behavior.
-	savedSwitchover := sle.GetNumberSwitchover()
-	sle.SetNumberSwitchover(false)
-	defer sle.SetNumberSwitchover(savedSwitchover)
+	savedSwitchover := state.GetNumberSwitchover()
+	state.SetNumberSwitchover(false)
+	defer state.SetNumberSwitchover(savedSwitchover)
 
 	type Status int
 	const (

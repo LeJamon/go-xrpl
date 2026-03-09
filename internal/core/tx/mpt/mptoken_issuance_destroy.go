@@ -7,7 +7,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -102,7 +102,7 @@ func (m *MPTokenIssuanceDestroy) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Parse issuance entry
-	issuance, err := sle.ParseMPTokenIssuance(issuanceRaw)
+	issuance, err := state.ParseMPTokenIssuance(issuanceRaw)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -122,7 +122,7 @@ func (m *MPTokenIssuanceDestroy) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// doApply: remove from owner directory
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	sle.DirRemove(ctx.View, ownerDirKey, issuance.OwnerNode, issuanceKey.Key, false)
+	state.DirRemove(ctx.View, ownerDirKey, issuance.OwnerNode, issuanceKey.Key, false)
 
 	// Erase the issuance
 	if err := ctx.View.Erase(issuanceKey); err != nil {

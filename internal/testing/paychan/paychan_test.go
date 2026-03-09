@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
 	"github.com/LeJamon/goXRPLd/internal/testing/credential"
 	"github.com/LeJamon/goXRPLd/internal/testing/depositpreauth"
@@ -235,7 +235,7 @@ func TestPayChan_DisallowIncoming(t *testing.T) {
 		// Flag should not be set since amendment is disabled
 		info := env.AccountInfo(alice)
 		require.NotNil(t, info)
-		require.Equal(t, uint32(0), info.Flags&sle.LsfDisallowIncomingPayChan,
+		require.Equal(t, uint32(0), info.Flags&state.LsfDisallowIncomingPayChan,
 			"DisallowIncomingPayChan flag should not be set without amendment")
 	})
 

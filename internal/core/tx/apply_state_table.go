@@ -10,7 +10,7 @@ import (
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // Action represents the type of modification to a ledger entry
@@ -556,7 +556,7 @@ func (t *ApplyStateTable) buildCreatedNode(key [32]byte, data []byte) (AffectedN
 
 	// For CreatedNode, include all non-default fields with sMD_Create | sMD_Always
 	for name, value := range fields {
-		if shouldIncludeInCreate(name) && !sle.IsDefaultValue(value) {
+		if shouldIncludeInCreate(name) && !state.IsDefaultValue(value) {
 			node.NewFields[name] = value
 		}
 	}
@@ -903,4 +903,4 @@ func fieldsEqual(a, b any) bool {
 	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
 }
 
-// Note: isDefaultValue is defined in sle.go
+// Note: isDefaultValue is defined in state.go

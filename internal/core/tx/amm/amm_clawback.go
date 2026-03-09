@@ -6,7 +6,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -126,7 +126,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	issuerID := ctx.AccountID
 
 	// Find the holder
-	holderID, err := sle.DecodeAccountID(a.Holder)
+	holderID, err := state.DecodeAccountID(a.Holder)
 	if err != nil {
 		return tx.TemINVALID
 	}
@@ -136,7 +136,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	if err != nil {
 		return TerNO_ACCOUNT
 	}
-	holderAccount, err := sle.ParseAccountRoot(holderData)
+	holderAccount, err := state.ParseAccountRoot(holderData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -149,10 +149,10 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Verify issuer has lsfAllowTrustLineClawback and NOT lsfNoFreeze
-	if (ctx.Account.Flags & sle.LsfAllowTrustLineClawback) == 0 {
+	if (ctx.Account.Flags & state.LsfAllowTrustLineClawback) == 0 {
 		return tx.TecNO_PERMISSION
 	}
-	if (ctx.Account.Flags & sle.LsfNoFreeze) != 0 {
+	if (ctx.Account.Flags & state.LsfNoFreeze) != 0 {
 		return tx.TecNO_PERMISSION
 	}
 
@@ -169,7 +169,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	ammAccount, err := sle.ParseAccountRoot(ammAccountData)
+	ammAccount, err := state.ParseAccountRoot(ammAccountData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -185,7 +185,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Get holder's LP token balance
 	// In full implementation, would read from LP token trustline
 	// For now, use half of the AMM LP token balance as holder's balance (simplified)
-	two := sle.NewIssuedAmountFromValue(2e15, -15, "", "")
+	two := state.NewIssuedAmountFromValue(2e15, -15, "", "")
 	holdLPTokens := numberDiv(lptAMMBalance, two)
 
 	if holdLPTokens.IsZero() {
@@ -303,7 +303,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TefINTERNAL
 		}
 
-		ammAccountBytes, err := sle.SerializeAccountRoot(ammAccount)
+		ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -314,7 +314,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Persist updated issuer account
 	accountKey := keylet.Account(issuerID)
-	accountBytes, err := sle.SerializeAccountRoot(ctx.Account)
+	accountBytes, err := state.SerializeAccountRoot(ctx.Account)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -323,7 +323,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Persist updated holder account
-	holderBytes, err := sle.SerializeAccountRoot(holderAccount)
+	holderBytes, err := state.SerializeAccountRoot(holderAccount)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

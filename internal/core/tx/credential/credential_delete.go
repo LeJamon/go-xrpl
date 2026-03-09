@@ -7,7 +7,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -65,7 +65,7 @@ func (c *CredentialDelete) Validate() error {
 	// If present, Subject and Issuer must not be zero accounts
 	// Reference: rippled Credentials.cpp:235-241
 	if c.Subject != "" {
-		if subjectID, err := sle.DecodeAccountID(c.Subject); err == nil {
+		if subjectID, err := state.DecodeAccountID(c.Subject); err == nil {
 			var zeroAccount [20]byte
 			if subjectID == zeroAccount {
 				return ErrCredentialZeroAccount
@@ -73,7 +73,7 @@ func (c *CredentialDelete) Validate() error {
 		}
 	}
 	if c.Issuer != "" {
-		if issuerID, err := sle.DecodeAccountID(c.Issuer); err == nil {
+		if issuerID, err := state.DecodeAccountID(c.Issuer); err == nil {
 			var zeroAccount [20]byte
 			if issuerID == zeroAccount {
 				return ErrCredentialZeroAccount
@@ -127,7 +127,7 @@ func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	var subjectID, issuerID [20]byte
 
 	if c.Subject != "" {
-		subjectID, err = sle.DecodeAccountID(c.Subject)
+		subjectID, err = state.DecodeAccountID(c.Subject)
 		if err != nil {
 			return tx.TecNO_TARGET
 		}
@@ -136,7 +136,7 @@ func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	if c.Issuer != "" {
-		issuerID, err = sle.DecodeAccountID(c.Issuer)
+		issuerID, err = state.DecodeAccountID(c.Issuer)
 		if err != nil {
 			return tx.TecNO_TARGET
 		}
@@ -172,12 +172,12 @@ func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Remove from issuer's owner directory
 	issuerDirKey := keylet.OwnerDir(issuerID)
-	sle.DirRemove(ctx.View, issuerDirKey, cred.IssuerNode, credKeylet.Key, false)
+	state.DirRemove(ctx.View, issuerDirKey, cred.IssuerNode, credKeylet.Key, false)
 
 	// Remove from subject's owner directory (if different from issuer)
 	if subjectID != issuerID {
 		subjectDirKey := keylet.OwnerDir(subjectID)
-		sle.DirRemove(ctx.View, subjectDirKey, cred.SubjectNode, credKeylet.Key, false)
+		state.DirRemove(ctx.View, subjectDirKey, cred.SubjectNode, credKeylet.Key, false)
 	}
 
 	// Delete the credential
@@ -199,10 +199,10 @@ func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 			subjectAccountKeylet := keylet.Account(subjectID)
 			subjectData, err := ctx.View.Read(subjectAccountKeylet)
 			if err == nil && subjectData != nil {
-				subjectAccount, err := sle.ParseAccountRoot(subjectData)
+				subjectAccount, err := state.ParseAccountRoot(subjectData)
 				if err == nil && subjectAccount.OwnerCount > 0 {
 					subjectAccount.OwnerCount--
-					updatedData, err := sle.SerializeAccountRoot(subjectAccount)
+					updatedData, err := state.SerializeAccountRoot(subjectAccount)
 					if err == nil {
 						ctx.View.Update(subjectAccountKeylet, updatedData)
 					}
@@ -221,10 +221,10 @@ func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 			issuerAccountKeylet := keylet.Account(issuerID)
 			issuerData, err := ctx.View.Read(issuerAccountKeylet)
 			if err == nil && issuerData != nil {
-				issuerAccount, err := sle.ParseAccountRoot(issuerData)
+				issuerAccount, err := state.ParseAccountRoot(issuerData)
 				if err == nil && issuerAccount.OwnerCount > 0 {
 					issuerAccount.OwnerCount--
-					updatedData, err := sle.SerializeAccountRoot(issuerAccount)
+					updatedData, err := state.SerializeAccountRoot(issuerAccount)
 					if err == nil {
 						ctx.View.Update(issuerAccountKeylet, updatedData)
 					}

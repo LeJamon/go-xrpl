@@ -14,7 +14,7 @@ import (
 	crypto "github.com/LeJamon/goXRPLd/crypto/common"
 
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 const (
@@ -128,7 +128,7 @@ func (d *DepositPreauth) Validate() error {
 		}
 
 		// Validate target account is not zero
-		targetID, err := sle.DecodeAccountID(target)
+		targetID, err := state.DecodeAccountID(target)
 		if err != nil {
 			return errors.New("temINVALID_ACCOUNT_ID: Authorized or Unauthorized field invalid")
 		}
@@ -174,7 +174,7 @@ func checkCredentialArray(creds []CredentialWrapper) error {
 		c := cw.Credential
 
 		// Validate issuer
-		issuerID, err := sle.DecodeAccountID(c.Issuer)
+		issuerID, err := state.DecodeAccountID(c.Issuer)
 		if err != nil || issuerID == ([20]byte{}) {
 			return errors.New("temINVALID_ACCOUNT_ID: Issuer account is invalid")
 		}
@@ -225,7 +225,7 @@ type sortedCredPair struct {
 func makeSorted(creds []CredentialWrapper) []sortedCredPair {
 	pairs := make([]sortedCredPair, 0, len(creds))
 	for _, cw := range creds {
-		issuerID, err := sle.DecodeAccountID(cw.Credential.Issuer)
+		issuerID, err := state.DecodeAccountID(cw.Credential.Issuer)
 		if err != nil {
 			return nil
 		}
@@ -288,7 +288,7 @@ func (d *DepositPreauth) Apply(ctx *tx.ApplyContext) tx.Result {
 // applyAuthorize handles the Authorize case.
 // Reference: rippled DepositPreauth preclaim(sfAuthorize) + doApply(sfAuthorize)
 func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) tx.Result {
-	authorizedID, err := sle.DecodeAccountID(d.Authorize)
+	authorizedID, err := state.DecodeAccountID(d.Authorize)
 	if err != nil {
 		return tx.TemINVALID
 	}
@@ -314,7 +314,7 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// --- doApply: create and insert preauth entry ---
-	preauthData, err := sle.SerializeDepositPreauth(ctx.AccountID, authorizedID)
+	preauthData, err := state.SerializeDepositPreauth(ctx.AccountID, authorizedID)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -325,7 +325,7 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) tx.Result {
 
 	// --- doApply: insert into owner directory ---
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	dirResult, err := sle.DirInsert(ctx.View, ownerDirKey, preauthKey.Key, func(dir *sle.DirectoryNode) {
+	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, preauthKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
@@ -346,7 +346,7 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) tx.Result {
 // applyUnauthorize handles the Unauthorize case.
 // Reference: rippled DepositPreauth preclaim(sfUnauthorize) + doApply(sfUnauthorize)
 func (d *DepositPreauth) applyUnauthorize(ctx *tx.ApplyContext) tx.Result {
-	unauthorizedID, err := sle.DecodeAccountID(d.Unauthorize)
+	unauthorizedID, err := state.DecodeAccountID(d.Unauthorize)
 	if err != nil {
 		return tx.TemINVALID
 	}
@@ -392,19 +392,19 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) tx.Resu
 	}
 
 	// --- doApply: create and insert preauth entry with sorted credentials ---
-	sleCreds := make([]sle.DepositPreauthCredential, len(sorted))
+	sleCreds := make([]state.DepositPreauthCredential, len(sorted))
 	for i, p := range sorted {
 		addr, err := addresscodec.EncodeAccountIDToClassicAddress(p.issuer[:])
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-		sleCreds[i] = sle.DepositPreauthCredential{
+		sleCreds[i] = state.DepositPreauthCredential{
 			Issuer:         addr,
 			CredentialType: hex.EncodeToString(p.credType),
 		}
 	}
 
-	preauthData, err := sle.SerializeDepositPreauthCredentials(ctx.AccountID, sleCreds)
+	preauthData, err := state.SerializeDepositPreauthCredentials(ctx.AccountID, sleCreds)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -415,7 +415,7 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) tx.Resu
 
 	// --- doApply: insert into owner directory ---
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	dirResult, err := sle.DirInsert(ctx.View, ownerDirKey, preauthKey.Key, func(dir *sle.DirectoryNode) {
+	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, preauthKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
@@ -463,7 +463,7 @@ func removeFromLedger(ctx *tx.ApplyContext, preauthKey keylet.Keylet) tx.Result 
 
 	// Parse OwnerNode from the binary entry
 	var ownerNode uint64
-	entry, err := sle.ParseDepositPreauth(preauthData)
+	entry, err := state.ParseDepositPreauth(preauthData)
 	if err == nil && entry != nil {
 		ownerNode = entry.OwnerNode
 	}
@@ -471,7 +471,7 @@ func removeFromLedger(ctx *tx.ApplyContext, preauthKey keylet.Keylet) tx.Result 
 
 	// Remove from owner directory
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	_, err = sle.DirRemove(ctx.View, ownerDirKey, ownerNode, preauthKey.Key, false)
+	_, err = state.DirRemove(ctx.View, ownerDirKey, ownerNode, preauthKey.Key, false)
 	if err != nil {
 		return tx.TefBAD_LEDGER
 	}
@@ -497,7 +497,7 @@ func updateOwnerNode(ctx *tx.ApplyContext, k keylet.Keylet, page uint64) error {
 		return err
 	}
 
-	entry, err := sle.ParseDepositPreauth(data)
+	entry, err := state.ParseDepositPreauth(data)
 	if err != nil {
 		return err
 	}

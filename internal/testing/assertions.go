@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/stretchr/testify/require"
 )
 
@@ -305,13 +305,13 @@ func RequireOffers(t *testing.T, env *TestEnv, acc *Account, expected uint32) {
 	}
 	dirKey := keylet.OwnerDir(acc.ID)
 	var count uint32
-	err := sle.DirForEach(env.ledger, dirKey, func(itemKey [32]byte) error {
+	err := state.DirForEach(env.ledger, dirKey, func(itemKey [32]byte) error {
 		entryKey := keylet.Keylet{Key: itemKey}
 		data, readErr := env.ledger.Read(entryKey)
 		if readErr != nil || len(data) == 0 {
 			return nil
 		}
-		entryType, typeErr := sle.GetLedgerEntryType(data)
+		entryType, typeErr := state.GetLedgerEntryType(data)
 		if typeErr != nil {
 			return nil
 		}
@@ -410,14 +410,14 @@ func RequireTicketCount(t *testing.T, env *TestEnv, acc *Account, expected uint3
 	t.Helper()
 	dirKey := keylet.OwnerDir(acc.ID)
 	var count uint32
-	err := sle.DirForEach(env.ledger, dirKey, func(itemKey [32]byte) error {
+	err := state.DirForEach(env.ledger, dirKey, func(itemKey [32]byte) error {
 		// Read the entry and check its LedgerEntryType
 		entryKey := keylet.Keylet{Key: itemKey}
 		data, readErr := env.ledger.Read(entryKey)
 		if readErr != nil || len(data) == 0 {
 			return nil
 		}
-		entryType, typeErr := sle.GetLedgerEntryType(data)
+		entryType, typeErr := state.GetLedgerEntryType(data)
 		if typeErr != nil {
 			return nil
 		}

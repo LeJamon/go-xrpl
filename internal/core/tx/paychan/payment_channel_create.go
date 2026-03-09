@@ -6,7 +6,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -138,7 +138,7 @@ func (pc *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	amount := uint64(pc.Amount.Drops())
 
 	// Verify destination exists
-	destID, err := sle.DecodeAccountID(pc.Destination)
+	destID, err := state.DecodeAccountID(pc.Destination)
 	if err != nil {
 		return tx.TemINVALID
 	}
@@ -149,35 +149,35 @@ func (pc *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecNO_DST
 	}
 
-	destAccount, err := sle.ParseAccountRoot(destData)
+	destAccount, err := state.ParseAccountRoot(destData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
 	// Pseudo-accounts cannot receive payment channels.
 	// Reference: rippled PayChan.cpp:240-248
-	if (destAccount.Flags & sle.LsfAMM) != 0 {
+	if (destAccount.Flags & state.LsfAMM) != 0 {
 		return tx.TecNO_PERMISSION
 	}
 
 	// DisallowIncoming check
 	// Reference: rippled PayChan.cpp preclaim() featureDisallowIncoming
 	if ctx.Rules().Enabled(amendment.FeatureDisallowIncoming) {
-		if destAccount.Flags&sle.LsfDisallowIncomingPayChan != 0 {
+		if destAccount.Flags&state.LsfDisallowIncomingPayChan != 0 {
 			return tx.TecNO_PERMISSION
 		}
 	}
 
 	// RequireDestTag check
 	// Reference: rippled PayChan.cpp preclaim() lsfRequireDestTag
-	if (destAccount.Flags&sle.LsfRequireDestTag) != 0 && pc.DestinationTag == nil {
+	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && pc.DestinationTag == nil {
 		return tx.TecDST_TAG_NEEDED
 	}
 
 	// DisallowXRP check (only when DepositAuth amendment is NOT enabled — bug compat)
 	// Reference: rippled PayChan.cpp preclaim() lsfDisallowXRP
 	if !ctx.Rules().Enabled(amendment.FeatureDepositAuth) {
-		if destAccount.Flags&sle.LsfDisallowXRP != 0 {
+		if destAccount.Flags&state.LsfDisallowXRP != 0 {
 			return tx.TecNO_TARGET
 		}
 	}
@@ -204,7 +204,7 @@ func (pc *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Create pay channel
-	accountID, _ := sle.DecodeAccountID(pc.Account)
+	accountID, _ := state.DecodeAccountID(pc.Account)
 	sequence := pc.GetCommon().SeqProxy()
 	channelKey := keylet.PayChannel(accountID, destID, sequence)
 
@@ -222,7 +222,7 @@ func (pc *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// DirInsert into owner directory
 	// Reference: rippled PayChan.cpp doApply() dirAdd(ownerDir)
 	ownerDirKey := keylet.OwnerDir(accountID)
-	ownerResult, err := sle.DirInsert(ctx.View, ownerDirKey, channelKey.Key, func(dir *sle.DirectoryNode) {
+	ownerResult, err := state.DirInsert(ctx.View, ownerDirKey, channelKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = accountID
 	})
 	if err != nil {
@@ -230,7 +230,7 @@ func (pc *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Re-read and update channel with OwnerNode from DirInsert
-	channelSLE, err := sle.ParsePayChannel(channelData)
+	channelSLE, err := state.ParsePayChannel(channelData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -240,7 +240,7 @@ func (pc *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled PayChan.cpp doApply() fixPayChanRecipientOwnerDir
 	if ctx.Rules().Enabled(amendment.FeatureFixPayChanRecipientOwnerDir) {
 		destDirKey := keylet.OwnerDir(destID)
-		destResult, err := sle.DirInsert(ctx.View, destDirKey, channelKey.Key, func(dir *sle.DirectoryNode) {
+		destResult, err := state.DirInsert(ctx.View, destDirKey, channelKey.Key, func(dir *state.DirectoryNode) {
 			dir.Owner = destID
 		})
 		if err != nil {
@@ -251,7 +251,7 @@ func (pc *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Re-serialize with updated OwnerNode/DestinationNode
-	updatedData, err := sle.SerializePayChannelFromData(channelSLE)
+	updatedData, err := state.SerializePayChannelFromData(channelSLE)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

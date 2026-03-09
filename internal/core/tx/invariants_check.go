@@ -11,7 +11,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // InitialXRP is the total XRP supply in drops (100 billion XRP).
@@ -75,7 +75,7 @@ func checkXRPBalances(entries []InvariantEntry) *InvariantViolation {
 		if e.IsDelete {
 			continue // deleted account — balance check not applicable
 		}
-		acct, err := sle.ParseAccountRoot(data)
+		acct, err := state.ParseAccountRoot(data)
 		if err != nil {
 			continue
 		}
@@ -104,12 +104,12 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 		case "AccountRoot":
 			var before, after uint64
 			if e.Before != nil {
-				if acct, err := sle.ParseAccountRoot(e.Before); err == nil {
+				if acct, err := state.ParseAccountRoot(e.Before); err == nil {
 					before = acct.Balance
 				}
 			}
 			if e.After != nil {
-				if acct, err := sle.ParseAccountRoot(e.After); err == nil {
+				if acct, err := state.ParseAccountRoot(e.After); err == nil {
 					after = acct.Balance
 				}
 			}
@@ -119,12 +119,12 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 			// Escrow holds XRP in escrow — count as a balance change
 			var before, after uint64
 			if e.Before != nil {
-				if esc, err := sle.ParseEscrow(e.Before); err == nil {
+				if esc, err := state.ParseEscrow(e.Before); err == nil {
 					before = esc.Amount
 				}
 			}
 			if e.After != nil {
-				if esc, err := sle.ParseEscrow(e.After); err == nil {
+				if esc, err := state.ParseEscrow(e.After); err == nil {
 					after = esc.Amount
 				}
 			}
@@ -135,12 +135,12 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 			// Reference: rippled InvariantCheck.cpp:107-131
 			var before, after uint64
 			if e.Before != nil {
-				if pc, err := sle.ParsePayChannel(e.Before); err == nil {
+				if pc, err := state.ParsePayChannel(e.Before); err == nil {
 					before = pc.Amount - pc.Balance
 				}
 			}
 			if e.After != nil && !e.IsDelete {
-				if pc, err := sle.ParsePayChannel(e.After); err == nil {
+				if pc, err := state.ParsePayChannel(e.After); err == nil {
 					after = pc.Amount - pc.Balance
 				}
 			}
@@ -211,7 +211,7 @@ func checkNoXRPTrustLines(entries []InvariantEntry) *InvariantViolation {
 		if e.EntryType != "RippleState" || e.IsDelete {
 			continue
 		}
-		rs, err := sle.ParseRippleState(e.After)
+		rs, err := state.ParseRippleState(e.After)
 		if err != nil {
 			continue
 		}
@@ -271,7 +271,7 @@ func checkNoZeroEscrow(entries []InvariantEntry) *InvariantViolation {
 		if e.EntryType != "Escrow" || e.IsDelete {
 			continue
 		}
-		esc, err := sle.ParseEscrow(e.After)
+		esc, err := state.ParseEscrow(e.After)
 		if err != nil {
 			continue
 		}

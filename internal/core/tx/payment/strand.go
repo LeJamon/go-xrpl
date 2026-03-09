@@ -3,7 +3,7 @@ package payment
 import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // StrandContext tracks state during strand building for loop detection.
@@ -356,7 +356,7 @@ func ToStrandWithContext(
 			node.hasCurrency = true
 		}
 		if hasIssuer(elem) {
-			issuerBytes, err := sle.DecodeAccountID(elem.Issuer)
+			issuerBytes, err := state.DecodeAccountID(elem.Issuer)
 			if err == nil {
 				node.issuer = issuerBytes
 				node.hasIssuer = true
@@ -776,7 +776,7 @@ func ToStrandLegacy(
 			node.hasCurrency = true
 		}
 		if hasIssuer(elem) {
-			issuerBytes, err := sle.DecodeAccountID(elem.Issuer)
+			issuerBytes, err := state.DecodeAccountID(elem.Issuer)
 			if err == nil {
 				node.issuer = issuerBytes
 				node.hasIssuer = true
@@ -966,7 +966,7 @@ func issueFromPathElement(elem PathStep, defaultAccount [20]byte) Issue {
 	}
 
 	if elem.Issuer != "" {
-		issuerBytes, err := sle.DecodeAccountID(elem.Issuer)
+		issuerBytes, err := state.DecodeAccountID(elem.Issuer)
 		if err == nil {
 			issue.Issuer = issuerBytes
 		}
@@ -981,7 +981,7 @@ func issueFromPathElement(elem PathStep, defaultAccount [20]byte) Issue {
 // accountFromPathElement extracts the account from a path element
 func accountFromPathElement(elem PathStep, defaultAccount [20]byte) [20]byte {
 	if elem.Account != "" {
-		accountBytes, err := sle.DecodeAccountID(elem.Account)
+		accountBytes, err := state.DecodeAccountID(elem.Account)
 		if err == nil {
 			return accountBytes
 		}

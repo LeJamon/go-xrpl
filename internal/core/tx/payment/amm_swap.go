@@ -10,12 +10,12 @@ import (
 	"math"
 
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // ammOne returns 1 as an IOU Amount for arithmetic.
 func ammOne() tx.Amount {
-	return sle.NewIssuedAmountFromValue(1e15, -15, "", "")
+	return state.NewIssuedAmountFromValue(1e15, -15, "", "")
 }
 
 // toNumber converts any tx.Amount (XRP or IOU) to an IOU-like representation
@@ -29,9 +29,9 @@ func toNumber(amt tx.Amount) tx.Amount {
 	}
 	drops := amt.Drops()
 	if drops == 0 {
-		return sle.NewIssuedAmountFromValue(0, -100, "", "")
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
 	}
-	return sle.NewIssuedAmountFromValue(drops, 0, "", "")
+	return state.NewIssuedAmountFromValue(drops, 0, "", "")
 }
 
 // fromNumber converts an IOU-like number back to the original amount type.
@@ -48,7 +48,7 @@ func fromNumber(num tx.Amount, original tx.Amount) tx.Amount {
 		mantissa := num.Mantissa()
 		exponent := num.Exponent()
 		if mantissa == 0 {
-			return sle.NewXRPAmountFromInt(0)
+			return state.NewXRPAmountFromInt(0)
 		}
 		drops := mantissa
 		if exponent > 0 {
@@ -60,13 +60,13 @@ func fromNumber(num tx.Amount, original tx.Amount) tx.Amount {
 				drops /= 10
 			}
 		}
-		return sle.NewXRPAmountFromInt(drops)
+		return state.NewXRPAmountFromInt(drops)
 	}
 	// Restore currency/issuer from original
 	if num.IsNative() {
-		return sle.NewIssuedAmountFromValue(0, -100, original.Currency, original.Issuer)
+		return state.NewIssuedAmountFromValue(0, -100, original.Currency, original.Issuer)
 	}
-	return sle.NewIssuedAmountFromValue(num.Mantissa(), num.Exponent(), original.Currency, original.Issuer)
+	return state.NewIssuedAmountFromValue(num.Mantissa(), num.Exponent(), original.Currency, original.Issuer)
 }
 
 // fromNumberRoundUp converts a Number back to the original amount type, rounding up.
@@ -80,7 +80,7 @@ func fromNumberRoundUp(num tx.Amount, original tx.Amount) tx.Amount {
 		mantissa := num.Mantissa()
 		exponent := num.Exponent()
 		if mantissa == 0 {
-			return sle.NewXRPAmountFromInt(0)
+			return state.NewXRPAmountFromInt(0)
 		}
 		drops := mantissa
 		hasRemainder := false
@@ -100,7 +100,7 @@ func fromNumberRoundUp(num tx.Amount, original tx.Amount) tx.Amount {
 				drops++
 			}
 		}
-		return sle.NewXRPAmountFromInt(drops)
+		return state.NewXRPAmountFromInt(drops)
 	}
 	return fromNumber(num, original)
 }
@@ -128,8 +128,8 @@ func AMMFeeMult(tfee uint16) tx.Amount {
 // AMMFeeMultHalf returns (1 - tfee/200000).
 // Reference: rippled AMMCore.h feeMultHalf()
 func AMMFeeMultHalf(tfee uint16) tx.Amount {
-	halfFee := sle.NewIssuedAmountFromValue(int64(tfee), 0, "", "")
-	denom := sle.NewIssuedAmountFromValue(2e15, -10, "", "") // 200000
+	halfFee := state.NewIssuedAmountFromValue(int64(tfee), 0, "", "")
+	denom := state.NewIssuedAmountFromValue(2e15, -10, "", "") // 200000
 	result := halfFee.Div(denom, false)
 	return ammSub(ammOne(), result)
 }
@@ -138,10 +138,10 @@ func AMMFeeMultHalf(tfee uint16) tx.Amount {
 // Reference: rippled AMMCore.h getFee()
 func AMMGetFee(tfee uint16) tx.Amount {
 	if tfee == 0 {
-		return sle.NewIssuedAmountFromValue(0, -100, "", "")
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
 	}
-	numerator := sle.NewIssuedAmountFromValue(int64(tfee), 0, "", "")
-	denominator := sle.NewIssuedAmountFromValue(1e15, -10, "", "") // 100000
+	numerator := state.NewIssuedAmountFromValue(int64(tfee), 0, "", "")
+	denominator := state.NewIssuedAmountFromValue(1e15, -10, "", "") // 100000
 	return numerator.Div(denominator, false)
 }
 
@@ -247,7 +247,7 @@ func SwapAssetOut(poolIn, poolOut, assetOut tx.Amount, tfee uint16, fixAMMv1_1 b
 // Reference: rippled AMMHelpers.cpp solveQuadraticEq()
 func SolveQuadraticEq(a, b, c tx.Amount) tx.Amount {
 	b2 := b.Mul(b, false)
-	four := sle.NewIssuedAmountFromValue(4e15, -15, "", "")
+	four := state.NewIssuedAmountFromValue(4e15, -15, "", "")
 	ac4 := four.Mul(a, false).Mul(c, false)
 	d := ammSub(b2, ac4)
 
@@ -255,7 +255,7 @@ func SolveQuadraticEq(a, b, c tx.Amount) tx.Amount {
 
 	neg_b := b.Negate()
 	num := ammAdd(neg_b, sqrtD)
-	two := sle.NewIssuedAmountFromValue(2e15, -15, "", "")
+	two := state.NewIssuedAmountFromValue(2e15, -15, "", "")
 	denom := two.Mul(a, false)
 	return num.Div(denom, false)
 }
@@ -265,7 +265,7 @@ func SolveQuadraticEq(a, b, c tx.Amount) tx.Amount {
 // Reference: rippled AMMHelpers.cpp solveQuadraticEqSmallest()
 func SolveQuadraticEqSmallest(a, b, c tx.Amount) *tx.Amount {
 	b2 := b.Mul(b, false)
-	four := sle.NewIssuedAmountFromValue(4e15, -15, "", "")
+	four := state.NewIssuedAmountFromValue(4e15, -15, "", "")
 	ac4 := four.Mul(a, false).Mul(c, false)
 	d := ammSub(b2, ac4)
 
@@ -275,7 +275,7 @@ func SolveQuadraticEqSmallest(a, b, c tx.Amount) *tx.Amount {
 
 	sqrtD := d.Sqrt()
 
-	twoC := sle.NewIssuedAmountFromValue(2e15, -15, "", "").Mul(c, false)
+	twoC := state.NewIssuedAmountFromValue(2e15, -15, "", "").Mul(c, false)
 
 	var result tx.Amount
 	if b.Signum() > 0 {
@@ -330,7 +330,7 @@ func changeSpotPriceQualityPreFix(poolIn, poolOut tx.Amount, quality Quality, tf
 	c := ammSub(poolInSq, poolInOutRate)
 
 	// Check discriminant
-	four := sle.NewIssuedAmountFromValue(4e15, -15, "", "")
+	four := state.NewIssuedAmountFromValue(4e15, -15, "", "")
 	disc := ammSub(b.Mul(b, false), four.Mul(a, false).Mul(c, false))
 	if disc.Signum() < 0 {
 		return tx.Amount{}, tx.Amount{}, false
@@ -338,7 +338,7 @@ func changeSpotPriceQualityPreFix(poolIn, poolOut tx.Amount, quality Quality, tf
 
 	sqrtDisc := disc.Sqrt()
 	neg_b := b.Negate()
-	two := sle.NewIssuedAmountFromValue(2e15, -15, "", "")
+	two := state.NewIssuedAmountFromValue(2e15, -15, "", "")
 	nTakerPaysPropose := ammAdd(neg_b, sqrtDisc).Div(two.Mul(a, false), false)
 
 	if nTakerPaysPropose.Signum() <= 0 {
@@ -383,7 +383,7 @@ func getAMMOfferStartWithTakerGets(poolIn, poolOut tx.Amount, quality Quality, t
 	nPoolOut := toNumber(poolOut)
 
 	f := AMMFeeMult(tfee)
-	two := sle.NewIssuedAmountFromValue(2e15, -15, "", "")
+	two := state.NewIssuedAmountFromValue(2e15, -15, "", "")
 
 	a := ammOne()
 	// b = poolIn * (1 - 1/f) / quality.rate() - 2 * poolOut
@@ -488,7 +488,7 @@ func getAMMOfferStartWithTakerPays(poolIn, poolOut tx.Amount, quality Quality, t
 // reduceOffer reduces an amount by multiplying by 0.9999 (towards zero).
 // Reference: rippled AMMHelpers.h detail::reduceOffer()
 func reduceOffer(amount tx.Amount) tx.Amount {
-	pct := sle.NewIssuedAmountFromValue(9999e12, -16, "", "") // 0.9999
+	pct := state.NewIssuedAmountFromValue(9999e12, -16, "", "") // 0.9999
 	n := toNumber(amount)
 	return fromNumber(n.Mul(pct, false), amount)
 }
@@ -510,19 +510,19 @@ func WithinRelativeDistance(q1, q2 Quality, threshold float64) bool {
 // Reference: rippled Quality.h rate() → amountFromQuality()
 func qualityToRate(q Quality) tx.Amount {
 	if q.Value == 0 {
-		return sle.NewIssuedAmountFromValue(0, -100, "", "")
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
 	}
 
 	storedExp := int(q.Value >> 56)
 	mantissa := int64(q.Value & 0x00FFFFFFFFFFFFFF)
 
 	if mantissa == 0 {
-		return sle.NewIssuedAmountFromValue(0, -100, "", "")
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
 	}
 
 	exponent := storedExp - 100
 
-	return sle.NewIssuedAmountFromValue(mantissa, exponent, "", "")
+	return state.NewIssuedAmountFromValue(mantissa, exponent, "", "")
 }
 
 // ToEitherAmt converts a tx.Amount to an EitherAmount.
@@ -541,17 +541,17 @@ func toEitherAmt(amt tx.Amount) EitherAmount {
 // zeroLikeAmount returns a zero amount matching the type (XRP or IOU) of the input.
 func zeroLikeAmount(amt tx.Amount) tx.Amount {
 	if amt.IsNative() {
-		return sle.NewXRPAmountFromInt(0)
+		return state.NewXRPAmountFromInt(0)
 	}
-	return sle.NewIssuedAmountFromValue(0, -100, amt.Currency, amt.Issuer)
+	return state.NewIssuedAmountFromValue(0, -100, amt.Currency, amt.Issuer)
 }
 
 // maxAmountLike returns the maximum amount for the type of the input.
 func maxAmountLike(amt tx.Amount) tx.Amount {
 	if amt.IsNative() {
-		return sle.NewXRPAmountFromInt(math.MaxInt64)
+		return state.NewXRPAmountFromInt(math.MaxInt64)
 	}
 	// Max IOU: mantissa = 9999999999999999 (cMaxValue), exponent = 80 (cMaxOffset)
 	// Reference: rippled STAmount.h cMaxValue = 9999999999999999, cMaxOffset = 80
-	return sle.NewIssuedAmountFromValue(9999999999999999, 80, amt.Currency, amt.Issuer)
+	return state.NewIssuedAmountFromValue(9999999999999999, 80, amt.Currency, amt.Issuer)
 }

@@ -7,7 +7,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -59,7 +59,7 @@ func (c *CredentialAccept) Validate() error {
 	if c.Issuer == "" {
 		return ErrCredentialNoIssuer
 	}
-	if issuerID, err := sle.DecodeAccountID(c.Issuer); err == nil {
+	if issuerID, err := state.DecodeAccountID(c.Issuer); err == nil {
 		var zeroAccount [20]byte
 		if issuerID == zeroAccount {
 			return ErrCredentialNoIssuer
@@ -102,7 +102,7 @@ func (c *CredentialAccept) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
 		return tx.TemINVALID
 	}
 
-	issuerID, err := sle.DecodeAccountID(c.Issuer)
+	issuerID, err := state.DecodeAccountID(c.Issuer)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -145,7 +145,7 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TemINVALID
 	}
 
-	issuerID, err := sle.DecodeAccountID(c.Issuer)
+	issuerID, err := state.DecodeAccountID(c.Issuer)
 	if err != nil {
 		return tx.TecNO_TARGET
 	}
@@ -194,10 +194,10 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Decrease issuer's owner count
 		issuerData, err := ctx.View.Read(issuerAccountKeylet)
 		if err == nil && issuerData != nil {
-			issuerAccount, err := sle.ParseAccountRoot(issuerData)
+			issuerAccount, err := state.ParseAccountRoot(issuerData)
 			if err == nil && issuerAccount.OwnerCount > 0 {
 				issuerAccount.OwnerCount--
-				updatedIssuerData, err := sle.SerializeAccountRoot(issuerAccount)
+				updatedIssuerData, err := state.SerializeAccountRoot(issuerAccount)
 				if err == nil {
 					ctx.View.Update(issuerAccountKeylet, updatedIssuerData)
 				}
@@ -235,7 +235,7 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	issuerAccount, err := sle.ParseAccountRoot(issuerData)
+	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -246,7 +246,7 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Serialize and update issuer account
-	updatedIssuerData, err := sle.SerializeAccountRoot(issuerAccount)
+	updatedIssuerData, err := state.SerializeAccountRoot(issuerAccount)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

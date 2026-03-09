@@ -9,8 +9,8 @@ import (
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
 	ed25519crypto "github.com/LeJamon/goXRPLd/crypto/algorithms/ed25519"
 	secp256k1crypto "github.com/LeJamon/goXRPLd/crypto/algorithms/secp256k1"
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
+	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
+	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,9 +18,9 @@ import (
 // Test vectors from rippled's RPCCall_test.cpp and PayChan_test.cpp
 
 func TestChannelAuthorize_MissingChannelID(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -30,14 +30,14 @@ func TestChannelAuthorize_MissingChannelID(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "channel_id")
 }
 
 func TestChannelAuthorize_MissingAmount(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -47,14 +47,14 @@ func TestChannelAuthorize_MissingAmount(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "amount")
 }
 
 func TestChannelAuthorize_MissingSecret(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -64,14 +64,14 @@ func TestChannelAuthorize_MissingSecret(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "secret")
 }
 
 func TestChannelAuthorize_MultipleSecrets(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -83,14 +83,14 @@ func TestChannelAuthorize_MultipleSecrets(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "Exactly one")
 }
 
 func TestChannelAuthorize_SecretNotAllowedWithKeyType(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -102,14 +102,14 @@ func TestChannelAuthorize_SecretNotAllowedWithKeyType(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "secret field is not allowed")
 }
 
 func TestChannelAuthorize_BadKeyType(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion2,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion2,
 	}
 
 	params := json.RawMessage(`{
@@ -121,14 +121,14 @@ func TestChannelAuthorize_BadKeyType(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcBAD_KEY_TYPE, err.Code)
+	assert.Equal(t, types.RpcBAD_KEY_TYPE, err.Code)
 	assert.Equal(t, "badKeyType", err.ErrorString)
 }
 
 func TestChannelAuthorize_ChannelIDTooShort(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -139,14 +139,14 @@ func TestChannelAuthorize_ChannelIDTooShort(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcCHANNEL_MALFORMED, err.Code)
+	assert.Equal(t, types.RpcCHANNEL_MALFORMED, err.Code)
 	assert.Equal(t, "channelMalformed", err.ErrorString)
 }
 
 func TestChannelAuthorize_ChannelIDTooLong(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -157,13 +157,13 @@ func TestChannelAuthorize_ChannelIDTooLong(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcCHANNEL_MALFORMED, err.Code)
+	assert.Equal(t, types.RpcCHANNEL_MALFORMED, err.Code)
 }
 
 func TestChannelAuthorize_ChannelIDNotHex(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -174,13 +174,13 @@ func TestChannelAuthorize_ChannelIDNotHex(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcCHANNEL_MALFORMED, err.Code)
+	assert.Equal(t, types.RpcCHANNEL_MALFORMED, err.Code)
 }
 
 func TestChannelAuthorize_NegativeAmount(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -191,14 +191,14 @@ func TestChannelAuthorize_NegativeAmount(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcCHANNEL_AMT_MALFORMED, err.Code)
+	assert.Equal(t, types.RpcCHANNEL_AMT_MALFORMED, err.Code)
 	assert.Equal(t, "channelAmtMalformed", err.ErrorString)
 }
 
 func TestChannelAuthorize_AmountOverflow(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -209,13 +209,13 @@ func TestChannelAuthorize_AmountOverflow(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcCHANNEL_AMT_MALFORMED, err.Code)
+	assert.Equal(t, types.RpcCHANNEL_AMT_MALFORMED, err.Code)
 }
 
 func TestChannelAuthorize_ValidWithSecret(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Use masterpassphrase seed which generates a known keypair
@@ -237,9 +237,9 @@ func TestChannelAuthorize_ValidWithSecret(t *testing.T) {
 }
 
 func TestChannelAuthorize_ValidWithSeed(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -259,9 +259,9 @@ func TestChannelAuthorize_ValidWithSeed(t *testing.T) {
 }
 
 func TestChannelAuthorize_ValidWithPassphrase(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -281,9 +281,9 @@ func TestChannelAuthorize_ValidWithPassphrase(t *testing.T) {
 }
 
 func TestChannelAuthorize_ValidWithSeedHex(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// masterpassphrase SHA512Half first 16 bytes = DEDCE9CE67B451D852FD4E846FCDE31C
@@ -304,9 +304,9 @@ func TestChannelAuthorize_ValidWithSeedHex(t *testing.T) {
 }
 
 func TestChannelAuthorize_ValidEd25519(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Ed25519 seed
@@ -329,9 +329,9 @@ func TestChannelAuthorize_ValidEd25519(t *testing.T) {
 }
 
 func TestChannelAuthorize_MaxAmount(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Max uint64 value
@@ -362,9 +362,9 @@ func TestChannelAuthorizeAndVerify_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Authorize
-	authorizeHandler := &rpc_handlers.ChannelAuthorizeMethod{}
-	authorizeCtx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	authorizeHandler := &handlers.ChannelAuthorizeMethod{}
+	authorizeCtx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	authorizeParams := json.RawMessage(`{
@@ -382,9 +382,9 @@ func TestChannelAuthorizeAndVerify_Integration(t *testing.T) {
 	require.True(t, ok)
 
 	// Verify
-	verifyHandler := &rpc_handlers.ChannelVerifyMethod{}
-	verifyCtx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	verifyHandler := &handlers.ChannelVerifyMethod{}
+	verifyCtx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	verifyParams := json.RawMessage(`{
@@ -414,9 +414,9 @@ func TestChannelAuthorizeAndVerify_IntegrationEd25519(t *testing.T) {
 	require.NoError(t, err)
 
 	// Authorize
-	authorizeHandler := &rpc_handlers.ChannelAuthorizeMethod{}
-	authorizeCtx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	authorizeHandler := &handlers.ChannelAuthorizeMethod{}
+	authorizeCtx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	authorizeParams := json.RawMessage(`{
@@ -434,9 +434,9 @@ func TestChannelAuthorizeAndVerify_IntegrationEd25519(t *testing.T) {
 	require.True(t, ok)
 
 	// Verify
-	verifyHandler := &rpc_handlers.ChannelVerifyMethod{}
-	verifyCtx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	verifyHandler := &handlers.ChannelVerifyMethod{}
+	verifyCtx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	verifyParams := json.RawMessage(`{
@@ -479,9 +479,9 @@ func TestChannelAuthorize_MessageFormat(t *testing.T) {
 }
 
 func TestChannelAuthorize_BadSeed(t *testing.T) {
-	handler := &rpc_handlers.ChannelAuthorizeMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -493,6 +493,6 @@ func TestChannelAuthorize_BadSeed(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcBAD_SEED, err.Code)
+	assert.Equal(t, types.RpcBAD_SEED, err.Code)
 	assert.Equal(t, "badSeed", err.ErrorString)
 }

@@ -14,7 +14,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/core/tx/clawback"
 	mpttx "github.com/LeJamon/goXRPLd/internal/core/tx/mpt"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/payment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	paybuilder "github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/stretchr/testify/require"
@@ -526,7 +526,7 @@ func (m *MPTTester) Claw(issuer, holder *jtx.Account, amount int64, expectedErr 
 func (m *MPTTester) MPTAmount(amount int64) tx.Amount {
 	// MPT amounts are stored as raw int64 values (no IOU normalization)
 	// to preserve precision for large values like MaxMPTokenAmount.
-	return sle.NewMPTAmountDirect(amount, "MPT", m.issuer.Address)
+	return state.NewMPTAmountDirect(amount, "MPT", m.issuer.Address)
 }
 
 // CheckMPTokenAmount verifies the MPTAmount balance for a holder.

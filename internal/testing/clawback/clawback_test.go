@@ -7,7 +7,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	accounttx "github.com/LeJamon/goXRPLd/internal/core/tx/account"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
 	"github.com/LeJamon/goXRPLd/internal/testing/clawback"
@@ -33,16 +33,16 @@ func TestClawback_AllowTrustLineClawbackFlag(t *testing.T) {
 		result := env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireFlagSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 		// clear asfAllowTrustLineClawback does nothing
 		result = env.Submit(accountset.AccountSet(alice).ClearFlag(accounttx.AccountSetFlagAllowTrustLineClawback).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireFlagSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 		// asfNoFreeze cannot be set when asfAllowTrustLineClawback is set
-		jtx.RequireFlagNotSet(t, env, alice, sle.LsfNoFreeze)
+		jtx.RequireFlagNotSet(t, env, alice, state.LsfNoFreeze)
 		result = env.Submit(accountset.AccountSet(alice).NoFreeze().Build())
 		jtx.RequireTxFail(t, result, "tecNO_PERMISSION")
 		env.Close()
@@ -56,7 +56,7 @@ func TestClawback_AllowTrustLineClawbackFlag(t *testing.T) {
 		env.Fund(alice)
 		env.Close()
 
-		jtx.RequireFlagNotSet(t, env, alice, sle.LsfNoFreeze)
+		jtx.RequireFlagNotSet(t, env, alice, state.LsfNoFreeze)
 
 		// set asfNoFreeze
 		result := env.Submit(accountset.AccountSet(alice).NoFreeze().Build())
@@ -64,14 +64,14 @@ func TestClawback_AllowTrustLineClawbackFlag(t *testing.T) {
 		env.Close()
 
 		// NoFreeze is set
-		jtx.RequireFlagSet(t, env, alice, sle.LsfNoFreeze)
+		jtx.RequireFlagSet(t, env, alice, state.LsfNoFreeze)
 
 		// asfAllowTrustLineClawback cannot be set if asfNoFreeze is set
 		result = env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 		jtx.RequireTxFail(t, result, "tecNO_PERMISSION")
 		env.Close()
 
-		jtx.RequireFlagNotSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagNotSet(t, env, alice, state.LsfAllowTrustLineClawback)
 	})
 
 	// Test that asfAllowTrustLineClawback is not allowed when owner dir is non-empty
@@ -83,7 +83,7 @@ func TestClawback_AllowTrustLineClawbackFlag(t *testing.T) {
 		env.Fund(alice, bob)
 		env.Close()
 
-		jtx.RequireFlagNotSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagNotSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 		// alice issues 10 USD to bob
 		env.Trust(bob, tx.NewIssuedAmountFromFloat64(1000, "USD", alice.Address))
@@ -112,7 +112,7 @@ func TestClawback_AllowTrustLineClawbackFlag(t *testing.T) {
 		result = env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireFlagSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 		jtx.RequireOwnerCount(t, env, alice, 0)
 		jtx.RequireOwnerCount(t, env, bob, 0)
@@ -129,7 +129,7 @@ func TestClawback_AllowTrustLineClawbackFlag(t *testing.T) {
 		env.Fund(alice)
 		env.Close()
 
-		jtx.RequireFlagNotSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagNotSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 		// alice attempts to set asfAllowTrustLineClawback flag while
 		// amendment is disabled. no error is returned, but the flag remains
@@ -137,7 +137,7 @@ func TestClawback_AllowTrustLineClawbackFlag(t *testing.T) {
 		result := env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireFlagNotSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagNotSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 		// now enable clawback amendment
 		env.EnableFeature("Clawback")
@@ -147,7 +147,7 @@ func TestClawback_AllowTrustLineClawbackFlag(t *testing.T) {
 		result = env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireFlagSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
 	})
 }
 
@@ -165,7 +165,7 @@ func TestClawback_Validation(t *testing.T) {
 		env.Fund(alice, bob)
 		env.Close()
 
-		jtx.RequireFlagNotSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagNotSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 		// alice issues 10 USD to bob
 		env.Trust(bob, tx.NewIssuedAmountFromFloat64(1000, "USD", alice.Address))
@@ -208,7 +208,7 @@ func TestClawback_Validation(t *testing.T) {
 		result := env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireFlagSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 		// alice issues 10 USD to bob
 		env.Trust(bob, tx.NewIssuedAmountFromFloat64(1000, "USD", alice.Address))
@@ -298,7 +298,7 @@ func TestClawback_Permission(t *testing.T) {
 		result := env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireFlagSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 		// bob, the token holder, does not exist
 		result = env.Submit(clawback.Claw(alice, bob, "USD", 5).Build())
@@ -321,13 +321,13 @@ func TestClawback_Permission(t *testing.T) {
 		result := env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireFlagSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 		// cindy sets asfAllowTrustLineClawback
 		result = env.Submit(accountset.AccountSet(cindy).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireFlagSet(t, env, cindy, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagSet(t, env, cindy, state.LsfAllowTrustLineClawback)
 
 		// alice issues 1000 USD to bob
 		env.Trust(bob, tx.NewIssuedAmountFromFloat64(1000, "USD", alice.Address))
@@ -361,13 +361,13 @@ func TestClawback_Permission(t *testing.T) {
 		result := env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireFlagSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 		// bob sets asfAllowTrustLineClawback
 		result = env.Submit(accountset.AccountSet(bob).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireFlagSet(t, env, bob, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagSet(t, env, bob, state.LsfAllowTrustLineClawback)
 
 		// alice issues 10 USD to bob.
 		// bob then attempts to submit a clawback tx to claw USD from alice.
@@ -424,7 +424,7 @@ func TestClawback_Enabled(t *testing.T) {
 	result := env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
-	jtx.RequireFlagSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+	jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 	// alice issues 1000 USD to bob
 	env.Trust(bob, tx.NewIssuedAmountFromFloat64(1000, "USD", alice.Address))
@@ -474,13 +474,13 @@ func TestClawback_MultiLine(t *testing.T) {
 		result := env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireFlagSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 		// bob sets asfAllowTrustLineClawback
 		result = env.Submit(accountset.AccountSet(bob).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireFlagSet(t, env, bob, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagSet(t, env, bob, state.LsfAllowTrustLineClawback)
 
 		// alice sends 1000 USD to cindy
 		env.Trust(cindy, tx.NewIssuedAmountFromFloat64(1000, "USD", alice.Address))
@@ -538,7 +538,7 @@ func TestClawback_MultiLine(t *testing.T) {
 		result := env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireFlagSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+		jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 		// alice sends 600 USD to bob
 		env.Trust(bob, tx.NewIssuedAmountFromFloat64(1000, "USD", alice.Address))
@@ -605,13 +605,13 @@ func TestClawback_BidirectionalLine(t *testing.T) {
 	result := env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
-	jtx.RequireFlagSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+	jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 	// bob sets asfAllowTrustLineClawback
 	result = env.Submit(accountset.AccountSet(bob).AllowClawback().Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
-	jtx.RequireFlagSet(t, env, bob, sle.LsfAllowTrustLineClawback)
+	jtx.RequireFlagSet(t, env, bob, state.LsfAllowTrustLineClawback)
 
 	// alice issues 1000 USD to bob
 	env.Trust(bob, tx.NewIssuedAmountFromFloat64(1000, "USD", alice.Address))
@@ -695,7 +695,7 @@ func TestClawback_DeleteDefaultLine(t *testing.T) {
 	result := env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
-	jtx.RequireFlagSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+	jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 	// alice issues 1000 USD to bob
 	env.Trust(bob, tx.NewIssuedAmountFromFloat64(1000, "USD", alice.Address))
@@ -742,7 +742,7 @@ func TestClawback_FrozenLine(t *testing.T) {
 	result := env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
-	jtx.RequireFlagSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+	jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 	// alice issues 1000 USD to bob
 	env.Trust(bob, tx.NewIssuedAmountFromFloat64(1000, "USD", alice.Address))
@@ -772,7 +772,7 @@ func TestClawback_FrozenLine(t *testing.T) {
 	isAliceLow := alice.ID[0] < bob.ID[0] // simplified comparison
 	_ = isAliceLow
 	// Check that either LsfLowFreeze or LsfHighFreeze is set (depending on which is alice)
-	isFrozen := (flags&sle.LsfLowFreeze != 0) || (flags&sle.LsfHighFreeze != 0)
+	isFrozen := (flags&state.LsfLowFreeze != 0) || (flags&state.LsfHighFreeze != 0)
 	require.True(t, isFrozen, "Trust line should remain frozen after clawback")
 }
 
@@ -792,7 +792,7 @@ func TestClawback_AmountExceedsAvailable(t *testing.T) {
 	result := env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
-	jtx.RequireFlagSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+	jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 	// alice issues 1000 USD to bob
 	env.Trust(bob, tx.NewIssuedAmountFromFloat64(1000, "USD", alice.Address))
@@ -841,7 +841,7 @@ func TestClawback_Tickets(t *testing.T) {
 	result := env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
-	jtx.RequireFlagSet(t, env, alice, sle.LsfAllowTrustLineClawback)
+	jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
 	// alice issues 100 USD to bob
 	env.Trust(bob, tx.NewIssuedAmountFromFloat64(1000, "USD", alice.Address))

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	accounttx "github.com/LeJamon/goXRPLd/internal/core/tx/account"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 )
 
@@ -16,31 +16,31 @@ import (
 func asfToLsf(asfFlag uint32) uint32 {
 	switch asfFlag {
 	case accounttx.AccountSetFlagRequireDest:
-		return sle.LsfRequireDestTag
+		return state.LsfRequireDestTag
 	case accounttx.AccountSetFlagRequireAuth:
-		return sle.LsfRequireAuth
+		return state.LsfRequireAuth
 	case accounttx.AccountSetFlagDisallowXRP:
-		return sle.LsfDisallowXRP
+		return state.LsfDisallowXRP
 	case accounttx.AccountSetFlagDisableMaster:
-		return sle.LsfDisableMaster
+		return state.LsfDisableMaster
 	case accounttx.AccountSetFlagNoFreeze:
-		return sle.LsfNoFreeze
+		return state.LsfNoFreeze
 	case accounttx.AccountSetFlagGlobalFreeze:
-		return sle.LsfGlobalFreeze
+		return state.LsfGlobalFreeze
 	case accounttx.AccountSetFlagDefaultRipple:
-		return sle.LsfDefaultRipple
+		return state.LsfDefaultRipple
 	case accounttx.AccountSetFlagDepositAuth:
-		return sle.LsfDepositAuth
+		return state.LsfDepositAuth
 	case accounttx.AccountSetFlagDisallowIncomingNFTokenOffer:
-		return sle.LsfDisallowIncomingNFTokenOffer
+		return state.LsfDisallowIncomingNFTokenOffer
 	case accounttx.AccountSetFlagDisallowIncomingCheck:
-		return sle.LsfDisallowIncomingCheck
+		return state.LsfDisallowIncomingCheck
 	case accounttx.AccountSetFlagDisallowIncomingPayChan:
-		return sle.LsfDisallowIncomingPayChan
+		return state.LsfDisallowIncomingPayChan
 	case accounttx.AccountSetFlagDisallowIncomingTrustline:
-		return sle.LsfDisallowIncomingTrustline
+		return state.LsfDisallowIncomingTrustline
 	case accounttx.AccountSetFlagAllowTrustLineClawback:
-		return sle.LsfAllowTrustLineClawback
+		return state.LsfAllowTrustLineClawback
 	default:
 		return 0
 	}
@@ -224,7 +224,7 @@ func TestAccountSet_SetNoFreeze(t *testing.T) {
 	env.FundNoRipple(eric)
 	env.SetRegularKey(alice, eric)
 
-	jtx.RequireFlagNotSet(t, env, alice, sle.LsfNoFreeze)
+	jtx.RequireFlagNotSet(t, env, alice, state.LsfNoFreeze)
 
 	// Setting NoFreeze with regular key should fail with tecNEED_MASTER_KEY
 	// Reference: rippled AccountSet_test.cpp line 195
@@ -239,12 +239,12 @@ func TestAccountSet_SetNoFreeze(t *testing.T) {
 		AccountSet(alice).SetFlag(accounttx.AccountSetFlagNoFreeze).Build(),
 	)
 	jtx.RequireTxSuccess(t, result)
-	jtx.RequireFlagSet(t, env, alice, sle.LsfNoFreeze)
+	jtx.RequireFlagSet(t, env, alice, state.LsfNoFreeze)
 
 	// Clearing NoFreeze should have no effect (flag persists)
 	result = env.Submit(AccountSet(alice).ClearFlag(accounttx.AccountSetFlagNoFreeze).Build())
 	jtx.RequireTxSuccess(t, result)
-	jtx.RequireFlagSet(t, env, alice, sle.LsfNoFreeze) // Still set
+	jtx.RequireFlagSet(t, env, alice, state.LsfNoFreeze) // Still set
 }
 
 // =========================================================================

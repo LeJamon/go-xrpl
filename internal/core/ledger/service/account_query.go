@@ -8,7 +8,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/core/ledger"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // AccountInfoResult contains account information from the ledger
@@ -93,7 +93,7 @@ func (s *Service) GetAccountInfo(account string, ledgerIndex string) (*AccountIn
 	}
 
 	// Parse the account root
-	accountRoot, err := sle.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRootFromBytes(data)
 	if err != nil {
 		return nil, errors.New("failed to parse account data: " + err.Error())
 	}
@@ -202,7 +202,7 @@ func (s *Service) GetAccountLines(account string, ledgerIndex string, peer strin
 		}
 
 		// Parse the RippleState
-		rs, err := sle.ParseRippleStateFromBytes(data)
+		rs, err := state.ParseRippleStateFromBytes(data)
 		if err != nil {
 			return true
 		}
@@ -350,7 +350,7 @@ func (s *Service) GetAccountOffers(account string, ledgerIndex string, limit uin
 		}
 
 		// Parse the Offer
-		offer, err := sle.ParseLedgerOfferFromBytes(data)
+		offer, err := state.ParseLedgerOfferFromBytes(data)
 		if err != nil {
 			return true
 		}
@@ -589,7 +589,7 @@ func (s *Service) GetAccountChannels(account string, destinationAccount string, 
 		}
 
 		// Parse the PayChannel
-		payChan, err := sle.ParsePayChannelFromBytes(data)
+		payChan, err := state.ParsePayChannelFromBytes(data)
 		if err != nil {
 			return true
 		}
@@ -716,7 +716,7 @@ func (s *Service) GetAccountCurrencies(account string, ledgerIndex string) (*Acc
 		}
 
 		// Parse the RippleState
-		rs, err := sle.ParseRippleStateFromBytes(data)
+		rs, err := state.ParseRippleStateFromBytes(data)
 		if err != nil {
 			return true
 		}
@@ -916,7 +916,7 @@ func (s *Service) GetAccountNFTs(account string, ledgerIndex string, limit uint3
 		}
 
 		// Parse the NFTokenPage
-		page, err := sle.ParseNFTokenPageFromBytes(data)
+		page, err := state.ParseNFTokenPageFromBytes(data)
 		if err != nil {
 			return true
 		}
@@ -1025,7 +1025,7 @@ func (s *Service) GetGatewayBalances(account string, hotWallets []string, ledger
 		}
 
 		// Parse the RippleState
-		rs, err := sle.ParseRippleStateFromBytes(data)
+		rs, err := state.ParseRippleStateFromBytes(data)
 		if err != nil {
 			return true
 		}
@@ -1073,10 +1073,10 @@ func (s *Service) GetGatewayBalances(account string, hotWallets []string, ledger
 		var isFrozen bool
 		if isLowAccount {
 			// We are low, check if peer (high) has frozen us
-			isFrozen = (rs.Flags & sle.LsfHighFreeze) != 0
+			isFrozen = (rs.Flags & state.LsfHighFreeze) != 0
 		} else {
 			// We are high, check if peer (low) has frozen us
-			isFrozen = (rs.Flags & sle.LsfLowFreeze) != 0
+			isFrozen = (rs.Flags & state.LsfLowFreeze) != 0
 		}
 
 		// Check what category this balance falls into
@@ -1210,7 +1210,7 @@ func (s *Service) GetNoRippleCheck(account string, role string, ledgerIndex stri
 		return nil, errors.New("failed to read account: " + err.Error())
 	}
 
-	accountRoot, err := sle.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRootFromBytes(data)
 	if err != nil {
 		return nil, errors.New("failed to parse account data: " + err.Error())
 	}
@@ -1227,7 +1227,7 @@ func (s *Service) GetNoRippleCheck(account string, role string, ledgerIndex stri
 	}
 
 	// Check DefaultRipple flag
-	bDefaultRipple := (accountRoot.Flags & sle.LsfDefaultRipple) != 0
+	bDefaultRipple := (accountRoot.Flags & state.LsfDefaultRipple) != 0
 
 	var problems []string
 	var suggestedTxs []SuggestedTransaction
@@ -1276,7 +1276,7 @@ func (s *Service) GetNoRippleCheck(account string, role string, ledgerIndex stri
 		}
 
 		// Parse the RippleState
-		rs, err := sle.ParseRippleStateFromBytes(entryData)
+		rs, err := state.ParseRippleStateFromBytes(entryData)
 		if err != nil {
 			return true
 		}
@@ -1301,9 +1301,9 @@ func (s *Service) GetNoRippleCheck(account string, role string, ledgerIndex stri
 		// Check NoRipple flag for this account's side
 		var bNoRipple bool
 		if isLowAccount {
-			bNoRipple = (rs.Flags & sle.LsfLowNoRipple) != 0
+			bNoRipple = (rs.Flags & state.LsfLowNoRipple) != 0
 		} else {
-			bNoRipple = (rs.Flags & sle.LsfHighNoRipple) != 0
+			bNoRipple = (rs.Flags & state.LsfHighNoRipple) != 0
 		}
 
 		currency := rs.Balance.Currency
@@ -1464,13 +1464,13 @@ func (s *Service) GetDepositAuthorized(sourceAccount string, destinationAccount 
 		return nil, errors.New("failed to read destination account: " + err.Error())
 	}
 
-	dstAccountRoot, err := sle.ParseAccountRootFromBytes(dstData)
+	dstAccountRoot, err := state.ParseAccountRootFromBytes(dstData)
 	if err != nil {
 		return nil, errors.New("failed to parse destination account data: " + err.Error())
 	}
 
 	// Check if DepositAuth flag is set on destination
-	depositAuthRequired := (dstAccountRoot.Flags & sle.LsfDepositAuth) != 0
+	depositAuthRequired := (dstAccountRoot.Flags & state.LsfDepositAuth) != 0
 
 	// If source == destination, deposit is always authorized (self-deposit)
 	sameAccount := srcID == dstID

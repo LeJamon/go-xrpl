@@ -5,7 +5,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -117,7 +117,7 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 	feeNew := a.TradingFee
 
 	// Track minimum token holder for potential replacement
-	var minTokens tx.Amount = sle.NewIssuedAmountFromValue(9999999999999999, 80, "", "") // Max amount
+	var minTokens tx.Amount = state.NewIssuedAmountFromValue(9999999999999999, 80, "", "") // Max amount
 	var minPos int = -1
 	var minAccount [20]byte
 	var minFee uint16
@@ -128,13 +128,13 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Scale factor as Amount for calculations
 	// voteWeightScaleFactor = 100000 = 1e5, represented as mantissa 1e15 with exponent -10
-	scaleFactorAmount := sle.NewIssuedAmountFromValue(1e15, -10, "", "")
+	scaleFactorAmount := state.NewIssuedAmountFromValue(1e15, -10, "", "")
 
 	// Running totals for weighted fee calculation.
 	// Use tx.Amount (IOU-style) to avoid int64 overflow on feeVal * lpTokens.
 	// Reference: rippled uses Number (arbitrary precision) for num/den.
-	var num tx.Amount = sle.NewIssuedAmountFromFloat64(0, "", "")
-	var den tx.Amount = sle.NewIssuedAmountFromFloat64(0, "", "")
+	var num tx.Amount = state.NewIssuedAmountFromFloat64(0, "", "")
+	var den tx.Amount = state.NewIssuedAmountFromFloat64(0, "", "")
 
 	// Iterate over current vote entries
 	// Reference: rippled AMMVote.cpp:111-154 — reads actual LP balance via ammLPHolds
@@ -166,7 +166,7 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Update running totals for weighted fee: num += feeVal * lpTokens, den += lpTokens
-		feeAmount := sle.NewIssuedAmountFromFloat64(float64(feeVal), "", "")
+		feeAmount := state.NewIssuedAmountFromFloat64(float64(feeVal), "", "")
 		num, _ = num.Add(feeAmount.Mul(lpTokens, false))
 		den, _ = den.Add(lpTokens)
 
@@ -202,14 +202,14 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 				TradingFee: feeNew,
 				VoteWeight: voteWeight,
 			})
-			feeAmount := sle.NewIssuedAmountFromFloat64(float64(feeNew), "", "")
+			feeAmount := state.NewIssuedAmountFromFloat64(float64(feeNew), "", "")
 			num, _ = num.Add(feeAmount.Mul(lpTokensNew, false))
 			den, _ = den.Add(lpTokensNew)
 		} else if isGreater(lpTokensNew, minTokens) || (lpTokensNew.Compare(minTokens) == 0 && feeNew > minFee) {
 			// Replace minimum token holder if new account has more tokens
 			if minPos >= 0 && minPos < len(updatedVoteSlots) {
 				// Remove min holder's contribution from totals
-				minFeeAmt := sle.NewIssuedAmountFromFloat64(float64(minFee), "", "")
+				minFeeAmt := state.NewIssuedAmountFromFloat64(float64(minFee), "", "")
 				num, _ = num.Sub(minFeeAmt.Mul(minTokens, false))
 				den, _ = den.Sub(minTokens)
 
@@ -221,7 +221,7 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 				}
 
 				// Add new voter's contribution
-				feeAmount := sle.NewIssuedAmountFromFloat64(float64(feeNew), "", "")
+				feeAmount := state.NewIssuedAmountFromFloat64(float64(feeNew), "", "")
 				num, _ = num.Add(feeAmount.Mul(lpTokensNew, false))
 				den, _ = den.Add(lpTokensNew)
 			}

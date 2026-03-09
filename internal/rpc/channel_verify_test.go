@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
+	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
+	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -13,9 +13,9 @@ import (
 // Test vectors from rippled's RPCCall_test.cpp
 
 func TestChannelVerify_MissingPublicKey(t *testing.T) {
-	handler := &rpc_handlers.ChannelVerifyMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelVerifyMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -26,14 +26,14 @@ func TestChannelVerify_MissingPublicKey(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "public_key")
 }
 
 func TestChannelVerify_MissingChannelID(t *testing.T) {
-	handler := &rpc_handlers.ChannelVerifyMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelVerifyMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -44,14 +44,14 @@ func TestChannelVerify_MissingChannelID(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "channel_id")
 }
 
 func TestChannelVerify_MissingAmount(t *testing.T) {
-	handler := &rpc_handlers.ChannelVerifyMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelVerifyMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -62,14 +62,14 @@ func TestChannelVerify_MissingAmount(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "amount")
 }
 
 func TestChannelVerify_MissingSignature(t *testing.T) {
-	handler := &rpc_handlers.ChannelVerifyMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelVerifyMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -80,14 +80,14 @@ func TestChannelVerify_MissingSignature(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "signature")
 }
 
 func TestChannelVerify_MalformedPublicKey(t *testing.T) {
-	handler := &rpc_handlers.ChannelVerifyMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelVerifyMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Public key with invalid checksum (changed last character from 'v' to 'V')
@@ -100,14 +100,14 @@ func TestChannelVerify_MalformedPublicKey(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcPUBLIC_MALFORMED, err.Code)
+	assert.Equal(t, types.RpcPUBLIC_MALFORMED, err.Code)
 	assert.Equal(t, "publicMalformed", err.ErrorString)
 }
 
 func TestChannelVerify_MalformedHexPublicKey(t *testing.T) {
-	handler := &rpc_handlers.ChannelVerifyMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelVerifyMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Public key too short (missing last character)
@@ -120,13 +120,13 @@ func TestChannelVerify_MalformedHexPublicKey(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcPUBLIC_MALFORMED, err.Code)
+	assert.Equal(t, types.RpcPUBLIC_MALFORMED, err.Code)
 }
 
 func TestChannelVerify_InvalidChannelIDTooLong(t *testing.T) {
-	handler := &rpc_handlers.ChannelVerifyMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelVerifyMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -138,14 +138,14 @@ func TestChannelVerify_InvalidChannelIDTooLong(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcCHANNEL_MALFORMED, err.Code)
+	assert.Equal(t, types.RpcCHANNEL_MALFORMED, err.Code)
 	assert.Equal(t, "channelMalformed", err.ErrorString)
 }
 
 func TestChannelVerify_InvalidChannelIDTooShort(t *testing.T) {
-	handler := &rpc_handlers.ChannelVerifyMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelVerifyMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -157,13 +157,13 @@ func TestChannelVerify_InvalidChannelIDTooShort(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcCHANNEL_MALFORMED, err.Code)
+	assert.Equal(t, types.RpcCHANNEL_MALFORMED, err.Code)
 }
 
 func TestChannelVerify_AmountTooSmall(t *testing.T) {
-	handler := &rpc_handlers.ChannelVerifyMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelVerifyMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -175,14 +175,14 @@ func TestChannelVerify_AmountTooSmall(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcCHANNEL_AMT_MALFORMED, err.Code)
+	assert.Equal(t, types.RpcCHANNEL_AMT_MALFORMED, err.Code)
 	assert.Equal(t, "channelAmtMalformed", err.ErrorString)
 }
 
 func TestChannelVerify_AmountTooLarge(t *testing.T) {
-	handler := &rpc_handlers.ChannelVerifyMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelVerifyMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -194,13 +194,13 @@ func TestChannelVerify_AmountTooLarge(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcCHANNEL_AMT_MALFORMED, err.Code)
+	assert.Equal(t, types.RpcCHANNEL_AMT_MALFORMED, err.Code)
 }
 
 func TestChannelVerify_NonHexSignature(t *testing.T) {
-	handler := &rpc_handlers.ChannelVerifyMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelVerifyMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -212,14 +212,14 @@ func TestChannelVerify_NonHexSignature(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpc_types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "signature")
 }
 
 func TestChannelVerify_ValidHexPublicKey(t *testing.T) {
-	handler := &rpc_handlers.ChannelVerifyMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelVerifyMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Valid hex public key but invalid signature - should return signature_verified: false
@@ -240,9 +240,9 @@ func TestChannelVerify_ValidHexPublicKey(t *testing.T) {
 }
 
 func TestChannelVerify_ValidBase58PublicKey(t *testing.T) {
-	handler := &rpc_handlers.ChannelVerifyMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelVerifyMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Valid base58 public key but invalid signature
@@ -263,9 +263,9 @@ func TestChannelVerify_ValidBase58PublicKey(t *testing.T) {
 }
 
 func TestChannelVerify_MaxAmount(t *testing.T) {
-	handler := &rpc_handlers.ChannelVerifyMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelVerifyMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Max uint64 value
@@ -285,9 +285,9 @@ func TestChannelVerify_MaxAmount(t *testing.T) {
 }
 
 func TestChannelVerify_ZeroAmount(t *testing.T) {
-	handler := &rpc_handlers.ChannelVerifyMethod{}
-	ctx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	handler := &handlers.ChannelVerifyMethod{}
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := json.RawMessage(`{
@@ -307,9 +307,9 @@ func TestChannelVerify_ZeroAmount(t *testing.T) {
 
 func TestChannelVerify_WrongSignatureForAmount(t *testing.T) {
 	// First create a valid signature for amount "1000000"
-	authorizeHandler := &rpc_handlers.ChannelAuthorizeMethod{}
-	authorizeCtx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	authorizeHandler := &handlers.ChannelAuthorizeMethod{}
+	authorizeCtx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	authorizeParams := json.RawMessage(`{
@@ -326,9 +326,9 @@ func TestChannelVerify_WrongSignatureForAmount(t *testing.T) {
 	signature, _ := resultMap["signature"].(string)
 
 	// Now try to verify with a different amount - should fail
-	verifyHandler := &rpc_handlers.ChannelVerifyMethod{}
-	verifyCtx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	verifyHandler := &handlers.ChannelVerifyMethod{}
+	verifyCtx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Use the public key derived from masterpassphrase
@@ -350,9 +350,9 @@ func TestChannelVerify_WrongSignatureForAmount(t *testing.T) {
 
 func TestChannelVerify_WrongChannelID(t *testing.T) {
 	// First create a valid signature for channel_id
-	authorizeHandler := &rpc_handlers.ChannelAuthorizeMethod{}
-	authorizeCtx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	authorizeHandler := &handlers.ChannelAuthorizeMethod{}
+	authorizeCtx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	authorizeParams := json.RawMessage(`{
@@ -369,9 +369,9 @@ func TestChannelVerify_WrongChannelID(t *testing.T) {
 	signature, _ := resultMap["signature"].(string)
 
 	// Now try to verify with a different channel_id - should fail
-	verifyHandler := &rpc_handlers.ChannelVerifyMethod{}
-	verifyCtx := &rpc_types.RpcContext{
-		ApiVersion: rpc_types.ApiVersion1,
+	verifyHandler := &handlers.ChannelVerifyMethod{}
+	verifyCtx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
 	}
 
 	verifyParams := json.RawMessage(`{

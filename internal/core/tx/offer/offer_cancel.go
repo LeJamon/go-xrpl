@@ -6,7 +6,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // OfferCancel cancels an existing offer on the decentralized exchange.
@@ -74,7 +74,7 @@ func (o *OfferCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Find the offer
-	accountID, _ := sle.DecodeAccountID(ctx.Account.Account)
+	accountID, _ := state.DecodeAccountID(ctx.Account.Account)
 	offerKey := keylet.Offer(accountID, o.OfferSequence)
 
 	exists, err := ctx.View.Exists(offerKey)
@@ -93,19 +93,19 @@ func (o *OfferCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	ledgerOffer, err := sle.ParseLedgerOffer(offerData)
+	ledgerOffer, err := state.ParseLedgerOffer(offerData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
 	// Create SLE for the offer for metadata tracking
-	sleOffer := sle.NewSLEOffer(offerKey.Key)
+	sleOffer := state.NewSLEOffer(offerKey.Key)
 	sleOffer.LoadFromLedgerOffer(ledgerOffer)
 	sleOffer.MarkAsDeleted()
 
 	// Remove from owner directory (keepRoot = false since owner dir should persist)
 	ownerDirKey := keylet.OwnerDir(accountID)
-	ownerDirResult, err := sle.DirRemove(ctx.View, ownerDirKey, ledgerOffer.OwnerNode, offerKey.Key, false)
+	ownerDirResult, err := state.DirRemove(ctx.View, ownerDirKey, ledgerOffer.OwnerNode, offerKey.Key, false)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -115,7 +115,7 @@ func (o *OfferCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Remove from book directory (keepRoot = false - delete directory if empty)
 	bookDirKey := keylet.Keylet{Type: 100, Key: ledgerOffer.BookDirectory} // DirectoryNode type
-	bookDirResult, err := sle.DirRemove(ctx.View, bookDirKey, ledgerOffer.BookNode, offerKey.Key, false)
+	bookDirResult, err := state.DirRemove(ctx.View, bookDirKey, ledgerOffer.BookNode, offerKey.Key, false)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

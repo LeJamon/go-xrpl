@@ -9,15 +9,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
+	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/gorilla/websocket"
 )
 
 // WebSocketServer handles WebSocket connections for real-time subscriptions
 type WebSocketServer struct {
 	upgrader            websocket.Upgrader
-	subscriptionManager *rpc_types.SubscriptionManager
-	methodRegistry      *rpc_types.MethodRegistry
+	subscriptionManager *types.SubscriptionManager
+	methodRegistry      *types.MethodRegistry
 	connections         map[string]*WebSocketConnection
 	connectionsMutex    sync.RWMutex
 	timeout             time.Duration
@@ -27,7 +27,7 @@ type WebSocketServer struct {
 type WebSocketConnection struct {
 	ID            string
 	conn          *websocket.Conn
-	subscriptions map[rpc_types.SubscriptionType]rpc_types.SubscriptionConfig
+	subscriptions map[types.SubscriptionType]types.SubscriptionConfig
 	sendChannel   chan []byte
 	closeChannel  chan struct{}
 	mutex         sync.RWMutex
@@ -46,10 +46,10 @@ func NewWebSocketServer(timeout time.Duration) *WebSocketServer {
 			},
 			// Don't require specific subprotocol - xrpl.js doesn't use one
 		},
-		subscriptionManager: &rpc_types.SubscriptionManager{
-			Connections: make(map[string]*rpc_types.Connection),
+		subscriptionManager: &types.SubscriptionManager{
+			Connections: make(map[string]*types.Connection),
 		},
-		methodRegistry: rpc_types.NewMethodRegistry(),
+		methodRegistry: types.NewMethodRegistry(),
 		connections:    make(map[string]*WebSocketConnection),
 		timeout:        timeout,
 	}
@@ -72,7 +72,7 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	wsConn := &WebSocketConnection{
 		ID:            generateConnectionID(),
 		conn:          conn,
-		subscriptions: make(map[rpc_types.SubscriptionType]rpc_types.SubscriptionConfig),
+		subscriptions: make(map[types.SubscriptionType]types.SubscriptionConfig),
 		sendChannel:   make(chan []byte, 256),
 		closeChannel:  make(chan struct{}),
 		ctx:           ctx,
@@ -85,7 +85,7 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ws.connectionsMutex.Unlock()
 
 	// Add to subscription manager
-	legacyConn := &rpc_types.Connection{
+	legacyConn := &types.Connection{
 		ID:            wsConn.ID,
 		Subscriptions: wsConn.subscriptions,
 		SendChannel:   wsConn.sendChannel,
@@ -182,14 +182,14 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	// Parse WebSocket command - XRPL format has command and params at top level
 	var cmdMap map[string]interface{}
 	if err := json.Unmarshal(message, &cmdMap); err != nil {
-		ws.sendError(wsConn, rpc_types.RpcErrorInvalidParams("Invalid JSON: "+err.Error()), nil)
+		ws.sendError(wsConn, types.RpcErrorInvalidParams("Invalid JSON: "+err.Error()), nil)
 		return
 	}
 
 	// Extract command
 	command, ok := cmdMap["command"].(string)
 	if !ok || command == "" {
-		ws.sendError(wsConn, rpc_types.NewRpcError(rpc_types.RpcMISSING_COMMAND, "missingCommand", "missingCommand", "Missing command field"), nil)
+		ws.sendError(wsConn, types.NewRpcError(types.RpcMISSING_COMMAND, "missingCommand", "missingCommand", "Missing command field"), nil)
 		return
 	}
 
@@ -200,7 +200,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	}
 
 	// Build cmd struct
-	cmd := rpc_types.WebSocketCommand{
+	cmd := types.WebSocketCommand{
 		Command: command,
 		ID:      id,
 	}
@@ -210,7 +210,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	delete(cmdMap, "id")
 
 	// Handle api_version
-	var apiVersion int = rpc_types.DefaultApiVersion
+	var apiVersion int = types.DefaultApiVersion
 	if apiVer, exists := cmdMap["api_version"]; exists {
 		if ver, ok := apiVer.(float64); ok {
 			apiVersion = int(ver)
@@ -225,9 +225,9 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	}
 
 	// Create RPC context
-	rpcCtx := &rpc_types.RpcContext{
+	rpcCtx := &types.RpcContext{
 		Context:    wsConn.ctx,
-		Role:       rpc_types.RoleGuest,
+		Role:       types.RoleGuest,
 		ApiVersion: apiVersion,
 		IsAdmin:    false,
 		ClientIP:   getWebSocketClientIP(wsConn.conn),
@@ -251,25 +251,25 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 }
 
 // handleSubscribe processes subscribe commands
-func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *rpc_types.RpcContext, cmd rpc_types.WebSocketCommand) {
+func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
 	// Parse subscription request
-	var request rpc_types.SubscriptionRequest
+	var request types.SubscriptionRequest
 	if len(cmd.Params) > 0 {
 		// The params are embedded in the command, extract them
 		var cmdWithParams map[string]interface{}
 		if err := json.Unmarshal(cmd.Params, &cmdWithParams); err != nil {
 			// Try to parse the entire command as subscription request
 			if err := json.Unmarshal(cmd.Params, &request); err != nil {
-				ws.sendError(wsConn, rpc_types.RpcErrorInvalidParams("Invalid subscription parameters"), cmd.ID)
+				ws.sendError(wsConn, types.RpcErrorInvalidParams("Invalid subscription parameters"), cmd.ID)
 				return
 			}
 		} else {
-			// Convert map to rpc_types.SubscriptionRequest
+			// Convert map to types.SubscriptionRequest
 			if streamsRaw, ok := cmdWithParams["streams"]; ok {
 				if streams, ok := streamsRaw.([]interface{}); ok {
 					for _, stream := range streams {
 						if streamStr, ok := stream.(string); ok {
-							request.Streams = append(request.Streams, rpc_types.SubscriptionType(streamStr))
+							request.Streams = append(request.Streams, types.SubscriptionType(streamStr))
 						}
 					}
 				}
@@ -279,7 +279,7 @@ func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *rpc
 	}
 
 	// Handle subscription through subscription manager
-	if err := ws.subscriptionManager.HandleSubscribe(&rpc_types.Connection{
+	if err := ws.subscriptionManager.HandleSubscribe(&types.Connection{
 		ID:            wsConn.ID,
 		Subscriptions: wsConn.subscriptions,
 		SendChannel:   wsConn.sendChannel,
@@ -290,7 +290,7 @@ func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *rpc
 	}
 
 	// Send success response
-	response := rpc_types.WebSocketResponse{
+	response := types.WebSocketResponse{
 		Type:       "response",
 		ID:         cmd.ID,
 		Status:     "success",
@@ -302,13 +302,13 @@ func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *rpc
 }
 
 // handleUnsubscribe processes unsubscribe commands
-func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *rpc_types.RpcContext, cmd rpc_types.WebSocketCommand) {
+func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
 	// Parse unsubscription request (similar to subscribe)
-	var request rpc_types.SubscriptionRequest
+	var request types.SubscriptionRequest
 	// TODO: Parse unsubscription parameters
 
 	// Handle unsubscription through subscription manager
-	if err := ws.subscriptionManager.HandleUnsubscribe(&rpc_types.Connection{
+	if err := ws.subscriptionManager.HandleUnsubscribe(&types.Connection{
 		ID:            wsConn.ID,
 		Subscriptions: wsConn.subscriptions,
 		SendChannel:   wsConn.sendChannel,
@@ -319,7 +319,7 @@ func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *r
 	}
 
 	// Send success response
-	response := rpc_types.WebSocketResponse{
+	response := types.WebSocketResponse{
 		Type:       "response",
 		ID:         cmd.ID,
 		Status:     "success",
@@ -331,26 +331,26 @@ func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *r
 }
 
 // handlePathFind processes path_find commands (special WebSocket-only method)
-func (ws *WebSocketServer) handlePathFind(wsConn *WebSocketConnection, ctx *rpc_types.RpcContext, cmd rpc_types.WebSocketCommand) {
+func (ws *WebSocketServer) handlePathFind(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
 	// TODO: Implement WebSocket path finding
 	// This creates a persistent path-finding session that sends updates
 	// as market conditions change
 
-	ws.sendError(wsConn, rpc_types.NewRpcError(rpc_types.RpcNOT_SUPPORTED, "notSupported", "notSupported", "path_find not yet implemented"), cmd.ID)
+	ws.sendError(wsConn, types.NewRpcError(types.RpcNOT_SUPPORTED, "notSupported", "notSupported", "path_find not yet implemented"), cmd.ID)
 }
 
 // handleRPCMethod processes regular RPC method calls over WebSocket
-func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *rpc_types.RpcContext, cmd rpc_types.WebSocketCommand) {
+func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
 	// Get method handler
 	handler, exists := ws.methodRegistry.Get(cmd.Command)
 	if !exists {
-		ws.sendError(wsConn, rpc_types.RpcErrorMethodNotFound(cmd.Command), cmd.ID)
+		ws.sendError(wsConn, types.RpcErrorMethodNotFound(cmd.Command), cmd.ID)
 		return
 	}
 
 	// Check role permissions
 	if ctx.Role < handler.RequiredRole() {
-		ws.sendError(wsConn, rpc_types.NewRpcError(rpc_types.RpcCOMMAND_UNTRUSTED, "commandUntrusted", "commandUntrusted",
+		ws.sendError(wsConn, types.NewRpcError(types.RpcCOMMAND_UNTRUSTED, "commandUntrusted", "commandUntrusted",
 			fmt.Sprintf("Command '%s' requires higher privileges", cmd.Command)), cmd.ID)
 		return
 	}
@@ -362,7 +362,7 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *rpc
 	if rpcErr != nil {
 		ws.sendError(wsConn, rpcErr, cmd.ID)
 	} else {
-		response := rpc_types.WebSocketResponse{
+		response := types.WebSocketResponse{
 			Type:       "response",
 			ID:         cmd.ID,
 			Status:     "success",
@@ -376,17 +376,17 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *rpc
 // WebSocketResponseOptions contains optional fields for WebSocket responses
 type WebSocketResponseOptions struct {
 	Warning   string                    // "load" when approaching rate limit
-	Warnings  []rpc_types.WarningObject // Array of warning objects
+	Warnings  []types.WarningObject // Array of warning objects
 	Forwarded bool                      // True if forwarded from Clio to P2P server
 }
 
 // sendResponse sends a WebSocket response
-func (ws *WebSocketServer) sendResponse(wsConn *WebSocketConnection, response rpc_types.WebSocketResponse) {
+func (ws *WebSocketServer) sendResponse(wsConn *WebSocketConnection, response types.WebSocketResponse) {
 	ws.sendResponseWithOptions(wsConn, response, nil)
 }
 
 // sendResponseWithOptions sends a WebSocket response with optional warning/forwarded fields
-func (ws *WebSocketServer) sendResponseWithOptions(wsConn *WebSocketConnection, response rpc_types.WebSocketResponse, opts *rpc_types.WebSocketResponseOptions) {
+func (ws *WebSocketServer) sendResponseWithOptions(wsConn *WebSocketConnection, response types.WebSocketResponse, opts *types.WebSocketResponseOptions) {
 	// Apply optional fields if provided
 	if opts != nil {
 		response.Warning = opts.Warning
@@ -413,14 +413,14 @@ func (ws *WebSocketServer) sendResponseWithOptions(wsConn *WebSocketConnection, 
 }
 
 // sendError sends a WebSocket error response with flat error fields (XRPL format)
-func (ws *WebSocketServer) sendError(wsConn *WebSocketConnection, rpcErr *rpc_types.RpcError, id interface{}) {
+func (ws *WebSocketServer) sendError(wsConn *WebSocketConnection, rpcErr *types.RpcError, id interface{}) {
 	ws.sendErrorWithOptions(wsConn, rpcErr, id, nil)
 }
 
 // sendErrorWithOptions sends a WebSocket error response with optional warning/forwarded fields
 // Per XRPL WebSocket spec, error fields are at top level (not nested in result)
-func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpcErr *rpc_types.RpcError, id interface{}, opts *rpc_types.WebSocketResponseOptions) {
-	response := rpc_types.WebSocketResponse{
+func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpcErr *types.RpcError, id interface{}, opts *types.WebSocketResponseOptions) {
+	response := types.WebSocketResponse{
 		Type:         "response",
 		Status:       "error",
 		ID:           id,
@@ -474,7 +474,7 @@ func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 }
 
 // BroadcastToSubscribers sends a message to all connections subscribed to a specific stream
-func (ws *WebSocketServer) BroadcastToSubscribers(msgType rpc_types.SubscriptionType, message interface{}) {
+func (ws *WebSocketServer) BroadcastToSubscribers(msgType types.SubscriptionType, message interface{}) {
 	data, err := json.Marshal(message)
 	if err != nil {
 		log.Printf("Failed to marshal broadcast message: %v", err)
@@ -527,6 +527,6 @@ func (ws *WebSocketServer) RegisterAllMethods() {
 }
 
 // GetSubscriptionManager returns the subscription manager for event publishing
-func (ws *WebSocketServer) GetSubscriptionManager() *rpc_types.SubscriptionManager {
+func (ws *WebSocketServer) GetSubscriptionManager() *types.SubscriptionManager {
 	return ws.subscriptionManager
 }

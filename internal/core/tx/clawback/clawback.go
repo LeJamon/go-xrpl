@@ -8,7 +8,7 @@ import (
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -40,7 +40,7 @@ type Clawback struct {
 
 	// Amount is the amount to claw back (required)
 	// For IOU clawback, the issuer field specifies the holder
-	Amount sle.Amount `json:"Amount" xrpl:"Amount,amount"`
+	Amount state.Amount `json:"Amount" xrpl:"Amount,amount"`
 
 	// Holder is the MPToken holder (optional, for MPToken clawback only)
 	Holder string `json:"Holder,omitempty" xrpl:"Holder,omitempty"`
@@ -50,7 +50,7 @@ type Clawback struct {
 }
 
 // NewClawback creates a new Clawback transaction for IOU tokens
-func NewClawback(account string, amount sle.Amount) *Clawback {
+func NewClawback(account string, amount state.Amount) *Clawback {
 	return &Clawback{
 		BaseTx: *tx.NewBaseTx(tx.TypeClawback, account),
 		Amount: amount,
@@ -58,7 +58,7 @@ func NewClawback(account string, amount sle.Amount) *Clawback {
 }
 
 // NewMPTokenClawback creates a new Clawback transaction for MPTokens
-func NewMPTokenClawback(account, holder, issuanceID string, amount sle.Amount) *Clawback {
+func NewMPTokenClawback(account, holder, issuanceID string, amount state.Amount) *Clawback {
 	return &Clawback{
 		BaseTx:            *tx.NewBaseTx(tx.TypeClawback, account),
 		Amount:            amount,
@@ -154,7 +154,7 @@ func (c *Clawback) applyMPT(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecOBJECT_NOT_FOUND
 	}
 
-	issuance, err := sle.ParseMPTokenIssuance(issuanceRaw)
+	issuance, err := state.ParseMPTokenIssuance(issuanceRaw)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -170,7 +170,7 @@ func (c *Clawback) applyMPT(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Decode holder account
-	holderID, err := sle.DecodeAccountID(c.Holder)
+	holderID, err := state.DecodeAccountID(c.Holder)
 	if err != nil {
 		return tx.TecNO_DST
 	}
@@ -182,7 +182,7 @@ func (c *Clawback) applyMPT(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecOBJECT_NOT_FOUND
 	}
 
-	token, err := sle.ParseMPToken(tokenRaw)
+	token, err := state.ParseMPToken(tokenRaw)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -215,7 +215,7 @@ func (c *Clawback) applyMPT(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Serialize and update MPToken
-	updatedToken, err := sle.SerializeMPToken(token)
+	updatedToken, err := state.SerializeMPToken(token)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -224,7 +224,7 @@ func (c *Clawback) applyMPT(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Serialize and update issuance
-	updatedIssuance, err := sle.SerializeMPTokenIssuance(issuance)
+	updatedIssuance, err := state.SerializeMPTokenIssuance(issuance)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -237,7 +237,7 @@ func (c *Clawback) applyMPT(ctx *tx.ApplyContext) tx.Result {
 
 // amountToUint64 converts an Amount to a uint64 integer value.
 // Prefers the raw MPT int64 value when available to avoid IOU normalization precision loss.
-func amountToUint64(a sle.Amount) uint64 {
+func amountToUint64(a state.Amount) uint64 {
 	if raw, ok := a.MPTRaw(); ok {
 		if raw <= 0 {
 			return 0
@@ -267,7 +267,7 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 	// --- Preclaim checks ---
 
 	// 1. Decode holder from Amount.Issuer
-	holderID, err := sle.DecodeAccountID(c.Amount.Issuer)
+	holderID, err := state.DecodeAccountID(c.Amount.Issuer)
 	if err != nil {
 		return tx.TecNO_TARGET
 	}
@@ -279,7 +279,7 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 	if err != nil || holderAccountData == nil {
 		return tx.TerNO_ACCOUNT
 	}
-	holderAccount, err := sle.ParseAccountRoot(holderAccountData)
+	holderAccount, err := state.ParseAccountRoot(holderAccountData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -287,10 +287,10 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 	// 3. Check issuer flags (ctx.Account is the issuer)
 	// Reference: rippled Clawback.cpp preclaimHelper<Issue>() lines 117-123
 	// AllowTrustLineClawback must be set, NoFreeze must NOT be set
-	if (ctx.Account.Flags & sle.LsfAllowTrustLineClawback) == 0 {
+	if (ctx.Account.Flags & state.LsfAllowTrustLineClawback) == 0 {
 		return tx.TecNO_PERMISSION
 	}
-	if (ctx.Account.Flags & sle.LsfNoFreeze) != 0 {
+	if (ctx.Account.Flags & state.LsfNoFreeze) != 0 {
 		return tx.TecNO_PERMISSION
 	}
 
@@ -301,7 +301,7 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 	if err != nil || trustData == nil {
 		return tx.TecNO_LINE
 	}
-	rs, err := sle.ParseRippleState(trustData)
+	rs, err := state.ParseRippleState(trustData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -313,7 +313,7 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 	//   Negative: LOW owes HIGH (LOW is the issuer)
 	// If balance > 0, issuer must be HIGH (issuer > holder)
 	// If balance < 0, issuer must be LOW (issuer < holder)
-	issuerIsLow := sle.CompareAccountIDs(ctx.AccountID, holderID) < 0
+	issuerIsLow := state.CompareAccountIDs(ctx.AccountID, holderID) < 0
 	if rs.Balance.Signum() > 0 && issuerIsLow {
 		return tx.TecNO_PERMISSION
 	}
@@ -325,7 +325,7 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled Clawback.cpp:149-156
 	// Get balance from holder's perspective
 	holderIsLow := !issuerIsLow
-	var holderBalance sle.Amount
+	var holderBalance state.Amount
 	if holderIsLow {
 		holderBalance = rs.Balance
 	} else {
@@ -343,7 +343,7 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 	clawAmount := c.Amount
 	clawAmount.Issuer = ctx.Account.Account
 
-	var actualAmount sle.Amount
+	var actualAmount state.Amount
 	if holderBalance.Compare(clawAmount) < 0 {
 		actualAmount = holderBalance
 	} else {
@@ -365,21 +365,21 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 	// Same pattern as trustset.go lines 514-570
 	var lowDefRipple, highDefRipple bool
 	if issuerIsLow {
-		lowDefRipple = (ctx.Account.Flags & sle.LsfDefaultRipple) != 0
-		highDefRipple = (holderAccount.Flags & sle.LsfDefaultRipple) != 0
+		lowDefRipple = (ctx.Account.Flags & state.LsfDefaultRipple) != 0
+		highDefRipple = (holderAccount.Flags & state.LsfDefaultRipple) != 0
 	} else {
-		lowDefRipple = (holderAccount.Flags & sle.LsfDefaultRipple) != 0
-		highDefRipple = (ctx.Account.Flags & sle.LsfDefaultRipple) != 0
+		lowDefRipple = (holderAccount.Flags & state.LsfDefaultRipple) != 0
+		highDefRipple = (ctx.Account.Flags & state.LsfDefaultRipple) != 0
 	}
 
 	bLowReserveSet := rs.LowQualityIn != 0 || rs.LowQualityOut != 0 ||
-		((rs.Flags&sle.LsfLowNoRipple) == 0) != lowDefRipple ||
-		(rs.Flags&sle.LsfLowFreeze) != 0 || !rs.LowLimit.IsZero() ||
+		((rs.Flags&state.LsfLowNoRipple) == 0) != lowDefRipple ||
+		(rs.Flags&state.LsfLowFreeze) != 0 || !rs.LowLimit.IsZero() ||
 		rs.Balance.Signum() > 0
 
 	bHighReserveSet := rs.HighQualityIn != 0 || rs.HighQualityOut != 0 ||
-		((rs.Flags&sle.LsfHighNoRipple) == 0) != highDefRipple ||
-		(rs.Flags&sle.LsfHighFreeze) != 0 || !rs.HighLimit.IsZero() ||
+		((rs.Flags&state.LsfHighNoRipple) == 0) != highDefRipple ||
+		(rs.Flags&state.LsfHighFreeze) != 0 || !rs.HighLimit.IsZero() ||
 		rs.Balance.Signum() < 0
 
 	bDefault := !bLowReserveSet && !bHighReserveSet
@@ -395,9 +395,9 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 			highAccountID = ctx.AccountID
 		}
 		lowDirKey := keylet.OwnerDir(lowAccountID)
-		sle.DirRemove(ctx.View, lowDirKey, rs.LowNode, trustKey.Key, false)
+		state.DirRemove(ctx.View, lowDirKey, rs.LowNode, trustKey.Key, false)
 		highDirKey := keylet.OwnerDir(highAccountID)
-		sle.DirRemove(ctx.View, highDirKey, rs.HighNode, trustKey.Key, false)
+		state.DirRemove(ctx.View, highDirKey, rs.HighNode, trustKey.Key, false)
 
 		// Delete the trust line
 		if err := ctx.View.Erase(trustKey); err != nil {
@@ -413,7 +413,7 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Write holder account back to ledger
-		holderUpdatedData, serErr := sle.SerializeAccountRoot(holderAccount)
+		holderUpdatedData, serErr := state.SerializeAccountRoot(holderAccount)
 		if serErr != nil {
 			return tx.TefINTERNAL
 		}
@@ -422,19 +422,19 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 		}
 	} else {
 		// Update reserve flags
-		if bLowReserveSet && (rs.Flags&sle.LsfLowReserve) == 0 {
-			rs.Flags |= sle.LsfLowReserve
-		} else if !bLowReserveSet && (rs.Flags&sle.LsfLowReserve) != 0 {
-			rs.Flags &^= sle.LsfLowReserve
+		if bLowReserveSet && (rs.Flags&state.LsfLowReserve) == 0 {
+			rs.Flags |= state.LsfLowReserve
+		} else if !bLowReserveSet && (rs.Flags&state.LsfLowReserve) != 0 {
+			rs.Flags &^= state.LsfLowReserve
 		}
-		if bHighReserveSet && (rs.Flags&sle.LsfHighReserve) == 0 {
-			rs.Flags |= sle.LsfHighReserve
-		} else if !bHighReserveSet && (rs.Flags&sle.LsfHighReserve) != 0 {
-			rs.Flags &^= sle.LsfHighReserve
+		if bHighReserveSet && (rs.Flags&state.LsfHighReserve) == 0 {
+			rs.Flags |= state.LsfHighReserve
+		} else if !bHighReserveSet && (rs.Flags&state.LsfHighReserve) != 0 {
+			rs.Flags &^= state.LsfHighReserve
 		}
 
 		// Serialize and update trust line
-		updatedData, serErr := sle.SerializeRippleState(rs)
+		updatedData, serErr := state.SerializeRippleState(rs)
 		if serErr != nil {
 			return tx.TefINTERNAL
 		}

@@ -6,7 +6,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -214,12 +214,12 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Ignore reserves requirement, disable the master key, allow default
 	// rippling, and enable deposit authorization to prevent payments into
 	// pseudo-account. Also set LsfAMM for fast AMM account detection.
-	ammAccount := &sle.AccountRoot{
+	ammAccount := &state.AccountRoot{
 		Account:    ammAccountAddr,
 		Balance:    0,
 		Sequence:   0,
 		OwnerCount: 1, // For the AMM entry itself
-		Flags:      sle.LsfDisableMaster | sle.LsfDefaultRipple | sle.LsfDepositAuth | sle.LsfAMM,
+		Flags:      state.LsfDisableMaster | state.LsfDefaultRipple | state.LsfDepositAuth | state.LsfAMM,
 		AMMID:      ammKey.Key, // Links pseudo-account to AMM entry (rippled View.cpp:1131)
 	}
 
@@ -266,7 +266,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Store the AMM pseudo-account
-	ammAccountBytes, err := sle.SerializeAccountRoot(ammAccount)
+	ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -316,7 +316,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 		// Debit from creator's trustline (skip if creator is the issuer —
 		// issuers have unlimited supply and no self-trust-line).
-		issuerID1, _ := sle.DecodeAccountID(sortedAsset1.Issuer)
+		issuerID1, _ := state.DecodeAccountID(sortedAsset1.Issuer)
 		if accountID != issuerID1 {
 			if err := updateTrustlineBalanceInView(accountID, issuerID1, sortedAsset1.Currency, sortedAmount1.Negate(), ctx.View); err != nil {
 				return TecUNFUNDED_AMM
@@ -337,7 +337,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err := setAMMNodeFlag(ammAccountID, sortedAsset2, ctx.View); err != nil {
 			return tx.TefINTERNAL
 		}
-		issuerID2, _ := sle.DecodeAccountID(sortedAsset2.Issuer)
+		issuerID2, _ := state.DecodeAccountID(sortedAsset2.Issuer)
 		if accountID != issuerID2 {
 			if err := updateTrustlineBalanceInView(accountID, issuerID2, sortedAsset2.Currency, sortedAmount2.Negate(), ctx.View); err != nil {
 				return TecUNFUNDED_AMM
@@ -350,7 +350,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Persist updated creator account
 	accountKey := keylet.Account(accountID)
-	accountBytes, err := sle.SerializeAccountRoot(ctx.Account)
+	accountBytes, err := state.SerializeAccountRoot(ctx.Account)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -359,7 +359,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Update AMM account balance (for XRP)
-	ammAccountBytes, err = sle.SerializeAccountRoot(ammAccount)
+	ammAccountBytes, err = state.SerializeAccountRoot(ammAccount)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -378,7 +378,7 @@ func requireAuth(view tx.LedgerView, asset tx.Asset, accountID [20]byte) tx.Resu
 		return tx.TesSUCCESS
 	}
 
-	issuerID, err := sle.DecodeAccountID(asset.Issuer)
+	issuerID, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {
 		return tx.TesSUCCESS // Invalid issuer - pass (will fail elsewhere)
 	}
@@ -401,14 +401,14 @@ func requireAuth(view tx.LedgerView, asset tx.Asset, accountID [20]byte) tx.Resu
 		return tx.TesSUCCESS
 	}
 
-	issuerAccount, err := sle.ParseAccountRoot(issuerData)
+	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
 		// Can't parse issuer account - pass (defensive)
 		return tx.TesSUCCESS
 	}
 
 	// If issuer doesn't require auth, OK
-	if (issuerAccount.Flags & sle.LsfRequireAuth) == 0 {
+	if (issuerAccount.Flags & state.LsfRequireAuth) == 0 {
 		return tx.TesSUCCESS
 	}
 
@@ -417,7 +417,7 @@ func requireAuth(view tx.LedgerView, asset tx.Asset, accountID [20]byte) tx.Resu
 		return tx.TecNO_LINE
 	}
 
-	rs, err := sle.ParseRippleState(trustLineData)
+	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
 		return tx.TecNO_AUTH
 	}
@@ -425,13 +425,13 @@ func requireAuth(view tx.LedgerView, asset tx.Asset, accountID [20]byte) tx.Resu
 	// Check authorization flags based on canonical ordering
 	// Reference: rippled line 2425-2428: (account > issue.account) ? lsfLowAuth : lsfHighAuth
 	// Note: In rippled, "account > issue.account" means account is HIGH side
-	accountIsHigh := sle.CompareAccountIDsForLine(accountID, issuerID) > 0
+	accountIsHigh := state.CompareAccountIDsForLine(accountID, issuerID) > 0
 	if accountIsHigh {
-		if (rs.Flags & sle.LsfLowAuth) == 0 {
+		if (rs.Flags & state.LsfLowAuth) == 0 {
 			return tx.TecNO_AUTH
 		}
 	} else {
-		if (rs.Flags & sle.LsfHighAuth) == 0 {
+		if (rs.Flags & state.LsfHighAuth) == 0 {
 			return tx.TecNO_AUTH
 		}
 	}
@@ -453,7 +453,7 @@ func isFrozen(view tx.LedgerView, accountID [20]byte, asset tx.Asset) bool {
 	}
 
 	// Check individual trustline freeze
-	issuerID, err := sle.DecodeAccountID(asset.Issuer)
+	issuerID, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {
 		return false
 	}
@@ -474,7 +474,7 @@ func noDefaultRipple(view tx.LedgerView, asset tx.Asset) bool {
 		return false
 	}
 
-	issuerID, err := sle.DecodeAccountID(asset.Issuer)
+	issuerID, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {
 		// Invalid issuer - return false (not a DefaultRipple problem)
 		return false
@@ -488,14 +488,14 @@ func noDefaultRipple(view tx.LedgerView, asset tx.Asset) bool {
 		return false
 	}
 
-	issuerAccount, err := sle.ParseAccountRoot(issuerData)
+	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
 		// Can't parse issuer account - return false (defensive)
 		return false
 	}
 
 	// Return true if DefaultRipple is NOT set (problem)
-	return (issuerAccount.Flags & sle.LsfDefaultRipple) == 0
+	return (issuerAccount.Flags & state.LsfDefaultRipple) == 0
 }
 
 // xrpLiquidBalance returns the XRP available after reserving for ownerCount additional objects.
@@ -507,7 +507,7 @@ func xrpLiquidBalance(view tx.LedgerView, accountID [20]byte, additionalOwnerCou
 		return 0
 	}
 
-	account, err := sle.ParseAccountRoot(data)
+	account, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return 0
 	}
@@ -533,7 +533,7 @@ func insufficientBalance(view tx.LedgerView, accountID [20]byte, amount tx.Amoun
 	}
 
 	// For IOU, check if account is issuer (issuers have unlimited balance)
-	issuerID, err := sle.DecodeAccountID(amount.Issuer)
+	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
 		return true
 	}
@@ -555,7 +555,7 @@ func isLPToken(view tx.LedgerView, amount tx.Amount) bool {
 	}
 
 	// Check if the issuer account has sfAMMID field (meaning it's an AMM pseudo-account)
-	issuerID, err := sle.DecodeAccountID(amount.Issuer)
+	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
 		return false
 	}
@@ -566,13 +566,13 @@ func isLPToken(view tx.LedgerView, amount tx.Amount) bool {
 		return false
 	}
 
-	issuerAccount, err := sle.ParseAccountRoot(issuerData)
+	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
 		return false
 	}
 
 	// AMM accounts have the lsfAMM flag set
-	return (issuerAccount.Flags & sle.LsfAMM) != 0
+	return (issuerAccount.Flags & state.LsfAMM) != 0
 }
 
 // sortAssets returns assets and amounts in canonical order (minmax).
@@ -624,7 +624,7 @@ func compareAssets(a, b tx.Asset) int {
 // setAMMNodeFlag sets the lsfAMMNode flag on the AMM's trustline for an IOU asset.
 // Reference: rippled AMMCreate.cpp sendAndTrustSet line 297-306
 func setAMMNodeFlag(ammAccountID [20]byte, asset tx.Asset, view tx.LedgerView) error {
-	issuerID, err := sle.DecodeAccountID(asset.Issuer)
+	issuerID, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {
 		return err
 	}
@@ -635,16 +635,16 @@ func setAMMNodeFlag(ammAccountID [20]byte, asset tx.Asset, view tx.LedgerView) e
 		return err
 	}
 
-	rs, err := sle.ParseRippleState(trustLineData)
+	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
 		return err
 	}
 
 	// Set lsfAMMNode flag
-	rs.Flags |= sle.LsfAMMNode
+	rs.Flags |= state.LsfAMMNode
 
 	// Serialize and update
-	rsBytes, err := sle.SerializeRippleState(rs)
+	rsBytes, err := state.SerializeRippleState(rs)
 	if err != nil {
 		return err
 	}

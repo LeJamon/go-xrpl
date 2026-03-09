@@ -7,7 +7,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -115,7 +115,7 @@ func (pf *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Parse channel
-	channel, err := sle.ParsePayChannel(channelData)
+	channel, err := state.ParsePayChannel(channelData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -129,7 +129,7 @@ func (pf *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Verify sender is the channel owner
-	accountID, _ := sle.DecodeAccountID(pf.Account)
+	accountID, _ := state.DecodeAccountID(pf.Account)
 	if channel.Account != accountID {
 		return tx.TecNO_PERMISSION
 	}
@@ -176,7 +176,7 @@ func (pf *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
 	channel.Amount += amount
 
 	// Serialize updated channel
-	updatedChannelData, err := sle.SerializePayChannelFromData(channel)
+	updatedChannelData, err := state.SerializePayChannelFromData(channel)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

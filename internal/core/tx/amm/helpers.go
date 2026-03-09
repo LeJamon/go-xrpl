@@ -10,7 +10,7 @@ import (
 	crypto "github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // validateAMMAmount validates an AMM amount
@@ -80,9 +80,9 @@ func matchesAsset(amt *tx.Amount, asset tx.Asset) bool {
 // zeroAmount returns a zero amount for the given asset
 func zeroAmount(asset tx.Asset) tx.Amount {
 	if asset.Currency == "" || asset.Currency == "XRP" {
-		return sle.NewXRPAmountFromInt(0)
+		return state.NewXRPAmountFromInt(0)
 	}
-	return sle.NewIssuedAmountFromValue(0, -100, asset.Currency, asset.Issuer)
+	return state.NewIssuedAmountFromValue(0, -100, asset.Currency, asset.Issuer)
 }
 
 // computeAMMAccountIDSimple derives the AMM pseudo-account ID using a simple
@@ -117,9 +117,9 @@ func PseudoAccountAddress(view tx.LedgerView, parentHash [32]byte, key [32]byte)
 // computeAMMKeylet computes the AMM keylet from the asset pair.
 func computeAMMKeylet(asset1, asset2 tx.Asset) keylet.Keylet {
 	issuer1 := getIssuerBytes(asset1.Issuer)
-	currency1 := sle.GetCurrencyBytes(asset1.Currency)
+	currency1 := state.GetCurrencyBytes(asset1.Currency)
 	issuer2 := getIssuerBytes(asset2.Issuer)
-	currency2 := sle.GetCurrencyBytes(asset2.Currency)
+	currency2 := state.GetCurrencyBytes(asset2.Currency)
 
 	return keylet.AMM(issuer1, currency1, issuer2, currency2)
 }
@@ -129,7 +129,7 @@ func getIssuerBytes(issuer string) [20]byte {
 	if issuer == "" {
 		return [20]byte{}
 	}
-	id, _ := sle.DecodeAccountID(issuer)
+	id, _ := state.DecodeAccountID(issuer)
 	return id
 }
 
@@ -178,7 +178,7 @@ func sha256Ripemd160(data []byte) [20]byte {
 // to maintain AMM invariant: sqrt(asset1 * asset2) >= LPTokensBalance
 func calculateLPTokens(amount1, amount2 tx.Amount, fixV1_3 ...bool) tx.Amount {
 	if amount1.IsZero() || amount2.IsZero() {
-		return sle.NewIssuedAmountFromValue(0, -100, "", "")
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
 	}
 
 	// With fixAMMv1_3 enabled, set rounding mode to downward to maintain
@@ -186,7 +186,7 @@ func calculateLPTokens(amount1, amount2 tx.Amount, fixV1_3 ...bool) tx.Amount {
 	// Reference: rippled AMMHelpers.cpp ammLPTokens() line 31-33
 	roundDown := len(fixV1_3) > 0 && fixV1_3[0]
 	if roundDown {
-		g := sle.NewNumberRoundModeGuard(sle.RoundDownward)
+		g := state.NewNumberRoundModeGuard(state.RoundDownward)
 		defer g.Release()
 	}
 
@@ -210,9 +210,9 @@ func calculateLPTokens(amount1, amount2 tx.Amount, fixV1_3 ...bool) tx.Amount {
 			mantissa *= 10
 			exp--
 		}
-		iou1 = sle.NewIssuedAmountFromValue(mantissa, exp, "", "")
+		iou1 = state.NewIssuedAmountFromValue(mantissa, exp, "", "")
 	} else {
-		iou1 = sle.NewIssuedAmountFromValue(amount1.Mantissa(), amount1.Exponent(), "", "")
+		iou1 = state.NewIssuedAmountFromValue(amount1.Mantissa(), amount1.Exponent(), "", "")
 	}
 
 	if amount2.IsNative() {
@@ -227,9 +227,9 @@ func calculateLPTokens(amount1, amount2 tx.Amount, fixV1_3 ...bool) tx.Amount {
 			mantissa *= 10
 			exp--
 		}
-		iou2 = sle.NewIssuedAmountFromValue(mantissa, exp, "", "")
+		iou2 = state.NewIssuedAmountFromValue(mantissa, exp, "", "")
 	} else {
-		iou2 = sle.NewIssuedAmountFromValue(amount2.Mantissa(), amount2.Exponent(), "", "")
+		iou2 = state.NewIssuedAmountFromValue(amount2.Mantissa(), amount2.Exponent(), "", "")
 	}
 
 	// product = iou1 * iou2
@@ -244,8 +244,8 @@ func calculateLPTokens(amount1, amount2 tx.Amount, fixV1_3 ...bool) tx.Amount {
 // GenerateAMMLPTCurrency generates the LP token currency code from two asset currencies.
 // The LP token currency is a hex-encoded 20-byte value derived from the asset pair.
 func GenerateAMMLPTCurrency(currency1, currency2 string) string {
-	c1 := sle.GetCurrencyBytes(currency1)
-	c2 := sle.GetCurrencyBytes(currency2)
+	c1 := state.GetCurrencyBytes(currency1)
+	c2 := state.GetCurrencyBytes(currency2)
 
 	// XOR the two currency bytes to create a unique LP token currency
 	var lptCurrency [20]byte
@@ -261,18 +261,18 @@ func GenerateAMMLPTCurrency(currency1, currency2 string) string {
 
 // compareAccountIDs compares two account IDs lexicographically.
 func compareAccountIDs(a, b [20]byte) int {
-	return sle.CompareAccountIDs(a, b)
+	return state.CompareAccountIDs(a, b)
 }
 
 // encodeAccountID encodes a 20-byte account ID to an XRPL address string.
 func encodeAccountID(accountID [20]byte) (string, error) {
-	return sle.EncodeAccountID(accountID)
+	return state.EncodeAccountID(accountID)
 }
 
 // EncodeAccountID converts a 20-byte account ID to an r-address string.
 // Exported for use in test helpers.
 func EncodeAccountID(accountID [20]byte) (string, error) {
-	return sle.EncodeAccountID(accountID)
+	return state.EncodeAccountID(accountID)
 }
 
 // getFee converts a trading fee in basis points (0-1000) to a fractional Amount.
@@ -281,12 +281,12 @@ func EncodeAccountID(accountID [20]byte) (string, error) {
 // Reference: rippled AMMCore.h getFee(): Number{tfee} / AUCTION_SLOT_FEE_SCALE_FACTOR
 func getFee(fee uint16) tx.Amount {
 	if fee == 0 {
-		return sle.NewIssuedAmountFromValue(0, -100, "", "")
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
 	}
 	// fee / 100000 = fee * 10^-5
 	// For normalized form: mantissa in [10^15, 10^16), so fee * 10^10 with exp -15
 	mantissa := int64(fee) * 1e10
-	return sle.NewIssuedAmountFromValue(mantissa, -15, "", "")
+	return state.NewIssuedAmountFromValue(mantissa, -15, "", "")
 }
 
 // feeMult returns (1 - getFee(tfee)), i.e., (1 - fee).
@@ -305,12 +305,12 @@ func feeMultHalf(tfee uint16) tx.Amount {
 
 // oneAmount returns the Amount value 1.0 as an IOU for arithmetic.
 func oneAmount() tx.Amount {
-	return sle.NewIssuedAmountFromValue(1e15, -15, "", "")
+	return state.NewIssuedAmountFromValue(1e15, -15, "", "")
 }
 
 // numAmount returns a Number-like Amount from an integer.
 func numAmount(n int64) tx.Amount {
-	return toIOUForCalc(sle.NewXRPAmountFromInt(n))
+	return toIOUForCalc(state.NewXRPAmountFromInt(n))
 }
 
 // subFromOne calculates (1 - x) where x is a fractional Amount
@@ -334,16 +334,16 @@ func addToOne(x tx.Amount) tx.Amount {
 // operates entirely in Number space.
 func numberDiv(n, d tx.Amount) tx.Amount {
 	if d.IsZero() {
-		return sle.NewIssuedAmountFromValue(0, -100, "", "")
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
 	}
 	if n.IsZero() {
-		return sle.NewIssuedAmountFromValue(0, -100, "", "")
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
 	}
-	nNum := sle.NewXRPLNumber(n.Mantissa(), n.Exponent())
-	dNum := sle.NewXRPLNumber(d.Mantissa(), d.Exponent())
+	nNum := state.NewXRPLNumber(n.Mantissa(), n.Exponent())
+	dNum := state.NewXRPLNumber(d.Mantissa(), d.Exponent())
 	result := nNum.Div(dNum)
 	iou := result.ToIOUAmountValue()
-	return sle.NewIssuedAmountFromValue(iou.Mantissa(), iou.Exponent(), n.Currency, n.Issuer)
+	return state.NewIssuedAmountFromValue(iou.Mantissa(), iou.Exponent(), n.Currency, n.Issuer)
 }
 
 // solveQuadraticEq solves the positive root of quadratic equation:
@@ -369,10 +369,10 @@ func solveQuadraticEq(a, b, c tx.Amount) tx.Amount {
 // multiplyWithRounding multiplies an amount by a fractional Number
 // using an explicit rounding mode.
 // Reference: rippled AMMHelpers.cpp multiply(amount, frac, rm)
-func multiplyWithRounding(amount, frac tx.Amount, rm sle.RoundingMode) tx.Amount {
-	g := sle.NewNumberRoundModeGuard(rm)
+func multiplyWithRounding(amount, frac tx.Amount, rm state.RoundingMode) tx.Amount {
+	g := state.NewNumberRoundModeGuard(rm)
 	defer g.Release()
-	result := amount.Mul(frac, rm == sle.RoundUpward)
+	result := amount.Mul(frac, rm == state.RoundUpward)
 	return toSTAmount(amount, result)
 }
 
@@ -382,9 +382,9 @@ func multiplyWithRounding(amount, frac tx.Amount, rm sle.RoundingMode) tx.Amount
 func toSTAmount(original, result tx.Amount) tx.Amount {
 	if original.IsNative() {
 		drops := iouToDrops(result)
-		return sle.NewXRPAmountFromInt(drops)
+		return state.NewXRPAmountFromInt(drops)
 	}
-	return sle.NewIssuedAmountFromValue(result.Mantissa(), result.Exponent(),
+	return state.NewIssuedAmountFromValue(result.Mantissa(), result.Exponent(),
 		original.Currency, original.Issuer)
 }
 
@@ -392,9 +392,9 @@ func toSTAmount(original, result tx.Amount) tx.Amount {
 // Reference: rippled's toSTAmount(issue, number)
 func toSTAmountIssue(amt tx.Amount, result tx.Amount) tx.Amount {
 	if amt.IsNative() {
-		return sle.NewXRPAmountFromInt(iouToDrops(result))
+		return state.NewXRPAmountFromInt(iouToDrops(result))
 	}
-	return sle.NewIssuedAmountFromValue(result.Mantissa(), result.Exponent(),
+	return state.NewIssuedAmountFromValue(result.Mantissa(), result.Exponent(),
 		amt.Currency, amt.Issuer)
 }
 
@@ -404,9 +404,9 @@ func toSTAmountIssue(amt tx.Amount, result tx.Amount) tx.Amount {
 // Reference: rippled's Number::operator rep() rounding behavior.
 func toSTAmountIssueRounded(amt tx.Amount, result tx.Amount) tx.Amount {
 	if amt.IsNative() {
-		return sle.NewXRPAmountFromInt(iouToDropsRounded(result))
+		return state.NewXRPAmountFromInt(iouToDropsRounded(result))
 	}
-	return sle.NewIssuedAmountFromValue(result.Mantissa(), result.Exponent(),
+	return state.NewIssuedAmountFromValue(result.Mantissa(), result.Exponent(),
 		amt.Currency, amt.Issuer)
 }
 
@@ -415,18 +415,18 @@ func toSTAmountIssueRounded(amt tx.Amount, result tx.Amount) tx.Amount {
 // This is needed because toIOUForCalc strips the native flag from XRP amounts,
 // so the original asset is passed separately to preserve the return type.
 // Reference: rippled AMMHelpers.cpp multiply(amount, frac, rm) + toSTAmount(issue, ...)
-func mulRoundForAsset(amount, frac tx.Amount, rm sle.RoundingMode, asset tx.Amount) tx.Amount {
+func mulRoundForAsset(amount, frac tx.Amount, rm state.RoundingMode, asset tx.Amount) tx.Amount {
 	if asset.IsNative() {
 		// For XRP: raw multiplication → single rounding step during drops conversion.
 		// Matches rippled's Number{v1, v2, unchecked{}} + Number::operator rep().
 		// rippled does NOT normalize the product before converting to drops.
-		return sle.NewXRPAmountFromInt(multiplyRawToDrops(amount, frac, rm))
+		return state.NewXRPAmountFromInt(multiplyRawToDrops(amount, frac, rm))
 	}
 	// For IOU: rounding mode active during multiplication normalization
-	g := sle.NewNumberRoundModeGuard(rm)
+	g := state.NewNumberRoundModeGuard(rm)
 	defer g.Release()
-	result := amount.Mul(frac, rm == sle.RoundUpward)
-	return sle.NewIssuedAmountFromValue(result.Mantissa(), result.Exponent(),
+	result := amount.Mul(frac, rm == state.RoundUpward)
+	return state.NewIssuedAmountFromValue(result.Mantissa(), result.Exponent(),
 		asset.Currency, asset.Issuer)
 }
 
@@ -435,7 +435,7 @@ func mulRoundForAsset(amount, frac tx.Amount, rm sle.RoundingMode, asset tx.Amou
 //   Step 1: Number::operator*= — normalize product to [10^15, 10^16) with Guard
 //   Step 2: Number::operator rep() — convert normalized Number to integer drops with Guard
 // Uses big.Int to avoid overflow (two 16-digit mantissas → 32-digit product).
-func multiplyRawToDrops(a, b tx.Amount, rm sle.RoundingMode) int64 {
+func multiplyRawToDrops(a, b tx.Amount, rm state.RoundingMode) int64 {
 	m1 := a.Mantissa()
 	e1 := a.Exponent()
 	m2 := b.Mantissa()
@@ -516,19 +516,19 @@ func multiplyRawToDrops(a, b tx.Amount, rm sle.RoundingMode) int64 {
 // guardDigit is the most significant discarded digit (0-9).
 // hasRemainder indicates whether any earlier discarded digit was non-zero.
 // Reference: rippled Number.cpp Guard::round() + caller rounding logic.
-func applyGuardRound(mantissa, guardDigit int64, hasRemainder, neg bool, rm sle.RoundingMode) int64 {
+func applyGuardRound(mantissa, guardDigit int64, hasRemainder, neg bool, rm state.RoundingMode) int64 {
 	anyDiscarded := guardDigit != 0 || hasRemainder
 
 	switch rm {
-	case sle.RoundUpward:
+	case state.RoundUpward:
 		if !neg && anyDiscarded {
 			mantissa++
 		}
-	case sle.RoundDownward:
+	case state.RoundDownward:
 		if neg && anyDiscarded {
 			mantissa++
 		}
-	case sle.RoundToNearest:
+	case state.RoundToNearest:
 		if guardDigit > 5 {
 			mantissa++
 		} else if guardDigit == 5 {
@@ -540,7 +540,7 @@ func applyGuardRound(mantissa, guardDigit int64, hasRemainder, neg bool, rm sle.
 				mantissa++
 			}
 		}
-	case sle.RoundTowardsZero:
+	case state.RoundTowardsZero:
 		// truncate — no rounding
 	}
 	return mantissa
@@ -550,7 +550,7 @@ func applyGuardRound(mantissa, guardDigit int64, hasRemainder, neg bool, rm sle.
 // from the AMM balance.
 // Reference: rippled AMMHelpers.cpp adjustLPTokens()
 func adjustLPTokens(lptAMMBalance, lpTokens tx.Amount, isDeposit bool) tx.Amount {
-	g := sle.NewNumberRoundModeGuard(sle.RoundDownward)
+	g := state.NewNumberRoundModeGuard(state.RoundDownward)
 	defer g.Release()
 
 	lptBalIOU := toIOUForCalc(lptAMMBalance)
@@ -664,7 +664,7 @@ func getRoundedAssetCb(fixAMMv1_3 bool, noRoundCb func() tx.Amount, balance tx.A
 	if isDeposit {
 		return mulRoundForAsset(toIOUForCalc(balance), productCb(), rm, balance)
 	}
-	g := sle.NewNumberRoundModeGuard(rm)
+	g := state.NewNumberRoundModeGuard(rm)
 	defer g.Release()
 	result := productCb()
 	return toSTAmountIssueRounded(balance, result)
@@ -695,7 +695,7 @@ func getRoundedLPTokensCb(fixAMMv1_3 bool, noRoundCb func() tx.Amount, lptAMMBal
 	rm := getLPTokenRounding(isDeposit)
 	var tokens tx.Amount
 	if isDeposit {
-		g := sle.NewNumberRoundModeGuard(rm)
+		g := state.NewNumberRoundModeGuard(rm)
 		result := productCb()
 		tokens = toSTAmountIssue(lptAMMBalance, result)
 		g.Release()
@@ -757,21 +757,21 @@ func adjustFracByTokens(fixAMMv1_3 bool, lptAMMBalance, tokens, frac tx.Amount) 
 // getAssetRounding returns the rounding mode for asset amounts.
 // Deposit: upward (maximize deposit), Withdraw: downward (minimize withdrawal)
 // Reference: rippled AMMHelpers.h detail::getAssetRounding()
-func getAssetRounding(isDeposit bool) sle.RoundingMode {
+func getAssetRounding(isDeposit bool) state.RoundingMode {
 	if isDeposit {
-		return sle.RoundUpward
+		return state.RoundUpward
 	}
-	return sle.RoundDownward
+	return state.RoundDownward
 }
 
 // getLPTokenRounding returns the rounding mode for LP token amounts.
 // Deposit: downward (minimize tokens out), Withdraw: upward (maximize tokens in)
 // Reference: rippled AMMHelpers.h detail::getLPTokenRounding()
-func getLPTokenRounding(isDeposit bool) sle.RoundingMode {
+func getLPTokenRounding(isDeposit bool) state.RoundingMode {
 	if isDeposit {
-		return sle.RoundDownward
+		return state.RoundDownward
 	}
-	return sle.RoundUpward
+	return state.RoundUpward
 }
 
 // minAmountIOU returns the smaller of two amounts compared in IOU space.
@@ -793,7 +793,7 @@ func minAmountIOU(a, b tx.Amount) tx.Amount {
 //	else:           frac = (r-c)/(1+c); multiply(lptAMMBalance, frac, downward)
 func lpTokensOut(assetBalance, amountIn, lptBalance tx.Amount, tfee uint16, fixAMMv1_3 bool) tx.Amount {
 	if assetBalance.IsZero() || lptBalance.IsZero() {
-		return sle.NewIssuedAmountFromValue(0, -100, "", "")
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
 	}
 
 	assetBalanceIOU := toIOUForCalc(assetBalance)
@@ -825,7 +825,7 @@ func lpTokensOut(assetBalance, amountIn, lptBalance tx.Amount, tfee uint16, fixA
 	rMinusC, _ := r.Sub(c)
 	onePlusC := addToOne(c)
 	frac := numberDiv(rMinusC, onePlusC)
-	return multiplyWithRounding(lptBalanceIOU, frac, sle.RoundDownward)
+	return multiplyWithRounding(lptBalanceIOU, frac, state.RoundDownward)
 }
 
 // ammAssetIn calculates the asset amount needed for a specified LP token output (Equation 4).
@@ -839,7 +839,7 @@ func lpTokensOut(assetBalance, amountIn, lptBalance tx.Amount, tfee uint16, fixA
 //	else:           frac = solveQuadraticEq(a,b,c); multiply(asset1Balance, frac, upward)
 func ammAssetIn(assetBalance, lptBalance, lpTokensOutAmt tx.Amount, tfee uint16, fixAMMv1_3 bool) tx.Amount {
 	if lptBalance.IsZero() {
-		return sle.NewIssuedAmountFromValue(0, -100, "", "")
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
 	}
 
 	assetBalanceIOU := toIOUForCalc(assetBalance)
@@ -881,7 +881,7 @@ func ammAssetIn(assetBalance, lptBalance, lpTokensOutAmt tx.Amount, tfee uint16,
 
 	// maximize deposit
 	frac := solveQuadraticEq(qa, qb, qc)
-	return mulRoundForAsset(assetBalanceIOU, frac, sle.RoundUpward, assetBalance)
+	return mulRoundForAsset(assetBalanceIOU, frac, state.RoundUpward, assetBalance)
 }
 
 // ammAssetOut calculates the asset amount received for burning LP tokens (Equation 8).
@@ -893,7 +893,7 @@ func ammAssetIn(assetBalance, lptBalance, lpTokensOutAmt tx.Amount, tfee uint16,
 //	else:           frac = (t1*t1 - t1*(2-f)) / (t1*f - 1); multiply(assetBalance, frac, downward)
 func ammAssetOut(assetBalance, lptBalance, lpTokensIn tx.Amount, tfee uint16, fixAMMv1_3 bool) tx.Amount {
 	if lptBalance.IsZero() {
-		return sle.NewIssuedAmountFromValue(0, -100, "", "")
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
 	}
 
 	assetBalanceIOU := toIOUForCalc(assetBalance)
@@ -927,7 +927,7 @@ func ammAssetOut(assetBalance, lptBalance, lpTokensIn tx.Amount, tfee uint16, fi
 
 	// minimize withdraw
 	frac := numberDiv(numerator, denominator)
-	return mulRoundForAsset(assetBalanceIOU, frac, sle.RoundDownward, assetBalance)
+	return mulRoundForAsset(assetBalanceIOU, frac, state.RoundDownward, assetBalance)
 }
 
 // AMMAssetOutExported is the exported wrapper for ammAssetOut, used by tests.
@@ -946,7 +946,7 @@ func AMMAssetOutExported(assetBalance, lptBalance, lpTokens tx.Amount, tfee uint
 //	else:           frac = (c - root2(c*c - 4*fr)) / 2; multiply(lptAMMBalance, frac, upward)
 func calcLPTokensIn(assetBalance, amountOut, lptBalance tx.Amount, tfee uint16, fixAMMv1_3 bool) tx.Amount {
 	if assetBalance.IsZero() || lptBalance.IsZero() {
-		return sle.NewIssuedAmountFromValue(0, -100, "", "")
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
 	}
 
 	assetBalanceIOU := toIOUForCalc(assetBalance)
@@ -981,7 +981,7 @@ func calcLPTokensIn(assetBalance, amountOut, lptBalance tx.Amount, tfee uint16, 
 	}
 
 	// maximize tokens in
-	return multiplyWithRounding(lptBalanceIOU, halfResult, sle.RoundUpward)
+	return multiplyWithRounding(lptBalanceIOU, halfResult, state.RoundUpward)
 }
 
 // proportionalAmount calculates balance * (numerator / denominator) using Amount arithmetic.
@@ -1010,7 +1010,7 @@ func toIOUForCalc(amt tx.Amount) tx.Amount {
 	// Convert XRP drops to IOU representation
 	drops := amt.Drops()
 	if drops == 0 {
-		return sle.NewIssuedAmountFromValue(0, -100, "", "")
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
 	}
 	// Normalize mantissa to [10^15, 10^16) range
 	mantissa := drops
@@ -1023,7 +1023,7 @@ func toIOUForCalc(amt tx.Amount) tx.Amount {
 		mantissa *= 10
 		exp--
 	}
-	return sle.NewIssuedAmountFromValue(mantissa, exp, "", "")
+	return state.NewIssuedAmountFromValue(mantissa, exp, "", "")
 }
 
 // ToIOUForCalcExported is an exported wrapper around toIOUForCalc for test use.
@@ -1095,7 +1095,7 @@ func iouToDropsRounded(amt tx.Amount) int64 {
 	}
 
 	// Apply rounding using accumulated guard info
-	mode := sle.GetNumberRound()
+	mode := state.GetNumberRound()
 	mantissa = applyGuardRound(mantissa, guardDigit, hasRemainder, neg, mode)
 
 	if neg {
@@ -1134,7 +1134,7 @@ func isLessOrEqual(a, b tx.Amount) bool {
 
 // amountFromXRPDrops creates an XRP Amount from drops (for balance tracking).
 func amountFromXRPDrops(drops uint64) tx.Amount {
-	return sle.NewXRPAmountFromInt(int64(drops))
+	return state.NewXRPAmountFromInt(int64(drops))
 }
 
 // serializeAmount serializes a tx.Amount to binary.
@@ -1159,24 +1159,24 @@ func serializeAmount(amt tx.Amount) []byte {
 // Returns the Amount and bytes consumed.
 func deserializeAmount(data []byte) (tx.Amount, int) {
 	if len(data) < 1 {
-		return sle.NewXRPAmountFromInt(0), 0
+		return state.NewXRPAmountFromInt(0), 0
 	}
 	amtType := data[0]
 	if amtType == 0 {
 		// XRP
 		if len(data) < 9 {
-			return sle.NewXRPAmountFromInt(0), 0
+			return state.NewXRPAmountFromInt(0), 0
 		}
 		drops := int64(binary.BigEndian.Uint64(data[1:9]))
-		return sle.NewXRPAmountFromInt(drops), 9
+		return state.NewXRPAmountFromInt(drops), 9
 	}
 	// IOU
 	if len(data) < 13 {
-		return sle.NewIssuedAmountFromValue(0, -100, "", ""), 0
+		return state.NewIssuedAmountFromValue(0, -100, "", ""), 0
 	}
 	mantissa := int64(binary.BigEndian.Uint64(data[1:9]))
 	exponent := int(binary.BigEndian.Uint32(data[9:13])) - 128 // reverse offset
-	return sle.NewIssuedAmountFromValue(mantissa, exponent, "", ""), 13
+	return state.NewIssuedAmountFromValue(mantissa, exponent, "", ""), 13
 }
 
 // serializeIssue serializes an Issue (currency + issuer) to binary.
@@ -1184,7 +1184,7 @@ func deserializeAmount(data []byte) (tx.Amount, int) {
 func serializeIssue(asset tx.Asset) []byte {
 	buf := make([]byte, 40)
 	// Currency (20 bytes)
-	currency := sle.GetCurrencyBytes(asset.Currency)
+	currency := state.GetCurrencyBytes(asset.Currency)
 	copy(buf[0:20], currency[:])
 	// Issuer (20 bytes)
 	issuer := getIssuerBytes(asset.Issuer)
@@ -1201,14 +1201,14 @@ func deserializeIssue(data []byte) (tx.Asset, int) {
 	// Currency (20 bytes)
 	var currencyBytes [20]byte
 	copy(currencyBytes[:], data[0:20])
-	currency := sle.GetCurrencyString(currencyBytes)
+	currency := state.GetCurrencyString(currencyBytes)
 
 	// Issuer (20 bytes)
 	var issuerBytes [20]byte
 	copy(issuerBytes[:], data[20:40])
 	issuer := ""
 	if issuerBytes != [20]byte{} {
-		issuer, _ = sle.EncodeAccountID(issuerBytes)
+		issuer, _ = state.EncodeAccountID(issuerBytes)
 	}
 
 	return tx.Asset{Currency: currency, Issuer: issuer}, 40
@@ -1428,7 +1428,7 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 		return nil
 	}
 
-	issuerID, err := sle.DecodeAccountID(asset.Issuer)
+	issuerID, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {
 		return err
 	}
@@ -1450,7 +1450,7 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 			return err
 		}
 
-		rs, err := sle.ParseRippleState(data)
+		rs, err := state.ParseRippleState(data)
 		if err != nil {
 			return err
 		}
@@ -1480,7 +1480,7 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 		}
 
 		// Update balance preserving currency/issuer
-		rs.Balance = sle.NewIssuedAmountFromValue(
+		rs.Balance = state.NewIssuedAmountFromValue(
 			newBalance.Mantissa(),
 			newBalance.Exponent(),
 			rs.Balance.Currency,
@@ -1488,10 +1488,10 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 		)
 
 		// Ensure lsfAMMNode flag is set (for AMM-owned trustlines)
-		rs.Flags |= sle.LsfAMMNode
+		rs.Flags |= state.LsfAMMNode
 
 		// Serialize and update
-		rsBytes, err := sle.SerializeRippleState(rs)
+		rsBytes, err := state.SerializeRippleState(rs)
 		if err != nil {
 			return err
 		}
@@ -1513,8 +1513,8 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 		highAccountID = ammAccountID
 	}
 
-	lowAccountStr, _ := sle.EncodeAccountID(lowAccountID)
-	highAccountStr, _ := sle.EncodeAccountID(highAccountID)
+	lowAccountStr, _ := state.EncodeAccountID(lowAccountID)
+	highAccountStr, _ := state.EncodeAccountID(highAccountID)
 
 	// Create the RippleState entry
 	// For AMM trustlines:
@@ -1525,30 +1525,30 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 	var balance tx.Amount
 	if ammIsLow {
 		// AMM is low - positive balance
-		balance = sle.NewIssuedAmountFromValue(
+		balance = state.NewIssuedAmountFromValue(
 			amount.Mantissa(),
 			amount.Exponent(),
 			asset.Currency,
-			sle.AccountOneAddress,
+			state.AccountOneAddress,
 		)
 	} else {
 		// AMM is high - negative balance
 		negated := amount.Negate()
-		balance = sle.NewIssuedAmountFromValue(
+		balance = state.NewIssuedAmountFromValue(
 			negated.Mantissa(),
 			negated.Exponent(),
 			asset.Currency,
-			sle.AccountOneAddress,
+			state.AccountOneAddress,
 		)
 	}
 
 	// Create RippleState
 	// Reference: rippled trustCreate - limits are set based on who set the limit
 	// For AMM trustlines, the limits are 0 on both sides (AMM doesn't set limits)
-	rs := &sle.RippleState{
+	rs := &state.RippleState{
 		Balance:  balance,
-		LowLimit: sle.NewIssuedAmountFromValue(0, -100, asset.Currency, lowAccountStr),
-		HighLimit: sle.NewIssuedAmountFromValue(0, -100, asset.Currency, highAccountStr),
+		LowLimit: state.NewIssuedAmountFromValue(0, -100, asset.Currency, lowAccountStr),
+		HighLimit: state.NewIssuedAmountFromValue(0, -100, asset.Currency, highAccountStr),
 		Flags:    0,
 		LowNode:  0,
 		HighNode: 0,
@@ -1558,18 +1558,18 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 	// Reference: rippled trustCreate line 1409
 	// For AMM, the AMM account should have reserve set
 	if ammIsLow {
-		rs.Flags |= sle.LsfLowReserve
+		rs.Flags |= state.LsfLowReserve
 	} else {
-		rs.Flags |= sle.LsfHighReserve
+		rs.Flags |= state.LsfHighReserve
 	}
 
 	// Set lsfAMMNode flag - this identifies it as an AMM-owned trustline
 	// Reference: rippled AMMCreate.cpp line 297-306
-	rs.Flags |= sle.LsfAMMNode
+	rs.Flags |= state.LsfAMMNode
 
 	// Insert into low account's owner directory
 	lowDirKey := keylet.OwnerDir(lowAccountID)
-	lowDirResult, err := sle.DirInsert(view, lowDirKey, trustLineKey.Key, func(dir *sle.DirectoryNode) {
+	lowDirResult, err := state.DirInsert(view, lowDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = lowAccountID
 	})
 	if err != nil {
@@ -1578,7 +1578,7 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 
 	// Insert into high account's owner directory
 	highDirKey := keylet.OwnerDir(highAccountID)
-	highDirResult, err := sle.DirInsert(view, highDirKey, trustLineKey.Key, func(dir *sle.DirectoryNode) {
+	highDirResult, err := state.DirInsert(view, highDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = highAccountID
 	})
 	if err != nil {
@@ -1590,7 +1590,7 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 	rs.HighNode = highDirResult.Page
 
 	// Serialize and insert the trustline
-	rsBytes, err := sle.SerializeRippleState(rs)
+	rsBytes, err := state.SerializeRippleState(rs)
 	if err != nil {
 		return err
 	}
@@ -1621,7 +1621,7 @@ func updateTrustlineBalanceInView(accountID [20]byte, issuerID [20]byte, currenc
 	}
 
 	// Parse trust line
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	if err != nil {
 		return err
 	}
@@ -1648,7 +1648,7 @@ func updateTrustlineBalanceInView(accountID [20]byte, issuerID [20]byte, currenc
 	}
 
 	// Update the balance - preserve currency and issuer from original
-	rs.Balance = sle.NewIssuedAmountFromValue(
+	rs.Balance = state.NewIssuedAmountFromValue(
 		newBalance.Mantissa(),
 		newBalance.Exponent(),
 		rs.Balance.Currency,
@@ -1656,7 +1656,7 @@ func updateTrustlineBalanceInView(accountID [20]byte, issuerID [20]byte, currenc
 	)
 
 	// Serialize and write back
-	serialized, err := sle.SerializeRippleState(rs)
+	serialized, err := state.SerializeRippleState(rs)
 	if err != nil {
 		return err
 	}
@@ -1669,7 +1669,7 @@ func updateTrustlineBalanceInView(accountID [20]byte, issuerID [20]byte, currenc
 // Reference: rippled View.cpp trustCreate
 func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amount, view tx.LedgerView) error {
 	// LP token issuer is the AMM account
-	ammAccountID, err := sle.DecodeAccountID(lptAsset.Issuer)
+	ammAccountID, err := state.DecodeAccountID(lptAsset.Issuer)
 	if err != nil {
 		return err
 	}
@@ -1690,7 +1690,7 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 			return err
 		}
 
-		rs, err := sle.ParseRippleState(data)
+		rs, err := state.ParseRippleState(data)
 		if err != nil {
 			return err
 		}
@@ -1717,7 +1717,7 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 		}
 
 		// Update balance preserving currency/issuer
-		rs.Balance = sle.NewIssuedAmountFromValue(
+		rs.Balance = state.NewIssuedAmountFromValue(
 			newBalance.Mantissa(),
 			newBalance.Exponent(),
 			rs.Balance.Currency,
@@ -1725,7 +1725,7 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 		)
 
 		// Serialize and update
-		rsBytes, err := sle.SerializeRippleState(rs)
+		rsBytes, err := state.SerializeRippleState(rs)
 		if err != nil {
 			return err
 		}
@@ -1746,36 +1746,36 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 		highAccountID = accountID
 	}
 
-	lowAccountStr, _ := sle.EncodeAccountID(lowAccountID)
-	highAccountStr, _ := sle.EncodeAccountID(highAccountID)
+	lowAccountStr, _ := state.EncodeAccountID(lowAccountID)
+	highAccountStr, _ := state.EncodeAccountID(highAccountID)
 
 	// Create balance - holder receives LP tokens
 	var balance tx.Amount
 	if holderIsLow {
 		// Holder is low - positive balance
-		balance = sle.NewIssuedAmountFromValue(
+		balance = state.NewIssuedAmountFromValue(
 			amount.Mantissa(),
 			amount.Exponent(),
 			lptAsset.Currency,
-			sle.AccountOneAddress,
+			state.AccountOneAddress,
 		)
 	} else {
 		// Holder is high - negative balance
 		negated := amount.Negate()
-		balance = sle.NewIssuedAmountFromValue(
+		balance = state.NewIssuedAmountFromValue(
 			negated.Mantissa(),
 			negated.Exponent(),
 			lptAsset.Currency,
-			sle.AccountOneAddress,
+			state.AccountOneAddress,
 		)
 	}
 
 	// Create RippleState
 	// For LP token trustlines, the holder side gets reserve, AMM side doesn't
-	rs := &sle.RippleState{
+	rs := &state.RippleState{
 		Balance:   balance,
-		LowLimit:  sle.NewIssuedAmountFromValue(0, -100, lptAsset.Currency, lowAccountStr),
-		HighLimit: sle.NewIssuedAmountFromValue(0, -100, lptAsset.Currency, highAccountStr),
+		LowLimit:  state.NewIssuedAmountFromValue(0, -100, lptAsset.Currency, lowAccountStr),
+		HighLimit: state.NewIssuedAmountFromValue(0, -100, lptAsset.Currency, highAccountStr),
 		Flags:     0,
 		LowNode:   0,
 		HighNode:  0,
@@ -1783,14 +1783,14 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 
 	// Set reserve flag for the LP token holder (not the AMM)
 	if holderIsLow {
-		rs.Flags |= sle.LsfLowReserve
+		rs.Flags |= state.LsfLowReserve
 	} else {
-		rs.Flags |= sle.LsfHighReserve
+		rs.Flags |= state.LsfHighReserve
 	}
 
 	// Insert into low account's owner directory
 	lowDirKey := keylet.OwnerDir(lowAccountID)
-	lowDirResult, err := sle.DirInsert(view, lowDirKey, trustLineKey.Key, func(dir *sle.DirectoryNode) {
+	lowDirResult, err := state.DirInsert(view, lowDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = lowAccountID
 	})
 	if err != nil {
@@ -1799,7 +1799,7 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 
 	// Insert into high account's owner directory
 	highDirKey := keylet.OwnerDir(highAccountID)
-	highDirResult, err := sle.DirInsert(view, highDirKey, trustLineKey.Key, func(dir *sle.DirectoryNode) {
+	highDirResult, err := state.DirInsert(view, highDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = highAccountID
 	})
 	if err != nil {
@@ -1811,7 +1811,7 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 	rs.HighNode = highDirResult.Page
 
 	// Serialize and insert
-	rsBytes, err := sle.SerializeRippleState(rs)
+	rsBytes, err := state.SerializeRippleState(rs)
 	if err != nil {
 		return err
 	}
@@ -1864,36 +1864,36 @@ func ammAccountHolds(view tx.LedgerView, ammAccountID [20]byte, asset tx.Asset) 
 		accountKey := keylet.Account(ammAccountID)
 		data, err := view.Read(accountKey)
 		if err != nil || data == nil {
-			return sle.NewXRPAmountFromInt(0)
+			return state.NewXRPAmountFromInt(0)
 		}
-		account, err := sle.ParseAccountRoot(data)
+		account, err := state.ParseAccountRoot(data)
 		if err != nil {
-			return sle.NewXRPAmountFromInt(0)
+			return state.NewXRPAmountFromInt(0)
 		}
-		return sle.NewXRPAmountFromInt(int64(account.Balance))
+		return state.NewXRPAmountFromInt(int64(account.Balance))
 	}
 
 	// IOU: read from trustline
-	issuerID, err := sle.DecodeAccountID(asset.Issuer)
+	issuerID, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {
-		return sle.NewIssuedAmountFromValue(0, -100, asset.Currency, asset.Issuer)
+		return state.NewIssuedAmountFromValue(0, -100, asset.Currency, asset.Issuer)
 	}
 
 	trustLineKey := keylet.Line(ammAccountID, issuerID, asset.Currency)
 	data, err := view.Read(trustLineKey)
 	if err != nil || data == nil {
-		return sle.NewIssuedAmountFromValue(0, -100, asset.Currency, asset.Issuer)
+		return state.NewIssuedAmountFromValue(0, -100, asset.Currency, asset.Issuer)
 	}
 
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	if err != nil {
-		return sle.NewIssuedAmountFromValue(0, -100, asset.Currency, asset.Issuer)
+		return state.NewIssuedAmountFromValue(0, -100, asset.Currency, asset.Issuer)
 	}
 
 	// Determine balance based on canonical ordering
 	// Balance is stored from low account's perspective (positive = low owes high)
 	// For AMM: if AMM is low, positive balance means AMM holds tokens
-	ammIsLow := sle.CompareAccountIDsForLine(ammAccountID, issuerID) < 0
+	ammIsLow := state.CompareAccountIDsForLine(ammAccountID, issuerID) < 0
 	balance := rs.Balance
 	if !ammIsLow {
 		balance = balance.Negate()
@@ -1901,10 +1901,10 @@ func ammAccountHolds(view tx.LedgerView, ammAccountID [20]byte, asset tx.Asset) 
 
 	// Return absolute balance with proper currency/issuer
 	if balance.Signum() <= 0 {
-		return sle.NewIssuedAmountFromValue(0, -100, asset.Currency, asset.Issuer)
+		return state.NewIssuedAmountFromValue(0, -100, asset.Currency, asset.Issuer)
 	}
 
-	return sle.NewIssuedAmountFromValue(balance.Mantissa(), balance.Exponent(), asset.Currency, asset.Issuer)
+	return state.NewIssuedAmountFromValue(balance.Mantissa(), balance.Exponent(), asset.Currency, asset.Issuer)
 }
 
 // ammPoolHolds returns the balances of both assets in the AMM pool.
@@ -1962,33 +1962,33 @@ func ammLPHolds(view tx.LedgerView, amm *AMMData, lpAccountID [20]byte) tx.Amoun
 	data, err := view.Read(trustLineKey)
 	if err != nil || data == nil {
 		// No trustline = no LP tokens held
-		ammAccountAddr, _ := sle.EncodeAccountID(ammAccountID)
-		return sle.NewIssuedAmountFromValue(0, -100, lptCurrency, ammAccountAddr)
+		ammAccountAddr, _ := state.EncodeAccountID(ammAccountID)
+		return state.NewIssuedAmountFromValue(0, -100, lptCurrency, ammAccountAddr)
 	}
 
 	// Parse the trustline
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	if err != nil {
-		ammAccountAddr, _ := sle.EncodeAccountID(ammAccountID)
-		return sle.NewIssuedAmountFromValue(0, -100, lptCurrency, ammAccountAddr)
+		ammAccountAddr, _ := state.EncodeAccountID(ammAccountID)
+		return state.NewIssuedAmountFromValue(0, -100, lptCurrency, ammAccountAddr)
 	}
 
 	// Determine balance based on canonical ordering
 	// Balance is stored from low account's perspective (positive = low owes high)
 	// For LP tokens: if LP is low, positive balance means LP holds tokens
-	lpIsLow := sle.CompareAccountIDsForLine(lpAccountID, ammAccountID) < 0
+	lpIsLow := state.CompareAccountIDsForLine(lpAccountID, ammAccountID) < 0
 	balance := rs.Balance
 	if !lpIsLow {
 		balance = balance.Negate()
 	}
 
 	// Return balance with proper issuer (AMM account)
-	ammAccountAddr, _ := sle.EncodeAccountID(ammAccountID)
+	ammAccountAddr, _ := state.EncodeAccountID(ammAccountID)
 	if balance.Signum() <= 0 {
-		return sle.NewIssuedAmountFromValue(0, -100, lptCurrency, ammAccountAddr)
+		return state.NewIssuedAmountFromValue(0, -100, lptCurrency, ammAccountAddr)
 	}
 
-	return sle.NewIssuedAmountFromValue(balance.Mantissa(), balance.Exponent(), lptCurrency, ammAccountAddr)
+	return state.NewIssuedAmountFromValue(balance.Mantissa(), balance.Exponent(), lptCurrency, ammAccountAddr)
 }
 
 // isOnlyLiquidityProvider checks if the given account is the sole LP in the AMM.
@@ -2000,7 +2000,7 @@ func isOnlyLiquidityProvider(lpTokens tx.Amount, lptBalance tx.Amount) bool {
 	totalIOU := toIOUForCalc(lptBalance)
 	// If LP holds all tokens, they are the only provider.
 	// Use withinRelativeDistance to handle rounding differences.
-	tolerance := sle.NewIssuedAmountFromValue(1, -3, "", "") // 0.001
+	tolerance := state.NewIssuedAmountFromValue(1, -3, "", "") // 0.001
 	return withinRelativeDistance(lpIOU, totalIOU, tolerance)
 }
 
@@ -2035,7 +2035,7 @@ func withinRelativeDistance(calc, req, dist tx.Amount) bool {
 func verifyAndAdjustLPTokenBalance(lpTokens tx.Amount, amm *AMMData) tx.Result {
 	if isOnlyLiquidityProvider(lpTokens, amm.LPTokenBalance) {
 		// Number{1, -3} = 0.001 tolerance
-		tolerance := sle.NewIssuedAmountFromValue(1, -3, "", "")
+		tolerance := state.NewIssuedAmountFromValue(1, -3, "", "")
 		if withinRelativeDistance(lpTokens, amm.LPTokenBalance, tolerance) {
 			amm.LPTokenBalance = lpTokens
 		} else {

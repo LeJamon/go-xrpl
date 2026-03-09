@@ -5,7 +5,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 
 	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -113,7 +113,7 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	var feeSettings *sle.FeeSettings
+	var feeSettings *state.FeeSettings
 
 	if exists {
 		// Read existing FeeSettings
@@ -122,13 +122,13 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TefINTERNAL
 		}
 
-		feeSettings, err = sle.ParseFeeSettings(data)
+		feeSettings, err = state.ParseFeeSettings(data)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
 	} else {
 		// Create new FeeSettings
-		feeSettings = &sle.FeeSettings{}
+		feeSettings = &state.FeeSettings{}
 	}
 
 	// Check if XRPFees amendment is enabled
@@ -182,7 +182,7 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Serialize the updated FeeSettings
-	data, err := sle.SerializeFeeSettings(feeSettings)
+	data, err := state.SerializeFeeSettings(feeSettings)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

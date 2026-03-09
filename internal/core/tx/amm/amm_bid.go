@@ -6,7 +6,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -189,7 +189,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Minimum slot price = lptAMMBalance * tradingFee / 25
 	// minSlotPrice = lptAMMBalance * tradingFee / auctionSlotMinFeeFraction
-	minSlotPriceFrac := numberDiv(tradingFee, sle.NewIssuedAmountFromValue(int64(auctionSlotMinFeeFraction)*1e15, -15, "", ""))
+	minSlotPriceFrac := numberDiv(tradingFee, state.NewIssuedAmountFromValue(int64(auctionSlotMinFeeFraction)*1e15, -15, "", ""))
 	minSlotPrice := lptAMMBalance.Mul(minSlotPriceFrac, false)
 
 	// Calculate discounted fee
@@ -243,12 +243,12 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Slot is owned - calculate price based on time interval
 		// fractionUsed = (timeSlot + 1) / auctionSlotTimeIntervals
 		slotNum := *timeSlot + 1
-		fractionUsed := numberDiv(sle.NewIssuedAmountFromValue(int64(slotNum)*1e15, -15, "", ""),
-			sle.NewIssuedAmountFromValue(int64(auctionSlotTimeIntervals)*1e15, -15, "", ""))
+		fractionUsed := numberDiv(state.NewIssuedAmountFromValue(int64(slotNum)*1e15, -15, "", ""),
+			state.NewIssuedAmountFromValue(int64(auctionSlotTimeIntervals)*1e15, -15, "", ""))
 		fractionRemaining, _ = oneAmount().Sub(fractionUsed)
 
 		// price1p05 = pricePurchased * 1.05
-		multiplier := sle.NewIssuedAmountFromValue(105*1e13, -15, "", "") // 1.05
+		multiplier := state.NewIssuedAmountFromValue(105*1e13, -15, "", "") // 1.05
 		price1p05 := pricePurchased.Mul(multiplier, false)
 
 		if *timeSlot == 0 {
@@ -312,7 +312,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Transfer refund from bidder to previous owner via LP token trust lines.
 		// Reference: rippled AMMBid.cpp:355-360 — accountSend(account_, previousOwner, refund)
 		if !refund.IsZero() {
-			refundWithIssue := sle.NewIssuedAmountFromValue(
+			refundWithIssue := state.NewIssuedAmountFromValue(
 				refund.Mantissa(), refund.Exponent(), lptCurrency, ammAccountAddr)
 			if r := transferLPTokens(ctx.View, accountID, amm.AuctionSlot.Account, amm.Account, refundWithIssue); r != tx.TesSUCCESS {
 				return r
@@ -326,7 +326,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 	if !burn.IsZero() {
-		burnWithIssue := sle.NewIssuedAmountFromValue(
+		burnWithIssue := state.NewIssuedAmountFromValue(
 			burn.Mantissa(), burn.Exponent(), lptCurrency, ammAccountAddr)
 		if r := redeemLPTokens(ctx.View, accountID, amm.Account, burnWithIssue); r != tx.TesSUCCESS {
 			return r
@@ -344,7 +344,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 	if a.AuthAccounts != nil {
 		amm.AuctionSlot.AuthAccounts = make([][20]byte, 0, len(a.AuthAccounts))
 		for _, authAccountEntry := range a.AuthAccounts {
-			authAccountID, err := sle.DecodeAccountID(authAccountEntry.AuthAccount.Account)
+			authAccountID, err := state.DecodeAccountID(authAccountEntry.AuthAccount.Account)
 			if err == nil {
 				amm.AuctionSlot.AuthAccounts = append(amm.AuctionSlot.AuthAccounts, authAccountID)
 			}
@@ -400,7 +400,7 @@ func adjustLPTrustLine(view tx.LedgerView, accountID, ammAccountID [20]byte, amo
 		return tx.TecINTERNAL
 	}
 
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -430,12 +430,12 @@ func adjustLPTrustLine(view tx.LedgerView, accountID, ammAccountID [20]byte, amo
 		}
 	}
 
-	rs.Balance = sle.NewIssuedAmountFromValue(
+	rs.Balance = state.NewIssuedAmountFromValue(
 		newBalance.Mantissa(), newBalance.Exponent(),
 		rs.Balance.Currency, rs.Balance.Issuer,
 	)
 
-	rsBytes, err := sle.SerializeRippleState(rs)
+	rsBytes, err := state.SerializeRippleState(rs)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

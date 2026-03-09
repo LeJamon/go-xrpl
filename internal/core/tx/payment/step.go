@@ -5,7 +5,7 @@ import (
 	"math"
 	"math/big"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
 )
@@ -223,12 +223,12 @@ func QualityFromAmounts(in, out EitherAmount) Quality {
 	// to [10^15, 10^16) mantissa range before performing the division.
 	var inAmt, outAmt tx.Amount
 	if in.IsNative {
-		inAmt = sle.NewIssuedAmountFromValue(in.XRP, 0, "", "")
+		inAmt = state.NewIssuedAmountFromValue(in.XRP, 0, "", "")
 	} else {
 		inAmt = in.IOU
 	}
 	if out.IsNative {
-		outAmt = sle.NewIssuedAmountFromValue(out.XRP, 0, "", "")
+		outAmt = state.NewIssuedAmountFromValue(out.XRP, 0, "", "")
 	} else {
 		outAmt = out.IOU
 	}
@@ -326,8 +326,8 @@ func RelativeDistance(q1, q2 Quality) float64 {
 // a Quality from STAmount(noIssue(), mantissa, exponent) / STAmount(noIssue(), 1).
 // Reference: rippled TheoreticalQuality_test.cpp lines 501-509
 func QualityFromMantissaExp(mantissa uint64, exponent int) Quality {
-	one := NewIOUEitherAmount(sle.NewIssuedAmountFromValue(1, 0, "", ""))
-	v := NewIOUEitherAmount(sle.NewIssuedAmountFromValue(int64(mantissa), exponent, "", ""))
+	one := NewIOUEitherAmount(state.NewIssuedAmountFromValue(1, 0, "", ""))
+	v := NewIOUEitherAmount(state.NewIssuedAmountFromValue(int64(mantissa), exponent, "", ""))
 	return QualityFromAmounts(v, one)
 }
 
@@ -387,7 +387,7 @@ func (q Quality) CeilOut(amtIn, amtOut EitherAmount, limit EitherAmount) (Either
 
 	var limitAmt tx.Amount
 	if limit.IsNative {
-		limitAmt = sle.NewIssuedAmountFromValue(limit.XRP, 0, "", "")
+		limitAmt = state.NewIssuedAmountFromValue(limit.XRP, 0, "", "")
 	} else {
 		limitAmt = limit.IOU
 	}
@@ -408,10 +408,10 @@ func (q Quality) CeilOut(amtIn, amtOut EitherAmount, limit EitherAmount) (Either
 		// The non-native MulRound path applies IOU canonicalization first, which
 		// uses different rounding than the native path and causes off-by-one errors.
 		// Reference: rippled STAmount.cpp mulRoundImpl + canonicalizeRound(native=true)
-		resultInEither = NewXRPEitherAmount(sle.MulRoundNative(limitAmt, qRate, true))
+		resultInEither = NewXRPEitherAmount(state.MulRoundNative(limitAmt, qRate, true))
 	} else {
 		// Non-strict: mulRound with roundUp=true (always)
-		resultIn := sle.MulRound(limitAmt, qRate, inCurrency, inIssuer, true)
+		resultIn := state.MulRound(limitAmt, qRate, inCurrency, inIssuer, true)
 		resultInEither = NewIOUEitherAmount(tx.NewIssuedAmount(
 			resultIn.Mantissa(), resultIn.Exponent(), inCurrency, inIssuer))
 	}
@@ -438,7 +438,7 @@ func (q Quality) CeilOutStrict(amtIn, amtOut EitherAmount, limit EitherAmount, r
 
 	var limitAmt tx.Amount
 	if limit.IsNative {
-		limitAmt = sle.NewIssuedAmountFromValue(limit.XRP, 0, "", "")
+		limitAmt = state.NewIssuedAmountFromValue(limit.XRP, 0, "", "")
 	} else {
 		limitAmt = limit.IOU
 	}
@@ -452,7 +452,7 @@ func (q Quality) CeilOutStrict(amtIn, amtOut EitherAmount, limit EitherAmount, r
 		inIssuer = amtIn.IOU.Issuer
 	}
 
-	resultIn := sle.MulRoundStrict(limitAmt, qRate, inCurrency, inIssuer, roundUp)
+	resultIn := state.MulRoundStrict(limitAmt, qRate, inCurrency, inIssuer, roundUp)
 
 
 	var resultInEither EitherAmount
@@ -496,7 +496,7 @@ func (q Quality) CeilIn(amtIn, amtOut EitherAmount, limit EitherAmount) (EitherA
 
 	var limitAmt tx.Amount
 	if limit.IsNative {
-		limitAmt = sle.NewIssuedAmountFromValue(limit.XRP, 0, "", "")
+		limitAmt = state.NewIssuedAmountFromValue(limit.XRP, 0, "", "")
 	} else {
 		limitAmt = limit.IOU
 	}
@@ -517,10 +517,10 @@ func (q Quality) CeilIn(amtIn, amtOut EitherAmount, limit EitherAmount) (EitherA
 		// The non-native DivRound path applies IOU canonicalization first, which
 		// uses different rounding than the native path and causes off-by-one errors.
 		// Reference: rippled STAmount.cpp divRoundImpl + canonicalizeRound(native=true)
-		resultOutEither = NewXRPEitherAmount(sle.DivRoundNative(limitAmt, qRate, true))
+		resultOutEither = NewXRPEitherAmount(state.DivRoundNative(limitAmt, qRate, true))
 	} else {
 		// Non-strict: divRound with roundUp=true (matching rippled's ceil_in which uses divRound)
-		resultOut := sle.DivRound(limitAmt, qRate, outCurrency, outIssuer, true)
+		resultOut := state.DivRound(limitAmt, qRate, outCurrency, outIssuer, true)
 		resultOutEither = NewIOUEitherAmount(tx.NewIssuedAmount(
 			resultOut.Mantissa(), resultOut.Exponent(), outCurrency, outIssuer))
 	}
@@ -546,7 +546,7 @@ func (q Quality) CeilInStrict(amtIn, amtOut EitherAmount, limit EitherAmount, ro
 
 	var limitAmt tx.Amount
 	if limit.IsNative {
-		limitAmt = sle.NewIssuedAmountFromValue(limit.XRP, 0, "", "")
+		limitAmt = state.NewIssuedAmountFromValue(limit.XRP, 0, "", "")
 	} else {
 		limitAmt = limit.IOU
 	}
@@ -560,7 +560,7 @@ func (q Quality) CeilInStrict(amtIn, amtOut EitherAmount, limit EitherAmount, ro
 		outIssuer = amtOut.IOU.Issuer
 	}
 
-	resultOut := sle.DivRoundStrict(limitAmt, qRate, outCurrency, outIssuer, roundUp)
+	resultOut := state.DivRoundStrict(limitAmt, qRate, outCurrency, outIssuer, roundUp)
 
 	var resultOutEither EitherAmount
 	if amtOut.IsNative {
@@ -970,7 +970,7 @@ func GetIssue(amt tx.Amount) Issue {
 	}
 
 	var issuerBytes [20]byte
-	if issuerID, err := sle.DecodeAccountID(amt.Issuer); err == nil {
+	if issuerID, err := state.DecodeAccountID(amt.Issuer); err == nil {
 		issuerBytes = issuerID
 	}
 

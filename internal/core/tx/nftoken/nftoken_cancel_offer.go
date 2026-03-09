@@ -8,7 +8,7 @@ import (
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -102,7 +102,7 @@ func (co *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			continue
 		}
 
-		offer, err := sle.ParseNFTokenOffer(offerData)
+		offer, err := state.ParseNFTokenOffer(offerData)
 		if err != nil {
 			continue
 		}
@@ -128,10 +128,10 @@ func (co *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			ownerKey := keylet.Account(offer.Owner)
 			ownerData, err := ctx.View.Read(ownerKey)
 			if err == nil && ownerData != nil {
-				ownerAccount, err := sle.ParseAccountRoot(ownerData)
+				ownerAccount, err := state.ParseAccountRoot(ownerData)
 				if err == nil && ownerAccount.OwnerCount > 0 {
 					ownerAccount.OwnerCount--
-					ownerUpdated, _ := sle.SerializeAccountRoot(ownerAccount)
+					ownerUpdated, _ := state.SerializeAccountRoot(ownerAccount)
 					if ownerUpdated != nil {
 						ctx.View.Update(ownerKey, ownerUpdated)
 					}

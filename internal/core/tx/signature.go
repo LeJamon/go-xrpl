@@ -9,7 +9,7 @@ import (
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/address-codec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	ed25519algo "github.com/LeJamon/goXRPLd/crypto/algorithms/ed25519"
 	secp256k1algo "github.com/LeJamon/goXRPLd/crypto/algorithms/secp256k1"
 )
@@ -53,14 +53,14 @@ type SignerListLookup interface {
 	// GetSignerList returns the signer list for an account
 	// Returns nil, nil if the account has no signer list
 	// Returns nil, error if there was an error looking up the signer list
-	GetSignerList(account string) (*sle.SignerListInfo, error)
+	GetSignerList(account string) (*state.SignerListInfo, error)
 
 	// GetAccountInfo returns account information needed for signer validation
 	// Returns the account's flags (to check if master key is disabled) and regular key
 	GetAccountInfo(account string) (flags uint32, regularKey string, err error)
 }
 
-// Note: sle.LsfDisableMaster is defined in account_root.go (0x00100000)
+// Note: state.LsfDisableMaster is defined in account_root.go (0x00100000)
 
 // IsMultiSigned returns true if the transaction is multi-signed
 // A transaction is multi-signed if it has a Signers array and an empty SigningPubKey
@@ -147,13 +147,13 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup) error {
 	}
 
 	// Build a map of authorized signers for quick lookup
-	authorizedSigners := make(map[string]sle.AccountSignerEntry)
+	authorizedSigners := make(map[string]state.AccountSignerEntry)
 	for _, entry := range signerList.SignerEntries {
 		authorizedSigners[entry.Account] = entry
 	}
 
 	// Sort the authorized signers by account for the matching algorithm
-	sortedAuthSigners := make([]sle.AccountSignerEntry, len(signerList.SignerEntries))
+	sortedAuthSigners := make([]state.AccountSignerEntry, len(signerList.SignerEntries))
 	copy(sortedAuthSigners, signerList.SignerEntries)
 	sort.Slice(sortedAuthSigners, func(i, j int) bool {
 		return sortedAuthSigners[i].Account < sortedAuthSigners[j].Account
@@ -227,7 +227,7 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup) error {
 			if lookupErr == nil {
 				// Account exists - this is the Master Key case
 				// Check if master key is disabled
-				if flags&sle.LsfDisableMaster != 0 {
+				if flags&state.LsfDisableMaster != 0 {
 					return ErrMasterDisabled
 				}
 			}

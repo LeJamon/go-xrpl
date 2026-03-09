@@ -7,7 +7,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/payment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/metadata"
 	"github.com/LeJamon/goXRPLd/internal/testing/ticket"
@@ -411,7 +411,7 @@ func TestMetadata_TrustLine_FreezeFlags(t *testing.T) {
 	// Verify freeze flag is set in FinalFields.Flags
 	flags := metadata.ToUint32(rsNode.FinalFields["Flags"])
 	// Gateway is the issuer — freeze is on the low or high side depending on sort order
-	isFrozen := (flags&sle.LsfLowFreeze != 0) || (flags&sle.LsfHighFreeze != 0)
+	isFrozen := (flags&state.LsfLowFreeze != 0) || (flags&state.LsfHighFreeze != 0)
 	require.True(t, isFrozen, "Freeze flag should be set in FinalFields.Flags (0x%08x)", flags)
 
 	// PreviousFields should contain Flags (since it changed)
@@ -429,7 +429,7 @@ func TestMetadata_TrustLine_FreezeFlags(t *testing.T) {
 	require.True(t, len(rsNodes) >= 1, "ClearFreeze should modify a RippleState node")
 	rsNode = rsNodes[0]
 	flags = metadata.ToUint32(rsNode.FinalFields["Flags"])
-	isUnfrozen := (flags&sle.LsfLowFreeze == 0) && (flags&sle.LsfHighFreeze == 0)
+	isUnfrozen := (flags&state.LsfLowFreeze == 0) && (flags&state.LsfHighFreeze == 0)
 	require.True(t, isUnfrozen, "Freeze flags should be cleared (0x%08x)", flags)
 }
 

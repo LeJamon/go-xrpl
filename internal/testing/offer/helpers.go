@@ -7,7 +7,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/stretchr/testify/require"
 )
@@ -98,13 +98,13 @@ func OfferInLedger(env *jtx.TestEnv, acc *jtx.Account, offerSeq uint32) bool {
 
 // GetOffer reads and parses a specific offer from the ledger by account and sequence.
 // Returns nil if the offer doesn't exist.
-func GetOffer(env *jtx.TestEnv, acc *jtx.Account, offerSeq uint32) *sle.LedgerOffer {
+func GetOffer(env *jtx.TestEnv, acc *jtx.Account, offerSeq uint32) *state.LedgerOffer {
 	key := keylet.Offer(acc.ID, offerSeq)
 	data, err := env.LedgerEntry(key)
 	if err != nil || len(data) == 0 {
 		return nil
 	}
-	offer, err := sle.ParseLedgerOfferFromBytes(data)
+	offer, err := state.ParseLedgerOfferFromBytes(data)
 	if err != nil {
 		return nil
 	}
@@ -117,13 +117,13 @@ func GetOffer(env *jtx.TestEnv, acc *jtx.Account, offerSeq uint32) *sle.LedgerOf
 func CountOffers(env *jtx.TestEnv, acc *jtx.Account) uint32 {
 	dirKey := keylet.OwnerDir(acc.ID)
 	var count uint32
-	_ = sle.DirForEach(env.Ledger(), dirKey, func(itemKey [32]byte) error {
+	_ = state.DirForEach(env.Ledger(), dirKey, func(itemKey [32]byte) error {
 		entryKey := keylet.Keylet{Key: itemKey}
 		data, readErr := env.LedgerEntry(entryKey)
 		if readErr != nil || len(data) == 0 {
 			return nil
 		}
-		entryType, typeErr := sle.GetLedgerEntryType(data)
+		entryType, typeErr := state.GetLedgerEntryType(data)
 		if typeErr != nil {
 			return nil
 		}
@@ -137,21 +137,21 @@ func CountOffers(env *jtx.TestEnv, acc *jtx.Account) uint32 {
 }
 
 // OffersOnAccount returns all parsed offer entries owned by an account.
-func OffersOnAccount(env *jtx.TestEnv, acc *jtx.Account) []*sle.LedgerOffer {
+func OffersOnAccount(env *jtx.TestEnv, acc *jtx.Account) []*state.LedgerOffer {
 	dirKey := keylet.OwnerDir(acc.ID)
-	var offers []*sle.LedgerOffer
-	_ = sle.DirForEach(env.Ledger(), dirKey, func(itemKey [32]byte) error {
+	var offers []*state.LedgerOffer
+	_ = state.DirForEach(env.Ledger(), dirKey, func(itemKey [32]byte) error {
 		entryKey := keylet.Keylet{Key: itemKey}
 		data, readErr := env.LedgerEntry(entryKey)
 		if readErr != nil || len(data) == 0 {
 			return nil
 		}
-		entryType, typeErr := sle.GetLedgerEntryType(data)
+		entryType, typeErr := state.GetLedgerEntryType(data)
 		if typeErr != nil {
 			return nil
 		}
 		if entryType == 0x006f {
-			offer, parseErr := sle.ParseLedgerOfferFromBytes(data)
+			offer, parseErr := state.ParseLedgerOfferFromBytes(data)
 			if parseErr == nil {
 				offers = append(offers, offer)
 			}
@@ -163,7 +163,7 @@ func OffersOnAccount(env *jtx.TestEnv, acc *jtx.Account) []*sle.LedgerOffer {
 
 // SortedOffersOnAccount returns all offers for an account sorted by sequence number.
 // Equivalent to rippled's sortedOffersOnAccount() in Offer_test.cpp.
-func SortedOffersOnAccount(env *jtx.TestEnv, acc *jtx.Account) []*sle.LedgerOffer {
+func SortedOffersOnAccount(env *jtx.TestEnv, acc *jtx.Account) []*state.LedgerOffer {
 	offers := OffersOnAccount(env, acc)
 	sort.Slice(offers, func(i, j int) bool {
 		return offers[i].Sequence < offers[j].Sequence
@@ -171,8 +171,8 @@ func SortedOffersOnAccount(env *jtx.TestEnv, acc *jtx.Account) []*sle.LedgerOffe
 	return offers
 }
 
-// amountsEqual compares an sle.Amount from a parsed offer against a tx.Amount.
-// Since tx.Amount is an alias for sle.Amount, we can use Compare directly.
+// amountsEqual compares an state.Amount from a parsed offer against a tx.Amount.
+// Since tx.Amount is an alias for state.Amount, we can use Compare directly.
 func amountsEqual(a, b tx.Amount) bool {
 	// First check both are same type (native vs issued)
 	if a.IsNative() != b.IsNative() {

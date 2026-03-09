@@ -6,7 +6,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -572,17 +572,17 @@ func (x *XChainCommit) Apply(ctx *tx.ApplyContext) tx.Result {
 func (x *XChainClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 	if x.Amount.IsNative() {
 		amount := uint64(x.Amount.Drops())
-		destID, err := sle.DecodeAccountID(x.Destination)
+		destID, err := state.DecodeAccountID(x.Destination)
 		if err != nil {
 			return tx.TemINVALID
 		}
 		destKey := keylet.Account(destID)
 		destData, err := ctx.View.Read(destKey)
 		if err == nil {
-			destAccount, err := sle.ParseAccountRoot(destData)
+			destAccount, err := state.ParseAccountRoot(destData)
 			if err == nil {
 				destAccount.Balance += amount
-				destUpdatedData, _ := sle.SerializeAccountRoot(destAccount)
+				destUpdatedData, _ := state.SerializeAccountRoot(destAccount)
 				ctx.View.Update(destKey, destUpdatedData)
 			}
 		}

@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"strings"
 )
 
@@ -44,7 +44,7 @@ func parseDIDEntry(data []byte) (*DIDEntry, error) {
 
 	// Parse Account
 	if account, ok := jsonObj["Account"].(string); ok {
-		accountID, err := sle.DecodeAccountID(account)
+		accountID, err := state.DecodeAccountID(account)
 		if err == nil {
 			did.Account = accountID
 		}
@@ -91,7 +91,7 @@ func serializeDIDEntry(did *DIDEntry) ([]byte, error) {
 	}
 
 	// Add Account
-	accountStr, err := sle.EncodeAccountID(did.Account)
+	accountStr, err := state.EncodeAccountID(did.Account)
 	if err == nil && accountStr != "" {
 		jsonObj["Account"] = accountStr
 	}

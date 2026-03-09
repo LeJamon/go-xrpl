@@ -6,7 +6,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -204,7 +204,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	ammAccount, err := sle.ParseAccountRoot(ammAccountData)
+	ammAccount, err := state.ParseAccountRoot(ammAccountData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -665,7 +665,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 	enabledFixAMMv1_2 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_2)
 
 	if !isXRP1 && !withdrawAmount1.IsZero() {
-		issuerID, err := sle.DecodeAccountID(a.Asset.Issuer)
+		issuerID, err := state.DecodeAccountID(a.Asset.Issuer)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -674,7 +674,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 	if !isXRP2 && !withdrawAmount2.IsZero() {
-		issuerID, err := sle.DecodeAccountID(a.Asset2.Issuer)
+		issuerID, err := state.DecodeAccountID(a.Asset2.Issuer)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -687,8 +687,8 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled AMMWithdraw.cpp — redeemIOU(account_, lpTokensActual, lpTokens.issue())
 	if !lpTokensToRedeem.IsZero() {
 		lptCurrency := GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency)
-		ammAccountAddr, _ := sle.EncodeAccountID(amm.Account)
-		redeemAmt := sle.NewIssuedAmountFromValue(
+		ammAccountAddr, _ := state.EncodeAccountID(amm.Account)
+		redeemAmt := state.NewIssuedAmountFromValue(
 			lpTokensToRedeem.Mantissa(), lpTokensToRedeem.Exponent(), lptCurrency, ammAccountAddr)
 		if r := redeemLPTokens(ctx.View, accountID, amm.Account, redeemAmt); r != tx.TesSUCCESS {
 			return r
@@ -712,7 +712,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	accountKey := keylet.Account(accountID)
-	accountBytes, err := sle.SerializeAccountRoot(ctx.Account)
+	accountBytes, err := state.SerializeAccountRoot(ctx.Account)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -797,11 +797,11 @@ func createWithdrawTrustLine(
 		highAccountID = accountID
 	}
 
-	lowAccountStr, err := sle.EncodeAccountID(lowAccountID)
+	lowAccountStr, err := state.EncodeAccountID(lowAccountID)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	highAccountStr, err := sle.EncodeAccountID(highAccountID)
+	highAccountStr, err := state.EncodeAccountID(highAccountID)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -812,15 +812,15 @@ func createWithdrawTrustLine(
 	// When receiver (account) is HIGH → negative balance
 	var balance tx.Amount
 	if accountIsLow {
-		balance = sle.NewIssuedAmountFromValue(
+		balance = state.NewIssuedAmountFromValue(
 			amount.Mantissa(), amount.Exponent(),
-			asset.Currency, sle.AccountOneAddress,
+			asset.Currency, state.AccountOneAddress,
 		)
 	} else {
 		negated := amount.Negate()
-		balance = sle.NewIssuedAmountFromValue(
+		balance = state.NewIssuedAmountFromValue(
 			negated.Mantissa(), negated.Exponent(),
-			asset.Currency, sle.AccountOneAddress,
+			asset.Currency, state.AccountOneAddress,
 		)
 	}
 
@@ -828,9 +828,9 @@ func createWithdrawTrustLine(
 	// Reference: rippled trustCreate
 	var flags uint32
 	if accountIsLow {
-		flags |= sle.LsfLowReserve
+		flags |= state.LsfLowReserve
 	} else {
-		flags |= sle.LsfHighReserve
+		flags |= state.LsfHighReserve
 	}
 
 	// Set NoRipple based on DefaultRipple for each side
@@ -838,15 +838,15 @@ func createWithdrawTrustLine(
 	if err != nil || acctData == nil {
 		return tx.TefINTERNAL
 	}
-	acct, err := sle.ParseAccountRoot(acctData)
+	acct, err := state.ParseAccountRoot(acctData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	if (acct.Flags & sle.LsfDefaultRipple) == 0 {
+	if (acct.Flags & state.LsfDefaultRipple) == 0 {
 		if accountIsLow {
-			flags |= sle.LsfLowNoRipple
+			flags |= state.LsfLowNoRipple
 		} else {
-			flags |= sle.LsfHighNoRipple
+			flags |= state.LsfHighNoRipple
 		}
 	}
 
@@ -854,19 +854,19 @@ func createWithdrawTrustLine(
 	if err != nil || issuerAcctData == nil {
 		return tx.TefINTERNAL
 	}
-	issuerAcct, err := sle.ParseAccountRoot(issuerAcctData)
+	issuerAcct, err := state.ParseAccountRoot(issuerAcctData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	if (issuerAcct.Flags & sle.LsfDefaultRipple) == 0 {
+	if (issuerAcct.Flags & state.LsfDefaultRipple) == 0 {
 		if !accountIsLow {
-			flags |= sle.LsfLowNoRipple
+			flags |= state.LsfLowNoRipple
 		} else {
-			flags |= sle.LsfHighNoRipple
+			flags |= state.LsfHighNoRipple
 		}
 	}
 
-	rs := &sle.RippleState{
+	rs := &state.RippleState{
 		Balance:   balance,
 		LowLimit:  tx.NewIssuedAmount(0, -100, asset.Currency, lowAccountStr),
 		HighLimit: tx.NewIssuedAmount(0, -100, asset.Currency, highAccountStr),
@@ -875,7 +875,7 @@ func createWithdrawTrustLine(
 
 	// Insert into both owner directories
 	lowDirKey := keylet.OwnerDir(lowAccountID)
-	lowDirResult, err := sle.DirInsert(ctx.View, lowDirKey, trustLineKey.Key, func(dir *sle.DirectoryNode) {
+	lowDirResult, err := state.DirInsert(ctx.View, lowDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = lowAccountID
 	})
 	if err != nil {
@@ -884,7 +884,7 @@ func createWithdrawTrustLine(
 	rs.LowNode = lowDirResult.Page
 
 	highDirKey := keylet.OwnerDir(highAccountID)
-	highDirResult, err := sle.DirInsert(ctx.View, highDirKey, trustLineKey.Key, func(dir *sle.DirectoryNode) {
+	highDirResult, err := state.DirInsert(ctx.View, highDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = highAccountID
 	})
 	if err != nil {
@@ -893,7 +893,7 @@ func createWithdrawTrustLine(
 	rs.HighNode = highDirResult.Page
 
 	// Serialize and insert
-	rsBytes, err := sle.SerializeRippleState(rs)
+	rsBytes, err := state.SerializeRippleState(rs)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

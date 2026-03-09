@@ -5,7 +5,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // checkNFTTrustlineAuthorized checks if an account is authorized for an IOU currency.
@@ -23,13 +23,13 @@ func checkNFTTrustlineAuthorized(view tx.LedgerView, accountID [20]byte, currenc
 	if err != nil || issuerData == nil {
 		return tx.TecNO_ISSUER
 	}
-	issuerAccount, err := sle.ParseAccountRoot(issuerData)
+	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
 	// If issuer doesn't require auth, any account can hold this currency
-	if issuerAccount.Flags&sle.LsfRequireAuth == 0 {
+	if issuerAccount.Flags&state.LsfRequireAuth == 0 {
 		return tx.TesSUCCESS
 	}
 
@@ -40,7 +40,7 @@ func checkNFTTrustlineAuthorized(view tx.LedgerView, accountID [20]byte, currenc
 		return tx.TecNO_LINE
 	}
 
-	rs, err := sle.ParseRippleState(trustLineData)
+	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -49,12 +49,12 @@ func checkNFTTrustlineAuthorized(view tx.LedgerView, accountID [20]byte, currenc
 	// Reference: rippled — if (id > issue.account) check lsfLowAuth else lsfHighAuth
 	// When id > issuer: issuer is the LOW account → check LsfLowAuth (issuer's auth flag)
 	// When id < issuer: issuer is the HIGH account → check LsfHighAuth (issuer's auth flag)
-	if sle.CompareAccountIDsForLine(accountID, issuerID) > 0 {
-		if rs.Flags&sle.LsfLowAuth == 0 {
+	if state.CompareAccountIDsForLine(accountID, issuerID) > 0 {
+		if rs.Flags&state.LsfLowAuth == 0 {
 			return tx.TecNO_AUTH
 		}
 	} else {
-		if rs.Flags&sle.LsfHighAuth == 0 {
+		if rs.Flags&state.LsfHighAuth == 0 {
 			return tx.TecNO_AUTH
 		}
 	}
@@ -64,7 +64,7 @@ func checkNFTTrustlineAuthorized(view tx.LedgerView, accountID [20]byte, currenc
 
 // offerIOUToAmount converts an NFTokenOfferData's IOU amount to a tx.Amount.
 // If the offer has no IOU amount, returns an XRP amount from the offer's Amount field.
-func offerIOUToAmount(offer *sle.NFTokenOfferData) tx.Amount {
+func offerIOUToAmount(offer *state.NFTokenOfferData) tx.Amount {
 	if offer.AmountIOU == nil {
 		return tx.NewXRPAmount(int64(offer.Amount))
 	}
@@ -72,7 +72,7 @@ func offerIOUToAmount(offer *sle.NFTokenOfferData) tx.Amount {
 	if err != nil {
 		return tx.NewXRPAmount(0)
 	}
-	return sle.NewIssuedAmountFromDecimalString(offer.AmountIOU.Value, offer.AmountIOU.Currency, issuerAddr)
+	return state.NewIssuedAmountFromDecimalString(offer.AmountIOU.Value, offer.AmountIOU.Currency, issuerAddr)
 }
 
 // accountSendIOU transfers IOU between accounts via trust lines.
@@ -87,7 +87,7 @@ func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) tx.
 		return tx.TesSUCCESS
 	}
 
-	issuerID, err := sle.DecodeAccountID(amount.Issuer)
+	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -129,7 +129,7 @@ func getTransferRate(view tx.LedgerView, issuerID [20]byte) uint32 {
 	if err != nil || acctData == nil {
 		return 0
 	}
-	acct, err := sle.ParseAccountRoot(acctData)
+	acct, err := state.ParseAccountRoot(acctData)
 	if err != nil {
 		return 0
 	}
@@ -144,7 +144,7 @@ func rippleCreditIOU(view tx.LedgerView, sender, receiver [20]byte, amount tx.Am
 		return tx.TesSUCCESS
 	}
 
-	issuerID, err := sle.DecodeAccountID(amount.Issuer)
+	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -168,13 +168,13 @@ func rippleCreditIOU(view tx.LedgerView, sender, receiver [20]byte, amount tx.Am
 		return createTrustLineWithBalance(view, sender, receiver, amount, trustLineKey)
 	}
 
-	rs, err := sle.ParseRippleState(trustLineData)
+	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
 	// Determine account ordering: low account < high account
-	senderIsLow := sle.CompareAccountIDsForLine(sender, receiver) < 0
+	senderIsLow := state.CompareAccountIDsForLine(sender, receiver) < 0
 
 	// Balance convention: positive = low account owes high account
 	// When sender is low: sending means decreasing the balance (low account pays)
@@ -196,7 +196,7 @@ func rippleCreditIOU(view tx.LedgerView, sender, receiver [20]byte, amount tx.Am
 	}
 
 	// Serialize and update
-	updated, err := sle.SerializeRippleState(rs)
+	updated, err := state.SerializeRippleState(rs)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -243,7 +243,7 @@ func payIOU(ctx *tx.ApplyContext, from, to [20]byte, amount tx.Amount) tx.Result
 // Returns: -1 (negative/owes), 0 (zero), 1 (positive/has funds)
 // For the IOU issuer, always returns 1 (issuer has unlimited).
 func accountIOUBalanceSignum(view tx.LedgerView, accountID [20]byte, amount tx.Amount) int {
-	issuerID, err := sle.DecodeAccountID(amount.Issuer)
+	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
 		return 0
 	}
@@ -259,12 +259,12 @@ func accountIOUBalanceSignum(view tx.LedgerView, accountID [20]byte, amount tx.A
 		return 0
 	}
 
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	if err != nil {
 		return 0
 	}
 
-	accountIsLow := sle.CompareAccountIDsForLine(accountID, issuerID) < 0
+	accountIsLow := state.CompareAccountIDsForLine(accountID, issuerID) < 0
 	balance := rs.Balance
 	if !accountIsLow {
 		balance = balance.Negate()
@@ -278,7 +278,7 @@ func accountIOUBalanceSignum(view tx.LedgerView, accountID [20]byte, amount tx.A
 // having unlimited funds (unlike AccountFunds).
 // Used for pre-fixNonFungibleTokensV1_2 fund checks.
 func accountHoldsIOU(view tx.LedgerView, accountID [20]byte, amount tx.Amount) tx.Amount {
-	issuerID, err := sle.DecodeAccountID(amount.Issuer)
+	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
 		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 	}
@@ -291,12 +291,12 @@ func accountHoldsIOU(view tx.LedgerView, accountID [20]byte, amount tx.Amount) t
 		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 	}
 
-	rs, err := sle.ParseRippleState(data)
+	rs, err := state.ParseRippleState(data)
 	if err != nil {
 		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 	}
 
-	accountIsLow := sle.CompareAccountIDsForLine(accountID, issuerID) < 0
+	accountIsLow := state.CompareAccountIDsForLine(accountID, issuerID) < 0
 	balance := rs.Balance
 	if !accountIsLow {
 		balance = balance.Negate()
@@ -306,7 +306,7 @@ func accountHoldsIOU(view tx.LedgerView, accountID [20]byte, amount tx.Amount) t
 		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 	}
 
-	return sle.NewIssuedAmountFromValue(balance.IOU().Mantissa(), balance.IOU().Exponent(), amount.Currency, amount.Issuer)
+	return state.NewIssuedAmountFromValue(balance.IOU().Mantissa(), balance.IOU().Exponent(), amount.Currency, amount.Issuer)
 }
 
 // createTrustLineWithBalance creates a new trust line between sender and receiver
@@ -315,7 +315,7 @@ func accountHoldsIOU(view tx.LedgerView, accountID [20]byte, amount tx.Amount) t
 // NoRipple flags are set based on each account's DefaultRipple setting.
 // Reference: rippled Ledger/View.cpp rippleCredit → trustCreate
 func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, amount tx.Amount, trustLineKey keylet.Keylet) tx.Result {
-	senderIsHigh := sle.CompareAccountIDsForLine(sender, receiver) > 0
+	senderIsHigh := state.CompareAccountIDsForLine(sender, receiver) > 0
 
 	// Determine low/high accounts
 	var lowAccountID, highAccountID [20]byte
@@ -327,11 +327,11 @@ func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, a
 		highAccountID = receiver
 	}
 
-	lowAccountStr, err := sle.EncodeAccountID(lowAccountID)
+	lowAccountStr, err := state.EncodeAccountID(lowAccountID)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	highAccountStr, err := sle.EncodeAccountID(highAccountID)
+	highAccountStr, err := state.EncodeAccountID(highAccountID)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -343,11 +343,11 @@ func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, a
 	var balance tx.Amount
 	if senderIsHigh {
 		// Sender is HIGH, receiver is LOW → LOW gets tokens → positive balance
-		balance = sle.NewIssuedAmountFromValue(amount.IOU().Mantissa(), amount.IOU().Exponent(), amount.Currency, sle.AccountOneAddress)
+		balance = state.NewIssuedAmountFromValue(amount.IOU().Mantissa(), amount.IOU().Exponent(), amount.Currency, state.AccountOneAddress)
 	} else {
 		// Sender is LOW, receiver is HIGH → HIGH gets tokens → negative balance
 		negated := amount.Negate()
-		balance = sle.NewIssuedAmountFromValue(negated.IOU().Mantissa(), negated.IOU().Exponent(), amount.Currency, sle.AccountOneAddress)
+		balance = state.NewIssuedAmountFromValue(negated.IOU().Mantissa(), negated.IOU().Exponent(), amount.Currency, state.AccountOneAddress)
 	}
 
 	// Determine receiver's position and set reserve flag accordingly.
@@ -356,9 +356,9 @@ func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, a
 	var flags uint32
 	receiverIsHigh := !senderIsHigh
 	if receiverIsHigh {
-		flags |= sle.LsfHighReserve
+		flags |= state.LsfHighReserve
 	} else {
-		flags |= sle.LsfLowReserve
+		flags |= state.LsfLowReserve
 	}
 
 	// Set NoRipple flags based on DefaultRipple settings.
@@ -368,16 +368,16 @@ func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, a
 	if err != nil || receiverAcctData == nil {
 		return tx.TefINTERNAL
 	}
-	receiverAcct, err := sle.ParseAccountRoot(receiverAcctData)
+	receiverAcct, err := state.ParseAccountRoot(receiverAcctData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	receiverNoRipple := (receiverAcct.Flags & sle.LsfDefaultRipple) == 0
+	receiverNoRipple := (receiverAcct.Flags & state.LsfDefaultRipple) == 0
 	if receiverNoRipple {
 		if receiverIsHigh {
-			flags |= sle.LsfHighNoRipple
+			flags |= state.LsfHighNoRipple
 		} else {
-			flags |= sle.LsfLowNoRipple
+			flags |= state.LsfLowNoRipple
 		}
 	}
 
@@ -385,20 +385,20 @@ func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, a
 	if err != nil || senderAcctData == nil {
 		return tx.TefINTERNAL
 	}
-	senderAcct, err := sle.ParseAccountRoot(senderAcctData)
+	senderAcct, err := state.ParseAccountRoot(senderAcctData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	senderNoRipple := (senderAcct.Flags & sle.LsfDefaultRipple) == 0
+	senderNoRipple := (senderAcct.Flags & state.LsfDefaultRipple) == 0
 	if senderNoRipple {
 		if senderIsHigh {
-			flags |= sle.LsfHighNoRipple
+			flags |= state.LsfHighNoRipple
 		} else {
-			flags |= sle.LsfLowNoRipple
+			flags |= state.LsfLowNoRipple
 		}
 	}
 
-	rs := &sle.RippleState{
+	rs := &state.RippleState{
 		Balance:   balance,
 		LowLimit:  tx.NewIssuedAmount(0, -100, amount.Currency, lowAccountStr),
 		HighLimit: tx.NewIssuedAmount(0, -100, amount.Currency, highAccountStr),
@@ -407,7 +407,7 @@ func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, a
 
 	// Insert into LOW account's owner directory
 	lowDirKey := keylet.OwnerDir(lowAccountID)
-	lowDirResult, err := sle.DirInsert(view, lowDirKey, trustLineKey.Key, func(dir *sle.DirectoryNode) {
+	lowDirResult, err := state.DirInsert(view, lowDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = lowAccountID
 	})
 	if err != nil {
@@ -417,7 +417,7 @@ func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, a
 
 	// Insert into HIGH account's owner directory
 	highDirKey := keylet.OwnerDir(highAccountID)
-	highDirResult, err := sle.DirInsert(view, highDirKey, trustLineKey.Key, func(dir *sle.DirectoryNode) {
+	highDirResult, err := state.DirInsert(view, highDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
 		dir.Owner = highAccountID
 	})
 	if err != nil {
@@ -426,7 +426,7 @@ func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, a
 	rs.HighNode = highDirResult.Page
 
 	// Serialize and insert the trust line
-	trustLineData, err := sle.SerializeRippleState(rs)
+	trustLineData, err := state.SerializeRippleState(rs)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -449,7 +449,7 @@ func checkIssuerTrustLine(ctx *tx.ApplyContext, nftIssuerID [20]byte, amount tx.
 		return tx.TesSUCCESS
 	}
 
-	iouIssuerID, err := sle.DecodeAccountID(amount.Issuer)
+	iouIssuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -491,7 +491,7 @@ func checkIssuerTrustLineForAccept(ctx *tx.ApplyContext, nftIssuerID [20]byte, a
 		return tx.TesSUCCESS
 	}
 
-	iouIssuerID, err := sle.DecodeAccountID(amount.Issuer)
+	iouIssuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

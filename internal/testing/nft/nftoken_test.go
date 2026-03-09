@@ -11,7 +11,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/nftoken"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
 	"github.com/LeJamon/goXRPLd/internal/testing/nft"
@@ -51,7 +51,7 @@ func TestDiagnosticMultiPage(t *testing.T) {
 			t.Logf("Cannot read page %s: %v", hex.EncodeToString(currentKL.Key[:]), err)
 			break
 		}
-		page, err := sle.ParseNFTokenPage(data)
+		page, err := state.ParseNFTokenPage(data)
 		if err != nil {
 			t.Fatalf("Cannot parse page: %v", err)
 		}
@@ -108,7 +108,7 @@ func TestDiagnosticPageLookup(t *testing.T) {
 		data, err := env.LedgerEntry(maxKL)
 		t.Logf("Page data before Close: err=%v, len=%d, hex=%s", err, len(data), hex.EncodeToString(data))
 		if err == nil {
-			page, parseErr := sle.ParseNFTokenPage(data)
+			page, parseErr := state.ParseNFTokenPage(data)
 			t.Logf("Parse before Close: err=%v, numTokens=%d", parseErr, len(page.NFTokens))
 			if len(page.NFTokens) > 0 {
 				t.Logf("Token[0] ID: %s", hex.EncodeToString(page.NFTokens[0].NFTokenID[:]))
@@ -126,7 +126,7 @@ func TestDiagnosticPageLookup(t *testing.T) {
 		data, err := env.LedgerEntry(maxKL)
 		t.Logf("Page data after Close: err=%v, len=%d", err, len(data))
 		if err == nil {
-			page, parseErr := sle.ParseNFTokenPage(data)
+			page, parseErr := state.ParseNFTokenPage(data)
 			t.Logf("Parse after Close: err=%v, numTokens=%d", parseErr, len(page.NFTokens))
 		}
 	}

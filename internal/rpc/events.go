@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
+	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
 // RippleEpoch is January 1, 2000 00:00:00 UTC - used for XRPL time calculations
@@ -275,8 +275,8 @@ type PathFindEvent struct {
 
 // PathAlternative represents a single path alternative
 type PathAlternative struct {
-	PathsCanonical [][]rpc_types.PathStep `json:"paths_canonical,omitempty"` // Canonical path representation
-	PathsComputed  [][]rpc_types.PathStep `json:"paths_computed,omitempty"`  // Computed paths
+	PathsCanonical [][]types.PathStep `json:"paths_canonical,omitempty"` // Canonical path representation
+	PathsComputed  [][]types.PathStep `json:"paths_computed,omitempty"`  // Computed paths
 	SourceAmount   json.RawMessage        `json:"source_amount"`             // Amount to send
 }
 

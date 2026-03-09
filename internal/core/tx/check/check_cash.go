@@ -8,7 +8,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/payment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -134,7 +134,7 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Parse check
-	check, err := sle.ParseCheck(checkData)
+	check, err := state.ParseCheck(checkData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -153,13 +153,13 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) tx.Result {
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	destAccount, err := sle.ParseAccountRoot(destData)
+	destAccount, err := state.ParseAccountRoot(destData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
 	// Check RequireDestTag on destination
-	if (destAccount.Flags&sle.LsfRequireDestTag) != 0 && !check.HasDestTag {
+	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && !check.HasDestTag {
 		return tx.TecDST_TAG_NEEDED
 	}
 
@@ -177,7 +177,7 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) tx.Result {
 }
 
 // applyCashWithAmount handles the exact Amount case for both XRP and IOU.
-func (c *CheckCash) applyCashWithAmount(ctx *tx.ApplyContext, check *sle.CheckData, checkKey keylet.Keylet) tx.Result {
+func (c *CheckCash) applyCashWithAmount(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet) tx.Result {
 	amount := c.Amount
 
 	// For XRP checks
@@ -190,7 +190,7 @@ func (c *CheckCash) applyCashWithAmount(ctx *tx.ApplyContext, check *sle.CheckDa
 }
 
 // applyCashWithDeliverMin handles the DeliverMin case for both XRP and IOU.
-func (c *CheckCash) applyCashWithDeliverMin(ctx *tx.ApplyContext, check *sle.CheckData, checkKey keylet.Keylet) tx.Result {
+func (c *CheckCash) applyCashWithDeliverMin(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet) tx.Result {
 	deliverMin := c.DeliverMin
 
 	// For XRP checks
@@ -203,7 +203,7 @@ func (c *CheckCash) applyCashWithDeliverMin(ctx *tx.ApplyContext, check *sle.Che
 }
 
 // applyCashXRPAmount handles XRP check cashing with exact Amount.
-func (c *CheckCash) applyCashXRPAmount(ctx *tx.ApplyContext, check *sle.CheckData, checkKey keylet.Keylet, cashDrops uint64) tx.Result {
+func (c *CheckCash) applyCashXRPAmount(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet, cashDrops uint64) tx.Result {
 	// Amount cannot exceed SendMax
 	// Reference: CashCheck.cpp L156-160
 	if cashDrops > check.SendMax {
@@ -216,7 +216,7 @@ func (c *CheckCash) applyCashXRPAmount(ctx *tx.ApplyContext, check *sle.CheckDat
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	creatorAccount, err := sle.ParseAccountRoot(creatorData)
+	creatorAccount, err := state.ParseAccountRoot(creatorData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -242,7 +242,7 @@ func (c *CheckCash) applyCashXRPAmount(ctx *tx.ApplyContext, check *sle.CheckDat
 	}
 
 	// Update creator account
-	creatorUpdatedData, err := sle.SerializeAccountRoot(creatorAccount)
+	creatorUpdatedData, err := state.SerializeAccountRoot(creatorAccount)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -259,7 +259,7 @@ func (c *CheckCash) applyCashXRPAmount(ctx *tx.ApplyContext, check *sle.CheckDat
 }
 
 // applyCashXRPDeliverMin handles XRP check cashing with DeliverMin.
-func (c *CheckCash) applyCashXRPDeliverMin(ctx *tx.ApplyContext, check *sle.CheckData, checkKey keylet.Keylet, deliverMinDrops uint64) tx.Result {
+func (c *CheckCash) applyCashXRPDeliverMin(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet, deliverMinDrops uint64) tx.Result {
 	// DeliverMin cannot exceed SendMax
 	if check.SendMax < deliverMinDrops {
 		return tx.TecPATH_PARTIAL
@@ -271,7 +271,7 @@ func (c *CheckCash) applyCashXRPDeliverMin(ctx *tx.ApplyContext, check *sle.Chec
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	creatorAccount, err := sle.ParseAccountRoot(creatorData)
+	creatorAccount, err := state.ParseAccountRoot(creatorData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -303,7 +303,7 @@ func (c *CheckCash) applyCashXRPDeliverMin(ctx *tx.ApplyContext, check *sle.Chec
 	}
 
 	// Update creator account
-	creatorUpdatedData, err := sle.SerializeAccountRoot(creatorAccount)
+	creatorUpdatedData, err := state.SerializeAccountRoot(creatorAccount)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -323,7 +323,7 @@ func (c *CheckCash) applyCashXRPDeliverMin(ctx *tx.ApplyContext, check *sle.Chec
 // When isDeliverMin is true, the requestedAmount is treated as the minimum and
 // the flow engine delivers as much as possible up to SendMax.
 // Reference: CashCheck.cpp L252-end
-func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *sle.CheckData, checkKey keylet.Keylet, requestedAmount tx.Amount, isDeliverMin bool) tx.Result {
+func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet, requestedAmount tx.Amount, isDeliverMin bool) tx.Result {
 	accountID := ctx.AccountID
 	sendMax := check.SendMaxAmount
 
@@ -344,7 +344,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *sle.CheckDat
 		return tx.TecPATH_PARTIAL
 	}
 
-	issuerID, err := sle.DecodeAccountID(sendMax.Issuer)
+	issuerID, err := state.DecodeAccountID(sendMax.Issuer)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -381,14 +381,14 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *sle.CheckDat
 		if err != nil {
 			return tx.TecNO_ISSUER
 		}
-		issuerAccount, err := sle.ParseAccountRoot(issuerData)
+		issuerAccount, err := state.ParseAccountRoot(issuerData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
 
 		// Check RequireAuth on issuer
 		// Reference: CashCheck.cpp L210-234
-		if (issuerAccount.Flags & sle.LsfRequireAuth) != 0 {
+		if (issuerAccount.Flags & state.LsfRequireAuth) != 0 {
 			if !trustLineExists {
 				// Can't auto-create trust line when auth is required
 				return tx.TecNO_AUTH
@@ -399,7 +399,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *sle.CheckDat
 			if err != nil {
 				return tx.TefINTERNAL
 			}
-			trustLine, err := sle.ParseRippleState(trustLineData)
+			trustLine, err := state.ParseRippleState(trustLineData)
 			if err != nil {
 				return tx.TefINTERNAL
 			}
@@ -407,12 +407,12 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *sle.CheckDat
 			// Check auth flag based on canonical ordering
 			// Reference: CashCheck.cpp L222-226
 			// canonical_gt means dstId > issuerId
-			dstGtIssuer := sle.CompareAccountIDs(accountID, issuerID) > 0
+			dstGtIssuer := state.CompareAccountIDs(accountID, issuerID) > 0
 			var authFlag uint32
 			if dstGtIssuer {
-				authFlag = sle.LsfLowAuth // issuer is LOW
+				authFlag = state.LsfLowAuth // issuer is LOW
 			} else {
-				authFlag = sle.LsfHighAuth // issuer is HIGH
+				authFlag = state.LsfHighAuth // issuer is HIGH
 			}
 
 			if (trustLine.Flags & authFlag) == 0 {
@@ -438,7 +438,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *sle.CheckDat
 	checkCashMakesTrustLine := rules.Enabled(amendment.FeatureCheckCashMakesTrustLine)
 
 	// Determine the trust line key for destination ↔ issuer
-	destLow := sle.CompareAccountIDs(issuerID, accountID) > 0
+	destLow := state.CompareAccountIDs(issuerID, accountID) > 0
 
 	if accountID != issuerID && checkCashMakesTrustLine {
 		trustLineKey := keylet.Line(accountID, issuerID, sendMax.Currency)
@@ -466,14 +466,14 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *sle.CheckDat
 	// CashCheck.cpp L418-439 - saves the limit, sets it to max, runs flow,
 	// then restores it via scope_exit.
 	// Reference: CashCheck.cpp L422-439
-	var savedLimit *sle.Amount
+	var savedLimit *state.Amount
 	if accountID != issuerID && checkCashMakesTrustLine {
 		trustLineKey := keylet.Line(accountID, issuerID, sendMax.Currency)
 		trustLineData, err := ctx.View.Read(trustLineKey)
 		if err != nil {
 			return tx.TecNO_LINE
 		}
-		rs, err := sle.ParseRippleState(trustLineData)
+		rs, err := state.ParseRippleState(trustLineData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -482,14 +482,14 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *sle.CheckDat
 		if destLow {
 			saved := rs.LowLimit
 			savedLimit = &saved
-			rs.LowLimit = sle.NewIssuedAmountFromValue(sle.MaxMantissa, sle.MaxExponent, sendMax.Currency, rs.LowLimit.Issuer)
+			rs.LowLimit = state.NewIssuedAmountFromValue(state.MaxMantissa, state.MaxExponent, sendMax.Currency, rs.LowLimit.Issuer)
 		} else {
 			saved := rs.HighLimit
 			savedLimit = &saved
-			rs.HighLimit = sle.NewIssuedAmountFromValue(sle.MaxMantissa, sle.MaxExponent, sendMax.Currency, rs.HighLimit.Issuer)
+			rs.HighLimit = state.NewIssuedAmountFromValue(state.MaxMantissa, state.MaxExponent, sendMax.Currency, rs.HighLimit.Issuer)
 		}
 
-		updatedData, err := sle.SerializeRippleState(rs)
+		updatedData, err := state.SerializeRippleState(rs)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -575,7 +575,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *sle.CheckDat
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	creatorAccount, err := sle.ParseAccountRoot(creatorData)
+	creatorAccount, err := state.ParseAccountRoot(creatorData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -584,7 +584,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *sle.CheckDat
 		creatorAccount.OwnerCount--
 	}
 
-	creatorUpdatedData, err := sle.SerializeAccountRoot(creatorAccount)
+	creatorUpdatedData, err := state.SerializeAccountRoot(creatorAccount)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -610,11 +610,11 @@ func isIssuerFrozenForAccount(view tx.LedgerView, accountID, issuerID [20]byte, 
 	if err != nil {
 		return false
 	}
-	issuerAccount, err := sle.ParseAccountRoot(issuerData)
+	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
 		return false
 	}
-	if (issuerAccount.Flags & sle.LsfGlobalFreeze) != 0 {
+	if (issuerAccount.Flags & state.LsfGlobalFreeze) != 0 {
 		return true
 	}
 
@@ -631,18 +631,18 @@ func isIssuerFrozenForAccount(view tx.LedgerView, accountID, issuerID [20]byte, 
 		return false
 	}
 
-	trustLine, err := sle.ParseRippleState(trustLineData)
+	trustLine, err := state.ParseRippleState(trustLineData)
 	if err != nil {
 		return false
 	}
 
-	issuerIsHigh := sle.CompareAccountIDs(issuerID, accountID) > 0
+	issuerIsHigh := state.CompareAccountIDs(issuerID, accountID) > 0
 	if issuerIsHigh {
 		// Issuer is HIGH → check lsfHighFreeze (set by HIGH account = issuer)
-		return (trustLine.Flags & sle.LsfHighFreeze) != 0
+		return (trustLine.Flags & state.LsfHighFreeze) != 0
 	}
 	// Issuer is LOW → check lsfLowFreeze (set by LOW account = issuer)
-	return (trustLine.Flags & sle.LsfLowFreeze) != 0
+	return (trustLine.Flags & state.LsfLowFreeze) != 0
 }
 
 // createTrustLineForCheckCash creates a trust line for the destination when
@@ -651,14 +651,14 @@ func isIssuerFrozenForAccount(view tx.LedgerView, accountID, issuerID [20]byte, 
 func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte, currency string) tx.Result {
 	trustLineKey := keylet.Line(destID, issuerID, currency)
 
-	destIsLow := sle.CompareAccountIDsForLine(destID, issuerID) < 0
+	destIsLow := state.CompareAccountIDsForLine(destID, issuerID) < 0
 
 	// Encode account addresses for trust line limits
-	destAddress, err := sle.EncodeAccountID(destID)
+	destAddress, err := state.EncodeAccountID(destID)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	issuerAddress, err := sle.EncodeAccountID(issuerID)
+	issuerAddress, err := state.EncodeAccountID(issuerID)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -678,7 +678,7 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	destAccount, err := sle.ParseAccountRoot(destData)
+	destAccount, err := state.ParseAccountRoot(destData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -689,13 +689,13 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	issuerAccount, err := sle.ParseAccountRoot(issuerData)
+	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
-	destDefaultRipple := (destAccount.Flags & sle.LsfDefaultRipple) != 0
-	issuerDefaultRipple := (issuerAccount.Flags & sle.LsfDefaultRipple) != 0
+	destDefaultRipple := (destAccount.Flags & state.LsfDefaultRipple) != 0
+	issuerDefaultRipple := (issuerAccount.Flags & state.LsfDefaultRipple) != 0
 
 	// Determine flags
 	// Reference: trustCreate in View.cpp
@@ -704,31 +704,31 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 	//           set on issuer's side if issuer lacks DefaultRipple
 	var flags uint32
 	if destIsLow {
-		flags |= sle.LsfLowReserve
+		flags |= state.LsfLowReserve
 		if !destDefaultRipple {
-			flags |= sle.LsfLowNoRipple
+			flags |= state.LsfLowNoRipple
 		}
 		if !issuerDefaultRipple {
-			flags |= sle.LsfHighNoRipple
+			flags |= state.LsfHighNoRipple
 		}
 	} else {
-		flags |= sle.LsfHighReserve
+		flags |= state.LsfHighReserve
 		if !destDefaultRipple {
-			flags |= sle.LsfHighNoRipple
+			flags |= state.LsfHighNoRipple
 		}
 		if !issuerDefaultRipple {
-			flags |= sle.LsfLowNoRipple
+			flags |= state.LsfLowNoRipple
 		}
 	}
 
 	// Create trust line with zero balance and zero limits
 	// LowLimit.Issuer = low account, HighLimit.Issuer = high account
 	// Balance.Issuer = AccountOneAddress (special sentinel)
-	zeroBalance := sle.NewIssuedAmountFromValue(0, -100, currency, sle.AccountOneAddress)
-	lowLimit := sle.NewIssuedAmountFromValue(0, -100, currency, lowAccountStr)
-	highLimit := sle.NewIssuedAmountFromValue(0, -100, currency, highAccountStr)
+	zeroBalance := state.NewIssuedAmountFromValue(0, -100, currency, state.AccountOneAddress)
+	lowLimit := state.NewIssuedAmountFromValue(0, -100, currency, lowAccountStr)
+	highLimit := state.NewIssuedAmountFromValue(0, -100, currency, highAccountStr)
 
-	newTrustLine := &sle.RippleState{
+	newTrustLine := &state.RippleState{
 		Balance:   zeroBalance,
 		LowLimit:  lowLimit,
 		HighLimit: highLimit,
@@ -736,7 +736,7 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 	}
 
 	// Serialize and insert
-	trustLineData, err := sle.SerializeRippleState(newTrustLine)
+	trustLineData, err := state.SerializeRippleState(newTrustLine)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -753,13 +753,13 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 
 // restoreTrustLineLimit restores the original trust line limit after flow.
 // Reference: CashCheck.cpp scope_exit at L426-429
-func restoreTrustLineLimit(ctx *tx.ApplyContext, destID, issuerID [20]byte, currency string, destLow bool, savedLimit sle.Amount) {
+func restoreTrustLineLimit(ctx *tx.ApplyContext, destID, issuerID [20]byte, currency string, destLow bool, savedLimit state.Amount) {
 	trustLineKey := keylet.Line(destID, issuerID, currency)
 	trustLineData, err := ctx.View.Read(trustLineKey)
 	if err != nil {
 		return
 	}
-	rs, err := sle.ParseRippleState(trustLineData)
+	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
 		return
 	}
@@ -770,7 +770,7 @@ func restoreTrustLineLimit(ctx *tx.ApplyContext, destID, issuerID [20]byte, curr
 		rs.HighLimit = savedLimit
 	}
 
-	updatedData, err := sle.SerializeRippleState(rs)
+	updatedData, err := state.SerializeRippleState(rs)
 	if err != nil {
 		return
 	}

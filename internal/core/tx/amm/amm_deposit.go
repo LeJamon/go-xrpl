@@ -6,7 +6,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -232,7 +232,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	ammAccount, err := sle.ParseAccountRoot(ammAccountData)
+	ammAccount, err := state.ParseAccountRoot(ammAccountData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -725,7 +725,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	if !isXRP1 && !depositAmount1.IsZero() {
 		// Check depositor has enough of asset1 (IOU)
 		// Skip check if depositor is the issuer (they can issue unlimited)
-		issuerID1, _ := sle.DecodeAccountID(a.Asset.Issuer)
+		issuerID1, _ := state.DecodeAccountID(a.Asset.Issuer)
 		if accountID != issuerID1 {
 			depositorFunds := tx.AccountFunds(ctx.View, accountID, depositAmount1, false, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 			if depositorFunds.Compare(depositAmount1) < 0 {
@@ -735,7 +735,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 	if !isXRP2 && !depositAmount2.IsZero() {
 		// Check depositor has enough of asset2 (IOU)
-		issuerID2, _ := sle.DecodeAccountID(a.Asset2.Issuer)
+		issuerID2, _ := state.DecodeAccountID(a.Asset2.Issuer)
 		if accountID != issuerID2 {
 			depositorFunds := tx.AccountFunds(ctx.View, accountID, depositAmount2, false, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 			if depositorFunds.Compare(depositAmount2) < 0 {
@@ -772,7 +772,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled AMMDeposit.cpp - deposit handles token transfer via book::quality path
 	if !isXRP1 && !depositAmount1.IsZero() {
 		// Get issuer account ID
-		issuerID, err := sle.DecodeAccountID(a.Asset.Issuer)
+		issuerID, err := state.DecodeAccountID(a.Asset.Issuer)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -791,7 +791,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 	if !isXRP2 && !depositAmount2.IsZero() {
-		issuerID, err := sle.DecodeAccountID(a.Asset2.Issuer)
+		issuerID, err := state.DecodeAccountID(a.Asset2.Issuer)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -847,7 +847,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Persist updated AMM account
-	ammAccountBytes, err := sle.SerializeAccountRoot(ammAccount)
+	ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -857,7 +857,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Persist updated depositor account
 	accountKey := keylet.Account(accountID)
-	accountBytes, err := sle.SerializeAccountRoot(ctx.Account)
+	accountBytes, err := state.SerializeAccountRoot(ctx.Account)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

@@ -10,7 +10,7 @@ package payment
 import (
 	"github.com/LeJamon/goXRPLd/keylet"
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // AMMLiquidity generates synthetic AMM offers for BookStep consumption.
@@ -39,7 +39,7 @@ var ammFibSequence = [AMMMaxIterations]uint32{
 
 // InitialFibSeqPct = 5 / 20000 = 0.00025
 // Reference: rippled AMMLiquidity.h: Number(5) / 20000
-var ammInitialFibSeqPct = sle.NewIssuedAmountFromValue(25e13, -18, "", "") // 0.00025
+var ammInitialFibSeqPct = state.NewIssuedAmountFromValue(25e13, -18, "", "") // 0.00025
 
 // NewAMMLiquidity creates a new AMMLiquidity for an AMM pool.
 func NewAMMLiquidity(
@@ -172,7 +172,7 @@ func (l *AMMLiquidity) generateFibSeqOffer(poolIn, poolOut tx.Amount) (tx.Amount
 	if int(idx) >= len(ammFibSequence) {
 		return tx.Amount{}, tx.Amount{}, false
 	}
-	fibNum := sle.NewIssuedAmountFromValue(int64(ammFibSequence[idx]), 0, "", "")
+	fibNum := state.NewIssuedAmountFromValue(int64(ammFibSequence[idx]), 0, "", "")
 	// curOut may be IOU or XRP — use toNumber for multiplication, convert back
 	nCurOut := toNumber(curOut)
 	curOut = fromNumber(nCurOut.Mul(fibNum, false), poolOut) // round down
@@ -201,7 +201,7 @@ func (l *AMMLiquidity) maxOffer(poolIn, poolOut tx.Amount) *AMMOffer {
 	// Post-fix: takerGets = 99% * poolOut, takerPays = swapOut(takerGets)
 	// Quality uses pool balances (spot price).
 	// Reference: rippled AMMLiquidity.cpp maxOffer() line 140-144
-	pct := sle.NewIssuedAmountFromValue(99e13, -15, "", "") // 0.99
+	pct := state.NewIssuedAmountFromValue(99e13, -15, "", "") // 0.99
 	nPoolOut := toNumber(poolOut)
 	maxOut := fromNumber(nPoolOut.Mul(pct, false), poolOut) // round down
 
@@ -222,16 +222,16 @@ func ammAccountHoldsFromPayment(view *PaymentSandbox, ammAccountID [20]byte, iss
 		// Read XRP balance from account root (stored as uint64 drops)
 		accountData, err := view.Read(keylet.Account(ammAccountID))
 		if err != nil || accountData == nil {
-			return sle.NewXRPAmountFromInt(0)
+			return state.NewXRPAmountFromInt(0)
 		}
-		acct, err := sle.ParseAccountRoot(accountData)
+		acct, err := state.ParseAccountRoot(accountData)
 		if err != nil {
-			return sle.NewXRPAmountFromInt(0)
+			return state.NewXRPAmountFromInt(0)
 		}
-		return sle.NewXRPAmountFromInt(int64(acct.Balance))
+		return state.NewXRPAmountFromInt(int64(acct.Balance))
 	}
 
-	zeroIOU := sle.NewIssuedAmountFromValue(0, -100, issue.Currency, sle.EncodeAccountIDSafe(issue.Issuer))
+	zeroIOU := state.NewIssuedAmountFromValue(0, -100, issue.Currency, state.EncodeAccountIDSafe(issue.Issuer))
 
 	// Read IOU balance from trust line
 	trustKey := keylet.Line(ammAccountID, issue.Issuer, issue.Currency)
@@ -240,7 +240,7 @@ func ammAccountHoldsFromPayment(view *PaymentSandbox, ammAccountID [20]byte, iss
 		return zeroIOU
 	}
 
-	trustLine, err := sle.ParseRippleState(data)
+	trustLine, err := state.ParseRippleState(data)
 	if err != nil {
 		return zeroIOU
 	}
@@ -254,19 +254,19 @@ func ammAccountHoldsFromPayment(view *PaymentSandbox, ammAccountID [20]byte, iss
 	}
 
 	bal := trustLineBalanceFor(trustLine, ammAccountID)
-	issuerStr := sle.EncodeAccountIDSafe(issue.Issuer)
-	return sle.NewIssuedAmountFromValue(bal.Mantissa(), bal.Exponent(), issue.Currency, issuerStr)
+	issuerStr := state.EncodeAccountIDSafe(issue.Issuer)
+	return state.NewIssuedAmountFromValue(bal.Mantissa(), bal.Exponent(), issue.Currency, issuerStr)
 }
 
 // isTrustLineFrozenForAMM checks if a trust line is frozen for the AMM account.
 // Checks both global freeze on the issuer and individual freeze on the trust line.
 // Reference: rippled View.cpp isFrozen(view, account, currency, issuer)
-func isTrustLineFrozenForAMM(view *PaymentSandbox, ammAccountID, issuerID [20]byte, trustLine *sle.RippleState) bool {
+func isTrustLineFrozenForAMM(view *PaymentSandbox, ammAccountID, issuerID [20]byte, trustLine *state.RippleState) bool {
 	// Check global freeze on the issuer
 	issuerData, err := view.Read(keylet.Account(issuerID))
 	if err == nil && issuerData != nil {
-		issuerAcct, err := sle.ParseAccountRoot(issuerData)
-		if err == nil && (issuerAcct.Flags&sle.LsfGlobalFreeze) != 0 {
+		issuerAcct, err := state.ParseAccountRoot(issuerData)
+		if err == nil && (issuerAcct.Flags&state.LsfGlobalFreeze) != 0 {
 			return true
 		}
 	}
@@ -275,18 +275,18 @@ func isTrustLineFrozenForAMM(view *PaymentSandbox, ammAccountID, issuerID [20]by
 	// The issuer's freeze flag is on their side of the trust line.
 	// Reference: rippled View.cpp isFrozen():
 	//   (issuer > account) ? lsfHighFreeze : lsfLowFreeze
-	issuerIsHigh := sle.CompareAccountIDsForLine(issuerID, ammAccountID) > 0
+	issuerIsHigh := state.CompareAccountIDsForLine(issuerID, ammAccountID) > 0
 	if issuerIsHigh {
-		return (trustLine.Flags & sle.LsfHighFreeze) != 0
+		return (trustLine.Flags & state.LsfHighFreeze) != 0
 	}
-	return (trustLine.Flags & sle.LsfLowFreeze) != 0
+	return (trustLine.Flags & state.LsfLowFreeze) != 0
 }
 
 // trustLineBalanceFor extracts the balance from a trust line for a given account.
 // If account is the low account, balance is used directly.
 // If account is the high account, balance is negated.
-func trustLineBalanceFor(tl *sle.RippleState, account [20]byte) tx.Amount {
-	lowID, _ := sle.DecodeAccountID(tl.LowLimit.Issuer)
+func trustLineBalanceFor(tl *state.RippleState, account [20]byte) tx.Amount {
+	lowID, _ := state.DecodeAccountID(tl.LowLimit.Issuer)
 	if lowID == account {
 		return tl.Balance
 	}

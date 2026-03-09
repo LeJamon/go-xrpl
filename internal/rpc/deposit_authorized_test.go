@@ -6,23 +6,23 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
+	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
+	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // mockDepositAuthorizedLedgerService implements LedgerService for deposit_authorized testing
 type mockDepositAuthorizedLedgerService struct {
-	depositAuthorizedResult *rpc_types.DepositAuthorizedResult
+	depositAuthorizedResult *types.DepositAuthorizedResult
 	depositAuthorizedErr    error
-	accountInfo             *rpc_types.AccountInfo
+	accountInfo             *types.AccountInfo
 	accountInfoErr          error
 	currentLedgerIndex      uint32
 	closedLedgerIndex       uint32
 	validatedLedgerIndex    uint32
 	standalone              bool
-	serverInfo              rpc_types.LedgerServerInfo
+	serverInfo              types.LedgerServerInfo
 }
 
 func newMockDepositAuthorizedLedgerService() *mockDepositAuthorizedLedgerService {
@@ -31,7 +31,7 @@ func newMockDepositAuthorizedLedgerService() *mockDepositAuthorizedLedgerService
 		closedLedgerIndex:    2,
 		validatedLedgerIndex: 2,
 		standalone:           true,
-		serverInfo: rpc_types.LedgerServerInfo{
+		serverInfo: types.LedgerServerInfo{
 			Standalone:         true,
 			OpenLedgerSeq:      3,
 			ClosedLedgerSeq:    2,
@@ -46,32 +46,32 @@ func (m *mockDepositAuthorizedLedgerService) GetClosedLedgerIndex() uint32    { 
 func (m *mockDepositAuthorizedLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
 func (m *mockDepositAuthorizedLedgerService) AcceptLedger() (uint32, error)   { return m.closedLedgerIndex + 1, nil }
 func (m *mockDepositAuthorizedLedgerService) IsStandalone() bool              { return m.standalone }
-func (m *mockDepositAuthorizedLedgerService) GetServerInfo() rpc_types.LedgerServerInfo {
+func (m *mockDepositAuthorizedLedgerService) GetServerInfo() types.LedgerServerInfo {
 	return m.serverInfo
 }
 func (m *mockDepositAuthorizedLedgerService) GetGenesisAccount() (string, error) {
 	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
 }
-func (m *mockDepositAuthorizedLedgerService) GetLedgerBySequence(seq uint32) (rpc_types.LedgerReader, error) {
+func (m *mockDepositAuthorizedLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetLedgerByHash(hash [32]byte) (rpc_types.LedgerReader, error) {
+func (m *mockDepositAuthorizedLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) SubmitTransaction(txJSON []byte) (*rpc_types.SubmitResult, error) {
+func (m *mockDepositAuthorizedLedgerService) SubmitTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockDepositAuthorizedLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
 	return 10, 10000000, 2000000
 }
-func (m *mockDepositAuthorizedLedgerService) GetAccountInfo(account string, ledgerIndex string) (*rpc_types.AccountInfo, error) {
+func (m *mockDepositAuthorizedLedgerService) GetAccountInfo(account string, ledgerIndex string) (*types.AccountInfo, error) {
 	if m.accountInfoErr != nil {
 		return nil, m.accountInfoErr
 	}
 	if m.accountInfo != nil {
 		return m.accountInfo, nil
 	}
-	return &rpc_types.AccountInfo{
+	return &types.AccountInfo{
 		Account:     account,
 		Balance:     "100000000",
 		Flags:       0,
@@ -82,55 +82,55 @@ func (m *mockDepositAuthorizedLedgerService) GetAccountInfo(account string, ledg
 		Validated:   true,
 	}, nil
 }
-func (m *mockDepositAuthorizedLedgerService) GetTransaction(txHash [32]byte) (*rpc_types.TransactionInfo, error) {
+func (m *mockDepositAuthorizedLedgerService) GetTransaction(txHash [32]byte) (*types.TransactionInfo, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockDepositAuthorizedLedgerService) StoreTransaction(txHash [32]byte, txData []byte) error {
 	return errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetAccountLines(account string, ledgerIndex string, peer string, limit uint32) (*rpc_types.AccountLinesResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetAccountLines(account string, ledgerIndex string, peer string, limit uint32) (*types.AccountLinesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetAccountOffers(account string, ledgerIndex string, limit uint32) (*rpc_types.AccountOffersResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetAccountOffers(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetBookOffers(takerGets, takerPays rpc_types.Amount, ledgerIndex string, limit uint32) (*rpc_types.BookOffersResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetBookOffers(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *rpc_types.AccountTxMarker, forward bool) (*rpc_types.AccountTxResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetTransactionHistory(startIndex uint32) (*rpc_types.TxHistoryResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetTransactionHistory(startIndex uint32) (*types.TxHistoryResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetLedgerRange(minSeq, maxSeq uint32) (*rpc_types.LedgerRangeResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetLedgerRange(minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*rpc_types.LedgerEntryResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetLedgerData(ledgerIndex string, limit uint32, marker string) (*rpc_types.LedgerDataResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetLedgerData(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*rpc_types.AccountObjectsResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*rpc_types.AccountChannelsResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*types.AccountChannelsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetAccountCurrencies(account string, ledgerIndex string) (*rpc_types.AccountCurrenciesResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetAccountCurrencies(account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetAccountNFTs(account string, ledgerIndex string, limit uint32) (*rpc_types.AccountNFTsResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetAccountNFTs(account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetGatewayBalances(account string, hotWallets []string, ledgerIndex string) (*rpc_types.GatewayBalancesResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetGatewayBalances(account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*rpc_types.NoRippleCheckResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*rpc_types.DepositAuthorizedResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*types.DepositAuthorizedResult, error) {
 	if m.depositAuthorizedErr != nil {
 		return nil, m.depositAuthorizedErr
 	}
@@ -138,7 +138,7 @@ func (m *mockDepositAuthorizedLedgerService) GetDepositAuthorized(sourceAccount 
 		return m.depositAuthorizedResult, nil
 	}
 	// Return authorized by default
-	return &rpc_types.DepositAuthorizedResult{
+	return &types.DepositAuthorizedResult{
 		SourceAccount:      sourceAccount,
 		DestinationAccount: destinationAccount,
 		DepositAuthorized:  true,
@@ -147,21 +147,21 @@ func (m *mockDepositAuthorizedLedgerService) GetDepositAuthorized(sourceAccount 
 		Validated:          true,
 	}, nil
 }
-func (m *mockDepositAuthorizedLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*rpc_types.NFTOffersResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*rpc_types.NFTOffersResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
 
 // setupDepositAuthorizedTestServices initializes the Services singleton with a mock for testing
 func setupDepositAuthorizedTestServices(mock *mockDepositAuthorizedLedgerService) func() {
-	oldServices := rpc_types.Services
-	rpc_types.Services = &rpc_types.ServiceContainer{
+	oldServices := types.Services
+	types.Services = &types.ServiceContainer{
 		Ledger: mock,
 	}
 	return func() {
-		rpc_types.Services = oldServices
+		types.Services = oldServices
 	}
 }
 
@@ -176,11 +176,11 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 	cleanup := setupDepositAuthorizedTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.DepositAuthorizedMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.DepositAuthorizedMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	tests := []struct {
@@ -214,7 +214,7 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 			},
 			expectError:   true,
 			expectedError: "Account malformed.",
-			expectedCode:  rpc_types.RpcACT_MALFORMED,
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			name: "Corrupt destination_account field",
@@ -227,7 +227,7 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 			},
 			expectError:   true,
 			expectedError: "Account malformed.",
-			expectedCode:  rpc_types.RpcACT_MALFORMED,
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			name: "Source account not found",
@@ -240,7 +240,7 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 			},
 			expectError:   true,
 			expectedError: "Source account not found.",
-			expectedCode:  rpc_types.RpcSRC_ACT_NOT_FOUND,
+			expectedCode:  types.RpcSRC_ACT_NOT_FOUND,
 		},
 		{
 			name: "Destination account not found",
@@ -253,7 +253,7 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 			},
 			expectError:   true,
 			expectedError: "Destination account not found.",
-			expectedCode:  rpc_types.RpcDST_ACT_NOT_FOUND,
+			expectedCode:  types.RpcDST_ACT_NOT_FOUND,
 		},
 	}
 
@@ -296,15 +296,15 @@ func TestDepositAuthorizedBasicAuthorized(t *testing.T) {
 	cleanup := setupDepositAuthorizedTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.DepositAuthorizedMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.DepositAuthorizedMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Alice can deposit to Becky (no DepositAuth set)
-	mock.depositAuthorizedResult = &rpc_types.DepositAuthorizedResult{
+	mock.depositAuthorizedResult = &types.DepositAuthorizedResult{
 		SourceAccount:      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		DestinationAccount: "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 		DepositAuthorized:  true,
@@ -343,15 +343,15 @@ func TestDepositAuthorizedSelfDeposit(t *testing.T) {
 	cleanup := setupDepositAuthorizedTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.DepositAuthorizedMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.DepositAuthorizedMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Becky can always deposit to herself, even with DepositAuth set
-	mock.depositAuthorizedResult = &rpc_types.DepositAuthorizedResult{
+	mock.depositAuthorizedResult = &types.DepositAuthorizedResult{
 		SourceAccount:      "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 		DestinationAccount: "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 		DepositAuthorized:  true,
@@ -384,15 +384,15 @@ func TestDepositAuthorizedNotAuthorized(t *testing.T) {
 	cleanup := setupDepositAuthorizedTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.DepositAuthorizedMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.DepositAuthorizedMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Alice is NOT authorized to deposit to Becky (DepositAuth set, no preauth)
-	mock.depositAuthorizedResult = &rpc_types.DepositAuthorizedResult{
+	mock.depositAuthorizedResult = &types.DepositAuthorizedResult{
 		SourceAccount:      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		DestinationAccount: "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 		DepositAuthorized:  false,
@@ -425,15 +425,15 @@ func TestDepositAuthorizedWithPreauth(t *testing.T) {
 	cleanup := setupDepositAuthorizedTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.DepositAuthorizedMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.DepositAuthorizedMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Alice is authorized to deposit to Becky (DepositAuth set, with preauth)
-	mock.depositAuthorizedResult = &rpc_types.DepositAuthorizedResult{
+	mock.depositAuthorizedResult = &types.DepositAuthorizedResult{
 		SourceAccount:      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		DestinationAccount: "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 		DepositAuthorized:  true,
@@ -466,16 +466,16 @@ func TestDepositAuthorizedReciprocal(t *testing.T) {
 	cleanup := setupDepositAuthorizedTestServices(mock)
 	defer cleanup()
 
-	method := &rpc_handlers.DepositAuthorizedMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.DepositAuthorizedMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	// Becky can deposit to Alice even though Alice can't deposit to Becky
 	// (It's not reciprocal)
-	mock.depositAuthorizedResult = &rpc_types.DepositAuthorizedResult{
+	mock.depositAuthorizedResult = &types.DepositAuthorizedResult{
 		SourceAccount:      "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 		DestinationAccount: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		DepositAuthorized:  true,
@@ -508,17 +508,17 @@ func TestDepositAuthorizedReciprocal(t *testing.T) {
 // TestDepositAuthorizedServiceUnavailable tests response when ledger service is unavailable
 func TestDepositAuthorizedServiceUnavailable(t *testing.T) {
 	// Set Services to nil
-	oldServices := rpc_types.Services
-	rpc_types.Services = nil
+	oldServices := types.Services
+	types.Services = nil
 	defer func() {
-		rpc_types.Services = oldServices
+		types.Services = oldServices
 	}()
 
-	method := &rpc_handlers.DepositAuthorizedMethod{}
-	ctx := &rpc_types.RpcContext{
+	method := &handlers.DepositAuthorizedMethod{}
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       rpc_types.RoleGuest,
-		ApiVersion: rpc_types.ApiVersion1,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
 	}
 
 	params := map[string]interface{}{
@@ -540,16 +540,16 @@ func TestDepositAuthorizedServiceUnavailable(t *testing.T) {
 
 // TestDepositAuthorizedMethodMetadata tests method metadata (role, API versions)
 func TestDepositAuthorizedMethodMetadata(t *testing.T) {
-	method := &rpc_handlers.DepositAuthorizedMethod{}
+	method := &handlers.DepositAuthorizedMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, rpc_types.RoleGuest, method.RequiredRole())
+		assert.Equal(t, types.RoleGuest, method.RequiredRole())
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {
 		versions := method.SupportedApiVersions()
-		assert.Contains(t, versions, rpc_types.ApiVersion1)
-		assert.Contains(t, versions, rpc_types.ApiVersion2)
-		assert.Contains(t, versions, rpc_types.ApiVersion3)
+		assert.Contains(t, versions, types.ApiVersion1)
+		assert.Contains(t, versions, types.ApiVersion2)
+		assert.Contains(t, versions, types.ApiVersion3)
 	})
 }

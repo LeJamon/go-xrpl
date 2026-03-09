@@ -6,7 +6,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 func init() {
@@ -70,7 +70,7 @@ func (ec *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	rules := ctx.Rules()
 
 	// Get the escrow owner's account ID
-	ownerID, err := sle.DecodeAccountID(ec.Owner)
+	ownerID, err := state.DecodeAccountID(ec.Owner)
 	if err != nil {
 		return tx.TemINVALID
 	}
@@ -83,7 +83,7 @@ func (ec *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Parse escrow
-	escrowEntry, err := sle.ParseEscrow(escrowData)
+	escrowEntry, err := state.ParseEscrow(escrowData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -124,7 +124,7 @@ func (ec *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TefINTERNAL
 		}
 
-		ownerAccount, err := sle.ParseAccountRoot(ownerData)
+		ownerAccount, err := state.ParseAccountRoot(ownerData)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -134,7 +134,7 @@ func (ec *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			ownerAccount.OwnerCount--
 		}
 
-		ownerUpdatedData, err := sle.SerializeAccountRoot(ownerAccount)
+		ownerUpdatedData, err := state.SerializeAccountRoot(ownerAccount)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
@@ -147,12 +147,12 @@ func (ec *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Remove escrow from owner directory
 	// Reference: rippled Escrow.cpp doApply() lines 1350-1360
 	ownerDirKey := keylet.OwnerDir(escrowEntry.Account)
-	sle.DirRemove(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key, false)
+	state.DirRemove(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key, false)
 
 	// Remove escrow from destination directory (if cross-account)
 	if escrowEntry.HasDestNode {
 		destDirKey := keylet.OwnerDir(escrowEntry.DestinationID)
-		sle.DirRemove(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key, false)
+		state.DirRemove(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key, false)
 	}
 
 	// Delete the escrow - deletion tracked automatically by ApplyStateTable
