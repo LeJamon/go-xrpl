@@ -51,6 +51,12 @@ type Engine struct {
 	// currentTxHash is the hash of the transaction currently being applied
 	// Used to set PreviousTxnID on modified ledger entries
 	currentTxHash [32]byte
+
+	// txCount tracks the number of applied transactions for TransactionIndex.
+	// Each applied transaction (tesSUCCESS or tec) gets the current count as
+	// its TransactionIndex, then the counter increments.
+	// Reference: rippled OpenView::txCount() = baseTxCount_ + txs_.size()
+	txCount uint32
 }
 
 // engineSignerListLookup implements SignerListLookup using the engine's ledger view
@@ -331,6 +337,19 @@ func (e *Engine) rules() *amendment.Rules {
 	return amendment.AllSupportedRules()
 }
 
+// TxCount returns the current transaction count (for batch baseTxCount).
+// Reference: rippled OpenView::txCount()
+func (e *Engine) TxCount() uint32 {
+	return e.txCount
+}
+
+// SetBaseTxCount sets the base transaction count for batch inner transactions.
+// Inner transactions start numbering from this value.
+// Reference: rippled OpenView::baseTxCount_ initialized from parent view
+func (e *Engine) SetBaseTxCount(count uint32) {
+	e.txCount = count
+}
+
 // computeTransactionHash computes the hash of a transaction
 // The hash is SHA512Half of the "TXN\x00" prefix + serialized transaction
 func computeTransactionHash(tx Transaction) ([32]byte, error) {
@@ -421,9 +440,11 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 
 	metadata.TransactionResult = result
 
-	// Record fee as destroyed
+	// Record fee as destroyed and assign TransactionIndex
 	if result.IsApplied() {
 		e.view.AdjustDropsDestroyed(XRPAmount.XRPAmount(fee))
+		metadata.TransactionIndex = e.txCount
+		e.txCount++
 	}
 
 	return ApplyResult{
@@ -494,6 +515,12 @@ func (e *Engine) applyPseudoTransaction(tx Transaction) ApplyResult {
 			}
 		}
 		metadata.AffectedNodes = generatedMeta.AffectedNodes
+	}
+
+	// Assign TransactionIndex for applied pseudo-transactions
+	if result.IsApplied() {
+		metadata.TransactionIndex = e.txCount
+		e.txCount++
 	}
 
 	return ApplyResult{
@@ -1095,16 +1122,19 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 	}
 
 	// For tec results, only apply fee/sequence changes, not transaction effects.
-	// Reference: rippled — tec codes claim the fee but discard the apply sandbox.
+	// Reference: rippled Transactor.cpp — tec codes claim the fee but discard
+	// the apply sandbox, then selectively re-apply specific cleanup operations
+	// (offer removal for tecOVERSIZE/tecKILLED, credential deletion for tecEXPIRED).
 	// We use a fresh ApplyStateTable (tecTable) to track all tec-specific changes
 	// so that proper metadata (PreviousFields, FinalFields, DeletedNode) is generated.
 	if result.IsTec() {
-		// For tecOVERSIZE (and tecKILLED): collect deleted offers from the table
+		// For tecOVERSIZE and tecKILLED: collect deleted offers from the table
 		// BEFORE discarding, so we can re-remove them from the clean view.
 		// Reference: rippled Transactor.cpp lines 1121-1201:
 		//   ctx_.visit() collects deleted offer keys, then reset(), then removeUnfundedOffers()
 		var removedOfferKeys [][32]byte
-		if result == TecOVERSIZE {
+		if result == TecOVERSIZE || result == TecKILLED {
+			const unfundedOfferRemoveLimit = 1000
 			for key, entry := range table.GetItems() {
 				if entry.Action == ActionErase {
 					entryType := getLedgerEntryType(entry.Original)
@@ -1113,25 +1143,38 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 					}
 					if entryType == "Offer" {
 						removedOfferKeys = append(removedOfferKeys, key)
+						if len(removedOfferKeys) >= unfundedOfferRemoveLimit {
+							break
+						}
 					}
 				}
 			}
 		}
 
-		// Only apply the table for OfferCreate, which uses a cancel sandbox pattern:
-		// expired/self-crossed offer cleanup must persist even on tec (FoK failure, etc.).
-		// For all other transaction types, the table contains doApply() side effects
-		// (e.g., NFT page splits) that must NOT persist on tec — matching rippled's
-		// behavior where the view sandbox is discarded.
-		// Reference: rippled Transactor.cpp — view sandbox discarded on tec.
-		// Exception: tecOVERSIZE — do NOT apply OfferCreate table because the state
-		// is oversize. We handle offer cleanup separately below.
-		txTypeName := tx.TxType().String()
-		if txTypeName == "OfferCreate" && result != TecOVERSIZE {
-			if _, applyErr := table.Apply(); applyErr != nil {
-				_ = applyErr
+		// Collect expired NFTokenOffer keys for tecEXPIRED re-deletion.
+		// Reference: rippled Transactor.cpp lines 1140, 1178-1180, 1203-1205
+		var expiredNFTokenOfferKeys [][32]byte
+		if result == TecEXPIRED {
+			const expiredOfferRemoveLimit = 256
+			for key, entry := range table.GetItems() {
+				if entry.Action == ActionErase {
+					entryType := getLedgerEntryType(entry.Original)
+					if entryType == "" && entry.Current != nil {
+						entryType = getLedgerEntryType(entry.Current)
+					}
+					if entryType == "NFTokenOffer" {
+						expiredNFTokenOfferKeys = append(expiredNFTokenOfferKeys, key)
+						if len(expiredNFTokenOfferKeys) >= expiredOfferRemoveLimit {
+							break
+						}
+					}
+				}
 			}
 		}
+
+		// Discard the transaction table — all doApply() side effects are lost.
+		// Reference: rippled Transactor.cpp — reset() discards the sandbox.
+		// (We simply don't call table.Apply(), which effectively discards it.)
 
 		// Create a fresh ApplyStateTable to track tec-specific changes
 		// (fee, sequence, ticket consumption) for proper metadata generation.
@@ -1181,11 +1224,10 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 			return TefINTERNAL
 		}
 
-		// Special case: tecOVERSIZE — remove unfunded offers that were found during
-		// processing. These are offers that were deleted in the (now discarded) sandbox.
-		// We re-delete them through the tecTable for metadata tracking.
+		// tecOVERSIZE/tecKILLED: re-delete offers that were found during processing.
+		// These offers were deleted in the (now discarded) sandbox.
 		// Reference: rippled Transactor.cpp lines 1198-1201: removeUnfundedOffers()
-		if result == TecOVERSIZE && len(removedOfferKeys) > 0 {
+		if len(removedOfferKeys) > 0 {
 			for _, offerKey := range removedOfferKeys {
 				offerKL := keylet.Keylet{Key: offerKey}
 				offerData, readErr := e.view.Read(offerKL)
@@ -1213,9 +1255,16 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 			}
 		}
 
-		// Special case: tecEXPIRED allows side-effects (e.g., expired credential deletion)
-		// Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
+		// tecEXPIRED: re-delete expired NFTokenOffers and credentials.
+		// Reference: rippled Transactor.cpp lines 1203-1205: removeExpiredNFTokenOffers()
 		if result == TecEXPIRED {
+			// Re-delete NFTokenOffers through tecTable
+			for _, offerKey := range expiredNFTokenOfferKeys {
+				offerKL := keylet.Keylet{Key: offerKey}
+				deleteNFTokenOfferOnView(tecTable, offerKL, txHash, e.config.LedgerSequence)
+			}
+
+			// Credential deletion via TecApplier
 			if tecApplier, ok := tx.(TecApplier); ok {
 				tecCtx := &ApplyContext{
 					View:      tecTable,
@@ -1375,4 +1424,41 @@ func adjustOwnerCountOnView(view LedgerView, account [20]byte, delta int, txHash
 		return
 	}
 	_ = view.Update(accountKey, newData)
+}
+
+// deleteNFTokenOfferOnView deletes an NFTokenOffer from the ledger view,
+// removing it from owner directory, NFTBuys/NFTSells directory, and erasing the SLE.
+// Used for tecEXPIRED re-deletion of expired NFToken offers.
+// Reference: rippled NFTokenUtils.cpp deleteTokenOffer
+func deleteNFTokenOfferOnView(view LedgerView, offerKL keylet.Keylet, txHash [32]byte, ledgerSeq uint32) {
+	offerData, err := view.Read(offerKL)
+	if err != nil || offerData == nil {
+		return
+	}
+
+	offer, err := sle.ParseNFTokenOffer(offerData)
+	if err != nil {
+		return
+	}
+
+	// Remove from owner's directory
+	ownerDirKey := keylet.OwnerDir(offer.Owner)
+	sle.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
+
+	// Remove from NFTBuys or NFTSells directory
+	const lsfSellNFToken = 0x00000001
+	isSellOffer := offer.Flags&lsfSellNFToken != 0
+	var tokenDirKey keylet.Keylet
+	if isSellOffer {
+		tokenDirKey = keylet.NFTSells(offer.NFTokenID)
+	} else {
+		tokenDirKey = keylet.NFTBuys(offer.NFTokenID)
+	}
+	sle.DirRemove(view, tokenDirKey, offer.NFTokenOfferNode, offerKL.Key, false)
+
+	// Erase the offer
+	_ = view.Erase(offerKL)
+
+	// Decrement owner count
+	adjustOwnerCountOnView(view, offer.Owner, -1, txHash, ledgerSeq)
 }

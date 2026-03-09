@@ -775,8 +775,21 @@ func getLedgerEntryType(data []byte) string {
 				offset++
 			}
 			offset += length
-		case 8: // AccountID
-			offset += 20
+		case 8: // AccountID (variable-length encoded with length prefix)
+			// Reference: rippled STAccount.cpp uses addVL() — 1-byte length prefix + data
+			if offset >= len(data) {
+				return "Unknown"
+			}
+			length := int(data[offset])
+			offset++
+			if length > 192 {
+				if offset >= len(data) {
+					return "Unknown"
+				}
+				length = 193 + ((length-193)<<8 | int(data[offset]))
+				offset++
+			}
+			offset += length
 		default:
 			// Unknown type, can't continue
 			return "Unknown"

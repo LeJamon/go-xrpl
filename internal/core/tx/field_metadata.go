@@ -33,6 +33,7 @@ const (
 // fieldMetadata maps field names to their metadata flags.
 // Based on rippled's sfields.macro definitions.
 // Only non-default flags are listed here; all other fields use sMD_Default.
+// Verified complete against rippled sfields.macro — no additional non-default entries exist.
 // Reference: rippled include/xrpl/protocol/detail/sfields.macro
 var fieldMetadata = map[string]uint8{
 	// sMD_Never (0x00) - never appear in metadata
