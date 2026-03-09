@@ -683,6 +683,53 @@ func canonicalizeDropsFloor(mantissa int64, exponent int) int64 {
 	return value
 }
 
+// canonicalizeDropsRound converts an IOU-style mantissa/exponent to XRP drops
+// using round-to-nearest with ties going to even (banker's rounding).
+// This matches rippled's Number::operator rep() which is used by
+// XRPAmount{Number} constructor (e.g., in limitOut for XRP output).
+// Reference: rippled Number.cpp operator rep() lines 480-512
+func canonicalizeDropsRound(mantissa int64, exponent int) int64 {
+	if mantissa == 0 || exponent <= -20 {
+		return 0
+	}
+	value := mantissa
+	negative := false
+	if value < 0 {
+		negative = true
+		value = -value
+	}
+	for exponent > 0 {
+		value *= 10
+		exponent--
+	}
+	// Track remainder digits for rounding
+	var lastDigit int64
+	var hasRemainder bool
+	for exponent < 0 {
+		d := value % 10
+		if exponent == -1 {
+			// This is the digit we'll round on
+			lastDigit = d
+		} else if d != 0 {
+			hasRemainder = true
+		}
+		value /= 10
+		exponent++
+	}
+	// Round to nearest, even on tie
+	// lastDigit > 5: round up
+	// lastDigit == 5 && hasRemainder: round up (more than 0.5)
+	// lastDigit == 5 && !hasRemainder: round to even (banker's rounding)
+	// lastDigit < 5: round down (already done by truncation)
+	if lastDigit > 5 || (lastDigit == 5 && hasRemainder) || (lastDigit == 5 && !hasRemainder && (value%2) == 1) {
+		value++
+	}
+	if negative {
+		return -value
+	}
+	return value
+}
+
 // CanonicalizeDropsStrict converts an IOU-style mantissa/exponent to XRP drops,
 // matching rippled's canonicalizeRoundStrict for native amounts.
 // Reference: rippled STAmount.cpp canonicalizeRoundStrict lines 1471-1497
@@ -845,8 +892,9 @@ func (i Issue) IsXRP() bool {
 
 // Book represents an order book (input/output issue pair)
 type Book struct {
-	In  Issue
-	Out Issue
+	In       Issue
+	Out      Issue
+	DomainID *[32]byte // nil for open market, non-nil for permissioned domain book
 }
 
 // Strand is a sequence of Steps forming a complete payment path
@@ -861,6 +909,13 @@ type Step interface {
 	CachedOut() *EitherAmount
 	DebtDirection(sb *PaymentSandbox, dir StrandDirection) DebtDirection
 	QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirection) (*Quality, DebtDirection)
+	// GetQualityFunc returns the QualityFunction for this step.
+	// Used in one-path optimization where the quality function is non-constant
+	// (has AMM) and there is a limitQuality. The QualityFunction allows
+	// calculation of required path output given requested limitQuality.
+	// The default implementation creates a CLOB-like QF from QualityUpperBound.
+	// Reference: rippled Steps.h Step::getQualityFunc()
+	GetQualityFunc(v *PaymentSandbox, prevStepDir DebtDirection) (*QualityFunction, DebtDirection)
 	IsZero(amt EitherAmount) bool
 	EqualIn(a, b EitherAmount) bool
 	EqualOut(a, b EitherAmount) bool

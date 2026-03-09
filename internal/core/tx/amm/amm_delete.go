@@ -73,19 +73,27 @@ func (a *AMMDelete) RequiredAmendments() [][32]byte {
 }
 
 // Apply applies the AMMDelete transaction to ledger state.
+// Reference: rippled AMMDelete.cpp preclaim + doApply
 func (a *AMMDelete) Apply(ctx *tx.ApplyContext) tx.Result {
-	// Find the AMM
+	// Preclaim: AMM must exist and be empty
+	// Reference: rippled AMMDelete.cpp preclaim (line 49-63)
 	ammKey := computeAMMKeylet(a.Asset, a.Asset2)
-
-	exists, _ := ctx.View.Exists(ammKey)
-	if !exists {
+	ammRawData, err := ctx.View.Read(ammKey)
+	if err != nil || ammRawData == nil {
 		return TerNO_AMM
 	}
 
-	// Delete the AMM (only works if empty) - deletion tracked automatically by ApplyStateTable
-	if err := ctx.View.Erase(ammKey); err != nil {
+	amm, err := parseAMMData(ammRawData)
+	if err != nil {
 		return tx.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	// AMM must be empty (LPTokenBalance == 0)
+	if !amm.LPTokenBalance.IsZero() {
+		return tx.TecAMM_NOT_EMPTY
+	}
+
+	// doApply: delete the AMM account
+	// Reference: rippled AMMDelete.cpp doApply (line 67-79)
+	return DeleteAMMAccount(ctx.View, a.Asset, a.Asset2)
 }

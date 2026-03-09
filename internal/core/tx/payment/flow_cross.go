@@ -64,6 +64,10 @@ func FlowCross(
 	fixReducedOffersV2 bool,
 	fixRmSmallIncreasedQOffers bool,
 	flowSortStrands bool,
+	fixAMMv1_1 bool,
+	fixAMMv1_2 bool,
+	fixAMMOverflowOffer bool,
+	domainID ...*[32]byte,
 ) FlowCrossResult {
 
 	// Create sandbox for tracking changes
@@ -183,6 +187,18 @@ func FlowCross(
 		}
 	}
 
+	// Create AMMContext for offer crossing.
+	// Reference: rippled Flow.cpp line 85: AMMContext ammContext(src, false);
+	ammCtx := NewAMMContext(takerAccount, false)
+
+	// Initialize AMM liquidity on BookSteps.
+	// Reference: rippled BookStep constructor reads AMM SLE and creates AMMLiquidity.
+	configureAMMOnBookSteps(sandbox, strands, ammCtx, parentCloseTime,
+		fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer)
+
+	// Set multiPath after strands are built
+	ammCtx.SetMultiPath(len(strands) > 1)
+
 	// Post-process strands for offer crossing:
 	// 1. Set quality limits on BookSteps (per-offer quality filtering)
 	// 2. Enable offer crossing mode on DirectSteps (ignores trust line limits/quality,
@@ -190,10 +206,16 @@ func FlowCross(
 	// Reference: rippled uses DirectIOfferCrossingStep instead of DirectIPaymentStep
 	configureStrandsForOfferCrossing(strands, &takerQuality, parentCloseTime, fixReducedOffersV1, fixReducedOffersV2, fixRmSmallIncreasedQOffers)
 
+	// For domain offers, set the domain on book steps so crossing uses the domain book directory.
+	// Reference: rippled CreateOffer.cpp flowCross() passes domainID to flow()
+	if len(domainID) > 0 && domainID[0] != nil {
+		setDomainOnBookSteps(strands, domainID[0])
+	}
+
 	// Execute the flow
 	// Reference: rippled flowCross passes partialPayment=!(txFlags & tfFillOrKill)
 	// For now, always allow partial (FoK is handled by caller)
-	result := Flow(sandbox, strands, deliver, true, &takerQuality, &sendMax, flowSortStrands)
+	result := Flow(sandbox, strands, deliver, true, &takerQuality, &sendMax, ammCtx, flowSortStrands)
 
 	// Apply the flow sandbox changes to our root sandbox
 	// Reference: rippled CreateOffer.cpp line 711: psbFlow.apply(sb)

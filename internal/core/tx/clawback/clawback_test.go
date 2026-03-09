@@ -75,7 +75,7 @@ func TestClawbackValidation(t *testing.T) {
 				Amount: tx.NewIssuedAmountFromFloat64(0.0, "USD", "rHolder"),
 			},
 			wantErr: true,
-			errMsg:  "positive",
+			errMsg:  "Amount is required",
 		},
 		{
 			name: "invalid - IOU clawback from self",
@@ -186,7 +186,7 @@ func TestClawbackConstructors(t *testing.T) {
 	})
 
 	t.Run("NewMPTokenClawback", func(t *testing.T) {
-		clawbackTx := NewMPTokenClawback("rIssuer", "rHolder", tx.NewIssuedAmountFromFloat64(100.0, "MPT", "rIssuer"))
+		clawbackTx := NewMPTokenClawback("rIssuer", "rHolder", "000000000000000000000001", tx.NewIssuedAmountFromFloat64(100.0, "MPT", "rIssuer"))
 		require.NotNil(t, clawbackTx)
 		assert.Equal(t, "rIssuer", clawbackTx.Account)
 		assert.Equal(t, "rHolder", clawbackTx.Holder)
@@ -207,7 +207,7 @@ func TestClawbackRequiredAmendments(t *testing.T) {
 	})
 
 	t.Run("MPToken clawback requires Clawback and MPTokensV1 amendments", func(t *testing.T) {
-		clawbackTx := NewMPTokenClawback("rIssuer", "rHolder", tx.NewIssuedAmountFromFloat64(100.0, "MPT", "rIssuer"))
+		clawbackTx := NewMPTokenClawback("rIssuer", "rHolder", "000000000000000000000001", tx.NewIssuedAmountFromFloat64(100.0, "MPT", "rIssuer"))
 		amendments := clawbackTx.RequiredAmendments()
 		assert.Contains(t, amendments, amendment.FeatureClawback)
 		assert.Contains(t, amendments, amendment.FeatureMPTokensV1)

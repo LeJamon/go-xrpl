@@ -188,6 +188,17 @@ func (s *XRPEndpointStep) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtD
 	return &q, s.DebtDirection(v, StrandDirectionForward)
 }
 
+// GetQualityFunc returns the QualityFunction for this step.
+// XRP endpoint uses the default implementation: CLOB-like QF from QualityUpperBound.
+// Reference: rippled Steps.h Step::getQualityFunc() default implementation
+func (s *XRPEndpointStep) GetQualityFunc(v *PaymentSandbox, prevStepDir DebtDirection) (*QualityFunction, DebtDirection) {
+	q, dir := s.QualityUpperBound(v, prevStepDir)
+	if q == nil {
+		return nil, dir
+	}
+	return NewCLOBLikeQualityFunction(*q), dir
+}
+
 // IsZero returns true if the amount is zero
 func (s *XRPEndpointStep) IsZero(amt EitherAmount) bool {
 	if !amt.IsNative {

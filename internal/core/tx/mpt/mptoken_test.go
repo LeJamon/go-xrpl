@@ -131,7 +131,7 @@ func TestMPTokenIssuanceCreateValidation(t *testing.T) {
 			name: "invalid metadata - temMALFORMED",
 			tx: &MPTokenIssuanceCreate{
 				BaseTx:          *tx.NewBaseTx(tx.TypeMPTokenIssuanceCreate, "rAlice"),
-				MPTokenMetadata: "XYZ", // Invalid hex
+				MPTokenMetadata: ptrStringMPT("XYZ"), // Invalid hex
 			},
 			expectError: true,
 			errorMsg:    "temMALFORMED: MPTokenMetadata must be valid hex",
@@ -140,9 +140,10 @@ func TestMPTokenIssuanceCreateValidation(t *testing.T) {
 			name: "empty metadata hex - temMALFORMED",
 			tx: &MPTokenIssuanceCreate{
 				BaseTx:          *tx.NewBaseTx(tx.TypeMPTokenIssuanceCreate, "rAlice"),
-				MPTokenMetadata: "", // Empty is actually OK (no metadata)
+				MPTokenMetadata: ptrStringMPT(""), // Empty string = 0 bytes decoded
 			},
-			expectError: false,
+			expectError: true,
+			errorMsg:    "temMALFORMED: MPTokenMetadata length must be 1-1024 bytes",
 		},
 	}
 

@@ -181,6 +181,12 @@ func (ec *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
+	// Pseudo-accounts cannot receive escrow.
+	// Reference: rippled Escrow.cpp:373-378
+	if (destAccount.Flags & sle.LsfAMM) != 0 {
+		return tx.TecNO_PERMISSION
+	}
+
 	// Destination tag check
 	// Reference: rippled Escrow.cpp:517-519
 	if (destAccount.Flags&sle.LsfRequireDestTag) != 0 && ec.DestinationTag == nil {

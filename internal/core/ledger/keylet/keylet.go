@@ -321,6 +321,16 @@ func BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIss
 	}
 }
 
+// BookDirWithDomain returns the keylet for a permissioned domain order book directory.
+// Domain offers are stored in a separate directory that includes the domain ID in the hash.
+// Reference: rippled Indexes.cpp getBookBase() with book.domain set
+func BookDirWithDomain(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer [20]byte, domainID [32]byte) Keylet {
+	return Keylet{
+		Type: entry.TypeDirectoryNode,
+		Key:  indexHash(spaceBookDir, takerPaysCurrency[:], takerGetsCurrency[:], takerPaysIssuer[:], takerGetsIssuer[:], domainID[:]),
+	}
+}
+
 // Quality returns a keylet with the quality (exchange rate) encoded in the last 8 bytes.
 // This is used for offer book directories where offers are sorted by quality.
 // The quality is stored in big-endian format in the rightmost 8 bytes.

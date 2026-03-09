@@ -140,7 +140,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	lptAMMBalance := amm.LPTokenBalance
 	if lptAMMBalance.IsZero() {
-		return tx.TecAMM_BALANCE // AMM empty
+		return tx.TecAMM_EMPTY
 	}
 
 	// Get bidder's LP token balance from trustline
@@ -153,7 +153,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Get LP token issue for validation
 	// Reference: rippled AMMBid.cpp preclaim lines 137-160
-	lptCurrency := generateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency)
+	lptCurrency := GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency)
 	ammAccountAddr, _ := encodeAccountID(amm.Account)
 
 	// Get bid amounts from transaction
@@ -189,7 +189,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Minimum slot price = lptAMMBalance * tradingFee / 25
 	// minSlotPrice = lptAMMBalance * tradingFee / auctionSlotMinFeeFraction
-	minSlotPriceFrac := tradingFee.Div(sle.NewIssuedAmountFromValue(int64(auctionSlotMinFeeFraction)*1e15, -15, "", ""), false)
+	minSlotPriceFrac := numberDiv(tradingFee, sle.NewIssuedAmountFromValue(int64(auctionSlotMinFeeFraction)*1e15, -15, "", ""))
 	minSlotPrice := lptAMMBalance.Mul(minSlotPriceFrac, false)
 
 	// Calculate discounted fee
@@ -243,8 +243,8 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Slot is owned - calculate price based on time interval
 		// fractionUsed = (timeSlot + 1) / auctionSlotTimeIntervals
 		slotNum := *timeSlot + 1
-		fractionUsed := sle.NewIssuedAmountFromValue(int64(slotNum)*1e15, -15, "", "").Div(
-			sle.NewIssuedAmountFromValue(int64(auctionSlotTimeIntervals)*1e15, -15, "", ""), false)
+		fractionUsed := numberDiv(sle.NewIssuedAmountFromValue(int64(slotNum)*1e15, -15, "", ""),
+			sle.NewIssuedAmountFromValue(int64(auctionSlotTimeIntervals)*1e15, -15, "", ""))
 		fractionRemaining, _ = oneAmount().Sub(fractionUsed)
 
 		// price1p05 = pricePurchased * 1.05
@@ -297,6 +297,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Calculate refund and burn amounts
+	// Reference: rippled AMMBid.cpp:345-367
 	var refund tx.Amount = zeroAmount(tx.Asset{})
 	var burn tx.Amount = payPrice
 
@@ -308,14 +309,28 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 		burn, _ = payPrice.Sub(refund)
 
-		// Transfer refund to previous owner
-		// In full implementation, would use accountSend
-		_ = refund
+		// Transfer refund from bidder to previous owner via LP token trust lines.
+		// Reference: rippled AMMBid.cpp:355-360 — accountSend(account_, previousOwner, refund)
+		if !refund.IsZero() {
+			refundWithIssue := sle.NewIssuedAmountFromValue(
+				refund.Mantissa(), refund.Exponent(), lptCurrency, ammAccountAddr)
+			if r := transferLPTokens(ctx.View, accountID, amm.AuctionSlot.Account, amm.Account, refundWithIssue); r != tx.TesSUCCESS {
+				return r
+			}
+		}
 	}
 
-	// Burn tokens (reduce LP balance)
+	// Burn LP tokens: debit bidder's trust line by burn amount, then reduce AMM LPTokenBalance.
+	// Reference: rippled AMMBid.cpp:262 — redeemIOU(account_, saBurn, lpTokens.issue())
 	if isGreater(burn, lptAMMBalance) {
 		return tx.TefINTERNAL
+	}
+	if !burn.IsZero() {
+		burnWithIssue := sle.NewIssuedAmountFromValue(
+			burn.Mantissa(), burn.Exponent(), lptCurrency, ammAccountAddr)
+		if r := redeemLPTokens(ctx.View, accountID, amm.Account, burnWithIssue); r != tx.TesSUCCESS {
+			return r
+		}
 	}
 	newLPBalance, _ := amm.LPTokenBalance.Sub(burn)
 	amm.LPTokenBalance = newLPBalance
@@ -344,6 +359,88 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 	if err := ctx.View.Update(ammKey, ammBytes); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	return tx.TesSUCCESS
+}
+
+// redeemLPTokens debits an account's LP token trust line, sending tokens back to the AMM (issuer).
+// This is the LP token equivalent of rippled's redeemIOU().
+// Reference: rippled Ledger/View.cpp redeemIOU()
+func redeemLPTokens(view tx.LedgerView, accountID, ammAccountID [20]byte, amount tx.Amount) tx.Result {
+	if amount.IsZero() {
+		return tx.TesSUCCESS
+	}
+	return adjustLPTrustLine(view, accountID, ammAccountID, amount, false)
+}
+
+// transferLPTokens transfers LP tokens from one account to another via the AMM (issuer).
+// This debits the sender's trust line and credits the receiver's trust line.
+// Reference: rippled Ledger/View.cpp accountSend() → rippleCredit()
+func transferLPTokens(view tx.LedgerView, from, to, ammAccountID [20]byte, amount tx.Amount) tx.Result {
+	if amount.IsZero() || from == to {
+		return tx.TesSUCCESS
+	}
+	// Debit sender → AMM (issuer)
+	if r := adjustLPTrustLine(view, from, ammAccountID, amount, false); r != tx.TesSUCCESS {
+		return r
+	}
+	// Credit AMM (issuer) → receiver
+	return adjustLPTrustLine(view, to, ammAccountID, amount, true)
+}
+
+// adjustLPTrustLine modifies the LP token trust line balance between an account and the AMM.
+// If isCredit is true, the account's balance increases; if false, it decreases.
+// Reference: rippled Ledger/View.cpp rippleCredit()
+func adjustLPTrustLine(view tx.LedgerView, accountID, ammAccountID [20]byte, amount tx.Amount, isCredit bool) tx.Result {
+	trustLineKey := keylet.Line(accountID, ammAccountID, amount.Currency)
+	data, err := view.Read(trustLineKey)
+	if err != nil || data == nil {
+		return tx.TecINTERNAL
+	}
+
+	rs, err := sle.ParseRippleState(data)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Determine if the LP account is the low account
+	lpIsLow := keylet.IsLowAccount(accountID, ammAccountID)
+
+	// Trust line balance convention:
+	//   positive balance → low account holds tokens (low owes high)
+	//   For LP tokens: AMM is the issuer, LP is the holder
+	currentBalance := rs.Balance
+
+	var newBalance tx.Amount
+	if lpIsLow {
+		// LP is low: positive = LP holds tokens
+		if isCredit {
+			newBalance, _ = currentBalance.Add(amount)
+		} else {
+			newBalance, _ = currentBalance.Sub(amount)
+		}
+	} else {
+		// LP is high: negative = LP holds tokens (from low perspective)
+		if isCredit {
+			newBalance, _ = currentBalance.Sub(amount)
+		} else {
+			newBalance, _ = currentBalance.Add(amount)
+		}
+	}
+
+	rs.Balance = sle.NewIssuedAmountFromValue(
+		newBalance.Mantissa(), newBalance.Exponent(),
+		rs.Balance.Currency, rs.Balance.Issuer,
+	)
+
+	rsBytes, err := sle.SerializeRippleState(rs)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	if err := view.Update(trustLineKey, rsBytes); err != nil {
 		return tx.TefINTERNAL
 	}
 

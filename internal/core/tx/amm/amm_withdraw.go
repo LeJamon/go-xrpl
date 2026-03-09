@@ -197,8 +197,8 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// Get AMM account
-	ammAccountID := computeAMMAccountID(ammKey.Key)
+	// Get AMM account from the stored AMM data
+	ammAccountID := amm.Account
 	ammAccountKey := keylet.Account(ammAccountID)
 	ammAccountData, err := ctx.View.Read(ammAccountKey)
 	if err != nil {
@@ -211,6 +211,19 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	flags := a.GetFlags()
 	tfee := amm.TradingFee
+
+	// Preclaim: EPrice issue must match LP token issue (rippled AMMWithdraw.cpp:273-278)
+	if a.EPrice != nil {
+		lptCurrency := GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency)
+		ammAccountAddr := ComputeAMMAccountAddress(amm.Asset, amm.Asset2)
+		if a.EPrice.Currency != lptCurrency || a.EPrice.Issuer != ammAccountAddr {
+			return tx.TemBAD_AMM_TOKENS
+		}
+	}
+
+	// Amendment checks
+	fixV1_3 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_3)
+	isWithdrawAll := (flags & (tfWithdrawAll | tfOneAssetWithdrawAll)) != 0
 
 	// Get amounts from transaction - use Amount type directly
 	amount1 := zeroAmount(a.Asset)
@@ -228,199 +241,336 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Get current AMM balances from actual state (not stored in AMM entry)
-	// Reference: rippled ammHolds - reads from AccountRoot (XRP) and trustlines (IOU)
 	assetBalance1, assetBalance2, lptBalance := AMMHolds(ctx.View, amm, false)
 
+	// Reorder balances to match the transaction's asset ordering.
+	// AMMHolds returns in amm.Asset / amm.Asset2 order, but the transaction
+	// may specify assets in a different order. rippled's ammHolds() reorders
+	// based on optional issue hints; we do it explicitly here.
+	if !matchesAssetByIssue(amm.Asset, a.Asset) {
+		assetBalance1, assetBalance2 = assetBalance2, assetBalance1
+	}
+
 	if lptBalance.IsZero() {
-		return tx.TecAMM_BALANCE // AMM empty
+		return tx.TecAMM_EMPTY
 	}
 
 	// Get withdrawer's LP token balance from trustline
-	// Reference: rippled AMMWithdraw.cpp preclaim line 251, 255-259
 	lpTokensHeld := ammLPHolds(ctx.View, amm, accountID)
 	if lpTokensHeld.IsZero() {
-		// Account is not a liquidity provider
-		// Note: Withdraw returns tecAMM_BALANCE (unlike Vote/Bid which return tecAMM_INVALID_TOKENS)
 		return tx.TecAMM_BALANCE
 	}
 
-	// Result amounts - use tx.Amount for precision
+	// For tfWithdrawAll / tfOneAssetWithdrawAll, lpTokensWithdraw = lpTokensHeld
+	lpTokensWithdraw := lpTokensRequested
+	if isWithdrawAll {
+		lpTokensWithdraw = lpTokensHeld
+	}
+
+	// Due to rounding, the LPTokenBalance of the last LP
+	// might not match the LP's trustline balance.
+	// Reference: rippled AMMWithdraw.cpp:311-317
+	if ctx.Rules().Enabled(amendment.FeatureFixAMMv1_1) {
+		if result := verifyAndAdjustLPTokenBalance(lpTokensHeld, amm); result != tx.TesSUCCESS {
+			return result
+		}
+		// Refresh lptBalance since verifyAndAdjustLPTokenBalance may have modified amm.LPTokenBalance
+		lptBalance = amm.LPTokenBalance
+	}
+
+	// Result amounts
 	var lpTokensToRedeem tx.Amount
 	var withdrawAmount1, withdrawAmount2 tx.Amount
 
-	// Handle different withdrawal modes
-	switch {
-	case flags&tfLPToken != 0:
-		// Proportional withdrawal for specified LP tokens
-		// Equations 5 and 6: a = (t/T) * A, b = (t/T) * B
-		if lpTokensRequested.IsZero() || lptBalance.IsZero() {
-			return tx.TecAMM_INVALID_TOKENS
-		}
-		if isGreater(lpTokensRequested, lpTokensHeld) || isGreater(lpTokensRequested, lptBalance) {
-			return tx.TecAMM_INVALID_TOKENS
-		}
-		// Calculate proportional amounts using Amount arithmetic
-		withdrawAmount1 = proportionalAmount(assetBalance1, lpTokensRequested, lptBalance)
-		withdrawAmount2 = proportionalAmount(assetBalance2, lpTokensRequested, lptBalance)
-		lpTokensToRedeem = lpTokensRequested
+	// Track single-asset withdrawal info for adjustAmountsByLPTokens calling convention.
+	// rippled's singleWithdraw/singleWithdrawTokens/singleWithdrawEPrice all call
+	// withdraw() with (amountBalance=withdrawn_asset_balance, amountWithdraw, nullopt).
+	// We must replicate this: pass the withdrawn asset's balance (not always assetBalance1)
+	// and nil for amount2 to enter the "single trade" path in adjustAmountsByLPTokens.
+	var withdrawAssetBalance tx.Amount   // pool balance for the withdrawn asset
+	isSingleAssetWithdraw := false       // true if only one asset is being withdrawn
+	singleWithdrawIsAsset2 := false      // true if the single withdrawal is for asset2
 
-	case flags&tfWithdrawAll != 0:
-		// Withdraw all - proportional withdrawal of all LP tokens held
-		if lpTokensHeld.IsZero() {
+	// Handle different withdrawal modes
+	// Reference: rippled AMMWithdraw.cpp applyGuts()
+	switch {
+	case flags&tfLPToken != 0, flags&tfWithdrawAll != 0:
+		// Proportional withdrawal (equalWithdrawTokens)
+		// Reference: rippled AMMWithdraw.cpp equalWithdrawTokens()
+		if lpTokensWithdraw.IsZero() || lptBalance.IsZero() {
 			return tx.TecAMM_INVALID_TOKENS
 		}
-		if isLessOrEqual(lptBalance, lpTokensHeld) {
-			// Last LP withdrawing everything
+		if isGreater(toIOUForCalc(lpTokensWithdraw), toIOUForCalc(lpTokensHeld)) {
+			return tx.TecAMM_INVALID_TOKENS
+		}
+
+		// Withdrawing all tokens in the pool
+		if toIOUForCalc(lpTokensWithdraw).Compare(toIOUForCalc(lptBalance)) == 0 {
 			withdrawAmount1 = assetBalance1
 			withdrawAmount2 = assetBalance2
-			lpTokensToRedeem = lptBalance
+			lpTokensToRedeem = lpTokensWithdraw
 		} else {
-			withdrawAmount1 = proportionalAmount(assetBalance1, lpTokensHeld, lptBalance)
-			withdrawAmount2 = proportionalAmount(assetBalance2, lpTokensHeld, lptBalance)
-			lpTokensToRedeem = lpTokensHeld
+			// adjustLPTokensIn
+			tokensAdj := lpTokensWithdraw
+			if fixV1_3 && !isWithdrawAll {
+				tokensAdj = adjustLPTokens(lptBalance, lpTokensWithdraw, false)
+				if tokensAdj.IsZero() {
+					return tx.TecAMM_INVALID_TOKENS
+				}
+			}
+
+			// frac = tokensAdj / lptBalance
+			frac := numberDiv(toIOUForCalc(tokensAdj), toIOUForCalc(lptBalance))
+			withdrawAmount1 = getRoundedAsset(fixV1_3, assetBalance1, frac, false)
+			withdrawAmount2 = getRoundedAsset(fixV1_3, assetBalance2, frac, false)
+
+			// LP is making equal withdrawal by tokens but the requested amount
+			// of LP tokens is likely too small and results in one-sided pool
+			// withdrawal due to round off.
+			if withdrawAmount1.IsZero() || withdrawAmount2.IsZero() {
+				return tx.TecAMM_FAILED
+			}
+			lpTokensToRedeem = tokensAdj
 		}
 
 	case flags&tfOneAssetWithdrawAll != 0:
-		// Withdraw all LP tokens as a single asset
-		// Use equation 8: ammAssetOut
+		// Withdraw all LP tokens as a single asset (singleWithdrawTokens)
+		// Reference: rippled routes tfOneAssetWithdrawAll to singleWithdrawTokens()
 		if lpTokensHeld.IsZero() {
 			return tx.TecAMM_INVALID_TOKENS
 		}
 		isWithdrawAsset1 := matchesAsset(a.Amount, a.Asset)
+
+		// adjustLPTokensIn - for WithdrawAll, skip adjustment
+		tokensAdj := lpTokensHeld
+		// tokens are not adjusted for withdrawAll
+
+		isSingleAssetWithdraw = true
+		var assetBalance tx.Amount
 		if isWithdrawAsset1 {
-			withdrawAmount1 = ammAssetOut(assetBalance1, lptBalance, lpTokensHeld, tfee)
-			// Compare using IOU for mixed-type consistency
-			if isGreater(toIOUForCalc(withdrawAmount1), toIOUForCalc(assetBalance1)) {
-				return tx.TecAMM_BALANCE
-			}
+			assetBalance = assetBalance1
+			withdrawAssetBalance = assetBalance1
+		} else {
+			assetBalance = assetBalance2
+			withdrawAssetBalance = assetBalance2
+			singleWithdrawIsAsset2 = true
+		}
+
+		// the adjusted tokens are factored in
+		amountWithdraw := ammAssetOut(assetBalance, lptBalance, tokensAdj, tfee, fixV1_3)
+		// For OneAssetWithdrawAll, amount==zero or amountWithdraw >= amount
+		if !amount1.IsZero() && toIOUForCalc(amountWithdraw).Compare(toIOUForCalc(amount1)) < 0 {
+			return tx.TecAMM_FAILED
+		}
+
+		if isWithdrawAsset1 {
+			withdrawAmount1 = amountWithdraw
 			withdrawAmount2 = zeroAmount(a.Asset2)
 		} else {
-			withdrawAmount2 = ammAssetOut(assetBalance2, lptBalance, lpTokensHeld, tfee)
-			// Compare using IOU for mixed-type consistency
-			if isGreater(toIOUForCalc(withdrawAmount2), toIOUForCalc(assetBalance2)) {
-				return tx.TecAMM_BALANCE
-			}
 			withdrawAmount1 = zeroAmount(a.Asset)
+			withdrawAmount2 = amountWithdraw
 		}
-		lpTokensToRedeem = lpTokensHeld
+		lpTokensToRedeem = tokensAdj
 
 	case flags&tfSingleAsset != 0:
-		// Single asset withdrawal - compute LP tokens from amount
-		// Equation 7: lpTokensIn function
+		// Single asset withdrawal (singleWithdraw)
+		// Reference: rippled AMMWithdraw.cpp singleWithdraw()
 		if amount1.IsZero() {
 			return tx.TemMALFORMED
 		}
 		isWithdrawAsset1 := matchesAsset(a.Amount, a.Asset)
+
+		isSingleAssetWithdraw = true
+		var assetBalance, withdrawAmt tx.Amount
 		if isWithdrawAsset1 {
-			// Compare using IOU for mixed-type consistency
-			if isGreater(toIOUForCalc(amount1), toIOUForCalc(assetBalance1)) {
-				return tx.TecAMM_BALANCE
-			}
-			lpTokensToRedeem = calcLPTokensIn(assetBalance1, amount1, lptBalance, tfee)
-			withdrawAmount1 = amount1
-			withdrawAmount2 = zeroAmount(a.Asset2)
+			assetBalance = assetBalance1
+			withdrawAssetBalance = assetBalance1
+			withdrawAmt = amount1
 		} else {
-			// Compare using IOU for mixed-type consistency
-			if isGreater(toIOUForCalc(amount1), toIOUForCalc(assetBalance2)) {
-				return tx.TecAMM_BALANCE
-			}
-			lpTokensToRedeem = calcLPTokensIn(assetBalance2, amount1, lptBalance, tfee)
-			withdrawAmount1 = zeroAmount(a.Asset)
-			withdrawAmount2 = amount1
+			assetBalance = assetBalance2
+			withdrawAssetBalance = assetBalance2
+			singleWithdrawIsAsset2 = true
+			withdrawAmt = amount1
 		}
-		if lpTokensToRedeem.IsZero() || isGreater(lpTokensToRedeem, lpTokensHeld) {
+
+		// adjustLPTokensIn
+		tokens := calcLPTokensIn(assetBalance, withdrawAmt, lptBalance, tfee, fixV1_3)
+		if fixV1_3 {
+			tokens = adjustLPTokens(lptBalance, tokens, false)
+		}
+		if tokens.IsZero() {
+			if fixV1_3 {
+				return tx.TecAMM_INVALID_TOKENS
+			}
+			return tx.TecAMM_INVALID_TOKENS
+		}
+		// factor in the adjusted tokens
+		tokensAdj, amountWithdrawAdj := adjustAssetOutByTokens(fixV1_3, assetBalance, withdrawAmt, lptBalance, tokens, tfee)
+		if fixV1_3 && tokensAdj.IsZero() {
 			return tx.TecAMM_INVALID_TOKENS
 		}
 
+		if isWithdrawAsset1 {
+			withdrawAmount1 = amountWithdrawAdj
+			withdrawAmount2 = zeroAmount(a.Asset2)
+		} else {
+			withdrawAmount1 = zeroAmount(a.Asset)
+			withdrawAmount2 = amountWithdrawAdj
+		}
+		lpTokensToRedeem = tokensAdj
+
 	case flags&tfTwoAsset != 0:
-		// Two asset withdrawal with limits
+		// Two asset withdrawal with limits (equalWithdrawLimit)
+		// Reference: rippled AMMWithdraw.cpp equalWithdrawLimit()
 		if amount1.IsZero() || amount2.IsZero() {
 			return tx.TemMALFORMED
 		}
-		// Calculate fractions using Amount arithmetic
-		// Convert to IOU for precise fractional calculations (XRP division is integer-only)
-		frac1 := toIOUForCalc(amount1).Div(toIOUForCalc(assetBalance1), false)
-		frac2 := toIOUForCalc(amount2).Div(toIOUForCalc(assetBalance2), false)
 
-		// Use the smaller fraction
-		var frac tx.Amount
-		if !assetBalance2.IsZero() && frac2.Compare(frac1) < 0 {
-			frac = frac2
-		} else {
-			frac = frac1
-		}
-
-		lpTokensToRedeem = toIOUForCalc(lptBalance).Mul(frac, false)
-		if lpTokensToRedeem.IsZero() || isGreater(lpTokensToRedeem, lpTokensHeld) {
+		frac := numberDiv(toIOUForCalc(amount1), toIOUForCalc(assetBalance1))
+		amount2Withdraw := getRoundedAsset(fixV1_3, assetBalance2, frac, false)
+		tokensAdj := getRoundedLPTokens(fixV1_3, lptBalance, frac, false)
+		if fixV1_3 && tokensAdj.IsZero() {
 			return tx.TecAMM_INVALID_TOKENS
 		}
-		withdrawAmount1 = toIOUForCalc(assetBalance1).Mul(frac, false)
-		withdrawAmount2 = toIOUForCalc(assetBalance2).Mul(frac, false)
+		// factor in the adjusted tokens
+		frac = adjustFracByTokens(fixV1_3, lptBalance, tokensAdj, frac)
+		amount2Withdraw = getRoundedAsset(fixV1_3, assetBalance2, frac, false)
+
+		if toIOUForCalc(amount2Withdraw).Compare(toIOUForCalc(amount2)) <= 0 {
+			withdrawAmount1 = amount1
+			withdrawAmount2 = amount2Withdraw
+			lpTokensToRedeem = tokensAdj
+		} else {
+			frac = numberDiv(toIOUForCalc(amount2), toIOUForCalc(assetBalance2))
+			amountWithdraw := getRoundedAsset(fixV1_3, assetBalance1, frac, false)
+			tokensAdj = getRoundedLPTokens(fixV1_3, lptBalance, frac, false)
+			if fixV1_3 && tokensAdj.IsZero() {
+				return tx.TecAMM_INVALID_TOKENS
+			}
+			frac = adjustFracByTokens(fixV1_3, lptBalance, tokensAdj, frac)
+			amountWithdraw = getRoundedAsset(fixV1_3, assetBalance1, frac, false)
+
+			if fixV1_3 && toIOUForCalc(amountWithdraw).Compare(toIOUForCalc(amount1)) > 0 {
+				return tx.TecAMM_FAILED
+			}
+
+			withdrawAmount1 = amountWithdraw
+			withdrawAmount2 = amount2
+			lpTokensToRedeem = tokensAdj
+		}
 
 	case flags&tfOneAssetLPToken != 0:
-		// Single asset withdrawal for specific LP tokens
-		// Equation 8: ammAssetOut
+		// Single asset withdrawal for specific LP tokens (singleWithdrawTokens)
+		// Reference: rippled AMMWithdraw.cpp singleWithdrawTokens()
 		if lpTokensRequested.IsZero() {
 			return tx.TecAMM_INVALID_TOKENS
 		}
-		if isGreater(lpTokensRequested, lpTokensHeld) || isGreater(lpTokensRequested, lptBalance) {
+		if isGreater(toIOUForCalc(lpTokensRequested), toIOUForCalc(lpTokensHeld)) ||
+			isGreater(toIOUForCalc(lpTokensRequested), toIOUForCalc(lptBalance)) {
 			return tx.TecAMM_INVALID_TOKENS
 		}
 		isWithdrawAsset1 := matchesAsset(a.Amount, a.Asset)
+
+		isSingleAssetWithdraw = true
+		var assetBalance tx.Amount
 		if isWithdrawAsset1 {
-			withdrawAmount1 = ammAssetOut(assetBalance1, lptBalance, lpTokensRequested, tfee)
-			// Compare using IOU for mixed-type consistency
-			if isGreater(toIOUForCalc(withdrawAmount1), toIOUForCalc(assetBalance1)) {
-				return tx.TecAMM_BALANCE
-			}
-			if !amount1.IsZero() && isGreater(toIOUForCalc(amount1), toIOUForCalc(withdrawAmount1)) {
-				return tx.TecAMM_FAILED
-			}
-			withdrawAmount2 = zeroAmount(a.Asset2)
+			assetBalance = assetBalance1
+			withdrawAssetBalance = assetBalance1
 		} else {
-			withdrawAmount2 = ammAssetOut(assetBalance2, lptBalance, lpTokensRequested, tfee)
-			// Compare using IOU for mixed-type consistency
-			if isGreater(toIOUForCalc(withdrawAmount2), toIOUForCalc(assetBalance2)) {
-				return tx.TecAMM_BALANCE
-			}
-			if !amount1.IsZero() && isGreater(toIOUForCalc(amount1), toIOUForCalc(withdrawAmount2)) {
-				return tx.TecAMM_FAILED
-			}
-			withdrawAmount1 = zeroAmount(a.Asset)
+			assetBalance = assetBalance2
+			withdrawAssetBalance = assetBalance2
+			singleWithdrawIsAsset2 = true
 		}
-		lpTokensToRedeem = lpTokensRequested
+
+		// adjustLPTokensIn
+		tokensAdj := lpTokensRequested
+		if fixV1_3 {
+			tokensAdj = adjustLPTokens(lptBalance, lpTokensRequested, false)
+			if tokensAdj.IsZero() {
+				return tx.TecAMM_INVALID_TOKENS
+			}
+		}
+
+		// the adjusted tokens are factored in
+		amountWithdraw := ammAssetOut(assetBalance, lptBalance, tokensAdj, tfee, fixV1_3)
+		if amount1.IsZero() || toIOUForCalc(amountWithdraw).Compare(toIOUForCalc(amount1)) >= 0 {
+			if isWithdrawAsset1 {
+				withdrawAmount1 = amountWithdraw
+				withdrawAmount2 = zeroAmount(a.Asset2)
+			} else {
+				withdrawAmount1 = zeroAmount(a.Asset)
+				withdrawAmount2 = amountWithdraw
+			}
+			lpTokensToRedeem = tokensAdj
+		} else {
+			return tx.TecAMM_FAILED
+		}
 
 	case flags&tfLimitLPToken != 0:
-		// Single asset withdrawal with effective price limit
+		// Single asset withdrawal with effective price limit (singleWithdrawEPrice)
+		// Reference: rippled AMMWithdraw.cpp singleWithdrawEPrice()
 		if amount1.IsZero() || a.EPrice == nil || a.EPrice.IsZero() {
 			return tx.TemMALFORMED
 		}
 
 		isWithdrawAsset1 := matchesAsset(a.Amount, a.Asset)
+		isSingleAssetWithdraw = true
 		var assetBalance tx.Amount
 		if isWithdrawAsset1 {
 			assetBalance = assetBalance1
+			withdrawAssetBalance = assetBalance1
 		} else {
 			assetBalance = assetBalance2
+			withdrawAssetBalance = assetBalance2
+			singleWithdrawIsAsset2 = true
 		}
 
-		lpTokensToRedeem = calcLPTokensIn(assetBalance, amount1, lptBalance, tfee)
-		if lpTokensToRedeem.IsZero() || isGreater(lpTokensToRedeem, lpTokensHeld) {
-			return tx.TecAMM_INVALID_TOKENS
-		}
+		ePrice := *a.EPrice
+		assetBalIOU := toIOUForCalc(assetBalance)
+		lptBalIOU := toIOUForCalc(lptBalance)
+		ePriceIOU := toIOUForCalc(ePrice)
 
-		// Check effective price: EP = lpTokens / amount
-		effectivePrice := lpTokensToRedeem.Div(amount1, false)
-		if isGreater(effectivePrice, *a.EPrice) {
+		// t = T*(T + A*E*(f - 2))/(T*f - A*E)
+		ae := assetBalIOU.Mul(ePriceIOU, false)
+		f := getFee(tfee)
+		two := numAmount(2)
+		fMinus2, _ := f.Sub(two)
+		aeFMinus2 := ae.Mul(fMinus2, false)
+		tPlusAE, _ := lptBalIOU.Add(aeFMinus2)
+		tf := lptBalIOU.Mul(f, false)
+		tfMinusAE, _ := tf.Sub(ae)
+
+		tokensAdj := getRoundedLPTokensCb(fixV1_3,
+			func() tx.Amount { return numberDiv(lptBalIOU.Mul(tPlusAE, false), tfMinusAE) },
+			lptBalance,
+			func() tx.Amount { return numberDiv(tPlusAE, tfMinusAE) },
+			false)
+
+		if tokensAdj.IsZero() || tokensAdj.IsNegative() {
+			if fixV1_3 {
+				return tx.TecAMM_INVALID_TOKENS
+			}
 			return tx.TecAMM_FAILED
 		}
 
-		if isWithdrawAsset1 {
-			withdrawAmount1 = amount1
-			withdrawAmount2 = zeroAmount(a.Asset2)
+		tokensAdjIOU := toIOUForCalc(tokensAdj)
+		amountWithdraw := getRoundedAssetCb(fixV1_3,
+			func() tx.Amount { return numberDiv(tokensAdjIOU, ePriceIOU) },
+			amount1,
+			func() tx.Amount { return numberDiv(tokensAdjIOU, ePriceIOU) },
+			false)
+
+		if amount1.IsZero() || toIOUForCalc(amountWithdraw).Compare(toIOUForCalc(amount1)) >= 0 {
+			if isWithdrawAsset1 {
+				withdrawAmount1 = amountWithdraw
+				withdrawAmount2 = zeroAmount(a.Asset2)
+			} else {
+				withdrawAmount1 = zeroAmount(a.Asset)
+				withdrawAmount2 = amountWithdraw
+			}
+			lpTokensToRedeem = tokensAdj
 		} else {
-			withdrawAmount1 = zeroAmount(a.Asset)
-			withdrawAmount2 = amount1
+			return tx.TecAMM_FAILED
 		}
 
 	default:
@@ -431,8 +581,47 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecAMM_INVALID_TOKENS
 	}
 
+	// Run adjustAmountsByLPTokens for withdrawal (non-withdrawAll modes)
+	// Reference: rippled AMMWithdraw.cpp withdraw() calls adjustAmountsByLPTokens
+	// Single-asset modes call withdraw(amountBalance, amountWithdraw, nullopt, ...)
+	// where amountBalance is the withdrawn asset's balance. Two-asset modes call
+	// withdraw(amountBalance, amount, amount2, ...) with both amounts.
+	if !isWithdrawAll {
+		fixV1_1 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_1)
+		if isSingleAssetWithdraw {
+			var withdrawAmt tx.Amount
+			if singleWithdrawIsAsset2 {
+				withdrawAmt = withdrawAmount2
+			} else {
+				withdrawAmt = withdrawAmount1
+			}
+			adjAmt, _, adjTokens := adjustAmountsByLPTokens(
+				withdrawAssetBalance, withdrawAmt, nil, lptBalance, lpTokensToRedeem, tfee, false, fixV1_3, fixV1_1)
+			lpTokensToRedeem = adjTokens
+			if singleWithdrawIsAsset2 {
+				withdrawAmount2 = adjAmt
+			} else {
+				withdrawAmount1 = adjAmt
+			}
+		} else {
+			var amount2Ptr *tx.Amount
+			if !withdrawAmount2.IsZero() {
+				amount2Ptr = &withdrawAmount2
+			}
+			withdrawAmount1, amount2Ptr, lpTokensToRedeem = adjustAmountsByLPTokens(
+				assetBalance1, withdrawAmount1, amount2Ptr, lptBalance, lpTokensToRedeem, tfee, false, fixV1_3, fixV1_1)
+			if amount2Ptr != nil {
+				withdrawAmount2 = *amount2Ptr
+			}
+		}
+	}
+
+	// Verify LP tokens
+	if lpTokensToRedeem.IsZero() || isGreater(toIOUForCalc(lpTokensToRedeem), toIOUForCalc(lpTokensHeld)) {
+		return tx.TecAMM_INVALID_TOKENS
+	}
+
 	// Verify withdrawal doesn't exceed balances
-	// Convert to IOU for comparison since withdrawAmount may be IOU from calculations
 	if isGreater(toIOUForCalc(withdrawAmount1), toIOUForCalc(assetBalance1)) {
 		return tx.TecAMM_BALANCE
 	}
@@ -441,14 +630,16 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Per rippled: Cannot withdraw one side of the pool while leaving the other
-	isSingleOrTwoAsset := flags&(tfSingleAsset|tfTwoAsset|tfLimitLPToken) != 0
-	if isSingleOrTwoAsset {
-		// Convert to IOU for comparison since withdrawAmount may be IOU from calculations
-		w1EqualsB1 := toIOUForCalc(withdrawAmount1).Compare(toIOUForCalc(assetBalance1)) == 0
-		w2EqualsB2 := toIOUForCalc(withdrawAmount2).Compare(toIOUForCalc(assetBalance2)) == 0
-		if (w1EqualsB1 && !w2EqualsB2) || (w2EqualsB2 && !w1EqualsB1) {
-			return tx.TecAMM_BALANCE
-		}
+	w1EqualsB1 := toIOUForCalc(withdrawAmount1).Compare(toIOUForCalc(assetBalance1)) == 0
+	w2EqualsB2 := toIOUForCalc(withdrawAmount2).Compare(toIOUForCalc(assetBalance2)) == 0
+	if (w1EqualsB1 && !w2EqualsB2) || (w2EqualsB2 && !w1EqualsB1) {
+		return tx.TecAMM_BALANCE
+	}
+
+	// May happen if withdrawing an amount close to one side of the pool
+	if toIOUForCalc(lpTokensToRedeem).Compare(toIOUForCalc(lptBalance)) == 0 &&
+		(!w1EqualsB1 || !w2EqualsB2) {
+		return tx.TecAMM_BALANCE
 	}
 
 	// Transfer assets from AMM to withdrawer
@@ -468,20 +659,18 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Account.Balance += drops
 	}
 
-	// For IOU transfers, update trust lines for BOTH withdrawer and AMM
-	// Reference: rippled AMMWithdraw.cpp - withdrawal handles token transfer via book::quality path
+	// For IOU transfers: check reserve if trust line creation is needed,
+	// then transfer tokens.
+	// Reference: rippled AMMWithdraw.cpp lines 581-647
+	enabledFixAMMv1_2 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_2)
+
 	if !isXRP1 && !withdrawAmount1.IsZero() {
 		issuerID, err := sle.DecodeAccountID(a.Asset.Issuer)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-		// Credit withdrawer's trust line (positive delta)
-		if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset.Currency, withdrawAmount1, ctx.View); err != nil {
-			return tx.TefINTERNAL
-		}
-		// Debit AMM's trust line (negative delta)
-		if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset, withdrawAmount1.Negate(), ctx.View); err != nil {
-			return tx.TefINTERNAL
+		if result := withdrawIOUToAccount(ctx, accountID, issuerID, ammAccountID, a.Asset, withdrawAmount1, enabledFixAMMv1_2); result != tx.TesSUCCESS {
+			return result
 		}
 	}
 	if !isXRP2 && !withdrawAmount2.IsZero() {
@@ -489,56 +678,37 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-		// Credit withdrawer's trust line
-		if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset2.Currency, withdrawAmount2, ctx.View); err != nil {
-			return tx.TefINTERNAL
-		}
-		// Debit AMM's trust line
-		if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2.Negate(), ctx.View); err != nil {
-			return tx.TefINTERNAL
+		if result := withdrawIOUToAccount(ctx, accountID, issuerID, ammAccountID, a.Asset2, withdrawAmount2, enabledFixAMMv1_2); result != tx.TesSUCCESS {
+			return result
 		}
 	}
 
-	// Redeem LP tokens - subtract from AMM LP balance
+	// Redeem LP tokens: debit withdrawer's trust line, then reduce AMM LP balance.
+	// Reference: rippled AMMWithdraw.cpp — redeemIOU(account_, lpTokensActual, lpTokens.issue())
+	if !lpTokensToRedeem.IsZero() {
+		lptCurrency := GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency)
+		ammAccountAddr, _ := sle.EncodeAccountID(amm.Account)
+		redeemAmt := sle.NewIssuedAmountFromValue(
+			lpTokensToRedeem.Mantissa(), lpTokensToRedeem.Exponent(), lptCurrency, ammAccountAddr)
+		if r := redeemLPTokens(ctx.View, accountID, amm.Account, redeemAmt); r != tx.TesSUCCESS {
+			return r
+		}
+	}
 	newLPBalance, err := amm.LPTokenBalance.Sub(lpTokensToRedeem)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	amm.LPTokenBalance = newLPBalance
-
 	// NOTE: Asset balances are NOT stored in AMM entry
 	// They are updated by the balance transfers above:
 	// - XRP: via ammAccount.Balance -= drops
 	// - IOU: via trustline updates (createOrUpdateAMMTrustline)
 
-	// Check if AMM should be deleted (empty)
-	ammDeleted := false
-	if newLPBalance.IsZero() {
-		if err := ctx.View.Erase(ammKey); err != nil {
-			return tx.TefINTERNAL
-		}
-		if err := ctx.View.Erase(ammAccountKey); err != nil {
-			return tx.TefINTERNAL
-		}
-		ammDeleted = true
-	}
-
-	if !ammDeleted {
-		ammBytes, err := serializeAMMData(amm)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		if err := ctx.View.Update(ammKey, ammBytes); err != nil {
-			return tx.TefINTERNAL
-		}
-
-		ammAccountBytes, err := sle.SerializeAccountRoot(ammAccount)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		if err := ctx.View.Update(ammAccountKey, ammAccountBytes); err != nil {
-			return tx.TefINTERNAL
-		}
+	// Check if AMM should be deleted (empty) or updated
+	// Reference: rippled AMMWithdraw.cpp deleteAMMAccountIfEmpty (line 718)
+	deleteResult := deleteAMMAccountIfEmpty(ctx.View, ammKey, ammAccountKey,
+		newLPBalance, a.Asset, a.Asset2, amm, ammAccount)
+	if deleteResult != tx.TesSUCCESS && deleteResult != tx.TecINCOMPLETE {
+		return deleteResult
 	}
 
 	accountKey := keylet.Account(accountID)
@@ -549,6 +719,190 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 	if err := ctx.View.Update(accountKey, accountBytes); err != nil {
 		return tx.TefINTERNAL
 	}
+
+	return tx.TesSUCCESS
+}
+
+// withdrawIOUToAccount handles IOU transfer from AMM to withdrawer, including
+// reserve check and trust line creation when needed.
+// Reference: rippled AMMWithdraw.cpp sufficientReserve (lines 581-603) +
+// accountSend (lines 609-646)
+func withdrawIOUToAccount(
+	ctx *tx.ApplyContext,
+	accountID, issuerID, ammAccountID [20]byte,
+	asset tx.Asset,
+	amount tx.Amount,
+	enabledFixAMMv1_2 bool,
+) tx.Result {
+	// Check if withdrawer already has a trust line for this IOU.
+	trustLineKey := keylet.Line(accountID, issuerID, asset.Currency)
+	trustLineExists, err := ctx.View.Exists(trustLineKey)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	if !trustLineExists {
+		// Reserve check: with fixAMMv1_2, verify the withdrawer has enough
+		// reserve for the new trust line before creating it.
+		// Reference: rippled AMMWithdraw.cpp lines 583-601
+		if enabledFixAMMv1_2 {
+			ownerCount := ctx.Account.OwnerCount
+			// See also SetTrust::doApply(): ownerCount < 2 → no reserve needed
+			if ownerCount >= 2 {
+				reserve := ctx.AccountReserve(ownerCount + 1)
+				if ctx.Account.Balance < reserve {
+					return tx.TecINSUFFICIENT_RESERVE
+				}
+			}
+		}
+
+		// Create trust line for the withdrawer.
+		// Reference: rippled uses accountSend → rippleCredit → trustCreate
+		if result := createWithdrawTrustLine(ctx, accountID, issuerID, asset, amount, trustLineKey); result != tx.TesSUCCESS {
+			return result
+		}
+	} else {
+		// Trust line exists — just credit the withdrawer's balance.
+		if err := updateTrustlineBalanceInView(accountID, issuerID, asset.Currency, amount, ctx.View); err != nil {
+			return tx.TefINTERNAL
+		}
+	}
+
+	// Debit AMM's trust line (negative delta)
+	if err := createOrUpdateAMMTrustline(ammAccountID, asset, amount.Negate(), ctx.View); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	return tx.TesSUCCESS
+}
+
+// createWithdrawTrustLine creates a new trust line between withdrawer and
+// issuer, setting the initial balance to the withdraw amount.
+// Reference: rippled trustCreate via accountSend path
+func createWithdrawTrustLine(
+	ctx *tx.ApplyContext,
+	accountID, issuerID [20]byte,
+	asset tx.Asset,
+	amount tx.Amount,
+	trustLineKey keylet.Keylet,
+) tx.Result {
+	// Determine low/high accounts
+	accountIsLow := keylet.IsLowAccount(accountID, issuerID)
+	var lowAccountID, highAccountID [20]byte
+	if accountIsLow {
+		lowAccountID = accountID
+		highAccountID = issuerID
+	} else {
+		lowAccountID = issuerID
+		highAccountID = accountID
+	}
+
+	lowAccountStr, err := sle.EncodeAccountID(lowAccountID)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	highAccountStr, err := sle.EncodeAccountID(highAccountID)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Set balance: the withdrawer (receiver) gets the tokens.
+	// Convention: positive balance = LOW account holds tokens.
+	// When receiver (account) is LOW → positive balance
+	// When receiver (account) is HIGH → negative balance
+	var balance tx.Amount
+	if accountIsLow {
+		balance = sle.NewIssuedAmountFromValue(
+			amount.Mantissa(), amount.Exponent(),
+			asset.Currency, sle.AccountOneAddress,
+		)
+	} else {
+		negated := amount.Negate()
+		balance = sle.NewIssuedAmountFromValue(
+			negated.Mantissa(), negated.Exponent(),
+			asset.Currency, sle.AccountOneAddress,
+		)
+	}
+
+	// Flags: receiver gets reserve flag + NoRipple per DefaultRipple setting
+	// Reference: rippled trustCreate
+	var flags uint32
+	if accountIsLow {
+		flags |= sle.LsfLowReserve
+	} else {
+		flags |= sle.LsfHighReserve
+	}
+
+	// Set NoRipple based on DefaultRipple for each side
+	acctData, err := ctx.View.Read(keylet.Account(accountID))
+	if err != nil || acctData == nil {
+		return tx.TefINTERNAL
+	}
+	acct, err := sle.ParseAccountRoot(acctData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if (acct.Flags & sle.LsfDefaultRipple) == 0 {
+		if accountIsLow {
+			flags |= sle.LsfLowNoRipple
+		} else {
+			flags |= sle.LsfHighNoRipple
+		}
+	}
+
+	issuerAcctData, err := ctx.View.Read(keylet.Account(issuerID))
+	if err != nil || issuerAcctData == nil {
+		return tx.TefINTERNAL
+	}
+	issuerAcct, err := sle.ParseAccountRoot(issuerAcctData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if (issuerAcct.Flags & sle.LsfDefaultRipple) == 0 {
+		if !accountIsLow {
+			flags |= sle.LsfLowNoRipple
+		} else {
+			flags |= sle.LsfHighNoRipple
+		}
+	}
+
+	rs := &sle.RippleState{
+		Balance:   balance,
+		LowLimit:  tx.NewIssuedAmount(0, -100, asset.Currency, lowAccountStr),
+		HighLimit: tx.NewIssuedAmount(0, -100, asset.Currency, highAccountStr),
+		Flags:     flags,
+	}
+
+	// Insert into both owner directories
+	lowDirKey := keylet.OwnerDir(lowAccountID)
+	lowDirResult, err := sle.DirInsert(ctx.View, lowDirKey, trustLineKey.Key, func(dir *sle.DirectoryNode) {
+		dir.Owner = lowAccountID
+	})
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	rs.LowNode = lowDirResult.Page
+
+	highDirKey := keylet.OwnerDir(highAccountID)
+	highDirResult, err := sle.DirInsert(ctx.View, highDirKey, trustLineKey.Key, func(dir *sle.DirectoryNode) {
+		dir.Owner = highAccountID
+	})
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	rs.HighNode = highDirResult.Page
+
+	// Serialize and insert
+	rsBytes, err := sle.SerializeRippleState(rs)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := ctx.View.Insert(trustLineKey, rsBytes); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Increment withdrawer's owner count for the new trust line
+	ctx.Account.OwnerCount++
 
 	return tx.TesSUCCESS
 }

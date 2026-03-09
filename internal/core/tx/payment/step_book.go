@@ -7,6 +7,8 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/amm"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/permissioneddomain"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )
 
@@ -84,6 +86,22 @@ type BookStep struct {
 
 	// cache holds results from the last Rev() call
 	cache *bookCache
+
+	// domainID is set for permissioned domain payments.
+	// When set, offers are fetched from the domain book directory, and each
+	// offer is checked for domain membership before being consumed.
+	// Reference: rippled PermissionedDEXHelpers.cpp offerInDomain()
+	domainID *[32]byte
+
+	// ammLiquidity provides synthetic AMM offers for this book.
+	// Initialized in configureAMMOnBookSteps if an AMM pool exists for the book.
+	// Reference: rippled BookStep::ammLiquidity_
+	ammLiquidity *AMMLiquidity
+
+	// fixAMMOverflowOffer gates the AMM pool product invariant check.
+	// When enabled, throws tecINVARIANT_FAILED if the invariant is violated.
+	// Reference: rippled fixAMMOverflowOffer amendment
+	fixAMMOverflowOffer bool
 }
 
 // bookCache holds cached values from the reverse pass
@@ -166,135 +184,85 @@ func (s *BookStep) Rev(
 	var currentQuality *Quality
 	offerAttempted := false
 
-	// Iterate through offers — combined forEachOffer + revImp callback
-	fundedCount := 0
-	unfundedCount := 0
-	for s.offersUsed_ < s.maxOffersToConsume && !remainingOut.IsZero() {
-		offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited)
-		if err != nil {
-			break
-		}
-		if offer == nil {
-			break
-		}
+	// AMM-aware offer iteration — combined forEachOffer + revImp callback.
+	// Reference: rippled BookStep.cpp forEachOffer lines 836-873
+	//
+	// The pattern is:
+	//   1. Get first CLOB offer quality (lobQuality)
+	//   2. tryAMM(lobQuality) — try AMM offer with CLOB quality as threshold
+	//   3. Iterate CLOB offers at the same quality level
+	//   4. If no CLOB offers, tryAMM(nullopt) — try AMM alone
+	ammProcessed := false
 
-		visited[offerKey] = true
-
-		// Get owner funds for this offer
-		ownerFunds := s.getOfferFundedAmount(sb, offer)
-
-		// Check unfunded offer — handled by FlowOfferStream in rippled BEFORE execOffer.
-		// Unfunded offers are removed transparently without affecting quality tracking.
-		if ownerFunds.IsEffectivelyZero() || offer.TakerGets.IsZero() {
-			ofrsToRm[offerKey] = true
-			s.offersUsed_++
-			unfundedCount++
-			continue
-		}
-
-		// Check if this is a tiny underfunded offer with degraded quality.
-		// Also handled at the OfferStream level in rippled.
-		// Reference: rippled OfferStream.cpp lines 343-404
-		if s.shouldRmSmallIncreasedQOffer(sb, offer, ownerFunds) {
-			ofrsToRm[offerKey] = true
-			s.offersUsed_++
-			continue
-		}
-
-		// === execOffer begins here (rippled BookStep.cpp forEachOffer line 748) ===
-		// Quality-level tracking: forEachOffer processes one quality level at a time.
-		// When the offer quality changes from the current level, stop iteration.
-		// This only applies to funded offers (after OfferStream filtering above).
-		// Reference: rippled BookStep.cpp forEachOffer lines 751-754:
-		//   if (!ofrQ) ofrQ = offer.quality();
-		//   else if (*ofrQ != offer.quality()) return false;
-		offerQuality := s.offerQuality(offer)
+	// execOffer processes a single offer (CLOB or AMM) through the rev callback.
+	// Returns false to stop iteration.
+	execOffer := func(ofrIn, ofrOut EitherAmount, offerQuality Quality,
+		ofrTrIn, ofrTrOut uint32, _ bool, isAMM bool,
+		ammOffer *AMMOffer, clobOffer *sle.LedgerOffer, clobKey [32]byte,
+	) bool {
+		// Quality tracking
 		if currentQuality == nil {
 			currentQuality = &offerQuality
 		} else if currentQuality.Value != offerQuality.Value {
-			break
+			return false
 		}
 
-		// Self-cross detection (default path only)
-		if s.defaultPath && s.qualityLimit != nil {
-			offerOwner, ownerErr := sle.DecodeAccountID(offer.Account)
+		// Self-cross detection (CLOB only, default path only)
+		if !isAMM && s.defaultPath && s.qualityLimit != nil {
+			offerOwner, ownerErr := sle.DecodeAccountID(clobOffer.Account)
 			if ownerErr == nil {
 				if !offerQuality.WorseThan(*s.qualityLimit) &&
 					s.strandSrc == offerOwner && s.strandDst == offerOwner {
-					ofrsToRm[offerKey] = true
+					ofrsToRm[clobKey] = true
 					s.offersUsed_++
-					// Reset quality tracking if no offers have been attempted
-					// Reference: rippled BookStep.cpp limitSelfCrossQuality lines 452-453
 					if !offerAttempted {
 						currentQuality = nil
 					}
-					continue
+					return true
 				}
 			}
 		}
 
-		// Authorization check: verify offer owner can hold the input currency
-		// Reference: BookStep.cpp lines 760-790
-		if !s.book.In.IsXRP() {
-			offerOwner, ownerErr := sle.DecodeAccountID(offer.Account)
+		// Authorization check (CLOB only)
+		if !isAMM && !s.book.In.IsXRP() {
+			offerOwner, ownerErr := sle.DecodeAccountID(clobOffer.Account)
 			if ownerErr == nil && offerOwner != s.book.In.Issuer {
 				if !s.isOfferOwnerAuthorized(afView, offerOwner, s.book.In.Issuer, s.book.In.Currency) {
-					ofrsToRm[offerKey] = true
+					ofrsToRm[clobKey] = true
 					s.offersUsed_++
-					// Reset quality tracking if no offers have been attempted
-					// Reference: rippled BookStep.cpp forEachOffer lines 783-785
 					if !offerAttempted {
 						currentQuality = nil
 					}
-					continue
+					return true
 				}
 			}
 		}
 
-		fundedCount++
-
-		// Quality check against quality limit
+		// Quality limit check
 		if s.qualityLimit != nil && offerQuality.WorseThan(*s.qualityLimit) {
-			break
+			return false
 		}
 
-		// Mark that we've attempted to cross at this quality level
-		// Reference: rippled BookStep.cpp forEachOffer line 832
 		offerAttempted = true
 
-		// === forEachOffer: compute ofrAmt, stpAmt, ownerGives ===
-		// Reference: BookStep.cpp lines 802-834
+		// AMM offers use adjustRates to waive output transfer fee
+		if isAMM {
+			ofrTrIn, ofrTrOut = ammOffer.AdjustRates(ofrTrIn, ofrTrOut)
+		}
 
-		// ofrAmt = offer.amount() (NET: TakerPays/TakerGets)
-		ofrIn := s.offerTakerPays(offer)
-		ofrOut := s.offerTakerGets(offer)
-
-		// Compute per-offer transfer rates (self-pay exemption in offer crossing)
-		// Reference: rippled BookOfferCrossingStep::getOfrInRate/getOfrOutRate
-		funds := ownerFunds
-		offerOwner, _ := sle.DecodeAccountID(offer.Account)
-		ofrTrIn := s.getOfrInRate(offerOwner, trIn)
-		ofrTrOut := s.getOfrOutRate(offerOwner, trOut)
-
-		// stpAmt.in = mulRatio(ofrAmt.in, ofrInRate, QUALITY_ONE, true) (GROSS input)
-		// stpAmt.out = ofrAmt.out
+		// stpAmt.in = mulRatio(ofrAmt.in, ofrInRate, QUALITY_ONE, true)
 		stpIn := MulRatio(ofrIn, ofrTrIn, QualityOne, true)
 		stpOut := ofrOut
-
-		// ownerGives = mulRatio(ofrAmt.out, ofrOutRate, QUALITY_ONE, false)
 		ownerGives := MulRatio(ofrOut, ofrTrOut, QualityOne, false)
 
-		// Funding cap: if funds < ownerGives, adjust all amounts
-		// Reference: BookStep.cpp lines 816-830
-		isFunded := offerOwner == s.book.Out.Issuer // offer owner is issuer = unlimited funds
-		if !isFunded {
-			if funds.Compare(ownerGives) < 0 {
+		// Funding cap (CLOB only — AMM is always funded)
+		if !isAMM {
+			offerOwner, _ := sle.DecodeAccountID(clobOffer.Account)
+			funds := s.getOfferFundedAmount(sb, clobOffer)
+			isFundedByIssuer := offerOwner == s.book.Out.Issuer
+			if !isFundedByIssuer && funds.Compare(ownerGives) < 0 {
 				ownerGives = funds
 				stpOut = MulRatio(ownerGives, QualityOne, ofrTrOut, false)
-				// fixReducedOffersV1 gates strict vs non-strict rounding.
-				// With fix: CeilOutStrict (mulRoundStrict, precise, roundUp=true)
-				// Without fix: CeilOut (mulRound, non-strict "slop", always roundUp)
-				// Reference: rippled Offer.h TOffer::limitOut() + fixReducedOffersV1 amendment
 				if s.fixReducedOffersV1 {
 					ofrIn, ofrOut = offerQuality.CeilOutStrict(ofrIn, ofrOut, stpOut, false)
 				} else {
@@ -305,48 +273,140 @@ func (s *BookStep) Rev(
 		}
 
 		// === revImp callback: decide full take vs partial take ===
-		// Reference: BookStep.cpp lines 1044-1081
 		if stpOut.Compare(remainingOut) <= 0 {
-			// Full take: consume entire offer as-is
+			// Full take
 			totalIn = totalIn.Add(stpIn)
 			totalOut = totalOut.Add(stpOut)
 			remainingOut = out.Sub(totalOut)
 
-			if err := s.consumeOffer(sb, offer, stpIn, ofrIn, stpOut, ownerGives); err != nil {
-				break
+			if isAMM {
+				if err := s.consumeAMMOffer(sb, ammOffer, stpIn, ofrIn, stpOut, ownerGives); err != nil {
+					return false
+				}
+			} else {
+				if err := s.consumeOffer(sb, clobOffer, stpIn, ofrIn, stpOut, ownerGives); err != nil {
+					return false
+				}
 			}
 		} else {
 			// Partial take: limitStepOut
-			// Reference: BookStep.cpp limitStepOut lines 688-712
-			ofrAdjIn, ofrAdjOut := ofrIn, ofrOut
-			stpAdjIn, stpAdjOut := stpIn, stpOut
-			_, _ = stpAdjIn, stpAdjOut
-
-			// limitStepOut: limit = remainingOut
-			stpAdjOut = remainingOut
-			// Reference: rippled Offer.h TOffer::limitOut() — gates on fixReducedOffersV1:
-			//   With fix: ceil_out_strict(ofrAmt, limit, roundUp=true) (mulRoundStrict)
-			//   Without fix: ceil_out(ofrAmt, limit) (mulRound, non-strict, always roundUp)
-			if s.fixReducedOffersV1 {
-				ofrAdjIn, ofrAdjOut = offerQuality.CeilOutStrict(ofrAdjIn, ofrAdjOut, stpAdjOut, true)
+			stpAdjOut := remainingOut
+			var ofrAdjIn, ofrAdjOut EitherAmount
+			if isAMM {
+				ofrAdjIn, ofrAdjOut = ammOffer.LimitOut(ofrIn, ofrOut, stpAdjOut, true, s.fixReducedOffersV1)
 			} else {
-				ofrAdjIn, ofrAdjOut = offerQuality.CeilOut(ofrAdjIn, ofrAdjOut, stpAdjOut)
+				if s.fixReducedOffersV1 {
+					ofrAdjIn, ofrAdjOut = offerQuality.CeilOutStrict(ofrIn, ofrOut, stpAdjOut, true)
+				} else {
+					ofrAdjIn, ofrAdjOut = offerQuality.CeilOut(ofrIn, ofrOut, stpAdjOut)
+				}
 			}
-			stpAdjIn = MulRatio(ofrAdjIn, ofrTrIn, QualityOne, true)
+			stpAdjIn := MulRatio(ofrAdjIn, ofrTrIn, QualityOne, true)
 			ownerGivesAdj := MulRatio(stpAdjOut, ofrTrOut, QualityOne, false)
-
+			_ = ofrAdjOut
 
 			totalIn = totalIn.Add(stpAdjIn)
-			totalOut = out // result.out = out (force exact)
+			totalOut = out
 			remainingOut = s.zeroOut()
 
-			if err := s.consumeOffer(sb, offer, stpAdjIn, ofrAdjIn, stpAdjOut, ownerGivesAdj); err != nil {
-				break
+			if isAMM {
+				if err := s.consumeAMMOffer(sb, ammOffer, stpAdjIn, ofrAdjIn, stpAdjOut, ownerGivesAdj); err != nil {
+					return false
+				}
+			} else {
+				if err := s.consumeOffer(sb, clobOffer, stpAdjIn, ofrAdjIn, stpAdjOut, ownerGivesAdj); err != nil {
+					return false
+				}
 			}
 		}
 
 		s.offersUsed_++
+		return true
 	}
+
+	// tryAMM attempts to process an AMM offer with optional CLOB quality threshold.
+	// Reference: rippled BookStep.cpp forEachOffer lines 838-853
+	tryAMM := func(lobQuality *Quality) bool {
+		if ammProcessed || s.ammLiquidity == nil {
+			return true
+		}
+		// AMM doesn't support domain yet
+		if s.domainID != nil {
+			return true
+		}
+		ammOffer := s.getAMMOffer(sb, lobQuality)
+		if ammOffer == nil {
+			return true
+		}
+		ammProcessed = true
+		ofrIn := toEitherAmt(ammOffer.AmountIn())
+		ofrOut := toEitherAmt(ammOffer.AmountOut())
+		offerQ := ammOffer.Quality()
+		return execOffer(ofrIn, ofrOut, offerQ, trIn, trOut, true, true,
+			ammOffer, nil, [32]byte{})
+	}
+
+	// Main CLOB iteration with AMM interleaving
+	// Reference: rippled BookStep.cpp forEachOffer lines 855-873
+	fundedCount := 0
+	unfundedCount := 0
+
+	firstCLOB := true
+	for s.offersUsed_ < s.maxOffersToConsume && !remainingOut.IsZero() {
+		offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited)
+		if err != nil {
+			break
+		}
+		if offer == nil {
+			break
+		}
+		visited[offerKey] = true
+
+		// Pre-execOffer checks (OfferStream level)
+		ownerFunds := s.getOfferFundedAmount(sb, offer)
+		if ownerFunds.IsEffectivelyZero() || offer.TakerGets.IsZero() {
+			ofrsToRm[offerKey] = true
+			s.offersUsed_++
+			unfundedCount++
+			continue
+		}
+		if s.shouldRmSmallIncreasedQOffer(sb, offer, ownerFunds) {
+			ofrsToRm[offerKey] = true
+			s.offersUsed_++
+			continue
+		}
+
+		// On first funded CLOB offer, try AMM with LOB quality
+		if firstCLOB {
+			firstCLOB = false
+			lobQ := s.offerQuality(offer)
+			if !tryAMM(&lobQ) {
+				break
+			}
+		}
+
+		fundedCount++
+
+		// Process this CLOB offer through execOffer
+		offerOwner, _ := sle.DecodeAccountID(offer.Account)
+		ofrTrIn := s.getOfrInRate(offerOwner, trIn)
+		ofrTrOut := s.getOfrOutRate(offerOwner, trOut)
+		ofrIn := s.offerTakerPays(offer)
+		ofrOut := s.offerTakerGets(offer)
+		offerQ := s.offerQuality(offer)
+		if !execOffer(ofrIn, ofrOut, offerQ, ofrTrIn, ofrTrOut, false, false,
+			nil, offer, offerKey) {
+			break
+		}
+	}
+
+	// If no CLOB offers found, try AMM alone
+	if firstCLOB {
+		tryAMM(nil)
+	}
+
+	_ = fundedCount
+	_ = unfundedCount
 
 	// Check if we should become inactive
 	if s.offersUsed_ >= s.maxOffersToConsume {
@@ -412,110 +472,74 @@ func (s *BookStep) Fwd(
 	var currentQuality *Quality
 	offerAttempted := false
 
-	for s.offersUsed_ < s.maxOffersToConsume && !remainingIn.IsZero() {
-		offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited)
-		if err != nil {
-			break
-		}
-		if offer == nil {
-			break
-		}
+	// AMM-aware offer iteration — combined forEachOffer + fwdImp callback.
+	ammProcessed := false
 
-		visited[offerKey] = true
-
-		// Get owner funds for this offer
-		ownerFunds := s.getOfferFundedAmount(sb, offer)
-
-		// Check unfunded offer — handled by FlowOfferStream in rippled BEFORE execOffer.
-		if ownerFunds.IsEffectivelyZero() || offer.TakerGets.IsZero() {
-			ofrsToRm[offerKey] = true
-			s.offersUsed_++
-			continue
-		}
-
-		// Check if this is a tiny underfunded offer with degraded quality.
-		// Also handled at the OfferStream level in rippled.
-		if s.shouldRmSmallIncreasedQOffer(sb, offer, ownerFunds) {
-			ofrsToRm[offerKey] = true
-			s.offersUsed_++
-			continue
-		}
-
-		// === execOffer begins here ===
-		// Quality-level tracking: forEachOffer processes one quality level at a time.
-		// Reference: rippled BookStep.cpp forEachOffer lines 751-754
-		offerQuality := s.offerQuality(offer)
+	// execOfferFwd processes a single offer (CLOB or AMM) through the fwd callback.
+	execOfferFwd := func(ofrIn, ofrOut EitherAmount, offerQuality Quality,
+		ofrTrIn, ofrTrOut uint32, _ bool, isAMM bool,
+		ammOffer *AMMOffer, clobOffer *sle.LedgerOffer, clobKey [32]byte,
+	) bool {
+		// Quality tracking
 		if currentQuality == nil {
 			currentQuality = &offerQuality
 		} else if currentQuality.Value != offerQuality.Value {
-			break
+			return false
 		}
 
-		// Self-cross detection
-		if s.defaultPath && s.qualityLimit != nil {
-			offerOwner, ownerErr := sle.DecodeAccountID(offer.Account)
+		// Self-cross detection (CLOB only)
+		if !isAMM && s.defaultPath && s.qualityLimit != nil {
+			offerOwner, ownerErr := sle.DecodeAccountID(clobOffer.Account)
 			if ownerErr == nil {
 				if !offerQuality.WorseThan(*s.qualityLimit) &&
 					s.strandSrc == offerOwner && s.strandDst == offerOwner {
-					ofrsToRm[offerKey] = true
+					ofrsToRm[clobKey] = true
 					s.offersUsed_++
-					// Reset quality tracking if no offers have been attempted
 					if !offerAttempted {
 						currentQuality = nil
 					}
-					continue
+					return true
 				}
 			}
 		}
 
-		// Authorization check: verify offer owner can hold the input currency
-		// Reference: BookStep.cpp lines 760-790
-		if !s.book.In.IsXRP() {
-			offerOwner, ownerErr := sle.DecodeAccountID(offer.Account)
+		// Authorization check (CLOB only)
+		if !isAMM && !s.book.In.IsXRP() {
+			offerOwner, ownerErr := sle.DecodeAccountID(clobOffer.Account)
 			if ownerErr == nil && offerOwner != s.book.In.Issuer {
 				if !s.isOfferOwnerAuthorized(afView, offerOwner, s.book.In.Issuer, s.book.In.Currency) {
-					ofrsToRm[offerKey] = true
+					ofrsToRm[clobKey] = true
 					s.offersUsed_++
-					// Reset quality tracking if no offers have been attempted
 					if !offerAttempted {
 						currentQuality = nil
 					}
-					continue
+					return true
 				}
 			}
 		}
 
-		// Quality check against quality limit
 		if s.qualityLimit != nil && offerQuality.WorseThan(*s.qualityLimit) {
-			break
+			return false
 		}
 
-		// Mark that we've attempted to cross at this quality level
 		offerAttempted = true
 
-		// === forEachOffer: compute ofrAmt, stpAmt, ownerGives ===
-		ofrIn := s.offerTakerPays(offer)
-		ofrOut := s.offerTakerGets(offer)
-
-		// Compute per-offer transfer rates (self-pay exemption in offer crossing)
-		funds := ownerFunds
-		offerOwner, _ := sle.DecodeAccountID(offer.Account)
-		ofrTrIn := s.getOfrInRate(offerOwner, trIn)
-		ofrTrOut := s.getOfrOutRate(offerOwner, trOut)
+		if isAMM {
+			ofrTrIn, ofrTrOut = ammOffer.AdjustRates(ofrTrIn, ofrTrOut)
+		}
 
 		stpIn := MulRatio(ofrIn, ofrTrIn, QualityOne, true)
 		stpOut := ofrOut
 		ownerGives := MulRatio(ofrOut, ofrTrOut, QualityOne, false)
 
-		// Funding cap
-		isFunded := offerOwner == s.book.Out.Issuer
-		if !isFunded {
-			if funds.Compare(ownerGives) < 0 {
+		// Funding cap (CLOB only)
+		if !isAMM {
+			offerOwner, _ := sle.DecodeAccountID(clobOffer.Account)
+			funds := s.getOfferFundedAmount(sb, clobOffer)
+			isFundedByIssuer := offerOwner == s.book.Out.Issuer
+			if !isFundedByIssuer && funds.Compare(ownerGives) < 0 {
 				ownerGives = funds
 				stpOut = MulRatio(ownerGives, QualityOne, ofrTrOut, false)
-				// Funding cap: roundUp=false to prevent quality degradation.
-				// Reference: rippled BookStep.cpp forEachOffer line 826:
-				//   ofrAmt = offer.limitOut(ofrAmt, stpAmt.out, /*roundUp*/ false);
 				if s.fixReducedOffersV1 {
 					ofrIn, ofrOut = offerQuality.CeilOutStrict(ofrIn, ofrOut, stpOut, false)
 				} else {
@@ -525,53 +549,66 @@ func (s *BookStep) Fwd(
 			}
 		}
 
-		// === fwdImp callback ===
-		// Reference: BookStep.cpp lines 1172-1252
+		// fwdImp callback
 		if stpIn.Compare(remainingIn) <= 0 {
-			// Full take
 			totalIn = totalIn.Add(stpIn)
 			totalOut = totalOut.Add(stpOut)
 
-			// Check if forward produced more output than reverse cache
+			// Forward > reverse cache check
 			if prevCache != nil && totalOut.Compare(prevCache.out) > 0 && totalIn.Compare(prevCache.in) <= 0 {
-				// Recompute using limitStepOut with remaining cache output
 				remainingCacheOut := prevCache.out.Sub(totalOut.Sub(stpOut))
 				adjOfrIn, adjOfrOut := ofrIn, ofrOut
 				adjStpOut := remainingCacheOut
-				_ = MulRatio(adjStpOut, ofrTrOut, QualityOne, false) // ownerGivesAdj
-				adjOfrIn, adjOfrOut = offerQuality.CeilOutStrict(adjOfrIn, adjOfrOut, adjStpOut, true)
+				if isAMM {
+					adjOfrIn, adjOfrOut = ammOffer.LimitOut(adjOfrIn, adjOfrOut, adjStpOut, true, s.fixReducedOffersV1)
+				} else {
+					adjOfrIn, adjOfrOut = offerQuality.CeilOutStrict(adjOfrIn, adjOfrOut, adjStpOut, true)
+				}
 				adjStpIn := MulRatio(adjOfrIn, ofrTrIn, QualityOne, true)
+				_ = adjOfrOut
 
 				if adjStpIn.Compare(remainingIn) == 0 {
 					totalIn = in
 					totalOut = prevCache.out
 					ownerGivesAdj := MulRatio(adjStpOut, ofrTrOut, QualityOne, false)
-					if err := s.consumeOffer(sb, offer, adjStpIn, adjOfrIn, adjStpOut, ownerGivesAdj); err != nil {
-						break
+					if isAMM {
+						if err := s.consumeAMMOffer(sb, ammOffer, adjStpIn, adjOfrIn, adjStpOut, ownerGivesAdj); err != nil {
+							return false
+						}
+					} else {
+						if err := s.consumeOffer(sb, clobOffer, adjStpIn, adjOfrIn, adjStpOut, ownerGivesAdj); err != nil {
+							return false
+						}
 					}
 					remainingIn = s.zeroIn()
 					s.offersUsed_++
-					continue
+					return true
 				}
 			}
 
 			remainingIn = in.Sub(totalIn)
-			if err := s.consumeOffer(sb, offer, stpIn, ofrIn, stpOut, ownerGives); err != nil {
-				break
+			if isAMM {
+				if err := s.consumeAMMOffer(sb, ammOffer, stpIn, ofrIn, stpOut, ownerGives); err != nil {
+					return false
+				}
+			} else {
+				if err := s.consumeOffer(sb, clobOffer, stpIn, ofrIn, stpOut, ownerGives); err != nil {
+					return false
+				}
 			}
 		} else {
 			// Partial take: limitStepIn
-			// Reference: BookStep.cpp limitStepIn lines 660-685
 			stpAdjIn := remainingIn
 			inLmt := MulRatio(stpAdjIn, QualityOne, ofrTrIn, false)
-			// fixReducedOffersV2 gates ceil_in (non-strict, always roundUp) vs
-			// ceil_in_strict (strict, roundUp=false).
-			// Reference: rippled Offer.h TOffer::limitIn() + fixReducedOffersV2
 			var ofrAdjIn, ofrAdjOut EitherAmount
-			if s.fixReducedOffersV2 {
-				ofrAdjIn, ofrAdjOut = offerQuality.CeilInStrict(ofrIn, ofrOut, inLmt, false)
+			if isAMM {
+				ofrAdjIn, ofrAdjOut = ammOffer.LimitIn(ofrIn, ofrOut, inLmt, false, s.fixReducedOffersV2)
 			} else {
-				ofrAdjIn, ofrAdjOut = offerQuality.CeilIn(ofrIn, ofrOut, inLmt)
+				if s.fixReducedOffersV2 {
+					ofrAdjIn, ofrAdjOut = offerQuality.CeilInStrict(ofrIn, ofrOut, inLmt, false)
+				} else {
+					ofrAdjIn, ofrAdjOut = offerQuality.CeilIn(ofrIn, ofrOut, inLmt)
+				}
 			}
 			stpAdjOut := ofrAdjOut
 			ownerGivesAdj := MulRatio(ofrAdjOut, ofrTrOut, QualityOne, false)
@@ -579,12 +616,16 @@ func (s *BookStep) Fwd(
 			totalOut = totalOut.Add(stpAdjOut)
 			totalIn = in
 
-			// Check forward > reverse
+			// Forward > reverse cache check
 			if prevCache != nil && totalOut.Compare(prevCache.out) > 0 && totalIn.Compare(prevCache.in) <= 0 {
 				remainingCacheOut := prevCache.out.Sub(totalOut.Sub(stpAdjOut))
 				revOfrIn, revOfrOut := ofrIn, ofrOut
 				revStpOut := remainingCacheOut
-				revOfrIn, revOfrOut = offerQuality.CeilOutStrict(revOfrIn, revOfrOut, revStpOut, true)
+				if isAMM {
+					revOfrIn, revOfrOut = ammOffer.LimitOut(revOfrIn, revOfrOut, revStpOut, true, s.fixReducedOffersV1)
+				} else {
+					revOfrIn, revOfrOut = offerQuality.CeilOutStrict(revOfrIn, revOfrOut, revStpOut, true)
+				}
 				revStpIn := MulRatio(revOfrIn, ofrTrIn, QualityOne, true)
 				revOwnerGives := MulRatio(revStpOut, ofrTrOut, QualityOne, false)
 				_ = revOfrOut
@@ -592,22 +633,103 @@ func (s *BookStep) Fwd(
 				if revStpIn.Compare(remainingIn) == 0 {
 					totalIn = in
 					totalOut = prevCache.out
-					if err := s.consumeOffer(sb, offer, revStpIn, revOfrIn, revStpOut, revOwnerGives); err != nil {
-						break
+					if isAMM {
+						if err := s.consumeAMMOffer(sb, ammOffer, revStpIn, revOfrIn, revStpOut, revOwnerGives); err != nil {
+							return false
+						}
+					} else {
+						if err := s.consumeOffer(sb, clobOffer, revStpIn, revOfrIn, revStpOut, revOwnerGives); err != nil {
+							return false
+						}
 					}
 					remainingIn = s.zeroIn()
 					s.offersUsed_++
-					continue
+					return true
 				}
 			}
 
 			remainingIn = s.zeroIn()
-			if err := s.consumeOffer(sb, offer, stpAdjIn, ofrAdjIn, stpAdjOut, ownerGivesAdj); err != nil {
-				break
+			if isAMM {
+				if err := s.consumeAMMOffer(sb, ammOffer, stpAdjIn, ofrAdjIn, stpAdjOut, ownerGivesAdj); err != nil {
+					return false
+				}
+			} else {
+				if err := s.consumeOffer(sb, clobOffer, stpAdjIn, ofrAdjIn, stpAdjOut, ownerGivesAdj); err != nil {
+					return false
+				}
 			}
 		}
 
 		s.offersUsed_++
+		return true
+	}
+
+	// tryAMM for Fwd
+	tryAMMFwd := func(lobQuality *Quality) bool {
+		if ammProcessed || s.ammLiquidity == nil {
+			return true
+		}
+		if s.domainID != nil {
+			return true
+		}
+		ammOffer := s.getAMMOffer(sb, lobQuality)
+		if ammOffer == nil {
+			return true
+		}
+		ammProcessed = true
+		ofrIn := toEitherAmt(ammOffer.AmountIn())
+		ofrOut := toEitherAmt(ammOffer.AmountOut())
+		offerQ := ammOffer.Quality()
+		return execOfferFwd(ofrIn, ofrOut, offerQ, trIn, trOut, true, true,
+			ammOffer, nil, [32]byte{})
+	}
+
+	// Main CLOB iteration with AMM interleaving
+	firstCLOB := true
+	for s.offersUsed_ < s.maxOffersToConsume && !remainingIn.IsZero() {
+		offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited)
+		if err != nil {
+			break
+		}
+		if offer == nil {
+			break
+		}
+		visited[offerKey] = true
+
+		ownerFunds := s.getOfferFundedAmount(sb, offer)
+		if ownerFunds.IsEffectivelyZero() || offer.TakerGets.IsZero() {
+			ofrsToRm[offerKey] = true
+			s.offersUsed_++
+			continue
+		}
+		if s.shouldRmSmallIncreasedQOffer(sb, offer, ownerFunds) {
+			ofrsToRm[offerKey] = true
+			s.offersUsed_++
+			continue
+		}
+
+		if firstCLOB {
+			firstCLOB = false
+			lobQ := s.offerQuality(offer)
+			if !tryAMMFwd(&lobQ) {
+				break
+			}
+		}
+
+		offerOwner, _ := sle.DecodeAccountID(offer.Account)
+		ofrTrIn := s.getOfrInRate(offerOwner, trIn)
+		ofrTrOut := s.getOfrOutRate(offerOwner, trOut)
+		ofrIn := s.offerTakerPays(offer)
+		ofrOut := s.offerTakerGets(offer)
+		offerQ := s.offerQuality(offer)
+		if !execOfferFwd(ofrIn, ofrOut, offerQ, ofrTrIn, ofrTrOut, false, false,
+			nil, offer, offerKey) {
+			break
+		}
+	}
+
+	if firstCLOB {
+		tryAMMFwd(nil)
 	}
 
 	if s.offersUsed_ >= s.maxOffersToConsume {
@@ -659,6 +781,152 @@ func (s *BookStep) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirectio
 		return nil, s.DebtDirection(v, StrandDirectionForward)
 	}
 	return tipQuality, s.DebtDirection(v, StrandDirectionForward)
+}
+
+// GetQualityFunc returns the QualityFunction for this step.
+// For BookStep, this examines whether the tip offer is CLOB or AMM and returns
+// the appropriate QualityFunction, adjusted for transfer fees.
+// Reference: rippled BookStep.cpp getQualityFunc() lines 608-648
+func (s *BookStep) GetQualityFunc(v *PaymentSandbox, prevStepDir DebtDirection) (*QualityFunction, DebtDirection) {
+	dir := s.DebtDirection(v, StrandDirectionForward)
+
+	res := s.tipOfferQualityF(v)
+	if res == nil {
+		return nil, dir
+	}
+
+	// AMM (non-constant quality function)
+	if !res.IsConst() {
+		// Check if transfer fees need to be composed in.
+		// For payments: adjustQualityWithFees with WaiveTransferFee::Yes and qOne
+		// Reference: rippled BookStep.cpp lines 620-636
+		qOne := qualityFromFloat64(1.0)
+		q := s.adjustQualityWithFeesForQF(v, qOne, prevStepDir, true)
+		if q.Value == qOne.Value {
+			// No fee adjustment needed
+			return res, dir
+		}
+		// Compose fee QF with AMM QF
+		feeQF := NewCLOBLikeQualityFunction(q)
+		if feeQF == nil {
+			return res, dir
+		}
+		feeQF.Combine(*res)
+		return feeQF, dir
+	}
+
+	// CLOB (constant quality function)
+	// Reference: rippled BookStep.cpp lines 639-647
+	q := s.adjustQualityWithFeesForQF(v, *res.quality, prevStepDir, false)
+	return NewCLOBLikeQualityFunction(q), dir
+}
+
+// tipOfferQualityF returns the QualityFunction for the tip (best) offer,
+// choosing between CLOB and AMM. Returns nil if no offer exists.
+//
+// For CLOB offers: returns a CLOB-like QF with the tip quality.
+// For AMM offers: returns the AMM's QualityFunction (may be non-constant
+// for single-path or constant for multi-path).
+//
+// Reference: rippled BookStep.cpp tipOfferQualityF() lines 990-1000
+func (s *BookStep) tipOfferQualityF(sb *PaymentSandbox) *QualityFunction {
+	// Call tip() equivalent: determine if CLOB or AMM is the tip
+	// Reference: rippled BookStep.cpp tip() lines 938-974
+	lobQuality := s.getCLOBTipQuality(sb)
+
+	if s.ammLiquidity != nil {
+		// With fixAMMv1_1, pass a quality threshold to getAMMOffer so the AMM
+		// doesn't generate tiny offers when its quality barely exceeds CLOB.
+		// This prevents the payment engine from going into many iterations.
+		// Reference: rippled BookStep.cpp tip() lines 962-967
+		var qualityThreshold *Quality
+		if s.ammLiquidity.fixAMMv1_1 && lobQuality != nil {
+			qualityThreshold = s.tipQualityThreshold(*lobQuality)
+		}
+
+		ammOffer := s.getAMMOffer(sb, qualityThreshold)
+		if ammOffer != nil {
+			ammQ := ammOffer.Quality()
+			if lobQuality == nil || ammQ.BetterThan(*lobQuality) {
+				// AMM is tip. Return AMM's quality function.
+				// Reference: rippled AMMOffer.cpp getQualityFunc()
+				return s.ammOfferGetQualityFunc(ammOffer)
+			}
+		}
+	}
+
+	// CLOB is tip (or no offers at all)
+	if lobQuality == nil {
+		return nil
+	}
+	return NewCLOBLikeQualityFunction(*lobQuality)
+}
+
+// tipQualityThreshold returns the quality threshold to use for AMM offer
+// generation in tipOfferQualityF. For offer crossing, if the taker's quality
+// limit is better than the CLOB tip, don't use a threshold (let AMM generate
+// max offer). Otherwise use the CLOB quality as threshold.
+// For payments, always use the CLOB quality.
+// Reference: rippled BookOfferCrossingStep::qualityThreshold() lines 479-486
+// Reference: rippled BookPaymentStep::qualityThreshold() line 305
+func (s *BookStep) tipQualityThreshold(lobQuality Quality) *Quality {
+	// For offer crossing with AMM in single-path mode:
+	// if qualityLimit is strictly better than lobQuality, return nil
+	// so AMM generates its max offer (limitOut handles the quality cap)
+	if s.qualityLimit != nil && s.ammLiquidity != nil &&
+		!s.ammLiquidity.ammContext.MultiPath() &&
+		s.qualityLimit.BetterThan(lobQuality) {
+		return nil
+	}
+	q := lobQuality
+	return &q
+}
+
+// ammOfferGetQualityFunc returns the QualityFunction for an AMM offer.
+// Multi-path: returns CLOB-like QF (constant quality).
+// Single-path: returns AMM QF (non-constant, slope-based).
+// Reference: rippled AMMOffer.cpp getQualityFunc() lines 130-137
+func (s *BookStep) ammOfferGetQualityFunc(offer *AMMOffer) *QualityFunction {
+	if offer.ammLiquidity.ammContext.MultiPath() {
+		return NewCLOBLikeQualityFunction(offer.Quality())
+	}
+	return NewAMMQualityFunction(offer.balanceIn, offer.balanceOut, offer.ammLiquidity.tradingFee)
+}
+
+// adjustQualityWithFeesForQF adjusts a quality with transfer fees for the
+// QualityFunction calculation. This implements the payment variant of
+// adjustQualityWithFees.
+//
+// For payments: charges transfer fee based on prevStepDir and ownerPaysTransferFee.
+// waiveOutFee=true waives the output transfer fee (used for AMM offers).
+//
+// Reference: rippled BookPaymentStep::adjustQualityWithFees() lines 328-359
+func (s *BookStep) adjustQualityWithFeesForQF(v *PaymentSandbox, ofrQ Quality, prevStepDir DebtDirection, waiveOutFee bool) Quality {
+	// trIn: charge transfer fee when previous step redeems
+	trIn := uint32(QualityOne)
+	if Redeems(prevStepDir) && !s.book.In.IsXRP() {
+		trIn = s.GetAccountTransferRate(v, s.book.In.Issuer)
+		// If issuer == strandDst, no fee (parityRate)
+		if s.book.In.Issuer == s.strandDst {
+			trIn = QualityOne
+		}
+	}
+
+	// trOut: charge transfer fee only if ownerPaysTransferFee and fee is not waived
+	trOut := uint32(QualityOne)
+	if s.ownerPaysTransferFee && !waiveOutFee && !s.book.Out.IsXRP() {
+		trOut = s.GetAccountTransferRate(v, s.book.Out.Issuer)
+		if s.book.Out.Issuer == s.strandDst {
+			trOut = QualityOne
+		}
+	}
+
+	// q1 = getRate(STAmount(trOut), STAmount(trIn)) = trIn / trOut
+	trOutAmt := NewIOUEitherAmount(sle.NewIssuedAmountFromValue(int64(trOut), 0, "", ""))
+	trInAmt := NewIOUEitherAmount(sle.NewIssuedAmountFromValue(int64(trIn), 0, "", ""))
+	q1 := QualityFromAmounts(trInAmt, trOutAmt)
+
+	return q1.Compose(ofrQ)
 }
 
 // IsZero returns true if the amount is zero
@@ -851,6 +1119,21 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 						ofrsToRm[offerKey] = true
 					}
 					continue
+				}
+
+				// Domain membership check: if the offer has a DomainID (domain or
+				// hybrid offer), verify the owner is still in that domain. Owners
+				// who have left the domain (or whose credential has expired) have
+				// their offers treated as unfunded and removed.
+				// This applies to ALL payment streams, not just domain payments —
+				// hybrid offers in the open book must also be validated.
+				// Reference: rippled OfferStream.cpp lines 294-303
+				var zeroDomainID [32]byte
+				if offer.DomainID != zeroDomainID {
+					if !permissioneddomain.OfferInDomain(sb, offer, offer.DomainID, s.parentCloseTime) {
+						ofrsToRm[offerKey] = true
+						continue
+					}
 				}
 
 				return offer, offerKey, nil
@@ -2534,12 +2817,27 @@ func (s *BookStep) eitherAmountToTxAmount(ea EitherAmount, issue Issue) tx.Amoun
 	return ea.IOU
 }
 
-// getTipQuality gets the best quality available in the order book
+// getTipQuality gets the best quality available, considering both CLOB and AMM offers.
+// Reference: rippled BookStep.cpp tip() returns the better of CLOB tip and AMM offer quality.
 func (s *BookStep) getTipQuality(sb *PaymentSandbox) *Quality {
-	// Find best quality in the order book using Succ() for O(log n) lookup.
-	// bookBase has quality=0 (bytes 24-31 zeroed). Succ finds the first key
-	// strictly greater, which is the first actual quality entry.
-	// Reference: rippled BookStep.cpp tip() uses view.succ(key, bookEnd).
+	lobQuality := s.getCLOBTipQuality(sb)
+
+	// If we have AMM liquidity, check if AMM quality is better
+	if s.ammLiquidity != nil {
+		ammOffer := s.getAMMOffer(sb, nil)
+		if ammOffer != nil {
+			ammQ := ammOffer.Quality()
+			if lobQuality == nil || ammQ.BetterThan(*lobQuality) {
+				return &ammQ
+			}
+		}
+	}
+
+	return lobQuality
+}
+
+// getCLOBTipQuality gets the best quality from CLOB offers only.
+func (s *BookStep) getCLOBTipQuality(sb *PaymentSandbox) *Quality {
 	bookBase := s.bookBaseKey()
 
 	foundKey, _, found, err := sb.Succ(bookBase)
@@ -2547,12 +2845,10 @@ func (s *BookStep) getTipQuality(sb *PaymentSandbox) *Quality {
 		return nil
 	}
 
-	// Check if the found key matches the book prefix (first 24 bytes)
 	if !bytes.Equal(foundKey[:24], bookBase[:24]) {
 		return nil
 	}
 
-	// Extract quality from the directory key (last 8 bytes)
 	q := QualityFromKey(foundKey)
 	return &q
 }
@@ -2567,7 +2863,13 @@ func (s *BookStep) bookBaseKey() [32]byte {
 	takerPaysIssuer := s.book.In.Issuer
 	takerGetsCurrency := sle.GetCurrencyBytes(s.book.Out.Currency)
 	takerGetsIssuer := s.book.Out.Issuer
-	key := keylet.BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer).Key
+
+	var key [32]byte
+	if s.domainID != nil {
+		key = keylet.BookDirWithDomain(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer, *s.domainID).Key
+	} else {
+		key = keylet.BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer).Key
+	}
 	// Zero out quality bytes (24-31). BookDir returns a full SHA-512Half hash,
 	// but actual book directory entries have bytes 24-31 replaced with the quality
 	// value. Zero them so Succ() finds the first quality entry.
@@ -2586,11 +2888,8 @@ func (s *BookStep) Check(sb *PaymentSandbox) tx.Result {
 		return tx.TemBAD_PATH
 	}
 
-	// Check that the book directory exists (has any offers, even expired ones).
-	// We use getTipQuality which reads from directory keys, not individual offers.
-	// This ensures expired-only books are still considered valid for crossing
-	// (the expired offers will be cleaned up during Rev/Fwd iteration).
-	// Reference: rippled BookStep.cpp check() uses tip() which reads directory
+	// Check that the book has liquidity (CLOB offers or AMM).
+	// Reference: rippled BookStep.cpp check() uses tip() which considers both.
 	tipQ := s.getTipQuality(sb)
 	if tipQ == nil {
 		return tx.TecPATH_DRY
@@ -2628,4 +2927,136 @@ func GetLedgerReserves(view LedgerReader) (baseReserve, incrementReserve int64) 
 	base := int64(feeSettings.GetReserveBase())
 	inc := int64(feeSettings.GetReserveIncrement())
 	return base, inc
+}
+
+// consumeAMMOffer processes an AMM offer through the pool.
+// Checks the pool product invariant, transfers funds, and marks the offer consumed.
+// Reference: rippled BookStep.cpp consumeOffer() for AMMOffer
+func (s *BookStep) consumeAMMOffer(
+	sb *PaymentSandbox,
+	ammOffer *AMMOffer,
+	consumedInGross, consumedInNet, consumedOut, ownerGives EitherAmount,
+) error {
+	// Check pool product invariant
+	if !ammOffer.CheckInvariant(eitherToAmount(consumedInNet), eitherToAmount(consumedOut)) {
+		if s.fixAMMOverflowOffer {
+			return errors.New("AMM pool product invariant failed")
+		}
+	}
+
+	// Transfer input: book.in.account → AMM account
+	inAmount := eitherToAmount(consumedInNet)
+	if err := ammOffer.Send(sb, s.book.In.Issuer, ammOffer.Owner(), inAmount); err != nil {
+		return err
+	}
+
+	// Transfer output: AMM account → book.out.account
+	outAmount := eitherToAmount(ownerGives)
+	if err := ammOffer.Send(sb, ammOffer.Owner(), s.book.Out.Issuer, outAmount); err != nil {
+		return err
+	}
+
+	// Mark the offer as consumed
+	ammOffer.Consume()
+
+	return nil
+}
+
+// initAMMLiquidity checks for an AMM pool for this book's in/out issues,
+// and if one exists with non-zero LP token balance, creates an AMMLiquidity.
+// Reference: rippled BookStep constructor lines 103-112
+func (s *BookStep) initAMMLiquidity(
+	view *PaymentSandbox,
+	ammCtx *AMMContext,
+	parentCloseTime uint32,
+	fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer bool,
+) {
+	s.fixAMMOverflowOffer = fixAMMOverflowOffer
+
+	// Build keylet::amm(in, out) to look up the AMM SLE
+	inIssuer := issueToCurrencyBytes(s.book.In)
+	inCurrency := issueToCurrencyBytesForCurrency(s.book.In)
+	outIssuer := issueToCurrencyBytes(s.book.Out)
+	outCurrency := issueToCurrencyBytesForCurrency(s.book.Out)
+
+	ammKey := keylet.AMM(inIssuer, inCurrency, outIssuer, outCurrency)
+	ammData, err := view.Read(ammKey)
+	if err != nil || ammData == nil {
+		return
+	}
+
+	ammEntry, err := amm.ParseAMMData(ammData)
+	if err != nil {
+		return
+	}
+
+	// Check LP token balance is non-zero
+	if ammEntry.LPTokenBalance.IsZero() {
+		return
+	}
+
+	// Get trading fee (may be discounted for auction slot holder)
+	tradingFee := getAMMTradingFee(ammEntry, ammCtx.Account(), parentCloseTime)
+
+	s.ammLiquidity = NewAMMLiquidity(
+		view,
+		ammEntry.Account,
+		tradingFee,
+		s.book.In, s.book.Out,
+		ammCtx,
+		fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer,
+	)
+}
+
+// getAMMOffer retrieves a synthetic AMM offer from the AMMLiquidity provider.
+// Returns nil if no AMM pool exists or if CLOB quality is better.
+// Reference: rippled BookStep::getAMMOffer()
+func (s *BookStep) getAMMOffer(view *PaymentSandbox, clobQuality *Quality) *AMMOffer {
+	if s.ammLiquidity == nil {
+		return nil
+	}
+	return s.ammLiquidity.GetOffer(view, clobQuality)
+}
+
+// getAMMTradingFee returns the trading fee for an AMM, potentially discounted
+// if the account holds the auction slot or is an authorized account.
+// Reference: rippled AMMUtils.cpp getTradingFee()
+func getAMMTradingFee(ammEntry *amm.AMMData, account [20]byte, parentCloseTime uint32) uint16 {
+	if ammEntry.AuctionSlot != nil {
+		// Check if auction slot is not expired
+		if parentCloseTime < ammEntry.AuctionSlot.Expiration {
+			// Check if account is the auction slot holder
+			if ammEntry.AuctionSlot.Account == account {
+				return ammEntry.AuctionSlot.DiscountedFee
+			}
+			// Check authorized accounts
+			for _, authAcct := range ammEntry.AuctionSlot.AuthAccounts {
+				if authAcct == account {
+					return ammEntry.AuctionSlot.DiscountedFee
+				}
+			}
+		}
+	}
+	return ammEntry.TradingFee
+}
+
+// issueToCurrencyBytes returns the issuer as [20]byte for keylet.AMM.
+func issueToCurrencyBytes(issue Issue) [20]byte {
+	return issue.Issuer
+}
+
+// issueToCurrencyBytesForCurrency returns the currency as [20]byte for keylet.AMM.
+// For XRP, this is all zeros. For IOUs, the 3-letter code is at bytes 12-14.
+func issueToCurrencyBytesForCurrency(issue Issue) [20]byte {
+	if issue.IsXRP() {
+		return [20]byte{}
+	}
+	var currency [20]byte
+	// Standard 3-letter currency codes go at bytes 12-14 in the 20-byte field
+	if len(issue.Currency) == 3 {
+		currency[12] = issue.Currency[0]
+		currency[13] = issue.Currency[1]
+		currency[14] = issue.Currency[2]
+	}
+	return currency
 }

@@ -316,6 +316,17 @@ func (s *DirectStepI) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirec
 	return &q, srcDebtDir
 }
 
+// GetQualityFunc returns the QualityFunction for this step.
+// DirectStepI uses the default implementation: CLOB-like QF from QualityUpperBound.
+// Reference: rippled Steps.h Step::getQualityFunc() default implementation
+func (s *DirectStepI) GetQualityFunc(v *PaymentSandbox, prevStepDir DebtDirection) (*QualityFunction, DebtDirection) {
+	q, dir := s.QualityUpperBound(v, prevStepDir)
+	if q == nil {
+		return nil, dir
+	}
+	return NewCLOBLikeQualityFunction(*q), dir
+}
+
 // IsZero returns true if the amount is zero
 func (s *DirectStepI) IsZero(amt EitherAmount) bool {
 	if amt.IsNative {
@@ -932,11 +943,11 @@ func (s *DirectStepI) Check(sb *PaymentSandbox) tx.Result {
 
 	// Check trust line exists
 	trustLineKey := keylet.Line(s.src, s.dst, s.currency)
-	exists, err := sb.Exists(trustLineKey)
+	data, err := sb.Read(trustLineKey)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	if !exists {
+	if data == nil {
 		return tx.TerNO_LINE
 	}
 
@@ -954,6 +965,61 @@ func (s *DirectStepI) Check(sb *PaymentSandbox) tx.Result {
 	// Reference: rippled DirectStep.cpp checkAuth()
 	if result := checkAuth(sb, s.src, s.dst, s.currency); result != tx.TesSUCCESS {
 		return result
+	}
+
+	// If previous step is a BookStep, check single-sided NoRipple.
+	// Reference: rippled DirectStep.cpp:432-441
+	//   if (ctx.prevStep && ctx.prevStep->bookStepBook())
+	//       check src's NoRipple on the src↔dst trust line
+	if s.prevStep != nil {
+		if s.prevStep.BookStepBook() != nil {
+			rs, parseErr := sle.ParseRippleState(data)
+			if parseErr != nil {
+				return tx.TefINTERNAL
+			}
+			srcIsHigh := sle.CompareAccountIDs(s.src, s.dst) > 0
+			var noRippleFlag uint32
+			if srcIsHigh {
+				noRippleFlag = sle.LsfHighNoRipple
+			} else {
+				noRippleFlag = sle.LsfLowNoRipple
+			}
+			if rs.Flags&noRippleFlag != 0 {
+				return tx.TerNO_RIPPLE
+			}
+		}
+	}
+
+	// Check credit limit — if dst's credit with src is exhausted, path is dry.
+	// Reference: rippled DirectStep.cpp:445-456, Credit.cpp creditBalance/creditLimit
+	//   owed = creditBalance(view, dst_, src_, currency_)
+	//     → reads sfBalance; negates if dst_ < src_ (i.e., dst is the low account)
+	//   limit = creditLimit(view, dst_, src_, currency_)
+	//     → dst_ < src_ ? sfLowLimit : sfHighLimit
+	//   if (owed <= 0 && -owed >= limit) → tecPATH_DRY
+	{
+		rs, parseErr := sle.ParseRippleState(data)
+		if parseErr == nil {
+			// creditBalance(dst_, src_): negate when dst_ < src_ (dst is low account)
+			owed := rs.Balance
+			if sle.CompareAccountIDs(s.dst, s.src) < 0 {
+				owed = owed.Negate()
+			}
+			zeroAmt := tx.NewIssuedAmount(0, -100, s.currency, "")
+			if owed.Compare(zeroAmt) <= 0 {
+				// creditLimit(dst_, src_): dst_ < src_ → LowLimit, else HighLimit
+				var limit tx.Amount
+				if sle.CompareAccountIDs(s.dst, s.src) < 0 {
+					limit = rs.LowLimit
+				} else {
+					limit = rs.HighLimit
+				}
+				negOwed := owed.Negate()
+				if negOwed.Compare(limit) >= 0 {
+					return tx.TecPATH_DRY
+				}
+			}
+		}
 	}
 
 	return tx.TesSUCCESS

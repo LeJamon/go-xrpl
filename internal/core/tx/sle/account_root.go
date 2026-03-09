@@ -30,6 +30,7 @@ type AccountRoot struct {
 	AccountTxnID      [32]byte // Hash of the last transaction this account submitted (when enabled)
 	WalletLocator     string   // Arbitrary hex data (deprecated)
 	TicketCount       uint32   // Number of outstanding tickets owned by this account
+	AMMID             [32]byte // Links AMM pseudo-account to its AMM ledger entry (sfAMMID, fieldCode 14)
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
 }
@@ -66,6 +67,7 @@ const (
 	fieldCodeTicketCount     = 40 // UInt32 - number of outstanding tickets
 	fieldCodeAccountTxnID    = 9  // Hash256 - last transaction ID
 	fieldCodeWalletLocator   = 7  // Hash256 - wallet locator (deprecated)
+	fieldCodeAMMID           = 14 // Hash256 - links AMM pseudo-account to AMM entry (sfAMMID)
 )
 
 // Ledger entry type code for AccountRoot (unexported)
@@ -310,7 +312,7 @@ func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 			offset += 16
 
 		case FieldTypeHash256:
-			// Hash256 fields (e.g., PreviousTxnID, AccountTxnID, WalletLocator) are 32 bytes
+			// Hash256 fields (e.g., PreviousTxnID, AccountTxnID, WalletLocator, AMMID) are 32 bytes
 			if offset+32 > len(data) {
 				return account, nil
 			}
@@ -321,6 +323,8 @@ func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 				copy(account.AccountTxnID[:], data[offset:offset+32])
 			case fieldCodeWalletLocator: // WalletLocator
 				account.WalletLocator = hex.EncodeToString(data[offset : offset+32])
+			case fieldCodeAMMID: // AMMID - links AMM pseudo-account to AMM entry
+				copy(account.AMMID[:], data[offset:offset+32])
 			}
 			offset += 32
 
@@ -419,6 +423,11 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 	// Add WalletLocator if set
 	if account.WalletLocator != "" {
 		jsonObj["WalletLocator"] = strings.ToUpper(account.WalletLocator)
+	}
+
+	// Add AMMID if set (non-zero) — links AMM pseudo-account to AMM entry
+	if account.AMMID != zeroHash {
+		jsonObj["AMMID"] = strings.ToUpper(hex.EncodeToString(account.AMMID[:]))
 	}
 
 	// Add PreviousTxnID if set (non-zero)

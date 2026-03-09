@@ -157,6 +157,11 @@ type EngineConfig struct {
 	// This is used for checking offer/escrow expiration
 	ParentCloseTime uint32
 
+	// ParentHash is the hash of the parent ledger.
+	// Used by pseudoAccountAddress for deterministic AMM account derivation.
+	// Reference: rippled View.cpp pseudoAccountAddress uses view.info().parentHash
+	ParentHash [32]byte
+
 	// Rules contains the amendment rules for this ledger.
 	// If nil, defaults to all amendments enabled (for backwards compatibility).
 	Rules *amendment.Rules
@@ -1188,6 +1193,13 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 			sle.DirRemove(tecTable, ownerDirKey, 0, ticketKey.Key, true)
 			if err := tecTable.Erase(ticketKey); err != nil {
 				return TefINTERNAL
+			}
+		}
+		// AMMDelete with tecINCOMPLETE: trust line deletions must persist.
+		// Reference: rippled AMMDelete.cpp — applies sandbox on both tesSUCCESS and tecINCOMPLETE.
+		if txTypeName == "AMMDelete" && result == TecINCOMPLETE {
+			if _, applyErr := table.Apply(); applyErr != nil {
+				_ = applyErr
 			}
 		}
 

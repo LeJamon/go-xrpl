@@ -1,6 +1,7 @@
 package tx
 
 import (
+	"encoding/hex"
 	"fmt"
 	"reflect"
 	"strings"
@@ -193,6 +194,13 @@ func ReflectFlatten(tx Transaction) (map[string]any, error) {
 			// The XRPL binary codec's UInt64.FromJSON expects a hex string representation.
 			if val.Kind() == reflect.Uint64 {
 				m[f.name] = fmt.Sprintf("%X", val.Uint())
+			} else if val.Kind() == reflect.Array && val.Type().Elem().Kind() == reflect.Uint8 && val.Len() == 32 {
+				// Hash256 fields ([32]byte): convert to uppercase hex string for binary codec.
+				var buf [32]byte
+				for i := 0; i < 32; i++ {
+					buf[i] = byte(val.Index(i).Uint())
+				}
+				m[f.name] = strings.ToUpper(hex.EncodeToString(buf[:]))
 			} else {
 				m[f.name] = val.Interface()
 			}

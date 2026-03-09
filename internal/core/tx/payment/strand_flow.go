@@ -49,6 +49,7 @@ func ExecuteStrand(
 	// Single pass backwards with inline resets when limiting steps are found.
 	// Reference: rippled StrandFlow.h lines 138-221
 	stepOut := requestedOut
+
 	for i := s - 1; i >= 0; i-- {
 		step := strand[i]
 

@@ -162,8 +162,8 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// Get AMM account
-	ammAccountID := computeAMMAccountID(ammKey.Key)
+	// Get AMM account from the stored AMM data
+	ammAccountID := amm.Account
 	ammAccountKey := keylet.Account(ammAccountID)
 	ammAccountData, err := ctx.View.Read(ammAccountKey)
 	if err != nil {
@@ -186,7 +186,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	// In full implementation, would read from LP token trustline
 	// For now, use half of the AMM LP token balance as holder's balance (simplified)
 	two := sle.NewIssuedAmountFromValue(2e15, -15, "", "")
-	holdLPTokens := lptAMMBalance.Div(two, false)
+	holdLPTokens := numberDiv(lptAMMBalance, two)
 
 	if holdLPTokens.IsZero() {
 		return tx.TecAMM_BALANCE // Holder has no LP tokens
@@ -213,7 +213,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 		if assetBalance1.IsZero() {
 			return tx.TecAMM_BALANCE
 		}
-		frac := clawAmount.Div(assetBalance1, false)
+		frac := numberDiv(clawAmount, assetBalance1)
 
 		// Calculate LP tokens needed for this withdrawal
 		lpTokensNeeded := lptAMMBalance.Mul(frac, false)

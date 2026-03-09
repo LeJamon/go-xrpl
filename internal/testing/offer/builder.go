@@ -19,6 +19,7 @@ type OfferCreateBuilder struct {
 	sequence      *uint32
 	ticketSeq     *uint32
 	flags         uint32
+	domainID      *[32]byte
 }
 
 // OfferCreate creates a new OfferCreateBuilder.
@@ -111,6 +112,19 @@ func (b *OfferCreateBuilder) TicketSeq(ticketSeq uint32) *OfferCreateBuilder {
 	return b
 }
 
+// DomainID sets the permissioned domain ID for this offer.
+func (b *OfferCreateBuilder) DomainID(id [32]byte) *OfferCreateBuilder {
+	b.domainID = &id
+	return b
+}
+
+// Hybrid sets the tfHybrid flag (offer appears in both domain and open book).
+// Requires DomainID to be set.
+func (b *OfferCreateBuilder) Hybrid() *OfferCreateBuilder {
+	b.flags |= 0x00100000 // tfHybrid
+	return b
+}
+
 // Build constructs the OfferCreate transaction.
 func (b *OfferCreateBuilder) Build() tx.Transaction {
 	o := offertx.NewOfferCreate(b.account.Address, b.takerGets, b.takerPays)
@@ -130,6 +144,9 @@ func (b *OfferCreateBuilder) Build() tx.Transaction {
 	}
 	if b.flags != 0 {
 		o.SetFlags(b.flags)
+	}
+	if b.domainID != nil {
+		o.DomainID = b.domainID
 	}
 
 	return o

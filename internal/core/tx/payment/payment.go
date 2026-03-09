@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/credential"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/permissioneddomain"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )
 
@@ -119,6 +120,13 @@ type Payment struct {
 	// MPTokenIssuanceID is the issuance ID for MPT direct payments (optional).
 	// When set, the payment follows the MPT direct path instead of IOU trust line path.
 	MPTokenIssuanceID string `json:"MPTokenIssuanceID,omitempty" xrpl:"MPTokenIssuanceID,omitempty"`
+
+	// DomainID is the permissioned domain for this payment (optional).
+	// When set, only offers within the specified domain are consumed on the payment path.
+	// Both sender and destination must be members of the domain.
+	// Requires FeaturePermissionedDEX amendment.
+	// Reference: rippled Payment.cpp sfDomainID
+	DomainID *string `json:"DomainID,omitempty" xrpl:"DomainID,omitempty"`
 }
 
 // PathStep represents a single step in a payment path
@@ -175,6 +183,9 @@ func (p *Payment) RequiredAmendments() [][32]byte {
 	}
 	if p.CredentialIDs != nil {
 		amendments = append(amendments, amendment.FeatureCredentials)
+	}
+	if p.DomainID != nil {
+		amendments = append(amendments, amendment.FeaturePermissionedDEX)
 	}
 	return amendments
 }
@@ -643,6 +654,30 @@ func (p *Payment) verifyDepositPreauth(ctx *tx.ApplyContext, srcAccountID, dstAc
 
 // Apply applies the Payment transaction to the ledger state.
 func (p *Payment) Apply(ctx *tx.ApplyContext) tx.Result {
+	// Domain membership checks for permissioned payments.
+	// Reference: rippled Payment.cpp preclaim() sfDomainID checks
+	if p.DomainID != nil {
+		domainID, err := permissioneddomain.ParseDomainID(*p.DomainID)
+		if err != nil {
+			return tx.TemMALFORMED
+		}
+		closeTime := ctx.Config.ParentCloseTime
+		senderID, err := sle.DecodeAccountID(p.Account)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		if !permissioneddomain.AccountInDomain(ctx.View, senderID, domainID, closeTime) {
+			return tx.TecNO_PERMISSION
+		}
+		destID, err := sle.DecodeAccountID(p.Destination)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		if !permissioneddomain.AccountInDomain(ctx.View, destID, domainID, closeTime) {
+			return tx.TecNO_PERMISSION
+		}
+	}
+
 	// MPT direct payment
 	if p.MPTokenIssuanceID != "" {
 		return p.applyMPTPayment(ctx)
@@ -1333,10 +1368,22 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 
 	// Check deposit authorization for IOU payments (including path-finding payments)
 	// Reference: rippled Payment.cpp:429-464
-	// IOU payments require deposit preauthorization if destination has lsfDepositAuth.
-	// No wedge-prevention exemption for IOU payments (unlike XRP).
-	if result := p.verifyDepositPreauth(ctx, senderAccountID, destAccountID, destAccount); result != tx.TesSUCCESS {
-		return result
+	depositPreauth := ctx.Rules().Enabled(amendment.FeatureDepositPreauth)
+	reqDepositAuth := (destAccount.Flags&sle.LsfDepositAuth) != 0
+
+	// Before DepositPreauth amendment: ALL ripple payments to accounts with
+	// DepositAuth are blocked (including self-payments). This was a bug that
+	// the DepositPreauth amendment fixed.
+	// Reference: rippled Payment.cpp:440-441
+	if !depositPreauth && reqDepositAuth {
+		return tx.TecNO_PERMISSION
+	}
+
+	// With DepositPreauth amendment: self-payments and preauthorized accounts are allowed.
+	if depositPreauth && reqDepositAuth {
+		if result := p.verifyDepositPreauth(ctx, senderAccountID, destAccountID, destAccount); result != tx.TesSUCCESS {
+			return result
+		}
 	}
 
 	// For path-finding payments, use the Flow Engine (RippleCalculate)
@@ -1435,6 +1482,27 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 
 	// Execute RippleCalculate
 	rules := ctx.Rules()
+	rcOpts := []RippleCalculateOption{
+		WithAmendments(
+			ctx.Config.ParentCloseTime,
+			rules.Enabled(amendment.FeatureFixReducedOffersV1),
+			rules.Enabled(amendment.FeatureFixReducedOffersV2),
+			rules.Enabled(amendment.FeatureFixRmSmallIncreasedQOffers),
+			rules.Enabled(amendment.FeatureFlowSortStrands),
+		),
+		WithAMMAmendments(
+			rules.Enabled(amendment.FeatureFixAMMv1_1),
+			rules.Enabled(amendment.FeatureFixAMMv1_2),
+			rules.Enabled(amendment.FeatureFixAMMOverflowOffer),
+		),
+	}
+	// Thread domain ID to the flow engine for permissioned domain payments.
+	if p.DomainID != nil {
+		domainID, err := permissioneddomain.ParseDomainID(*p.DomainID)
+		if err == nil {
+			rcOpts = append(rcOpts, WithDomainID(&domainID))
+		}
+	}
 	_, actualOut, _, sandbox, result := RippleCalculate(
 		ctx.View,
 		senderID,
@@ -1447,13 +1515,7 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 		limitQuality,
 		ctx.TxHash,
 		ctx.Config.LedgerSequence,
-		WithAmendments(
-			ctx.Config.ParentCloseTime,
-			rules.Enabled(amendment.FeatureFixReducedOffersV1),
-			rules.Enabled(amendment.FeatureFixReducedOffersV2),
-			rules.Enabled(amendment.FeatureFixRmSmallIncreasedQOffers),
-			rules.Enabled(amendment.FeatureFlowSortStrands),
-		),
+		rcOpts...,
 	)
 
 	// Because of its overhead, if RippleCalc fails with a retry code (ter*),

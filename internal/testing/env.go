@@ -623,6 +623,7 @@ func (e *TestEnv) Submit(transaction interface{}) TxResult {
 		Rules:                     e.rulesBuilder.Build(),
 		ParentCloseTime:           parentCloseTime,
 		NetworkID:                 e.networkID,
+		ParentHash:                e.ledger.ParentHash(),
 	}
 
 	// Create engine with current ledger
@@ -1263,6 +1264,7 @@ func (e *TestEnv) submitWithSigVerification(txn tx.Transaction) TxResult {
 		Rules:                     e.rulesBuilder.Build(),
 		ParentCloseTime:           parentCloseTime,
 		NetworkID:                 e.networkID,
+		ParentHash:                e.ledger.ParentHash(),
 	}
 
 	engine := tx.NewEngine(e.ledger, engineConfig)

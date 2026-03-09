@@ -51,6 +51,21 @@ func NewAccount(name string) *Account {
 	return NewAccountWithKeyType(name, KeyTypeSecp256k1)
 }
 
+// NewAccountWithAddress creates a test account at a specific address.
+// The account has no real keypair — it can only be used as a payment destination
+// (to create/fund an account at that specific address) in test environments with
+// signature verification disabled.
+func NewAccountWithAddress(name string, address string) *Account {
+	_, idBytes, _ := addresscodec.DecodeClassicAddressToAccountID(address)
+	var id [20]byte
+	copy(id[:], idBytes)
+	return &Account{
+		Name:    name,
+		Address: address,
+		ID:      id,
+	}
+}
+
 // NewAccountWithKeyType creates a new test account with the specified key type.
 // Supported key types: "secp256k1" and "ed25519".
 func NewAccountWithKeyType(name string, keyType string) *Account {
