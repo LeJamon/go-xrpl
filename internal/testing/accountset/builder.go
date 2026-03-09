@@ -3,8 +3,8 @@ package accountset
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	accounttx "github.com/LeJamon/goXRPLd/internal/core/tx/account"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
 	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 

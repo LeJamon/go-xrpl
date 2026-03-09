@@ -75,7 +75,7 @@ func (b *BaseNode) setHash(data ...[]byte) error {
 		return fmt.Errorf("no data provided for hash calculation")
 	}
 
-	hash := crypto.Sha512Half(data...)
+	hash := common.Sha512Half(data...)
 	b.hash = hash
 	return nil
 }

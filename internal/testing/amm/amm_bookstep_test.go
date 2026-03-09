@@ -9,8 +9,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	paymenttx "github.com/LeJamon/goXRPLd/internal/core/tx/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	paymenttx "github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/amm"

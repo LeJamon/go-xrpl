@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	cred "github.com/LeJamon/goXRPLd/internal/testing/credential"
 	pd "github.com/LeJamon/goXRPLd/internal/testing/permissioneddomain"

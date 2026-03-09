@@ -11,7 +11,7 @@ package feetrack_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/core/txq"
+	"github.com/LeJamon/goXRPLd/internal/txq"
 	"github.com/stretchr/testify/require"
 )
 

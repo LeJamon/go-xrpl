@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 
 	"github.com/LeJamon/goXRPLd/ledger/entry"
-	crypto "github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/crypto/common"
 )
 
 // Space identifiers for keylet generation
@@ -61,7 +61,7 @@ func indexHash(space uint16, data ...[]byte) [32]byte {
 	inputs = append(inputs, spaceBytes)
 	inputs = append(inputs, data...)
 
-	return crypto.Sha512Half(inputs...)
+	return common.Sha512Half(inputs...)
 }
 
 // Account returns the keylet for an account root entry.
@@ -212,7 +212,7 @@ func DepositPreauthCredentials(owner [20]byte, sortedCreds []CredentialPair) Key
 	data := make([][]byte, 0, 1+len(sortedCreds))
 	data = append(data, owner[:])
 	for _, c := range sortedCreds {
-		h := crypto.Sha512Half(c.Issuer[:], c.CredentialType)
+		h := common.Sha512Half(c.Issuer[:], c.CredentialType)
 		hashBytes := make([]byte, 32)
 		copy(hashBytes, h[:])
 		data = append(data, hashBytes)

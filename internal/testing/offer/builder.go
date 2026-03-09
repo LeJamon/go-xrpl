@@ -3,8 +3,8 @@ package offer
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	offertx "github.com/LeJamon/goXRPLd/internal/core/tx/offer"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	offertx "github.com/LeJamon/goXRPLd/internal/tx/offer"
 	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 

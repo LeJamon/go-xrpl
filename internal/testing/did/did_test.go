@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/keylet"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/did"

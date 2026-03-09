@@ -5,7 +5,7 @@ package payment
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
 	"github.com/stretchr/testify/require"

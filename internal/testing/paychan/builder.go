@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	paychan "github.com/LeJamon/goXRPLd/internal/core/tx/paychan"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	paychan "github.com/LeJamon/goXRPLd/internal/tx/paychan"
 	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 

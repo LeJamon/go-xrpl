@@ -7,10 +7,10 @@ import (
 	"strconv"
 	"strings"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/address-codec"
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
-	ed25519crypto "github.com/LeJamon/goXRPLd/crypto/algorithms/ed25519"
-	secp256k1crypto "github.com/LeJamon/goXRPLd/crypto/algorithms/secp256k1"
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/ed25519"
+	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -201,12 +201,12 @@ func verifySignature(message []byte, pubKeyHex string, sigHex string) bool {
 
 	// ED25519 keys start with 0xED prefix
 	if pubKeyBytes[0] == 0xED {
-		algo := ed25519crypto.ED25519()
+		algo := ed25519.ED25519()
 		return algo.Validate(msgStr, pubKeyHex, sigHex)
 	}
 
 	// Otherwise use secp256k1
-	algo := secp256k1crypto.SECP256K1()
+	algo := secp256k1.SECP256K1()
 	return algo.Validate(msgStr, pubKeyHex, sigHex)
 }
 

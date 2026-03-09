@@ -3,8 +3,8 @@ package trustset
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	trustsettx "github.com/LeJamon/goXRPLd/internal/core/tx/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	trustsettx "github.com/LeJamon/goXRPLd/internal/tx/trustset"
 	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 

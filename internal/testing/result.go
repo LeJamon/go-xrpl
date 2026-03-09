@@ -1,7 +1,7 @@
 package testing
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 // TxResult represents the result of applying a transaction.

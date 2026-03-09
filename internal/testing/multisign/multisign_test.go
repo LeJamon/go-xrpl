@@ -7,10 +7,10 @@ package multisign_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/account"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/offer"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/account"
+	"github.com/LeJamon/goXRPLd/internal/tx/offer"
+	"github.com/LeJamon/goXRPLd/internal/tx/trustset"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/stretchr/testify/require"

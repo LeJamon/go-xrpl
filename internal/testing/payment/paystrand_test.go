@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
 	"github.com/stretchr/testify/require"

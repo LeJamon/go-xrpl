@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/core/ledger"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/header"
+	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 )
 
 // Common errors for gRPC handlers

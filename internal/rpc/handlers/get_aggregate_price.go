@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strconv"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/address-codec"
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )

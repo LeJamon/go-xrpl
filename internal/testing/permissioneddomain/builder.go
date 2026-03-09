@@ -3,8 +3,8 @@ package permissioneddomain
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/permissioneddomain"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/permissioneddomain"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 )
 

@@ -11,13 +11,13 @@ import (
 	"strings"
 	"time"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/header"
+	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/shamap"
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/statecompare"
 	"github.com/spf13/cobra"
 )

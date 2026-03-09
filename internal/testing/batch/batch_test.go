@@ -9,9 +9,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	accounttx "github.com/LeJamon/goXRPLd/internal/core/tx/account"
-	batchtx "github.com/LeJamon/goXRPLd/internal/core/tx/batch"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
+	batchtx "github.com/LeJamon/goXRPLd/internal/tx/batch"
 	xtesting "github.com/LeJamon/goXRPLd/internal/testing"
 )
 

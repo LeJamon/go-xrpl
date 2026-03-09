@@ -5,7 +5,7 @@ package pseudotx_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/stretchr/testify/require"
 )
 

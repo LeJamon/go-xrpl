@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	accounttx "github.com/LeJamon/goXRPLd/internal/core/tx/account"
+	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 )

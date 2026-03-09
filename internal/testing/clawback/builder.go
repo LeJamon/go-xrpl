@@ -3,8 +3,8 @@ package clawback
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/clawback"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/clawback"
 	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 

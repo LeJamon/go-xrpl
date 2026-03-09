@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/LeJamon/goXRPLd/config"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/genesis"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/service"
+	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/rpc"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	kvpebble "github.com/LeJamon/goXRPLd/storage/kvstore/pebble"

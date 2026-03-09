@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	checktx "github.com/LeJamon/goXRPLd/internal/core/tx/check"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	checktx "github.com/LeJamon/goXRPLd/internal/tx/check"
 	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 

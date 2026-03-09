@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
-	crypto "github.com/LeJamon/goXRPLd/crypto/common"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -160,7 +160,7 @@ func CalculateTxHash(txBlobHex string) string {
 	}
 
 	data := append(prefix, txBytes...)
-	hash := crypto.Sha512Half(data)
+	hash := common.Sha512Half(data)
 	return strings.ToUpper(hex.EncodeToString(hash[:]))
 }
 

@@ -4,11 +4,11 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/address-codec"
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	ed25519 "github.com/LeJamon/goXRPLd/crypto/algorithms/ed25519"
-	secp256k1 "github.com/LeJamon/goXRPLd/crypto/algorithms/secp256k1"
+	ed25519 "github.com/LeJamon/goXRPLd/crypto/ed25519"
+	secp256k1 "github.com/LeJamon/goXRPLd/crypto/secp256k1"
 )
 
 // KeyType constants for account key derivation.

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 )
 
 // FeeSettings represents the singleton fee settings ledger entry.

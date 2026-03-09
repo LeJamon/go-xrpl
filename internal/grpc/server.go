@@ -6,8 +6,8 @@ import (
 	"net"
 	"sync"
 
-	"github.com/LeJamon/goXRPLd/internal/core/ledger"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/service"
+	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"google.golang.org/grpc"
 )
 

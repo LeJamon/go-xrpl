@@ -3,8 +3,8 @@ package ticket
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	tickettx "github.com/LeJamon/goXRPLd/internal/core/tx/ticket"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	tickettx "github.com/LeJamon/goXRPLd/internal/tx/ticket"
 	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 

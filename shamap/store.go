@@ -3,7 +3,7 @@ package shamap
 import (
 	"fmt"
 
-	crypto "github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/protocol"
 )
 
@@ -119,7 +119,7 @@ func parseTransactionLeafFromPrefix(data []byte) (*TransactionLeafNode, error) {
 	txData := data[4:]
 
 	// Key is derived from hashing the data (same as wire format)
-	key := crypto.Sha512Half(protocol.HashPrefixTransactionID[:], txData)
+	key := common.Sha512Half(protocol.HashPrefixTransactionID[:], txData)
 	item := NewItem(key, txData)
 
 	node, err := NewTransactionLeafNode(item)

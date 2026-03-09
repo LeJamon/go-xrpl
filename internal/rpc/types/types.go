@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/address-codec"
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 )
 
 // XRPL API Version constants

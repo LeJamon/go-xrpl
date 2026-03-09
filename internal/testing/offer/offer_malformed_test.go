@@ -6,8 +6,8 @@ package offer
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	offertx "github.com/LeJamon/goXRPLd/internal/core/tx/offer"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	offertx "github.com/LeJamon/goXRPLd/internal/tx/offer"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
 )

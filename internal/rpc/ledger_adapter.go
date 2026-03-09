@@ -4,9 +4,9 @@ import (
 	"encoding/hex"
 	"strconv"
 
-	"github.com/LeJamon/goXRPLd/internal/core/ledger"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/service"
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )

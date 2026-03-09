@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
-	ed25519crypto "github.com/LeJamon/goXRPLd/crypto/algorithms/ed25519"
-	secp256k1crypto "github.com/LeJamon/goXRPLd/crypto/algorithms/secp256k1"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/ed25519"
+	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -357,7 +357,7 @@ func TestChannelAuthorizeAndVerify_Integration(t *testing.T) {
 
 	// First, generate the keypair for verification
 	seedBytes, _ := hex.DecodeString("DEDCE9CE67B451D852FD4E846FCDE31C")
-	algo := secp256k1crypto.SECP256K1()
+	algo := secp256k1.SECP256K1()
 	_, pubKeyHex, err := algo.DeriveKeypair(seedBytes, false)
 	require.NoError(t, err)
 
@@ -409,7 +409,7 @@ func TestChannelAuthorizeAndVerify_IntegrationEd25519(t *testing.T) {
 
 	// First, generate the keypair for verification
 	seedBytes, _ := hex.DecodeString("DEDCE9CE67B451D852FD4E846FCDE31C")
-	algo := ed25519crypto.ED25519()
+	algo := ed25519.ED25519()
 	_, pubKeyHex, err := algo.DeriveKeypair(seedBytes, false)
 	require.NoError(t, err)
 

@@ -10,7 +10,7 @@ package amm_test
 import (
 	"testing"
 
-	paymenttx "github.com/LeJamon/goXRPLd/internal/core/tx/payment"
+	paymenttx "github.com/LeJamon/goXRPLd/internal/tx/payment"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/amm"
 	offerbuild "github.com/LeJamon/goXRPLd/internal/testing/offer"

@@ -21,7 +21,7 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2"
 	btcecdsa "github.com/btcsuite/btcd/btcec/v2/ecdsa"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/address-codec"
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 )
 
 // Identity-related errors.

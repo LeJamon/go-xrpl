@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	escrowtx "github.com/LeJamon/goXRPLd/internal/core/tx/escrow"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	escrowtx "github.com/LeJamon/goXRPLd/internal/tx/escrow"
 	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 

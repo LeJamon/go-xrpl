@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/oracle"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/oracle"
 	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 

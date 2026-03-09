@@ -5,11 +5,11 @@ package amm
 import (
 	"testing"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/address-codec"
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	coreAmm "github.com/LeJamon/goXRPLd/internal/core/tx/amm"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	coreAmm "github.com/LeJamon/goXRPLd/internal/tx/amm"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	offerbuild "github.com/LeJamon/goXRPLd/internal/testing/offer"

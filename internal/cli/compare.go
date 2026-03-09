@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/spf13/cobra"
 )
 

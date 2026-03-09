@@ -5,8 +5,8 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/address-codec"
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 )
 
 // PayChannelData represents a PayChannel ledger entry

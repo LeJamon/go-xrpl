@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	accounttx "github.com/LeJamon/goXRPLd/internal/core/tx/account"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
 	"github.com/LeJamon/goXRPLd/internal/testing/check"

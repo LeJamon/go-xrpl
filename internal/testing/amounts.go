@@ -4,7 +4,7 @@ package testing
 import (
 	"math"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 // DropsPerXRP is the number of drops in one XRP.

@@ -6,11 +6,11 @@ import (
 	"sort"
 	"strings"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/address-codec"
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
-	crypto "github.com/LeJamon/goXRPLd/crypto/common"
-	ed25519crypto "github.com/LeJamon/goXRPLd/crypto/algorithms/ed25519"
-	secp256k1crypto "github.com/LeJamon/goXRPLd/crypto/algorithms/secp256k1"
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/crypto/ed25519"
+	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -98,7 +98,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		}
 
 		// Detect key type from seed
-		if _, isEd25519 := algo.(ed25519crypto.ED25519CryptoAlgorithm); isEd25519 {
+		if _, isEd25519 := algo.(ed25519.ED25519CryptoAlgorithm); isEd25519 {
 			detectedKeyType = "ed25519"
 		} else {
 			detectedKeyType = "secp256k1"
@@ -128,7 +128,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		}
 	} else if request.Passphrase != "" {
 		// Derive seed from passphrase using SHA-512 Half (first 16 bytes of SHA-512)
-		hash := crypto.Sha512Half([]byte(request.Passphrase))
+		hash := common.Sha512Half([]byte(request.Passphrase))
 		entropy = hash[:16]
 	}
 
@@ -137,13 +137,13 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	var err error
 
 	if keyType == "ed25519" {
-		algo := ed25519crypto.ED25519()
+		algo := ed25519.ED25519()
 		privateKey, publicKey, err = algo.DeriveKeypair(entropy, false)
 		if err != nil {
 			return nil, types.RpcErrorInternal("Failed to derive keypair: " + err.Error())
 		}
 	} else {
-		algo := secp256k1crypto.SECP256K1()
+		algo := secp256k1.SECP256K1()
 		privateKey, publicKey, err = algo.DeriveKeypair(entropy, false)
 		if err != nil {
 			return nil, types.RpcErrorInternal("Failed to derive keypair: " + err.Error())
@@ -266,10 +266,10 @@ func signPayload(payloadHex string, privateKeyHex string, keyType string) (strin
 	var signature string
 
 	if keyType == "ed25519" {
-		algo := ed25519crypto.ED25519()
+		algo := ed25519.ED25519()
 		signature, err = algo.Sign(payloadStr, privateKeyHex)
 	} else {
-		algo := secp256k1crypto.SECP256K1()
+		algo := secp256k1.SECP256K1()
 		signature, err = algo.Sign(payloadStr, privateKeyHex)
 	}
 

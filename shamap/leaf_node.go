@@ -340,7 +340,7 @@ func NewTransactionLeafFromWire(data []byte) (*TransactionLeafNode, error) {
 
 	// For transaction without metadata, the key is derived from hashing the data
 	// As per rippled: sha512Half(HashPrefix::transactionID, data)
-	key := crypto.Sha512Half(protocol.HashPrefixTransactionID[:], nodeData)
+	key := common.Sha512Half(protocol.HashPrefixTransactionID[:], nodeData)
 
 	item := NewItem(key, nodeData)
 	node, err := NewTransactionLeafNode(item)

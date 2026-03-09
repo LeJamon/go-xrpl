@@ -7,10 +7,10 @@ import (
 	"math"
 	"strings"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/address-codec"
-	crypto "github.com/LeJamon/goXRPLd/crypto/common"
-	ed25519crypto "github.com/LeJamon/goXRPLd/crypto/algorithms/ed25519"
-	secp256k1crypto "github.com/LeJamon/goXRPLd/crypto/algorithms/secp256k1"
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/crypto/ed25519"
+	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -71,7 +71,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 		// Check if the seed's algorithm matches the requested key type
 		// If a seed encodes ed25519 but user requests secp256k1, that's an error
-		if _, isEd25519 := algo.(ed25519crypto.ED25519CryptoAlgorithm); isEd25519 {
+		if _, isEd25519 := algo.(ed25519.ED25519CryptoAlgorithm); isEd25519 {
 			if keyType != "ed25519" {
 				return nil, &types.RpcError{
 					Code:        types.RpcBAD_SEED,
@@ -95,7 +95,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 	} else if request.Passphrase != "" {
 		// Derive seed from passphrase using SHA-512 Half (first 16 bytes of SHA-512)
-		hash := crypto.Sha512Half([]byte(request.Passphrase))
+		hash := common.Sha512Half([]byte(request.Passphrase))
 		entropy = hash[:16]
 
 		// Add warning about passphrase-based wallets
@@ -119,7 +119,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	var err error
 
 	if keyType == "ed25519" {
-		algo := ed25519crypto.ED25519()
+		algo := ed25519.ED25519()
 		privateKey, publicKey, err = algo.DeriveKeypair(entropy, false)
 		if err != nil {
 			return nil, types.RpcErrorInternal("Failed to derive keypair: " + err.Error())
@@ -129,7 +129,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 			return nil, types.RpcErrorInternal("Failed to encode seed: " + err.Error())
 		}
 	} else {
-		algo := secp256k1crypto.SECP256K1()
+		algo := secp256k1.SECP256K1()
 		privateKey, publicKey, err = algo.DeriveKeypair(entropy, false)
 		if err != nil {
 			return nil, types.RpcErrorInternal("Failed to derive keypair: " + err.Error())

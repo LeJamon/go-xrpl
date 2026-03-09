@@ -3,8 +3,8 @@
 package amm
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/amm"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/amm"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 )
 

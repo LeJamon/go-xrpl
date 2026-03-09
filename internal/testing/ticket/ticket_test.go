@@ -6,11 +6,11 @@ package ticket_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/account"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/depositpreauth"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/payment"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/account"
+	"github.com/LeJamon/goXRPLd/internal/tx/depositpreauth"
+	"github.com/LeJamon/goXRPLd/internal/tx/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx/trustset"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/ticket"
 	"github.com/stretchr/testify/require"

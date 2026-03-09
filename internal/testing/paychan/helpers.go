@@ -6,11 +6,11 @@ import (
 	"strconv"
 	"testing"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/keylet"
-	accounttx "github.com/LeJamon/goXRPLd/internal/core/tx/account"
+	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	secp256k1crypto "github.com/LeJamon/goXRPLd/crypto/algorithms/secp256k1"
+	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/stretchr/testify/require"
 )
@@ -52,7 +52,7 @@ func signClaimAuth(acc *jtx.Account, channelIDHex string, authAmtDrops uint64) s
 	//   msg: raw bytes as a string (NOT hex)
 	//   privKey: hex string, 66 chars with "00" prefix
 	privKeyHex := "00" + hex.EncodeToString(acc.PrivateKey)
-	signature, err := secp256k1crypto.SECP256K1().Sign(string(messageBytes), privKeyHex)
+	signature, err := secp256k1.SECP256K1().Sign(string(messageBytes), privKeyHex)
 	if err != nil {
 		panic(fmt.Sprintf("signClaimAuth: failed to sign: %v", err))
 	}

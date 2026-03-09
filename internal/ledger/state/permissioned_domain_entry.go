@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 )
 
 // PermissionedDomainData holds the parsed fields of a PermissionedDomain ledger entry.

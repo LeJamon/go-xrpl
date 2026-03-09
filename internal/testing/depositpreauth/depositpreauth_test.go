@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/depositpreauth"
-	paymentPkg "github.com/LeJamon/goXRPLd/internal/core/tx/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/depositpreauth"
+	paymentPkg "github.com/LeJamon/goXRPLd/internal/tx/payment"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/credential"
 	dp "github.com/LeJamon/goXRPLd/internal/testing/depositpreauth"

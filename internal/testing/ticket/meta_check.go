@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	tickettx "github.com/LeJamon/goXRPLd/internal/core/tx/ticket"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	tickettx "github.com/LeJamon/goXRPLd/internal/tx/ticket"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/stretchr/testify/require"
 )

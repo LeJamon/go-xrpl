@@ -5,9 +5,9 @@ package batch
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx"
-	batchtx "github.com/LeJamon/goXRPLd/internal/core/tx/batch"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	batchtx "github.com/LeJamon/goXRPLd/internal/tx/batch"
+	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 
