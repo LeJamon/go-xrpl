@@ -29,6 +29,7 @@ type AccountRoot struct {
 	BurnedNFTokens    uint32   // Number of NFTokens burned for this issuer
 	AccountTxnID      [32]byte // Hash of the last transaction this account submitted (when enabled)
 	WalletLocator     string   // Arbitrary hex data (deprecated)
+	TicketCount       uint32   // Number of outstanding tickets owned by this account
 	AMMID             [32]byte // Links AMM pseudo-account to its AMM ledger entry (sfAMMID, fieldCode 14)
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
@@ -63,6 +64,7 @@ const (
 	fieldCodeEmailHash       = 1  // Hash128
 	fieldCodeDomain          = 7  // Blob
 	fieldCodeTickSize        = 16 // UInt8 (type code 16)
+	fieldCodeTicketCount     = 40 // UInt32 - number of outstanding tickets
 	fieldCodeAccountTxnID    = 9  // Hash256 - last transaction ID
 	fieldCodeWalletLocator   = 7  // Hash256 - wallet locator (deprecated)
 	fieldCodeAMMID           = 14 // Hash256 - links AMM pseudo-account to AMM entry (sfAMMID)
@@ -212,6 +214,8 @@ func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 				account.MintedNFTokens = value
 			case fieldCodeBurnedNFTokens:
 				account.BurnedNFTokens = value
+			case fieldCodeTicketCount:
+				account.TicketCount = value
 			}
 
 		case FieldTypeAmount:
@@ -403,6 +407,11 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 	// Add BurnedNFTokens if set (for NFToken issuer tracking)
 	if account.BurnedNFTokens > 0 {
 		jsonObj["BurnedNFTokens"] = account.BurnedNFTokens
+	}
+
+	// Add TicketCount if set (number of outstanding tickets)
+	if account.TicketCount > 0 {
+		jsonObj["TicketCount"] = account.TicketCount
 	}
 
 	// Add AccountTxnID if set (non-zero)

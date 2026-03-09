@@ -24,6 +24,10 @@ const (
 	FieldMetaCreate FieldMeta = 0x08
 	// FieldMetaAlways - always include when node is affected
 	FieldMetaAlways FieldMeta = 0x10
+	// FieldMetaBaseTen - serialize as base-10 (decimal) in metadata JSON, not base-16 (hex).
+	// Used for UInt64 amount fields (MaximumAmount, OutstandingAmount, MPTAmount, LockedAmount).
+	// Reference: rippled SField.h sMD_BaseTen = 0x20
+	FieldMetaBaseTen FieldMeta = 0x20
 	// FieldMetaDefault - default metadata behavior (change tracking + create + delete)
 	FieldMetaDefault = FieldMetaChangeOrig | FieldMetaChangeNew | FieldMetaDeleteFinal | FieldMetaCreate
 )

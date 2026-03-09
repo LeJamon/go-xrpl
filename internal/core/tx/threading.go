@@ -89,9 +89,11 @@ func threadItem(data []byte, txHash [32]byte, ledgerSeq uint32) (prevTxnID [32]b
 	return prevTxnID, prevLgrSeq, newData, true
 }
 
-// getOwnerAccounts returns the account IDs that own this ledger entry
-// These accounts should have their PreviousTxnID/PreviousTxnLgrSeq updated
-func getOwnerAccounts(data []byte, entryType string) [][20]byte {
+// getOwnerAccounts returns the account IDs that own this ledger entry.
+// These accounts should have their PreviousTxnID/PreviousTxnLgrSeq updated.
+// fixCheckThreading gates whether Check entries thread to their Destination.
+// Reference: rippled ApplyStateTable.cpp threadOwners() lines 659-695.
+func getOwnerAccounts(data []byte, entryType string, fixCheckThreading bool) [][20]byte {
 	var owners [][20]byte
 
 	// Decode the entry
@@ -133,8 +135,14 @@ func getOwnerAccounts(data []byte, entryType string) [][20]byte {
 			}
 		}
 
+		// Don't thread a Check's Destination unless fixCheckThreading is enabled.
+		// Reference: rippled ApplyStateTable.cpp lines 686-689
+		if entryType == "Check" && !fixCheckThreading {
+			return owners
+		}
+
 		// Destination field (secondary owner) for types that have it
-		// Check, Escrow, PayChannel, etc.
+		// Check (with amendment), Escrow, PayChannel, etc.
 		if dest, ok := fields["Destination"].(string); ok {
 			if id := decodeAccountAddress(dest); id != nil {
 				owners = append(owners, *id)

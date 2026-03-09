@@ -148,5 +148,9 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	ctx.Account.OwnerCount += t.TicketCount
 	ctx.Account.Sequence += t.TicketCount
 
+	// Update TicketCount on the AccountRoot
+	// Reference: rippled CreateTicket.cpp lines 142-144
+	ctx.Account.TicketCount += t.TicketCount
+
 	return tx.TesSUCCESS
 }

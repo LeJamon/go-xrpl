@@ -5,11 +5,12 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 	"strings"
 
 	"github.com/LeJamon/goXRPLd/internal/core/XRPAmount"
+	"github.com/LeJamon/goXRPLd/internal/core/amendment"
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )
 
 // Action represents the type of modification to a ledger entry
@@ -41,15 +42,19 @@ type ApplyStateTable struct {
 	drops  XRPAmount.XRPAmount
 	txHash [32]byte
 	txSeq  uint32
+	rules  *amendment.Rules
 }
 
-// NewApplyStateTable creates a new ApplyStateTable wrapping the given base view
-func NewApplyStateTable(base LedgerView, txHash [32]byte, txSeq uint32) *ApplyStateTable {
+// NewApplyStateTable creates a new ApplyStateTable wrapping the given base view.
+// rules controls amendment-gated behaviour (threading, metadata flags).
+// If nil, defaults to all amendments enabled.
+func NewApplyStateTable(base LedgerView, txHash [32]byte, txSeq uint32, rules *amendment.Rules) *ApplyStateTable {
 	return &ApplyStateTable{
 		base:   base,
 		items:  make(map[[32]byte]*TrackedEntry),
 		txHash: txHash,
 		txSeq:  txSeq,
+		rules:  rules,
 	}
 }
 
@@ -273,12 +278,27 @@ func (t *ApplyStateTable) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 // Apply commits all changes to the base view and returns generated metadata.
 // Threading is applied first (PreviousTxnID/PreviousTxnLgrSeq updates),
 // then metadata is generated from the final state.
+// Changes are written to the base view unless dry-run mode is set.
+// Reference: rippled ApplyStateTable.cpp apply() lines 113-292
 func (t *ApplyStateTable) Apply() (*Metadata, error) {
+	return t.applyImpl(false)
+}
+
+// ApplyDryRun generates metadata without committing changes to the base view.
+// Threading and metadata are computed identically to Apply(), but no state
+// is written. Useful for transaction simulation and batch processing.
+// Reference: rippled ApplyStateTable.cpp apply() isDryRun parameter
+func (t *ApplyStateTable) ApplyDryRun() (*Metadata, error) {
+	return t.applyImpl(true)
+}
+
+// applyImpl is the shared implementation for Apply and ApplyDryRun.
+func (t *ApplyStateTable) applyImpl(isDryRun bool) (*Metadata, error) {
 	// Phase 1: Apply threading to all entries
 	// This updates PreviousTxnID/PreviousTxnLgrSeq on entries and their owners
 	t.applyThreading()
 
-	// Phase 2: Generate metadata and apply to base
+	// Phase 2: Generate metadata and optionally apply to base
 	metadata := &Metadata{
 		AffectedNodes: make([]AffectedNode, 0),
 	}
@@ -296,9 +316,10 @@ func (t *ApplyStateTable) Apply() (*Metadata, error) {
 			}
 			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
 
-			// Apply to base
-			if err := t.base.Insert(keylet.Keylet{Key: key}, entry.Current); err != nil {
-				return nil, err
+			if !isDryRun {
+				if err := t.base.Insert(keylet.Keylet{Key: key}, entry.Current); err != nil {
+					return nil, err
+				}
 			}
 
 		case ActionModify:
@@ -313,9 +334,10 @@ func (t *ApplyStateTable) Apply() (*Metadata, error) {
 			}
 			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
 
-			// Apply to base
-			if err := t.base.Update(keylet.Keylet{Key: key}, entry.Current); err != nil {
-				return nil, err
+			if !isDryRun {
+				if err := t.base.Update(keylet.Keylet{Key: key}, entry.Current); err != nil {
+					return nil, err
+				}
 			}
 
 		case ActionErase:
@@ -325,19 +347,28 @@ func (t *ApplyStateTable) Apply() (*Metadata, error) {
 			}
 			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
 
-			// Apply to base
-			if err := t.base.Erase(keylet.Keylet{Key: key}); err != nil {
-				return nil, err
+			if !isDryRun {
+				if err := t.base.Erase(keylet.Keylet{Key: key}); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
 
-	// Apply destroyed drops
-	if t.drops.IsPositive() {
+	// Apply destroyed drops only when not dry-run
+	if !isDryRun && t.drops.IsPositive() {
 		t.base.AdjustDropsDestroyed(t.drops)
 	}
 
 	return metadata, nil
+}
+
+// effectiveRules returns the amendment rules, defaulting to all supported if nil.
+func (t *ApplyStateTable) effectiveRules() *amendment.Rules {
+	if t.rules != nil {
+		return t.rules
+	}
+	return amendment.AllSupportedRules()
 }
 
 // applyThreading updates PreviousTxnID/PreviousTxnLgrSeq on affected entries
@@ -355,6 +386,11 @@ func (t *ApplyStateTable) applyThreading() {
 		}
 	}
 
+	// Check amendment state once for the entire threading pass.
+	// Reference: rippled ApplyStateTable.cpp passes to.rules() to isThreadedType().
+	fixPreviousTxnID := t.effectiveRules().Enabled(amendment.FeatureFixPreviousTxnID)
+	fixCheckThreading := t.effectiveRules().Enabled(amendment.FeatureFixCheckThreading)
+
 	for _, w := range work {
 		entryType := getLedgerEntryType(w.entry.Current)
 		if w.entry.Current == nil && w.entry.Original != nil {
@@ -364,7 +400,7 @@ func (t *ApplyStateTable) applyThreading() {
 		switch w.entry.Action {
 		case ActionInsert:
 			// Thread the created entry itself (set PreviousTxnID/PreviousTxnLgrSeq)
-			if isThreadedType(entryType, false) {
+			if isThreadedType(entryType, fixPreviousTxnID) {
 				_, _, newData, changed := threadItem(w.entry.Current, t.txHash, t.txSeq)
 				if changed {
 					w.entry.Current = newData
@@ -372,11 +408,11 @@ func (t *ApplyStateTable) applyThreading() {
 			}
 
 			// Thread owner accounts
-			t.threadOwners(w.entry.Current, entryType)
+			t.threadOwners(w.entry.Current, entryType, fixCheckThreading)
 
 		case ActionModify:
 			// Thread the modified entry itself
-			if isThreadedType(entryType, false) {
+			if isThreadedType(entryType, fixPreviousTxnID) {
 				_, _, newData, changed := threadItem(w.entry.Current, t.txHash, t.txSeq)
 				if changed {
 					w.entry.Current = newData
@@ -389,19 +425,19 @@ func (t *ApplyStateTable) applyThreading() {
 			if data == nil {
 				data = w.entry.Original
 			}
-			t.threadOwners(data, entryType)
+			t.threadOwners(data, entryType, fixCheckThreading)
 		}
 	}
 }
 
 // threadOwners updates PreviousTxnID/PreviousTxnLgrSeq on owner accounts
-// of a given ledger entry.
-func (t *ApplyStateTable) threadOwners(data []byte, entryType string) {
+// of a given ledger entry. fixCheckThreading gates Check→Destination threading.
+func (t *ApplyStateTable) threadOwners(data []byte, entryType string, fixCheckThreading bool) {
 	if data == nil {
 		return
 	}
 
-	owners := getOwnerAccounts(data, entryType)
+	owners := getOwnerAccounts(data, entryType, fixCheckThreading)
 	for _, ownerID := range owners {
 		ownerKey := keylet.Account(ownerID)
 
@@ -739,8 +775,21 @@ func getLedgerEntryType(data []byte) string {
 				offset++
 			}
 			offset += length
-		case 8: // AccountID
-			offset += 20
+		case 8: // AccountID (variable-length encoded with length prefix)
+			// Reference: rippled STAccount.cpp uses addVL() — 1-byte length prefix + data
+			if offset >= len(data) {
+				return "Unknown"
+			}
+			length := int(data[offset])
+			offset++
+			if length > 192 {
+				if offset >= len(data) {
+					return "Unknown"
+				}
+				length = 193 + ((length-193)<<8 | int(data[offset]))
+				offset++
+			}
+			offset += length
 		default:
 			// Unknown type, can't continue
 			return "Unknown"

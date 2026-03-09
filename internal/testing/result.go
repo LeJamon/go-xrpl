@@ -1,5 +1,9 @@
 package testing
 
+import (
+	"github.com/LeJamon/goXRPLd/internal/core/tx"
+)
+
 // TxResult represents the result of applying a transaction.
 type TxResult struct {
 	// Code is the transaction engine result code (e.g., "tesSUCCESS").
@@ -11,8 +15,8 @@ type TxResult struct {
 	// Message provides additional details about the result.
 	Message string
 
-	// Metadata contains the serialized transaction metadata, if available.
-	Metadata []byte
+	// Metadata contains the transaction metadata (AffectedNodes, etc.).
+	Metadata *tx.Metadata
 }
 
 // Common transaction result codes.

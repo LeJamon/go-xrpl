@@ -306,7 +306,7 @@ func (b *Batch) Apply(ctx *tx.ApplyContext) tx.Result {
 // Reference: rippled Batch.cpp applyBatchTransactions() with tfAllOrNothing
 func (b *Batch) applyAllOrNothing(ctx *tx.ApplyContext, innerTxns []tx.Transaction) tx.Result {
 	// Create a batch-level state table wrapping ctx.View
-	batchTable := tx.NewApplyStateTable(ctx.View, ctx.TxHash, ctx.Config.LedgerSequence)
+	batchTable := tx.NewApplyStateTable(ctx.View, ctx.TxHash, ctx.Config.LedgerSequence, ctx.Config.Rules)
 
 	batchCtx := &tx.ApplyContext{
 		View:      batchTable,
@@ -389,7 +389,7 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) tx.Resu
 	}
 
 	// Create per-tx state table for isolation
-	perTxTable := tx.NewApplyStateTable(ctx.View, ctx.TxHash, ctx.Config.LedgerSequence)
+	perTxTable := tx.NewApplyStateTable(ctx.View, ctx.TxHash, ctx.Config.LedgerSequence, ctx.Config.Rules)
 
 	// Increment sequence
 	account.Sequence++

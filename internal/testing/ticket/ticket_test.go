@@ -85,9 +85,10 @@ func TestTicket_FeatureNotEnabled(t *testing.T) {
 
 	// Create 2 tickets
 	ticketSeq := env.Seq(master) + 1
-	result = env.Submit(ticket.TicketCreate(master, 2).Build())
+	tc2 := ticket.TicketCreate(master, 2).Build()
+	result = env.Submit(tc2)
 	jtx.RequireTxSuccess(t, result)
-	// TODO: checkTicketCreateMeta equivalent (requires metadata support)
+	ticket.CheckTicketCreateMeta(t, result, tc2)
 	env.Close()
 	jtx.RequireOwnerCount(t, env, master, 2)
 	jtx.RequireTicketCount(t, env, master, 2)
@@ -97,7 +98,7 @@ func TestTicket_FeatureNotEnabled(t *testing.T) {
 	jtx.WithTicketSeq(noop3, ticketSeq)
 	result = env.Submit(noop3)
 	jtx.RequireTxSuccess(t, result)
-	// TODO: checkTicketConsumeMeta equivalent (requires metadata support)
+	ticket.CheckTicketConsumeMeta(t, result, noop3)
 	ticketSeq++
 	env.Close()
 	jtx.RequireOwnerCount(t, env, master, 1)
@@ -113,7 +114,7 @@ func TestTicket_FeatureNotEnabled(t *testing.T) {
 	jtx.WithTicketSeq(fset, ticketSeq)
 	result = env.Submit(fset)
 	jtx.RequireTxFail(t, result, "tecNO_ALTERNATIVE_KEY")
-	// TODO: checkTicketConsumeMeta equivalent (requires metadata support)
+	ticket.CheckTicketConsumeMeta(t, result, fset)
 	env.Close()
 	jtx.RequireOwnerCount(t, env, master, 0)
 	jtx.RequireTicketCount(t, env, master, 0)
@@ -137,9 +138,10 @@ func TestTicket_CreatePreflightFail(t *testing.T) {
 
 	// Exercise fees.
 	ticketSeqA := env.Seq(master) + 1
-	result = env.Submit(ticket.TicketCreate(master, 1).Fee(int64(jtx.XRP(10))).Build())
+	tcA := ticket.TicketCreate(master, 1).Fee(int64(jtx.XRP(10))).Build()
+	result = env.Submit(tcA)
 	jtx.RequireTxSuccess(t, result)
-	// TODO: checkTicketCreateMeta
+	ticket.CheckTicketCreateMeta(t, result, tcA)
 	env.Close()
 	jtx.RequireOwnerCount(t, env, master, 1)
 	jtx.RequireTicketCount(t, env, master, 1)
@@ -149,9 +151,10 @@ func TestTicket_CreatePreflightFail(t *testing.T) {
 
 	// Exercise flags.
 	ticketSeqB := env.Seq(master) + 1
-	result = env.Submit(ticket.TicketCreate(master, 1).Flags(tfFullyCanonicalSig).Build())
+	tcB := ticket.TicketCreate(master, 1).Flags(tfFullyCanonicalSig).Build()
+	result = env.Submit(tcB)
 	jtx.RequireTxSuccess(t, result)
-	// TODO: checkTicketCreateMeta
+	ticket.CheckTicketCreateMeta(t, result, tcB)
 	env.Close()
 	jtx.RequireOwnerCount(t, env, master, 2)
 	jtx.RequireTicketCount(t, env, master, 2)
@@ -168,14 +171,15 @@ func TestTicket_CreatePreflightFail(t *testing.T) {
 	jtx.WithTicketSeq(noopA, ticketSeqA)
 	result = env.Submit(noopA)
 	jtx.RequireTxSuccess(t, result)
-	// TODO: checkTicketConsumeMeta
+	ticket.CheckTicketConsumeMeta(t, result, noopA)
 	env.Close()
 	jtx.RequireOwnerCount(t, env, master, 1)
 	jtx.RequireTicketCount(t, env, master, 1)
 
-	result = env.Submit(ticket.TicketCreate(master, 250).TicketSeq(ticketSeqB).Build())
+	tc250 := ticket.TicketCreate(master, 250).TicketSeq(ticketSeqB).Build()
+	result = env.Submit(tc250)
 	jtx.RequireTxSuccess(t, result)
-	// TODO: checkTicketCreateMeta
+	ticket.CheckTicketCreateMeta(t, result, tc250)
 	env.Close()
 	jtx.RequireOwnerCount(t, env, master, 250)
 	jtx.RequireTicketCount(t, env, master, 250)
@@ -205,18 +209,20 @@ func TestTicket_CreatePreclaimFail(t *testing.T) {
 		env.FundAmount(alice, uint64(jtx.XRP(100000)))
 
 		ticketSeq := env.Seq(alice) + 1
-		result := env.Submit(ticket.TicketCreate(alice, 250).Build())
+		tc250 := ticket.TicketCreate(alice, 250).Build()
+		result := env.Submit(tc250)
 		jtx.RequireTxSuccess(t, result)
-		// TODO: checkTicketCreateMeta
+		ticket.CheckTicketCreateMeta(t, result, tc250)
 		env.Close()
 		jtx.RequireOwnerCount(t, env, alice, 250)
 		jtx.RequireTicketCount(t, env, alice, 250)
 
 		// Note that we can add one more ticket while consuming a ticket
 		// because the final result is still 250 tickets.
-		result = env.Submit(ticket.TicketCreate(alice, 1).TicketSeq(ticketSeq + 0).Build())
+		tc1a := ticket.TicketCreate(alice, 1).TicketSeq(ticketSeq + 0).Build()
+		result = env.Submit(tc1a)
 		jtx.RequireTxSuccess(t, result)
-		// TODO: checkTicketCreateMeta
+		ticket.CheckTicketCreateMeta(t, result, tc1a)
 		env.Close()
 		jtx.RequireOwnerCount(t, env, alice, 250)
 		jtx.RequireTicketCount(t, env, alice, 250)
@@ -230,9 +236,10 @@ func TestTicket_CreatePreclaimFail(t *testing.T) {
 		jtx.RequireTicketCount(t, env, alice, 249)
 
 		// Now we can successfully add two tickets while consuming one.
-		result = env.Submit(ticket.TicketCreate(alice, 2).TicketSeq(ticketSeq + 2).Build())
+		tc2a := ticket.TicketCreate(alice, 2).TicketSeq(ticketSeq + 2).Build()
+		result = env.Submit(tc2a)
 		jtx.RequireTxSuccess(t, result)
-		// TODO: checkTicketCreateMeta
+		ticket.CheckTicketCreateMeta(t, result, tc2a)
 		env.Close()
 		jtx.RequireOwnerCount(t, env, alice, 250)
 		jtx.RequireTicketCount(t, env, alice, 250)
@@ -254,9 +261,10 @@ func TestTicket_CreatePreclaimFail(t *testing.T) {
 		env.Close()
 
 		ticketSeqAB := env.Seq(alice) + 1
-		result := env.Submit(ticket.TicketCreate(alice, 2).Build())
+		tc2b := ticket.TicketCreate(alice, 2).Build()
+		result := env.Submit(tc2b)
 		jtx.RequireTxSuccess(t, result)
-		// TODO: checkTicketCreateMeta
+		ticket.CheckTicketCreateMeta(t, result, tc2b)
 		env.Close()
 		jtx.RequireOwnerCount(t, env, alice, 2)
 		jtx.RequireTicketCount(t, env, alice, 2)
@@ -280,9 +288,10 @@ func TestTicket_CreatePreclaimFail(t *testing.T) {
 
 		// Alice can now add 250 tickets while consuming one.
 		// currentTickets=1 + 250 - 1 = 250 → success
-		result = env.Submit(ticket.TicketCreate(alice, 250).TicketSeq(ticketSeqAB + 1).Build())
+		tc250b := ticket.TicketCreate(alice, 250).TicketSeq(ticketSeqAB + 1).Build()
+		result = env.Submit(tc250b)
 		jtx.RequireTxSuccess(t, result)
-		// TODO: checkTicketCreateMeta
+		ticket.CheckTicketCreateMeta(t, result, tc250b)
 		env.Close()
 		jtx.RequireOwnerCount(t, env, alice, 250)
 		jtx.RequireTicketCount(t, env, alice, 250)
@@ -315,9 +324,10 @@ func TestTicket_InsufficientReserve(t *testing.T) {
 	env.Pay(alice, topUp)
 	env.Close()
 
-	result = env.Submit(ticket.TicketCreate(alice, 1).Build())
+	tcR1 := ticket.TicketCreate(alice, 1).Build()
+	result = env.Submit(tcR1)
 	jtx.RequireTxSuccess(t, result)
-	// TODO: checkTicketCreateMeta
+	ticket.CheckTicketCreateMeta(t, result, tcR1)
 	env.Close()
 	jtx.RequireOwnerCount(t, env, alice, 1)
 	jtx.RequireTicketCount(t, env, alice, 1)
@@ -343,9 +353,10 @@ func TestTicket_InsufficientReserve(t *testing.T) {
 	env.Close()
 
 	ticketSeq := env.Seq(alice) + 1
-	result = env.Submit(ticket.TicketCreate(alice, 249).Build())
+	tc249 := ticket.TicketCreate(alice, 249).Build()
+	result = env.Submit(tc249)
 	jtx.RequireTxSuccess(t, result)
-	// TODO: checkTicketCreateMeta
+	ticket.CheckTicketCreateMeta(t, result, tc249)
 	env.Close()
 	jtx.RequireOwnerCount(t, env, alice, 250)
 	jtx.RequireTicketCount(t, env, alice, 250)
@@ -367,9 +378,10 @@ func TestTicket_UsingTickets(t *testing.T) {
 
 	// Successfully create tickets (using a sequence)
 	ticketSeqAB := env.Seq(alice) + 1
-	result := env.Submit(ticket.TicketCreate(alice, 2).Build())
+	tcU2 := ticket.TicketCreate(alice, 2).Build()
+	result := env.Submit(tcU2)
 	jtx.RequireTxSuccess(t, result)
-	// TODO: checkTicketCreateMeta
+	ticket.CheckTicketCreateMeta(t, result, tcU2)
 	env.Close()
 	jtx.RequireOwnerCount(t, env, alice, 2)
 	jtx.RequireTicketCount(t, env, alice, 2)
@@ -377,9 +389,10 @@ func TestTicket_UsingTickets(t *testing.T) {
 
 	// You can use a ticket to create one ticket ...
 	ticketSeqC := env.Seq(alice)
-	result = env.Submit(ticket.TicketCreate(alice, 1).TicketSeq(ticketSeqAB + 0).Build())
+	tcU1 := ticket.TicketCreate(alice, 1).TicketSeq(ticketSeqAB + 0).Build()
+	result = env.Submit(tcU1)
 	jtx.RequireTxSuccess(t, result)
-	// TODO: checkTicketCreateMeta
+	ticket.CheckTicketCreateMeta(t, result, tcU1)
 	env.Close()
 	jtx.RequireOwnerCount(t, env, alice, 2)
 	jtx.RequireTicketCount(t, env, alice, 2)
@@ -387,9 +400,10 @@ func TestTicket_UsingTickets(t *testing.T) {
 
 	// ... you can use a ticket to create multiple tickets ...
 	ticketSeqDE := env.Seq(alice)
-	result = env.Submit(ticket.TicketCreate(alice, 2).TicketSeq(ticketSeqAB + 1).Build())
+	tcU2b := ticket.TicketCreate(alice, 2).TicketSeq(ticketSeqAB + 1).Build()
+	result = env.Submit(tcU2b)
 	jtx.RequireTxSuccess(t, result)
-	// TODO: checkTicketCreateMeta
+	ticket.CheckTicketCreateMeta(t, result, tcU2b)
 	env.Close()
 	jtx.RequireOwnerCount(t, env, alice, 3)
 	jtx.RequireTicketCount(t, env, alice, 3)
@@ -401,7 +415,7 @@ func TestTicket_UsingTickets(t *testing.T) {
 	jtx.WithTicketSeq(noopDE0, ticketSeqDE+0)
 	result = env.Submit(noopDE0)
 	jtx.RequireTxSuccess(t, result)
-	// TODO: checkTicketConsumeMeta
+	ticket.CheckTicketConsumeMeta(t, result, noopDE0)
 	env.Close()
 	jtx.RequireOwnerCount(t, env, alice, 2)
 	jtx.RequireTicketCount(t, env, alice, 2)
@@ -413,7 +427,7 @@ func TestTicket_UsingTickets(t *testing.T) {
 	jtx.WithTicketSeq(pay, ticketSeqDE+1)
 	result = env.Submit(pay)
 	jtx.RequireTxSuccess(t, result)
-	// TODO: checkTicketConsumeMeta
+	ticket.CheckTicketConsumeMeta(t, result, pay)
 	env.Close()
 	jtx.RequireOwnerCount(t, env, alice, 1)
 	jtx.RequireTicketCount(t, env, alice, 1)
@@ -427,7 +441,7 @@ func TestTicket_UsingTickets(t *testing.T) {
 	jtx.WithTicketSeq(ts, ticketSeqC)
 	result = env.Submit(ts)
 	jtx.RequireTxSuccess(t, result)
-	// TODO: checkTicketConsumeMeta
+	ticket.CheckTicketConsumeMeta(t, result, ts)
 	env.Close()
 	// Trust line added (+1 owner), ticket consumed (-1 owner) = net 0 change
 	// But ticket count drops by 1
@@ -451,9 +465,10 @@ func TestTicket_UsingTickets(t *testing.T) {
 	env.Close()
 
 	// Now create the ticket.
-	result = env.Submit(ticket.TicketCreate(alice, 1).Build())
+	tcF := ticket.TicketCreate(alice, 1).Build()
+	result = env.Submit(tcF)
 	jtx.RequireTxSuccess(t, result)
-	// TODO: checkTicketCreateMeta
+	ticket.CheckTicketCreateMeta(t, result, tcF)
 	env.Close()
 
 	// In rippled the queued terPRE_TICKET noop would be retried automatically.
@@ -469,9 +484,10 @@ func TestTicket_UsingTickets(t *testing.T) {
 
 	// Try a transaction that combines consuming a ticket with AccountTxnID.
 	ticketSeqG := env.Seq(alice) + 1
-	result = env.Submit(ticket.TicketCreate(alice, 1).Build())
+	tcG := ticket.TicketCreate(alice, 1).Build()
+	result = env.Submit(tcG)
 	jtx.RequireTxSuccess(t, result)
-	// TODO: checkTicketCreateMeta
+	ticket.CheckTicketCreateMeta(t, result, tcG)
 	env.Close()
 
 	noopTxnID := noop(alice)
@@ -604,9 +620,10 @@ func TestTicket_SignWithTicketSequence(t *testing.T) {
 
 	// Successfully create tickets (using a sequence).
 	ticketSeq := env.Seq(alice) + 1
-	result := env.Submit(ticket.TicketCreate(alice, 2).Build())
+	tcS := ticket.TicketCreate(alice, 2).Build()
+	result := env.Submit(tcS)
 	jtx.RequireTxSuccess(t, result)
-	// TODO: checkTicketCreateMeta
+	ticket.CheckTicketCreateMeta(t, result, tcS)
 	env.Close()
 	jtx.RequireOwnerCount(t, env, alice, 2)
 	jtx.RequireTicketCount(t, env, alice, 2)
