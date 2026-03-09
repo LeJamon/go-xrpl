@@ -3,7 +3,7 @@ package entry
 import (
 	"errors"
 
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/entry"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
 // WithdrawalPolicy represents the withdrawal policy for a vault

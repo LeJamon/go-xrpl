@@ -1,7 +1,7 @@
 package payment
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )

@@ -16,7 +16,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/core/ledger"
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/header"
-	"github.com/LeJamon/goXRPLd/internal/core/shamap"
+	"github.com/LeJamon/goXRPLd/shamap"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/statecompare"
 	"github.com/spf13/cobra"

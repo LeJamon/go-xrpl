@@ -3,7 +3,7 @@ package entry
 import (
 	"errors"
 
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/entry"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
 // Credential represents a verifiable credential ledger entry

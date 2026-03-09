@@ -3,7 +3,7 @@ package entry
 import (
 	"encoding/binary"
 	"errors"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/entry"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
 // AccountRoot represents an account in the ledger

@@ -1,7 +1,7 @@
 package delegate
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"

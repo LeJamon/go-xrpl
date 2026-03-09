@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	cred "github.com/LeJamon/goXRPLd/internal/testing/credential"

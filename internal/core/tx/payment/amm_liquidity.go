@@ -8,7 +8,7 @@ package payment
 // Reference: rippled/src/xrpld/app/paths/AMMLiquidity.h and detail/AMMLiquidity.cpp
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )

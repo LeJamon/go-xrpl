@@ -1,6 +1,6 @@
 package sle
 
-import "github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+import "github.com/LeJamon/goXRPLd/keylet"
 
 // LedgerView provides read/write access to ledger state
 type LedgerView interface {

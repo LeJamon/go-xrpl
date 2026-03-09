@@ -3,7 +3,7 @@ package entry
 import (
 	"errors"
 
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/entry"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
 // XChainClaimAttestation represents a single attestation for a cross-chain claim

@@ -3,7 +3,7 @@ package entry
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/entry"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

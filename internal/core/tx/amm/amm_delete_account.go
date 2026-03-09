@@ -1,8 +1,8 @@
 package amm
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/entry"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )

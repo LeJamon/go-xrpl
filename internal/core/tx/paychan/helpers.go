@@ -11,7 +11,7 @@ import (
 	ed25519crypto "github.com/LeJamon/goXRPLd/crypto/algorithms/ed25519"
 	secp256k1crypto "github.com/LeJamon/goXRPLd/crypto/algorithms/secp256k1"
 
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )

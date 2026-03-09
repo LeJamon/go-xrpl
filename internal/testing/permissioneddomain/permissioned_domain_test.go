@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 	acctx "github.com/LeJamon/goXRPLd/internal/core/tx/account"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	pd "github.com/LeJamon/goXRPLd/internal/testing/permissioneddomain"

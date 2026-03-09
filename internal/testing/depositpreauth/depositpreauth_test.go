@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/depositpreauth"
 	paymentPkg "github.com/LeJamon/goXRPLd/internal/core/tx/payment"

@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 
 	"github.com/LeJamon/goXRPLd/drops"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/entry"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
 // FeeSettings represents the singleton fee settings ledger entry.

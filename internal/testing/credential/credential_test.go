@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 	acctx "github.com/LeJamon/goXRPLd/internal/core/tx/account"
 	credtx "github.com/LeJamon/goXRPLd/internal/core/tx/credential"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"

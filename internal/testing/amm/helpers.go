@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/address-codec"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/entry"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	coreAmm "github.com/LeJamon/goXRPLd/internal/core/tx/amm"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"

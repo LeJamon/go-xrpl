@@ -7,7 +7,7 @@ import (
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/address-codec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/rpc/rpc_types"
 )
 

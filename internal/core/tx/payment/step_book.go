@@ -5,7 +5,7 @@ import (
 	"errors"
 	"math/big"
 
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 	tx "github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/amm"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/permissioneddomain"

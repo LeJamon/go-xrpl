@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // DirectoryNode represents a directory ledger entry

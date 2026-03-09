@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/nftoken"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"

@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/address-codec"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // NFTOfferInfo represents an individual NFToken offer for nft_buy_offers/nft_sell_offers RPC

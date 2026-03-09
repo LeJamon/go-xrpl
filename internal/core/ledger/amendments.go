@@ -11,7 +11,7 @@ import (
 	"github.com/LeJamon/goXRPLd/codec/binary-codec/definitions"
 	"github.com/LeJamon/goXRPLd/codec/binary-codec/serdes"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // LedgerReader is the interface needed for reading ledger state.

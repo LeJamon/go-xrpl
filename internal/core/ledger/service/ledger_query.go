@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/core/ledger"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 

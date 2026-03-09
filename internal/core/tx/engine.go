@@ -12,7 +12,7 @@ import (
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 	crypto "github.com/LeJamon/goXRPLd/crypto/common"
 )

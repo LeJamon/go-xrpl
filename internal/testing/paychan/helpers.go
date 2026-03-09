@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binary-codec"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 	accounttx "github.com/LeJamon/goXRPLd/internal/core/tx/account"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 	secp256k1crypto "github.com/LeJamon/goXRPLd/crypto/algorithms/secp256k1"

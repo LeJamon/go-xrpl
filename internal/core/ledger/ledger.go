@@ -8,9 +8,9 @@ import (
 
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/header"
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/protocol"
-	"github.com/LeJamon/goXRPLd/internal/core/shamap"
+	"github.com/LeJamon/goXRPLd/shamap"
 	crypto "github.com/LeJamon/goXRPLd/crypto/common"
 )
 

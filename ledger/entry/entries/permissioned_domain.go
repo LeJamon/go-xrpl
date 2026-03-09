@@ -3,7 +3,7 @@ package entry
 import (
 	"errors"
 
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/entry"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
 // AcceptedCredential represents a credential type accepted by a permissioned domain

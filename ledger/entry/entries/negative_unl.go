@@ -1,7 +1,7 @@
 package entry
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/core/ledger/entry"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
 // DisabledValidator represents a validator that has been disabled
