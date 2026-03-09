@@ -1133,6 +1133,7 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 	// We use a fresh ApplyStateTable (tecTable) to track all tec-specific changes
 	// so that proper metadata (PreviousFields, FinalFields, DeletedNode) is generated.
 	if result.IsTec() {
+		txTypeName := tx.TxType().String()
 		// For tecOVERSIZE and tecKILLED: collect deleted offers from the table
 		// BEFORE discarding, so we can re-remove them from the clean view.
 		// Reference: rippled Transactor.cpp lines 1121-1201:
