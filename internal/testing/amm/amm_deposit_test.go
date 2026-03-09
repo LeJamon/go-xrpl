@@ -426,3 +426,97 @@ func TestDepositInvalidAMM(t *testing.T) {
 	}
 	amm.ExpectTER(t, result, amm.TerNO_AMM)
 }
+
+// TestAMMDepositWithFrozenAssets tests deposit behavior when one of the AMM
+// assets has a frozen trust line.
+// Reference: rippled AMM_test.cpp testAMMDepositWithFrozenAssets (line 7351)
+func TestAMMDepositWithFrozenAssets(t *testing.T) {
+	// Helper that sets up the environment: create AMM(XRP(100)/USD(100)),
+	// then freeze alice's USD trust line, then run the callback.
+	// Matches the rippled lambda testAMMDeposit.
+	setupFrozenAMM := func(t *testing.T) *amm.AMMTestEnv {
+		t.Helper()
+
+		env := amm.NewAMMTestEnv(t)
+
+		// Fund GW, alice.
+		env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(1000)))
+		env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(1000)))
+		env.Close()
+		env.Trust(env.Alice, env.GW, "USD", 100000)
+		env.Close()
+		env.PayIOU(env.GW, env.Alice, "USD", 1000)
+		env.Close()
+
+		// Create AMM(XRP(100), USD(100)) by alice.
+		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(100), amm.IOUAmount(env.GW, "USD", 100)).Build()
+		result := env.Submit(createTx)
+		if !result.Success {
+			t.Fatalf("AMM creation should succeed: %s - %s", result.Code, result.Message)
+		}
+		env.Close()
+
+		// Freeze alice's USD trust line: trust(gw, alice["USD"](0), tfSetFreeze).
+		env.FreezeTrustLine(env.GW, env.Alice, "USD")
+		env.Close()
+
+		return env
+	}
+
+	// Deposit two assets, one of which is frozen -> tecFROZEN.
+	// Reference: lines 7370-7381
+	t.Run("TwoAsset_FrozenToken", func(t *testing.T) {
+		env := setupFrozenAMM(t)
+
+		depositTx := amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
+			Amount(amm.IOUAmount(env.GW, "USD", 100)).
+			Amount2(amm.XRPAmount(100)).
+			TwoAsset().
+			Build()
+		result := env.Submit(depositTx)
+		amm.ExpectTER(t, result, amm.TecFROZEN)
+	})
+
+	// Deposit single frozen asset -> tecFROZEN.
+	// Reference: lines 7383-7396
+	t.Run("SingleAsset_FrozenToken", func(t *testing.T) {
+		env := setupFrozenAMM(t)
+
+		depositTx := amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
+			Amount(amm.IOUAmount(env.GW, "USD", 100)).
+			SingleAsset().
+			Build()
+		result := env.Submit(depositTx)
+		amm.ExpectTER(t, result, amm.TecFROZEN)
+	})
+
+	// With AMMClawback enabled: deposit the non-frozen asset (XRP) when the
+	// other asset is frozen -> tecFROZEN.
+	// Reference: lines 7398-7413
+	t.Run("SingleAsset_NonFrozen_WithAMMClawback", func(t *testing.T) {
+		env := setupFrozenAMM(t)
+		env.EnableFeature("AMMClawback")
+
+		depositTx := amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
+			Amount(amm.XRPAmount(100)).
+			SingleAsset().
+			Build()
+		result := env.Submit(depositTx)
+		amm.ExpectTER(t, result, amm.TecFROZEN)
+	})
+
+	// Without AMMClawback: deposit the non-frozen asset (XRP) when the other
+	// asset is frozen -> tesSUCCESS.
+	// Reference: lines 7414-7429
+	t.Run("SingleAsset_NonFrozen_WithoutAMMClawback", func(t *testing.T) {
+		env := setupFrozenAMM(t)
+		env.DisableFeature("AMMClawback")
+
+		depositTx := amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
+			Amount(amm.XRPAmount(100)).
+			SingleAsset().
+			Build()
+		result := env.Submit(depositTx)
+		jtx.RequireTxSuccess(t, result)
+	})
+}

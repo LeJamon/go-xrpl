@@ -40,6 +40,7 @@ func Flow(
 	partialPayment bool,
 	limitQuality *Quality,
 	sendMax *EitherAmount,
+	ammCtx *AMMContext,
 	flowSortStrands ...bool,
 ) FlowResult {
 	sortStrands := false
@@ -152,6 +153,22 @@ func Flow(
 			break
 		}
 
+		// Update AMMContext multiPath for this iteration
+		// Reference: rippled StrandFlow.h line 654: ammContext.setMultiPath(activeStrands.size() > 1)
+		if ammCtx != nil {
+			ammCtx.SetMultiPath(len(cur) > 1)
+		}
+
+		// Limit output if one strand and limitQuality is set.
+		// This reduces the output to generate exact requested limitQuality
+		// when the path contains AMM (non-constant quality).
+		// Reference: rippled StrandFlow.h lines 656-662
+		limitRemainingOut := remainingOut
+		if len(cur) == 1 && limitQuality != nil && cur[0] != nil {
+			limitRemainingOut = limitOut(accumSandbox, *cur[0], remainingOut, *limitQuality)
+		}
+		adjustedRemOut := limitRemainingOut.Compare(remainingOut) != 0
+
 		// Collect offers to remove from ALL strands in this iteration
 		iterOfrsToRm := make(map[[32]byte]bool)
 
@@ -180,8 +197,15 @@ func Flow(
 				}
 			}
 
-			// Execute this strand
-			result := ExecuteStrand(accumSandbox, *strand, remainingIn, remainingOut)
+			// Clear AMM liquidity used flag before each strand attempt.
+			// Reference: rippled StrandFlow.h line 687: ammContext.clear()
+			if ammCtx != nil {
+				ammCtx.Clear()
+			}
+
+			// Execute this strand with the potentially limited output.
+			// Reference: rippled StrandFlow.h line 694: flow(sb, *strand, remainingIn, limitRemainingOut, j)
+			result := ExecuteStrand(accumSandbox, *strand, remainingIn, limitRemainingOut)
 
 			// Collect offers to remove from ALL strands (even failed ones)
 			for k, v := range result.OffsToRm {
@@ -198,9 +222,14 @@ func Flow(
 			// Calculate actual quality
 			q := QualityFromAmounts(result.In, result.Out)
 
-			// Check quality limit
+			// Check quality limit.
+			// limitOut() finds output to generate exact requested limitQuality.
+			// But the actual limit quality might be slightly off due to round off.
+			// Reference: rippled StrandFlow.h lines 720-731
 			if limitQuality != nil && q.WorseThan(*limitQuality) {
-				continue
+				if !adjustedRemOut || !WithinRelativeDistance(q, *limitQuality, 1e-7) {
+					continue
+				}
 			}
 
 			if sortStrands {
@@ -281,6 +310,11 @@ func Flow(
 			if best.sandbox != nil {
 				best.sandbox.Apply(accumSandbox)
 			}
+			// Update AMM iteration counter
+			// Reference: rippled StrandFlow.h line 798: ammContext.update()
+			if ammCtx != nil {
+				ammCtx.Update()
+			}
 		}
 
 		// Delete removable offers from the accumulating sandbox
@@ -299,13 +333,17 @@ func Flow(
 	}
 
 	// Determine final result code
+	// Reference: rippled StrandFlow.h lines 853-872:
+	//   if (!partialPayment) → tecPATH_PARTIAL (couldn't deliver full amount)
+	//   if (partialPayment && actualOut == 0) → tecPATH_DRY (delivered nothing)
+	//   if (partialPayment && actualOut > 0) → success (partial delivery)
 	resultCode := tx.TesSUCCESS
 
-	if totalOut.IsZero() {
-		resultCode = tx.TecPATH_DRY
-	} else if totalOut.Compare(outReq) < 0 {
+	if totalOut.Compare(outReq) < 0 {
 		if !partialPayment {
 			resultCode = tx.TecPATH_PARTIAL
+		} else if totalOut.IsZero() {
+			resultCode = tx.TecPATH_DRY
 		}
 	}
 
@@ -316,6 +354,75 @@ func Flow(
 		RemovableOffers: allOfrsToRm,
 		Result:          tx.Result(resultCode),
 	}
+}
+
+// limitOut limits the output amount to produce the requested strand limitQuality
+// when the path contains AMM (non-constant quality function). Reducing the output
+// increases quality of AMM steps, increasing the strand's composite quality.
+//
+// The function composes QualityFunctions from all steps in the strand, then
+// solves for the output that produces the desired average quality.
+//
+// Returns remainingOut unchanged if:
+//   - any step returns nil QualityFunction
+//   - the composed QF is constant (all CLOB, no AMM)
+//   - the computed output is not less than remainingOut
+//   - the computed output is within 1e-9 relative distance of remainingOut
+//
+// Reference: rippled StrandFlow.h limitOut() lines 369-413
+func limitOut(v *PaymentSandbox, strand Strand, remainingOut EitherAmount, limitQuality Quality) EitherAmount {
+	var qf *QualityFunction
+	dir := DebtDirectionIssues
+	for _, step := range strand {
+		stepQF, stepDir := step.GetQualityFunc(v, dir)
+		if stepQF == nil {
+			return remainingOut
+		}
+		if qf == nil {
+			qf = stepQF
+		} else {
+			qf.Combine(*stepQF)
+		}
+		dir = stepDir
+	}
+
+	// QualityFunction is constant (all CLOB, no AMM)
+	if qf == nil || qf.IsConst() {
+		return remainingOut
+	}
+
+	outAmt := qf.OutFromAvgQ(limitQuality)
+	if outAmt == nil {
+		return remainingOut
+	}
+
+	// Convert the Number result to an EitherAmount matching remainingOut's type
+	var out EitherAmount
+	if remainingOut.IsNative {
+		// Convert IOU-style number to XRP drops using round-to-nearest (banker's rounding).
+		// Reference: rippled StrandFlow.h limitOut() line 402: XRPAmount{*out}
+		// which calls Number::operator rep() (round to nearest, even on tie).
+		drops := canonicalizeDropsRound(outAmt.Mantissa(), outAmt.Exponent())
+		out = NewXRPEitherAmount(drops)
+	} else {
+		// Preserve currency/issuer from remainingOut (outAmt has empty currency/issuer
+		// because QualityFunction uses Number arithmetic with no issue info).
+		out = NewIOUEitherAmount(tx.NewIssuedAmount(
+			outAmt.Mantissa(), outAmt.Exponent(),
+			remainingOut.IOU.Currency, remainingOut.IOU.Issuer))
+	}
+
+	// A tiny difference could be due to round off
+	// Reference: rippled withinRelativeDistance(out, remainingOut, Number(1, -9))
+	if withinRelativeDistanceAmounts(out, remainingOut, 1e-9) {
+		return remainingOut
+	}
+
+	// Return min(out, remainingOut)
+	if out.Compare(remainingOut) < 0 {
+		return out
+	}
+	return remainingOut
 }
 
 // sumAmounts sums a slice of EitherAmounts.
@@ -466,8 +573,26 @@ func RippleCalculate(
 		return ZeroXRPEitherAmount(), ZeroXRPEitherAmount(), nil, nil, strandResult
 	}
 
+	// Create AMMContext for this payment
+	// Reference: rippled Flow.cpp line 85: AMMContext ammContext(src, false);
+	ammCtx := NewAMMContext(srcAccount, false)
+
 	// Configure BookSteps with amendment flags for payments.
 	configureBookStepsForPayments(strands, rcOpts.parentCloseTime, rcOpts.fixReducedOffersV1, rcOpts.fixReducedOffersV2, rcOpts.fixRmSmallIncreasedQOffers)
+
+	// Initialize AMM liquidity on BookSteps.
+	// Reference: rippled BookStep constructor reads AMM SLE and creates AMMLiquidity.
+	configureAMMOnBookSteps(sandbox, strands, ammCtx, rcOpts.parentCloseTime,
+		rcOpts.fixAMMv1_1, rcOpts.fixAMMv1_2, rcOpts.fixAMMOverflowOffer)
+
+	// Set multiPath after strands are built
+	// Reference: rippled Flow.cpp line 112: ammContext.setMultiPath(strands.size() > 1)
+	ammCtx.SetMultiPath(len(strands) > 1)
+
+	// Configure BookSteps with domain ID for permissioned domain payments.
+	if rcOpts.domainID != nil {
+		setDomainOnBookSteps(strands, rcOpts.domainID)
+	}
 
 	// Convert amounts to EitherAmount
 	outReq := ToEitherAmount(dstAmount)
@@ -486,7 +611,7 @@ func RippleCalculate(
 	}
 
 	// Execute flow with FlowSortStrands amendment flag
-	result := Flow(sandbox, strands, outReq, partialPayment, qualityLimit, sendMax, rcOpts.flowSortStrands)
+	result := Flow(sandbox, strands, outReq, partialPayment, qualityLimit, sendMax, ammCtx, rcOpts.flowSortStrands)
 
 	// Apply flow sandbox changes back to the main sandbox
 	if result.Result == tx.TesSUCCESS || result.Result == tx.TecPATH_PARTIAL {
@@ -507,6 +632,11 @@ type rippleCalculateOpts struct {
 	fixReducedOffersV2         bool
 	fixRmSmallIncreasedQOffers bool
 	flowSortStrands            bool
+	domainID                   *[32]byte
+	// AMM amendment flags
+	fixAMMv1_1          bool
+	fixAMMv1_2          bool
+	fixAMMOverflowOffer bool
 }
 
 // WithAmendments passes amendment flags and ledger timing to RippleCalculate,
@@ -520,6 +650,25 @@ func WithAmendments(parentCloseTime uint32, fixReducedOffersV1, fixReducedOffers
 		if len(flowSortStrands) > 0 {
 			o.flowSortStrands = flowSortStrands[0]
 		}
+	}
+}
+
+// WithAMMAmendments passes AMM-specific amendment flags to RippleCalculate.
+// Reference: rippled BookStep reads these from ctx.view.rules()
+func WithAMMAmendments(fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer bool) RippleCalculateOption {
+	return func(o *rippleCalculateOpts) {
+		o.fixAMMv1_1 = fixAMMv1_1
+		o.fixAMMv1_2 = fixAMMv1_2
+		o.fixAMMOverflowOffer = fixAMMOverflowOffer
+	}
+}
+
+// WithDomainID passes a permissioned domain ID to RippleCalculate, causing the
+// flow engine to use domain book directories and filter offers by domain membership.
+// Reference: rippled Payment.cpp doApply() passes ctx_.tx[~sfDomainID] to rippleCalculate
+func WithDomainID(domainID *[32]byte) RippleCalculateOption {
+	return func(o *rippleCalculateOpts) {
+		o.domainID = domainID
 	}
 }
 
@@ -540,6 +689,43 @@ func configureBookStepsForPayments(strands []Strand, parentCloseTime uint32, fix
 	}
 }
 
+// setDomainOnBookSteps sets the domain ID on all BookSteps in the given strands.
+// This causes each BookStep to use the domain book directory and filter offers
+// by domain membership during iteration.
+// Reference: rippled RippleCalc::rippleCalculate passes domain to OfferStream
+func setDomainOnBookSteps(strands []Strand, domainID *[32]byte) {
+	for _, strand := range strands {
+		for _, step := range strand {
+			if bookStep, ok := step.(*BookStep); ok {
+				bookStep.domainID = domainID
+				bookStep.book.DomainID = domainID
+			}
+		}
+	}
+}
+
+// configureAMMOnBookSteps initializes AMMLiquidity on each BookStep if an AMM pool
+// exists for the book's in/out issues.
+// Reference: rippled BookStep constructor lines 103-112
+func configureAMMOnBookSteps(
+	view *PaymentSandbox,
+	strands []Strand,
+	ammCtx *AMMContext,
+	parentCloseTime uint32,
+	fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer bool,
+) {
+	for _, strand := range strands {
+		for _, step := range strand {
+			bookStep, ok := step.(*BookStep)
+			if !ok {
+				continue
+			}
+			bookStep.initAMMLiquidity(view, ammCtx, parentCloseTime,
+				fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer)
+		}
+	}
+}
+
 // FlowV2 is an alternative flow implementation that matches rippled's FlowV2.
 // It uses a slightly different iteration strategy.
 func FlowV2(
@@ -551,5 +737,5 @@ func FlowV2(
 	sendMax *EitherAmount,
 ) FlowResult {
 	// For now, delegate to Flow
-	return Flow(baseView, strands, outReq, partialPayment, limitQuality, sendMax)
+	return Flow(baseView, strands, outReq, partialPayment, limitQuality, sendMax, nil)
 }

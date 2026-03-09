@@ -23,7 +23,7 @@ func TestTrustSetValidation(t *testing.T) {
 			name: "valid trust line creation with positive limit",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("800", "USD", "rGateway"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(800, "USD", "rGateway"),
 			},
 			expectError: false,
 		},
@@ -31,7 +31,7 @@ func TestTrustSetValidation(t *testing.T) {
 			name: "valid trust line with EUR currency",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("1000", "EUR", "rGateway"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(1000, "EUR", "rGateway"),
 			},
 			expectError: false,
 		},
@@ -39,7 +39,7 @@ func TestTrustSetValidation(t *testing.T) {
 			name: "valid trust line with BTC currency",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rBob"),
-				LimitAmount: tx.NewIssuedAmount("100", "BTC", "rGateway"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "BTC", "rGateway"),
 			},
 			expectError: false,
 		},
@@ -47,7 +47,7 @@ func TestTrustSetValidation(t *testing.T) {
 			name: "valid trust line with large limit",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("999999999999", "USD", "rGateway"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(999999999999, "USD", "rGateway"),
 			},
 			expectError: false,
 		},
@@ -57,7 +57,7 @@ func TestTrustSetValidation(t *testing.T) {
 			name: "valid remove trust line with zero limit",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("0", "USD", "rGateway"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(0, "USD", "rGateway"),
 			},
 			expectError: false,
 		},
@@ -67,7 +67,7 @@ func TestTrustSetValidation(t *testing.T) {
 			name: "missing LimitAmount currency - should fail",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("100", "", "rGateway"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "", "rGateway"),
 			},
 			expectError: true,
 			errorMsg:    "temBAD_CURRENCY: currency is required",
@@ -76,7 +76,7 @@ func TestTrustSetValidation(t *testing.T) {
 			name: "missing LimitAmount issuer - should fail",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("100", "USD", ""),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", ""),
 			},
 			expectError: true,
 			errorMsg:    "temDST_NEEDED: issuer is required",
@@ -85,7 +85,7 @@ func TestTrustSetValidation(t *testing.T) {
 			name: "XRP as LimitAmount - cannot create trust line for XRP",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewXRPAmount("1000000"),
+				LimitAmount: tx.NewXRPAmount(1000000),
 			},
 			expectError: true,
 			errorMsg:    "temBAD_LIMIT: cannot create trust line for XRP",
@@ -94,7 +94,7 @@ func TestTrustSetValidation(t *testing.T) {
 			name: "XRP currency code - should fail",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("100", "XRP", "rGateway"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "XRP", "rGateway"),
 			},
 			expectError: true,
 			errorMsg:    "temBAD_CURRENCY: cannot use XRP as IOU currency",
@@ -103,7 +103,7 @@ func TestTrustSetValidation(t *testing.T) {
 			name: "negative limit - should fail",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("-100", "USD", "rGateway"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(-100, "USD", "rGateway"),
 			},
 			expectError: true,
 			errorMsg:    "temBAD_LIMIT: negative credit limit",
@@ -114,7 +114,7 @@ func TestTrustSetValidation(t *testing.T) {
 			name: "trust line to self - should fail",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("100", "USD", "rAlice"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rAlice"),
 			},
 			expectError: true,
 			errorMsg:    "temDST_IS_SRC: cannot create trust line to self",
@@ -125,7 +125,7 @@ func TestTrustSetValidation(t *testing.T) {
 			name: "missing account - should fail",
 			trustSet: &TrustSet{
 				BaseTx: tx.BaseTx{Common: tx.Common{TransactionType: "TrustSet"}},
-				LimitAmount: tx.NewIssuedAmount("100", "USD", "rGateway"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"),
 			},
 			expectError: true,
 			errorMsg:    "Account is required",
@@ -136,7 +136,7 @@ func TestTrustSetValidation(t *testing.T) {
 			name: "valid trust line with QualityIn",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("100", "USD", "rGateway"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"),
 				QualityIn:   ptrUint32(1000000000), // 1:1 ratio
 			},
 			expectError: false,
@@ -145,7 +145,7 @@ func TestTrustSetValidation(t *testing.T) {
 			name: "valid trust line with QualityOut",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("100", "USD", "rGateway"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"),
 				QualityOut:  ptrUint32(1000000000), // 1:1 ratio
 			},
 			expectError: false,
@@ -154,7 +154,7 @@ func TestTrustSetValidation(t *testing.T) {
 			name: "valid trust line with both QualityIn and QualityOut",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("100", "USD", "rGateway"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"),
 				QualityIn:   ptrUint32(900000000),  // 0.9 ratio
 				QualityOut:  ptrUint32(1100000000), // 1.1 ratio
 			},
@@ -164,7 +164,7 @@ func TestTrustSetValidation(t *testing.T) {
 			name: "valid trust line with zero QualityIn (removes quality)",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("100", "USD", "rGateway"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"),
 				QualityIn:   ptrUint32(0),
 			},
 			expectError: false,
@@ -173,7 +173,7 @@ func TestTrustSetValidation(t *testing.T) {
 			name: "valid trust line with zero QualityOut (removes quality)",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("100", "USD", "rGateway"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"),
 				QualityOut:  ptrUint32(0),
 			},
 			expectError: false,
@@ -210,7 +210,7 @@ func TestTrustSetFlags(t *testing.T) {
 		{
 			name: "tfSetfAuth flag - authorize other party",
 			setupFunc: func() *TrustSet {
-				ts := NewTrustSet("rAlice", tx.NewIssuedAmount("100", "USD", "rGateway"))
+				ts := NewTrustSet("rAlice", tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"))
 				ts.SetFlags(TrustSetFlagSetfAuth)
 				return ts
 			},
@@ -224,7 +224,7 @@ func TestTrustSetFlags(t *testing.T) {
 		{
 			name: "tfSetNoRipple flag - block rippling",
 			setupFunc: func() *TrustSet {
-				ts := NewTrustSet("rAlice", tx.NewIssuedAmount("100", "USD", "rGateway"))
+				ts := NewTrustSet("rAlice", tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"))
 				ts.SetNoRipple()
 				return ts
 			},
@@ -238,7 +238,7 @@ func TestTrustSetFlags(t *testing.T) {
 		{
 			name: "tfClearNoRipple flag - clear no ripple",
 			setupFunc: func() *TrustSet {
-				ts := NewTrustSet("rAlice", tx.NewIssuedAmount("100", "USD", "rGateway"))
+				ts := NewTrustSet("rAlice", tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"))
 				ts.ClearNoRipple()
 				return ts
 			},
@@ -252,7 +252,7 @@ func TestTrustSetFlags(t *testing.T) {
 		{
 			name: "tfSetFreeze flag - freeze trust line",
 			setupFunc: func() *TrustSet {
-				ts := NewTrustSet("rAlice", tx.NewIssuedAmount("100", "USD", "rGateway"))
+				ts := NewTrustSet("rAlice", tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"))
 				ts.SetFreeze()
 				return ts
 			},
@@ -266,7 +266,7 @@ func TestTrustSetFlags(t *testing.T) {
 		{
 			name: "tfClearFreeze flag - unfreeze trust line",
 			setupFunc: func() *TrustSet {
-				ts := NewTrustSet("rAlice", tx.NewIssuedAmount("100", "USD", "rGateway"))
+				ts := NewTrustSet("rAlice", tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"))
 				ts.SetFlags(TrustSetFlagClearFreeze)
 				return ts
 			},
@@ -280,7 +280,7 @@ func TestTrustSetFlags(t *testing.T) {
 		{
 			name: "multiple flags - SetNoRipple and SetFreeze",
 			setupFunc: func() *TrustSet {
-				ts := NewTrustSet("rAlice", tx.NewIssuedAmount("100", "USD", "rGateway"))
+				ts := NewTrustSet("rAlice", tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"))
 				ts.SetNoRipple()
 				ts.SetFreeze()
 				return ts
@@ -299,7 +299,7 @@ func TestTrustSetFlags(t *testing.T) {
 		{
 			name: "combining SetfAuth with SetNoRipple",
 			setupFunc: func() *TrustSet {
-				ts := NewTrustSet("rGateway", tx.NewIssuedAmount("0", "USD", "rAlice"))
+				ts := NewTrustSet("rGateway", tx.NewIssuedAmountFromFloat64(0, "USD", "rAlice"))
 				ts.SetFlags(TrustSetFlagSetfAuth | TrustSetFlagSetNoRipple)
 				return ts
 			},
@@ -426,7 +426,7 @@ func TestTrustSetFlatten(t *testing.T) {
 			name: "basic trust line",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("100", "USD", "rGateway"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"),
 			},
 			checkMap: func(t *testing.T, m map[string]any) {
 				if m["Account"] != "rAlice" {
@@ -451,7 +451,7 @@ func TestTrustSetFlatten(t *testing.T) {
 			name: "trust line with QualityIn",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("200", "EUR", "rIssuer"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(200, "EUR", "rIssuer"),
 				QualityIn:   ptrUint32(1000000000),
 			},
 			checkMap: func(t *testing.T, m map[string]any) {
@@ -467,7 +467,7 @@ func TestTrustSetFlatten(t *testing.T) {
 			name: "trust line with QualityOut",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rBob"),
-				LimitAmount: tx.NewIssuedAmount("500", "BTC", "rIssuer"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(500, "BTC", "rIssuer"),
 				QualityOut:  ptrUint32(900000000),
 			},
 			checkMap: func(t *testing.T, m map[string]any) {
@@ -483,7 +483,7 @@ func TestTrustSetFlatten(t *testing.T) {
 			name: "trust line with both quality fields",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("1000", "USD", "rGateway"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(1000, "USD", "rGateway"),
 				QualityIn:   ptrUint32(1100000000),
 				QualityOut:  ptrUint32(900000000),
 			},
@@ -500,7 +500,7 @@ func TestTrustSetFlatten(t *testing.T) {
 			name: "trust line with zero limit (removal)",
 			trustSet: &TrustSet{
 				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
-				LimitAmount: tx.NewIssuedAmount("0", "USD", "rGateway"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(0, "USD", "rGateway"),
 			},
 			checkMap: func(t *testing.T, m map[string]any) {
 				limitAmount, ok := m["LimitAmount"].(map[string]any)
@@ -527,7 +527,7 @@ func TestTrustSetFlatten(t *testing.T) {
 
 // TestTrustSetTransactionType tests that transaction type is correctly returned.
 func TestTrustSetTransactionType(t *testing.T) {
-	ts := NewTrustSet("rAlice", tx.NewIssuedAmount("100", "USD", "rGateway"))
+	ts := NewTrustSet("rAlice", tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"))
 	if ts.TxType() != tx.TypeTrustSet {
 		t.Errorf("expected tx.TypeTrustSet, got %v", ts.TxType())
 	}
@@ -536,13 +536,13 @@ func TestTrustSetTransactionType(t *testing.T) {
 // TestNewTrustSetConstructor tests the NewTrustSet constructor function.
 func TestNewTrustSetConstructor(t *testing.T) {
 	t.Run("basic constructor", func(t *testing.T) {
-		ts := NewTrustSet("rAlice", tx.NewIssuedAmount("100", "USD", "rGateway"))
+		ts := NewTrustSet("rAlice", tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"))
 
 		if ts.Account != "rAlice" {
 			t.Errorf("expected Account=rAlice, got %v", ts.Account)
 		}
-		if ts.LimitAmount.Value != "100" {
-			t.Errorf("expected LimitAmount.Value=100, got %v", ts.LimitAmount.Value)
+		if ts.LimitAmount.Value() != "100" {
+			t.Errorf("expected LimitAmount.Value=100, got %v", ts.LimitAmount.Value())
 		}
 		if ts.LimitAmount.Currency != "USD" {
 			t.Errorf("expected LimitAmount.Currency=USD, got %v", ts.LimitAmount.Currency)
@@ -558,7 +558,7 @@ func TestNewTrustSetConstructor(t *testing.T) {
 	t.Run("constructor with different currencies", func(t *testing.T) {
 		currencies := []string{"USD", "EUR", "BTC", "ETH", "JPY", "GBP"}
 		for _, currency := range currencies {
-			ts := NewTrustSet("rAlice", tx.NewIssuedAmount("500", currency, "rIssuer"))
+			ts := NewTrustSet("rAlice", tx.NewIssuedAmountFromFloat64(500, currency, "rIssuer"))
 			if ts.LimitAmount.Currency != currency {
 				t.Errorf("expected currency=%s, got %v", currency, ts.LimitAmount.Currency)
 			}
@@ -569,7 +569,7 @@ func TestNewTrustSetConstructor(t *testing.T) {
 // TestTrustSetHelperMethods tests the helper methods on TrustSet.
 func TestTrustSetHelperMethods(t *testing.T) {
 	t.Run("SetNoRipple", func(t *testing.T) {
-		ts := NewTrustSet("rAlice", tx.NewIssuedAmount("100", "USD", "rGateway"))
+		ts := NewTrustSet("rAlice", tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"))
 		ts.SetNoRipple()
 
 		if ts.GetFlags()&TrustSetFlagSetNoRipple == 0 {
@@ -578,7 +578,7 @@ func TestTrustSetHelperMethods(t *testing.T) {
 	})
 
 	t.Run("ClearNoRipple", func(t *testing.T) {
-		ts := NewTrustSet("rAlice", tx.NewIssuedAmount("100", "USD", "rGateway"))
+		ts := NewTrustSet("rAlice", tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"))
 		ts.ClearNoRipple()
 
 		if ts.GetFlags()&TrustSetFlagClearNoRipple == 0 {
@@ -587,7 +587,7 @@ func TestTrustSetHelperMethods(t *testing.T) {
 	})
 
 	t.Run("SetFreeze", func(t *testing.T) {
-		ts := NewTrustSet("rGateway", tx.NewIssuedAmount("0", "USD", "rAlice"))
+		ts := NewTrustSet("rGateway", tx.NewIssuedAmountFromFloat64(0, "USD", "rAlice"))
 		ts.SetFreeze()
 
 		if ts.GetFlags()&TrustSetFlagSetFreeze == 0 {
@@ -596,7 +596,7 @@ func TestTrustSetHelperMethods(t *testing.T) {
 	})
 
 	t.Run("SetNoRipple then ClearNoRipple (cumulative)", func(t *testing.T) {
-		ts := NewTrustSet("rAlice", tx.NewIssuedAmount("100", "USD", "rGateway"))
+		ts := NewTrustSet("rAlice", tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"))
 		ts.SetNoRipple()
 		ts.ClearNoRipple()
 
@@ -635,7 +635,7 @@ func TestTrustSetVariousCurrencies(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ts := NewTrustSet("rAlice", tx.NewIssuedAmount("100", tt.currency, "rGateway"))
+			ts := NewTrustSet("rAlice", tx.NewIssuedAmountFromFloat64(100, tt.currency, "rGateway"))
 			err := ts.Validate()
 
 			if tt.valid && err != nil {
@@ -678,7 +678,7 @@ func TestTrustSetIssuerValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ts := NewTrustSet(tt.account, tx.NewIssuedAmount("100", "USD", tt.issuer))
+			ts := NewTrustSet(tt.account, tx.NewIssuedAmountFromFloat64(100, "USD", tt.issuer))
 			err := ts.Validate()
 
 			if tt.expectError {
@@ -701,50 +701,50 @@ func TestTrustSetIssuerValidation(t *testing.T) {
 func TestTrustSetAmountValues(t *testing.T) {
 	tests := []struct {
 		name        string
-		value       string
+		value       float64
 		expectError bool
 		description string
 	}{
 		{
 			name:        "positive integer limit",
-			value:       "800",
+			value:       800,
 			expectError: false,
 			description: "credit limit of 800",
 		},
 		{
 			name:        "modified positive limit",
-			value:       "700",
+			value:       700,
 			expectError: false,
 			description: "modified credit limit",
 		},
 		{
 			name:        "zero limit (remove trust line)",
-			value:       "0",
+			value:       0,
 			expectError: false,
 			description: "set zero limit to remove trust line",
 		},
 		{
 			name:        "large limit",
-			value:       "999999999999999",
+			value:       999999999999999,
 			expectError: false,
 			description: "very large credit limit",
 		},
 		{
 			name:        "decimal limit",
-			value:       "100.5",
+			value:       100.5,
 			expectError: false,
 			description: "decimal credit limit",
 		},
 		{
 			name:        "small decimal limit",
-			value:       "0.001",
+			value:       0.001,
 			expectError: false,
 			description: "small decimal credit limit",
 		},
 		// Negative limits are rejected with temBAD_LIMIT
 		{
 			name:        "negative limit - temBAD_LIMIT",
-			value:       "-1",
+			value:       -1,
 			expectError: true,
 			description: "negative limit - temBAD_LIMIT",
 		},
@@ -752,7 +752,7 @@ func TestTrustSetAmountValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ts := NewTrustSet("rAlice", tx.NewIssuedAmount(tt.value, "USD", "rGateway"))
+			ts := NewTrustSet("rAlice", tx.NewIssuedAmountFromFloat64(tt.value, "USD", "rGateway"))
 			err := ts.Validate()
 
 			if tt.expectError && err == nil {
@@ -771,7 +771,7 @@ func TestTrustSetFreezeScenarios(t *testing.T) {
 	t.Run("issuer can freeze trust line", func(t *testing.T) {
 		// Issuer (G1) freezes the trust line with bob
 		// env(trust(G1, bob["USD"](0), tfSetFreeze))
-		ts := NewTrustSet("rGateway", tx.NewIssuedAmount("0", "USD", "rBob"))
+		ts := NewTrustSet("rGateway", tx.NewIssuedAmountFromFloat64(0, "USD", "rBob"))
 		ts.SetFreeze()
 
 		if err := ts.Validate(); err != nil {
@@ -784,7 +784,7 @@ func TestTrustSetFreezeScenarios(t *testing.T) {
 
 	t.Run("issuer can clear freeze", func(t *testing.T) {
 		// env(trust(G1, bob["USD"](0), tfClearFreeze))
-		ts := NewTrustSet("rGateway", tx.NewIssuedAmount("0", "USD", "rBob"))
+		ts := NewTrustSet("rGateway", tx.NewIssuedAmountFromFloat64(0, "USD", "rBob"))
 		ts.SetFlags(TrustSetFlagClearFreeze)
 
 		if err := ts.Validate(); err != nil {
@@ -798,7 +798,7 @@ func TestTrustSetFreezeScenarios(t *testing.T) {
 	t.Run("holder cannot freeze their own line (structurally valid)", func(t *testing.T) {
 		// Note: While structurally valid, rippled will reject this
 		// The holder (rAlice) setting freeze on their line to the issuer
-		ts := NewTrustSet("rAlice", tx.NewIssuedAmount("100", "USD", "rGateway"))
+		ts := NewTrustSet("rAlice", tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"))
 		ts.SetFreeze()
 
 		// This passes local validation but would fail on rippled
@@ -856,7 +856,7 @@ func TestTrustSetQualityRatios(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ts := NewTrustSet("rAlice", tx.NewIssuedAmount("100", "USD", "rGateway"))
+			ts := NewTrustSet("rAlice", tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"))
 			ts.QualityIn = tt.qualityIn
 			ts.QualityOut = tt.qualityOut
 
@@ -923,7 +923,7 @@ func TestTrustSetFlagConstants(t *testing.T) {
 // Reference: rippled SetTrust.cpp featureDeepFreeze
 func TestTrustSetDeepFreezeFlags(t *testing.T) {
 	t.Run("SetDeepFreeze flag", func(t *testing.T) {
-		ts := NewTrustSet("rGateway", tx.NewIssuedAmount("0", "USD", "rAlice"))
+		ts := NewTrustSet("rGateway", tx.NewIssuedAmountFromFloat64(0, "USD", "rAlice"))
 		ts.SetFlags(TrustSetFlagSetDeepFreeze)
 
 		if err := ts.Validate(); err != nil {
@@ -935,7 +935,7 @@ func TestTrustSetDeepFreezeFlags(t *testing.T) {
 	})
 
 	t.Run("ClearDeepFreeze flag", func(t *testing.T) {
-		ts := NewTrustSet("rGateway", tx.NewIssuedAmount("0", "USD", "rAlice"))
+		ts := NewTrustSet("rGateway", tx.NewIssuedAmountFromFloat64(0, "USD", "rAlice"))
 		ts.SetFlags(TrustSetFlagClearDeepFreeze)
 
 		if err := ts.Validate(); err != nil {
@@ -947,7 +947,7 @@ func TestTrustSetDeepFreezeFlags(t *testing.T) {
 	})
 
 	t.Run("SetDeepFreeze + ClearDeepFreeze - CONFLICT", func(t *testing.T) {
-		ts := NewTrustSet("rGateway", tx.NewIssuedAmount("0", "USD", "rAlice"))
+		ts := NewTrustSet("rGateway", tx.NewIssuedAmountFromFloat64(0, "USD", "rAlice"))
 		ts.SetFlags(TrustSetFlagSetDeepFreeze | TrustSetFlagClearDeepFreeze)
 
 		err := ts.Validate()
@@ -957,7 +957,7 @@ func TestTrustSetDeepFreezeFlags(t *testing.T) {
 	})
 
 	t.Run("SetFreeze + ClearDeepFreeze - CONFLICT", func(t *testing.T) {
-		ts := NewTrustSet("rGateway", tx.NewIssuedAmount("0", "USD", "rAlice"))
+		ts := NewTrustSet("rGateway", tx.NewIssuedAmountFromFloat64(0, "USD", "rAlice"))
 		ts.SetFlags(TrustSetFlagSetFreeze | TrustSetFlagClearDeepFreeze)
 
 		err := ts.Validate()
@@ -967,7 +967,7 @@ func TestTrustSetDeepFreezeFlags(t *testing.T) {
 	})
 
 	t.Run("SetDeepFreeze + ClearFreeze - CONFLICT", func(t *testing.T) {
-		ts := NewTrustSet("rGateway", tx.NewIssuedAmount("0", "USD", "rAlice"))
+		ts := NewTrustSet("rGateway", tx.NewIssuedAmountFromFloat64(0, "USD", "rAlice"))
 		ts.SetFlags(TrustSetFlagSetDeepFreeze | TrustSetFlagClearFreeze)
 
 		err := ts.Validate()
@@ -977,7 +977,7 @@ func TestTrustSetDeepFreezeFlags(t *testing.T) {
 	})
 
 	t.Run("SetFreeze + SetDeepFreeze - no conflict", func(t *testing.T) {
-		ts := NewTrustSet("rGateway", tx.NewIssuedAmount("0", "USD", "rAlice"))
+		ts := NewTrustSet("rGateway", tx.NewIssuedAmountFromFloat64(0, "USD", "rAlice"))
 		ts.SetFlags(TrustSetFlagSetFreeze | TrustSetFlagSetDeepFreeze)
 
 		if err := ts.Validate(); err != nil {

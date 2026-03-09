@@ -27,6 +27,14 @@ type StrandContext struct {
 	// Used by BookStep for self-cross detection during offer crossing.
 	// Reference: rippled StrandContext::isDefaultPath
 	IsDefaultPath bool
+	// AMMContext tracks AMM state across payment engine iterations.
+	// Shared across all strands in a payment. BookStep reads it to
+	// initialize AMMLiquidity for synthetic AMM offers.
+	// Reference: rippled StrandContext::ammContext
+	AMMContext *AMMContext
+	// ParentCloseTime is the parent ledger close time (Ripple epoch seconds).
+	// Used by BookStep for offer expiration and AMM auction slot expiry checks.
+	ParentCloseTime uint32
 }
 
 // NewStrandContext creates a new context for strand building
@@ -531,8 +539,24 @@ func ToStrandWithContext(
 			// Account to offer (currency change)
 			// Reference: rippled PaySteps.cpp toStep()
 
+			// Determine output issue first (needed for XRP continue check)
+			outCurrency := curIssue.Currency
+			if next.hasCurrency {
+				outCurrency = next.currency
+			}
+			outIssuer := curIssue.Issuer
+			if next.hasIssuer {
+				outIssuer = next.issuer
+			}
+			outIssue := Issue{Currency: outCurrency, Issuer: outIssuer}
+			// XRP must have zero issuer
+			if outIssue.IsXRP() {
+				outIssue.Issuer = [20]byte{}
+			}
+
 			// If source is XRP, need XRPEndpointStep first (only if this is the first element)
-			// Reference: rippled PaySteps.cpp creates XRPEndpointStep for source when entering book
+			// Reference: rippled PaySteps.cpp toStep() lines 80-85: creates XRPEndpointStep
+			// and returns immediately. The book step is created in the next iteration.
 			if curIssue.IsXRP() && i == 0 {
 				// Check for XRP loop
 				if result := ctx.CheckXRPEndpointLoop(false); result != tx.TesSUCCESS {
@@ -541,6 +565,12 @@ func ToStrandWithContext(
 				xrpStep := ctx.newXRPEndpointStep(cur.account, false, true) // source, isFirst=true
 				strand = append(strand, xrpStep)
 				prevStep = xrpStep
+				// If output is also XRP, defer book step to next iteration
+				// (matching rippled's toStep which returns after XRPEndpointStep).
+				// The next iteration handles the offer→offer transition.
+				if outIssue.IsXRP() {
+					continue
+				}
 			} else if !curIssue.IsXRP() && curIssue.Issuer != cur.account {
 				// May need implied DirectStep first for IOU
 				// Check for loop BEFORE creating step
@@ -556,24 +586,8 @@ func ToStrandWithContext(
 				prevStep = directStep
 			}
 
-			// Determine output issue
-			outCurrency := curIssue.Currency
-			if next.hasCurrency {
-				outCurrency = next.currency
-			}
-			outIssuer := curIssue.Issuer
-			if next.hasIssuer {
-				outIssuer = next.issuer
-			}
-			outIssue := Issue{Currency: outCurrency, Issuer: outIssuer}
-			// XRP must have zero issuer
-			if outIssue.IsXRP() {
-				outIssue.Issuer = [20]byte{}
-			}
-
-			// Always create book step for offer path elements
-			// Reference: rippled PaySteps.cpp toStep() always creates BookStep,
-			// then check() validates it (returns temBAD_PATH for same in/out issue)
+			// Create book step for offer path elements
+			// Reference: rippled PaySteps.cpp toStep() creates BookStep
 			if curIssue.IsXRP() && outIssue.IsXRP() {
 				return nil, tx.TemBAD_PATH // Invalid: XRP to XRP book
 			}

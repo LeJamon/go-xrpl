@@ -33,7 +33,7 @@ func TestEscrowCreateValidation(t *testing.T) {
 				Amount:      tx.NewXRPAmount(1000000000),
 				Destination: "rBob",
 				CancelAfter: ptrUint32(700000100),
-				Condition:   "A0258020E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855810100",
+				Condition:   ptrString("A0258020E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855810100"),
 			},
 			expectError: false,
 		},
@@ -157,7 +157,7 @@ func TestEscrowCreateValidation(t *testing.T) {
 				Amount:      tx.NewXRPAmount(1000000000),
 				Destination: "rBob",
 				CancelAfter: ptrUint32(700000100),
-				Condition:   "A0258020E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855810100",
+				Condition:   ptrString("A0258020E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855810100"),
 			},
 			expectError: false,
 		},
@@ -216,8 +216,8 @@ func TestEscrowFinishValidation(t *testing.T) {
 				BaseTx:        *tx.NewBaseTx(tx.TypeEscrowFinish, "rBob"),
 				Owner:         "rAlice",
 				OfferSequence: 12345,
-				Condition:     "A0258020E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855810100",
-				Fulfillment:   "A0028000",
+				Condition:     ptrString("A0258020E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855810100"),
+				Fulfillment:   ptrString("A0028000"),
 			},
 			expectError: false,
 		},
@@ -237,7 +237,7 @@ func TestEscrowFinishValidation(t *testing.T) {
 				BaseTx:        *tx.NewBaseTx(tx.TypeEscrowFinish, "rBob"),
 				Owner:         "rAlice",
 				OfferSequence: 12345,
-				Condition:     "A0258020E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855810100",
+				Condition:     ptrString("A0258020E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855810100"),
 				// Missing Fulfillment
 			},
 			expectError: true,
@@ -249,7 +249,7 @@ func TestEscrowFinishValidation(t *testing.T) {
 				BaseTx:        *tx.NewBaseTx(tx.TypeEscrowFinish, "rBob"),
 				Owner:         "rAlice",
 				OfferSequence: 12345,
-				Fulfillment:   "A0028000",
+				Fulfillment:   ptrString("A0028000"),
 				// Missing Condition
 			},
 			expectError: true,
@@ -408,7 +408,7 @@ func TestEscrowCreateFlatten(t *testing.T) {
 				DestinationTag: ptrUint32(42),
 				FinishAfter:    ptrUint32(700000000),
 				CancelAfter:    ptrUint32(800000000),
-				Condition:      "DEADBEEF",
+				Condition:      ptrString("DEADBEEF"),
 			},
 			checkMap: func(t *testing.T, m map[string]any) {
 				if m["DestinationTag"] != uint32(42) {
@@ -467,8 +467,8 @@ func TestEscrowFinishFlatten(t *testing.T) {
 				BaseTx:        *tx.NewBaseTx(tx.TypeEscrowFinish, "rBob"),
 				Owner:         "rAlice",
 				OfferSequence: 12345,
-				Condition:     "DEADBEEF",
-				Fulfillment:   "CAFEBABE",
+				Condition:     ptrString("DEADBEEF"),
+				Fulfillment:   ptrString("CAFEBABE"),
 			},
 			checkMap: func(t *testing.T, m map[string]any) {
 				if m["Condition"] != "DEADBEEF" {
@@ -581,6 +581,10 @@ func TestNewEscrowConstructors(t *testing.T) {
 
 // Helper function to create a pointer to uint32
 func ptrUint32(v uint32) *uint32 {
+	return &v
+}
+
+func ptrString(v string) *string {
 	return &v
 }
 
@@ -769,7 +773,7 @@ func TestParseFulfillment(t *testing.T) {
 				t.Fatalf("invalid test data: %v", err)
 			}
 
-			preimage, fulfType, err := parseFulfillment(data)
+			preimage, fulfType, _, err := parseFulfillment(data)
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error, got nil")

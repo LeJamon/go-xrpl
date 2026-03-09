@@ -81,6 +81,10 @@ func SerializeLedgerOffer(offer *LedgerOffer) ([]byte, error) {
 	if offer.Expiration > 0 {
 		jsonObj["Expiration"] = offer.Expiration
 	}
+	var zeroDomainID [32]byte
+	if offer.DomainID != zeroDomainID {
+		jsonObj["DomainID"] = strings.ToUpper(hex.EncodeToString(offer.DomainID[:]))
+	}
 
 	hexStr, err := binarycodec.Encode(jsonObj)
 	if err != nil {
@@ -184,6 +188,8 @@ func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
 				copy(offer.BookDirectory[:], data[offset:offset+32])
 			case 5: // PreviousTxnID (nth=5 in definitions.json)
 				copy(offer.PreviousTxnID[:], data[offset:offset+32])
+			case 34: // DomainID (nth=34 in definitions.json, PermissionedDEX)
+				copy(offer.DomainID[:], data[offset:offset+32])
 			}
 			offset += 32
 

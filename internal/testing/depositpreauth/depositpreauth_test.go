@@ -361,17 +361,20 @@ func testPayment(t *testing.T, supportsPreauth, supportsCredentials bool) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// alice creates passive offer: XRP(100) for USD(100)
+		// alice creates passive offer: TakerPays=XRP(100), TakerGets=USD(100)
+		// In rippled: offer(alice, XRP(100), USD(100), tfPassive)
+		// Note: rippled's offer(account, takerPays, takerGets) vs Go's CreatePassiveOffer(account, takerGets, takerPays)
 		usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 		xrp100 := tx.NewXRPAmount(int64(jtx.XRP(100)))
-		env.CreatePassiveOffer(alice, xrp100, usd100)
+		env.CreatePassiveOffer(alice, usd100, xrp100)
 		env.Close()
 
 		// becky pays herself USD(10) by consuming part of alice's offer.
-		// Reference: rippled uses path(~USD) — currency-only path step
+		// Reference: rippled uses path(~USD) which includes currency AND issuer.
+		// ~USD = BookSpec(gw, USD) → {typeCurrency|typeIssuer, currency=USD, issuer=gw}
 		usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)
 		xrp10 := tx.NewXRPAmount(int64(jtx.XRP(10)))
-		usdPath := [][]paymentPkg.PathStep{{{Currency: "USD"}}}
+		usdPath := [][]paymentPkg.PathStep{{{Currency: "USD", Issuer: gw.Address}}}
 		result = env.Submit(
 			payment.PayIssued(becky, becky, usd10).
 				SendMax(xrp10).

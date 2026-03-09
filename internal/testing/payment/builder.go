@@ -29,6 +29,7 @@ type PaymentBuilder struct {
 	memos         []tx.MemoWrapper
 	credentialIDs []string
 	mptIssuanceID string
+	domainID      *string
 }
 
 // Pay creates a new PaymentBuilder for an XRP payment.
@@ -130,6 +131,19 @@ func (b *PaymentBuilder) PathsIOUToIOU(srcCurrency string, srcIssuer *testing.Ac
 	return b
 }
 
+// PathsCurrency adds a single path step specifying a currency (with optional issuer).
+// This is the Go equivalent of rippled's path(~USD) or path(~EUR).
+// For IOU currencies, the issuer is required.
+// For XRP, pass currency="XRP" and issuer=nil.
+func (b *PaymentBuilder) PathsCurrency(currency string, issuer *testing.Account) *PaymentBuilder {
+	step := payment.PathStep{Currency: currency}
+	if issuer != nil {
+		step.Issuer = issuer.Address
+	}
+	b.paths = [][]payment.PathStep{{step}}
+	return b
+}
+
 // Sequence sets the sequence number explicitly.
 func (b *PaymentBuilder) Sequence(seq uint32) *PaymentBuilder {
 	b.sequence = &seq
@@ -171,6 +185,13 @@ func (b *PaymentBuilder) CredentialIDs(ids []string) *PaymentBuilder {
 // MPTIssuanceID sets the MPT issuance ID for MPT direct payments.
 func (b *PaymentBuilder) MPTIssuanceID(id string) *PaymentBuilder {
 	b.mptIssuanceID = id
+	return b
+}
+
+// DomainID sets the permissioned domain ID for this payment.
+// The domainIDHex should be a 64-character hex string.
+func (b *PaymentBuilder) DomainID(domainIDHex string) *PaymentBuilder {
+	b.domainID = &domainIDHex
 	return b
 }
 
@@ -230,6 +251,9 @@ func (b *PaymentBuilder) Build() tx.Transaction {
 	}
 	if b.mptIssuanceID != "" {
 		payment.MPTokenIssuanceID = b.mptIssuanceID
+	}
+	if b.domainID != nil {
+		payment.DomainID = b.domainID
 	}
 
 	return payment

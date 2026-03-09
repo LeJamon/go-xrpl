@@ -1,9 +1,10 @@
-package tx
+package ledgerstatefix
 
 import (
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/internal/core/amendment"
+	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -65,7 +66,7 @@ func TestLedgerStateFixValidation(t *testing.T) {
 			name: "invalid - universal flags set",
 			tx: func() *LedgerStateFix {
 				l := NewNFTokenPageLinkFix("rAdmin", "rOwner")
-				flags := uint32(TfUniversalMask)
+				flags := uint32(tx.TfUniversalMask)
 				l.Common.Flags = &flags
 				return l
 			}(),
@@ -106,7 +107,7 @@ func TestLedgerStateFixFlatten(t *testing.T) {
 
 		assert.Equal(t, "rAdmin", flat["Account"])
 		assert.Equal(t, "LedgerStateFix", flat["TransactionType"])
-		assert.Equal(t, uint8(1), flat["LedgerFixType"])
+		assert.Equal(t, int(1), flat["LedgerFixType"])
 		assert.Equal(t, "rOwner", flat["Owner"])
 	})
 
@@ -116,7 +117,7 @@ func TestLedgerStateFixFlatten(t *testing.T) {
 		flat, err := l.Flatten()
 		require.NoError(t, err)
 
-		assert.Equal(t, uint8(1), flat["LedgerFixType"])
+		assert.Equal(t, int(1), flat["LedgerFixType"])
 		_, hasOwner := flat["Owner"]
 		assert.False(t, hasOwner)
 	})
@@ -128,21 +129,21 @@ func TestLedgerStateFixFlatten(t *testing.T) {
 
 func TestLedgerStateFixConstructors(t *testing.T) {
 	t.Run("NewLedgerStateFix", func(t *testing.T) {
-		tx := NewLedgerStateFix("rAdmin", LedgerFixTypeNFTokenPageLink)
-		require.NotNil(t, tx)
-		assert.Equal(t, "rAdmin", tx.Account)
-		assert.Equal(t, uint8(1), tx.LedgerFixType)
-		assert.Equal(t, "", tx.Owner)
-		assert.Equal(t, TypeLedgerStateFix, tx.TxType())
+		lsf := NewLedgerStateFix("rAdmin", LedgerFixTypeNFTokenPageLink)
+		require.NotNil(t, lsf)
+		assert.Equal(t, "rAdmin", lsf.Account)
+		assert.Equal(t, uint8(1), lsf.LedgerFixType)
+		assert.Equal(t, "", lsf.Owner)
+		assert.Equal(t, tx.TypeLedgerStateFix, lsf.TxType())
 	})
 
 	t.Run("NewNFTokenPageLinkFix", func(t *testing.T) {
-		tx := NewNFTokenPageLinkFix("rAdmin", "rOwner")
-		require.NotNil(t, tx)
-		assert.Equal(t, "rAdmin", tx.Account)
-		assert.Equal(t, LedgerFixTypeNFTokenPageLink, tx.LedgerFixType)
-		assert.Equal(t, "rOwner", tx.Owner)
-		assert.Equal(t, TypeLedgerStateFix, tx.TxType())
+		lsf := NewNFTokenPageLinkFix("rAdmin", "rOwner")
+		require.NotNil(t, lsf)
+		assert.Equal(t, "rAdmin", lsf.Account)
+		assert.Equal(t, LedgerFixTypeNFTokenPageLink, lsf.LedgerFixType)
+		assert.Equal(t, "rOwner", lsf.Owner)
+		assert.Equal(t, tx.TypeLedgerStateFix, lsf.TxType())
 	})
 }
 
@@ -151,8 +152,8 @@ func TestLedgerStateFixConstructors(t *testing.T) {
 // =============================================================================
 
 func TestLedgerStateFixRequiredAmendments(t *testing.T) {
-	tx := NewNFTokenPageLinkFix("rAdmin", "rOwner")
-	amendments := tx.RequiredAmendments()
+	lsf := NewNFTokenPageLinkFix("rAdmin", "rOwner")
+	amendments := lsf.RequiredAmendments()
 	assert.Contains(t, amendments, amendment.FeatureFixNFTokenPageLinks)
 }
 

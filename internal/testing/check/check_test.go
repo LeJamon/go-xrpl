@@ -1071,6 +1071,11 @@ func TestCheck_CashQuality(t *testing.T) {
 	})
 
 	// Test non-issuer to non-issuer with QualityIn on bob
+	// This is the only case where the Quality affects the outcome.
+	// Reference: rippled Check_test.cpp testCashQuality line 1249-1251:
+	//   testNonIssuerQCheck(bob, gw["USD"], qIn, 50, 5);
+	// Bob's QualityIn=50% means requesting USD(5) actually delivers USD(10)
+	// on the trust line (alice sends 10, bob receives 10 but at 50% quality).
 	t.Run("BobQualityIn50", func(t *testing.T) {
 		// Set bob's QualityIn to 50%
 		result := env.Submit(trustset.TrustSet(bob, USD(1000)).QualityIn(500_000_000).Build())
@@ -1082,8 +1087,9 @@ func TestCheck_CashQuality(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Check cash should deliver USD(10) (checks ignore bob's QualityIn)
-		result = env.Submit(check.CheckCashAmount(bob, chkID, USD(10)).Build())
+		// With QualityIn=50%, bob can only effectively request USD(5).
+		// The flow engine needs srcToDst=10 to deliver quality-adjusted 5.
+		result = env.Submit(check.CheckCashAmount(bob, chkID, USD(5)).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 

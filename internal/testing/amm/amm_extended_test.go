@@ -10,6 +10,7 @@ package amm_test
 import (
 	"testing"
 
+	paymenttx "github.com/LeJamon/goXRPLd/internal/core/tx/payment"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/amm"
 	offerbuild "github.com/LeJamon/goXRPLd/internal/testing/offer"
@@ -767,6 +768,487 @@ func TestAMMExtended_PayStrand(t *testing.T) {
 		} else {
 			t.Logf("Note: cross-currency via AMM got %s", result.Code)
 		}
+	})
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// RmFundedOffer tests
+// Reference: rippled AMMExtended_test.cpp testRmFundedOffer
+// ───────────────────────────────────────────────────────────────────────
+
+// TestAMMExtended_RmFundedOffer tests that funded offers are not incorrectly removed.
+// Reference: rippled AMMExtended_test.cpp testRmFundedOffer (line 50)
+func TestAMMExtended_RmFundedOffer(t *testing.T) {
+	env := amm.NewAMMTestEnv(t)
+
+	// Fund accounts with XRP(10000), USD(200000), BTC(2000)
+	for _, acc := range []*jtx.Account{env.GW, env.Alice, env.Bob, env.Carol} {
+		env.TestEnv.FundAmount(acc, uint64(jtx.XRP(10000)))
+	}
+	env.Close()
+
+	// Trust lines for USD and BTC
+	for _, acc := range []*jtx.Account{env.Alice, env.Bob, env.Carol} {
+		env.Trust(acc, env.GW, "USD", 300000)
+		env.Trust(acc, env.GW, "BTC", 3000)
+	}
+	env.Close()
+
+	// Fund IOUs
+	for _, acc := range []*jtx.Account{env.Alice, env.Bob, env.Carol} {
+		env.PayIOU(env.GW, acc, "USD", 200000)
+		env.PayIOU(env.GW, acc, "BTC", 2000)
+	}
+	env.Close()
+
+	// Carol creates offers: BTC→XRP (funded, should NOT be removed)
+	offer1 := offerbuild.OfferCreate(env.Carol,
+		amm.IOUAmount(env.GW, "BTC", 49),
+		amm.XRPAmount(49)).Build()
+	jtx.RequireTxSuccess(t, env.Submit(offer1))
+	offer2 := offerbuild.OfferCreate(env.Carol,
+		amm.IOUAmount(env.GW, "BTC", 51),
+		amm.XRPAmount(51)).Build()
+	jtx.RequireTxSuccess(t, env.Submit(offer2))
+
+	// Carol creates offers for poor quality path: XRP→USD
+	offer3 := offerbuild.OfferCreate(env.Carol,
+		amm.XRPAmount(50),
+		amm.IOUAmount(env.GW, "USD", 50)).Build()
+	jtx.RequireTxSuccess(t, env.Submit(offer3))
+	offer4 := offerbuild.OfferCreate(env.Carol,
+		amm.XRPAmount(50),
+		amm.IOUAmount(env.GW, "USD", 50)).Build()
+	jtx.RequireTxSuccess(t, env.Submit(offer4))
+	env.Close()
+
+	// Carol creates AMM: BTC(1000)/USD(100100) — good quality path
+	createTx := amm.AMMCreate(env.Carol,
+		amm.IOUAmount(env.GW, "BTC", 1000),
+		amm.IOUAmount(env.GW, "USD", 100100)).Build()
+	jtx.RequireTxSuccess(t, env.Submit(createTx))
+	env.Close()
+
+	// Alice pays bob USD(100), two paths, sendmax BTC(1000), partial payment
+	// Path 1: BTC→XRP→USD (via CLOB offers) — poor quality
+	// Path 2: BTC→USD (via AMM) — good quality
+	payTx := payment.PayIssued(env.Alice, env.Bob,
+		amm.IOUAmount(env.GW, "USD", 100)).
+		SendMax(amm.IOUAmount(env.GW, "BTC", 1000)).
+		Paths([][]paymenttx.PathStep{
+			// Path(XRP, USD): BTC→XRP book, then XRP→USD book
+			{
+				{Currency: "XRP"},
+				{Currency: "USD", Issuer: env.GW.Address},
+			},
+			// Path(USD): BTC→USD book (through AMM)
+			{
+				{Currency: "USD", Issuer: env.GW.Address},
+			},
+		}).
+		PartialPayment().
+		Build()
+	jtx.RequireTxSuccess(t, env.Submit(payTx))
+	env.Close()
+
+	// Bob should have received USD(100) more → 200100
+	bobUSD := env.TestEnv.BalanceIOU(env.Bob, "USD", env.GW)
+	if bobUSD != 200100 {
+		t.Errorf("Bob USD balance: got %f, want 200100", bobUSD)
+	}
+
+	// Carol's first BTC→XRP offer should still exist (funded but unused)
+	carolOffers := env.AccountOffers(env.Carol)
+	t.Logf("Carol has %d offers remaining:", len(carolOffers))
+	for i, o := range carolOffers {
+		t.Logf("  Offer %d: TakerPays=%s(%s) TakerGets=%s(%s)",
+			i, o.TakerPays.Currency, o.TakerPays.Value(), o.TakerGets.Currency, o.TakerGets.Value())
+	}
+	foundOffer := false
+	for _, o := range carolOffers {
+		// XRP amounts have empty currency; BTC is IOU
+		if o.TakerGets.IsNative() && o.TakerPays.Currency == "BTC" {
+			foundOffer = true
+			break
+		}
+	}
+	if !foundOffer {
+		t.Error("Carol's funded BTC/XRP offer should still exist")
+	}
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// EnforceNoRipple tests
+// Reference: rippled AMMExtended_test.cpp testEnforceNoRipple
+// ───────────────────────────────────────────────────────────────────────
+
+// TestAMMExtended_EnforceNoRipple tests NoRipple enforcement with AMM.
+// Reference: rippled AMMExtended_test.cpp testEnforceNoRipple (line 114)
+func TestAMMExtended_EnforceNoRipple(t *testing.T) {
+	t.Run("NoRippleBlocksAMMPath", func(t *testing.T) {
+		// bob has NoRipple on trust lines, blocks rippling USD1->USD2
+		env := amm.NewAMMTestEnv(t)
+		dan := jtx.NewAccount("dan")
+		gw1 := jtx.NewAccount("gw1")
+		gw2 := jtx.NewAccount("gw2")
+
+		for _, acc := range []*jtx.Account{env.Alice, env.Bob, env.Carol, dan, gw1, gw2} {
+			env.TestEnv.FundAmount(acc, uint64(jtx.XRP(20000)))
+		}
+		env.Close()
+
+		// Trust lines — bob uses NoRipple
+		usd1Amt := amm.IOUAmount(gw1, "USD", 20000)
+		usd2Amt := amm.IOUAmount(gw2, "USD", 1000)
+		for _, acc := range []*jtx.Account{env.Alice, env.Carol, dan} {
+			tsTx := trustset.TrustSet(acc, usd1Amt).Build()
+			jtx.RequireTxSuccess(t, env.Submit(tsTx))
+			tsTx2 := trustset.TrustSet(acc, usd2Amt).Build()
+			jtx.RequireTxSuccess(t, env.Submit(tsTx2))
+		}
+		// Bob's trust lines with NoRipple
+		tsBob1 := trustset.TrustSet(env.Bob, amm.IOUAmount(gw1, "USD", 1000)).NoRipple().Build()
+		jtx.RequireTxSuccess(t, env.Submit(tsBob1))
+		tsBob2 := trustset.TrustSet(env.Bob, amm.IOUAmount(gw2, "USD", 1000)).NoRipple().Build()
+		jtx.RequireTxSuccess(t, env.Submit(tsBob2))
+		env.Close()
+
+		// Fund IOUs
+		pay1 := payment.PayIssued(gw1, dan, amm.IOUAmount(gw1, "USD", 10000)).Build()
+		jtx.RequireTxSuccess(t, env.Submit(pay1))
+		pay2 := payment.PayIssued(gw1, env.Bob, amm.IOUAmount(gw1, "USD", 50)).Build()
+		jtx.RequireTxSuccess(t, env.Submit(pay2))
+		pay3 := payment.PayIssued(gw2, env.Bob, amm.IOUAmount(gw2, "USD", 50)).Build()
+		jtx.RequireTxSuccess(t, env.Submit(pay3))
+		env.Close()
+
+		// Dan creates AMM: XRP(10000)/USD1(10000)
+		createTx := amm.AMMCreate(dan,
+			amm.XRPAmount(10000),
+			amm.IOUAmount(gw1, "USD", 10000)).Build()
+		jtx.RequireTxSuccess(t, env.Submit(createTx))
+		env.Close()
+
+		// Alice pays carol USD2(50), path(~USD1, bob), sendmax XRP(50)
+		// Should fail: bob has NoRipple → tecPATH_DRY
+		payTx := payment.PayIssued(env.Alice, env.Carol,
+			amm.IOUAmount(gw2, "USD", 50)).
+			SendMax(amm.XRPAmount(50)).
+			Paths([][]paymenttx.PathStep{
+				{
+					{Currency: "USD", Issuer: gw1.Address},
+					{Account: env.Bob.Address},
+				},
+			}).
+			NoDirectRipple().
+			Build()
+		result := env.Submit(payTx)
+		amm.ExpectTER(t, result, "tecPATH_DRY")
+	})
+
+	t.Run("DefaultFlagsAllowAMMPath", func(t *testing.T) {
+		// Same as above but bob does NOT have NoRipple
+		env := amm.NewAMMTestEnv(t)
+		dan := jtx.NewAccount("dan")
+		gw1 := jtx.NewAccount("gw1")
+		gw2 := jtx.NewAccount("gw2")
+
+		for _, acc := range []*jtx.Account{env.Alice, env.Bob, env.Carol, dan, gw1, gw2} {
+			env.TestEnv.FundAmount(acc, uint64(jtx.XRP(20000)))
+		}
+		env.Close()
+
+		// Trust lines — no NoRipple for bob
+		for _, acc := range []*jtx.Account{env.Alice, env.Bob, env.Carol, dan} {
+			tsTx := trustset.TrustSet(acc, amm.IOUAmount(gw1, "USD", 20000)).Build()
+			jtx.RequireTxSuccess(t, env.Submit(tsTx))
+			tsTx2 := trustset.TrustSet(acc, amm.IOUAmount(gw2, "USD", 1000)).Build()
+			jtx.RequireTxSuccess(t, env.Submit(tsTx2))
+		}
+		env.Close()
+
+		// Fund IOUs
+		pay1 := payment.PayIssued(gw1, dan, amm.IOUAmount(gw1, "USD", 10050)).Build()
+		jtx.RequireTxSuccess(t, env.Submit(pay1))
+		pay2 := payment.PayIssued(gw1, env.Bob, amm.IOUAmount(gw1, "USD", 50)).Build()
+		jtx.RequireTxSuccess(t, env.Submit(pay2))
+		pay3 := payment.PayIssued(gw2, env.Bob, amm.IOUAmount(gw2, "USD", 50)).Build()
+		jtx.RequireTxSuccess(t, env.Submit(pay3))
+		env.Close()
+
+		// Dan creates AMM: XRP(10000)/USD1(10050)
+		createTx := amm.AMMCreate(dan,
+			amm.XRPAmount(10000),
+			amm.IOUAmount(gw1, "USD", 10050)).Build()
+		jtx.RequireTxSuccess(t, env.Submit(createTx))
+		env.Close()
+
+		// Alice pays carol USD2(50), path(~USD1, bob), sendmax XRP(50)
+		// Should succeed: bob allows rippling
+		payTx := payment.PayIssued(env.Alice, env.Carol,
+			amm.IOUAmount(gw2, "USD", 50)).
+			SendMax(amm.XRPAmount(50)).
+			Paths([][]paymenttx.PathStep{
+				{
+					{Currency: "USD", Issuer: gw1.Address},
+					{Account: env.Bob.Address},
+				},
+			}).
+			NoDirectRipple().
+			Build()
+		result := env.Submit(payTx)
+		jtx.RequireTxSuccess(t, result)
+	})
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// MissingAuth tests
+// Reference: rippled AMMExtended_test.cpp testMissingAuth
+// ───────────────────────────────────────────────────────────────────────
+
+// TestAMMExtended_MissingAuth tests RequireAuth interactions with AMM creation.
+// Reference: rippled AMMExtended_test.cpp testMissingAuth (line 1379)
+func TestAMMExtended_MissingAuth(t *testing.T) {
+	// Alice tries to create AMM without trust line (no funds) -> tecUNFUNDED_AMM
+	t.Run("NoTrustLine_Unfunded", func(t *testing.T) {
+		env := amm.NewAMMTestEnv(t)
+		env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(400000)))
+		env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(400000)))
+		env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(400000)))
+		env.Close()
+
+		// Alice has no USD trust line, so no funds
+		createTx := amm.AMMCreate(env.Alice, amm.IOUAmount(env.GW, "USD", 1000), amm.XRPAmount(1000)).Build()
+		result := env.Submit(createTx)
+		amm.ExpectTER(t, result, amm.TecUNFUNDED_AMM, "tecNO_LINE")
+	})
+
+	// GW sets RequireAuth, authorizes bob but not alice
+	t.Run("NoAuth_NoLine", func(t *testing.T) {
+		env := amm.NewAMMTestEnv(t)
+		env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(400000)))
+		env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(400000)))
+		env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(400000)))
+		env.Close()
+
+		// GW sets RequireAuth
+		env.TestEnv.EnableRequireAuth(env.GW)
+		env.Close()
+
+		// GW authorizes bob
+		env.TestEnv.AuthorizeTrustLine(env.GW, env.Bob, "USD")
+		env.Close()
+		env.Trust(env.Bob, env.GW, "USD", 50)
+		env.Close()
+		env.PayIOU(env.GW, env.Bob, "USD", 50)
+		env.Close()
+
+		// Alice has no trust line at all -> tecNO_LINE
+		createTx := amm.AMMCreate(env.Alice, amm.IOUAmount(env.GW, "USD", 1000), amm.XRPAmount(1000)).Build()
+		result := env.Submit(createTx)
+		amm.ExpectTER(t, result, "tecNO_LINE", amm.TecUNFUNDED_AMM)
+	})
+
+	// GW has trust line for alice but NOT authorized -> tecNO_AUTH
+	t.Run("TrustLine_NotAuthorized", func(t *testing.T) {
+		env := amm.NewAMMTestEnv(t)
+		env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(400000)))
+		env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(400000)))
+		env.Close()
+
+		// GW sets RequireAuth
+		env.TestEnv.EnableRequireAuth(env.GW)
+		env.Close()
+
+		// GW creates trust line for alice without auth
+		// (in rippled: trust(gw, alice["USD"](2000)) without tfSetfAuth)
+		env.Trust(env.Alice, env.GW, "USD", 2000)
+		env.Close()
+
+		// Alice tries to create AMM -> tecNO_AUTH (trust line exists but not authorized)
+		createTx := amm.AMMCreate(env.Alice, amm.IOUAmount(env.GW, "USD", 1000), amm.XRPAmount(1000)).Build()
+		result := env.Submit(createTx)
+		amm.ExpectTER(t, result, amm.TecNO_AUTH, amm.TecUNFUNDED_AMM)
+	})
+
+	// Finally authorize alice -> AMM creation succeeds
+	t.Run("Authorized_Succeeds", func(t *testing.T) {
+		env := amm.NewAMMTestEnv(t)
+		env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(400000)))
+		env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(400000)))
+		env.Close()
+
+		// GW sets RequireAuth
+		env.TestEnv.EnableRequireAuth(env.GW)
+		env.Close()
+
+		// GW authorizes alice
+		env.TestEnv.AuthorizeTrustLine(env.GW, env.Alice, "USD")
+		env.Close()
+		env.Trust(env.Alice, env.GW, "USD", 2000)
+		env.Close()
+		env.PayIOU(env.GW, env.Alice, "USD", 1000)
+		env.Close()
+
+		// Alice creates AMM -> should succeed
+		createTx := amm.AMMCreate(env.Alice, amm.IOUAmount(env.GW, "USD", 1000), amm.XRPAmount(1050)).Build()
+		result := env.Submit(createTx)
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+	})
+
+	// Offer crossing AMM — after RequireAuth setup, AMM account needs auth too
+	// Reference: rippled AMMExtended_test.cpp testMissingAuth lines 1427-1443
+	t.Run("OfferCrossingAMM", func(t *testing.T) {
+		env := amm.NewAMMTestEnv(t)
+		env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(400000)))
+		env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(400000)))
+		env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(400000)))
+		env.Close()
+
+		// GW sets RequireAuth
+		env.TestEnv.EnableRequireAuth(env.GW)
+		env.Close()
+
+		// Authorize alice
+		env.TestEnv.AuthorizeTrustLine(env.GW, env.Alice, "USD")
+		env.Close()
+		env.Trust(env.Alice, env.GW, "USD", 2000)
+		env.Close()
+		env.PayIOU(env.GW, env.Alice, "USD", 1000)
+		env.Close()
+
+		// Authorize bob
+		env.TestEnv.AuthorizeTrustLine(env.GW, env.Bob, "USD")
+		env.Close()
+		env.Trust(env.Bob, env.GW, "USD", 50)
+		env.Close()
+		env.PayIOU(env.GW, env.Bob, "USD", 50)
+		env.Close()
+
+		// Alice creates AMM: USD(1000)/XRP(1050)
+		createTx := amm.AMMCreate(env.Alice,
+			amm.IOUAmount(env.GW, "USD", 1000),
+			amm.XRPAmount(1050)).Build()
+		jtx.RequireTxSuccess(t, env.Submit(createTx))
+		env.Close()
+
+		ammAcc := amm.AMMAccount(t, env.USD, amm.XRP())
+
+		// Authorize AMM account's trust line with gw
+		env.TestEnv.AuthorizeTrustLine(env.GW, ammAcc, "USD")
+		env.Close()
+
+		// Bob creates offer: buy XRP(50), sell USD(50) — should cross with AMM
+		offerTx := offerbuild.OfferCreate(env.Bob,
+			amm.XRPAmount(50),
+			amm.IOUAmount(env.GW, "USD", 50)).Build()
+		jtx.RequireTxSuccess(t, env.Submit(offerTx))
+		env.Close()
+
+		// AMM balances should be USD(1050)/XRP(1000)
+		ammAddr := amm.AMMAccount(t, env.USD, amm.XRP())
+		usdBal := env.AMMPoolIOU(ammAddr, env.GW, "USD")
+		xrpBal := env.AMMPoolXRP(ammAddr)
+		if usdBal != 1050 {
+			t.Errorf("AMM USD balance: got %f, want 1050", usdBal)
+		}
+		if xrpBal != 1_000_000_000 {
+			t.Errorf("AMM XRP balance: got %d, want 1000000000 (1000 XRP)", xrpBal)
+		}
+
+		// Bob should have no offers left
+		bobOffers := env.AccountOffers(env.Bob)
+		if len(bobOffers) != 0 {
+			t.Errorf("Bob should have 0 offers, got %d", len(bobOffers))
+		}
+
+		// Bob should have USD(0)
+		bobUSD := env.TestEnv.BalanceIOU(env.Bob, "USD", env.GW)
+		if bobUSD != 0 {
+			t.Errorf("Bob USD balance: got %f, want 0", bobUSD)
+		}
+	})
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Multisign with disabled master key tests
+// Reference: rippled AMMExtended_test.cpp testTxMultisign (line 3559)
+// ───────────────────────────────────────────────────────────────────────
+
+// TestAMMExtended_Multisign_WithDisabledMaster tests multisigned AMM transactions
+// with disabled master key, matching rippled's more thorough testTxMultisign setup.
+// Reference: rippled AMMExtended_test.cpp testTxMultisign (line 3559)
+func TestAMMExtended_Multisign_WithDisabledMaster(t *testing.T) {
+	env := amm.NewAMMTestEnv(t)
+	env.FundWithIOUs(20000, 0) // Match rippled: fund with 20000
+	env.Close()
+
+	// Create accounts matching rippled's test
+	bogie := jtx.NewAccount("bogie")
+	becky := jtx.NewAccount("becky")
+	alie := jtx.NewAccount("alie") // Regular key for alice
+
+	env.TestEnv.Fund(bogie, becky)
+	env.Close()
+
+	// alice sets regular key and disables master
+	env.TestEnv.SetRegularKey(env.Alice, alie)
+	env.TestEnv.DisableMasterKey(env.Alice)
+	env.Close()
+
+	// Attach signers to alice (quorum=2, becky weight=1, bogie weight=1)
+	env.SetSignerList(env.Alice, 2, []jtx.TestSigner{
+		{Account: becky, Weight: 1},
+		{Account: bogie, Weight: 1},
+	})
+	env.Close()
+
+	// Multisigned AMMCreate
+	t.Run("Create", func(t *testing.T) {
+		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
+		result := env.SubmitMultiSigned(createTx, []*jtx.Account{becky, bogie})
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+	})
+
+	// Multisigned AMMDeposit (proportional, 1_000_000 LP tokens)
+	t.Run("Deposit", func(t *testing.T) {
+		depositTx := amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
+			LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+			LPToken().
+			Build()
+		result := env.SubmitMultiSigned(depositTx, []*jtx.Account{becky, bogie})
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+	})
+
+	// Multisigned AMMWithdraw
+	t.Run("Withdraw", func(t *testing.T) {
+		withdrawTx := amm.AMMWithdraw(env.Alice, amm.XRP(), env.USD).
+			LPTokenIn(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+			LPToken().
+			Build()
+		result := env.SubmitMultiSigned(withdrawTx, []*jtx.Account{becky, bogie})
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+	})
+
+	// Multisigned AMMVote
+	t.Run("Vote", func(t *testing.T) {
+		voteTx := amm.AMMVote(env.Alice, amm.XRP(), env.USD, 1000).Build()
+		result := env.SubmitMultiSigned(voteTx, []*jtx.Account{becky, bogie})
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+	})
+
+	// Multisigned AMMBid
+	t.Run("Bid", func(t *testing.T) {
+		bidTx := amm.AMMBid(env.Alice, amm.XRP(), env.USD).
+			BidMin(amm.LPTokenAmount(amm.XRP(), env.USD, 100)).
+			Build()
+		result := env.SubmitMultiSigned(bidTx, []*jtx.Account{becky, bogie})
+		jtx.RequireTxSuccess(t, result)
 	})
 }
 

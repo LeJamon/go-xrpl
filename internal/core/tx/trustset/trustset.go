@@ -3,10 +3,10 @@ package trustset
 import (
 	"errors"
 
-	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
-
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/amm"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )
 
 func init() {
@@ -196,6 +196,41 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	trustLineExists, err := ctx.View.Exists(trustLineKey)
 	if err != nil {
 		return tx.TefINTERNAL
+	}
+
+	// In general, trust lines to pseudo-accounts (AMM) are not permitted
+	// unless the trust line already exists or it's an LP token trust line
+	// for a non-empty AMM.
+	// Reference: rippled SetTrust.cpp lines 273-309
+	var zeroHash [32]byte
+	if (issuerAccount.Flags & sle.LsfAMM) != 0 {
+		if issuerAccount.AMMID != zeroHash {
+			if trustLineExists {
+				// Allow modification of existing trust lines to AMM accounts.
+			} else {
+				// Read the AMM SLE to check LP token balance and currency.
+				ammKey := keylet.AMMByID(issuerAccount.AMMID)
+				ammRawData, err := ctx.View.Read(ammKey)
+				if err != nil || ammRawData == nil {
+					return tx.TecINTERNAL
+				}
+				ammData, err := amm.ParseAMMData(ammRawData)
+				if err != nil {
+					return tx.TecINTERNAL
+				}
+				if amm.IsAMMEmpty(ammData) {
+					return tx.TecAMM_EMPTY
+				}
+				// Compute LP token currency from the AMM's asset pair
+				lptCurrency := amm.GenerateAMMLPTCurrency(ammData.Asset.Currency, ammData.Asset2.Currency)
+				if lptCurrency != t.LimitAmount.Currency {
+					return tx.TecNO_PERMISSION
+				}
+				// LP token trust line to non-empty AMM — allow creation
+			}
+		} else {
+			return tx.TecPSEUDO_ACCOUNT
+		}
 	}
 
 	// Parse transaction flags

@@ -64,16 +64,36 @@ const (
 	TecAMM_BALANCE                   Result = 163
 	TecAMM_FAILED                    Result = 164
 	TecAMM_INVALID_TOKENS            Result = 165
-	TecAMM_NOT_EMPTY                 Result = 166
-	TecNO_SUITABLE_PAGE              Result = 167
-	TecNO_PERMISSION_XCHAIN          Result = 168
-	TecEMPTY_DID                     Result = 169
-	TecINVALID_UPDATE_TIME           Result = 170
-	TecTOKEN_PAIR_NOT_FOUND          Result = 171
-	TecARRAY_EMPTY                   Result = 172
-	TecARRAY_TOO_LARGE               Result = 173
+	TecAMM_EMPTY                     Result = 166
+	TecAMM_NOT_EMPTY                 Result = 167
+	TecAMM_ACCOUNT                   Result = 168
+	TecINCOMPLETE                    Result = 169
+	TecXCHAIN_BAD_TRANSFER_ISSUE     Result = 170
+	TecXCHAIN_NO_CLAIM_ID            Result = 171
+	TecXCHAIN_BAD_CLAIM_ID           Result = 172
+	TecXCHAIN_CLAIM_NO_QUORUM        Result = 173
+	TecXCHAIN_PROOF_UNKNOWN_KEY      Result = 174
+	TecXCHAIN_CREATE_ACCOUNT_NONXRP_ISSUE Result = 175
+	TecXCHAIN_WRONG_CHAIN            Result = 176
+	TecXCHAIN_REWARD_MISMATCH        Result = 177
+	TecXCHAIN_NO_SIGNERS_LIST        Result = 178
+	TecXCHAIN_SENDING_ACCOUNT_MISMATCH Result = 179
+	TecXCHAIN_INSUFF_CREATE_AMOUNT   Result = 180
+	TecXCHAIN_ACCOUNT_CREATE_PAST    Result = 181
+	TecXCHAIN_ACCOUNT_CREATE_TOO_MANY Result = 182
+	TecXCHAIN_PAYMENT_FAILED         Result = 183
+	TecXCHAIN_SELF_COMMIT            Result = 184
+	TecXCHAIN_BAD_PUBLIC_KEY_ACCOUNT_PAIR Result = 185
+	TecXCHAIN_CREATE_ACCOUNT_DISABLED Result = 186
+	TecEMPTY_DID                     Result = 187
+	TecINVALID_UPDATE_TIME           Result = 188
+	TecTOKEN_PAIR_NOT_FOUND          Result = 189
+	TecARRAY_EMPTY                   Result = 190
+	TecARRAY_TOO_LARGE               Result = 191
 	TecLOCKED                        Result = 192
 	TecBAD_CREDENTIALS               Result = 193
+	TecWRONG_ASSET                   Result = 194
+	TecPSEUDO_ACCOUNT                Result = 196
 
 	// tefFAILURE and related codes (-199 to -100)
 	// Transaction failed, fee claimed but tx not applied
@@ -186,7 +206,7 @@ const (
 	TerQUEUED       Result = -89
 	TerPRE_TICKET   Result = -88
 	TerNO_AMM       Result = -87
-	TerSUBMITTED    Result = -86
+	TerADDRESS_COLLISION    Result = -86
 )
 
 // String returns the string representation of the result code
@@ -284,10 +304,12 @@ func (r Result) String() string {
 		return "tecOBJECT_NOT_FOUND"
 	case TecINSUFFICIENT_PAYMENT:
 		return "tecINSUFFICIENT_PAYMENT"
-	case TecNO_SUITABLE_PAGE:
-		return "tecNO_SUITABLE_PAGE"
-	case TecNO_PERMISSION_XCHAIN:
-		return "tecNO_PERMISSION_XCHAIN"
+	case TecAMM_EMPTY:
+		return "tecAMM_EMPTY"
+	case TecAMM_ACCOUNT:
+		return "tecAMM_ACCOUNT"
+	case TecINCOMPLETE:
+		return "tecINCOMPLETE"
 	case TecEMPTY_DID:
 		return "tecEMPTY_DID"
 	case TecINVALID_UPDATE_TIME:
@@ -302,6 +324,10 @@ func (r Result) String() string {
 		return "tecLOCKED"
 	case TecBAD_CREDENTIALS:
 		return "tecBAD_CREDENTIALS"
+	case TecWRONG_ASSET:
+		return "tecWRONG_ASSET"
+	case TecPSEUDO_ACCOUNT:
+		return "tecPSEUDO_ACCOUNT"
 	case TecDUPLICATE:
 		return "tecDUPLICATE"
 	case TecUNFUNDED_AMM:
@@ -476,8 +502,8 @@ func (r Result) String() string {
 		return "terPRE_TICKET"
 	case TerNO_AMM:
 		return "terNO_AMM"
-	case TerSUBMITTED:
-		return "terSUBMITTED"
+	case TerADDRESS_COLLISION:
+		return "terADDRESS_COLLISION"
 	default:
 		return fmt.Sprintf("Unknown(%d)", r)
 	}

@@ -154,6 +154,12 @@ func (pc *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
+	// Pseudo-accounts cannot receive payment channels.
+	// Reference: rippled PayChan.cpp:240-248
+	if (destAccount.Flags & sle.LsfAMM) != 0 {
+		return tx.TecNO_PERMISSION
+	}
+
 	// DisallowIncoming check
 	// Reference: rippled PayChan.cpp preclaim() featureDisallowIncoming
 	if ctx.Rules().Enabled(amendment.FeatureDisallowIncoming) {

@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/core/ledger/keylet"
 	"github.com/LeJamon/goXRPLd/internal/core/tx"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/payment"
+	"github.com/LeJamon/goXRPLd/internal/core/tx/permissioneddomain"
 	"github.com/LeJamon/goXRPLd/internal/core/tx/sle"
 )
 
@@ -364,7 +365,7 @@ func (o *OfferCreate) Preclaim(ctx *tx.ApplyContext) tx.Result {
 	// Check domain membership if DomainID is specified
 	// Reference: lines 217-222
 	if o.DomainID != nil {
-		if !accountInDomain(ctx.View, ctx.AccountID, *o.DomainID) {
+		if !accountInDomain(ctx.View, ctx.AccountID, *o.DomainID, ctx.Config.ParentCloseTime) {
 			return tx.TecNO_PERMISSION
 		}
 	}
@@ -537,6 +538,10 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 			rules.Enabled(amendment.FeatureFixReducedOffersV2),
 			rules.Enabled(amendment.FeatureFixRmSmallIncreasedQOffers),
 			rules.Enabled(amendment.FeatureFlowSortStrands),
+			rules.Enabled(amendment.FeatureFixAMMv1_1),
+			rules.Enabled(amendment.FeatureFixAMMv1_2),
+			rules.Enabled(amendment.FeatureFixAMMOverflowOffer),
+			o.DomainID, // Domain ID for permissioned DEX offer crossing
 		)
 
 		// Convert result amounts back
@@ -814,7 +819,14 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 	takerGetsCurrency := sle.GetCurrencyBytes(saTakerGets.Currency)
 	takerGetsIssuer := sle.GetIssuerBytes(saTakerGets.Issuer)
 
-	bookBase := keylet.BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer)
+	// Domain offers go in a separate domain-keyed book directory.
+	// Reference: rippled Indexes.cpp getBookBase() includes domain in hash when set
+	var bookBase keylet.Keylet
+	if o.DomainID != nil {
+		bookBase = keylet.BookDirWithDomain(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer, *o.DomainID)
+	} else {
+		bookBase = keylet.BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer)
+	}
 	bookDirKey := keylet.Quality(bookBase, uRate)
 
 	// Add to owner directory
@@ -1550,10 +1562,8 @@ func checkAcceptAsset(ctx *tx.ApplyContext, issuerID [20]byte, currency string, 
 
 // accountInDomain checks if an account is a member of a permissioned domain.
 // Reference: rippled app/misc/PermissionedDEXHelpers.cpp accountInDomain()
-func accountInDomain(view tx.LedgerView, accountID [20]byte, domainID [32]byte) bool {
-	// TODO: Implement domain membership check when PermissionedDomains is fully implemented
-	// For now, return true to allow offers (permissioned DEX is not yet active)
-	return true
+func accountInDomain(view tx.LedgerView, accountID [20]byte, domainID [32]byte, parentCloseTime uint32) bool {
+	return permissioneddomain.AccountInDomain(view, accountID, domainID, parentCloseTime)
 }
 
 // applyTickSize applies tick size rounding to offer amounts.

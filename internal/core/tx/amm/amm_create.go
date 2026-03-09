@@ -160,12 +160,21 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// if result := clawbackDisabled(ctx.View, asset1); result != tx.TesSUCCESS { return result }
 	// if result := clawbackDisabled(ctx.View, asset2); result != tx.TesSUCCESS { return result }
 
+	// Check for pseudo-account collision with featureSingleAssetVault
+	// Reference: rippled AMMCreate.cpp preclaim lines 186-192
+	if ctx.Rules().Enabled(amendment.FeatureSingleAssetVault) {
+		testID := pseudoAccountAddress(ctx.View, ctx.Config.ParentHash, ammKey.Key)
+		if testID == ([20]byte{}) {
+			return tx.TerADDRESS_COLLISION
+		}
+	}
+
 	// =========================================================================
 	// APPLY - Reference: rippled AMMCreate.cpp applyCreate lines 217-356
 	// =========================================================================
 
 	// Compute the AMM account ID from keylet
-	ammAccountID := computeAMMAccountID(ammKey.Key)
+	ammAccountID := computeAMMAccountIDSimple(ammKey.Key)
 	ammAccountAddr, _ := encodeAccountID(ammAccountID)
 
 	// Check if AMM account already exists (should not happen)
@@ -181,7 +190,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	sortedAsset1, sortedAsset2, sortedAmount1, sortedAmount2 := sortAssets(asset1, asset2, a.Amount, a.Amount2)
 
 	// Generate LP token currency code using sorted assets
-	lptCurrency := generateAMMLPTCurrency(sortedAsset1.Currency, sortedAsset2.Currency)
+	lptCurrency := GenerateAMMLPTCurrency(sortedAsset1.Currency, sortedAsset2.Currency)
 
 	// Check LP token trustline doesn't already exist
 	// Reference: rippled AMMCreate.cpp line 241-247
@@ -194,19 +203,24 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Calculate initial LP token balance: sqrt(amount1 * amount2)
 	// Reference: rippled AMMCreate.cpp line 256
-	lpTokenBalance := calculateLPTokens(sortedAmount1, sortedAmount2)
+	fixV1_3 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_3)
+	lpTokenBalance := calculateLPTokens(sortedAmount1, sortedAmount2, fixV1_3)
 	if lpTokenBalance.IsZero() {
 		return tx.TecAMM_BALANCE
 	}
 
-	// Create the AMM pseudo-account with lsfAMM flag
-	// Reference: rippled AMMCreate.cpp line 230 (createPseudoAccount)
+	// Create the AMM pseudo-account.
+	// Reference: rippled View.cpp createPseudoAccount (line 1112-1133)
+	// Ignore reserves requirement, disable the master key, allow default
+	// rippling, and enable deposit authorization to prevent payments into
+	// pseudo-account. Also set LsfAMM for fast AMM account detection.
 	ammAccount := &sle.AccountRoot{
 		Account:    ammAccountAddr,
 		Balance:    0,
 		Sequence:   0,
 		OwnerCount: 1, // For the AMM entry itself
-		Flags:      sle.LsfAMM,
+		Flags:      sle.LsfDisableMaster | sle.LsfDefaultRipple | sle.LsfDepositAuth | sle.LsfAMM,
+		AMMID:      ammKey.Key, // Links pseudo-account to AMM entry (rippled View.cpp:1131)
 	}
 
 	// Create the AMM entry with sorted assets
@@ -286,6 +300,8 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	isXRP2 := sortedAsset2.Currency == "" || sortedAsset2.Currency == "XRP"
 
 	// Transfer first asset
+	// Reference: rippled AMMCreate.cpp sendAndTrustSet uses accountSend which
+	// handles issuer-as-sender (no self-trust-line debit needed).
 	if isXRP1 {
 		drops := uint64(sortedAmount1.Drops())
 		ctx.Account.Balance -= drops
@@ -298,10 +314,13 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err := setAMMNodeFlag(ammAccountID, sortedAsset1, ctx.View); err != nil {
 			return tx.TefINTERNAL
 		}
-		// Debit from creator's trustline
+		// Debit from creator's trustline (skip if creator is the issuer —
+		// issuers have unlimited supply and no self-trust-line).
 		issuerID1, _ := sle.DecodeAccountID(sortedAsset1.Issuer)
-		if err := updateTrustlineBalanceInView(accountID, issuerID1, sortedAsset1.Currency, sortedAmount1.Negate(), ctx.View); err != nil {
-			return TecUNFUNDED_AMM
+		if accountID != issuerID1 {
+			if err := updateTrustlineBalanceInView(accountID, issuerID1, sortedAsset1.Currency, sortedAmount1.Negate(), ctx.View); err != nil {
+				return TecUNFUNDED_AMM
+			}
 		}
 	}
 
@@ -319,8 +338,10 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TefINTERNAL
 		}
 		issuerID2, _ := sle.DecodeAccountID(sortedAsset2.Issuer)
-		if err := updateTrustlineBalanceInView(accountID, issuerID2, sortedAsset2.Currency, sortedAmount2.Negate(), ctx.View); err != nil {
-			return TecUNFUNDED_AMM
+		if accountID != issuerID2 {
+			if err := updateTrustlineBalanceInView(accountID, issuerID2, sortedAsset2.Currency, sortedAmount2.Negate(), ctx.View); err != nil {
+				return TecUNFUNDED_AMM
+			}
 		}
 	}
 

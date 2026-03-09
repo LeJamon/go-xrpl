@@ -121,6 +121,12 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
+	// Pseudo-accounts cannot cash checks.
+	// Reference: rippled CreateCheck.cpp:100-105
+	if (destAccount.Flags & sle.LsfAMM) != 0 {
+		return tx.TecNO_PERMISSION
+	}
+
 	// Check DisallowIncoming flag on destination
 	// Reference: CreateCheck.cpp L93-98
 	rules := ctx.Rules()
