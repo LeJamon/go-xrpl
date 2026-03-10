@@ -17,6 +17,7 @@ var (
 	ErrMaxDepthReached = errors.New("maximum tree depth reached")
 	ErrInvalidState    = errors.New("invalid state for operation")
 	ErrUnknownNodeType = errors.New("unknown node type")
+	ErrItemTooSmall    = errors.New("item data too small (minimum 12 bytes)")
 )
 
 // State defines the state of the SHAMap

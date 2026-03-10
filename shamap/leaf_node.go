@@ -32,6 +32,10 @@ func NewAccountStateLeafNode(item *Item) (*AccountStateLeafNode, error) {
 	if item == nil {
 		return nil, ErrNilItem
 	}
+	// Reference: rippled SHAMapLeafNode.cpp asserts item_->size() >= 12
+	if len(item.Data()) < 12 {
+		return nil, ErrItemTooSmall
+	}
 
 	n := &AccountStateLeafNode{
 		BaseNode: BaseNode{dirty: true},
@@ -233,6 +237,10 @@ func NewTransactionLeafNode(item *Item) (*TransactionLeafNode, error) {
 	if item == nil {
 		return nil, ErrNilItem
 	}
+	// Reference: rippled SHAMapLeafNode.cpp asserts item_->size() >= 12
+	if len(item.Data()) < 12 {
+		return nil, ErrItemTooSmall
+	}
 
 	n := &TransactionLeafNode{
 		BaseNode: BaseNode{dirty: true},
@@ -413,6 +421,10 @@ type TransactionWithMetaLeafNode struct {
 func NewTransactionWithMetaLeafNode(item *Item) (*TransactionWithMetaLeafNode, error) {
 	if item == nil {
 		return nil, ErrNilItem
+	}
+	// Reference: rippled SHAMapLeafNode.cpp asserts item_->size() >= 12
+	if len(item.Data()) < 12 {
+		return nil, ErrItemTooSmall
 	}
 
 	n := &TransactionWithMetaLeafNode{

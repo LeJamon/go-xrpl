@@ -53,7 +53,7 @@ func TestGetNodeFat(t *testing.T) {
 	for i := byte(0); i < 20; i++ {
 		var key [32]byte
 		key[0] = i
-		if err := sMap.Put(key, []byte{i, i + 1, i + 2}); err != nil {
+		if err := sMap.Put(key, make([]byte, 12)); err != nil {
 			t.Fatalf("Failed to put: %v", err)
 		}
 	}
@@ -121,7 +121,7 @@ func TestSerializeRoot(t *testing.T) {
 
 		var key [32]byte
 		key[0] = 1
-		if err := sMap.Put(key, []byte{1, 2, 3}); err != nil {
+		if err := sMap.Put(key, make([]byte, 12)); err != nil {
 			t.Fatalf("Failed to put: %v", err)
 		}
 
@@ -156,7 +156,7 @@ func TestGetNodeByHash(t *testing.T) {
 
 	var key [32]byte
 	key[0] = 1
-	if err := sMap.Put(key, []byte{1, 2, 3}); err != nil {
+	if err := sMap.Put(key, make([]byte, 12)); err != nil {
 		t.Fatalf("Failed to put: %v", err)
 	}
 
@@ -192,7 +192,7 @@ func TestGetSerializedNode(t *testing.T) {
 
 	var key [32]byte
 	key[0] = 1
-	if err := sMap.Put(key, []byte{1, 2, 3}); err != nil {
+	if err := sMap.Put(key, make([]byte, 12)); err != nil {
 		t.Fatalf("Failed to put: %v", err)
 	}
 
@@ -218,7 +218,7 @@ func TestGetChildHashes(t *testing.T) {
 	for i := byte(0); i < 10; i++ {
 		var key [32]byte
 		key[0] = i
-		if err := sMap.Put(key, []byte{i}); err != nil {
+		if err := sMap.Put(key, make([]byte, 12)); err != nil {
 			t.Fatalf("Failed to put: %v", err)
 		}
 	}
@@ -245,7 +245,7 @@ func TestBulkGetNodes(t *testing.T) {
 	for i := byte(0); i < 5; i++ {
 		var key [32]byte
 		key[0] = i
-		if err := sMap.Put(key, []byte{i}); err != nil {
+		if err := sMap.Put(key, make([]byte, 12)); err != nil {
 			t.Fatalf("Failed to put: %v", err)
 		}
 	}
@@ -289,7 +289,7 @@ func TestCreateWireMessage(t *testing.T) {
 	for i := byte(0); i < 5; i++ {
 		var key [32]byte
 		key[0] = i
-		if err := sMap.Put(key, []byte{i}); err != nil {
+		if err := sMap.Put(key, make([]byte, 12)); err != nil {
 			t.Fatalf("Failed to put: %v", err)
 		}
 	}
@@ -358,7 +358,10 @@ func TestFindNodeByHash(t *testing.T) {
 	for i := byte(0); i < 20; i++ {
 		var key [32]byte
 		key[0] = i
-		if err := sMap.Put(key, []byte{i, i + 1}); err != nil {
+		data := make([]byte, 12)
+		data[0] = i
+		data[1] = i + 1
+		if err := sMap.Put(key, data); err != nil {
 			t.Fatalf("Failed to put: %v", err)
 		}
 	}

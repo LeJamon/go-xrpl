@@ -107,7 +107,7 @@ func TestInvariants(t *testing.T) {
 		for i := byte(1); i <= 10; i++ {
 			var key [32]byte
 			key[0] = i
-			if err := sMap.Put(key, []byte{i, i + 1, i + 2}); err != nil {
+			if err := sMap.Put(key, make([]byte, 12)); err != nil {
 				t.Fatalf("Failed to put: %v", err)
 			}
 		}
@@ -127,7 +127,7 @@ func TestInvariants(t *testing.T) {
 		for i := byte(1); i <= 100; i++ {
 			var key [32]byte
 			key[0] = i
-			if err := sMap.Put(key, []byte{i}); err != nil {
+			if err := sMap.Put(key, make([]byte, 12)); err != nil {
 				t.Fatalf("Failed to put: %v", err)
 			}
 		}
@@ -147,7 +147,7 @@ func TestInvariants(t *testing.T) {
 		for i := byte(1); i <= 20; i++ {
 			var key [32]byte
 			key[0] = i
-			if err := sMap.Put(key, []byte{i}); err != nil {
+			if err := sMap.Put(key, make([]byte, 12)); err != nil {
 				t.Fatalf("Failed to put: %v", err)
 			}
 		}
@@ -190,7 +190,7 @@ func TestInvariantsDetailed(t *testing.T) {
 		for i := byte(1); i <= 10; i++ {
 			var key [32]byte
 			key[0] = i
-			if err := sMap.Put(key, []byte{i}); err != nil {
+			if err := sMap.Put(key, make([]byte, 12)); err != nil {
 				t.Fatalf("Failed to put: %v", err)
 			}
 		}
@@ -231,7 +231,7 @@ func TestVerifyHashes(t *testing.T) {
 		for i := byte(0); i < 20; i++ {
 			var key [32]byte
 			key[0] = i
-			if err := sMap.Put(key, []byte{i, i + 1}); err != nil {
+			if err := sMap.Put(key, make([]byte, 12)); err != nil {
 				t.Fatalf("Failed to put: %v", err)
 			}
 		}
@@ -256,7 +256,7 @@ func TestInvariantsWithDifferentMapTypes(t *testing.T) {
 			for i := byte(1); i <= 10; i++ {
 				var key [32]byte
 				key[0] = i
-				if err := sMap.Put(key, []byte{i, i + 1, i + 2}); err != nil {
+				if err := sMap.Put(key, make([]byte, 12)); err != nil {
 					t.Fatalf("Failed to put: %v", err)
 				}
 			}
@@ -278,7 +278,7 @@ func TestInvariantsAfterSnapshot(t *testing.T) {
 	for i := byte(1); i <= 10; i++ {
 		var key [32]byte
 		key[0] = i
-		if err := sMap.Put(key, []byte{i}); err != nil {
+		if err := sMap.Put(key, make([]byte, 12)); err != nil {
 			t.Fatalf("Failed to put: %v", err)
 		}
 	}
@@ -301,7 +301,7 @@ func TestInvariantsAfterSnapshot(t *testing.T) {
 	// Modify original
 	var newKey [32]byte
 	newKey[0] = 100
-	if err := sMap.Put(newKey, []byte{100}); err != nil {
+	if err := sMap.Put(newKey, make([]byte, 12)); err != nil {
 		t.Fatalf("Failed to put: %v", err)
 	}
 

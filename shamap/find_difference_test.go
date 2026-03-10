@@ -20,10 +20,10 @@ func TestFindDifference(t *testing.T) {
 		for i := byte(0); i < 5; i++ {
 			var key [32]byte
 			key[0] = i
-			if err := map1.Put(key, []byte{i}); err != nil {
+			if err := map1.Put(key, make([]byte, 12)); err != nil {
 				t.Fatalf("Failed to put to map1: %v", err)
 			}
-			if err := map2.Put(key, []byte{i}); err != nil {
+			if err := map2.Put(key, make([]byte, 12)); err != nil {
 				t.Fatalf("Failed to put to map2: %v", err)
 			}
 		}
@@ -60,7 +60,7 @@ func TestFindDifference(t *testing.T) {
 		for i := byte(0); i < 3; i++ {
 			var key [32]byte
 			key[0] = i
-			if err := map1.Put(key, []byte{i}); err != nil {
+			if err := map1.Put(key, make([]byte, 12)); err != nil {
 				t.Fatalf("Failed to put: %v", err)
 			}
 		}
@@ -85,10 +85,10 @@ func TestFindDifference(t *testing.T) {
 			key1[0] = i
 			key2[0] = i + 10
 
-			if err := map1.Put(key1, []byte{i}); err != nil {
+			if err := map1.Put(key1, make([]byte, 12)); err != nil {
 				t.Fatalf("Failed to put to map1: %v", err)
 			}
-			if err := map2.Put(key2, []byte{i + 10}); err != nil {
+			if err := map2.Put(key2, make([]byte, 12)); err != nil {
 				t.Fatalf("Failed to put to map2: %v", err)
 			}
 		}
@@ -111,10 +111,14 @@ func TestFindDifference(t *testing.T) {
 		var key [32]byte
 		key[0] = 1
 
-		if err := map1.Put(key, []byte{1, 2, 3}); err != nil {
+		val1 := make([]byte, 12)
+		val1[0] = 1
+		if err := map1.Put(key, val1); err != nil {
 			t.Fatalf("Failed to put to map1: %v", err)
 		}
-		if err := map2.Put(key, []byte{4, 5, 6}); err != nil {
+		val2 := make([]byte, 12)
+		val2[0] = 2
+		if err := map2.Put(key, val2); err != nil {
 			t.Fatalf("Failed to put to map2: %v", err)
 		}
 
@@ -140,10 +144,10 @@ func TestFindDifference(t *testing.T) {
 		for i := byte(0); i < 3; i++ {
 			var key [32]byte
 			key[0] = i
-			if err := map1.Put(key, []byte{i}); err != nil {
+			if err := map1.Put(key, make([]byte, 12)); err != nil {
 				t.Fatalf("Failed to put: %v", err)
 			}
-			if err := map2.Put(key, []byte{i}); err != nil {
+			if err := map2.Put(key, make([]byte, 12)); err != nil {
 				t.Fatalf("Failed to put: %v", err)
 			}
 		}
@@ -151,24 +155,28 @@ func TestFindDifference(t *testing.T) {
 		// Only in map1
 		var onlyMap1 [32]byte
 		onlyMap1[0] = 100
-		if err := map1.Put(onlyMap1, []byte{100}); err != nil {
+		if err := map1.Put(onlyMap1, make([]byte, 12)); err != nil {
 			t.Fatalf("Failed to put: %v", err)
 		}
 
 		// Only in map2
 		var onlyMap2 [32]byte
 		onlyMap2[0] = 200
-		if err := map2.Put(onlyMap2, []byte{200}); err != nil {
+		if err := map2.Put(onlyMap2, make([]byte, 12)); err != nil {
 			t.Fatalf("Failed to put: %v", err)
 		}
 
 		// Modified
 		var modified [32]byte
 		modified[0] = 50
-		if err := map1.Put(modified, []byte{1}); err != nil {
+		data1 := make([]byte, 12)
+		data1[0] = 1
+		if err := map1.Put(modified, data1); err != nil {
 			t.Fatalf("Failed to put: %v", err)
 		}
-		if err := map2.Put(modified, []byte{2}); err != nil {
+		data2 := make([]byte, 12)
+		data2[0] = 2
+		if err := map2.Put(modified, data2); err != nil {
 			t.Fatalf("Failed to put: %v", err)
 		}
 
@@ -200,7 +208,7 @@ func TestFindDifference(t *testing.T) {
 		for i := byte(0); i < 50; i++ {
 			var key [32]byte
 			key[0] = i
-			if err := map1.Put(key, []byte{i}); err != nil {
+			if err := map1.Put(key, make([]byte, 12)); err != nil {
 				t.Fatalf("Failed to put: %v", err)
 			}
 		}
@@ -208,7 +216,7 @@ func TestFindDifference(t *testing.T) {
 		for i := byte(25); i < 75; i++ {
 			var key [32]byte
 			key[0] = i
-			if err := map2.Put(key, []byte{i}); err != nil {
+			if err := map2.Put(key, make([]byte, 12)); err != nil {
 				t.Fatalf("Failed to put: %v", err)
 			}
 		}
@@ -237,8 +245,8 @@ func TestFindDifferenceSymmetry(t *testing.T) {
 	key1[0] = 1
 	key2[0] = 2
 
-	map1.Put(key1, []byte{1})
-	map2.Put(key2, []byte{2})
+	map1.Put(key1, make([]byte, 12))
+	map2.Put(key2, make([]byte, 12))
 
 	diff1, err := map1.FindDifference(map2)
 	if err != nil {
@@ -274,7 +282,7 @@ func TestCollectAllKeys(t *testing.T) {
 	for i := byte(0); i < 10; i++ {
 		var key [32]byte
 		key[0] = i
-		sMap.Put(key, []byte{i})
+		sMap.Put(key, make([]byte, 12))
 	}
 
 	sMap.mu.RLock()
@@ -297,7 +305,7 @@ func TestCollectAllKeysExcept(t *testing.T) {
 	for i := byte(0); i < 5; i++ {
 		var key [32]byte
 		key[0] = i
-		sMap.Put(key, []byte{i})
+		sMap.Put(key, make([]byte, 12))
 	}
 
 	var exceptKey [32]byte
