@@ -472,6 +472,12 @@ func (t *ApplyStateTable) threadOwners(data []byte, entryType string, fixCheckTh
 	}
 }
 
+// TxExists delegates to the base view to check if a transaction exists.
+// Reference: rippled ReadView::txExists()
+func (t *ApplyStateTable) TxExists(txID [32]byte) bool {
+	return t.base.TxExists(txID)
+}
+
 // DropsDestroyed returns the amount of XRP destroyed
 func (t *ApplyStateTable) DropsDestroyed() drops.XRPAmount {
 	return t.drops
@@ -481,7 +487,7 @@ func (t *ApplyStateTable) DropsDestroyed() drops.XRPAmount {
 // Must be called BEFORE Apply() — entries are still in the table at this point.
 func (t *ApplyStateTable) CollectEntries() []InvariantEntry {
 	var entries []InvariantEntry
-	for _, entry := range t.items {
+	for key, entry := range t.items {
 		if entry.Action == ActionCache {
 			continue
 		}
@@ -507,6 +513,7 @@ func (t *ApplyStateTable) CollectEntries() []InvariantEntry {
 			typeData = before
 		}
 		entries = append(entries, InvariantEntry{
+			Key:       key,
 			IsDelete:  entry.Action == ActionErase,
 			Before:    before,
 			After:     after,

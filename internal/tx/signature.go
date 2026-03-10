@@ -137,8 +137,14 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup) error {
 		return ErrNoSigners
 	}
 
-	// Get the account's signer list
-	signerList, err := lookup.GetSignerList(common.Account)
+	// Get the signer list for the idAccount.
+	// For delegated transactions, use the delegate's signer list.
+	// Reference: rippled Transactor::checkSign line 602 + 608-609
+	idAccount := common.Account
+	if common.Delegate != "" {
+		idAccount = common.Delegate
+	}
+	signerList, err := lookup.GetSignerList(idAccount)
 	if err != nil {
 		return errors.New("failed to get signer list: " + err.Error())
 	}

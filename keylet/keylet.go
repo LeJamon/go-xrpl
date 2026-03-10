@@ -41,6 +41,7 @@ const (
 	spaceCredential uint16 = 'D' // Credential
 	spacePermDomain uint16 = 'b' // Permissioned domain
 	spaceVault      uint16 = 'V' // Vault
+	spaceDelegate   uint16 = 'E' // Delegate
 )
 
 // Keylet represents an addressable location in the ledger state.
@@ -614,5 +615,15 @@ func PermissionedDomainByID(domainID [32]byte) Keylet {
 	return Keylet{
 		Type: entry.TypePermissionedDomain,
 		Key:  domainID,
+	}
+}
+
+// DelegateKeylet returns the keylet for a delegation entry.
+// The key is computed from the account that grants and the account that receives the delegation.
+// Reference: rippled Indexes.cpp delegate(account, authorizedAccount) — LedgerNameSpace::DELEGATE = 'E'
+func DelegateKeylet(account, authorizedAccount [20]byte) Keylet {
+	return Keylet{
+		Type: entry.TypeDelegate,
+		Key:  indexHash(spaceDelegate, account[:], authorizedAccount[:]),
 	}
 }

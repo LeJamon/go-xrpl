@@ -52,6 +52,18 @@ func (a *AMMWithdraw) TxType() tx.Type {
 	return tx.TypeAMMWithdraw
 }
 
+// GetAMMAsset returns the first asset of the AMM (Asset field).
+// Implements ammAssetProvider for the ValidAMM invariant checker.
+func (a *AMMWithdraw) GetAMMAsset() tx.Asset {
+	return a.Asset
+}
+
+// GetAMMAsset2 returns the second asset of the AMM (Asset2 field).
+// Implements ammAssetProvider for the ValidAMM invariant checker.
+func (a *AMMWithdraw) GetAMMAsset2() tx.Asset {
+	return a.Asset2
+}
+
 // Validate validates the AMMWithdraw transaction
 // Reference: rippled AMMWithdraw.cpp preflight
 func (a *AMMWithdraw) Validate() error {

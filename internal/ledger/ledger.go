@@ -405,6 +405,17 @@ func (l *Ledger) HasTransaction(txHash [32]byte) (bool, error) {
 	return l.txMap.Has(txHash)
 }
 
+// TxExists returns true if a transaction with the given hash has already been
+// applied to this ledger. Delegates to the transaction SHAMap.
+// Reference: rippled ReadView::txExists()
+func (l *Ledger) TxExists(txID [32]byte) bool {
+	exists, err := l.HasTransaction(txID)
+	if err != nil {
+		return false
+	}
+	return exists
+}
+
 // Close closes the ledger, making it immutable
 func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 	l.mu.Lock()

@@ -2,10 +2,17 @@ package entry
 
 import (
 	"errors"
-
 )
 
-// Permission represents a single delegated permission
+// DelegatePermission represents a single delegated permission.
+// The PermissionValue encodes the permitted transaction type as txType + 1,
+// or a granular permission value (> 65535).
+// Reference: rippled DelegateUtils.cpp — permissionValue == tx.getTxnType() + 1
+type DelegatePermission struct {
+	PermissionValue uint32 // Numeric permission value
+}
+
+// Permission represents a single delegated permission (legacy name for compatibility)
 type Permission struct {
 	PermissionType string // Type of permission (e.g., "Payment", "TrustSet")
 }
@@ -16,10 +23,11 @@ type Delegate struct {
 	BaseEntry
 
 	// Required fields
-	Account     [20]byte     // Account that granted the delegation
-	Authorize   [20]byte     // Account that received the delegation
-	Permissions []Permission // List of delegated permissions
-	OwnerNode   uint64       // Directory node hint
+	Account              [20]byte              // Account that granted the delegation
+	Authorize            [20]byte              // Account that received the delegation
+	Permissions          []Permission          // List of delegated permissions (legacy)
+	DelegatePermissions  []DelegatePermission  // List of delegated permissions (numeric)
+	OwnerNode            uint64                // Directory node hint
 }
 
 func (d *Delegate) Type() Type {
@@ -36,7 +44,7 @@ func (d *Delegate) Validate() error {
 	if d.Account == d.Authorize {
 		return errors.New("cannot delegate to self")
 	}
-	if len(d.Permissions) == 0 {
+	if len(d.DelegatePermissions) == 0 && len(d.Permissions) == 0 {
 		return errors.New("at least one permission is required")
 	}
 	return nil
@@ -49,4 +57,17 @@ func (d *Delegate) Hash() ([32]byte, error) {
 		hash[i] ^= d.Authorize[i]
 	}
 	return hash, nil
+}
+
+// HasTxPermission checks if this delegate SLE grants permission for the given
+// transaction type. The permission value for a tx type is txType + 1.
+// Reference: rippled DelegateUtils.cpp checkTxPermission()
+func (d *Delegate) HasTxPermission(txType uint32) bool {
+	txPermission := txType + 1
+	for _, perm := range d.DelegatePermissions {
+		if perm.PermissionValue == txPermission {
+			return true
+		}
+	}
+	return false
 }

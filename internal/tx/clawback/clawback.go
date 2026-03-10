@@ -446,6 +446,12 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 	return tx.TesSUCCESS
 }
 
+// ClawbackAmount returns the Amount field for use by the ValidClawback invariant checker.
+// Implements tx.clawbackAmountProvider.
+func (c *Clawback) ClawbackAmount() tx.Amount {
+	return c.Amount
+}
+
 // Flatten returns a flat map of all transaction fields
 func (c *Clawback) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(c)

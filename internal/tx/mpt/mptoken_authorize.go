@@ -78,6 +78,12 @@ func (m *MPTokenAuthorize) Validate() error {
 	return nil
 }
 
+// HasHolder returns true if the Holder field is present (non-empty).
+// Implements tx.holderFieldProvider for the ValidMPTIssuance invariant checker.
+func (m *MPTokenAuthorize) HasHolder() bool {
+	return m.Holder != ""
+}
+
 // Flatten returns a flat map of all transaction fields
 func (m *MPTokenAuthorize) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(m)

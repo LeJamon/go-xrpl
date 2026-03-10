@@ -195,6 +195,12 @@ type LedgerView interface {
 	// Returns (key, data, true, nil) if found, or ([32]byte{}, nil, false, nil) if not.
 	// Reference: rippled ReadView::succ() used for efficient ordered traversal.
 	Succ(key [32]byte) ([32]byte, []byte, bool, error)
+
+	// TxExists returns true if a transaction with the given hash has already been
+	// applied to the current open ledger. Used by invariant checkers and duplicate
+	// transaction detection.
+	// Reference: rippled ReadView::txExists()
+	TxExists(txID [32]byte) bool
 }
 
 // ApplyResult contains the result of applying a transaction
@@ -409,8 +415,18 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 		}
 	}
 
-	// Step 2: Preclaim checks (validate against ledger state)
-	result = e.preclaim(tx)
+	// Step 2: Compute transaction hash (needed by preclaim for tefALREADY check)
+	txHash, err := computeTransactionHash(tx)
+	if err != nil {
+		return ApplyResult{
+			Result:  TefINTERNAL,
+			Applied: false,
+			Message: "failed to compute transaction hash: " + err.Error(),
+		}
+	}
+
+	// Step 3: Preclaim checks (validate against ledger state)
+	result = e.preclaim(tx, txHash)
 	if !result.IsSuccess() && !result.IsTec() {
 		return ApplyResult{
 			Result:  result,
@@ -419,19 +435,8 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 		}
 	}
 
-	// Step 3: Calculate and apply fee
+	// Step 4: Calculate and apply fee
 	fee := e.calculateFee(tx)
-
-	// Step 4: Compute transaction hash
-	txHash, err := computeTransactionHash(tx)
-	if err != nil {
-		return ApplyResult{
-			Result:  TefINTERNAL,
-			Applied: false,
-			Fee:     fee,
-			Message: "failed to compute transaction hash: " + err.Error(),
-		}
-	}
 
 	// Step 5: Apply the transaction
 	metadata := &Metadata{
@@ -569,6 +574,17 @@ func (e *Engine) preflight(tx Transaction) Result {
 	// Reference: rippled Transactor.cpp preflight1() line 92
 	if common.TicketSequence != nil && !e.rules().Enabled(amendment.FeatureTicketBatch) {
 		return TemMALFORMED
+	}
+
+	// Delegate field validation
+	// Reference: rippled Transactor.cpp preflight1() lines 101-108
+	if common.Delegate != "" {
+		if !e.rules().Enabled(amendment.FeaturePermissionDelegation) {
+			return TemDISABLED
+		}
+		if common.Delegate == common.Account {
+			return TemBAD_SIGNER
+		}
 	}
 
 	// tfInnerBatchTxn flag validation
@@ -877,7 +893,7 @@ func isURLChar(c byte) bool {
 }
 
 // preclaim validates the transaction against the current ledger state
-func (e *Engine) preclaim(tx Transaction) Result {
+func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 	common := tx.GetCommon()
 
 	// Check that the source account exists
@@ -907,29 +923,8 @@ func (e *Engine) preclaim(tx Transaction) Result {
 		return TefINTERNAL
 	}
 
-	// Check single-sign authorization (master key or regular key)
-	// Reference: rippled Transactor::checkSingleSign in Transactor.cpp
-	// Multi-signed transactions are already verified in preflight via VerifyMultiSignature.
-	if !e.config.SkipSignatureVerification && !IsMultiSigned(tx) && common.SigningPubKey != "" {
-		signerAddress, addrErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(common.SigningPubKey)
-		if addrErr != nil {
-			return TefBAD_AUTH
-		}
-
-		isMasterDisabled := (account.Flags & state.LsfDisableMaster) != 0
-
-		if signerAddress == account.RegularKey {
-			// Signed with regular key — allowed
-		} else if !isMasterDisabled && signerAddress == common.Account {
-			// Signed with enabled master key — allowed
-		} else if isMasterDisabled && signerAddress == common.Account {
-			// Signed with disabled master key
-			return TefMASTER_DISABLED
-		} else {
-			// Signed with an unauthorized key
-			return TefBAD_AUTH
-		}
-	}
+	// Step 1: checkSeqProxy — sequence/ticket validation
+	// Reference: rippled Transactor::checkSeqProxy in Transactor.cpp
 
 	// Check for both Sequence (non-zero) and TicketSequence set → temSEQ_AND_TICKET
 	// Reference: rippled Transactor::checkSeqProxy in Transactor.cpp line 375
@@ -940,7 +935,6 @@ func (e *Engine) preclaim(tx Transaction) Result {
 	}
 
 	// Check sequence number or ticket
-	// Reference: rippled Transactor::checkSeqProxy in Transactor.cpp
 	if common.TicketSequence != nil {
 		// Ticket-based transaction: validate the ticket exists
 		if *common.TicketSequence >= account.Sequence {
@@ -961,8 +955,40 @@ func (e *Engine) preclaim(tx Transaction) Result {
 		}
 	}
 
-	// Batch minimum fee validation
-	// Reference: rippled Transactor::checkFee() - telINSUF_FEE_P for insufficient batch fee
+	// Step 2: checkPriorTxAndLastLedger
+	// Reference: rippled Transactor::checkPriorTxAndLastLedger in Transactor.cpp
+
+	// AccountTxnID check — if the transaction specifies an AccountTxnID, it must match
+	// the account's stored AccountTxnID (the hash of the last tx this account submitted).
+	if common.AccountTxnID != "" {
+		txAccountTxnID, decErr := hex.DecodeString(common.AccountTxnID)
+		if decErr != nil || len(txAccountTxnID) != 32 {
+			return TefWRONG_PRIOR
+		}
+		var txPrior [32]byte
+		copy(txPrior[:], txAccountTxnID)
+		if txPrior != account.AccountTxnID {
+			return TefWRONG_PRIOR
+		}
+	}
+
+	// LastLedgerSequence check
+	if common.LastLedgerSequence != nil {
+		if e.config.LedgerSequence > *common.LastLedgerSequence {
+			return TefMAX_LEDGER
+		}
+	}
+
+	// Duplicate transaction detection — if this transaction hash already exists in the
+	// view (already applied to this ledger), return tefALREADY.
+	// Reference: rippled Transactor::checkPriorTxAndLastLedger — ctx.view.txExists()
+	if e.view.TxExists(txHash) {
+		return TefALREADY
+	}
+
+	// Step 3: checkFee — fee validation and balance check
+	// Reference: rippled Transactor::checkFee in Transactor.cpp
+	// When a delegate is present, the fee is checked against the delegate's balance.
 	fee := e.calculateFee(tx)
 	if feeCalc, ok := tx.(BatchFeeCalculator); ok {
 		minFee := feeCalc.CalculateMinimumFee(e.config.BaseFee)
@@ -971,15 +997,98 @@ func (e *Engine) preclaim(tx Transaction) Result {
 		}
 	}
 
-	// Check that account can pay the fee
-	if account.Balance < fee {
+	// Determine who pays the fee: delegate (if present) or the source account.
+	// Reference: rippled Transactor::checkFee lines 295-297:
+	//   auto const id = ctx.tx.isFieldPresent(sfDelegate)
+	//       ? ctx.tx.getAccountID(sfDelegate)
+	//       : ctx.tx.getAccountID(sfAccount);
+	feePayerBalance := account.Balance
+	if common.Delegate != "" {
+		delegateID, delegateErr := state.DecodeAccountID(common.Delegate)
+		if delegateErr != nil {
+			return TerNO_ACCOUNT
+		}
+		delegateAccountKey := keylet.Account(delegateID)
+		delegateAccountData, delegateReadErr := e.view.Read(delegateAccountKey)
+		if delegateReadErr != nil || delegateAccountData == nil {
+			return TerNO_ACCOUNT
+		}
+		delegateAccount, delegateParseErr := state.ParseAccountRoot(delegateAccountData)
+		if delegateParseErr != nil {
+			return TefINTERNAL
+		}
+		feePayerBalance = delegateAccount.Balance
+	}
+
+	if feePayerBalance < fee {
 		return TerINSUF_FEE_B
 	}
 
-	// LastLedgerSequence check
-	if common.LastLedgerSequence != nil {
-		if e.config.LedgerSequence > *common.LastLedgerSequence {
-			return TefMAX_LEDGER
+	// Step 4: checkPermission — delegation permission check
+	// Reference: rippled Transactor::checkPermission in Transactor.cpp lines 213-227
+	// and DelegateUtils.cpp checkTxPermission()
+	if common.Delegate != "" {
+		delegateID, _ := state.DecodeAccountID(common.Delegate)
+		delegateKeylet := keylet.DelegateKeylet(accountID, delegateID)
+		delegateData, readErr := e.view.Read(delegateKeylet)
+		if readErr != nil || delegateData == nil {
+			return TecNO_DELEGATE_PERMISSION
+		}
+		delegateEntry, parseErr := state.ParseDelegate(delegateData)
+		if parseErr != nil {
+			return TecNO_DELEGATE_PERMISSION
+		}
+		// Check if the delegate SLE grants permission for this tx type.
+		// In rippled: permissionValue == tx.getTxnType() + 1
+		txTypeValue := uint32(tx.TxType())
+		if !delegateEntry.HasTxPermission(txTypeValue) {
+			return TecNO_DELEGATE_PERMISSION
+		}
+	}
+
+	// Step 5: checkSign — signature verification
+	// Reference: rippled Transactor::checkSign in Transactor.cpp
+	// When a delegate is present, the idAccount for signature checking is the delegate.
+	// Reference: rippled line 602: auto const idAccount = ctx.tx[~sfDelegate].value_or(ctx.tx[sfAccount]);
+	if !e.config.SkipSignatureVerification && !IsMultiSigned(tx) && common.SigningPubKey != "" {
+		signerAddress, addrErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(common.SigningPubKey)
+		if addrErr != nil {
+			return TefBAD_AUTH
+		}
+
+		// Determine the idAccount: delegate if present, else source account.
+		idAccount := common.Account
+		if common.Delegate != "" {
+			idAccount = common.Delegate
+		}
+
+		// Read the idAccount's data for signature authorization check
+		idAccountID, idErr := state.DecodeAccountID(idAccount)
+		if idErr != nil {
+			return TefBAD_AUTH
+		}
+		idAccountKey := keylet.Account(idAccountID)
+		idAccountData, idReadErr := e.view.Read(idAccountKey)
+		if idReadErr != nil || idAccountData == nil {
+			return TerNO_ACCOUNT
+		}
+		idAccountRoot, idParseErr := state.ParseAccountRoot(idAccountData)
+		if idParseErr != nil {
+			return TefINTERNAL
+		}
+
+		isMasterDisabled := (idAccountRoot.Flags & state.LsfDisableMaster) != 0
+
+		if signerAddress == idAccountRoot.RegularKey {
+			// Signed with regular key — allowed
+		} else if !isMasterDisabled && signerAddress == idAccount {
+			// Signed with enabled master key — allowed
+		} else if isMasterDisabled && signerAddress == idAccount {
+			// Signed with disabled master key
+			return TefMASTER_DISABLED
+		} else {
+			// Signed with an unauthorized key
+			return TefBAD_AUTH
 		}
 	}
 
@@ -1019,9 +1128,19 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 	copy(originalAccountData, accountData)
 
 	// Deduct fee and handle sequence/ticket
-	// Reference: rippled Transactor::consumeSeqProxy in Transactor.cpp
-	account.Balance -= fee
+	// Reference: rippled Transactor::payFee + consumeSeqProxy in Transactor.cpp
+	isDelegated := common.Delegate != ""
 	isTicket := common.TicketSequence != nil
+
+	if isDelegated {
+		// Delegated transactions: fee is charged to the delegate account, not the source.
+		// The source account's balance is NOT reduced by the fee.
+		// Reference: rippled Transactor::payFee() lines 327-337
+	} else {
+		// Normal transactions: fee is charged to the source account.
+		account.Balance -= fee
+	}
+
 	if !isTicket && common.Sequence != nil {
 		account.Sequence = *common.Sequence + 1
 	}
@@ -1029,6 +1148,17 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 	// Update PreviousTxnID and PreviousTxnLgrSeq (thread the account)
 	account.PreviousTxnID = txHash
 	account.PreviousTxnLgrSeq = e.config.LedgerSequence
+
+	// Update AccountTxnID if the account has tracking enabled (field is present/non-zero).
+	// Reference: rippled Transactor::apply() line 568-569:
+	//   if (sle->isFieldPresent(sfAccountTxnID))
+	//       sle->setFieldH256(sfAccountTxnID, ctx_.tx.getTransactionID());
+	{
+		var zeroHash [32]byte
+		if account.AccountTxnID != zeroHash {
+			account.AccountTxnID = txHash
+		}
+	}
 
 	// Create ApplyStateTable for transaction-specific changes
 	table := NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, e.rules())
@@ -1043,6 +1173,31 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 			return TefINTERNAL
 		}
 		if err := table.Update(accountKey, preApplyData); err != nil {
+			return TefINTERNAL
+		}
+	}
+
+	// For delegated transactions, deduct the fee from the delegate's account.
+	// Reference: rippled Transactor::payFee() lines 327-337
+	if isDelegated {
+		delegateID, _ := state.DecodeAccountID(common.Delegate)
+		delegateAccountKey := keylet.Account(delegateID)
+		delegateAccountData, delegateReadErr := e.view.Read(delegateAccountKey)
+		if delegateReadErr != nil || delegateAccountData == nil {
+			return TefINTERNAL
+		}
+		delegateAccount, delegateParseErr := state.ParseAccountRoot(delegateAccountData)
+		if delegateParseErr != nil {
+			return TefINTERNAL
+		}
+		delegateAccount.Balance -= fee
+		delegateAccount.PreviousTxnID = txHash
+		delegateAccount.PreviousTxnLgrSeq = e.config.LedgerSequence
+		delegateData, delegateSerErr := state.SerializeAccountRoot(delegateAccount)
+		if delegateSerErr != nil {
+			return TefINTERNAL
+		}
+		if err := table.Update(delegateAccountKey, delegateData); err != nil {
 			return TefINTERNAL
 		}
 	}
@@ -1212,7 +1367,11 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		if err != nil {
 			return TefINTERNAL
 		}
-		account.Balance -= fee
+		// For delegated transactions, fee is charged to the delegate, not the source.
+		// Reference: rippled Transactor.cpp reset() lines 1011-1013, 1036
+		if !isDelegated {
+			account.Balance -= fee
+		}
 		if !isTicket && common.Sequence != nil {
 			account.Sequence = *common.Sequence + 1
 		}
@@ -1235,6 +1394,31 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		// Update account through tecTable for proper metadata diff generation
 		if err := tecTable.Update(accountKey, updatedData); err != nil {
 			return TefINTERNAL
+		}
+
+		// For delegated transactions, deduct the fee from the delegate's account on tec.
+		// Reference: rippled Transactor.cpp reset() lines 1011-1013, 1036
+		if isDelegated {
+			delegateID, _ := state.DecodeAccountID(common.Delegate)
+			delegateAccountKey := keylet.Account(delegateID)
+			delegateAccountData, delegateReadErr := e.view.Read(delegateAccountKey)
+			if delegateReadErr != nil || delegateAccountData == nil {
+				return TefINTERNAL
+			}
+			delegateAccount, delegateParseErr := state.ParseAccountRoot(delegateAccountData)
+			if delegateParseErr != nil {
+				return TefINTERNAL
+			}
+			delegateAccount.Balance -= fee
+			delegateAccount.PreviousTxnID = txHash
+			delegateAccount.PreviousTxnLgrSeq = e.config.LedgerSequence
+			delegateData, delegateSerErr := state.SerializeAccountRoot(delegateAccount)
+			if delegateSerErr != nil {
+				return TefINTERNAL
+			}
+			if err := tecTable.Update(delegateAccountKey, delegateData); err != nil {
+				return TefINTERNAL
+			}
 		}
 
 		// tecOVERSIZE/tecKILLED: re-delete offers that were found during processing.
@@ -1318,9 +1502,9 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 	// Run invariant checks BEFORE committing — entries are still inspectable in the table.
 	// Reference: rippled Transactor::apply() — invariant check runs before ctx_->apply().
 	{
-		txTypeName := tx.TxType().String()
 		invEntries := table.CollectEntries()
-		if violation := CheckInvariants(txTypeName, result, fee, invEntries); violation != nil {
+		txDeclaredFee := parseTxDeclaredFee(tx, fee)
+		if violation := CheckInvariants(tx, result, fee, txDeclaredFee, invEntries, table, e.rules()); violation != nil {
 			// First violation: charge fee but revert all state changes (tecINVARIANT_FAILED).
 			// Reference: rippled — first pass returns tec, second would return tef.
 			_ = violation // logged in future via journal
@@ -1369,6 +1553,25 @@ func (e *Engine) calculateMinimumFee(tx Transaction) uint64 {
 		return CalculateMultiSigFee(baseFee, numSigners)
 	}
 	return baseFee
+}
+
+// parseTxDeclaredFee extracts the fee declared in the transaction itself.
+// This is the fee the user authorized, as opposed to the fee actually charged.
+// If the transaction doesn't explicitly set a Fee field (e.g., the test env
+// auto-computes it), fallback is returned instead.
+// Reference: rippled InvariantCheck.cpp TransactionFeeCheck — tx.getFieldAmount(sfFee).xrp()
+func parseTxDeclaredFee(tx Transaction, fallback uint64) uint64 {
+	common := tx.GetCommon()
+	if common.Fee != "" {
+		if fee, err := strconv.ParseUint(common.Fee, 10, 64); err == nil {
+			return fee
+		}
+	}
+	// In rippled, sfFee is always present on the transaction. In the Go test env,
+	// the fee may be auto-computed by the engine. Use the engine-computed fee as
+	// the declared fee in this case, since the engine authorized it on behalf
+	// of the test.
+	return fallback
 }
 
 // AccountReserve calculates the total reserve required for an account with the given owner count.

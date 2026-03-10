@@ -56,6 +56,18 @@ func (a *AMMDeposit) TxType() tx.Type {
 	return tx.TypeAMMDeposit
 }
 
+// GetAMMAsset returns the first asset of the AMM (Asset field).
+// Implements ammAssetProvider for the ValidAMM invariant checker.
+func (a *AMMDeposit) GetAMMAsset() tx.Asset {
+	return a.Asset
+}
+
+// GetAMMAsset2 returns the second asset of the AMM (Asset2 field).
+// Implements ammAssetProvider for the ValidAMM invariant checker.
+func (a *AMMDeposit) GetAMMAsset2() tx.Asset {
+	return a.Asset2
+}
+
 // Validate validates the AMMDeposit transaction
 // Reference: rippled AMMDeposit.cpp preflight lines 32-162
 func (a *AMMDeposit) Validate() error {
@@ -349,7 +361,11 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	fixV1_3 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_3)
 	fixV1_1 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_1)
 
-	// Get amounts from transaction
+	// Get amounts from transaction.
+	// In rippled, ammHolds() reorders pool balances to match Amount/Amount2 issues,
+	// so amountBalance always corresponds to sfAmount. In our code, assetBalance1/2
+	// are in a.Asset/a.Asset2 order. We reorder the tx amounts to match that order.
+	// Reference: rippled AMMDeposit.cpp applyGuts lines 379-388
 	amount1 := zeroAmount(a.Asset)
 	amount2 := zeroAmount(a.Asset2)
 	lpTokensRequested := zeroAmount(tx.Asset{}) // LP tokens
@@ -362,6 +378,17 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 	if a.LPTokenOut != nil {
 		lpTokensRequested = *a.LPTokenOut
+	}
+
+	// Reorder amount1/amount2 to match assetBalance1/assetBalance2 (a.Asset/a.Asset2 order).
+	// If Amount's issue matches a.Asset2 (not a.Asset), swap the amounts so that
+	// amount1 corresponds to a.Asset and amount2 corresponds to a.Asset2.
+	// This matches rippled's ammHolds issue-hint reordering behavior.
+	if a.Amount != nil && a.Amount2 != nil {
+		amountIssue := tx.Asset{Currency: a.Amount.Currency, Issuer: a.Amount.Issuer}
+		if matchesAssetByIssue(a.Asset2, amountIssue) && !matchesAssetByIssue(a.Asset, amountIssue) {
+			amount1, amount2 = amount2, amount1
+		}
 	}
 
 	// Result amounts - use tx.Amount for precision

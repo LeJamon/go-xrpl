@@ -94,6 +94,8 @@ const (
 	TecBAD_CREDENTIALS               Result = 193
 	TecWRONG_ASSET                   Result = 194
 	TecPSEUDO_ACCOUNT                Result = 196
+	TecPRECISION_LOSS                Result = 197
+	TecNO_DELEGATE_PERMISSION        Result = 198
 
 	// tefFAILURE and related codes (-199 to -100)
 	// Transaction failed, fee claimed but tx not applied
@@ -328,6 +330,10 @@ func (r Result) String() string {
 		return "tecWRONG_ASSET"
 	case TecPSEUDO_ACCOUNT:
 		return "tecPSEUDO_ACCOUNT"
+	case TecPRECISION_LOSS:
+		return "tecPRECISION_LOSS"
+	case TecNO_DELEGATE_PERMISSION:
+		return "tecNO_DELEGATE_PERMISSION"
 	case TecDUPLICATE:
 		return "tecDUPLICATE"
 	case TecUNFUNDED_AMM:
@@ -362,6 +368,8 @@ func (r Result) String() string {
 		return "tefINTERNAL"
 	case TefPAST_SEQ:
 		return "tefPAST_SEQ"
+	case TefWRONG_PRIOR:
+		return "tefWRONG_PRIOR"
 	case TefMASTER_DISABLED:
 		return "tefMASTER_DISABLED"
 	case TefMAX_LEDGER:

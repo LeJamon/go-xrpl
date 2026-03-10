@@ -323,6 +323,18 @@ func (s *PaymentSandbox) AdjustDropsDestroyed(drops drops.XRPAmount) {
 	s.dropsDestroyed = s.dropsDestroyed.Add(drops)
 }
 
+// TxExists delegates to the parent sandbox or underlying view.
+// Reference: rippled ReadView::txExists()
+func (s *PaymentSandbox) TxExists(txID [32]byte) bool {
+	if s.parent != nil {
+		return s.parent.TxExists(txID)
+	}
+	if s.view != nil {
+		return s.view.TxExists(txID)
+	}
+	return false
+}
+
 // ForEach iterates over all state entries visible from this sandbox
 func (s *PaymentSandbox) ForEach(fn func(key [32]byte, data []byte) bool) error {
 	// Track visited keys to avoid duplicates

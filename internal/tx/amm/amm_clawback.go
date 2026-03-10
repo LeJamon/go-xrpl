@@ -47,6 +47,18 @@ func (a *AMMClawback) TxType() tx.Type {
 	return tx.TypeAMMClawback
 }
 
+// GetAMMAsset returns the first asset of the AMM (Asset field).
+// Implements ammAssetProvider for the ValidAMM invariant checker.
+func (a *AMMClawback) GetAMMAsset() tx.Asset {
+	return a.Asset
+}
+
+// GetAMMAsset2 returns the second asset of the AMM (Asset2 field).
+// Implements ammAssetProvider for the ValidAMM invariant checker.
+func (a *AMMClawback) GetAMMAsset2() tx.Asset {
+	return a.Asset2
+}
+
 // Validate validates the AMMClawback transaction
 // Reference: rippled AMMClawback.cpp preflight
 func (a *AMMClawback) Validate() error {

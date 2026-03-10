@@ -44,6 +44,18 @@ func (a *AMMCreate) TxType() tx.Type {
 	return tx.TypeAMMCreate
 }
 
+// GetAmountAsset returns the issue (currency + issuer) of the first asset (Amount field).
+// Implements ammCreateIssueProvider for the ValidAMM invariant checker.
+func (a *AMMCreate) GetAmountAsset() tx.Asset {
+	return tx.Asset{Currency: a.Amount.Currency, Issuer: a.Amount.Issuer}
+}
+
+// GetAmount2Asset returns the issue (currency + issuer) of the second asset (Amount2 field).
+// Implements ammCreateIssueProvider for the ValidAMM invariant checker.
+func (a *AMMCreate) GetAmount2Asset() tx.Asset {
+	return tx.Asset{Currency: a.Amount2.Currency, Issuer: a.Amount2.Issuer}
+}
+
 // Validate validates the AMMCreate transaction
 // Reference: rippled AMMCreate.cpp preflight
 func (a *AMMCreate) Validate() error {

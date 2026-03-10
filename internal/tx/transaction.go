@@ -130,6 +130,12 @@ type Common struct {
 	TicketSequence     *uint32         `json:"TicketSequence,omitempty"`
 	TxnSignature       string          `json:"TxnSignature,omitempty"`
 
+	// Delegate is the account delegating permission to execute this transaction.
+	// When present, the fee is charged to the delegate and signature is verified
+	// against the delegate's keys.
+	// Reference: rippled Transactor.cpp sfDelegate
+	Delegate string `json:"Delegate,omitempty"`
+
 	// RawBytes stores the original serialized bytes for hash computation
 	RawBytes []byte `json:"-"`
 
@@ -268,6 +274,9 @@ func (c *Common) ToMap() map[string]any {
 	}
 	if c.TxnSignature != "" {
 		m["TxnSignature"] = c.TxnSignature
+	}
+	if c.Delegate != "" {
+		m["Delegate"] = c.Delegate
 	}
 
 	return m
