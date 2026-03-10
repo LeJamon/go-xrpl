@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -52,14 +53,22 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		return nil, types.RpcErrorInternal("Failed to get account objects: " + err.Error())
 	}
 
-	// Build account_objects array
-	objects := make([]map[string]interface{}, len(result.AccountObjects))
-	for i, obj := range result.AccountObjects {
-		objects[i] = map[string]interface{}{
-			"index":           obj.Index,
-			"LedgerEntryType": obj.LedgerEntryType,
-			"data":            hex.EncodeToString(obj.Data),
+	// Build account_objects array with deserialized fields
+	objects := make([]map[string]interface{}, 0, len(result.AccountObjects))
+	for _, obj := range result.AccountObjects {
+		hexData := hex.EncodeToString(obj.Data)
+		decoded, err := binarycodec.Decode(hexData)
+		if err != nil {
+			// Fallback to raw data if decode fails
+			objects = append(objects, map[string]interface{}{
+				"index":           obj.Index,
+				"LedgerEntryType": obj.LedgerEntryType,
+				"data":            hexData,
+			})
+			continue
 		}
+		decoded["index"] = obj.Index
+		objects = append(objects, decoded)
 	}
 
 	response := map[string]interface{}{

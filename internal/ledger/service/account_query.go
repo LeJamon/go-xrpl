@@ -443,6 +443,9 @@ func (s *Service) GetAccountObjects(account string, ledgerIndex string, objType 
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
 
+	// Normalize type filter from rippled's snake_case to PascalCase
+	objType = normalizeObjectType(objType)
+
 	if limit == 0 || limit > 400 {
 		limit = 200
 	}

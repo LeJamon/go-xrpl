@@ -115,44 +115,140 @@ func formatRange(min, max uint32) string {
 	return string(rune(min)) + "-" + string(rune(max))
 }
 
-// getLedgerEntryType extracts the entry type from serialized data
+// getLedgerEntryType extracts the entry type from serialized data.
+// Type codes match LEDGER_ENTRY_TYPES in definitions.json.
 func getLedgerEntryType(data []byte) string {
 	if len(data) < 3 {
 		return ""
 	}
-	if data[0] != 0x11 { // UInt16 type code
+	if data[0] != 0x11 { // UInt16 field header for LedgerEntryType
 		return ""
 	}
 	entryType := uint16(data[1])<<8 | uint16(data[2])
 	switch entryType {
-	case 0x0061: // 'a' = AccountRoot
-		return "AccountRoot"
-	case 0x0063: // 'c' = Check
-		return "Check"
-	case 0x0064: // 'd' = DirNode
-		return "DirectoryNode"
-	case 0x0066: // 'f' = FeeSettings
-		return "FeeSettings"
-	case 0x0068: // 'h' = Escrow
-		return "Escrow"
-	case 0x006E: // 'n' = NFTokenPage
-		return "NFTokenPage"
-	case 0x006F: // 'o' = Offer
-		return "Offer"
-	case 0x0070: // 'p' = PayChannel
-		return "PayChannel"
-	case 0x0072: // 'r' = RippleState
-		return "RippleState"
-	case 0x0073: // 's' = SignerList
-		return "SignerList"
-	case 0x0074: // 't' = Ticket
-		return "Ticket"
-	case 0x0075: // 'u' = NFTokenOffer
+	case 55: // NFTokenOffer
 		return "NFTokenOffer"
-	case 0x0078: // 'x' = AMM
+	case 67: // Check
+		return "Check"
+	case 73: // DID
+		return "DID"
+	case 78: // NegativeUNL
+		return "NegativeUNL"
+	case 80: // NFTokenPage
+		return "NFTokenPage"
+	case 83: // SignerList
+		return "SignerList"
+	case 84: // Ticket
+		return "Ticket"
+	case 97: // AccountRoot
+		return "AccountRoot"
+	case 100: // DirectoryNode
+		return "DirectoryNode"
+	case 102: // Amendments
+		return "Amendments"
+	case 104: // LedgerHashes
+		return "LedgerHashes"
+	case 105: // Bridge
+		return "Bridge"
+	case 111: // Offer
+		return "Offer"
+	case 112: // DepositPreauth
+		return "DepositPreauth"
+	case 113: // XChainOwnedClaimID
+		return "XChainOwnedClaimID"
+	case 114: // RippleState
+		return "RippleState"
+	case 115: // FeeSettings
+		return "FeeSettings"
+	case 116: // XChainOwnedCreateAccountClaimID
+		return "XChainOwnedCreateAccountClaimID"
+	case 117: // Escrow
+		return "Escrow"
+	case 120: // PayChannel
+		return "PayChannel"
+	case 121: // AMM
 		return "AMM"
+	case 126: // MPTokenIssuance
+		return "MPTokenIssuance"
+	case 127: // MPToken
+		return "MPToken"
+	case 128: // Oracle
+		return "Oracle"
+	case 129: // Credential
+		return "Credential"
+	case 130: // PermissionedDomain
+		return "PermissionedDomain"
+	case 131: // Delegate
+		return "Delegate"
+	case 132: // Vault
+		return "Vault"
 	default:
 		return ""
+	}
+}
+
+// normalizeObjectType maps rippled's RPC type names (lowercase/snake_case)
+// to the PascalCase names used by getLedgerEntryType.
+func normalizeObjectType(objType string) string {
+	switch objType {
+	case "account":
+		return "AccountRoot"
+	case "amendments":
+		return "Amendments"
+	case "amm":
+		return "AMM"
+	case "bridge":
+		return "Bridge"
+	case "check":
+		return "Check"
+	case "credential":
+		return "Credential"
+	case "delegate":
+		return "Delegate"
+	case "deposit_preauth":
+		return "DepositPreauth"
+	case "did":
+		return "DID"
+	case "directory":
+		return "DirectoryNode"
+	case "escrow":
+		return "Escrow"
+	case "fee":
+		return "FeeSettings"
+	case "hashes":
+		return "LedgerHashes"
+	case "mptoken":
+		return "MPToken"
+	case "mpt_issuance":
+		return "MPTokenIssuance"
+	case "nft_offer":
+		return "NFTokenOffer"
+	case "nft_page":
+		return "NFTokenPage"
+	case "nunl":
+		return "NegativeUNL"
+	case "offer":
+		return "Offer"
+	case "oracle":
+		return "Oracle"
+	case "payment_channel":
+		return "PayChannel"
+	case "permissioned_domain":
+		return "PermissionedDomain"
+	case "state":
+		return "RippleState"
+	case "signer_list":
+		return "SignerList"
+	case "ticket":
+		return "Ticket"
+	case "vault":
+		return "Vault"
+	case "xchain_owned_claim_id":
+		return "XChainOwnedClaimID"
+	case "xchain_owned_create_account_claim_id":
+		return "XChainOwnedCreateAccountClaimID"
+	default:
+		return objType
 	}
 }
 
