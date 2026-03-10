@@ -302,10 +302,10 @@ func (n *TransactionLeafNode) SerializeForWire() ([]byte, error) {
 		return nil, ErrNilItem
 	}
 	var result []byte
-	// Add transaction + metadata data (no prefix for wire format)
+	// Add transaction data (no prefix for wire format)
+	// Note: key is NOT included — it is derived by hashing the data (sha512Half(txID prefix, data))
+	// Reference: rippled SHAMapTxLeafNode.h serializeForWire()
 	result = append(result, n.item.Data()...)
-	key := n.item.Key()
-	result = append(result, key[:]...)
 	result = append(result, protocol.WireTypeTransaction)
 
 	return result, nil

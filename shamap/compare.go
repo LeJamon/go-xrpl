@@ -109,8 +109,8 @@ func (sm *SHAMap) handleInnerComparison(ourNode, otherNode Node, other *SHAMap, 
 				})
 			}
 		} else if ourChild == nil && otherChild != nil {
-			// Other has a branch, we don't
-			complete, err := other.walkBranch(otherInner, nil, false, result, maxCount)
+			// Other has a branch, we don't — walk the specific child
+			complete, err := other.walkBranch(otherChild, nil, false, result, maxCount)
 			if err != nil {
 				return nil, err
 			}
@@ -118,8 +118,8 @@ func (sm *SHAMap) handleInnerComparison(ourNode, otherNode Node, other *SHAMap, 
 				return nil, nil // Signal truncation
 			}
 		} else if ourChild != nil {
-			// We have a branch, other doesn't
-			complete, err := sm.walkBranch(ourInner, nil, true, result, maxCount)
+			// We have a branch, other doesn't — walk the specific child
+			complete, err := sm.walkBranch(ourChild, nil, true, result, maxCount)
 			if err != nil {
 				return nil, err
 			}
@@ -235,8 +235,9 @@ func (sm *SHAMap) compareUnsafe(other *SHAMap, maxCount int) (*DifferenceSet, er
 
 // walkBranch walks a branch of a SHAMap that's matched by an empty branch
 // or single item in the other map
-func (sm *SHAMap) walkBranch(node *InnerNode, otherMapItem *Item, isFirstMap bool, differences *DifferenceSet, maxCount *int) (bool, error) {
+func (sm *SHAMap) walkBranch(node Node, otherMapItem *Item, isFirstMap bool, differences *DifferenceSet, maxCount *int) (bool, error) {
 	// Use a stack to traverse the branch
+	// Reference: rippled SHAMapDelta.cpp walkBranch() accepts SHAMapTreeNode* (any node type)
 	nodeStack := make([]Node, 0)
 	nodeStack = append(nodeStack, node)
 
@@ -638,13 +639,13 @@ func (sm *SHAMap) handleInnerComparisonWithChannel(ourNode, otherNode Node, othe
 				})
 			}
 		} else if ourChild == nil && otherChild != nil {
-			// Other has a branch, we don't
-			if err := other.walkBranchWithChannel(otherInner, nil, false, ch); err != nil {
+			// Other has a branch, we don't — walk the specific child
+			if err := other.walkBranchWithChannel(otherChild, nil, false, ch); err != nil {
 				return nil, err
 			}
 		} else if ourChild != nil {
-			// We have a branch, other doesn't
-			if err := sm.walkBranchWithChannel(ourInner, nil, true, ch); err != nil {
+			// We have a branch, other doesn't — walk the specific child
+			if err := sm.walkBranchWithChannel(ourChild, nil, true, ch); err != nil {
 				return nil, err
 			}
 		}
@@ -655,8 +656,9 @@ func (sm *SHAMap) handleInnerComparisonWithChannel(ourNode, otherNode Node, othe
 }
 
 // walkBranchWithChannel walks a branch using channel to send differences
-func (sm *SHAMap) walkBranchWithChannel(node *InnerNode, otherMapItem *Item, isFirstMap bool, ch chan<- DifferenceItem) error {
+func (sm *SHAMap) walkBranchWithChannel(node Node, otherMapItem *Item, isFirstMap bool, ch chan<- DifferenceItem) error {
 	// Use a stack to traverse the branch
+	// Reference: rippled SHAMapDelta.cpp walkBranch() accepts SHAMapTreeNode* (any node type)
 	nodeStack := make([]Node, 0)
 	nodeStack = append(nodeStack, node)
 
