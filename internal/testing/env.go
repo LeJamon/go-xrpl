@@ -642,6 +642,43 @@ func (e *TestEnv) Submit(transaction interface{}) TxResult {
 	}
 }
 
+// SubmitPseudo submits a pseudo-transaction (EnableAmendment, SetFee, UNLModify)
+// directly to the engine. Pseudo-transactions bypass account lookup, sequence
+// auto-fill, fee deduction, and signature verification.
+// Reference: rippled Change.cpp — pseudo-txs have zero account, zero fee, no sigs.
+func (e *TestEnv) SubmitPseudo(transaction interface{}) TxResult {
+	e.t.Helper()
+
+	txn, ok := transaction.(tx.Transaction)
+	if !ok {
+		e.t.Fatalf("Transaction does not implement tx.Transaction interface")
+		return TxResult{Code: "temINVALID", Success: false, Message: "Invalid transaction type"}
+	}
+
+	parentCloseTime := uint32(e.clock.Now().Unix() - 946684800)
+	engineConfig := tx.EngineConfig{
+		BaseFee:                   e.baseFee,
+		ReserveBase:               e.reserveBase,
+		ReserveIncrement:          e.reserveIncrement,
+		LedgerSequence:            e.ledger.Sequence(),
+		SkipSignatureVerification: true,
+		Rules:                     e.rulesBuilder.Build(),
+		ParentCloseTime:           parentCloseTime,
+		NetworkID:                 e.networkID,
+		ParentHash:                e.ledger.ParentHash(),
+	}
+
+	engine := tx.NewEngine(e.ledger, engineConfig)
+	applyResult := engine.Apply(txn)
+
+	return TxResult{
+		Code:     applyResult.Result.String(),
+		Success:  applyResult.Result.IsSuccess(),
+		Message:  applyResult.Message,
+		Metadata: applyResult.Metadata,
+	}
+}
+
 // Balance returns the XRP balance of an account in drops.
 func (e *TestEnv) Balance(acc *Account) uint64 {
 	e.t.Helper()

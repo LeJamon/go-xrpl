@@ -1,11 +1,14 @@
 package ledgerstatefix
 
 import (
+	"bytes"
 	"errors"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/nftoken"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -115,12 +118,252 @@ func (l *LedgerStateFix) RequiredAmendments() [][32]byte {
 }
 
 // Apply applies the LedgerStateFix transaction to the ledger.
-func (l *LedgerStateFix) Apply() tx.Result {
-	if l.Owner != "" {
-		_, err := state.DecodeAccountID(l.Owner)
+// This implements the Appliable interface: Apply(ctx *tx.ApplyContext) tx.Result
+// Reference: rippled LedgerStateFix.cpp preclaim() + doApply()
+func (l *LedgerStateFix) Apply(ctx *tx.ApplyContext) tx.Result {
+	switch l.LedgerFixType {
+	case LedgerFixTypeNFTokenPageLink:
+		// Preclaim: verify owner account exists
+		// Reference: rippled LedgerStateFix.cpp preclaim() lines 65-80
+		ownerID, err := state.DecodeAccountID(l.Owner)
 		if err != nil {
-			return tx.TecNO_TARGET
+			return tx.TecOBJECT_NOT_FOUND
+		}
+		ownerAccountKey := keylet.Account(ownerID)
+		exists, existsErr := ctx.View.Exists(ownerAccountKey)
+		if existsErr != nil || !exists {
+			return tx.TecOBJECT_NOT_FOUND
+		}
+
+		// doApply: repair NFToken directory links
+		// Reference: rippled LedgerStateFix.cpp doApply() lines 83-96
+		if !repairNFTokenDirectoryLinks(ctx.View, ownerID) {
+			return tx.TecFAILED_PROCESSING
+		}
+		return tx.TesSUCCESS
+
+	default:
+		// preflight should have caught this
+		return tx.TecINTERNAL
+	}
+}
+
+// repairNFTokenDirectoryLinks repairs the doubly-linked list of NFTokenPages
+// for an account. Returns true if any repairs were made, false if there was
+// nothing to repair or no pages exist.
+// Reference: rippled NFTokenUtils.cpp repairNFTokenDirectoryLinks() lines 717-834
+func repairNFTokenDirectoryLinks(view tx.LedgerView, owner [20]byte) bool {
+	didRepair := false
+
+	last := keylet.NFTokenPageMax(owner)
+	min := keylet.NFTokenPageMin(owner)
+
+	// Find the first page: succ(nftpage_min.key, last.key.next())
+	// In rippled, succ(start, upperBound) returns the first key in [start, upperBound).
+	// Go's Succ(key) returns the first key > key. We start from one less than min
+	// to find entries >= min. But since min has the owner prefix with all-zero low bits,
+	// we actually want to find the first page key >= min. We use Succ with key that is
+	// one less than min.key. However, a simpler approach: use Succ(key) where key is
+	// one byte before min. But NFTokenPage keys are [owner_20 | low_12], so min is
+	// [owner_20 | 0x000...000]. We need the first entry with key >= min and <= last.
+	//
+	// rippled: view.succ(keylet::nftpage_min(owner).key, last.key.next())
+	// This finds the first key >= min.key and < last.key.next().
+	// In Go: we can use Succ with a key that is one less than min to get >= min.
+	// Compute min.key - 1:
+	searchKey := decrementKey(min.Key)
+
+	firstKey, firstData, found, err := view.Succ(searchKey)
+	if err != nil || !found {
+		return didRepair
+	}
+
+	// Check if the found key is within the owner's page range
+	if bytes.Compare(firstKey[:], min.Key[:]) < 0 || bytes.Compare(firstKey[:], last.Key[:]) > 0 {
+		return didRepair
+	}
+
+	// If no page found at this key, fall back to last page
+	// rippled: .value_or(last.key) means use last.key if succ returns nothing
+	pageKey := firstKey
+	pageData := firstData
+
+	// Parse the page
+	page, parseErr := state.ParseNFTokenPage(pageData)
+	if parseErr != nil {
+		return didRepair
+	}
+
+	// Single page case: page key == last key
+	// Reference: rippled lines 731-747
+	if pageKey == last.Key {
+		// There's only one page. It should have no links.
+		var emptyHash [32]byte
+		nextPresent := page.NextPageMin != emptyHash
+		prevPresent := page.PreviousPageMin != emptyHash
+
+		if nextPresent || prevPresent {
+			didRepair = true
+			if prevPresent {
+				page.PreviousPageMin = emptyHash
+			}
+			if nextPresent {
+				page.NextPageMin = emptyHash
+			}
+			if serialized, serErr := nftoken.SerializeNFTokenPage(page); serErr == nil {
+				pageKl := keylet.Keylet{Type: keylet.NFTokenPageMax(owner).Type, Key: pageKey}
+				_ = view.Update(pageKl, serialized)
+			}
+		}
+		return didRepair
+	}
+
+	// Multiple pages case.
+	// First page should not contain a previous link.
+	// Reference: rippled lines 749-757
+	var emptyHash [32]byte
+	if page.PreviousPageMin != emptyHash {
+		didRepair = true
+		page.PreviousPageMin = emptyHash
+		if serialized, serErr := nftoken.SerializeNFTokenPage(page); serErr == nil {
+			pageKl := keylet.Keylet{Type: last.Type, Key: pageKey}
+			_ = view.Update(pageKl, serialized)
 		}
 	}
-	return tx.TesSUCCESS
+
+	// Walk pairs using succ
+	// Reference: rippled lines 759-786
+	var nextPage *state.NFTokenPageData
+	var nextPageKey [32]byte
+	foundNextPage := false
+
+	for {
+		// Find next page: succ(page.key.next(), last.key.next())
+		// In Go: Succ(pageKey) returns first key > pageKey
+		nKey, nData, nFound, nErr := view.Succ(pageKey)
+		if nErr != nil || !nFound {
+			break
+		}
+		// Check upper bound: key must be <= last.key
+		if bytes.Compare(nKey[:], last.Key[:]) > 0 {
+			break
+		}
+
+		nextPageKey = nKey
+		nParsed, nParseErr := state.ParseNFTokenPage(nData)
+		if nParseErr != nil {
+			break
+		}
+		nextPage = nParsed
+		foundNextPage = true
+
+		// Verify page -> nextPage forward link
+		// Reference: rippled lines 765-771
+		if page.NextPageMin != nextPageKey {
+			didRepair = true
+			page.NextPageMin = nextPageKey
+			if serialized, serErr := nftoken.SerializeNFTokenPage(page); serErr == nil {
+				pageKl := keylet.Keylet{Type: last.Type, Key: pageKey}
+				_ = view.Update(pageKl, serialized)
+			}
+		}
+
+		// Verify nextPage -> page backward link
+		// Reference: rippled lines 773-779
+		if nextPage.PreviousPageMin != pageKey {
+			didRepair = true
+			nextPage.PreviousPageMin = pageKey
+			if serialized, serErr := nftoken.SerializeNFTokenPage(nextPage); serErr == nil {
+				nKl := keylet.Keylet{Type: last.Type, Key: nextPageKey}
+				_ = view.Update(nKl, serialized)
+			}
+		}
+
+		// If nextPage is the last page, break out for special handling
+		// Reference: rippled lines 781-783
+		if nextPageKey == last.Key {
+			break
+		}
+
+		// Move forward
+		page = nextPage
+		pageKey = nextPageKey
+	}
+
+	// When we arrive here, nextPage should have the same index as last.
+	// If not, we need to fix it by moving the current last page's contents
+	// to the correct final position.
+	// Reference: rippled lines 790-821
+	if !foundNextPage || nextPageKey != last.Key {
+		// page is the actual last page, but it doesn't have the expected final index.
+		// Move its contents to a new page at the correct last.Key position.
+		didRepair = true
+
+		newLastPage := &state.NFTokenPageData{
+			NFTokens: page.NFTokens,
+		}
+
+		// If page has a PreviousPageMin link, copy it and fix the previous page's
+		// NextPageMin to point to the new last page.
+		// Reference: rippled lines 806-818
+		if page.PreviousPageMin != emptyHash {
+			newLastPage.PreviousPageMin = page.PreviousPageMin
+
+			// Fix up the NextPageMin link in the previous page
+			prevPageKl := keylet.Keylet{Type: last.Type, Key: page.PreviousPageMin}
+			prevData, prevErr := view.Read(prevPageKl)
+			if prevErr != nil {
+				return false
+			}
+			prevPage, prevParseErr := state.ParseNFTokenPage(prevData)
+			if prevParseErr != nil {
+				return false
+			}
+			prevPage.NextPageMin = last.Key
+			if serialized, serErr := nftoken.SerializeNFTokenPage(prevPage); serErr == nil {
+				_ = view.Update(prevPageKl, serialized)
+			}
+		}
+
+		// Erase the old page and insert the new one at the correct position
+		// Reference: rippled lines 819-821
+		oldPageKl := keylet.Keylet{Type: last.Type, Key: pageKey}
+		_ = view.Erase(oldPageKl)
+
+		if serialized, serErr := nftoken.SerializeNFTokenPage(newLastPage); serErr == nil {
+			_ = view.Insert(last, serialized)
+		}
+
+		return didRepair
+	}
+
+	// nextPage is the last page. It should not have a NextPageMin link.
+	// Reference: rippled lines 824-833
+	if nextPage != nil && nextPage.NextPageMin != emptyHash {
+		didRepair = true
+		nextPage.NextPageMin = emptyHash
+		if serialized, serErr := nftoken.SerializeNFTokenPage(nextPage); serErr == nil {
+			nKl := keylet.Keylet{Type: last.Type, Key: nextPageKey}
+			_ = view.Update(nKl, serialized)
+		}
+	}
+
+	return didRepair
 }
+
+// decrementKey returns key - 1 (treating the 32-byte key as a big-endian integer).
+// This is used to find entries >= a given key using Succ (which returns > key).
+func decrementKey(key [32]byte) [32]byte {
+	result := key
+	for i := 31; i >= 0; i-- {
+		if result[i] > 0 {
+			result[i]--
+			return result
+		}
+		result[i] = 0xFF
+	}
+	return result
+}
+
+// Ensure LedgerStateFix implements Appliable.
+var _ tx.Appliable = (*LedgerStateFix)(nil)

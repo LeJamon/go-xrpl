@@ -1,7 +1,10 @@
 package pseudo
 
 import (
+	"encoding/hex"
+
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -50,27 +53,145 @@ func (u *UNLModify) IsPseudoTransaction() bool {
 }
 
 // Apply applies the UNLModify transaction to ledger state.
-// Reference: rippled Change.cpp applyUNLModify()
-//
-// TODO: Implement full UNL modify logic for network mode:
-//   - Verify this is a flag ledger: isFlagLedger(view.seq()) — i.e. (seq % 256 == 0)
-//   - Validate required fields: UNLModifyDisabling (0 or 1), LedgerSequence, UNLModifyValidator
-//   - Verify LedgerSequence matches current ledger sequence
-//   - Validate UNLModifyValidator is a valid public key
-//   - Read/create negative UNL SLE at keylet::negativeUNL()
-//     (needs keylet.NegativeUNL() — not yet implemented)
-//   - If disabling (UNLModifyDisabling == 1):
-//     - Must not already have a ValidatorToDisable
-//     - Must not conflict with ValidatorToReEnable
-//     - Must not already be in the DisabledValidators array
-//     - Set sfValidatorToDisable on the SLE
-//   - If re-enabling (UNLModifyDisabling == 0):
-//     - Must not already have a ValidatorToReEnable
-//     - Must not conflict with ValidatorToDisable
-//     - Must already be in the DisabledValidators array
-//     - Set sfValidatorToReEnable on the SLE
-//   - Update the negative UNL SLE
+// Reference: rippled Change.cpp applyUNLModify() lines 388-512
 func (u *UNLModify) Apply(ctx *tx.ApplyContext) tx.Result {
-	// Stub: not needed for standalone mode (no validators in negative UNL)
+	// 1. Validate flag ledger
+	// Reference: rippled lines 390-395
+	if !isFlagLedger(ctx.Config.LedgerSequence) {
+		return tx.TefFAILURE
+	}
+
+	// 2. Validate required fields
+	// Reference: rippled lines 397-404
+	if u.UNLModifyDisabling == nil || *u.UNLModifyDisabling > 1 {
+		return tx.TefFAILURE
+	}
+	if u.LedgerSequence == nil || u.UNLModifyValidator == "" {
+		return tx.TefFAILURE
+	}
+
+	disabling := *u.UNLModifyDisabling == 1
+	seq := *u.LedgerSequence
+
+	// 3. Verify LedgerSequence matches current ledger
+	// Reference: rippled lines 407-412
+	if seq != ctx.Config.LedgerSequence {
+		return tx.TefFAILURE
+	}
+
+	// 4. Parse and validate the validator public key
+	// Reference: rippled lines 414-419
+	validator, err := hex.DecodeString(u.UNLModifyValidator)
+	if err != nil || len(validator) == 0 {
+		return tx.TefFAILURE
+	}
+	// Validate public key type: ED25519 (0xED prefix, 33 bytes) or secp256k1 (0x02/0x03, 33 bytes)
+	if !isValidPublicKeyType(validator) {
+		return tx.TefFAILURE
+	}
+
+	// 5. Get or create the NegativeUNL SLE
+	// Reference: rippled lines 426-432
+	k := keylet.NegativeUNL()
+	var sle *NegativeUNLSLE
+	isNew := false
+
+	data, readErr := ctx.View.Read(k)
+	if readErr != nil || data == nil {
+		sle = &NegativeUNLSLE{}
+		isNew = true
+	} else {
+		sle, err = ParseNegativeUNLSLE(data)
+		if err != nil {
+			return tx.TefFAILURE
+		}
+	}
+
+	// 6. Check if validator is in the disabled list
+	// Reference: rippled lines 434-447
+	found := sle.ContainsValidator(validator)
+
+	if disabling {
+		// 7. Disabling path
+		// Reference: rippled lines 449-478
+
+		// Cannot have more than one ValidatorToDisable
+		if len(sle.ValidatorToDisable) > 0 {
+			return tx.TefFAILURE
+		}
+
+		// Cannot be the same as ValidatorToReEnable
+		if len(sle.ValidatorToReEnable) > 0 && bytesEqual(sle.ValidatorToReEnable, validator) {
+			return tx.TefFAILURE
+		}
+
+		// Cannot already be in the disabled list
+		if found {
+			return tx.TefFAILURE
+		}
+
+		sle.ValidatorToDisable = validator
+	} else {
+		// 8. Re-enabling path
+		// Reference: rippled lines 479-508
+
+		// Cannot have more than one ValidatorToReEnable
+		if len(sle.ValidatorToReEnable) > 0 {
+			return tx.TefFAILURE
+		}
+
+		// Cannot be the same as ValidatorToDisable
+		if len(sle.ValidatorToDisable) > 0 && bytesEqual(sle.ValidatorToDisable, validator) {
+			return tx.TefFAILURE
+		}
+
+		// Must be in the disabled list
+		if !found {
+			return tx.TefFAILURE
+		}
+
+		sle.ValidatorToReEnable = validator
+	}
+
+	// 9. Serialize and write back
+	// Reference: rippled line 510
+	serialized, serErr := SerializeNegativeUNLSLE(sle)
+	if serErr != nil {
+		return tx.TefFAILURE
+	}
+
+	if isNew {
+		if insertErr := ctx.View.Insert(k, serialized); insertErr != nil {
+			return tx.TefFAILURE
+		}
+	} else {
+		if updateErr := ctx.View.Update(k, serialized); updateErr != nil {
+			return tx.TefFAILURE
+		}
+	}
+
 	return tx.TesSUCCESS
+}
+
+// isFlagLedger returns true if the ledger sequence is a flag ledger (multiple of 256).
+// Reference: rippled isFlagLedger()
+func isFlagLedger(seq uint32) bool {
+	return seq%256 == 0
+}
+
+// isValidPublicKeyType validates that the byte slice is a valid public key.
+// ED25519 keys are 33 bytes with 0xED prefix.
+// secp256k1 keys are 33 bytes with 0x02 or 0x03 prefix.
+func isValidPublicKeyType(key []byte) bool {
+	if len(key) != 33 {
+		return false
+	}
+	switch key[0] {
+	case 0xED: // ED25519
+		return true
+	case 0x02, 0x03: // secp256k1 compressed
+		return true
+	default:
+		return false
+	}
 }

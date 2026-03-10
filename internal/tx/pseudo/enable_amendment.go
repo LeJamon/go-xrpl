@@ -1,9 +1,12 @@
 package pseudo
 
 import (
+	"encoding/hex"
 	"errors"
+	"strings"
 
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 var (
@@ -64,17 +67,128 @@ func (e *EnableAmendment) IsPseudoTransaction() bool {
 }
 
 // Apply applies the EnableAmendment transaction to ledger state.
-// Reference: rippled Change.cpp applyAmendment()
-//
-// TODO: Implement full amendment apply logic for network mode:
-//   - Read/create amendments SLE at keylet::amendments()
-//   - If tfGotMajority: add amendment hash to sfMajorities array with close time
-//   - If tfLostMajority: remove amendment hash from sfMajorities array
-//   - If no flags: enable the amendment — add to sfAmendments vector,
-//     call AmendmentTable.enable(), check if supported (block server if not)
-//   - Handle activateTrustLinesToSelfFix() special case
-//   - Serialize and update the amendments SLE
+// Reference: rippled Change.cpp applyAmendment() lines 248-345
 func (e *EnableAmendment) Apply(ctx *tx.ApplyContext) tx.Result {
-	// Stub: not needed for standalone mode (no validators voting on amendments)
+	// Parse the amendment hash from the transaction
+	// Reference: rippled line 251: uint256 amendment(ctx_.tx.getFieldH256(sfAmendment))
+	amendmentHash, err := parseAmendmentHash(e.Amendment)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Get or create the Amendments SLE
+	// Reference: rippled lines 253-261
+	k := keylet.Amendments()
+	var sle *AmendmentsSLE
+
+	data, readErr := ctx.View.Read(k)
+	if readErr != nil || data == nil {
+		// Create new empty Amendments SLE
+		sle = &AmendmentsSLE{}
+	} else {
+		sle, err = ParseAmendmentsSLE(data)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+	}
+
+	isNew := data == nil || readErr != nil
+
+	// Check if amendment is already enabled
+	// Reference: rippled lines 265-267
+	if sle.ContainsAmendment(amendmentHash) {
+		return tx.TefALREADY
+	}
+
+	// Parse flags
+	// Reference: rippled lines 269-275
+	var flags uint32
+	if e.Common.Flags != nil {
+		flags = *e.Common.Flags
+	}
+	gotMajority := (flags & tfGotMajority) != 0
+	lostMajority := (flags & tfLostMajority) != 0
+
+	if gotMajority && lostMajority {
+		return tx.TemINVALID_FLAG
+	}
+
+	// Build new majorities list, filtering out the target amendment
+	// Reference: rippled lines 277-298
+	newMajorities := make([]MajorityEntry, 0, len(sle.Majorities))
+	found := false
+
+	for _, entry := range sle.Majorities {
+		if entry.Amendment == amendmentHash {
+			if gotMajority {
+				// Already in majorities and we're trying to add again
+				return tx.TefALREADY
+			}
+			found = true
+			// Don't copy this entry (it's being removed for lostMajority,
+			// or it will be removed for enable)
+		} else {
+			// Pass through other entries
+			newMajorities = append(newMajorities, entry)
+		}
+	}
+
+	// lostMajority but amendment wasn't in the majorities list
+	// Reference: rippled lines 300-301
+	if !found && lostMajority {
+		return tx.TefALREADY
+	}
+
+	// Handle gotMajority: add new majority entry
+	// Reference: rippled lines 303-317
+	if gotMajority {
+		newMajorities = append(newMajorities, MajorityEntry{
+			Amendment: amendmentHash,
+			CloseTime: ctx.Config.ParentCloseTime,
+		})
+	} else if !lostMajority {
+		// No flags = enable the amendment
+		// Reference: rippled lines 318-335
+		sle.Amendments = append(sle.Amendments, amendmentHash)
+
+		// Note: activateTrustLinesToSelfFix() and AmendmentTable.enable() are
+		// not implemented since they require full network infrastructure.
+		// The amendment is recorded in the ledger state which is the primary goal.
+	}
+
+	// Update the majorities list
+	// Reference: rippled lines 337-340
+	sle.Majorities = newMajorities
+
+	// Serialize and write back
+	serialized, serErr := SerializeAmendmentsSLE(sle)
+	if serErr != nil {
+		return tx.TefINTERNAL
+	}
+
+	if isNew {
+		if insertErr := ctx.View.Insert(k, serialized); insertErr != nil {
+			return tx.TefINTERNAL
+		}
+	} else {
+		if updateErr := ctx.View.Update(k, serialized); updateErr != nil {
+			return tx.TefINTERNAL
+		}
+	}
+
 	return tx.TesSUCCESS
+}
+
+// parseAmendmentHash parses a hex-encoded amendment hash string into [32]byte.
+func parseAmendmentHash(hashStr string) ([32]byte, error) {
+	var hash [32]byte
+	b, err := hex.DecodeString(strings.TrimPrefix(hashStr, "0x"))
+	if err != nil {
+		return hash, err
+	}
+	if len(b) != 32 {
+		return hash, errors.New("amendment hash must be 32 bytes")
+	}
+	copy(hash[:], b)
+	return hash, nil
 }

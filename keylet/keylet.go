@@ -40,6 +40,7 @@ const (
 	spaceMPToken    uint16 = 't' // MPToken
 	spaceCredential uint16 = 'D' // Credential
 	spacePermDomain uint16 = 'b' // Permissioned domain
+	spaceNegativeUNL uint16 = 'N' // Negative UNL (singleton)
 	spaceVault      uint16 = 'V' // Vault
 	spaceDelegate   uint16 = 'E' // Delegate
 )
@@ -88,6 +89,15 @@ func Amendments() Keylet {
 	return Keylet{
 		Type: entry.TypeAmendments,
 		Key:  indexHash(spaceAmendments),
+	}
+}
+
+// NegativeUNL returns the keylet for the singleton negative UNL entry.
+// Reference: rippled Indexes.cpp negativeUNL()
+func NegativeUNL() Keylet {
+	return Keylet{
+		Type: entry.TypeNegativeUNL,
+		Key:  indexHash(spaceNegativeUNL),
 	}
 }
 

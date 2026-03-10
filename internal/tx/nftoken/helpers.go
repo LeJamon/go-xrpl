@@ -1454,6 +1454,12 @@ func adjustOwnerCountViaView(view tx.LedgerView, accountID [20]byte, delta int) 
 // Serialization helpers
 // ---------------------------------------------------------------------------
 
+// SerializeNFTokenPage serializes an NFToken page ledger entry.
+// Exported so that LedgerStateFix can use it to repair pages.
+func SerializeNFTokenPage(page *state.NFTokenPageData) ([]byte, error) {
+	return serializeNFTokenPage(page)
+}
+
 // serializeNFTokenPage serializes an NFToken page ledger entry
 func serializeNFTokenPage(page *state.NFTokenPageData) ([]byte, error) {
 	jsonObj := map[string]any{
