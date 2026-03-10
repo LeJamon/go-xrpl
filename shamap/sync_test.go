@@ -70,7 +70,7 @@ func TestGetMissingNodes(t *testing.T) {
 	for i := byte(0); i < 10; i++ {
 		var key [32]byte
 		key[0] = i
-		if err := sMap.Put(key, []byte{i}); err != nil {
+		if err := sMap.Put(key, make([]byte, 12)); err != nil {
 			t.Fatalf("Failed to put: %v", err)
 		}
 	}
@@ -128,7 +128,7 @@ func TestIsComplete(t *testing.T) {
 	// Add items
 	var key [32]byte
 	key[0] = 1
-	if err := sMap.Put(key, []byte{1}); err != nil {
+	if err := sMap.Put(key, make([]byte, 12)); err != nil {
 		t.Fatalf("Failed to put: %v", err)
 	}
 
@@ -157,7 +157,7 @@ func TestSyncProgress(t *testing.T) {
 	for i := byte(0); i < 5; i++ {
 		var key [32]byte
 		key[0] = i
-		if err := sMap.Put(key, []byte{i}); err != nil {
+		if err := sMap.Put(key, make([]byte, 12)); err != nil {
 			t.Fatalf("Failed to put: %v", err)
 		}
 	}
@@ -177,7 +177,7 @@ func TestAddRootNode(t *testing.T) {
 
 	var key [32]byte
 	key[0] = 1
-	if err := sourceMap.Put(key, []byte{1, 2, 3}); err != nil {
+	if err := sourceMap.Put(key, make([]byte, 12)); err != nil {
 		t.Fatalf("Failed to put: %v", err)
 	}
 

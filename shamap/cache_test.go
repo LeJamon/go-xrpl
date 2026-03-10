@@ -31,7 +31,7 @@ func TestTreeNodeCache(t *testing.T) {
 		cache := NewTreeNodeCache(100)
 
 		// Create a test node
-		item := NewItem([32]byte{1}, []byte{1, 2, 3})
+		item := NewItem([32]byte{1}, make([]byte, 12))
 		node, err := NewAccountStateLeafNode(item)
 		if err != nil {
 			t.Fatalf("Failed to create node: %v", err)
@@ -72,7 +72,7 @@ func TestTreeNodeCache(t *testing.T) {
 	t.Run("Evict", func(t *testing.T) {
 		cache := NewTreeNodeCache(100)
 
-		item := NewItem([32]byte{1}, []byte{1, 2, 3})
+		item := NewItem([32]byte{1}, make([]byte, 12))
 		node, _ := NewAccountStateLeafNode(item)
 		hash := node.Hash()
 
@@ -97,7 +97,7 @@ func TestTreeNodeCache(t *testing.T) {
 		// Add 3 nodes
 		for i := byte(1); i <= 3; i++ {
 			key := [32]byte{i}
-			item := NewItem(key, []byte{i})
+			item := NewItem(key, make([]byte, 12))
 			node, _ := NewAccountStateLeafNode(item)
 			cache.Put(node.Hash(), node)
 		}
@@ -108,7 +108,7 @@ func TestTreeNodeCache(t *testing.T) {
 
 		// Add 4th node - should evict oldest
 		key4 := [32]byte{4}
-		item4 := NewItem(key4, []byte{4})
+		item4 := NewItem(key4, make([]byte, 12))
 		node4, _ := NewAccountStateLeafNode(item4)
 		cache.Put(node4.Hash(), node4)
 
@@ -122,7 +122,7 @@ func TestTreeNodeCache(t *testing.T) {
 
 		for i := byte(1); i <= 5; i++ {
 			key := [32]byte{i}
-			item := NewItem(key, []byte{i})
+			item := NewItem(key, make([]byte, 12))
 			node, _ := NewAccountStateLeafNode(item)
 			cache.Put(node.Hash(), node)
 		}
@@ -141,7 +141,7 @@ func TestTreeNodeCache(t *testing.T) {
 	t.Run("Stats", func(t *testing.T) {
 		cache := NewTreeNodeCache(100)
 
-		item := NewItem([32]byte{1}, []byte{1})
+		item := NewItem([32]byte{1}, make([]byte, 12))
 		node, _ := NewAccountStateLeafNode(item)
 		hash := node.Hash()
 
@@ -175,7 +175,7 @@ func TestTreeNodeCache(t *testing.T) {
 			t.Errorf("Empty cache hit rate should be 0, got %f", cache.HitRate())
 		}
 
-		item := NewItem([32]byte{1}, []byte{1})
+		item := NewItem([32]byte{1}, make([]byte, 12))
 		node, _ := NewAccountStateLeafNode(item)
 		hash := node.Hash()
 
@@ -194,7 +194,7 @@ func TestTreeNodeCache(t *testing.T) {
 	t.Run("Contains", func(t *testing.T) {
 		cache := NewTreeNodeCache(100)
 
-		item := NewItem([32]byte{1}, []byte{1})
+		item := NewItem([32]byte{1}, make([]byte, 12))
 		node, _ := NewAccountStateLeafNode(item)
 		hash := node.Hash()
 

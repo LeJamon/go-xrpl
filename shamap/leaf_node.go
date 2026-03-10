@@ -32,6 +32,10 @@ func NewAccountStateLeafNode(item *Item) (*AccountStateLeafNode, error) {
 	if item == nil {
 		return nil, ErrNilItem
 	}
+	// Reference: rippled SHAMapLeafNode.cpp asserts item_->size() >= 12
+	if len(item.Data()) < 12 {
+		return nil, ErrItemTooSmall
+	}
 
 	n := &AccountStateLeafNode{
 		BaseNode: BaseNode{dirty: true},
@@ -233,6 +237,10 @@ func NewTransactionLeafNode(item *Item) (*TransactionLeafNode, error) {
 	if item == nil {
 		return nil, ErrNilItem
 	}
+	// Reference: rippled SHAMapLeafNode.cpp asserts item_->size() >= 12
+	if len(item.Data()) < 12 {
+		return nil, ErrItemTooSmall
+	}
 
 	n := &TransactionLeafNode{
 		BaseNode: BaseNode{dirty: true},
@@ -302,10 +310,10 @@ func (n *TransactionLeafNode) SerializeForWire() ([]byte, error) {
 		return nil, ErrNilItem
 	}
 	var result []byte
-	// Add transaction + metadata data (no prefix for wire format)
+	// Add transaction data (no prefix for wire format)
+	// Note: key is NOT included — it is derived by hashing the data (sha512Half(txID prefix, data))
+	// Reference: rippled SHAMapTxLeafNode.h serializeForWire()
 	result = append(result, n.item.Data()...)
-	key := n.item.Key()
-	result = append(result, key[:]...)
 	result = append(result, protocol.WireTypeTransaction)
 
 	return result, nil
@@ -413,6 +421,10 @@ type TransactionWithMetaLeafNode struct {
 func NewTransactionWithMetaLeafNode(item *Item) (*TransactionWithMetaLeafNode, error) {
 	if item == nil {
 		return nil, ErrNilItem
+	}
+	// Reference: rippled SHAMapLeafNode.cpp asserts item_->size() >= 12
+	if len(item.Data()) < 12 {
+		return nil, ErrItemTooSmall
 	}
 
 	n := &TransactionWithMetaLeafNode{
