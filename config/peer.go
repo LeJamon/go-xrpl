@@ -89,19 +89,13 @@ func (tq *TransactionQueueConfig) Validate() error {
 	return nil
 }
 
-// GetMaxUnknownTime returns the max unknown time with default if not set
+// GetMaxUnknownTime returns the max unknown time
 func (o *OverlayConfig) GetMaxUnknownTime() int {
-	if o.MaxUnknownTime == 0 {
-		return 600 // Default value
-	}
 	return o.MaxUnknownTime
 }
 
-// GetMaxDivergedTime returns the max diverged time with default if not set
+// GetMaxDivergedTime returns the max diverged time
 func (o *OverlayConfig) GetMaxDivergedTime() int {
-	if o.MaxDivergedTime == 0 {
-		return 300 // Default value
-	}
 	return o.MaxDivergedTime
 }
 
@@ -119,103 +113,67 @@ func (o *OverlayConfig) GetIPLimit() int {
 	return o.IPLimit
 }
 
-// GetLedgersInQueue returns ledgers in queue with default
+// GetLedgersInQueue returns ledgers in queue
 func (tq *TransactionQueueConfig) GetLedgersInQueue() int {
-	if tq.LedgersInQueue == 0 {
-		return 20
-	}
 	return tq.LedgersInQueue
 }
 
-// GetMinimumQueueSize returns minimum queue size with default
+// GetMinimumQueueSize returns minimum queue size
 func (tq *TransactionQueueConfig) GetMinimumQueueSize() int {
-	if tq.MinimumQueueSize == 0 {
-		return 2000
-	}
 	return tq.MinimumQueueSize
 }
 
-// GetRetrySequencePercent returns retry sequence percent with default
+// GetRetrySequencePercent returns retry sequence percent
 func (tq *TransactionQueueConfig) GetRetrySequencePercent() int {
-	if tq.RetrySequencePercent == 0 {
-		return 25
-	}
 	return tq.RetrySequencePercent
 }
 
-// GetMinimumEscalationMultiplier returns minimum escalation multiplier with default
+// GetMinimumEscalationMultiplier returns minimum escalation multiplier
 func (tq *TransactionQueueConfig) GetMinimumEscalationMultiplier() int {
-	if tq.MinimumEscalationMultiplier == 0 {
-		return 500
-	}
 	return tq.MinimumEscalationMultiplier
 }
 
-// GetMinimumTxnInLedger returns minimum transactions in ledger with default
+// GetMinimumTxnInLedger returns minimum transactions in ledger
 func (tq *TransactionQueueConfig) GetMinimumTxnInLedger() int {
-	if tq.MinimumTxnInLedger == 0 {
-		return 5
-	}
 	return tq.MinimumTxnInLedger
 }
 
-// GetMinimumTxnInLedgerStandalone returns minimum transactions in ledger for standalone with default
+// GetMinimumTxnInLedgerStandalone returns minimum transactions in ledger for standalone
 func (tq *TransactionQueueConfig) GetMinimumTxnInLedgerStandalone() int {
-	if tq.MinimumTxnInLedgerStandalone == 0 {
-		return 1000
-	}
 	return tq.MinimumTxnInLedgerStandalone
 }
 
-// GetTargetTxnInLedger returns target transactions in ledger with default
+// GetTargetTxnInLedger returns target transactions in ledger
 func (tq *TransactionQueueConfig) GetTargetTxnInLedger() int {
-	if tq.TargetTxnInLedger == 0 {
-		return 50
-	}
 	return tq.TargetTxnInLedger
 }
 
 // GetMaximumTxnInLedger returns maximum transactions in ledger (0 means no maximum)
 func (tq *TransactionQueueConfig) GetMaximumTxnInLedger() int {
-	return tq.MaximumTxnInLedger // 0 means no maximum
+	return tq.MaximumTxnInLedger
 }
 
-// GetNormalConsensusIncreasePercent returns normal consensus increase percent with default
+// GetNormalConsensusIncreasePercent returns normal consensus increase percent
 func (tq *TransactionQueueConfig) GetNormalConsensusIncreasePercent() int {
-	if tq.NormalConsensusIncreasePercent == 0 {
-		return 20
-	}
 	return tq.NormalConsensusIncreasePercent
 }
 
-// GetSlowConsensusDecreasePercent returns slow consensus decrease percent with default
+// GetSlowConsensusDecreasePercent returns slow consensus decrease percent
 func (tq *TransactionQueueConfig) GetSlowConsensusDecreasePercent() int {
-	if tq.SlowConsensusDecreasePercent == 0 {
-		return 50
-	}
 	return tq.SlowConsensusDecreasePercent
 }
 
-// GetMaximumTxnPerAccount returns maximum transactions per account with default
+// GetMaximumTxnPerAccount returns maximum transactions per account
 func (tq *TransactionQueueConfig) GetMaximumTxnPerAccount() int {
-	if tq.MaximumTxnPerAccount == 0 {
-		return 10
-	}
 	return tq.MaximumTxnPerAccount
 }
 
-// GetMinimumLastLedgerBuffer returns minimum last ledger buffer with default
+// GetMinimumLastLedgerBuffer returns minimum last ledger buffer
 func (tq *TransactionQueueConfig) GetMinimumLastLedgerBuffer() int {
-	if tq.MinimumLastLedgerBuffer == 0 {
-		return 2
-	}
 	return tq.MinimumLastLedgerBuffer
 }
 
-// GetZeroBaseFeeTransactionFeeLevel returns zero base fee transaction fee level with default
+// GetZeroBaseFeeTransactionFeeLevel returns zero base fee transaction fee level
 func (tq *TransactionQueueConfig) GetZeroBaseFeeTransactionFeeLevel() int {
-	if tq.ZeroBaseFeeTransactionFeeLevel == 0 {
-		return 256000
-	}
 	return tq.ZeroBaseFeeTransactionFeeLevel
 }

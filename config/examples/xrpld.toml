@@ -1,20 +1,92 @@
-# Example xrpld.toml configuration file
-# This is the TOML equivalent of rippled.cfg
+# goXRPLd configuration file
+# ALL fields listed here are REQUIRED unless marked as optional.
+# The server will refuse to start if any required field is missing.
+# Use 'xrpld generate-config' to create this file automatically.
 
 # =============================================================================
-# 1. Server Configuration
+# Top-level settings (MUST come before any [section] headers in TOML)
+# =============================================================================
+
+# Peer Protocol
+compression = false
+peer_private = 0         # 0 = normal, 1 = private
+peers_max = 21           # maximum peer connections
+max_transactions = 250   # job queue max (100-1000)
+
+# Peer discovery IPs (optional — empty list is valid)
+ips = [
+    "r.ripple.com 51235",
+    "sahyadri.isrdc.in 51235",
+    "hubs.xrpkuwait.com 51235",
+    "hub.xrpl-commons.org 51235"
+]
+
+# Fixed peer connections (optional)
+# ips_fixed = ["192.168.1.100 51235"]
+
+# Ripple Protocol
+relay_proposals = "trusted"      # all, trusted, drop_untrusted
+relay_validations = "all"        # all, trusted, drop_untrusted
+ledger_history = 256             # integer, "full", or "none"
+fetch_depth = "full"             # integer or "full"
+
+# Path finding
+path_search = 2
+path_search_fast = 2
+path_search_max = 3
+path_search_old = 2
+
+# Workers (0 = auto-detect)
+workers = 0
+io_workers = 0
+prefetch_workers = 0
+
+# Network: "main", "testnet", "devnet", or integer
+network_id = "main"
+
+ledger_replay = 0    # 0 = disabled, 1 = enabled
+
+# HTTPS Client
+ssl_verify = 1       # 0 = disabled, 1 = enabled
+
+# Database path (SQLite location)
+database_path = "/var/lib/xrpld/db"
+
+# Diagnostics
+debug_logfile = "/var/log/xrpld/debug.log"
+
+# Node sizing: tiny, small, medium, large, huge
+node_size = "medium"
+
+signing_support = false
+beta_rpc_api = 0
+
+# Validators file (optional — path to validators.toml or validators.txt)
+# validators_file = "validators.toml"
+
+# Genesis file (optional — omit to use built-in defaults)
+# genesis_file = "genesis.json"
+
+# Validation settings (optional — only for validator nodes)
+# validation_seed = "RASH BUSH MILK LOOK BAD BRIM AVID GAFF BAIT ROT POD LOVE"
+# validator_token = "base64-encoded-token"
+
+# RPC commands to run at startup (optional)
+rpc_startup = [
+    { command = "log_level", severity = "warning" }
+]
+
+# =============================================================================
+# Server Configuration
 # =============================================================================
 
 [server]
-# List of port names to enable - corresponds to port sections below
+# List of port names — each MUST have a corresponding [port_*] section below.
 ports = ["port_rpc_admin_local", "port_peer", "port_ws_admin_local"]
-
-# Default values that apply to all ports unless overridden
-port = 80
-ip = "0.0.0.0"
 
 # =============================================================================
 # Port Configurations
+# Required per port: port, ip, protocol
 # =============================================================================
 
 [port_rpc_admin_local]
@@ -24,13 +96,8 @@ admin = ["127.0.0.1"]
 protocol = "http"
 
 [port_peer]
-# Many servers still use the legacy port of 51235, so for backward-compatibility
-# we maintain that port number here. However, for new servers we recommend
-# changing this to the default port of 2459.
 port = 51235
 ip = "0.0.0.0"
-# alternatively, to accept connections on IPv4 + IPv6, use:
-# ip = "::"
 protocol = "peer"
 
 [port_ws_admin_local]
@@ -47,63 +114,39 @@ send_queue_limit = 500
 # protocol = "grpc"
 # secure_gateway = ["127.0.0.1"]
 
-# Uncomment to enable public WebSocket port
-# [port_ws_public]
-# port = 6005
-# ip = "127.0.0.1"
-# protocol = "wss"
-# send_queue_limit = 500
-# ssl_key = "/etc/ssl/private/server.key"
-# ssl_cert = "/etc/ssl/certs/server.crt"
-
 # =============================================================================
-# 2. Peer Protocol
+# Database
 # =============================================================================
 
-# Enable link compression (default: false)
-compression = false
+[node_db]
+type = "NuDB"                    # NuDB or RocksDB
+path = "/var/lib/xrpld/db/nudb"
+online_delete = 512
+advisory_delete = 0
+cache_size = 16384
+cache_age = 5                    # minutes
+fast_load = false
+earliest_seq = 32570
+delete_batch = 100
+back_off_milliseconds = 100
+age_threshold_seconds = 60
+recovery_wait_seconds = 5
 
-# Peer connection settings
-peer_private = 0  # 0 = normal, 1 = private
-peers_max = 0     # 0 = implementation default
+[sqlite]
+journal_mode = "wal"             # delete, truncate, persist, memory, wal, off
+synchronous = "normal"           # off, normal, full, extra
+temp_store = "file"              # default, file, memory
+page_size = 4096                 # power of 2, 512-65536
+journal_size_limit = 1582080
 
-# Maximum transactions in job queue (100-1000)
-max_transactions = 250
-
-# List of IP addresses for peer discovery
-ips = [
-    "r.ripple.com 51235",
-    "sahyadri.isrdc.in 51235", 
-    "hubs.xrpkuwait.com 51235",
-    "hub.xrpl-commons.org 51235"
-]
-
-# Fixed peer connections (always maintain connections to these)
-# ips_fixed = [
-#     "192.168.1.100 51235",
-#     "example.com 51235"
-# ]
-
-# Node seed for clustering (optional)
-# node_seed = "RASH BUSH MILK LOOK BAD BRIM AVID GAFF BAIT ROT POD LOVE"
-
-# Trusted cluster nodes (space-separated: pubkey name)
-# cluster_nodes = [
-#     "n9LdgEtkmGB9E2h3K4Vp7iGUaKuq23Zr32ehxiU8FWY7xoxbWTSA cluster_node_1"
-# ]
+# =============================================================================
+# Overlay & Transaction Queue
+# =============================================================================
 
 [overlay]
-# If server has a known public IP, specify it here
-# public_ip = "203.0.113.10"
+max_unknown_time = 600   # seconds (300-1800)
+max_diverged_time = 300  # seconds (60-900)
 
-# Maximum connections per IP (0 = auto-configure)
-ip_limit = 0
-
-# Connection timeout settings (seconds)
-max_unknown_time = 600   # 300-1800
-max_diverged_time = 300  # 60-900
-
-# Transaction queue settings (EXPERIMENTAL)
 [transaction_queue]
 ledgers_in_queue = 20
 minimum_queue_size = 2000
@@ -120,168 +163,22 @@ minimum_last_ledger_buffer = 2
 zero_basefee_transaction_feelevel = 256000
 
 # =============================================================================
-# 3. Ripple Protocol
+# Optional Sections
 # =============================================================================
 
-# Proposal and validation relay settings
-relay_proposals = "trusted"      # all, trusted, drop_untrusted
-relay_validations = "all"        # all, trusted, drop_untrusted
-
-# Ledger history settings
-ledger_history = 256             # number of ledgers or "full" or "none"
-fetch_depth = "full"             # number of ledgers or "full"
-
-# Validation settings (for validators)
-# validation_seed = "RASH BUSH MILK LOOK BAD BRIM AVID GAFF BAIT ROT POD LOVE"
-# validator_token = "base64-encoded-token"
-# validator_key_revocation = "base64-encoded-revocation"
-
-# Path finding aggressiveness
-path_search = 2
-path_search_fast = 2
-path_search_max = 3
-path_search_old = 2
-
-# Default transaction fee (drops)
-# fee_default = 10
-
-# Worker thread configuration (0 = auto-detect)
-workers = 0
-io_workers = 0
-prefetch_workers = 0
-
-# Network identification
-# network_id = "main"  # main, testnet, devnet, or integer
-
-# Ledger replay feature
-ledger_replay = 0  # 0 = disabled, 1 = enabled
-
-# =============================================================================
-# 4. HTTPS Client
-# =============================================================================
-
-# SSL certificate verification for outbound connections
-ssl_verify = 1  # 0 = disabled, 1 = enabled
-
-# SSL certificate files for verification
-# ssl_verify_file = "/path/to/ca-certificates.crt"
-# ssl_verify_dir = "/path/to/ca-certificates/"
-
-# =============================================================================
-# 6. Database
-# =============================================================================
-
-[node_db]
-# Database type: NuDB (recommended for SSDs) or RocksDB
-type = "NuDB"
-path = "/var/lib/xrpld/db/nudb"
-
-# Online deletion of old ledgers
-online_delete = 512
-advisory_delete = 0
-
-# Cache settings
-cache_size = 16384  # 0 = default
-cache_age = 5       # minutes
-
-# Performance settings
-fast_load = false
-
-# Network-specific settings
-earliest_seq = 32570  # XRP Ledger default
-
-# Online delete tuning
-delete_batch = 100
-back_off_milliseconds = 100
-age_threshold_seconds = 60
-recovery_wait_seconds = 5
-
-# Optional import database configuration
-# [import_db]
-# type = "NuDB"
-# path = "/path/to/import/db"
-
-# SQLite database path
-database_path = "/var/lib/xrpld/db"
-
-[sqlite]
-# Safety level: "high" (default) or "low"
-# safety_level = "high"
-
-# Individual settings (cannot be combined with safety_level)
-journal_mode = "wal"        # delete, truncate, persist, memory, wal, off
-synchronous = "normal"      # off, normal, full, extra
-temp_store = "file"         # default, file, memory
-page_size = 4096           # power of 2 between 512-65536
-journal_size_limit = 1582080
-
-# =============================================================================
-# 7. Diagnostics
-# =============================================================================
-
-# Debug log file location
-debug_logfile = "/var/log/xrpld/debug.log"
-
-# Beast.Insight stats collection
-[insight]
-# server = "statsd"
-# address = "127.0.0.1:8125"
-# prefix = "xrpld_node"
-
-# Performance logging
-[perf]
+# Performance logging (optional)
+# [perf]
 # perf_log = "/var/log/xrpld/perf.log"
 # log_interval = 1
 
-# =============================================================================
-# 8. Voting
-# =============================================================================
+# Crawler endpoint (optional)
+# [crawl]
+# enabled = true
+# overlay = 1
+# server = 1
+# counts = 0
+# unl = 1
 
-[voting]
-# Fee voting (in drops) - leave empty to use internal defaults
-# reference_fee = 10        # 10 drops
-# account_reserve = 10000000  # 10 XRP
-# owner_reserve = 2000000     # 2 XRP
-
-# =============================================================================
-# 9. Misc Settings
-# =============================================================================
-
-# Node size tuning: tiny, small, medium, large, huge (empty = auto-detect)
-node_size = ""
-
-# Allow remote signing commands (discouraged for security)
-signing_support = false
-
-# Crawler endpoint configuration
-[crawl]
-enabled = true
-overlay = 1  # Report peer overlay info
-server = 1   # Report server state info  
-counts = 0   # Report health counters
-unl = 1      # Report validator lists
-
-# Validator list endpoint
-[vl]
-enable = 1
-
-# Beta API features
-beta_rpc_api = 0
-
-# WebSocket ping frequency (seconds, 0 = default)
-websocket_ping_frequency = 0
-
-# Server domain for TOML file discovery
-# server_domain = "example.com"
-
-# =============================================================================
-# Special Configurations
-# =============================================================================
-
-# RPC commands to run at startup
-rpc_startup = [
-    { command = "log_level", severity = "warning" }
-]
-
-# Validators file location (relative to config directory)
-validators_file = "validators.toml"
+# Validator list endpoint (optional)
+# [vl]
+# enable = 1

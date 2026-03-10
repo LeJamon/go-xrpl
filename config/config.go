@@ -95,13 +95,6 @@ type ConfigPaths struct {
 	Validators string // Path to validators file (validators.toml)
 }
 
-// DefaultConfigPaths returns the default configuration file paths
-func DefaultConfigPaths() ConfigPaths {
-	return ConfigPaths{
-		Main:       "xrpld.toml",
-		Validators: "validators.toml",
-	}
-}
 
 // ConfigPathsFromDir returns configuration paths for a specific directory
 func ConfigPathsFromDir(configDir string) ConfigPaths {
@@ -126,6 +119,8 @@ func (c *Config) GetNetworkID() (int, error) {
 	switch v := c.NetworkID.(type) {
 	case int:
 		return v, nil
+	case int64:
+		return int(v), nil
 	case string:
 		switch v {
 		case "main":
@@ -138,7 +133,7 @@ func (c *Config) GetNetworkID() (int, error) {
 			return 0, fmt.Errorf("unknown network name: %s", v)
 		}
 	case nil:
-		return 0, nil // No network specified
+		return 0, fmt.Errorf("network_id is required but not set")
 	default:
 		return 0, fmt.Errorf("invalid network_id type: %T", v)
 	}
@@ -149,6 +144,8 @@ func (c *Config) GetLedgerHistory() (int, error) {
 	switch v := c.LedgerHistory.(type) {
 	case int:
 		return v, nil
+	case int64:
+		return int(v), nil
 	case string:
 		if v == "full" {
 			return -1, nil
@@ -158,7 +155,7 @@ func (c *Config) GetLedgerHistory() (int, error) {
 		}
 		return 0, fmt.Errorf("invalid ledger_history value: %s", v)
 	case nil:
-		return 256, nil // Default value
+		return 0, fmt.Errorf("ledger_history is required but not set")
 	default:
 		return 0, fmt.Errorf("invalid ledger_history type: %T", v)
 	}
@@ -169,13 +166,15 @@ func (c *Config) GetFetchDepth() (int, error) {
 	switch v := c.FetchDepth.(type) {
 	case int:
 		return v, nil
+	case int64:
+		return int(v), nil
 	case string:
 		if v == "full" {
 			return -1, nil
 		}
 		return 0, fmt.Errorf("invalid fetch_depth value: %s", v)
 	case nil:
-		return -1, nil // Default is "full"
+		return 0, fmt.Errorf("fetch_depth is required but not set")
 	default:
 		return 0, fmt.Errorf("invalid fetch_depth type: %T", v)
 	}

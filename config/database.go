@@ -159,19 +159,13 @@ func (n *NodeDBConfig) GetType() string {
 	}
 }
 
-// GetCacheSize returns cache size with default
+// GetCacheSize returns cache size
 func (n *NodeDBConfig) GetCacheSize() int {
-	if n.CacheSize == 0 {
-		return 16384
-	}
 	return n.CacheSize
 }
 
-// GetCacheAge returns cache age with default
+// GetCacheAge returns cache age
 func (n *NodeDBConfig) GetCacheAge() int {
-	if n.CacheAge == 0 {
-		return 5
-	}
 	return n.CacheAge
 }
 
@@ -181,11 +175,8 @@ func (n *NodeDBConfig) ShouldCreateCache() bool {
 	return n.OnlineDelete == 0 && (n.CacheSize != 0 || n.CacheAge != 0)
 }
 
-// GetEarliestSeq returns the earliest sequence with default
+// GetEarliestSeq returns the earliest sequence
 func (n *NodeDBConfig) GetEarliestSeq() int {
-	if n.EarliestSeq == 0 {
-		return 32570 // Default to match XRP ledger network
-	}
 	return n.EarliestSeq
 }
 
@@ -199,35 +190,23 @@ func (n *NodeDBConfig) IsAdvisoryDeleteEnabled() bool {
 	return n.AdvisoryDelete == 1
 }
 
-// GetDeleteBatch returns delete batch size with default
+// GetDeleteBatch returns delete batch size
 func (n *NodeDBConfig) GetDeleteBatch() int {
-	if n.DeleteBatch == 0 {
-		return 100
-	}
 	return n.DeleteBatch
 }
 
-// GetBackOffMilliseconds returns back off time with default
+// GetBackOffMilliseconds returns back off time
 func (n *NodeDBConfig) GetBackOffMilliseconds() int {
-	if n.BackOffMilliseconds == 0 {
-		return 100
-	}
 	return n.BackOffMilliseconds
 }
 
-// GetAgeThresholdSeconds returns age threshold with default
+// GetAgeThresholdSeconds returns age threshold
 func (n *NodeDBConfig) GetAgeThresholdSeconds() int {
-	if n.AgeThresholdSeconds == 0 {
-		return 60
-	}
 	return n.AgeThresholdSeconds
 }
 
-// GetRecoveryWaitSeconds returns recovery wait time with default
+// GetRecoveryWaitSeconds returns recovery wait time
 func (n *NodeDBConfig) GetRecoveryWaitSeconds() int {
-	if n.RecoveryWaitSeconds == 0 {
-		return 5
-	}
 	return n.RecoveryWaitSeconds
 }
 
@@ -235,40 +214,21 @@ func (n *NodeDBConfig) GetRecoveryWaitSeconds() int {
 func (s *SQLiteConfig) GetEffectiveSettings() (journalMode, synchronous, tempStore string) {
 	if s.SafetyLevel == "low" {
 		return "memory", "off", "memory"
-	} else if s.SafetyLevel == "high" || s.SafetyLevel == "" {
-		// Default to high safety settings
-		journalMode = "wal"
-		synchronous = "normal"
-		tempStore = "file"
+	} else if s.SafetyLevel == "high" {
+		return "wal", "normal", "file"
 	}
 
-	// Override with individual settings if specified
-	if s.JournalMode != "" {
-		journalMode = s.JournalMode
-	}
-	if s.Synchronous != "" {
-		synchronous = s.Synchronous
-	}
-	if s.TempStore != "" {
-		tempStore = s.TempStore
-	}
-
-	return journalMode, synchronous, tempStore
+	// Use individual settings (required when safety_level is not set)
+	return s.JournalMode, s.Synchronous, s.TempStore
 }
 
-// GetPageSize returns page size with default
+// GetPageSize returns page size
 func (s *SQLiteConfig) GetPageSize() int {
-	if s.PageSize == 0 {
-		return 4096
-	}
 	return s.PageSize
 }
 
-// GetJournalSizeLimit returns journal size limit with default
+// GetJournalSizeLimit returns journal size limit
 func (s *SQLiteConfig) GetJournalSizeLimit() int {
-	if s.JournalSizeLimit == 0 {
-		return 1582080
-	}
 	return s.JournalSizeLimit
 }
 

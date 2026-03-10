@@ -23,13 +23,7 @@ import (
 )
 
 var (
-	// Server flags
-	port       int
-	wsPort     int
-	bindAddr   string
 	standalone bool
-	dataDir    string
-	pgConnStr  string
 )
 
 // serverCmd represents the server command (default action)
@@ -38,11 +32,12 @@ var serverCmd = &cobra.Command{
 	Short: "Start the XRPL daemon server",
 	Long: `Start the goXRPLd server which provides:
 - HTTP JSON-RPC API endpoints
-- WebSocket server for real-time subscriptions  
+- WebSocket server for real-time subscriptions
 - Health check endpoint
 - All XRPL protocol methods
 
-This is the default command when no subcommand is specified.`,
+Requires --conf flag to specify the configuration file.
+Use 'xrpld generate-config' to create an initial configuration file.`,
 	Run: runServer,
 }
 
@@ -52,32 +47,33 @@ func init() {
 	// Set server as the default command
 	rootCmd.Run = runServer
 
-	// Server-specific flags
-	serverCmd.Flags().IntVarP(&port, "port", "p", 5005, "HTTP JSON-RPC port to listen on")
-	serverCmd.Flags().IntVar(&wsPort, "ws-port", 6006, "WebSocket port to listen on")
-	serverCmd.Flags().StringVar(&bindAddr, "bind", "", "address to bind to (default: all interfaces)")
-	serverCmd.Flags().BoolVarP(&standalone, "standalone", "a", true, "run in standalone mode (default: true)")
-	serverCmd.Flags().StringVar(&dataDir, "data-dir", "", "data directory for storage (empty for in-memory only)")
-	serverCmd.Flags().StringVar(&pgConnStr, "postgres", "", "PostgreSQL connection string for transaction indexing (e.g., postgres://user:pass@localhost:5432/xrpl)")
+	// Server-specific flags — operational concerns only
+	serverCmd.Flags().BoolVarP(&standalone, "standalone", "a", false, "run in standalone mode (no peers)")
 }
 
 func runServer(cmd *cobra.Command, args []string) {
+	// Require config file
+	if globalConfig == nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Error: --conf flag is required to start the server.\n")
+		fmt.Fprintf(cmd.ErrOrStderr(), "  Use 'xrpld generate-config' to create an initial configuration file.\n")
+		fmt.Fprintf(cmd.ErrOrStderr(), "  Example: xrpld server --conf /path/to/xrpld.toml\n")
+		return
+	}
+
 	if !quiet {
 		fmt.Println("Starting goXRPLd - XRPL Node Implementation")
 		fmt.Println("=========================================")
 	}
 
-	// Initialize storage if data directory is provided
+	// Initialize storage from config
 	var db nodestore.Database
-	if dataDir != "" {
-		nodestorePath := filepath.Join(dataDir, "nodestore")
-
+	nodestorePath := globalConfig.NodeDB.Path
+	if nodestorePath != "" {
 		store, err := kvpebble.New(nodestorePath, 256<<20, 500, false)
 		if err != nil {
 			log.Fatal("Failed to create storage backend:", err)
 		}
 
-		// Create database with cache (10000 entries, 10 minute TTL)
 		db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", 10000, 10*time.Minute)
 
 		if !quiet {
@@ -85,33 +81,38 @@ func runServer(cmd *cobra.Command, args []string) {
 		}
 	} else {
 		if !quiet {
-			fmt.Println("Storage: in-memory only (use --data-dir to persist)")
+			fmt.Println("Storage: in-memory only")
 		}
 	}
 
-	// Initialize RelationalDB if PostgreSQL connection string is provided
+	// Initialize RelationalDB if configured
 	var repoManager relationaldb.RepositoryManager
-	if pgConnStr != "" {
+	dbPath := globalConfig.DatabasePath
+	if dbPath != "" {
 		pgConfig := relationaldb.NewConfig()
-		pgConfig.ConnectionString = pgConnStr
+		pgConfig.ConnectionString = dbPath
 
 		var err error
 		repoManager, err = postgres.NewRepositoryManager(pgConfig)
 		if err != nil {
-			log.Fatal("Failed to create PostgreSQL repository manager:", err)
-		}
-
-		if err := repoManager.Open(context.Background()); err != nil {
-			log.Fatal("Failed to open PostgreSQL connection:", err)
-		}
-
-		if !quiet {
-			fmt.Println("PostgreSQL: connected for transaction indexing")
+			// Not fatal — postgres is optional, only log
+			if !quiet {
+				fmt.Printf("PostgreSQL: not available (%v)\n", err)
+			}
+		} else {
+			if err := repoManager.Open(context.Background()); err != nil {
+				if !quiet {
+					fmt.Printf("PostgreSQL: connection failed (%v)\n", err)
+				}
+				repoManager = nil
+			} else if !quiet {
+				fmt.Println("PostgreSQL: connected for transaction indexing")
+			}
 		}
 	}
 
-	// Load genesis configuration
-	genesisFile, _ := cmd.Flags().GetString("genesis")
+	// Load genesis configuration from config file path (if set)
+	genesisFile := globalConfig.GenesisFile
 	var genesisConfig genesis.Config
 	if genesisFile != "" {
 		genesisJSON, err := config.LoadGenesisJSON(genesisFile)
@@ -125,7 +126,6 @@ func runServer(cmd *cobra.Command, args []string) {
 		if err != nil {
 			log.Fatal("Failed to parse genesis configuration:", err)
 		}
-		// Convert config.GenesisConfig to genesis.Config
 		genesisConfig = genesis.Config{
 			TotalXRP:            genesisCfg.TotalXRP,
 			CloseTimeResolution: genesisCfg.CloseTimeResolution,
@@ -137,7 +137,6 @@ func runServer(cmd *cobra.Command, args []string) {
 			Amendments:    genesisCfg.Amendments,
 			UseModernFees: genesisCfg.UseModernFees,
 		}
-		// Convert initial accounts
 		for _, acc := range genesisCfg.InitialAccounts {
 			genesisConfig.InitialAccounts = append(genesisConfig.InitialAccounts, genesis.InitialAccount{
 				Address:  acc.Address,
@@ -192,14 +191,11 @@ func runServer(cmd *cobra.Command, args []string) {
 	// Create HTTP JSON-RPC server with 30 second timeout
 	httpServer := rpc.NewServer(30 * time.Second)
 
-	// Wire dispatcher so the 'json' RPC method can forward calls
 	types.Services.SetDispatcher(httpServer)
 
-	// Wire shutdown function for the 'stop' RPC method
 	types.Services.SetShutdownFunc(func() {
 		log.Println("Server shutdown requested via RPC stop command")
 		go func() {
-			// Small delay to allow the RPC response to be sent
 			time.Sleep(100 * time.Millisecond)
 			log.Fatal("Server stopped by admin request")
 		}()
@@ -209,7 +205,6 @@ func runServer(cmd *cobra.Command, args []string) {
 	wsServer := rpc.NewWebSocketServer(30 * time.Second)
 	wsServer.RegisterAllMethods()
 
-	// Create Publisher for broadcasting events to WebSocket subscribers
 	publisher := rpc.NewPublisher(wsServer.GetSubscriptionManager())
 
 	// Wire up ledger service events to WebSocket broadcasts
@@ -218,45 +213,38 @@ func runServer(cmd *cobra.Command, args []string) {
 			return
 		}
 
-		// Get fee information from the ledger service
 		baseFee, reserveBase, reserveInc := ledgerService.GetCurrentFees()
 
-		// Convert close time to Ripple epoch (seconds since Jan 1, 2000)
 		rippleEpoch := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 		ledgerTime := uint32(event.LedgerInfo.CloseTime.Unix() - rippleEpoch.Unix())
 
-		// Publish ledger closed event
 		ledgerCloseEvent := &rpc.LedgerCloseEvent{
 			Type:             "ledgerClosed",
 			LedgerIndex:      event.LedgerInfo.Sequence,
 			LedgerHash:       hex.EncodeToString(event.LedgerInfo.Hash[:]),
 			LedgerTime:       ledgerTime,
 			FeeBase:          baseFee,
-			FeeRef:           baseFee, // Reference fee equals base fee in current implementation
+			FeeRef:           baseFee,
 			ReserveBase:      reserveBase,
 			ReserveInc:       reserveInc,
 			TxnCount:         len(event.TransactionResults),
-			ValidatedLedgers: "", // Will be set by publisher
+			ValidatedLedgers: "",
 		}
 		publisher.PublishLedgerClosed(ledgerCloseEvent)
 
-		// Publish transaction events for each transaction in the ledger
 		for _, txResult := range event.TransactionResults {
-			// Create transaction event
 			txEvent := &rpc.TransactionEvent{
-				Type:              "transaction",
-				EngineResult:      "tesSUCCESS",
-				EngineResultCode:  0,
+				Type:                "transaction",
+				EngineResult:        "tesSUCCESS",
+				EngineResultCode:    0,
 				EngineResultMessage: "The transaction was applied. Only final in a validated ledger.",
-				LedgerIndex:      txResult.LedgerIndex,
-				LedgerHash:       hex.EncodeToString(txResult.LedgerHash[:]),
-				Transaction:      json.RawMessage(txResult.TxData),
-				Meta:             json.RawMessage(txResult.MetaData),
-				Hash:             hex.EncodeToString(txResult.TxHash[:]),
-				Validated:        txResult.Validated,
+				LedgerIndex:         txResult.LedgerIndex,
+				LedgerHash:          hex.EncodeToString(txResult.LedgerHash[:]),
+				Transaction:         json.RawMessage(txResult.TxData),
+				Meta:                json.RawMessage(txResult.MetaData),
+				Hash:                hex.EncodeToString(txResult.TxHash[:]),
+				Validated:           txResult.Validated,
 			}
-
-			// Broadcast to transaction subscribers and affected account subscribers
 			publisher.PublishTransaction(txEvent, txResult.AffectedAccounts)
 		}
 
@@ -266,61 +254,96 @@ func runServer(cmd *cobra.Command, args []string) {
 		}
 	})
 
-	// Create separate HTTP multiplexers for HTTP RPC and WebSocket
+	// Start listeners based on configured ports
 	httpMux := http.NewServeMux()
-	wsMux := http.NewServeMux()
-
-	// Register HTTP RPC endpoints
-	httpMux.Handle("/", httpServer)    // Main RPC endpoint
-	httpMux.Handle("/rpc", httpServer) // Alternative RPC endpoint
-
-	// Add health check to HTTP server
+	httpMux.Handle("/", httpServer)
+	httpMux.Handle("/rpc", httpServer)
 	httpMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok","service":"goXRPLd"}`))
 	})
 
-	// Register WebSocket endpoint - accepts connections at root path
+	wsMux := http.NewServeMux()
 	wsMux.Handle("/", wsServer)
+
+	// Start listeners from config ports
+	httpPorts := globalConfig.GetHTTPPorts()
+	wsPorts := globalConfig.GetWebSocketPorts()
 
 	if !quiet {
 		fmt.Println("Server Configuration:")
-		fmt.Printf("  - HTTP JSON-RPC: http://localhost:%d/\n", port)
-		fmt.Printf("  - HTTP JSON-RPC: http://localhost:%d/rpc\n", port)
-		fmt.Printf("  - WebSocket:     ws://localhost:%d/\n", wsPort)
-		fmt.Printf("  - Health Check:  http://localhost:%d/health\n", port)
-		fmt.Println()
-		fmt.Println("Supported Features:")
-		fmt.Printf("  - All XRPL RPC methods (%d+ methods implemented)\n", 70)
-		fmt.Printf("  - WebSocket subscriptions (ledger, transactions, accounts, etc.)\n")
-		fmt.Printf("  - JSON-RPC 2.0 compliance\n")
-		fmt.Printf("  - CORS support\n")
-		fmt.Printf("  - Error codes matching rippled\n")
-		fmt.Printf("  - Multi-version API support (v1, v2, v3)\n")
-		fmt.Println()
-		fmt.Printf("Starting HTTP server on port %d...\n", port)
-		fmt.Printf("Starting WebSocket server on port %d...\n", wsPort)
-	}
-
-	// Determine listen addresses
-	httpAddr := fmt.Sprintf("%s:%d", bindAddr, port)
-	wsAddr := fmt.Sprintf("%s:%d", bindAddr, wsPort)
-	if bindAddr == "" {
-		httpAddr = fmt.Sprintf(":%d", port)
-		wsAddr = fmt.Sprintf(":%d", wsPort)
-	}
-
-	// Start WebSocket server in a goroutine
-	go func() {
-		if err := http.ListenAndServe(wsAddr, wsMux); err != nil {
-			log.Fatal("WebSocket server failed to start:", err)
+		for name, p := range httpPorts {
+			fmt.Printf("  - HTTP (%s): http://%s/\n", name, p.GetBindAddress())
 		}
-	}()
+		for name, p := range wsPorts {
+			fmt.Printf("  - WebSocket (%s): ws://%s/\n", name, p.GetBindAddress())
+		}
+		if _, _, hasPeer := globalConfig.GetPeerPort(); hasPeer {
+			_, peerPort, _ := globalConfig.GetPeerPort()
+			fmt.Printf("  - Peer: %s\n", peerPort.GetBindAddress())
+		}
+		fmt.Println()
+	}
 
-	// Start HTTP server (blocks)
-	if err := http.ListenAndServe(httpAddr, httpMux); err != nil {
-		log.Fatal("HTTP server failed to start:", err)
+	// Start WebSocket listeners
+	for name, p := range wsPorts {
+		addr := p.GetBindAddress()
+		portName := name
+		go func() {
+			if !quiet {
+				fmt.Printf("Starting WebSocket server (%s) on %s...\n", portName, addr)
+			}
+			if err := http.ListenAndServe(addr, wsMux); err != nil {
+				log.Fatalf("WebSocket server (%s) failed to start on %s: %v", portName, addr, err)
+			}
+		}()
+	}
+
+	// Start HTTP listeners — use the first one as the blocking listener, rest in goroutines
+	httpPortList := make([]struct {
+		name string
+		addr string
+	}, 0, len(httpPorts))
+	for name, p := range httpPorts {
+		httpPortList = append(httpPortList, struct {
+			name string
+			addr string
+		}{name, p.GetBindAddress()})
+	}
+
+	if len(httpPortList) == 0 {
+		log.Fatal("No HTTP ports configured — at least one HTTP port is required")
+	}
+
+	// Start extra HTTP listeners in goroutines
+	for i := 1; i < len(httpPortList); i++ {
+		entry := httpPortList[i]
+		go func() {
+			if !quiet {
+				fmt.Printf("Starting HTTP server (%s) on %s...\n", entry.name, entry.addr)
+			}
+			if err := http.ListenAndServe(entry.addr, httpMux); err != nil {
+				log.Fatalf("HTTP server (%s) failed to start on %s: %v", entry.name, entry.addr, err)
+			}
+		}()
+	}
+
+	// Start the first HTTP listener (blocks)
+	first := httpPortList[0]
+	if !quiet {
+		fmt.Printf("Starting HTTP server (%s) on %s...\n", first.name, first.addr)
+	}
+	if err := http.ListenAndServe(first.addr, httpMux); err != nil {
+		log.Fatalf("HTTP server (%s) failed to start on %s: %v", first.name, first.addr, err)
 	}
 }
 
+// getDataDir returns the data directory path from config.
+// Uses node_db.path's parent directory.
+func getDataDir() string {
+	if globalConfig == nil {
+		return ""
+	}
+	return filepath.Dir(globalConfig.NodeDB.Path)
+}
