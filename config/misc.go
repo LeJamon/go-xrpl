@@ -80,7 +80,7 @@ func (v *VLConfig) IsEnabled() bool {
 // ValidateNodeSize validates the node_size setting
 func ValidateNodeSize(nodeSize string) error {
 	if nodeSize == "" {
-		return nil // Empty means auto-detect
+		return fmt.Errorf("node_size is required (valid options: tiny, small, medium, large, huge)")
 	}
 
 	validSizes := []string{"tiny", "small", "medium", "large", "huge"}
@@ -213,7 +213,7 @@ func ValidateWebsocketPingFrequency(frequency int) error {
 // ValidateRelayProposals validates the relay proposals setting
 func ValidateRelayProposals(relayProposals string) error {
 	if relayProposals == "" {
-		return nil // Empty means default
+		return fmt.Errorf("relay_proposals is required (valid options: all, trusted, drop_untrusted)")
 	}
 
 	validOptions := []string{"all", "trusted", "drop_untrusted"}
@@ -229,7 +229,7 @@ func ValidateRelayProposals(relayProposals string) error {
 // ValidateRelayValidations validates the relay validations setting
 func ValidateRelayValidations(relayValidations string) error {
 	if relayValidations == "" {
-		return nil // Empty means default
+		return fmt.Errorf("relay_validations is required (valid options: all, trusted, drop_untrusted)")
 	}
 
 	validOptions := []string{"all", "trusted", "drop_untrusted"}

@@ -3,13 +3,26 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
-
+	"strings"
 	"github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
 // AccountObjectsMethod handles the account_objects RPC method
 type AccountObjectsMethod struct{}
+
+// deletionBlockerTypes lists SLE types that block account deletion
+var deletionBlockerTypes = map[string]bool{
+	"RippleState":   true,
+	"Check":         true,
+	"Escrow":        true,
+	"PayChannel":    true,
+	"NFTokenPage":   true,
+	"NFTokenOffer":  true,
+	"MPToken":       true,
+	"Credential":    true,
+	"Bridge":        true,
+}
 
 func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
@@ -30,23 +43,20 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		return nil, types.RpcErrorInvalidParams("Missing required parameter: account")
 	}
 
-	// Check if ledger service is available
 	if types.Services == nil || types.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
-	// Determine ledger index to use
 	ledgerIndex := "current"
 	if request.LedgerIndex != "" {
 		ledgerIndex = request.LedgerIndex.String()
 	}
 
-	// Get account objects from the ledger service
 	result, err := types.Services.Ledger.GetAccountObjects(request.Account, ledgerIndex, request.Type, request.Limit)
 	if err != nil {
 		if err.Error() == "account not found" {
 			return nil, &types.RpcError{
-				Code:    19, // actNotFound
+				Code:    19,
 				Message: "Account not found.",
 			}
 		}

@@ -13,19 +13,21 @@ import (
 
 // AccountInfoResult contains account information from the ledger
 type AccountInfoResult struct {
-	Account      string
-	Balance      uint64
-	Flags        uint32
-	OwnerCount   uint32
-	Sequence     uint32
-	RegularKey   string
-	Domain       string
-	EmailHash    string
-	TransferRate uint32
-	TickSize     uint8
-	LedgerIndex  uint32
-	LedgerHash   [32]byte
-	Validated    bool
+	Account           string
+	Balance           uint64
+	Flags             uint32
+	OwnerCount        uint32
+	Sequence          uint32
+	RegularKey        string
+	Domain            string
+	EmailHash         string
+	TransferRate      uint32
+	TickSize          uint8
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
+	LedgerIndex       uint32
+	LedgerHash        [32]byte
+	Validated         bool
 }
 
 // GetAccountInfo retrieves account information from the ledger
@@ -99,19 +101,21 @@ func (s *Service) GetAccountInfo(account string, ledgerIndex string) (*AccountIn
 	}
 
 	return &AccountInfoResult{
-		Account:      account,
-		Balance:      accountRoot.Balance,
-		Flags:        accountRoot.Flags,
-		OwnerCount:   accountRoot.OwnerCount,
-		Sequence:     accountRoot.Sequence,
-		RegularKey:   accountRoot.RegularKey,
-		Domain:       accountRoot.Domain,
-		EmailHash:    accountRoot.EmailHash,
-		TransferRate: accountRoot.TransferRate,
-		TickSize:     accountRoot.TickSize,
-		LedgerIndex:  targetLedger.Sequence(),
-		LedgerHash:   targetLedger.Hash(),
-		Validated:    validated,
+		Account:           account,
+		Balance:           accountRoot.Balance,
+		Flags:             accountRoot.Flags,
+		OwnerCount:        accountRoot.OwnerCount,
+		Sequence:          accountRoot.Sequence,
+		RegularKey:        accountRoot.RegularKey,
+		Domain:            accountRoot.Domain,
+		EmailHash:         accountRoot.EmailHash,
+		TransferRate:      accountRoot.TransferRate,
+		TickSize:          accountRoot.TickSize,
+		PreviousTxnID:     accountRoot.PreviousTxnID,
+		PreviousTxnLgrSeq: accountRoot.PreviousTxnLgrSeq,
+		LedgerIndex:       targetLedger.Sequence(),
+		LedgerHash:        targetLedger.Hash(),
+		Validated:          validated,
 	}, nil
 }
 

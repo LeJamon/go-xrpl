@@ -136,6 +136,9 @@ func (m *mockLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, 
 func (m *mockLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
+func (m *mockLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
+	return nil, errors.New("not implemented")
+}
 
 // setupTestServices initializes the Services singleton with a mock for testing
 func setupTestServices(mock *mockLedgerService) func() {
@@ -680,9 +683,10 @@ func TestAccountInfoResponseFields(t *testing.T) {
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		// Check signer_lists is present
-		assert.Contains(t, resp, "signer_lists")
-		signerLists := resp["signer_lists"].([]interface{})
+		// Check signer_lists is present under account_data (API v1 behavior)
+		accountData := resp["account_data"].(map[string]interface{})
+		assert.Contains(t, accountData, "signer_lists")
+		signerLists := accountData["signer_lists"].([]interface{})
 		assert.NotNil(t, signerLists)
 	})
 }

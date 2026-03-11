@@ -11,8 +11,9 @@ type DepositAuthorizedMethod struct{}
 
 func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
-		SourceAccount      string `json:"source_account"`
-		DestinationAccount string `json:"destination_account"`
+		SourceAccount      string   `json:"source_account"`
+		DestinationAccount string   `json:"destination_account"`
+		Credentials        []string `json:"credentials,omitempty"`
 		types.LedgerSpecifier
 	}
 
@@ -94,6 +95,11 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		"ledger_hash":         FormatLedgerHash(result.LedgerHash),
 		"ledger_index":        result.LedgerIndex,
 		"validated":           result.Validated,
+	}
+
+	// Echo credentials in response if provided (matches rippled)
+	if len(request.Credentials) > 0 {
+		response["credentials"] = request.Credentials
 	}
 
 	return response, nil

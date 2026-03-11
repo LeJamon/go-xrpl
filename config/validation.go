@@ -5,99 +5,230 @@ import (
 	"strings"
 )
 
-// ValidateConfig performs comprehensive validation on the complete configuration
+// ValidateConfig performs comprehensive validation on the complete configuration.
+// It collects ALL errors and returns them at once so operators can fix everything in one pass.
 func ValidateConfig(config *Config) error {
-	// Validate server configuration
-	if err := validateServerConfig(&config.Server); err != nil {
-		return fmt.Errorf("server config validation failed: %w", err)
+	var errors []string
+
+	// 1. Check all required fields are present
+	errors = append(errors, validateRequiredFields(config)...)
+
+	// 2. Validate port configurations (if ports exist)
+	if len(config.Ports) > 0 {
+		if portErrors := validatePorts(config.Ports); portErrors != nil {
+			errors = append(errors, portErrors.Error())
+		}
 	}
 
-	// Validate port configurations
-	if err := validatePorts(config.Ports); err != nil {
-		return fmt.Errorf("port config validation failed: %w", err)
-	}
-
-	// Validate peer protocol settings
+	// 3. Validate peer protocol settings
 	if err := validatePeerProtocol(config); err != nil {
-		return fmt.Errorf("peer protocol validation failed: %w", err)
+		errors = append(errors, err.Error())
 	}
 
-	// Validate ripple protocol settings
+	// 4. Validate ripple protocol settings
 	if err := validateRippleProtocol(config); err != nil {
-		return fmt.Errorf("ripple protocol validation failed: %w", err)
+		errors = append(errors, err.Error())
 	}
 
-	// Validate database configuration
+	// 5. Validate database configuration
 	if err := config.NodeDB.Validate(); err != nil {
-		return fmt.Errorf("node_db validation failed: %w", err)
+		errors = append(errors, fmt.Sprintf("node_db: %s", err.Error()))
 	}
 	if err := config.ImportDB.Validate(); err != nil {
-		return fmt.Errorf("import_db validation failed: %w", err)
+		errors = append(errors, fmt.Sprintf("import_db: %s", err.Error()))
 	}
 	if err := config.SQLite.Validate(); err != nil {
-		return fmt.Errorf("sqlite validation failed: %w", err)
+		errors = append(errors, fmt.Sprintf("sqlite: %s", err.Error()))
 	}
 
-	// Validate diagnostics configuration
+	// 6. Validate diagnostics configuration
 	if err := config.Insight.Validate(); err != nil {
-		return fmt.Errorf("insight validation failed: %w", err)
+		errors = append(errors, fmt.Sprintf("insight: %s", err.Error()))
 	}
 	if err := config.Perf.Validate(); err != nil {
-		return fmt.Errorf("perf validation failed: %w", err)
+		errors = append(errors, fmt.Sprintf("perf: %s", err.Error()))
 	}
 
-	// Validate voting configuration
+	// 7. Validate voting configuration
 	if err := config.Voting.Validate(); err != nil {
-		return fmt.Errorf("voting validation failed: %w", err)
+		errors = append(errors, fmt.Sprintf("voting: %s", err.Error()))
 	}
 
-	// Validate misc settings
+	// 8. Validate misc settings
 	if err := validateMiscSettings(config); err != nil {
-		return fmt.Errorf("misc settings validation failed: %w", err)
+		errors = append(errors, err.Error())
 	}
 
-	// Validate crawl configuration
+	// 9. Validate crawl and VL configuration
 	if err := config.Crawl.Validate(); err != nil {
-		return fmt.Errorf("crawl validation failed: %w", err)
+		errors = append(errors, fmt.Sprintf("crawl: %s", err.Error()))
 	}
 	if err := config.VL.Validate(); err != nil {
-		return fmt.Errorf("vl validation failed: %w", err)
+		errors = append(errors, fmt.Sprintf("vl: %s", err.Error()))
 	}
 
-	// Validate validators configuration
+	// 10. Validate validators configuration
 	if err := config.Validators.Validate(); err != nil {
-		return fmt.Errorf("validators validation failed: %w", err)
+		errors = append(errors, fmt.Sprintf("validators: %s", err.Error()))
 	}
 
-	// Validate overlay and transaction queue
+	// 11. Validate overlay and transaction queue
 	if err := config.Overlay.Validate(); err != nil {
-		return fmt.Errorf("overlay validation failed: %w", err)
+		errors = append(errors, fmt.Sprintf("overlay: %s", err.Error()))
 	}
 	if err := config.TransactionQueue.Validate(); err != nil {
-		return fmt.Errorf("transaction_queue validation failed: %w", err)
+		errors = append(errors, fmt.Sprintf("transaction_queue: %s", err.Error()))
 	}
 
-	// Cross-validation checks
-	if err := validateCrossReferences(config); err != nil {
-		return fmt.Errorf("cross-validation failed: %w", err)
+	// 12. Cross-validation checks
+	if crossErrors := validateCrossReferences(config); crossErrors != nil {
+		errors = append(errors, crossErrors.Error())
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("configuration errors:\n  - %s", strings.Join(errors, "\n  - "))
 	}
 
 	return nil
 }
 
-// validateServerConfig validates the server configuration
-func validateServerConfig(server *ServerConfig) error {
-	// Check that at least one port is specified
-	if len(server.Ports) == 0 {
-		return fmt.Errorf("at least one port must be specified in server.ports")
+// validateRequiredFields checks that all required fields are present in the config.
+// Returns a list of all missing fields so operators can fix everything at once.
+func validateRequiredFields(config *Config) []string {
+	var missing []string
+
+	// Server ports
+	if len(config.Server.Ports) == 0 {
+		missing = append(missing, "missing required field: server.ports (at least one port must be specified)")
 	}
 
-	// Validate default values if specified
-	if server.Port != 0 && (server.Port < 1 || server.Port > 65535) {
-		return fmt.Errorf("server default port must be between 1 and 65535, got %d", server.Port)
+	// Port configurations
+	for name, port := range config.Ports {
+		if port.Port == 0 {
+			missing = append(missing, fmt.Sprintf("missing required field: %s.port", name))
+		}
+		if port.IP == "" {
+			missing = append(missing, fmt.Sprintf("missing required field: %s.ip", name))
+		}
+		if port.Protocol == "" {
+			missing = append(missing, fmt.Sprintf("missing required field: %s.protocol", name))
+		}
 	}
 
-	return nil
+	// Database
+	if config.NodeDB.Type == "" {
+		missing = append(missing, "missing required field: node_db.type")
+	}
+	if config.NodeDB.Path == "" {
+		missing = append(missing, "missing required field: node_db.path")
+	}
+	if config.DatabasePath == "" {
+		missing = append(missing, "missing required field: database_path")
+	}
+
+	// Network
+	if config.NetworkID == nil {
+		missing = append(missing, "missing required field: network_id")
+	}
+
+	// Ledger
+	if config.LedgerHistory == nil {
+		missing = append(missing, "missing required field: ledger_history")
+	}
+	if config.FetchDepth == nil {
+		missing = append(missing, "missing required field: fetch_depth")
+	}
+
+	// Node sizing
+	if config.NodeSize == "" {
+		missing = append(missing, "missing required field: node_size (valid: tiny, small, medium, large, huge)")
+	}
+
+	// Logging
+	if config.DebugLogfile == "" {
+		missing = append(missing, "missing required field: debug_logfile")
+	}
+
+	// Relay policy
+	if config.RelayProposals == "" {
+		missing = append(missing, "missing required field: relay_proposals (valid: all, trusted, drop_untrusted)")
+	}
+	if config.RelayValidations == "" {
+		missing = append(missing, "missing required field: relay_validations (valid: all, trusted, drop_untrusted)")
+	}
+
+	// Overlay
+	if config.Overlay.MaxUnknownTime == 0 {
+		missing = append(missing, "missing required field: overlay.max_unknown_time")
+	}
+	if config.Overlay.MaxDivergedTime == 0 {
+		missing = append(missing, "missing required field: overlay.max_diverged_time")
+	}
+
+	// Transaction queue
+	if config.TransactionQueue.LedgersInQueue == 0 {
+		missing = append(missing, "missing required field: transaction_queue.ledgers_in_queue")
+	}
+	if config.TransactionQueue.MinimumQueueSize == 0 {
+		missing = append(missing, "missing required field: transaction_queue.minimum_queue_size")
+	}
+	if config.TransactionQueue.RetrySequencePercent == 0 {
+		missing = append(missing, "missing required field: transaction_queue.retry_sequence_percent")
+	}
+	if config.TransactionQueue.MinimumEscalationMultiplier == 0 {
+		missing = append(missing, "missing required field: transaction_queue.minimum_escalation_multiplier")
+	}
+	if config.TransactionQueue.MinimumTxnInLedger == 0 {
+		missing = append(missing, "missing required field: transaction_queue.minimum_txn_in_ledger")
+	}
+	if config.TransactionQueue.MinimumTxnInLedgerStandalone == 0 {
+		missing = append(missing, "missing required field: transaction_queue.minimum_txn_in_ledger_standalone")
+	}
+	if config.TransactionQueue.TargetTxnInLedger == 0 {
+		missing = append(missing, "missing required field: transaction_queue.target_txn_in_ledger")
+	}
+	// maximum_txn_in_ledger: 0 is valid (means no maximum), so NOT required
+	if config.TransactionQueue.NormalConsensusIncreasePercent == 0 {
+		missing = append(missing, "missing required field: transaction_queue.normal_consensus_increase_percent")
+	}
+	if config.TransactionQueue.SlowConsensusDecreasePercent == 0 {
+		missing = append(missing, "missing required field: transaction_queue.slow_consensus_decrease_percent")
+	}
+	if config.TransactionQueue.MaximumTxnPerAccount == 0 {
+		missing = append(missing, "missing required field: transaction_queue.maximum_txn_per_account")
+	}
+	if config.TransactionQueue.MinimumLastLedgerBuffer == 0 {
+		missing = append(missing, "missing required field: transaction_queue.minimum_last_ledger_buffer")
+	}
+	if config.TransactionQueue.ZeroBaseFeeTransactionFeeLevel == 0 {
+		missing = append(missing, "missing required field: transaction_queue.zero_basefee_transaction_feelevel")
+	}
+
+	// Max transactions
+	if config.MaxTransactions == 0 {
+		missing = append(missing, "missing required field: max_transactions")
+	}
+
+	// SQLite settings (required when safety_level is not set)
+	if config.SQLite.SafetyLevel == "" {
+		if config.SQLite.JournalMode == "" {
+			missing = append(missing, "missing required field: sqlite.journal_mode")
+		}
+		if config.SQLite.Synchronous == "" {
+			missing = append(missing, "missing required field: sqlite.synchronous")
+		}
+		if config.SQLite.TempStore == "" {
+			missing = append(missing, "missing required field: sqlite.temp_store")
+		}
+		if config.SQLite.PageSize == 0 {
+			missing = append(missing, "missing required field: sqlite.page_size")
+		}
+		if config.SQLite.JournalSizeLimit == 0 {
+			missing = append(missing, "missing required field: sqlite.journal_size_limit")
+		}
+	}
+
+	return missing
 }
 
 // validatePorts validates all port configurations
@@ -106,29 +237,25 @@ func validatePorts(ports map[string]PortConfig) error {
 		return fmt.Errorf("no ports configured")
 	}
 
-	usedPorts := make(map[string]string) // port -> portName mapping
+	usedPorts := make(map[string]string)
 	peerPortCount := 0
 
 	for portName, portConfig := range ports {
-		// Validate individual port
 		if err := portConfig.Validate(); err != nil {
-			return fmt.Errorf("port %s validation failed: %w", portName, err)
+			return fmt.Errorf("port %s: %w", portName, err)
 		}
 
-		// Check for port conflicts
 		portKey := fmt.Sprintf("%s:%d", portConfig.IP, portConfig.Port)
 		if existingPort, exists := usedPorts[portKey]; exists {
 			return fmt.Errorf("port conflict: both %s and %s are trying to use %s", existingPort, portName, portKey)
 		}
 		usedPorts[portKey] = portName
 
-		// Count peer ports (only one allowed)
 		if portConfig.HasPeer() {
 			peerPortCount++
 		}
 	}
 
-	// Validate peer port constraint
 	if peerPortCount > 1 {
 		return fmt.Errorf("only one port may be configured to support the peer protocol, found %d", peerPortCount)
 	}
@@ -148,14 +275,12 @@ func validatePeerProtocol(config *Config) error {
 		return err
 	}
 
-	// Validate IPs format
 	for i, ip := range config.IPs {
 		if err := validateIPEntry(ip); err != nil {
 			return fmt.Errorf("invalid IP entry at index %d: %w", i, err)
 		}
 	}
 
-	// Validate fixed IPs format (must include port)
 	for i, ip := range config.IPsFixed {
 		if err := validateFixedIPEntry(ip); err != nil {
 			return fmt.Errorf("invalid fixed IP entry at index %d: %w", i, err)
@@ -174,22 +299,18 @@ func validateRippleProtocol(config *Config) error {
 		return err
 	}
 
-	// Validate ledger history
 	if _, err := config.GetLedgerHistory(); err != nil {
 		return fmt.Errorf("invalid ledger_history: %w", err)
 	}
 
-	// Validate fetch depth
 	if _, err := config.GetFetchDepth(); err != nil {
 		return fmt.Errorf("invalid fetch_depth: %w", err)
 	}
 
-	// Validate network ID
 	if _, err := config.GetNetworkID(); err != nil {
 		return fmt.Errorf("invalid network_id: %w", err)
 	}
 
-	// Validate path search settings
 	if err := ValidatePathSearch(config.PathSearch); err != nil {
 		return err
 	}
@@ -203,7 +324,6 @@ func validateRippleProtocol(config *Config) error {
 		return err
 	}
 
-	// Validate worker settings
 	if err := ValidateWorkers(config.Workers); err != nil {
 		return err
 	}
@@ -214,7 +334,6 @@ func validateRippleProtocol(config *Config) error {
 		return err
 	}
 
-	// Validate other settings
 	if err := ValidateLedgerReplay(config.LedgerReplay); err != nil {
 		return err
 	}
@@ -242,27 +361,23 @@ func validateMiscSettings(config *Config) error {
 
 // validateCrossReferences validates cross-references between different config sections
 func validateCrossReferences(config *Config) error {
-	// Validate that online_delete is not less than ledger_history
 	ledgerHistory, err := config.GetLedgerHistory()
 	if err != nil {
 		return err
 	}
 
 	if config.NodeDB.OnlineDelete > 0 && ledgerHistory > 0 && config.NodeDB.OnlineDelete < ledgerHistory {
-		return fmt.Errorf("online_delete (%d) must be greater than or equal to ledger_history (%d)", 
+		return fmt.Errorf("online_delete (%d) must be greater than or equal to ledger_history (%d)",
 			config.NodeDB.OnlineDelete, ledgerHistory)
 	}
 
-	// Validate that if validation is configured, appropriate ports are available
 	if config.IsValidator() {
-		// Should have at least one peer port for validation
 		_, _, hasPeerPort := config.GetPeerPort()
 		if !hasPeerPort {
 			return fmt.Errorf("validator configuration requires a peer port to be configured")
 		}
 	}
 
-	// Validate RPC startup commands format
 	for i, cmd := range config.RPCStartup {
 		if _, hasCommand := cmd["command"]; !hasCommand {
 			return fmt.Errorf("rpc_startup command at index %d missing 'command' field", i)
@@ -278,19 +393,15 @@ func validateIPEntry(entry string) error {
 		return fmt.Errorf("IP entry cannot be empty")
 	}
 
-	// Entry can be just an IP or IP with port
 	parts := strings.Fields(entry)
 	if len(parts) > 2 || len(parts) == 0 {
 		return fmt.Errorf("invalid format, expected 'IP [port]'")
 	}
 
-	// Basic IP validation would go here
-	// For now, just check it's not empty
 	if parts[0] == "" {
 		return fmt.Errorf("IP address cannot be empty")
 	}
 
-	// If port is specified, validate it
 	if len(parts) == 2 {
 		if err := validatePortString(parts[1]); err != nil {
 			return fmt.Errorf("invalid port: %w", err)
@@ -306,7 +417,6 @@ func validateFixedIPEntry(entry string) error {
 		return fmt.Errorf("fixed IP entry cannot be empty")
 	}
 
-	// Fixed IP entries must include a port
 	parts := strings.Fields(entry)
 	if len(parts) != 2 {
 		return fmt.Errorf("fixed IP entries must include a port, expected 'IP port'")
@@ -329,7 +439,6 @@ func validatePortString(portStr string) error {
 		return fmt.Errorf("port cannot be empty")
 	}
 
-	// Simple numeric validation
 	var port int
 	if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
 		return fmt.Errorf("port must be numeric: %w", err)
@@ -344,11 +453,9 @@ func validatePortString(portStr string) error {
 
 // ValidateConfigPaths validates that configuration file paths are accessible
 func ValidateConfigPaths(paths ConfigPaths) error {
-	// Check main config file
 	if paths.Main == "" {
 		return fmt.Errorf("main config path cannot be empty")
 	}
 
-	// Validators path can be empty (optional)
 	return nil
 }

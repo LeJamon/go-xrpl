@@ -126,11 +126,11 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
-			name: "tx_blob submission not implemented",
+			name: "tx_blob invalid hex",
 			params: map[string]interface{}{
-				"tx_blob": "1200002200000000240000000161D4838D7EA4C6800000000000000000000000000055534400000000000000000000000000000000000000000000000168400000000000000A732103AB40A0490F9B7ED8DF29D246BF2D6269820A0EE7742ACDD457BEA7C7D0931EDB74473045022100",
+				"tx_blob": "ZZZZ",
 			},
-			expectedError: "tx_blob submission not yet implemented",
+			expectedError: "Invalid tx_blob",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 	}
@@ -353,7 +353,9 @@ func TestSubmitMethodResponseFields(t *testing.T) {
 		assert.Contains(t, resp, "kept")
 		assert.Contains(t, resp, "queued")
 		assert.Contains(t, resp, "validated_ledger_index")
-		assert.Contains(t, resp, "current_ledger_index")
+		assert.Contains(t, resp, "tx_blob")
+		assert.Contains(t, resp, "account_sequence_next")
+		assert.Contains(t, resp, "account_sequence_available")
 
 		// Verify field values for successful submission
 		assert.Equal(t, "tesSUCCESS", resp["engine_result"])
@@ -436,7 +438,6 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 			expectedStatus:   "success",
 			validateResp: func(t *testing.T, resp map[string]interface{}) {
 				assert.Equal(t, true, resp["applied"])
-				assert.Equal(t, "success", resp["status"])
 			},
 		},
 		{
@@ -484,7 +485,6 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 			validateResp: func(t *testing.T, resp map[string]interface{}) {
 				assert.Equal(t, "tefPAST_SEQ", resp["engine_result"])
 				assert.Equal(t, false, resp["applied"])
-				assert.Equal(t, "error", resp["status"])
 			},
 		},
 		{
@@ -507,7 +507,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 			expectedStatus:   "error",
 			validateResp: func(t *testing.T, resp map[string]interface{}) {
 				assert.Equal(t, "temBAD_AMOUNT", resp["engine_result"])
-				assert.Equal(t, "error", resp["status"])
+				assert.Equal(t, false, resp["applied"])
 			},
 		},
 		{

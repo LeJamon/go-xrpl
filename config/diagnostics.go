@@ -80,11 +80,8 @@ func (p *PerfConfig) IsEnabled() bool {
 	return p.PerfLog != ""
 }
 
-// GetLogInterval returns the log interval with default
+// GetLogInterval returns the log interval
 func (p *PerfConfig) GetLogInterval() int {
-	if p.LogInterval == 0 {
-		return 1 // Default 1 second
-	}
 	return p.LogInterval
 }
 

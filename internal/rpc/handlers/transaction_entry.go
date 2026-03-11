@@ -95,6 +95,15 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 		"validated":    txInfo.Validated,
 	}
 
+	// Add close_time_iso from the containing ledger
+	if targetLedger, err := types.Services.Ledger.GetLedgerBySequence(targetSeq); err == nil {
+		closeTimeSec := targetLedger.CloseTime()
+		if closeTimeSec > 0 {
+			closeTime := rippleEpochTime.Add(secondsToDuration(closeTimeSec))
+			response["close_time_iso"] = closeTime.UTC().Format("2006-01-02T15:04:05Z")
+		}
+	}
+
 	return response, nil
 }
 
