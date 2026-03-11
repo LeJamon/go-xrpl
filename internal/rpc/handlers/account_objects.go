@@ -3,7 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
-	"strings"
+
 	"github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
