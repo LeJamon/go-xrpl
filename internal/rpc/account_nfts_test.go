@@ -155,6 +155,7 @@ func (m *mockAccountNFTsLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerIn
 func (m *mockAccountNFTsLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
+func (m *mockAccountNFTsLedgerService) IsAmendmentBlocked() bool { return false }
 
 // setupAccountNFTsTestServices initializes the Services singleton with a mock for testing
 func setupAccountNFTsTestServices(mock *mockAccountNFTsLedgerService) func() {

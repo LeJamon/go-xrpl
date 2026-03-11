@@ -61,3 +61,7 @@ func (m *ServerDefinitionsMethod) RequiredRole() types.Role {
 func (m *ServerDefinitionsMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *ServerDefinitionsMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

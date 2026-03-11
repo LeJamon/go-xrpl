@@ -156,6 +156,7 @@ func (m *mockDepositAuthorizedLedgerService) GetNFTSellOffers(nftID [32]byte, le
 func (m *mockDepositAuthorizedLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
+func (m *mockDepositAuthorizedLedgerService) IsAmendmentBlocked() bool { return false }
 
 // setupDepositAuthorizedTestServices initializes the Services singleton with a mock for testing
 func setupDepositAuthorizedTestServices(mock *mockDepositAuthorizedLedgerService) func() {

@@ -112,3 +112,7 @@ func (m *DepositAuthorizedMethod) RequiredRole() types.Role {
 func (m *DepositAuthorizedMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *DepositAuthorizedMethod) RequiredCondition() types.Condition {
+	return types.NeedsCurrentLedger
+}

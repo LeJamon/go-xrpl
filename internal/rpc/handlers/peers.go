@@ -30,6 +30,10 @@ func (m *PeersMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
+func (m *PeersMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}
+
 // PeerReservationsAddMethod handles the peer_reservations_add RPC method.
 // STUB: Returns empty result. Network-only — not needed for standalone mode.
 //
@@ -53,6 +57,10 @@ func (m *PeerReservationsAddMethod) RequiredRole() types.Role {
 
 func (m *PeerReservationsAddMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
+}
+
+func (m *PeerReservationsAddMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
 }
 
 // PeerReservationsDelMethod handles the peer_reservations_del RPC method.
@@ -80,6 +88,10 @@ func (m *PeerReservationsDelMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
+func (m *PeerReservationsDelMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}
+
 // PeerReservationsListMethod handles the peer_reservations_list RPC method.
 // STUB: Returns empty list. Network-only — not needed for standalone mode.
 //
@@ -101,4 +113,8 @@ func (m *PeerReservationsListMethod) RequiredRole() types.Role {
 
 func (m *PeerReservationsListMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
+}
+
+func (m *PeerReservationsListMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
 }

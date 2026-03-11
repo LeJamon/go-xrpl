@@ -36,3 +36,7 @@ func (m *ValidationCreateMethod) RequiredRole() types.Role {
 func (m *ValidationCreateMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *ValidationCreateMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

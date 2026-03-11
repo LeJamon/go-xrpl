@@ -802,6 +802,11 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 	}, nil
 }
 
+// IsAmendmentBlocked returns true if the server is blocked by unsupported amendments
+func (a *LedgerServiceAdapter) IsAmendmentBlocked() bool {
+	return false
+}
+
 // GetNFTSellOffers retrieves sell offers for an NFToken
 func (a *LedgerServiceAdapter) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
 	result, err := a.svc.GetNFTSellOffers(nftID, ledgerIndex, limit, marker)

@@ -31,3 +31,7 @@ func (m *PathFindMethod) RequiredRole() types.Role {
 func (m *PathFindMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *PathFindMethod) RequiredCondition() types.Condition {
+	return types.NeedsCurrentLedger
+}

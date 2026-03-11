@@ -44,3 +44,7 @@ func (m *LedgerClosedMethod) RequiredRole() types.Role {
 func (m *LedgerClosedMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *LedgerClosedMethod) RequiredCondition() types.Condition {
+	return types.NeedsClosedLedger
+}

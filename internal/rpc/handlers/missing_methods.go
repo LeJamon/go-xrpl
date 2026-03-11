@@ -62,6 +62,10 @@ func (m *FetchInfoMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
+func (m *FetchInfoMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}
+
 // OwnerInfoMethod handles the owner_info RPC method.
 // STUB: Returns notImplemented. Requires NetworkOPs integration.
 //
@@ -102,6 +106,10 @@ func (m *OwnerInfoMethod) RequiredRole() types.Role {
 
 func (m *OwnerInfoMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
+}
+
+func (m *OwnerInfoMethod) RequiredCondition() types.Condition {
+	return types.NeedsCurrentLedger
 }
 
 // LedgerHeaderMethod handles the ledger_header RPC method.
@@ -189,6 +197,10 @@ func (m *LedgerHeaderMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
+func (m *LedgerHeaderMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}
+
 // LedgerRequestMethod handles the ledger_request RPC method.
 // STUB: Returns error. Network-only — requests missing ledgers from peers.
 //
@@ -220,6 +232,10 @@ func (m *LedgerRequestMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
+func (m *LedgerRequestMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}
+
 // LedgerCleanerMethod handles the ledger_cleaner RPC method.
 // STUB: Returns error. Admin-only maintenance tool.
 //
@@ -247,6 +263,10 @@ func (m *LedgerCleanerMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
+func (m *LedgerCleanerMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}
+
 // LedgerDiffMethod handles the ledger_diff RPC method.
 // STUB: Returns error. Only available via gRPC in rippled.
 //
@@ -266,6 +286,10 @@ func (m *LedgerDiffMethod) RequiredRole() types.Role {
 
 func (m *LedgerDiffMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
+}
+
+func (m *LedgerDiffMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
 }
 
 // TxReduceRelayMethod handles the tx_reduce_relay RPC method.
@@ -296,6 +320,10 @@ func (m *TxReduceRelayMethod) RequiredRole() types.Role {
 
 func (m *TxReduceRelayMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
+}
+
+func (m *TxReduceRelayMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
 }
 
 // SimulateMethod handles the simulate RPC method.
@@ -386,6 +414,10 @@ func (m *SimulateMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
+func (m *SimulateMethod) RequiredCondition() types.Condition {
+	return types.NeedsCurrentLedger
+}
+
 // ConnectMethod handles the connect RPC method.
 // STUB: Returns message without actually connecting. Network-only.
 //
@@ -438,6 +470,10 @@ func (m *ConnectMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
+func (m *ConnectMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}
+
 // PrintMethod handles the print RPC method.
 // STUB: Returns acknowledgment. Admin debug tool.
 //
@@ -463,6 +499,10 @@ func (m *PrintMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
+func (m *PrintMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}
+
 // ValidatorInfoMethod handles the validator_info RPC method.
 // STUB: Returns notValidator. Requires validator configuration.
 //
@@ -486,6 +526,10 @@ func (m *ValidatorInfoMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
+func (m *ValidatorInfoMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}
+
 // CanDeleteMethod handles the can_delete RPC method.
 // STUB: Returns notEnabled. Requires SHAMapStore advisory delete.
 //
@@ -506,6 +550,10 @@ func (m *CanDeleteMethod) RequiredRole() types.Role {
 
 func (m *CanDeleteMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
+}
+
+func (m *CanDeleteMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
 }
 
 // GetCountsMethod handles the get_counts RPC method.
@@ -536,6 +584,10 @@ func (m *GetCountsMethod) RequiredRole() types.Role {
 
 func (m *GetCountsMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
+}
+
+func (m *GetCountsMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
 }
 
 // LogLevelMethod handles the log_level RPC method.
@@ -590,6 +642,10 @@ func (m *LogLevelMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
+func (m *LogLevelMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}
+
 // LogRotateMethod handles the log_rotate RPC method (logrotate).
 // STUB: Returns acknowledgment without actually rotating.
 //
@@ -615,6 +671,10 @@ func (m *LogRotateMethod) RequiredRole() types.Role {
 
 func (m *LogRotateMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
+}
+
+func (m *LogRotateMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
 }
 
 // UnlListMethod handles the unl_list RPC method.
@@ -644,6 +704,10 @@ func (m *UnlListMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
+func (m *UnlListMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}
+
 // BlackListMethod handles the black_list (blacklist) RPC method.
 // STUB: Returns empty list. Network-only — manages IP blacklisting.
 //
@@ -669,4 +733,8 @@ func (m *BlackListMethod) RequiredRole() types.Role {
 
 func (m *BlackListMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
+}
+
+func (m *BlackListMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
 }

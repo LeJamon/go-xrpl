@@ -21,6 +21,10 @@ func (m *DownloadShardMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
+func (m *DownloadShardMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}
+
 // CrawlShardsMethod handles the crawl_shards RPC method
 type CrawlShardsMethod struct{}
 
@@ -34,4 +38,8 @@ func (m *CrawlShardsMethod) RequiredRole() types.Role {
 
 func (m *CrawlShardsMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
+}
+
+func (m *CrawlShardsMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
 }

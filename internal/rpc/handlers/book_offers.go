@@ -105,3 +105,7 @@ func (m *BookOffersMethod) RequiredRole() types.Role {
 func (m *BookOffersMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *BookOffersMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

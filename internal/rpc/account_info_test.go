@@ -21,6 +21,7 @@ type mockLedgerService struct {
 	validatedLedgerIndex uint32
 	standalone           bool
 	serverInfo           types.LedgerServerInfo
+	amendmentBlocked     bool
 }
 
 func newMockLedgerService() *mockLedgerService {
@@ -139,6 +140,7 @@ func (m *mockLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerIndex string,
 func (m *mockLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
+func (m *mockLedgerService) IsAmendmentBlocked() bool { return m.amendmentBlocked }
 
 // setupTestServices initializes the Services singleton with a mock for testing.
 // Accepts any type that implements types.LedgerService.

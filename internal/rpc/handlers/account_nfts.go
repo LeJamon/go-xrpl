@@ -105,3 +105,7 @@ func (m *AccountNftsMethod) RequiredRole() types.Role {
 func (m *AccountNftsMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *AccountNftsMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

@@ -179,8 +179,8 @@ func RpcErrorNotEnabled(feature string) *RpcError {
 	return NewRpcError(RpcNOT_ENABLED, "notEnabled", "notEnabled", "Feature not enabled: "+feature)
 }
 
-func RpcErrorAmendmentBlocked(amendment string) *RpcError {
-	return NewRpcError(RpcAMENDMENT_BLOCKED, "amendmentBlocked", "amendmentBlocked", "Amendment blocked: "+amendment)
+func RpcErrorAmendmentBlocked() *RpcError {
+	return NewRpcError(RpcAMENDMENT_BLOCKED, "amendmentBlocked", "amendmentBlocked", "Amendment blocked, need upgrade.")
 }
 
 // RpcErrorObjectNotFound returns an error for object not found (matches rippled rpcOBJECT_NOT_FOUND)

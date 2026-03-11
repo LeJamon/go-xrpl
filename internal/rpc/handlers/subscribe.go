@@ -31,3 +31,7 @@ func (m *SubscribeMethod) RequiredRole() types.Role {
 func (m *SubscribeMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *SubscribeMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

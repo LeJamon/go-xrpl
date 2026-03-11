@@ -594,3 +594,7 @@ func (m *LedgerEntryMethod) RequiredRole() types.Role {
 func (m *LedgerEntryMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *LedgerEntryMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

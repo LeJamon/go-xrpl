@@ -34,3 +34,7 @@ func (m *RandomMethod) RequiredRole() types.Role {
 func (m *RandomMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *RandomMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

@@ -78,3 +78,7 @@ func (m *AccountCurrenciesMethod) RequiredRole() types.Role {
 func (m *AccountCurrenciesMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *AccountCurrenciesMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

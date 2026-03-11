@@ -209,3 +209,7 @@ func (m *LedgerDataMethod) RequiredRole() types.Role {
 func (m *LedgerDataMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *LedgerDataMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}
