@@ -251,6 +251,11 @@ func runServer(cmd *cobra.Command, args []string) {
 			publisher.PublishTransaction(txEvent, txResult.AffectedAccounts)
 		}
 
+		// Update persistent path_find sessions on ledger close
+		wsServer.UpdatePathFindSessions(func() (types.LedgerStateView, error) {
+			return types.Services.Ledger.GetClosedLedgerView()
+		})
+
 		if !quiet {
 			log.Printf("Broadcasted ledger %d with %d transactions to WebSocket subscribers",
 				event.LedgerInfo.Sequence, len(event.TransactionResults))

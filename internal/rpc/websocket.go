@@ -26,14 +26,15 @@ type WebSocketServer struct {
 
 // WebSocketConnection represents a single WebSocket connection
 type WebSocketConnection struct {
-	ID            string
-	conn          *websocket.Conn
-	subscriptions map[types.SubscriptionType]types.SubscriptionConfig
-	sendChannel   chan []byte
-	closeChannel  chan struct{}
-	mutex         sync.RWMutex
-	ctx           context.Context
-	cancel        context.CancelFunc
+	ID              string
+	conn            *websocket.Conn
+	subscriptions   map[types.SubscriptionType]types.SubscriptionConfig
+	sendChannel     chan []byte
+	closeChannel    chan struct{}
+	mutex           sync.RWMutex
+	ctx             context.Context
+	cancel          context.CancelFunc
+	pathFindSession *PathFindSession // At most one active path_find session per connection
 }
 
 // NewWebSocketServer creates a new WebSocket server
@@ -345,13 +346,163 @@ func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *t
 	ws.sendResponse(wsConn, response)
 }
 
-// handlePathFind processes path_find commands (special WebSocket-only method)
+// handlePathFind processes path_find commands (special WebSocket-only method).
+// Subcommands: "create" (start session), "close" (stop session), "status" (get current paths).
+// Reference: rippled PathFind.cpp
 func (ws *WebSocketServer) handlePathFind(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
-	// TODO: Implement WebSocket path finding
-	// This creates a persistent path-finding session that sends updates
-	// as market conditions change
+	// Parse subcommand
+	var sub struct {
+		Subcommand string `json:"subcommand"`
+	}
+	if len(cmd.Params) > 0 {
+		if err := json.Unmarshal(cmd.Params, &sub); err != nil {
+			ws.sendError(wsConn, types.RpcErrorInvalidParams("Invalid parameters: "+err.Error()), cmd.ID)
+			return
+		}
+	}
 
-	ws.sendError(wsConn, types.NewRpcError(types.RpcNOT_SUPPORTED, "notSupported", "notSupported", "path_find not yet implemented"), cmd.ID)
+	switch sub.Subcommand {
+	case "create":
+		ws.handlePathFindCreate(wsConn, ctx, cmd)
+	case "close":
+		ws.handlePathFindClose(wsConn, ctx, cmd)
+	case "status":
+		ws.handlePathFindStatus(wsConn, ctx, cmd)
+	default:
+		ws.sendError(wsConn, types.RpcErrorInvalidParams("Invalid field 'subcommand'."), cmd.ID)
+	}
+}
+
+// handlePathFindCreate creates a new persistent pathfinding session.
+// Any existing session on this connection is replaced (matching rippled).
+func (ws *WebSocketServer) handlePathFindCreate(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+	// Parse and validate parameters
+	session, rpcErr := ParseAndCreateSession(cmd.Params, cmd.ID)
+	if rpcErr != nil {
+		ws.sendError(wsConn, rpcErr, cmd.ID)
+		return
+	}
+
+	// Get ledger view for initial computation
+	view, err := types.Services.Ledger.GetClosedLedgerView()
+	if err != nil {
+		ws.sendError(wsConn, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
+			"No closed ledger available"), cmd.ID)
+		return
+	}
+
+	// Run initial pathfinding
+	event := session.Execute(view)
+
+	// Store session on connection (replaces any existing one, matching rippled)
+	wsConn.mutex.Lock()
+	wsConn.pathFindSession = session
+	wsConn.mutex.Unlock()
+
+	// Send initial result as response
+	response := types.WebSocketResponse{
+		Type:       "response",
+		ID:         cmd.ID,
+		Status:     "success",
+		Result:     event,
+		ApiVersion: ctx.ApiVersion,
+	}
+	ws.sendResponse(wsConn, response)
+}
+
+// handlePathFindClose closes the active pathfinding session on this connection.
+func (ws *WebSocketServer) handlePathFindClose(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+	wsConn.mutex.Lock()
+	session := wsConn.pathFindSession
+	wsConn.pathFindSession = nil
+	wsConn.mutex.Unlock()
+
+	if session == nil {
+		ws.sendError(wsConn, types.RpcErrorNoPathRequest(), cmd.ID)
+		return
+	}
+
+	response := types.WebSocketResponse{
+		Type:       "response",
+		ID:         cmd.ID,
+		Status:     "success",
+		Result:     map[string]interface{}{"closed": true},
+		ApiVersion: ctx.ApiVersion,
+	}
+	ws.sendResponse(wsConn, response)
+}
+
+// handlePathFindStatus returns the current status of the active pathfinding session.
+func (ws *WebSocketServer) handlePathFindStatus(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+	wsConn.mutex.RLock()
+	session := wsConn.pathFindSession
+	wsConn.mutex.RUnlock()
+
+	if session == nil {
+		ws.sendError(wsConn, types.RpcErrorNoPathRequest(), cmd.ID)
+		return
+	}
+
+	event := session.GetLastResult()
+
+	response := types.WebSocketResponse{
+		Type:       "response",
+		ID:         cmd.ID,
+		Status:     "success",
+		Result:     event,
+		ApiVersion: ctx.ApiVersion,
+	}
+	ws.sendResponse(wsConn, response)
+}
+
+// UpdatePathFindSessions re-runs pathfinding for all active sessions on ledger close.
+// Called from the ledger close callback in server.go.
+func (ws *WebSocketServer) UpdatePathFindSessions(getView func() (types.LedgerStateView, error)) {
+	ws.connectionsMutex.RLock()
+	// Collect connections with active sessions
+	var activeSessions []*WebSocketConnection
+	for _, conn := range ws.connections {
+		conn.mutex.RLock()
+		if conn.pathFindSession != nil {
+			activeSessions = append(activeSessions, conn)
+		}
+		conn.mutex.RUnlock()
+	}
+	ws.connectionsMutex.RUnlock()
+
+	if len(activeSessions) == 0 {
+		return
+	}
+
+	// Get ledger view once for all sessions
+	view, err := getView()
+	if err != nil {
+		log.Printf("Failed to get ledger view for path_find updates: %v", err)
+		return
+	}
+
+	for _, conn := range activeSessions {
+		conn.mutex.RLock()
+		session := conn.pathFindSession
+		conn.mutex.RUnlock()
+
+		if session == nil {
+			continue
+		}
+
+		event := session.Execute(view)
+
+		data, marshalErr := json.Marshal(event)
+		if marshalErr != nil {
+			continue
+		}
+
+		select {
+		case conn.sendChannel <- data:
+		default:
+			// Channel full, skip this update
+		}
+	}
 }
 
 // handleRPCMethod processes regular RPC method calls over WebSocket
@@ -473,6 +624,11 @@ func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpc
 func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 	// Cancel context
 	wsConn.cancel()
+
+	// Clear any active path_find session
+	wsConn.mutex.Lock()
+	wsConn.pathFindSession = nil
+	wsConn.mutex.Unlock()
 
 	// Remove from connections map
 	ws.connectionsMutex.Lock()
