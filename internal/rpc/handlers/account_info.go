@@ -1,28 +1,37 @@
 package handlers
 
 import (
+	"encoding/hex"
 	"encoding/json"
+	"strings"
 
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
+// AccountRoot flag constants matching rippled's lsfXxx values
+const (
+	lsfPasswordSpent            uint32 = 0x00010000
+	lsfRequireDestTag           uint32 = 0x00020000
+	lsfRequireAuth              uint32 = 0x00040000
+	lsfDisallowXRP              uint32 = 0x00080000
+	lsfDisableMaster            uint32 = 0x00100000
+	lsfNoFreeze                 uint32 = 0x00200000
+	lsfGlobalFreeze             uint32 = 0x00400000
+	lsfDefaultRipple            uint32 = 0x00800000
+	lsfDepositAuth              uint32 = 0x01000000
+	lsfAMM                      uint32 = 0x02000000
+	lsfDisallowIncomingNFTOffer uint32 = 0x04000000
+	lsfDisallowIncomingCheck    uint32 = 0x08000000
+	lsfDisallowIncomingPayChan  uint32 = 0x10000000
+	lsfDisallowIncomingTrustln  uint32 = 0x20000000
+	lsfAllowTrustLineClawback  uint32 = 0x80000000
+)
+
 // AccountInfoMethod handles the account_info RPC method.
-// PARTIAL: Core account data works. Missing:
-//
-// TODO [account_info]: Support ledger lookup by hash.
-//   - When ledger_hash is provided, resolve the ledger by hash first,
-//     then query account info from that specific ledger state.
-//   - Requires: GetAccountInfo() to accept a ledger hash parameter,
-//     or resolve hash→sequence first via GetLedgerByHash().
-//
-// TODO [account_info]: Load actual signer lists when signer_lists=true.
-//   - Requires: Reading SignerList SLE from the account's owner directory
-//   - Reference: rippled AccountInfo.cpp lines 180-220
-//   - Should return array of signer list objects with SignerQuorum + SignerEntries
 type AccountInfoMethod struct{}
 
 func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	// Parse parameters
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -40,34 +49,30 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, types.RpcErrorInvalidParams("Missing required parameter: account")
 	}
 
-	// Check if ledger service is available
 	if types.Services == nil || types.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
-	// Determine ledger index to use
+	// Determine ledger index
 	ledgerIndex := "current"
 	if request.LedgerIndex != "" {
 		ledgerIndex = request.LedgerIndex.String()
 	} else if request.LedgerHash != "" {
-		// TODO [account_info]: resolve ledger by hash (see type-level TODO)
 		ledgerIndex = "validated"
 	}
 
-	// Get account info from the ledger
 	info, err := types.Services.Ledger.GetAccountInfo(request.Account, ledgerIndex)
 	if err != nil {
-		// Check for specific error types
 		if err.Error() == "account not found" {
 			return nil, &types.RpcError{
-				Code:    19, // actNotFound
+				Code:    19,
 				Message: "Account not found.",
 			}
 		}
 		return nil, types.RpcErrorInternal("Failed to get account info: " + err.Error())
 	}
 
-	// Build account_data response
+	// Build account_data
 	accountData := map[string]interface{}{
 		"Account":         info.Account,
 		"Balance":         info.Balance,
@@ -93,15 +98,42 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	if info.TickSize > 0 {
 		accountData["TickSize"] = info.TickSize
 	}
-
-	response := map[string]interface{}{
-		"account_data": accountData,
-		"ledger_hash":  info.LedgerHash,
-		"ledger_index": info.LedgerIndex,
-		"validated":    info.Validated,
+	if info.PreviousTxnID != "" {
+		accountData["PreviousTxnID"] = info.PreviousTxnID
+	}
+	if info.PreviousTxnLgrSeq > 0 {
+		accountData["PreviousTxnLgrSeq"] = info.PreviousTxnLgrSeq
 	}
 
-	// Add queue data if requested and this is current ledger
+	// Build account_flags from Flags bitmask
+	flags := info.Flags
+	accountFlags := map[string]bool{
+		"defaultRipple":         flags&lsfDefaultRipple != 0,
+		"depositAuth":          flags&lsfDepositAuth != 0,
+		"disableMasterKey":     flags&lsfDisableMaster != 0,
+		"disallowIncomingXRP":  flags&lsfDisallowXRP != 0,
+		"globalFreeze":         flags&lsfGlobalFreeze != 0,
+		"noFreeze":             flags&lsfNoFreeze != 0,
+		"passwordSpent":        flags&lsfPasswordSpent != 0,
+		"requireAuthorization": flags&lsfRequireAuth != 0,
+		"requireDestinationTag": flags&lsfRequireDestTag != 0,
+	}
+	// Conditional flags (always include them — amendment gating is separate)
+	accountFlags["disallowIncomingNFTokenOffer"] = flags&lsfDisallowIncomingNFTOffer != 0
+	accountFlags["disallowIncomingCheck"] = flags&lsfDisallowIncomingCheck != 0
+	accountFlags["disallowIncomingPayChan"] = flags&lsfDisallowIncomingPayChan != 0
+	accountFlags["disallowIncomingTrustline"] = flags&lsfDisallowIncomingTrustln != 0
+	accountFlags["allowTrustLineClawback"] = flags&lsfAllowTrustLineClawback != 0
+
+	response := map[string]interface{}{
+		"account_data":  accountData,
+		"account_flags": accountFlags,
+		"ledger_hash":   info.LedgerHash,
+		"ledger_index":  info.LedgerIndex,
+		"validated":     info.Validated,
+	}
+
+	// Add queue data if requested
 	if request.Queue && ledgerIndex == "current" {
 		response["queue_data"] = map[string]interface{}{
 			"auth_change_queued":    false,
@@ -113,13 +145,39 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// Add signer lists if requested
-	// TODO [account_info]: load signer lists from ledger (see type-level TODO)
+	// Load signer lists if requested
 	if request.SignerLists {
-		response["signer_lists"] = []interface{}{}
+		signerLists := m.loadSignerLists(request.Account, ledgerIndex)
+		// API v1: nested under account_data
+		accountData["signer_lists"] = signerLists
 	}
 
 	return response, nil
+}
+
+// loadSignerLists retrieves signer list objects for an account
+func (m *AccountInfoMethod) loadSignerLists(account string, ledgerIndex string) []interface{} {
+	result, err := types.Services.Ledger.GetAccountObjects(account, ledgerIndex, "SignerList", 10)
+	if err != nil || len(result.AccountObjects) == 0 {
+		return []interface{}{}
+	}
+
+	var signerLists []interface{}
+	for _, obj := range result.AccountObjects {
+		// Decode the raw SLE binary to JSON
+		hexData := hex.EncodeToString(obj.Data)
+		decoded, err := binarycodec.Decode(hexData)
+		if err != nil {
+			continue
+		}
+		// Add the index field
+		decoded["index"] = strings.ToUpper(obj.Index)
+		signerLists = append(signerLists, decoded)
+	}
+	if signerLists == nil {
+		return []interface{}{}
+	}
+	return signerLists
 }
 
 func (m *AccountInfoMethod) RequiredRole() types.Role {

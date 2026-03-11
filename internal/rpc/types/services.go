@@ -117,6 +117,9 @@ type LedgerService interface {
 
 	// GetNFTSellOffers retrieves sell offers for an NFToken
 	GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error)
+
+	// SimulateTransaction runs a transaction against a snapshot without committing
+	SimulateTransaction(txJSON []byte) (*SubmitResult, error)
 }
 
 // DepositAuthorizedResult contains the result of deposit_authorized RPC
@@ -131,19 +134,21 @@ type DepositAuthorizedResult struct {
 
 // AccountInfo contains account information from the ledger
 type AccountInfo struct {
-	Account      string
-	Balance      string
-	Flags        uint32
-	OwnerCount   uint32
-	Sequence     uint32
-	RegularKey   string
-	Domain       string
-	EmailHash    string
-	TransferRate uint32
-	TickSize     uint8
-	LedgerIndex  uint32
-	LedgerHash   string
-	Validated    bool
+	Account           string
+	Balance           string
+	Flags             uint32
+	OwnerCount        uint32
+	Sequence          uint32
+	RegularKey        string
+	Domain            string
+	EmailHash         string
+	TransferRate      uint32
+	TickSize          uint8
+	PreviousTxnID     string
+	PreviousTxnLgrSeq uint32
+	LedgerIndex       uint32
+	LedgerHash        string
+	Validated         bool
 }
 
 // LedgerReader provides read access to a ledger
@@ -154,6 +159,13 @@ type LedgerReader interface {
 	IsClosed() bool
 	IsValidated() bool
 	TotalDrops() uint64
+	CloseTime() int64         // Ripple epoch seconds
+	CloseTimeResolution() uint32
+	CloseFlags() uint8
+	ParentCloseTime() int64   // Ripple epoch seconds
+	TxMapHash() [32]byte      // Transaction tree root hash
+	StateMapHash() [32]byte   // Account state tree root hash
+	ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error
 }
 
 // LedgerServerInfo contains server status information from the ledger service
@@ -165,6 +177,7 @@ type LedgerServerInfo struct {
 	ValidatedLedgerSeq  uint32
 	ValidatedLedgerHash [32]byte
 	CompleteLedgers     string
+	NetworkID           uint32
 }
 
 // SubmitResult contains the result of submitting a transaction

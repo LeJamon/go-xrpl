@@ -65,6 +65,11 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		"validated":    result.Validated,
 	}
 
+	// Conditionally include limit if it was specified in the request
+	if request.Limit > 0 {
+		response["limit"] = request.Limit
+	}
+
 	return response, nil
 }
 

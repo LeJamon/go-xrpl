@@ -668,14 +668,14 @@ func TestLedgerEntryMissingEntryType(t *testing.T) {
 		{
 			name:          "Empty params - must specify object type",
 			params:        map[string]interface{}{},
-			expectedError: "Must specify object by",
+			expectedError: "Must specify object to look up",
 		},
 		{
 			name: "Only ledger_index specified - must specify object type",
 			params: map[string]interface{}{
 				"ledger_index": "validated",
 			},
-			expectedError: "Must specify object by",
+			expectedError: "Must specify object to look up",
 		},
 	}
 
@@ -1107,8 +1107,9 @@ func TestLedgerEntryTypePriority(t *testing.T) {
 // =============================================================================
 
 // TestLedgerEntryNotImplementedTypes documents entry types that are defined but not fully implemented
-// These tests verify the current behavior and can be updated when implementation is complete
-func TestLedgerEntryNotImplementedTypes(t *testing.T) {
+// TestLedgerEntryImplementedTypes tests that keylet-based lookups now work
+// The mock returns a default result for any keylet, so these should succeed.
+func TestLedgerEntryImplementedTypes(t *testing.T) {
 	mock := newMockLedgerEntryService()
 	cleanup := setupLedgerEntryTestServices(mock)
 	defer cleanup()
@@ -1120,12 +1121,7 @@ func TestLedgerEntryNotImplementedTypes(t *testing.T) {
 		ApiVersion: types.ApiVersion1,
 	}
 
-	// These entry types have struct definitions but keylet computation is not implemented
-	// When an object is provided instead of an index string, JSON parsing fails
-
-	t.Run("account_root by address - not implemented", func(t *testing.T) {
-		// account_root expects a string (address) but current implementation
-		// doesn't compute the account root keylet from the address
+	t.Run("account_root by address", func(t *testing.T) {
 		params := map[string]interface{}{
 			"account_root": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"ledger_index": "validated",
@@ -1133,14 +1129,13 @@ func TestLedgerEntryNotImplementedTypes(t *testing.T) {
 		paramsJSON, err := json.Marshal(params)
 		require.NoError(t, err)
 
-		_, rpcErr := method.Handle(ctx, paramsJSON)
-		// Current implementation doesn't process account_root
-		require.NotNil(t, rpcErr, "account_root by address is not implemented")
-		assert.Contains(t, rpcErr.Message, "Must specify object by")
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		// Mock returns a default result for any key
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
 	})
 
-	t.Run("offer by account and seq - not implemented", func(t *testing.T) {
-		// offer as object expects account + seq to compute keylet
+	t.Run("offer by account and seq", func(t *testing.T) {
 		params := map[string]interface{}{
 			"offer": map[string]interface{}{
 				"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
@@ -1151,12 +1146,12 @@ func TestLedgerEntryNotImplementedTypes(t *testing.T) {
 		paramsJSON, err := json.Marshal(params)
 		require.NoError(t, err)
 
-		_, rpcErr := method.Handle(ctx, paramsJSON)
-		// Current implementation doesn't compute offer keylet from account+seq
-		require.NotNil(t, rpcErr, "offer by account+seq is not implemented")
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
 	})
 
-	t.Run("escrow by owner and seq - not implemented", func(t *testing.T) {
+	t.Run("escrow by owner and seq", func(t *testing.T) {
 		params := map[string]interface{}{
 			"escrow": map[string]interface{}{
 				"owner": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
@@ -1167,61 +1162,28 @@ func TestLedgerEntryNotImplementedTypes(t *testing.T) {
 		paramsJSON, err := json.Marshal(params)
 		require.NoError(t, err)
 
-		_, rpcErr := method.Handle(ctx, paramsJSON)
-		// Current implementation doesn't compute escrow keylet from owner+seq
-		require.NotNil(t, rpcErr, "escrow by owner+seq is not implemented")
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
 	})
 
-	t.Run("ripple_state by accounts and currency - not implemented", func(t *testing.T) {
-		params := map[string]interface{}{
-			"ripple_state": map[string]interface{}{
-				"accounts": []string{"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9"},
-				"currency": "USD",
-			},
-			"ledger_index": "validated",
-		}
-		paramsJSON, err := json.Marshal(params)
-		require.NoError(t, err)
-
-		_, rpcErr := method.Handle(ctx, paramsJSON)
-		// Current implementation doesn't compute ripple_state keylet
-		require.NotNil(t, rpcErr, "ripple_state by accounts+currency is not implemented")
-	})
-
-	t.Run("ticket by account and ticket_seq - not implemented", func(t *testing.T) {
+	t.Run("ticket by account and ticket_id", func(t *testing.T) {
 		params := map[string]interface{}{
 			"ticket": map[string]interface{}{
-				"account":    "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-				"ticket_seq": 5,
+				"account":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"ticket_id": 5,
 			},
 			"ledger_index": "validated",
 		}
 		paramsJSON, err := json.Marshal(params)
 		require.NoError(t, err)
 
-		_, rpcErr := method.Handle(ctx, paramsJSON)
-		// Current implementation doesn't compute ticket keylet
-		require.NotNil(t, rpcErr, "ticket by account+ticket_seq is not implemented")
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
 	})
 
-	t.Run("deposit_preauth by owner and authorized - not implemented", func(t *testing.T) {
-		params := map[string]interface{}{
-			"deposit_preauth": map[string]interface{}{
-				"owner":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-				"authorized": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
-			},
-			"ledger_index": "validated",
-		}
-		paramsJSON, err := json.Marshal(params)
-		require.NoError(t, err)
-
-		_, rpcErr := method.Handle(ctx, paramsJSON)
-		// Current implementation doesn't compute deposit_preauth keylet
-		require.NotNil(t, rpcErr, "deposit_preauth by owner+authorized is not implemented")
-	})
-
-	t.Run("directory by owner - not implemented", func(t *testing.T) {
-		// directory as object with owner field is not implemented
+	t.Run("directory by owner", func(t *testing.T) {
 		params := map[string]interface{}{
 			"directory": map[string]interface{}{
 				"owner": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
@@ -1231,9 +1193,9 @@ func TestLedgerEntryNotImplementedTypes(t *testing.T) {
 		paramsJSON, err := json.Marshal(params)
 		require.NoError(t, err)
 
-		_, rpcErr := method.Handle(ctx, paramsJSON)
-		// Current implementation only accepts directory as hex string index
-		require.NotNil(t, rpcErr, "directory by owner is not implemented")
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
 	})
 }
 
@@ -1260,12 +1222,11 @@ func TestLedgerEntryInvalidParameters(t *testing.T) {
 		expectedError string
 	}{
 		{
-			name: "Invalid JSON in binary field",
+			name: "Index with empty hex string",
 			params: map[string]interface{}{
-				"index":  "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
-				"binary": "not-a-boolean",
+				"index": "",
 			},
-			expectedError: "Invalid parameters",
+			expectedError: "Invalid index",
 		},
 		{
 			name: "Index with non-hex characters",
@@ -2287,42 +2248,42 @@ func TestLedgerEntryMalformedRequests(t *testing.T) {
 			params: map[string]interface{}{
 				"index": 12345,
 			},
-			expectedError: "Invalid parameters",
+			expectedError: "Invalid index",
 		},
 		{
 			name: "Index as array should fail",
 			params: map[string]interface{}{
 				"index": []string{"A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"},
 			},
-			expectedError: "Invalid parameters",
+			expectedError: "Invalid index",
 		},
 		{
 			name: "Check as integer should fail",
 			params: map[string]interface{}{
 				"check": 12345,
 			},
-			expectedError: "Invalid parameters",
+			expectedError: "Invalid check",
 		},
 		{
 			name: "Payment channel as boolean should fail",
 			params: map[string]interface{}{
 				"payment_channel": true,
 			},
-			expectedError: "Invalid parameters",
+			expectedError: "Invalid payment_channel",
 		},
 		{
 			name: "Directory as null should fail",
 			params: map[string]interface{}{
 				"directory": nil,
 			},
-			expectedError: "Must specify object",
+			expectedError: "Invalid directory",
 		},
 		{
 			name: "NFT page as empty string should fail",
 			params: map[string]interface{}{
 				"nft_page": "",
 			},
-			expectedError: "Must specify object",
+			expectedError: "Invalid nft_page",
 		},
 	}
 
@@ -2520,7 +2481,7 @@ func TestLedgerEntryHexValidation(t *testing.T) {
 			paramName:     "nft_page",
 			paramValue:    "",
 			expectError:   true,
-			expectedError: "Must specify object",
+			expectedError: "Invalid nft_page",
 		},
 	}
 

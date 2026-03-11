@@ -10,11 +10,21 @@ import (
 type PingMethod struct{}
 
 func (m *PingMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	// Ping method is used to test connectivity and measure round-trip time
-	// It simply returns an empty success response
+	response := map[string]interface{}{}
 
-	response := map[string]interface{}{
-		// Empty response indicates successful ping
+	// Add role info based on RPC context (matches rippled Ping.cpp)
+	if ctx != nil {
+		switch ctx.Role {
+		case types.RoleAdmin:
+			response["role"] = "admin"
+		case types.RoleIdentified:
+			response["role"] = "identified"
+			if ctx.ClientIP != "" {
+				response["ip"] = ctx.ClientIP
+			}
+		default:
+			// Guest/User don't get role info in response
+		}
 	}
 
 	return response, nil

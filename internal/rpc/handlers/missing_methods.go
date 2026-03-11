@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -298,20 +299,8 @@ func (m *TxReduceRelayMethod) SupportedApiVersions() []int {
 }
 
 // SimulateMethod handles the simulate RPC method.
-// STUB: Returns error. Requires dry-run transaction execution.
-//
-// TODO [engine]: Implement transaction simulation (dry-run).
-//   - Reference: rippled Simulate.cpp
-//   - Steps:
-//     1. Parse tx_blob or tx_json (mutually exclusive)
-//     2. Create a snapshot/sandbox of the current open ledger state
-//     3. Apply the transaction in the sandbox (full Validate→Preflight→Preclaim→Apply)
-//     4. Collect the result and metadata WITHOUT committing to the real ledger
-//     5. Return: engine_result, tx_json, metadata (same format as submit response)
-//   - Requires: Engine snapshot support — the NestedApplyStateTable/sandbox
-//     infrastructure already exists (used by payment engine).
-//     Key: run transaction through engine with a discardable view.
-//   - Binary param: if true, return tx_blob + meta as hex instead of JSON
+// Runs a transaction against a snapshot of the open ledger without committing.
+// Reference: rippled Simulate.cpp
 type SimulateMethod struct{}
 
 func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
@@ -341,8 +330,52 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
-	return nil, types.NewRpcError(types.RpcNOT_IMPL, "notImplemented", "notImplemented",
-		"simulate is not yet implemented — requires dry-run transaction execution")
+	var txJSON []byte
+	var txJsonMap map[string]interface{}
+
+	if hasTxBlob {
+		// Decode tx_blob to get tx_json
+		decoded, err := binarycodec.Decode(request.TxBlob)
+		if err != nil {
+			return nil, types.RpcErrorInvalidParams("Invalid tx_blob: " + err.Error())
+		}
+		txJsonMap = decoded
+		txJSON, err = json.Marshal(decoded)
+		if err != nil {
+			return nil, types.RpcErrorInternal("Failed to marshal decoded tx_blob")
+		}
+	} else {
+		txJsonMap = request.TxJSON
+		var err error
+		txJSON, err = json.Marshal(request.TxJSON)
+		if err != nil {
+			return nil, types.RpcErrorInternal("Failed to marshal tx_json")
+		}
+	}
+
+	// Run the transaction in simulation mode (snapshot, no commit)
+	result, err := types.Services.Ledger.SimulateTransaction(txJSON)
+	if err != nil {
+		return nil, types.RpcErrorInternal("Simulation failed: " + err.Error())
+	}
+
+	response := map[string]interface{}{
+		"engine_result":         result.EngineResult,
+		"engine_result_code":    result.EngineResultCode,
+		"engine_result_message": result.EngineResultMessage,
+		"applied":               result.Applied,
+		"ledger_index":          result.CurrentLedger,
+	}
+
+	if request.Binary {
+		if encoded, err := binarycodec.Encode(txJsonMap); err == nil {
+			response["tx_blob"] = encoded
+		}
+	} else {
+		response["tx_json"] = txJsonMap
+	}
+
+	return response, nil
 }
 
 func (m *SimulateMethod) RequiredRole() types.Role {

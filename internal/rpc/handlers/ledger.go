@@ -3,30 +3,22 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strconv"
+	"strings"
+	"time"
 
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
+// rippleEpochTime is 2000-01-01T00:00:00Z
+var rippleEpochTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+
 // LedgerMethod handles the ledger RPC method.
-// PARTIAL: Ledger header info works. Missing:
-//
-// TODO [ledger]: Populate transactions list when transactions=true.
-//   - Requires: LedgerService.GetLedgerTransactions(seq) returning tx hashes
-//     (or full tx+meta if expand=true)
-//   - When expand=false: return array of transaction hash strings
-//   - When expand=true: return array of full tx_json objects with metadata
-//   - When binary=true + expand=true: return tx_blob + meta hex strings
-//   - Reference: rippled LedgerHandler.cpp lines 200-300
-//
-// TODO [ledger]: Populate accounts/state when accounts=true or full=true.
-//   - Requires: LedgerService.GetLedgerData() (already exists for ledger_data RPC)
-//   - When full=true: include all state objects and transactions
-//   - Reference: rippled LedgerHandler.cpp
 type LedgerMethod struct{}
 
 func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	// Parse parameters
 	var request struct {
 		types.LedgerSpecifier
 		Accounts     bool `json:"accounts,omitempty"`
@@ -44,7 +36,6 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		}
 	}
 
-	// Check if ledger service is available
 	if types.Services == nil || types.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
@@ -55,7 +46,6 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	var err error
 
 	if request.LedgerHash != "" {
-		// Look up by hash
 		hashBytes, decErr := hex.DecodeString(request.LedgerHash)
 		if decErr != nil || len(hashBytes) != 32 {
 			return nil, types.RpcErrorInvalidParams("Invalid ledger_hash")
@@ -68,7 +58,6 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		}
 		validated = targetLedger.IsValidated()
 	} else {
-		// Look up by index
 		ledgerIndex := request.LedgerIndex.String()
 		if ledgerIndex == "" {
 			ledgerIndex = "validated"
@@ -91,7 +80,6 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 			targetLedger, err = types.Services.Ledger.GetLedgerBySequence(seq)
 			validated = targetLedger != nil && targetLedger.IsValidated()
 		default:
-			// Parse as number
 			seq, parseErr := strconv.ParseUint(ledgerIndex, 10, 32)
 			if parseErr != nil {
 				return nil, types.RpcErrorInvalidParams("Invalid ledger_index")
@@ -111,20 +99,78 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	// Build ledger info
 	hash := targetLedger.Hash()
 	parent := targetLedger.ParentHash()
-	ledgerHash := hex.EncodeToString(hash[:])
-	parentHash := hex.EncodeToString(parent[:])
+	txHash := targetLedger.TxMapHash()
+	stateHash := targetLedger.StateMapHash()
+	ledgerHash := strings.ToUpper(hex.EncodeToString(hash[:]))
+	parentHash := strings.ToUpper(hex.EncodeToString(parent[:]))
+	txHashStr := strings.ToUpper(hex.EncodeToString(txHash[:]))
+	stateHashStr := strings.ToUpper(hex.EncodeToString(stateHash[:]))
+
+	// Format close time
+	closeTimeSec := targetLedger.CloseTime()
+	closeTime := rippleEpochTime.Add(time.Duration(closeTimeSec) * time.Second)
+	closeTimeHuman := closeTime.UTC().Format("2006-Jan-02 15:04:05.000000000 UTC")
+	closeTimeISO := closeTime.UTC().Format(time.RFC3339)
+
+	// Get reserve info
+	_, reserveBase, reserveInc := types.Services.Ledger.GetCurrentFees()
 
 	ledgerInfo := map[string]interface{}{
-		"accepted":     true,
-		"close_flags":  0,
-		"closed":       targetLedger.IsClosed(),
-		"hash":         ledgerHash,
-		"ledger_hash":  ledgerHash,
-		"ledger_index": strconv.FormatUint(uint64(targetLedger.Sequence()), 10),
-		"parent_hash":  parentHash,
-		"seqNum":       strconv.FormatUint(uint64(targetLedger.Sequence()), 10),
-		"totalCoins":   strconv.FormatUint(targetLedger.TotalDrops(), 10),
-		"total_coins":  strconv.FormatUint(targetLedger.TotalDrops(), 10),
+		"accepted":              true,
+		"account_hash":          stateHashStr,
+		"close_flags":           targetLedger.CloseFlags(),
+		"close_time":            closeTimeSec,
+		"close_time_human":      closeTimeHuman,
+		"close_time_iso":        closeTimeISO,
+		"close_time_resolution": targetLedger.CloseTimeResolution(),
+		"closed":                targetLedger.IsClosed(),
+		"hash":                  ledgerHash,
+		"ledger_hash":           ledgerHash,
+		"ledger_index":          strconv.FormatUint(uint64(targetLedger.Sequence()), 10),
+		"parent_close_time":     targetLedger.ParentCloseTime(),
+		"parent_hash":           parentHash,
+		"seqNum":                strconv.FormatUint(uint64(targetLedger.Sequence()), 10),
+		"totalCoins":            strconv.FormatUint(targetLedger.TotalDrops(), 10),
+		"total_coins":           strconv.FormatUint(targetLedger.TotalDrops(), 10),
+		"transaction_hash":      txHashStr,
+	}
+
+	// Add transactions if requested
+	if request.Transactions {
+		var txList []interface{}
+		targetLedger.ForEachTransaction(func(txHashKey [32]byte, txData []byte) bool {
+			hashStr := strings.ToUpper(hex.EncodeToString(txHashKey[:]))
+			if request.Expand {
+				// Return full transaction objects
+				if request.Binary {
+					txList = append(txList, map[string]interface{}{
+						"tx_blob": strings.ToUpper(hex.EncodeToString(txData)),
+						"hash":    hashStr,
+					})
+				} else {
+					// Decode transaction blob to JSON
+					txHex := hex.EncodeToString(txData)
+					decoded, err := binarycodec.Decode(txHex)
+					if err != nil {
+						txList = append(txList, map[string]interface{}{
+							"hash":    hashStr,
+							"tx_blob": strings.ToUpper(txHex),
+						})
+					} else {
+						decoded["hash"] = hashStr
+						txList = append(txList, decoded)
+					}
+				}
+			} else {
+				// Return just transaction hashes
+				txList = append(txList, hashStr)
+			}
+			return true
+		})
+		if txList == nil {
+			txList = []interface{}{}
+		}
+		ledgerInfo["transactions"] = txList
 	}
 
 	response := map[string]interface{}{
@@ -134,12 +180,11 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		"validated":    validated,
 	}
 
-	// TODO [ledger]: populate with real transactions (see type-level TODO)
-	if request.Transactions {
-		response["ledger"].(map[string]interface{})["transactions"] = []interface{}{}
-	}
+	// Add reserve info at top level
+	response["reserve_base_drops"] = fmt.Sprintf("%d", reserveBase)
+	response["reserve_inc_drops"] = fmt.Sprintf("%d", reserveInc)
 
-	// Add queue if requested and this is current ledger
+	// Add queue data if requested
 	if request.Queue {
 		response["queue_data"] = []interface{}{}
 	}

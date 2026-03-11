@@ -17,6 +17,7 @@ type FeatureMethod struct{}
 func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
 		Feature string `json:"feature,omitempty"`
+		Vetoed  *bool  `json:"vetoed,omitempty"`
 	}
 	if params != nil {
 		_ = json.Unmarshal(params, &request)
@@ -27,9 +28,9 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		return m.handleSingleFeature(request.Feature)
 	}
 
-	// Return all features
+	// Return all features wrapped in "features" key (matches rippled)
 	allFeatures := amendment.AllFeatures()
-	response := make(map[string]interface{}, len(allFeatures))
+	features := make(map[string]interface{}, len(allFeatures))
 
 	for _, f := range allFeatures {
 		hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
@@ -50,7 +51,7 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		// In standalone mode, supported features with default-yes vote are enabled
 		enabled := supported && f.Vote == amendment.VoteDefaultYes
 
-		response[hexID] = map[string]interface{}{
+		features[hexID] = map[string]interface{}{
 			"name":      f.Name,
 			"enabled":   enabled,
 			"supported": supported,
@@ -58,7 +59,9 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		}
 	}
 
-	return response, nil
+	return map[string]interface{}{
+		"features": features,
+	}, nil
 }
 
 // handleSingleFeature looks up a single feature by name or hex ID.

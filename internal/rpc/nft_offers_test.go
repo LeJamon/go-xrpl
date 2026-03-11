@@ -139,6 +139,9 @@ func (m *mockNFTOffersLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerInde
 	}
 	return nil, errors.New("object not found")
 }
+func (m *mockNFTOffersLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
+	return nil, errors.New("not implemented")
+}
 
 // setupNFTOffersTestServices initializes the Services singleton with a mock for testing
 func setupNFTOffersTestServices(mock *mockNFTOffersLedgerService) func() {

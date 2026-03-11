@@ -3,7 +3,9 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -21,31 +23,50 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		}
 	}
 
-	// Check if ledger service is available
 	if types.Services == nil || types.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
-	// Get transaction history from the ledger service
 	result, err := types.Services.Ledger.GetTransactionHistory(request.Start)
 	if err != nil {
 		if err.Error() == "transaction history not available (no database configured)" {
 			return nil, &types.RpcError{
-				Code:    73, // lgrNotFound
+				Code:    73,
 				Message: "Transaction history not available. Database not configured.",
 			}
 		}
 		return nil, types.RpcErrorInternal("Failed to get transaction history: " + err.Error())
 	}
 
-	// Build transactions array
-	txs := make([]map[string]interface{}, len(result.Transactions))
+	// Build transactions array with deserialized JSON
+	txs := make([]interface{}, len(result.Transactions))
 	for i, tx := range result.Transactions {
-		txs[i] = map[string]interface{}{
-			"hash":         hex.EncodeToString(tx.Hash[:]),
-			"ledger_index": tx.LedgerIndex,
-			"tx_blob":      hex.EncodeToString(tx.TxBlob),
+		hashStr := strings.ToUpper(hex.EncodeToString(tx.Hash[:]))
+		txHex := hex.EncodeToString(tx.TxBlob)
+
+		// Decode to full JSON
+		decoded, err := binarycodec.Decode(txHex)
+		if err != nil {
+			// Fallback to hex blob
+			txs[i] = map[string]interface{}{
+				"hash":         hashStr,
+				"ledger_index": tx.LedgerIndex,
+				"tx_blob":      strings.ToUpper(txHex),
+			}
+			continue
 		}
+
+		decoded["hash"] = hashStr
+		decoded["ledger_index"] = tx.LedgerIndex
+
+		// Inject DeliverMax for Payment transactions
+		if txType, ok := decoded["TransactionType"].(string); ok && txType == "Payment" {
+			if amount, ok := decoded["Amount"]; ok {
+				decoded["DeliverMax"] = amount
+			}
+		}
+
+		txs[i] = decoded
 	}
 
 	response := map[string]interface{}{

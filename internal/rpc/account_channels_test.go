@@ -152,6 +152,9 @@ func (m *mockAccountChannelsLedgerService) GetNFTBuyOffers(nftID [32]byte, ledge
 func (m *mockAccountChannelsLedgerService) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
+func (m *mockAccountChannelsLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
+	return nil, errors.New("not implemented")
+}
 
 // setupAccountChannelsTestServices initializes the Services singleton with a mock for testing
 func setupAccountChannelsTestServices(mock *mockAccountChannelsLedgerService) func() {

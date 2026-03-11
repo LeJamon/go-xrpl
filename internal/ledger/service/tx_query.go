@@ -148,6 +148,57 @@ func (s *Service) StoreTransaction(txHash [32]byte, txData []byte) error {
 	return nil
 }
 
+// SimulateTransaction runs a transaction against a snapshot of the open ledger
+// without committing changes. Returns the result and metadata.
+func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.openLedger == nil {
+		return nil, ErrNoOpenLedger
+	}
+
+	// Create a snapshot of the open ledger's state map for isolation
+	snapshot, err := s.openLedger.StateMapSnapshot()
+	if err != nil {
+		return nil, errors.New("failed to create ledger snapshot: " + err.Error())
+	}
+
+	// Create a temporary ledger view backed by the snapshot
+	simView := newSnapshotView(snapshot, s.openLedger)
+
+	// Create engine config from current state
+	engineConfig := tx.EngineConfig{
+		BaseFee:                   10,
+		ReserveBase:               10_000_000,
+		ReserveIncrement:          2_000_000,
+		LedgerSequence:            s.openLedger.Sequence(),
+		SkipSignatureVerification: true, // Skip signatures for simulation
+	}
+
+	// Create engine with the snapshot view
+	engine := tx.NewEngine(simView, engineConfig)
+
+	// Apply the transaction (changes go to the snapshot, not the real ledger)
+	applyResult := engine.Apply(transaction)
+
+	result := &SubmitResult{
+		Result:          applyResult.Result,
+		Applied:         applyResult.Applied,
+		Fee:             applyResult.Fee,
+		Metadata:        applyResult.Metadata,
+		Message:         applyResult.Message,
+		CurrentLedger:   s.openLedger.Sequence(),
+		ValidatedLedger: 0,
+	}
+
+	if s.validatedLedger != nil {
+		result.ValidatedLedger = s.validatedLedger.Sequence()
+	}
+
+	return result, nil
+}
+
 // AccountTxResult contains the result of account_tx query
 type AccountTxResult struct {
 	Account      string                        `json:"account"`
