@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx/invariants"
 )
 
 // Action represents the type of modification to a ledger entry
@@ -485,8 +486,8 @@ func (t *ApplyStateTable) DropsDestroyed() drops.XRPAmount {
 
 // CollectEntries returns all modified ledger entries (Insert/Modify/Erase) for invariant checking.
 // Must be called BEFORE Apply() — entries are still in the table at this point.
-func (t *ApplyStateTable) CollectEntries() []InvariantEntry {
-	var entries []InvariantEntry
+func (t *ApplyStateTable) CollectEntries() []invariants.InvariantEntry {
+	var entries []invariants.InvariantEntry
 	for key, entry := range t.items {
 		if entry.Action == ActionCache {
 			continue
@@ -512,7 +513,7 @@ func (t *ApplyStateTable) CollectEntries() []InvariantEntry {
 		if typeData == nil {
 			typeData = before
 		}
-		entries = append(entries, InvariantEntry{
+		entries = append(entries, invariants.InvariantEntry{
 			Key:       key,
 			IsDelete:  entry.Action == ActionErase,
 			Before:    before,

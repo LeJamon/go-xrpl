@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx/invariants"
 	"github.com/LeJamon/goXRPLd/crypto/common"
 )
 
@@ -1542,7 +1543,7 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 	{
 		invEntries := table.CollectEntries()
 		txDeclaredFee := parseTxDeclaredFee(tx, fee)
-		if violation := CheckInvariants(tx, result, fee, txDeclaredFee, invEntries, table, e.rules()); violation != nil {
+		if violation := invariants.CheckInvariants(wrapTxForInvariants(tx), invariants.Result(result), fee, txDeclaredFee, invEntries, table, e.rules()); violation != nil {
 			// First violation: charge fee but revert all state changes (tecINVARIANT_FAILED).
 			// Reference: rippled — first pass returns tec, second would return tef.
 			_ = violation // logged in future via journal
