@@ -138,6 +138,21 @@ func checkAccountRootsNotDeleted(txType string, result Result, entries []Invaria
 				Name:    "AccountRootsNotDeleted",
 				Message: fmt.Sprintf("%s may delete at most 1 AccountRoot, got %d", txType, deletedCount),
 			}
+		// A Batch may contain inner AccountDelete/AMMDelete transactions that
+		// delete account roots. In rippled, each inner tx runs through its own
+		// apply() with its own invariant check under its own tx type. In goXRPL,
+		// the batch processes inner txns within a single engine table, so the
+		// invariant sees the combined result under the "Batch" tx type.
+		// Allow up to 1 account root deletion per batch.
+		// Reference: rippled apply.cpp applyBatchTransactions()
+		case "Batch":
+			if deletedCount <= 1 {
+				return nil
+			}
+			return &InvariantViolation{
+				Name:    "AccountRootsNotDeleted",
+				Message: fmt.Sprintf("Batch may delete at most 1 AccountRoot, got %d", deletedCount),
+			}
 		}
 	}
 
