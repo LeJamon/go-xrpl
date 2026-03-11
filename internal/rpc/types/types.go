@@ -26,6 +26,23 @@ const (
 	RoleIdentified
 )
 
+// Condition represents the preconditions required by an RPC method.
+// Matches rippled's Condition enum in Handler.h.
+// When the server is amendment-blocked, methods with any condition
+// other than NoCondition are blocked with rpcAMENDMENT_BLOCKED.
+type Condition int
+
+const (
+	// NoCondition - method has no preconditions, always available even when amendment blocked
+	NoCondition Condition = iota
+	// NeedsNetworkConnection - method requires network sync
+	NeedsNetworkConnection
+	// NeedsCurrentLedger - method requires access to the current open ledger
+	NeedsCurrentLedger
+	// NeedsClosedLedger - method requires access to the last closed ledger
+	NeedsClosedLedger
+)
+
 // RPC Context contains request-specific information
 type RpcContext struct {
 	Context    context.Context
@@ -40,6 +57,7 @@ type MethodHandler interface {
 	Handle(ctx *RpcContext, params json.RawMessage) (interface{}, *RpcError)
 	RequiredRole() Role
 	SupportedApiVersions() []int
+	RequiredCondition() Condition
 }
 
 // Method registry for dynamic method registration

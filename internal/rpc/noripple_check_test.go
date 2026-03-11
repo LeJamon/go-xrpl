@@ -154,6 +154,7 @@ func (m *mockNoRippleCheckLedgerService) GetNFTSellOffers(nftID [32]byte, ledger
 func (m *mockNoRippleCheckLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
+func (m *mockNoRippleCheckLedgerService) IsAmendmentBlocked() bool { return false }
 
 // setupNoRippleCheckTestServices initializes the Services singleton with a mock for testing
 func setupNoRippleCheckTestServices(mock *mockNoRippleCheckLedgerService) func() {

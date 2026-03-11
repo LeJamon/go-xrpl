@@ -319,3 +319,7 @@ func (m *GetAggregatePriceMethod) RequiredRole() types.Role {
 func (m *GetAggregatePriceMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *GetAggregatePriceMethod) RequiredCondition() types.Condition {
+	return types.NeedsCurrentLedger
+}

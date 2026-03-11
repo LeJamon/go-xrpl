@@ -29,3 +29,7 @@ func (m *ConsensusInfoMethod) RequiredRole() types.Role {
 func (m *ConsensusInfoMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *ConsensusInfoMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

@@ -287,3 +287,7 @@ func (m *SignForMethod) RequiredRole() types.Role {
 func (m *SignForMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *SignForMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

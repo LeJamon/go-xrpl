@@ -149,3 +149,7 @@ func (m *NftBuyOffersMethod) RequiredRole() types.Role {
 func (m *NftBuyOffersMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *NftBuyOffersMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

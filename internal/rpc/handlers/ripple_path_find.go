@@ -41,3 +41,7 @@ func (m *RipplePathFindMethod) RequiredRole() types.Role {
 func (m *RipplePathFindMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *RipplePathFindMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

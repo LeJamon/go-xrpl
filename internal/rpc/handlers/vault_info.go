@@ -127,3 +127,7 @@ func (m *VaultInfoMethod) RequiredRole() types.Role {
 func (m *VaultInfoMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *VaultInfoMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

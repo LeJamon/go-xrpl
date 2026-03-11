@@ -110,3 +110,7 @@ func (m *AccountLinesMethod) RequiredRole() types.Role {
 func (m *AccountLinesMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *AccountLinesMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

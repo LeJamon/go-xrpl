@@ -55,3 +55,7 @@ func (m *JsonMethod) RequiredRole() types.Role {
 func (m *JsonMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *JsonMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

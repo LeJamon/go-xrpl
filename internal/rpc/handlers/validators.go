@@ -33,6 +33,10 @@ func (m *ValidatorsMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
+func (m *ValidatorsMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}
+
 // ValidatorListSitesMethod handles the validator_list_sites RPC method.
 // STUB: Returns empty list. Network-only — not needed for standalone mode.
 //
@@ -52,4 +56,8 @@ func (m *ValidatorListSitesMethod) RequiredRole() types.Role {
 
 func (m *ValidatorListSitesMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
+}
+
+func (m *ValidatorListSitesMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
 }

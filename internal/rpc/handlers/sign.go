@@ -249,3 +249,7 @@ func (m *SignMethod) RequiredRole() types.Role {
 func (m *SignMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *SignMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

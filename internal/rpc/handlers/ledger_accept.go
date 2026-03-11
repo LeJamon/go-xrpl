@@ -43,3 +43,7 @@ func (m *LedgerAcceptMethod) RequiredRole() types.Role {
 func (m *LedgerAcceptMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *LedgerAcceptMethod) RequiredCondition() types.Condition {
+	return types.NeedsCurrentLedger
+}

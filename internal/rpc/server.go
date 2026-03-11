@@ -188,6 +188,19 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types
 			fmt.Sprintf("Method '%s' requires higher privileges", method))
 	}*/
 
+	// Check amendment blocking - matching rippled's conditionMet() in Handler.h
+	// When the server is amendment-blocked, methods with any condition
+	// other than NoCondition are blocked with rpcAMENDMENT_BLOCKED.
+	if handler.RequiredCondition() != types.NoCondition {
+		if types.Services != nil && types.Services.Ledger != nil {
+			if types.Services.Ledger.IsAmendmentBlocked() {
+				return nil, types.NewRpcError(types.RpcAMENDMENT_BLOCKED,
+					"amendmentBlocked", "amendmentBlocked",
+					"Amendment blocked, need upgrade.")
+			}
+		}
+	}
+
 	// Check API version support
 	supportedVersions := handler.SupportedApiVersions()
 	if len(supportedVersions) > 0 {

@@ -136,3 +136,7 @@ func (m *NoRippleCheckMethod) RequiredRole() types.Role {
 func (m *NoRippleCheckMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *NoRippleCheckMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

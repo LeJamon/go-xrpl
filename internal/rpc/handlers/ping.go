@@ -37,3 +37,7 @@ func (m *PingMethod) RequiredRole() types.Role {
 func (m *PingMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *PingMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

@@ -218,3 +218,7 @@ func (m *ChannelVerifyMethod) RequiredRole() types.Role {
 func (m *ChannelVerifyMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *ChannelVerifyMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}

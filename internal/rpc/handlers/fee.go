@@ -70,3 +70,7 @@ func (m *FeeMethod) RequiredRole() types.Role {
 func (m *FeeMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *FeeMethod) RequiredCondition() types.Condition {
+	return types.NeedsCurrentLedger
+}

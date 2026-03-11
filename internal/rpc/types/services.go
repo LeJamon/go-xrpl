@@ -120,6 +120,9 @@ type LedgerService interface {
 
 	// SimulateTransaction runs a transaction against a snapshot without committing
 	SimulateTransaction(txJSON []byte) (*SubmitResult, error)
+
+	// IsAmendmentBlocked returns true if the server is blocked by unsupported amendments
+	IsAmendmentBlocked() bool
 }
 
 // DepositAuthorizedResult contains the result of deposit_authorized RPC

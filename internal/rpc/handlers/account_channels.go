@@ -117,3 +117,7 @@ func (m *AccountChannelsMethod) RequiredRole() types.Role {
 func (m *AccountChannelsMethod) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
+
+func (m *AccountChannelsMethod) RequiredCondition() types.Condition {
+	return types.NoCondition
+}
