@@ -1204,11 +1204,17 @@ func (s *BookStep) getNextOffer(sb *PaymentSandbox, afView *PaymentSandbox, ofrs
 					continue
 				}
 
-				// Check offer expiration (but do NOT remove — used before Rev/Fwd)
-				if s.parentCloseTime > 0 && offer.Expiration > 0 &&
-					offer.Expiration <= s.parentCloseTime {
-					continue
+				// Check offer expiration — remove expired offers from the ledger.
+			// Reference: rippled OfferStream.cpp lines 256-265:
+			// OfferStream::step() always removes expired offers it encounters.
+			if s.parentCloseTime > 0 && offer.Expiration > 0 &&
+				offer.Expiration <= s.parentCloseTime {
+				s.removeExpiredOffer(sb, offer, offerKey)
+				if ofrsToRm != nil {
+					ofrsToRm[offerKey] = true
 				}
+				continue
+			}
 
 				return offer, offerKey, nil
 			}

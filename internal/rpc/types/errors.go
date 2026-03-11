@@ -34,8 +34,9 @@ const (
 	RpcCOMMAND_UNTRUSTED = 3
 	RpcNO_CURRENT        = 4
 	RpcNO_NETWORK        = 5
-	RpcTOO_BUSY          = 6
-	RpcSLOW_DOWN         = 7
+	RpcNO_PERMISSION     = 6 // rippled: rpcNO_PERMISSION = 6
+	RpcTOO_BUSY          = 9 // rippled: rpcTOO_BUSY = 9
+	RpcSLOW_DOWN         = 10 // rippled: rpcSLOW_DOWN = 10
 
 	// Networking
 	RpcNOT_STANDALONE = 10
@@ -153,6 +154,11 @@ func RpcErrorTxnNotFound(message string) *RpcError {
 
 func RpcErrorInternal(message string) *RpcError {
 	return NewRpcError(RpcINTERNAL, "internal", "internal", message)
+}
+
+func RpcErrorNoPermission(method string) *RpcError {
+	return NewRpcError(RpcNO_PERMISSION, "noPermission", "noPermission",
+		"You don't have permission for this command.")
 }
 
 func RpcErrorTooBusy(message string) *RpcError {

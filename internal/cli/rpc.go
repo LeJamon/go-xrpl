@@ -99,8 +99,6 @@ func initMethodRegistry() *types.MethodRegistry {
 	registry.Register("validator_list_sites", &handlers.ValidatorListSitesMethod{})
 	registry.Register("download_shard", &handlers.DownloadShardMethod{})
 	registry.Register("crawl_shards", &handlers.CrawlShardsMethod{})
-	registry.Register("ledger_index", &handlers.LedgerIndexMethod{})
-	
 	// Subscription methods (for WebSocket)
 	registry.Register("subscribe", &handlers.SubscribeMethod{})
 	registry.Register("unsubscribe", &handlers.UnsubscribeMethod{})

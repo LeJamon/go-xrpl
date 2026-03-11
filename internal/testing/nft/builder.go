@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/ledgerstatefix"
 	"github.com/LeJamon/goXRPLd/internal/tx/nftoken"
@@ -632,14 +633,49 @@ func isHexEncoded(s string) bool {
 	return len(s) > 0
 }
 
+// GetNFTokenSeq returns the token sequence that will be used for the next
+// NFTokenMint by the given account. Without fixNFTokenRemint this is simply
+// MintedNFTokens. With fixNFTokenRemint it is FirstNFTokenSequence +
+// MintedNFTokens (falling back to account sequence if FirstNFTokenSequence
+// has not been set yet).
+// Reference: rippled FixNFTokenPageLinks_test.cpp internalTaxon lambda and
+//            rippled token.cpp getID() lines 90-97.
+func GetNFTokenSeq(env *testing.TestEnv, acct *testing.Account) uint32 {
+	nftSeq := env.MintedCount(acct)
+
+	if env.FeatureEnabled("fixNFTokenRemint") {
+		data, err := env.LedgerEntry(keylet.Account(acct.ID))
+		if err == nil && data != nil {
+			acctRoot, err := state.ParseAccountRoot(data)
+			if err == nil {
+				if acctRoot.HasFirstNFTSeq {
+					nftSeq += acctRoot.FirstNFTokenSequence
+				} else {
+					nftSeq += env.Seq(acct)
+				}
+			}
+		}
+	}
+
+	return nftSeq
+}
+
 // GetNextNFTokenID predicts the next NFT ID that will be generated when minting.
 // Must be called BEFORE submitting the NFTokenMint transaction.
-// Reference: rippled's token::getNextID(env, issuer, taxon, flags, xferFee).
+// Reference: rippled's token::getNextID(env, issuer, taxon, flags, xferFee) +
+//            token::getID(env, issuer, taxon, nftSeq, flags, xferFee).
 func GetNextNFTokenID(env *testing.TestEnv, issuer *testing.Account, taxon uint32, flags uint16, transferFee uint16) string {
-	// Get the current MintedNFTokens count (this will be the sequence for the next mint)
-	tokenSeq := env.MintedCount(issuer)
-	tokenID := nftoken.GenerateNFTokenID(issuer.ID, taxon, tokenSeq, flags, transferFee)
+	nftSeq := GetNFTokenSeq(env, issuer)
+	tokenID := nftoken.GenerateNFTokenID(issuer.ID, taxon, nftSeq, flags, transferFee)
 	return hex.EncodeToString(tokenID[:])
+}
+
+// GetNextTokenSeq returns the effective token sequence that will be used for
+// the next NFTokenMint, accounting for the fixNFTokenRemint offset.
+// This is needed when computing ciphered taxons in tests.
+// Reference: rippled NFTokenMint.cpp doApply — tokenSeq computation.
+func GetNextTokenSeq(env *testing.TestEnv, issuer *testing.Account) uint32 {
+	return GetNFTokenSeq(env, issuer)
 }
 
 // GetOfferIndex predicts the offer index (keylet) that will be created.

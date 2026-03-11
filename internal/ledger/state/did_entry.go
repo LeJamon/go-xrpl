@@ -94,7 +94,7 @@ func ParseDID(data []byte) (*DIDData, error) {
 				return did, nil
 			}
 			value := binary.BigEndian.Uint64(data[offset : offset+8])
-			if fieldCode == 34 { // OwnerNode
+			if fieldCode == 4 { // OwnerNode (sfOwnerNode is UInt64 field code 4)
 				did.OwnerNode = value
 			}
 			offset += 8

@@ -30,6 +30,7 @@ func NewSLEAccountRoot(ledgerIndex [32]byte) *SLEAccountRoot {
 	sle.SetFieldMeta("RegularKey", FieldMetaDefault)
 	sle.SetFieldMeta("AccountTxnID", FieldMetaDefault)
 	sle.SetFieldMeta("AMMID", FieldMetaDefault)
+	sle.SetFieldMeta("FirstNFTokenSequence", FieldMetaDefault)
 	// PreviousTxnID and PreviousTxnLgrSeq only in DeleteFinal
 	sle.SetFieldMeta("PreviousTxnID", FieldMetaDeleteFinal)
 	sle.SetFieldMeta("PreviousTxnLgrSeq", FieldMetaDeleteFinal)
@@ -60,6 +61,9 @@ func (s *SLEAccountRoot) LoadFromAccountRoot(account *AccountRoot) {
 	}
 	if account.RegularKey != "" {
 		s.SetOriginal("RegularKey", account.RegularKey)
+	}
+	if account.HasFirstNFTSeq {
+		s.SetOriginal("FirstNFTokenSequence", account.FirstNFTokenSequence)
 	}
 	var zeroHash [32]byte
 	if account.AccountTxnID != zeroHash {
@@ -233,6 +237,8 @@ func NewSLEDirectoryNode(ledgerIndex [32]byte) *SLEDirectoryNode {
 	sle.SetFieldMeta("Indexes", FieldMetaNever)
 	sle.SetFieldMeta("IndexNext", FieldMetaDefault)
 	sle.SetFieldMeta("IndexPrevious", FieldMetaDefault)
+	sle.SetFieldMeta("NFTokenID", FieldMetaDefault)
+	sle.SetFieldMeta("DomainID", FieldMetaDefault)
 	sle.SetFieldMeta("PreviousTxnID", FieldMetaDeleteFinal)
 	sle.SetFieldMeta("PreviousTxnLgrSeq", FieldMetaDeleteFinal)
 	return sle
@@ -342,6 +348,18 @@ func (s *SLEDirectoryNode) LoadFromDirectoryNode(dir *DirectoryNode) {
 		idxPrev := formatUint64Hex(dir.IndexPrevious)
 		s.SetOriginal("IndexPrevious", idxPrev)
 		s.SetField("IndexPrevious", idxPrev)
+	}
+
+	var zeroHash [32]byte
+	if dir.NFTokenID != zeroHash {
+		nftID := strings.ToUpper(hex.EncodeToString(dir.NFTokenID[:]))
+		s.SetOriginal("NFTokenID", nftID)
+		s.SetField("NFTokenID", nftID)
+	}
+	if dir.DomainID != zeroHash {
+		domID := strings.ToUpper(hex.EncodeToString(dir.DomainID[:]))
+		s.SetOriginal("DomainID", domID)
+		s.SetField("DomainID", domID)
 	}
 }
 

@@ -6,16 +6,22 @@ import (
 
 // CheckData represents a Check ledger entry
 type CheckData struct {
-	Account        [20]byte
-	DestinationID  [20]byte
-	SendMax        uint64 // XRP drops (when IsNativeSendMax is true)
-	SendMaxAmount  Amount // Full Amount representation (for both XRP and IOU)
-	IsNativeSendMax bool
-	Sequence       uint32
-	Expiration     uint32
-	InvoiceID      [32]byte
-	DestinationTag uint32
-	HasDestTag     bool
+	Account           [20]byte
+	DestinationID     [20]byte
+	SendMax           uint64 // XRP drops (when IsNativeSendMax is true)
+	SendMaxAmount     Amount // Full Amount representation (for both XRP and IOU)
+	IsNativeSendMax   bool
+	Sequence          uint32
+	Expiration        uint32
+	InvoiceID         [32]byte
+	DestinationTag    uint32
+	HasDestTag        bool
+	SourceTag         uint32
+	HasSourceTag      bool
+	OwnerNode         uint64
+	DestinationNode   uint64
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
 }
 
 // ParseCheck parses a Check ledger entry from binary data
@@ -64,8 +70,13 @@ func ParseCheck(data []byte) (*CheckData, error) {
 			value := binary.BigEndian.Uint32(data[offset : offset+4])
 			offset += 4
 			switch fieldCode {
+			case 3: // SourceTag
+				check.SourceTag = value
+				check.HasSourceTag = true
 			case 4: // Sequence
 				check.Sequence = value
+			case 5: // PreviousTxnLgrSeq
+				check.PreviousTxnLgrSeq = value
 			case 10: // Expiration
 				check.Expiration = value
 			case 14: // DestinationTag
@@ -77,13 +88,23 @@ func ParseCheck(data []byte) (*CheckData, error) {
 			if offset+8 > len(data) {
 				return check, nil
 			}
+			value := binary.BigEndian.Uint64(data[offset : offset+8])
 			offset += 8
+			switch fieldCode {
+			case 4: // OwnerNode
+				check.OwnerNode = value
+			case 9: // DestinationNode
+				check.DestinationNode = value
+			}
 
 		case FieldTypeHash256:
 			if offset+32 > len(data) {
 				return check, nil
 			}
-			if fieldCode == 17 { // InvoiceID
+			switch fieldCode {
+			case 5: // PreviousTxnID
+				copy(check.PreviousTxnID[:], data[offset:offset+32])
+			case 17: // InvoiceID
 				copy(check.InvoiceID[:], data[offset:offset+32])
 			}
 			offset += 32

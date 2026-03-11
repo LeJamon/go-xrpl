@@ -49,6 +49,9 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	var txJsonMap map[string]interface{}
 	var txBlobHex string
 
+	// Determine if this is a sign-and-submit request (tx_json + credentials)
+	hasSigningCreds := request.Secret != "" || request.Seed != "" || request.SeedHex != "" || request.Passphrase != ""
+
 	if request.TxBlob != "" {
 		// Decode tx_blob to get tx_json
 		decoded, err := binarycodec.Decode(request.TxBlob)
@@ -63,8 +66,31 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		if err != nil {
 			return nil, types.RpcErrorInternal("Failed to marshal decoded tx_blob")
 		}
+	} else if hasSigningCreds {
+		// Sign-and-submit path: sign the transaction first, then submit the blob.
+		// This matches rippled's behavior in doSubmit() when tx_blob is absent.
+		signed, rpcErr := signTransactionJSON(request.TxJson, signCredentials{
+			Secret:     request.Secret,
+			Seed:       request.Seed,
+			SeedHex:    request.SeedHex,
+			Passphrase: request.Passphrase,
+			KeyType:    request.KeyType,
+		}, request.Offline)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+
+		txJsonMap = signed.TxMap
+		txBlobHex = signed.TxBlob
+
+		// Use the signed JSON for submission
+		var err error
+		txJSON, err = json.Marshal(txJsonMap)
+		if err != nil {
+			return nil, types.RpcErrorInternal("Failed to marshal signed transaction")
+		}
 	} else {
-		// Submit using tx_json
+		// Submit using tx_json directly (no signing)
 		txJSON = request.TxJson
 
 		if err := json.Unmarshal(txJSON, &txJsonMap); err != nil {

@@ -76,8 +76,15 @@ func (bp *BlockProcessor) ApplyTransaction(transaction Transaction, txBlob []byt
 	}
 	result.Hash = hash
 
-	// Apply the transaction using the engine
-	applyResult := bp.engine.Apply(transaction)
+	// Apply the transaction using the engine.
+	// Pseudo-transactions (Amendment, SetFee, UNLModify) use ApplyPseudo()
+	// since Apply() rejects them (matching rippled's passesLocalChecks).
+	var applyResult ApplyResult
+	if transaction.TxType().IsPseudoTransaction() {
+		applyResult = bp.engine.ApplyPseudo(transaction)
+	} else {
+		applyResult = bp.engine.Apply(transaction)
+	}
 	result.ApplyResult = applyResult
 
 	// Set the transaction index in the metadata

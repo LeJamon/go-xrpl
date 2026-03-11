@@ -5,7 +5,10 @@ import (
 	"errors"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 
@@ -42,11 +45,14 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction) (*SubmitResult, 
 		return nil, ErrNoOpenLedger
 	}
 
+	// Read fee settings from the FeeSettings SLE in the open ledger
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.openLedger)
+
 	// Create engine config from current state
 	engineConfig := tx.EngineConfig{
-		BaseFee:                   10,         // Default base fee in drops
-		ReserveBase:               10_000_000, // 10 XRP reserve
-		ReserveIncrement:          2_000_000,  // 2 XRP per object
+		BaseFee:                   baseFee,
+		ReserveBase:               reserveBase,
+		ReserveIncrement:          reserveIncrement,
 		LedgerSequence:            s.openLedger.Sequence(),
 		SkipSignatureVerification: s.config.Standalone, // Skip signatures in standalone mode
 	}
@@ -74,14 +80,44 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction) (*SubmitResult, 
 	return result, nil
 }
 
-// GetCurrentFees returns the current fee settings
+// readFeesFromLedger reads fee settings from the FeeSettings SLE in the given
+// ledger. It supports both the modern XRPFees format (BaseFeeDrops /
+// ReserveBaseDrops / ReserveIncrementDrops) and the legacy format (BaseFee /
+// ReserveBase / ReserveIncrement). Falls back to hardcoded defaults if the SLE
+// cannot be found or parsed.
+func readFeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64) {
+	// Hardcoded defaults (same as rippled)
+	const (
+		defaultBaseFee          = 10
+		defaultReserveBase      = 10_000_000
+		defaultReserveIncrement = 2_000_000
+	)
+
+	if l == nil {
+		return defaultBaseFee, defaultReserveBase, defaultReserveIncrement
+	}
+
+	data, err := l.Read(keylet.Fees())
+	if err != nil || data == nil {
+		return defaultBaseFee, defaultReserveBase, defaultReserveIncrement
+	}
+
+	feeSettings, err := state.ParseFeeSettings(data)
+	if err != nil {
+		return defaultBaseFee, defaultReserveBase, defaultReserveIncrement
+	}
+
+	return feeSettings.GetBaseFee(), feeSettings.GetReserveBase(), feeSettings.GetReserveIncrement()
+}
+
+// GetCurrentFees returns the current fee settings read from the FeeSettings
+// ledger entry in the open ledger. Falls back to hardcoded defaults if the
+// open ledger is not available or the FeeSettings SLE cannot be read.
 func (s *Service) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Return default fees for now
-	// In a full implementation, these would come from the FeeSettings ledger entry
-	return 10, 10_000_000, 2_000_000
+	return readFeesFromLedger(s.openLedger)
 }
 
 // TransactionResult contains a transaction and its metadata
@@ -167,11 +203,14 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 	// Create a temporary ledger view backed by the snapshot
 	simView := newSnapshotView(snapshot, s.openLedger)
 
+	// Read fee settings from the FeeSettings SLE in the open ledger
+	simBaseFee, simReserveBase, simReserveIncrement := readFeesFromLedger(s.openLedger)
+
 	// Create engine config from current state
 	engineConfig := tx.EngineConfig{
-		BaseFee:                   10,
-		ReserveBase:               10_000_000,
-		ReserveIncrement:          2_000_000,
+		BaseFee:                   simBaseFee,
+		ReserveBase:               simReserveBase,
+		ReserveIncrement:          simReserveIncrement,
 		LedgerSequence:            s.openLedger.Sequence(),
 		SkipSignatureVerification: true, // Skip signatures for simulation
 	}

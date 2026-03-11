@@ -369,47 +369,7 @@ func TestFreeze_HolderFreeze(t *testing.T) {
 // TestFreeze_PathsWhenFrozen tests longer payment paths when trust lines are frozen.
 // From rippled: testPathsWhenFrozen
 func TestFreeze_PathsWhenFrozen(t *testing.T) {
-	t.Skip("TODO: Frozen paths require IOU payment support and offers")
-
-	env := xrplgoTesting.NewTestEnv(t)
-
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-	env.Close()
-
-	// Set up trust lines
-	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "10000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
-	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "10000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
-	env.Close()
-
-	// Fund both accounts
-	usd1000 := tx.NewIssuedAmountFromFloat64(1000, "USD", gw.Address)
-	result = env.Submit(PayIssued(gw, alice, usd1000).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
-	result = env.Submit(PayIssued(gw, bob, usd1000).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
-	env.Close()
-
-	// bob creates offer: XRP(100) for USD(100)
-	// TODO: Offer creation
-
-	// Freeze bob's trust line
-	freezeTx := trustset.TrustLine(gw, "USD", bob, "0").Freeze().Build()
-	result = env.Submit(freezeTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
-	env.Close()
-
-	// alice tries to pay gateway USD via XRP through bob's offer
-	// Should fail because bob's trust line is frozen
-
-	t.Log("Paths when frozen test: requires offer creation support")
+	t.Skip("TODO: Frozen paths require freeze enforcement in BookStep (flow engine doesn't check freeze on offers)")
 }
 
 // TestFreeze_OffersWhenFrozen tests offers for frozen trust lines.

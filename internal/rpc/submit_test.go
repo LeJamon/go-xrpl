@@ -920,8 +920,9 @@ func TestSubmitMethodOptionalParams(t *testing.T) {
 	}
 }
 
-// TestSubmitMethodSigningCredentials documents signing credential handling
-// Note: The current implementation has TODO markers for signing
+// TestSubmitMethodSigningCredentials tests the sign-and-submit path:
+// when tx_json + signing credentials are provided, the handler derives
+// the key, signs the transaction, and submits the signed blob.
 func TestSubmitMethodSigningCredentials(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
 	cleanup := setupTestServicesSubmit(mock)
@@ -934,14 +935,11 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 		ApiVersion: types.ApiVersion1,
 	}
 
-	// These tests document expected behavior for signing credentials
-	// The current implementation passes through tx_json without signing
-
 	tests := []struct {
-		name          string
-		signingParam  string
-		signingValue  string
-		description   string
+		name         string
+		signingParam string
+		signingValue string
+		description  string
 	}{
 		{
 			name:         "secret parameter",
@@ -971,15 +969,13 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// Document expected behavior
 			t.Logf("Parameter: %s, Description: %s", tc.signingParam, tc.description)
 
-			// The current implementation accepts these parameters without error
-			// but doesn't perform actual signing
+			// Omit Account so the signing helper auto-fills it from the
+			// derived key. This avoids account mismatch errors.
 			params := map[string]interface{}{
 				"tx_json": map[string]interface{}{
 					"TransactionType": "Payment",
-					"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 					"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 					"Amount":          "1000000",
 				},
@@ -991,9 +987,37 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 
 			result, rpcErr := method.Handle(ctx, paramsJSON)
 
-			// Currently the method succeeds (signing is TODO)
-			require.Nil(t, rpcErr)
+			require.Nil(t, rpcErr, "sign-and-submit should succeed")
 			require.NotNil(t, result)
+
+			// Convert result to map for field inspection
+			resultJSON, err := json.Marshal(result)
+			require.NoError(t, err)
+			var resp map[string]interface{}
+			err = json.Unmarshal(resultJSON, &resp)
+			require.NoError(t, err)
+
+			// The response must contain the deprecated warning
+			assert.Contains(t, resp, "deprecated",
+				"sign-and-submit response must include deprecation warning")
+
+			// The tx_json in the response must contain a signature
+			txJson, ok := resp["tx_json"].(map[string]interface{})
+			require.True(t, ok, "tx_json should be a map")
+			assert.Contains(t, txJson, "TxnSignature",
+				"signed transaction must have TxnSignature")
+			assert.Contains(t, txJson, "SigningPubKey",
+				"signed transaction must have SigningPubKey")
+			assert.Contains(t, txJson, "Account",
+				"signed transaction must have Account auto-filled")
+
+			// tx_blob must be present (hex-encoded signed blob)
+			assert.NotEmpty(t, resp["tx_blob"],
+				"tx_blob must be present for signed transaction")
+
+			// Engine result should reflect the mock
+			assert.Equal(t, "tesSUCCESS", resp["engine_result"])
+			assert.Equal(t, true, resp["applied"])
 		})
 	}
 }

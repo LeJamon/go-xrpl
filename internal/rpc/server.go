@@ -87,12 +87,14 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create RPC context
+	clientIP := getClientIP(r)
+	role := roleForRequest(clientIP)
 	ctx := &types.RpcContext{
 		Context:    r.Context(),
-		Role:       types.RoleGuest,
+		Role:       role,
 		ApiVersion: types.DefaultApiVersion,
-		IsAdmin:    false,
-		ClientIP:   getClientIP(r),
+		IsAdmin:    role == types.RoleAdmin,
+		ClientIP:   clientIP,
 	}
 
 	// Execute method
@@ -132,12 +134,14 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create RPC context
+	clientIP := getClientIP(r)
+	role := roleForRequest(clientIP)
 	ctx := &types.RpcContext{
 		Context:    r.Context(),
-		Role:       types.RoleGuest,
+		Role:       role,
 		ApiVersion: types.DefaultApiVersion,
-		IsAdmin:    false,
-		ClientIP:   getClientIP(r),
+		IsAdmin:    role == types.RoleAdmin,
+		ClientIP:   clientIP,
 	}
 
 	// Parse API version from params if present
@@ -182,11 +186,12 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types
 		return nil, types.RpcErrorMethodNotFound(method)
 	}
 
-	// Check role permissions
-	/*if ctx.Role < handler.RequiredRole() {
-		return nil, types.NewRpcError(types.RpcCOMMAND_UNTRUSTED, "commandUntrusted", "commandUntrusted",
-			fmt.Sprintf("Method '%s' requires higher privileges", method))
-	}*/
+	// Check role permissions — matches rippled RPCHandler.cpp line 166:
+	// if (handler->role_ == Role::ADMIN && context.role != Role::ADMIN)
+	//     return rpcNO_PERMISSION;
+	if handler.RequiredRole() == types.RoleAdmin && ctx.Role != types.RoleAdmin {
+		return nil, types.RpcErrorNoPermission(method)
+	}
 
 	// Check amendment blocking - matching rippled's conditionMet() in Handler.h
 	// When the server is amendment-blocked, methods with any condition
@@ -319,6 +324,23 @@ func (s *Server) ExecuteMethod(method string, params []byte) (interface{}, *type
 		IsAdmin:    false,
 	}
 	return s.executeMethod(method, json.RawMessage(params), ctx)
+}
+
+// isLocalhost returns true if the IP address is a loopback address.
+// In standalone mode, connections from localhost are treated as Admin.
+// This is a simplified version of rippled's admin detection (see Role.cpp:isAdmin).
+func isLocalhost(ip string) bool {
+	return ip == "127.0.0.1" || ip == "::1"
+}
+
+// roleForRequest determines the Role for an incoming request.
+// In standalone mode (the only mode currently supported), localhost
+// connections are Admin; everything else is Guest.
+func roleForRequest(clientIP string) types.Role {
+	if isLocalhost(clientIP) {
+		return types.RoleAdmin
+	}
+	return types.RoleGuest
 }
 
 // getClientIP extracts the client IP from the request

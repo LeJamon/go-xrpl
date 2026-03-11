@@ -264,7 +264,7 @@ func TestConsecutiveNFTs(t *testing.T) {
 		// Tweak the taxon so zero is always stored internally:
 		// taxon = cipheredTaxon(sequence, 0)
 		// This produces tokens with sequential internal representations.
-		tokenSeq := env.MintedCount(issuer)
+		tokenSeq := nft.GetNFTokenSeq(env, issuer)
 		taxon := nftoken.CipheredTaxon(tokenSeq, 0)
 
 		flags := nftoken.NFTokenFlagTransferable
@@ -558,7 +558,7 @@ func TestConsecutivePacking(t *testing.T) {
 
 		for _, account := range accounts {
 			// Tweak taxon so zero is always stored: cipheredTaxon(seq, 0)
-			tokenSeq := uint32(i) // Each account mints sequentially
+			tokenSeq := nft.GetNFTokenSeq(env, account)
 			taxon := nftoken.CipheredTaxon(tokenSeq, 0)
 
 			flags := nftoken.NFTokenFlagTransferable

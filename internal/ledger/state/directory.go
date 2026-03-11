@@ -29,6 +29,10 @@ type DirectoryNode struct {
 	TakerGetsCurrency [20]byte
 	TakerGetsIssuer   [20]byte
 	ExchangeRate      uint64 // Quality encoded as uint64
+
+	// Optional fields (per rippled ledger_entries.macro)
+	NFTokenID [32]byte // For NFToken offer directories
+	DomainID  [32]byte // For permissioned domain directories
 }
 
 // cMinValue is the minimum normalized mantissa value (10^15)
@@ -187,6 +191,15 @@ func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) 
 		}
 	}
 
+	// Add optional Hash256 fields if set
+	var zeroHash [32]byte
+	if dir.NFTokenID != zeroHash {
+		jsonObj["NFTokenID"] = strings.ToUpper(hex.EncodeToString(dir.NFTokenID[:]))
+	}
+	if dir.DomainID != zeroHash {
+		jsonObj["DomainID"] = strings.ToUpper(hex.EncodeToString(dir.DomainID[:]))
+	}
+
 	hexStr, err := binarycodec.Encode(jsonObj)
 	if err != nil {
 		return nil, err
@@ -262,6 +275,16 @@ func ParseDirectoryNode(data []byte) (*DirectoryNode, error) {
 	if takerGetsIssuer, ok := jsonObj["TakerGetsIssuer"].(string); ok {
 		decoded, _ := hex.DecodeString(takerGetsIssuer)
 		copy(dir.TakerGetsIssuer[:], decoded)
+	}
+
+	// Parse optional Hash256 fields
+	if nfTokenID, ok := jsonObj["NFTokenID"].(string); ok {
+		decoded, _ := hex.DecodeString(nfTokenID)
+		copy(dir.NFTokenID[:], decoded)
+	}
+	if domainID, ok := jsonObj["DomainID"].(string); ok {
+		decoded, _ := hex.DecodeString(domainID)
+		copy(dir.DomainID[:], decoded)
 	}
 
 	return dir, nil

@@ -63,6 +63,13 @@ type BatchFeeCalculator interface {
 	CalculateMinimumFee(baseFee uint64) uint64
 }
 
+// CustomBaseFeeCalculator is implemented by transaction types that override calculateBaseFee()
+// and need access to the full engine config (e.g., reserve increment) for their minimum fee.
+// Reference: rippled Transactor::calculateBaseFee() virtual override pattern.
+type CustomBaseFeeCalculator interface {
+	CalculateBaseFee(config EngineConfig) uint64
+}
+
 // Amount is an alias for state.Amount — represents either XRP (as drops int64) or an issued currency amount
 type Amount = state.Amount
 

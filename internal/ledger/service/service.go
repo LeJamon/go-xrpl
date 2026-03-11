@@ -169,13 +169,14 @@ func (s *Service) Start() error {
 		return errors.New("failed to create genesis ledger: " + err.Error())
 	}
 
-	// Convert genesis to Ledger
-	fees := drops.Fees{} // TODO: properly parse from genesis
+	// Convert genesis to Ledger.
+	// Fee values are read dynamically from the FeeSettings SLE in the state map
+	// by readFeesFromLedger() whenever they are needed.
 	genesisLedger := ledger.FromGenesis(
 		genesisResult.Header,
 		genesisResult.StateMap,
 		genesisResult.TxMap,
-		fees,
+		drops.Fees{},
 	)
 
 	s.genesisLedger = genesisLedger
@@ -497,7 +498,7 @@ func (s *Service) GetServerInfo() ServerInfo {
 			}
 		}
 		if minSeq == maxSeq {
-			info.CompleteLedgers = string(rune(minSeq))
+			info.CompleteLedgers = strconv.FormatUint(uint64(minSeq), 10)
 		} else {
 			info.CompleteLedgers = formatRange(minSeq, maxSeq)
 		}

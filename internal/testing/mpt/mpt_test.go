@@ -1703,14 +1703,15 @@ func TestMPT_InvalidInTx(t *testing.T) {
 	// We test the key principle: MPT amounts should be rejected in non-MPT tx types.
 
 	t.Run("OfferCreate_RejectsMPT", func(t *testing.T) {
-		// OfferCreate should reject MPT amounts
-		// This is tested through the validation of each tx type
-		t.Skip("Requires OfferCreate MPT validation - tested at tx type level")
+		// In rippled, MPT rejection for non-MPT tx types happens at the RPC/serialization
+		// layer (passesLocalChecks + soeMPTNotSupported), NOT in the engine. The Go engine
+		// does not implement this RPC-layer field type constraint check.
+		t.Skip("MPT rejection is RPC-layer (passesLocalChecks/soeMPTNotSupported), not engine-level")
 	})
 
 	t.Run("TrustSet_RejectsMPT", func(t *testing.T) {
-		// TrustSet should reject MPT amounts
-		t.Skip("Requires TrustSet MPT validation - tested at tx type level")
+		// Same as OfferCreate: MPT rejection is a serialization/RPC-layer concern.
+		t.Skip("MPT rejection is RPC-layer (passesLocalChecks/soeMPTNotSupported), not engine-level")
 	})
 }
 

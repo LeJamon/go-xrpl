@@ -19,6 +19,7 @@ const (
 	spaceBookDir    uint16 = 'B' // Order book directory
 	spaceSkip       uint16 = 's' // Skip list
 	spaceEscrow     uint16 = 'u' // Escrow
+	spacePayChan    uint16 = 'x' // Payment channel
 	spaceAmendments uint16 = 'f' // Amendments (singleton)
 	spaceFees       uint16 = 'e' // Fee settings (singleton)
 	spaceTicket     uint16 = 'T' // Ticket
@@ -27,11 +28,10 @@ const (
 	spaceDepPreauth     uint16 = 'p' // Deposit preauthorization
 	spaceDepPreauthCred uint16 = 'P' // Deposit preauthorization (credential-based)
 	spaceNFTokenOff  uint16 = 'q' // NFToken offer
-	spaceNFTokenPg   uint16 = 'P' // NFToken page
 	spaceNFTBuyOffers  uint16 = 'h' // NFToken buy offers directory
-	spaceNFTSellOffers uint16 = 'i' // NFToken sell offers directory (note: same as Bridge but different context)
+	spaceNFTSellOffers uint16 = 'i' // NFToken sell offers directory
 	spaceAMM        uint16 = 'A' // AMM
-	spaceBridge     uint16 = 'i' // XChain bridge
+	spaceBridge     uint16 = 'H' // XChain bridge
 	spaceXCClaimID  uint16 = 'Q' // XChain claim ID
 	spaceXCCreateAc uint16 = 'K' // XChain create account claim
 	spaceDID        uint16 = 'I' // DID
@@ -39,7 +39,7 @@ const (
 	spaceMPTIssu    uint16 = '~' // MPToken issuance
 	spaceMPToken    uint16 = 't' // MPToken
 	spaceCredential uint16 = 'D' // Credential
-	spacePermDomain uint16 = 'b' // Permissioned domain
+	spacePermDomain uint16 = 'm' // Permissioned domain
 	spaceNegativeUNL uint16 = 'N' // Negative UNL (singleton)
 	spaceVault      uint16 = 'V' // Vault
 	spaceDelegate   uint16 = 'E' // Delegate
@@ -441,7 +441,7 @@ func PayChannel(srcAccountID, dstAccountID [20]byte, sequence uint32) Keylet {
 	binary.BigEndian.PutUint32(seqBytes, sequence)
 	return Keylet{
 		Type: entry.TypePayChannel,
-		Key:  indexHash(spaceEscrow, srcAccountID[:], dstAccountID[:], seqBytes),
+		Key:  indexHash(spacePayChan, srcAccountID[:], dstAccountID[:], seqBytes),
 	}
 }
 

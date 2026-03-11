@@ -202,15 +202,18 @@ func TestEitherAmount_Compare(t *testing.T) {
 
 func TestQuality_FromAmounts(t *testing.T) {
 	// Quality = in / out
-	// If in=100, out=100, quality should be 1.0 (QualityOne)
+	// If in=100, out=100, quality should be 1.0
 	in := NewXRPEitherAmount(100)
 	out := NewXRPEitherAmount(100)
 
 	q := QualityFromAmounts(in, out)
 
-	// Quality value should be around QualityOne (1 billion)
-	if q.Value < uint64(QualityOne)*9/10 || q.Value > uint64(QualityOne)*11/10 {
-		t.Errorf("expected quality near %d, got %d", QualityOne, q.Value)
+	// Quality.Value is STAmount-encoded (exponent in top 8 bits, mantissa in lower 56).
+	// A quality of 1.0 is encoded by qualityFromFloat64(1.0), NOT by the raw uint32
+	// constant QualityOne (which is the transfer rate identity, 1 billion).
+	expectedQ := qualityFromFloat64(1.0)
+	if q.Value != expectedQ.Value {
+		t.Errorf("expected quality value %d (1.0 encoded), got %d", expectedQ.Value, q.Value)
 	}
 }
 
@@ -457,6 +460,12 @@ func TestToStrands_WithPaths(t *testing.T) {
 	view.createAccount(alice, 100_000_000, 1)
 	view.createAccount(bob, 100_000_000, 1)
 	view.createAccount(gateway, 100_000_000, 0)
+
+	// Create trust lines required for the IOU path:
+	// alice <-> gateway for USD (alice holds 100 USD from gateway)
+	// gateway <-> bob for USD (bob holds 0 USD from gateway, with limit)
+	view.createTrustLine(alice, gateway, "USD", 100_000_000, 1000_000_000, 1000_000_000)
+	view.createTrustLine(bob, gateway, "USD", 0, 1000_000_000, 1000_000_000)
 
 	sandbox := NewPaymentSandbox(view)
 
@@ -773,7 +782,7 @@ func TestGetStrandQuality(t *testing.T) {
 
 	sandbox := NewPaymentSandbox(view)
 
-	// Simple XRP strand should have quality = QualityOne
+	// Simple XRP strand should have quality = 1.0 (identity)
 	strand := Strand{
 		NewXRPEndpointStep(alice, false),
 		NewXRPEndpointStep(bob, true),
@@ -785,11 +794,11 @@ func TestGetStrandQuality(t *testing.T) {
 		t.Fatal("expected non-nil quality")
 	}
 
-	// Quality should be around QualityOne for XRP-to-XRP
-	expectedMin := uint64(QualityOne) * 8 / 10
-	expectedMax := uint64(QualityOne) * 12 / 10
-	if q.Value < expectedMin || q.Value > expectedMax {
-		t.Errorf("expected quality near %d, got %d", QualityOne, q.Value)
+	// Quality.Value is STAmount-encoded. For XRP-to-XRP, each step has quality 1.0,
+	// so the composed quality is also 1.0. Compare against qualityFromFloat64(1.0).
+	expectedQ := qualityFromFloat64(1.0)
+	if q.Value != expectedQ.Value {
+		t.Errorf("expected quality value %d (1.0 encoded), got %d", expectedQ.Value, q.Value)
 	}
 }
 

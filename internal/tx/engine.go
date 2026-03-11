@@ -397,12 +397,20 @@ func computeTransactionHash(tx Transaction) ([32]byte, error) {
 	return hash, nil
 }
 
-// Apply processes a transaction and applies it to the ledger
+// Apply processes a transaction and applies it to the ledger.
+// Pseudo-transactions (Amendment, SetFee, UNLModify) are rejected here;
+// use ApplyPseudo() for pseudo-transaction application (e.g., during block processing).
+// Reference: rippled passesLocalChecks() rejects pseudo-transactions submitted by users.
 func (e *Engine) Apply(tx Transaction) ApplyResult {
-	// Check if this is a pseudo-transaction (Amendment, SetFee, UNLModify)
+	// Reject pseudo-transactions — they cannot be submitted by users.
+	// Reference: rippled passesLocalChecks() in NetworkOPs.cpp
 	txType := tx.TxType()
 	if txType.IsPseudoTransaction() {
-		return e.applyPseudoTransaction(tx)
+		return ApplyResult{
+			Result:  TemINVALID,
+			Applied: false,
+			Message: "pseudo-transactions cannot be submitted",
+		}
 	}
 
 	// Step 1: Preflight checks (syntax validation)
@@ -464,6 +472,14 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 		Metadata: metadata,
 		Message:  result.Message(),
 	}
+}
+
+// ApplyPseudo applies a pseudo-transaction (Amendment, SetFee, UNLModify) to the ledger.
+// This is the public entry point for pseudo-transaction application, used by the block
+// processor and test environment. Unlike Apply(), this does not reject pseudo-transactions.
+// Reference: rippled Change.cpp — pseudo-txs are applied during consensus, not user submission.
+func (e *Engine) ApplyPseudo(tx Transaction) ApplyResult {
+	return e.applyPseudoTransaction(tx)
 }
 
 // applyPseudoTransaction handles pseudo-transactions (Amendment, SetFee, UNLModify).
@@ -996,6 +1012,15 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 			return TelINSUF_FEE_P
 		}
 	}
+	// CustomBaseFeeCalculator: transaction types that override calculateBaseFee()
+	// with access to the full engine config (e.g., LedgerStateFix uses increment).
+	// Reference: rippled Transactor::checkFee calls calculateBaseFee(view, tx)
+	if feeCalc, ok := tx.(CustomBaseFeeCalculator); ok {
+		minFee := feeCalc.CalculateBaseFee(e.config)
+		if fee < minFee {
+			return TelINSUF_FEE_P
+		}
+	}
 
 	// Determine who pays the fee: delegate (if present) or the source account.
 	// Reference: rippled Transactor::checkFee lines 295-297:
@@ -1385,6 +1410,19 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		// Apply PreviousTxnID/PreviousTxnLgrSeq threading
 		account.PreviousTxnID = txHash
 		account.PreviousTxnLgrSeq = e.config.LedgerSequence
+
+		// Update AccountTxnID if the account has tracking enabled (field is present/non-zero).
+		// On the success path, apply() sets this before doApply(). On the tec path,
+		// reset() discards all changes then re-applies fee/sequence. The AccountTxnID
+		// must also be updated here so the account tracks the last-applied transaction
+		// even when the result is a tec code.
+		// Reference: rippled Transactor::apply() lines 568-569.
+		{
+			var zeroHash [32]byte
+			if account.AccountTxnID != zeroHash {
+				account.AccountTxnID = txHash
+			}
+		}
 
 		updatedData, err := state.SerializeAccountRoot(account)
 		if err != nil {

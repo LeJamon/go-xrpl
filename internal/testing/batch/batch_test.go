@@ -935,7 +935,7 @@ func TestBadOuterFee(t *testing.T) {
 // =============================================================================
 
 func TestBatchDelegate(t *testing.T) {
-	t.Skip("Skipped: DelegateSet transaction type not yet implemented in goXRPL")
+	t.Skip("Skipped: DelegateSet Apply is a stub that does not serialize proper Delegate SLE with permissions, and applyInnerTransaction does not handle the Delegate field on inner batch transactions")
 }
 
 // =============================================================================
@@ -944,7 +944,134 @@ func TestBatchDelegate(t *testing.T) {
 // =============================================================================
 
 func TestTickets(t *testing.T) {
-	t.Skip("Skipped: TicketCreate transaction type not yet implemented in goXRPL")
+	t.Run("tickets outer", func(t *testing.T) {
+		// Outer batch uses a ticket; inner transactions use regular sequences.
+		// Reference: rippled Batch_test.cpp testTickets() - "tickets outer"
+		env := xtesting.NewTestEnv(t)
+
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
+		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		env.Close()
+
+		// Create 10 tickets for alice
+		aliceTicketSeq := env.CreateTickets(alice, 10)
+		env.Close()
+
+		aliceSeq := env.Seq(alice)
+		preAlice := env.Balance(alice)
+		preBob := env.Balance(bob)
+
+		// Submit batch with outer using ticket, inner using sequences
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		batch := NewBatchBuilderWithTicket(alice, aliceTicketSeq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, aliceSeq+0)).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 2, aliceSeq+1)).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// Verify owner count: started with 10 tickets, consumed 1 (outer ticket) = 9
+		require.Equal(t, uint32(9), env.OwnerCount(alice), "alice should have 9 owner objects")
+		require.Equal(t, uint32(9), env.TicketCount(alice), "alice should have 9 tickets remaining")
+
+		// Alice's sequence advances by 2 (inner txns use sequences)
+		xtesting.RequireSequence(t, env, alice, aliceSeq+2)
+
+		// Alice pays XRP(3) + batchFee; Bob receives XRP(3)
+		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(3))-batchFee)
+		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(3)))
+	})
+
+	t.Run("tickets inner", func(t *testing.T) {
+		// Outer batch uses regular sequence; inner transactions use tickets.
+		// Reference: rippled Batch_test.cpp testTickets() - "tickets inner"
+		env := xtesting.NewTestEnv(t)
+
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
+		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		env.Close()
+
+		// Create 10 tickets for alice
+		aliceTicketSeq := env.CreateTickets(alice, 10)
+		env.Close()
+
+		aliceSeq := env.Seq(alice)
+		preAlice := env.Balance(alice)
+		preBob := env.Balance(bob)
+
+		// Submit batch with outer using sequence, inner using tickets
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		batch := NewBatchBuilder(alice, aliceSeq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRPWithTicket(alice, bob, 1, aliceTicketSeq)).
+			AddInnerTx(MakeInnerPaymentXRPWithTicket(alice, bob, 2, aliceTicketSeq+1)).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// Verify owner count: started with 10 tickets, consumed 2 (inner tickets) = 8
+		require.Equal(t, uint32(8), env.OwnerCount(alice), "alice should have 8 owner objects")
+		require.Equal(t, uint32(8), env.TicketCount(alice), "alice should have 8 tickets remaining")
+
+		// Alice's sequence advances by 1 (only outer seq increment, inner use tickets)
+		xtesting.RequireSequence(t, env, alice, aliceSeq+1)
+
+		// Alice pays XRP(3) + batchFee; Bob receives XRP(3)
+		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(3))-batchFee)
+		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(3)))
+	})
+
+	t.Run("tickets outer inner", func(t *testing.T) {
+		// Outer batch uses a ticket; one inner tx uses a ticket, the other uses a sequence.
+		// Reference: rippled Batch_test.cpp testTickets() - "tickets outer inner"
+		env := xtesting.NewTestEnv(t)
+
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
+		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		env.Close()
+
+		// Create 10 tickets for alice
+		aliceTicketSeq := env.CreateTickets(alice, 10)
+		env.Close()
+
+		aliceSeq := env.Seq(alice)
+		preAlice := env.Balance(alice)
+		preBob := env.Balance(bob)
+
+		// Submit batch:
+		// - outer uses ticket aliceTicketSeq
+		// - inner[0] uses ticket aliceTicketSeq+1
+		// - inner[1] uses sequence aliceSeq
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		batch := NewBatchBuilderWithTicket(alice, aliceTicketSeq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRPWithTicket(alice, bob, 1, aliceTicketSeq+1)).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 2, aliceSeq)).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// Verify owner count: started with 10 tickets, consumed 2 (outer + inner[0]) = 8
+		require.Equal(t, uint32(8), env.OwnerCount(alice), "alice should have 8 owner objects")
+		require.Equal(t, uint32(8), env.TicketCount(alice), "alice should have 8 tickets remaining")
+
+		// Alice's sequence advances by 1 (only inner[1] uses a sequence)
+		xtesting.RequireSequence(t, env, alice, aliceSeq+1)
+
+		// Alice pays XRP(3) + batchFee; Bob receives XRP(3)
+		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(3))-batchFee)
+		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(3)))
+	})
 }
 
 func TestTicketsOpenLedger(t *testing.T) {
@@ -1071,7 +1198,119 @@ func TestPreclaim(t *testing.T) {
 // =============================================================================
 
 func TestAccountDelete(t *testing.T) {
-	t.Skip("Skipped: AccountDelete requires incLgrSeqForAccDel helper and sufficient ledger history not yet available in goXRPL test environment")
+	t.Run("tfIndependent - account delete success", func(t *testing.T) {
+		// Reference: rippled Batch_test.cpp testAccountDelete() - tfIndependent success
+		env := xtesting.NewTestEnv(t)
+
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
+		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		env.Close()
+
+		env.IncLedgerSeqForAccDel(alice)
+		for i := 0; i < 5; i++ {
+			env.Close()
+		}
+
+		preAlice := env.Balance(alice)
+		preBob := env.Balance(bob)
+
+		seq := env.Seq(alice)
+		// batchFee = calcBatchFee(env, 0, 2) + increment
+		// The 2 payments cost baseFee each; the AccountDelete costs increment.
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2) + env.ReserveIncrement()
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagIndependent).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(MakeInnerAccountDelete(alice, bob, seq+2)).
+			// terNO_ACCOUNT: alice does not exist after deletion
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 2, seq+3)).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// Alice does not exist; Bob receives Alice's XRP
+		xtesting.RequireAccountNotExists(t, env, alice)
+		xtesting.RequireBalance(t, env, bob, preBob+(preAlice-batchFee))
+	})
+
+	t.Run("tfIndependent - account delete fails", func(t *testing.T) {
+		// Reference: rippled Batch_test.cpp testAccountDelete() - tfIndependent fails
+		env := xtesting.NewTestEnv(t)
+
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
+		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		env.Close()
+
+		env.IncLedgerSeqForAccDel(alice)
+		for i := 0; i < 5; i++ {
+			env.Close()
+		}
+
+		preBob := env.Balance(bob)
+
+		// Alice creates a trust line which counts as an obligation
+		env.Trust(alice, bob.IOU("USD", 1000))
+		env.Close()
+
+		seq := env.Seq(alice)
+		// batchFee = calcBatchFee(env, 0, 2) + increment
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2) + env.ReserveIncrement()
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagIndependent).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			// tecHAS_OBLIGATIONS: alice has obligations (trust line)
+			AddInnerTx(MakeInnerAccountDelete(alice, bob, seq+2)).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 2, seq+3)).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// Alice still exists; Bob receives XRP(3) from the two successful payments
+		xtesting.RequireAccountExists(t, env, alice)
+		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(3)))
+	})
+
+	t.Run("tfAllOrNothing - account delete fails", func(t *testing.T) {
+		// Reference: rippled Batch_test.cpp testAccountDelete() - tfAllOrNothing fails
+		env := xtesting.NewTestEnv(t)
+
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
+		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		env.Close()
+
+		env.IncLedgerSeqForAccDel(alice)
+		for i := 0; i < 5; i++ {
+			env.Close()
+		}
+
+		preBob := env.Balance(bob)
+
+		seq := env.Seq(alice)
+		// batchFee = calcBatchFee(env, 0, 2) + increment
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2) + env.ReserveIncrement()
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(MakeInnerAccountDelete(alice, bob, seq+2)).
+			// terNO_ACCOUNT: alice does not exist after deletion, causing rollback
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 2, seq+3)).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// Alice still exists (all rolled back); Bob is unchanged
+		xtesting.RequireAccountExists(t, env, alice)
+		xtesting.RequireBalance(t, env, bob, preBob)
+	})
 }
 
 // =============================================================================
@@ -1080,7 +1319,131 @@ func TestAccountDelete(t *testing.T) {
 // =============================================================================
 
 func TestObjectCreateSequence(t *testing.T) {
-	t.Skip("Skipped: Check transaction types (CheckCreate, CheckCash) not yet available in goXRPL test builder infrastructure")
+	t.Run("success", func(t *testing.T) {
+		// Create a CheckCreate from bob to alice, then CheckCash from alice, all in a batch.
+		// Reference: rippled Batch_test.cpp testObjectCreateSequence() - success
+		env := xtesting.NewTestEnv(t)
+
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		gw := xtesting.NewAccount("gw")
+		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
+		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		env.FundAmount(gw, uint64(xtesting.XRP(10000)))
+		env.Close()
+
+		// Set up trust lines and issue USD
+		usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)
+		usd1000 := tx.NewIssuedAmountFromFloat64(1000, "USD", gw.Address)
+
+		env.Trust(alice, usd1000)
+		env.Trust(bob, usd1000)
+		env.PayIOU(gw, alice, gw, "USD", 100)
+		env.PayIOU(gw, bob, gw, "USD", 100)
+		env.Close()
+
+		aliceSeq := env.Seq(alice)
+		bobSeq := env.Seq(bob)
+		preAlice := env.Balance(alice)
+		preBob := env.Balance(bob)
+		preAliceUSD := env.BalanceIOU(alice, "USD", gw)
+		preBobUSD := env.BalanceIOU(bob, "USD", gw)
+
+		// CheckCreate from bob to alice for USD(10), then CheckCash from alice
+		// chkID is derived from bob's account and bob's current seq
+		chkID := GetCheckIndex(bob, bobSeq)
+
+		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
+		batch := NewBatchBuilder(alice, aliceSeq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerCheckCreate(bob, alice, usd10, bobSeq)).
+			AddInnerTx(MakeInnerCheckCash(alice, chkID, usd10, aliceSeq+1)).
+			AddSigner(bob, "DEADBEEF").
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// Alice consumes sequences (outer + 1 inner)
+		xtesting.RequireSequence(t, env, alice, aliceSeq+2)
+
+		// Bob consumes sequences (1 inner)
+		xtesting.RequireSequence(t, env, bob, bobSeq+1)
+
+		// Alice pays fee; Bob XRP unchanged
+		xtesting.RequireBalance(t, env, alice, preAlice-batchFee)
+		xtesting.RequireBalance(t, env, bob, preBob)
+
+		// Alice gains USD(10); Bob loses USD(10)
+		require.InDelta(t, preAliceUSD+10.0, env.BalanceIOU(alice, "USD", gw), 0.001,
+			"alice should have gained USD 10")
+		require.InDelta(t, preBobUSD-10.0, env.BalanceIOU(bob, "USD", gw), 0.001,
+			"bob should have lost USD 10")
+	})
+
+	t.Run("failure - tecDST_TAG_NEEDED", func(t *testing.T) {
+		// Alice enables asfRequireDest, so CheckCreate to alice fails with tecDST_TAG_NEEDED.
+		// In Independent mode, CheckCash then fails with tecNO_ENTRY.
+		// Reference: rippled Batch_test.cpp testObjectCreateSequence() - failure
+		env := xtesting.NewTestEnv(t)
+
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		gw := xtesting.NewAccount("gw")
+		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
+		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		env.FundAmount(gw, uint64(xtesting.XRP(10000)))
+		env.Close()
+
+		usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)
+		usd1000 := tx.NewIssuedAmountFromFloat64(1000, "USD", gw.Address)
+
+		env.Trust(alice, usd1000)
+		env.Trust(bob, usd1000)
+		env.PayIOU(gw, alice, gw, "USD", 100)
+		env.PayIOU(gw, bob, gw, "USD", 100)
+		env.Close()
+
+		// Enable RequireDest on alice
+		env.EnableRequireDest(alice)
+		env.Close()
+
+		aliceSeq := env.Seq(alice)
+		bobSeq := env.Seq(bob)
+		preAlice := env.Balance(alice)
+		preBob := env.Balance(bob)
+		preAliceUSD := env.BalanceIOU(alice, "USD", gw)
+		preBobUSD := env.BalanceIOU(bob, "USD", gw)
+
+		chkID := GetCheckIndex(bob, bobSeq)
+
+		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
+		batch := NewBatchBuilder(alice, aliceSeq, batchFee, batchtx.BatchFlagIndependent).
+			AddInnerTx(MakeInnerCheckCreate(bob, alice, usd10, bobSeq)).
+			AddInnerTx(MakeInnerCheckCash(alice, chkID, usd10, aliceSeq+1)).
+			AddSigner(bob, "DEADBEEF").
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxSuccess(t, result) // Batch itself succeeds
+		env.Close()
+
+		// Alice consumes sequences (outer + 1 inner)
+		xtesting.RequireSequence(t, env, alice, aliceSeq+2)
+
+		// Bob consumes sequences (1 inner)
+		xtesting.RequireSequence(t, env, bob, bobSeq+1)
+
+		// Alice pays fee only; Bob XRP unchanged
+		xtesting.RequireBalance(t, env, alice, preAlice-batchFee)
+		xtesting.RequireBalance(t, env, bob, preBob)
+
+		// USD balances unchanged (both inner txns failed)
+		require.InDelta(t, preAliceUSD, env.BalanceIOU(alice, "USD", gw), 0.001,
+			"alice USD should be unchanged")
+		require.InDelta(t, preBobUSD, env.BalanceIOU(bob, "USD", gw), 0.001,
+			"bob USD should be unchanged")
+	})
 }
 
 // =============================================================================
@@ -1089,7 +1452,74 @@ func TestObjectCreateSequence(t *testing.T) {
 // =============================================================================
 
 func TestObjectCreateTicket(t *testing.T) {
-	t.Skip("Skipped: TicketCreate transaction type not yet implemented in goXRPL")
+	// Create tickets inside a batch, then use a ticket for CheckCreate, then CheckCash.
+	// Reference: rippled Batch_test.cpp testObjectCreateTicket()
+	env := xtesting.NewTestEnv(t)
+
+	alice := xtesting.NewAccount("alice")
+	bob := xtesting.NewAccount("bob")
+	gw := xtesting.NewAccount("gw")
+	env.FundAmount(alice, uint64(xtesting.XRP(10000)))
+	env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+	env.FundAmount(gw, uint64(xtesting.XRP(10000)))
+	env.Close()
+
+	// Set up trust lines and issue USD
+	usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)
+	usd1000 := tx.NewIssuedAmountFromFloat64(1000, "USD", gw.Address)
+
+	env.Trust(alice, usd1000)
+	env.Trust(bob, usd1000)
+	env.PayIOU(gw, alice, gw, "USD", 100)
+	env.PayIOU(gw, bob, gw, "USD", 100)
+	env.Close()
+
+	aliceSeq := env.Seq(alice)
+	bobSeq := env.Seq(bob)
+	preAlice := env.Balance(alice)
+	preBob := env.Balance(bob)
+	preAliceUSD := env.BalanceIOU(alice, "USD", gw)
+	preBobUSD := env.BalanceIOU(bob, "USD", gw)
+
+	// Batch with 3 inner txns:
+	// 1. TicketCreate(bob, 10) using bobSeq
+	// 2. CheckCreate(bob->alice, USD(10)) using ticket bobSeq+1
+	// 3. CheckCash(alice, chkID, USD(10)) using aliceSeq+1
+	//
+	// After TicketCreate, bob's sequence advances by 10 (tickets) + 1 (for the TicketCreate).
+	// The first ticket is at bobSeq+1. CheckCreate uses ticket bobSeq+1.
+	// The check ID is derived from bob's account and the ticket sequence.
+	chkID := GetCheckIndex(bob, bobSeq+1)
+
+	batchFee := CalcBatchFeeFromEnv(env, 1, 3)
+	batch := NewBatchBuilder(alice, aliceSeq, batchFee, batchtx.BatchFlagAllOrNothing).
+		AddInnerTx(MakeInnerTicketCreate(bob, 10, bobSeq)).
+		AddInnerTx(MakeInnerCheckCreateWithTicket(bob, alice, usd10, bobSeq+1)).
+		AddInnerTx(MakeInnerCheckCash(alice, chkID, usd10, aliceSeq+1)).
+		AddSigner(bob, "DEADBEEF").
+		Build()
+
+	result := env.Submit(batch)
+	xtesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Alice consumes sequences: outer + 1 inner = aliceSeq + 2
+	xtesting.RequireSequence(t, env, alice, aliceSeq+2)
+
+	// Bob: TicketCreate uses seq bobSeq (sequence advances by 1 + 10 tickets = 11).
+	// CheckCreate uses ticket (no sequence advancement).
+	// So bob's sequence = bobSeq + 10 + 1 = bobSeq + 11
+	xtesting.RequireSequence(t, env, bob, bobSeq+10+1)
+
+	// Alice pays fee; Bob XRP unchanged
+	xtesting.RequireBalance(t, env, alice, preAlice-batchFee)
+	xtesting.RequireBalance(t, env, bob, preBob)
+
+	// Alice gains USD(10); Bob loses USD(10)
+	require.InDelta(t, preAliceUSD+10.0, env.BalanceIOU(alice, "USD", gw), 0.001,
+		"alice should have gained USD 10")
+	require.InDelta(t, preBobUSD-10.0, env.BalanceIOU(bob, "USD", gw), 0.001,
+		"bob should have lost USD 10")
 }
 
 // =============================================================================

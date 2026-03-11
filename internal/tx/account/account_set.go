@@ -332,6 +332,11 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// RequireAuth
 	// Reference: rippled SetAccount.cpp preclaim() lines 269-276
 	// dirIsEmpty() checks whether the owner directory has any entries.
+	//
+	// In rippled, this returns terOWNERS (retry) when tapRETRY is set (open ledger)
+	// and tecOWNERS (claim fee) otherwise. goXRPL has no open-ledger retry mechanism
+	// (tapRETRY), so we always return tecOWNERS — equivalent to the closed-ledger
+	// (consensus) path in rippled.
 	bSetRequireAuth := (a.GetFlags()&AccountSetTxFlagRequireAuth != 0) ||
 		uSetFlag == AccountSetFlagRequireAuth
 	if bSetRequireAuth && (uFlagsIn&state.LsfRequireAuth) == 0 {
@@ -372,6 +377,11 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// DisableMaster
 	// Reference: rippled SetAccount.cpp:402-418
 	if uSetFlag == AccountSetFlagDisableMaster && (uFlagsIn&state.LsfDisableMaster) == 0 {
+		// Must use master key to disable master key.
+		// Reference: rippled SetAccount.cpp:404-408
+		if !ctx.SignedWithMaster {
+			return tx.TecNEED_MASTER_KEY
+		}
 		// Account has no regular key or multi-signer signer list.
 		// Reference: rippled SetAccount.cpp:410-415
 		hasRegularKey := account.RegularKey != ""

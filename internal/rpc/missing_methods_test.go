@@ -201,11 +201,11 @@ func TestLedgerHeaderMethod(t *testing.T) {
 		assert.Equal(t, types.RoleGuest, method.RequiredRole())
 	})
 
-	t.Run("Supports all API versions", func(t *testing.T) {
+	t.Run("Supports only API version 1", func(t *testing.T) {
 		versions := method.SupportedApiVersions()
 		assert.Contains(t, versions, types.ApiVersion1)
-		assert.Contains(t, versions, types.ApiVersion2)
-		assert.Contains(t, versions, types.ApiVersion3)
+		assert.NotContains(t, versions, types.ApiVersion2)
+		assert.NotContains(t, versions, types.ApiVersion3)
 	})
 }
 
@@ -393,8 +393,9 @@ func TestTxReduceRelayMethod(t *testing.T) {
 		}
 	})
 
-	t.Run("RequiredRole is Admin", func(t *testing.T) {
-		assert.Equal(t, types.RoleAdmin, method.RequiredRole())
+	t.Run("RequiredRole is User", func(t *testing.T) {
+		// rippled: Role::USER (Handler.cpp line 179)
+		assert.Equal(t, types.RoleUser, method.RequiredRole())
 	})
 }
 

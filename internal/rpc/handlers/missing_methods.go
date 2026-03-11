@@ -194,7 +194,7 @@ func (m *LedgerHeaderMethod) RequiredRole() types.Role {
 }
 
 func (m *LedgerHeaderMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
+	return []int{types.ApiVersion1}
 }
 
 func (m *LedgerHeaderMethod) RequiredCondition() types.Condition {
@@ -315,7 +315,7 @@ func (m *TxReduceRelayMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 }
 
 func (m *TxReduceRelayMethod) RequiredRole() types.Role {
-	return types.RoleAdmin
+	return types.RoleUser // rippled: Role::USER (Handler.cpp line 179)
 }
 
 func (m *TxReduceRelayMethod) SupportedApiVersions() []int {

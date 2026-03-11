@@ -252,8 +252,8 @@ func Create(cfg Config) (*GenesisLedger, error) {
 	// Create ledger header
 	ledgerHeader := header.LedgerHeader{
 		LedgerIndex:         GenesisLedgerSequence,
-		ParentCloseTime:     time.Unix(0, 0),
-		CloseTime:           time.Unix(0, 0),
+		ParentCloseTime:     time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+		CloseTime:           time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
 		CloseTimeResolution: closeTimeRes,
 		CloseFlags:          0,
 		ParentHash:          [32]byte{}, // Genesis has no parent

@@ -239,7 +239,8 @@ func TestWalletPropose_Metadata(t *testing.T) {
 	handler := &handlers.WalletProposeMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, types.RoleGuest, handler.RequiredRole())
+		// rippled: Role::ADMIN (Handler.cpp line 192)
+		assert.Equal(t, types.RoleAdmin, handler.RequiredRole())
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {

@@ -5,9 +5,13 @@ package payment
 import (
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/depositpreauth"
+	paymentPkg "github.com/LeJamon/goXRPLd/internal/tx/payment"
 	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
+	"github.com/LeJamon/goXRPLd/internal/testing/credential"
+	dp "github.com/LeJamon/goXRPLd/internal/testing/depositpreauth"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
 	"github.com/stretchr/testify/require"
 )
@@ -362,24 +366,405 @@ func TestDepositPreauth_Payment(t *testing.T) {
 
 // TestDepositPreauth_SelfPayment tests self-payment with DepositAuth.
 // From rippled: DepositPreauth_test::testPayment (self-payment section)
+// The initial implementation of DepositAuth had a bug where an account with
+// the DepositAuth flag set could not make a payment to itself. That bug was
+// fixed in the DepositPreauth amendment.
 func TestDepositPreauth_SelfPayment(t *testing.T) {
-	t.Skip("TODO: DepositPreauth self-payment requires Offers for cross-currency paths")
+	env := xrplgoTesting.NewTestEnv(t)
 
-	t.Log("DepositPreauth self-payment test: requires offer support")
+	alice := xrplgoTesting.NewAccount("alice")
+	becky := xrplgoTesting.NewAccount("becky")
+	gw := xrplgoTesting.NewAccount("gateway")
+
+	env.FundAmount(alice, uint64(xrplgoTesting.XRP(5000)))
+	env.FundAmount(becky, uint64(xrplgoTesting.XRP(5000)))
+	env.FundAmount(gw, uint64(xrplgoTesting.XRP(5000)))
+	env.Close()
+
+	// Set up trust lines for USD.
+	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "1000").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(trustset.TrustLine(becky, "USD", gw, "1000").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Fund alice with USD.
+	usd500 := tx.NewIssuedAmountFromFloat64(500, "USD", gw.Address)
+	result = env.Submit(PayIssued(gw, alice, usd500).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// alice creates a passive offer: TakerPays=XRP(100), TakerGets=USD(100).
+	// In rippled: offer(alice, XRP(100), USD(100), tfPassive)
+	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
+	xrp100 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(100)))
+	env.CreatePassiveOffer(alice, usd100, xrp100)
+	env.Close()
+
+	// becky pays herself USD(10) by consuming part of alice's offer.
+	// This is a cross-currency self-payment: becky sends XRP and receives USD
+	// through alice's offer. path(~USD) = {currency=USD, issuer=gw}.
+	usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)
+	xrp10 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(10)))
+	usdPath := [][]paymentPkg.PathStep{{{Currency: "USD", Issuer: gw.Address}}}
+	result = env.Submit(
+		PayIssued(becky, becky, usd10).
+			SendMax(xrp10).
+			Paths(usdPath).
+			Build(),
+	)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// becky enables DepositAuth.
+	env.EnableDepositAuth(becky)
+	env.Close()
+
+	// becky pays herself again. With DepositPreauth enabled, self-payment
+	// should succeed (the bug fix). Without DepositPreauth it would fail
+	// with tecNO_PERMISSION.
+	result = env.Submit(
+		PayIssued(becky, becky, usd10).
+			SendMax(xrp10).
+			Paths(usdPath).
+			Build(),
+	)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	t.Log("DepositPreauth self-payment test passed")
 }
 
 // TestDepositPreauth_Credentials tests DepositPreauth with credentials.
-// From rippled: DepositPreauth_test with credentials
+// From rippled: DepositPreauth_test::testCredentialsPayment
+// An account with DepositAuth enabled can accept payments from senders who
+// present valid credentials that match a credential-based DepositPreauth
+// entry set up by the receiver.
 func TestDepositPreauth_Credentials(t *testing.T) {
-	t.Skip("TODO: Credentials require Credentials feature support")
+	credType := "abcde"
 
-	t.Log("DepositPreauth credentials test: requires Credentials feature")
+	issuer := xrplgoTesting.NewAccount("issuer")
+	alice := xrplgoTesting.NewAccount("alice")
+	bob := xrplgoTesting.NewAccount("bob")
+	john := xrplgoTesting.NewAccount("john")
+
+	env := xrplgoTesting.NewTestEnv(t)
+
+	env.FundAmount(issuer, uint64(xrplgoTesting.XRP(5000)))
+	env.FundAmount(alice, uint64(xrplgoTesting.XRP(5000)))
+	env.FundAmount(bob, uint64(xrplgoTesting.XRP(5000)))
+	env.FundAmount(john, uint64(xrplgoTesting.XRP(5000)))
+	env.Close()
+
+	// issuer creates credential for alice, alice hasn't accepted yet.
+	result := env.Submit(credential.CredentialCreate(issuer, alice, credType).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Get the credential index.
+	credIdx := dp.CredentialIndex(alice, issuer, credType)
+
+	// bob requires preauthorization.
+	env.EnableDepositAuth(bob)
+	env.Close()
+
+	// bob accepts payments from accounts with credentials signed by 'issuer'.
+	result = env.Submit(dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
+		{Issuer: issuer, CredType: credType},
+	}).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// alice can't pay with empty credentials array.
+	result = env.Submit(
+		Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).
+			CredentialIDs([]string{}).
+			Build(),
+	)
+	require.Equal(t, "temMALFORMED", result.Code,
+		"empty credentials array should fail with temMALFORMED")
+	env.Close()
+
+	// alice can't pay with unaccepted credentials.
+	result = env.Submit(
+		Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).
+			CredentialIDs([]string{credIdx}).
+			Build(),
+	)
+	require.Equal(t, "tecBAD_CREDENTIALS", result.Code,
+		"unaccepted credentials should fail with tecBAD_CREDENTIALS")
+	env.Close()
+
+	// alice accepts the credentials.
+	result = env.Submit(credential.CredentialAccept(alice, issuer, credType).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Now alice can pay bob with valid credentials.
+	result = env.Submit(
+		Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).
+			CredentialIDs([]string{credIdx}).
+			Build(),
+	)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// alice can pay maria (unfunded, will be created) without depositPreauth
+	// because maria has no deposit restrictions. Valid credentials on a
+	// non-restricted destination are simply ignored.
+	maria := xrplgoTesting.NewAccount("maria")
+	result = env.Submit(
+		Pay(alice, maria, uint64(xrplgoTesting.XRP(250))).
+			CredentialIDs([]string{credIdx}).
+			Build(),
+	)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// john can accept payment with old (account-based) DepositPreauth and
+	// valid credentials at the same time.
+	env.EnableDepositAuth(john)
+	result = env.Submit(dp.Auth(john, alice).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(
+		Pay(alice, john, uint64(xrplgoTesting.XRP(100))).
+			CredentialIDs([]string{credIdx}).
+			Build(),
+	)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// --- Invalid credentials section ---
+
+	t.Run("InvalidCredentials", func(t *testing.T) {
+		env2 := xrplgoTesting.NewTestEnv(t)
+
+		issuer2 := xrplgoTesting.NewAccount("issuer2")
+		alice2 := xrplgoTesting.NewAccount("alice2")
+		bob2 := xrplgoTesting.NewAccount("bob2")
+		maria2 := xrplgoTesting.NewAccount("maria2")
+
+		env2.FundAmount(issuer2, uint64(xrplgoTesting.XRP(10000)))
+		env2.FundAmount(alice2, uint64(xrplgoTesting.XRP(10000)))
+		env2.FundAmount(bob2, uint64(xrplgoTesting.XRP(10000)))
+		env2.FundAmount(maria2, uint64(xrplgoTesting.XRP(10000)))
+		env2.Close()
+
+		// issuer creates credential for alice, alice accepts.
+		result := env2.Submit(credential.CredentialCreate(issuer2, alice2, credType).Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env2.Close()
+		result = env2.Submit(credential.CredentialAccept(alice2, issuer2, credType).Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env2.Close()
+
+		credIdx := dp.CredentialIndex(alice2, issuer2, credType)
+
+		// Success: destination didn't enable preauthorization, so valid
+		// credentials won't fail.
+		result = env2.Submit(
+			Pay(alice2, bob2, uint64(xrplgoTesting.XRP(100))).
+				CredentialIDs([]string{credIdx}).
+				Build(),
+		)
+		xrplgoTesting.RequireTxSuccess(t, result)
+
+		// bob requires preauthorization.
+		env2.EnableDepositAuth(bob2)
+		env2.Close()
+
+		// Fail: destination didn't set up DepositPreauth object for these credentials.
+		result = env2.Submit(
+			Pay(alice2, bob2, uint64(xrplgoTesting.XRP(100))).
+				CredentialIDs([]string{credIdx}).
+				Build(),
+		)
+		require.Equal(t, "tecNO_PERMISSION", result.Code)
+
+		// bob tries to set up DepositPreauth with duplicates - not allowed.
+		result = env2.Submit(dp.AuthCredentials(bob2, []dp.AuthorizeCredentials{
+			{Issuer: issuer2, CredType: credType},
+			{Issuer: issuer2, CredType: credType},
+		}).Build())
+		require.Equal(t, "temMALFORMED", result.Code)
+
+		// bob sets up DepositPreauth correctly.
+		result = env2.Submit(dp.AuthCredentials(bob2, []dp.AuthorizeCredentials{
+			{Issuer: issuer2, CredType: credType},
+		}).Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env2.Close()
+
+		// alice can't pay with non-existing credentials.
+		invalidIdx := "0E0B04ED60588A758B67E21FBBE95AC5A63598BA951761DC0EC9C08D7E01E034"
+		result = env2.Submit(
+			Pay(alice2, bob2, uint64(xrplgoTesting.XRP(100))).
+				CredentialIDs([]string{invalidIdx}).
+				Build(),
+		)
+		require.Equal(t, "tecBAD_CREDENTIALS", result.Code)
+
+		// maria can't pay using alice's credentials.
+		result = env2.Submit(
+			Pay(maria2, bob2, uint64(xrplgoTesting.XRP(100))).
+				CredentialIDs([]string{credIdx}).
+				Build(),
+		)
+		require.Equal(t, "tecBAD_CREDENTIALS", result.Code)
+
+		// Create another valid credential for alice with different type.
+		credType2 := "fghij"
+		result = env2.Submit(credential.CredentialCreate(issuer2, alice2, credType2).Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env2.Close()
+		result = env2.Submit(credential.CredentialAccept(alice2, issuer2, credType2).Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env2.Close()
+
+		credIdx2 := dp.CredentialIndex(alice2, issuer2, credType2)
+
+		// alice can't pay with invalid set of valid credentials (wrong combination).
+		result = env2.Submit(
+			Pay(alice2, bob2, uint64(xrplgoTesting.XRP(100))).
+				CredentialIDs([]string{credIdx, credIdx2}).
+				Build(),
+		)
+		require.Equal(t, "tecNO_PERMISSION", result.Code)
+
+		// Error: duplicate credentials.
+		result = env2.Submit(
+			Pay(alice2, bob2, uint64(xrplgoTesting.XRP(100))).
+				CredentialIDs([]string{credIdx, credIdx}).
+				Build(),
+		)
+		require.Equal(t, "temMALFORMED", result.Code)
+
+		// alice can pay with the correct single credential.
+		result = env2.Submit(
+			Pay(alice2, bob2, uint64(xrplgoTesting.XRP(100))).
+				CredentialIDs([]string{credIdx}).
+				Build(),
+		)
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env2.Close()
+	})
+
+	t.Log("DepositPreauth credentials test passed")
+}
+
+// rippleEpoch is the XRPL epoch start (2000-01-01 00:00:00 UTC).
+const rippleEpoch = 946684800
+
+// rippleTime returns the current Ripple epoch time from the test environment.
+func rippleTime(env *xrplgoTesting.TestEnv) uint32 {
+	return uint32(env.Now().Unix() - rippleEpoch)
+}
+
+// credentialKeylet computes the keylet for a credential given subject, issuer, and raw credential type.
+func credentialKeylet(subject, issuer *xrplgoTesting.Account, credType string) keylet.Keylet {
+	return keylet.Credential(subject.ID, issuer.ID, []byte(credType))
 }
 
 // TestDepositPreauth_ExpiredCredentials tests DepositPreauth with expired credentials.
 // From rippled: DepositPreauth_test::testExpiredCreds
+// When a payment is attempted with expired credentials, the transaction should
+// fail with tecEXPIRED and the expired credential should be deleted from the
+// ledger, while non-expired credentials remain.
 func TestDepositPreauth_ExpiredCredentials(t *testing.T) {
-	t.Skip("TODO: Expired credentials require Credentials feature support")
+	credType := "abcde"
+	credType2 := "fghijkl"
 
-	t.Log("DepositPreauth expired credentials test: requires Credentials feature")
+	issuer := xrplgoTesting.NewAccount("issuer")
+	alice := xrplgoTesting.NewAccount("alice")
+	bob := xrplgoTesting.NewAccount("bob")
+
+	env := xrplgoTesting.NewTestEnv(t)
+
+	env.FundAmount(issuer, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.Close()
+
+	// issuer creates credential for alice with short expiration (current time + 60s).
+	now := rippleTime(env)
+	expiration := now + 60
+	result := env.Submit(
+		credential.CredentialCreate(issuer, alice, credType).
+			Expiration(expiration).
+			Build(),
+	)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// alice accepts the credential.
+	result = env.Submit(credential.CredentialAccept(alice, issuer, credType).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// issuer creates a second credential for alice with long expiration.
+	now = rippleTime(env)
+	result = env.Submit(
+		credential.CredentialCreate(issuer, alice, credType2).
+			Expiration(now + 1000).
+			Build(),
+	)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+	result = env.Submit(credential.CredentialAccept(alice, issuer, credType2).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	xrplgoTesting.RequireOwnerCount(t, env, issuer, 0)
+	xrplgoTesting.RequireOwnerCount(t, env, alice, 2)
+
+	credIdx := dp.CredentialIndex(alice, issuer, credType)
+	credIdx2 := dp.CredentialIndex(alice, issuer, credType2)
+
+	// bob requires preauthorization.
+	env.EnableDepositAuth(bob)
+	env.Close()
+
+	// bob sets up credential-based preauth for both credential types.
+	result = env.Submit(dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
+		{Issuer: issuer, CredType: credType},
+		{Issuer: issuer, CredType: credType2},
+	}).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// alice can pay (credentials not yet expired).
+	result = env.Submit(
+		Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).
+			CredentialIDs([]string{credIdx, credIdx2}).
+			Build(),
+	)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+	env.Close() // Extra close to advance time past expiration
+
+	// Credentials have now expired (60s expiration, each Close advances 10s).
+	// alice can't pay anymore.
+	result = env.Submit(
+		Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).
+			CredentialIDs([]string{credIdx, credIdx2}).
+			Build(),
+	)
+	require.Equal(t, "tecEXPIRED", result.Code,
+		"payment with expired credentials should fail with tecEXPIRED")
+	env.Close()
+
+	// Expired credential (credType) should be deleted from the ledger.
+	credKey := credentialKeylet(alice, issuer, credType)
+	require.False(t, env.LedgerEntryExists(credKey),
+		"expired credential should be deleted from ledger")
+
+	// Non-expired credential (credType2) should still be present.
+	credKey2 := credentialKeylet(alice, issuer, credType2)
+	require.True(t, env.LedgerEntryExists(credKey2),
+		"non-expired credential should still exist")
+
+	xrplgoTesting.RequireOwnerCount(t, env, issuer, 0)
+	xrplgoTesting.RequireOwnerCount(t, env, alice, 1) // only credType2 remains
+
+	t.Log("DepositPreauth expired credentials test passed")
 }
