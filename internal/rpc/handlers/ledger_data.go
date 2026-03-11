@@ -199,7 +199,6 @@ func deserializeLedgerEntry(data []byte) (interface{}, error) {
 	}
 
 	// Use the binary codec's Decode function to convert binary to JSON
-	println("HEX VALUE TO DECODE: ", hex.EncodeToString(data))
 	return binarycodec.Decode(hex.EncodeToString(data))
 }
 

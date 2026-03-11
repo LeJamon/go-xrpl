@@ -140,8 +140,9 @@ func (m *mockLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitRes
 	return nil, errors.New("not implemented")
 }
 
-// setupTestServices initializes the Services singleton with a mock for testing
-func setupTestServices(mock *mockLedgerService) func() {
+// setupTestServices initializes the Services singleton with a mock for testing.
+// Accepts any type that implements types.LedgerService.
+func setupTestServices(mock types.LedgerService) func() {
 	oldServices := types.Services
 	types.Services = &types.ServiceContainer{
 		Ledger: mock,
