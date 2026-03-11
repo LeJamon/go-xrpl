@@ -54,9 +54,15 @@ func TestSubscribeStreamTypes(t *testing.T) {
 		},
 		{
 			name:         "transactions_proposed stream - subscribe to proposed transactions",
-			streamType:   types.SubscriptionType("transactions_proposed"),
+			streamType:   types.SubTransactionsProposed,
 			streamString: "transactions_proposed",
-			expectError:  true, // Not in validStreams map
+			expectError:  false,
+		},
+		{
+			name:         "server stream - subscribe to server status events",
+			streamType:   types.SubServer,
+			streamString: "server",
+			expectError:  false,
 		},
 		{
 			name:         "validations stream - subscribe to validation messages",

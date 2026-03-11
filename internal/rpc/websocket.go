@@ -21,6 +21,7 @@ type WebSocketServer struct {
 	connections         map[string]*WebSocketConnection
 	connectionsMutex    sync.RWMutex
 	timeout             time.Duration
+	ledgerInfoProvider  types.LedgerInfoProvider
 }
 
 // WebSocketConnection represents a single WebSocket connection
@@ -53,6 +54,12 @@ func NewWebSocketServer(timeout time.Duration) *WebSocketServer {
 		connections:    make(map[string]*WebSocketConnection),
 		timeout:        timeout,
 	}
+}
+
+// SetLedgerInfoProvider sets the provider used to return current ledger info
+// in subscribe responses (e.g., when subscribing to the "ledger" stream).
+func (ws *WebSocketServer) SetLedgerInfoProvider(provider types.LedgerInfoProvider) {
+	ws.ledgerInfoProvider = provider
 }
 
 // ServeHTTP handles WebSocket upgrade requests
@@ -252,81 +259,89 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 
 // handleSubscribe processes subscribe commands
 func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
-	// Parse subscription request
 	var request types.SubscriptionRequest
 	if len(cmd.Params) > 0 {
-		// The params are embedded in the command, extract them
-		var cmdWithParams map[string]interface{}
-		if err := json.Unmarshal(cmd.Params, &cmdWithParams); err != nil {
-			// Try to parse the entire command as subscription request
-			if err := json.Unmarshal(cmd.Params, &request); err != nil {
-				ws.sendError(wsConn, types.RpcErrorInvalidParams("Invalid subscription parameters"), cmd.ID)
-				return
-			}
-		} else {
-			// Convert map to types.SubscriptionRequest
-			if streamsRaw, ok := cmdWithParams["streams"]; ok {
-				if streams, ok := streamsRaw.([]interface{}); ok {
-					for _, stream := range streams {
-						if streamStr, ok := stream.(string); ok {
-							request.Streams = append(request.Streams, types.SubscriptionType(streamStr))
-						}
-					}
-				}
-			}
-			// TODO: Parse other subscription parameters (accounts, books, etc.)
+		if err := json.Unmarshal(cmd.Params, &request); err != nil {
+			ws.sendError(wsConn, types.RpcErrorInvalidParams("Invalid subscription parameters: "+err.Error()), cmd.ID)
+			return
 		}
 	}
 
 	// Handle subscription through subscription manager
-	if err := ws.subscriptionManager.HandleSubscribe(&types.Connection{
+	conn := &types.Connection{
 		ID:            wsConn.ID,
 		Subscriptions: wsConn.subscriptions,
 		SendChannel:   wsConn.sendChannel,
 		CloseChannel:  wsConn.closeChannel,
-	}, request); err != nil {
+	}
+	if err := ws.subscriptionManager.HandleSubscribe(conn, request); err != nil {
 		ws.sendError(wsConn, err, cmd.ID)
 		return
 	}
 
-	// Send success response
+	// Build response - rippled returns ledger info when subscribing to ledger stream
+	result := make(map[string]interface{})
+
+	// Check if subscribing to ledger stream - return current ledger info
+	for _, stream := range request.Streams {
+		if stream == types.SubLedger {
+			if ws.ledgerInfoProvider != nil {
+				info := ws.ledgerInfoProvider.GetCurrentLedgerInfo()
+				if info != nil {
+					result["ledger_index"] = info.LedgerIndex
+					result["ledger_hash"] = info.LedgerHash
+					result["ledger_time"] = info.LedgerTime
+					result["fee_base"] = info.FeeBase
+					result["fee_ref"] = info.FeeRef
+					result["reserve_base"] = info.ReserveBase
+					result["reserve_inc"] = info.ReserveInc
+					if info.ValidatedLedgers != "" {
+						result["validated_ledgers"] = info.ValidatedLedgers
+					}
+				}
+			}
+			break
+		}
+	}
+
 	response := types.WebSocketResponse{
 		Type:       "response",
 		ID:         cmd.ID,
 		Status:     "success",
-		Result:     map[string]interface{}{"subscribed": true},
+		Result:     result,
 		ApiVersion: ctx.ApiVersion,
 	}
-
 	ws.sendResponse(wsConn, response)
 }
 
 // handleUnsubscribe processes unsubscribe commands
 func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
-	// Parse unsubscription request (similar to subscribe)
 	var request types.SubscriptionRequest
-	// TODO: Parse unsubscription parameters
+	if len(cmd.Params) > 0 {
+		if err := json.Unmarshal(cmd.Params, &request); err != nil {
+			ws.sendError(wsConn, types.RpcErrorInvalidParams("Invalid unsubscription parameters: "+err.Error()), cmd.ID)
+			return
+		}
+	}
 
-	// Handle unsubscription through subscription manager
-	if err := ws.subscriptionManager.HandleUnsubscribe(&types.Connection{
+	conn := &types.Connection{
 		ID:            wsConn.ID,
 		Subscriptions: wsConn.subscriptions,
 		SendChannel:   wsConn.sendChannel,
 		CloseChannel:  wsConn.closeChannel,
-	}, request); err != nil {
+	}
+	if err := ws.subscriptionManager.HandleUnsubscribe(conn, request); err != nil {
 		ws.sendError(wsConn, err, cmd.ID)
 		return
 	}
 
-	// Send success response
 	response := types.WebSocketResponse{
 		Type:       "response",
 		ID:         cmd.ID,
 		Status:     "success",
-		Result:     map[string]interface{}{"unsubscribed": true},
+		Result:     map[string]interface{}{},
 		ApiVersion: ctx.ApiVersion,
 	}
-
 	ws.sendResponse(wsConn, response)
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 )
@@ -173,15 +174,17 @@ type WebSocketResponse struct {
 type SubscriptionType string
 
 const (
-	SubLedger       SubscriptionType = "ledger"
-	SubTransactions SubscriptionType = "transactions"
-	SubAccounts     SubscriptionType = "accounts"
-	SubOrderBooks   SubscriptionType = "book_changes"
-	SubValidations  SubscriptionType = "validations"
-	SubManifests    SubscriptionType = "manifests"
-	SubPeerStatus   SubscriptionType = "peer_status"
-	SubConsensus    SubscriptionType = "consensus"
-	SubPath         SubscriptionType = "path_find"
+	SubLedger               SubscriptionType = "ledger"
+	SubTransactions         SubscriptionType = "transactions"
+	SubTransactionsProposed SubscriptionType = "transactions_proposed"
+	SubAccounts             SubscriptionType = "accounts"
+	SubOrderBooks           SubscriptionType = "book_changes"
+	SubValidations          SubscriptionType = "validations"
+	SubManifests            SubscriptionType = "manifests"
+	SubPeerStatus           SubscriptionType = "peer_status"
+	SubServer               SubscriptionType = "server"
+	SubConsensus            SubscriptionType = "consensus"
+	SubPath                 SubscriptionType = "path_find"
 )
 
 // Subscription request structure
@@ -323,6 +326,7 @@ type WebSocketResponseOptions struct {
 // SubscriptionManager manages WebSocket subscriptions
 type SubscriptionManager struct {
 	Connections map[string]*Connection
+	mu          sync.RWMutex
 }
 
 // NewSubscriptionManager creates a new SubscriptionManager
@@ -334,6 +338,8 @@ func NewSubscriptionManager() *SubscriptionManager {
 
 // AddConnection adds a connection to the subscription manager
 func (sm *SubscriptionManager) AddConnection(conn *Connection) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	if sm.Connections == nil {
 		sm.Connections = make(map[string]*Connection)
 	}
@@ -342,24 +348,31 @@ func (sm *SubscriptionManager) AddConnection(conn *Connection) {
 
 // RemoveConnection removes a connection from the subscription manager
 func (sm *SubscriptionManager) RemoveConnection(connID string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	delete(sm.Connections, connID)
 }
 
 // validStreams contains the set of valid stream types
 var validStreams = map[SubscriptionType]bool{
-	SubLedger:       true,
-	SubTransactions: true,
-	SubAccounts:     true,
-	SubOrderBooks:   true,
-	SubValidations:  true,
-	SubManifests:    true,
-	SubPeerStatus:   true,
-	SubConsensus:    true,
-	SubPath:         true,
+	SubLedger:               true,
+	SubTransactions:         true,
+	SubTransactionsProposed: true,
+	SubAccounts:             true,
+	SubOrderBooks:           true,
+	SubValidations:          true,
+	SubManifests:            true,
+	SubPeerStatus:           true,
+	SubServer:               true,
+	SubConsensus:            true,
+	SubPath:                 true,
 }
 
 // HandleSubscribe handles a subscribe request for a connection
 func (sm *SubscriptionManager) HandleSubscribe(conn *Connection, request SubscriptionRequest) *RpcError {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
 	// Validate and add stream subscriptions
 	for _, stream := range request.Streams {
 		if !validStreams[stream] {
@@ -506,6 +519,9 @@ func isValidXRPLAddress(addr string) bool {
 
 // HandleUnsubscribe handles an unsubscribe request for a connection
 func (sm *SubscriptionManager) HandleUnsubscribe(conn *Connection, request SubscriptionRequest) *RpcError {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
 	// Remove stream subscriptions
 	for _, stream := range request.Streams {
 		delete(conn.Subscriptions, stream)
@@ -535,6 +551,29 @@ func (sm *SubscriptionManager) HandleUnsubscribe(conn *Connection, request Subsc
 		}
 	}
 
+	// Remove specific accounts_proposed subscriptions
+	if len(request.AccountsProposed) > 0 {
+		if existing, ok := conn.Subscriptions["accounts_proposed"]; ok {
+			accountsToRemove := make(map[string]bool)
+			for _, acc := range request.AccountsProposed {
+				accountsToRemove[acc] = true
+			}
+			var remainingAccounts []string
+			for _, acc := range existing.Accounts {
+				if !accountsToRemove[acc] {
+					remainingAccounts = append(remainingAccounts, acc)
+				}
+			}
+			if len(remainingAccounts) > 0 {
+				conn.Subscriptions["accounts_proposed"] = SubscriptionConfig{
+					Accounts: remainingAccounts,
+				}
+			} else {
+				delete(conn.Subscriptions, "accounts_proposed")
+			}
+		}
+	}
+
 	// Remove book subscriptions
 	if len(request.Books) > 0 {
 		delete(conn.Subscriptions, SubOrderBooks)
@@ -550,6 +589,9 @@ func (sm *SubscriptionManager) HandleUnsubscribe(conn *Connection, request Subsc
 
 // BroadcastToStream sends a message to all connections subscribed to a stream
 func (sm *SubscriptionManager) BroadcastToStream(streamType SubscriptionType, data []byte, _ interface{}) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
 	for _, conn := range sm.Connections {
 		if _, ok := conn.Subscriptions[streamType]; ok {
 			select {
@@ -563,6 +605,9 @@ func (sm *SubscriptionManager) BroadcastToStream(streamType SubscriptionType, da
 
 // BroadcastToAccounts sends a message to all connections subscribed to any of the accounts
 func (sm *SubscriptionManager) BroadcastToAccounts(data []byte, accounts []string) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
 	accountSet := make(map[string]bool)
 	for _, acc := range accounts {
 		accountSet[acc] = true
@@ -586,12 +631,33 @@ func (sm *SubscriptionManager) BroadcastToAccounts(data []byte, accounts []strin
 
 // BroadcastToAccountsProposed sends a message to accounts_proposed subscribers
 func (sm *SubscriptionManager) BroadcastToAccountsProposed(data []byte, accounts []string) {
-	// Similar to BroadcastToAccounts but for proposed transactions
-	sm.BroadcastToAccounts(data, accounts)
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	accountSet := make(map[string]bool)
+	for _, acc := range accounts {
+		accountSet[acc] = true
+	}
+	for _, conn := range sm.Connections {
+		if config, ok := conn.Subscriptions["accounts_proposed"]; ok {
+			for _, subAcc := range config.Accounts {
+				if accountSet[subAcc] {
+					select {
+					case conn.SendChannel <- data:
+					default:
+					}
+					break
+				}
+			}
+		}
+	}
 }
 
 // BroadcastToOrderBook sends a message to order book subscribers
 func (sm *SubscriptionManager) BroadcastToOrderBook(data []byte, takerGets, takerPays CurrencySpec) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
 	for _, conn := range sm.Connections {
 		if config, ok := conn.Subscriptions[SubOrderBooks]; ok {
 			if config.TakerGets != nil && config.TakerPays != nil {
@@ -612,6 +678,9 @@ func (sm *SubscriptionManager) BroadcastToOrderBook(data []byte, takerGets, take
 
 // GetSubscriberCount returns the number of subscribers for a stream type
 func (sm *SubscriptionManager) GetSubscriberCount(streamType SubscriptionType) int {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
 	count := 0
 	for _, conn := range sm.Connections {
 		if _, ok := conn.Subscriptions[streamType]; ok {
@@ -623,16 +692,22 @@ func (sm *SubscriptionManager) GetSubscriberCount(streamType SubscriptionType) i
 
 // ConnectionCount returns the number of active connections
 func (sm *SubscriptionManager) ConnectionCount() int {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
 	return len(sm.Connections)
 }
 
 // GetConnection returns a connection by ID
 func (sm *SubscriptionManager) GetConnection(connID string) *Connection {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
 	return sm.Connections[connID]
 }
 
 // IsSubscribed checks if a connection is subscribed to a stream type
 func (sm *SubscriptionManager) IsSubscribed(connID string, streamType SubscriptionType) bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
 	conn := sm.Connections[connID]
 	if conn == nil {
 		return false
@@ -643,6 +718,8 @@ func (sm *SubscriptionManager) IsSubscribed(connID string, streamType Subscripti
 
 // GetConnectionSubscriptions returns the subscriptions for a connection
 func (sm *SubscriptionManager) GetConnectionSubscriptions(connID string) map[SubscriptionType]SubscriptionConfig {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
 	conn := sm.Connections[connID]
 	if conn == nil {
 		return nil
@@ -702,4 +779,30 @@ func BookMatchesCurrency(book BookRequest, specGets, specPays CurrencySpec) bool
 	}
 
 	return true
+}
+
+// LedgerInfoProvider provides current ledger info for subscribe responses
+type LedgerInfoProvider interface {
+	GetCurrentLedgerInfo() *LedgerSubscribeInfo
+}
+
+// LedgerSubscribeInfo contains ledger info returned in subscribe response
+type LedgerSubscribeInfo struct {
+	LedgerIndex      uint32 `json:"ledger_index"`
+	LedgerHash       string `json:"ledger_hash"`
+	LedgerTime       uint32 `json:"ledger_time"`
+	FeeBase          uint64 `json:"fee_base"`
+	FeeRef           uint64 `json:"fee_ref"`
+	ReserveBase      uint64 `json:"reserve_base"`
+	ReserveInc       uint64 `json:"reserve_inc"`
+	ValidatedLedgers string `json:"validated_ledgers,omitempty"`
+	NetworkID        uint32 `json:"network_id,omitempty"`
+}
+
+// ServerSubscribeInfo contains server info returned when subscribing to server stream
+type ServerSubscribeInfo struct {
+	ServerStatus string `json:"server_status"`
+	LoadBase     int    `json:"load_base"`
+	LoadFactor   int    `json:"load_factor"`
+	StandAlone   bool   `json:"stand_alone,omitempty"`
 }

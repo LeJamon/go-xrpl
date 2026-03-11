@@ -205,6 +205,9 @@ func runServer(cmd *cobra.Command, args []string) {
 	wsServer := rpc.NewWebSocketServer(30 * time.Second)
 	wsServer.RegisterAllMethods()
 
+	// Create a ledger info provider adapter for WebSocket subscribe responses
+	wsServer.SetLedgerInfoProvider(&ledgerInfoAdapter{ledgerService: ledgerService})
+
 	publisher := rpc.NewPublisher(wsServer.GetSubscriptionManager())
 
 	// Wire up ledger service events to WebSocket broadcasts
@@ -336,6 +339,41 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 	if err := http.ListenAndServe(first.addr, httpMux); err != nil {
 		log.Fatalf("HTTP server (%s) failed to start on %s: %v", first.name, first.addr, err)
+	}
+}
+
+// ledgerInfoAdapter adapts the ledger service to the LedgerInfoProvider interface
+type ledgerInfoAdapter struct {
+	ledgerService *service.Service
+}
+
+func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
+	if a.ledgerService == nil {
+		return nil
+	}
+
+	validatedLedger := a.ledgerService.GetValidatedLedger()
+	if validatedLedger == nil {
+		return nil
+	}
+
+	baseFee, reserveBase, reserveInc := a.ledgerService.GetCurrentFees()
+
+	rippleEpoch := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	ledgerTime := uint32(validatedLedger.CloseTime().Unix() - rippleEpoch.Unix())
+
+	hash := validatedLedger.Hash()
+	serverInfo := a.ledgerService.GetServerInfo()
+
+	return &types.LedgerSubscribeInfo{
+		LedgerIndex:      validatedLedger.Sequence(),
+		LedgerHash:       hex.EncodeToString(hash[:]),
+		LedgerTime:       ledgerTime,
+		FeeBase:          baseFee,
+		FeeRef:           baseFee,
+		ReserveBase:      reserveBase,
+		ReserveInc:       reserveInc,
+		ValidatedLedgers: serverInfo.CompleteLedgers,
 	}
 }
 
