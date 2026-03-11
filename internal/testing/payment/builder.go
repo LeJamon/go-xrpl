@@ -137,9 +137,12 @@ func (b *PaymentBuilder) PathsIOUToIOU(srcCurrency string, srcIssuer *testing.Ac
 // For XRP, pass currency="XRP" and issuer=nil.
 func (b *PaymentBuilder) PathsCurrency(currency string, issuer *testing.Account) *PaymentBuilder {
 	step := payment.PathStep{Currency: currency}
+	stepType := 0x10 // typeCurrency
 	if issuer != nil {
 		step.Issuer = issuer.Address
+		stepType |= 0x20 // typeIssuer
 	}
+	step.Type = stepType
 	b.paths = [][]payment.PathStep{{step}}
 	return b
 }

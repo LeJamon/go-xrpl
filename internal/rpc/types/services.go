@@ -1,5 +1,10 @@
 package types
 
+import (
+	"github.com/LeJamon/goXRPLd/drops"
+	"github.com/LeJamon/goXRPLd/keylet"
+)
+
 // Services provides access to core services from RPC handlers
 // This is a singleton that holds references to the services
 // needed by RPC method handlers.
@@ -123,6 +128,25 @@ type LedgerService interface {
 
 	// IsAmendmentBlocked returns true if the server is blocked by unsupported amendments
 	IsAmendmentBlocked() bool
+
+	// GetClosedLedgerView returns a read-only view of the last closed ledger
+	// for use by pathfinding and other operations that need direct state access.
+	GetClosedLedgerView() (LedgerStateView, error)
+}
+
+// LedgerStateView provides low-level read access to ledger state.
+// This interface matches tx.LedgerView for pathfinding and other operations
+// that need direct state access. Any *ledger.Ledger satisfies this.
+type LedgerStateView interface {
+	Read(k keylet.Keylet) ([]byte, error)
+	Exists(k keylet.Keylet) (bool, error)
+	Insert(k keylet.Keylet, data []byte) error
+	Update(k keylet.Keylet, data []byte) error
+	Erase(k keylet.Keylet) error
+	ForEach(fn func(key [32]byte, data []byte) bool) error
+	Succ(key [32]byte) ([32]byte, []byte, bool, error)
+	AdjustDropsDestroyed(d drops.XRPAmount)
+	TxExists(txID [32]byte) bool
 }
 
 // DepositAuthorizedResult contains the result of deposit_authorized RPC

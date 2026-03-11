@@ -141,6 +141,9 @@ func (m *mockLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitRes
 	return nil, errors.New("not implemented")
 }
 func (m *mockLedgerService) IsAmendmentBlocked() bool { return m.amendmentBlocked }
+func (m *mockLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {
+	return nil, errors.New("not implemented in mock")
+}
 
 // setupTestServices initializes the Services singleton with a mock for testing.
 // Accepts any type that implements types.LedgerService.
