@@ -39,7 +39,7 @@ func TestPath_NoDirectPathNoIntermediaryNoAlternatives(t *testing.T) {
 // TestPath_DirectPathNoIntermediary tests direct path without intermediary.
 // From rippled: direct_path_no_intermediary
 func TestPath_DirectPathNoIntermediary(t *testing.T) {
-	t.Skip("TODO: Direct IOU path requires Amount serialization fixes")
+	// Direct IOU payment works: issuer pays directly to trusted account
 
 	env := xrplgoTesting.NewTestEnv(t)
 
@@ -392,9 +392,14 @@ func TestPath_XRPToXRP(t *testing.T) {
 
 // TestPath_ViaGateway tests payment via gateway with offers.
 // From rippled: via_offers_via_gateway
+// Reference: rippled Path_test.cpp via_offers_via_gateway()
+//
+//	env(rate(gw, 1.1));
+//	env(offer("carol", XRP(50), AUD(50)));
+//	env(pay("alice", "bob", AUD(10)), sendmax(XRP(100)), paths(XRP));
+//	env.require(balance("bob", AUD(10)));
+//	env.require(balance("carol", AUD(39)));
 func TestPath_ViaGateway(t *testing.T) {
-	t.Skip("TODO: Via gateway requires IOU payment support and offers")
-
 	env := xrplgoTesting.NewTestEnv(t)
 
 	gw := xrplgoTesting.NewAccount("gateway")
@@ -406,6 +411,10 @@ func TestPath_ViaGateway(t *testing.T) {
 	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
 	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
 	env.FundAmount(carol, uint64(xrplgoTesting.XRP(10000)))
+	env.Close()
+
+	// Set 10% transfer rate on gateway (1.1 = 1_100_000_000)
+	env.SetTransferRate(gw, 1_100_000_000)
 	env.Close()
 
 	// Create trust lines
@@ -422,10 +431,30 @@ func TestPath_ViaGateway(t *testing.T) {
 	env.Close()
 
 	// Carol creates offer: XRP(50) for AUD(50)
-	// TODO: Offer creation
+	aud50Amt := tx.NewIssuedAmountFromFloat64(50, "AUD", gw.Address)
+	xrp50 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(50)))
+	result = env.CreateOffer(carol, aud50Amt, xrp50)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
 
-	// alice pays bob 10 AUD using XRP
-	t.Log("Via gateway test: requires offer creation support")
+	// alice pays bob AUD(10) using XRP as bridge, sendmax XRP(100)
+	aud10 := tx.NewIssuedAmountFromFloat64(10, "AUD", gw.Address)
+	xrp100 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(100)))
+	payTx := PayIssued(alice, bob, aud10).
+		SendMax(xrp100).
+		PathsXRP().
+		Build()
+	result = env.Submit(payTx)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Verify: bob should have AUD(10)
+	bobAUD := env.BalanceIOU(bob, "AUD", gw)
+	require.InDelta(t, 10.0, bobAUD, 0.0001, "Bob should have 10 AUD")
+
+	// Verify: carol should have AUD(39) (50 - 10 - 1 transfer fee)
+	carolAUD := env.BalanceIOU(carol, "AUD", gw)
+	require.InDelta(t, 39.0, carolAUD, 0.01, "Carol should have ~39 AUD after transfer fee")
 }
 
 // TestPath_IssuerToRepay tests path finding when repaying issuer.
@@ -516,11 +545,11 @@ func TestPath_CommonGateway(t *testing.T) {
 	require.InDelta(t, 10.0, bobBalance, 0.0001, "Bob should have 10 HKD from alice")
 }
 
-// TestPath_XRPBridge tests XRP bridge between currencies.
+// TestPath_XRPBridge tests XRP bridge between currencies from different gateways.
 // From rippled: path_find_05 case I4 - XRP bridge
+// Source -> AC -> OB to XRP -> OB from XRP -> AC -> Destination
+// Reference: rippled Path_test.cpp path_find_05() I4
 func TestPath_XRPBridge(t *testing.T) {
-	t.Skip("TODO: XRP bridge requires IOU payment support and offers")
-
 	env := xrplgoTesting.NewTestEnv(t)
 
 	gw1 := xrplgoTesting.NewAccount("gateway1")
@@ -551,16 +580,45 @@ func TestPath_XRPBridge(t *testing.T) {
 	hkd1000a := tx.NewIssuedAmountFromFloat64(1000, "HKD", gw1.Address)
 	result = env.Submit(PayIssued(gw1, alice, hkd1000a).Build())
 	xrplgoTesting.RequireTxSuccess(t, result)
-	hkd5000 := tx.NewIssuedAmountFromFloat64(5000, "HKD", gw2.Address)
-	result = env.Submit(PayIssued(gw2, mm, hkd5000).Build())
+	hkd5000gw1 := tx.NewIssuedAmountFromFloat64(5000, "HKD", gw1.Address)
+	result = env.Submit(PayIssued(gw1, mm, hkd5000gw1).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	hkd5000gw2 := tx.NewIssuedAmountFromFloat64(5000, "HKD", gw2.Address)
+	result = env.Submit(PayIssued(gw2, mm, hkd5000gw2).Build())
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
 
-	// Market maker creates offers bridging via XRP
-	// TODO: Offer creation
+	// Market maker creates offers bridging gw1/HKD <-> XRP <-> gw2/HKD
+	// Offer 1: mm sells XRP for gw1/HKD — mm offers XRP(1000), wants gw1/HKD(1000)
+	xrp1000 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(1000)))
+	hkd1000gw1 := tx.NewIssuedAmountFromFloat64(1000, "HKD", gw1.Address)
+	result = env.CreateOffer(mm, xrp1000, hkd1000gw1)
+	xrplgoTesting.RequireTxSuccess(t, result)
 
-	// alice (gw1/HKD holder) pays bob (gw2/HKD holder) via XRP bridge
-	t.Log("XRP bridge test: requires offer creation support")
+	// Offer 2: mm sells gw2/HKD for XRP — mm offers gw2/HKD(1000), wants XRP(1000)
+	hkd1000gw2 := tx.NewIssuedAmountFromFloat64(1000, "HKD", gw2.Address)
+	result = env.CreateOffer(mm, hkd1000gw2, xrp1000)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// alice pays bob gw2/HKD(10), sendmax gw1/HKD(10), path through XRP bridge
+	hkd10gw2 := tx.NewIssuedAmountFromFloat64(10, "HKD", gw2.Address)
+	hkd10gw1 := tx.NewIssuedAmountFromFloat64(10, "HKD", gw1.Address)
+	payTx := PayIssued(alice, bob, hkd10gw2).
+		SendMax(hkd10gw1).
+		PathsXRP(). // path through XRP bridge
+		Build()
+	result = env.Submit(payTx)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Verify: bob should have gw2/HKD(10)
+	bobHKD := env.BalanceIOU(bob, "HKD", gw2)
+	require.InDelta(t, 10.0, bobHKD, 0.0001, "Bob should have 10 gw2/HKD")
+
+	// Verify: alice should have gw1/HKD(990)
+	aliceHKD := env.BalanceIOU(alice, "HKD", gw1)
+	require.InDelta(t, 990.0, aliceHKD, 0.0001, "Alice should have 990 gw1/HKD")
 }
 
 // =============================================================================
@@ -770,9 +828,8 @@ func TestPath_AMMDomainPath(t *testing.T) {
 
 // TestPath_PathFind tests basic path finding via gateway.
 // From rippled: Path_test::path_find
+// alice and bob both trust gw for USD, alice pays bob through gw.
 func TestPath_PathFind(t *testing.T) {
-	t.Skip("TODO: Requires IOU payment through gateway")
-
 	env := xrplgoTesting.NewTestEnv(t)
 
 	gw := xrplgoTesting.NewAccount("gateway")
@@ -800,16 +857,29 @@ func TestPath_PathFind(t *testing.T) {
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
 
-	// alice pays bob 5 USD - path should go through gateway
-	// Path: alice -> gw -> bob
-	t.Log("Path find test: requires IOU payment through gateway")
+	// alice pays bob 5 USD - path goes through common gateway
+	usd5 := tx.NewIssuedAmountFromFloat64(5, "USD", gw.Address)
+	payTx := PayIssued(alice, bob, usd5).Build()
+	result = env.Submit(payTx)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Verify balances
+	aliceBalance := env.BalanceIOU(alice, "USD", gw)
+	require.InDelta(t, 65.0, aliceBalance, 0.0001, "Alice should have 65 USD")
+
+	bobBalance := env.BalanceIOU(bob, "USD", gw)
+	require.InDelta(t, 55.0, bobBalance, 0.0001, "Bob should have 55 USD")
 }
 
 // TestPath_ViaOffersViaGateway tests payment via gateway with offers.
 // From rippled: Path_test::via_offers_via_gateway
+// Reference: rippled Path_test.cpp via_offers_via_gateway()
+//
+//	env(rate(gw, 1.1));
+//	env(offer("carol", XRP(50), AUD(50)));
+//	env(pay("alice", "bob", AUD(10)), sendmax(XRP(100)), paths(XRP));
 func TestPath_ViaOffersViaGateway(t *testing.T) {
-	t.Skip("TODO: Requires offer creation and cross-currency payment")
-
 	env := xrplgoTesting.NewTestEnv(t)
 
 	gw := xrplgoTesting.NewAccount("gateway")
@@ -824,6 +894,9 @@ func TestPath_ViaOffersViaGateway(t *testing.T) {
 	env.Close()
 
 	// gw has 1.1x transfer rate
+	env.SetTransferRate(gw, 1_100_000_000)
+	env.Close()
+
 	// bob and carol trust gw for AUD
 	result := env.Submit(trustset.TrustLine(bob, "AUD", gw, "100").Build())
 	xrplgoTesting.RequireTxSuccess(t, result)
@@ -838,8 +911,30 @@ func TestPath_ViaOffersViaGateway(t *testing.T) {
 	env.Close()
 
 	// Carol creates offer: XRP(50) for AUD(50)
-	// alice pays bob 10 AUD using XRP via carol's offer
-	t.Log("Via offers via gateway test: requires offer creation")
+	aud50Offer := tx.NewIssuedAmountFromFloat64(50, "AUD", gw.Address)
+	xrp50 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(50)))
+	result = env.CreateOffer(carol, aud50Offer, xrp50)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// alice pays bob AUD(10) using XRP via carol's offer
+	aud10 := tx.NewIssuedAmountFromFloat64(10, "AUD", gw.Address)
+	xrp100 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(100)))
+	payTx := PayIssued(alice, bob, aud10).
+		SendMax(xrp100).
+		PathsXRP().
+		Build()
+	result = env.Submit(payTx)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Verify: bob should have AUD(10)
+	bobAUD := env.BalanceIOU(bob, "AUD", gw)
+	require.InDelta(t, 10.0, bobAUD, 0.0001, "Bob should have 10 AUD")
+
+	// carol had 50 AUD, sold ~11 AUD (10 + 10% transfer fee) via offer
+	carolAUD := env.BalanceIOU(carol, "AUD", gw)
+	require.InDelta(t, 39.0, carolAUD, 0.01, "Carol should have ~39 AUD after transfer fee")
 }
 
 // TestPath_IndirectPathsPathFind tests indirect path finding.

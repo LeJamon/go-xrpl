@@ -34,7 +34,7 @@ func genPackedTokensForOwner(env *jtx.TestEnv, owner, minter *jtx.Account) []str
 			intTaxon += 2
 		}
 
-		tokenSeq := env.MintedCount(minter)
+		tokenSeq := nft.GetNFTokenSeq(env, minter)
 		extTaxon := nftoken.CipheredTaxon(tokenSeq, intTaxon)
 
 		flags := nftoken.NFTokenFlagTransferable
@@ -69,7 +69,7 @@ func genPackedTokens(env *jtx.TestEnv, owner *jtx.Account) []string {
 			intTaxon += 2
 		}
 
-		tokenSeq := env.MintedCount(owner)
+		tokenSeq := nft.GetNFTokenSeq(env, owner)
 		extTaxon := nftoken.CipheredTaxon(tokenSeq, intTaxon)
 
 		flags := nftoken.NFTokenFlagTransferable
@@ -139,9 +139,14 @@ func TestLedgerStateFixErrors(t *testing.T) {
 		// Fee too low.
 		// Reference: rippled LedgerStateFix.cpp — requires fees().increment as minimum fee
 		t.Run("telINSUF_FEE_P with fee below increment", func(t *testing.T) {
-			// In rippled, LedgerStateFix requires increment (50M drops) as fee.
-			// The Go engine does not enforce this minimum fee for LedgerStateFix yet.
-			t.Skip("Go engine does not enforce increment as minimum fee for LedgerStateFix")
+			// LedgerStateFix requires increment (50M drops) as minimum fee.
+			// Submitting with the default base fee (10 drops) should fail.
+			result := env.Submit(
+				nft.LedgerStateFixNFTPageLinks(alice, alice).
+					Fee(env.BaseFee()). // 10 drops, well below the 50M increment
+					Build(),
+			)
+			jtx.RequireTxFail(t, result, "telINSUF_FEE_P")
 		})
 
 		// Invalid flags.

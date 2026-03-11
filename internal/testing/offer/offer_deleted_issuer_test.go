@@ -143,8 +143,6 @@ func TestOffer_DeletedOfferIssuer(t *testing.T) {
 }
 
 func testDeletedOfferIssuer(t *testing.T, disabledFeatures []string) {
-	t.Skip("TODO: Requires AccountDelete transaction to fully cascade-delete owner objects (offers, trust lines)")
-
 	env := newEnvWithFeatures(t, disabledFeatures)
 
 	alice := jtx.NewAccount("alice")

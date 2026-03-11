@@ -84,10 +84,11 @@ func (n *NFTokenMint) Validate() error {
 	}
 
 	// Check for invalid flags
-	// Use the old (permissive) mask here since Validate() has no access to Rules.
-	// The amendment-dependent check (rejecting tfTrustLine when
-	// fixRemoveNFTokenAutoTrustLine is enabled) is in Apply().
-	if n.GetFlags()&tfNFTokenMintOldMask != 0 {
+	// Use the most permissive mask here since Validate() has no access to Rules.
+	// The amendment-dependent checks (rejecting tfTrustLine when
+	// fixRemoveNFTokenAutoTrustLine is enabled, rejecting tfMutable when
+	// DynamicNFT is not enabled) are in Apply().
+	if n.GetFlags()&tfNFTokenMintOldMaskWithMutable != 0 {
 		return errors.New("temINVALID_FLAG: invalid NFTokenMint flags")
 	}
 
@@ -161,13 +162,26 @@ func (n *NFTokenMint) RequiredAmendments() [][32]byte {
 // Apply applies the NFTokenMint transaction to the ledger.
 // Reference: rippled NFTokenMint.cpp doApply
 func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
-	// Amendment-dependent flag check: with fixRemoveNFTokenAutoTrustLine,
-	// tfTrustLine is no longer valid.
-	// Reference: rippled NFTokenMint.cpp preflight — mask depends on amendment
+	// Amendment-dependent flag check.
+	// Reference: rippled NFTokenMint.cpp preflight — mask depends on amendments
+	dynamicNFT := ctx.Rules().NFTsWithDynamicEnabled()
 	if ctx.Rules().Enabled(amendment.FeatureFixRemoveNFTokenAutoTrustLine) {
-		if m.GetFlags()&tfNFTokenMintMask != 0 {
-			return tx.TemINVALID_FLAG
+		if dynamicNFT {
+			if m.GetFlags()&tfNFTokenMintMaskWithMutable != 0 {
+				return tx.TemINVALID_FLAG
+			}
+		} else {
+			if m.GetFlags()&tfNFTokenMintMask != 0 {
+				return tx.TemINVALID_FLAG
+			}
 		}
+	} else {
+		if dynamicNFT {
+			if m.GetFlags()&tfNFTokenMintOldMaskWithMutable != 0 {
+				return tx.TemINVALID_FLAG
+			}
+		}
+		// else: use the old permissive mask (already checked in Validate)
 	}
 
 	accountID := ctx.AccountID
@@ -205,12 +219,49 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 		issuerAccount = ctx.Account
 	}
 
-	// Get the token sequence from MintedNFTokens
-	tokenSeq := issuerAccount.MintedNFTokens
+	// Get the token sequence from MintedNFTokens.
+	// With fixNFTokenRemint, the token sequence is FirstNFTokenSequence + MintedNFTokens.
+	// Reference: rippled NFTokenMint.cpp doApply lines 227-291
+	var tokenSeq uint32
 
-	// Check for overflow
-	if tokenSeq+1 < tokenSeq {
-		return tx.TecMAX_SEQUENCE_REACHED
+	if !ctx.Rules().Enabled(amendment.FeatureFixNFTokenRemint) {
+		// Without fixNFTokenRemint: tokenSeq = MintedNFTokens
+		tokenSeq = issuerAccount.MintedNFTokens
+		nextTokenSeq := tokenSeq + 1
+		if nextTokenSeq < tokenSeq {
+			return tx.TecMAX_SEQUENCE_REACHED
+		}
+		issuerAccount.MintedNFTokens = nextTokenSeq
+	} else {
+		// With fixNFTokenRemint:
+		// If the issuer hasn't minted an NFToken before, set FirstNFTokenSequence.
+		// Reference: rippled NFTokenMint.cpp lines 245-271
+		if !issuerAccount.HasFirstNFTSeq {
+			acctSeq := issuerAccount.Sequence
+			// If minted by authorized minter (Issuer field present) or using a ticket,
+			// use acctSeq as-is. Otherwise, the sequence was pre-incremented, so use acctSeq - 1.
+			if m.Issuer != "" || m.GetCommon().TicketSequence != nil {
+				issuerAccount.FirstNFTokenSequence = acctSeq
+			} else {
+				issuerAccount.FirstNFTokenSequence = acctSeq - 1
+			}
+			issuerAccount.HasFirstNFTSeq = true
+		}
+
+		mintedNftCnt := issuerAccount.MintedNFTokens
+		issuerAccount.MintedNFTokens = mintedNftCnt + 1
+		if issuerAccount.MintedNFTokens == 0 {
+			return tx.TecMAX_SEQUENCE_REACHED
+		}
+
+		// tokenSeq = FirstNFTokenSequence + MintedNFTokens (before increment)
+		offset := issuerAccount.FirstNFTokenSequence
+		tokenSeq = offset + mintedNftCnt
+
+		// Check for overflow
+		if tokenSeq+1 == 0 || tokenSeq < offset {
+			return tx.TecMAX_SEQUENCE_REACHED
+		}
 	}
 
 	// Get flags for the token from transaction flags
@@ -256,8 +307,7 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Update owner count based on pages created
 	ctx.Account.OwnerCount += uint32(insertResult.PagesCreated)
 
-	// Update MintedNFTokens on the issuer account
-	issuerAccount.MintedNFTokens = tokenSeq + 1
+	// MintedNFTokens was already incremented above in the fixNFTokenRemint/non-fix branches.
 
 	// If issuer is different from minter, update the issuer account - tracked automatically
 	if m.Issuer != "" {

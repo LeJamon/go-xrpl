@@ -24,9 +24,11 @@ type AccountRoot struct {
 	MessageKey        string
 	TransferRate      uint32
 	TickSize          uint8
-	NFTokenMinter     string   // Account allowed to mint NFTokens on behalf of this account
-	MintedNFTokens    uint32   // Number of NFTokens minted by this account (issuer tracking)
-	BurnedNFTokens    uint32   // Number of NFTokens burned for this issuer
+	NFTokenMinter        string // Account allowed to mint NFTokens on behalf of this account
+	MintedNFTokens       uint32 // Number of NFTokens minted by this account (issuer tracking)
+	BurnedNFTokens       uint32 // Number of NFTokens burned for this issuer
+	FirstNFTokenSequence uint32 // First NFToken sequence (set by fixNFTokenRemint)
+	HasFirstNFTSeq       bool   // Whether FirstNFTokenSequence is set (zero is a valid value)
 	AccountTxnID      [32]byte // Hash of the last transaction this account submitted (when enabled)
 	WalletLocator     string   // Arbitrary hex data (deprecated)
 	TicketCount       uint32   // Number of outstanding tickets owned by this account
@@ -55,8 +57,9 @@ const (
 	fieldCodeSequence        = 4  // UInt32
 	fieldCodeOwnerCount      = 13 // UInt32 (per rippled sfields.macro)
 	fieldCodeTransferRate    = 11 // UInt32
-	fieldCodeMintedNFTokens  = 43 // UInt32 - number of NFTokens minted
-	fieldCodeBurnedNFTokens  = 44 // UInt32 - number of NFTokens burned
+	fieldCodeMintedNFTokens       = 43 // UInt32 - number of NFTokens minted
+	fieldCodeBurnedNFTokens       = 44 // UInt32 - number of NFTokens burned
+	fieldCodeFirstNFTokenSequence = 50 // UInt32 - first NFToken sequence (fixNFTokenRemint)
 	fieldCodeBalance         = 1  // Amount
 	fieldCodeRegularKey      = 8  // Account
 	fieldCodeAccount         = 1  // Account (different context)
@@ -214,6 +217,9 @@ func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 				account.MintedNFTokens = value
 			case fieldCodeBurnedNFTokens:
 				account.BurnedNFTokens = value
+			case fieldCodeFirstNFTokenSequence:
+				account.FirstNFTokenSequence = value
+				account.HasFirstNFTSeq = true
 			case fieldCodeTicketCount:
 				account.TicketCount = value
 			}
@@ -407,6 +413,11 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 	// Add BurnedNFTokens if set (for NFToken issuer tracking)
 	if account.BurnedNFTokens > 0 {
 		jsonObj["BurnedNFTokens"] = account.BurnedNFTokens
+	}
+
+	// Add FirstNFTokenSequence if set (fixNFTokenRemint amendment)
+	if account.HasFirstNFTSeq {
+		jsonObj["FirstNFTokenSequence"] = account.FirstNFTokenSequence
 	}
 
 	// Add TicketCount if set (number of outstanding tickets)

@@ -3,6 +3,7 @@ package account
 import (
 	"errors"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -68,11 +69,15 @@ func (a *AccountDelete) Flatten() (map[string]any, error) {
 // Apply applies the AccountDelete transaction to ledger state.
 // Reference: rippled DeleteAccount.cpp DeleteAccount::preclaim() + doApply()
 func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
-	// Check minimum ledger gap: account must have existed for at least 256 ledgers.
-	// Use the transaction's Sequence (pre-increment value), matching rippled's preclaim().
-	// Reference: rippled DeleteAccount.cpp accountDeleteMinLedgerGap = 256
+	// Check minimum ledger gap: account sequence must be far enough behind the ledger.
+	// Uses addition (seq + 255 > ledgerSeq) instead of subtraction to avoid uint32 underflow.
+	// Reference: rippled DeleteAccount.cpp preclaim():
+	//   constexpr std::uint32_t seqDelta{255};
+	//   if ((*sleAccount)[sfSequence] + seqDelta > ctx.view.seq())
+	//       return tecTOO_SOON;
+	const seqDelta uint32 = 255
 	if a.Common.Sequence != nil {
-		if ctx.Config.LedgerSequence-*a.Common.Sequence < 256 {
+		if *a.Common.Sequence+seqDelta > ctx.Config.LedgerSequence {
 			return tx.TecTOO_SOON
 		}
 	}
@@ -109,6 +114,44 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
+	// --- NFToken preclaim checks ---
+	// Reference: rippled DeleteAccount.cpp preclaim() lines 268-285
+	rules := ctx.Rules()
+
+	// If NonFungibleTokensV1 is enabled, check NFT-related obligations.
+	if rules.Enabled(amendment.FeatureNonFungibleTokensV1) {
+		// An issuer cannot be deleted if they have outstanding NFTs in the ledger.
+		if ctx.Account.MintedNFTokens != ctx.Account.BurnedNFTokens {
+			return tx.TecHAS_OBLIGATIONS
+		}
+
+		// An account that owns any NFTs cannot be deleted.
+		// Check if any NFToken page exists in the account's NFT page range.
+		first := keylet.NFTokenPageMin(ctx.AccountID)
+		last := keylet.NFTokenPageMax(ctx.AccountID)
+
+		succKey, _, succFound, succErr := ctx.View.Succ(first.Key)
+		if succErr == nil && succFound {
+			// Check if the successor key is within the account's NFT page range
+			if keyLessEqual(succKey, last.Key) {
+				return tx.TecHAS_OBLIGATIONS
+			}
+		}
+	}
+
+	// When fixNFTokenRemint is enabled, enforce the additional constraint:
+	// FirstNFTokenSequence + MintedNFTokens + seqDelta > LedgerSequence
+	// Reference: rippled DeleteAccount.cpp preclaim() lines 297-312
+	if rules.Enabled(amendment.FeatureFixNFTokenRemint) {
+		firstNFTSeq := uint32(0)
+		if ctx.Account.HasFirstNFTSeq {
+			firstNFTSeq = ctx.Account.FirstNFTokenSequence
+		}
+		if uint64(firstNFTSeq)+uint64(ctx.Account.MintedNFTokens)+uint64(seqDelta) > uint64(ctx.Config.LedgerSequence) {
+			return tx.TecTOO_SOON
+		}
+	}
+
 	// --- Cascade-delete all non-obligation directory entries ---
 	// Collect all keys first, then delete — avoids modifying directory during iteration.
 	// Reference: rippled DeleteAccount.cpp nonObligationDeleter()
@@ -136,6 +179,107 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		switch entry.Type(entryType) {
+		case entry.TypeOffer:
+			// Cascade-delete DEX offers: remove from owner dir, book dir, erase.
+			// Reference: rippled DeleteAccount.cpp nonObligationDeleter case ltOFFER → offerDelete()
+			offer, err := state.ParseLedgerOfferFromBytes(data)
+			if err != nil {
+				return tx.TefBAD_LEDGER
+			}
+			// Remove from owner directory
+			_, err = state.DirRemove(ctx.View, ownerDirKey, offer.OwnerNode, itemKeylet.Key, false)
+			if err != nil {
+				return tx.TefBAD_LEDGER
+			}
+			// Remove from book directory
+			bookDirKey := keylet.Keylet{Type: 100, Key: offer.BookDirectory}
+			_, err = state.DirRemove(ctx.View, bookDirKey, offer.BookNode, itemKeylet.Key, false)
+			if err != nil {
+				return tx.TefBAD_LEDGER
+			}
+			// Erase the offer
+			if err := ctx.View.Erase(itemKeylet); err != nil {
+				return tx.TefBAD_LEDGER
+			}
+			if ctx.Account.OwnerCount > 0 {
+				ctx.Account.OwnerCount--
+			}
+
+		case entry.TypeTicket:
+			// Cascade-delete tickets: remove from owner dir, erase.
+			// Reference: rippled DeleteAccount.cpp nonObligationDeleter case ltTICKET → ticketDelete()
+			state.DirRemove(ctx.View, ownerDirKey, 0, itemKeylet.Key, true)
+			if err := ctx.View.Erase(itemKeylet); err != nil {
+				return tx.TefBAD_LEDGER
+			}
+			if ctx.Account.OwnerCount > 0 {
+				ctx.Account.OwnerCount--
+			}
+			if ctx.Account.TicketCount > 0 {
+				ctx.Account.TicketCount--
+			}
+
+		case entry.TypeNFTokenOffer:
+			// Cascade-delete NFToken offers: remove from owner dir, NFTBuys/NFTSells dir, erase.
+			// Reference: rippled DeleteAccount.cpp nonObligationDeleter case ltNFTOKEN_OFFER → nft::deleteTokenOffer()
+			nftOffer, err := state.ParseNFTokenOffer(data)
+			if err != nil {
+				return tx.TefBAD_LEDGER
+			}
+			// Remove from owner's directory
+			state.DirRemove(ctx.View, ownerDirKey, nftOffer.OwnerNode, itemKeylet.Key, false)
+			// Remove from NFTBuys or NFTSells directory
+			const lsfSellNFToken uint32 = 0x00000001
+			isSellOffer := nftOffer.Flags&lsfSellNFToken != 0
+			var tokenDirKey keylet.Keylet
+			if isSellOffer {
+				tokenDirKey = keylet.NFTSells(nftOffer.NFTokenID)
+			} else {
+				tokenDirKey = keylet.NFTBuys(nftOffer.NFTokenID)
+			}
+			state.DirRemove(ctx.View, tokenDirKey, nftOffer.NFTokenOfferNode, itemKeylet.Key, false)
+			// Erase the offer
+			ctx.View.Erase(itemKeylet)
+			if ctx.Account.OwnerCount > 0 {
+				ctx.Account.OwnerCount--
+			}
+
+		case entry.TypeDepositPreauth:
+			// Cascade-delete deposit preauth: remove from owner dir, erase.
+			// Reference: rippled DeleteAccount.cpp nonObligationDeleter case ltDEPOSIT_PREAUTH → DepositPreauth::removeFromLedger()
+			preauthEntry, err := state.ParseDepositPreauth(data)
+			if err != nil {
+				return tx.TefBAD_LEDGER
+			}
+			_, err = state.DirRemove(ctx.View, ownerDirKey, preauthEntry.OwnerNode, itemKeylet.Key, false)
+			if err != nil {
+				return tx.TefBAD_LEDGER
+			}
+			if err := ctx.View.Erase(itemKeylet); err != nil {
+				return tx.TefBAD_LEDGER
+			}
+			if ctx.Account.OwnerCount > 0 {
+				ctx.Account.OwnerCount--
+			}
+
+		case entry.TypeDID:
+			// Cascade-delete DID: remove from owner dir, erase.
+			// Reference: rippled DeleteAccount.cpp nonObligationDeleter case ltDID → DIDDelete::deleteSLE()
+			didData, err := state.ParseDID(data)
+			if err != nil {
+				return tx.TefBAD_LEDGER
+			}
+			_, err = state.DirRemove(ctx.View, ownerDirKey, didData.OwnerNode, itemKeylet.Key, false)
+			if err != nil {
+				return tx.TefBAD_LEDGER
+			}
+			if err := ctx.View.Erase(itemKeylet); err != nil {
+				return tx.TefBAD_LEDGER
+			}
+			if ctx.Account.OwnerCount > 0 {
+				ctx.Account.OwnerCount--
+			}
+
 		case entry.TypeCredential:
 			cred, err := credential.ParseCredentialEntry(data)
 			if err != nil {
@@ -144,6 +288,7 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 			if err := credential.DeleteSLE(ctx.View, itemKeylet, cred); err != nil {
 				return tx.TecHAS_OBLIGATIONS
 			}
+
 		case entry.TypeOracle:
 			oracleData, err := state.ParseOracle(data)
 			if err != nil {
@@ -153,6 +298,7 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 			if result := oracle.DeleteOracleFromView(ctx.View, itemKeylet, oracleData, ctx.AccountID, nil); result != tx.TesSUCCESS {
 				return tx.TecHAS_OBLIGATIONS
 			}
+
 		case entry.TypeSignerList:
 			// Signer lists are not obligations — cascade-delete them.
 			// Reference: rippled DeleteAccount.cpp nonObligationDeleter case ltSIGNER_LIST
@@ -163,6 +309,25 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 			if ctx.Account.OwnerCount > 0 {
 				ctx.Account.OwnerCount--
 			}
+
+		case entry.TypeDelegate:
+			// Cascade-delete delegate: remove from owner dir, erase.
+			// Reference: rippled DeleteAccount.cpp nonObligationDeleter case ltDELEGATE → DelegateSet::deleteDelegate()
+			delegateData, err := state.ParseDelegate(data)
+			if err != nil {
+				return tx.TefBAD_LEDGER
+			}
+			_, err = state.DirRemove(ctx.View, ownerDirKey, delegateData.OwnerNode, itemKeylet.Key, false)
+			if err != nil {
+				return tx.TefBAD_LEDGER
+			}
+			if err := ctx.View.Erase(itemKeylet); err != nil {
+				return tx.TefBAD_LEDGER
+			}
+			if ctx.Account.OwnerCount > 0 {
+				ctx.Account.OwnerCount--
+			}
+
 		default:
 			return tx.TecHAS_OBLIGATIONS
 		}
@@ -183,7 +348,13 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	destAccount.Balance += ctx.Account.Balance
+	// Transfer balance from source to destination.
+	// Reference: rippled DeleteAccount.cpp doApply() lines 414-416:
+	//   (*dst)[sfBalance] = (*dst)[sfBalance] + mSourceBalance;
+	//   (*src)[sfBalance] = (*src)[sfBalance] - mSourceBalance;
+	sourceBalance := ctx.Account.Balance
+	destAccount.Balance += sourceBalance
+	ctx.Account.Balance -= sourceBalance
 
 	destUpdatedData, err := state.SerializeAccountRoot(destAccount)
 	if err != nil {
@@ -194,12 +365,34 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
+	// Update the source account in the view with balance=0 BEFORE erasing.
+	// This ensures the erased entry's Current data has the correct final state
+	// for invariant checks (XRPNotCreated verifies net XRP changes).
+	// Reference: rippled DeleteAccount.cpp — sets src balance to 0, then erases.
 	srcKey := keylet.Account(ctx.AccountID)
+	srcUpdatedData, err := state.SerializeAccountRoot(ctx.Account)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := ctx.View.Update(srcKey, srcUpdatedData); err != nil {
+		return tx.TefINTERNAL
+	}
 	if err := ctx.View.Erase(srcKey); err != nil {
 		return tx.TefINTERNAL
 	}
 
-	ctx.Account.Balance = 0
-
 	return tx.TesSUCCESS
+}
+
+// keyLessEqual returns true if a <= b (byte-level comparison of 32-byte keys).
+func keyLessEqual(a, b [32]byte) bool {
+	for i := 0; i < 32; i++ {
+		if a[i] < b[i] {
+			return true
+		}
+		if a[i] > b[i] {
+			return false
+		}
+	}
+	return true // equal
 }

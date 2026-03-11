@@ -40,11 +40,6 @@ func TestOfferStream_ExpiredOfferCleanup(t *testing.T) {
 }
 
 func testOfferStream_ExpiredOfferCleanup(t *testing.T, disabledFeatures []string) {
-	t.Skip("Engine gap: expired offer removal during book traversal not yet implemented " +
-		"(same gap as TestOffer_Expiration). The BookStep skips expired offers without " +
-		"removing them; when all offers are expired, the strand returns tecPATH_DRY " +
-		"before the cleanup logic can run.")
-
 	env := newEnvWithFeatures(t, disabledFeatures)
 
 	gw := jtx.NewAccount("gateway")
@@ -221,10 +216,6 @@ func TestOfferStream_SkipBadOffers(t *testing.T) {
 }
 
 func testOfferStream_SkipBadOffers(t *testing.T, disabledFeatures []string) {
-	t.Skip("Engine gap: expired offer removal during book traversal not yet implemented. " +
-		"The BookStep skips expired offers but does not remove them, causing the strand " +
-		"to return tecPATH_DRY before cleanup can occur.")
-
 	env := newEnvWithFeatures(t, disabledFeatures)
 
 	gw := jtx.NewAccount("gateway")
@@ -459,10 +450,6 @@ func TestOfferStream_MultipleExpiredOffers(t *testing.T) {
 }
 
 func testOfferStream_MultipleExpiredOffers(t *testing.T, disabledFeatures []string) {
-	t.Skip("Engine gap: expired offer removal during book traversal not yet implemented. " +
-		"Multiple expired offers should all be cleaned up before reaching a valid offer, " +
-		"but the engine returns tecPATH_DRY before cleanup runs.")
-
 	env := newEnvWithFeatures(t, disabledFeatures)
 
 	gw := jtx.NewAccount("gateway")

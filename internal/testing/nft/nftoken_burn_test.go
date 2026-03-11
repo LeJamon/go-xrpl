@@ -172,7 +172,7 @@ func TestBurnSequential(t *testing.T) {
 			}
 
 			// Compute external taxon that will produce the desired internal taxon
-			tokenSeq := env.MintedCount(account)
+			tokenSeq := nft.GetNFTokenSeq(env, account)
 			extTaxon := nftoken.CipheredTaxon(tokenSeq, intTaxon)
 
 			nftID := nft.GetNextNFTokenID(env, account, extTaxon, 0, 0)
@@ -476,7 +476,7 @@ func TestExerciseBrokenLinks(t *testing.T) {
 			intTaxon += 2
 		}
 
-		tokenSeq := env.MintedCount(minter)
+		tokenSeq := nft.GetNFTokenSeq(env, minter)
 		extTaxon := nftoken.CipheredTaxon(tokenSeq, intTaxon)
 
 		flags := nftoken.NFTokenFlagTransferable

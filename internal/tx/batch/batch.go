@@ -378,21 +378,63 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) tx.Resu
 		return tx.TefINTERNAL
 	}
 
-	// Check sequence
-	if common.Sequence != nil {
-		if *common.Sequence < account.Sequence {
-			return tx.TefPAST_SEQ
+	// Determine whether this inner tx uses a ticket or a regular sequence.
+	// Reference: rippled Transactor::checkSeqProxy + consumeSeqProxy
+	isTicket := common.TicketSequence != nil && (common.Sequence == nil || *common.Sequence == 0)
+
+	if isTicket {
+		// Ticket-based inner transaction
+		ticketSeq := *common.TicketSequence
+
+		// Ticket must have been created already (ticketSeq < account.Sequence)
+		if account.Sequence <= ticketSeq {
+			return tx.TerPRE_SEQ // terPRE_TICKET equivalent
 		}
-		if *common.Sequence > account.Sequence {
-			return tx.TerPRE_SEQ
+
+		// Check ticket exists in the view
+		ticketKey := keylet.Ticket(accountID, ticketSeq)
+		ticketExists, tickErr := ctx.View.Exists(ticketKey)
+		if tickErr != nil || !ticketExists {
+			return tx.TefPAST_SEQ // tefNO_TICKET equivalent
+		}
+	} else {
+		// Regular sequence-based inner transaction
+		if common.Sequence != nil {
+			if *common.Sequence < account.Sequence {
+				return tx.TefPAST_SEQ
+			}
+			if *common.Sequence > account.Sequence {
+				return tx.TerPRE_SEQ
+			}
 		}
 	}
 
 	// Create per-tx state table for isolation
 	perTxTable := tx.NewApplyStateTable(ctx.View, ctx.TxHash, ctx.Config.LedgerSequence, ctx.Config.Rules)
 
-	// Increment sequence
-	account.Sequence++
+	if isTicket {
+		// Ticket-based: consume the ticket (delete it, adjust owner/ticket counts).
+		// Sequence does NOT increment for ticket transactions.
+		// Reference: rippled Transactor::consumeSeqProxy + ticketDelete
+		ticketKey := keylet.Ticket(accountID, *common.TicketSequence)
+		ownerDirKey := keylet.OwnerDir(accountID)
+
+		// Remove ticket from owner directory
+		state.DirRemove(perTxTable, ownerDirKey, 0, ticketKey.Key, true)
+		if err := perTxTable.Erase(ticketKey); err != nil {
+			return tx.TefINTERNAL
+		}
+
+		if account.OwnerCount > 0 {
+			account.OwnerCount--
+		}
+		if account.TicketCount > 0 {
+			account.TicketCount--
+		}
+	} else {
+		// Increment sequence for regular sequence transactions
+		account.Sequence++
+	}
 
 	// Create inner apply context
 	innerCtx := &tx.ApplyContext{
@@ -413,27 +455,31 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) tx.Resu
 		result = tx.TesSUCCESS
 	}
 
-	// Serialize the updated account
-	updatedData, err := state.SerializeAccountRoot(account)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
 	if result.IsSuccess() {
-		// Success: update account in per-tx table and commit all changes
-		if err := perTxTable.Update(accountKey, updatedData); err != nil {
-			return tx.TefINTERNAL
+		// Success: update account in per-tx table and commit all changes.
+		// If the inner transaction deleted the account (e.g. AccountDelete),
+		// the account SLE was already erased from the per-tx table, so we
+		// must not try to update it — just commit the per-tx table as-is.
+		accountExists, _ := perTxTable.Exists(accountKey)
+		if accountExists {
+			updatedData, err := state.SerializeAccountRoot(account)
+			if err != nil {
+				return tx.TefINTERNAL
+			}
+			if err := perTxTable.Update(accountKey, updatedData); err != nil {
+				return tx.TefINTERNAL
+			}
 		}
 		if _, err := perTxTable.Apply(); err != nil {
 			return tx.TefINTERNAL
 		}
-	} else if result.IsTec() {
-		// TEC: sequence increments but transaction effects are discarded
-		if err := ctx.View.Update(accountKey, updatedData); err != nil {
+	} else {
+		// TEC/TEF/TER: sequence increments but transaction effects are discarded.
+		// Update account state (sequence) directly in the parent view.
+		updatedData, err := state.SerializeAccountRoot(account)
+		if err != nil {
 			return tx.TefINTERNAL
 		}
-	} else {
-		// TEF/TER: sequence still increments for inner batch txns
 		if err := ctx.View.Update(accountKey, updatedData); err != nil {
 			return tx.TefINTERNAL
 		}
@@ -456,5 +502,7 @@ func syncAccountFromView(ctx *tx.ApplyContext) {
 	}
 	ctx.Account.Balance = account.Balance
 	ctx.Account.Sequence = account.Sequence
+	ctx.Account.OwnerCount = account.OwnerCount
+	ctx.Account.TicketCount = account.TicketCount
 }
 

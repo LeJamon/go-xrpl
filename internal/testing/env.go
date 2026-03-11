@@ -669,7 +669,7 @@ func (e *TestEnv) SubmitPseudo(transaction interface{}) TxResult {
 	}
 
 	engine := tx.NewEngine(e.ledger, engineConfig)
-	applyResult := engine.Apply(txn)
+	applyResult := engine.ApplyPseudo(txn)
 
 	return TxResult{
 		Code:     applyResult.Result.String(),
@@ -990,6 +990,7 @@ func (e *TestEnv) AccountInfo(acc *Account) *AccountInfo {
 		WalletLocator:  accountRoot.WalletLocator,
 		AccountTxnID:   accountRoot.AccountTxnID,
 		TransferRate:   accountRoot.TransferRate,
+		TicketCount:    accountRoot.TicketCount,
 	}
 }
 
@@ -1009,6 +1010,7 @@ type AccountInfo struct {
 	WalletLocator  string
 	AccountTxnID   [32]byte
 	TransferRate   uint32
+	TicketCount    uint32
 }
 
 // MintedCount returns the number of NFTokens minted by this issuer.
@@ -1525,6 +1527,17 @@ func (e *TestEnv) OwnerCount(acc *Account) uint32 {
 	return info.OwnerCount
 }
 
+// TicketCount returns the ticket count for an account (0 if account doesn't exist).
+// Reference: rippled sfTicketCount field on AccountRoot
+func (e *TestEnv) TicketCount(acc *Account) uint32 {
+	e.t.Helper()
+	info := e.AccountInfo(acc)
+	if info == nil {
+		return 0
+	}
+	return info.TicketCount
+}
+
 // LedgerEntryExists checks if a ledger entry exists by keylet.
 func (e *TestEnv) LedgerEntryExists(key keylet.Keylet) bool {
 	e.t.Helper()
@@ -1796,14 +1809,15 @@ func (e *TestEnv) AuthorizeTrustLine(issuer, holder *Account, currency string) {
 }
 
 // IncLedgerSeqForAccDel closes enough ledgers so account deletion is allowed.
-// rippled requires 256 ledgers after account creation before deletion.
+// rippled requires the account's sequence + 255 to be <= the current ledger sequence.
+// Uses addition instead of subtraction to avoid uint32 underflow.
 // Reference: rippled's incLgrSeqForAccDel() in acctdelete.h
 func (e *TestEnv) IncLedgerSeqForAccDel(acc *Account) {
 	e.t.Helper()
 
-	// AccountDelete requires the account's sequence to be at least 256 ledgers
-	// behind the current ledger sequence. Close ledgers until this is satisfied.
-	for e.LedgerSeq()-e.Seq(acc) < 256 {
+	// AccountDelete requires: seq + 255 <= LedgerSeq (i.e., seq + 255 > LedgerSeq fails)
+	// Close ledgers until this condition is met.
+	for e.Seq(acc)+255 > e.LedgerSeq() {
 		e.Close()
 	}
 }
@@ -1903,5 +1917,67 @@ func (e *TestEnv) SetTransferRateDirect(acc *Account, rate uint32) {
 
 	if err := e.ledger.Update(accountKey, updated); err != nil {
 		e.t.Fatalf("SetTransferRateDirect: failed to update: %v", err)
+	}
+}
+
+// SetMintedNFTokensDirect directly modifies an account's MintedNFTokens field
+// in the ledger, bypassing normal transaction validation.
+// This is used to test boundary conditions (e.g., near 0xFFFFFFFF) without
+// actually minting billions of tokens.
+// Reference: rippled NFToken_test.cpp testMintMaxTokens (env.app().openLedger().modify())
+func (e *TestEnv) SetMintedNFTokensDirect(acc *Account, count uint32) {
+	e.t.Helper()
+
+	accountKey := keylet.Account(acc.ID)
+	data, err := e.ledger.Read(accountKey)
+	if err != nil {
+		e.t.Fatalf("SetMintedNFTokensDirect: failed to read account: %v", err)
+	}
+
+	accountRoot, err := state.ParseAccountRoot(data)
+	if err != nil {
+		e.t.Fatalf("SetMintedNFTokensDirect: failed to parse account: %v", err)
+	}
+
+	accountRoot.MintedNFTokens = count
+
+	updated, err := state.SerializeAccountRoot(accountRoot)
+	if err != nil {
+		e.t.Fatalf("SetMintedNFTokensDirect: failed to serialize: %v", err)
+	}
+
+	if err := e.ledger.Update(accountKey, updated); err != nil {
+		e.t.Fatalf("SetMintedNFTokensDirect: failed to update: %v", err)
+	}
+}
+
+// SetFirstNFTokenSequenceDirect directly modifies an account's FirstNFTokenSequence
+// field in the ledger, bypassing normal transaction validation.
+// This is used to test boundary conditions with fixNFTokenRemint.
+// Reference: rippled NFToken_test.cpp testMintMaxTokens (env.app().openLedger().modify())
+func (e *TestEnv) SetFirstNFTokenSequenceDirect(acc *Account, seq uint32) {
+	e.t.Helper()
+
+	accountKey := keylet.Account(acc.ID)
+	data, err := e.ledger.Read(accountKey)
+	if err != nil {
+		e.t.Fatalf("SetFirstNFTokenSequenceDirect: failed to read account: %v", err)
+	}
+
+	accountRoot, err := state.ParseAccountRoot(data)
+	if err != nil {
+		e.t.Fatalf("SetFirstNFTokenSequenceDirect: failed to parse account: %v", err)
+	}
+
+	accountRoot.FirstNFTokenSequence = seq
+	accountRoot.HasFirstNFTSeq = true
+
+	updated, err := state.SerializeAccountRoot(accountRoot)
+	if err != nil {
+		e.t.Fatalf("SetFirstNFTokenSequenceDirect: failed to serialize: %v", err)
+	}
+
+	if err := e.ledger.Update(accountKey, updated); err != nil {
+		e.t.Fatalf("SetFirstNFTokenSequenceDirect: failed to update: %v", err)
 	}
 }

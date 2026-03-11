@@ -237,6 +237,21 @@ func checkAccountRootsNotDeleted(txType string, result Result, entries []Invaria
 				Name:    "AccountRootsNotDeleted",
 				Message: fmt.Sprintf("%s may delete at most 1 AccountRoot, got %d", txType, deletedCount),
 			}
+		// A Batch may contain inner AccountDelete/AMMDelete transactions that
+		// delete account roots. In rippled, each inner tx runs through its own
+		// apply() with its own invariant check under its own tx type. In goXRPL,
+		// the batch processes inner txns within a single engine table, so the
+		// invariant sees the combined result under the "Batch" tx type.
+		// Allow up to 1 account root deletion per batch.
+		// Reference: rippled apply.cpp applyBatchTransactions()
+		case "Batch":
+			if deletedCount <= 1 {
+				return nil
+			}
+			return &InvariantViolation{
+				Name:    "AccountRootsNotDeleted",
+				Message: fmt.Sprintf("Batch may delete at most 1 AccountRoot, got %d", deletedCount),
+			}
 		}
 	}
 
@@ -530,8 +545,19 @@ func checkNFTokenCountTracking(txType string, result Result, entries []Invariant
 			}
 		}
 
-		// Sum minted/burned from after state
-		if e.After != nil {
+		// Sum minted/burned from after state.
+		// In rippled, even erased SLEs pass their data as the "after" parameter
+		// to visitEntry (ApplyStateTable.cpp line 88-92). For deleted AccountRoots,
+		// we must include the before data in the after totals too, matching rippled's
+		// behavior where the SLE is passed as "after" even for Action::erase.
+		if e.IsDelete && e.Before != nil {
+			// Erased entry: rippled passes the SLE data as "after",
+			// so the before values appear in both before and after totals.
+			if acct, err := state.ParseAccountRoot(e.Before); err == nil {
+				afterMintedTotal += acct.MintedNFTokens
+				afterBurnedTotal += acct.BurnedNFTokens
+			}
+		} else if e.After != nil {
 			if acct, err := state.ParseAccountRoot(e.After); err == nil {
 				afterMintedTotal += acct.MintedNFTokens
 				afterBurnedTotal += acct.BurnedNFTokens

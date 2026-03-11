@@ -397,12 +397,20 @@ func computeTransactionHash(tx Transaction) ([32]byte, error) {
 	return hash, nil
 }
 
-// Apply processes a transaction and applies it to the ledger
+// Apply processes a transaction and applies it to the ledger.
+// Pseudo-transactions (Amendment, SetFee, UNLModify) are rejected here;
+// use ApplyPseudo() for pseudo-transaction application (e.g., during block processing).
+// Reference: rippled passesLocalChecks() rejects pseudo-transactions submitted by users.
 func (e *Engine) Apply(tx Transaction) ApplyResult {
-	// Check if this is a pseudo-transaction (Amendment, SetFee, UNLModify)
+	// Reject pseudo-transactions — they cannot be submitted by users.
+	// Reference: rippled passesLocalChecks() in NetworkOPs.cpp
 	txType := tx.TxType()
 	if txType.IsPseudoTransaction() {
-		return e.applyPseudoTransaction(tx)
+		return ApplyResult{
+			Result:  TemINVALID,
+			Applied: false,
+			Message: "pseudo-transactions cannot be submitted",
+		}
 	}
 
 	// Step 1: Preflight checks (syntax validation)
@@ -464,6 +472,14 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 		Metadata: metadata,
 		Message:  result.Message(),
 	}
+}
+
+// ApplyPseudo applies a pseudo-transaction (Amendment, SetFee, UNLModify) to the ledger.
+// This is the public entry point for pseudo-transaction application, used by the block
+// processor and test environment. Unlike Apply(), this does not reject pseudo-transactions.
+// Reference: rippled Change.cpp — pseudo-txs are applied during consensus, not user submission.
+func (e *Engine) ApplyPseudo(tx Transaction) ApplyResult {
+	return e.applyPseudoTransaction(tx)
 }
 
 // applyPseudoTransaction handles pseudo-transactions (Amendment, SetFee, UNLModify).
@@ -992,6 +1008,15 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 	fee := e.calculateFee(tx)
 	if feeCalc, ok := tx.(BatchFeeCalculator); ok {
 		minFee := feeCalc.CalculateMinimumFee(e.config.BaseFee)
+		if fee < minFee {
+			return TelINSUF_FEE_P
+		}
+	}
+	// CustomBaseFeeCalculator: transaction types that override calculateBaseFee()
+	// with access to the full engine config (e.g., LedgerStateFix uses increment).
+	// Reference: rippled Transactor::checkFee calls calculateBaseFee(view, tx)
+	if feeCalc, ok := tx.(CustomBaseFeeCalculator); ok {
+		minFee := feeCalc.CalculateBaseFee(e.config)
 		if fee < minFee {
 			return TelINSUF_FEE_P
 		}

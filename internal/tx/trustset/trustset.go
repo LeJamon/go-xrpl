@@ -3,6 +3,7 @@ package trustset
 import (
 	"errors"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/amm"
@@ -198,6 +199,19 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
+	// If the destination has opted to disallow incoming trustlines, honour that flag.
+	// Reference: rippled SetTrust.cpp lines 254-271
+	if ctx.Rules().DisallowIncomingEnabled() {
+		if issuerAccount.Flags&state.LsfDisallowIncomingTrustline != 0 {
+			// fixDisallowIncomingV1: if the trust line already exists, allow the TrustSet
+			if ctx.Rules().Enabled(amendment.FeatureFixDisallowIncomingV1) && trustLineExists {
+				// pass — existing trust lines are allowed
+			} else {
+				return tx.TecNO_PERMISSION
+			}
+		}
+	}
+
 	// In general, trust lines to pseudo-accounts (AMM) are not permitted
 	// unless the trust line already exists or it's an LP token trust line
 	// for a non-empty AMM.
@@ -287,9 +301,10 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Check account has reserve for new trust line
+		// Reference: rippled SetTrust.cpp line 710: tecNO_LINE_INSUF_RESERVE for new lines
 		reserveCreate := ctx.ReserveForNewObject(ctx.Account.OwnerCount)
 		if ctx.Account.Balance < reserveCreate {
-			return tx.TecINSUF_RESERVE_LINE
+			return tx.TecNO_LINE_INSUF_RESERVE
 		}
 
 		// Determine the LOW and HIGH account IDs
@@ -346,6 +361,19 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 				rs.Flags |= state.LsfHighNoRipple
 			} else {
 				rs.Flags |= state.LsfLowNoRipple
+			}
+		}
+
+		// If the peer (destination/issuer) does not have DefaultRipple,
+		// set NoRipple on the peer's side of the trust line.
+		// Reference: rippled trustCreate() in View.cpp lines 1428-1432
+		if (issuerAccount.Flags & state.LsfDefaultRipple) == 0 {
+			if bHigh {
+				// Sender is high, peer is low
+				rs.Flags |= state.LsfLowNoRipple
+			} else {
+				// Sender is low, peer is high
+				rs.Flags |= state.LsfHighNoRipple
 			}
 		}
 
@@ -430,11 +458,15 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TefINTERNAL
 		}
 
-		// Update the limit
+		// Update the limit.
+		// Per rippled: saLimitAllow = saLimitAmount; saLimitAllow.setIssuer(account_);
+		// The limit's issuer must be set to the sender's account, not the counterparty.
+		// In a RippleState, LowLimit.Issuer = lowAccount, HighLimit.Issuer = highAccount.
+		saLimitAllow := tx.NewIssuedAmount(limitAmount.IOU().Mantissa(), limitAmount.IOU().Exponent(), limitAmount.Currency, ctx.Account.Account)
 		if !bHigh {
-			rs.LowLimit = limitAmount
+			rs.LowLimit = saLimitAllow
 		} else {
-			rs.HighLimit = limitAmount
+			rs.HighLimit = saLimitAllow
 		}
 
 		// Handle Auth flag (can only be set, not cleared per rippled)
@@ -575,7 +607,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		bDefault := !bLowReserveSet && !bHighReserveSet
 
-		if bDefault && rs.Balance.IsZero() {
+		if bDefault {
 			// Remove from both owner directories before erasing
 			// Reference: rippled trustDelete() in View.cpp
 			var lowAccountID, highAccountID [20]byte

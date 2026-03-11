@@ -10,6 +10,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/account"
 	"github.com/LeJamon/goXRPLd/internal/tx/nftoken"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
@@ -381,8 +382,49 @@ func TestMintReserve(t *testing.T) {
 // Reference: rippled NFToken_test.cpp testMintMaxTokens
 // ===========================================================================
 func TestMintMaxTokens(t *testing.T) {
-	// TODO: Requires direct ledger state manipulation to set MintedNFTokens near 0xFFFFFFFE
-	t.Skip("testMintMaxTokens requires direct ledger state manipulation to set MintedNFTokens near max")
+	// Reference: rippled NFToken_test.cpp testMintMaxTokens
+	// Make sure an account cannot cause sfMintedNFTokens to wrap by minting
+	// more than 0xFFFFFFFF tokens.
+	env := jtx.NewTestEnv(t)
+
+	alice := jtx.NewAccount("alice")
+	env.Fund(alice)
+	env.Close()
+
+	// Mint one token and burn it to initialize MintedNFTokens and BurnedNFTokens
+	// fields (prevents issues when we hack the ledger below).
+	nftID0 := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
+	result := env.Submit(nft.NFTokenMint(alice, 0).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	result = env.Submit(nft.NFTokenBurn(alice, nftID0).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Directly set MintedNFTokens to the boundary value, bypassing normal
+	// transaction validation. With fixNFTokenRemint, the token sequence is
+	// FirstNFTokenSequence + MintedNFTokens; we set those fields so their
+	// sum equals 0xFFFFFFFE (the largest valid token sequence).
+	// Reference: rippled NFToken_test.cpp testMintMaxTokens
+	// NOTE: Do NOT call env.Close() between this modification and the test
+	// mints, as Close() would commit a new ledger that might reset state.
+	if env.FeatureEnabled("fixNFTokenRemint") {
+		// With fixNFTokenRemint: set FirstNFTokenSequence to the max and
+		// MintedNFTokens to 0 so their sum is 0xFFFFFFFE.
+		env.SetFirstNFTokenSequenceDirect(alice, 0xFFFFFFFE)
+		env.SetMintedNFTokensDirect(alice, 0x00000000)
+	} else {
+		env.SetMintedNFTokensDirect(alice, 0xFFFFFFFE)
+	}
+
+	// The next mint should succeed (bringing MintedNFTokens to 0xFFFFFFFF)
+	result = env.Submit(nft.NFTokenMint(alice, 0).Build())
+	jtx.RequireTxSuccess(t, result)
+
+	// The mint after that should fail with tecMAX_SEQUENCE_REACHED
+	result = env.Submit(nft.NFTokenMint(alice, 0).Build())
+	jtx.RequireTxFail(t, result, "tecMAX_SEQUENCE_REACHED")
 }
 
 // ===========================================================================
@@ -1644,8 +1686,102 @@ func TestNFTokenOfferOwner(t *testing.T) {
 // Reference: rippled NFToken_test.cpp testNFTokenWithTickets
 // ===========================================================================
 func TestNFTokenWithTickets(t *testing.T) {
-	// TODO: Requires TicketCreate transaction builder in the test framework
-	t.Skip("testNFTokenWithTickets requires TicketCreate transaction builder")
+	// Reference: rippled NFToken_test.cpp testNFTokenWithTickets
+	// Make sure all NFToken transactions work with tickets.
+	env := jtx.NewTestEnv(t)
+
+	issuer := jtx.NewAccount("issuer")
+	buyer := jtx.NewAccount("buyer")
+	env.FundAmount(issuer, uint64(jtx.XRP(10000)))
+	env.FundAmount(buyer, uint64(jtx.XRP(10000)))
+	env.Close()
+
+	// issuer and buyer grab enough tickets for all following transactions.
+	// Note that once tickets are acquired, account sequence numbers should not advance.
+	issuerTicketSeq := env.CreateTickets(issuer, 10)
+	env.Close()
+	issuerSeq := env.Seq(issuer)
+	jtx.RequireTicketCount(t, env, issuer, 10)
+
+	buyerTicketSeq := env.CreateTickets(buyer, 10)
+	env.Close()
+	buyerSeq := env.Seq(buyer)
+	jtx.RequireTicketCount(t, env, buyer, 10)
+
+	// NFTokenMint with ticket
+	jtx.RequireOwnerCount(t, env, issuer, 10)
+	nftID := nft.GetNextNFTokenID(env, issuer, 0, nftoken.NFTokenFlagTransferable, 0)
+	mintTx := nft.NFTokenMint(issuer, 0).Transferable().Build()
+	jtx.WithTicketSeq(mintTx, issuerTicketSeq)
+	issuerTicketSeq++
+	result := env.Submit(mintTx)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	jtx.RequireOwnerCount(t, env, issuer, 10) // ticket consumed, NFT page added = net 0
+	jtx.RequireTicketCount(t, env, issuer, 9)
+
+	// NFTokenCreateOffer (buy offer) with ticket
+	jtx.RequireOwnerCount(t, env, buyer, 10)
+	offerIndex0 := keylet.NFTokenOffer(buyer.ID, buyerTicketSeq).Key
+	buyOfferTx := nft.NFTokenCreateBuyOffer(buyer, nftID, tx.NewXRPAmount(1_000_000), issuer).Build()
+	jtx.WithTicketSeq(buyOfferTx, buyerTicketSeq)
+	buyerTicketSeq++
+	result = env.Submit(buyOfferTx)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	jtx.RequireOwnerCount(t, env, buyer, 10) // ticket consumed, offer added = net 0
+	jtx.RequireTicketCount(t, env, buyer, 9)
+
+	// NFTokenCancelOffer with ticket
+	cancelTx := nft.NFTokenCancelOffer(buyer, fmt.Sprintf("%064X", offerIndex0)).Build()
+	jtx.WithTicketSeq(cancelTx, buyerTicketSeq)
+	buyerTicketSeq++
+	result = env.Submit(cancelTx)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	jtx.RequireOwnerCount(t, env, buyer, 8) // ticket + offer consumed = -2
+	jtx.RequireTicketCount(t, env, buyer, 8)
+
+	// NFTokenCreateOffer (buy offer again) with ticket
+	offerIndex1 := keylet.NFTokenOffer(buyer.ID, buyerTicketSeq).Key
+	buyOfferTx2 := nft.NFTokenCreateBuyOffer(buyer, nftID, tx.NewXRPAmount(2_000_000), issuer).Build()
+	jtx.WithTicketSeq(buyOfferTx2, buyerTicketSeq)
+	buyerTicketSeq++
+	result = env.Submit(buyOfferTx2)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	jtx.RequireOwnerCount(t, env, buyer, 8) // ticket consumed, offer added = net 0
+	jtx.RequireTicketCount(t, env, buyer, 7)
+
+	// NFTokenAcceptOffer (issuer accepts buyer's offer) with ticket
+	acceptTx := nft.NFTokenAcceptBuyOffer(issuer, fmt.Sprintf("%064X", offerIndex1)).Build()
+	jtx.WithTicketSeq(acceptTx, issuerTicketSeq)
+	issuerTicketSeq++
+	result = env.Submit(acceptTx)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	jtx.RequireOwnerCount(t, env, issuer, 8) // ticket consumed, NFT page removed = -2; but buyer has NFT now
+	jtx.RequireOwnerCount(t, env, buyer, 8)  // offer consumed, NFT page added = net 0
+	jtx.RequireTicketCount(t, env, issuer, 8)
+
+	// NFTokenBurn with ticket (buyer burns the token they just bought)
+	burnTx := nft.NFTokenBurn(buyer, nftID).Build()
+	jtx.WithTicketSeq(burnTx, buyerTicketSeq)
+	buyerTicketSeq++
+	result = env.Submit(burnTx)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	jtx.RequireOwnerCount(t, env, issuer, 8)
+	jtx.RequireOwnerCount(t, env, buyer, 6) // ticket + NFT page consumed = -2
+	jtx.RequireTicketCount(t, env, buyer, 6)
+
+	// Verify that the account sequence numbers did not advance
+	if env.Seq(issuer) != issuerSeq {
+		t.Fatalf("issuer sequence advanced: expected %d, got %d", issuerSeq, env.Seq(issuer))
+	}
+	if env.Seq(buyer) != buyerSeq {
+		t.Fatalf("buyer sequence advanced: expected %d, got %d", buyerSeq, env.Seq(buyer))
+	}
 }
 
 // ===========================================================================
@@ -1653,8 +1789,138 @@ func TestNFTokenWithTickets(t *testing.T) {
 // Reference: rippled NFToken_test.cpp testNFTokenDeleteAccount
 // ===========================================================================
 func TestNFTokenDeleteAccount(t *testing.T) {
-	// TODO: Requires AccountDelete transaction support
-	t.Skip("testNFTokenDeleteAccount requires AccountDelete transaction support")
+	// Account deletion rules with NFTs:
+	//  1. An account holding one or more NFT offers may be deleted.
+	//  2. An NFT issuer with any NFTs they have issued still in the
+	//     ledger may not be deleted.
+	//  3. An account holding one or more NFTs may not be deleted.
+	// Reference: rippled NFToken_test.cpp testNFTokenDeleteAccount
+
+	env := jtx.NewTestEnv(t)
+
+	issuer := jtx.NewAccount("issuer")
+	minter := jtx.NewAccount("minter")
+	becky := jtx.NewAccount("becky")
+	carla := jtx.NewAccount("carla")
+	daria := jtx.NewAccount("daria")
+
+	env.FundAmount(issuer, uint64(jtx.XRP(10000)))
+	env.FundAmount(minter, uint64(jtx.XRP(10000)))
+	env.FundAmount(becky, uint64(jtx.XRP(10000)))
+	env.FundAmount(carla, uint64(jtx.XRP(10000)))
+	env.FundAmount(daria, uint64(jtx.XRP(10000)))
+	env.Close()
+
+	// Allow enough ledgers to pass so any of these accounts can be deleted.
+	for i := 0; i < 300; i++ {
+		env.Close()
+	}
+
+	// Set minter as issuer's authorized minter
+	result := env.Submit(accountset.AccountSet(issuer).AuthorizedMinter(minter).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Minter mints a transferable NFT for issuer
+	nftID := nft.GetNextNFTokenID(env, issuer, 0, nftoken.NFTokenFlagTransferable, 0)
+	result = env.Submit(nft.NFTokenMint(minter, 0).Issuer(issuer).Transferable().Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	// At the moment issuer and minter cannot delete themselves.
+	//  o issuer has an issued NFT in the ledger.
+	//  o minter owns an NFT.
+	acctDelFee := fmt.Sprintf("%d", env.ReserveIncrement())
+
+	issuerDel := account.NewAccountDelete(issuer.Address, daria.Address)
+	issuerDel.Fee = acctDelFee
+	result = env.Submit(issuerDel)
+	jtx.RequireTxClaimed(t, result, jtx.TecHAS_OBLIGATIONS)
+
+	minterDel := account.NewAccountDelete(minter.Address, daria.Address)
+	minterDel.Fee = acctDelFee
+	result = env.Submit(minterDel)
+	jtx.RequireTxClaimed(t, result, jtx.TecHAS_OBLIGATIONS)
+	env.Close()
+
+	// Let enough ledgers pass so the account delete transactions are
+	// not retried.
+	for i := 0; i < 15; i++ {
+		env.Close()
+	}
+
+	// becky and carla create offers for minter's NFT.
+	result = env.Submit(nft.NFTokenCreateBuyOffer(becky, nftID, tx.NewXRPAmount(2000000), minter).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	carlaOfferIndex := nft.GetOfferIndex(env, carla)
+	result = env.Submit(nft.NFTokenCreateBuyOffer(carla, nftID, tx.NewXRPAmount(3000000), minter).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	// It should be possible for becky to delete herself, even though
+	// becky has an active NFT offer.
+	beckyDel := account.NewAccountDelete(becky.Address, daria.Address)
+	beckyDel.Fee = acctDelFee
+	result = env.Submit(beckyDel)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	// minter accepts carla's offer.
+	result = env.Submit(nft.NFTokenAcceptBuyOffer(minter, carlaOfferIndex).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Now it should be possible for minter to delete themselves since
+	// they no longer own an NFT.
+	env.IncLedgerSeqForAccDel(minter)
+	minterDel2 := account.NewAccountDelete(minter.Address, daria.Address)
+	minterDel2.Fee = acctDelFee
+	result = env.Submit(minterDel2)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	// 1. issuer cannot delete themselves because they issued an NFT that
+	//    is still in the ledger.
+	// 2. carla owns an NFT, so she cannot delete herself.
+	env.IncLedgerSeqForAccDel(issuer)
+	issuerDel2 := account.NewAccountDelete(issuer.Address, daria.Address)
+	issuerDel2.Fee = acctDelFee
+	result = env.Submit(issuerDel2)
+	jtx.RequireTxClaimed(t, result, jtx.TecHAS_OBLIGATIONS)
+
+	env.IncLedgerSeqForAccDel(carla)
+	carlaDel := account.NewAccountDelete(carla.Address, daria.Address)
+	carlaDel.Fee = acctDelFee
+	result = env.Submit(carlaDel)
+	jtx.RequireTxClaimed(t, result, jtx.TecHAS_OBLIGATIONS)
+	env.Close()
+
+	// Let enough ledgers pass so the account delete transactions are
+	// not retried.
+	for i := 0; i < 15; i++ {
+		env.Close()
+	}
+
+	// carla burns her NFT. Since issuer's NFT is no longer in the
+	// ledger, both issuer and carla can delete themselves.
+	result = env.Submit(nft.NFTokenBurn(carla, nftID).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	env.IncLedgerSeqForAccDel(issuer)
+	issuerDel3 := account.NewAccountDelete(issuer.Address, daria.Address)
+	issuerDel3.Fee = acctDelFee
+	result = env.Submit(issuerDel3)
+	jtx.RequireTxSuccess(t, result)
+
+	env.IncLedgerSeqForAccDel(carla)
+	carlaDel2 := account.NewAccountDelete(carla.Address, daria.Address)
+	carlaDel2.Fee = acctDelFee
+	result = env.Submit(carlaDel2)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
 }
 
 // ===========================================================================
@@ -2311,8 +2577,579 @@ func TestBrokeredSaleToSelf(t *testing.T) {
 // Reference: rippled NFToken_test.cpp testFixNFTokenRemint
 // ===========================================================================
 func TestFixNFTokenRemint(t *testing.T) {
-	// TODO: Requires AccountDelete transaction support
-	t.Skip("testFixNFTokenRemint requires AccountDelete transaction support")
+	// Reference: rippled NFToken_test.cpp testFixNFTokenRemint
+	//
+	// This test verifies:
+	// 1. Without fixNFTokenRemint: after minting NFTs and deleting+re-creating an account,
+	//    the re-created account can mint NFTs with duplicate IDs.
+	// 2. With fixNFTokenRemint: FirstNFTokenSequence is set on first mint, and after
+	//    delete+re-create, the new account gets a different sequence ensuring unique IDs.
+	// 3. The tecTOO_SOON check: FirstNFTSeq + MintedNFTokens + 255 > ledgerSeq prevents
+	//    premature account deletion when fixNFTokenRemint is active.
+
+	// Helper: close enough ledgers so that the fixNFTokenRemint constraint
+	// (FirstNFTokenSequence + MintedNFTokens + 255 >= ledgerSeq) is satisfied
+	// for account deletion.
+	incLgrSeqForFixNftRemint := func(env *jtx.TestEnv, acc *jtx.Account) {
+		t.Helper()
+		data, err := env.LedgerEntry(keylet.Account(acc.ID))
+		if err != nil {
+			t.Fatalf("incLgrSeqForFixNftRemint: failed to read account: %v", err)
+		}
+		accountRoot, err := state.ParseAccountRoot(data)
+		if err != nil {
+			t.Fatalf("incLgrSeqForFixNftRemint: failed to parse account: %v", err)
+		}
+		firstNFTSeq := uint32(0)
+		if accountRoot.HasFirstNFTSeq {
+			firstNFTSeq = accountRoot.FirstNFTokenSequence
+		}
+		deletableLgrSeq := firstNFTSeq + accountRoot.MintedNFTokens + 255
+		for deletableLgrSeq > env.LedgerSeq() {
+			env.Close()
+		}
+	}
+
+	// Helper: check if an ID is in a list of IDs
+	containsID := func(ids []string, id string) bool {
+		for _, v := range ids {
+			if v == id {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Block 1: Test if NFTokenIDs can be duplicated by re-creation of an account.
+	// Run with and without fixNFTokenRemint.
+	for _, withFix := range []bool{false, true} {
+		name := "WithoutFixNFTokenRemint"
+		if withFix {
+			name = "WithFixNFTokenRemint"
+		}
+		t.Run(name+"/DuplicateByReCreation", func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			if !withFix {
+				env.DisableFeature("fixNFTokenRemint")
+			} else {
+				env.EnableFeature("fixNFTokenRemint")
+			}
+
+			alice := jtx.NewAccount("alice")
+			becky := jtx.NewAccount("becky")
+
+			env.FundAmount(alice, uint64(jtx.XRP(10000)))
+			env.FundAmount(becky, uint64(jtx.XRP(10000)))
+			env.Close()
+
+			// alice mints and burns a NFT
+			prevNFTokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
+			result := env.Submit(nft.NFTokenMint(alice, 0).Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+			result = env.Submit(nft.NFTokenBurn(alice, prevNFTokenID).Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+
+			// alice has minted 1 NFToken
+			if env.MintedCount(alice) != 1 {
+				t.Fatalf("expected MintedNFTokens == 1, got %d", env.MintedCount(alice))
+			}
+
+			// Close enough ledgers to delete alice's account
+			env.IncLedgerSeqForAccDel(alice)
+
+			// alice's account is deleted
+			acctDelFee := fmt.Sprintf("%d", env.ReserveIncrement())
+			delTx := account.NewAccountDelete(alice.Address, becky.Address)
+			delTx.Fee = acctDelFee
+			result = env.Submit(delTx)
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+
+			// alice's account root is gone
+			jtx.RequireAccountNotExists(t, env, alice)
+
+			// Fund alice to re-create her account
+			env.FundAmount(alice, uint64(jtx.XRP(10000)))
+			env.Close()
+
+			// alice's account now exists and has minted 0 NFTokens
+			jtx.RequireAccountExists(t, env, alice)
+			if env.MintedCount(alice) != 0 {
+				t.Fatalf("expected MintedNFTokens == 0 after re-create, got %d", env.MintedCount(alice))
+			}
+
+			// alice mints a NFT with same params as prevNFTokenID
+			remintNFTokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
+			result = env.Submit(nft.NFTokenMint(alice, 0).Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+
+			// burn the NFT to make sure alice owns remintNFTokenID
+			result = env.Submit(nft.NFTokenBurn(alice, remintNFTokenID).Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+
+			if withFix {
+				// With fixNFTokenRemint, two NFTs should NOT have the same ID
+				if remintNFTokenID == prevNFTokenID {
+					t.Fatalf("with fixNFTokenRemint, reminted NFT should have different ID: prev=%s remint=%s",
+						prevNFTokenID, remintNFTokenID)
+				}
+			} else {
+				// Without fixNFTokenRemint, two NFTs SHOULD have the same ID
+				if remintNFTokenID != prevNFTokenID {
+					t.Fatalf("without fixNFTokenRemint, reminted NFT should have same ID: prev=%s remint=%s",
+						prevNFTokenID, remintNFTokenID)
+				}
+			}
+		})
+	}
+
+	// Block 2: Test if the issuer account can be deleted after an authorized
+	// minter mints and burns a batch of NFTokens.
+	// Run with and without fixNFTokenRemint.
+	for _, withFix := range []bool{false, true} {
+		name := "WithoutFixNFTokenRemint"
+		if withFix {
+			name = "WithFixNFTokenRemint"
+		}
+		t.Run(name+"/AuthorizedMinterBatch", func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			if !withFix {
+				env.DisableFeature("fixNFTokenRemint")
+			} else {
+				env.EnableFeature("fixNFTokenRemint")
+			}
+
+			alice := jtx.NewAccount("alice")
+			becky := jtx.NewAccount("becky")
+			minter := jtx.NewAccount("minter")
+
+			env.FundAmount(alice, uint64(jtx.XRP(10000)))
+			env.FundAmount(becky, uint64(jtx.XRP(10000)))
+			env.FundAmount(minter, uint64(jtx.XRP(10000)))
+			env.Close()
+
+			// alice sets minter as her authorized minter
+			result := env.Submit(accountset.AccountSet(alice).AuthorizedMinter(minter).Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+
+			// minter mints 500 NFTs for alice
+			var nftIDs []string
+			for i := 0; i < 500; i++ {
+				nftokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
+				nftIDs = append(nftIDs, nftokenID)
+				result = env.Submit(nft.NFTokenMint(minter, 0).Issuer(alice).Build())
+				jtx.RequireTxSuccess(t, result)
+			}
+			env.Close()
+
+			// minter burns 500 NFTs
+			for _, nftokenID := range nftIDs {
+				result = env.Submit(nft.NFTokenBurn(minter, nftokenID).Build())
+				jtx.RequireTxSuccess(t, result)
+			}
+			env.Close()
+
+			// Increment ledger sequence to the number that is
+			// enforced by the featureDeletableAccounts amendment
+			env.IncLedgerSeqForAccDel(alice)
+
+			// Verify that alice's account root is present
+			jtx.RequireAccountExists(t, env, alice)
+
+			acctDelFee := fmt.Sprintf("%d", env.ReserveIncrement())
+
+			if !withFix {
+				// alice's account can be successfully deleted
+				delTx := account.NewAccountDelete(alice.Address, becky.Address)
+				delTx.Fee = acctDelFee
+				result = env.Submit(delTx)
+				jtx.RequireTxSuccess(t, result)
+				env.Close()
+				jtx.RequireAccountNotExists(t, env, alice)
+
+				// Fund alice to re-create her account
+				env.FundAmount(alice, uint64(jtx.XRP(10000)))
+				env.Close()
+
+				// alice's account now exists and has minted 0 NFTokens
+				jtx.RequireAccountExists(t, env, alice)
+				if env.MintedCount(alice) != 0 {
+					t.Fatalf("expected MintedNFTokens == 0 after re-create, got %d", env.MintedCount(alice))
+				}
+
+				// alice mints a NFT with same params as the first one before
+				// the account delete
+				remintNFTokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
+				result = env.Submit(nft.NFTokenMint(alice, 0).Build())
+				jtx.RequireTxSuccess(t, result)
+				env.Close()
+
+				// burn the NFT to make sure alice owns remintNFTokenID
+				result = env.Submit(nft.NFTokenBurn(alice, remintNFTokenID).Build())
+				jtx.RequireTxSuccess(t, result)
+				env.Close()
+
+				// The new NFT minted has the same ID as one of the NFTs
+				// authorized minter minted for alice
+				if !containsID(nftIDs, remintNFTokenID) {
+					t.Fatalf("without fixNFTokenRemint, reminted NFT should have same ID as one of the authorized minter's NFTs")
+				}
+			} else {
+				// alice tries to delete her account, but is unsuccessful.
+				// Due to authorized minting, alice's account sequence does not
+				// advance while minter mints NFTokens for her.
+				// The new account deletion restriction <FirstNFTokenSequence +
+				// MintedNFTokens + 256> enabled by this amendment will enforce
+				// alice to wait for more ledgers to close before she can
+				// delete her account, to prevent duplicate NFTokenIDs
+				delTx := account.NewAccountDelete(alice.Address, becky.Address)
+				delTx.Fee = acctDelFee
+				result = env.Submit(delTx)
+				jtx.RequireTxClaimed(t, result, "tecTOO_SOON")
+				env.Close()
+
+				// alice's account is still present
+				jtx.RequireAccountExists(t, env, alice)
+
+				// Close more ledgers until it is no longer within
+				// <FirstNFTokenSequence + MintedNFTokens + 256>
+				// to be able to delete alice's account
+				incLgrSeqForFixNftRemint(env, alice)
+
+				// alice's account is deleted
+				delTx2 := account.NewAccountDelete(alice.Address, becky.Address)
+				delTx2.Fee = acctDelFee
+				result = env.Submit(delTx2)
+				jtx.RequireTxSuccess(t, result)
+				env.Close()
+
+				// alice's account root is gone
+				jtx.RequireAccountNotExists(t, env, alice)
+
+				// Fund alice to re-create her account
+				env.FundAmount(alice, uint64(jtx.XRP(10000)))
+				env.Close()
+
+				// alice's account now exists and has minted 0 NFTokens
+				jtx.RequireAccountExists(t, env, alice)
+				if env.MintedCount(alice) != 0 {
+					t.Fatalf("expected MintedNFTokens == 0 after re-create, got %d", env.MintedCount(alice))
+				}
+
+				// alice mints a NFT with same params as the first one before
+				// the account delete
+				remintNFTokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
+				result = env.Submit(nft.NFTokenMint(alice, 0).Build())
+				jtx.RequireTxSuccess(t, result)
+				env.Close()
+
+				// burn the NFT to make sure alice owns remintNFTokenID
+				result = env.Submit(nft.NFTokenBurn(alice, remintNFTokenID).Build())
+				jtx.RequireTxSuccess(t, result)
+				env.Close()
+
+				// The new NFT minted will not have the same ID
+				// as any of the NFTs authorized minter minted
+				if containsID(nftIDs, remintNFTokenID) {
+					t.Fatalf("with fixNFTokenRemint, reminted NFT should NOT have same ID as any authorized minter's NFT")
+				}
+			}
+		})
+	}
+
+	// Block 3: When an account mints and burns a batch of NFTokens using tickets,
+	// see if the account can be deleted.
+	// Run with and without fixNFTokenRemint.
+	for _, withFix := range []bool{false, true} {
+		name := "WithoutFixNFTokenRemint"
+		if withFix {
+			name = "WithFixNFTokenRemint"
+		}
+		t.Run(name+"/TicketMintAndBurn", func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			if !withFix {
+				env.DisableFeature("fixNFTokenRemint")
+			} else {
+				env.EnableFeature("fixNFTokenRemint")
+			}
+
+			alice := jtx.NewAccount("alice")
+			becky := jtx.NewAccount("becky")
+
+			env.FundAmount(alice, uint64(jtx.XRP(10000)))
+			env.FundAmount(becky, uint64(jtx.XRP(10000)))
+			env.Close()
+
+			// alice grabs enough tickets for all of the following transactions.
+			// Note that once the tickets are acquired alice's account sequence
+			// number should not advance.
+			aliceTicketSeq := env.CreateTickets(alice, 100)
+			env.Close()
+
+			jtx.RequireTicketCount(t, env, alice, 100)
+			jtx.RequireOwnerCount(t, env, alice, 100)
+
+			// alice mints 50 NFTs using tickets
+			var nftIDs []string
+			for i := 0; i < 50; i++ {
+				nftokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
+				nftIDs = append(nftIDs, nftokenID)
+				mintTx := nft.NFTokenMint(alice, 0).Build()
+				jtx.WithTicketSeq(mintTx, aliceTicketSeq)
+				aliceTicketSeq++
+				result := env.Submit(mintTx)
+				jtx.RequireTxSuccess(t, result)
+				env.Close()
+			}
+
+			// alice burns 50 NFTs using tickets
+			for _, nftokenID := range nftIDs {
+				burnTx := nft.NFTokenBurn(alice, nftokenID).Build()
+				jtx.WithTicketSeq(burnTx, aliceTicketSeq)
+				aliceTicketSeq++
+				result := env.Submit(burnTx)
+				jtx.RequireTxSuccess(t, result)
+			}
+			env.Close()
+
+			jtx.RequireTicketCount(t, env, alice, 0)
+
+			// Increment ledger sequence to the number that is
+			// enforced by the featureDeletableAccounts amendment
+			env.IncLedgerSeqForAccDel(alice)
+
+			// Verify that alice's account root is present
+			jtx.RequireAccountExists(t, env, alice)
+
+			acctDelFee := fmt.Sprintf("%d", env.ReserveIncrement())
+
+			if !withFix {
+				// alice tries to delete her account, and is successful
+				delTx := account.NewAccountDelete(alice.Address, becky.Address)
+				delTx.Fee = acctDelFee
+				result := env.Submit(delTx)
+				jtx.RequireTxSuccess(t, result)
+				env.Close()
+
+				// alice's account root is gone
+				jtx.RequireAccountNotExists(t, env, alice)
+
+				// Fund alice to re-create her account
+				env.FundAmount(alice, uint64(jtx.XRP(10000)))
+				env.Close()
+
+				// alice's account now exists and has minted 0 NFTokens
+				jtx.RequireAccountExists(t, env, alice)
+				if env.MintedCount(alice) != 0 {
+					t.Fatalf("expected MintedNFTokens == 0 after re-create, got %d", env.MintedCount(alice))
+				}
+
+				// alice mints a NFT with same params as the first one before
+				// the account delete
+				remintNFTokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
+				result = env.Submit(nft.NFTokenMint(alice, 0).Build())
+				jtx.RequireTxSuccess(t, result)
+				env.Close()
+
+				// burn the NFT to make sure alice owns remintNFTokenID
+				result = env.Submit(nft.NFTokenBurn(alice, remintNFTokenID).Build())
+				jtx.RequireTxSuccess(t, result)
+				env.Close()
+
+				// The new NFT minted will have the same ID
+				// as one of NFTs minted using tickets
+				if !containsID(nftIDs, remintNFTokenID) {
+					t.Fatalf("without fixNFTokenRemint, reminted NFT should have same ID as one of the ticket-minted NFTs")
+				}
+			} else {
+				// alice tries to delete her account, but is unsuccessful.
+				// Due to ticket minting, alice's account sequence does not
+				// advance while minting NFTokens using tickets.
+				// The new account deletion restriction <FirstNFTokenSequence +
+				// MintedNFTokens + 256> enabled by this amendment will enforce
+				// alice to wait for more ledgers to close before she can
+				// delete her account, to prevent duplicate NFTokenIDs
+				delTx := account.NewAccountDelete(alice.Address, becky.Address)
+				delTx.Fee = acctDelFee
+				result := env.Submit(delTx)
+				jtx.RequireTxClaimed(t, result, "tecTOO_SOON")
+				env.Close()
+
+				// alice's account is still present
+				jtx.RequireAccountExists(t, env, alice)
+
+				// Close more ledgers until it is no longer within
+				// <FirstNFTokenSequence + MintedNFTokens + 256>
+				// to be able to delete alice's account
+				incLgrSeqForFixNftRemint(env, alice)
+
+				// alice's account is deleted
+				delTx2 := account.NewAccountDelete(alice.Address, becky.Address)
+				delTx2.Fee = acctDelFee
+				result = env.Submit(delTx2)
+				jtx.RequireTxSuccess(t, result)
+				env.Close()
+
+				// alice's account root is gone
+				jtx.RequireAccountNotExists(t, env, alice)
+
+				// Fund alice to re-create her account
+				env.FundAmount(alice, uint64(jtx.XRP(10000)))
+				env.Close()
+
+				// alice's account now exists and has minted 0 NFTokens
+				jtx.RequireAccountExists(t, env, alice)
+				if env.MintedCount(alice) != 0 {
+					t.Fatalf("expected MintedNFTokens == 0 after re-create, got %d", env.MintedCount(alice))
+				}
+
+				// alice mints a NFT with same params as the first one before
+				// the account delete
+				remintNFTokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
+				result = env.Submit(nft.NFTokenMint(alice, 0).Build())
+				jtx.RequireTxSuccess(t, result)
+				env.Close()
+
+				// burn the NFT to make sure alice owns remintNFTokenID
+				result = env.Submit(nft.NFTokenBurn(alice, remintNFTokenID).Build())
+				jtx.RequireTxSuccess(t, result)
+				env.Close()
+
+				// The new NFT minted will not have the same ID
+				// as any of the NFTs minted using tickets
+				if containsID(nftIDs, remintNFTokenID) {
+					t.Fatalf("with fixNFTokenRemint, reminted NFT should NOT have same ID as any ticket-minted NFT")
+				}
+			}
+		})
+	}
+
+	// Block 4: If fixNFTokenRemint is enabled,
+	// when an authorized minter mints and burns a batch of NFTokens using tickets,
+	// issuer's account needs to wait a longer time before it can be deleted.
+	// After the issuer's account is re-created and mints a NFT, it should
+	// not have the same NFTokenID as the ones authorized minter minted.
+	t.Run("WithFixNFTokenRemint/AuthorizedMinterWithTickets", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		env.EnableFeature("fixNFTokenRemint")
+
+		alice := jtx.NewAccount("alice")
+		becky := jtx.NewAccount("becky")
+		minter := jtx.NewAccount("minter")
+
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.FundAmount(becky, uint64(jtx.XRP(10000)))
+		env.FundAmount(minter, uint64(jtx.XRP(10000)))
+		env.Close()
+
+		// alice sets minter as her authorized minter
+		result := env.Submit(accountset.AccountSet(alice).AuthorizedMinter(minter).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// minter creates 100 tickets
+		minterTicketSeq := env.CreateTickets(minter, 100)
+		env.Close()
+
+		jtx.RequireTicketCount(t, env, minter, 100)
+		jtx.RequireOwnerCount(t, env, minter, 100)
+
+		// minter mints 50 NFTs for alice using tickets
+		var nftIDs []string
+		for i := 0; i < 50; i++ {
+			nftokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
+			nftIDs = append(nftIDs, nftokenID)
+			mintTx := nft.NFTokenMint(minter, 0).Issuer(alice).Build()
+			jtx.WithTicketSeq(mintTx, minterTicketSeq)
+			minterTicketSeq++
+			result = env.Submit(mintTx)
+			jtx.RequireTxSuccess(t, result)
+		}
+		env.Close()
+
+		// minter burns 50 NFTs using tickets
+		for _, nftokenID := range nftIDs {
+			burnTx := nft.NFTokenBurn(minter, nftokenID).Build()
+			jtx.WithTicketSeq(burnTx, minterTicketSeq)
+			minterTicketSeq++
+			result = env.Submit(burnTx)
+			jtx.RequireTxSuccess(t, result)
+		}
+		env.Close()
+
+		jtx.RequireTicketCount(t, env, minter, 0)
+
+		// Increment ledger sequence to the number that is
+		// enforced by the featureDeletableAccounts amendment
+		env.IncLedgerSeqForAccDel(alice)
+
+		// Verify that alice's account root is present
+		jtx.RequireAccountExists(t, env, alice)
+
+		// alice tries to delete her account, but is unsuccessful.
+		// Due to authorized minting, alice's account sequence does not
+		// advance while minter mints NFTokens for her using tickets.
+		// The new account deletion restriction <FirstNFTokenSequence +
+		// MintedNFTokens + 256> enabled by this amendment will enforce
+		// alice to wait for more ledgers to close before she can delete
+		// her account, to prevent duplicate NFTokenIDs
+		acctDelFee := fmt.Sprintf("%d", env.ReserveIncrement())
+		delTx := account.NewAccountDelete(alice.Address, becky.Address)
+		delTx.Fee = acctDelFee
+		result = env.Submit(delTx)
+		jtx.RequireTxClaimed(t, result, "tecTOO_SOON")
+		env.Close()
+
+		// alice's account is still present
+		jtx.RequireAccountExists(t, env, alice)
+
+		// Close more ledgers until it is no longer within
+		// <FirstNFTokenSequence + MintedNFTokens + 256>
+		// to be able to delete alice's account
+		incLgrSeqForFixNftRemint(env, alice)
+
+		// alice's account is deleted
+		delTx2 := account.NewAccountDelete(alice.Address, becky.Address)
+		delTx2.Fee = acctDelFee
+		result = env.Submit(delTx2)
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// alice's account root is gone
+		jtx.RequireAccountNotExists(t, env, alice)
+
+		// Fund alice to re-create her account
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.Close()
+
+		// alice's account now exists and has minted 0 NFTokens
+		jtx.RequireAccountExists(t, env, alice)
+		if env.MintedCount(alice) != 0 {
+			t.Fatalf("expected MintedNFTokens == 0 after re-create, got %d", env.MintedCount(alice))
+		}
+
+		// alice mints a NFT
+		remintNFTokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
+		result = env.Submit(nft.NFTokenMint(alice, 0).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// burn the NFT to make sure alice owns remintNFTokenID
+		result = env.Submit(nft.NFTokenBurn(alice, remintNFTokenID).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// The new NFT minted will not have the same ID
+		// as any of the NFTs authorized minter minted using tickets
+		if containsID(nftIDs, remintNFTokenID) {
+			t.Fatalf("with fixNFTokenRemint, reminted NFT should NOT have same ID as any authorized-minter ticket-minted NFT")
+		}
+	})
 }
 
 // ===========================================================================
@@ -2740,12 +3577,15 @@ func TestNFTokenModify(t *testing.T) {
 
 	// Test: Modify with real mutable NFT (requires featureDynamicNFT)
 	t.Run("ModifyMutableNFT", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		env.EnableFeature("DynamicNFT")
+
+		alice := jtx.NewAccount("alice")
+		env.Fund(alice)
+		env.Close()
+
 		nftID := nft.GetNextNFTokenID(env, alice, 0, nftoken.NFTokenFlagMutable, 0)
 		result := env.Submit(nft.NFTokenMint(alice, 0).Mutable().Build())
-		if result.Code == "temINVALID_FLAG" {
-			t.Skip("featureDynamicNFT not enabled")
-			return
-		}
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
