@@ -104,7 +104,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 				txJSON["hash"] = strings.ToUpper(hex.EncodeToString(tx.Hash[:]))
 
 				// Inject DeliveredAmount for Payment transactions
-				injectDeliveredAmount(txJSON, nil)
+				InjectDeliveredAmount(txJSON, nil)
 
 				txEntry["tx"] = txJSON
 			}
@@ -117,7 +117,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 			} else {
 				// Inject DeliveredAmount into metadata if this is a Payment
 				if txJSON != nil {
-					injectDeliveredAmount(txJSON, metaJSON)
+					InjectDeliveredAmount(txJSON, metaJSON)
 				}
 				txEntry["meta"] = metaJSON
 			}
@@ -145,34 +145,6 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	return response, nil
 }
 
-// injectDeliveredAmount adds DeliveredAmount to metadata for Payment transactions.
-// If meta has a "delivered_amount" field, it uses that; otherwise for Payment
-// transactions it uses the Amount field as DeliveredAmount.
-func injectDeliveredAmount(txJSON map[string]interface{}, meta map[string]interface{}) {
-	txType, _ := txJSON["TransactionType"].(string)
-	if txType != "Payment" {
-		return
-	}
-	if meta == nil {
-		return
-	}
-
-	// If DeliveredAmount already present in metadata, use it
-	if _, ok := meta["DeliveredAmount"]; ok {
-		return
-	}
-
-	// If delivered_amount is present, promote to DeliveredAmount
-	if da, ok := meta["delivered_amount"]; ok {
-		meta["DeliveredAmount"] = da
-		return
-	}
-
-	// Fallback: use Amount from transaction as DeliveredAmount
-	if amount, ok := txJSON["Amount"]; ok {
-		meta["DeliveredAmount"] = amount
-	}
-}
 
 func (m *AccountTxMethod) RequiredRole() types.Role {
 	return types.RoleGuest
