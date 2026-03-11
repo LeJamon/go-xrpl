@@ -14,11 +14,12 @@ type AccountRoot struct {
 	OwnerCount uint32
 
 	// Optional fields
-	Domain       *string
-	EmailHash    *[32]byte
-	RegularKey   *[20]byte
-	TickSize     *uint8
-	TransferRate *uint32
+	Domain                *string
+	EmailHash             *[32]byte
+	RegularKey            *[20]byte
+	TickSize              *uint8
+	TransferRate          *uint32
+	FirstNFTokenSequence  *uint32
 }
 
 func (a *AccountRoot) Type() Type {

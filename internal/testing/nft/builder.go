@@ -634,12 +634,43 @@ func isHexEncoded(s string) bool {
 
 // GetNextNFTokenID predicts the next NFT ID that will be generated when minting.
 // Must be called BEFORE submitting the NFTokenMint transaction.
-// Reference: rippled's token::getNextID(env, issuer, taxon, flags, xferFee).
+// Reference: rippled's token::getNextID(env, issuer, taxon, flags, xferFee) +
+//            token::getID(env, issuer, taxon, nftSeq, flags, xferFee).
 func GetNextNFTokenID(env *testing.TestEnv, issuer *testing.Account, taxon uint32, flags uint16, transferFee uint16) string {
 	// Get the current MintedNFTokens count (this will be the sequence for the next mint)
 	tokenSeq := env.MintedCount(issuer)
+
+	// When fixNFTokenRemint is enabled, add the FirstNFTokenSequence offset.
+	// If FirstNFTokenSequence is not yet set, fall back to the issuer's current sequence.
+	// Reference: rippled token.cpp getID() lines 90-97
+	if env.FeatureEnabled("fixNFTokenRemint") {
+		info := env.AccountInfo(issuer)
+		if info != nil && info.FirstNFTokenSequence != nil {
+			tokenSeq += *info.FirstNFTokenSequence
+		} else {
+			tokenSeq += env.Seq(issuer)
+		}
+	}
+
 	tokenID := nftoken.GenerateNFTokenID(issuer.ID, taxon, tokenSeq, flags, transferFee)
 	return hex.EncodeToString(tokenID[:])
+}
+
+// GetNextTokenSeq returns the effective token sequence that will be used for
+// the next NFTokenMint, accounting for the fixNFTokenRemint offset.
+// This is needed when computing ciphered taxons in tests.
+// Reference: rippled NFTokenMint.cpp doApply — tokenSeq computation.
+func GetNextTokenSeq(env *testing.TestEnv, issuer *testing.Account) uint32 {
+	tokenSeq := env.MintedCount(issuer)
+	if env.FeatureEnabled("fixNFTokenRemint") {
+		info := env.AccountInfo(issuer)
+		if info != nil && info.FirstNFTokenSequence != nil {
+			tokenSeq += *info.FirstNFTokenSequence
+		} else {
+			tokenSeq += env.Seq(issuer)
+		}
+	}
+	return tokenSeq
 }
 
 // GetOfferIndex predicts the offer index (keylet) that will be created.

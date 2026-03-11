@@ -206,11 +206,48 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Get the token sequence from MintedNFTokens
-	tokenSeq := issuerAccount.MintedNFTokens
+	// Reference: rippled NFTokenMint.cpp doApply — tokenSeq lambda
+	var tokenSeq uint32
 
-	// Check for overflow
-	if tokenSeq+1 < tokenSeq {
-		return tx.TecMAX_SEQUENCE_REACHED
+	if !ctx.Rules().Enabled(amendment.FeatureFixNFTokenRemint) {
+		// Without fixNFTokenRemint: tokenSeq = MintedNFTokens
+		tokenSeq = issuerAccount.MintedNFTokens
+		nextTokenSeq := tokenSeq + 1
+		if nextTokenSeq < tokenSeq {
+			return tx.TecMAX_SEQUENCE_REACHED
+		}
+		issuerAccount.MintedNFTokens = nextTokenSeq
+	} else {
+		// With fixNFTokenRemint: set FirstNFTokenSequence if not yet present,
+		// then tokenSeq = FirstNFTokenSequence + MintedNFTokens
+		if issuerAccount.FirstNFTokenSequence == nil {
+			acctSeq := issuerAccount.Sequence
+
+			// If minting via authorized minter (sfIssuer is present) or using a ticket,
+			// use acctSeq as-is. Otherwise the issuer is minting with their own sequence
+			// which was pre-incremented, so use acctSeq - 1.
+			var firstSeq uint32
+			if m.Issuer != "" || m.GetCommon().TicketSequence != nil {
+				firstSeq = acctSeq
+			} else {
+				firstSeq = acctSeq - 1
+			}
+			issuerAccount.FirstNFTokenSequence = &firstSeq
+		}
+
+		mintedNftCnt := issuerAccount.MintedNFTokens
+		issuerAccount.MintedNFTokens = mintedNftCnt + 1
+		if issuerAccount.MintedNFTokens == 0 {
+			return tx.TecMAX_SEQUENCE_REACHED
+		}
+
+		offset := *issuerAccount.FirstNFTokenSequence
+		tokenSeq = offset + mintedNftCnt
+
+		// Check for overflow
+		if tokenSeq+1 == 0 || tokenSeq < offset {
+			return tx.TecMAX_SEQUENCE_REACHED
+		}
 	}
 
 	// Get flags for the token from transaction flags
@@ -255,9 +292,6 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Update owner count based on pages created
 	ctx.Account.OwnerCount += uint32(insertResult.PagesCreated)
-
-	// Update MintedNFTokens on the issuer account
-	issuerAccount.MintedNFTokens = tokenSeq + 1
 
 	// If issuer is different from minter, update the issuer account - tracked automatically
 	if m.Issuer != "" {

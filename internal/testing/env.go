@@ -977,38 +977,40 @@ func (e *TestEnv) AccountInfo(acc *Account) *AccountInfo {
 
 	return &AccountInfo{
 		Address:        acc.Address,
-		Balance:        accountRoot.Balance,
-		Sequence:       accountRoot.Sequence,
-		OwnerCount:     accountRoot.OwnerCount,
-		Flags:          accountRoot.Flags,
-		MintedNFTokens: accountRoot.MintedNFTokens,
-		BurnedNFTokens: accountRoot.BurnedNFTokens,
-		NFTokenMinter:  accountRoot.NFTokenMinter,
-		Domain:         accountRoot.Domain,
-		EmailHash:      accountRoot.EmailHash,
-		MessageKey:     accountRoot.MessageKey,
-		WalletLocator:  accountRoot.WalletLocator,
-		AccountTxnID:   accountRoot.AccountTxnID,
-		TransferRate:   accountRoot.TransferRate,
+		Balance:               accountRoot.Balance,
+		Sequence:              accountRoot.Sequence,
+		OwnerCount:            accountRoot.OwnerCount,
+		Flags:                 accountRoot.Flags,
+		MintedNFTokens:        accountRoot.MintedNFTokens,
+		BurnedNFTokens:        accountRoot.BurnedNFTokens,
+		FirstNFTokenSequence:  accountRoot.FirstNFTokenSequence,
+		NFTokenMinter:         accountRoot.NFTokenMinter,
+		Domain:                accountRoot.Domain,
+		EmailHash:             accountRoot.EmailHash,
+		MessageKey:            accountRoot.MessageKey,
+		WalletLocator:         accountRoot.WalletLocator,
+		AccountTxnID:          accountRoot.AccountTxnID,
+		TransferRate:          accountRoot.TransferRate,
 	}
 }
 
 // AccountInfo contains account information from the ledger.
 type AccountInfo struct {
-	Address        string
-	Balance        uint64
-	Sequence       uint32
-	OwnerCount     uint32
-	Flags          uint32
-	MintedNFTokens uint32
-	BurnedNFTokens uint32
-	NFTokenMinter  string
-	Domain         string
-	EmailHash      string
-	MessageKey     string
-	WalletLocator  string
-	AccountTxnID   [32]byte
-	TransferRate   uint32
+	Address               string
+	Balance               uint64
+	Sequence              uint32
+	OwnerCount            uint32
+	Flags                 uint32
+	MintedNFTokens        uint32
+	BurnedNFTokens        uint32
+	FirstNFTokenSequence  *uint32
+	NFTokenMinter         string
+	Domain                string
+	EmailHash             string
+	MessageKey            string
+	WalletLocator         string
+	AccountTxnID          [32]byte
+	TransferRate          uint32
 }
 
 // MintedCount returns the number of NFTokens minted by this issuer.

@@ -3,6 +3,7 @@ package account
 import (
 	"errors"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -68,11 +69,26 @@ func (a *AccountDelete) Flatten() (map[string]any, error) {
 // Apply applies the AccountDelete transaction to ledger state.
 // Reference: rippled DeleteAccount.cpp DeleteAccount::preclaim() + doApply()
 func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
-	// Check minimum ledger gap: account must have existed for at least 256 ledgers.
-	// Use the transaction's Sequence (pre-increment value), matching rippled's preclaim().
-	// Reference: rippled DeleteAccount.cpp accountDeleteMinLedgerGap = 256
-	if a.Common.Sequence != nil {
-		if ctx.Config.LedgerSequence-*a.Common.Sequence < 256 {
+	// Check minimum ledger gap: the account's Sequence + 255 must not exceed
+	// the current ledger sequence. This prevents replay of old transactions
+	// if this account is resurrected after deletion.
+	// Reference: rippled DeleteAccount.cpp preclaim() — uses sleAccount[sfSequence]
+	const seqDelta = 255
+	if ctx.Account.Sequence+seqDelta > ctx.Config.LedgerSequence {
+		return tx.TecTOO_SOON
+	}
+
+	// When fixNFTokenRemint is enabled, also check that
+	// FirstNFTokenSequence + MintedNFTokens is sufficiently behind the
+	// current ledger to prevent NFTokenID replay after account re-creation.
+	// Reference: rippled DeleteAccount.cpp preclaim() lines 297-312
+	if ctx.Rules().Enabled(amendment.FeatureFixNFTokenRemint) {
+		firstNFTSeq := uint32(0)
+		if ctx.Account.FirstNFTokenSequence != nil {
+			firstNFTSeq = *ctx.Account.FirstNFTokenSequence
+		}
+		mintedNFTs := ctx.Account.MintedNFTokens
+		if firstNFTSeq+mintedNFTs+seqDelta > ctx.Config.LedgerSequence {
 			return tx.TecTOO_SOON
 		}
 	}

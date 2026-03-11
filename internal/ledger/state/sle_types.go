@@ -30,6 +30,7 @@ func NewSLEAccountRoot(ledgerIndex [32]byte) *SLEAccountRoot {
 	sle.SetFieldMeta("RegularKey", FieldMetaDefault)
 	sle.SetFieldMeta("AccountTxnID", FieldMetaDefault)
 	sle.SetFieldMeta("AMMID", FieldMetaDefault)
+	sle.SetFieldMeta("FirstNFTokenSequence", FieldMetaDefault)
 	// PreviousTxnID and PreviousTxnLgrSeq only in DeleteFinal
 	sle.SetFieldMeta("PreviousTxnID", FieldMetaDeleteFinal)
 	sle.SetFieldMeta("PreviousTxnLgrSeq", FieldMetaDeleteFinal)
@@ -60,6 +61,9 @@ func (s *SLEAccountRoot) LoadFromAccountRoot(account *AccountRoot) {
 	}
 	if account.RegularKey != "" {
 		s.SetOriginal("RegularKey", account.RegularKey)
+	}
+	if account.FirstNFTokenSequence != nil {
+		s.SetOriginal("FirstNFTokenSequence", *account.FirstNFTokenSequence)
 	}
 	var zeroHash [32]byte
 	if account.AccountTxnID != zeroHash {

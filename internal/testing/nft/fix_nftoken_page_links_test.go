@@ -34,7 +34,7 @@ func genPackedTokensForOwner(env *jtx.TestEnv, owner, minter *jtx.Account) []str
 			intTaxon += 2
 		}
 
-		tokenSeq := env.MintedCount(minter)
+		tokenSeq := nft.GetNextTokenSeq(env, minter)
 		extTaxon := nftoken.CipheredTaxon(tokenSeq, intTaxon)
 
 		flags := nftoken.NFTokenFlagTransferable
@@ -69,7 +69,7 @@ func genPackedTokens(env *jtx.TestEnv, owner *jtx.Account) []string {
 			intTaxon += 2
 		}
 
-		tokenSeq := env.MintedCount(owner)
+		tokenSeq := nft.GetNextTokenSeq(env, owner)
 		extTaxon := nftoken.CipheredTaxon(tokenSeq, intTaxon)
 
 		flags := nftoken.NFTokenFlagTransferable
