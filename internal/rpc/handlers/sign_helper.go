@@ -1,15 +1,10 @@
 package handlers
 
 import (
-	"encoding/hex"
 	"encoding/json"
-	"strings"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/crypto/common"
-	"github.com/LeJamon/goXRPLd/crypto/ed25519"
-	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 )
@@ -24,11 +19,6 @@ type signCredentials struct {
 	KeyType    string
 }
 
-// hasCredentials returns true if any signing credential is provided.
-func (c *signCredentials) hasCredentials() bool {
-	return c.Secret != "" || c.Seed != "" || c.SeedHex != "" || c.Passphrase != ""
-}
-
 // signResult holds the output of the signing operation.
 type signResult struct {
 	TxMap  map[string]interface{} // The transaction JSON map with SigningPubKey, TxnSignature, and hash
@@ -39,106 +29,23 @@ type signResult struct {
 // keypair, auto-fills missing fields (unless offline), signs the transaction,
 // and returns the signed tx map + blob. This is the shared logic used by both
 // the "sign" and "submit" RPC methods.
-func signTransactionJSON(txJSON json.RawMessage, creds signCredentials, offline bool) (*signResult, *types.RpcError) {
-	// Validate credentials are present
-	if !creds.hasCredentials() {
-		return nil, types.RpcErrorInvalidParams("Missing signing credentials")
-	}
-
+func signTransactionJSON(txJSON json.RawMessage, creds signCredentials, offline bool, apiVersion int) (*signResult, *types.RpcError) {
 	// Check if ledger service is available (needed for auto-filling fields)
 	if !offline && (types.Services == nil || types.Services.Ledger == nil) {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
-	// Determine the key type
-	keyType := strings.ToLower(creds.KeyType)
-	if keyType == "" {
-		keyType = "secp256k1" // Default
-	}
-	if keyType != "secp256k1" && keyType != "ed25519" {
-		return nil, &types.RpcError{
-			Code:        types.RpcBAD_KEY_TYPE,
-			ErrorString: "badKeyType",
-			Type:        "badKeyType",
-			Message:     "Invalid field 'key_type'.",
-		}
-	}
-
-	// Derive entropy from the provided credential
-	var entropy []byte
-	var detectedKeyType string
-
-	if creds.Seed != "" || creds.Secret != "" {
-		// secret is an alias for seed
-		seedStr := creds.Seed
-		if seedStr == "" {
-			seedStr = creds.Secret
-		}
-
-		// Decode the seed
-		var err error
-		var algo interface{}
-		entropy, algo, err = addresscodec.DecodeSeed(seedStr)
-		if err != nil {
-			return nil, &types.RpcError{
-				Code:        types.RpcBAD_SEED,
-				ErrorString: "badSeed",
-				Type:        "badSeed",
-				Message:     "Disallowed seed.",
-			}
-		}
-
-		// Detect key type from seed
-		if _, isEd25519 := algo.(ed25519.ED25519CryptoAlgorithm); isEd25519 {
-			detectedKeyType = "ed25519"
-		} else {
-			detectedKeyType = "secp256k1"
-		}
-
-		// If key_type was specified, verify it matches
-		if creds.KeyType != "" && keyType != detectedKeyType {
-			return nil, &types.RpcError{
-				Code:        types.RpcBAD_SEED,
-				ErrorString: "badSeed",
-				Type:        "badSeed",
-				Message:     "Disallowed seed.",
-			}
-		}
-		keyType = detectedKeyType
-	} else if creds.SeedHex != "" {
-		// Decode hex seed
-		var err error
-		entropy, err = hex.DecodeString(creds.SeedHex)
-		if err != nil || len(entropy) != 16 {
-			return nil, &types.RpcError{
-				Code:        types.RpcBAD_SEED,
-				ErrorString: "badSeed",
-				Type:        "badSeed",
-				Message:     "Disallowed seed.",
-			}
-		}
-	} else if creds.Passphrase != "" {
-		// Derive seed from passphrase using SHA-512 Half (first 16 bytes of SHA-512)
-		hash := common.Sha512Half([]byte(creds.Passphrase))
-		entropy = hash[:16]
-	}
-
-	// Derive keypair based on key type
-	var privateKey, publicKey string
-	var err error
-
-	if keyType == "ed25519" {
-		algo := ed25519.ED25519()
-		privateKey, publicKey, err = algo.DeriveKeypair(entropy, false)
-		if err != nil {
-			return nil, types.RpcErrorInternal("Failed to derive keypair: " + err.Error())
-		}
-	} else {
-		algo := secp256k1.SECP256K1()
-		privateKey, publicKey, err = algo.DeriveKeypair(entropy, false)
-		if err != nil {
-			return nil, types.RpcErrorInternal("Failed to derive keypair: " + err.Error())
-		}
+	// Parse credentials and derive keypair using the shared helper
+	privateKey, publicKey, rpcErr := parseCredentialsAndDeriveKeypair(
+		creds.Secret,
+		creds.Seed,
+		creds.SeedHex,
+		creds.Passphrase,
+		creds.KeyType,
+		apiVersion,
+	)
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	// Derive address from public key

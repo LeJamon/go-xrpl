@@ -75,7 +75,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 			SeedHex:    request.SeedHex,
 			Passphrase: request.Passphrase,
 			KeyType:    request.KeyType,
-		}, request.Offline)
+		}, request.Offline, ctx.ApiVersion)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}
