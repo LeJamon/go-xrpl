@@ -122,9 +122,7 @@ func (p *Publisher) PublishServerStatus(event *ServerStatusEvent) {
 		return
 	}
 
-	// Server status goes to the "server" stream (we use types.SubPeerStatus as a proxy here)
-	// In a full implementation, there would be a separate SubServer type
-	p.manager.BroadcastToStream(types.SubPeerStatus, data, nil)
+	p.manager.BroadcastToStream(types.SubServer, data, nil)
 }
 
 // PublishConsensusPhase broadcasts a consensus phase change event
@@ -185,8 +183,12 @@ func (p *Publisher) PublishProposedTransaction(event *ProposedTransactionEvent, 
 		return
 	}
 
-	// Proposed transactions go to accounts_proposed subscribers
-	p.manager.BroadcastToAccountsProposed(data, accounts)
+	// Broadcast to transactions_proposed stream (all proposed txs)
+	p.manager.BroadcastToStream(types.SubTransactionsProposed, data, nil)
+	// Also broadcast to accounts_proposed subscribers for specific accounts
+	if len(accounts) > 0 {
+		p.manager.BroadcastToAccountsProposed(data, accounts)
+	}
 }
 
 // PublishOrderBookChange broadcasts an order book change to book subscribers
