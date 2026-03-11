@@ -169,31 +169,7 @@ func notTooManyOffers(view tx.LedgerView, tokenID [32]byte) tx.Result {
 // adjustOwnerCountViaView adjusts an account's OwnerCount through the view.
 // Use this for accounts that are NOT ctx.Account (the submitter).
 func adjustOwnerCountViaView(view tx.LedgerView, accountID [20]byte, delta int) {
-	if delta == 0 {
-		return
-	}
-	acctKey := keylet.Account(accountID)
-	acctData, err := view.Read(acctKey)
-	if err != nil {
-		return
-	}
-	acct, err := state.ParseAccountRoot(acctData)
-	if err != nil {
-		return
-	}
-	if delta > 0 {
-		acct.OwnerCount += uint32(delta)
-	} else {
-		for i := 0; i < -delta; i++ {
-			if acct.OwnerCount > 0 {
-				acct.OwnerCount--
-			}
-		}
-	}
-	updated, _ := state.SerializeAccountRoot(acct)
-	if updated != nil {
-		view.Update(acctKey, updated)
-	}
+	_ = tx.AdjustOwnerCount(view, accountID, delta)
 }
 
 // tokenOfferCreateApply creates a sell offer for a newly minted NFToken.

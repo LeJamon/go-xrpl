@@ -900,30 +900,7 @@ func (s *DirectStepI) trustCreate(sb *PaymentSandbox, amount tx.Amount) error {
 
 // adjustOwnerCount modifies an account's OwnerCount by delta.
 func (s *DirectStepI) adjustOwnerCount(sb *PaymentSandbox, account [20]byte, delta int32) error {
-	accountKey := keylet.Account(account)
-	data, err := sb.Read(accountKey)
-	if err != nil || data == nil {
-		return err
-	}
-
-	acct, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return err
-	}
-
-	if delta > 0 {
-		acct.OwnerCount += uint32(delta)
-	} else if uint32(-delta) <= acct.OwnerCount {
-		acct.OwnerCount -= uint32(-delta)
-	}
-
-	newData, err := state.SerializeAccountRoot(acct)
-	if err != nil {
-		return err
-	}
-
-	sb.Update(accountKey, newData)
-	return nil
+	return tx.AdjustOwnerCount(sb, account, int(delta))
 }
 
 // DirectStepSrcAcct returns the source account for NoRipple checking

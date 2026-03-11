@@ -494,31 +494,7 @@ func offerDeleteInSandbox(sb *PaymentSandbox, offerKey [32]byte) {
 // adjustOwnerCountInSandbox modifies an account's OwnerCount by delta in a PaymentSandbox.
 // This is a standalone version used by offerDeleteInSandbox.
 func adjustOwnerCountInSandbox(sb *PaymentSandbox, account [20]byte, delta int, txHash [32]byte, ledgerSeq uint32) {
-	accountKey := keylet.Account(account)
-	accountData, err := sb.Read(accountKey)
-	if err != nil || accountData == nil {
-		return
-	}
-
-	accountRoot, err := state.ParseAccountRoot(accountData)
-	if err != nil {
-		return
-	}
-
-	newCount := int(accountRoot.OwnerCount) + delta
-	if newCount < 0 {
-		newCount = 0
-	}
-	accountRoot.OwnerCount = uint32(newCount)
-	accountRoot.PreviousTxnID = txHash
-	accountRoot.PreviousTxnLgrSeq = ledgerSeq
-
-	newData, err := state.SerializeAccountRoot(accountRoot)
-	if err != nil {
-		return
-	}
-
-	sb.Update(accountKey, newData)
+	_ = tx.AdjustOwnerCountWithTx(sb, account, delta, txHash, ledgerSeq)
 }
 
 // RippleCalculate is the main entry point for path-based payments.

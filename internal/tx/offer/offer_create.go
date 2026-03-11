@@ -1929,29 +1929,7 @@ func offerDeleteInView(view tx.LedgerView, offer *state.LedgerOffer) tx.Result {
 // offers or unfunded offers from other accounts removed during crossing).
 // Reference: rippled adjustOwnerCount() in View.cpp
 func adjustOwnerCountInView(view tx.LedgerView, accountID [20]byte, delta int) {
-	accountKey := keylet.Account(accountID)
-	data, err := view.Read(accountKey)
-	if err != nil || data == nil {
-		return
-	}
-
-	account, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return
-	}
-
-	if delta < 0 && account.OwnerCount > 0 {
-		account.OwnerCount--
-	} else if delta > 0 {
-		account.OwnerCount++
-	}
-
-	updated, err := state.SerializeAccountRoot(account)
-	if err != nil {
-		return
-	}
-
-	view.Update(accountKey, updated)
+	_ = tx.AdjustOwnerCount(view, accountID, delta)
 }
 
 // getOfferSequence returns the sequence number to use for a new offer.

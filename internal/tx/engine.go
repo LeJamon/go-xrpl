@@ -1658,27 +1658,7 @@ func (e *Engine) CheckReserveIncrease(priorBalance uint64, currentOwnerCount uin
 // Used by the engine for tecOVERSIZE offer cleanup after the sandbox is discarded.
 // Reference: rippled removeUnfundedOffers() adjusts owner count on the base view.
 func adjustOwnerCountOnView(view LedgerView, account [20]byte, delta int, txHash [32]byte, ledgerSeq uint32) {
-	accountKey := keylet.Account(account)
-	accountData, err := view.Read(accountKey)
-	if err != nil || accountData == nil {
-		return
-	}
-	accountRoot, err := state.ParseAccountRoot(accountData)
-	if err != nil {
-		return
-	}
-	newCount := int(accountRoot.OwnerCount) + delta
-	if newCount < 0 {
-		newCount = 0
-	}
-	accountRoot.OwnerCount = uint32(newCount)
-	accountRoot.PreviousTxnID = txHash
-	accountRoot.PreviousTxnLgrSeq = ledgerSeq
-	newData, err := state.SerializeAccountRoot(accountRoot)
-	if err != nil {
-		return
-	}
-	_ = view.Update(accountKey, newData)
+	_ = AdjustOwnerCountWithTx(view, account, delta, txHash, ledgerSeq)
 }
 
 // deleteNFTokenOfferOnView deletes an NFTokenOffer from the ledger view,

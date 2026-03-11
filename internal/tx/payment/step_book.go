@@ -2315,33 +2315,7 @@ func (s *BookStep) applyDirRemoveResult(sb *PaymentSandbox, result *state.DirRem
 
 // adjustOwnerCount adjusts the OwnerCount on an account
 func (s *BookStep) adjustOwnerCount(sb *PaymentSandbox, account [20]byte, delta int, txHash [32]byte, ledgerSeq uint32) error {
-	accountKey := keylet.Account(account)
-	accountData, err := sb.Read(accountKey)
-	if err != nil {
-		return err
-	}
-	if accountData == nil {
-		return errors.New("account not found for owner count adjustment")
-	}
-
-	accountRoot, err := state.ParseAccountRoot(accountData)
-	if err != nil {
-		return err
-	}
-
-	newCount := int(accountRoot.OwnerCount) + delta
-	if newCount < 0 {
-		newCount = 0
-	}
-	accountRoot.OwnerCount = uint32(newCount)
-	accountRoot.PreviousTxnID = txHash
-	accountRoot.PreviousTxnLgrSeq = ledgerSeq
-
-	newData, err := state.SerializeAccountRoot(accountRoot)
-	if err != nil {
-		return err
-	}
-	return sb.Update(accountKey, newData)
+	return tx.AdjustOwnerCountWithTx(sb, account, delta, txHash, ledgerSeq)
 }
 
 // transferFunds transfers an amount between two accounts.
@@ -2645,33 +2619,7 @@ func (s *BookStep) trustCreateForCredit(sb *PaymentSandbox, account, issuer [20]
 
 // adjustOwnerCountForTrustCreate modifies an account's OwnerCount by delta during trust line creation.
 func (s *BookStep) adjustOwnerCountForTrustCreate(sb *PaymentSandbox, account [20]byte, delta int32, txHash [32]byte, ledgerSeq uint32) error {
-	accountKey := keylet.Account(account)
-	data, err := sb.Read(accountKey)
-	if err != nil || data == nil {
-		return err
-	}
-
-	acct, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return err
-	}
-
-	if delta > 0 {
-		acct.OwnerCount += uint32(delta)
-	} else if uint32(-delta) <= acct.OwnerCount {
-		acct.OwnerCount -= uint32(-delta)
-	}
-
-	acct.PreviousTxnID = txHash
-	acct.PreviousTxnLgrSeq = ledgerSeq
-
-	newData, err := state.SerializeAccountRoot(acct)
-	if err != nil {
-		return err
-	}
-
-	sb.Update(accountKey, newData)
-	return nil
+	return tx.AdjustOwnerCountWithTx(sb, account, int(delta), txHash, ledgerSeq)
 }
 
 // debitTrustline decreases an account's IOU balance.
