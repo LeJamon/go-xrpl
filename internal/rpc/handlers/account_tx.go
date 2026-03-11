@@ -3,7 +3,9 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -32,7 +34,6 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return nil, types.RpcErrorInvalidParams("Missing required parameter: account")
 	}
 
-	// Check if ledger service is available
 	if types.Services == nil || types.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
@@ -51,7 +52,6 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		}
 	}
 
-	// Get account transactions from the ledger service
 	result, err := types.Services.Ledger.GetAccountTransactions(
 		request.Account,
 		int64(request.LedgerIndexMin),
@@ -63,13 +63,13 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	if err != nil {
 		if err.Error() == "transaction history not available (no database configured)" {
 			return nil, &types.RpcError{
-				Code:    73, // lgrNotFound
+				Code:    73,
 				Message: "Transaction history not available. Database not configured.",
 			}
 		}
 		if err.Error() == "account not found" {
 			return nil, &types.RpcError{
-				Code:    19, // actNotFound
+				Code:    19,
 				Message: "Account not found.",
 			}
 		}
@@ -80,17 +80,49 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	transactions := make([]map[string]interface{}, len(result.Transactions))
 	for i, tx := range result.Transactions {
 		txEntry := map[string]interface{}{
-			"ledger_index": tx.LedgerIndex,
-			"validated":    true,
+			"validated": true,
 		}
+
+		// Add transaction hash
+		txEntry["hash"] = strings.ToUpper(hex.EncodeToString(tx.Hash[:]))
+
 		if request.Binary {
-			txEntry["tx_blob"] = hex.EncodeToString(tx.TxBlob)
-			txEntry["meta"] = hex.EncodeToString(tx.Meta)
+			// Binary mode: return hex blobs
+			txEntry["tx_blob"] = strings.ToUpper(hex.EncodeToString(tx.TxBlob))
+			txEntry["meta"] = strings.ToUpper(hex.EncodeToString(tx.Meta))
+			txEntry["ledger_index"] = tx.LedgerIndex
 		} else {
-			// Parse tx_blob and meta as JSON if not binary
-			txEntry["tx_blob"] = hex.EncodeToString(tx.TxBlob)
-			txEntry["meta"] = hex.EncodeToString(tx.Meta)
+			// JSON mode: decode tx_blob and meta to JSON objects
+			txBlobHex := hex.EncodeToString(tx.TxBlob)
+			txJSON, err := binarycodec.Decode(txBlobHex)
+			if err != nil {
+				// Fallback to hex if decode fails
+				txEntry["tx_blob"] = strings.ToUpper(txBlobHex)
+			} else {
+				// Add ledger_index and hash to tx_json
+				txJSON["ledger_index"] = tx.LedgerIndex
+				txJSON["hash"] = strings.ToUpper(hex.EncodeToString(tx.Hash[:]))
+
+				// Inject DeliveredAmount for Payment transactions
+				injectDeliveredAmount(txJSON, nil)
+
+				txEntry["tx"] = txJSON
+			}
+
+			// Decode metadata
+			metaHex := hex.EncodeToString(tx.Meta)
+			metaJSON, err := binarycodec.Decode(metaHex)
+			if err != nil {
+				txEntry["meta"] = strings.ToUpper(metaHex)
+			} else {
+				// Inject DeliveredAmount into metadata if this is a Payment
+				if txJSON != nil {
+					injectDeliveredAmount(txJSON, metaJSON)
+				}
+				txEntry["meta"] = metaJSON
+			}
 		}
+
 		transactions[i] = txEntry
 	}
 
@@ -111,6 +143,35 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 
 	return response, nil
+}
+
+// injectDeliveredAmount adds DeliveredAmount to metadata for Payment transactions.
+// If meta has a "delivered_amount" field, it uses that; otherwise for Payment
+// transactions it uses the Amount field as DeliveredAmount.
+func injectDeliveredAmount(txJSON map[string]interface{}, meta map[string]interface{}) {
+	txType, _ := txJSON["TransactionType"].(string)
+	if txType != "Payment" {
+		return
+	}
+	if meta == nil {
+		return
+	}
+
+	// If DeliveredAmount already present in metadata, use it
+	if _, ok := meta["DeliveredAmount"]; ok {
+		return
+	}
+
+	// If delivered_amount is present, promote to DeliveredAmount
+	if da, ok := meta["delivered_amount"]; ok {
+		meta["DeliveredAmount"] = da
+		return
+	}
+
+	// Fallback: use Amount from transaction as DeliveredAmount
+	if amount, ok := txJSON["Amount"]; ok {
+		meta["DeliveredAmount"] = amount
+	}
 }
 
 func (m *AccountTxMethod) RequiredRole() types.Role {

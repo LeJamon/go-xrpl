@@ -3,11 +3,12 @@ package rpc
 import (
 	"encoding/hex"
 	"strconv"
+	"strings"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 
@@ -112,6 +113,47 @@ func (a *ledgerReaderAdapter) TotalDrops() uint64 {
 	return a.l.TotalDrops()
 }
 
+// rippleEpoch is 2000-01-01T00:00:00Z in Unix seconds
+const rippleEpoch int64 = 946684800
+
+func (a *ledgerReaderAdapter) CloseTime() int64 {
+	t := a.l.CloseTime()
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix() - rippleEpoch
+}
+
+func (a *ledgerReaderAdapter) CloseTimeResolution() uint32 {
+	return a.l.Header().CloseTimeResolution
+}
+
+func (a *ledgerReaderAdapter) CloseFlags() uint8 {
+	return a.l.Header().CloseFlags
+}
+
+func (a *ledgerReaderAdapter) ParentCloseTime() int64 {
+	t := a.l.ParentCloseTime()
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix() - rippleEpoch
+}
+
+func (a *ledgerReaderAdapter) TxMapHash() [32]byte {
+	h, _ := a.l.TxMapHash()
+	return h
+}
+
+func (a *ledgerReaderAdapter) StateMapHash() [32]byte {
+	h, _ := a.l.StateMapHash()
+	return h
+}
+
+func (a *ledgerReaderAdapter) ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error {
+	return a.l.ForEachTransaction(fn)
+}
+
 // SubmitTransaction submits a transaction to the open ledger
 func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	// Parse the transaction from JSON
@@ -159,20 +201,28 @@ func (a *LedgerServiceAdapter) GetAccountInfo(account string, ledgerIndex string
 		return nil, err
 	}
 
+	var prevTxnID string
+	zeroHash := [32]byte{}
+	if result.PreviousTxnID != zeroHash {
+		prevTxnID = strings.ToUpper(hex.EncodeToString(result.PreviousTxnID[:]))
+	}
+
 	return &types.AccountInfo{
-		Account:      result.Account,
-		Balance:      strconv.FormatUint(result.Balance, 10),
-		Flags:        result.Flags,
-		OwnerCount:   result.OwnerCount,
-		Sequence:     result.Sequence,
-		RegularKey:   result.RegularKey,
-		Domain:       result.Domain,
-		EmailHash:    result.EmailHash,
-		TransferRate: result.TransferRate,
-		TickSize:     result.TickSize,
-		LedgerIndex:  result.LedgerIndex,
-		LedgerHash:   hex.EncodeToString(result.LedgerHash[:]),
-		Validated:    result.Validated,
+		Account:           result.Account,
+		Balance:           strconv.FormatUint(result.Balance, 10),
+		Flags:             result.Flags,
+		OwnerCount:        result.OwnerCount,
+		Sequence:          result.Sequence,
+		RegularKey:        result.RegularKey,
+		Domain:            result.Domain,
+		EmailHash:         result.EmailHash,
+		TransferRate:      result.TransferRate,
+		TickSize:          result.TickSize,
+		PreviousTxnID:     prevTxnID,
+		PreviousTxnLgrSeq: result.PreviousTxnLgrSeq,
+		LedgerIndex:       result.LedgerIndex,
+		LedgerHash:        hex.EncodeToString(result.LedgerHash[:]),
+		Validated:         result.Validated,
 	}, nil
 }
 
@@ -716,6 +766,39 @@ func (a *LedgerServiceAdapter) GetNFTBuyOffers(nftID [32]byte, ledgerIndex strin
 		Validated:   result.Validated,
 		Limit:       result.Limit,
 		Marker:      result.Marker,
+	}, nil
+}
+
+// SimulateTransaction runs a transaction against a snapshot without committing
+func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
+	transaction, err := tx.ParseJSON(txJSON)
+	if err != nil {
+		return &types.SubmitResult{
+			EngineResult:        "temMALFORMED",
+			EngineResultCode:    -299,
+			EngineResultMessage: "Transaction is malformed: " + err.Error(),
+			Applied:             false,
+		}, nil
+	}
+
+	result, err := a.svc.SimulateTransaction(transaction)
+	if err != nil {
+		return &types.SubmitResult{
+			EngineResult:        "tefINTERNAL",
+			EngineResultCode:    -199,
+			EngineResultMessage: "Internal error: " + err.Error(),
+			Applied:             false,
+		}, nil
+	}
+
+	return &types.SubmitResult{
+		EngineResult:        result.Result.String(),
+		EngineResultCode:    int(result.Result),
+		EngineResultMessage: result.Message,
+		Applied:             result.Applied,
+		Fee:                 result.Fee,
+		CurrentLedger:       result.CurrentLedger,
+		ValidatedLedger:     result.ValidatedLedger,
 	}, nil
 }
 

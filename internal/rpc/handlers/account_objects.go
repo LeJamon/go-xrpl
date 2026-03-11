@@ -3,12 +3,27 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
 // AccountObjectsMethod handles the account_objects RPC method
 type AccountObjectsMethod struct{}
+
+// deletionBlockerTypes lists SLE types that block account deletion
+var deletionBlockerTypes = map[string]bool{
+	"RippleState":   true,
+	"Check":         true,
+	"Escrow":        true,
+	"PayChannel":    true,
+	"NFTokenPage":   true,
+	"NFTokenOffer":  true,
+	"MPToken":       true,
+	"Credential":    true,
+	"Bridge":        true,
+}
 
 func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
@@ -29,37 +44,50 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		return nil, types.RpcErrorInvalidParams("Missing required parameter: account")
 	}
 
-	// Check if ledger service is available
 	if types.Services == nil || types.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
-	// Determine ledger index to use
 	ledgerIndex := "current"
 	if request.LedgerIndex != "" {
 		ledgerIndex = request.LedgerIndex.String()
 	}
 
-	// Get account objects from the ledger service
 	result, err := types.Services.Ledger.GetAccountObjects(request.Account, ledgerIndex, request.Type, request.Limit)
 	if err != nil {
 		if err.Error() == "account not found" {
 			return nil, &types.RpcError{
-				Code:    19, // actNotFound
+				Code:    19,
 				Message: "Account not found.",
 			}
 		}
 		return nil, types.RpcErrorInternal("Failed to get account objects: " + err.Error())
 	}
 
-	// Build account_objects array
-	objects := make([]map[string]interface{}, len(result.AccountObjects))
-	for i, obj := range result.AccountObjects {
-		objects[i] = map[string]interface{}{
-			"index":           obj.Index,
-			"LedgerEntryType": obj.LedgerEntryType,
-			"data":            hex.EncodeToString(obj.Data),
+	// Build account_objects array with full deserialized JSON
+	objects := make([]interface{}, 0, len(result.AccountObjects))
+	for _, obj := range result.AccountObjects {
+		// Filter deletion blockers if requested
+		if request.DeletionBlockersOnly && !deletionBlockerTypes[obj.LedgerEntryType] {
+			continue
 		}
+
+		// Deserialize the binary SLE data to JSON
+		hexData := hex.EncodeToString(obj.Data)
+		decoded, err := binarycodec.Decode(hexData)
+		if err != nil {
+			// Fallback: return raw hex if decode fails
+			objects = append(objects, map[string]interface{}{
+				"index":           strings.ToUpper(obj.Index),
+				"LedgerEntryType": obj.LedgerEntryType,
+				"data":            hexData,
+			})
+			continue
+		}
+
+		// Add the index field
+		decoded["index"] = strings.ToUpper(obj.Index)
+		objects = append(objects, decoded)
 	}
 
 	response := map[string]interface{}{
