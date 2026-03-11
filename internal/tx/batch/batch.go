@@ -44,11 +44,15 @@ type BatchSigner struct {
 	BatchSigner BatchSignerData `json:"BatchSigner"`
 }
 
-// BatchSignerData contains batch signer fields
+// BatchSignerData contains batch signer fields.
+// For single-sign: SigningPubKey is non-empty, Signers is nil.
+// For multi-sign: SigningPubKey is "", Signers contains the nested multi-signers.
+// Reference: rippled sfBatchSigner object
 type BatchSignerData struct {
-	Account           string `json:"Account"`
-	SigningPubKey     string `json:"SigningPubKey"`
-	BatchTxnSignature string `json:"BatchTxnSignature"`
+	Account           string            `json:"Account"`
+	SigningPubKey     string            `json:"SigningPubKey"`
+	BatchTxnSignature string           `json:"BatchTxnSignature"`
+	Signers           []tx.SignerWrapper `json:"Signers,omitempty"`
 }
 
 // Batch flags
@@ -91,6 +95,13 @@ func NewBatch(account string) *Batch {
 // TxType returns the transaction type
 func (b *Batch) TxType() tx.Type {
 	return tx.TypeBatch
+}
+
+// InnerTxCount returns the number of inner transactions in the batch.
+// This is used by the test environment to count inner batch transactions
+// for fee metrics in ProcessClosedLedger.
+func (b *Batch) InnerTxCount() int {
+	return len(b.RawTransactions)
 }
 
 // Validate validates the Batch transaction
@@ -197,6 +208,23 @@ func (b *Batch) Flatten() (map[string]any, error) {
 			if s.BatchSigner.BatchTxnSignature != "" {
 				signerMap["TxnSignature"] = s.BatchSigner.BatchTxnSignature
 			}
+			// Include nested Signers for multi-sign batch signers
+			if len(s.BatchSigner.Signers) > 0 {
+				nestedSigners := make([]map[string]any, len(s.BatchSigner.Signers))
+				for j, nested := range s.BatchSigner.Signers {
+					nestedMap := map[string]any{
+						"Account":       nested.Signer.Account,
+						"SigningPubKey":  nested.Signer.SigningPubKey,
+					}
+					if nested.Signer.TxnSignature != "" {
+						nestedMap["TxnSignature"] = nested.Signer.TxnSignature
+					}
+					nestedSigners[j] = map[string]any{
+						"Signer": nestedMap,
+					}
+				}
+				signerMap["Signers"] = nestedSigners
+			}
 			signers[i] = map[string]any{
 				"BatchSigner": signerMap,
 			}
@@ -229,6 +257,30 @@ func (b *Batch) AddInnerTransaction(innerTx tx.Transaction) {
 // RequiredAmendments returns the amendments required for this transaction type
 func (b *Batch) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureBatch}
+}
+
+// GetBatchSigners returns the batch signers as BatchSignerInfo for authorization checking.
+// Implements tx.BatchSignerProvider.
+func (b *Batch) GetBatchSigners() []tx.BatchSignerInfo {
+	result := make([]tx.BatchSignerInfo, len(b.BatchSigners))
+	for i, s := range b.BatchSigners {
+		info := tx.BatchSignerInfo{
+			Account:       s.BatchSigner.Account,
+			SigningPubKey: s.BatchSigner.SigningPubKey,
+		}
+		// Include nested multi-sign signers
+		if len(s.BatchSigner.Signers) > 0 {
+			info.Signers = make([]tx.SignerInfo, len(s.BatchSigner.Signers))
+			for j, nested := range s.BatchSigner.Signers {
+				info.Signers[j] = tx.SignerInfo{
+					Account:       nested.Signer.Account,
+					SigningPubKey: nested.Signer.SigningPubKey,
+				}
+			}
+		}
+		result[i] = info
+	}
+	return result
 }
 
 // Apply applies the Batch transaction to the ledger.
@@ -436,6 +488,15 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) tx.Resu
 		account.Sequence++
 	}
 
+	// Check delegate permission if Delegate field is present on the inner tx.
+	// This must happen after sequence increment because tec results still advance the sequence.
+	// Reference: rippled Transactor::checkPermission — verifies that the delegate
+	// account has a Delegate SLE granting permission for this tx type.
+	var delegateResult tx.Result
+	if common.Delegate != "" {
+		delegateResult = checkDelegatePermission(ctx, accountID, innerTx)
+	}
+
 	// Create inner apply context
 	innerCtx := &tx.ApplyContext{
 		View:      perTxTable,
@@ -447,9 +508,11 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) tx.Resu
 		Engine:    ctx.Engine,
 	}
 
-	// Apply the inner transaction
+	// Apply the inner transaction (skip if delegate check failed)
 	var result tx.Result
-	if appliable, ok := innerTx.(tx.Appliable); ok {
+	if delegateResult != 0 {
+		result = delegateResult
+	} else if appliable, ok := innerTx.(tx.Appliable); ok {
 		result = appliable.Apply(innerCtx)
 	} else {
 		result = tx.TesSUCCESS
@@ -504,5 +567,31 @@ func syncAccountFromView(ctx *tx.ApplyContext) {
 	ctx.Account.Sequence = account.Sequence
 	ctx.Account.OwnerCount = account.OwnerCount
 	ctx.Account.TicketCount = account.TicketCount
+}
+
+// checkDelegatePermission checks whether the Delegate on an inner tx has permission
+// to execute the transaction on behalf of the account.
+// Reference: rippled Transactor::checkPermission in Transactor.cpp
+func checkDelegatePermission(ctx *tx.ApplyContext, accountID [20]byte, innerTx tx.Transaction) tx.Result {
+	common := innerTx.GetCommon()
+	delegateID, delegateErr := state.DecodeAccountID(common.Delegate)
+	if delegateErr != nil {
+		return tx.TecNO_DELEGATE_PERMISSION
+	}
+	delegateKeylet := keylet.DelegateKeylet(accountID, delegateID)
+	delegateData, readErr := ctx.View.Read(delegateKeylet)
+	if readErr != nil || delegateData == nil {
+		return tx.TecNO_DELEGATE_PERMISSION
+	}
+	delegateEntry, parseErr := state.ParseDelegate(delegateData)
+	if parseErr != nil {
+		return tx.TecNO_DELEGATE_PERMISSION
+	}
+	// Check if the delegate SLE grants permission for this tx type.
+	txTypeValue := uint32(innerTx.TxType())
+	if !delegateEntry.HasTxPermission(txTypeValue) {
+		return tx.TecNO_DELEGATE_PERMISSION
+	}
+	return 0 // success (no error)
 }
 

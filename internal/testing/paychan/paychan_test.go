@@ -1327,36 +1327,6 @@ func TestPayChan_Multiple(t *testing.T) {
 	require.NotEqual(t, chanK1.Key, chanK2.Key)
 }
 
-// TestPayChan_AccountChannelsRPC tests the account_channels RPC method.
-// From rippled: PayChan_test::testAccountChannelsRPC
-func TestPayChan_AccountChannelsRPC(t *testing.T) {
-	t.Skip("RPC test - requires server setup")
-}
-
-// TestPayChan_AccountChannelsRPCMarkers tests account_channels with markers.
-// From rippled: PayChan_test::testAccountChannelsRPCMarkers
-func TestPayChan_AccountChannelsRPCMarkers(t *testing.T) {
-	t.Skip("RPC test - requires server setup")
-}
-
-// TestPayChan_AccountChannelsRPCSenderOnly tests account_channels with sender only.
-// From rippled: PayChan_test::testAccountChannelsRPCSenderOnly
-func TestPayChan_AccountChannelsRPCSenderOnly(t *testing.T) {
-	t.Skip("RPC test - requires server setup")
-}
-
-// TestPayChan_AccountChannelAuthorize tests channel_authorize RPC method.
-// From rippled: PayChan_test::testAccountChannelAuthorize
-func TestPayChan_AccountChannelAuthorize(t *testing.T) {
-	t.Skip("RPC test - requires server setup")
-}
-
-// TestPayChan_AuthVerifyRPC tests channel_verify RPC method.
-// From rippled: PayChan_test::testAuthVerifyRPC
-func TestPayChan_AuthVerifyRPC(t *testing.T) {
-	t.Skip("RPC test - requires server setup")
-}
-
 // TestPayChan_OptionalFields tests optional fields in payment channels.
 // From rippled: PayChan_test::testOptionalFields
 func TestPayChan_OptionalFields(t *testing.T) {

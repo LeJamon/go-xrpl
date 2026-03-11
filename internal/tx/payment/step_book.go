@@ -362,7 +362,20 @@ func (s *BookStep) Rev(
 		}
 		visited[offerKey] = true
 
+		// Deep freeze check on the input (TakerPays) side.
+		// Deep-frozen offers are permanently removed from the order book.
+		// Reference: rippled OfferStream.cpp lines 280-292
+		{
+			offerOwnerDF, _ := state.DecodeAccountID(offer.Account)
+			if s.isDeepFrozen(sb, offerOwnerDF, s.book.In.Currency, s.book.In.Issuer) {
+				ofrsToRm[offerKey] = true
+				s.offersUsed_++
+				continue
+			}
+		}
+
 		// Pre-execOffer checks (OfferStream level)
+		// getOfferFundedAmount checks freeze on the output (TakerGets) side via fhZERO_IF_FROZEN.
 		ownerFunds := s.getOfferFundedAmount(sb, offer)
 		if ownerFunds.IsEffectivelyZero() || offer.TakerGets.IsZero() {
 			ofrsToRm[offerKey] = true
@@ -696,6 +709,19 @@ func (s *BookStep) Fwd(
 		}
 		visited[offerKey] = true
 
+		// Deep freeze check on the input (TakerPays) side.
+		// Deep-frozen offers are permanently removed from the order book.
+		// Reference: rippled OfferStream.cpp lines 280-292
+		{
+			offerOwnerDF, _ := state.DecodeAccountID(offer.Account)
+			if s.isDeepFrozen(sb, offerOwnerDF, s.book.In.Currency, s.book.In.Issuer) {
+				ofrsToRm[offerKey] = true
+				s.offersUsed_++
+				continue
+			}
+		}
+
+		// getOfferFundedAmount checks freeze on the output (TakerGets) side via fhZERO_IF_FROZEN.
 		ownerFunds := s.getOfferFundedAmount(sb, offer)
 		if ownerFunds.IsEffectivelyZero() || offer.TakerGets.IsZero() {
 			ofrsToRm[offerKey] = true
@@ -1322,9 +1348,89 @@ func (s *BookStep) isOfferFunded(sb *PaymentSandbox, offer *state.LedgerOffer) b
 	return !funded.IsEffectivelyZero()
 }
 
+// isFrozen checks if an account's trust line for the given currency/issuer is frozen.
+// Returns true if:
+//   - The issuer has GlobalFreeze set on their AccountRoot, OR
+//   - The issuer has individually frozen the account's trust line (lsfHighFreeze/lsfLowFreeze)
+//
+// XRP cannot be frozen, so this always returns false for XRP.
+// Reference: rippled View.cpp isFrozen(view, account, currency, issuer)
+func (s *BookStep) isFrozen(sb *PaymentSandbox, account [20]byte, currency string, issuer [20]byte) bool {
+	// XRP cannot be frozen
+	if currency == "" || currency == "XRP" {
+		return false
+	}
+
+	// Check global freeze on the issuer
+	issuerData, err := sb.Read(keylet.Account(issuer))
+	if err == nil && issuerData != nil {
+		issuerAcct, err := state.ParseAccountRoot(issuerData)
+		if err == nil && (issuerAcct.Flags&state.LsfGlobalFreeze) != 0 {
+			return true
+		}
+	}
+
+	// If the account IS the issuer, no individual freeze to check
+	if issuer == account {
+		return false
+	}
+
+	// Check individual freeze on the trust line
+	// The issuer's freeze flag depends on which side (high/low) the issuer is on
+	// Reference: rippled View.cpp isFrozen():
+	//   (issuer > account) ? lsfHighFreeze : lsfLowFreeze
+	lineKey := keylet.Line(account, issuer, currency)
+	lineData, err := sb.Read(lineKey)
+	if err != nil || lineData == nil {
+		return false
+	}
+	rs, err := state.ParseRippleState(lineData)
+	if err != nil {
+		return false
+	}
+
+	issuerIsHigh := state.CompareAccountIDsForLine(issuer, account) > 0
+	if issuerIsHigh {
+		return (rs.Flags & state.LsfHighFreeze) != 0
+	}
+	return (rs.Flags & state.LsfLowFreeze) != 0
+}
+
+// isDeepFrozen checks if an account's trust line for the given currency/issuer
+// has either the high or low deep freeze flag set.
+// Deep freeze is more restrictive than regular freeze — it prevents both
+// sending AND receiving, and causes existing offers to be removed.
+// XRP cannot be frozen, so this always returns false for XRP.
+// If the account is the issuer, deep freeze does not apply.
+// Reference: rippled View.cpp isDeepFrozen(view, account, currency, issuer)
+func (s *BookStep) isDeepFrozen(sb *PaymentSandbox, account [20]byte, currency string, issuer [20]byte) bool {
+	// XRP cannot be frozen
+	if currency == "" || currency == "XRP" {
+		return false
+	}
+
+	// Issuer is never deep frozen for their own currency
+	if issuer == account {
+		return false
+	}
+
+	lineKey := keylet.Line(account, issuer, currency)
+	lineData, err := sb.Read(lineKey)
+	if err != nil || lineData == nil {
+		return false
+	}
+	rs, err := state.ParseRippleState(lineData)
+	if err != nil {
+		return false
+	}
+
+	return (rs.Flags&state.LsfHighDeepFreeze) != 0 || (rs.Flags&state.LsfLowDeepFreeze) != 0
+}
+
 // getOfferFundedAmount returns the actual amount an offer can deliver based on owner's balance.
 // This matches rippled's calculation of funded amounts for offers.
-// Reference: rippled OfferStream.cpp uses accountFundsHelper which calls accountHolds.
+// For IOU output, returns zero if the owner's trust line is frozen (matching fhZERO_IF_FROZEN).
+// Reference: rippled OfferStream.cpp uses accountFundsHelper which calls accountHolds with fhZERO_IF_FROZEN.
 func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerOffer) EitherAmount {
 	offerOwner, err := state.DecodeAccountID(offer.Account)
 	if err != nil {
@@ -1377,6 +1483,19 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 	// For IOU TakerGets: check owner's trustline balance with issuer
 	issuer := s.book.Out.Issuer
 	currency := s.book.Out.Currency
+
+	// Check freeze before returning balance (fhZERO_IF_FROZEN).
+	// If the trust line is frozen or deep frozen, the offer is treated as unfunded.
+	// Reference: rippled accountHolds() lines 407-413:
+	//   if (zeroIfFrozen == fhZERO_IF_FROZEN) {
+	//     if (isFrozen(...) || isDeepFrozen(...)) return false;
+	//   }
+	if offerOwner != issuer {
+		if s.isFrozen(sb, offerOwner, currency, issuer) ||
+			s.isDeepFrozen(sb, offerOwner, currency, issuer) {
+			return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer))
+		}
+	}
 
 	ownerBalance := s.getIOUBalance(sb, offerOwner, issuer, currency)
 

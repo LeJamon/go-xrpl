@@ -1556,11 +1556,8 @@ func TestMultisig(t *testing.T) {
 			disable: nil,
 		},
 		{
-			// Skip: MultiSignReserve amendment not yet implemented in signer list engine.
-			// When disabled, signer list should charge 2+N OwnerCount, but Go engine always charges 1.
 			name:    "NoMultiSignReserve_NoExpandedSignerList",
 			disable: []string{"MultiSignReserve", "ExpandedSignerList"},
-			skip:    true,
 		},
 		{
 			name:    "NoExpandedSignerList",

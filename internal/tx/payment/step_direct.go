@@ -512,7 +512,10 @@ func (s *DirectStepI) quality(sb *PaymentSandbox, isIn bool) uint32 {
 	return QualityOne
 }
 
-// accountHolds returns the balance src holds of dst's IOUs
+// accountHolds returns the balance src holds of dst's IOUs.
+// The result is adjusted by the BalanceHook to account for deferred credits,
+// preventing double-counting across payment paths.
+// Reference: rippled View.cpp accountHolds() lines 385-465
 func (s *DirectStepI) accountHolds(sb *PaymentSandbox) tx.Amount {
 	trustLineKey := keylet.Line(s.src, s.dst, s.currency)
 	data, err := sb.Read(trustLineKey)
@@ -532,12 +535,19 @@ func (s *DirectStepI) accountHolds(sb *PaymentSandbox) tx.Amount {
 
 	srcIsLow := state.CompareAccountIDs(s.src, s.dst) < 0
 
-	if srcIsLow {
-		// src is low account
-		return balance
+	if !srcIsLow {
+		// Put balance in src's terms (src is high account)
+		balance = balance.Negate()
 	}
-	// src is high account
-	return balance.Negate()
+
+	// Set issuer to dst (the counterparty) to match rippled's convention.
+	// Reference: rippled View.cpp accountHolds() line 453: amount.setIssuer(issuer)
+	balance.Issuer = state.EncodeAccountIDSafe(s.dst)
+
+	// Apply the balance hook to account for deferred credits.
+	// This prevents self-payments and circular paths from double-counting liquidity.
+	// Reference: rippled View.cpp accountHolds() line 464: return view.balanceHook(account, issuer, amount)
+	return sb.BalanceHook(s.src, s.dst, balance)
 }
 
 // creditLimit returns the credit limit dst has extended to src

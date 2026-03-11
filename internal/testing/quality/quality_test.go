@@ -62,36 +62,6 @@ func TestRelativeQualityDistance(t *testing.T) {
 	})
 }
 
-// TestDirectStepQuality tests that theoretical quality upper bounds match actual
-// flow quality for direct payment paths (alice → bob → carol → dan).
-// Reference: rippled TheoreticalQuality_test.cpp testDirectStep()
-//
-// This test uses 250 random iterations varying trust line quality in/out,
-// debt direction, and transfer rates across 4 accounts. It calls internal
-// path engine functions (toStrands, qualityUpperBound, flow) directly on
-// the ledger state rather than through transaction submission.
-//
-// Not portable as a behavior test because it requires:
-// - Trust line QualityIn/QualityOut setup (not exposed via standard TrustSet helpers)
-// - Direct access to internal payment path functions (toStrands, GetStrandQuality, flow)
-// - PaymentSandbox wrapping the ledger view for strand execution
-func TestDirectStepQuality(t *testing.T) {
-	t.Skip("Internal path engine test: requires direct access to toStrands/qualityUpperBound/flow (not accessible from behavior test layer)")
-}
-
-// TestBookStepQuality tests that theoretical quality upper bounds match actual
-// flow quality for payment paths through offer books.
-// Reference: rippled TheoreticalQuality_test.cpp testBookStep()
-//
-// This test uses 100 random iterations with a payment path:
-// alice (USD/bob) → bob → (USD/bob)|(EUR/carol) → carol → dan
-// with random transfer rates, quality in/out, and debt directions.
-//
-// Not portable for the same reasons as TestDirectStepQuality.
-func TestBookStepQuality(t *testing.T) {
-	t.Skip("Internal path engine test: requires direct access to toStrands/qualityUpperBound/flow (not accessible from behavior test layer)")
-}
-
 // TestQualityComposition verifies basic quality composition (multiplication).
 // This supplements the theoretical quality tests by verifying that Quality.Compose
 // correctly combines step qualities.

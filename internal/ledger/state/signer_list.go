@@ -8,10 +8,16 @@ import (
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 )
 
+// lsfOneOwnerCount is the flag indicating that this SignerList only costs
+// 1 OwnerCount (set when featureMultiSignReserve is enabled).
+// Reference: rippled LedgerFormats.h lsfOneOwnerCount = 0x00020000
+const LsfOneOwnerCount uint32 = 0x00020000
+
 // SignerListInfo holds parsed signer list data from a ledger entry.
 type SignerListInfo struct {
 	SignerListID   uint32
 	SignerQuorum  uint32
+	Flags         uint32
 	SignerEntries []AccountSignerEntry
 }
 
@@ -38,6 +44,17 @@ func ParseSignerList(data []byte) (*SignerListInfo, error) {
 
 	signerList := &SignerListInfo{
 		SignerListID: 0,
+	}
+
+	if flags, ok := decoded["Flags"]; ok {
+		switch v := flags.(type) {
+		case float64:
+			signerList.Flags = uint32(v)
+		case int:
+			signerList.Flags = uint32(v)
+		case uint32:
+			signerList.Flags = v
+		}
 	}
 
 	if quorum, ok := decoded["SignerQuorum"]; ok {
@@ -91,7 +108,9 @@ func ParseSignerList(data []byte) (*SignerListInfo, error) {
 }
 
 // SerializeSignerList serializes a SignerList ledger entry.
-func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte) ([]byte, error) {
+// flags should be LsfOneOwnerCount when featureMultiSignReserve is enabled, 0 otherwise.
+// Reference: rippled SetSignerList.cpp writeSignersToSLE()
+func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte, flags uint32) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -102,6 +121,12 @@ func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte)
 		"Account":         ownerAddress,
 		"SignerQuorum":    quorum,
 		"OwnerNode":       "0",
+	}
+
+	// Only set Flags if non-zero, matching rippled's writeSignersToSLE behavior.
+	// Reference: rippled SetSignerList.cpp:429 - if (flags) ledgerEntry->setFieldU32(sfFlags, flags);
+	if flags != 0 {
+		jsonObj["Flags"] = flags
 	}
 
 	if len(entries) > 0 {

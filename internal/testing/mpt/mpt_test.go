@@ -1690,32 +1690,6 @@ func TestMPT_DepositPreauth(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// TestMPT_InvalidInTx
-// Reference: rippled MPToken_test.cpp testMPTInvalidInTx() (lines 1943-2318)
-// This test validates that MPT amounts are rejected in transactions that
-// don't support MPT. This is a comprehensive check across all tx types.
-// --------------------------------------------------------------------------
-
-func TestMPT_InvalidInTx(t *testing.T) {
-	// Reference: rippled lines 1943-2318
-	// This test is rippled-specific (iterates TxFormats) and tests RPC submission.
-	// In the Go implementation, MPT validation happens at the tx type level.
-	// We test the key principle: MPT amounts should be rejected in non-MPT tx types.
-
-	t.Run("OfferCreate_RejectsMPT", func(t *testing.T) {
-		// In rippled, MPT rejection for non-MPT tx types happens at the RPC/serialization
-		// layer (passesLocalChecks + soeMPTNotSupported), NOT in the engine. The Go engine
-		// does not implement this RPC-layer field type constraint check.
-		t.Skip("MPT rejection is RPC-layer (passesLocalChecks/soeMPTNotSupported), not engine-level")
-	})
-
-	t.Run("TrustSet_RejectsMPT", func(t *testing.T) {
-		// Same as OfferCreate: MPT rejection is a serialization/RPC-layer concern.
-		t.Skip("MPT rejection is RPC-layer (passesLocalChecks/soeMPTNotSupported), not engine-level")
-	})
-}
-
-// --------------------------------------------------------------------------
 // TestMPT_TxJsonMetaFields
 // Reference: rippled MPToken_test.cpp testTxJsonMetaFields() (lines 2320-2351)
 // --------------------------------------------------------------------------

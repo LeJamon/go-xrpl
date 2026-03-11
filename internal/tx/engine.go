@@ -1117,6 +1117,186 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 		}
 	}
 
+	// Step 6: checkBatchSign — batch signer authorization
+	// Reference: rippled Batch::checkSign -> Transactor::checkBatchSign
+	// This checks that each BatchSigner is authorized to act as their account.
+	// This runs even when SkipSignatureVerification is true because it checks
+	// authorization (account existence, master key, regular key), not crypto.
+	if bsp, ok := tx.(BatchSignerProvider); ok {
+		if result := e.checkBatchSign(bsp.GetBatchSigners()); result != TesSUCCESS {
+			return result
+		}
+	}
+
+	return TesSUCCESS
+}
+
+// checkBatchSign verifies that each batch signer is authorized to sign for their account.
+// For single-sign signers (SigningPubKey non-empty): derives account from pubkey, checks authorization.
+// For multi-sign signers (SigningPubKey empty): checks signer list exists and quorum is met.
+// Reference: rippled Transactor::checkBatchSign in Transactor.cpp lines 635-679
+func (e *Engine) checkBatchSign(signers []BatchSignerInfo) Result {
+	for _, signer := range signers {
+		signerAccountID, err := state.DecodeAccountID(signer.Account)
+		if err != nil {
+			return TefBAD_AUTH
+		}
+
+		if signer.SigningPubKey == "" {
+			// Multi-sign batch signer: check nested Signers against the account's SignerList.
+			// Reference: rippled checkBatchSign -> checkMultiSign
+			if result := e.checkBatchMultiSign(signerAccountID, signer.Signers); result != TesSUCCESS {
+				return result
+			}
+			continue
+		}
+
+		// Single-sign batch signer: derive account from public key
+		signerAddress, addrErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(signer.SigningPubKey)
+		if addrErr != nil {
+			return TefBAD_AUTH
+		}
+
+		// Read the signer's account root
+		signerAccountKey := keylet.Account(signerAccountID)
+		signerAccountData, readErr := e.view.Read(signerAccountKey)
+
+		if readErr != nil || signerAccountData == nil {
+			// Account doesn't exist: only allowed if the signer pubkey derives to this account
+			// (phantom account pattern — the signer IS the account)
+			if signerAddress != signer.Account {
+				return TefBAD_AUTH
+			}
+			// Phantom account — allowed
+			continue
+		}
+
+		signerAccountRoot, parseErr := state.ParseAccountRoot(signerAccountData)
+		if parseErr != nil {
+			return TefINTERNAL
+		}
+
+		// Check authorization: master key, regular key, or disabled master
+		// Reference: rippled Transactor::checkSingleSign
+		isMasterDisabled := (signerAccountRoot.Flags & state.LsfDisableMaster) != 0
+
+		if signerAddress == signerAccountRoot.RegularKey {
+			// Signed with regular key — allowed
+		} else if !isMasterDisabled && signerAddress == signer.Account {
+			// Signed with enabled master key — allowed
+		} else if isMasterDisabled && signerAddress == signer.Account {
+			// Signed with disabled master key
+			return TefMASTER_DISABLED
+		} else {
+			// Signed with an unauthorized key
+			return TefBAD_AUTH
+		}
+	}
+	return TesSUCCESS
+}
+
+// checkBatchMultiSign verifies a multi-sign batch signer's nested Signers against
+// the account's SignerList. This mirrors rippled's checkMultiSign.
+// Reference: rippled Transactor::checkMultiSign in Transactor.cpp lines 742-911
+func (e *Engine) checkBatchMultiSign(accountID [20]byte, txSigners []SignerInfo) Result {
+	// Read the account's SignerList
+	signerListKey := keylet.SignerList(accountID)
+	signerListData, err := e.view.Read(signerListKey)
+	if err != nil || signerListData == nil {
+		return TefNOT_MULTI_SIGNING
+	}
+
+	signerList, parseErr := state.ParseSignerList(signerListData)
+	if parseErr != nil {
+		return TefINTERNAL
+	}
+
+	// Walk through txSigners and match against account signer entries.
+	// Both lists are sorted by account. All signers must be valid.
+	// Reference: rippled checkMultiSign — linear walk with sorted lists
+	var weightSum uint32
+	accountSignerIdx := 0
+
+	for _, txSigner := range txSigners {
+		txSignerAccountID, decErr := state.DecodeAccountID(txSigner.Account)
+		if decErr != nil {
+			return TefBAD_SIGNATURE
+		}
+
+		// Advance through account signers to find a match
+		for accountSignerIdx < len(signerList.SignerEntries) &&
+			signerList.SignerEntries[accountSignerIdx].Account < txSigner.Account {
+			accountSignerIdx++
+		}
+		if accountSignerIdx >= len(signerList.SignerEntries) {
+			return TefBAD_SIGNATURE
+		}
+		if signerList.SignerEntries[accountSignerIdx].Account != txSigner.Account {
+			return TefBAD_SIGNATURE
+		}
+
+		// Derive account from the signer's public key
+		var signingAcctIDFromPubKey string
+		if txSigner.SigningPubKey == "" {
+			// In simulation/dry-run mode, empty pubkey maps to the signer account itself
+			signingAcctIDFromPubKey = txSigner.Account
+		} else {
+			addr, addrErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(txSigner.SigningPubKey)
+			if addrErr != nil {
+				return TefBAD_SIGNATURE
+			}
+			signingAcctIDFromPubKey = addr
+		}
+
+		// Read the signer's account root
+		signerAccountKey := keylet.Account(txSignerAccountID)
+		signerAccountData, readErr := e.view.Read(signerAccountKey)
+
+		if signingAcctIDFromPubKey == txSigner.Account {
+			// Either Phantom or Master key
+			if readErr == nil && signerAccountData != nil {
+				// Account exists — check master key not disabled
+				signerAccountRoot, parseErr := state.ParseAccountRoot(signerAccountData)
+				if parseErr != nil {
+					return TefINTERNAL
+				}
+				if (signerAccountRoot.Flags & state.LsfDisableMaster) != 0 {
+					return TefMASTER_DISABLED
+				}
+			}
+			// Phantom account or master key allowed — continue
+		} else {
+			// May be a Regular Key
+			if readErr != nil || signerAccountData == nil {
+				// Non-phantom signer lacks account root
+				return TefBAD_SIGNATURE
+			}
+
+			signerAccountRoot, parseErr := state.ParseAccountRoot(signerAccountData)
+			if parseErr != nil {
+				return TefINTERNAL
+			}
+
+			if signerAccountRoot.RegularKey == "" {
+				// Account lacks RegularKey
+				return TefBAD_SIGNATURE
+			}
+
+			if signingAcctIDFromPubKey != signerAccountRoot.RegularKey {
+				// Wrong RegularKey
+				return TefBAD_SIGNATURE
+			}
+		}
+
+		// Signer is legitimate — add weight
+		weightSum += uint32(signerList.SignerEntries[accountSignerIdx].SignerWeight)
+	}
+
+	// Check quorum
+	if weightSum < signerList.SignerQuorum {
+		return TefBAD_QUORUM
+	}
+
 	return TesSUCCESS
 }
 

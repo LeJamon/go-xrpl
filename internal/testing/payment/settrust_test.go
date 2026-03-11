@@ -7,6 +7,8 @@ import (
 
 	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/stretchr/testify/require"
 )
 
@@ -305,11 +307,104 @@ func TestSetTrust_DisallowIncoming(t *testing.T) {
 }
 
 // TestSetTrust_PaymentsWithPathsAndFees tests payments with paths and fees.
-// From rippled: TrustAndBalance_test::testPaymentsWithPathsAndFees
+// From rippled: TrustAndBalance_test::testIndirectMultiPath
+//
+// alice pays amazon 150 gw/USD via two paths: through bob and through carol.
+// Each intermediary holds 100 gw/USD and has a trust line to alice for alice/USD.
+// The payment ripples through both paths, with or without gw's transfer rate.
 func TestSetTrust_PaymentsWithPathsAndFees(t *testing.T) {
-	t.Skip("TODO: Payments with paths and fees requires path finding and transfer rate")
+	t.Run("WithoutTransferFee", func(t *testing.T) {
+		testIndirectMultiPath(t, false)
+	})
+	t.Run("WithTransferFee", func(t *testing.T) {
+		testIndirectMultiPath(t, true)
+	})
+}
 
-	t.Log("SetTrust payments with paths and fees test: requires path support")
+func testIndirectMultiPath(t *testing.T, withRate bool) {
+	t.Helper()
+	env := xrplgoTesting.NewTestEnv(t)
+
+	gw := xrplgoTesting.NewAccount("gateway")
+	amazon := xrplgoTesting.NewAccount("amazon")
+	alice := xrplgoTesting.NewAccount("alice")
+	bob := xrplgoTesting.NewAccount("bob")
+	carol := xrplgoTesting.NewAccount("carol")
+
+	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(amazon, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(carol, uint64(xrplgoTesting.XRP(10000)))
+	env.Close()
+
+	// Set up trust lines
+	result := env.Submit(trustset.TrustLine(amazon, "USD", gw, "2000").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(trustset.TrustLine(bob, "USD", alice, "600").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "1000").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(trustset.TrustLine(carol, "USD", alice, "700").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(trustset.TrustLine(carol, "USD", gw, "1000").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Set transfer rate on gw if needed (1.1x = 10% fee)
+	if withRate {
+		env.SetTransferRate(gw, 1_100_000_000)
+		env.Close()
+	}
+
+	// Fund bob and carol with 100 gw/USD each
+	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
+	result = env.Submit(PayIssued(gw, bob, usd100).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(PayIssued(gw, carol, usd100).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// alice pays amazon 150 gw/USD via paths through bob and carol
+	usd150 := tx.NewIssuedAmountFromFloat64(150, "USD", gw.Address)
+	paths := [][]payment.PathStep{
+		{accountPath(bob)},
+		{accountPath(carol)},
+	}
+
+	var payTx tx.Transaction
+	if withRate {
+		sendMax := tx.NewIssuedAmountFromFloat64(200, "USD", alice.Address)
+		payTx = PayIssued(alice, amazon, usd150).
+			SendMax(sendMax).
+			Paths(paths).
+			Build()
+	} else {
+		payTx = PayIssued(alice, amazon, usd150).
+			Paths(paths).
+			Build()
+	}
+
+	result = env.Submit(payTx)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Verify balances
+	if withRate {
+		// With transfer rate 1.1x, carol retains some gw/USD:
+		// alice->carol transfers 65 alice/USD, carol->gw transfers ~65/1.1 gw/USD
+		// Rippled expects: alice has -65 carol/USD (6500000000000000e-14 negative)
+		xrplgoTesting.RequireIOUBalanceApprox(t, env, alice, carol, "USD", -65, 0.01)
+		xrplgoTesting.RequireIOUBalance(t, env, carol, gw, "USD", 35)
+	} else {
+		// Without rate: alice issued 50 to carol, carol sent 50 gw/USD
+		xrplgoTesting.RequireIOUBalance(t, env, alice, carol, "USD", -50)
+		xrplgoTesting.RequireIOUBalance(t, env, carol, gw, "USD", 50)
+	}
+	// Common assertions for both cases
+	xrplgoTesting.RequireIOUBalance(t, env, alice, bob, "USD", -100)
+	xrplgoTesting.RequireIOUBalance(t, env, amazon, gw, "USD", 150)
+	xrplgoTesting.RequireIOUBalance(t, env, bob, gw, "USD", 0)
 }
 
 // TestSetTrust_InvoiceID tests setting invoice ID on payment.

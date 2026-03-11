@@ -174,15 +174,183 @@ func TestDepositAuth_PayXRP_AtReserve(t *testing.T) {
 }
 
 // TestDepositAuth_NoRipple tests DepositAuth interaction with NoRipple flag.
-// From rippled: testNoRipple
+// From rippled: DepositAuth_test::testNoRipple
+// Reference: DepositAuth_test.cpp lines 282-380
+//
+// Key assertion: DepositAuth does NOT change any behaviors regarding rippling
+// and the NoRipple flag. Rippling is blocked only when BOTH the prev and next
+// trust lines have NoRipple set on the intermediary account's side.
 func TestDepositAuth_NoRipple(t *testing.T) {
-	t.Skip("TODO: DepositAuth+NoRipple requires path payment support")
+	// testIssuer: gw1 is the issuer AND intermediary.
+	//   alice <--(NoRipple?)-- gw1 --(NoRipple?)--> bob
+	//   alice holds 10 USD/gw1, pays bob 10 USD/gw1 via path(gw1)
+	testIssuer := func(t *testing.T, noRipplePrev, noRippleNext, withDepositAuth bool) {
+		t.Helper()
+		env := xrplgoTesting.NewTestEnv(t)
 
-	// Test various combinations of NoRipple and DepositAuth flags
-	// DepositAuth should not affect rippling behavior
-	// NoRipple controls whether funds can ripple through an account
+		gw1 := xrplgoTesting.NewAccount("gw1")
+		alice := xrplgoTesting.NewAccount("alice")
+		bob := xrplgoTesting.NewAccount("bob")
 
-	t.Log("DepositAuth NoRipple test: requires path payment support")
+		env.FundAmount(gw1, uint64(xrplgoTesting.XRP(10000)))
+		env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+		env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+		env.Close()
+
+		// gw1 sets NoRipple on alice trust line (gw1's side)
+		gwAliceTrust := trustset.TrustLine(gw1, "USD", alice, "10")
+		if noRipplePrev {
+			gwAliceTrust = gwAliceTrust.NoRipple()
+		}
+		result := env.Submit(gwAliceTrust.Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+
+		// gw1 sets NoRipple on bob trust line (gw1's side)
+		gwBobTrust := trustset.TrustLine(gw1, "USD", bob, "10")
+		if noRippleNext {
+			gwBobTrust = gwBobTrust.NoRipple()
+		}
+		result = env.Submit(gwBobTrust.Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+
+		// alice and bob trust gw1
+		result = env.Submit(trustset.TrustLine(alice, "USD", gw1, "10").Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+		result = env.Submit(trustset.TrustLine(bob, "USD", gw1, "10").Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// Fund alice with 10 USD from gw1
+		usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw1.Address)
+		result = env.Submit(PayIssued(gw1, alice, usd10).Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// Optionally set DepositAuth on gw1
+		if withDepositAuth {
+			env.EnableDepositAuth(gw1)
+			env.Close()
+		}
+
+		// alice pays bob 10 USD via path through gw1
+		payTx := PayIssued(alice, bob, usd10).Build()
+		result = env.Submit(payTx)
+
+		if noRipplePrev && noRippleNext {
+			require.Equal(t, "tecPATH_DRY", result.Code,
+				"Should fail when gw1 has NoRipple on both trust lines")
+		} else {
+			xrplgoTesting.RequireTxSuccess(t, result)
+		}
+	}
+
+	// testNonIssuer: alice is the non-issuer intermediary.
+	//   gw1 <--(NoRipple?)-- alice --(NoRipple?)--> gw2
+	//   alice holds 10 USD2 from gw2. Payment: gw1 pays gw2 10 USD2
+	//   via path(alice), sendmax(USD1(10)).
+	testNonIssuer := func(t *testing.T, noRipplePrev, noRippleNext, withDepositAuth bool) {
+		t.Helper()
+		env := xrplgoTesting.NewTestEnv(t)
+
+		gw1 := xrplgoTesting.NewAccount("gw1")
+		gw2 := xrplgoTesting.NewAccount("gw2")
+		alice := xrplgoTesting.NewAccount("alice")
+
+		env.FundAmount(gw1, uint64(xrplgoTesting.XRP(10000)))
+		env.FundAmount(gw2, uint64(xrplgoTesting.XRP(10000)))
+		env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+		env.Close()
+
+		// alice trusts gw1 with NoRipple flag
+		aliceGw1Trust := trustset.TrustLine(alice, "USD", gw1, "10")
+		if noRipplePrev {
+			aliceGw1Trust = aliceGw1Trust.NoRipple()
+		}
+		result := env.Submit(aliceGw1Trust.Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+
+		// alice trusts gw2 with NoRipple flag
+		aliceGw2Trust := trustset.TrustLine(alice, "USD", gw2, "10")
+		if noRippleNext {
+			aliceGw2Trust = aliceGw2Trust.NoRipple()
+		}
+		result = env.Submit(aliceGw2Trust.Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// Fund alice with 10 USD from gw2
+		usd2_10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw2.Address)
+		result = env.Submit(PayIssued(gw2, alice, usd2_10).Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// Optionally set DepositAuth on alice
+		if withDepositAuth {
+			env.EnableDepositAuth(alice)
+			env.Close()
+		}
+
+		// gw1 pays gw2 10 USD/gw2 via path(alice), sendmax(USD/gw1(10))
+		usd1_10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw1.Address)
+		pathAlice := [][]paymentPkg.PathStep{{{Account: alice.Address}}}
+		payTx := PayIssued(gw1, gw2, usd2_10).
+			SendMax(usd1_10).
+			Paths(pathAlice).
+			Build()
+		result = env.Submit(payTx)
+
+		if noRipplePrev && noRippleNext {
+			require.Equal(t, "tecPATH_DRY", result.Code,
+				"Should fail when alice has NoRipple on both trust lines")
+		} else {
+			xrplgoTesting.RequireTxSuccess(t, result)
+		}
+	}
+
+	// Run all 8 combinations of (noRipplePrev, noRippleNext, withDepositAuth)
+	for i := 0; i < 8; i++ {
+		noRipplePrev := (i & 0x1) != 0
+		noRippleNext := (i & 0x2) != 0
+		withDepositAuth := (i & 0x4) != 0
+
+		name := "issuer/"
+		if noRipplePrev {
+			name += "noRipplePrev"
+		} else {
+			name += "ripplePrev"
+		}
+		name += "_"
+		if noRippleNext {
+			name += "noRippleNext"
+		} else {
+			name += "rippleNext"
+		}
+		if withDepositAuth {
+			name += "_depositAuth"
+		}
+		t.Run(name, func(t *testing.T) {
+			testIssuer(t, noRipplePrev, noRippleNext, withDepositAuth)
+		})
+
+		nameNI := "nonIssuer/"
+		if noRipplePrev {
+			nameNI += "noRipplePrev"
+		} else {
+			nameNI += "ripplePrev"
+		}
+		nameNI += "_"
+		if noRippleNext {
+			nameNI += "noRippleNext"
+		} else {
+			nameNI += "rippleNext"
+		}
+		if withDepositAuth {
+			nameNI += "_depositAuth"
+		}
+		t.Run(nameNI, func(t *testing.T) {
+			testNonIssuer(t, noRipplePrev, noRippleNext, withDepositAuth)
+		})
+	}
 }
 
 // TestDepositPreauth_Enable tests DepositPreauth creation and deletion.

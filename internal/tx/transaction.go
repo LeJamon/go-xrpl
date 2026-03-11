@@ -70,6 +70,28 @@ type CustomBaseFeeCalculator interface {
 	CalculateBaseFee(config EngineConfig) uint64
 }
 
+// BatchSignerInfo represents a single batch signer entry for authorization checking.
+// Reference: rippled sfBatchSigners array entries.
+type BatchSignerInfo struct {
+	Account       string       // Signer's account address
+	SigningPubKey string       // Signer's public key hex (empty for multi-sign)
+	Signers       []SignerInfo // Nested multi-sign signers (non-empty when SigningPubKey is "")
+}
+
+// SignerInfo represents a single signer within a multi-sign batch signer.
+// Reference: rippled sfSigners array within sfBatchSigner
+type SignerInfo struct {
+	Account       string // Signer's account address
+	SigningPubKey string // Signer's public key hex
+}
+
+// BatchSignerProvider is implemented by transaction types that have batch-level signers
+// (currently only Batch). The engine uses this to perform checkBatchSign authorization.
+// Reference: rippled Batch::checkSign -> Transactor::checkBatchSign
+type BatchSignerProvider interface {
+	GetBatchSigners() []BatchSignerInfo
+}
+
 // Amount is an alias for state.Amount — represents either XRP (as drops int64) or an issued currency amount
 type Amount = state.Amount
 

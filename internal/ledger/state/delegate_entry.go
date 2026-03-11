@@ -166,3 +166,14 @@ func (d *DelegateData) HasTxPermission(txType uint32) bool {
 	}
 	return false
 }
+
+// LookupPermissionValue converts a permission name (e.g., "Payment") to its
+// numeric delegatable permission value using the definitions package.
+// Returns 0 if the name is not found.
+func LookupPermissionValue(name string) uint32 {
+	pv, err := definitions.Get().GetDelegatablePermissionValueByName(name)
+	if err != nil {
+		return 0
+	}
+	return uint32(pv)
+}
