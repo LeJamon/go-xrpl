@@ -99,7 +99,8 @@ const (
 	RpcINVALID_LGR_RANGE      = 45
 
 	// Path finding errors
-	RpcNO_PATH = 46
+	RpcNO_PATH       = 46
+	RpcNO_PF_REQUEST = 53 // No pathfinding request in progress (rippled: rpcNO_PF_REQUEST)
 
 	// Implementation status errors
 	RpcNOT_IMPL      = 47 // Feature not implemented
@@ -187,6 +188,11 @@ func RpcErrorNotEnabled(feature string) *RpcError {
 
 func RpcErrorAmendmentBlocked() *RpcError {
 	return NewRpcError(RpcAMENDMENT_BLOCKED, "amendmentBlocked", "amendmentBlocked", "Amendment blocked, need upgrade.")
+}
+
+// RpcErrorNoPathRequest returns an error when close/status is called without an active path_find session
+func RpcErrorNoPathRequest() *RpcError {
+	return NewRpcError(RpcNO_PF_REQUEST, "noPathRequest", "noPathRequest", "No pathfinding request in progress.")
 }
 
 // RpcErrorObjectNotFound returns an error for object not found (matches rippled rpcOBJECT_NOT_FOUND)
