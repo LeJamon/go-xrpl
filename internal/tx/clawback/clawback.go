@@ -2,7 +2,6 @@ package clawback
 
 import (
 	"encoding/hex"
-	"errors"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
@@ -25,12 +24,12 @@ const (
 
 // Clawback errors
 var (
-	ErrClawbackAmountRequired  = errors.New("temBAD_AMOUNT: Amount is required")
-	ErrClawbackAmountNotToken  = errors.New("temBAD_AMOUNT: cannot claw back XRP")
-	ErrClawbackAmountNotPos    = errors.New("temBAD_AMOUNT: Amount must be positive")
-	ErrClawbackHolderWithToken = errors.New("temMALFORMED: Holder field cannot be present for token clawback")
-	ErrClawbackHolderRequired  = errors.New("temMALFORMED: Holder is required for MPToken clawback")
-	ErrClawbackHolderIsSelf    = errors.New("temMALFORMED: Holder cannot be the same as issuer")
+	ErrClawbackAmountRequired  = tx.Errorf(tx.TemBAD_AMOUNT, "Amount is required")
+	ErrClawbackAmountNotToken  = tx.Errorf(tx.TemBAD_AMOUNT, "cannot claw back XRP")
+	ErrClawbackAmountNotPos    = tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
+	ErrClawbackHolderWithToken = tx.Errorf(tx.TemMALFORMED, "Holder field cannot be present for token clawback")
+	ErrClawbackHolderRequired  = tx.Errorf(tx.TemMALFORMED, "Holder is required for MPToken clawback")
+	ErrClawbackHolderIsSelf    = tx.Errorf(tx.TemMALFORMED, "Holder cannot be the same as issuer")
 )
 
 // Clawback claws back tokens from a trust line or MPToken.
@@ -81,8 +80,8 @@ func (c *Clawback) Validate() error {
 
 	// Check for invalid flags
 	// Reference: rippled Clawback.cpp:87-88
-	if c.Common.Flags != nil && *c.Common.Flags&tx.TfUniversalMask != 0 {
-		return tx.ErrInvalidFlags
+	if err := tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	// Amount is required and must be positive
@@ -413,12 +412,8 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Write holder account back to ledger
-		holderUpdatedData, serErr := state.SerializeAccountRoot(holderAccount)
-		if serErr != nil {
-			return tx.TefINTERNAL
-		}
-		if err := ctx.View.Update(holderAccountKey, holderUpdatedData); err != nil {
-			return tx.TefINTERNAL
+		if result := ctx.UpdateAccountRoot(holderID, holderAccount); result != tx.TesSUCCESS {
+			return result
 		}
 	} else {
 		// Update reserve flags

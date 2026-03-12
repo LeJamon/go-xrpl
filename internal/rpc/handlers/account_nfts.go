@@ -7,7 +7,7 @@ import (
 )
 
 // AccountNftsMethod handles the account_nfts RPC method
-type AccountNftsMethod struct{}
+type AccountNftsMethod struct{ BaseHandler }
 
 func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
@@ -16,19 +16,16 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		types.PaginationParams
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
-	if request.Account == "" {
-		return nil, types.RpcErrorInvalidParams("Missing required parameter: account")
+	if err := RequireAccount(request.Account); err != nil {
+		return nil, err
 	}
 
-	// Check if ledger service is available
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Determine ledger index to use
@@ -98,14 +95,3 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	return response, nil
 }
 
-func (m *AccountNftsMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *AccountNftsMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *AccountNftsMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

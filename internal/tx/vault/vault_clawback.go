@@ -2,7 +2,6 @@ package vault
 
 import (
 	"encoding/hex"
-	"errors"
 
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -52,8 +51,8 @@ func (v *VaultClawback) Validate() error {
 
 	// Check for invalid flags (universal mask)
 	// Reference: rippled VaultClawback.cpp:42-43
-	if v.Common.Flags != nil && *v.Common.Flags&tx.TfUniversalMask != 0 {
-		return tx.ErrInvalidFlags
+	if err := tx.CheckFlags(v.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	// VaultID is required and cannot be zero
@@ -63,7 +62,7 @@ func (v *VaultClawback) Validate() error {
 	}
 	vaultBytes, err := hex.DecodeString(v.VaultID)
 	if err != nil || len(vaultBytes) != 32 {
-		return errors.New("temMALFORMED: VaultID must be a valid 256-bit hash")
+		return tx.Errorf(tx.TemMALFORMED, "VaultID must be a valid 256-bit hash")
 	}
 	isZero := true
 	for _, b := range vaultBytes {

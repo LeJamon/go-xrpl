@@ -1,6 +1,6 @@
 package did
 
-import "errors"
+import "github.com/LeJamon/goXRPLd/internal/tx"
 
 // DID field length constants
 // Reference: rippled Protocol.h
@@ -17,9 +17,9 @@ const (
 
 // DID validation errors
 var (
-	ErrDIDEmpty       = errors.New("temEMPTY_DID: DID transaction must have at least one non-empty field")
-	ErrDIDURITooLong  = errors.New("temMALFORMED: URI exceeds maximum length of 256 bytes")
-	ErrDIDDocTooLong  = errors.New("temMALFORMED: DIDDocument exceeds maximum length of 256 bytes")
-	ErrDIDDataTooLong = errors.New("temMALFORMED: Data exceeds maximum length of 256 bytes")
-	ErrDIDInvalidHex  = errors.New("temMALFORMED: field must be valid hex string")
+	ErrDIDEmpty       = tx.Errorf(tx.TemEMPTY_DID, "DID transaction must have at least one non-empty field")
+	ErrDIDURITooLong  = tx.Errorf(tx.TemMALFORMED, "URI exceeds maximum length of 256 bytes")
+	ErrDIDDocTooLong  = tx.Errorf(tx.TemMALFORMED, "DIDDocument exceeds maximum length of 256 bytes")
+	ErrDIDDataTooLong = tx.Errorf(tx.TemMALFORMED, "Data exceeds maximum length of 256 bytes")
+	ErrDIDInvalidHex  = tx.Errorf(tx.TemMALFORMED, "field must be valid hex string")
 )

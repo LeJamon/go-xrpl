@@ -22,21 +22,10 @@ import (
 //   - This is admin-only and generates keys for validator configuration
 //   - Note: The crypto primitives already exist in internal/crypto/; this just needs
 //     wiring to RPC format (base58 encoding of seeds/keys)
-type ValidationCreateMethod struct{}
+type ValidationCreateMethod struct{ AdminHandler }
 
 func (m *ValidationCreateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	return nil, types.NewRpcError(types.RpcNOT_IMPL, "notImplemented", "notImplemented",
 		"validation_create requires validator key generation wiring")
 }
 
-func (m *ValidationCreateMethod) RequiredRole() types.Role {
-	return types.RoleAdmin
-}
-
-func (m *ValidationCreateMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *ValidationCreateMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

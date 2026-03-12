@@ -9,7 +9,7 @@ import (
 // StopMethod handles the stop RPC method.
 // Initiates a graceful server shutdown.
 // Reference: rippled Stop.cpp
-type StopMethod struct{}
+type StopMethod struct{ AdminHandler }
 
 func (m *StopMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	if types.Services == nil || types.Services.ShutdownFunc == nil {
@@ -26,14 +26,3 @@ func (m *StopMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (inte
 	return response, nil
 }
 
-func (m *StopMethod) RequiredRole() types.Role {
-	return types.RoleAdmin
-}
-
-func (m *StopMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *StopMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

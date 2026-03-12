@@ -16,6 +16,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx/invariants"
 	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // Validation constants matching rippled
@@ -37,8 +38,8 @@ const (
 	// Reference: rippled SystemParameters.h isLegalAmount() — fee <= INITIAL_XRP
 	DefaultMaxFee = 100_000_000_000_000_000 // 100 billion XRP in drops
 
-	// QualityOne Per rippled: QUALITY_ONE (1e9 = 1000000000) is treated as default (stored as 0)
-	QualityOne uint32 = 1000000000
+	// QualityOne is the identity transfer rate (1e9). Alias for protocol.QualityOne.
+	QualityOne = protocol.QualityOne
 )
 
 // Engine processes transactions against a ledger
@@ -684,6 +685,13 @@ func (e *Engine) preflight(tx Transaction) Result {
 // If the error message starts with a valid TER code prefix (e.g., "temREDUNDANT:"),
 // it returns the corresponding Result. Otherwise, it returns TemINVALID.
 func parseValidationError(err error) Result {
+	// Fast path: structured ResultError carries the code directly
+	var re *ResultError
+	if errors.As(err, &re) {
+		return re.Code
+	}
+
+	// Legacy fallback: string-prefix matching for unmigrated callers
 	msg := err.Error()
 
 	// Check for known TER code prefixes

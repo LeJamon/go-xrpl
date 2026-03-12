@@ -50,6 +50,19 @@ func validateAMMAmountWithPair(amt tx.Amount, asset1, asset2 *tx.Asset, validZer
 	return ""
 }
 
+// ammErrCodeToResult maps a string error code from validateAMMAmountWithPair
+// to its corresponding tx.Result constant.
+func ammErrCodeToResult(code string) tx.Result {
+	switch code {
+	case "temBAD_AMM_TOKENS":
+		return tx.TemBAD_AMM_TOKENS
+	case "temBAD_AMOUNT":
+		return tx.TemBAD_AMOUNT
+	default:
+		return tx.TemMALFORMED
+	}
+}
+
 // matchesAssetByIssue checks if two Assets represent the same issue.
 // Handles XRP being represented as either "" or "XRP" for currency.
 func matchesAssetByIssue(a, b tx.Asset) bool {

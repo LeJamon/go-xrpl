@@ -2,7 +2,6 @@ package credential
 
 import (
 	"encoding/hex"
-	"errors"
 
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -50,8 +49,8 @@ func (c *CredentialAccept) Validate() error {
 
 	// Check for invalid flags (tfUniversalMask)
 	// Reference: rippled Credentials.cpp:304-308
-	if c.Common.Flags != nil && *c.Common.Flags&tx.TfUniversalMask != 0 {
-		return tx.ErrInvalidFlags
+	if err := tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	// Issuer is required and must not be zero
@@ -73,7 +72,7 @@ func (c *CredentialAccept) Validate() error {
 	}
 	decoded, err := hex.DecodeString(c.CredentialType)
 	if err != nil {
-		return errors.New("temMALFORMED: CredentialType must be valid hex string")
+		return tx.Errorf(tx.TemMALFORMED, "CredentialType must be valid hex string")
 	}
 	if len(decoded) == 0 {
 		return ErrCredentialTypeEmpty
@@ -246,13 +245,8 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Serialize and update issuer account
-	updatedIssuerData, err := state.SerializeAccountRoot(issuerAccount)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
-	if err := ctx.View.Update(issuerAccountKeylet, updatedIssuerData); err != nil {
-		return tx.TefINTERNAL
+	if result := ctx.UpdateAccountRoot(issuerID, issuerAccount); result != tx.TesSUCCESS {
+		return result
 	}
 
 	// Increase subject's owner count

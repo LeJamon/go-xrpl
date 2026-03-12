@@ -7,7 +7,7 @@ import (
 )
 
 // PingMethod handles the ping RPC method
-type PingMethod struct{}
+type PingMethod struct{ BaseHandler }
 
 func (m *PingMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	response := map[string]interface{}{}
@@ -30,14 +30,3 @@ func (m *PingMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (inte
 	return response, nil
 }
 
-func (m *PingMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *PingMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *PingMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

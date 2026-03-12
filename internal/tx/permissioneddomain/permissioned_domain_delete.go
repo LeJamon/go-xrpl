@@ -2,7 +2,6 @@ package permissioneddomain
 
 import (
 	"encoding/hex"
-	"errors"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -47,8 +46,8 @@ func (p *PermissionedDomainDelete) Validate() error {
 
 	// Check for invalid flags (tfUniversalMask)
 	// Reference: rippled PermissionedDomainDelete.cpp:36-40
-	if p.Common.Flags != nil && *p.Common.Flags&tx.TfUniversalMask != 0 {
-		return tx.ErrInvalidFlags
+	if err := tx.CheckFlags(p.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	// DomainID is required
@@ -60,7 +59,7 @@ func (p *PermissionedDomainDelete) Validate() error {
 	// Validate DomainID is valid 256-bit hash and not zero
 	domainBytes, err := hex.DecodeString(p.DomainID)
 	if err != nil || len(domainBytes) != 32 {
-		return errors.New("temMALFORMED: DomainID must be a valid 256-bit hash")
+		return tx.Errorf(tx.TemMALFORMED, "DomainID must be a valid 256-bit hash")
 	}
 
 	isZero := true

@@ -13,21 +13,10 @@ import (
 //   The WebSocket server handles actual unsubscriptions.
 //   - Reference: rippled Unsubscribe.cpp
 //   - Removes subscriptions created by subscribe command
-type UnsubscribeMethod struct{}
+type UnsubscribeMethod struct{ BaseHandler }
 
 func (m *UnsubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	return nil, types.NewRpcError(types.RpcNOT_SUPPORTED, "notSupported", "notSupported",
 		"unsubscribe is only available via WebSocket")
 }
 
-func (m *UnsubscribeMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *UnsubscribeMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *UnsubscribeMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

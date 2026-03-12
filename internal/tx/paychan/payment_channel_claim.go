@@ -2,7 +2,6 @@ package paychan
 
 import (
 	"encoding/hex"
-	"errors"
 	"sort"
 	"strings"
 
@@ -71,14 +70,13 @@ func (p *PaymentChannelClaim) Validate() error {
 	// Validate Channel is valid hex (256-bit hash)
 	channelBytes, err := hex.DecodeString(p.Channel)
 	if err != nil || len(channelBytes) != 32 {
-		return errors.New("temMALFORMED: Channel must be a valid 256-bit hash")
+		return tx.Errorf(tx.TemMALFORMED, "Channel must be a valid 256-bit hash")
 	}
 
 	// Validate flags - fix1543
 	flags := p.GetFlags()
-	validFlags := tfPayChanRenew | tfPayChanClose | tx.TfUniversal
-	if flags & ^validFlags != 0 {
-		return tx.ErrInvalidFlags
+	if err := tx.CheckFlags(flags, ^(tfPayChanRenew | tfPayChanClose | tx.TfUniversal)); err != nil {
+		return err
 	}
 
 	// Cannot set both tfClose and tfRenew
@@ -89,22 +87,22 @@ func (p *PaymentChannelClaim) Validate() error {
 	// Validate Balance if present
 	if p.Balance != nil {
 		if !p.Balance.IsNative() {
-			return errors.New("temBAD_AMOUNT: Balance must be XRP")
+			return tx.Errorf(tx.TemBAD_AMOUNT, "Balance must be XRP")
 		}
 		balVal := p.Balance.Drops()
 		if balVal <= 0 {
-			return errors.New("temBAD_AMOUNT: Balance must be positive")
+			return tx.Errorf(tx.TemBAD_AMOUNT, "Balance must be positive")
 		}
 	}
 
 	// Validate Amount if present
 	if p.Amount != nil {
 		if !p.Amount.IsNative() {
-			return errors.New("temBAD_AMOUNT: Amount must be XRP")
+			return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be XRP")
 		}
 		amtVal := p.Amount.Drops()
 		if amtVal <= 0 {
-			return errors.New("temBAD_AMOUNT: Amount must be positive")
+			return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
 		}
 	}
 
@@ -121,12 +119,12 @@ func (p *PaymentChannelClaim) Validate() error {
 	// Reference: rippled credentials::checkFields()
 	if p.CredentialIDs != nil {
 		if len(p.CredentialIDs) == 0 || len(p.CredentialIDs) > 8 {
-			return errors.New("temMALFORMED: CredentialIDs array size is invalid")
+			return tx.Errorf(tx.TemMALFORMED, "CredentialIDs array size is invalid")
 		}
 		seen := make(map[string]bool, len(p.CredentialIDs))
 		for _, id := range p.CredentialIDs {
 			if seen[id] {
-				return errors.New("temMALFORMED: duplicates in credentials")
+				return tx.Errorf(tx.TemMALFORMED, "duplicates in credentials")
 			}
 			seen[id] = true
 		}

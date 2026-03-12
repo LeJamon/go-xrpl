@@ -10,7 +10,7 @@ import (
 
 // NftSellOffersMethod handles the nft_sell_offers RPC method
 // Reference: rippled NFTOffers.cpp doNFTSellOffers
-type NftSellOffersMethod struct{}
+type NftSellOffersMethod struct{ BaseHandler }
 
 func (m *NftSellOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
@@ -20,10 +20,8 @@ func (m *NftSellOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		Marker string  `json:"marker,omitempty"`
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
 	// Check for missing nft_id parameter - matching rippled's missing_field_error
@@ -45,9 +43,8 @@ func (m *NftSellOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	var nftID [32]byte
 	copy(nftID[:], nftIDBytes)
 
-	// Check if ledger service is available
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Determine ledger index to use
@@ -135,14 +132,3 @@ func (m *NftSellOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	return response, nil
 }
 
-func (m *NftSellOffersMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *NftSellOffersMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *NftSellOffersMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

@@ -3,7 +3,6 @@ package escrow
 
 import (
 	"encoding/hex"
-	"errors"
 	"fmt"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
@@ -67,37 +66,37 @@ func (e *EscrowCreate) Validate() error {
 
 	// Check for invalid flags
 	// Reference: rippled Escrow.cpp preflight() fix1543 flag check
-	if e.GetFlags()&tx.TfUniversalMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags")
+	if err := tx.CheckFlags(e.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
-	if e.Destination == "" {
-		return errors.New("temDST_NEEDED: Destination is required")
+	if err := tx.CheckDestRequired(e.Destination); err != nil {
+		return err
 	}
 
 	// Amount must be positive
 	// Reference: rippled Escrow.cpp:146-147
 	if e.Amount.IsZero() || e.Amount.IsNegative() {
-		return errors.New("temBAD_AMOUNT: Amount must be positive")
+		return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
 	}
 
 	// Must be XRP (unless featureTokenEscrow is enabled)
 	// Reference: rippled Escrow.cpp:131-148
 	if !e.Amount.IsNative() {
-		return errors.New("temBAD_AMOUNT: escrow can only hold XRP")
+		return tx.Errorf(tx.TemBAD_AMOUNT, "escrow can only hold XRP")
 	}
 
 	// Must have at least one timeout value
 	// Reference: rippled Escrow.cpp:151-152
 	if e.CancelAfter == nil && e.FinishAfter == nil {
-		return errors.New("temBAD_EXPIRATION: must specify CancelAfter or FinishAfter")
+		return tx.Errorf(tx.TemBAD_EXPIRATION, "must specify CancelAfter or FinishAfter")
 	}
 
 	// If both times are specified, CancelAfter must be strictly after FinishAfter
 	// Reference: rippled Escrow.cpp:156-158
 	if e.CancelAfter != nil && e.FinishAfter != nil {
 		if *e.CancelAfter <= *e.FinishAfter {
-			return errors.New("temBAD_EXPIRATION: CancelAfter must be after FinishAfter")
+			return tx.Errorf(tx.TemBAD_EXPIRATION, "CancelAfter must be after FinishAfter")
 		}
 	}
 
@@ -108,10 +107,10 @@ func (e *EscrowCreate) Validate() error {
 	// Reference: rippled Escrow.cpp:170-190 condition deserialization
 	if e.Condition != nil {
 		if *e.Condition == "" {
-			return errors.New("temMALFORMED: empty condition")
+			return tx.Errorf(tx.TemMALFORMED, "empty condition")
 		}
 		if err := ValidateConditionFormat(*e.Condition); err != nil {
-			return errors.New("temMALFORMED: invalid condition")
+			return tx.Errorf(tx.TemMALFORMED, "invalid condition")
 		}
 	}
 
@@ -163,28 +162,11 @@ func (ec *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TemINVALID
 	}
 
-	// Verify destination exists
-	// Reference: rippled Escrow.cpp:511-512
-	destID, err := state.DecodeAccountID(ec.Destination)
-	if err != nil {
-		return tx.TemINVALID
-	}
-
-	destKey := keylet.Account(destID)
-	destData, err := ctx.View.Read(destKey)
-	if err != nil || destData == nil {
-		return tx.TecNO_DST
-	}
-
-	destAccount, err := state.ParseAccountRoot(destData)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
-	// Pseudo-accounts cannot receive escrow.
-	// Reference: rippled Escrow.cpp:373-378
-	if (destAccount.Flags & state.LsfAMM) != 0 {
-		return tx.TecNO_PERMISSION
+	// Verify destination exists and is not a pseudo-account
+	// Reference: rippled Escrow.cpp:511-512, 373-378
+	destAccount, destID, result := ctx.LookupDestination(ec.Destination)
+	if result != tx.TesSUCCESS {
+		return result
 	}
 
 	// Destination tag check
@@ -255,12 +237,8 @@ func (ec *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// Increment destination's OwnerCount
 		destAccount.OwnerCount++
-		destUpdatedData2, err := state.SerializeAccountRoot(destAccount)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		if err := ctx.View.Update(destKey, destUpdatedData2); err != nil {
-			return tx.TefINTERNAL
+		if result := ctx.UpdateAccountRoot(destID, destAccount); result != tx.TesSUCCESS {
+			return result
 		}
 	}
 

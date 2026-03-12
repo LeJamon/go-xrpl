@@ -6,8 +6,8 @@ import (
 	"math/big"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-
 	tx "github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // QualityFromKey extracts a Quality from a 32-byte book directory key.
@@ -47,8 +47,8 @@ const (
 	StrandDirectionReverse
 )
 
-// QualityOne is the standard quality representing 1:1 ratio (1 billion)
-const QualityOne uint32 = 1_000_000_000
+// QualityOne is the identity transfer rate (1e9). Alias for protocol.QualityOne.
+const QualityOne = protocol.QualityOne
 
 // EitherAmount holds either an XRP amount (in drops) or an IOU amount
 // This allows unified handling in the flow algorithm regardless of currency type

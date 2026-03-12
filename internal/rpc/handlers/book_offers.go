@@ -7,7 +7,7 @@ import (
 )
 
 // BookOffersMethod handles the book_offers RPC method
-type BookOffersMethod struct{}
+type BookOffersMethod struct{ BaseHandler }
 
 func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
@@ -18,19 +18,16 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		types.PaginationParams
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
 	if len(request.TakerGets) == 0 || len(request.TakerPays) == 0 {
 		return nil, types.RpcErrorInvalidParams("Both taker_gets and taker_pays are required")
 	}
 
-	// Check if ledger service is available
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Parse taker_gets amount
@@ -98,14 +95,3 @@ func ParseAmountFromJSON(data json.RawMessage) (types.Amount, error) {
 	}, nil
 }
 
-func (m *BookOffersMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *BookOffersMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *BookOffersMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

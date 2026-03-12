@@ -29,7 +29,7 @@ const (
 )
 
 // AccountInfoMethod handles the account_info RPC method.
-type AccountInfoMethod struct{}
+type AccountInfoMethod struct{ BaseHandler }
 
 func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
@@ -39,18 +39,16 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		SignerLists bool `json:"signer_lists,omitempty"`
 		Strict      bool `json:"strict,omitempty"`
 	}
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
-	if request.Account == "" {
-		return nil, types.RpcErrorInvalidParams("Missing required parameter: account")
+	if err := RequireAccount(request.Account); err != nil {
+		return nil, err
 	}
 
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Determine ledger index
@@ -180,14 +178,3 @@ func (m *AccountInfoMethod) loadSignerLists(account string, ledgerIndex string) 
 	return signerLists
 }
 
-func (m *AccountInfoMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *AccountInfoMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *AccountInfoMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

@@ -14,7 +14,7 @@ import (
 // Unlike the 'tx' method which searches across the ledger range,
 // this method requires a specific ledger to search in.
 // Reference: rippled TransactionEntry.cpp
-type TransactionEntryMethod struct{}
+type TransactionEntryMethod struct{ BaseHandler }
 
 func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
@@ -23,18 +23,16 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 		LedgerIndex any    `json:"ledger_index,omitempty"`
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
 	if request.TxHash == "" {
 		return nil, types.RpcErrorInvalidParams("Missing required parameter: tx_hash")
 	}
 
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Parse the transaction hash
@@ -151,14 +149,3 @@ func (m *TransactionEntryMethod) resolveTargetLedger(ledgerHash string, ledgerIn
 	return types.Services.Ledger.GetValidatedLedgerIndex(), nil
 }
 
-func (m *TransactionEntryMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *TransactionEntryMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *TransactionEntryMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

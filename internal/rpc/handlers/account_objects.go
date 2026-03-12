@@ -9,7 +9,7 @@ import (
 )
 
 // AccountObjectsMethod handles the account_objects RPC method
-type AccountObjectsMethod struct{}
+type AccountObjectsMethod struct{ BaseHandler }
 
 // deletionBlockerTypes lists SLE types that block account deletion
 var deletionBlockerTypes = map[string]bool{
@@ -33,18 +33,16 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		types.PaginationParams
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
-	if request.Account == "" {
-		return nil, types.RpcErrorInvalidParams("Missing required parameter: account")
+	if err := RequireAccount(request.Account); err != nil {
+		return nil, err
 	}
 
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	ledgerIndex := "current"
@@ -96,14 +94,3 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	return response, nil
 }
 
-func (m *AccountObjectsMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *AccountObjectsMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *AccountObjectsMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

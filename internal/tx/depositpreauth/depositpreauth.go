@@ -3,7 +3,6 @@ package depositpreauth
 import (
 	"bytes"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"sort"
 
@@ -99,8 +98,8 @@ func (d *DepositPreauth) Validate() error {
 
 	// No flags allowed
 	// Reference: rippled preflight() - tx.getFlags() & tfUniversalMask
-	if d.Flags != nil && *d.Flags != 0 {
-		return errors.New("temINVALID_FLAG: Invalid flags set")
+	if err := tx.CheckNoFlags(d.GetFlags()); err != nil {
+		return err
 	}
 
 	// Count which fields are present.
@@ -117,7 +116,7 @@ func (d *DepositPreauth) Validate() error {
 	// Exactly one of the 4 fields must be present
 	// Reference: rippled preflight() - authPresent + authCredPresent != 1
 	if authPresent+authCredPresent != 1 {
-		return errors.New("temMALFORMED: Invalid Authorize and Unauthorize field combination")
+		return tx.Errorf(tx.TemMALFORMED, "Invalid Authorize and Unauthorize field combination")
 	}
 
 	if authPresent > 0 {
@@ -130,16 +129,16 @@ func (d *DepositPreauth) Validate() error {
 		// Validate target account is not zero
 		targetID, err := state.DecodeAccountID(target)
 		if err != nil {
-			return errors.New("temINVALID_ACCOUNT_ID: Authorized or Unauthorized field invalid")
+			return tx.Errorf(tx.TemINVALID_ACCOUNT_ID, "Authorized or Unauthorized field invalid")
 		}
 		if targetID == [20]byte{} {
-			return errors.New("temINVALID_ACCOUNT_ID: Authorized or Unauthorized field zeroed")
+			return tx.Errorf(tx.TemINVALID_ACCOUNT_ID, "Authorized or Unauthorized field zeroed")
 		}
 
 		// Cannot preauthorize self (only checked for Authorize, not Unauthorize)
 		// Reference: rippled preflight() - optAuth && target == ctx.tx[sfAccount]
 		if hasAuth && target == d.Account {
-			return errors.New("temCAN_NOT_PREAUTH_SELF: Attempting to DepositPreauth self")
+			return tx.Errorf(tx.TemCAN_NOT_PREAUTH_SELF, "Attempting to DepositPreauth self")
 		}
 	} else {
 		// Credential-based preauth validation
@@ -162,10 +161,10 @@ func (d *DepositPreauth) Validate() error {
 // Reference: rippled credentials::checkArray()
 func checkCredentialArray(creds []CredentialWrapper) error {
 	if len(creds) == 0 {
-		return errors.New("temARRAY_EMPTY: Invalid credentials size: 0")
+		return tx.Errorf(tx.TemARRAY_EMPTY, "Invalid credentials size: 0")
 	}
 	if len(creds) > maxCredentialsArraySize {
-		return fmt.Errorf("temARRAY_TOO_LARGE: Invalid credentials size: %d", len(creds))
+		return tx.Errorf(tx.TemARRAY_TOO_LARGE, "Invalid credentials size: %d", len(creds))
 	}
 
 	// Check each credential and detect duplicates
@@ -176,19 +175,19 @@ func checkCredentialArray(creds []CredentialWrapper) error {
 		// Validate issuer
 		issuerID, err := state.DecodeAccountID(c.Issuer)
 		if err != nil || issuerID == ([20]byte{}) {
-			return errors.New("temINVALID_ACCOUNT_ID: Issuer account is invalid")
+			return tx.Errorf(tx.TemINVALID_ACCOUNT_ID, "Issuer account is invalid")
 		}
 
 		// Validate credential type (hex-encoded, 1-64 raw bytes)
 		credTypeBytes, err := hex.DecodeString(c.CredentialType)
 		if err != nil || len(credTypeBytes) == 0 || len(credTypeBytes) > maxCredentialTypeLength {
-			return errors.New("temMALFORMED: Invalid credentialType size")
+			return tx.Errorf(tx.TemMALFORMED, "Invalid credentialType size")
 		}
 
 		// Check for duplicates using sha512Half(issuer, credType)
 		hash := common.Sha512Half(issuerID[:], credTypeBytes)
 		if duplicates[hash] {
-			return errors.New("temMALFORMED: duplicates in credentials")
+			return tx.Errorf(tx.TemMALFORMED, "duplicates in credentials")
 		}
 		duplicates[hash] = true
 	}

@@ -9,12 +9,11 @@ import (
 )
 
 // ServerStateMethod handles the server_state RPC method
-type ServerStateMethod struct{}
+type ServerStateMethod struct{ BaseHandler }
 
 func (m *ServerStateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	// Check if ledger service is available
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Get server info from ledger service
@@ -75,14 +74,3 @@ func (m *ServerStateMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	return response, nil
 }
 
-func (m *ServerStateMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *ServerStateMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *ServerStateMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

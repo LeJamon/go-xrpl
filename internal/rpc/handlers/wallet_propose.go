@@ -16,7 +16,7 @@ import (
 
 // WalletProposeMethod handles the wallet_propose RPC method
 // This generates a new random keypair or derives one from a provided seed/passphrase
-type WalletProposeMethod struct{}
+type WalletProposeMethod struct{ AdminHandler }
 
 // walletProposeRequest represents the request parameters
 type walletProposeRequest struct {
@@ -200,14 +200,3 @@ func estimateEntropy(input string) float64 {
 	return math.Floor(-se * length)
 }
 
-func (m *WalletProposeMethod) RequiredRole() types.Role {
-	return types.RoleAdmin // rippled: Role::ADMIN (Handler.cpp line 192)
-}
-
-func (m *WalletProposeMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *WalletProposeMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

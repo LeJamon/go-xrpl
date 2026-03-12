@@ -1,8 +1,6 @@
 package amm
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -58,35 +56,35 @@ func (a *AMMBid) Validate() error {
 
 	// Check flags - no flags are valid for AMMBid
 	if a.GetFlags()&tfAMMBidMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags for AMMBid")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMBid")
 	}
 
 	// Validate asset pair
 	if a.Asset.Currency == "" {
-		return errors.New("temMALFORMED: Asset is required")
+		return tx.Errorf(tx.TemMALFORMED, "Asset is required")
 	}
 
 	if a.Asset2.Currency == "" {
-		return errors.New("temMALFORMED: Asset2 is required")
+		return tx.Errorf(tx.TemMALFORMED, "Asset2 is required")
 	}
 
 	// Validate BidMin if present
 	if a.BidMin != nil {
 		if err := validateAMMAmount(*a.BidMin); err != nil {
-			return errors.New("temBAD_AMOUNT: invalid min slot price")
+			return tx.Errorf(tx.TemBAD_AMOUNT, "invalid min slot price")
 		}
 	}
 
 	// Validate BidMax if present
 	if a.BidMax != nil {
 		if err := validateAMMAmount(*a.BidMax); err != nil {
-			return errors.New("temBAD_AMOUNT: invalid max slot price")
+			return tx.Errorf(tx.TemBAD_AMOUNT, "invalid max slot price")
 		}
 	}
 
 	// Max 4 auth accounts
 	if len(a.AuthAccounts) > AUCTION_SLOT_MAX_AUTH_ACCOUNTS {
-		return errors.New("temMALFORMED: cannot have more than 4 AuthAccounts")
+		return tx.Errorf(tx.TemMALFORMED, "cannot have more than 4 AuthAccounts")
 	}
 
 	// Check for duplicate auth accounts and self-authorization
@@ -96,11 +94,11 @@ func (a *AMMBid) Validate() error {
 			acct := authAcct.AuthAccount.Account
 			// Cannot authorize self
 			if acct == a.Common.Account {
-				return errors.New("temMALFORMED: cannot authorize self in AuthAccounts")
+				return tx.Errorf(tx.TemMALFORMED, "cannot authorize self in AuthAccounts")
 			}
 			// Check for duplicates
 			if seen[acct] {
-				return errors.New("temMALFORMED: duplicate account in AuthAccounts")
+				return tx.Errorf(tx.TemMALFORMED, "duplicate account in AuthAccounts")
 			}
 			seen[acct] = true
 		}

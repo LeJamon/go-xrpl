@@ -1,8 +1,6 @@
 package amm
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -68,42 +66,42 @@ func (a *AMMClawback) Validate() error {
 
 	// Check flags
 	if a.GetFlags()&tfAMMClawbackMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags for AMMClawback")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMClawback")
 	}
 
 	// Holder is required
 	if a.Holder == "" {
-		return errors.New("temMALFORMED: Holder is required")
+		return tx.Errorf(tx.TemMALFORMED, "Holder is required")
 	}
 
 	// Holder cannot be the same as issuer (Account)
 	if a.Holder == a.Common.Account {
-		return errors.New("temMALFORMED: Holder cannot be the same as issuer")
+		return tx.Errorf(tx.TemMALFORMED, "Holder cannot be the same as issuer")
 	}
 
 	// Validate asset pair
 	if a.Asset.Currency == "" {
-		return errors.New("temMALFORMED: Asset is required")
+		return tx.Errorf(tx.TemMALFORMED, "Asset is required")
 	}
 
 	if a.Asset2.Currency == "" {
-		return errors.New("temMALFORMED: Asset2 is required")
+		return tx.Errorf(tx.TemMALFORMED, "Asset2 is required")
 	}
 
 	// Asset cannot be XRP (must be issued currency)
 	if a.Asset.Currency == "XRP" || a.Asset.Currency == "" && a.Asset.Issuer == "" {
-		return errors.New("temMALFORMED: Asset cannot be XRP")
+		return tx.Errorf(tx.TemMALFORMED, "Asset cannot be XRP")
 	}
 
 	// Asset issuer must match the transaction account (issuer)
 	if a.Asset.Issuer != a.Common.Account {
-		return errors.New("temMALFORMED: Asset issuer must match Account")
+		return tx.Errorf(tx.TemMALFORMED, "Asset issuer must match Account")
 	}
 
 	// If tfClawTwoAssets is set, both assets must be issued by the same issuer
 	if a.GetFlags()&tfClawTwoAssets != 0 {
 		if a.Asset.Issuer != a.Asset2.Issuer {
-			return errors.New("temINVALID_FLAG: tfClawTwoAssets requires both assets to have the same issuer")
+			return tx.Errorf(tx.TemINVALID_FLAG, "tfClawTwoAssets requires both assets to have the same issuer")
 		}
 	}
 
@@ -111,11 +109,11 @@ func (a *AMMClawback) Validate() error {
 	if a.Amount != nil {
 		// Amount must be positive
 		if err := validateAMMAmount(*a.Amount); err != nil {
-			return errors.New("temBAD_AMOUNT: invalid Amount - " + err.Error())
+			return tx.Errorf(tx.TemBAD_AMOUNT, "invalid Amount - %s", err.Error())
 		}
 		// Amount's issue must match tx.Asset
 		if a.Amount.Currency != a.Asset.Currency || a.Amount.Issuer != a.Asset.Issuer {
-			return errors.New("temBAD_AMOUNT: Amount issue must match tx.Asset")
+			return tx.Errorf(tx.TemBAD_AMOUNT, "Amount issue must match tx.Asset")
 		}
 	}
 

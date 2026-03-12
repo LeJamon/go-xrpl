@@ -10,7 +10,7 @@ import (
 )
 
 // LedgerDataMethod handles the ledger_data RPC method
-type LedgerDataMethod struct{}
+type LedgerDataMethod struct{ BaseHandler }
 
 func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	// Parse parameters
@@ -22,15 +22,12 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		Type   string      `json:"type,omitempty"`
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
-	// Check if ledger service is available
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Validate limit
@@ -202,14 +199,3 @@ func deserializeLedgerEntry(data []byte) (interface{}, error) {
 	return binarycodec.Decode(hex.EncodeToString(data))
 }
 
-func (m *LedgerDataMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *LedgerDataMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *LedgerDataMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

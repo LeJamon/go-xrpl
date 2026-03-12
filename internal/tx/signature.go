@@ -26,16 +26,16 @@ var (
 // Multi-signature specific errors (matching rippled error codes)
 var (
 	// ErrNotMultiSigning is returned when the account has no signer list (tefNOT_MULTI_SIGNING)
-	ErrNotMultiSigning = errors.New("tefNOT_MULTI_SIGNING: account is not configured for multi-signing")
+	ErrNotMultiSigning = Errorf(TefNOT_MULTI_SIGNING, "account is not configured for multi-signing")
 
 	// ErrBadQuorum is returned when signers fail to meet the quorum (tefBAD_QUORUM)
-	ErrBadQuorum = errors.New("tefBAD_QUORUM: signers failed to meet quorum")
+	ErrBadQuorum = Errorf(TefBAD_QUORUM, "signers failed to meet quorum")
 
 	// ErrBadSignature is returned when a multi-sig signature is invalid (tefBAD_SIGNATURE)
-	ErrBadSignature = errors.New("tefBAD_SIGNATURE: invalid signer or signature")
+	ErrBadSignature = Errorf(TefBAD_SIGNATURE, "invalid signer or signature")
 
 	// ErrMasterDisabled is returned when trying to sign with a disabled master key (tefMASTER_DISABLED)
-	ErrMasterDisabled = errors.New("tefMASTER_DISABLED: master key is disabled for this signer")
+	ErrMasterDisabled = Errorf(TefMASTER_DISABLED, "master key is disabled for this signer")
 
 	// ErrNoSigners is returned when Signers array is empty
 	ErrNoSigners = errors.New("multi-signed transaction has no signers")

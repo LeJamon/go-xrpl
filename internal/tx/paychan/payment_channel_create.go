@@ -66,13 +66,13 @@ func (p *PaymentChannelCreate) Validate() error {
 	}
 
 	// Check for invalid flags (tfUniversalMask) - fix1543
-	if p.Common.Flags != nil && *p.Common.Flags&tx.TfUniversal != 0 {
-		return tx.ErrInvalidFlags
+	if err := tx.CheckFlags(p.GetFlags(), tx.TfUniversal); err != nil {
+		return err
 	}
 
 	// Destination is required
-	if p.Destination == "" {
-		return ErrPayChanDestRequired
+	if err := tx.CheckDestRequired(p.Destination); err != nil {
+		return err
 	}
 
 	// Amount is required and must be XRP
@@ -90,8 +90,8 @@ func (p *PaymentChannelCreate) Validate() error {
 	}
 
 	// Cannot create channel to self
-	if p.Account == p.Destination {
-		return ErrPayChanDestIsSrc
+	if err := tx.CheckDestNotSrc(p.Account, p.Destination); err != nil {
+		return err
 	}
 
 	// PublicKey is required and must be valid
@@ -137,27 +137,10 @@ func (p *PaymentChannelCreate) RequiredAmendments() [][32]byte {
 func (pc *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	amount := uint64(pc.Amount.Drops())
 
-	// Verify destination exists
-	destID, err := state.DecodeAccountID(pc.Destination)
-	if err != nil {
-		return tx.TemINVALID
-	}
-
-	destKey := keylet.Account(destID)
-	destData, err := ctx.View.Read(destKey)
-	if err != nil || destData == nil {
-		return tx.TecNO_DST
-	}
-
-	destAccount, err := state.ParseAccountRoot(destData)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
-	// Pseudo-accounts cannot receive payment channels.
-	// Reference: rippled PayChan.cpp:240-248
-	if (destAccount.Flags & state.LsfAMM) != 0 {
-		return tx.TecNO_PERMISSION
+	// Verify destination exists and is not a pseudo-account (AMM)
+	destAccount, destID, result := ctx.LookupDestination(pc.Destination)
+	if result != tx.TesSUCCESS {
+		return result
 	}
 
 	// DisallowIncoming check

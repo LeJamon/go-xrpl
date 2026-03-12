@@ -1,8 +1,6 @@
 package amm
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -80,7 +78,7 @@ func (a *AMMDeposit) Validate() error {
 	// Check for invalid flags
 	// Reference: rippled AMMDeposit.cpp line 42-46
 	if flags&tfAMMDepositMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags for AMMDeposit")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMDeposit")
 	}
 
 	// Must have exactly one deposit mode flag set
@@ -91,7 +89,7 @@ func (a *AMMDeposit) Validate() error {
 		flagCount++
 	}
 	if flagCount != 1 {
-		return errors.New("temMALFORMED: must specify exactly one deposit mode flag")
+		return tx.Errorf(tx.TemMALFORMED, "must specify exactly one deposit mode flag")
 	}
 
 	// Validate flag-specific field combinations
@@ -105,32 +103,32 @@ func (a *AMMDeposit) Validate() error {
 	if flags&tfLPToken != 0 {
 		// tfLPToken: LPTokenOut required, [Amount, Amount2] optional but must be both or neither, no EPrice, no TradingFee
 		if !hasLPTokens || hasEPrice || (hasAmount && !hasAmount2) || (!hasAmount && hasAmount2) || hasTradingFee {
-			return errors.New("temMALFORMED: tfLPToken requires LPTokenOut, optional Amount+Amount2 pair")
+			return tx.Errorf(tx.TemMALFORMED, "tfLPToken requires LPTokenOut, optional Amount+Amount2 pair")
 		}
 	} else if flags&tfSingleAsset != 0 {
 		// tfSingleAsset: Amount required, no Amount2, no EPrice, no TradingFee
 		if !hasAmount || hasAmount2 || hasEPrice || hasTradingFee {
-			return errors.New("temMALFORMED: tfSingleAsset requires Amount only")
+			return tx.Errorf(tx.TemMALFORMED, "tfSingleAsset requires Amount only")
 		}
 	} else if flags&tfTwoAsset != 0 {
 		// tfTwoAsset: Amount and Amount2 required, no EPrice, no TradingFee
 		if !hasAmount || !hasAmount2 || hasEPrice || hasTradingFee {
-			return errors.New("temMALFORMED: tfTwoAsset requires Amount and Amount2")
+			return tx.Errorf(tx.TemMALFORMED, "tfTwoAsset requires Amount and Amount2")
 		}
 	} else if flags&tfOneAssetLPToken != 0 {
 		// tfOneAssetLPToken: Amount and LPTokenOut required, no Amount2, no EPrice, no TradingFee
 		if !hasAmount || !hasLPTokens || hasAmount2 || hasEPrice || hasTradingFee {
-			return errors.New("temMALFORMED: tfOneAssetLPToken requires Amount and LPTokenOut")
+			return tx.Errorf(tx.TemMALFORMED, "tfOneAssetLPToken requires Amount and LPTokenOut")
 		}
 	} else if flags&tfLimitLPToken != 0 {
 		// tfLimitLPToken: Amount and EPrice required, no LPTokens, no Amount2, no TradingFee
 		if !hasAmount || !hasEPrice || hasLPTokens || hasAmount2 || hasTradingFee {
-			return errors.New("temMALFORMED: tfLimitLPToken requires Amount and EPrice")
+			return tx.Errorf(tx.TemMALFORMED, "tfLimitLPToken requires Amount and EPrice")
 		}
 	} else if flags&tfTwoAssetIfEmpty != 0 {
 		// tfTwoAssetIfEmpty: Amount and Amount2 required, no EPrice, no LPTokens
 		if !hasAmount || !hasAmount2 || hasEPrice || hasLPTokens {
-			return errors.New("temMALFORMED: tfTwoAssetIfEmpty requires Amount and Amount2")
+			return tx.Errorf(tx.TemMALFORMED, "tfTwoAssetIfEmpty requires Amount and Amount2")
 		}
 	}
 
@@ -139,19 +137,19 @@ func (a *AMMDeposit) Validate() error {
 	if a.Asset.Currency == "" && a.Asset.Issuer == "" {
 		// XRP asset - OK
 	} else if a.Asset.Currency == "" {
-		return errors.New("temMALFORMED: Asset is invalid")
+		return tx.Errorf(tx.TemMALFORMED, "Asset is invalid")
 	}
 	if a.Asset2.Currency == "" && a.Asset2.Issuer == "" {
 		// XRP asset - OK
 	} else if a.Asset2.Currency == "" {
-		return errors.New("temMALFORMED: Asset2 is invalid")
+		return tx.Errorf(tx.TemMALFORMED, "Asset2 is invalid")
 	}
 
 	// Amount and Amount2 cannot have the same issue
 	// Reference: rippled AMMDeposit.cpp lines 108-113
 	if hasAmount && hasAmount2 {
 		if a.Amount.Currency == a.Amount2.Currency && a.Amount.Issuer == a.Amount2.Issuer {
-			return errors.New("temBAD_AMM_TOKENS: Amount and Amount2 have same issue")
+			return tx.Errorf(tx.TemBAD_AMM_TOKENS, "Amount and Amount2 have same issue")
 		}
 	}
 
@@ -159,7 +157,7 @@ func (a *AMMDeposit) Validate() error {
 	// Reference: rippled AMMDeposit.cpp lines 115-119
 	if hasLPTokens {
 		if a.LPTokenOut.IsZero() || a.LPTokenOut.IsNegative() {
-			return errors.New("temBAD_AMM_TOKENS: invalid LPTokens")
+			return tx.Errorf(tx.TemBAD_AMM_TOKENS, "invalid LPTokens")
 		}
 	}
 
@@ -169,9 +167,9 @@ func (a *AMMDeposit) Validate() error {
 	if hasAmount {
 		if errCode := validateAMMAmountWithPair(*a.Amount, &a.Asset, &a.Asset2, hasEPrice); errCode != "" {
 			if errCode == "temBAD_AMM_TOKENS" {
-				return errors.New("temBAD_AMM_TOKENS: invalid Amount")
+				return tx.Errorf(tx.TemBAD_AMM_TOKENS, "invalid Amount")
 			}
-			return errors.New("temBAD_AMOUNT: invalid Amount")
+			return tx.Errorf(tx.TemBAD_AMOUNT, "invalid Amount")
 		}
 	}
 
@@ -180,9 +178,9 @@ func (a *AMMDeposit) Validate() error {
 	if hasAmount2 {
 		if errCode := validateAMMAmountWithPair(*a.Amount2, &a.Asset, &a.Asset2, false); errCode != "" {
 			if errCode == "temBAD_AMM_TOKENS" {
-				return errors.New("temBAD_AMM_TOKENS: invalid Amount2")
+				return tx.Errorf(tx.TemBAD_AMM_TOKENS, "invalid Amount2")
 			}
-			return errors.New("temBAD_AMOUNT: invalid Amount2")
+			return tx.Errorf(tx.TemBAD_AMOUNT, "invalid Amount2")
 		}
 	}
 
@@ -191,14 +189,14 @@ func (a *AMMDeposit) Validate() error {
 	if hasAmount && hasEPrice {
 		amtIssue := tx.Asset{Currency: a.Amount.Currency, Issuer: a.Amount.Issuer}
 		if errCode := validateAMMAmountWithPair(*a.EPrice, &amtIssue, &amtIssue, false); errCode != "" {
-			return errors.New("temBAD_AMOUNT: invalid EPrice")
+			return tx.Errorf(tx.TemBAD_AMOUNT, "invalid EPrice")
 		}
 	}
 
 	// Validate TradingFee if provided
 	// Reference: rippled AMMDeposit.cpp lines 156-160
 	if a.TradingFee > TRADING_FEE_THRESHOLD {
-		return errors.New("temBAD_FEE: TradingFee must be 0-1000")
+		return tx.Errorf(tx.TemBAD_FEE, "TradingFee must be 0-1000")
 	}
 
 	return nil

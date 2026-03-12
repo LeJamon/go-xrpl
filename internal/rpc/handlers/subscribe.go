@@ -17,21 +17,10 @@ import (
 //   - Streams: ledger, transactions, transactions_proposed, peer_status,
 //     consensus, server, validations, manifests, book (order book)
 //   - Account subscriptions: accounts, accounts_proposed
-type SubscribeMethod struct{}
+type SubscribeMethod struct{ BaseHandler }
 
 func (m *SubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	return nil, types.NewRpcError(types.RpcNOT_SUPPORTED, "notSupported", "notSupported",
 		"subscribe is only available via WebSocket")
 }
 
-func (m *SubscribeMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *SubscribeMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *SubscribeMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

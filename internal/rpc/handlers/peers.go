@@ -14,7 +14,7 @@ import (
 //   - Reference: rippled Peers.cpp → context.app.overlay().json()
 //   - Response should include per-peer: address, port, latency, version,
 //     ledger sequence, complete_ledgers range, cluster status
-type PeersMethod struct{}
+type PeersMethod struct{ AdminHandler }
 
 func (m *PeersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	return map[string]interface{}{
@@ -22,17 +22,6 @@ func (m *PeersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (int
 	}, nil
 }
 
-func (m *PeersMethod) RequiredRole() types.Role {
-	return types.RoleAdmin
-}
-
-func (m *PeersMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *PeersMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}
 
 // PeerReservationsAddMethod handles the peer_reservations_add RPC method.
 // STUB: Returns empty result. Network-only — not needed for standalone mode.
@@ -42,7 +31,7 @@ func (m *PeersMethod) RequiredCondition() types.Condition {
 //   - Reference: rippled Reservations.cpp → context.app.peerReservations()
 //   - Params: public_key (required), description (optional)
 //   - Should add a peer reservation and return previous + current state
-type PeerReservationsAddMethod struct{}
+type PeerReservationsAddMethod struct{ AdminHandler }
 
 func (m *PeerReservationsAddMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	return map[string]interface{}{
@@ -51,17 +40,6 @@ func (m *PeerReservationsAddMethod) Handle(ctx *types.RpcContext, params json.Ra
 	}, nil
 }
 
-func (m *PeerReservationsAddMethod) RequiredRole() types.Role {
-	return types.RoleAdmin
-}
-
-func (m *PeerReservationsAddMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *PeerReservationsAddMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}
 
 // PeerReservationsDelMethod handles the peer_reservations_del RPC method.
 // STUB: Returns empty result. Network-only — not needed for standalone mode.
@@ -71,7 +49,7 @@ func (m *PeerReservationsAddMethod) RequiredCondition() types.Condition {
 //   - Reference: rippled Reservations.cpp
 //   - Params: public_key (required)
 //   - Should remove a peer reservation and return previous + current state
-type PeerReservationsDelMethod struct{}
+type PeerReservationsDelMethod struct{ AdminHandler }
 
 func (m *PeerReservationsDelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	return map[string]interface{}{
@@ -80,17 +58,6 @@ func (m *PeerReservationsDelMethod) Handle(ctx *types.RpcContext, params json.Ra
 	}, nil
 }
 
-func (m *PeerReservationsDelMethod) RequiredRole() types.Role {
-	return types.RoleAdmin
-}
-
-func (m *PeerReservationsDelMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *PeerReservationsDelMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}
 
 // PeerReservationsListMethod handles the peer_reservations_list RPC method.
 // STUB: Returns empty list. Network-only — not needed for standalone mode.
@@ -99,7 +66,7 @@ func (m *PeerReservationsDelMethod) RequiredCondition() types.Condition {
 //   - Requires: PeerReservationTable service
 //   - Reference: rippled Reservations.cpp
 //   - Returns all peer reservations with their public keys and descriptions
-type PeerReservationsListMethod struct{}
+type PeerReservationsListMethod struct{ AdminHandler }
 
 func (m *PeerReservationsListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	return map[string]interface{}{
@@ -107,14 +74,3 @@ func (m *PeerReservationsListMethod) Handle(ctx *types.RpcContext, params json.R
 	}, nil
 }
 
-func (m *PeerReservationsListMethod) RequiredRole() types.Role {
-	return types.RoleAdmin
-}
-
-func (m *PeerReservationsListMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *PeerReservationsListMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

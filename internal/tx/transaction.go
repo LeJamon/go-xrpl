@@ -13,7 +13,7 @@ var (
 	ErrInvalidAmount          = errors.New("invalid amount")
 	ErrInvalidDestination     = errors.New("invalid destination")
 	ErrInvalidAccount         = errors.New("invalid account")
-	ErrInvalidFlags           = errors.New("temINVALID_FLAG: invalid flags")
+	ErrInvalidFlags           = Errorf(TemINVALID_FLAG, "invalid flags")
 	ErrInvalidSequence        = errors.New("invalid sequence")
 )
 

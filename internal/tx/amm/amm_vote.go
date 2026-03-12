@@ -1,8 +1,6 @@
 package amm
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
@@ -52,21 +50,21 @@ func (a *AMMVote) Validate() error {
 
 	// Check flags - no flags are valid for AMMVote
 	if a.GetFlags()&tfAMMVoteMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags for AMMVote")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMVote")
 	}
 
 	// Validate asset pair
 	if a.Asset.Currency == "" {
-		return errors.New("temMALFORMED: Asset is required")
+		return tx.Errorf(tx.TemMALFORMED, "Asset is required")
 	}
 
 	if a.Asset2.Currency == "" {
-		return errors.New("temMALFORMED: Asset2 is required")
+		return tx.Errorf(tx.TemMALFORMED, "Asset2 is required")
 	}
 
 	// TradingFee must be within threshold
 	if a.TradingFee > TRADING_FEE_THRESHOLD {
-		return errors.New("temBAD_FEE: TradingFee must be 0-1000")
+		return tx.Errorf(tx.TemBAD_FEE, "TradingFee must be 0-1000")
 	}
 
 	return nil

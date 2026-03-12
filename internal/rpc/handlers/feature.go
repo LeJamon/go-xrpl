@@ -12,7 +12,7 @@ import (
 // FeatureMethod handles the feature RPC method.
 // Returns information about amendments including their status, support, and voting.
 // Reference: rippled Feature.cpp
-type FeatureMethod struct{}
+type FeatureMethod struct{ AdminHandler }
 
 func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
@@ -111,14 +111,3 @@ func (m *FeatureMethod) handleSingleFeature(feature string) (interface{}, *types
 	return response, nil
 }
 
-func (m *FeatureMethod) RequiredRole() types.Role {
-	return types.RoleAdmin
-}
-
-func (m *FeatureMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *FeatureMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

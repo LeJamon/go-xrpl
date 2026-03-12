@@ -10,7 +10,7 @@ import (
 )
 
 // RandomMethod handles the random RPC method
-type RandomMethod struct{}
+type RandomMethod struct{ BaseHandler }
 
 func (m *RandomMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	// Generate 256 bits (32 bytes) of cryptographically secure random data
@@ -27,14 +27,3 @@ func (m *RandomMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	return response, nil
 }
 
-func (m *RandomMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *RandomMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *RandomMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

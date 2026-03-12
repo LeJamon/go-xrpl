@@ -91,23 +91,11 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecTOO_SOON
 	}
 
-	destID, err := state.DecodeAccountID(a.Destination)
-	if err != nil {
-		return tx.TemINVALID
+	destAccount, destID, result := ctx.LookupAccount(a.Destination)
+	if result != tx.TesSUCCESS {
+		return result
 	}
-
 	destKey := keylet.Account(destID)
-	destData, err := ctx.View.Read(destKey)
-	if err != nil || destData == nil {
-		return tx.TecNO_DST
-	}
-
-	// --- Preclaim: destination checks ---
-	// Reference: rippled DeleteAccount.cpp preclaim() lines 230-260
-	destAccount, err := state.ParseAccountRoot(destData)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
 
 	// Check if destination requires a destination tag
 	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && a.DestinationTag == nil {
@@ -167,7 +155,7 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 	var entryKeys [][32]byte
 
-	err = state.DirForEach(ctx.View, ownerDirKey, func(itemKey [32]byte) error {
+	err := state.DirForEach(ctx.View, ownerDirKey, func(itemKey [32]byte) error {
 		entryKeys = append(entryKeys, itemKey)
 		return nil
 	})
@@ -348,7 +336,7 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Re-read destination in case it was modified during cascade deletions
-	destData, err = ctx.View.Read(destKey)
+	destData, err := ctx.View.Read(destKey)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -365,27 +353,18 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	destAccount.Balance += sourceBalance
 	ctx.Account.Balance -= sourceBalance
 
-	destUpdatedData, err := state.SerializeAccountRoot(destAccount)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
-	if err := ctx.View.Update(destKey, destUpdatedData); err != nil {
-		return tx.TefINTERNAL
+	if result := ctx.UpdateAccountRoot(destID, destAccount); result != tx.TesSUCCESS {
+		return result
 	}
 
 	// Update the source account in the view with balance=0 BEFORE erasing.
 	// This ensures the erased entry's Current data has the correct final state
 	// for invariant checks (XRPNotCreated verifies net XRP changes).
 	// Reference: rippled DeleteAccount.cpp — sets src balance to 0, then erases.
+	if result := ctx.UpdateAccountRoot(ctx.AccountID, ctx.Account); result != tx.TesSUCCESS {
+		return result
+	}
 	srcKey := keylet.Account(ctx.AccountID)
-	srcUpdatedData, err := state.SerializeAccountRoot(ctx.Account)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	if err := ctx.View.Update(srcKey, srcUpdatedData); err != nil {
-		return tx.TefINTERNAL
-	}
 	if err := ctx.View.Erase(srcKey); err != nil {
 		return tx.TefINTERNAL
 	}

@@ -2,7 +2,6 @@ package escrow
 
 import (
 	"encoding/hex"
-	"errors"
 	"sort"
 
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -64,12 +63,12 @@ func (e *EscrowFinish) Validate() error {
 	}
 
 	// Check for invalid flags
-	if e.GetFlags()&tx.TfUniversalMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags")
+	if err := tx.CheckFlags(e.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	if e.Owner == "" {
-		return errors.New("temMALFORMED: Owner is required")
+		return tx.Errorf(tx.TemMALFORMED, "Owner is required")
 	}
 
 	// Both Condition and Fulfillment must be present or absent together
@@ -78,7 +77,7 @@ func (e *EscrowFinish) Validate() error {
 	hasCondition := e.Condition != nil
 	hasFulfillment := e.Fulfillment != nil
 	if hasCondition != hasFulfillment {
-		return errors.New("temMALFORMED: Condition and Fulfillment must be provided together")
+		return tx.Errorf(tx.TemMALFORMED, "Condition and Fulfillment must be provided together")
 	}
 
 	return nil
@@ -230,12 +229,8 @@ func (ef *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Write destination back (only if it's a separate account from the finisher)
 	if !destIsSelf {
-		destUpdatedData, err := state.SerializeAccountRoot(destAccount)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		if err := ctx.View.Update(destKey, destUpdatedData); err != nil {
-			return tx.TefINTERNAL
+		if result := ctx.UpdateAccountRoot(escrowEntry.DestinationID, destAccount); result != tx.TesSUCCESS {
+			return result
 		}
 	}
 

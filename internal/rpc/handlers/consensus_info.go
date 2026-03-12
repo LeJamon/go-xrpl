@@ -14,7 +14,7 @@ import (
 //   - Returns: phase, proposing, validating, proposers, converge_percent,
 //     close_resolution, have_time_consensus, previous_proposers, etc.
 //   - In standalone mode, returning empty info is correct behavior
-type ConsensusInfoMethod struct{}
+type ConsensusInfoMethod struct{ AdminHandler }
 
 func (m *ConsensusInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	return map[string]interface{}{
@@ -22,14 +22,3 @@ func (m *ConsensusInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	}, nil
 }
 
-func (m *ConsensusInfoMethod) RequiredRole() types.Role {
-	return types.RoleAdmin
-}
-
-func (m *ConsensusInfoMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *ConsensusInfoMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

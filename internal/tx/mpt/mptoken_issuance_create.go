@@ -2,7 +2,6 @@ package mpt
 
 import (
 	"encoding/hex"
-	"errors"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
@@ -59,17 +58,17 @@ func (m *MPTokenIssuanceCreate) Validate() error {
 	// Any flags other than the valid ones are not allowed
 	flags := m.GetFlags()
 	if flags&^tfMPTokenIssuanceCreateValidMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags for MPTokenIssuanceCreate")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for MPTokenIssuanceCreate")
 	}
 
 	// Validate TransferFee
 	if m.TransferFee != nil {
 		if *m.TransferFee > entry.MaxTransferFee {
-			return errors.New("temBAD_TRANSFER_FEE: TransferFee cannot exceed 50000")
+			return tx.Errorf(tx.TemBAD_TRANSFER_FEE, "TransferFee cannot exceed 50000")
 		}
 		// If a non-zero TransferFee is set, tfMPTCanTransfer must also be set
 		if *m.TransferFee > 0 && (flags&MPTokenIssuanceCreateFlagCanTransfer) == 0 {
-			return errors.New("temMALFORMED: TransferFee requires tfMPTCanTransfer flag")
+			return tx.Errorf(tx.TemMALFORMED, "TransferFee requires tfMPTCanTransfer flag")
 		}
 	}
 
@@ -77,20 +76,20 @@ func (m *MPTokenIssuanceCreate) Validate() error {
 	if m.MPTokenMetadata != nil {
 		metadataBytes, err := hex.DecodeString(*m.MPTokenMetadata)
 		if err != nil {
-			return errors.New("temMALFORMED: MPTokenMetadata must be valid hex")
+			return tx.Errorf(tx.TemMALFORMED, "MPTokenMetadata must be valid hex")
 		}
 		if len(metadataBytes) == 0 || len(metadataBytes) > entry.MaxMPTokenMetadataLength {
-			return errors.New("temMALFORMED: MPTokenMetadata length must be 1-1024 bytes")
+			return tx.Errorf(tx.TemMALFORMED, "MPTokenMetadata length must be 1-1024 bytes")
 		}
 	}
 
 	// Validate MaximumAmount
 	if m.MaximumAmount != nil {
 		if *m.MaximumAmount == 0 {
-			return errors.New("temMALFORMED: MaximumAmount cannot be zero")
+			return tx.Errorf(tx.TemMALFORMED, "MaximumAmount cannot be zero")
 		}
 		if *m.MaximumAmount > entry.MaxMPTokenAmount {
-			return errors.New("temMALFORMED: MaximumAmount exceeds maximum allowed")
+			return tx.Errorf(tx.TemMALFORMED, "MaximumAmount exceeds maximum allowed")
 		}
 	}
 
