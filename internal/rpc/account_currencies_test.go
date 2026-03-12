@@ -196,7 +196,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 			// missing account field
 			name:          "Missing account field - empty params",
 			params:        map[string]interface{}{},
-			expectedError: "Missing field 'account'.",
+			expectedError: "Missing required parameter: account",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -228,33 +228,29 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 		},
 		{
 			// invalid base58 characters (llIIOO)
+			// rippled returns rpcACT_MALFORMED for malformed addresses
 			name: "Malformed account - invalid base58 characters",
 			params: map[string]interface{}{
 				"account": "llIIOO",
 			},
-			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_NOT_FOUND,
-			setupMock: func() {
-				mock.accountCurrenciesErr = errors.New("invalid account address: bad address")
-			},
+			expectedError: "Malformed account.",
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			// Cannot use a seed as account
+			// rippled returns rpcACT_MALFORMED
 			name: "Malformed account - seed format (actMalformed)",
 			params: map[string]interface{}{
 				"account": "Bob",
 			},
-			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_NOT_FOUND,
-			setupMock: func() {
-				mock.accountCurrenciesErr = errors.New("invalid account address: bad address")
-			},
+			expectedError: "Malformed account.",
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			// ask for nonexistent account (actNotFound)
 			name: "Account not found - valid format but not in ledger",
 			params: map[string]interface{}{
-				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
+				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
 			expectedCode:  types.RpcACT_NOT_FOUND,

@@ -7,6 +7,7 @@ import (
 )
 
 // NoRippleCheckMethod handles the noripple_check RPC method
+// Reference: rippled/src/xrpld/rpc/handlers/NoRippleCheck.cpp
 type NoRippleCheckMethod struct{ BaseHandler }
 
 func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
@@ -26,24 +27,25 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, err
 	}
 
+	// rippled: missing_field_error("role")
 	if request.Role == "" {
-		return nil, types.RpcErrorInvalidParams("Missing required parameter: role")
+		return nil, types.RpcErrorMissingField("role")
 	}
 
+	// rippled: invalid_field_error("role")
 	if request.Role != "gateway" && request.Role != "user" {
-		return nil, types.RpcErrorInvalidParams("Invalid field 'role'.")
+		return nil, types.RpcErrorInvalidField("role")
 	}
 
 	// API v2+ requires transactions to be a boolean
+	// Reference: NoRippleCheck.cpp lines 95-99
 	if ctx.ApiVersion > 1 && params != nil {
-		// Check if transactions field exists and is not a boolean
 		var rawParams map[string]json.RawMessage
 		if err := json.Unmarshal(params, &rawParams); err == nil {
 			if txField, ok := rawParams["transactions"]; ok {
-				// Try to unmarshal as bool
 				var boolVal bool
 				if err := json.Unmarshal(txField, &boolVal); err != nil {
-					return nil, types.RpcErrorInvalidParams("Invalid field 'transactions'.")
+					return nil, types.RpcErrorInvalidField("transactions")
 				}
 			}
 		}
@@ -59,8 +61,9 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		ledgerIndex = request.LedgerIndex.String()
 	}
 
-	// Call the service
+	// Apply limit clamping matching rippled's readLimitField with noRippleCheck tuning
 	limit := ClampLimit(request.Limit, LimitNoRippleCheck, ctx.IsAdmin)
+
 	result, err := types.Services.Ledger.GetNoRippleCheck(
 		request.Account,
 		request.Role,
@@ -69,24 +72,16 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		request.Transactions,
 	)
 	if err != nil {
-		// Handle specific errors
 		if err.Error() == "account not found" {
-			return nil, &types.RpcError{
-				Code:    types.RpcACT_NOT_FOUND,
-				Message: "Account not found.",
-			}
+			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
-		// Check for malformed account address
 		if len(err.Error()) > 24 && err.Error()[:24] == "invalid account address:" {
-			return nil, &types.RpcError{
-				Code:    types.RpcACT_NOT_FOUND,
-				Message: "Account malformed.",
-			}
+			return nil, types.RpcErrorActMalformed("Account malformed.")
 		}
 		return nil, types.RpcErrorInternal(err.Error())
 	}
 
-	// Build response
+	// Build response matching rippled's NoRippleCheck.cpp format
 	response := map[string]interface{}{
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
@@ -94,36 +89,42 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	}
 
 	// Problems is always present (may be empty array)
+	// Reference: NoRippleCheck.cpp line 123: result["problems"] = Json::arrayValue
 	if result.Problems != nil {
 		response["problems"] = result.Problems
 	} else {
 		response["problems"] = []string{}
 	}
 
-	// Transactions only included if requested
-	if request.Transactions && len(result.Transactions) > 0 {
-		transactions := make([]map[string]interface{}, len(result.Transactions))
-		for i, tx := range result.Transactions {
-			txMap := map[string]interface{}{
-				"TransactionType": tx.TransactionType,
-				"Account":         tx.Account,
-				"Fee":             tx.Fee,
-				"Sequence":        tx.Sequence,
+	// When transactions=true, rippled always includes the transactions array
+	// even if empty. Reference: NoRippleCheck.cpp line 108:
+	//   jvTransactions = transactions ? (result[jss::transactions] = Json::arrayValue) : dummy;
+	if request.Transactions {
+		if len(result.Transactions) > 0 {
+			transactions := make([]map[string]interface{}, len(result.Transactions))
+			for i, tx := range result.Transactions {
+				txMap := map[string]interface{}{
+					"TransactionType": tx.TransactionType,
+					"Account":         tx.Account,
+					"Fee":             tx.Fee,
+					"Sequence":        tx.Sequence,
+				}
+				if tx.SetFlag != 0 {
+					txMap["SetFlag"] = tx.SetFlag
+				}
+				if tx.Flags != 0 {
+					txMap["Flags"] = tx.Flags
+				}
+				if tx.LimitAmount != nil {
+					txMap["LimitAmount"] = tx.LimitAmount
+				}
+				transactions[i] = txMap
 			}
-			if tx.SetFlag != 0 {
-				txMap["SetFlag"] = tx.SetFlag
-			}
-			if tx.Flags != 0 {
-				txMap["Flags"] = tx.Flags
-			}
-			if tx.LimitAmount != nil {
-				txMap["LimitAmount"] = tx.LimitAmount
-			}
-			transactions[i] = txMap
+			response["transactions"] = transactions
+		} else {
+			response["transactions"] = []map[string]interface{}{}
 		}
-		response["transactions"] = transactions
 	}
 
 	return response, nil
 }
-

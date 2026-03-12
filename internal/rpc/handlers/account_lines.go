@@ -26,6 +26,13 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		return nil, err
 	}
 
+	// Validate peer parameter if provided (rippled: rpcACT_MALFORMED)
+	if request.Peer != "" {
+		if !types.IsValidXRPLAddress(request.Peer) {
+			return nil, types.RpcErrorActMalformed("Malformed peer account.")
+		}
+	}
+
 	if err := RequireLedgerService(); err != nil {
 		return nil, err
 	}
@@ -64,17 +71,52 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		lines = filtered
 	}
 
+	// Build lines array with quality_in/quality_out always included (rippled always emits them)
+	jsonLines := make([]map[string]interface{}, 0, len(lines))
+	for _, line := range lines {
+		entry := map[string]interface{}{
+			"account":     line.Account,
+			"balance":     line.Balance,
+			"currency":    line.Currency,
+			"limit":       line.Limit,
+			"limit_peer":  line.LimitPeer,
+			"quality_in":  line.QualityIn,
+			"quality_out": line.QualityOut,
+		}
+		// Boolean flags are only included when true (rippled: conditional)
+		if line.NoRipple {
+			entry["no_ripple"] = true
+		}
+		if line.NoRipplePeer {
+			entry["no_ripple_peer"] = true
+		}
+		if line.Authorized {
+			entry["authorized"] = true
+		}
+		if line.PeerAuthorized {
+			entry["peer_authorized"] = true
+		}
+		if line.Freeze {
+			entry["freeze"] = true
+		}
+		if line.FreezePeer {
+			entry["freeze_peer"] = true
+		}
+		jsonLines = append(jsonLines, entry)
+	}
+
 	// Build response
 	response := map[string]interface{}{
 		"account":      result.Account,
-		"lines":        lines,
+		"lines":        jsonLines,
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
 		"validated":    result.Validated,
-		"limit":        limit,
 	}
 
+	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {
+		response["limit"] = limit
 		response["marker"] = result.Marker
 	}
 

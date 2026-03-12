@@ -503,7 +503,7 @@ func TestBookOffersLimitParameter(t *testing.T) {
 		{
 			name:           "No limit specified",
 			limit:          nil,
-			expectedLimit:  0,
+			expectedLimit:  60, // ClampLimit returns default (60) when user omits limit
 			expectLimitKey: false,
 		},
 	}

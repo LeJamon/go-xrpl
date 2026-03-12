@@ -222,21 +222,19 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 		},
 		{
 			// Test case from rippled: malformed account using node public key format
+			// rippled returns rpcACT_MALFORMED
 			name: "Malformed account address - node public key format (actMalformed)",
 			params: map[string]interface{}{
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
-			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_NOT_FOUND,
-			setupMock: func() {
-				mock.accountNFTsErr = errors.New("invalid account address: bad address")
-			},
+			expectedError: "Malformed account.",
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			// Test case from rippled: account not found (unfunded account)
 			name: "Account not found - valid format but not in ledger (actNotFound)",
 			params: map[string]interface{}{
-				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
+				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
 			expectedCode:  types.RpcACT_NOT_FOUND,

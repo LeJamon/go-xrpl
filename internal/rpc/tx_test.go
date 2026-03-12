@@ -332,7 +332,8 @@ func TestTxMethodLookupByHash(t *testing.T) {
 				"transaction": strings.ToLower(validHash),
 			},
 			validateResp: func(t *testing.T, resp map[string]interface{}) {
-				assert.Equal(t, strings.ToLower(validHash), resp["hash"])
+				// Hash is uppercased in the response (matching rippled)
+				assert.Equal(t, strings.ToUpper(validHash), resp["hash"])
 				assert.Equal(t, float64(100), resp["ledger_index"])
 				assert.Equal(t, true, resp["validated"])
 			},
@@ -1495,8 +1496,8 @@ func TestTxMethodMetadata(t *testing.T) {
 	method := &handlers.TxMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, types.RoleGuest, method.RequiredRole(),
-			"tx method should be accessible to guests")
+		assert.Equal(t, types.RoleUser, method.RequiredRole(),
+			"tx method should require RoleUser (rippled: Role::USER)")
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {

@@ -85,7 +85,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 			params: map[string]interface{}{
 				"account": "0xDEADBEEF",
 			},
-			expectedError: "Account malformed.",
+			expectedError: "Malformed account.",
 			expectedCode:  35, // actMalformed (address validation)
 		},
 		{
@@ -93,7 +93,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 			params: map[string]interface{}{
 				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
 			},
-			expectedError: "Account malformed.",
+			expectedError: "Malformed account.",
 			expectedCode:  35, // actMalformed (address validation)
 		},
 		{

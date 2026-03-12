@@ -53,22 +53,17 @@ func (m *NftSellOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		ledgerIndex = request.LedgerIndex.String()
 	}
 
-	// Parse and validate limit parameter matching rippled's readLimitField
-	limit := nftOffersDefaultLimit
+	// Apply limit clamping matching rippled's readLimitField with nftOffers tuning.
+	// Reference: NFTOffers.cpp line 69: readLimitField(limit, RPC::Tuning::nftOffers, context)
+	var userLimit uint32
 	if request.Limit != nil {
-		limit = *request.Limit
-		if limit < nftOffersMinLimit {
-			limit = nftOffersMinLimit
-		}
-		if limit > nftOffersMaxLimit {
-			limit = nftOffersMaxLimit
-		}
+		userLimit = *request.Limit
 	}
+	limit := ClampLimit(userLimit, LimitNFTOffers, ctx.IsAdmin)
 
 	// Validate marker if provided - must be a valid hex string
 	marker := request.Marker
 	if marker != "" {
-		// Marker should be a 64-character hex string (offer index)
 		if len(marker) != 64 {
 			return nil, types.RpcErrorInvalidParams("Invalid marker")
 		}
@@ -80,7 +75,6 @@ func (m *NftSellOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	// Get NFT sell offers from the ledger service
 	result, err := types.Services.Ledger.GetNFTSellOffers(nftID, ledgerIndex, limit, marker)
 	if err != nil {
-		// Check for specific error types
 		if err.Error() == "ledger not found" {
 			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
 		}
@@ -93,42 +87,5 @@ func (m *NftSellOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, types.RpcErrorInternal("Failed to get NFT sell offers: " + err.Error())
 	}
 
-	// Build offers array with proper field handling
-	offers := make([]map[string]interface{}, len(result.Offers))
-	for i, offer := range result.Offers {
-		offerObj := map[string]interface{}{
-			"nft_offer_index": offer.NFTOfferIndex,
-			"flags":           offer.Flags,
-			"owner":           offer.Owner,
-			"amount":          offer.Amount,
-		}
-
-		// Add optional fields only if they have values
-		if offer.Destination != "" {
-			offerObj["destination"] = offer.Destination
-		}
-		if offer.Expiration > 0 {
-			offerObj["expiration"] = offer.Expiration
-		}
-
-		offers[i] = offerObj
-	}
-
-	// Build response matching rippled format
-	response := map[string]interface{}{
-		"nft_id":       nftIDHex,
-		"offers":       offers,
-		"ledger_hash":  strings.ToUpper(FormatLedgerHash(result.LedgerHash)),
-		"ledger_index": result.LedgerIndex,
-		"validated":    result.Validated,
-	}
-
-	// Add limit and marker only if there are more results (pagination)
-	if result.Marker != "" {
-		response["limit"] = limit
-		response["marker"] = result.Marker
-	}
-
-	return response, nil
+	return buildNFTOffersResponse(nftIDHex, result, limit), nil
 }
-

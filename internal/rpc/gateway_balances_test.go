@@ -206,7 +206,8 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 		{
 			name: "Account not found",
 			params: map[string]interface{}{
-				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
+				// Use a valid r-address so it passes ValidateAccount; mock returns "account not found"
+				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
 			expectedCode:  types.RpcACT_NOT_FOUND,
@@ -217,13 +218,11 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 		{
 			name: "Malformed account address",
 			params: map[string]interface{}{
+				// n-prefix address is not a valid account address -- caught by ValidateAccount
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
-			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_NOT_FOUND,
-			setupMock: func() {
-				mock.gatewayBalancesErr = errors.New("invalid account address: bad address")
-			},
+			expectedError: "Malformed account.",
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 	}
 
@@ -364,9 +363,11 @@ func TestGatewayBalancesBasic(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, aliceAccount, resp["account"])
-		// No obligations should be present
+		// obligations, balances, assets are always present (may be empty)
 		_, hasObligations := resp["obligations"]
-		assert.False(t, hasObligations, "Should not have obligations for gateway with no issued currency")
+		assert.True(t, hasObligations, "obligations should always be present in response")
+		obligations := resp["obligations"].(map[string]interface{})
+		assert.Empty(t, obligations, "obligations should be empty for gateway with no issued currency")
 	})
 
 	t.Run("Gateway with obligations returns obligations by currency", func(t *testing.T) {

@@ -25,6 +25,13 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		return nil, err
 	}
 
+	// Validate destination_account parameter if provided (rippled: rpcACT_MALFORMED)
+	if request.DestinationAccount != "" {
+		if !types.IsValidXRPLAddress(request.DestinationAccount) {
+			return nil, types.RpcErrorActMalformed("Destination account malformed.")
+		}
+	}
+
 	if err := RequireLedgerService(); err != nil {
 		return nil, err
 	}
@@ -99,10 +106,11 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
 		"validated":    result.Validated,
-		"limit":        limit,
 	}
 
+	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {
+		response["limit"] = limit
 		response["marker"] = result.Marker
 	}
 

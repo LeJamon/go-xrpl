@@ -207,7 +207,7 @@ func TestNoRippleCheckErrorValidation(t *testing.T) {
 				"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
 			expectError:   true,
-			expectedError: "Missing required parameter: role",
+			expectedError: "Missing field 'role'.",
 		},
 		{
 			name: "Invalid role field",
@@ -236,11 +236,9 @@ func TestNoRippleCheckErrorValidation(t *testing.T) {
 				"account": "invalid_account_address",
 				"role":    "user",
 			},
-			setupMock: func() {
-				mock.noRippleCheckErr = errors.New("invalid account address: bad checksum")
-			},
+			// ValidateAccount catches this before the service call
 			expectError:   true,
-			expectedError: "Account malformed.",
+			expectedError: "Malformed account.",
 		},
 	}
 

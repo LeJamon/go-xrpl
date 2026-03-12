@@ -258,18 +258,15 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 			params: map[string]interface{}{
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
-			expectedError: "Account not found.",
-			expectedCode:  types.RpcACT_NOT_FOUND, // actMalformed results in actNotFound in rippled
-			setupMock: func() {
-				mock.accountLinesErr = errors.New("account not found")
-			},
+			expectedError: "Malformed account.",
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			// Test case from rippled: account not found (unfunded account)
 			// Based on line 78-87 of AccountLines_test.cpp
 			name: "Account not found - valid format but not in ledger (actNotFound)",
 			params: map[string]interface{}{
-				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
+				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
 			expectedCode:  types.RpcACT_NOT_FOUND,
@@ -653,17 +650,14 @@ func TestAccountLinesPeerFilter(t *testing.T) {
 				"account": validAccount,
 				"peer":    "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
-			setupMock: func() {
-				mock.accountLinesErr = errors.New("actMalformed")
-			},
 			expectError:  true,
-			expectedCode: types.RpcINTERNAL,
+			expectedCode: types.RpcACT_MALFORMED,
 		},
 		{
 			name: "Peer not found - valid format but no trust lines with this peer",
 			params: map[string]interface{}{
 				"account": validAccount,
-				"peer":    "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
+				"peer":    "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			setupMock: func() {
 				mock.accountLinesResult = &types.AccountLinesResult{
@@ -794,7 +788,7 @@ func TestAccountLinesPagination(t *testing.T) {
 					Account: validAccount,
 					Lines: []types.TrustLine{
 						{
-							Account:  "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
+							Account:  "rUFiTVw3LSgEqrHV7yPL4nZ1n6f6QgjjfU",
 							Balance:  "100",
 							Currency: "EUR",
 							Limit:    "200",
@@ -1156,7 +1150,7 @@ func TestAccountLinesResponseFields(t *testing.T) {
 					Limit:    "200",
 				},
 				{
-					Account:  "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
+					Account:  "rUFiTVw3LSgEqrHV7yPL4nZ1n6f6QgjjfU",
 					Balance:  "25.25",
 					Currency: "BTC",
 					Limit:    "10",
@@ -1287,10 +1281,8 @@ func TestAccountLinesMalformedAddresses(t *testing.T) {
 		ApiVersion: types.ApiVersion1,
 	}
 
-	// Set up mock to return "account not found" for all these cases
-	// (malformed addresses result in actNotFound in rippled)
-	mock.accountLinesErr = errors.New("account not found")
-
+	// Malformed addresses are now caught by ValidateAccount at handler level
+	// returning rpcACT_MALFORMED (35) matching rippled behavior
 	malformedAddresses := []struct {
 		name    string
 		address string
@@ -1317,18 +1309,10 @@ func TestAccountLinesMalformedAddresses(t *testing.T) {
 
 			result, rpcErr := method.Handle(ctx, paramsJSON)
 
-			if tc.address == "" {
-				// Empty string should trigger missing parameter error
-				assert.Nil(t, result)
-				require.NotNil(t, rpcErr)
-				assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
-			} else {
-				// Other malformed addresses should trigger account not found
-				assert.Nil(t, result, "Expected nil result for malformed address")
-				require.NotNil(t, rpcErr, "Expected RPC error for malformed address")
-				assert.Equal(t, types.RpcACT_NOT_FOUND, rpcErr.Code,
-					"Expected actNotFound error for malformed address: %s", tc.address)
-			}
+			assert.Nil(t, result, "Expected nil result for malformed address")
+			require.NotNil(t, rpcErr, "Expected RPC error for malformed address")
+			assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code,
+				"Expected actMalformed error for malformed address: %s", tc.address)
 		})
 	}
 }

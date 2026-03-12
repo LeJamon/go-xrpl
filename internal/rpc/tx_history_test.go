@@ -333,7 +333,8 @@ func TestTxHistoryMethodMetadata(t *testing.T) {
 	t.Run("SupportedApiVersions", func(t *testing.T) {
 		versions := method.SupportedApiVersions()
 		assert.Contains(t, versions, types.ApiVersion1)
-		assert.Contains(t, versions, types.ApiVersion2)
-		assert.Contains(t, versions, types.ApiVersion3)
+		// tx_history is deprecated and only supports v1
+		assert.NotContains(t, versions, types.ApiVersion2)
+		assert.NotContains(t, versions, types.ApiVersion3)
 	})
 }

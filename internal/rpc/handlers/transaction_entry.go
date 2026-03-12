@@ -123,9 +123,10 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 			}
 		}
 	} else {
-		// v1: always include ledger_index and ledger_hash
+		// v1: always include ledger_index, ledger_hash, and validated
 		response["ledger_index"] = txInfo.LedgerIndex
 		response["ledger_hash"] = ledgerHash
+		response["validated"] = txInfo.Validated
 	}
 
 	return response, nil

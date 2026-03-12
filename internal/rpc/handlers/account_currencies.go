@@ -20,8 +20,8 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, err
 	}
 
-	if request.Account == "" {
-		return nil, types.RpcErrorInvalidParams("Missing field 'account'.")
+	if err := ValidateAccount(request.Account); err != nil {
+		return nil, err
 	}
 
 	if err := RequireLedgerService(); err != nil {

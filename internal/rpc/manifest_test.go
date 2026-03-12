@@ -129,9 +129,9 @@ func TestManifestValidKeyReturnsRequested(t *testing.T) {
 func TestManifestMethodMetadata(t *testing.T) {
 	method := &handlers.ManifestMethod{}
 
-	t.Run("RequiredRole is Admin", func(t *testing.T) {
-		assert.Equal(t, types.RoleAdmin, method.RequiredRole(),
-			"manifest should require admin role")
+	t.Run("RequiredRole is User", func(t *testing.T) {
+		assert.Equal(t, types.RoleUser, method.RequiredRole(),
+			"manifest should require user role (rippled: Role::USER)")
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {

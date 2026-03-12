@@ -42,8 +42,7 @@ func allAdminMethods() []adminMethodEntry {
 		{"consensus_info", &handlers.ConsensusInfoMethod{}},
 		{"unl_list", &handlers.UnlListMethod{}},
 		{"blacklist", &handlers.BlackListMethod{}},
-		{"tx_reduce_relay", &handlers.TxReduceRelayMethod{}},
-		{"manifest", &handlers.ManifestMethod{}},
+		{"wallet_propose", &handlers.WalletProposeMethod{}},
 		{"download_shard", &handlers.DownloadShardMethod{}},
 		{"crawl_shards", &handlers.CrawlShardsMethod{}},
 	}
@@ -75,9 +74,7 @@ func allGuestMethods() []guestMethodEntry {
 		{"ledger_entry", &handlers.LedgerEntryMethod{}},
 		{"ledger_index", &handlers.LedgerIndexMethod{}},
 		{"ledger_header", &handlers.LedgerHeaderMethod{}},
-		{"tx", &handlers.TxMethod{}},
 		{"tx_history", &handlers.TxHistoryMethod{}},
-		{"transaction_entry", &handlers.TransactionEntryMethod{}},
 		{"ping", &handlers.PingMethod{}},
 		{"random", &handlers.RandomMethod{}},
 		{"fee", &handlers.FeeMethod{}},
@@ -97,7 +94,6 @@ func allGuestMethods() []guestMethodEntry {
 		{"owner_info", &handlers.OwnerInfoMethod{}},
 		{"simulate", &handlers.SimulateMethod{}},
 		{"json", &handlers.JsonMethod{}},
-		{"wallet_propose", &handlers.WalletProposeMethod{}},
 		{"channel_verify", &handlers.ChannelVerifyMethod{}},
 		{"vault_info", &handlers.VaultInfoMethod{}},
 		{"amm_info", &handlers.AMMInfoMethod{}},
@@ -119,6 +115,10 @@ func allUserMethods() []userMethodEntry {
 		{"submit", &handlers.SubmitMethod{}},
 		{"submit_multisigned", &handlers.SubmitMultisignedMethod{}},
 		{"channel_authorize", &handlers.ChannelAuthorizeMethod{}},
+		{"tx", &handlers.TxMethod{}},
+		{"transaction_entry", &handlers.TransactionEntryMethod{}},
+		{"manifest", &handlers.ManifestMethod{}},
+		{"tx_reduce_relay", &handlers.TxReduceRelayMethod{}},
 	}
 }
 
@@ -163,7 +163,7 @@ func TestUserMethodsRequireUserRole(t *testing.T) {
 // added to the handlers package but forgotten in this test catalogue.
 // Update the expected count when adding new admin handlers.
 func TestAdminMethodCount(t *testing.T) {
-	const expectedAdminCount = 29
+	const expectedAdminCount = 28
 
 	got := len(allAdminMethods())
 	assert.Equal(t, expectedAdminCount, got,
@@ -176,7 +176,7 @@ func TestAdminMethodCount(t *testing.T) {
 // added to the handlers package but forgotten in this test catalogue.
 // Update the expected count when adding new guest handlers.
 func TestGuestMethodCount(t *testing.T) {
-	const expectedGuestCount = 44
+	const expectedGuestCount = 41
 
 	got := len(allGuestMethods())
 	assert.Equal(t, expectedGuestCount, got,
@@ -189,7 +189,7 @@ func TestGuestMethodCount(t *testing.T) {
 // added to the handlers package but forgotten in this test catalogue.
 // Update the expected count when adding new user handlers.
 func TestUserMethodCount(t *testing.T) {
-	const expectedUserCount = 5
+	const expectedUserCount = 9
 
 	got := len(allUserMethods())
 	assert.Equal(t, expectedUserCount, got,

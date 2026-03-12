@@ -599,8 +599,8 @@ func TestTransactionEntryMethodMetadata(t *testing.T) {
 	method := &handlers.TransactionEntryMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, types.RoleGuest, method.RequiredRole(),
-			"transaction_entry should be accessible to guests")
+		assert.Equal(t, types.RoleUser, method.RequiredRole(),
+			"transaction_entry requires RoleUser (rippled: Role::USER)")
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {

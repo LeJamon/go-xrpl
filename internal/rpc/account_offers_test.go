@@ -135,31 +135,21 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 			params: map[string]interface{}{
 				"account": "n94JNrQYkDrpt62bbSR7nVEhdyAvcJXRAsjEkFYyqRkh9SUTYEqV",
 			},
-			expectedError: "Account not found.",
-			expectedCode:  19, // actNotFound
-			setupMock: func() {
-				mock.getAccountOffersFn = func(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
-					return nil, errors.New("account not found")
-				}
-			},
+			expectedError: "Malformed account.",
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			name: "Malformed account address - seed format",
 			params: map[string]interface{}{
 				"account": "foo",
 			},
-			expectedError: "Account not found.",
-			expectedCode:  19, // actNotFound
-			setupMock: func() {
-				mock.getAccountOffersFn = func(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
-					return nil, errors.New("account not found")
-				}
-			},
+			expectedError: "Malformed account.",
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			name: "Account not found - valid format but not in ledger",
 			params: map[string]interface{}{
-				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
+				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
 			expectedCode:  19, // actNotFound
@@ -289,8 +279,8 @@ func TestAccountOffersNonAdminMinLimit(t *testing.T) {
 		require.Nil(t, rpcErr)
 		require.NotNil(t, result)
 
-		// The limit is passed through to the service
-		assert.Equal(t, uint32(1), capturedLimit, "Limit should be forwarded to service")
+		// Non-admin limit=1 is clamped to minimum of 10 by ClampLimit
+		assert.Equal(t, uint32(10), capturedLimit, "Limit should be clamped to minimum")
 	})
 }
 
@@ -1168,8 +1158,8 @@ func TestAccountOffersMalformedAddresses(t *testing.T) {
 
 			assert.Nil(t, result, "Expected nil result for malformed address")
 			require.NotNil(t, rpcErr, "Expected RPC error for malformed address: %s", tc.address)
-			assert.Equal(t, 19, rpcErr.Code, // actNotFound
-				"Expected actNotFound error for malformed address: %s", tc.address)
+			assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code,
+				"Expected actMalformed error for malformed address: %s", tc.address)
 		})
 	}
 

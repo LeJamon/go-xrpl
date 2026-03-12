@@ -8,13 +8,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
-// NFT offers tuning constants matching rippled's Tuning.h
-const (
-	nftOffersMinLimit     uint32 = 50
-	nftOffersDefaultLimit uint32 = 250
-	nftOffersMaxLimit     uint32 = 500
-)
-
 // NftBuyOffersMethod handles the nft_buy_offers RPC method
 // Reference: rippled NFTOffers.cpp doNFTBuyOffers
 type NftBuyOffersMethod struct{ BaseHandler }
@@ -60,22 +53,17 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		ledgerIndex = request.LedgerIndex.String()
 	}
 
-	// Parse and validate limit parameter matching rippled's readLimitField
-	limit := nftOffersDefaultLimit
+	// Apply limit clamping matching rippled's readLimitField with nftOffers tuning.
+	// Reference: NFTOffers.cpp line 69: readLimitField(limit, RPC::Tuning::nftOffers, context)
+	var userLimit uint32
 	if request.Limit != nil {
-		limit = *request.Limit
-		if limit < nftOffersMinLimit {
-			limit = nftOffersMinLimit
-		}
-		if limit > nftOffersMaxLimit {
-			limit = nftOffersMaxLimit
-		}
+		userLimit = *request.Limit
 	}
+	limit := ClampLimit(userLimit, LimitNFTOffers, ctx.IsAdmin)
 
 	// Validate marker if provided - must be a valid hex string
 	marker := request.Marker
 	if marker != "" {
-		// Marker should be a 64-character hex string (offer index)
 		if len(marker) != 64 {
 			return nil, types.RpcErrorInvalidParams("Invalid marker")
 		}
@@ -87,7 +75,6 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	// Get NFT buy offers from the ledger service
 	result, err := types.Services.Ledger.GetNFTBuyOffers(nftID, ledgerIndex, limit, marker)
 	if err != nil {
-		// Check for specific error types
 		if err.Error() == "ledger not found" {
 			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
 		}
@@ -100,7 +87,13 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		return nil, types.RpcErrorInternal("Failed to get NFT buy offers: " + err.Error())
 	}
 
-	// Build offers array with proper field handling
+	return buildNFTOffersResponse(nftIDHex, result, limit), nil
+}
+
+// buildNFTOffersResponse builds the JSON response for NFT offer queries.
+// Shared between nft_buy_offers and nft_sell_offers.
+// Reference: rippled NFTOffers.cpp enumerateNFTOffers + appendNftOfferJson
+func buildNFTOffersResponse(nftIDHex string, result *types.NFTOffersResult, limit uint32) map[string]interface{} {
 	offers := make([]map[string]interface{}, len(result.Offers))
 	for i, offer := range result.Offers {
 		offerObj := map[string]interface{}{
@@ -110,7 +103,6 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 			"amount":          offer.Amount,
 		}
 
-		// Add optional fields only if they have values
 		if offer.Destination != "" {
 			offerObj["destination"] = offer.Destination
 		}
@@ -121,7 +113,6 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		offers[i] = offerObj
 	}
 
-	// Build response matching rippled format
 	response := map[string]interface{}{
 		"nft_id":       nftIDHex,
 		"offers":       offers,
@@ -130,12 +121,12 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		"validated":    result.Validated,
 	}
 
-	// Add limit and marker only if there are more results (pagination)
+	// rippled includes limit and marker only when there are more results (pagination).
+	// Reference: NFTOffers.cpp lines 136-141
 	if result.Marker != "" {
 		response["limit"] = limit
 		response["marker"] = result.Marker
 	}
 
-	return response, nil
+	return response
 }
-

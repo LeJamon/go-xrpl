@@ -226,17 +226,14 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 			params: map[string]interface{}{
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
-			expectedError: "Account not found.",
-			expectedCode:  types.RpcACT_NOT_FOUND,
-			setupMock: func() {
-				mock.accountChannelsErr = errors.New("account not found")
-			},
+			expectedError: "Malformed account.",
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			// Test case from rippled: account not found (unfunded account)
 			name: "Account not found - valid format but not in ledger (actNotFound)",
 			params: map[string]interface{}{
-				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
+				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
 			expectedCode:  types.RpcACT_NOT_FOUND,
@@ -488,7 +485,7 @@ func TestAccountChannelsDestinationFilter(t *testing.T) {
 
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	bobAccount := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
-	carolAccount := "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9"
+	carolAccount := "rfAetmdrVkPrSdthFd8qTMqruNvWkKvw4e"
 
 	t.Run("Filter by destination returns only matching channels", func(t *testing.T) {
 		// Setup: alice has channels to both bob and carol
@@ -956,7 +953,7 @@ func TestAccountChannelsMultipleChannels(t *testing.T) {
 
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	bobAccount := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
-	carolAccount := "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9"
+	carolAccount := "rfAetmdrVkPrSdthFd8qTMqruNvWkKvw4e"
 
 	t.Run("Account with multiple channels to different destinations", func(t *testing.T) {
 		mock.accountChannelsResult = &types.AccountChannelsResult{
