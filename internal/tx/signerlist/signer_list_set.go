@@ -1,7 +1,6 @@
 package signerlist
 
 import (
-	"errors"
 	"sort"
 
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -66,7 +65,7 @@ func (s *SignerListSet) Validate() error {
 	// Reference: rippled SetSignerList.cpp preflight()
 	if s.SignerQuorum == 0 {
 		if len(s.SignerEntries) > 0 {
-			return errors.New("temMALFORMED: cannot have SignerEntries when deleting signer list")
+			return tx.Errorf(tx.TemMALFORMED, "cannot have SignerEntries when deleting signer list")
 		}
 		return nil
 	}
@@ -74,7 +73,7 @@ func (s *SignerListSet) Validate() error {
 	// Must have at least one signer, max 32
 	// Reference: rippled SetSignerList.cpp:270-276
 	if len(s.SignerEntries) == 0 || len(s.SignerEntries) > 32 {
-		return errors.New("temMALFORMED: too many or too few signers in signer list")
+		return tx.Errorf(tx.TemMALFORMED, "too many or too few signers in signer list")
 	}
 
 	// Check for duplicates, self-reference, and weight validity
@@ -86,7 +85,7 @@ func (s *SignerListSet) Validate() error {
 		// Weight must be positive
 		// Reference: rippled SetSignerList.cpp:298-303
 		if entry.SignerEntry.SignerWeight == 0 {
-			return errors.New("temBAD_WEIGHT: every signer must have a positive weight")
+			return tx.Errorf(tx.TemBAD_WEIGHT, "every signer must have a positive weight")
 		}
 
 		totalWeight += uint32(entry.SignerEntry.SignerWeight)
@@ -94,13 +93,13 @@ func (s *SignerListSet) Validate() error {
 		// Cannot include self
 		// Reference: rippled SetSignerList.cpp:307-311
 		if entry.SignerEntry.Account == s.Account {
-			return errors.New("temBAD_SIGNER: a signer may not self reference account")
+			return tx.Errorf(tx.TemBAD_SIGNER, "a signer may not self reference account")
 		}
 
 		// No duplicate accounts
 		// Reference: rippled SetSignerList.cpp:284-288
 		if seenAccounts[entry.SignerEntry.Account] {
-			return errors.New("temBAD_SIGNER: duplicate signers in signer list")
+			return tx.Errorf(tx.TemBAD_SIGNER, "duplicate signers in signer list")
 		}
 		seenAccounts[entry.SignerEntry.Account] = true
 	}
@@ -108,7 +107,7 @@ func (s *SignerListSet) Validate() error {
 	// Total weight must be >= quorum, and quorum must be positive
 	// Reference: rippled SetSignerList.cpp:324-328
 	if s.SignerQuorum == 0 || totalWeight < s.SignerQuorum {
-		return errors.New("temBAD_QUORUM: quorum is unreachable")
+		return tx.Errorf(tx.TemBAD_QUORUM, "quorum is unreachable")
 	}
 
 	return nil

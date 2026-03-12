@@ -2,7 +2,6 @@ package nftoken
 
 import (
 	"encoding/hex"
-	"errors"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
@@ -58,32 +57,32 @@ func (n *NFTokenAcceptOffer) Validate() error {
 
 	// Check for invalid flags (no flags are valid for NFTokenAcceptOffer)
 	if n.GetFlags() != 0 {
-		return errors.New("temINVALID_FLAG: NFTokenAcceptOffer does not accept any flags")
+		return tx.Errorf(tx.TemINVALID_FLAG, "NFTokenAcceptOffer does not accept any flags")
 	}
 
 	// Must have at least one offer
 	if n.NFTokenSellOffer == "" && n.NFTokenBuyOffer == "" {
-		return errors.New("temMALFORMED: must specify NFTokenSellOffer or NFTokenBuyOffer")
+		return tx.Errorf(tx.TemMALFORMED, "must specify NFTokenSellOffer or NFTokenBuyOffer")
 	}
 
 	// BrokerFee only valid for brokered mode (both offers)
 	if n.NFTokenBrokerFee != nil {
 		if n.NFTokenSellOffer == "" || n.NFTokenBuyOffer == "" {
-			return errors.New("temMALFORMED: NFTokenBrokerFee requires both sell and buy offers")
+			return tx.Errorf(tx.TemMALFORMED, "NFTokenBrokerFee requires both sell and buy offers")
 		}
 		// BrokerFee must be positive (greater than zero)
 		// Reference: rippled NFTokenAcceptOffer.cpp:56 - if (*bf <= beast::zero)
 		if n.NFTokenBrokerFee.IsZero() {
-			return errors.New("temMALFORMED: NFTokenBrokerFee must be greater than zero")
+			return tx.Errorf(tx.TemMALFORMED, "NFTokenBrokerFee must be greater than zero")
 		}
 	}
 
 	// Validate offer IDs are valid hex strings (64 characters = 32 bytes)
 	if n.NFTokenSellOffer != "" && len(n.NFTokenSellOffer) != 64 {
-		return errors.New("temMALFORMED: invalid NFTokenSellOffer format")
+		return tx.Errorf(tx.TemMALFORMED, "invalid NFTokenSellOffer format")
 	}
 	if n.NFTokenBuyOffer != "" && len(n.NFTokenBuyOffer) != 64 {
-		return errors.New("temMALFORMED: invalid NFTokenBuyOffer format")
+		return tx.Errorf(tx.TemMALFORMED, "invalid NFTokenBuyOffer format")
 	}
 
 	return nil

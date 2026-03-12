@@ -12,9 +12,8 @@ import (
 type LedgerAcceptMethod struct{}
 
 func (m *LedgerAcceptMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	// Check if services are initialized
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not initialized")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Check if running in standalone mode

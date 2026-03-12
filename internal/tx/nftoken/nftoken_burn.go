@@ -2,7 +2,6 @@ package nftoken
 
 import (
 	"encoding/hex"
-	"errors"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -52,16 +51,16 @@ func (n *NFTokenBurn) Validate() error {
 
 	// Check for invalid flags
 	if n.GetFlags()&^tfBurnNFToken != 0 {
-		return errors.New("temINVALID_FLAG: invalid NFTokenBurn flags")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid NFTokenBurn flags")
 	}
 
 	if n.NFTokenID == "" {
-		return errors.New("temMALFORMED: NFTokenID is required")
+		return tx.Errorf(tx.TemMALFORMED, "NFTokenID is required")
 	}
 
 	// Owner must not be the same as Account
 	if n.Owner != "" && n.Owner == n.Account {
-		return errors.New("temMALFORMED: Owner cannot be the same as Account")
+		return tx.Errorf(tx.TemMALFORMED, "Owner cannot be the same as Account")
 	}
 
 	return nil

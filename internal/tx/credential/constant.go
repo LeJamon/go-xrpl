@@ -1,6 +1,6 @@
 package credential
 
-import "errors"
+import "github.com/LeJamon/goXRPLd/internal/tx"
 
 // Credential constants matching rippled Protocol.h
 const (
@@ -13,12 +13,12 @@ const (
 
 // Credential validation errors
 var (
-	ErrCredentialTypeTooLong = errors.New("temMALFORMED: CredentialType exceeds maximum length")
-	ErrCredentialTypeEmpty   = errors.New("temMALFORMED: CredentialType is empty")
-	ErrCredentialURITooLong  = errors.New("temMALFORMED: URI exceeds maximum length")
-	ErrCredentialURIEmpty    = errors.New("temMALFORMED: URI is empty")
-	ErrCredentialNoSubject   = errors.New("temMALFORMED: Subject is required")
-	ErrCredentialNoIssuer    = errors.New("temINVALID_ACCOUNT_ID: Issuer field zeroed")
-	ErrCredentialNoFields    = errors.New("temMALFORMED: No Subject or Issuer fields")
-	ErrCredentialZeroAccount = errors.New("temINVALID_ACCOUNT_ID: Subject or Issuer field zeroed")
+	ErrCredentialTypeTooLong = tx.Errorf(tx.TemMALFORMED, "CredentialType exceeds maximum length")
+	ErrCredentialTypeEmpty   = tx.Errorf(tx.TemMALFORMED, "CredentialType is empty")
+	ErrCredentialURITooLong  = tx.Errorf(tx.TemMALFORMED, "URI exceeds maximum length")
+	ErrCredentialURIEmpty    = tx.Errorf(tx.TemMALFORMED, "URI is empty")
+	ErrCredentialNoSubject   = tx.Errorf(tx.TemMALFORMED, "Subject is required")
+	ErrCredentialNoIssuer    = tx.Errorf(tx.TemINVALID_ACCOUNT_ID, "Issuer field zeroed")
+	ErrCredentialNoFields    = tx.Errorf(tx.TemMALFORMED, "No Subject or Issuer fields")
+	ErrCredentialZeroAccount = tx.Errorf(tx.TemINVALID_ACCOUNT_ID, "Subject or Issuer field zeroed")
 )

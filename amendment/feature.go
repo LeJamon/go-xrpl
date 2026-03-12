@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Package amendment implements the XRP Ledger amendment system for enabling
-// new features and protocol changes in a controlled manner.
 package amendment
 
 import (

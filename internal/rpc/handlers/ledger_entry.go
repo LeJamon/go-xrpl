@@ -18,14 +18,12 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	// We need to parse into a generic map first because the fields are polymorphic
 	// (some are strings, some are objects)
 	var rawParams map[string]json.RawMessage
-	if params != nil {
-		if err := json.Unmarshal(params, &rawParams); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
-		}
+	if err := ParseParams(params, &rawParams); err != nil {
+		return nil, err
 	}
 
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Parse ledger specifier

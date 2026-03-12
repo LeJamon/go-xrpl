@@ -2,8 +2,6 @@
 package offer
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
@@ -44,7 +42,7 @@ func (o *OfferCancel) Validate() error {
 	}
 
 	if o.OfferSequence == 0 {
-		return errors.New("temBAD_SEQUENCE: OfferSequence is required and cannot be zero")
+		return tx.Errorf(tx.TemBAD_SEQUENCE, "OfferSequence is required and cannot be zero")
 	}
 
 	return nil

@@ -3,7 +3,6 @@ package permissioneddomain
 import (
 	"bytes"
 	"encoding/hex"
-	"errors"
 	"sort"
 
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -52,8 +51,8 @@ func (p *PermissionedDomainSet) Validate() error {
 
 	// Check for invalid flags (tfUniversalMask)
 	// Reference: rippled PermissionedDomainSet.cpp:41-45
-	if p.Common.Flags != nil && *p.Common.Flags&tx.TfUniversalMask != 0 {
-		return tx.ErrInvalidFlags
+	if err := tx.CheckFlags(p.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	// If DomainID is present, it must not be zero
@@ -61,7 +60,7 @@ func (p *PermissionedDomainSet) Validate() error {
 	if p.DomainID != "" {
 		domainBytes, err := hex.DecodeString(p.DomainID)
 		if err != nil || len(domainBytes) != 32 {
-			return errors.New("temMALFORMED: DomainID must be a valid 256-bit hash")
+			return tx.Errorf(tx.TemMALFORMED, "DomainID must be a valid 256-bit hash")
 		}
 		isZero := true
 		for _, b := range domainBytes {
@@ -99,7 +98,7 @@ func (p *PermissionedDomainSet) Validate() error {
 
 		credTypeBytes, err := hex.DecodeString(data.CredentialType)
 		if err != nil {
-			return errors.New("temMALFORMED: CredentialType must be valid hex string")
+			return tx.Errorf(tx.TemMALFORMED, "CredentialType must be valid hex string")
 		}
 		if len(credTypeBytes) == 0 {
 			return ErrPermDomainEmptyCredType

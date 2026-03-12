@@ -1,8 +1,6 @@
 package amm
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -73,15 +71,15 @@ func (a *AMMWithdraw) Validate() error {
 
 	// Check flags
 	if a.GetFlags()&tfAMMWithdrawMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags for AMMWithdraw")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMWithdraw")
 	}
 
 	if a.Asset.Currency == "" {
-		return errors.New("temMALFORMED: Asset is required")
+		return tx.Errorf(tx.TemMALFORMED, "Asset is required")
 	}
 
 	if a.Asset2.Currency == "" {
-		return errors.New("temMALFORMED: Asset2 is required")
+		return tx.Errorf(tx.TemMALFORMED, "Asset2 is required")
 	}
 
 	flags := a.GetFlags()
@@ -96,7 +94,7 @@ func (a *AMMWithdraw) Validate() error {
 		flagCount++
 	}
 	if flagCount != 1 {
-		return errors.New("temMALFORMED: exactly one withdraw mode flag must be set")
+		return tx.Errorf(tx.TemMALFORMED, "exactly one withdraw mode flag must be set")
 	}
 
 	// Validate field requirements for each mode
@@ -108,51 +106,51 @@ func (a *AMMWithdraw) Validate() error {
 	if flags&tfLPToken != 0 {
 		// LPToken mode: LPTokenIn required, no amount/amount2/ePrice
 		if !hasLPTokenIn || hasAmount || hasAmount2 || hasEPrice {
-			return errors.New("temMALFORMED: tfLPToken requires LPTokenIn only")
+			return tx.Errorf(tx.TemMALFORMED, "tfLPToken requires LPTokenIn only")
 		}
 	} else if flags&tfWithdrawAll != 0 {
 		// WithdrawAll mode: no fields needed
 		if hasLPTokenIn || hasAmount || hasAmount2 || hasEPrice {
-			return errors.New("temMALFORMED: tfWithdrawAll requires no amount fields")
+			return tx.Errorf(tx.TemMALFORMED, "tfWithdrawAll requires no amount fields")
 		}
 	} else if flags&tfOneAssetWithdrawAll != 0 {
 		// OneAssetWithdrawAll mode: Amount required (identifies which asset)
 		if !hasAmount || hasLPTokenIn || hasAmount2 || hasEPrice {
-			return errors.New("temMALFORMED: tfOneAssetWithdrawAll requires Amount only")
+			return tx.Errorf(tx.TemMALFORMED, "tfOneAssetWithdrawAll requires Amount only")
 		}
 	} else if flags&tfSingleAsset != 0 {
 		// SingleAsset mode: Amount required
 		if !hasAmount || hasLPTokenIn || hasAmount2 || hasEPrice {
-			return errors.New("temMALFORMED: tfSingleAsset requires Amount only")
+			return tx.Errorf(tx.TemMALFORMED, "tfSingleAsset requires Amount only")
 		}
 	} else if flags&tfTwoAsset != 0 {
 		// TwoAsset mode: Amount and Amount2 required
 		if !hasAmount || !hasAmount2 || hasLPTokenIn || hasEPrice {
-			return errors.New("temMALFORMED: tfTwoAsset requires Amount and Amount2")
+			return tx.Errorf(tx.TemMALFORMED, "tfTwoAsset requires Amount and Amount2")
 		}
 	} else if flags&tfOneAssetLPToken != 0 {
 		// OneAssetLPToken mode: Amount and LPTokenIn required
 		if !hasAmount || !hasLPTokenIn || hasAmount2 || hasEPrice {
-			return errors.New("temMALFORMED: tfOneAssetLPToken requires Amount and LPTokenIn")
+			return tx.Errorf(tx.TemMALFORMED, "tfOneAssetLPToken requires Amount and LPTokenIn")
 		}
 	} else if flags&tfLimitLPToken != 0 {
 		// LimitLPToken mode: Amount and EPrice required
 		if !hasAmount || !hasEPrice || hasLPTokenIn || hasAmount2 {
-			return errors.New("temMALFORMED: tfLimitLPToken requires Amount and EPrice")
+			return tx.Errorf(tx.TemMALFORMED, "tfLimitLPToken requires Amount and EPrice")
 		}
 	}
 
 	// Amount and Amount2 cannot have the same issue if both present
 	if hasAmount && hasAmount2 {
 		if a.Amount.Currency == a.Amount2.Currency && a.Amount.Issuer == a.Amount2.Issuer {
-			return errors.New("temBAD_AMM_TOKENS: Amount and Amount2 cannot have the same issue")
+			return tx.Errorf(tx.TemBAD_AMM_TOKENS, "Amount and Amount2 cannot have the same issue")
 		}
 	}
 
 	// Validate LPTokenIn is positive
 	if hasLPTokenIn {
 		if a.LPTokenIn.IsZero() || a.LPTokenIn.IsNegative() {
-			return errors.New("temBAD_AMM_TOKENS: invalid LPTokenIn")
+			return tx.Errorf(tx.TemBAD_AMM_TOKENS, "invalid LPTokenIn")
 		}
 	}
 
@@ -163,17 +161,17 @@ func (a *AMMWithdraw) Validate() error {
 
 	if hasAmount {
 		if errCode := validateAMMAmountWithPair(*a.Amount, &a.Asset, &a.Asset2, validZeroAmount); errCode != "" {
-			return errors.New(errCode + ": invalid Amount")
+			return tx.Errorf(ammErrCodeToResult(errCode), "invalid Amount")
 		}
 	}
 	if hasAmount2 {
 		if errCode := validateAMMAmountWithPair(*a.Amount2, &a.Asset, &a.Asset2, false); errCode != "" {
-			return errors.New(errCode + ": invalid Amount2")
+			return tx.Errorf(ammErrCodeToResult(errCode), "invalid Amount2")
 		}
 	}
 	if hasEPrice {
 		if err := validateAMMAmount(*a.EPrice); err != nil {
-			return errors.New("temBAD_AMOUNT: invalid EPrice - " + err.Error())
+			return tx.Errorf(tx.TemBAD_AMOUNT, "invalid EPrice - %s", err.Error())
 		}
 	}
 

@@ -2,7 +2,6 @@ package mpt
 
 import (
 	"encoding/hex"
-	"errors"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
@@ -54,25 +53,25 @@ func (m *MPTokenAuthorize) Validate() error {
 
 	// Check for invalid flags
 	if flags&^tfMPTokenAuthorizeValidMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags for MPTokenAuthorize")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for MPTokenAuthorize")
 	}
 
 	// MPTokenIssuanceID is required
 	if m.MPTokenIssuanceID == "" {
-		return errors.New("temMALFORMED: MPTokenIssuanceID is required")
+		return tx.Errorf(tx.TemMALFORMED, "MPTokenIssuanceID is required")
 	}
 
 	if len(m.MPTokenIssuanceID) != 48 {
-		return errors.New("temMALFORMED: MPTokenIssuanceID must be 48 hex characters")
+		return tx.Errorf(tx.TemMALFORMED, "MPTokenIssuanceID must be 48 hex characters")
 	}
 
 	if _, err := hex.DecodeString(m.MPTokenIssuanceID); err != nil {
-		return errors.New("temMALFORMED: MPTokenIssuanceID must be valid hex")
+		return tx.Errorf(tx.TemMALFORMED, "MPTokenIssuanceID must be valid hex")
 	}
 
 	// Holder cannot be the same as Account
 	if m.Holder != "" && m.Holder == m.Account {
-		return errors.New("temMALFORMED: Holder cannot be the same as Account")
+		return tx.Errorf(tx.TemMALFORMED, "Holder cannot be the same as Account")
 	}
 
 	return nil

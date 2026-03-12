@@ -1,9 +1,6 @@
 package ticket
 
 import (
-	"errors"
-	"fmt"
-
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -52,14 +49,14 @@ func (t *TicketCreate) Validate() error {
 
 	// Check for invalid flags (tfUniversalMask)
 	// Reference: rippled CreateTicket.cpp:36 — if (ctx.tx.getFlags() & tfUniversalMask)
-	if t.Common.Flags != nil && *t.Common.Flags&tx.TfUniversalMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags for TicketCreate")
+	if err := tx.CheckFlags(t.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	// TicketCount must be between 1 and 250
 	// Reference: rippled CreateTicket.cpp:39-40
 	if t.TicketCount == 0 || t.TicketCount > 250 {
-		return fmt.Errorf("temINVALID_COUNT: TicketCount must be 1-250, got %d", t.TicketCount)
+		return tx.Errorf(tx.TemINVALID_COUNT, "TicketCount must be 1-250, got %d", t.TicketCount)
 	}
 
 	return nil

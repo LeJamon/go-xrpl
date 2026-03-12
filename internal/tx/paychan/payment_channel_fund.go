@@ -3,7 +3,7 @@ package paychan
 
 import (
 	"encoding/hex"
-	"errors"
+
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -53,8 +53,8 @@ func (p *PaymentChannelFund) Validate() error {
 	}
 
 	// Check for invalid flags (tfUniversalMask) - fix1543
-	if p.Common.Flags != nil && *p.Common.Flags&tx.TfUniversal != 0 {
-		return tx.ErrInvalidFlags
+	if err := tx.CheckFlags(p.GetFlags(), tx.TfUniversal); err != nil {
+		return err
 	}
 
 	// Channel is required
@@ -65,7 +65,7 @@ func (p *PaymentChannelFund) Validate() error {
 	// Validate Channel is valid hex (256-bit hash)
 	channelBytes, err := hex.DecodeString(p.Channel)
 	if err != nil || len(channelBytes) != 32 {
-		return errors.New("temMALFORMED: Channel must be a valid 256-bit hash")
+		return tx.Errorf(tx.TemMALFORMED, "Channel must be a valid 256-bit hash")
 	}
 
 	// Amount is required and must be XRP

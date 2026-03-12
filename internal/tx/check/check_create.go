@@ -1,8 +1,6 @@
 package check
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -56,34 +54,34 @@ func (c *CheckCreate) Validate() error {
 
 	// No flags allowed except universal flags
 	// Reference: CreateCheck.cpp L41-46
-	if c.GetFlags()&tx.TfUniversalMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags")
+	if err := tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	// Cannot create check to self
 	// Reference: CreateCheck.cpp L47-52
 	if c.Account == c.Destination {
-		return errors.New("temREDUNDANT: cannot create check to self")
+		return tx.Errorf(tx.TemREDUNDANT, "cannot create check to self")
 	}
 
 	// SendMax must be positive
 	// Reference: CreateCheck.cpp L55-61
 	if c.SendMax.Signum() <= 0 {
-		return errors.New("temBAD_AMOUNT: SendMax must be positive")
+		return tx.Errorf(tx.TemBAD_AMOUNT, "SendMax must be positive")
 	}
 
 	// Cannot use bad currency (XRP as IOU or null currency)
 	// Reference: CreateCheck.cpp L63-67
 	if !c.SendMax.IsNative() {
 		if c.SendMax.Currency == "XRP" || c.SendMax.Currency == "\x00\x00\x00" || c.SendMax.Currency == "" {
-			return errors.New("temBAD_CURRENCY: invalid currency")
+			return tx.Errorf(tx.TemBAD_CURRENCY, "invalid currency")
 		}
 	}
 
 	// Expiration must not be zero if provided
 	// Reference: CreateCheck.cpp L70-77
 	if c.Expiration != nil && *c.Expiration == 0 {
-		return errors.New("temBAD_EXPIRATION: expiration must not be zero")
+		return tx.Errorf(tx.TemBAD_EXPIRATION, "expiration must not be zero")
 	}
 
 	return nil

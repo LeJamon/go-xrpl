@@ -2,7 +2,6 @@ package check
 
 import (
 	"encoding/hex"
-	"errors"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -52,12 +51,12 @@ func (c *CheckCash) Validate() error {
 
 	// No flags allowed except universal flags
 	// Reference: CashCheck.cpp L45-50
-	if c.GetFlags()&tx.TfUniversalMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags")
+	if err := tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	if c.CheckID == "" {
-		return errors.New("temMALFORMED: CheckID is required")
+		return tx.Errorf(tx.TemMALFORMED, "CheckID is required")
 	}
 
 	// Must have exactly one of Amount or DeliverMin
@@ -66,26 +65,26 @@ func (c *CheckCash) Validate() error {
 	hasDeliverMin := c.DeliverMin != nil
 
 	if hasAmount == hasDeliverMin {
-		return errors.New("temMALFORMED: must specify exactly one of Amount or DeliverMin")
+		return tx.Errorf(tx.TemMALFORMED, "must specify exactly one of Amount or DeliverMin")
 	}
 
 	// Validate the provided amount
 	// Reference: CashCheck.cpp L65-77
 	if hasAmount {
 		if c.Amount.Signum() <= 0 {
-			return errors.New("temBAD_AMOUNT: Amount must be positive")
+			return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
 		}
 		if !c.Amount.IsNative() && c.Amount.Currency == "XRP" {
-			return errors.New("temBAD_CURRENCY: invalid currency")
+			return tx.Errorf(tx.TemBAD_CURRENCY, "invalid currency")
 		}
 	}
 
 	if hasDeliverMin {
 		if c.DeliverMin.Signum() <= 0 {
-			return errors.New("temBAD_AMOUNT: DeliverMin must be positive")
+			return tx.Errorf(tx.TemBAD_AMOUNT, "DeliverMin must be positive")
 		}
 		if !c.DeliverMin.IsNative() && c.DeliverMin.Currency == "XRP" {
-			return errors.New("temBAD_CURRENCY: invalid currency")
+			return tx.Errorf(tx.TemBAD_CURRENCY, "invalid currency")
 		}
 	}
 

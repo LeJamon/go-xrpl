@@ -66,13 +66,13 @@ func (p *PaymentChannelCreate) Validate() error {
 	}
 
 	// Check for invalid flags (tfUniversalMask) - fix1543
-	if p.Common.Flags != nil && *p.Common.Flags&tx.TfUniversal != 0 {
-		return tx.ErrInvalidFlags
+	if err := tx.CheckFlags(p.GetFlags(), tx.TfUniversal); err != nil {
+		return err
 	}
 
 	// Destination is required
-	if p.Destination == "" {
-		return ErrPayChanDestRequired
+	if err := tx.CheckDestRequired(p.Destination); err != nil {
+		return err
 	}
 
 	// Amount is required and must be XRP
@@ -90,8 +90,8 @@ func (p *PaymentChannelCreate) Validate() error {
 	}
 
 	// Cannot create channel to self
-	if p.Account == p.Destination {
-		return ErrPayChanDestIsSrc
+	if err := tx.CheckDestNotSrc(p.Account, p.Destination); err != nil {
+		return err
 	}
 
 	// PublicKey is required and must be valid

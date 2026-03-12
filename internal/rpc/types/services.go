@@ -28,110 +28,69 @@ type ServiceContainer struct {
 	ShutdownFunc func()
 }
 
-// LedgerService interface for ledger operations
-type LedgerService interface {
-	// GetCurrentLedgerIndex returns the current open ledger index
+// LedgerNavigator provides ledger index navigation and mode queries.
+type LedgerNavigator interface {
 	GetCurrentLedgerIndex() uint32
-
-	// GetClosedLedgerIndex returns the last closed ledger index
 	GetClosedLedgerIndex() uint32
-
-	// GetValidatedLedgerIndex returns the highest validated ledger index
 	GetValidatedLedgerIndex() uint32
-
-	// AcceptLedger closes the current open ledger (standalone mode only)
 	AcceptLedger() (uint32, error)
-
-	// IsStandalone returns true if running in standalone mode
 	IsStandalone() bool
+}
 
-	// GetServerInfo returns server status information
-	GetServerInfo() LedgerServerInfo
-
-	// GetLedgerBySequence returns a ledger by its sequence number
+// LedgerAccessor provides ledger retrieval and server metadata.
+type LedgerAccessor interface {
 	GetLedgerBySequence(seq uint32) (LedgerReader, error)
-
-	// GetLedgerByHash returns a ledger by its hash
 	GetLedgerByHash(hash [32]byte) (LedgerReader, error)
-
-	// GetGenesisAccount returns the genesis account address
+	GetServerInfo() LedgerServerInfo
 	GetGenesisAccount() (string, error)
-
-	// SubmitTransaction submits a transaction to the open ledger
-	SubmitTransaction(txJSON []byte) (*SubmitResult, error)
-
-	// GetCurrentFees returns the current fee settings
 	GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64)
+	GetLedgerRange(minSeq, maxSeq uint32) (*LedgerRangeResult, error)
+	GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*LedgerEntryResult, error)
+	GetLedgerData(ledgerIndex string, limit uint32, marker string) (*LedgerDataResult, error)
+	GetClosedLedgerView() (LedgerStateView, error)
+	IsAmendmentBlocked() bool
+}
 
-	// GetAccountInfo retrieves account information from the ledger
-	GetAccountInfo(account string, ledgerIndex string) (*AccountInfo, error)
-
-	// GetTransaction retrieves a transaction by its hash
+// TransactionSubmitter handles transaction submission and retrieval.
+type TransactionSubmitter interface {
+	SubmitTransaction(txJSON []byte) (*SubmitResult, error)
+	SimulateTransaction(txJSON []byte) (*SubmitResult, error)
 	GetTransaction(txHash [32]byte) (*TransactionInfo, error)
-
-	// StoreTransaction stores a transaction in the current ledger
 	StoreTransaction(txHash [32]byte, txData []byte) error
+	GetTransactionHistory(startIndex uint32) (*TxHistoryResult, error)
+}
 
-	// GetAccountLines retrieves trust lines for an account
+// AccountQuerier provides account-related read operations.
+type AccountQuerier interface {
+	GetAccountInfo(account string, ledgerIndex string) (*AccountInfo, error)
 	GetAccountLines(account string, ledgerIndex string, peer string, limit uint32) (*AccountLinesResult, error)
-
-	// GetAccountOffers retrieves offers for an account
 	GetAccountOffers(account string, ledgerIndex string, limit uint32) (*AccountOffersResult, error)
+	GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *AccountTxMarker, forward bool) (*AccountTxResult, error)
+	GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*AccountChannelsResult, error)
+	GetAccountCurrencies(account string, ledgerIndex string) (*AccountCurrenciesResult, error)
+	GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*AccountObjectsResult, error)
+	GetAccountNFTs(account string, ledgerIndex string, limit uint32) (*AccountNFTsResult, error)
+}
 
-	// GetBookOffers retrieves offers from an order book
+// LedgerService is the full interface for ledger operations.
+// It composes the sub-interfaces and includes remaining methods.
+type LedgerService interface {
+	LedgerNavigator
+	LedgerAccessor
+	TransactionSubmitter
+	AccountQuerier
+
+	// Book and market data
 	GetBookOffers(takerGets, takerPays Amount, ledgerIndex string, limit uint32) (*BookOffersResult, error)
 
-	// GetAccountTransactions retrieves transaction history for an account
-	GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *AccountTxMarker, forward bool) (*AccountTxResult, error)
-
-	// GetTransactionHistory retrieves recent transactions
-	GetTransactionHistory(startIndex uint32) (*TxHistoryResult, error)
-
-	// GetLedgerRange retrieves ledger hashes for a range of sequences
-	GetLedgerRange(minSeq, maxSeq uint32) (*LedgerRangeResult, error)
-
-	// GetLedgerEntry retrieves a specific ledger entry by its index/key
-	GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*LedgerEntryResult, error)
-
-	// GetLedgerData retrieves all ledger state entries with pagination
-	GetLedgerData(ledgerIndex string, limit uint32, marker string) (*LedgerDataResult, error)
-
-	// GetAccountObjects retrieves all objects owned by an account
-	GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*AccountObjectsResult, error)
-
-	// GetAccountChannels retrieves payment channels for an account
-	GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*AccountChannelsResult, error)
-
-	// GetAccountCurrencies retrieves currencies an account can send and receive
-	GetAccountCurrencies(account string, ledgerIndex string) (*AccountCurrenciesResult, error)
-
-	// GetAccountNFTs retrieves NFTs owned by an account
-	GetAccountNFTs(account string, ledgerIndex string, limit uint32) (*AccountNFTsResult, error)
-
-	// GetGatewayBalances retrieves obligations and balances for a gateway account
+	// Gateway operations
 	GetGatewayBalances(account string, hotWallets []string, ledgerIndex string) (*GatewayBalancesResult, error)
-
-	// GetNoRippleCheck checks trust lines for proper NoRipple flag settings
 	GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*NoRippleCheckResult, error)
-
-	// GetDepositAuthorized checks if a source account is authorized to deposit to a destination account
 	GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*DepositAuthorizedResult, error)
 
-	// GetNFTBuyOffers retrieves buy offers for an NFToken
+	// NFT operations
 	GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error)
-
-	// GetNFTSellOffers retrieves sell offers for an NFToken
 	GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error)
-
-	// SimulateTransaction runs a transaction against a snapshot without committing
-	SimulateTransaction(txJSON []byte) (*SubmitResult, error)
-
-	// IsAmendmentBlocked returns true if the server is blocked by unsupported amendments
-	IsAmendmentBlocked() bool
-
-	// GetClosedLedgerView returns a read-only view of the last closed ledger
-	// for use by pathfinding and other operations that need direct state access.
-	GetClosedLedgerView() (LedgerStateView, error)
 }
 
 // LedgerStateView provides low-level read access to ledger state.

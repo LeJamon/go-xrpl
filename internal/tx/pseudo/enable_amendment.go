@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	ErrAmendmentMissing = errors.New("temMALFORMED: EnableAmendment missing amendment hash")
+	ErrAmendmentMissing = tx.Errorf(tx.TemMALFORMED, "EnableAmendment missing amendment hash")
 )
 
 func init() {

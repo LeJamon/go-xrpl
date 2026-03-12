@@ -1,6 +1,40 @@
 package tx
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+// ResultError is a structured validation error that carries a typed Result code.
+// It eliminates the need for string-prefix matching in parseValidationError.
+type ResultError struct {
+	Code   Result
+	Detail string
+}
+
+func (e *ResultError) Error() string {
+	if e.Detail == "" {
+		return e.Code.String()
+	}
+	return e.Code.String() + ": " + e.Detail
+}
+
+// Errorf creates a ResultError with the given code and formatted detail message.
+func Errorf(code Result, format string, args ...any) error {
+	return &ResultError{
+		Code:   code,
+		Detail: fmt.Sprintf(format, args...),
+	}
+}
+
+// AsResultError extracts a ResultError from err, if present.
+func AsResultError(err error) (*ResultError, bool) {
+	var re *ResultError
+	if errors.As(err, &re) {
+		return re, true
+	}
+	return nil, false
+}
 
 // Result represents a transaction result code
 type Result int

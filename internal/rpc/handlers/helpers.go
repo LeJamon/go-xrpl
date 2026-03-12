@@ -2,7 +2,39 @@ package handlers
 
 import (
 	"encoding/hex"
+	"encoding/json"
+
+	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
+
+// RequireLedgerService checks that the ledger service is available.
+// Returns an RpcError if the service is nil.
+func RequireLedgerService() *types.RpcError {
+	if types.Services == nil || types.Services.Ledger == nil {
+		return types.RpcErrorInternal("Ledger service not available")
+	}
+	return nil
+}
+
+// ParseParams unmarshals JSON params into dest, returning an RpcError on failure.
+// If params is nil, dest is left untouched (zero value).
+func ParseParams(params json.RawMessage, dest interface{}) *types.RpcError {
+	if params == nil {
+		return nil
+	}
+	if err := json.Unmarshal(params, dest); err != nil {
+		return types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
+	}
+	return nil
+}
+
+// RequireAccount checks that the account parameter is non-empty.
+func RequireAccount(account string) *types.RpcError {
+	if account == "" {
+		return types.RpcErrorInvalidParams("Missing required parameter: account")
+	}
+	return nil
+}
 
 // FormatLedgerHash formats a 32-byte hash as hex string
 func FormatLedgerHash(hash [32]byte) string {

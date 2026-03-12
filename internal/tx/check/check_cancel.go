@@ -45,8 +45,8 @@ func (c *CheckCancel) Validate() error {
 
 	// No flags allowed except universal flags
 	// Reference: CancelCheck.cpp L42-47
-	if c.GetFlags()&tx.TfUniversalMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags")
+	if err := tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	if c.CheckID == "" {

@@ -1,8 +1,6 @@
 package escrow
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -48,12 +46,12 @@ func (e *EscrowCancel) Validate() error {
 	}
 
 	// Check for invalid flags
-	if e.GetFlags()&tx.TfUniversalMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags")
+	if err := tx.CheckFlags(e.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	if e.Owner == "" {
-		return errors.New("temMALFORMED: Owner is required")
+		return tx.Errorf(tx.TemMALFORMED, "Owner is required")
 	}
 
 	return nil

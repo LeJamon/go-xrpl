@@ -39,9 +39,8 @@ func (d *DIDDelete) Validate() error {
 	}
 
 	// Check for invalid flags (tfUniversalMask)
-	flags := d.GetFlags()
-	if flags&tx.TfUniversalMask != 0 {
-		return tx.ErrInvalidFlags
+	if err := tx.CheckFlags(d.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	return nil

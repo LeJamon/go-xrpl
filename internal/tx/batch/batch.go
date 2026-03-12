@@ -1,7 +1,6 @@
 package batch
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -75,14 +74,14 @@ const (
 
 // Batch errors
 var (
-	ErrBatchTooFewTxns      = errors.New("temARRAY_EMPTY: batch must have at least 2 transactions")
-	ErrBatchTooManyTxns     = errors.New("temARRAY_TOO_LARGE: batch exceeds 8 transactions")
-	ErrBatchInvalidFlags    = errors.New("temINVALID_FLAG: invalid batch flags")
-	ErrBatchMustHaveOneFlag = errors.New("temINVALID_FLAG: exactly one batch mode flag required")
-	ErrBatchTooManySigners  = errors.New("temARRAY_TOO_LARGE: batch signers exceeds 8 entries")
-	ErrBatchDuplicateSigner = errors.New("temREDUNDANT: duplicate batch signer")
-	ErrBatchSignerIsOuter   = errors.New("temBAD_SIGNER: batch signer cannot be outer account")
-	ErrBatchNilInnerTx     = errors.New("temMALFORMED: inner transaction cannot be nil")
+	ErrBatchTooFewTxns      = tx.Errorf(tx.TemARRAY_EMPTY, "batch must have at least 2 transactions")
+	ErrBatchTooManyTxns     = tx.Errorf(tx.TemARRAY_TOO_LARGE, "batch exceeds 8 transactions")
+	ErrBatchInvalidFlags    = tx.Errorf(tx.TemINVALID_FLAG, "invalid batch flags")
+	ErrBatchMustHaveOneFlag = tx.Errorf(tx.TemINVALID_FLAG, "exactly one batch mode flag required")
+	ErrBatchTooManySigners  = tx.Errorf(tx.TemARRAY_TOO_LARGE, "batch signers exceeds 8 entries")
+	ErrBatchDuplicateSigner = tx.Errorf(tx.TemREDUNDANT, "duplicate batch signer")
+	ErrBatchSignerIsOuter   = tx.Errorf(tx.TemBAD_SIGNER, "batch signer cannot be outer account")
+	ErrBatchNilInnerTx     = tx.Errorf(tx.TemMALFORMED, "inner transaction cannot be nil")
 )
 
 // NewBatch creates a new Batch transaction

@@ -1,8 +1,6 @@
 package trustset
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -84,43 +82,43 @@ func (t *TrustSet) Validate() error {
 
 	// Check for invalid transaction flags
 	if txFlags&TrustSetFlagMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid transaction flags")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid transaction flags")
 	}
 
 	// LimitAmount must be an issued currency, not XRP
 	if t.LimitAmount.IsNative() {
-		return errors.New("temBAD_LIMIT: cannot create trust line for XRP")
+		return tx.Errorf(tx.TemBAD_LIMIT, "cannot create trust line for XRP")
 	}
 
 	if t.LimitAmount.Currency == "" {
-		return errors.New("temBAD_CURRENCY: currency is required")
+		return tx.Errorf(tx.TemBAD_CURRENCY, "currency is required")
 	}
 
 	// Check for XRP currency code
 	if t.LimitAmount.Currency == "XRP" {
-		return errors.New("temBAD_CURRENCY: cannot use XRP as IOU currency")
+		return tx.Errorf(tx.TemBAD_CURRENCY, "cannot use XRP as IOU currency")
 	}
 
 	// Negative limit is not allowed
 	if t.LimitAmount.IsNegative() {
-		return errors.New("temBAD_LIMIT: negative credit limit")
+		return tx.Errorf(tx.TemBAD_LIMIT, "negative credit limit")
 	}
 
 	// Check if destination makes sense
 	if t.LimitAmount.Issuer == "" {
-		return errors.New("temDST_NEEDED: issuer is required")
+		return tx.Errorf(tx.TemDST_NEEDED, "issuer is required")
 	}
 
 	// Cannot create trust line to self
 	if t.LimitAmount.Issuer == t.Account {
-		return errors.New("temDST_IS_SRC: cannot create trust line to self")
+		return tx.Errorf(tx.TemDST_IS_SRC, "cannot create trust line to self")
 	}
 
 	// Check for contradictory NoRipple flags
 	setNoRipple := txFlags&TrustSetFlagSetNoRipple != 0
 	clearNoRipple := txFlags&TrustSetFlagClearNoRipple != 0
 	if setNoRipple && clearNoRipple {
-		return errors.New("temINVALID_FLAG: cannot set and clear NoRipple")
+		return tx.Errorf(tx.TemINVALID_FLAG, "cannot set and clear NoRipple")
 	}
 
 	// Check for contradictory Freeze flags
@@ -130,7 +128,7 @@ func (t *TrustSet) Validate() error {
 	clearDeepFreeze := txFlags&TrustSetFlagClearDeepFreeze != 0
 
 	if (setFreeze || setDeepFreeze) && (clearFreeze || clearDeepFreeze) {
-		return errors.New("temINVALID_FLAG: cannot set and clear freeze in same transaction")
+		return tx.Errorf(tx.TemINVALID_FLAG, "cannot set and clear freeze in same transaction")
 	}
 
 	return nil

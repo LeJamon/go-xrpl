@@ -1,8 +1,6 @@
 package amm
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
 )
@@ -47,16 +45,16 @@ func (a *AMMDelete) Validate() error {
 
 	// Check flags - no flags are valid for AMMDelete
 	if a.GetFlags()&tfAMMDeleteMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags for AMMDelete")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMDelete")
 	}
 
 	// Validate asset pair
 	if a.Asset.Currency == "" {
-		return errors.New("temMALFORMED: Asset is required")
+		return tx.Errorf(tx.TemMALFORMED, "Asset is required")
 	}
 
 	if a.Asset2.Currency == "" {
-		return errors.New("temMALFORMED: Asset2 is required")
+		return tx.Errorf(tx.TemMALFORMED, "Asset2 is required")
 	}
 
 	return nil

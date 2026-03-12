@@ -1,5 +1,3 @@
-// Package kvstore defines a generic key-value storage interface,
-// analogous to go-ethereum's ethdb package.
 package kvstore
 
 // KeyValueReader wraps the Has and Get methods of a key-value store.

@@ -2,7 +2,6 @@ package mpt
 
 import (
 	"encoding/hex"
-	"errors"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -53,21 +52,21 @@ func (m *MPTokenIssuanceDestroy) Validate() error {
 	// Check for invalid flags
 	flags := m.GetFlags()
 	if flags&^tfMPTokenIssuanceDestroyValidMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags for MPTokenIssuanceDestroy")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for MPTokenIssuanceDestroy")
 	}
 
 	// MPTokenIssuanceID is required and must be valid hex
 	if m.MPTokenIssuanceID == "" {
-		return errors.New("temMALFORMED: MPTokenIssuanceID is required")
+		return tx.Errorf(tx.TemMALFORMED, "MPTokenIssuanceID is required")
 	}
 
 	// MPTokenIssuanceID should be 48 hex characters (24 bytes / Hash192)
 	if len(m.MPTokenIssuanceID) != 48 {
-		return errors.New("temMALFORMED: MPTokenIssuanceID must be 48 hex characters")
+		return tx.Errorf(tx.TemMALFORMED, "MPTokenIssuanceID must be 48 hex characters")
 	}
 
 	if _, err := hex.DecodeString(m.MPTokenIssuanceID); err != nil {
-		return errors.New("temMALFORMED: MPTokenIssuanceID must be valid hex")
+		return tx.Errorf(tx.TemMALFORMED, "MPTokenIssuanceID must be valid hex")
 	}
 
 	return nil

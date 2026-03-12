@@ -2,7 +2,6 @@ package credential
 
 import (
 	"encoding/hex"
-	"errors"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 
@@ -56,8 +55,8 @@ func (c *CredentialCreate) Validate() error {
 
 	// Check for invalid flags (tfUniversalMask)
 	// Reference: rippled Credentials.cpp:66-71
-	if c.Common.Flags != nil && *c.Common.Flags&tx.TfUniversalMask != 0 {
-		return tx.ErrInvalidFlags
+	if err := tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	// Subject is required and must not be the zero account
@@ -77,7 +76,7 @@ func (c *CredentialCreate) Validate() error {
 	if c.URI != "" {
 		decoded, err := hex.DecodeString(c.URI)
 		if err != nil {
-			return errors.New("temMALFORMED: URI must be valid hex string")
+			return tx.Errorf(tx.TemMALFORMED, "URI must be valid hex string")
 		}
 		if len(decoded) == 0 {
 			return ErrCredentialURIEmpty
@@ -94,7 +93,7 @@ func (c *CredentialCreate) Validate() error {
 	}
 	decoded, err := hex.DecodeString(c.CredentialType)
 	if err != nil {
-		return errors.New("temMALFORMED: CredentialType must be valid hex string")
+		return tx.Errorf(tx.TemMALFORMED, "CredentialType must be valid hex string")
 	}
 	if len(decoded) == 0 {
 		return ErrCredentialTypeEmpty
