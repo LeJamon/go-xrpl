@@ -1,10 +1,15 @@
 package handlers
 
 import (
+	"encoding/hex"
 	"encoding/json"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
+
+// maxCredentialsArraySize matches rippled's protocol constant.
+// Reference: rippled/include/xrpl/protocol/Protocol.h maxCredentialsArraySize = 8
+const maxCredentialsArraySize = 8
 
 // DepositAuthorizedMethod handles the deposit_authorized RPC method
 type DepositAuthorizedMethod struct{}
@@ -29,6 +34,14 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, types.RpcErrorInvalidParams("Missing field 'destination_account'.")
 	}
 
+	// Validate credentials array format before calling the service.
+	// This matches rippled DepositAuthorized.cpp credential validation order.
+	if len(request.Credentials) > 0 {
+		if err := validateCredentialsFormat(request.Credentials); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := RequireLedgerService(); err != nil {
 		return nil, err
 	}
@@ -39,7 +52,7 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		ledgerIndex = request.LedgerIndex.String()
 	}
 
-	// Call the service
+	// Call the service with credentials for ledger-side validation
 	result, err := types.Services.Ledger.GetDepositAuthorized(
 		request.SourceAccount,
 		request.DestinationAccount,
@@ -82,6 +95,11 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 			}
 		}
 
+		// Credential validation errors from the service layer
+		if len(errMsg) > 16 && errMsg[:16] == "bad_credentials:" {
+			return nil, types.RpcErrorBadCredentials(errMsg[17:])
+		}
+
 		return nil, types.RpcErrorInternal(errMsg)
 	}
 
@@ -101,6 +119,37 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 
 	return response, nil
+}
+
+// validateCredentialsFormat validates the credentials array format at the RPC level.
+// This performs format-only checks (non-empty, max size, valid hex hashes).
+// Ledger-side validation (existence, acceptance, expiry, ownership, duplicates)
+// is done in the service layer.
+// Reference: rippled DepositAuthorized.cpp credential parsing loop
+func validateCredentialsFormat(credentials []string) *types.RpcError {
+	if len(credentials) == 0 {
+		return types.RpcErrorInvalidParams(
+			"Invalid field 'credentials', is non-empty array of CredentialID(hash256).")
+	}
+
+	if len(credentials) > maxCredentialsArraySize {
+		return types.RpcErrorInvalidParams(
+			"Invalid field 'credentials', array too long.")
+	}
+
+	for _, credStr := range credentials {
+		// Each credential must be a valid 64-char hex string (32 bytes / 256 bits)
+		if len(credStr) != 64 {
+			return types.RpcErrorInvalidParams(
+				"Invalid field 'credentials', an array of CredentialID(hash256).")
+		}
+		if _, err := hex.DecodeString(credStr); err != nil {
+			return types.RpcErrorInvalidParams(
+				"Invalid field 'credentials', an array of CredentialID(hash256).")
+		}
+	}
+
+	return nil
 }
 
 func (m *DepositAuthorizedMethod) RequiredRole() types.Role {

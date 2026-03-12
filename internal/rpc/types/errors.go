@@ -207,7 +207,7 @@ func RpcErrorObjectNotFound(message string) *RpcError {
 	return NewRpcError(RpcOBJECT_NOT_FOUND, "objectNotFound", "objectNotFound", message)
 }
 
-// RpcErrorBadCredentials returns an error for invalid credentials (matches rippled rpcBAD_CREDENTIALS)
+// RpcErrorBadCredentials returns an error for credential validation failures (matches rippled rpcBAD_CREDENTIALS).
 func RpcErrorBadCredentials(message string) *RpcError {
 	return NewRpcError(RpcBAD_CREDENTIALS, "badCredentials", "badCredentials", message)
 }
