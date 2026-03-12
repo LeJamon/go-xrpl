@@ -20,6 +20,7 @@ import (
 	"github.com/LeJamon/goXRPLd/storage/nodestore"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb/postgres"
+	sqlitedb "github.com/LeJamon/goXRPLd/storage/relationaldb/sqlite"
 	"github.com/spf13/cobra"
 )
 
@@ -96,7 +97,6 @@ func runServer(cmd *cobra.Command, args []string) {
 		var err error
 		repoManager, err = postgres.NewRepositoryManager(pgConfig)
 		if err != nil {
-			// Not fatal — postgres is optional, only log
 			if !quiet {
 				fmt.Printf("PostgreSQL: not available (%v)\n", err)
 			}
@@ -108,6 +108,24 @@ func runServer(cmd *cobra.Command, args []string) {
 				repoManager = nil
 			} else if !quiet {
 				fmt.Println("PostgreSQL: connected for transaction indexing")
+			}
+		}
+	} else if dbPath != "" {
+		// Default: auto-create SQLite databases at the given directory path
+		var err error
+		repoManager, err = sqlitedb.NewRepositoryManager(dbPath)
+		if err != nil {
+			if !quiet {
+				fmt.Printf("SQLite: failed to initialize (%v)\n", err)
+			}
+		} else {
+			if err := repoManager.Open(context.Background()); err != nil {
+				if !quiet {
+					fmt.Printf("SQLite: failed to open (%v)\n", err)
+				}
+				repoManager = nil
+			} else if !quiet {
+				fmt.Printf("SQLite: transaction indexing at %s\n", dbPath)
 			}
 		}
 	}
