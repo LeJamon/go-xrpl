@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/config"
@@ -88,7 +89,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	// Initialize RelationalDB if configured
 	var repoManager relationaldb.RepositoryManager
 	dbPath := globalConfig.DatabasePath
-	if dbPath != "" {
+	if strings.HasPrefix(dbPath, "postgres://") || strings.HasPrefix(dbPath, "postgresql://") {
 		pgConfig := relationaldb.NewConfig()
 		pgConfig.ConnectionString = dbPath
 
