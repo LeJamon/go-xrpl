@@ -1,0 +1,50 @@
+version: "2"
+
+run:
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - bidichk
+    - copyloopvar
+    - durationcheck
+    - gocheckcompilerdirectives
+    - govet
+    - ineffassign
+    - mirror
+    - misspell
+    - reassign
+    - revive
+    - staticcheck
+    - unconvert
+    - unused
+    - usetesting
+    - whitespace
+  settings:
+    staticcheck:
+      checks:
+        - -QF1*
+    revive:
+      enable-all-rules: false
+      rules:
+        - name: receiver-naming
+          severity: warning
+          disabled: false
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+
+formatters:
+  enable:
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+  exclusions:
+    generated: lax
