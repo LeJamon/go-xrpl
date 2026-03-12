@@ -8,7 +8,6 @@ import (
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/crypto/ed25519"
 	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -44,11 +43,6 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		return nil, types.RpcErrorMissingField("tx_json")
 	}
 
-	// Check for signing credentials
-	if request.Secret == "" && request.Seed == "" && request.SeedHex == "" && request.Passphrase == "" {
-		return nil, types.RpcErrorInvalidParams("Missing signing credentials")
-	}
-
 	// Validate account address
 	if !addresscodec.IsValidClassicAddress(request.Account) {
 		return nil, &types.RpcError{
@@ -59,95 +53,23 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		}
 	}
 
-	// Determine the key type
+	// Parse credentials and derive keypair using the shared helper
+	privateKey, publicKey, rpcErr := parseCredentialsAndDeriveKeypair(
+		request.Secret,
+		request.Seed,
+		request.SeedHex,
+		request.Passphrase,
+		request.KeyType,
+		ctx.ApiVersion,
+	)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+
+	// Determine key type for signing (needed by signPayload)
 	keyType := strings.ToLower(request.KeyType)
 	if keyType == "" {
-		keyType = "secp256k1" // Default
-	}
-	if keyType != "secp256k1" && keyType != "ed25519" {
-		return nil, &types.RpcError{
-			Code:        types.RpcBAD_KEY_TYPE,
-			ErrorString: "badKeyType",
-			Type:        "badKeyType",
-			Message:     "Invalid field 'key_type'.",
-		}
-	}
-
-	// Derive entropy from the provided credential
-	var entropy []byte
-	var detectedKeyType string
-
-	if request.Seed != "" || request.Secret != "" {
-		// secret is an alias for seed
-		seedStr := request.Seed
-		if seedStr == "" {
-			seedStr = request.Secret
-		}
-
-		// Decode the seed
-		var err error
-		var algo interface{}
-		entropy, algo, err = addresscodec.DecodeSeed(seedStr)
-		if err != nil {
-			return nil, &types.RpcError{
-				Code:        types.RpcBAD_SEED,
-				ErrorString: "badSeed",
-				Type:        "badSeed",
-				Message:     "Disallowed seed.",
-			}
-		}
-
-		// Detect key type from seed
-		if _, isEd25519 := algo.(ed25519.ED25519CryptoAlgorithm); isEd25519 {
-			detectedKeyType = "ed25519"
-		} else {
-			detectedKeyType = "secp256k1"
-		}
-
-		// If key_type was specified, verify it matches
-		if request.KeyType != "" && keyType != detectedKeyType {
-			return nil, &types.RpcError{
-				Code:        types.RpcBAD_SEED,
-				ErrorString: "badSeed",
-				Type:        "badSeed",
-				Message:     "Disallowed seed.",
-			}
-		}
-		keyType = detectedKeyType
-	} else if request.SeedHex != "" {
-		// Decode hex seed
-		var err error
-		entropy, err = hex.DecodeString(request.SeedHex)
-		if err != nil || len(entropy) != 16 {
-			return nil, &types.RpcError{
-				Code:        types.RpcBAD_SEED,
-				ErrorString: "badSeed",
-				Type:        "badSeed",
-				Message:     "Disallowed seed.",
-			}
-		}
-	} else if request.Passphrase != "" {
-		// Derive seed from passphrase using SHA-512 Half (first 16 bytes of SHA-512)
-		hash := common.Sha512Half([]byte(request.Passphrase))
-		entropy = hash[:16]
-	}
-
-	// Derive keypair based on key type
-	var privateKey, publicKey string
-	var err error
-
-	if keyType == "ed25519" {
-		algo := ed25519.ED25519()
-		privateKey, publicKey, err = algo.DeriveKeypair(entropy, false)
-		if err != nil {
-			return nil, types.RpcErrorInternal("Failed to derive keypair: " + err.Error())
-		}
-	} else {
-		algo := secp256k1.SECP256K1()
-		privateKey, publicKey, err = algo.DeriveKeypair(entropy, false)
-		if err != nil {
-			return nil, types.RpcErrorInternal("Failed to derive keypair: " + err.Error())
-		}
+		keyType = "secp256k1"
 	}
 
 	// Parse the transaction JSON

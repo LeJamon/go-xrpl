@@ -1,8 +1,6 @@
 package trustset
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -84,54 +82,48 @@ func (t *TrustSet) Validate() error {
 
 	// Check for invalid transaction flags
 	if txFlags&TrustSetFlagMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid transaction flags")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid transaction flags")
 	}
 
 	// LimitAmount must be an issued currency, not XRP
 	if t.LimitAmount.IsNative() {
-		return errors.New("temBAD_LIMIT: cannot create trust line for XRP")
+		return tx.Errorf(tx.TemBAD_LIMIT, "cannot create trust line for XRP")
 	}
 
 	if t.LimitAmount.Currency == "" {
-		return errors.New("temBAD_CURRENCY: currency is required")
+		return tx.Errorf(tx.TemBAD_CURRENCY, "currency is required")
 	}
 
 	// Check for XRP currency code
 	if t.LimitAmount.Currency == "XRP" {
-		return errors.New("temBAD_CURRENCY: cannot use XRP as IOU currency")
+		return tx.Errorf(tx.TemBAD_CURRENCY, "cannot use XRP as IOU currency")
 	}
 
 	// Negative limit is not allowed
 	if t.LimitAmount.IsNegative() {
-		return errors.New("temBAD_LIMIT: negative credit limit")
+		return tx.Errorf(tx.TemBAD_LIMIT, "negative credit limit")
 	}
 
 	// Check if destination makes sense
 	if t.LimitAmount.Issuer == "" {
-		return errors.New("temDST_NEEDED: issuer is required")
+		return tx.Errorf(tx.TemDST_NEEDED, "issuer is required")
 	}
 
 	// Cannot create trust line to self
 	if t.LimitAmount.Issuer == t.Account {
-		return errors.New("temDST_IS_SRC: cannot create trust line to self")
+		return tx.Errorf(tx.TemDST_IS_SRC, "cannot create trust line to self")
 	}
 
 	// Check for contradictory NoRipple flags
 	setNoRipple := txFlags&TrustSetFlagSetNoRipple != 0
 	clearNoRipple := txFlags&TrustSetFlagClearNoRipple != 0
 	if setNoRipple && clearNoRipple {
-		return errors.New("temINVALID_FLAG: cannot set and clear NoRipple")
+		return tx.Errorf(tx.TemINVALID_FLAG, "cannot set and clear NoRipple")
 	}
 
-	// Check for contradictory Freeze flags
-	setFreeze := txFlags&TrustSetFlagSetFreeze != 0
-	clearFreeze := txFlags&TrustSetFlagClearFreeze != 0
-	setDeepFreeze := txFlags&TrustSetFlagSetDeepFreeze != 0
-	clearDeepFreeze := txFlags&TrustSetFlagClearDeepFreeze != 0
-
-	if (setFreeze || setDeepFreeze) && (clearFreeze || clearDeepFreeze) {
-		return errors.New("temINVALID_FLAG: cannot set and clear freeze in same transaction")
-	}
+	// Note: contradictory freeze/deep-freeze flag checks are done in Apply(),
+	// gated behind featureDeepFreeze, returning tecNO_PERMISSION (not temINVALID_FLAG).
+	// Reference: rippled SetTrust.cpp preclaim() lines 326-332
 
 	return nil
 }
@@ -157,6 +149,47 @@ func (t *TrustSet) ClearNoRipple() {
 func (t *TrustSet) SetFreeze() {
 	flags := t.GetFlags() | TrustSetFlagSetFreeze
 	t.SetFlags(flags)
+}
+
+// computeFreezeFlags computes the resulting trust line flags after applying
+// freeze/deep-freeze flag changes. Matches rippled's computeFreezeFlags() exactly.
+// Reference: rippled SetTrust.cpp lines 34-64
+func computeFreezeFlags(
+	uFlags uint32,
+	bHigh bool,
+	bNoFreeze bool,
+	bSetFreeze bool,
+	bClearFreeze bool,
+	bSetDeepFreeze bool,
+	bClearDeepFreeze bool,
+) uint32 {
+	if bSetFreeze && !bClearFreeze && !bNoFreeze {
+		if bHigh {
+			uFlags |= state.LsfHighFreeze
+		} else {
+			uFlags |= state.LsfLowFreeze
+		}
+	} else if bClearFreeze && !bSetFreeze {
+		if bHigh {
+			uFlags &^= state.LsfHighFreeze
+		} else {
+			uFlags &^= state.LsfLowFreeze
+		}
+	}
+	if bSetDeepFreeze && !bClearDeepFreeze && !bNoFreeze {
+		if bHigh {
+			uFlags |= state.LsfHighDeepFreeze
+		} else {
+			uFlags |= state.LsfLowDeepFreeze
+		}
+	} else if bClearDeepFreeze && !bSetDeepFreeze {
+		if bHigh {
+			uFlags &^= state.LsfHighDeepFreeze
+		} else {
+			uFlags &^= state.LsfLowDeepFreeze
+		}
+	}
+	return uFlags
 }
 
 // Apply applies a TrustSet transaction to the ledger state.
@@ -266,10 +299,61 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefNO_AUTH_REQUIRED
 	}
 
-	// Validate freeze flags - cannot freeze if account has lsfNoFreeze set
 	bNoFreeze := (ctx.Account.Flags & state.LsfNoFreeze) != 0
-	if bNoFreeze && (bSetFreeze || bSetDeepFreeze) {
-		return tx.TecNO_PERMISSION
+
+	// Deep freeze preclaim checks.
+	// Reference: rippled SetTrust.cpp preflight() lines 87-95 and preclaim() lines 311-361
+	if ctx.Rules().DeepFreezeEnabled() {
+		// Check #1: Cannot freeze if account has lsfNoFreeze set.
+		// Reference: rippled preclaim() lines 318-322
+		if bNoFreeze && (bSetFreeze || bSetDeepFreeze) {
+			return tx.TecNO_PERMISSION
+		}
+
+		// Check #2: Cannot set and clear freeze in same transaction.
+		// Reference: rippled preclaim() lines 326-332
+		if (bSetFreeze || bSetDeepFreeze) && (bClearFreeze || bClearDeepFreeze) {
+			return tx.TecNO_PERMISSION
+		}
+
+		// Check #3: Compute what the trust line flags WOULD be after applying,
+		// and reject if deep frozen without being frozen.
+		// Reference: rippled preclaim() lines 334-360
+		var currentFlags uint32
+		if trustLineExists {
+			trustLineData, readErr := ctx.View.Read(trustLineKey)
+			if readErr == nil && trustLineData != nil {
+				rs, parseErr := state.ParseRippleState(trustLineData)
+				if parseErr == nil {
+					currentFlags = rs.Flags
+				}
+			}
+		}
+
+		resultFlags := computeFreezeFlags(
+			currentFlags, bHigh, bNoFreeze,
+			bSetFreeze, bClearFreeze,
+			bSetDeepFreeze, bClearDeepFreeze,
+		)
+
+		var frozen, deepFrozen bool
+		if bHigh {
+			frozen = resultFlags&state.LsfHighFreeze != 0
+			deepFrozen = resultFlags&state.LsfHighDeepFreeze != 0
+		} else {
+			frozen = resultFlags&state.LsfLowFreeze != 0
+			deepFrozen = resultFlags&state.LsfLowDeepFreeze != 0
+		}
+
+		if deepFrozen && !frozen {
+			return tx.TecNO_PERMISSION
+		}
+	} else {
+		// Without featureDeepFreeze, deep freeze flags are invalid.
+		// Reference: rippled preflight() lines 87-95
+		if bSetDeepFreeze || bClearDeepFreeze {
+			return tx.TemINVALID_FLAG
+		}
 	}
 
 	// Parse quality values from transaction

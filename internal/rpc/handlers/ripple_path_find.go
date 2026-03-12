@@ -2,36 +2,143 @@ package handlers
 
 import (
 	"encoding/json"
+	"strconv"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/goXRPLd/internal/tx/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx/payment/pathfinder"
 )
 
+// ripplePathFindRequest represents the ripple_path_find RPC request params.
+type ripplePathFindRequest struct {
+	SourceAccount      string          `json:"source_account"`
+	DestinationAccount string          `json:"destination_account"`
+	DestinationAmount  json.RawMessage `json:"destination_amount"`
+	SendMax            json.RawMessage `json:"send_max,omitempty"`
+	SourceCurrencies   []struct {
+		Currency string `json:"currency"`
+		Issuer   string `json:"issuer,omitempty"`
+	} `json:"source_currencies,omitempty"`
+}
+
+// ripplePathFindResponse represents the ripple_path_find RPC response.
+type ripplePathFindResponse struct {
+	Alternatives          []pathAlternativeJSON `json:"alternatives"`
+	DestinationAccount    string                `json:"destination_account"`
+	DestinationCurrencies []string              `json:"destination_currencies"`
+}
+
+type pathAlternativeJSON struct {
+	SourceAmount  interface{}          `json:"source_amount"`
+	PathsComputed [][]payment.PathStep `json:"paths_computed"`
+}
+
 // RipplePathFindMethod handles the ripple_path_find RPC method.
-// STUB: Returns notImplemented. Requires full pathfinding engine.
-//
-// TODO [pathfinding]: Implement payment path finding.
-//   - Requires: Pathfinder engine (major feature — rippled's is ~5000 lines)
-//   - Reference: rippled RipplePathFind.cpp, Pathfinder.cpp, PathRequest.cpp
-//   - Steps:
-//     1. Parse: source_account, destination_account, destination_amount,
-//        send_max (optional), source_currencies (optional)
-//     2. Resolve target ledger state
-//     3. Run pathfinding algorithm:
-//        a. Direct paths (same currency, direct trust line)
-//        b. Rippling paths (through intermediary trust lines)
-//        c. Order book paths (through DEX offers)
-//        d. Combined multi-hop paths
-//     4. For each path, calculate: source_amount, paths_computed
-//     5. Sort by cost (lowest source_amount first)
-//     6. Return alternatives array with path details
-//   - Depends on: payment engine's flow/strand infrastructure already exists
-//     in internal/core/tx/payment/ — pathfinding uses similar strand logic
-//     but searches backwards from destination to source
+// Reference: rippled RipplePathFind.cpp
 type RipplePathFindMethod struct{}
 
 func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	return nil, types.NewRpcError(types.RpcNOT_IMPL, "notImplemented", "notImplemented",
-		"Path finding engine not yet implemented")
+	var request ripplePathFindRequest
+	if err := json.Unmarshal(params, &request); err != nil {
+		return nil, types.NewRpcError(types.RpcINVALID_PARAMS, "invalidParams", "invalidParams",
+			"Invalid parameters: "+err.Error())
+	}
+
+	// Validate required fields
+	if request.SourceAccount == "" {
+		return nil, types.NewRpcError(types.RpcINVALID_PARAMS, "invalidParams", "invalidParams",
+			"Missing field 'source_account'")
+	}
+	if request.DestinationAccount == "" {
+		return nil, types.NewRpcError(types.RpcINVALID_PARAMS, "invalidParams", "invalidParams",
+			"Missing field 'destination_account'")
+	}
+	if request.DestinationAmount == nil {
+		return nil, types.NewRpcError(types.RpcINVALID_PARAMS, "invalidParams", "invalidParams",
+			"Missing field 'destination_amount'")
+	}
+
+	// Decode accounts
+	srcAccount, err := state.DecodeAccountID(request.SourceAccount)
+	if err != nil {
+		return nil, types.NewRpcError(types.RpcINVALID_PARAMS, "invalidParams", "invalidParams",
+			"Invalid source_account")
+	}
+	dstAccount, err := state.DecodeAccountID(request.DestinationAccount)
+	if err != nil {
+		return nil, types.NewRpcError(types.RpcINVALID_PARAMS, "invalidParams", "invalidParams",
+			"Invalid destination_account")
+	}
+
+	// Parse destination amount
+	dstAmount := parsePathFindAmount(request.DestinationAmount)
+
+	// Parse optional send_max
+	var sendMax *state.Amount
+	if request.SendMax != nil {
+		amt := parsePathFindAmount(request.SendMax)
+		sendMax = &amt
+	}
+
+	// Parse optional source_currencies
+	var srcCurrencies []payment.Issue
+	for _, sc := range request.SourceCurrencies {
+		issue := payment.Issue{Currency: sc.Currency}
+		if sc.Issuer != "" {
+			issuerID, decErr := state.DecodeAccountID(sc.Issuer)
+			if decErr != nil {
+				return nil, types.NewRpcError(types.RpcINVALID_PARAMS, "invalidParams", "invalidParams",
+					"Invalid source_currencies issuer")
+			}
+			issue.Issuer = issuerID
+		} else if sc.Currency != "XRP" && sc.Currency != "" {
+			issue.Issuer = srcAccount
+		}
+		srcCurrencies = append(srcCurrencies, issue)
+	}
+
+	// Get ledger view
+	view, err := types.Services.Ledger.GetClosedLedgerView()
+	if err != nil {
+		return nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
+			"No closed ledger available")
+	}
+
+	// Run pathfinding
+	pr := pathfinder.NewPathRequest(srcAccount, dstAccount, dstAmount, sendMax, srcCurrencies, false)
+	result := pr.Execute(view)
+
+	// Build response
+	response := ripplePathFindResponse{
+		DestinationAccount:    request.DestinationAccount,
+		DestinationCurrencies: result.DestinationCurrencies,
+	}
+
+	for _, alt := range result.Alternatives {
+		jAlt := pathAlternativeJSON{
+			PathsComputed: alt.PathsComputed,
+		}
+		if alt.SourceAmount.IsNative() {
+			jAlt.SourceAmount = alt.SourceAmount.Value()
+		} else {
+			jAlt.SourceAmount = map[string]string{
+				"currency": alt.SourceAmount.Currency,
+				"issuer":   alt.SourceAmount.Issuer,
+				"value":    alt.SourceAmount.Value(),
+			}
+		}
+		response.Alternatives = append(response.Alternatives, jAlt)
+	}
+
+	if response.Alternatives == nil {
+		response.Alternatives = []pathAlternativeJSON{}
+	}
+	if response.DestinationCurrencies == nil {
+		response.DestinationCurrencies = []string{}
+	}
+
+	return response, nil
 }
 
 func (m *RipplePathFindMethod) RequiredRole() types.Role {
@@ -43,5 +150,32 @@ func (m *RipplePathFindMethod) SupportedApiVersions() []int {
 }
 
 func (m *RipplePathFindMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
+	return types.NeedsCurrentLedger
+}
+
+// parsePathFindAmount parses a JSON amount for path finding.
+func parsePathFindAmount(raw json.RawMessage) state.Amount {
+	// Try as string first (XRP drops)
+	var strVal string
+	if err := json.Unmarshal(raw, &strVal); err == nil {
+		drops, _ := strconv.ParseInt(strVal, 10, 64)
+		return state.NewXRPAmountFromInt(drops)
+	}
+
+	// Try as IOU object
+	var iou struct {
+		Currency string `json:"currency"`
+		Issuer   string `json:"issuer"`
+		Value    string `json:"value"`
+	}
+	if err := json.Unmarshal(raw, &iou); err != nil {
+		return state.NewXRPAmountFromInt(0)
+	}
+
+	if iou.Currency == "XRP" || iou.Currency == "" {
+		drops, _ := strconv.ParseInt(iou.Value, 10, 64)
+		return state.NewXRPAmountFromInt(drops)
+	}
+
+	return state.NewIssuedAmountFromDecimalString(iou.Value, iou.Currency, iou.Issuer)
 }

@@ -281,27 +281,5 @@ func DeleteSLE(view tx.LedgerView, credKey keylet.Keylet, cred *CredentialEntry)
 
 // adjustOwnerCount reads an account, adjusts its OwnerCount, and writes it back.
 func adjustOwnerCount(view tx.LedgerView, accountID [20]byte, delta int) error {
-	accountKey := keylet.Account(accountID)
-	data, err := view.Read(accountKey)
-	if err != nil || data == nil {
-		return nil // Account doesn't exist (may have been deleted)
-	}
-
-	account, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return fmt.Errorf("failed to parse account root: %w", err)
-	}
-
-	if delta < 0 && account.OwnerCount > 0 {
-		account.OwnerCount--
-	} else if delta > 0 {
-		account.OwnerCount++
-	}
-
-	updated, err := state.SerializeAccountRoot(account)
-	if err != nil {
-		return fmt.Errorf("failed to serialize account root: %w", err)
-	}
-
-	return view.Update(accountKey, updated)
+	return tx.AdjustOwnerCount(view, accountID, delta)
 }

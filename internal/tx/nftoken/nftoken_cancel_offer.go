@@ -2,7 +2,6 @@ package nftoken
 
 import (
 	"encoding/hex"
-	"errors"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
@@ -47,24 +46,24 @@ func (n *NFTokenCancelOffer) Validate() error {
 
 	// Check flags - no flags are valid for NFTokenCancelOffer
 	if n.GetFlags()&tfNFTokenCancelOfferMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags for NFTokenCancelOffer")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for NFTokenCancelOffer")
 	}
 
 	// Must have at least one offer ID
 	if len(n.NFTokenOffers) == 0 {
-		return errors.New("temMALFORMED: NFTokenOffers is required")
+		return tx.Errorf(tx.TemMALFORMED, "NFTokenOffers is required")
 	}
 
 	// Cannot exceed maximum offer count
 	if len(n.NFTokenOffers) > maxTokenOfferCancelCount {
-		return errors.New("temMALFORMED: NFTokenOffers exceeds maximum count")
+		return tx.Errorf(tx.TemMALFORMED, "NFTokenOffers exceeds maximum count")
 	}
 
 	// Check for duplicates
 	seen := make(map[string]bool)
 	for _, offerID := range n.NFTokenOffers {
 		if seen[offerID] {
-			return errors.New("temMALFORMED: duplicate offer ID in NFTokenOffers")
+			return tx.Errorf(tx.TemMALFORMED, "duplicate offer ID in NFTokenOffers")
 		}
 		seen[offerID] = true
 	}

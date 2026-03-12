@@ -1,8 +1,6 @@
 package check
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -56,34 +54,34 @@ func (c *CheckCreate) Validate() error {
 
 	// No flags allowed except universal flags
 	// Reference: CreateCheck.cpp L41-46
-	if c.GetFlags()&tx.TfUniversalMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags")
+	if err := tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	// Cannot create check to self
 	// Reference: CreateCheck.cpp L47-52
 	if c.Account == c.Destination {
-		return errors.New("temREDUNDANT: cannot create check to self")
+		return tx.Errorf(tx.TemREDUNDANT, "cannot create check to self")
 	}
 
 	// SendMax must be positive
 	// Reference: CreateCheck.cpp L55-61
 	if c.SendMax.Signum() <= 0 {
-		return errors.New("temBAD_AMOUNT: SendMax must be positive")
+		return tx.Errorf(tx.TemBAD_AMOUNT, "SendMax must be positive")
 	}
 
 	// Cannot use bad currency (XRP as IOU or null currency)
 	// Reference: CreateCheck.cpp L63-67
 	if !c.SendMax.IsNative() {
 		if c.SendMax.Currency == "XRP" || c.SendMax.Currency == "\x00\x00\x00" || c.SendMax.Currency == "" {
-			return errors.New("temBAD_CURRENCY: invalid currency")
+			return tx.Errorf(tx.TemBAD_CURRENCY, "invalid currency")
 		}
 	}
 
 	// Expiration must not be zero if provided
 	// Reference: CreateCheck.cpp L70-77
 	if c.Expiration != nil && *c.Expiration == 0 {
-		return errors.New("temBAD_EXPIRATION: expiration must not be zero")
+		return tx.Errorf(tx.TemBAD_EXPIRATION, "expiration must not be zero")
 	}
 
 	return nil
@@ -103,28 +101,11 @@ func (c *CheckCreate) RequiredAmendments() [][32]byte {
 func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// --- Preclaim checks ---
 
-	// Verify destination exists
-	// Reference: CreateCheck.cpp L85-90
-	destID, err := state.DecodeAccountID(c.Destination)
-	if err != nil {
-		return tx.TemINVALID
-	}
-
-	destKey := keylet.Account(destID)
-	destData, err := ctx.View.Read(destKey)
-	if err != nil || destData == nil {
-		return tx.TecNO_DST
-	}
-
-	destAccount, err := state.ParseAccountRoot(destData)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
-	// Pseudo-accounts cannot cash checks.
-	// Reference: rippled CreateCheck.cpp:100-105
-	if (destAccount.Flags & state.LsfAMM) != 0 {
-		return tx.TecNO_PERMISSION
+	// Verify destination exists and is not a pseudo-account
+	// Reference: CreateCheck.cpp L85-90, L100-105
+	destAccount, destID, result := ctx.LookupDestination(c.Destination)
+	if result != tx.TesSUCCESS {
+		return result
 	}
 
 	// Check DisallowIncoming flag on destination
@@ -230,12 +211,8 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Reserve check: account must afford owner count + 1
 	// Reference: CreateCheck.cpp L181-186
-	// Use prior balance (before fee deduction) as rippled uses mPriorBalance
-	feeDrops := parseFee(c.Fee)
-	priorBalance := ctx.Account.Balance + feeDrops
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-	if priorBalance < reserve {
-		return tx.TecINSUFFICIENT_RESERVE
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount+1, c.Fee); result != tx.TesSUCCESS {
+		return result
 	}
 
 	// Create the check entry

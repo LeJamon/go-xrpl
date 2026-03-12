@@ -7,7 +7,9 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/account"
+	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
+	offerBuilder "github.com/LeJamon/goXRPLd/internal/testing/offer"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
 )
 
@@ -368,49 +370,326 @@ func TestFreeze_HolderFreeze(t *testing.T) {
 
 // TestFreeze_PathsWhenFrozen tests longer payment paths when trust lines are frozen.
 // From rippled: testPathsWhenFrozen
+//
+// When an offer owner's trust line is frozen by the issuer, payments that route
+// through that offer (via the order book) should fail with tecPATH_PARTIAL because
+// the frozen offer is treated as unfunded.
+//
+// When frozen by the currency holder (not the issuer), the offer should still be
+// usable (holder freeze only prevents the holder from creating new outgoing
+// obligations, not from receiving).
 func TestFreeze_PathsWhenFrozen(t *testing.T) {
-	t.Skip("TODO: Frozen paths require freeze enforcement in BookStep (flow engine doesn't check freeze on offers)")
+	env := xrplgoTesting.NewTestEnv(t)
+
+	G1 := xrplgoTesting.NewAccount("G1")
+	A1 := xrplgoTesting.NewAccount("A1")
+	A2 := xrplgoTesting.NewAccount("A2")
+
+	env.FundAmount(G1, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(A1, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(A2, uint64(xrplgoTesting.XRP(10000)))
+	env.Close()
+
+	// Set up trust lines: both A1 and A2 trust G1 for USD
+	usdLimit := tx.NewIssuedAmountFromFloat64(10000, "USD", G1.Address)
+	result := env.Submit(trustset.TrustLine(A1, "USD", G1, "10000").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(trustset.TrustLine(A2, "USD", G1, "10000").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Fund both with USD
+	usd1000 := tx.NewIssuedAmountFromFloat64(1000, "USD", G1.Address)
+	result = env.Submit(PayIssued(G1, A1, usd1000).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(PayIssued(G1, A2, usd1000).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// A2 creates a passive offer: wants XRP(100), gives USD(100)
+	// This is an XRP->USD offer on the book
+	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", G1.Address)
+	xrp100 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(100)))
+	result = env.Submit(offerBuilder.OfferCreate(A2, xrp100, usd100).Passive().Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// === Test 1: A2's trust line frozen by issuer (G1) ===
+	// Payments through A2's offer should fail because the offer is unfunded (frozen output side)
+	{
+		env.FreezeTrustLine(G1, A2, "USD")
+		env.Close()
+
+		// A1 tries to send USD to G1 using XRP through A2's offer — should fail
+		usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", G1.Address)
+		xrp11 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(11)))
+		result = env.Submit(
+			PayIssued(A1, G1, usd10).
+				SendMax(tx.NewXRPAmount(int64(xrplgoTesting.XRP(11)))).
+				Paths([][]payment.PathStep{{
+					{Currency: "USD", Issuer: G1.Address},
+				}}).
+				NoDirectRipple().
+				Build(),
+		)
+		if result.Code != "tecPATH_PARTIAL" {
+			t.Errorf("Expected tecPATH_PARTIAL when A2's line frozen by issuer (A1->G1), got %s", result.Code)
+		}
+
+		// G1 tries to send USD to A1 using XRP through A2's offer — should also fail
+		result = env.Submit(
+			PayIssued(G1, A1, usd10).
+				SendMax(tx.NewXRPAmount(int64(xrplgoTesting.XRP(11)))).
+				Paths([][]payment.PathStep{{
+					{Currency: "USD", Issuer: G1.Address},
+				}}).
+				NoDirectRipple().
+				Build(),
+		)
+		if result.Code != "tecPATH_PARTIAL" {
+			t.Errorf("Expected tecPATH_PARTIAL when A2's line frozen by issuer (G1->A1), got %s", result.Code)
+		}
+
+		env.UnfreezeTrustLine(G1, A2, "USD")
+		env.Close()
+		_ = xrp11
+		_ = usdLimit
+	}
+
+	// === Test 2: A2's trust line frozen by holder (A2 herself) ===
+	// Holder freeze does NOT prevent the offer from being consumed
+	{
+		// A2 freezes her own trust line
+		result = env.Submit(trustset.TrustLine(A2, "USD", G1, "10000").Freeze().Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// A1 can still send USD using XRP through A2's offer
+		usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", G1.Address)
+		result = env.Submit(
+			PayIssued(A1, G1, usd10).
+				SendMax(tx.NewXRPAmount(int64(xrplgoTesting.XRP(11)))).
+				Paths([][]payment.PathStep{{
+					{Currency: "USD", Issuer: G1.Address},
+				}}).
+				NoDirectRipple().
+				Build(),
+		)
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// G1 can still send USD using XRP through A2's offer
+		result = env.Submit(
+			PayIssued(G1, A1, usd10).
+				SendMax(tx.NewXRPAmount(int64(xrplgoTesting.XRP(11)))).
+				Paths([][]payment.PathStep{{
+					{Currency: "USD", Issuer: G1.Address},
+				}}).
+				NoDirectRipple().
+				Build(),
+		)
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// Clear A2's holder freeze
+		result = env.Submit(trustset.TrustLine(A2, "USD", G1, "10000").ClearFreeze().Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+	}
+
+	// === Test 3: USD->XRP direction: A2 creates offer selling XRP for USD ===
+	// Create a new offer: A2 wants USD(100), gives XRP(100)
+	result = env.Submit(offerBuilder.OfferCreate(A2, usd100, xrp100).Passive().Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// === Test 3a: A2's trust line frozen by issuer ===
+	// For USD->XRP offers, freeze on the input side (USD) means the offer can
+	// still be crossed (the offer owner receives USD, which is the frozen side,
+	// but accountFundsHelper with fhZERO_IF_FROZEN only checks the OUTPUT side).
+	// In rippled, A1 can send XRP using USD through A2's offer when frozen by issuer.
+	{
+		env.FreezeTrustLine(G1, A2, "USD")
+		env.Close()
+
+		// A1 can still send XRP using USD through A2's offer
+		xrp10 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(10)))
+		usd11 := tx.NewIssuedAmountFromFloat64(11, "USD", G1.Address)
+		result = env.Submit(
+			Pay(A1, G1, uint64(xrplgoTesting.XRP(10))).
+				SendMax(usd11).
+				PathsXRP().
+				NoDirectRipple().
+				Build(),
+		)
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// G1 can still send XRP using USD through A2's offer
+		result = env.Submit(
+			Pay(G1, A1, uint64(xrplgoTesting.XRP(10))).
+				SendMax(usd11).
+				PathsXRP().
+				NoDirectRipple().
+				Build(),
+		)
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		env.UnfreezeTrustLine(G1, A2, "USD")
+		env.Close()
+		_ = xrp10
+	}
+
+	// === Test 3b: A2's trust line frozen by holder ===
+	// Holder freeze does NOT prevent the offer from being consumed
+	{
+		result = env.Submit(trustset.TrustLine(A2, "USD", G1, "10000").Freeze().Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// A1 can still send XRP using USD through A2's offer
+		usd11 := tx.NewIssuedAmountFromFloat64(11, "USD", G1.Address)
+		result = env.Submit(
+			Pay(A1, G1, uint64(xrplgoTesting.XRP(10))).
+				SendMax(usd11).
+				PathsXRP().
+				NoDirectRipple().
+				Build(),
+		)
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// G1 can still send XRP using USD through A2's offer
+		result = env.Submit(
+			Pay(G1, A1, uint64(xrplgoTesting.XRP(10))).
+				SendMax(usd11).
+				PathsXRP().
+				NoDirectRipple().
+				Build(),
+		)
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		result = env.Submit(trustset.TrustLine(A2, "USD", G1, "10000").ClearFreeze().Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+	}
 }
 
 // TestFreeze_OffersWhenFrozen tests offers for frozen trust lines.
 // From rippled: testOffersWhenFrozen
+//
+// When an offer owner's trust line is frozen by the issuer, the offer's output
+// (TakerGets) side becomes frozen. The flow engine treats this as an unfunded
+// offer (fhZERO_IF_FROZEN returns zero balance). A payment that routes through
+// this frozen offer should fail, and the frozen offer should be removed from the
+// order book during the payment/offer crossing process.
 func TestFreeze_OffersWhenFrozen(t *testing.T) {
-	t.Skip("TODO: Frozen offers require offer creation support")
-
 	env := xrplgoTesting.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	carol := xrplgoTesting.NewAccount("carol")
+	G1 := xrplgoTesting.NewAccount("G1")
+	A2 := xrplgoTesting.NewAccount("A2")
+	A3 := xrplgoTesting.NewAccount("A3")
+	A4 := xrplgoTesting.NewAccount("A4")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(1000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(2000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(1000)))
-	env.FundAmount(carol, uint64(xrplgoTesting.XRP(1000)))
+	env.FundAmount(G1, uint64(xrplgoTesting.XRP(1000)))
+	env.FundAmount(A2, uint64(xrplgoTesting.XRP(2000)))
+	env.FundAmount(A3, uint64(xrplgoTesting.XRP(1000)))
+	env.FundAmount(A4, uint64(xrplgoTesting.XRP(1000)))
 	env.Close()
 
 	// Set up trust lines
-	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "1000").Build())
+	result := env.Submit(trustset.TrustLine(A2, "USD", G1, "1000").Build())
 	xrplgoTesting.RequireTxSuccess(t, result)
-	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "2000").Build())
+	result = env.Submit(trustset.TrustLine(A3, "USD", G1, "2000").Build())
 	xrplgoTesting.RequireTxSuccess(t, result)
-	result = env.Submit(trustset.TrustLine(carol, "USD", gw, "2000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
-	env.Close()
-
-	// Fund bob and carol
-	usd2000 := tx.NewIssuedAmountFromFloat64(2000, "USD", gw.Address)
-	result = env.Submit(PayIssued(gw, bob, usd2000).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
-	result = env.Submit(PayIssued(gw, carol, usd2000).Build())
+	result = env.Submit(trustset.TrustLine(A4, "USD", G1, "2000").Build())
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
 
-	// bob creates offer: XRP(1000) for USD(1000) (passive)
-	// TODO: Offer creation
+	// Fund A3 and A4 with USD
+	usd2000 := tx.NewIssuedAmountFromFloat64(2000, "USD", G1.Address)
+	result = env.Submit(PayIssued(G1, A3, usd2000).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(PayIssued(G1, A4, usd2000).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
 
-	t.Log("Offers when frozen test: requires offer creation support")
+	// A3 creates a passive offer: wants XRP(1000), gives USD(1000)
+	usd1000 := tx.NewIssuedAmountFromFloat64(1000, "USD", G1.Address)
+	xrp1000 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(1000)))
+	result = env.Submit(offerBuilder.OfferCreate(A3, xrp1000, usd1000).Passive().Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// === Removal after successful payment ===
+	// Make a payment that partially consumes A3's offer
+	usd1 := tx.NewIssuedAmountFromFloat64(1, "USD", G1.Address)
+	result = env.Submit(
+		PayIssued(A2, G1, usd1).
+			SendMax(tx.NewXRPAmount(int64(xrplgoTesting.XRP(1)))).
+			Paths([][]payment.PathStep{{
+				{Currency: "USD", Issuer: G1.Address},
+			}}).
+			Build(),
+	)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Verify A3's offer is partially consumed (still has 1 offer)
+	offerBuilder.RequireOfferCount(t, env, A3, 1)
+
+	// Someone else (A4) creates an offer providing liquidity
+	usd999 := tx.NewIssuedAmountFromFloat64(999, "USD", G1.Address)
+	xrp999 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(999)))
+	result = env.Submit(offerBuilder.OfferCreate(A4, xrp999, usd999).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Freeze A3's trust line (issuer freeze)
+	env.FreezeTrustLine(G1, A3, "USD")
+	env.Close()
+
+	// A3's offer is still in the ledger...
+	offerBuilder.RequireOfferCount(t, env, A3, 1)
+
+	// ...but a payment through the book should use A4's offer instead
+	// (A3's is treated as unfunded due to freeze) and remove A3's offer
+	result = env.Submit(
+		PayIssued(A2, G1, usd1).
+			SendMax(tx.NewXRPAmount(int64(xrplgoTesting.XRP(1)))).
+			Paths([][]payment.PathStep{{
+				{Currency: "USD", Issuer: G1.Address},
+			}}).
+			Build(),
+	)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// A3's frozen offer should have been removed during the payment
+	offerBuilder.RequireOfferCount(t, env, A3, 0)
+
+	// === Removal by successful OfferCreate ===
+	// Freeze A4's trust line
+	env.FreezeTrustLine(G1, A4, "USD")
+	env.Close()
+
+	// A2 creates a crossing offer — A4's frozen offer should be removed
+	// but A2's offer won't cross (A4 is frozen), so A2's offer stays on the book
+	usdOffer := tx.NewIssuedAmountFromFloat64(999, "USD", G1.Address)
+	xrpOffer := tx.NewXRPAmount(int64(xrplgoTesting.XRP(999)))
+	result = env.Submit(offerBuilder.OfferCreate(A2, usdOffer, xrpOffer).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// A4's frozen offer should have been removed
+	offerBuilder.RequireOfferCount(t, env, A4, 0)
+
+	_ = usd999
+	_ = xrp999
+	_ = usd1000
+	_ = xrp1000
 }
 
 // TestFreeze_CreateFrozenTrustline tests creating a pre-frozen trust line.

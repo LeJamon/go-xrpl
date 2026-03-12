@@ -157,6 +157,9 @@ func (m *mockDepositAuthorizedLedgerService) SimulateTransaction(txJSON []byte) 
 	return nil, errors.New("not implemented")
 }
 func (m *mockDepositAuthorizedLedgerService) IsAmendmentBlocked() bool { return false }
+func (m *mockDepositAuthorizedLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {
+	return nil, errors.New("not implemented in mock")
+}
 
 // setupDepositAuthorizedTestServices initializes the Services singleton with a mock for testing
 func setupDepositAuthorizedTestServices(mock *mockDepositAuthorizedLedgerService) func() {

@@ -16,7 +16,7 @@ import (
 var rippleEpochTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // LedgerMethod handles the ledger RPC method.
-type LedgerMethod struct{}
+type LedgerMethod struct{ BaseHandler }
 
 func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
@@ -30,14 +30,12 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		Queue        bool `json:"queue,omitempty"`
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Determine which ledger to retrieve
@@ -192,14 +190,3 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	return response, nil
 }
 
-func (m *LedgerMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *LedgerMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *LedgerMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

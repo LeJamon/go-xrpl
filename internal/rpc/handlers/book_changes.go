@@ -15,7 +15,7 @@ import (
 // BookChangesMethod handles the book_changes RPC method.
 // Computes OHLCV data for all currency pairs that had offer changes in a ledger.
 // Reference: rippled BookChanges.h (computeBookChanges)
-type BookChangesMethod struct{}
+type BookChangesMethod struct{ BaseHandler }
 
 // bookChange tracks OHLCV data for a single currency pair
 type bookChange struct {
@@ -34,14 +34,12 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		types.LedgerSpecifier
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Resolve ledger - default to validated
@@ -306,14 +304,3 @@ func formatBigFloat(f *big.Float) string {
 	return f.Text('f', 6)
 }
 
-func (m *BookChangesMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *BookChangesMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *BookChangesMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

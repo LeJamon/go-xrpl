@@ -7,7 +7,7 @@ import (
 )
 
 // AccountCurrenciesMethod handles the account_currencies RPC method
-type AccountCurrenciesMethod struct{}
+type AccountCurrenciesMethod struct{ BaseHandler }
 
 func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
@@ -16,19 +16,16 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 		Strict bool `json:"strict,omitempty"`
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
 	if request.Account == "" {
 		return nil, types.RpcErrorInvalidParams("Missing field 'account'.")
 	}
 
-	// Check if ledger service is available
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Determine ledger index to use
@@ -71,14 +68,3 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 	return response, nil
 }
 
-func (m *AccountCurrenciesMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *AccountCurrenciesMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *AccountCurrenciesMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

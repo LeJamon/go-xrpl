@@ -2,7 +2,6 @@ package credential
 
 import (
 	"encoding/hex"
-	"errors"
 
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -52,8 +51,8 @@ func (c *CredentialDelete) Validate() error {
 
 	// Check for invalid flags (tfUniversalMask)
 	// Reference: rippled Credentials.cpp:217-222
-	if c.Common.Flags != nil && *c.Common.Flags&tx.TfUniversalMask != 0 {
-		return tx.ErrInvalidFlags
+	if err := tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	// At least one of Subject or Issuer must be present
@@ -88,7 +87,7 @@ func (c *CredentialDelete) Validate() error {
 	}
 	decoded, err := hex.DecodeString(c.CredentialType)
 	if err != nil {
-		return errors.New("temMALFORMED: CredentialType must be valid hex string")
+		return tx.Errorf(tx.TemMALFORMED, "CredentialType must be valid hex string")
 	}
 	if len(decoded) == 0 {
 		return ErrCredentialTypeEmpty

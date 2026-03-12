@@ -10,7 +10,7 @@ import (
 // Returns API version information for the server.
 // IMPLEMENTED: Returns the supported API version range.
 // Reference: rippled Version.h (VersionHandler)
-type VersionMethod struct{}
+type VersionMethod struct{ BaseHandler }
 
 func (m *VersionMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	response := map[string]interface{}{
@@ -24,14 +24,3 @@ func (m *VersionMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	return response, nil
 }
 
-func (m *VersionMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *VersionMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *VersionMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

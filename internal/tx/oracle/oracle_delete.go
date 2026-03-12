@@ -1,8 +1,6 @@
 package oracle
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -44,8 +42,8 @@ func (o *OracleDelete) Validate() error {
 	}
 
 	// Check flags - only universal flags allowed
-	if o.Flags != nil && *o.Flags&tx.TfUniversalMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags set")
+	if err := tx.CheckFlags(o.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	return nil

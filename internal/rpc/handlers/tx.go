@@ -22,10 +22,8 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interf
 		CTID      string `json:"ctid,omitempty"`
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
 	// CTID lookup support
@@ -41,8 +39,8 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interf
 		return nil, types.RpcErrorInvalidParams("Missing required parameter: transaction")
 	}
 
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Parse the transaction hash
@@ -120,8 +118,8 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interf
 
 // lookupByCTID looks up a transaction using a CTID (Compact Transaction ID)
 func (m *TxMethod) lookupByCTID(ledgerSeq uint32, txIndex uint16, binary bool) (interface{}, *types.RpcError) {
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	ledger, err := types.Services.Ledger.GetLedgerBySequence(ledgerSeq)

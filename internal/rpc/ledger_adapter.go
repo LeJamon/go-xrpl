@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -836,4 +837,14 @@ func (a *LedgerServiceAdapter) GetNFTSellOffers(nftID [32]byte, ledgerIndex stri
 		Limit:       result.Limit,
 		Marker:      result.Marker,
 	}, nil
+}
+
+// GetClosedLedgerView returns a read-only view of the last closed ledger
+// for use by pathfinding and other operations that need direct state access.
+func (a *LedgerServiceAdapter) GetClosedLedgerView() (types.LedgerStateView, error) {
+	l := a.svc.GetClosedLedger()
+	if l == nil {
+		return nil, fmt.Errorf("no closed ledger available")
+	}
+	return l, nil
 }

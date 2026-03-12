@@ -512,7 +512,10 @@ func (s *DirectStepI) quality(sb *PaymentSandbox, isIn bool) uint32 {
 	return QualityOne
 }
 
-// accountHolds returns the balance src holds of dst's IOUs
+// accountHolds returns the balance src holds of dst's IOUs.
+// The result is adjusted by the BalanceHook to account for deferred credits,
+// preventing double-counting across payment paths.
+// Reference: rippled View.cpp accountHolds() lines 385-465
 func (s *DirectStepI) accountHolds(sb *PaymentSandbox) tx.Amount {
 	trustLineKey := keylet.Line(s.src, s.dst, s.currency)
 	data, err := sb.Read(trustLineKey)
@@ -532,12 +535,19 @@ func (s *DirectStepI) accountHolds(sb *PaymentSandbox) tx.Amount {
 
 	srcIsLow := state.CompareAccountIDs(s.src, s.dst) < 0
 
-	if srcIsLow {
-		// src is low account
-		return balance
+	if !srcIsLow {
+		// Put balance in src's terms (src is high account)
+		balance = balance.Negate()
 	}
-	// src is high account
-	return balance.Negate()
+
+	// Set issuer to dst (the counterparty) to match rippled's convention.
+	// Reference: rippled View.cpp accountHolds() line 453: amount.setIssuer(issuer)
+	balance.Issuer = state.EncodeAccountIDSafe(s.dst)
+
+	// Apply the balance hook to account for deferred credits.
+	// This prevents self-payments and circular paths from double-counting liquidity.
+	// Reference: rippled View.cpp accountHolds() line 464: return view.balanceHook(account, issuer, amount)
+	return sb.BalanceHook(s.src, s.dst, balance)
 }
 
 // creditLimit returns the credit limit dst has extended to src
@@ -900,30 +910,7 @@ func (s *DirectStepI) trustCreate(sb *PaymentSandbox, amount tx.Amount) error {
 
 // adjustOwnerCount modifies an account's OwnerCount by delta.
 func (s *DirectStepI) adjustOwnerCount(sb *PaymentSandbox, account [20]byte, delta int32) error {
-	accountKey := keylet.Account(account)
-	data, err := sb.Read(accountKey)
-	if err != nil || data == nil {
-		return err
-	}
-
-	acct, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return err
-	}
-
-	if delta > 0 {
-		acct.OwnerCount += uint32(delta)
-	} else if uint32(-delta) <= acct.OwnerCount {
-		acct.OwnerCount -= uint32(-delta)
-	}
-
-	newData, err := state.SerializeAccountRoot(acct)
-	if err != nil {
-		return err
-	}
-
-	sb.Update(accountKey, newData)
-	return nil
+	return tx.AdjustOwnerCount(sb, account, int(delta))
 }
 
 // DirectStepSrcAcct returns the source account for NoRipple checking
@@ -1125,6 +1112,14 @@ func checkFreeze(view *PaymentSandbox, src, dst [20]byte, currency string) tx.Re
 		if err == nil && (dstAccount.Flags&state.LsfGlobalFreeze) != 0 {
 			return tx.TerNO_LINE
 		}
+	}
+
+	// Check deep freeze — unlike normal freeze, deep freeze acts the same
+	// regardless of which side froze it. If either side set deep freeze,
+	// the trust line is completely blocked in both directions.
+	// Reference: rippled StepChecks.h:58-62
+	if (rs.Flags&state.LsfHighDeepFreeze) != 0 || (rs.Flags&state.LsfLowDeepFreeze) != 0 {
+		return tx.TerNO_LINE
 	}
 
 	return tx.TesSUCCESS

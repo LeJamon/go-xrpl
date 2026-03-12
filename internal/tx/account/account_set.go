@@ -2,11 +2,11 @@ package account
 
 import (
 	"encoding/hex"
-	"errors"
 	"strings"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
@@ -170,13 +170,13 @@ func (a *AccountSet) Validate() error {
 	// Check for invalid transaction flags
 	// Reference: rippled SetAccount.cpp:71-75
 	if txFlags&AccountSetTxFlagMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid transaction flags")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid transaction flags")
 	}
 
 	// Cannot set and clear the same flag
 	// Reference: rippled SetAccount.cpp:80-84
 	if a.SetFlag != nil && a.ClearFlag != nil && *a.SetFlag == *a.ClearFlag {
-		return errors.New("temINVALID_FLAG: cannot set and clear the same flag")
+		return tx.Errorf(tx.TemINVALID_FLAG, "cannot set and clear the same flag")
 	}
 
 	// Check for contradictory RequireAuth flags
@@ -186,7 +186,7 @@ func (a *AccountSet) Validate() error {
 	clearRequireAuth := (txFlags&AccountSetTxFlagOptionalAuth != 0) ||
 		(a.ClearFlag != nil && *a.ClearFlag == AccountSetFlagRequireAuth)
 	if setRequireAuth && clearRequireAuth {
-		return errors.New("temINVALID_FLAG: contradictory RequireAuth flags")
+		return tx.Errorf(tx.TemINVALID_FLAG, "contradictory RequireAuth flags")
 	}
 
 	// Check for contradictory RequireDest flags
@@ -196,7 +196,7 @@ func (a *AccountSet) Validate() error {
 	clearRequireDest := (txFlags&AccountSetTxFlagOptionalDestTag != 0) ||
 		(a.ClearFlag != nil && *a.ClearFlag == AccountSetFlagRequireDest)
 	if setRequireDest && clearRequireDest {
-		return errors.New("temINVALID_FLAG: contradictory RequireDest flags")
+		return tx.Errorf(tx.TemINVALID_FLAG, "contradictory RequireDest flags")
 	}
 
 	// Check for contradictory DisallowXRP flags
@@ -206,18 +206,18 @@ func (a *AccountSet) Validate() error {
 	clearDisallowXRP := (txFlags&AccountSetTxFlagAllowXRP != 0) ||
 		(a.ClearFlag != nil && *a.ClearFlag == AccountSetFlagDisallowXRP)
 	if setDisallowXRP && clearDisallowXRP {
-		return errors.New("temINVALID_FLAG: contradictory DisallowXRP flags")
+		return tx.Errorf(tx.TemINVALID_FLAG, "contradictory DisallowXRP flags")
 	}
 
 	// TransferRate validation
 	// Reference: rippled SetAccount.cpp:129-146
 	if a.TransferRate != nil {
 		tr := *a.TransferRate
-		if tr != 0 && tr < 1000000000 {
-			return errors.New("temBAD_TRANSFER_RATE: transfer rate too small")
+		if tr != 0 && tr < protocol.TransferRateMin {
+			return tx.Errorf(tx.TemBAD_TRANSFER_RATE, "transfer rate too small")
 		}
-		if tr > 2000000000 {
-			return errors.New("temBAD_TRANSFER_RATE: transfer rate too large")
+		if tr > protocol.TransferRateMax {
+			return tx.Errorf(tx.TemBAD_TRANSFER_RATE, "transfer rate too large")
 		}
 	}
 
@@ -225,8 +225,8 @@ func (a *AccountSet) Validate() error {
 	// Reference: rippled SetAccount.cpp:149-159
 	if a.TickSize != nil {
 		ts := *a.TickSize
-		if ts != 0 && (ts < 3 || ts > 15) {
-			return errors.New("temBAD_TICK_SIZE: tick size must be 0 or 3-15")
+		if ts != 0 && (ts < protocol.TickSizeMin || ts > protocol.TickSizeMax) {
+			return tx.Errorf(tx.TemBAD_TICK_SIZE, "tick size must be 0 or 3-15")
 		}
 	}
 
@@ -236,7 +236,7 @@ func (a *AccountSet) Validate() error {
 	if a.MessageKey != nil && *a.MessageKey != "" {
 		mkBytes, err := hex.DecodeString(*a.MessageKey)
 		if err != nil || !isValidPublicKey(mkBytes) {
-			return errors.New("telBAD_PUBLIC_KEY: invalid message key specified")
+			return tx.Errorf(tx.TelBAD_PUBLIC_KEY, "invalid message key specified")
 		}
 	}
 
@@ -244,19 +244,19 @@ func (a *AccountSet) Validate() error {
 	// Reference: rippled SetAccount.cpp:170-175
 	// Domain is stored as hex, so max hex length is 2*256 = 512
 	if a.Domain != nil && len(*a.Domain) > MaxDomainLength*2 {
-		return errors.New("telBAD_DOMAIN: domain too long")
+		return tx.Errorf(tx.TelBAD_DOMAIN, "domain too long")
 	}
 
 	// NFTokenMinter validation
 	// Reference: rippled SetAccount.cpp:177-187
 	if a.SetFlag != nil && *a.SetFlag == AccountSetFlagAuthorizedNFTokenMinter {
 		if a.NFTokenMinter == "" {
-			return errors.New("temMALFORMED: NFTokenMinter required when setting asfAuthorizedNFTokenMinter")
+			return tx.Errorf(tx.TemMALFORMED, "NFTokenMinter required when setting asfAuthorizedNFTokenMinter")
 		}
 	}
 	if a.ClearFlag != nil && *a.ClearFlag == AccountSetFlagAuthorizedNFTokenMinter {
 		if a.NFTokenMinter != "" {
-			return errors.New("temMALFORMED: NFTokenMinter must be empty when clearing asfAuthorizedNFTokenMinter")
+			return tx.Errorf(tx.TemMALFORMED, "NFTokenMinter must be empty when clearing asfAuthorizedNFTokenMinter")
 		}
 	}
 

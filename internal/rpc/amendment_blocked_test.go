@@ -35,6 +35,7 @@ var blockedMethods = []string{
 	"get_aggregate_price",
 	"simulate",
 	"tx",
+	"ripple_path_find",
 }
 
 // unblockedMethods are methods with NO_CONDITION that should continue working.
@@ -229,7 +230,7 @@ func TestAmendmentBlockedConditionClassification(t *testing.T) {
 		counts[types.NeedsCurrentLedger], counts[types.NeedsClosedLedger], counts[types.NeedsNetworkConnection])
 
 	// Verify specific condition counts based on rippled
-	assert.Equal(t, 10, counts[types.NeedsCurrentLedger], "NeedsCurrentLedger count")
+	assert.Equal(t, 11, counts[types.NeedsCurrentLedger], "NeedsCurrentLedger count")
 	assert.Equal(t, 1, counts[types.NeedsClosedLedger], "NeedsClosedLedger count")
 	assert.Equal(t, 1, counts[types.NeedsNetworkConnection], "NeedsNetworkConnection count")
 

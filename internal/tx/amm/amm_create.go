@@ -1,8 +1,6 @@
 package amm
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -65,28 +63,28 @@ func (a *AMMCreate) Validate() error {
 
 	// Check flags - no flags are valid for AMMCreate
 	if a.GetFlags()&tfAMMCreateMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags for AMMCreate")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMCreate")
 	}
 
 	// Assets cannot be the same (same currency and issuer)
 	// Reference: rippled AMMCreate.cpp line 52-57
 	if a.Amount.Currency == a.Amount2.Currency && a.Amount.Issuer == a.Amount2.Issuer {
-		return errors.New("temBAD_AMM_TOKENS: tokens can not have the same currency/issuer")
+		return tx.Errorf(tx.TemBAD_AMM_TOKENS, "tokens can not have the same currency/issuer")
 	}
 
 	// Validate amounts using invalidAMMAmount logic
 	// Reference: rippled AMMCreate.cpp line 59-68
 	if err := validateAMMAmount(a.Amount); err != nil {
-		return errors.New("temBAD_AMOUNT: invalid asset1 amount")
+		return tx.Errorf(tx.TemBAD_AMOUNT, "invalid asset1 amount")
 	}
 	if err := validateAMMAmount(a.Amount2); err != nil {
-		return errors.New("temBAD_AMOUNT: invalid asset2 amount")
+		return tx.Errorf(tx.TemBAD_AMOUNT, "invalid asset2 amount")
 	}
 
 	// TradingFee must be 0-1000 (0-1%)
 	// Reference: rippled AMMCreate.cpp line 71-75
 	if a.TradingFee > TRADING_FEE_THRESHOLD {
-		return errors.New("temBAD_FEE: TradingFee must be 0-1000")
+		return tx.Errorf(tx.TemBAD_FEE, "TradingFee must be 0-1000")
 	}
 
 	return nil

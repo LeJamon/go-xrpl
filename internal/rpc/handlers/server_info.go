@@ -13,12 +13,11 @@ import (
 var serverStartTime = time.Now()
 
 // ServerInfoMethod handles the server_info RPC method
-type ServerInfoMethod struct{}
+type ServerInfoMethod struct{ BaseHandler }
 
 func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	// Check if ledger service is available
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Get server info from ledger service
@@ -129,14 +128,3 @@ func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	return response, nil
 }
 
-func (m *ServerInfoMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *ServerInfoMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *ServerInfoMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

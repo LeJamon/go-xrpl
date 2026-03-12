@@ -12,7 +12,7 @@ import (
 )
 
 // AMMInfoMethod handles the amm_info RPC method
-type AMMInfoMethod struct{}
+type AMMInfoMethod struct{ BaseHandler }
 
 func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
@@ -23,10 +23,8 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		Account    string                 `json:"account,omitempty"`
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
 	hasAssets := request.Asset != nil && request.Asset2 != nil
@@ -37,8 +35,8 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		return nil, types.RpcErrorInvalidParams("Must specify either (asset + asset2) or amm_account, but not both or neither")
 	}
 
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Determine ledger index to use
@@ -265,14 +263,3 @@ func currencyToBytes(currency string) [20]byte {
 	return result
 }
 
-func (m *AMMInfoMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *AMMInfoMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *AMMInfoMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

@@ -16,11 +16,11 @@ func init() {
 
 // SetFee errors matching rippled
 var (
-	ErrSetFeeBadSrcAccount = errors.New("temBAD_SRC_ACCOUNT: SetFee must have zero account")
-	ErrSetFeeBadFee        = errors.New("temBAD_FEE: SetFee must have zero fee")
-	ErrSetFeeBadSignature  = errors.New("temBAD_SIGNATURE: SetFee must not have signature")
-	ErrSetFeeBadSequence   = errors.New("temBAD_SEQUENCE: SetFee must have zero sequence")
-	ErrSetFeeMalformed     = errors.New("temMALFORMED: SetFee has invalid fields")
+	ErrSetFeeBadSrcAccount = tx.Errorf(tx.TemBAD_SRC_ACCOUNT, "SetFee must have zero account")
+	ErrSetFeeBadFee        = tx.Errorf(tx.TemBAD_FEE, "SetFee must have zero fee")
+	ErrSetFeeBadSignature  = tx.Errorf(tx.TemBAD_SIGNATURE, "SetFee must not have signature")
+	ErrSetFeeBadSequence   = tx.Errorf(tx.TemBAD_SEQUENCE, "SetFee must have zero sequence")
+	ErrSetFeeMalformed     = tx.Errorf(tx.TemMALFORMED, "SetFee has invalid fields")
 )
 
 // SetFee is a pseudo-transaction that updates network fee settings.

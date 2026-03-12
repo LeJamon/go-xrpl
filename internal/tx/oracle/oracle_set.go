@@ -1,8 +1,6 @@
 package oracle
 
 import (
-	"errors"
-	"fmt"
 	"sort"
 
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -70,18 +68,18 @@ func (o *OracleSet) Validate() error {
 	}
 
 	// Check flags - only universal flags allowed
-	if o.Flags != nil && *o.Flags&tx.TfUniversalMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags set")
+	if err := tx.CheckFlags(o.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	// PriceDataSeries must not be empty
 	if len(o.PriceDataSeries) == 0 {
-		return errors.New("temARRAY_EMPTY: PriceDataSeries is required")
+		return tx.Errorf(tx.TemARRAY_EMPTY, "PriceDataSeries is required")
 	}
 
 	// Max 10 price data entries
 	if len(o.PriceDataSeries) > MaxOracleDataSeries {
-		return fmt.Errorf("temARRAY_TOO_LARGE: cannot have more than %d PriceDataSeries entries", MaxOracleDataSeries)
+		return tx.Errorf(tx.TemARRAY_TOO_LARGE, "cannot have more than %d PriceDataSeries entries", MaxOracleDataSeries)
 	}
 
 	// Validate Provider field
@@ -90,7 +88,7 @@ func (o *OracleSet) Validate() error {
 	// Note: Provider is stored as hex string, so byte length = len/2
 	if o.ProviderPresent || o.Provider != "" {
 		if len(o.Provider) == 0 {
-			return errors.New("temMALFORMED: Provider cannot be empty")
+			return tx.Errorf(tx.TemMALFORMED, "Provider cannot be empty")
 		}
 		// Provider is hex-encoded, so byte length = string length / 2
 		byteLen := len(o.Provider) / 2
@@ -98,7 +96,7 @@ func (o *OracleSet) Validate() error {
 			byteLen = (len(o.Provider) + 1) / 2 // Round up for odd-length strings
 		}
 		if byteLen > MaxOracleProvider {
-			return fmt.Errorf("temMALFORMED: Provider length must be between 1 and %d bytes", MaxOracleProvider)
+			return tx.Errorf(tx.TemMALFORMED, "Provider length must be between 1 and %d bytes", MaxOracleProvider)
 		}
 	}
 
@@ -108,7 +106,7 @@ func (o *OracleSet) Validate() error {
 	// Note: URI is stored as hex string, so byte length = len/2
 	if o.URIPresent || o.URI != "" {
 		if len(o.URI) == 0 {
-			return errors.New("temMALFORMED: URI cannot be empty")
+			return tx.Errorf(tx.TemMALFORMED, "URI cannot be empty")
 		}
 		// URI is hex-encoded, so byte length = string length / 2
 		byteLen := len(o.URI) / 2
@@ -116,7 +114,7 @@ func (o *OracleSet) Validate() error {
 			byteLen = (len(o.URI) + 1) / 2 // Round up for odd-length strings
 		}
 		if byteLen > MaxOracleURI {
-			return fmt.Errorf("temMALFORMED: URI length must be between 1 and %d bytes", MaxOracleURI)
+			return tx.Errorf(tx.TemMALFORMED, "URI length must be between 1 and %d bytes", MaxOracleURI)
 		}
 	}
 
@@ -126,7 +124,7 @@ func (o *OracleSet) Validate() error {
 	// Note: AssetClass is stored as hex string, so byte length = len/2
 	if o.AssetClassPresent || o.AssetClass != "" {
 		if len(o.AssetClass) == 0 {
-			return errors.New("temMALFORMED: AssetClass cannot be empty")
+			return tx.Errorf(tx.TemMALFORMED, "AssetClass cannot be empty")
 		}
 		// AssetClass is hex-encoded, so byte length = string length / 2
 		byteLen := len(o.AssetClass) / 2
@@ -134,7 +132,7 @@ func (o *OracleSet) Validate() error {
 			byteLen = (len(o.AssetClass) + 1) / 2 // Round up for odd-length strings
 		}
 		if byteLen > MaxOracleSymbolClass {
-			return fmt.Errorf("temMALFORMED: AssetClass length must be between 1 and %d bytes", MaxOracleSymbolClass)
+			return tx.Errorf(tx.TemMALFORMED, "AssetClass length must be between 1 and %d bytes", MaxOracleSymbolClass)
 		}
 	}
 
@@ -146,18 +144,18 @@ func (o *OracleSet) Validate() error {
 
 		// BaseAsset and QuoteAsset must be different
 		if entry.BaseAsset == entry.QuoteAsset {
-			return errors.New("temMALFORMED: BaseAsset and QuoteAsset must be different")
+			return tx.Errorf(tx.TemMALFORMED, "BaseAsset and QuoteAsset must be different")
 		}
 
 		// Scale cannot exceed MaxPriceScale
 		if entry.Scale != nil && *entry.Scale > MaxPriceScale {
-			return fmt.Errorf("temMALFORMED: Scale cannot exceed %d", MaxPriceScale)
+			return tx.Errorf(tx.TemMALFORMED, "Scale cannot exceed %d", MaxPriceScale)
 		}
 
 		// Check for duplicate token pairs
 		pairKey := entry.BaseAsset + ":" + entry.QuoteAsset
 		if seenPairs[pairKey] {
-			return errors.New("temMALFORMED: duplicate token pair in PriceDataSeries")
+			return tx.Errorf(tx.TemMALFORMED, "duplicate token pair in PriceDataSeries")
 		}
 		seenPairs[pairKey] = true
 	}
@@ -177,22 +175,22 @@ func (o *OracleSet) ValidatePriceDataSeries(isUpdate bool) (map[string]PriceData
 
 		// BaseAsset and QuoteAsset must be different
 		if entry.BaseAsset == entry.QuoteAsset {
-			return nil, nil, errors.New("temMALFORMED: BaseAsset and QuoteAsset must be different")
+			return nil, nil, tx.Errorf(tx.TemMALFORMED, "BaseAsset and QuoteAsset must be different")
 		}
 
 		key := entry.TokenPairKey()
 
 		// Check for duplicates in both sets
 		if _, exists := pairsToAdd[key]; exists {
-			return nil, nil, errors.New("temMALFORMED: duplicate token pair in PriceDataSeries")
+			return nil, nil, tx.Errorf(tx.TemMALFORMED, "duplicate token pair in PriceDataSeries")
 		}
 		if _, exists := pairsToDelete[key]; exists {
-			return nil, nil, errors.New("temMALFORMED: duplicate token pair in PriceDataSeries")
+			return nil, nil, tx.Errorf(tx.TemMALFORMED, "duplicate token pair in PriceDataSeries")
 		}
 
 		// Validate Scale if present
 		if entry.Scale != nil && *entry.Scale > MaxPriceScale {
-			return nil, nil, fmt.Errorf("temMALFORMED: Scale cannot exceed %d", MaxPriceScale)
+			return nil, nil, tx.Errorf(tx.TemMALFORMED, "Scale cannot exceed %d", MaxPriceScale)
 		}
 
 		if entry.AssetPrice != nil {
@@ -204,7 +202,7 @@ func (o *OracleSet) ValidatePriceDataSeries(isUpdate bool) (map[string]PriceData
 				pairsToDelete[key] = struct{}{}
 			} else {
 				// Cannot delete on create
-				return nil, nil, errors.New("temMALFORMED: cannot delete token pair on oracle creation")
+				return nil, nil, tx.Errorf(tx.TemMALFORMED, "cannot delete token pair on oracle creation")
 			}
 		}
 	}

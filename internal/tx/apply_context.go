@@ -1,7 +1,10 @@
 package tx
 
 import (
+	"strconv"
+
 	"github.com/LeJamon/goXRPLd/amendment"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
@@ -69,4 +72,95 @@ func (ctx *ApplyContext) Rules() *amendment.Rules {
 		return ctx.Config.Rules
 	}
 	return amendment.AllSupportedRules()
+}
+
+// LookupAccount loads and parses an AccountRoot by account address string.
+// Returns the parsed AccountRoot, decoded account ID, and TesSUCCESS on success.
+// On failure returns nil, zero ID, and the appropriate TER code:
+//   - TemINVALID if the address cannot be decoded
+//   - TecNO_DST if the account does not exist
+//   - TefINTERNAL if the account data cannot be parsed
+func (ctx *ApplyContext) LookupAccount(account string) (*state.AccountRoot, [20]byte, Result) {
+	var zeroID [20]byte
+	accountID, err := state.DecodeAccountID(account)
+	if err != nil {
+		return nil, zeroID, TemINVALID
+	}
+
+	accountKey := keylet.Account(accountID)
+	accountData, err := ctx.View.Read(accountKey)
+	if err != nil || accountData == nil {
+		return nil, zeroID, TecNO_DST
+	}
+
+	accountRoot, err := state.ParseAccountRoot(accountData)
+	if err != nil {
+		return nil, zeroID, TefINTERNAL
+	}
+
+	return accountRoot, accountID, TesSUCCESS
+}
+
+// LookupDestination loads and parses a destination account.
+// In addition to LookupAccount checks, it also rejects pseudo-accounts (LsfAMM).
+// Reference: rippled's common preclaim pattern for destination accounts.
+func (ctx *ApplyContext) LookupDestination(account string) (*state.AccountRoot, [20]byte, Result) {
+	dest, destID, result := ctx.LookupAccount(account)
+	if result != TesSUCCESS {
+		return nil, destID, result
+	}
+
+	// Pseudo-accounts (AMM) cannot be destinations
+	if (dest.Flags & state.LsfAMM) != 0 {
+		return nil, destID, TecNO_PERMISSION
+	}
+
+	return dest, destID, TesSUCCESS
+}
+
+// PriorBalance returns the sender's balance before fee deduction.
+// Equivalent to rippled's mPriorBalance = account.Balance + fee.
+func (ctx *ApplyContext) PriorBalance(fee string) uint64 {
+	return ctx.Account.Balance + parseFeeDrops(fee)
+}
+
+// CheckReserveWithFee validates that the sender can afford the reserve
+// for the given owner count using prior balance (before fee deduction).
+// This is the "prior balance vs reserve" pattern used in 12+ Apply() methods.
+// Returns TecINSUFFICIENT_RESERVE if the prior balance is below the reserve.
+func (ctx *ApplyContext) CheckReserveWithFee(ownerCountAfter uint32, fee string) Result {
+	priorBalance := ctx.PriorBalance(fee)
+	reserve := ctx.AccountReserve(ownerCountAfter)
+	if priorBalance < reserve {
+		return TecINSUFFICIENT_RESERVE
+	}
+	return TesSUCCESS
+}
+
+// UpdateAccountRoot serializes an AccountRoot and writes it back to the ledger view.
+// Encapsulates the serialize + view.Update pattern repeated across Apply() methods.
+// Returns TefINTERNAL on serialization or update failure, TesSUCCESS otherwise.
+func (ctx *ApplyContext) UpdateAccountRoot(accountID [20]byte, account *state.AccountRoot) Result {
+	data, err := state.SerializeAccountRoot(account)
+	if err != nil {
+		return TefINTERNAL
+	}
+	accountKey := keylet.Account(accountID)
+	if err := ctx.View.Update(accountKey, data); err != nil {
+		return TefINTERNAL
+	}
+	return TesSUCCESS
+}
+
+// parseFeeDrops parses a fee string (in drops) to uint64.
+// Returns 0 if the fee is empty or invalid.
+func parseFeeDrops(fee string) uint64 {
+	if fee == "" {
+		return 0
+	}
+	v, err := strconv.ParseUint(fee, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
 }

@@ -1,7 +1,6 @@
 package nftoken
 
 import (
-	"errors"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -89,23 +88,23 @@ func (n *NFTokenMint) Validate() error {
 	// fixRemoveNFTokenAutoTrustLine is enabled, rejecting tfMutable when
 	// DynamicNFT is not enabled) are in Apply().
 	if n.GetFlags()&tfNFTokenMintOldMaskWithMutable != 0 {
-		return errors.New("temINVALID_FLAG: invalid NFTokenMint flags")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid NFTokenMint flags")
 	}
 
 	// TransferFee must be <= maxTransferFee (50000 = 50%)
 	if n.TransferFee != nil {
 		if *n.TransferFee > maxTransferFee {
-			return errors.New("temBAD_NFTOKEN_TRANSFER_FEE: TransferFee cannot exceed 50000")
+			return tx.Errorf(tx.TemBAD_NFTOKEN_TRANSFER_FEE, "TransferFee cannot exceed 50000")
 		}
 		// If a non-zero TransferFee is set, tfTransferable must also be set
 		if *n.TransferFee > 0 && n.GetFlags()&NFTokenMintFlagTransferable == 0 {
-			return errors.New("temMALFORMED: non-zero TransferFee requires tfTransferable flag")
+			return tx.Errorf(tx.TemMALFORMED, "non-zero TransferFee requires tfTransferable flag")
 		}
 	}
 
 	// Issuer must not be the same as Account (if specified)
 	if n.Issuer != "" && n.Issuer == n.Account {
-		return errors.New("temMALFORMED: Issuer cannot be the same as Account")
+		return tx.Errorf(tx.TemMALFORMED, "Issuer cannot be the same as Account")
 	}
 
 	// URI validation: if the field is present, it must not be empty and must
@@ -117,10 +116,10 @@ func (n *NFTokenMint) Validate() error {
 	if n.HasField("URI") || n.URI != "" {
 		uriBytes := len(n.URI) / 2
 		if uriBytes == 0 {
-			return errors.New("temMALFORMED: URI cannot be empty")
+			return tx.Errorf(tx.TemMALFORMED, "URI cannot be empty")
 		}
 		if uriBytes > maxTokenURILength {
-			return errors.New("temMALFORMED: URI too long")
+			return tx.Errorf(tx.TemMALFORMED, "URI too long")
 		}
 	}
 
@@ -128,7 +127,7 @@ func (n *NFTokenMint) Validate() error {
 	// (This is NFTokenMintOffer support)
 	hasOfferFields := n.Amount != nil || n.Destination != "" || n.Expiration != nil
 	if hasOfferFields && n.Amount == nil {
-		return errors.New("temMALFORMED: Amount required when Destination or Expiration present")
+		return tx.Errorf(tx.TemMALFORMED, "Amount required when Destination or Expiration present")
 	}
 
 	return nil

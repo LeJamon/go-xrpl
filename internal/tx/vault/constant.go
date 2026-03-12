@@ -1,6 +1,6 @@
 package vault
 
-import "errors"
+import "github.com/LeJamon/goXRPLd/internal/tx"
 
 // Vault constants
 const (
@@ -27,24 +27,24 @@ const (
 
 // Vault errors
 var (
-	ErrVaultIDRequired       = errors.New("temMALFORMED: VaultID is required")
-	ErrVaultIDZero           = errors.New("temMALFORMED: VaultID cannot be zero")
-	ErrVaultAssetRequired    = errors.New("temMALFORMED: Asset is required")
-	ErrVaultDataTooLong      = errors.New("temMALFORMED: Data exceeds maximum length")
-	ErrVaultDataEmpty        = errors.New("temMALFORMED: Data cannot be empty if present")
-	ErrVaultDomainIDZero     = errors.New("temMALFORMED: DomainID cannot be zero")
-	ErrVaultDomainNotPrivate = errors.New("temMALFORMED: DomainID only allowed on private vaults")
-	ErrVaultAmountRequired   = errors.New("temBAD_AMOUNT: Amount is required")
-	ErrVaultAmountNotPos     = errors.New("temBAD_AMOUNT: Amount must be positive")
-	ErrVaultHolderRequired   = errors.New("temMALFORMED: Holder is required")
-	ErrVaultHolderIsSelf     = errors.New("temMALFORMED: Holder cannot be same as issuer")
-	ErrVaultDestZero         = errors.New("temMALFORMED: Destination cannot be zero")
-	ErrVaultDestTagNoAccount = errors.New("temMALFORMED: DestinationTag without Destination")
-	ErrVaultNoFieldsToUpdate = errors.New("temMALFORMED: nothing to update")
-	ErrVaultAssetsMaxNeg     = errors.New("temMALFORMED: AssetsMaximum cannot be negative")
-	ErrVaultWithdrawalPolicy = errors.New("temMALFORMED: invalid withdrawal policy")
-	ErrVaultMetadataTooLong  = errors.New("temMALFORMED: MPTokenMetadata exceeds maximum length")
-	ErrVaultMetadataEmpty    = errors.New("temMALFORMED: MPTokenMetadata cannot be empty if present")
-	ErrVaultAmountXRP        = errors.New("temMALFORMED: cannot clawback XRP from vault")
-	ErrVaultAmountNotIssuer  = errors.New("temMALFORMED: only asset issuer can clawback")
+	ErrVaultIDRequired       = tx.Errorf(tx.TemMALFORMED, "VaultID is required")
+	ErrVaultIDZero           = tx.Errorf(tx.TemMALFORMED, "VaultID cannot be zero")
+	ErrVaultAssetRequired    = tx.Errorf(tx.TemMALFORMED, "Asset is required")
+	ErrVaultDataTooLong      = tx.Errorf(tx.TemMALFORMED, "Data exceeds maximum length")
+	ErrVaultDataEmpty        = tx.Errorf(tx.TemMALFORMED, "Data cannot be empty if present")
+	ErrVaultDomainIDZero     = tx.Errorf(tx.TemMALFORMED, "DomainID cannot be zero")
+	ErrVaultDomainNotPrivate = tx.Errorf(tx.TemMALFORMED, "DomainID only allowed on private vaults")
+	ErrVaultAmountRequired   = tx.Errorf(tx.TemBAD_AMOUNT, "Amount is required")
+	ErrVaultAmountNotPos     = tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
+	ErrVaultHolderRequired   = tx.Errorf(tx.TemMALFORMED, "Holder is required")
+	ErrVaultHolderIsSelf     = tx.Errorf(tx.TemMALFORMED, "Holder cannot be same as issuer")
+	ErrVaultDestZero         = tx.Errorf(tx.TemMALFORMED, "Destination cannot be zero")
+	ErrVaultDestTagNoAccount = tx.Errorf(tx.TemMALFORMED, "DestinationTag without Destination")
+	ErrVaultNoFieldsToUpdate = tx.Errorf(tx.TemMALFORMED, "nothing to update")
+	ErrVaultAssetsMaxNeg     = tx.Errorf(tx.TemMALFORMED, "AssetsMaximum cannot be negative")
+	ErrVaultWithdrawalPolicy = tx.Errorf(tx.TemMALFORMED, "invalid withdrawal policy")
+	ErrVaultMetadataTooLong  = tx.Errorf(tx.TemMALFORMED, "MPTokenMetadata exceeds maximum length")
+	ErrVaultMetadataEmpty    = tx.Errorf(tx.TemMALFORMED, "MPTokenMetadata cannot be empty if present")
+	ErrVaultAmountXRP        = tx.Errorf(tx.TemMALFORMED, "cannot clawback XRP from vault")
+	ErrVaultAmountNotIssuer  = tx.Errorf(tx.TemMALFORMED, "only asset issuer can clawback")
 )

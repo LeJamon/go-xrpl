@@ -5,6 +5,7 @@ package batch
 import (
 	"encoding/hex"
 	"fmt"
+	"sort"
 
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -78,6 +79,87 @@ func (b *BatchBuilder) AddSigner(account *testing.Account, signature string) *Ba
 	return b
 }
 
+// AddSignerWithRegKey adds a single-sign batch signer using a regular key.
+// The 'account' is the BatchSigner.Account, and 'regKey' provides the signing public key.
+// Reference: rippled test/jtx/batch.h sig(Reg{account, regKey})
+func (b *BatchBuilder) AddSignerWithRegKey(account, regKey *testing.Account, signature string) *BatchBuilder {
+	b.signers = append(b.signers, batchtx.BatchSigner{
+		BatchSigner: batchtx.BatchSignerData{
+			Account:           account.Address,
+			SigningPubKey:     regKey.PublicKeyHex(),
+			BatchTxnSignature: signature,
+		},
+	})
+	return b
+}
+
+// AddMultiSignBatchSigner adds a multi-sign batch signer with nested Signers.
+// The 'masterAccount' is the account being multi-signed for, and 'signerAccounts'
+// are the individual signers providing their keys.
+// Nested signers are sorted by account address to match rippled's sortSigners().
+// Reference: rippled test/jtx/batch.h msig(masterAccount, {signer1, signer2, ...})
+func (b *BatchBuilder) AddMultiSignBatchSigner(masterAccount *testing.Account, signerAccounts []*testing.Account) *BatchBuilder {
+	nestedSigners := make([]tx.SignerWrapper, len(signerAccounts))
+	for i, s := range signerAccounts {
+		nestedSigners[i] = tx.SignerWrapper{
+			Signer: tx.Signer{
+				Account:       s.Address,
+				SigningPubKey: s.PublicKeyHex(),
+				TxnSignature:  "DEADBEEF", // placeholder
+			},
+		}
+	}
+	// Sort by account address — matches rippled's sortSigners() in batch.h
+	sort.Slice(nestedSigners, func(i, j int) bool {
+		return nestedSigners[i].Signer.Account < nestedSigners[j].Signer.Account
+	})
+	b.signers = append(b.signers, batchtx.BatchSigner{
+		BatchSigner: batchtx.BatchSignerData{
+			Account:       masterAccount.Address,
+			SigningPubKey: "", // empty = multi-sign
+			Signers:       nestedSigners,
+		},
+	})
+	return b
+}
+
+// AddMultiSignBatchSignerWithRegKeys adds a multi-sign batch signer where some signers
+// use regular keys. Each RegKeySigner specifies the account and the key used to sign.
+// Nested signers are sorted by account address to match rippled's sortSigners().
+// Reference: rippled test/jtx/batch.h msig(masterAccount, {Reg{account, regKey}, ...})
+func (b *BatchBuilder) AddMultiSignBatchSignerWithRegKeys(masterAccount *testing.Account, signers []RegKeySigner) *BatchBuilder {
+	nestedSigners := make([]tx.SignerWrapper, len(signers))
+	for i, s := range signers {
+		nestedSigners[i] = tx.SignerWrapper{
+			Signer: tx.Signer{
+				Account:       s.Account.Address,
+				SigningPubKey: s.SigningKey.PublicKeyHex(),
+				TxnSignature:  "DEADBEEF", // placeholder
+			},
+		}
+	}
+	// Sort by account address — matches rippled's sortSigners() in batch.h
+	sort.Slice(nestedSigners, func(i, j int) bool {
+		return nestedSigners[i].Signer.Account < nestedSigners[j].Signer.Account
+	})
+	b.signers = append(b.signers, batchtx.BatchSigner{
+		BatchSigner: batchtx.BatchSignerData{
+			Account:       masterAccount.Address,
+			SigningPubKey: "", // empty = multi-sign
+			Signers:       nestedSigners,
+		},
+	})
+	return b
+}
+
+// RegKeySigner represents a signer that may use a different key than its master key.
+// Account is the signer's account, SigningKey is the account whose public key is used.
+// For master key signing, Account == SigningKey. For regular key signing, SigningKey is the reg key account.
+type RegKeySigner struct {
+	Account    *testing.Account
+	SigningKey *testing.Account
+}
+
 // Build constructs the Batch transaction.
 func (b *BatchBuilder) Build() *batchtx.Batch {
 	batch := batchtx.NewBatch(b.account.Address)
@@ -122,6 +204,14 @@ func MakeInnerPayment(from, to *testing.Account, amountDrops int64, seq uint32) 
 	p.SigningPubKey = ""
 	p.SetSequence(seq)
 	p.SetFlags(tx.TfInnerBatchTxn)
+	return p
+}
+
+// MakeInnerPaymentXRPWithDelegate creates an inner XRP Payment with a Delegate field.
+// Reference: rippled batch::inner(pay(...), seq) with tx[jss::Delegate] = delegate.human()
+func MakeInnerPaymentXRPWithDelegate(from, to *testing.Account, xrp int64, seq uint32, delegate *testing.Account) *payment.Payment {
+	p := MakeInnerPaymentXRP(from, to, xrp, seq)
+	p.GetCommon().Delegate = delegate.Address
 	return p
 }
 
@@ -220,6 +310,18 @@ func MakeInnerAccountDelete(from, dest *testing.Account, seq uint32) *account.Ac
 	ad.SetSequence(seq)
 	ad.SetFlags(tx.TfInnerBatchTxn)
 	return ad
+}
+
+// MakeInnerAccountSet creates an inner AccountSet (noop) transaction for batch inclusion.
+// Sets Fee=0, SigningPubKey="", and adds tfInnerBatchTxn flag.
+// Reference: rippled batch::inner(noop(account), seq) — noop is AccountSet with no flags.
+func MakeInnerAccountSet(acc *testing.Account, seq uint32) *account.AccountSet {
+	as := account.NewAccountSet(acc.Address)
+	as.Fee = "0"
+	as.SigningPubKey = ""
+	as.SetSequence(seq)
+	as.SetFlags(tx.TfInnerBatchTxn)
+	return as
 }
 
 // GetCheckIndex returns the hex-encoded check keylet key for an account and sequence.

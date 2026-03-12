@@ -3,7 +3,6 @@
 package offer
 
 import (
-	"errors"
 	"math/big"
 	"strings"
 
@@ -94,7 +93,7 @@ func (o *OfferCreate) Validate() error {
 	// Reference: rippled CreateOffer.cpp preflight() lines 61-65
 	flags := o.GetFlags()
 	if flags&tfOfferCreateMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags set")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags set")
 	}
 
 	// IoC and FoK are mutually exclusive
@@ -102,25 +101,25 @@ func (o *OfferCreate) Validate() error {
 	bImmediateOrCancel := (flags & OfferCreateFlagImmediateOrCancel) != 0
 	bFillOrKill := (flags & OfferCreateFlagFillOrKill) != 0
 	if bImmediateOrCancel && bFillOrKill {
-		return errors.New("temINVALID_FLAG: cannot set both ImmediateOrCancel and FillOrKill")
+		return tx.Errorf(tx.TemINVALID_FLAG, "cannot set both ImmediateOrCancel and FillOrKill")
 	}
 
 	// tfHybrid requires DomainID (rules-independent check)
 	// Reference: lines 70-71
 	if (flags&tfHybrid != 0) && o.DomainID == nil {
-		return errors.New("temINVALID_FLAG: tfHybrid requires DomainID")
+		return tx.Errorf(tx.TemINVALID_FLAG, "tfHybrid requires DomainID")
 	}
 
 	// Check expiration
 	// Reference: lines 82-88
 	if o.Expiration != nil && *o.Expiration == 0 {
-		return errors.New("temBAD_EXPIRATION: expiration cannot be zero")
+		return tx.Errorf(tx.TemBAD_EXPIRATION, "expiration cannot be zero")
 	}
 
 	// Check OfferSequence
 	// Reference: lines 90-95
 	if o.OfferSequence != nil && *o.OfferSequence == 0 {
-		return errors.New("temBAD_SEQUENCE: OfferSequence cannot be zero")
+		return tx.Errorf(tx.TemBAD_SEQUENCE, "OfferSequence cannot be zero")
 	}
 
 	// Validate amounts
@@ -129,28 +128,28 @@ func (o *OfferCreate) Validate() error {
 
 	// Check required amounts are present (unset Amount has no type info)
 	if !saTakerPays.IsNative() && saTakerPays.Currency == "" {
-		return errors.New("temBAD_OFFER: TakerPays is required")
+		return tx.Errorf(tx.TemBAD_OFFER, "TakerPays is required")
 	}
 	if !saTakerGets.IsNative() && saTakerGets.Currency == "" {
-		return errors.New("temBAD_OFFER: TakerGets is required")
+		return tx.Errorf(tx.TemBAD_OFFER, "TakerGets is required")
 	}
 
 	// Check amounts are present and valid
 	// Reference: lines 97-101
 	if !isLegalNetAmount(saTakerPays) || !isLegalNetAmount(saTakerGets) {
-		return errors.New("temBAD_AMOUNT: invalid amount")
+		return tx.Errorf(tx.TemBAD_AMOUNT, "invalid amount")
 	}
 
 	// Cannot exchange XRP for XRP
 	// Reference: lines 103-107
 	if saTakerPays.IsNative() && saTakerGets.IsNative() {
-		return errors.New("temBAD_OFFER: cannot exchange XRP for XRP")
+		return tx.Errorf(tx.TemBAD_OFFER, "cannot exchange XRP for XRP")
 	}
 
 	// Amounts must be positive
 	// Reference: lines 108-112
 	if isAmountZeroOrNegative(saTakerPays) || isAmountZeroOrNegative(saTakerGets) {
-		return errors.New("temBAD_OFFER: amounts must be positive")
+		return tx.Errorf(tx.TemBAD_OFFER, "amounts must be positive")
 	}
 
 	// Get currency and issuer info
@@ -162,25 +161,25 @@ func (o *OfferCreate) Validate() error {
 	// Check for redundant offer (same currency and issuer)
 	// Reference: lines 120-124
 	if uPaysCurrency == uGetsCurrency && uPaysIssuerID == uGetsIssuerID {
-		return errors.New("temREDUNDANT: cannot create offer with same currency and issuer on both sides")
+		return tx.Errorf(tx.TemREDUNDANT, "cannot create offer with same currency and issuer on both sides")
 	}
 
 	// Check for bad currency (XRP as non-native currency code)
 	// Reference: lines 126-130
 	if !saTakerPays.IsNative() && uPaysCurrency == badCurrency() {
-		return errors.New("temBAD_CURRENCY: cannot use XRP as non-native currency code")
+		return tx.Errorf(tx.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
 	}
 	if !saTakerGets.IsNative() && uGetsCurrency == badCurrency() {
-		return errors.New("temBAD_CURRENCY: cannot use XRP as non-native currency code")
+		return tx.Errorf(tx.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
 	}
 
 	// Check issuer consistency
 	// Reference: lines 132-137
 	if saTakerPays.IsNative() != (uPaysIssuerID == "") {
-		return errors.New("temBAD_ISSUER: issuer mismatch for TakerPays")
+		return tx.Errorf(tx.TemBAD_ISSUER, "issuer mismatch for TakerPays")
 	}
 	if saTakerGets.IsNative() != (uGetsIssuerID == "") {
-		return errors.New("temBAD_ISSUER: issuer mismatch for TakerGets")
+		return tx.Errorf(tx.TemBAD_ISSUER, "issuer mismatch for TakerGets")
 	}
 
 	return nil
@@ -286,14 +285,14 @@ func (o *OfferCreate) Preflight(rules *amendment.Rules) error {
 	// Check if DomainID field is present without PermissionedDEX amendment
 	// Reference: rippled CreateOffer.cpp preflight() lines 49-51
 	if o.DomainID != nil && !rules.PermissionedDEXEnabled() {
-		return errors.New("temDISABLED: DomainID requires PermissionedDEX amendment")
+		return tx.Errorf(tx.TemDISABLED, "DomainID requires PermissionedDEX amendment")
 	}
 
 	// Check tfHybrid without PermissionedDEX
 	// Reference: lines 67-68
 	flags := o.GetFlags()
 	if !rules.PermissionedDEXEnabled() && (flags&tfHybrid != 0) {
-		return errors.New("temINVALID_FLAG: tfHybrid requires PermissionedDEX amendment")
+		return tx.Errorf(tx.TemINVALID_FLAG, "tfHybrid requires PermissionedDEX amendment")
 	}
 
 	return nil
@@ -1929,29 +1928,7 @@ func offerDeleteInView(view tx.LedgerView, offer *state.LedgerOffer) tx.Result {
 // offers or unfunded offers from other accounts removed during crossing).
 // Reference: rippled adjustOwnerCount() in View.cpp
 func adjustOwnerCountInView(view tx.LedgerView, accountID [20]byte, delta int) {
-	accountKey := keylet.Account(accountID)
-	data, err := view.Read(accountKey)
-	if err != nil || data == nil {
-		return
-	}
-
-	account, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return
-	}
-
-	if delta < 0 && account.OwnerCount > 0 {
-		account.OwnerCount--
-	} else if delta > 0 {
-		account.OwnerCount++
-	}
-
-	updated, err := state.SerializeAccountRoot(account)
-	if err != nil {
-		return
-	}
-
-	view.Update(accountKey, updated)
+	_ = tx.AdjustOwnerCount(view, accountID, delta)
 }
 
 // getOfferSequence returns the sequence number to use for a new offer.

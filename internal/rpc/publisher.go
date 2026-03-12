@@ -5,6 +5,7 @@ import (
 	"log"
 	"sync"
 
+	"github.com/LeJamon/goXRPLd/internal/rpc/subscription"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -46,14 +47,14 @@ type EventPublisher interface {
 
 // Note: CurrencySpec is defined in subscription_methods.go
 
-// Publisher implements EventPublisher using SubscriptionManager
+// Publisher implements EventPublisher using subscription.Manager
 type Publisher struct {
-	manager *types.SubscriptionManager
+	manager *subscription.Manager
 	mu      sync.RWMutex
 }
 
 // NewPublisher creates a new Publisher with the given subscription manager
-func NewPublisher(manager *types.SubscriptionManager) *Publisher {
+func NewPublisher(manager *subscription.Manager) *Publisher {
 	return &Publisher{
 		manager: manager,
 	}

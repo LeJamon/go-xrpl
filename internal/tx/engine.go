@@ -14,7 +14,9 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx/invariants"
 	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // Validation constants matching rippled
@@ -36,8 +38,8 @@ const (
 	// Reference: rippled SystemParameters.h isLegalAmount() — fee <= INITIAL_XRP
 	DefaultMaxFee = 100_000_000_000_000_000 // 100 billion XRP in drops
 
-	// QualityOne Per rippled: QUALITY_ONE (1e9 = 1000000000) is treated as default (stored as 0)
-	QualityOne uint32 = 1000000000
+	// QualityOne is the identity transfer rate (1e9). Alias for protocol.QualityOne.
+	QualityOne = protocol.QualityOne
 )
 
 // Engine processes transactions against a ledger
@@ -683,6 +685,13 @@ func (e *Engine) preflight(tx Transaction) Result {
 // If the error message starts with a valid TER code prefix (e.g., "temREDUNDANT:"),
 // it returns the corresponding Result. Otherwise, it returns TemINVALID.
 func parseValidationError(err error) Result {
+	// Fast path: structured ResultError carries the code directly
+	var re *ResultError
+	if errors.As(err, &re) {
+		return re.Code
+	}
+
+	// Legacy fallback: string-prefix matching for unmigrated callers
 	msg := err.Error()
 
 	// Check for known TER code prefixes
@@ -1018,7 +1027,20 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 	// Reference: rippled SetRegularKey.cpp calculateBaseFee
 	minFee := e.calculateMinimumFee(tx)
 	if tx.TxType() == TypeRegularKeySet {
-		if account.Flags&state.LsfPasswordSpent == 0 {
+		// Free password change: baseFee=0 when signed with master key and
+		// lsfPasswordSpent is not set.
+		// Reference: rippled SetRegularKey.cpp calculateBaseFee
+		signedWithMaster := false
+		if spk := common.SigningPubKey; spk != "" {
+			sigAddr, sigErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(spk)
+			if sigErr == nil && sigAddr == common.Account {
+				signedWithMaster = true
+			}
+		} else if e.config.SkipSignatureVerification {
+			// In test mode without signatures, assume master key
+			signedWithMaster = true
+		}
+		if signedWithMaster && account.Flags&state.LsfPasswordSpent == 0 {
 			minFee = 0
 		}
 	}
@@ -1135,6 +1157,186 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 			// Signed with an unauthorized key
 			return TefBAD_AUTH
 		}
+	}
+
+	// Step 6: checkBatchSign — batch signer authorization
+	// Reference: rippled Batch::checkSign -> Transactor::checkBatchSign
+	// This checks that each BatchSigner is authorized to act as their account.
+	// This runs even when SkipSignatureVerification is true because it checks
+	// authorization (account existence, master key, regular key), not crypto.
+	if bsp, ok := tx.(BatchSignerProvider); ok {
+		if result := e.checkBatchSign(bsp.GetBatchSigners()); result != TesSUCCESS {
+			return result
+		}
+	}
+
+	return TesSUCCESS
+}
+
+// checkBatchSign verifies that each batch signer is authorized to sign for their account.
+// For single-sign signers (SigningPubKey non-empty): derives account from pubkey, checks authorization.
+// For multi-sign signers (SigningPubKey empty): checks signer list exists and quorum is met.
+// Reference: rippled Transactor::checkBatchSign in Transactor.cpp lines 635-679
+func (e *Engine) checkBatchSign(signers []BatchSignerInfo) Result {
+	for _, signer := range signers {
+		signerAccountID, err := state.DecodeAccountID(signer.Account)
+		if err != nil {
+			return TefBAD_AUTH
+		}
+
+		if signer.SigningPubKey == "" {
+			// Multi-sign batch signer: check nested Signers against the account's SignerList.
+			// Reference: rippled checkBatchSign -> checkMultiSign
+			if result := e.checkBatchMultiSign(signerAccountID, signer.Signers); result != TesSUCCESS {
+				return result
+			}
+			continue
+		}
+
+		// Single-sign batch signer: derive account from public key
+		signerAddress, addrErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(signer.SigningPubKey)
+		if addrErr != nil {
+			return TefBAD_AUTH
+		}
+
+		// Read the signer's account root
+		signerAccountKey := keylet.Account(signerAccountID)
+		signerAccountData, readErr := e.view.Read(signerAccountKey)
+
+		if readErr != nil || signerAccountData == nil {
+			// Account doesn't exist: only allowed if the signer pubkey derives to this account
+			// (phantom account pattern — the signer IS the account)
+			if signerAddress != signer.Account {
+				return TefBAD_AUTH
+			}
+			// Phantom account — allowed
+			continue
+		}
+
+		signerAccountRoot, parseErr := state.ParseAccountRoot(signerAccountData)
+		if parseErr != nil {
+			return TefINTERNAL
+		}
+
+		// Check authorization: master key, regular key, or disabled master
+		// Reference: rippled Transactor::checkSingleSign
+		isMasterDisabled := (signerAccountRoot.Flags & state.LsfDisableMaster) != 0
+
+		if signerAddress == signerAccountRoot.RegularKey {
+			// Signed with regular key — allowed
+		} else if !isMasterDisabled && signerAddress == signer.Account {
+			// Signed with enabled master key — allowed
+		} else if isMasterDisabled && signerAddress == signer.Account {
+			// Signed with disabled master key
+			return TefMASTER_DISABLED
+		} else {
+			// Signed with an unauthorized key
+			return TefBAD_AUTH
+		}
+	}
+	return TesSUCCESS
+}
+
+// checkBatchMultiSign verifies a multi-sign batch signer's nested Signers against
+// the account's SignerList. This mirrors rippled's checkMultiSign.
+// Reference: rippled Transactor::checkMultiSign in Transactor.cpp lines 742-911
+func (e *Engine) checkBatchMultiSign(accountID [20]byte, txSigners []SignerInfo) Result {
+	// Read the account's SignerList
+	signerListKey := keylet.SignerList(accountID)
+	signerListData, err := e.view.Read(signerListKey)
+	if err != nil || signerListData == nil {
+		return TefNOT_MULTI_SIGNING
+	}
+
+	signerList, parseErr := state.ParseSignerList(signerListData)
+	if parseErr != nil {
+		return TefINTERNAL
+	}
+
+	// Walk through txSigners and match against account signer entries.
+	// Both lists are sorted by account. All signers must be valid.
+	// Reference: rippled checkMultiSign — linear walk with sorted lists
+	var weightSum uint32
+	accountSignerIdx := 0
+
+	for _, txSigner := range txSigners {
+		txSignerAccountID, decErr := state.DecodeAccountID(txSigner.Account)
+		if decErr != nil {
+			return TefBAD_SIGNATURE
+		}
+
+		// Advance through account signers to find a match
+		for accountSignerIdx < len(signerList.SignerEntries) &&
+			signerList.SignerEntries[accountSignerIdx].Account < txSigner.Account {
+			accountSignerIdx++
+		}
+		if accountSignerIdx >= len(signerList.SignerEntries) {
+			return TefBAD_SIGNATURE
+		}
+		if signerList.SignerEntries[accountSignerIdx].Account != txSigner.Account {
+			return TefBAD_SIGNATURE
+		}
+
+		// Derive account from the signer's public key
+		var signingAcctIDFromPubKey string
+		if txSigner.SigningPubKey == "" {
+			// In simulation/dry-run mode, empty pubkey maps to the signer account itself
+			signingAcctIDFromPubKey = txSigner.Account
+		} else {
+			addr, addrErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(txSigner.SigningPubKey)
+			if addrErr != nil {
+				return TefBAD_SIGNATURE
+			}
+			signingAcctIDFromPubKey = addr
+		}
+
+		// Read the signer's account root
+		signerAccountKey := keylet.Account(txSignerAccountID)
+		signerAccountData, readErr := e.view.Read(signerAccountKey)
+
+		if signingAcctIDFromPubKey == txSigner.Account {
+			// Either Phantom or Master key
+			if readErr == nil && signerAccountData != nil {
+				// Account exists — check master key not disabled
+				signerAccountRoot, parseErr := state.ParseAccountRoot(signerAccountData)
+				if parseErr != nil {
+					return TefINTERNAL
+				}
+				if (signerAccountRoot.Flags & state.LsfDisableMaster) != 0 {
+					return TefMASTER_DISABLED
+				}
+			}
+			// Phantom account or master key allowed — continue
+		} else {
+			// May be a Regular Key
+			if readErr != nil || signerAccountData == nil {
+				// Non-phantom signer lacks account root
+				return TefBAD_SIGNATURE
+			}
+
+			signerAccountRoot, parseErr := state.ParseAccountRoot(signerAccountData)
+			if parseErr != nil {
+				return TefINTERNAL
+			}
+
+			if signerAccountRoot.RegularKey == "" {
+				// Account lacks RegularKey
+				return TefBAD_SIGNATURE
+			}
+
+			if signingAcctIDFromPubKey != signerAccountRoot.RegularKey {
+				// Wrong RegularKey
+				return TefBAD_SIGNATURE
+			}
+		}
+
+		// Signer is legitimate — add weight
+		weightSum += uint32(signerList.SignerEntries[accountSignerIdx].SignerWeight)
+	}
+
+	// Check quorum
+	if weightSum < signerList.SignerQuorum {
+		return TefBAD_QUORUM
 	}
 
 	return TesSUCCESS
@@ -1562,7 +1764,7 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 	{
 		invEntries := table.CollectEntries()
 		txDeclaredFee := parseTxDeclaredFee(tx, fee)
-		if violation := CheckInvariants(tx, result, fee, txDeclaredFee, invEntries, table, e.rules()); violation != nil {
+		if violation := invariants.CheckInvariants(wrapTxForInvariants(tx), invariants.Result(result), fee, txDeclaredFee, invEntries, table, e.rules()); violation != nil {
 			// First violation: charge fee but revert all state changes (tecINVARIANT_FAILED).
 			// Reference: rippled — first pass returns tec, second would return tef.
 			_ = violation // logged in future via journal
@@ -1677,27 +1879,7 @@ func (e *Engine) CheckReserveIncrease(priorBalance uint64, currentOwnerCount uin
 // Used by the engine for tecOVERSIZE offer cleanup after the sandbox is discarded.
 // Reference: rippled removeUnfundedOffers() adjusts owner count on the base view.
 func adjustOwnerCountOnView(view LedgerView, account [20]byte, delta int, txHash [32]byte, ledgerSeq uint32) {
-	accountKey := keylet.Account(account)
-	accountData, err := view.Read(accountKey)
-	if err != nil || accountData == nil {
-		return
-	}
-	accountRoot, err := state.ParseAccountRoot(accountData)
-	if err != nil {
-		return
-	}
-	newCount := int(accountRoot.OwnerCount) + delta
-	if newCount < 0 {
-		newCount = 0
-	}
-	accountRoot.OwnerCount = uint32(newCount)
-	accountRoot.PreviousTxnID = txHash
-	accountRoot.PreviousTxnLgrSeq = ledgerSeq
-	newData, err := state.SerializeAccountRoot(accountRoot)
-	if err != nil {
-		return
-	}
-	_ = view.Update(accountKey, newData)
+	_ = AdjustOwnerCountWithTx(view, account, delta, txHash, ledgerSeq)
 }
 
 // deleteNFTokenOfferOnView deletes an NFTokenOffer from the ledger view,

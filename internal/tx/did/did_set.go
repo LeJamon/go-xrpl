@@ -50,9 +50,8 @@ func (d *DIDSet) Validate() error {
 
 	// Check for invalid flags (tfUniversalMask)
 	// Reference: DID.cpp line 51-52
-	flags := d.GetFlags()
-	if flags&tx.TfUniversalMask != 0 {
-		return tx.ErrInvalidFlags
+	if err := tx.CheckFlags(d.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	// Check if any field is present (even if empty)

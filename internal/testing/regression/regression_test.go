@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -14,6 +15,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/testing/check"
 	"github.com/LeJamon/goXRPLd/internal/testing/offer"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
+	"github.com/LeJamon/goXRPLd/internal/txq"
 	"github.com/stretchr/testify/require"
 )
 
@@ -110,25 +112,102 @@ func TestRegression_InvalidTxObjectIDType(t *testing.T) {
 }
 
 // TestRegression_FeeEscalation tests that the fee escalation mechanism works.
+// With minimum_txn_in_ledger_standalone=3, the first 3+1 transactions in the
+// open ledger (including 2 from fund) pay the base fee. After that, fees
+// escalate according to: feeLevel = multiplier * txCount^2 / threshold^2.
+//
 // Reference: rippled Regression_test.cpp testFeeEscalationAutofill()
 func TestRegression_FeeEscalation(t *testing.T) {
-	t.Skip("Fee escalation requires transaction queue support (not implemented)")
+	// Create TxQ config matching rippled's test:
+	// minimum_txn_in_ledger_standalone = 3, reference_fee = 10
+	cfg := txq.Config{
+		LedgersInQueue:                 20,
+		QueueSizeMin:                   2000,
+		RetrySequencePercent:           25,
+		MinimumEscalationMultiplier:    txq.BaseLevel * 500, // 128000
+		MinimumTxnInLedger:             32,
+		MinimumTxnInLedgerStandalone:   3, // Key setting
+		TargetTxnInLedger:              256,
+		MaximumTxnInLedger:             0,
+		NormalConsensusIncreasePercent:  20,
+		SlowConsensusDecreasePercent:    50,
+		MaximumTxnPerAccount:           10,
+		MinimumLastLedgerBuffer:        2,
+		Standalone:                     true,
+	}
+
+	env := jtx.NewTestEnvWithTxQ(t, cfg)
+	alice := jtx.NewAccount("alice")
+
+	// Fund alice with 100,000 XRP.
+	// Fund adds 2 transactions to the open ledger (payment + AccountSet for
+	// DefaultRipple), so txInLedger starts at 2 before the test loop.
+	env.FundAmount(alice, uint64(jtx.XRP(100000)))
+
+	require.Equal(t, uint32(2), env.TxInLedger(),
+		"fund should have added 2 transactions to the open ledger")
+
+	// Expected fees match rippled's test:
+	// With txInLedger starting at 2 and threshold=3:
+	// tx0: txInLedger=2, below threshold -> base fee 10
+	// tx1: txInLedger=3, at threshold -> base fee 10
+	// tx2: txInLedger=4, escalation: 128000*16/9=227555 -> fee=8889
+	// tx3: txInLedger=5, escalation: 128000*25/9=355555 -> fee=13889
+	// tx4: txInLedger=6, escalation: 128000*36/9=512000 -> fee=20000
+	expectedFees := []uint64{10, 10, 8889, 13889, 20000}
+
+	for i := 0; i < 5; i++ {
+		// Compute the escalated fee before submitting
+		fee := env.EscalatedFee()
+		require.Equal(t, expectedFees[i], fee,
+			"auto-fill fee for tx%d should be %d, got %d", i, expectedFees[i], fee)
+
+		// Submit a noop with the escalated fee
+		accountSet := account.NewAccountSet(alice.Address)
+		accountSet.Fee = strconv.FormatUint(fee, 10)
+		// Sequence is auto-filled by Submit()
+		result := env.Submit(accountSet)
+		jtx.RequireTxSuccess(t, result)
+	}
 }
 
-// TestRegression_FeeEscalationExtremeConfig tests fee escalation with extreme config.
+// TestRegression_FeeEscalationExtremeConfig tests fee escalation with extreme
+// config values. The primary concern is that Close() completes in a reasonable
+// time even when the TxQ config has near-max-uint32 values, which could cause
+// extreme memory allocation or infinite loops if the arithmetic overflows.
+//
 // Reference: rippled Regression_test.cpp testFeeEscalationExtremeConfig()
 func TestRegression_FeeEscalationExtremeConfig(t *testing.T) {
-	t.Skip("Fee escalation requires transaction queue support (not implemented)")
+	// Extreme config with near-max uint32 values
+	cfg := txq.Config{
+		LedgersInQueue:                 20,
+		QueueSizeMin:                   2000,
+		RetrySequencePercent:           25,
+		MinimumEscalationMultiplier:    txq.BaseLevel * 500,
+		MinimumTxnInLedger:             4294967295, // max uint32
+		MinimumTxnInLedgerStandalone:   4294967295,
+		TargetTxnInLedger:              4294967295,
+		MaximumTxnInLedger:             0,
+		NormalConsensusIncreasePercent:  4294967295,
+		SlowConsensusDecreasePercent:    50,
+		MaximumTxnPerAccount:           10,
+		MinimumLastLedgerBuffer:        2,
+		Standalone:                     true,
+	}
+
+	env := jtx.NewTestEnvWithTxQ(t, cfg)
+
+	// Submit a noop to ensure the env works
+	env.Noop(jtx.MasterAccount())
+
+	// Close should complete quickly (< 1 second) even with extreme config.
+	// This test verifies that the TxQ's ProcessClosedLedger and fee metric
+	// updates don't cause excessive memory allocation or computation.
+	start := time.Now()
+	env.Close()
+	elapsed := time.Since(start)
+
+	require.True(t, elapsed < time.Second,
+		"Close() took %v, expected < 1s with extreme config", elapsed)
 }
 
-// TestRegression_Secp256r1Key tests that signing with a secp256r1 key fails.
-// Reference: rippled Regression_test.cpp testSecp256r1key()
-func TestRegression_Secp256r1Key(t *testing.T) {
-	t.Skip("Requires low-level SigningPubKey manipulation (secp256r1 rejection tested in crypto layer)")
-}
-
-// TestRegression_JsonInvalid tests JSON parsing of a large request.
-// Reference: rippled Regression_test.cpp testJsonInvalid()
-func TestRegression_JsonInvalid(t *testing.T) {
-	t.Skip("JSON parser library test — not applicable to Go engine")
-}

@@ -155,6 +155,9 @@ func (m *mockNoRippleCheckLedgerService) SimulateTransaction(txJSON []byte) (*ty
 	return nil, errors.New("not implemented")
 }
 func (m *mockNoRippleCheckLedgerService) IsAmendmentBlocked() bool { return false }
+func (m *mockNoRippleCheckLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {
+	return nil, errors.New("not implemented in mock")
+}
 
 // setupNoRippleCheckTestServices initializes the Services singleton with a mock for testing
 func setupNoRippleCheckTestServices(mock *mockNoRippleCheckLedgerService) func() {

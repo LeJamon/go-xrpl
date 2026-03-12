@@ -3,7 +3,6 @@ package vault
 import (
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -61,8 +60,8 @@ func (v *VaultCreate) Validate() error {
 
 	// Check for invalid flags
 	// Reference: rippled VaultCreate.cpp:50-51
-	if v.Common.Flags != nil && *v.Common.Flags&tfVaultCreateMask != 0 {
-		return tx.ErrInvalidFlags
+	if err := tx.CheckFlags(v.GetFlags(), tfVaultCreateMask); err != nil {
+		return err
 	}
 
 	// Asset is required
@@ -91,7 +90,7 @@ func (v *VaultCreate) Validate() error {
 	if v.DomainID != "" {
 		domainBytes, err := hex.DecodeString(v.DomainID)
 		if err != nil || len(domainBytes) != 32 {
-			return errors.New("temMALFORMED: DomainID must be a valid 256-bit hash")
+			return tx.Errorf(tx.TemMALFORMED, "DomainID must be a valid 256-bit hash")
 		}
 		// Check if zero
 		isZero := true

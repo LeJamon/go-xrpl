@@ -7,7 +7,7 @@ import (
 )
 
 // GatewayBalancesMethod handles the gateway_balances RPC method
-type GatewayBalancesMethod struct{}
+type GatewayBalancesMethod struct{ BaseHandler }
 
 func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
@@ -17,19 +17,16 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		HotWallet json.RawMessage `json:"hotwallet,omitempty"`
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
-	if request.Account == "" {
-		return nil, types.RpcErrorInvalidParams("Missing required parameter: account")
+	if err := RequireAccount(request.Account); err != nil {
+		return nil, err
 	}
 
-	// Check if ledger service is available
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Parse hotwallet parameter - can be a string or array of strings
@@ -163,14 +160,3 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	return response, nil
 }
 
-func (m *GatewayBalancesMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *GatewayBalancesMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *GatewayBalancesMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

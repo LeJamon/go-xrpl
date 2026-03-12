@@ -946,33 +946,35 @@ func TestTrustSetDeepFreezeFlags(t *testing.T) {
 		}
 	})
 
-	t.Run("SetDeepFreeze + ClearDeepFreeze - CONFLICT", func(t *testing.T) {
+	// Contradictory freeze/deep-freeze flag combinations are NOT checked in Validate().
+	// They are checked in Apply() (preclaim), gated behind featureDeepFreeze, and return
+	// tecNO_PERMISSION. Therefore Validate() should pass for these combinations.
+	// Reference: rippled SetTrust.cpp preclaim() lines 326-332
+
+	t.Run("SetDeepFreeze + ClearDeepFreeze - passes Validate (checked in Apply)", func(t *testing.T) {
 		ts := NewTrustSet("rGateway", tx.NewIssuedAmountFromFloat64(0, "USD", "rAlice"))
 		ts.SetFlags(TrustSetFlagSetDeepFreeze | TrustSetFlagClearDeepFreeze)
 
-		err := ts.Validate()
-		if err == nil {
-			t.Error("expected error for conflicting deep freeze flags")
+		if err := ts.Validate(); err != nil {
+			t.Errorf("contradictory deep freeze flags should pass Validate (checked in Apply): %v", err)
 		}
 	})
 
-	t.Run("SetFreeze + ClearDeepFreeze - CONFLICT", func(t *testing.T) {
+	t.Run("SetFreeze + ClearDeepFreeze - passes Validate (checked in Apply)", func(t *testing.T) {
 		ts := NewTrustSet("rGateway", tx.NewIssuedAmountFromFloat64(0, "USD", "rAlice"))
 		ts.SetFlags(TrustSetFlagSetFreeze | TrustSetFlagClearDeepFreeze)
 
-		err := ts.Validate()
-		if err == nil {
-			t.Error("expected error for conflicting freeze/clear deep freeze flags")
+		if err := ts.Validate(); err != nil {
+			t.Errorf("contradictory freeze/clear deep freeze should pass Validate (checked in Apply): %v", err)
 		}
 	})
 
-	t.Run("SetDeepFreeze + ClearFreeze - CONFLICT", func(t *testing.T) {
+	t.Run("SetDeepFreeze + ClearFreeze - passes Validate (checked in Apply)", func(t *testing.T) {
 		ts := NewTrustSet("rGateway", tx.NewIssuedAmountFromFloat64(0, "USD", "rAlice"))
 		ts.SetFlags(TrustSetFlagSetDeepFreeze | TrustSetFlagClearFreeze)
 
-		err := ts.Validate()
-		if err == nil {
-			t.Error("expected error for conflicting deep freeze/clear freeze flags")
+		if err := ts.Validate(); err != nil {
+			t.Errorf("contradictory deep freeze/clear freeze should pass Validate (checked in Apply): %v", err)
 		}
 	})
 

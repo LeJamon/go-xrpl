@@ -12,7 +12,7 @@ import (
 // Returns the transaction, ledger entry, field, and result type definitions
 // used by the binary codec for serialization.
 // Reference: rippled ServerDefinitions.cpp
-type ServerDefinitionsMethod struct{}
+type ServerDefinitionsMethod struct{ BaseHandler }
 
 func (m *ServerDefinitionsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	defs := definitions.Get()
@@ -54,14 +54,3 @@ func (m *ServerDefinitionsMethod) Handle(ctx *types.RpcContext, params json.RawM
 	return response, nil
 }
 
-func (m *ServerDefinitionsMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *ServerDefinitionsMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *ServerDefinitionsMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

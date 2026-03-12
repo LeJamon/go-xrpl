@@ -11,7 +11,7 @@ import (
 )
 
 // VaultInfoMethod handles the vault_info RPC method
-type VaultInfoMethod struct{}
+type VaultInfoMethod struct{ BaseHandler }
 
 func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
@@ -21,10 +21,8 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		Seq     uint32 `json:"seq,omitempty"`
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
 	hasVaultID := request.VaultID != ""
@@ -39,8 +37,8 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return nil, types.RpcErrorInvalidParams("Must specify either vault_id or (owner + seq)")
 	}
 
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Determine ledger index to use
@@ -120,14 +118,3 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	return response, nil
 }
 
-func (m *VaultInfoMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *VaultInfoMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *VaultInfoMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

@@ -16,7 +16,7 @@ import (
 
 // ChannelVerifyMethod handles the channel_verify RPC method
 // This verifies a signature that can be used to redeem a specific amount from a payment channel.
-type ChannelVerifyMethod struct{}
+type ChannelVerifyMethod struct{ BaseHandler }
 
 // channelVerifyRequest represents the request parameters
 type channelVerifyRequest struct {
@@ -210,15 +210,3 @@ func verifySignature(message []byte, pubKeyHex string, sigHex string) bool {
 	return algo.Validate(msgStr, pubKeyHex, sigHex)
 }
 
-func (m *ChannelVerifyMethod) RequiredRole() types.Role {
-	// channel_verify doesn't require any special role - it's a stateless verification
-	return types.RoleGuest
-}
-
-func (m *ChannelVerifyMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *ChannelVerifyMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

@@ -5,14 +5,15 @@ import (
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
+	"github.com/LeJamon/goXRPLd/internal/rpc/subscription"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// newTestSubscriptionManager creates a new SubscriptionManager for testing
-func newTestSubscriptionManager() *types.SubscriptionManager {
-	return &types.SubscriptionManager{
+// newTestSubscriptionManager creates a new subscription.Manager for testing
+func newTestSubscriptionManager() *subscription.Manager {
+	return &subscription.Manager{
 		Connections: make(map[string]*types.Connection),
 	}
 }

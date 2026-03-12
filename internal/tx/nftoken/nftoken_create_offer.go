@@ -2,7 +2,6 @@ package nftoken
 
 import (
 	"encoding/hex"
-	"errors"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -67,11 +66,11 @@ func (n *NFTokenCreateOffer) Validate() error {
 
 	// Check for invalid flags
 	if n.GetFlags()&tfNFTokenCreateOfferMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid NFTokenCreateOffer flags")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid NFTokenCreateOffer flags")
 	}
 
 	if n.NFTokenID == "" {
-		return errors.New("temMALFORMED: NFTokenID is required")
+		return tx.Errorf(tx.TemMALFORMED, "NFTokenID is required")
 	}
 
 	// Parse NFToken flags from token ID to validate
@@ -81,28 +80,28 @@ func (n *NFTokenCreateOffer) Validate() error {
 
 	// Buy offers must have Owner
 	if !isSellOffer && n.Owner == "" {
-		return errors.New("temMALFORMED: Owner is required for buy offers")
+		return tx.Errorf(tx.TemMALFORMED, "Owner is required for buy offers")
 	}
 
 	// Sell offers cannot specify Owner
 	if isSellOffer && n.Owner != "" {
-		return errors.New("temMALFORMED: Owner not allowed for sell offers")
+		return tx.Errorf(tx.TemMALFORMED, "Owner not allowed for sell offers")
 	}
 
 	// Owner cannot be the same as Account
 	// Reference: rippled tokenOfferCreatePreflight — "if (owner && owner == acctID)"
 	if n.Owner != "" && n.Owner == n.Account {
-		return errors.New("temMALFORMED: Owner cannot be the same as Account")
+		return tx.Errorf(tx.TemMALFORMED, "Owner cannot be the same as Account")
 	}
 
 	// Destination cannot be the same as the account creating the offer
 	if n.Destination != "" && n.Destination == n.Account {
-		return errors.New("temMALFORMED: Destination cannot be the same as Account")
+		return tx.Errorf(tx.TemMALFORMED, "Destination cannot be the same as Account")
 	}
 
 	// Expiration validation - expiration of 0 is invalid
 	if n.Expiration != nil && *n.Expiration == 0 {
-		return errors.New("temBAD_EXPIRATION: Expiration cannot be 0")
+		return tx.Errorf(tx.TemBAD_EXPIRATION, "Expiration cannot be 0")
 	}
 
 	// Amount validation
@@ -110,16 +109,16 @@ func (n *NFTokenCreateOffer) Validate() error {
 		// XRP amount
 		// For buy offers, zero amount is not allowed
 		if !isSellOffer && n.Amount.IsZero() {
-			return errors.New("temBAD_AMOUNT: buy offer amount cannot be zero")
+			return tx.Errorf(tx.TemBAD_AMOUNT, "buy offer amount cannot be zero")
 		}
 	} else {
 		// IOU amount - check if OnlyXRP flag is set on the token
 		if nftFlags&nftFlagOnlyXRP != 0 {
-			return errors.New("temBAD_AMOUNT: NFToken requires XRP only")
+			return tx.Errorf(tx.TemBAD_AMOUNT, "NFToken requires XRP only")
 		}
 		// IOU amount of 0 is not allowed
 		if n.Amount.IsZero() {
-			return errors.New("temBAD_AMOUNT: IOU amount cannot be zero")
+			return tx.Errorf(tx.TemBAD_AMOUNT, "IOU amount cannot be zero")
 		}
 	}
 
@@ -203,18 +202,9 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Check destination exists and doesn't disallow incoming NFT offers
 	// Reference: rippled tokenOfferCreatePreclaim
 	if c.Destination != "" {
-		destID, err := state.DecodeAccountID(c.Destination)
-		if err != nil {
-			return tx.TemINVALID
-		}
-		destKey := keylet.Account(destID)
-		destData, err := ctx.View.Read(destKey)
-		if err != nil || destData == nil {
-			return tx.TecNO_DST
-		}
-		destAccount, err := state.ParseAccountRoot(destData)
-		if err != nil {
-			return tx.TefINTERNAL
+		destAccount, _, result := ctx.LookupAccount(c.Destination)
+		if result != tx.TesSUCCESS {
+			return result
 		}
 		if destAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
 			return tx.TecNO_PERMISSION

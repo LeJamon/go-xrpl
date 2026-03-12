@@ -1,8 +1,6 @@
 package nftoken
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
 )
@@ -50,17 +48,17 @@ func (n *NFTokenModify) Validate() error {
 	// Check for invalid flags (no flags are valid for NFTokenModify)
 	// Reference: rippled NFTokenModify.cpp:38 - if (ctx.tx.getFlags() & tfUniversalMask)
 	if n.GetFlags() != 0 {
-		return errors.New("temINVALID_FLAG: NFTokenModify does not accept any flags")
+		return tx.Errorf(tx.TemINVALID_FLAG, "NFTokenModify does not accept any flags")
 	}
 
 	if n.NFTokenID == "" {
-		return errors.New("temMALFORMED: NFTokenID is required")
+		return tx.Errorf(tx.TemMALFORMED, "NFTokenID is required")
 	}
 
 	// Owner cannot be the same as Account
 	// Reference: rippled NFTokenModify.cpp:41 - if (auto owner = ctx.tx[~sfOwner]; owner == ctx.tx[sfAccount])
 	if n.Owner != "" && n.Owner == n.Account {
-		return errors.New("temMALFORMED: Owner cannot be the same as Account")
+		return tx.Errorf(tx.TemMALFORMED, "Owner cannot be the same as Account")
 	}
 
 	// URI validation: if present, must not be empty and not exceed maxTokenURILength
@@ -69,10 +67,10 @@ func (n *NFTokenModify) Validate() error {
 		// URI in transactions is hex-encoded, so actual byte length is len/2
 		uriBytes := len(n.URI) / 2
 		if uriBytes == 0 {
-			return errors.New("temMALFORMED: URI cannot be empty")
+			return tx.Errorf(tx.TemMALFORMED, "URI cannot be empty")
 		}
 		if uriBytes > maxTokenURILength {
-			return errors.New("temMALFORMED: URI too long")
+			return tx.Errorf(tx.TemMALFORMED, "URI too long")
 		}
 	}
 

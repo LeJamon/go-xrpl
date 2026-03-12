@@ -15,7 +15,7 @@ import (
 //   - Returns: list of trusted validators with their public keys, manifests,
 //     and current validation status
 //   - Also returns publisher_lists with their public keys, sequence, expiration
-type ValidatorsMethod struct{}
+type ValidatorsMethod struct{ AdminHandler }
 
 func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	return map[string]interface{}{
@@ -25,17 +25,6 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	}, nil
 }
 
-func (m *ValidatorsMethod) RequiredRole() types.Role {
-	return types.RoleAdmin
-}
-
-func (m *ValidatorsMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *ValidatorsMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}
 
 // ValidatorListSitesMethod handles the validator_list_sites RPC method.
 // STUB: Returns empty list. Network-only — not needed for standalone mode.
@@ -44,20 +33,9 @@ func (m *ValidatorsMethod) RequiredCondition() types.Condition {
 //   - Requires: ValidatorSite service that fetches validator lists from URLs
 //   - Reference: rippled ValidatorListSites.cpp
 //   - Returns: array of configured validator list sites with their fetch status
-type ValidatorListSitesMethod struct{}
+type ValidatorListSitesMethod struct{ AdminHandler }
 
 func (m *ValidatorListSitesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	return map[string]interface{}{"validator_sites": []interface{}{}}, nil
 }
 
-func (m *ValidatorListSitesMethod) RequiredRole() types.Role {
-	return types.RoleAdmin
-}
-
-func (m *ValidatorListSitesMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *ValidatorListSitesMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

@@ -2,7 +2,6 @@ package ledgerstatefix
 
 import (
 	"bytes"
-	"errors"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
@@ -26,8 +25,8 @@ const (
 
 // LedgerStateFix errors
 var (
-	ErrLedgerFixInvalidType   = errors.New("tefINVALID_LEDGER_FIX_TYPE: invalid LedgerFixType")
-	ErrLedgerFixOwnerRequired = errors.New("temINVALID: Owner is required for nfTokenPageLink fix")
+	ErrLedgerFixInvalidType   = tx.Errorf(tx.TefINVALID_LEDGER_FIX_TYPE, "invalid LedgerFixType")
+	ErrLedgerFixOwnerRequired = tx.Errorf(tx.TemINVALID, "Owner is required for nfTokenPageLink fix")
 )
 
 // LedgerStateFix is a system transaction to fix ledger state issues.
@@ -73,8 +72,8 @@ func (l *LedgerStateFix) Validate() error {
 
 	// Check for invalid flags (universal mask)
 	// Reference: rippled LedgerStateFix.cpp:36-37
-	if l.Common.Flags != nil && *l.Common.Flags&tx.TfUniversalMask != 0 {
-		return tx.ErrInvalidFlags
+	if err := tx.CheckFlags(l.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
 	}
 
 	// Validate LedgerFixType and required fields based on type

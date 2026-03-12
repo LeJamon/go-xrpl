@@ -1031,16 +1031,6 @@ func TestMintFlagOnlyXRP(t *testing.T) {
 	_ = nftAny
 }
 
-// ===========================================================================
-// testMintFlagCreateTrustLines
-// Reference: rippled NFToken_test.cpp testMintFlagCreateTrustLines
-// ===========================================================================
-func TestMintFlagCreateTrustLines(t *testing.T) {
-	// Deprecated by fixRemoveNFTokenAutoTrustLine amendment.
-	// Reference: rippled NFToken_test.cpp - this flag is tested but the behaviour
-	// is considered a bug that was fixed by the amendment.
-	t.Skip("TrustLine flag (tfTrustLine) is deprecated by fixRemoveNFTokenAutoTrustLine")
-}
 
 // ===========================================================================
 // testMintFlagTransferable
@@ -1921,15 +1911,6 @@ func TestNFTokenDeleteAccount(t *testing.T) {
 	result = env.Submit(carlaDel2)
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
-}
-
-// ===========================================================================
-// testNftBuyOffersSellOffers
-// Reference: rippled NFToken_test.cpp testNftBuyOffersSellOffers
-// ===========================================================================
-func TestNftBuyOffersSellOffers(t *testing.T) {
-	// RPC-only test — not applicable to transaction engine behaviour tests
-	t.Skip("testNftBuyOffersSellOffers is an RPC test, not engine behaviour")
 }
 
 // ===========================================================================
@@ -3196,15 +3177,6 @@ func TestNFTokenMintOffer(t *testing.T) {
 	})
 
 	env.Close()
-}
-
-// ===========================================================================
-// testSyntheticFieldsFromJSON
-// Reference: rippled NFToken_test.cpp testSyntheticFieldsFromJSON
-// ===========================================================================
-func TestSyntheticFieldsFromJSON(t *testing.T) {
-	// RPC-only test
-	t.Skip("testSyntheticFieldsFromJSON is an RPC test, not engine behaviour")
 }
 
 // ===========================================================================

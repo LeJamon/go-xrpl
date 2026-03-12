@@ -1,11 +1,12 @@
 package signerlist
 
 import (
-	"errors"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	"sort"
 
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -64,7 +65,7 @@ func (s *SignerListSet) Validate() error {
 	// Reference: rippled SetSignerList.cpp preflight()
 	if s.SignerQuorum == 0 {
 		if len(s.SignerEntries) > 0 {
-			return errors.New("temMALFORMED: cannot have SignerEntries when deleting signer list")
+			return tx.Errorf(tx.TemMALFORMED, "cannot have SignerEntries when deleting signer list")
 		}
 		return nil
 	}
@@ -72,7 +73,7 @@ func (s *SignerListSet) Validate() error {
 	// Must have at least one signer, max 32
 	// Reference: rippled SetSignerList.cpp:270-276
 	if len(s.SignerEntries) == 0 || len(s.SignerEntries) > 32 {
-		return errors.New("temMALFORMED: too many or too few signers in signer list")
+		return tx.Errorf(tx.TemMALFORMED, "too many or too few signers in signer list")
 	}
 
 	// Check for duplicates, self-reference, and weight validity
@@ -84,7 +85,7 @@ func (s *SignerListSet) Validate() error {
 		// Weight must be positive
 		// Reference: rippled SetSignerList.cpp:298-303
 		if entry.SignerEntry.SignerWeight == 0 {
-			return errors.New("temBAD_WEIGHT: every signer must have a positive weight")
+			return tx.Errorf(tx.TemBAD_WEIGHT, "every signer must have a positive weight")
 		}
 
 		totalWeight += uint32(entry.SignerEntry.SignerWeight)
@@ -92,13 +93,13 @@ func (s *SignerListSet) Validate() error {
 		// Cannot include self
 		// Reference: rippled SetSignerList.cpp:307-311
 		if entry.SignerEntry.Account == s.Account {
-			return errors.New("temBAD_SIGNER: a signer may not self reference account")
+			return tx.Errorf(tx.TemBAD_SIGNER, "a signer may not self reference account")
 		}
 
 		// No duplicate accounts
 		// Reference: rippled SetSignerList.cpp:284-288
 		if seenAccounts[entry.SignerEntry.Account] {
-			return errors.New("temBAD_SIGNER: duplicate signers in signer list")
+			return tx.Errorf(tx.TemBAD_SIGNER, "duplicate signers in signer list")
 		}
 		seenAccounts[entry.SignerEntry.Account] = true
 	}
@@ -106,7 +107,7 @@ func (s *SignerListSet) Validate() error {
 	// Total weight must be >= quorum, and quorum must be positive
 	// Reference: rippled SetSignerList.cpp:324-328
 	if s.SignerQuorum == 0 || totalWeight < s.SignerQuorum {
-		return errors.New("temBAD_QUORUM: quorum is unreachable")
+		return tx.Errorf(tx.TemBAD_QUORUM, "quorum is unreachable")
 	}
 
 	return nil
@@ -155,7 +156,7 @@ func (s *SetRegularKey) Validate() error {
 	}
 	// SetRegularKey has no type-specific flags.
 	if s.GetFlags()&tx.TfUniversalMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags for SetRegularKey")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for SetRegularKey")
 	}
 	return nil
 }
@@ -176,8 +177,16 @@ func (s *SetRegularKey) ClearKey() {
 }
 
 // Apply applies the SetRegularKey transaction to ledger state.
-// Reference: rippled SetRegularKey.cpp doApply()
+// Reference: rippled SetRegularKey.cpp preflight + doApply()
 func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) tx.Result {
+	// Amendment-gated preflight check: reject setting RegularKey to own account.
+	// Reference: rippled SetRegularKey.cpp preflight lines 66-71
+	if ctx.Rules().Enabled(amendment.FeatureFixMasterKeyAsRegularKey) {
+		if s.RegularKey != "" && s.RegularKey == s.Account {
+			return tx.TemBAD_REGKEY
+		}
+	}
+
 	if s.RegularKey != "" {
 		// Setting a regular key
 		if _, err := state.DecodeAccountID(s.RegularKey); err != nil {
@@ -211,15 +220,72 @@ func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) tx.Result {
 	return tx.TesSUCCESS
 }
 
+// removeSignersFromLedger removes the existing signer list from the ledger,
+// adjusting the owner count based on whether lsfOneOwnerCount is set.
+// Reference: rippled SetSignerList.cpp removeSignersFromLedger()
+func removeSignersFromLedger(ctx *tx.ApplyContext, signerListKey, ownerDirKey keylet.Keylet) tx.Result {
+	exists, _ := ctx.View.Exists(signerListKey)
+	if !exists {
+		// If the signer list doesn't exist we've already succeeded in deleting it.
+		return tx.TesSUCCESS
+	}
+
+	// Read the existing signer list to determine the owner count adjustment.
+	signerListData, err := ctx.View.Read(signerListKey)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	signerList, err := state.ParseSignerList(signerListData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// There are two different ways that the OwnerCount could be managed.
+	// If lsfOneOwnerCount is set, remove just one owner count.
+	// Otherwise use the pre-MultiSignReserve amendment calculation.
+	// Reference: rippled SetSignerList.cpp:216-223
+	removeFromOwnerCount := uint32(1)
+	if (signerList.Flags & state.LsfOneOwnerCount) == 0 {
+		// Old formula: 2 + entryCount
+		removeFromOwnerCount = 2 + uint32(len(signerList.SignerEntries))
+	}
+
+	// Remove the node from the account directory.
+	state.DirRemove(ctx.View, ownerDirKey, 0, signerListKey.Key, true)
+
+	// Adjust owner count.
+	if ctx.Account.OwnerCount >= removeFromOwnerCount {
+		ctx.Account.OwnerCount -= removeFromOwnerCount
+	} else {
+		ctx.Account.OwnerCount = 0
+	}
+
+	// Erase the signer list.
+	if err := ctx.View.Erase(signerListKey); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	return tx.TesSUCCESS
+}
+
+// signerCountBasedOwnerCountDelta computes the OwnerCount cost for a signer list
+// when featureMultiSignReserve is NOT enabled.
+// The rule is: 2 base + 1 per signer entry.
+// Reference: rippled SetSignerList.cpp signerCountBasedOwnerCountDelta()
+func signerCountBasedOwnerCountDelta(entryCount int) int {
+	return 2 + entryCount
+}
+
 // Apply applies the SignerListSet transaction to ledger state.
+// Reference: rippled SetSignerList.cpp doApply(), replaceSignerList(), destroySignerList()
 func (sl *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	signerListKey := keylet.SignerList(ctx.AccountID)
-
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 
 	if sl.SignerQuorum == 0 {
-		// Remove signer list
+		// --- Destroy signer list ---
 		// Reference: rippled SetSignerList.cpp destroySignerList()
+
 		// Destroying the signer list is only allowed if either the master key
 		// is enabled or there is a regular key.
 		// Reference: rippled SetSignerList.cpp:411-413
@@ -229,46 +295,69 @@ func (sl *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TecNO_ALTERNATIVE_KEY
 		}
 
-		exists, _ := ctx.View.Exists(signerListKey)
-		if exists {
-			// Remove from owner directory
-			// Reference: rippled SetSignerList.cpp removeSignersFromLedger
-			state.DirRemove(ctx.View, ownerDirKey, 0, signerListKey.Key, true)
-			if err := ctx.View.Erase(signerListKey); err != nil {
-				return tx.TefINTERNAL
-			}
-			if ctx.Account.OwnerCount > 0 {
-				ctx.Account.OwnerCount--
-			}
-		}
-	} else {
-		sleEntries := make([]state.SignerEntry, len(sl.SignerEntries))
-		for i, e := range sl.SignerEntries {
-			sleEntries[i] = state.SignerEntry{
-				Account:      e.SignerEntry.Account,
-				SignerWeight: e.SignerEntry.SignerWeight,
-			}
-		}
-		signerListData, err := state.SerializeSignerList(sl.SignerQuorum, sleEntries, ctx.AccountID)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
+		return removeSignersFromLedger(ctx, signerListKey, ownerDirKey)
+	}
 
-		exists, _ := ctx.View.Exists(signerListKey)
-		if exists {
-			if err := ctx.View.Update(signerListKey, signerListData); err != nil {
-				return tx.TefINTERNAL
-			}
-		} else {
-			if err := ctx.View.Insert(signerListKey, signerListData); err != nil {
-				return tx.TefINTERNAL
-			}
-			// Add to owner directory
-			// Reference: rippled SetSignerList.cpp applySignerEntries
-			state.DirInsert(ctx.View, ownerDirKey, signerListKey.Key, nil)
-			ctx.Account.OwnerCount++
+	// --- Replace (or create) signer list ---
+	// Reference: rippled SetSignerList.cpp replaceSignerList()
+
+	// Preemptively remove any old signer list. May reduce the reserve,
+	// so this is done before checking the reserve.
+	if result := removeSignersFromLedger(ctx, signerListKey, ownerDirKey); result != tx.TesSUCCESS {
+		return result
+	}
+
+	// Compute new reserve. Verify the account has funds to meet the reserve.
+	oldOwnerCount := ctx.Account.OwnerCount
+
+	// The required reserve changes based on featureMultiSignReserve.
+	// Reference: rippled SetSignerList.cpp:359-366
+	addedOwnerCount := 1
+	flags := uint32(state.LsfOneOwnerCount)
+	if !ctx.Rules().Enabled(amendment.FeatureMultiSignReserve) {
+		addedOwnerCount = signerCountBasedOwnerCountDelta(len(sl.SignerEntries))
+		flags = 0
+	}
+
+	newReserve := ctx.AccountReserve(oldOwnerCount + uint32(addedOwnerCount))
+
+	// We check the reserve against the starting balance because we want to
+	// allow dipping into the reserve to pay fees. This behavior is consistent
+	// with CreateTicket.
+	// Reference: rippled SetSignerList.cpp:374-375
+	priorBalance := ctx.Account.Balance + ctx.Config.BaseFee
+	if priorBalance < newReserve {
+		return tx.TecINSUFFICIENT_RESERVE
+	}
+
+	// Build the signer entries for serialization.
+	// Sort by account address, matching rippled's SetSignerList.cpp preflight() (line 66).
+	sleEntries := make([]state.SignerEntry, len(sl.SignerEntries))
+	for i, e := range sl.SignerEntries {
+		sleEntries[i] = state.SignerEntry{
+			Account:      e.SignerEntry.Account,
+			SignerWeight: e.SignerEntry.SignerWeight,
 		}
 	}
+	sort.Slice(sleEntries, func(i, j int) bool {
+		return sleEntries[i].Account < sleEntries[j].Account
+	})
+
+	// Serialize and insert the new signer list.
+	signerListData, err := state.SerializeSignerList(sl.SignerQuorum, sleEntries, ctx.AccountID, flags)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	if err := ctx.View.Insert(signerListKey, signerListData); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Add the signer list to the account's directory.
+	state.DirInsert(ctx.View, ownerDirKey, signerListKey.Key, nil)
+
+	// Adjust owner count.
+	ctx.Account.OwnerCount += uint32(addedOwnerCount)
 
 	return tx.TesSUCCESS
 }

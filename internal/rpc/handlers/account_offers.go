@@ -7,7 +7,7 @@ import (
 )
 
 // AccountOffersMethod handles the account_offers RPC method
-type AccountOffersMethod struct{}
+type AccountOffersMethod struct{ BaseHandler }
 
 func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
@@ -17,19 +17,16 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		types.PaginationParams
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
-	if request.Account == "" {
-		return nil, types.RpcErrorInvalidParams("Missing required parameter: account")
+	if err := RequireAccount(request.Account); err != nil {
+		return nil, err
 	}
 
-	// Check if ledger service is available
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Determine ledger index to use
@@ -66,14 +63,3 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	return response, nil
 }
 
-func (m *AccountOffersMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *AccountOffersMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *AccountOffersMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

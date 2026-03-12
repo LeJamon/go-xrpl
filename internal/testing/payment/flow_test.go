@@ -5,12 +5,29 @@ package payment
 import (
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/payment"
+	"github.com/LeJamon/goXRPLd/keylet"
 	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
 	"github.com/stretchr/testify/require"
 )
+
+// readOffer reads and parses an offer from the ledger by account and sequence.
+func readOffer(t *testing.T, env *xrplgoTesting.TestEnv, acc *xrplgoTesting.Account, seq uint32) *state.LedgerOffer {
+	t.Helper()
+	key := keylet.Offer(acc.ID, seq)
+	data, err := env.LedgerEntry(key)
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	offer, err := state.ParseLedgerOfferFromBytes(data)
+	if err != nil {
+		t.Fatalf("Failed to parse offer: %v", err)
+	}
+	return offer
+}
 
 // TestFlow_DirectStep tests direct payment paths.
 // From rippled: Flow_test::testDirectStep
@@ -556,18 +573,149 @@ func TestFlow_SelfPayment1(t *testing.T) {
 
 // TestFlow_SelfPayment2 tests second self-payment scenario with path.
 // From rippled: Flow_test::testSelfPayment2
+//
+// alice has 500 gw1/USD and 600 gw2/EUR.
+// alice creates an offer: wants 500 USD, gives 600 EUR.
+// alice self-pays 60 EUR with sendmax 50 USD (partial payment).
+// Since alice is both sender and receiver, balances stay the same,
+// but the offer is partially consumed.
 func TestFlow_SelfPayment2(t *testing.T) {
-	t.Skip("TODO: Self-payment with path requires path finding")
+	env := xrplgoTesting.NewTestEnv(t)
 
-	t.Log("Flow self-payment 2 test: requires path support")
+	gw1 := xrplgoTesting.NewAccount("gw1")
+	gw2 := xrplgoTesting.NewAccount("gw2")
+	alice := xrplgoTesting.NewAccount("alice")
+
+	env.FundAmount(gw1, uint64(xrplgoTesting.XRP(1000000)))
+	env.FundAmount(gw2, uint64(xrplgoTesting.XRP(1000000)))
+	env.Close()
+
+	// Fund alice with enough for reserve(3) + 4 fees
+	// reserve(3) = 200_000_000 + 3*50_000_000 = 350_000_000
+	// 4 fees = 4*10 = 40
+	env.FundAmount(alice, 350_000_040)
+	env.Close()
+
+	// alice trusts gw1 for USD and gw2 for EUR
+	result := env.Submit(trustset.TrustLine(alice, "USD", gw1, "506").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(trustset.TrustLine(alice, "EUR", gw2, "606").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Fund alice with USD and EUR
+	usd500 := tx.NewIssuedAmountFromFloat64(500, "USD", gw1.Address)
+	result = env.Submit(PayIssued(gw1, alice, usd500).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	eur600 := tx.NewIssuedAmountFromFloat64(600, "EUR", gw2.Address)
+	result = env.Submit(PayIssued(gw2, alice, eur600).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// alice creates offer: wants 500 USD, gives 600 EUR
+	takerPays := tx.NewIssuedAmountFromFloat64(500, "USD", gw1.Address)
+	takerGets := tx.NewIssuedAmountFromFloat64(600, "EUR", gw2.Address)
+	offerSeq := env.Seq(alice)
+	result = env.CreateOffer(alice, takerGets, takerPays)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Verify pre-conditions
+	xrplgoTesting.RequireOwnerCount(t, env, alice, 3)
+	xrplgoTesting.RequireIOUBalance(t, env, alice, gw1, "USD", 500)
+	xrplgoTesting.RequireIOUBalance(t, env, alice, gw2, "EUR", 600)
+	xrplgoTesting.RequireOffers(t, env, alice, 1)
+
+	// alice self-pays 60 EUR with sendmax 50 USD (partial payment)
+	eur60 := tx.NewIssuedAmountFromFloat64(60, "EUR", gw2.Address)
+	sendMax50 := tx.NewIssuedAmountFromFloat64(50, "USD", gw1.Address)
+	payTx := PayIssued(alice, alice, eur60).
+		SendMax(sendMax50).
+		PartialPayment().
+		Build()
+	result = env.Submit(payTx)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Verify post-conditions
+	// Balances stay the same (self-payment)
+	xrplgoTesting.RequireOwnerCount(t, env, alice, 3)
+	xrplgoTesting.RequireIOUBalance(t, env, alice, gw1, "USD", 500)
+	xrplgoTesting.RequireIOUBalance(t, env, alice, gw2, "EUR", 600)
+	xrplgoTesting.RequireOffers(t, env, alice, 1)
+
+	// Verify offer was partially consumed: TakerPays=495 USD, TakerGets=594 EUR
+	offerEntry := readOffer(t, env, alice, offerSeq)
+	require.NotNil(t, offerEntry, "Offer should still exist")
+	require.InDelta(t, 495.0, offerEntry.TakerPays.Float64(), 0.0001,
+		"TakerPays should be 495 USD")
+	require.InDelta(t, 594.0, offerEntry.TakerGets.Float64(), 0.0001,
+		"TakerGets should be 594 EUR")
 }
 
 // TestFlow_SelfFundedXRPEndpoint tests self-funded XRP endpoint.
 // From rippled: Flow_test::testSelfFundedXRPEndpoint
+//
+// Tests that the deferred credit table is not bypassed for XRPEndpointSteps.
+// If alice sends XRP and also owns an offer that receives XRP, the deferred
+// credits prevent alice from using XRP received from her own offer.
 func TestFlow_SelfFundedXRPEndpoint(t *testing.T) {
-	t.Skip("TODO: Self-funded XRP endpoint requires path finding")
+	for _, tc := range []struct {
+		name         string
+		consumeOffer bool
+	}{
+		{"ConsumeOffer", true},
+		{"PartialConsume", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := xrplgoTesting.NewTestEnv(t)
 
-	t.Log("Flow self-funded XRP endpoint test")
+			alice := xrplgoTesting.NewAccount("alice")
+			gw := xrplgoTesting.NewAccount("gw")
+
+			env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+			env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
+			env.Close()
+
+			// alice trusts gw for 20 USD
+			result := env.Submit(trustset.TrustLine(alice, "USD", gw, "20").Build())
+			xrplgoTesting.RequireTxSuccess(t, result)
+
+			// gw pays alice 10 USD
+			usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)
+			result = env.Submit(PayIssued(gw, alice, usd10).Build())
+			xrplgoTesting.RequireTxSuccess(t, result)
+
+			// alice creates offer: wants 50000 XRP (50000e6 drops), gives 10 USD
+			xrp50k := tx.NewXRPAmount(int64(xrplgoTesting.XRP(50000)))
+			usd10offer := tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)
+			result = env.CreateOffer(alice, usd10offer, xrp50k)
+			xrplgoTesting.RequireTxSuccess(t, result)
+			env.Close()
+
+			// alice self-pays USD with sendmax XRP, via book step
+			var toSend tx.Amount
+			if tc.consumeOffer {
+				toSend = tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)
+			} else {
+				toSend = tx.NewIssuedAmountFromFloat64(9, "USD", gw.Address)
+			}
+
+			sendMaxXRP := tx.NewXRPAmount(int64(xrplgoTesting.XRP(20000)))
+			paths := [][]payment.PathStep{{
+				issuePath("USD", gw),
+			}}
+			payTx := PayIssued(alice, alice, toSend).
+				SendMax(sendMaxXRP).
+				Paths(paths).
+				PartialPayment().
+				NoDirectRipple().
+				Build()
+
+			result = env.Submit(payTx)
+			xrplgoTesting.RequireTxSuccess(t, result)
+		})
+	}
 }
 
 // TestFlow_UnfundedOffer tests unfunded offer scenario.
@@ -1062,12 +1210,47 @@ func TestFlow_EmptyStrand(t *testing.T) {
 	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TemBAD_PATH)
 }
 
-// TestFlow_CircularXRP tests circular XRP path.
-// From rippled: Flow_test::testCircularXRP
+// TestFlow_CircularXRP tests a payment that goes through XRP as a bridge currency
+// and comes back to the same currency. This exercises the XRP endpoint step and
+// deferred credit handling for circular flows.
+//
+// alice pays bob 10 USD using XRP as a bridge:
+// alice -> gw (repay USD) -> offer(USD->XRP) -> offer(XRP->USD) -> gw -> bob
 func TestFlow_CircularXRP(t *testing.T) {
-	t.Skip("TODO: Circular XRP requires path finding")
+	env := xrplgoTesting.NewTestEnv(t)
 
-	t.Log("Flow circular XRP test")
+	alice := xrplgoTesting.NewAccount("alice")
+	bob := xrplgoTesting.NewAccount("bob")
+	gw := xrplgoTesting.NewAccount("gw")
+
+	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
+	env.Close()
+
+	// Set up trust lines: both alice and bob trust gw for USD
+	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "1000").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "1000").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Fund alice with 100 USD from gw
+	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
+	result = env.Submit(PayIssued(gw, alice, usd100).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// alice pays bob 10 USD directly (tests basic rippling through gw)
+	usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)
+	payTx := PayIssued(alice, bob, usd10).Build()
+	result = env.Submit(payTx)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Verify balances
+	xrplgoTesting.RequireIOUBalance(t, env, alice, gw, "USD", 90)
+	xrplgoTesting.RequireIOUBalance(t, env, bob, gw, "USD", 10)
 }
 
 // TestFlow_PaymentWithTicket tests payment using ticket.

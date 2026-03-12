@@ -7,7 +7,7 @@ import (
 )
 
 // NoRippleCheckMethod handles the noripple_check RPC method
-type NoRippleCheckMethod struct{}
+type NoRippleCheckMethod struct{ BaseHandler }
 
 func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
@@ -18,14 +18,12 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		Limit        uint32 `json:"limit,omitempty"`
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
-	if request.Account == "" {
-		return nil, types.RpcErrorInvalidParams("Missing required parameter: account")
+	if err := RequireAccount(request.Account); err != nil {
+		return nil, err
 	}
 
 	if request.Role == "" {
@@ -51,9 +49,8 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 	}
 
-	// Check if service is available
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := RequireLedgerService(); err != nil {
+		return nil, err
 	}
 
 	// Determine ledger index to use
@@ -129,14 +126,3 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	return response, nil
 }
 
-func (m *NoRippleCheckMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *NoRippleCheckMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *NoRippleCheckMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
-}

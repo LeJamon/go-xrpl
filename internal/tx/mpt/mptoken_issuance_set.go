@@ -2,7 +2,6 @@ package mpt
 
 import (
 	"encoding/hex"
-	"errors"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
@@ -53,30 +52,30 @@ func (m *MPTokenIssuanceSet) Validate() error {
 
 	// Check for invalid flags
 	if flags&^tfMPTokenIssuanceSetValidMask != 0 {
-		return errors.New("temINVALID_FLAG: invalid flags for MPTokenIssuanceSet")
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for MPTokenIssuanceSet")
 	}
 
 	// Cannot set both tfMPTLock and tfMPTUnlock
 	if (flags&MPTokenIssuanceSetFlagLock) != 0 && (flags&MPTokenIssuanceSetFlagUnlock) != 0 {
-		return errors.New("temINVALID_FLAG: cannot set both tfMPTLock and tfMPTUnlock")
+		return tx.Errorf(tx.TemINVALID_FLAG, "cannot set both tfMPTLock and tfMPTUnlock")
 	}
 
 	// MPTokenIssuanceID is required
 	if m.MPTokenIssuanceID == "" {
-		return errors.New("temMALFORMED: MPTokenIssuanceID is required")
+		return tx.Errorf(tx.TemMALFORMED, "MPTokenIssuanceID is required")
 	}
 
 	if len(m.MPTokenIssuanceID) != 48 {
-		return errors.New("temMALFORMED: MPTokenIssuanceID must be 48 hex characters")
+		return tx.Errorf(tx.TemMALFORMED, "MPTokenIssuanceID must be 48 hex characters")
 	}
 
 	if _, err := hex.DecodeString(m.MPTokenIssuanceID); err != nil {
-		return errors.New("temMALFORMED: MPTokenIssuanceID must be valid hex")
+		return tx.Errorf(tx.TemMALFORMED, "MPTokenIssuanceID must be valid hex")
 	}
 
 	// Holder cannot be the same as Account
 	if m.Holder != "" && m.Holder == m.Account {
-		return errors.New("temMALFORMED: Holder cannot be the same as Account")
+		return tx.Errorf(tx.TemMALFORMED, "Holder cannot be the same as Account")
 	}
 
 	return nil
