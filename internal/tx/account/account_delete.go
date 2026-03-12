@@ -1,8 +1,6 @@
 package account
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -49,16 +47,30 @@ func (a *AccountDelete) Validate() error {
 		return err
 	}
 
+	// Check for invalid flags
+	// Reference: rippled DeleteAccount.cpp preflight() line 51
+	if err := tx.CheckFlags(a.GetFlags(), tx.TfUniversalMask); err != nil {
+		return err
+	}
+
 	if a.Destination == "" {
-		return errors.New("Destination is required")
+		return tx.Errorf(tx.TemDST_NEEDED, "Destination is required")
 	}
 
 	// Cannot delete to self
+	// Reference: rippled AccountDelete.cpp preflight()
 	if a.Account == a.Destination {
-		return errors.New("cannot delete account to self")
+		return tx.Errorf(tx.TemDST_IS_SRC, "cannot delete account to self")
 	}
 
 	return nil
+}
+
+// CalculateBaseFee returns the minimum fee for AccountDelete.
+// AccountDelete requires one owner reserve increment as the base fee.
+// Reference: rippled DeleteAccount.cpp calculateBaseFee() — returns view.fees().increment
+func (a *AccountDelete) CalculateBaseFee(config tx.EngineConfig) uint64 {
+	return config.ReserveIncrement
 }
 
 // Flatten returns a flat map of all transaction fields

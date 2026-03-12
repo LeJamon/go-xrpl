@@ -11,7 +11,7 @@ const (
 // Tick size bounds for order book rounding.
 const (
 	TickSizeMin uint8 = 3
-	TickSizeMax uint8 = 15
+	TickSizeMax uint8 = 16
 )
 
 // Fee limits.

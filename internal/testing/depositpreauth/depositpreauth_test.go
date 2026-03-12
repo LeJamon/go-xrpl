@@ -207,7 +207,7 @@ func TestDepositPreauth_Invalid(t *testing.T) {
 	// Self-authorization.
 	t.Run("SelfAuth", func(t *testing.T) {
 		result := env.Submit(dp.Auth(alice, alice).Build())
-		require.Equal(t, "temCAN_NOT_PREAUTH_SELF", result.Code)
+		require.Equal(t, "temCANNOT_PREAUTH_SELF", result.Code)
 		env.Close()
 	})
 

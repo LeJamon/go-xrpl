@@ -153,11 +153,5 @@ func (ec *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// If cross-account, also decrement destination's OwnerCount
-	// Reference: rippled — if (sle[sfAccount] != sle[sfDestination]) adjustOwnerCount(dest, -1)
-	if escrowEntry.Account != escrowEntry.DestinationID {
-		adjustOwnerCount(ctx, escrowEntry.DestinationID, -1)
-	}
-
 	return tx.TesSUCCESS
 }

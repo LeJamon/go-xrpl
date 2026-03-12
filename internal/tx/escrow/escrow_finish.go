@@ -3,6 +3,7 @@ package escrow
 import (
 	"encoding/hex"
 	"sort"
+	"strings"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -173,8 +174,8 @@ func (ef *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TecCRYPTOCONDITION_ERROR
 		}
 
-		// Condition in tx must match condition on escrow
-		if txCondition != escrowEntry.Condition {
+		// Condition in tx must match condition on escrow (case-insensitive hex comparison)
+		if !strings.EqualFold(txCondition, escrowEntry.Condition) {
 			return tx.TecCRYPTOCONDITION_ERROR
 		}
 
@@ -250,13 +251,10 @@ func (ef *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// Decrement OwnerCount for escrow owner
+	// Decrement OwnerCount for escrow owner only.
+	// Note: rippled does NOT adjust destination's OwnerCount for XRP escrows.
+	// Reference: rippled Escrow.cpp:1188-1190
 	adjustOwnerCount(ctx, ownerID, -1)
-
-	// If cross-account, also decrement destination's OwnerCount
-	if escrowEntry.Account != escrowEntry.DestinationID {
-		adjustOwnerCount(ctx, escrowEntry.DestinationID, -1)
-	}
 
 	return tx.TesSUCCESS
 }

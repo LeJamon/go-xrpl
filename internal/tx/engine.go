@@ -732,7 +732,7 @@ func parseValidationError(err error) Result {
 		"temBAD_SEND_XRP_PATHS":     TemBAD_SEND_XRP_PATHS,
 		"temBAD_SEND_XRP_LIMIT":     TemBAD_SEND_XRP_LIMIT,
 		"temBAD_SEND_XRP_NO_DIRECT": TemBAD_SEND_XRP_NO_DIRECT,
-		"temCAN_NOT_PREAUTH_SELF":   TemCAN_NOT_PREAUTH_SELF,
+		"temCANNOT_PREAUTH_SELF":    TemCAN_NOT_PREAUTH_SELF,
 		"temEMPTY_DID":              TemEMPTY_DID,
 		"temARRAY_EMPTY":            TemARRAY_EMPTY,
 		"temARRAY_TOO_LARGE":        TemARRAY_TOO_LARGE,
@@ -1036,8 +1036,9 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 			if sigErr == nil && sigAddr == common.Account {
 				signedWithMaster = true
 			}
-		} else if e.config.SkipSignatureVerification {
-			// In test mode without signatures, assume master key
+		} else if e.config.SkipSignatureVerification && !IsMultiSigned(tx) {
+			// In test mode without signatures, assume master key (single-signed only).
+			// Multi-signed transactions have SigningPubKey="" but are NOT master-signed.
 			signedWithMaster = true
 		}
 		if signedWithMaster && account.Flags&state.LsfPasswordSpent == 0 {

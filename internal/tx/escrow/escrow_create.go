@@ -226,9 +226,10 @@ func (ec *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecDIR_FULL
 	}
 
-	// If cross-account, insert into destination's owner directory and
-	// increment destination's OwnerCount.
-	// Reference: rippled Escrow.cpp:560-570 + adjustOwnerCount
+	// If cross-account, insert into destination's owner directory.
+	// Note: rippled does NOT increment the destination's OwnerCount for
+	// XRP escrows. Only the creator's OwnerCount is incremented.
+	// Reference: rippled Escrow.cpp:561-569
 	if destID != accountID {
 		destDirKey := keylet.OwnerDir(destID)
 		_, err = state.DirInsert(ctx.View, destDirKey, escrowKey.Key, func(dir *state.DirectoryNode) {
@@ -236,12 +237,6 @@ func (ec *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		})
 		if err != nil {
 			return tx.TecDIR_FULL
-		}
-
-		// Increment destination's OwnerCount
-		destAccount.OwnerCount++
-		if result := ctx.UpdateAccountRoot(destID, destAccount); result != tx.TesSUCCESS {
-			return result
 		}
 	}
 

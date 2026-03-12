@@ -509,7 +509,7 @@ func (r Result) String() string {
 	case TemINVALID_ACCOUNT_ID:
 		return "temINVALID_ACCOUNT_ID"
 	case TemCAN_NOT_PREAUTH_SELF:
-		return "temCAN_NOT_PREAUTH_SELF"
+		return "temCANNOT_PREAUTH_SELF"
 	case TemINVALID_COUNT:
 		return "temINVALID_COUNT"
 	case TemSEQ_AND_TICKET:
