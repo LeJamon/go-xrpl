@@ -2836,3 +2836,43 @@ func (e *TestEnv) SetDelegate(owner, authorized *Account, permissions []string) 
 		e.t.Fatalf("SetDelegate(%s -> %s, %v): %s: %s", owner.Name, authorized.Name, permissions, result.Code, result.Message)
 	}
 }
+
+// SetAmendments replaces the current amendment set with exactly the named amendments.
+// This is used by the conformance runner to configure the exact amendment set from fixtures.
+func (e *TestEnv) SetAmendments(names []string) {
+	e.rulesBuilder = amendment.NewRulesBuilder()
+	for _, name := range names {
+		e.rulesBuilder.EnableByName(name)
+	}
+}
+
+// ReimburseFeeDirect directly adds baseFee drops back to an account's balance
+// in the ledger, without submitting a transaction. This matches rippled's test
+// framework behavior where trust line setup reimburses the transaction fee so
+// the account's XRP balance is unchanged.
+func (e *TestEnv) ReimburseFeeDirect(acc *Account) {
+	e.t.Helper()
+
+	accountKey := keylet.Account(acc.ID)
+	data, err := e.ledger.Read(accountKey)
+	if err != nil {
+		e.t.Fatalf("ReimburseFeeDirect: failed to read account %s: %v", acc.Name, err)
+	}
+
+	accountRoot, err := state.ParseAccountRoot(data)
+	if err != nil {
+		e.t.Fatalf("ReimburseFeeDirect: failed to parse account %s: %v", acc.Name, err)
+	}
+
+	accountRoot.Balance += e.baseFee
+
+	updated, err := state.SerializeAccountRoot(accountRoot)
+	if err != nil {
+		e.t.Fatalf("ReimburseFeeDirect: failed to serialize account %s: %v", acc.Name, err)
+	}
+
+	if err := e.ledger.Update(accountKey, updated); err != nil {
+		e.t.Fatalf("ReimburseFeeDirect: failed to update account %s: %v", acc.Name, err)
+	}
+}
+
