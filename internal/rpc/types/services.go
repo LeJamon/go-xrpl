@@ -168,7 +168,10 @@ type LedgerServerInfo struct {
 	NetworkID           uint32
 }
 
-// SubmitResult contains the result of submitting a transaction
+// SubmitResult contains the result of submitting a transaction.
+// The boolean fields match rippled's Transaction::SubmitResult struct:
+// applied, broadcast, queued, kept are independent pipeline states.
+// "accepted" in rippled is derived as: applied || broadcast || queued || kept.
 type SubmitResult struct {
 	// EngineResult is the result code string (e.g., "tesSUCCESS")
 	EngineResult string
@@ -179,8 +182,17 @@ type SubmitResult struct {
 	// EngineResultMessage is a human-readable result message
 	EngineResultMessage string
 
-	// Applied indicates if the transaction was applied to the ledger
+	// Applied indicates if the transaction was applied to the open ledger
 	Applied bool
+
+	// Broadcast indicates if the transaction was broadcast to peers
+	Broadcast bool
+
+	// Queued indicates if the transaction was placed in the transaction queue
+	Queued bool
+
+	// Kept indicates if the transaction was kept for retry
+	Kept bool
 
 	// Fee is the fee charged (in drops)
 	Fee uint64
@@ -190,6 +202,12 @@ type SubmitResult struct {
 
 	// ValidatedLedger is the highest validated ledger sequence
 	ValidatedLedger uint32
+}
+
+// Accepted returns true if any submission state is true, matching
+// rippled's SubmitResult::any() method.
+func (r *SubmitResult) Accepted() bool {
+	return r.Applied || r.Broadcast || r.Queued || r.Kept
 }
 
 // TransactionInfo contains transaction data and metadata

@@ -53,6 +53,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 	var entropy []byte
 	var warning string
+	var passphraseUsed bool
 
 	// Determine the seed source
 	// Priority: seed > seed_hex > passphrase > random
@@ -97,14 +98,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		// Derive seed from passphrase using SHA-512 Half (first 16 bytes of SHA-512)
 		hash := common.Sha512Half([]byte(request.Passphrase))
 		entropy = hash[:16]
-
-		// Add warning about passphrase-based wallets
-		entropyBits := estimateEntropy(request.Passphrase)
-		if entropyBits < 80.0 {
-			warning = "This wallet was generated using a user-supplied passphrase that has low entropy and is vulnerable to brute-force attacks."
-		} else {
-			warning = "This wallet was generated using a user-supplied passphrase. It may be vulnerable to brute-force attacks."
-		}
+		passphraseUsed = true
 	} else {
 		// Generate random seed
 		entropy = make([]byte, 16)
@@ -157,12 +151,28 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, types.RpcErrorInternal("Failed to encode public key: " + err.Error())
 	}
 
+	// Add passphrase warning matching rippled logic
+	// rippled skips warning if passphrase equals any seed encoding
+	seedHexStr := strings.ToUpper(hex.EncodeToString(entropy))
+	if passphraseUsed {
+		// TODO: add master_key (RFC1751) comparison when rfc1751 dictionary is complete
+		if request.Passphrase != encodedSeed && request.Passphrase != seedHexStr {
+			entropyBits := estimateEntropy(request.Passphrase)
+			if entropyBits < 80.0 {
+				warning = "This wallet was generated using a user-supplied passphrase that has low entropy and is vulnerable to brute-force attacks."
+			} else {
+				warning = "This wallet was generated using a user-supplied passphrase. It may be vulnerable to brute-force attacks."
+			}
+		}
+	}
+
 	// Build response matching rippled format
 	response := map[string]interface{}{
 		"account_id":      accountID,
 		"key_type":        keyType,
+		// TODO: "master_key" (RFC1751 encoding) — requires rfc1751 dictionary to be complete
 		"master_seed":     encodedSeed,
-		"master_seed_hex": strings.ToUpper(hex.EncodeToString(entropy)),
+		"master_seed_hex": seedHexStr,
 		"public_key":      encodedPublicKey,
 		"public_key_hex":  strings.ToUpper(publicKey),
 	}

@@ -75,6 +75,12 @@ var (
 	LimitNoRippleCheck   = LimitRange{10, 300, 400}
 	LimitAccountNFTokens = LimitRange{20, 100, 400}
 	LimitNFTOffers       = LimitRange{50, 250, 500}
+
+	// LedgerData limits from rippled Tuning.h: pageLength(isBinary)
+	// Binary mode: binaryPageLength = 2048
+	// JSON mode: jsonPageLength = 256
+	LimitLedgerData       = LimitRange{16, 256, 256}
+	LimitLedgerDataBinary = LimitRange{16, 2048, 2048}
 )
 
 // ClampLimit applies rippled's readLimitField logic: if the user provides a limit,

@@ -76,7 +76,7 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 }
 
 func (m *TxHistoryMethod) RequiredRole() types.Role {
-	return types.RoleGuest
+	return types.RoleUser
 }
 
 func (m *TxHistoryMethod) SupportedApiVersions() []int {

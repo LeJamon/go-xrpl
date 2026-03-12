@@ -74,7 +74,6 @@ func allGuestMethods() []guestMethodEntry {
 		{"ledger_entry", &handlers.LedgerEntryMethod{}},
 		{"ledger_index", &handlers.LedgerIndexMethod{}},
 		{"ledger_header", &handlers.LedgerHeaderMethod{}},
-		{"tx_history", &handlers.TxHistoryMethod{}},
 		{"ping", &handlers.PingMethod{}},
 		{"random", &handlers.RandomMethod{}},
 		{"fee", &handlers.FeeMethod{}},
@@ -119,6 +118,7 @@ func allUserMethods() []userMethodEntry {
 		{"transaction_entry", &handlers.TransactionEntryMethod{}},
 		{"manifest", &handlers.ManifestMethod{}},
 		{"tx_reduce_relay", &handlers.TxReduceRelayMethod{}},
+		{"tx_history", &handlers.TxHistoryMethod{}},
 	}
 }
 
@@ -176,7 +176,7 @@ func TestAdminMethodCount(t *testing.T) {
 // added to the handlers package but forgotten in this test catalogue.
 // Update the expected count when adding new guest handlers.
 func TestGuestMethodCount(t *testing.T) {
-	const expectedGuestCount = 41
+	const expectedGuestCount = 40
 
 	got := len(allGuestMethods())
 	assert.Equal(t, expectedGuestCount, got,
@@ -189,7 +189,7 @@ func TestGuestMethodCount(t *testing.T) {
 // added to the handlers package but forgotten in this test catalogue.
 // Update the expected count when adding new user handlers.
 func TestUserMethodCount(t *testing.T) {
-	const expectedUserCount = 9
+	const expectedUserCount = 10
 
 	got := len(allUserMethods())
 	assert.Equal(t, expectedUserCount, got,
@@ -206,7 +206,7 @@ func TestAllMethodsCovered(t *testing.T) {
 	// The expected total is the sum of all three role categories.
 	// Every handler struct in the handlers package must appear in exactly
 	// one of: allAdminMethods, allGuestMethods, allUserMethods.
-	const expectedTotal = 29 + 44 + 5 // 78
+	const expectedTotal = 28 + 40 + 10 // 78
 
 	total := len(allAdminMethods()) + len(allGuestMethods()) + len(allUserMethods())
 	assert.Equal(t, expectedTotal, total,

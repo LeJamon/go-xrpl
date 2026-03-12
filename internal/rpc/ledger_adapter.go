@@ -184,6 +184,9 @@ func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte) (*types.SubmitRe
 		EngineResultCode:    int(result.Result),
 		EngineResultMessage: result.Message,
 		Applied:             result.Applied,
+		Broadcast:           result.Applied, // If applied, it would be broadcast to peers
+		Queued:              false,          // Not queued when applied directly
+		Kept:                result.Applied, // If applied, it is kept
 		Fee:                 result.Fee,
 		CurrentLedger:       result.CurrentLedger,
 		ValidatedLedger:     result.ValidatedLedger,

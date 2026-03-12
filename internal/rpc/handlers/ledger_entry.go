@@ -62,7 +62,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// account_root: string (account address)
+	// account_root: string (account address) — rippled only accepts address, no hex fallback
 	if !keySet {
 		if raw, ok := rawParams["account_root"]; ok {
 			var addr string
@@ -78,10 +78,21 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// amm: { asset, asset2 }
+	// amm: string (hex) or { asset, asset2 }
 	if !keySet {
 		if raw, ok := rawParams["amm"]; ok {
 			entryKey, rpcErr = parseAMMKeylet(raw)
+			if rpcErr != nil {
+				return nil, rpcErr
+			}
+			keySet = true
+		}
+	}
+
+	// bridge: hex string only (object form requires xchain bridge keylet not yet implemented)
+	if !keySet {
+		if raw, ok := rawParams["bridge"]; ok {
+			entryKey, rpcErr = parseHex256(raw, "bridge")
 			if rpcErr != nil {
 				return nil, rpcErr
 			}
@@ -100,7 +111,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// credential: { subject, issuer, credential_type }
+	// credential: string (hex) or { subject, issuer, credential_type }
 	if !keySet {
 		if raw, ok := rawParams["credential"]; ok {
 			entryKey, rpcErr = parseCredentialKeylet(raw)
@@ -111,7 +122,18 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// deposit_preauth: { owner, authorized } or { owner, authorized_credentials }
+	// delegate: string (hex) or { account, authorize }
+	if !keySet {
+		if raw, ok := rawParams["delegate"]; ok {
+			entryKey, rpcErr = parseDelegateKeylet(raw)
+			if rpcErr != nil {
+				return nil, rpcErr
+			}
+			keySet = true
+		}
+	}
+
+	// deposit_preauth: string (hex) or { owner, authorized } or { owner, authorized_credentials }
 	if !keySet {
 		if raw, ok := rawParams["deposit_preauth"]; ok {
 			entryKey, rpcErr = parseDepositPreauthKeylet(raw)
@@ -122,7 +144,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// did: string (account address)
+	// did: string (account address) — rippled only accepts address, no hex fallback
 	if !keySet {
 		if raw, ok := rawParams["did"]; ok {
 			var addr string
@@ -149,26 +171,18 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// escrow: { owner, seq }
+	// escrow: string (hex) or { owner, seq }
 	if !keySet {
 		if raw, ok := rawParams["escrow"]; ok {
-			var req struct {
-				Owner string `json:"owner"`
-				Seq   uint32 `json:"seq"`
+			entryKey, rpcErr = parseEscrowKeylet(raw)
+			if rpcErr != nil {
+				return nil, rpcErr
 			}
-			if err := json.Unmarshal(raw, &req); err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid escrow params")
-			}
-			accountID, err := decodeAccountID(req.Owner)
-			if err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid escrow owner: " + err.Error())
-			}
-			entryKey = keylet.Escrow(accountID, req.Seq).Key
 			keySet = true
 		}
 	}
 
-	// mpt_issuance: string (hex issuance ID, 24 bytes / 48 chars)
+	// mpt_issuance: string (hex issuance ID, 24 bytes / 48 chars) — rippled only accepts string
 	if !keySet {
 		if raw, ok := rawParams["mpt_issuance"]; ok {
 			var idHex string
@@ -186,27 +200,13 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// mptoken: { mpt_issuance_id, account }
+	// mptoken: string (hex) or { mpt_issuance_id, account }
 	if !keySet {
 		if raw, ok := rawParams["mptoken"]; ok {
-			var req struct {
-				MPTIssuanceID string `json:"mpt_issuance_id"`
-				Account       string `json:"account"`
+			entryKey, rpcErr = parseMPTokenKeylet(raw)
+			if rpcErr != nil {
+				return nil, rpcErr
 			}
-			if err := json.Unmarshal(raw, &req); err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid mptoken params")
-			}
-			idBytes, err := hex.DecodeString(req.MPTIssuanceID)
-			if err != nil || len(idBytes) != 24 {
-				return nil, types.RpcErrorInvalidParams("Invalid mpt_issuance_id")
-			}
-			var mptID [24]byte
-			copy(mptID[:], idBytes)
-			accountID, err := decodeAccountID(req.Account)
-			if err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid mptoken account: " + err.Error())
-			}
-			entryKey = keylet.MPTokenByID(mptID, accountID).Key
 			keySet = true
 		}
 	}
@@ -233,40 +233,24 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// offer: { account, seq }
+	// offer: string (hex) or { account, seq }
 	if !keySet {
 		if raw, ok := rawParams["offer"]; ok {
-			var req struct {
-				Account string `json:"account"`
-				Seq     uint32 `json:"seq"`
+			entryKey, rpcErr = parseOfferKeylet(raw)
+			if rpcErr != nil {
+				return nil, rpcErr
 			}
-			if err := json.Unmarshal(raw, &req); err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid offer params")
-			}
-			accountID, err := decodeAccountID(req.Account)
-			if err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid offer account: " + err.Error())
-			}
-			entryKey = keylet.Offer(accountID, req.Seq).Key
 			keySet = true
 		}
 	}
 
-	// oracle: { account, oracle_document_id }
+	// oracle: string (hex) or { account, oracle_document_id }
 	if !keySet {
 		if raw, ok := rawParams["oracle"]; ok {
-			var req struct {
-				Account          string `json:"account"`
-				OracleDocumentID uint32 `json:"oracle_document_id"`
+			entryKey, rpcErr = parseOracleKeylet(raw)
+			if rpcErr != nil {
+				return nil, rpcErr
 			}
-			if err := json.Unmarshal(raw, &req); err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid oracle params")
-			}
-			accountID, err := decodeAccountID(req.Account)
-			if err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid oracle account: " + err.Error())
-			}
-			entryKey = keylet.Oracle(accountID, req.OracleDocumentID).Key
 			keySet = true
 		}
 	}
@@ -282,21 +266,13 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// permissioned_domain: { account, seq }
+	// permissioned_domain: string (hex) or { account, seq }
 	if !keySet {
 		if raw, ok := rawParams["permissioned_domain"]; ok {
-			var req struct {
-				Account string `json:"account"`
-				Seq     uint32 `json:"seq"`
+			entryKey, rpcErr = parsePermissionedDomainKeylet(raw)
+			if rpcErr != nil {
+				return nil, rpcErr
 			}
-			if err := json.Unmarshal(raw, &req); err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid permissioned_domain params")
-			}
-			accountID, err := decodeAccountID(req.Account)
-			if err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid permissioned_domain account: " + err.Error())
-			}
-			entryKey = keylet.PermissionedDomain(accountID, req.Seq).Key
 			keySet = true
 		}
 	}
@@ -323,7 +299,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// signer_list: string (account address)
+	// signer_list: string (account address) — rippled only accepts address, no hex fallback
 	if !keySet {
 		if raw, ok := rawParams["signer_list"]; ok {
 			var addr string
@@ -339,21 +315,46 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// ticket: { account, ticket_seq }
+	// ticket: string (hex) or { account, ticket_seq }
 	if !keySet {
 		if raw, ok := rawParams["ticket"]; ok {
-			var req struct {
-				Account  string `json:"account"`
-				TicketID uint32 `json:"ticket_id"`
+			entryKey, rpcErr = parseTicketKeylet(raw)
+			if rpcErr != nil {
+				return nil, rpcErr
 			}
-			if err := json.Unmarshal(raw, &req); err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid ticket params")
+			keySet = true
+		}
+	}
+
+	// vault: string (hex) or { owner, seq }
+	if !keySet {
+		if raw, ok := rawParams["vault"]; ok {
+			entryKey, rpcErr = parseVaultKeylet(raw)
+			if rpcErr != nil {
+				return nil, rpcErr
 			}
-			accountID, err := decodeAccountID(req.Account)
-			if err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid ticket account: " + err.Error())
+			keySet = true
+		}
+	}
+
+	// xchain_owned_claim_id: string (hex) — object form requires bridge keylet (not yet implemented)
+	if !keySet {
+		if raw, ok := rawParams["xchain_owned_claim_id"]; ok {
+			entryKey, rpcErr = parseHex256(raw, "xchain_owned_claim_id")
+			if rpcErr != nil {
+				return nil, rpcErr
 			}
-			entryKey = keylet.Ticket(accountID, req.TicketID).Key
+			keySet = true
+		}
+	}
+
+	// xchain_owned_create_account_claim_id: string (hex) — object form requires bridge keylet
+	if !keySet {
+		if raw, ok := rawParams["xchain_owned_create_account_claim_id"]; ok {
+			entryKey, rpcErr = parseHex256(raw, "xchain_owned_create_account_claim_id")
+			if rpcErr != nil {
+				return nil, rpcErr
+			}
 			keySet = true
 		}
 	}
@@ -376,7 +377,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 	response := map[string]interface{}{
 		"index":        result.Index,
-		"ledger_hash":  hex.EncodeToString(result.LedgerHash[:]),
+		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
 		"validated":    result.Validated,
 	}
@@ -425,14 +426,42 @@ func parseHex256(raw json.RawMessage, fieldName string) ([32]byte, *types.RpcErr
 	return result, nil
 }
 
-// parseAMMKeylet parses an AMM specifier: { asset, asset2 }
+// tryParseHex256 attempts to parse raw JSON as a 64-char hex string.
+// Returns the parsed key and true on success, or zero-value and false if the
+// raw value is not a string or not valid 32-byte hex (caller should try object form).
+func tryParseHex256(raw json.RawMessage) ([32]byte, bool) {
+	var hexStr string
+	if err := json.Unmarshal(raw, &hexStr); err != nil {
+		return [32]byte{}, false
+	}
+	decoded, err := hex.DecodeString(hexStr)
+	if err != nil || len(decoded) != 32 {
+		return [32]byte{}, false
+	}
+	var result [32]byte
+	copy(result[:], decoded)
+	return result, true
+}
+
+// parseAMMKeylet parses an AMM specifier: string (hex) or { asset, asset2 }
+// Reference: rippled LedgerEntry.cpp parseAMM()
 func parseAMMKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	// Try hex string first
+	if key, ok := tryParseHex256(raw); ok {
+		return key, nil
+	}
+
+	// Try object form
 	var req struct {
 		Asset  json.RawMessage `json:"asset"`
 		Asset2 json.RawMessage `json:"asset2"`
 	}
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return [32]byte{}, types.RpcErrorInvalidParams("Invalid amm params")
+	}
+
+	if req.Asset == nil || req.Asset2 == nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid amm params: asset and asset2 required")
 	}
 
 	issue1Currency, issue1Issuer, err := parseCurrencyIssuer(req.Asset)
@@ -447,8 +476,15 @@ func parseAMMKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 	return keylet.AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency).Key, nil
 }
 
-// parseCredentialKeylet parses a credential specifier: { subject, issuer, credential_type }
+// parseCredentialKeylet parses a credential specifier: string (hex) or { subject, issuer, credential_type }
+// Reference: rippled LedgerEntry.cpp parseCredential()
 func parseCredentialKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	// Try hex string first
+	if key, ok := tryParseHex256(raw); ok {
+		return key, nil
+	}
+
+	// Try object form
 	var req struct {
 		Subject        string `json:"subject"`
 		Issuer         string `json:"issuer"`
@@ -472,8 +508,46 @@ func parseCredentialKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 	return keylet.Credential(subjectID, issuerID, credType).Key, nil
 }
 
-// parseDepositPreauthKeylet parses a deposit_preauth specifier
+// parseDelegateKeylet parses a delegate specifier: string (hex) or { account, authorize }
+// Reference: rippled LedgerEntry.cpp parseDelegate()
+func parseDelegateKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	// Try hex string first
+	if key, ok := tryParseHex256(raw); ok {
+		return key, nil
+	}
+
+	// Try object form
+	var req struct {
+		Account   string `json:"account"`
+		Authorize string `json:"authorize"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid delegate params")
+	}
+	if req.Account == "" || req.Authorize == "" {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid delegate params: account and authorize required")
+	}
+	accountID, err := decodeAccountID(req.Account)
+	if err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid delegate account: " + err.Error())
+	}
+	authorizeID, err := decodeAccountID(req.Authorize)
+	if err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid delegate authorize: " + err.Error())
+	}
+	return keylet.DelegateKeylet(accountID, authorizeID).Key, nil
+}
+
+// parseDepositPreauthKeylet parses a deposit_preauth specifier:
+// string (hex) or { owner, authorized } or { owner, authorized_credentials }
+// Reference: rippled LedgerEntry.cpp parseDepositPreauth()
 func parseDepositPreauthKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	// Try hex string first
+	if key, ok := tryParseHex256(raw); ok {
+		return key, nil
+	}
+
+	// Try object form
 	var req struct {
 		Owner      string `json:"owner"`
 		Authorized string `json:"authorized"`
@@ -493,17 +567,16 @@ func parseDepositPreauthKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) 
 }
 
 // parseDirectoryKeylet parses a directory specifier: string (hex) or { owner, sub_index }
+// Reference: rippled LedgerEntry.cpp parseDirectory()
 func parseDirectoryKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	// Check for null/non-value
+	if raw == nil || string(raw) == "null" {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid directory params")
+	}
+
 	// Try as string first (direct hex ID)
-	var hexStr string
-	if err := json.Unmarshal(raw, &hexStr); err == nil {
-		decoded, err := hex.DecodeString(hexStr)
-		if err != nil || len(decoded) != 32 {
-			return [32]byte{}, types.RpcErrorInvalidParams("Invalid directory: must be 64-character hex string")
-		}
-		var result [32]byte
-		copy(result[:], decoded)
-		return result, nil
+	if key, ok := tryParseHex256(raw); ok {
+		return key, nil
 	}
 
 	// Try as object { owner, sub_index } or { dir_root, sub_index }
@@ -517,6 +590,10 @@ func parseDirectoryKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 	}
 
 	if req.DirRoot != "" {
+		if req.Owner != "" {
+			// May not specify both dir_root and owner
+			return [32]byte{}, types.RpcErrorInvalidParams("Invalid directory: may not specify both dir_root and owner")
+		}
 		decoded, err := hex.DecodeString(req.DirRoot)
 		if err != nil || len(decoded) != 32 {
 			return [32]byte{}, types.RpcErrorInvalidParams("Invalid dir_root")
@@ -536,6 +613,127 @@ func parseDirectoryKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 	}
 
 	return [32]byte{}, types.RpcErrorInvalidParams("directory requires owner or dir_root")
+}
+
+// parseEscrowKeylet parses an escrow specifier: string (hex) or { owner, seq }
+// Reference: rippled LedgerEntry.cpp parseEscrow()
+func parseEscrowKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	// Try hex string first
+	if key, ok := tryParseHex256(raw); ok {
+		return key, nil
+	}
+
+	// Try object form
+	var req struct {
+		Owner string `json:"owner"`
+		Seq   uint32 `json:"seq"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid escrow params")
+	}
+	accountID, err := decodeAccountID(req.Owner)
+	if err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid escrow owner: " + err.Error())
+	}
+	return keylet.Escrow(accountID, req.Seq).Key, nil
+}
+
+// parseMPTokenKeylet parses an mptoken specifier: string (hex) or { mpt_issuance_id, account }
+// Reference: rippled LedgerEntry.cpp parseMPToken()
+func parseMPTokenKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	// Try hex string first
+	if key, ok := tryParseHex256(raw); ok {
+		return key, nil
+	}
+
+	// Try object form
+	var req struct {
+		MPTIssuanceID string `json:"mpt_issuance_id"`
+		Account       string `json:"account"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid mptoken params")
+	}
+	idBytes, err := hex.DecodeString(req.MPTIssuanceID)
+	if err != nil || len(idBytes) != 24 {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid mpt_issuance_id")
+	}
+	var mptID [24]byte
+	copy(mptID[:], idBytes)
+	accountID, err := decodeAccountID(req.Account)
+	if err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid mptoken account: " + err.Error())
+	}
+	return keylet.MPTokenByID(mptID, accountID).Key, nil
+}
+
+// parseOfferKeylet parses an offer specifier: string (hex) or { account, seq }
+// Reference: rippled LedgerEntry.cpp parseOffer()
+func parseOfferKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	// Try hex string first
+	if key, ok := tryParseHex256(raw); ok {
+		return key, nil
+	}
+
+	// Try object form
+	var req struct {
+		Account string `json:"account"`
+		Seq     uint32 `json:"seq"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid offer params")
+	}
+	accountID, err := decodeAccountID(req.Account)
+	if err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid offer account: " + err.Error())
+	}
+	return keylet.Offer(accountID, req.Seq).Key, nil
+}
+
+// parseOracleKeylet parses an oracle specifier: string (hex) or { account, oracle_document_id }
+// Reference: rippled LedgerEntry.cpp parseOracle()
+func parseOracleKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	// Try hex string first
+	if key, ok := tryParseHex256(raw); ok {
+		return key, nil
+	}
+
+	// Try object form
+	var req struct {
+		Account          string `json:"account"`
+		OracleDocumentID uint32 `json:"oracle_document_id"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid oracle params")
+	}
+	accountID, err := decodeAccountID(req.Account)
+	if err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid oracle account: " + err.Error())
+	}
+	return keylet.Oracle(accountID, req.OracleDocumentID).Key, nil
+}
+
+// parsePermissionedDomainKeylet parses a permissioned_domain specifier: string (hex) or { account, seq }
+// Reference: rippled LedgerEntry.cpp parsePermissionedDomains()
+func parsePermissionedDomainKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	// Try hex string first
+	if key, ok := tryParseHex256(raw); ok {
+		return key, nil
+	}
+
+	// Try object form
+	var req struct {
+		Account string `json:"account"`
+		Seq     uint32 `json:"seq"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid permissioned_domain params")
+	}
+	accountID, err := decodeAccountID(req.Account)
+	if err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid permissioned_domain account: " + err.Error())
+	}
+	return keylet.PermissionedDomain(accountID, req.Seq).Key, nil
 }
 
 // parseRippleStateKeylet parses a ripple_state/state specifier: { accounts, currency }
@@ -561,6 +759,52 @@ func parseRippleStateKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 	return keylet.Line(account1, account2, req.Currency).Key, nil
 }
 
+// parseTicketKeylet parses a ticket specifier: string (hex) or { account, ticket_seq }
+// Reference: rippled LedgerEntry.cpp parseTicket()
+func parseTicketKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	// Try hex string first
+	if key, ok := tryParseHex256(raw); ok {
+		return key, nil
+	}
+
+	// Try object form
+	var req struct {
+		Account   string `json:"account"`
+		TicketSeq uint32 `json:"ticket_seq"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid ticket params")
+	}
+	accountID, err := decodeAccountID(req.Account)
+	if err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid ticket account: " + err.Error())
+	}
+	return keylet.Ticket(accountID, req.TicketSeq).Key, nil
+}
+
+// parseVaultKeylet parses a vault specifier: string (hex) or { owner, seq }
+// Reference: rippled LedgerEntry.cpp parseVault()
+func parseVaultKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	// Try hex string first
+	if key, ok := tryParseHex256(raw); ok {
+		return key, nil
+	}
+
+	// Try object form
+	var req struct {
+		Owner string `json:"owner"`
+		Seq   uint32 `json:"seq"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid vault params")
+	}
+	accountID, err := decodeAccountID(req.Owner)
+	if err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid vault owner: " + err.Error())
+	}
+	return keylet.Vault(accountID, req.Seq).Key, nil
+}
+
 // parseCurrencyIssuer parses a currency specifier (e.g., {"currency":"USD","issuer":"rXXX"} or {"currency":"XRP"})
 func parseCurrencyIssuer(raw json.RawMessage) (currency [20]byte, issuer [20]byte, err error) {
 	var req struct {
@@ -584,4 +828,3 @@ func parseCurrencyIssuer(raw json.RawMessage) (currency [20]byte, issuer [20]byt
 
 	return currency, issuer, nil
 }
-

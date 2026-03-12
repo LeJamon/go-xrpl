@@ -127,7 +127,13 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		}
 	}
 
-	// Add hash to tx_json in response
+	// Inject DeliverMax for Payment transactions, matching rippled's
+	// RPC::insertDeliverMax behavior in TransactionSign.cpp.
+	injectDeliverMax(txJsonMap, ctx.ApiVersion)
+
+	// For API v2+: add hash at root level of response, matching
+	// transactionFormatResultImpl in TransactionSign.cpp.
+	// For API v1: hash goes inside tx_json only.
 	if txHashStr != "" {
 		txJsonMap["hash"] = txHashStr
 	}
@@ -135,18 +141,25 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	// Get current fees for response
 	baseFee, _, _ := types.Services.Ledger.GetCurrentFees()
 
+	// Build response with independent boolean fields matching rippled's
+	// Transaction::SubmitResult struct. "accepted" = any() in rippled.
 	response := map[string]interface{}{
 		"engine_result":         result.EngineResult,
 		"engine_result_code":    result.EngineResultCode,
 		"engine_result_message": result.EngineResultMessage,
 		"tx_json":               txJsonMap,
 		"tx_blob":               txBlobHex,
-		"accepted":              result.Applied,
+		"accepted":              result.Accepted(),
 		"applied":               result.Applied,
-		"broadcast":             result.Applied,
-		"kept":                  result.Applied,
-		"queued":                false,
+		"broadcast":             result.Broadcast,
+		"kept":                  result.Kept,
+		"queued":                result.Queued,
 		"open_ledger_cost":      fmt.Sprintf("%d", baseFee),
+	}
+
+	// API v2+: add hash at the root level of the response
+	if ctx.ApiVersion > 1 && txHashStr != "" {
+		response["hash"] = txHashStr
 	}
 
 	// Add validated_ledger_index only if we have one

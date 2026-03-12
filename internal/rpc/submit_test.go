@@ -1021,3 +1021,365 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 		})
 	}
 }
+
+// TestSubmitMethodApiV2Response tests API v2 specific response formatting.
+// API v2 should include "hash" at the root level of the response.
+func TestSubmitMethodApiV2Response(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	cleanup := setupTestServicesSubmit(mock)
+	defer cleanup()
+
+	method := &handlers.SubmitMethod{}
+
+	baseTxJson := map[string]interface{}{
+		"TransactionType": "Payment",
+		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+		"Amount":          "1000000",
+		"Fee":             "10",
+		"Sequence":        1,
+	}
+
+	t.Run("API v1 does not have hash at root", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleUser,
+			ApiVersion: types.ApiVersion1,
+		}
+
+		params := map[string]interface{}{
+			"tx_json": baseTxJson,
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+
+		resultJSON, err := json.Marshal(result)
+		require.NoError(t, err)
+		var resp map[string]interface{}
+		err = json.Unmarshal(resultJSON, &resp)
+		require.NoError(t, err)
+
+		// API v1: no hash at root level
+		_, hasRootHash := resp["hash"]
+		assert.False(t, hasRootHash, "API v1 should NOT have hash at root level")
+
+		// hash should still be present inside tx_json
+		txJson, ok := resp["tx_json"].(map[string]interface{})
+		require.True(t, ok)
+		assert.NotEmpty(t, txJson["hash"], "hash should be inside tx_json")
+	})
+
+	t.Run("API v2 has hash at root", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleUser,
+			ApiVersion: types.ApiVersion2,
+		}
+
+		params := map[string]interface{}{
+			"tx_json": baseTxJson,
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+
+		resultJSON, err := json.Marshal(result)
+		require.NoError(t, err)
+		var resp map[string]interface{}
+		err = json.Unmarshal(resultJSON, &resp)
+		require.NoError(t, err)
+
+		// API v2: hash at root level
+		rootHash, hasRootHash := resp["hash"].(string)
+		assert.True(t, hasRootHash, "API v2 should have hash at root level")
+		assert.NotEmpty(t, rootHash)
+
+		// Also in tx_json
+		txJson, ok := resp["tx_json"].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, rootHash, txJson["hash"], "root hash and tx_json hash should match")
+	})
+
+	t.Run("API v3 has hash at root", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleUser,
+			ApiVersion: types.ApiVersion3,
+		}
+
+		params := map[string]interface{}{
+			"tx_json": baseTxJson,
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+
+		resultJSON, err := json.Marshal(result)
+		require.NoError(t, err)
+		var resp map[string]interface{}
+		err = json.Unmarshal(resultJSON, &resp)
+		require.NoError(t, err)
+
+		// API v3: also has hash at root
+		rootHash, hasRootHash := resp["hash"].(string)
+		assert.True(t, hasRootHash, "API v3 should have hash at root level")
+		assert.NotEmpty(t, rootHash)
+	})
+}
+
+// TestSubmitMethodDeliverMax tests DeliverMax injection for Payment transactions.
+// For API v1: Amount is kept, DeliverMax is added.
+// For API v2+: Amount is removed, DeliverMax replaces it.
+func TestSubmitMethodDeliverMax(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	cleanup := setupTestServicesSubmit(mock)
+	defer cleanup()
+
+	method := &handlers.SubmitMethod{}
+
+	t.Run("API v1 Payment - Amount kept, DeliverMax added", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleUser,
+			ApiVersion: types.ApiVersion1,
+		}
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "Payment",
+				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"Amount":          "1000000",
+				"Fee":             "10",
+				"Sequence":        1,
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+
+		resultJSON, err := json.Marshal(result)
+		require.NoError(t, err)
+		var resp map[string]interface{}
+		err = json.Unmarshal(resultJSON, &resp)
+		require.NoError(t, err)
+
+		txJson, ok := resp["tx_json"].(map[string]interface{})
+		require.True(t, ok)
+
+		// API v1: Amount is kept
+		assert.Equal(t, "1000000", txJson["Amount"],
+			"API v1 should keep Amount in tx_json")
+		// DeliverMax is added
+		assert.Equal(t, "1000000", txJson["DeliverMax"],
+			"API v1 should add DeliverMax for Payment")
+	})
+
+	t.Run("API v2 Payment - Amount removed, DeliverMax added", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleUser,
+			ApiVersion: types.ApiVersion2,
+		}
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "Payment",
+				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"Amount":          "1000000",
+				"Fee":             "10",
+				"Sequence":        1,
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+
+		resultJSON, err := json.Marshal(result)
+		require.NoError(t, err)
+		var resp map[string]interface{}
+		err = json.Unmarshal(resultJSON, &resp)
+		require.NoError(t, err)
+
+		txJson, ok := resp["tx_json"].(map[string]interface{})
+		require.True(t, ok)
+
+		// API v2: Amount is removed
+		_, hasAmount := txJson["Amount"]
+		assert.False(t, hasAmount,
+			"API v2 should remove Amount from tx_json for Payment")
+		// DeliverMax replaces it
+		assert.Equal(t, "1000000", txJson["DeliverMax"],
+			"API v2 should have DeliverMax in tx_json for Payment")
+	})
+
+	t.Run("Non-Payment tx - no DeliverMax regardless of API version", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleUser,
+			ApiVersion: types.ApiVersion2,
+		}
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"Fee":             "12",
+				"Sequence":        5,
+				"SetFlag":         8,
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+
+		resultJSON, err := json.Marshal(result)
+		require.NoError(t, err)
+		var resp map[string]interface{}
+		err = json.Unmarshal(resultJSON, &resp)
+		require.NoError(t, err)
+
+		txJson, ok := resp["tx_json"].(map[string]interface{})
+		require.True(t, ok)
+
+		// Non-Payment: no DeliverMax added
+		_, hasDeliverMax := txJson["DeliverMax"]
+		assert.False(t, hasDeliverMax,
+			"Non-Payment tx should not have DeliverMax")
+	})
+}
+
+// TestSubmitMethodIndependentBooleans tests that the boolean response fields
+// (accepted, applied, broadcast, queued, kept) can be set independently,
+// matching rippled's Transaction::SubmitResult struct.
+func TestSubmitMethodIndependentBooleans(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	cleanup := setupTestServicesSubmit(mock)
+	defer cleanup()
+
+	method := &handlers.SubmitMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	baseTxJson := map[string]interface{}{
+		"TransactionType": "Payment",
+		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+		"Amount":          "1000000",
+		"Fee":             "10",
+		"Sequence":        1,
+	}
+
+	t.Run("Applied=true implies accepted=true, broadcast=true, kept=true", func(t *testing.T) {
+		mock.submitResult = &types.SubmitResult{
+			EngineResult:        "tesSUCCESS",
+			EngineResultCode:    0,
+			EngineResultMessage: "The transaction was applied.",
+			Applied:             true,
+			Broadcast:           true,
+			Kept:                true,
+			Queued:              false,
+			ValidatedLedger:     2,
+		}
+
+		params := map[string]interface{}{"tx_json": baseTxJson}
+		paramsJSON, _ := json.Marshal(params)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+
+		resultJSON, _ := json.Marshal(result)
+		var resp map[string]interface{}
+		json.Unmarshal(resultJSON, &resp)
+
+		assert.Equal(t, true, resp["applied"])
+		assert.Equal(t, true, resp["broadcast"])
+		assert.Equal(t, true, resp["kept"])
+		assert.Equal(t, false, resp["queued"])
+		assert.Equal(t, true, resp["accepted"],
+			"accepted should be true when applied is true (any() = true)")
+	})
+
+	t.Run("Not applied, not broadcast - accepted=false", func(t *testing.T) {
+		mock.submitResult = &types.SubmitResult{
+			EngineResult:        "tefPAST_SEQ",
+			EngineResultCode:    -190,
+			EngineResultMessage: "This sequence number has already passed.",
+			Applied:             false,
+			Broadcast:           false,
+			Kept:                false,
+			Queued:              false,
+			ValidatedLedger:     2,
+		}
+
+		params := map[string]interface{}{"tx_json": baseTxJson}
+		paramsJSON, _ := json.Marshal(params)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+
+		resultJSON, _ := json.Marshal(result)
+		var resp map[string]interface{}
+		json.Unmarshal(resultJSON, &resp)
+
+		assert.Equal(t, false, resp["applied"])
+		assert.Equal(t, false, resp["broadcast"])
+		assert.Equal(t, false, resp["kept"])
+		assert.Equal(t, false, resp["queued"])
+		assert.Equal(t, false, resp["accepted"],
+			"accepted should be false when nothing is true")
+	})
+
+	t.Run("Queued only - accepted=true, applied=false", func(t *testing.T) {
+		mock.submitResult = &types.SubmitResult{
+			EngineResult:        "terQUEUED",
+			EngineResultCode:    -89,
+			EngineResultMessage: "Held until escalated fee drops.",
+			Applied:             false,
+			Broadcast:           false,
+			Kept:                false,
+			Queued:              true,
+			ValidatedLedger:     2,
+		}
+
+		params := map[string]interface{}{"tx_json": baseTxJson}
+		paramsJSON, _ := json.Marshal(params)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+
+		resultJSON, _ := json.Marshal(result)
+		var resp map[string]interface{}
+		json.Unmarshal(resultJSON, &resp)
+
+		assert.Equal(t, false, resp["applied"])
+		assert.Equal(t, false, resp["broadcast"])
+		assert.Equal(t, false, resp["kept"])
+		assert.Equal(t, true, resp["queued"])
+		assert.Equal(t, true, resp["accepted"],
+			"accepted should be true when queued is true (any() = true)")
+	})
+}
