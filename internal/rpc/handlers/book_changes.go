@@ -79,13 +79,15 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 			return true
 		}
 
-		// Get TransactionType to detect explicit offer cancels.
-		// Both OfferCancel and OfferCreate can cancel a prior offer via OfferSequence.
+		// Get TransactionType to detect OfferCancel/OfferCreate with OfferSequence
 		txType, _ := storedTx.TxJSON["TransactionType"].(string)
+
+		// Read OfferSequence from the tx (used by both OfferCancel and OfferCreate
+		// to cancel a prior offer). Reference: rippled BookChanges.h lines 67-81
 		var offerCancel *uint32
 		if txType == "OfferCancel" || txType == "OfferCreate" {
-			if seq, ok := storedTx.TxJSON["OfferSequence"].(float64); ok {
-				v := uint32(seq)
+			if offerSeqVal, ok := storedTx.TxJSON["OfferSequence"].(float64); ok {
+				v := uint32(offerSeqVal)
 				offerCancel = &v
 			}
 		}
@@ -128,8 +130,10 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 				continue
 			}
 
-			// Skip explicitly cancelled offers (OfferCancel/OfferCreate with OfferSequence matching this offer's Sequence)
-			if offerCancel != nil && nodeType == "DeletedNode" {
+			// Skip explicitly cancelled offers: filter out deleted offers whose
+			// Sequence matches the tx's OfferSequence field.
+			// Reference: rippled BookChanges.h lines 112-115
+			if nodeType == "DeletedNode" && offerCancel != nil {
 				if offerSeq, ok := finalFields["Sequence"].(float64); ok {
 					if uint32(offerSeq) == *offerCancel {
 						continue
@@ -147,49 +151,60 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 				continue
 			}
 
+			// Reference: rippled BookChanges.h lines 119-122
+			// deltaGets = finalFields.TakerGets - previousFields.TakerGets
+			// deltaPays = finalFields.TakerPays - previousFields.TakerPays
 			deltaGets := new(big.Float).Sub(finalGets.value, prevGets.value)
 			deltaPays := new(big.Float).Sub(finalPays.value, prevPays.value)
 
-			// Determine currency pair ordering to match rippled:
-			// XRP always goes first (noswap if gets is XRP, swap if pays is XRP),
-			// otherwise alphabetical by issue string.
-			getsKey := formatCurrencyKey(finalGets)
-			paysKey := formatCurrencyKey(finalPays)
+			// Determine currency pair ordering.
+			// Reference: rippled BookChanges.h lines 124-131
+			// noswap = isXRP(deltaGets) ? true : (isXRP(deltaPays) ? false : (g < p))
+			g := formatCurrencyKey(finalGets)
+			p := formatCurrencyKey(finalPays)
 
-			noswap := true
+			var noswap bool
 			if finalGets.isXRP {
 				noswap = true
 			} else if finalPays.isXRP {
 				noswap = false
 			} else {
-				noswap = getsKey < paysKey
+				noswap = g < p
 			}
 
 			var first, second *big.Float
-			var currA, currB string
+			var pairKey string
 			if noswap {
 				first = deltaGets
 				second = deltaPays
-				currA = getsKey
-				currB = paysKey
+				pairKey = g + "|" + p
 			} else {
 				first = deltaPays
 				second = deltaGets
-				currA = paysKey
-				currB = getsKey
+				pairKey = p + "|" + g
 			}
 
-			pairKey := currA + "|" + currB
-
-			// Compute exchange rate: rate = first / second (matching rippled's divide)
+			// Skip if second is zero
 			if second.Sign() == 0 {
 				continue
 			}
+
+			// rate = first / second (matching rippled's divide)
 			rate := new(big.Float).Quo(first, second)
 
 			// Take absolute values for volume accumulation
-			first = new(big.Float).Abs(first)
-			second = new(big.Float).Abs(second)
+			absFirst := new(big.Float).Abs(first)
+			absSecond := new(big.Float).Abs(second)
+
+			// Determine currency labels for output
+			var currA, currB string
+			if noswap {
+				currA = g
+				currB = p
+			} else {
+				currA = p
+				currB = g
+			}
 
 			// Update or create change entry
 			bc, exists := changes[pairKey]
@@ -216,9 +231,9 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 				bc.Close.Set(rate)
 			}
 
-			// Accumulate volumes (already absolute values)
-			bc.VolumeA.Add(bc.VolumeA, first)
-			bc.VolumeB.Add(bc.VolumeB, second)
+			// Accumulate volumes (absolute values)
+			bc.VolumeA.Add(bc.VolumeA, absFirst)
+			bc.VolumeB.Add(bc.VolumeB, absSecond)
 		}
 
 		return true
@@ -322,4 +337,3 @@ func formatBigFloat(f *big.Float) string {
 	}
 	return f.Text('f', 6)
 }
-
