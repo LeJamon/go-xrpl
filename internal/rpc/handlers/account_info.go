@@ -143,11 +143,21 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
+	// Add index field (SLE key) to account_data
+	if info.Index != "" {
+		accountData["index"] = strings.ToUpper(info.Index)
+	}
+
 	// Load signer lists if requested
 	if request.SignerLists {
 		signerLists := m.loadSignerLists(request.Account, ledgerIndex)
-		// API v1: nested under account_data
-		accountData["signer_lists"] = signerLists
+		if ctx.ApiVersion > 1 {
+			// API v2: signer_lists at top level
+			response["signer_lists"] = signerLists
+		} else {
+			// API v1: nested under account_data
+			accountData["signer_lists"] = signerLists
+		}
 	}
 
 	return response, nil

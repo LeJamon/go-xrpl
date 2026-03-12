@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
@@ -15,6 +16,8 @@ import (
 // this method requires a specific ledger to search in.
 // Reference: rippled TransactionEntry.cpp
 type TransactionEntryMethod struct{ BaseHandler }
+
+func (m *TransactionEntryMethod) RequiredRole() types.Role { return types.RoleUser }
 
 func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
@@ -85,21 +88,44 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 		}
 	}
 
-	response := map[string]interface{}{
-		"ledger_index": txInfo.LedgerIndex,
-		"ledger_hash":  ledgerHash,
-		"metadata":     storedTx.Meta,
-		"tx_json":      storedTx.TxJSON,
-		"validated":    txInfo.Validated,
+	// Inject DeliveredAmount for Payment transactions
+	if storedTx.Meta != nil {
+		InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
 	}
 
-	// Add close_time_iso from the containing ledger
-	if targetLedger, err := types.Services.Ledger.GetLedgerBySequence(targetSeq); err == nil {
-		closeTimeSec := targetLedger.CloseTime()
-		if closeTimeSec > 0 {
-			closeTime := rippleEpochTime.Add(secondsToDuration(closeTimeSec))
-			response["close_time_iso"] = closeTime.UTC().Format("2006-01-02T15:04:05Z")
+	response := map[string]interface{}{
+		"tx_json": storedTx.TxJSON,
+	}
+
+	// Metadata key: "meta" for v2+, "metadata" for v1
+	if ctx.ApiVersion > 1 {
+		response["meta"] = storedTx.Meta
+	} else {
+		response["metadata"] = storedTx.Meta
+	}
+
+	if ctx.ApiVersion > 1 {
+		// v2: hash at root, conditional ledger_hash/ledger_index/close_time_iso
+		response["hash"] = strings.ToUpper(request.TxHash)
+		response["validated"] = txInfo.Validated
+
+		if ledgerHash != "" {
+			response["ledger_hash"] = ledgerHash
 		}
+		if txInfo.Validated {
+			response["ledger_index"] = txInfo.LedgerIndex
+			if targetLedger, err := types.Services.Ledger.GetLedgerBySequence(targetSeq); err == nil {
+				closeTimeSec := targetLedger.CloseTime()
+				if closeTimeSec > 0 {
+					closeTime := rippleEpochTime.Add(secondsToDuration(closeTimeSec))
+					response["close_time_iso"] = closeTime.UTC().Format("2006-01-02T15:04:05Z")
+				}
+			}
+		}
+	} else {
+		// v1: always include ledger_index and ledger_hash
+		response["ledger_index"] = txInfo.LedgerIndex
+		response["ledger_hash"] = ledgerHash
 	}
 
 	return response, nil

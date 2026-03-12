@@ -71,6 +71,7 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
 		"validated":    result.Validated,
+		"limit":        limit,
 	}
 
 	if result.Marker != "" {

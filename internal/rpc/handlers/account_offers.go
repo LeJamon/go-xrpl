@@ -55,6 +55,7 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
 		"validated":    result.Validated,
+		"limit":        limit,
 	}
 
 	if result.Marker != "" {
