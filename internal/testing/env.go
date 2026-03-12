@@ -20,6 +20,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx/signerlist"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx/ticket"
+	"github.com/LeJamon/goXRPLd/internal/tx/delegate"
 	"github.com/LeJamon/goXRPLd/internal/tx/trustset"
 )
 
@@ -54,6 +55,10 @@ type TestEnv struct {
 
 	// NetworkID for engine configuration (0 = mainnet default, >1024 requires NetworkID in txns)
 	networkID uint32
+
+	// VerifySignatures enables cryptographic signature verification in the engine.
+	// Default is false (test mode). Set to true for conformance tests with real tx_blobs.
+	VerifySignatures bool
 
 	// Optional state map family for backed SHAMaps (PebbleDB on disk).
 	// Only set when using NewTestEnvBacked() for heavy tests that would OOM otherwise.
@@ -619,7 +624,7 @@ func (e *TestEnv) Submit(transaction interface{}) TxResult {
 		ReserveBase:               e.reserveBase,
 		ReserveIncrement:          e.reserveIncrement,
 		LedgerSequence:            e.ledger.Sequence(),
-		SkipSignatureVerification: true, // Skip signatures in test mode
+		SkipSignatureVerification: !e.VerifySignatures,
 		Rules:                     e.rulesBuilder.Build(),
 		ParentCloseTime:           parentCloseTime,
 		NetworkID:                 e.networkID,
@@ -1074,6 +1079,11 @@ func (e *TestEnv) EnableFeature(name string) {
 // Reference: rippled's Env::disableFeature() in test/jtx/impl/Env.cpp
 func (e *TestEnv) DisableFeature(name string) {
 	e.rulesBuilder.DisableByName(name)
+}
+
+// SetVerifySignatures enables or disables signature verification in the engine.
+func (e *TestEnv) SetVerifySignatures(verify bool) {
+	e.VerifySignatures = verify
 }
 
 // SetNetworkID sets the network identifier for the test environment.
@@ -1988,5 +1998,100 @@ func (e *TestEnv) SetFirstNFTokenSequenceDirect(acc *Account, seq uint32) {
 
 	if err := e.ledger.Update(accountKey, updated); err != nil {
 		e.t.Fatalf("SetFirstNFTokenSequenceDirect: failed to update: %v", err)
+	}
+}
+
+
+// ===========================================================================
+// Phase 4: Delegation helpers
+// ===========================================================================
+
+// SetDelegate creates a Delegate SLE that grants delegation permissions from one account to another.
+// permissions is a list of permission names like "Payment", "AccountDomainSet", etc.
+// Reference: rippled's delegate::set(account, authorize, permissions) in Delegate_test.cpp
+func (e *TestEnv) SetDelegate(owner, authorized *Account, permissions []string) {
+	e.t.Helper()
+
+	ds := delegate.NewDelegateSet(owner.Address)
+	ds.Authorize = authorized.Address
+	for _, perm := range permissions {
+		ds.Permissions = append(ds.Permissions, delegate.Permission{
+			Permission: delegate.PermissionData{
+				PermissionValue: perm,
+			},
+		})
+	}
+
+	result := e.Submit(ds)
+	if !result.Success {
+		e.t.Fatalf("SetDelegate(%s -> %s, %v): %s: %s", owner.Name, authorized.Name, permissions, result.Code, result.Message)
+	}
+}
+
+// SetAmendments replaces the current amendment set with exactly the named amendments.
+// This is used by the conformance runner to configure the exact amendment set from fixtures.
+func (e *TestEnv) SetAmendments(names []string) {
+	e.rulesBuilder = amendment.NewRulesBuilder()
+	for _, name := range names {
+		e.rulesBuilder.EnableByName(name)
+	}
+}
+
+// ReimburseFeeDirect directly adds baseFee drops back to an account's balance
+// in the ledger, without submitting a transaction. This matches rippled's test
+// framework behavior where trust line setup reimburses the transaction fee so
+// the account's XRP balance is unchanged.
+//
+// In rippled, the reimbursement is done via a Payment from master, which costs
+// master 2*baseFee (baseFee for the payment amount + baseFee for the payment
+// tx fee). We simulate this by directly adjusting both balances.
+func (e *TestEnv) ReimburseFeeDirect(acc *Account) {
+	e.t.Helper()
+
+	// Add baseFee back to the account (reimburse the TrustSet fee)
+	accountKey := keylet.Account(acc.ID)
+	data, err := e.ledger.Read(accountKey)
+	if err != nil {
+		e.t.Fatalf("ReimburseFeeDirect: failed to read account %s: %v", acc.Name, err)
+	}
+
+	accountRoot, err := state.ParseAccountRoot(data)
+	if err != nil {
+		e.t.Fatalf("ReimburseFeeDirect: failed to parse account %s: %v", acc.Name, err)
+	}
+
+	accountRoot.Balance += e.baseFee
+
+	updated, err := state.SerializeAccountRoot(accountRoot)
+	if err != nil {
+		e.t.Fatalf("ReimburseFeeDirect: failed to serialize account %s: %v", acc.Name, err)
+	}
+
+	if err := e.ledger.Update(accountKey, updated); err != nil {
+		e.t.Fatalf("ReimburseFeeDirect: failed to update account %s: %v", acc.Name, err)
+	}
+
+	// Deduct 2*baseFee from master (payment amount + payment fee)
+	master := MasterAccount()
+	masterKey := keylet.Account(master.ID)
+	masterData, err := e.ledger.Read(masterKey)
+	if err != nil {
+		e.t.Fatalf("ReimburseFeeDirect: failed to read master: %v", err)
+	}
+
+	masterRoot, err := state.ParseAccountRoot(masterData)
+	if err != nil {
+		e.t.Fatalf("ReimburseFeeDirect: failed to parse master: %v", err)
+	}
+
+	masterRoot.Balance -= 2 * e.baseFee
+
+	masterUpdated, err := state.SerializeAccountRoot(masterRoot)
+	if err != nil {
+		e.t.Fatalf("ReimburseFeeDirect: failed to serialize master: %v", err)
+	}
+
+	if err := e.ledger.Update(masterKey, masterUpdated); err != nil {
+		e.t.Fatalf("ReimburseFeeDirect: failed to update master: %v", err)
 	}
 }

@@ -108,9 +108,13 @@ func (n *NFTokenMint) Validate() error {
 		return errors.New("temMALFORMED: Issuer cannot be the same as Account")
 	}
 
-	// URI validation: must be hex-encoded, not empty (if present), and <= maxTokenURILength bytes
-	if n.URI != "" {
-		// URI is hex-encoded, so length in bytes is len/2
+	// URI validation: if the field is present, it must not be empty and must
+	// not exceed maxTokenURILength bytes.
+	// Reference: rippled NFTokenMint.cpp preflight — checks isFieldPresent(sfURI)
+	// then rejects empty or oversized URIs.
+	// HasField("URI") distinguishes binary-parsed "URI present but empty" from "URI absent".
+	// For Go-created transactions (no PresentFields), fall back to n.URI != "".
+	if n.HasField("URI") || n.URI != "" {
 		uriBytes := len(n.URI) / 2
 		if uriBytes == 0 {
 			return errors.New("temMALFORMED: URI cannot be empty")
@@ -185,6 +189,14 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	accountID := ctx.AccountID
+
+	// Record owner count before insertion for reserve check.
+	// Reference: rippled NFTokenMint.cpp doApply line 296-297
+	ownerCountBefore := ctx.Account.OwnerCount
+
+	// Reconstruct mPriorBalance (balance before fee deduction).
+	// Reference: rippled Transactor.cpp — mPriorBalance is set before payFee()
+	mPriorBalance := ctx.Account.Balance + ctx.Config.BaseFee
 
 	// Determine the issuer
 	var issuerID [20]byte
@@ -330,10 +342,16 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Check reserve for all new objects (pages + possible offer)
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount)
-	if ctx.Account.Balance < reserve {
-		return tx.TecINSUFFICIENT_RESERVE
+	// Only check the reserve if the owner count actually changed. This
+	// allows NFTs to be added to the page (and burn fees) without
+	// requiring the reserve to be met each time. The reserve is
+	// only managed when a new NFT page or sell offer is added.
+	// Reference: rippled NFTokenMint.cpp doApply lines 350-357
+	if ctx.Account.OwnerCount > ownerCountBefore {
+		reserve := ctx.AccountReserve(ctx.Account.OwnerCount)
+		if mPriorBalance < reserve {
+			return tx.TecINSUFFICIENT_RESERVE
+		}
 	}
 
 	return tx.TesSUCCESS

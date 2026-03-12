@@ -59,11 +59,6 @@ func (n *NFTokenBurn) Validate() error {
 		return errors.New("temMALFORMED: NFTokenID is required")
 	}
 
-	// Owner must not be the same as Account
-	if n.Owner != "" && n.Owner == n.Account {
-		return errors.New("temMALFORMED: Owner cannot be the same as Account")
-	}
-
 	return nil
 }
 

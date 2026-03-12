@@ -346,10 +346,16 @@ func deserializeMPTAmount(data []byte) (map[string]any, error) {
 
 // verifyXrpValue validates the format of an XRP amount value.
 // XRP values should not contain a decimal point because they are represented as integers as drops.
+// Negative values are allowed (used by NFToken offers pre-fixNFTokenNegOffer).
 func verifyXrpValue(value string) error {
+	// Strip optional leading minus sign for validation
+	checkVal := value
+	if strings.HasPrefix(checkVal, "-") {
+		checkVal = checkVal[1:]
+	}
 
 	r := regexp.MustCompile(`\d+`) // regex to match only digits
-	m := r.FindAllString(value, -1)
+	m := r.FindAllString(checkVal, -1)
 
 	if len(m) != 1 {
 		return errInvalidXRPValue
@@ -366,7 +372,9 @@ func verifyXrpValue(value string) error {
 		return nil
 	}
 
-	if decimal.Cmp(big.NewFloat(MinXRP)) == -1 || decimal.Cmp(big.NewFloat(MaxDrops)) == 1 {
+	// Use absolute value for range check
+	absDecimal := new(big.Float).Abs(decimal)
+	if absDecimal.Cmp(big.NewFloat(MinXRP)) == -1 || absDecimal.Cmp(big.NewFloat(MaxDrops)) == 1 {
 		return &InvalidAmountError{value}
 	}
 
@@ -437,22 +445,36 @@ func verifyMPTValue(value string) error {
 }
 
 // serializeXrpAmount serializes an XRP amount value.
+// Negative values are supported: the absolute value is stored without the positive sign bit.
+// Reference: rippled STAmount::add — positive sets cPositive bit, negative does not.
 func serializeXrpAmount(value string) ([]byte, error) {
 
-	if verifyXrpValue(value) != nil {
-		return nil, verifyXrpValue(value)
+	if err := verifyXrpValue(value); err != nil {
+		return nil, err
 	}
 
-	val, err := strconv.ParseUint(value, 10, 64)
+	isNegative := strings.HasPrefix(value, "-")
+	absValue := value
+	if isNegative {
+		absValue = value[1:]
+	}
 
+	val, err := strconv.ParseUint(absValue, 10, 64)
 	if err != nil {
 		return nil, err
 	}
 
-	valWithPosBit := val | PosSignBitMask
-	valBytes := make([]byte, NativeAmountByteLength)
+	var serialized uint64
+	if isNegative {
+		// Negative: store absolute value without positive sign bit
+		serialized = val
+	} else {
+		// Positive: set the positive sign bit
+		serialized = val | PosSignBitMask
+	}
 
-	binary.BigEndian.PutUint64(valBytes, uint64(valWithPosBit))
+	valBytes := make([]byte, NativeAmountByteLength)
+	binary.BigEndian.PutUint64(valBytes, serialized)
 
 	return valBytes, nil
 }

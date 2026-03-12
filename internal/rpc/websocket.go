@@ -129,7 +129,7 @@ func (ws *WebSocketServer) handleConnection(wsConn *WebSocketConnection) {
 		// Read message from WebSocket (blocking)
 		_, message, err := wsConn.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure, websocket.CloseNoStatusReceived) {
 				log.Printf("WebSocket read error: %v", err)
 			}
 			return

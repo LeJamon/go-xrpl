@@ -90,7 +90,10 @@ func CipheredTaxon(tokenSeq uint32, taxon uint32) uint32 {
 }
 
 func cipheredTaxon(tokenSeq uint32, taxon uint32) uint32 {
-	return taxon ^ ((tokenSeq ^ 384160001) * 2357503715)
+	// Reference: rippled nft.h cipheredTaxon()
+	// Linear congruential generator: f(x) = (m * x + c) mod 2^32
+	// m = 384160001, c = 2459
+	return taxon ^ ((384160001 * tokenSeq) + 2459)
 }
 
 // GenerateNFTokenID generates an NFTokenID based on the minting parameters.

@@ -796,10 +796,10 @@ func (e *Engine) validateFee(common *Common) Result {
 
 	fee := uint64(feeInt)
 
-	// Fee cannot be zero (must pay something)
-	if fee == 0 {
-		return TemBAD_FEE
-	}
+	// Fee=0 is allowed in preflight — rippled permits it here and checks the
+	// minimum fee in preclaim (checkFee). SetRegularKey uses fee=0 for the
+	// one-time free "password change". Other tx types that declare fee=0 will
+	// be caught later by telINSUF_FEE_P in preclaim.
 
 	// Fee cannot exceed maximum allowed fee
 	maxFee := e.config.MaxFee
@@ -1006,9 +1006,29 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 	// Reference: rippled Transactor::checkFee in Transactor.cpp
 	// When a delegate is present, the fee is checked against the delegate's balance.
 	fee := e.calculateFee(tx)
+
+	// General minimum fee check: for multi-signed transactions the minimum
+	// required fee is baseFee * (1 + numSigners).
+	// Reference: rippled Transactor::calculateBaseFee — baseFee + (signerCount * baseFee)
+	// This is checked before the type-specific overrides because rippled computes
+	// calculateBaseFee first and then applies any type-specific adjustments.
+	//
+	// Special case: SetRegularKey with lsfPasswordSpent not set gets baseFee=0,
+	// so fee=0 is valid (one-time free password change).
+	// Reference: rippled SetRegularKey.cpp calculateBaseFee
+	minFee := e.calculateMinimumFee(tx)
+	if tx.TxType() == TypeRegularKeySet {
+		if account.Flags&state.LsfPasswordSpent == 0 {
+			minFee = 0
+		}
+	}
+	if fee < minFee {
+		return TelINSUF_FEE_P
+	}
+
 	if feeCalc, ok := tx.(BatchFeeCalculator); ok {
-		minFee := feeCalc.CalculateMinimumFee(e.config.BaseFee)
-		if fee < minFee {
+		batchMinFee := feeCalc.CalculateMinimumFee(e.config.BaseFee)
+		if fee < batchMinFee {
 			return TelINSUF_FEE_P
 		}
 	}
@@ -1016,8 +1036,8 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 	// with access to the full engine config (e.g., LedgerStateFix uses increment).
 	// Reference: rippled Transactor::checkFee calls calculateBaseFee(view, tx)
 	if feeCalc, ok := tx.(CustomBaseFeeCalculator); ok {
-		minFee := feeCalc.CalculateBaseFee(e.config)
-		if fee < minFee {
+		customMinFee := feeCalc.CalculateBaseFee(e.config)
+		if fee < customMinFee {
 			return TelINSUF_FEE_P
 		}
 	}
