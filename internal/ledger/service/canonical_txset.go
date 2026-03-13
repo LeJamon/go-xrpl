@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"sort"
 
-	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/shamap"
 )
 
 // pendingTx holds a transaction that was applied during the open ledger phase.
@@ -69,25 +69,23 @@ func canonicalSort(txs []pendingTx) {
 	copy(txs, sorted)
 }
 
-// computeSalt returns a deterministic salt derived from the set of transaction hashes.
-// Hashes are sorted lexicographically and concatenated before hashing with SHA-512Half.
+// computeSalt returns a deterministic salt derived from the transaction set.
+// Matches rippled: builds a SHAMap of type TRANSACTION with each tx blob
+// keyed by its hash (node type tnTRANSACTION_NM), then returns the root hash.
+// Reference: rippled RCLConsensus.cpp onClose() lines 335-349
 func computeSalt(txs []pendingTx) [32]byte {
-	// Collect and sort hashes
-	hashes := make([][32]byte, len(txs))
-	for i := range txs {
-		hashes[i] = txs[i].hash
+	txMap, err := shamap.New(shamap.TypeTransaction)
+	if err != nil {
+		return [32]byte{}
 	}
-	sort.Slice(hashes, func(i, j int) bool {
-		return bytes.Compare(hashes[i][:], hashes[j][:]) < 0
-	})
-
-	// Concatenate sorted hashes
-	concat := make([]byte, 0, len(hashes)*32)
-	for _, h := range hashes {
-		concat = append(concat, h[:]...)
+	for _, ptx := range txs {
+		_ = txMap.PutWithNodeType(ptx.hash, ptx.txBlob, shamap.NodeTypeTransactionNoMeta)
 	}
-
-	return common.Sha512Half(concat)
+	hash, err := txMap.Hash()
+	if err != nil {
+		return [32]byte{}
+	}
+	return hash
 }
 
 // computeAccountKey computes the sort key for an account.

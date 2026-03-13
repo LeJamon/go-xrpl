@@ -135,9 +135,15 @@ func TestCanonicalSortDeterministic(t *testing.T) {
 }
 
 func TestComputeSalt(t *testing.T) {
+	// SHAMap leaf nodes require >= 12 bytes of data
+	blob1 := make([]byte, 16)
+	blob1[0] = 0x01
+	blob2 := make([]byte, 16)
+	blob2[0] = 0x02
+
 	txs := []pendingTx{
-		{hash: makeHash(2)},
-		{hash: makeHash(1)},
+		{hash: makeHash(2), txBlob: blob2},
+		{hash: makeHash(1), txBlob: blob1},
 	}
 
 	salt := computeSalt(txs)
@@ -148,8 +154,8 @@ func TestComputeSalt(t *testing.T) {
 
 	// Verify it's deterministic regardless of input order
 	txsReversed := []pendingTx{
-		{hash: makeHash(1)},
-		{hash: makeHash(2)},
+		{hash: makeHash(1), txBlob: blob1},
+		{hash: makeHash(2), txBlob: blob2},
 	}
 	saltReversed := computeSalt(txsReversed)
 	if salt != saltReversed {
