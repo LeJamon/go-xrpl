@@ -16,6 +16,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx/invariants"
 	"github.com/LeJamon/goXRPLd/crypto/common"
+	xrpllog "github.com/LeJamon/goXRPLd/log"
 	"github.com/LeJamon/goXRPLd/protocol"
 )
 
@@ -49,6 +50,10 @@ type Engine struct {
 
 	// Config holds engine configuration
 	config EngineConfig
+
+	// logger is the scoped logger for the Tx partition.
+	// Always non-nil; falls back to xrpllog.Discard() when not configured.
+	logger xrpllog.Logger
 
 	// currentTxHash is the hash of the transaction currently being applied
 	// Used to set PreviousTxnID on modified ledger entries
@@ -167,6 +172,10 @@ type EngineConfig struct {
 	// Rules contains the amendment rules for this ledger.
 	// If nil, defaults to all amendments enabled (for backwards compatibility).
 	Rules *amendment.Rules
+
+	// Logger is the logger to use for this engine instance.
+	// If nil, xrpllog.Discard() is used — safe for tests and zero-value construction.
+	Logger xrpllog.Logger
 }
 
 // LedgerView provides read/write access to ledger state
@@ -334,9 +343,14 @@ func affectedNodeToRippledFormat(n AffectedNode) (map[string]any, error) {
 
 // NewEngine creates a new transaction engine
 func NewEngine(view LedgerView, config EngineConfig) *Engine {
+	logger := config.Logger
+	if logger == nil {
+		logger = xrpllog.Discard()
+	}
 	return &Engine{
 		view:   view,
 		config: config,
+		logger: logger.Named(xrpllog.PartitionTx),
 	}
 }
 
@@ -415,9 +429,21 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 		}
 	}
 
+	account := tx.GetCommon().Account
+	e.logger.Debug("apply",
+		"txType", txType.String(),
+		"account", account,
+		"ledgerSeq", e.config.LedgerSequence,
+	)
+
 	// Step 1: Preflight checks (syntax validation)
 	result := e.preflight(tx)
 	if !result.IsSuccess() {
+		e.logger.Debug("preflight failed",
+			"txType", txType.String(),
+			"account", account,
+			"ter", result.String(),
+		)
 		return ApplyResult{
 			Result:  result,
 			Applied: false,
@@ -438,6 +464,12 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 	// Step 3: Preclaim checks (validate against ledger state)
 	result = e.preclaim(tx, txHash)
 	if !result.IsSuccess() && !result.IsTec() {
+		e.logger.Debug("preclaim failed",
+			"txType", txType.String(),
+			"account", account,
+			"txHash", hex.EncodeToString(txHash[:]),
+			"ter", result.String(),
+		)
 		return ApplyResult{
 			Result:  result,
 			Applied: false,
@@ -466,6 +498,13 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 		metadata.TransactionIndex = e.txCount
 		e.txCount++
 	}
+
+	e.logger.Debug("apply result",
+		"txHash", hex.EncodeToString(txHash[:]),
+		"ter", result.String(),
+		"applied", result.IsApplied(),
+		"fee", fee,
+	)
 
 	return ApplyResult{
 		Result:   result,
@@ -519,6 +558,7 @@ func (e *Engine) applyPseudoTransaction(tx Transaction) ApplyResult {
 		TxHash:   txHash,
 		Metadata: metadata,
 		Engine:   e,
+		Log:      e.logger,
 	}
 
 	// Apply the transaction
@@ -1441,6 +1481,7 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		Metadata:        metadata,
 		Engine:          e,
 		SignedWithMaster: sigWithMaster,
+		Log:             e.logger,
 	}
 
 	// Set NumberSwitchover based on fixUniversalNumber amendment.
@@ -1698,6 +1739,7 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 					TxHash:    txHash,
 					Metadata:  metadata,
 					Engine:    e,
+					Log:       e.logger,
 				}
 				tecApplier.ApplyOnTec(tecCtx)
 			}

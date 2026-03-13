@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	xrpllog "github.com/LeJamon/goXRPLd/log"
 )
 
 // ApplyContext provides all the state and helpers needed to apply a transaction.
@@ -35,6 +36,11 @@ type ApplyContext struct {
 	// SignedWithMaster is true when the transaction was signed with the account's master key.
 	// Reference: rippled SetAccount.cpp sigWithMaster — derived from SigningPubKey.
 	SignedWithMaster bool
+
+	// Log is the logger scoped to the Tx partition for this transaction.
+	// Transaction handlers (Apply methods) use this for Trace/Debug logging.
+	// Always non-nil — falls back to xrpllog.Discard() when not set by the engine.
+	Log xrpllog.Logger
 }
 
 // AccountReserve calculates the total reserve required for an account with the given owner count.

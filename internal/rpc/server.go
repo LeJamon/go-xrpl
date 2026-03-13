@@ -3,12 +3,12 @@ package rpc
 import (
 	"encoding/json"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	xrpllog "github.com/LeJamon/goXRPLd/log"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -279,7 +279,7 @@ func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, method stri
 
 	responseData, err := json.Marshal(response)
 	if err != nil {
-		log.Printf("Failed to marshal response: %v", err)
+		xrpllog.Named(xrpllog.PartitionRPC).Error("Failed to marshal response", "err", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -305,7 +305,7 @@ func (s *Server) writeXrplError(w http.ResponseWriter, method string, request in
 
 	responseData, err := json.Marshal(response)
 	if err != nil {
-		log.Printf("Failed to marshal error response: %v", err)
+		xrpllog.Named(xrpllog.PartitionRPC).Error("Failed to marshal error response", "err", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/rpc"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	xrpllog "github.com/LeJamon/goXRPLd/log"
 	kvpebble "github.com/LeJamon/goXRPLd/storage/kvstore/pebble"
 	"github.com/LeJamon/goXRPLd/storage/nodestore"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
@@ -62,10 +62,19 @@ func runServer(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	if !quiet {
-		fmt.Println("Starting goXRPLd - XRPL Node Implementation")
-		fmt.Println("=========================================")
+	// Initialize structured logger from config + CLI flag overrides.
+	logCfg := globalConfig.Logging.ToLogConfig(globalConfig.DebugLogfile)
+	if debug {
+		logCfg.Level = xrpllog.LevelDebug
 	}
+	if verbose {
+		logCfg.Level = xrpllog.LevelTrace
+	}
+	rootLogger := xrpllog.New(xrpllog.NewHandler(logCfg), &logCfg)
+	xrpllog.SetRoot(rootLogger)
+	serverLog := rootLogger.Named(xrpllog.PartitionServer)
+
+	serverLog.Info("Starting goXRPLd", "version", "0.1.0-dev")
 
 	// Initialize storage from config
 	var db nodestore.Database
@@ -73,18 +82,13 @@ func runServer(cmd *cobra.Command, args []string) {
 	if nodestorePath != "" {
 		store, err := kvpebble.New(nodestorePath, 256<<20, 500, false)
 		if err != nil {
-			log.Fatal("Failed to create storage backend:", err)
+			serverLog.Fatal("Failed to create storage backend", "err", err)
 		}
 
 		db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", 10000, 10*time.Minute)
-
-		if !quiet {
-			fmt.Printf("Storage: %s\n", nodestorePath)
-		}
+		serverLog.Info("Storage initialized", "backend", "pebble", "path", nodestorePath)
 	} else {
-		if !quiet {
-			fmt.Println("Storage: in-memory only")
-		}
+		serverLog.Info("Storage initialized", "backend", "in-memory")
 	}
 
 	// Initialize RelationalDB if configured
@@ -97,17 +101,13 @@ func runServer(cmd *cobra.Command, args []string) {
 		var err error
 		repoManager, err = postgres.NewRepositoryManager(pgConfig)
 		if err != nil {
-			if !quiet {
-				fmt.Printf("PostgreSQL: not available (%v)\n", err)
-			}
+			serverLog.Warn("PostgreSQL not available", "err", err)
 		} else {
 			if err := repoManager.Open(context.Background()); err != nil {
-				if !quiet {
-					fmt.Printf("PostgreSQL: connection failed (%v)\n", err)
-				}
+				serverLog.Warn("PostgreSQL connection failed", "err", err)
 				repoManager = nil
-			} else if !quiet {
-				fmt.Println("PostgreSQL: connected for transaction indexing")
+			} else {
+				serverLog.Info("PostgreSQL connected", "purpose", "transaction indexing")
 			}
 		}
 	} else if dbPath != "" {
@@ -115,17 +115,13 @@ func runServer(cmd *cobra.Command, args []string) {
 		var err error
 		repoManager, err = sqlitedb.NewRepositoryManager(dbPath)
 		if err != nil {
-			if !quiet {
-				fmt.Printf("SQLite: failed to initialize (%v)\n", err)
-			}
+			serverLog.Warn("SQLite failed to initialize", "path", dbPath, "err", err)
 		} else {
 			if err := repoManager.Open(context.Background()); err != nil {
-				if !quiet {
-					fmt.Printf("SQLite: failed to open (%v)\n", err)
-				}
+				serverLog.Warn("SQLite failed to open", "path", dbPath, "err", err)
 				repoManager = nil
-			} else if !quiet {
-				fmt.Printf("SQLite: transaction indexing at %s\n", dbPath)
+			} else {
+				serverLog.Info("SQLite connected", "path", dbPath, "purpose", "transaction indexing")
 			}
 		}
 	}
@@ -136,14 +132,14 @@ func runServer(cmd *cobra.Command, args []string) {
 	if genesisFile != "" {
 		genesisJSON, err := config.LoadGenesisJSON(genesisFile)
 		if err != nil {
-			log.Fatal("Failed to load genesis file:", err)
+			serverLog.Fatal("Failed to load genesis file", "path", genesisFile, "err", err)
 		}
 		if err := genesisJSON.Validate(); err != nil {
-			log.Fatal("Invalid genesis file:", err)
+			serverLog.Fatal("Invalid genesis file", "path", genesisFile, "err", err)
 		}
 		genesisCfg, err := genesisJSON.ToGenesisConfig()
 		if err != nil {
-			log.Fatal("Failed to parse genesis configuration:", err)
+			serverLog.Fatal("Failed to parse genesis configuration", "path", genesisFile, "err", err)
 		}
 		genesisConfig = genesis.Config{
 			TotalXRP:            genesisCfg.TotalXRP,
@@ -164,14 +160,10 @@ func runServer(cmd *cobra.Command, args []string) {
 				Flags:    acc.Flags,
 			})
 		}
-		if !quiet {
-			fmt.Printf("Genesis: loaded from %s\n", genesisFile)
-		}
+		serverLog.Info("Genesis config loaded", "path", genesisFile)
 	} else {
 		genesisConfig = genesis.DefaultConfig()
-		if !quiet {
-			fmt.Println("Genesis: using built-in defaults")
-		}
+		serverLog.Info("Genesis config using built-in defaults")
 	}
 
 	// Initialize ledger service
@@ -179,6 +171,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		Standalone:   standalone,
 		NodeStore:    db,
 		RelationalDB: repoManager,
+		Logger:       rootLogger,
 	}
 	if standalone {
 		cfg.GenesisConfig = genesisConfig
@@ -186,25 +179,23 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	ledgerService, err := service.New(cfg)
 	if err != nil {
-		log.Fatal("Failed to create ledger service:", err)
+		serverLog.Fatal("Failed to create ledger service", "err", err)
 	}
 
 	if err := ledgerService.Start(); err != nil {
-		log.Fatal("Failed to start ledger service:", err)
+		serverLog.Fatal("Failed to start ledger service", "err", err)
 	}
 
 	// Wire up RPC services
 	types.InitServices(rpc.NewLedgerServiceAdapter(ledgerService))
 
-	if !quiet {
-		if standalone {
-			fmt.Println("Running in STANDALONE mode")
-			genesisAddr, _ := ledgerService.GetGenesisAccount()
-			fmt.Printf("  Genesis account: %s\n", genesisAddr)
-			fmt.Printf("  Genesis ledger:  %d\n", ledgerService.GetValidatedLedgerIndex())
-			fmt.Printf("  Open ledger:     %d\n", ledgerService.GetCurrentLedgerIndex())
-			fmt.Println()
-		}
+	if standalone {
+		genesisAddr, _ := ledgerService.GetGenesisAccount()
+		serverLog.Info("Running in standalone mode",
+			"genesisAccount", genesisAddr,
+			"validatedLedger", ledgerService.GetValidatedLedgerIndex(),
+			"openLedger", ledgerService.GetCurrentLedgerIndex(),
+		)
 	}
 
 	// Create HTTP JSON-RPC server with 30 second timeout
@@ -213,10 +204,10 @@ func runServer(cmd *cobra.Command, args []string) {
 	types.Services.SetDispatcher(httpServer)
 
 	types.Services.SetShutdownFunc(func() {
-		log.Println("Server shutdown requested via RPC stop command")
+		serverLog.Info("Shutdown requested via RPC stop command")
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			log.Fatal("Server stopped by admin request")
+			serverLog.Fatal("Server stopped by admin request")
 		}()
 	})
 
@@ -275,10 +266,10 @@ func runServer(cmd *cobra.Command, args []string) {
 			return types.Services.Ledger.GetClosedLedgerView()
 		})
 
-		if !quiet {
-			log.Printf("Broadcasted ledger %d with %d transactions to WebSocket subscribers",
-				event.LedgerInfo.Sequence, len(event.TransactionResults))
-		}
+		serverLog.Debug("Broadcasted ledger",
+			"sequence", event.LedgerInfo.Sequence,
+			"txs", len(event.TransactionResults),
+		)
 	})
 
 	// Start listeners based on configured ports
@@ -298,19 +289,14 @@ func runServer(cmd *cobra.Command, args []string) {
 	httpPorts := globalConfig.GetHTTPPorts()
 	wsPorts := globalConfig.GetWebSocketPorts()
 
-	if !quiet {
-		fmt.Println("Server Configuration:")
-		for name, p := range httpPorts {
-			fmt.Printf("  - HTTP (%s): http://%s/\n", name, p.GetBindAddress())
-		}
-		for name, p := range wsPorts {
-			fmt.Printf("  - WebSocket (%s): ws://%s/\n", name, p.GetBindAddress())
-		}
-		if _, _, hasPeer := globalConfig.GetPeerPort(); hasPeer {
-			_, peerPort, _ := globalConfig.GetPeerPort()
-			fmt.Printf("  - Peer: %s\n", peerPort.GetBindAddress())
-		}
-		fmt.Println()
+	for name, p := range httpPorts {
+		serverLog.Info("Port configured", "protocol", "http", "name", name, "addr", p.GetBindAddress())
+	}
+	for name, p := range wsPorts {
+		serverLog.Info("Port configured", "protocol", "ws", "name", name, "addr", p.GetBindAddress())
+	}
+	if _, peerPort, hasPeer := globalConfig.GetPeerPort(); hasPeer {
+		serverLog.Info("Port configured", "protocol", "peer", "addr", peerPort.GetBindAddress())
 	}
 
 	// Start WebSocket listeners
@@ -318,11 +304,9 @@ func runServer(cmd *cobra.Command, args []string) {
 		addr := p.GetBindAddress()
 		portName := name
 		go func() {
-			if !quiet {
-				fmt.Printf("Starting WebSocket server (%s) on %s...\n", portName, addr)
-			}
+			serverLog.Info("Listening", "protocol", "ws", "name", portName, "addr", addr)
 			if err := http.ListenAndServe(addr, wsMux); err != nil {
-				log.Fatalf("WebSocket server (%s) failed to start on %s: %v", portName, addr, err)
+				serverLog.Fatal("WebSocket server failed", "name", portName, "addr", addr, "err", err)
 			}
 		}()
 	}
@@ -340,29 +324,25 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 
 	if len(httpPortList) == 0 {
-		log.Fatal("No HTTP ports configured — at least one HTTP port is required")
+		serverLog.Fatal("No HTTP ports configured — at least one HTTP port is required")
 	}
 
 	// Start extra HTTP listeners in goroutines
 	for i := 1; i < len(httpPortList); i++ {
 		entry := httpPortList[i]
 		go func() {
-			if !quiet {
-				fmt.Printf("Starting HTTP server (%s) on %s...\n", entry.name, entry.addr)
-			}
+			serverLog.Info("Listening", "protocol", "http", "name", entry.name, "addr", entry.addr)
 			if err := http.ListenAndServe(entry.addr, httpMux); err != nil {
-				log.Fatalf("HTTP server (%s) failed to start on %s: %v", entry.name, entry.addr, err)
+				serverLog.Fatal("HTTP server failed", "name", entry.name, "addr", entry.addr, "err", err)
 			}
 		}()
 	}
 
 	// Start the first HTTP listener (blocks)
 	first := httpPortList[0]
-	if !quiet {
-		fmt.Printf("Starting HTTP server (%s) on %s...\n", first.name, first.addr)
-	}
+	serverLog.Info("Listening", "protocol", "http", "name", first.name, "addr", first.addr)
 	if err := http.ListenAndServe(first.addr, httpMux); err != nil {
-		log.Fatalf("HTTP server (%s) failed to start on %s: %v", first.name, first.addr, err)
+		serverLog.Fatal("HTTP server failed", "name", first.name, "addr", first.addr, "err", err)
 	}
 }
 
