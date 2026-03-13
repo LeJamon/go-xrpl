@@ -547,9 +547,9 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *typ
 
 // WebSocketResponseOptions contains optional fields for WebSocket responses
 type WebSocketResponseOptions struct {
-	Warning   string                    // "load" when approaching rate limit
+	Warning   string                // "load" when approaching rate limit
 	Warnings  []types.WarningObject // Array of warning objects
-	Forwarded bool                      // True if forwarded from Clio to P2P server
+	Forwarded bool                  // True if forwarded from Clio to P2P server
 }
 
 // sendResponse sends a WebSocket response
@@ -701,4 +701,17 @@ func (ws *WebSocketServer) RegisterAllMethods() {
 // GetSubscriptionManager returns the subscription manager for event publishing
 func (ws *WebSocketServer) GetSubscriptionManager() *subscription.Manager {
 	return ws.subscriptionManager
+}
+
+// Close gracefully closes all active WebSocket connections.
+func (ws *WebSocketServer) Close() {
+	ws.connectionsMutex.Lock()
+	defer ws.connectionsMutex.Unlock()
+	for _, conn := range ws.connections {
+		conn.conn.WriteMessage(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"),
+		)
+		conn.conn.Close()
+	}
 }

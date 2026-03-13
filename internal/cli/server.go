@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
-	"path/filepath"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/config"
@@ -313,18 +316,21 @@ func runServer(cmd *cobra.Command, args []string) {
 		fmt.Println()
 	}
 
-	// Start WebSocket listeners
+	// Start WebSocket listeners with named *http.Server instances
+	var wsSrvs []*http.Server
 	for name, p := range wsPorts {
 		addr := p.GetBindAddress()
 		portName := name
-		go func() {
+		srv := &http.Server{Addr: addr, Handler: wsMux, ReadHeaderTimeout: 10 * time.Second}
+		wsSrvs = append(wsSrvs, srv)
+		go func(n string, s *http.Server) {
 			if !quiet {
-				fmt.Printf("Starting WebSocket server (%s) on %s...\n", portName, addr)
+				fmt.Printf("Starting WebSocket server (%s) on %s...\n", n, s.Addr)
 			}
-			if err := http.ListenAndServe(addr, wsMux); err != nil {
-				log.Fatalf("WebSocket server (%s) failed to start on %s: %v", portName, addr, err)
+			if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Fatalf("WebSocket server (%s) failed to start on %s: %v", n, s.Addr, err)
 			}
-		}()
+		}(portName, srv)
 	}
 
 	// Start HTTP listeners — use the first one as the blocking listener, rest in goroutines
@@ -343,27 +349,106 @@ func runServer(cmd *cobra.Command, args []string) {
 		log.Fatal("No HTTP ports configured — at least one HTTP port is required")
 	}
 
+	// Collect HTTP servers into a slice
+	var httpSrvs []*http.Server
+
 	// Start extra HTTP listeners in goroutines
 	for i := 1; i < len(httpPortList); i++ {
 		entry := httpPortList[i]
-		go func() {
+		srv := &http.Server{
+			Addr:         entry.addr,
+			Handler:      httpMux,
+			ReadTimeout:  30 * time.Second,
+			WriteTimeout: 30 * time.Second,
+			IdleTimeout:  60 * time.Second,
+		}
+		httpSrvs = append(httpSrvs, srv)
+		go func(n, addr string, s *http.Server) {
 			if !quiet {
-				fmt.Printf("Starting HTTP server (%s) on %s...\n", entry.name, entry.addr)
+				fmt.Printf("Starting HTTP server (%s) on %s...\n", n, addr)
 			}
-			if err := http.ListenAndServe(entry.addr, httpMux); err != nil {
-				log.Fatalf("HTTP server (%s) failed to start on %s: %v", entry.name, entry.addr, err)
+			if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Fatalf("HTTP server (%s) failed to start on %s: %v", n, addr, err)
 			}
-		}()
+		}(entry.name, entry.addr, srv)
 	}
 
-	// Start the first HTTP listener (blocks)
+	// Start the first HTTP listener (will block until shutdown)
 	first := httpPortList[0]
+	firstSrv := &http.Server{
+		Addr:         first.addr,
+		Handler:      httpMux,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+	httpSrvs = append(httpSrvs, firstSrv)
 	if !quiet {
 		fmt.Printf("Starting HTTP server (%s) on %s...\n", first.name, first.addr)
 	}
-	if err := http.ListenAndServe(first.addr, httpMux); err != nil {
-		log.Fatalf("HTTP server (%s) failed to start on %s: %v", first.name, first.addr, err)
+	go func() {
+		if err := firstSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("HTTP server (%s) failed to start on %s: %v", first.name, first.addr, err)
+		}
+	}()
+
+	// Add signal handling and a shared shutdown trigger
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+
+	// shutdownCh lets the RPC stop command trigger the same path
+	shutdownCh := make(chan struct{}, 1)
+
+	types.Services.SetShutdownFunc(func() {
+		log.Println("Shutdown requested via RPC stop command")
+		shutdownCh <- struct{}{}
+	})
+
+	// Block until signal or RPC stop
+	select {
+	case sig := <-sigCh:
+		log.Printf("Received signal %s — shutting down", sig)
+	case <-shutdownCh:
 	}
+
+	doShutdown(httpSrvs, wsSrvs, wsServer, ledgerService, db, repoManager, quiet)
+}
+
+// doShutdown performs graceful shutdown of all server components
+func doShutdown(
+	httpSrvs, wsSrvs []*http.Server,
+	wsServer *rpc.WebSocketServer,
+	ledgerService *service.Service,
+	kvDB nodestore.Database,
+	repoManager relationaldb.RepositoryManager,
+	quiet bool,
+) {
+	const drainTimeout = 30 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+	defer cancel()
+
+	if !quiet {
+		log.Println("Draining HTTP connections...")
+	}
+	for _, srv := range httpSrvs {
+		_ = srv.Shutdown(ctx)
+	}
+	for _, srv := range wsSrvs {
+		_ = srv.Shutdown(ctx)
+	}
+
+	wsServer.Close()
+
+	// Note: ledgerService has no Stop method; it is garbage collected
+	_ = ledgerService
+	if kvDB != nil {
+		kvDB.Close()
+	}
+	if repoManager != nil {
+		repoManager.Close(context.Background())
+	}
+
+	log.Println("Shutdown complete")
 }
 
 // ledgerInfoAdapter adapts the ledger service to the LedgerInfoProvider interface
@@ -399,13 +484,4 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 		ReserveInc:       reserveInc,
 		ValidatedLedgers: serverInfo.CompleteLedgers,
 	}
-}
-
-// getDataDir returns the data directory path from config.
-// Uses node_db.path's parent directory.
-func getDataDir() string {
-	if globalConfig == nil {
-		return ""
-	}
-	return filepath.Dir(globalConfig.NodeDB.Path)
 }
