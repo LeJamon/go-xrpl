@@ -40,21 +40,21 @@ func TestAmmAuctionTimeSlot_ActiveSlot(t *testing.T) {
 	// Auction expiration = 86400 + 86400 = 172800 (start = 86400)
 	// parentCloseTime = 86400 + 4320 = 90720 (interval 1)
 	expiration := uint32(172800) // start + totalTimeSlotSecs
-	pct := uint64(90720)        // start + 1 interval
+	pct := uint64(90720)         // start + 1 interval
 	interval := ammAuctionTimeSlot(pct, expiration)
 	assert.Equal(t, uint32(1), interval)
 }
 
 func TestAmmAuctionTimeSlot_FirstInterval(t *testing.T) {
 	expiration := uint32(172800) // start=86400
-	pct := uint64(86400)        // exactly at start
+	pct := uint64(86400)         // exactly at start
 	interval := ammAuctionTimeSlot(pct, expiration)
 	assert.Equal(t, uint32(0), interval)
 }
 
 func TestAmmAuctionTimeSlot_LastInterval(t *testing.T) {
-	expiration := uint32(172800)             // start=86400
-	pct := uint64(172800 - 1)                // just before expiration
+	expiration := uint32(172800) // start=86400
+	pct := uint64(172800 - 1)    // just before expiration
 	interval := ammAuctionTimeSlot(pct, expiration)
 	assert.Equal(t, uint32(19), interval, "Last valid interval should be 19")
 }

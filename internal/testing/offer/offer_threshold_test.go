@@ -9,10 +9,10 @@ package offer
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	paymentBuilder "github.com/LeJamon/goXRPLd/internal/testing/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/stretchr/testify/require"
 )
 

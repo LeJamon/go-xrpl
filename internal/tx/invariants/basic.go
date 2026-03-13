@@ -88,7 +88,6 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 				}
 			}
 			netChange += int64(after) - int64(before)
-
 		}
 	}
 

@@ -265,8 +265,8 @@ func TestCheckReserveIncrease(t *testing.T) {
 // TestFreeTrustlines tests that the first 2 trust lines are free (no reserve increase).
 // This matches rippled's SetTrust_test.cpp::testFreeTrustlines
 func TestFreeTrustlines(t *testing.T) {
-	baseReserve := uint64(10000000)      // 10 XRP
-	reserveIncrement := uint64(2000000)  // 2 XRP
+	baseReserve := uint64(10000000)     // 10 XRP
+	reserveIncrement := uint64(2000000) // 2 XRP
 
 	engine := &Engine{
 		config: EngineConfig{

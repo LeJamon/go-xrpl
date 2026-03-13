@@ -1,8 +1,8 @@
 package nftoken
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 func init() {

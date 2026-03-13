@@ -6,13 +6,13 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	cred "github.com/LeJamon/goXRPLd/internal/testing/credential"
-	pd "github.com/LeJamon/goXRPLd/internal/testing/permissioneddomain"
 	paymentBuilder "github.com/LeJamon/goXRPLd/internal/testing/payment"
+	pd "github.com/LeJamon/goXRPLd/internal/testing/permissioneddomain"
 	trustsetBuilder "github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // PermissionedDEXEnv holds the accounts and domain ID for a PermissionedDEX test environment.

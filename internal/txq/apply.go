@@ -312,14 +312,3 @@ func computeConsequences(txn tx.Transaction, seqProxy SeqProxy) TxConsequences {
 
 	return cons
 }
-
-// parseDrops parses a drops string to uint64.
-func parseDrops(s string) uint64 {
-	var drops uint64
-	for _, c := range s {
-		if c >= '0' && c <= '9' {
-			drops = drops*10 + uint64(c-'0')
-		}
-	}
-	return drops
-}

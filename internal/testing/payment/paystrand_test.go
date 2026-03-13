@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1541,7 +1541,7 @@ func TestToStrand_LastStepXRPFromOffer(t *testing.T) {
 
 	// Create offer: USD -> XRP (bob sells XRP for USD)
 	// TakerGets=XRP, TakerPays=USD means taker gives USD and gets XRP
-	xrp50 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(50)))
+	xrp50 := tx.NewXRPAmount(xrplgoTesting.XRP(50))
 	usd50 := tx.NewIssuedAmountFromFloat64(50, "USD", gw.Address)
 	result = env.CreatePassiveOffer(bob, xrp50, usd50)
 	xrplgoTesting.RequireTxSuccess(t, result)

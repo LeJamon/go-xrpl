@@ -6,10 +6,10 @@ import (
 	"sync"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	rpctypes "github.com/LeJamon/goXRPLd/internal/rpc/types"
 	tx "github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/LeJamon/goXRPLd/internal/tx/payment/pathfinder"
-	rpctypes "github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
 // PathFindSession holds the state for a persistent WebSocket path_find session.

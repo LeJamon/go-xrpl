@@ -131,7 +131,6 @@ func TestPathSet_ToJson(t *testing.T) {
 }
 
 func TestIsPathStep(t *testing.T) {
-
 	tt := []struct {
 		description string
 		input       map[string]any
@@ -169,7 +168,6 @@ func TestIsPathStep(t *testing.T) {
 }
 
 func TestNewPathStep(t *testing.T) {
-
 	tt := []struct {
 		description string
 		input       map[string]any
@@ -194,7 +192,6 @@ func TestNewPathStep(t *testing.T) {
 }
 
 func TestNewPath(t *testing.T) {
-
 	tt := []struct {
 		description string
 		input       []any
@@ -223,7 +220,6 @@ func TestNewPath(t *testing.T) {
 			require.Equal(t, tc.expected, newPath(tc.input))
 		})
 	}
-
 }
 
 func TestNewPathSet(t *testing.T) {
@@ -317,7 +313,6 @@ func TestParsePathStep(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-
 			p := tc.malleate(t)
 			got, err := parsePathStep(p)
 			if tc.expectedErr != nil {

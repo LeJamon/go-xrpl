@@ -5,12 +5,12 @@ package depositpreauth_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	paymentPkg "github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	paymentPkg "github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/stretchr/testify/require"
 )
 
@@ -109,7 +109,7 @@ func TestDepositAuth_PayIOU(t *testing.T) {
 
 	// carol creates an offer: sell USD(100) for XRP(100)
 	usd100Offer := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
-	xrp100Offer := tx.NewXRPAmount(int64(jtx.XRP(100)))
+	xrp100Offer := tx.NewXRPAmount(jtx.XRP(100))
 	env.CreateOffer(carol, usd100Offer, xrp100Offer)
 	env.Close()
 
@@ -213,7 +213,7 @@ func TestDepositAuth_PayXRP(t *testing.T) {
 	env.Close()
 
 	// bob enables DepositAuth
-	result := env.Submit(
+	env.Submit(
 		payment.Pay(bob, bob, 0).Fee(baseFee).Build(), // placeholder; use AccountSet
 	)
 	// Actually use the env helper:
@@ -224,7 +224,7 @@ func TestDepositAuth_PayXRP(t *testing.T) {
 	require.Equal(t, expectedBobBalance, env.Balance(bob))
 
 	// bob has more XRP than base reserve — any payment should fail.
-	result = env.Submit(payment.Pay(alice, bob, 1).Build())
+	result := env.Submit(payment.Pay(alice, bob, 1).Build())
 	require.Equal(t, "tecNO_PERMISSION", result.Code)
 	env.Close()
 	require.Equal(t, expectedBobBalance, env.Balance(bob))

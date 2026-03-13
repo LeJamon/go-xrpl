@@ -76,7 +76,6 @@ func TestStObject_FromJson(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestStObject_ToJson(t *testing.T) {

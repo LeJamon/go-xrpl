@@ -1,9 +1,9 @@
 package payment
 
 import (
-	"github.com/LeJamon/goXRPLd/keylet"
-	tx "github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	tx "github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // FlowCrossResult contains the result of an offer crossing operation
@@ -69,7 +69,6 @@ func FlowCross(
 	fixAMMOverflowOffer bool,
 	domainID ...*[32]byte,
 ) FlowCrossResult {
-
 	// Create sandbox for tracking changes
 	sandbox := NewPaymentSandbox(view)
 	sandbox.SetTransactionContext(txHash, ledgerSeq)
@@ -256,9 +255,9 @@ func FlowCross(
 }
 
 // configureStrandsForOfferCrossing sets up strands for offer crossing by:
-// 1. Setting quality limits on BookSteps in DIRECT strands (single BookStep)
-// 2. Enabling offer crossing mode on DirectSteps (ignores trust line limits/quality,
-//    allows trust line creation during crossing)
+//  1. Setting quality limits on BookSteps in DIRECT strands (single BookStep)
+//  2. Enabling offer crossing mode on DirectSteps (ignores trust line limits/quality,
+//     allows trust line creation during crossing)
 //
 // Quality limits are NOT set on individual BookSteps in BRIDGED strands (2 BookSteps)
 // because the taker's quality is computed from the overall offer (e.g., EUR/USD), but

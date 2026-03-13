@@ -1,8 +1,9 @@
 package mpt
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"testing"
+
+	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 // Helper functions for pointers

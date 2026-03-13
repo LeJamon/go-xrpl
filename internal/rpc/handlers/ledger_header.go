@@ -114,15 +114,17 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 // serializeLedgerHeader serializes a ledger header to binary in rippled's addRaw format.
 // This matches rippled/src/libxrpl/protocol/LedgerHeader.cpp addRaw(info, s, false).
 // Field layout (big-endian):
-//   4B  seq (uint32)
-//   8B  drops (uint64)
-//  32B  parentHash
-//  32B  txHash
-//  32B  accountHash
-//   4B  parentCloseTime (uint32, ripple epoch seconds)
-//   4B  closeTime (uint32, ripple epoch seconds)
-//   1B  closeTimeResolution (uint8)
-//   1B  closeFlags (uint8)
+//
+//	 4B  seq (uint32)
+//	 8B  drops (uint64)
+//	32B  parentHash
+//	32B  txHash
+//	32B  accountHash
+//	 4B  parentCloseTime (uint32, ripple epoch seconds)
+//	 4B  closeTime (uint32, ripple epoch seconds)
+//	 1B  closeTimeResolution (uint8)
+//	 1B  closeFlags (uint8)
+//
 // Total: 118 bytes
 func serializeLedgerHeader(lr types.LedgerReader) []byte {
 	buf := make([]byte, 0, 118)

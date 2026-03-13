@@ -88,14 +88,14 @@ func DecodeLedgerData(data string) (LedgerData, error) {
 		return LedgerData{}, err
 	}
 
-	ledgerData.CloseTimeResolution = uint8(closeTimeResolution)
+	ledgerData.CloseTimeResolution = closeTimeResolution
 
 	closeFlags, err := parser.ReadByte()
 	if err != nil {
 		return LedgerData{}, err
 	}
 
-	ledgerData.CloseFlags = uint8(closeFlags)
+	ledgerData.CloseFlags = closeFlags
 
 	return ledgerData, nil
 }

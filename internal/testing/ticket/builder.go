@@ -3,9 +3,9 @@ package ticket
 import (
 	"fmt"
 
+	"github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	tickettx "github.com/LeJamon/goXRPLd/internal/tx/ticket"
-	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 
 // TicketCreateBuilder provides a fluent interface for building TicketCreate transactions.

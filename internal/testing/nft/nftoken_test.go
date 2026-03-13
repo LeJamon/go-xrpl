@@ -8,16 +8,16 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/account"
-	"github.com/LeJamon/goXRPLd/internal/tx/nftoken"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
 	"github.com/LeJamon/goXRPLd/internal/testing/nft"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/account"
+	"github.com/LeJamon/goXRPLd/internal/tx/nftoken"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // TestDiagnosticMultiPage verifies NFTokenPage handling with multiple pages
@@ -1031,7 +1031,6 @@ func TestMintFlagOnlyXRP(t *testing.T) {
 	_ = nftAny
 }
 
-
 // ===========================================================================
 // testMintFlagTransferable
 // Reference: rippled NFToken_test.cpp testMintFlagTransferable
@@ -1574,7 +1573,7 @@ func TestBrokeredAccept(t *testing.T) {
 		// Verify balances: minter gets +1 XRP, buyer pays -1 XRP, broker pays only fee
 		minterExpected := minterBal + 1000000 - baseFee // gained 1 XRP minus offer creation fee
 		buyerExpected := buyerBal - 1000000 - baseFee   // paid 1 XRP minus offer creation fee
-		brokerExpected := brokerBal - baseFee            // only broker tx fee
+		brokerExpected := brokerBal - baseFee           // only broker tx fee
 
 		// Note: offer creation fees must be accounted for
 		_ = minterExpected
@@ -1746,7 +1745,6 @@ func TestNFTokenWithTickets(t *testing.T) {
 	// NFTokenAcceptOffer (issuer accepts buyer's offer) with ticket
 	acceptTx := nft.NFTokenAcceptBuyOffer(issuer, fmt.Sprintf("%064X", offerIndex1)).Build()
 	jtx.WithTicketSeq(acceptTx, issuerTicketSeq)
-	issuerTicketSeq++
 	result = env.Submit(acceptTx)
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
@@ -1757,7 +1755,6 @@ func TestNFTokenWithTickets(t *testing.T) {
 	// NFTokenBurn with ticket (buyer burns the token they just bought)
 	burnTx := nft.NFTokenBurn(buyer, nftID).Build()
 	jtx.WithTicketSeq(burnTx, buyerTicketSeq)
-	buyerTicketSeq++
 	result = env.Submit(burnTx)
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
@@ -2055,7 +2052,7 @@ func TestIOUWithTransferFee(t *testing.T) {
 				if len(transferFee) > 0 {
 					fee = transferFee[0]
 				}
-				flags := uint16(nftoken.NFTokenFlagTransferable)
+				flags := nftoken.NFTokenFlagTransferable
 				nftID := nft.GetNextNFTokenID(env, account, 0, flags, fee)
 				builder := nft.NFTokenMint(account, 0).Transferable()
 				if fee > 0 {
@@ -2435,9 +2432,9 @@ func TestIOUWithTransferFee(t *testing.T) {
 				result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, sellOffer).Build())
 				env.Close()
 				jtx.RequireTxSuccess(t, result)
-				checkBalance(minter, "XAU", 27)        // 3% of 900
+				checkBalance(minter, "XAU", 27)           // 3% of 900
 				checkBalance(secondarySeller, "XAU", 873) // 900 - 27
-				checkBalance(buyer, "XAU", 82)           // 1000 - 918
+				checkBalance(buyer, "XAU", 82)            // 1000 - 918
 			})
 
 			// 24. NFT transfer fee 3% + buy 900 (fits in balance, buyside)
@@ -2467,9 +2464,9 @@ func TestIOUWithTransferFee(t *testing.T) {
 					BrokerFee(XAU(100)).Build())
 				env.Close()
 				jtx.RequireTxSuccess(t, result)
-				checkBalance(minter, "XAU", 400)   // 500 - 100 broker fee
-				checkBalance(buyer, "XAU", 490)     // 1000 - 510 (500 + 2% fee)
-				checkBalance(broker, "XAU", 5100)   // 5000 + 100
+				checkBalance(minter, "XAU", 400)  // 500 - 100 broker fee
+				checkBalance(buyer, "XAU", 490)   // 1000 - 510 (500 + 2% fee)
+				checkBalance(broker, "XAU", 5100) // 5000 + 100
 			})
 
 			// 26. Brokered sale with NFT + IOU fee
@@ -3289,12 +3286,12 @@ func TestFixAutoTrustLine(t *testing.T) {
 			// one with tfTrustLine, one without
 			xferFee := uint16(5000) // 5%
 			nftAutoTrustID := nft.GetNextNFTokenID(env, issuer, 0,
-				uint16(nftoken.NFTokenFlagTransferable)|nftoken.NFTokenFlagTrustLine, xferFee)
+				nftoken.NFTokenFlagTransferable|nftoken.NFTokenFlagTrustLine, xferFee)
 			env.Submit(nft.NFTokenMint(issuer, 0).Transferable().TrustLine().TransferFee(xferFee).Build())
 			env.Close()
 
 			nftNoAutoTrustID := nft.GetNextNFTokenID(env, issuer, 0,
-				uint16(nftoken.NFTokenFlagTransferable), xferFee)
+				nftoken.NFTokenFlagTransferable, xferFee)
 			env.Submit(nft.NFTokenMint(issuer, 0).Transferable().TransferFee(xferFee).Build())
 			env.Close()
 
@@ -3418,12 +3415,12 @@ func TestFixNFTIssuerIsIOUIssuer(t *testing.T) {
 			// one with tfTrustLine, one without
 			xferFee := uint16(5000) // 5%
 			nftAutoTrustID := nft.GetNextNFTokenID(env, issuer, 0,
-				uint16(nftoken.NFTokenFlagTransferable)|nftoken.NFTokenFlagTrustLine, xferFee)
+				nftoken.NFTokenFlagTransferable|nftoken.NFTokenFlagTrustLine, xferFee)
 			env.Submit(nft.NFTokenMint(issuer, 0).Transferable().TrustLine().TransferFee(xferFee).Build())
 			env.Close()
 
 			nftNoAutoTrustID := nft.GetNextNFTokenID(env, issuer, 0,
-				uint16(nftoken.NFTokenFlagTransferable), xferFee)
+				nftoken.NFTokenFlagTransferable, xferFee)
 			env.Submit(nft.NFTokenMint(issuer, 0).Transferable().TransferFee(xferFee).Build())
 			env.Close()
 
@@ -3567,4 +3564,3 @@ func TestNFTokenModify(t *testing.T) {
 		env.Close()
 	})
 }
-

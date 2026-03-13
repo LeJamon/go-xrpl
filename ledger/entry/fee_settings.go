@@ -12,16 +12,16 @@ type FeeSettings struct {
 	BaseEntry
 
 	// Modern fee fields (XRPFees amendment)
-	BaseFeeDrops         drops.XRPAmount
-	ReserveBaseDrops     drops.XRPAmount
+	BaseFeeDrops          drops.XRPAmount
+	ReserveBaseDrops      drops.XRPAmount
 	ReserveIncrementDrops drops.XRPAmount
 
 	// Legacy fee fields (deprecated, for backward compatibility)
 	// These are used if XRPFees amendment is not enabled
-	BaseFee            *uint64
-	ReferenceFeeUnits  *uint32
-	ReserveBase        *uint32
-	ReserveIncrement   *uint32
+	BaseFee           *uint64
+	ReferenceFeeUnits *uint32
+	ReserveBase       *uint32
+	ReserveIncrement  *uint32
 }
 
 // NewFeeSettings creates a new FeeSettings entry with the specified fees.

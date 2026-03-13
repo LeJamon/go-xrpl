@@ -20,10 +20,10 @@ import (
 func TestXRPAmountEncoding_RippledVectors(t *testing.T) {
 	tests := []struct {
 		name        string
-		drops       string        // Input drops value
-		expectedHex string        // Expected serialized hex
+		drops       string // Input drops value
+		expectedHex string // Expected serialized hex
 		expectError bool
-		description string        // From rippled test
+		description string // From rippled test
 	}{
 		// From testNativeCurrency() - basic values
 		{

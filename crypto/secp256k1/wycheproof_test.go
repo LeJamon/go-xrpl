@@ -24,10 +24,10 @@ var halfN = new(big.Int).Rsh(curveOrderN, 1)
 
 // DER parsing errors
 var (
-	errInvalidDERSignature   = errors.New("invalid DER signature")
-	errInvalidDERIntegerTag  = errors.New("invalid DER: expected integer tag")
+	errInvalidDERSignature     = errors.New("invalid DER signature")
+	errInvalidDERIntegerTag    = errors.New("invalid DER: expected integer tag")
 	errInvalidDERNotEnoughData = errors.New("invalid DER: not enough data")
-	errLeftoverBytes         = errors.New("invalid signature: leftover bytes after parsing")
+	errLeftoverBytes           = errors.New("invalid signature: leftover bytes after parsing")
 )
 
 // parseStrictDERSignature parses a DER-encoded ECDSA signature with strict validation.
@@ -135,8 +135,8 @@ func parseStrictDERSignature(sig []byte) ([]byte, []byte, error) {
 
 // WycheproofTestVectors represents the root structure of the Wycheproof test vectors JSON.
 type WycheproofTestVectors struct {
-	Algorithm     string           `json:"algorithm"`
-	NumberOfTests int              `json:"numberOfTests"`
+	Algorithm     string            `json:"algorithm"`
+	NumberOfTests int               `json:"numberOfTests"`
 	TestGroups    []WycheproofGroup `json:"testGroups"`
 }
 
@@ -406,7 +406,6 @@ func TestWycheproofECDSATableDriven(t *testing.T) {
 
 		t.Run("group_"+string(rune('0'+groupIdx)), func(t *testing.T) {
 			for _, tc := range testCases {
-				tc := tc // capture range variable
 				testName := tc.name
 				if testName == "" {
 					testName = "test"

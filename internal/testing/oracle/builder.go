@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/oracle"
-	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 
 // XRPLEpochOffset is the XRPL epoch (Jan 1, 2000 00:00:00 UTC) in Unix seconds.
@@ -14,19 +14,19 @@ const XRPLEpochOffset = 946684800
 
 // OracleSetBuilder provides a fluent interface for building OracleSet transactions.
 type OracleSetBuilder struct {
-	account          *testing.Account
-	oracleDocumentID uint32
-	provider         string
-	providerPresent  bool
-	uri              string
-	uriPresent       bool
-	assetClass       string
+	account           *testing.Account
+	oracleDocumentID  uint32
+	provider          string
+	providerPresent   bool
+	uri               string
+	uriPresent        bool
+	assetClass        string
 	assetClassPresent bool
-	lastUpdateTime   uint32
-	priceDataSeries  []oracle.PriceData
-	fee              uint64
-	sequence         *uint32
-	flags            *uint32
+	lastUpdateTime    uint32
+	priceDataSeries   []oracle.PriceData
+	fee               uint64
+	sequence          *uint32
+	flags             *uint32
 }
 
 // OracleSet creates a new OracleSetBuilder.

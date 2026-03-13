@@ -854,46 +854,46 @@ func TestMakeFeaturesResponseHeader(t *testing.T) {
 // TestParseProtocolCtlFeatures tests full feature set parsing
 func TestParseProtocolCtlFeatures(t *testing.T) {
 	tests := []struct {
-		name       string
-		header     string
-		hasCompr   bool
-		hasReplay  bool
-		hasReduce  bool
+		name      string
+		header    string
+		hasCompr  bool
+		hasReplay bool
+		hasReduce bool
 	}{
 		{
-			name:       "all_features",
-			header:     "compr=lz4;ledgerreplay=1;vprr=1;txrr=1",
-			hasCompr:   true,
-			hasReplay:  true,
-			hasReduce:  true,
+			name:      "all_features",
+			header:    "compr=lz4;ledgerreplay=1;vprr=1;txrr=1",
+			hasCompr:  true,
+			hasReplay: true,
+			hasReduce: true,
 		},
 		{
-			name:       "only_compression",
-			header:     "compr=lz4",
-			hasCompr:   true,
-			hasReplay:  false,
-			hasReduce:  false,
+			name:      "only_compression",
+			header:    "compr=lz4",
+			hasCompr:  true,
+			hasReplay: false,
+			hasReduce: false,
 		},
 		{
-			name:       "only_vprr",
-			header:     "vprr=1",
-			hasCompr:   false,
-			hasReplay:  false,
-			hasReduce:  true,
+			name:      "only_vprr",
+			header:    "vprr=1",
+			hasCompr:  false,
+			hasReplay: false,
+			hasReduce: true,
 		},
 		{
-			name:       "only_txrr",
-			header:     "txrr=1",
-			hasCompr:   false,
-			hasReplay:  false,
-			hasReduce:  true,
+			name:      "only_txrr",
+			header:    "txrr=1",
+			hasCompr:  false,
+			hasReplay: false,
+			hasReduce: true,
 		},
 		{
-			name:       "empty_header",
-			header:     "",
-			hasCompr:   false,
-			hasReplay:  false,
-			hasReduce:  false,
+			name:      "empty_header",
+			header:    "",
+			hasCompr:  false,
+			hasReplay: false,
+			hasReduce: false,
 		},
 	}
 

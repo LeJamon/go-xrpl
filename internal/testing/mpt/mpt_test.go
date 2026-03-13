@@ -516,7 +516,7 @@ func TestMPT_AuthorizeValidation(t *testing.T) {
 		bob := jtx.NewAccount("bob")
 
 		acctReserve := uint64(jtx.XRP(200)) // 200 XRP account reserve
-		incReserve := uint64(jtx.XRP(50))    // 50 XRP increment reserve
+		incReserve := uint64(jtx.XRP(50))   // 50 XRP increment reserve
 
 		// Fund bob with just enough for account reserve + almost one increment
 		env.FundAmount(alice, uint64(jtx.XRP(10_000)))

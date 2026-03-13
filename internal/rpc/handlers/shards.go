@@ -13,11 +13,9 @@ func (m *DownloadShardMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	return map[string]interface{}{"message": "shard download initiated"}, nil
 }
 
-
 // CrawlShardsMethod handles the crawl_shards RPC method
 type CrawlShardsMethod struct{ AdminHandler }
 
 func (m *CrawlShardsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	return map[string]interface{}{"shards": []interface{}{}}, nil
 }
-

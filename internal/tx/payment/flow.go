@@ -3,9 +3,9 @@ package payment
 import (
 	"sort"
 
-	"github.com/LeJamon/goXRPLd/keylet"
-	tx "github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	tx "github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // Flow executes payment across multiple strands, selecting the best quality paths.
@@ -283,7 +283,6 @@ func Flow(
 			// Remove inactive strand from next if it was the best
 			if markInactiveOnUse >= 0 && markInactiveOnUse < len(next) {
 				next = append(next[:markInactiveOnUse], next[markInactiveOnUse+1:]...)
-				markInactiveOnUse = -1
 			}
 
 			savedIns = append(savedIns, best.in)
@@ -352,7 +351,7 @@ func Flow(
 		Out:             totalOut,
 		Sandbox:         accumSandbox,
 		RemovableOffers: allOfrsToRm,
-		Result:          tx.Result(resultCode),
+		Result:          resultCode,
 	}
 }
 

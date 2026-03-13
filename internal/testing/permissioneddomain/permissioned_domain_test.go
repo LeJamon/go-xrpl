@@ -9,11 +9,11 @@ import (
 	"testing"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/keylet"
-	acctx "github.com/LeJamon/goXRPLd/internal/tx/account"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	pd "github.com/LeJamon/goXRPLd/internal/testing/permissioneddomain"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
+	pd "github.com/LeJamon/goXRPLd/internal/testing/permissioneddomain"
+	acctx "github.com/LeJamon/goXRPLd/internal/tx/account"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // credTypeHex returns a hex-encoded credential type of the given byte length.

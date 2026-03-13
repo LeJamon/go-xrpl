@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	paychan "github.com/LeJamon/goXRPLd/internal/tx/paychan"
-	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 
 const RippleEpoch = 946684800

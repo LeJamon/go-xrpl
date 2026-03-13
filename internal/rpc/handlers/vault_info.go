@@ -6,8 +6,8 @@ import (
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // VaultInfoMethod handles the vault_info RPC method
@@ -117,4 +117,3 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 
 	return response, nil
 }
-

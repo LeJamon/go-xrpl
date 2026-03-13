@@ -454,7 +454,6 @@ func (q Quality) CeilOutStrict(amtIn, amtOut EitherAmount, limit EitherAmount, r
 
 	resultIn := state.MulRoundStrict(limitAmt, qRate, inCurrency, inIssuer, roundUp)
 
-
 	var resultInEither EitherAmount
 	if amtIn.IsNative {
 		var drops int64
@@ -645,7 +644,6 @@ func CanonicalizeDrops(mantissa int64, exponent int) int64 {
 			adder = 9
 		}
 		value = (value + adder) / 10
-		exponent++
 	}
 
 	if mantissa < 0 {
@@ -768,7 +766,6 @@ func CanonicalizeDropsStrict(mantissa int64, exponent int, roundUp bool) int64 {
 			adder = 10
 		}
 		value = (value + adder) / 10
-		exponent++
 	}
 
 	if mantissa < 0 {
@@ -809,17 +806,17 @@ func (q Quality) Compose(other Quality) Quality {
 	bigM2 := new(big.Int).SetInt64(m2)
 	product := new(big.Int).Mul(bigM1, bigM2)
 
-	tenTo14 := new(big.Int).SetInt64(100000000000000)    // 10^14
-	tenTo14m1 := new(big.Int).SetInt64(99999999999999)   // 10^14 - 1
-	product.Add(product, tenTo14m1)                       // round up
+	tenTo14 := new(big.Int).SetInt64(100000000000000)  // 10^14
+	tenTo14m1 := new(big.Int).SetInt64(99999999999999) // 10^14 - 1
+	product.Add(product, tenTo14m1)                    // round up
 	product.Div(product, tenTo14)
 
 	offset := e1 + e2 + 14
 
 	// canonicalizeRound with roundUp=true
 	// Reference: rippled STAmount.cpp canonicalizeRound
-	minMantissa := new(big.Int).SetInt64(1000000000000000)  // 10^15
-	maxMantissa := new(big.Int).SetInt64(9999999999999999)  // 10^16 - 1
+	minMantissa := new(big.Int).SetInt64(1000000000000000) // 10^15
+	maxMantissa := new(big.Int).SetInt64(9999999999999999) // 10^16 - 1
 	ten := big.NewInt(10)
 	nine := big.NewInt(9)
 

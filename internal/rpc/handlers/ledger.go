@@ -286,4 +286,3 @@ func expandBinaryTransaction(txData []byte, hashStr string, binary bool, apiVers
 	}
 	return txEntry
 }
-

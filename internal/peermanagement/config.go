@@ -7,10 +7,10 @@ import (
 
 // Default configuration values.
 const (
-	DefaultListenAddr   = ":51235"
-	DefaultMaxPeers     = 50
-	DefaultMaxInbound   = 25
-	DefaultMaxOutbound  = 25
+	DefaultListenAddr  = ":51235"
+	DefaultMaxPeers    = 50
+	DefaultMaxInbound  = 25
+	DefaultMaxOutbound = 25
 
 	DefaultConnectTimeout   = 10 * time.Second
 	DefaultHandshakeTimeout = 5 * time.Second
@@ -32,9 +32,9 @@ type Config struct {
 	UserAgent  string
 
 	// Peer limits
-	MaxPeers     int
-	MaxInbound   int
-	MaxOutbound  int
+	MaxPeers    int
+	MaxInbound  int
+	MaxOutbound int
 
 	// Bootstrap peers
 	BootstrapPeers []string
@@ -68,11 +68,11 @@ type Config struct {
 // DefaultConfig returns the default configuration.
 func DefaultConfig() Config {
 	return Config{
-		ListenAddr:   DefaultListenAddr,
-		UserAgent:    DefaultUserAgent,
-		MaxPeers:     DefaultMaxPeers,
-		MaxInbound:   DefaultMaxInbound,
-		MaxOutbound:  DefaultMaxOutbound,
+		ListenAddr:  DefaultListenAddr,
+		UserAgent:   DefaultUserAgent,
+		MaxPeers:    DefaultMaxPeers,
+		MaxInbound:  DefaultMaxInbound,
+		MaxOutbound: DefaultMaxOutbound,
 
 		ConnectTimeout:   DefaultConnectTimeout,
 		HandshakeTimeout: DefaultHandshakeTimeout,

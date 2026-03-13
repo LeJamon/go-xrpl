@@ -3,10 +3,10 @@ package permissioneddomain
 import (
 	"encoding/hex"
 
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/credential"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // AccountInDomain checks if an account is a member of a permissioned domain.

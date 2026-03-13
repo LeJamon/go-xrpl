@@ -206,8 +206,8 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 
 // Auction slot constants matching rippled's AMMCore.h
 const (
-	totalTimeSlotSecs           = 24 * 3600           // 86400 seconds
-	auctionSlotTimeIntervals    = 20                   // number of intervals
+	totalTimeSlotSecs           = 24 * 3600                                    // 86400 seconds
+	auctionSlotTimeIntervals    = 20                                           // number of intervals
 	auctionSlotIntervalDuration = totalTimeSlotSecs / auctionSlotTimeIntervals // 4320 seconds
 )
 
@@ -380,4 +380,3 @@ func currencyToBytes(currency string) [20]byte {
 
 	return result
 }
-

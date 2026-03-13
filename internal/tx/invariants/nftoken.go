@@ -461,4 +461,3 @@ func checkValidNFTokenPage(entries []InvariantEntry, view ReadView, rules *amend
 
 	return nil
 }
-

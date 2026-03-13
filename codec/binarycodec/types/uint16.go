@@ -16,7 +16,6 @@ type UInt16 struct{}
 // If the input value is a string, it's assumed to be a transaction type or ledger entry type name, and the
 // method will attempt to convert it into a corresponding type code. If the conversion fails, an error is returned.
 func (u *UInt16) FromJSON(value any) ([]byte, error) {
-
 	if _, ok := value.(string); ok {
 		tc, err := definitions.Get().GetTransactionTypeCodeByTransactionTypeName(value.(string))
 		if err != nil {

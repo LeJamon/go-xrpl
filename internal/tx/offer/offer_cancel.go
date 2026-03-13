@@ -2,9 +2,9 @@
 package offer
 
 import (
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // OfferCancel cancels an existing offer on the decentralized exchange.

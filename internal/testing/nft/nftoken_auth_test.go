@@ -13,13 +13,13 @@ package nft_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/nftoken"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
 	"github.com/LeJamon/goXRPLd/internal/testing/nft"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/nftoken"
 )
 
 // mintAndOfferNFT mints a transferable NFT and creates a sell offer for it.

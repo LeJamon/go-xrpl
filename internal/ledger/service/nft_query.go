@@ -30,9 +30,6 @@ type NFTOffersResult struct {
 	Marker      string         // Next page marker (only when more results)
 }
 
-// lsfSellNFToken is the flag indicating a sell offer
-const lsfSellNFToken uint32 = 0x00000001
-
 // GetNFTBuyOffers retrieves buy offers for an NFToken
 // Reference: rippled NFTOffers.cpp enumerateNFTOffers with nft_buys keylet
 func (s *Service) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error) {
@@ -194,7 +191,7 @@ func (s *Service) getNFTOffers(nftID [32]byte, ledgerIndex string, limit uint32,
 type NFTokenOfferForQuery struct {
 	Owner          [20]byte
 	NFTokenID      [32]byte
-	Amount         uint64       // XRP drops
+	Amount         uint64 // XRP drops
 	AmountIOU      *IOUAmountForQuery
 	Flags          uint32
 	Destination    [20]byte
@@ -355,7 +352,7 @@ func parseNFTokenOfferForQuery(data []byte) (*NFTokenOfferForQuery, error) {
 				// First 8 bytes: mantissa and exponent
 				mantissa := binary.BigEndian.Uint64(data[offset : offset+8])
 				isNegative := (mantissa & 0x4000000000000000) == 0
-				exponent := int8((mantissa >> 54) & 0xFF) - 97
+				exponent := int8((mantissa>>54)&0xFF) - 97
 				mantissa = mantissa & 0x003FFFFFFFFFFFFF
 
 				// Calculate the actual value

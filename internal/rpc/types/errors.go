@@ -34,8 +34,8 @@ const (
 	RpcCOMMAND_UNTRUSTED = 3
 	RpcNO_CURRENT        = 4
 	RpcNO_NETWORK        = 5
-	RpcNO_PERMISSION     = 6 // rippled: rpcNO_PERMISSION = 6
-	RpcTOO_BUSY          = 9 // rippled: rpcTOO_BUSY = 9
+	RpcNO_PERMISSION     = 6  // rippled: rpcNO_PERMISSION = 6
+	RpcTOO_BUSY          = 9  // rippled: rpcTOO_BUSY = 9
 	RpcSLOW_DOWN         = 10 // rippled: rpcSLOW_DOWN = 10
 
 	// Networking
@@ -75,7 +75,7 @@ const (
 	RpcNOT_SUPPORTED = 32
 
 	// WebSocket specific
-	RpcCOMMAND_MISSING        = 34
+	RpcCOMMAND_MISSING         = 34
 	RpcCOMMAND_IS_NOT_A_STRING = 35
 
 	// Rate limiting
@@ -125,7 +125,7 @@ const (
 	RpcBAD_CREDENTIALS = 95 // Credentials do not exist, are not accepted, or have expired
 
 	// Simulate errors - must match rippled exactly
-	RpcTX_SIGNED        = 96 // Transaction should not be signed (rippled: rpcTX_SIGNED = 96)
+	RpcTX_SIGNED         = 96 // Transaction should not be signed (rippled: rpcTX_SIGNED = 96)
 	RpcSRC_ACT_MALFORMED = 65 // Source account is malformed (rippled: rpcSRC_ACT_MALFORMED = 65)
 )
 

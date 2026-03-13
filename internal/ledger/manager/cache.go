@@ -4,7 +4,7 @@ import (
 	"sync"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/hashicorp/golang-lru/v2"
+	lru "github.com/hashicorp/golang-lru/v2"
 )
 
 // LedgerCache provides fast access to recently used ledgers and tracks

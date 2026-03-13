@@ -21,11 +21,11 @@ import (
 
 // Fixture represents a single xrpl-fixtures test vector file.
 type Fixture struct {
-	RippledVersion string  `json:"rippled_version"`
-	Suite          string  `json:"suite"`
-	Testcase       string  `json:"testcase"`
+	RippledVersion string    `json:"rippled_version"`
+	Suite          string    `json:"suite"`
+	Testcase       string    `json:"testcase"`
 	Env            EnvConfig `json:"env"`
-	Steps          []Step  `json:"steps"`
+	Steps          []Step    `json:"steps"`
 }
 
 // EnvConfig holds the ledger environment configuration.

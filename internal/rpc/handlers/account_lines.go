@@ -143,4 +143,3 @@ func isDefaultTrustLine(line types.TrustLine) bool {
 	}
 	return true
 }
-

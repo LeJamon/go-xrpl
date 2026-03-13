@@ -44,9 +44,9 @@ type XrplRequest struct {
 // JsonRpcResponseOptions contains optional fields for JSON-RPC responses
 // These fields are at the top level, not inside the result object
 type JsonRpcResponseOptions struct {
-	Warning   string                    // "load" when approaching rate limit
+	Warning   string                // "load" when approaching rate limit
 	Warnings  []types.WarningObject // Array of warning objects
-	Forwarded bool                      // True if forwarded from Clio to P2P server
+	Forwarded bool                  // True if forwarded from Clio to P2P server
 }
 
 // ServeHTTP implements http.Handler interface

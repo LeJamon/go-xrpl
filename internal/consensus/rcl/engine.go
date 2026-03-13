@@ -24,15 +24,15 @@ type Engine struct {
 	eventBus *consensus.EventBus
 
 	// Current state
-	mode      consensus.Mode
-	phase     consensus.Phase
-	state     *consensus.RoundState
+	mode       consensus.Mode
+	phase      consensus.Phase
+	state      *consensus.RoundState
 	prevLedger consensus.Ledger
 
 	// Proposal tracking
-	proposals  map[consensus.NodeID]*consensus.Proposal
-	ourTxSet   consensus.TxSet
-	converged  bool
+	proposals map[consensus.NodeID]*consensus.Proposal
+	ourTxSet  consensus.TxSet
+	converged bool
 
 	// Validation tracking
 	validations map[consensus.NodeID]*consensus.Validation

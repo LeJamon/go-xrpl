@@ -5,9 +5,9 @@ package amm_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/amm"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 // setupAMM creates a standard AMM test environment with an AMM already created.

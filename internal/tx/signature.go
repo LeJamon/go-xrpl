@@ -9,9 +9,9 @@ import (
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/crypto/ed25519"
 	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // Signature verification errors
@@ -290,21 +290,6 @@ func copyMap(m map[string]any) map[string]any {
 		result[k] = v
 	}
 	return result
-}
-
-// verifyPublicKeyMatchesAccount checks that the public key derives to the given account
-func verifyPublicKeyMatchesAccount(pubKeyHex, account string) error {
-	// Derive the account address from the public key
-	derivedAddress, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(pubKeyHex)
-	if err != nil {
-		return errors.New("failed to derive address from public key: " + err.Error())
-	}
-
-	if derivedAddress != account {
-		return ErrPublicKeyMismatch
-	}
-
-	return nil
 }
 
 // getSigningPayload returns the binary data that should be signed

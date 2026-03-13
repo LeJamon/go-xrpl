@@ -12,9 +12,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,18 +22,18 @@ import (
 // sell offer test case.  Mirrors the TestData struct in rippled's
 // testSellOffer (Offer_test.cpp lines 2825-2906).
 type sellOfferTestData struct {
-	account  string     // Account name
-	fundXrp  uint64     // XRP acct funded with (drops)
-	fundUSD  float64    // USD acct funded with (0 means no pre-trust)
-	gwGets   tx.Amount  // gw's offer: what gw gets
-	gwPays   tx.Amount  // gw's offer: what gw pays
-	acctGets tx.Amount  // acct's offer: what acct gets
-	acctPays tx.Amount  // acct's offer: what acct pays
-	tec      string     // Expected result code
-	spentXrp int64      // XRP removed from fundXrp (drops, can be negative)
-	finalUSD float64    // Final USD balance on acct
-	offers   uint32     // Expected offer count on acct
-	owners   uint32     // Expected owner count on acct
+	account  string    // Account name
+	fundXrp  uint64    // XRP acct funded with (drops)
+	fundUSD  float64   // USD acct funded with (0 means no pre-trust)
+	gwGets   tx.Amount // gw's offer: what gw gets
+	gwPays   tx.Amount // gw's offer: what gw pays
+	acctGets tx.Amount // acct's offer: what acct gets
+	acctPays tx.Amount // acct's offer: what acct pays
+	tec      string    // Expected result code
+	spentXrp int64     // XRP removed from fundXrp (drops, can be negative)
+	finalUSD float64   // Final USD balance on acct
+	offers   uint32    // Expected offer count on acct
+	owners   uint32    // Expected owner count on acct
 	// Remainder of acct's offer (only checked when offers > 0)
 	takerGets tx.Amount
 	takerPays tx.Amount

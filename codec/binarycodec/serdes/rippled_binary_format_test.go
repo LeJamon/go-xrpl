@@ -222,8 +222,8 @@ func TestVariableLengthRoundtrip(t *testing.T) {
 	defs := definitions.Get()
 
 	lengths := []int{
-		0, 1, 10, 100, 192,           // Single byte
-		193, 200, 1000, 5000, 12480,  // Two byte
+		0, 1, 10, 100, 192, // Single byte
+		193, 200, 1000, 5000, 12480, // Two byte
 		12481, 50000, 100000, 918744, // Three byte
 	}
 
@@ -586,13 +586,13 @@ func TestSerializedFieldOrder(t *testing.T) {
 
 	// Get field instances and verify ordering
 	fields := []string{
-		"TransactionType",  // type=1, field=2
-		"Flags",            // type=2, field=2
-		"SourceTag",        // type=2, field=3
-		"Sequence",         // type=2, field=4
-		"DestinationTag",   // type=2, field=14
-		"Fee",              // type=6, field=8
-		"Account",          // type=8, field=1
+		"TransactionType", // type=1, field=2
+		"Flags",           // type=2, field=2
+		"SourceTag",       // type=2, field=3
+		"Sequence",        // type=2, field=4
+		"DestinationTag",  // type=2, field=14
+		"Fee",             // type=6, field=8
+		"Account",         // type=8, field=1
 	}
 
 	var prevOrdinal int32 = -1

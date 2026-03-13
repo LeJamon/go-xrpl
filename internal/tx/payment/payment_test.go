@@ -4,11 +4,11 @@ import (
 	"strconv"
 	"testing"
 
-	tx "github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	tx "github.com/LeJamon/goXRPLd/internal/tx"
 )
 
-func ptrUint32(v uint32) *uint32 { return &v }
+func ptrUint32(v uint32) *uint32       { return &v }
 func ptrAmount(a tx.Amount) *tx.Amount { return &a }
 
 // Helper to create XRP amount from string drops

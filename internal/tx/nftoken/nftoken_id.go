@@ -7,16 +7,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
-// Field type constants for binary parsing (from sle package)
-const (
-	fieldTypeUInt16  = state.FieldTypeUInt16
-	fieldTypeUInt32  = state.FieldTypeUInt32
-	fieldTypeUInt64  = state.FieldTypeUInt64
-	fieldTypeHash256 = state.FieldTypeHash256
-	fieldTypeAccount = state.FieldTypeAccount
-	fieldTypeBlob    = state.FieldTypeBlob
-)
-
 // NFToken ID flag constants (stored in first 2 bytes of NFTokenID).
 // These match the mint flags but are used when constructing/inspecting NFToken IDs.
 const (

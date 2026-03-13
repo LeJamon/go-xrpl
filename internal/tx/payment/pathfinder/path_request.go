@@ -21,7 +21,7 @@ type PathAlternative struct {
 
 // PathRequestResult holds the complete result of a pathfinding request.
 type PathRequestResult struct {
-	Alternatives        []PathAlternative
+	Alternatives          []PathAlternative
 	DestinationCurrencies []string
 }
 

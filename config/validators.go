@@ -43,7 +43,7 @@ func (v *ValidatorsConfig) Validate() error {
 	}
 
 	if len(v.ValidatorListKeys) > 0 && v.ValidatorListThreshold > len(v.ValidatorListKeys) {
-		return fmt.Errorf("validator_list_threshold (%d) cannot be greater than number of validator_list_keys (%d)", 
+		return fmt.Errorf("validator_list_threshold (%d) cannot be greater than number of validator_list_keys (%d)",
 			v.ValidatorListThreshold, len(v.ValidatorListKeys))
 	}
 
@@ -128,9 +128,9 @@ func validateValidatorListSite(site string) error {
 	}
 
 	// Basic URL validation
-	if !strings.HasPrefix(site, "http://") && 
-	   !strings.HasPrefix(site, "https://") && 
-	   !strings.HasPrefix(site, "file://") {
+	if !strings.HasPrefix(site, "http://") &&
+		!strings.HasPrefix(site, "https://") &&
+		!strings.HasPrefix(site, "file://") {
 		return fmt.Errorf("validator list site must use http://, https://, or file:// scheme")
 	}
 
@@ -177,9 +177,9 @@ func isValidBase58(s string) bool {
 // isValidHex checks if a string contains only valid hexadecimal characters
 func isValidHex(s string) bool {
 	for _, char := range s {
-		if !((char >= '0' && char <= '9') || 
-			 (char >= 'a' && char <= 'f') || 
-			 (char >= 'A' && char <= 'F')) {
+		if !((char >= '0' && char <= '9') ||
+			(char >= 'a' && char <= 'f') ||
+			(char >= 'A' && char <= 'F')) {
 			return false
 		}
 	}
@@ -190,24 +190,24 @@ func isValidHex(s string) bool {
 // This helper function allows migration from the old format
 func ParseValidatorsTxt(content string) (*ValidatorsConfig, error) {
 	config := &ValidatorsConfig{}
-	
+
 	lines := strings.Split(content, "\n")
 	currentSection := ""
-	
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		
+
 		// Skip empty lines and comments
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		
+
 		// Check for section headers
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
 			currentSection = strings.Trim(line, "[]")
 			continue
 		}
-		
+
 		// Parse content based on current section
 		switch currentSection {
 		case "validators":
@@ -224,6 +224,6 @@ func ParseValidatorsTxt(content string) (*ValidatorsConfig, error) {
 			}
 		}
 	}
-	
+
 	return config, nil
 }

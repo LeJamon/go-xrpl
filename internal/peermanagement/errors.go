@@ -17,18 +17,18 @@ var (
 	ErrConnectionClosed   = errors.New("connection closed")
 
 	// Handshake errors
-	ErrHandshakeFailed   = errors.New("handshake failed")
-	ErrInvalidHandshake  = errors.New("invalid handshake data")
-	ErrHandshakeTimeout  = errors.New("handshake timeout")
-	ErrProtocolMismatch  = errors.New("protocol version mismatch")
-	ErrInvalidPublicKey  = errors.New("invalid public key")
-	ErrInvalidSignature  = errors.New("invalid signature")
-	ErrNetworkMismatch   = errors.New("network ID mismatch")
+	ErrHandshakeFailed  = errors.New("handshake failed")
+	ErrInvalidHandshake = errors.New("invalid handshake data")
+	ErrHandshakeTimeout = errors.New("handshake timeout")
+	ErrProtocolMismatch = errors.New("protocol version mismatch")
+	ErrInvalidPublicKey = errors.New("invalid public key")
+	ErrInvalidSignature = errors.New("invalid signature")
+	ErrNetworkMismatch  = errors.New("network ID mismatch")
 
 	// Discovery errors
-	ErrPeerNotFound     = errors.New("peer not found")
-	ErrInvalidEndpoint  = errors.New("invalid endpoint")
-	ErrEndpointBanned   = errors.New("endpoint is banned")
+	ErrPeerNotFound    = errors.New("peer not found")
+	ErrInvalidEndpoint = errors.New("invalid endpoint")
+	ErrEndpointBanned  = errors.New("endpoint is banned")
 
 	// Message errors
 	ErrInvalidMessage   = errors.New("invalid message")

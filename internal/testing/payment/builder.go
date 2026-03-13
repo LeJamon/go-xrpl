@@ -6,25 +6,25 @@ package payment
 import (
 	"fmt"
 
+	"github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/payment"
-	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 
 // PaymentBuilder provides a fluent interface for building Payment transactions.
 type PaymentBuilder struct {
-	from       *testing.Account
-	to         *testing.Account
-	amount     uint64 // XRP in drops
-	issuedAmt  *tx.Amount
-	fee        uint64
-	destTag    *uint32
-	sourceTag  *uint32
-	invoiceID  string
-	sendMax    *tx.Amount
-	deliverMin *tx.Amount
-	paths      [][]payment.PathStep
-	sequence   *uint32
+	from          *testing.Account
+	to            *testing.Account
+	amount        uint64 // XRP in drops
+	issuedAmt     *tx.Amount
+	fee           uint64
+	destTag       *uint32
+	sourceTag     *uint32
+	invoiceID     string
+	sendMax       *tx.Amount
+	deliverMin    *tx.Amount
+	paths         [][]payment.PathStep
+	sequence      *uint32
 	flags         uint32
 	memos         []tx.MemoWrapper
 	credentialIDs []string

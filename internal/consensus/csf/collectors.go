@@ -187,9 +187,9 @@ func (c *LedgerCollector) On(peer PeerID, when SimTime, event Event) {
 
 // TxSubmitCollector tracks transaction submission to validation latency.
 type TxSubmitCollector struct {
-	Submitted  map[uint32]SimTime        // tx ID -> submit time
-	Validated  map[uint32]SimTime        // tx ID -> validation time
-	ByPeer     map[PeerID]map[uint32]SimTime // peer -> tx ID -> validation time
+	Submitted map[uint32]SimTime            // tx ID -> submit time
+	Validated map[uint32]SimTime            // tx ID -> validation time
+	ByPeer    map[PeerID]map[uint32]SimTime // peer -> tx ID -> validation time
 }
 
 // NewTxSubmitCollector creates a new transaction tracking collector.

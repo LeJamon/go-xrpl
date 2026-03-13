@@ -67,25 +67,25 @@ func allHandlers() map[string]types.MethodHandler {
 		"nft_sell_offers": &handlers.NftSellOffersMethod{},
 
 		// Utility methods
-		"deposit_authorized": &handlers.DepositAuthorizedMethod{},
-		"gateway_balances":   &handlers.GatewayBalancesMethod{},
-		"noripple_check":     &handlers.NoRippleCheckMethod{},
-		"channel_authorize":  &handlers.ChannelAuthorizeMethod{},
-		"channel_verify":     &handlers.ChannelVerifyMethod{},
-		"wallet_propose":     &handlers.WalletProposeMethod{},
-		"json":               &handlers.JsonMethod{},
-		"manifest":           &handlers.ManifestMethod{},
-		"amm_info":           &handlers.AMMInfoMethod{},
-		"vault_info":         &handlers.VaultInfoMethod{},
+		"deposit_authorized":  &handlers.DepositAuthorizedMethod{},
+		"gateway_balances":    &handlers.GatewayBalancesMethod{},
+		"noripple_check":      &handlers.NoRippleCheckMethod{},
+		"channel_authorize":   &handlers.ChannelAuthorizeMethod{},
+		"channel_verify":      &handlers.ChannelVerifyMethod{},
+		"wallet_propose":      &handlers.WalletProposeMethod{},
+		"json":                &handlers.JsonMethod{},
+		"manifest":            &handlers.ManifestMethod{},
+		"amm_info":            &handlers.AMMInfoMethod{},
+		"vault_info":          &handlers.VaultInfoMethod{},
 		"get_aggregate_price": &handlers.GetAggregatePriceMethod{},
-		"simulate":           &handlers.SimulateMethod{},
+		"simulate":            &handlers.SimulateMethod{},
 
 		// WebSocket subscription methods
 		"subscribe":   &handlers.SubscribeMethod{},
 		"unsubscribe": &handlers.UnsubscribeMethod{},
 
 		// Admin / network methods
-		"stop":                    &handlers.StopMethod{},
+		"stop":                   &handlers.StopMethod{},
 		"validation_create":      &handlers.ValidationCreateMethod{},
 		"consensus_info":         &handlers.ConsensusInfoMethod{},
 		"peers":                  &handlers.PeersMethod{},

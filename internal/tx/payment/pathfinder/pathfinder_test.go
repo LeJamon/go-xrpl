@@ -1340,8 +1340,8 @@ func TestFindPaths_XRPToIOU_ThroughOfferBook(t *testing.T) {
 
 	// mm has an offer: taker pays XRP, taker gets USD
 	addOffer(t, ledger, mm, 1,
-		state.NewXRPAmountFromInt(10000000),                     // taker pays 10 XRP
-		state.NewIssuedAmountFromFloat64(100, "USD", gwAddr),    // taker gets 100 USD
+		state.NewXRPAmountFromInt(10000000),                  // taker pays 10 XRP
+		state.NewIssuedAmountFromFloat64(100, "USD", gwAddr), // taker gets 100 USD
 	)
 
 	cache := NewRippleLineCache(ledger)
@@ -1906,7 +1906,7 @@ func TestPathTable_XRPToNonXRP_KnownSecondEntry(t *testing.T) {
 	second := entries[1]
 	require.Equal(t, 3, second.SearchLevel)
 	expected := PathType{ntSOURCE, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}
-	require.Equal(t, expected, PathType(second.Type))
+	require.Equal(t, expected, second.Type)
 }
 
 func TestPathTable_NonXRPToXRP_KnownSecondEntry(t *testing.T) {
@@ -1916,7 +1916,7 @@ func TestPathTable_NonXRPToXRP_KnownSecondEntry(t *testing.T) {
 	second := entries[1]
 	require.Equal(t, 2, second.SearchLevel)
 	expected := PathType{ntSOURCE, ntACCOUNTS, ntXRP_BOOK, ntDESTINATION}
-	require.Equal(t, expected, PathType(second.Type))
+	require.Equal(t, expected, second.Type)
 }
 
 // ===========================================================================

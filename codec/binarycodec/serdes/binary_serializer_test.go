@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes/testutil"
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes/interfaces"
+	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes/testutil"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 )

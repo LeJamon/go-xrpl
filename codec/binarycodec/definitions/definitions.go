@@ -45,7 +45,6 @@ type definitionsDoc struct {
 // canonical binary serialization format:
 // `Serialization <https://xrpl.org/serialization.html>`_
 func loadDefinitions() {
-
 	var jh codec.JsonHandle
 
 	jh.MapKeyAsString = true

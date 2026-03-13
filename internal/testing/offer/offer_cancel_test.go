@@ -9,9 +9,9 @@ package offer
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/stretchr/testify/require"
 )
 
@@ -111,7 +111,7 @@ func testCanceledOffer(t *testing.T, disabledFeatures []string) {
 
 	RequireOfferCount(t, env, alice, 2)
 	RequireIsOffer(t, env, alice, jtx.XRPTxAmountFromXRP(300), USD(100)) // offer2
-	RequireNoOffer(t, env, alice, jtx.XRPTxAmountFromXRP(5), USD(2))    // expired
+	RequireNoOffer(t, env, alice, jtx.XRPTxAmountFromXRP(5), USD(2))     // expired
 }
 
 // TestOffer_AcceptThenCancel tests basic offer creation followed by cancellation.

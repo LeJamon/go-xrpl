@@ -6,11 +6,11 @@ import (
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
+	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/LeJamon/goXRPLd/keylet"
-	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -438,7 +438,7 @@ func TestFlow_FalseDryChanges(t *testing.T) {
 	//   bob sells XRP(50), receives EUR(50)
 	// rippled: offer(bob, XRP(50), USD(50)) -> TakerPays=XRP(50), TakerGets=USD(50)
 	//   bob sells USD(50), receives XRP(50)
-	xrp50 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(50)))
+	xrp50 := tx.NewXRPAmount(xrplgoTesting.XRP(50))
 	result = env.CreateOffer(bob, xrp50, eur50) // TakerGets=XRP(50), TakerPays=EUR(50)
 	xrplgoTesting.RequireTxSuccess(t, result)
 	result = env.CreateOffer(bob, usd50, xrp50) // TakerGets=USD(50), TakerPays=XRP(50)
@@ -518,12 +518,12 @@ func TestFlow_LimitQuality(t *testing.T) {
 	// Bob creates two offers at different quality:
 	// Offer 1: wants XRP(50), gives USD(50) -> quality 1:1 (good)
 	usd50 := tx.NewIssuedAmountFromFloat64(50, "USD", gw.Address)
-	xrp50 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(50)))
+	xrp50 := tx.NewXRPAmount(xrplgoTesting.XRP(50))
 	result = env.CreateOffer(bob, usd50, xrp50) // TakerGets=USD(50), TakerPays=XRP(50)
 	xrplgoTesting.RequireTxSuccess(t, result)
 
 	// Offer 2: wants XRP(100), gives USD(50) -> quality 2:1 (bad)
-	xrp100 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(100)))
+	xrp100 := tx.NewXRPAmount(xrplgoTesting.XRP(100))
 	result = env.CreateOffer(bob, usd50, xrp100) // TakerGets=USD(50), TakerPays=XRP(100)
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
@@ -532,7 +532,7 @@ func TestFlow_LimitQuality(t *testing.T) {
 	// With tfLimitQuality: only the first offer (quality 1:1) should be consumed.
 	// The quality of the payment (sendmax/amount = XRP(100)/USD(100) = 1:1) means
 	// only offers with quality <= 1:1 are eligible. Offer 2 (2:1) is too expensive.
-	xrpMax := tx.NewXRPAmount(int64(xrplgoTesting.XRP(100)))
+	xrpMax := tx.NewXRPAmount(xrplgoTesting.XRP(100))
 	paths := [][]payment.PathStep{{
 		issuePath("USD", gw),
 	}}
@@ -687,7 +687,7 @@ func TestFlow_SelfFundedXRPEndpoint(t *testing.T) {
 			xrplgoTesting.RequireTxSuccess(t, result)
 
 			// alice creates offer: wants 50000 XRP (50000e6 drops), gives 10 USD
-			xrp50k := tx.NewXRPAmount(int64(xrplgoTesting.XRP(50000)))
+			xrp50k := tx.NewXRPAmount(xrplgoTesting.XRP(50000))
 			usd10offer := tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)
 			result = env.CreateOffer(alice, usd10offer, xrp50k)
 			xrplgoTesting.RequireTxSuccess(t, result)
@@ -701,7 +701,7 @@ func TestFlow_SelfFundedXRPEndpoint(t *testing.T) {
 				toSend = tx.NewIssuedAmountFromFloat64(9, "USD", gw.Address)
 			}
 
-			sendMaxXRP := tx.NewXRPAmount(int64(xrplgoTesting.XRP(20000)))
+			sendMaxXRP := tx.NewXRPAmount(xrplgoTesting.XRP(20000))
 			paths := [][]payment.PathStep{{
 				issuePath("USD", gw),
 			}}
@@ -858,21 +858,21 @@ func TestFlow_ReexecuteDirectStep(t *testing.T) {
 	// rippled: offer(gw, USD(5.0), XRP(1000))
 	// = TakerPays=USD(5.0), TakerGets=XRP(1000): gw sells XRP(1000), buys USD(5.0)
 	gwOffer1USD := tx.NewIssuedAmount(5000000000000000, -15, "USD", gw.Address)
-	xrp1000 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(1000)))
+	xrp1000 := tx.NewXRPAmount(xrplgoTesting.XRP(1000))
 	result = env.CreateOffer(gw, xrp1000, gwOffer1USD) // TakerGets=XRP(1000), TakerPays=USD(5.0)
 	xrplgoTesting.RequireTxSuccess(t, result)
 
 	// rippled: offer(gw, USD(0.5555...), XRP(10))
 	// = TakerPays=USD(0.5555...), TakerGets=XRP(10): gw sells XRP(10), buys USD(0.5555...)
 	gwOffer2USD := tx.NewIssuedAmount(5555555555555555, -16, "USD", gw.Address)
-	xrp10 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(10)))
+	xrp10 := tx.NewXRPAmount(xrplgoTesting.XRP(10))
 	result = env.CreateOffer(gw, xrp10, gwOffer2USD) // TakerGets=XRP(10), TakerPays=USD(0.5555...)
 	xrplgoTesting.RequireTxSuccess(t, result)
 
 	// rippled: offer(gw, USD(4.4444...), XRP(0.1))
 	// = TakerPays=USD(4.4444...), TakerGets=XRP(0.1): gw sells XRP(0.1), buys USD(4.4444...)
 	gwOffer3USD := tx.NewIssuedAmount(4444444444444444, -15, "USD", gw.Address)
-	xrpTenth := tx.NewXRPAmount(100000) // 0.1 XRP = 100000 drops
+	xrpTenth := tx.NewXRPAmount(100000)                 // 0.1 XRP = 100000 drops
 	result = env.CreateOffer(gw, xrpTenth, gwOffer3USD) // TakerGets=XRP(0.1), TakerPays=USD(4.4444...)
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
@@ -880,14 +880,14 @@ func TestFlow_ReexecuteDirectStep(t *testing.T) {
 	// rippled: offer(alice, USD(17), XRP(0.001))
 	// = TakerPays=USD(17), TakerGets=XRP(0.001): alice sells XRP(0.001), buys USD(17)
 	aliceOfferUSD := tx.NewIssuedAmount(1700000000000000, -14, "USD", gw.Address)
-	xrpThousandth := tx.NewXRPAmount(1000) // 0.001 XRP = 1000 drops
+	xrpThousandth := tx.NewXRPAmount(1000)                        // 0.001 XRP = 1000 drops
 	result = env.CreateOffer(alice, xrpThousandth, aliceOfferUSD) // TakerGets=XRP(0.001), TakerPays=USD(17)
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice pays bob XRP(10000) using USD, path through ~XRP
 	// partial payment, no direct ripple
-	xrp10000 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(10000)))
+	xrp10000 := tx.NewXRPAmount(xrplgoTesting.XRP(10000))
 	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 	paths := [][]payment.PathStep{{
 		currencyPath("XRP"),
@@ -912,11 +912,14 @@ func TestFlow_ReexecuteDirectStep(t *testing.T) {
 // bob has NoRipple set on his gw trust line.
 //
 // Test 1: alice pays herself XRP through path(gw, bob, ~XRP) using gw["USD"]
-//   Expected: tecPATH_DRY because the path crosses issuers (gw->bob) and the
-//   offer is on bob["USD"]/XRP book, not gw["USD"]/XRP book.
+//
+//	Expected: tecPATH_DRY because the path crosses issuers (gw->bob) and the
+//	offer is on bob["USD"]/XRP book, not gw["USD"]/XRP book.
+//
 // Test 2: carol pays herself gw["USD"] through path(~bob["USD"], gw) using XRP
-//   Expected: tecPATH_DRY because NoRipple on bob/gw blocks rippling needed
-//   for the cross-issuer path.
+//
+//	Expected: tecPATH_DRY because NoRipple on bob/gw blocks rippling needed
+//	for the cross-issuer path.
 func TestFlow_RIPD1443(t *testing.T) {
 	t.Run("CrossIssuerPathDry", func(t *testing.T) {
 		env := xrplgoTesting.NewTestEnv(t)
@@ -957,7 +960,7 @@ func TestFlow_RIPD1443(t *testing.T) {
 		// = TakerPays=bob_USD(1000), TakerGets=XRP(1)
 		// alice sells XRP(1), buys bob_USD(1000)
 		bobUsd1000 := tx.NewIssuedAmountFromFloat64(1000, "USD", bob.Address)
-		xrp1 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(1)))
+		xrp1 := tx.NewXRPAmount(xrplgoTesting.XRP(1))
 		result = env.CreateOffer(alice, xrp1, bobUsd1000) // TakerGets=XRP(1), TakerPays=bob_USD(1000)
 		xrplgoTesting.RequireTxSuccess(t, result)
 		env.Close()
@@ -1019,7 +1022,7 @@ func TestFlow_RIPD1443(t *testing.T) {
 
 		// rippled: offer(alice, XRP(1000), bob["USD"](1000))
 		// alice sells bob_USD(1000), buys XRP(1000)
-		xrp1000 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(1000)))
+		xrp1000 := tx.NewXRPAmount(xrplgoTesting.XRP(1000))
 		result = env.CreateOffer(alice, bobUsd1000, xrp1000) // TakerGets=bob_USD(1000), TakerPays=XRP(1000)
 		xrplgoTesting.RequireTxSuccess(t, result)
 		env.Close()
@@ -1027,7 +1030,7 @@ func TestFlow_RIPD1443(t *testing.T) {
 		// Test 2: carol pays herself gw["USD"](1000) through path(~bob["USD"], gw)
 		// Should fail with tecPATH_DRY because NoRipple on bob/gw blocks rippling
 		gwUsd1000 := tx.NewIssuedAmountFromFloat64(1000, "USD", gw.Address)
-		xrpMax := tx.NewXRPAmount(int64(xrplgoTesting.XRP(100000)))
+		xrpMax := tx.NewXRPAmount(xrplgoTesting.XRP(100000))
 		paths2 := [][]payment.PathStep{{
 			issuePath("USD", bob),
 			accountPath(gw),
@@ -1098,7 +1101,7 @@ func TestFlow_RIPD1449(t *testing.T) {
 	// rippled: offer(carol, XRP(1), bob["USD"](1000))
 	// = TakerPays=XRP(1), TakerGets=bob_USD(1000)
 	// carol sells bob_USD(1000), buys XRP(1)
-	xrp1 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(1)))
+	xrp1 := tx.NewXRPAmount(xrplgoTesting.XRP(1))
 	result = env.CreateOffer(carol, bobUsd1000, xrp1) // TakerGets=bob_USD(1000), TakerPays=XRP(1)
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()

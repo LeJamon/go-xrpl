@@ -119,11 +119,7 @@ func fetchBatch(t *testing.T, backend nodestore.Backend, batch []*nodestore.Node
 func setupTempBackend(t *testing.T) (nodestore.Backend, func()) {
 	t.Helper()
 
-	tempDir, err := os.MkdirTemp("", "nodestore_test_*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-
+	tempDir := t.TempDir()
 	config := &nodestore.Config{
 		Path:       filepath.Join(tempDir, "test.db"),
 		Compressor: "none",
@@ -131,13 +127,11 @@ func setupTempBackend(t *testing.T) (nodestore.Backend, func()) {
 
 	backend, err := nodestore.NewPebbleBackend(config)
 	if err != nil {
-		os.RemoveAll(tempDir)
 		t.Fatalf("failed to create backend: %v", err)
 	}
 
 	cleanup := func() {
 		backend.Close()
-		os.RemoveAll(tempDir)
 	}
 
 	return backend, cleanup
@@ -146,11 +140,7 @@ func setupTempBackend(t *testing.T) (nodestore.Backend, func()) {
 func setupBenchBackend(b *testing.B) (nodestore.Backend, func()) {
 	b.Helper()
 
-	tempDir, err := os.MkdirTemp("", "nodestore_bench_*")
-	if err != nil {
-		b.Fatalf("failed to create temp dir: %v", err)
-	}
-
+	tempDir := b.TempDir()
 	config := &nodestore.Config{
 		Path:       filepath.Join(tempDir, "bench.db"),
 		Compressor: "none",
@@ -158,19 +148,16 @@ func setupBenchBackend(b *testing.B) (nodestore.Backend, func()) {
 
 	backend, err := nodestore.NewPebbleBackend(config)
 	if err != nil {
-		os.RemoveAll(tempDir)
 		b.Fatalf("failed to create backend: %v", err)
 	}
 
 	if err := backend.Open(true); err != nil {
 		backend.Close()
-		os.RemoveAll(tempDir)
 		b.Fatalf("failed to open backend: %v", err)
 	}
 
 	cleanup := func() {
 		backend.Close()
-		os.RemoveAll(tempDir)
 	}
 
 	return backend, cleanup
@@ -344,11 +331,7 @@ func TestBackend(t *testing.T) {
 }
 
 func TestBackendPersistence(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "nodestore_persist_test_*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	tempDir := t.TempDir()
 
 	config := &nodestore.Config{
 		Path:       filepath.Join(tempDir, "test.db"),
@@ -625,11 +608,7 @@ func TestBackendErrors(t *testing.T) {
 
 // Cleanup test
 func TestCleanup(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "nodestore_cleanup_test_*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir) // Ensure cleanup
+	tempDir := t.TempDir()
 
 	dbPath := filepath.Join(tempDir, "test.db")
 	config := &nodestore.Config{

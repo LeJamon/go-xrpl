@@ -8,15 +8,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/depositpreauth"
-	paymentPkg "github.com/LeJamon/goXRPLd/internal/tx/payment"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/credential"
 	dp "github.com/LeJamon/goXRPLd/internal/testing/depositpreauth"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/depositpreauth"
+	paymentPkg "github.com/LeJamon/goXRPLd/internal/tx/payment"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -309,8 +309,8 @@ func TestDepositPreauth_Invalid(t *testing.T) {
 
 func TestDepositPreauth_Payment(t *testing.T) {
 	type featureSet struct {
-		name               string
-		supportsPreauth    bool
+		name                string
+		supportsPreauth     bool
 		supportsCredentials bool
 	}
 
@@ -365,7 +365,7 @@ func testPayment(t *testing.T, supportsPreauth, supportsCredentials bool) {
 		// In rippled: offer(alice, XRP(100), USD(100), tfPassive)
 		// Note: rippled's offer(account, takerPays, takerGets) vs Go's CreatePassiveOffer(account, takerGets, takerPays)
 		usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
-		xrp100 := tx.NewXRPAmount(int64(jtx.XRP(100)))
+		xrp100 := tx.NewXRPAmount(jtx.XRP(100))
 		env.CreatePassiveOffer(alice, usd100, xrp100)
 		env.Close()
 
@@ -373,7 +373,7 @@ func testPayment(t *testing.T, supportsPreauth, supportsCredentials bool) {
 		// Reference: rippled uses path(~USD) which includes currency AND issuer.
 		// ~USD = BookSpec(gw, USD) → {typeCurrency|typeIssuer, currency=USD, issuer=gw}
 		usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)
-		xrp10 := tx.NewXRPAmount(int64(jtx.XRP(10)))
+		xrp10 := tx.NewXRPAmount(jtx.XRP(10))
 		usdPath := [][]paymentPkg.PathStep{{{Currency: "USD", Issuer: gw.Address}}}
 		result = env.Submit(
 			payment.PayIssued(becky, becky, usd10).

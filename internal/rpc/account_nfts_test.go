@@ -41,11 +41,15 @@ func newMockAccountNFTsLedgerService() *mockAccountNFTsLedgerService {
 	}
 }
 
-func (m *mockAccountNFTsLedgerService) GetCurrentLedgerIndex() uint32   { return m.currentLedgerIndex }
-func (m *mockAccountNFTsLedgerService) GetClosedLedgerIndex() uint32    { return m.closedLedgerIndex }
-func (m *mockAccountNFTsLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
-func (m *mockAccountNFTsLedgerService) AcceptLedger() (uint32, error)   { return m.closedLedgerIndex + 1, nil }
-func (m *mockAccountNFTsLedgerService) IsStandalone() bool              { return m.standalone }
+func (m *mockAccountNFTsLedgerService) GetCurrentLedgerIndex() uint32 { return m.currentLedgerIndex }
+func (m *mockAccountNFTsLedgerService) GetClosedLedgerIndex() uint32  { return m.closedLedgerIndex }
+func (m *mockAccountNFTsLedgerService) GetValidatedLedgerIndex() uint32 {
+	return m.validatedLedgerIndex
+}
+func (m *mockAccountNFTsLedgerService) AcceptLedger() (uint32, error) {
+	return m.closedLedgerIndex + 1, nil
+}
+func (m *mockAccountNFTsLedgerService) IsStandalone() bool { return m.standalone }
 func (m *mockAccountNFTsLedgerService) GetServerInfo() types.LedgerServerInfo {
 	return m.serverInfo
 }

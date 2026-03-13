@@ -179,13 +179,13 @@ func DefaultConsensusParms() ConsensusParms {
 
 // Validations tracks validations received and manages validation state.
 type Validations struct {
-	mu                  sync.RWMutex
-	parms               ValidationParms
-	byLedger            map[consensus.LedgerID]map[PeerID]*Validation
-	byNode              map[PeerID]*Validation
-	lastValidatedSeq    map[PeerID]uint32
-	trustedValidations  map[consensus.LedgerID]int
-	staleCount          int
+	mu                 sync.RWMutex
+	parms              ValidationParms
+	byLedger           map[consensus.LedgerID]map[PeerID]*Validation
+	byNode             map[PeerID]*Validation
+	lastValidatedSeq   map[PeerID]uint32
+	trustedValidations map[consensus.LedgerID]int
+	staleCount         int
 }
 
 // NewValidations creates a new validation tracker.
@@ -326,9 +326,9 @@ type Peer struct {
 	collectors *Collectors
 
 	// Ledger state
-	lastClosedLedger    *Ledger
+	lastClosedLedger     *Ledger
 	fullyValidatedLedger *Ledger
-	ledgers             map[consensus.LedgerID]*Ledger
+	ledgers              map[consensus.LedgerID]*Ledger
 
 	// Transaction state
 	openTxs *TxSet
@@ -363,21 +363,18 @@ type Peer struct {
 	router *Router
 
 	// Consensus state (simplified - in full impl would use actual consensus engine)
-	phase              consensus.Phase
-	mode               consensus.Mode
-	currentRound       consensus.RoundID
-	ourPosition        *Proposal
-	proposalNum        uint32
-	roundStartTime     time.Time
-	phaseStartTime     time.Time
-	converged          bool
-	receivedProposals  map[PeerID]*Proposal
+	phase             consensus.Phase
+	mode              consensus.Mode
+	currentRound      consensus.RoundID
+	ourPosition       *Proposal
+	proposalNum       uint32
+	roundStartTime    time.Time
+	phaseStartTime    time.Time
+	converged         bool
+	receivedProposals map[PeerID]*Proposal
 
 	// Transaction injections for byzantine failure testing
 	txInjections map[uint32]Tx
-
-	// Timer cancellation
-	cancelTimer func()
 }
 
 // NewPeer creates a new simulated peer.
@@ -750,68 +747,6 @@ func (p *Peer) share(msg interface{}) {
 	}
 }
 
-// handle processes a received message and returns whether to relay it.
-func (p *Peer) handle(msg interface{}) bool {
-	switch m := msg.(type) {
-	case *Proposal:
-		return p.handleProposal(m)
-	case *TxSet:
-		return p.handleTxSet(m)
-	case Tx:
-		return p.handleTx(m)
-	case *Validation:
-		return p.handleValidation(m)
-	default:
-		return false
-	}
-}
-
-// handleProposal processes an incoming proposal.
-func (p *Peer) handleProposal(prop *Proposal) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	p.Issue(ReceiveProposalEvent{Proposal: prop})
-
-	// Only relay untrusted proposals if on same ledger
-	if !p.TrustsPeerID(prop.NodeID) {
-		return prop.PrevLedger == p.lastClosedLedger.ID()
-	}
-
-	// Check if we've already seen this proposal
-	dest := p.peerPositions[prop.PrevLedger]
-	for _, existing := range dest {
-		if existing.NodeID == prop.NodeID && existing.PropNum == prop.PropNum {
-			return false
-		}
-	}
-
-	p.peerPositions[prop.PrevLedger] = append(dest, prop)
-	p.receivedProposals[prop.NodeID] = prop
-
-	// Store the tx set if we don't have it
-	if _, ok := p.txSets[prop.Position.ID()]; !ok {
-		p.txSets[prop.Position.ID()] = prop.Position
-	}
-
-	return true
-}
-
-// handleTxSet processes an incoming transaction set.
-func (p *Peer) handleTxSet(txs *TxSet) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	id := txs.ID()
-	if _, ok := p.txSets[id]; ok {
-		return false // Already have it
-	}
-
-	p.txSets[id] = txs
-	delete(p.acquiringTxSets, id)
-	return true
-}
-
 // handleTx processes an incoming transaction.
 func (p *Peer) handleTx(tx Tx) bool {
 	p.mu.Lock()
@@ -829,59 +764,6 @@ func (p *Peer) handleTx(tx Tx) bool {
 
 	p.openTxs.Insert(tx)
 	return true
-}
-
-// handleValidation processes an incoming validation.
-func (p *Peer) handleValidation(val *Validation) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	p.Issue(ReceiveValidationEvent{Validation: val})
-
-	// Only process trusted validations
-	if !p.TrustsPeerID(val.NodeID) {
-		return false
-	}
-
-	return p.addTrustedValidation(val)
-}
-
-// addTrustedValidation adds a trusted validation and returns whether to relay.
-func (p *Peer) addTrustedValidation(val *Validation) bool {
-	val.Trusted = true
-	val.SeenTime = p.Now()
-	status := p.validations.Add(val.NodeID, val)
-
-	if status == ValStatusStale {
-		return false
-	}
-
-	// Try to acquire the ledger if we don't have it
-	if ledger, ok := p.ledgers[val.LedgerID]; ok {
-		p.checkFullyValidated(ledger)
-	}
-
-	return true
-}
-
-// checkFullyValidated checks if a ledger can be deemed fully validated.
-func (p *Peer) checkFullyValidated(ledger *Ledger) {
-	// Only consider ledgers newer than our last fully validated
-	if ledger.Seq() <= p.fullyValidatedLedger.Seq() {
-		return
-	}
-
-	count := p.validations.NumTrustedForLedger(ledger.ID())
-	numTrustedPeers := p.trustGraph.UNLSize(p.ID)
-	p.quorum = int(float64(numTrustedPeers) * 0.8)
-	if p.quorum < 1 {
-		p.quorum = 1
-	}
-
-	if count >= p.quorum && ledger.IsAncestor(p.fullyValidatedLedger, p.oracle) {
-		p.Issue(FullyValidateLedgerEvent{Ledger: ledger})
-		p.fullyValidatedLedger = ledger
-	}
 }
 
 // -----------------------------------------------------------------------------

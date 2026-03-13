@@ -15,7 +15,6 @@ import (
 // Reference: rippled NFTokenAcceptOffer.cpp doApply (brokered mode)
 func (n *NFTokenAcceptOffer) acceptNFTokenBrokeredMode(ctx *tx.ApplyContext, accountID [20]byte,
 	buyOffer, sellOffer *state.NFTokenOfferData, buyOfferKey, sellOfferKey keylet.Keylet) tx.Result {
-
 	if buyOffer.NFTokenID != sellOffer.NFTokenID {
 		return tx.TecNFTOKEN_BUY_SELL_MISMATCH
 	}
@@ -229,7 +228,6 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBrokeredMode(ctx *tx.ApplyContext, acc
 // acceptNFTokenSellOfferDirect handles direct sell offer acceptance
 func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, accountID [20]byte,
 	sellOffer *state.NFTokenOfferData, sellOfferKey keylet.Keylet) tx.Result {
-
 	if sellOffer.HasDestination && sellOffer.Destination != accountID {
 		return tx.TecNO_PERMISSION
 	}
@@ -343,7 +341,6 @@ func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, 
 // acceptNFTokenBuyOfferDirect handles direct buy offer acceptance
 func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, accountID [20]byte,
 	buyOffer *state.NFTokenOfferData, buyOfferKey keylet.Keylet) tx.Result {
-
 	// Verify account owns the token
 	if _, _, _, found := findToken(ctx.View, accountID, buyOffer.NFTokenID); !found {
 		return tx.TecNO_PERMISSION

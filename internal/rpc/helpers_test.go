@@ -279,7 +279,7 @@ func TestDeliveredAmountPriorityOrder(t *testing.T) {
 			"Amount":          "9999",
 		}
 		meta := map[string]interface{}{
-			"DeliveredAmount": "1111",
+			"DeliveredAmount":  "1111",
 			"delivered_amount": "2222",
 		}
 

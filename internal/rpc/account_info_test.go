@@ -40,11 +40,11 @@ func newMockLedgerService() *mockLedgerService {
 	}
 }
 
-func (m *mockLedgerService) GetCurrentLedgerIndex() uint32             { return m.currentLedgerIndex }
-func (m *mockLedgerService) GetClosedLedgerIndex() uint32              { return m.closedLedgerIndex }
-func (m *mockLedgerService) GetValidatedLedgerIndex() uint32           { return m.validatedLedgerIndex }
-func (m *mockLedgerService) AcceptLedger() (uint32, error)             { return m.closedLedgerIndex + 1, nil }
-func (m *mockLedgerService) IsStandalone() bool                        { return m.standalone }
+func (m *mockLedgerService) GetCurrentLedgerIndex() uint32         { return m.currentLedgerIndex }
+func (m *mockLedgerService) GetClosedLedgerIndex() uint32          { return m.closedLedgerIndex }
+func (m *mockLedgerService) GetValidatedLedgerIndex() uint32       { return m.validatedLedgerIndex }
+func (m *mockLedgerService) AcceptLedger() (uint32, error)         { return m.closedLedgerIndex + 1, nil }
+func (m *mockLedgerService) IsStandalone() bool                    { return m.standalone }
 func (m *mockLedgerService) GetServerInfo() types.LedgerServerInfo { return m.serverInfo }
 func (m *mockLedgerService) GetGenesisAccount() (string, error) {
 	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil

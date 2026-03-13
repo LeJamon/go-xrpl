@@ -12,9 +12,9 @@ package offer
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 // crossingLimitsFeatureSets matches the 4 feature combinations from
@@ -257,7 +257,6 @@ func testStepAndCrossingLimit(t *testing.T, disabledFeatures []string) {
 	jtx.RequireOwnerCount(t, env, evita, 150)
 }
 
-
 // TestCrossingLimits_AutoBridgedLimits tests auto-bridging limits with
 // strands that have many unfunded offers causing the strand to be marked dry.
 // Two sub-tests: one where the dry strand has best initial quality, one where it doesn't.
@@ -468,4 +467,3 @@ func testOfferOverflow(t *testing.T, disabledFeatures []string) {
 		jtx.RequireIOUBalance(t, env, bob, gw, "USD", 0)
 	}
 }
-

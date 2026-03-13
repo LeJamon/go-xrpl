@@ -121,9 +121,6 @@ type Service struct {
 	// Transaction index (hash -> ledger sequence) - in-memory cache
 	txIndex map[[32]byte]uint32
 
-	// Current fee settings
-	fees drops.Fees
-
 	// EventCallback is called when a ledger is accepted (optional)
 	eventCallback EventCallback
 

@@ -175,4 +175,3 @@ func (m *TransactionEntryMethod) resolveTargetLedger(ledgerHash string, ledgerIn
 	// Default to validated ledger
 	return types.Services.Ledger.GetValidatedLedgerIndex(), nil
 }
-

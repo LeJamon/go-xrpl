@@ -67,4 +67,3 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 
 	return response, nil
 }
-

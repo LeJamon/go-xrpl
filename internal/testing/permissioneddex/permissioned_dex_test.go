@@ -7,9 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	ammBuilder "github.com/LeJamon/goXRPLd/internal/testing/amm"
 	cred "github.com/LeJamon/goXRPLd/internal/testing/credential"
@@ -17,6 +14,9 @@ import (
 	paymentBuilder "github.com/LeJamon/goXRPLd/internal/testing/payment"
 	pd "github.com/LeJamon/goXRPLd/internal/testing/permissioneddomain"
 	trustsetBuilder "github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/payment"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // requireResult asserts the transaction result matches the expected code.
@@ -1071,7 +1071,6 @@ func TestPermissionedDEX_RemoveUnfundedOffer(t *testing.T) {
 // TestPermissionedDEX_AmmNotUsed tests that domain payments cannot consume AMM liquidity.
 // Reference: rippled PermissionedDEX_test::testAmmNotUsed
 func TestPermissionedDEX_AmmNotUsed(t *testing.T) {
-
 	env := jtx.NewTestEnv(t)
 	dex := SetupPermissionedDEX(t, env)
 

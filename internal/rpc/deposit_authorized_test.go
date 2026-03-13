@@ -41,11 +41,19 @@ func newMockDepositAuthorizedLedgerService() *mockDepositAuthorizedLedgerService
 	}
 }
 
-func (m *mockDepositAuthorizedLedgerService) GetCurrentLedgerIndex() uint32   { return m.currentLedgerIndex }
-func (m *mockDepositAuthorizedLedgerService) GetClosedLedgerIndex() uint32    { return m.closedLedgerIndex }
-func (m *mockDepositAuthorizedLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
-func (m *mockDepositAuthorizedLedgerService) AcceptLedger() (uint32, error)   { return m.closedLedgerIndex + 1, nil }
-func (m *mockDepositAuthorizedLedgerService) IsStandalone() bool              { return m.standalone }
+func (m *mockDepositAuthorizedLedgerService) GetCurrentLedgerIndex() uint32 {
+	return m.currentLedgerIndex
+}
+func (m *mockDepositAuthorizedLedgerService) GetClosedLedgerIndex() uint32 {
+	return m.closedLedgerIndex
+}
+func (m *mockDepositAuthorizedLedgerService) GetValidatedLedgerIndex() uint32 {
+	return m.validatedLedgerIndex
+}
+func (m *mockDepositAuthorizedLedgerService) AcceptLedger() (uint32, error) {
+	return m.closedLedgerIndex + 1, nil
+}
+func (m *mockDepositAuthorizedLedgerService) IsStandalone() bool { return m.standalone }
 func (m *mockDepositAuthorizedLedgerService) GetServerInfo() types.LedgerServerInfo {
 	return m.serverInfo
 }

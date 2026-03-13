@@ -367,7 +367,7 @@ func (e *TestEnv) EscalatedFee() uint64 {
 		return e.baseFee
 	}
 	// fee = toDrops(feeLevel - 1, baseFee) + 1
-	return txq.FeeLevel(uint64(feeLevel) - 1).ToDrops(e.baseFee) + 1
+	return txq.FeeLevel(uint64(feeLevel)-1).ToDrops(e.baseFee) + 1
 }
 
 // OpenLedgerFee returns the fee (in drops) needed to bypass the queue for a

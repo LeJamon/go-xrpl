@@ -5,10 +5,10 @@ import (
 	"encoding/hex"
 	"sort"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	tx "github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/credential"
 	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // validateCredentials performs preclaim-level validation of CredentialIDs.

@@ -114,13 +114,13 @@ func (e *ValidationReceivedEvent) Type() EventType { return EventValidationRecei
 
 // ConsensusReachedEvent is emitted when consensus is achieved.
 type ConsensusReachedEvent struct {
-	Round       RoundID
-	TxSet       TxSetID
-	CloseTime   time.Time
-	Proposers   int
-	Result      Result
-	Duration    time.Duration
-	Timestamp   time.Time
+	Round     RoundID
+	TxSet     TxSetID
+	CloseTime time.Time
+	Proposers int
+	Result    Result
+	Duration  time.Duration
+	Timestamp time.Time
 }
 
 func (e *ConsensusReachedEvent) Type() EventType { return EventConsensusReached }

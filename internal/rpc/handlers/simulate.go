@@ -214,4 +214,3 @@ func (m *SimulateMethod) SupportedApiVersions() []int {
 func (m *SimulateMethod) RequiredCondition() types.Condition {
 	return types.NeedsCurrentLedger
 }
-

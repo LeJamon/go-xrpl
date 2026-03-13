@@ -315,7 +315,7 @@ func TestVaultSetValidation(t *testing.T) {
 			tx: func() *VaultSet {
 				v := NewVaultSet("rOwner", makeValidVaultID())
 				v.Data = "test"
-				flags := uint32(tx.TfUniversalMask)
+				flags := tx.TfUniversalMask
 				v.Common.Flags = &flags
 				return v
 			}(),
@@ -385,7 +385,7 @@ func TestVaultDeleteValidation(t *testing.T) {
 			name: "invalid - universal flags set",
 			tx: func() *VaultDelete {
 				v := NewVaultDelete("rOwner", makeValidVaultID())
-				flags := uint32(tx.TfUniversalMask)
+				flags := tx.TfUniversalMask
 				v.Common.Flags = &flags
 				return v
 			}(),
@@ -472,7 +472,7 @@ func TestVaultDepositValidation(t *testing.T) {
 			name: "invalid - universal flags set",
 			tx: func() *VaultDeposit {
 				v := NewVaultDeposit("rOwner", makeValidVaultID(), tx.NewXRPAmount(1000000))
-				flags := uint32(tx.TfUniversalMask)
+				flags := tx.TfUniversalMask
 				v.Common.Flags = &flags
 				return v
 			}(),
@@ -591,7 +591,7 @@ func TestVaultWithdrawValidation(t *testing.T) {
 			name: "invalid - universal flags set",
 			tx: func() *VaultWithdraw {
 				v := NewVaultWithdraw("rOwner", makeValidVaultID(), tx.NewXRPAmount(1000000))
-				flags := uint32(tx.TfUniversalMask)
+				flags := tx.TfUniversalMask
 				v.Common.Flags = &flags
 				return v
 			}(),
@@ -720,7 +720,7 @@ func TestVaultClawbackValidation(t *testing.T) {
 			name: "invalid - universal flags set",
 			tx: func() *VaultClawback {
 				v := NewVaultClawback("rIssuer", makeValidVaultID(), "rHolder")
-				flags := uint32(tx.TfUniversalMask)
+				flags := tx.TfUniversalMask
 				v.Common.Flags = &flags
 				return v
 			}(),

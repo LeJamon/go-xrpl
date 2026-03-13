@@ -15,9 +15,6 @@ import (
 const (
 	// nodeHeaderSize is type(1) + ledgerSeq(4) = 5 bytes
 	nodeHeaderSize = 5
-
-	// Performance constants
-	defaultBatchSize = 1000
 )
 
 // PebbleBackend implements a high-performance PebbleDB storage backend.
@@ -133,11 +130,11 @@ func (p *PebbleBackend) buildOptimizedOptions() *pebble.Options {
 	// Configure bloom filters and file sizes for each level
 	for i := range opts.Levels {
 		opts.Levels[i] = pebble.LevelOptions{
-			BlockSize:      32 << 10,                // 32KB blocks (good for large values)
-			IndexBlockSize: 256 << 10,               // 256KB index blocks
-			FilterPolicy:   bloom.FilterPolicy(10),  // 10 bits per key bloom filter
-			FilterType:     pebble.TableFilter,      // Table-level filters
-			TargetFileSize: int64(8<<20) << uint(i), // Exponential file size growth
+			BlockSize:      32 << 10,                 // 32KB blocks (good for large values)
+			IndexBlockSize: 256 << 10,                // 256KB index blocks
+			FilterPolicy:   bloom.FilterPolicy(10),   // 10 bits per key bloom filter
+			FilterType:     pebble.TableFilter,       // Table-level filters
+			TargetFileSize: int64(8<<20) << uint(i),  // Exponential file size growth
 			Compression:    pebble.SnappyCompression, // Use Snappy (built-in Pebble compression)
 		}
 

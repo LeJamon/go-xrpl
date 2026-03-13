@@ -5,13 +5,13 @@ package metadata_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/metadata"
 	"github.com/LeJamon/goXRPLd/internal/testing/ticket"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/stretchr/testify/require"
 )
 

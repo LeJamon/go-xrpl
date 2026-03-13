@@ -10,12 +10,12 @@ package amm_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/amm"
 	offerbuild "github.com/LeJamon/goXRPLd/internal/testing/offer"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 // setupLPTokenEnv creates an AMM with two liquidity providers holding LP tokens.
@@ -528,7 +528,7 @@ func TestAMMTokens_LPTokenXRPOfferCrossing(t *testing.T) {
 			// priceXRP = 7,500,000,000 drops = 7,500 XRP
 			// Our setup charges 1 extra fee (trust line) vs rippled
 			// Fees: trust(1) + offer(2) + vote(3) + vote(4) + bid(5) = 5 * baseFee
-			expectedCarolXRP := uint64(22_500_000_000 - 5*baseFee)
+			expectedCarolXRP := 22_500_000_000 - 5*baseFee
 			actualCarolXRP := env.TestEnv.Balance(env.Carol)
 			if actualCarolXRP != expectedCarolXRP {
 				t.Errorf("Carol XRP balance: got %d, want %d (diff=%d)", actualCarolXRP, expectedCarolXRP, int64(actualCarolXRP)-int64(expectedCarolXRP))

@@ -5,29 +5,29 @@ import "fmt"
 // NodeDBConfig represents the [node_db] and [import_db] sections
 // Configures the primary persistent datastore for ledger data
 type NodeDBConfig struct {
-	Type                   string `toml:"type" mapstructure:"type"`
-	Path                   string `toml:"path" mapstructure:"path"`
-	CacheSize              int    `toml:"cache_size" mapstructure:"cache_size"`
-	CacheAge               int    `toml:"cache_age" mapstructure:"cache_age"`
-	FastLoad               bool   `toml:"fast_load" mapstructure:"fast_load"`
-	EarliestSeq            int    `toml:"earliest_seq" mapstructure:"earliest_seq"`
-	OnlineDelete           int    `toml:"online_delete" mapstructure:"online_delete"`
-	AdvisoryDelete         int    `toml:"advisory_delete" mapstructure:"advisory_delete"`
-	DeleteBatch            int    `toml:"delete_batch" mapstructure:"delete_batch"`
-	BackOffMilliseconds    int    `toml:"back_off_milliseconds" mapstructure:"back_off_milliseconds"`
-	AgeThresholdSeconds    int    `toml:"age_threshold_seconds" mapstructure:"age_threshold_seconds"`
-	RecoveryWaitSeconds    int    `toml:"recovery_wait_seconds" mapstructure:"recovery_wait_seconds"`
+	Type                string `toml:"type" mapstructure:"type"`
+	Path                string `toml:"path" mapstructure:"path"`
+	CacheSize           int    `toml:"cache_size" mapstructure:"cache_size"`
+	CacheAge            int    `toml:"cache_age" mapstructure:"cache_age"`
+	FastLoad            bool   `toml:"fast_load" mapstructure:"fast_load"`
+	EarliestSeq         int    `toml:"earliest_seq" mapstructure:"earliest_seq"`
+	OnlineDelete        int    `toml:"online_delete" mapstructure:"online_delete"`
+	AdvisoryDelete      int    `toml:"advisory_delete" mapstructure:"advisory_delete"`
+	DeleteBatch         int    `toml:"delete_batch" mapstructure:"delete_batch"`
+	BackOffMilliseconds int    `toml:"back_off_milliseconds" mapstructure:"back_off_milliseconds"`
+	AgeThresholdSeconds int    `toml:"age_threshold_seconds" mapstructure:"age_threshold_seconds"`
+	RecoveryWaitSeconds int    `toml:"recovery_wait_seconds" mapstructure:"recovery_wait_seconds"`
 }
 
 // SQLiteConfig represents the [sqlite] section
 // Tuning settings for the SQLite databases
 type SQLiteConfig struct {
-	SafetyLevel        string `toml:"safety_level" mapstructure:"safety_level"`
-	JournalMode        string `toml:"journal_mode" mapstructure:"journal_mode"`
-	Synchronous        string `toml:"synchronous" mapstructure:"synchronous"`
-	TempStore          string `toml:"temp_store" mapstructure:"temp_store"`
-	PageSize           int    `toml:"page_size" mapstructure:"page_size"`
-	JournalSizeLimit   int    `toml:"journal_size_limit" mapstructure:"journal_size_limit"`
+	SafetyLevel      string `toml:"safety_level" mapstructure:"safety_level"`
+	JournalMode      string `toml:"journal_mode" mapstructure:"journal_mode"`
+	Synchronous      string `toml:"synchronous" mapstructure:"synchronous"`
+	TempStore        string `toml:"temp_store" mapstructure:"temp_store"`
+	PageSize         int    `toml:"page_size" mapstructure:"page_size"`
+	JournalSizeLimit int    `toml:"journal_size_limit" mapstructure:"journal_size_limit"`
 }
 
 // Validate performs validation on the NodeDB configuration
@@ -36,7 +36,7 @@ func (n *NodeDBConfig) Validate() error {
 	if n.Type == "" && n.Path == "" {
 		return nil
 	}
-	
+
 	// Validate type
 	if n.Type == "" {
 		return fmt.Errorf("node_db type is required")

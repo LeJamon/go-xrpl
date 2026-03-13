@@ -4,10 +4,10 @@ import (
 	"encoding/hex"
 
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/payment"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -503,14 +503,14 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	// Reference: CashCheck.cpp L442-455
 	_, actualOut, _, sandbox, flowResult := payment.RippleCalculate(
 		ctx.View,
-		srcID,      // source (check creator)
-		accountID,  // destination (check casher)
-		flowAmount, // amount to deliver
-		&sendMax,   // SendMax as input limit
-		nil,        // no explicit paths
-		true,       // use default path
+		srcID,        // source (check creator)
+		accountID,    // destination (check casher)
+		flowAmount,   // amount to deliver
+		&sendMax,     // SendMax as input limit
+		nil,          // no explicit paths
+		true,         // use default path
 		isDeliverMin, // partial payment for DeliverMin
-		false,      // no limit quality
+		false,        // no limit quality
 		ctx.TxHash,
 		ctx.Config.LedgerSequence,
 	)

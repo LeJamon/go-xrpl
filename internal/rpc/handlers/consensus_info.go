@@ -21,4 +21,3 @@ func (m *ConsensusInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		"info": map[string]interface{}{},
 	}, nil
 }
-

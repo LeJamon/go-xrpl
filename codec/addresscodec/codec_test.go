@@ -68,7 +68,6 @@ func TestDecode(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-
 			res, _ := Decode(tc.input, tc.inputPrefix)
 			require.Equal(t, tc.expectedOutput, res)
 		})
@@ -116,7 +115,6 @@ func TestEncodeClassicAddressFromPublicKeyHex(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-
 			got, err := EncodeClassicAddressFromPublicKeyHex(tc.input)
 
 			if tc.expectedErr != nil {
@@ -256,7 +254,6 @@ func TestDecodeSeed(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-
 			got, algorithm, err := DecodeSeed(tc.input)
 
 			if tc.expectedErr != nil {
@@ -311,7 +308,6 @@ func TestDecodeAddressToAccountID(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-
 			typePrefix, accountID, err := DecodeClassicAddressToAccountID(tc.input)
 
 			if tc.expectedErr != nil {
@@ -536,7 +532,6 @@ func TestDecodeAccountPublicKey(t *testing.T) {
 }
 
 func TestIsValidAddress(t *testing.T) {
-
 	testcases := []struct {
 		name     string
 		input    string

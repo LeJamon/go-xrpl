@@ -1113,60 +1113,6 @@ func (sm *SHAMap) createSplitStructure(newKey, existingKey [32]byte, newItem *It
 	return sm.dirtyUp(stack, newKey, currentNode)
 }
 
-// consolidateUp removes empty inner nodes
-func (sm *SHAMap) consolidateUp(startNode *InnerNode, stack *NodeStack, key [32]byte) (Node, error) {
-	currentNode := Node(startNode)
-
-	// Only consolidate completely empty nodes
-	for {
-		if !currentNode.IsInner() {
-			break
-		}
-
-		inner, ok := currentNode.(*InnerNode)
-		if !ok {
-			break
-		}
-
-		if !inner.HasChildren() {
-			// Empty node - remove it
-			if stack.IsEmpty() {
-				// This was the root
-				return NewInnerNode(), nil
-			}
-
-			// Remove from parent
-			parent, parentID, ok := stack.Pop()
-			if !ok {
-				break
-			}
-
-			parentInner, ok := parent.(*InnerNode)
-			if !ok {
-				return nil, ErrInvalidType
-			}
-
-			branch := SelectBranch(parentID, key)
-			if err := parentInner.SetChild(int(branch), nil); err != nil {
-				return nil, fmt.Errorf("failed to remove empty branch: %w", err)
-			}
-
-			currentNode = parentInner
-			continue
-		} else {
-			// Has children - stop consolidation
-			break
-		}
-	}
-
-	// Propagate remaining changes up if there's more stack
-	if !stack.IsEmpty() {
-		return sm.dirtyUp(stack, key, currentNode)
-	}
-
-	return currentNode, nil
-}
-
 // IsBacked returns true if this SHAMap is backed by a NodeStore.
 func (sm *SHAMap) IsBacked() bool {
 	return sm.backed

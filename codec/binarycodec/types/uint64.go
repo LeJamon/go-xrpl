@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
-	"regexp"
 	"strings"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
@@ -51,10 +50,4 @@ func (u *UInt64) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
 	// Convert to uppercase hex with zero padding to 16 characters
 	hexStr := strings.ToUpper(hex.EncodeToString(b))
 	return hexStr, nil
-}
-
-// isNumeric checks if a string only contains numerical values.
-func isNumeric(s string) bool {
-	match, _ := regexp.MatchString("^[0-9]+$", s)
-	return match
 }

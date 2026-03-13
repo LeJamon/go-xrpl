@@ -5,10 +5,10 @@ import (
 	"sort"
 
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/credential"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -90,12 +90,12 @@ func (e *EscrowFinish) Flatten() (map[string]any, error) {
 
 // Apply applies an EscrowFinish transaction
 // Reference: rippled Escrow.cpp EscrowFinish::preclaim() + doApply()
-func (ef *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
+func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	rules := ctx.Rules()
 
 	// Amendment-gated check: CredentialIDs requires Credentials amendment
 	// Reference: rippled Escrow.cpp preflight() credential check
-	if len(ef.CredentialIDs) > 0 && !rules.Enabled(amendment.FeatureCredentials) {
+	if len(e.CredentialIDs) > 0 && !rules.Enabled(amendment.FeatureCredentials) {
 		return tx.TemDISABLED
 	}
 
@@ -103,20 +103,20 @@ func (ef *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled EscrowFinish::preclaim() calls credentials::valid()
 	// This must run before doApply's time checks because rippled's preclaim
 	// runs before doApply.
-	if len(ef.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-		if result := validateCredentials(ctx, ef.CredentialIDs); result != tx.TesSUCCESS {
+	if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
+		if result := validateCredentials(ctx, e.CredentialIDs); result != tx.TesSUCCESS {
 			return result
 		}
 	}
 
 	// Get the escrow owner's account ID
-	ownerID, err := state.DecodeAccountID(ef.Owner)
+	ownerID, err := state.DecodeAccountID(e.Owner)
 	if err != nil {
 		return tx.TemINVALID
 	}
 
 	// Find the escrow
-	escrowKey := keylet.Escrow(ownerID, ef.OfferSequence)
+	escrowKey := keylet.Escrow(ownerID, e.OfferSequence)
 	escrowData, err := ctx.View.Read(escrowKey)
 	if err != nil || escrowData == nil {
 		return tx.TecNO_TARGET
@@ -154,12 +154,12 @@ func (ef *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Crypto-condition verification
 	// Reference: rippled Escrow.cpp doApply() lines 1057-1101
 	txCondition := ""
-	if ef.Condition != nil {
-		txCondition = *ef.Condition
+	if e.Condition != nil {
+		txCondition = *e.Condition
 	}
 	txFulfillment := ""
-	if ef.Fulfillment != nil {
-		txFulfillment = *ef.Fulfillment
+	if e.Fulfillment != nil {
+		txFulfillment = *e.Fulfillment
 	}
 
 	if escrowEntry.Condition == "" {
@@ -212,8 +212,8 @@ func (ef *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 				preauthKey := keylet.DepositPreauth(escrowEntry.DestinationID, ctx.AccountID)
 				if exists, _ := ctx.View.Exists(preauthKey); !exists {
 					// No account-based preauth — check credential-based
-					if len(ef.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-						if result := authorizedDepositPreauth(ctx, ef.CredentialIDs, escrowEntry.DestinationID); result != tx.TesSUCCESS {
+					if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
+						if result := authorizedDepositPreauth(ctx, e.CredentialIDs, escrowEntry.DestinationID); result != tx.TesSUCCESS {
 							return result
 						}
 					} else {
@@ -309,7 +309,7 @@ func validateCredentials(ctx *tx.ApplyContext, credentialIDs []string) tx.Result
 // Reference: rippled CredentialHelpers.cpp credentials::authorizedDepositPreauth()
 func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst [20]byte) tx.Result {
 	type credPair struct {
-		issuer [20]byte
+		issuer   [20]byte
 		credType []byte
 	}
 

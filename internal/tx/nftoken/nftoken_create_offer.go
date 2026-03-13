@@ -2,10 +2,11 @@ package nftoken
 
 import (
 	"encoding/hex"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -143,11 +144,11 @@ func (n *NFTokenCreateOffer) RequiredAmendments() [][32]byte {
 
 // Apply applies the NFTokenCreateOffer transaction to the ledger.
 // Reference: rippled NFTokenCreateOffer.cpp doApply
-func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
+func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	accountID := ctx.AccountID
 
 	// Parse token ID
-	tokenIDBytes, err := hex.DecodeString(c.NFTokenID)
+	tokenIDBytes, err := hex.DecodeString(n.NFTokenID)
 	if err != nil || len(tokenIDBytes) != 32 {
 		return tx.TemINVALID
 	}
@@ -156,11 +157,11 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	copy(tokenID[:], tokenIDBytes)
 
 	// Check expiration
-	if c.Expiration != nil && *c.Expiration <= ctx.Config.ParentCloseTime {
+	if n.Expiration != nil && *n.Expiration <= ctx.Config.ParentCloseTime {
 		return tx.TecEXPIRED
 	}
 
-	isSellOffer := c.GetFlags()&NFTokenCreateOfferFlagSellNFToken != 0
+	isSellOffer := n.GetFlags()&NFTokenCreateOfferFlagSellNFToken != 0
 
 	// Verify token ownership using findToken (proper page traversal)
 	if isSellOffer {
@@ -169,7 +170,7 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	} else {
 		var ownerID [20]byte
-		ownerID, err = state.DecodeAccountID(c.Owner)
+		ownerID, err = state.DecodeAccountID(n.Owner)
 		if err != nil {
 			return tx.TemINVALID
 		}
@@ -194,15 +195,15 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err != nil {
 			return tx.TefNFTOKEN_IS_NOT_TRANSFERABLE
 		}
-		if issuerAccount.NFTokenMinter != c.Account {
+		if issuerAccount.NFTokenMinter != n.Account {
 			return tx.TefNFTOKEN_IS_NOT_TRANSFERABLE
 		}
 	}
 
 	// Check destination exists and doesn't disallow incoming NFT offers
 	// Reference: rippled tokenOfferCreatePreclaim
-	if c.Destination != "" {
-		destAccount, _, result := ctx.LookupAccount(c.Destination)
+	if n.Destination != "" {
+		destAccount, _, result := ctx.LookupAccount(n.Destination)
 		if result != tx.TesSUCCESS {
 			return result
 		}
@@ -213,8 +214,8 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// IOU preclaim checks
 	// Reference: rippled tokenOfferCreatePreclaim — IOU-specific validation
-	if !c.Amount.IsNative() {
-		iouIssuerID, err := state.DecodeAccountID(c.Amount.Issuer)
+	if !n.Amount.IsNative() {
+		iouIssuerID, err := state.DecodeAccountID(n.Amount.Issuer)
 		if err != nil {
 			return tx.TemINVALID
 		}
@@ -226,12 +227,12 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		// without it uses accountHolds (issuer has no special treatment)
 		if !isSellOffer {
 			if ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
-				funds := tx.AccountFunds(ctx.View, accountID, c.Amount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+				funds := tx.AccountFunds(ctx.View, accountID, n.Amount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 				if funds.Signum() <= 0 {
 					return tx.TecUNFUNDED_OFFER
 				}
 			} else {
-				funds := accountHoldsIOU(ctx.View, accountID, c.Amount)
+				funds := accountHoldsIOU(ctx.View, accountID, n.Amount)
 				if funds.Signum() <= 0 {
 					return tx.TecUNFUNDED_OFFER
 				}
@@ -240,7 +241,7 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// Trust line authorization checks (with fixEnforceNFTokenTrustlineV2)
 		if ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
-			if r := checkNFTTrustlineAuthorized(ctx.View, accountID, c.Amount.Currency, iouIssuerID); r != tx.TesSUCCESS {
+			if r := checkNFTTrustlineAuthorized(ctx.View, accountID, n.Amount.Currency, iouIssuerID); r != tx.TesSUCCESS {
 				return r
 			}
 		}
@@ -254,7 +255,7 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		if getNFTTransferFee(tokenID) != 0 && nftFlags&nftFlagTrustLine == 0 {
 			skipCheck := nftIssuerID == iouIssuerID && ctx.Rules().Enabled(amendment.FeatureNFTokenMintOffer)
 			if !skipCheck {
-				trustLineKey := keylet.Line(nftIssuerID, iouIssuerID, c.Amount.Currency)
+				trustLineKey := keylet.Line(nftIssuerID, iouIssuerID, n.Amount.Currency)
 				trustLineExists, _ := ctx.View.Exists(trustLineKey)
 				if !trustLineExists {
 					return tx.TecNO_LINE
@@ -269,7 +270,7 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled NFTokenUtils.cpp tokenOfferCreateApply — no balance deduction
 
 	// Create the offer
-	sequence := c.GetCommon().SeqProxy()
+	sequence := n.GetCommon().SeqProxy()
 	offerKey := keylet.NFTokenOffer(accountID, sequence)
 
 	// Insert into owner's directory
@@ -294,7 +295,7 @@ func (c *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	offerNode := tokenDirResult.Page
 
 	// Serialize the offer with directory page numbers
-	offerData, err := serializeNFTokenOffer(c, accountID, tokenID, sequence, ownerNode, offerNode)
+	offerData, err := serializeNFTokenOffer(n, accountID, tokenID, sequence, ownerNode, offerNode)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

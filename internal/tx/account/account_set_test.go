@@ -1,8 +1,9 @@
 package account
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"testing"
+
+	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 // Helper function to create a uint32 pointer

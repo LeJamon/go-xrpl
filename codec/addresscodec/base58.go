@@ -22,7 +22,6 @@ var bigRadix10 = big.NewInt(58 * 58 * 58 * 58 * 58 * 58 * 58 * 58 * 58 * 58)
 
 // EncodeBase58 encodes a byte slice to a base58 string using the XRP alphabet.
 func EncodeBase58(b []byte) string {
-
 	x := new(big.Int)
 	x.SetBytes(b)
 
@@ -73,7 +72,6 @@ func EncodeBase58(b []byte) string {
 	}
 
 	return string(answer)
-
 }
 
 // DecodeBase58 decodes a modified base58 string to a byte slice.

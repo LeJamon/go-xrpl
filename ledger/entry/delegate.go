@@ -23,11 +23,11 @@ type Delegate struct {
 	BaseEntry
 
 	// Required fields
-	Account              [20]byte              // Account that granted the delegation
-	Authorize            [20]byte              // Account that received the delegation
-	Permissions          []Permission          // List of delegated permissions (legacy)
-	DelegatePermissions  []DelegatePermission  // List of delegated permissions (numeric)
-	OwnerNode            uint64                // Directory node hint
+	Account             [20]byte             // Account that granted the delegation
+	Authorize           [20]byte             // Account that received the delegation
+	Permissions         []Permission         // List of delegated permissions (legacy)
+	DelegatePermissions []DelegatePermission // List of delegated permissions (numeric)
+	OwnerNode           uint64               // Directory node hint
 }
 
 func (d *Delegate) Type() Type {

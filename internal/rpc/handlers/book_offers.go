@@ -103,4 +103,3 @@ func ParseAmountFromJSON(data json.RawMessage) (types.Amount, error) {
 		Value:    iouAmount.Value,
 	}, nil
 }
-

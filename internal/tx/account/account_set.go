@@ -5,10 +5,10 @@ import (
 	"strings"
 
 	"github.com/LeJamon/goXRPLd/amendment"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/protocol"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 const qualityOne uint32 = 1000000000

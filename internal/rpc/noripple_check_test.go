@@ -41,11 +41,15 @@ func newMockNoRippleCheckLedgerService() *mockNoRippleCheckLedgerService {
 	}
 }
 
-func (m *mockNoRippleCheckLedgerService) GetCurrentLedgerIndex() uint32   { return m.currentLedgerIndex }
-func (m *mockNoRippleCheckLedgerService) GetClosedLedgerIndex() uint32    { return m.closedLedgerIndex }
-func (m *mockNoRippleCheckLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
-func (m *mockNoRippleCheckLedgerService) AcceptLedger() (uint32, error)   { return m.closedLedgerIndex + 1, nil }
-func (m *mockNoRippleCheckLedgerService) IsStandalone() bool              { return m.standalone }
+func (m *mockNoRippleCheckLedgerService) GetCurrentLedgerIndex() uint32 { return m.currentLedgerIndex }
+func (m *mockNoRippleCheckLedgerService) GetClosedLedgerIndex() uint32  { return m.closedLedgerIndex }
+func (m *mockNoRippleCheckLedgerService) GetValidatedLedgerIndex() uint32 {
+	return m.validatedLedgerIndex
+}
+func (m *mockNoRippleCheckLedgerService) AcceptLedger() (uint32, error) {
+	return m.closedLedgerIndex + 1, nil
+}
+func (m *mockNoRippleCheckLedgerService) IsStandalone() bool { return m.standalone }
 func (m *mockNoRippleCheckLedgerService) GetServerInfo() types.LedgerServerInfo {
 	return m.serverInfo
 }

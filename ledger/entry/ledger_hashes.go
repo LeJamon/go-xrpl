@@ -3,7 +3,6 @@ package entry
 import (
 	"encoding/binary"
 	"errors"
-
 )
 
 var (

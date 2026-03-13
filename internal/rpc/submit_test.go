@@ -421,13 +421,13 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 	}
 
 	tests := []struct {
-		name               string
-		engineResult       string
-		engineResultCode   int
-		engineResultMsg    string
-		applied            bool
-		expectedStatus     string
-		validateResp       func(t *testing.T, resp map[string]interface{})
+		name             string
+		engineResult     string
+		engineResultCode int
+		engineResultMsg  string
+		applied          bool
+		expectedStatus   string
+		validateResp     func(t *testing.T, resp map[string]interface{})
 	}{
 		{
 			name:             "tesSUCCESS",

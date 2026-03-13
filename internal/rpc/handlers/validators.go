@@ -25,7 +25,6 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	}, nil
 }
 
-
 // ValidatorListSitesMethod handles the validator_list_sites RPC method.
 // STUB: Returns empty list. Network-only — not needed for standalone mode.
 //
@@ -38,4 +37,3 @@ type ValidatorListSitesMethod struct{ AdminHandler }
 func (m *ValidatorListSitesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	return map[string]interface{}{"validator_sites": []interface{}{}}, nil
 }
-

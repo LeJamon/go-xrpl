@@ -9,9 +9,9 @@ package offer
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/stretchr/testify/require"
 )
 
@@ -120,9 +120,9 @@ func testSelfCrossOffer2(t *testing.T, disabledFeatures []string) {
 		{"ann", Reserve(env, 3) + f*4, 1000, 1000, "", ""},
 		{"bev", Reserve(env, 3) + f*4, 1, 1000, "", ""},
 		{"cam", Reserve(env, 3) + f*4, 1000, 1, "", ""},
-		{"deb", Reserve(env, 3) + f*4, 0, 1, "", string(jtx.TecUNFUNDED_OFFER)},
-		{"eve", Reserve(env, 3) + f*4, 1, 0, string(jtx.TecUNFUNDED_OFFER), ""},
-		{"flo", Reserve(env, 3) + 0, 1000, 1000, string(jtx.TecINSUF_RESERVE_OFFER), string(jtx.TecINSUF_RESERVE_OFFER)},
+		{"deb", Reserve(env, 3) + f*4, 0, 1, "", jtx.TecUNFUNDED_OFFER},
+		{"eve", Reserve(env, 3) + f*4, 1, 0, jtx.TecUNFUNDED_OFFER, ""},
+		{"flo", Reserve(env, 3) + 0, 1000, 1000, jtx.TecINSUF_RESERVE_OFFER, jtx.TecINSUF_RESERVE_OFFER},
 	}
 
 	for _, tt := range tests {
@@ -151,7 +151,7 @@ func testSelfCrossOffer2(t *testing.T, disabledFeatures []string) {
 			if tt.firstOfferTec == "" {
 				jtx.RequireTxSuccess(t, result)
 			} else {
-				jtx.RequireTxClaimed(t, result, jtx.TxResultCode(tt.firstOfferTec))
+				jtx.RequireTxClaimed(t, result, tt.firstOfferTec)
 			}
 			env.Close()
 
@@ -180,7 +180,7 @@ func testSelfCrossOffer2(t *testing.T, disabledFeatures []string) {
 			if tt.secondOfferTec == "" {
 				jtx.RequireTxSuccess(t, result)
 			} else {
-				jtx.RequireTxClaimed(t, result, jtx.TxResultCode(tt.secondOfferTec))
+				jtx.RequireTxClaimed(t, result, tt.secondOfferTec)
 			}
 			env.Close()
 

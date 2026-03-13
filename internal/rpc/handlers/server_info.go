@@ -76,12 +76,12 @@ func buildServerInfo(human bool) map[string]interface{} {
 	uptimeUs := uptimeDuration.Microseconds()
 
 	info := map[string]interface{}{
-		"build_version":    BuildVersion,
-		"complete_ledgers": completeLedgers,
-		"io_latency_ms":    1, // TODO: track real IO latency
-		"pubkey_node":      "n9KnrcCmL5psyKtk2KWP6jy14Hj4EXuZDg7XMdQJ9cSDoFSp53hu", // TODO: derive from node identity
-		"server_state":     serverState,
-		"uptime":           uptime,
+		"build_version":     BuildVersion,
+		"complete_ledgers":  completeLedgers,
+		"io_latency_ms":     1,                                                      // TODO: track real IO latency
+		"pubkey_node":       "n9KnrcCmL5psyKtk2KWP6jy14Hj4EXuZDg7XMdQJ9cSDoFSp53hu", // TODO: derive from node identity
+		"server_state":      serverState,
+		"uptime":            uptime,
 		"validation_quorum": 1, // TODO: get from consensus/validators
 		"peers":             0, // TODO: get from peer manager
 
@@ -147,9 +147,9 @@ func buildServerInfo(human bool) map[string]interface{} {
 	if human {
 		info["load_factor"] = 1.0 // TODO: compute from fee tracker
 	} else {
-		info["load_base"] = 256         // TODO: get from fee tracker (rippled default is 256)
-		info["load_factor"] = 256       // TODO: get from fee tracker
-		info["load_factor_server"] = 256 // TODO: get from fee tracker
+		info["load_base"] = 256                  // TODO: get from fee tracker (rippled default is 256)
+		info["load_factor"] = 256                // TODO: get from fee tracker
+		info["load_factor_server"] = 256         // TODO: get from fee tracker
 		info["load_factor_fee_escalation"] = 256 // TODO: get from TxQ metrics
 		info["load_factor_fee_queue"] = 256      // TODO: get from TxQ metrics
 		info["load_factor_fee_reference"] = 256  // TODO: get from TxQ metrics
@@ -182,7 +182,7 @@ func buildServerInfo(human bool) map[string]interface{} {
 	} else {
 		info["validated_ledger"] = map[string]interface{}{
 			"base_fee":     baseFee,
-			"close_time":   0,            // TODO: get from ledger close time (ripple epoch seconds)
+			"close_time":   0, // TODO: get from ledger close time (ripple epoch seconds)
 			"hash":         validatedLedgerHash,
 			"reserve_base": reserveBase,
 			"reserve_inc":  reserveIncrement,

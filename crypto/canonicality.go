@@ -269,16 +269,16 @@ func encodeDERSignature(r, s *big.Int) []byte {
 	totalLen := 2 + len(rBytes) + 2 + len(sBytes)
 
 	result := make([]byte, 2+totalLen)
-	result[0] = 0x30          // Sequence tag
+	result[0] = 0x30           // Sequence tag
 	result[1] = byte(totalLen) // Total length
 
 	offset := 2
-	result[offset] = 0x02           // Integer tag for R
+	result[offset] = 0x02 // Integer tag for R
 	result[offset+1] = byte(len(rBytes))
 	copy(result[offset+2:], rBytes)
 
 	offset += 2 + len(rBytes)
-	result[offset] = 0x02           // Integer tag for S
+	result[offset] = 0x02 // Integer tag for S
 	result[offset+1] = byte(len(sBytes))
 	copy(result[offset+2:], sBytes)
 

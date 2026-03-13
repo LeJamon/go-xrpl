@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -186,17 +186,6 @@ func amountsEqual(a, b tx.Amount) bool {
 		return false
 	}
 	return a.Compare(b) == 0
-}
-
-// computeRate returns the rate of an offer as a float64 (TakerPays / TakerGets).
-// This is used for comparing offer quality degradation in reduced offer tests.
-func computeRate(takerPays, takerGets tx.Amount) float64 {
-	pays := takerPays.Float64()
-	gets := takerGets.Float64()
-	if gets == 0 {
-		return 0
-	}
-	return pays / gets
 }
 
 // CountOffersMatching counts offers with specific TakerPays and TakerGets amounts.

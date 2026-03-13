@@ -15,10 +15,10 @@ var versionCmd = &cobra.Command{
 		fmt.Printf("goXRPLd version %s\n", rootCmd.Version)
 		fmt.Printf("Go version: %s\n", runtime.Version())
 		fmt.Printf("OS/Arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
-		
+
 		// TODO: Add build information like rippled
 		// fmt.Printf("Git commit hash: %s\n", gitCommitHash)
-		// fmt.Printf("Git build branch: %s\n", gitBranch) 
+		// fmt.Printf("Git build branch: %s\n", gitBranch)
 		// fmt.Printf("Build timestamp: %s\n", buildTime)
 	},
 }

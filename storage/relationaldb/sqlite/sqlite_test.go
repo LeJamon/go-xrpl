@@ -10,12 +10,12 @@ import (
 
 // Compile-time interface checks
 var (
-	_ relationaldb.RepositoryManager   = (*RepositoryManager)(nil)
-	_ relationaldb.LedgerRepository    = (*LedgerRepository)(nil)
-	_ relationaldb.TransactionRepository = (*TransactionRepository)(nil)
+	_ relationaldb.RepositoryManager            = (*RepositoryManager)(nil)
+	_ relationaldb.LedgerRepository             = (*LedgerRepository)(nil)
+	_ relationaldb.TransactionRepository        = (*TransactionRepository)(nil)
 	_ relationaldb.AccountTransactionRepository = (*AccountTransactionRepository)(nil)
-	_ relationaldb.SystemRepository    = (*SystemRepository)(nil)
-	_ relationaldb.TransactionContext  = (*TransactionContext)(nil)
+	_ relationaldb.SystemRepository             = (*SystemRepository)(nil)
+	_ relationaldb.TransactionContext           = (*TransactionContext)(nil)
 )
 
 func setupTestDB(t *testing.T) *RepositoryManager {

@@ -22,7 +22,7 @@ func TestTrustSetValidation(t *testing.T) {
 		{
 			name: "valid trust line creation with positive limit",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(800, "USD", "rGateway"),
 			},
 			expectError: false,
@@ -30,7 +30,7 @@ func TestTrustSetValidation(t *testing.T) {
 		{
 			name: "valid trust line with EUR currency",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(1000, "EUR", "rGateway"),
 			},
 			expectError: false,
@@ -38,7 +38,7 @@ func TestTrustSetValidation(t *testing.T) {
 		{
 			name: "valid trust line with BTC currency",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rBob"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rBob"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "BTC", "rGateway"),
 			},
 			expectError: false,
@@ -46,7 +46,7 @@ func TestTrustSetValidation(t *testing.T) {
 		{
 			name: "valid trust line with large limit",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(999999999999, "USD", "rGateway"),
 			},
 			expectError: false,
@@ -56,7 +56,7 @@ func TestTrustSetValidation(t *testing.T) {
 		{
 			name: "valid remove trust line with zero limit",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(0, "USD", "rGateway"),
 			},
 			expectError: false,
@@ -66,7 +66,7 @@ func TestTrustSetValidation(t *testing.T) {
 		{
 			name: "missing LimitAmount currency - should fail",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "", "rGateway"),
 			},
 			expectError: true,
@@ -75,7 +75,7 @@ func TestTrustSetValidation(t *testing.T) {
 		{
 			name: "missing LimitAmount issuer - should fail",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", ""),
 			},
 			expectError: true,
@@ -84,7 +84,7 @@ func TestTrustSetValidation(t *testing.T) {
 		{
 			name: "XRP as LimitAmount - cannot create trust line for XRP",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewXRPAmount(1000000),
 			},
 			expectError: true,
@@ -93,7 +93,7 @@ func TestTrustSetValidation(t *testing.T) {
 		{
 			name: "XRP currency code - should fail",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "XRP", "rGateway"),
 			},
 			expectError: true,
@@ -102,7 +102,7 @@ func TestTrustSetValidation(t *testing.T) {
 		{
 			name: "negative limit - should fail",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(-100, "USD", "rGateway"),
 			},
 			expectError: true,
@@ -113,7 +113,7 @@ func TestTrustSetValidation(t *testing.T) {
 		{
 			name: "trust line to self - should fail",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rAlice"),
 			},
 			expectError: true,
@@ -124,7 +124,7 @@ func TestTrustSetValidation(t *testing.T) {
 		{
 			name: "missing account - should fail",
 			trustSet: &TrustSet{
-				BaseTx: tx.BaseTx{Common: tx.Common{TransactionType: "TrustSet"}},
+				BaseTx:      tx.BaseTx{Common: tx.Common{TransactionType: "TrustSet"}},
 				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"),
 			},
 			expectError: true,
@@ -135,7 +135,7 @@ func TestTrustSetValidation(t *testing.T) {
 		{
 			name: "valid trust line with QualityIn",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"),
 				QualityIn:   ptrUint32(1000000000), // 1:1 ratio
 			},
@@ -144,7 +144,7 @@ func TestTrustSetValidation(t *testing.T) {
 		{
 			name: "valid trust line with QualityOut",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"),
 				QualityOut:  ptrUint32(1000000000), // 1:1 ratio
 			},
@@ -153,7 +153,7 @@ func TestTrustSetValidation(t *testing.T) {
 		{
 			name: "valid trust line with both QualityIn and QualityOut",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"),
 				QualityIn:   ptrUint32(900000000),  // 0.9 ratio
 				QualityOut:  ptrUint32(1100000000), // 1.1 ratio
@@ -163,7 +163,7 @@ func TestTrustSetValidation(t *testing.T) {
 		{
 			name: "valid trust line with zero QualityIn (removes quality)",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"),
 				QualityIn:   ptrUint32(0),
 			},
@@ -172,7 +172,7 @@ func TestTrustSetValidation(t *testing.T) {
 		{
 			name: "valid trust line with zero QualityOut (removes quality)",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"),
 				QualityOut:  ptrUint32(0),
 			},
@@ -425,7 +425,7 @@ func TestTrustSetFlatten(t *testing.T) {
 		{
 			name: "basic trust line",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"),
 			},
 			checkMap: func(t *testing.T, m map[string]any) {
@@ -450,7 +450,7 @@ func TestTrustSetFlatten(t *testing.T) {
 		{
 			name: "trust line with QualityIn",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(200, "EUR", "rIssuer"),
 				QualityIn:   ptrUint32(1000000000),
 			},
@@ -466,7 +466,7 @@ func TestTrustSetFlatten(t *testing.T) {
 		{
 			name: "trust line with QualityOut",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rBob"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rBob"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(500, "BTC", "rIssuer"),
 				QualityOut:  ptrUint32(900000000),
 			},
@@ -482,7 +482,7 @@ func TestTrustSetFlatten(t *testing.T) {
 		{
 			name: "trust line with both quality fields",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(1000, "USD", "rGateway"),
 				QualityIn:   ptrUint32(1100000000),
 				QualityOut:  ptrUint32(900000000),
@@ -499,7 +499,7 @@ func TestTrustSetFlatten(t *testing.T) {
 		{
 			name: "trust line with zero limit (removal)",
 			trustSet: &TrustSet{
-				BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
 				LimitAmount: tx.NewIssuedAmountFromFloat64(0, "USD", "rGateway"),
 			},
 			checkMap: func(t *testing.T, m map[string]any) {

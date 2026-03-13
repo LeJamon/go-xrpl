@@ -83,12 +83,10 @@ journal_size_limit = 1582080
 }
 
 func TestLoadConfig(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "xrpld_config_test")
-	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+	tempDir := t.TempDir()
 
 	mainConfigPath := filepath.Join(tempDir, "test_config.toml")
-	err = os.WriteFile(mainConfigPath, []byte(completeTestConfig()), 0644)
+	err := os.WriteFile(mainConfigPath, []byte(completeTestConfig()), 0644)
 	require.NoError(t, err)
 
 	paths := ConfigPaths{
@@ -111,9 +109,7 @@ func TestLoadConfig(t *testing.T) {
 }
 
 func TestLoadConfig_WithValidators(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "xrpld_config_test")
-	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+	tempDir := t.TempDir()
 
 	// Insert validators_file as a top-level key by replacing the first line after the comment
 	configContent := `
@@ -185,7 +181,7 @@ page_size = 4096
 journal_size_limit = 1582080
 `
 	mainConfigPath := filepath.Join(tempDir, "test_config.toml")
-	err = os.WriteFile(mainConfigPath, []byte(configContent), 0644)
+	err := os.WriteFile(mainConfigPath, []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	// Create validators file in the same dir
@@ -223,9 +219,7 @@ func TestLoadConfig_MissingFile(t *testing.T) {
 }
 
 func TestLoadConfig_MissingValidatorsFile(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "xrpld_config_test")
-	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+	tempDir := t.TempDir()
 
 	// Config with validators_file as a top-level key pointing to nonexistent file
 	configContent := `
@@ -289,7 +283,7 @@ page_size = 4096
 journal_size_limit = 1582080
 `
 	mainConfigPath := filepath.Join(tempDir, "test_config.toml")
-	err = os.WriteFile(mainConfigPath, []byte(configContent), 0644)
+	err := os.WriteFile(mainConfigPath, []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	paths := ConfigPaths{
@@ -362,13 +356,13 @@ func TestConfigValidation_CompleteConfig(t *testing.T) {
 			MinimumQueueSize:               2000,
 			RetrySequencePercent:           25,
 			MinimumEscalationMultiplier:    500,
-			MinimumTxnInLedger:            5,
-			MinimumTxnInLedgerStandalone:  1000,
-			TargetTxnInLedger:            50,
+			MinimumTxnInLedger:             5,
+			MinimumTxnInLedgerStandalone:   1000,
+			TargetTxnInLedger:              50,
 			NormalConsensusIncreasePercent: 20,
 			SlowConsensusDecreasePercent:   50,
-			MaximumTxnPerAccount:          10,
-			MinimumLastLedgerBuffer:       2,
+			MaximumTxnPerAccount:           10,
+			MinimumLastLedgerBuffer:        2,
 			ZeroBaseFeeTransactionFeeLevel: 256000,
 		},
 		SQLite: SQLiteConfig{
@@ -418,13 +412,13 @@ func TestConfigValidation_InvalidPort(t *testing.T) {
 			MinimumQueueSize:               2000,
 			RetrySequencePercent:           25,
 			MinimumEscalationMultiplier:    500,
-			MinimumTxnInLedger:            5,
-			MinimumTxnInLedgerStandalone:  1000,
-			TargetTxnInLedger:            50,
+			MinimumTxnInLedger:             5,
+			MinimumTxnInLedgerStandalone:   1000,
+			TargetTxnInLedger:              50,
 			NormalConsensusIncreasePercent: 20,
 			SlowConsensusDecreasePercent:   50,
-			MaximumTxnPerAccount:          10,
-			MinimumLastLedgerBuffer:       2,
+			MaximumTxnPerAccount:           10,
+			MinimumLastLedgerBuffer:        2,
 			ZeroBaseFeeTransactionFeeLevel: 256000,
 		},
 		SQLite: SQLiteConfig{

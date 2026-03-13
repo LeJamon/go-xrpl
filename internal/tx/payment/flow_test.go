@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/drops"
-	"github.com/LeJamon/goXRPLd/keylet"
-	tx "github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	tx "github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // ============================================================================
@@ -219,8 +219,8 @@ func TestQuality_FromAmounts(t *testing.T) {
 
 func TestQuality_BetterThan(t *testing.T) {
 	// Lower quality value = better (less input for same output)
-	better := Quality{Value: 500000000}  // 0.5 ratio
-	worse := Quality{Value: 1500000000}  // 1.5 ratio
+	better := Quality{Value: 500000000} // 0.5 ratio
+	worse := Quality{Value: 1500000000} // 1.5 ratio
 
 	if !better.BetterThan(worse) {
 		t.Error("expected 0.5 to be better than 1.5")

@@ -1,8 +1,9 @@
 package payment
 
 import (
-	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
 	"testing"
+
+	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
 )
 
 // Payment tests ported from rippled's TrustAndBalance_test.cpp and Flow_test.cpp

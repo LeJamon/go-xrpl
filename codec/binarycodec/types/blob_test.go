@@ -11,7 +11,6 @@ import (
 )
 
 func TestBlob_FromJson(t *testing.T) {
-
 	tt := []struct {
 		name        string
 		input       string

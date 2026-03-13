@@ -40,9 +40,9 @@ func (s PeerState) String() string {
 type Peer struct {
 	mu sync.RWMutex
 
-	id        PeerID
-	endpoint  Endpoint
-	inbound   bool
+	id       PeerID
+	endpoint Endpoint
+	inbound  bool
 
 	identity     *Identity
 	remotePubKey *PublicKeyToken
@@ -383,14 +383,14 @@ func (p *Peer) setState(state PeerState) {
 
 // PeerInfo provides read-only information about a peer.
 type PeerInfo struct {
-	ID            PeerID
-	Endpoint      Endpoint
-	Inbound       bool
-	State         PeerState
-	PublicKey     string
-	ConnectedAt   time.Time
-	MessagesIn    uint64
-	MessagesOut   uint64
+	ID          PeerID
+	Endpoint    Endpoint
+	Inbound     bool
+	State       PeerState
+	PublicKey   string
+	ConnectedAt time.Time
+	MessagesIn  uint64
+	MessagesOut uint64
 }
 
 // Info returns read-only information about the peer.

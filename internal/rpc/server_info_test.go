@@ -14,15 +14,15 @@ import (
 // mockLedgerServiceServerInfo extends mockLedgerService with server_info-specific behavior
 type mockLedgerServiceServerInfo struct {
 	*mockLedgerService
-	serverState        string
-	buildVersion       string
-	peers              int
-	loadFactor         float64
-	ioLatencyMs        int
-	validationQuorum   int
-	baseFee            uint64
-	reserveBase        uint64
-	reserveIncrement   uint64
+	serverState      string
+	buildVersion     string
+	peers            int
+	loadFactor       float64
+	ioLatencyMs      int
+	validationQuorum int
+	baseFee          uint64
+	reserveBase      uint64
+	reserveIncrement uint64
 }
 
 func newMockLedgerServiceServerInfo() *mockLedgerServiceServerInfo {

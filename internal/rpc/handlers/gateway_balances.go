@@ -152,4 +152,3 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 
 	return response, nil
 }
-

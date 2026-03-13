@@ -41,11 +41,17 @@ func newMockGatewayBalancesLedgerService() *mockGatewayBalancesLedgerService {
 	}
 }
 
-func (m *mockGatewayBalancesLedgerService) GetCurrentLedgerIndex() uint32   { return m.currentLedgerIndex }
-func (m *mockGatewayBalancesLedgerService) GetClosedLedgerIndex() uint32    { return m.closedLedgerIndex }
-func (m *mockGatewayBalancesLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
-func (m *mockGatewayBalancesLedgerService) AcceptLedger() (uint32, error)   { return m.closedLedgerIndex + 1, nil }
-func (m *mockGatewayBalancesLedgerService) IsStandalone() bool              { return m.standalone }
+func (m *mockGatewayBalancesLedgerService) GetCurrentLedgerIndex() uint32 {
+	return m.currentLedgerIndex
+}
+func (m *mockGatewayBalancesLedgerService) GetClosedLedgerIndex() uint32 { return m.closedLedgerIndex }
+func (m *mockGatewayBalancesLedgerService) GetValidatedLedgerIndex() uint32 {
+	return m.validatedLedgerIndex
+}
+func (m *mockGatewayBalancesLedgerService) AcceptLedger() (uint32, error) {
+	return m.closedLedgerIndex + 1, nil
+}
+func (m *mockGatewayBalancesLedgerService) IsStandalone() bool { return m.standalone }
 func (m *mockGatewayBalancesLedgerService) GetServerInfo() types.LedgerServerInfo {
 	return m.serverInfo
 }

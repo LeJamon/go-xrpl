@@ -9,9 +9,9 @@ package offer
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/stretchr/testify/require"
 )
 
@@ -76,9 +76,9 @@ func testPartialCross(t *testing.T, disabledFeatures []string) {
 
 	tests := []testData{
 		// No pre-established trust lines
-		{"ann", Reserve(env, 0) + 0*f, 1, noPreTrust, 1000, string(jtx.TecUNFUNDED_OFFER), f, 0, 0, 0},
-		{"bev", Reserve(env, 0) + 1*f, 1, noPreTrust, 1000, string(jtx.TecUNFUNDED_OFFER), f, 0, 0, 0},
-		{"cam", Reserve(env, 0) + 2*f, 0, noPreTrust, 1000, string(jtx.TecINSUF_RESERVE_OFFER), f, 0, 0, 0},
+		{"ann", Reserve(env, 0) + 0*f, 1, noPreTrust, 1000, jtx.TecUNFUNDED_OFFER, f, 0, 0, 0},
+		{"bev", Reserve(env, 0) + 1*f, 1, noPreTrust, 1000, jtx.TecUNFUNDED_OFFER, f, 0, 0, 0},
+		{"cam", Reserve(env, 0) + 2*f, 0, noPreTrust, 1000, jtx.TecINSUF_RESERVE_OFFER, f, 0, 0, 0},
 		{"deb", 10 + Reserve(env, 0) + 1*f, 1, noPreTrust, 1000, "", 10 + f, 0.00001, 0, 1},
 		{"eve", Reserve(env, 1) + 0*f, 0, noPreTrust, 1000, "", f, 0, 1, 1},
 		{"flo", Reserve(env, 1) + 0*f, 1, noPreTrust, 1000, "", uint64(jtx.XRP(1)) + f, 1, 0, 1},
@@ -95,23 +95,23 @@ func testPartialCross(t *testing.T, disabledFeatures []string) {
 		{"rae", uint64(jtx.XRP(999)) + Reserve(env, 2) + 1*f, 1000, noPreTrust, 1000, "", uint64(jtx.XRP(1000)) + f, 1000, 0, 1},
 		{"sue", uint64(jtx.XRP(1000)) + Reserve(env, 2) + 1*f, 0, noPreTrust, 1000, "", f, 0, 1, 1},
 		// Pre-established trust lines: gateway pre-trusts
-		{"abe", Reserve(env, 0) + 0*f, 1, gwPreTrust, 1000, string(jtx.TecUNFUNDED_OFFER), f, 0, 0, 0},
-		{"bud", Reserve(env, 0) + 1*f, 1, gwPreTrust, 1000, string(jtx.TecUNFUNDED_OFFER), f, 0, 0, 0},
-		{"che", Reserve(env, 0) + 2*f, 0, gwPreTrust, 1000, string(jtx.TecINSUF_RESERVE_OFFER), f, 0, 0, 0},
+		{"abe", Reserve(env, 0) + 0*f, 1, gwPreTrust, 1000, jtx.TecUNFUNDED_OFFER, f, 0, 0, 0},
+		{"bud", Reserve(env, 0) + 1*f, 1, gwPreTrust, 1000, jtx.TecUNFUNDED_OFFER, f, 0, 0, 0},
+		{"che", Reserve(env, 0) + 2*f, 0, gwPreTrust, 1000, jtx.TecINSUF_RESERVE_OFFER, f, 0, 0, 0},
 		{"dan2", 10 + Reserve(env, 0) + 1*f, 1, gwPreTrust, 1000, "", 10 + f, 0.00001, 0, 0},
 		{"eli", uint64(jtx.XRP(20)) + Reserve(env, 0) + 1*f, 1000, gwPreTrust, 1000, "", uint64(jtx.XRP(20)) + 1*f, 20, 0, 0},
 		{"fyn", Reserve(env, 1) + 0*f, 0, gwPreTrust, 1000, "", f, 0, 1, 1},
 		{"gar", Reserve(env, 1) + 0*f, 1, gwPreTrust, 1000, "", uint64(jtx.XRP(1)) + f, 1, 1, 1},
 		{"hal", Reserve(env, 1) + 1*f, 1, gwPreTrust, 1000, "", uint64(jtx.XRP(1)) + f, 1, 1, 1},
 		// Pre-established trust lines: account pre-trusts
-		{"ned", Reserve(env, 1) + 0*f, 1, acctPreTrust, 1000, string(jtx.TecUNFUNDED_OFFER), 2 * f, 0, 0, 1},
-		{"ole", Reserve(env, 1) + 1*f, 1, acctPreTrust, 1000, string(jtx.TecUNFUNDED_OFFER), 2 * f, 0, 0, 1},
-		{"pat", Reserve(env, 1) + 2*f, 0, acctPreTrust, 1000, string(jtx.TecUNFUNDED_OFFER), 2 * f, 0, 0, 1},
-		{"quy", Reserve(env, 1) + 2*f, 1, acctPreTrust, 1000, string(jtx.TecUNFUNDED_OFFER), 2 * f, 0, 0, 1},
-		{"ron", Reserve(env, 1) + 3*f, 0, acctPreTrust, 1000, string(jtx.TecINSUF_RESERVE_OFFER), 2 * f, 0, 0, 1},
+		{"ned", Reserve(env, 1) + 0*f, 1, acctPreTrust, 1000, jtx.TecUNFUNDED_OFFER, 2 * f, 0, 0, 1},
+		{"ole", Reserve(env, 1) + 1*f, 1, acctPreTrust, 1000, jtx.TecUNFUNDED_OFFER, 2 * f, 0, 0, 1},
+		{"pat", Reserve(env, 1) + 2*f, 0, acctPreTrust, 1000, jtx.TecUNFUNDED_OFFER, 2 * f, 0, 0, 1},
+		{"quy", Reserve(env, 1) + 2*f, 1, acctPreTrust, 1000, jtx.TecUNFUNDED_OFFER, 2 * f, 0, 0, 1},
+		{"ron", Reserve(env, 1) + 3*f, 0, acctPreTrust, 1000, jtx.TecINSUF_RESERVE_OFFER, 2 * f, 0, 0, 1},
 		{"syd", 10 + Reserve(env, 1) + 2*f, 1, acctPreTrust, 1000, "", 10 + 2*f, 0.00001, 0, 1},
 		{"ted", uint64(jtx.XRP(20)) + Reserve(env, 1) + 2*f, 1000, acctPreTrust, 1000, "", uint64(jtx.XRP(20)) + 2*f, 20, 0, 1},
-		{"uli", Reserve(env, 2) + 0*f, 0, acctPreTrust, 1000, string(jtx.TecINSUF_RESERVE_OFFER), 2 * f, 0, 0, 1},
+		{"uli", Reserve(env, 2) + 0*f, 0, acctPreTrust, 1000, jtx.TecINSUF_RESERVE_OFFER, 2 * f, 0, 0, 1},
 		{"vic", Reserve(env, 2) + 0*f, 1, acctPreTrust, 1000, "", uint64(jtx.XRP(1)) + 2*f, 1, 0, 1},
 		{"wes", Reserve(env, 2) + 1*f, 0, acctPreTrust, 1000, "", 2 * f, 0, 1, 2},
 		{"xan", Reserve(env, 2) + 1*f, 1, acctPreTrust, 1000, "", uint64(jtx.XRP(1)) + 2*f, 1, 1, 2},
@@ -162,7 +162,7 @@ func testPartialCross(t *testing.T, disabledFeatures []string) {
 			if tt.tec == "" {
 				jtx.RequireTxSuccess(t, result)
 			} else {
-				jtx.RequireTxClaimed(t, result, jtx.TxResultCode(tt.tec))
+				jtx.RequireTxClaimed(t, result, tt.tec)
 			}
 			env.Close()
 

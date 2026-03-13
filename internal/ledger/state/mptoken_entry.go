@@ -190,11 +190,11 @@ func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 	}
 
 	jsonObj := map[string]any{
-		"LedgerEntryType":  "MPTokenIssuance",
-		"Flags":            issuance.Flags,
-		"Issuer":           issuerAddress,
-		"Sequence":         issuance.Sequence,
-		"OwnerNode":        fmt.Sprintf("%X", issuance.OwnerNode),
+		"LedgerEntryType":   "MPTokenIssuance",
+		"Flags":             issuance.Flags,
+		"Issuer":            issuerAddress,
+		"Sequence":          issuance.Sequence,
+		"OwnerNode":         fmt.Sprintf("%X", issuance.OwnerNode),
 		"OutstandingAmount": fmt.Sprintf("%X", issuance.OutstandingAmount),
 	}
 
@@ -356,12 +356,12 @@ func SerializeMPToken(token *MPTokenData) ([]byte, error) {
 	}
 
 	jsonObj := map[string]any{
-		"LedgerEntryType":  "MPToken",
-		"Flags":            token.Flags,
-		"Account":          accountAddress,
+		"LedgerEntryType":   "MPToken",
+		"Flags":             token.Flags,
+		"Account":           accountAddress,
 		"MPTokenIssuanceID": strings.ToUpper(hex.EncodeToString(token.MPTokenIssuanceID[:])),
-		"OwnerNode":        fmt.Sprintf("%X", token.OwnerNode),
-		"MPTAmount":        fmt.Sprintf("%X", token.MPTAmount),
+		"OwnerNode":         fmt.Sprintf("%X", token.OwnerNode),
+		"MPTAmount":         fmt.Sprintf("%X", token.MPTAmount),
 	}
 
 	if token.LockedAmount != nil && *token.LockedAmount > 0 {

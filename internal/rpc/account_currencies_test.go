@@ -41,11 +41,19 @@ func newMockAccountCurrenciesLedgerService() *mockAccountCurrenciesLedgerService
 	}
 }
 
-func (m *mockAccountCurrenciesLedgerService) GetCurrentLedgerIndex() uint32   { return m.currentLedgerIndex }
-func (m *mockAccountCurrenciesLedgerService) GetClosedLedgerIndex() uint32    { return m.closedLedgerIndex }
-func (m *mockAccountCurrenciesLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
-func (m *mockAccountCurrenciesLedgerService) AcceptLedger() (uint32, error)   { return m.closedLedgerIndex + 1, nil }
-func (m *mockAccountCurrenciesLedgerService) IsStandalone() bool              { return m.standalone }
+func (m *mockAccountCurrenciesLedgerService) GetCurrentLedgerIndex() uint32 {
+	return m.currentLedgerIndex
+}
+func (m *mockAccountCurrenciesLedgerService) GetClosedLedgerIndex() uint32 {
+	return m.closedLedgerIndex
+}
+func (m *mockAccountCurrenciesLedgerService) GetValidatedLedgerIndex() uint32 {
+	return m.validatedLedgerIndex
+}
+func (m *mockAccountCurrenciesLedgerService) AcceptLedger() (uint32, error) {
+	return m.closedLedgerIndex + 1, nil
+}
+func (m *mockAccountCurrenciesLedgerService) IsStandalone() bool { return m.standalone }
 func (m *mockAccountCurrenciesLedgerService) GetServerInfo() types.LedgerServerInfo {
 	return m.serverInfo
 }
@@ -186,11 +194,11 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		params         interface{}
-		expectedError  string
-		expectedCode   int
-		setupMock      func()
+		name          string
+		params        interface{}
+		expectedError string
+		expectedCode  int
+		setupMock     func()
 	}{
 		{
 			// missing account field

@@ -2,28 +2,29 @@
 // detects protocol violations after transactions are applied.
 //
 // Plan:
-//   1. Positive tests: verify invariants hold after valid transactions (Payment,
-//      OfferCreate, EscrowCreate, TrustSet, AccountDelete).
-//   2. XRP conservation: verify total XRP is conserved across transactions.
-//   3. XRP trust line: verify that XRP cannot be used as a trust line currency.
+//  1. Positive tests: verify invariants hold after valid transactions (Payment,
+//     OfferCreate, EscrowCreate, TrustSet, AccountDelete).
+//  2. XRP conservation: verify total XRP is conserved across transactions.
+//  3. XRP trust line: verify that XRP cannot be used as a trust line currency.
 //
 // The invariant checker is hooked into the engine (invariants_check.go) and runs
 // before table.Apply(). Violations return TecINVARIANT_FAILED.
 //
 // Reference: rippled/src/test/app/Invariants_test.cpp
-//            rippled/src/xrpld/app/tx/detail/InvariantCheck.cpp
+//
+//	rippled/src/xrpld/app/tx/detail/InvariantCheck.cpp
 package invariants_test
 
 import (
 	"testing"
 	"time"
 
-	acctx "github.com/LeJamon/goXRPLd/internal/tx/account"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/escrow"
 	offerbuild "github.com/LeJamon/goXRPLd/internal/testing/offer"
 	paymentbuild "github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	acctx "github.com/LeJamon/goXRPLd/internal/tx/account"
 )
 
 const baseFee = uint64(10)
@@ -227,7 +228,7 @@ func TestInvariant_TrustSet_NoXRP(t *testing.T) {
 	result := env.Submit(xrpLine)
 
 	// Should be rejected — XRP is not a valid IOU currency
-	if result.Code == string(jtx.TesSUCCESS) {
+	if result.Code == jtx.TesSUCCESS {
 		t.Error("TrustSet with XRP currency should be rejected (NoXRPTrustLines invariant)")
 	}
 }

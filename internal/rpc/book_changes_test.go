@@ -53,18 +53,18 @@ func newMockLedgerReaderBC(seq uint32) *mockLedgerReaderBC {
 	}
 }
 
-func (m *mockLedgerReaderBC) Sequence() uint32                                         { return m.seq }
-func (m *mockLedgerReaderBC) Hash() [32]byte                                           { return m.hash }
-func (m *mockLedgerReaderBC) ParentHash() [32]byte                                     { return m.parentHash }
-func (m *mockLedgerReaderBC) IsClosed() bool                                           { return m.closed }
-func (m *mockLedgerReaderBC) IsValidated() bool                                        { return m.validated }
-func (m *mockLedgerReaderBC) TotalDrops() uint64                                       { return m.totalDrops }
-func (m *mockLedgerReaderBC) CloseTime() int64                                         { return m.closeTime }
-func (m *mockLedgerReaderBC) CloseTimeResolution() uint32                              { return m.closeRes }
-func (m *mockLedgerReaderBC) CloseFlags() uint8                                        { return m.closeFlags }
-func (m *mockLedgerReaderBC) ParentCloseTime() int64                                   { return m.pCloseTime }
-func (m *mockLedgerReaderBC) TxMapHash() [32]byte                                      { return m.txMapHash }
-func (m *mockLedgerReaderBC) StateMapHash() [32]byte                                   { return m.stateMap }
+func (m *mockLedgerReaderBC) Sequence() uint32            { return m.seq }
+func (m *mockLedgerReaderBC) Hash() [32]byte              { return m.hash }
+func (m *mockLedgerReaderBC) ParentHash() [32]byte        { return m.parentHash }
+func (m *mockLedgerReaderBC) IsClosed() bool              { return m.closed }
+func (m *mockLedgerReaderBC) IsValidated() bool           { return m.validated }
+func (m *mockLedgerReaderBC) TotalDrops() uint64          { return m.totalDrops }
+func (m *mockLedgerReaderBC) CloseTime() int64            { return m.closeTime }
+func (m *mockLedgerReaderBC) CloseTimeResolution() uint32 { return m.closeRes }
+func (m *mockLedgerReaderBC) CloseFlags() uint8           { return m.closeFlags }
+func (m *mockLedgerReaderBC) ParentCloseTime() int64      { return m.pCloseTime }
+func (m *mockLedgerReaderBC) TxMapHash() [32]byte         { return m.txMapHash }
+func (m *mockLedgerReaderBC) StateMapHash() [32]byte      { return m.stateMap }
 func (m *mockLedgerReaderBC) ForEachTransaction(fn func([32]byte, []byte) bool) error {
 	for h, d := range m.txs {
 		if !fn(h, d) {
@@ -77,7 +77,7 @@ func (m *mockLedgerReaderBC) ForEachTransaction(fn func([32]byte, []byte) bool) 
 // mockLedgerServiceBC extends mockLedgerService with book_changes-specific behavior.
 type mockLedgerServiceBC struct {
 	*mockLedgerService
-	ledgers      map[uint32]*mockLedgerReaderBC
+	ledgers       map[uint32]*mockLedgerReaderBC
 	ledgersByHash map[[32]byte]*mockLedgerReaderBC
 }
 

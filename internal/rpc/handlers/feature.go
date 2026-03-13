@@ -138,4 +138,3 @@ func buildFeatureInfo(f *amendment.Feature, enabledSet map[[32]byte]bool) map[st
 		"vetoed":    vetoed,
 	}
 }
-

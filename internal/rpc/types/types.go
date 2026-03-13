@@ -174,17 +174,17 @@ type WebSocketCommand struct {
 
 // WebSocketResponse represents an XRPL WebSocket API response
 type WebSocketResponse struct {
-	Status     string          `json:"status"`
-	Type       string          `json:"type"`
-	Result     interface{}     `json:"result,omitempty"`
-	ID         interface{}     `json:"id,omitempty"`
-	Warning    string          `json:"warning,omitempty"`
-	Warnings   []WarningObject `json:"warnings,omitempty"`
-	Forwarded  bool            `json:"forwarded,omitempty"`
-	ApiVersion int             `json:"api_version,omitempty"`
-	Error      string          `json:"error,omitempty"`
-	ErrorCode  int             `json:"error_code,omitempty"`
-	ErrorMessage string        `json:"error_message,omitempty"`
+	Status       string          `json:"status"`
+	Type         string          `json:"type"`
+	Result       interface{}     `json:"result,omitempty"`
+	ID           interface{}     `json:"id,omitempty"`
+	Warning      string          `json:"warning,omitempty"`
+	Warnings     []WarningObject `json:"warnings,omitempty"`
+	Forwarded    bool            `json:"forwarded,omitempty"`
+	ApiVersion   int             `json:"api_version,omitempty"`
+	Error        string          `json:"error,omitempty"`
+	ErrorCode    int             `json:"error_code,omitempty"`
+	ErrorMessage string          `json:"error_message,omitempty"`
 }
 
 // Subscription types for WebSocket streams

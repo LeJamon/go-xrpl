@@ -96,7 +96,7 @@ func TestFeeScaling_NoLoad_10xBaseFee(t *testing.T) {
 func TestFeeEscalation_BelowThreshold(t *testing.T) {
 	snapshot := txq.Snapshot{
 		TxnsExpected:         25,
-		EscalationMultiplier: uint64(txq.BaseLevel),
+		EscalationMultiplier: txq.BaseLevel,
 	}
 
 	t.Run("at threshold returns base level", func(t *testing.T) {
@@ -120,7 +120,7 @@ func TestFeeEscalation_BelowThreshold(t *testing.T) {
 func TestFeeEscalation_AboveThreshold(t *testing.T) {
 	snapshot := txq.Snapshot{
 		TxnsExpected:         25,
-		EscalationMultiplier: uint64(txq.BaseLevel),
+		EscalationMultiplier: txq.BaseLevel,
 	}
 
 	t.Run("double expected count escalates", func(t *testing.T) {

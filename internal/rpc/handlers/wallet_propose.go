@@ -168,8 +168,8 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 	// Build response matching rippled format
 	response := map[string]interface{}{
-		"account_id":      accountID,
-		"key_type":        keyType,
+		"account_id": accountID,
+		"key_type":   keyType,
 		// TODO: "master_key" (RFC1751 encoding) — requires rfc1751 dictionary to be complete
 		"master_seed":     encodedSeed,
 		"master_seed_hex": seedHexStr,
@@ -209,4 +209,3 @@ func estimateEntropy(input string) float64 {
 	// Multiply by length to get total entropy estimate
 	return math.Floor(-se * length)
 }
-

@@ -147,12 +147,12 @@ type LedgerReader interface {
 	IsClosed() bool
 	IsValidated() bool
 	TotalDrops() uint64
-	CloseTime() int64         // Ripple epoch seconds
+	CloseTime() int64 // Ripple epoch seconds
 	CloseTimeResolution() uint32
 	CloseFlags() uint8
-	ParentCloseTime() int64   // Ripple epoch seconds
-	TxMapHash() [32]byte      // Transaction tree root hash
-	StateMapHash() [32]byte   // Account state tree root hash
+	ParentCloseTime() int64 // Ripple epoch seconds
+	TxMapHash() [32]byte    // Transaction tree root hash
+	StateMapHash() [32]byte // Account state tree root hash
 	ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error
 }
 
@@ -452,13 +452,13 @@ type AccountCurrenciesResult struct {
 
 // NFTInfo represents an individual NFT for account_nfts RPC
 type NFTInfo struct {
-	Flags         uint16 `json:"Flags"`
-	Issuer        string `json:"Issuer"`
-	NFTokenID     string `json:"NFTokenID"`
-	NFTokenTaxon  uint32 `json:"NFTokenTaxon"`
-	URI           string `json:"URI,omitempty"`
-	NFTSerial     uint32 `json:"nft_serial"`
-	TransferFee   uint16 `json:"transfer_fee,omitempty"`
+	Flags        uint16 `json:"Flags"`
+	Issuer       string `json:"Issuer"`
+	NFTokenID    string `json:"NFTokenID"`
+	NFTokenTaxon uint32 `json:"NFTokenTaxon"`
+	URI          string `json:"URI,omitempty"`
+	NFTSerial    uint32 `json:"nft_serial"`
+	TransferFee  uint16 `json:"transfer_fee,omitempty"`
 }
 
 // AccountNFTsResult contains the result of account_nfts RPC
@@ -479,15 +479,15 @@ type CurrencyBalance struct {
 
 // GatewayBalancesResult contains the result of gateway_balances RPC
 type GatewayBalancesResult struct {
-	Account        string                         `json:"account"`
-	Obligations    map[string]string              `json:"obligations,omitempty"`    // currency -> value
-	Balances       map[string][]CurrencyBalance   `json:"balances,omitempty"`       // account -> []balance
-	FrozenBalances map[string][]CurrencyBalance   `json:"frozen_balances,omitempty"` // account -> []balance
-	Assets         map[string][]CurrencyBalance   `json:"assets,omitempty"`         // account -> []balance
-	Locked         map[string]string              `json:"locked,omitempty"`         // currency -> value (escrows)
-	LedgerIndex    uint32                         `json:"ledger_index"`
-	LedgerHash     [32]byte                       `json:"ledger_hash"`
-	Validated      bool                           `json:"validated"`
+	Account        string                       `json:"account"`
+	Obligations    map[string]string            `json:"obligations,omitempty"`     // currency -> value
+	Balances       map[string][]CurrencyBalance `json:"balances,omitempty"`        // account -> []balance
+	FrozenBalances map[string][]CurrencyBalance `json:"frozen_balances,omitempty"` // account -> []balance
+	Assets         map[string][]CurrencyBalance `json:"assets,omitempty"`          // account -> []balance
+	Locked         map[string]string            `json:"locked,omitempty"`          // currency -> value (escrows)
+	LedgerIndex    uint32                       `json:"ledger_index"`
+	LedgerHash     [32]byte                     `json:"ledger_hash"`
+	Validated      bool                         `json:"validated"`
 }
 
 // NoRippleProblem describes a trust line with incorrect NoRipple settings
@@ -522,7 +522,7 @@ type NFTOfferInfo struct {
 	NFTOfferIndex string      `json:"nft_offer_index"`
 	Flags         uint32      `json:"flags"`
 	Owner         string      `json:"owner"`
-	Amount        interface{} `json:"amount"`               // Can be string (XRP drops) or object (IOU)
+	Amount        interface{} `json:"amount"`                // Can be string (XRP drops) or object (IOU)
 	Destination   string      `json:"destination,omitempty"` // Optional
 	Expiration    uint32      `json:"expiration,omitempty"`  // Optional
 }

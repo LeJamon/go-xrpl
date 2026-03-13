@@ -9,14 +9,14 @@ import (
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	secp256k1 "github.com/LeJamon/goXRPLd/crypto/secp256k1"
 	"github.com/LeJamon/goXRPLd/drops"
-	ledgerentries "github.com/LeJamon/goXRPLd/ledger/entry"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/keylet"
+	ledgerentries "github.com/LeJamon/goXRPLd/ledger/entry"
 	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/shamap"
-	secp256k1 "github.com/LeJamon/goXRPLd/crypto/secp256k1"
-	"github.com/LeJamon/goXRPLd/crypto/common"
 )
 
 const (
@@ -274,11 +274,6 @@ func Create(cfg Config) (*GenesisLedger, error) {
 		GenesisAccount: accountID,
 		GenesisAddress: address,
 	}, nil
-}
-
-// createGenesisAccount creates the genesis account entry with all initial XRP.
-func createGenesisAccount(stateMap *shamap.SHAMap, accountID [20]byte) error {
-	return createGenesisAccountWithBalance(stateMap, accountID, InitialXRP)
 }
 
 // createGenesisAccountWithBalance creates the genesis account entry with a specific balance.

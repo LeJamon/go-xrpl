@@ -14,10 +14,10 @@ import (
 	"testing"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/keylet"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/did"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // ---- helpers (matching rippled's checkVL and field checks) ----

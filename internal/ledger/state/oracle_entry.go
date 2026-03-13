@@ -220,7 +220,7 @@ func parseOraclePriceDataSeries(data []byte, offset int) ([]OraclePriceData, int
 			if offset >= len(data) {
 				break
 			}
-			fieldCode = data[offset]
+			// skip the extended field code byte (not used further)
 			offset++
 		}
 

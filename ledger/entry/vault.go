@@ -2,7 +2,6 @@ package entry
 
 import (
 	"errors"
-
 )
 
 // WithdrawalPolicy represents the withdrawal policy for a vault

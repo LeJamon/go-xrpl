@@ -116,4 +116,3 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 
 	return response, nil
 }
-

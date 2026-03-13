@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/crypto/ed25519"
 	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
-	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/stretchr/testify/require"
 )
 

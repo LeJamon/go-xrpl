@@ -5,28 +5,28 @@ import "fmt"
 // OverlayConfig represents the [overlay] section
 // Controls settings related to the peer to peer overlay
 type OverlayConfig struct {
-	PublicIP         string `toml:"public_ip" mapstructure:"public_ip"`
-	IPLimit          int    `toml:"ip_limit" mapstructure:"ip_limit"`
-	MaxUnknownTime   int    `toml:"max_unknown_time" mapstructure:"max_unknown_time"`
-	MaxDivergedTime  int    `toml:"max_diverged_time" mapstructure:"max_diverged_time"`
+	PublicIP        string `toml:"public_ip" mapstructure:"public_ip"`
+	IPLimit         int    `toml:"ip_limit" mapstructure:"ip_limit"`
+	MaxUnknownTime  int    `toml:"max_unknown_time" mapstructure:"max_unknown_time"`
+	MaxDivergedTime int    `toml:"max_diverged_time" mapstructure:"max_diverged_time"`
 }
 
 // TransactionQueueConfig represents the [transaction_queue] section (EXPERIMENTAL)
 // Tunes the performance of the transaction queue
 type TransactionQueueConfig struct {
-	LedgersInQueue                  int `toml:"ledgers_in_queue" mapstructure:"ledgers_in_queue"`
-	MinimumQueueSize                int `toml:"minimum_queue_size" mapstructure:"minimum_queue_size"`
-	RetrySequencePercent            int `toml:"retry_sequence_percent" mapstructure:"retry_sequence_percent"`
-	MinimumEscalationMultiplier     int `toml:"minimum_escalation_multiplier" mapstructure:"minimum_escalation_multiplier"`
-	MinimumTxnInLedger              int `toml:"minimum_txn_in_ledger" mapstructure:"minimum_txn_in_ledger"`
-	MinimumTxnInLedgerStandalone    int `toml:"minimum_txn_in_ledger_standalone" mapstructure:"minimum_txn_in_ledger_standalone"`
-	TargetTxnInLedger               int `toml:"target_txn_in_ledger" mapstructure:"target_txn_in_ledger"`
-	MaximumTxnInLedger              int `toml:"maximum_txn_in_ledger" mapstructure:"maximum_txn_in_ledger"`
-	NormalConsensusIncreasePercent  int `toml:"normal_consensus_increase_percent" mapstructure:"normal_consensus_increase_percent"`
-	SlowConsensusDecreasePercent    int `toml:"slow_consensus_decrease_percent" mapstructure:"slow_consensus_decrease_percent"`
-	MaximumTxnPerAccount            int `toml:"maximum_txn_per_account" mapstructure:"maximum_txn_per_account"`
-	MinimumLastLedgerBuffer         int `toml:"minimum_last_ledger_buffer" mapstructure:"minimum_last_ledger_buffer"`
-	ZeroBaseFeeTransactionFeeLevel  int `toml:"zero_basefee_transaction_feelevel" mapstructure:"zero_basefee_transaction_feelevel"`
+	LedgersInQueue                 int `toml:"ledgers_in_queue" mapstructure:"ledgers_in_queue"`
+	MinimumQueueSize               int `toml:"minimum_queue_size" mapstructure:"minimum_queue_size"`
+	RetrySequencePercent           int `toml:"retry_sequence_percent" mapstructure:"retry_sequence_percent"`
+	MinimumEscalationMultiplier    int `toml:"minimum_escalation_multiplier" mapstructure:"minimum_escalation_multiplier"`
+	MinimumTxnInLedger             int `toml:"minimum_txn_in_ledger" mapstructure:"minimum_txn_in_ledger"`
+	MinimumTxnInLedgerStandalone   int `toml:"minimum_txn_in_ledger_standalone" mapstructure:"minimum_txn_in_ledger_standalone"`
+	TargetTxnInLedger              int `toml:"target_txn_in_ledger" mapstructure:"target_txn_in_ledger"`
+	MaximumTxnInLedger             int `toml:"maximum_txn_in_ledger" mapstructure:"maximum_txn_in_ledger"`
+	NormalConsensusIncreasePercent int `toml:"normal_consensus_increase_percent" mapstructure:"normal_consensus_increase_percent"`
+	SlowConsensusDecreasePercent   int `toml:"slow_consensus_decrease_percent" mapstructure:"slow_consensus_decrease_percent"`
+	MaximumTxnPerAccount           int `toml:"maximum_txn_per_account" mapstructure:"maximum_txn_per_account"`
+	MinimumLastLedgerBuffer        int `toml:"minimum_last_ledger_buffer" mapstructure:"minimum_last_ledger_buffer"`
+	ZeroBaseFeeTransactionFeeLevel int `toml:"zero_basefee_transaction_feelevel" mapstructure:"zero_basefee_transaction_feelevel"`
 }
 
 // Validate performs validation on the overlay configuration

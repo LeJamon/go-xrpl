@@ -33,14 +33,6 @@ type LedgerOffer struct {
 	AdditionalBookNode      uint64
 }
 
-// Ledger offer flags
-const (
-	// lsfPassive - offer is passive (doesn't consume offers)
-	lsfOfferPassive uint32 = 0x00010000
-	// lsfSell - offer is a sell offer
-	lsfOfferSell uint32 = 0x00020000
-)
-
 // OfferCreate flags (kept here for backwards compatibility and external references)
 const (
 	OfferCreateFlagPassive           uint32 = 0x00010000
@@ -253,21 +245,6 @@ func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
 	}
 
 	return offer, nil
-}
-
-// formatDrops formats drops as a string
-func formatDrops(drops uint64) string {
-	if drops == 0 {
-		return "0"
-	}
-	result := make([]byte, 20)
-	i := len(result)
-	for drops > 0 {
-		i--
-		result[i] = byte(drops%10) + '0'
-		drops /= 10
-	}
-	return string(result[i:])
 }
 
 // ParseLedgerOfferFromBytes parses a LedgerOffer from binary data (exported)

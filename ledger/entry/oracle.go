@@ -2,15 +2,14 @@ package entry
 
 import (
 	"errors"
-
 )
 
 // PriceData represents a single price data point in an oracle
 type PriceData struct {
-	BaseAsset       string // Base asset symbol (e.g., "XRP")
-	QuoteAsset      string // Quote asset symbol (e.g., "USD")
-	AssetPrice      uint64 // Price scaled by 10^Scale
-	Scale           uint8  // Decimal scale for the price
+	BaseAsset  string // Base asset symbol (e.g., "XRP")
+	QuoteAsset string // Quote asset symbol (e.g., "USD")
+	AssetPrice uint64 // Price scaled by 10^Scale
+	Scale      uint8  // Decimal scale for the price
 }
 
 // Oracle represents a price oracle ledger entry

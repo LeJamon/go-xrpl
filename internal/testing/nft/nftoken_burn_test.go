@@ -8,11 +8,11 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/nftoken"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
 	"github.com/LeJamon/goXRPLd/internal/testing/nft"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/nftoken"
 )
 
 // ===========================================================================

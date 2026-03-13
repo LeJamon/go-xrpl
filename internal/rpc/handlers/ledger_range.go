@@ -62,4 +62,3 @@ func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 	return response, nil
 }
-

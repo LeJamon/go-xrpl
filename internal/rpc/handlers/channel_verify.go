@@ -209,4 +209,3 @@ func verifySignature(message []byte, pubKeyHex string, sigHex string) bool {
 	algo := secp256k1.SECP256K1()
 	return algo.Validate(msgStr, pubKeyHex, sigHex)
 }
-

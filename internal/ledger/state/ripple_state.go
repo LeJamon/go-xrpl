@@ -105,7 +105,7 @@ func ParseRippleState(data []byte) (*RippleState, error) {
 		typeCode := (header >> 4) & 0x0F
 		fieldCode := header & 0x0F
 
-			if typeCode == 0 {
+		if typeCode == 0 {
 			if offset >= len(data) {
 				break
 			}

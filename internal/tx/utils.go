@@ -1,9 +1,10 @@
 package tx
 
 import (
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"strconv"
+
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // ParseUint64Hex parses a hex string as uint64

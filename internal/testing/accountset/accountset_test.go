@@ -7,9 +7,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
+	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
 )
 
 // asfToLsf maps an AccountSet flag (asf*) to the corresponding ledger flag (lsf*).
@@ -80,13 +80,13 @@ func TestAccountSet_MostFlags(t *testing.T) {
 
 	// Flags that are tested elsewhere and should be skipped
 	skipFlags := map[uint32]bool{
-		accounttx.AccountSetFlagNoFreeze:                      true, // Can't be cleared
-		accounttx.AccountSetFlagAuthorizedNFTokenMinter:       true, // Requires NFTokenMinter field
-		accounttx.AccountSetFlagDisallowIncomingCheck:         true, // DisallowIncoming amendment
-		accounttx.AccountSetFlagDisallowIncomingPayChan:       true, // DisallowIncoming amendment
-		accounttx.AccountSetFlagDisallowIncomingNFTokenOffer:  true, // DisallowIncoming amendment
-		accounttx.AccountSetFlagDisallowIncomingTrustline:     true, // DisallowIncoming amendment
-		accounttx.AccountSetFlagAllowTrustLineClawback:        true, // Can't be cleared
+		accounttx.AccountSetFlagNoFreeze:                     true, // Can't be cleared
+		accounttx.AccountSetFlagAuthorizedNFTokenMinter:      true, // Requires NFTokenMinter field
+		accounttx.AccountSetFlagDisallowIncomingCheck:        true, // DisallowIncoming amendment
+		accounttx.AccountSetFlagDisallowIncomingPayChan:      true, // DisallowIncoming amendment
+		accounttx.AccountSetFlagDisallowIncomingNFTokenOffer: true, // DisallowIncoming amendment
+		accounttx.AccountSetFlagDisallowIncomingTrustline:    true, // DisallowIncoming amendment
+		accounttx.AccountSetFlagAllowTrustLineClawback:       true, // Can't be cleared
 	}
 
 	testFlags := func(goodFlags []uint32) {

@@ -62,11 +62,11 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	nfts := make([]map[string]interface{}, len(result.AccountNFTs))
 	for i, nft := range result.AccountNFTs {
 		nftObj := map[string]interface{}{
-			"Flags":         nft.Flags,
-			"Issuer":        nft.Issuer,
-			"NFTokenID":     nft.NFTokenID,
-			"NFTokenTaxon":  nft.NFTokenTaxon,
-			"nft_serial":    nft.NFTSerial,
+			"Flags":        nft.Flags,
+			"Issuer":       nft.Issuer,
+			"NFTokenID":    nft.NFTokenID,
+			"NFTokenTaxon": nft.NFTokenTaxon,
+			"nft_serial":   nft.NFTSerial,
 		}
 
 		// Add optional fields only if they have values
@@ -96,4 +96,3 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 	return response, nil
 }
-

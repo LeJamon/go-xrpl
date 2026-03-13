@@ -6,13 +6,13 @@ package ticket_test
 import (
 	"testing"
 
+	jtx "github.com/LeJamon/goXRPLd/internal/testing"
+	"github.com/LeJamon/goXRPLd/internal/testing/ticket"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/account"
 	"github.com/LeJamon/goXRPLd/internal/tx/depositpreauth"
 	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/LeJamon/goXRPLd/internal/tx/trustset"
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/ticket"
 	"github.com/stretchr/testify/require"
 )
 
@@ -138,7 +138,7 @@ func TestTicket_CreatePreflightFail(t *testing.T) {
 
 	// Exercise fees.
 	ticketSeqA := env.Seq(master) + 1
-	tcA := ticket.TicketCreate(master, 1).Fee(int64(jtx.XRP(10))).Build()
+	tcA := ticket.TicketCreate(master, 1).Fee(jtx.XRP(10)).Build()
 	result = env.Submit(tcA)
 	jtx.RequireTxSuccess(t, result)
 	ticket.CheckTicketCreateMeta(t, result, tcA)
@@ -146,7 +146,7 @@ func TestTicket_CreatePreflightFail(t *testing.T) {
 	jtx.RequireOwnerCount(t, env, master, 1)
 	jtx.RequireTicketCount(t, env, master, 1)
 
-	result = env.Submit(ticket.TicketCreate(master, 1).Fee(int64(jtx.XRP(-1))).Build())
+	result = env.Submit(ticket.TicketCreate(master, 1).Fee(jtx.XRP(-1)).Build())
 	jtx.RequireTxFail(t, result, "temBAD_FEE")
 
 	// Exercise flags.
@@ -422,7 +422,7 @@ func TestTicket_UsingTickets(t *testing.T) {
 	require.Equal(t, ticketSeqDE+2, env.Seq(alice))
 
 	// pay with ticket
-	pay := payment.NewPayment(alice.Address, master.Address, tx.NewXRPAmount(int64(jtx.XRP(20))))
+	pay := payment.NewPayment(alice.Address, master.Address, tx.NewXRPAmount(jtx.XRP(20)))
 	pay.Fee = "10"
 	jtx.WithTicketSeq(pay, ticketSeqDE+1)
 	result = env.Submit(pay)
@@ -538,7 +538,7 @@ func TestTicket_TransactionDatabaseWithTickets(t *testing.T) {
 	ticketSeq--
 
 	// pay using ticket
-	pay1 := payment.NewPayment(alice.Address, master.Address, tx.NewXRPAmount(int64(jtx.XRP(200))))
+	pay1 := payment.NewPayment(alice.Address, master.Address, tx.NewXRPAmount(jtx.XRP(200)))
 	pay1.Fee = "10"
 	jtx.WithTicketSeq(pay1, ticketSeq)
 	result = env.Submit(pay1)
@@ -559,7 +559,7 @@ func TestTicket_TransactionDatabaseWithTickets(t *testing.T) {
 	env.Close()
 
 	// pay using ticket
-	pay2 := payment.NewPayment(alice.Address, master.Address, tx.NewXRPAmount(int64(jtx.XRP(300))))
+	pay2 := payment.NewPayment(alice.Address, master.Address, tx.NewXRPAmount(jtx.XRP(300)))
 	pay2.Fee = "10"
 	jtx.WithTicketSeq(pay2, ticketSeq)
 	result = env.Submit(pay2)
@@ -567,7 +567,7 @@ func TestTicket_TransactionDatabaseWithTickets(t *testing.T) {
 	ticketSeq--
 
 	// pay using ticket
-	pay3 := payment.NewPayment(alice.Address, master.Address, tx.NewXRPAmount(int64(jtx.XRP(400))))
+	pay3 := payment.NewPayment(alice.Address, master.Address, tx.NewXRPAmount(jtx.XRP(400)))
 	pay3.Fee = "10"
 	jtx.WithTicketSeq(pay3, ticketSeq)
 	result = env.Submit(pay3)
@@ -588,8 +588,6 @@ func TestTicket_TransactionDatabaseWithTickets(t *testing.T) {
 	jtx.WithTicketSeq(noop2, ticketSeq)
 	result = env.Submit(noop2)
 	jtx.RequireTxSuccess(t, result)
-	ticketSeq--
-
 	env.Close()
 
 	// We used 7 of the 10 tickets. 3 remain.

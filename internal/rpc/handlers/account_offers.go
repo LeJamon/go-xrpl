@@ -65,4 +65,3 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 	return response, nil
 }
-

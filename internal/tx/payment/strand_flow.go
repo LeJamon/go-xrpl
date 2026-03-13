@@ -90,7 +90,6 @@ func ExecuteStrand(
 
 			// stepOut is not used after this (loop ends at i=0)
 			_ = fwdIn
-
 		} else if !step.EqualOut(actualOut, stepOut) {
 			// Limiting step found — actualOut < requested stepOut
 			// Reset BOTH sandboxes and re-execute ONLY this step

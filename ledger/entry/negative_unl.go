@@ -1,8 +1,5 @@
 package entry
 
-import (
-)
-
 // DisabledValidator represents a validator that has been disabled
 type DisabledValidator struct {
 	PublicKey      [33]byte // Validator's public key

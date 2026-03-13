@@ -1231,28 +1231,28 @@ func TestTxMethodSearchedAllFlag(t *testing.T) {
 	// - searched_all: not present when transaction was found
 
 	tests := []struct {
-		name               string
-		scenario           string
+		name                string
+		scenario            string
 		expectedSearchedAll *bool // nil means field should not be present
 	}{
 		{
-			name:               "Transaction found in range",
-			scenario:           "Transaction exists within min_ledger to max_ledger",
+			name:                "Transaction found in range",
+			scenario:            "Transaction exists within min_ledger to max_ledger",
 			expectedSearchedAll: nil, // Not present when found
 		},
 		{
-			name:               "Transaction not found - all searched",
-			scenario:           "Transaction not in range, but all ledgers available",
+			name:                "Transaction not found - all searched",
+			scenario:            "Transaction not in range, but all ledgers available",
 			expectedSearchedAll: boolPtr(true),
 		},
 		{
-			name:               "Transaction not found - incomplete search",
-			scenario:           "Transaction not in range, some ledgers missing/deleted",
+			name:                "Transaction not found - incomplete search",
+			scenario:            "Transaction not in range, some ledgers missing/deleted",
 			expectedSearchedAll: boolPtr(false),
 		},
 		{
-			name:               "Found outside provided range",
-			scenario:           "Transaction found but in different ledger range",
+			name:                "Found outside provided range",
+			scenario:            "Transaction found but in different ledger range",
 			expectedSearchedAll: boolPtr(false),
 		},
 	}

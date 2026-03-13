@@ -44,13 +44,12 @@ func (m *ServerDefinitionsMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 
 	response := map[string]interface{}{
-		"TYPES":              defs.Types,
-		"FIELDS":             fields,
-		"LEDGER_ENTRY_TYPES": defs.LedgerEntryTypes,
-		"TRANSACTION_TYPES":  defs.TransactionTypes,
+		"TYPES":               defs.Types,
+		"FIELDS":              fields,
+		"LEDGER_ENTRY_TYPES":  defs.LedgerEntryTypes,
+		"TRANSACTION_TYPES":   defs.TransactionTypes,
 		"TRANSACTION_RESULTS": defs.TransactionResults,
 	}
 
 	return response, nil
 }
-

@@ -18,9 +18,6 @@ import (
 // InitialXRP is the total XRP supply in drops (100 billion XRP).
 const InitialXRP uint64 = 100_000_000_000_000_000
 
-// xrpCurrencyBytes is the canonical XRP currency representation (all zeros in the 20-byte currency field).
-var xrpCurrencyBytes = make([]byte, 20)
-
 // InvariantEntry represents a single ledger entry modification to be checked by invariants.
 // Before is nil for newly created entries; After is nil for deleted entries.
 type InvariantEntry struct {
@@ -311,4 +308,3 @@ type AMMCreateIssueProvider interface {
 	GetAmountAsset() Asset
 	GetAmount2Asset() Asset
 }
-

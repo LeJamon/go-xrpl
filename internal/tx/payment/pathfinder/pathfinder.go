@@ -80,19 +80,19 @@ func NewPathfinder(
 	}
 
 	return &Pathfinder{
-		srcAccount:   srcAccount,
-		dstAccount:   dstAccount,
-		effectiveDst: effectiveDst,
-		srcCurrency:  srcCurrency,
-		srcIssuer:    srcIssuer,
-		dstAmount:    dstAmount,
-		srcAmount:    srcAmount,
-		convertAll:   convertAll,
-		ledger:       ledger,
-		cache:        cache,
-		books:        NewBookIndex(ledger),
-		source:       source,
-		paths:        make(map[string][][]payment.PathStep),
+		srcAccount:    srcAccount,
+		dstAccount:    dstAccount,
+		effectiveDst:  effectiveDst,
+		srcCurrency:   srcCurrency,
+		srcIssuer:     srcIssuer,
+		dstAmount:     dstAmount,
+		srcAmount:     srcAmount,
+		convertAll:    convertAll,
+		ledger:        ledger,
+		cache:         cache,
+		books:         NewBookIndex(ledger),
+		source:        source,
+		paths:         make(map[string][][]payment.PathStep),
 		pathsOutCount: make(map[payment.Issue]int),
 	}
 }

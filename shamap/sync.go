@@ -34,9 +34,9 @@ func (f *DefaultSyncFilter) ShouldFetch(nodeHash [32]byte) bool {
 
 // CachingSyncFilter wraps another filter and caches results to avoid repeated lookups.
 type CachingSyncFilter struct {
-	mu     sync.RWMutex
-	inner  SyncFilter
-	cache  map[[32]byte]bool
+	mu      sync.RWMutex
+	inner   SyncFilter
+	cache   map[[32]byte]bool
 	maxSize int
 }
 
@@ -94,10 +94,7 @@ func (m *MissingNode) String() string {
 
 // SyncState tracks the state of a sync operation.
 type SyncState struct {
-	mu            sync.RWMutex
-	pendingNodes  map[[32]byte]*MissingNode // Nodes we've requested but not received
-	receivedCount int
-	totalMissing  int
+	pendingNodes map[[32]byte]*MissingNode // Nodes we've requested but not received
 }
 
 // NewSyncState creates a new SyncState.

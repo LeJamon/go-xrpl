@@ -16,16 +16,16 @@ type NegativeCache struct {
 
 	// Statistics
 	stats struct {
-		hits       int64 // Number of cache hits (confirmed missing)
-		misses     int64 // Number of cache misses (not in negative cache)
-		insertions int64 // Number of entries added
+		hits        int64 // Number of cache hits (confirmed missing)
+		misses      int64 // Number of cache misses (not in negative cache)
+		insertions  int64 // Number of entries added
 		expirations int64 // Number of entries expired
-		evictions  int64 // Number of entries evicted
+		evictions   int64 // Number of entries evicted
 	}
 
 	// Configuration
-	maxSize   int  // Maximum number of entries (0 = unlimited)
-	closed    int64
+	maxSize int // Maximum number of entries (0 = unlimited)
+	closed  int64
 }
 
 // NegativeCacheConfig holds configuration for the negative cache.
@@ -352,4 +352,3 @@ func (s *NegativeCacheSweeper) run() {
 		}
 	}
 }
-

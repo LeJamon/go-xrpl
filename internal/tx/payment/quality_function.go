@@ -1,8 +1,8 @@
 package payment
 
 import (
-	tx "github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	tx "github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 // AuctionSlotFeeScaleFactor is the denominator for trading fee calculations.

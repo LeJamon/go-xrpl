@@ -176,7 +176,7 @@ func (p *PortConfig) Validate() error {
 // validateProtocols validates that protocol combinations are valid
 func (p *PortConfig) validateProtocols() error {
 	protocols := parseProtocols(p.Protocol)
-	
+
 	hasWebSocket := false
 	hasNonWebSocket := false
 	peerCount := 0
@@ -186,7 +186,7 @@ func (p *PortConfig) validateProtocols() error {
 		case "ws", "wss":
 			hasWebSocket = true
 		case "http", "https":
-			hasNonWebSocket = true  
+			hasNonWebSocket = true
 		case "peer":
 			peerCount++
 		case "grpc":
@@ -213,10 +213,10 @@ func parseProtocols(protocolStr string) []string {
 	if protocolStr == "" {
 		return nil
 	}
-	
+
 	protocols := make([]string, 0)
 	current := ""
-	
+
 	for _, char := range protocolStr {
 		if char == ',' || char == ' ' {
 			if current != "" {
@@ -227,10 +227,10 @@ func parseProtocols(protocolStr string) []string {
 			current += string(char)
 		}
 	}
-	
+
 	if current != "" {
 		protocols = append(protocols, strings.TrimSpace(current))
 	}
-	
+
 	return protocols
 }

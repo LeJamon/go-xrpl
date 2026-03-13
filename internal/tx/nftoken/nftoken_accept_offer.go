@@ -4,10 +4,10 @@ import (
 	"encoding/hex"
 
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/ledger/entry"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
 func init() {
@@ -29,12 +29,6 @@ type NFTokenAcceptOffer struct {
 	// NFTokenBrokerFee is the broker fee for brokered sales (optional)
 	NFTokenBrokerFee *tx.Amount `json:"NFTokenBrokerFee,omitempty" xrpl:"NFTokenBrokerFee,omitempty,amount"`
 }
-
-// NFTokenAcceptOffer has no transaction flags
-const (
-	// tfNFTokenAcceptOfferMask is the mask for invalid flags (all flags are invalid)
-	tfNFTokenAcceptOfferMask uint32 = 0xFFFFFFFF
-)
 
 // NewNFTokenAcceptOffer creates a new NFTokenAcceptOffer transaction
 func NewNFTokenAcceptOffer(account string) *NFTokenAcceptOffer {
@@ -110,15 +104,15 @@ func (n *NFTokenAcceptOffer) RequiredAmendments() [][32]byte {
 
 // Apply applies the NFTokenAcceptOffer transaction to the ledger.
 // Reference: rippled NFTokenAcceptOffer.cpp doApply
-func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
+func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	accountID := ctx.AccountID
 
 	// Load offers
 	var buyOffer, sellOffer *state.NFTokenOfferData
 	var buyOfferKey, sellOfferKey keylet.Keylet
 
-	if a.NFTokenBuyOffer != "" {
-		buyOfferIDBytes, err := hex.DecodeString(a.NFTokenBuyOffer)
+	if n.NFTokenBuyOffer != "" {
+		buyOfferIDBytes, err := hex.DecodeString(n.NFTokenBuyOffer)
 		if err != nil || len(buyOfferIDBytes) != 32 {
 			return tx.TemINVALID
 		}
@@ -151,8 +145,8 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	if a.NFTokenSellOffer != "" {
-		sellOfferIDBytes, err := hex.DecodeString(a.NFTokenSellOffer)
+	if n.NFTokenSellOffer != "" {
+		sellOfferIDBytes, err := hex.DecodeString(n.NFTokenSellOffer)
 		if err != nil || len(sellOfferIDBytes) != 32 {
 			return tx.TemINVALID
 		}
@@ -187,23 +181,23 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// IOU preclaim checks for all modes
 	// Reference: rippled NFTokenAcceptOffer.cpp preclaim — IOU authorization and fund checks
-	if r := a.iouPreclaimChecks(ctx, accountID, buyOffer, sellOffer); r != tx.TesSUCCESS {
+	if r := n.iouPreclaimChecks(ctx, accountID, buyOffer, sellOffer); r != tx.TesSUCCESS {
 		return r
 	}
 
 	// Brokered mode (both offers)
 	if buyOffer != nil && sellOffer != nil {
-		return a.acceptNFTokenBrokeredMode(ctx, accountID, buyOffer, sellOffer, buyOfferKey, sellOfferKey)
+		return n.acceptNFTokenBrokeredMode(ctx, accountID, buyOffer, sellOffer, buyOfferKey, sellOfferKey)
 	}
 
 	// Direct mode - sell offer only
 	if sellOffer != nil {
-		return a.acceptNFTokenSellOfferDirect(ctx, accountID, sellOffer, sellOfferKey)
+		return n.acceptNFTokenSellOfferDirect(ctx, accountID, sellOffer, sellOfferKey)
 	}
 
 	// Direct mode - buy offer only
 	if buyOffer != nil {
-		return a.acceptNFTokenBuyOfferDirect(ctx, accountID, buyOffer, buyOfferKey)
+		return n.acceptNFTokenBuyOfferDirect(ctx, accountID, buyOffer, buyOfferKey)
 	}
 
 	return tx.TemINVALID
@@ -211,9 +205,8 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 
 // iouPreclaimChecks performs IOU-specific preclaim checks for NFTokenAcceptOffer.
 // Reference: rippled NFTokenAcceptOffer.cpp preclaim
-func (a *NFTokenAcceptOffer) iouPreclaimChecks(ctx *tx.ApplyContext, accountID [20]byte,
+func (n *NFTokenAcceptOffer) iouPreclaimChecks(ctx *tx.ApplyContext, accountID [20]byte,
 	buyOffer, sellOffer *state.NFTokenOfferData) tx.Result {
-
 	fixV2 := ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2)
 
 	fixV1_2 := ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2)
@@ -293,11 +286,11 @@ func (a *NFTokenAcceptOffer) iouPreclaimChecks(ctx *tx.ApplyContext, accountID [
 	}
 
 	// Brokered mode broker fee check
-	if buyOffer != nil && sellOffer != nil && a.NFTokenBrokerFee != nil && !a.NFTokenBrokerFee.IsNative() {
+	if buyOffer != nil && sellOffer != nil && n.NFTokenBrokerFee != nil && !n.NFTokenBrokerFee.IsNative() {
 		if fixV2 {
-			brokerFeeIssuerID, err := state.DecodeAccountID(a.NFTokenBrokerFee.Issuer)
+			brokerFeeIssuerID, err := state.DecodeAccountID(n.NFTokenBrokerFee.Issuer)
 			if err == nil {
-				if r := checkNFTTrustlineAuthorized(ctx.View, accountID, a.NFTokenBrokerFee.Currency, brokerFeeIssuerID); r != tx.TesSUCCESS {
+				if r := checkNFTTrustlineAuthorized(ctx.View, accountID, n.NFTokenBrokerFee.Currency, brokerFeeIssuerID); r != tx.TesSUCCESS {
 					return r
 				}
 			}

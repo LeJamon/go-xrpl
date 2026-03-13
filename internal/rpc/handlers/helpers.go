@@ -107,16 +107,20 @@ func ClampLimit(userLimit uint32, r LimitRange, isAdmin bool) uint32 {
 // Embed this in handler structs to avoid repeating these 3 boilerplate methods.
 type BaseHandler struct{}
 
-func (BaseHandler) RequiredRole() types.Role           { return types.RoleGuest }
-func (BaseHandler) SupportedApiVersions() []int        { return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3} }
-func (BaseHandler) RequiredCondition() types.Condition  { return types.NoCondition }
+func (BaseHandler) RequiredRole() types.Role { return types.RoleGuest }
+func (BaseHandler) SupportedApiVersions() []int {
+	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
+}
+func (BaseHandler) RequiredCondition() types.Condition { return types.NoCondition }
 
 // AdminHandler is like BaseHandler but defaults to RoleAdmin.
 type AdminHandler struct{}
 
-func (AdminHandler) RequiredRole() types.Role           { return types.RoleAdmin }
-func (AdminHandler) SupportedApiVersions() []int        { return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3} }
-func (AdminHandler) RequiredCondition() types.Condition  { return types.NoCondition }
+func (AdminHandler) RequiredRole() types.Role { return types.RoleAdmin }
+func (AdminHandler) SupportedApiVersions() []int {
+	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
+}
+func (AdminHandler) RequiredCondition() types.Condition { return types.NoCondition }
 
 // InjectDeliveredAmount adds DeliveredAmount to metadata for Payment transactions.
 // If meta has a "DeliveredAmount" field already, it is left as-is.

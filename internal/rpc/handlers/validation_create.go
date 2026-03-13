@@ -18,7 +18,7 @@ import (
 //     3. If no secret: generate random seed
 //     4. Derive keypair from seed using key_type (default secp256k1)
 //     5. Encode as: validation_key (RFC 1751), validation_public_key (base58),
-//        validation_seed (base58 seed)
+//     validation_seed (base58 seed)
 //   - This is admin-only and generates keys for validator configuration
 //   - Note: The crypto primitives already exist in internal/crypto/; this just needs
 //     wiring to RPC format (base58 encoding of seeds/keys)
@@ -28,4 +28,3 @@ func (m *ValidationCreateMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	return nil, types.NewRpcError(types.RpcNOT_IMPL, "notImplemented", "notImplemented",
 		"validation_create requires validator key generation wiring")
 }
-

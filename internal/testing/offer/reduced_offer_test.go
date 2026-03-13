@@ -9,10 +9,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	paymentBuilder "github.com/LeJamon/goXRPLd/internal/testing/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/stretchr/testify/require"
 )
 
@@ -74,14 +74,14 @@ func testPartialCrossNewXrpIouQChange(t *testing.T) {
 
 			// bob's offer (new offer) is the same every time:
 			// TakerPays = XRP(1) = 1000000 drops, TakerGets = USD(1)
-			bobTakerPays := tx.NewXRPAmount(1000000)     // XRP(1)
+			bobTakerPays := tx.NewXRPAmount(1000000)                    // XRP(1)
 			bobTakerGets := tx.NewIssuedAmount(1, 0, "USD", gw.Address) // USD(1)
 
 			var blockedCount uint32
 			// alice's offer has a slightly smaller TakerPays with each iteration
 			for mantissaReduce := uint64(1000000000); mantissaReduce <= 5000000000; mantissaReduce += 20000000 {
 				// alice's offer: takerPays = USD with reduced mantissa, takerGets = XRP(1) - 1 drop
-				aliceUSD := tx.NewIssuedAmount(int64(bobTakerGets.Mantissa()-int64(mantissaReduce)), bobTakerGets.Exponent(), "USD", gw.Address)
+				aliceUSD := tx.NewIssuedAmount(bobTakerGets.Mantissa()-int64(mantissaReduce), bobTakerGets.Exponent(), "USD", gw.Address)
 				aliceXRP := tx.NewXRPAmount(bobTakerPays.Drops() - 1)
 
 				// Put alice's offer in the ledger
@@ -178,7 +178,7 @@ func testPartialCrossOldXrpIouQChange(t *testing.T) {
 			var blockedCount uint32
 			for mantissaReduce := uint64(1000000000); mantissaReduce <= 4000000000; mantissaReduce += 20000000 {
 				// bob's offer: slightly smaller TakerPays (USD)
-				bobUSD := tx.NewIssuedAmount(int64(aliceTakerGets.Mantissa()-int64(mantissaReduce)), aliceTakerGets.Exponent(), "USD", gw.Address)
+				bobUSD := tx.NewIssuedAmount(aliceTakerGets.Mantissa()-int64(mantissaReduce), aliceTakerGets.Exponent(), "USD", gw.Address)
 				bobXRP := tx.NewXRPAmount(aliceTakerPays.Drops() - 1)
 
 				initialQuality := qualityRate(aliceTakerPays, aliceTakerGets)

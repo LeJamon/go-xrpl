@@ -25,4 +25,3 @@ func (m *StopMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (inte
 
 	return response, nil
 }
-

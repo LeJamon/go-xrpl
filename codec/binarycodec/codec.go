@@ -45,7 +45,6 @@ func Encode(json map[string]any) (string, error) {
 
 	// Iterate over the keys in the provided JSON
 	for k := range json {
-
 		// Get the FieldIdNameMap from the definitions package
 		fh := definitions.Get().Fields[k]
 
@@ -91,7 +90,6 @@ func EncodeForMultisigning(json map[string]any, xrpAccountID string) (string, er
 
 // EncodeForSigning encodes a transaction into binary format in preparation for signing.
 func EncodeForSigning(json map[string]any) (string, error) {
-
 	encoded, err := Encode(removeNonSigningFields(json))
 
 	if err != nil {
@@ -106,7 +104,6 @@ func EncodeForSigning(json map[string]any) (string, error) {
 // Note: Unlike normal XRP amounts, payment channel claim amounts use the full uint64 range as raw drops,
 // without the XRP amount validation limits.
 func EncodeForSigningClaim(json map[string]any) (string, error) {
-
 	if json["Channel"] == nil || json["Amount"] == nil {
 		return "", ErrSigningClaimFieldNotFound
 	}

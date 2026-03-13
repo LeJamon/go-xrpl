@@ -7,21 +7,21 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/account"
 	batchtx "github.com/LeJamon/goXRPLd/internal/tx/batch"
 	"github.com/LeJamon/goXRPLd/internal/tx/check"
 	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/LeJamon/goXRPLd/internal/tx/ticket"
-	"github.com/LeJamon/goXRPLd/internal/testing"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // CalcBatchFee calculates the expected batch fee.
 // Formula: (numSigners + 2) * baseFee + baseFee * numInnerTxns
 // Reference: rippled test/jtx/batch.h calcBatchFee()
 func CalcBatchFee(baseFee uint64, numSigners uint32, numInnerTxns uint32) uint64 {
-	return (uint64(numSigners) + 2) * baseFee + baseFee*uint64(numInnerTxns)
+	return (uint64(numSigners)+2)*baseFee + baseFee*uint64(numInnerTxns)
 }
 
 // CalcBatchFeeFromEnv calculates the expected batch fee using the env's base fee.

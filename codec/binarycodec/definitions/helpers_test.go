@@ -7,7 +7,6 @@ import (
 )
 
 func TestGetTypeNameByFieldName(t *testing.T) {
-
 	tt := []struct {
 		description   string
 		input         string
@@ -32,7 +31,6 @@ func TestGetTypeNameByFieldName(t *testing.T) {
 	}
 
 	for _, test := range tt {
-
 		t.Run(test.description, func(t *testing.T) {
 			got, err := definitions.GetTypeNameByFieldName(test.input)
 			if test.expectedError != nil {
@@ -43,13 +41,10 @@ func TestGetTypeNameByFieldName(t *testing.T) {
 				require.Equal(t, test.expected, got)
 			}
 		})
-
 	}
-
 }
 
 func TestGetTypeCodeByTypeName(t *testing.T) {
-
 	tt := []struct {
 		description   string
 		input         string
@@ -80,7 +75,6 @@ func TestGetTypeCodeByTypeName(t *testing.T) {
 	}
 
 	for _, test := range tt {
-
 		t.Run(test.description, func(t *testing.T) {
 			got, err := definitions.GetTypeCodeByTypeName(test.input)
 			if test.expectedError != nil {
@@ -91,9 +85,7 @@ func TestGetTypeCodeByTypeName(t *testing.T) {
 				require.Equal(t, test.expected, got)
 			}
 		})
-
 	}
-
 }
 
 func TestGetTypeCodeByFieldName(t *testing.T) {
@@ -127,7 +119,6 @@ func TestGetTypeCodeByFieldName(t *testing.T) {
 	}
 
 	for _, test := range tt {
-
 		t.Run(test.description, func(t *testing.T) {
 			got, err := definitions.GetTypeCodeByFieldName(test.input)
 			if test.expectedError != nil {
@@ -142,7 +133,6 @@ func TestGetTypeCodeByFieldName(t *testing.T) {
 }
 
 func TestGetFieldCodeByFieldName(t *testing.T) {
-
 	tt := []struct {
 		description   string
 		input         string
@@ -167,7 +157,6 @@ func TestGetFieldCodeByFieldName(t *testing.T) {
 	}
 
 	for _, test := range tt {
-
 		t.Run(test.description, func(t *testing.T) {
 			got, err := definitions.GetFieldCodeByFieldName(test.input)
 			if test.expectedError != nil {
@@ -209,7 +198,6 @@ func TestGetFieldHeaderByFieldName(t *testing.T) {
 	}
 
 	for _, test := range tt {
-
 		t.Run(test.description, func(t *testing.T) {
 			got, err := definitions.GetFieldHeaderByFieldName(test.input)
 			if test.expectedError != nil {
@@ -319,7 +307,6 @@ func TestGetFieldInfoByFieldName(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, test.expected, got)
 			}
-
 		})
 	}
 }
@@ -362,7 +349,6 @@ func TestGetFieldInstanceByFieldName(t *testing.T) {
 	}
 
 	for _, test := range tt {
-
 		t.Run(test.description, func(t *testing.T) {
 			got, err := definitions.GetFieldInstanceByFieldName(test.input)
 			if test.expectedError != nil {
@@ -564,7 +550,6 @@ func TestGetLedgerEntryTypeCodeByLedgerEntryTypeName(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestGetLedgerEntryTypeNameByLedgerEntryTypeCode(t *testing.T) {

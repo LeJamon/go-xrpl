@@ -44,12 +44,16 @@ var tenTo17 = new(big.Int).Exp(big.NewInt(10), big.NewInt(17), nil)
 // GetRate calculates the quality/exchange rate for an offer.
 // This matches rippled's getRate(offerOut, offerIn) which returns in/out.
 // Reference: rippled STAmount.h line 693-694:
-//   "Rate: smaller is better, the taker wants the most out: in/out"
+//
+//	"Rate: smaller is better, the taker wants the most out: in/out"
+//
 // Lower rate value = better for taker (they pay less per unit they get)
 // Returns uint64 encoded as: (exponent+100) << 56 | mantissa
 //
 // Uses the same integer arithmetic as rippled's divide() function in STAmount.cpp:
-//   muldiv(numVal, tenTo17, denVal) + 5
+//
+//	muldiv(numVal, tenTo17, denVal) + 5
+//
 // where muldiv does (a * b) / c with 128-bit precision.
 func GetRate(offerOut, offerIn Amount) uint64 {
 	// Handle zero case - check offerOut since we divide by it

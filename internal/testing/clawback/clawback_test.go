@@ -5,14 +5,14 @@ package clawback_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
 	"github.com/LeJamon/goXRPLd/internal/testing/clawback"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
 	"github.com/stretchr/testify/require"
 )
 

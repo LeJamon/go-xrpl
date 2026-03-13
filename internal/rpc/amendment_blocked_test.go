@@ -211,7 +211,7 @@ func TestAmendmentBlockedConditionClassification(t *testing.T) {
 	methods := server.registry.List()
 
 	counts := map[types.Condition]int{
-		types.NoCondition:             0,
+		types.NoCondition:            0,
 		types.NeedsNetworkConnection: 0,
 		types.NeedsCurrentLedger:     0,
 		types.NeedsClosedLedger:      0,
@@ -246,7 +246,7 @@ func TestAllHandlersDeclareCondition(t *testing.T) {
 	methods := server.registry.List()
 
 	validConditions := map[types.Condition]bool{
-		types.NoCondition:             true,
+		types.NoCondition:            true,
 		types.NeedsNetworkConnection: true,
 		types.NeedsCurrentLedger:     true,
 		types.NeedsClosedLedger:      true,

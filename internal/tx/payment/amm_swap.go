@@ -9,8 +9,8 @@ package payment
 import (
 	"math"
 
-	tx "github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	tx "github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 // ammOne returns 1 as an IOU Amount for arithmetic.

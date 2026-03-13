@@ -9,14 +9,14 @@ import (
 	"testing"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	jtx "github.com/LeJamon/goXRPLd/internal/testing"
+	paybuilder "github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/clawback"
 	mpttx "github.com/LeJamon/goXRPLd/internal/tx/mpt"
 	"github.com/LeJamon/goXRPLd/internal/tx/payment"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	paybuilder "github.com/LeJamon/goXRPLd/internal/testing/payment"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -605,7 +605,6 @@ func decodeMPTID(hexID string) [24]byte {
 	}
 	return mptID
 }
-
 
 // --------------------------------------------------------------------------
 // Pointer helpers for option structs

@@ -11,9 +11,9 @@ import (
 	"github.com/LeJamon/goXRPLd/crypto/ed25519"
 	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
 
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // serializePayChannel serializes a PayChannel ledger entry from a PaymentChannelCreate transaction.

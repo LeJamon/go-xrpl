@@ -100,7 +100,6 @@ func TestXChainBridge_FromJson(t *testing.T) {
 			if !bytes.Equal(got, tc.want) {
 				t.Errorf("FromJson() got = %v, want %v", got, tc.want)
 			}
-
 		})
 	}
 }
