@@ -577,6 +577,34 @@ func (l *Ledger) SetStateMapFamily(family shamap.Family) {
 	l.stateMap.SetFamily(family)
 }
 
+// SetTxMapFamily sets the Family on the transaction map, enabling backed mode
+// with lazy loading and efficient snapshots.
+func (l *Ledger) SetTxMapFamily(family shamap.Family) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.txMap.SetFamily(family)
+}
+
+// FlushDirtyNodes flushes all dirty SHAMap nodes (both state and tx maps)
+// and returns the batches. This must be called before persisting to the NodeStore
+// so that inner nodes are also stored (not just leaves).
+func (l *Ledger) FlushDirtyNodes() (*shamap.NodeBatch, *shamap.NodeBatch, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	stateBatch, err := l.stateMap.FlushDirty(false)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	txBatch, err := l.txMap.FlushDirty(false)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return stateBatch, txBatch, nil
+}
+
 // SerializeHeader returns the serialized ledger header bytes
 func (l *Ledger) SerializeHeader() []byte {
 	l.mu.RLock()

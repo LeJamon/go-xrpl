@@ -26,6 +26,7 @@ import (
 
 var (
 	standalone bool
+	startFresh bool
 )
 
 // serverCmd represents the server command (default action)
@@ -51,6 +52,7 @@ func init() {
 
 	// Server-specific flags — operational concerns only
 	serverCmd.Flags().BoolVarP(&standalone, "standalone", "a", false, "run in standalone mode (no peers)")
+	serverCmd.Flags().BoolVar(&startFresh, "start", false, "start fresh (ignore persisted ledger state)")
 }
 
 func runServer(cmd *cobra.Command, args []string) {
@@ -179,6 +181,9 @@ func runServer(cmd *cobra.Command, args []string) {
 		Standalone:   standalone,
 		NodeStore:    db,
 		RelationalDB: repoManager,
+	}
+	if startFresh {
+		cfg.StartupMode = service.StartupFresh
 	}
 	if standalone {
 		cfg.GenesisConfig = genesisConfig

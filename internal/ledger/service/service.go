@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"sync"
@@ -10,22 +11,43 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
+	"github.com/LeJamon/goXRPLd/shamap"
 	"github.com/LeJamon/goXRPLd/storage/nodestore"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 
+// StartupMode controls how the service initializes its ledger state.
+type StartupMode int
+
+const (
+	// StartupNormal attempts to load the latest persisted ledger.
+	// If no persisted state is found, it creates a fresh genesis ledger.
+	StartupNormal StartupMode = iota
+
+	// StartupFresh always creates a new genesis ledger, ignoring any persisted state.
+	StartupFresh
+
+	// StartupLoad requires persisted state to exist. Returns an error if none is found.
+	StartupLoad
+)
+
 // Common errors
 var (
-	ErrNotStandalone  = errors.New("operation only valid in standalone mode")
-	ErrNoOpenLedger   = errors.New("no open ledger")
-	ErrNoClosedLedger = errors.New("no closed ledger")
-	ErrLedgerNotFound = errors.New("ledger not found")
+	ErrNotStandalone      = errors.New("operation only valid in standalone mode")
+	ErrNoOpenLedger       = errors.New("no open ledger")
+	ErrNoClosedLedger     = errors.New("no closed ledger")
+	ErrLedgerNotFound     = errors.New("ledger not found")
+	ErrNoPersistedLedger  = errors.New("no persisted ledger found (required by StartupLoad)")
 )
 
 // Config holds configuration for the LedgerService
 type Config struct {
 	// Standalone indicates whether the node is running in standalone mode
 	Standalone bool
+
+	// StartupMode controls how the service initializes ledger state.
+	// Default is StartupNormal: load from storage if available, else create genesis.
+	StartupMode StartupMode
 
 	// GenesisConfig is the configuration for creating the genesis ledger
 	GenesisConfig genesis.Config
@@ -91,6 +113,9 @@ type Service struct {
 
 	// NodeStore for persistent storage (nil if in-memory only)
 	nodeStore nodestore.Database
+
+	// family wraps nodeStore for SHAMap backed operations (lazy set on first use)
+	family *shamap.NodeStoreFamily
 
 	// RelationalDB for transaction indexing (nil if not configured)
 	relationalDB relationaldb.RepositoryManager
@@ -158,36 +183,58 @@ func (s *Service) GetEventHooks() *EventHooks {
 	return s.hooks
 }
 
-// Start initializes the service with a genesis ledger
+// Start initializes the service based on StartupMode:
+//   - StartupFresh: always creates a new genesis ledger
+//   - StartupNormal: loads from storage if available, else creates genesis
+//   - StartupLoad: requires persisted state, returns error if none found
 func (s *Service) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Create genesis ledger
-	genesisResult, err := genesis.Create(s.config.GenesisConfig)
+	switch s.config.StartupMode {
+	case StartupFresh:
+		return s.createGenesis()
+
+	case StartupLoad:
+		ctx := context.Background()
+		hash, found, err := latestLedgerHash(ctx, s.relationalDB, s.nodeStore)
+		if err != nil {
+			return errors.New("failed to find persisted ledger: " + err.Error())
+		}
+		if !found {
+			return ErrNoPersistedLedger
+		}
+		return s.resumeFromLedger(ctx, hash)
+
+	default: // StartupNormal
+		ctx := context.Background()
+		hash, found, err := latestLedgerHash(ctx, s.relationalDB, s.nodeStore)
+		if err != nil {
+			return errors.New("failed to find persisted ledger: " + err.Error())
+		}
+		if found {
+			return s.resumeFromLedger(ctx, hash)
+		}
+		return s.createGenesis()
+	}
+}
+
+// resumeFromLedger loads a persisted ledger and sets up the service to continue
+// from where it left off.
+func (s *Service) resumeFromLedger(ctx context.Context, ledgerHash [32]byte) error {
+	loaded, err := s.loadLedger(ctx, ledgerHash)
 	if err != nil {
-		return errors.New("failed to create genesis ledger: " + err.Error())
+		return errors.New("failed to load persisted ledger: " + err.Error())
 	}
 
-	// Convert genesis to Ledger.
-	// Fee values are read dynamically from the FeeSettings SLE in the state map
-	// by readFeesFromLedger() whenever they are needed.
-	genesisLedger := ledger.FromGenesis(
-		genesisResult.Header,
-		genesisResult.StateMap,
-		genesisResult.TxMap,
-		drops.Fees{},
-	)
+	s.closedLedger = loaded
+	s.validatedLedger = loaded
+	s.ledgerHistory[loaded.Sequence()] = loaded
 
-	s.genesisLedger = genesisLedger
-	s.closedLedger = genesisLedger
-	s.validatedLedger = genesisLedger
-	s.ledgerHistory[genesisLedger.Sequence()] = genesisLedger
-
-	// Create the first open ledger (ledger 2)
-	openLedger, err := ledger.NewOpen(genesisLedger, time.Now())
+	// Create the next open ledger
+	openLedger, err := ledger.NewOpen(loaded, time.Now())
 	if err != nil {
-		return errors.New("failed to create open ledger: " + err.Error())
+		return errors.New("failed to create open ledger from loaded state: " + err.Error())
 	}
 	s.openLedger = openLedger
 

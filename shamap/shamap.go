@@ -1203,6 +1203,13 @@ func (sm *SHAMap) flushNode(node Node, releaseChildren bool, batch *NodeBatch) e
 
 	// For inner nodes: flush children first (post-order)
 	if inner, ok := node.(*InnerNode); ok {
+		// Skip empty inner nodes (e.g., root of an empty SHAMap).
+		// Their hash is zero and they don't need to be stored.
+		if inner.BranchCount() == 0 {
+			node.SetDirty(false)
+			return nil
+		}
+
 		inner.mu.Lock()
 		for i := 0; i < BranchFactor; i++ {
 			child := inner.children[i]

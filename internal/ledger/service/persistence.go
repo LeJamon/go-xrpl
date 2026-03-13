@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/goXRPLd/shamap"
 	"github.com/LeJamon/goXRPLd/storage/nodestore"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
@@ -30,30 +32,35 @@ func (s *Service) persistLedger(l *ledger.Ledger) error {
 	return nil
 }
 
-// persistToNodeStore writes ledger state to the nodestore
+// persistToNodeStore writes ledger state to the nodestore.
+// This stores both the SHAMap inner nodes and leaf nodes in prefix-serialized
+// format so that NewFromRootHash() can reconstruct the tree via lazy loading.
 func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq uint32) error {
-	// Collect nodes to store in batch
-	var nodes []*nodestore.Node
+	// Ensure the SHAMaps have a Family set so FlushDirty knows how to serialize
+	family := s.getOrCreateFamily()
 
-	// Persist state map entries
-	err := l.ForEach(func(key [32]byte, data []byte) bool {
-		node := &nodestore.Node{
-			Type:      nodestore.NodeAccount,
-			Hash:      nodestore.Hash256(key),
-			Data:      data,
-			LedgerSeq: seq,
-		}
-		nodes = append(nodes, node)
-		return true
-	})
+	l.SetStateMapFamily(family)
+	l.SetTxMapFamily(family)
+
+	// Flush all dirty SHAMap nodes (inner + leaf) in prefix-serialized format.
+	// This is critical for recovery: NewFromRootHash() needs inner nodes in the
+	// NodeStore for lazy loading to work.
+	stateBatch, txBatch, err := l.FlushDirtyNodes()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to flush dirty nodes: %w", err)
 	}
 
-	// Store nodes in batch for efficiency
-	if len(nodes) > 0 {
-		if err := s.nodeStore.StoreBatch(ctx, nodes); err != nil {
-			return err
+	// Store state map nodes
+	if len(stateBatch.Entries) > 0 {
+		if err := family.StoreBatch(stateBatch.Entries); err != nil {
+			return fmt.Errorf("failed to store state map nodes: %w", err)
+		}
+	}
+
+	// Store transaction map nodes
+	if len(txBatch.Entries) > 0 {
+		if err := family.StoreBatch(txBatch.Entries); err != nil {
+			return fmt.Errorf("failed to store tx map nodes: %w", err)
 		}
 	}
 
@@ -66,11 +73,21 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 		LedgerSeq: seq,
 	}
 	if err := s.nodeStore.Store(ctx, headerNode); err != nil {
-		return err
+		return fmt.Errorf("failed to store ledger header: %w", err)
 	}
 
 	// Sync to ensure durability
 	return s.nodeStore.Sync()
+}
+
+// getOrCreateFamily returns the NodeStoreFamily for this service.
+// It wraps the existing nodeStore database.
+func (s *Service) getOrCreateFamily() *shamap.NodeStoreFamily {
+	if s.family != nil {
+		return s.family
+	}
+	s.family = shamap.NewNodeStoreFamily(s.nodeStore)
+	return s.family
 }
 
 // persistToRelationalDB writes ledger metadata to the relational database

@@ -275,5 +275,31 @@ func (d *KVDatabaseImpl) Close() error {
 	return lastErr
 }
 
+// ForEach iterates over all stored nodes, decoding each entry.
+// The callback receives a fully decoded Node. Return a non-nil error
+// from fn to stop iteration early.
+func (d *KVDatabaseImpl) ForEach(fn func(*Node) error) error {
+	iter := d.store.NewIterator(nil, nil)
+	defer iter.Release()
+
+	for iter.Next() {
+		key := iter.Key()
+		if len(key) != 32 {
+			continue // skip non-hash keys
+		}
+		var hash Hash256
+		copy(hash[:], key)
+
+		node, err := decodeNodeData(hash, iter.Value())
+		if err != nil {
+			continue // skip corrupt entries
+		}
+		if err := fn(node); err != nil {
+			return err
+		}
+	}
+	return iter.Error()
+}
+
 // Ensure KVDatabaseImpl implements Database at compile time.
 var _ Database = (*KVDatabaseImpl)(nil)
