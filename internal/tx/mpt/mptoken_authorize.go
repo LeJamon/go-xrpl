@@ -148,6 +148,13 @@ func (m *MPTokenAuthorize) holderUnauthorize(ctx *tx.ApplyContext, issuanceKey, 
 		return tx.TecHAS_OBLIGATIONS
 	}
 
+	// With featureSingleAssetVault, a locked MPToken cannot be deleted.
+	// Reference: rippled MPTokenAuthorize.cpp:95-97
+	if ctx.Rules().Enabled(amendment.FeatureSingleAssetVault) &&
+		token.Flags&entry.LsfMPTLocked != 0 {
+		return tx.TecNO_PERMISSION
+	}
+
 	// Remove from owner directory
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 	state.DirRemove(ctx.View, ownerDirKey, token.OwnerNode, tokenKey.Key, false)

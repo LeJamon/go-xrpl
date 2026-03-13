@@ -1,12 +1,134 @@
 package nftoken
 
 import (
+	"encoding/binary"
+
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
+
+// isOfferAmountNegative checks the raw binary SLE data of an NFTokenOffer
+// to determine if its Amount field represents a negative value.
+// In XRPL binary encoding for XRP: bit 63 = 0 (native), bit 62 = sign (1=positive, 0=negative).
+// For IOU: bit 63 = 1, bit 62 = sign.
+// The NFTokenOfferData struct uses uint64 for Amount and loses the sign, so
+// this function re-parses the raw binary to recover it.
+// Reference: rippled NFTokenAcceptOffer.cpp pay() line 404: if (amount < beast::zero) return tecINTERNAL;
+func isOfferAmountNegative(rawSLEData []byte) bool {
+	// FieldTypeAmount = 6, Amount fieldCode = 1 → header byte = 0x61
+	// Walk the binary SLE to find the Amount field
+	offset := 0
+	for offset < len(rawSLEData) {
+		if offset+1 > len(rawSLEData) {
+			break
+		}
+
+		header := rawSLEData[offset]
+		offset++
+
+		typeCode := (header >> 4) & 0x0F
+		fieldCode := header & 0x0F
+
+		if typeCode == 0 {
+			if offset >= len(rawSLEData) {
+				break
+			}
+			typeCode = rawSLEData[offset]
+			offset++
+		}
+
+		if fieldCode == 0 {
+			if offset >= len(rawSLEData) {
+				break
+			}
+			fieldCode = rawSLEData[offset]
+			offset++
+		}
+
+		switch typeCode {
+		case 1: // UInt16
+			if offset+2 > len(rawSLEData) {
+				return false
+			}
+			offset += 2
+
+		case 2: // UInt32
+			if offset+4 > len(rawSLEData) {
+				return false
+			}
+			offset += 4
+
+		case 3: // UInt64
+			if offset+8 > len(rawSLEData) {
+				return false
+			}
+			offset += 8
+
+		case 5: // Hash256
+			if offset+32 > len(rawSLEData) {
+				return false
+			}
+			offset += 32
+
+		case 6: // Amount
+			if offset+8 > len(rawSLEData) {
+				return false
+			}
+			if fieldCode == 1 { // Amount field (sfAmount)
+				rawAmount := binary.BigEndian.Uint64(rawSLEData[offset : offset+8])
+				isNative := (rawAmount & 0x8000000000000000) == 0
+				isPositive := (rawAmount & 0x4000000000000000) != 0
+
+				if isNative {
+					// XRP: negative if bit 62 is 0 AND value is not zero
+					value := rawAmount & 0x3FFFFFFFFFFFFFFF
+					if !isPositive && value != 0 {
+						return true
+					}
+				} else {
+					// IOU: negative if bit 62 is 0
+					// The mantissa/exponent are in the lower bits
+					if !isPositive {
+						return true
+					}
+				}
+				return false
+			}
+			// Skip this amount field
+			if rawSLEData[offset]&0x80 == 0 {
+				offset += 8 // XRP
+			} else {
+				offset += 48 // IOU
+			}
+
+		case 8: // AccountID
+			if offset >= len(rawSLEData) {
+				return false
+			}
+			length := int(rawSLEData[offset])
+			offset++
+			if offset+length > len(rawSLEData) {
+				return false
+			}
+			offset += length
+
+		case 0x0E: // Array end marker / Object end
+			// End of object or array
+			continue
+
+		case 0x0F: // End marker
+			return false
+
+		default:
+			// Unknown type - bail
+			return false
+		}
+	}
+	return false
+}
 
 // checkNFTTrustlineAuthorized checks if an account is authorized for an IOU currency.
 // Returns tesSUCCESS if authorized, or tecNO_LINE/tecNO_AUTH if not.

@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/drops"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func TestGenerateGenesisAccountID(t *testing.T) {
@@ -142,6 +144,66 @@ func TestStandardFees(t *testing.T) {
 	if fees.ReserveIncrement != expectedReserveIncrement {
 		t.Errorf("Reserve increment mismatch: got %d, expected %d",
 			fees.ReserveIncrement, expectedReserveIncrement)
+	}
+}
+
+// TestFeeSettingsRoundTrip verifies that FeeSettings round-trip correctly
+// through genesis creation, binary codec, SHAMap, and state.ParseFeeSettings.
+// This test is critical for understanding the AccountDelete conformance fixture
+// behavior where CalculateBaseFee reads fees from the ledger SLE.
+func TestFeeSettingsRoundTrip(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Fees.ReserveBase = drops.DropsPerXRP * 200
+	cfg.Fees.ReserveIncrement = drops.DropsPerXRP * 50 // 50 XRP = 50_000_000 drops
+
+	genesis, err := Create(cfg)
+	if err != nil {
+		t.Fatalf("Create genesis failed: %v", err)
+	}
+
+	// Read the FeeSettings SLE from the state map
+	k := keylet.Fees()
+	item, found, err := genesis.StateMap.Get(k.Key)
+	if err != nil {
+		t.Fatalf("Failed to get FeeSettings from state map: %v", err)
+	}
+	if !found {
+		t.Fatal("FeeSettings not found in genesis state map")
+	}
+
+	data := item.Data()
+	t.Logf("FeeSettings SLE bytes (%d): %x", len(data), data)
+
+	// Parse the FeeSettings
+	feeSettings, err := state.ParseFeeSettings(data)
+	if err != nil {
+		t.Fatalf("Failed to parse FeeSettings: %v", err)
+	}
+
+	t.Logf("Parsed FeeSettings:")
+	t.Logf("  BaseFeeDrops: %d", feeSettings.BaseFeeDrops)
+	t.Logf("  ReserveBaseDrops: %d", feeSettings.ReserveBaseDrops)
+	t.Logf("  ReserveIncrementDrops: %d", feeSettings.ReserveIncrementDrops)
+	t.Logf("  BaseFee (legacy): %d", feeSettings.BaseFee)
+	t.Logf("  ReserveBase (legacy): %d", feeSettings.ReserveBase)
+	t.Logf("  ReserveIncrement (legacy): %d", feeSettings.ReserveIncrement)
+
+	gotBaseFee := feeSettings.GetBaseFee()
+	gotReserveBase := feeSettings.GetReserveBase()
+	gotReserveIncrement := feeSettings.GetReserveIncrement()
+
+	t.Logf("  GetBaseFee(): %d", gotBaseFee)
+	t.Logf("  GetReserveBase(): %d", gotReserveBase)
+	t.Logf("  GetReserveIncrement(): %d", gotReserveIncrement)
+
+	if gotBaseFee != 10 {
+		t.Errorf("GetBaseFee() = %d, want 10", gotBaseFee)
+	}
+	if gotReserveBase != 200_000_000 {
+		t.Errorf("GetReserveBase() = %d, want 200000000", gotReserveBase)
+	}
+	if gotReserveIncrement != 50_000_000 {
+		t.Errorf("GetReserveIncrement() = %d, want 50000000", gotReserveIncrement)
 	}
 }
 

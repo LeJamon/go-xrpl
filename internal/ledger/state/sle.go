@@ -387,6 +387,21 @@ func (t *SLETracker) GenerateAffectedNodes() []AffectedNode {
 	return nodes
 }
 
+// GetOwnerNode extracts the OwnerNode (UInt64 type=3, field=4) from raw binary
+// SLE data by scanning for the header byte 0x34 followed by 8 bytes of value.
+// Returns 0 if the field is not found (which is a valid default for page 0).
+// Reference: rippled sfOwnerNode — needed for DirRemove to find the right page.
+func GetOwnerNode(data []byte) uint64 {
+	// OwnerNode header byte: type code 3 (UInt64) << 4 | field code 4 = 0x34
+	const ownerNodeHeader byte = 0x34
+	for i := 0; i < len(data)-8; i++ {
+		if data[i] == ownerNodeHeader {
+			return binary.BigEndian.Uint64(data[i+1 : i+9])
+		}
+	}
+	return 0
+}
+
 // GetLedgerEntryType extracts the LedgerEntryType (UInt16, field code 1) from raw
 // binary SLE data without a full codec decode. The first field in XRPL binary
 // format is always the LedgerEntryType encoded as header byte 0x11 + 2 bytes value.

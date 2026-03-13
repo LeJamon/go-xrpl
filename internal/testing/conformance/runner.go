@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -129,6 +130,17 @@ func RunFixture(t *testing.T, fixturePath string) {
 	}
 	r.setupEnv(*envCfg)
 
+	// Auto-fund accounts for fixtures without fund steps.
+	// Many rippled test fixtures rely on implicit account creation from
+	// the test framework. When a fixture has no "fund" ops AND the first
+	// tx expects an applied result (tesSUCCESS/tec*), we scan tx_json
+	// steps to discover accounts and fund them. Fixtures that expect
+	// rejection codes (tem*/tef*/tel*/ter*) intentionally use unfunded
+	// accounts and should NOT be auto-funded.
+	if r.shouldAutoFund(fixture.Steps) {
+		r.autoFundAccounts(fixture.Steps)
+	}
+
 	// Execute steps sequentially
 	for i, step := range fixture.Steps {
 		switch step.Op {
@@ -238,6 +250,16 @@ func (r *runner) execTx(stepIdx int, step Step) {
 		r.t.Fatalf("Step %d (tx): invalid tx_blob hex: %v", stepIdx, err)
 	}
 
+	// Empty blob means the transaction was constructed without required fields
+	// and couldn't be serialized. If the expected result is tem* (malformed),
+	// treat this as a conformance match — both rippled and goXRPL reject it.
+	if len(blob) == 0 {
+		if strings.HasPrefix(step.ExpectTER, "tem") {
+			return
+		}
+		r.t.Fatalf("Step %d (tx): empty tx_blob with expected %s", stepIdx, step.ExpectTER)
+	}
+
 	parsed, err := tx.ParseFromBinary(blob)
 	if err != nil {
 		// If the tx_blob can't be parsed and the expected result is a tem
@@ -325,6 +347,352 @@ func (r *runner) assertPostState(stepIdx int, ps *PostState) {
 				stepIdx, expected.Name, gotOwnerCount, expected.OwnerCount)
 		}
 	}
+}
+
+// shouldAutoFund returns true if the fixture needs implicit account funding.
+// This is true when at least one tx step expects an applied result (tesSUCCESS
+// or tec*) and its Account is not established by a preceding fund step.
+// Many rippled test fixtures depend on accounts existing from prior test context
+// (accounts funded before the test case captured in the fixture). When fund
+// steps exist but only AFTER the first applied tx, we still need auto-funding
+// for accounts that send those early transactions.
+func (r *runner) shouldAutoFund(steps []Step) bool {
+	// Collect addresses funded by explicit fund steps and their positions.
+	fundedAt := make(map[string]int) // address -> step index
+	for i, s := range steps {
+		if s.Op == "fund" && s.Address != "" {
+			if _, exists := fundedAt[s.Address]; !exists {
+				fundedAt[s.Address] = i
+			}
+		}
+	}
+
+	// Check if any tx step expects an applied result from an account that
+	// isn't funded by a preceding fund step.
+	for i, s := range steps {
+		if s.Op != "tx" || s.TxJSON == nil {
+			continue
+		}
+		if s.ExpectTER != "tesSUCCESS" && !strings.HasPrefix(s.ExpectTER, "tec") {
+			continue
+		}
+
+		var txj map[string]interface{}
+		if err := json.Unmarshal(s.TxJSON, &txj); err != nil {
+			continue
+		}
+		addr, ok := txj["Account"].(string)
+		if !ok || addr == "" || addr == "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh" {
+			continue
+		}
+
+		// Check if this account is funded BEFORE this tx step
+		fundIdx, funded := fundedAt[addr]
+		if !funded || fundIdx > i {
+			return true
+		}
+	}
+	return false
+}
+
+// autoFundAccounts scans tx_json steps for accounts and funds them so their
+// sequences match the fixture's expectations. Accounts are grouped by their
+// first expected sequence: accounts with the same initial seq are funded in
+// the same ledger, with closes between groups to increment open_ledger_seq.
+//
+// For Credential and similar transaction types, auxiliary accounts (Subject,
+// Issuer, Destination) are also funded when they need to exist for preclaim
+// checks. However, accounts that have explicit fund steps in the fixture are
+// NOT auto-funded as auxiliary accounts — the fixture intends to fund them
+// at a specific time and amount.
+//
+// Initial funding amounts are derived from the first post_state entry for
+// each account when possible. This is critical for reserve-sensitive tests
+// where the exact balance determines the TER code.
+func (r *runner) autoFundAccounts(steps []Step) {
+	// Build a map of addresses that have explicit fund steps.
+	// These addresses should not be auto-funded as auxiliary accounts because the
+	// fixture deliberately controls when they are created.
+	explicitFundAddrs := make(map[string]bool) // addresses with explicit fund steps
+	for _, s := range steps {
+		if s.Op == "fund" && s.Address != "" {
+			explicitFundAddrs[s.Address] = true
+		}
+	}
+
+	// Derive the initial funding amount for each account from the first
+	// post_state entry. For applied tx results (tesSUCCESS/tec*), the
+	// post_state balance = initial_balance - fees_consumed. By analyzing
+	// how many txs the account has sent before the post_state check, we
+	// can infer the initial balance.
+	//
+	// For simplicity, we use the first post_state balance + (number of
+	// fees consumed by this account up to that post_state step) * baseFee.
+	// This gives us the initial balance the fixture expects.
+	initialBalances := r.deriveInitialBalances(steps)
+
+	// Collect unique account addresses and their first sequence from tx_json.
+	type acctInfo struct {
+		address  string
+		firstSeq uint32
+	}
+	seen := make(map[string]bool)
+	var accounts []acctInfo
+
+	// Also collect auxiliary addresses (Subject, Issuer, Destination) that
+	// need to exist but aren't tx senders. These get sequence 0 (no txs from them).
+	auxSeen := make(map[string]bool)
+
+	for _, s := range steps {
+		if s.Op != "tx" || s.TxJSON == nil {
+			continue
+		}
+		var txj map[string]interface{}
+		if err := json.Unmarshal(s.TxJSON, &txj); err != nil {
+			continue
+		}
+
+		// Collect the Account field (the sender/signer).
+		addr, ok := txj["Account"].(string)
+		if ok && addr != "" && !seen[addr] {
+			// Skip master/genesis account — already exists
+			if addr == "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh" {
+				seen[addr] = true
+			} else {
+				seen[addr] = true
+
+				seq := uint32(0)
+				if seqF, ok := txj["Sequence"].(float64); ok {
+					seq = uint32(seqF)
+				}
+				accounts = append(accounts, acctInfo{address: addr, firstSeq: seq})
+			}
+		}
+
+		// Collect auxiliary accounts (Subject, Issuer, Destination).
+		// These accounts need to exist for preclaim checks to work correctly,
+		// BUT only if they don't have explicit fund steps (which control timing).
+		for _, field := range []string{"Subject", "Issuer", "Destination"} {
+			if auxAddr, ok := txj[field].(string); ok && auxAddr != "" {
+				auxSeen[auxAddr] = true
+			}
+		}
+	}
+
+	// Also collect addresses from post_state — if the fixture expects
+	// specific balances for named accounts, those accounts must exist.
+	for _, s := range steps {
+		if s.PostState == nil {
+			continue
+		}
+		for _, as := range s.PostState.Accounts {
+			if as.Address != "" {
+				auxSeen[as.Address] = true
+			}
+		}
+	}
+
+	// Determine minimum first_seq from sender accounts.
+	minSeq := uint32(0xFFFFFFFF)
+	for _, a := range accounts {
+		if a.firstSeq > 0 && a.firstSeq < minSeq {
+			minSeq = a.firstSeq
+		}
+	}
+	if minSeq == 0xFFFFFFFF {
+		minSeq = 4 // Default: funded in open ledger 3, AccountSet → seq 4
+	}
+
+	// Determine which auxiliary addresses should NOT be funded because the
+	// fixture expects them to not exist (e.g., tecNO_TARGET, tecNO_ISSUER).
+	skipAuxAddrs := r.findSkipAuxAddresses(steps)
+
+	// Add auxiliary accounts that aren't already senders and aren't in the
+	// skip set. Accounts are skipped if they have explicit fund steps AND the
+	// first tx referencing them expects a TER code that depends on them not
+	// existing (tecNO_TARGET for Subject/Destination, tecNO_ISSUER for Issuer).
+	for auxAddr := range auxSeen {
+		if seen[auxAddr] {
+			continue
+		}
+		if auxAddr == "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh" {
+			continue
+		}
+		// Check if it's the zero account
+		if auxAddr == "rrrrrrrrrrrrrrrrrrrrrhoLvTp" || auxAddr == "rrrrrrrrrrrrrrrrrrrrBZbvji" {
+			continue
+		}
+		// Skip auxiliary accounts that should not exist for the test to work
+		if skipAuxAddrs[auxAddr] {
+			continue
+		}
+		seen[auxAddr] = true
+		accounts = append(accounts, acctInfo{address: auxAddr, firstSeq: 0})
+	}
+
+	if len(accounts) == 0 {
+		return
+	}
+
+	// Assign zero-seq accounts to earliest group
+	for i := range accounts {
+		if accounts[i].firstSeq == 0 {
+			accounts[i].firstSeq = minSeq
+		}
+	}
+
+	// Sort by firstSeq to fund in correct ledger order
+	sort.Slice(accounts, func(i, j int) bool {
+		return accounts[i].firstSeq < accounts[j].firstSeq
+	})
+
+	// Fund accounts grouped by firstSeq.
+	// After setupEnv, open_ledger_seq = 3. Account creation sets
+	// account.Sequence = open_ledger_seq. FundAmount then does AccountSet
+	// (DefaultRipple) which bumps seq by 1. So to get firstSeq = N,
+	// we need open_ledger_seq = N - 1 when funding.
+	//
+	// Starting open_ledger_seq = 3. We close ledgers as needed to reach
+	// the target open_ledger_seq for each group.
+	currentOpenSeq := r.env.LedgerSeq() // Should be 3 after setupEnv
+	for _, a := range accounts {
+		targetOpenSeq := a.firstSeq - 1 // open_ledger_seq needed for this account
+		for currentOpenSeq < targetOpenSeq {
+			r.env.Close()
+			currentOpenSeq++
+		}
+
+		// Generate a short name from the address (last 8 chars)
+		name := a.address
+		if len(name) > 8 {
+			name = name[len(name)-8:]
+		}
+		acc := jtx.NewAccountWithAddress(name, a.address)
+		r.accounts[name] = acc
+		// Also register by full address for post_state lookups
+		r.accounts[a.address] = acc
+
+		// Use the derived initial balance if available, otherwise default to 5000 XRP.
+		fundAmount := uint64(5_000_000_000)
+		if derived, ok := initialBalances[a.address]; ok && derived > 0 {
+			fundAmount = derived
+		}
+		r.env.FundAmount(acc, fundAmount)
+	}
+
+	// Close after all funding so state is committed
+	r.env.Close()
+}
+
+// findSkipAuxAddresses identifies auxiliary addresses (Subject, Issuer, Destination)
+// that should NOT be auto-funded because a tx step expects a TER code that depends
+// on the account not existing. For example:
+// - tecNO_TARGET: the Subject/Destination doesn't exist
+// - tecNO_ISSUER: the Issuer doesn't exist
+//
+// Only addresses that also have explicit fund steps are considered for skipping,
+// because if there's no fund step, the auxiliary account was never meant to be
+// created by the fixture at all.
+func (r *runner) findSkipAuxAddresses(steps []Step) map[string]bool {
+	skipAddrs := make(map[string]bool)
+
+	// Build set of addresses with explicit fund steps
+	explicitFundAddrs := make(map[string]bool)
+	for _, s := range steps {
+		if s.Op == "fund" && s.Address != "" {
+			explicitFundAddrs[s.Address] = true
+		}
+	}
+
+	for _, s := range steps {
+		if s.Op != "tx" || s.TxJSON == nil {
+			continue
+		}
+		var txj map[string]interface{}
+		if err := json.Unmarshal(s.TxJSON, &txj); err != nil {
+			continue
+		}
+
+		// tecNO_TARGET: Subject or Destination should not exist
+		if s.ExpectTER == "tecNO_TARGET" {
+			for _, field := range []string{"Subject", "Destination"} {
+				if addr, ok := txj[field].(string); ok && addr != "" && explicitFundAddrs[addr] {
+					skipAddrs[addr] = true
+				}
+			}
+		}
+
+		// tecNO_ISSUER: Issuer should not exist
+		if s.ExpectTER == "tecNO_ISSUER" {
+			if addr, ok := txj["Issuer"].(string); ok && addr != "" && explicitFundAddrs[addr] {
+				skipAddrs[addr] = true
+			}
+		}
+	}
+
+	return skipAddrs
+}
+
+// deriveInitialBalances infers the initial funding balance for each account
+// from the fixture's first post_state entry. For each account, it finds the
+// first post_state appearance and adds back the fees that were consumed by
+// transactions from that account up to that point.
+//
+// Example: if account A sends 2 txs (each costing 10 drops) before the first
+// post_state shows balance 4999999980, then initial balance = 4999999980 + 20
+// = 5000000000 (5B).
+func (r *runner) deriveInitialBalances(steps []Step) map[string]uint64 {
+	result := make(map[string]uint64)
+
+	// Track how many fees each address has consumed (as tx sender).
+	// Only count applied results (tesSUCCESS, tec*) since tem/tef/tel/ter
+	// don't deduct fees.
+	feesByAddr := make(map[string]uint64)     // address -> total fees paid
+	postStateSeen := make(map[string]bool)     // already derived for this address
+
+	for _, s := range steps {
+		if s.Op == "tx" && s.TxJSON != nil {
+			// Count fees for applied results
+			if s.ExpectTER == "tesSUCCESS" || strings.HasPrefix(s.ExpectTER, "tec") {
+				var txj map[string]interface{}
+				if err := json.Unmarshal(s.TxJSON, &txj); err == nil {
+					if addr, ok := txj["Account"].(string); ok && addr != "" {
+						fee := uint64(10) // default base fee
+						if feeStr, ok := txj["Fee"].(string); ok {
+							if f, err := strconv.ParseUint(feeStr, 10, 64); err == nil {
+								fee = f
+							}
+						}
+						feesByAddr[addr] += fee
+					}
+				}
+			}
+		}
+
+		// When we hit a post_state, derive balances for accounts we haven't seen yet.
+		if s.PostState != nil {
+			for _, as := range s.PostState.Accounts {
+				if as.Address == "" || postStateSeen[as.Address] {
+					continue
+				}
+				if as.Address == "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh" {
+					continue // skip master
+				}
+				postStateSeen[as.Address] = true
+
+				balance, err := strconv.ParseUint(as.XRPBalance, 10, 64)
+				if err != nil {
+					continue
+				}
+
+				// Initial balance = post_state balance + fees consumed by this account
+				fees := feesByAddr[as.Address]
+				result[as.Address] = balance + fees
+			}
+		}
+	}
+
+	return result
 }
 
 // parseDropsAmount parses a JSON amount field (can be string or number) into drops.

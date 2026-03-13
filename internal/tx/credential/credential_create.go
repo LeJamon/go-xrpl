@@ -48,16 +48,15 @@ func (c *CredentialCreate) TxType() tx.Type {
 
 // Validate validates the CredentialCreate transaction
 // Reference: rippled Credentials.cpp CredentialCreate::preflight()
+// Note: The fixInvalidTxFlags-gated flag check is done in Apply() because
+// Validate() has no access to amendment rules.
 func (c *CredentialCreate) Validate() error {
 	if err := c.BaseTx.Validate(); err != nil {
 		return err
 	}
 
-	// Check for invalid flags (tfUniversalMask)
-	// Reference: rippled Credentials.cpp:66-71
-	if err := tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask); err != nil {
-		return err
-	}
+	// Flag check is deferred to Apply() where amendment rules are available.
+	// Reference: rippled Credentials.cpp:66-71 — gated behind fixInvalidTxFlags.
 
 	// Subject is required and must not be the zero account
 	// Reference: rippled Credentials.cpp:73-77
@@ -73,7 +72,8 @@ func (c *CredentialCreate) Validate() error {
 
 	// Validate URI field length (optional but if present must be valid)
 	// Reference: rippled Credentials.cpp:79-84
-	if c.URI != "" {
+	// HasField("URI") detects binary-parsed "URI present but empty" vs "URI absent".
+	if c.URI != "" || c.HasField("URI") {
 		decoded, err := hex.DecodeString(c.URI)
 		if err != nil {
 			return tx.Errorf(tx.TemMALFORMED, "URI must be valid hex string")
@@ -118,6 +118,14 @@ func (c *CredentialCreate) RequiredAmendments() [][32]byte {
 // Apply applies the CredentialCreate transaction to ledger state.
 // Reference: rippled Credentials.cpp CredentialCreate::doApply()
 func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+	// Check for invalid flags, gated behind fixInvalidTxFlags
+	// Reference: rippled Credentials.cpp:66-71
+	if ctx.Rules().Enabled(amendment.FeatureFixInvalidTxFlags) {
+		if c.GetFlags()&tx.TfUniversalMask != 0 {
+			return tx.TemINVALID_FLAG
+		}
+	}
+
 	if c.Subject == "" || c.CredentialType == "" {
 		return tx.TemINVALID
 	}

@@ -75,6 +75,7 @@ func TestPseudoTx_Prevented(t *testing.T) {
 		ReserveIncrement:          50_000_000,
 		LedgerSequence:            env.LedgerSeq(),
 		SkipSignatureVerification: true,
+		OpenLedger:                true,
 	}
 	engine := tx.NewEngine(env.Ledger(), engineConfig)
 

@@ -48,6 +48,15 @@ type TestEnv struct {
 	// Default is false (test mode). Set to true for conformance tests with real tx_blobs.
 	VerifySignatures bool
 
+	// openLedger controls whether the engine checks fee adequacy.
+	// When true (default for normal tests), fee adequacy is checked
+	// (Fee >= calculateBaseFee). When false (conformance replay mode),
+	// fee adequacy is skipped, matching rippled's behavior where
+	// checkFee only checks when ctx.view.open() is true.
+	// Reference: rippled Transactor.cpp checkFee — "Only check fee is
+	// sufficient when the ledger is open."
+	openLedger bool
+
 	// Optional state map family for backed SHAMaps (PebbleDB on disk).
 	// Only set when using NewTestEnvBacked() for heavy tests that would OOM otherwise.
 	// When nil, SHAMaps use unbacked mode (fast, full in-memory clones).
@@ -145,6 +154,7 @@ func NewTestEnv(t *testing.T) *TestEnv {
 		reserveIncrement: 50_000_000,  // 50 XRP (matches rippled test env)
 		// Initialize with all supported amendments enabled (like rippled's testable_amendments())
 		rulesBuilder: amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported),
+		openLedger:   true, // Normal test mode: check fee adequacy
 	}
 
 	// Register master account
@@ -249,6 +259,7 @@ func NewTestEnvWithConfig(t *testing.T, cfg genesis.Config) *TestEnv {
 		reserveIncrement: uint64(cfg.Fees.ReserveIncrement.Drops()),
 		// Initialize with all supported amendments enabled (like rippled's testable_amendments())
 		rulesBuilder: amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported),
+		openLedger:   true, // Normal test mode: check fee adequacy
 	}
 	master := MasterAccount()
 	env.accounts[master.Name] = master

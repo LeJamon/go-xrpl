@@ -1133,7 +1133,10 @@ func TestAMMExtended_MissingAuth(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
-		ammAcc := amm.AMMAccount(t, env.USD, amm.XRP())
+		ammAcc := env.ReadAMMAccount(env.USD, amm.XRP())
+		if ammAcc == nil {
+			t.Fatal("AMM not found")
+		}
 
 		// Authorize AMM account's trust line with gw
 		env.TestEnv.AuthorizeTrustLine(env.GW, ammAcc, "USD")
@@ -1147,7 +1150,10 @@ func TestAMMExtended_MissingAuth(t *testing.T) {
 		env.Close()
 
 		// AMM balances should be USD(1050)/XRP(1000)
-		ammAddr := amm.AMMAccount(t, env.USD, amm.XRP())
+		ammAddr := env.ReadAMMAccount(env.USD, amm.XRP())
+		if ammAddr == nil {
+			t.Fatal("AMM not found")
+		}
 		usdBal := env.AMMPoolIOU(ammAddr, env.GW, "USD")
 		xrpBal := env.AMMPoolXRP(ammAddr)
 		if usdBal != 1050 {

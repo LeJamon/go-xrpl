@@ -55,6 +55,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction) (*SubmitResult, 
 		ReserveIncrement:          reserveIncrement,
 		LedgerSequence:            s.openLedger.Sequence(),
 		SkipSignatureVerification: s.config.Standalone, // Skip signatures in standalone mode
+		OpenLedger:                true,                 // Live submission: check fee adequacy
 	}
 
 	// Create engine with the open ledger as the view
@@ -213,6 +214,7 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 		ReserveIncrement:          simReserveIncrement,
 		LedgerSequence:            s.openLedger.Sequence(),
 		SkipSignatureVerification: true, // Skip signatures for simulation
+		OpenLedger:                true, // Check fee adequacy for simulation
 	}
 
 	// Create engine with the snapshot view

@@ -1,11 +1,37 @@
 package delegate
 
 import (
+	"fmt"
+
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
 )
+
+// permissionMaxSize is the maximum number of permissions allowed in a DelegateSet.
+// Reference: rippled Protocol.h — std::size_t constexpr permissionMaxSize = 10
+const permissionMaxSize = 10
+
+// notDelegatableTxTypes maps transaction type values that are notDelegatable.
+// Reference: rippled transactions.macro — TRANSACTION(tag, value, name, Delegation::notDelegatable, ...)
+// The key is the tx type value (not permissionValue), matching rippled's delegatableTx_ map.
+var notDelegatableTxTypes = map[uint16]bool{
+	3:   true, // ttACCOUNT_SET
+	5:   true, // ttREGULAR_KEY_SET
+	12:  true, // ttSIGNER_LIST_SET
+	21:  true, // ttACCOUNT_DELETE
+	64:  true, // ttDELEGATE_SET
+	71:  true, // ttBATCH
+	100: true, // ttAMENDMENT (EnableAmendment)
+	101: true, // ttFEE (SetFee)
+	102: true, // ttUNL_MODIFY (UNLModify)
+}
+
+// granularPermissionMin is the threshold above which a permission value is granular.
+// Granular permissions have values > UINT16_MAX (65535) and are always delegatable.
+// Reference: rippled Permissions.h — GranularPermissionType values start at 65537
+const granularPermissionMin = 65536
 
 func init() {
 	tx.Register(tx.TypeDelegateSet, func() tx.Transaction {
@@ -51,9 +77,40 @@ func (d *DelegateSet) TxType() tx.Type {
 	return tx.TypeDelegateSet
 }
 
-// Validate validates the DelegateSet transaction
+// Validate validates the DelegateSet transaction.
+// Reference: rippled DelegateSet.cpp preflight()
 func (d *DelegateSet) Validate() error {
-	return d.BaseTx.Validate()
+	if err := d.BaseTx.Validate(); err != nil {
+		return err
+	}
+
+	// Check permissions array size.
+	// Reference: rippled DelegateSet.cpp preflight() — permissions.size() > permissionMaxSize
+	if len(d.Permissions) > permissionMaxSize {
+		return fmt.Errorf("temARRAY_TOO_LARGE: permissions array exceeds maximum size of %d", permissionMaxSize)
+	}
+
+	// Cannot authorize self.
+	// Reference: rippled DelegateSet.cpp preflight() — ctx.tx[sfAccount] == ctx.tx[sfAuthorize]
+	if d.Authorize != "" && d.GetCommon().Account == d.Authorize {
+		return fmt.Errorf("temMALFORMED: cannot delegate to self")
+	}
+
+	// Check for duplicate permission values.
+	// Reference: rippled DelegateSet.cpp preflight() — permissionSet.insert check
+	seen := make(map[string]bool)
+	for _, p := range d.Permissions {
+		pv := p.Permission.PermissionValue
+		if pv == "" {
+			continue
+		}
+		if seen[pv] {
+			return fmt.Errorf("temMALFORMED: duplicate permission value %q", pv)
+		}
+		seen[pv] = true
+	}
+
+	return nil
 }
 
 // Flatten returns a flat map of all transaction fields.
@@ -92,9 +149,10 @@ func (d *DelegateSet) RequiredAmendments() [][32]byte {
 }
 
 // Apply applies the DelegateSet transaction to the ledger.
-// Reference: rippled DelegateSet.cpp doApply()
+// Reference: rippled DelegateSet.cpp preclaim() + doApply()
 func (d *DelegateSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Preclaim: verify authorize target exists
+	// Reference: rippled DelegateSet.cpp preclaim()
 	authorizeID, err := state.DecodeAccountID(d.Authorize)
 	if err != nil {
 		return tx.TecNO_TARGET
@@ -103,10 +161,16 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecNO_TARGET
 	}
 
-	delegateKey := keylet.DelegateKeylet(ctx.AccountID, authorizeID)
-
-	// Convert permissions to uint32 values
+	// Preclaim: check that all permissions are delegatable.
+	// Reference: rippled DelegateSet.cpp preclaim() — Permission::isDelegatable()
 	permValues := d.permissionValues()
+	for _, pv := range permValues {
+		if !isDelegatable(pv) {
+			return tx.TecNO_PERMISSION
+		}
+	}
+
+	delegateKey := keylet.DelegateKeylet(ctx.AccountID, authorizeID)
 
 	// Check if delegate SLE already exists
 	existingData, readErr := ctx.View.Read(delegateKey)
@@ -231,4 +295,25 @@ func (d *DelegateSet) permissionValues() []uint32 {
 		}
 	}
 	return values
+}
+
+// isDelegatable checks whether a permission value represents a delegatable permission.
+// Granular permissions (values > UINT16_MAX) are always delegatable.
+// Transaction-level permissions use permissionValue = txType + 1, and are delegatable
+// unless the tx type is explicitly marked as notDelegatable.
+// Reference: rippled Permissions.cpp isDelegatable()
+func isDelegatable(permissionValue uint32) bool {
+	// Granular permissions are always delegatable.
+	if permissionValue >= granularPermissionMin {
+		return true
+	}
+
+	// Transaction-level: txType = permissionValue - 1
+	txType := uint16(permissionValue - 1)
+	if notDelegatableTxTypes[txType] {
+		return false
+	}
+
+	// Default: delegatable (permissive, matching rippled's behavior for unknown types)
+	return true
 }

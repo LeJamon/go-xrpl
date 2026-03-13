@@ -131,6 +131,13 @@ func (a *AMMClawback) RequiredAmendments() [][32]byte {
 }
 
 // Apply applies the AMMClawback transaction to ledger state.
+//
+// Rippled flow: AMMClawback delegates to AMMWithdraw infrastructure which
+// performs accountSend (AMM -> holder) + redeemIOU (LP tokens), then
+// rippleCredit (holder -> issuer) for the clawback. The net effect for
+// clawed-back assets: AMM pool decreases, holder unchanged, issuer absorbs.
+// For non-clawed asset2: AMM pool decreases, holder gains.
+//
 // Reference: rippled AMMClawback.cpp preclaim + applyGuts
 func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	issuerID := ctx.AccountID
@@ -143,7 +150,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	holderKey := keylet.Account(holderID)
 	holderData, err := ctx.View.Read(holderKey)
-	if err != nil {
+	if err != nil || holderData == nil {
 		return TerNO_ACCOUNT
 	}
 	holderAccount, err := state.ParseAccountRoot(holderData)
@@ -184,135 +191,208 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// Get current AMM balances from actual state (not stored in AMM entry)
-	// Reference: rippled ammHolds - reads from AccountRoot (XRP) and trustlines (IOU)
-	assetBalance1, assetBalance2, lptAMMBalance := AMMHolds(ctx.View, amm, false)
-
-	if lptAMMBalance.IsZero() {
-		return tx.TecAMM_BALANCE // AMM is empty
+	// fixAMMClawbackRounding: retrieve LP token balance and adjust if needed
+	// Reference: rippled AMMClawback.cpp applyGuts lines 154-166
+	if ctx.Rules().Enabled(amendment.FeatureFixAMMClawbackRounding) {
+		lpTokenBalance := ammLPHolds(ctx.View, amm, holderID)
+		if lpTokenBalance.IsZero() {
+			return tx.TecAMM_BALANCE
+		}
+		if result := verifyAndAdjustLPTokenBalance(lpTokenBalance, amm); result != tx.TesSUCCESS {
+			return result
+		}
 	}
 
-	// Get holder's LP token balance
-	// In full implementation, would read from LP token trustline
-	// For now, use half of the AMM LP token balance as holder's balance (simplified)
-	two := state.NewIssuedAmountFromValue(2e15, -15, "", "")
-	holdLPTokens := numberDiv(lptAMMBalance, two)
+	// Get current AMM balances from actual state (not stored in AMM entry)
+	// Reference: rippled ammHolds with issue hints — reorders to match tx asset ordering
+	assetBalance1, assetBalance2, lptAMMBalance := AMMHolds(ctx.View, amm, false)
 
+	// Reorder balances to match the transaction's asset ordering (a.Asset / a.Asset2).
+	if !matchesAssetByIssue(amm.Asset, a.Asset) {
+		assetBalance1, assetBalance2 = assetBalance2, assetBalance1
+	}
+
+	if lptAMMBalance.IsZero() {
+		return tx.TecAMM_BALANCE
+	}
+
+	// Get holder's LP token balance from trustline
+	// Reference: rippled AMMClawback.cpp applyGuts line 185
+	holdLPTokens := ammLPHolds(ctx.View, amm, holderID)
 	if holdLPTokens.IsZero() {
-		return tx.TecAMM_BALANCE // Holder has no LP tokens
+		return tx.TecAMM_BALANCE
 	}
 
 	flags := a.GetFlags()
+	fixV1_3 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_3)
 
 	var lpTokensToWithdraw tx.Amount
 	var withdrawAmount1, withdrawAmount2 tx.Amount
 
 	if a.Amount == nil {
-		// No amount specified - withdraw all LP tokens the holder has
-		// This is a proportional two-asset withdrawal
+		// No amount specified - withdraw all LP tokens the holder has.
+		// Reference: rippled calls equalWithdrawTokens with WithdrawAll::Yes
 		lpTokensToWithdraw = holdLPTokens
 
-		// Calculate proportional withdrawal amounts
-		withdrawAmount1 = proportionalAmount(assetBalance1, holdLPTokens, lptAMMBalance)
-		withdrawAmount2 = proportionalAmount(assetBalance2, holdLPTokens, lptAMMBalance)
+		if toIOUForCalc(holdLPTokens).Compare(toIOUForCalc(lptAMMBalance)) == 0 {
+			// Holder has ALL LP tokens — withdraw everything
+			withdrawAmount1 = assetBalance1
+			withdrawAmount2 = assetBalance2
+		} else {
+			// Proportional withdrawal
+			frac := numberDiv(toIOUForCalc(holdLPTokens), toIOUForCalc(lptAMMBalance))
+			withdrawAmount1 = getRoundedAsset(fixV1_3, assetBalance1, frac, false)
+			withdrawAmount2 = getRoundedAsset(fixV1_3, assetBalance2, frac, false)
+		}
 	} else {
-		// Amount specified - calculate proportional withdrawal based on specified amount
+		// Amount specified - calculate proportional withdrawal.
+		// Reference: rippled AMMClawback.cpp equalWithdrawMatchingOneAmount
 		clawAmount := *a.Amount
 
-		// Calculate fraction based on the clawback amount relative to asset1 balance
 		if assetBalance1.IsZero() {
 			return tx.TecAMM_BALANCE
 		}
-		frac := numberDiv(clawAmount, assetBalance1)
+		frac := numberDiv(toIOUForCalc(clawAmount), toIOUForCalc(assetBalance1))
 
-		// Calculate LP tokens needed for this withdrawal
+		// Calculate LP tokens needed
 		lpTokensNeeded := lptAMMBalance.Mul(frac, false)
 
-		// If holder doesn't have enough LP tokens, clawback all they have
 		if isGreater(lpTokensNeeded, holdLPTokens) {
+			// Holder doesn't have enough LP tokens — clawback all they have.
 			lpTokensToWithdraw = holdLPTokens
-			withdrawAmount1 = proportionalAmount(assetBalance1, holdLPTokens, lptAMMBalance)
-			withdrawAmount2 = proportionalAmount(assetBalance2, holdLPTokens, lptAMMBalance)
+			if toIOUForCalc(holdLPTokens).Compare(toIOUForCalc(lptAMMBalance)) == 0 {
+				withdrawAmount1 = assetBalance1
+				withdrawAmount2 = assetBalance2
+			} else {
+				fallbackFrac := numberDiv(toIOUForCalc(holdLPTokens), toIOUForCalc(lptAMMBalance))
+				withdrawAmount1 = getRoundedAsset(fixV1_3, assetBalance1, fallbackFrac, false)
+				withdrawAmount2 = getRoundedAsset(fixV1_3, assetBalance2, fallbackFrac, false)
+			}
 		} else {
-			lpTokensToWithdraw = lpTokensNeeded
-			withdrawAmount1 = clawAmount
-			withdrawAmount2 = assetBalance2.Mul(frac, false)
+			// fixAMMClawbackRounding: use rounded tokens and adjusted fractions
+			if ctx.Rules().Enabled(amendment.FeatureFixAMMClawbackRounding) {
+				tokensAdj := getRoundedLPTokens(fixV1_3, lptAMMBalance, frac, false)
+				if tokensAdj.IsZero() {
+					return tx.TecAMM_INVALID_TOKENS
+				}
+				frac = adjustFracByTokens(fixV1_3, lptAMMBalance, tokensAdj, frac)
+				amountRounded := getRoundedAsset(fixV1_3, assetBalance1, frac, false)
+				amount2Rounded := getRoundedAsset(fixV1_3, assetBalance2, frac, false)
+				lpTokensToWithdraw = tokensAdj
+				withdrawAmount1 = amountRounded
+				withdrawAmount2 = amount2Rounded
+			} else {
+				amount2Withdraw := assetBalance2.Mul(frac, false)
+				lpTokensToWithdraw = lpTokensNeeded
+				withdrawAmount1 = clawAmount
+				withdrawAmount2 = amount2Withdraw
+			}
 		}
 	}
 
 	// Verify withdrawal amounts don't exceed balances
-	if isGreater(withdrawAmount1, assetBalance1) {
+	if isGreater(toIOUForCalc(withdrawAmount1), toIOUForCalc(assetBalance1)) {
 		withdrawAmount1 = assetBalance1
 	}
-	if isGreater(withdrawAmount2, assetBalance2) {
+	if isGreater(toIOUForCalc(withdrawAmount2), toIOUForCalc(assetBalance2)) {
 		withdrawAmount2 = assetBalance2
 	}
 
-	// Perform the withdrawal from AMM
+	// =========================================================================
+	// ASSET TRANSFERS
+	//
+	// Rippled flow per asset:
+	//   1. accountSend(ammAccount, holder, amount): AMM->holder
+	//      Internally: redeemIOU(ammAccount, amount) + rippleCredit(issuer, holder, amount)
+	//   2. rippleCredit(holder, issuer, amount): holder->issuer (clawback)
+	//      The net effect on holder's trustline: +amount - amount = 0
+	//      The net effect on AMM's trustline: -amount
+	//      The issuer absorbs (tokens destroyed).
+	//
+	// For non-clawed asset2:
+	//   Only step 1: AMM->holder. AMM trustline decreases, holder trustline increases.
+	// =========================================================================
 	isXRP1 := a.Asset.Currency == "" || a.Asset.Currency == "XRP"
 	isXRP2 := a.Asset2.Currency == "" || a.Asset2.Currency == "XRP"
 
-	// Transfer asset1 from AMM to holder (intermediate step)
-	if isXRP1 && !withdrawAmount1.IsZero() {
-		drops := uint64(withdrawAmount1.Drops())
-		ammAccount.Balance -= drops
-	}
-	// Transfer asset2 from AMM to holder (intermediate step)
-	if isXRP2 && !withdrawAmount2.IsZero() {
-		drops := uint64(withdrawAmount2.Drops())
-		ammAccount.Balance -= drops
-	}
-
-	// Now claw back: transfer asset1 from holder to issuer
-	if isXRP1 && !withdrawAmount1.IsZero() {
-		drops := uint64(withdrawAmount1.Drops())
-		ctx.Account.Balance += drops
+	// Asset1 is ALWAYS clawed back (sent from AMM to issuer).
+	// Net effect: debit AMM's trust line, tokens returned to issuer (destroyed).
+	// Asset1 cannot be XRP (enforced in preflight).
+	if !isXRP1 && !withdrawAmount1.IsZero() {
+		// Debit AMM's trust line with issuer
+		if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset, withdrawAmount1.Negate(), ctx.View); err != nil {
+			return tx.TefINTERNAL
+		}
 	}
 
-	// If tfClawTwoAssets is set, also claw back asset2
+	// Asset2: depends on tfClawTwoAssets flag
 	if flags&tfClawTwoAssets != 0 {
-		if isXRP2 && !withdrawAmount2.IsZero() {
-			drops := uint64(withdrawAmount2.Drops())
+		// Clawback asset2 too. Same net effect as asset1.
+		if !isXRP2 && !withdrawAmount2.IsZero() {
+			// Debit AMM's trust line with asset2 issuer
+			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2.Negate(), ctx.View); err != nil {
+				return tx.TefINTERNAL
+			}
+		} else if isXRP2 && !withdrawAmount2.IsZero() {
+			// XRP clawback: AMM loses XRP, issuer gains
+			drops := uint64(iouToDrops(withdrawAmount2))
+			ammAccount.Balance -= drops
 			ctx.Account.Balance += drops
 		}
 	} else {
-		// Asset2 goes to holder (not clawed back)
-		if isXRP2 && !withdrawAmount2.IsZero() {
-			drops := uint64(withdrawAmount2.Drops())
+		// NOT clawing asset2 — holder receives it.
+		// Transfer from AMM to holder.
+		if !isXRP2 && !withdrawAmount2.IsZero() {
+			// Debit AMM's trust line
+			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2.Negate(), ctx.View); err != nil {
+				return tx.TefINTERNAL
+			}
+			// Credit holder's trust line with asset2 issuer — BUT skip if
+			// holder IS the issuer (the IOU is just returned/destroyed).
+			// Reference: rippled rippleSendIOU line 1807: direct path when
+			// sender or receiver is the issuer.
+			issuer2ID, _ := state.DecodeAccountID(a.Asset2.Issuer)
+			if holderID != issuer2ID {
+				if err := updateTrustlineBalanceInView(holderID, issuer2ID, a.Asset2.Currency, withdrawAmount2, ctx.View); err != nil {
+					return tx.TefINTERNAL
+				}
+			}
+		} else if isXRP2 && !withdrawAmount2.IsZero() {
+			// XRP: AMM sends to holder
+			drops := uint64(iouToDrops(withdrawAmount2))
+			ammAccount.Balance -= drops
 			holderAccount.Balance += drops
 		}
 	}
 
-	// Reduce LP token balance (this is stored in the AMM entry)
-	newLPBalance, _ := lptAMMBalance.Sub(lpTokensToWithdraw)
-	amm.LPTokenBalance = newLPBalance
-
-	// NOTE: Asset balances are NOT stored in AMM entry
-	// They are updated by the balance transfers above:
-	// - XRP: via ammAccount.Balance -= drops
-	// - IOU: via trustline updates (already done above)
-
-	// Check if AMM should be deleted (empty)
-	ammDeleted := false
-	if newLPBalance.IsZero() {
-		if err := ctx.View.Erase(ammKey); err != nil {
-			return tx.TefINTERNAL
+	// =========================================================================
+	// BURN LP TOKENS
+	// Reference: rippled AMMWithdraw::withdraw calls redeemIOU(holder, lpTokens, lpIssue)
+	// This debits the holder's LP token trust line and may delete it.
+	// =========================================================================
+	if !lpTokensToWithdraw.IsZero() {
+		lptCurrency := GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency)
+		ammAccountAddr, _ := state.EncodeAccountID(amm.Account)
+		redeemAmt := state.NewIssuedAmountFromValue(
+			lpTokensToWithdraw.Mantissa(), lpTokensToWithdraw.Exponent(), lptCurrency, ammAccountAddr)
+		if r := redeemIOUWithCleanup(ctx.View, holderID, amm.Account, redeemAmt); r != tx.TesSUCCESS {
+			return r
 		}
-		if err := ctx.View.Erase(ammAccountKey); err != nil {
-			return tx.TefINTERNAL
-		}
-		ammDeleted = true
 	}
 
-	if !ammDeleted {
-		ammBytes, err := serializeAMMData(amm)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		if err := ctx.View.Update(ammKey, ammBytes); err != nil {
-			return tx.TefINTERNAL
-		}
+	// =========================================================================
+	// UPDATE AMM ENTRY / DELETE IF EMPTY
+	// =========================================================================
+	newLPBalance, _ := lptAMMBalance.Sub(lpTokensToWithdraw)
 
+	deleteResult := deleteAMMAccountIfEmpty(ctx.View, ammKey, ammAccountKey,
+		newLPBalance, a.Asset, a.Asset2, amm, ammAccount)
+	if deleteResult != tx.TesSUCCESS && deleteResult != tx.TecINCOMPLETE {
+		return deleteResult
+	}
+
+	// Persist updated AMM account XRP balance if AMM still exists
+	if !newLPBalance.IsZero() || deleteResult == tx.TecINCOMPLETE {
 		ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
 		if err != nil {
 			return tx.TefINTERNAL
@@ -332,13 +412,188 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// Persist updated holder account
-	holderBytes, err := state.SerializeAccountRoot(holderAccount)
+	// Re-read holder account from view — redeemIOUWithCleanup may have
+	// decremented OwnerCount when deleting the LP token trust line.
+	// We must merge our local changes (XRP balance) with whatever
+	// redeemIOUWithCleanup wrote.
+	holderData2, err := ctx.View.Read(holderKey)
+	if err != nil || holderData2 == nil {
+		return tx.TefINTERNAL
+	}
+	holderAccount2, err := state.ParseAccountRoot(holderData2)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	// Apply any XRP balance change from our local holderAccount to the
+	// version that redeemIOUWithCleanup persisted.
+	holderAccount2.Balance = holderAccount.Balance
+	holderBytes, err := state.SerializeAccountRoot(holderAccount2)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 	if err := ctx.View.Update(holderKey, holderBytes); err != nil {
 		return tx.TefINTERNAL
+	}
+
+	return tx.TesSUCCESS
+}
+
+// redeemIOUWithCleanup burns LP tokens from holder's trust line, potentially
+// deleting the trust line if balance reaches zero (matching rippled's redeemIOU
+// + updateTrustLine + trustDelete flow).
+// Reference: rippled View.cpp redeemIOU (line 2288)
+func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, amount tx.Amount) tx.Result {
+	if amount.IsZero() {
+		return tx.TesSUCCESS
+	}
+
+	trustLineKey := keylet.Line(holderID, ammAccountID, amount.Currency)
+	data, err := view.Read(trustLineKey)
+	if err != nil || data == nil {
+		return tx.TefINTERNAL // LP token trust line must exist
+	}
+
+	rs, err := state.ParseRippleState(data)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	holderHigh := !keylet.IsLowAccount(holderID, ammAccountID)
+
+	// Get balance in holder terms (positive = holder holds tokens)
+	saBalance := rs.Balance
+	if holderHigh {
+		saBalance = saBalance.Negate()
+	}
+
+	saBefore := saBalance
+	// Holder is redeeming (sending back to AMM/issuer), so balance decreases
+	saBalance, _ = saBalance.Sub(amount)
+
+	// Check trust line cleanup conditions
+	// Reference: rippled View.cpp updateTrustLine (line 2135) + redeemIOU (line 2323)
+	bDelete := false
+	rsFlags := rs.Flags
+
+	var holderReserveFlag, holderNoRippleFlag, holderFreezeFlag uint32
+	var holderLimitIsZero, holderQInIsZero, holderQOutIsZero bool
+	if !holderHigh {
+		holderReserveFlag = state.LsfLowReserve
+		holderNoRippleFlag = state.LsfLowNoRipple
+		holderFreezeFlag = state.LsfLowFreeze
+		holderLimitIsZero = rs.LowLimit.IsZero()
+		holderQInIsZero = rs.LowQualityIn == 0
+		holderQOutIsZero = rs.LowQualityOut == 0
+	} else {
+		holderReserveFlag = state.LsfHighReserve
+		holderNoRippleFlag = state.LsfHighNoRipple
+		holderFreezeFlag = state.LsfHighFreeze
+		holderLimitIsZero = rs.HighLimit.IsZero()
+		holderQInIsZero = rs.HighQualityIn == 0
+		holderQOutIsZero = rs.HighQualityOut == 0
+	}
+
+	isPositive := !saBefore.IsZero() && !saBefore.IsNegative()
+	isZeroOrNeg := saBalance.IsZero() || saBalance.IsNegative()
+	hasReserve := (rsFlags & holderReserveFlag) != 0
+
+	holderAccountData, _ := view.Read(keylet.Account(holderID))
+	holderAccount, _ := state.ParseAccountRoot(holderAccountData)
+
+	holderHasDefaultRipple := false
+	if holderAccount != nil {
+		holderHasDefaultRipple = (holderAccount.Flags & state.LsfDefaultRipple) != 0
+	}
+	holderHasNoRipple := (rsFlags & holderNoRippleFlag) != 0
+	holderHasFreeze := (rsFlags & holderFreezeFlag) != 0
+
+	if isPositive && isZeroOrNeg && hasReserve &&
+		(holderHasNoRipple != holderHasDefaultRipple) &&
+		!holderHasFreeze &&
+		holderLimitIsZero &&
+		holderQInIsZero &&
+		holderQOutIsZero {
+
+		// Decrement holder's owner count
+		if holderAccount != nil && holderAccount.OwnerCount > 0 {
+			holderAccount.OwnerCount--
+			holderBytes, err := state.SerializeAccountRoot(holderAccount)
+			if err != nil {
+				return tx.TefINTERNAL
+			}
+			if err := view.Update(keylet.Account(holderID), holderBytes); err != nil {
+				return tx.TefINTERNAL
+			}
+		}
+
+		// Clear holder's reserve flag
+		rsFlags &= ^holderReserveFlag
+
+		// Check if line should be deleted
+		var ammReserveFlag uint32
+		if holderHigh {
+			ammReserveFlag = state.LsfLowReserve
+		} else {
+			ammReserveFlag = state.LsfHighReserve
+		}
+
+		bDelete = saBalance.IsZero() && (rsFlags&ammReserveFlag) == 0
+	}
+
+	// Update balance
+	finalBalance := saBalance
+	if holderHigh {
+		finalBalance = finalBalance.Negate()
+	}
+	rs.Balance = state.NewIssuedAmountFromValue(
+		finalBalance.Mantissa(), finalBalance.Exponent(),
+		rs.Balance.Currency, rs.Balance.Issuer)
+	rs.Flags = rsFlags
+
+	if bDelete {
+		return trustDeleteRippleState(view, trustLineKey, rs, holderID, ammAccountID, holderHigh)
+	}
+
+	rsBytes, err := state.SerializeRippleState(rs)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := view.Update(trustLineKey, rsBytes); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	return tx.TesSUCCESS
+}
+
+// trustDeleteRippleState removes a trust line from both owner directories and erases it.
+// Reference: rippled View.cpp trustDelete (line 1534)
+func trustDeleteRippleState(view tx.LedgerView, lineKey keylet.Keylet, rs *state.RippleState, id1, id2 [20]byte, id1IsHigh bool) tx.Result {
+	var lowID, highID [20]byte
+	if id1IsHigh {
+		lowID = id2
+		highID = id1
+	} else {
+		lowID = id1
+		highID = id2
+	}
+
+	// Remove from low account's owner directory
+	lowDirKey := keylet.OwnerDir(lowID)
+	_, err := state.DirRemove(view, lowDirKey, rs.LowNode, lineKey.Key, false)
+	if err != nil {
+		return tx.TefBAD_LEDGER
+	}
+
+	// Remove from high account's owner directory
+	highDirKey := keylet.OwnerDir(highID)
+	_, err = state.DirRemove(view, highDirKey, rs.HighNode, lineKey.Key, false)
+	if err != nil {
+		return tx.TefBAD_LEDGER
+	}
+
+	// Erase the trust line
+	if err := view.Erase(lineKey); err != nil {
+		return tx.TefBAD_LEDGER
 	}
 
 	return tx.TesSUCCESS

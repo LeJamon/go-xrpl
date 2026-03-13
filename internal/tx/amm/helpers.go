@@ -98,20 +98,35 @@ func zeroAmount(asset tx.Asset) tx.Amount {
 	return state.NewIssuedAmountFromValue(0, -100, asset.Currency, asset.Issuer)
 }
 
-// computeAMMAccountIDSimple derives the AMM pseudo-account ID using a simple
-// first-20-bytes approach. Used as a fallback when pseudoAccountAddress is not needed.
-func computeAMMAccountIDSimple(ammKey [32]byte) [20]byte {
-	var accountID [20]byte
-	copy(accountID[:], ammKey[:20])
-	return accountID
+// ammAccountCache maps AMM keylet keys to their pseudo-account IDs.
+// Populated during AMMCreate and used by ComputeAMMAccountAddress for test helpers.
+var ammAccountCache = make(map[[32]byte][20]byte)
+
+// CacheAMMAccount stores an AMM keylet → accountID mapping for later lookup.
+func CacheAMMAccount(ammKeyletKey [32]byte, accountID [20]byte) {
+	ammAccountCache[ammKeyletKey] = accountID
 }
 
-// ComputeAMMAccountAddress computes the AMM account address from the asset pair.
+// ClearAMMAccountCache removes all cached AMM account mappings.
+// Call this from test env_reset or between test runs.
+func ClearAMMAccountCache() {
+	ammAccountCache = make(map[[32]byte][20]byte)
+}
+
+// ComputeAMMAccountAddress returns the AMM pseudo-account address for the given asset pair.
+// It first checks the cache (populated by AMMCreate), then falls back to the AMM keylet
+// first-20-bytes derivation (which is incorrect but backwards-compatible for old tests).
 // Exported for use in test helpers.
 func ComputeAMMAccountAddress(asset1, asset2 tx.Asset) string {
 	ammKey := computeAMMKeylet(asset1, asset2)
-	ammAccountID := computeAMMAccountIDSimple(ammKey.Key)
-	addr, _ := encodeAccountID(ammAccountID)
+	if cachedID, ok := ammAccountCache[ammKey.Key]; ok {
+		addr, _ := encodeAccountID(cachedID)
+		return addr
+	}
+	// Fallback: first 20 bytes of keylet hash (incorrect but backwards-compatible)
+	var accountID [20]byte
+	copy(accountID[:], ammKey.Key[:20])
+	addr, _ := encodeAccountID(accountID)
 	return addr
 }
 
@@ -252,22 +267,30 @@ func calculateLPTokens(amount1, amount2 tx.Amount, fixV1_3 ...bool) tx.Amount {
 }
 
 // GenerateAMMLPTCurrency generates the LP token currency code from two asset currencies.
-// The LP token currency is a hex-encoded 20-byte value derived from the asset pair.
-// Exported for use in test helpers.
-// GenerateAMMLPTCurrency generates the LP token currency code from two asset currencies.
-// The LP token currency is a hex-encoded 20-byte value derived from the asset pair.
+// The LP token currency is 0x03 prefix + first 19 bytes of sha512Half(min(c1,c2), max(c1,c2)).
+// Reference: rippled AMMCore.cpp ammLPTCurrency()
 func GenerateAMMLPTCurrency(currency1, currency2 string) string {
 	c1 := state.GetCurrencyBytes(currency1)
 	c2 := state.GetCurrencyBytes(currency2)
 
-	// XOR the two currency bytes to create a unique LP token currency
-	var lptCurrency [20]byte
-	// Set high nibble to 0x03 to indicate LP token
-	lptCurrency[0] = 0x03
-
-	for i := 1; i < 20; i++ {
-		lptCurrency[i] = c1[i] ^ c2[i]
+	// Sort currencies lexicographically (std::minmax in rippled)
+	minC, maxC := c1, c2
+	for i := 0; i < 20; i++ {
+		if c1[i] < c2[i] {
+			break
+		} else if c1[i] > c2[i] {
+			minC, maxC = c2, c1
+			break
+		}
 	}
+
+	// sha512Half(minC, maxC)
+	hash := common.Sha512Half(minC[:], maxC[:])
+
+	// AMM LPToken currency: 0x03 + first 19 bytes of hash
+	var lptCurrency [20]byte
+	lptCurrency[0] = 0x03
+	copy(lptCurrency[1:], hash[:19])
 
 	return fmt.Sprintf("%X", lptCurrency)
 }
@@ -371,6 +394,10 @@ func solveQuadraticEq(a, b, c tx.Amount) tx.Amount {
 	bb := b.Mul(b, false)
 	fourAC := four.Mul(a, false).Mul(c, false)
 	disc, _ := bb.Sub(fourAC)
+	// Guard against negative discriminant (no real root)
+	if disc.IsNegative() {
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
+	}
 	sqrtDisc := disc.Sqrt()
 	// (-b + sqrtDisc) / (2*a)
 	negB := b.Negate()
@@ -823,6 +850,9 @@ func lpTokensOut(assetBalance, amountIn, lptBalance tx.Amount, tfee uint16, fixA
 	f2f2 := f2.Mul(f2, false)
 	rDivF1 := numberDiv(r, f1)
 	inner, _ := f2f2.Add(rDivF1)
+	if inner.IsNegative() {
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
+	}
 	sqrtInner := inner.Sqrt()
 	c, _ := sqrtInner.Sub(f2)
 
@@ -982,6 +1012,13 @@ func calcLPTokensIn(assetBalance, amountOut, lptBalance tx.Amount, tfee uint16, 
 	cc := c.Mul(c, false)
 	fourFr := four.Mul(fr, false)
 	disc, _ := cc.Sub(fourFr)
+	// If discriminant is negative (withdrawal > pool balance), return zero.
+	// In rippled, root2() throws std::overflow_error which propagates to
+	// the engine catch handler. Here we return zero so the caller can
+	// produce the appropriate TER code.
+	if disc.IsNegative() {
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
+	}
 	sqrtDisc := disc.Sqrt()
 
 	// (c - sqrt(c*c - 4*fr)) / 2
@@ -1794,11 +1831,39 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 		HighNode:  0,
 	}
 
-	// Set reserve flag for the LP token holder (not the AMM)
+	// Set reserve flag and NoRipple flags matching rippled's trustCreate + issueIOU.
+	// Reference: rippled View.cpp trustCreate (lines 1415-1432) and issueIOU (line 2228-2240).
+	// When creating a trust line, each side gets NoRipple set if that account
+	// does NOT have the lsfDefaultRipple flag set.
+	holderHasDefaultRipple := false
+	if holderAccountData, readErr := view.Read(keylet.Account(accountID)); readErr == nil && holderAccountData != nil {
+		if holderAcct, parseErr := state.ParseAccountRoot(holderAccountData); parseErr == nil {
+			holderHasDefaultRipple = (holderAcct.Flags & state.LsfDefaultRipple) != 0
+		}
+	}
+	ammHasDefaultRipple := false
+	if ammAccountData, readErr := view.Read(keylet.Account(ammAccountID)); readErr == nil && ammAccountData != nil {
+		if ammAcct, parseErr := state.ParseAccountRoot(ammAccountData); parseErr == nil {
+			ammHasDefaultRipple = (ammAcct.Flags & state.LsfDefaultRipple) != 0
+		}
+	}
+
 	if holderIsLow {
 		rs.Flags |= state.LsfLowReserve
+		if !holderHasDefaultRipple {
+			rs.Flags |= state.LsfLowNoRipple
+		}
+		if !ammHasDefaultRipple {
+			rs.Flags |= state.LsfHighNoRipple
+		}
 	} else {
 		rs.Flags |= state.LsfHighReserve
+		if !holderHasDefaultRipple {
+			rs.Flags |= state.LsfHighNoRipple
+		}
+		if !ammHasDefaultRipple {
+			rs.Flags |= state.LsfLowNoRipple
+		}
 	}
 
 	// Insert into low account's owner directory

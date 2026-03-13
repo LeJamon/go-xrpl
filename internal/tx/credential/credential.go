@@ -3,10 +3,10 @@ package credential
 import (
 	"encoding/hex"
 
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -42,16 +42,15 @@ func (c *CredentialAccept) TxType() tx.Type {
 
 // Validate validates the CredentialAccept transaction
 // Reference: rippled Credentials.cpp CredentialAccept::preflight()
+// Note: The fixInvalidTxFlags-gated flag check is done in Apply() because
+// Validate() has no access to amendment rules.
 func (c *CredentialAccept) Validate() error {
 	if err := c.BaseTx.Validate(); err != nil {
 		return err
 	}
 
-	// Check for invalid flags (tfUniversalMask)
-	// Reference: rippled Credentials.cpp:304-308
-	if err := tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask); err != nil {
-		return err
-	}
+	// Flag check is deferred to Apply() where amendment rules are available.
+	// Reference: rippled Credentials.cpp:304-308 — gated behind fixInvalidTxFlags.
 
 	// Issuer is required and must not be zero
 	// Reference: rippled Credentials.cpp:310-314
@@ -140,6 +139,14 @@ func (c *CredentialAccept) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
 // Apply applies the CredentialAccept transaction to ledger state.
 // Reference: rippled Credentials.cpp CredentialAccept::doApply()
 func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) tx.Result {
+	// Check for invalid flags, gated behind fixInvalidTxFlags
+	// Reference: rippled Credentials.cpp:304-308
+	if ctx.Rules().Enabled(amendment.FeatureFixInvalidTxFlags) {
+		if c.GetFlags()&tx.TfUniversalMask != 0 {
+			return tx.TemINVALID_FLAG
+		}
+	}
+
 	if c.Issuer == "" || c.CredentialType == "" {
 		return tx.TemINVALID
 	}

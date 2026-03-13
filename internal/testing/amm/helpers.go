@@ -313,30 +313,52 @@ func TestAMM(t *testing.T, pool *[2]tx.Amount, tradingFee uint16, callback TestA
 	}
 	env.Close()
 
-	// Compute AMM account
+	// Look up AMM account from ledger
 	a1 := tx.Asset{Currency: asset1.Currency, Issuer: asset1.Issuer}
 	a2 := tx.Asset{Currency: asset2.Currency, Issuer: asset2.Issuer}
-	ammAcc := AMMAccount(t, a1, a2)
+	ammAcc := env.ReadAMMAccount(a1, a2)
+	if ammAcc == nil {
+		t.Fatalf("TestAMM: AMM not found for %s/%s", a1.Currency, a2.Currency)
+	}
 
 	callback(env, ammAcc)
 }
 
-// AMMAccount computes the AMM pseudo-account for the given asset pair.
+// AMMAccount derives the AMM pseudo-account for the given asset pair.
+// It uses a cache populated by AMMCreate to return the correct address.
 func AMMAccount(t *testing.T, asset1, asset2 tx.Asset) *jtx.Account {
 	t.Helper()
-
 	addr := coreAmm.ComputeAMMAccountAddress(asset1, asset2)
+	if addr == "" {
+		t.Fatalf("AMMAccount: failed to compute address for %s/%s", asset1.Currency, asset2.Currency)
+	}
 	_, idBytes, err := addresscodec.DecodeClassicAddressToAccountID(addr)
 	if err != nil {
-		t.Fatalf("Failed to decode AMM account address %s: %v", addr, err)
+		t.Fatalf("AMMAccount: decode address error: %v", err)
 	}
 	var id20 [20]byte
 	copy(id20[:], idBytes)
-
 	return &jtx.Account{
 		Name:    "amm",
 		Address: addr,
 		ID:      id20,
+	}
+}
+
+// ReadAMMAccount reads the AMM pseudo-account from the ledger.
+func (e *AMMTestEnv) ReadAMMAccount(asset1, asset2 tx.Asset) *jtx.Account {
+	ammData := e.ReadAMMData(asset1, asset2)
+	if ammData == nil {
+		return nil
+	}
+	addr, err := coreAmm.EncodeAccountID(ammData.Account)
+	if err != nil {
+		e.T.Fatalf("ReadAMMAccount: failed to encode account: %v", err)
+	}
+	return &jtx.Account{
+		Name:    "amm",
+		Address: addr,
+		ID:      ammData.Account,
 	}
 }
 
@@ -380,7 +402,11 @@ func accountFromAddress(t *testing.T, addr string) *jtx.Account {
 func (e *AMMTestEnv) AMMBalances(asset1, asset2 tx.Asset) (tx.Amount, tx.Amount, tx.Amount) {
 	e.T.Helper()
 
-	ammAcc := AMMAccount(e.T, asset1, asset2)
+	ammAcc := e.ReadAMMAccount(asset1, asset2)
+	if ammAcc == nil {
+		zero := tx.NewIssuedAmountFromFloat64(0, "", "")
+		return zero, zero, zero
+	}
 
 	// Get pool IOU balances — must decode issuer addresses to get proper account IDs
 	issuer1 := accountFromAddress(e.T, asset1.Issuer)
@@ -605,7 +631,13 @@ func AMMAssetOut(assetBalance, lptBalance, lpTokens tx.Amount, tfee uint16) tx.A
 func (e *AMMTestEnv) ExpectLPTokens(account *jtx.Account, asset1, asset2 tx.Asset, expected float64) {
 	e.T.Helper()
 
-	ammAcc := AMMAccount(e.T, asset1, asset2)
+	ammAcc := e.ReadAMMAccount(asset1, asset2)
+	if ammAcc == nil {
+		if expected != 0 {
+			e.T.Errorf("ExpectLPTokens(%s): AMM not found, want %f", account.Name, expected)
+		}
+		return
+	}
 	lptCurrency := coreAmm.GenerateAMMLPTCurrency(asset1.Currency, asset2.Currency)
 
 	balance := e.TestEnv.IOUBalance(account, ammAcc, lptCurrency)
@@ -638,7 +670,11 @@ func (e *AMMTestEnv) ExpectLPTokens(account *jtx.Account, asset1, asset2 tx.Asse
 func (e *AMMTestEnv) ExpectLPTokensPrecise(account *jtx.Account, asset1, asset2 tx.Asset, expected tx.Amount) {
 	e.T.Helper()
 
-	ammAcc := AMMAccount(e.T, asset1, asset2)
+	ammAcc := e.ReadAMMAccount(asset1, asset2)
+	if ammAcc == nil {
+		e.T.Errorf("ExpectLPTokensPrecise(%s): AMM not found", account.Name)
+		return
+	}
 	lptCurrency := coreAmm.GenerateAMMLPTCurrency(asset1.Currency, asset2.Currency)
 
 	balance := e.TestEnv.IOUBalance(account, ammAcc, lptCurrency)

@@ -3,6 +3,8 @@
 package offer
 
 import (
+	"encoding/hex"
+	"encoding/json"
 	"math/big"
 	"strings"
 
@@ -64,6 +66,30 @@ func init() {
 	tx.Register(tx.TypeOfferCreate, func() tx.Transaction {
 		return &OfferCreate{BaseTx: *tx.NewBaseTx(tx.TypeOfferCreate, "")}
 	})
+}
+
+// UnmarshalJSON handles DomainID as a hex string from the binary codec.
+func (o *OfferCreate) UnmarshalJSON(data []byte) error {
+	type Alias OfferCreate
+	aux := &struct {
+		DomainID *string `json:"DomainID,omitempty"`
+		*Alias
+	}{
+		Alias: (*Alias)(o),
+	}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if aux.DomainID != nil {
+		b, err := hex.DecodeString(*aux.DomainID)
+		if err != nil || len(b) != 32 {
+			return &json.UnmarshalTypeError{Value: "string", Type: nil}
+		}
+		var id [32]byte
+		copy(id[:], b)
+		o.DomainID = &id
+	}
+	return nil
 }
 
 // NewOfferCreate creates a new OfferCreate transaction

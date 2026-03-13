@@ -2,6 +2,9 @@ package mpt
 
 import (
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"strconv"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
@@ -33,6 +36,60 @@ type MPTokenIssuanceCreate struct {
 	// MPTokenMetadata is metadata for the token (optional, 1-1024 bytes as hex)
 	// Pointer type distinguishes nil (absent) from &"" (present but empty).
 	MPTokenMetadata *string `json:"MPTokenMetadata,omitempty" xrpl:"MPTokenMetadata,omitempty"`
+
+	// DomainID is the permissioned domain for this issuance (optional).
+	// When set, the issuance is restricted to the specified domain.
+	// Requires featurePermissionedDomains AND featureSingleAssetVault.
+	// Reference: rippled MPTokenIssuanceCreate.cpp sfDomainID
+	DomainID *string `json:"DomainID,omitempty" xrpl:"DomainID,omitempty"`
+
+	// hasDomainID tracks whether the DomainID field was present in the parsed JSON.
+	hasDomainID bool
+}
+
+// UnmarshalJSON handles MaximumAmount as a hex string from the binary codec
+// and tracks DomainID field presence.
+// UInt64 fields are encoded as hex strings by the binary codec.
+func (m *MPTokenIssuanceCreate) UnmarshalJSON(data []byte) error {
+	type Alias MPTokenIssuanceCreate
+	aux := &struct {
+		MaximumAmount *json.RawMessage `json:"MaximumAmount,omitempty"`
+		DomainID      *string          `json:"DomainID,omitempty"`
+		*Alias
+	}{
+		Alias: (*Alias)(m),
+	}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if aux.MaximumAmount != nil {
+		val, err := parseUInt64Field(*aux.MaximumAmount)
+		if err != nil {
+			return fmt.Errorf("invalid MaximumAmount: %w", err)
+		}
+		m.MaximumAmount = &val
+	}
+	if aux.DomainID != nil {
+		m.DomainID = aux.DomainID
+		m.hasDomainID = true
+	}
+	return nil
+}
+
+// parseUInt64Field parses a JSON value that may be a hex string (from binary codec)
+// or a numeric value (from JSON). UInt64 fields in XRPL are encoded as hex strings.
+func parseUInt64Field(raw json.RawMessage) (uint64, error) {
+	// Try as string first (hex from binary codec)
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return strconv.ParseUint(s, 16, 64)
+	}
+	// Try as number
+	var n uint64
+	if err := json.Unmarshal(raw, &n); err == nil {
+		return n, nil
+	}
+	return 0, fmt.Errorf("cannot parse UInt64 field: %s", string(raw))
 }
 
 // NewMPTokenIssuanceCreate creates a new MPTokenIssuanceCreate transaction
@@ -72,6 +129,18 @@ func (m *MPTokenIssuanceCreate) Validate() error {
 		}
 	}
 
+	// Validate DomainID
+	// Reference: rippled MPTokenIssuanceCreate.cpp:56-64
+	if m.hasDomainID && m.DomainID != nil {
+		if *m.DomainID == zeroHash256 {
+			return tx.Errorf(tx.TemMALFORMED, "DomainID cannot be zero")
+		}
+		// Domain present implies that MPTokenIssuance is not public
+		if flags&MPTokenIssuanceCreateFlagRequireAuth == 0 {
+			return tx.Errorf(tx.TemMALFORMED, "DomainID requires tfMPTRequireAuth flag")
+		}
+	}
+
 	// Validate MPTokenMetadata
 	if m.MPTokenMetadata != nil {
 		metadataBytes, err := hex.DecodeString(*m.MPTokenMetadata)
@@ -103,7 +172,13 @@ func (m *MPTokenIssuanceCreate) Flatten() (map[string]any, error) {
 
 // RequiredAmendments returns the amendments required for this transaction type
 func (m *MPTokenIssuanceCreate) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureMPTokensV1}
+	amendments := [][32]byte{amendment.FeatureMPTokensV1}
+	// DomainID requires both PermissionedDomains and SingleAssetVault
+	// Reference: rippled MPTokenIssuanceCreate.cpp:34-37
+	if m.hasDomainID {
+		amendments = append(amendments, amendment.FeaturePermissionedDomains, amendment.FeatureSingleAssetVault)
+	}
+	return amendments
 }
 
 // Apply applies the MPTokenIssuanceCreate transaction to ledger state.
@@ -139,6 +214,9 @@ func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 	if m.MPTokenMetadata != nil && *m.MPTokenMetadata != "" {
 		issuanceData.MPTokenMetadata = *m.MPTokenMetadata
+	}
+	if m.hasDomainID && m.DomainID != nil {
+		issuanceData.DomainID = m.DomainID
 	}
 
 	// Serialize and insert into ledger

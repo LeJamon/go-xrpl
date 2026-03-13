@@ -44,3 +44,33 @@ const (
 	// tfNFTokenCancelOfferMask is the mask for invalid flags (all flags are invalid)
 	tfNFTokenCancelOfferMask uint32 = 0xFFFFFFFF
 )
+
+// nftTransferFeeXRP computes the issuer transfer fee cut for an XRP amount
+// using round-half-even (banker's rounding) to match rippled's Number arithmetic.
+//
+// rippled computes: multiply(amount, transferFeeAsRate(fee))
+//   transferFeeAsRate(fee) = Rate{fee * 10000}
+//   as_amount(rate) = STAmount{noIssue(), rate, -9} = rate/1e9
+//   multiply goes through Number path: amount * fee * 10000 / 1e9 = amount * fee / 1e5
+//
+// The result is converted back to drops via Number::operator rep() which uses
+// round-to-nearest, even on tie.
+//
+// Reference: rippled Rate2.cpp, Number.cpp operator rep()
+func nftTransferFeeXRP(amount uint64, fee uint16) uint64 {
+	numerator := amount * uint64(fee)
+	quotient := numerator / transferFeeDivisor
+	remainder := numerator % transferFeeDivisor
+
+	// Round-half-even (banker's rounding)
+	half := uint64(transferFeeDivisor / 2) // 50000
+	if remainder > half {
+		quotient++
+	} else if remainder == half {
+		// Tie: round to even
+		if quotient%2 != 0 {
+			quotient++
+		}
+	}
+	return quotient
+}

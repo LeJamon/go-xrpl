@@ -3,10 +3,10 @@ package credential
 import (
 	"encoding/hex"
 
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -44,21 +44,24 @@ func (c *CredentialDelete) TxType() tx.Type {
 
 // Validate validates the CredentialDelete transaction
 // Reference: rippled Credentials.cpp CredentialDelete::preflight()
+// Note: The fixInvalidTxFlags-gated flag check is done in Apply() because
+// Validate() has no access to amendment rules.
 func (c *CredentialDelete) Validate() error {
 	if err := c.BaseTx.Validate(); err != nil {
 		return err
 	}
 
-	// Check for invalid flags (tfUniversalMask)
-	// Reference: rippled Credentials.cpp:217-222
-	if err := tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask); err != nil {
-		return err
-	}
+	// Flag check is deferred to Apply() where amendment rules are available.
+	// Reference: rippled Credentials.cpp:217-222 — gated behind fixInvalidTxFlags.
 
 	// At least one of Subject or Issuer must be present
 	// Reference: rippled Credentials.cpp:224-233
 	if c.Subject == "" && c.Issuer == "" {
-		return ErrCredentialNoFields
+		// Check PresentFields: if both are absent from the parsed blob, that's malformed.
+		// If either was present (even with value ""), it was explicitly set.
+		if !c.HasField("Subject") && !c.HasField("Issuer") {
+			return ErrCredentialNoFields
+		}
 	}
 
 	// If present, Subject and Issuer must not be zero accounts
@@ -112,6 +115,14 @@ func (c *CredentialDelete) RequiredAmendments() [][32]byte {
 // Apply applies the CredentialDelete transaction to ledger state.
 // Reference: rippled Credentials.cpp CredentialDelete::doApply()
 func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) tx.Result {
+	// Check for invalid flags, gated behind fixInvalidTxFlags
+	// Reference: rippled Credentials.cpp:217-222
+	if ctx.Rules().Enabled(amendment.FeatureFixInvalidTxFlags) {
+		if c.GetFlags()&tx.TfUniversalMask != 0 {
+			return tx.TemINVALID_FLAG
+		}
+	}
+
 	if c.CredentialType == "" {
 		return tx.TemINVALID
 	}

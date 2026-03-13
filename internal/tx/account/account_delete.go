@@ -69,7 +69,24 @@ func (a *AccountDelete) Validate() error {
 // CalculateBaseFee returns the minimum fee for AccountDelete.
 // AccountDelete requires one owner reserve increment as the base fee.
 // Reference: rippled DeleteAccount.cpp calculateBaseFee() — returns view.fees().increment
-func (a *AccountDelete) CalculateBaseFee(config tx.EngineConfig) uint64 {
+//
+// In rippled, this reads from the live ledger's FeeSettings SLE via
+// view.fees().increment, which is populated during Ledger::setup().
+// We do the same: read from the FeeSettings SLE on the provided view,
+// falling back to the engine config if the SLE cannot be read.
+func (a *AccountDelete) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) uint64 {
+	// Read reserve increment from the FeeSettings SLE on the ledger,
+	// matching rippled's view.fees().increment behavior.
+	if view != nil {
+		data, err := view.Read(keylet.Fees())
+		if err == nil && data != nil {
+			feeSettings, err := state.ParseFeeSettings(data)
+			if err == nil {
+				return feeSettings.GetReserveIncrement()
+			}
+		}
+	}
+	// Fallback: use the engine config value (from genesis/env config).
 	return config.ReserveIncrement
 }
 
@@ -161,12 +178,16 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// --- Cascade-delete all non-obligation directory entries ---
-	// Collect all keys first, then delete — avoids modifying directory during iteration.
-	// Reference: rippled DeleteAccount.cpp nonObligationDeleter()
+	// --- Cascade-delete all directory entries ---
+	// Reference: rippled DeleteAccount.cpp preclaim() lines 316-358 + doApply() nonObligationDeleter()
+	// We check each entry is deletable, count entries (tefTOO_BIG if > 1000),
+	// and delete in a single pass.
+	const maxDeletableDirEntries = 1000
+
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 	var entryKeys [][32]byte
 
+	deletableCount := 0
 	err := state.DirForEach(ctx.View, ownerDirKey, func(itemKey [32]byte) error {
 		entryKeys = append(entryKeys, itemKey)
 		return nil
@@ -185,6 +206,15 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		entryType, err := state.GetLedgerEntryType(data)
 		if err != nil {
 			return tx.TecHAS_OBLIGATIONS
+		}
+
+		if !isNonObligationDeletable(entry.Type(entryType)) {
+			return tx.TecHAS_OBLIGATIONS
+		}
+
+		deletableCount++
+		if deletableCount > maxDeletableDirEntries {
+			return tx.TefTOO_BIG
 		}
 
 		switch entry.Type(entryType) {
@@ -365,6 +395,16 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	destAccount.Balance += sourceBalance
 	ctx.Account.Balance -= sourceBalance
 
+	// Re-arm the password change fee if we can and need to.
+	// When XRP is transferred to the destination, clear the PasswordSpent flag
+	// so the destination can use the free SetRegularKey password change again.
+	// Reference: rippled DeleteAccount.cpp doApply() lines 431-433:
+	//   if (mSourceBalance > XRPAmount(0) && dst->isFlag(lsfPasswordSpent))
+	//       dst->clearFlag(lsfPasswordSpent);
+	if sourceBalance > 0 && (destAccount.Flags&state.LsfPasswordSpent) != 0 {
+		destAccount.Flags &^= state.LsfPasswordSpent
+	}
+
 	if result := ctx.UpdateAccountRoot(destID, destAccount); result != tx.TesSUCCESS {
 		return result
 	}
@@ -382,6 +422,26 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	return tx.TesSUCCESS
+}
+
+// isNonObligationDeletable returns true if a ledger entry type can be cascade-deleted
+// during AccountDelete. Entry types not in this list are obligations that prevent deletion.
+// Reference: rippled DeleteAccount.cpp nonObligationDeleter()
+func isNonObligationDeletable(t entry.Type) bool {
+	switch t {
+	case entry.TypeOffer,
+		entry.TypeSignerList,
+		entry.TypeTicket,
+		entry.TypeDepositPreauth,
+		entry.TypeNFTokenOffer,
+		entry.TypeDID,
+		entry.TypeOracle,
+		entry.TypeCredential,
+		entry.TypeDelegate:
+		return true
+	default:
+		return false
+	}
 }
 
 // keyLessEqual returns true if a <= b (byte-level comparison of 32-byte keys).

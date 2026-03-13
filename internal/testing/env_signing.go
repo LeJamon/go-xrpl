@@ -2,6 +2,7 @@ package testing
 
 import (
 	"encoding/hex"
+	"strconv"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
@@ -146,9 +147,14 @@ func (e *TestEnv) SubmitMultiSigned(transaction interface{}, signers []*Account)
 	common.SigningPubKey = ""
 	common.TxnSignature = ""
 
-	// Calculate multi-sign fee: (numSigners + 1) * baseFee
+	// Calculate multi-sign fee: (numSigners + 1) * baseFee.
+	// Only override if the fee isn't already set higher (e.g., AccountDelete
+	// requires a higher fee than the standard multi-sign minimum).
 	multisigFee := uint64(len(signers)+1) * e.baseFee
-	common.Fee = formatUint64(multisigFee)
+	existingFee, _ := strconv.ParseUint(common.Fee, 10, 64)
+	if existingFee < multisigFee {
+		common.Fee = formatUint64(multisigFee)
+	}
 
 	// Each signer signs and is added (AddMultiSigner maintains sorted order)
 	for _, signer := range signers {
@@ -223,6 +229,7 @@ func (e *TestEnv) submitWithSigVerification(txn tx.Transaction) TxResult {
 		ParentCloseTime:           parentCloseTime,
 		NetworkID:                 e.networkID,
 		ParentHash:                e.ledger.ParentHash(),
+		OpenLedger:                e.openLedger,
 	}
 
 	engine := tx.NewEngine(e.ledger, engineConfig)

@@ -225,7 +225,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Preclaim: EPrice issue must match LP token issue (rippled AMMWithdraw.cpp:273-278)
 	if a.EPrice != nil {
 		lptCurrency := GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency)
-		ammAccountAddr := ComputeAMMAccountAddress(amm.Asset, amm.Asset2)
+		ammAccountAddr, _ := encodeAccountID(amm.Account)
 		if a.EPrice.Currency != lptCurrency || a.EPrice.Issuer != ammAccountAddr {
 			return tx.TemBAD_AMM_TOKENS
 		}
@@ -694,13 +694,14 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Redeem LP tokens: debit withdrawer's trust line, then reduce AMM LP balance.
+	// Uses redeemIOUWithCleanup which handles trust line deletion when balance reaches zero.
 	// Reference: rippled AMMWithdraw.cpp — redeemIOU(account_, lpTokensActual, lpTokens.issue())
 	if !lpTokensToRedeem.IsZero() {
 		lptCurrency := GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency)
 		ammAccountAddr, _ := state.EncodeAccountID(amm.Account)
 		redeemAmt := state.NewIssuedAmountFromValue(
 			lpTokensToRedeem.Mantissa(), lpTokensToRedeem.Exponent(), lptCurrency, ammAccountAddr)
-		if r := redeemLPTokens(ctx.View, accountID, amm.Account, redeemAmt); r != tx.TesSUCCESS {
+		if r := redeemIOUWithCleanup(ctx.View, accountID, amm.Account, redeemAmt); r != tx.TesSUCCESS {
 			return r
 		}
 	}
@@ -721,14 +722,19 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 		return deleteResult
 	}
 
+	// Re-read account from view — redeemIOUWithCleanup may have decremented
+	// OwnerCount when deleting the LP token trust line, and the engine writes
+	// ctx.Account back after Apply() returns, which would overwrite the change.
 	accountKey := keylet.Account(accountID)
-	accountBytes, err := state.SerializeAccountRoot(ctx.Account)
+	accountData, err := ctx.View.Read(accountKey)
+	if err != nil || accountData == nil {
+		return tx.TefINTERNAL
+	}
+	accountFromView, err := state.ParseAccountRoot(accountData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	if err := ctx.View.Update(accountKey, accountBytes); err != nil {
-		return tx.TefINTERNAL
-	}
+	ctx.Account.OwnerCount = accountFromView.OwnerCount
 
 	return tx.TesSUCCESS
 }

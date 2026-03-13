@@ -323,6 +323,7 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 		ParentCloseTime:           parentCloseTime,
 		NetworkID:                 e.networkID,
 		ParentHash:                e.ledger.ParentHash(),
+		OpenLedger:                e.openLedger,
 	}
 
 	engine := tx.NewEngine(e.ledger, engineConfig)
@@ -534,6 +535,7 @@ func (e *TestEnv) applyForReplay(txn tx.Transaction) tx.Result {
 		ParentCloseTime:           parentCloseTime,
 		NetworkID:                 e.networkID,
 		ParentHash:                e.ledger.ParentHash(),
+		OpenLedger:                e.openLedger,
 	}
 
 	engine := tx.NewEngine(e.ledger, engineConfig)
@@ -736,6 +738,7 @@ func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (tx.Result, b
 		ParentCloseTime:           parentCloseTime,
 		NetworkID:                 c.env.networkID,
 		ParentHash:                c.env.ledger.ParentHash(),
+		OpenLedger:                c.env.openLedger,
 	}
 
 	engine := tx.NewEngine(c.env.ledger, engineConfig)
@@ -786,6 +789,7 @@ func (c *testTxQAcceptContext) ApplyTransaction(txn tx.Transaction) (tx.Result, 
 		ParentCloseTime:           parentCloseTime,
 		NetworkID:                 c.env.networkID,
 		ParentHash:                c.env.ledger.ParentHash(),
+		OpenLedger:                c.env.openLedger,
 	}
 
 	engine := tx.NewEngine(c.env.ledger, engineConfig)
@@ -851,6 +855,7 @@ func (e *TestEnv) SubmitPseudo(transaction interface{}) TxResult {
 		ParentCloseTime:           parentCloseTime,
 		NetworkID:                 e.networkID,
 		ParentHash:                e.ledger.ParentHash(),
+		OpenLedger:                e.openLedger,
 	}
 
 	engine := tx.NewEngine(e.ledger, engineConfig)

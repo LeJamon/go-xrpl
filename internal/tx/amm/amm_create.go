@@ -183,9 +183,16 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// APPLY - Reference: rippled AMMCreate.cpp applyCreate lines 217-356
 	// =========================================================================
 
-	// Compute the AMM account ID from keylet
-	ammAccountID := computeAMMAccountIDSimple(ammKey.Key)
+	// Compute the AMM pseudo-account ID using SHA256-RIPEMD160 derivation.
+	// Reference: rippled View.cpp createPseudoAccount → pseudoAccountAddress
+	ammAccountID := pseudoAccountAddress(ctx.View, ctx.Config.ParentHash, ammKey.Key)
+	if ammAccountID == ([20]byte{}) {
+		return tx.TecDUPLICATE
+	}
 	ammAccountAddr, _ := encodeAccountID(ammAccountID)
+
+	// Cache the AMM pseudo-account ID for test helper lookups.
+	CacheAMMAccount(ammKey.Key, ammAccountID)
 
 	// Check if AMM account already exists (should not happen)
 	// Reference: rippled AMMCreate.cpp line 230-236

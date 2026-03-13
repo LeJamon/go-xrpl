@@ -5,6 +5,7 @@ package credential_test
 
 import (
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -296,7 +297,7 @@ func TestCredentialsDelete(t *testing.T) {
 		// Delete issuer account — rippled cascade-deletes the credential
 		env.IncLedgerSeqForAccDel(issuer)
 		acctDel := acctx.NewAccountDelete(issuer.Address, other.Address)
-		acctDel.Fee = "10"
+		acctDel.Fee = fmt.Sprintf("%d", env.ReserveIncrement())
 		result = env.Submit(acctDel)
 		if !result.Success {
 			t.Fatalf("AccountDelete expected success, got %s: %s", result.Code, result.Message)
@@ -339,7 +340,7 @@ func TestCredentialsDelete(t *testing.T) {
 		// Delete issuer account — rippled cascade-deletes the credential
 		env.IncLedgerSeqForAccDel(issuer)
 		acctDel := acctx.NewAccountDelete(issuer.Address, other.Address)
-		acctDel.Fee = "10"
+		acctDel.Fee = fmt.Sprintf("%d", env.ReserveIncrement())
 		result = env.Submit(acctDel)
 		if !result.Success {
 			t.Fatalf("AccountDelete expected success, got %s: %s", result.Code, result.Message)
@@ -374,7 +375,7 @@ func TestCredentialsDelete(t *testing.T) {
 		// Delete subject account — rippled cascade-deletes the credential
 		env.IncLedgerSeqForAccDel(subject)
 		acctDel := acctx.NewAccountDelete(subject.Address, other.Address)
-		acctDel.Fee = "10"
+		acctDel.Fee = fmt.Sprintf("%d", env.ReserveIncrement())
 		result = env.Submit(acctDel)
 		if !result.Success {
 			t.Fatalf("AccountDelete expected success, got %s: %s", result.Code, result.Message)
@@ -416,7 +417,7 @@ func TestCredentialsDelete(t *testing.T) {
 		// Delete subject account — rippled cascade-deletes the credential
 		env.IncLedgerSeqForAccDel(subject)
 		acctDel := acctx.NewAccountDelete(subject.Address, other.Address)
-		acctDel.Fee = "10"
+		acctDel.Fee = fmt.Sprintf("%d", env.ReserveIncrement())
 		result = env.Submit(acctDel)
 		if !result.Success {
 			t.Fatalf("AccountDelete expected success, got %s: %s", result.Code, result.Message)
@@ -791,7 +792,7 @@ func TestAcceptFailed(t *testing.T) {
 		// Delete issuer account
 		env.IncLedgerSeqForAccDel(issuer)
 		acctDel := acctx.NewAccountDelete(issuer.Address, subject.Address)
-		acctDel.Fee = "10"
+		acctDel.Fee = fmt.Sprintf("%d", env.ReserveIncrement())
 		result = env.Submit(acctDel)
 		if !result.Success {
 			t.Fatalf("AccountDelete expected success, got %s: %s", result.Code, result.Message)

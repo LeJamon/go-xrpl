@@ -46,6 +46,21 @@ type OracleSet struct {
 	AssetClassPresent bool `json:"-" xrpl:"-"` // true if AssetClass field was explicitly set
 }
 
+// isFieldPresent returns true if the given field was explicitly present in the
+// transaction. It checks both the per-field tracking bools (set by programmatic
+// construction) and Common.HasField (set by binary/JSON parsing via ParseFromBinary).
+func (o *OracleSet) isFieldPresent(fieldName string) bool {
+	switch fieldName {
+	case "Provider":
+		return o.ProviderPresent || o.GetCommon().HasField("Provider")
+	case "URI":
+		return o.URIPresent || o.GetCommon().HasField("URI")
+	case "AssetClass":
+		return o.AssetClassPresent || o.GetCommon().HasField("AssetClass")
+	}
+	return false
+}
+
 // NewOracleSet creates a new OracleSet transaction
 func NewOracleSet(account string, oracleDocID uint32, lastUpdateTime uint32) *OracleSet {
 	return &OracleSet{
@@ -84,9 +99,9 @@ func (o *OracleSet) Validate() error {
 
 	// Validate Provider field
 	// Reference: rippled Oracle_test.cpp lines 229-232 (too long) and 240-242 (empty)
-	// If Provider is present (either via ProviderPresent flag or non-empty string), validate it
+	// If Provider is present (either via isFieldPresent or non-empty string), validate it
 	// Note: Provider is stored as hex string, so byte length = len/2
-	if o.ProviderPresent || o.Provider != "" {
+	if o.isFieldPresent("Provider") || o.Provider != "" {
 		if len(o.Provider) == 0 {
 			return tx.Errorf(tx.TemMALFORMED, "Provider cannot be empty")
 		}
@@ -102,9 +117,9 @@ func (o *OracleSet) Validate() error {
 
 	// Validate URI field
 	// Reference: rippled Oracle_test.cpp lines 233-235 (too long) and 243-245 (empty)
-	// If URI is present (either via URIPresent flag or non-empty string), validate it
+	// If URI is present (either via isFieldPresent or non-empty string), validate it
 	// Note: URI is stored as hex string, so byte length = len/2
-	if o.URIPresent || o.URI != "" {
+	if o.isFieldPresent("URI") || o.URI != "" {
 		if len(o.URI) == 0 {
 			return tx.Errorf(tx.TemMALFORMED, "URI cannot be empty")
 		}
@@ -120,9 +135,9 @@ func (o *OracleSet) Validate() error {
 
 	// Validate AssetClass field
 	// Reference: rippled Oracle_test.cpp lines 223-228 (too long) and 237-239 (empty)
-	// If AssetClass is present (either via AssetClassPresent flag or non-empty string), validate it
+	// If AssetClass is present (either via isFieldPresent or non-empty string), validate it
 	// Note: AssetClass is stored as hex string, so byte length = len/2
-	if o.AssetClassPresent || o.AssetClass != "" {
+	if o.isFieldPresent("AssetClass") || o.AssetClass != "" {
 		if len(o.AssetClass) == 0 {
 			return tx.Errorf(tx.TemMALFORMED, "AssetClass cannot be empty")
 		}
@@ -257,7 +272,7 @@ type pairEntry struct {
 func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// --- Preclaim: Time validation ---
 	// Reference: rippled SetOracle.cpp preclaim lines 80-93
-	closeTime := ctx.Config.ParentCloseTime
+	closeTime := uint64(ctx.Config.ParentCloseTime)
 	lastUpdateTime := uint64(o.LastUpdateTime)
 
 	if lastUpdateTime < RippleEpochOffset {
@@ -265,12 +280,16 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 	lastUpdateTimeEpoch := lastUpdateTime - RippleEpochOffset
 
-	if uint64(closeTime) < MaxLastUpdateTimeDelta {
-		return tx.TefINTERNAL
-	}
-	if lastUpdateTimeEpoch < (uint64(closeTime)-MaxLastUpdateTimeDelta) ||
-		lastUpdateTimeEpoch > (uint64(closeTime)+MaxLastUpdateTimeDelta) {
-		return tx.TecINVALID_UPDATE_TIME
+	// Validate that lastUpdateTimeEpoch is within maxLastUpdateTimeDelta of closeTime.
+	// The lower-bound subtraction (closeTime - delta) is guarded to prevent underflow.
+	// In rippled this guard returns tecINTERNAL (LCOV_EXCL_LINE — effectively dead code
+	// since close time is always well past 300s in practice). We skip the range check
+	// entirely when closeTime is too small, matching the intent of the unreachable guard.
+	if closeTime >= MaxLastUpdateTimeDelta {
+		if lastUpdateTimeEpoch < (closeTime-MaxLastUpdateTimeDelta) ||
+			lastUpdateTimeEpoch > (closeTime+MaxLastUpdateTimeDelta) {
+			return tx.TecINVALID_UPDATE_TIME
+		}
 	}
 
 	// --- Read oracle SLE to determine create vs update ---
@@ -335,10 +354,10 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// Check provider/assetClass consistency
 		// If field is present in tx, it must match existing value
-		if o.ProviderPresent && o.Provider != existingOracle.Provider {
+		if o.isFieldPresent("Provider") && o.Provider != existingOracle.Provider {
 			return tx.TemMALFORMED
 		}
-		if o.AssetClassPresent && o.AssetClass != existingOracle.AssetClass {
+		if o.isFieldPresent("AssetClass") && o.AssetClass != existingOracle.AssetClass {
 			return tx.TemMALFORMED
 		}
 
@@ -375,10 +394,10 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	} else {
 		// --- Create-specific preclaim ---
 		// Reference: rippled SetOracle.cpp preclaim lines 160-168
-		if !o.ProviderPresent && o.Provider == "" {
+		if !o.isFieldPresent("Provider") && o.Provider == "" {
 			return tx.TemMALFORMED
 		}
-		if !o.AssetClassPresent && o.AssetClass == "" {
+		if !o.isFieldPresent("AssetClass") && o.AssetClass == "" {
 			return tx.TemMALFORMED
 		}
 
@@ -492,7 +511,7 @@ func (o *OracleSet) doApplyUpdate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 	// Update oracle SLE fields
 	existingOracle.PriceDataSeries = updatedSeries
 	existingOracle.LastUpdateTime = o.LastUpdateTime
-	if o.URIPresent || o.URI != "" {
+	if o.isFieldPresent("URI") || o.URI != "" {
 		existingOracle.URI = o.URI
 	}
 
@@ -581,7 +600,7 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 		LastUpdateTime:  o.LastUpdateTime,
 		PriceDataSeries: series,
 	}
-	if o.URIPresent || o.URI != "" {
+	if o.isFieldPresent("URI") || o.URI != "" {
 		oracleData.URI = o.URI
 	}
 

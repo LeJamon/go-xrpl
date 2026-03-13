@@ -64,10 +64,11 @@ type BatchFeeCalculator interface {
 }
 
 // CustomBaseFeeCalculator is implemented by transaction types that override calculateBaseFee()
-// and need access to the full engine config (e.g., reserve increment) for their minimum fee.
-// Reference: rippled Transactor::calculateBaseFee() virtual override pattern.
+// and need access to the ledger view and engine config for their minimum fee.
+// Reference: rippled Transactor::calculateBaseFee() virtual override pattern —
+// rippled's version has access to the view (view.fees().increment).
 type CustomBaseFeeCalculator interface {
-	CalculateBaseFee(config EngineConfig) uint64
+	CalculateBaseFee(view LedgerView, config EngineConfig) uint64
 }
 
 // BatchSignerInfo represents a single batch signer entry for authorization checking.

@@ -100,6 +100,7 @@ func getPageForToken(
 	view tx.LedgerView,
 	owner [20]byte,
 	tokenID [32]byte,
+	fixDirV1 bool,
 ) (keylet.Keylet, *state.NFTokenPageData, int, error) {
 	base := keylet.NFTokenPageMin(owner)
 	first := keylet.NFTokenPageForToken(base, tokenID)
@@ -135,7 +136,7 @@ func getPageForToken(
 
 	// Page is full — need to split
 	// Reference: rippled NFTokenUtils.cpp getPageForToken (split logic)
-	return splitPage(view, owner, tokenID, cpKL, cp, base, first)
+	return splitPage(view, owner, tokenID, cpKL, cp, base, first, fixDirV1)
 }
 
 // locatePageForInsert finds the first existing page with key > first.Key,
@@ -189,6 +190,7 @@ func splitPage(
 	cpKL keylet.Keylet,
 	cp *state.NFTokenPageData,
 	base, first keylet.Keylet,
+	fixDirV1 bool,
 ) (keylet.Keylet, *state.NFTokenPageData, int, error) {
 	narr := cp.NFTokens // Will become the "left" page (lower keys)
 
@@ -224,6 +226,12 @@ func splitPage(
 
 	// If splitIdx == 0, entire page is equivalent tokens
 	if splitIdx == 0 {
+		// Prior to fixNFTokenDirV1 we simply stopped.
+		// Reference: rippled NFTokenUtils.cpp lines 145-147
+		if !fixDirV1 {
+			return keylet.Keylet{}, nil, 0, nil
+		}
+
 		tokenPageKey := getNFTPageKey(tokenID)
 		if tokenPageKey == cmp {
 			// Token belongs on this full page of equivalent tokens — cannot store
@@ -305,8 +313,16 @@ func splitPage(
 	}
 
 	// Determine which page to return for the new token insertion
-	// Reference: rippled — with fixNFTokenDirV1: return (first.key < np.key) ? np : cp
-	if bytes.Compare(first.Key[:], npKL.Key[:]) < 0 {
+	// Reference: rippled — fixNFTokenDirV1 corrects off-by-one: uses < instead of <=
+	// Without fixDirV1: return (first.key <= np.key) ? np : cp
+	// With fixDirV1:    return (first.key < np.key) ? np : cp
+	useNp := false
+	if fixDirV1 {
+		useNp = bytes.Compare(first.Key[:], npKL.Key[:]) < 0
+	} else {
+		useNp = bytes.Compare(first.Key[:], npKL.Key[:]) <= 0
+	}
+	if useNp {
 		// Re-read np since we just wrote it
 		npData, err := view.Read(npKL)
 		if err != nil {
@@ -336,8 +352,8 @@ func splitPage(
 // Reference: rippled NFTokenUtils.cpp insertToken
 // ---------------------------------------------------------------------------
 
-func insertNFToken(ownerID [20]byte, token state.NFTokenData, view tx.LedgerView) insertNFTokenResult {
-	pageKL, page, pagesCreated, err := getPageForToken(view, ownerID, token.NFTokenID)
+func insertNFToken(ownerID [20]byte, token state.NFTokenData, view tx.LedgerView, fixDirV1 bool) insertNFTokenResult {
+	pageKL, page, pagesCreated, err := getPageForToken(view, ownerID, token.NFTokenID, fixDirV1)
 	if err != nil {
 		return insertNFTokenResult{Result: tx.TefINTERNAL}
 	}
@@ -608,7 +624,7 @@ type transferNFTokenResult struct {
 	ToPagesCreated   int
 }
 
-func transferNFToken(from, to [20]byte, tokenID [32]byte, view tx.LedgerView, fixPageLinks bool) transferNFTokenResult {
+func transferNFToken(from, to [20]byte, tokenID [32]byte, view tx.LedgerView, fixPageLinks bool, fixDirV1 bool) transferNFTokenResult {
 	// Find the token on the sender's pages
 	_, _, idx, found := findToken(view, from, tokenID)
 	if !found {
@@ -632,7 +648,7 @@ func transferNFToken(from, to [20]byte, tokenID [32]byte, view tx.LedgerView, fi
 	}
 
 	// Insert into recipient
-	insertResult := insertNFToken(to, tokenData, view)
+	insertResult := insertNFToken(to, tokenData, view, fixDirV1)
 	if insertResult.Result != tx.TesSUCCESS {
 		return transferNFTokenResult{Result: insertResult.Result}
 	}

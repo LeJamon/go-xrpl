@@ -109,13 +109,25 @@ func (n *NFTokenAcceptOffer) RequiredAmendments() [][32]byte {
 }
 
 // Apply applies the NFTokenAcceptOffer transaction to the ledger.
-// Reference: rippled NFTokenAcceptOffer.cpp doApply
+// Reference: rippled NFTokenAcceptOffer.cpp preclaim + doApply
+// IMPORTANT: Check order must match rippled's preclaim exactly:
+//   1. Load offers (existence, expiration, negative amount)
+//   2. Brokered mode header checks (tokenID/issue match, sell>buy, destinations, broker fee)
+//   3. Buy offer checks (type, own offer, ownership, fund, auth)
+//   4. Sell offer checks (type, own offer, ownership, fund, auth)
+//   5. Transfer fee issuer checks
 func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	accountID := ctx.AccountID
 
-	// Load offers
+	// --- Step 1: Load offers (checkOffer equivalent) ---
+	// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 66-97
 	var buyOffer, sellOffer *state.NFTokenOfferData
 	var buyOfferKey, sellOfferKey keylet.Keylet
+	// Track whether offer amounts are negative (from raw binary, since
+	// NFTokenOfferData.Amount is uint64 and loses sign info).
+	// These flags are used both for fixNFTokenNegOffer (temBAD_OFFER)
+	// and for the pay() negative check (tecINTERNAL).
+	var buyOfferNegative, sellOfferNegative bool
 
 	if a.NFTokenBuyOffer != "" {
 		buyOfferIDBytes, err := hex.DecodeString(a.NFTokenBuyOffer)
@@ -125,6 +137,12 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		var buyOfferKeyBytes [32]byte
 		copy(buyOfferKeyBytes[:], buyOfferIDBytes)
 		buyOfferKey = keylet.Keylet{Type: entry.TypeNFTokenOffer, Key: buyOfferKeyBytes}
+
+		// Zero offer ID check
+		var zeroID [32]byte
+		if buyOfferKeyBytes == zeroID {
+			return tx.TecOBJECT_NOT_FOUND
+		}
 
 		buyOfferData, err := ctx.View.Read(buyOfferKey)
 		if err != nil || buyOfferData == nil {
@@ -140,14 +158,15 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TecEXPIRED
 		}
 
-		// Verify it's a buy offer (flag not set)
-		if buyOffer.Flags&lsfSellNFToken != 0 {
-			return tx.TecNFTOKEN_OFFER_TYPE_MISMATCH
-		}
+		// Detect negative amounts from raw binary (since uint64 loses sign)
+		buyOfferNegative = isOfferAmountNegative(buyOfferData)
 
-		// Cannot accept your own offer
-		if buyOffer.Owner == accountID {
-			return tx.TecCANT_ACCEPT_OWN_NFTOKEN_OFFER
+		// fixNFTokenNegOffer: reject negative amount offers
+		// Reference: rippled NFTokenAcceptOffer.cpp checkOffer lines 80-87
+		if ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
+			if buyOfferNegative {
+				return tx.TemBAD_OFFER
+			}
 		}
 	}
 
@@ -159,6 +178,12 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		var sellOfferKeyBytes [32]byte
 		copy(sellOfferKeyBytes[:], sellOfferIDBytes)
 		sellOfferKey = keylet.Keylet{Type: entry.TypeNFTokenOffer, Key: sellOfferKeyBytes}
+
+		// Zero offer ID check
+		var zeroID [32]byte
+		if sellOfferKeyBytes == zeroID {
+			return tx.TecOBJECT_NOT_FOUND
+		}
 
 		sellOfferData, err := ctx.View.Read(sellOfferKey)
 		if err != nil || sellOfferData == nil {
@@ -174,78 +199,176 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TecEXPIRED
 		}
 
-		// Verify it's a sell offer (flag set)
-		if sellOffer.Flags&lsfSellNFToken == 0 {
+		// Detect negative amounts from raw binary (since uint64 loses sign)
+		sellOfferNegative = isOfferAmountNegative(sellOfferData)
+
+		// fixNFTokenNegOffer: reject negative amount offers
+		// Reference: rippled NFTokenAcceptOffer.cpp checkOffer lines 80-87
+		if ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
+			if sellOfferNegative {
+				return tx.TemBAD_OFFER
+			}
+		}
+	}
+
+	// --- Step 2: Brokered mode header checks ---
+	// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 99-184
+	if buyOffer != nil && sellOffer != nil {
+		// Token IDs must match
+		if buyOffer.NFTokenID != sellOffer.NFTokenID {
+			return tx.TecNFTOKEN_BUY_SELL_MISMATCH
+		}
+
+		// Asset type must match
+		buyIsXRP := buyOffer.AmountIOU == nil
+		sellIsXRP := sellOffer.AmountIOU == nil
+		if buyIsXRP != sellIsXRP {
+			return tx.TecNFTOKEN_BUY_SELL_MISMATCH
+		}
+		if !buyIsXRP && !sellIsXRP {
+			if buyOffer.AmountIOU.Currency != sellOffer.AmountIOU.Currency ||
+				buyOffer.AmountIOU.Issuer != sellOffer.AmountIOU.Issuer {
+				return tx.TecNFTOKEN_BUY_SELL_MISMATCH
+			}
+		}
+
+		// Loop check (fixNonFungibleTokensV1_2)
+		if ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
+			if buyOffer.Owner == sellOffer.Owner {
+				return tx.TecCANT_ACCEPT_OWN_NFTOKEN_OFFER
+			}
+		}
+
+		// Sell amount must not exceed buy amount.
+		// Skip this check when offers have negative amounts (pre-fixNFTokenNegOffer):
+		// negative amounts stored as uint64 lose their sign, making the
+		// comparison meaningless. In rippled, the signed comparison on negative
+		// amounts works naturally (e.g., -2M <= -1M is true).
+		if !(buyOfferNegative || sellOfferNegative) {
+			if buyIsXRP {
+				if sellOffer.Amount > buyOffer.Amount {
+					return tx.TecINSUFFICIENT_PAYMENT
+				}
+			} else {
+				buyAmount := offerIOUToAmount(buyOffer)
+				sellAmount := offerIOUToAmount(sellOffer)
+				if sellAmount.Compare(buyAmount) > 0 {
+					return tx.TecINSUFFICIENT_PAYMENT
+				}
+			}
+		}
+
+		// Destination checks (fixNonFungibleTokensV1_2: dest must be tx submitter)
+		if buyOffer.HasDestination {
+			if ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
+				if buyOffer.Destination != accountID {
+					return tx.TecNO_PERMISSION
+				}
+			} else if buyOffer.Destination != sellOffer.Owner && buyOffer.Destination != accountID {
+				return tx.TecNFTOKEN_BUY_SELL_MISMATCH
+			}
+		}
+		if sellOffer.HasDestination {
+			if ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
+				if sellOffer.Destination != accountID {
+					return tx.TecNO_PERMISSION
+				}
+			} else if sellOffer.Destination != buyOffer.Owner && sellOffer.Destination != accountID {
+				return tx.TecNFTOKEN_BUY_SELL_MISMATCH
+			}
+		}
+
+		// Broker fee checks (skip when offers have negative amounts pre-amendment)
+		if a.NFTokenBrokerFee != nil && !(buyOfferNegative || sellOfferNegative) {
+			brokerFeeIsXRP := a.NFTokenBrokerFee.Currency == ""
+			if brokerFeeIsXRP != buyIsXRP {
+				return tx.TecNFTOKEN_BUY_SELL_MISMATCH
+			}
+
+			if buyIsXRP {
+				brokerFee := uint64(a.NFTokenBrokerFee.Drops())
+				if brokerFee >= buyOffer.Amount {
+					return tx.TecINSUFFICIENT_PAYMENT
+				}
+				if sellOffer.Amount > buyOffer.Amount-brokerFee {
+					return tx.TecINSUFFICIENT_PAYMENT
+				}
+			} else {
+				brokerFeeIOU := *a.NFTokenBrokerFee
+				buyAmount := offerIOUToAmount(buyOffer)
+				sellAmount := offerIOUToAmount(sellOffer)
+				if brokerFeeIOU.Compare(buyAmount) >= 0 {
+					return tx.TecINSUFFICIENT_PAYMENT
+				}
+				remainder, _ := buyAmount.Sub(brokerFeeIOU)
+				if sellAmount.Compare(remainder) > 0 {
+					return tx.TecINSUFFICIENT_PAYMENT
+				}
+			}
+
+			// Broker trustline authorization check (fixEnforceNFTokenTrustlineV2)
+			if !a.NFTokenBrokerFee.IsNative() && ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
+				brokerFeeIssuerID, err := state.DecodeAccountID(a.NFTokenBrokerFee.Issuer)
+				if err == nil {
+					if r := checkNFTTrustlineAuthorized(ctx.View, accountID, a.NFTokenBrokerFee.Currency, brokerFeeIssuerID); r != tx.TesSUCCESS {
+						return r
+					}
+				}
+			}
+		}
+	}
+
+	// --- Step 3: Buy offer individual checks ---
+	// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 187-263
+	if buyOffer != nil {
+		// Type check
+		if buyOffer.Flags&lsfSellNFToken != 0 {
 			return tx.TecNFTOKEN_OFFER_TYPE_MISMATCH
 		}
 
 		// Cannot accept your own offer
-		if sellOffer.Owner == accountID {
+		if buyOffer.Owner == accountID {
 			return tx.TecCANT_ACCEPT_OWN_NFTOKEN_OFFER
 		}
-	}
 
-	// IOU preclaim checks for all modes
-	// Reference: rippled NFTokenAcceptOffer.cpp preclaim — IOU authorization and fund checks
-	if r := a.iouPreclaimChecks(ctx, accountID, buyOffer, sellOffer); r != tx.TesSUCCESS {
-		return r
-	}
-
-	// Brokered mode (both offers)
-	if buyOffer != nil && sellOffer != nil {
-		return a.acceptNFTokenBrokeredMode(ctx, accountID, buyOffer, sellOffer, buyOfferKey, sellOfferKey)
-	}
-
-	// Direct mode - sell offer only
-	if sellOffer != nil {
-		return a.acceptNFTokenSellOfferDirect(ctx, accountID, sellOffer, sellOfferKey)
-	}
-
-	// Direct mode - buy offer only
-	if buyOffer != nil {
-		return a.acceptNFTokenBuyOfferDirect(ctx, accountID, buyOffer, buyOfferKey)
-	}
-
-	return tx.TemINVALID
-}
-
-// iouPreclaimChecks performs IOU-specific preclaim checks for NFTokenAcceptOffer.
-// Reference: rippled NFTokenAcceptOffer.cpp preclaim
-func (a *NFTokenAcceptOffer) iouPreclaimChecks(ctx *tx.ApplyContext, accountID [20]byte,
-	buyOffer, sellOffer *state.NFTokenOfferData) tx.Result {
-
-	fixV2 := ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2)
-
-	fixV1_2 := ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2)
-
-	// Check buy offer IOU constraints
-	if buyOffer != nil && buyOffer.AmountIOU != nil {
-		currency := buyOffer.AmountIOU.Currency
-		issuerID := buyOffer.AmountIOU.Issuer
-		buyAmount := offerIOUToAmount(buyOffer)
-
-		// Fund check: buyer must have sufficient IOU balance
-		// Reference: rippled — with fixNonFungibleTokensV1_2 uses accountFunds,
-		// without uses accountHolds (no issuer exception)
-		if fixV1_2 {
-			funds := tx.AccountFunds(ctx.View, buyOffer.Owner, buyAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
-			if funds.Compare(buyAmount) < 0 {
-				return tx.TecINSUFFICIENT_FUNDS
-			}
-		} else {
-			funds := accountHoldsIOU(ctx.View, buyOffer.Owner, buyAmount)
-			if funds.Compare(buyAmount) < 0 {
-				return tx.TecINSUFFICIENT_FUNDS
+		// Ownership check (non-brokered only)
+		if sellOffer == nil {
+			if _, _, _, found := findToken(ctx.View, accountID, buyOffer.NFTokenID); !found {
+				return tx.TecNO_PERMISSION
 			}
 		}
 
-		if fixV2 {
-			// Buyer must be authorized
+		// Destination check (non-brokered only)
+		if sellOffer == nil {
+			if buyOffer.HasDestination && buyOffer.Destination != accountID {
+				return tx.TecNO_PERMISSION
+			}
+		}
+
+		// Fund check: buyer must have sufficient funds
+		if buyOffer.AmountIOU != nil {
+			buyAmount := offerIOUToAmount(buyOffer)
+			if ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
+				funds := tx.AccountFunds(ctx.View, buyOffer.Owner, buyAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+				if funds.Compare(buyAmount) < 0 {
+					return tx.TecINSUFFICIENT_FUNDS
+				}
+			} else {
+				funds := accountHoldsIOU(ctx.View, buyOffer.Owner, buyAmount)
+				if funds.Compare(buyAmount) < 0 {
+					return tx.TecINSUFFICIENT_FUNDS
+				}
+			}
+		}
+
+		// Trust line authorization checks (fixEnforceNFTokenTrustlineV2)
+		if buyOffer.AmountIOU != nil && ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
+			currency := buyOffer.AmountIOU.Currency
+			issuerID := buyOffer.AmountIOU.Issuer
 			if r := checkNFTTrustlineAuthorized(ctx.View, buyOffer.Owner, currency, issuerID); r != tx.TesSUCCESS {
 				return r
 			}
-
-			// Direct buy offer: seller (acceptor = ctx.Account) must be authorized
+			// Direct buy offer: seller (acceptor) must be authorized
 			if sellOffer == nil {
 				if r := checkNFTTrustlineAuthorized(ctx.View, accountID, currency, issuerID); r != tx.TesSUCCESS {
 					return r
@@ -254,36 +377,56 @@ func (a *NFTokenAcceptOffer) iouPreclaimChecks(ctx *tx.ApplyContext, accountID [
 		}
 	}
 
-	// Check sell offer IOU constraints
-	// Reference: rippled preclaim — fund checks BEFORE auth checks
-	if sellOffer != nil && sellOffer.AmountIOU != nil {
-		currency := sellOffer.AmountIOU.Currency
-		issuerID := sellOffer.AmountIOU.Issuer
+	// --- Step 4: Sell offer individual checks ---
+	// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 266-355
+	if sellOffer != nil {
+		// Type check
+		if sellOffer.Flags&lsfSellNFToken == 0 {
+			return tx.TecNFTOKEN_OFFER_TYPE_MISMATCH
+		}
 
-		// Fund check for direct sell mode: buyer (acceptor) must have funds
-		// Reference: rippled — without fixNonFungibleTokensV1_2 always checks;
-		// with fix, only checks in direct mode (not brokered)
-		if !fixV1_2 {
-			sellAmount := offerIOUToAmount(sellOffer)
-			funds := accountHoldsIOU(ctx.View, accountID, sellAmount)
-			if funds.Compare(sellAmount) < 0 {
-				return tx.TecINSUFFICIENT_FUNDS
-			}
-		} else if buyOffer == nil {
-			sellAmount := offerIOUToAmount(sellOffer)
-			funds := tx.AccountFunds(ctx.View, accountID, sellAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
-			if funds.Compare(sellAmount) < 0 {
-				return tx.TecINSUFFICIENT_FUNDS
+		// Cannot accept your own offer
+		if sellOffer.Owner == accountID {
+			return tx.TecCANT_ACCEPT_OWN_NFTOKEN_OFFER
+		}
+
+		// Seller must own the token
+		if _, _, _, found := findToken(ctx.View, sellOffer.Owner, sellOffer.NFTokenID); !found {
+			return tx.TecNO_PERMISSION
+		}
+
+		// Destination check (non-brokered only)
+		if buyOffer == nil {
+			if sellOffer.HasDestination && sellOffer.Destination != accountID {
+				return tx.TecNO_PERMISSION
 			}
 		}
 
-		if fixV2 {
-			// Seller must be authorized
+		// Fund check for direct sell mode: buyer (acceptor) must have funds
+		if sellOffer.AmountIOU != nil {
+			fixV1_2 := ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2)
+			if !fixV1_2 {
+				sellAmount := offerIOUToAmount(sellOffer)
+				funds := accountHoldsIOU(ctx.View, accountID, sellAmount)
+				if funds.Compare(sellAmount) < 0 {
+					return tx.TecINSUFFICIENT_FUNDS
+				}
+			} else if buyOffer == nil {
+				sellAmount := offerIOUToAmount(sellOffer)
+				funds := tx.AccountFunds(ctx.View, accountID, sellAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+				if funds.Compare(sellAmount) < 0 {
+					return tx.TecINSUFFICIENT_FUNDS
+				}
+			}
+		}
+
+		// Trust line authorization checks (fixEnforceNFTokenTrustlineV2)
+		if sellOffer.AmountIOU != nil && ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
+			currency := sellOffer.AmountIOU.Currency
+			issuerID := sellOffer.AmountIOU.Issuer
 			if r := checkNFTTrustlineAuthorized(ctx.View, sellOffer.Owner, currency, issuerID); r != tx.TesSUCCESS {
 				return r
 			}
-
-			// Direct sell offer: buyer (acceptor = ctx.Account) must be authorized
 			if buyOffer == nil {
 				if r := checkNFTTrustlineAuthorized(ctx.View, accountID, currency, issuerID); r != tx.TesSUCCESS {
 					return r
@@ -292,21 +435,8 @@ func (a *NFTokenAcceptOffer) iouPreclaimChecks(ctx *tx.ApplyContext, accountID [
 		}
 	}
 
-	// Brokered mode broker fee check
-	if buyOffer != nil && sellOffer != nil && a.NFTokenBrokerFee != nil && !a.NFTokenBrokerFee.IsNative() {
-		if fixV2 {
-			brokerFeeIssuerID, err := state.DecodeAccountID(a.NFTokenBrokerFee.Issuer)
-			if err == nil {
-				if r := checkNFTTrustlineAuthorized(ctx.View, accountID, a.NFTokenBrokerFee.Currency, brokerFeeIssuerID); r != tx.TesSUCCESS {
-					return r
-				}
-			}
-		}
-	}
-
-	// NFT issuer transfer fee check — when an IOU sale has an NFT transfer fee,
-	// the NFT issuer must be authorized to receive the IOU.
-	// Reference: rippled NFTokenAcceptOffer.cpp preclaim — checkTrustlineAuthorized for issuer
+	// --- Step 5: Transfer fee issuer checks ---
+	// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 358-392
 	var tokenID [32]byte
 	if buyOffer != nil {
 		tokenID = buyOffer.NFTokenID
@@ -315,27 +445,76 @@ func (a *NFTokenAcceptOffer) iouPreclaimChecks(ctx *tx.ApplyContext, accountID [
 	}
 
 	transferFee := getNFTTransferFee(tokenID)
-	if transferFee != 0 && fixV2 {
-		nftIssuerID := getNFTIssuer(tokenID)
+	if transferFee != 0 {
+		nftMinterID := getNFTIssuer(tokenID)
 
-		// Determine the IOU currency/issuer from whichever offer is IOU
-		var iouOffer *state.NFTokenOfferData
+		// Determine the offer amount
+		var offerAmount *tx.Amount
 		if buyOffer != nil && buyOffer.AmountIOU != nil {
-			iouOffer = buyOffer
+			amt := offerIOUToAmount(buyOffer)
+			offerAmount = &amt
 		} else if sellOffer != nil && sellOffer.AmountIOU != nil {
-			iouOffer = sellOffer
+			amt := offerIOUToAmount(sellOffer)
+			offerAmount = &amt
 		}
 
-		if iouOffer != nil {
-			iouIssuerID := iouOffer.AmountIOU.Issuer
-			// Only check if NFT issuer != IOU issuer (NFT issuer needs to hold the IOU)
-			if nftIssuerID != iouIssuerID {
-				if r := checkNFTTrustlineAuthorized(ctx.View, nftIssuerID, iouOffer.AmountIOU.Currency, iouIssuerID); r != tx.TesSUCCESS {
-					return r
+		if offerAmount != nil && !offerAmount.IsNative() {
+			// fixEnforceNFTokenTrustline: issuer trust line check
+			if ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustline) {
+				nftFlags := getNFTFlagsFromID(tokenID)
+				if nftFlags&nftFlagTrustLine == 0 {
+					iouIssuerID, err := state.DecodeAccountID(offerAmount.Issuer)
+					if err == nil && nftMinterID != iouIssuerID {
+						trustLineKey := keylet.Line(nftMinterID, iouIssuerID, offerAmount.Currency)
+						trustLineData, _ := ctx.View.Read(trustLineKey)
+						if trustLineData == nil {
+							return tx.TecNO_LINE
+						}
+					}
+				}
+			}
+
+			// fixEnforceNFTokenTrustlineV2: issuer auth + deep freeze check
+			if ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
+				iouIssuerID, err := state.DecodeAccountID(offerAmount.Issuer)
+				if err == nil {
+					if r := checkNFTTrustlineAuthorized(ctx.View, nftMinterID, offerAmount.Currency, iouIssuerID); r != tx.TesSUCCESS {
+						return r
+					}
 				}
 			}
 		}
 	}
 
-	return tx.TesSUCCESS
+	// --- Dispatch to mode-specific doApply ---
+	// Brokered mode (both offers)
+	if buyOffer != nil && sellOffer != nil {
+		return a.executeBrokeredMode(ctx, accountID, buyOffer, sellOffer, buyOfferKey, sellOfferKey,
+			buyOfferNegative, sellOfferNegative)
+	}
+
+	// Direct mode - sell offer only
+	// Pre-amendment negative amount guard: rippled's pay() (line 404) checks
+	// `if (amount < beast::zero) return tecINTERNAL;`. In direct mode,
+	// pay() is always called when amount != 0, so negative amounts hit this.
+	// Reference: rippled NFTokenAcceptOffer.cpp pay() line 404
+	if sellOffer != nil {
+		if sellOfferNegative && !ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
+			return tx.TecINTERNAL
+		}
+		return a.acceptNFTokenSellOfferDirect(ctx, accountID, sellOffer, sellOfferKey)
+	}
+
+	// Direct mode - buy offer only
+	if buyOffer != nil {
+		if buyOfferNegative && !ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
+			return tx.TecINTERNAL
+		}
+		return a.acceptNFTokenBuyOfferDirect(ctx, accountID, buyOffer, buyOfferKey)
+	}
+
+	return tx.TemINVALID
 }
+
+// iouPreclaimChecks is no longer used — its logic has been moved into Apply()
+// to match rippled's exact check ordering. Kept as a comment for reference.

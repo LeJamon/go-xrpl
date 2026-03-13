@@ -429,17 +429,26 @@ func TestFailedPseudoAccount(t *testing.T) {
 		env.FundWithIOUs(30000, 0)
 		env.Close()
 
-		// Compute the address that AMMCreate will try to use
+		// Fill all 256 pseudo-account candidate addresses on the same open ledger.
+		// Reference: rippled AMM_test.cpp testFailedPseudoAccount (line 7499-7508)
 		xrpAsset := amm.XRP()
 		usdAsset := env.USD
-		ammAddr := coreAmm.ComputeAMMAccountAddress(xrpAsset, usdAsset)
+		ammKeylet := coreAmm.ComputeAMMKeylet(xrpAsset, usdAsset)
+		for i := 0; i < 256; i++ {
+			parentHash := env.Ledger().ParentHash()
+			accountID := coreAmm.PseudoAccountAddress(env.Ledger(), parentHash, ammKeylet.Key)
+			if accountID == ([20]byte{}) {
+				t.Fatalf("PseudoAccountAddress returned zero at iteration %d", i)
+			}
+			addr, err := coreAmm.EncodeAccountID(accountID)
+			if err != nil {
+				t.Fatalf("Failed to encode account ID: %v", err)
+			}
+			pseudoAcct := jtx.NewAccountWithAddress(fmt.Sprintf("pseudo%d", i), addr)
+			env.FundAmountNoRipple(pseudoAcct, uint64(jtx.XRP(1000)))
+		}
 
-		// Fund that address so it's occupied (no DefaultRipple — pseudo-account has no keys)
-		pseudoAcct := jtx.NewAccountWithAddress("pseudo", ammAddr)
-		env.FundAmountNoRipple(pseudoAcct, uint64(jtx.XRP(1000)))
-		env.Close()
-
-		// Now AMMCreate should fail with tecDUPLICATE
+		// Now AMMCreate should fail with tecDUPLICATE (all 256 slots occupied)
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		result := env.Submit(createTx)
 		amm.ExpectTER(t, result, amm.TecDUPLICATE)

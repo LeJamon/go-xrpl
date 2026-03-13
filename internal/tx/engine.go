@@ -167,6 +167,16 @@ type EngineConfig struct {
 	// Rules contains the amendment rules for this ledger.
 	// If nil, defaults to all amendments enabled (for backwards compatibility).
 	Rules *amendment.Rules
+
+	// OpenLedger controls whether fee adequacy is checked.
+	// When true, the engine verifies that the transaction fee meets the
+	// minimum required fee (including tx-type-specific overrides like
+	// AccountDelete's owner reserve). When false, fee adequacy is
+	// skipped — only basic fee validity (non-negative, legal amount,
+	// sufficient balance) is checked.
+	// Reference: rippled Transactor.cpp checkFee — "Only check fee is
+	// sufficient when the ledger is open."
+	OpenLedger bool
 }
 
 // LedgerView provides read/write access to ledger state
@@ -1016,51 +1026,58 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 	// When a delegate is present, the fee is checked against the delegate's balance.
 	fee := e.calculateFee(tx)
 
-	// General minimum fee check: for multi-signed transactions the minimum
-	// required fee is baseFee * (1 + numSigners).
-	// Reference: rippled Transactor::calculateBaseFee — baseFee + (signerCount * baseFee)
-	// This is checked before the type-specific overrides because rippled computes
-	// calculateBaseFee first and then applies any type-specific adjustments.
-	//
-	// Special case: SetRegularKey with lsfPasswordSpent not set gets baseFee=0,
-	// so fee=0 is valid (one-time free password change).
-	// Reference: rippled SetRegularKey.cpp calculateBaseFee
-	minFee := e.calculateMinimumFee(tx)
-	if tx.TxType() == TypeRegularKeySet {
-		// Free password change: baseFee=0 when signed with master key and
-		// lsfPasswordSpent is not set.
+	// Only check fee is sufficient when the ledger is open.
+	// Reference: rippled Transactor::checkFee — "Only check fee is
+	// sufficient when the ledger is open."
+	if e.config.OpenLedger {
+		// Calculate the minimum fee using rippled's virtual calculateBaseFee() pattern.
+		// Transaction types that implement CustomBaseFeeCalculator REPLACE the standard
+		// base fee calculation entirely (including signer multiplication).
+		// Reference: rippled applySteps.cpp — calculateBaseFee() dispatches to the
+		// tx-type-specific override; checkFee() uses that result directly.
+		//
+		// Special case: SetRegularKey with lsfPasswordSpent not set gets baseFee=0,
+		// so fee=0 is valid (one-time free password change).
 		// Reference: rippled SetRegularKey.cpp calculateBaseFee
-		signedWithMaster := false
-		if spk := common.SigningPubKey; spk != "" {
-			sigAddr, sigErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(spk)
-			if sigErr == nil && sigAddr == common.Account {
+		var minFee uint64
+		if feeCalc, ok := tx.(CustomBaseFeeCalculator); ok {
+			// Transaction overrides calculateBaseFee() — use its result directly,
+			// WITHOUT additional signer multiplication.
+			// Reference: rippled DeleteAccount::calculateBaseFee returns view.fees().increment
+			// (no signer multiplication), LedgerStateFix::calculateBaseFee similarly.
+			minFee = feeCalc.CalculateBaseFee(e.view, e.config)
+		} else {
+			// Standard base fee calculation: baseFee * (1 + numSigners) for multi-signed.
+			// Reference: rippled Transactor::calculateBaseFee — baseFee + (signerCount * baseFee)
+			minFee = e.calculateMinimumFee(tx)
+		}
+		if tx.TxType() == TypeRegularKeySet {
+			// Free password change: baseFee=0 when signed with master key and
+			// lsfPasswordSpent is not set.
+			// Reference: rippled SetRegularKey.cpp calculateBaseFee
+			signedWithMaster := false
+			if spk := common.SigningPubKey; spk != "" {
+				sigAddr, sigErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(spk)
+				if sigErr == nil && sigAddr == common.Account {
+					signedWithMaster = true
+				}
+			} else if e.config.SkipSignatureVerification && !IsMultiSigned(tx) {
+				// In test mode without signatures, assume master key (single-signed only).
+				// Multi-signed transactions have SigningPubKey="" but are NOT master-signed.
 				signedWithMaster = true
 			}
-		} else if e.config.SkipSignatureVerification && !IsMultiSigned(tx) {
-			// In test mode without signatures, assume master key (single-signed only).
-			// Multi-signed transactions have SigningPubKey="" but are NOT master-signed.
-			signedWithMaster = true
+			if signedWithMaster && account.Flags&state.LsfPasswordSpent == 0 {
+				minFee = 0
+			}
 		}
-		if signedWithMaster && account.Flags&state.LsfPasswordSpent == 0 {
-			minFee = 0
+		if fee < minFee {
+			return TelINSUF_FEE_P
 		}
-	}
-	if fee < minFee {
-		return TelINSUF_FEE_P
 	}
 
 	if feeCalc, ok := tx.(BatchFeeCalculator); ok {
 		batchMinFee := feeCalc.CalculateMinimumFee(e.config.BaseFee)
 		if fee < batchMinFee {
-			return TelINSUF_FEE_P
-		}
-	}
-	// CustomBaseFeeCalculator: transaction types that override calculateBaseFee()
-	// with access to the full engine config (e.g., LedgerStateFix uses increment).
-	// Reference: rippled Transactor::checkFee calls calculateBaseFee(view, tx)
-	if feeCalc, ok := tx.(CustomBaseFeeCalculator); ok {
-		customMinFee := feeCalc.CalculateBaseFee(e.config)
-		if fee < customMinFee {
 			return TelINSUF_FEE_P
 		}
 	}
@@ -1514,8 +1531,13 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 	if isTicket && result == TesSUCCESS {
 		ticketKey := keylet.Ticket(accountID, *common.TicketSequence)
 		ownerDirKey := keylet.OwnerDir(accountID)
-		// Remove ticket from owner directory (page 0)
-		state.DirRemove(table, ownerDirKey, 0, ticketKey.Key, true)
+		// Read ticket SLE to get OwnerNode (directory page) for proper removal.
+		// Reference: rippled Transactor::ticketDelete reads (*sleTicket)[sfOwnerNode]
+		var ticketOwnerNode uint64
+		if ticketData, ticketErr := table.Read(ticketKey); ticketErr == nil && ticketData != nil {
+			ticketOwnerNode = state.GetOwnerNode(ticketData)
+		}
+		state.DirRemove(table, ownerDirKey, ticketOwnerNode, ticketKey.Key, true)
 		if err := table.Erase(ticketKey); err != nil {
 			return TefINTERNAL
 		}
@@ -1594,7 +1616,12 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		if isTicket {
 			ticketKey := keylet.Ticket(accountID, *common.TicketSequence)
 			ownerDirKey := keylet.OwnerDir(accountID)
-			state.DirRemove(tecTable, ownerDirKey, 0, ticketKey.Key, true)
+			// Read ticket SLE to get OwnerNode (directory page) for proper removal.
+			var ticketOwnerNode uint64
+			if ticketData, ticketErr := tecTable.Read(ticketKey); ticketErr == nil && ticketData != nil {
+				ticketOwnerNode = state.GetOwnerNode(ticketData)
+			}
+			state.DirRemove(tecTable, ownerDirKey, ticketOwnerNode, ticketKey.Key, true)
 			if err := tecTable.Erase(ticketKey); err != nil {
 				return TefINTERNAL
 			}

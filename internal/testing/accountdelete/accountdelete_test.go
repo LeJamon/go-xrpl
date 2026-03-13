@@ -17,7 +17,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
 )
 
-const acctDelFee = uint64(5_000_000) // 5 XRP
+const acctDelFee = uint64(50_000_000) // 50 XRP — matches rippled's owner reserve
 
 func newAccountDelete(from, to *jtx.Account) *acctx.AccountDelete {
 	d := acctx.NewAccountDelete(from.Address, to.Address)
@@ -275,7 +275,9 @@ func TestAccountDelete_MultiSign(t *testing.T) {
 	// Note: signer list itself counts as an owned object, so AccountDelete
 	// cascade must remove it. If the engine supports cascade deletion of
 	// signer lists, this succeeds.
+	// Multi-sign fee: baseFee * (1 + numSigners) = 50_000_000 * 2 = 100_000_000
 	d := newAccountDelete(carol, becky)
+	d.Fee = fmt.Sprintf("%d", acctDelFee*2)
 	result := env.SubmitMultiSigned(d, []*jtx.Account{alice})
 	jtx.RequireTxSuccess(t, result)
 	jtx.RequireAccountNotExists(t, env, carol)

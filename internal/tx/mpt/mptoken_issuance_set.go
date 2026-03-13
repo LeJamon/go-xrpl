@@ -2,6 +2,7 @@ package mpt
 
 import (
 	"encoding/hex"
+	"encoding/json"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
@@ -26,6 +27,35 @@ type MPTokenIssuanceSet struct {
 	// Holder is the holder account (optional)
 	// When set, the issuer is modifying a specific holder's MPToken
 	Holder string `json:"Holder,omitempty" xrpl:"Holder,omitempty"`
+
+	// DomainID is the permissioned domain for this issuance (optional).
+	// When set, the issuance is restricted to the specified domain.
+	// Requires featurePermissionedDomains AND featureSingleAssetVault.
+	// Reference: rippled MPTokenIssuanceSet.cpp sfDomainID
+	DomainID *string `json:"DomainID,omitempty" xrpl:"DomainID,omitempty"`
+
+	// hasDomainID tracks whether the DomainID field was present in the parsed JSON.
+	// This is needed because DomainID can be the zero hash (clearing the domain).
+	hasDomainID bool
+}
+
+// UnmarshalJSON handles DomainID field presence tracking.
+func (m *MPTokenIssuanceSet) UnmarshalJSON(data []byte) error {
+	type Alias MPTokenIssuanceSet
+	aux := &struct {
+		DomainID *string `json:"DomainID,omitempty"`
+		*Alias
+	}{
+		Alias: (*Alias)(m),
+	}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if aux.DomainID != nil {
+		m.DomainID = aux.DomainID
+		m.hasDomainID = true
+	}
+	return nil
 }
 
 // NewMPTokenIssuanceSet creates a new MPTokenIssuanceSet transaction
@@ -41,11 +71,17 @@ func (m *MPTokenIssuanceSet) TxType() tx.Type {
 	return tx.TypeMPTokenIssuanceSet
 }
 
-// Validate validates the MPTokenIssuanceSet transaction
+// Validate validates the MPTokenIssuanceSet transaction (rules-independent checks).
 // Reference: rippled MPTokenIssuanceSet.cpp preflight
 func (m *MPTokenIssuanceSet) Validate() error {
 	if err := m.BaseTx.Validate(); err != nil {
 		return err
+	}
+
+	// DomainID and Holder cannot both be present
+	// Reference: rippled MPTokenIssuanceSet.cpp:40-41
+	if m.hasDomainID && m.Holder != "" {
+		return tx.Errorf(tx.TemMALFORMED, "cannot specify both DomainID and Holder")
 	}
 
 	flags := m.GetFlags()
@@ -88,12 +124,30 @@ func (m *MPTokenIssuanceSet) Flatten() (map[string]any, error) {
 
 // RequiredAmendments returns the amendments required for this transaction type
 func (m *MPTokenIssuanceSet) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureMPTokensV1}
+	amendments := [][32]byte{amendment.FeatureMPTokensV1}
+	// DomainID requires both PermissionedDomains and SingleAssetVault
+	// Reference: rippled MPTokenIssuanceSet.cpp:35-38
+	if m.hasDomainID {
+		amendments = append(amendments, amendment.FeaturePermissionedDomains, amendment.FeatureSingleAssetVault)
+	}
+	return amendments
 }
 
 // Apply applies the MPTokenIssuanceSet transaction to ledger state.
 // Reference: rippled MPTokenIssuanceSet.cpp preclaim() + doApply()
 func (m *MPTokenIssuanceSet) Apply(ctx *tx.ApplyContext) tx.Result {
+	rules := ctx.Rules()
+	txFlags := m.GetFlags()
+
+	// Rules-dependent preflight: with featureSingleAssetVault,
+	// the transaction must actually change something (flags or domain).
+	// Reference: rippled MPTokenIssuanceSet.cpp:60-65
+	if rules.Enabled(amendment.FeatureSingleAssetVault) {
+		if txFlags == 0 && !m.hasDomainID {
+			return tx.TemMALFORMED
+		}
+	}
+
 	// Parse MPTokenIssuanceID
 	var mptID [24]byte
 	issuanceIDBytes, err := hex.DecodeString(m.MPTokenIssuanceID)
@@ -114,13 +168,16 @@ func (m *MPTokenIssuanceSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	txFlags := m.GetFlags()
-
-	// Issuance must have CanLock capability for Set to work at all
-	// Reference: rippled MPTokenIssuanceSet.cpp preclaim() - without featureSingleAssetVault,
-	// if issuance doesn't have lsfMPTCanLock, any Set returns tecNO_PERMISSION
+	// CanLock check is conditional on featureSingleAssetVault.
+	// Without the amendment, any Set on an issuance without lsfMPTCanLock fails.
+	// With the amendment, only lock/unlock operations require lsfMPTCanLock.
+	// Reference: rippled MPTokenIssuanceSet.cpp:116-123
 	if issuance.Flags&entry.LsfMPTCanLock == 0 {
-		return tx.TecNO_PERMISSION
+		if !rules.Enabled(amendment.FeatureSingleAssetVault) {
+			return tx.TecNO_PERMISSION
+		} else if txFlags&MPTokenIssuanceSetFlagLock != 0 || txFlags&MPTokenIssuanceSetFlagUnlock != 0 {
+			return tx.TecNO_PERMISSION
+		}
 	}
 
 	// Caller must be the issuer
@@ -132,9 +189,35 @@ func (m *MPTokenIssuanceSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Targeting a specific holder's MPToken
 		return m.setHolderToken(ctx, issuanceKey, issuance, txFlags)
 	}
+
+	// DomainID preclaim checks (only when targeting the issuance, not a holder)
+	// Reference: rippled MPTokenIssuanceSet.cpp:141-153
+	if m.hasDomainID {
+		if issuance.Flags&entry.LsfMPTRequireAuth == 0 {
+			return tx.TecNO_PERMISSION
+		}
+		if m.DomainID != nil && *m.DomainID != zeroHash256 {
+			// Non-zero domain: verify it exists
+			domainIDBytes, err := hex.DecodeString(*m.DomainID)
+			if err != nil || len(domainIDBytes) != 32 {
+				return tx.TefINTERNAL
+			}
+			var domainKey [32]byte
+			copy(domainKey[:], domainIDBytes)
+			domainKL := keylet.PermissionedDomainByID(domainKey)
+			exists, _ := ctx.View.Exists(domainKL)
+			if !exists {
+				return tx.TecOBJECT_NOT_FOUND
+			}
+		}
+	}
+
 	// Targeting the issuance itself
 	return m.setIssuance(ctx, issuanceKey, issuance, txFlags)
 }
+
+// zeroHash256 is the 64-char hex string of a 32-byte zero hash.
+const zeroHash256 = "0000000000000000000000000000000000000000000000000000000000000000"
 
 // setHolderToken modifies a specific holder's MPToken (lock/unlock).
 func (m *MPTokenIssuanceSet) setHolderToken(ctx *tx.ApplyContext, issuanceKey keylet.Keylet, issuance *state.MPTokenIssuanceData, txFlags uint32) tx.Result {
@@ -182,13 +265,26 @@ func (m *MPTokenIssuanceSet) setHolderToken(ctx *tx.ApplyContext, issuanceKey ke
 	return tx.TesSUCCESS
 }
 
-// setIssuance modifies the issuance itself (lock/unlock).
+// setIssuance modifies the issuance itself (lock/unlock and DomainID).
+// Reference: rippled MPTokenIssuanceSet.cpp doApply()
 func (m *MPTokenIssuanceSet) setIssuance(ctx *tx.ApplyContext, issuanceKey keylet.Keylet, issuance *state.MPTokenIssuanceData, txFlags uint32) tx.Result {
 	// Toggle lock/unlock on the issuance
 	if txFlags&MPTokenIssuanceSetFlagLock != 0 {
 		issuance.Flags |= entry.LsfMPTLocked
 	} else if txFlags&MPTokenIssuanceSetFlagUnlock != 0 {
 		issuance.Flags &= ^entry.LsfMPTLocked
+	}
+
+	// Handle DomainID update
+	// Reference: rippled MPTokenIssuanceSet.cpp:186-202
+	if m.hasDomainID && m.DomainID != nil {
+		if *m.DomainID != zeroHash256 {
+			// Set the DomainID
+			issuance.DomainID = m.DomainID
+		} else {
+			// Clear the DomainID (zero hash means remove)
+			issuance.DomainID = nil
+		}
 	}
 
 	// Serialize and update

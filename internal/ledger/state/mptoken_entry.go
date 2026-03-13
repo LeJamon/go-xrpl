@@ -28,6 +28,7 @@ type MPTokenIssuanceData struct {
 	MaximumAmount     *uint64
 	LockedAmount      *uint64
 	MPTokenMetadata   string // hex-encoded
+	DomainID          *string // hex-encoded 32-byte hash, nil if not set
 	Flags             uint32
 }
 
@@ -149,6 +150,11 @@ func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
 			if offset+32 > len(data) {
 				return issuance, nil
 			}
+			switch fieldCode {
+			case 34: // DomainID (nth=34)
+				domainHex := hex.EncodeToString(data[offset : offset+32])
+				issuance.DomainID = &domainHex
+			}
 			offset += 32
 
 		case FieldTypeBlob:
@@ -216,6 +222,10 @@ func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 
 	if issuance.MPTokenMetadata != "" {
 		jsonObj["MPTokenMetadata"] = strings.ToUpper(issuance.MPTokenMetadata)
+	}
+
+	if issuance.DomainID != nil && *issuance.DomainID != "" {
+		jsonObj["DomainID"] = strings.ToUpper(*issuance.DomainID)
 	}
 
 	hexStr, err := binarycodec.Encode(jsonObj)
