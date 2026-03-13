@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -236,6 +237,8 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	// Create RPC context
 	clientIP := getWebSocketClientIP(wsConn.conn)
 	role := roleForRequest(clientIP)
+	log.Printf("[WS] cmd=%s remoteAddr=%s clientIP=%q role=%d isAdmin=%v",
+		cmd.Command, wsConn.conn.RemoteAddr().String(), clientIP, role, role == types.RoleAdmin)
 	rpcCtx := &types.RpcContext{
 		Context:    wsConn.ctx,
 		Role:       role,
@@ -681,16 +684,11 @@ func generateConnectionID() string {
 }
 
 func getWebSocketClientIP(conn *websocket.Conn) string {
-	// Extract client IP from WebSocket connection
-	remoteAddr := conn.RemoteAddr().String()
-	if idx := len(remoteAddr) - 1; idx >= 0 {
-		for i := idx; i >= 0; i-- {
-			if remoteAddr[i] == ':' {
-				return remoteAddr[:i]
-			}
-		}
+	host, _, err := net.SplitHostPort(conn.RemoteAddr().String())
+	if err != nil {
+		return conn.RemoteAddr().String()
 	}
-	return remoteAddr
+	return host
 }
 
 // RegisterAllMethods registers all RPC methods for WebSocket use
