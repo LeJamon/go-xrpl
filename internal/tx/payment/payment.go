@@ -388,6 +388,15 @@ func (p *Payment) SetNoDirectRipple() {
 
 // Apply applies the Payment transaction to the ledger state.
 func (p *Payment) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("payment apply",
+		"src", p.Account,
+		"dst", p.Destination,
+		"amount", p.Amount,
+		"hasPaths", len(p.Paths) > 0,
+		"hasSendMax", p.SendMax != nil,
+		"mpt", p.MPTokenIssuanceID != "",
+	)
+
 	// Domain membership checks for permissioned payments.
 	// Reference: rippled Payment.cpp preclaim() sfDomainID checks
 	if p.DomainID != nil {

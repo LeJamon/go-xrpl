@@ -249,6 +249,12 @@ func parsePreflightError(err error) tx.Result {
 // 4. Offer placement if not fully filled
 // Reference: rippled CreateOffer.cpp doApply()
 func (o *OfferCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("offer create apply",
+		"account", o.Account,
+		"takerPays", o.TakerPays,
+		"takerGets", o.TakerGets,
+		"flags", o.GetFlags(),
+	)
 
 	// Run preflight validation with amendment rules
 	// Reference: rippled CreateOffer.cpp preflight()
@@ -520,6 +526,13 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 			out tx.Amount
 		}
 
+		ctx.Log.Trace("offer crossing start",
+			"takerPays", saTakerPays,
+			"takerGets", saTakerGets,
+			"passive", bPassive,
+			"sell", bSell,
+		)
+
 		// FlowCross operates on the main sandbox (sb)
 		crossResult := payment.FlowCross(
 			sb, // Use main sandbox for crossing
@@ -567,6 +580,11 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 		placeOffer.out = payment.FromEitherAmount(crossResult.TakerGot) // What we received
 
 		result = crossResult.Result
+		ctx.Log.Trace("offer crossing done",
+			"result", result,
+			"takerPaid", grossPaid,
+			"takerGot", placeOffer.out,
+		)
 
 		// For offer crossing, tecPATH_DRY means no liquidity found to cross
 		// This is not an error - we just place the offer with original amounts

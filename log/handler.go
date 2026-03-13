@@ -5,7 +5,16 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sync"
 )
+
+// configDynamic holds the hot-reloadable parts of Config.
+// Stored by pointer so Config itself remains copy-safe (no embedded mutex).
+type configDynamic struct {
+	mu         sync.RWMutex
+	globalVar  *slog.LevelVar
+	partitions map[string]*slog.LevelVar
+}
 
 // Config holds all configuration needed to build a Logger.
 type Config struct {
@@ -22,6 +31,73 @@ type Config struct {
 	// Partitions maps partition names to their override level.
 	// Omitted partitions use the global Level.
 	Partitions map[string]Level
+
+	// dyn holds live LevelVars initialised by NewHandler.
+	// Nil until NewHandler is called; safe for Config to be copied before that.
+	dyn *configDynamic
+}
+
+// initDyn lazily initialises the dynamic state from the static Level fields.
+// Idempotent — safe to call multiple times.
+func (c *Config) initDyn() {
+	if c.dyn != nil {
+		return
+	}
+	d := &configDynamic{
+		globalVar:  &slog.LevelVar{},
+		partitions: make(map[string]*slog.LevelVar, len(c.Partitions)),
+	}
+	d.globalVar.Set(c.Level)
+	for name, lvl := range c.Partitions {
+		v := &slog.LevelVar{}
+		v.Set(lvl)
+		d.partitions[name] = v
+	}
+	c.dyn = d
+}
+
+// SetLevel changes the global log level at runtime.
+// All loggers built from this Config reflect the change immediately.
+func (c *Config) SetLevel(l Level) {
+	c.initDyn()
+	c.Level = l
+	c.dyn.globalVar.Set(l)
+}
+
+// SetPartitionLevel changes the level for one partition at runtime.
+// Creates an override entry if the partition did not previously have one.
+func (c *Config) SetPartitionLevel(partition string, l Level) {
+	c.initDyn()
+	if c.Partitions == nil {
+		c.Partitions = make(map[string]Level)
+	}
+	c.Partitions[partition] = l
+	c.dyn.mu.Lock()
+	defer c.dyn.mu.Unlock()
+	if v, ok := c.dyn.partitions[partition]; ok {
+		v.Set(l)
+	} else {
+		v := &slog.LevelVar{}
+		v.Set(l)
+		c.dyn.partitions[partition] = v
+	}
+}
+
+// getPartitionLeveler returns the live slog.Leveler for a partition.
+// If the partition has an override it returns that LevelVar; otherwise the
+// global LevelVar so changes via SetLevel propagate to unoverridden partitions.
+func (c *Config) getPartitionLeveler(partition string) slog.Leveler {
+	if c == nil {
+		return LevelInfo
+	}
+	c.initDyn()
+	c.dyn.mu.RLock()
+	v, ok := c.dyn.partitions[partition]
+	c.dyn.mu.RUnlock()
+	if ok {
+		return v
+	}
+	return c.dyn.globalVar
 }
 
 // DefaultConfig returns a Config suitable for development:
@@ -49,14 +125,21 @@ func (c *Config) partitionLevel(partition string) Level {
 
 // NewHandler builds a slog.Handler from cfg.
 // Text format uses slog.NewTextHandler; JSON uses slog.NewJSONHandler.
-func NewHandler(cfg Config) slog.Handler {
+// NewHandler initialises cfg's dynamic LevelVars so that SetLevel /
+// SetPartitionLevel calls on the same *Config take effect immediately.
+func NewHandler(cfg *Config) slog.Handler {
+	if cfg == nil {
+		cfg = &Config{Level: LevelInfo, Format: "text", Output: os.Stdout}
+	}
 	out := cfg.Output
 	if out == nil {
 		out = os.Stdout
 	}
 
+	cfg.initDyn() // ensure globalVar is live
+
 	opts := &slog.HandlerOptions{
-		Level:       cfg.Level,
+		Level:       cfg.dyn.globalVar, // *slog.LevelVar — hot-reloadable
 		ReplaceAttr: replaceLevel,
 	}
 
@@ -120,20 +203,20 @@ func (m *multiHandler) WithGroup(name string) slog.Handler {
 }
 
 // newLevelHandler returns a slog.Handler that filters records below the given level.
-// This is the idiomatic way to implement per-partition level control in slog:
-// attach a level-filtering handler in front of the real output handler.
-func newLevelHandler(level slog.Level, h slog.Handler) slog.Handler {
+// level may be a static slog.Level or a *slog.LevelVar for live updates.
+func newLevelHandler(level slog.Leveler, h slog.Handler) slog.Handler {
 	return &levelHandler{level: level, inner: h}
 }
 
 // levelHandler wraps a slog.Handler and filters by a minimum level.
+// Using slog.Leveler allows the threshold to be a live *slog.LevelVar.
 type levelHandler struct {
-	level slog.Level
+	level slog.Leveler
 	inner slog.Handler
 }
 
 func (h *levelHandler) Enabled(_ context.Context, level slog.Level) bool {
-	return level >= h.level
+	return level >= h.level.Level()
 }
 
 func (h *levelHandler) Handle(ctx context.Context, r slog.Record) error {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	xrpllog "github.com/LeJamon/goXRPLd/log"
 )
 
 // =============================================================================
@@ -123,24 +124,28 @@ func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		_ = json.Unmarshal(params, &request)
 	}
 
-	if types.Services == nil || types.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
-	}
-
+	// GET: return current levels snapshot
 	if request.Severity == "" {
-		return map[string]interface{}{
-			"levels": map[string]interface{}{
-				"base": "info",
-			},
-		}, nil
+		global, partitions := xrpllog.GetCurrentLevels()
+		levels := map[string]string{
+			"base": xrpllog.LevelName(global),
+		}
+		for name, lvl := range partitions {
+			levels[name] = xrpllog.LevelName(lvl)
+		}
+		return map[string]interface{}{"levels": levels}, nil
 	}
 
-	validLevels := map[string]bool{
-		"trace": true, "debug": true, "info": true,
-		"warning": true, "error": true, "fatal": true,
-	}
-	if !validLevels[request.Severity] {
+	// SET: parse and apply the new level
+	lvl, ok := xrpllog.ParseLevel(request.Severity)
+	if !ok {
 		return nil, types.RpcErrorInvalidParams("Invalid severity level: " + request.Severity)
+	}
+
+	if request.Partition != "" {
+		xrpllog.SetPartitionLevel(request.Partition, lvl)
+	} else {
+		xrpllog.SetLevel(lvl)
 	}
 
 	return map[string]interface{}{}, nil

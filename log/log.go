@@ -109,6 +109,69 @@ func parseLevel(s string) (Level, bool) {
 	}
 }
 
+// ParseLevel is the exported form of parseLevel for use by RPC handlers and
+// external callers. Returns (LevelInfo, false) for unrecognised strings.
+func ParseLevel(s string) (Level, bool) { return parseLevel(s) }
+
+// LevelName returns a canonical lowercase name for the given level.
+func LevelName(l Level) string {
+	switch {
+	case l <= LevelTrace:
+		return "trace"
+	case l <= LevelDebug:
+		return "debug"
+	case l <= LevelInfo:
+		return "info"
+	case l <= LevelWarn:
+		return "warn"
+	default:
+		return "error"
+	}
+}
+
+// rootCfg is the *Config that backs the global root logger.
+// Set by SetRootConfig after SetRoot is called in the CLI bootstrap.
+var rootCfg *Config
+
+// SetRootConfig registers cfg as the live config for the root logger.
+// Call this once after SetRoot so that SetLevel / SetPartitionLevel work.
+func SetRootConfig(cfg *Config) { rootCfg = cfg }
+
+// SetLevel changes the global log level at runtime.
+// No-op if SetRootConfig has not been called.
+func SetLevel(l Level) {
+	if rootCfg != nil {
+		rootCfg.SetLevel(l)
+	}
+}
+
+// SetPartitionLevel changes the level for one partition at runtime.
+// No-op if SetRootConfig has not been called.
+func SetPartitionLevel(partition string, l Level) {
+	if rootCfg != nil {
+		rootCfg.SetPartitionLevel(partition, l)
+	}
+}
+
+// GetCurrentLevels returns a point-in-time snapshot of the global level and
+// all per-partition overrides. Returns (LevelInfo, nil) if rootCfg is unset.
+func GetCurrentLevels() (global Level, partitions map[string]Level) {
+	if rootCfg == nil {
+		return LevelInfo, nil
+	}
+	rootCfg.initDyn()
+	rootCfg.dyn.mu.RLock()
+	defer rootCfg.dyn.mu.RUnlock()
+	global = rootCfg.Level
+	if len(rootCfg.Partitions) > 0 {
+		partitions = make(map[string]Level, len(rootCfg.Partitions))
+		for k, v := range rootCfg.Partitions {
+			partitions[k] = v
+		}
+	}
+	return
+}
+
 // defaultExit is called by Fatal after logging. Replaceable in tests.
 var defaultExit = func() { os.Exit(1) }
 

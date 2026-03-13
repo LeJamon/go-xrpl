@@ -59,8 +59,7 @@ func (l *logger) With(args ...any) Logger {
 // The "t" key (short for "topic", matching rippled's partition display)
 // is baked into every record emitted by this logger.
 func (l *logger) Named(partition string) Logger {
-	level := l.cfg.partitionLevel(partition)
-	h := newLevelHandler(level, l.inner.Handler())
+	h := newLevelHandler(l.cfg.getPartitionLeveler(partition), l.inner.Handler())
 	return &logger{
 		inner: slog.New(h).With("t", partition),
 		cfg:   l.cfg,

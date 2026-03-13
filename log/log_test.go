@@ -10,9 +10,9 @@ import (
 // captureLogger returns a new Logger that writes to buf at the given level.
 func captureLogger(level Level, format string) (*bytes.Buffer, Logger) {
 	var buf bytes.Buffer
-	cfg := Config{Level: level, Format: format, Output: &buf}
+	cfg := &Config{Level: level, Format: format, Output: &buf}
 	h := NewHandler(cfg)
-	return &buf, New(h, &cfg)
+	return &buf, New(h, cfg)
 }
 
 // TestLevels_Text verifies that each level produces the correct label in text output.
@@ -97,13 +97,13 @@ func TestNamed_BakesPartitionKey(t *testing.T) {
 // emits Debug records even when the global level is Info.
 func TestNamed_PartitionLevelOverride_Verbose(t *testing.T) {
 	var buf bytes.Buffer
-	cfg := Config{
+	cfg := &Config{
 		Level:      LevelInfo,
 		Format:     "text",
 		Output:     &buf,
 		Partitions: map[string]Level{"VerbosePart": LevelDebug},
 	}
-	l := New(NewHandler(cfg), &cfg)
+	l := New(NewHandler(cfg), cfg)
 	l.Named("VerbosePart").Debug("debug-from-partition")
 
 	if !strings.Contains(buf.String(), "debug-from-partition") {
@@ -115,13 +115,13 @@ func TestNamed_PartitionLevelOverride_Verbose(t *testing.T) {
 // silences Debug records even when the global level is Debug.
 func TestNamed_PartitionLevelOverride_Quiet(t *testing.T) {
 	var buf bytes.Buffer
-	cfg := Config{
+	cfg := &Config{
 		Level:      LevelDebug,
 		Format:     "text",
 		Output:     &buf,
 		Partitions: map[string]Level{"QuietPart": LevelWarn},
 	}
-	l := New(NewHandler(cfg), &cfg)
+	l := New(NewHandler(cfg), cfg)
 	named := l.Named("QuietPart")
 	named.Debug("should-be-silenced")
 	named.Warn("should-appear")
@@ -171,12 +171,12 @@ func TestDiscard_WithNamed_ReturnEquivalent(t *testing.T) {
 // TestMultiHandler verifies that NewMultiHandler fans records to all children.
 func TestMultiHandler(t *testing.T) {
 	var buf1, buf2 bytes.Buffer
-	cfg1 := Config{Level: LevelTrace, Format: "text", Output: &buf1}
-	cfg2 := Config{Level: LevelTrace, Format: "text", Output: &buf2}
+	cfg1 := &Config{Level: LevelTrace, Format: "text", Output: &buf1}
+	cfg2 := &Config{Level: LevelTrace, Format: "text", Output: &buf2}
 
 	multi := NewMultiHandler(NewHandler(cfg1), NewHandler(cfg2))
-	cfgMulti := Config{Level: LevelTrace}
-	l := New(multi, &cfgMulti)
+	cfgMulti := &Config{Level: LevelTrace}
+	l := New(multi, cfgMulti)
 	l.Info("fan-out")
 
 	if !strings.Contains(buf1.String(), "fan-out") {
@@ -190,8 +190,8 @@ func TestMultiHandler(t *testing.T) {
 // TestMultiHandler_Enabled verifies Enabled returns true if any child is enabled.
 func TestMultiHandler_Enabled(t *testing.T) {
 	var buf bytes.Buffer
-	lowCfg := Config{Level: LevelTrace, Format: "text", Output: &buf}
-	highCfg := Config{Level: LevelError, Format: "text", Output: &buf}
+	lowCfg := &Config{Level: LevelTrace, Format: "text", Output: &buf}
+	highCfg := &Config{Level: LevelError, Format: "text", Output: &buf}
 
 	multi := NewMultiHandler(NewHandler(lowCfg), NewHandler(highCfg))
 	if !multi.Enabled(bgCtx, LevelDebug) {
@@ -245,6 +245,47 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.Output == nil {
 		t.Error("DefaultConfig output must not be nil")
+	}
+}
+
+// TestSetLevel_HotReload verifies that cfg.SetLevel propagates to already-created loggers.
+func TestSetLevel_HotReload(t *testing.T) {
+	var buf bytes.Buffer
+	cfg := &Config{Level: LevelInfo, Format: "text", Output: &buf}
+	l := New(NewHandler(cfg), cfg)
+	named := l.Named("HotPart")
+	named.Debug("before-hot-reload")
+	if strings.Contains(buf.String(), "before-hot-reload") {
+		t.Error("Debug should be suppressed at Info level")
+	}
+	cfg.SetLevel(LevelDebug)
+	named.Debug("after-hot-reload")
+	if !strings.Contains(buf.String(), "after-hot-reload") {
+		t.Error("Debug should appear after hot-reload to Debug level")
+	}
+}
+
+// TestSetPartitionLevel_HotReload verifies that cfg.SetPartitionLevel propagates to already-created named loggers.
+// The partition must be pre-registered in Config.Partitions so Named() receives its *slog.LevelVar;
+// updating an already-known partition's LevelVar is what hot-reload supports.
+func TestSetPartitionLevel_HotReload(t *testing.T) {
+	var buf bytes.Buffer
+	cfg := &Config{
+		Level:      LevelInfo,
+		Format:     "text",
+		Output:     &buf,
+		Partitions: map[string]Level{"HotPartition": LevelInfo}, // pre-register at Info
+	}
+	l := New(NewHandler(cfg), cfg)
+	named := l.Named("HotPartition") // gets the partition's *slog.LevelVar
+	named.Trace("before-partition-reload")
+	if strings.Contains(buf.String(), "before-partition-reload") {
+		t.Error("Trace should be suppressed before partition hot-reload")
+	}
+	cfg.SetPartitionLevel("HotPartition", LevelTrace) // updates the existing *slog.LevelVar
+	named.Trace("after-partition-reload")
+	if !strings.Contains(buf.String(), "after-partition-reload") {
+		t.Error("Trace should appear after partition hot-reload to Trace")
 	}
 }
 

@@ -70,8 +70,9 @@ func runServer(cmd *cobra.Command, args []string) {
 	if verbose {
 		logCfg.Level = xrpllog.LevelTrace
 	}
-	rootLogger := xrpllog.New(xrpllog.NewHandler(logCfg), &logCfg)
+	rootLogger := xrpllog.New(xrpllog.NewHandler(&logCfg), &logCfg)
 	xrpllog.SetRoot(rootLogger)
+	xrpllog.SetRootConfig(&logCfg)
 	serverLog := rootLogger.Named(xrpllog.PartitionServer)
 
 	serverLog.Info("Starting goXRPLd", "version", "0.1.0-dev")
