@@ -2,10 +2,12 @@ package rpc
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -155,7 +157,9 @@ func (a *ledgerReaderAdapter) ForEachTransaction(fn func(txHash [32]byte, txData
 	return a.l.ForEachTransaction(fn)
 }
 
-// SubmitTransaction submits a transaction to the open ledger
+// SubmitTransaction submits a transaction to the open ledger.
+// The txJSON is parsed, encoded to binary, and both are passed to the service
+// so that AcceptLedger can re-apply transactions in canonical order.
 func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	// Parse the transaction from JSON
 	transaction, err := tx.ParseJSON(txJSON)
@@ -168,8 +172,26 @@ func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte) (*types.SubmitRe
 		}, nil
 	}
 
-	// Submit to the service
-	result, err := a.svc.SubmitTransaction(transaction)
+	// Encode the transaction to binary for canonical re-ordering at AcceptLedger time.
+	// We flatten to a map and use binarycodec.Encode to get the hex blob.
+	var rawBlob []byte
+	if txMap, fErr := transaction.Flatten(); fErr == nil {
+		if hexStr, eErr := binarycodec.Encode(txMap); eErr == nil {
+			rawBlob, _ = hex.DecodeString(hexStr)
+		}
+	}
+	// If we couldn't produce a blob from Flatten, try unmarshaling the JSON directly.
+	if rawBlob == nil {
+		var jsonMap map[string]interface{}
+		if jErr := json.Unmarshal(txJSON, &jsonMap); jErr == nil {
+			if hexStr, eErr := binarycodec.Encode(jsonMap); eErr == nil {
+				rawBlob, _ = hex.DecodeString(hexStr)
+			}
+		}
+	}
+
+	// Submit to the service with the raw blob for canonical ordering
+	result, err := a.svc.SubmitTransaction(transaction, rawBlob)
 	if err != nil {
 		return &types.SubmitResult{
 			EngineResult:        "tefINTERNAL",

@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
 	"github.com/LeJamon/goXRPLd/storage/nodestore"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
@@ -126,6 +127,11 @@ type Service struct {
 	// Transaction index (hash -> ledger sequence) - in-memory cache
 	txIndex map[[32]byte]uint32
 
+	// Pending transactions accumulated during the open ledger phase.
+	// Re-applied in canonical order at AcceptLedger time.
+	// Reference: rippled CanonicalTXSet / retriableTxs
+	pendingTxs []pendingTx
+
 	// EventCallback is called when a ledger is accepted (optional)
 	eventCallback EventCallback
 
@@ -227,6 +233,9 @@ func (s *Service) Start() error {
 	}
 	s.openLedger = openLedger
 
+	// Reset pending transactions
+	s.pendingTxs = nil
+
 	s.logger.Info("Ledger service started",
 		"standalone", s.config.Standalone,
 		"openLedger", openLedger.Sequence(),
@@ -317,6 +326,10 @@ func (s *Service) GetValidatedLedgerIndex() uint32 {
 // AcceptLedger closes the current open ledger and creates a new one.
 // This is the main mechanism for advancing ledgers in standalone mode.
 // It corresponds to the "ledger_accept" RPC command.
+//
+// When pending transactions exist, they are sorted using CanonicalTXSet ordering
+// and re-applied from a fresh copy of the LCL, matching rippled's behavior.
+// Reference: rippled NetworkOPs::acceptLedgerTransaction / CanonicalTXSet
 func (s *Service) AcceptLedger() (uint32, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -329,8 +342,199 @@ func (s *Service) AcceptLedger() (uint32, error) {
 		return 0, ErrNoOpenLedger
 	}
 
-	// Close the current open ledger
+	if s.closedLedger == nil {
+		return 0, ErrNoClosedLedger
+	}
+
 	closeTime := time.Now()
+
+	// If there are pending transactions, re-apply them in canonical order
+	// on a fresh ledger built from the LCL. This matches rippled's behavior
+	// where open ledger transactions are re-ordered via CanonicalTXSet.
+	if len(s.pendingTxs) > 0 {
+		// Sort pending transactions in canonical order
+		canonicalSort(s.pendingTxs)
+
+		// Create a fresh open ledger from the LCL
+		freshLedger, err := ledger.NewOpen(s.closedLedger, closeTime)
+		if err != nil {
+			return 0, errors.New("failed to create fresh ledger for canonical reapply: " + err.Error())
+		}
+
+		// Read fees from the LCL for the engine config
+		baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
+
+		engineConfig := tx.EngineConfig{
+			BaseFee:                   baseFee,
+			ReserveBase:               reserveBase,
+			ReserveIncrement:          reserveIncrement,
+			LedgerSequence:            freshLedger.Sequence(),
+			SkipSignatureVerification: s.config.Standalone,
+			NetworkID:                 s.config.NetworkID,
+			Logger:                    s.config.Logger,
+		}
+
+		// Multi-pass application matching rippled's BuildLedger.
+		//
+		// Rippled uses tapRETRY so that tec* results are NOT applied (no fee,
+		// no sequence consumed). This lets the same tx be retried on the next pass.
+		// Our engine doesn't support tapRETRY, so we rebuild the ledger each pass:
+		//
+		// Pass 0: Apply all txs. Record which got tesSUCCESS vs tec*/ter*.
+		// Pass 1+: Rebuild from LCL. Re-apply only tesSUCCESS txs first (restoring
+		//          state), then retry the tec*/ter* ones (which may now succeed).
+		//
+		// Reference: rippled BuildLedger.cpp, LEDGER_TOTAL_PASSES=3, LEDGER_RETRY_PASSES=1
+		const (
+			totalPasses = 3
+			retryPasses = 1
+		)
+
+		type txStatus int
+		const (
+			txPending   txStatus = iota
+			txSucceeded          // tesSUCCESS — will be re-applied on rebuilds
+			txRetry              // tec*/ter* during certainRetry — try again
+			txFailed             // permanently failed — skip
+		)
+		statuses := make(map[[32]byte]txStatus, len(s.pendingTxs))
+
+		certainRetry := true
+		for pass := 0; pass < totalPasses; pass++ {
+			// Rebuild fresh from LCL each pass
+			freshLedger, err = ledger.NewOpen(s.closedLedger, closeTime)
+			if err != nil {
+				return 0, errors.New("failed to create fresh ledger: " + err.Error())
+			}
+			engineConfig.LedgerSequence = freshLedger.Sequence()
+			engine := tx.NewEngine(freshLedger, engineConfig)
+			blockProcessor := tx.NewBlockProcessor(engine)
+
+			changes := 0
+			hasRetry := false
+
+			for _, ptx := range s.pendingTxs {
+				st := statuses[ptx.hash]
+
+				// Skip permanently failed or tec*/ter* txs in rebuild phase.
+				// On pass > 0, we ONLY apply txs that previously succeeded (to
+				// rebuild state) plus txs that are being retried.
+				if st == txFailed {
+					continue
+				}
+				if pass > 0 && st == txRetry {
+					// Don't apply yet — we'll retry after all succeeded txs
+					continue
+				}
+
+				transaction, parseErr := tx.ParseFromBinary(ptx.txBlob)
+				if parseErr != nil {
+					statuses[ptx.hash] = txFailed
+					continue
+				}
+				transaction.SetRawBytes(ptx.txBlob)
+
+				result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
+				if applyErr != nil {
+					statuses[ptx.hash] = txFailed
+					continue
+				}
+
+				engineResult := result.ApplyResult.Result
+				switch {
+				case engineResult.IsSuccess():
+					freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
+					s.txIndex[result.Hash] = freshLedger.Sequence()
+					if st != txSucceeded {
+						changes++
+					}
+					statuses[ptx.hash] = txSucceeded
+
+				case engineResult.IsTec():
+					if certainRetry {
+						statuses[ptx.hash] = txRetry
+						hasRetry = true
+					} else {
+						// Final pass: apply tec* normally
+						freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
+						s.txIndex[result.Hash] = freshLedger.Sequence()
+						statuses[ptx.hash] = txSucceeded
+					}
+
+				case engineResult.ShouldRetry():
+					statuses[ptx.hash] = txRetry
+					hasRetry = true
+
+				default:
+					statuses[ptx.hash] = txFailed
+				}
+			}
+
+			// Now retry the tec*/ter* transactions (state from succeeded txs is in place)
+			if pass > 0 {
+				for _, ptx := range s.pendingTxs {
+					if statuses[ptx.hash] != txRetry {
+						continue
+					}
+
+					transaction, parseErr := tx.ParseFromBinary(ptx.txBlob)
+					if parseErr != nil {
+						statuses[ptx.hash] = txFailed
+						continue
+					}
+					transaction.SetRawBytes(ptx.txBlob)
+
+					result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
+					if applyErr != nil {
+						statuses[ptx.hash] = txFailed
+						continue
+					}
+
+					engineResult := result.ApplyResult.Result
+					switch {
+					case engineResult.IsSuccess():
+						freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
+						s.txIndex[result.Hash] = freshLedger.Sequence()
+						changes++
+						statuses[ptx.hash] = txSucceeded
+
+					case engineResult.IsTec():
+						if certainRetry {
+							hasRetry = true
+						} else {
+							freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
+							s.txIndex[result.Hash] = freshLedger.Sequence()
+							statuses[ptx.hash] = txSucceeded
+						}
+
+					case engineResult.ShouldRetry():
+						hasRetry = true
+
+					default:
+						statuses[ptx.hash] = txFailed
+					}
+				}
+			}
+
+			if !hasRetry {
+				break
+			}
+			if changes == 0 && !certainRetry {
+				break
+			}
+			if changes == 0 || pass >= retryPasses {
+				certainRetry = false
+			}
+		}
+
+		// Replace the open ledger with the canonically-built one
+		s.openLedger = freshLedger
+	}
+
+	// Reset pending transactions
+	s.pendingTxs = nil
+
+	// Close the current open ledger
 	if err := s.openLedger.Close(closeTime, 0); err != nil {
 		return 0, errors.New("failed to close ledger: " + err.Error())
 	}
