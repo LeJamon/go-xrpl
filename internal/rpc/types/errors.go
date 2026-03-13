@@ -81,8 +81,8 @@ const (
 	// Rate limiting
 	RpcSLOW_DOWN_INVALID_IP = 36
 
-	// Oracle errors
-	RpcORACLE_MALFORMED = 37
+	// Oracle errors — must match rippled exactly (rpcORACLE_MALFORMED = 94)
+	RpcORACLE_MALFORMED = 94
 
 	// Amendment and feature errors
 	RpcINVALID_API_VERSION = 38
@@ -123,6 +123,10 @@ const (
 
 	// Credential errors - must match rippled exactly
 	RpcBAD_CREDENTIALS = 95 // Credentials do not exist, are not accepted, or have expired
+
+	// Simulate errors - must match rippled exactly
+	RpcTX_SIGNED        = 96 // Transaction should not be signed (rippled: rpcTX_SIGNED = 96)
+	RpcSRC_ACT_MALFORMED = 65 // Source account is malformed (rippled: rpcSRC_ACT_MALFORMED = 65)
 )
 
 // Standard error constructors
@@ -249,4 +253,28 @@ func RpcErrorMissingField(field string) *RpcError {
 // RpcErrorInvalidField returns an error for invalid field value (matches rippled invalid_field_error)
 func RpcErrorInvalidField(field string) *RpcError {
 	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", "Invalid field '"+field+"'.")
+}
+
+// RpcErrorTxSigned returns an error when a transaction is pre-signed but should not be
+// (matches rippled rpcTX_SIGNED, code 96, token "transactionSigned").
+func RpcErrorTxSigned() *RpcError {
+	return NewRpcError(RpcTX_SIGNED, "transactionSigned", "transactionSigned", "Transaction should not be signed.")
+}
+
+// RpcErrorSrcActMalformed returns an error when the source account address is malformed
+// (matches rippled rpcSRC_ACT_MALFORMED, code 65, token "srcActMalformed").
+func RpcErrorSrcActMalformed(message string) *RpcError {
+	return NewRpcError(RpcSRC_ACT_MALFORMED, "srcActMalformed", "srcActMalformed", message)
+}
+
+// RpcErrorNotImpl returns an error for unimplemented features
+// (matches rippled rpcNOT_IMPL, code 74, token "notImpl").
+func RpcErrorNotImpl() *RpcError {
+	return NewRpcError(RpcNOT_IMPL, "notImpl", "notImpl", "Not implemented.")
+}
+
+// RpcErrorOracleMalformed returns an error for malformed oracle requests
+// (matches rippled rpcORACLE_MALFORMED, code 94, token "oracleMalformed").
+func RpcErrorOracleMalformed() *RpcError {
+	return NewRpcError(RpcORACLE_MALFORMED, "oracleMalformed", "oracleMalformed", "Oracle request is malformed.")
 }
