@@ -1481,7 +1481,7 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		Metadata:         metadata,
 		Engine:           e,
 		SignedWithMaster: sigWithMaster,
-		Log:             e.logger,
+		Log:              e.logger,
 	}
 
 	// Set NumberSwitchover based on fixUniversalNumber amendment.

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	xrpllog "github.com/LeJamon/goXRPLd/log"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	xrpllog "github.com/LeJamon/goXRPLd/log"
 )
 
 // rpcLog is the logger for the HTTP JSON-RPC server.

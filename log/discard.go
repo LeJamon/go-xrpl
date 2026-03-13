@@ -15,5 +15,5 @@ func (discardLogger) Warn(_ string, _ ...any)  {}
 func (discardLogger) Error(_ string, _ ...any) {}
 func (discardLogger) Fatal(_ string, _ ...any) {}
 
-func (d discardLogger) With(_ ...any) Logger        { return d }
-func (d discardLogger) Named(_ string) Logger       { return d }
+func (d discardLogger) With(_ ...any) Logger  { return d }
+func (d discardLogger) Named(_ string) Logger { return d }
