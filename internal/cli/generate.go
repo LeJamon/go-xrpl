@@ -130,6 +130,23 @@ rpc_startup = [
 ]
 
 # =============================================================================
+# Logging
+# =============================================================================
+
+[logging]
+level  = "info"   # trace | debug | info | warn | error
+format = "text"   # text (human-readable) | json (for log aggregators)
+output = "stdout" # stdout | stderr | /path/to/logfile
+
+# Per-partition level overrides (uncomment to increase verbosity per subsystem)
+# [logging.partitions]
+# Tx              = "debug"
+# Flow            = "debug"
+# Pathfinder      = "debug"
+# LedgerConsensus = "debug"
+# NodeStore       = "debug"
+
+# =============================================================================
 # Server Configuration
 # =============================================================================
 

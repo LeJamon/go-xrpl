@@ -3,9 +3,10 @@ package relationaldb
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
+
+	xrpllog "github.com/LeJamon/goXRPLd/log"
 )
 
 // Logger interface for dependency injection
@@ -16,31 +17,25 @@ type Logger interface {
 	Error(msg string, fields ...interface{})
 }
 
-// DefaultLogger provides a basic logger implementation
-type DefaultLogger struct {
-	logger *log.Logger
-}
+// DefaultLogger provides a basic logger implementation backed by the global xrpllog root.
+type DefaultLogger struct{}
 
-func NewDefaultLogger() *DefaultLogger {
-	return &DefaultLogger{
-		logger: log.Default(),
-	}
-}
+func NewDefaultLogger() *DefaultLogger { return &DefaultLogger{} }
 
 func (l *DefaultLogger) Debug(msg string, fields ...interface{}) {
-	l.logger.Printf("[DEBUG] "+msg, fields...)
+	xrpllog.Named(xrpllog.PartitionNodeStore).Debug(msg, fields...)
 }
 
 func (l *DefaultLogger) Info(msg string, fields ...interface{}) {
-	l.logger.Printf("[INFO] "+msg, fields...)
+	xrpllog.Named(xrpllog.PartitionNodeStore).Info(msg, fields...)
 }
 
 func (l *DefaultLogger) Warn(msg string, fields ...interface{}) {
-	l.logger.Printf("[WARN] "+msg, fields...)
+	xrpllog.Named(xrpllog.PartitionNodeStore).Warn(msg, fields...)
 }
 
 func (l *DefaultLogger) Error(msg string, fields ...interface{}) {
-	l.logger.Printf("[ERROR] "+msg, fields...)
+	xrpllog.Named(xrpllog.PartitionNodeStore).Error(msg, fields...)
 }
 
 // HealthChecker defines interface for health checking

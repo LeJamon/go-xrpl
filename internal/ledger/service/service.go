@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
+	xrpllog "github.com/LeJamon/goXRPLd/log"
 	"github.com/LeJamon/goXRPLd/storage/nodestore"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
@@ -35,6 +37,10 @@ type Config struct {
 
 	// RelationalDB is the repository manager for transaction indexing (optional)
 	RelationalDB relationaldb.RepositoryManager
+
+	// Logger is the logger for the ledger service.
+	// If nil, xrpllog.Discard() is used.
+	Logger xrpllog.Logger
 }
 
 // DefaultConfig returns the default service configuration
@@ -44,6 +50,7 @@ func DefaultConfig() Config {
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     nil,
 		RelationalDB:  nil,
+		Logger:        xrpllog.Discard(),
 	}
 }
 
@@ -88,6 +95,7 @@ type Service struct {
 	mu sync.RWMutex
 
 	config Config
+	logger xrpllog.Logger
 
 	// NodeStore for persistent storage (nil if in-memory only)
 	nodeStore nodestore.Database
@@ -122,8 +130,13 @@ type Service struct {
 
 // New creates a new LedgerService
 func New(cfg Config) (*Service, error) {
+	logger := cfg.Logger
+	if logger == nil {
+		logger = xrpllog.Discard()
+	}
 	s := &Service{
 		config:        cfg,
+		logger:        logger.Named(xrpllog.PartitionLedger),
 		nodeStore:     cfg.NodeStore,
 		relationalDB:  cfg.RelationalDB,
 		ledgerHistory: make(map[uint32]*ledger.Ledger),
@@ -181,12 +194,23 @@ func (s *Service) Start() error {
 	s.validatedLedger = genesisLedger
 	s.ledgerHistory[genesisLedger.Sequence()] = genesisLedger
 
+	hash := genesisLedger.Hash()
+	s.logger.Info("Genesis ledger created",
+		"sequence", genesisLedger.Sequence(),
+		"hash", strconv.FormatUint(uint64(hash[0])<<24|uint64(hash[1])<<16|uint64(hash[2])<<8|uint64(hash[3]), 16)+"...",
+	)
+
 	// Create the first open ledger (ledger 2)
 	openLedger, err := ledger.NewOpen(genesisLedger, time.Now())
 	if err != nil {
 		return errors.New("failed to create open ledger: " + err.Error())
 	}
 	s.openLedger = openLedger
+
+	s.logger.Info("Ledger service started",
+		"standalone", s.config.Standalone,
+		"openLedger", openLedger.Sequence(),
+	)
 
 	return nil
 }
@@ -376,6 +400,12 @@ func (s *Service) AcceptLedger() (uint32, error) {
 		callback := s.eventCallback
 		go callback(event)
 	}
+
+	s.logger.Info("Ledger accepted",
+		"sequence", closedSeq,
+		"hash", fmt.Sprintf("%x", closedLedgerHash[:8]),
+		"txs", len(txResults),
+	)
 
 	return closedSeq, nil
 }

@@ -59,6 +59,7 @@ type Config struct {
 
 	// 7. Diagnostics
 	DebugLogfile string        `toml:"debug_logfile" mapstructure:"debug_logfile"`
+	Logging      LoggingConfig `toml:"logging" mapstructure:"logging"`
 	Insight      InsightConfig `toml:"insight" mapstructure:"insight"`
 	Perf         PerfConfig    `toml:"perf" mapstructure:"perf"`
 
