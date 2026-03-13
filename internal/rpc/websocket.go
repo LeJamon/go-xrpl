@@ -234,12 +234,14 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	}
 
 	// Create RPC context
+	clientIP := getWebSocketClientIP(wsConn.conn)
+	role := roleForRequest(clientIP)
 	rpcCtx := &types.RpcContext{
 		Context:    wsConn.ctx,
-		Role:       types.RoleGuest,
+		Role:       role,
 		ApiVersion: apiVersion,
-		IsAdmin:    false,
-		ClientIP:   getWebSocketClientIP(wsConn.conn),
+		IsAdmin:    role == types.RoleAdmin,
+		ClientIP:   clientIP,
 	}
 
 	// Handle subscription commands specially
