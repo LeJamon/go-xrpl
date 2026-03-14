@@ -6,6 +6,8 @@ import (
 	"sort"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
+	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes"
 )
 
 var (
@@ -172,4 +174,31 @@ func CreateTxWithMetaBlob(txBlob []byte, meta *Metadata) ([]byte, error) {
 	copy(result[len(vlTx):], vlMeta)
 
 	return result, nil
+}
+
+// SplitTxWithMetaBlob splits a combined VL-encoded blob back into
+// transaction and metadata byte slices.
+// This is the inverse of CreateTxWithMetaBlob.
+func SplitTxWithMetaBlob(blob []byte) (txData []byte, metaData []byte, err error) {
+	p := serdes.NewBinaryParser(blob, definitions.Get())
+
+	txLen, err := p.ReadVariableLength()
+	if err != nil {
+		return nil, nil, errors.New("failed to decode tx VL prefix")
+	}
+	txData, err = p.ReadBytes(txLen)
+	if err != nil {
+		return nil, nil, errors.New("failed to read tx data")
+	}
+
+	metaLen, err := p.ReadVariableLength()
+	if err != nil {
+		return nil, nil, errors.New("failed to decode meta VL prefix")
+	}
+	metaData, err = p.ReadBytes(metaLen)
+	if err != nil {
+		return nil, nil, errors.New("failed to read meta data")
+	}
+
+	return txData, metaData, nil
 }
