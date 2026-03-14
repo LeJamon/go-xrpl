@@ -377,6 +377,12 @@ func (e *Engine) SetBaseTxCount(count uint32) {
 	e.txCount = count
 }
 
+// ComputeTransactionHash computes the hash of a transaction.
+// The hash is SHA512Half of the "TXN\x00" prefix + serialized transaction.
+func ComputeTransactionHash(tx Transaction) ([32]byte, error) {
+	return computeTransactionHash(tx)
+}
+
 // computeTransactionHash computes the hash of a transaction
 // The hash is SHA512Half of the "TXN\x00" prefix + serialized transaction
 func computeTransactionHash(tx Transaction) ([32]byte, error) {

@@ -101,17 +101,18 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		}
 	}
 
-	// Submit the transaction
-	result, err := types.Services.Ledger.SubmitTransaction(txJSON)
-	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to submit transaction: " + err.Error())
-	}
-
-	// Calculate tx hash and blob
+	// Ensure we have the tx_blob hex for both submission and hash calculation
 	if txBlobHex == "" {
 		if encoded, err := binarycodec.Encode(txJsonMap); err == nil {
 			txBlobHex = encoded
 		}
+	}
+
+	// Submit the transaction with the original signed blob.
+	// The blob is needed for canonical re-ordering during AcceptLedger.
+	result, err := types.Services.Ledger.SubmitTransaction(txJSON, txBlobHex)
+	if err != nil {
+		return nil, types.RpcErrorInternal("Failed to submit transaction: " + err.Error())
 	}
 	txHashStr := CalculateTxHash(txBlobHex)
 

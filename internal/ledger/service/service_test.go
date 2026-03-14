@@ -33,25 +33,25 @@ func TestServiceStart(t *testing.T) {
 		t.Fatalf("Failed to start service: %v", err)
 	}
 
-	// Check that genesis ledger was created
-	if svc.GetValidatedLedgerIndex() != genesis.GenesisLedgerSequence {
-		t.Errorf("Validated ledger should be genesis (seq %d), got %d",
-			genesis.GenesisLedgerSequence, svc.GetValidatedLedgerIndex())
+	// Match rippled: genesis=1, LCL=2 (immediately closed), open=3
+	if svc.GetValidatedLedgerIndex() != genesis.GenesisLedgerSequence+1 {
+		t.Errorf("Validated ledger should be seq %d, got %d",
+			genesis.GenesisLedgerSequence+1, svc.GetValidatedLedgerIndex())
 	}
 
-	// Check that open ledger was created (seq 2)
-	if svc.GetCurrentLedgerIndex() != genesis.GenesisLedgerSequence+1 {
+	// Open ledger should be seq 3
+	if svc.GetCurrentLedgerIndex() != genesis.GenesisLedgerSequence+2 {
 		t.Errorf("Open ledger should be seq %d, got %d",
-			genesis.GenesisLedgerSequence+1, svc.GetCurrentLedgerIndex())
+			genesis.GenesisLedgerSequence+2, svc.GetCurrentLedgerIndex())
 	}
 
-	// Check closed ledger is genesis
-	if svc.GetClosedLedgerIndex() != genesis.GenesisLedgerSequence {
+	// Closed ledger should be seq 2
+	if svc.GetClosedLedgerIndex() != genesis.GenesisLedgerSequence+1 {
 		t.Errorf("Closed ledger should be seq %d, got %d",
-			genesis.GenesisLedgerSequence, svc.GetClosedLedgerIndex())
+			genesis.GenesisLedgerSequence+1, svc.GetClosedLedgerIndex())
 	}
 
-	t.Logf("Genesis ledger seq: %d", svc.GetValidatedLedgerIndex())
+	t.Logf("Genesis ledger seq: %d", svc.genesisLedger.Sequence())
 	t.Logf("Open ledger seq: %d", svc.GetCurrentLedgerIndex())
 }
 
@@ -117,21 +117,22 @@ func TestAcceptMultipleLedgers(t *testing.T) {
 		}
 
 		// Each closed ledger should be sequential
-		expectedSeq := uint32(2 + i) // Genesis is 1, first open is 2
+		// Open starts at 3 (genesis=1, LCL=2), so first close is 3
+		expectedSeq := uint32(3 + i)
 		if closedSeq != expectedSeq {
 			t.Errorf("Closed sequence should be %d, got %d", expectedSeq, closedSeq)
 		}
 	}
 
-	// Final state check
+	// Final state check: after closing 3,4,5,6,7, open should be 8
 	finalOpen := svc.GetCurrentLedgerIndex()
-	if finalOpen != 7 { // After closing 2,3,4,5,6, open should be 7
-		t.Errorf("Final open ledger should be 7, got %d", finalOpen)
+	if finalOpen != 8 {
+		t.Errorf("Final open ledger should be 8, got %d", finalOpen)
 	}
 
-	// Validated should be 6
-	if svc.GetValidatedLedgerIndex() != 6 {
-		t.Errorf("Final validated ledger should be 6, got %d", svc.GetValidatedLedgerIndex())
+	// Validated should be 7
+	if svc.GetValidatedLedgerIndex() != 7 {
+		t.Errorf("Final validated ledger should be 7, got %d", svc.GetValidatedLedgerIndex())
 	}
 
 	t.Logf("After 5 accepts: open=%d, validated=%d",
@@ -204,16 +205,16 @@ func TestGetServerInfo(t *testing.T) {
 		t.Error("Server info should show standalone mode")
 	}
 
-	if info.OpenLedgerSeq != 2 {
-		t.Errorf("Open ledger seq should be 2, got %d", info.OpenLedgerSeq)
+	if info.OpenLedgerSeq != 3 {
+		t.Errorf("Open ledger seq should be 3, got %d", info.OpenLedgerSeq)
 	}
 
-	if info.ClosedLedgerSeq != 1 {
-		t.Errorf("Closed ledger seq should be 1, got %d", info.ClosedLedgerSeq)
+	if info.ClosedLedgerSeq != 2 {
+		t.Errorf("Closed ledger seq should be 2, got %d", info.ClosedLedgerSeq)
 	}
 
-	if info.ValidatedLedgerSeq != 1 {
-		t.Errorf("Validated ledger seq should be 1, got %d", info.ValidatedLedgerSeq)
+	if info.ValidatedLedgerSeq != 2 {
+		t.Errorf("Validated ledger seq should be 2, got %d", info.ValidatedLedgerSeq)
 	}
 
 	t.Logf("Server info: %+v", info)

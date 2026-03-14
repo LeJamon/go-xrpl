@@ -53,7 +53,7 @@ type LedgerAccessor interface {
 
 // TransactionSubmitter handles transaction submission and retrieval.
 type TransactionSubmitter interface {
-	SubmitTransaction(txJSON []byte) (*SubmitResult, error)
+	SubmitTransaction(txJSON []byte, txBlobHex ...string) (*SubmitResult, error)
 	SimulateTransaction(txJSON []byte) (*SubmitResult, error)
 	GetTransaction(txHash [32]byte) (*TransactionInfo, error)
 	StoreTransaction(txHash [32]byte, txData []byte) error

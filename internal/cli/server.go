@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/config"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
@@ -170,9 +171,16 @@ func runServer(cmd *cobra.Command, args []string) {
 		serverLog.Info("Genesis config using built-in defaults")
 	}
 
+	// Get network ID from config
+	networkID, err := globalConfig.GetNetworkID()
+	if err != nil {
+		serverLog.Fatal("Failed to get network ID", "err", err)
+	}
+
 	// Initialize ledger service
 	cfg := service.Config{
 		Standalone:   standalone,
+		NetworkID:    uint32(networkID),
 		NodeStore:    db,
 		RelationalDB: repoManager,
 		Logger:       rootLogger,
@@ -242,6 +250,10 @@ func runServer(cmd *cobra.Command, args []string) {
 		publisher.PublishLedgerClosed(ledgerCloseEvent)
 
 		for _, txResult := range event.TransactionResults {
+			// Decode binary tx+meta blob to JSON for the event.
+			// TxData is VL-encoded: [VL-length][tx_blob][VL-length][meta_blob]
+			txJSON, metaJSON := decodeTxWithMetaToJSON(txResult.TxData)
+
 			txEvent := &rpc.TransactionEvent{
 				Type:                "transaction",
 				EngineResult:        "tesSUCCESS",
@@ -249,8 +261,8 @@ func runServer(cmd *cobra.Command, args []string) {
 				EngineResultMessage: "The transaction was applied. Only final in a validated ledger.",
 				LedgerIndex:         txResult.LedgerIndex,
 				LedgerHash:          hex.EncodeToString(txResult.LedgerHash[:]),
-				Transaction:         json.RawMessage(txResult.TxData),
-				Meta:                json.RawMessage(txResult.MetaData),
+				Transaction:         txJSON,
+				Meta:                metaJSON,
 				Hash:                hex.EncodeToString(txResult.TxHash[:]),
 				Validated:           txResult.Validated,
 			}
@@ -455,4 +467,79 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 		ReserveInc:       reserveInc,
 		ValidatedLedgers: serverInfo.CompleteLedgers,
 	}
+}
+
+// decodeTxWithMetaToJSON splits a VL-encoded tx+meta binary blob and decodes
+// each part to JSON. The blob format is: [VL-length][tx_blob][VL-length][meta_blob].
+// Returns (txJSON, metaJSON) as json.RawMessage, or empty JSON objects on error.
+func decodeTxWithMetaToJSON(data []byte) (json.RawMessage, json.RawMessage) {
+	emptyObj := json.RawMessage("{}")
+
+	if len(data) == 0 {
+		return emptyObj, emptyObj
+	}
+
+	// Parse first VL field (transaction)
+	txLen, txPrefixLen := parseVLLength(data)
+	if txPrefixLen == 0 || txPrefixLen+txLen > len(data) {
+		return emptyObj, emptyObj
+	}
+	txBlob := data[txPrefixLen : txPrefixLen+txLen]
+
+	// Parse second VL field (metadata)
+	metaStart := txPrefixLen + txLen
+	var metaBlob []byte
+	if metaStart < len(data) {
+		metaLen, metaPrefixLen := parseVLLength(data[metaStart:])
+		if metaPrefixLen > 0 && metaStart+metaPrefixLen+metaLen <= len(data) {
+			metaBlob = data[metaStart+metaPrefixLen : metaStart+metaPrefixLen+metaLen]
+		}
+	}
+
+	// Decode transaction binary to JSON
+	txHex := hex.EncodeToString(txBlob)
+	txMap, err := binarycodec.Decode(txHex)
+	if err != nil {
+		return emptyObj, emptyObj
+	}
+	txJSON, err := json.Marshal(txMap)
+	if err != nil {
+		return emptyObj, emptyObj
+	}
+
+	// Decode metadata binary to JSON
+	metaJSON := emptyObj
+	if len(metaBlob) > 0 {
+		metaHex := hex.EncodeToString(metaBlob)
+		metaMap, err := binarycodec.Decode(metaHex)
+		if err == nil {
+			if m, err := json.Marshal(metaMap); err == nil {
+				metaJSON = m
+			}
+		}
+	}
+
+	return json.RawMessage(txJSON), metaJSON
+}
+
+// parseVLLength parses a variable-length field prefix.
+// Returns (length, bytesConsumed).
+func parseVLLength(data []byte) (int, int) {
+	if len(data) == 0 {
+		return 0, 0
+	}
+	b1 := int(data[0])
+	if b1 <= 192 {
+		return b1, 1
+	}
+	if b1 <= 240 {
+		if len(data) < 2 {
+			return 0, 0
+		}
+		return 193 + ((b1 - 193) * 256) + int(data[1]), 2
+	}
+	if len(data) < 3 {
+		return 0, 0
+	}
+	return 12481 + ((b1 - 241) * 65536) + (int(data[1]) * 256) + int(data[2]), 3
 }

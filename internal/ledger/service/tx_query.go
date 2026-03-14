@@ -36,8 +36,10 @@ type SubmitResult struct {
 	ValidatedLedger uint32
 }
 
-// SubmitTransaction submits a transaction to the open ledger
-func (s *Service) SubmitTransaction(transaction tx.Transaction) (*SubmitResult, error) {
+// SubmitTransaction submits a transaction to the open ledger.
+// The rawBlob parameter is the original binary transaction blob; it is stored
+// so that AcceptLedger can re-apply transactions in canonical order.
+func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte) (*SubmitResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -55,6 +57,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction) (*SubmitResult, 
 		ReserveIncrement:          reserveIncrement,
 		LedgerSequence:            s.openLedger.Sequence(),
 		SkipSignatureVerification: s.config.Standalone, // Skip signatures in standalone mode
+		NetworkID:                 s.config.NetworkID,
 		Logger:                    s.config.Logger,
 	}
 
@@ -76,6 +79,33 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction) (*SubmitResult, 
 
 	if s.validatedLedger != nil {
 		result.ValidatedLedger = s.validatedLedger.Sequence()
+	}
+
+	// Track successfully applied transactions for canonical re-ordering at AcceptLedger.
+	// Reference: rippled accumulates applied txs for CanonicalTXSet reapply.
+	if applyResult.Applied && rawBlob != nil {
+		common := transaction.GetCommon()
+
+		// Decode account address to raw 20-byte AccountID
+		var accountID [20]byte
+		_, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(common.Account)
+		if err == nil && len(accountBytes) == 20 {
+			copy(accountID[:], accountBytes)
+		}
+
+		// Compute transaction hash from the original signed blob.
+		// We set raw bytes so ComputeTransactionHash uses the exact signed bytes
+		// rather than re-serializing (which can produce a different blob/hash).
+		transaction.SetRawBytes(rawBlob)
+		txHash, hashErr := tx.ComputeTransactionHash(transaction)
+		if hashErr == nil {
+			s.pendingTxs = append(s.pendingTxs, pendingTx{
+				txBlob:   rawBlob,
+				hash:     txHash,
+				account:  accountID,
+				sequence: common.SeqProxy(),
+			})
+		}
 	}
 
 	return result, nil
@@ -214,6 +244,7 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 		ReserveIncrement:          simReserveIncrement,
 		LedgerSequence:            s.openLedger.Sequence(),
 		SkipSignatureVerification: true, // Skip signatures for simulation
+		NetworkID:                 s.config.NetworkID,
 		Logger:                    s.config.Logger,
 	}
 
