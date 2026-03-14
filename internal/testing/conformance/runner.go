@@ -54,6 +54,18 @@ type Step struct {
 	PostState        *PostState      `json:"post_state,omitempty"`
 	Env              *EnvConfig      `json:"env,omitempty"`
 	Amendment        string          `json:"amendment,omitempty"`
+	ModifyState      *ModifyState    `json:"modify_state,omitempty"`
+}
+
+// ModifyState describes direct ledger state modifications that bypass normal
+// transaction processing.  This is used when rippled tests hack the open
+// ledger (via env.app().openLedger().modify()) to set up boundary conditions
+// that cannot be reached through regular transactions (e.g., setting
+// MintedNFTokens to 0xFFFFFFFE to test overflow detection).
+type ModifyState struct {
+	Account              string  `json:"account"`
+	MintedNFTokens       *uint32 `json:"minted_nftokens,omitempty"`
+	FirstNFTokenSequence *uint32 `json:"first_nftoken_sequence,omitempty"`
 }
 
 // LimitAmount is an IOU amount for trust line setup.
@@ -156,6 +168,8 @@ func RunFixture(t *testing.T, fixturePath string) {
 			r.execEnvReset(i, step)
 		case "enable_amendment":
 			r.env.EnableFeature(step.Amendment)
+		case "modify_state":
+			r.execModifyState(i, step)
 		default:
 			t.Fatalf("Step %d: unknown op %q", i, step.Op)
 		}
@@ -321,6 +335,40 @@ func (r *runner) execEnvReset(stepIdx int, step Step) {
 
 	// Create fresh environment
 	r.setupEnv(*step.Env)
+}
+
+// execModifyState handles a "modify_state" step, which directly modifies
+// ledger state to set up boundary conditions. This mirrors rippled test
+// hacks that use env.app().openLedger().modify() to set fields like
+// MintedNFTokens to near-overflow values.
+func (r *runner) execModifyState(stepIdx int, step Step) {
+	if step.ModifyState == nil {
+		r.t.Fatalf("Step %d (modify_state): missing modify_state config", stepIdx)
+	}
+	ms := step.ModifyState
+
+	// Look up the account by address
+	acc, ok := r.accounts[ms.Account]
+	if !ok {
+		// Try to find by address among registered accounts
+		for _, a := range r.accounts {
+			if a.Address == ms.Account {
+				acc = a
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		r.t.Fatalf("Step %d (modify_state): unknown account %q", stepIdx, ms.Account)
+	}
+
+	if ms.MintedNFTokens != nil {
+		r.env.SetMintedNFTokensDirect(acc, *ms.MintedNFTokens)
+	}
+	if ms.FirstNFTokenSequence != nil {
+		r.env.SetFirstNFTokenSequenceDirect(acc, *ms.FirstNFTokenSequence)
+	}
 }
 
 // assertPostState validates account states against expected values.
