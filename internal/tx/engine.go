@@ -1177,11 +1177,37 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 		}
 	}
 
-	// Step 5: checkSign — signature verification
+	// Step 5: checkSign — signature verification and multi-sign authorization
 	// Reference: rippled Transactor::checkSign in Transactor.cpp
 	// When a delegate is present, the idAccount for signature checking is the delegate.
 	// Reference: rippled line 602: auto const idAccount = ctx.tx[~sfDelegate].value_or(ctx.tx[sfAccount]);
-	if !e.config.SkipSignatureVerification && !IsMultiSigned(tx) && common.SigningPubKey != "" {
+	if IsMultiSigned(tx) {
+		// Multi-signed transaction: always check signer authorization and quorum.
+		// This runs regardless of SkipSignatureVerification because quorum and
+		// signer authorization (master key disabled, regular key, phantom accounts)
+		// are ledger-state checks, not cryptographic checks.
+		// Reference: rippled Transactor::checkMultiSign in Transactor.cpp lines 743-911
+		idAccount := common.Account
+		if common.Delegate != "" {
+			idAccount = common.Delegate
+		}
+		idAccountID, idErr := state.DecodeAccountID(idAccount)
+		if idErr != nil {
+			return TefBAD_SIGNATURE
+		}
+		// Convert tx Signers to SignerInfo for checkBatchMultiSign
+		txSigners := make([]SignerInfo, len(common.Signers))
+		for i, sw := range common.Signers {
+			txSigners[i] = SignerInfo{
+				Account:       sw.Signer.Account,
+				SigningPubKey: sw.Signer.SigningPubKey,
+			}
+		}
+		if result := e.checkBatchMultiSign(idAccountID, txSigners); result != TesSUCCESS {
+			return result
+		}
+	} else if !e.config.SkipSignatureVerification && common.SigningPubKey != "" {
+		// Single-signed transaction with signature verification enabled.
 		signerAddress, addrErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(common.SigningPubKey)
 		if addrErr != nil {
 			return TefBAD_AUTH
@@ -1317,11 +1343,17 @@ func (e *Engine) checkBatchMultiSign(accountID [20]byte, txSigners []SignerInfo)
 		return TefINTERNAL
 	}
 
-	// Walk through txSigners and match against account signer entries.
-	// Both lists are sorted by account. All signers must be valid.
-	// Reference: rippled checkMultiSign — linear walk with sorted lists
+	// Build a map from r-address to signer entry for O(1) lookup.
+	// This avoids ordering issues between binary AccountID sort (rippled/ledger)
+	// and r-address string sort (Go's AddMultiSigner).
+	authorizedSigners := make(map[string]state.AccountSignerEntry, len(signerList.SignerEntries))
+	for _, se := range signerList.SignerEntries {
+		authorizedSigners[se.Account] = se
+	}
+
+	// Verify each tx signer is authorized and accumulate weights.
+	// Reference: rippled checkMultiSign — all signers must be valid.
 	var weightSum uint32
-	accountSignerIdx := 0
 
 	for _, txSigner := range txSigners {
 		txSignerAccountID, decErr := state.DecodeAccountID(txSigner.Account)
@@ -1329,15 +1361,9 @@ func (e *Engine) checkBatchMultiSign(accountID [20]byte, txSigners []SignerInfo)
 			return TefBAD_SIGNATURE
 		}
 
-		// Advance through account signers to find a match
-		for accountSignerIdx < len(signerList.SignerEntries) &&
-			signerList.SignerEntries[accountSignerIdx].Account < txSigner.Account {
-			accountSignerIdx++
-		}
-		if accountSignerIdx >= len(signerList.SignerEntries) {
-			return TefBAD_SIGNATURE
-		}
-		if signerList.SignerEntries[accountSignerIdx].Account != txSigner.Account {
+		// Look up the signer in the authorized signers map
+		authEntry, found := authorizedSigners[txSigner.Account]
+		if !found {
 			return TefBAD_SIGNATURE
 		}
 
@@ -1395,7 +1421,7 @@ func (e *Engine) checkBatchMultiSign(accountID [20]byte, txSigners []SignerInfo)
 		}
 
 		// Signer is legitimate — add weight
-		weightSum += uint32(signerList.SignerEntries[accountSignerIdx].SignerWeight)
+		weightSum += uint32(authEntry.SignerWeight)
 	}
 
 	// Check quorum
