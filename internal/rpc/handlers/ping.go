@@ -29,4 +29,3 @@ func (m *PingMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (inte
 
 	return response, nil
 }
-

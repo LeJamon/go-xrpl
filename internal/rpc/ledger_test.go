@@ -33,18 +33,18 @@ type mockLedgerReader struct {
 	}
 }
 
-func (m *mockLedgerReader) Sequence() uint32                 { return m.seq }
-func (m *mockLedgerReader) Hash() [32]byte                   { return m.hash }
-func (m *mockLedgerReader) ParentHash() [32]byte             { return m.parentHash }
-func (m *mockLedgerReader) IsClosed() bool                   { return m.closed }
-func (m *mockLedgerReader) IsValidated() bool                { return m.validated }
-func (m *mockLedgerReader) TotalDrops() uint64               { return m.totalDrops }
-func (m *mockLedgerReader) CloseTime() int64                 { return m.closeTime }
-func (m *mockLedgerReader) CloseTimeResolution() uint32      { return m.closeTimeResolution }
-func (m *mockLedgerReader) CloseFlags() uint8                { return m.closeFlags }
-func (m *mockLedgerReader) ParentCloseTime() int64           { return m.parentCloseTime }
-func (m *mockLedgerReader) TxMapHash() [32]byte              { return m.txMapHash }
-func (m *mockLedgerReader) StateMapHash() [32]byte           { return m.stateMapHash }
+func (m *mockLedgerReader) Sequence() uint32            { return m.seq }
+func (m *mockLedgerReader) Hash() [32]byte              { return m.hash }
+func (m *mockLedgerReader) ParentHash() [32]byte        { return m.parentHash }
+func (m *mockLedgerReader) IsClosed() bool              { return m.closed }
+func (m *mockLedgerReader) IsValidated() bool           { return m.validated }
+func (m *mockLedgerReader) TotalDrops() uint64          { return m.totalDrops }
+func (m *mockLedgerReader) CloseTime() int64            { return m.closeTime }
+func (m *mockLedgerReader) CloseTimeResolution() uint32 { return m.closeTimeResolution }
+func (m *mockLedgerReader) CloseFlags() uint8           { return m.closeFlags }
+func (m *mockLedgerReader) ParentCloseTime() int64      { return m.parentCloseTime }
+func (m *mockLedgerReader) TxMapHash() [32]byte         { return m.txMapHash }
+func (m *mockLedgerReader) StateMapHash() [32]byte      { return m.stateMapHash }
 func (m *mockLedgerReader) ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error {
 	for _, tx := range m.transactions {
 		if !fn(tx.hash, tx.data) {

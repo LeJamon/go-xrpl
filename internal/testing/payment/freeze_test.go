@@ -5,18 +5,17 @@ package payment
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/account"
-	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
 	offerBuilder "github.com/LeJamon/goXRPLd/internal/testing/offer"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/account"
+	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 )
 
 // TestFreeze_RippleState tests basic RippleState freeze functionality.
 // From rippled: testRippleState
 func TestFreeze_RippleState(t *testing.T) {
-
 	env := xrplgoTesting.NewTestEnv(t)
 
 	gw := xrplgoTesting.NewAccount("gateway")
@@ -228,7 +227,7 @@ func TestFreeze_NoFreeze(t *testing.T) {
 	seq := env.Seq(gw)
 	accountSet.Sequence = &seq
 
-	result = env.Submit(accountSet)
+	env.Submit(accountSet)
 	// Should still succeed but GlobalFreeze should remain set
 	// (rippled allows the tx but doesn't clear the flag when NoFreeze is set)
 
@@ -238,7 +237,6 @@ func TestFreeze_NoFreeze(t *testing.T) {
 // TestFreeze_DirectPaymentsWhenFrozen tests direct payments on frozen trust lines.
 // From rippled: testPaymentsWhenDeepFrozen (direct payments section)
 func TestFreeze_DirectPaymentsWhenFrozen(t *testing.T) {
-
 	env := xrplgoTesting.NewTestEnv(t)
 
 	gw := xrplgoTesting.NewAccount("gateway")
@@ -307,7 +305,6 @@ func TestFreeze_DirectPaymentsWhenFrozen(t *testing.T) {
 // TestFreeze_HolderFreeze tests when holder (not issuer) freezes trust line.
 // From rippled: testPaymentsWhenDeepFrozen (holder freeze section)
 func TestFreeze_HolderFreeze(t *testing.T) {
-
 	env := xrplgoTesting.NewTestEnv(t)
 
 	gw := xrplgoTesting.NewAccount("gateway")
@@ -409,7 +406,7 @@ func TestFreeze_PathsWhenFrozen(t *testing.T) {
 	// A2 creates a passive offer: wants XRP(100), gives USD(100)
 	// This is an XRP->USD offer on the book
 	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", G1.Address)
-	xrp100 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(100)))
+	xrp100 := tx.NewXRPAmount(xrplgoTesting.XRP(100))
 	result = env.Submit(offerBuilder.OfferCreate(A2, xrp100, usd100).Passive().Build())
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
@@ -422,10 +419,10 @@ func TestFreeze_PathsWhenFrozen(t *testing.T) {
 
 		// A1 tries to send USD to G1 using XRP through A2's offer — should fail
 		usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", G1.Address)
-		xrp11 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(11)))
+		xrp11 := tx.NewXRPAmount(xrplgoTesting.XRP(11))
 		result = env.Submit(
 			PayIssued(A1, G1, usd10).
-				SendMax(tx.NewXRPAmount(int64(xrplgoTesting.XRP(11)))).
+				SendMax(tx.NewXRPAmount(xrplgoTesting.XRP(11))).
 				Paths([][]payment.PathStep{{
 					{Currency: "USD", Issuer: G1.Address},
 				}}).
@@ -439,7 +436,7 @@ func TestFreeze_PathsWhenFrozen(t *testing.T) {
 		// G1 tries to send USD to A1 using XRP through A2's offer — should also fail
 		result = env.Submit(
 			PayIssued(G1, A1, usd10).
-				SendMax(tx.NewXRPAmount(int64(xrplgoTesting.XRP(11)))).
+				SendMax(tx.NewXRPAmount(xrplgoTesting.XRP(11))).
 				Paths([][]payment.PathStep{{
 					{Currency: "USD", Issuer: G1.Address},
 				}}).
@@ -468,7 +465,7 @@ func TestFreeze_PathsWhenFrozen(t *testing.T) {
 		usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", G1.Address)
 		result = env.Submit(
 			PayIssued(A1, G1, usd10).
-				SendMax(tx.NewXRPAmount(int64(xrplgoTesting.XRP(11)))).
+				SendMax(tx.NewXRPAmount(xrplgoTesting.XRP(11))).
 				Paths([][]payment.PathStep{{
 					{Currency: "USD", Issuer: G1.Address},
 				}}).
@@ -481,7 +478,7 @@ func TestFreeze_PathsWhenFrozen(t *testing.T) {
 		// G1 can still send USD using XRP through A2's offer
 		result = env.Submit(
 			PayIssued(G1, A1, usd10).
-				SendMax(tx.NewXRPAmount(int64(xrplgoTesting.XRP(11)))).
+				SendMax(tx.NewXRPAmount(xrplgoTesting.XRP(11))).
 				Paths([][]payment.PathStep{{
 					{Currency: "USD", Issuer: G1.Address},
 				}}).
@@ -513,7 +510,7 @@ func TestFreeze_PathsWhenFrozen(t *testing.T) {
 		env.Close()
 
 		// A1 can still send XRP using USD through A2's offer
-		xrp10 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(10)))
+		xrp10 := tx.NewXRPAmount(xrplgoTesting.XRP(10))
 		usd11 := tx.NewIssuedAmountFromFloat64(11, "USD", G1.Address)
 		result = env.Submit(
 			Pay(A1, G1, uint64(xrplgoTesting.XRP(10))).
@@ -618,7 +615,7 @@ func TestFreeze_OffersWhenFrozen(t *testing.T) {
 
 	// A3 creates a passive offer: wants XRP(1000), gives USD(1000)
 	usd1000 := tx.NewIssuedAmountFromFloat64(1000, "USD", G1.Address)
-	xrp1000 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(1000)))
+	xrp1000 := tx.NewXRPAmount(xrplgoTesting.XRP(1000))
 	result = env.Submit(offerBuilder.OfferCreate(A3, xrp1000, usd1000).Passive().Build())
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
@@ -628,7 +625,7 @@ func TestFreeze_OffersWhenFrozen(t *testing.T) {
 	usd1 := tx.NewIssuedAmountFromFloat64(1, "USD", G1.Address)
 	result = env.Submit(
 		PayIssued(A2, G1, usd1).
-			SendMax(tx.NewXRPAmount(int64(xrplgoTesting.XRP(1)))).
+			SendMax(tx.NewXRPAmount(xrplgoTesting.XRP(1))).
 			Paths([][]payment.PathStep{{
 				{Currency: "USD", Issuer: G1.Address},
 			}}).
@@ -642,7 +639,7 @@ func TestFreeze_OffersWhenFrozen(t *testing.T) {
 
 	// Someone else (A4) creates an offer providing liquidity
 	usd999 := tx.NewIssuedAmountFromFloat64(999, "USD", G1.Address)
-	xrp999 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(999)))
+	xrp999 := tx.NewXRPAmount(xrplgoTesting.XRP(999))
 	result = env.Submit(offerBuilder.OfferCreate(A4, xrp999, usd999).Build())
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
@@ -658,7 +655,7 @@ func TestFreeze_OffersWhenFrozen(t *testing.T) {
 	// (A3's is treated as unfunded due to freeze) and remove A3's offer
 	result = env.Submit(
 		PayIssued(A2, G1, usd1).
-			SendMax(tx.NewXRPAmount(int64(xrplgoTesting.XRP(1)))).
+			SendMax(tx.NewXRPAmount(xrplgoTesting.XRP(1))).
 			Paths([][]payment.PathStep{{
 				{Currency: "USD", Issuer: G1.Address},
 			}}).
@@ -678,7 +675,7 @@ func TestFreeze_OffersWhenFrozen(t *testing.T) {
 	// A2 creates a crossing offer — A4's frozen offer should be removed
 	// but A2's offer won't cross (A4 is frozen), so A2's offer stays on the book
 	usdOffer := tx.NewIssuedAmountFromFloat64(999, "USD", G1.Address)
-	xrpOffer := tx.NewXRPAmount(int64(xrplgoTesting.XRP(999)))
+	xrpOffer := tx.NewXRPAmount(xrplgoTesting.XRP(999))
 	result = env.Submit(offerBuilder.OfferCreate(A2, usdOffer, xrpOffer).Build())
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()

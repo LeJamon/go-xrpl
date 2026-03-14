@@ -2,7 +2,6 @@ package entry
 
 import (
 	"errors"
-
 )
 
 // AcceptedCredential represents a credential type accepted by a permissioned domain

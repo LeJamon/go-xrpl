@@ -16,6 +16,13 @@ import (
 type SubmitMethod struct{}
 
 func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+	// Parse fee_mult_max / fee_div_max first with proper type validation,
+	// matching rippled's checkFee() in TransactionSign.cpp.
+	feeOpts, feeErr := parseFeeOptions(params)
+	if feeErr != nil {
+		return nil, feeErr
+	}
+
 	var request struct {
 		TxBlob     string          `json:"tx_blob,omitempty"`
 		TxJson     json.RawMessage `json:"tx_json,omitempty"`
@@ -27,8 +34,6 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		FailHard   bool            `json:"fail_hard,omitempty"`
 		Offline    bool            `json:"offline,omitempty"`
 		BuildPath  bool            `json:"build_path,omitempty"`
-		FeeMultMax uint32          `json:"fee_mult_max,omitempty"`
-		FeeDivMax  uint32          `json:"fee_div_max,omitempty"`
 	}
 
 	if err := ParseParams(params, &request); err != nil {
@@ -73,7 +78,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 			SeedHex:    request.SeedHex,
 			Passphrase: request.Passphrase,
 			KeyType:    request.KeyType,
-		}, request.Offline, ctx.ApiVersion)
+		}, request.Offline, ctx.ApiVersion, feeOpts)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}
@@ -96,17 +101,18 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		}
 	}
 
-	// Submit the transaction
-	result, err := types.Services.Ledger.SubmitTransaction(txJSON)
-	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to submit transaction: " + err.Error())
-	}
-
-	// Calculate tx hash and blob
+	// Ensure we have the tx_blob hex for both submission and hash calculation
 	if txBlobHex == "" {
 		if encoded, err := binarycodec.Encode(txJsonMap); err == nil {
 			txBlobHex = encoded
 		}
+	}
+
+	// Submit the transaction with the original signed blob.
+	// The blob is needed for canonical re-ordering during AcceptLedger.
+	result, err := types.Services.Ledger.SubmitTransaction(txJSON, txBlobHex)
+	if err != nil {
+		return nil, types.RpcErrorInternal("Failed to submit transaction: " + err.Error())
 	}
 	txHashStr := CalculateTxHash(txBlobHex)
 
@@ -127,7 +133,13 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		}
 	}
 
-	// Add hash to tx_json in response
+	// Inject DeliverMax for Payment transactions, matching rippled's
+	// RPC::insertDeliverMax behavior in TransactionSign.cpp.
+	injectDeliverMax(txJsonMap, ctx.ApiVersion)
+
+	// For API v2+: add hash at root level of response, matching
+	// transactionFormatResultImpl in TransactionSign.cpp.
+	// For API v1: hash goes inside tx_json only.
 	if txHashStr != "" {
 		txJsonMap["hash"] = txHashStr
 	}
@@ -135,18 +147,25 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	// Get current fees for response
 	baseFee, _, _ := types.Services.Ledger.GetCurrentFees()
 
+	// Build response with independent boolean fields matching rippled's
+	// Transaction::SubmitResult struct. "accepted" = any() in rippled.
 	response := map[string]interface{}{
 		"engine_result":         result.EngineResult,
 		"engine_result_code":    result.EngineResultCode,
 		"engine_result_message": result.EngineResultMessage,
 		"tx_json":               txJsonMap,
 		"tx_blob":               txBlobHex,
-		"accepted":              result.Applied,
+		"accepted":              result.Accepted(),
 		"applied":               result.Applied,
-		"broadcast":             result.Applied,
-		"kept":                  result.Applied,
-		"queued":                false,
+		"broadcast":             result.Broadcast,
+		"kept":                  result.Kept,
+		"queued":                result.Queued,
 		"open_ledger_cost":      fmt.Sprintf("%d", baseFee),
+	}
+
+	// API v2+: add hash at the root level of the response
+	if ctx.ApiVersion > 1 && txHashStr != "" {
+		response["hash"] = txHashStr
 	}
 
 	// Add validated_ledger_index only if we have one

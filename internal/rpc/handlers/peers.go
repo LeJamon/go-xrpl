@@ -22,7 +22,6 @@ func (m *PeersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (int
 	}, nil
 }
 
-
 // PeerReservationsAddMethod handles the peer_reservations_add RPC method.
 // STUB: Returns empty result. Network-only — not needed for standalone mode.
 //
@@ -39,7 +38,6 @@ func (m *PeerReservationsAddMethod) Handle(ctx *types.RpcContext, params json.Ra
 		"current":  []interface{}{},
 	}, nil
 }
-
 
 // PeerReservationsDelMethod handles the peer_reservations_del RPC method.
 // STUB: Returns empty result. Network-only — not needed for standalone mode.
@@ -58,7 +56,6 @@ func (m *PeerReservationsDelMethod) Handle(ctx *types.RpcContext, params json.Ra
 	}, nil
 }
 
-
 // PeerReservationsListMethod handles the peer_reservations_list RPC method.
 // STUB: Returns empty list. Network-only — not needed for standalone mode.
 //
@@ -73,4 +70,3 @@ func (m *PeerReservationsListMethod) Handle(ctx *types.RpcContext, params json.R
 		"reservations": []interface{}{},
 	}, nil
 }
-

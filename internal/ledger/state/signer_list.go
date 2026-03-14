@@ -15,7 +15,7 @@ const LsfOneOwnerCount uint32 = 0x00020000
 
 // SignerListInfo holds parsed signer list data from a ledger entry.
 type SignerListInfo struct {
-	SignerListID   uint32
+	SignerListID  uint32
 	SignerQuorum  uint32
 	Flags         uint32
 	SignerEntries []AccountSignerEntry

@@ -6,7 +6,9 @@
 //
 // These tests verify that the AMM math correctly handles rounding for
 // various deposit and withdrawal modes. The key invariant is:
-//   sqrt(amount1 * amount2) >= lptBalance
+//
+//	sqrt(amount1 * amount2) >= lptBalance
+//
 // which must hold after every operation to prevent value leakage.
 //
 // The tests use GBP/EUR IOU pairs with precise mantissa/exponent values.
@@ -19,9 +21,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/amm"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 // setupGBPEURPoolWithBob creates a GBP/EUR AMM and funds Bob with

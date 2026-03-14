@@ -4,10 +4,10 @@ import (
 	"encoding/hex"
 
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/ledger/entry"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
 func init() {
@@ -29,12 +29,6 @@ type NFTokenAcceptOffer struct {
 	// NFTokenBrokerFee is the broker fee for brokered sales (optional)
 	NFTokenBrokerFee *tx.Amount `json:"NFTokenBrokerFee,omitempty" xrpl:"NFTokenBrokerFee,omitempty,amount"`
 }
-
-// NFTokenAcceptOffer has no transaction flags
-const (
-	// tfNFTokenAcceptOfferMask is the mask for invalid flags (all flags are invalid)
-	tfNFTokenAcceptOfferMask uint32 = 0xFFFFFFFF
-)
 
 // NewNFTokenAcceptOffer creates a new NFTokenAcceptOffer transaction
 func NewNFTokenAcceptOffer(account string) *NFTokenAcceptOffer {
@@ -111,12 +105,12 @@ func (n *NFTokenAcceptOffer) RequiredAmendments() [][32]byte {
 // Apply applies the NFTokenAcceptOffer transaction to the ledger.
 // Reference: rippled NFTokenAcceptOffer.cpp preclaim + doApply
 // IMPORTANT: Check order must match rippled's preclaim exactly:
-//   1. Load offers (existence, expiration, negative amount)
-//   2. Brokered mode header checks (tokenID/issue match, sell>buy, destinations, broker fee)
-//   3. Buy offer checks (type, own offer, ownership, fund, auth)
-//   4. Sell offer checks (type, own offer, ownership, fund, auth)
-//   5. Transfer fee issuer checks
-func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
+//  1. Load offers (existence, expiration, negative amount)
+//  2. Brokered mode header checks (tokenID/issue match, sell>buy, destinations, broker fee)
+//  3. Buy offer checks (type, own offer, ownership, fund, auth)
+//  4. Sell offer checks (type, own offer, ownership, fund, auth)
+//  5. Transfer fee issuer checks
+func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	accountID := ctx.AccountID
 
 	// --- Step 1: Load offers (checkOffer equivalent) ---
@@ -129,8 +123,8 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	// and for the pay() negative check (tecINTERNAL).
 	var buyOfferNegative, sellOfferNegative bool
 
-	if a.NFTokenBuyOffer != "" {
-		buyOfferIDBytes, err := hex.DecodeString(a.NFTokenBuyOffer)
+	if n.NFTokenBuyOffer != "" {
+		buyOfferIDBytes, err := hex.DecodeString(n.NFTokenBuyOffer)
 		if err != nil || len(buyOfferIDBytes) != 32 {
 			return tx.TemINVALID
 		}
@@ -170,8 +164,8 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	if a.NFTokenSellOffer != "" {
-		sellOfferIDBytes, err := hex.DecodeString(a.NFTokenSellOffer)
+	if n.NFTokenSellOffer != "" {
+		sellOfferIDBytes, err := hex.DecodeString(n.NFTokenSellOffer)
 		if err != nil || len(sellOfferIDBytes) != 32 {
 			return tx.TemINVALID
 		}
@@ -279,14 +273,14 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Broker fee checks (skip when offers have negative amounts pre-amendment)
-		if a.NFTokenBrokerFee != nil && !(buyOfferNegative || sellOfferNegative) {
-			brokerFeeIsXRP := a.NFTokenBrokerFee.Currency == ""
+		if n.NFTokenBrokerFee != nil && !(buyOfferNegative || sellOfferNegative) {
+			brokerFeeIsXRP := n.NFTokenBrokerFee.Currency == ""
 			if brokerFeeIsXRP != buyIsXRP {
 				return tx.TecNFTOKEN_BUY_SELL_MISMATCH
 			}
 
 			if buyIsXRP {
-				brokerFee := uint64(a.NFTokenBrokerFee.Drops())
+				brokerFee := uint64(n.NFTokenBrokerFee.Drops())
 				if brokerFee >= buyOffer.Amount {
 					return tx.TecINSUFFICIENT_PAYMENT
 				}
@@ -294,7 +288,7 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 					return tx.TecINSUFFICIENT_PAYMENT
 				}
 			} else {
-				brokerFeeIOU := *a.NFTokenBrokerFee
+				brokerFeeIOU := *n.NFTokenBrokerFee
 				buyAmount := offerIOUToAmount(buyOffer)
 				sellAmount := offerIOUToAmount(sellOffer)
 				if brokerFeeIOU.Compare(buyAmount) >= 0 {
@@ -307,10 +301,10 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			}
 
 			// Broker trustline authorization check (fixEnforceNFTokenTrustlineV2)
-			if !a.NFTokenBrokerFee.IsNative() && ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
-				brokerFeeIssuerID, err := state.DecodeAccountID(a.NFTokenBrokerFee.Issuer)
+			if !n.NFTokenBrokerFee.IsNative() && ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
+				brokerFeeIssuerID, err := state.DecodeAccountID(n.NFTokenBrokerFee.Issuer)
 				if err == nil {
-					if r := checkNFTTrustlineAuthorized(ctx.View, accountID, a.NFTokenBrokerFee.Currency, brokerFeeIssuerID); r != tx.TesSUCCESS {
+					if r := checkNFTTrustlineAuthorized(ctx.View, accountID, n.NFTokenBrokerFee.Currency, brokerFeeIssuerID); r != tx.TesSUCCESS {
 						return r
 					}
 				}
@@ -489,7 +483,7 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	// --- Dispatch to mode-specific doApply ---
 	// Brokered mode (both offers)
 	if buyOffer != nil && sellOffer != nil {
-		return a.executeBrokeredMode(ctx, accountID, buyOffer, sellOffer, buyOfferKey, sellOfferKey,
+		return n.executeBrokeredMode(ctx, accountID, buyOffer, sellOffer, buyOfferKey, sellOfferKey,
 			buyOfferNegative, sellOfferNegative)
 	}
 
@@ -502,7 +496,7 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		if sellOfferNegative && !ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
 			return tx.TecINTERNAL
 		}
-		return a.acceptNFTokenSellOfferDirect(ctx, accountID, sellOffer, sellOfferKey)
+		return n.acceptNFTokenSellOfferDirect(ctx, accountID, sellOffer, sellOfferKey)
 	}
 
 	// Direct mode - buy offer only
@@ -510,7 +504,7 @@ func (a *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		if buyOfferNegative && !ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
 			return tx.TecINTERNAL
 		}
-		return a.acceptNFTokenBuyOfferDirect(ctx, accountID, buyOffer, buyOfferKey)
+		return n.acceptNFTokenBuyOfferDirect(ctx, accountID, buyOffer, buyOfferKey)
 	}
 
 	return tx.TemINVALID

@@ -2,10 +2,12 @@ package rpc
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -155,8 +157,11 @@ func (a *ledgerReaderAdapter) ForEachTransaction(fn func(txHash [32]byte, txData
 	return a.l.ForEachTransaction(fn)
 }
 
-// SubmitTransaction submits a transaction to the open ledger
-func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte) (*types.SubmitResult, error) {
+// SubmitTransaction submits a transaction to the open ledger.
+// The optional txBlobHex is the original signed transaction blob in hex.
+// This is used for canonical re-ordering during AcceptLedger to ensure
+// the exact same bytes (and thus same tx hash) are used during re-application.
+func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
 	// Parse the transaction from JSON
 	transaction, err := tx.ParseJSON(txJSON)
 	if err != nil {
@@ -168,8 +173,29 @@ func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte) (*types.SubmitRe
 		}, nil
 	}
 
-	// Submit to the service
-	result, err := a.svc.SubmitTransaction(transaction)
+	// Use the original signed blob if provided, otherwise re-encode
+	var rawBlob []byte
+	if len(txBlobHex) > 0 && txBlobHex[0] != "" {
+		rawBlob, _ = hex.DecodeString(txBlobHex[0])
+	}
+	if rawBlob == nil {
+		if txMap, fErr := transaction.Flatten(); fErr == nil {
+			if hexStr, eErr := binarycodec.Encode(txMap); eErr == nil {
+				rawBlob, _ = hex.DecodeString(hexStr)
+			}
+		}
+	}
+	if rawBlob == nil {
+		var jsonMap map[string]interface{}
+		if jErr := json.Unmarshal(txJSON, &jsonMap); jErr == nil {
+			if hexStr, eErr := binarycodec.Encode(jsonMap); eErr == nil {
+				rawBlob, _ = hex.DecodeString(hexStr)
+			}
+		}
+	}
+
+	// Submit to the service with the raw blob for canonical ordering
+	result, err := a.svc.SubmitTransaction(transaction, rawBlob)
 	if err != nil {
 		return &types.SubmitResult{
 			EngineResult:        "tefINTERNAL",
@@ -184,6 +210,9 @@ func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte) (*types.SubmitRe
 		EngineResultCode:    int(result.Result),
 		EngineResultMessage: result.Message,
 		Applied:             result.Applied,
+		Broadcast:           result.Applied, // If applied, it would be broadcast to peers
+		Queued:              false,          // Not queued when applied directly
+		Kept:                result.Applied, // If applied, it is kept
 		Fee:                 result.Fee,
 		CurrentLedger:       result.CurrentLedger,
 		ValidatedLedger:     result.ValidatedLedger,
@@ -224,6 +253,8 @@ func (a *LedgerServiceAdapter) GetAccountInfo(account string, ledgerIndex string
 		LedgerIndex:       result.LedgerIndex,
 		LedgerHash:        hex.EncodeToString(result.LedgerHash[:]),
 		Validated:         result.Validated,
+		RawData:           result.RawData,
+		Index:             strings.ToUpper(hex.EncodeToString(result.Index[:])),
 	}, nil
 }
 
@@ -386,6 +417,7 @@ func (a *LedgerServiceAdapter) GetAccountTransactions(account string, ledgerMin,
 		txs[i] = types.AccountTransaction{
 			Hash:        tx.Hash,
 			LedgerIndex: tx.LedgerIndex,
+			TxnSeq:      tx.TxnSeq,
 			TxBlob:      tx.TxBlob,
 			Meta:        tx.Meta,
 		}
@@ -723,8 +755,8 @@ func (a *LedgerServiceAdapter) GetGatewayBalances(account string, hotWallets []s
 }
 
 // GetDepositAuthorized checks if a source account is authorized to deposit to a destination account
-func (a *LedgerServiceAdapter) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*types.DepositAuthorizedResult, error) {
-	result, err := a.svc.GetDepositAuthorized(sourceAccount, destinationAccount, ledgerIndex)
+func (a *LedgerServiceAdapter) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*types.DepositAuthorizedResult, error) {
+	result, err := a.svc.GetDepositAuthorized(sourceAccount, destinationAccount, ledgerIndex, credentials)
 	if err != nil {
 		return nil, err
 	}

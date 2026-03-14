@@ -14,10 +14,10 @@ import (
 
 // GenesisJSON represents the JSON genesis file format
 type GenesisJSON struct {
-	Ledger              GenesisLedgerJSON `json:"ledger"`
-	LedgerCurrentIndex  int               `json:"ledger_current_index,omitempty"`
-	Status              string            `json:"status,omitempty"`
-	Validated           bool              `json:"validated,omitempty"`
+	Ledger             GenesisLedgerJSON `json:"ledger"`
+	LedgerCurrentIndex int               `json:"ledger_current_index,omitempty"`
+	Status             string            `json:"status,omitempty"`
+	Validated          bool              `json:"validated,omitempty"`
 }
 
 // GenesisLedgerJSON represents the ledger section of genesis JSON
@@ -49,15 +49,15 @@ type StateEntryType struct {
 
 // AccountRootJSON represents an AccountRoot ledger entry in JSON format
 type AccountRootJSON struct {
-	LedgerEntryType  string `json:"LedgerEntryType"`
-	Account          string `json:"Account"`
-	Balance          string `json:"Balance"`
-	Flags            uint32 `json:"Flags"`
-	OwnerCount       uint32 `json:"OwnerCount"`
-	PreviousTxnID    string `json:"PreviousTxnID,omitempty"`
+	LedgerEntryType   string `json:"LedgerEntryType"`
+	Account           string `json:"Account"`
+	Balance           string `json:"Balance"`
+	Flags             uint32 `json:"Flags"`
+	OwnerCount        uint32 `json:"OwnerCount"`
+	PreviousTxnID     string `json:"PreviousTxnID,omitempty"`
 	PreviousTxnLgrSeq uint32 `json:"PreviousTxnLgrSeq,omitempty"`
-	Sequence         uint32 `json:"Sequence"`
-	Index            string `json:"index"`
+	Sequence          uint32 `json:"Sequence"`
+	Index             string `json:"index"`
 }
 
 // AmendmentsJSON represents an Amendments ledger entry in JSON format
@@ -71,7 +71,7 @@ type AmendmentsJSON struct {
 // FeeSettingsJSON represents a FeeSettings ledger entry in JSON format
 type FeeSettingsJSON struct {
 	LedgerEntryType   string `json:"LedgerEntryType"`
-	BaseFee           string `json:"BaseFee"`           // Hex string (e.g., "A" for 10)
+	BaseFee           string `json:"BaseFee"` // Hex string (e.g., "A" for 10)
 	Flags             uint32 `json:"Flags"`
 	ReferenceFeeUnits uint32 `json:"ReferenceFeeUnits"`
 	ReserveBase       uint64 `json:"ReserveBase"`
@@ -366,9 +366,9 @@ func DefaultGenesisConfig() *GenesisConfig {
 	return &GenesisConfig{
 		TotalXRP:            100_000_000_000 * 1_000_000, // 100 billion XRP
 		CloseTimeResolution: 30,
-		BaseFee:             drops.NewXRPAmount(10),         // 10 drops
-		ReserveBase:         drops.DropsPerXRP * 10,         // 10 XRP
-		ReserveIncrement:    drops.DropsPerXRP * 2,          // 2 XRP
+		BaseFee:             drops.NewXRPAmount(10), // 10 drops
+		ReserveBase:         drops.DropsPerXRP * 10, // 10 XRP
+		ReserveIncrement:    drops.DropsPerXRP * 2,  // 2 XRP
 		UseModernFees:       true,
 		Amendments:          nil,
 		InitialAccounts:     nil, // Will use master passphrase account

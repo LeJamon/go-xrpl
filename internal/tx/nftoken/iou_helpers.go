@@ -3,11 +3,11 @@ package nftoken
 import (
 	"encoding/binary"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // isOfferAmountNegative checks the raw binary SLE data of an NFTokenOffer
@@ -559,45 +559,6 @@ func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, a
 	// Only increment OwnerCount for the RECEIVER (matching rippled's trustCreate).
 	// The sender (IOU issuer) doesn't get a reserve for auto-created trust lines.
 	adjustOwnerCountViaView(view, receiver, 1)
-
-	return tx.TesSUCCESS
-}
-
-// checkIssuerTrustLine checks that the NFT issuer has a trust line for the IOU currency.
-// Used by NFTokenCreateOffer preclaim path — NOT gated on fixEnforceNFTokenTrustline.
-// Reference: rippled NFTokenUtils.cpp tokenOfferCreatePreclaim lines 909-925
-func checkIssuerTrustLine(ctx *tx.ApplyContext, nftIssuerID [20]byte, amount tx.Amount, nftFlags uint16) tx.Result {
-	if nftFlags&nftFlagTrustLine != 0 {
-		return tx.TesSUCCESS
-	}
-
-	iouIssuerID, err := state.DecodeAccountID(amount.Issuer)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
-	issuerExists, _ := ctx.View.Exists(keylet.Account(nftIssuerID))
-	if !issuerExists {
-		return tx.TecNO_ISSUER
-	}
-
-	// With featureNFTokenMintOffer: skip trust line check when nftIssuer == iouIssuer.
-	// Without featureNFTokenMintOffer: always check trust line existence.
-	if ctx.Rules().Enabled(amendment.FeatureNFTokenMintOffer) {
-		if nftIssuerID != iouIssuerID {
-			trustLineKey := keylet.Line(nftIssuerID, iouIssuerID, amount.Currency)
-			trustLineData, err := ctx.View.Read(trustLineKey)
-			if err != nil || trustLineData == nil {
-				return tx.TecNO_LINE
-			}
-		}
-	} else {
-		trustLineKey := keylet.Line(nftIssuerID, iouIssuerID, amount.Currency)
-		exists, _ := ctx.View.Exists(trustLineKey)
-		if !exists {
-			return tx.TecNO_LINE
-		}
-	}
 
 	return tx.TesSUCCESS
 }

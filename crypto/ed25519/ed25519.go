@@ -5,9 +5,10 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
+	"strings"
+
 	rootcrypto "github.com/LeJamon/goXRPLd/crypto"
 	"github.com/LeJamon/goXRPLd/crypto/common"
-	"strings"
 )
 
 const (

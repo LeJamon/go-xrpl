@@ -42,6 +42,9 @@ func ValidateConfig(config *Config) error {
 	}
 
 	// 6. Validate diagnostics configuration
+	if err := config.Logging.Validate(); err != nil {
+		errors = append(errors, fmt.Sprintf("logging: %s", err.Error()))
+	}
 	if err := config.Insight.Validate(); err != nil {
 		errors = append(errors, fmt.Sprintf("insight: %s", err.Error()))
 	}

@@ -332,7 +332,8 @@ func TestTxMethodLookupByHash(t *testing.T) {
 				"transaction": strings.ToLower(validHash),
 			},
 			validateResp: func(t *testing.T, resp map[string]interface{}) {
-				assert.Equal(t, strings.ToLower(validHash), resp["hash"])
+				// Hash is uppercased in the response (matching rippled)
+				assert.Equal(t, strings.ToUpper(validHash), resp["hash"])
 				assert.Equal(t, float64(100), resp["ledger_index"])
 				assert.Equal(t, true, resp["validated"])
 			},
@@ -1230,28 +1231,28 @@ func TestTxMethodSearchedAllFlag(t *testing.T) {
 	// - searched_all: not present when transaction was found
 
 	tests := []struct {
-		name               string
-		scenario           string
+		name                string
+		scenario            string
 		expectedSearchedAll *bool // nil means field should not be present
 	}{
 		{
-			name:               "Transaction found in range",
-			scenario:           "Transaction exists within min_ledger to max_ledger",
+			name:                "Transaction found in range",
+			scenario:            "Transaction exists within min_ledger to max_ledger",
 			expectedSearchedAll: nil, // Not present when found
 		},
 		{
-			name:               "Transaction not found - all searched",
-			scenario:           "Transaction not in range, but all ledgers available",
+			name:                "Transaction not found - all searched",
+			scenario:            "Transaction not in range, but all ledgers available",
 			expectedSearchedAll: boolPtr(true),
 		},
 		{
-			name:               "Transaction not found - incomplete search",
-			scenario:           "Transaction not in range, some ledgers missing/deleted",
+			name:                "Transaction not found - incomplete search",
+			scenario:            "Transaction not in range, some ledgers missing/deleted",
 			expectedSearchedAll: boolPtr(false),
 		},
 		{
-			name:               "Found outside provided range",
-			scenario:           "Transaction found but in different ledger range",
+			name:                "Found outside provided range",
+			scenario:            "Transaction found but in different ledger range",
 			expectedSearchedAll: boolPtr(false),
 		},
 	}
@@ -1495,8 +1496,8 @@ func TestTxMethodMetadata(t *testing.T) {
 	method := &handlers.TxMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, types.RoleGuest, method.RequiredRole(),
-			"tx method should be accessible to guests")
+		assert.Equal(t, types.RoleUser, method.RequiredRole(),
+			"tx method should require RoleUser (rippled: Role::USER)")
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {

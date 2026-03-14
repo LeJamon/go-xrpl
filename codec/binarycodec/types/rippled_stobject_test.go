@@ -29,7 +29,7 @@ func TestFieldOrdering_RippledVectors(t *testing.T) {
 		{
 			name: "basic field ordering",
 			input: map[string]any{
-				"Fee":           "10",       // ordinal varies
+				"Fee":           "10", // ordinal varies
 				"Flags":         uint32(524288),
 				"OfferSequence": uint32(1752791),
 				"TakerGets":     "150000000000",
@@ -264,7 +264,7 @@ func TestMalformedBinary_RippledVectors(t *testing.T) {
 		{
 			name:        "duplicate field in object",
 			hexInput:    "e2e1e2", // From rippled test
-			expectedErr: "",      // Should error but exact message may vary
+			expectedErr: "",       // Should error but exact message may vary
 		},
 	}
 

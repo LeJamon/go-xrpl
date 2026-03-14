@@ -41,11 +41,17 @@ func newMockGatewayBalancesLedgerService() *mockGatewayBalancesLedgerService {
 	}
 }
 
-func (m *mockGatewayBalancesLedgerService) GetCurrentLedgerIndex() uint32   { return m.currentLedgerIndex }
-func (m *mockGatewayBalancesLedgerService) GetClosedLedgerIndex() uint32    { return m.closedLedgerIndex }
-func (m *mockGatewayBalancesLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
-func (m *mockGatewayBalancesLedgerService) AcceptLedger() (uint32, error)   { return m.closedLedgerIndex + 1, nil }
-func (m *mockGatewayBalancesLedgerService) IsStandalone() bool              { return m.standalone }
+func (m *mockGatewayBalancesLedgerService) GetCurrentLedgerIndex() uint32 {
+	return m.currentLedgerIndex
+}
+func (m *mockGatewayBalancesLedgerService) GetClosedLedgerIndex() uint32 { return m.closedLedgerIndex }
+func (m *mockGatewayBalancesLedgerService) GetValidatedLedgerIndex() uint32 {
+	return m.validatedLedgerIndex
+}
+func (m *mockGatewayBalancesLedgerService) AcceptLedger() (uint32, error) {
+	return m.closedLedgerIndex + 1, nil
+}
+func (m *mockGatewayBalancesLedgerService) IsStandalone() bool { return m.standalone }
 func (m *mockGatewayBalancesLedgerService) GetServerInfo() types.LedgerServerInfo {
 	return m.serverInfo
 }
@@ -58,7 +64,7 @@ func (m *mockGatewayBalancesLedgerService) GetLedgerBySequence(seq uint32) (type
 func (m *mockGatewayBalancesLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) SubmitTransaction(txJSON []byte) (*types.SubmitResult, error) {
+func (m *mockGatewayBalancesLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockGatewayBalancesLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
@@ -142,7 +148,7 @@ func (m *mockGatewayBalancesLedgerService) GetGatewayBalances(account string, ho
 func (m *mockGatewayBalancesLedgerService) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*types.DepositAuthorizedResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*types.DepositAuthorizedResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockGatewayBalancesLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
@@ -206,7 +212,8 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 		{
 			name: "Account not found",
 			params: map[string]interface{}{
-				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
+				// Use a valid r-address so it passes ValidateAccount; mock returns "account not found"
+				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
 			expectedCode:  types.RpcACT_NOT_FOUND,
@@ -217,13 +224,11 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 		{
 			name: "Malformed account address",
 			params: map[string]interface{}{
+				// n-prefix address is not a valid account address -- caught by ValidateAccount
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
-			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_NOT_FOUND,
-			setupMock: func() {
-				mock.gatewayBalancesErr = errors.New("invalid account address: bad address")
-			},
+			expectedError: "Malformed account.",
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 	}
 
@@ -364,9 +369,11 @@ func TestGatewayBalancesBasic(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, aliceAccount, resp["account"])
-		// No obligations should be present
+		// obligations, balances, assets are always present (may be empty)
 		_, hasObligations := resp["obligations"]
-		assert.False(t, hasObligations, "Should not have obligations for gateway with no issued currency")
+		assert.True(t, hasObligations, "obligations should always be present in response")
+		obligations := resp["obligations"].(map[string]interface{})
+		assert.Empty(t, obligations, "obligations should be empty for gateway with no issued currency")
 	})
 
 	t.Run("Gateway with obligations returns obligations by currency", func(t *testing.T) {

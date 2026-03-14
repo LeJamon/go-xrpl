@@ -1,10 +1,10 @@
 package amm
 
 import (
-	"github.com/LeJamon/goXRPLd/ledger/entry"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
 // maxDeletableAMMTrustLines is the maximum number of trust lines that can be
@@ -173,7 +173,7 @@ func deleteAMMTrustLines(view tx.LedgerView, ammAccountID [20]byte, maxTrustline
 
 			// Must be a trust line (RippleState)
 			if entry.Type(entryType) != entry.TypeRippleState {
-					return tx.TecINTERNAL
+				return tx.TecINTERNAL
 			}
 
 			// Trust line balance must be zero
@@ -182,13 +182,13 @@ func deleteAMMTrustLines(view tx.LedgerView, ammAccountID [20]byte, maxTrustline
 				return tx.TecINTERNAL
 			}
 			if !rs.Balance.IsZero() {
-					return tx.TecINTERNAL
+				return tx.TecINTERNAL
 			}
 
 			// Delete the trust line
 			result := deleteAMMTrustLine(view, itemKeylet, rs, ammAccountID)
 			if result != tx.TesSUCCESS {
-					return result
+				return result
 			}
 
 			// Re-read the current page since directory was modified
@@ -299,7 +299,6 @@ func DeleteAMMAccount(view tx.LedgerView, asset, asset2 tx.Asset) tx.Result {
 // Reference: rippled AMMWithdraw.cpp deleteAMMAccountIfEmpty (line 718)
 func deleteAMMAccountIfEmpty(view tx.LedgerView, ammKey keylet.Keylet, ammAccountKey keylet.Keylet,
 	lpTokenBalance tx.Amount, asset, asset2 tx.Asset, amm *AMMData, ammAccount *state.AccountRoot) tx.Result {
-
 	if !lpTokenBalance.IsZero() {
 		// Not empty, just update the AMM
 		amm.LPTokenBalance = lpTokenBalance

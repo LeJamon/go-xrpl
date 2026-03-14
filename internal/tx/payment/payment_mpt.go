@@ -4,8 +4,8 @@ import (
 	"encoding/hex"
 	"math/big"
 
-	tx "github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	tx "github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
@@ -201,7 +201,6 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 // No transfer fee applies. Handles MaximumAmount enforcement.
 func (p *Payment) mptDirectTransfer(ctx *tx.ApplyContext, issuance *state.MPTokenIssuanceData,
 	issuanceKey keylet.Keylet, amount uint64, senderIsIssuer, destIsIssuer bool, destAccountID [20]byte) tx.Result {
-
 	// If sender is issuer: check MaximumAmount
 	// Reference: rippled View.cpp rippleSendMPT() lines 2044-2055
 	if senderIsIssuer {
@@ -283,7 +282,6 @@ func (p *Payment) mptDirectTransfer(ctx *tx.ApplyContext, issuance *state.MPToke
 // Reference: rippled View.cpp rippleSendMPT() lines 2068-2085
 func (p *Payment) mptTransitTransfer(ctx *tx.ApplyContext, issuance *state.MPTokenIssuanceData,
 	issuanceKey keylet.Keylet, amountDeliver, rate uint64, destAccountID [20]byte) tx.Result {
-
 	// Actual amount sender pays (includes transfer fee)
 	saActual := mptMultiply(amountDeliver, rate)
 

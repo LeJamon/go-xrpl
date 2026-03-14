@@ -8,9 +8,9 @@ import (
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/crypto/common"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // validateAMMAmount validates an AMM amount
@@ -472,8 +472,10 @@ func mulRoundForAsset(amount, frac tx.Amount, rm state.RoundingMode, asset tx.Am
 
 // multiplyRawToDrops multiplies two IOU-format amounts and converts the
 // product to XRP drops, matching rippled's two-step rounding:
-//   Step 1: Number::operator*= — normalize product to [10^15, 10^16) with Guard
-//   Step 2: Number::operator rep() — convert normalized Number to integer drops with Guard
+//
+//	Step 1: Number::operator*= — normalize product to [10^15, 10^16) with Guard
+//	Step 2: Number::operator rep() — convert normalized Number to integer drops with Guard
+//
 // Uses big.Int to avoid overflow (two 16-digit mantissas → 32-digit product).
 func multiplyRawToDrops(a, b tx.Amount, rm state.RoundingMode) int64 {
 	m1 := a.Mantissa()
@@ -840,7 +842,7 @@ func lpTokensOut(assetBalance, amountIn, lptBalance tx.Amount, tfee uint16, fixA
 	amountInIOU := toIOUForCalc(amountIn)
 	lptBalanceIOU := toIOUForCalc(lptBalance)
 
-	f1 := feeMult(tfee)                       // 1 - fee
+	f1 := feeMult(tfee)                    // 1 - fee
 	f2 := numberDiv(feeMultHalf(tfee), f1) // (1 - fee/2) / (1 - fee)
 
 	// r = asset1Deposit / asset1Balance
@@ -1154,15 +1156,6 @@ func iouToDropsRounded(amt tx.Amount) int64 {
 	return mantissa
 }
 
-// minAmount returns the smaller of two amounts.
-// Assumes both amounts are of the same type (both XRP or same IOU).
-func minAmount(a, b tx.Amount) tx.Amount {
-	if a.Compare(b) < 0 {
-		return a
-	}
-	return b
-}
-
 // maxAmount returns the larger of two amounts.
 // Assumes both amounts are of the same type (both XRP or same IOU).
 func maxAmount(a, b tx.Amount) tx.Amount {
@@ -1180,11 +1173,6 @@ func isGreater(a, b tx.Amount) bool {
 // isLessOrEqual returns true if a <= b
 func isLessOrEqual(a, b tx.Amount) bool {
 	return a.Compare(b) <= 0
-}
-
-// amountFromXRPDrops creates an XRP Amount from drops (for balance tracking).
-func amountFromXRPDrops(drops uint64) tx.Amount {
-	return state.NewXRPAmountFromInt(int64(drops))
 }
 
 // serializeAmount serializes a tx.Amount to binary.
@@ -1596,12 +1584,12 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 	// Reference: rippled trustCreate - limits are set based on who set the limit
 	// For AMM trustlines, the limits are 0 on both sides (AMM doesn't set limits)
 	rs := &state.RippleState{
-		Balance:  balance,
-		LowLimit: state.NewIssuedAmountFromValue(0, -100, asset.Currency, lowAccountStr),
+		Balance:   balance,
+		LowLimit:  state.NewIssuedAmountFromValue(0, -100, asset.Currency, lowAccountStr),
 		HighLimit: state.NewIssuedAmountFromValue(0, -100, asset.Currency, highAccountStr),
-		Flags:    0,
-		LowNode:  0,
-		HighNode: 0,
+		Flags:     0,
+		LowNode:   0,
+		HighNode:  0,
 	}
 
 	// Set reserve flag for the side that is NOT the issuer

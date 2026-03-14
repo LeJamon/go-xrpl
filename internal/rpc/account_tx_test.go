@@ -85,18 +85,21 @@ func TestAccountTxErrorValidation(t *testing.T) {
 			params: map[string]interface{}{
 				"account": "0xDEADBEEF",
 			},
-			expectedError: "Account not found.",
-			expectedCode:  19, // actNotFound
-			setupMock: func() {
-				mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
-					return nil, errors.New("account not found")
-				}
+			expectedError: "Malformed account.",
+			expectedCode:  35, // actMalformed (address validation)
+		},
+		{
+			name: "Malformed account address - bad checksum",
+			params: map[string]interface{}{
+				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
 			},
+			expectedError: "Malformed account.",
+			expectedCode:  35, // actMalformed (address validation)
 		},
 		{
 			name: "Account not found - valid format but not in ledger",
 			params: map[string]interface{}{
-				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
+				"account": "rDsbeomae4FXwgQTJp9Rs64Qg9vDiTCdBv",
 			},
 			expectedError: "Account not found.",
 			expectedCode:  19, // actNotFound
@@ -327,11 +330,11 @@ func TestAccountTxBinaryMode(t *testing.T) {
 	txBlobBytes, _ := hex.DecodeString("1200002200000000240000000361D4838D7EA4C680000000000000000000000000005553440000000000E6C92BF47A692162751F6017CF3E40B4AE15285568400000000000000A7321ED5F5AC43F527AE97194A1B29F2E8831A2AEE056431FC596590B5F3F5769AF70774473045022100")
 	metaBytes, _ := hex.DecodeString("201C00000001")
 
-	t.Run("Binary mode returns tx_blob and meta as hex", func(t *testing.T) {
+	t.Run("Binary mode returns tx_blob and meta_blob as hex (API v2)", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
-			ApiVersion: types.ApiVersion1,
+			ApiVersion: types.ApiVersion2,
 		}
 
 		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
@@ -373,21 +376,21 @@ func TestAccountTxBinaryMode(t *testing.T) {
 		require.Len(t, txs, 1)
 
 		tx0 := txs[0].(map[string]interface{})
-		// In binary mode, should have tx_blob as hex string
+		// In binary mode (API v2), should have tx_blob and meta_blob as hex strings
 		assert.Contains(t, tx0, "tx_blob", "Binary mode should return tx_blob")
-		assert.Contains(t, tx0, "meta", "Binary mode should return meta")
-		assert.Contains(t, tx0, "hash", "Binary mode should return hash")
+		assert.Contains(t, tx0, "meta_blob", "Binary mode should return meta_blob")
+		assert.Contains(t, tx0, "ledger_index", "Binary mode should return ledger_index")
 		assert.Equal(t, true, tx0["validated"])
 
 		// tx_blob should be uppercase hex
 		txBlobStr, ok := tx0["tx_blob"].(string)
 		assert.True(t, ok, "tx_blob should be a string")
-		assert.Equal(t, txBlobStr, strings.ToUpper(hex.EncodeToString(txBlobBytes)))
+		assert.Equal(t, strings.ToUpper(hex.EncodeToString(txBlobBytes)), txBlobStr)
 
-		// meta should be uppercase hex
-		metaStr, ok := tx0["meta"].(string)
-		assert.True(t, ok, "meta should be a string")
-		assert.Equal(t, metaStr, strings.ToUpper(hex.EncodeToString(metaBytes)))
+		// meta_blob should be uppercase hex
+		metaBlobStr, ok := tx0["meta_blob"].(string)
+		assert.True(t, ok, "meta_blob should be a string")
+		assert.Equal(t, strings.ToUpper(hex.EncodeToString(metaBytes)), metaBlobStr)
 	})
 
 	t.Run("JSON mode returns decoded tx and meta objects", func(t *testing.T) {
@@ -833,11 +836,6 @@ func TestAccountTxMultipleTransactions(t *testing.T) {
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
-	}
 
 	// Create multiple transaction hashes
 	hash1 := [32]byte{}
@@ -867,49 +865,102 @@ func TestAccountTxMultipleTransactions(t *testing.T) {
 		}, nil
 	}
 
-	// Test in binary mode to get raw hex hashes
-	params := map[string]interface{}{
-		"account": validAccount,
-		"binary":  true,
-	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
+	t.Run("Binary mode - API v2 fields", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion2,
+		}
 
-	result, rpcErr := method.Handle(ctx, paramsJSON)
-	require.Nil(t, rpcErr)
-	require.NotNil(t, result)
+		params := map[string]interface{}{
+			"account": validAccount,
+			"binary":  true,
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
 
-	resultJSON, err := json.Marshal(result)
-	require.NoError(t, err)
-	var resp map[string]interface{}
-	err = json.Unmarshal(resultJSON, &resp)
-	require.NoError(t, err)
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
 
-	txs := resp["transactions"].([]interface{})
-	require.Len(t, txs, 3, "Should return 3 transactions")
+		resultJSON, err := json.Marshal(result)
+		require.NoError(t, err)
+		var resp map[string]interface{}
+		err = json.Unmarshal(resultJSON, &resp)
+		require.NoError(t, err)
 
-	// Verify hash formatting - should be uppercase hex
-	expectedHash1 := strings.ToUpper(hex.EncodeToString(hash1[:]))
-	expectedHash2 := strings.ToUpper(hex.EncodeToString(hash2[:]))
-	expectedHash3 := strings.ToUpper(hex.EncodeToString(hash3[:]))
+		txs := resp["transactions"].([]interface{})
+		require.Len(t, txs, 3, "Should return 3 transactions")
 
-	tx0 := txs[0].(map[string]interface{})
-	tx1 := txs[1].(map[string]interface{})
-	tx2 := txs[2].(map[string]interface{})
+		tx0 := txs[0].(map[string]interface{})
+		tx1 := txs[1].(map[string]interface{})
+		tx2 := txs[2].(map[string]interface{})
 
-	assert.Equal(t, expectedHash1, tx0["hash"], "Hash 1 should be uppercase hex")
-	assert.Equal(t, expectedHash2, tx1["hash"], "Hash 2 should be uppercase hex")
-	assert.Equal(t, expectedHash3, tx2["hash"], "Hash 3 should be uppercase hex")
+		// Verify each transaction has validated=true
+		assert.Equal(t, true, tx0["validated"])
+		assert.Equal(t, true, tx1["validated"])
+		assert.Equal(t, true, tx2["validated"])
 
-	// Verify each transaction has validated=true
-	assert.Equal(t, true, tx0["validated"])
-	assert.Equal(t, true, tx1["validated"])
-	assert.Equal(t, true, tx2["validated"])
+		// Verify ledger_index in binary mode
+		assert.Equal(t, float64(3), tx0["ledger_index"])
+		assert.Equal(t, float64(4), tx1["ledger_index"])
+		assert.Equal(t, float64(5), tx2["ledger_index"])
 
-	// Verify ledger_index in binary mode
-	assert.Equal(t, float64(3), tx0["ledger_index"])
-	assert.Equal(t, float64(4), tx1["ledger_index"])
-	assert.Equal(t, float64(5), tx2["ledger_index"])
+		// Binary mode uses meta_blob, not meta
+		assert.Contains(t, tx0, "meta_blob", "Binary v2 should have meta_blob")
+		assert.Contains(t, tx0, "tx_blob", "Binary v2 should have tx_blob")
+	})
+
+	t.Run("JSON mode - hash at entry level", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion2,
+		}
+
+		params := map[string]interface{}{
+			"account": validAccount,
+			"binary":  false,
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+
+		resultJSON, err := json.Marshal(result)
+		require.NoError(t, err)
+		var resp map[string]interface{}
+		err = json.Unmarshal(resultJSON, &resp)
+		require.NoError(t, err)
+
+		txs := resp["transactions"].([]interface{})
+		require.Len(t, txs, 3, "Should return 3 transactions")
+
+		// Verify hash formatting - should be uppercase hex at entry level
+		expectedHash1 := strings.ToUpper(hex.EncodeToString(hash1[:]))
+		expectedHash2 := strings.ToUpper(hex.EncodeToString(hash2[:]))
+		expectedHash3 := strings.ToUpper(hex.EncodeToString(hash3[:]))
+
+		tx0 := txs[0].(map[string]interface{})
+		tx1 := txs[1].(map[string]interface{})
+		tx2 := txs[2].(map[string]interface{})
+
+		assert.Equal(t, expectedHash1, tx0["hash"], "Hash 1 should be uppercase hex")
+		assert.Equal(t, expectedHash2, tx1["hash"], "Hash 2 should be uppercase hex")
+		assert.Equal(t, expectedHash3, tx2["hash"], "Hash 3 should be uppercase hex")
+
+		// Verify each transaction has validated=true
+		assert.Equal(t, true, tx0["validated"])
+		assert.Equal(t, true, tx1["validated"])
+		assert.Equal(t, true, tx2["validated"])
+
+		// Verify ledger_index at entry level
+		assert.Equal(t, float64(3), tx0["ledger_index"])
+		assert.Equal(t, float64(4), tx1["ledger_index"])
+		assert.Equal(t, float64(5), tx2["ledger_index"])
+	})
 }
 
 // =============================================================================

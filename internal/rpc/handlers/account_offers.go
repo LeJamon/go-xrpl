@@ -21,7 +21,7 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, err
 	}
 
-	if err := RequireAccount(request.Account); err != nil {
+	if err := ValidateAccount(request.Account); err != nil {
 		return nil, err
 	}
 
@@ -36,7 +36,8 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	}
 
 	// Get account offers from the ledger service
-	result, err := types.Services.Ledger.GetAccountOffers(request.Account, ledgerIndex, request.Limit)
+	limit := ClampLimit(request.Limit, LimitAccountOffers, ctx.IsAdmin)
+	result, err := types.Services.Ledger.GetAccountOffers(request.Account, ledgerIndex, limit)
 	if err != nil {
 		if err.Error() == "account not found" {
 			return nil, &types.RpcError{
@@ -56,10 +57,11 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		"validated":    result.Validated,
 	}
 
+	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {
+		response["limit"] = limit
 		response["marker"] = result.Marker
 	}
 
 	return response, nil
 }
-

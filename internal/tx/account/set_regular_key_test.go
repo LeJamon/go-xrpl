@@ -1,9 +1,10 @@
 package account
 
 import (
+	"testing"
+
 	tx2 "github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/signerlist"
-	"testing"
 )
 
 // TestSetRegularKeyValidation tests SetRegularKey transaction validation.

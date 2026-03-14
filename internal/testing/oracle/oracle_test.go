@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"testing"
 
-	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
-	"github.com/LeJamon/goXRPLd/keylet"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
 	oracletest "github.com/LeJamon/goXRPLd/internal/testing/oracle"
+	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,48 +35,6 @@ func defaultLUT(env *jtx.TestEnv) uint32 {
 
 // baseFee returns the base fee used in the test env.
 const baseFee = uint64(10)
-
-// createOracle is a helper to create an oracle and verify success.
-// Returns the LastUpdateTime used.
-func createOracle(t *testing.T, env *jtx.TestEnv, owner *jtx.Account, docID uint32, series []struct {
-	base, quote string
-	price       uint64
-	scale       uint8
-}) uint32 {
-	t.Helper()
-	lut := defaultLUT(env)
-	builder := oracletest.OracleSet(owner, docID, lut).
-		ProviderHex(32).
-		AssetClassHex(8)
-	for _, s := range series {
-		builder = builder.AddPrice(s.base, s.quote, s.price, s.scale)
-	}
-	result := env.Submit(builder.Build())
-	jtx.RequireTxSuccess(t, result)
-	return lut
-}
-
-// pair is a convenience type for price series.
-type pair struct {
-	base, quote string
-	price       uint64
-	scale       uint8
-}
-
-// createOracleP is a helper to create an oracle from pair slice.
-func createOracleP(t *testing.T, env *jtx.TestEnv, owner *jtx.Account, docID uint32, pairs []pair) uint32 {
-	t.Helper()
-	lut := defaultLUT(env)
-	builder := oracletest.OracleSet(owner, docID, lut).
-		ProviderHex(32).
-		AssetClassHex(8)
-	for _, p := range pairs {
-		builder = builder.AddPrice(p.base, p.quote, p.price, p.scale)
-	}
-	result := env.Submit(builder.Build())
-	jtx.RequireTxSuccess(t, result)
-	return lut
-}
 
 // oracleExists checks if an oracle ledger entry exists.
 func oracleExists(t *testing.T, env *jtx.TestEnv, owner *jtx.Account, docID uint32) bool {
@@ -1049,8 +1007,8 @@ func TestInvalidDelete(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("InvalidDocumentID", func(t *testing.T) {
 		result := env.Submit(oracletest.OracleDelete(owner, 2). // docID=2 doesn't exist
-										Fee(baseFee).
-										Build())
+									Fee(baseFee).
+									Build())
 		require.Equal(t, "tecNO_ENTRY", result.Code)
 	})
 
@@ -1547,9 +1505,9 @@ func TestAmendment(t *testing.T) {
 
 func TestMultisig(t *testing.T) {
 	featureSets := []struct {
-		name     string
-		disable  []string
-		skip     bool
+		name    string
+		disable []string
+		skip    bool
 	}{
 		{
 			name:    "AllFeatures",

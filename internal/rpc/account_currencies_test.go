@@ -41,11 +41,19 @@ func newMockAccountCurrenciesLedgerService() *mockAccountCurrenciesLedgerService
 	}
 }
 
-func (m *mockAccountCurrenciesLedgerService) GetCurrentLedgerIndex() uint32   { return m.currentLedgerIndex }
-func (m *mockAccountCurrenciesLedgerService) GetClosedLedgerIndex() uint32    { return m.closedLedgerIndex }
-func (m *mockAccountCurrenciesLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
-func (m *mockAccountCurrenciesLedgerService) AcceptLedger() (uint32, error)   { return m.closedLedgerIndex + 1, nil }
-func (m *mockAccountCurrenciesLedgerService) IsStandalone() bool              { return m.standalone }
+func (m *mockAccountCurrenciesLedgerService) GetCurrentLedgerIndex() uint32 {
+	return m.currentLedgerIndex
+}
+func (m *mockAccountCurrenciesLedgerService) GetClosedLedgerIndex() uint32 {
+	return m.closedLedgerIndex
+}
+func (m *mockAccountCurrenciesLedgerService) GetValidatedLedgerIndex() uint32 {
+	return m.validatedLedgerIndex
+}
+func (m *mockAccountCurrenciesLedgerService) AcceptLedger() (uint32, error) {
+	return m.closedLedgerIndex + 1, nil
+}
+func (m *mockAccountCurrenciesLedgerService) IsStandalone() bool { return m.standalone }
 func (m *mockAccountCurrenciesLedgerService) GetServerInfo() types.LedgerServerInfo {
 	return m.serverInfo
 }
@@ -58,7 +66,7 @@ func (m *mockAccountCurrenciesLedgerService) GetLedgerBySequence(seq uint32) (ty
 func (m *mockAccountCurrenciesLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountCurrenciesLedgerService) SubmitTransaction(txJSON []byte) (*types.SubmitResult, error) {
+func (m *mockAccountCurrenciesLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountCurrenciesLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
@@ -143,7 +151,7 @@ func (m *mockAccountCurrenciesLedgerService) GetGatewayBalances(account string, 
 func (m *mockAccountCurrenciesLedgerService) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountCurrenciesLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*types.DepositAuthorizedResult, error) {
+func (m *mockAccountCurrenciesLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*types.DepositAuthorizedResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountCurrenciesLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
@@ -186,17 +194,17 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		params         interface{}
-		expectedError  string
-		expectedCode   int
-		setupMock      func()
+		name          string
+		params        interface{}
+		expectedError string
+		expectedCode  int
+		setupMock     func()
 	}{
 		{
 			// missing account field
 			name:          "Missing account field - empty params",
 			params:        map[string]interface{}{},
-			expectedError: "Missing field 'account'.",
+			expectedError: "Missing required parameter: account",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -228,33 +236,29 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 		},
 		{
 			// invalid base58 characters (llIIOO)
+			// rippled returns rpcACT_MALFORMED for malformed addresses
 			name: "Malformed account - invalid base58 characters",
 			params: map[string]interface{}{
 				"account": "llIIOO",
 			},
-			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_NOT_FOUND,
-			setupMock: func() {
-				mock.accountCurrenciesErr = errors.New("invalid account address: bad address")
-			},
+			expectedError: "Malformed account.",
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			// Cannot use a seed as account
+			// rippled returns rpcACT_MALFORMED
 			name: "Malformed account - seed format (actMalformed)",
 			params: map[string]interface{}{
 				"account": "Bob",
 			},
-			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_NOT_FOUND,
-			setupMock: func() {
-				mock.accountCurrenciesErr = errors.New("invalid account address: bad address")
-			},
+			expectedError: "Malformed account.",
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			// ask for nonexistent account (actNotFound)
 			name: "Account not found - valid format but not in ledger",
 			params: map[string]interface{}{
-				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
+				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
 			expectedCode:  types.RpcACT_NOT_FOUND,

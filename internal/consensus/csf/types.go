@@ -338,12 +338,12 @@ func (p *Proposal) ID() consensus.TxSetID {
 
 // Validation represents a validation message in the simulation.
 type Validation struct {
-	LedgerID  consensus.LedgerID
-	Seq       uint32
-	SignTime  time.Time
-	SeenTime  time.Time
-	NodeID    PeerID
-	Key       PeerID // Signing key (same as NodeID in simulation)
-	Full      bool
-	Trusted   bool
+	LedgerID consensus.LedgerID
+	Seq      uint32
+	SignTime time.Time
+	SeenTime time.Time
+	NodeID   PeerID
+	Key      PeerID // Signing key (same as NodeID in simulation)
+	Full     bool
+	Trusted  bool
 }

@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24"
+          cache: true
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.11.3
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24"
+          cache: true
+      - run: go build -v ./cmd/xrpld
+
+  test:
+    name: Test (${{ matrix.group }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: integration
+            packages: ./internal/testing/...
+          - group: tx
+            packages: ./internal/tx/...
+          - group: core
+            packages: ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/consensus/... ./internal/peermanagement/...
+          - group: libs
+            packages: ./codec/... ./crypto/... ./shamap/... ./storage/... ./keylet/... ./ledger/... ./amendment/... ./drops/... ./protocol/... ./config/...
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24"
+          cache: true
+      - run: go test -race -count=1 -timeout 15m ${{ matrix.packages }}

@@ -1,8 +1,9 @@
 package clawback
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"testing"
+
+	"github.com/LeJamon/goXRPLd/internal/tx"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/stretchr/testify/assert"
@@ -103,7 +104,7 @@ func TestClawbackValidation(t *testing.T) {
 					BaseTx: *tx.NewBaseTx(tx.TypeClawback, "rIssuer"),
 					Amount: tx.NewIssuedAmountFromFloat64(100.0, "USD", "rHolder"),
 				}
-				flags := uint32(tx.TfUniversalMask)
+				flags := tx.TfUniversalMask
 				clawbackTx.Common.Flags = &flags
 				return clawbackTx
 			}(),

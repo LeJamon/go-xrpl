@@ -63,7 +63,6 @@ func (t *STObject) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
 	m := make(map[string]any)
 
 	for p.HasMore() {
-
 		fi, err := p.ReadField()
 		if err != nil {
 			return nil, fmt.Errorf("ReadField error: %w", err)
@@ -88,7 +87,6 @@ func (t *STObject) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
 			if err != nil {
 				return nil, fmt.Errorf("ToJSON error for VL field %q (type=%s, vlen=%d): %w", fi.FieldName, fi.Type, vlen, err)
 			}
-
 		} else {
 			res, err = st.ToJSON(p)
 			if err != nil {

@@ -337,7 +337,6 @@ func TestEncode(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestDecode(t *testing.T) {
@@ -443,7 +442,6 @@ func TestDecode(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestEncodeForMultisigning(t *testing.T) {
@@ -543,7 +541,6 @@ func TestEncodeForMultisigning(t *testing.T) {
 }
 
 func TestEncodeForSigningClaim(t *testing.T) {
-
 	tt := []struct {
 		description string
 		input       map[string]any

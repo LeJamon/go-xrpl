@@ -73,10 +73,10 @@ func buildManifests(n int) *Manifests {
 		rand.Read(stObject)
 
 		// Add some structure to make it more realistic
-		stObject[0] = byte(i % 256)                // Sequence-like byte
-		stObject[1] = 0xED                         // ed25519 key prefix
-		copy(stObject[2:35], randomBytes(33))      // Public key
-		copy(stObject[35:68], randomBytes(33))     // Signing key
+		stObject[0] = byte(i % 256)                                     // Sequence-like byte
+		stObject[1] = 0xED                                              // ed25519 key prefix
+		copy(stObject[2:35], randomBytes(33))                           // Public key
+		copy(stObject[35:68], randomBytes(33))                          // Signing key
 		copy(stObject[68:100], []byte(fmt.Sprintf("example%d.com", i))) // Domain
 
 		manifests.List[i] = Manifest{STObject: stObject}

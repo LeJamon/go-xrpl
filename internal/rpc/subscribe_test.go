@@ -1145,12 +1145,12 @@ func TestGetSubscribeResponse(t *testing.T) {
 	sm := newTestSubscriptionManager()
 
 	response := sm.GetSubscribeResponse(
-		100,                                                              // ledgerIndex
+		100, // ledgerIndex
 		"4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652", // ledgerHash
-		735000000,                                                        // ledgerTime
-		10,                                                               // feeBase
-		10000000,                                                         // reserveBase
-		2000000,                                                          // reserveInc
+		735000000, // ledgerTime
+		10,        // feeBase
+		10000000,  // reserveBase
+		2000000,   // reserveInc
 	)
 
 	assert.Equal(t, "success", response.Status)
@@ -1327,11 +1327,11 @@ func TestBroadcastToAccounts(t *testing.T) {
 // TestBookMatchesCurrency tests the order book matching logic
 func TestBookMatchesCurrency(t *testing.T) {
 	tests := []struct {
-		name       string
-		takerGets  map[string]interface{}
-		takerPays  map[string]interface{}
-		specGets   types.CurrencySpec
-		specPays   types.CurrencySpec
+		name        string
+		takerGets   map[string]interface{}
+		takerPays   map[string]interface{}
+		specGets    types.CurrencySpec
+		specPays    types.CurrencySpec
 		shouldMatch bool
 	}{
 		{

@@ -466,6 +466,377 @@ func TestSign_Metadata(t *testing.T) {
 }
 
 // =============================================================================
+// Sign: fee_mult_max / fee_div_max Tests
+// =============================================================================
+
+func TestSign_FeeMultMax_DefaultAccepted(t *testing.T) {
+	// With default fee_mult_max=10 and fee_div_max=1, a baseFee of 10
+	// should be accepted (10 <= 10*10/1 = 100).
+	mock := newMockLedgerService()
+	cleanup := setupTestServices(mock)
+	defer cleanup()
+
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+	}
+
+	// No Fee in tx_json, auto-fill will kick in
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000"
+		},
+		"passphrase": "masterpassphrase",
+		"offline": false
+	}`)
+	result, err := handler.Handle(ctx, params)
+	require.Nil(t, err)
+	require.NotNil(t, result)
+
+	resultMap := result.(map[string]interface{})
+	txJson := resultMap["tx_json"].(map[string]interface{})
+	// Fee should have been auto-filled
+	assert.Equal(t, "10", txJson["Fee"])
+}
+
+func TestSign_FeeMultMax_ZeroRejects(t *testing.T) {
+	// fee_mult_max=0 means limit = baseFee * 0 / 1 = 0.
+	// Since networkFee (10) > 0, should return rpcHIGH_FEE.
+	mock := newMockLedgerService()
+	cleanup := setupTestServices(mock)
+	defer cleanup()
+
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000"
+		},
+		"passphrase": "masterpassphrase",
+		"fee_mult_max": 0
+	}`)
+	_, err := handler.Handle(ctx, params)
+	require.NotNil(t, err)
+	assert.Equal(t, types.RpcHIGH_FEE, err.Code)
+	assert.Contains(t, err.Message, "exceeds the requested tx limit")
+}
+
+func TestSign_FeeDivMax_LargeRejects(t *testing.T) {
+	// fee_div_max=100 means limit = baseFee * 10 / 100 = 1.
+	// Since networkFee (10) > 1, should return rpcHIGH_FEE.
+	mock := newMockLedgerService()
+	cleanup := setupTestServices(mock)
+	defer cleanup()
+
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000"
+		},
+		"passphrase": "masterpassphrase",
+		"fee_div_max": 100
+	}`)
+	_, err := handler.Handle(ctx, params)
+	require.NotNil(t, err)
+	assert.Equal(t, types.RpcHIGH_FEE, err.Code)
+	assert.Contains(t, err.Message, "exceeds the requested tx limit")
+}
+
+func TestSign_FeeMultMax_NegativeRejectsInvalidParams(t *testing.T) {
+	// Negative fee_mult_max should return rpcINVALID_PARAMS.
+	// Matches rippled: mult < 0 -> rpcINVALID_PARAMS
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Fee": "10",
+			"Sequence": 1,
+			"LastLedgerSequence": 100
+		},
+		"passphrase": "masterpassphrase",
+		"offline": true,
+		"fee_mult_max": -1
+	}`)
+	_, err := handler.Handle(ctx, params)
+	require.NotNil(t, err)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Contains(t, err.Message, "fee_mult_max")
+	assert.Contains(t, err.Message, "a positive integer")
+}
+
+func TestSign_FeeDivMax_ZeroRejectsInvalidParams(t *testing.T) {
+	// fee_div_max=0 should return rpcINVALID_PARAMS (not positive).
+	// Matches rippled: div <= 0 -> rpcINVALID_PARAMS
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Fee": "10",
+			"Sequence": 1,
+			"LastLedgerSequence": 100
+		},
+		"passphrase": "masterpassphrase",
+		"offline": true,
+		"fee_div_max": 0
+	}`)
+	_, err := handler.Handle(ctx, params)
+	require.NotNil(t, err)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Contains(t, err.Message, "fee_div_max")
+	assert.Contains(t, err.Message, "a positive integer")
+}
+
+func TestSign_FeeDivMax_NegativeRejectsInvalidParams(t *testing.T) {
+	// Negative fee_div_max should return rpcINVALID_PARAMS.
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Fee": "10",
+			"Sequence": 1,
+			"LastLedgerSequence": 100
+		},
+		"passphrase": "masterpassphrase",
+		"offline": true,
+		"fee_div_max": -5
+	}`)
+	_, err := handler.Handle(ctx, params)
+	require.NotNil(t, err)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Contains(t, err.Message, "fee_div_max")
+}
+
+func TestSign_FeeMultMax_FloatRejectsHighFee(t *testing.T) {
+	// Float fee_mult_max should return rpcHIGH_FEE (not rpcINVALID_PARAMS).
+	// Matches rippled: isInt() false -> rpcHIGH_FEE
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Fee": "10",
+			"Sequence": 1,
+			"LastLedgerSequence": 100
+		},
+		"passphrase": "masterpassphrase",
+		"offline": true,
+		"fee_mult_max": 1.5
+	}`)
+	_, err := handler.Handle(ctx, params)
+	require.NotNil(t, err)
+	assert.Equal(t, types.RpcHIGH_FEE, err.Code)
+	assert.Contains(t, err.Message, "fee_mult_max")
+	assert.Contains(t, err.Message, "a positive integer")
+}
+
+func TestSign_FeeMultMax_StringRejectsHighFee(t *testing.T) {
+	// String fee_mult_max should return rpcHIGH_FEE.
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Fee": "10",
+			"Sequence": 1,
+			"LastLedgerSequence": 100
+		},
+		"passphrase": "masterpassphrase",
+		"offline": true,
+		"fee_mult_max": "ten"
+	}`)
+	_, err := handler.Handle(ctx, params)
+	require.NotNil(t, err)
+	assert.Equal(t, types.RpcHIGH_FEE, err.Code)
+	assert.Contains(t, err.Message, "fee_mult_max")
+}
+
+func TestSign_FeeAlreadySet_IgnoresFeeMultMax(t *testing.T) {
+	// When Fee is already set in tx_json, fee_mult_max / fee_div_max
+	// should be ignored (the tx already has a fee).
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+	}
+
+	// fee_mult_max=0 would normally reject, but Fee is provided
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Fee": "10",
+			"Sequence": 1,
+			"LastLedgerSequence": 100
+		},
+		"passphrase": "masterpassphrase",
+		"offline": true,
+		"fee_mult_max": 0
+	}`)
+	result, err := handler.Handle(ctx, params)
+	require.Nil(t, err, "fee_mult_max should be ignored when Fee is in tx_json")
+	require.NotNil(t, result)
+}
+
+// =============================================================================
+// Sign: DeliverMax injection Tests
+// =============================================================================
+
+func TestSign_DeliverMax_APIv1(t *testing.T) {
+	// API v1: DeliverMax should be added for Payment, Amount kept
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Fee": "10",
+			"Sequence": 1,
+			"LastLedgerSequence": 100
+		},
+		"passphrase": "masterpassphrase",
+		"offline": true
+	}`)
+	result, err := handler.Handle(ctx, params)
+	require.Nil(t, err)
+
+	resultMap := result.(map[string]interface{})
+	txJson := resultMap["tx_json"].(map[string]interface{})
+
+	// API v1: Amount is kept, DeliverMax is added
+	assert.Equal(t, "1000000", txJson["Amount"])
+	assert.Equal(t, "1000000", txJson["DeliverMax"])
+}
+
+func TestSign_DeliverMax_APIv2(t *testing.T) {
+	// API v2: DeliverMax replaces Amount for Payment
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion2,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Fee": "10",
+			"Sequence": 1,
+			"LastLedgerSequence": 100
+		},
+		"passphrase": "masterpassphrase",
+		"offline": true
+	}`)
+	result, err := handler.Handle(ctx, params)
+	require.Nil(t, err)
+
+	resultMap := result.(map[string]interface{})
+	txJson := resultMap["tx_json"].(map[string]interface{})
+
+	// API v2: Amount removed, DeliverMax added
+	_, hasAmount := txJson["Amount"]
+	assert.False(t, hasAmount, "API v2 should remove Amount for Payment")
+	assert.Equal(t, "1000000", txJson["DeliverMax"])
+
+	// API v2: hash at root level
+	assert.Contains(t, resultMap, "hash")
+}
+
+func TestSign_NoDeliverMax_NonPayment(t *testing.T) {
+	// Non-Payment: no DeliverMax regardless of API version
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "AccountSet",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Fee": "10",
+			"Sequence": 1,
+			"LastLedgerSequence": 100
+		},
+		"passphrase": "masterpassphrase",
+		"offline": true
+	}`)
+	result, err := handler.Handle(ctx, params)
+	require.Nil(t, err)
+
+	resultMap := result.(map[string]interface{})
+	txJson := resultMap["tx_json"].(map[string]interface{})
+	_, hasDeliverMax := txJson["DeliverMax"]
+	assert.False(t, hasDeliverMax, "Non-Payment should not have DeliverMax")
+}
+
+// =============================================================================
 // SignFor Tests
 // =============================================================================
 
@@ -676,6 +1047,8 @@ func TestSubmitMultisigned_MissingAccount(t *testing.T) {
 			"TransactionType": "Payment",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000",
+			"Fee": "12",
+			"Sequence": 1,
 			"SigningPubKey": "",
 			"Signers": []
 		}
@@ -702,13 +1075,15 @@ func TestSubmitMultisigned_NonEmptySigningPubKey(t *testing.T) {
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000",
+			"Fee": "12",
+			"Sequence": 1,
 			"SigningPubKey": "0330E7FC9D56BB25D6893BA3F317AE5BCF33B3291BD63DB32654A313222F7FD020",
 			"Signers": []
 		}
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Contains(t, err.Message, "empty SigningPubKey")
+	assert.Contains(t, err.Message, "SigningPubKey")
 }
 
 func TestSubmitMultisigned_EmptySignersArray(t *testing.T) {
@@ -728,13 +1103,15 @@ func TestSubmitMultisigned_EmptySignersArray(t *testing.T) {
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000",
+			"Fee": "12",
+			"Sequence": 1,
 			"SigningPubKey": "",
 			"Signers": []
 		}
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Contains(t, err.Message, "at least one Signer")
+	assert.Contains(t, err.Message, "Signers array may not be empty")
 }
 
 func TestSubmitMultisigned_InvalidSignerFormat(t *testing.T) {
@@ -754,6 +1131,8 @@ func TestSubmitMultisigned_InvalidSignerFormat(t *testing.T) {
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000",
+			"Fee": "12",
+			"Sequence": 1,
 			"SigningPubKey": "",
 			"Signers": [
 				{
@@ -764,7 +1143,7 @@ func TestSubmitMultisigned_InvalidSignerFormat(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Contains(t, err.Message, "Signer entry")
+	assert.Contains(t, err.Message, "Signer entr")
 }
 
 func TestSubmitMultisigned_MissingSignerAccount(t *testing.T) {
@@ -784,6 +1163,8 @@ func TestSubmitMultisigned_MissingSignerAccount(t *testing.T) {
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000",
+			"Fee": "12",
+			"Sequence": 1,
 			"SigningPubKey": "",
 			"Signers": [
 				{
@@ -817,6 +1198,8 @@ func TestSubmitMultisigned_MissingSigningPubKey(t *testing.T) {
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000",
+			"Fee": "12",
+			"Sequence": 1,
 			"SigningPubKey": "",
 			"Signers": [
 				{
@@ -850,6 +1233,8 @@ func TestSubmitMultisigned_MissingTxnSignature(t *testing.T) {
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000",
+			"Fee": "12",
+			"Sequence": 1,
 			"SigningPubKey": "",
 			"Signers": [
 				{

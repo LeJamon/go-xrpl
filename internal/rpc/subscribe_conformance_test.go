@@ -413,12 +413,12 @@ func TestSubscribeConformanceLedgerResponseFields(t *testing.T) {
 	sm := newTestSubscriptionManager()
 
 	response := sm.GetSubscribeResponse(
-		2,                                                                // ledgerIndex
+		2, // ledgerIndex
 		"ABC123DEF456ABC123DEF456ABC123DEF456ABC123DEF456ABC123DEF456AB", // ledgerHash (64 hex)
-		735000000,                                                        // ledgerTime
-		10,                                                               // feeBase
-		10000000,                                                         // reserveBase
-		2000000,                                                          // reserveInc
+		735000000, // ledgerTime
+		10,        // feeBase
+		10000000,  // reserveBase
+		2000000,   // reserveInc
 	)
 
 	// Verify all required fields per rippled conformance

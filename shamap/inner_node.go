@@ -479,26 +479,6 @@ func (n *InnerNode) HasChildren() bool {
 	return !n.IsEmpty()
 }
 
-// setChildHashForProof is used when deserializing an InnerNode for proof verification
-func (n *InnerNode) setChildHashForProof(index int, hash [32]byte) error {
-	if index < 0 || index >= BranchFactor {
-		return ErrInvalidBranch
-	}
-
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	n.hashes[index] = hash
-	n.children[index] = nil // No actual child, just hash
-	if !isZeroHash(hash) {
-		n.isBranch |= 1 << index
-	} else {
-		n.isBranch &= ^(1 << index)
-	}
-
-	return nil
-}
-
 func isZeroHash(hash [32]byte) bool {
 	for _, b := range hash {
 		if b != 0 {

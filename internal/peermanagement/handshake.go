@@ -420,8 +420,8 @@ const (
 
 	// Feature names as defined in rippled
 	FeatureNameCompr        = "compr"
-	FeatureNameVPRR         = "vprr"  // validation/proposal reduce-relay
-	FeatureNameTXRR         = "txrr"  // transaction reduce-relay
+	FeatureNameVPRR         = "vprr" // validation/proposal reduce-relay
+	FeatureNameTXRR         = "txrr" // transaction reduce-relay
 	FeatureNameLedgerReplay = "ledgerreplay"
 
 	// Delimiters

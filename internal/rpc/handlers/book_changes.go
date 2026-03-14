@@ -79,11 +79,17 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 			return true
 		}
 
-		// Get TransactionType to detect OfferCancel
+		// Get TransactionType to detect OfferCancel/OfferCreate with OfferSequence
 		txType, _ := storedTx.TxJSON["TransactionType"].(string)
-		txSequence := uint32(0)
-		if seq, ok := storedTx.TxJSON["Sequence"].(float64); ok {
-			txSequence = uint32(seq)
+
+		// Read OfferSequence from the tx (used by both OfferCancel and OfferCreate
+		// to cancel a prior offer). Reference: rippled BookChanges.h lines 67-81
+		var offerCancel *uint32
+		if txType == "OfferCancel" || txType == "OfferCreate" {
+			if offerSeqVal, ok := storedTx.TxJSON["OfferSequence"].(float64); ok {
+				v := uint32(offerSeqVal)
+				offerCancel = &v
+			}
 		}
 
 		// Get AffectedNodes from metadata
@@ -124,10 +130,12 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 				continue
 			}
 
-			// Skip explicitly cancelled offers (OfferCancel matching this offer's Sequence)
-			if txType == "OfferCancel" && nodeType == "DeletedNode" {
+			// Skip explicitly cancelled offers: filter out deleted offers whose
+			// Sequence matches the tx's OfferSequence field.
+			// Reference: rippled BookChanges.h lines 112-115
+			if nodeType == "DeletedNode" && offerCancel != nil {
 				if offerSeq, ok := finalFields["Sequence"].(float64); ok {
-					if uint32(offerSeq) == txSequence {
+					if uint32(offerSeq) == *offerCancel {
 						continue
 					}
 				}
@@ -143,34 +151,60 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 				continue
 			}
 
-			deltaGets := new(big.Float).Sub(prevGets.value, finalGets.value)
-			deltaPays := new(big.Float).Sub(prevPays.value, finalPays.value)
+			// Reference: rippled BookChanges.h lines 119-122
+			// deltaGets = finalFields.TakerGets - previousFields.TakerGets
+			// deltaPays = finalFields.TakerPays - previousFields.TakerPays
+			deltaGets := new(big.Float).Sub(finalGets.value, prevGets.value)
+			deltaPays := new(big.Float).Sub(finalPays.value, prevPays.value)
 
-			// Skip if no actual change
-			if deltaGets.Sign() == 0 || deltaPays.Sign() == 0 {
+			// Determine currency pair ordering.
+			// Reference: rippled BookChanges.h lines 124-131
+			// noswap = isXRP(deltaGets) ? true : (isXRP(deltaPays) ? false : (g < p))
+			g := formatCurrencyKey(finalGets)
+			p := formatCurrencyKey(finalPays)
+
+			var noswap bool
+			if finalGets.isXRP {
+				noswap = true
+			} else if finalPays.isXRP {
+				noswap = false
+			} else {
+				noswap = g < p
+			}
+
+			var first, second *big.Float
+			var pairKey string
+			if noswap {
+				first = deltaGets
+				second = deltaPays
+				pairKey = g + "|" + p
+			} else {
+				first = deltaPays
+				second = deltaGets
+				pairKey = p + "|" + g
+			}
+
+			// Skip if second is zero
+			if second.Sign() == 0 {
 				continue
 			}
 
-			// Determine currency pair (canonical ordering)
-			currA := formatCurrencyKey(finalGets)
-			currB := formatCurrencyKey(finalPays)
+			// rate = first / second (matching rippled's divide)
+			rate := new(big.Float).Quo(first, second)
 
-			// Ensure canonical ordering: XRP first, then alphabetical
-			swapped := false
-			if currB < currA {
-				currA, currB = currB, currA
-				deltaGets, deltaPays = deltaPays, deltaGets
-				swapped = true
+			// Take absolute values for volume accumulation
+			absFirst := new(big.Float).Abs(first)
+			absSecond := new(big.Float).Abs(second)
+
+			// Determine currency labels for output
+			var currA, currB string
+			if noswap {
+				currA = g
+				currB = p
+			} else {
+				currA = p
+				currB = g
 			}
-			_ = swapped
-
-			pairKey := currA + "|" + currB
-
-			// Compute exchange rate
-			rate := new(big.Float).Quo(
-				new(big.Float).Abs(deltaPays),
-				new(big.Float).Abs(deltaGets),
-			)
 
 			// Update or create change entry
 			bc, exists := changes[pairKey]
@@ -198,8 +232,8 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 			}
 
 			// Accumulate volumes (absolute values)
-			bc.VolumeA.Add(bc.VolumeA, new(big.Float).Abs(deltaGets))
-			bc.VolumeB.Add(bc.VolumeB, new(big.Float).Abs(deltaPays))
+			bc.VolumeA.Add(bc.VolumeA, absFirst)
+			bc.VolumeB.Add(bc.VolumeB, absSecond)
 		}
 
 		return true
@@ -303,4 +337,3 @@ func formatBigFloat(f *big.Float) string {
 	}
 	return f.Text('f', 6)
 }
-

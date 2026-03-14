@@ -4,8 +4,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/LeJamon/goXRPLd/protocol"
 	"strings"
+
+	"github.com/LeJamon/goXRPLd/protocol"
 
 	"github.com/LeJamon/goXRPLd/crypto/common"
 )

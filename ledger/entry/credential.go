@@ -2,7 +2,6 @@ package entry
 
 import (
 	"errors"
-
 )
 
 // Credential represents a verifiable credential ledger entry

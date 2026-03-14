@@ -5,9 +5,9 @@ import (
 	"encoding/hex"
 
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -97,9 +97,9 @@ func (p *PaymentChannelFund) RequiredAmendments() [][32]byte {
 
 // Apply applies a PaymentChannelFund transaction
 // Reference: rippled PayChan.cpp PayChanFund::doApply()
-func (pf *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
+func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Parse channel ID
-	channelID, err := hex.DecodeString(pf.Channel)
+	channelID, err := hex.DecodeString(p.Channel)
 	if err != nil || len(channelID) != 32 {
 		return tx.TemINVALID
 	}
@@ -129,14 +129,14 @@ func (pf *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Verify sender is the channel owner
-	accountID, _ := state.DecodeAccountID(pf.Account)
+	accountID, _ := state.DecodeAccountID(p.Account)
 	if channel.Account != accountID {
 		return tx.TecNO_PERMISSION
 	}
 
 	// Handle Expiration extension
 	// Reference: rippled PayChan.cpp doApply() lines 370-381
-	if pf.Expiration != nil {
+	if p.Expiration != nil {
 		// minExpiration = closeTime + settleDelay
 		minExpiration := closeTime + channel.SettleDelay
 
@@ -146,16 +146,16 @@ func (pf *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// New expiration must be >= minExpiration
-		if *pf.Expiration < minExpiration {
+		if *p.Expiration < minExpiration {
 			return tx.TemBAD_EXPIRATION
 		}
 
-		channel.Expiration = *pf.Expiration
+		channel.Expiration = *p.Expiration
 	}
 
 	// Reserve check
 	// Reference: rippled PayChan.cpp doApply() lines 383-387
-	amount := uint64(pf.Amount.Drops())
+	amount := uint64(p.Amount.Drops())
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount)
 	if ctx.Account.Balance < reserve {
 		return tx.TecINSUFFICIENT_RESERVE

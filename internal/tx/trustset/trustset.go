@@ -2,10 +2,10 @@ package trustset
 
 import (
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/amm"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -529,7 +529,6 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// Increment owner count for the transaction sender
 		ctx.Account.OwnerCount++
-
 	} else {
 		// Modify existing trust line
 		trustLineData, err := ctx.View.Read(trustLineKey)
@@ -664,8 +663,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Check if trust line should be deleted
-		bLowDefRipple := (issuerAccount.Flags & state.LsfDefaultRipple) != 0
-		bHighDefRipple := (ctx.Account.Flags & state.LsfDefaultRipple) != 0
+		var bLowDefRipple, bHighDefRipple bool
 		if bHigh {
 			bLowDefRipple = (issuerAccount.Flags & state.LsfDefaultRipple) != 0
 			bHighDefRipple = (ctx.Account.Flags & state.LsfDefaultRipple) != 0

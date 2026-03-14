@@ -415,13 +415,13 @@ func TestFullKeyDerivationChainSecp256k1(t *testing.T) {
 	// Test vectors from rippled for "masterpassphrase" with secp256k1
 	// Note: We only test account-related values since DeriveKeypair derives account keys
 	expected := struct {
-		seed              string
-		accountAddress    string
-		accountPublic     string
+		seed           string
+		accountAddress string
+		accountPublic  string
 	}{
-		seed:              "snoPBrXtMeMyMHUVTgbuqAfg1SUTb",
-		accountAddress:    "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-		accountPublic:     "aBQG8RQAzjs1eTKFEAQXr2gS4utcDiEC9wmi7pfUPTi27VCahwgw",
+		seed:           "snoPBrXtMeMyMHUVTgbuqAfg1SUTb",
+		accountAddress: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		accountPublic:  "aBQG8RQAzjs1eTKFEAQXr2gS4utcDiEC9wmi7pfUPTi27VCahwgw",
 	}
 
 	// Step 1: Generate seed from passphrase
@@ -461,15 +461,15 @@ func TestFullKeyDerivationChainSecp256k1(t *testing.T) {
 func TestFullKeyDerivationChainED25519(t *testing.T) {
 	// Test vectors from rippled for "masterpassphrase" with ed25519
 	expected := struct {
-		nodePublic        string
-		nodeID            string
-		accountAddress    string
-		accountPublic     string
+		nodePublic     string
+		nodeID         string
+		accountAddress string
+		accountPublic  string
 	}{
-		nodePublic:        "nHUeeJCSY2dM71oxM8Cgjouf5ekTuev2mwDpc374aLMxzDLXNmjf",
-		nodeID:            "AA066C988C712815CC37AF71472B7CBBBD4E2A0A",
-		accountAddress:    "rGWrZyQqhTp9Xu7G5Pkayo7bXjH4k4QYpf",
-		accountPublic:     "aKGheSBjmCsKJVuLNKRAKpZXT6wpk2FCuEZAXJupXgdAxX5THCqR",
+		nodePublic:     "nHUeeJCSY2dM71oxM8Cgjouf5ekTuev2mwDpc374aLMxzDLXNmjf",
+		nodeID:         "AA066C988C712815CC37AF71472B7CBBBD4E2A0A",
+		accountAddress: "rGWrZyQqhTp9Xu7G5Pkayo7bXjH4k4QYpf",
+		accountPublic:  "aKGheSBjmCsKJVuLNKRAKpZXT6wpk2FCuEZAXJupXgdAxX5THCqR",
 	}
 
 	// Step 1: Generate seed from passphrase
@@ -510,9 +510,9 @@ func TestFullKeyDerivationChainED25519(t *testing.T) {
 // TestSeedAlgorithmDetection tests that decoding correctly identifies the algorithm.
 func TestSeedAlgorithmDetection(t *testing.T) {
 	testcases := []struct {
-		name           string
-		seed           string
-		expectedAlgo   string
+		name         string
+		seed         string
+		expectedAlgo string
 	}{
 		{
 			name:         "secp256k1 seed from masterpassphrase",

@@ -23,15 +23,20 @@ type ripplePathFindRequest struct {
 }
 
 // ripplePathFindResponse represents the ripple_path_find RPC response.
+// Reference: rippled PathRequest::doUpdate() builds newStatus with these fields.
 type ripplePathFindResponse struct {
 	Alternatives          []pathAlternativeJSON `json:"alternatives"`
 	DestinationAccount    string                `json:"destination_account"`
+	DestinationAmount     interface{}           `json:"destination_amount"`
 	DestinationCurrencies []string              `json:"destination_currencies"`
+	FullReply             bool                  `json:"full_reply"`
+	SourceAccount         string                `json:"source_account"`
 }
 
 type pathAlternativeJSON struct {
-	SourceAmount  interface{}          `json:"source_amount"`
-	PathsComputed [][]payment.PathStep `json:"paths_computed"`
+	PathsCanonical []interface{}        `json:"paths_canonical"`
+	PathsComputed  [][]payment.PathStep `json:"paths_computed"`
+	SourceAmount   interface{}          `json:"source_amount"`
 }
 
 // RipplePathFindMethod handles the ripple_path_find RPC method.
@@ -109,24 +114,23 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	pr := pathfinder.NewPathRequest(srcAccount, dstAccount, dstAmount, sendMax, srcCurrencies, false)
 	result := pr.Execute(view)
 
-	// Build response
+	// Build response matching rippled PathRequest::doUpdate() format.
+	// Reference: rippled PathRequest.cpp lines 691-777
 	response := ripplePathFindResponse{
 		DestinationAccount:    request.DestinationAccount,
+		DestinationAmount:     formatAmountJSON(dstAmount),
 		DestinationCurrencies: result.DestinationCurrencies,
+		FullReply:             true, // rippled sets !fast; legacy path always does a full reply
+		SourceAccount:         request.SourceAccount,
 	}
 
 	for _, alt := range result.Alternatives {
 		jAlt := pathAlternativeJSON{
-			PathsComputed: alt.PathsComputed,
-		}
-		if alt.SourceAmount.IsNative() {
-			jAlt.SourceAmount = alt.SourceAmount.Value()
-		} else {
-			jAlt.SourceAmount = map[string]string{
-				"currency": alt.SourceAmount.Currency,
-				"issuer":   alt.SourceAmount.Issuer,
-				"value":    alt.SourceAmount.Value(),
-			}
+			// paths_canonical is always an empty array for the legacy ripple_path_find API.
+			// Reference: rippled PathRequest.cpp line 653
+			PathsCanonical: []interface{}{},
+			PathsComputed:  alt.PathsComputed,
+			SourceAmount:   formatAmountJSON(alt.SourceAmount),
 		}
 		response.Alternatives = append(response.Alternatives, jAlt)
 	}
@@ -151,6 +155,21 @@ func (m *RipplePathFindMethod) SupportedApiVersions() []int {
 
 func (m *RipplePathFindMethod) RequiredCondition() types.Condition {
 	return types.NeedsCurrentLedger
+}
+
+// formatAmountJSON formats an Amount for JSON output, matching rippled's
+// STAmount::getJson(JsonOptions::none) behavior.
+// XRP amounts are serialized as a string of drops.
+// IOU amounts are serialized as {"currency": ..., "issuer": ..., "value": ...}.
+func formatAmountJSON(amt state.Amount) interface{} {
+	if amt.IsNative() {
+		return amt.Value()
+	}
+	return map[string]string{
+		"currency": amt.Currency,
+		"issuer":   amt.Issuer,
+		"value":    amt.Value(),
+	}
 }
 
 // parsePathFindAmount parses a JSON amount for path finding.

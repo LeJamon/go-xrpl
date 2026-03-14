@@ -278,11 +278,11 @@ func signerCountBasedOwnerCountDelta(entryCount int) int {
 
 // Apply applies the SignerListSet transaction to ledger state.
 // Reference: rippled SetSignerList.cpp doApply(), replaceSignerList(), destroySignerList()
-func (sl *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
+func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	signerListKey := keylet.SignerList(ctx.AccountID)
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 
-	if sl.SignerQuorum == 0 {
+	if s.SignerQuorum == 0 {
 		// --- Destroy signer list ---
 		// Reference: rippled SetSignerList.cpp destroySignerList()
 
@@ -313,9 +313,9 @@ func (sl *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// The required reserve changes based on featureMultiSignReserve.
 	// Reference: rippled SetSignerList.cpp:359-366
 	addedOwnerCount := 1
-	flags := uint32(state.LsfOneOwnerCount)
+	flags := state.LsfOneOwnerCount
 	if !ctx.Rules().Enabled(amendment.FeatureMultiSignReserve) {
-		addedOwnerCount = signerCountBasedOwnerCountDelta(len(sl.SignerEntries))
+		addedOwnerCount = signerCountBasedOwnerCountDelta(len(s.SignerEntries))
 		flags = 0
 	}
 
@@ -332,8 +332,8 @@ func (sl *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Build the signer entries for serialization.
 	// Sort by account address, matching rippled's SetSignerList.cpp preflight() (line 66).
-	sleEntries := make([]state.SignerEntry, len(sl.SignerEntries))
-	for i, e := range sl.SignerEntries {
+	sleEntries := make([]state.SignerEntry, len(s.SignerEntries))
+	for i, e := range s.SignerEntries {
 		sleEntries[i] = state.SignerEntry{
 			Account:      e.SignerEntry.Account,
 			SignerWeight: e.SignerEntry.SignerWeight,
@@ -344,7 +344,7 @@ func (sl *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	})
 
 	// Serialize and insert the new signer list.
-	signerListData, err := state.SerializeSignerList(sl.SignerQuorum, sleEntries, ctx.AccountID, flags)
+	signerListData, err := state.SerializeSignerList(s.SignerQuorum, sleEntries, ctx.AccountID, flags)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

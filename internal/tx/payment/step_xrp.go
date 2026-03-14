@@ -1,9 +1,9 @@
 package payment
 
 import (
-	"github.com/LeJamon/goXRPLd/keylet"
-	tx "github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	tx "github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // XRPEndpointStep handles XRP as source (first step) or destination (last step).

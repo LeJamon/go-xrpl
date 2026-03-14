@@ -277,7 +277,7 @@ type PathFindEvent struct {
 type PathAlternative struct {
 	PathsCanonical [][]types.PathStep `json:"paths_canonical,omitempty"` // Canonical path representation
 	PathsComputed  [][]types.PathStep `json:"paths_computed,omitempty"`  // Computed paths
-	SourceAmount   json.RawMessage        `json:"source_amount"`             // Amount to send
+	SourceAmount   json.RawMessage    `json:"source_amount"`             // Amount to send
 }
 
 // PathStep represents a step in a payment path

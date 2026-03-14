@@ -21,8 +21,15 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		return nil, err
 	}
 
-	if err := RequireAccount(request.Account); err != nil {
+	if err := ValidateAccount(request.Account); err != nil {
 		return nil, err
+	}
+
+	// Validate destination_account parameter if provided (rippled: rpcACT_MALFORMED)
+	if request.DestinationAccount != "" {
+		if !types.IsValidXRPLAddress(request.DestinationAccount) {
+			return nil, types.RpcErrorActMalformed("Destination account malformed.")
+		}
 	}
 
 	if err := RequireLedgerService(); err != nil {
@@ -36,11 +43,12 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	}
 
 	// Get account channels from the ledger service
+	limit := ClampLimit(request.Limit, LimitAccountChannels, ctx.IsAdmin)
 	result, err := types.Services.Ledger.GetAccountChannels(
 		request.Account,
 		request.DestinationAccount,
 		ledgerIndex,
-		request.Limit,
+		limit,
 	)
 	if err != nil {
 		if err.Error() == "account not found" {
@@ -100,10 +108,11 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		"validated":    result.Validated,
 	}
 
+	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {
+		response["limit"] = limit
 		response["marker"] = result.Marker
 	}
 
 	return response, nil
 }
-

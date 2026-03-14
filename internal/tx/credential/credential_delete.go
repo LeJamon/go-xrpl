@@ -172,7 +172,7 @@ func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Permission check: only subject or issuer can delete non-expired credentials
 	// Anyone can delete expired credentials
 	closeTime := ctx.Config.ParentCloseTime
-	isExpired := checkCredentialExpired(cred, closeTime)
+	isExpired := CheckCredentialExpired(cred, closeTime)
 	isSubject := subjectID == ctx.AccountID
 	isIssuer := issuerID == ctx.AccountID
 

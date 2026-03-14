@@ -9,13 +9,13 @@ import (
 	"math"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	paymenttx "github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/amm"
 	offerbuild "github.com/LeJamon/goXRPLd/internal/testing/offer"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	paymenttx "github.com/LeJamon/goXRPLd/internal/tx/payment"
 )
 
 // expectIOUBalance checks an IOU balance with tolerance for float64 precision.
@@ -827,9 +827,9 @@ func TestAMMBookStep_FixDefaultInnerObj(t *testing.T) {
 	// In C++ without fixInnerObjTemplate, no close, fee=9: SUCCESS, tefEXCEPTION, SUCCESS, SUCCESS
 	// In Go: ALL succeed because we don't have C++ STObject template caching.
 	cases := []struct {
-		name         string
-		tradingFee   uint16
-		closeLedger  bool
+		name        string
+		tradingFee  uint16
+		closeLedger bool
 	}{
 		{"fee0_close", 0, true},
 		{"fee0_noclose", 0, false},
@@ -2193,16 +2193,17 @@ func TestAMMBookStep_SellFlagBasic(t *testing.T) {
 // Reference: rippled AMMExtended_test.cpp testSellFlagExceedLimit (line 656)
 //
 // Setup:
-//   starting_xrp = XRP(100) + reserve(env,1) + 2*baseFee
-//                 = 100M + 250M + 20 = 350,000,020 drops
-//   Fund gw and alice with starting_xrp, bob with XRP(2000).
-//   Bob creates AMM: XRP(1000)/USD(2200).
-//   Alice creates offer: TakerPays=USD(100), TakerGets=XRP(200) with tfSell.
-//   Alice only has ~100 XRP available (350M drops - 250M reserve - fees).
-//   tfSell means sell at least TakerGets, but alice can only sell 100 XRP.
-//   Pool K = 1000*2200 = 2,200,000. After +100 XRP: 1100 * x = 2,200,000, x = 2000.
-//   Alice gets 200 USD (more than 100 asked). Pool: XRP(1100)/USD(2000).
-//   Alice XRP = 250,000,000 drops (exactly the reserve for 1 item).
+//
+//	starting_xrp = XRP(100) + reserve(env,1) + 2*baseFee
+//	              = 100M + 250M + 20 = 350,000,020 drops
+//	Fund gw and alice with starting_xrp, bob with XRP(2000).
+//	Bob creates AMM: XRP(1000)/USD(2200).
+//	Alice creates offer: TakerPays=USD(100), TakerGets=XRP(200) with tfSell.
+//	Alice only has ~100 XRP available (350M drops - 250M reserve - fees).
+//	tfSell means sell at least TakerGets, but alice can only sell 100 XRP.
+//	Pool K = 1000*2200 = 2,200,000. After +100 XRP: 1100 * x = 2,200,000, x = 2000.
+//	Alice gets 200 USD (more than 100 asked). Pool: XRP(1100)/USD(2000).
+//	Alice XRP = 250,000,000 drops (exactly the reserve for 1 item).
 func TestAMMBookStep_SellFlagExceedLimit(t *testing.T) {
 	env := amm.NewAMMTestEnv(t)
 
@@ -3020,7 +3021,7 @@ func TestAMMBookStep_FalseDry(t *testing.T) {
 	env.Close()
 
 	ammXRPPool := env.TestEnv.ReserveIncrement() * 2 // increment * 2
-	bobFund := env.TestEnv.ReserveBase() + 5*env.TestEnv.ReserveIncrement() + 10 + uint64(ammXRPPool)
+	bobFund := env.TestEnv.ReserveBase() + 5*env.TestEnv.ReserveIncrement() + 10 + ammXRPPool
 	env.TestEnv.FundAmount(env.Bob, bobFund)
 	env.Close()
 

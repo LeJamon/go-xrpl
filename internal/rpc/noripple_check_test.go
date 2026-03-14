@@ -41,11 +41,15 @@ func newMockNoRippleCheckLedgerService() *mockNoRippleCheckLedgerService {
 	}
 }
 
-func (m *mockNoRippleCheckLedgerService) GetCurrentLedgerIndex() uint32   { return m.currentLedgerIndex }
-func (m *mockNoRippleCheckLedgerService) GetClosedLedgerIndex() uint32    { return m.closedLedgerIndex }
-func (m *mockNoRippleCheckLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
-func (m *mockNoRippleCheckLedgerService) AcceptLedger() (uint32, error)   { return m.closedLedgerIndex + 1, nil }
-func (m *mockNoRippleCheckLedgerService) IsStandalone() bool              { return m.standalone }
+func (m *mockNoRippleCheckLedgerService) GetCurrentLedgerIndex() uint32 { return m.currentLedgerIndex }
+func (m *mockNoRippleCheckLedgerService) GetClosedLedgerIndex() uint32  { return m.closedLedgerIndex }
+func (m *mockNoRippleCheckLedgerService) GetValidatedLedgerIndex() uint32 {
+	return m.validatedLedgerIndex
+}
+func (m *mockNoRippleCheckLedgerService) AcceptLedger() (uint32, error) {
+	return m.closedLedgerIndex + 1, nil
+}
+func (m *mockNoRippleCheckLedgerService) IsStandalone() bool { return m.standalone }
 func (m *mockNoRippleCheckLedgerService) GetServerInfo() types.LedgerServerInfo {
 	return m.serverInfo
 }
@@ -58,7 +62,7 @@ func (m *mockNoRippleCheckLedgerService) GetLedgerBySequence(seq uint32) (types.
 func (m *mockNoRippleCheckLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) SubmitTransaction(txJSON []byte) (*types.SubmitResult, error) {
+func (m *mockNoRippleCheckLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockNoRippleCheckLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
@@ -142,7 +146,7 @@ func (m *mockNoRippleCheckLedgerService) GetNoRippleCheck(account string, role s
 		Validated:   true,
 	}, nil
 }
-func (m *mockNoRippleCheckLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*types.DepositAuthorizedResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*types.DepositAuthorizedResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockNoRippleCheckLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
@@ -207,7 +211,7 @@ func TestNoRippleCheckErrorValidation(t *testing.T) {
 				"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
 			expectError:   true,
-			expectedError: "Missing required parameter: role",
+			expectedError: "Missing field 'role'.",
 		},
 		{
 			name: "Invalid role field",
@@ -236,11 +240,9 @@ func TestNoRippleCheckErrorValidation(t *testing.T) {
 				"account": "invalid_account_address",
 				"role":    "user",
 			},
-			setupMock: func() {
-				mock.noRippleCheckErr = errors.New("invalid account address: bad checksum")
-			},
+			// ValidateAccount catches this before the service call
 			expectError:   true,
-			expectedError: "Account malformed.",
+			expectedError: "Malformed account.",
 		},
 	}
 

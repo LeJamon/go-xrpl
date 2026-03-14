@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/keylet"
-	escrowtx "github.com/LeJamon/goXRPLd/internal/tx/escrow"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
 	"github.com/LeJamon/goXRPLd/internal/testing/credential"
 	dp "github.com/LeJamon/goXRPLd/internal/testing/depositpreauth"
 	"github.com/LeJamon/goXRPLd/internal/testing/escrow"
+	escrowtx "github.com/LeJamon/goXRPLd/internal/tx/escrow"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,7 +23,7 @@ const baseFee = uint64(10)
 
 // xrp is a shortcut for creating XRP amounts in drops.
 func xrp(amount int64) int64 {
-	return int64(jtx.XRP(amount))
+	return jtx.XRP(amount)
 }
 
 // drops returns the value as uint64 drops.
@@ -1248,7 +1248,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		// v[0:s-1]
 		result = env.Submit(
 			escrow.EscrowCreate(alice, carol, xrp(1000)).
-				Condition(v[0:s-1]).
+				Condition(v[0 : s-1]).
 				CancelTime(ts).
 				Build())
 		require.Equal(t, "temMALFORMED", result.Code)
@@ -1256,7 +1256,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		// v[0:s-2]
 		result = env.Submit(
 			escrow.EscrowCreate(alice, carol, xrp(1000)).
-				Condition(v[0:s-2]).
+				Condition(v[0 : s-2]).
 				CancelTime(ts).
 				Build())
 		require.Equal(t, "temMALFORMED", result.Code)
@@ -1272,7 +1272,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		// v[1:s-2] - short
 		result = env.Submit(
 			escrow.EscrowCreate(alice, carol, xrp(1000)).
-				Condition(v[1:s-2]).
+				Condition(v[1 : s-2]).
 				CancelTime(ts).
 				Build())
 		require.Equal(t, "temMALFORMED", result.Code)
@@ -1288,7 +1288,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		// v[2:s-1] - also malformed
 		result = env.Submit(
 			escrow.EscrowCreate(alice, carol, xrp(1000)).
-				Condition(v[2:s-1]).
+				Condition(v[2 : s-1]).
 				CancelTime(ts).
 				Build())
 		require.Equal(t, "temMALFORMED", result.Code)
@@ -1352,11 +1352,11 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		require.Equal(t, "temMALFORMED", result.Code)
 		result = env.Submit(
 			escrow.EscrowCreate(alice, carol, xrp(1000)).
-				Condition(cv[0:cs-1]).CancelTime(ts).Build())
+				Condition(cv[0 : cs-1]).CancelTime(ts).Build())
 		require.Equal(t, "temMALFORMED", result.Code)
 		result = env.Submit(
 			escrow.EscrowCreate(alice, carol, xrp(1000)).
-				Condition(cv[0:cs-2]).CancelTime(ts).Build())
+				Condition(cv[0 : cs-2]).CancelTime(ts).Build())
 		require.Equal(t, "temMALFORMED", result.Code)
 		result = env.Submit(
 			escrow.EscrowCreate(alice, carol, xrp(1000)).
@@ -1364,7 +1364,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		require.Equal(t, "temMALFORMED", result.Code)
 		result = env.Submit(
 			escrow.EscrowCreate(alice, carol, xrp(1000)).
-				Condition(cv[1:cs-2]).CancelTime(ts).Build())
+				Condition(cv[1 : cs-2]).CancelTime(ts).Build())
 		require.Equal(t, "temMALFORMED", result.Code)
 		result = env.Submit(
 			escrow.EscrowCreate(alice, carol, xrp(1000)).
@@ -1372,7 +1372,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		require.Equal(t, "temMALFORMED", result.Code)
 		result = env.Submit(
 			escrow.EscrowCreate(alice, carol, xrp(1000)).
-				Condition(cv[2:cs-1]).CancelTime(ts).Build())
+				Condition(cv[2 : cs-1]).CancelTime(ts).Build())
 		require.Equal(t, "temMALFORMED", result.Code)
 
 		// Valid condition: cv[1:cs-1] is exactly cb2
@@ -1392,11 +1392,11 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(cv[0:cs-1]).Fulfillment(fv[0:fs]).Fee(150 * baseFee).Build())
+				Condition(cv[0 : cs-1]).Fulfillment(fv[0:fs]).Fee(150 * baseFee).Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(cv[0:cs-2]).Fulfillment(fv[0:fs]).Fee(150 * baseFee).Build())
+				Condition(cv[0 : cs-2]).Fulfillment(fv[0:fs]).Fee(150 * baseFee).Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
@@ -1404,7 +1404,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(cv[1:cs-2]).Fulfillment(fv[0:fs]).Fee(150 * baseFee).Build())
+				Condition(cv[1 : cs-2]).Fulfillment(fv[0:fs]).Fee(150 * baseFee).Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
@@ -1412,41 +1412,41 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(cv[2:cs-1]).Fulfillment(fv[0:fs]).Fee(150 * baseFee).Build())
+				Condition(cv[2 : cs-1]).Fulfillment(fv[0:fs]).Fee(150 * baseFee).Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 
 		// Correct condition, malformed fulfillments
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(cv[1:cs-1]).Fulfillment(fv[0:fs]).Fee(150 * baseFee).Build())
+				Condition(cv[1 : cs-1]).Fulfillment(fv[0:fs]).Fee(150 * baseFee).Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(cv[1:cs-1]).Fulfillment(fv[0:fs-1]).Fee(150 * baseFee).Build())
+				Condition(cv[1 : cs-1]).Fulfillment(fv[0 : fs-1]).Fee(150 * baseFee).Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(cv[1:cs-1]).Fulfillment(fv[0:fs-2]).Fee(150 * baseFee).Build())
+				Condition(cv[1 : cs-1]).Fulfillment(fv[0 : fs-2]).Fee(150 * baseFee).Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(cv[1:cs-1]).Fulfillment(fv[1:fs]).Fee(150 * baseFee).Build())
+				Condition(cv[1 : cs-1]).Fulfillment(fv[1:fs]).Fee(150 * baseFee).Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(cv[1:cs-1]).Fulfillment(fv[1:fs-2]).Fee(150 * baseFee).Build())
+				Condition(cv[1 : cs-1]).Fulfillment(fv[1 : fs-2]).Fee(150 * baseFee).Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(cv[1:cs-1]).Fulfillment(fv[1:fs-2]).Fee(150 * baseFee).Build())
+				Condition(cv[1 : cs-1]).Fulfillment(fv[1 : fs-2]).Fee(150 * baseFee).Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(cv[1:cs-1]).Fulfillment(fv[2:fs]).Fee(150 * baseFee).Build())
+				Condition(cv[1 : cs-1]).Fulfillment(fv[2:fs]).Fee(150 * baseFee).Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(cv[1:cs-1]).Fulfillment(fv[2:fs-1]).Fee(150 * baseFee).Build())
+				Condition(cv[1 : cs-1]).Fulfillment(fv[2 : fs-1]).Fee(150 * baseFee).Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 
 		// Now try the correct one
@@ -1727,7 +1727,7 @@ func TestEscrow_Consequences(t *testing.T) {
 
 		// Verify amount (potential spend) is 1000 XRP
 		ec := txn.(*escrowtx.EscrowCreate)
-		require.Equal(t, int64(xrp(1000)), ec.Amount.Drops())
+		require.Equal(t, xrp(1000), ec.Amount.Drops())
 	})
 
 	t.Run("EscrowCancelConsequences", func(t *testing.T) {
@@ -1905,7 +1905,6 @@ func TestEscrow_WithTickets(t *testing.T) {
 			Fee(150 * baseFee).
 			Build()
 		jtx.WithTicketSeq(cancelTx, bobTicket)
-		bobTicket++
 		result = env.Submit(cancelTx)
 		jtx.RequireTxSuccess(t, result)
 		env.Close()

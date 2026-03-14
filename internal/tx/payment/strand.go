@@ -1,9 +1,9 @@
 package payment
 
 import (
-	"github.com/LeJamon/goXRPLd/keylet"
-	tx "github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	tx "github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // StrandContext tracks state during strand building for loop detection.
@@ -957,27 +957,6 @@ func ToStrandLegacy(
 	return strand, nil
 }
 
-// issueFromPathElement extracts the Issue from a path element
-func issueFromPathElement(elem PathStep, defaultAccount [20]byte) Issue {
-	var issue Issue
-
-	if elem.Currency != "" {
-		issue.Currency = elem.Currency
-	}
-
-	if elem.Issuer != "" {
-		issuerBytes, err := state.DecodeAccountID(elem.Issuer)
-		if err == nil {
-			issue.Issuer = issuerBytes
-		}
-	} else if !issue.IsXRP() {
-		// Default to the account if issuer not specified and not XRP
-		issue.Issuer = defaultAccount
-	}
-
-	return issue
-}
-
 // accountFromPathElement extracts the account from a path element
 func accountFromPathElement(elem PathStep, defaultAccount [20]byte) [20]byte {
 	if elem.Account != "" {
@@ -1013,11 +992,6 @@ func issuesEqual(a, b Issue) bool {
 		return true // Both XRP
 	}
 	return a.Currency == b.Currency && a.Issuer == b.Issuer
-}
-
-// accountsEqual compares two account IDs
-func accountsEqual(a, b [20]byte) bool {
-	return a == b
 }
 
 // strandsEqual compares two strands for equality
@@ -1087,7 +1061,9 @@ func validateStrand(strand Strand, view *PaymentSandbox) error {
 func CheckStrand(strand Strand, view *PaymentSandbox) tx.Result {
 	for _, step := range strand {
 		// Check if step implements Check method
-		if checker, ok := step.(interface{ Check(*PaymentSandbox) tx.Result }); ok {
+		if checker, ok := step.(interface {
+			Check(*PaymentSandbox) tx.Result
+		}); ok {
 			result := checker.Check(view)
 			if result != tx.TesSUCCESS {
 				return result
@@ -1119,11 +1095,6 @@ func GetStrandQuality(strand Strand, view *PaymentSandbox) *Quality {
 	}
 
 	return &composedQuality
-}
-
-// createDirectStepI creates a new DirectStepI with proper initialization for strand building
-func createDirectStepI(src, dst [20]byte, currency string, prevStep Step, isFirst, isLast bool) *DirectStepI {
-	return NewDirectStepI(src, dst, currency, prevStep, isFirst, isLast)
 }
 
 // newDirectStepI creates a DirectStepI with the context's offerCrossing flag set.

@@ -31,9 +31,9 @@ func initMethodRegistry() *types.MethodRegistry {
 	if methodRegistry != nil {
 		return methodRegistry
 	}
-	
+
 	registry := types.NewMethodRegistry()
-	
+
 	// Server methods
 	registry.Register("ping", &handlers.PingMethod{})
 	registry.Register("server_info", &handlers.ServerInfoMethod{})
@@ -42,7 +42,7 @@ func initMethodRegistry() *types.MethodRegistry {
 	registry.Register("server_definitions", &handlers.ServerDefinitionsMethod{})
 	registry.Register("feature", &handlers.FeatureMethod{})
 	registry.Register("fee", &handlers.FeeMethod{})
-	
+
 	// Account methods
 	registry.Register("account_info", &handlers.AccountInfoMethod{})
 	registry.Register("account_channels", &handlers.AccountChannelsMethod{})
@@ -54,7 +54,7 @@ func initMethodRegistry() *types.MethodRegistry {
 	registry.Register("account_tx", &handlers.AccountTxMethod{})
 	registry.Register("gateway_balances", &handlers.GatewayBalancesMethod{})
 	registry.Register("noripple_check", &handlers.NoRippleCheckMethod{})
-	
+
 	// Ledger methods
 	registry.Register("ledger", &handlers.LedgerMethod{})
 	registry.Register("ledger_closed", &handlers.LedgerClosedMethod{})
@@ -62,7 +62,7 @@ func initMethodRegistry() *types.MethodRegistry {
 	registry.Register("ledger_data", &handlers.LedgerDataMethod{})
 	registry.Register("ledger_entry", &handlers.LedgerEntryMethod{})
 	registry.Register("ledger_range", &handlers.LedgerRangeMethod{})
-	
+
 	// Transaction methods
 	registry.Register("tx", &handlers.TxMethod{})
 	registry.Register("tx_history", &handlers.TxHistoryMethod{})
@@ -71,7 +71,7 @@ func initMethodRegistry() *types.MethodRegistry {
 	registry.Register("sign", &handlers.SignMethod{})
 	registry.Register("sign_for", &handlers.SignForMethod{})
 	registry.Register("transaction_entry", &handlers.TransactionEntryMethod{})
-	
+
 	// Utility methods
 	registry.Register("book_offers", &handlers.BookOffersMethod{})
 	registry.Register("path_find", &handlers.PathFindMethod{})
@@ -81,11 +81,11 @@ func initMethodRegistry() *types.MethodRegistry {
 	registry.Register("channel_authorize", &handlers.ChannelAuthorizeMethod{})
 	registry.Register("channel_verify", &handlers.ChannelVerifyMethod{})
 	registry.Register("json", &handlers.JsonMethod{})
-	
+
 	// NFT methods
 	registry.Register("nft_buy_offers", &handlers.NftBuyOffersMethod{})
 	registry.Register("nft_sell_offers", &handlers.NftSellOffersMethod{})
-	
+
 	// Admin methods (require admin role)
 	registry.Register("stop", &handlers.StopMethod{})
 	registry.Register("validation_create", &handlers.ValidationCreateMethod{})
@@ -102,7 +102,7 @@ func initMethodRegistry() *types.MethodRegistry {
 	// Subscription methods (for WebSocket)
 	registry.Register("subscribe", &handlers.SubscribeMethod{})
 	registry.Register("unsubscribe", &handlers.UnsubscribeMethod{})
-	
+
 	methodRegistry = registry
 	return registry
 }
@@ -110,12 +110,12 @@ func initMethodRegistry() *types.MethodRegistry {
 // executeMethod calls an RPC method handler directly
 func executeMethod(method string, params interface{}) error {
 	registry := initMethodRegistry()
-	
+
 	handler, exists := registry.Get(method)
 	if !exists {
 		return fmt.Errorf("unknown method: %s", method)
 	}
-	
+
 	// Create RPC context (CLI runs as admin role)
 	rpcCtx := &types.RpcContext{
 		Context:    context.Background(),
@@ -124,7 +124,7 @@ func executeMethod(method string, params interface{}) error {
 		IsAdmin:    true,
 		ClientIP:   "127.0.0.1", // Local CLI
 	}
-	
+
 	// Marshal params to JSON if provided
 	var paramBytes json.RawMessage
 	if params != nil {
@@ -134,13 +134,13 @@ func executeMethod(method string, params interface{}) error {
 		}
 		paramBytes = json.RawMessage(bytes)
 	}
-	
+
 	// Call the method handler directly
 	result, rpcErr := handler.Handle(rpcCtx, paramBytes)
 	if rpcErr != nil {
 		return fmt.Errorf("RPC error [%d]: %s", rpcErr.Code, rpcErr.Message)
 	}
-	
+
 	// Pretty print the result
 	if result != nil {
 		prettyJSON, err := json.MarshalIndent(result, "", "  ")
@@ -150,7 +150,7 @@ func executeMethod(method string, params interface{}) error {
 		}
 		fmt.Println(string(prettyJSON))
 	}
-	
+
 	return nil
 }
 
@@ -358,7 +358,7 @@ var accountTxCmd = &cobra.Command{
 		params := map[string]interface{}{
 			"account": args[0],
 		}
-		
+
 		if len(args) > 1 {
 			if min, err := strconv.Atoi(args[1]); err == nil {
 				params["ledger_index_min"] = min
@@ -377,7 +377,7 @@ var accountTxCmd = &cobra.Command{
 		if len(args) > 4 && args[4] == "binary" {
 			params["binary"] = true
 		}
-		
+
 		return executeMethod("account_tx", params)
 	},
 }
@@ -425,7 +425,7 @@ var ledgerCmd = &cobra.Command{
 	Short: "Get ledger information",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		params := map[string]interface{}{}
-		
+
 		if len(args) > 0 {
 			switch args[0] {
 			case "current", "closed", "validated":
@@ -439,11 +439,11 @@ var ledgerCmd = &cobra.Command{
 				}
 			}
 		}
-		
+
 		if len(args) > 1 && args[1] == "full" {
 			params["full"] = true
 		}
-		
+
 		return executeMethod("ledger", params)
 	},
 }
@@ -469,7 +469,7 @@ var ledgerDataCmd = &cobra.Command{
 	Short: "Get ledger objects",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		params := map[string]interface{}{}
-		
+
 		if len(args) > 0 {
 			params["ledger_index"] = args[0]
 		}
@@ -481,7 +481,7 @@ var ledgerDataCmd = &cobra.Command{
 		if len(args) > 2 {
 			params["marker"] = args[2]
 		}
-		
+
 		return executeMethod("ledger_data", params)
 	},
 }
@@ -514,7 +514,7 @@ var ledgerRangeCmd = &cobra.Command{
 		if err1 != nil || err2 != nil {
 			return fmt.Errorf("invalid ledger indices")
 		}
-		
+
 		params := map[string]interface{}{
 			"ledger_index_min": start,
 			"ledger_index_max": end,
@@ -561,7 +561,7 @@ var submitCmd = &cobra.Command{
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var params map[string]interface{}
-		
+
 		if len(args) == 1 {
 			// Single argument - assume it's a tx_blob
 			params = map[string]interface{}{
@@ -576,7 +576,7 @@ var submitCmd = &cobra.Command{
 		} else {
 			return fmt.Errorf("invalid number of arguments")
 		}
-		
+
 		return executeMethod("submit", params)
 	},
 }
@@ -652,7 +652,7 @@ var bookOffersCmd = &cobra.Command{
 			"taker_pays": args[0],
 			"taker_gets": args[1],
 		}
-		
+
 		if len(args) > 2 && args[2] != "" {
 			params["taker"] = args[2]
 		}
@@ -670,7 +670,7 @@ var bookOffersCmd = &cobra.Command{
 		if len(args) > 6 {
 			params["marker"] = args[6]
 		}
-		
+
 		return executeMethod("book_offers", params)
 	},
 }
@@ -698,7 +698,7 @@ var ripplePathFindCmd = &cobra.Command{
 		if err := json.Unmarshal([]byte(args[0]), &pathRequest); err != nil {
 			return fmt.Errorf("invalid JSON: %w", err)
 		}
-		
+
 		params := pathRequest
 		if len(args) > 1 {
 			// Convert to map to add ledger
@@ -707,7 +707,7 @@ var ripplePathFindCmd = &cobra.Command{
 				params = paramsMap
 			}
 		}
-		
+
 		return executeMethod("ripple_path_find", params)
 	},
 }
@@ -751,7 +751,7 @@ var channelAuthorizeCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("invalid amount: %w", err)
 		}
-		
+
 		params := map[string]interface{}{
 			"secret":  args[0],
 			"channel": args[1],
@@ -770,7 +770,7 @@ var channelVerifyCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("invalid amount: %w", err)
 		}
-		
+
 		params := map[string]interface{}{
 			"public_key": args[0],
 			"channel":    args[1],
@@ -789,12 +789,12 @@ var jsonCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		method := args[0]
 		jsonParams := args[1]
-		
+
 		var params interface{}
 		if err := json.Unmarshal([]byte(jsonParams), &params); err != nil {
 			return fmt.Errorf("invalid JSON parameters: %w", err)
 		}
-		
+
 		return executeMethod(method, params)
 	},
 }
@@ -995,7 +995,7 @@ func init() {
 		serverDefinitionsCmd,
 		featureCmd,
 		feeCmd,
-		
+
 		// Account commands
 		accountInfoCmd,
 		accountChannelsCmd,
@@ -1007,7 +1007,7 @@ func init() {
 		accountTxCmd,
 		gatewayBalancesCmd,
 		norippleCheckCmd,
-		
+
 		// Ledger commands
 		ledgerCmd,
 		ledgerClosedCmd,
@@ -1015,7 +1015,7 @@ func init() {
 		ledgerDataCmd,
 		ledgerEntryCmd,
 		ledgerRangeCmd,
-		
+
 		// Transaction commands
 		txCmd,
 		txHistoryCmd,
@@ -1024,7 +1024,7 @@ func init() {
 		signCmd,
 		signForCmd,
 		transactionEntryCmd,
-		
+
 		// Utility commands
 		bookOffersCmd,
 		pathFindCmd,
@@ -1033,14 +1033,14 @@ func init() {
 		depositAuthorizedCmd,
 		channelAuthorizeCmd,
 		channelVerifyCmd,
-		
+
 		// NFT commands
 		nftBuyOffersCmd,
 		nftSellOffersCmd,
 		nftHistoryCmd,
 		nftsByIssuerCmd,
 		nftInfoCmd,
-		
+
 		// Admin commands
 		stopCmd,
 		validationCreateCmd,
@@ -1052,7 +1052,7 @@ func init() {
 		consensusInfoCmd,
 		validatorsCmd,
 		validatorListSitesCmd,
-		
+
 		// Generic JSON command
 		jsonCmd,
 	)

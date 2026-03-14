@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	escrowtx "github.com/LeJamon/goXRPLd/internal/tx/escrow"
-	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 
 // RippleEpoch is the Unix timestamp for the Ripple epoch (January 1, 2000 00:00:00 UTC).

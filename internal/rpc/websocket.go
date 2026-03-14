@@ -4,15 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"net"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/subscription"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	xrpllog "github.com/LeJamon/goXRPLd/log"
 	"github.com/gorilla/websocket"
 )
+
+// wsLog is the logger for the WebSocket server.
+var wsLog = xrpllog.Named(xrpllog.PartitionRPC)
 
 // WebSocketServer handles WebSocket connections for real-time subscriptions
 type WebSocketServer struct {
@@ -69,7 +73,7 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Upgrade HTTP connection to WebSocket
 	conn, err := ws.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("WebSocket upgrade failed: %v", err)
+		wsLog.Error("WebSocket upgrade failed", "err", err)
 		return
 	}
 
@@ -132,7 +136,7 @@ func (ws *WebSocketServer) handleConnection(wsConn *WebSocketConnection) {
 		_, message, err := wsConn.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure, websocket.CloseNoStatusReceived) {
-				log.Printf("WebSocket read error: %v", err)
+				wsLog.Debug("WebSocket read error", "err", err)
 			}
 			return
 		}
@@ -161,7 +165,7 @@ func (ws *WebSocketServer) pingLoop(wsConn *WebSocketConnection) {
 		case <-ticker.C:
 			wsConn.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := wsConn.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				log.Printf("WebSocket ping failed: %v", err)
+				wsLog.Debug("WebSocket ping failed", "err", err)
 				return
 			}
 		}
@@ -179,7 +183,7 @@ func (ws *WebSocketServer) handleSend(wsConn *WebSocketConnection) {
 		case message := <-wsConn.sendChannel:
 			wsConn.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := wsConn.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				log.Printf("WebSocket send failed: %v", err)
+				wsLog.Debug("WebSocket send failed", "err", err)
 				return
 			}
 		}
@@ -234,12 +238,15 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	}
 
 	// Create RPC context
+	clientIP := getWebSocketClientIP(wsConn.conn)
+	role := roleForRequest(clientIP)
+	wsLog.Debug("ws request", "cmd", cmd.Command, "remoteAddr", wsConn.conn.RemoteAddr().String(), "clientIP", clientIP, "role", role, "isAdmin", role == types.RoleAdmin)
 	rpcCtx := &types.RpcContext{
 		Context:    wsConn.ctx,
-		Role:       types.RoleGuest,
+		Role:       role,
 		ApiVersion: apiVersion,
-		IsAdmin:    false,
-		ClientIP:   getWebSocketClientIP(wsConn.conn),
+		IsAdmin:    role == types.RoleAdmin,
+		ClientIP:   clientIP,
 	}
 
 	// Handle subscription commands specially
@@ -478,7 +485,7 @@ func (ws *WebSocketServer) UpdatePathFindSessions(getView func() (types.LedgerSt
 	// Get ledger view once for all sessions
 	view, err := getView()
 	if err != nil {
-		log.Printf("Failed to get ledger view for path_find updates: %v", err)
+		wsLog.Error("Failed to get ledger view for path_find updates", "err", err)
 		return
 	}
 
@@ -542,9 +549,9 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *typ
 
 // WebSocketResponseOptions contains optional fields for WebSocket responses
 type WebSocketResponseOptions struct {
-	Warning   string                    // "load" when approaching rate limit
+	Warning   string                // "load" when approaching rate limit
 	Warnings  []types.WarningObject // Array of warning objects
-	Forwarded bool                      // True if forwarded from Clio to P2P server
+	Forwarded bool                  // True if forwarded from Clio to P2P server
 }
 
 // sendResponse sends a WebSocket response
@@ -563,7 +570,7 @@ func (ws *WebSocketServer) sendResponseWithOptions(wsConn *WebSocketConnection, 
 
 	data, err := json.Marshal(response)
 	if err != nil {
-		log.Printf("Failed to marshal WebSocket response: %v", err)
+		wsLog.Error("Failed to marshal WebSocket response", "err", err)
 		return
 	}
 
@@ -574,7 +581,7 @@ func (ws *WebSocketServer) sendResponseWithOptions(wsConn *WebSocketConnection, 
 		// Connection closed
 	default:
 		// Channel full, close connection
-		log.Printf("WebSocket send channel full, closing connection %s", wsConn.ID)
+		wsLog.Warn("WebSocket send channel full", "connID", wsConn.ID)
 		ws.closeConnection(wsConn)
 	}
 }
@@ -605,7 +612,7 @@ func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpc
 
 	data, err := json.Marshal(response)
 	if err != nil {
-		log.Printf("Failed to marshal WebSocket error response: %v", err)
+		wsLog.Error("Failed to marshal WebSocket error response", "err", err)
 		return
 	}
 
@@ -616,7 +623,7 @@ func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpc
 		// Connection closed
 	default:
 		// Channel full, close connection
-		log.Printf("WebSocket send channel full, closing connection %s", wsConn.ID)
+		wsLog.Warn("WebSocket send channel full", "connID", wsConn.ID)
 		ws.closeConnection(wsConn)
 	}
 }
@@ -642,14 +649,14 @@ func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 	// Close WebSocket connection
 	wsConn.conn.Close()
 
-	log.Printf("WebSocket connection %s closed", wsConn.ID)
+	wsLog.Debug("WebSocket connection closed", "connID", wsConn.ID)
 }
 
 // BroadcastToSubscribers sends a message to all connections subscribed to a specific stream
 func (ws *WebSocketServer) BroadcastToSubscribers(msgType types.SubscriptionType, message interface{}) {
 	data, err := json.Marshal(message)
 	if err != nil {
-		log.Printf("Failed to marshal broadcast message: %v", err)
+		wsLog.Error("Failed to marshal broadcast message", "err", err)
 		return
 	}
 
@@ -664,7 +671,7 @@ func (ws *WebSocketServer) BroadcastToSubscribers(msgType types.SubscriptionType
 				// Message sent
 			default:
 				// Channel full, skip this connection
-				log.Printf("Skipping slow WebSocket connection %s", conn.ID)
+				wsLog.Debug("Skipping slow WebSocket connection", "connID", conn.ID)
 			}
 		}
 		conn.mutex.RUnlock()
@@ -679,16 +686,11 @@ func generateConnectionID() string {
 }
 
 func getWebSocketClientIP(conn *websocket.Conn) string {
-	// Extract client IP from WebSocket connection
-	remoteAddr := conn.RemoteAddr().String()
-	if idx := len(remoteAddr) - 1; idx >= 0 {
-		for i := idx; i >= 0; i-- {
-			if remoteAddr[i] == ':' {
-				return remoteAddr[:i]
-			}
-		}
+	host, _, err := net.SplitHostPort(conn.RemoteAddr().String())
+	if err != nil {
+		return conn.RemoteAddr().String()
 	}
-	return remoteAddr
+	return host
 }
 
 // RegisterAllMethods registers all RPC methods for WebSocket use
@@ -701,4 +703,17 @@ func (ws *WebSocketServer) RegisterAllMethods() {
 // GetSubscriptionManager returns the subscription manager for event publishing
 func (ws *WebSocketServer) GetSubscriptionManager() *subscription.Manager {
 	return ws.subscriptionManager
+}
+
+// Close gracefully closes all active WebSocket connections.
+func (ws *WebSocketServer) Close() {
+	ws.connectionsMutex.Lock()
+	defer ws.connectionsMutex.Unlock()
+	for _, conn := range ws.connections {
+		conn.conn.WriteMessage(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"),
+		)
+		conn.conn.Close()
+	}
 }

@@ -1,14 +1,19 @@
 package service
 
 import (
+	"bytes"
+	"encoding/hex"
 	"errors"
+	"math"
+	"sort"
 	"strconv"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/credential"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // AccountInfoResult contains account information from the ledger
@@ -28,6 +33,8 @@ type AccountInfoResult struct {
 	LedgerIndex       uint32
 	LedgerHash        [32]byte
 	Validated         bool
+	RawData           []byte   // Raw SLE binary for full deserialization
+	Index             [32]byte // SLE key (keylet hash)
 }
 
 // GetAccountInfo retrieves account information from the ledger
@@ -115,7 +122,9 @@ func (s *Service) GetAccountInfo(account string, ledgerIndex string) (*AccountIn
 		PreviousTxnLgrSeq: accountRoot.PreviousTxnLgrSeq,
 		LedgerIndex:       targetLedger.Sequence(),
 		LedgerHash:        targetLedger.Hash(),
-		Validated:          validated,
+		Validated:         validated,
+		RawData:           data,
+		Index:             accountKey.Key,
 	}, nil
 }
 
@@ -1418,8 +1427,12 @@ type DepositAuthorizedResult struct {
 	Validated          bool
 }
 
-// GetDepositAuthorized checks if a source account is authorized to deposit to a destination account
-func (s *Service) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*DepositAuthorizedResult, error) {
+// GetDepositAuthorized checks if a source account is authorized to deposit to a destination account.
+// When credentials are provided, they are validated against the ledger (existence,
+// acceptance, expiry, ownership, duplicates) before checking credential-based
+// deposit preauthorization.
+// Reference: rippled DepositAuthorized.cpp doDepositAuthorized()
+func (s *Service) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*DepositAuthorizedResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -1482,16 +1495,38 @@ func (s *Service) GetDepositAuthorized(sourceAccount string, destinationAccount 
 	// If source == destination, deposit is always authorized (self-deposit)
 	sameAccount := srcID == dstID
 
+	// Validate credentials on-ledger if provided.
+	// Reference: rippled DepositAuthorized.cpp credential validation loop
+	var sortedCredPairs []keylet.CredentialPair
+	credentialsPresent := len(credentials) > 0
+	if credentialsPresent {
+		sortedCredPairs, err = validateCredentialsOnLedger(targetLedger, credentials, srcID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// Determine authorization status
 	depositAuthorized := true
 	if depositAuthRequired && !sameAccount {
-		// Need to check for DepositPreauth
+		// First check direct deposit preauth (account-to-account)
 		depositPreauthKey := keylet.DepositPreauth(dstID, srcID)
 		exists, err := targetLedger.Exists(depositPreauthKey)
 		if err != nil {
 			return nil, errors.New("failed to check deposit preauthorization: " + err.Error())
 		}
 		depositAuthorized = exists
+
+		// If not directly authorized but credentials are present,
+		// check credential-based deposit preauthorization.
+		if !depositAuthorized && credentialsPresent {
+			credPreauthKey := keylet.DepositPreauthCredentials(dstID, sortedCredPairs)
+			exists, err := targetLedger.Exists(credPreauthKey)
+			if err != nil {
+				return nil, errors.New("failed to check credential deposit preauthorization: " + err.Error())
+			}
+			depositAuthorized = exists
+		}
 	}
 
 	return &DepositAuthorizedResult{
@@ -1502,4 +1537,101 @@ func (s *Service) GetDepositAuthorized(sourceAccount string, destinationAccount 
 		LedgerHash:         targetLedger.Hash(),
 		Validated:          validated,
 	}, nil
+}
+
+// validateCredentialsOnLedger validates each credential ID against the ledger.
+// It checks: existence, acceptance, expiry, ownership (subject == srcAcct), and
+// detects duplicates (same issuer+credentialType pair).
+// Returns the sorted credential pairs for use in credential-based preauth lookup.
+// Errors are prefixed with "bad_credentials: " for the handler to map to rpcBAD_CREDENTIALS.
+// Reference: rippled DepositAuthorized.cpp credential validation loop
+func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []string, srcAcct [20]byte) ([]keylet.CredentialPair, error) {
+	type credKey struct {
+		issuer         [20]byte
+		credentialType string
+	}
+
+	seen := make(map[credKey]struct{})
+	pairs := make([]keylet.CredentialPair, 0, len(credentials))
+
+	// Get parent close time for expiry check.
+	// rippled uses ledger->info().parentCloseTime
+	parentCloseTime := targetLedger.ParentCloseTime()
+	parentCloseTimeSecs := uint32(parentCloseTime.Unix())
+	// Clamp to max uint32 if negative (shouldn't happen, but be safe)
+	if parentCloseTime.Unix() < 0 {
+		parentCloseTimeSecs = 0
+	}
+	if parentCloseTime.Unix() > math.MaxUint32 {
+		parentCloseTimeSecs = math.MaxUint32
+	}
+
+	for _, credHex := range credentials {
+		// Decode the credential hash
+		credHashBytes, err := hex.DecodeString(credHex)
+		if err != nil {
+			return nil, errors.New("bad_credentials: credentials don't exist")
+		}
+		var credHash [32]byte
+		copy(credHash[:], credHashBytes)
+
+		// Look up credential on ledger by its hash
+		credKeylet := keylet.CredentialByID(credHash)
+		credData, err := targetLedger.Read(credKeylet)
+		if err != nil || credData == nil {
+			return nil, errors.New("bad_credentials: credentials don't exist")
+		}
+
+		// Parse the credential entry
+		credEntry, err := credential.ParseCredentialEntry(credData)
+		if err != nil {
+			return nil, errors.New("bad_credentials: credentials don't exist")
+		}
+
+		// Check accepted flag
+		// Reference: rippled DepositAuthorized.cpp: if (!(sleCred->getFlags() & lsfAccepted))
+		if !credEntry.IsAccepted() {
+			return nil, errors.New("bad_credentials: credentials aren't accepted")
+		}
+
+		// Check expiry
+		// Reference: rippled DepositAuthorized.cpp: if (credentials::checkExpired(sleCred, ...))
+		if credEntry.Expiration != nil && parentCloseTimeSecs > *credEntry.Expiration {
+			return nil, errors.New("bad_credentials: credentials are expired")
+		}
+
+		// Check ownership: subject must match source account
+		// Reference: rippled DepositAuthorized.cpp: if ((*sleCred)[sfSubject] != srcAcct)
+		if credEntry.Subject != srcAcct {
+			return nil, errors.New("bad_credentials: credentials doesn't belong to the root account")
+		}
+
+		// Check for duplicates (same issuer + credentialType)
+		// Reference: rippled DepositAuthorized.cpp: sorted.emplace(issuer, credType)
+		key := credKey{
+			issuer:         credEntry.Issuer,
+			credentialType: string(credEntry.CredentialType),
+		}
+		if _, exists := seen[key]; exists {
+			return nil, errors.New("bad_credentials: duplicates in credentials")
+		}
+		seen[key] = struct{}{}
+
+		pairs = append(pairs, keylet.CredentialPair{
+			Issuer:         credEntry.Issuer,
+			CredentialType: credEntry.CredentialType,
+		})
+	}
+
+	// Sort pairs by (issuer, credentialType) for deterministic keylet computation.
+	// Reference: rippled uses std::set which sorts by (issuer, credType)
+	sort.Slice(pairs, func(i, j int) bool {
+		cmp := bytes.Compare(pairs[i].Issuer[:], pairs[j].Issuer[:])
+		if cmp != 0 {
+			return cmp < 0
+		}
+		return bytes.Compare(pairs[i].CredentialType, pairs[j].CredentialType) < 0
+	})
+
+	return pairs, nil
 }

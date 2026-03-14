@@ -320,11 +320,11 @@ func (s *Sim) GetConsensusResults() []PeerResult {
 	results := make([]PeerResult, len(s.peers))
 	for i, peer := range s.peers {
 		results[i] = PeerResult{
-			ID:                    peer.ID,
-			CompletedLedgers:      peer.CompletedLedgers(),
-			LastClosedLedgerSeq:   peer.LastClosedLedger().Seq(),
-			FullyValidatedSeq:     peer.FullyValidatedLedger().Seq(),
-			LastClosedLedgerID:    peer.LastClosedLedger().ID(),
+			ID:                     peer.ID,
+			CompletedLedgers:       peer.CompletedLedgers(),
+			LastClosedLedgerSeq:    peer.LastClosedLedger().Seq(),
+			FullyValidatedSeq:      peer.FullyValidatedLedger().Seq(),
+			LastClosedLedgerID:     peer.LastClosedLedger().ID(),
 			FullyValidatedLedgerID: peer.FullyValidatedLedger().ID(),
 		}
 	}

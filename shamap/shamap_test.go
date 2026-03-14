@@ -219,7 +219,6 @@ func TestBuildAndTear(t *testing.T) {
 
 	// Add all keys and verify hash after each addition
 	for k, key := range keys {
-
 		if err := sMap.Put(key, intToBytes(k)); err != nil {
 			t.Fatalf("Failed to add item %d: %v", k, err)
 		}
@@ -1006,11 +1005,11 @@ func TestUpperBound(t *testing.T) {
 		expectKey  byte
 		expectNone bool
 	}{
-		{"before all", 5, 10, false},      // key=5, expect first item > 5 = 10
-		{"exact match", 20, 30, false},    // key=20, expect first item > 20 = 30
-		{"between items", 25, 30, false},  // key=25, expect first item > 25 = 30
-		{"at last", 50, 0, true},          // key=50, no item > 50
-		{"after all", 60, 0, true},        // key=60, no item > 60
+		{"before all", 5, 10, false},     // key=5, expect first item > 5 = 10
+		{"exact match", 20, 30, false},   // key=20, expect first item > 20 = 30
+		{"between items", 25, 30, false}, // key=25, expect first item > 25 = 30
+		{"at last", 50, 0, true},         // key=50, no item > 50
+		{"after all", 60, 0, true},       // key=60, no item > 60
 	}
 
 	for _, tt := range tests {
@@ -1059,12 +1058,12 @@ func TestLowerBound(t *testing.T) {
 		expectKey  byte
 		expectNone bool
 	}{
-		{"before all", 5, 0, true},        // key=5, no item < 5
-		{"at first", 10, 0, true},         // key=10, no item < 10
-		{"after first", 15, 10, false},    // key=15, greatest item < 15 = 10
-		{"exact match", 30, 20, false},    // key=30, greatest item < 30 = 20
-		{"between items", 35, 30, false},  // key=35, greatest item < 35 = 30
-		{"after all", 60, 50, false},      // key=60, greatest item < 60 = 50
+		{"before all", 5, 0, true},       // key=5, no item < 5
+		{"at first", 10, 0, true},        // key=10, no item < 10
+		{"after first", 15, 10, false},   // key=15, greatest item < 15 = 10
+		{"exact match", 30, 20, false},   // key=30, greatest item < 30 = 20
+		{"between items", 35, 30, false}, // key=35, greatest item < 35 = 30
+		{"after all", 60, 50, false},     // key=60, greatest item < 60 = 50
 	}
 
 	for _, tt := range tests {
@@ -1262,17 +1261,17 @@ func TestBoundsMatchingCppTestVectors(t *testing.T) {
 		sMap := setup([]int{1, 2, 3})
 
 		// lower_bound tests (greatest item < key)
-		checkLowerBound(sMap, 1, 0, true, "set{1,2,3}")   // no item < 1
-		checkLowerBound(sMap, 2, 1, false, "set{1,2,3}")  // item 1 < 2
-		checkLowerBound(sMap, 3, 2, false, "set{1,2,3}")  // item 2 < 3
-		checkLowerBound(sMap, 4, 3, false, "set{1,2,3}")  // item 3 < 4
-		checkLowerBound(sMap, 5, 3, false, "set{1,2,3}")  // item 3 < 5
+		checkLowerBound(sMap, 1, 0, true, "set{1,2,3}")  // no item < 1
+		checkLowerBound(sMap, 2, 1, false, "set{1,2,3}") // item 1 < 2
+		checkLowerBound(sMap, 3, 2, false, "set{1,2,3}") // item 2 < 3
+		checkLowerBound(sMap, 4, 3, false, "set{1,2,3}") // item 3 < 4
+		checkLowerBound(sMap, 5, 3, false, "set{1,2,3}") // item 3 < 5
 
 		// upper_bound tests (first item > key)
-		checkUpperBound(sMap, 0, 1, false, "set{1,2,3}")  // first item > 0 = 1
-		checkUpperBound(sMap, 1, 2, false, "set{1,2,3}")  // first item > 1 = 2
-		checkUpperBound(sMap, 2, 3, false, "set{1,2,3}")  // first item > 2 = 3
-		checkUpperBound(sMap, 3, 0, true, "set{1,2,3}")   // no item > 3
+		checkUpperBound(sMap, 0, 1, false, "set{1,2,3}") // first item > 0 = 1
+		checkUpperBound(sMap, 1, 2, false, "set{1,2,3}") // first item > 1 = 2
+		checkUpperBound(sMap, 2, 3, false, "set{1,2,3}") // first item > 2 = 3
+		checkUpperBound(sMap, 3, 0, true, "set{1,2,3}")  // no item > 3
 	})
 
 	// Test case 2: {2, 4, 6} - from C++ View_test.cpp line 444
@@ -1280,22 +1279,22 @@ func TestBoundsMatchingCppTestVectors(t *testing.T) {
 		sMap := setup([]int{2, 4, 6})
 
 		// lower_bound tests
-		checkLowerBound(sMap, 1, 0, true, "set{2,4,6}")   // no item < 1
-		checkLowerBound(sMap, 2, 0, true, "set{2,4,6}")   // no item < 2
-		checkLowerBound(sMap, 3, 2, false, "set{2,4,6}")  // item 2 < 3
-		checkLowerBound(sMap, 4, 2, false, "set{2,4,6}")  // item 2 < 4
-		checkLowerBound(sMap, 5, 4, false, "set{2,4,6}")  // item 4 < 5
-		checkLowerBound(sMap, 6, 4, false, "set{2,4,6}")  // item 4 < 6
-		checkLowerBound(sMap, 7, 6, false, "set{2,4,6}")  // item 6 < 7
+		checkLowerBound(sMap, 1, 0, true, "set{2,4,6}")  // no item < 1
+		checkLowerBound(sMap, 2, 0, true, "set{2,4,6}")  // no item < 2
+		checkLowerBound(sMap, 3, 2, false, "set{2,4,6}") // item 2 < 3
+		checkLowerBound(sMap, 4, 2, false, "set{2,4,6}") // item 2 < 4
+		checkLowerBound(sMap, 5, 4, false, "set{2,4,6}") // item 4 < 5
+		checkLowerBound(sMap, 6, 4, false, "set{2,4,6}") // item 4 < 6
+		checkLowerBound(sMap, 7, 6, false, "set{2,4,6}") // item 6 < 7
 
 		// upper_bound tests
-		checkUpperBound(sMap, 1, 2, false, "set{2,4,6}")  // first item > 1 = 2
-		checkUpperBound(sMap, 2, 4, false, "set{2,4,6}")  // first item > 2 = 4
-		checkUpperBound(sMap, 3, 4, false, "set{2,4,6}")  // first item > 3 = 4
-		checkUpperBound(sMap, 4, 6, false, "set{2,4,6}")  // first item > 4 = 6
-		checkUpperBound(sMap, 5, 6, false, "set{2,4,6}")  // first item > 5 = 6
-		checkUpperBound(sMap, 6, 0, true, "set{2,4,6}")   // no item > 6
-		checkUpperBound(sMap, 7, 0, true, "set{2,4,6}")   // no item > 7
+		checkUpperBound(sMap, 1, 2, false, "set{2,4,6}") // first item > 1 = 2
+		checkUpperBound(sMap, 2, 4, false, "set{2,4,6}") // first item > 2 = 4
+		checkUpperBound(sMap, 3, 4, false, "set{2,4,6}") // first item > 3 = 4
+		checkUpperBound(sMap, 4, 6, false, "set{2,4,6}") // first item > 4 = 6
+		checkUpperBound(sMap, 5, 6, false, "set{2,4,6}") // first item > 5 = 6
+		checkUpperBound(sMap, 6, 0, true, "set{2,4,6}")  // no item > 6
+		checkUpperBound(sMap, 7, 0, true, "set{2,4,6}")  // no item > 7
 	})
 
 	// Test case 3: {2, 3, 5, 6, 10, 15} - from C++ View_test.cpp line 470

@@ -616,9 +616,9 @@ func TestAmountBitMasks(t *testing.T) {
 // TestIsNativeFunction tests the isNative helper function.
 func TestIsNativeFunction(t *testing.T) {
 	tests := []struct {
-		name     string
+		name      string
 		firstByte byte
-		expected bool
+		expected  bool
 	}{
 		{"XRP positive (0x40)", 0x40, true},
 		{"XRP zero (0x00)", 0x00, true},

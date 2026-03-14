@@ -23,4 +23,3 @@ func (m *VersionMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 
 	return response, nil
 }
-

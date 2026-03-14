@@ -5,11 +5,11 @@ package payment
 import (
 	"testing"
 
+	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
+	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/LeJamon/goXRPLd/internal/tx/payment/pathfinder"
-	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -516,14 +516,14 @@ func TestPath_ViaGateway(t *testing.T) {
 
 	// Carol creates offer: XRP(50) for AUD(50)
 	aud50Amt := tx.NewIssuedAmountFromFloat64(50, "AUD", gw.Address)
-	xrp50 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(50)))
+	xrp50 := tx.NewXRPAmount(xrplgoTesting.XRP(50))
 	result = env.CreateOffer(carol, aud50Amt, xrp50)
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice pays bob AUD(10) using XRP as bridge, sendmax XRP(100)
 	aud10 := tx.NewIssuedAmountFromFloat64(10, "AUD", gw.Address)
-	xrp100 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(100)))
+	xrp100 := tx.NewXRPAmount(xrplgoTesting.XRP(100))
 	payTx := PayIssued(alice, bob, aud10).
 		SendMax(xrp100).
 		PathsXRP().
@@ -674,7 +674,7 @@ func TestPath_XRPBridge(t *testing.T) {
 
 	// Market maker creates offers bridging gw1/HKD <-> XRP <-> gw2/HKD
 	// Offer 1: mm sells XRP for gw1/HKD — mm offers XRP(1000), wants gw1/HKD(1000)
-	xrp1000 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(1000)))
+	xrp1000 := tx.NewXRPAmount(xrplgoTesting.XRP(1000))
 	hkd1000gw1 := tx.NewIssuedAmountFromFloat64(1000, "HKD", gw1.Address)
 	result = env.CreateOffer(mm, xrp1000, hkd1000gw1)
 	xrplgoTesting.RequireTxSuccess(t, result)
@@ -770,7 +770,7 @@ func TestPath_PathFindConsumeAll(t *testing.T) {
 	// Expected: paths = stpath("dan"), stpath("bob", "carol")
 	//           source_amount = alice/USD(110)
 	//           dest_amount = edward/USD(110)
-	dstAmount := tx.NewIssuedAmountFromFloat64(1, "USD", edward.Address) // placeholder, convertAll replaces it
+	dstAmount := tx.NewIssuedAmountFromFloat64(1, "USD", edward.Address)            // placeholder, convertAll replaces it
 	pr := pathfinder.NewPathRequest(alice.ID, edward.ID, dstAmount, nil, nil, true) // convertAll=true
 	pfResult := pr.Execute(env.Ledger())
 
@@ -1450,14 +1450,14 @@ func TestPath_ViaOffersViaGateway(t *testing.T) {
 
 	// Carol creates offer: XRP(50) for AUD(50)
 	aud50Offer := tx.NewIssuedAmountFromFloat64(50, "AUD", gw.Address)
-	xrp50 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(50)))
+	xrp50 := tx.NewXRPAmount(xrplgoTesting.XRP(50))
 	result = env.CreateOffer(carol, aud50Offer, xrp50)
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice pays bob AUD(10) using XRP via carol's offer
 	aud10 := tx.NewIssuedAmountFromFloat64(10, "AUD", gw.Address)
-	xrp100 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(100)))
+	xrp100 := tx.NewXRPAmount(xrplgoTesting.XRP(100))
 	payTx := PayIssued(alice, bob, aud10).
 		SendMax(xrp100).
 		PathsXRP().

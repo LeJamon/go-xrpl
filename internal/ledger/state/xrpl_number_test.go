@@ -24,14 +24,14 @@ func TestXRPLGuard_PushPop(t *testing.T) {
 // TestXRPLGuard_Round verifies banker's rounding (round-half-to-even).
 func TestXRPLGuard_Round(t *testing.T) {
 	tests := []struct {
-		name    string
-		setup   func(*xrplGuard)
-		want    int
+		name  string
+		setup func(*xrplGuard)
+		want  int
 	}{
 		{
-			name: "empty guard rounds down",
+			name:  "empty guard rounds down",
 			setup: func(g *xrplGuard) {},
-			want: -1,
+			want:  -1,
 		},
 		{
 			name: "exactly half (5) rounds to even (0 = half)",

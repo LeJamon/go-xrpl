@@ -142,7 +142,7 @@ func TestSerializeRoot(t *testing.T) {
 		}
 
 		// Empty root should still serialize (though it may fail)
-		_, err = sMap.SerializeRoot()
+		_, _ = sMap.SerializeRoot()
 		// This may or may not fail depending on implementation
 		// Just verify it doesn't panic
 	})

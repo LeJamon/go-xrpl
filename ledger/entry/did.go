@@ -2,7 +2,6 @@ package entry
 
 import (
 	"errors"
-
 )
 
 // DID represents a Decentralized Identifier ledger entry

@@ -4,9 +4,9 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/did"
-	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 
 // DIDSetBuilder provides a fluent interface for building DIDSet transactions.

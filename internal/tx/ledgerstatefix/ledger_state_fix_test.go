@@ -66,7 +66,7 @@ func TestLedgerStateFixValidation(t *testing.T) {
 			name: "invalid - universal flags set",
 			tx: func() *LedgerStateFix {
 				l := NewNFTokenPageLinkFix("rAdmin", "rOwner")
-				flags := uint32(tx.TfUniversalMask)
+				flags := tx.TfUniversalMask
 				l.Common.Flags = &flags
 				return l
 			}(),

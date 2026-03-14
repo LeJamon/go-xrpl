@@ -1,10 +1,10 @@
 package amm
 
 import (
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -407,7 +407,7 @@ func requireAuth(view tx.LedgerView, asset tx.Asset, accountID [20]byte) tx.Resu
 
 	// Read trustline first
 	trustLineKey := keylet.Line(accountID, issuerID, asset.Currency)
-	trustLineData, err := view.Read(trustLineKey)
+	trustLineData, _ := view.Read(trustLineKey)
 
 	// Read issuer account
 	issuerKey := keylet.Account(issuerID)
@@ -531,8 +531,8 @@ func xrpLiquidBalance(view tx.LedgerView, accountID [20]byte, additionalOwnerCou
 
 	// Base reserve + owner reserve * (ownerCount + additional)
 	// Using standard XRPL reserves: 10 XRP base + 2 XRP per owner
-	baseReserve := int64(10_000_000)   // 10 XRP in drops
-	ownerReserve := int64(2_000_000)   // 2 XRP in drops
+	baseReserve := int64(10_000_000) // 10 XRP in drops
+	ownerReserve := int64(2_000_000) // 2 XRP in drops
 	totalReserve := baseReserve + ownerReserve*int64(account.OwnerCount+uint32(additionalOwnerCount))
 
 	liquid := int64(account.Balance) - totalReserve

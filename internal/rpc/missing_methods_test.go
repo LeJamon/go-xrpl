@@ -561,7 +561,12 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 
 	method := &handlers.GetAggregatePriceMethod{}
 
-	t.Run("Missing oracles parameter returns error", func(t *testing.T) {
+	// Convenience helper to make a valid-looking oracle entry for params
+	// (uses a real-format r-address so account parsing doesn't fail before
+	// the check we actually want to test).
+	validOracle := `{"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", "oracle_document_id": 1}`
+
+	t.Run("Missing oracles parameter returns missing_field_error", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
@@ -574,36 +579,190 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
+		assert.Equal(t, "Missing field 'oracles'.", rpcErr.Message)
 	})
 
-	t.Run("Missing base_asset returns error", func(t *testing.T) {
+	t.Run("Empty oracles array returns oracleMalformed", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
 		}
 
-		params := json.RawMessage(`{"quote_asset": "USD", "oracles": []}`)
+		params := json.RawMessage(`{"base_asset": "XRP", "quote_asset": "USD", "oracles": []}`)
 		result, rpcErr := method.Handle(ctx, params)
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, types.RpcORACLE_MALFORMED, rpcErr.Code)
+		assert.Equal(t, "oracleMalformed", rpcErr.ErrorString)
 	})
 
-	t.Run("Missing quote_asset returns error", func(t *testing.T) {
+	t.Run("Oracles not array returns oracleMalformed", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
 		}
 
-		params := json.RawMessage(`{"base_asset": "XRP", "oracles": []}`)
+		params := json.RawMessage(`{"base_asset": "XRP", "quote_asset": "USD", "oracles": "bad"}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcORACLE_MALFORMED, rpcErr.Code)
+		assert.Equal(t, "oracleMalformed", rpcErr.ErrorString)
+	})
+
+	t.Run("Missing base_asset returns missing_field_error", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+		}
+
+		params := json.RawMessage(`{"quote_asset": "USD", "oracles": [` + validOracle + `]}`)
 		result, rpcErr := method.Handle(ctx, params)
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Missing field 'base_asset'.", rpcErr.Message)
+	})
+
+	t.Run("Missing quote_asset returns missing_field_error", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+		}
+
+		params := json.RawMessage(`{"base_asset": "XRP", "oracles": [` + validOracle + `]}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Missing field 'quote_asset'.", rpcErr.Message)
+	})
+
+	t.Run("Trim=0 returns invalidParams", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+		}
+
+		params := json.RawMessage(`{"base_asset": "XRP", "quote_asset": "USD", "oracles": [` + validOracle + `], "trim": 0}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
+	})
+
+	t.Run("Trim=26 returns invalidParams", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+		}
+
+		params := json.RawMessage(`{"base_asset": "XRP", "quote_asset": "USD", "oracles": [` + validOracle + `], "trim": 26}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
+	})
+
+	t.Run("Invalid base_asset returns invalidParams", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+		}
+
+		// empty string
+		params := json.RawMessage(`{"base_asset": "", "quote_asset": "USD", "oracles": [` + validOracle + `]}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
+
+		// invalid currency (4 chars, not hex)
+		params = json.RawMessage(`{"base_asset": "ABCD", "quote_asset": "USD", "oracles": [` + validOracle + `]}`)
+		result, rpcErr = method.Handle(ctx, params)
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
+	})
+
+	t.Run("Oracle entry missing account returns oracleMalformed", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+		}
+
+		params := json.RawMessage(`{"base_asset": "XRP", "quote_asset": "USD", "oracles": [{"oracle_document_id": 1}]}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcORACLE_MALFORMED, rpcErr.Code)
+		assert.Equal(t, "oracleMalformed", rpcErr.ErrorString)
+	})
+
+	t.Run("Oracle entry missing oracle_document_id returns oracleMalformed", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+		}
+
+		params := json.RawMessage(`{"base_asset": "XRP", "quote_asset": "USD", "oracles": [{"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}]}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcORACLE_MALFORMED, rpcErr.Code)
+		assert.Equal(t, "oracleMalformed", rpcErr.ErrorString)
+	})
+
+	t.Run("Invalid trim type returns invalidParams", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+		}
+
+		// float trim
+		params := json.RawMessage(`{"base_asset": "XRP", "quote_asset": "USD", "oracles": [` + validOracle + `], "trim": 1.2}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
+	})
+
+	t.Run("Invalid time_threshold type returns invalidParams", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+		}
+
+		// non-numeric time_threshold
+		params := json.RawMessage(`{"base_asset": "XRP", "quote_asset": "USD", "oracles": [` + validOracle + `], "time_threshold": "none"}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
 	})
 
 	t.Run("RequiredRole is Guest", func(t *testing.T) {
@@ -1085,11 +1244,13 @@ func TestMissingMethodsNilLedgerService(t *testing.T) {
 		{"FetchInfoMethod", &handlers.FetchInfoMethod{}},
 		{"PrintMethod", &handlers.PrintMethod{}},
 		{"GetCountsMethod", &handlers.GetCountsMethod{}},
-		{"LogLevelMethod", &handlers.LogLevelMethod{}},
 		{"LogRotateMethod", &handlers.LogRotateMethod{}},
 		{"UnlListMethod", &handlers.UnlListMethod{}},
 		{"BlackListMethod", &handlers.BlackListMethod{}},
 	}
+
+	// Note: LogLevelMethod is excluded — it manages log levels without needing
+	// the ledger service, so it succeeds with nil ledger (returns current levels).
 
 	for _, tc := range methods {
 		t.Run(tc.name+" handles nil Ledger", func(t *testing.T) {

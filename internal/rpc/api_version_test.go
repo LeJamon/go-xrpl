@@ -67,25 +67,25 @@ func allHandlers() map[string]types.MethodHandler {
 		"nft_sell_offers": &handlers.NftSellOffersMethod{},
 
 		// Utility methods
-		"deposit_authorized": &handlers.DepositAuthorizedMethod{},
-		"gateway_balances":   &handlers.GatewayBalancesMethod{},
-		"noripple_check":     &handlers.NoRippleCheckMethod{},
-		"channel_authorize":  &handlers.ChannelAuthorizeMethod{},
-		"channel_verify":     &handlers.ChannelVerifyMethod{},
-		"wallet_propose":     &handlers.WalletProposeMethod{},
-		"json":               &handlers.JsonMethod{},
-		"manifest":           &handlers.ManifestMethod{},
-		"amm_info":           &handlers.AMMInfoMethod{},
-		"vault_info":         &handlers.VaultInfoMethod{},
+		"deposit_authorized":  &handlers.DepositAuthorizedMethod{},
+		"gateway_balances":    &handlers.GatewayBalancesMethod{},
+		"noripple_check":      &handlers.NoRippleCheckMethod{},
+		"channel_authorize":   &handlers.ChannelAuthorizeMethod{},
+		"channel_verify":      &handlers.ChannelVerifyMethod{},
+		"wallet_propose":      &handlers.WalletProposeMethod{},
+		"json":                &handlers.JsonMethod{},
+		"manifest":            &handlers.ManifestMethod{},
+		"amm_info":            &handlers.AMMInfoMethod{},
+		"vault_info":          &handlers.VaultInfoMethod{},
 		"get_aggregate_price": &handlers.GetAggregatePriceMethod{},
-		"simulate":           &handlers.SimulateMethod{},
+		"simulate":            &handlers.SimulateMethod{},
 
 		// WebSocket subscription methods
 		"subscribe":   &handlers.SubscribeMethod{},
 		"unsubscribe": &handlers.UnsubscribeMethod{},
 
 		// Admin / network methods
-		"stop":                    &handlers.StopMethod{},
+		"stop":                   &handlers.StopMethod{},
 		"validation_create":      &handlers.ValidationCreateMethod{},
 		"consensus_info":         &handlers.ConsensusInfoMethod{},
 		"peers":                  &handlers.PeersMethod{},
@@ -155,9 +155,9 @@ func TestApiVersionConstants(t *testing.T) {
 	assert.LessOrEqual(t, types.DefaultApiVersion, maxAPI,
 		"DefaultApiVersion should be <= MAX_API_VERSION")
 
-	// DefaultApiVersion should match rippled's apiVersionIfUnspecified (1).
-	assert.Equal(t, types.ApiVersion1, types.DefaultApiVersion,
-		"DefaultApiVersion should equal ApiVersion1 (rippled apiVersionIfUnspecified)")
+	// DefaultApiVersion should match rippled's apiVersionIfUnspecified (2).
+	assert.Equal(t, types.ApiVersion2, types.DefaultApiVersion,
+		"DefaultApiVersion should equal ApiVersion2 (rippled apiVersionIfUnspecified)")
 
 	// Cross-check with the version handler response (which reports the range).
 	method := &handlers.VersionMethod{}
@@ -349,13 +349,11 @@ func TestApiVersionDeprecatedMethodRanges(t *testing.T) {
 
 	// Expected version ranges per method.
 	//
-	// In rippled, tx_history is deprecated and marked for removal, but still
-	// responds on all supported versions.  The goXRPL implementation mirrors
-	// this: all versions are supported until the method is actually removed.
+	// tx_history is deprecated in rippled and only supports API v1.
 	expectations := map[string]versionRange{
 		"tx_history": {
 			handler:  &handlers.TxHistoryMethod{},
-			expected: []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3},
+			expected: []int{types.ApiVersion1},
 		},
 		"ping": {
 			handler:  &handlers.PingMethod{},

@@ -20,16 +20,16 @@ type NFTokenData struct {
 
 // NFTokenOfferData represents an NFToken offer ledger entry
 type NFTokenOfferData struct {
-	Owner             [20]byte
-	NFTokenID         [32]byte
-	Amount            uint64
-	AmountIOU         *NFTIOUAmount // For IOU amounts
-	Flags             uint32
-	Destination       [20]byte
-	Expiration        uint32
-	HasDestination    bool
-	OwnerNode         uint64 // Page in owner directory where this offer is listed
-	NFTokenOfferNode  uint64 // Page in NFTBuys/NFTSells directory where this offer is listed
+	Owner            [20]byte
+	NFTokenID        [32]byte
+	Amount           uint64
+	AmountIOU        *NFTIOUAmount // For IOU amounts
+	Flags            uint32
+	Destination      [20]byte
+	Expiration       uint32
+	HasDestination   bool
+	OwnerNode        uint64 // Page in owner directory where this offer is listed
+	NFTokenOfferNode uint64 // Page in NFTBuys/NFTSells directory where this offer is listed
 }
 
 // NFTIOUAmount represents an IOU amount for NFToken offers
@@ -152,7 +152,6 @@ func ParseNFTokenPage(data []byte) (*NFTokenPageData, error) {
 		default:
 			if hasToken {
 				page.NFTokens = append(page.NFTokens, currentToken)
-				hasToken = false
 			}
 			return page, nil
 		}

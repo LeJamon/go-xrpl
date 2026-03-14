@@ -58,10 +58,10 @@ const (
 	TypeMPToken         Type = 0x007f // MPT holdings
 
 	// Oracle, Credentials, Permissions
-	TypeOracle            Type = 0x0080 // Price oracles
-	TypeCredential        Type = 0x0081 // Verifiable credentials
+	TypeOracle             Type = 0x0080 // Price oracles
+	TypeCredential         Type = 0x0081 // Verifiable credentials
 	TypePermissionedDomain Type = 0x0082 // Permissioned domain objects
-	TypeDelegate          Type = 0x0083 // Delegated permissions
+	TypeDelegate           Type = 0x0083 // Delegated permissions
 
 	// Vault
 	TypeVault Type = 0x0084 // Asset vaults

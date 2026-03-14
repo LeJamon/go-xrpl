@@ -9,10 +9,10 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/depositpreauth"
-	"github.com/LeJamon/goXRPLd/internal/testing"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // AuthorizeCredentials describes a single credential requirement for
@@ -48,10 +48,10 @@ func Auth(owner, authorized *testing.Account) *AuthBuilder {
 	}
 }
 
-func (b *AuthBuilder) Fee(f uint64) *AuthBuilder          { b.fee = f; return b }
-func (b *AuthBuilder) Sequence(seq uint32) *AuthBuilder    { b.sequence = &seq; return b }
-func (b *AuthBuilder) Flags(flags uint32) *AuthBuilder     { b.flags = &flags; return b }
-func (b *AuthBuilder) TicketSeq(seq uint32) *AuthBuilder   { b.ticketSeq = &seq; return b }
+func (b *AuthBuilder) Fee(f uint64) *AuthBuilder         { b.fee = f; return b }
+func (b *AuthBuilder) Sequence(seq uint32) *AuthBuilder  { b.sequence = &seq; return b }
+func (b *AuthBuilder) Flags(flags uint32) *AuthBuilder   { b.flags = &flags; return b }
+func (b *AuthBuilder) TicketSeq(seq uint32) *AuthBuilder { b.ticketSeq = &seq; return b }
 
 // Build constructs the DepositPreauth transaction.
 func (b *AuthBuilder) Build() tx.Transaction {
@@ -102,7 +102,7 @@ func Unauth(owner, unauthorized *testing.Account) *UnauthBuilder {
 	}
 }
 
-func (b *UnauthBuilder) Fee(f uint64) *UnauthBuilder        { b.fee = f; return b }
+func (b *UnauthBuilder) Fee(f uint64) *UnauthBuilder         { b.fee = f; return b }
 func (b *UnauthBuilder) Sequence(seq uint32) *UnauthBuilder  { b.sequence = &seq; return b }
 func (b *UnauthBuilder) Flags(flags uint32) *UnauthBuilder   { b.flags = &flags; return b }
 func (b *UnauthBuilder) TicketSeq(seq uint32) *UnauthBuilder { b.ticketSeq = &seq; return b }
@@ -155,9 +155,15 @@ func AuthCredentials(owner *testing.Account, credentials []AuthorizeCredentials)
 	}
 }
 
-func (b *AuthCredentialsBuilder) Fee(f uint64) *AuthCredentialsBuilder       { b.fee = f; return b }
-func (b *AuthCredentialsBuilder) Sequence(seq uint32) *AuthCredentialsBuilder { b.sequence = &seq; return b }
-func (b *AuthCredentialsBuilder) Flags(flags uint32) *AuthCredentialsBuilder  { b.flags = &flags; return b }
+func (b *AuthCredentialsBuilder) Fee(f uint64) *AuthCredentialsBuilder { b.fee = f; return b }
+func (b *AuthCredentialsBuilder) Sequence(seq uint32) *AuthCredentialsBuilder {
+	b.sequence = &seq
+	return b
+}
+func (b *AuthCredentialsBuilder) Flags(flags uint32) *AuthCredentialsBuilder {
+	b.flags = &flags
+	return b
+}
 
 // Build constructs the DepositPreauth transaction with AuthorizeCredentials.
 func (b *AuthCredentialsBuilder) Build() tx.Transaction {
@@ -217,9 +223,15 @@ func UnauthCredentials(owner *testing.Account, credentials []AuthorizeCredential
 	}
 }
 
-func (b *UnauthCredentialsBuilder) Fee(f uint64) *UnauthCredentialsBuilder       { b.fee = f; return b }
-func (b *UnauthCredentialsBuilder) Sequence(seq uint32) *UnauthCredentialsBuilder { b.sequence = &seq; return b }
-func (b *UnauthCredentialsBuilder) Flags(flags uint32) *UnauthCredentialsBuilder  { b.flags = &flags; return b }
+func (b *UnauthCredentialsBuilder) Fee(f uint64) *UnauthCredentialsBuilder { b.fee = f; return b }
+func (b *UnauthCredentialsBuilder) Sequence(seq uint32) *UnauthCredentialsBuilder {
+	b.sequence = &seq
+	return b
+}
+func (b *UnauthCredentialsBuilder) Flags(flags uint32) *UnauthCredentialsBuilder {
+	b.flags = &flags
+	return b
+}
 
 // Build constructs the DepositPreauth transaction with UnauthorizeCredentials.
 func (b *UnauthCredentialsBuilder) Build() tx.Transaction {
@@ -271,16 +283,18 @@ func Raw(account string) *RawBuilder {
 	return &RawBuilder{dp: depositpreauth.NewDepositPreauth(account)}
 }
 
-func (b *RawBuilder) Authorize(addr string) *RawBuilder                          { b.dp.Authorize = addr; return b }
-func (b *RawBuilder) Unauthorize(addr string) *RawBuilder                        { b.dp.Unauthorize = addr; return b }
-func (b *RawBuilder) Fee(f string) *RawBuilder                                   { b.dp.Fee = f; return b }
-func (b *RawBuilder) Sequence(seq uint32) *RawBuilder                            { b.dp.Sequence = &seq; return b }
-func (b *RawBuilder) Flags(flags uint32) *RawBuilder                             { b.dp.SetFlags(flags); return b }
+func (b *RawBuilder) Authorize(addr string) *RawBuilder   { b.dp.Authorize = addr; return b }
+func (b *RawBuilder) Unauthorize(addr string) *RawBuilder { b.dp.Unauthorize = addr; return b }
+func (b *RawBuilder) Fee(f string) *RawBuilder            { b.dp.Fee = f; return b }
+func (b *RawBuilder) Sequence(seq uint32) *RawBuilder     { b.dp.Sequence = &seq; return b }
+func (b *RawBuilder) Flags(flags uint32) *RawBuilder      { b.dp.SetFlags(flags); return b }
 func (b *RawBuilder) AuthorizeCredentials(c []depositpreauth.CredentialWrapper) *RawBuilder {
-	b.dp.AuthorizeCredentials = c; return b
+	b.dp.AuthorizeCredentials = c
+	return b
 }
 func (b *RawBuilder) UnauthorizeCredentials(c []depositpreauth.CredentialWrapper) *RawBuilder {
-	b.dp.UnauthorizeCredentials = c; return b
+	b.dp.UnauthorizeCredentials = c
+	return b
 }
 
 // Build returns the DepositPreauth transaction.

@@ -34,7 +34,7 @@ import (
 // ammInvariantFields holds the fields extracted from AMM SLE entries during the
 // visitEntry phase.
 type ammInvariantFields struct {
-	accountID [20]byte
+	accountID  [20]byte
 	lptBalance Amount
 	hasBalance bool
 }
@@ -656,4 +656,3 @@ func generalAMMInvariant(tx Transaction, view ReadView, ammAccount *[20]byte, lp
 
 	return nil
 }
-

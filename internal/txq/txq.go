@@ -82,7 +82,7 @@ func (q *TxQ) GetMetrics(txInLedger uint32) Metrics {
 	snapshot := q.feeMetrics.GetSnapshot()
 	openLedgerFeeLevel := ScaleFeeLevel(snapshot, txInLedger)
 
-	minProcessingFeeLevel := uint64(BaseLevel)
+	minProcessingFeeLevel := BaseLevel
 	if q.isFull() && len(q.byFee) > 0 {
 		// When full, need to beat the lowest fee in the queue
 		minProcessingFeeLevel = uint64(q.byFee[len(q.byFee)-1].FeeLevel) + 1

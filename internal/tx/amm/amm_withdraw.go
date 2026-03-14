@@ -1,10 +1,10 @@
 package amm
 
 import (
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -297,9 +297,9 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 	// withdraw() with (amountBalance=withdrawn_asset_balance, amountWithdraw, nullopt).
 	// We must replicate this: pass the withdrawn asset's balance (not always assetBalance1)
 	// and nil for amount2 to enter the "single trade" path in adjustAmountsByLPTokens.
-	var withdrawAssetBalance tx.Amount   // pool balance for the withdrawn asset
-	isSingleAssetWithdraw := false       // true if only one asset is being withdrawn
-	singleWithdrawIsAsset2 := false      // true if the single withdrawal is for asset2
+	var withdrawAssetBalance tx.Amount // pool balance for the withdrawn asset
+	isSingleAssetWithdraw := false     // true if only one asset is being withdrawn
+	singleWithdrawIsAsset2 := false    // true if the single withdrawal is for asset2
 
 	// Handle different withdrawal modes
 	// Reference: rippled AMMWithdraw.cpp applyGuts()
@@ -437,14 +437,13 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		frac := numberDiv(toIOUForCalc(amount1), toIOUForCalc(assetBalance1))
-		amount2Withdraw := getRoundedAsset(fixV1_3, assetBalance2, frac, false)
 		tokensAdj := getRoundedLPTokens(fixV1_3, lptBalance, frac, false)
 		if fixV1_3 && tokensAdj.IsZero() {
 			return tx.TecAMM_INVALID_TOKENS
 		}
 		// factor in the adjusted tokens
 		frac = adjustFracByTokens(fixV1_3, lptBalance, tokensAdj, frac)
-		amount2Withdraw = getRoundedAsset(fixV1_3, assetBalance2, frac, false)
+		amount2Withdraw := getRoundedAsset(fixV1_3, assetBalance2, frac, false)
 
 		if toIOUForCalc(amount2Withdraw).Compare(toIOUForCalc(amount2)) <= 0 {
 			withdrawAmount1 = amount1
@@ -452,13 +451,12 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 			lpTokensToRedeem = tokensAdj
 		} else {
 			frac = numberDiv(toIOUForCalc(amount2), toIOUForCalc(assetBalance2))
-			amountWithdraw := getRoundedAsset(fixV1_3, assetBalance1, frac, false)
 			tokensAdj = getRoundedLPTokens(fixV1_3, lptBalance, frac, false)
 			if fixV1_3 && tokensAdj.IsZero() {
 				return tx.TecAMM_INVALID_TOKENS
 			}
 			frac = adjustFracByTokens(fixV1_3, lptBalance, tokensAdj, frac)
-			amountWithdraw = getRoundedAsset(fixV1_3, assetBalance1, frac, false)
+			amountWithdraw := getRoundedAsset(fixV1_3, assetBalance1, frac, false)
 
 			if fixV1_3 && toIOUForCalc(amountWithdraw).Compare(toIOUForCalc(amount1)) > 0 {
 				return tx.TecAMM_FAILED

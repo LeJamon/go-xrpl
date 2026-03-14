@@ -3,9 +3,9 @@ package clawback
 import (
 	"fmt"
 
+	"github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/clawback"
-	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 
 // ClawbackBuilder provides a fluent interface for building Clawback transactions.

@@ -44,8 +44,10 @@ func newMockNFTOffersLedgerService() *mockNFTOffersLedgerService {
 func (m *mockNFTOffersLedgerService) GetCurrentLedgerIndex() uint32   { return m.currentLedgerIndex }
 func (m *mockNFTOffersLedgerService) GetClosedLedgerIndex() uint32    { return m.closedLedgerIndex }
 func (m *mockNFTOffersLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
-func (m *mockNFTOffersLedgerService) AcceptLedger() (uint32, error)   { return m.closedLedgerIndex + 1, nil }
-func (m *mockNFTOffersLedgerService) IsStandalone() bool              { return m.standalone }
+func (m *mockNFTOffersLedgerService) AcceptLedger() (uint32, error) {
+	return m.closedLedgerIndex + 1, nil
+}
+func (m *mockNFTOffersLedgerService) IsStandalone() bool { return m.standalone }
 func (m *mockNFTOffersLedgerService) GetServerInfo() types.LedgerServerInfo {
 	return m.serverInfo
 }
@@ -58,7 +60,7 @@ func (m *mockNFTOffersLedgerService) GetLedgerBySequence(seq uint32) (types.Ledg
 func (m *mockNFTOffersLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) SubmitTransaction(txJSON []byte) (*types.SubmitResult, error) {
+func (m *mockNFTOffersLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockNFTOffersLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
@@ -115,7 +117,7 @@ func (m *mockNFTOffersLedgerService) GetGatewayBalances(account string, hotWalle
 func (m *mockNFTOffersLedgerService) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*types.DepositAuthorizedResult, error) {
+func (m *mockNFTOffersLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*types.DepositAuthorizedResult, error) {
 	return nil, errors.New("not implemented")
 }
 

@@ -4,9 +4,9 @@ import (
 	"encoding/hex"
 
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -134,11 +134,11 @@ func (p *PaymentChannelCreate) RequiredAmendments() [][32]byte {
 
 // Apply applies a PaymentChannelCreate transaction
 // Reference: rippled PayChan.cpp PayChanCreate::doApply()
-func (pc *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
-	amount := uint64(pc.Amount.Drops())
+func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+	amount := uint64(p.Amount.Drops())
 
 	// Verify destination exists and is not a pseudo-account (AMM)
-	destAccount, destID, result := ctx.LookupDestination(pc.Destination)
+	destAccount, destID, result := ctx.LookupDestination(p.Destination)
 	if result != tx.TesSUCCESS {
 		return result
 	}
@@ -153,7 +153,7 @@ func (pc *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// RequireDestTag check
 	// Reference: rippled PayChan.cpp preclaim() lsfRequireDestTag
-	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && pc.DestinationTag == nil {
+	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
 		return tx.TecDST_TAG_NEEDED
 	}
 
@@ -178,21 +178,21 @@ func (pc *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// fixPayChanCancelAfter: CancelAfter must be in the future
 	// Reference: rippled PayChan.cpp doApply() fixPayChanCancelAfter
 	if ctx.Rules().Enabled(amendment.FeatureFixPayChanCancelAfter) {
-		if pc.CancelAfter != nil {
+		if p.CancelAfter != nil {
 			closeTime := ctx.Config.ParentCloseTime
-			if closeTime > *pc.CancelAfter {
+			if closeTime > *p.CancelAfter {
 				return tx.TecEXPIRED
 			}
 		}
 	}
 
 	// Create pay channel
-	accountID, _ := state.DecodeAccountID(pc.Account)
-	sequence := pc.GetCommon().SeqProxy()
+	accountID, _ := state.DecodeAccountID(p.Account)
+	sequence := p.GetCommon().SeqProxy()
 	channelKey := keylet.PayChannel(accountID, destID, sequence)
 
 	// Serialize pay channel SLE
-	channelData, err := serializePayChannel(pc, accountID, destID, amount)
+	channelData, err := serializePayChannel(p, accountID, destID, amount)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

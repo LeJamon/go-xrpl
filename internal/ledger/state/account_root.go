@@ -24,11 +24,11 @@ type AccountRoot struct {
 	MessageKey           string
 	TransferRate         uint32
 	TickSize             uint8
-	NFTokenMinter        string // Account allowed to mint NFTokens on behalf of this account
-	MintedNFTokens       uint32 // Number of NFTokens minted by this account (issuer tracking)
-	BurnedNFTokens       uint32 // Number of NFTokens burned for this issuer
-	FirstNFTokenSequence uint32 // First NFToken sequence (set by fixNFTokenRemint)
-	HasFirstNFTSeq       bool   // Whether FirstNFTokenSequence is set (zero is a valid value)
+	NFTokenMinter        string   // Account allowed to mint NFTokens on behalf of this account
+	MintedNFTokens       uint32   // Number of NFTokens minted by this account (issuer tracking)
+	BurnedNFTokens       uint32   // Number of NFTokens burned for this issuer
+	FirstNFTokenSequence uint32   // First NFToken sequence (set by fixNFTokenRemint)
+	HasFirstNFTSeq       bool     // Whether FirstNFTokenSequence is set (zero is a valid value)
 	AccountTxnID         [32]byte // Hash of the last transaction this account submitted (when enabled)
 	WalletLocator        string   // Arbitrary hex data (deprecated)
 	TicketCount          uint32   // Number of outstanding tickets owned by this account
@@ -52,25 +52,25 @@ const (
 
 // Field codes for AccountRoot (unexported, only used locally)
 const (
-	fieldCodeLedgerEntryType = 1  // UInt16
-	fieldCodeFlags           = 2  // UInt32
-	fieldCodeSequence        = 4  // UInt32
-	fieldCodeOwnerCount      = 13 // UInt32 (per rippled sfields.macro)
-	fieldCodeTransferRate    = 11 // UInt32
+	fieldCodeLedgerEntryType      = 1  // UInt16
+	fieldCodeFlags                = 2  // UInt32
+	fieldCodeSequence             = 4  // UInt32
+	fieldCodeOwnerCount           = 13 // UInt32 (per rippled sfields.macro)
+	fieldCodeTransferRate         = 11 // UInt32
 	fieldCodeMintedNFTokens       = 43 // UInt32 - number of NFTokens minted
 	fieldCodeBurnedNFTokens       = 44 // UInt32 - number of NFTokens burned
 	fieldCodeFirstNFTokenSequence = 50 // UInt32 - first NFToken sequence (fixNFTokenRemint)
-	fieldCodeBalance         = 1  // Amount
-	fieldCodeRegularKey      = 8  // Account
-	fieldCodeAccount         = 1  // Account (different context)
-	fieldCodeNFTokenMinter   = 9  // Account - authorized NFT minter
-	fieldCodeEmailHash       = 1  // Hash128
-	fieldCodeDomain          = 7  // Blob
-	fieldCodeTickSize        = 16 // UInt8 (type code 16)
-	fieldCodeTicketCount     = 40 // UInt32 - number of outstanding tickets
-	fieldCodeAccountTxnID    = 9  // Hash256 - last transaction ID
-	fieldCodeWalletLocator   = 7  // Hash256 - wallet locator (deprecated)
-	fieldCodeAMMID           = 14 // Hash256 - links AMM pseudo-account to AMM entry (sfAMMID)
+	fieldCodeBalance              = 1  // Amount
+	fieldCodeRegularKey           = 8  // Account
+	fieldCodeAccount              = 1  // Account (different context)
+	fieldCodeNFTokenMinter        = 9  // Account - authorized NFT minter
+	fieldCodeEmailHash            = 1  // Hash128
+	fieldCodeDomain               = 7  // Blob
+	fieldCodeTickSize             = 16 // UInt8 (type code 16)
+	fieldCodeTicketCount          = 40 // UInt32 - number of outstanding tickets
+	fieldCodeAccountTxnID         = 9  // Hash256 - last transaction ID
+	fieldCodeWalletLocator        = 7  // Hash256 - wallet locator (deprecated)
+	fieldCodeAMMID                = 14 // Hash256 - links AMM pseudo-account to AMM entry (sfAMMID)
 )
 
 // Ledger entry type code for AccountRoot (unexported)

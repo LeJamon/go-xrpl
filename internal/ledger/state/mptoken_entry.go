@@ -27,7 +27,7 @@ type MPTokenIssuanceData struct {
 	AssetScale        uint8
 	MaximumAmount     *uint64
 	LockedAmount      *uint64
-	MPTokenMetadata   string // hex-encoded
+	MPTokenMetadata   string  // hex-encoded
 	DomainID          *string // hex-encoded 32-byte hash, nil if not set
 	Flags             uint32
 }
@@ -196,11 +196,11 @@ func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 	}
 
 	jsonObj := map[string]any{
-		"LedgerEntryType":  "MPTokenIssuance",
-		"Flags":            issuance.Flags,
-		"Issuer":           issuerAddress,
-		"Sequence":         issuance.Sequence,
-		"OwnerNode":        fmt.Sprintf("%X", issuance.OwnerNode),
+		"LedgerEntryType":   "MPTokenIssuance",
+		"Flags":             issuance.Flags,
+		"Issuer":            issuerAddress,
+		"Sequence":          issuance.Sequence,
+		"OwnerNode":         fmt.Sprintf("%X", issuance.OwnerNode),
 		"OutstandingAmount": fmt.Sprintf("%X", issuance.OutstandingAmount),
 	}
 
@@ -366,12 +366,12 @@ func SerializeMPToken(token *MPTokenData) ([]byte, error) {
 	}
 
 	jsonObj := map[string]any{
-		"LedgerEntryType":  "MPToken",
-		"Flags":            token.Flags,
-		"Account":          accountAddress,
+		"LedgerEntryType":   "MPToken",
+		"Flags":             token.Flags,
+		"Account":           accountAddress,
 		"MPTokenIssuanceID": strings.ToUpper(hex.EncodeToString(token.MPTokenIssuanceID[:])),
-		"OwnerNode":        fmt.Sprintf("%X", token.OwnerNode),
-		"MPTAmount":        fmt.Sprintf("%X", token.MPTAmount),
+		"OwnerNode":         fmt.Sprintf("%X", token.OwnerNode),
+		"MPTAmount":         fmt.Sprintf("%X", token.MPTAmount),
 	}
 
 	if token.LockedAmount != nil && *token.LockedAmount > 0 {

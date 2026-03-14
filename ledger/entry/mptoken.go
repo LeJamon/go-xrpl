@@ -2,7 +2,6 @@ package entry
 
 import (
 	"errors"
-
 )
 
 // MPTokenIssuance represents a Multi-Purpose Token issuance ledger entry
@@ -21,9 +20,9 @@ type MPTokenIssuance struct {
 	AssetScale  uint8  // Decimal places for the token
 
 	// Optional fields
-	MaximumAmount   *uint64 // Maximum amount that can be issued
-	LockedAmount    *uint64 // Amount currently locked
-	MPTokenMetadata *[]byte // Metadata for the token
+	MaximumAmount   *uint64   // Maximum amount that can be issued
+	LockedAmount    *uint64   // Amount currently locked
+	MPTokenMetadata *[]byte   // Metadata for the token
 	DomainID        *[32]byte // Associated permissioned domain
 }
 

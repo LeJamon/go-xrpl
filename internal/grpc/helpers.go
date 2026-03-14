@@ -3,7 +3,6 @@ package grpc
 import (
 	"encoding/hex"
 	"errors"
-	"strconv"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger"
@@ -12,15 +11,15 @@ import (
 
 // Common errors for gRPC handlers
 var (
-	ErrLedgerNotFound        = errors.New("ledger not found")
-	ErrInvalidLedgerHash     = errors.New("invalid ledger hash")
-	ErrInvalidLedgerIndex    = errors.New("invalid ledger index")
-	ErrNoValidatedLedger     = errors.New("no validated ledger available")
-	ErrNoClosedLedger        = errors.New("no closed ledger available")
-	ErrNoCurrentLedger       = errors.New("no current ledger available")
-	ErrInvalidMarker         = errors.New("invalid marker format")
-	ErrEntryNotFound         = errors.New("ledger entry not found")
-	ErrSerializationFailed   = errors.New("failed to serialize ledger object")
+	ErrLedgerNotFound         = errors.New("ledger not found")
+	ErrInvalidLedgerHash      = errors.New("invalid ledger hash")
+	ErrInvalidLedgerIndex     = errors.New("invalid ledger index")
+	ErrNoValidatedLedger      = errors.New("no validated ledger available")
+	ErrNoClosedLedger         = errors.New("no closed ledger available")
+	ErrNoCurrentLedger        = errors.New("no current ledger available")
+	ErrInvalidMarker          = errors.New("invalid marker format")
+	ErrEntryNotFound          = errors.New("ledger entry not found")
+	ErrSerializationFailed    = errors.New("failed to serialize ledger object")
 	ErrInvalidLedgerSpecifier = errors.New("invalid ledger specifier")
 )
 
@@ -109,34 +108,6 @@ func ledgerFromSpecifier(spec *LedgerSpecifier, svc LedgerServiceInterface) (*le
 	}
 }
 
-// parseLedgerSpecifier parses a string-based ledger specifier into a LedgerSpecifier struct.
-// This is useful for parsing incoming gRPC requests.
-func parseLedgerSpecifier(hashStr string, sequence uint32, shortcut string) (*LedgerSpecifier, error) {
-	spec := &LedgerSpecifier{}
-
-	// Parse hash if provided
-	if hashStr != "" {
-		hashBytes, err := hex.DecodeString(hashStr)
-		if err != nil || len(hashBytes) != 32 {
-			return nil, ErrInvalidLedgerHash
-		}
-		copy(spec.Hash[:], hashBytes)
-		spec.HasHash = true
-		return spec, nil
-	}
-
-	// Use sequence if provided and non-zero
-	if sequence > 0 {
-		spec.Sequence = sequence
-		spec.HasSequence = true
-		return spec, nil
-	}
-
-	// Use shortcut
-	spec.Shortcut = shortcut
-	return spec, nil
-}
-
 // serializeLedgerObject serializes a ledger entry (SLE) to its binary representation.
 // The data is already in binary format from the ledger, so this mainly handles
 // any additional processing needed for the gRPC response.
@@ -201,11 +172,6 @@ func toRippleTime(t time.Time) uint32 {
 	return uint32(t.Unix() - RippleEpoch.Unix())
 }
 
-// fromRippleTime converts seconds since the Ripple epoch to time.Time.
-func fromRippleTime(rippleSeconds uint32) time.Time {
-	return time.Unix(RippleEpoch.Unix()+int64(rippleSeconds), 0)
-}
-
 // getLedgerEntryType extracts the ledger entry type from serialized data.
 // Returns the type code or 0 if it cannot be determined.
 func getLedgerEntryType(data []byte) uint16 {
@@ -259,26 +225,4 @@ func getLedgerEntryTypeName(typeCode uint16) string {
 	default:
 		return "Unknown"
 	}
-}
-
-// hexDecode decodes a hex string to bytes.
-func hexDecode(s string) ([]byte, error) {
-	return hex.DecodeString(s)
-}
-
-// hexEncode encodes bytes to a hex string.
-func hexEncode(b []byte) string {
-	return hex.EncodeToString(b)
-}
-
-// parseUint32 parses a string as uint32.
-func parseUint32(s string) (uint32, error) {
-	if s == "" {
-		return 0, nil
-	}
-	val, err := strconv.ParseUint(s, 10, 32)
-	if err != nil {
-		return 0, err
-	}
-	return uint32(val), nil
 }

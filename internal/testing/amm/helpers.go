@@ -6,15 +6,15 @@ import (
 	"testing"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/ledger/entry"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	coreAmm "github.com/LeJamon/goXRPLd/internal/tx/amm"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	offerbuild "github.com/LeJamon/goXRPLd/internal/testing/offer"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	coreAmm "github.com/LeJamon/goXRPLd/internal/tx/amm"
+	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
 // AMM-specific result codes
@@ -33,10 +33,10 @@ const (
 	TecINCOMPLETE         = "tecINCOMPLETE"
 	TecPATH_PARTIAL       = "tecPATH_PARTIAL"
 
-	TerNO_AMM              = "terNO_AMM"
-	TerNO_ACCOUNT          = "terNO_ACCOUNT"
-	TerNO_RIPPLE           = "terNO_RIPPLE"
-	TerADDRESS_COLLISION   = "terADDRESS_COLLISION"
+	TerNO_AMM            = "terNO_AMM"
+	TerNO_ACCOUNT        = "terNO_ACCOUNT"
+	TerNO_RIPPLE         = "terNO_RIPPLE"
+	TerADDRESS_COLLISION = "terADDRESS_COLLISION"
 
 	TemBAD_AMM_TOKENS = "temBAD_AMM_TOKENS"
 	TemBAD_AMOUNT     = "temBAD_AMOUNT"
@@ -278,11 +278,6 @@ func TestAMM(t *testing.T, pool *[2]tx.Amount, tradingFee uint16, callback TestA
 	// Gather all IOU currencies from the pool
 	for _, amt := range []tx.Amount{asset1, asset2} {
 		if !amt.IsNative() {
-			// Fix issuer to GW if empty
-			issuer := amt.Issuer
-			if issuer == "" {
-				issuer = env.GW.Address
-			}
 			env.Trust(env.Alice, env.GW, amt.Currency, iouFund*2)
 			env.Trust(env.Carol, env.GW, amt.Currency, iouFund*2)
 		}

@@ -770,7 +770,6 @@ func (a Amount) MulRatio(num, den uint32, roundUp bool) Amount {
 
 	exponent := a.iou.Exponent()
 
-
 	// roomToGrow: scale up to capture fractional digits from rem/den
 	// Reference: IOUAmount.cpp lines 254-272
 	if rem.Sign() != 0 {
@@ -1083,7 +1082,6 @@ func (a Amount) Div(other Amount, roundUp bool) Amount {
 		}
 	}
 
-
 	bigM1 := new(big.Int).SetUint64(uint64(m1))
 	bigM2 := new(big.Int).SetUint64(uint64(m2))
 
@@ -1210,8 +1208,8 @@ func MulRoundStrict(v1, v2 Amount, currency, issuer string, roundUp bool) Amount
 
 	// muldiv_round: (value1 * value2 + rounding) / 10^14
 	// rounding = (resultNegative != roundUp) ? 10^14 - 1 : 0
-	tenTo14 := new(big.Int).SetUint64(100_000_000_000_000)     // 10^14
-	tenTo14m1 := new(big.Int).SetUint64(99_999_999_999_999)    // 10^14 - 1
+	tenTo14 := new(big.Int).SetUint64(100_000_000_000_000)  // 10^14
+	tenTo14m1 := new(big.Int).SetUint64(99_999_999_999_999) // 10^14 - 1
 	product := new(big.Int).Mul(big.NewInt(value1), big.NewInt(value2))
 	if resultNegative != roundUp {
 		product.Add(product, tenTo14m1)
@@ -1220,7 +1218,6 @@ func MulRoundStrict(v1, v2 Amount, currency, issuer string, roundUp bool) Amount
 
 	amount := product.Uint64()
 	offset := offset1 + offset2 + 14
-
 
 	// canonicalizeRoundStrict: only when resultNegative != roundUp
 	if resultNegative != roundUp {
@@ -1244,7 +1241,6 @@ func MulRoundStrict(v1, v2 Amount, currency, issuer string, roundUp bool) Amount
 	}
 	result := NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
 	guard.Release()
-
 
 	// If roundUp and positive and result is zero, return minimum value
 	if roundUp && !resultNegative && result.IsZero() {
@@ -1492,7 +1488,6 @@ func DivRoundNative(num, den Amount, roundUp bool) int64 {
 				adder = 9
 			}
 			amount = (amount + adder) / 10
-			offset++
 		}
 	} else {
 		// When resultNegative == roundUp (i.e., no rounding needed),
@@ -1589,7 +1584,6 @@ func MulRoundNative(v1, v2 Amount, roundUp bool) int64 {
 				adder = 9
 			}
 			amount = (amount + adder) / 10
-			offset++
 		}
 	} else {
 		// When resultNegative == roundUp, no special rounding needed.

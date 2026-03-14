@@ -2,7 +2,6 @@ package entry
 
 import (
 	"errors"
-
 )
 
 // XChainBridge represents the bridge specification

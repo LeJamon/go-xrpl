@@ -19,9 +19,9 @@ type Overlay struct {
 	identity *Identity
 
 	// Components
-	discovery   *Discovery
-	relay       *Relay
-	ledgerSync  *LedgerSyncHandler
+	discovery  *Discovery
+	relay      *Relay
+	ledgerSync *LedgerSyncHandler
 
 	// Peer management
 	peers   map[PeerID]*Peer
@@ -38,7 +38,6 @@ type Overlay struct {
 	// Lifecycle
 	ctx    context.Context
 	cancel context.CancelFunc
-	wg     sync.WaitGroup
 }
 
 // New creates a new Overlay with the provided options.

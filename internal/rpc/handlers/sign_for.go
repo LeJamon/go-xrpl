@@ -166,9 +166,19 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	// Add hash to response tx_json
 	txMap["hash"] = txHash
 
+	// Inject DeliverMax for Payment transactions, matching rippled's
+	// RPC::insertDeliverMax in transactionFormatResultImpl.
+	injectDeliverMax(txMap, ctx.ApiVersion)
+
 	response := map[string]interface{}{
 		"tx_blob": txBlob,
 		"tx_json": txMap,
+	}
+
+	// API v2+: add hash at root level of response, matching rippled's
+	// transactionFormatResultImpl in TransactionSign.cpp.
+	if ctx.ApiVersion > 1 {
+		response["hash"] = txHash
 	}
 
 	return response, nil

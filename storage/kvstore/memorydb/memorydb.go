@@ -13,8 +13,8 @@ import (
 
 // MemDatabase is a thread-safe in-memory implementation of kvstore.KeyValueStore.
 type MemDatabase struct {
-	db   map[string][]byte
-	lock sync.RWMutex
+	db     map[string][]byte
+	lock   sync.RWMutex
 	closed bool
 }
 

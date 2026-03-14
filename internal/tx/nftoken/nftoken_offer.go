@@ -212,7 +212,7 @@ func tokenOfferCreateApply(
 	offerNode := tokenDirResult.Page
 
 	// Serialize the offer
-	flags := uint32(NFTokenCreateOfferFlagSellNFToken) // Always a sell offer
+	flags := NFTokenCreateOfferFlagSellNFToken // Always a sell offer
 
 	offerData, err := serializeNFTokenOfferRaw(
 		accountID, tokenID,

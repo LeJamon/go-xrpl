@@ -4,9 +4,9 @@ import (
 	"encoding/hex"
 
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -73,11 +73,11 @@ func (n *NFTokenBurn) RequiredAmendments() [][32]byte {
 
 // Apply applies the NFTokenBurn transaction to the ledger.
 // Reference: rippled NFTokenBurn.cpp doApply
-func (b *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
+func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 	accountID := ctx.AccountID
 
 	// Parse the token ID
-	tokenIDBytes, err := hex.DecodeString(b.NFTokenID)
+	tokenIDBytes, err := hex.DecodeString(n.NFTokenID)
 	if err != nil || len(tokenIDBytes) != 32 {
 		return tx.TemINVALID
 	}
@@ -87,8 +87,8 @@ func (b *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Determine the owner
 	var ownerID [20]byte
-	if b.Owner != "" {
-		ownerID, err = state.DecodeAccountID(b.Owner)
+	if n.Owner != "" {
+		ownerID, err = state.DecodeAccountID(n.Owner)
 		if err != nil {
 			return tx.TemINVALID
 		}
@@ -129,7 +129,7 @@ func (b *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 			if err != nil {
 				return tx.TefINTERNAL
 			}
-			if issuerAccount.NFTokenMinter != b.Account {
+			if issuerAccount.NFTokenMinter != n.Account {
 				return tx.TecNO_PERMISSION
 			}
 		}

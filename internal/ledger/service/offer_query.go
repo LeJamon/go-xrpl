@@ -1,8 +1,8 @@
 package service
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 // BookOffer represents an offer in an order book

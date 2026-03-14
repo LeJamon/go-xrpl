@@ -143,9 +143,9 @@ func TestPreflight(t *testing.T) {
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		batch := NewBatchBuilder(alice, seq, batchFee, 0x00010000). // invalid flag
-											AddInnerTx(MakeFakeInnerTx()).
-											AddInnerTx(MakeFakeInnerTx()).
-											Build()
+										AddInnerTx(MakeFakeInnerTx()).
+										AddInnerTx(MakeFakeInnerTx()).
+										Build()
 
 		result := env.Submit(batch)
 		xtesting.RequireTxFail(t, result, "temINVALID_FLAG")
@@ -1404,8 +1404,8 @@ func makeSmallQueueConfig(minTxnStandalone uint32) txq.Config {
 		MinimumTxnInLedgerStandalone:   minTxnStandalone,
 		TargetTxnInLedger:              256,
 		MaximumTxnInLedger:             0,
-		NormalConsensusIncreasePercent:  0,
-		SlowConsensusDecreasePercent:    50,
+		NormalConsensusIncreasePercent: 0,
+		SlowConsensusDecreasePercent:   50,
 		MaximumTxnPerAccount:           10,
 		MinimumLastLedgerBuffer:        2,
 		Standalone:                     true,
@@ -2140,8 +2140,8 @@ func TestPreclaim(t *testing.T) {
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
 			AddMultiSignBatchSignerWithRegKeys(bob, []RegKeySigner{
-				{Account: carol, SigningKey: carol},  // carol signs with own key
-				{Account: dave, SigningKey: davo},     // dave signs with davo's key (no regkey set)
+				{Account: carol, SigningKey: carol}, // carol signs with own key
+				{Account: dave, SigningKey: davo},   // dave signs with davo's key (no regkey set)
 			}).
 			Build()
 		result := env.Submit(batch)
@@ -2161,7 +2161,7 @@ func TestPreclaim(t *testing.T) {
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
 			AddMultiSignBatchSignerWithRegKeys(bob, []RegKeySigner{
 				{Account: carol, SigningKey: carol},
-				{Account: dave, SigningKey: davo},    // davo != frank (dave's regular key)
+				{Account: dave, SigningKey: davo}, // davo != frank (dave's regular key)
 			}).
 			Build()
 		result := env.Submit(batch)
@@ -2677,7 +2677,7 @@ func TestObjectCreate3rdParty(t *testing.T) {
 	// Verify XRP balances: alice and bob unchanged, carol pays fee
 	xtesting.RequireBalance(t, env, alice, preAlice)
 	xtesting.RequireBalance(t, env, bob, preBob)
-	xtesting.RequireBalance(t, env, carol, preCarol-uint64(batchFee))
+	xtesting.RequireBalance(t, env, carol, preCarol-batchFee)
 
 	// Verify IOU balances: alice gains USD(10), bob loses USD(10)
 	require.InDelta(t, preAliceUSD+10.0, env.BalanceIOU(alice, "USD", gw), 0.001,

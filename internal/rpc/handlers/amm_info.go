@@ -4,11 +4,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
+	"time"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // AMMInfoMethod handles the amm_info RPC method
@@ -131,6 +133,11 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	if tradingFee, ok := decoded["TradingFee"]; ok {
 		ammResult["trading_fee"] = tradingFee
 	}
+
+	// TODO: amount/amount2 currently return the asset issue definitions from the AMM SLE
+	// (sfAsset/sfAsset2), not the actual pool balances. Rippled calls ammPoolHolds() to
+	// get real balances from trust lines, which requires service-layer trust line lookups.
+	// Similarly, asset_frozen/asset2_frozen require isFrozen() calls on trust lines.
 	if asset, ok := decoded["Asset"]; ok {
 		ammResult["amount"] = asset
 	}
@@ -163,35 +170,24 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		}
 	}
 
+	// Resolve parentCloseTime from the ledger for auction slot time_interval computation.
+	// rippled: ammAuctionTimeSlot(ledger->info().parentCloseTime, auctionSlot)
+	var parentCloseTime uint64
+	if ammEntry.LedgerIndex > 0 {
+		if lr, lrErr := types.Services.Ledger.GetLedgerBySequence(ammEntry.LedgerIndex); lrErr == nil && lr != nil {
+			pct := lr.ParentCloseTime()
+			if pct > 0 {
+				parentCloseTime = uint64(pct)
+			}
+		}
+	}
+
 	// Handle auction slot
 	if auctionSlot, ok := decoded["AuctionSlot"].(map[string]interface{}); ok {
-		auction := make(map[string]interface{})
-		if account, ok := auctionSlot["Account"].(string); ok {
-			auction["account"] = account
+		auction := buildAuctionSlot(auctionSlot, parentCloseTime)
+		if auction != nil {
+			ammResult["auction_slot"] = auction
 		}
-		if price, ok := auctionSlot["Price"]; ok {
-			auction["price"] = price
-		}
-		if discountedFee, ok := auctionSlot["DiscountedFee"]; ok {
-			auction["discounted_fee"] = discountedFee
-		}
-		if expiration, ok := auctionSlot["Expiration"]; ok {
-			auction["expiration"] = expiration
-		}
-		if authAccounts, ok := auctionSlot["AuthAccounts"].([]interface{}); ok {
-			auth := make([]map[string]interface{}, 0, len(authAccounts))
-			for _, aa := range authAccounts {
-				if authAccount, ok := aa.(map[string]interface{}); ok {
-					if account, ok := authAccount["Account"].(string); ok {
-						auth = append(auth, map[string]interface{}{"account": account})
-					}
-				}
-			}
-			if len(auth) > 0 {
-				auction["auth_accounts"] = auth
-			}
-		}
-		ammResult["auction_slot"] = auction
 	}
 
 	// Build final response
@@ -206,6 +202,128 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	}
 
 	return response, nil
+}
+
+// Auction slot constants matching rippled's AMMCore.h
+const (
+	totalTimeSlotSecs           = 24 * 3600                                    // 86400 seconds
+	auctionSlotTimeIntervals    = 20                                           // number of intervals
+	auctionSlotIntervalDuration = totalTimeSlotSecs / auctionSlotTimeIntervals // 4320 seconds
+)
+
+// rippleEpochOffset is the number of seconds between Unix epoch (1970-01-01)
+// and Ripple epoch (2000-01-01): 946684800 seconds.
+const rippleEpochOffset = 946684800
+
+// rippleEpochToISO8601 converts a Ripple epoch timestamp to an ISO 8601 string.
+// Matches rippled's to_iso8601() in AMMInfo.cpp.
+func rippleEpochToISO8601(rippleSeconds uint32) string {
+	unixTime := int64(rippleSeconds) + rippleEpochOffset
+	t := time.Unix(unixTime, 0).UTC()
+	return t.Format("2006-01-02T15:04:05+0000")
+}
+
+// ammAuctionTimeSlot computes the current time interval for the auction slot.
+// Returns the interval index (0..19) or auctionSlotTimeIntervals if expired/not started.
+// Matches rippled's ammAuctionTimeSlot() in AMMCore.cpp.
+func ammAuctionTimeSlot(currentParentCloseTime uint64, expiration uint32) uint32 {
+	if expiration >= totalTimeSlotSecs {
+		start := uint64(expiration) - totalTimeSlotSecs
+		if currentParentCloseTime >= start {
+			diff := currentParentCloseTime - start
+			if diff < totalTimeSlotSecs {
+				return uint32(diff / auctionSlotIntervalDuration)
+			}
+		}
+	}
+	return auctionSlotTimeIntervals
+}
+
+// buildAuctionSlot constructs the auction_slot response object from decoded AMM SLE fields.
+// Only includes the slot if it has an Account (rippled checks isFieldPresent(sfAccount)).
+func buildAuctionSlot(auctionSlot map[string]interface{}, parentCloseTime uint64) map[string]interface{} {
+	account, ok := auctionSlot["Account"].(string)
+	if !ok || account == "" {
+		// rippled: only includes auction_slot if auctionSlot.isFieldPresent(sfAccount)
+		return nil
+	}
+
+	auction := make(map[string]interface{})
+	auction["account"] = account
+
+	if price, ok := auctionSlot["Price"]; ok {
+		auction["price"] = price
+	}
+	if discountedFee, ok := auctionSlot["DiscountedFee"]; ok {
+		auction["discounted_fee"] = discountedFee
+	}
+
+	// Convert expiration from Ripple epoch uint32 to ISO 8601 string.
+	// rippled: auction[jss::expiration] = to_iso8601(NetClock::time_point{...})
+	var expirationUint32 uint32
+	if exp, ok := auctionSlot["Expiration"]; ok {
+		expirationUint32 = toUint32(exp)
+		auction["expiration"] = rippleEpochToISO8601(expirationUint32)
+	}
+
+	// Compute time_interval.
+	// rippled: ammAuctionTimeSlot(parentCloseTime, auctionSlot) → interval or AUCTION_SLOT_TIME_INTERVALS
+	auction["time_interval"] = ammAuctionTimeSlot(parentCloseTime, expirationUint32)
+
+	// Handle auth_accounts — each element is wrapped in an AuthAccount inner object:
+	// decoded: [{"AuthAccount": {"Account": "rXXX"}}, ...]
+	// rippled output: [{"account": "rXXX"}, ...]
+	if authAccounts, ok := auctionSlot["AuthAccounts"].([]interface{}); ok {
+		auth := make([]map[string]interface{}, 0, len(authAccounts))
+		for _, aa := range authAccounts {
+			if wrapper, ok := aa.(map[string]interface{}); ok {
+				// Unwrap the AuthAccount inner object
+				inner, ok := wrapper["AuthAccount"].(map[string]interface{})
+				if !ok {
+					// Fallback: try direct Account field (in case codec doesn't wrap)
+					inner = wrapper
+				}
+				if acct, ok := inner["Account"].(string); ok {
+					auth = append(auth, map[string]interface{}{"account": acct})
+				}
+			}
+		}
+		if len(auth) > 0 {
+			auction["auth_accounts"] = auth
+		}
+	}
+
+	return auction
+}
+
+// toUint32 extracts a uint32 from a JSON-decoded numeric value.
+// The binary codec may return float64 or json.Number depending on decode mode.
+func toUint32(v interface{}) uint32 {
+	switch n := v.(type) {
+	case float64:
+		if n >= 0 && n <= math.MaxUint32 {
+			return uint32(n)
+		}
+	case json.Number:
+		if i, err := n.Int64(); err == nil && i >= 0 && i <= math.MaxUint32 {
+			return uint32(i)
+		}
+	case int:
+		if n >= 0 {
+			return uint32(n)
+		}
+	case int64:
+		if n >= 0 && n <= math.MaxUint32 {
+			return uint32(n)
+		}
+	case uint32:
+		return n
+	case uint64:
+		if n <= math.MaxUint32 {
+			return uint32(n)
+		}
+	}
+	return 0
 }
 
 // parseIssue parses an asset/issue from the JSON representation
@@ -262,4 +380,3 @@ func currencyToBytes(currency string) [20]byte {
 
 	return result
 }
-

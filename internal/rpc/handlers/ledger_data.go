@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -30,13 +31,14 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, err
 	}
 
-	// Validate limit
-	if request.Limit > 2048 {
-		request.Limit = 2048
+	// Clamp limit using rippled's pageLength ranges from Tuning.h:
+	//   binary mode: {16, 2048, 2048}
+	//   JSON mode:   {16, 256, 256}
+	limitRange := LimitLedgerData
+	if request.Binary {
+		limitRange = LimitLedgerDataBinary
 	}
-	if request.Limit == 0 {
-		request.Limit = 256 // Default limit
-	}
+	limit := ClampLimit(request.Limit, limitRange, ctx.IsAdmin)
 
 	// Determine ledger index to use
 	ledgerIndex := "current"
@@ -53,7 +55,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	}
 
 	// Get ledger data from the ledger service
-	result, err := types.Services.Ledger.GetLedgerData(ledgerIndex, request.Limit, markerStr)
+	result, err := types.Services.Ledger.GetLedgerData(ledgerIndex, limit, markerStr)
 	if err != nil {
 		return nil, types.RpcErrorInternal("Failed to get ledger data: " + err.Error())
 	}
@@ -61,31 +63,33 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	// Build state array based on binary flag
 	state := make([]map[string]interface{}, len(result.State))
 	for i, item := range result.State {
+		// Ensure index is uppercase hex (matching rippled's to_string(key))
+		upperIndex := strings.ToUpper(item.Index)
+
 		if request.Binary {
-			// Binary format: just data and index as hex
+			// Binary format: data as uppercase hex and index
 			state[i] = map[string]interface{}{
-				"data":  hex.EncodeToString(item.Data),
-				"index": item.Index,
+				"data":  strings.ToUpper(hex.EncodeToString(item.Data)),
+				"index": upperIndex,
 			}
 		} else {
 			// JSON format: deserialize the ledger entry
 			jsonObj, err := deserializeLedgerEntry(item.Data)
 			if err != nil {
-				println(err.Error())
 				// Fallback to binary format if deserialization fails
 				state[i] = map[string]interface{}{
-					"data":  hex.EncodeToString(item.Data),
-					"index": item.Index,
+					"data":  strings.ToUpper(hex.EncodeToString(item.Data)),
+					"index": upperIndex,
 				}
 			} else {
 				// Add index field to the deserialized object
 				if objMap, ok := jsonObj.(map[string]interface{}); ok {
-					objMap["index"] = item.Index
+					objMap["index"] = upperIndex
 					state[i] = objMap
 				} else {
 					state[i] = map[string]interface{}{
-						"data":  hex.EncodeToString(item.Data),
-						"index": item.Index,
+						"data":  strings.ToUpper(hex.EncodeToString(item.Data)),
+						"index": upperIndex,
 					}
 				}
 			}
@@ -93,7 +97,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	}
 
 	response := map[string]interface{}{
-		"ledger_hash":  hex.EncodeToString(result.LedgerHash[:]),
+		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
 		"state":        state,
 		"validated":    result.Validated,
@@ -104,31 +108,33 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		if request.Binary {
 			// Binary format: include ledger_data as hex serialization
 			response["ledger"] = map[string]interface{}{
-				"ledger_data": formatLedgerHeaderBinary(result.LedgerHeader),
+				"ledger_data": strings.ToUpper(formatLedgerHeaderBinary(result.LedgerHeader)),
 				"closed":      result.LedgerHeader.Closed,
 			}
 		} else {
 			// JSON format: include full ledger header fields
 			response["ledger"] = map[string]interface{}{
-				"account_hash":          hex.EncodeToString(result.LedgerHeader.AccountHash[:]),
+				"account_hash":          FormatLedgerHash(result.LedgerHeader.AccountHash),
 				"close_flags":           result.LedgerHeader.CloseFlags,
 				"close_time":            result.LedgerHeader.CloseTime,
 				"close_time_human":      result.LedgerHeader.CloseTimeHuman,
 				"close_time_iso":        result.LedgerHeader.CloseTimeISO,
 				"close_time_resolution": result.LedgerHeader.CloseTimeResolution,
 				"closed":                result.LedgerHeader.Closed,
-				"ledger_hash":           hex.EncodeToString(result.LedgerHeader.LedgerHash[:]),
+				"ledger_hash":           FormatLedgerHash(result.LedgerHeader.LedgerHash),
 				"ledger_index":          result.LedgerHeader.LedgerIndex,
 				"parent_close_time":     result.LedgerHeader.ParentCloseTime,
-				"parent_hash":           hex.EncodeToString(result.LedgerHeader.ParentHash[:]),
+				"parent_hash":           FormatLedgerHash(result.LedgerHeader.ParentHash),
 				"total_coins":           fmt.Sprintf("%d", result.LedgerHeader.TotalCoins),
-				"transaction_hash":      hex.EncodeToString(result.LedgerHeader.TransactionHash[:]),
+				"transaction_hash":      FormatLedgerHash(result.LedgerHeader.TransactionHash),
 			}
 		}
 	}
 
 	if result.Marker != "" {
 		response["marker"] = result.Marker
+		// Include limit in response only when paginating (marker present)
+		response["limit"] = limit
 	}
 
 	return response, nil
@@ -198,4 +204,3 @@ func deserializeLedgerEntry(data []byte) (interface{}, error) {
 	// Use the binary codec's Decode function to convert binary to JSON
 	return binarycodec.Decode(hex.EncodeToString(data))
 }
-

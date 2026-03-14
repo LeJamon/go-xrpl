@@ -173,11 +173,7 @@ func BenchmarkInsertBatch(b *testing.B) {
 
 	params := BenchmarkParams{Items: DefaultItems, Threads: 1}
 
-	tempDir, err := os.MkdirTemp("", "nodestore_insert_bench_*")
-	if err != nil {
-		b.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	tempDir := b.TempDir()
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -211,11 +207,7 @@ func BenchmarkFetchBatch(b *testing.B) {
 
 	params := BenchmarkParams{Items: DefaultItems, Threads: 1}
 
-	tempDir, err := os.MkdirTemp("", "nodestore_fetch_bench_*")
-	if err != nil {
-		b.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	tempDir := b.TempDir()
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -262,11 +254,7 @@ func BenchmarkMissingBatch(b *testing.B) {
 
 	params := BenchmarkParams{Items: DefaultItems, Threads: 1}
 
-	tempDir, err := os.MkdirTemp("", "nodestore_missing_bench_*")
-	if err != nil {
-		b.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	tempDir := b.TempDir()
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -301,11 +289,7 @@ func BenchmarkMixedBatch(b *testing.B) {
 
 	params := BenchmarkParams{Items: DefaultItems, Threads: 1}
 
-	tempDir, err := os.MkdirTemp("", "nodestore_mixed_bench_*")
-	if err != nil {
-		b.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	tempDir := b.TempDir()
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -359,11 +343,7 @@ func BenchmarkWorkBatch(b *testing.B) {
 
 	params := BenchmarkParams{Items: DefaultItems, Threads: 1}
 
-	tempDir, err := os.MkdirTemp("", "nodestore_work_bench_*")
-	if err != nil {
-		b.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	tempDir := b.TempDir()
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -434,11 +414,7 @@ func BenchmarkInsertBatch4Threads(b *testing.B) {
 
 	params := BenchmarkParams{Items: DefaultItems, Threads: 4}
 
-	tempDir, err := os.MkdirTemp("", "nodestore_insert_4t_bench_*")
-	if err != nil {
-		b.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	tempDir := b.TempDir()
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -471,11 +447,7 @@ func BenchmarkInsertBatch8Threads(b *testing.B) {
 
 	params := BenchmarkParams{Items: DefaultItems, Threads: 8}
 
-	tempDir, err := os.MkdirTemp("", "nodestore_insert_8t_bench_*")
-	if err != nil {
-		b.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	tempDir := b.TempDir()
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -549,11 +521,7 @@ func BenchmarkSingleOperations(b *testing.B) {
 		b.Skip("skipping benchmark in short mode")
 	}
 
-	tempDir, err := os.MkdirTemp("", "nodestore_single_ops_*")
-	if err != nil {
-		b.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	tempDir := b.TempDir()
 
 	backend, cleanup := setupBenchBackendWithConfig(b, filepath.Join(tempDir, "single.db"))
 	defer cleanup()

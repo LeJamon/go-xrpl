@@ -4,12 +4,12 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/ledgerstatefix"
 	"github.com/LeJamon/goXRPLd/internal/tx/nftoken"
-	"github.com/LeJamon/goXRPLd/internal/testing"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // NFTokenMintBuilder provides a fluent interface for building NFTokenMint transactions.
@@ -369,12 +369,12 @@ func (b *NFTokenCancelOfferBuilder) BuildNFTokenCancelOffer() *nftoken.NFTokenCa
 
 // NFTokenAcceptOfferBuilder provides a fluent interface for building NFTokenAcceptOffer transactions.
 type NFTokenAcceptOfferBuilder struct {
-	account    *testing.Account
-	sellOffer  string
-	buyOffer   string
-	brokerFee  *tx.Amount
-	fee        uint64
-	sequence   *uint32
+	account   *testing.Account
+	sellOffer string
+	buyOffer  string
+	brokerFee *tx.Amount
+	fee       uint64
+	sequence  *uint32
 }
 
 // NFTokenAcceptOffer creates a new NFTokenAcceptOfferBuilder.
@@ -639,7 +639,8 @@ func isHexEncoded(s string) bool {
 // MintedNFTokens (falling back to account sequence if FirstNFTokenSequence
 // has not been set yet).
 // Reference: rippled FixNFTokenPageLinks_test.cpp internalTaxon lambda and
-//            rippled token.cpp getID() lines 90-97.
+//
+//	rippled token.cpp getID() lines 90-97.
 func GetNFTokenSeq(env *testing.TestEnv, acct *testing.Account) uint32 {
 	nftSeq := env.MintedCount(acct)
 
@@ -663,7 +664,8 @@ func GetNFTokenSeq(env *testing.TestEnv, acct *testing.Account) uint32 {
 // GetNextNFTokenID predicts the next NFT ID that will be generated when minting.
 // Must be called BEFORE submitting the NFTokenMint transaction.
 // Reference: rippled's token::getNextID(env, issuer, taxon, flags, xferFee) +
-//            token::getID(env, issuer, taxon, nftSeq, flags, xferFee).
+//
+//	token::getID(env, issuer, taxon, nftSeq, flags, xferFee).
 func GetNextNFTokenID(env *testing.TestEnv, issuer *testing.Account, taxon uint32, flags uint16, transferFee uint16) string {
 	nftSeq := GetNFTokenSeq(env, issuer)
 	tokenID := nftoken.GenerateNFTokenID(issuer.ID, taxon, nftSeq, flags, transferFee)

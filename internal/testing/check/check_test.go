@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
 	"github.com/LeJamon/goXRPLd/internal/testing/check"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1838,7 +1838,6 @@ func TestCheck_WithTickets(t *testing.T) {
 	chkIdUsd2 := check.GetCheckID(alice, aliceTicketSeq)
 	chkCreateUsd2 := check.CheckCreate(alice, bob, USD(300)).Build()
 	jtx.WithTicketSeq(chkCreateUsd2, aliceTicketSeq)
-	aliceTicketSeq++
 	result = env.Submit(chkCreateUsd2)
 	jtx.RequireTxSuccess(t, result)
 
@@ -1881,7 +1880,6 @@ func TestCheck_WithTickets(t *testing.T) {
 
 	cashUsd1 := check.CheckCashAmount(bob, chkIdUsd1, USD(200)).Build()
 	jtx.WithTicketSeq(cashUsd1, bobTicketSeq)
-	bobTicketSeq++
 	result = env.Submit(cashUsd1)
 	jtx.RequireTxSuccess(t, result)
 	env.Close()

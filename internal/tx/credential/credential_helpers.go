@@ -5,10 +5,9 @@ import (
 	"fmt"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // Credential ledger entry flags
@@ -44,23 +43,6 @@ func (c *CredentialEntry) IsAccepted() bool {
 // SetAccepted sets the accepted flag
 func (c *CredentialEntry) SetAccepted() {
 	c.Flags |= LsfCredentialAccepted
-}
-
-// credentialKeylet calculates the keylet for a credential
-// Keylet = SHA512Half(spaceCredential + subject + issuer + credentialType)
-func credentialKeylet(subject, issuer [20]byte, credentialType []byte) [32]byte {
-	// Space for Credential is 0x0044 ('D')
-	const spaceCredential = 0x0044
-
-	// Build the hash input: space (2 bytes) + subject (20 bytes) + issuer (20 bytes) + credentialType
-	input := make([]byte, 2+20+20+len(credentialType))
-	input[0] = byte(spaceCredential >> 8)
-	input[1] = byte(spaceCredential & 0xFF)
-	copy(input[2:22], subject[:])
-	copy(input[22:42], issuer[:])
-	copy(input[42:], credentialType)
-
-	return common.Sha512Half(input)
 }
 
 // ParseCredentialEntry parses a Credential ledger entry from binary data
@@ -226,9 +208,9 @@ func serializeCredentialEntry(cred *CredentialEntry) ([]byte, error) {
 	return hex.DecodeString(hexStr)
 }
 
-// checkCredentialExpired checks if a credential has expired
+// CheckCredentialExpired checks if a credential has expired
 // Reference: rippled CredentialHelpers.cpp checkExpired()
-func checkCredentialExpired(cred *CredentialEntry, closeTime uint32) bool {
+func CheckCredentialExpired(cred *CredentialEntry, closeTime uint32) bool {
 	if cred.Expiration == nil {
 		return false
 	}

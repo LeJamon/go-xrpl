@@ -4,10 +4,10 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	checktx "github.com/LeJamon/goXRPLd/internal/tx/check"
-	"github.com/LeJamon/goXRPLd/internal/testing"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // GetCheckID computes the check ledger entry ID from the creator account and sequence.

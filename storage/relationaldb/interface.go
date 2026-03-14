@@ -163,7 +163,7 @@ type SystemRepository interface {
 type TransactionContext interface {
 	Commit(ctx context.Context) error
 	Rollback(ctx context.Context) error
-	
+
 	// Repository access within transaction
 	Ledger() LedgerRepository
 	Transaction() TransactionRepository
@@ -177,11 +177,11 @@ type RepositoryManager interface {
 	Transaction() TransactionRepository
 	AccountTransaction() AccountTransactionRepository
 	System() SystemRepository
-	
+
 	// Connection management
 	Open(ctx context.Context) error
 	Close(ctx context.Context) error
-	
+
 	// Transaction management
 	WithTransaction(ctx context.Context, fn func(TransactionContext) error) error
 }

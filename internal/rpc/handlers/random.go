@@ -26,4 +26,3 @@ func (m *RandomMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 
 	return response, nil
 }
-

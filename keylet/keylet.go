@@ -3,46 +3,46 @@ package keylet
 import (
 	"encoding/binary"
 
-	"github.com/LeJamon/goXRPLd/ledger/entry"
 	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
 // Space identifiers for keylet generation
 // These correspond to the LedgerNameSpace enum in rippled
 const (
-	spaceAccount    uint16 = 'a' // Account root
-	spaceDirNode    uint16 = 'd' // Directory node
-	spaceGenerator  uint16 = 'g' // Generator map (deprecated)
-	spaceRippleDir  uint16 = 'r' // Trust line directory
-	spaceOffer      uint16 = 'o' // Offer
-	spaceOwnerDir   uint16 = 'O' // Owner directory
-	spaceBookDir    uint16 = 'B' // Order book directory
-	spaceSkip       uint16 = 's' // Skip list
-	spaceEscrow     uint16 = 'u' // Escrow
-	spacePayChan    uint16 = 'x' // Payment channel
-	spaceAmendments uint16 = 'f' // Amendments (singleton)
-	spaceFees       uint16 = 'e' // Fee settings (singleton)
-	spaceTicket     uint16 = 'T' // Ticket
-	spaceSignerList uint16 = 'S' // Signer list
-	spaceCheck      uint16 = 'C' // Check
+	spaceAccount        uint16 = 'a' // Account root
+	spaceDirNode        uint16 = 'd' // Directory node
+	spaceGenerator      uint16 = 'g' // Generator map (deprecated)
+	spaceRippleDir      uint16 = 'r' // Trust line directory
+	spaceOffer          uint16 = 'o' // Offer
+	spaceOwnerDir       uint16 = 'O' // Owner directory
+	spaceBookDir        uint16 = 'B' // Order book directory
+	spaceSkip           uint16 = 's' // Skip list
+	spaceEscrow         uint16 = 'u' // Escrow
+	spacePayChan        uint16 = 'x' // Payment channel
+	spaceAmendments     uint16 = 'f' // Amendments (singleton)
+	spaceFees           uint16 = 'e' // Fee settings (singleton)
+	spaceTicket         uint16 = 'T' // Ticket
+	spaceSignerList     uint16 = 'S' // Signer list
+	spaceCheck          uint16 = 'C' // Check
 	spaceDepPreauth     uint16 = 'p' // Deposit preauthorization
 	spaceDepPreauthCred uint16 = 'P' // Deposit preauthorization (credential-based)
-	spaceNFTokenOff  uint16 = 'q' // NFToken offer
-	spaceNFTBuyOffers  uint16 = 'h' // NFToken buy offers directory
-	spaceNFTSellOffers uint16 = 'i' // NFToken sell offers directory
-	spaceAMM        uint16 = 'A' // AMM
-	spaceBridge     uint16 = 'H' // XChain bridge
-	spaceXCClaimID  uint16 = 'Q' // XChain claim ID
-	spaceXCCreateAc uint16 = 'K' // XChain create account claim
-	spaceDID        uint16 = 'I' // DID
-	spaceOracle     uint16 = 'R' // Oracle
-	spaceMPTIssu    uint16 = '~' // MPToken issuance
-	spaceMPToken    uint16 = 't' // MPToken
-	spaceCredential uint16 = 'D' // Credential
-	spacePermDomain uint16 = 'm' // Permissioned domain
-	spaceNegativeUNL uint16 = 'N' // Negative UNL (singleton)
-	spaceVault      uint16 = 'V' // Vault
-	spaceDelegate   uint16 = 'E' // Delegate
+	spaceNFTokenOff     uint16 = 'q' // NFToken offer
+	spaceNFTBuyOffers   uint16 = 'h' // NFToken buy offers directory
+	spaceNFTSellOffers  uint16 = 'i' // NFToken sell offers directory
+	spaceAMM            uint16 = 'A' // AMM
+	spaceBridge         uint16 = 'H' // XChain bridge
+	spaceXCClaimID      uint16 = 'Q' // XChain claim ID
+	spaceXCCreateAc     uint16 = 'K' // XChain create account claim
+	spaceDID            uint16 = 'I' // DID
+	spaceOracle         uint16 = 'R' // Oracle
+	spaceMPTIssu        uint16 = '~' // MPToken issuance
+	spaceMPToken        uint16 = 't' // MPToken
+	spaceCredential     uint16 = 'D' // Credential
+	spacePermDomain     uint16 = 'm' // Permissioned domain
+	spaceNegativeUNL    uint16 = 'N' // Negative UNL (singleton)
+	spaceVault          uint16 = 'V' // Vault
+	spaceDelegate       uint16 = 'E' // Delegate
 )
 
 // Keylet represents an addressable location in the ledger state.

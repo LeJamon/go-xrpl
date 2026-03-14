@@ -1,9 +1,9 @@
 package payment
 
 import (
-	"github.com/LeJamon/goXRPLd/keylet"
-	tx "github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	tx "github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // DirectStepI handles IOU transfers between two accounts via trust lines.
@@ -124,7 +124,6 @@ func (s *DirectStepI) Rev(
 	// Calculate srcToDst = out / dstQIn (round up)
 	srcToDst := mulRatioAmount(out.IOU, QualityOne, dstQIn, true)
 
-
 	if srcToDst.Compare(maxSrcToDst) <= 0 {
 		// Non-limiting case
 		in := mulRatioAmount(srcToDst, srcQOut, QualityOne, true)
@@ -134,7 +133,6 @@ func (s *DirectStepI) Rev(
 			out:        out.IOU,
 			srcDebtDir: srcDebtDir,
 		}
-
 
 		// Execute the credit
 		_ = s.rippleCredit(sb, srcToDst, issuer)
@@ -214,12 +212,10 @@ func (s *DirectStepI) Fwd(
 	// Calculate srcToDst = in / srcQOut (round down)
 	srcToDst := mulRatioAmount(in.IOU, QualityOne, srcQOut, false)
 
-
 	if srcToDst.Compare(maxSrcToDst) <= 0 {
 		// Non-limiting case
 		out := mulRatioAmount(srcToDst, dstQIn, QualityOne, false)
 		s.setCacheLimiting(in.IOU, srcToDst, out, srcDebtDir)
-
 
 		// Execute the credit
 		s.rippleCredit(sb, s.cache.srcToDst, issuer)
@@ -698,7 +694,6 @@ func (s *DirectStepI) rippleCredit(sb *PaymentSandbox, amount tx.Amount, issuer 
 			senderLimit.Signum() == 0 &&
 			senderQualityIn == 0 &&
 			senderQualityOut == 0 {
-
 			// Clear sender's reserve flag and decrement OwnerCount
 			// Reference: rippled lines 1716-1722
 			rs.Flags &= ^senderReserve
@@ -1016,7 +1011,9 @@ func (s *DirectStepI) Check(sb *PaymentSandbox) tx.Result {
 // Reference: rippled DirectStep.cpp check() - auth section (lines 420-430)
 // Only checks if the SOURCE requires auth and has authorized the trust line.
 // The auth flag checked is on the source's own side:
-//   (src > dst) ? lsfHighAuth : lsfLowAuth
+//
+//	(src > dst) ? lsfHighAuth : lsfLowAuth
+//
 // Auth is only checked when the balance is zero.
 func checkAuth(view *PaymentSandbox, src, dst [20]byte, currency string) tx.Result {
 	// Read source account to check RequireAuth

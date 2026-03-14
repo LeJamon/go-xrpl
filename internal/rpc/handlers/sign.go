@@ -11,6 +11,13 @@ import (
 type SignMethod struct{}
 
 func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+	// Parse fee_mult_max / fee_div_max first with proper type validation,
+	// matching rippled's checkFee() in TransactionSign.cpp.
+	feeOpts, rpcErr := parseFeeOptions(params)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+
 	var request struct {
 		TxJson     json.RawMessage `json:"tx_json"`
 		Secret     string          `json:"secret,omitempty"`
@@ -20,8 +27,6 @@ func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (inte
 		KeyType    string          `json:"key_type,omitempty"`
 		Offline    bool            `json:"offline,omitempty"`
 		BuildPath  bool            `json:"build_path,omitempty"`
-		FeeMultMax uint32          `json:"fee_mult_max,omitempty"`
-		FeeDivMax  uint32          `json:"fee_div_max,omitempty"`
 	}
 
 	if params != nil {
@@ -41,14 +46,26 @@ func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (inte
 		SeedHex:    request.SeedHex,
 		Passphrase: request.Passphrase,
 		KeyType:    request.KeyType,
-	}, request.Offline, ctx.ApiVersion)
+	}, request.Offline, ctx.ApiVersion, feeOpts)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
 
+	// Inject DeliverMax for Payment transactions, matching rippled's
+	// RPC::insertDeliverMax in transactionFormatResultImpl.
+	injectDeliverMax(signed.TxMap, ctx.ApiVersion)
+
 	response := map[string]interface{}{
 		"tx_blob": signed.TxBlob,
 		"tx_json": signed.TxMap,
+	}
+
+	// API v2+: add hash at root level of response, matching rippled's
+	// transactionFormatResultImpl in TransactionSign.cpp.
+	if ctx.ApiVersion > 1 {
+		if hash, ok := signed.TxMap["hash"].(string); ok {
+			response["hash"] = hash
+		}
 	}
 
 	return response, nil

@@ -4,10 +4,11 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"errors"
-	rootcrypto "github.com/LeJamon/goXRPLd/crypto"
-	"github.com/LeJamon/goXRPLd/crypto/common"
 	"math/big"
 	"strings"
+
+	rootcrypto "github.com/LeJamon/goXRPLd/crypto"
+	"github.com/LeJamon/goXRPLd/crypto/common"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -60,7 +61,6 @@ func (c SECP256K1CryptoAlgorithm) FamilySeedPrefix() byte {
 
 // deriveScalar derives a scalar from a seed.
 func (c SECP256K1CryptoAlgorithm) deriveScalar(bytes []byte, discrim *big.Int) *big.Int {
-
 	order := btcec.S256().N
 	for i := 0; i <= 0xffffffff; i++ {
 		hash := sha512.New()

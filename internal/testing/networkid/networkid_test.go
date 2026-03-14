@@ -5,8 +5,8 @@ package networkid_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx/account"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
+	"github.com/LeJamon/goXRPLd/internal/tx/account"
 )
 
 // TestNetworkID_Mainnet tests that on mainnet (NetworkID=0), transactions

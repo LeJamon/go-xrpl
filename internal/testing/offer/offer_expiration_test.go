@@ -6,9 +6,9 @@ package offer
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 // TestOffer_Expiration tests offer expiration behavior.
@@ -99,6 +99,6 @@ func testExpiration(t *testing.T, disabledFeatures []string) {
 
 	jtx.RequireBalance(t, env, bob, startBalance-f)
 	jtx.RequireIOUBalance(t, env, bob, gw, "USD", 0)
-	RequireOfferCount(t, env, bob, 1)   // Bob's offer stays (no cross)
+	RequireOfferCount(t, env, bob, 1) // Bob's offer stays (no cross)
 	jtx.RequireOwnerCount(t, env, bob, 1)
 }

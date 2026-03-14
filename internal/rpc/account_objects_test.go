@@ -132,24 +132,19 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
-			// rippled: "Account malformed." for node-public-key format
+			// rippled: rpcACT_MALFORMED for node-public-key format
 			name: "Malformed account address - node public key format",
 			params: map[string]interface{}{
 				"account": "n94JNrQYkDrpt62bbSR7nVEhdyAvcJXRAsjEkFYyqRkh9SUTYEqV",
 			},
-			expectedError: "Account not found.",
-			expectedCode:  types.RpcACT_NOT_FOUND,
-			setupMock: func() {
-				mock.getAccountObjectsFn = func(string, string, string, uint32) (*types.AccountObjectsResult, error) {
-					return nil, errors.New("account not found")
-				}
-			},
+			expectedError: "Malformed account.",
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
-			// rippled: "Account not found." for valid-format but non-existing account
+			// rippled: rpcACT_NOT_FOUND for valid-format but non-existing account
 			name: "Account not found - valid format but not in ledger",
 			params: map[string]interface{}{
-				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
+				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
 			expectedCode:  types.RpcACT_NOT_FOUND,
@@ -160,17 +155,13 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			},
 		},
 		{
+			// rippled: rpcACT_MALFORMED for seed string
 			name: "Malformed account address - seed string",
 			params: map[string]interface{}{
 				"account": "foo",
 			},
-			expectedError: "Account not found.",
-			expectedCode:  types.RpcACT_NOT_FOUND,
-			setupMock: func() {
-				mock.getAccountObjectsFn = func(string, string, string, uint32) (*types.AccountObjectsResult, error) {
-					return nil, errors.New("account not found")
-				}
-			},
+			expectedError: "Malformed account.",
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 	}
 
@@ -680,8 +671,8 @@ func TestAccountObjectsPagination(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
-		// When no limit is specified, 0 is passed (service decides defaults)
-		assert.Equal(t, uint32(0), capturedLimit)
+		// When no limit is specified, ClampLimit returns the default (200)
+		assert.Equal(t, uint32(200), capturedLimit)
 	})
 }
 
@@ -920,11 +911,6 @@ func TestAccountObjectsMalformedAddresses(t *testing.T) {
 		ApiVersion: types.ApiVersion1,
 	}
 
-	// Mock returns "account not found" for all these addresses
-	mock.getAccountObjectsFn = func(string, string, string, uint32) (*types.AccountObjectsResult, error) {
-		return nil, errors.New("account not found")
-	}
-
 	malformedAddresses := []struct {
 		name    string
 		address string
@@ -951,8 +937,9 @@ func TestAccountObjectsMalformedAddresses(t *testing.T) {
 
 			assert.Nil(t, result, "Expected nil result for malformed address")
 			require.NotNil(t, rpcErr, "Expected RPC error for malformed address")
-			assert.Equal(t, types.RpcACT_NOT_FOUND, rpcErr.Code,
-				"Expected actNotFound error for malformed address: %s", tc.address)
+			// rippled returns rpcACT_MALFORMED (code 35) for malformed addresses
+			assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code,
+				"Expected actMalformed error for malformed address: %s", tc.address)
 		})
 	}
 

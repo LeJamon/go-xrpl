@@ -11,9 +11,6 @@ import (
 	"testing"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	coreAmm "github.com/LeJamon/goXRPLd/internal/tx/amm"
-	paymentPkg "github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/amm"
@@ -22,6 +19,9 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/testing/paychan"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	coreAmm "github.com/LeJamon/goXRPLd/internal/tx/amm"
+	paymentPkg "github.com/LeJamon/goXRPLd/internal/tx/payment"
 )
 
 // ammAccount computes the AMM pseudo-account for the given asset pair and returns

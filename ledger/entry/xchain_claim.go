@@ -2,7 +2,6 @@ package entry
 
 import (
 	"errors"
-
 )
 
 // XChainClaimAttestation represents a single attestation for a cross-chain claim

@@ -124,7 +124,7 @@ func (c *CredentialAccept) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	if !checkCredentialExpired(cred, ctx.Config.ParentCloseTime) {
+	if !CheckCredentialExpired(cred, ctx.Config.ParentCloseTime) {
 		return tx.TesSUCCESS
 	}
 
@@ -192,7 +192,7 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Check if credential is expired
 	closeTime := ctx.Config.ParentCloseTime
-	if checkCredentialExpired(cred, closeTime) {
+	if CheckCredentialExpired(cred, closeTime) {
 		// Delete expired credentials even if the transaction failed
 		if err := ctx.View.Erase(credKeylet); err != nil {
 			return tx.TefINTERNAL

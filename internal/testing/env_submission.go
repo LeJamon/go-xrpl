@@ -9,8 +9,8 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/txq"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // Close closes the current ledger and advances to a new one.
@@ -659,7 +659,7 @@ type testClosedLedgerContext struct {
 	feeLevels []txq.FeeLevel
 }
 
-func (c *testClosedLedgerContext) GetLedgerSequence() uint32            { return c.ledgerSeq }
+func (c *testClosedLedgerContext) GetLedgerSequence() uint32               { return c.ledgerSeq }
 func (c *testClosedLedgerContext) GetTransactionFeeLevels() []txq.FeeLevel { return c.feeLevels }
 
 // testTxQApplyContext implements txq.ApplyContext for the test environment.
@@ -816,9 +816,9 @@ func (c *testTxQAcceptContext) GetParentHash() [32]byte {
 // retry passes. This matches rippled's standalone consensus simulation.
 //
 // Use this for tests that depend on:
-// - terPRE_SEQ transactions being retried after close
-// - tec transactions being re-applied from a clean state after
-//   prerequisite objects are created by batch transactions
+//   - terPRE_SEQ transactions being retried after close
+//   - tec transactions being re-applied from a clean state after
+//     prerequisite objects are created by batch transactions
 //
 // Must be called before any Submit calls in the test.
 // Reference: rippled BuildLedger.cpp applyTransactions()

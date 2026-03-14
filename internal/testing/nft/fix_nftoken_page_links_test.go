@@ -22,41 +22,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/testing/nft"
 )
 
-// genPackedTokensForOwner generates 96 NFTs packed into three pages of 32 each.
-// The minter creates the NFTs and transfers them to the owner.
-// Returns a sorted list of NFT IDs.
-func genPackedTokensForOwner(env *jtx.TestEnv, owner, minter *jtx.Account) []string {
-	nfts := make([]string, 0, 96)
-
-	for i := uint32(0); i < 96; i++ {
-		intTaxon := (i / 16)
-		if i&0b10000 != 0 {
-			intTaxon += 2
-		}
-
-		tokenSeq := nft.GetNFTokenSeq(env, minter)
-		extTaxon := nftoken.CipheredTaxon(tokenSeq, intTaxon)
-
-		flags := nftoken.NFTokenFlagTransferable
-		nftID := nft.GetNextNFTokenID(env, minter, extTaxon, flags, 0)
-		env.Submit(nft.NFTokenMint(minter, extTaxon).Transferable().Build())
-		env.Close()
-
-		// Minter creates sell offer, owner accepts
-		offerIndex := nft.GetOfferIndex(env, minter)
-		env.Submit(nft.NFTokenCreateSellOffer(minter, nftID, tx.NewXRPAmount(0)).Build())
-		env.Close()
-
-		env.Submit(nft.NFTokenAcceptSellOffer(owner, offerIndex).Build())
-		env.Close()
-
-		nfts = append(nfts, nftID)
-	}
-
-	sort.Strings(nfts)
-	return nfts
-}
-
 // genPackedTokens generates 96 NFTs packed into three pages of 32 each.
 // The owner mints the NFTs directly (matching rippled's genPackedTokens).
 // Returns a sorted list of NFT IDs.

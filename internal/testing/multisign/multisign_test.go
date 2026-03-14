@@ -7,12 +7,12 @@ package multisign_test
 import (
 	"testing"
 
+	jtx "github.com/LeJamon/goXRPLd/internal/testing"
+	"github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/account"
 	"github.com/LeJamon/goXRPLd/internal/tx/offer"
 	"github.com/LeJamon/goXRPLd/internal/tx/trustset"
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/payment"
 	"github.com/stretchr/testify/require"
 )
 
@@ -206,7 +206,7 @@ func TestMultiSign_FeeEscalation(t *testing.T) {
 	// Balance change = 10 XRP sent + fee
 	paid := aliceBefore - aliceAfter
 	expectedPayment := uint64(jtx.XRP(10))
-	expectedFee := uint64(3 * env.BaseFee()) // (1 + 2) * baseFee
+	expectedFee := 3 * env.BaseFee() // (1 + 2) * baseFee
 	expectedTotal := expectedPayment + expectedFee
 	if paid != expectedTotal {
 		t.Logf("Note: alice paid %d drops, expected %d (10 XRP + %d fee)", paid, expectedTotal, expectedFee)
@@ -623,4 +623,3 @@ func TestMultiSign_SignersWithTickets(t *testing.T) {
 
 	jtx.RequireOwnerCount(t, env, alice, 2) // 2 remaining unused tickets
 }
-

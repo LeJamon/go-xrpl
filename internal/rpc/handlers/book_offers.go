@@ -48,13 +48,22 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		ledgerIndex = request.LedgerIndex.String()
 	}
 
-	// Get book offers from the ledger service
-	result, err := types.Services.Ledger.GetBookOffers(takerGets, takerPays, ledgerIndex, request.Limit)
+	// Clamp the limit using rippled's bookOffers range {0, 60, 100}.
+	// When the user omits "limit" (zero value), ClampLimit returns the default (60).
+	limit := ClampLimit(request.Limit, LimitBookOffers, ctx.IsAdmin)
+	result, err := types.Services.Ledger.GetBookOffers(takerGets, takerPays, ledgerIndex, limit)
 	if err != nil {
 		return nil, types.RpcErrorInternal("Failed to get book offers: " + err.Error())
 	}
 
-	// Build response
+	// Build response matching rippled's book_offers structure.
+	//
+	// TODO(#107): owner_funds, taker_gets_funded, taker_pays_funded
+	// These fields require computing the offer owner's available balance and
+	// adjusting for transfer fees. This is a service-layer concern implemented
+	// in rippled's NetworkOPsImp::getBookPage (see NetworkOPs.cpp).
+	// Currently the service layer returns these fields if it computes them;
+	// otherwise they are omitted from the BookOffer struct (omitempty).
 	response := map[string]interface{}{
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
@@ -62,9 +71,9 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		"validated":    result.Validated,
 	}
 
-	// Conditionally include limit if it was specified in the request
+	// Echo the effective (clamped) limit when the user specified one.
 	if request.Limit > 0 {
-		response["limit"] = request.Limit
+		response["limit"] = limit
 	}
 
 	return response, nil
@@ -94,4 +103,3 @@ func ParseAmountFromJSON(data json.RawMessage) (types.Amount, error) {
 		Value:    iouAmount.Value,
 	}, nil
 }
-

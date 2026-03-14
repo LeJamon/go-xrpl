@@ -2,7 +2,6 @@ package amm
 
 import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
 // AMM constants matching rippled
@@ -68,13 +67,6 @@ const (
 	auctionSlotTimeIntervals    = AUCTION_SLOT_TIME_INTERVALS
 	auctionSlotTotalTimeSecs    = uint32(TOTAL_TIME_SLOT_SECS)
 	auctionSlotIntervalDuration = auctionSlotTotalTimeSecs / auctionSlotTimeIntervals
-)
-
-// AccountRoot flags needed by AMMClawback
-const (
-	lsfAllowTrustLineClawback = state.LsfAllowTrustLineClawback
-	lsfNoFreeze               = state.LsfNoFreeze
-	lsfAMM                    = state.LsfAMM
 )
 
 // Result code aliases for AMM-specific codes

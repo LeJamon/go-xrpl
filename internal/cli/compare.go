@@ -22,10 +22,10 @@ type StateFile struct {
 
 // StateFileEntry represents a state entry that could come from different formats
 type StateFileEntry struct {
-	Index    string                 `json:"index"`
-	Data     string                 `json:"data,omitempty"`      // From fixture state.json
-	DataHex  string                 `json:"data_hex,omitempty"`  // From debug post_state.json
-	Decoded  map[string]interface{} `json:"decoded,omitempty"`   // Pre-decoded data
+	Index   string                 `json:"index"`
+	Data    string                 `json:"data,omitempty"`     // From fixture state.json
+	DataHex string                 `json:"data_hex,omitempty"` // From debug post_state.json
+	Decoded map[string]interface{} `json:"decoded,omitempty"`  // Pre-decoded data
 }
 
 var (

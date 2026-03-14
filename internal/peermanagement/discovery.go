@@ -13,12 +13,12 @@ import (
 
 // Discovery constants.
 const (
-	DefaultBootCacheFile     = "peerfinder.cache"
-	MaxCachedEndpoints       = 1000
-	CacheEntryTTL            = 7 * 24 * time.Hour
-	RecentEndpointTTL        = 5 * time.Minute
-	MaxHops                  = 3
-	DefaultReservationFile   = "peer_reservations.json"
+	DefaultBootCacheFile   = "peerfinder.cache"
+	MaxCachedEndpoints     = 1000
+	CacheEntryTTL          = 7 * 24 * time.Hour
+	RecentEndpointTTL      = 5 * time.Minute
+	MaxHops                = 3
+	DefaultReservationFile = "peer_reservations.json"
 )
 
 // SlotState represents the connection state of a peer slot.
@@ -56,12 +56,9 @@ type Slot struct {
 
 	inbound         bool
 	fixed           bool
-	reserved        bool
 	state           SlotState
 	remoteEndpoint  net.Addr
 	localEndpoint   net.Addr
-	publicKey       *PublicKeyToken
-	listeningPort   uint16
 	recentEndpoints *RecentEndpoints
 
 	createdAt   time.Time

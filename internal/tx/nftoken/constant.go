@@ -49,9 +49,10 @@ const (
 // using round-half-even (banker's rounding) to match rippled's Number arithmetic.
 //
 // rippled computes: multiply(amount, transferFeeAsRate(fee))
-//   transferFeeAsRate(fee) = Rate{fee * 10000}
-//   as_amount(rate) = STAmount{noIssue(), rate, -9} = rate/1e9
-//   multiply goes through Number path: amount * fee * 10000 / 1e9 = amount * fee / 1e5
+//
+//	transferFeeAsRate(fee) = Rate{fee * 10000}
+//	as_amount(rate) = STAmount{noIssue(), rate, -9} = rate/1e9
+//	multiply goes through Number path: amount * fee * 10000 / 1e9 = amount * fee / 1e5
 //
 // The result is converted back to drops via Number::operator rep() which uses
 // round-to-nearest, even on tie.

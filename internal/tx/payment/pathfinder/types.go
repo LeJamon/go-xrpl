@@ -100,55 +100,55 @@ func init() {
 
 	// XRP → non-XRP
 	pathTable[ptXRP_to_nonXRP] = []CostedPath{
-		{1, PathType{ntSOURCE, ntDEST_BOOK, ntDESTINATION}},                                    // sfd
-		{3, PathType{ntSOURCE, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},                        // sfad
-		{5, PathType{ntSOURCE, ntDEST_BOOK, ntACCOUNTS, ntACCOUNTS, ntDESTINATION}},            // sfaad
-		{6, PathType{ntSOURCE, ntBOOKS, ntDEST_BOOK, ntDESTINATION}},                           // sbfd
-		{8, PathType{ntSOURCE, ntBOOKS, ntACCOUNTS, ntDEST_BOOK, ntDESTINATION}},               // sbafd
-		{9, PathType{ntSOURCE, ntBOOKS, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},               // sbfad
-		{10, PathType{ntSOURCE, ntBOOKS, ntACCOUNTS, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},  // sbafad
+		{1, PathType{ntSOURCE, ntDEST_BOOK, ntDESTINATION}},                                   // sfd
+		{3, PathType{ntSOURCE, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},                       // sfad
+		{5, PathType{ntSOURCE, ntDEST_BOOK, ntACCOUNTS, ntACCOUNTS, ntDESTINATION}},           // sfaad
+		{6, PathType{ntSOURCE, ntBOOKS, ntDEST_BOOK, ntDESTINATION}},                          // sbfd
+		{8, PathType{ntSOURCE, ntBOOKS, ntACCOUNTS, ntDEST_BOOK, ntDESTINATION}},              // sbafd
+		{9, PathType{ntSOURCE, ntBOOKS, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},              // sbfad
+		{10, PathType{ntSOURCE, ntBOOKS, ntACCOUNTS, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}}, // sbafad
 	}
 
 	// non-XRP → XRP
 	pathTable[ptNonXRP_to_XRP] = []CostedPath{
-		{1, PathType{ntSOURCE, ntXRP_BOOK, ntDESTINATION}},                                           // sxd
-		{2, PathType{ntSOURCE, ntACCOUNTS, ntXRP_BOOK, ntDESTINATION}},                               // saxd
-		{6, PathType{ntSOURCE, ntACCOUNTS, ntACCOUNTS, ntXRP_BOOK, ntDESTINATION}},                   // saaxd
-		{7, PathType{ntSOURCE, ntBOOKS, ntXRP_BOOK, ntDESTINATION}},                                  // sbxd
-		{8, PathType{ntSOURCE, ntACCOUNTS, ntBOOKS, ntXRP_BOOK, ntDESTINATION}},                      // sabxd
-		{9, PathType{ntSOURCE, ntACCOUNTS, ntBOOKS, ntACCOUNTS, ntXRP_BOOK, ntDESTINATION}},          // sabaxd
+		{1, PathType{ntSOURCE, ntXRP_BOOK, ntDESTINATION}},                                  // sxd
+		{2, PathType{ntSOURCE, ntACCOUNTS, ntXRP_BOOK, ntDESTINATION}},                      // saxd
+		{6, PathType{ntSOURCE, ntACCOUNTS, ntACCOUNTS, ntXRP_BOOK, ntDESTINATION}},          // saaxd
+		{7, PathType{ntSOURCE, ntBOOKS, ntXRP_BOOK, ntDESTINATION}},                         // sbxd
+		{8, PathType{ntSOURCE, ntACCOUNTS, ntBOOKS, ntXRP_BOOK, ntDESTINATION}},             // sabxd
+		{9, PathType{ntSOURCE, ntACCOUNTS, ntBOOKS, ntACCOUNTS, ntXRP_BOOK, ntDESTINATION}}, // sabaxd
 	}
 
 	// non-XRP → same non-XRP
 	pathTable[ptNonXRP_to_same] = []CostedPath{
-		{1, PathType{ntSOURCE, ntACCOUNTS, ntDESTINATION}},                                                       // sad
-		{1, PathType{ntSOURCE, ntDEST_BOOK, ntDESTINATION}},                                                      // sfd
-		{4, PathType{ntSOURCE, ntACCOUNTS, ntDEST_BOOK, ntDESTINATION}},                                          // safd
-		{4, PathType{ntSOURCE, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},                                          // sfad
-		{5, PathType{ntSOURCE, ntACCOUNTS, ntACCOUNTS, ntDESTINATION}},                                           // saad
-		{5, PathType{ntSOURCE, ntBOOKS, ntDEST_BOOK, ntDESTINATION}},                                             // sbfd
-		{6, PathType{ntSOURCE, ntXRP_BOOK, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},                              // sxfad
-		{6, PathType{ntSOURCE, ntACCOUNTS, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},                              // safad
-		{6, PathType{ntSOURCE, ntACCOUNTS, ntXRP_BOOK, ntDEST_BOOK, ntDESTINATION}},                              // saxfd
-		{6, PathType{ntSOURCE, ntACCOUNTS, ntXRP_BOOK, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},                  // saxfad
-		{6, PathType{ntSOURCE, ntACCOUNTS, ntBOOKS, ntDEST_BOOK, ntDESTINATION}},                                 // sabfd
-		{7, PathType{ntSOURCE, ntACCOUNTS, ntACCOUNTS, ntACCOUNTS, ntDESTINATION}},                               // saaad
+		{1, PathType{ntSOURCE, ntACCOUNTS, ntDESTINATION}},                                      // sad
+		{1, PathType{ntSOURCE, ntDEST_BOOK, ntDESTINATION}},                                     // sfd
+		{4, PathType{ntSOURCE, ntACCOUNTS, ntDEST_BOOK, ntDESTINATION}},                         // safd
+		{4, PathType{ntSOURCE, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},                         // sfad
+		{5, PathType{ntSOURCE, ntACCOUNTS, ntACCOUNTS, ntDESTINATION}},                          // saad
+		{5, PathType{ntSOURCE, ntBOOKS, ntDEST_BOOK, ntDESTINATION}},                            // sbfd
+		{6, PathType{ntSOURCE, ntXRP_BOOK, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},             // sxfad
+		{6, PathType{ntSOURCE, ntACCOUNTS, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},             // safad
+		{6, PathType{ntSOURCE, ntACCOUNTS, ntXRP_BOOK, ntDEST_BOOK, ntDESTINATION}},             // saxfd
+		{6, PathType{ntSOURCE, ntACCOUNTS, ntXRP_BOOK, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}}, // saxfad
+		{6, PathType{ntSOURCE, ntACCOUNTS, ntBOOKS, ntDEST_BOOK, ntDESTINATION}},                // sabfd
+		{7, PathType{ntSOURCE, ntACCOUNTS, ntACCOUNTS, ntACCOUNTS, ntDESTINATION}},              // saaad
 	}
 
 	// non-XRP → different non-XRP
 	pathTable[ptNonXRP_to_nonXRP] = []CostedPath{
-		{1, PathType{ntSOURCE, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},                                          // sfad
-		{1, PathType{ntSOURCE, ntACCOUNTS, ntDEST_BOOK, ntDESTINATION}},                                          // safd
-		{3, PathType{ntSOURCE, ntACCOUNTS, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},                              // safad
-		{4, PathType{ntSOURCE, ntXRP_BOOK, ntDEST_BOOK, ntDESTINATION}},                                          // sxfd
-		{5, PathType{ntSOURCE, ntACCOUNTS, ntXRP_BOOK, ntDEST_BOOK, ntDESTINATION}},                              // saxfd
-		{5, PathType{ntSOURCE, ntXRP_BOOK, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},                              // sxfad
-		{5, PathType{ntSOURCE, ntBOOKS, ntDEST_BOOK, ntDESTINATION}},                                             // sbfd
-		{6, PathType{ntSOURCE, ntACCOUNTS, ntXRP_BOOK, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},                  // saxfad
-		{6, PathType{ntSOURCE, ntACCOUNTS, ntBOOKS, ntDEST_BOOK, ntDESTINATION}},                                 // sabfd
-		{7, PathType{ntSOURCE, ntACCOUNTS, ntACCOUNTS, ntDEST_BOOK, ntDESTINATION}},                              // saafd
-		{8, PathType{ntSOURCE, ntACCOUNTS, ntACCOUNTS, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},                  // saafad
-		{9, PathType{ntSOURCE, ntACCOUNTS, ntDEST_BOOK, ntACCOUNTS, ntACCOUNTS, ntDESTINATION}},                  // safaad
+		{1, PathType{ntSOURCE, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},                         // sfad
+		{1, PathType{ntSOURCE, ntACCOUNTS, ntDEST_BOOK, ntDESTINATION}},                         // safd
+		{3, PathType{ntSOURCE, ntACCOUNTS, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},             // safad
+		{4, PathType{ntSOURCE, ntXRP_BOOK, ntDEST_BOOK, ntDESTINATION}},                         // sxfd
+		{5, PathType{ntSOURCE, ntACCOUNTS, ntXRP_BOOK, ntDEST_BOOK, ntDESTINATION}},             // saxfd
+		{5, PathType{ntSOURCE, ntXRP_BOOK, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}},             // sxfad
+		{5, PathType{ntSOURCE, ntBOOKS, ntDEST_BOOK, ntDESTINATION}},                            // sbfd
+		{6, PathType{ntSOURCE, ntACCOUNTS, ntXRP_BOOK, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}}, // saxfad
+		{6, PathType{ntSOURCE, ntACCOUNTS, ntBOOKS, ntDEST_BOOK, ntDESTINATION}},                // sabfd
+		{7, PathType{ntSOURCE, ntACCOUNTS, ntACCOUNTS, ntDEST_BOOK, ntDESTINATION}},             // saafd
+		{8, PathType{ntSOURCE, ntACCOUNTS, ntACCOUNTS, ntDEST_BOOK, ntACCOUNTS, ntDESTINATION}}, // saafad
+		{9, PathType{ntSOURCE, ntACCOUNTS, ntDEST_BOOK, ntACCOUNTS, ntACCOUNTS, ntDESTINATION}}, // safaad
 	}
 }
 

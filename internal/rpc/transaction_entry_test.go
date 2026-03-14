@@ -20,19 +20,19 @@ import (
 
 // mockLedgerReaderTE implements types.LedgerReader for transaction_entry tests.
 type mockLedgerReaderTE struct {
-	seq         uint32
-	hash        [32]byte
-	parentHash  [32]byte
-	closed      bool
-	validated   bool
-	totalDrops  uint64
-	closeTime   int64
-	closeRes    uint32
-	closeFlags  uint8
-	pCloseTime  int64
-	txMapHash   [32]byte
-	stateMap    [32]byte
-	txs         map[[32]byte][]byte
+	seq        uint32
+	hash       [32]byte
+	parentHash [32]byte
+	closed     bool
+	validated  bool
+	totalDrops uint64
+	closeTime  int64
+	closeRes   uint32
+	closeFlags uint8
+	pCloseTime int64
+	txMapHash  [32]byte
+	stateMap   [32]byte
+	txs        map[[32]byte][]byte
 }
 
 func newMockLedgerReaderTE(seq uint32) *mockLedgerReaderTE {
@@ -54,18 +54,18 @@ func newMockLedgerReaderTE(seq uint32) *mockLedgerReaderTE {
 	}
 }
 
-func (m *mockLedgerReaderTE) Sequence() uint32                                         { return m.seq }
-func (m *mockLedgerReaderTE) Hash() [32]byte                                           { return m.hash }
-func (m *mockLedgerReaderTE) ParentHash() [32]byte                                     { return m.parentHash }
-func (m *mockLedgerReaderTE) IsClosed() bool                                           { return m.closed }
-func (m *mockLedgerReaderTE) IsValidated() bool                                        { return m.validated }
-func (m *mockLedgerReaderTE) TotalDrops() uint64                                       { return m.totalDrops }
-func (m *mockLedgerReaderTE) CloseTime() int64                                         { return m.closeTime }
-func (m *mockLedgerReaderTE) CloseTimeResolution() uint32                              { return m.closeRes }
-func (m *mockLedgerReaderTE) CloseFlags() uint8                                        { return m.closeFlags }
-func (m *mockLedgerReaderTE) ParentCloseTime() int64                                   { return m.pCloseTime }
-func (m *mockLedgerReaderTE) TxMapHash() [32]byte                                      { return m.txMapHash }
-func (m *mockLedgerReaderTE) StateMapHash() [32]byte                                   { return m.stateMap }
+func (m *mockLedgerReaderTE) Sequence() uint32            { return m.seq }
+func (m *mockLedgerReaderTE) Hash() [32]byte              { return m.hash }
+func (m *mockLedgerReaderTE) ParentHash() [32]byte        { return m.parentHash }
+func (m *mockLedgerReaderTE) IsClosed() bool              { return m.closed }
+func (m *mockLedgerReaderTE) IsValidated() bool           { return m.validated }
+func (m *mockLedgerReaderTE) TotalDrops() uint64          { return m.totalDrops }
+func (m *mockLedgerReaderTE) CloseTime() int64            { return m.closeTime }
+func (m *mockLedgerReaderTE) CloseTimeResolution() uint32 { return m.closeRes }
+func (m *mockLedgerReaderTE) CloseFlags() uint8           { return m.closeFlags }
+func (m *mockLedgerReaderTE) ParentCloseTime() int64      { return m.pCloseTime }
+func (m *mockLedgerReaderTE) TxMapHash() [32]byte         { return m.txMapHash }
+func (m *mockLedgerReaderTE) StateMapHash() [32]byte      { return m.stateMap }
 func (m *mockLedgerReaderTE) ForEachTransaction(fn func([32]byte, []byte) bool) error {
 	for h, d := range m.txs {
 		if !fn(h, d) {
@@ -78,8 +78,8 @@ func (m *mockLedgerReaderTE) ForEachTransaction(fn func([32]byte, []byte) bool) 
 // mockLedgerServiceTE extends mockLedgerService with transaction_entry-specific behavior
 type mockLedgerServiceTE struct {
 	*mockLedgerService
-	transactions map[string]*types.TransactionInfo
-	ledgers      map[uint32]*mockLedgerReaderTE
+	transactions  map[string]*types.TransactionInfo
+	ledgers       map[uint32]*mockLedgerReaderTE
 	ledgersByHash map[[32]byte]*mockLedgerReaderTE
 }
 
@@ -599,8 +599,8 @@ func TestTransactionEntryMethodMetadata(t *testing.T) {
 	method := &handlers.TransactionEntryMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, types.RoleGuest, method.RequiredRole(),
-			"transaction_entry should be accessible to guests")
+		assert.Equal(t, types.RoleUser, method.RequiredRole(),
+			"transaction_entry requires RoleUser (rippled: Role::USER)")
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {

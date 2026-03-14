@@ -15,8 +15,8 @@ import (
 
 // XRPLNumber constants matching rippled's Number.h
 const (
-	xrplNumMinMantissa int64 = 1_000_000_000_000_000  // 10^15
-	xrplNumMaxMantissa int64 = 9_999_999_999_999_999  // 10^16 - 1
+	xrplNumMinMantissa int64 = 1_000_000_000_000_000 // 10^15
+	xrplNumMaxMantissa int64 = 9_999_999_999_999_999 // 10^16 - 1
 	xrplNumMinExponent       = -32768
 	xrplNumMaxExponent       = 32768
 	// Zero exponent for Number (different from IOUAmount's zeroExponent)
@@ -97,9 +97,7 @@ type xrplGuard struct {
 	sbit   bool   // sign bit (true = negative)
 }
 
-func (g *xrplGuard) setPositive() { g.sbit = false }
 func (g *xrplGuard) setNegative() { g.sbit = true }
-func (g *xrplGuard) isNegative() bool { return g.sbit }
 
 // push adds a digit to the guard, shifting existing digits right.
 // Reference: Number.cpp lines 117-122

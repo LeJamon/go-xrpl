@@ -8,9 +8,9 @@ package payment
 // Reference: rippled/src/xrpld/app/paths/AMMLiquidity.h and detail/AMMLiquidity.cpp
 
 import (
-	"github.com/LeJamon/goXRPLd/keylet"
-	tx "github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	tx "github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // AMMLiquidity generates synthetic AMM offers for BookStep consumption.

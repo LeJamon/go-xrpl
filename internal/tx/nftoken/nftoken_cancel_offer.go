@@ -4,10 +4,10 @@ import (
 	"encoding/hex"
 
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/ledger/entry"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
 func init() {
@@ -83,12 +83,12 @@ func (n *NFTokenCancelOffer) RequiredAmendments() [][32]byte {
 
 // Apply applies the NFTokenCancelOffer transaction to the ledger.
 // Reference: rippled NFTokenCancelOffer.cpp preclaim + doApply
-func (co *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) tx.Result {
+func (n *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	accountID := ctx.AccountID
 
 	// --- Preclaim: verify all offers can be cancelled ---
 	// Reference: rippled NFTokenCancelOffer.cpp preclaim()
-	for _, offerIDHex := range co.NFTokenOffers {
+	for _, offerIDHex := range n.NFTokenOffers {
 		offerIDBytes, err := hex.DecodeString(offerIDHex)
 		if err != nil || len(offerIDBytes) != 32 {
 			continue
@@ -138,7 +138,7 @@ func (co *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// --- doApply: delete all offers ---
 	// Reference: rippled NFTokenCancelOffer.cpp doApply()
-	for _, offerIDHex := range co.NFTokenOffers {
+	for _, offerIDHex := range n.NFTokenOffers {
 		offerIDBytes, err := hex.DecodeString(offerIDHex)
 		if err != nil || len(offerIDBytes) != 32 {
 			continue

@@ -136,29 +136,25 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	// Add transactions if requested
 	if request.Transactions {
 		var txList []interface{}
+		apiVersion := ctx.ApiVersion
 		targetLedger.ForEachTransaction(func(txHashKey [32]byte, txData []byte) bool {
 			hashStr := strings.ToUpper(hex.EncodeToString(txHashKey[:]))
 			if request.Expand {
-				// Return full transaction objects
-				if request.Binary {
-					txList = append(txList, map[string]interface{}{
-						"tx_blob": strings.ToUpper(hex.EncodeToString(txData)),
-						"hash":    hashStr,
-					})
-				} else {
-					// Decode transaction blob to JSON
-					txHex := hex.EncodeToString(txData)
-					decoded, err := binarycodec.Decode(txHex)
-					if err != nil {
-						txList = append(txList, map[string]interface{}{
-							"hash":    hashStr,
-							"tx_blob": strings.ToUpper(txHex),
-						})
-					} else {
-						decoded["hash"] = hashStr
-						txList = append(txList, decoded)
+				txEntry := expandTransaction(txData, hashStr, request.Binary, apiVersion)
+				// Add per-entry context fields for v2+
+				if apiVersion > 1 && !request.Binary {
+					if targetLedger.IsClosed() {
+						txEntry["ledger_hash"] = ledgerHash
+					}
+					txEntry["validated"] = validated
+					if validated {
+						txEntry["ledger_index"] = targetLedger.Sequence()
+						if closeTimeSec > 0 {
+							txEntry["close_time_iso"] = closeTimeISO
+						}
 					}
 				}
+				txList = append(txList, txEntry)
 			} else {
 				// Return just transaction hashes
 				txList = append(txList, hashStr)
@@ -190,3 +186,103 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	return response, nil
 }
 
+// expandTransaction builds an expanded transaction object from raw txData.
+// It handles two storage formats:
+//  1. JSON StoredTransaction: {"tx_json": {...}, "meta": {...}}
+//  2. Raw binary blob (decoded via binarycodec)
+//
+// The output format varies by API version:
+//   - API v1: tx fields at top level + "metaData" for metadata
+//   - API v2+: "tx_json" key + "meta" key + "hash"
+//
+// For binary mode, tx_blob and meta_blob/meta are returned as hex strings.
+// Reference: rippled LedgerToJson.cpp fillJsonTx()
+func expandTransaction(txData []byte, hashStr string, binary bool, apiVersion int) map[string]interface{} {
+	// Try JSON StoredTransaction format first (used by submit handler)
+	var storedTx StoredTransaction
+	if err := json.Unmarshal(txData, &storedTx); err == nil && storedTx.TxJSON != nil {
+		return expandStoredTransaction(storedTx, hashStr, binary, apiVersion)
+	}
+
+	// Fall back to raw binary blob
+	return expandBinaryTransaction(txData, hashStr, binary, apiVersion)
+}
+
+// expandStoredTransaction formats a JSON-stored transaction for the response.
+func expandStoredTransaction(storedTx StoredTransaction, hashStr string, binary bool, apiVersion int) map[string]interface{} {
+	txEntry := map[string]interface{}{}
+
+	if binary {
+		// Encode tx_json back to binary hex
+		txBlob, err := binarycodec.Encode(storedTx.TxJSON)
+		if err == nil {
+			txEntry["tx_blob"] = txBlob
+		}
+		txEntry["hash"] = hashStr
+		// Encode metadata to binary hex
+		if storedTx.Meta != nil {
+			metaBlob, err := binarycodec.Encode(storedTx.Meta)
+			if err == nil {
+				if apiVersion > 1 {
+					txEntry["meta_blob"] = metaBlob
+				} else {
+					txEntry["meta"] = metaBlob
+				}
+			}
+		}
+		return txEntry
+	}
+
+	if apiVersion > 1 {
+		// API v2+: use tx_json and meta keys
+		txEntry["tx_json"] = storedTx.TxJSON
+		txEntry["hash"] = hashStr
+		if storedTx.Meta != nil {
+			InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
+			txEntry["meta"] = storedTx.Meta
+		}
+	} else {
+		// API v1: flatten tx fields at top level, metadata under "metaData"
+		for k, v := range storedTx.TxJSON {
+			txEntry[k] = v
+		}
+		txEntry["hash"] = hashStr
+		if storedTx.Meta != nil {
+			InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
+			txEntry["metaData"] = storedTx.Meta
+		}
+	}
+	return txEntry
+}
+
+// expandBinaryTransaction formats a raw binary transaction blob for the response.
+func expandBinaryTransaction(txData []byte, hashStr string, binary bool, apiVersion int) map[string]interface{} {
+	txEntry := map[string]interface{}{}
+
+	if binary {
+		txEntry["tx_blob"] = strings.ToUpper(hex.EncodeToString(txData))
+		txEntry["hash"] = hashStr
+		return txEntry
+	}
+
+	// Try to decode binary blob via binarycodec
+	txHex := hex.EncodeToString(txData)
+	decoded, err := binarycodec.Decode(txHex)
+	if err != nil {
+		// Cannot decode: return raw blob
+		txEntry["tx_blob"] = strings.ToUpper(txHex)
+		txEntry["hash"] = hashStr
+		return txEntry
+	}
+
+	if apiVersion > 1 {
+		txEntry["tx_json"] = decoded
+		txEntry["hash"] = hashStr
+	} else {
+		for k, v := range decoded {
+			txEntry[k] = v
+		}
+		txEntry["hash"] = hashStr
+	}
+	return txEntry
+}

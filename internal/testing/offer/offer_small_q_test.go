@@ -8,10 +8,10 @@ package offer
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	paymentPkg "github.com/LeJamon/goXRPLd/internal/tx/payment"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	paymentPkg "github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/stretchr/testify/require"
 )
 
@@ -171,7 +171,7 @@ func testRmSmallIncreasedQOffersXRP(t *testing.T, disabledFeatures []string) {
 				Paths([][]paymentPkg.PathStep{
 					{{Currency: "USD", Issuer: gw.Address}},
 				}).
-				SendMax(tx.NewXRPAmount(int64(jtx.XRP(1)))).
+				SendMax(tx.NewXRPAmount(jtx.XRP(1))).
 				NoDirectRipple()
 
 			if isPartialPayment {

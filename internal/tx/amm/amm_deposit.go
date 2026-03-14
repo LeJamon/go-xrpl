@@ -1,10 +1,10 @@
 package amm
 
 import (
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -398,9 +398,9 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	// - For single-asset: amountBalance = deposited asset's pool balance, amount2 = nullopt
 	// - For two-asset: amountBalance = asset1 pool balance, amount2 = asset2 deposit
 	// We track which asset is the "primary" deposit to reconstruct this at the end.
-	var depositAssetBalance tx.Amount   // pool balance for the primary deposited asset
-	isSingleAssetDeposit := false       // true if only one asset is being deposited
-	singleDepositIsAsset2 := false      // true if the single deposit is for asset2
+	var depositAssetBalance tx.Amount // pool balance for the primary deposited asset
+	isSingleAssetDeposit := false     // true if only one asset is being deposited
+	singleDepositIsAsset2 := false    // true if the single deposit is for asset2
 
 	// Handle different deposit modes
 	// Reference: rippled AMMDeposit.cpp applyGuts()

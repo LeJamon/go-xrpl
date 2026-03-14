@@ -27,9 +27,9 @@ func (e *InvariantError) Unwrap() error {
 
 // InvariantCheckResult contains the results of an invariant check.
 type InvariantCheckResult struct {
-	Errors      []*InvariantError
-	NodesChecked int
-	LeavesChecked int
+	Errors            []*InvariantError
+	NodesChecked      int
+	LeavesChecked     int
 	InnerNodesChecked int
 }
 

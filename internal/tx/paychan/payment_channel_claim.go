@@ -1,15 +1,16 @@
 package paychan
 
 import (
+	"bytes"
 	"encoding/hex"
 	"sort"
 	"strings"
 
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/credential"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -196,24 +197,24 @@ func (p *PaymentChannelClaim) IsRenew() bool {
 
 // Apply applies a PaymentChannelClaim transaction
 // Reference: rippled PayChan.cpp PayChanClaim::preclaim() + doApply()
-func (pcl *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
+func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 	rules := ctx.Rules()
 
 	// --- Preclaim: credential checks ---
 	// Reference: rippled PayChan.cpp PayChanClaim::preflight() credential check
-	if len(pcl.CredentialIDs) > 0 && !rules.Enabled(amendment.FeatureCredentials) {
+	if len(p.CredentialIDs) > 0 && !rules.Enabled(amendment.FeatureCredentials) {
 		return tx.TemDISABLED
 	}
 
 	// Reference: rippled PayChan.cpp PayChanClaim::preclaim() credentials::valid()
-	if len(pcl.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-		if result := validateCredentials(ctx, pcl.CredentialIDs); result != tx.TesSUCCESS {
+	if len(p.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
+		if result := validateCredentials(ctx, p.CredentialIDs); result != tx.TesSUCCESS {
 			return result
 		}
 	}
 
 	// Parse channel ID
-	channelID, err := hex.DecodeString(pcl.Channel)
+	channelID, err := hex.DecodeString(p.Channel)
 	if err != nil || len(channelID) != 32 {
 		return tx.TemINVALID
 	}
@@ -242,7 +243,7 @@ func (pcl *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 		return closeChannel(ctx, channelKey, channel)
 	}
 
-	accountID, _ := state.DecodeAccountID(pcl.Account)
+	accountID, _ := state.DecodeAccountID(p.Account)
 	isOwner := channel.Account == accountID
 	isDest := channel.DestinationID == accountID
 
@@ -252,22 +253,22 @@ func (pcl *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// --- Handle Balance claim ---
-	if pcl.Balance != nil {
-		claimBalance := uint64(pcl.Balance.Drops())
+	if p.Balance != nil {
+		claimBalance := uint64(p.Balance.Drops())
 
 		// Destination claiming without signature
 		// Reference: rippled PayChan.cpp doApply() lines 480-481
-		if isDest && !isOwner && pcl.Signature == "" {
+		if isDest && !isOwner && p.Signature == "" {
 			return tx.TemBAD_SIGNATURE
 		}
 
 		// Signature verification
 		// Reference: rippled PayChan.cpp doApply() lines 483-501
-		if pcl.Signature != "" {
+		if p.Signature != "" {
 			// Determine authorized amount: use Amount if present, else Balance
 			var authAmt uint64
-			if pcl.Amount != nil {
-				authAmt = uint64(pcl.Amount.Drops())
+			if p.Amount != nil {
+				authAmt = uint64(p.Amount.Drops())
 			} else {
 				authAmt = claimBalance
 			}
@@ -278,12 +279,12 @@ func (pcl *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 			}
 
 			// PublicKey must match the channel's PublicKey
-			if !strings.EqualFold(pcl.PublicKey, channel.PublicKey) {
+			if !strings.EqualFold(p.PublicKey, channel.PublicKey) {
 				return tx.TemBAD_SIGNER
 			}
 
 			// Verify the signature
-			if !verifyClaimSignature(pcl.Channel, authAmt, pcl.PublicKey, pcl.Signature) {
+			if !verifyClaimSignature(p.Channel, authAmt, p.PublicKey, p.Signature) {
 				return tx.TemBAD_SIGNATURE
 			}
 		}
@@ -324,7 +325,7 @@ func (pcl *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 		// DepositAuth check — when DepositAuth IS enabled
 		// Reference: rippled PayChan.cpp doApply() lines 553-563
 		if depositAuth {
-			if result := verifyDepositPreauth(ctx, pcl.CredentialIDs, accountID, channel.DestinationID, destAccount); result != tx.TesSUCCESS {
+			if result := verifyDepositPreauth(ctx, p.CredentialIDs, accountID, channel.DestinationID, destAccount); result != tx.TesSUCCESS {
 				return result
 			}
 		}
@@ -352,7 +353,7 @@ func (pcl *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// --- Handle tfRenew ---
 	// Reference: rippled PayChan.cpp doApply() lines 534-542
-	flags := pcl.GetFlags()
+	flags := p.GetFlags()
 	if flags&PaymentChannelClaimFlagRenew != 0 {
 		if !isOwner {
 			return tx.TecNO_PERMISSION
@@ -394,13 +395,13 @@ func (pcl *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 // ApplyOnTec implements TecApplier for PaymentChannelClaim.
 // When tecEXPIRED is returned, expired credentials must still be deleted from the ledger.
 // Reference: rippled CredentialHelpers.cpp removeExpired() — called from verifyDepositPreauth()
-func (pcl *PaymentChannelClaim) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
-	if len(pcl.CredentialIDs) == 0 {
+func (p *PaymentChannelClaim) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
+	if len(p.CredentialIDs) == 0 {
 		return tx.TesSUCCESS
 	}
 
 	closeTime := ctx.Config.ParentCloseTime
-	for _, credIDHex := range pcl.CredentialIDs {
+	for _, credIDHex := range p.CredentialIDs {
 		credHash, err := hex.DecodeString(credIDHex)
 		if err != nil || len(credHash) != 32 {
 			continue
@@ -535,11 +536,11 @@ func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst 
 
 	// Sort pairs by (issuer, credType) for deterministic lookup
 	sort.Slice(pairs, func(i, j int) bool {
-		cmp := strings.Compare(string(pairs[i].issuer[:]), string(pairs[j].issuer[:]))
+		cmp := bytes.Compare(pairs[i].issuer[:], pairs[j].issuer[:])
 		if cmp != 0 {
 			return cmp < 0
 		}
-		return strings.Compare(string(pairs[i].credType), string(pairs[j].credType)) < 0
+		return bytes.Compare(pairs[i].credType, pairs[j].credType) < 0
 	})
 
 	sortedCreds := make([]keylet.CredentialPair, len(pairs))

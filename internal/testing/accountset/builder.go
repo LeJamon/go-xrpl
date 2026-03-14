@@ -3,9 +3,9 @@ package accountset
 import (
 	"fmt"
 
+	"github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
-	"github.com/LeJamon/goXRPLd/internal/testing"
 )
 
 // AccountSetBuilder provides a fluent interface for building AccountSet transactions.

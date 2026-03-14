@@ -5,12 +5,12 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -121,20 +121,20 @@ func (e *EscrowCreate) Flatten() (map[string]any, error) {
 
 // Apply applies an EscrowCreate transaction
 // Reference: rippled Escrow.cpp EscrowCreate::doApply()
-func (ec *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	rules := ctx.Rules()
 	closeTime := ctx.Config.ParentCloseTime
 
 	// Non-XRP amounts require featureTokenEscrow.
 	// Reference: rippled Escrow.cpp preflight lines 131-148
-	if !ec.Amount.IsNative() && !rules.Enabled(amendment.FeatureTokenEscrow) {
+	if !e.Amount.IsNative() && !rules.Enabled(amendment.FeatureTokenEscrow) {
 		return tx.TemBAD_AMOUNT
 	}
 
 	// Amendment-gated preflight: fix1571 requires FinishAfter or Condition
 	// Reference: rippled Escrow.cpp:160-167
 	if rules.Enabled(amendment.FeatureFix1571) {
-		if ec.FinishAfter == nil && (ec.Condition == nil || *ec.Condition == "") {
+		if e.FinishAfter == nil && (e.Condition == nil || *e.Condition == "") {
 			return tx.TemMALFORMED
 		}
 	}
@@ -143,38 +143,38 @@ func (ec *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled Escrow.cpp:457-489
 	if rules.Enabled(amendment.FeatureFix1571) {
 		// fix1571: after() means strictly greater than
-		if ec.CancelAfter != nil && closeTime > *ec.CancelAfter {
+		if e.CancelAfter != nil && closeTime > *e.CancelAfter {
 			return tx.TecNO_PERMISSION
 		}
-		if ec.FinishAfter != nil && closeTime > *ec.FinishAfter {
+		if e.FinishAfter != nil && closeTime > *e.FinishAfter {
 			return tx.TecNO_PERMISSION
 		}
 	} else {
 		// pre-fix1571: >= comparison
-		if ec.CancelAfter != nil && closeTime >= *ec.CancelAfter {
+		if e.CancelAfter != nil && closeTime >= *e.CancelAfter {
 			return tx.TecNO_PERMISSION
 		}
-		if ec.FinishAfter != nil && closeTime >= *ec.FinishAfter {
+		if e.FinishAfter != nil && closeTime >= *e.FinishAfter {
 			return tx.TecNO_PERMISSION
 		}
 	}
 
 	// Get the amount to escrow
-	amount := ec.Amount.Drops()
+	amount := e.Amount.Drops()
 	if amount <= 0 {
 		return tx.TemINVALID
 	}
 
 	// Verify destination exists and is not a pseudo-account
 	// Reference: rippled Escrow.cpp:511-512, 373-378
-	destAccount, destID, result := ctx.LookupDestination(ec.Destination)
+	destAccount, destID, result := ctx.LookupDestination(e.Destination)
 	if result != tx.TesSUCCESS {
 		return result
 	}
 
 	// Destination tag check
 	// Reference: rippled Escrow.cpp:517-519
-	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && ec.DestinationTag == nil {
+	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && e.DestinationTag == nil {
 		return tx.TecDST_TAG_NEEDED
 	}
 
@@ -200,13 +200,13 @@ func (ec *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	ctx.Account.Balance -= uint64(amount)
 
 	// Create the escrow entry
-	accountID, _ := state.DecodeAccountID(ec.Account)
-	sequence := ec.GetCommon().SeqProxy()
+	accountID, _ := state.DecodeAccountID(e.Account)
+	sequence := e.GetCommon().SeqProxy()
 
 	escrowKey := keylet.Escrow(accountID, sequence)
 
 	// Serialize escrow
-	escrowData, err := serializeEscrow(ec, accountID, destID, sequence, uint64(amount))
+	escrowData, err := serializeEscrow(e, accountID, destID, sequence, uint64(amount))
 	if err != nil {
 		return tx.TefINTERNAL
 	}

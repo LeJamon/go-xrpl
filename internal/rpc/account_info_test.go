@@ -40,11 +40,11 @@ func newMockLedgerService() *mockLedgerService {
 	}
 }
 
-func (m *mockLedgerService) GetCurrentLedgerIndex() uint32             { return m.currentLedgerIndex }
-func (m *mockLedgerService) GetClosedLedgerIndex() uint32              { return m.closedLedgerIndex }
-func (m *mockLedgerService) GetValidatedLedgerIndex() uint32           { return m.validatedLedgerIndex }
-func (m *mockLedgerService) AcceptLedger() (uint32, error)             { return m.closedLedgerIndex + 1, nil }
-func (m *mockLedgerService) IsStandalone() bool                        { return m.standalone }
+func (m *mockLedgerService) GetCurrentLedgerIndex() uint32         { return m.currentLedgerIndex }
+func (m *mockLedgerService) GetClosedLedgerIndex() uint32          { return m.closedLedgerIndex }
+func (m *mockLedgerService) GetValidatedLedgerIndex() uint32       { return m.validatedLedgerIndex }
+func (m *mockLedgerService) AcceptLedger() (uint32, error)         { return m.closedLedgerIndex + 1, nil }
+func (m *mockLedgerService) IsStandalone() bool                    { return m.standalone }
 func (m *mockLedgerService) GetServerInfo() types.LedgerServerInfo { return m.serverInfo }
 func (m *mockLedgerService) GetGenesisAccount() (string, error) {
 	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
@@ -55,7 +55,7 @@ func (m *mockLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader,
 func (m *mockLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockLedgerService) SubmitTransaction(txJSON []byte) (*types.SubmitResult, error) {
+func (m *mockLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
@@ -128,7 +128,7 @@ func (m *mockLedgerService) GetGatewayBalances(account string, hotWallets []stri
 func (m *mockLedgerService) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*types.DepositAuthorizedResult, error) {
+func (m *mockLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*types.DepositAuthorizedResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
@@ -244,27 +244,21 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 			params: map[string]interface{}{
 				"account": "n94JNrQYkDrpt62bbSR7nVEhdyAvcJXRAsjEkFYyqRkh9SUTYEqV",
 			},
-			expectedError: "Account not found.",
-			expectedCode:  19, // actNotFound (malformed addresses get treated as not found)
-			setupMock: func() {
-				mock.accountInfoErr = errors.New("account not found")
-			},
+			expectedError: "Malformed account.",
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			name: "Malformed account address - seed format",
 			params: map[string]interface{}{
 				"account": "foo",
 			},
-			expectedError: "Account not found.",
-			expectedCode:  19, // actNotFound
-			setupMock: func() {
-				mock.accountInfoErr = errors.New("account not found")
-			},
+			expectedError: "Malformed account.",
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			name: "Account not found - valid format but not in ledger",
 			params: map[string]interface{}{
-				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
+				"account": "r4bbzCamAis69rNoRdSaMSmPb1kDUHXcAL",
 			},
 			expectedError: "Account not found.",
 			expectedCode:  19, // actNotFound
@@ -763,25 +757,22 @@ func TestAccountInfoMalformedAddresses(t *testing.T) {
 		ApiVersion: types.ApiVersion1,
 	}
 
-	// Set up mock to return "account not found" for all these cases
-	// (malformed addresses result in actNotFound in rippled)
-	mock.accountInfoErr = errors.New("account not found")
-
 	malformedAddresses := []struct {
-		name    string
-		address string
+		name         string
+		address      string
+		expectedCode int
 	}{
-		{"node public key format", "n94JNrQYkDrpt62bbSR7nVEhdyAvcJXRAsjEkFYyqRkh9SUTYEqV"},
-		{"seed string", "foo"},
-		{"short string", "r"},
-		{"empty string", ""},
-		{"too short address", "rHb9CJAWyB4rj91VRWn96DkukG"},
-		{"too long address", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyThExtraChars"},
-		{"invalid characters", "rHb9CJAWyB4rj91VRWn96DkukG4bwdty!@"},
-		{"lowercase prefix", "rhb9cjAWyB4rj91VRWn96DkukG4bwdtyTh"},
-		{"zero prefix", "0Hb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
-		{"numeric only", "12345678901234567890123456789012345"},
-		{"hex string", "0x1234567890ABCDEF1234567890ABCDEF12345678"},
+		{"node public key format", "n94JNrQYkDrpt62bbSR7nVEhdyAvcJXRAsjEkFYyqRkh9SUTYEqV", types.RpcACT_MALFORMED},
+		{"seed string", "foo", types.RpcACT_MALFORMED},
+		{"short string", "r", types.RpcACT_MALFORMED},
+		{"empty string", "", types.RpcINVALID_PARAMS},
+		{"too short address", "rHb9CJAWyB4rj91VRWn96DkukG", types.RpcACT_MALFORMED},
+		{"too long address", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyThExtraChars", types.RpcACT_MALFORMED},
+		{"invalid characters", "rHb9CJAWyB4rj91VRWn96DkukG4bwdty!@", types.RpcACT_MALFORMED},
+		{"lowercase prefix", "rhb9cjAWyB4rj91VRWn96DkukG4bwdtyTh", types.RpcACT_MALFORMED},
+		{"zero prefix", "0Hb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", types.RpcACT_MALFORMED},
+		{"numeric only", "12345678901234567890123456789012345", types.RpcACT_MALFORMED},
+		{"hex string", "0x1234567890ABCDEF1234567890ABCDEF12345678", types.RpcACT_MALFORMED},
 	}
 
 	for _, tc := range malformedAddresses {
@@ -794,18 +785,10 @@ func TestAccountInfoMalformedAddresses(t *testing.T) {
 
 			result, rpcErr := method.Handle(ctx, paramsJSON)
 
-			if tc.address == "" {
-				// Empty string should trigger missing parameter error
-				assert.Nil(t, result)
-				require.NotNil(t, rpcErr)
-				assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
-			} else {
-				// Other malformed addresses should trigger account not found
-				assert.Nil(t, result, "Expected nil result for malformed address")
-				require.NotNil(t, rpcErr, "Expected RPC error for malformed address")
-				assert.Equal(t, 19, rpcErr.Code, // actNotFound
-					"Expected actNotFound error for malformed address: %s", tc.address)
-			}
+			assert.Nil(t, result, "Expected nil result for malformed address")
+			require.NotNil(t, rpcErr, "Expected RPC error for malformed address")
+			assert.Equal(t, tc.expectedCode, rpcErr.Code,
+				"Expected correct error code for malformed address: %s", tc.address)
 		})
 	}
 }

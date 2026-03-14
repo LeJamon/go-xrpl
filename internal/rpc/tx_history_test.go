@@ -66,7 +66,7 @@ func TestTxHistoryBasicRequest(t *testing.T) {
 	method := &handlers.TxHistoryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       types.RoleGuest,
+		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -146,7 +146,7 @@ func TestTxHistoryEmptyResult(t *testing.T) {
 	method := &handlers.TxHistoryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       types.RoleGuest,
+		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -184,7 +184,7 @@ func TestTxHistoryResponseStructure(t *testing.T) {
 	method := &handlers.TxHistoryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       types.RoleGuest,
+		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -230,7 +230,7 @@ func TestTxHistoryDatabaseNotConfigured(t *testing.T) {
 	method := &handlers.TxHistoryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       types.RoleGuest,
+		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -253,7 +253,7 @@ func TestTxHistoryServiceUnavailable(t *testing.T) {
 	method := &handlers.TxHistoryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       types.RoleGuest,
+		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -303,7 +303,7 @@ func TestTxHistoryInternalError(t *testing.T) {
 	method := &handlers.TxHistoryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       types.RoleGuest,
+		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -326,14 +326,15 @@ func TestTxHistoryMethodMetadata(t *testing.T) {
 	method := &handlers.TxHistoryMethod{}
 
 	t.Run("RequiredRole", func(t *testing.T) {
-		assert.Equal(t, types.RoleGuest, method.RequiredRole(),
-			"tx_history should be accessible to guests")
+		assert.Equal(t, types.RoleUser, method.RequiredRole(),
+			"tx_history requires Role::USER per rippled Handler.cpp")
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {
 		versions := method.SupportedApiVersions()
 		assert.Contains(t, versions, types.ApiVersion1)
-		assert.Contains(t, versions, types.ApiVersion2)
-		assert.Contains(t, versions, types.ApiVersion3)
+		// tx_history is deprecated and only supports v1
+		assert.NotContains(t, versions, types.ApiVersion2)
+		assert.NotContains(t, versions, types.ApiVersion3)
 	})
 }

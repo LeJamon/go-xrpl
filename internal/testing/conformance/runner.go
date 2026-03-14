@@ -25,9 +25,9 @@ import (
 
 // Fixture represents a single xrpl-fixtures test vector file.
 type Fixture struct {
-	RippledVersion string  `json:"rippled_version"`
-	Suite          string  `json:"suite"`
-	Testcase       string  `json:"testcase"`
+	RippledVersion string     `json:"rippled_version"`
+	Suite          string     `json:"suite"`
+	Testcase       string     `json:"testcase"`
 	Env            *EnvConfig `json:"env,omitempty"`
 	Steps          []Step     `json:"steps"`
 }
@@ -647,8 +647,8 @@ func (r *runner) deriveInitialBalances(steps []Step) map[string]uint64 {
 	// Track how many fees each address has consumed (as tx sender).
 	// Only count applied results (tesSUCCESS, tec*) since tem/tef/tel/ter
 	// don't deduct fees.
-	feesByAddr := make(map[string]uint64)     // address -> total fees paid
-	postStateSeen := make(map[string]bool)     // already derived for this address
+	feesByAddr := make(map[string]uint64)  // address -> total fees paid
+	postStateSeen := make(map[string]bool) // already derived for this address
 
 	for _, s := range steps {
 		if s.Op == "tx" && s.TxJSON != nil {

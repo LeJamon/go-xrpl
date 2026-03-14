@@ -22,7 +22,7 @@ type mockClosedLedgerContext struct {
 	feeLevels []txq.FeeLevel
 }
 
-func (m *mockClosedLedgerContext) GetLedgerSequence() uint32          { return m.ledgerSeq }
+func (m *mockClosedLedgerContext) GetLedgerSequence() uint32               { return m.ledgerSeq }
 func (m *mockClosedLedgerContext) GetTransactionFeeLevels() []txq.FeeLevel { return m.feeLevels }
 
 func makeConfig() txq.Config {
@@ -36,7 +36,7 @@ func makeConfig() txq.Config {
 		QueueSizeMin:                   10,
 		MaximumTxnPerAccount:           10,
 		MinimumTxnInLedgerStandalone:   100,
-		NormalConsensusIncreasePercent:  20,
+		NormalConsensusIncreasePercent: 20,
 		SlowConsensusDecreasePercent:   50,
 		Standalone:                     false,
 	}

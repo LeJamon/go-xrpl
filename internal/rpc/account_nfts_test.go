@@ -41,11 +41,15 @@ func newMockAccountNFTsLedgerService() *mockAccountNFTsLedgerService {
 	}
 }
 
-func (m *mockAccountNFTsLedgerService) GetCurrentLedgerIndex() uint32   { return m.currentLedgerIndex }
-func (m *mockAccountNFTsLedgerService) GetClosedLedgerIndex() uint32    { return m.closedLedgerIndex }
-func (m *mockAccountNFTsLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
-func (m *mockAccountNFTsLedgerService) AcceptLedger() (uint32, error)   { return m.closedLedgerIndex + 1, nil }
-func (m *mockAccountNFTsLedgerService) IsStandalone() bool              { return m.standalone }
+func (m *mockAccountNFTsLedgerService) GetCurrentLedgerIndex() uint32 { return m.currentLedgerIndex }
+func (m *mockAccountNFTsLedgerService) GetClosedLedgerIndex() uint32  { return m.closedLedgerIndex }
+func (m *mockAccountNFTsLedgerService) GetValidatedLedgerIndex() uint32 {
+	return m.validatedLedgerIndex
+}
+func (m *mockAccountNFTsLedgerService) AcceptLedger() (uint32, error) {
+	return m.closedLedgerIndex + 1, nil
+}
+func (m *mockAccountNFTsLedgerService) IsStandalone() bool { return m.standalone }
 func (m *mockAccountNFTsLedgerService) GetServerInfo() types.LedgerServerInfo {
 	return m.serverInfo
 }
@@ -58,7 +62,7 @@ func (m *mockAccountNFTsLedgerService) GetLedgerBySequence(seq uint32) (types.Le
 func (m *mockAccountNFTsLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) SubmitTransaction(txJSON []byte) (*types.SubmitResult, error) {
+func (m *mockAccountNFTsLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountNFTsLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
@@ -143,7 +147,7 @@ func (m *mockAccountNFTsLedgerService) GetGatewayBalances(account string, hotWal
 func (m *mockAccountNFTsLedgerService) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string) (*types.DepositAuthorizedResult, error) {
+func (m *mockAccountNFTsLedgerService) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*types.DepositAuthorizedResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountNFTsLedgerService) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
@@ -222,21 +226,19 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 		},
 		{
 			// Test case from rippled: malformed account using node public key format
+			// rippled returns rpcACT_MALFORMED
 			name: "Malformed account address - node public key format (actMalformed)",
 			params: map[string]interface{}{
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
-			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_NOT_FOUND,
-			setupMock: func() {
-				mock.accountNFTsErr = errors.New("invalid account address: bad address")
-			},
+			expectedError: "Malformed account.",
+			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			// Test case from rippled: account not found (unfunded account)
 			name: "Account not found - valid format but not in ledger (actNotFound)",
 			params: map[string]interface{}{
-				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
+				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
 			expectedCode:  types.RpcACT_NOT_FOUND,

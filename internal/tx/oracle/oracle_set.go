@@ -4,9 +4,9 @@ import (
 	"sort"
 
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -299,8 +299,8 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// --- Build pair sets from tx PriceDataSeries ---
 	// Reference: rippled SetOracle.cpp preclaim lines 98-118
-	pairs := make(map[string]pairEntry)    // pairs to add/update
-	pairsDel := make(map[string]struct{})  // pairs to delete
+	pairs := make(map[string]pairEntry)   // pairs to add/update
+	pairsDel := make(map[string]struct{}) // pairs to delete
 
 	for _, pd := range o.PriceDataSeries {
 		entry := pd.PriceData
@@ -437,7 +437,6 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 // Reference: rippled SetOracle.cpp doApply lines 223-280
 func (o *OracleSet) doApplyUpdate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 	existingOracle *state.OracleData, pairs map[string]pairEntry) tx.Result {
-
 	// Build ordered pairs map from existing PriceDataSeries.
 	// Existing pairs are stored WITHOUT price/scale (just base/quote).
 	type orderedPair struct {

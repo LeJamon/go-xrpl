@@ -2,7 +2,6 @@ package entry
 
 import (
 	"errors"
-
 )
 
 // VoteSlot represents a vote slot in an AMM

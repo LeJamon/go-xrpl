@@ -9,12 +9,12 @@ import (
 // This improves performance by avoiding repeated deserialization and hash computation
 // for nodes that are accessed multiple times during tree operations.
 type TreeNodeCache struct {
-	mu       sync.RWMutex
-	maxSize  int
-	cache    map[[32]byte]*list.Element
-	lruList  *list.List
-	hits     uint64
-	misses   uint64
+	mu      sync.RWMutex
+	maxSize int
+	cache   map[[32]byte]*list.Element
+	lruList *list.List
+	hits    uint64
+	misses  uint64
 }
 
 // cacheEntry represents an entry in the node cache.
@@ -163,9 +163,9 @@ func (c *TreeNodeCache) Contains(hash [32]byte) bool {
 // which allows skipping sync checks for that entire subtree.
 // This significantly improves sync performance for large trees.
 type FullBelowCache struct {
-	mu       sync.RWMutex
-	fullSet  map[[32]byte]struct{}
-	maxSize  int
+	mu      sync.RWMutex
+	fullSet map[[32]byte]struct{}
+	maxSize int
 }
 
 // NewFullBelowCache creates a new FullBelowCache.

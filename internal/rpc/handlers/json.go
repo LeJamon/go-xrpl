@@ -47,4 +47,3 @@ func (m *JsonMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (inte
 
 	return types.Services.Dispatcher.ExecuteMethod(request.Method, forwardParams)
 }
-

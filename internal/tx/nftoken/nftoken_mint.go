@@ -1,10 +1,10 @@
 package nftoken
 
 import (
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -56,8 +56,6 @@ const (
 	tfNFTokenMintMask uint32 = ^(NFTokenMintFlagBurnable | NFTokenMintFlagOnlyXRP | NFTokenMintFlagTransferable)
 	// tfNFTokenMintMaskWithMutable includes mutable flag
 	tfNFTokenMintMaskWithMutable uint32 = ^(NFTokenMintFlagBurnable | NFTokenMintFlagOnlyXRP | NFTokenMintFlagTransferable | NFTokenMintFlagMutable)
-	// tfNFTokenMintOldMask is the mask for valid flags (before fixRemoveNFTokenAutoTrustLine)
-	tfNFTokenMintOldMask uint32 = ^(NFTokenMintFlagBurnable | NFTokenMintFlagOnlyXRP | NFTokenMintFlagTrustLine | NFTokenMintFlagTransferable)
 	// tfNFTokenMintOldMaskWithMutable includes mutable flag
 	tfNFTokenMintOldMaskWithMutable uint32 = ^(NFTokenMintFlagBurnable | NFTokenMintFlagOnlyXRP | NFTokenMintFlagTrustLine | NFTokenMintFlagTransferable | NFTokenMintFlagMutable)
 )
@@ -200,23 +198,23 @@ func (n *NFTokenMint) RequiredAmendments() [][32]byte {
 
 // Apply applies the NFTokenMint transaction to the ledger.
 // Reference: rippled NFTokenMint.cpp doApply
-func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
+func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Amendment-dependent flag check.
 	// Reference: rippled NFTokenMint.cpp preflight — mask depends on amendments
 	dynamicNFT := ctx.Rules().NFTsWithDynamicEnabled()
 	if ctx.Rules().Enabled(amendment.FeatureFixRemoveNFTokenAutoTrustLine) {
 		if dynamicNFT {
-			if m.GetFlags()&tfNFTokenMintMaskWithMutable != 0 {
+			if n.GetFlags()&tfNFTokenMintMaskWithMutable != 0 {
 				return tx.TemINVALID_FLAG
 			}
 		} else {
-			if m.GetFlags()&tfNFTokenMintMask != 0 {
+			if n.GetFlags()&tfNFTokenMintMask != 0 {
 				return tx.TemINVALID_FLAG
 			}
 		}
 	} else {
 		if dynamicNFT {
-			if m.GetFlags()&tfNFTokenMintOldMaskWithMutable != 0 {
+			if n.GetFlags()&tfNFTokenMintOldMaskWithMutable != 0 {
 				return tx.TemINVALID_FLAG
 			}
 		}
@@ -238,9 +236,9 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 	var issuerAccount *state.AccountRoot
 	var issuerKey keylet.Keylet
 
-	if m.Issuer != "" {
+	if n.Issuer != "" {
 		var err error
-		issuerID, err = state.DecodeAccountID(m.Issuer)
+		issuerID, err = state.DecodeAccountID(n.Issuer)
 		if err != nil {
 			return tx.TemINVALID
 		}
@@ -258,7 +256,7 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// Verify that Account is authorized to mint for this issuer
 		// The issuer must have set Account as their NFTokenMinter
-		if issuerAccount.NFTokenMinter != m.Account {
+		if issuerAccount.NFTokenMinter != n.Account {
 			return tx.TecNO_PERMISSION
 		}
 	} else {
@@ -268,32 +266,32 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Preclaim checks for the combined mint+offer path.
 	// Reference: rippled NFTokenMint.cpp preclaim → tokenOfferCreatePreclaim
-	if m.Amount != nil {
+	if n.Amount != nil {
 		// Negative amount check — gated by fixNFTokenNegOffer amendment
 		// Reference: rippled NFTokenUtils.cpp tokenOfferCreatePreflight line 847
-		if m.Amount.IsNegative() && ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
+		if n.Amount.IsNegative() && ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
 			return tx.TemBAD_AMOUNT
 		}
 
 		// Check expiration
-		if m.Expiration != nil && *m.Expiration <= ctx.Config.ParentCloseTime {
+		if n.Expiration != nil && *n.Expiration <= ctx.Config.ParentCloseTime {
 			return tx.TecEXPIRED
 		}
 
 		// Extract NFToken flags from transaction flags (lower 16 bits)
 		// These are the flags that will be embedded in the minted token.
-		nftFlags := uint16(m.GetFlags() & 0xFFFF)
+		nftFlags := uint16(n.GetFlags() & 0xFFFF)
 
 		// Get transfer fee
 		var transferFee uint16
-		if m.TransferFee != nil {
-			transferFee = *m.TransferFee
+		if n.TransferFee != nil {
+			transferFee = *n.TransferFee
 		}
 
 		// IOU-specific preclaim checks
 		// Reference: rippled NFTokenUtils.cpp tokenOfferCreatePreclaim
-		if !m.Amount.IsNative() {
-			iouIssuerID, err := state.DecodeAccountID(m.Amount.Issuer)
+		if !n.Amount.IsNative() {
+			iouIssuerID, err := state.DecodeAccountID(n.Amount.Issuer)
 			if err != nil {
 				return tx.TemINVALID
 			}
@@ -309,14 +307,14 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 				// With featureNFTokenMintOffer: skip trust line check when NFT issuer == IOU issuer
 				if ctx.Rules().Enabled(amendment.FeatureNFTokenMintOffer) {
 					if issuerID != iouIssuerID {
-						trustLineKey := keylet.Line(issuerID, iouIssuerID, m.Amount.Currency)
+						trustLineKey := keylet.Line(issuerID, iouIssuerID, n.Amount.Currency)
 						trustLineData, err := ctx.View.Read(trustLineKey)
 						if err != nil || trustLineData == nil {
 							return tx.TecNO_LINE
 						}
 					}
 				} else {
-					trustLineKey := keylet.Line(issuerID, iouIssuerID, m.Amount.Currency)
+					trustLineKey := keylet.Line(issuerID, iouIssuerID, n.Amount.Currency)
 					exists, _ := ctx.View.Exists(trustLineKey)
 					if !exists {
 						return tx.TecNO_LINE
@@ -324,21 +322,21 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 				}
 
 				// Check if NFT issuer is frozen for this IOU
-				if tx.IsGlobalFrozen(ctx.View, m.Amount.Issuer) || tx.IsTrustlineFrozen(ctx.View, issuerID, iouIssuerID, m.Amount.Currency) {
+				if tx.IsGlobalFrozen(ctx.View, n.Amount.Issuer) || tx.IsTrustlineFrozen(ctx.View, issuerID, iouIssuerID, n.Amount.Currency) {
 					return tx.TecFROZEN
 				}
 			}
 
 			// Check if the minting account is frozen for this IOU
 			// Reference: rippled tokenOfferCreatePreclaim line 941
-			if tx.IsGlobalFrozen(ctx.View, m.Amount.Issuer) || tx.IsTrustlineFrozen(ctx.View, accountID, iouIssuerID, m.Amount.Currency) {
+			if tx.IsGlobalFrozen(ctx.View, n.Amount.Issuer) || tx.IsTrustlineFrozen(ctx.View, accountID, iouIssuerID, n.Amount.Currency) {
 				return tx.TecFROZEN
 			}
 
 			// Trust line authorization check (with fixEnforceNFTokenTrustlineV2)
 			// Reference: rippled tokenOfferCreatePreclaim lines 1007-1018
 			if ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
-				if r := checkNFTTrustlineAuthorized(ctx.View, accountID, m.Amount.Currency, iouIssuerID); r != tx.TesSUCCESS {
+				if r := checkNFTTrustlineAuthorized(ctx.View, accountID, n.Amount.Currency, iouIssuerID); r != tx.TesSUCCESS {
 					return r
 				}
 			}
@@ -346,8 +344,8 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// Destination check
 		// Reference: rippled tokenOfferCreatePreclaim lines 970-988
-		if m.Destination != "" {
-			destAccount, _, result := ctx.LookupAccount(m.Destination)
+		if n.Destination != "" {
+			destAccount, _, result := ctx.LookupAccount(n.Destination)
 			if result != tx.TesSUCCESS {
 				return result
 			}
@@ -381,7 +379,7 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 			acctSeq := issuerAccount.Sequence
 			// If minted by authorized minter (Issuer field present) or using a ticket,
 			// use acctSeq as-is. Otherwise, the sequence was pre-incremented, so use acctSeq - 1.
-			if m.Issuer != "" || m.GetCommon().TicketSequence != nil {
+			if n.Issuer != "" || n.GetCommon().TicketSequence != nil {
 				issuerAccount.FirstNFTokenSequence = acctSeq
 			} else {
 				issuerAccount.FirstNFTokenSequence = acctSeq - 1
@@ -406,7 +404,7 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Get flags for the token from transaction flags
-	txFlags := m.GetFlags()
+	txFlags := n.GetFlags()
 	var tokenFlags uint16
 	if txFlags&NFTokenMintFlagBurnable != 0 {
 		tokenFlags |= nftFlagBurnable
@@ -426,18 +424,18 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Get transfer fee
 	var transferFee uint16
-	if m.TransferFee != nil {
-		transferFee = *m.TransferFee
+	if n.TransferFee != nil {
+		transferFee = *n.TransferFee
 	}
 
 	// Generate the NFTokenID
-	tokenID := generateNFTokenID(issuerID, m.NFTokenTaxon, tokenSeq, tokenFlags, transferFee)
+	tokenID := generateNFTokenID(issuerID, n.NFTokenTaxon, tokenSeq, tokenFlags, transferFee)
 
 	// Insert the NFToken into the owner's token directory
 	// Reference: rippled NFTokenUtils.cpp insertToken
 	newToken := state.NFTokenData{
 		NFTokenID: tokenID,
-		URI:       m.URI,
+		URI:       n.URI,
 	}
 
 	fixDirV1 := ctx.Rules().Enabled(amendment.FeatureFixNFTokenDirV1)
@@ -452,7 +450,7 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 	// MintedNFTokens was already incremented above in the fixNFTokenRemint/non-fix branches.
 
 	// If issuer is different from minter, update the issuer account - tracked automatically
-	if m.Issuer != "" {
+	if n.Issuer != "" {
 		issuerUpdatedData, err := state.SerializeAccountRoot(issuerAccount)
 		if err != nil {
 			return tx.TefINTERNAL
@@ -464,9 +462,9 @@ func (m *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// If Amount field is present, create a sell offer for the newly minted token.
 	// Reference: rippled NFTokenMint.cpp doApply — tokenOfferCreateApply
-	if m.Amount != nil {
-		seqProxy := m.GetCommon().SeqProxy()
-		result := tokenOfferCreateApply(ctx, accountID, tokenID, m.Amount, m.Destination, m.Expiration, seqProxy, mPriorBalance)
+	if n.Amount != nil {
+		seqProxy := n.GetCommon().SeqProxy()
+		result := tokenOfferCreateApply(ctx, accountID, tokenID, n.Amount, n.Destination, n.Expiration, seqProxy, mPriorBalance)
 		if result != tx.TesSUCCESS {
 			return result
 		}

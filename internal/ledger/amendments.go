@@ -8,9 +8,9 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes"
-	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 

@@ -279,7 +279,7 @@ func TestDeliveredAmountPriorityOrder(t *testing.T) {
 			"Amount":          "9999",
 		}
 		meta := map[string]interface{}{
-			"DeliveredAmount": "1111",
+			"DeliveredAmount":  "1111",
 			"delivered_amount": "2222",
 		}
 
@@ -334,7 +334,7 @@ func TestFormatLedgerHashValidHash(t *testing.T) {
 
 	result := handlers.FormatLedgerHash(hash)
 
-	assert.Equal(t, "4bc50c9b0d8515d3eaae1e74b29a95804346c491ee1a95bf25e4aab854a6a652", result)
+	assert.Equal(t, "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652", result)
 	assert.Len(t, result, 64, "Hash hex string should be 64 characters")
 }
 
@@ -358,7 +358,7 @@ func TestFormatLedgerHashAllOnes(t *testing.T) {
 
 	result := handlers.FormatLedgerHash(hash)
 
-	expected := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	expected := "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
 	assert.Equal(t, expected, result)
 }
 

@@ -3,7 +3,6 @@ package serdes
 import (
 	"encoding/hex"
 	"errors"
-	"fmt"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes/interfaces"
 )
@@ -50,10 +49,8 @@ func (f *FieldIDCodec) Encode(fieldName string) ([]byte, error) {
 func (f *FieldIDCodec) Decode(h string) (string, error) {
 	b, err := hex.DecodeString(h)
 	if err != nil {
-		fmt.Println(err)
 		return "", err
 	}
-	fmt.Println(len(b))
 	if len(b) == 1 {
 		return f.definitions.GetFieldNameByFieldHeader(f.definitions.CreateFieldHeader(int32(b[0]>>4), int32(b[0]&byte(15))))
 	}

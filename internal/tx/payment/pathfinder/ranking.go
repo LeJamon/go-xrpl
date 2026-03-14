@@ -29,7 +29,7 @@ func (pf *Pathfinder) ComputePathRanks(maxPaths int) {
 		pf.srcAccount, pf.dstAccount,
 		convertedAmount,
 		&pf.srcAmount,
-		nil, // no explicit paths
+		nil,  // no explicit paths
 		true, // add default path
 		true, // partial payment allowed (to measure liquidity)
 		false,

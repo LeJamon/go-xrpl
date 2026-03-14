@@ -6,10 +6,10 @@ package offer
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	offertx "github.com/LeJamon/goXRPLd/internal/tx/offer"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	offertx "github.com/LeJamon/goXRPLd/internal/tx/offer"
 )
 
 // TestOffer_Malformed tests validation of malformed offer transactions.
@@ -80,7 +80,7 @@ func testMalformed(t *testing.T, disabledFeatures []string) {
 	// Offers with negative amounts
 	{
 		negUSD := jtx.IssuedCurrency(gw, "USD", -1000)
-		negXRP := tx.NewXRPAmount(-int64(jtx.XRP(1000)))
+		negXRP := tx.NewXRPAmount(-jtx.XRP(1000))
 
 		offerTx = OfferCreate(alice, negUSD, jtx.XRPTxAmountFromXRP(1000)).Build()
 		result = env.Submit(offerTx)

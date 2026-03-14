@@ -48,7 +48,7 @@ type mockAdaptor struct {
 	validator bool
 
 	// Validator info
-	nodeID consensus.NodeID
+	nodeID  consensus.NodeID
 	trusted map[consensus.NodeID]bool
 	quorum  int
 
@@ -281,13 +281,6 @@ func (a *mockAdaptor) OnPhaseChange(oldPhase, newPhase consensus.Phase) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.phaseChanges = append(a.phaseChanges, newPhase)
-}
-
-// Test helper methods
-func (a *mockAdaptor) advanceTime(d time.Duration) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.now = a.now.Add(d)
 }
 
 func (a *mockAdaptor) setTrusted(nodes []consensus.NodeID) {

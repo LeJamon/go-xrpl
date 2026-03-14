@@ -8,14 +8,15 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/drops"
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx/invariants"
-	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/keylet"
+	xrpllog "github.com/LeJamon/goXRPLd/log"
 	"github.com/LeJamon/goXRPLd/protocol"
 )
 
@@ -49,6 +50,10 @@ type Engine struct {
 
 	// Config holds engine configuration
 	config EngineConfig
+
+	// logger is the scoped logger for the Tx partition.
+	// Always non-nil; falls back to xrpllog.Discard() when not configured.
+	logger xrpllog.Logger
 
 	// currentTxHash is the hash of the transaction currently being applied
 	// Used to set PreviousTxnID on modified ledger entries
@@ -177,6 +182,10 @@ type EngineConfig struct {
 	// Reference: rippled Transactor.cpp checkFee — "Only check fee is
 	// sufficient when the ledger is open."
 	OpenLedger bool
+
+	// Logger is the logger to use for this engine instance.
+	// If nil, xrpllog.Discard() is used — safe for tests and zero-value construction.
+	Logger xrpllog.Logger
 }
 
 // LedgerView provides read/write access to ledger state
@@ -344,9 +353,14 @@ func affectedNodeToRippledFormat(n AffectedNode) (map[string]any, error) {
 
 // NewEngine creates a new transaction engine
 func NewEngine(view LedgerView, config EngineConfig) *Engine {
+	logger := config.Logger
+	if logger == nil {
+		logger = xrpllog.Discard()
+	}
 	return &Engine{
 		view:   view,
 		config: config,
+		logger: logger.Named(xrpllog.PartitionTx),
 	}
 }
 
@@ -371,6 +385,12 @@ func (e *Engine) TxCount() uint32 {
 // Reference: rippled OpenView::baseTxCount_ initialized from parent view
 func (e *Engine) SetBaseTxCount(count uint32) {
 	e.txCount = count
+}
+
+// ComputeTransactionHash computes the hash of a transaction.
+// The hash is SHA512Half of the "TXN\x00" prefix + serialized transaction.
+func ComputeTransactionHash(tx Transaction) ([32]byte, error) {
+	return computeTransactionHash(tx)
 }
 
 // computeTransactionHash computes the hash of a transaction
@@ -425,9 +445,21 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 		}
 	}
 
+	account := tx.GetCommon().Account
+	e.logger.Debug("apply",
+		"txType", txType.String(),
+		"account", account,
+		"ledgerSeq", e.config.LedgerSequence,
+	)
+
 	// Step 1: Preflight checks (syntax validation)
 	result := e.preflight(tx)
 	if !result.IsSuccess() {
+		e.logger.Debug("preflight failed",
+			"txType", txType.String(),
+			"account", account,
+			"ter", result.String(),
+		)
 		return ApplyResult{
 			Result:  result,
 			Applied: false,
@@ -448,6 +480,12 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 	// Step 3: Preclaim checks (validate against ledger state)
 	result = e.preclaim(tx, txHash)
 	if !result.IsSuccess() && !result.IsTec() {
+		e.logger.Debug("preclaim failed",
+			"txType", txType.String(),
+			"account", account,
+			"txHash", hex.EncodeToString(txHash[:]),
+			"ter", result.String(),
+		)
 		return ApplyResult{
 			Result:  result,
 			Applied: false,
@@ -476,6 +514,13 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 		metadata.TransactionIndex = e.txCount
 		e.txCount++
 	}
+
+	e.logger.Debug("apply result",
+		"txHash", hex.EncodeToString(txHash[:]),
+		"ter", result.String(),
+		"applied", result.IsApplied(),
+		"fee", fee,
+	)
 
 	return ApplyResult{
 		Result:   result,
@@ -529,6 +574,7 @@ func (e *Engine) applyPseudoTransaction(tx Transaction) ApplyResult {
 		TxHash:   txHash,
 		Metadata: metadata,
 		Engine:   e,
+		Log:      e.logger,
 	}
 
 	// Apply the transaction
@@ -707,49 +753,50 @@ func parseValidationError(err error) Result {
 	// Check for known TER code prefixes
 	// Common tem (malformed) codes
 	terCodes := map[string]Result{
-		"temMALFORMED":              TemMALFORMED,
-		"temBAD_AMOUNT":             TemBAD_AMOUNT,
-		"temBAD_CURRENCY":           TemBAD_CURRENCY,
-		"temBAD_EXPIRATION":         TemBAD_EXPIRATION,
-		"temBAD_FEE":                TemBAD_FEE,
-		"temBAD_ISSUER":             TemBAD_ISSUER,
-		"temBAD_LIMIT":              TemBAD_LIMIT,
-		"temBAD_OFFER":              TemBAD_OFFER,
-		"temBAD_PATH":               TemBAD_PATH,
-		"temBAD_PATH_LOOP":          TemBAD_PATH_LOOP,
-		"temBAD_REGKEY":             TemBAD_REGKEY,
-		"temBAD_SEQUENCE":           TemBAD_SEQUENCE,
-		"temBAD_SIGNATURE":          TemBAD_SIGNATURE,
-		"temBAD_SRC_ACCOUNT":        TemBAD_SRC_ACCOUNT,
-		"temBAD_TRANSFER_RATE":      TemBAD_TRANSFER_RATE,
-		"temDST_IS_SRC":             TemDST_IS_SRC,
-		"temDST_NEEDED":             TemDST_NEEDED,
-		"temINVALID":                TemINVALID,
-		"temINVALID_FLAG":           TemINVALID_FLAG,
-		"temREDUNDANT":              TemREDUNDANT,
-		"temRIPPLE_EMPTY":           TemRIPPLE_EMPTY,
-		"temDISABLED":               TemDISABLED,
-		"temBAD_SIGNER":             TemBAD_SIGNER,
-		"temBAD_QUORUM":             TemBAD_QUORUM,
-		"temBAD_WEIGHT":             TemBAD_WEIGHT,
-		"temBAD_TICK_SIZE":          TemBAD_TICK_SIZE,
-		"temINVALID_ACCOUNT_ID":     TemINVALID_ACCOUNT_ID,
-		"temUNCERTAIN":              TemUNCERTAIN,
-		"temUNKNOWN":                TemUNKNOWN,
-		"temSEQ_AND_TICKET":         TemSEQ_AND_TICKET,
-		"temBAD_SEND_XRP_MAX":       TemBAD_SEND_XRP_MAX,
-		"temBAD_SEND_XRP_PARTIAL":   TemBAD_SEND_XRP_PARTIAL,
-		"temBAD_SEND_XRP_PATHS":     TemBAD_SEND_XRP_PATHS,
-		"temBAD_SEND_XRP_LIMIT":     TemBAD_SEND_XRP_LIMIT,
-		"temBAD_SEND_XRP_NO_DIRECT": TemBAD_SEND_XRP_NO_DIRECT,
-		"temCANNOT_PREAUTH_SELF":    TemCAN_NOT_PREAUTH_SELF,
-		"temEMPTY_DID":              TemEMPTY_DID,
-		"temARRAY_EMPTY":            TemARRAY_EMPTY,
-		"temARRAY_TOO_LARGE":        TemARRAY_TOO_LARGE,
-		"temBAD_AMM_TOKENS":         TemBAD_AMM_TOKENS,
-		"temBAD_TRANSFER_FEE":              TemBAD_TRANSFER_FEE,
-		"temBAD_NFTOKEN_TRANSFER_FEE":      TemBAD_NFTOKEN_TRANSFER_FEE,
-		"temINVALID_COUNT":                 TemINVALID_COUNT,
+		"temMALFORMED":                TemMALFORMED,
+		"temBAD_AMOUNT":               TemBAD_AMOUNT,
+		"temBAD_CURRENCY":             TemBAD_CURRENCY,
+		"temBAD_EXPIRATION":           TemBAD_EXPIRATION,
+		"temBAD_FEE":                  TemBAD_FEE,
+		"temBAD_ISSUER":               TemBAD_ISSUER,
+		"temBAD_LIMIT":                TemBAD_LIMIT,
+		"temBAD_OFFER":                TemBAD_OFFER,
+		"temBAD_PATH":                 TemBAD_PATH,
+		"temBAD_PATH_LOOP":            TemBAD_PATH_LOOP,
+		"temBAD_REGKEY":               TemBAD_REGKEY,
+		"temBAD_SEQUENCE":             TemBAD_SEQUENCE,
+		"temBAD_SIGNATURE":            TemBAD_SIGNATURE,
+		"temBAD_SRC_ACCOUNT":          TemBAD_SRC_ACCOUNT,
+		"temBAD_TRANSFER_RATE":        TemBAD_TRANSFER_RATE,
+		"temDST_IS_SRC":               TemDST_IS_SRC,
+		"temDST_NEEDED":               TemDST_NEEDED,
+		"temINVALID":                  TemINVALID,
+		"temINVALID_FLAG":             TemINVALID_FLAG,
+		"temREDUNDANT":                TemREDUNDANT,
+		"temRIPPLE_EMPTY":             TemRIPPLE_EMPTY,
+		"temDISABLED":                 TemDISABLED,
+		"temBAD_SIGNER":               TemBAD_SIGNER,
+		"temBAD_QUORUM":               TemBAD_QUORUM,
+		"temBAD_WEIGHT":               TemBAD_WEIGHT,
+		"temBAD_TICK_SIZE":            TemBAD_TICK_SIZE,
+		"temINVALID_ACCOUNT_ID":       TemINVALID_ACCOUNT_ID,
+		"temUNCERTAIN":                TemUNCERTAIN,
+		"temUNKNOWN":                  TemUNKNOWN,
+		"temSEQ_AND_TICKET":           TemSEQ_AND_TICKET,
+		"temBAD_SEND_XRP_MAX":         TemBAD_SEND_XRP_MAX,
+		"temBAD_SEND_XRP_PARTIAL":     TemBAD_SEND_XRP_PARTIAL,
+		"temBAD_SEND_XRP_PATHS":       TemBAD_SEND_XRP_PATHS,
+		"temBAD_SEND_XRP_LIMIT":       TemBAD_SEND_XRP_LIMIT,
+		"temBAD_SEND_XRP_NO_DIRECT":   TemBAD_SEND_XRP_NO_DIRECT,
+		"temCANNOT_PREAUTH_SELF":      TemCAN_NOT_PREAUTH_SELF,
+		"temCAN_NOT_PREAUTH_SELF":     TemCAN_NOT_PREAUTH_SELF,
+		"temEMPTY_DID":                TemEMPTY_DID,
+		"temARRAY_EMPTY":              TemARRAY_EMPTY,
+		"temARRAY_TOO_LARGE":          TemARRAY_TOO_LARGE,
+		"temBAD_AMM_TOKENS":           TemBAD_AMM_TOKENS,
+		"temBAD_TRANSFER_FEE":         TemBAD_TRANSFER_FEE,
+		"temBAD_NFTOKEN_TRANSFER_FEE": TemBAD_NFTOKEN_TRANSFER_FEE,
+		"temINVALID_COUNT":            TemINVALID_COUNT,
 		// tef (failure) codes
 		"tefINVALID_LEDGER_FIX_TYPE": TefINVALID_LEDGER_FIX_TYPE,
 		// tel (local) codes
@@ -1049,7 +1096,7 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 		} else {
 			// Standard base fee calculation: baseFee * (1 + numSigners) for multi-signed.
 			// Reference: rippled Transactor::calculateBaseFee — baseFee + (signerCount * baseFee)
-			minFee = e.calculateMinimumFee(tx)
+			minFee = e.calculateFee(tx)
 		}
 		if tx.TxType() == TypeRegularKeySet {
 			// Free password change: baseFee=0 when signed with master key and
@@ -1484,14 +1531,15 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 
 	// All transaction types implement Appliable
 	ctx := &ApplyContext{
-		View:            table,
-		Account:         account,
-		AccountID:       accountID,
-		Config:          e.config,
-		TxHash:          txHash,
-		Metadata:        metadata,
-		Engine:          e,
+		View:             table,
+		Account:          account,
+		AccountID:        accountID,
+		Config:           e.config,
+		TxHash:           txHash,
+		Metadata:         metadata,
+		Engine:           e,
 		SignedWithMaster: sigWithMaster,
+		Log:              e.logger,
 	}
 
 	// Set NumberSwitchover based on fixUniversalNumber amendment.
@@ -1759,6 +1807,7 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 					TxHash:    txHash,
 					Metadata:  metadata,
 					Engine:    e,
+					Log:       e.logger,
 				}
 				tecApplier.ApplyOnTec(tecCtx)
 			}
@@ -1825,18 +1874,6 @@ func (e *Engine) calculateFee(tx Transaction) uint64 {
 	// If no fee specified, use base fee (adjusted for multi-sig if applicable)
 	baseFee := e.config.BaseFee
 	if IsMultiSigned(tx) {
-		numSigners := len(common.Signers)
-		return CalculateMultiSigFee(baseFee, numSigners)
-	}
-	return baseFee
-}
-
-// calculateMinimumFee calculates the minimum required fee for a transaction
-// This is used to validate that the provided fee meets the minimum threshold
-func (e *Engine) calculateMinimumFee(tx Transaction) uint64 {
-	baseFee := e.config.BaseFee
-	if IsMultiSigned(tx) {
-		common := tx.GetCommon()
 		numSigners := len(common.Signers)
 		return CalculateMultiSigFee(baseFee, numSigners)
 	}

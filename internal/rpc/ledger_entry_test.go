@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
@@ -1167,11 +1168,11 @@ func TestLedgerEntryImplementedTypes(t *testing.T) {
 		require.NotNil(t, result)
 	})
 
-	t.Run("ticket by account and ticket_id", func(t *testing.T) {
+	t.Run("ticket by account and ticket_seq", func(t *testing.T) {
 		params := map[string]interface{}{
 			"ticket": map[string]interface{}{
-				"account":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-				"ticket_id": 5,
+				"account":    "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"ticket_seq": 5,
 			},
 			"ledger_index": "validated",
 		}
@@ -2516,4 +2517,587 @@ func TestLedgerEntryHexValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// =============================================================================
+// Hex Index Fallback Tests
+// =============================================================================
+
+// TestLedgerEntryHexFallback tests that all entry types that support it accept
+// a direct hex string as an alternative to the structured object form.
+// Reference: rippled LedgerEntry.cpp — each parse* function checks isObject()
+// first and falls back to parseHex if the value is a string.
+func TestLedgerEntryHexFallback(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	cleanup := setupLedgerEntryTestServices(mock)
+	defer cleanup()
+
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	validHex := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
+
+	// All entry types that should accept a direct hex string
+	hexEntryTypes := []string{
+		"amm",
+		"bridge",
+		"credential",
+		"delegate",
+		"deposit_preauth",
+		"escrow",
+		"mptoken",
+		"offer",
+		"oracle",
+		"permissioned_domain",
+		"ticket",
+		"vault",
+		"xchain_owned_claim_id",
+		"xchain_owned_create_account_claim_id",
+	}
+
+	for _, entryType := range hexEntryTypes {
+		t.Run(entryType+" accepts hex string", func(t *testing.T) {
+			mock.ledgerEntryResult = nil
+			mock.ledgerEntryErr = nil
+
+			params := map[string]interface{}{
+				entryType:      validHex,
+				"ledger_index": "validated",
+			}
+			paramsJSON, err := json.Marshal(params)
+			require.NoError(t, err)
+
+			result, rpcErr := method.Handle(ctx, paramsJSON)
+			require.Nil(t, rpcErr, "Entry type %s should accept hex string, got error: %v", entryType, rpcErr)
+			require.NotNil(t, result)
+		})
+
+		t.Run(entryType+" rejects invalid hex", func(t *testing.T) {
+			mock.ledgerEntryResult = nil
+			mock.ledgerEntryErr = nil
+
+			params := map[string]interface{}{
+				entryType:      "INVALID_NOT_HEX_STRING",
+				"ledger_index": "validated",
+			}
+			paramsJSON, err := json.Marshal(params)
+			require.NoError(t, err)
+
+			result, rpcErr := method.Handle(ctx, paramsJSON)
+			// Should fail because it's not valid hex and won't parse as object either
+			require.NotNil(t, rpcErr, "Entry type %s should reject invalid hex/params", entryType)
+			assert.Nil(t, result)
+		})
+	}
+}
+
+// =============================================================================
+// New Entry Type Tests: vault, delegate, bridge, xchain
+// =============================================================================
+
+// TestLedgerEntryVault tests vault entry lookup by hex and by object form
+func TestLedgerEntryVault(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	cleanup := setupLedgerEntryTestServices(mock)
+	defer cleanup()
+
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	vaultHex := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
+
+	t.Run("vault by hex string", func(t *testing.T) {
+		params := map[string]interface{}{
+			"vault":        vaultHex,
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+
+	t.Run("vault by owner and seq", func(t *testing.T) {
+		params := map[string]interface{}{
+			"vault": map[string]interface{}{
+				"owner": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"seq":   5,
+			},
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+
+	t.Run("vault with invalid owner", func(t *testing.T) {
+		params := map[string]interface{}{
+			"vault": map[string]interface{}{
+				"owner": "not-a-valid-address",
+				"seq":   5,
+			},
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Contains(t, rpcErr.Message, "Invalid vault owner")
+	})
+}
+
+// TestLedgerEntryDelegate tests delegate entry lookup by hex and by object form
+func TestLedgerEntryDelegate(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	cleanup := setupLedgerEntryTestServices(mock)
+	defer cleanup()
+
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	delegateHex := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
+
+	t.Run("delegate by hex string", func(t *testing.T) {
+		params := map[string]interface{}{
+			"delegate":     delegateHex,
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+
+	t.Run("delegate by account and authorize", func(t *testing.T) {
+		params := map[string]interface{}{
+			"delegate": map[string]interface{}{
+				"account":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"authorize": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			},
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+
+	t.Run("delegate missing authorize", func(t *testing.T) {
+		params := map[string]interface{}{
+			"delegate": map[string]interface{}{
+				"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			},
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Contains(t, rpcErr.Message, "account and authorize required")
+	})
+}
+
+// TestLedgerEntryBridge tests bridge entry lookup by hex string
+func TestLedgerEntryBridge(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	cleanup := setupLedgerEntryTestServices(mock)
+	defer cleanup()
+
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	t.Run("bridge by hex string", func(t *testing.T) {
+		params := map[string]interface{}{
+			"bridge":       "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+
+	t.Run("bridge invalid hex", func(t *testing.T) {
+		params := map[string]interface{}{
+			"bridge":       "TOOSHORT",
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Contains(t, rpcErr.Message, "Invalid bridge")
+	})
+}
+
+// TestLedgerEntryXChainClaimID tests xchain_owned_claim_id entry lookup by hex
+func TestLedgerEntryXChainClaimID(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	cleanup := setupLedgerEntryTestServices(mock)
+	defer cleanup()
+
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	t.Run("xchain_owned_claim_id by hex string", func(t *testing.T) {
+		params := map[string]interface{}{
+			"xchain_owned_claim_id": "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
+			"ledger_index":          "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+
+	t.Run("xchain_owned_create_account_claim_id by hex string", func(t *testing.T) {
+		params := map[string]interface{}{
+			"xchain_owned_create_account_claim_id": "B33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
+			"ledger_index":                         "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+}
+
+// =============================================================================
+// Ticket Conformance Tests
+// =============================================================================
+
+// TestLedgerEntryTicketConformance tests that ticket uses ticket_seq (not ticket_id)
+// matching rippled's parseTicket() which expects jss::ticket_seq
+func TestLedgerEntryTicketConformance(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	cleanup := setupLedgerEntryTestServices(mock)
+	defer cleanup()
+
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	t.Run("ticket by account and ticket_seq", func(t *testing.T) {
+		params := map[string]interface{}{
+			"ticket": map[string]interface{}{
+				"account":    "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"ticket_seq": 5,
+			},
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+
+	t.Run("ticket by hex string", func(t *testing.T) {
+		params := map[string]interface{}{
+			"ticket":       "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+}
+
+// =============================================================================
+// Uppercase Hex Response Tests
+// =============================================================================
+
+// TestLedgerEntryUppercaseHex verifies that the ledger_hash in the response
+// uses uppercase hex encoding, matching rippled's output.
+func TestLedgerEntryUppercaseHex(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	cleanup := setupLedgerEntryTestServices(mock)
+	defer cleanup()
+
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	mock.ledgerEntryResult = &types.LedgerEntryResult{
+		Index:       "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
+		LedgerIndex: 2,
+		LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B, 0x0D, 0x85, 0x15, 0xD3, 0xEA, 0xAE, 0x1E, 0x74, 0xB2, 0x9A, 0x95, 0x80, 0x43, 0x46, 0xC4, 0x91, 0xEE, 0x1A, 0x95, 0xBF, 0x25, 0xE4, 0xAA, 0xB8, 0x54, 0xA6, 0xA6, 0x52},
+		Node:        []byte(`{"LedgerEntryType": "AccountRoot"}`),
+		Validated:   true,
+	}
+
+	params := map[string]interface{}{
+		"index":        "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
+		"ledger_index": "validated",
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	result, rpcErr := method.Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+	require.NotNil(t, result)
+
+	resultMap, ok := result.(map[string]interface{})
+	require.True(t, ok)
+
+	ledgerHash, ok := resultMap["ledger_hash"].(string)
+	require.True(t, ok)
+
+	// Verify uppercase hex
+	assert.Equal(t, "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652", ledgerHash,
+		"ledger_hash should use uppercase hex")
+	// Verify no lowercase letters in the hash
+	assert.Equal(t, ledgerHash, strings.ToUpper(ledgerHash),
+		"ledger_hash should be entirely uppercase")
+}
+
+// =============================================================================
+// Escrow Hex Fallback Tests
+// =============================================================================
+
+// TestLedgerEntryEscrowHexFallback tests escrow specifically with hex vs object form
+func TestLedgerEntryEscrowHexFallback(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	cleanup := setupLedgerEntryTestServices(mock)
+	defer cleanup()
+
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	t.Run("escrow by hex string", func(t *testing.T) {
+		params := map[string]interface{}{
+			"escrow":       "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+
+	t.Run("escrow by owner and seq (object form)", func(t *testing.T) {
+		params := map[string]interface{}{
+			"escrow": map[string]interface{}{
+				"owner": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"seq":   5,
+			},
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+}
+
+// =============================================================================
+// Offer Hex Fallback Tests
+// =============================================================================
+
+// TestLedgerEntryOfferHexFallback tests offer specifically with hex vs object form
+func TestLedgerEntryOfferHexFallback(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	cleanup := setupLedgerEntryTestServices(mock)
+	defer cleanup()
+
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	t.Run("offer by hex string", func(t *testing.T) {
+		params := map[string]interface{}{
+			"offer":        "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+
+	t.Run("offer by account and seq (object form)", func(t *testing.T) {
+		params := map[string]interface{}{
+			"offer": map[string]interface{}{
+				"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"seq":     5,
+			},
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+}
+
+// =============================================================================
+// Oracle Hex Fallback Tests
+// =============================================================================
+
+// TestLedgerEntryOracleHexFallback tests oracle with hex vs object form
+func TestLedgerEntryOracleHexFallback(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	cleanup := setupLedgerEntryTestServices(mock)
+	defer cleanup()
+
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	t.Run("oracle by hex string", func(t *testing.T) {
+		params := map[string]interface{}{
+			"oracle":       "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+
+	t.Run("oracle by account and document_id (object form)", func(t *testing.T) {
+		params := map[string]interface{}{
+			"oracle": map[string]interface{}{
+				"account":            "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"oracle_document_id": 1,
+			},
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+}
+
+// =============================================================================
+// AMM Hex Fallback Tests
+// =============================================================================
+
+// TestLedgerEntryAMMHexFallback tests AMM with hex vs object form
+func TestLedgerEntryAMMHexFallback(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	cleanup := setupLedgerEntryTestServices(mock)
+	defer cleanup()
+
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	t.Run("amm by hex string", func(t *testing.T) {
+		params := map[string]interface{}{
+			"amm":          "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+
+	t.Run("amm by asset pair (object form)", func(t *testing.T) {
+		params := map[string]interface{}{
+			"amm": map[string]interface{}{
+				"asset":  map[string]interface{}{"currency": "XRP"},
+				"asset2": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			},
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+
+	t.Run("amm object missing asset2", func(t *testing.T) {
+		params := map[string]interface{}{
+			"amm": map[string]interface{}{
+				"asset": map[string]interface{}{"currency": "XRP"},
+			},
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Contains(t, rpcErr.Message, "asset and asset2 required")
+	})
 }

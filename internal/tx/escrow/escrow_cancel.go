@@ -2,9 +2,9 @@ package escrow
 
 import (
 	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -64,17 +64,17 @@ func (e *EscrowCancel) Flatten() (map[string]any, error) {
 
 // Apply applies an EscrowCancel transaction
 // Reference: rippled Escrow.cpp EscrowCancel::preclaim() + doApply()
-func (ec *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
+func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	rules := ctx.Rules()
 
 	// Get the escrow owner's account ID
-	ownerID, err := state.DecodeAccountID(ec.Owner)
+	ownerID, err := state.DecodeAccountID(e.Owner)
 	if err != nil {
 		return tx.TemINVALID
 	}
 
 	// Find the escrow
-	escrowKey := keylet.Escrow(ownerID, ec.OfferSequence)
+	escrowKey := keylet.Escrow(ownerID, e.OfferSequence)
 	escrowData, err := ctx.View.Read(escrowKey)
 	if err != nil || escrowData == nil {
 		return tx.TecNO_TARGET

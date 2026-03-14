@@ -3,10 +3,10 @@ package batch
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 func init() {
@@ -48,9 +48,9 @@ type BatchSigner struct {
 // For multi-sign: SigningPubKey is "", Signers contains the nested multi-signers.
 // Reference: rippled sfBatchSigner object
 type BatchSignerData struct {
-	Account           string            `json:"Account"`
-	SigningPubKey     string            `json:"SigningPubKey"`
-	BatchTxnSignature string           `json:"BatchTxnSignature"`
+	Account           string             `json:"Account"`
+	SigningPubKey     string             `json:"SigningPubKey"`
+	BatchTxnSignature string             `json:"BatchTxnSignature"`
 	Signers           []tx.SignerWrapper `json:"Signers,omitempty"`
 }
 
@@ -81,7 +81,7 @@ var (
 	ErrBatchTooManySigners  = tx.Errorf(tx.TemARRAY_TOO_LARGE, "batch signers exceeds 8 entries")
 	ErrBatchDuplicateSigner = tx.Errorf(tx.TemREDUNDANT, "duplicate batch signer")
 	ErrBatchSignerIsOuter   = tx.Errorf(tx.TemBAD_SIGNER, "batch signer cannot be outer account")
-	ErrBatchNilInnerTx     = tx.Errorf(tx.TemMALFORMED, "inner transaction cannot be nil")
+	ErrBatchNilInnerTx      = tx.Errorf(tx.TemMALFORMED, "inner transaction cannot be nil")
 )
 
 // NewBatch creates a new Batch transaction
@@ -201,7 +201,7 @@ func (b *Batch) Flatten() (map[string]any, error) {
 		signers := make([]map[string]any, len(b.BatchSigners))
 		for i, s := range b.BatchSigners {
 			signerMap := map[string]any{
-				"Account":      s.BatchSigner.Account,
+				"Account":       s.BatchSigner.Account,
 				"SigningPubKey": s.BatchSigner.SigningPubKey,
 			}
 			if s.BatchSigner.BatchTxnSignature != "" {
@@ -213,7 +213,7 @@ func (b *Batch) Flatten() (map[string]any, error) {
 				for j, nested := range s.BatchSigner.Signers {
 					nestedMap := map[string]any{
 						"Account":       nested.Signer.Account,
-						"SigningPubKey":  nested.Signer.SigningPubKey,
+						"SigningPubKey": nested.Signer.SigningPubKey,
 					}
 					if nested.Signer.TxnSignature != "" {
 						nestedMap["TxnSignature"] = nested.Signer.TxnSignature
@@ -593,4 +593,3 @@ func checkDelegatePermission(ctx *tx.ApplyContext, accountID [20]byte, innerTx t
 	}
 	return 0 // success (no error)
 }
-

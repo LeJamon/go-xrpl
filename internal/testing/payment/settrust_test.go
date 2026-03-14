@@ -98,7 +98,8 @@ func TestSetTrust_ResetWithAuthFlag(t *testing.T) {
 // up to 2 trust lines without any additional reserve. The 3rd trust line
 // requires the full accountReserve(3) = baseReserve + 3*increment.
 // Reference: rippled SetTrust.cpp lines 405-407:
-//   (uOwnerCount < 2) ? XRPAmount(beast::zero) : view().fees().accountReserve(uOwnerCount + 1)
+//
+//	(uOwnerCount < 2) ? XRPAmount(beast::zero) : view().fees().accountReserve(uOwnerCount + 1)
 func TestSetTrust_FreeTrustlines(t *testing.T) {
 	env := xrplgoTesting.NewTestEnv(t)
 

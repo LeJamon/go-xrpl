@@ -6,10 +6,10 @@ import (
 	"math"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
 	"github.com/LeJamon/goXRPLd/internal/testing/amm"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 // setupClawbackEnv creates an environment where gw has AllowTrustLineClawback set

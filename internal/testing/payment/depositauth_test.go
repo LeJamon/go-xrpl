@@ -5,14 +5,14 @@ package payment
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/depositpreauth"
-	paymentPkg "github.com/LeJamon/goXRPLd/internal/tx/payment"
 	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/credential"
 	dp "github.com/LeJamon/goXRPLd/internal/testing/depositpreauth"
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/depositpreauth"
+	paymentPkg "github.com/LeJamon/goXRPLd/internal/tx/payment"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -565,7 +565,7 @@ func TestDepositPreauth_SelfPayment(t *testing.T) {
 	// alice creates a passive offer: TakerPays=XRP(100), TakerGets=USD(100).
 	// In rippled: offer(alice, XRP(100), USD(100), tfPassive)
 	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
-	xrp100 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(100)))
+	xrp100 := tx.NewXRPAmount(xrplgoTesting.XRP(100))
 	env.CreatePassiveOffer(alice, usd100, xrp100)
 	env.Close()
 
@@ -573,7 +573,7 @@ func TestDepositPreauth_SelfPayment(t *testing.T) {
 	// This is a cross-currency self-payment: becky sends XRP and receives USD
 	// through alice's offer. path(~USD) = {currency=USD, issuer=gw}.
 	usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)
-	xrp10 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(10)))
+	xrp10 := tx.NewXRPAmount(xrplgoTesting.XRP(10))
 	usdPath := [][]paymentPkg.PathStep{{{Currency: "USD", Issuer: gw.Address}}}
 	result = env.Submit(
 		PayIssued(becky, becky, usd10).

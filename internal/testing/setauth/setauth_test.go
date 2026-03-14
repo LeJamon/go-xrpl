@@ -69,4 +69,3 @@ func TestSetAuth(t *testing.T) {
 	)
 	jtx.RequireTxClaimed(t, result, "tecPATH_DRY")
 }
-

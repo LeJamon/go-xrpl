@@ -3,9 +3,9 @@
 package amm
 
 import (
+	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/amm"
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 )
 
 // AMMCreateBuilder provides a fluent interface for building AMMCreate transactions.

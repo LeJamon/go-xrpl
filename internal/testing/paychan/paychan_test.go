@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
 	"github.com/LeJamon/goXRPLd/internal/testing/credential"
 	"github.com/LeJamon/goXRPLd/internal/testing/depositpreauth"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/stretchr/testify/require"
@@ -680,7 +680,7 @@ func TestPayChan_Expiration(t *testing.T) {
 	env.Close()
 
 	// Try to extend the expiration after the expiration has already passed
-	result = env.Submit(ChannelFund(alice, chanIDHex, drops(1_000_000)).
+	env.Submit(ChannelFund(alice, chanIDHex, drops(1_000_000)).
 		ExpirationRipple(minExpiration + 1000).Build())
 	// Channel auto-closes
 	require.False(t, chanExists(env, chanK))
@@ -1615,7 +1615,6 @@ func TestPayChan_AccountDelete(t *testing.T) {
 				require.Equal(t, uint64(reqBal), chanBalance(env, chanK))
 				require.Equal(t, chanAmt, chanAmount(env, chanK))
 				require.Equal(t, preBob+uint64(delta), env.Balance(bob))
-				chanBal = uint64(reqBal)
 			} else {
 				preAlice := env.Balance(alice)
 				submitExpect(t, env, ChannelClaim(alice, chanIDHex).
@@ -1637,7 +1636,6 @@ func TestPayChan_AccountDelete(t *testing.T) {
 
 				require.Equal(t, preAlice-uint64(xrp(1000))-baseFee, env.Balance(alice))
 				require.Equal(t, chanAmt+uint64(xrp(1000)), chanAmount(env, chanK))
-				chanAmt = chanAmt + uint64(xrp(1000))
 			} else {
 				preAlice := env.Balance(alice)
 				submitExpect(t, env, ChannelFund(alice, chanIDHex, xrp(1000)).Build(), "tecNO_DST")
@@ -1767,7 +1765,6 @@ func TestPayChan_AccountDelete(t *testing.T) {
 			require.Equal(t, uint64(reqBal2), chanBalance(env, chanK))
 			require.Equal(t, chanAmt, chanAmount(env, chanK))
 			require.Equal(t, preBob+uint64(delta)-baseFee, env.Balance(bob))
-			chanBal = uint64(reqBal2)
 		}
 
 		// Alice should be able to fund
@@ -1779,7 +1776,6 @@ func TestPayChan_AccountDelete(t *testing.T) {
 
 			require.Equal(t, preAlice-uint64(xrp(1000))-baseFee, env.Balance(alice))
 			require.Equal(t, chanAmt+uint64(xrp(1000)), chanAmount(env, chanK))
-			chanAmt = chanAmt + uint64(xrp(1000))
 		}
 
 		// Owner closes, will close after settleDelay
@@ -1869,13 +1865,11 @@ func TestPayChan_UsingTickets(t *testing.T) {
 			Ticket(aliceTicketSeq).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		aliceTicketSeq++
 
 		require.Equal(t, aliceSeq, env.Seq(alice))
 		require.Equal(t, uint64(reqBal), chanBalance(env, chanK))
 		require.Equal(t, chanAmt, chanAmount(env, chanK))
 		require.Equal(t, preBob+uint64(delta), env.Balance(bob))
-		chanBal = uint64(reqBal)
 	}
 
 	// Claim with signature (bob uses ticket)
@@ -1958,7 +1952,6 @@ func TestPayChan_UsingTickets(t *testing.T) {
 			Ticket(bobTicketSeq).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		bobTicketSeq++
 
 		require.Equal(t, bobSeq, env.Seq(bob))
 		require.False(t, chanExists(env, chanK))

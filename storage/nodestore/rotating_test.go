@@ -1,7 +1,6 @@
 package nodestore_test
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -11,11 +10,7 @@ import (
 
 func TestRotatingDatabase(t *testing.T) {
 	t.Run("Creation", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "rotating_test_*")
-		if err != nil {
-			t.Fatalf("failed to create temp dir: %v", err)
-		}
-		defer os.RemoveAll(tempDir)
+		tempDir := t.TempDir()
 
 		config := &nodestore.RotationConfig{
 			RotationThreshold: 100,
@@ -59,11 +54,7 @@ func TestRotatingDatabase(t *testing.T) {
 	})
 
 	t.Run("OpenClose", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "rotating_test_*")
-		if err != nil {
-			t.Fatalf("failed to create temp dir: %v", err)
-		}
-		defer os.RemoveAll(tempDir)
+		tempDir := t.TempDir()
 
 		config := &nodestore.RotationConfig{
 			RotationThreshold: 100,
@@ -102,11 +93,7 @@ func TestRotatingDatabase(t *testing.T) {
 	})
 
 	t.Run("StoreAndFetch", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "rotating_test_*")
-		if err != nil {
-			t.Fatalf("failed to create temp dir: %v", err)
-		}
-		defer os.RemoveAll(tempDir)
+		tempDir := t.TempDir()
 
 		config := &nodestore.RotationConfig{
 			RotationThreshold: 100,
@@ -148,11 +135,7 @@ func TestRotatingDatabase(t *testing.T) {
 	})
 
 	t.Run("FetchNotFound", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "rotating_test_*")
-		if err != nil {
-			t.Fatalf("failed to create temp dir: %v", err)
-		}
-		defer os.RemoveAll(tempDir)
+		tempDir := t.TempDir()
 
 		config := &nodestore.RotationConfig{
 			RotationThreshold: 100,
@@ -183,11 +166,7 @@ func TestRotatingDatabase(t *testing.T) {
 	})
 
 	t.Run("StoreBatch", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "rotating_test_*")
-		if err != nil {
-			t.Fatalf("failed to create temp dir: %v", err)
-		}
-		defer os.RemoveAll(tempDir)
+		tempDir := t.TempDir()
 
 		config := &nodestore.RotationConfig{
 			RotationThreshold: 100,
@@ -233,11 +212,7 @@ func TestRotatingDatabase(t *testing.T) {
 	})
 
 	t.Run("FetchBatch", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "rotating_test_*")
-		if err != nil {
-			t.Fatalf("failed to create temp dir: %v", err)
-		}
-		defer os.RemoveAll(tempDir)
+		tempDir := t.TempDir()
 
 		config := &nodestore.RotationConfig{
 			RotationThreshold: 100,
@@ -280,11 +255,7 @@ func TestRotatingDatabase(t *testing.T) {
 	})
 
 	t.Run("Rotate", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "rotating_test_*")
-		if err != nil {
-			t.Fatalf("failed to create temp dir: %v", err)
-		}
-		defer os.RemoveAll(tempDir)
+		tempDir := t.TempDir()
 
 		config := &nodestore.RotationConfig{
 			RotationThreshold: 10,
@@ -352,11 +323,7 @@ func TestRotatingDatabase(t *testing.T) {
 	})
 
 	t.Run("ShouldRotate", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "rotating_test_*")
-		if err != nil {
-			t.Fatalf("failed to create temp dir: %v", err)
-		}
-		defer os.RemoveAll(tempDir)
+		tempDir := t.TempDir()
 
 		config := &nodestore.RotationConfig{
 			RotationThreshold: 10,
@@ -397,11 +364,7 @@ func TestRotatingDatabase(t *testing.T) {
 	})
 
 	t.Run("Sync", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "rotating_test_*")
-		if err != nil {
-			t.Fatalf("failed to create temp dir: %v", err)
-		}
-		defer os.RemoveAll(tempDir)
+		tempDir := t.TempDir()
 
 		config := &nodestore.RotationConfig{
 			RotationThreshold: 100,
@@ -429,11 +392,7 @@ func TestRotatingDatabase(t *testing.T) {
 	})
 
 	t.Run("ForEach", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "rotating_test_*")
-		if err != nil {
-			t.Fatalf("failed to create temp dir: %v", err)
-		}
-		defer os.RemoveAll(tempDir)
+		tempDir := t.TempDir()
 
 		config := &nodestore.RotationConfig{
 			RotationThreshold: 100,
@@ -479,11 +438,7 @@ func TestRotatingDatabase(t *testing.T) {
 	})
 
 	t.Run("Stats", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "rotating_test_*")
-		if err != nil {
-			t.Fatalf("failed to create temp dir: %v", err)
-		}
-		defer os.RemoveAll(tempDir)
+		tempDir := t.TempDir()
 
 		config := &nodestore.RotationConfig{
 			RotationThreshold: 100,
@@ -523,11 +478,7 @@ func TestRotatingDatabase(t *testing.T) {
 	})
 
 	t.Run("PrimaryBackend", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "rotating_test_*")
-		if err != nil {
-			t.Fatalf("failed to create temp dir: %v", err)
-		}
-		defer os.RemoveAll(tempDir)
+		tempDir := t.TempDir()
 
 		config := &nodestore.RotationConfig{
 			RotationThreshold: 100,
@@ -556,11 +507,7 @@ func TestRotatingDatabase(t *testing.T) {
 	})
 
 	t.Run("OperationsOnClosedDatabase", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "rotating_test_*")
-		if err != nil {
-			t.Fatalf("failed to create temp dir: %v", err)
-		}
-		defer os.RemoveAll(tempDir)
+		tempDir := t.TempDir()
 
 		config := &nodestore.RotationConfig{
 			RotationThreshold: 100,

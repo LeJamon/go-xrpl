@@ -20,7 +20,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, err
 	}
 
-	if err := RequireAccount(request.Account); err != nil {
+	if err := ValidateAccount(request.Account); err != nil {
 		return nil, err
 	}
 
@@ -35,10 +35,11 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	}
 
 	// Get account NFTs from the ledger service
+	limit := ClampLimit(request.Limit, LimitAccountNFTokens, ctx.IsAdmin)
 	result, err := types.Services.Ledger.GetAccountNFTs(
 		request.Account,
 		ledgerIndex,
-		request.Limit,
+		limit,
 	)
 	if err != nil {
 		if err.Error() == "account not found" {
@@ -61,11 +62,11 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	nfts := make([]map[string]interface{}, len(result.AccountNFTs))
 	for i, nft := range result.AccountNFTs {
 		nftObj := map[string]interface{}{
-			"Flags":         nft.Flags,
-			"Issuer":        nft.Issuer,
-			"NFTokenID":     nft.NFTokenID,
-			"NFTokenTaxon":  nft.NFTokenTaxon,
-			"nft_serial":    nft.NFTSerial,
+			"Flags":        nft.Flags,
+			"Issuer":       nft.Issuer,
+			"NFTokenID":    nft.NFTokenID,
+			"NFTokenTaxon": nft.NFTokenTaxon,
+			"nft_serial":   nft.NFTSerial,
 		}
 
 		// Add optional fields only if they have values
@@ -86,6 +87,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
 		"validated":    result.Validated,
+		"limit":        limit,
 	}
 
 	if result.Marker != "" {
@@ -94,4 +96,3 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 	return response, nil
 }
-

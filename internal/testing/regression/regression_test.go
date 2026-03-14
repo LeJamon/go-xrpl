@@ -8,14 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/account"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/check"
 	"github.com/LeJamon/goXRPLd/internal/testing/offer"
 	"github.com/LeJamon/goXRPLd/internal/testing/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/account"
 	"github.com/LeJamon/goXRPLd/internal/txq"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -129,8 +129,8 @@ func TestRegression_FeeEscalation(t *testing.T) {
 		MinimumTxnInLedgerStandalone:   3, // Key setting
 		TargetTxnInLedger:              256,
 		MaximumTxnInLedger:             0,
-		NormalConsensusIncreasePercent:  20,
-		SlowConsensusDecreasePercent:    50,
+		NormalConsensusIncreasePercent: 20,
+		SlowConsensusDecreasePercent:   50,
 		MaximumTxnPerAccount:           10,
 		MinimumLastLedgerBuffer:        2,
 		Standalone:                     true,
@@ -188,8 +188,8 @@ func TestRegression_FeeEscalationExtremeConfig(t *testing.T) {
 		MinimumTxnInLedgerStandalone:   4294967295,
 		TargetTxnInLedger:              4294967295,
 		MaximumTxnInLedger:             0,
-		NormalConsensusIncreasePercent:  4294967295,
-		SlowConsensusDecreasePercent:    50,
+		NormalConsensusIncreasePercent: 4294967295,
+		SlowConsensusDecreasePercent:   50,
 		MaximumTxnPerAccount:           10,
 		MinimumLastLedgerBuffer:        2,
 		Standalone:                     true,
@@ -210,4 +210,3 @@ func TestRegression_FeeEscalationExtremeConfig(t *testing.T) {
 	require.True(t, elapsed < time.Second,
 		"Close() took %v, expected < 1s with extreme config", elapsed)
 }
-

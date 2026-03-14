@@ -34,8 +34,8 @@ const (
 	RpcCOMMAND_UNTRUSTED = 3
 	RpcNO_CURRENT        = 4
 	RpcNO_NETWORK        = 5
-	RpcNO_PERMISSION     = 6 // rippled: rpcNO_PERMISSION = 6
-	RpcTOO_BUSY          = 9 // rippled: rpcTOO_BUSY = 9
+	RpcNO_PERMISSION     = 6  // rippled: rpcNO_PERMISSION = 6
+	RpcTOO_BUSY          = 9  // rippled: rpcTOO_BUSY = 9
 	RpcSLOW_DOWN         = 10 // rippled: rpcSLOW_DOWN = 10
 
 	// Networking
@@ -58,7 +58,7 @@ const (
 	RpcACT_CHANNELS       = 21
 	RpcACT_OBJECTS        = 22
 	RpcACT_ROOT_NOT_FOUND = 23
-	RpcACT_MALFORMED      = 50
+	RpcACT_MALFORMED      = 35
 	RpcSRC_ACT_NOT_FOUND  = 51
 	RpcDST_ACT_NOT_FOUND  = 52
 
@@ -75,14 +75,14 @@ const (
 	RpcNOT_SUPPORTED = 32
 
 	// WebSocket specific
-	RpcCOMMAND_MISSING        = 34
+	RpcCOMMAND_MISSING         = 34
 	RpcCOMMAND_IS_NOT_A_STRING = 35
 
 	// Rate limiting
 	RpcSLOW_DOWN_INVALID_IP = 36
 
-	// Oracle errors
-	RpcORACLE_MALFORMED = 37
+	// Oracle errors — must match rippled exactly (rpcORACLE_MALFORMED = 94)
+	RpcORACLE_MALFORMED = 94
 
 	// Amendment and feature errors
 	RpcINVALID_API_VERSION = 38
@@ -107,15 +107,26 @@ const (
 	RpcNOT_VALIDATOR = 48 // Server is not configured as a validator
 	RpcNOT_SYNCED    = 49 // Not synced to network
 
+	// Fee errors - must match rippled exactly
+	RpcHIGH_FEE = 11 // Current transaction fee exceeds your limit
+
 	// Signing/Key errors - must match rippled exactly
-	RpcBAD_SEED             = 44 // Disallowed seed
-	RpcCHANNEL_MALFORMED    = 45 // Payment channel is malformed
+	RpcBAD_SEED              = 44 // Disallowed seed
+	RpcCHANNEL_MALFORMED     = 45 // Payment channel is malformed
 	RpcCHANNEL_AMT_MALFORMED = 46 // Payment channel amount is malformed
-	RpcPUBLIC_MALFORMED     = 62 // Public key is malformed
-	RpcBAD_KEY_TYPE         = 76 // Bad key type
+	RpcPUBLIC_MALFORMED      = 62 // Public key is malformed
+	RpcSIGNING_MALFORMED     = 63 // Signing of transaction is malformed
+	RpcBAD_KEY_TYPE          = 76 // Bad key type
 
 	// Object errors - must match rippled exactly
 	RpcOBJECT_NOT_FOUND = 92 // Object not found
+
+	// Credential errors - must match rippled exactly
+	RpcBAD_CREDENTIALS = 95 // Credentials do not exist, are not accepted, or have expired
+
+	// Simulate errors - must match rippled exactly
+	RpcTX_SIGNED         = 96 // Transaction should not be signed (rippled: rpcTX_SIGNED = 96)
+	RpcSRC_ACT_MALFORMED = 65 // Source account is malformed (rippled: rpcSRC_ACT_MALFORMED = 65)
 )
 
 // Standard error constructors
@@ -147,6 +158,10 @@ func RpcErrorLgrNotFound(message string) *RpcError {
 
 func RpcErrorActNotFound(message string) *RpcError {
 	return NewRpcError(RpcACT_NOT_FOUND, "actNotFound", "actNotFound", message)
+}
+
+func RpcErrorActMalformed(message string) *RpcError {
+	return NewRpcError(RpcACT_MALFORMED, "actMalformed", "actMalformed", message)
 }
 
 func RpcErrorTxnNotFound(message string) *RpcError {
@@ -200,6 +215,36 @@ func RpcErrorObjectNotFound(message string) *RpcError {
 	return NewRpcError(RpcOBJECT_NOT_FOUND, "objectNotFound", "objectNotFound", message)
 }
 
+// RpcErrorBadCredentials returns an error for credential validation failures (matches rippled rpcBAD_CREDENTIALS).
+func RpcErrorBadCredentials(message string) *RpcError {
+	return NewRpcError(RpcBAD_CREDENTIALS, "badCredentials", "badCredentials", message)
+}
+
+// RpcErrorHighFee returns an error when the auto-filled fee exceeds the requested limit (matches rippled rpcHIGH_FEE).
+func RpcErrorHighFee(message string) *RpcError {
+	return NewRpcError(RpcHIGH_FEE, "highFee", "highFee", message)
+}
+
+// RpcErrorExpectedField returns an error for a field that is not of the expected type
+// (matches rippled's expected_field_message: "Invalid field '<name>', not <type>.")
+func RpcErrorExpectedField(field, expectedType string) *RpcError {
+	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams",
+		"Invalid field '"+field+"', not "+expectedType+".")
+}
+
+// RpcErrorExpectedFieldHighFee returns a highFee error for a field that is not of the expected type.
+// rippled returns rpcHIGH_FEE (not rpcINVALID_PARAMS) when fee_mult_max or fee_div_max is not an integer.
+func RpcErrorExpectedFieldHighFee(field, expectedType string) *RpcError {
+	return NewRpcError(RpcHIGH_FEE, "highFee", "highFee",
+		"Invalid field '"+field+"', not "+expectedType+".")
+}
+
+// RpcErrorSigningMalformed returns an error when a transaction's signing is malformed
+// (matches rippled rpcSIGNING_MALFORMED, code 63, token "signingMalformed").
+func RpcErrorSigningMalformed() *RpcError {
+	return NewRpcError(RpcSIGNING_MALFORMED, "signingMalformed", "signingMalformed", "Signing of transaction is malformed.")
+}
+
 // RpcErrorMissingField returns an error for missing required field (matches rippled missing_field_error)
 func RpcErrorMissingField(field string) *RpcError {
 	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", "Missing field '"+field+"'.")
@@ -208,4 +253,28 @@ func RpcErrorMissingField(field string) *RpcError {
 // RpcErrorInvalidField returns an error for invalid field value (matches rippled invalid_field_error)
 func RpcErrorInvalidField(field string) *RpcError {
 	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", "Invalid field '"+field+"'.")
+}
+
+// RpcErrorTxSigned returns an error when a transaction is pre-signed but should not be
+// (matches rippled rpcTX_SIGNED, code 96, token "transactionSigned").
+func RpcErrorTxSigned() *RpcError {
+	return NewRpcError(RpcTX_SIGNED, "transactionSigned", "transactionSigned", "Transaction should not be signed.")
+}
+
+// RpcErrorSrcActMalformed returns an error when the source account address is malformed
+// (matches rippled rpcSRC_ACT_MALFORMED, code 65, token "srcActMalformed").
+func RpcErrorSrcActMalformed(message string) *RpcError {
+	return NewRpcError(RpcSRC_ACT_MALFORMED, "srcActMalformed", "srcActMalformed", message)
+}
+
+// RpcErrorNotImpl returns an error for unimplemented features
+// (matches rippled rpcNOT_IMPL, code 74, token "notImpl").
+func RpcErrorNotImpl() *RpcError {
+	return NewRpcError(RpcNOT_IMPL, "notImpl", "notImpl", "Not implemented.")
+}
+
+// RpcErrorOracleMalformed returns an error for malformed oracle requests
+// (matches rippled rpcORACLE_MALFORMED, code 94, token "oracleMalformed").
+func RpcErrorOracleMalformed() *RpcError {
+	return NewRpcError(RpcORACLE_MALFORMED, "oracleMalformed", "oracleMalformed", "Oracle request is malformed.")
 }
