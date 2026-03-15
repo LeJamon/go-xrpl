@@ -67,6 +67,11 @@ type TestEnv struct {
 	// Reference: rippled's TxQ used by NetworkOPs::processTransaction.
 	txQueue *txq.TxQ
 
+	// bypassTxQ temporarily bypasses TxQ routing when true. Used for setup
+	// operations (fund, trust) that should go directly to the ledger, matching
+	// rippled's apply() vs submit() distinction for setup operations.
+	bypassTxQ bool
+
 	// txInLedger tracks the number of transactions applied to the current open
 	// ledger. Reset on Close(). Used by TxQ for fee escalation computation.
 	txInLedger uint32
@@ -271,4 +276,11 @@ func NewTestEnvWithConfig(t *testing.T, cfg genesis.Config) *TestEnv {
 // When false, fee adequacy checks are skipped (matching rippled's closed-ledger behavior).
 func (e *TestEnv) SetOpenLedger(open bool) {
 	e.openLedger = open
+}
+
+// SetBypassTxQ temporarily bypasses TxQ routing. When true, Submit() goes
+// directly to the engine even when a TxQ is configured. This matches rippled's
+// distinction between apply() (direct, used for setup) and submit() (via TxQ).
+func (e *TestEnv) SetBypassTxQ(bypass bool) {
+	e.bypassTxQ = bypass
 }

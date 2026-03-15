@@ -298,8 +298,8 @@ func (e *TestEnv) Submit(transaction interface{}) TxResult {
 		common.Sequence = &seq
 	}
 
-	// If TxQ is enabled, route through TxQ for fee escalation and queuing.
-	if e.txQueue != nil {
+	// If TxQ is enabled and not bypassed, route through TxQ for fee escalation and queuing.
+	if e.txQueue != nil && !e.bypassTxQ {
 		return e.submitViaTxQ(txn)
 	}
 

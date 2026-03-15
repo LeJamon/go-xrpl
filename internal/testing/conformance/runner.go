@@ -561,6 +561,7 @@ func (r *runner) setupEnv(cfg EnvConfig) {
 }
 
 // execFund handles a "fund" step.
+// Fund operations bypass TxQ, matching rippled's apply() for setup operations.
 func (r *runner) execFund(stepIdx int, step Step) {
 	amount, err := parseDropsAmount(step.Amount)
 	if err != nil {
@@ -569,6 +570,10 @@ func (r *runner) execFund(stepIdx int, step Step) {
 
 	acc := jtx.NewAccountWithAddress(step.Account, step.Address)
 	r.accounts[step.Account] = acc
+
+	// Bypass TxQ for fund operations (rippled uses apply() not submit())
+	r.env.SetBypassTxQ(true)
+	defer r.env.SetBypassTxQ(false)
 
 	setRipple := step.SetDefaultRipple == nil || *step.SetDefaultRipple
 	if setRipple {
@@ -579,7 +584,12 @@ func (r *runner) execFund(stepIdx int, step Step) {
 }
 
 // execTrust handles a "trust" step.
+// Trust operations bypass TxQ, matching rippled's apply() for setup operations.
 func (r *runner) execTrust(stepIdx int, step Step) {
+	// Bypass TxQ for trust operations (rippled uses apply() not submit())
+	r.env.SetBypassTxQ(true)
+	defer r.env.SetBypassTxQ(false)
+
 	acc, ok := r.accounts[step.Account]
 	if !ok {
 		r.t.Fatalf("Step %d (trust): unknown account %q", stepIdx, step.Account)
