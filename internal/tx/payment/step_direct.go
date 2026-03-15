@@ -916,7 +916,19 @@ func (s *DirectStepI) DirectStepSrcAcct() *[20]byte {
 
 // Check validates the DirectStepI before use
 func (s *DirectStepI) Check(sb *PaymentSandbox) tx.Result {
-	// Offer crossing: no trust line checks needed.
+	// Check freeze status — applies to BOTH payments and offer crossing.
+	// Skip for pure issue/redeem (single-step strand).
+	// Reference: rippled DirectStepI<TDerived>::check() lines 906-912
+	//   if (!(ctx.isLast && ctx.isFirst))
+	//       checkFreeze(ctx.view, src_, dst_, currency_);
+	// This runs in the BASE class check(), before delegating to derived class.
+	if !(s.isFirst && s.isLast) {
+		if result := checkFreeze(sb, s.src, s.dst, s.currency); result != tx.TesSUCCESS {
+			return result
+		}
+	}
+
+	// Offer crossing: skip trust line existence and authorization checks.
 	// Trust lines are created on demand during crossing via rippleCredit.
 	// Reference: rippled DirectIOfferCrossingStep::check() lines 462-470
 	if s.offerCrossing {
@@ -931,16 +943,6 @@ func (s *DirectStepI) Check(sb *PaymentSandbox) tx.Result {
 	}
 	if data == nil {
 		return tx.TerNO_LINE
-	}
-
-	// Check freeze status — skip for pure issue/redeem (single-step strand)
-	// Reference: rippled DirectStep.cpp:906-912
-	//   if (!(ctx.isLast && ctx.isFirst))
-	//       checkFreeze(ctx.view, src_, dst_, currency_);
-	if !(s.isFirst && s.isLast) {
-		if result := checkFreeze(sb, s.src, s.dst, s.currency); result != tx.TesSUCCESS {
-			return result
-		}
 	}
 
 	// Check authorization
@@ -1067,43 +1069,13 @@ func checkAuth(view *PaymentSandbox, src, dst [20]byte, currency string) tx.Resu
 
 // checkFreeze checks if a trust line is frozen.
 // Reference: rippled StepChecks.h checkFreeze()
-// Returns terNO_LINE if the trust line is frozen, tesSUCCESS otherwise.
+// Returns terNO_LINE if frozen, tesSUCCESS otherwise.
+// Order matches rippled: global freeze → individual freeze → deep freeze.
 func checkFreeze(view *PaymentSandbox, src, dst [20]byte, currency string) tx.Result {
-	// Get the trust line
-	trustLineKey := keylet.Line(src, dst, currency)
-	data, err := view.Read(trustLineKey)
-	if err != nil || data == nil {
-		return tx.TerNO_LINE
-	}
-
-	rs, err := state.ParseRippleState(data)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
-	// Determine which account is low/high
-	srcIsLow := state.CompareAccountIDs(src, dst) < 0
-
-	// Check individual freeze
-	// If src is low, check if high (dst) has frozen the line
-	// If src is high, check if low (dst) has frozen the line
-	if srcIsLow {
-		// dst is high, check if high has frozen
-		if (rs.Flags & state.LsfHighFreeze) != 0 {
-			return tx.TerNO_LINE
-		}
-	} else {
-		// dst is low, check if low has frozen
-		if (rs.Flags & state.LsfLowFreeze) != 0 {
-			return tx.TerNO_LINE
-		}
-	}
-
-	// Check global freeze on destination account only (not source)
-	// Reference: rippled StepChecks.h:43-49 — only checks dst global freeze
+	// 1. Check global freeze on destination account
+	// Reference: rippled StepChecks.h:43-49
 	dstKey := keylet.Account(dst)
 	dstData, _ := view.Read(dstKey)
-
 	if dstData != nil {
 		dstAccount, err := state.ParseAccountRoot(dstData)
 		if err == nil && (dstAccount.Flags&state.LsfGlobalFreeze) != 0 {
@@ -1111,9 +1083,37 @@ func checkFreeze(view *PaymentSandbox, src, dst [20]byte, currency string) tx.Re
 		}
 	}
 
-	// Check deep freeze — unlike normal freeze, deep freeze acts the same
-	// regardless of which side froze it. If either side set deep freeze,
-	// the trust line is completely blocked in both directions.
+	// 2. Read trust line — if it doesn't exist, skip freeze checks.
+	// During offer crossing, trust lines may not exist yet (created on demand).
+	// Reference: rippled StepChecks.h:51 — `if (auto sle = view.read(...))`
+	trustLineKey := keylet.Line(src, dst, currency)
+	data, err := view.Read(trustLineKey)
+	if err != nil || data == nil {
+		// No trust line — nothing to freeze-check
+		return tx.TesSUCCESS
+	}
+
+	rs, err := state.ParseRippleState(data)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// 3. Check individual freeze
+	// Reference: rippled StepChecks.h:53 — (dst > src) ? lsfHighFreeze : lsfLowFreeze
+	// If src is low (dst is high), check lsfHighFreeze (dst's side)
+	// If src is high (dst is low), check lsfLowFreeze (dst's side)
+	srcIsLow := state.CompareAccountIDs(src, dst) < 0
+	if srcIsLow {
+		if (rs.Flags & state.LsfHighFreeze) != 0 {
+			return tx.TerNO_LINE
+		}
+	} else {
+		if (rs.Flags & state.LsfLowFreeze) != 0 {
+			return tx.TerNO_LINE
+		}
+	}
+
+	// 4. Check deep freeze — either side having deep freeze blocks the line
 	// Reference: rippled StepChecks.h:58-62
 	if (rs.Flags&state.LsfHighDeepFreeze) != 0 || (rs.Flags&state.LsfLowDeepFreeze) != 0 {
 		return tx.TerNO_LINE

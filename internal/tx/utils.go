@@ -107,6 +107,36 @@ func IsGlobalFrozen(view LedgerView, issuerAddress string) bool {
 	return (account.Flags & state.LsfGlobalFreeze) != 0
 }
 
+// IsDeepFrozen checks if a trust line between account and issuer is deep-frozen.
+// Deep freeze can be set by either side of the trust line. Unlike regular freeze
+// (which only checks the issuer's side), deep freeze checks both lsfLowDeepFreeze
+// and lsfHighDeepFreeze.
+// Reference: rippled ledger/View.cpp isDeepFrozen()
+func IsDeepFrozen(view LedgerView, accountID, issuerID [20]byte, currency string) bool {
+	// XRP cannot be frozen
+	if currency == "" || currency == "XRP" {
+		return false
+	}
+
+	// If account is issuer, not frozen
+	if accountID == issuerID {
+		return false
+	}
+
+	trustLineKey := keylet.Line(accountID, issuerID, currency)
+	trustLineData, err := view.Read(trustLineKey)
+	if err != nil || trustLineData == nil {
+		return false
+	}
+
+	rs, err := state.ParseRippleState(trustLineData)
+	if err != nil {
+		return false
+	}
+
+	return (rs.Flags & (state.LsfLowDeepFreeze | state.LsfHighDeepFreeze)) != 0
+}
+
 // XRPLiquid returns the amount of XRP an account can spend (balance minus reserve).
 // Reference: rippled ledger/View.cpp xrpLiquid()
 // ownerCountAdj allows adjusting the owner count (e.g., +1 to account for a pending new object).
@@ -156,12 +186,17 @@ func AccountFunds(view LedgerView, accountID [20]byte, amount Amount, fhZeroIfFr
 	}
 
 	// Check for frozen if requested
+	// Reference: rippled View.cpp accountHolds() — checks isFrozen || isDeepFrozen
 	if fhZeroIfFrozen {
 		if IsGlobalFrozen(view, amount.Issuer) {
 			return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 		}
 		// Check individual trustline freeze
 		if IsTrustlineFrozen(view, accountID, issuerID, amount.Currency) {
+			return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
+		}
+		// Check deep freeze — either side of the trust line can deep-freeze it
+		if IsDeepFrozen(view, accountID, issuerID, amount.Currency) {
 			return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 		}
 	}

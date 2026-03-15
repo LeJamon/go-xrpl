@@ -1206,8 +1206,13 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 		if result := e.checkBatchMultiSign(idAccountID, txSigners); result != TesSUCCESS {
 			return result
 		}
-	} else if !e.config.SkipSignatureVerification && common.SigningPubKey != "" {
-		// Single-signed transaction with signature verification enabled.
+	} else if common.SigningPubKey != "" {
+		// Single-signed transaction: check signing key authorization.
+		// This runs regardless of SkipSignatureVerification because authorization
+		// (master key disabled, regular key) is a ledger-state check, not a
+		// cryptographic check. The actual signature verification is done in
+		// Validate() and gated by SkipSignatureVerification.
+		// Reference: rippled Transactor::checkSingleSign in Transactor.cpp lines 682-740
 		signerAddress, addrErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(common.SigningPubKey)
 		if addrErr != nil {
 			return TefBAD_AUTH
@@ -1236,16 +1241,41 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 
 		isMasterDisabled := (idAccountRoot.Flags & state.LsfDisableMaster) != 0
 
-		if signerAddress == idAccountRoot.RegularKey {
-			// Signed with regular key — allowed
-		} else if !isMasterDisabled && signerAddress == idAccount {
-			// Signed with enabled master key — allowed
-		} else if isMasterDisabled && signerAddress == idAccount {
-			// Signed with disabled master key
-			return TefMASTER_DISABLED
+		if e.rules().Enabled(amendment.FeatureFixMasterKeyAsRegularKey) {
+			// With fixMasterKeyAsRegularKey: check regular key first, then master.
+			// This allows the master key to serve as a regular key even when
+			// master signing is disabled (e.g., regkey(alice, alice) + disable master).
+			// Reference: rippled Transactor::checkSingleSign lines 691-713
+			if signerAddress == idAccountRoot.RegularKey {
+				// Signed with regular key — allowed
+			} else if !isMasterDisabled && signerAddress == idAccount {
+				// Signed with enabled master key — allowed
+			} else if isMasterDisabled && signerAddress == idAccount {
+				// Signed with disabled master key
+				return TefMASTER_DISABLED
+			} else {
+				// Signed with an unauthorized key
+				return TefBAD_AUTH
+			}
 		} else {
-			// Signed with an unauthorized key
-			return TefBAD_AUTH
+			// Without fixMasterKeyAsRegularKey: check master key first.
+			// If signer == account, it's a master key sign attempt.
+			// The regular key is only checked if signer != account.
+			// Reference: rippled Transactor::checkSingleSign lines 715-737
+			if signerAddress == idAccount {
+				// Signing with the master key. Continue if it is not disabled.
+				if isMasterDisabled {
+					return TefMASTER_DISABLED
+				}
+			} else if signerAddress == idAccountRoot.RegularKey {
+				// Signing with the regular key. Continue.
+			} else if idAccountRoot.RegularKey != "" {
+				// Signing key does not match master or regular key.
+				return TefBAD_AUTH
+			} else {
+				// No regular key on account and signing key does not match master key.
+				return TefBAD_AUTH_MASTER
+			}
 		}
 	}
 

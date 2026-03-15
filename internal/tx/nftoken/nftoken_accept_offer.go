@@ -300,11 +300,15 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 				}
 			}
 
-			// Broker trustline authorization check (fixEnforceNFTokenTrustlineV2)
+			// Broker trustline authorization + deep freeze check (fixEnforceNFTokenTrustlineV2)
 			if !n.NFTokenBrokerFee.IsNative() && ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
 				brokerFeeIssuerID, err := state.DecodeAccountID(n.NFTokenBrokerFee.Issuer)
 				if err == nil {
 					if r := checkNFTTrustlineAuthorized(ctx.View, accountID, n.NFTokenBrokerFee.Currency, brokerFeeIssuerID); r != tx.TesSUCCESS {
+						return r
+					}
+					// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 176-182
+					if r := checkNFTTrustlineDeepFrozen(ctx.View, accountID, n.NFTokenBrokerFee.Currency, brokerFeeIssuerID, ctx.Rules()); r != tx.TesSUCCESS {
 						return r
 					}
 				}
@@ -362,9 +366,13 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			if r := checkNFTTrustlineAuthorized(ctx.View, buyOffer.Owner, currency, issuerID); r != tx.TesSUCCESS {
 				return r
 			}
-			// Direct buy offer: seller (acceptor) must be authorized
+			// Direct buy offer: seller (acceptor) must be authorized + deep freeze check
 			if sellOffer == nil {
 				if r := checkNFTTrustlineAuthorized(ctx.View, accountID, currency, issuerID); r != tx.TesSUCCESS {
+					return r
+				}
+				// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 255-261
+				if r := checkNFTTrustlineDeepFrozen(ctx.View, accountID, currency, issuerID, ctx.Rules()); r != tx.TesSUCCESS {
 					return r
 				}
 			}
@@ -427,6 +435,16 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 				}
 			}
 		}
+
+		// Deep freeze check on sell offer owner (outside fixEnforceNFTokenTrustlineV2 gate)
+		// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 350-353
+		if sellOffer.AmountIOU != nil {
+			currency := sellOffer.AmountIOU.Currency
+			issuerID := sellOffer.AmountIOU.Issuer
+			if r := checkNFTTrustlineDeepFrozen(ctx.View, sellOffer.Owner, currency, issuerID, ctx.Rules()); r != tx.TesSUCCESS {
+				return r
+			}
+		}
 	}
 
 	// --- Step 5: Transfer fee issuer checks ---
@@ -473,6 +491,10 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 				iouIssuerID, err := state.DecodeAccountID(offerAmount.Issuer)
 				if err == nil {
 					if r := checkNFTTrustlineAuthorized(ctx.View, nftMinterID, offerAmount.Currency, iouIssuerID); r != tx.TesSUCCESS {
+						return r
+					}
+					// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 387-390
+					if r := checkNFTTrustlineDeepFrozen(ctx.View, nftMinterID, offerAmount.Currency, iouIssuerID, ctx.Rules()); r != tx.TesSUCCESS {
 						return r
 					}
 				}

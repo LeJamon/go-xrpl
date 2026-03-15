@@ -1122,10 +1122,19 @@ func (ctx *StrandContext) newDirectStepI(src, dst [20]byte, currency string, pre
 }
 
 // checkDirectStep validates a DirectStepI during strand building.
-// For offer crossing, returns tesSUCCESS (trust lines not required to pre-exist).
-// Reference: rippled DirectIOfferCrossingStep::check() returns tesSUCCESS
+// For offer crossing, skips trust line existence and authorization checks
+// but STILL runs the freeze check (common base class checks).
+// Reference: rippled DirectStepI<TDerived>::check() runs checkFreeze before
+// delegating to DirectIOfferCrossingStep::check() which returns tesSUCCESS.
 func (ctx *StrandContext) checkDirectStep(step *DirectStepI, view *PaymentSandbox, prevStep Step) tx.Result {
 	if ctx.OfferCrossing {
+		// Run common checks that apply to both payments and offer crossing.
+		// Reference: rippled DirectStepI<TDerived>::check() lines 906-912
+		if !(step.isFirst && step.isLast) {
+			if result := checkFreeze(view, step.src, step.dst, step.currency); result != tx.TesSUCCESS {
+				return result
+			}
+		}
 		return tx.TesSUCCESS
 	}
 	return step.CheckWithPrevStep(view, prevStep)

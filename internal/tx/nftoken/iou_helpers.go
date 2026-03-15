@@ -184,6 +184,47 @@ func checkNFTTrustlineAuthorized(view tx.LedgerView, accountID [20]byte, currenc
 	return tx.TesSUCCESS
 }
 
+// checkNFTTrustlineDeepFrozen checks if the trust line between account and
+// the asset issuer is deep-frozen. Returns tecFROZEN if either side has set
+// deep freeze. Gated behind featureDeepFreeze.
+// Reference: rippled NFTokenUtils.cpp nft::checkTrustlineDeepFrozen()
+func checkNFTTrustlineDeepFrozen(view tx.LedgerView, accountID [20]byte, currency string, issuerID [20]byte, rules *amendment.Rules) tx.Result {
+	if rules == nil || !rules.DeepFreezeEnabled() {
+		return tx.TesSUCCESS
+	}
+
+	// Check issuer exists
+	issuerKey := keylet.Account(issuerID)
+	issuerData, err := view.Read(issuerKey)
+	if err != nil || issuerData == nil {
+		return tx.TecNO_ISSUER
+	}
+
+	// An account can not create a trustline to itself
+	if accountID == issuerID {
+		return tx.TesSUCCESS
+	}
+
+	trustLineKey := keylet.Line(accountID, issuerID, currency)
+	trustLineData, err := view.Read(trustLineKey)
+	if err != nil || trustLineData == nil {
+		// No trust line — not frozen
+		return tx.TesSUCCESS
+	}
+
+	rs, err := state.ParseRippleState(trustLineData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Either side having deep freeze set blocks the operation
+	if (rs.Flags & (state.LsfLowDeepFreeze | state.LsfHighDeepFreeze)) != 0 {
+		return tx.TecFROZEN
+	}
+
+	return tx.TesSUCCESS
+}
+
 // offerIOUToAmount converts an NFTokenOfferData's IOU amount to a tx.Amount.
 // If the offer has no IOU amount, returns an XRP amount from the offer's Amount field.
 func offerIOUToAmount(offer *state.NFTokenOfferData) tx.Amount {
