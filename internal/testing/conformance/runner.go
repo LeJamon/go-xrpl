@@ -278,6 +278,16 @@ func findPrerequisites(t *testing.T, fixturePath string, current Fixture) []Fixt
 			continue
 		}
 
+		// Skip fixtures that have their own env config. Such fixtures create
+		// an independent environment and cannot be valid prerequisites for
+		// the current fixture. Without this check, unrelated fixtures that
+		// happen to share account addresses (common in Credentials tests
+		// where issuer/subject addresses are reused across test functions)
+		// would be incorrectly selected as prerequisites.
+		if f.Env != nil {
+			continue
+		}
+
 		// Check for shared accounts
 		fAccounts := collectTxAccounts(f.Steps)
 		shared := false
@@ -351,6 +361,22 @@ func findPrerequisites(t *testing.T, fixturePath string, current Fixture) []Fixt
 
 		// Remove the selected fixture to avoid infinite loops
 		allFixtures = append(allFixtures[:bestIdx], allFixtures[bestIdx+1:]...)
+	}
+
+	// Only return the chain if it starts with a base fixture (one with fund
+	// steps). A chain that doesn't reach a base means we couldn't find the
+	// original environment setup, so the caller should fall back to auto-fund.
+	if len(chain) > 0 {
+		hasBase := false
+		for _, s := range chain[0].Steps {
+			if s.Op == "fund" {
+				hasBase = true
+				break
+			}
+		}
+		if !hasBase {
+			return nil
+		}
 	}
 
 	return chain
@@ -554,21 +580,30 @@ func (r *runner) execTrust(stepIdx int, step Step) {
 	r.env.ReimburseFeeDirect(acc)
 }
 
-// execClose handles a "close" step, aligning the clock with expected Oracle
-// time offsets when necessary.
+// execClose handles a "close" step, aligning the clock with expected time
+// offsets when necessary.
 //
-// rippled's Oracle test helper (Oracle.cpp) jumps the ledger clock forward by
-// ~10,000s on Oracle construction, and individual tests may do env.close(seconds(N))
-// for large N. These time jumps are captured in the fixture as plain "close" ops
-// indistinguishable from the default 5-second advance.  The goXRPL conformance
-// runner advances by a fixed 10s per close, so the clock drifts for fixtures
-// that rely on large time offsets.
+// rippled tests sometimes do env.close(specificTimepoint) to jump the ledger
+// clock forward by large amounts. These time jumps are captured in the fixture
+// as plain "close" ops indistinguishable from the default 5-second advance.
+// The goXRPL conformance runner advances by a fixed 10s per close, so the
+// clock drifts for fixtures that rely on large time offsets.
 //
-// To fix this, execClose scans ahead for the next OracleSet tx whose expected
-// TER depends on the ledger close time being in a specific range.  When the
-// current clock would produce the wrong result, the clock is advanced to match
-// the value rippled must have had.
+// To fix this, execClose contains calibration logic for:
+// 1. OracleSet transactions (LastUpdateTime range checks)
+// 2. PaymentChannel transactions (CancelAfter/Expiration auto-close)
+//
+// When the current clock would produce the wrong result, the clock is advanced
+// to match the value rippled must have had.
 func (r *runner) execClose(stepIdx int, steps []Step) {
+	r.calibrateOracleTime(stepIdx, steps)
+	r.calibratePayChanTime(stepIdx, steps)
+	r.env.Close()
+}
+
+// calibrateOracleTime adjusts the clock for upcoming OracleSet transactions
+// whose expected TER depends on the ledger close time.
+func (r *runner) calibrateOracleTime(stepIdx int, steps []Step) {
 	const rippleEpochOffset = uint64(946684800)
 	const maxDelta = uint64(300)
 
@@ -664,8 +699,165 @@ func (r *runner) execClose(stepIdx int, steps []Step) {
 
 		break // only check the first OracleSet after this close
 	}
+}
 
-	r.env.Close()
+// calibratePayChanTime adjusts the clock for upcoming PaymentChannel
+// transactions that expect channel auto-close on CancelAfter or Expiration.
+//
+// In rippled tests, env.close(cancelAfter) or env.close(settleTimepoint) jumps
+// the clock to a specific time so that the next PayChan transaction triggers
+// the CancelAfter/Expiration auto-close check. The fixture captures these as
+// plain "close" ops, so we scan ahead for PayChan transactions whose post_state
+// indicates a channel was closed (owner_count decreased) and advance time to
+// the channel's CancelAfter or Expiration value.
+func (r *runner) calibratePayChanTime(stepIdx int, steps []Step) {
+	const rippleEpochOffset = uint64(946684800)
+
+	// Collect all known CancelAfter and settle-expiry values from preceding
+	// PaymentChannelCreate/Fund/Claim steps. We track both CancelAfter (set
+	// at creation time) and settle-based Expiration (set when tfClose is used).
+	var maxExpiry uint64
+	var lastSettleDelay uint32
+	closesBefore := 0
+
+	for i := 0; i < stepIdx; i++ {
+		s := steps[i]
+		if s.Op == "close" {
+			closesBefore++
+			continue
+		}
+		if s.Op == "fund" {
+			// A fund step resets the test context — clear tracked expiries.
+			// This prevents stale CancelAfter from a previous sub-test from
+			// affecting the current sub-test's time calibration.
+			maxExpiry = 0
+			lastSettleDelay = 0
+			continue
+		}
+		if s.Op != "tx" || s.TxJSON == nil {
+			continue
+		}
+		var txj map[string]interface{}
+		if err := json.Unmarshal(s.TxJSON, &txj); err != nil {
+			continue
+		}
+		tt, _ := txj["TransactionType"].(string)
+
+		switch tt {
+		case "PaymentChannelCreate":
+			if ca, ok := parseUint32Field(txj, "CancelAfter"); ok && uint64(ca) > maxExpiry {
+				maxExpiry = uint64(ca)
+			}
+			if sd, ok := parseUint32Field(txj, "SettleDelay"); ok {
+				lastSettleDelay = sd
+			}
+		case "PaymentChannelClaim":
+			// If this claim had tfClose flag, it set Expiration on the channel.
+			// Expiration = parentCloseTime_at_claim + SettleDelay.
+			flags, _ := parseUint32Field(txj, "Flags")
+			if flags&0x20000 != 0 && lastSettleDelay > 0 { // tfPayChanClose
+				// Estimate parentCloseTime at the time of this claim.
+				// Each close step advances by 10s from ripple epoch 0.
+				claimParentClose := uint64(closesBefore) * 10
+				settleExpiry := claimParentClose + uint64(lastSettleDelay)
+				if settleExpiry > maxExpiry {
+					maxExpiry = settleExpiry
+				}
+			}
+		case "PaymentChannelFund":
+			if exp, ok := parseUint32Field(txj, "Expiration"); ok && uint64(exp) > maxExpiry {
+				maxExpiry = uint64(exp)
+			}
+		}
+	}
+
+	if maxExpiry == 0 {
+		return // no PayChan expiry values found
+	}
+
+	// Scan ahead for the next PayChan tx after this close (and any
+	// intermediate closes) that expects a channel close in its post_state.
+	closesAfter := uint64(0) // count of close steps between this one and the target tx
+	for j := stepIdx + 1; j < len(steps); j++ {
+		s := steps[j]
+		if s.Op == "env_reset" || s.Op == "fund" {
+			break
+		}
+		if s.Op == "close" {
+			closesAfter++
+			continue
+		}
+		if s.Op != "tx" || s.TxJSON == nil {
+			continue
+		}
+		var txj map[string]interface{}
+		if err := json.Unmarshal(s.TxJSON, &txj); err != nil {
+			break
+		}
+		tt, _ := txj["TransactionType"].(string)
+		if tt != "PaymentChannelClaim" && tt != "PaymentChannelFund" &&
+			tt != "PaymentChannelCreate" && tt != "AccountDelete" &&
+			tt != "Payment" {
+			break
+		}
+
+		// Check if this tx expects a channel auto-close by looking at post_state.
+		needsExpiry := false
+		if s.PostState != nil {
+			for _, as := range s.PostState.Accounts {
+				// A channel close returns funds to the owner and decrements
+				// owner_count. We detect this by looking for owner_count
+				// values that indicate channels were closed.
+				actualOC := r.env.OwnerCount(
+					jtx.NewAccountWithAddress(as.Name, as.Address))
+				if actualOC > as.OwnerCount {
+					needsExpiry = true
+				}
+			}
+		}
+
+		// Also detect auto-close for tecEXPIRED (fixPayChanCancelAfter).
+		if s.ExpectTER == "tecEXPIRED" {
+			needsExpiry = true
+		}
+
+		if !needsExpiry {
+			break
+		}
+
+		// Compute the projected parentCloseTime after this close + intermediate closes.
+		currentRipple := uint64(r.env.Now().Unix()) - rippleEpochOffset
+		projectedClose := currentRipple + 10 + closesAfter*10
+
+		// If the projected close time is already past the expiry, no adjustment needed.
+		if projectedClose >= maxExpiry {
+			break
+		}
+
+		// Need to advance time to maxExpiry so the auto-close check triggers.
+		advanceBy := maxExpiry - projectedClose
+		r.env.AdvanceTime(time.Duration(advanceBy) * time.Second)
+		break
+	}
+}
+
+// parseUint32Field extracts a uint32 value from a JSON map field.
+func parseUint32Field(m map[string]interface{}, key string) (uint32, bool) {
+	v, ok := m[key]
+	if !ok {
+		return 0, false
+	}
+	switch val := v.(type) {
+	case float64:
+		return uint32(val), true
+	case string:
+		parsed, err := strconv.ParseUint(val, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return uint32(parsed), true
+	}
+	return 0, false
 }
 
 // execTx handles a "tx" step.

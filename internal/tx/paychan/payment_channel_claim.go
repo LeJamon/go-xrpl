@@ -118,7 +118,9 @@ func (p *PaymentChannelClaim) Validate() error {
 
 	// Validate CredentialIDs if present
 	// Reference: rippled credentials::checkFields()
-	if p.CredentialIDs != nil {
+	// Use HasField to detect empty arrays from binary parsing where omitempty
+	// causes the Go struct field to be nil even though the field was present.
+	if p.CredentialIDs != nil || p.HasField("CredentialIDs") {
 		if len(p.CredentialIDs) == 0 || len(p.CredentialIDs) > 8 {
 			return tx.Errorf(tx.TemMALFORMED, "CredentialIDs array size is invalid")
 		}
