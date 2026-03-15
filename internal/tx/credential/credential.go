@@ -140,6 +140,12 @@ func (c *CredentialAccept) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
 // Apply applies the CredentialAccept transaction to ledger state.
 // Reference: rippled Credentials.cpp CredentialAccept::doApply()
 func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("credential accept apply",
+		"account", c.Account,
+		"issuer", c.Issuer,
+		"credentialType", c.CredentialType,
+	)
+
 	if c.Issuer == "" || c.CredentialType == "" {
 		return tx.TemINVALID
 	}

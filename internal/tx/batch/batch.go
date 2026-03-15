@@ -286,6 +286,12 @@ func (b *Batch) GetBatchSigners() []tx.BatchSignerInfo {
 // It decodes and processes each inner transaction according to the batch mode flag.
 // Reference: rippled apply.cpp applyBatchTransactions()
 func (b *Batch) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("batch apply",
+		"account", b.Account,
+		"txCount", len(b.RawTransactions),
+		"flags", b.GetFlags(),
+	)
+
 	if len(b.RawTransactions) == 0 {
 		return tx.TemINVALID
 	}

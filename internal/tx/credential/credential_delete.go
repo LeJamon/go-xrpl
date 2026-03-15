@@ -112,6 +112,13 @@ func (c *CredentialDelete) RequiredAmendments() [][32]byte {
 // Apply applies the CredentialDelete transaction to ledger state.
 // Reference: rippled Credentials.cpp CredentialDelete::doApply()
 func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("credential delete apply",
+		"account", c.Account,
+		"subject", c.Subject,
+		"issuer", c.Issuer,
+		"credentialType", c.CredentialType,
+	)
+
 	if c.CredentialType == "" {
 		return tx.TemINVALID
 	}

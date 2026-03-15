@@ -121,6 +121,11 @@ func (d *DIDSet) RequiredAmendments() [][32]byte {
 // Apply applies a DIDSet transaction to the ledger state.
 // Reference: rippled DID.cpp DIDSet::doApply
 func (d *DIDSet) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("did set apply",
+		"account", d.Account,
+		"uri", d.URI,
+	)
+
 	didKey := keylet.DID(ctx.AccountID)
 
 	// Check if DID already exist
