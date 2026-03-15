@@ -434,6 +434,16 @@ func (r Result) String() string {
 		return "telINSUF_FEE_P"
 	case TelCAN_NOT_QUEUE:
 		return "telCAN_NOT_QUEUE"
+	case TelCAN_NOT_QUEUE_BALANCE:
+		return "telCAN_NOT_QUEUE_BALANCE"
+	case TelCAN_NOT_QUEUE_BLOCKS:
+		return "telCAN_NOT_QUEUE_BLOCKS"
+	case TelCAN_NOT_QUEUE_BLOCKED:
+		return "telCAN_NOT_QUEUE_BLOCKED"
+	case TelCAN_NOT_QUEUE_FEE:
+		return "telCAN_NOT_QUEUE_FEE"
+	case TelCAN_NOT_QUEUE_FULL:
+		return "telCAN_NOT_QUEUE_FULL"
 	case TelWRONG_NETWORK:
 		return "telWRONG_NETWORK"
 	case TelREQUIRES_NETWORK_ID:

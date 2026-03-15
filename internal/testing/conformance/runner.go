@@ -128,6 +128,51 @@ type runner struct {
 	// pseudo-account address depends on parentHash, which differs between
 	// rippled and goXRPL due to different ledger hash computation.
 	ammAddrMap map[string]string // lowercase hex of 20-byte account ID
+
+	// txqMinTxn overrides MinimumTxnInLedgerStandalone per fixture.
+	// Set from the fixture's testcase name using txqMinTxnLookup.
+	txqMinTxn uint32
+}
+
+// txqMinTxnLookup maps TxQ fixture test case names to their
+// minimum_txn_in_ledger_standalone values from rippled TxQ_test.cpp.
+var txqMinTxnLookup = map[string]uint32{
+	"queue sequence":                                  3,
+	"queue ticket":                                    3,
+	"queue tec":                                       2,
+	"local tx retry":                                  2,
+	"last ledger sequence":                            2,
+	"zero transaction fee":                            2,
+	"queued tx fails":                                 2,
+	"multi tx per account":                            3,
+	"tie breaking":                                    4,
+	"acct tx id":                                      1,
+	"maximum tx":                                      2,
+	"unexpected balance change":                       3,
+	"blockers sequence":                               3,
+	"blockers ticket":                                 3,
+	"In-flight balance checks":                        3,
+	"acct in queue but empty":                         3,
+	"expiration replacement":                          1,
+	"full queue gap handling":                         1,
+	"Autofilled sequence should account for TxQ":      6,
+	"account info":                                    3,
+	"server info":                                     3,
+	"server subscribe":                                3,
+	"clear queued acct txs":                           3,
+	"scaling":                                         3,
+	"Sequence in queue and open ledger":               3,
+	"Ticket in queue and open ledger":                 3,
+	"Re-execute preflight":                            1,
+	"Queue full drop penalty":                         5,
+	"Cancel queued offers":                            5,
+	"Zero reference fee":                              3,
+	"consequences":                                    2,
+	"fail in preclaim":                                2,
+	"straightfoward positive case":                    3,
+	"replace middle tx with enough to clear queue":    3,
+	"replace last tx with enough to clear queue":      3,
+	"clear queue failure (load)":                      3,
 }
 
 // RunFixture loads and executes a single fixture file.
@@ -147,10 +192,21 @@ func RunFixture(t *testing.T, fixturePath string) {
 	// Detect TxQ suites by fixture path
 	isTxQSuite := strings.Contains(fixturePath, "/TxQ")
 
+	// Look up per-fixture MinimumTxnInLedgerStandalone
+	var minTxn uint32
+	if isTxQSuite {
+		if v, ok := txqMinTxnLookup[fixture.Testcase]; ok {
+			minTxn = v
+		} else {
+			minTxn = 3 // default fallback
+		}
+	}
+
 	r := &runner{
 		t:         t,
 		accounts:  make(map[string]*jtx.Account),
 		enableTxQ: isTxQSuite,
+		txqMinTxn: minTxn,
 	}
 
 	// Detect continuation fixtures: fixtures without fund steps or env config
@@ -522,11 +578,10 @@ func (r *runner) setupEnv(cfg EnvConfig) {
 
 	// Enable TxQ if this is a TxQ test suite. TxQ must be created with the
 	// test env so Submit() routes through fee escalation and queuing.
-	// Use MinimumTxnInLedgerStandalone=2 to match the most common rippled
-	// test config (testPosNegFlows uses minimum_txn_in_ledger_standalone=2).
+	// Use per-fixture MinimumTxnInLedgerStandalone from txqMinTxnLookup.
 	if r.enableTxQ {
 		txqCfg := txq.StandaloneConfig()
-		txqCfg.MinimumTxnInLedgerStandalone = 2
+		txqCfg.MinimumTxnInLedgerStandalone = r.txqMinTxn
 		r.env = jtx.NewTestEnvWithTxQAndConfig(r.t, txqCfg, genCfg)
 	} else {
 		r.env = jtx.NewTestEnvWithConfig(r.t, genCfg)
@@ -1432,7 +1487,10 @@ func (r *runner) autoFundAccounts(steps []Step) {
 		if derived, ok := initialBalances[a.address]; ok && derived > 0 {
 			fundAmount = derived
 		}
+		// Bypass TxQ for auto-fund (setup operation, like rippled's apply())
+		r.env.SetBypassTxQ(true)
 		r.env.FundAmount(acc, fundAmount)
+		r.env.SetBypassTxQ(false)
 	}
 
 	// Close after all funding so state is committed
