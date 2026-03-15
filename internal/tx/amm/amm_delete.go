@@ -73,6 +73,12 @@ func (a *AMMDelete) RequiredAmendments() [][32]byte {
 // Apply applies the AMMDelete transaction to ledger state.
 // Reference: rippled AMMDelete.cpp preclaim + doApply
 func (a *AMMDelete) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("amm delete apply",
+		"account", a.Account,
+		"asset", a.Asset,
+		"asset2", a.Asset2,
+	)
+
 	// Preclaim: AMM must exist and be empty
 	// Reference: rippled AMMDelete.cpp preclaim (line 49-63)
 	ammKey := computeAMMKeylet(a.Asset, a.Asset2)

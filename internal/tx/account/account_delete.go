@@ -68,6 +68,11 @@ func (a *AccountDelete) Flatten() (map[string]any, error) {
 // Apply applies the AccountDelete transaction to ledger state.
 // Reference: rippled DeleteAccount.cpp DeleteAccount::preclaim() + doApply()
 func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("account delete apply",
+		"account", a.Account,
+		"destination", a.Destination,
+	)
+
 	// Check minimum ledger gap: account sequence must be far enough behind the ledger.
 	// Uses addition (seq + 255 > ledgerSeq) instead of subtraction to avoid uint32 underflow.
 	// Reference: rippled DeleteAccount.cpp preclaim():

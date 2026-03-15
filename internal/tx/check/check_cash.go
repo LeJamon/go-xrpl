@@ -115,6 +115,13 @@ func (c *CheckCash) RequiredAmendments() [][32]byte {
 
 // Apply implements preclaim + doApply matching rippled's CashCheck.
 func (c *CheckCash) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("check cash apply",
+		"account", c.Account,
+		"checkID", c.CheckID,
+		"amount", c.Amount,
+		"deliverMin", c.DeliverMin,
+	)
+
 	// Parse check ID
 	checkIDBytes, err := hex.DecodeString(c.CheckID)
 	if err != nil || len(checkIDBytes) != 32 {

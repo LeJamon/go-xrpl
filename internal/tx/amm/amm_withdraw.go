@@ -191,6 +191,15 @@ func (a *AMMWithdraw) RequiredAmendments() [][32]byte {
 // Apply applies the AMMWithdraw transaction to ledger state.
 // Reference: rippled AMMWithdraw.cpp applyGuts
 func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("amm withdraw apply",
+		"account", a.Account,
+		"asset", a.Asset,
+		"asset2", a.Asset2,
+		"amount", a.Amount,
+		"amount2", a.Amount2,
+		"flags", a.GetFlags(),
+	)
+
 	accountID := ctx.AccountID
 
 	// Find the AMM

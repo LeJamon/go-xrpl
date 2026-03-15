@@ -83,6 +83,13 @@ func (a *AMMVote) RequiredAmendments() [][32]byte {
 // Apply applies the AMMVote transaction to ledger state.
 // Reference: rippled AMMVote.cpp applyVote
 func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("amm vote apply",
+		"account", a.Account,
+		"asset", a.Asset,
+		"asset2", a.Asset2,
+		"tradingFee", a.TradingFee,
+	)
+
 	accountID := ctx.AccountID
 
 	// Find the AMM

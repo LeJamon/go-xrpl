@@ -103,6 +103,13 @@ func (a *AMMCreate) RequiredAmendments() [][32]byte {
 // Apply applies the AMMCreate transaction to ledger state.
 // Reference: rippled AMMCreate.cpp preclaim + doApply/applyCreate
 func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("amm create apply",
+		"account", a.Account,
+		"amount", a.Amount,
+		"amount2", a.Amount2,
+		"tradingFee", a.TradingFee,
+	)
+
 	accountID := ctx.AccountID
 
 	// Build assets for keylet computation

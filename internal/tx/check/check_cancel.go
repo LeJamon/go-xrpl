@@ -68,6 +68,11 @@ func (c *CheckCancel) RequiredAmendments() [][32]byte {
 
 // Apply implements preclaim + doApply matching rippled's CancelCheck.
 func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("check cancel apply",
+		"account", c.Account,
+		"checkID", c.CheckID,
+	)
+
 	// Parse check ID
 	checkID, err := hex.DecodeString(c.CheckID)
 	if err != nil || len(checkID) != 32 {

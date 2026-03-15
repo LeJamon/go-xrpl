@@ -99,6 +99,12 @@ func (c *CheckCreate) RequiredAmendments() [][32]byte {
 
 // Apply implements preclaim + doApply matching rippled's CreateCheck.
 func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("check create apply",
+		"account", c.Account,
+		"destination", c.Destination,
+		"sendMax", c.SendMax,
+	)
+
 	// --- Preclaim checks ---
 
 	// Verify destination exists and is not a pseudo-account

@@ -288,6 +288,12 @@ func (a *AccountSet) EnableDefaultRipple() {
 
 // Apply applies the AccountSet transaction to ledger state.
 func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("account set apply",
+		"account", a.Account,
+		"setFlag", a.SetFlag,
+		"clearFlag", a.ClearFlag,
+	)
+
 	account := ctx.Account
 	uFlagsIn := account.Flags
 	uFlagsOut := uFlagsIn

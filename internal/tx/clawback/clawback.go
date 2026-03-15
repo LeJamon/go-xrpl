@@ -122,6 +122,12 @@ func (c *Clawback) Validate() error {
 // Apply applies the Clawback transaction to ledger state.
 // Reference: rippled Clawback.cpp preclaim() + applyHelper<Issue>() / applyHelper<MPTIssue>()
 func (c *Clawback) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("clawback apply",
+		"account", c.Account,
+		"amount", c.Amount,
+		"holder", c.Holder,
+	)
+
 	if c.Holder != "" {
 		return c.applyMPT(ctx)
 	}

@@ -120,6 +120,14 @@ func (a *AMMBid) RequiredAmendments() [][32]byte {
 // Apply applies the AMMBid transaction to ledger state.
 // Reference: rippled AMMBid.cpp applyBid
 func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("amm bid apply",
+		"account", a.Account,
+		"asset", a.Asset,
+		"asset2", a.Asset2,
+		"bidMin", a.BidMin,
+		"bidMax", a.BidMax,
+	)
+
 	accountID := ctx.AccountID
 
 	// Find the AMM
