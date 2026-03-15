@@ -193,6 +193,20 @@ func parseSpecialFields(k string, v any) (any, error) {
 		}
 	}
 
+	// Resolve LedgerEntryType strings to their correct ledger entry type code.
+	// UInt16.FromJSON tries transaction types first, which causes collisions for
+	// names shared by both maps (e.g., "DepositPreauth" is tx type 19 but ledger
+	// entry type 112). By resolving here we guarantee the ledger entry map wins.
+	if k == "LedgerEntryType" {
+		if strValue, ok := v.(string); ok {
+			code, err := definitions.Get().GetLedgerEntryTypeCodeByLedgerEntryTypeName(strValue)
+			if err != nil {
+				return nil, err
+			}
+			return int(code), nil
+		}
+	}
+
 	return v, nil
 }
 

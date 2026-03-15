@@ -1104,16 +1104,13 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 		}
 	}
 
-	// Zero-fee rejection: always reject fee=0 when baseFee > 0, regardless of
-	// open/closed ledger. In rippled, the TxQ rejects zero-fee transactions
-	// because feeLevelPaid=0 is below the minimum queue threshold.
-	// This ensures password-spent and similar checks work in conformance mode.
+	// Zero-fee rejection: always reject fee=0 when baseFee > 0.
 	if fee == 0 && baseFeeForTx > 0 {
 		return TelINSUF_FEE_P
 	}
 
-	// Full fee adequacy check: only when the ledger is open.
-	// Reference: rippled Transactor::checkFee — "Only check fee is
+	// Fee adequacy check: only when the ledger is open.
+	// Reference: rippled Transactor::checkFee -- "Only check fee is
 	// sufficient when the ledger is open."
 	if e.config.OpenLedger {
 		if fee < baseFeeForTx {
@@ -1597,6 +1594,36 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		Log:              e.logger,
 	}
 
+	// Consume ticket BEFORE Apply, matching rippled's Transactor::apply()
+	// which calls consumeSeqProxy() before doApply(). This ensures that when
+	// doApply() iterates the owner directory (e.g., AccountDelete), the
+	// consumed ticket is already gone.
+	if isTicket {
+		ticketKey := keylet.Ticket(accountID, *common.TicketSequence)
+		ownerDirKey := keylet.OwnerDir(accountID)
+		var ticketOwnerNode uint64
+		if ticketData, ticketErr := table.Read(ticketKey); ticketErr == nil && ticketData != nil {
+			ticketOwnerNode = state.GetOwnerNode(ticketData)
+		}
+		state.DirRemove(table, ownerDirKey, ticketOwnerNode, ticketKey.Key, true)
+		if err := table.Erase(ticketKey); err != nil {
+			return TefINTERNAL
+		}
+		if account.OwnerCount > 0 {
+			account.OwnerCount--
+		}
+		if account.TicketCount > 0 {
+			account.TicketCount--
+		}
+		preApplyData2, preApplyErr2 := state.SerializeAccountRoot(account)
+		if preApplyErr2 != nil {
+			return TefINTERNAL
+		}
+		if err := table.Update(accountKey, preApplyData2); err != nil {
+			return TefINTERNAL
+		}
+	}
+
 	// Set NumberSwitchover based on fixUniversalNumber amendment.
 	// When enabled, IOUAmount arithmetic uses Guard-based precision (XRPLNumber).
 	// Reference: rippled's setSTNumberSwitchover() in IOUAmount.cpp
@@ -1628,31 +1655,8 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		result = TecOVERSIZE
 	}
 
-	// Consume ticket on success (tec ticket consumption is handled in the tec block below
-	// via a tracked ApplyStateTable so that proper metadata is generated).
-	// Reference: rippled Transactor::consumeSeqProxy + ticketDelete
-	if isTicket && result == TesSUCCESS {
-		ticketKey := keylet.Ticket(accountID, *common.TicketSequence)
-		ownerDirKey := keylet.OwnerDir(accountID)
-		// Read ticket SLE to get OwnerNode (directory page) for proper removal.
-		// Reference: rippled Transactor::ticketDelete reads (*sleTicket)[sfOwnerNode]
-		var ticketOwnerNode uint64
-		if ticketData, ticketErr := table.Read(ticketKey); ticketErr == nil && ticketData != nil {
-			ticketOwnerNode = state.GetOwnerNode(ticketData)
-		}
-		state.DirRemove(table, ownerDirKey, ticketOwnerNode, ticketKey.Key, true)
-		if err := table.Erase(ticketKey); err != nil {
-			return TefINTERNAL
-		}
-		if account.OwnerCount > 0 {
-			account.OwnerCount--
-		}
-		// Decrement TicketCount on the AccountRoot
-		// Reference: rippled Transactor::consumeSeqProxy() updates sfTicketCount
-		if account.TicketCount > 0 {
-			account.TicketCount--
-		}
-	}
+	// Ticket was already consumed before Apply (see below). No post-Apply
+	// ticket consumption needed for success results.
 
 	// For tec results, only apply fee/sequence changes, not transaction effects.
 	// Reference: rippled Transactor.cpp — tec codes claim the fee but discard
