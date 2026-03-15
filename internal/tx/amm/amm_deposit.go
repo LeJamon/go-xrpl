@@ -704,6 +704,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 	default:
+		ctx.Log.Error("amm deposit: invalid options")
 		return tx.TemMALFORMED
 	}
 

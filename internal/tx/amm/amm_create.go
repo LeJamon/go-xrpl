@@ -285,9 +285,11 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Store the AMM pseudo-account
 	ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
 	if err != nil {
+		ctx.Log.Error("amm create: failed to create pseudo account")
 		return tx.TefINTERNAL
 	}
 	if err := ctx.View.Insert(ammAccountKey, ammAccountBytes); err != nil {
+		ctx.Log.Error("amm create: failed to insert pseudo account")
 		return tx.TefINTERNAL
 	}
 
@@ -383,6 +385,13 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	if err := ctx.View.Update(ammAccountKey, ammAccountBytes); err != nil {
 		return tx.TefINTERNAL
 	}
+
+	ctx.Log.Debug("amm create: success",
+		"ammAccount", ammAccountAddr,
+		"lpTokens", lpTokenBalance,
+		"amount", sortedAmount1,
+		"amount2", sortedAmount2,
+	)
 
 	return tx.TesSUCCESS
 }

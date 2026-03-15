@@ -280,6 +280,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		if isLessOrEqual(computedPrice, bidMax) {
 			payPrice = maxAmount(computedPrice, bidMin)
 		} else {
+			ctx.Log.Debug("amm bid: not in range", "computedPrice", computedPrice, "bidMin", bidMin, "bidMax", bidMax)
 			return tx.TecAMM_FAILED
 		}
 	} else if hasBidMin {
@@ -290,6 +291,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		if isLessOrEqual(computedPrice, bidMax) {
 			payPrice = computedPrice
 		} else {
+			ctx.Log.Debug("amm bid: not in range", "computedPrice", computedPrice, "bidMax", bidMax)
 			return tx.TecAMM_FAILED
 		}
 	} else {
@@ -311,7 +313,8 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Refund previous owner: refund = fractionRemaining * pricePurchased
 		refund = fractionRemaining.Mul(pricePurchased, false)
 		if isGreater(refund, payPrice) {
-			return tx.TefINTERNAL // Should not happen
+			ctx.Log.Error("amm bid: refund exceeds payPrice", "refund", refund, "payPrice", payPrice)
+			return tx.TefINTERNAL
 		}
 		burn, _ = payPrice.Sub(refund)
 
@@ -329,6 +332,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Burn LP tokens: debit bidder's trust line by burn amount, then reduce AMM LPTokenBalance.
 	// Reference: rippled AMMBid.cpp:262 — redeemIOU(account_, saBurn, lpTokens.issue())
 	if isGreater(burn, lptAMMBalance) {
+		ctx.Log.Error("amm bid: LP token burn exceeds AMM balance", "burn", burn, "lptAMMBalance", lptAMMBalance)
 		return tx.TefINTERNAL
 	}
 	if !burn.IsZero() {

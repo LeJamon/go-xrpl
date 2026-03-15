@@ -330,6 +330,9 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 			}
 
 		default:
+			ctx.Log.Error("account delete: undeletable item in owner directory",
+				"entryType", entryType,
+			)
 			return tx.TecHAS_OBLIGATIONS
 		}
 	}
@@ -342,10 +345,12 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Re-read destination in case it was modified during cascade deletions
 	destData, err := ctx.View.Read(destKey)
 	if err != nil {
+		ctx.Log.Error("account delete: failed to re-read destination account")
 		return tx.TefINTERNAL
 	}
 	destAccount, err = state.ParseAccountRoot(destData)
 	if err != nil {
+		ctx.Log.Error("account delete: failed to parse destination account")
 		return tx.TefINTERNAL
 	}
 

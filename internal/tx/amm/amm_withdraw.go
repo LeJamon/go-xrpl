@@ -591,6 +591,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 	default:
+		ctx.Log.Error("amm withdraw: invalid options")
 		return tx.TemMALFORMED
 	}
 

@@ -115,7 +115,7 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled AMMVote.cpp preclaim line 73-79
 	lpTokensNew := ammLPHolds(ctx.View, amm, accountID)
 	if lpTokensNew.IsZero() {
-		// Account is not a liquidity provider
+		ctx.Log.Debug("amm vote: account is not LP", "account", a.Account)
 		return tx.TecAMM_INVALID_TOKENS
 	}
 
