@@ -72,9 +72,9 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 		}
 	}
 
-	// Parse the stored transaction data
-	var storedTx StoredTransaction
-	if err := json.Unmarshal(txInfo.TxData, &storedTx); err != nil {
+	// Parse the stored transaction data (VL-encoded binary or JSON)
+	storedTx, err := decodeTxBlob(txInfo.TxData)
+	if err != nil {
 		return nil, types.RpcErrorInternal("Failed to parse transaction data")
 	}
 

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"strings"
 
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 // RequireLedgerService checks that the ledger service is available.
@@ -121,6 +123,38 @@ func (AdminHandler) SupportedApiVersions() []int {
 	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 func (AdminHandler) RequiredCondition() types.Condition { return types.NoCondition }
+
+// decodeTxBlob decodes transaction data that may be in one of two formats:
+//  1. VL-encoded binary blob: [VL-prefix][tx_bytes][VL-prefix][meta_bytes]
+//     (produced by tx.CreateTxWithMetaBlob, stored via AddTransactionWithMeta)
+//  2. JSON-marshaled StoredTransaction: {"tx_json":{...},"meta":{...}}
+//     (produced by the submit handler)
+//
+// It tries VL binary decode first, then falls back to JSON unmarshal.
+func decodeTxBlob(data []byte) (StoredTransaction, error) {
+	// Try VL-encoded binary format first
+	txBytes, metaBytes, err := tx.SplitTxWithMetaBlob(data)
+	if err == nil {
+		txJSON, decErr := binarycodec.Decode(hex.EncodeToString(txBytes))
+		if decErr == nil {
+			st := StoredTransaction{TxJSON: txJSON}
+			if len(metaBytes) > 0 {
+				metaJSON, metaErr := binarycodec.Decode(hex.EncodeToString(metaBytes))
+				if metaErr == nil {
+					st.Meta = metaJSON
+				}
+			}
+			return st, nil
+		}
+	}
+
+	// Fall back to JSON format
+	var st StoredTransaction
+	if jsonErr := json.Unmarshal(data, &st); jsonErr != nil {
+		return StoredTransaction{}, jsonErr
+	}
+	return st, nil
+}
 
 // InjectDeliveredAmount adds DeliveredAmount to metadata for Payment transactions.
 // If meta has a "DeliveredAmount" field already, it is left as-is.

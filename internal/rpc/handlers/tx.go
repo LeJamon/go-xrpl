@@ -63,9 +63,9 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interf
 		}
 	}
 
-	// Parse the stored transaction data
-	var storedTx StoredTransaction
-	if err := json.Unmarshal(txInfo.TxData, &storedTx); err != nil {
+	// Parse the stored transaction data (VL-encoded binary or JSON)
+	storedTx, err := decodeTxBlob(txInfo.TxData)
+	if err != nil {
 		return nil, types.RpcErrorInternal("Failed to parse transaction data")
 	}
 
@@ -252,11 +252,28 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 	ledgerHash := ledger.Hash()
 	ledgerHashStr := strings.ToUpper(fmt.Sprintf("%x", ledgerHash))
 
+	// Decode the VL-encoded blob into tx + meta
+	storedTx, decodeErr := decodeTxBlob(foundData)
+
 	if binary {
 		response := map[string]interface{}{}
-		response["tx_blob"] = strings.ToUpper(hex.EncodeToString(foundData))
-		if ctx.ApiVersion > 1 {
-			response["meta_blob"] = "" // no separate metadata in raw CTID lookup binary path
+		if decodeErr == nil {
+			txBlob, err := binarycodec.Encode(storedTx.TxJSON)
+			if err == nil {
+				response["tx_blob"] = txBlob
+			}
+			if storedTx.Meta != nil {
+				metaBlob, err := binarycodec.Encode(storedTx.Meta)
+				if err == nil {
+					if ctx.ApiVersion > 1 {
+						response["meta_blob"] = metaBlob
+					} else {
+						response["meta"] = metaBlob
+					}
+				}
+			}
+		} else {
+			response["tx_blob"] = strings.ToUpper(hex.EncodeToString(foundData))
 		}
 		response["hash"] = hashStr
 		response["ledger_index"] = ledgerSeq
@@ -269,14 +286,10 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 		return response, nil
 	}
 
-	// Decode the raw transaction blob to JSON
-	txHex := hex.EncodeToString(foundData)
-	decoded, decodeErr := binarycodec.Decode(txHex)
-
 	if ctx.ApiVersion > 1 {
 		response := map[string]interface{}{}
 		if decodeErr == nil {
-			txJSON := decoded
+			txJSON := storedTx.TxJSON
 			if closeTimeSec > 0 {
 				txJSON["date"] = closeTimeSec
 			}
@@ -284,6 +297,10 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 				txJSON["ctid"] = encodeCTID(ledgerSeq, txIndex)
 			}
 			response["tx_json"] = txJSON
+			if storedTx.Meta != nil {
+				InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
+				response["meta"] = storedTx.Meta
+			}
 		}
 		response["hash"] = hashStr
 		response["ledger_index"] = ledgerSeq
@@ -305,8 +322,12 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 		"ledger_hash":  ledgerHashStr,
 	}
 	if decodeErr == nil {
-		for k, v := range decoded {
+		for k, v := range storedTx.TxJSON {
 			response[k] = v
+		}
+		if storedTx.Meta != nil {
+			InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
+			response["meta"] = storedTx.Meta
 		}
 	}
 	if closeTimeSec > 0 {
