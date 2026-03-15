@@ -187,9 +187,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 }
 
 // expandTransaction builds an expanded transaction object from raw txData.
-// It handles two storage formats:
-//  1. JSON StoredTransaction: {"tx_json": {...}, "meta": {...}}
-//  2. Raw binary blob (decoded via binarycodec)
+// It handles VL-encoded binary blobs and JSON StoredTransaction format.
 //
 // The output format varies by API version:
 //   - API v1: tx fields at top level + "metaData" for metadata
@@ -198,14 +196,16 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 // For binary mode, tx_blob and meta_blob/meta are returned as hex strings.
 // Reference: rippled LedgerToJson.cpp fillJsonTx()
 func expandTransaction(txData []byte, hashStr string, binary bool, apiVersion int) map[string]interface{} {
-	// Try JSON StoredTransaction format first (used by submit handler)
-	var storedTx StoredTransaction
-	if err := json.Unmarshal(txData, &storedTx); err == nil && storedTx.TxJSON != nil {
+	storedTx, err := decodeTxBlob(txData)
+	if err == nil && storedTx.TxJSON != nil {
 		return expandStoredTransaction(storedTx, hashStr, binary, apiVersion)
 	}
 
-	// Fall back to raw binary blob
-	return expandBinaryTransaction(txData, hashStr, binary, apiVersion)
+	// Cannot decode: return raw blob
+	txEntry := map[string]interface{}{}
+	txEntry["tx_blob"] = strings.ToUpper(hex.EncodeToString(txData))
+	txEntry["hash"] = hashStr
+	return txEntry
 }
 
 // expandStoredTransaction formats a JSON-stored transaction for the response.
@@ -251,38 +251,6 @@ func expandStoredTransaction(storedTx StoredTransaction, hashStr string, binary 
 			InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
 			txEntry["metaData"] = storedTx.Meta
 		}
-	}
-	return txEntry
-}
-
-// expandBinaryTransaction formats a raw binary transaction blob for the response.
-func expandBinaryTransaction(txData []byte, hashStr string, binary bool, apiVersion int) map[string]interface{} {
-	txEntry := map[string]interface{}{}
-
-	if binary {
-		txEntry["tx_blob"] = strings.ToUpper(hex.EncodeToString(txData))
-		txEntry["hash"] = hashStr
-		return txEntry
-	}
-
-	// Try to decode binary blob via binarycodec
-	txHex := hex.EncodeToString(txData)
-	decoded, err := binarycodec.Decode(txHex)
-	if err != nil {
-		// Cannot decode: return raw blob
-		txEntry["tx_blob"] = strings.ToUpper(txHex)
-		txEntry["hash"] = hashStr
-		return txEntry
-	}
-
-	if apiVersion > 1 {
-		txEntry["tx_json"] = decoded
-		txEntry["hash"] = hashStr
-	} else {
-		for k, v := range decoded {
-			txEntry[k] = v
-		}
-		txEntry["hash"] = hashStr
 	}
 	return txEntry
 }
