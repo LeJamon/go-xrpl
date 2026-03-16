@@ -65,6 +65,12 @@ func (e *EscrowCancel) Flatten() (map[string]any, error) {
 // Apply applies an EscrowCancel transaction
 // Reference: rippled Escrow.cpp EscrowCancel::preclaim() + doApply()
 func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("escrow cancel apply",
+		"account", e.Account,
+		"owner", e.Owner,
+		"offerSequence", e.OfferSequence,
+	)
+
 	rules := ctx.Rules()
 
 	// Get the escrow owner's account ID
@@ -77,12 +83,17 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	escrowKey := keylet.Escrow(ownerID, e.OfferSequence)
 	escrowData, err := ctx.View.Read(escrowKey)
 	if err != nil || escrowData == nil {
+		ctx.Log.Warn("escrow cancel: escrow not found",
+			"owner", e.Owner,
+			"offerSequence", e.OfferSequence,
+		)
 		return tx.TecNO_TARGET
 	}
 
 	// Parse escrow
 	escrowEntry, err := state.ParseEscrow(escrowData)
 	if err != nil {
+		ctx.Log.Error("escrow cancel: failed to parse escrow", "error", err)
 		return tx.TefINTERNAL
 	}
 
@@ -119,11 +130,13 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 		ownerKey := keylet.Account(ownerID)
 		ownerData, err := ctx.View.Read(ownerKey)
 		if err != nil {
+			ctx.Log.Error("escrow cancel: failed to read owner account", "error", err)
 			return tx.TefINTERNAL
 		}
 
 		ownerAccount, err := state.ParseAccountRoot(ownerData)
 		if err != nil {
+			ctx.Log.Error("escrow cancel: failed to parse owner account", "error", err)
 			return tx.TefINTERNAL
 		}
 
@@ -150,6 +163,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Delete the escrow - deletion tracked automatically by ApplyStateTable
 	if err := ctx.View.Erase(escrowKey); err != nil {
+		ctx.Log.Error("escrow cancel: failed to erase escrow", "error", err)
 		return tx.TefINTERNAL
 	}
 

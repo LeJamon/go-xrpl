@@ -125,6 +125,14 @@ func (e *EscrowCreate) Flatten() (map[string]any, error) {
 // Apply applies an EscrowCreate transaction
 // Reference: rippled Escrow.cpp EscrowCreate::doApply()
 func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("escrow create apply",
+		"account", e.Account,
+		"destination", e.Destination,
+		"amount", e.Amount,
+		"finishAfter", e.FinishAfter,
+		"cancelAfter", e.CancelAfter,
+	)
+
 	rules := ctx.Rules()
 	closeTime := ctx.Config.ParentCloseTime
 
@@ -166,12 +174,19 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled Escrow.cpp:511-512, 373-378
 	destAccount, destID, result := ctx.LookupDestination(e.Destination)
 	if result != tx.TesSUCCESS {
+		ctx.Log.Warn("escrow create: destination lookup failed",
+			"destination", e.Destination,
+			"result", result,
+		)
 		return result
 	}
 
 	// Destination tag check
 	// Reference: rippled Escrow.cpp:517-519
 	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && e.DestinationTag == nil {
+		ctx.Log.Warn("escrow create: destination tag required",
+			"destination", e.Destination,
+		)
 		return tx.TecDST_TAG_NEEDED
 	}
 
@@ -187,9 +202,17 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled Escrow.cpp:496-509
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
 	if ctx.Account.Balance < reserve {
+		ctx.Log.Warn("escrow create: insufficient reserve",
+			"balance", ctx.Account.Balance,
+			"reserve", reserve,
+		)
 		return tx.TecINSUFFICIENT_RESERVE
 	}
 	if ctx.Account.Balance < reserve+uint64(amount) {
+		ctx.Log.Warn("escrow create: unfunded",
+			"balance", ctx.Account.Balance,
+			"needed", reserve+uint64(amount),
+		)
 		return tx.TecUNFUNDED
 	}
 
@@ -205,11 +228,13 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Serialize escrow
 	escrowData, err := serializeEscrow(e, accountID, destID, sequence, uint64(amount))
 	if err != nil {
+		ctx.Log.Error("escrow create: failed to serialize escrow", "error", err)
 		return tx.TefINTERNAL
 	}
 
 	// Insert escrow - creation tracked automatically by ApplyStateTable
 	if err := ctx.View.Insert(escrowKey, escrowData); err != nil {
+		ctx.Log.Error("escrow create: failed to insert escrow", "error", err)
 		return tx.TefINTERNAL
 	}
 
@@ -220,6 +245,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		dir.Owner = accountID
 	})
 	if err != nil {
+		ctx.Log.Error("escrow create: owner directory full", "error", err)
 		return tx.TecDIR_FULL
 	}
 
@@ -232,6 +258,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 			dir.Owner = destID
 		})
 		if err != nil {
+			ctx.Log.Error("escrow create: destination directory full", "error", err)
 			return tx.TecDIR_FULL
 		}
 

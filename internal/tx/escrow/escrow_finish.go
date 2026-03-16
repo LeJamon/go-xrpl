@@ -91,6 +91,12 @@ func (e *EscrowFinish) Flatten() (map[string]any, error) {
 // Apply applies an EscrowFinish transaction
 // Reference: rippled Escrow.cpp EscrowFinish::preclaim() + doApply()
 func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("escrow finish apply",
+		"account", e.Account,
+		"owner", e.Owner,
+		"offerSequence", e.OfferSequence,
+	)
+
 	rules := ctx.Rules()
 
 	// Amendment-gated check: CredentialIDs requires Credentials amendment
@@ -119,12 +125,17 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	escrowKey := keylet.Escrow(ownerID, e.OfferSequence)
 	escrowData, err := ctx.View.Read(escrowKey)
 	if err != nil || escrowData == nil {
+		ctx.Log.Warn("escrow finish: escrow not found",
+			"owner", e.Owner,
+			"offerSequence", e.OfferSequence,
+		)
 		return tx.TecNO_TARGET
 	}
 
 	// Parse escrow
 	escrowEntry, err := state.ParseEscrow(escrowData)
 	if err != nil {
+		ctx.Log.Error("escrow finish: failed to parse escrow", "error", err)
 		return tx.TefINTERNAL
 	}
 
@@ -165,23 +176,28 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	if escrowEntry.Condition == "" {
 		// Escrow has no condition — tx must NOT provide condition/fulfillment
 		if txCondition != "" || txFulfillment != "" {
+			ctx.Log.Warn("escrow finish: condition/fulfillment provided but escrow has no condition")
 			return tx.TecCRYPTOCONDITION_ERROR
 		}
 	} else {
 		// Escrow has a condition — fulfillment is required (non-empty)
 		if txFulfillment == "" {
+			ctx.Log.Warn("escrow finish: fulfillment required but not provided")
 			return tx.TecCRYPTOCONDITION_ERROR
 		}
 
 		// Condition in tx must match condition on escrow
 		if txCondition != escrowEntry.Condition {
+			ctx.Log.Warn("escrow finish: condition mismatch")
 			return tx.TecCRYPTOCONDITION_ERROR
 		}
 
 		// Verify fulfillment matches condition
 		if err := validateCryptoCondition(txFulfillment, escrowEntry.Condition); err != nil {
+			ctx.Log.Debug("escrow finish: fulfillment verification failed", "error", err)
 			return tx.TecCRYPTOCONDITION_ERROR
 		}
+		ctx.Log.Debug("escrow finish: fulfillment verified successfully")
 	}
 
 	// Determine if finisher is the destination and/or the owner.
@@ -247,6 +263,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Delete the escrow
 	if err := ctx.View.Erase(escrowKey); err != nil {
+		ctx.Log.Error("escrow finish: failed to erase escrow", "error", err)
 		return tx.TefINTERNAL
 	}
 
