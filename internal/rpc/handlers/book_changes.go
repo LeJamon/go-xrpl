@@ -69,9 +69,9 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	changes := make(map[string]*bookChange)
 
 	targetLedger.ForEachTransaction(func(txHash [32]byte, txData []byte) bool {
-		// Try to parse as StoredTransaction (JSON format from submit handler)
-		var storedTx StoredTransaction
-		if err := json.Unmarshal(txData, &storedTx); err != nil {
+		// Decode VL-encoded binary blob (or JSON fallback)
+		storedTx, err := decodeTxBlob(txData)
+		if err != nil {
 			return true // skip, continue
 		}
 
