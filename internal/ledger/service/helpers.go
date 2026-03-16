@@ -111,8 +111,7 @@ func sortBookOffersByQuality(offers []BookOffer) {
 
 // helper function to format ledger range
 func formatRange(min, max uint32) string {
-	// Simple implementation - could be improved
-	return string(rune(min)) + "-" + string(rune(max))
+	return strconv.FormatUint(uint64(min), 10) + "-" + strconv.FormatUint(uint64(max), 10)
 }
 
 // getLedgerEntryType extracts the entry type from serialized data.
