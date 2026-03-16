@@ -22,7 +22,6 @@ app/NFTokenBurnWOFixNFTPageLinks
 app/NFTokenBurnWOFixTokenRemint
 app/NFTokenDir
 app/Regression
-app/SetAuth
 app/ThinBook
 app/Transaction_ordering
 ledger/BookDirs
