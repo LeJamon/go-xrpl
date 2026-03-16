@@ -21,8 +21,8 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/amm"
 	_ "github.com/LeJamon/goXRPLd/internal/tx/all"
+	"github.com/LeJamon/goXRPLd/internal/tx/amm"
 	"github.com/LeJamon/goXRPLd/internal/tx/trustset"
 	"github.com/LeJamon/goXRPLd/internal/txq"
 )
@@ -68,10 +68,10 @@ type Step struct {
 // that cannot be reached through regular transactions (e.g., setting
 // MintedNFTokens to 0xFFFFFFFE to test overflow detection).
 type ModifyState struct {
-	Account              string         `json:"account"`
-	MintedNFTokens       *uint32        `json:"minted_nftokens,omitempty"`
-	FirstNFTokenSequence *uint32        `json:"first_nftoken_sequence,omitempty"`
-	BumpLastPage         *BumpLastPage  `json:"bump_last_page,omitempty"`
+	Account              string        `json:"account"`
+	MintedNFTokens       *uint32       `json:"minted_nftokens,omitempty"`
+	FirstNFTokenSequence *uint32       `json:"first_nftoken_sequence,omitempty"`
+	BumpLastPage         *BumpLastPage `json:"bump_last_page,omitempty"`
 }
 
 // BumpLastPage describes a directory page bump operation.
@@ -149,42 +149,42 @@ type runner struct {
 // txqMinTxnLookup maps TxQ fixture test case names to their
 // minimum_txn_in_ledger_standalone values from rippled TxQ_test.cpp.
 var txqMinTxnLookup = map[string]uint32{
-	"queue sequence":                                  3,
-	"queue ticket":                                    3,
-	"queue tec":                                       2,
-	"local tx retry":                                  2,
-	"last ledger sequence":                            2,
-	"zero transaction fee":                            2,
-	"queued tx fails":                                 2,
-	"multi tx per account":                            3,
-	"tie breaking":                                    4,
-	"acct tx id":                                      1,
-	"maximum tx":                                      2,
-	"unexpected balance change":                       3,
-	"blockers sequence":                               3,
-	"blockers ticket":                                 3,
-	"In-flight balance checks":                        3,
-	"acct in queue but empty":                         3,
-	"expiration replacement":                          1,
-	"full queue gap handling":                         1,
-	"Autofilled sequence should account for TxQ":      6,
-	"account info":                                    3,
-	"server info":                                     3,
-	"server subscribe":                                3,
-	"clear queued acct txs":                           3,
-	"scaling":                                         3,
-	"Sequence in queue and open ledger":               3,
-	"Ticket in queue and open ledger":                 3,
-	"Re-execute preflight":                            1,
-	"Queue full drop penalty":                         5,
-	"Cancel queued offers":                            5,
-	"Zero reference fee":                              3,
-	"consequences":                                    2,
-	"fail in preclaim":                                2,
-	"straightfoward positive case":                    3,
-	"replace middle tx with enough to clear queue":    3,
-	"replace last tx with enough to clear queue":      3,
-	"clear queue failure (load)":                      3,
+	"queue sequence":                               3,
+	"queue ticket":                                 3,
+	"queue tec":                                    2,
+	"local tx retry":                               2,
+	"last ledger sequence":                         2,
+	"zero transaction fee":                         2,
+	"queued tx fails":                              2,
+	"multi tx per account":                         3,
+	"tie breaking":                                 4,
+	"acct tx id":                                   1,
+	"maximum tx":                                   2,
+	"unexpected balance change":                    3,
+	"blockers sequence":                            3,
+	"blockers ticket":                              3,
+	"In-flight balance checks":                     3,
+	"acct in queue but empty":                      3,
+	"expiration replacement":                       1,
+	"full queue gap handling":                      1,
+	"Autofilled sequence should account for TxQ":   6,
+	"account info":                                 3,
+	"server info":                                  3,
+	"server subscribe":                             3,
+	"clear queued acct txs":                        3,
+	"scaling":                                      3,
+	"Sequence in queue and open ledger":            3,
+	"Ticket in queue and open ledger":              3,
+	"Re-execute preflight":                         1,
+	"Queue full drop penalty":                      5,
+	"Cancel queued offers":                         5,
+	"Zero reference fee":                           3,
+	"consequences":                                 2,
+	"fail in preclaim":                             2,
+	"straightfoward positive case":                 3,
+	"replace middle tx with enough to clear queue": 3,
+	"replace last tx with enough to clear queue":   3,
+	"clear queue failure (load)":                   3,
 }
 
 // RunFixture loads and executes a single fixture file.

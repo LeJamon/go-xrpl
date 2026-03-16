@@ -17,7 +17,9 @@ import (
 // succNFTokenPage finds the first NFToken page key strictly greater than
 // first.Key and at most last.Key, falling back to last.Key if none exists.
 // This mirrors rippled's:
-//   view.succ(first.key, last.key.next()).value_or(last.key)
+//
+//	view.succ(first.key, last.key.next()).value_or(last.key)
+//
 // where succ(start, upperBound) returns the first key > start and < upperBound.
 func succNFTokenPage(view tx.LedgerView, first, last keylet.Keylet) ([32]byte, error) {
 	foundKey, _, found, err := view.Succ(first.Key)
