@@ -3,13 +3,24 @@ package state
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/keylet"
 )
+
+// DirNodeMaxPages is the maximum number of directory pages allowed
+// without the fixDirectoryLimit amendment.
+// Reference: rippled Protocol.h dirNodeMaxPages = 262144
+const DirNodeMaxPages uint64 = 262144
+
+// ErrDirFull is returned when a directory cannot accept more entries
+// because the page limit has been reached.
+var ErrDirFull = errors.New("directory full")
 
 // DirectoryNode represents a directory ledger entry
 type DirectoryNode struct {
@@ -338,7 +349,7 @@ const dirNodeMaxEntries = 32
 // dirInsert adds an item to a directory, creating the directory if needed.
 // Returns the page number where the item was inserted.
 // Follows rippled's dirAdd algorithm for multi-page directory support.
-func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, setupFunc func(*DirectoryNode)) (*DirInsertResult, error) {
+func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, setupFunc func(*DirectoryNode), rules ...*amendment.Rules) (*DirInsertResult, error) {
 	result := &DirInsertResult{
 		DirKey: dirKey.Key,
 	}
@@ -436,6 +447,17 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, setupFun
 
 	// Current page is full - need to create a new page
 	newPage := page + 1
+
+	// Check for page overflow (uint64 wraps to 0).
+	// Reference: rippled ApplyView.cpp dirAdd() lines 107-113
+	if newPage == 0 {
+		return nil, ErrDirFull
+	}
+	// Without fixDirectoryLimit, enforce old page limit.
+	if len(rules) > 0 && rules[0] != nil && !rules[0].Enabled(amendment.FeatureFixDirectoryLimit) && newPage >= DirNodeMaxPages {
+		return nil, ErrDirFull
+	}
+
 	newPageKeylet := keylet.DirPage(dirKey.Key, newPage)
 
 	// Save previous states
