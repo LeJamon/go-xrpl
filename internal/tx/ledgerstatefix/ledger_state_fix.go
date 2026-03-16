@@ -120,29 +120,48 @@ func (l *LedgerStateFix) RequiredAmendments() [][32]byte {
 // This implements the Appliable interface: Apply(ctx *tx.ApplyContext) tx.Result
 // Reference: rippled LedgerStateFix.cpp preclaim() + doApply()
 func (l *LedgerStateFix) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("ledger state fix apply",
+		"account", l.Account,
+		"fixType", l.LedgerFixType,
+		"owner", l.Owner,
+	)
+
 	switch l.LedgerFixType {
 	case LedgerFixTypeNFTokenPageLink:
 		// Preclaim: verify owner account exists
 		// Reference: rippled LedgerStateFix.cpp preclaim() lines 65-80
 		ownerID, err := state.DecodeAccountID(l.Owner)
 		if err != nil {
+			ctx.Log.Warn("ledger state fix: owner account decode failed",
+				"owner", l.Owner,
+			)
 			return tx.TecOBJECT_NOT_FOUND
 		}
 		ownerAccountKey := keylet.Account(ownerID)
 		exists, existsErr := ctx.View.Exists(ownerAccountKey)
 		if existsErr != nil || !exists {
+			ctx.Log.Warn("ledger state fix: owner account does not exist",
+				"owner", l.Owner,
+			)
 			return tx.TecOBJECT_NOT_FOUND
 		}
 
 		// doApply: repair NFToken directory links
 		// Reference: rippled LedgerStateFix.cpp doApply() lines 83-96
-		if !repairNFTokenDirectoryLinks(ctx.View, ownerID) {
+		if !repairNFTokenDirectoryLinks(ctx, ownerID) {
+			ctx.Log.Warn("ledger state fix: no repairs needed",
+				"owner", l.Owner,
+			)
 			return tx.TecFAILED_PROCESSING
 		}
+		ctx.Log.Debug("ledger state fix: nftoken page links repaired",
+			"owner", l.Owner,
+		)
 		return tx.TesSUCCESS
 
 	default:
 		// preflight should have caught this
+		ctx.Log.Error("ledger state fix: unknown fix type", "fixType", l.LedgerFixType)
 		return tx.TecINTERNAL
 	}
 }
@@ -151,7 +170,8 @@ func (l *LedgerStateFix) Apply(ctx *tx.ApplyContext) tx.Result {
 // for an account. Returns true if any repairs were made, false if there was
 // nothing to repair or no pages exist.
 // Reference: rippled NFTokenUtils.cpp repairNFTokenDirectoryLinks() lines 717-834
-func repairNFTokenDirectoryLinks(view tx.LedgerView, owner [20]byte) bool {
+func repairNFTokenDirectoryLinks(ctx *tx.ApplyContext, owner [20]byte) bool {
+	view := ctx.View
 	didRepair := false
 
 	last := keylet.NFTokenPageMax(owner)
@@ -203,6 +223,10 @@ func repairNFTokenDirectoryLinks(view tx.LedgerView, owner [20]byte) bool {
 
 		if nextPresent || prevPresent {
 			didRepair = true
+			ctx.Log.Debug("ledger state fix: clearing links on single page",
+				"nextPresent", nextPresent,
+				"prevPresent", prevPresent,
+			)
 			if prevPresent {
 				page.PreviousPageMin = emptyHash
 			}
@@ -223,6 +247,7 @@ func repairNFTokenDirectoryLinks(view tx.LedgerView, owner [20]byte) bool {
 	var emptyHash [32]byte
 	if page.PreviousPageMin != emptyHash {
 		didRepair = true
+		ctx.Log.Debug("ledger state fix: clearing previous link on first page")
 		page.PreviousPageMin = emptyHash
 		if serialized, serErr := nftoken.SerializeNFTokenPage(page); serErr == nil {
 			pageKl := keylet.Keylet{Type: last.Type, Key: pageKey}
@@ -260,6 +285,7 @@ func repairNFTokenDirectoryLinks(view tx.LedgerView, owner [20]byte) bool {
 		// Reference: rippled lines 765-771
 		if page.NextPageMin != nextPageKey {
 			didRepair = true
+			ctx.Log.Debug("ledger state fix: repairing forward link between pages")
 			page.NextPageMin = nextPageKey
 			if serialized, serErr := nftoken.SerializeNFTokenPage(page); serErr == nil {
 				pageKl := keylet.Keylet{Type: last.Type, Key: pageKey}
@@ -271,6 +297,7 @@ func repairNFTokenDirectoryLinks(view tx.LedgerView, owner [20]byte) bool {
 		// Reference: rippled lines 773-779
 		if nextPage.PreviousPageMin != pageKey {
 			didRepair = true
+			ctx.Log.Debug("ledger state fix: repairing backward link between pages")
 			nextPage.PreviousPageMin = pageKey
 			if serialized, serErr := nftoken.SerializeNFTokenPage(nextPage); serErr == nil {
 				nKl := keylet.Keylet{Type: last.Type, Key: nextPageKey}
@@ -297,6 +324,7 @@ func repairNFTokenDirectoryLinks(view tx.LedgerView, owner [20]byte) bool {
 		// page is the actual last page, but it doesn't have the expected final index.
 		// Move its contents to a new page at the correct last.Key position.
 		didRepair = true
+		ctx.Log.Debug("ledger state fix: relocating last page to correct position")
 
 		newLastPage := &state.NFTokenPageData{
 			NFTokens: page.NFTokens,
@@ -340,6 +368,7 @@ func repairNFTokenDirectoryLinks(view tx.LedgerView, owner [20]byte) bool {
 	// Reference: rippled lines 824-833
 	if nextPage != nil && nextPage.NextPageMin != emptyHash {
 		didRepair = true
+		ctx.Log.Debug("ledger state fix: clearing next link on last page")
 		nextPage.NextPageMin = emptyHash
 		if serialized, serErr := nftoken.SerializeNFTokenPage(nextPage); serErr == nil {
 			nKl := keylet.Keylet{Type: last.Type, Key: nextPageKey}
