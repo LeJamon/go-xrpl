@@ -9,6 +9,7 @@ import (
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/crypto/common"
 	secp256k1 "github.com/LeJamon/goXRPLd/crypto/secp256k1"
 	"github.com/LeJamon/goXRPLd/drops"
@@ -23,8 +24,9 @@ const (
 	// InitialXRP is the total XRP in existence (100 billion XRP in drops)
 	InitialXRP = 100_000_000_000 * 1_000_000
 
-	// GenesisTimeResolution is the close time resolution for the genesis ledger
-	GenesisTimeResolution = 30
+	// GenesisTimeResolution is the close time resolution for the genesis ledger.
+	// Reference: rippled LedgerTiming.h ledgerGenesisTimeResolution = ledgerPossibleTimeResolutions[0] = 10s
+	GenesisTimeResolution = 10
 
 	// GenesisLedgerSequence is the sequence number of the genesis ledger
 	GenesisLedgerSequence = 1
@@ -68,9 +70,6 @@ type Config struct {
 	// Amendments to enable at genesis (empty for standard genesis)
 	Amendments [][32]byte
 
-	// UseModernFees indicates whether to use XRPFees amendment format
-	UseModernFees bool
-
 	// InitialAccounts specifies additional accounts to create at genesis
 	// The balance for these is deducted from the genesis account
 	InitialAccounts []InitialAccount
@@ -84,7 +83,10 @@ type InitialAccount struct {
 	Flags    uint32
 }
 
-// DefaultConfig returns the default genesis configuration
+// DefaultConfig returns the default genesis configuration.
+// Fee format (modern vs legacy) is automatically derived from whether
+// the XRPFees amendment is in the Amendments list, matching rippled's
+// genesis behavior (Ledger.cpp:168-229).
 func DefaultConfig() Config {
 	return Config{
 		TotalXRP:            InitialXRP,
@@ -92,9 +94,20 @@ func DefaultConfig() Config {
 		CloseTimeResolution: GenesisTimeResolution,
 		Fees:                StandardFees(),
 		Amendments:          nil,
-		UseModernFees:       true,
 		InitialAccounts:     nil,
 	}
+}
+
+// hasXRPFeesAmendment checks if the XRPFees amendment is in the amendments list.
+// This determines whether to use modern (Amount) or legacy (UInt32/UInt64) fee fields.
+// Reference: rippled Ledger.cpp checks for featureXRPFees in the amendments vector.
+func hasXRPFeesAmendment(amendments [][32]byte) bool {
+	for _, a := range amendments {
+		if a == amendment.FeatureXRPFees {
+			return true
+		}
+	}
+	return false
 }
 
 // GenesisLedger represents a freshly created genesis ledger
@@ -331,10 +344,13 @@ func createInitialAccount(stateMap *shamap.SHAMap, accountID [20]byte, balance u
 }
 
 // createFeeSettings creates the fee settings entry.
+// The fee format is derived from the amendments list: modern (Amount fields)
+// if XRPFees is present, legacy (UInt32/UInt64) otherwise.
+// Reference: rippled Ledger.cpp checks featureXRPFees in the amendments vector.
 func createFeeSettings(stateMap *shamap.SHAMap, cfg Config) error {
 	var feeSettings *ledgerentries.FeeSettings
 
-	if cfg.UseModernFees {
+	if hasXRPFeesAmendment(cfg.Amendments) {
 		feeSettings = ledgerentries.NewFeeSettings(
 			cfg.Fees.BaseFee,
 			cfg.Fees.ReserveBase,

@@ -1,8 +1,10 @@
 package genesis
 
 import (
+	"encoding/hex"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/drops"
 )
 
@@ -105,10 +107,10 @@ func TestCreateGenesisLedgerWithAmendments(t *testing.T) {
 }
 
 func TestCreateGenesisLedgerLegacyFees(t *testing.T) {
+	// No amendments → legacy fee format (XRPFees not present)
 	cfg := Config{
-		Fees:          StandardFees(),
-		UseModernFees: false, // Use legacy fee format
-		Amendments:    nil,
+		Fees:       StandardFees(),
+		Amendments: nil,
 	}
 
 	genesis, err := Create(cfg)
@@ -122,6 +124,40 @@ func TestCreateGenesisLedgerLegacyFees(t *testing.T) {
 	}
 
 	t.Logf("Genesis with legacy fees created successfully")
+}
+
+func TestCreateGenesisLedgerModernFees(t *testing.T) {
+	// Include XRPFees amendment → modern fee format
+	cfg := Config{
+		Fees:       StandardFees(),
+		Amendments: [][32]byte{amendment.FeatureXRPFees},
+	}
+
+	genesis, err := Create(cfg)
+	if err != nil {
+		t.Fatalf("Create genesis with modern fees failed: %v", err)
+	}
+
+	if genesis.Header.Drops != InitialXRP {
+		t.Errorf("Genesis XRP mismatch: got %d, expected %d",
+			genesis.Header.Drops, InitialXRP)
+	}
+
+	// Hash should differ from legacy format genesis
+	legacyCfg := Config{
+		Fees:       StandardFees(),
+		Amendments: nil,
+	}
+	legacyGenesis, err := Create(legacyCfg)
+	if err != nil {
+		t.Fatalf("Create genesis with legacy fees failed: %v", err)
+	}
+
+	if genesis.Header.Hash == legacyGenesis.Header.Hash {
+		t.Error("Modern fees genesis should produce different hash than legacy fees genesis")
+	}
+
+	t.Logf("Genesis with modern fees created successfully")
 }
 
 func TestStandardFees(t *testing.T) {
@@ -159,4 +195,89 @@ func TestCalculateLedgerHash(t *testing.T) {
 		t.Errorf("Recalculated hash mismatch: got %x, expected %x",
 			recalculatedHash, genesis.Header.Hash)
 	}
+}
+
+func TestHasXRPFeesAmendment(t *testing.T) {
+	// No amendments → false
+	if hasXRPFeesAmendment(nil) {
+		t.Error("Expected false for nil amendments")
+	}
+
+	// Empty amendments → false
+	if hasXRPFeesAmendment([][32]byte{}) {
+		t.Error("Expected false for empty amendments")
+	}
+
+	// Unrelated amendment → false
+	fakeAmendment := [32]byte{1, 2, 3}
+	if hasXRPFeesAmendment([][32]byte{fakeAmendment}) {
+		t.Error("Expected false for unrelated amendment")
+	}
+
+	// XRPFees present → true
+	if !hasXRPFeesAmendment([][32]byte{amendment.FeatureXRPFees}) {
+		t.Error("Expected true when XRPFees amendment is present")
+	}
+
+	// XRPFees among others → true
+	amendments := [][32]byte{fakeAmendment, amendment.FeatureXRPFees, {9, 8, 7}}
+	if !hasXRPFeesAmendment(amendments) {
+		t.Error("Expected true when XRPFees is among multiple amendments")
+	}
+}
+
+// TestGenesisHashConformance verifies that the genesis hash matches what rippled
+// would produce for the same configuration. This catches serialization regressions.
+//
+// rippled test env: START_UP=NORMAL → no amendments → legacy FeeSettings format.
+// Reference: rippled Application.cpp:1707-1712, Ledger.cpp:168-229.
+func TestGenesisHashConformance(t *testing.T) {
+	t.Run("StandardDefaults_NoAmendments", func(t *testing.T) {
+		// Standard genesis: no amendments, standard fees (10 drops, 10 XRP reserve, 2 XRP increment)
+		cfg := DefaultConfig()
+		gen, err := Create(cfg)
+		if err != nil {
+			t.Fatalf("genesis creation failed: %v", err)
+		}
+
+		// These are the verified hashes for standard genesis with legacy fees
+		expectedAccountHash := "ec2f822edfbc6f2f4de5aa7c8aff128f27db2c194315fd727445a4967dafd018"
+		expectedLedgerHash := "b06f8e90df67b6a383e692a12963425b0e5fa6fbf0704370c137fce71d88a2d8"
+
+		gotAccountHash := hex.EncodeToString(gen.Header.AccountHash[:])
+		gotLedgerHash := hex.EncodeToString(gen.Header.Hash[:])
+
+		if gotAccountHash != expectedAccountHash {
+			t.Errorf("AccountHash mismatch:\n  got:  %s\n  want: %s", gotAccountHash, expectedAccountHash)
+		}
+		if gotLedgerHash != expectedLedgerHash {
+			t.Errorf("LedgerHash mismatch:\n  got:  %s\n  want: %s", gotLedgerHash, expectedLedgerHash)
+		}
+	})
+
+	t.Run("TestEnvConfig_NoAmendments", func(t *testing.T) {
+		// rippled test env config: 200 XRP reserve, 50 XRP increment, no amendments
+		cfg := DefaultConfig()
+		cfg.Fees.ReserveBase = drops.DropsPerXRP * 200
+		cfg.Fees.ReserveIncrement = drops.DropsPerXRP * 50
+
+		gen, err := Create(cfg)
+		if err != nil {
+			t.Fatalf("genesis creation failed: %v", err)
+		}
+
+		// Verified hashes for test env config with legacy fees
+		expectedAccountHash := "bd8a3d72ca73dde887ad63666ec2bad07875cba997a102579b5b95ecdffeaed8"
+		expectedLedgerHash := "3020eb9e7be24ef7d7a060cb051583ec117384636d1781afb5b87f3e348da489"
+
+		gotAccountHash := hex.EncodeToString(gen.Header.AccountHash[:])
+		gotLedgerHash := hex.EncodeToString(gen.Header.Hash[:])
+
+		if gotAccountHash != expectedAccountHash {
+			t.Errorf("AccountHash mismatch:\n  got:  %s\n  want: %s", gotAccountHash, expectedAccountHash)
+		}
+		if gotLedgerHash != expectedLedgerHash {
+			t.Errorf("LedgerHash mismatch:\n  got:  %s\n  want: %s", gotLedgerHash, expectedLedgerHash)
+		}
+	})
 }

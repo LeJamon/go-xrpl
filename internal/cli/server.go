@@ -154,8 +154,7 @@ func runServer(cmd *cobra.Command, args []string) {
 				ReserveBase:      genesisCfg.ReserveBase,
 				ReserveIncrement: genesisCfg.ReserveIncrement,
 			},
-			Amendments:    genesisCfg.Amendments,
-			UseModernFees: genesisCfg.UseModernFees,
+			Amendments: genesisCfg.Amendments,
 		}
 		for _, acc := range genesisCfg.InitialAccounts {
 			genesisConfig.InitialAccounts = append(genesisConfig.InitialAccounts, genesis.InitialAccount{

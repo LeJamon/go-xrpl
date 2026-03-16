@@ -99,7 +99,6 @@ type GenesisConfig struct {
 	BaseFee          drops.XRPAmount
 	ReserveBase      drops.XRPAmount
 	ReserveIncrement drops.XRPAmount
-	UseModernFees    bool
 
 	// Amendments to enable (32-byte hashes)
 	Amendments [][32]byte
@@ -182,9 +181,7 @@ func (g *GenesisJSON) ToGenesisConfig() (*GenesisConfig, error) {
 		return nil, fmt.Errorf("failed to parse genesis state: %w", err)
 	}
 
-	config := &GenesisConfig{
-		UseModernFees: true, // Default to modern fees
-	}
+	config := &GenesisConfig{}
 
 	// Parse total coins
 	totalCoins := g.Ledger.TotalCoins
@@ -213,11 +210,6 @@ func (g *GenesisJSON) ToGenesisConfig() (*GenesisConfig, error) {
 		config.BaseFee = drops.NewXRPAmount(int64(baseFee))
 		config.ReserveBase = drops.NewXRPAmount(int64(state.FeeSettings.ReserveBase))
 		config.ReserveIncrement = drops.NewXRPAmount(int64(state.FeeSettings.ReserveIncrement))
-
-		// Detect if using legacy fees (has ReferenceFeeUnits)
-		if state.FeeSettings.ReferenceFeeUnits > 0 {
-			config.UseModernFees = false
-		}
 	}
 
 	// Parse amendments
@@ -361,7 +353,8 @@ func parseAmendmentHash(hexHash string) ([32]byte, error) {
 	return hash, nil
 }
 
-// DefaultGenesisConfig returns a default genesis configuration matching rippled defaults
+// DefaultGenesisConfig returns a default genesis configuration matching rippled defaults.
+// Fee format is derived from amendments: legacy when XRPFees is absent, modern when present.
 func DefaultGenesisConfig() *GenesisConfig {
 	return &GenesisConfig{
 		TotalXRP:            100_000_000_000 * 1_000_000, // 100 billion XRP
@@ -369,7 +362,6 @@ func DefaultGenesisConfig() *GenesisConfig {
 		BaseFee:             drops.NewXRPAmount(10), // 10 drops
 		ReserveBase:         drops.DropsPerXRP * 10, // 10 XRP
 		ReserveIncrement:    drops.DropsPerXRP * 2,  // 2 XRP
-		UseModernFees:       true,
 		Amendments:          nil,
 		InitialAccounts:     nil, // Will use master passphrase account
 	}
