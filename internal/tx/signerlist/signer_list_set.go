@@ -172,12 +172,20 @@ func (s *SetRegularKey) ClearKey() {
 // Reference: rippled SetRegularKey.cpp doApply()
 func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) tx.Result {
 	if s.RegularKey != "" {
+		ctx.Log.Trace("set regular key apply",
+			"account", s.Account,
+			"regularKey", s.RegularKey,
+		)
 		// Setting a regular key
 		if _, err := state.DecodeAccountID(s.RegularKey); err != nil {
 			return tx.TemINVALID
 		}
 		ctx.Account.RegularKey = s.RegularKey
 	} else {
+		ctx.Log.Trace("set regular key apply",
+			"account", s.Account,
+			"regularKey", "removed",
+		)
 		// Clearing the regular key — check that an alternative auth method exists.
 		// Reference: rippled SetRegularKey.cpp lines 86-98
 		isMasterDisabled := (ctx.Account.Flags & state.LsfDisableMaster) != 0
@@ -185,6 +193,7 @@ func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) tx.Result {
 			signerListKey := keylet.SignerList(ctx.AccountID)
 			hasSignerList, _ := ctx.View.Exists(signerListKey)
 			if !hasSignerList {
+				ctx.Log.Warn("set regular key: no alternative key available")
 				return tx.TecNO_ALTERNATIVE_KEY
 			}
 		}
@@ -253,12 +262,19 @@ func signerCountBasedOwnerCountDelta(entryCount int) int {
 // Apply applies the SignerListSet transaction to ledger state.
 // Reference: rippled SetSignerList.cpp doApply(), replaceSignerList(), destroySignerList()
 func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("signer list set apply",
+		"account", s.Account,
+		"signerQuorum", s.SignerQuorum,
+		"signerCount", len(s.SignerEntries),
+	)
+
 	signerListKey := keylet.SignerList(ctx.AccountID)
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 
 	if s.SignerQuorum == 0 {
 		// --- Destroy signer list ---
 		// Reference: rippled SetSignerList.cpp destroySignerList()
+		ctx.Log.Debug("signer list set: deleting signer list")
 
 		// Destroying the signer list is only allowed if either the master key
 		// is enabled or there is a regular key.
@@ -266,6 +282,7 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		isMasterDisabled := (ctx.Account.Flags & state.LsfDisableMaster) != 0
 		hasRegularKey := ctx.Account.RegularKey != ""
 		if isMasterDisabled && !hasRegularKey {
+			ctx.Log.Warn("signer list set: no alternative key available")
 			return tx.TecNO_ALTERNATIVE_KEY
 		}
 
@@ -301,6 +318,10 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled SetSignerList.cpp:374-375
 	priorBalance := ctx.Account.Balance + ctx.Config.BaseFee
 	if priorBalance < newReserve {
+		ctx.Log.Warn("signer list set: insufficient reserve",
+			"balance", priorBalance,
+			"reserve", newReserve,
+		)
 		return tx.TecINSUFFICIENT_RESERVE
 	}
 
@@ -320,10 +341,12 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Serialize and insert the new signer list.
 	signerListData, err := state.SerializeSignerList(s.SignerQuorum, sleEntries, ctx.AccountID, flags)
 	if err != nil {
+		ctx.Log.Error("signer list set: failed to serialize signer list", "error", err)
 		return tx.TefINTERNAL
 	}
 
 	if err := ctx.View.Insert(signerListKey, signerListData); err != nil {
+		ctx.Log.Error("signer list set: failed to insert signer list", "error", err)
 		return tx.TefINTERNAL
 	}
 
