@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"strings"
 )
 
@@ -206,6 +207,53 @@ func (p *PortConfig) validateProtocols() error {
 	}
 
 	return nil
+}
+
+// ParseAdminNets parses the Admin field entries into net.IPNet values.
+// Bare IPs (without CIDR suffix) get /32 for IPv4 or /128 for IPv6.
+// This matches rippled's parse_Port() in Port.cpp.
+func (p *PortConfig) ParseAdminNets() ([]net.IPNet, error) {
+	var nets []net.IPNet
+	for _, entry := range p.Admin {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		// Append CIDR suffix if not present
+		if !strings.Contains(entry, "/") {
+			ip := net.ParseIP(entry)
+			if ip == nil {
+				return nil, fmt.Errorf("invalid admin IP: %s", entry)
+			}
+			if ip.To4() != nil {
+				entry += "/32"
+			} else {
+				entry += "/128"
+			}
+		}
+		_, ipNet, err := net.ParseCIDR(entry)
+		if err != nil {
+			return nil, fmt.Errorf("invalid admin CIDR %q: %w", entry, err)
+		}
+		nets = append(nets, *ipNet)
+	}
+	return nets, nil
+}
+
+// IPInNets returns true if ip is contained in any of the given networks.
+// Handles IPv4-mapped IPv6 addresses by normalizing to IPv4 first.
+// This matches rippled's ipAllowed() in Role.cpp.
+func IPInNets(ip net.IP, nets []net.IPNet) bool {
+	// Normalize IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1) to plain IPv4
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
+	for _, n := range nets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseProtocols parses a comma-separated protocol string

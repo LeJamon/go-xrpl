@@ -18,6 +18,10 @@ import (
 // wsLog is the logger for the WebSocket server.
 var wsLog = xrpllog.Named(xrpllog.PartitionRPC)
 
+// DefaultSendQueueLimit is the default WebSocket send channel buffer size,
+// matching rippled's default ws_queue_limit of 100 (Port.cpp).
+const DefaultSendQueueLimit = 100
+
 // WebSocketServer handles WebSocket connections for real-time subscriptions
 type WebSocketServer struct {
 	upgrader            websocket.Upgrader
@@ -27,6 +31,7 @@ type WebSocketServer struct {
 	connectionsMutex    sync.RWMutex
 	timeout             time.Duration
 	ledgerInfoProvider  types.LedgerInfoProvider
+	connLimiter         *ConnLimiter
 }
 
 // WebSocketConnection represents a single WebSocket connection
@@ -40,6 +45,7 @@ type WebSocketConnection struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	pathFindSession *PathFindSession // At most one active path_find session per connection
+	portCtx         *PortContext     // per-port config for role determination
 }
 
 // NewWebSocketServer creates a new WebSocket server
@@ -68,13 +74,28 @@ func (ws *WebSocketServer) SetLedgerInfoProvider(provider types.LedgerInfoProvid
 	ws.ledgerInfoProvider = provider
 }
 
+// SetConnLimiter sets the connection limiter used to release per-port slots
+// when WebSocket connections close.
+func (ws *WebSocketServer) SetConnLimiter(limiter *ConnLimiter) {
+	ws.connLimiter = limiter
+}
+
 // ServeHTTP handles WebSocket upgrade requests
 func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Extract per-port context injected by PortMiddleware
+	portCtx := GetPortContext(r.Context())
+
 	// Upgrade HTTP connection to WebSocket
 	conn, err := ws.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		wsLog.Error("WebSocket upgrade failed", "err", err)
 		return
+	}
+
+	// Determine send queue size from port config, default to 100 (rippled default)
+	sendQueueLimit := DefaultSendQueueLimit
+	if portCtx != nil && portCtx.SendQueue > 0 {
+		sendQueueLimit = portCtx.SendQueue
 	}
 
 	// Create connection context - use Background() not r.Context()
@@ -86,10 +107,11 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ID:            generateConnectionID(),
 		conn:          conn,
 		subscriptions: make(map[types.SubscriptionType]types.SubscriptionConfig),
-		sendChannel:   make(chan []byte, 256),
+		sendChannel:   make(chan []byte, sendQueueLimit),
 		closeChannel:  make(chan struct{}),
 		ctx:           ctx,
 		cancel:        cancel,
+		portCtx:       portCtx,
 	}
 
 	// Register connection
@@ -239,7 +261,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 
 	// Create RPC context
 	clientIP := getWebSocketClientIP(wsConn.conn)
-	role := roleForRequest(clientIP)
+	role := roleForRequest(clientIP, wsConn.portCtx)
 	wsLog.Debug("ws request", "cmd", cmd.Command, "remoteAddr", wsConn.conn.RemoteAddr().String(), "clientIP", clientIP, "role", role, "isAdmin", role == types.RoleAdmin)
 	rpcCtx := &types.RpcContext{
 		Context:    wsConn.ctx,
@@ -645,6 +667,11 @@ func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 
 	// Remove from subscription manager
 	ws.subscriptionManager.RemoveConnection(wsConn.ID)
+
+	// Release per-port connection limiter slot
+	if ws.connLimiter != nil && wsConn.portCtx != nil {
+		ws.connLimiter.Release(wsConn.portCtx.PortName)
+	}
 
 	// Close WebSocket connection
 	wsConn.conn.Close()

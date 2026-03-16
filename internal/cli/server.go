@@ -280,7 +280,11 @@ func runServer(cmd *cobra.Command, args []string) {
 		)
 	})
 
-	// Start listeners based on configured ports
+	// Shared connection limiter for all ports
+	connLimiter := rpc.NewConnLimiter()
+	wsServer.SetConnLimiter(connLimiter)
+
+	// Build the base HTTP mux (shared handler logic, wrapped per-port below)
 	httpMux := http.NewServeMux()
 	httpMux.Handle("/", httpServer)
 	httpMux.Handle("/rpc", httpServer)
@@ -289,9 +293,6 @@ func runServer(cmd *cobra.Command, args []string) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok","service":"goXRPLd"}`))
 	})
-
-	wsMux := http.NewServeMux()
-	wsMux.Handle("/", wsServer)
 
 	// Start listeners from config ports
 	httpPorts := globalConfig.GetHTTPPorts()
@@ -307,31 +308,55 @@ func runServer(cmd *cobra.Command, args []string) {
 		serverLog.Info("Port configured", "protocol", "peer", "addr", peerPort.GetBindAddress())
 	}
 
-	// Start WebSocket listeners with named *http.Server instances
+	// Start WebSocket listeners — each port gets its own mux with PortMiddleware
 	var wsSrvs []*http.Server
 	for name, p := range wsPorts {
-		addr := p.GetBindAddress()
-		portName := name
-		srv := &http.Server{Addr: addr, Handler: wsMux, ReadHeaderTimeout: 10 * time.Second}
+		portCfg := p
+		adminNets, err := portCfg.ParseAdminNets()
+		if err != nil {
+			serverLog.Fatal("Failed to parse admin nets for port", "name", name, "err", err)
+		}
+		pc := &rpc.PortContext{
+			PortName:  name,
+			AdminNets: adminNets,
+			Limit:     portCfg.Limit,
+			SendQueue: portCfg.SendQueueLimit,
+		}
+		mux := http.NewServeMux()
+		mux.Handle("/", rpc.PortMiddleware(pc, connLimiter, wsServer))
+		srv := &http.Server{Addr: portCfg.GetBindAddress(), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 		wsSrvs = append(wsSrvs, srv)
 		go func(n string, s *http.Server) {
 			serverLog.Info("Listening", "protocol", "ws", "name", n, "addr", s.Addr)
 			if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				serverLog.Fatal("WebSocket server failed", "name", n, "addr", s.Addr, "err", err)
 			}
-		}(portName, srv)
+		}(name, srv)
 	}
 
-	// Start HTTP listeners — use the first one as the blocking listener, rest in goroutines
+	// Start HTTP listeners — each port gets its own mux with PortMiddleware
 	httpPortList := make([]struct {
 		name string
+		pc   *rpc.PortContext
 		addr string
 	}, 0, len(httpPorts))
 	for name, p := range httpPorts {
+		portCfg := p
+		adminNets, err := portCfg.ParseAdminNets()
+		if err != nil {
+			serverLog.Fatal("Failed to parse admin nets for port", "name", name, "err", err)
+		}
+		pc := &rpc.PortContext{
+			PortName:  name,
+			AdminNets: adminNets,
+			Limit:     portCfg.Limit,
+			SendQueue: portCfg.SendQueueLimit,
+		}
 		httpPortList = append(httpPortList, struct {
 			name string
+			pc   *rpc.PortContext
 			addr string
-		}{name, p.GetBindAddress()})
+		}{name, pc, portCfg.GetBindAddress()})
 	}
 
 	if len(httpPortList) == 0 {
@@ -341,12 +366,12 @@ func runServer(cmd *cobra.Command, args []string) {
 	// Collect HTTP servers into a slice
 	var httpSrvs []*http.Server
 
-	// Start extra HTTP listeners in goroutines
-	for i := 1; i < len(httpPortList); i++ {
-		entry := httpPortList[i]
+	for _, entry := range httpPortList {
+		wrappedMux := http.NewServeMux()
+		wrappedMux.Handle("/", rpc.PortMiddleware(entry.pc, connLimiter, httpMux))
 		srv := &http.Server{
 			Addr:         entry.addr,
-			Handler:      httpMux,
+			Handler:      wrappedMux,
 			ReadTimeout:  30 * time.Second,
 			WriteTimeout: 30 * time.Second,
 			IdleTimeout:  60 * time.Second,
@@ -359,23 +384,6 @@ func runServer(cmd *cobra.Command, args []string) {
 			}
 		}(entry.name, entry.addr, srv)
 	}
-
-	// Start the first HTTP listener (will block until shutdown)
-	first := httpPortList[0]
-	firstSrv := &http.Server{
-		Addr:         first.addr,
-		Handler:      httpMux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
-	httpSrvs = append(httpSrvs, firstSrv)
-	serverLog.Info("Listening", "protocol", "http", "name", first.name, "addr", first.addr)
-	go func() {
-		if err := firstSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serverLog.Fatal("HTTP server failed", "name", first.name, "addr", first.addr, "err", err)
-		}
-	}()
 
 	// Add signal handling and a shared shutdown trigger
 	sigCh := make(chan os.Signal, 1)

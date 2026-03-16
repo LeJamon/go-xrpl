@@ -82,12 +82,22 @@ rpc_startup = [
 
 [server]
 # List of port names — each MUST have a corresponding [port_*] section below.
-ports = ["port_rpc_admin_local", "port_peer", "port_ws_admin_local"]
+ports = ["port_rpc_admin_local", "port_rpc_public", "port_peer", "port_ws_admin_local", "port_ws_public"]
 
 # =============================================================================
 # Port Configurations
 # Required per port: port, ip, protocol
+#
+# Admin vs public:
+#   - admin = ["127.0.0.1"]  → only listed IPs get admin role (CIDR supported)
+#   - no admin field          → public port, all clients get guest role
+#
+# Optional fields:
+#   - limit             → max concurrent connections (0 = unlimited)
+#   - send_queue_limit  → WS send buffer per connection (default 100)
 # =============================================================================
+
+# --- Admin ports (localhost only) ---
 
 [port_rpc_admin_local]
 port = 5005
@@ -95,17 +105,34 @@ ip = "127.0.0.1"
 admin = ["127.0.0.1"]
 protocol = "http"
 
-[port_peer]
-port = 51235
-ip = "0.0.0.0"
-protocol = "peer"
-
 [port_ws_admin_local]
 port = 6006
 ip = "127.0.0.1"
 admin = ["127.0.0.1"]
 protocol = "ws"
 send_queue_limit = 500
+
+# --- Public ports (open to all interfaces, no admin access) ---
+
+[port_rpc_public]
+port = 5555
+ip = "0.0.0.0"
+protocol = "http"
+limit = 500
+
+[port_ws_public]
+port = 6005
+ip = "0.0.0.0"
+protocol = "ws"
+limit = 300
+send_queue_limit = 100
+
+# --- Peer port ---
+
+[port_peer]
+port = 51235
+ip = "0.0.0.0"
+protocol = "peer"
 
 # Uncomment to enable gRPC port for Clio integration
 # [port_grpc]
