@@ -140,6 +140,12 @@ func (p *PermissionedDomainSet) RequiredAmendments() [][32]byte {
 // Apply applies the PermissionedDomainSet transaction to the ledger.
 // Reference: rippled PermissionedDomainSet.cpp preclaim() + doApply()
 func (p *PermissionedDomainSet) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("permissioned domain set apply",
+		"account", p.Account,
+		"domainID", p.DomainID,
+		"credentialCount", len(p.AcceptedCredentials),
+	)
+
 	// Preclaim: verify each issuer account exists
 	// Reference: rippled PermissionedDomainSet.cpp preclaim() lines 70-85
 	for _, cred := range p.AcceptedCredentials {
@@ -149,6 +155,9 @@ func (p *PermissionedDomainSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 		issuerData, err := ctx.View.Read(keylet.Account(issuerID))
 		if err != nil || issuerData == nil {
+			ctx.Log.Warn("permissioned domain set: issuer does not exist",
+				"issuer", cred.Credential.Issuer,
+			)
 			return tx.TecNO_ISSUER
 		}
 	}
@@ -175,6 +184,10 @@ func (p *PermissionedDomainSet) applyCreate(ctx *tx.ApplyContext, sorted []state
 	// Reference: rippled PermissionedDomainSet.cpp doApply() lines 102-106
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
 	if ctx.Account.Balance < reserve {
+		ctx.Log.Warn("permissioned domain set: insufficient reserve",
+			"balance", ctx.Account.Balance,
+			"reserve", reserve,
+		)
 		return tx.TecINSUFFICIENT_RESERVE
 	}
 
@@ -192,10 +205,12 @@ func (p *PermissionedDomainSet) applyCreate(ctx *tx.ApplyContext, sorted []state
 
 	pdData, err := state.SerializePermissionedDomain(pd, p.Account)
 	if err != nil {
+		ctx.Log.Error("permissioned domain set: failed to serialize domain", "error", err)
 		return tx.TefINTERNAL
 	}
 
 	if err := ctx.View.Insert(domainKeylet, pdData); err != nil {
+		ctx.Log.Error("permissioned domain set: failed to insert domain", "error", err)
 		return tx.TefINTERNAL
 	}
 
@@ -203,6 +218,7 @@ func (p *PermissionedDomainSet) applyCreate(ctx *tx.ApplyContext, sorted []state
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 	result, err := state.DirInsert(ctx.View, ownerDirKey, domainKeylet.Key, nil)
 	if err != nil {
+		ctx.Log.Error("permissioned domain set: directory insert failed", "error", err)
 		return tx.TefINTERNAL
 	}
 
@@ -233,17 +249,22 @@ func (p *PermissionedDomainSet) applyUpdate(ctx *tx.ApplyContext, sorted []state
 
 	existingData, err := ctx.View.Read(domainKeylet)
 	if err != nil || existingData == nil {
+		ctx.Log.Warn("permissioned domain set: domain not found",
+			"domainID", p.DomainID,
+		)
 		return tx.TecNO_ENTRY
 	}
 
 	existing, err := state.ParsePermissionedDomain(existingData)
 	if err != nil {
+		ctx.Log.Error("permissioned domain set: failed to parse domain", "error", err)
 		return tx.TefINTERNAL
 	}
 
 	// Verify caller is the owner
 	// Reference: rippled PermissionedDomainSet.cpp preclaim() lines 88-95
 	if existing.Owner != ctx.AccountID {
+		ctx.Log.Warn("permissioned domain set: caller is not owner")
 		return tx.TecNO_PERMISSION
 	}
 

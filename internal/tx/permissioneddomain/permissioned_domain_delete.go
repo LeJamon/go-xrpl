@@ -89,6 +89,11 @@ func (p *PermissionedDomainDelete) RequiredAmendments() [][32]byte {
 // Apply applies the PermissionedDomainDelete transaction to the ledger.
 // Reference: rippled PermissionedDomainDelete.cpp preclaim() + doApply()
 func (p *PermissionedDomainDelete) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("permissioned domain delete apply",
+		"account", p.Account,
+		"domainID", p.DomainID,
+	)
+
 	domainBytes, err := hex.DecodeString(p.DomainID)
 	if err != nil || len(domainBytes) != 32 {
 		return tx.TemINVALID
@@ -101,17 +106,22 @@ func (p *PermissionedDomainDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled PermissionedDomainDelete.cpp preclaim() lines 50-55
 	existingData, err := ctx.View.Read(domainKeylet)
 	if err != nil || existingData == nil {
+		ctx.Log.Warn("permissioned domain delete: domain not found",
+			"domainID", p.DomainID,
+		)
 		return tx.TecNO_ENTRY
 	}
 
 	existing, err := state.ParsePermissionedDomain(existingData)
 	if err != nil {
+		ctx.Log.Error("permissioned domain delete: failed to parse domain", "error", err)
 		return tx.TefINTERNAL
 	}
 
 	// Preclaim: verify caller owns the domain
 	// Reference: rippled PermissionedDomainDelete.cpp preclaim() lines 57-61
 	if existing.Owner != ctx.AccountID {
+		ctx.Log.Warn("permissioned domain delete: caller is not owner")
 		return tx.TecNO_PERMISSION
 	}
 
@@ -119,11 +129,13 @@ func (p *PermissionedDomainDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled PermissionedDomainDelete.cpp doApply()
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 	if _, err := state.DirRemove(ctx.View, ownerDirKey, existing.OwnerNode, domainKeylet.Key, false); err != nil {
+		ctx.Log.Error("permissioned domain delete: failed to remove from directory", "error", err)
 		return tx.TefBAD_LEDGER
 	}
 
 	// Erase the domain from ledger
 	if err := ctx.View.Erase(domainKeylet); err != nil {
+		ctx.Log.Error("permissioned domain delete: failed to erase domain", "error", err)
 		return tx.TefINTERNAL
 	}
 
