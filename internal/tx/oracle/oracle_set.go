@@ -255,6 +255,13 @@ type pairEntry struct {
 // Combines rippled's SetOracle::preclaim() and SetOracle::doApply().
 // Reference: rippled SetOracle.cpp
 func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("oracle set apply",
+		"account", o.Account,
+		"oracleDocumentID", o.OracleDocumentID,
+		"provider", o.Provider,
+		"priceDataCount", len(o.PriceDataSeries),
+	)
+
 	// --- Preclaim: Time validation ---
 	// Reference: rippled SetOracle.cpp preclaim lines 80-93
 	closeTime := ctx.Config.ParentCloseTime
@@ -392,9 +399,13 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// --- Final preclaim checks ---
 	// Reference: rippled SetOracle.cpp preclaim lines 170-181
 	if len(pairs) == 0 {
+		ctx.Log.Warn("oracle set: empty price data after merge")
 		return tx.TecARRAY_EMPTY
 	}
 	if len(pairs) > MaxOracleDataSeries {
+		ctx.Log.Warn("oracle set: too many price data entries",
+			"count", len(pairs),
+		)
 		return tx.TecARRAY_TOO_LARGE
 	}
 
@@ -402,6 +413,10 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	priorBalance := ctx.Account.Balance + ctx.Config.BaseFee
 	reserve := ctx.AccountReserve(uint32(int(ctx.Account.OwnerCount) + adjustReserve))
 	if priorBalance < reserve {
+		ctx.Log.Warn("oracle set: insufficient reserve",
+			"balance", priorBalance,
+			"reserve", reserve,
+		)
 		return tx.TecINSUFFICIENT_RESERVE
 	}
 
@@ -510,9 +525,11 @@ func (o *OracleSet) doApplyUpdate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 	// Serialize and write back
 	data, err := state.SerializeOracle(existingOracle)
 	if err != nil {
+		ctx.Log.Error("oracle set update: failed to serialize oracle", "error", err)
 		return tx.TefINTERNAL
 	}
 	if err := ctx.View.Update(oracleKey, data); err != nil {
+		ctx.Log.Error("oracle set update: failed to update oracle", "error", err)
 		return tx.TefINTERNAL
 	}
 
@@ -590,6 +607,7 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
+		ctx.Log.Error("oracle set create: directory full", "error", err)
 		return tx.TecDIR_FULL
 	}
 	oracleData.OwnerNode = dirResult.Page
@@ -597,11 +615,13 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 	// Serialize oracle
 	data, err := state.SerializeOracle(oracleData)
 	if err != nil {
+		ctx.Log.Error("oracle set create: failed to serialize oracle", "error", err)
 		return tx.TefINTERNAL
 	}
 
 	// Insert oracle SLE
 	if err := ctx.View.Insert(oracleKey, data); err != nil {
+		ctx.Log.Error("oracle set create: failed to insert oracle", "error", err)
 		return tx.TefINTERNAL
 	}
 

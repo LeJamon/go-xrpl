@@ -63,16 +63,25 @@ func (o *OracleDelete) RequiredAmendments() [][32]byte {
 // Combines rippled's DeleteOracle::preclaim() and DeleteOracle::doApply().
 // Reference: rippled DeleteOracle.cpp
 func (o *OracleDelete) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("oracle delete apply",
+		"account", o.Account,
+		"oracleDocumentID", o.OracleDocumentID,
+	)
+
 	// --- Preclaim ---
 	// Reference: rippled DeleteOracle.cpp preclaim lines 47-69
 	oracleKey := keylet.Oracle(ctx.AccountID, o.OracleDocumentID)
 	oracleData, err := ctx.View.Read(oracleKey)
 	if err != nil || oracleData == nil {
+		ctx.Log.Warn("oracle delete: oracle not found",
+			"oracleDocumentID", o.OracleDocumentID,
+		)
 		return tx.TecNO_ENTRY
 	}
 
 	oracle, err := state.ParseOracle(oracleData)
 	if err != nil {
+		ctx.Log.Error("oracle delete: failed to parse oracle", "error", err)
 		return tx.TefINTERNAL
 	}
 
