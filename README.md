@@ -1,8 +1,8 @@
-# goXRPLd
+# go-xrpl
 
 An idiomatic Go implementation of an [XRP Ledger](https://xrpl.org/) node.
 
-goXRPLd is not a line-by-line port of [rippled](https://github.com/XRPLF/rippled) (the C++ reference implementation). It is a native Go implementation that follows Go conventions and concurrency patterns while maintaining full protocol compatibility with the XRP Ledger network. rippled serves as the de facto specification — there is no formal XRPL spec — so behavioral parity with rippled is the correctness bar.
+go-xrpl is not a line-by-line port of [rippled](https://github.com/XRPLF/rippled) (the C++ reference implementation). It is a native Go implementation that follows Go conventions and concurrency patterns while maintaining full protocol compatibility with the XRP Ledger network. rippled serves as the de facto specification — there is no formal XRPL spec — so behavioral parity with rippled is the correctness bar.
 
 > **Status: actively developed, building in public.** Core transaction processing, ledger state management, and RPC are functional. See [Current Status](#current-status) for details.
 
@@ -135,7 +135,7 @@ The client currently targets **standalone mode** (single-node, no network peers)
 
 **Why Go?** Go's concurrency model (goroutines, channels) is a natural fit for a blockchain node that juggles peer connections, transaction processing, consensus rounds, and RPC serving concurrently. The language's simplicity and strong standard library reduce the surface area for bugs in critical financial infrastructure.
 
-**Why not a direct port?** rippled's C++ idioms (templates, RAII, complex inheritance hierarchies) don't translate well to Go. Instead, goXRPLd uses Go interfaces, composition, and table-driven designs while preserving the same protocol semantics. The result is more readable and maintainable while remaining behaviorally equivalent.
+**Why not a direct port?** rippled's C++ idioms (templates, RAII, complex inheritance hierarchies) don't translate well to Go. Instead, go-xrpl uses Go interfaces, composition, and table-driven designs while preserving the same protocol semantics. The result is more readable and maintainable while remaining behaviorally equivalent.
 
 **rippled as spec.** Every transaction type, ledger entry, and edge case is validated against rippled's behavior. The local `rippled/` source tree is the reference for any ambiguity.
 
