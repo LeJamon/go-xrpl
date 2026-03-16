@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/crypto/common"
 	secp256k1 "github.com/LeJamon/goXRPLd/crypto/secp256k1"
 	"github.com/LeJamon/goXRPLd/drops"
