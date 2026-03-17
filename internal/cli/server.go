@@ -210,24 +210,9 @@ func runServer(cmd *cobra.Command, args []string) {
 			serverLog.Fatal("Failed to create consensus components", "err", compErr)
 		}
 
-		// Start overlay (P2P networking)
-		overlayCtx, overlayCancel := context.WithCancel(context.Background())
-		go func() {
-			if err := consensusComponents.Overlay.Run(overlayCtx); err != nil {
-				serverLog.Error("Overlay stopped", "err", err)
-			}
-		}()
-		_ = overlayCancel // stored for shutdown
-
-		// Start consensus engine
-		if err := consensusComponents.Engine.Start(context.Background()); err != nil {
-			serverLog.Fatal("Failed to start consensus engine", "err", err)
+		if err := consensusComponents.Start(); err != nil {
+			serverLog.Fatal("Failed to start consensus components", "err", err)
 		}
-
-		// Start message router
-		routerCtx, routerCancel := context.WithCancel(context.Background())
-		go consensusComponents.Router.Run(routerCtx)
-		_ = routerCancel // stored for shutdown
 
 		isValidator := globalConfig.IsValidator()
 		serverLog.Info("Running in consensus mode",
@@ -466,12 +451,7 @@ func doShutdown(
 
 	// Stop consensus components (if running)
 	if consensusComponents != nil {
-		if consensusComponents.Engine != nil {
-			_ = consensusComponents.Engine.Stop()
-		}
-		if consensusComponents.Overlay != nil {
-			_ = consensusComponents.Overlay.Stop()
-		}
+		consensusComponents.Stop()
 		logger.Info("Consensus components stopped")
 	}
 

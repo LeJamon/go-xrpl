@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/LeJamon/goXRPLd/config"
@@ -12,10 +13,52 @@ import (
 
 // Components holds all the consensus/networking components created by NewFromConfig.
 type Components struct {
-	Overlay *peermanagement.Overlay
-	Engine  consensus.Engine
-	Adaptor *Adaptor
-	Router  *Router
+	Overlay     *peermanagement.Overlay
+	Engine      consensus.Engine
+	Adaptor     *Adaptor
+	Router      *Router
+	ModeManager *ModeManager
+
+	// cancel functions for background goroutines
+	overlayCancel context.CancelFunc
+	routerCancel  context.CancelFunc
+}
+
+// Start launches all background goroutines (overlay, engine, router).
+func (c *Components) Start() error {
+	// Start overlay
+	overlayCtx, overlayCancel := context.WithCancel(context.Background())
+	c.overlayCancel = overlayCancel
+	go c.Overlay.Run(overlayCtx) //nolint:errcheck
+
+	// Start consensus engine
+	if err := c.Engine.Start(context.Background()); err != nil {
+		overlayCancel()
+		return fmt.Errorf("start consensus engine: %w", err)
+	}
+
+	// Start message router
+	routerCtx, routerCancel := context.WithCancel(context.Background())
+	c.routerCancel = routerCancel
+	go c.Router.Run(routerCtx)
+
+	return nil
+}
+
+// Stop gracefully shuts down all components.
+func (c *Components) Stop() {
+	if c.routerCancel != nil {
+		c.routerCancel()
+	}
+	if c.Engine != nil {
+		_ = c.Engine.Stop()
+	}
+	if c.overlayCancel != nil {
+		c.overlayCancel()
+	}
+	if c.Overlay != nil {
+		_ = c.Overlay.Stop()
+	}
 }
 
 // NewFromConfig creates and wires all consensus/networking components from the app config.
@@ -58,6 +101,9 @@ func NewFromConfig(
 		Validators:    validators,
 	})
 
+	// Create mode manager
+	modeManager := NewModeManager(adaptor)
+
 	// Create the RCL consensus engine
 	engine := rcl.NewEngine(adaptor, rcl.DefaultConfig())
 
@@ -65,10 +111,11 @@ func NewFromConfig(
 	router := NewRouter(engine, adaptor, overlay.Messages())
 
 	return &Components{
-		Overlay: overlay,
-		Engine:  engine,
-		Adaptor: adaptor,
-		Router:  router,
+		Overlay:     overlay,
+		Engine:      engine,
+		Adaptor:     adaptor,
+		Router:      router,
+		ModeManager: modeManager,
 	}, nil
 }
 

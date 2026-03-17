@@ -5,6 +5,7 @@ package adaptor
 
 import (
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -62,6 +63,8 @@ type Adaptor struct {
 	// Pending transactions (raw blobs) from RPC submissions and peer relay
 	pendingTxsMu sync.RWMutex
 	pendingTxs   map[consensus.TxID][]byte
+
+	logger *slog.Logger
 }
 
 // Config holds configuration for the Adaptor.
@@ -101,6 +104,7 @@ func New(cfg Config) *Adaptor {
 		operatingMode:     consensus.OpModeDisconnected,
 		txSetCache:        NewTxSetCache(),
 		pendingTxs:        make(map[consensus.TxID][]byte),
+		logger:            slog.Default().With("component", "consensus-adaptor"),
 	}
 }
 
@@ -330,12 +334,33 @@ func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*con
 
 	// Mark the ledger as validated in the service
 	a.ledgerService.SetValidatedLedger(ledger.Seq())
+
+	a.logger.Info("Consensus reached",
+		"ledger_seq", ledger.Seq(),
+		"validations", len(validations),
+	)
+
+	// Fire consensus phase hook if available
+	if hooks := a.ledgerService.GetEventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
+		go hooks.OnConsensusPhase("accepted")
+	}
 }
 
 func (a *Adaptor) OnModeChange(oldMode, newMode consensus.Mode) {
-	// Could be used to update metrics or notify subscribers
+	a.logger.Info("Consensus mode changed",
+		"from", oldMode.String(),
+		"to", newMode.String(),
+	)
 }
 
 func (a *Adaptor) OnPhaseChange(oldPhase, newPhase consensus.Phase) {
-	// Could be used to update metrics or notify subscribers
+	a.logger.Debug("Consensus phase changed",
+		"from", oldPhase.String(),
+		"to", newPhase.String(),
+	)
+
+	// Notify via hooks for WebSocket subscription broadcasting
+	if hooks := a.ledgerService.GetEventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
+		go hooks.OnConsensusPhase(newPhase.String())
+	}
 }
