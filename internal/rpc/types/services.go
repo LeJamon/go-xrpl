@@ -27,6 +27,9 @@ type ServiceContainer struct {
 
 	// ShutdownFunc gracefully stops the server (used by 'stop' method)
 	ShutdownFunc func()
+
+	// NodePublicKey is the base58-encoded node identity public key (e.g. "n9...")
+	NodePublicKey string
 }
 
 // LedgerNavigator provides ledger index navigation and mode queries.

@@ -79,7 +79,7 @@ func buildServerInfo(human bool) map[string]interface{} {
 		"build_version":     BuildVersion,
 		"complete_ledgers":  completeLedgers,
 		"io_latency_ms":     1,                                                      // TODO: track real IO latency
-		"pubkey_node":       "n9KnrcCmL5psyKtk2KWP6jy14Hj4EXuZDg7XMdQJ9cSDoFSp53hu", // TODO: derive from node identity
+		"pubkey_node":       types.Services.NodePublicKey,
 		"server_state":      serverState,
 		"uptime":            uptime,
 		"validation_quorum": 1, // TODO: get from consensus/validators

@@ -214,6 +214,9 @@ func runServer(cmd *cobra.Command, args []string) {
 			serverLog.Fatal("Failed to start consensus components", "err", err)
 		}
 
+		// Expose node identity to RPC handlers
+		types.Services.NodePublicKey = consensusComponents.Overlay.Identity().EncodedPublicKey()
+
 		isValidator := globalConfig.IsValidator()
 		serverLog.Info("Running in consensus mode",
 			"validator", isValidator,

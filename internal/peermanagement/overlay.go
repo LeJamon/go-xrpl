@@ -203,8 +203,16 @@ func (o *Overlay) acceptLoop(ctx context.Context) error {
 
 // handleInbound handles an incoming peer connection.
 func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("Panic in inbound handler", "t", "Overlay", "panic", r)
+			conn.Close()
+		}
+	}()
+
 	// Check if we can accept more inbound connections
 	if !o.canAcceptInbound() {
+		slog.Info("Inbound rejected: no slots", "t", "Overlay", "remote", conn.RemoteAddr())
 		conn.Close()
 		return
 	}
@@ -216,8 +224,16 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 	peer := NewPeer(peerID, endpoint, true, o.identity, o.events)
 	peer.AcceptConnection(conn)
 
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		slog.Error("Inbound connection is not TLS", "t", "Overlay", "remote", remoteAddr)
+		conn.Close()
+		return
+	}
+
 	// Perform handshake
-	if err := o.performInboundHandshake(ctx, peer, conn.(*tls.Conn)); err != nil {
+	if err := o.performInboundHandshake(ctx, peer, tlsConn); err != nil {
+		slog.Info("Inbound handshake failed", "t", "Overlay", "remote", remoteAddr, "err", err)
 		conn.Close()
 		o.events <- Event{
 			Type:     EventPeerFailed,
@@ -228,6 +244,8 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 		}
 		return
 	}
+
+	slog.Info("Inbound peer connected", "t", "Overlay", "remote", remoteAddr)
 
 	o.addPeer(peer)
 
@@ -240,6 +258,14 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 
 // performInboundHandshake handles the inbound handshake.
 func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsConn *tls.Conn) error {
+	// The TLS handshake is lazy after Accept(); we must complete it
+	// before accessing the finished messages via reflection.
+	handshakeCtx, cancel := context.WithTimeout(ctx, o.cfg.HandshakeTimeout)
+	defer cancel()
+	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
+		return NewHandshakeError(peer.Endpoint(), "tls", err)
+	}
+
 	sharedValue, err := MakeSharedValue(tlsConn)
 	if err != nil {
 		return NewHandshakeError(peer.Endpoint(), "shared_value", err)
@@ -465,6 +491,7 @@ func (o *Overlay) Connect(addr string) error {
 	cfg := PeerConfig{
 		SendBufferSize: DefaultSendBufferSize,
 		TLSConfig: &tls.Config{
+			Certificates:       []tls.Certificate{o.identity.TLSCertificate()},
 			InsecureSkipVerify: true,
 			MinVersion:         tls.VersionTLS12,
 			MaxVersion:         tls.VersionTLS12,
