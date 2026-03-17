@@ -1,0 +1,9 @@
+tmp/
+main
+xrpld
+*.md
+docs/
+tasks/
+testdata/
+scripts/
+.git/

@@ -149,6 +149,16 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TecTOO_SOON
 		}
 	}
+	// Verify deposit preauth with credentials BEFORE cleaning up owned objects.
+	// Credentials in the owner directory will be deleted during cleanup, so this
+	// check must happen first.
+	// Reference: rippled DeleteAccount.cpp doApply() — verifyDepositPreauth
+	// is called before cleanupOnAccountDelete.
+	if rules.Enabled(amendment.FeatureDepositAuth) && len(a.CredentialIDs) > 0 {
+		if r := adVerifyDepositPreauth(ctx, a.CredentialIDs, ctx.AccountID, destID, destAccount); r != tx.TesSUCCESS {
+			return r
+		}
+	}
 	const maxDeletableDirEntries = 1000
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 	var entryKeys [][32]byte
@@ -299,11 +309,6 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 	if dirData, err := ctx.View.Read(ownerDirKey); err == nil && dirData != nil {
 		ctx.View.Erase(ownerDirKey)
-	}
-	if rules.Enabled(amendment.FeatureDepositAuth) && len(a.CredentialIDs) > 0 {
-		if r := adVerifyDepositPreauth(ctx, a.CredentialIDs, ctx.AccountID, destID, destAccount); r != tx.TesSUCCESS {
-			return r
-		}
 	}
 	destData, err := ctx.View.Read(destKey)
 	if err != nil {
