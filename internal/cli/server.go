@@ -21,6 +21,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
+	"github.com/LeJamon/goXRPLd/version"
 	kvpebble "github.com/LeJamon/goXRPLd/storage/kvstore/pebble"
 	"github.com/LeJamon/goXRPLd/storage/nodestore"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
@@ -80,7 +81,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	xrpllog.SetRootConfig(&logCfg)
 	serverLog := rootLogger.Named(xrpllog.PartitionServer)
 
-	serverLog.Info("Starting goXRPLd", "version", "0.1.0-dev")
+	serverLog.Info("Starting goXRPLd", "version", version.Version)
 
 	// Initialize storage from config
 	var db nodestore.Database

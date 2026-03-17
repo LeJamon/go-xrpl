@@ -8,14 +8,14 @@ import (
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/goXRPLd/version"
 )
 
 // serverStartTime tracks when the server started for uptime calculation
 var serverStartTime = time.Now()
 
 // BuildVersion is the reported build version for server_info/server_state.
-// It can be overridden at build time via ldflags.
-var BuildVersion = "2.0.0-goXRPLd"
+var BuildVersion = version.Version
 
 // cachedHostID is resolved once at startup to avoid repeated syscalls.
 var cachedHostID = resolveHostID()

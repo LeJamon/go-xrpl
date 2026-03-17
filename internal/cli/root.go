@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/LeJamon/goXRPLd/config"
+	"github.com/LeJamon/goXRPLd/version"
 	"github.com/spf13/cobra"
 )
 
@@ -28,7 +29,7 @@ var rootCmd = &cobra.Command{
 with concurrent processing capabilities. This is NOT a direct translation of the
 C++ rippled implementation but rather a native Go implementation that follows
 Go conventions and patterns while maintaining protocol compatibility.`,
-	Version: "0.1.0-dev",
+	Version: version.Version,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
