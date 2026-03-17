@@ -350,7 +350,7 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 }
 
 func (p *Peer) pingLoop(ctx context.Context) error {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
 	for {
