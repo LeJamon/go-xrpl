@@ -18,11 +18,9 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	_ "github.com/LeJamon/goXRPLd/internal/tx/all"
-	"github.com/LeJamon/goXRPLd/internal/tx/amm"
 	"github.com/LeJamon/goXRPLd/internal/tx/trustset"
 	"github.com/LeJamon/goXRPLd/internal/txq"
 )
@@ -133,13 +131,6 @@ type runner struct {
 	// enableTxQ enables TxQ routing for fee escalation and queuing.
 	// Set to true for TxQ test suites (TxQPosNegFlows, TxQMetaInfo).
 	enableTxQ bool
-
-	// ammAddrMap maps fixture AMM account ID hex → our AMM account ID hex.
-	// Populated after AMMCreate succeeds, used to substitute addresses in
-	// subsequent tx_blobs and trust steps. This is needed because the AMM
-	// pseudo-account address depends on parentHash, which differs between
-	// rippled and goXRPL due to different ledger hash computation.
-	ammAddrMap map[string]string // lowercase hex of 20-byte account ID
 
 	// txqMinTxn overrides MinimumTxnInLedgerStandalone per fixture.
 	// Set from the fixture's testcase name using txqMinTxnLookup.
@@ -279,7 +270,7 @@ func RunFixture(t *testing.T, fixturePath string) {
 		case "close":
 			r.execClose(i, fixture.Steps)
 		case "tx":
-			r.execTx(i, step, fixture.Steps[i+1:])
+			r.execTx(i, step)
 		case "env_reset":
 			r.execEnvReset(i, step)
 		case "enable_amendment":
@@ -554,7 +545,7 @@ func (r *runner) replaySteps(steps []Step) {
 		case "close":
 			r.execClose(i, steps)
 		case "tx":
-			r.replayTx(step, steps[i+1:])
+			r.replayTx(step)
 		case "enable_amendment":
 			r.env.EnableFeature(step.Amendment)
 		case "modify_state":
@@ -565,9 +556,8 @@ func (r *runner) replaySteps(steps []Step) {
 
 // replayTx submits a transaction silently without asserting TER codes.
 // Used for replaying prerequisite fixture steps.
-func (r *runner) replayTx(step Step, remainingSteps []Step) {
-	blobHex := r.applyAMMAddrMap(step.TxBlob)
-	blob, err := hex.DecodeString(blobHex)
+func (r *runner) replayTx(step Step) {
+	blob, err := hex.DecodeString(step.TxBlob)
 	if err != nil || len(blob) == 0 {
 		return
 	}
@@ -575,10 +565,7 @@ func (r *runner) replayTx(step Step, remainingSteps []Step) {
 	if err != nil {
 		return
 	}
-	result := r.env.Submit(parsed)
-	if result.Success {
-		r.detectAMMMapping(0, step, remainingSteps)
-	}
+	r.env.Submit(parsed)
 }
 
 // setupEnv creates a TestEnv with the given configuration.
@@ -674,13 +661,7 @@ func (r *runner) execTrust(stepIdx int, step Step) {
 		r.t.Fatalf("Step %d (trust): invalid limit value %q: %v", stepIdx, step.LimitAmount.Value, err)
 	}
 
-	// Apply AMM address mapping to the issuer if needed
-	issuer := step.LimitAmount.Issuer
-	if mapped, ok := r.ammAddrMap[issuer]; ok {
-		issuer = mapped
-	}
-
-	limitAmount := tx.NewIssuedAmountFromFloat64(value, step.LimitAmount.Currency, issuer)
+	limitAmount := tx.NewIssuedAmountFromFloat64(value, step.LimitAmount.Currency, step.LimitAmount.Issuer)
 
 	ts := trustset.NewTrustSet(acc.Address, limitAmount)
 	ts.Fee = strconv.FormatUint(r.env.BaseFee(), 10)
@@ -977,11 +958,8 @@ func parseUint32Field(m map[string]interface{}, key string) (uint32, bool) {
 }
 
 // execTx handles a "tx" step.
-func (r *runner) execTx(stepIdx int, step Step, remainingSteps []Step) {
-	// Apply AMM address mapping to the blob if needed
-	blobHex := r.applyAMMAddrMap(step.TxBlob)
-
-	blob, err := hex.DecodeString(blobHex)
+func (r *runner) execTx(stepIdx int, step Step) {
+	blob, err := hex.DecodeString(step.TxBlob)
 	if err != nil {
 		r.t.Fatalf("Step %d (tx): invalid tx_blob hex: %v", stepIdx, err)
 	}
@@ -1008,11 +986,6 @@ func (r *runner) execTx(stepIdx int, step Step, remainingSteps []Step) {
 	}
 
 	result := r.env.Submit(parsed)
-
-	// After successful AMMCreate, detect AMM address mapping
-	if result.Success {
-		r.detectAMMMapping(stepIdx, step, remainingSteps)
-	}
 
 	// Assert TER code
 	if result.Code != step.ExpectTER {
@@ -1041,156 +1014,6 @@ func (r *runner) execTx(stepIdx int, step Step, remainingSteps []Step) {
 	if step.PostState != nil && strings.HasPrefix(result.Code, "tec") {
 		r.assertPostState(stepIdx, step.PostState)
 	}
-}
-
-// detectAMMMapping checks if a successful AMMCreate produced a different
-// pseudo-account address than the fixture expects, and records the mapping.
-// This happens because the AMM pseudo-account depends on parentHash, which
-// differs between rippled and goXRPL due to different ledger hash computation.
-func (r *runner) detectAMMMapping(stepIdx int, step Step, remainingSteps []Step) {
-	if step.TxJSON == nil {
-		return
-	}
-	var txj map[string]interface{}
-	if json.Unmarshal(step.TxJSON, &txj) != nil {
-		return
-	}
-	if txj["TransactionType"] != "AMMCreate" {
-		return
-	}
-
-	// Parse Asset and Asset2 from the tx_json
-	asset1 := parseAssetFromTxJSON(txj, "Amount")
-	asset2 := parseAssetFromTxJSON(txj, "Amount2")
-	if asset1.Currency == "" || asset2.Currency == "" {
-		return
-	}
-
-	// Get our AMM account address from the cache (populated by AMMCreate Apply)
-	ourAddr := amm.ComputeAMMAccountAddress(asset1, asset2)
-	if ourAddr == "" {
-		return
-	}
-
-	// Compute the LP token currency to identify fixture references
-	lptCurrency := amm.GenerateAMMLPTCurrency(asset1.Currency, asset2.Currency)
-
-	// Scan remaining steps for any reference to this LP token currency.
-	// The issuer of such a reference is the fixture's AMM account address.
-	fixtureAddr := findFixtureAMMAccount(remainingSteps, lptCurrency)
-	if fixtureAddr == "" || fixtureAddr == ourAddr {
-		return // No mapping needed
-	}
-
-	// Store mapping as hex account ID bytes
-	fixtureID, err := state.DecodeAccountID(fixtureAddr)
-	if err != nil {
-		return
-	}
-	ourID, err := state.DecodeAccountID(ourAddr)
-	if err != nil {
-		return
-	}
-
-	if r.ammAddrMap == nil {
-		r.ammAddrMap = make(map[string]string)
-	}
-	fixtureHex := hex.EncodeToString(fixtureID[:])
-	ourHex := hex.EncodeToString(ourID[:])
-	r.ammAddrMap[fixtureHex] = ourHex
-
-	// Also store the r-address mapping for trust step issuer replacement
-	r.ammAddrMap[fixtureAddr] = ourAddr
-}
-
-// parseAssetFromTxJSON extracts a tx.Asset from a tx_json field.
-// The field can be a string (XRP drops) or an object (IOU with currency/issuer).
-func parseAssetFromTxJSON(txj map[string]interface{}, field string) tx.Asset {
-	val, ok := txj[field]
-	if !ok {
-		return tx.Asset{}
-	}
-	switch v := val.(type) {
-	case string:
-		// XRP amount (drops string)
-		return tx.Asset{Currency: "XRP"}
-	case map[string]interface{}:
-		currency, _ := v["currency"].(string)
-		issuer, _ := v["issuer"].(string)
-		return tx.Asset{Currency: currency, Issuer: issuer}
-	default:
-		_ = v
-		return tx.Asset{}
-	}
-}
-
-// findFixtureAMMAccount scans steps for any IOU amount whose currency matches
-// the given LP token currency. Returns the issuer address (the fixture's AMM account).
-func findFixtureAMMAccount(steps []Step, lptCurrency string) string {
-	for _, s := range steps {
-		if s.TxJSON == nil {
-			continue
-		}
-		var txj map[string]interface{}
-		if json.Unmarshal(s.TxJSON, &txj) != nil {
-			continue
-		}
-		// Check common fields that may contain LP token references
-		for _, field := range []string{"BidMin", "BidMax", "LPTokenOut", "LPToken", "EPrice", "Amount", "LPTokensIn"} {
-			if addr := extractIssuerForCurrency(txj, field, lptCurrency); addr != "" {
-				return addr
-			}
-		}
-		// Also check LimitAmount (for TrustSet)
-		if la, ok := txj["LimitAmount"].(map[string]interface{}); ok {
-			if c, _ := la["currency"].(string); c == lptCurrency {
-				if issuer, _ := la["issuer"].(string); issuer != "" {
-					return issuer
-				}
-			}
-		}
-		// Check trust step limit_amount
-		if s.LimitAmount != nil && s.LimitAmount.Currency == lptCurrency {
-			return s.LimitAmount.Issuer
-		}
-	}
-	return ""
-}
-
-// extractIssuerForCurrency extracts the issuer from a tx_json field if its
-// currency matches the target currency.
-func extractIssuerForCurrency(txj map[string]interface{}, field, targetCurrency string) string {
-	val, ok := txj[field]
-	if !ok {
-		return ""
-	}
-	obj, ok := val.(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	currency, _ := obj["currency"].(string)
-	if currency != targetCurrency {
-		return ""
-	}
-	issuer, _ := obj["issuer"].(string)
-	return issuer
-}
-
-// applyAMMAddrMap replaces fixture AMM account ID bytes in a hex-encoded
-// tx_blob with our AMM account ID bytes. Returns the modified blob.
-func (r *runner) applyAMMAddrMap(blobHex string) string {
-	if len(r.ammAddrMap) == 0 {
-		return blobHex
-	}
-	lower := strings.ToLower(blobHex)
-	for fixtureHex, ourHex := range r.ammAddrMap {
-		// Skip r-address entries (only process hex account IDs)
-		if len(fixtureHex) != 40 {
-			continue
-		}
-		lower = strings.ReplaceAll(lower, fixtureHex, ourHex)
-	}
-	return lower
 }
 
 // execEnvReset handles an "env_reset" step.

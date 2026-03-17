@@ -198,9 +198,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 	ammAccountAddr, _ := encodeAccountID(ammAccountID)
 
-	// Cache the AMM pseudo-account ID for test helper lookups.
-	CacheAMMAccount(ammKey.Key, ammAccountID)
-
 	// Check if AMM account already exists (should not happen)
 	// Reference: rippled AMMCreate.cpp line 230-236
 	ammAccountKey := keylet.Account(ammAccountID)

@@ -98,32 +98,11 @@ func zeroAmount(asset tx.Asset) tx.Amount {
 	return state.NewIssuedAmountFromValue(0, -100, asset.Currency, asset.Issuer)
 }
 
-// ammAccountCache maps AMM keylet keys to their pseudo-account IDs.
-// Populated during AMMCreate and used by ComputeAMMAccountAddress for test helpers.
-var ammAccountCache = make(map[[32]byte][20]byte)
-
-// CacheAMMAccount stores an AMM keylet → accountID mapping for later lookup.
-func CacheAMMAccount(ammKeyletKey [32]byte, accountID [20]byte) {
-	ammAccountCache[ammKeyletKey] = accountID
-}
-
-// ClearAMMAccountCache removes all cached AMM account mappings.
-// Call this from test env_reset or between test runs.
-func ClearAMMAccountCache() {
-	ammAccountCache = make(map[[32]byte][20]byte)
-}
-
 // ComputeAMMAccountAddress returns the AMM pseudo-account address for the given asset pair.
-// It first checks the cache (populated by AMMCreate), then falls back to the AMM keylet
-// first-20-bytes derivation (which is incorrect but backwards-compatible for old tests).
+// Uses the first 20 bytes of the AMM keylet hash as the account ID.
 // Exported for use in test helpers.
 func ComputeAMMAccountAddress(asset1, asset2 tx.Asset) string {
 	ammKey := computeAMMKeylet(asset1, asset2)
-	if cachedID, ok := ammAccountCache[ammKey.Key]; ok {
-		addr, _ := encodeAccountID(cachedID)
-		return addr
-	}
-	// Fallback: first 20 bytes of keylet hash (incorrect but backwards-compatible)
 	var accountID [20]byte
 	copy(accountID[:], ammKey.Key[:20])
 	addr, _ := encodeAccountID(accountID)
