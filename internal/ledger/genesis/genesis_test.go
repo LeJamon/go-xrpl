@@ -291,20 +291,21 @@ func TestHasXRPFeesAmendment(t *testing.T) {
 // TestGenesisHashConformance verifies that the genesis hash matches what rippled
 // would produce for the same configuration. This catches serialization regressions.
 //
-// rippled test env: START_UP=NORMAL → no amendments → legacy FeeSettings format.
+// DefaultConfig() now includes all VoteDefaultYes amendments, matching rippled's
+// genesis behavior of enabling non-vetoed amendments via getDesired().
 // Reference: rippled Application.cpp:1707-1712, Ledger.cpp:168-229.
 func TestGenesisHashConformance(t *testing.T) {
-	t.Run("StandardDefaults_NoAmendments", func(t *testing.T) {
-		// Standard genesis: no amendments, standard fees (10 drops, 10 XRP reserve, 2 XRP increment)
+	t.Run("StandardDefaults_WithAmendments", func(t *testing.T) {
+		// Standard genesis: default amendments, standard fees (10 drops, 10 XRP reserve, 2 XRP increment)
 		cfg := DefaultConfig()
 		gen, err := Create(cfg)
 		if err != nil {
 			t.Fatalf("genesis creation failed: %v", err)
 		}
 
-		// These are the verified hashes for standard genesis with legacy fees
-		expectedAccountHash := "ec2f822edfbc6f2f4de5aa7c8aff128f27db2c194315fd727445a4967dafd018"
-		expectedLedgerHash := "b06f8e90df67b6a383e692a12963425b0e5fa6fbf0704370c137fce71d88a2d8"
+		// Verified hashes for standard genesis with default amendments and legacy fees
+		expectedAccountHash := "3791bf543e5b77a17bc454f7a0720e4615760f457135f399de67c54d7929546d"
+		expectedLedgerHash := "e158c218a9af027957a54ecd7d25f4ad35c90b2aaf8de4956723a17d80f5b3f4"
 
 		gotAccountHash := hex.EncodeToString(gen.Header.AccountHash[:])
 		gotLedgerHash := hex.EncodeToString(gen.Header.Hash[:])
@@ -317,20 +318,19 @@ func TestGenesisHashConformance(t *testing.T) {
 		}
 	})
 
-	t.Run("TestEnvConfig_NoAmendments", func(t *testing.T) {
-		// rippled test env config: 200 XRP reserve, 50 XRP increment, no amendments
+	t.Run("NoAmendments", func(t *testing.T) {
+		// Explicit no-amendments config for regression testing
 		cfg := DefaultConfig()
-		cfg.Fees.ReserveBase = drops.DropsPerXRP * 200
-		cfg.Fees.ReserveIncrement = drops.DropsPerXRP * 50
+		cfg.Amendments = nil
 
 		gen, err := Create(cfg)
 		if err != nil {
 			t.Fatalf("genesis creation failed: %v", err)
 		}
 
-		// Verified hashes for test env config with legacy fees
-		expectedAccountHash := "bd8a3d72ca73dde887ad63666ec2bad07875cba997a102579b5b95ecdffeaed8"
-		expectedLedgerHash := "3020eb9e7be24ef7d7a060cb051583ec117384636d1781afb5b87f3e348da489"
+		// Verified hashes for standard genesis with NO amendments (legacy fees)
+		expectedAccountHash := "ec2f822edfbc6f2f4de5aa7c8aff128f27db2c194315fd727445a4967dafd018"
+		expectedLedgerHash := "b06f8e90df67b6a383e692a12963425b0e5fa6fbf0704370c137fce71d88a2d8"
 
 		gotAccountHash := hex.EncodeToString(gen.Header.AccountHash[:])
 		gotLedgerHash := hex.EncodeToString(gen.Header.Hash[:])

@@ -1,10 +1,12 @@
 package genesis
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -83,6 +85,22 @@ type InitialAccount struct {
 	Flags    uint32
 }
 
+// DefaultGenesisAmendments returns the amendment IDs to include in the genesis
+// ledger. This matches rippled's behavior of enabling all non-vetoed amendments
+// at genesis via getDesired() (AmendmentTable.h:134-139).
+func DefaultGenesisAmendments() [][32]byte {
+	features := amendment.DefaultYesFeatures()
+	ids := make([][32]byte, len(features))
+	for i, f := range features {
+		ids[i] = f.ID
+	}
+	// Sort by hash to match rippled's std::map<uint256> ordering
+	sort.Slice(ids, func(i, j int) bool {
+		return bytes.Compare(ids[i][:], ids[j][:]) < 0
+	})
+	return ids
+}
+
 // DefaultConfig returns the default genesis configuration.
 // Fee format (modern vs legacy) is automatically derived from whether
 // the XRPFees amendment is in the Amendments list, matching rippled's
@@ -93,7 +111,7 @@ func DefaultConfig() Config {
 		MasterPassphrase:    MasterPassphrase,
 		CloseTimeResolution: GenesisTimeResolution,
 		Fees:                StandardFees(),
-		Amendments:          nil,
+		Amendments:          DefaultGenesisAmendments(),
 		InitialAccounts:     nil,
 	}
 }
