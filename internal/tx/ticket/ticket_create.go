@@ -81,34 +81,20 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Check 250 ticket threshold
 	// Reference: rippled CreateTicket.cpp preclaim() lines 63-79
-	// Count existing tickets in owner directory
-	var currentTicketCount uint32
-	_ = state.DirForEach(ctx.View, ownerDirKey, func(itemKey [32]byte) error {
-		entryKey := keylet.Keylet{Key: itemKey}
-		data, readErr := ctx.View.Read(entryKey)
-		if readErr != nil || len(data) == 0 {
-			return nil
-		}
-		entryType, typeErr := state.GetLedgerEntryType(data)
-		if typeErr != nil {
-			return nil
-		}
-		// Ticket type = 0x0054
-		if entryType == 0x0054 {
-			currentTicketCount++
-		}
-		return nil
-	})
-
-	// If using a ticket to create tickets, one ticket is consumed
-	var consumed uint32
-	if t.Common.TicketSequence != nil {
-		consumed = 1
-	}
+	//
+	// In rippled, preclaim() reads sfTicketCount BEFORE ticket consumption.
+	// In goXRPL, the engine consumes the ticket BEFORE calling Apply(),
+	// so ctx.Account.TicketCount has already been decremented.
+	// We use ctx.Account.TicketCount (post-consumption) and simply check
+	// whether adding the new tickets would exceed the threshold, which is
+	// equivalent to rippled's pre-consumption check:
+	//   curTicketCount + addedTickets - consumed > 250
+	//   = (postConsumptionCount + consumed) + addedTickets - consumed > 250
+	//   = postConsumptionCount + addedTickets > 250
+	currentTicketCount := ctx.Account.TicketCount
 
 	// maxTicketThreshold = 250
-	// Reference: rippled CreateTicket.cpp:75 — if (curTicketCount + addedTickets - consumed > 250)
-	if currentTicketCount+t.TicketCount-consumed > 250 {
+	if currentTicketCount+t.TicketCount > 250 {
 		ctx.Log.Warn("ticket create: would exceed 250 ticket limit",
 			"currentCount", currentTicketCount,
 			"requestedCount", t.TicketCount,
