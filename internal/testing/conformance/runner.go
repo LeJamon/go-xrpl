@@ -30,6 +30,7 @@ type Fixture struct {
 	RippledVersion string     `json:"rippled_version"`
 	Suite          string     `json:"suite"`
 	Testcase       string     `json:"testcase"`
+	DependsOn      string     `json:"depends_on,omitempty"`
 	Env            *EnvConfig `json:"env,omitempty"`
 	Steps          []Step     `json:"steps"`
 }
@@ -41,6 +42,7 @@ type EnvConfig struct {
 	ReserveBase       uint64   `json:"reserve_base"`
 	ReserveIncrement  uint64   `json:"reserve_increment"`
 	NetworkID         *uint32  `json:"network_id,omitempty"`
+	InitialLedgerSeq  *uint32  `json:"initial_ledger_seq,omitempty"`
 }
 
 // Step represents a single operation in a fixture.
@@ -58,6 +60,9 @@ type Step struct {
 	Env              *EnvConfig      `json:"env,omitempty"`
 	Amendment        string          `json:"amendment,omitempty"`
 	ModifyState      *ModifyState    `json:"modify_state,omitempty"`
+	CloseTime        *uint32         `json:"close_time,omitempty"`
+	LedgerSeq        *uint32         `json:"ledger_seq,omitempty"`
+	ParentCloseTime  *uint32         `json:"parent_close_time,omitempty"`
 }
 
 // ModifyState describes direct ledger state modifications that bypass normal
@@ -96,10 +101,12 @@ type PostState struct {
 
 // AccountState holds expected account state after a transaction.
 type AccountState struct {
-	Name       string `json:"name"`
-	Address    string `json:"address"`
-	XRPBalance string `json:"xrp_balance"`
-	OwnerCount uint32 `json:"owner_count"`
+	Name       string  `json:"name"`
+	Address    string  `json:"address"`
+	XRPBalance string  `json:"xrp_balance"`
+	OwnerCount uint32  `json:"owner_count"`
+	Sequence   *uint32 `json:"sequence,omitempty"`
+	Flags      *uint32 `json:"flags,omitempty"`
 }
 
 // rippleEpoch is Jan 1, 2000 00:00:00 UTC — the Ripple epoch start.
@@ -212,27 +219,22 @@ func RunFixture(t *testing.T, fixturePath string) {
 		txqMinTxn: minTxn,
 	}
 
-	// Detect continuation fixtures: fixtures without fund steps or env config
-	// are continuations of prior test cases in the same rippled test function.
-	// They depend on ledger state (accounts, regular keys, disabled master keys)
-	// from prerequisite fixtures. Replay those prerequisites first.
-	if isContinuation(fixture) {
-		prereqs := findPrerequisites(t, fixturePath, fixture)
-		if len(prereqs) > 0 {
-			// Set up env from the first prerequisite's config (or defaults)
-			envCfg := prereqs[0].Env
+	// If this fixture depends on a predecessor, build the dependency chain
+	// using the depends_on field and replay predecessors first.
+	if fixture.DependsOn != "" {
+		chain := loadDependsOnChain(t, fixturePath, fixture.DependsOn)
+		if len(chain) > 0 {
+			envCfg := chain[0].Env
 			if envCfg == nil {
 				cfg := defaultEnvConfig()
 				envCfg = &cfg
 			}
 			r.setupEnv(*envCfg)
-
-			// Replay each prerequisite fixture's steps silently
-			for _, prereq := range prereqs {
+			for _, prereq := range chain {
 				r.replaySteps(prereq.Steps)
 			}
 		} else {
-			// No prerequisites found — fall through to normal auto-fund
+			// Chain broken — fall back to defaults
 			cfg := defaultEnvConfig()
 			r.setupEnv(cfg)
 			if r.shouldAutoFund(fixture.Steps) {
@@ -240,7 +242,7 @@ func RunFixture(t *testing.T, fixturePath string) {
 			}
 		}
 	} else {
-		// Create initial environment (use defaults if env not specified)
+		// Normal fixture: set up env and optionally auto-fund
 		envCfg := fixture.Env
 		if envCfg == nil {
 			cfg := defaultEnvConfig()
@@ -248,13 +250,6 @@ func RunFixture(t *testing.T, fixturePath string) {
 		}
 		r.setupEnv(*envCfg)
 
-		// Auto-fund accounts for fixtures without fund steps.
-		// Many rippled test fixtures rely on implicit account creation from
-		// the test framework. When a fixture has no "fund" ops AND the first
-		// tx expects an applied result (tesSUCCESS/tec*), we scan tx_json
-		// steps to discover accounts and fund them. Fixtures that expect
-		// rejection codes (tem*/tef*/tel*/ter*) intentionally use unfunded
-		// accounts and should NOT be auto-funded.
 		if r.shouldAutoFund(fixture.Steps) {
 			r.autoFundAccounts(fixture.Steps)
 		}
@@ -268,8 +263,10 @@ func RunFixture(t *testing.T, fixturePath string) {
 		case "trust":
 			r.execTrust(i, step)
 		case "close":
-			r.execClose(i, fixture.Steps)
+			r.execClose(i, step)
 		case "tx":
+			r.execTx(i, step)
+		case "retry":
 			r.execTx(i, step)
 		case "env_reset":
 			r.execEnvReset(i, step)
@@ -283,253 +280,40 @@ func RunFixture(t *testing.T, fixturePath string) {
 	}
 }
 
-// isContinuation returns true if the fixture is a continuation of a prior
-// test case — it has no fund steps and no env config, meaning it depends on
-// ledger state established by prerequisite fixtures.
-func isContinuation(f Fixture) bool {
-	if f.Env != nil {
-		return false
-	}
-	for _, s := range f.Steps {
-		if s.Op == "fund" {
-			return false
-		}
-	}
-	return true
-}
-
-// findPrerequisites finds fixture files in the same directory that must be
-// replayed before the current fixture to establish the correct ledger state.
-//
-// In rippled, multiple testcase() calls within a single test function share
-// the same Env. The fixture extractor creates one file per testcase, so
-// continuation fixtures depend on state from prior testcases. This function
-// reconstructs the chain by following sequence links backwards:
-//
-//  1. Starting from the current fixture's minSeq, find the fixture whose
-//     maxSeq directly precedes it (maxSeq < minSeq, closest match).
-//  2. Recursively find that fixture's prerequisite until we reach a base
-//     fixture (one with fund steps).
-//  3. Only consider fixtures that share accounts with the current fixture.
-func findPrerequisites(t *testing.T, fixturePath string, current Fixture) []Fixture {
+// loadDependsOnChain follows depends_on links backwards to build the full
+// prerequisite chain. Returns fixtures in order from root to immediate parent.
+func loadDependsOnChain(t *testing.T, fixturePath string, firstDep string) []Fixture {
 	t.Helper()
-
 	dir := filepath.Dir(fixturePath)
-	currentFile := filepath.Base(fixturePath)
 
-	// Collect accounts used in the current fixture
-	currentAccounts := collectTxAccounts(current.Steps)
-	if len(currentAccounts) == 0 {
-		return nil
-	}
+	var chain []Fixture
+	dep := firstDep
+	seen := make(map[string]bool) // cycle protection
 
-	// Load all fixtures in the same directory
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-
-	type fixtureInfo struct {
-		fixture  Fixture
-		filename string
-		minSeq   uint32
-		maxSeq   uint32
-		hasFund  bool
-	}
-	var allFixtures []fixtureInfo
-
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
+	for dep != "" {
+		if seen[dep] {
+			t.Logf("depends_on cycle detected at %q", dep)
+			break
 		}
-		if entry.Name() == currentFile {
-			continue
-		}
+		seen[dep] = true
 
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		depPath := filepath.Join(dir, dep+".json")
+		data, err := os.ReadFile(depPath)
 		if err != nil {
-			continue
+			t.Logf("depends_on: cannot read %s: %v", depPath, err)
+			return nil
 		}
 		var f Fixture
 		if err := json.Unmarshal(data, &f); err != nil {
-			continue
-		}
-
-		// Skip fixtures that have their own env config. Such fixtures create
-		// an independent environment and cannot be valid prerequisites for
-		// the current fixture. Without this check, unrelated fixtures that
-		// happen to share account addresses (common in Credentials tests
-		// where issuer/subject addresses are reused across test functions)
-		// would be incorrectly selected as prerequisites.
-		if f.Env != nil {
-			continue
-		}
-
-		// Check for shared accounts
-		fAccounts := collectTxAccounts(f.Steps)
-		shared := false
-		for addr := range fAccounts {
-			if currentAccounts[addr] {
-				shared = true
-				break
-			}
-		}
-		if !shared {
-			continue
-		}
-
-		hasFund := false
-		for _, s := range f.Steps {
-			if s.Op == "fund" {
-				hasFund = true
-				break
-			}
-		}
-
-		allFixtures = append(allFixtures, fixtureInfo{
-			fixture:  f,
-			filename: entry.Name(),
-			minSeq:   minTxSequence(f.Steps),
-			maxSeq:   maxTxSequence(f.Steps),
-			hasFund:  hasFund,
-		})
-	}
-
-	if len(allFixtures) == 0 {
-		return nil
-	}
-
-	// Build the prerequisite chain by walking backwards from the current
-	// fixture's minSeq. At each step, find the fixture whose maxSeq is the
-	// closest predecessor (largest maxSeq that is still < targetMinSeq).
-	var chain []Fixture
-	targetMinSeq := minTxSequence(current.Steps)
-
-	for {
-		// Find the best predecessor: fixture with the largest maxSeq <= targetMinSeq.
-		// We use <= because failed transactions (tefMASTER_DISABLED, tefBAD_AUTH, etc.)
-		// don't consume the sequence number. A fixture chain like:
-		//   Set_regular_key (seqs 4-6) → Disable_master_key (seqs 7-9, where 9 fails)
-		//   → Re-enable_master_key (starts at seq 9)
-		// has Disable_master_key's maxSeq=9 == Re-enable_master_key's minSeq=9.
-		bestIdx := -1
-		bestMaxSeq := uint32(0)
-		for i, fi := range allFixtures {
-			if fi.maxSeq > 0 && fi.maxSeq <= targetMinSeq && fi.maxSeq > bestMaxSeq {
-				bestIdx = i
-				bestMaxSeq = fi.maxSeq
-			}
-		}
-
-		if bestIdx < 0 {
-			break
-		}
-
-		best := allFixtures[bestIdx]
-		chain = append([]Fixture{best.fixture}, chain...) // prepend
-
-		// If this is a base fixture (has fund steps), we're done
-		if best.hasFund {
-			break
-		}
-
-		// Otherwise, continue looking for this fixture's prerequisite
-		targetMinSeq = best.minSeq
-
-		// Remove the selected fixture to avoid infinite loops
-		allFixtures = append(allFixtures[:bestIdx], allFixtures[bestIdx+1:]...)
-	}
-
-	// Only return the chain if it starts with a base fixture (one with fund
-	// steps). A chain that doesn't reach a base means we couldn't find the
-	// original environment setup, so the caller should fall back to auto-fund.
-	if len(chain) > 0 {
-		hasBase := false
-		for _, s := range chain[0].Steps {
-			if s.Op == "fund" {
-				hasBase = true
-				break
-			}
-		}
-		if !hasBase {
+			t.Logf("depends_on: cannot parse %s: %v", depPath, err)
 			return nil
 		}
+
+		chain = append([]Fixture{f}, chain...) // prepend
+		dep = f.DependsOn                      // follow the chain
 	}
 
 	return chain
-}
-
-// minTxSequence returns the minimum Sequence from tx steps in a fixture.
-// Returns 0 if no valid sequences found.
-func minTxSequence(steps []Step) uint32 {
-	min := uint32(0xFFFFFFFF)
-	found := false
-	for _, s := range steps {
-		if s.Op != "tx" || s.TxJSON == nil {
-			continue
-		}
-		var txj map[string]interface{}
-		if err := json.Unmarshal(s.TxJSON, &txj); err != nil {
-			continue
-		}
-		if seqF, ok := txj["Sequence"].(float64); ok && seqF > 0 {
-			seq := uint32(seqF)
-			if seq < min {
-				min = seq
-				found = true
-			}
-		}
-	}
-	if !found {
-		return 0
-	}
-	return min
-}
-
-// maxTxSequence returns the maximum Sequence from tx steps in a fixture.
-// Returns 0 if no valid sequences found.
-func maxTxSequence(steps []Step) uint32 {
-	max := uint32(0)
-	for _, s := range steps {
-		if s.Op != "tx" || s.TxJSON == nil {
-			continue
-		}
-		var txj map[string]interface{}
-		if err := json.Unmarshal(s.TxJSON, &txj); err != nil {
-			continue
-		}
-		if seqF, ok := txj["Sequence"].(float64); ok {
-			seq := uint32(seqF)
-			if seq > max {
-				max = seq
-			}
-		}
-	}
-	return max
-}
-
-// collectTxAccounts returns the set of Account addresses from tx steps.
-func collectTxAccounts(steps []Step) map[string]bool {
-	accounts := make(map[string]bool)
-	for _, s := range steps {
-		if s.Op != "tx" || s.TxJSON == nil {
-			continue
-		}
-		var txj map[string]interface{}
-		if err := json.Unmarshal(s.TxJSON, &txj); err != nil {
-			continue
-		}
-		if addr, ok := txj["Account"].(string); ok && addr != "" {
-			accounts[addr] = true
-		}
-	}
-	// Also collect from fund steps
-	for _, s := range steps {
-		if s.Op == "fund" && s.Address != "" {
-			accounts[s.Address] = true
-		}
-	}
-	return accounts
 }
 
 // replaySteps executes fixture steps silently (without asserting TER codes
@@ -543,8 +327,8 @@ func (r *runner) replaySteps(steps []Step) {
 		case "trust":
 			r.execTrust(i, step)
 		case "close":
-			r.execClose(i, steps)
-		case "tx":
+			r.execClose(i, step)
+		case "tx", "retry":
 			r.replayTx(step)
 		case "enable_amendment":
 			r.env.EnableFeature(step.Amendment)
@@ -677,284 +461,17 @@ func (r *runner) execTrust(stepIdx int, step Step) {
 	r.env.ReimburseFeeDirect(acc)
 }
 
-// execClose handles a "close" step, aligning the clock with expected time
-// offsets when necessary.
-//
-// rippled tests sometimes do env.close(specificTimepoint) to jump the ledger
-// clock forward by large amounts. These time jumps are captured in the fixture
-// as plain "close" ops indistinguishable from the default 5-second advance.
-// The goXRPL conformance runner advances by a fixed 10s per close, so the
-// clock drifts for fixtures that rely on large time offsets.
-//
-// To fix this, execClose contains calibration logic for:
-// 1. OracleSet transactions (LastUpdateTime range checks)
-// 2. PaymentChannel transactions (CancelAfter/Expiration auto-close)
-//
-// When the current clock would produce the wrong result, the clock is advanced
-// to match the value rippled must have had.
-func (r *runner) execClose(stepIdx int, steps []Step) {
-	r.calibrateOracleTime(stepIdx, steps)
-	r.calibratePayChanTime(stepIdx, steps)
+// execClose handles a "close" step. With v2 fixtures, the close_time field
+// provides the exact close time, eliminating the need for time calibration.
+func (r *runner) execClose(stepIdx int, step Step) {
+	if step.CloseTime != nil {
+		// v2 fixture: set clock so that after Close()'s 10s advance,
+		// the resulting close time matches the fixture's close_time.
+		// close_time is in seconds since Ripple epoch (Jan 1, 2000).
+		targetTime := rippleEpoch.Add(time.Duration(*step.CloseTime) * time.Second)
+		r.env.SetTime(targetTime.Add(-10 * time.Second))
+	}
 	r.env.Close()
-}
-
-// calibrateOracleTime adjusts the clock for upcoming OracleSet transactions
-// whose expected TER depends on the ledger close time.
-func (r *runner) calibrateOracleTime(stepIdx int, steps []Step) {
-	const rippleEpochOffset = uint64(946684800)
-	const maxDelta = uint64(300)
-
-	// Find the next OracleSet tx after this close (skipping other closes).
-	for j := stepIdx + 1; j < len(steps); j++ {
-		s := steps[j]
-		if s.Op == "env_reset" {
-			break
-		}
-		if s.Op != "tx" || s.TxJSON == nil {
-			continue
-		}
-		var txj map[string]interface{}
-		if err := json.Unmarshal(s.TxJSON, &txj); err != nil {
-			break
-		}
-		if txj["TransactionType"] != "OracleSet" {
-			break
-		}
-
-		// Parse LastUpdateTime from the tx JSON.
-		lutRaw, ok := txj["LastUpdateTime"]
-		if !ok {
-			break
-		}
-		var lut uint64
-		switch v := lutRaw.(type) {
-		case float64:
-			lut = uint64(v)
-		case string:
-			parsed, err := strconv.ParseUint(v, 10, 64)
-			if err != nil {
-				break
-			}
-			lut = parsed
-		default:
-			break
-		}
-		if lut < rippleEpochOffset {
-			break // LUT before Ripple epoch — nothing to calibrate
-		}
-		lutRipple := lut - rippleEpochOffset
-
-		// Count how many close steps sit between this close and the OracleSet.
-		// Each intermediate close advances the clock by 10s.
-		intermCloses := uint64(0)
-		for k := stepIdx + 1; k < j; k++ {
-			if steps[k].Op == "close" {
-				intermCloses++
-			}
-		}
-
-		// Compute what parentCloseTime would be after THIS close and all
-		// intermediate closes, using the current clock.
-		currentRipple := uint64(r.env.Now().Unix()) - rippleEpochOffset
-		projectedClose := currentRipple + 10 + intermCloses*10
-
-		// Check whether the projected close time yields the expected TER.
-		needsAdjust := false
-		var targetClose uint64
-
-		switch s.ExpectTER {
-		case "tesSUCCESS":
-			// For success, lutRipple must be in [close-300, close+300].
-			if lutRipple+maxDelta < projectedClose || (projectedClose+maxDelta < lutRipple) {
-				// The projected close time would put LUT outside the valid range.
-				// Target: set close time to lutRipple (the rippled default LUT = closeTime).
-				targetClose = lutRipple
-				needsAdjust = true
-			}
-		case "tecINVALID_UPDATE_TIME":
-			// For the range check to fail, lutRipple must be outside [close-300, close+300].
-			// If projected close would make it pass (inside the range), we need to adjust.
-			if projectedClose >= maxDelta {
-				lower := projectedClose - maxDelta
-				upper := projectedClose + maxDelta
-				if lutRipple >= lower && lutRipple <= upper {
-					// LUT is inside the valid range with projected close → wrong result.
-					// We need closeTime such that lutRipple is OUTSIDE [ct-300, ct+300].
-					// Choose ct = lutRipple + maxDelta + 1 (push LUT below the lower bound).
-					targetClose = lutRipple + maxDelta + 1
-					needsAdjust = true
-				}
-			}
-		}
-
-		if needsAdjust && targetClose > projectedClose {
-			// Advance the clock so that after this close (+10s) and intermediate
-			// closes, parentCloseTime = targetClose.
-			advanceBy := targetClose - projectedClose
-			r.env.AdvanceTime(time.Duration(advanceBy) * time.Second)
-		}
-
-		break // only check the first OracleSet after this close
-	}
-}
-
-// calibratePayChanTime adjusts the clock for upcoming PaymentChannel
-// transactions that expect channel auto-close on CancelAfter or Expiration.
-//
-// In rippled tests, env.close(cancelAfter) or env.close(settleTimepoint) jumps
-// the clock to a specific time so that the next PayChan transaction triggers
-// the CancelAfter/Expiration auto-close check. The fixture captures these as
-// plain "close" ops, so we scan ahead for PayChan transactions whose post_state
-// indicates a channel was closed (owner_count decreased) and advance time to
-// the channel's CancelAfter or Expiration value.
-func (r *runner) calibratePayChanTime(stepIdx int, steps []Step) {
-	const rippleEpochOffset = uint64(946684800)
-
-	// Collect all known CancelAfter and settle-expiry values from preceding
-	// PaymentChannelCreate/Fund/Claim steps. We track both CancelAfter (set
-	// at creation time) and settle-based Expiration (set when tfClose is used).
-	var maxExpiry uint64
-	var lastSettleDelay uint32
-	closesBefore := 0
-
-	for i := 0; i < stepIdx; i++ {
-		s := steps[i]
-		if s.Op == "close" {
-			closesBefore++
-			continue
-		}
-		if s.Op == "fund" {
-			// A fund step resets the test context — clear tracked expiries.
-			// This prevents stale CancelAfter from a previous sub-test from
-			// affecting the current sub-test's time calibration.
-			maxExpiry = 0
-			lastSettleDelay = 0
-			continue
-		}
-		if s.Op != "tx" || s.TxJSON == nil {
-			continue
-		}
-		var txj map[string]interface{}
-		if err := json.Unmarshal(s.TxJSON, &txj); err != nil {
-			continue
-		}
-		tt, _ := txj["TransactionType"].(string)
-
-		switch tt {
-		case "PaymentChannelCreate":
-			if ca, ok := parseUint32Field(txj, "CancelAfter"); ok && uint64(ca) > maxExpiry {
-				maxExpiry = uint64(ca)
-			}
-			if sd, ok := parseUint32Field(txj, "SettleDelay"); ok {
-				lastSettleDelay = sd
-			}
-		case "PaymentChannelClaim":
-			// If this claim had tfClose flag, it set Expiration on the channel.
-			// Expiration = parentCloseTime_at_claim + SettleDelay.
-			flags, _ := parseUint32Field(txj, "Flags")
-			if flags&0x20000 != 0 && lastSettleDelay > 0 { // tfPayChanClose
-				// Estimate parentCloseTime at the time of this claim.
-				// Each close step advances by 10s from ripple epoch 0.
-				claimParentClose := uint64(closesBefore) * 10
-				settleExpiry := claimParentClose + uint64(lastSettleDelay)
-				if settleExpiry > maxExpiry {
-					maxExpiry = settleExpiry
-				}
-			}
-		case "PaymentChannelFund":
-			if exp, ok := parseUint32Field(txj, "Expiration"); ok && uint64(exp) > maxExpiry {
-				maxExpiry = uint64(exp)
-			}
-		}
-	}
-
-	if maxExpiry == 0 {
-		return // no PayChan expiry values found
-	}
-
-	// Scan ahead for the next PayChan tx after this close (and any
-	// intermediate closes) that expects a channel close in its post_state.
-	closesAfter := uint64(0) // count of close steps between this one and the target tx
-	for j := stepIdx + 1; j < len(steps); j++ {
-		s := steps[j]
-		if s.Op == "env_reset" || s.Op == "fund" {
-			break
-		}
-		if s.Op == "close" {
-			closesAfter++
-			continue
-		}
-		if s.Op != "tx" || s.TxJSON == nil {
-			continue
-		}
-		var txj map[string]interface{}
-		if err := json.Unmarshal(s.TxJSON, &txj); err != nil {
-			break
-		}
-		tt, _ := txj["TransactionType"].(string)
-		if tt != "PaymentChannelClaim" && tt != "PaymentChannelFund" &&
-			tt != "PaymentChannelCreate" && tt != "AccountDelete" &&
-			tt != "Payment" {
-			break
-		}
-
-		// Check if this tx expects a channel auto-close by looking at post_state.
-		needsExpiry := false
-		if s.PostState != nil {
-			for _, as := range s.PostState.Accounts {
-				// A channel close returns funds to the owner and decrements
-				// owner_count. We detect this by looking for owner_count
-				// values that indicate channels were closed.
-				actualOC := r.env.OwnerCount(
-					jtx.NewAccountWithAddress(as.Name, as.Address))
-				if actualOC > as.OwnerCount {
-					needsExpiry = true
-				}
-			}
-		}
-
-		// Also detect auto-close for tecEXPIRED (fixPayChanCancelAfter).
-		if s.ExpectTER == "tecEXPIRED" {
-			needsExpiry = true
-		}
-
-		if !needsExpiry {
-			break
-		}
-
-		// Compute the projected parentCloseTime after this close + intermediate closes.
-		currentRipple := uint64(r.env.Now().Unix()) - rippleEpochOffset
-		projectedClose := currentRipple + 10 + closesAfter*10
-
-		// If the projected close time is already past the expiry, no adjustment needed.
-		if projectedClose >= maxExpiry {
-			break
-		}
-
-		// Need to advance time to maxExpiry so the auto-close check triggers.
-		advanceBy := maxExpiry - projectedClose
-		r.env.AdvanceTime(time.Duration(advanceBy) * time.Second)
-		break
-	}
-}
-
-// parseUint32Field extracts a uint32 value from a JSON map field.
-func parseUint32Field(m map[string]interface{}, key string) (uint32, bool) {
-	v, ok := m[key]
-	if !ok {
-		return 0, false
-	}
-	switch val := v.(type) {
-	case float64:
-		return uint32(val), true
-	case string:
-		parsed, err := strconv.ParseUint(val, 10, 64)
-		if err != nil {
-			return 0, false
-		}
-		return uint32(parsed), true
-	}
-	return 0, false
 }
 
 // execTx handles a "tx" step.
@@ -1099,6 +616,11 @@ func (r *runner) assertPostState(stepIdx int, ps *PostState) {
 			r.t.Errorf("Step %d: owner_count mismatch for %s: got %d, want %d",
 				stepIdx, expected.Name, gotOwnerCount, expected.OwnerCount)
 		}
+
+		// Note: sequence and flags fields are parsed from v2 fixtures but not
+		// asserted yet. The runner's account setup (auto-fund, setupEnv) does not
+		// yet produce identical starting sequences to rippled, so sequence checks
+		// would fail for reasons unrelated to transaction logic correctness.
 	}
 }
 

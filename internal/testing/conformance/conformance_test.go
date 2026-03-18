@@ -10,7 +10,7 @@ import (
 
 // fixturesRoot is the path to the xrpl-fixtures directory relative to this test file.
 // Adjust this if the fixtures are located elsewhere.
-const fixturesRoot = "../../../../xrpl-fixtures/rippled-2.6.2"
+const fixturesRoot = "../../../../../../../fixtures/rippled-2.6.2-v2"
 
 func TestConformance(t *testing.T) {
 	root, err := filepath.Abs(fixturesRoot)
