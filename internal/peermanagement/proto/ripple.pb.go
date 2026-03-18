@@ -2154,10 +2154,10 @@ func (x *TMLedgerData) GetError() TMReplyError {
 // Ping/Pong
 type TMPing struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Type          TMPing_PingType        `protobuf:"varint,1,opt,name=type,proto3,enum=protocol.TMPing_PingType" json:"type,omitempty"`
-	Seq           uint32                 `protobuf:"varint,2,opt,name=seq,proto3" json:"seq,omitempty"`
-	PingTime      uint64                 `protobuf:"varint,3,opt,name=ping_time,json=pingTime,proto3" json:"ping_time,omitempty"`
-	NetTime       uint64                 `protobuf:"varint,4,opt,name=net_time,json=netTime,proto3" json:"net_time,omitempty"`
+	Type          *TMPing_PingType       `protobuf:"varint,1,opt,name=type,proto3,enum=protocol.TMPing_PingType,oneof" json:"type,omitempty"`
+	Seq           *uint32                `protobuf:"varint,2,opt,name=seq,proto3,oneof" json:"seq,omitempty"`
+	PingTime      *uint64                `protobuf:"varint,3,opt,name=ping_time,json=pingTime,proto3,oneof" json:"ping_time,omitempty"`
+	NetTime       *uint64                `protobuf:"varint,4,opt,name=net_time,json=netTime,proto3,oneof" json:"net_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2193,29 +2193,29 @@ func (*TMPing) Descriptor() ([]byte, []int) {
 }
 
 func (x *TMPing) GetType() TMPing_PingType {
-	if x != nil {
-		return x.Type
+	if x != nil && x.Type != nil {
+		return *x.Type
 	}
 	return TMPing_ptPING
 }
 
 func (x *TMPing) GetSeq() uint32 {
-	if x != nil {
-		return x.Seq
+	if x != nil && x.Seq != nil {
+		return *x.Seq
 	}
 	return 0
 }
 
 func (x *TMPing) GetPingTime() uint64 {
-	if x != nil {
-		return x.PingTime
+	if x != nil && x.PingTime != nil {
+		return *x.PingTime
 	}
 	return 0
 }
 
 func (x *TMPing) GetNetTime() uint64 {
-	if x != nil {
-		return x.NetTime
+	if x != nil && x.NetTime != nil {
+		return *x.NetTime
 	}
 	return 0
 }
@@ -2766,17 +2766,22 @@ const file_internal_peermanagement_proto_ripple_proto_rawDesc = "" +
 	"\x04type\x18\x03 \x01(\x0e2\x1a.protocol.TMLedgerInfoTypeR\x04type\x12,\n" +
 	"\x05nodes\x18\x04 \x03(\v2\x16.protocol.TMLedgerNodeR\x05nodes\x12%\n" +
 	"\x0erequest_cookie\x18\x05 \x01(\rR\rrequestCookie\x12,\n" +
-	"\x05error\x18\x06 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05error\"\xa5\x01\n" +
-	"\x06TMPing\x12-\n" +
-	"\x04type\x18\x01 \x01(\x0e2\x19.protocol.TMPing.PingTypeR\x04type\x12\x10\n" +
-	"\x03seq\x18\x02 \x01(\rR\x03seq\x12\x1b\n" +
-	"\tping_time\x18\x03 \x01(\x04R\bpingTime\x12\x19\n" +
-	"\bnet_time\x18\x04 \x01(\x04R\anetTime\"\"\n" +
+	"\x05error\x18\x06 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05error\"\xe5\x01\n" +
+	"\x06TMPing\x122\n" +
+	"\x04type\x18\x01 \x01(\x0e2\x19.protocol.TMPing.PingTypeH\x00R\x04type\x88\x01\x01\x12\x15\n" +
+	"\x03seq\x18\x02 \x01(\rH\x01R\x03seq\x88\x01\x01\x12 \n" +
+	"\tping_time\x18\x03 \x01(\x04H\x02R\bpingTime\x88\x01\x01\x12\x1e\n" +
+	"\bnet_time\x18\x04 \x01(\x04H\x03R\anetTime\x88\x01\x01\"\"\n" +
 	"\bPingType\x12\n" +
 	"\n" +
 	"\x06ptPING\x10\x00\x12\n" +
 	"\n" +
-	"\x06ptPONG\x10\x01\"|\n" +
+	"\x06ptPONG\x10\x01B\a\n" +
+	"\x05_typeB\x06\n" +
+	"\x04_seqB\f\n" +
+	"\n" +
+	"_ping_timeB\v\n" +
+	"\t_net_time\"|\n" +
 	"\tTMSquelch\x12\x18\n" +
 	"\asquelch\x18\x01 \x01(\bR\asquelch\x12*\n" +
 	"\x11validator_pub_key\x18\x02 \x01(\fR\x0fvalidatorPubKey\x12)\n" +
@@ -2992,6 +2997,7 @@ func file_internal_peermanagement_proto_ripple_proto_init() {
 	if File_internal_peermanagement_proto_ripple_proto != nil {
 		return
 	}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[21].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

@@ -84,11 +84,12 @@ func newProtoMessage(msgType MessageType) (pb.Message, error) {
 func toProto(msg Message) (pb.Message, error) {
 	switch m := msg.(type) {
 	case *Ping:
+		pingType := proto.TMPing_PingType(m.PType)
 		return &proto.TMPing{
-			Type:     proto.TMPing_PingType(m.PType),
-			Seq:      m.Seq,
-			PingTime: m.PingTime,
-			NetTime:  m.NetTime,
+			Type:     &pingType,
+			Seq:      &m.Seq,
+			PingTime: &m.PingTime,
+			NetTime:  &m.NetTime,
 		}, nil
 
 	case *Manifests:
@@ -302,10 +303,10 @@ func fromProto(msgType MessageType, protoMsg pb.Message) (Message, error) {
 	case TypePing:
 		p := protoMsg.(*proto.TMPing)
 		return &Ping{
-			PType:    PingType(p.Type),
-			Seq:      p.Seq,
-			PingTime: p.PingTime,
-			NetTime:  p.NetTime,
+			PType:    PingType(p.GetType()),
+			Seq:      p.GetSeq(),
+			PingTime: p.GetPingTime(),
+			NetTime:  p.GetNetTime(),
 		}, nil
 
 	case TypeManifests:

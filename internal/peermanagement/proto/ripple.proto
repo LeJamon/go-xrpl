@@ -275,10 +275,10 @@ message TMPing {
         ptPING = 0;
         ptPONG = 1;
     }
-    PingType type = 1;
-    uint32 seq = 2;
-    uint64 ping_time = 3;
-    uint64 net_time = 4;
+    optional PingType type = 1;
+    optional uint32 seq = 2;
+    optional uint64 ping_time = 3;
+    optional uint64 net_time = 4;
 }
 
 // Squelch for reduce-relay
