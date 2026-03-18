@@ -470,14 +470,18 @@ func SerializeAccountRoot(a *ledgerentries.AccountRoot) ([]byte, error) {
 		return nil, fmt.Errorf("failed to encode account address: %w", err)
 	}
 
-	// Build the JSON representation for the binary codec
+	// Build the JSON representation for the binary codec.
+	// All soeREQUIRED fields for AccountRoot must be present (rippled auto-initializes them):
+	// LedgerEntryType, Flags, Account, Sequence, Balance, OwnerCount,
+	// PreviousTxnID, PreviousTxnLgrSeq
+	// Reference: rippled ledger_entries.macro lines 147-153
 	jsonObj := map[string]any{
 		"LedgerEntryType":   "AccountRoot",
+		"Flags":             uint32(0),
 		"Account":           address,
 		"Balance":           fmt.Sprintf("%d", a.Balance), // XRP balance as drops string
 		"Sequence":          a.Sequence,
-		"OwnerCount":        a.OwnerCount,
-		"Flags":             a.Flags,
+		"OwnerCount":        uint32(0),
 		"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
 		"PreviousTxnLgrSeq": uint32(0),
 	}
@@ -494,7 +498,8 @@ func SerializeAccountRoot(a *ledgerentries.AccountRoot) ([]byte, error) {
 
 // serializeFeeSettings serializes a FeeSettings entry to bytes using the XRPL binary codec.
 func serializeFeeSettings(f *ledgerentries.FeeSettings) ([]byte, error) {
-	// Build the JSON representation for the binary codec
+	// Build the JSON representation for the binary codec.
+	// Rippled auto-initializes Flags=0 as a required field.
 	jsonObj := map[string]any{
 		"LedgerEntryType": "FeeSettings",
 		"Flags":           uint32(0),
@@ -540,7 +545,8 @@ func serializeAmendments(amendments [][32]byte) ([]byte, error) {
 		amendmentHexes[i] = fmt.Sprintf("%064X", amendment)
 	}
 
-	// Build the JSON representation for the binary codec
+	// Build the JSON representation for the binary codec.
+	// Rippled auto-initializes Flags=0 as a required field.
 	jsonObj := map[string]any{
 		"LedgerEntryType": "Amendments",
 		"Flags":           uint32(0),
