@@ -267,10 +267,15 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 		}
 		r.peersMu.Unlock()
 
-		// During initial sync, try to adopt the peer's ledger directly from StatusChange
+		// During initial sync, adopt the peer's ledger from StatusChange
 		if r.adaptor.NeedsInitialSync() && sc.LedgerSeq > 1 {
 			r.tryAdoptFromStatusChange(sc.LedgerSeq, peerHash, parentHash)
 		}
+
+		// TODO: To properly track rippled's chain, goXRPL needs to participate
+		// in consensus (match close times from proposals) rather than running
+		// solo consensus rounds. For now, the initial adoption gets us past
+		// the seq 2 barrier.
 
 		// Check if we're behind and need to catch up
 		r.checkBehind(sc.LedgerSeq, peerHash)
@@ -284,8 +289,20 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 func (r *Router) tryAdoptFromStatusChange(seq uint32, hash, parentHash [32]byte) {
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
+		r.logger.Warn("tryAdopt: no ledger service")
 		return
 	}
+
+	closedLedger := svc.GetClosedLedger()
+	if closedLedger == nil {
+		r.logger.Warn("tryAdopt: no closed ledger")
+		return
+	}
+
+	r.logger.Info("attempting ledger adoption",
+		"peer_seq", seq,
+		"our_seq", closedLedger.Sequence(),
+	)
 
 	// Build a synthetic header from the StatusChange data
 	h := &header.LedgerHeader{
@@ -293,14 +310,14 @@ func (r *Router) tryAdoptFromStatusChange(seq uint32, hash, parentHash [32]byte)
 		Hash:        hash,
 		ParentHash:  parentHash,
 		// Reuse genesis state hash — valid for empty ledger sequences
-		AccountHash: svc.GetClosedLedger().Header().AccountHash,
+		AccountHash: closedLedger.Header().AccountHash,
 		// TxHash stays zero — no transactions
 		Drops:               100_000_000_000_000_000, // total XRP supply
 		CloseTimeResolution: 10,
 	}
 
 	if err := svc.AdoptLedgerHeader(h); err != nil {
-		r.logger.Debug("failed to adopt from status change", "error", err, "seq", seq)
+		r.logger.Info("failed to adopt from status change", "error", err, "seq", seq)
 		return
 	}
 

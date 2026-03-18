@@ -1156,11 +1156,9 @@ func (s *Service) AdoptLedgerHeader(h *header.LedgerHeader) error {
 		return fmt.Errorf("failed to snapshot genesis tx map: %w", err)
 	}
 
-	// Create the adopted ledger from the peer's header
+	// Create the adopted ledger from the peer's header.
+	// NewFromHeader creates in StateValidated — no need to call SetValidated().
 	adopted := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
-	if err := adopted.SetValidated(); err != nil {
-		return fmt.Errorf("failed to validate adopted ledger: %w", err)
-	}
 
 	// Update service state
 	s.closedLedger = adopted
