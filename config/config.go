@@ -80,7 +80,8 @@ type Config struct {
 
 	// Genesis file path (JSON format)
 	// If empty, uses built-in default genesis configuration
-	GenesisFile string `toml:"genesis_file" mapstructure:"genesis_file"`
+	GenesisFile               string `toml:"genesis_file" mapstructure:"genesis_file"`
+	GenesisAmendmentsDisabled bool   `toml:"genesis_amendments_disabled" mapstructure:"genesis_amendments_disabled"`
 
 	// Validators configuration (loaded from separate file)
 	Validators ValidatorsConfig `toml:"-" mapstructure:"-"`

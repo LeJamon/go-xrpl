@@ -457,8 +457,9 @@ func (e *Engine) closeLedger() {
 	}
 	e.ourTxSet = txSet
 
-	// Calculate close time
-	closeTime := e.roundCloseTime()
+	// Use raw now — rippled sets rawCloseTimes_.self = now_ (Consensus.h:1441).
+	// Rounding only happens later via effCloseTime() at acceptance.
+	closeTime := e.adaptor.Now()
 	e.state.CloseTimes.Self = closeTime
 
 	// If proposing, create and broadcast our proposal

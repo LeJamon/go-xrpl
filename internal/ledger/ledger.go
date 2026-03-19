@@ -2,11 +2,14 @@ package ledger
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/amendment"
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
@@ -448,6 +451,12 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 		return ErrInvalidState
 	}
 
+	// Update LedgerHashes skiplist before making state immutable.
+	// Matches rippled's updateSkipList() in Ledger.cpp:878-943.
+	if err := l.updateSkipList(); err != nil {
+		return fmt.Errorf("failed to update skip list: %w", err)
+	}
+
 	// Make maps immutable
 	if err := l.stateMap.SetImmutable(); err != nil {
 		return errors.New("failed to make state map immutable: " + err.Error())
@@ -483,6 +492,139 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 	l.state = StateClosed
 
 	return nil
+}
+
+// updateSkipList updates the LedgerHashes SLE(s) in the state map.
+// Called during Close() before making the state map immutable.
+// Caller holds l.mu.
+func (l *Ledger) updateSkipList() error {
+	return UpdateSkipListOnMap(l.stateMap, l.header.LedgerIndex, l.header.ParentHash)
+}
+
+// UpdateSkipListOnMap updates the LedgerHashes SLE(s) on a mutable SHAMap.
+// Matches rippled's updateSkipList() in Ledger.cpp:878-943.
+//
+// Two operations:
+// 1. Every 256th ledger: append parentHash to the historical skiplist (keylet::skip(seq))
+// 2. Every ledger: append parentHash to the rolling-256 skiplist (keylet::skip())
+func UpdateSkipListOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [32]byte) error {
+	prevIndex := ledgerSeq - 1
+
+	// Genesis ledger (seq 1) has no parent to record
+	if prevIndex == 0 {
+		return nil
+	}
+
+	// Operation 1: Historical skiplist (every 256th ledger)
+	if (prevIndex & 0xff) == 0 {
+		histKey := keylet.LedgerHashesForSeq(prevIndex)
+		hashes, err := readSkipListHashes(stateMap, histKey.Key)
+		if err != nil {
+			return fmt.Errorf("read historical skip list: %w", err)
+		}
+		hashes = append(hashes, parentHash)
+		if err := writeSkipList(stateMap, histKey.Key, hashes, prevIndex); err != nil {
+			return fmt.Errorf("write historical skip list: %w", err)
+		}
+	}
+
+	// Operation 2: Rolling 256 skiplist (every ledger)
+	rollingKey := keylet.LedgerHashes()
+	hashes, err := readSkipListHashes(stateMap, rollingKey.Key)
+	if err != nil {
+		return fmt.Errorf("read rolling skip list: %w", err)
+	}
+	// Trim to 256: remove oldest if at capacity
+	if len(hashes) >= 256 {
+		hashes = hashes[1:]
+	}
+	hashes = append(hashes, parentHash)
+	if err := writeSkipList(stateMap, rollingKey.Key, hashes, prevIndex); err != nil {
+		return fmt.Errorf("write rolling skip list: %w", err)
+	}
+
+	return nil
+}
+
+// readSkipListHashes reads and decodes the Hashes array from an existing
+// LedgerHashes SLE in the state map. Returns nil if the entry doesn't exist.
+func readSkipListHashes(stateMap *shamap.SHAMap, key [32]byte) ([][32]byte, error) {
+	item, found, err := stateMap.Get(key)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+
+	hexStr := hex.EncodeToString(item.Data())
+	jsonObj, err := binarycodec.Decode(hexStr)
+	if err != nil {
+		return nil, fmt.Errorf("decode LedgerHashes: %w", err)
+	}
+
+	rawHashes, ok := jsonObj["Hashes"]
+	if !ok {
+		return nil, nil
+	}
+
+	// binarycodec.Decode returns Vector256 as []string
+	var hashStrings []string
+	switch v := rawHashes.(type) {
+	case []string:
+		hashStrings = v
+	case []any:
+		hashStrings = make([]string, len(v))
+		for i, h := range v {
+			s, ok := h.(string)
+			if !ok {
+				return nil, fmt.Errorf("hash entry is not a string")
+			}
+			hashStrings[i] = s
+		}
+	default:
+		return nil, fmt.Errorf("Hashes field has unexpected type %T", rawHashes)
+	}
+
+	result := make([][32]byte, 0, len(hashStrings))
+	for _, hashStr := range hashStrings {
+		hashBytes, err := hex.DecodeString(hashStr)
+		if err != nil {
+			return nil, fmt.Errorf("decode hash hex: %w", err)
+		}
+		var hash [32]byte
+		copy(hash[:], hashBytes)
+		result = append(result, hash)
+	}
+
+	return result, nil
+}
+
+// writeSkipList serializes a LedgerHashes SLE and writes it to the state map.
+func writeSkipList(stateMap *shamap.SHAMap, key [32]byte, hashes [][32]byte, lastSeq uint32) error {
+	hashHexes := make([]string, len(hashes))
+	for i, h := range hashes {
+		hashHexes[i] = fmt.Sprintf("%064X", h)
+	}
+
+	jsonObj := map[string]any{
+		"LedgerEntryType":    "LedgerHashes",
+		"Flags":              uint32(0),
+		"Hashes":             hashHexes,
+		"LastLedgerSequence": lastSeq,
+	}
+
+	hexStr, err := binarycodec.Encode(jsonObj)
+	if err != nil {
+		return fmt.Errorf("encode LedgerHashes: %w", err)
+	}
+
+	data, err := hex.DecodeString(hexStr)
+	if err != nil {
+		return fmt.Errorf("decode hex: %w", err)
+	}
+
+	return stateMap.Put(key, data)
 }
 
 // SetValidated marks the ledger as validated

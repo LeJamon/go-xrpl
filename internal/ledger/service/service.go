@@ -1150,6 +1150,11 @@ func (s *Service) AdoptLedgerHeader(h *header.LedgerHeader) error {
 		return fmt.Errorf("failed to snapshot genesis state: %w", err)
 	}
 
+	// Update LedgerHashes skiplist so state matches rippled
+	if err := ledger.UpdateSkipListOnMap(stateMap, h.LedgerIndex, h.ParentHash); err != nil {
+		s.logger.Warn("failed to update skip list during adoption", "error", err)
+	}
+
 	// Create empty tx map
 	txMap, err := s.genesisLedger.TxMapSnapshot()
 	if err != nil {
@@ -1197,10 +1202,19 @@ func (s *Service) ReAdoptLedgerHeader(h *header.LedgerHeader) error {
 		return fmt.Errorf("re-adopt seq %d not ahead of current %d", h.LedgerIndex, s.closedLedger.Sequence())
 	}
 
-	// Snapshot genesis state (same as initial adoption)
-	stateMap, err := s.genesisLedger.StateMapSnapshot()
+	// Snapshot from the closed ledger so the skiplist accumulates across re-adoptions
+	source := s.closedLedger
+	if source == nil {
+		source = s.genesisLedger
+	}
+	stateMap, err := source.StateMapSnapshot()
 	if err != nil {
-		return fmt.Errorf("failed to snapshot genesis state: %w", err)
+		return fmt.Errorf("failed to snapshot state: %w", err)
+	}
+
+	// Update LedgerHashes skiplist so state matches rippled
+	if err := ledger.UpdateSkipListOnMap(stateMap, h.LedgerIndex, h.ParentHash); err != nil {
+		s.logger.Warn("failed to update skip list during re-adoption", "error", err)
 	}
 
 	txMap, err := s.genesisLedger.TxMapSnapshot()

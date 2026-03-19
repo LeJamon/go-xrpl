@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
@@ -271,7 +272,7 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 
 		// During initial sync, adopt the peer's ledger from StatusChange
 		if r.adaptor.NeedsInitialSync() && sc.LedgerSeq > 1 {
-			r.tryAdoptFromStatusChange(sc.LedgerSeq, peerHash, parentHash)
+			r.tryAdoptFromStatusChange(sc.LedgerSeq, peerHash, parentHash, sc.NetworkTime)
 			return
 		}
 
@@ -290,7 +291,7 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 					if r.modeManager != nil {
 						r.modeManager.OnWrongLedger()
 					}
-					r.reAdoptFromStatusChange(sc.LedgerSeq, peerHash, parentHash)
+					r.reAdoptFromStatusChange(sc.LedgerSeq, peerHash, parentHash, sc.NetworkTime)
 					return
 				}
 			}
@@ -309,7 +310,7 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 						"peer_seq", sc.LedgerSeq,
 						"gap", sc.LedgerSeq-ourSeq,
 					)
-					r.reAdoptFromStatusChange(sc.LedgerSeq, peerHash, parentHash)
+					r.reAdoptFromStatusChange(sc.LedgerSeq, peerHash, parentHash, sc.NetworkTime)
 					return
 				}
 			}
@@ -329,7 +330,7 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 // Instead, we stay in Tracking mode and keep re-adopting until we're within
 // 1 ledger of the network. This prevents running solo consensus rounds that
 // produce divergent close times.
-func (r *Router) tryAdoptFromStatusChange(seq uint32, hash, parentHash [32]byte) {
+func (r *Router) tryAdoptFromStatusChange(seq uint32, hash, parentHash [32]byte, networkTime uint64) {
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
 		r.logger.Warn("tryAdopt: no ledger service")
@@ -347,16 +348,23 @@ func (r *Router) tryAdoptFromStatusChange(seq uint32, hash, parentHash [32]byte)
 		"our_seq", closedLedger.Sequence(),
 	)
 
+	// Derive close time from peer's NetworkTime (XRPL epoch seconds)
+	var closeTime time.Time
+	if networkTime > 0 {
+		closeTime = time.Unix(int64(networkTime)+xrplEpochOffset, 0)
+	}
+
 	// Build a synthetic header from the StatusChange data
 	h := &header.LedgerHeader{
 		LedgerIndex: seq,
 		Hash:        hash,
 		ParentHash:  parentHash,
 		// Reuse genesis state hash — valid for empty ledger sequences
-		AccountHash: closedLedger.Header().AccountHash,
-		// TxHash stays zero — no transactions
-		Drops:               100_000_000_000_000_000, // total XRP supply
+		AccountHash:         closedLedger.Header().AccountHash,
+		Drops:               closedLedger.Header().Drops,
 		CloseTimeResolution: 10,
+		CloseTime:           closeTime,
+		ParentCloseTime:     closedLedger.Header().CloseTime,
 	}
 
 	if err := svc.AdoptLedgerHeader(h); err != nil {
@@ -378,7 +386,7 @@ func (r *Router) tryAdoptFromStatusChange(seq uint32, hash, parentHash [32]byte)
 // catching up to the network. Unlike tryAdoptFromStatusChange, this works
 // after initial sync is complete but before we've reached Full mode.
 // Once the gap closes to ≤ 1, it transitions to Full mode to start consensus.
-func (r *Router) reAdoptFromStatusChange(seq uint32, hash, parentHash [32]byte) {
+func (r *Router) reAdoptFromStatusChange(seq uint32, hash, parentHash [32]byte, networkTime uint64) {
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
 		return
@@ -389,13 +397,21 @@ func (r *Router) reAdoptFromStatusChange(seq uint32, hash, parentHash [32]byte) 
 		return
 	}
 
+	// Derive close time from peer's NetworkTime (XRPL epoch seconds)
+	var closeTime time.Time
+	if networkTime > 0 {
+		closeTime = time.Unix(int64(networkTime)+xrplEpochOffset, 0)
+	}
+
 	h := &header.LedgerHeader{
 		LedgerIndex:         seq,
 		Hash:                hash,
 		ParentHash:          parentHash,
 		AccountHash:         closedLedger.Header().AccountHash,
-		Drops:               100_000_000_000_000_000,
+		Drops:               closedLedger.Header().Drops,
 		CloseTimeResolution: 10,
+		CloseTime:           closeTime,
+		ParentCloseTime:     closedLedger.Header().CloseTime,
 	}
 
 	if err := svc.ReAdoptLedgerHeader(h); err != nil {

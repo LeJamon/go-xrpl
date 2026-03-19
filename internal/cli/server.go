@@ -170,6 +170,9 @@ func runServer(cmd *cobra.Command, args []string) {
 		serverLog.Info("Genesis config loaded", "path", genesisFile)
 	} else {
 		genesisConfig = genesis.DefaultConfig()
+		if globalConfig.GenesisAmendmentsDisabled {
+			genesisConfig.Amendments = nil
+		}
 		serverLog.Info("Genesis config using built-in defaults")
 	}
 
