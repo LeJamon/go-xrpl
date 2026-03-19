@@ -286,8 +286,16 @@ func signerCountBasedOwnerCountDelta(entryCount int) int {
 }
 
 // Apply applies the SignerListSet transaction to ledger state.
-// Reference: rippled SetSignerList.cpp doApply(), replaceSignerList(), destroySignerList()
+// Reference: rippled SetSignerList.cpp preflight() + doApply(), replaceSignerList(), destroySignerList()
 func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
+	// Check for invalid flags, gated behind fixInvalidTxFlags.
+	// Reference: rippled SetSignerList.cpp preflight() lines 86-91
+	if ctx.Rules().Enabled(amendment.FeatureFixInvalidTxFlags) {
+		if s.GetFlags()&tx.TfUniversalMask != 0 {
+			return tx.TemINVALID_FLAG
+		}
+	}
+
 	ctx.Log.Trace("signer list set apply",
 		"account", s.Account,
 		"signerQuorum", s.SignerQuorum,

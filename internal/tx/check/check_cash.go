@@ -242,6 +242,9 @@ func (c *CheckCash) applyCashXRPAmount(ctx *tx.ApplyContext, check *state.CheckD
 	creatorAccount.Balance -= cashDrops
 	ctx.Account.Balance += cashDrops
 
+	// Remove check from directories before erasing
+	removeCheckFromDirectories(ctx, check, checkKey.Key)
+
 	// Decrease creator's owner count
 	if creatorAccount.OwnerCount > 0 {
 		creatorAccount.OwnerCount--
@@ -298,6 +301,9 @@ func (c *CheckCash) applyCashXRPDeliverMin(ctx *tx.ApplyContext, check *state.Ch
 	// Transfer XRP
 	creatorAccount.Balance -= cashAmount
 	ctx.Account.Balance += cashAmount
+
+	// Remove check from directories before erasing
+	removeCheckFromDirectories(ctx, check, checkKey.Key)
 
 	// Decrease creator's owner count
 	if creatorAccount.OwnerCount > 0 {
@@ -569,6 +575,10 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		restoreTrustLineLimit(ctx, accountID, issuerID, sendMax.Currency, destLow, *savedLimit)
 	}
 
+	// Remove check from directories before erasing.
+	// Reference: CashCheck.cpp L487-508
+	removeCheckFromDirectories(ctx, check, checkKey.Key)
+
 	// Decrease creator's owner count and delete the check
 	creatorKey := keylet.Account(srcID)
 	creatorData, err := ctx.View.Read(creatorKey)
@@ -771,4 +781,22 @@ func restoreTrustLineLimit(ctx *tx.ApplyContext, destID, issuerID [20]byte, curr
 		return
 	}
 	ctx.View.Update(trustLineKey, updatedData)
+}
+
+// removeCheckFromDirectories removes a check from both source and destination
+// owner directories. Must be called before erasing the check SLE.
+// Reference: CashCheck.cpp L487-508
+func removeCheckFromDirectories(ctx *tx.ApplyContext, check *state.CheckData, checkKeyBytes [32]byte) {
+	srcID := check.Account
+	dstID := check.DestinationID
+
+	// Remove from destination directory (if not self-send)
+	if srcID != dstID {
+		destDirKey := keylet.OwnerDir(dstID)
+		state.DirRemove(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes, true)
+	}
+
+	// Remove from owner directory
+	ownerDirKey := keylet.OwnerDir(srcID)
+	state.DirRemove(ctx.View, ownerDirKey, check.OwnerNode, checkKeyBytes, true)
 }

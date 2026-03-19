@@ -106,7 +106,7 @@ func (p *Payment) TxType() tx.Type {
 // Reference: rippled Payment.cpp preflight() - featureCredentials check for sfCredentialIDs
 func (p *Payment) RequiredAmendments() [][32]byte {
 	var amendments [][32]byte
-	if p.MPTokenIssuanceID != "" {
+	if p.isMPTDirect() {
 		amendments = append(amendments, amendment.FeatureMPTokensV1)
 	}
 	if p.CredentialIDs != nil || p.HasField("CredentialIDs") {
@@ -116,6 +116,13 @@ func (p *Payment) RequiredAmendments() [][32]byte {
 		amendments = append(amendments, amendment.FeaturePermissionedDEX)
 	}
 	return amendments
+}
+
+// isMPTDirect returns true if this payment is an MPT direct payment.
+// Checks both the legacy MPTokenIssuanceID field and the Amount's embedded mpt_issuance_id.
+// Reference: rippled Payment.cpp: bool const mptDirect = dstAmount.holds<MPTIssue>();
+func (p *Payment) isMPTDirect() bool {
+	return p.MPTokenIssuanceID != "" || p.Amount.IsMPT()
 }
 
 // Validate validates the payment transaction
@@ -134,7 +141,8 @@ func (p *Payment) Validate() error {
 	}
 
 	// Determine if this is an MPT direct payment
-	mptDirect := p.MPTokenIssuanceID != ""
+	// Reference: rippled Payment.cpp:86: bool const mptDirect = dstAmount.holds<MPTIssue>();
+	mptDirect := p.isMPTDirect()
 
 	// Determine if this is an XRP-to-XRP (direct) payment
 	// Reference: rippled Payment.cpp:129
@@ -159,10 +167,40 @@ func (p *Payment) Validate() error {
 	noRippleDirect := (flags & PaymentFlagNoDirectRipple) != 0
 	hasPaths := len(p.Paths) > 0
 
-	// MPT payments cannot have paths
+	// MPT payments cannot have paths (sfPaths)
 	// Reference: rippled Payment.cpp:101-102
 	if mptDirect && hasPaths {
 		return tx.Errorf(tx.TemMALFORMED, "Paths not allowed for MPT payment")
+	}
+
+	// MPT issue consistency check.
+	// When Amount carries an embedded mpt_issuance_id (wire format), SendMax must
+	// also be MPT with the same issuance ID. Non-MPT SendMax with MPT Amount is invalid.
+	// Reference: rippled Payment.cpp:116-124
+	//   if ((mptDirect && dstAmount.asset() != maxSourceAmount.asset()) ||
+	//       (!mptDirect && maxSourceAmount.holds<MPTIssue>()))
+	srcAmount := p.Amount
+	if p.SendMax != nil {
+		srcAmount = *p.SendMax
+	}
+	if p.Amount.IsMPT() {
+		// Wire-format MPT: SendMax must be same MPT or absent
+		if p.SendMax != nil && (!p.SendMax.IsMPT() ||
+			p.SendMax.MPTIssuanceID() != p.Amount.MPTIssuanceID()) {
+			return tx.Errorf(tx.TemMALFORMED, "Inconsistent MPT issues in Amount and SendMax")
+		}
+	} else if !mptDirect && srcAmount.IsMPT() {
+		// Non-MPT payment cannot have MPT SendMax
+		return tx.Errorf(tx.TemMALFORMED, "MPT SendMax not allowed for non-MPT payment")
+	}
+
+	// Amount and SendMax must be positive (> 0)
+	// Reference: rippled Payment.cpp:142-153
+	if p.SendMax != nil && (p.SendMax.IsZero() || p.SendMax.IsNegative()) {
+		return tx.Errorf(tx.TemBAD_AMOUNT, "SendMax must be positive")
+	}
+	if p.Amount.IsNegative() {
+		return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
 	}
 
 	// Cannot send to self with same source/destination asset (temREDUNDANT)
@@ -170,10 +208,6 @@ func (p *Payment) Validate() error {
 	// srcAsset = maxSourceAmount.asset() (SendMax if set, else Amount)
 	// dstAsset = dstAmount.asset()
 	// Only redundant if equalTokens(srcAsset, dstAsset) — same currency+issuer
-	srcAmount := p.Amount
-	if p.SendMax != nil {
-		srcAmount = *p.SendMax
-	}
 	equalTokens := (srcAmount.IsNative() && p.Amount.IsNative()) ||
 		(!srcAmount.IsNative() && !p.Amount.IsNative() &&
 			srcAmount.Currency == p.Amount.Currency &&
@@ -191,10 +225,10 @@ func (p *Payment) Validate() error {
 		return tx.Errorf(tx.TemBAD_SEND_XRP_MAX, "SendMax specified for XRP to XRP")
 	}
 
-	// XRP to XRP with paths is invalid (temBAD_SEND_XRP_PATHS)
+	// XRP/MPT with paths is invalid (temBAD_SEND_XRP_PATHS)
 	// Reference: rippled Payment.cpp:175-181
-	if xrpDirect && hasPaths {
-		return tx.Errorf(tx.TemBAD_SEND_XRP_PATHS, "Paths specified for XRP to XRP")
+	if (xrpDirect || mptDirect) && hasPaths {
+		return tx.Errorf(tx.TemBAD_SEND_XRP_PATHS, "Paths specified for XRP to XRP or MPT to MPT")
 	}
 
 	// tfPartialPayment flag is invalid for XRP-to-XRP payments (temBAD_SEND_XRP_PARTIAL)
@@ -203,16 +237,16 @@ func (p *Payment) Validate() error {
 		return tx.Errorf(tx.TemBAD_SEND_XRP_PARTIAL, "Partial payment specified for XRP to XRP")
 	}
 
-	// tfLimitQuality flag is invalid for XRP-to-XRP payments (temBAD_SEND_XRP_LIMIT)
+	// tfLimitQuality flag is invalid for XRP/MPT direct payments (temBAD_SEND_XRP_LIMIT)
 	// Reference: rippled Payment.cpp:189-196
-	if xrpDirect && limitQuality {
-		return tx.Errorf(tx.TemBAD_SEND_XRP_LIMIT, "Limit quality specified for XRP to XRP")
+	if (xrpDirect || mptDirect) && limitQuality {
+		return tx.Errorf(tx.TemBAD_SEND_XRP_LIMIT, "Limit quality specified for XRP to XRP or MPT to MPT")
 	}
 
-	// tfNoRippleDirect flag is invalid for XRP-to-XRP payments (temBAD_SEND_XRP_NO_DIRECT)
+	// tfNoRippleDirect flag is invalid for XRP/MPT direct payments (temBAD_SEND_XRP_NO_DIRECT)
 	// Reference: rippled Payment.cpp:197-204
-	if xrpDirect && noRippleDirect {
-		return tx.Errorf(tx.TemBAD_SEND_XRP_NO_DIRECT, "No ripple direct specified for XRP to XRP")
+	if (xrpDirect || mptDirect) && noRippleDirect {
+		return tx.Errorf(tx.TemBAD_SEND_XRP_NO_DIRECT, "No ripple direct specified for XRP to XRP or MPT to MPT")
 	}
 
 	// DeliverMin can only be used with tfPartialPayment flag (temBAD_AMOUNT)
@@ -390,13 +424,15 @@ func (p *Payment) SetNoDirectRipple() {
 
 // Apply applies the Payment transaction to the ledger state.
 func (p *Payment) Apply(ctx *tx.ApplyContext) tx.Result {
+	mptDirect := p.isMPTDirect()
+
 	ctx.Log.Trace("payment apply",
 		"src", p.Account,
 		"dst", p.Destination,
 		"amount", p.Amount,
 		"hasPaths", len(p.Paths) > 0,
 		"hasSendMax", p.SendMax != nil,
-		"mpt", p.MPTokenIssuanceID != "",
+		"mpt", mptDirect,
 	)
 
 	// Domain membership checks for permissioned payments.
@@ -424,7 +460,7 @@ func (p *Payment) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// MPT direct payment
-	if p.MPTokenIssuanceID != "" {
+	if mptDirect {
 		return p.applyMPTPayment(ctx)
 	}
 
@@ -433,7 +469,7 @@ func (p *Payment) Apply(ctx *tx.ApplyContext) tx.Result {
 	//   bool const ripple = (hasPaths || sendMax || !dstAmount.native()) && !mptDirect;
 	hasPaths := len(p.Paths) > 0
 	hasSendMax := p.SendMax != nil
-	ripple := hasPaths || hasSendMax || !p.Amount.IsNative()
+	ripple := (hasPaths || hasSendMax || !p.Amount.IsNative()) && !mptDirect
 
 	if !ripple {
 		// XRP-to-XRP direct payment (no paths, no SendMax, Amount is native)

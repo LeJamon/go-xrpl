@@ -1,6 +1,7 @@
 package tx
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -694,6 +695,38 @@ func (e *Engine) preflight(tx Transaction) Result {
 	// Memo validation
 	if result := e.validateMemos(common); result != TesSUCCESS {
 		return result
+	}
+
+	// Multi-sign structural validation: signers must be sorted by binary
+	// AccountID, unique, and none may equal the transaction's own Account.
+	// These are format checks (not cryptographic) and run regardless of
+	// SkipSignatureVerification.
+	// Reference: rippled STTx.cpp multiSignHelper() lines 468-485
+	if IsMultiSigned(tx) {
+		txAccountID, acctErr := state.DecodeAccountID(common.Account)
+		if acctErr != nil {
+			return TemBAD_SRC_ACCOUNT
+		}
+		var lastAccountID [20]byte // zero-initialized — less than any real ID
+		for _, sw := range common.Signers {
+			signerID, decErr := state.DecodeAccountID(sw.Signer.Account)
+			if decErr != nil {
+				return TemBAD_SIGNATURE
+			}
+			// The account owner may not multisign for themselves.
+			if signerID == txAccountID {
+				return TemBAD_SIGNATURE
+			}
+			// No duplicate signers allowed.
+			if signerID == lastAccountID {
+				return TemBAD_SIGNATURE
+			}
+			// Accounts must be in order by binary AccountID.
+			if bytes.Compare(lastAccountID[:], signerID[:]) > 0 {
+				return TemBAD_SIGNATURE
+			}
+			lastAccountID = signerID
+		}
 	}
 
 	// Verify signature (unless skipped for testing)

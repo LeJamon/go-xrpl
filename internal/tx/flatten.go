@@ -212,11 +212,18 @@ func ReflectFlatten(tx Transaction) (map[string]any, error) {
 
 // flattenAmount converts an Amount to its serializable form.
 // Native XRP amounts are returned as a string value.
+// MPT amounts are returned as a map with value/mpt_issuance_id.
 // Issued currency amounts are returned as a map with value/currency/issuer.
 // Note: The binary codec expects map[string]any, not map[string]string.
 func flattenAmount(a Amount) any {
 	if a.IsNative() {
 		return a.Value()
+	}
+	if a.IsMPT() {
+		return map[string]any{
+			"value":           a.Value(),
+			"mpt_issuance_id": a.MPTIssuanceID(),
+		}
 	}
 	return map[string]any{
 		"value":    a.Value(),

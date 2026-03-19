@@ -93,12 +93,27 @@ func (c *Clawback) Validate() error {
 		return ErrClawbackAmountNotToken
 	}
 
-	// Determine if this is IOU or MPToken clawback based on Holder field
-	// For IOU clawback, Holder must not be present
-	// For MPToken clawback, Holder is required
-	if c.Holder == "" {
-		// IOU clawback
-		// Reference: rippled Clawback.cpp:39-40
+	// Determine if this is IOU or MPToken clawback based on Amount type.
+	// Reference: rippled Clawback.cpp:90-94 dispatches via std::visit on Amount's asset type.
+	if c.Amount.IsMPT() {
+		// MPToken clawback (preflightHelper<MPTIssue>)
+		// Reference: rippled Clawback.cpp:54-76
+		// Holder is required for MPT clawback
+		if c.Holder == "" {
+			return ErrClawbackHolderRequired
+		}
+		// Holder cannot be same as issuer
+		if c.Holder == c.Account {
+			return ErrClawbackHolderIsSelf
+		}
+	} else {
+		// IOU clawback (preflightHelper<Issue>)
+		// Reference: rippled Clawback.cpp:37-51
+		// Holder must not be present for IOU clawback
+		if c.Holder != "" {
+			return ErrClawbackHolderWithToken
+		}
+
 		// For IOU, the issuer field in Amount specifies the holder
 		// The transaction account must be the issuer of the currency
 		holder := c.Amount.Issuer
@@ -106,13 +121,6 @@ func (c *Clawback) Validate() error {
 		// Issuer cannot claw back from themselves
 		if holder == c.Account {
 			return ErrClawbackAmountNotPos // temBAD_AMOUNT per rippled
-		}
-	} else {
-		// MPToken clawback
-		// Reference: rippled Clawback.cpp:54-76
-		// Holder cannot be same as issuer
-		if c.Holder == c.Account {
-			return ErrClawbackHolderIsSelf
 		}
 	}
 
@@ -128,18 +136,24 @@ func (c *Clawback) Apply(ctx *tx.ApplyContext) tx.Result {
 		"holder", c.Holder,
 	)
 
-	if c.Holder != "" {
+	if c.Amount.IsMPT() {
 		return c.applyMPT(ctx)
 	}
 	return c.applyIOU(ctx)
 }
 
-// applyMPT handles MPToken clawback when Holder field is set.
+// applyMPT handles MPToken clawback when Amount is an MPT type.
 // Reference: rippled Clawback.cpp preclaimHelper<MPTIssue>() + applyHelper<MPTIssue>()
 func (c *Clawback) applyMPT(ctx *tx.ApplyContext) tx.Result {
+	// Get the MPT issuance ID: prefer the legacy field, fall back to Amount's embedded ID
+	mptIDHex := c.MPTokenIssuanceID
+	if mptIDHex == "" {
+		mptIDHex = c.Amount.MPTIssuanceID()
+	}
+
 	// Parse MPTokenIssuanceID
 	var mptID [24]byte
-	issuanceIDBytes, err := hex.DecodeString(c.MPTokenIssuanceID)
+	issuanceIDBytes, err := hex.DecodeString(mptIDHex)
 	if err != nil || len(issuanceIDBytes) != 24 {
 		// If the ID is invalid/empty, the issuance won't be found
 		return tx.TecOBJECT_NOT_FOUND
@@ -452,10 +466,13 @@ func (c *Clawback) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(c)
 }
 
-// RequiredAmendments returns the amendments required for this transaction type
+// RequiredAmendments returns the amendments required for this transaction type.
+// Only require FeatureMPTokensV1 when the Amount actually holds an MPT issue,
+// matching rippled's dispatch which checks the Amount type, not the Holder field.
+// Reference: rippled Clawback.cpp:90-94 dispatches preflightHelper<MPTIssue>
+// which contains the featureMPTokensV1 check.
 func (c *Clawback) RequiredAmendments() [][32]byte {
-	// MPToken clawback requires additional amendment
-	if c.Holder != "" {
+	if c.Amount.IsMPT() {
 		return [][32]byte{amendment.FeatureClawback, amendment.FeatureMPTokensV1}
 	}
 	return [][32]byte{amendment.FeatureClawback}

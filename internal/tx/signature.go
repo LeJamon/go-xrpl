@@ -1,6 +1,7 @@
 package tx
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"sort"
@@ -158,11 +159,14 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup) error {
 		authorizedSigners[entry.Account] = entry
 	}
 
-	// Sort the authorized signers by account for the matching algorithm
+	// Sort the authorized signers by binary AccountID for the matching algorithm.
+	// Reference: rippled stores signer lists sorted by binary AccountID.
 	sortedAuthSigners := make([]state.AccountSignerEntry, len(signerList.SignerEntries))
 	copy(sortedAuthSigners, signerList.SignerEntries)
 	sort.Slice(sortedAuthSigners, func(i, j int) bool {
-		return sortedAuthSigners[i].Account < sortedAuthSigners[j].Account
+		idI, _ := state.DecodeAccountID(sortedAuthSigners[i].Account)
+		idJ, _ := state.DecodeAccountID(sortedAuthSigners[j].Account)
+		return bytes.Compare(idI[:], idJ[:]) < 0
 	})
 
 	// Get the multi-signing payload for this transaction
@@ -172,8 +176,9 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup) error {
 		return errors.New("failed to flatten transaction: " + err.Error())
 	}
 
-	// Verify signers are sorted by account (required by XRPL)
-	var prevAccount string
+	// Verify signers are sorted by binary AccountID (required by XRPL).
+	// Reference: rippled STTx.cpp multiSignHelper() lines 468-485
+	var lastAccountID [20]byte
 	seenAccounts := make(map[string]bool)
 
 	var weightSum uint32
@@ -189,14 +194,25 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup) error {
 		}
 		seenAccounts[txSignerAccount] = true
 
-		// Check signers are sorted
-		if txSignerAccount < prevAccount {
+		// Check signers are sorted by binary AccountID
+		signerID, decErr := state.DecodeAccountID(txSignerAccount)
+		if decErr != nil {
+			return ErrBadSignature
+		}
+		if bytes.Compare(lastAccountID[:], signerID[:]) > 0 {
 			return ErrSignersNotSorted
 		}
-		prevAccount = txSignerAccount
+		if signerID == lastAccountID {
+			return ErrDuplicateSigner
+		}
+		lastAccountID = signerID
 
-		// Match the signer to an authorized signer (both lists are sorted)
-		for authIter < len(sortedAuthSigners) && sortedAuthSigners[authIter].Account < txSignerAccount {
+		// Match the signer to an authorized signer (both lists are sorted by binary AccountID)
+		for authIter < len(sortedAuthSigners) {
+			authID, _ := state.DecodeAccountID(sortedAuthSigners[authIter].Account)
+			if bytes.Compare(authID[:], signerID[:]) >= 0 {
+				break
+			}
 			authIter++
 		}
 
@@ -490,7 +506,7 @@ func SignTransactionForMultiSign(tx Transaction, signerAccount string, privateKe
 
 // AddMultiSigner adds a signer to a transaction's Signers array
 // The signer should have already signed the transaction using SignTransactionForMultiSign
-// Signers must be added in sorted order by account address
+// Signers are maintained in sorted order by binary AccountID, matching rippled.
 func AddMultiSigner(tx Transaction, account, publicKey, signature string) error {
 	common := tx.GetCommon()
 
@@ -498,6 +514,12 @@ func AddMultiSigner(tx Transaction, account, publicKey, signature string) error 
 	if len(common.Signers) == 0 {
 		common.SigningPubKey = ""
 		common.TxnSignature = ""
+	}
+
+	// Decode the new signer's AccountID for binary comparison
+	newID, err := state.DecodeAccountID(account)
+	if err != nil {
+		return errors.New("invalid signer account: " + err.Error())
 	}
 
 	// Create the new signer entry
@@ -509,13 +531,18 @@ func AddMultiSigner(tx Transaction, account, publicKey, signature string) error 
 		},
 	}
 
-	// Find the correct position to insert (maintain sorted order)
+	// Find the correct position to insert (maintain sorted order by binary AccountID).
+	// Reference: rippled STTx.cpp multiSignHelper — signers sorted by AccountID.
 	insertPos := len(common.Signers)
 	for i, sw := range common.Signers {
 		if sw.Signer.Account == account {
 			return ErrDuplicateSigner
 		}
-		if sw.Signer.Account > account {
+		existingID, decErr := state.DecodeAccountID(sw.Signer.Account)
+		if decErr != nil {
+			continue
+		}
+		if bytes.Compare(existingID[:], newID[:]) > 0 {
 			insertPos = i
 			break
 		}

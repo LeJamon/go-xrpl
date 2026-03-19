@@ -121,13 +121,23 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// --- doApply ---
 
-	// Delete the check
-	if err := ctx.View.Erase(checkKey); err != nil {
-		ctx.Log.Error("check cancel: unable to delete check", "checkID", c.CheckID)
-		return tx.TefINTERNAL
+	srcID := check.Account
+	dstID := check.DestinationID
+
+	// Remove check from destination directory (if not self-send).
+	// Reference: CancelCheck.cpp L102-113
+	if srcID != dstID {
+		destDirKey := keylet.OwnerDir(dstID)
+		state.DirRemove(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes, true)
 	}
 
-	// Adjust creator's owner count
+	// Remove check from owner directory.
+	// Reference: CancelCheck.cpp L114-122
+	ownerDirKey := keylet.OwnerDir(srcID)
+	state.DirRemove(ctx.View, ownerDirKey, check.OwnerNode, checkKeyBytes, true)
+
+	// Adjust creator's owner count.
+	// Reference: CancelCheck.cpp L125-126
 	if isCreator {
 		// Canceller is the creator
 		if ctx.Account.OwnerCount > 0 {
@@ -145,6 +155,13 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 				ctx.View.Update(creatorKey, creatorUpdatedData)
 			}
 		}
+	}
+
+	// Delete the check.
+	// Reference: CancelCheck.cpp L129
+	if err := ctx.View.Erase(checkKey); err != nil {
+		ctx.Log.Error("check cancel: unable to delete check", "checkID", c.CheckID)
+		return tx.TefINTERNAL
 	}
 
 	return tx.TesSUCCESS

@@ -238,6 +238,48 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
+	// Parse the check SLE to update with directory page numbers
+	checkSLE, err := state.ParseCheck(checkData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Insert check into destination's owner directory (not self-send).
+	// Reference: CreateCheck.cpp L213-228
+	if destID != accountID {
+		destDirKey := keylet.OwnerDir(destID)
+		destResult, err := state.DirInsert(ctx.View, destDirKey, checkKey.Key, func(dir *state.DirectoryNode) {
+			dir.Owner = destID
+		})
+		if err != nil {
+			ctx.Log.Error("check create: destination directory full", "error", err)
+			return tx.TecDIR_FULL
+		}
+		checkSLE.DestinationNode = destResult.Page
+		checkSLE.HasDestNode = true
+	}
+
+	// Insert check into owner's owner directory.
+	// Reference: CreateCheck.cpp L230-244
+	ownerDirKey := keylet.OwnerDir(accountID)
+	ownerResult, err := state.DirInsert(ctx.View, ownerDirKey, checkKey.Key, func(dir *state.DirectoryNode) {
+		dir.Owner = accountID
+	})
+	if err != nil {
+		ctx.Log.Error("check create: owner directory full", "error", err)
+		return tx.TecDIR_FULL
+	}
+	checkSLE.OwnerNode = ownerResult.Page
+
+	// Re-serialize check with updated OwnerNode/DestinationNode
+	updatedData, err := state.SerializeCheckFromData(checkSLE)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := ctx.View.Update(checkKey, updatedData); err != nil {
+		return tx.TefINTERNAL
+	}
+
 	// Increase owner count
 	ctx.Account.OwnerCount++
 

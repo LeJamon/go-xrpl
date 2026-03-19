@@ -2,6 +2,11 @@ package state
 
 import (
 	"encoding/binary"
+	"encoding/hex"
+	"fmt"
+
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 )
 
 // CheckData represents a Check ledger entry
@@ -14,12 +19,14 @@ type CheckData struct {
 	Sequence          uint32
 	Expiration        uint32
 	InvoiceID         [32]byte
+	HasInvoiceID      bool
 	DestinationTag    uint32
 	HasDestTag        bool
 	SourceTag         uint32
 	HasSourceTag      bool
 	OwnerNode         uint64
 	DestinationNode   uint64
+	HasDestNode       bool
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
 }
@@ -95,6 +102,7 @@ func ParseCheck(data []byte) (*CheckData, error) {
 				check.OwnerNode = value
 			case 9: // DestinationNode
 				check.DestinationNode = value
+				check.HasDestNode = true
 			}
 
 		case FieldTypeHash256:
@@ -106,6 +114,7 @@ func ParseCheck(data []byte) (*CheckData, error) {
 				copy(check.PreviousTxnID[:], data[offset:offset+32])
 			case 17: // InvoiceID
 				copy(check.InvoiceID[:], data[offset:offset+32])
+				check.HasInvoiceID = true
 			}
 			offset += 32
 
@@ -170,4 +179,64 @@ func ParseCheck(data []byte) (*CheckData, error) {
 	}
 
 	return check, nil
+}
+
+// SerializeCheckFromData serializes a Check ledger entry from CheckData.
+func SerializeCheckFromData(check *CheckData) ([]byte, error) {
+	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(check.Account[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode owner address: %w", err)
+	}
+
+	destAddress, err := addresscodec.EncodeAccountIDToClassicAddress(check.DestinationID[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode destination address: %w", err)
+	}
+
+	jsonObj := map[string]any{
+		"LedgerEntryType": "Check",
+		"Account":         ownerAddress,
+		"Destination":     destAddress,
+		"Sequence":        check.Sequence,
+		"OwnerNode":       fmt.Sprintf("%x", check.OwnerNode),
+		"Flags":           uint32(0),
+	}
+
+	// Serialize SendMax
+	if check.IsNativeSendMax {
+		jsonObj["SendMax"] = fmt.Sprintf("%d", check.SendMax)
+	} else {
+		jsonObj["SendMax"] = map[string]any{
+			"value":    check.SendMaxAmount.Value(),
+			"currency": check.SendMaxAmount.Currency,
+			"issuer":   check.SendMaxAmount.Issuer,
+		}
+	}
+
+	if check.HasDestNode {
+		jsonObj["DestinationNode"] = fmt.Sprintf("%x", check.DestinationNode)
+	}
+
+	if check.Expiration > 0 {
+		jsonObj["Expiration"] = check.Expiration
+	}
+
+	if check.HasDestTag {
+		jsonObj["DestinationTag"] = check.DestinationTag
+	}
+
+	if check.HasSourceTag {
+		jsonObj["SourceTag"] = check.SourceTag
+	}
+
+	if check.HasInvoiceID {
+		jsonObj["InvoiceID"] = fmt.Sprintf("%X", check.InvoiceID[:])
+	}
+
+	hexStr, err := binarycodec.Encode(jsonObj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode Check: %w", err)
+	}
+
+	return hex.DecodeString(hexStr)
 }

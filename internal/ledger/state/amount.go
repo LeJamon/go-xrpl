@@ -275,8 +275,8 @@ func (v IOUAmountValue) String() string {
 	return result
 }
 
-// Amount represents either XRP (as drops) or an issued currency amount
-// Matches rippled's STAmount which can hold any asset type
+// Amount represents either XRP (as drops), an issued currency amount, or an MPT amount.
+// Matches rippled's STAmount which can hold any asset type (XRP, IOU, or MPT).
 type Amount struct {
 	// For XRP amounts
 	xrp XRPAmount
@@ -293,6 +293,12 @@ type Amount struct {
 	// which loses precision for large values. The iou field is still set (normalized)
 	// for binary codec compatibility. Engine code should use MPTRaw() when available.
 	mptRaw *int64
+
+	// mptIssuanceID stores the 24-byte MPT issuance ID as an uppercase hex string.
+	// When set, this Amount represents an MPT amount rather than an IOU.
+	// This is populated from the binary codec's "mpt_issuance_id" field during
+	// deserialization and used by the engine to detect MPT payments/clawbacks.
+	mptIssuanceID string
 }
 
 // NewXRPAmountFromInt creates an XRP amount from drops as int64
@@ -338,6 +344,17 @@ func (a Amount) MPTRaw() (int64, bool) {
 		return *a.mptRaw, true
 	}
 	return 0, false
+}
+
+// IsMPT returns true if this Amount holds an MPT issuance (has mpt_issuance_id).
+// Matches rippled's STAmount::holds<MPTIssue>() check.
+func (a Amount) IsMPT() bool {
+	return a.mptIssuanceID != ""
+}
+
+// MPTIssuanceID returns the MPT issuance ID hex string, or empty if not an MPT amount.
+func (a Amount) MPTIssuanceID() string {
+	return a.mptIssuanceID
 }
 
 // NewIssuedAmountFromFloat64 creates an issued currency amount from a float64 value.
@@ -485,6 +502,12 @@ func (a Amount) MarshalJSON() ([]byte, error) {
 	if a.IsNative() {
 		return json.Marshal(a.xrp.String())
 	}
+	if a.IsMPT() {
+		return json.Marshal(map[string]string{
+			"value":           a.iou.String(),
+			"mpt_issuance_id": a.mptIssuanceID,
+		})
+	}
 	return json.Marshal(map[string]string{
 		"value":    a.iou.String(),
 		"currency": a.Currency,
@@ -506,14 +529,31 @@ func (a *Amount) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 
-	// Try as object (issued currency)
+	// Try as object (issued currency or MPT amount)
 	var objVal struct {
-		Value    string `json:"value"`
-		Currency string `json:"currency"`
-		Issuer   string `json:"issuer"`
+		Value         string `json:"value"`
+		Currency      string `json:"currency"`
+		Issuer        string `json:"issuer"`
+		MPTIssuanceID string `json:"mpt_issuance_id"`
 	}
 	if err := json.Unmarshal(data, &objVal); err != nil {
 		return err
+	}
+
+	// MPT amounts have mpt_issuance_id instead of currency/issuer
+	if objVal.MPTIssuanceID != "" {
+		// Parse value as integer for MPT (whole number amounts)
+		raw, err := strconv.ParseInt(objVal.Value, 10, 64)
+		if err != nil {
+			// Fallback to IOU parsing if not a plain integer
+			a.iou = parseIOUValueFromString(objVal.Value)
+		} else {
+			a.iou = NewIOUAmountValue(raw, 0) // normalized for binary codec
+			a.mptRaw = &raw
+		}
+		a.mptIssuanceID = strings.ToUpper(objVal.MPTIssuanceID)
+		a.Native = false
+		return nil
 	}
 
 	a.iou = parseIOUValueFromString(objVal.Value)
@@ -580,6 +620,12 @@ func parseIOUValueFromString(value string) IOUAmountValue {
 func flattenAmount(a Amount) any {
 	if a.IsNative() {
 		return a.xrp.String()
+	}
+	if a.IsMPT() {
+		return map[string]string{
+			"value":           a.iou.String(),
+			"mpt_issuance_id": a.mptIssuanceID,
+		}
 	}
 	return map[string]string{
 		"value":    a.iou.String(),
