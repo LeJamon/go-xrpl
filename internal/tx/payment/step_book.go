@@ -1619,19 +1619,20 @@ func (s *BookStep) consumeOffer(sb *PaymentSandbox, offer *state.LedgerOffer, co
 	// 3. Update offer's remaining amounts (use NET input for offer consumption)
 	offerKey := keylet.Offer(offerOwner, offer.Sequence)
 
-	newTakerPays := s.subtractFromAmount(s.offerTakerPays(offer), netIn)
-	newTakerGets := s.subtractFromAmount(s.offerTakerGets(offer), consumedOut)
+	origPays := s.offerTakerPays(offer)
+	origGets := s.offerTakerGets(offer)
+	newTakerPays := s.subtractFromAmount(origPays, netIn)
+	newTakerGets := s.subtractFromAmount(origGets, consumedOut)
 
-	//	newTakerPays, newTakerPays.IsZero(), newTakerGets, newTakerGets.IsZero())
-
+	// Update offer's remaining amounts.
+	// Reference: rippled Offer.h consume() — just subtracts consumed amounts
+	// and updates the SLE. Does NOT check remaining funding or delete.
+	// The OfferStream's step() function handles unfunded offer detection
+	// on subsequent iterations.
+	offer.TakerPays = s.eitherAmountToTxAmount(newTakerPays, s.book.In)
+	offer.TakerGets = s.eitherAmountToTxAmount(newTakerGets, s.book.Out)
 	if newTakerPays.IsZero() || newTakerGets.IsZero() {
-		// Before deleting, update the offer with zero amounts
-		// This is needed for correct metadata generation:
-		// - PreviousFields should show the original (non-zero) amounts
-		// - FinalFields should show the final (zero) amounts
-		// Reference: rippled's metadata tracks the state changes before deletion
-		offer.TakerPays = s.eitherAmountToTxAmount(newTakerPays, s.book.In)
-		offer.TakerGets = s.eitherAmountToTxAmount(newTakerGets, s.book.Out)
+		// Fully consumed — update with zero amounts for metadata, then delete.
 		offerData, err := state.SerializeLedgerOffer(offer)
 		if err != nil {
 			return err
@@ -1643,31 +1644,18 @@ func (s *BookStep) consumeOffer(sb *PaymentSandbox, offer *state.LedgerOffer, co
 			return err
 		}
 	} else {
-		offer.TakerPays = s.eitherAmountToTxAmount(newTakerPays, s.book.In)
-		offer.TakerGets = s.eitherAmountToTxAmount(newTakerGets, s.book.Out)
-
-		remainingFunded := s.getOfferFundedAmount(sb, offer)
-		if remainingFunded.IsEffectivelyZero() {
-			offerData, err := state.SerializeLedgerOffer(offer)
-			if err != nil {
-				return err
-			}
-			if err := sb.Update(offerKey, offerData); err != nil {
-				return err
-			}
-			if err := s.deleteOffer(sb, offer, offerOwner, txHash, ledgerSeq); err != nil {
-				return err
-			}
-		} else {
-			offer.PreviousTxnID = txHash
-			offer.PreviousTxnLgrSeq = ledgerSeq
-			offerData, err := state.SerializeLedgerOffer(offer)
-			if err != nil {
-				return err
-			}
-			if err := sb.Update(offerKey, offerData); err != nil {
-				return err
-			}
+		// Partially consumed — just update the offer amounts.
+		// Do NOT check remaining funding here. Rippled's consume() does not
+		// check funding; the OfferStream handles unfunded detection on the
+		// next step() call.
+		offer.PreviousTxnID = txHash
+		offer.PreviousTxnLgrSeq = ledgerSeq
+		offerData, err := state.SerializeLedgerOffer(offer)
+		if err != nil {
+			return err
+		}
+		if err := sb.Update(offerKey, offerData); err != nil {
+			return err
 		}
 	}
 
@@ -1739,8 +1727,31 @@ func (s *BookStep) applyDirRemoveResult(sb *PaymentSandbox, result *state.DirRem
 	}
 }
 
-// adjustOwnerCount adjusts the OwnerCount on an account
+// adjustOwnerCount adjusts the OwnerCount on an account.
+// Also records the change via AdjustOwnerCount for the PaymentSandbox's
+// OwnerCountHook, which returns the maximum count seen.
+// Reference: rippled View.cpp adjustOwnerCount() calls adjustOwnerCountHook()
 func (s *BookStep) adjustOwnerCount(sb *PaymentSandbox, account [20]byte, delta int, txHash [32]byte, ledgerSeq uint32) error {
+	// Read the current owner count BEFORE modifying so we can record it.
+	accountKey := keylet.Account(account)
+	data, err := sb.Read(accountKey)
+	if err != nil || data == nil {
+		return nil
+	}
+	acct, err := state.ParseAccountRoot(data)
+	if err != nil {
+		return err
+	}
+	curOC := acct.OwnerCount
+	newOC := int(curOC) + delta
+	if newOC < 0 {
+		newOC = 0
+	}
+
+	// Record via AdjustOwnerCount hook so OwnerCountHook returns the maximum.
+	sb.AdjustOwnerCount(account, curOC, uint32(newOC))
+
+	// Perform the actual modification.
 	return tx.AdjustOwnerCountWithTx(sb, account, delta, txHash, ledgerSeq)
 }
 
@@ -1920,6 +1931,22 @@ func (s *BookStep) creditTrustline(sb *PaymentSandbox, account, issuer [20]byte,
 	}
 
 	accountIsLow := state.CompareAccountIDsForLine(account, issuer) < 0
+
+	// Compute sender's (issuer's) balance BEFORE update, from issuer's perspective.
+	// The sender here is 'issuer' (crediting account means issuer sends to account).
+	// Reference: rippled rippleCreditIOU() line 1672-1675
+	issuerIsLow := !accountIsLow
+	var preCreditIssuerBalance tx.Amount
+	if issuerIsLow {
+		preCreditIssuerBalance = rs.Balance
+	} else {
+		preCreditIssuerBalance = rs.Balance.Negate()
+	}
+	// Record deferred credit: issuer (sender) → account (receiver).
+	// Reference: rippled View.cpp rippleCreditIOU() line 1675:
+	//   view.creditHook(uSenderID, uReceiverID, saAmount, saBalance)
+	sb.CreditHook(issuer, account, amount, preCreditIssuerBalance)
+
 	if accountIsLow {
 		rs.Balance, _ = rs.Balance.Add(amount)
 	} else {
@@ -2045,6 +2072,19 @@ func (s *BookStep) trustCreateForCredit(sb *PaymentSandbox, account, issuer [20]
 
 // adjustOwnerCountForTrustCreate modifies an account's OwnerCount by delta during trust line creation.
 func (s *BookStep) adjustOwnerCountForTrustCreate(sb *PaymentSandbox, account [20]byte, delta int32, txHash [32]byte, ledgerSeq uint32) error {
+	// Read current owner count and record via hook before modifying.
+	accountKey := keylet.Account(account)
+	data, err := sb.Read(accountKey)
+	if err == nil && data != nil {
+		if acct, pErr := state.ParseAccountRoot(data); pErr == nil {
+			curOC := acct.OwnerCount
+			newOC := int(curOC) + int(delta)
+			if newOC < 0 {
+				newOC = 0
+			}
+			sb.AdjustOwnerCount(account, curOC, uint32(newOC))
+		}
+	}
 	return tx.AdjustOwnerCountWithTx(sb, account, int(delta), txHash, ledgerSeq)
 }
 
@@ -2069,13 +2109,18 @@ func (s *BookStep) debitTrustline(sb *PaymentSandbox, account, issuer [20]byte, 
 	// The "sender" is account (their balance decreases)
 	accountIsLow := state.CompareAccountIDsForLine(account, issuer) < 0
 
-	// Compute sender's balance BEFORE update (from sender's perspective)
+	// Compute sender's (account's) balance BEFORE update (from sender's perspective)
 	var saBefore tx.Amount
 	if accountIsLow {
 		saBefore = rs.Balance
 	} else {
 		saBefore = rs.Balance.Negate()
 	}
+
+	// Record deferred credit: account (sender) → issuer (receiver).
+	// Reference: rippled View.cpp rippleCreditIOU() line 1675:
+	//   view.creditHook(uSenderID, uReceiverID, saAmount, saBalance)
+	sb.CreditHook(account, issuer, amount, saBefore)
 
 	// Update balance
 	if accountIsLow {
