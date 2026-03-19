@@ -72,6 +72,20 @@ func (s *OverlaySender) RequestLedger(id consensus.LedgerID) error {
 	return s.overlay.Broadcast(frame)
 }
 
+func (s *OverlaySender) RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error {
+	msg := &message.GetLedger{
+		InfoType:   message.LedgerInfoBase,
+		LType:      message.LedgerTypeClosed,
+		LedgerHash: hash[:],
+		LedgerSeq:  seq,
+	}
+	frame, err := encodeFrame(message.TypeGetLedger, msg)
+	if err != nil {
+		return fmt.Errorf("encode get_ledger: %w", err)
+	}
+	return s.overlay.Broadcast(frame)
+}
+
 func (s *OverlaySender) SendToPeer(peerID uint64, frame []byte) error {
 	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
 }

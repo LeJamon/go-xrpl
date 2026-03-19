@@ -635,8 +635,10 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		return
 	}
 
-	// Determine winning close time
+	// Determine winning close time and apply effCloseTime
 	closeTime := e.determineCloseTime()
+	resolution := e.adaptor.CloseTimeResolution()
+	closeTime = effCloseTime(closeTime, resolution, e.prevLedger.CloseTime())
 
 	// Get the agreed transaction set
 	var txSet consensus.TxSet
@@ -727,13 +729,17 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// Move to accepted phase
 	e.setPhase(consensus.PhaseAccepted)
 
-	// Immediately start next round (matching rippled's endConsensus→beginConsensus flow)
-	proposing := e.adaptor.IsValidator() && e.adaptor.GetOperatingMode() == consensus.OpModeFull
-	nextRound := consensus.RoundID{
-		Seq:        newLedger.Seq() + 1,
-		ParentHash: newLedger.ID(),
+	// Only auto-advance to the next round if we're in Full mode.
+	// If not Full, the router will keep re-adopting until caught up,
+	// then transition to Full, at which point checkAndStartRound kicks in.
+	if e.adaptor.GetOperatingMode() == consensus.OpModeFull {
+		proposing := e.adaptor.IsValidator()
+		nextRound := consensus.RoundID{
+			Seq:        newLedger.Seq() + 1,
+			ParentHash: newLedger.ID(),
+		}
+		e.startRoundLocked(nextRound, proposing)
 	}
-	e.startRoundLocked(nextRound, proposing)
 }
 
 // determineCloseTime determines the consensus close time.
@@ -784,4 +790,38 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 	}
 
 	e.adaptor.BroadcastValidation(validation)
+}
+
+// roundCloseTime rounds a close time to the nearest multiple of resolution.
+// Rounds up if the close time is at the midpoint.
+// Reference: rippled LedgerTiming.h roundCloseTime()
+func roundCloseTime(closeTime time.Time, resolution time.Duration) time.Time {
+	if closeTime.IsZero() {
+		return closeTime
+	}
+	// Add half the resolution for rounding
+	adjusted := closeTime.Add(resolution / 2)
+	// Truncate to the nearest resolution boundary using Unix seconds
+	epoch := adjusted.Unix()
+	resSec := int64(resolution.Seconds())
+	if resSec <= 0 {
+		return closeTime
+	}
+	return time.Unix(epoch-(epoch%resSec), 0).UTC()
+}
+
+// effCloseTime calculates the effective ledger close time.
+// After rounding to the close time resolution, ensures the result is
+// at least 1 second after the prior ledger's close time.
+// Reference: rippled LedgerTiming.h effCloseTime()
+func effCloseTime(closeTime time.Time, resolution time.Duration, priorCloseTime time.Time) time.Time {
+	if closeTime.IsZero() {
+		return closeTime
+	}
+	rounded := roundCloseTime(closeTime, resolution)
+	minTime := priorCloseTime.Add(time.Second)
+	if rounded.Before(minTime) {
+		return minTime
+	}
+	return rounded
 }

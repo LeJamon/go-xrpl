@@ -167,6 +167,7 @@ type LedgerReader interface {
 // LedgerServerInfo contains server status information from the ledger service
 type LedgerServerInfo struct {
 	Standalone          bool
+	ServerState         string
 	OpenLedgerSeq       uint32
 	ClosedLedgerSeq     uint32
 	ClosedLedgerHash    [32]byte

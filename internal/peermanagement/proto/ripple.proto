@@ -30,7 +30,7 @@ enum MessageType {
 
 // Provides the current ephemeral key for a validator
 message TMManifest {
-    bytes stobject = 1;
+    optional bytes stobject = 1;
 }
 
 message TMManifests {
@@ -40,17 +40,17 @@ message TMManifests {
 
 // Cluster node status
 message TMClusterNode {
-    string public_key = 1;
-    uint32 report_time = 2;
-    uint32 node_load = 3;
+    optional string public_key = 1;
+    optional uint32 report_time = 2;
+    optional uint32 node_load = 3;
     string node_name = 4;
     string address = 5;
 }
 
 // Load sources
 message TMLoadSource {
-    string name = 1;
-    uint32 cost = 2;
+    optional string name = 1;
+    optional uint32 cost = 2;
     uint32 count = 3;
 }
 
@@ -62,7 +62,7 @@ message TMCluster {
 
 // Public key
 message TMPublicKey {
-    bytes public_key = 1;
+    optional bytes public_key = 1;
 }
 
 // Transaction status
@@ -79,8 +79,8 @@ enum TransactionStatus {
 }
 
 message TMTransaction {
-    bytes raw_transaction = 1;
-    TransactionStatus status = 2;
+    optional bytes raw_transaction = 1;
+    optional TransactionStatus status = 2;
     uint64 receive_timestamp = 3;
     bool deferred = 4;
 }
@@ -121,12 +121,12 @@ message TMStatusChange {
 
 // Ledger proposal
 message TMProposeSet {
-    uint32 propose_seq = 1;
-    bytes current_tx_hash = 2;
-    bytes node_pub_key = 3;
-    uint32 close_time = 4;
-    bytes signature = 5;
-    bytes previous_ledger = 6;
+    optional uint32 propose_seq = 1;
+    optional bytes current_tx_hash = 2;
+    optional bytes node_pub_key = 3;
+    optional uint32 close_time = 4;
+    optional bytes signature = 5;
+    optional bytes previous_ledger = 6;
     bool checked_signature = 7 [deprecated=true];
     repeated bytes added_transactions = 10;
     repeated bytes removed_transactions = 11;
@@ -142,45 +142,45 @@ enum TxSetStatus {
 }
 
 message TMHaveTransactionSet {
-    TxSetStatus status = 1;
-    bytes hash = 2;
+    optional TxSetStatus status = 1;
+    optional bytes hash = 2;
 }
 
 // Validator list
 message TMValidatorList {
-    bytes manifest = 1;
-    bytes blob = 2;
-    bytes signature = 3;
-    uint32 version = 4;
+    optional bytes manifest = 1;
+    optional bytes blob = 2;
+    optional bytes signature = 3;
+    optional uint32 version = 4;
 }
 
 // Validator list v2
 message ValidatorBlobInfo {
     bytes manifest = 1;
-    bytes blob = 2;
-    bytes signature = 3;
+    optional bytes blob = 2;
+    optional bytes signature = 3;
 }
 
 message TMValidatorListCollection {
-    uint32 version = 1;
-    bytes manifest = 2;
+    optional uint32 version = 1;
+    optional bytes manifest = 2;
     repeated ValidatorBlobInfo blobs = 3;
 }
 
 // Validation message
 message TMValidation {
-    bytes validation = 1;
+    optional bytes validation = 1;
     bool checked_signature = 2 [deprecated=true];
     uint32 hops = 3 [deprecated=true];
 }
 
 // Endpoints for peer discovery
 message TMEndpoints {
-    uint32 version = 1;
+    optional uint32 version = 1;
 
     message TMEndpointv2 {
-        string endpoint = 1;
-        uint32 hops = 2;
+        optional string endpoint = 1;
+        optional uint32 hops = 2;
     }
     repeated TMEndpointv2 endpoints_v2 = 3;
 }
@@ -207,8 +207,8 @@ enum ObjectType {
 }
 
 message TMGetObjectByHash {
-    ObjectType type = 1;
-    bool query = 2;
+    optional ObjectType type = 1;
+    optional bool query = 2;
     uint32 seq = 3;
     bytes ledger_hash = 4;
     bool fat = 5;
@@ -217,7 +217,7 @@ message TMGetObjectByHash {
 
 // Ledger node
 message TMLedgerNode {
-    bytes nodedata = 1;
+    optional bytes nodedata = 1;
     bytes nodeid = 2;
 }
 
@@ -261,9 +261,9 @@ enum TMReplyError {
 }
 
 message TMLedgerData {
-    bytes ledger_hash = 1;
-    uint32 ledger_seq = 2;
-    TMLedgerInfoType type = 3;
+    optional bytes ledger_hash = 1;
+    optional uint32 ledger_seq = 2;
+    optional TMLedgerInfoType type = 3;
     repeated TMLedgerNode nodes = 4;
     uint32 request_cookie = 5;
     TMReplyError error = 6;
@@ -283,8 +283,8 @@ message TMPing {
 
 // Squelch for reduce-relay
 message TMSquelch {
-    bool squelch = 1;
-    bytes validator_pub_key = 2;
+    optional bool squelch = 1;
+    optional bytes validator_pub_key = 2;
     uint32 squelch_duration = 3;
 }
 
@@ -297,15 +297,15 @@ enum TMLedgerMapType {
 
 // Proof path request/response
 message TMProofPathRequest {
-    bytes key = 1;
-    bytes ledger_hash = 2;
-    TMLedgerMapType type = 3;
+    optional bytes key = 1;
+    optional bytes ledger_hash = 2;
+    optional TMLedgerMapType type = 3;
 }
 
 message TMProofPathResponse {
-    bytes key = 1;
-    bytes ledger_hash = 2;
-    TMLedgerMapType type = 3;
+    optional bytes key = 1;
+    optional bytes ledger_hash = 2;
+    optional TMLedgerMapType type = 3;
     bytes ledger_header = 4;
     repeated bytes path = 5;
     TMReplyError error = 6;
@@ -313,11 +313,11 @@ message TMProofPathResponse {
 
 // Replay delta for ledger sync
 message TMReplayDeltaRequest {
-    bytes ledger_hash = 1;
+    optional bytes ledger_hash = 1;
 }
 
 message TMReplayDeltaResponse {
-    bytes ledger_hash = 1;
+    optional bytes ledger_hash = 1;
     bytes ledger_header = 2;
     repeated bytes transaction = 3;
     TMReplyError error = 4;

@@ -2,11 +2,13 @@ package adaptor
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 )
@@ -239,11 +241,12 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	r.logger.Debug("peer status change",
+	r.logger.Info("peer status change",
 		"peer", msg.PeerID,
 		"status", sc.NewStatus,
 		"event", sc.NewEvent,
 		"ledger_seq", sc.LedgerSeq,
+		"needs_sync", r.adaptor.NeedsInitialSync(),
 	)
 
 	// Track peer's reported ledger state
@@ -251,6 +254,10 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 		var peerHash [32]byte
 		if len(sc.LedgerHash) == 32 {
 			copy(peerHash[:], sc.LedgerHash)
+		}
+		var parentHash [32]byte
+		if len(sc.LedgerHashPrevious) == 32 {
+			copy(parentHash[:], sc.LedgerHashPrevious)
 		}
 
 		r.peersMu.Lock()
@@ -260,12 +267,128 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 		}
 		r.peersMu.Unlock()
 
+		// During initial sync, adopt the peer's ledger from StatusChange
+		if r.adaptor.NeedsInitialSync() && sc.LedgerSeq > 1 {
+			r.tryAdoptFromStatusChange(sc.LedgerSeq, peerHash, parentHash)
+			return
+		}
+
+		// While not in Full mode, keep re-adopting from StatusChange until
+		// we're within 1 ledger of the network. This prevents the consensus
+		// engine from running solo rounds that produce divergent close times.
+		if r.adaptor.GetOperatingMode() != consensus.OpModeFull && sc.LedgerSeq > 1 {
+			svc := r.adaptor.LedgerService()
+			if svc != nil {
+				ourSeq := svc.GetClosedLedgerIndex()
+				if sc.LedgerSeq > ourSeq+1 {
+					r.logger.Info("re-adopting: still behind network",
+						"our_seq", ourSeq,
+						"peer_seq", sc.LedgerSeq,
+						"gap", sc.LedgerSeq-ourSeq,
+					)
+					r.reAdoptFromStatusChange(sc.LedgerSeq, peerHash, parentHash)
+					return
+				}
+			}
+		}
+
 		// Check if we're behind and need to catch up
 		r.checkBehind(sc.LedgerSeq, peerHash)
 	}
 }
 
-// checkBehind compares the peer's ledger seq to ours and requests missing ledgers.
+// tryAdoptFromStatusChange builds a ledger header from StatusChange data and adopts it.
+// This is used during initial sync when we can't fetch the full ledger from peers
+// (rippled may not serve old ledgers). We construct a minimal header from the
+// peer's reported state and use our genesis state map.
+//
+// After initial adoption, we do NOT transition to Full mode immediately.
+// Instead, we stay in Tracking mode and keep re-adopting until we're within
+// 1 ledger of the network. This prevents running solo consensus rounds that
+// produce divergent close times.
+func (r *Router) tryAdoptFromStatusChange(seq uint32, hash, parentHash [32]byte) {
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		r.logger.Warn("tryAdopt: no ledger service")
+		return
+	}
+
+	closedLedger := svc.GetClosedLedger()
+	if closedLedger == nil {
+		r.logger.Warn("tryAdopt: no closed ledger")
+		return
+	}
+
+	r.logger.Info("attempting ledger adoption",
+		"peer_seq", seq,
+		"our_seq", closedLedger.Sequence(),
+	)
+
+	// Build a synthetic header from the StatusChange data
+	h := &header.LedgerHeader{
+		LedgerIndex: seq,
+		Hash:        hash,
+		ParentHash:  parentHash,
+		// Reuse genesis state hash — valid for empty ledger sequences
+		AccountHash: closedLedger.Header().AccountHash,
+		// TxHash stays zero — no transactions
+		Drops:               100_000_000_000_000_000, // total XRP supply
+		CloseTimeResolution: 10,
+	}
+
+	if err := svc.AdoptLedgerHeader(h); err != nil {
+		r.logger.Info("failed to adopt from status change", "error", err, "seq", seq)
+		return
+	}
+
+	// Stay in Tracking mode — don't go Full yet.
+	// We'll transition to Full once we're caught up (gap ≤ 1).
+	r.adaptor.SetOperatingMode(consensus.OpModeTracking)
+
+	r.logger.Info("adopted ledger from peer status change (tracking)",
+		"seq", seq,
+		"hash", fmt.Sprintf("%x", hash[:8]),
+	)
+}
+
+// reAdoptFromStatusChange re-adopts a peer's ledger header while we're still
+// catching up to the network. Unlike tryAdoptFromStatusChange, this works
+// after initial sync is complete but before we've reached Full mode.
+// Once the gap closes to ≤ 1, it transitions to Full mode to start consensus.
+func (r *Router) reAdoptFromStatusChange(seq uint32, hash, parentHash [32]byte) {
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		return
+	}
+
+	closedLedger := svc.GetClosedLedger()
+	if closedLedger == nil {
+		return
+	}
+
+	h := &header.LedgerHeader{
+		LedgerIndex: seq,
+		Hash:        hash,
+		ParentHash:  parentHash,
+		AccountHash: closedLedger.Header().AccountHash,
+		Drops:               100_000_000_000_000_000,
+		CloseTimeResolution: 10,
+	}
+
+	if err := svc.ReAdoptLedgerHeader(h); err != nil {
+		r.logger.Debug("re-adopt failed", "error", err, "seq", seq)
+		return
+	}
+
+	r.logger.Info("re-adopted ledger from peer",
+		"seq", seq,
+		"hash", fmt.Sprintf("%x", hash[:8]),
+	)
+}
+
+// checkBehind compares the peer's ledger seq to ours and handles catch-up.
+// When we're within 1 ledger of the peer and not yet in Full mode,
+// transitions to Full to start consensus.
 func (r *Router) checkBehind(peerSeq uint32, peerHash [32]byte) {
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
@@ -273,8 +396,17 @@ func (r *Router) checkBehind(peerSeq uint32, peerHash [32]byte) {
 	}
 
 	ourSeq := svc.GetClosedLedgerIndex()
+
+	// If we're caught up (gap ≤ 1) and not yet Full, transition to Full
 	if peerSeq <= ourSeq+1 {
-		return // not behind, or only 1 ahead (normal during consensus)
+		if r.adaptor.GetOperatingMode() == consensus.OpModeTracking {
+			r.logger.Info("caught up with network, transitioning to Full",
+				"our_seq", ourSeq,
+				"peer_seq", peerSeq,
+			)
+			r.adaptor.SetOperatingMode(consensus.OpModeFull)
+		}
+		return
 	}
 
 	r.logger.Info("behind network",
@@ -283,10 +415,9 @@ func (r *Router) checkBehind(peerSeq uint32, peerHash [32]byte) {
 		"gap", peerSeq-ourSeq,
 	)
 
-	// Request the next ledger we need
-	nextSeq := ourSeq + 1
-	if err := r.adaptor.RequestLedger(consensus.LedgerID(peerHash)); err != nil {
-		r.logger.Debug("failed to request ledger", "seq", nextSeq, "error", err)
+	// Request the peer's closed ledger by hash and sequence
+	if err := r.adaptor.RequestLedgerByHashAndSeq(peerHash, peerSeq); err != nil {
+		r.logger.Debug("failed to request ledger", "seq", peerSeq, "error", err)
 	}
 }
 
@@ -305,14 +436,28 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 		"peer", msg.PeerID,
 		"seq", ld.LedgerSeq,
 		"nodes", len(ld.Nodes),
+		"itype", ld.InfoType,
 	)
+
+	// During initial sync, try to adopt the ledger header from peers
+	if ld.InfoType == message.LedgerInfoBase && len(ld.Nodes) > 0 && r.adaptor.NeedsInitialSync() {
+		headerData := ld.Nodes[0].NodeData
+		if err := r.adaptor.AdoptLedgerFromHeader(headerData); err != nil {
+			r.logger.Debug("failed to adopt ledger header", "error", err, "peer", msg.PeerID)
+		} else {
+			r.logger.Info("adopted ledger from peer",
+				"seq", ld.LedgerSeq,
+				"peer", msg.PeerID,
+			)
+			return
+		}
+	}
 
 	// Pass the ledger data to the consensus engine
 	if len(ld.LedgerHash) == 32 {
 		var ledgerID consensus.LedgerID
 		copy(ledgerID[:], ld.LedgerHash)
 
-		// Combine all node data into a single payload for the engine
 		var payload []byte
 		for _, node := range ld.Nodes {
 			payload = append(payload, node.NodeData...)

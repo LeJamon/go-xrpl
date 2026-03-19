@@ -17,12 +17,19 @@ import (
 
 // LedgerServiceAdapter adapts the ledger service to the RPC LedgerService interface
 type LedgerServiceAdapter struct {
-	svc *service.Service
+	svc           *service.Service
+	txBroadcaster func(txBlob []byte) // called after successful submit to relay tx to peers
 }
 
 // NewLedgerServiceAdapter creates a new adapter
 func NewLedgerServiceAdapter(svc *service.Service) *LedgerServiceAdapter {
 	return &LedgerServiceAdapter{svc: svc}
+}
+
+// SetTxBroadcaster sets the callback for relaying submitted transactions to P2P peers.
+// Called during server startup once the overlay is available.
+func (a *LedgerServiceAdapter) SetTxBroadcaster(fn func(txBlob []byte)) {
+	a.txBroadcaster = fn
 }
 
 // GetCurrentLedgerIndex returns the current open ledger index
@@ -55,6 +62,7 @@ func (a *LedgerServiceAdapter) GetServerInfo() types.LedgerServerInfo {
 	info := a.svc.GetServerInfo()
 	return types.LedgerServerInfo{
 		Standalone:          info.Standalone,
+		ServerState:         info.ServerState,
 		OpenLedgerSeq:       info.OpenLedgerSeq,
 		ClosedLedgerSeq:     info.ClosedLedgerSeq,
 		ClosedLedgerHash:    info.ClosedLedgerHash,
@@ -205,12 +213,19 @@ func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte, txBlobHex ...str
 		}, nil
 	}
 
+	// Relay the transaction to P2P peers if successfully applied
+	broadcast := false
+	if result.Applied && rawBlob != nil && a.txBroadcaster != nil {
+		a.txBroadcaster(rawBlob)
+		broadcast = true
+	}
+
 	return &types.SubmitResult{
 		EngineResult:        result.Result.String(),
 		EngineResultCode:    int(result.Result),
 		EngineResultMessage: result.Message,
 		Applied:             result.Applied,
-		Broadcast:           result.Applied, // If applied, it would be broadcast to peers
+		Broadcast:           broadcast,
 		Queued:              false,          // Not queued when applied directly
 		Kept:                result.Applied, // If applied, it is kept
 		Fee:                 result.Fee,

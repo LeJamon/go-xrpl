@@ -66,8 +66,11 @@ func buildServerInfo(human bool) map[string]interface{} {
 	validatedLedgerHash := strings.ToUpper(fmt.Sprintf("%064x", serverInfo.ValidatedLedgerHash))
 	closedLedgerHash := strings.ToUpper(fmt.Sprintf("%064x", serverInfo.ClosedLedgerHash))
 
-	// Server state
-	serverState := "full"
+	// Server state — use actual operating mode from service
+	serverState := serverInfo.ServerState
+	if serverState == "" {
+		serverState = "full"
+	}
 	if serverInfo.Standalone {
 		serverState = "standalone"
 	}

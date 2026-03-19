@@ -103,9 +103,9 @@ func toProto(msg Message) (pb.Message, error) {
 		nodes := make([]*proto.TMClusterNode, len(m.ClusterNodes))
 		for i, n := range m.ClusterNodes {
 			nodes[i] = &proto.TMClusterNode{
-				PublicKey:  n.PublicKey,
-				ReportTime: n.ReportTime,
-				NodeLoad:   n.NodeLoad,
+				PublicKey:  pb.String(n.PublicKey),
+				ReportTime: pb.Uint32(n.ReportTime),
+				NodeLoad:   pb.Uint32(n.NodeLoad),
 				NodeName:   n.NodeName,
 				Address:    n.Address,
 			}
@@ -113,8 +113,8 @@ func toProto(msg Message) (pb.Message, error) {
 		sources := make([]*proto.TMLoadSource, len(m.LoadSources))
 		for i, s := range m.LoadSources {
 			sources[i] = &proto.TMLoadSource{
-				Name:  s.Name,
-				Cost:  s.Cost,
+				Name:  pb.String(s.Name),
+				Cost:  pb.Uint32(s.Cost),
 				Count: s.Count,
 			}
 		}
@@ -124,16 +124,17 @@ func toProto(msg Message) (pb.Message, error) {
 		eps := make([]*proto.TMEndpoints_TMEndpointv2, len(m.EndpointsV2))
 		for i, ep := range m.EndpointsV2 {
 			eps[i] = &proto.TMEndpoints_TMEndpointv2{
-				Endpoint: ep.Endpoint,
-				Hops:     ep.Hops,
+				Endpoint: pb.String(ep.Endpoint),
+				Hops:     pb.Uint32(ep.Hops),
 			}
 		}
-		return &proto.TMEndpoints{Version: m.Version, EndpointsV2: eps}, nil
+		return &proto.TMEndpoints{Version: pb.Uint32(m.Version), EndpointsV2: eps}, nil
 
 	case *Transaction:
+		txStatus := proto.TransactionStatus(m.Status)
 		return &proto.TMTransaction{
 			RawTransaction:   m.RawTransaction,
-			Status:           proto.TransactionStatus(m.Status),
+			Status:           &txStatus,
 			ReceiveTimestamp: m.ReceiveTimestamp,
 			Deferred:         m.Deferred,
 		}, nil
@@ -141,9 +142,10 @@ func toProto(msg Message) (pb.Message, error) {
 	case *Transactions:
 		txs := make([]*proto.TMTransaction, len(m.Transactions))
 		for i, tx := range m.Transactions {
+			txStatus := proto.TransactionStatus(tx.Status)
 			txs[i] = &proto.TMTransaction{
 				RawTransaction:   tx.RawTransaction,
-				Status:           proto.TransactionStatus(tx.Status),
+				Status:           &txStatus,
 				ReceiveTimestamp: tx.ReceiveTimestamp,
 				Deferred:         tx.Deferred,
 			}
@@ -164,10 +166,10 @@ func toProto(msg Message) (pb.Message, error) {
 
 	case *ProposeSet:
 		return &proto.TMProposeSet{
-			ProposeSeq:          m.ProposeSeq,
+			ProposeSeq:          pb.Uint32(m.ProposeSeq),
 			CurrentTxHash:       m.CurrentTxHash,
 			NodePubKey:          m.NodePubKey,
-			CloseTime:           m.CloseTime,
+			CloseTime:           pb.Uint32(m.CloseTime),
 			Signature:           m.Signature,
 			PreviousLedger:      m.PreviousLedger,
 			AddedTransactions:   m.AddedTransactions,
@@ -175,8 +177,9 @@ func toProto(msg Message) (pb.Message, error) {
 		}, nil
 
 	case *HaveTransactionSet:
+		txSetStatus := proto.TxSetStatus(m.Status)
 		return &proto.TMHaveTransactionSet{
-			Status: proto.TxSetStatus(m.Status),
+			Status: &txSetStatus,
 			Hash:   m.Hash,
 		}, nil
 
@@ -188,7 +191,7 @@ func toProto(msg Message) (pb.Message, error) {
 			Manifest:  m.Manifest,
 			Blob:      m.Blob,
 			Signature: m.Signature,
-			Version:   m.Version,
+			Version:   pb.Uint32(m.Version),
 		}, nil
 
 	case *ValidatorListCollection:
@@ -201,7 +204,7 @@ func toProto(msg Message) (pb.Message, error) {
 			}
 		}
 		return &proto.TMValidatorListCollection{
-			Version:  m.Version,
+			Version:  pb.Uint32(m.Version),
 			Manifest: m.Manifest,
 			Blobs:    blobs,
 		}, nil
@@ -227,10 +230,11 @@ func toProto(msg Message) (pb.Message, error) {
 				Nodeid:   n.NodeID,
 			}
 		}
+		ledgerInfoType := proto.TMLedgerInfoType(m.InfoType)
 		return &proto.TMLedgerData{
 			LedgerHash:    m.LedgerHash,
-			LedgerSeq:     m.LedgerSeq,
-			Type:          proto.TMLedgerInfoType(m.InfoType),
+			LedgerSeq:     pb.Uint32(m.LedgerSeq),
+			Type:          &ledgerInfoType,
 			Nodes:         nodes,
 			RequestCookie: m.RequestCookie,
 			Error:         proto.TMReplyError(m.Error),
@@ -247,9 +251,10 @@ func toProto(msg Message) (pb.Message, error) {
 				LedgerSeq: o.LedgerSeq,
 			}
 		}
+		objType := proto.ObjectType(m.ObjType)
 		return &proto.TMGetObjectByHash{
-			Type:       proto.ObjectType(m.ObjType),
-			Query:      m.Query,
+			Type:       &objType,
+			Query:      pb.Bool(m.Query),
 			Seq:        m.Seq,
 			LedgerHash: m.LedgerHash,
 			Fat:        m.Fat,
@@ -258,23 +263,25 @@ func toProto(msg Message) (pb.Message, error) {
 
 	case *Squelch:
 		return &proto.TMSquelch{
-			Squelch:         m.Squelch,
+			Squelch:         pb.Bool(m.Squelch),
 			ValidatorPubKey: m.ValidatorPubKey,
 			SquelchDuration: m.SquelchDuration,
 		}, nil
 
 	case *ProofPathRequest:
+		mapType := proto.TMLedgerMapType(m.MapType)
 		return &proto.TMProofPathRequest{
 			Key:        m.Key,
 			LedgerHash: m.LedgerHash,
-			Type:       proto.TMLedgerMapType(m.MapType),
+			Type:       &mapType,
 		}, nil
 
 	case *ProofPathResponse:
+		mapType := proto.TMLedgerMapType(m.MapType)
 		return &proto.TMProofPathResponse{
 			Key:          m.Key,
 			LedgerHash:   m.LedgerHash,
-			Type:         proto.TMLedgerMapType(m.MapType),
+			Type:         &mapType,
 			LedgerHeader: m.LedgerHeader,
 			Path:         m.Path,
 			Error:        proto.TMReplyError(m.Error),
@@ -324,19 +331,19 @@ func fromProto(msgType MessageType, protoMsg pb.Message) (Message, error) {
 		nodes := make([]ClusterNode, len(p.ClusterNodes))
 		for i, n := range p.ClusterNodes {
 			nodes[i] = ClusterNode{
-				PublicKey:  n.PublicKey,
-				ReportTime: n.ReportTime,
-				NodeLoad:   n.NodeLoad,
-				NodeName:   n.NodeName,
-				Address:    n.Address,
+				PublicKey:  n.GetPublicKey(),
+				ReportTime: n.GetReportTime(),
+				NodeLoad:   n.GetNodeLoad(),
+				NodeName:   n.GetNodeName(),
+				Address:    n.GetAddress(),
 			}
 		}
 		sources := make([]LoadSource, len(p.LoadSources))
 		for i, s := range p.LoadSources {
 			sources[i] = LoadSource{
-				Name:  s.Name,
-				Cost:  s.Cost,
-				Count: s.Count,
+				Name:  s.GetName(),
+				Cost:  s.GetCost(),
+				Count: s.GetCount(),
 			}
 		}
 		return &Cluster{ClusterNodes: nodes, LoadSources: sources}, nil
@@ -346,19 +353,19 @@ func fromProto(msgType MessageType, protoMsg pb.Message) (Message, error) {
 		eps := make([]Endpointv2, len(p.EndpointsV2))
 		for i, ep := range p.EndpointsV2 {
 			eps[i] = Endpointv2{
-				Endpoint: ep.Endpoint,
-				Hops:     ep.Hops,
+				Endpoint: ep.GetEndpoint(),
+				Hops:     ep.GetHops(),
 			}
 		}
-		return &Endpoints{Version: p.Version, EndpointsV2: eps}, nil
+		return &Endpoints{Version: p.GetVersion(), EndpointsV2: eps}, nil
 
 	case TypeTransaction:
 		p := protoMsg.(*proto.TMTransaction)
 		return &Transaction{
-			RawTransaction:   p.RawTransaction,
-			Status:           TransactionStatus(p.Status),
-			ReceiveTimestamp: p.ReceiveTimestamp,
-			Deferred:         p.Deferred,
+			RawTransaction:   p.GetRawTransaction(),
+			Status:           TransactionStatus(p.GetStatus()),
+			ReceiveTimestamp: p.GetReceiveTimestamp(),
+			Deferred:         p.GetDeferred(),
 		}, nil
 
 	case TypeTransactions:
@@ -366,10 +373,10 @@ func fromProto(msgType MessageType, protoMsg pb.Message) (Message, error) {
 		txs := make([]Transaction, len(p.Transactions))
 		for i, tx := range p.Transactions {
 			txs[i] = Transaction{
-				RawTransaction:   tx.RawTransaction,
-				Status:           TransactionStatus(tx.Status),
-				ReceiveTimestamp: tx.ReceiveTimestamp,
-				Deferred:         tx.Deferred,
+				RawTransaction:   tx.GetRawTransaction(),
+				Status:           TransactionStatus(tx.GetStatus()),
+				ReceiveTimestamp: tx.GetReceiveTimestamp(),
+				Deferred:         tx.GetDeferred(),
 			}
 		}
 		return &Transactions{Transactions: txs}, nil
@@ -379,11 +386,11 @@ func fromProto(msgType MessageType, protoMsg pb.Message) (Message, error) {
 		return &GetLedger{
 			InfoType:      LedgerInfoType(p.GetItype()),
 			LType:         LedgerType(p.GetLtype()),
-			LedgerHash:    p.LedgerHash,
-			LedgerSeq:     p.LedgerSeq,
-			NodeIDs:       p.NodeIds,
-			RequestCookie: p.RequestCookie,
-			QueryDepth:    p.QueryDepth,
+			LedgerHash:    p.GetLedgerHash(),
+			LedgerSeq:     p.GetLedgerSeq(),
+			NodeIDs:       p.GetNodeIds(),
+			RequestCookie: p.GetRequestCookie(),
+			QueryDepth:    p.GetQueryDepth(),
 		}, nil
 
 	case TypeLedgerData:
@@ -391,92 +398,92 @@ func fromProto(msgType MessageType, protoMsg pb.Message) (Message, error) {
 		nodes := make([]LedgerNode, len(p.Nodes))
 		for i, n := range p.Nodes {
 			nodes[i] = LedgerNode{
-				NodeData: n.Nodedata,
-				NodeID:   n.Nodeid,
+				NodeData: n.GetNodedata(),
+				NodeID:   n.GetNodeid(),
 			}
 		}
 		return &LedgerData{
-			LedgerHash:    p.LedgerHash,
-			LedgerSeq:     p.LedgerSeq,
-			InfoType:      LedgerInfoType(p.Type),
+			LedgerHash:    p.GetLedgerHash(),
+			LedgerSeq:     p.GetLedgerSeq(),
+			InfoType:      LedgerInfoType(p.GetType()),
 			Nodes:         nodes,
-			RequestCookie: p.RequestCookie,
-			Error:         ReplyError(p.Error),
+			RequestCookie: p.GetRequestCookie(),
+			Error:         ReplyError(p.GetError()),
 		}, nil
 
 	case TypeProposeLedger:
 		p := protoMsg.(*proto.TMProposeSet)
 		return &ProposeSet{
-			ProposeSeq:          p.ProposeSeq,
-			CurrentTxHash:       p.CurrentTxHash,
-			NodePubKey:          p.NodePubKey,
-			CloseTime:           p.CloseTime,
-			Signature:           p.Signature,
-			PreviousLedger:      p.PreviousLedger,
-			AddedTransactions:   p.AddedTransactions,
-			RemovedTransactions: p.RemovedTransactions,
+			ProposeSeq:          p.GetProposeSeq(),
+			CurrentTxHash:       p.GetCurrentTxHash(),
+			NodePubKey:          p.GetNodePubKey(),
+			CloseTime:           p.GetCloseTime(),
+			Signature:           p.GetSignature(),
+			PreviousLedger:      p.GetPreviousLedger(),
+			AddedTransactions:   p.GetAddedTransactions(),
+			RemovedTransactions: p.GetRemovedTransactions(),
 		}, nil
 
 	case TypeStatusChange:
 		p := protoMsg.(*proto.TMStatusChange)
 		return &StatusChange{
-			NewStatus:          NodeStatus(p.NewStatus),
-			NewEvent:           NodeEvent(p.NewEvent),
-			LedgerSeq:          p.LedgerSeq,
-			LedgerHash:         p.LedgerHash,
-			LedgerHashPrevious: p.LedgerHashPrevious,
-			NetworkTime:        p.NetworkTime,
-			FirstSeq:           p.FirstSeq,
-			LastSeq:            p.LastSeq,
+			NewStatus:          NodeStatus(p.GetNewStatus()),
+			NewEvent:           NodeEvent(p.GetNewEvent()),
+			LedgerSeq:          p.GetLedgerSeq(),
+			LedgerHash:         p.GetLedgerHash(),
+			LedgerHashPrevious: p.GetLedgerHashPrevious(),
+			NetworkTime:        p.GetNetworkTime(),
+			FirstSeq:           p.GetFirstSeq(),
+			LastSeq:            p.GetLastSeq(),
 		}, nil
 
 	case TypeHaveSet:
 		p := protoMsg.(*proto.TMHaveTransactionSet)
 		return &HaveTransactionSet{
-			Status: TxSetStatus(p.Status),
-			Hash:   p.Hash,
+			Status: TxSetStatus(p.GetStatus()),
+			Hash:   p.GetHash(),
 		}, nil
 
 	case TypeValidation:
 		p := protoMsg.(*proto.TMValidation)
-		return &Validation{Validation: p.Validation}, nil
+		return &Validation{Validation: p.GetValidation()}, nil
 
 	case TypeGetObjects:
 		p := protoMsg.(*proto.TMGetObjectByHash)
 		objects := make([]IndexedObject, len(p.Objects))
 		for i, o := range p.Objects {
 			objects[i] = IndexedObject{
-				Hash:      o.Hash,
-				NodeID:    o.NodeId,
-				Index:     o.Index,
-				Data:      o.Data,
-				LedgerSeq: o.LedgerSeq,
+				Hash:      o.GetHash(),
+				NodeID:    o.GetNodeId(),
+				Index:     o.GetIndex(),
+				Data:      o.GetData(),
+				LedgerSeq: o.GetLedgerSeq(),
 			}
 		}
 		return &GetObjectByHash{
-			ObjType:    ObjectType(p.Type),
-			Query:      p.Query,
-			Seq:        p.Seq,
-			LedgerHash: p.LedgerHash,
-			Fat:        p.Fat,
+			ObjType:    ObjectType(p.GetType()),
+			Query:      p.GetQuery(),
+			Seq:        p.GetSeq(),
+			LedgerHash: p.GetLedgerHash(),
+			Fat:        p.GetFat(),
 			Objects:    objects,
 		}, nil
 
 	case TypeValidatorList:
 		p := protoMsg.(*proto.TMValidatorList)
 		return &ValidatorList{
-			Manifest:  p.Manifest,
-			Blob:      p.Blob,
-			Signature: p.Signature,
-			Version:   p.Version,
+			Manifest:  p.GetManifest(),
+			Blob:      p.GetBlob(),
+			Signature: p.GetSignature(),
+			Version:   p.GetVersion(),
 		}, nil
 
 	case TypeSquelch:
 		p := protoMsg.(*proto.TMSquelch)
 		return &Squelch{
-			Squelch:         p.Squelch,
-			ValidatorPubKey: p.ValidatorPubKey,
-			SquelchDuration: p.SquelchDuration,
+			Squelch:         p.GetSquelch(),
+			ValidatorPubKey: p.GetValidatorPubKey(),
+			SquelchDuration: p.GetSquelchDuration(),
 		}, nil
 
 	case TypeValidatorListCollection:
@@ -484,52 +491,52 @@ func fromProto(msgType MessageType, protoMsg pb.Message) (Message, error) {
 		blobs := make([]ValidatorBlobInfo, len(p.Blobs))
 		for i, b := range p.Blobs {
 			blobs[i] = ValidatorBlobInfo{
-				Manifest:  b.Manifest,
-				Blob:      b.Blob,
-				Signature: b.Signature,
+				Manifest:  b.GetManifest(),
+				Blob:      b.GetBlob(),
+				Signature: b.GetSignature(),
 			}
 		}
 		return &ValidatorListCollection{
-			Version:  p.Version,
-			Manifest: p.Manifest,
+			Version:  p.GetVersion(),
+			Manifest: p.GetManifest(),
 			Blobs:    blobs,
 		}, nil
 
 	case TypeProofPathReq:
 		p := protoMsg.(*proto.TMProofPathRequest)
 		return &ProofPathRequest{
-			Key:        p.Key,
-			LedgerHash: p.LedgerHash,
-			MapType:    LedgerMapType(p.Type),
+			Key:        p.GetKey(),
+			LedgerHash: p.GetLedgerHash(),
+			MapType:    LedgerMapType(p.GetType()),
 		}, nil
 
 	case TypeProofPathResponse:
 		p := protoMsg.(*proto.TMProofPathResponse)
 		return &ProofPathResponse{
-			Key:          p.Key,
-			LedgerHash:   p.LedgerHash,
-			MapType:      LedgerMapType(p.Type),
-			LedgerHeader: p.LedgerHeader,
-			Path:         p.Path,
-			Error:        ReplyError(p.Error),
+			Key:          p.GetKey(),
+			LedgerHash:   p.GetLedgerHash(),
+			MapType:      LedgerMapType(p.GetType()),
+			LedgerHeader: p.GetLedgerHeader(),
+			Path:         p.GetPath(),
+			Error:        ReplyError(p.GetError()),
 		}, nil
 
 	case TypeReplayDeltaReq:
 		p := protoMsg.(*proto.TMReplayDeltaRequest)
-		return &ReplayDeltaRequest{LedgerHash: p.LedgerHash}, nil
+		return &ReplayDeltaRequest{LedgerHash: p.GetLedgerHash()}, nil
 
 	case TypeReplayDeltaResponse:
 		p := protoMsg.(*proto.TMReplayDeltaResponse)
 		return &ReplayDeltaResponse{
-			LedgerHash:   p.LedgerHash,
-			LedgerHeader: p.LedgerHeader,
-			Transactions: p.Transaction,
-			Error:        ReplyError(p.Error),
+			LedgerHash:   p.GetLedgerHash(),
+			LedgerHeader: p.GetLedgerHeader(),
+			Transactions: p.GetTransaction(),
+			Error:        ReplyError(p.GetError()),
 		}, nil
 
 	case TypeHaveTransactions:
 		p := protoMsg.(*proto.TMHaveTransactions)
-		return &HaveTransactions{Hashes: p.Hashes}, nil
+		return &HaveTransactions{Hashes: p.GetHashes()}, nil
 
 	default:
 		return nil, fmt.Errorf("unknown message type: %d", msgType)

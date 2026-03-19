@@ -17,6 +17,7 @@ import (
 	"github.com/LeJamon/goXRPLd/config"
 	"github.com/LeJamon/goXRPLd/internal/consensus/adaptor"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
+	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/rpc"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -198,7 +199,8 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 
 	// Wire up RPC services
-	types.InitServices(rpc.NewLedgerServiceAdapter(ledgerService))
+	ledgerAdapter := rpc.NewLedgerServiceAdapter(ledgerService)
+	types.InitServices(ledgerAdapter)
 
 	// Start consensus/networking if not in standalone mode
 	var consensusComponents *adaptor.Components
@@ -212,6 +214,27 @@ func runServer(cmd *cobra.Command, args []string) {
 		if err := consensusComponents.Start(); err != nil {
 			serverLog.Fatal("Failed to start consensus components", "err", err)
 		}
+
+		// Wire transaction relay: when a tx is submitted via RPC,
+		// broadcast it to peers and add to the consensus pending pool.
+		overlay := consensusComponents.Overlay
+		consensusAdaptor := consensusComponents.Adaptor
+		ledgerAdapter.SetTxBroadcaster(func(txBlob []byte) {
+			txMsg := &message.Transaction{
+				RawTransaction: txBlob,
+				Status:         message.TxStatusCurrent,
+			}
+			encoded, err := message.Encode(txMsg)
+			if err != nil {
+				return
+			}
+			frame, err := message.BuildWireMessage(message.TypeTransaction, encoded)
+			if err != nil {
+				return
+			}
+			overlay.Broadcast(frame)
+			consensusAdaptor.AddPendingTx(txBlob)
+		})
 
 		// Expose node identity and peer count to RPC handlers
 		types.Services.NodePublicKey = consensusComponents.Overlay.Identity().EncodedPublicKey()

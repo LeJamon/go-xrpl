@@ -111,6 +111,11 @@ func NewFromConfig(
 	// Create the router
 	router := NewRouter(engine, adaptor, overlay.Messages())
 
+	// Wire operating mode into ledger service for server_info
+	ledgerSvc.SetServerStateFunc(func() string {
+		return adaptor.GetOperatingMode().String()
+	})
+
 	return &Components{
 		Overlay:     overlay,
 		Engine:      engine,

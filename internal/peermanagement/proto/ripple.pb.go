@@ -728,7 +728,7 @@ func (TMPing_PingType) EnumDescriptor() ([]byte, []int) {
 // Provides the current ephemeral key for a validator
 type TMManifest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Stobject      []byte                 `protobuf:"bytes,1,opt,name=stobject,proto3" json:"stobject,omitempty"`
+	Stobject      []byte                 `protobuf:"bytes,1,opt,name=stobject,proto3,oneof" json:"stobject,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -827,9 +827,9 @@ func (x *TMManifests) GetHistory() bool {
 // Cluster node status
 type TMClusterNode struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	PublicKey     string                 `protobuf:"bytes,1,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
-	ReportTime    uint32                 `protobuf:"varint,2,opt,name=report_time,json=reportTime,proto3" json:"report_time,omitempty"`
-	NodeLoad      uint32                 `protobuf:"varint,3,opt,name=node_load,json=nodeLoad,proto3" json:"node_load,omitempty"`
+	PublicKey     *string                `protobuf:"bytes,1,opt,name=public_key,json=publicKey,proto3,oneof" json:"public_key,omitempty"`
+	ReportTime    *uint32                `protobuf:"varint,2,opt,name=report_time,json=reportTime,proto3,oneof" json:"report_time,omitempty"`
+	NodeLoad      *uint32                `protobuf:"varint,3,opt,name=node_load,json=nodeLoad,proto3,oneof" json:"node_load,omitempty"`
 	NodeName      string                 `protobuf:"bytes,4,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
 	Address       string                 `protobuf:"bytes,5,opt,name=address,proto3" json:"address,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -867,22 +867,22 @@ func (*TMClusterNode) Descriptor() ([]byte, []int) {
 }
 
 func (x *TMClusterNode) GetPublicKey() string {
-	if x != nil {
-		return x.PublicKey
+	if x != nil && x.PublicKey != nil {
+		return *x.PublicKey
 	}
 	return ""
 }
 
 func (x *TMClusterNode) GetReportTime() uint32 {
-	if x != nil {
-		return x.ReportTime
+	if x != nil && x.ReportTime != nil {
+		return *x.ReportTime
 	}
 	return 0
 }
 
 func (x *TMClusterNode) GetNodeLoad() uint32 {
-	if x != nil {
-		return x.NodeLoad
+	if x != nil && x.NodeLoad != nil {
+		return *x.NodeLoad
 	}
 	return 0
 }
@@ -904,8 +904,8 @@ func (x *TMClusterNode) GetAddress() string {
 // Load sources
 type TMLoadSource struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Cost          uint32                 `protobuf:"varint,2,opt,name=cost,proto3" json:"cost,omitempty"`
+	Name          *string                `protobuf:"bytes,1,opt,name=name,proto3,oneof" json:"name,omitempty"`
+	Cost          *uint32                `protobuf:"varint,2,opt,name=cost,proto3,oneof" json:"cost,omitempty"`
 	Count         uint32                 `protobuf:"varint,3,opt,name=count,proto3" json:"count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -942,15 +942,15 @@ func (*TMLoadSource) Descriptor() ([]byte, []int) {
 }
 
 func (x *TMLoadSource) GetName() string {
-	if x != nil {
-		return x.Name
+	if x != nil && x.Name != nil {
+		return *x.Name
 	}
 	return ""
 }
 
 func (x *TMLoadSource) GetCost() uint32 {
-	if x != nil {
-		return x.Cost
+	if x != nil && x.Cost != nil {
+		return *x.Cost
 	}
 	return 0
 }
@@ -1018,7 +1018,7 @@ func (x *TMCluster) GetLoadSources() []*TMLoadSource {
 // Public key
 type TMPublicKey struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	PublicKey     []byte                 `protobuf:"bytes,1,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
+	PublicKey     []byte                 `protobuf:"bytes,1,opt,name=public_key,json=publicKey,proto3,oneof" json:"public_key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1062,8 +1062,8 @@ func (x *TMPublicKey) GetPublicKey() []byte {
 
 type TMTransaction struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
-	RawTransaction   []byte                 `protobuf:"bytes,1,opt,name=raw_transaction,json=rawTransaction,proto3" json:"raw_transaction,omitempty"`
-	Status           TransactionStatus      `protobuf:"varint,2,opt,name=status,proto3,enum=protocol.TransactionStatus" json:"status,omitempty"`
+	RawTransaction   []byte                 `protobuf:"bytes,1,opt,name=raw_transaction,json=rawTransaction,proto3,oneof" json:"raw_transaction,omitempty"`
+	Status           *TransactionStatus     `protobuf:"varint,2,opt,name=status,proto3,enum=protocol.TransactionStatus,oneof" json:"status,omitempty"`
 	ReceiveTimestamp uint64                 `protobuf:"varint,3,opt,name=receive_timestamp,json=receiveTimestamp,proto3" json:"receive_timestamp,omitempty"`
 	Deferred         bool                   `protobuf:"varint,4,opt,name=deferred,proto3" json:"deferred,omitempty"`
 	unknownFields    protoimpl.UnknownFields
@@ -1108,8 +1108,8 @@ func (x *TMTransaction) GetRawTransaction() []byte {
 }
 
 func (x *TMTransaction) GetStatus() TransactionStatus {
-	if x != nil {
-		return x.Status
+	if x != nil && x.Status != nil {
+		return *x.Status
 	}
 	return TransactionStatus_tsUNKNOWN
 }
@@ -1275,12 +1275,12 @@ func (x *TMStatusChange) GetLastSeq() uint32 {
 // Ledger proposal
 type TMProposeSet struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
-	ProposeSeq     uint32                 `protobuf:"varint,1,opt,name=propose_seq,json=proposeSeq,proto3" json:"propose_seq,omitempty"`
-	CurrentTxHash  []byte                 `protobuf:"bytes,2,opt,name=current_tx_hash,json=currentTxHash,proto3" json:"current_tx_hash,omitempty"`
-	NodePubKey     []byte                 `protobuf:"bytes,3,opt,name=node_pub_key,json=nodePubKey,proto3" json:"node_pub_key,omitempty"`
-	CloseTime      uint32                 `protobuf:"varint,4,opt,name=close_time,json=closeTime,proto3" json:"close_time,omitempty"`
-	Signature      []byte                 `protobuf:"bytes,5,opt,name=signature,proto3" json:"signature,omitempty"`
-	PreviousLedger []byte                 `protobuf:"bytes,6,opt,name=previous_ledger,json=previousLedger,proto3" json:"previous_ledger,omitempty"`
+	ProposeSeq     *uint32                `protobuf:"varint,1,opt,name=propose_seq,json=proposeSeq,proto3,oneof" json:"propose_seq,omitempty"`
+	CurrentTxHash  []byte                 `protobuf:"bytes,2,opt,name=current_tx_hash,json=currentTxHash,proto3,oneof" json:"current_tx_hash,omitempty"`
+	NodePubKey     []byte                 `protobuf:"bytes,3,opt,name=node_pub_key,json=nodePubKey,proto3,oneof" json:"node_pub_key,omitempty"`
+	CloseTime      *uint32                `protobuf:"varint,4,opt,name=close_time,json=closeTime,proto3,oneof" json:"close_time,omitempty"`
+	Signature      []byte                 `protobuf:"bytes,5,opt,name=signature,proto3,oneof" json:"signature,omitempty"`
+	PreviousLedger []byte                 `protobuf:"bytes,6,opt,name=previous_ledger,json=previousLedger,proto3,oneof" json:"previous_ledger,omitempty"`
 	// Deprecated: Marked as deprecated in internal/peermanagement/proto/ripple.proto.
 	CheckedSignature    bool     `protobuf:"varint,7,opt,name=checked_signature,json=checkedSignature,proto3" json:"checked_signature,omitempty"`
 	AddedTransactions   [][]byte `protobuf:"bytes,10,rep,name=added_transactions,json=addedTransactions,proto3" json:"added_transactions,omitempty"`
@@ -1322,8 +1322,8 @@ func (*TMProposeSet) Descriptor() ([]byte, []int) {
 }
 
 func (x *TMProposeSet) GetProposeSeq() uint32 {
-	if x != nil {
-		return x.ProposeSeq
+	if x != nil && x.ProposeSeq != nil {
+		return *x.ProposeSeq
 	}
 	return 0
 }
@@ -1343,8 +1343,8 @@ func (x *TMProposeSet) GetNodePubKey() []byte {
 }
 
 func (x *TMProposeSet) GetCloseTime() uint32 {
-	if x != nil {
-		return x.CloseTime
+	if x != nil && x.CloseTime != nil {
+		return *x.CloseTime
 	}
 	return 0
 }
@@ -1395,8 +1395,8 @@ func (x *TMProposeSet) GetHops() uint32 {
 
 type TMHaveTransactionSet struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Status        TxSetStatus            `protobuf:"varint,1,opt,name=status,proto3,enum=protocol.TxSetStatus" json:"status,omitempty"`
-	Hash          []byte                 `protobuf:"bytes,2,opt,name=hash,proto3" json:"hash,omitempty"`
+	Status        *TxSetStatus           `protobuf:"varint,1,opt,name=status,proto3,enum=protocol.TxSetStatus,oneof" json:"status,omitempty"`
+	Hash          []byte                 `protobuf:"bytes,2,opt,name=hash,proto3,oneof" json:"hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1432,8 +1432,8 @@ func (*TMHaveTransactionSet) Descriptor() ([]byte, []int) {
 }
 
 func (x *TMHaveTransactionSet) GetStatus() TxSetStatus {
-	if x != nil {
-		return x.Status
+	if x != nil && x.Status != nil {
+		return *x.Status
 	}
 	return TxSetStatus_tsUNKNOWN_SET
 }
@@ -1448,10 +1448,10 @@ func (x *TMHaveTransactionSet) GetHash() []byte {
 // Validator list
 type TMValidatorList struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Manifest      []byte                 `protobuf:"bytes,1,opt,name=manifest,proto3" json:"manifest,omitempty"`
-	Blob          []byte                 `protobuf:"bytes,2,opt,name=blob,proto3" json:"blob,omitempty"`
-	Signature     []byte                 `protobuf:"bytes,3,opt,name=signature,proto3" json:"signature,omitempty"`
-	Version       uint32                 `protobuf:"varint,4,opt,name=version,proto3" json:"version,omitempty"`
+	Manifest      []byte                 `protobuf:"bytes,1,opt,name=manifest,proto3,oneof" json:"manifest,omitempty"`
+	Blob          []byte                 `protobuf:"bytes,2,opt,name=blob,proto3,oneof" json:"blob,omitempty"`
+	Signature     []byte                 `protobuf:"bytes,3,opt,name=signature,proto3,oneof" json:"signature,omitempty"`
+	Version       *uint32                `protobuf:"varint,4,opt,name=version,proto3,oneof" json:"version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1508,8 +1508,8 @@ func (x *TMValidatorList) GetSignature() []byte {
 }
 
 func (x *TMValidatorList) GetVersion() uint32 {
-	if x != nil {
-		return x.Version
+	if x != nil && x.Version != nil {
+		return *x.Version
 	}
 	return 0
 }
@@ -1518,8 +1518,8 @@ func (x *TMValidatorList) GetVersion() uint32 {
 type ValidatorBlobInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Manifest      []byte                 `protobuf:"bytes,1,opt,name=manifest,proto3" json:"manifest,omitempty"`
-	Blob          []byte                 `protobuf:"bytes,2,opt,name=blob,proto3" json:"blob,omitempty"`
-	Signature     []byte                 `protobuf:"bytes,3,opt,name=signature,proto3" json:"signature,omitempty"`
+	Blob          []byte                 `protobuf:"bytes,2,opt,name=blob,proto3,oneof" json:"blob,omitempty"`
+	Signature     []byte                 `protobuf:"bytes,3,opt,name=signature,proto3,oneof" json:"signature,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1577,8 +1577,8 @@ func (x *ValidatorBlobInfo) GetSignature() []byte {
 
 type TMValidatorListCollection struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Version       uint32                 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
-	Manifest      []byte                 `protobuf:"bytes,2,opt,name=manifest,proto3" json:"manifest,omitempty"`
+	Version       *uint32                `protobuf:"varint,1,opt,name=version,proto3,oneof" json:"version,omitempty"`
+	Manifest      []byte                 `protobuf:"bytes,2,opt,name=manifest,proto3,oneof" json:"manifest,omitempty"`
 	Blobs         []*ValidatorBlobInfo   `protobuf:"bytes,3,rep,name=blobs,proto3" json:"blobs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1615,8 +1615,8 @@ func (*TMValidatorListCollection) Descriptor() ([]byte, []int) {
 }
 
 func (x *TMValidatorListCollection) GetVersion() uint32 {
-	if x != nil {
-		return x.Version
+	if x != nil && x.Version != nil {
+		return *x.Version
 	}
 	return 0
 }
@@ -1638,7 +1638,7 @@ func (x *TMValidatorListCollection) GetBlobs() []*ValidatorBlobInfo {
 // Validation message
 type TMValidation struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
-	Validation []byte                 `protobuf:"bytes,1,opt,name=validation,proto3" json:"validation,omitempty"`
+	Validation []byte                 `protobuf:"bytes,1,opt,name=validation,proto3,oneof" json:"validation,omitempty"`
 	// Deprecated: Marked as deprecated in internal/peermanagement/proto/ripple.proto.
 	CheckedSignature bool `protobuf:"varint,2,opt,name=checked_signature,json=checkedSignature,proto3" json:"checked_signature,omitempty"`
 	// Deprecated: Marked as deprecated in internal/peermanagement/proto/ripple.proto.
@@ -1703,7 +1703,7 @@ func (x *TMValidation) GetHops() uint32 {
 // Endpoints for peer discovery
 type TMEndpoints struct {
 	state         protoimpl.MessageState      `protogen:"open.v1"`
-	Version       uint32                      `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
+	Version       *uint32                     `protobuf:"varint,1,opt,name=version,proto3,oneof" json:"version,omitempty"`
 	EndpointsV2   []*TMEndpoints_TMEndpointv2 `protobuf:"bytes,3,rep,name=endpoints_v2,json=endpointsV2,proto3" json:"endpoints_v2,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1740,8 +1740,8 @@ func (*TMEndpoints) Descriptor() ([]byte, []int) {
 }
 
 func (x *TMEndpoints) GetVersion() uint32 {
-	if x != nil {
-		return x.Version
+	if x != nil && x.Version != nil {
+		return *x.Version
 	}
 	return 0
 }
@@ -1832,8 +1832,8 @@ func (x *TMIndexedObject) GetLedgerSeq() uint32 {
 
 type TMGetObjectByHash struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Type          ObjectType             `protobuf:"varint,1,opt,name=type,proto3,enum=protocol.ObjectType" json:"type,omitempty"`
-	Query         bool                   `protobuf:"varint,2,opt,name=query,proto3" json:"query,omitempty"`
+	Type          *ObjectType            `protobuf:"varint,1,opt,name=type,proto3,enum=protocol.ObjectType,oneof" json:"type,omitempty"`
+	Query         *bool                  `protobuf:"varint,2,opt,name=query,proto3,oneof" json:"query,omitempty"`
 	Seq           uint32                 `protobuf:"varint,3,opt,name=seq,proto3" json:"seq,omitempty"`
 	LedgerHash    []byte                 `protobuf:"bytes,4,opt,name=ledger_hash,json=ledgerHash,proto3" json:"ledger_hash,omitempty"`
 	Fat           bool                   `protobuf:"varint,5,opt,name=fat,proto3" json:"fat,omitempty"`
@@ -1873,15 +1873,15 @@ func (*TMGetObjectByHash) Descriptor() ([]byte, []int) {
 }
 
 func (x *TMGetObjectByHash) GetType() ObjectType {
-	if x != nil {
-		return x.Type
+	if x != nil && x.Type != nil {
+		return *x.Type
 	}
 	return ObjectType_otUNKNOWN
 }
 
 func (x *TMGetObjectByHash) GetQuery() bool {
-	if x != nil {
-		return x.Query
+	if x != nil && x.Query != nil {
+		return *x.Query
 	}
 	return false
 }
@@ -1917,7 +1917,7 @@ func (x *TMGetObjectByHash) GetObjects() []*TMIndexedObject {
 // Ledger node
 type TMLedgerNode struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Nodedata      []byte                 `protobuf:"bytes,1,opt,name=nodedata,proto3" json:"nodedata,omitempty"`
+	Nodedata      []byte                 `protobuf:"bytes,1,opt,name=nodedata,proto3,oneof" json:"nodedata,omitempty"`
 	Nodeid        []byte                 `protobuf:"bytes,2,opt,name=nodeid,proto3" json:"nodeid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2069,9 +2069,9 @@ func (x *TMGetLedger) GetQueryDepth() uint32 {
 
 type TMLedgerData struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	LedgerHash    []byte                 `protobuf:"bytes,1,opt,name=ledger_hash,json=ledgerHash,proto3" json:"ledger_hash,omitempty"`
-	LedgerSeq     uint32                 `protobuf:"varint,2,opt,name=ledger_seq,json=ledgerSeq,proto3" json:"ledger_seq,omitempty"`
-	Type          TMLedgerInfoType       `protobuf:"varint,3,opt,name=type,proto3,enum=protocol.TMLedgerInfoType" json:"type,omitempty"`
+	LedgerHash    []byte                 `protobuf:"bytes,1,opt,name=ledger_hash,json=ledgerHash,proto3,oneof" json:"ledger_hash,omitempty"`
+	LedgerSeq     *uint32                `protobuf:"varint,2,opt,name=ledger_seq,json=ledgerSeq,proto3,oneof" json:"ledger_seq,omitempty"`
+	Type          *TMLedgerInfoType      `protobuf:"varint,3,opt,name=type,proto3,enum=protocol.TMLedgerInfoType,oneof" json:"type,omitempty"`
 	Nodes         []*TMLedgerNode        `protobuf:"bytes,4,rep,name=nodes,proto3" json:"nodes,omitempty"`
 	RequestCookie uint32                 `protobuf:"varint,5,opt,name=request_cookie,json=requestCookie,proto3" json:"request_cookie,omitempty"`
 	Error         TMReplyError           `protobuf:"varint,6,opt,name=error,proto3,enum=protocol.TMReplyError" json:"error,omitempty"`
@@ -2117,15 +2117,15 @@ func (x *TMLedgerData) GetLedgerHash() []byte {
 }
 
 func (x *TMLedgerData) GetLedgerSeq() uint32 {
-	if x != nil {
-		return x.LedgerSeq
+	if x != nil && x.LedgerSeq != nil {
+		return *x.LedgerSeq
 	}
 	return 0
 }
 
 func (x *TMLedgerData) GetType() TMLedgerInfoType {
-	if x != nil {
-		return x.Type
+	if x != nil && x.Type != nil {
+		return *x.Type
 	}
 	return TMLedgerInfoType_liBASE
 }
@@ -2223,8 +2223,8 @@ func (x *TMPing) GetNetTime() uint64 {
 // Squelch for reduce-relay
 type TMSquelch struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
-	Squelch         bool                   `protobuf:"varint,1,opt,name=squelch,proto3" json:"squelch,omitempty"`
-	ValidatorPubKey []byte                 `protobuf:"bytes,2,opt,name=validator_pub_key,json=validatorPubKey,proto3" json:"validator_pub_key,omitempty"`
+	Squelch         *bool                  `protobuf:"varint,1,opt,name=squelch,proto3,oneof" json:"squelch,omitempty"`
+	ValidatorPubKey []byte                 `protobuf:"bytes,2,opt,name=validator_pub_key,json=validatorPubKey,proto3,oneof" json:"validator_pub_key,omitempty"`
 	SquelchDuration uint32                 `protobuf:"varint,3,opt,name=squelch_duration,json=squelchDuration,proto3" json:"squelch_duration,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
@@ -2261,8 +2261,8 @@ func (*TMSquelch) Descriptor() ([]byte, []int) {
 }
 
 func (x *TMSquelch) GetSquelch() bool {
-	if x != nil {
-		return x.Squelch
+	if x != nil && x.Squelch != nil {
+		return *x.Squelch
 	}
 	return false
 }
@@ -2284,9 +2284,9 @@ func (x *TMSquelch) GetSquelchDuration() uint32 {
 // Proof path request/response
 type TMProofPathRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	LedgerHash    []byte                 `protobuf:"bytes,2,opt,name=ledger_hash,json=ledgerHash,proto3" json:"ledger_hash,omitempty"`
-	Type          TMLedgerMapType        `protobuf:"varint,3,opt,name=type,proto3,enum=protocol.TMLedgerMapType" json:"type,omitempty"`
+	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3,oneof" json:"key,omitempty"`
+	LedgerHash    []byte                 `protobuf:"bytes,2,opt,name=ledger_hash,json=ledgerHash,proto3,oneof" json:"ledger_hash,omitempty"`
+	Type          *TMLedgerMapType       `protobuf:"varint,3,opt,name=type,proto3,enum=protocol.TMLedgerMapType,oneof" json:"type,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2336,17 +2336,17 @@ func (x *TMProofPathRequest) GetLedgerHash() []byte {
 }
 
 func (x *TMProofPathRequest) GetType() TMLedgerMapType {
-	if x != nil {
-		return x.Type
+	if x != nil && x.Type != nil {
+		return *x.Type
 	}
 	return TMLedgerMapType_lmUNKNOWN
 }
 
 type TMProofPathResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	LedgerHash    []byte                 `protobuf:"bytes,2,opt,name=ledger_hash,json=ledgerHash,proto3" json:"ledger_hash,omitempty"`
-	Type          TMLedgerMapType        `protobuf:"varint,3,opt,name=type,proto3,enum=protocol.TMLedgerMapType" json:"type,omitempty"`
+	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3,oneof" json:"key,omitempty"`
+	LedgerHash    []byte                 `protobuf:"bytes,2,opt,name=ledger_hash,json=ledgerHash,proto3,oneof" json:"ledger_hash,omitempty"`
+	Type          *TMLedgerMapType       `protobuf:"varint,3,opt,name=type,proto3,enum=protocol.TMLedgerMapType,oneof" json:"type,omitempty"`
 	LedgerHeader  []byte                 `protobuf:"bytes,4,opt,name=ledger_header,json=ledgerHeader,proto3" json:"ledger_header,omitempty"`
 	Path          [][]byte               `protobuf:"bytes,5,rep,name=path,proto3" json:"path,omitempty"`
 	Error         TMReplyError           `protobuf:"varint,6,opt,name=error,proto3,enum=protocol.TMReplyError" json:"error,omitempty"`
@@ -2399,8 +2399,8 @@ func (x *TMProofPathResponse) GetLedgerHash() []byte {
 }
 
 func (x *TMProofPathResponse) GetType() TMLedgerMapType {
-	if x != nil {
-		return x.Type
+	if x != nil && x.Type != nil {
+		return *x.Type
 	}
 	return TMLedgerMapType_lmUNKNOWN
 }
@@ -2429,7 +2429,7 @@ func (x *TMProofPathResponse) GetError() TMReplyError {
 // Replay delta for ledger sync
 type TMReplayDeltaRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	LedgerHash    []byte                 `protobuf:"bytes,1,opt,name=ledger_hash,json=ledgerHash,proto3" json:"ledger_hash,omitempty"`
+	LedgerHash    []byte                 `protobuf:"bytes,1,opt,name=ledger_hash,json=ledgerHash,proto3,oneof" json:"ledger_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2473,7 +2473,7 @@ func (x *TMReplayDeltaRequest) GetLedgerHash() []byte {
 
 type TMReplayDeltaResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	LedgerHash    []byte                 `protobuf:"bytes,1,opt,name=ledger_hash,json=ledgerHash,proto3" json:"ledger_hash,omitempty"`
+	LedgerHash    []byte                 `protobuf:"bytes,1,opt,name=ledger_hash,json=ledgerHash,proto3,oneof" json:"ledger_hash,omitempty"`
 	LedgerHeader  []byte                 `protobuf:"bytes,2,opt,name=ledger_header,json=ledgerHeader,proto3" json:"ledger_header,omitempty"`
 	Transaction   [][]byte               `protobuf:"bytes,3,rep,name=transaction,proto3" json:"transaction,omitempty"`
 	Error         TMReplyError           `protobuf:"varint,4,opt,name=error,proto3,enum=protocol.TMReplyError" json:"error,omitempty"`
@@ -2586,8 +2586,8 @@ func (x *TMHaveTransactions) GetHashes() [][]byte {
 
 type TMEndpoints_TMEndpointv2 struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Endpoint      string                 `protobuf:"bytes,1,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
-	Hops          uint32                 `protobuf:"varint,2,opt,name=hops,proto3" json:"hops,omitempty"`
+	Endpoint      *string                `protobuf:"bytes,1,opt,name=endpoint,proto3,oneof" json:"endpoint,omitempty"`
+	Hops          *uint32                `protobuf:"varint,2,opt,name=hops,proto3,oneof" json:"hops,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2623,15 +2623,15 @@ func (*TMEndpoints_TMEndpointv2) Descriptor() ([]byte, []int) {
 }
 
 func (x *TMEndpoints_TMEndpointv2) GetEndpoint() string {
-	if x != nil {
-		return x.Endpoint
+	if x != nil && x.Endpoint != nil {
+		return *x.Endpoint
 	}
 	return ""
 }
 
 func (x *TMEndpoints_TMEndpointv2) GetHops() uint32 {
-	if x != nil {
-		return x.Hops
+	if x != nil && x.Hops != nil {
+		return *x.Hops
 	}
 	return 0
 }
@@ -2640,36 +2640,46 @@ var File_internal_peermanagement_proto_ripple_proto protoreflect.FileDescriptor
 
 const file_internal_peermanagement_proto_ripple_proto_rawDesc = "" +
 	"\n" +
-	"*internal/peermanagement/proto/ripple.proto\x12\bprotocol\"(\n" +
+	"*internal/peermanagement/proto/ripple.proto\x12\bprotocol\":\n" +
 	"\n" +
-	"TMManifest\x12\x1a\n" +
-	"\bstobject\x18\x01 \x01(\fR\bstobject\"U\n" +
+	"TMManifest\x12\x1f\n" +
+	"\bstobject\x18\x01 \x01(\fH\x00R\bstobject\x88\x01\x01B\v\n" +
+	"\t_stobject\"U\n" +
 	"\vTMManifests\x12(\n" +
 	"\x04list\x18\x01 \x03(\v2\x14.protocol.TMManifestR\x04list\x12\x1c\n" +
-	"\ahistory\x18\x02 \x01(\bB\x02\x18\x01R\ahistory\"\xa3\x01\n" +
-	"\rTMClusterNode\x12\x1d\n" +
+	"\ahistory\x18\x02 \x01(\bB\x02\x18\x01R\ahistory\"\xdf\x01\n" +
+	"\rTMClusterNode\x12\"\n" +
 	"\n" +
-	"public_key\x18\x01 \x01(\tR\tpublicKey\x12\x1f\n" +
-	"\vreport_time\x18\x02 \x01(\rR\n" +
-	"reportTime\x12\x1b\n" +
-	"\tnode_load\x18\x03 \x01(\rR\bnodeLoad\x12\x1b\n" +
+	"public_key\x18\x01 \x01(\tH\x00R\tpublicKey\x88\x01\x01\x12$\n" +
+	"\vreport_time\x18\x02 \x01(\rH\x01R\n" +
+	"reportTime\x88\x01\x01\x12 \n" +
+	"\tnode_load\x18\x03 \x01(\rH\x02R\bnodeLoad\x88\x01\x01\x12\x1b\n" +
 	"\tnode_name\x18\x04 \x01(\tR\bnodeName\x12\x18\n" +
-	"\aaddress\x18\x05 \x01(\tR\aaddress\"L\n" +
-	"\fTMLoadSource\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
-	"\x04cost\x18\x02 \x01(\rR\x04cost\x12\x14\n" +
-	"\x05count\x18\x03 \x01(\rR\x05count\"\x84\x01\n" +
+	"\aaddress\x18\x05 \x01(\tR\aaddressB\r\n" +
+	"\v_public_keyB\x0e\n" +
+	"\f_report_timeB\f\n" +
+	"\n" +
+	"_node_load\"h\n" +
+	"\fTMLoadSource\x12\x17\n" +
+	"\x04name\x18\x01 \x01(\tH\x00R\x04name\x88\x01\x01\x12\x17\n" +
+	"\x04cost\x18\x02 \x01(\rH\x01R\x04cost\x88\x01\x01\x12\x14\n" +
+	"\x05count\x18\x03 \x01(\rR\x05countB\a\n" +
+	"\x05_nameB\a\n" +
+	"\x05_cost\"\x84\x01\n" +
 	"\tTMCluster\x12<\n" +
 	"\rcluster_nodes\x18\x01 \x03(\v2\x17.protocol.TMClusterNodeR\fclusterNodes\x129\n" +
-	"\fload_sources\x18\x02 \x03(\v2\x16.protocol.TMLoadSourceR\vloadSources\",\n" +
-	"\vTMPublicKey\x12\x1d\n" +
+	"\fload_sources\x18\x02 \x03(\v2\x16.protocol.TMLoadSourceR\vloadSources\"@\n" +
+	"\vTMPublicKey\x12\"\n" +
 	"\n" +
-	"public_key\x18\x01 \x01(\fR\tpublicKey\"\xb6\x01\n" +
-	"\rTMTransaction\x12'\n" +
-	"\x0fraw_transaction\x18\x01 \x01(\fR\x0erawTransaction\x123\n" +
-	"\x06status\x18\x02 \x01(\x0e2\x1b.protocol.TransactionStatusR\x06status\x12+\n" +
+	"public_key\x18\x01 \x01(\fH\x00R\tpublicKey\x88\x01\x01B\r\n" +
+	"\v_public_key\"\xdf\x01\n" +
+	"\rTMTransaction\x12,\n" +
+	"\x0fraw_transaction\x18\x01 \x01(\fH\x00R\x0erawTransaction\x88\x01\x01\x128\n" +
+	"\x06status\x18\x02 \x01(\x0e2\x1b.protocol.TransactionStatusH\x01R\x06status\x88\x01\x01\x12+\n" +
 	"\x11receive_timestamp\x18\x03 \x01(\x04R\x10receiveTimestamp\x12\x1a\n" +
-	"\bdeferred\x18\x04 \x01(\bR\bdeferred\"M\n" +
+	"\bdeferred\x18\x04 \x01(\bR\bdeferredB\x12\n" +
+	"\x10_raw_transactionB\t\n" +
+	"\a_status\"M\n" +
 	"\x0eTMTransactions\x12;\n" +
 	"\ftransactions\x18\x01 \x03(\v2\x17.protocol.TMTransactionR\ftransactions\"\xc4\x02\n" +
 	"\x0eTMStatusChange\x123\n" +
@@ -2683,68 +2693,97 @@ const file_internal_peermanagement_proto_ripple_proto_rawDesc = "" +
 	"\x14ledger_hash_previous\x18\x05 \x01(\fR\x12ledgerHashPrevious\x12!\n" +
 	"\fnetwork_time\x18\x06 \x01(\x04R\vnetworkTime\x12\x1b\n" +
 	"\tfirst_seq\x18\a \x01(\rR\bfirstSeq\x12\x19\n" +
-	"\blast_seq\x18\b \x01(\rR\alastSeq\"\x8a\x03\n" +
-	"\fTMProposeSet\x12\x1f\n" +
-	"\vpropose_seq\x18\x01 \x01(\rR\n" +
-	"proposeSeq\x12&\n" +
-	"\x0fcurrent_tx_hash\x18\x02 \x01(\fR\rcurrentTxHash\x12 \n" +
-	"\fnode_pub_key\x18\x03 \x01(\fR\n" +
-	"nodePubKey\x12\x1d\n" +
+	"\blast_seq\x18\b \x01(\rR\alastSeq\"\x8e\x04\n" +
+	"\fTMProposeSet\x12$\n" +
+	"\vpropose_seq\x18\x01 \x01(\rH\x00R\n" +
+	"proposeSeq\x88\x01\x01\x12+\n" +
+	"\x0fcurrent_tx_hash\x18\x02 \x01(\fH\x01R\rcurrentTxHash\x88\x01\x01\x12%\n" +
+	"\fnode_pub_key\x18\x03 \x01(\fH\x02R\n" +
+	"nodePubKey\x88\x01\x01\x12\"\n" +
 	"\n" +
-	"close_time\x18\x04 \x01(\rR\tcloseTime\x12\x1c\n" +
-	"\tsignature\x18\x05 \x01(\fR\tsignature\x12'\n" +
-	"\x0fprevious_ledger\x18\x06 \x01(\fR\x0epreviousLedger\x12/\n" +
+	"close_time\x18\x04 \x01(\rH\x03R\tcloseTime\x88\x01\x01\x12!\n" +
+	"\tsignature\x18\x05 \x01(\fH\x04R\tsignature\x88\x01\x01\x12,\n" +
+	"\x0fprevious_ledger\x18\x06 \x01(\fH\x05R\x0epreviousLedger\x88\x01\x01\x12/\n" +
 	"\x11checked_signature\x18\a \x01(\bB\x02\x18\x01R\x10checkedSignature\x12-\n" +
 	"\x12added_transactions\x18\n" +
 	" \x03(\fR\x11addedTransactions\x121\n" +
 	"\x14removed_transactions\x18\v \x03(\fR\x13removedTransactions\x12\x16\n" +
-	"\x04hops\x18\f \x01(\rB\x02\x18\x01R\x04hops\"Y\n" +
-	"\x14TMHaveTransactionSet\x12-\n" +
-	"\x06status\x18\x01 \x01(\x0e2\x15.protocol.TxSetStatusR\x06status\x12\x12\n" +
-	"\x04hash\x18\x02 \x01(\fR\x04hash\"y\n" +
-	"\x0fTMValidatorList\x12\x1a\n" +
-	"\bmanifest\x18\x01 \x01(\fR\bmanifest\x12\x12\n" +
-	"\x04blob\x18\x02 \x01(\fR\x04blob\x12\x1c\n" +
-	"\tsignature\x18\x03 \x01(\fR\tsignature\x12\x18\n" +
-	"\aversion\x18\x04 \x01(\rR\aversion\"a\n" +
-	"\x11ValidatorBlobInfo\x12\x1a\n" +
-	"\bmanifest\x18\x01 \x01(\fR\bmanifest\x12\x12\n" +
-	"\x04blob\x18\x02 \x01(\fR\x04blob\x12\x1c\n" +
-	"\tsignature\x18\x03 \x01(\fR\tsignature\"\x84\x01\n" +
-	"\x19TMValidatorListCollection\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\rR\aversion\x12\x1a\n" +
-	"\bmanifest\x18\x02 \x01(\fR\bmanifest\x121\n" +
-	"\x05blobs\x18\x03 \x03(\v2\x1b.protocol.ValidatorBlobInfoR\x05blobs\"w\n" +
-	"\fTMValidation\x12\x1e\n" +
+	"\x04hops\x18\f \x01(\rB\x02\x18\x01R\x04hopsB\x0e\n" +
+	"\f_propose_seqB\x12\n" +
+	"\x10_current_tx_hashB\x0f\n" +
+	"\r_node_pub_keyB\r\n" +
+	"\v_close_timeB\f\n" +
 	"\n" +
-	"validation\x18\x01 \x01(\fR\n" +
-	"validation\x12/\n" +
+	"_signatureB\x12\n" +
+	"\x10_previous_ledger\"w\n" +
+	"\x14TMHaveTransactionSet\x122\n" +
+	"\x06status\x18\x01 \x01(\x0e2\x15.protocol.TxSetStatusH\x00R\x06status\x88\x01\x01\x12\x17\n" +
+	"\x04hash\x18\x02 \x01(\fH\x01R\x04hash\x88\x01\x01B\t\n" +
+	"\a_statusB\a\n" +
+	"\x05_hash\"\xbd\x01\n" +
+	"\x0fTMValidatorList\x12\x1f\n" +
+	"\bmanifest\x18\x01 \x01(\fH\x00R\bmanifest\x88\x01\x01\x12\x17\n" +
+	"\x04blob\x18\x02 \x01(\fH\x01R\x04blob\x88\x01\x01\x12!\n" +
+	"\tsignature\x18\x03 \x01(\fH\x02R\tsignature\x88\x01\x01\x12\x1d\n" +
+	"\aversion\x18\x04 \x01(\rH\x03R\aversion\x88\x01\x01B\v\n" +
+	"\t_manifestB\a\n" +
+	"\x05_blobB\f\n" +
+	"\n" +
+	"_signatureB\n" +
+	"\n" +
+	"\b_version\"\x82\x01\n" +
+	"\x11ValidatorBlobInfo\x12\x1a\n" +
+	"\bmanifest\x18\x01 \x01(\fR\bmanifest\x12\x17\n" +
+	"\x04blob\x18\x02 \x01(\fH\x00R\x04blob\x88\x01\x01\x12!\n" +
+	"\tsignature\x18\x03 \x01(\fH\x01R\tsignature\x88\x01\x01B\a\n" +
+	"\x05_blobB\f\n" +
+	"\n" +
+	"_signature\"\xa7\x01\n" +
+	"\x19TMValidatorListCollection\x12\x1d\n" +
+	"\aversion\x18\x01 \x01(\rH\x00R\aversion\x88\x01\x01\x12\x1f\n" +
+	"\bmanifest\x18\x02 \x01(\fH\x01R\bmanifest\x88\x01\x01\x121\n" +
+	"\x05blobs\x18\x03 \x03(\v2\x1b.protocol.ValidatorBlobInfoR\x05blobsB\n" +
+	"\n" +
+	"\b_versionB\v\n" +
+	"\t_manifest\"\x8b\x01\n" +
+	"\fTMValidation\x12#\n" +
+	"\n" +
+	"validation\x18\x01 \x01(\fH\x00R\n" +
+	"validation\x88\x01\x01\x12/\n" +
 	"\x11checked_signature\x18\x02 \x01(\bB\x02\x18\x01R\x10checkedSignature\x12\x16\n" +
-	"\x04hops\x18\x03 \x01(\rB\x02\x18\x01R\x04hops\"\xae\x01\n" +
-	"\vTMEndpoints\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\rR\aversion\x12E\n" +
-	"\fendpoints_v2\x18\x03 \x03(\v2\".protocol.TMEndpoints.TMEndpointv2R\vendpointsV2\x1a>\n" +
-	"\fTMEndpointv2\x12\x1a\n" +
-	"\bendpoint\x18\x01 \x01(\tR\bendpoint\x12\x12\n" +
-	"\x04hops\x18\x02 \x01(\rR\x04hops\"\x87\x01\n" +
+	"\x04hops\x18\x03 \x01(\rB\x02\x18\x01R\x04hopsB\r\n" +
+	"\v_validation\"\xdf\x01\n" +
+	"\vTMEndpoints\x12\x1d\n" +
+	"\aversion\x18\x01 \x01(\rH\x00R\aversion\x88\x01\x01\x12E\n" +
+	"\fendpoints_v2\x18\x03 \x03(\v2\".protocol.TMEndpoints.TMEndpointv2R\vendpointsV2\x1a^\n" +
+	"\fTMEndpointv2\x12\x1f\n" +
+	"\bendpoint\x18\x01 \x01(\tH\x00R\bendpoint\x88\x01\x01\x12\x17\n" +
+	"\x04hops\x18\x02 \x01(\rH\x01R\x04hops\x88\x01\x01B\v\n" +
+	"\t_endpointB\a\n" +
+	"\x05_hopsB\n" +
+	"\n" +
+	"\b_version\"\x87\x01\n" +
 	"\x0fTMIndexedObject\x12\x12\n" +
 	"\x04hash\x18\x01 \x01(\fR\x04hash\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\fR\x06nodeId\x12\x14\n" +
 	"\x05index\x18\x03 \x01(\fR\x05index\x12\x12\n" +
 	"\x04data\x18\x04 \x01(\fR\x04data\x12\x1d\n" +
 	"\n" +
-	"ledger_seq\x18\x05 \x01(\rR\tledgerSeq\"\xcd\x01\n" +
-	"\x11TMGetObjectByHash\x12(\n" +
-	"\x04type\x18\x01 \x01(\x0e2\x14.protocol.ObjectTypeR\x04type\x12\x14\n" +
-	"\x05query\x18\x02 \x01(\bR\x05query\x12\x10\n" +
+	"ledger_seq\x18\x05 \x01(\rR\tledgerSeq\"\xea\x01\n" +
+	"\x11TMGetObjectByHash\x12-\n" +
+	"\x04type\x18\x01 \x01(\x0e2\x14.protocol.ObjectTypeH\x00R\x04type\x88\x01\x01\x12\x19\n" +
+	"\x05query\x18\x02 \x01(\bH\x01R\x05query\x88\x01\x01\x12\x10\n" +
 	"\x03seq\x18\x03 \x01(\rR\x03seq\x12\x1f\n" +
 	"\vledger_hash\x18\x04 \x01(\fR\n" +
 	"ledgerHash\x12\x10\n" +
 	"\x03fat\x18\x05 \x01(\bR\x03fat\x123\n" +
-	"\aobjects\x18\x06 \x03(\v2\x19.protocol.TMIndexedObjectR\aobjects\"B\n" +
-	"\fTMLedgerNode\x12\x1a\n" +
-	"\bnodedata\x18\x01 \x01(\fR\bnodedata\x12\x16\n" +
-	"\x06nodeid\x18\x02 \x01(\fR\x06nodeid\"\xf8\x02\n" +
+	"\aobjects\x18\x06 \x03(\v2\x19.protocol.TMIndexedObjectR\aobjectsB\a\n" +
+	"\x05_typeB\b\n" +
+	"\x06_query\"T\n" +
+	"\fTMLedgerNode\x12\x1f\n" +
+	"\bnodedata\x18\x01 \x01(\fH\x00R\bnodedata\x88\x01\x01\x12\x16\n" +
+	"\x06nodeid\x18\x02 \x01(\fR\x06nodeidB\v\n" +
+	"\t_nodedata\"\xf8\x02\n" +
 	"\vTMGetLedger\x125\n" +
 	"\x05itype\x18\x01 \x01(\x0e2\x1a.protocol.TMLedgerInfoTypeH\x00R\x05itype\x88\x01\x01\x121\n" +
 	"\x05ltype\x18\x02 \x01(\x0e2\x16.protocol.TMLedgerTypeH\x01R\x05ltype\x88\x01\x01\x12\x1f\n" +
@@ -2760,16 +2799,19 @@ const file_internal_peermanagement_proto_ripple_proto_rawDesc = "" +
 	"queryDepthB\b\n" +
 	"\x06_itypeB\b\n" +
 	"\x06_ltypeB\r\n" +
-	"\v_query_type\"\x81\x02\n" +
-	"\fTMLedgerData\x12\x1f\n" +
-	"\vledger_hash\x18\x01 \x01(\fR\n" +
-	"ledgerHash\x12\x1d\n" +
+	"\v_query_type\"\xb8\x02\n" +
+	"\fTMLedgerData\x12$\n" +
+	"\vledger_hash\x18\x01 \x01(\fH\x00R\n" +
+	"ledgerHash\x88\x01\x01\x12\"\n" +
 	"\n" +
-	"ledger_seq\x18\x02 \x01(\rR\tledgerSeq\x12.\n" +
-	"\x04type\x18\x03 \x01(\x0e2\x1a.protocol.TMLedgerInfoTypeR\x04type\x12,\n" +
+	"ledger_seq\x18\x02 \x01(\rH\x01R\tledgerSeq\x88\x01\x01\x123\n" +
+	"\x04type\x18\x03 \x01(\x0e2\x1a.protocol.TMLedgerInfoTypeH\x02R\x04type\x88\x01\x01\x12,\n" +
 	"\x05nodes\x18\x04 \x03(\v2\x16.protocol.TMLedgerNodeR\x05nodes\x12%\n" +
 	"\x0erequest_cookie\x18\x05 \x01(\rR\rrequestCookie\x12,\n" +
-	"\x05error\x18\x06 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05error\"\xe5\x01\n" +
+	"\x05error\x18\x06 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05errorB\x0e\n" +
+	"\f_ledger_hashB\r\n" +
+	"\v_ledger_seqB\a\n" +
+	"\x05_type\"\xe5\x01\n" +
 	"\x06TMPing\x122\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x19.protocol.TMPing.PingTypeH\x00R\x04type\x88\x01\x01\x12\x15\n" +
 	"\x03seq\x18\x02 \x01(\rH\x01R\x03seq\x88\x01\x01\x12 \n" +
@@ -2784,33 +2826,44 @@ const file_internal_peermanagement_proto_ripple_proto_rawDesc = "" +
 	"\x04_seqB\f\n" +
 	"\n" +
 	"_ping_timeB\v\n" +
-	"\t_net_time\"|\n" +
-	"\tTMSquelch\x12\x18\n" +
-	"\asquelch\x18\x01 \x01(\bR\asquelch\x12*\n" +
-	"\x11validator_pub_key\x18\x02 \x01(\fR\x0fvalidatorPubKey\x12)\n" +
-	"\x10squelch_duration\x18\x03 \x01(\rR\x0fsquelchDuration\"v\n" +
-	"\x12TMProofPathRequest\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\fR\x03key\x12\x1f\n" +
-	"\vledger_hash\x18\x02 \x01(\fR\n" +
-	"ledgerHash\x12-\n" +
-	"\x04type\x18\x03 \x01(\x0e2\x19.protocol.TMLedgerMapTypeR\x04type\"\xde\x01\n" +
-	"\x13TMProofPathResponse\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\fR\x03key\x12\x1f\n" +
-	"\vledger_hash\x18\x02 \x01(\fR\n" +
-	"ledgerHash\x12-\n" +
-	"\x04type\x18\x03 \x01(\x0e2\x19.protocol.TMLedgerMapTypeR\x04type\x12#\n" +
+	"\t_net_time\"\xa8\x01\n" +
+	"\tTMSquelch\x12\x1d\n" +
+	"\asquelch\x18\x01 \x01(\bH\x00R\asquelch\x88\x01\x01\x12/\n" +
+	"\x11validator_pub_key\x18\x02 \x01(\fH\x01R\x0fvalidatorPubKey\x88\x01\x01\x12)\n" +
+	"\x10squelch_duration\x18\x03 \x01(\rR\x0fsquelchDurationB\n" +
+	"\n" +
+	"\b_squelchB\x14\n" +
+	"\x12_validator_pub_key\"\xa6\x01\n" +
+	"\x12TMProofPathRequest\x12\x15\n" +
+	"\x03key\x18\x01 \x01(\fH\x00R\x03key\x88\x01\x01\x12$\n" +
+	"\vledger_hash\x18\x02 \x01(\fH\x01R\n" +
+	"ledgerHash\x88\x01\x01\x122\n" +
+	"\x04type\x18\x03 \x01(\x0e2\x19.protocol.TMLedgerMapTypeH\x02R\x04type\x88\x01\x01B\x06\n" +
+	"\x04_keyB\x0e\n" +
+	"\f_ledger_hashB\a\n" +
+	"\x05_type\"\x8e\x02\n" +
+	"\x13TMProofPathResponse\x12\x15\n" +
+	"\x03key\x18\x01 \x01(\fH\x00R\x03key\x88\x01\x01\x12$\n" +
+	"\vledger_hash\x18\x02 \x01(\fH\x01R\n" +
+	"ledgerHash\x88\x01\x01\x122\n" +
+	"\x04type\x18\x03 \x01(\x0e2\x19.protocol.TMLedgerMapTypeH\x02R\x04type\x88\x01\x01\x12#\n" +
 	"\rledger_header\x18\x04 \x01(\fR\fledgerHeader\x12\x12\n" +
 	"\x04path\x18\x05 \x03(\fR\x04path\x12,\n" +
-	"\x05error\x18\x06 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05error\"7\n" +
-	"\x14TMReplayDeltaRequest\x12\x1f\n" +
-	"\vledger_hash\x18\x01 \x01(\fR\n" +
-	"ledgerHash\"\xad\x01\n" +
-	"\x15TMReplayDeltaResponse\x12\x1f\n" +
-	"\vledger_hash\x18\x01 \x01(\fR\n" +
-	"ledgerHash\x12#\n" +
+	"\x05error\x18\x06 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05errorB\x06\n" +
+	"\x04_keyB\x0e\n" +
+	"\f_ledger_hashB\a\n" +
+	"\x05_type\"L\n" +
+	"\x14TMReplayDeltaRequest\x12$\n" +
+	"\vledger_hash\x18\x01 \x01(\fH\x00R\n" +
+	"ledgerHash\x88\x01\x01B\x0e\n" +
+	"\f_ledger_hash\"\xc2\x01\n" +
+	"\x15TMReplayDeltaResponse\x12$\n" +
+	"\vledger_hash\x18\x01 \x01(\fH\x00R\n" +
+	"ledgerHash\x88\x01\x01\x12#\n" +
 	"\rledger_header\x18\x02 \x01(\fR\fledgerHeader\x12 \n" +
 	"\vtransaction\x18\x03 \x03(\fR\vtransaction\x12,\n" +
-	"\x05error\x18\x04 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05error\",\n" +
+	"\x05error\x18\x04 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05errorB\x0e\n" +
+	"\f_ledger_hash\",\n" +
 	"\x12TMHaveTransactions\x12\x16\n" +
 	"\x06hashes\x18\x01 \x03(\fR\x06hashes*\xc7\x03\n" +
 	"\vMessageType\x12\r\n" +
@@ -3000,8 +3053,29 @@ func file_internal_peermanagement_proto_ripple_proto_init() {
 	if File_internal_peermanagement_proto_ripple_proto != nil {
 		return
 	}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[0].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[2].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[3].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[5].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[6].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[9].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[10].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[11].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[12].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[13].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[14].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[15].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[17].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[18].OneofWrappers = []any{}
 	file_internal_peermanagement_proto_ripple_proto_msgTypes[19].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[20].OneofWrappers = []any{}
 	file_internal_peermanagement_proto_ripple_proto_msgTypes[21].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[22].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[23].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[24].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[25].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[26].OneofWrappers = []any{}
+	file_internal_peermanagement_proto_ripple_proto_msgTypes[28].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

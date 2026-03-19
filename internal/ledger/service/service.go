@@ -137,6 +137,14 @@ type Service struct {
 
 	// hooks provides event callbacks for external subscribers
 	hooks *EventHooks
+
+	// needsInitialSync is true when the node is in consensus mode
+	// and hasn't yet adopted a ledger from peers.
+	needsInitialSync bool
+
+	// serverStateFunc optionally provides the operating mode string for server_info.
+	// Set by the consensus adaptor after startup.
+	serverStateFunc func() string
 }
 
 // New creates a new LedgerService
@@ -209,36 +217,51 @@ func (s *Service) Start() error {
 		"hash", strconv.FormatUint(uint64(hash[0])<<24|uint64(hash[1])<<16|uint64(hash[2])<<8|uint64(hash[3]), 16)+"...",
 	)
 
-	// Match rippled's startGenesisLedger: create ledger 2 from genesis,
-	// immediately close it, and use it as the LCL. The open ledger is then 3.
-	// Reference: rippled Application.cpp startGenesisLedger()
-	nextLedger, err := ledger.NewOpen(genesisLedger, time.Now())
-	if err != nil {
-		return errors.New("failed to create next ledger: " + err.Error())
-	}
-	if err := nextLedger.Close(time.Now(), 0); err != nil {
-		return errors.New("failed to close initial ledger: " + err.Error())
-	}
-	if err := nextLedger.SetValidated(); err != nil {
-		return errors.New("failed to validate initial ledger: " + err.Error())
-	}
-	s.closedLedger = nextLedger
-	s.validatedLedger = nextLedger
-	s.ledgerHistory[nextLedger.Sequence()] = nextLedger
+	if s.config.Standalone {
+		// Standalone mode: create ledger 2 locally and start from there.
+		// Reference: rippled Application.cpp startGenesisLedger()
+		nextLedger, err := ledger.NewOpen(genesisLedger, time.Now())
+		if err != nil {
+			return errors.New("failed to create next ledger: " + err.Error())
+		}
+		if err := nextLedger.Close(time.Now(), 0); err != nil {
+			return errors.New("failed to close initial ledger: " + err.Error())
+		}
+		if err := nextLedger.SetValidated(); err != nil {
+			return errors.New("failed to validate initial ledger: " + err.Error())
+		}
+		s.closedLedger = nextLedger
+		s.validatedLedger = nextLedger
+		s.ledgerHistory[nextLedger.Sequence()] = nextLedger
 
-	// Create the open ledger (ledger 3)
-	openLedger, err := ledger.NewOpen(nextLedger, time.Now())
-	if err != nil {
-		return errors.New("failed to create open ledger: " + err.Error())
+		// Create the open ledger (ledger 3)
+		openLedger, err := ledger.NewOpen(nextLedger, time.Now())
+		if err != nil {
+			return errors.New("failed to create open ledger: " + err.Error())
+		}
+		s.openLedger = openLedger
+	} else {
+		// Consensus mode: do NOT create ledger 2 locally.
+		// Stay at genesis (seq 1) and wait to adopt a peer's ledger.
+		s.closedLedger = genesisLedger
+		s.validatedLedger = genesisLedger
+		s.needsInitialSync = true
+
+		// Create open ledger (seq 2) on top of genesis — will be replaced on adoption
+		openLedger, err := ledger.NewOpen(genesisLedger, time.Now())
+		if err != nil {
+			return errors.New("failed to create open ledger: " + err.Error())
+		}
+		s.openLedger = openLedger
 	}
-	s.openLedger = openLedger
 
 	// Reset pending transactions
 	s.pendingTxs = nil
 
 	s.logger.Info("Ledger service started",
 		"standalone", s.config.Standalone,
-		"openLedger", openLedger.Sequence(),
+		"openLedger", s.openLedger.Sequence(),
+		"needsInitialSync", s.needsInitialSync,
 	)
 
 	return nil
@@ -700,6 +723,13 @@ func extractAffectedAccounts(txData []byte) []string {
 	return accounts
 }
 
+// SetServerStateFunc sets a function that provides the server state string.
+func (s *Service) SetServerStateFunc(fn func() string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.serverStateFunc = fn
+}
+
 // IsStandalone returns true if running in standalone mode
 func (s *Service) IsStandalone() bool {
 	return s.config.Standalone
@@ -716,8 +746,14 @@ func (s *Service) GetServerInfo() ServerInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	serverState := "full"
+	if s.serverStateFunc != nil {
+		serverState = s.serverStateFunc()
+	}
+
 	info := ServerInfo{
 		Standalone:      s.config.Standalone,
+		ServerState:     serverState,
 		CompleteLedgers: "",
 	}
 
@@ -760,6 +796,7 @@ func (s *Service) GetServerInfo() ServerInfo {
 // ServerInfo contains basic server status information
 type ServerInfo struct {
 	Standalone          bool
+	ServerState         string // "disconnected", "connected", "syncing", "tracking", "full"
 	OpenLedgerSeq       uint32
 	ClosedLedgerSeq     uint32
 	ClosedLedgerHash    [32]byte
@@ -1081,6 +1118,116 @@ func (s *Service) SetValidatedLedger(seq uint32) {
 	}
 	_ = l.SetValidated()
 	s.validatedLedger = l
+}
+
+// NeedsInitialSync returns true if the node hasn't yet adopted a ledger from peers.
+func (s *Service) NeedsInitialSync() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.needsInitialSync
+}
+
+// AdoptLedgerHeader adopts a peer's ledger header as our closed ledger.
+// Used during initial sync: the node fetches the network's current ledger
+// header and starts tracking from there.
+// The state map is reused from genesis (valid as long as no transactions
+// have changed the state — true for empty ledger sequences).
+func (s *Service) AdoptLedgerHeader(h *header.LedgerHeader) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.needsInitialSync {
+		return errors.New("not in initial sync mode")
+	}
+
+	if s.genesisLedger == nil {
+		return errors.New("no genesis ledger available")
+	}
+
+	// Snapshot the genesis state map for the adopted ledger
+	stateMap, err := s.genesisLedger.StateMapSnapshot()
+	if err != nil {
+		return fmt.Errorf("failed to snapshot genesis state: %w", err)
+	}
+
+	// Create empty tx map
+	txMap, err := s.genesisLedger.TxMapSnapshot()
+	if err != nil {
+		return fmt.Errorf("failed to snapshot genesis tx map: %w", err)
+	}
+
+	// Create the adopted ledger from the peer's header.
+	// NewFromHeader creates in StateValidated — no need to call SetValidated().
+	adopted := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+
+	// Update service state
+	s.closedLedger = adopted
+	s.validatedLedger = adopted
+	s.ledgerHistory[h.LedgerIndex] = adopted
+
+	// Create new open ledger on top
+	openLedger, err := ledger.NewOpen(adopted, time.Now())
+	if err != nil {
+		return fmt.Errorf("failed to create open ledger: %w", err)
+	}
+	s.openLedger = openLedger
+	s.needsInitialSync = false
+
+	s.logger.Info("Adopted ledger from peer",
+		"seq", h.LedgerIndex,
+		"hash", fmt.Sprintf("%x", h.Hash[:8]),
+	)
+
+	return nil
+}
+
+// ReAdoptLedgerHeader re-adopts a peer's ledger header while catching up.
+// Unlike AdoptLedgerHeader, this works after needsInitialSync has been cleared.
+// Used during the catch-up phase when we're still behind the network.
+func (s *Service) ReAdoptLedgerHeader(h *header.LedgerHeader) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.genesisLedger == nil {
+		return errors.New("no genesis ledger available")
+	}
+
+	// Only allow re-adoption if the new sequence is ahead of our current
+	if s.closedLedger != nil && h.LedgerIndex <= s.closedLedger.Sequence() {
+		return fmt.Errorf("re-adopt seq %d not ahead of current %d", h.LedgerIndex, s.closedLedger.Sequence())
+	}
+
+	// Snapshot genesis state (same as initial adoption)
+	stateMap, err := s.genesisLedger.StateMapSnapshot()
+	if err != nil {
+		return fmt.Errorf("failed to snapshot genesis state: %w", err)
+	}
+
+	txMap, err := s.genesisLedger.TxMapSnapshot()
+	if err != nil {
+		return fmt.Errorf("failed to snapshot genesis tx map: %w", err)
+	}
+
+	adopted := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+
+	s.closedLedger = adopted
+	s.validatedLedger = adopted
+	s.ledgerHistory[h.LedgerIndex] = adopted
+
+	// Create new open ledger on top
+	openLedger, err := ledger.NewOpen(adopted, time.Now())
+	if err != nil {
+		return fmt.Errorf("failed to create open ledger: %w", err)
+	}
+	s.openLedger = openLedger
+	s.pendingTxs = nil
+
+	s.logger.Info("Re-adopted ledger from peer",
+		"seq", h.LedgerIndex,
+		"hash", fmt.Sprintf("%x", h.Hash[:8]),
+	)
+
+	return nil
 }
 
 // GetPendingTxBlobs returns the raw transaction blobs for all pending transactions.

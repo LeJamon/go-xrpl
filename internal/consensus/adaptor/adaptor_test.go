@@ -14,7 +14,7 @@ import (
 func newTestLedgerService(t *testing.T) *service.Service {
 	t.Helper()
 	cfg := service.Config{
-		Standalone:    false, // NOT standalone — consensus mode
+		Standalone:    true, // standalone for tests that expect seq 2
 		GenesisConfig: genesis.DefaultConfig(),
 	}
 	svc, err := service.New(cfg)

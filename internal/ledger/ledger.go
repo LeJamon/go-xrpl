@@ -170,6 +170,23 @@ func FromGenesis(
 	}
 }
 
+// NewFromHeader creates a closed/validated ledger from a deserialized header
+// and existing state/tx maps. Used during initial sync to adopt a peer's ledger.
+func NewFromHeader(
+	hdr header.LedgerHeader,
+	stateMap *shamap.SHAMap,
+	txMap *shamap.SHAMap,
+	fees drops.Fees,
+) *Ledger {
+	return &Ledger{
+		stateMap: stateMap,
+		txMap:    txMap,
+		header:   hdr,
+		fees:     fees,
+		state:    StateValidated,
+	}
+}
+
 // NewOpenWithHeader creates an open ledger with the exact header values provided.
 // This is useful for testing/replay scenarios where you want to control all header fields.
 func NewOpenWithHeader(
@@ -573,6 +590,14 @@ func (l *Ledger) StateMapSnapshot() (*shamap.SHAMap, error) {
 	defer l.mu.RUnlock()
 
 	return l.stateMap.Snapshot(true)
+}
+
+// TxMapSnapshot returns a mutable snapshot of the transaction map.
+func (l *Ledger) TxMapSnapshot() (*shamap.SHAMap, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	return l.txMap.Snapshot(true)
 }
 
 // SetStateMapFamily sets the Family on the state map, enabling backed mode
