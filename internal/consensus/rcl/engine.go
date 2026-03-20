@@ -5,6 +5,7 @@ package rcl
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -55,6 +56,18 @@ type Engine struct {
 	prevRoundTime           time.Duration
 	roundStartTime          time.Time
 
+	// Proposal buffering for cross-round playback.
+	// Matches rippled's recentPeerPositions_ (Consensus.h:629).
+	recentProposals map[consensus.NodeID][]*consensus.Proposal
+
+	// Number of trusted proposers in the previous round.
+	// Used by shouldCloseLedger() for peer pressure calculation.
+	prevProposers int
+
+	// wrongLedgerID tracks the ledger we're trying to acquire
+	// while in ModeWrongLedger. Prevents spamming handleWrongLedger.
+	wrongLedgerID consensus.LedgerID
+
 	// Stats
 	roundCount     uint64
 	consensusCount uint64
@@ -88,15 +101,16 @@ func DefaultConfig() Config {
 // NewEngine creates a new RCL consensus engine.
 func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 	return &Engine{
-		timing:      config.Timing,
-		thresholds:  config.Thresholds,
-		adaptor:     adaptor,
-		eventBus:    consensus.NewEventBus(100),
-		mode:        consensus.ModeObserving,
-		phase:       consensus.PhaseAccepted,
-		proposals:   make(map[consensus.NodeID]*consensus.Proposal),
-		validations: make(map[consensus.NodeID]*consensus.Validation),
-		disputes:    make(map[consensus.TxID]*consensus.DisputedTx),
+		timing:          config.Timing,
+		thresholds:      config.Thresholds,
+		adaptor:         adaptor,
+		eventBus:        consensus.NewEventBus(100),
+		mode:            consensus.ModeObserving,
+		phase:           consensus.PhaseAccepted,
+		proposals:       make(map[consensus.NodeID]*consensus.Proposal),
+		validations:     make(map[consensus.NodeID]*consensus.Validation),
+		disputes:        make(map[consensus.TxID]*consensus.DisputedTx),
+		recentProposals: make(map[consensus.NodeID][]*consensus.Proposal),
 	}
 }
 
@@ -182,6 +196,43 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing bool) error
 	// Start close timer
 	e.startCloseTimer()
 
+	// Replay buffered proposals matching this round's prevLedger.
+	// Matches rippled's playbackProposals() (Consensus.h:1151).
+	if e.prevLedger != nil && len(e.recentProposals) > 0 {
+		prevID := e.prevLedger.ID()
+		replayed := 0
+		for nodeID, positions := range e.recentProposals {
+			for _, p := range positions {
+				if p.PreviousLedger == prevID {
+					trusted := e.adaptor.IsTrusted(nodeID)
+					existing, exists := e.proposals[nodeID]
+					if !exists || p.Position > existing.Position {
+						e.proposals[nodeID] = p
+					}
+					if p.Position == 0 && trusted {
+						e.state.CloseTimes.Peers[p.CloseTime]++
+					}
+					if trusted {
+						replayed++
+					}
+				}
+			}
+		}
+
+		// Peer pressure: if peers have already closed (proposals exist),
+		// close immediately without waiting for the 2s timer.
+		// Matches rippled's startRoundInternal() check (Consensus.h:730-738).
+		if replayed > 0 {
+			if e.closeTimer != nil {
+				e.closeTimer.Stop()
+			}
+			e.closeLedger()
+			// Immediately check convergence since we already have proposals
+			// from playback — no need to wait for new ones to arrive.
+			e.checkConvergence()
+		}
+	}
+
 	e.roundCount++
 	return nil
 }
@@ -191,7 +242,21 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Reject proposals during accepted phase (between rounds).
+	// Verify signature first (before buffering).
+	if err := e.adaptor.VerifyProposal(proposal); err != nil {
+		return fmt.Errorf("invalid proposal signature: %w", err)
+	}
+
+	// Always buffer proposals for future playback, even between rounds.
+	// Matches rippled's recentPeerPositions_ (Consensus.h:629).
+	// Keep max 5 per node to limit memory.
+	positions := e.recentProposals[proposal.NodeID]
+	if len(positions) >= 5 {
+		positions = positions[1:] // drop oldest
+	}
+	e.recentProposals[proposal.NodeID] = append(positions, proposal)
+
+	// During accepted phase (between rounds), only buffer — don't process.
 	// Matches rippled Consensus.h:769-770.
 	if e.phase == consensus.PhaseAccepted {
 		return nil
@@ -201,11 +266,6 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal) error {
 	// Matches rippled Consensus.h:776-781.
 	if e.prevLedger != nil && proposal.PreviousLedger != e.prevLedger.ID() {
 		return nil
-	}
-
-	// Verify signature
-	if err := e.adaptor.VerifyProposal(proposal); err != nil {
-		return fmt.Errorf("invalid proposal signature: %w", err)
 	}
 
 	// Check if from trusted validator
@@ -305,11 +365,18 @@ func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
 
 	// If we were on wrong ledger, check if this helps
 	if e.mode == consensus.ModeWrongLedger {
-		// Try to get the ledger
 		l, err := e.adaptor.GetLedger(id)
 		if err == nil && l != nil {
+			lID := l.ID()
+			slog.Info("Acquired missing ledger, restarting round",
+				"seq", l.Seq(), "hash", fmt.Sprintf("%x", lID[:8]))
 			e.prevLedger = l
 			e.state.HaveCorrectLCL = true
+			nextRound := consensus.RoundID{
+				Seq:        l.Seq() + 1,
+				ParentHash: l.ID(),
+			}
+			e.startRoundLocked(nextRound, false)
 			e.setMode(consensus.ModeSwitchedLedger)
 		}
 	}
@@ -369,8 +436,8 @@ func (e *Engine) run() {
 		case <-e.ctx.Done():
 			return
 		default:
-			// Check operating mode
 			if e.adaptor.GetOperatingMode() == consensus.OpModeFull {
+				e.checkLedgerLocked() // Detect wrong chain (like rippled's timerEntry)
 				e.checkAndStartRound()
 			}
 			time.Sleep(100 * time.Millisecond)
@@ -385,8 +452,11 @@ func (e *Engine) checkAndStartRound() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Only start if in accepted phase
+	// Only start if in accepted phase and not on wrong ledger
 	if e.phase != consensus.PhaseAccepted {
+		return
+	}
+	if e.mode == consensus.ModeWrongLedger {
 		return
 	}
 
@@ -396,10 +466,28 @@ func (e *Engine) checkAndStartRound() {
 		return
 	}
 
-	// Check if it's time for a new round
-	timeSinceClose := e.adaptor.Now().Sub(ledger.CloseTime())
-	if timeSinceClose < e.timing.LedgerIdleInterval {
-		return
+	// Check if we have buffered proposals for this ledger.
+	// If so, start immediately (peer pressure will close the open phase right away).
+	// Otherwise, wait for the idle interval as before.
+	ledgerID := ledger.ID()
+	hasBufferedProposals := false
+	for _, positions := range e.recentProposals {
+		for _, p := range positions {
+			if p.PreviousLedger == ledgerID {
+				hasBufferedProposals = true
+				break
+			}
+		}
+		if hasBufferedProposals {
+			break
+		}
+	}
+
+	if !hasBufferedProposals {
+		timeSinceClose := e.adaptor.Now().Sub(ledger.CloseTime())
+		if timeSinceClose < e.timing.LedgerIdleInterval {
+			return
+		}
 	}
 
 	// Determine if we should propose
@@ -415,6 +503,192 @@ func (e *Engine) checkAndStartRound() {
 		ParentHash: ledger.ID(),
 	}
 	e.startRoundLocked(round, proposing)
+}
+
+// checkLedgerLocked acquires the lock and calls checkLedger.
+// Only runs during active consensus phases (Open/Establish).
+// Matches rippled's timerEntry() calling checkLedger() on every tick.
+func (e *Engine) checkLedgerLocked() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.phase == consensus.PhaseAccepted {
+		return
+	}
+	e.checkLedger()
+}
+
+// checkLedger verifies we are on the correct ledger by comparing our
+// prevLedger against what the network prefers (from proposal counting).
+// If we're on the wrong chain, calls handleWrongLedger to switch.
+// Matches rippled's checkLedger() (Consensus.h:1118-1147).
+func (e *Engine) checkLedger() {
+	if e.prevLedger == nil {
+		return
+	}
+	ourID := e.prevLedger.ID()
+	netLgr := e.getNetworkLedger()
+	if netLgr != ourID {
+		// Already targeting this ledger — don't spam
+		if e.mode == consensus.ModeWrongLedger && e.wrongLedgerID == netLgr {
+			return
+		}
+		slog.Warn("Consensus view changed",
+			"phase", e.phase,
+			"mode", e.mode,
+			"our", fmt.Sprintf("%x", ourID[:8]),
+			"net", fmt.Sprintf("%x", netLgr[:8]),
+		)
+		e.handleWrongLedger(netLgr)
+	}
+}
+
+// getNetworkLedger determines what ledger the network is working on
+// by counting recent proposals from trusted validators.
+// Returns the most popular prevLedger ID if a majority of trusted
+// proposers agree on a different ledger than ours.
+// Simplified substitute for rippled's getPrevLedger() + LedgerTrie.
+func (e *Engine) getNetworkLedger() consensus.LedgerID {
+	if e.prevLedger == nil {
+		return consensus.LedgerID{}
+	}
+	ourID := e.prevLedger.ID()
+	freshness := e.timing.ProposeFreshness
+	now := e.adaptor.Now()
+
+	// For each trusted node, take the most recent fresh proposal
+	type vote struct {
+		prevLedger consensus.LedgerID
+	}
+	votes := make(map[consensus.NodeID]vote)
+	for nodeID, positions := range e.recentProposals {
+		if !e.adaptor.IsTrusted(nodeID) {
+			continue
+		}
+		// Find the most recent fresh proposal from this node
+		var best *consensus.Proposal
+		for _, p := range positions {
+			if now.Sub(p.Timestamp) > freshness {
+				continue // stale
+			}
+			if best == nil || p.Timestamp.After(best.Timestamp) {
+				best = p
+			}
+		}
+		if best != nil {
+			votes[nodeID] = vote{prevLedger: best.PreviousLedger}
+		}
+	}
+
+	if len(votes) == 0 {
+		return ourID
+	}
+
+	// Count votes per prevLedger
+	counts := make(map[consensus.LedgerID]int)
+	for _, v := range votes {
+		counts[v.prevLedger]++
+	}
+
+	// Find the most popular
+	var bestID consensus.LedgerID
+	bestCount := 0
+	for id, count := range counts {
+		if count > bestCount {
+			bestID = id
+			bestCount = count
+		}
+	}
+
+	// Only switch if majority of voters agree AND it's different from ours
+	if bestID != ourID && bestCount > len(votes)/2 {
+		return bestID
+	}
+	return ourID
+}
+
+// handleWrongLedger switches the engine to the network's preferred ledger.
+// Matches rippled's handleWrongLedger() (Consensus.h:1062-1113).
+func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID) {
+	// Step 1: Stop proposing (like rippled's leaveConsensus)
+	if e.mode == consensus.ModeProposing {
+		e.setMode(consensus.ModeObserving)
+	}
+
+	// Step 2: Clear consensus state and replay for new ledger
+	// (only if this is a new target ledger)
+	if e.prevLedger == nil || netLedgerID != e.prevLedger.ID() {
+		e.proposals = make(map[consensus.NodeID]*consensus.Proposal)
+		e.disputes = make(map[consensus.TxID]*consensus.DisputedTx)
+		e.converged = false
+		e.haveCloseTimeConsensus = false
+		if e.state != nil {
+			e.state.CloseTimes.Peers = make(map[time.Time]int)
+		}
+
+		// Replay proposals matching the new ledger
+		for nodeID, positions := range e.recentProposals {
+			for _, p := range positions {
+				if p.PreviousLedger == netLedgerID {
+					trusted := e.adaptor.IsTrusted(nodeID)
+					existing, exists := e.proposals[nodeID]
+					if !exists || p.Position > existing.Position {
+						e.proposals[nodeID] = p
+					}
+					if p.Position == 0 && trusted && e.state != nil {
+						e.state.CloseTimes.Peers[p.CloseTime]++
+					}
+				}
+			}
+		}
+	}
+
+	// Step 3: Try to acquire the correct ledger.
+	// First try by hash, then check if the adaptor's LCL has already been
+	// updated (e.g., by inbound ledger adoption in the router).
+	newLedger, err := e.adaptor.GetLedger(netLedgerID)
+	if (err != nil || newLedger == nil) {
+		if lcl, lclErr := e.adaptor.GetLastClosedLedger(); lclErr == nil && lcl != nil && lcl.ID() == netLedgerID {
+			newLedger = lcl
+			err = nil
+		}
+	}
+	if err == nil && newLedger != nil {
+		// Found — restart the round with the correct ledger
+		slog.Info("Switching to network ledger",
+			"seq", newLedger.Seq(),
+			"hash", fmt.Sprintf("%x", netLedgerID[:8]),
+		)
+		e.prevLedger = newLedger
+		e.wrongLedgerID = consensus.LedgerID{}
+		if e.state != nil {
+			e.state.HaveCorrectLCL = true
+		}
+		nextRound := consensus.RoundID{
+			Seq:        newLedger.Seq() + 1,
+			ParentHash: newLedger.ID(),
+		}
+		e.startRoundLocked(nextRound, false) // observe first round after switch
+		e.setMode(consensus.ModeSwitchedLedger)
+	} else {
+		// Not found — enter wrong ledger mode and request from peers
+		slog.Info("Cannot acquire network ledger, entering wrongLedger mode",
+			"hash", fmt.Sprintf("%x", netLedgerID[:8]),
+		)
+		if e.state != nil {
+			e.state.HaveCorrectLCL = false
+		}
+		e.wrongLedgerID = netLedgerID
+		e.setMode(consensus.ModeWrongLedger)
+		// Stop timers to prevent closing/accepting while on wrong chain
+		if e.closeTimer != nil {
+			e.closeTimer.Stop()
+		}
+		if e.timeoutTimer != nil {
+			e.timeoutTimer.Stop()
+		}
+		e.adaptor.RequestLedger(netLedgerID)
+	}
 }
 
 // setMode changes the consensus mode.
@@ -458,6 +732,54 @@ func (e *Engine) setPhase(newPhase consensus.Phase) {
 	e.adaptor.OnPhaseChange(oldPhase, newPhase)
 }
 
+// shouldCloseLedger checks whether the ledger should be closed now.
+// Matches rippled's shouldCloseLedger() (Consensus.cpp:27-103).
+func (e *Engine) shouldCloseLedger() bool {
+	openTime := time.Since(e.state.StartTime)
+	timeSincePrevClose := e.adaptor.Now().Sub(e.prevLedger.CloseTime())
+
+	// Sanity check: if timeSincePrevClose or prevRoundTime are unreasonable,
+	// just close (matches rippled lines 52-64).
+	if e.prevRoundTime < 0 || e.prevRoundTime > 10*time.Minute ||
+		timeSincePrevClose > 10*time.Minute {
+		return true
+	}
+
+	// Count how many trusted peers have already closed (sent proposals)
+	proposersClosed := 0
+	for nodeID := range e.proposals {
+		if e.adaptor.IsTrusted(nodeID) {
+			proposersClosed++
+		}
+	}
+
+	// Peer pressure: if more than half of previous round's proposers
+	// have already closed, close immediately (matches rippled lines 67-73).
+	if proposersClosed > e.prevProposers/2 {
+		return true
+	}
+
+	// No transactions: only close at the idle interval.
+	// Matches rippled lines 75-80.
+	anyTransactions := len(e.adaptor.GetPendingTxs()) > 0
+	if !anyTransactions {
+		return timeSincePrevClose >= e.timing.LedgerIdleInterval
+	}
+
+	// Preserve minimum ledger open time (matches rippled lines 83-88).
+	if openTime < e.timing.LedgerMinClose {
+		return false
+	}
+
+	// Don't close faster than half the previous round time,
+	// so slower validators can keep up (matches rippled lines 93-98).
+	if openTime < e.prevRoundTime/2 {
+		return false
+	}
+
+	return true
+}
+
 // startCloseTimer starts the timer for closing the ledger.
 func (e *Engine) startCloseTimer() {
 	if e.closeTimer != nil {
@@ -478,14 +800,21 @@ func (e *Engine) onCloseTimer() {
 		return
 	}
 
-	e.eventBus.Publish(&consensus.TimerFiredEvent{
-		Timer:     consensus.TimerLedgerClose,
-		Round:     e.state.Round,
-		Timestamp: e.adaptor.Now(),
-	})
+	if e.shouldCloseLedger() {
+		e.eventBus.Publish(&consensus.TimerFiredEvent{
+			Timer:     consensus.TimerLedgerClose,
+			Round:     e.state.Round,
+			Timestamp: e.adaptor.Now(),
+		})
 
-	// Close the ledger and move to establish phase
-	e.closeLedger()
+		// Close the ledger and move to establish phase
+		e.closeLedger()
+	} else {
+		// Reschedule check in 100ms
+		e.closeTimer = time.AfterFunc(100*time.Millisecond, func() {
+			e.onCloseTimer()
+		})
+	}
 }
 
 // closeLedger transitions from open to establish phase.
@@ -617,7 +946,11 @@ func (e *Engine) checkConvergence() {
 				// Also need close time consensus before accepting
 				// (matching rippled Consensus.h:1406-1411)
 				if !e.haveCloseTimeConsensus {
-					return // Keep going until CT consensus is reached
+					// Update close time position — this may establish CT consensus.
+					e.updateCloseTimePosition()
+					if !e.haveCloseTimeConsensus {
+						return // Keep going until CT consensus is reached
+					}
 				}
 				e.acceptLedger(consensus.ResultSuccess)
 			}
@@ -784,6 +1117,15 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// Track round time for convergePercent calculation
 	e.prevRoundTime = time.Since(e.roundStartTime)
 
+	// Track trusted proposer count for peer pressure in next round
+	trustedCount := 0
+	for nodeID := range e.proposals {
+		if e.adaptor.IsTrusted(nodeID) {
+			trustedCount++
+		}
+	}
+	e.prevProposers = trustedCount
+
 	// Update state for next round
 	e.prevLedger = newLedger
 	e.validations = make(map[consensus.NodeID]*consensus.Validation)
@@ -920,12 +1262,31 @@ func participantsNeeded(participants, percent int) int {
 // determineCloseTime returns the consensus close time.
 // Uses the close time that was converged on by updateCloseTimePosition().
 // If we have a consensus position with a non-zero close time, use it.
+// For observers (no position), use the most popular peer close time.
 // Otherwise fall back to our own close time.
 func (e *Engine) determineCloseTime() time.Time {
 	// If we have a position (from updateCloseTimePosition convergence), use its close time.
 	if e.state.OurPosition != nil && !e.state.OurPosition.CloseTime.IsZero() {
 		return e.state.OurPosition.CloseTime
 	}
+
+	// For observers: use the most popular peer close time from proposals.
+	// This matches rippled's behavior where non-proposing nodes adopt the
+	// network's close time rather than using their own wall clock.
+	if len(e.state.CloseTimes.Peers) > 0 {
+		var bestTime time.Time
+		bestCount := 0
+		for t, count := range e.state.CloseTimes.Peers {
+			if count > bestCount {
+				bestTime = t
+				bestCount = count
+			}
+		}
+		if bestCount > 0 {
+			return bestTime
+		}
+	}
+
 	return e.state.CloseTimes.Self
 }
 

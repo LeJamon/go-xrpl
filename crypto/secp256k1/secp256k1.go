@@ -159,6 +159,32 @@ func (c SECP256K1CryptoAlgorithm) Sign(msg, privKey string) (string, error) {
 	return strings.ToUpper(parsedSig), nil
 }
 
+// SignDigest signs a pre-computed digest (hash) directly without re-hashing.
+// Matches rippled's signDigest() which passes the SHA-512Half hash directly
+// to secp256k1 signing.
+func (c SECP256K1CryptoAlgorithm) SignDigest(digest [32]byte, privKeyHex string) ([]byte, error) {
+	if len(privKeyHex) == 66 {
+		privKeyHex = privKeyHex[2:]
+	}
+	key, err := hex.DecodeString(privKeyHex)
+	if err != nil {
+		return nil, ErrInvalidPrivateKey
+	}
+
+	secpPrivKey := secp256k1.PrivKeyFromBytes(key)
+	sig := ecdsa.Sign(secpPrivKey, digest[:])
+
+	parsedSig, err := rootcrypto.DERHexFromSig(sig.R().String(), sig.S().String())
+	if err != nil {
+		return nil, err
+	}
+	sigBytes, err := hex.DecodeString(parsedSig)
+	if err != nil {
+		return nil, err
+	}
+	return sigBytes, nil
+}
+
 // Validate validates a signature for a message with a public key.
 // It checks that the signature is fully canonical (low S) to prevent
 // signature malleability attacks.
@@ -218,6 +244,42 @@ func (c SECP256K1CryptoAlgorithm) ValidateWithCanonicality(msg, pubkey, sig stri
 		return false
 	}
 	return parsedSig.Verify(hash[:], pubKey)
+}
+
+// ValidateDigest verifies a signature against a pre-computed digest (hash).
+// Unlike Validate, this does NOT re-hash the data — it uses the digest directly.
+// Matches rippled's verifyDigest() which passes the SHA-512Half hash directly
+// to secp256k1_ecdsa_verify.
+func (c SECP256K1CryptoAlgorithm) ValidateDigest(digest [32]byte, pubkeyBytes []byte, sigBytes []byte) bool {
+	// Check signature canonicality
+	canonicality := rootcrypto.ECDSACanonicality(sigBytes)
+	if canonicality == rootcrypto.CanonicityNone {
+		return false
+	}
+
+	// Decode the signature from DER to r and s
+	sigHex := hex.EncodeToString(sigBytes)
+	r, s, err := rootcrypto.DERHexToSig(sigHex)
+	if err != nil {
+		return false
+	}
+
+	var rBytes, sBytes [32]byte
+	copy(rBytes[32-len(r):], r)
+	copy(sBytes[32-len(s):], s)
+
+	ecdsaR := &secp256k1.ModNScalar{}
+	ecdsaS := &secp256k1.ModNScalar{}
+	ecdsaR.SetBytes(&rBytes)
+	ecdsaS.SetBytes(&sBytes)
+
+	parsedSig := ecdsa.NewSignature(ecdsaR, ecdsaS)
+
+	pubKey, err := secp256k1.ParsePubKey(pubkeyBytes)
+	if err != nil {
+		return false
+	}
+	return parsedSig.Verify(digest[:], pubKey)
 }
 
 // DerivePublicKeyFromPublicGenerator derives a public key from a public generator.

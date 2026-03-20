@@ -3,7 +3,6 @@ package adaptor
 import (
 	"encoding/hex"
 	"errors"
-	"strings"
 
 	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/crypto/common"
@@ -64,29 +63,28 @@ func NewValidatorIdentity(seed string) (*ValidatorIdentity, error) {
 	}, nil
 }
 
-// Sign signs data with the validator's private key using secp256k1.
-// The data is first hashed with SHA-512Half before signing.
+// Sign signs a pre-computed digest with the validator's private key using secp256k1.
+// The data parameter must be a SHA-512Half digest (32 bytes).
+// Matches rippled's signDigest() which passes the hash directly to secp256k1.
 func (vi *ValidatorIdentity) Sign(data []byte) ([]byte, error) {
 	if vi == nil {
 		return nil, ErrNoValidatorKey
 	}
 	algo := secp256k1.SECP256K1()
-	// Sign expects hex-encoded message string and hex-encoded private key
-	sigHex, err := algo.Sign(hex.EncodeToString(data), vi.PrivateKey)
-	if err != nil {
-		return nil, err
-	}
-	return hex.DecodeString(sigHex)
+	var digest [32]byte
+	copy(digest[:], data)
+	return algo.SignDigest(digest, vi.PrivateKey)
 }
 
 // Verify verifies a signature against a public key.
+// The data parameter must be a pre-computed SHA-512Half digest (32 bytes).
+// Matches rippled's verifyDigest() which passes the hash directly to
+// secp256k1_ecdsa_verify without re-hashing.
 func Verify(pubKey []byte, data []byte, signature []byte) bool {
 	algo := secp256k1.SECP256K1()
-	return algo.Validate(
-		hex.EncodeToString(data),
-		strings.ToUpper(hex.EncodeToString(pubKey)),
-		strings.ToUpper(hex.EncodeToString(signature)),
-	)
+	var digest [32]byte
+	copy(digest[:], data)
+	return algo.ValidateDigest(digest, pubKey, signature)
 }
 
 // SignProposal signs a consensus proposal.

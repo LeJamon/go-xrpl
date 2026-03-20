@@ -842,17 +842,34 @@ type LedgerInfo struct {
 //   - Does NOT require standalone mode
 //   - Does NOT automatically validate (validation comes from the validation tracker)
 //
+// The parent parameter specifies which ledger to build on top of. When the
+// consensus engine switches chains (wrong ledger detection), this may differ
+// from s.closedLedger. The service resets its internal state accordingly.
+//
 // The multi-pass retry logic is the same as AcceptLedger to match rippled's
 // BuildLedger behavior.
-func (s *Service) AcceptConsensusResult(txBlobs [][]byte, closeTime time.Time) (uint32, error) {
+func (s *Service) AcceptConsensusResult(parent *ledger.Ledger, txBlobs [][]byte, closeTime time.Time) (uint32, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.openLedger == nil {
-		return 0, ErrNoOpenLedger
-	}
 	if s.closedLedger == nil {
 		return 0, ErrNoClosedLedger
+	}
+
+	// If the parent differs from our closed ledger (chain switch via wrong
+	// ledger detection), reset internal state to build on the correct chain.
+	if parent != nil && parent.Sequence() != s.closedLedger.Sequence() {
+		s.closedLedger = parent
+		s.ledgerHistory[parent.Sequence()] = parent
+		newOpen, err := ledger.NewOpen(parent, closeTime)
+		if err != nil {
+			return 0, fmt.Errorf("failed to create open ledger from parent: %w", err)
+		}
+		s.openLedger = newOpen
+	}
+
+	if s.openLedger == nil {
+		return 0, ErrNoOpenLedger
 	}
 
 	if len(txBlobs) > 0 {

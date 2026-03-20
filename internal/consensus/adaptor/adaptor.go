@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
@@ -188,8 +189,14 @@ func (a *Adaptor) GetLastClosedLedger() (consensus.Ledger, error) {
 }
 
 func (a *Adaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time) (consensus.Ledger, error) {
-	// Apply the consensus-agreed transaction set to produce a new ledger
-	seq, err := a.ledgerService.AcceptConsensusResult(txSet.Txs(), closeTime)
+	// Unwrap the parent to get the concrete ledger for the service.
+	// This is critical for chain switching: the parent may differ from
+	// the service's internal closedLedger after wrong ledger detection.
+	var parentLedger *ledger.Ledger
+	if w, ok := parent.(*LedgerWrapper); ok {
+		parentLedger = w.Unwrap()
+	}
+	seq, err := a.ledgerService.AcceptConsensusResult(parentLedger, txSet.Txs(), closeTime)
 	if err != nil {
 		return nil, err
 	}
