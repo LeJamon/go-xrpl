@@ -315,16 +315,8 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 				return tx.TecNO_PERMISSION
 			}
 			// Owner directory must be empty
-			ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-			dirExists, dirErr := ctx.View.Exists(ownerDirKey)
-			if dirErr == nil && dirExists {
-				dirData, readErr := ctx.View.Read(ownerDirKey)
-				if readErr == nil {
-					dirNode, parseErr := state.ParseDirectoryNode(dirData)
-					if parseErr == nil && len(dirNode.Indexes) > 0 {
-						return tx.TecOWNERS
-					}
-				}
+			if ownerDirHasEntries(ctx) {
+				return tx.TecOWNERS
 			}
 		}
 		if uSetFlag == AccountSetFlagNoFreeze {
@@ -347,16 +339,8 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		uSetFlag == AccountSetFlagRequireAuth
 	if bSetRequireAuth && (uFlagsIn&state.LsfRequireAuth) == 0 {
 		// Owner directory must be empty to set RequireAuth
-		ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-		dirExists, dirErr := ctx.View.Exists(ownerDirKey)
-		if dirErr == nil && dirExists {
-			dirData, readErr := ctx.View.Read(ownerDirKey)
-			if readErr == nil {
-				dirNode, parseErr := state.ParseDirectoryNode(dirData)
-				if parseErr == nil && len(dirNode.Indexes) > 0 {
-					return tx.TecOWNERS
-				}
-			}
+		if ownerDirHasEntries(ctx) {
+			return tx.TecOWNERS
 		}
 		uFlagsOut |= state.LsfRequireAuth
 	}
@@ -570,4 +554,22 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	return tx.TesSUCCESS
+}
+
+// ownerDirHasEntries reports whether the account's owner directory contains any entries.
+func ownerDirHasEntries(ctx *tx.ApplyContext) bool {
+	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
+	exists, err := ctx.View.Exists(ownerDirKey)
+	if err != nil || !exists {
+		return false
+	}
+	dirData, err := ctx.View.Read(ownerDirKey)
+	if err != nil {
+		return false
+	}
+	dirNode, err := state.ParseDirectoryNode(dirData)
+	if err != nil {
+		return false
+	}
+	return len(dirNode.Indexes) > 0
 }
