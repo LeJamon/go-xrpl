@@ -1,10 +1,11 @@
 package invariants
 
 import (
-	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/LeJamon/goXRPLd/amendment"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/keylet"
 )
@@ -39,101 +40,47 @@ type ammInvariantFields struct {
 	hasBalance bool
 }
 
-// isLikelyAMMBinary checks if binary data is likely an AMM SLE entry.
-// AMM entries use a custom binary format that starts with 20 bytes of AccountID,
-// NOT the standard 0x11 LedgerEntryType header. We verify the data is at least
-// 110 bytes (minimum AMM entry size) and does NOT start with 0x11.
-// We also verify that bytes 20-39 contain a plausible Issue (40 bytes = currency + issuer).
+// isLikelyAMMBinary checks if binary data is an AMM SLE entry.
+// AMM entries are now stored using the standard binary codec format, so we
+// check the LedgerEntryType field via the codec. This replaced the old
+// heuristic-based approach that relied on the custom binary format.
 func isLikelyAMMBinary(data []byte) bool {
-	if len(data) < 110 {
-		return false
-	}
-	// Standard SLE entries start with 0x11 (LedgerEntryType header).
-	// AMM entries start with raw AccountID bytes.
-	if data[0] == 0x11 {
-		return false
-	}
-	// Additional heuristic: check if offset 20 contains a plausible currency.
-	// A valid currency's first byte is either 0x00 (standard ISO) or has bit 7 set (non-standard).
-	// For AMM, the Asset field starts at offset 20.
-	firstCurrByte := data[20]
-	if firstCurrByte != 0x00 && (firstCurrByte&0x80) == 0 {
-		return false
-	}
-	return true
+	// The standard detection via getLedgerEntryType is now the primary path.
+	// This function serves as a fallback for entries where EntryType != "AMM".
+	return getLedgerEntryType(data) == "AMM"
 }
 
 // parseAMMInvariantFields extracts the Account ID and LPTokenBalance from
-// binary AMM SLE data. This is a local parser to avoid importing the amm package.
-// The AMM SLE uses a CUSTOM binary format (not the standard binary codec).
+// binary AMM SLE data. AMM data is now stored in the standard binary codec
+// format, so we decode it via binarycodec.Decode.
 // Reference: rippled InvariantCheck.cpp lines 1733-1737 (after), 1749-1754 (before)
 func parseAMMInvariantFields(data []byte) (*ammInvariantFields, error) {
-	if len(data) < 110 {
-		return nil, fmt.Errorf("AMM data too short: %d bytes", len(data))
+	hexStr := hex.EncodeToString(data)
+	fields, err := binarycodec.Decode(hexStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode AMM binary: %w", err)
 	}
 
 	result := &ammInvariantFields{}
 
-	// Account (20 bytes) — first field
-	copy(result.accountID[:], data[0:20])
-
-	// Asset (40 bytes: currency + issuer)
-	offset := 20
-	offset += 40 // skip Asset
-
-	// Asset2 (40 bytes: currency + issuer)
-	offset += 40 // skip Asset2
-
-	// TradingFee (2 bytes)
-	offset += 2
-
-	// OwnerNode (8 bytes)
-	offset += 8
-
-	// LPTokenBalance — uses the custom AMM Amount serialization format:
-	//   1 byte type (0=XRP, 1=IOU)
-	//   XRP: 8 bytes int64 drops
-	//   IOU: 8 bytes int64 mantissa + 4 bytes int32 exponent (exponent offset by +128)
-	if offset >= len(data) {
-		return result, nil
+	// Account (r-address string → [20]byte)
+	if acctStr, ok := fields["Account"].(string); ok {
+		id, err := state.DecodeAccountID(acctStr)
+		if err == nil {
+			result.accountID = id
+		}
 	}
-	amt, consumed := deserializeAMMAmount(data[offset:])
-	if consumed > 0 {
-		result.lptBalance = amt
+
+	// LPTokenBalance (Amount object)
+	if lptObj, ok := fields["LPTokenBalance"].(map[string]any); ok {
+		valueStr, _ := lptObj["value"].(string)
+		currency, _ := lptObj["currency"].(string)
+		issuer, _ := lptObj["issuer"].(string)
+		result.lptBalance = state.NewIssuedAmountFromDecimalString(valueStr, currency, issuer)
 		result.hasBalance = true
 	}
 
 	return result, nil
-}
-
-// deserializeAMMAmount reads an Amount from the custom AMM binary format.
-// Format:
-//
-//	1 byte type (0=XRP, 1=IOU)
-//	XRP: 8 bytes int64 drops
-//	IOU: 8 bytes int64 mantissa + 4 bytes int32 exponent (offset by +128)
-//
-// Returns the Amount and the number of bytes consumed.
-func deserializeAMMAmount(data []byte) (Amount, int) {
-	if len(data) < 1 {
-		return state.NewIssuedAmountFromValue(0, -100, "", ""), 0
-	}
-	amtType := data[0]
-	if amtType == 0 {
-		// XRP
-		if len(data) < 9 {
-			return state.NewXRPAmountFromInt(0), 0
-		}
-		drops := int64(binary.BigEndian.Uint64(data[1:9]))
-		return state.NewXRPAmountFromInt(drops), 9
-	}
-	// IOU
-	if len(data) < 13 {
-		return state.NewIssuedAmountFromValue(0, -100, "", ""), 0
-	}
-	mantissa := int64(binary.BigEndian.Uint64(data[1:9]))
-	exponent := int(binary.BigEndian.Uint32(data[9:13])) - 128 // reverse offset
-	return state.NewIssuedAmountFromValue(mantissa, exponent, "", ""), 13
 }
 
 // ammPoolHoldsForInvariant reads the balances of both assets in the AMM pool.

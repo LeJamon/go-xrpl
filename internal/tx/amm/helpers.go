@@ -2,11 +2,14 @@ package amm
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -1133,6 +1136,11 @@ func isGreater(a, b tx.Amount) bool {
 	return a.Compare(b) > 0
 }
 
+// isGreaterOrEqual returns true if a >= b
+func isGreaterOrEqual(a, b tx.Amount) bool {
+	return a.Compare(b) >= 0
+}
+
 // isLessOrEqual returns true if a <= b
 func isLessOrEqual(a, b tx.Amount) bool {
 	return a.Compare(b) <= 0
@@ -1215,110 +1223,109 @@ func deserializeIssue(data []byte) (tx.Asset, int) {
 	return tx.Asset{Currency: currency, Issuer: issuer}, 40
 }
 
-// ParseAMMData deserializes an AMM ledger entry from binary data.
+// ParseAMMData deserializes an AMM ledger entry from binary codec format.
 // Exported for use by TrustSet to check LP token balance.
 func ParseAMMData(data []byte) (*AMMData, error) {
 	return parseAMMData(data)
 }
 
-// parseAMMData deserializes an AMM ledger entry from binary data.
-// This matches the rippled AMM ledger entry format exactly.
+// parseAMMData deserializes an AMM ledger entry from binary codec (SLE) format.
+// The data is first decoded via binarycodec.Decode into a JSON map, then the
+// fields are extracted and converted to the AMMData struct.
 // Reference: rippled include/xrpl/protocol/detail/ledger_entries.macro ltAMM
 func parseAMMData(data []byte) (*AMMData, error) {
-	// Minimum size: Account(20) + Asset(40) + Asset2(40) + TradingFee(2) + OwnerNode(8) = 110 bytes
-	if len(data) < 110 {
-		return nil, fmt.Errorf("AMM data too short: %d bytes", len(data))
+	hexStr := hex.EncodeToString(data)
+	fields, err := binarycodec.Decode(hexStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode AMM binary: %w", err)
 	}
 
-	amm := &AMMData{}
-	offset := 0
-
-	// Account (20 bytes)
-	copy(amm.Account[:], data[offset:offset+20])
-	offset += 20
-
-	// Asset (40 bytes: currency + issuer)
-	amm.Asset, _ = deserializeIssue(data[offset:])
-	offset += 40
-
-	// Asset2 (40 bytes: currency + issuer)
-	amm.Asset2, _ = deserializeIssue(data[offset:])
-	offset += 40
-
-	// TradingFee (2 bytes)
-	amm.TradingFee = binary.BigEndian.Uint16(data[offset : offset+2])
-	offset += 2
-
-	// OwnerNode (8 bytes)
-	amm.OwnerNode = binary.BigEndian.Uint64(data[offset : offset+8])
-	offset += 8
-
-	// LPTokenBalance (variable: 9 or 13 bytes)
-	if offset >= len(data) {
-		return amm, nil
-	}
-	amt, consumed := deserializeAmount(data[offset:])
-	amm.LPTokenBalance = amt
-	offset += consumed
-
-	// VoteSlots count (1 byte)
-	if offset+1 > len(data) {
-		amm.VoteSlots = make([]VoteSlotData, 0)
-		return amm, nil
-	}
-	voteCount := int(data[offset])
-	offset++
-
-	amm.VoteSlots = make([]VoteSlotData, 0, voteCount)
-	for i := 0; i < voteCount && offset+26 <= len(data); i++ {
-		var slot VoteSlotData
-		copy(slot.Account[:], data[offset:offset+20])
-		offset += 20
-		slot.TradingFee = binary.BigEndian.Uint16(data[offset : offset+2])
-		offset += 2
-		slot.VoteWeight = binary.BigEndian.Uint32(data[offset : offset+4])
-		offset += 4
-		amm.VoteSlots = append(amm.VoteSlots, slot)
+	amm := &AMMData{
+		VoteSlots: make([]VoteSlotData, 0),
 	}
 
-	// AuctionSlot (optional)
-	if offset+1 > len(data) {
-		return amm, nil
+	// Account (r-address string → [20]byte)
+	if acctStr, ok := fields["Account"].(string); ok {
+		id, err := state.DecodeAccountID(acctStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode AMM Account: %w", err)
+		}
+		amm.Account = id
 	}
-	hasAuctionSlot := data[offset]
-	offset++
 
-	if hasAuctionSlot != 0 && offset+24 <= len(data) {
+	// Asset (Issue object)
+	if assetObj, ok := fields["Asset"].(map[string]any); ok {
+		amm.Asset = issueMapToAsset(assetObj)
+	}
+
+	// Asset2 (Issue object)
+	if asset2Obj, ok := fields["Asset2"].(map[string]any); ok {
+		amm.Asset2 = issueMapToAsset(asset2Obj)
+	}
+
+	// TradingFee (UInt16)
+	amm.TradingFee = getFieldUint16(fields, "TradingFee")
+
+	// OwnerNode (UInt64 as hex string)
+	if ownerNodeStr, ok := fields["OwnerNode"].(string); ok {
+		amm.OwnerNode, _ = parseHexUint64(ownerNodeStr)
+	}
+
+	// LPTokenBalance (Amount object)
+	if lptObj, ok := fields["LPTokenBalance"].(map[string]any); ok {
+		amm.LPTokenBalance = amountMapToAmount(lptObj)
+	}
+
+	// VoteSlots (STArray of VoteEntry objects)
+	if voteSlotsArr, ok := fields["VoteSlots"].([]any); ok {
+		for _, entry := range voteSlotsArr {
+			entryMap, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			voteEntryObj, ok := entryMap["VoteEntry"].(map[string]any)
+			if !ok {
+				continue
+			}
+			var slot VoteSlotData
+			if acctStr, ok := voteEntryObj["Account"].(string); ok {
+				slot.Account, _ = state.DecodeAccountID(acctStr)
+			}
+			slot.TradingFee = getFieldUint16(voteEntryObj, "TradingFee")
+			slot.VoteWeight = getFieldUint32(voteEntryObj, "VoteWeight")
+			amm.VoteSlots = append(amm.VoteSlots, slot)
+		}
+	}
+
+	// AuctionSlot (STObject, optional)
+	if auctionObj, ok := fields["AuctionSlot"].(map[string]any); ok {
 		slot := &AuctionSlotData{
 			AuthAccounts: make([][20]byte, 0),
 		}
-		copy(slot.Account[:], data[offset:offset+20])
-		offset += 20
-		slot.Expiration = binary.BigEndian.Uint32(data[offset : offset+4])
-		offset += 4
-
-		// DiscountedFee (2 bytes)
-		if offset+2 <= len(data) {
-			slot.DiscountedFee = binary.BigEndian.Uint16(data[offset : offset+2])
-			offset += 2
+		if acctStr, ok := auctionObj["Account"].(string); ok {
+			slot.Account, _ = state.DecodeAccountID(acctStr)
 		}
-
-		// Price (variable: 9 or 13 bytes)
-		if offset < len(data) {
-			price, consumed := deserializeAmount(data[offset:])
-			slot.Price = price
-			offset += consumed
+		slot.Expiration = getFieldUint32(auctionObj, "Expiration")
+		slot.DiscountedFee = getFieldUint16(auctionObj, "DiscountedFee")
+		if priceObj, ok := auctionObj["Price"].(map[string]any); ok {
+			slot.Price = amountMapToAmount(priceObj)
 		}
-
-		// Auth accounts count
-		if offset+1 <= len(data) {
-			authCount := int(data[offset])
-			offset++
-			for i := 0; i < authCount && offset+20 <= len(data); i++ {
-				var authID [20]byte
-				copy(authID[:], data[offset:offset+20])
-				offset += 20
-				slot.AuthAccounts = append(slot.AuthAccounts, authID)
+		if authArr, ok := auctionObj["AuthAccounts"].([]any); ok {
+			for _, authEntry := range authArr {
+				authMap, ok := authEntry.(map[string]any)
+				if !ok {
+					continue
+				}
+				authAcctObj, ok := authMap["AuthAccount"].(map[string]any)
+				if !ok {
+					continue
+				}
+				if acctStr, ok := authAcctObj["Account"].(string); ok {
+					id, err := state.DecodeAccountID(acctStr)
+					if err == nil {
+						slot.AuthAccounts = append(slot.AuthAccounts, id)
+					}
+				}
 			}
 		}
 		amm.AuctionSlot = slot
@@ -1327,96 +1334,177 @@ func parseAMMData(data []byte) (*AMMData, error) {
 	return amm, nil
 }
 
-// serializeAMMData serializes an AMMData entry to binary.
-// This matches the rippled AMM ledger entry format exactly.
+// serializeAMMData serializes an AMMData entry using the standard binary codec
+// format. Builds a JSON map of AMM fields and encodes it via binarycodec.Encode.
 // Reference: rippled include/xrpl/protocol/detail/ledger_entries.macro ltAMM
 // IMPORTANT: Asset balances are NOT stored - they are read from AccountRoot/trustlines.
 func serializeAMMData(amm *AMMData) ([]byte, error) {
-	// Pre-serialize amounts to get their sizes
-	lptBalanceBytes := serializeAmount(amm.LPTokenBalance)
-
-	// Calculate size
-	// Account(20) + Asset(40) + Asset2(40) + TradingFee(2) + OwnerNode(8) + LPTokenBalance(variable)
-	size := 20 + 40 + 40 + 2 + 8 + len(lptBalanceBytes)
-	size += 1                       // voteCount
-	size += len(amm.VoteSlots) * 26 // Each vote slot: 20 + 2 + 4
-	size += 1                       // hasAuctionSlot flag
-	if amm.AuctionSlot != nil {
-		priceBytes := serializeAmount(amm.AuctionSlot.Price)
-		// Account(20) + Expiration(4) + DiscountedFee(2) + Price(variable) + authCount(1)
-		size += 20 + 4 + 2 + len(priceBytes) + 1
-		size += len(amm.AuctionSlot.AuthAccounts) * 20
+	accountAddr, err := state.EncodeAccountID(amm.Account)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode AMM Account: %w", err)
 	}
 
-	data := make([]byte, size)
-	offset := 0
-
-	// Account (20 bytes)
-	copy(data[offset:offset+20], amm.Account[:])
-	offset += 20
-
-	// Asset (40 bytes: currency + issuer)
-	assetBytes := serializeIssue(amm.Asset)
-	copy(data[offset:offset+40], assetBytes)
-	offset += 40
-
-	// Asset2 (40 bytes: currency + issuer)
-	asset2Bytes := serializeIssue(amm.Asset2)
-	copy(data[offset:offset+40], asset2Bytes)
-	offset += 40
-
-	// TradingFee (2 bytes)
-	binary.BigEndian.PutUint16(data[offset:offset+2], amm.TradingFee)
-	offset += 2
-
-	// OwnerNode (8 bytes)
-	binary.BigEndian.PutUint64(data[offset:offset+8], amm.OwnerNode)
-	offset += 8
-
-	// LPTokenBalance (using serializeAmount for proper Amount serialization)
-	copy(data[offset:], lptBalanceBytes)
-	offset += len(lptBalanceBytes)
-
-	// VoteSlots
-	data[offset] = byte(len(amm.VoteSlots))
-	offset++
-
-	for _, slot := range amm.VoteSlots {
-		copy(data[offset:offset+20], slot.Account[:])
-		offset += 20
-		binary.BigEndian.PutUint16(data[offset:offset+2], slot.TradingFee)
-		offset += 2
-		binary.BigEndian.PutUint32(data[offset:offset+4], slot.VoteWeight)
-		offset += 4
+	// Ensure LPTokenBalance has proper currency and issuer.
+	// If empty, derive them from the asset pair.
+	lptBal := amm.LPTokenBalance
+	if lptBal.Currency == "" {
+		lptBal = state.NewIssuedAmountFromValue(
+			lptBal.Mantissa(), lptBal.Exponent(),
+			GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency),
+			accountAddr)
 	}
 
-	// AuctionSlot
-	if amm.AuctionSlot != nil {
-		data[offset] = 1
-		offset++
-		copy(data[offset:offset+20], amm.AuctionSlot.Account[:])
-		offset += 20
-		binary.BigEndian.PutUint32(data[offset:offset+4], amm.AuctionSlot.Expiration)
-		offset += 4
-		// DiscountedFee (2 bytes)
-		binary.BigEndian.PutUint16(data[offset:offset+2], amm.AuctionSlot.DiscountedFee)
-		offset += 2
-		// Price (using serializeAmount for proper Amount serialization)
-		priceBytes := serializeAmount(amm.AuctionSlot.Price)
-		copy(data[offset:], priceBytes)
-		offset += len(priceBytes)
-		data[offset] = byte(len(amm.AuctionSlot.AuthAccounts))
-		offset++
-		for _, authID := range amm.AuctionSlot.AuthAccounts {
-			copy(data[offset:offset+20], authID[:])
-			offset += 20
+	jsonObj := map[string]any{
+		"LedgerEntryType": "AMM",
+		"Account":         accountAddr,
+		"Asset":           assetToIssueMap(amm.Asset),
+		"Asset2":          assetToIssueMap(amm.Asset2),
+		"TradingFee":      amm.TradingFee,
+		"OwnerNode":       fmt.Sprintf("%x", amm.OwnerNode),
+		"LPTokenBalance":  amountToAmountMap(lptBal),
+	}
+
+	// VoteSlots (STArray of VoteEntry objects)
+	if len(amm.VoteSlots) > 0 {
+		voteSlots := make([]any, 0, len(amm.VoteSlots))
+		for _, slot := range amm.VoteSlots {
+			slotAcctAddr, err := state.EncodeAccountID(slot.Account)
+			if err != nil {
+				continue
+			}
+			voteEntry := map[string]any{
+				"VoteEntry": map[string]any{
+					"Account":    slotAcctAddr,
+					"TradingFee": slot.TradingFee,
+					"VoteWeight": slot.VoteWeight,
+				},
+			}
+			voteSlots = append(voteSlots, voteEntry)
 		}
-	} else {
-		data[offset] = 0
-		offset++
+		jsonObj["VoteSlots"] = voteSlots
 	}
 
-	return data[:offset], nil
+	// AuctionSlot (STObject, optional)
+	if amm.AuctionSlot != nil {
+		slotAcctAddr, _ := state.EncodeAccountID(amm.AuctionSlot.Account)
+		// Ensure AuctionSlot Price has proper currency and issuer
+		slotPrice := amm.AuctionSlot.Price
+		if slotPrice.Currency == "" {
+			slotPrice = state.NewIssuedAmountFromValue(
+				slotPrice.Mantissa(), slotPrice.Exponent(),
+				lptBal.Currency, lptBal.Issuer)
+		}
+		auctionSlot := map[string]any{
+			"Account":    slotAcctAddr,
+			"Expiration": amm.AuctionSlot.Expiration,
+			"Price":      amountToAmountMap(slotPrice),
+		}
+		if amm.AuctionSlot.DiscountedFee != 0 {
+			auctionSlot["DiscountedFee"] = amm.AuctionSlot.DiscountedFee
+		}
+		if len(amm.AuctionSlot.AuthAccounts) > 0 {
+			authAccounts := make([]any, 0, len(amm.AuctionSlot.AuthAccounts))
+			for _, authID := range amm.AuctionSlot.AuthAccounts {
+				authAcctAddr, err := state.EncodeAccountID(authID)
+				if err != nil {
+					continue
+				}
+				authAccounts = append(authAccounts, map[string]any{
+					"AuthAccount": map[string]any{
+						"Account": authAcctAddr,
+					},
+				})
+			}
+			auctionSlot["AuthAccounts"] = authAccounts
+		}
+		jsonObj["AuctionSlot"] = auctionSlot
+	}
+
+	hexStr, err := binarycodec.Encode(jsonObj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode AMM: %w", err)
+	}
+
+	return hex.DecodeString(hexStr)
+}
+
+// issueMapToAsset converts a binary codec Issue map to a tx.Asset.
+func issueMapToAsset(m map[string]any) tx.Asset {
+	asset := tx.Asset{}
+	if currency, ok := m["currency"].(string); ok {
+		asset.Currency = currency
+	}
+	if issuer, ok := m["issuer"].(string); ok {
+		asset.Issuer = issuer
+	}
+	return asset
+}
+
+// assetToIssueMap converts a tx.Asset to a binary codec Issue map.
+func assetToIssueMap(asset tx.Asset) map[string]any {
+	isXRP := asset.Currency == "" || asset.Currency == "XRP"
+	if isXRP {
+		return map[string]any{"currency": "XRP"}
+	}
+	return map[string]any{
+		"currency": asset.Currency,
+		"issuer":   asset.Issuer,
+	}
+}
+
+// amountMapToAmount converts a binary codec Amount map to a tx.Amount.
+func amountMapToAmount(m map[string]any) tx.Amount {
+	valueStr, _ := m["value"].(string)
+	currency, _ := m["currency"].(string)
+	issuer, _ := m["issuer"].(string)
+	return state.NewIssuedAmountFromDecimalString(valueStr, currency, issuer)
+}
+
+// amountToAmountMap converts a tx.Amount to a binary codec Amount map.
+func amountToAmountMap(amt tx.Amount) map[string]any {
+	return map[string]any{
+		"value":    amt.Value(),
+		"currency": amt.Currency,
+		"issuer":   amt.Issuer,
+	}
+}
+
+// getFieldUint16 extracts a uint16 from a decoded JSON map field.
+func getFieldUint16(fields map[string]any, name string) uint16 {
+	switch v := fields[name].(type) {
+	case float64:
+		return uint16(v)
+	case int:
+		return uint16(v)
+	case uint16:
+		return v
+	}
+	return 0
+}
+
+// getFieldUint32 extracts a uint32 from a decoded JSON map field.
+func getFieldUint32(fields map[string]any, name string) uint32 {
+	switch v := fields[name].(type) {
+	case float64:
+		return uint32(v)
+	case int:
+		return uint32(v)
+	case uint32:
+		return v
+	}
+	return 0
+}
+
+// parseHexUint64 parses a hex string to uint64.
+func parseHexUint64(s string) (uint64, error) {
+	s = strings.TrimPrefix(s, "0x")
+	s = strings.TrimPrefix(s, "0X")
+	if s == "" || s == "0" {
+		return 0, nil
+	}
+	var val uint64
+	_, err := fmt.Sscanf(s, "%x", &val)
+	return val, err
 }
 
 // createOrUpdateAMMTrustline creates or updates a trust line for an AMM asset.

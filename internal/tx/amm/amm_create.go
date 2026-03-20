@@ -230,10 +230,16 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Calculate initial LP token balance: sqrt(amount1 * amount2)
 	// Reference: rippled AMMCreate.cpp line 256
 	fixV1_3 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_3)
-	lpTokenBalance := calculateLPTokens(sortedAmount1, sortedAmount2, fixV1_3)
-	if lpTokenBalance.IsZero() {
+	lpTokenBalanceRaw := calculateLPTokens(sortedAmount1, sortedAmount2, fixV1_3)
+	if lpTokenBalanceRaw.IsZero() {
 		return tx.TecAMM_BALANCE
 	}
+	// Set the correct issue (currency + issuer) on the LP token balance.
+	// The LP token currency is derived from the asset pair and the issuer
+	// is the AMM pseudo-account.
+	lpTokenBalance := state.NewIssuedAmountFromValue(
+		lpTokenBalanceRaw.Mantissa(), lpTokenBalanceRaw.Exponent(),
+		lptCurrency, ammAccountAddr)
 
 	// Create the AMM pseudo-account.
 	// Reference: rippled View.cpp createPseudoAccount (line 1112-1133)

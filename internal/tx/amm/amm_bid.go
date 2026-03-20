@@ -172,7 +172,9 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		if bidMin.Currency != lptCurrency || bidMin.Issuer != ammAccountAddr {
 			return tx.TemBAD_AMM_TOKENS
 		}
-		if isGreater(bidMin, lpTokens) || isGreater(bidMin, lptAMMBalance) {
+		// Reference: rippled AMMBid.cpp preclaim line 146:
+		//   if (*bidMin > lpTokens || *bidMin >= lpTokensBalance)
+		if isGreater(bidMin, lpTokens) || isGreaterOrEqual(bidMin, lptAMMBalance) {
 			return tx.TecAMM_INVALID_TOKENS
 		}
 	}
@@ -182,7 +184,9 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		if bidMax.Currency != lptCurrency || bidMax.Issuer != ammAccountAddr {
 			return tx.TemBAD_AMM_TOKENS
 		}
-		if isGreater(bidMax, lpTokens) || isGreater(bidMax, lptAMMBalance) {
+		// Reference: rippled AMMBid.cpp preclaim line 163:
+		//   if (*bidMax > lpTokens || *bidMax >= lpTokensBalance)
+		if isGreater(bidMax, lpTokens) || isGreaterOrEqual(bidMax, lptAMMBalance) {
 			return tx.TecAMM_INVALID_TOKENS
 		}
 	}

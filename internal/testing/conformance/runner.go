@@ -208,6 +208,16 @@ type runner struct {
 	// found during prescan. This enables precise matching of fixture AMM
 	// addresses to specific AMM instances when multiple AMMs exist.
 	fixtureAMMPairs []ammPair
+
+	// fixtureUnfundedAddrs is the set of addresses that appear in fixture
+	// steps but are NOT in any fund step (and are not special addresses like
+	// genesis or ACCOUNT_ZERO). These are candidates for AMM pseudo-account
+	// addresses even when they don't appear with LP token currencies.
+	fixtureUnfundedAddrs map[string]bool
+
+	// fixtureSteps stores all fixture steps for use by registerAMMMapping
+	// when it needs to scan for unfunded AMM address candidates.
+	fixtureSteps []Step
 }
 
 // ammPair associates an LP token issuer with its currency code.
@@ -284,15 +294,17 @@ func RunFixture(t *testing.T, fixturePath string) {
 		}
 	}
 
-	fixtureAddrs, fixturePairs := prescanAMMAddresses(fixture.Steps)
+	fixtureAddrs, fixturePairs, unfundedAddrs := prescanAMMAddresses(fixture.Steps)
 	r := &runner{
-		t:               t,
-		accounts:        make(map[string]*jtx.Account),
-		enableTxQ:       isTxQSuite,
-		txqMinTxn:       minTxn,
-		ammAddrMap:      make(map[string]string),
-		fixtureAMMAddrs: fixtureAddrs,
-		fixtureAMMPairs: fixturePairs,
+		t:                    t,
+		accounts:             make(map[string]*jtx.Account),
+		enableTxQ:            isTxQSuite,
+		txqMinTxn:            minTxn,
+		ammAddrMap:           make(map[string]string),
+		fixtureAMMAddrs:      fixtureAddrs,
+		fixtureAMMPairs:      fixturePairs,
+		fixtureUnfundedAddrs: unfundedAddrs,
+		fixtureSteps:         fixture.Steps,
 	}
 
 	// If this fixture depends on a predecessor, build the dependency chain
@@ -347,6 +359,7 @@ func RunFixture(t *testing.T, fixturePath string) {
 				if acc, exists := r.accounts[step.Account]; exists {
 					if r.env.Exists(acc) {
 						r.accounts = make(map[string]*jtx.Account)
+						r.ammAddrMap = make(map[string]string)
 						r.setupEnv(r.lastEnvCfg)
 					}
 				}
@@ -904,6 +917,11 @@ func (r *runner) execEnvReset(stepIdx int, step Step) {
 	// Clear accounts (keep only master which is re-registered in setupEnv)
 	r.accounts = make(map[string]*jtx.Account)
 
+	// Clear AMM address mappings — the previous ledger's AMM accounts no
+	// longer exist in the new environment, and new AMMCreates will produce
+	// different pseudo-account addresses (different parentHash).
+	r.ammAddrMap = make(map[string]string)
+
 	// Create fresh environment
 	r.setupEnv(*step.Env)
 }
@@ -1395,31 +1413,103 @@ func parseDropsAmount(raw json.RawMessage) (uint64, error) {
 // prescanAMMAddresses scans fixture steps to find all issuer addresses
 // associated with LP token currencies (03-prefixed 40-char hex). These
 // addresses are AMM pseudo-account addresses that may differ between rippled
-// and goXRPL due to different parentHash values. Returns both the set of
-// addresses and the (issuer, currency) pairs for precise matching.
-func prescanAMMAddresses(steps []Step) (map[string]bool, []ammPair) {
+// and goXRPL due to different parentHash values. Returns the set of LP token
+// issuer addresses, the (issuer, currency) pairs for precise matching, and
+// the set of all addresses that appear in steps but are NOT funded (potential
+// AMM pseudo-account addresses that may not use LP token currencies).
+func prescanAMMAddresses(steps []Step) (map[string]bool, []ammPair, map[string]bool) {
 	addrs := make(map[string]bool)
 	var pairs []ammPair
 
-	// Pattern: find "issuer" values near "currency" values that match LP token format.
-	// We scan tx_json and trust limit_amount fields.
+	// Collect all addresses from all steps, and funded addresses separately.
+	allAddrs := make(map[string]bool)
+	fundedAddrs := make(map[string]bool)
+
+	// Special addresses that should never be remapped.
+	specialAddrs := map[string]bool{
+		"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh": true, // genesis/root
+		"rrrrrrrrrrrrrrrrrrrrrhoLvTp":         true, // ACCOUNT_ZERO
+		"rrrrrrrrrrrrrrrrrrrrBZbvji":          true, // ACCOUNT_ONE / NaN account
+	}
+
 	for _, step := range steps {
-		// Check tx_json
+		// Track funded addresses
+		if step.Op == "fund" && step.Address != "" {
+			fundedAddrs[step.Address] = true
+		}
+
+		// Check tx_json for LP token issuers and all addresses
 		if step.TxJSON != nil {
 			var txj map[string]interface{}
 			if json.Unmarshal(step.TxJSON, &txj) == nil {
 				collectLPTokenIssuers(txj, addrs, &pairs)
+				collectAllAddresses(txj, allAddrs)
 			}
 		}
 		// Check trust limit_amount
-		if step.LimitAmount != nil && isLPTokenCurrency(step.LimitAmount.Currency) {
+		if step.LimitAmount != nil {
 			if step.LimitAmount.Issuer != "" {
-				addrs[step.LimitAmount.Issuer] = true
-				pairs = append(pairs, ammPair{issuer: step.LimitAmount.Issuer, currency: step.LimitAmount.Currency})
+				allAddrs[step.LimitAmount.Issuer] = true
+			}
+			if isLPTokenCurrency(step.LimitAmount.Currency) {
+				if step.LimitAmount.Issuer != "" {
+					addrs[step.LimitAmount.Issuer] = true
+					pairs = append(pairs, ammPair{issuer: step.LimitAmount.Issuer, currency: step.LimitAmount.Currency})
+				}
 			}
 		}
 	}
-	return addrs, pairs
+
+	// Compute unfunded addresses: addresses that appear in steps but are
+	// not funded and not special. These are candidates for AMM pseudo-accounts.
+	unfunded := make(map[string]bool)
+	for addr := range allAddrs {
+		if !fundedAddrs[addr] && !specialAddrs[addr] {
+			unfunded[addr] = true
+		}
+	}
+
+	return addrs, pairs, unfunded
+}
+
+// collectAllAddresses recursively walks a JSON map to collect all string
+// values that look like XRPL addresses (start with 'r', 25-35 chars).
+func collectAllAddresses(obj map[string]interface{}, addrs map[string]bool) {
+	for key, v := range obj {
+		switch val := v.(type) {
+		case string:
+			// Only collect addresses from fields that would contain account
+			// addresses, not from arbitrary string fields like TxnSignature.
+			if isAddressField(key) && isXRPLAddress(val) {
+				addrs[val] = true
+			}
+		case map[string]interface{}:
+			collectAllAddresses(val, addrs)
+		case []interface{}:
+			for _, item := range val {
+				if m, ok := item.(map[string]interface{}); ok {
+					collectAllAddresses(m, addrs)
+				}
+			}
+		}
+	}
+}
+
+// isAddressField returns true if the JSON field name typically contains an
+// XRPL account address.
+func isAddressField(name string) bool {
+	switch name {
+	case "Account", "Destination", "issuer", "Issuer",
+		"Owner", "Authorize", "Unauthorize",
+		"RegularKey", "Target":
+		return true
+	}
+	return false
+}
+
+// isXRPLAddress returns true if s looks like an XRPL base58 address.
+func isXRPLAddress(s string) bool {
+	return len(s) >= 25 && len(s) <= 35 && s[0] == 'r'
 }
 
 // isLPTokenCurrency returns true if the currency is an LP token currency
@@ -1479,11 +1569,11 @@ func (r *runner) discoverAMMAddress(asset1, asset2 tx.Asset) string {
 // It extracts the asset pair from the AMMCreate tx_json, looks up the actual
 // AMM account, and maps fixture AMM addresses that were seen with this AMM's
 // LP token currency.
+//
+// If LP token currency matching fails (the AMM address only appears with
+// non-LP-token currencies, e.g., as a TrustSet issuer for USD), it falls
+// back to matching against unfunded addresses found in fixture steps.
 func (r *runner) registerAMMMapping(step Step) {
-	if len(r.fixtureAMMAddrs) == 0 {
-		return // no LP token addresses to remap
-	}
-
 	// Parse asset pair from tx_json
 	if step.TxJSON == nil {
 		return
@@ -1506,10 +1596,9 @@ func (r *runner) registerAMMMapping(step Step) {
 		return
 	}
 
-	// Find the fixture AMM address for this asset pair by matching the LP
-	// token currency. We compute the expected LP token currency from the
-	// asset pair and check which fixture address was associated with it.
+	// Phase 1: Try matching by LP token currency (precise matching).
 	lptCurrency := strings.ToUpper(amm.GenerateAMMLPTCurrency(asset1.Currency, asset2.Currency))
+	matched := false
 
 	for fixtureAddr := range r.fixtureAMMAddrs {
 		if _, alreadyMapped := r.ammAddrMap[fixtureAddr]; alreadyMapped {
@@ -1517,8 +1606,128 @@ func (r *runner) registerAMMMapping(step Step) {
 		}
 		if r.fixtureAddrSeenWithCurrency(fixtureAddr, lptCurrency) {
 			r.ammAddrMap[fixtureAddr] = actualAddr
+			matched = true
 		}
 	}
+
+	if matched {
+		return
+	}
+
+	// Phase 2: Fallback — match against unfunded addresses by proximity.
+	// Some fixtures reference the AMM pseudo-account with non-LP-token
+	// currencies (e.g., TrustSet issuer for USD, Payment Destination).
+	// These addresses won't appear in the LP token prescan.
+	//
+	// Strategy: find the unfunded, unmapped address that first appears
+	// in steps AFTER this AMMCreate step and BEFORE the next scope
+	// boundary (env_reset, next fund-after-tx, or next AMMCreate that
+	// creates a different AMM). The AMM address is only referenced after
+	// the AMMCreate that produces it.
+	candidate := r.findUnfundedAMMByProximity(step)
+	if candidate != "" {
+		r.ammAddrMap[candidate] = actualAddr
+		return
+	}
+
+	// Last resort: if there's exactly one unfunded unmapped address total,
+	// it must be this AMM account.
+	var remaining []string
+	for addr := range r.fixtureUnfundedAddrs {
+		if _, alreadyMapped := r.ammAddrMap[addr]; !alreadyMapped {
+			remaining = append(remaining, addr)
+		}
+	}
+	if len(remaining) == 1 {
+		r.ammAddrMap[remaining[0]] = actualAddr
+	}
+}
+
+// findUnfundedAMMByProximity finds the unfunded address that first appears
+// in fixture steps immediately after the given AMMCreate step. The AMM
+// pseudo-account address only appears AFTER the AMMCreate that creates it,
+// so the first unfunded address we encounter in the window between this
+// AMMCreate and the next scope boundary (env_reset or next AMMCreate) is
+// the AMM account.
+func (r *runner) findUnfundedAMMByProximity(ammCreateStep Step) string {
+	// Find the index of this AMMCreate step in the fixture
+	ammCreateIdx := -1
+	for i, s := range r.fixtureSteps {
+		if s.TxJSON != nil {
+			// Match by tx_json and tx_blob content identity
+			if string(s.TxJSON) == string(ammCreateStep.TxJSON) &&
+				s.TxBlob == ammCreateStep.TxBlob {
+				ammCreateIdx = i
+				break
+			}
+		}
+	}
+	if ammCreateIdx < 0 {
+		return ""
+	}
+
+	// Scan steps after the AMMCreate for unfunded addresses.
+	// Stop at the next scope boundary: env_reset, or the first fund step
+	// that comes after tx steps (implicit scope reset).
+	for i := ammCreateIdx + 1; i < len(r.fixtureSteps); i++ {
+		s := r.fixtureSteps[i]
+
+		// Stop at scope boundaries
+		if s.Op == "env_reset" {
+			break
+		}
+
+		// Check tx_json for unfunded addresses
+		if s.TxJSON != nil {
+			var txj map[string]interface{}
+			if json.Unmarshal(s.TxJSON, &txj) == nil {
+				addr := r.findFirstUnfundedAddr(txj)
+				if addr != "" {
+					return addr
+				}
+			}
+		}
+
+		// Check trust limit_amount
+		if s.LimitAmount != nil && s.LimitAmount.Issuer != "" {
+			addr := s.LimitAmount.Issuer
+			if r.fixtureUnfundedAddrs[addr] {
+				if _, alreadyMapped := r.ammAddrMap[addr]; !alreadyMapped {
+					return addr
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+// findFirstUnfundedAddr looks through a tx_json for the first address that
+// is unfunded and unmapped. It checks Destination and issuer fields.
+func (r *runner) findFirstUnfundedAddr(txj map[string]interface{}) string {
+	// Check Destination first (most common for Payment to AMM)
+	if dest, ok := txj["Destination"].(string); ok {
+		if r.fixtureUnfundedAddrs[dest] {
+			if _, alreadyMapped := r.ammAddrMap[dest]; !alreadyMapped {
+				return dest
+			}
+		}
+	}
+
+	// Check issuers in amount objects
+	for _, field := range []string{"Amount", "LimitAmount", "SendMax", "DeliverMin"} {
+		if amt, ok := txj[field].(map[string]interface{}); ok {
+			if issuer, ok := amt["issuer"].(string); ok && issuer != "" {
+				if r.fixtureUnfundedAddrs[issuer] {
+					if _, alreadyMapped := r.ammAddrMap[issuer]; !alreadyMapped {
+						return issuer
+					}
+				}
+			}
+		}
+	}
+
+	return ""
 }
 
 // fixtureAddrSeenWithCurrency checks if a fixture address was seen as the
