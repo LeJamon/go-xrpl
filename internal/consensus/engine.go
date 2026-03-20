@@ -141,6 +141,9 @@ type Adaptor interface {
 	// CloseTimeResolution returns the close time granularity.
 	CloseTimeResolution() time.Duration
 
+	// AdjustCloseTime adjusts the clock offset toward the network average.
+	AdjustCloseTime(rawCloseTimes CloseTimes)
+
 	// Status operations
 
 	// GetOperatingMode returns the node's overall operating mode.

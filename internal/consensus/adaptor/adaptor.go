@@ -70,6 +70,10 @@ type Adaptor struct {
 	// Operating mode
 	operatingMode consensus.OperatingMode
 
+	// Close time offset — adjusted each round toward network average.
+	// Matches rippled's timeKeeper().closeTime() offset.
+	closeOffset time.Duration
+
 	// Transaction set cache
 	txSetCache *TxSetCache
 
@@ -353,11 +357,52 @@ func (a *Adaptor) GetQuorum() int {
 // --- Time operations ---
 
 func (a *Adaptor) Now() time.Time {
-	return time.Now()
+	a.mu.RLock()
+	offset := a.closeOffset
+	a.mu.RUnlock()
+	return time.Now().Add(offset)
 }
 
 func (a *Adaptor) CloseTimeResolution() time.Duration {
-	return consensus.DefaultTiming().LedgerGranularity
+	l := a.ledgerService.GetClosedLedger()
+	if l != nil {
+		res := l.Header().CloseTimeResolution
+		if res >= 2 && res <= 120 {
+			return time.Duration(res) * time.Second
+		}
+	}
+	return 30 * time.Second // rippled default
+}
+
+// AdjustCloseTime computes the weighted average of all raw close times
+// and adjusts our clock offset toward the network. Matches rippled's
+// adjustCloseTime() in RCLConsensus.cpp:694-732.
+func (a *Adaptor) AdjustCloseTime(rawCloseTimes consensus.CloseTimes) {
+	if rawCloseTimes.Self.IsZero() {
+		return
+	}
+
+	totalSecs := rawCloseTimes.Self.Unix()
+	count := int64(1)
+	for t, v := range rawCloseTimes.Peers {
+		count += int64(v)
+		totalSecs += t.Unix() * int64(v)
+	}
+	avgSecs := (totalSecs + count/2) / count
+	avg := time.Unix(avgSecs, 0)
+
+	offset := avg.Sub(rawCloseTimes.Self)
+
+	a.mu.Lock()
+	a.closeOffset = offset
+	a.mu.Unlock()
+
+	if offset != 0 {
+		a.logger.Debug("adjusted close time offset",
+			"offset_ms", offset.Milliseconds(),
+			"peers", len(rawCloseTimes.Peers),
+		)
+	}
 }
 
 // --- Status operations ---

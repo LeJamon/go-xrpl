@@ -49,10 +49,27 @@ type Engine struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
+	// Close time consensus
+	haveCloseTimeConsensus  bool
+	closeTimeAvalancheState avalancheState
+	prevRoundTime           time.Duration
+	roundStartTime          time.Time
+
 	// Stats
 	roundCount     uint64
 	consensusCount uint64
 }
+
+// avalancheState tracks the close time voting threshold escalation.
+// Matches rippled's avalanche cutoffs in ConsensusParms.h.
+type avalancheState int
+
+const (
+	avalancheInit  avalancheState = iota // 50% threshold
+	avalancheMid                         // 65% threshold
+	avalancheLate                        // 70% threshold
+	avalancheStuck                       // 95% threshold
+)
 
 // Config holds RCL engine configuration.
 type Config struct {
@@ -148,6 +165,9 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing bool) error
 	e.disputes = make(map[consensus.TxID]*consensus.DisputedTx)
 	e.converged = false
 	e.ourTxSet = nil
+	e.haveCloseTimeConsensus = false
+	e.closeTimeAvalancheState = avalancheInit
+	e.roundStartTime = e.adaptor.Now()
 
 	// Set phase
 	e.setPhase(consensus.PhaseOpen)
@@ -183,6 +203,12 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal) error {
 	existing, exists := e.proposals[proposal.NodeID]
 	if !exists || proposal.Position > existing.Position {
 		e.proposals[proposal.NodeID] = proposal
+	}
+
+	// Record close time only from initial proposals (Position == 0),
+	// matching rippled's rawCloseTimes_.peers tracking (Consensus.h:825-830).
+	if proposal.Position == 0 && trusted {
+		e.state.CloseTimes.Peers[proposal.CloseTime]++
 	}
 
 	// Emit event
@@ -570,18 +596,26 @@ func (e *Engine) checkConvergence() {
 				e.adaptor.RequestTxSet(txSetID)
 			}
 
-			// Check if we have consensus
+			// Check if we have TX consensus
 			if count >= (trustedProposals*e.thresholds.MaxConsensusPct)/100 {
+				// Also need close time consensus before accepting
+				// (matching rippled Consensus.h:1406-1411)
+				if !e.haveCloseTimeConsensus {
+					return // Keep going until CT consensus is reached
+				}
 				e.acceptLedger(consensus.ResultSuccess)
 			}
 			return
 		}
 	}
 
-	// Update our position if proposing and not converged
+	// Update our position (tx set + close time) if proposing and not converged
 	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil {
 		e.updatePosition()
 	}
+
+	// Always update close time position during establish phase
+	e.updateCloseTimePosition()
 }
 
 // updatePosition updates our proposal position based on peer proposals.
@@ -722,6 +756,15 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		Timestamp:   e.adaptor.Now(),
 	})
 
+	// Adjust our clock toward the network's close time average.
+	// Matches rippled's adjustCloseTime() in RCLConsensus.cpp:694-732.
+	if e.mode == consensus.ModeProposing || e.mode == consensus.ModeObserving {
+		e.adaptor.AdjustCloseTime(e.state.CloseTimes)
+	}
+
+	// Track round time for convergePercent calculation
+	e.prevRoundTime = time.Since(e.roundStartTime)
+
 	// Update state for next round
 	e.prevLedger = newLedger
 	e.validations = make(map[consensus.NodeID]*consensus.Validation)
@@ -743,31 +786,128 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	}
 }
 
-// determineCloseTime determines the consensus close time.
-func (e *Engine) determineCloseTime() time.Time {
-	// Collect close times from trusted proposals
+// updateCloseTimePosition counts close time votes from peer proposals,
+// applies avalanche thresholds, and updates our proposal's close time
+// to match the consensus. Matches rippled's updateOurPositions() close
+// time logic (Consensus.h:1507-1634).
+func (e *Engine) updateCloseTimePosition() {
+	resolution := e.adaptor.CloseTimeResolution()
+
+	// Count close time votes from current trusted proposals, rounding
+	// each via roundCloseTime (matching rippled's asCloseTime).
+	closeTimeVotes := make(map[time.Time]int)
+	participants := 0
 	for nodeID, proposal := range e.proposals {
 		if e.adaptor.IsTrusted(nodeID) {
-			e.state.CloseTimes.Peers[proposal.CloseTime]++
+			rounded := roundCloseTime(proposal.CloseTime, resolution)
+			closeTimeVotes[rounded]++
+			participants++
 		}
 	}
 
-	// Find most popular close time
-	var bestTime time.Time
-	bestCount := 0
-	for t, count := range e.state.CloseTimes.Peers {
-		if count > bestCount {
-			bestTime = t
-			bestCount = count
+	if participants == 0 {
+		e.haveCloseTimeConsensus = true // trivially
+		return
+	}
+
+	// Add our own vote if proposing
+	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil {
+		ourRounded := roundCloseTime(e.state.OurPosition.CloseTime, resolution)
+		closeTimeVotes[ourRounded]++
+		participants++
+	}
+
+	// Determine threshold from avalanche state
+	neededWeight := e.getCloseTimeNeededWeight()
+	threshVote := participantsNeeded(participants, neededWeight)
+	threshConsensus := participantsNeeded(participants, 75) // avCT_CONSENSUS_PCT
+
+	// Find winning close time
+	var consensusCloseTime time.Time
+	e.haveCloseTimeConsensus = false
+	for t, count := range closeTimeVotes {
+		if count >= threshVote {
+			consensusCloseTime = t
+			threshVote = count // raise bar to pick the MOST popular
+			if count >= threshConsensus {
+				e.haveCloseTimeConsensus = true
+			}
 		}
 	}
 
-	// If no consensus on time, use our time
-	if bestCount == 0 {
-		return e.state.CloseTimes.Self
+	// Update our proposal if close time changed
+	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil && !consensusCloseTime.IsZero() {
+		ourRounded := roundCloseTime(e.state.OurPosition.CloseTime, resolution)
+		if consensusCloseTime != ourRounded {
+			e.state.OurPosition.CloseTime = consensusCloseTime
+			e.state.OurPosition.Position++
+			e.state.OurPosition.Timestamp = e.adaptor.Now()
+			if err := e.adaptor.SignProposal(e.state.OurPosition); err == nil {
+				e.adaptor.BroadcastProposal(e.state.OurPosition)
+			}
+		}
 	}
+}
 
-	return bestTime
+// getCloseTimeNeededWeight returns the minimum vote percentage for close time
+// based on the avalanche state machine. Matches rippled's getNeededWeight()
+// in ConsensusParms.h:172-199.
+func (e *Engine) getCloseTimeNeededWeight() int {
+	pct := e.convergePercent()
+	switch e.closeTimeAvalancheState {
+	case avalancheInit:
+		if pct >= 0 {
+			e.closeTimeAvalancheState = avalancheMid
+		}
+		return 50
+	case avalancheMid:
+		if pct >= 50 {
+			e.closeTimeAvalancheState = avalancheLate
+		}
+		return 65
+	case avalancheLate:
+		if pct >= 85 {
+			e.closeTimeAvalancheState = avalancheStuck
+		}
+		return 70
+	case avalancheStuck:
+		return 95
+	}
+	return 50
+}
+
+// convergePercent returns how far through the establish phase we are,
+// as a percentage of the previous round time (min 5s).
+// Matches rippled's convergePercent_ calculation.
+func (e *Engine) convergePercent() int {
+	elapsed := time.Since(e.roundStartTime)
+	prevRound := e.prevRoundTime
+	if prevRound < 5*time.Second {
+		prevRound = 5 * time.Second
+	}
+	return int(elapsed * 100 / prevRound)
+}
+
+// participantsNeeded computes the minimum number of participants required
+// to meet a given percentage threshold. Matches rippled's participantsNeeded().
+func participantsNeeded(participants, percent int) int {
+	result := (participants*percent + percent/2) / 100
+	if result == 0 {
+		return 1
+	}
+	return result
+}
+
+// determineCloseTime returns the consensus close time.
+// Uses the close time that was converged on by updateCloseTimePosition().
+// If we have a consensus position with a non-zero close time, use it.
+// Otherwise fall back to our own close time.
+func (e *Engine) determineCloseTime() time.Time {
+	// If we have a position (from updateCloseTimePosition convergence), use its close time.
+	if e.state.OurPosition != nil && !e.state.OurPosition.CloseTime.IsZero() {
+		return e.state.OurPosition.CloseTime
+	}
+	return e.state.CloseTimes.Self
 }
 
 // sendValidation creates and broadcasts a validation.
