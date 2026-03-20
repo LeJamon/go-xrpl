@@ -191,6 +191,18 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	// Reject proposals during accepted phase (between rounds).
+	// Matches rippled Consensus.h:769-770.
+	if e.phase == consensus.PhaseAccepted {
+		return nil
+	}
+
+	// Reject proposals referencing a different previous ledger.
+	// Matches rippled Consensus.h:776-781.
+	if e.prevLedger != nil && proposal.PreviousLedger != e.prevLedger.ID() {
+		return nil
+	}
+
 	// Verify signature
 	if err := e.adaptor.VerifyProposal(proposal); err != nil {
 		return fmt.Errorf("invalid proposal signature: %w", err)
