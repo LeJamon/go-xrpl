@@ -848,11 +848,14 @@ func (r *runner) execTx(stepIdx int, step Step) {
 			if acc != nil && r.env.Exists(acc) {
 				currentSeq := r.env.Seq(acc)
 				targetSeq := *common.Sequence
-				for currentSeq < targetSeq {
-					r.env.BumpSequenceAndDeductFee(acc)
-					currentSeq++
+				const maxSeqBump = 50
+				if targetSeq > currentSeq && targetSeq-currentSeq <= maxSeqBump {
+					for currentSeq < targetSeq {
+						r.env.BumpSequenceAndDeductFee(acc)
+						currentSeq++
+					}
+					result = r.env.Submit(parsed)
 				}
-				result = r.env.Submit(parsed)
 			}
 		}
 	}

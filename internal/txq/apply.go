@@ -1,11 +1,13 @@
 package txq
 
 import (
+	"sort"
 	"strconv"
 
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/account"
 	"github.com/LeJamon/goXRPLd/internal/tx/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx/ticket"
 )
 
 // ApplyResult represents the result of trying to apply or queue a transaction.
@@ -430,13 +432,9 @@ func (q *TxQ) tryClearAccountQueue(
 	}
 
 	// Sort preceding by SeqProxy (ascending order for application)
-	for i := 0; i < len(preceding)-1; i++ {
-		for j := i + 1; j < len(preceding); j++ {
-			if preceding[j].SeqProxy.Less(preceding[i].SeqProxy) {
-				preceding[i], preceding[j] = preceding[j], preceding[i]
-			}
-		}
-	}
+	sort.Slice(preceding, func(i, j int) bool {
+		return preceding[i].SeqProxy.Less(preceding[j].SeqProxy)
+	})
 
 	dist := uint32(len(preceding))
 
@@ -461,27 +459,37 @@ func (q *TxQ) tryClearAccountQueue(
 	}
 
 	// Total fee is sufficient. Try to apply all preceding transactions in order.
+	// TODO: use sandbox view for full atomicity (matching rippled's OpenView).
+	// Currently, successfully-applied preceding txns cannot be rolled back if a
+	// later one fails. We track applied candidates to keep the queue consistent.
+	var applied []*Candidate
 	for _, c := range preceding {
-		result, applied := ctx.ApplyTransaction(c.Txn)
+		result, ok := ctx.ApplyTransaction(c.Txn)
 		c.RetriesRemaining--
 		c.LastResult = result
 
 		if result == tx.TefNO_TICKET {
 			// Ticket was already consumed; treat as success for clearing purposes.
+			applied = append(applied, c)
 			continue
 		}
 
-		if !applied {
-			// A preceding transaction failed to apply. Abort the clear attempt.
+		if !ok {
+			// A preceding transaction failed to apply. Erase already-applied
+			// candidates from the queue to stay consistent with ledger state.
+			for _, a := range applied {
+				q.erase(a)
+			}
 			return nil
 		}
+		applied = append(applied, c)
 	}
 
 	// All preceding transactions applied. Now apply the new transaction.
-	result, applied := ctx.ApplyTransaction(txn)
-	if applied {
+	result, ok := ctx.ApplyTransaction(txn)
+	if ok {
 		// Remove all applied preceding transactions from the queue.
-		for _, c := range preceding {
+		for _, c := range applied {
 			q.erase(c)
 		}
 		// Also remove the replacement if one exists at the new tx's seqProxy.
@@ -492,8 +500,8 @@ func (q *TxQ) tryClearAccountQueue(
 	}
 
 	// New transaction failed but preceding ones were applied.
-	// Remove the applied preceding transactions.
-	for _, c := range preceding {
+	// Remove the applied preceding transactions from the queue.
+	for _, c := range applied {
 		q.erase(c)
 	}
 	return &ApplyResult{Result: result, Applied: false}
@@ -545,7 +553,11 @@ func computeConsequences(txn tx.Transaction, seqProxy SeqProxy) TxConsequences {
 		cons.FollowingSeq = seqProxy
 	} else {
 		nextSeq := seqProxy.Value + 1
-		// TODO: Handle TicketCreate which advances by ticket count
+		// TicketCreate consumes TicketCount additional sequences.
+		// Reference: TicketCreate.cpp makeTxConsequences
+		if tc, ok := txn.(*ticket.TicketCreate); ok && tc.TicketCount > 0 {
+			nextSeq = seqProxy.Value + 1 + tc.TicketCount
+		}
 		cons.FollowingSeq = NewSeqProxySequence(nextSeq)
 	}
 
