@@ -116,6 +116,12 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecAMM_INVALID_TOKENS
 	}
 
+	// Check fixInnerObjTemplate: AuctionSlot must exist when amendment is enabled
+	// Reference: rippled AMMVote.cpp lines 202-205
+	if amm.AuctionSlot == nil && ctx.Rules().Enabled(amendment.FeatureFixInnerObjTemplate) {
+		return tx.TefEXCEPTION
+	}
+
 	feeNew := a.TradingFee
 
 	// Track minimum token holder for potential replacement

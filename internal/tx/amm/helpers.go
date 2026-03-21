@@ -332,6 +332,23 @@ func feeMultHalf(tfee uint16) tx.Amount {
 	return subFromOne(halfFee)
 }
 
+// numberPower returns f^n using exponentiation by squaring.
+// Reference: rippled Number.cpp power(Number const& f, unsigned n)
+func numberPower(f tx.Amount, n int) tx.Amount {
+	if n == 0 {
+		return oneAmount()
+	}
+	if n == 1 {
+		return f
+	}
+	r := numberPower(f, n/2)
+	r = r.Mul(r, false)
+	if n%2 != 0 {
+		r = r.Mul(f, false)
+	}
+	return r
+}
+
 // oneAmount returns the Amount value 1.0 as an IOU for arithmetic.
 func oneAmount() tx.Amount {
 	return state.NewIssuedAmountFromValue(1e15, -15, "", "")
@@ -422,10 +439,14 @@ func toSTAmount(original, result tx.Amount) tx.Amount {
 }
 
 // toSTAmountIssue converts a result to the issue of the given amount.
-// Reference: rippled's toSTAmount(issue, number)
+// For XRP, uses to_nearest rounding (matching rippled's toSTAmount default).
+// Reference: rippled AmountConversions.h toSTAmount(issue, number, mode=getround())
 func toSTAmountIssue(amt tx.Amount, result tx.Amount) tx.Amount {
 	if amt.IsNative() {
-		return state.NewXRPAmountFromInt(iouToDrops(result))
+		g := state.NewNumberRoundModeGuard(state.RoundToNearest)
+		drops := iouToDropsRounded(result)
+		g.Release()
+		return state.NewXRPAmountFromInt(drops)
 	}
 	return state.NewIssuedAmountFromValue(result.Mantissa(), result.Exponent(),
 		amt.Currency, amt.Issuer)

@@ -146,6 +146,20 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecAMM_EMPTY
 	}
 
+	// Validate AuthAccounts exist
+	// Reference: rippled AMMBid.cpp preclaim lines 116-126
+	for _, authAcct := range a.AuthAccounts {
+		authAccountID, err := state.DecodeAccountID(authAcct.AuthAccount.Account)
+		if err != nil {
+			return tx.TerNO_ACCOUNT
+		}
+		authKey := keylet.Account(authAccountID)
+		exists, _ := ctx.View.Exists(authKey)
+		if !exists {
+			return tx.TerNO_ACCOUNT
+		}
+	}
+
 	// Get bidder's LP token balance from trustline
 	// Reference: rippled AMMBid.cpp preclaim line 129
 	lpTokens := ammLPHolds(ctx.View, amm, accountID)
@@ -208,11 +222,16 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Calculate discounted fee
 	_ = amm.TradingFee / uint16(auctionSlotDiscountedFee) // discountedFee for future use
 
-	// Get current time (simplified - would use ledger close time)
-	currentTime := uint32(0) // Would be ctx.View.info().parentCloseTime
+	// Get current time from parent ledger close time
+	// Reference: rippled AMMBid.cpp:192 — view.info().parentCloseTime
+	currentTime := ctx.Config.ParentCloseTime
 
 	// Initialize auction slot if needed
+	// Reference: rippled AMMBid.cpp lines 192-203 — fixInnerObjTemplate enforcement
 	if amm.AuctionSlot == nil {
+		if ctx.Rules().Enabled(amendment.FeatureFixInnerObjTemplate) {
+			return tx.TefEXCEPTION
+		}
 		amm.AuctionSlot = &AuctionSlotData{
 			AuthAccounts: make([][20]byte, 0),
 			Price:        zeroAmount(tx.Asset{}),
@@ -268,10 +287,10 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 			// First interval: price = pricePurchased * 1.05 + minSlotPrice
 			computedPrice, _ = price1p05.Add(minSlotPrice)
 		} else {
-			// Other intervals: price = pricePurchased * 1.05 * (1 - fractionUsed^60) + minSlotPrice
-			// For simplicity, approximate with linear decay: price = pricePurchased * 1.05 * fractionRemaining + minSlotPrice
-			// This is a simplification - a full implementation would use proper power function
-			decayFactor := fractionRemaining
+			// Other intervals: price = pricePurchased * 1.05 * (1 - power(fractionUsed, 60)) + minSlotPrice
+			// Reference: rippled AMMBid.cpp line 336
+			fractionUsedPow60 := numberPower(fractionUsed, 60)
+			decayFactor, _ := oneAmount().Sub(fractionUsedPow60)
 			decayedPrice := price1p05.Mul(decayFactor, false)
 			computedPrice, _ = decayedPrice.Add(minSlotPrice)
 		}

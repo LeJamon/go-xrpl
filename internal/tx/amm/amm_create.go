@@ -95,6 +95,13 @@ func (a *AMMCreate) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(a)
 }
 
+// CalculateBaseFee returns the minimum fee for AMMCreate transactions.
+// AMMCreate requires one owner reserve as the fee (not the standard base fee).
+// Reference: rippled AMMCreate.cpp calculateBaseFee — returns view.fees().increment
+func (a *AMMCreate) CalculateBaseFee(_ tx.LedgerView, config tx.EngineConfig) uint64 {
+	return config.ReserveIncrement
+}
+
 // RequiredAmendments returns the amendments required for this transaction type
 func (a *AMMCreate) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
@@ -151,8 +158,13 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Check reserve for LP token trustline
 	// Reference: rippled AMMCreate.cpp line 145-151
-	// The account needs enough XRP for the reserve after creating the LP trustline
-	xrpLiquid := xrpLiquidBalanceWithReserves(ctx.View, accountID, 1, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+	// In rippled, this check runs in preclaim (before fee deduction). In our engine,
+	// Apply() runs after the fee is deducted. Use PriorBalance to match rippled's
+	// preclaim behavior.
+	priorBalance := ctx.PriorBalance(a.GetCommon().Fee)
+	ownerCount := ctx.Account.OwnerCount
+	reserveNeeded := ctx.Config.ReserveBase + uint64(ownerCount+1)*ctx.Config.ReserveIncrement
+	xrpLiquid := int64(priorBalance) - int64(reserveNeeded)
 	if xrpLiquid <= 0 {
 		return TecINSUF_RESERVE_LINE
 	}
@@ -551,29 +563,6 @@ func noDefaultRipple(view tx.LedgerView, asset tx.Asset) bool {
 
 	// Return true if DefaultRipple is NOT set (problem)
 	return (issuerAccount.Flags & state.LsfDefaultRipple) == 0
-}
-
-// xrpLiquidBalanceWithReserves returns XRP available after reserves, using explicit reserve values.
-// Reference: rippled xrpLiquid() — reads from view.fees()
-func xrpLiquidBalanceWithReserves(view tx.LedgerView, accountID [20]byte, additionalOwnerCount int, reserveBase, reserveIncrement uint64) int64 {
-	accountKey := keylet.Account(accountID)
-	data, err := view.Read(accountKey)
-	if err != nil || data == nil {
-		return 0
-	}
-
-	account, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return 0
-	}
-
-	totalReserve := int64(reserveBase) + int64(reserveIncrement)*int64(account.OwnerCount+uint32(additionalOwnerCount))
-
-	liquid := int64(account.Balance) - totalReserve
-	if liquid < 0 {
-		return 0
-	}
-	return liquid
 }
 
 // insufficientBalance checks if the account has insufficient balance for the amount.
