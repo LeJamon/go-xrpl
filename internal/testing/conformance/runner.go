@@ -225,11 +225,15 @@ type runner struct {
 	// These cannot be detected from the fixture data alone.
 	timeLeapSteps map[int]bool
 
-	// pendingTicketRetries stores transactions that returned terPRE_TICKET
-	// (ticket sequence not yet available). In rippled, these are queued in
-	// the TxQ and automatically retried when a TicketCreate produces the
-	// needed ticket. The runner replays them after each successful tx step.
-	pendingTicketRetries []tx.Transaction
+	// pendingHeld stores transactions that returned terPRE_TICKET or
+	// terPRE_SEQ. In rippled, these are "held" and retried immediately
+	// after each subsequent successful transaction submission.
+	pendingHeld []tx.Transaction
+
+	// pendingQueued stores transactions that returned other ter* results
+	// (e.g., terNO_RIPPLE). In rippled, these are queued in the TxQ and
+	// retried during TxQ::accept() on ledger close.
+	pendingQueued []tx.Transaction
 
 	// initFee stores the post-initFee fee configuration for fixtures that
 	// use rippled's initFee() pattern. Applied after the initial close sequence.
@@ -782,6 +786,15 @@ func (r *runner) execClose(stepIdx int, step Step) {
 		r.env.SetBaseFee(r.initFee.BaseFee)
 		r.env.SetReserves(r.initFee.ReserveBase, r.initFee.ReserveIncrement)
 	}
+
+	// Retry TxQ-queued transactions on close. In rippled, TxQ::accept()
+	// retries queued transactions during ledger close. A queued tx may
+	// now get a tec result (e.g., tecNO_ENTRY after a check is canceled),
+	// which charges the fee even though the tx doesn't fully apply.
+	// Skip for TxQ-enabled suites — the real TxQ handles retries there.
+	if !r.enableTxQ {
+		r.retryQueuedTxs()
+	}
 }
 
 // execTx handles a "tx" step.
@@ -895,11 +908,21 @@ func (r *runner) execTx(stepIdx int, step Step) {
 		return
 	}
 
-	// Queue terPRE_TICKET transactions for later retry. In rippled, these
-	// are held in the TxQ and automatically retried when a subsequent
-	// TicketCreate produces the needed ticket sequence.
-	if result.Code == "terPRE_TICKET" {
-		r.pendingTicketRetries = append(r.pendingTicketRetries, parsed)
+	// Queue ter* transactions for later retry. Skip for TxQ-enabled suites
+	// where the real TxQ handles queuing and retries.
+	//
+	// - terPRE_TICKET / terPRE_SEQ: "held" transactions retried after
+	//   each successful tx submission (rippled's held-tx mechanism).
+	//
+	// - ter* codes from actual apply (terNO_RIPPLE, etc.): queued and
+	//   retried during ledger close (matching TxQ::accept()).
+	//   terNO_ACCOUNT is excluded — returned early from TxQ::apply().
+	if !r.enableTxQ {
+		if result.Code == "terPRE_TICKET" || result.Code == "terPRE_SEQ" {
+			r.pendingHeld = append(r.pendingHeld, parsed)
+		} else if strings.HasPrefix(result.Code, "ter") && result.Code != "terNO_ACCOUNT" {
+			r.pendingQueued = append(r.pendingQueued, parsed)
+		}
 	}
 
 	// After a successful AMMCreate, discover the actual AMM account address
@@ -913,13 +936,11 @@ func (r *runner) execTx(stepIdx int, step Step) {
 		}
 	}
 
-	// After a successful transaction, retry any pending terPRE_TICKET
-	// transactions. In rippled, the TxQ retries queued transactions after
-	// each new transaction is applied to the open ledger. This matters for
-	// TicketCreate: the newly created ticket may satisfy a previously
-	// queued transaction that was waiting for that ticket sequence.
+	// After a successful transaction, retry held transactions (terPRE_TICKET,
+	// terPRE_SEQ). In rippled, these are retried immediately after each
+	// successful submission — not via the TxQ, but through a held-tx path.
 	if result.Success {
-		r.retryPendingTicketTxs()
+		r.retryHeldTxs()
 	}
 
 	// Assert post-state only for applied results (tesSUCCESS or tec).
@@ -935,25 +956,39 @@ func (r *runner) execTx(stepIdx int, step Step) {
 	}
 }
 
-// retryPendingTicketTxs retries any transactions that previously returned
-// terPRE_TICKET. In rippled, the TxQ automatically retries queued
-// transactions after each new transaction is applied to the open ledger.
-// When a TicketCreate produces the ticket that a queued transaction was
-// waiting for, the retry succeeds and the ticket is consumed.
-func (r *runner) retryPendingTicketTxs() {
-	if len(r.pendingTicketRetries) == 0 {
+// retryHeldTxs retries transactions that returned terPRE_TICKET or
+// terPRE_SEQ. In rippled, these are retried immediately after each
+// successful submission through a held-transaction mechanism (not the TxQ).
+func (r *runner) retryHeldTxs() {
+	if len(r.pendingHeld) == 0 {
 		return
 	}
-	remaining := r.pendingTicketRetries[:0]
-	for _, txn := range r.pendingTicketRetries {
+	remaining := r.pendingHeld[:0]
+	for _, txn := range r.pendingHeld {
 		result := r.env.Submit(txn)
-		if result.Code == "terPRE_TICKET" {
-			// Still not ready — keep in the queue for later retry.
+		if result.Code == "terPRE_TICKET" || result.Code == "terPRE_SEQ" {
 			remaining = append(remaining, txn)
 		}
-		// Successfully applied or failed with a different error — drop it.
 	}
-	r.pendingTicketRetries = remaining
+	r.pendingHeld = remaining
+}
+
+// retryQueuedTxs retries TxQ-queued transactions on ledger close.
+// In rippled, TxQ::accept() processes queued ter* transactions during
+// close. Retries that still return ter* stay queued; tec results charge
+// the fee; tef/tem results are dropped.
+func (r *runner) retryQueuedTxs() {
+	if len(r.pendingQueued) == 0 {
+		return
+	}
+	remaining := r.pendingQueued[:0]
+	for _, txn := range r.pendingQueued {
+		result := r.env.Submit(txn)
+		if strings.HasPrefix(result.Code, "ter") {
+			remaining = append(remaining, txn)
+		}
+	}
+	r.pendingQueued = remaining
 }
 
 // execRetryBatch handles a batch of consecutive "retry" steps. Retry ops
