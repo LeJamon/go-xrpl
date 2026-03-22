@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	tx "github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/credential"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
@@ -63,37 +64,15 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// requireAuth: check sender is authorized
-	// Reference: rippled Payment.cpp:518-520
-	if issuance.Flags&entry.LsfMPTRequireAuth != 0 && ctx.AccountID != issuerID {
-		senderTokenKey := keylet.MPToken(issuanceKey.Key, ctx.AccountID)
-		senderTokenRaw, err := ctx.View.Read(senderTokenKey)
-		if err != nil || senderTokenRaw == nil {
-			return tx.TecNO_AUTH
-		}
-		senderToken, err := state.ParseMPToken(senderTokenRaw)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		if senderToken.Flags&entry.LsfMPTAuthorized == 0 {
-			return tx.TecNO_AUTH
-		}
+	// Reference: rippled View.cpp requireAuth() for MPTIssue + Payment.cpp:518-520
+	if res := requireMPTAuth(ctx, issuance, issuanceKey, ctx.AccountID, issuerID); res != tx.TesSUCCESS {
+		return res
 	}
 
 	// requireAuth: check destination is authorized
-	// Reference: rippled Payment.cpp:522-524
-	if issuance.Flags&entry.LsfMPTRequireAuth != 0 && destAccountID != issuerID {
-		destTokenKey := keylet.MPToken(issuanceKey.Key, destAccountID)
-		destTokenRaw, err := ctx.View.Read(destTokenKey)
-		if err != nil || destTokenRaw == nil {
-			return tx.TecNO_AUTH
-		}
-		destToken, err := state.ParseMPToken(destTokenRaw)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		if destToken.Flags&entry.LsfMPTAuthorized == 0 {
-			return tx.TecNO_AUTH
-		}
+	// Reference: rippled View.cpp requireAuth() for MPTIssue + Payment.cpp:522-524
+	if res := requireMPTAuth(ctx, issuance, issuanceKey, destAccountID, issuerID); res != tx.TesSUCCESS {
+		return res
 	}
 
 	// Verify deposit preauth
@@ -414,4 +393,103 @@ func mptAmountToUint64(a tx.Amount) uint64 {
 		exp++
 	}
 	return result
+}
+
+// requireMPTAuth checks if an account is authorized for an MPToken issuance.
+// Reference: rippled View.cpp requireAuth() for MPTIssue (lines 2436-2519)
+func requireMPTAuth(ctx *tx.ApplyContext, issuance *state.MPTokenIssuanceData,
+	issuanceKey keylet.Keylet, accountID [20]byte, issuerID [20]byte) tx.Result {
+	// Issuer is always authorized
+	if accountID == issuerID {
+		return tx.TesSUCCESS
+	}
+
+	// Read the MPToken for this account
+	tokenKey := keylet.MPToken(issuanceKey.Key, accountID)
+	tokenRaw, _ := ctx.View.Read(tokenKey)
+	var token *state.MPTokenData
+	if tokenRaw != nil {
+		token, _ = state.ParseMPToken(tokenRaw)
+	}
+
+	// If no MPToken exists, fail (StrongAuth/Legacy path)
+	if token == nil && issuance.Flags&entry.LsfMPTRequireAuth != 0 {
+		// Check domain-based credential authorization first
+		if issuance.DomainID != nil {
+			domainID, err := hex.DecodeString(*issuance.DomainID)
+			if err == nil && len(domainID) == 32 {
+				var did [32]byte
+				copy(did[:], domainID)
+				res := validDomain(ctx, did, accountID)
+				return res // No token → return domain result directly
+			}
+		}
+		return tx.TecNO_AUTH
+	}
+
+	// Check domain-based credential authorization
+	// Reference: rippled View.cpp lines 2494-2511
+	if issuance.DomainID != nil {
+		domainID, err := hex.DecodeString(*issuance.DomainID)
+		if err == nil && len(domainID) == 32 {
+			var did [32]byte
+			copy(did[:], domainID)
+			res := validDomain(ctx, did, accountID)
+			if res == tx.TesSUCCESS {
+				return tx.TesSUCCESS // Authorized by credentials
+			}
+			if token == nil {
+				return res // No token and credentials invalid
+			}
+			// Token exists but credentials invalid — fall through to classic check
+		}
+	}
+
+	// Classic authorization check
+	if issuance.Flags&entry.LsfMPTRequireAuth != 0 {
+		if token == nil || token.Flags&entry.LsfMPTAuthorized == 0 {
+			return tx.TecNO_AUTH
+		}
+	}
+
+	return tx.TesSUCCESS
+}
+
+// validDomain checks if an account has valid credentials for a permissioned domain.
+// Reference: rippled CredentialHelpers.cpp credentials::validDomain()
+func validDomain(ctx *tx.ApplyContext, domainID [32]byte, account [20]byte) tx.Result {
+	domKey := keylet.PermissionedDomainByID(domainID)
+	domData, err := ctx.View.Read(domKey)
+	if err != nil || domData == nil {
+		return tx.TecOBJECT_NOT_FOUND
+	}
+	pd, err := state.ParsePermissionedDomain(domData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	foundExpired := false
+	for _, c := range pd.AcceptedCredentials {
+		credKey := keylet.Credential(account, c.Issuer, c.CredentialType)
+		credData, err := ctx.View.Read(credKey)
+		if err != nil || credData == nil {
+			continue
+		}
+		cred, err := credential.ParseCredentialEntry(credData)
+		if err != nil {
+			continue
+		}
+		if credential.CheckCredentialExpired(cred, ctx.Config.ParentCloseTime) {
+			foundExpired = true
+			continue
+		}
+		if cred.IsAccepted() {
+			return tx.TesSUCCESS
+		}
+	}
+
+	if foundExpired {
+		return tx.TecEXPIRED
+	}
+	return tx.TecNO_AUTH
 }
