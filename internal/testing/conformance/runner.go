@@ -238,6 +238,16 @@ type runner struct {
 	// initFee stores the post-initFee fee configuration for fixtures that
 	// use rippled's initFee() pattern. Applied after the initial close sequence.
 	initFee *initFeeConfig
+
+	// feeVote stores the fee-vote configuration for fixtures that use
+	// rippled's fee-voting pattern. Applied when the close step's
+	// ledger_seq matches the configured flag ledger sequence.
+	feeVote *feeVoteConfig
+
+	// feeVoteApplied tracks whether the fee-vote reserve reduction has
+	// already been applied in the current scope. Reset on env_reset and
+	// scope boundaries.
+	feeVoteApplied bool
 }
 
 // ammPair associates an LP token issuer with its currency code.
@@ -307,6 +317,25 @@ var txqInitFeeLookup = map[string]initFeeConfig{
 	"In-flight balance checks":  {BaseFee: 10, ReserveBase: 200, ReserveIncrement: 50, ApplyAfterStep: 257},
 	"unexpected balance change": {BaseFee: 10, ReserveBase: 200, ReserveIncrement: 50, ApplyAfterStep: 257},
 	"Zero reference fee":        {BaseFee: 0, ReserveBase: 0, ReserveIncrement: 0, ApplyAfterStep: 257},
+}
+
+// feeVoteConfig describes the post-vote fee configuration for fixtures that
+// use rippled's fee-voting pattern (many consecutive ledger closes that
+// trigger a fee vote at the flag ledger). Applied when the close step's
+// ledger_seq matches FlagLedgerSeq.
+type feeVoteConfig struct {
+	BaseFee          uint64
+	ReserveBase      uint64
+	ReserveIncrement uint64
+	FlagLedgerSeq    uint32 // The ledger_seq at which fee vote takes effect
+}
+
+// feeVoteLookup maps (suite, testcase) keys to fee-vote configurations.
+// These fixtures have long runs of consecutive closes that trigger rippled's
+// fee-voting mechanism, reducing reserves from genesis values (200 XRP) to
+// test config values (200 drops).
+var feeVoteLookup = map[string]feeVoteConfig{
+	"ripple.app.PayChan/Account Delete": {BaseFee: 10, ReserveBase: 200, ReserveIncrement: 50, FlagLedgerSeq: 256},
 }
 
 // txqTimeLeapLookup maps TxQ fixture test case names to the step indices
@@ -379,6 +408,13 @@ func RunFixture(t *testing.T, fixturePath string) {
 		}
 	}
 
+	// Look up fee-vote config for this fixture
+	var feeVote *feeVoteConfig
+	feeVoteKey := fixture.Suite + "/" + fixture.Testcase
+	if cfg, ok := feeVoteLookup[feeVoteKey]; ok {
+		feeVote = &cfg
+	}
+
 	r := &runner{
 		t:                    t,
 		accounts:             make(map[string]*jtx.Account),
@@ -391,6 +427,7 @@ func RunFixture(t *testing.T, fixturePath string) {
 		fixtureSteps:         fixture.Steps,
 		timeLeapSteps:        timeLeapSet,
 		initFee:              initFee,
+		feeVote:              feeVote,
 	}
 
 	// If this fixture depends on a predecessor, build the dependency chain
@@ -446,6 +483,7 @@ func RunFixture(t *testing.T, fixturePath string) {
 					if r.env.Exists(acc) {
 						r.accounts = make(map[string]*jtx.Account)
 						r.ammAddrMap = make(map[string]string)
+						r.feeVoteApplied = false
 						r.setupEnv(r.lastEnvCfg)
 					}
 				}
@@ -824,6 +862,20 @@ func (r *runner) execClose(stepIdx int, step Step) {
 		r.env.SetReserves(r.initFee.ReserveBase, r.initFee.ReserveIncrement)
 	}
 
+	// Apply fee-vote reserve reduction for fixtures that use rippled's
+	// fee-voting pattern. In these fixtures, many consecutive ledger closes
+	// trigger a fee vote that reduces reserves from genesis values (200 XRP)
+	// to test config values (200 drops). The reduction is applied at the
+	// flag ledger (ledger_seq % 256 == 0). TxQ suites use the explicit
+	// initFee mechanism instead.
+	if r.feeVote != nil && !r.feeVoteApplied {
+		if step.LedgerSeq != nil && *step.LedgerSeq == r.feeVote.FlagLedgerSeq {
+			r.env.SetBaseFee(r.feeVote.BaseFee)
+			r.env.SetReserves(r.feeVote.ReserveBase, r.feeVote.ReserveIncrement)
+			r.feeVoteApplied = true
+		}
+	}
+
 	// Retry TxQ-queued transactions on close. In rippled, TxQ::accept()
 	// retries queued transactions during ledger close. A queued tx may
 	// now get a tec result (e.g., tecNO_ENTRY after a check is canceled),
@@ -1150,6 +1202,9 @@ func (r *runner) execEnvReset(stepIdx int, step Step) {
 	// longer exist in the new environment, and new AMMCreates will produce
 	// different pseudo-account addresses (different parentHash).
 	r.ammAddrMap = make(map[string]string)
+
+	// Reset fee-vote tracking for the new scope.
+	r.feeVoteApplied = false
 
 	// Create fresh environment
 	r.setupEnv(*step.Env)

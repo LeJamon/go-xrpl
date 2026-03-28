@@ -1870,6 +1870,7 @@ func TestPayChan_UsingTickets(t *testing.T) {
 		require.Equal(t, uint64(reqBal), chanBalance(env, chanK))
 		require.Equal(t, chanAmt, chanAmount(env, chanK))
 		require.Equal(t, preBob+uint64(delta), env.Balance(bob))
+		chanBal = uint64(reqBal)
 	}
 
 	// Claim with signature (bob uses ticket)
