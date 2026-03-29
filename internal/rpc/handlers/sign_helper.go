@@ -231,6 +231,17 @@ func signTransactionJSON(txJSON json.RawMessage, creds signCredentials, offline 
 			currentLedger := types.Services.Ledger.GetCurrentLedgerIndex()
 			txMap["LastLedgerSequence"] = currentLedger + 4
 		}
+
+		// Auto-fill NetworkID if not present and network ID > 1024.
+		// Matches rippled's transactionPreProcessImpl() in TransactionSign.cpp:
+		// legacy networks (ID <= 1024) must NOT include NetworkID;
+		// new networks (ID > 1024) require it and it is auto-filled here.
+		if _, ok := txMap["NetworkID"]; !ok {
+			serverInfo := types.Services.Ledger.GetServerInfo()
+			if serverInfo.NetworkID > 1024 {
+				txMap["NetworkID"] = serverInfo.NetworkID
+			}
+		}
 	}
 
 	// Add the signing public key

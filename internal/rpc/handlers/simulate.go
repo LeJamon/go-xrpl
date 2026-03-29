@@ -161,7 +161,15 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 
 	// TODO: Autofill Sequence from ledger (service-level) — getAutofillSequence
 	// TODO: Autofill Fee from ledger (service-level) — getCurrentNetworkFee
-	// TODO: Autofill NetworkID from config (service-level)
+
+	// Autofill NetworkID if not present and network ID > 1024.
+	// Matches rippled's autofillTx() in Simulate.cpp.
+	if _, ok := txJsonMap["NetworkID"]; !ok {
+		serverInfo := types.Services.Ledger.GetServerInfo()
+		if serverInfo.NetworkID > 1024 {
+			txJsonMap["NetworkID"] = serverInfo.NetworkID
+		}
+	}
 
 	// Reject Batch transaction type.
 	// rippled: if (stTx->getTxnType() == ttBATCH) return RPC::make_error(rpcNOT_IMPL)
