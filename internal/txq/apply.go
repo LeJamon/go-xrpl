@@ -282,10 +282,11 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 					}
 				} else {
 					// The tx goes after existing entries.
-					// Must follow the last queued sequence.
-					nextSeq := q.getNextQueuableSeq(aq, acctSeq)
-					if seqProxy.Value != nextSeq {
-						if seqProxy.Value < nextSeq {
+					// Must follow the PREVIOUS entry's followingSeq.
+					// Reference: TxQ.cpp:1031-1040 (prevIter->second.consequences().followingSeq())
+					prevFollowingSeq := prevTx.Consequences.FollowingSeq.Value
+					if seqProxy.Value != prevFollowingSeq {
+						if seqProxy.Value < prevFollowingSeq {
 							return ApplyResult{Result: tx.TefPAST_SEQ, Applied: false}
 						}
 						// Gap not bridged by queued txns.
