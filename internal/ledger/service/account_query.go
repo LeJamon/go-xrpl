@@ -1068,16 +1068,18 @@ func (s *Service) GetGatewayBalances(account string, hotWallets []string, ledger
 			return true
 		}
 
-		// Get the balance from the gateway's perspective
-		// RippleState balance: positive = low owes high, negative = high owes low
-		// Gateway perspective: negative = we owe them (obligations), positive = they owe us (assets)
+		// Get the balance from the gateway's perspective.
+		// RippleState raw balance: positive means low account holds IOUs from high account.
+		// To get the balance from the viewAccount's perspective (matching rippled's
+		// TrustLineBase constructor): keep as-is if we are low, negate if we are high.
+		// Result: negative = we owe them (obligations), positive = they owe us (assets).
 		var gatewayBalance tx.Amount
 		if isLowAccount {
-			// We are low, balance from our view is negated
-			gatewayBalance = rs.Balance.Negate()
-		} else {
-			// We are high, balance from our view is the same
+			// We are low, balance from our perspective is as stored
 			gatewayBalance = rs.Balance
+		} else {
+			// We are high, negate to get balance from our perspective
+			gatewayBalance = rs.Balance.Negate()
 		}
 
 		// Get peer address
@@ -1085,14 +1087,16 @@ func (s *Service) GetGatewayBalances(account string, hotWallets []string, ledger
 
 		currency := rs.Balance.Currency
 
-		// Determine if this is frozen
+		// Determine if the gateway has frozen this trust line.
+		// Matches rippled's TrustLineBase::getFreeze(): checks whether the
+		// view account (gateway) set the freeze flag on its side of the line.
 		var isFrozen bool
 		if isLowAccount {
-			// We are low, check if peer (high) has frozen us
-			isFrozen = (rs.Flags & state.LsfHighFreeze) != 0
-		} else {
-			// We are high, check if peer (low) has frozen us
+			// We are low, check if we (low) have frozen the peer
 			isFrozen = (rs.Flags & state.LsfLowFreeze) != 0
+		} else {
+			// We are high, check if we (high) have frozen the peer
+			isFrozen = (rs.Flags & state.LsfHighFreeze) != 0
 		}
 
 		// Check what category this balance falls into
