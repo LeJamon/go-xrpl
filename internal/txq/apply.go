@@ -508,25 +508,51 @@ func (q *TxQ) tryClearAccountQueue(
 	return &ApplyResult{Result: result, Applied: false}
 }
 
-// getNextQueuableSeq returns the next sequence number that can be queued for an account.
+// getNextQueuableSeq returns the next sequence that can be queued for an account.
+// It finds the FIRST gap in the sequence chain, not the max following sequence.
+// Reference: rippled TxQ::nextQueuableSeqImpl (TxQ.cpp:1622-1666)
 func (q *TxQ) getNextQueuableSeq(aq *AccountQueue, acctSeq uint32) uint32 {
 	if aq == nil || aq.Empty() {
 		return acctSeq
 	}
 
-	// Find the highest sequence-based transaction
-	maxSeq := acctSeq
-	for seqProxy, c := range aq.Transactions {
-		if !seqProxy.IsTicket {
-			// Use the following sequence based on consequences
-			followingSeq := c.Consequences.FollowingSeq.Value
-			if followingSeq > maxSeq {
-				maxSeq = followingSeq
+	acctSeqProx := NewSeqProxySequence(acctSeq)
+
+	// Get all sequence-based transactions sorted by SeqProxy.
+	sorted := aq.GetSortedCandidates()
+
+	// Find the first relevant sequence-based transaction (>= acctSeqProx).
+	startIdx := -1
+	for i, c := range sorted {
+		if !c.SeqProxy.IsTicket && !c.SeqProxy.Less(acctSeqProx) {
+			if c.SeqProxy == acctSeqProx {
+				startIdx = i
 			}
+			break
 		}
 	}
 
-	return maxSeq
+	// If acctSeqProx is not in the queue, return acctSeq (first gap is at front).
+	if startIdx < 0 {
+		return acctSeq
+	}
+
+	// Walk through consecutive sequence-based transactions to find the first gap.
+	attempt := sorted[startIdx].Consequences.FollowingSeq.Value
+	for i := startIdx + 1; i < len(sorted); i++ {
+		sp := sorted[i].SeqProxy
+		if sp.IsTicket {
+			continue
+		}
+		if sp.Less(acctSeqProx) {
+			continue // Skip stale
+		}
+		if attempt < sp.Value {
+			break // Found a gap
+		}
+		attempt = sorted[i].Consequences.FollowingSeq.Value
+	}
+	return attempt
 }
 
 // canBeQueued returns true if the result code indicates the transaction might succeed later.
