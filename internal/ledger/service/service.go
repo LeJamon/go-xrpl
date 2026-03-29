@@ -756,6 +756,7 @@ func (s *Service) GetServerInfo() ServerInfo {
 		Standalone:      s.config.Standalone,
 		ServerState:     serverState,
 		CompleteLedgers: "",
+		NetworkID:       s.config.NetworkID,
 	}
 
 	if s.openLedger != nil {
@@ -804,6 +805,7 @@ type ServerInfo struct {
 	ValidatedLedgerSeq  uint32
 	ValidatedLedgerHash [32]byte
 	CompleteLedgers     string
+	NetworkID           uint32
 }
 
 // GetLedgerInfo returns information about a specific ledger
