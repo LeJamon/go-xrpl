@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
@@ -17,13 +18,28 @@ type UInt64 struct{}
 var ErrInvalidUInt64String = errors.New("invalid UInt64 string, value should be a string representation of a UInt64")
 
 // FromJSON converts a JSON value into a serialized byte slice representing a 64-bit unsigned integer.
-// The input value is assumed to be a hex string (without leading zeros, like "a" for 10).
+// Accepts either a hex string (e.g. "2E4" for 740) or a numeric value (float64, int, int64, uint64).
+// Numeric values are common when the RPC layer passes raw JSON where UInt64 fields appear as numbers
+// (e.g. AssetPrice in OracleSet transactions).
 // If the serialization fails, an error is returned.
 func (u *UInt64) FromJSON(value any) ([]byte, error) {
 	var buf = new(bytes.Buffer)
 
-	strVal, ok := value.(string)
-	if !ok {
+	var strVal string
+	switch v := value.(type) {
+	case string:
+		strVal = v
+	case float64:
+		strVal = fmt.Sprintf("%X", uint64(v))
+	case int:
+		strVal = fmt.Sprintf("%X", uint64(v))
+	case int64:
+		strVal = fmt.Sprintf("%X", uint64(v))
+	case uint64:
+		strVal = fmt.Sprintf("%X", v)
+	case uint32:
+		strVal = fmt.Sprintf("%X", uint64(v))
+	default:
 		return nil, ErrInvalidUInt64String
 	}
 

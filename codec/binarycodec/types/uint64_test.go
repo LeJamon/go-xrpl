@@ -20,8 +20,8 @@ func TestUint64_FromJson(t *testing.T) {
 		expectedErr error
 	}{
 		{
-			name:        "fail - value is not a string",
-			input:       1,
+			name:        "fail - value is unsupported type",
+			input:       true,
 			expected:    nil,
 			expectedErr: ErrInvalidUInt64String,
 		},
@@ -53,6 +53,36 @@ func TestUint64_FromJson(t *testing.T) {
 			name:        "pass - valid uint64 non-numeric string (large number)",
 			input:       "FFFFFFFFFFFFFFFF",
 			expected:    []byte{255, 255, 255, 255, 255, 255, 255, 255},
+			expectedErr: nil,
+		},
+		{
+			name:        "pass - int value",
+			input:       int(1),
+			expected:    []byte{0, 0, 0, 0, 0, 0, 0, 1},
+			expectedErr: nil,
+		},
+		{
+			name:        "pass - float64 value (from JSON unmarshal)",
+			input:       float64(740),
+			expected:    []byte{0, 0, 0, 0, 0, 0, 0x02, 0xE4},
+			expectedErr: nil,
+		},
+		{
+			name:        "pass - int64 value",
+			input:       int64(256),
+			expected:    []byte{0, 0, 0, 0, 0, 0, 1, 0},
+			expectedErr: nil,
+		},
+		{
+			name:        "pass - uint64 value",
+			input:       uint64(65535),
+			expected:    []byte{0, 0, 0, 0, 0, 0, 0xFF, 0xFF},
+			expectedErr: nil,
+		},
+		{
+			name:        "pass - uint32 value",
+			input:       uint32(42),
+			expected:    []byte{0, 0, 0, 0, 0, 0, 0, 0x2A},
 			expectedErr: nil,
 		},
 	}
