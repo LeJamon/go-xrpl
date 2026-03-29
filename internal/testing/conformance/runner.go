@@ -376,7 +376,11 @@ var txqInitFeeLookup = map[string]initFeeConfig{
 	"multi tx per account":      {BaseFee: 10, ReserveBase: 200, ReserveIncrement: 50, ApplyAfterStep: 257},
 	"In-flight balance checks":  {BaseFee: 10, ReserveBase: 200, ReserveIncrement: 50, ApplyAfterStep: 257},
 	"unexpected balance change": {BaseFee: 10, ReserveBase: 200, ReserveIncrement: 50, ApplyAfterStep: 257},
-	"Zero reference fee":        {BaseFee: 0, ReserveBase: 0, ReserveIncrement: 0, ApplyAfterStep: 257},
+	// Zero reference fee: the fee vote sets baseFee=0 at the flag ledger
+	// (around step 254). Steps 255-256 are tx steps that need baseFee=0
+	// to apply correctly. Apply immediately after the last close before
+	// the first tx step, not after the time-leap close at step 257.
+	"Zero reference fee": {BaseFee: 0, ReserveBase: 0, ReserveIncrement: 0, ApplyAfterStep: 254},
 }
 
 // feeVoteConfig describes the post-vote fee configuration for fixtures that

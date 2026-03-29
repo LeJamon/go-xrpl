@@ -17,7 +17,12 @@ type FeeLevel uint64
 // Returns the fee level: (drops * BaseLevel) / baseFee
 func ToFeeLevel(drops, baseFee uint64) FeeLevel {
 	if baseFee == 0 {
-		return FeeLevel(^uint64(0)) // Max value if base fee is 0
+		// Reference: rippled Transactor.cpp toFeeLevel()
+		// When baseFee is 0: fee=0 → level 0, fee>0 → level max.
+		if drops == 0 {
+			return 0
+		}
+		return FeeLevel(^uint64(0))
 	}
 	// Use 128-bit arithmetic to avoid overflow
 	// fee level = drops * 256 / baseFee
