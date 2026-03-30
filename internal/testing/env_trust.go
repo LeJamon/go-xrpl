@@ -21,6 +21,11 @@ func (e *TestEnv) Trust(acc *Account, amount tx.Amount) {
 	seq := e.Seq(acc)
 	ts.Sequence = &seq
 
+	if e.replayOnClose && acc.PublicKey != nil {
+		ts.SetFlags(ts.GetFlags() | tx.TfFullyCanonicalSig)
+		e.SignWith(ts, acc)
+	}
+
 	result := e.Submit(ts)
 	if !result.Success {
 		e.t.Fatalf("Failed to set trust line for %s: %s", acc.Name, result.Code)

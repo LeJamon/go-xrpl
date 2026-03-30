@@ -254,6 +254,7 @@ type runner struct {
 	// already been applied in the current scope. Reset on env_reset and
 	// scope boundaries.
 	feeVoteApplied bool
+
 }
 
 // ammPair associates an LP token issuer with its currency code.
@@ -827,6 +828,12 @@ func (r *runner) setupEnv(cfg EnvConfig) {
 		r.env.SetNetworkID(*cfg.NetworkID)
 	}
 
+	// Enable open-ledger replay so ledger close replays all transactions in
+	// canonical order (SHAMap-salted), matching rippled's consensus simulation.
+	// In rippled, fund/trust/user transactions ALL go through submit() and are
+	// ALL replayed from the parent ledger on close.
+	r.env.EnableOpenLedgerReplay()
+
 	// Match rippled's startup sequence. rippled's startGenesisLedger()
 	// creates: genesis(seq=1) → closed(seq=2, closeTime=0) → open(seq=3).
 	// goXRPL's NewTestEnvWithConfig creates only genesis(seq=1) → open(seq=2).
@@ -881,7 +888,17 @@ func (r *runner) execFund(stepIdx int, step Step) {
 		r.t.Fatalf("Step %d (fund): invalid amount: %v", stepIdx, err)
 	}
 
-	acc := jtx.NewAccountWithAddress(step.Account, step.Address)
+	// Use NewAccount to derive a full keypair from the account name (same
+	// algorithm as rippled: SHA512-Half of name → seed → keypair). This
+	// enables signing of fund/trust transactions so their serialized bytes
+	// match rippled's, which is needed for correct SHAMap-salted canonical
+	// ordering during replay-on-close.
+	// Fall back to NewAccountWithAddress (no keypair) if the derived address
+	// doesn't match the fixture address.
+	acc := jtx.NewAccount(step.Account)
+	if acc.Address != step.Address {
+		acc = jtx.NewAccountWithAddress(step.Account, step.Address)
+	}
 	r.accounts[step.Account] = acc
 
 	// Bypass TxQ for fund operations (rippled uses apply() not submit())
@@ -935,8 +952,15 @@ func (r *runner) execTrust(stepIdx int, step Step) {
 		r.t.Fatalf("Step %d (trust): TrustSet failed for %s: %s", stepIdx, acc.Name, result.Code)
 	}
 
-	// Reimburse the fee directly in the ledger (matching rippled's test framework)
+	// Reimburse the fee directly in the ledger (matching rippled's test framework).
+	// Always reimburse immediately so open-ledger balance checks pass.
+	// When replay is enabled, also queue the reimbursement so it's applied
+	// inside closeWithReplay() (after transaction replay, before ledger close),
+	// ensuring the adjustment survives the rebuild from lastClosedLedger.
 	r.env.ReimburseFeeDirect(acc)
+	if r.env.IsReplayEnabled() {
+		r.env.QueueReimbursement(acc)
+	}
 }
 
 // execClose handles a "close" step. With v2 fixtures, the close_time field

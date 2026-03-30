@@ -120,6 +120,12 @@ type TestEnv struct {
 	// lastClosedLedger stores the most recent closed ledger, used as the
 	// parent for replay-on-close. Updated in Close().
 	lastClosedLedger *ledger.Ledger
+
+	// pendingReimbursements tracks accounts whose trust-line fee should be
+	// reimbursed. Applied inside closeWithReplay() (after transaction replay,
+	// before ledger.Close()) so the adjustment is part of the closed ledger
+	// state and survives future replays.
+	pendingReimbursements []*Account
 }
 
 // NewTestEnv creates a new test environment with a genesis ledger.

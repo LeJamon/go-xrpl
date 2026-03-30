@@ -45,6 +45,14 @@ func (e *TestEnv) FundAmount(acc *Account, amount uint64) {
 		p.NetworkID = &e.networkID
 	}
 
+	// When replay-on-close is enabled, sign the transaction so its serialized
+	// bytes match rippled's. Unsigned transactions produce different hashes,
+	// corrupting the SHAMap salt for canonical sort during ledger close.
+	if e.replayOnClose && master.PublicKey != nil {
+		p.SetFlags(tx.TfFullyCanonicalSig)
+		e.SignWith(p, master)
+	}
+
 	// Submit the payment
 	result := e.Submit(p)
 	if !result.Success {
@@ -96,6 +104,11 @@ func (e *TestEnv) enableDefaultRipple(acc *Account) {
 		accountSet.NetworkID = &e.networkID
 	}
 
+	if e.replayOnClose && acc.PublicKey != nil {
+		accountSet.SetFlags(accountSet.GetFlags() | tx.TfFullyCanonicalSig)
+		e.SignWith(accountSet, acc)
+	}
+
 	result := e.Submit(accountSet)
 	if !result.Success {
 		e.t.Fatalf("Failed to enable DefaultRipple for account %s: %s", acc.Name, result.Code)
@@ -128,6 +141,11 @@ func (e *TestEnv) FundAmountNoRipple(acc *Account, amount uint64) {
 	pay.Sequence = &seq
 	if e.networkID > 1024 {
 		pay.NetworkID = &e.networkID
+	}
+
+	if e.replayOnClose && master.PublicKey != nil {
+		pay.SetFlags(tx.TfFullyCanonicalSig)
+		e.SignWith(pay, master)
 	}
 
 	result := e.Submit(pay)

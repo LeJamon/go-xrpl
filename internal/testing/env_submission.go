@@ -1,17 +1,21 @@
 package testing
 
 import (
+	"bytes"
 	"crypto/sha512"
+	"encoding/hex"
 	"sort"
 	"strconv"
 	"time"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/txq"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/shamap"
 )
 
 // Close closes the current ledger and advances to a new one.
@@ -201,10 +205,11 @@ func (e *TestEnv) closeWithReplay() {
 	// Clear held transactions -- they will be re-held if they still fail
 	e.heldTxns = nil
 
-	// Sort transactions in canonical order.
-	// Reference: rippled CanonicalTXSet orders by (account, seqProxy, txID).
-	// We use (account, sequence) as a simplified deterministic ordering.
-	sortCanonical(allTxns)
+	// Sort transactions in canonical order using the SHAMap-salted ordering
+	// that matches rippled's CanonicalTXSet. The salt is the SHAMap root hash
+	// of the transaction set, which XORs with account IDs to produce the sort key.
+	// Reference: rippled CanonicalTXSet.cpp, RCLConsensus.cpp
+	sortCanonicalSalted(allTxns)
 
 	// Create a fresh open ledger from the last closed ledger (parent).
 	// This discards all state changes from the immediate applies.
@@ -274,6 +279,17 @@ func (e *TestEnv) closeWithReplay() {
 		accountAddr := txn.GetCommon().Account
 		e.addHeldTransaction(accountAddr, txn)
 	}
+
+	// Apply queued fee reimbursements after replay but before closing.
+	// This ensures the balance adjustments become part of the closed ledger
+	// state, surviving future replays that rebuild from lastClosedLedger.
+	// In rippled, setup operations (trust) use apply() whose state changes
+	// persist through close without replay; our replay discards direct
+	// modifications, so we bake the reimbursement into the replayed state.
+	for _, acc := range e.pendingReimbursements {
+		e.ReimburseFeeDirect(acc)
+	}
+	e.pendingReimbursements = nil
 
 	// Close the replayed ledger
 	if err := e.ledger.Close(e.clock.Now(), 0); err != nil {
@@ -418,11 +434,14 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 	}
 
 	// Track transaction for replay-on-close.
-	// All submitted transactions (success, tec, or retryable failures) are
-	// recorded so Close() can rebuild the ledger from the parent state.
-	// Reference: rippled's open ledger tx map includes ALL applied txns.
+	// Only applied (tesSUCCESS, tec*) and retryable (ter*) transactions are
+	// included in the replay set. Permanent failures (tem*, tef*, tel*) are
+	// dropped — they never appear in rippled's canonical TX set.
+	// Reference: rippled's open ledger tx map only contains applied txns.
 	if e.replayOnClose {
-		e.openLedgerTxns = append(e.openLedgerTxns, txn)
+		if applyResult.Result.IsApplied() || isRetryable(applyResult.Result) {
+			e.openLedgerTxns = append(e.openLedgerTxns, txn)
+		}
 
 		// For retryable results (terPRE_SEQ etc), also hold the transaction
 		// so it can be retried in subsequent ledgers if the replay doesn't
@@ -645,7 +664,15 @@ func (e *TestEnv) drainQueue() {
 // process. Returns the result code. The transaction is applied to the
 // current e.ledger.
 func (e *TestEnv) applyForReplay(txn tx.Transaction) tx.Result {
-	parentCloseTime := uint32(e.clock.Now().Unix() - 946684800)
+	// Use the parent ledger's close time, not the current clock.
+	// During replay, the clock has already been advanced for the new ledger,
+	// but ParentCloseTime must reflect the PARENT's close time.
+	var parentCloseTime uint32
+	if e.lastClosedLedger != nil {
+		parentCloseTime = uint32(e.lastClosedLedger.CloseTime().Unix() - 946684800)
+	} else {
+		parentCloseTime = uint32(e.clock.Now().Unix() - 946684800)
+	}
 	engineConfig := tx.EngineConfig{
 		BaseFee:                   e.baseFee,
 		ReserveBase:               e.reserveBase,
@@ -697,6 +724,107 @@ func sortCanonical(txns []tx.Transaction) {
 		// Tertiary: fall back to tx type as a tiebreaker
 		return txns[i].TxType() < txns[j].TxType()
 	})
+}
+
+// sortCanonicalSalted sorts transactions using the production CanonicalTXSet
+// ordering from rippled. The sort key is (accountKey, sequence, txHash) where
+// accountKey = accountID XOR salt. The salt is the SHAMap root hash built from
+// the transaction set, matching rippled's RCLConsensus.cpp onClose().
+// Reference: rippled CanonicalTXSet.cpp, internal/ledger/service/canonical_txset.go
+func sortCanonicalSalted(txns []tx.Transaction) {
+	if len(txns) <= 1 {
+		return
+	}
+
+	type entry struct {
+		txn      tx.Transaction
+		hash     [32]byte
+		account  [20]byte
+		sequence uint32
+		blob     []byte
+	}
+
+	entries := make([]entry, len(txns))
+	for i, txn := range txns {
+		// Serialize the transaction to binary
+		var blob []byte
+		if raw := txn.GetRawBytes(); len(raw) > 0 {
+			blob = raw
+		} else {
+			flatMap, err := txn.Flatten()
+			if err != nil {
+				continue
+			}
+			hexStr, err := binarycodec.Encode(flatMap)
+			if err != nil {
+				continue
+			}
+			decoded, _ := hex.DecodeString(hexStr)
+			blob = decoded
+		}
+
+		h, _ := tx.ComputeTransactionHash(txn)
+
+		common := txn.GetCommon()
+		var accountID [20]byte
+		_, acctBytes, _ := addresscodec.DecodeClassicAddressToAccountID(common.Account)
+		copy(accountID[:], acctBytes)
+
+		entries[i] = entry{
+			txn:      txn,
+			hash:     h,
+			account:  accountID,
+			sequence: common.SeqProxy(),
+			blob:     blob,
+		}
+	}
+
+	// Compute salt: SHAMap root hash of all transactions.
+	// Matches rippled: builds a SHAMap of type TRANSACTION with each tx blob
+	// keyed by its hash, then returns the root hash.
+	txMap, _ := shamap.New(shamap.TypeTransaction)
+	for _, e := range entries {
+		if len(e.blob) > 0 {
+			_ = txMap.PutWithNodeType(e.hash, e.blob, shamap.NodeTypeTransactionNoMeta)
+		}
+	}
+	salt, _ := txMap.Hash()
+
+	// Pre-compute account keys: accountID XOR salt (32 bytes).
+	// Mirrors rippled CanonicalTXSet::accountKey(): copy 20-byte account into
+	// 32-byte uint256 (zero-padded), then XOR with full 32-byte salt.
+	type sortEntry struct {
+		accountKey [32]byte
+		idx        int
+	}
+	sortEntries := make([]sortEntry, len(entries))
+	for i, e := range entries {
+		var key [32]byte
+		copy(key[:20], e.account[:])
+		for j := 0; j < 32; j++ {
+			key[j] ^= salt[j]
+		}
+		sortEntries[i] = sortEntry{accountKey: key, idx: i}
+	}
+
+	sort.SliceStable(sortEntries, func(i, j int) bool {
+		ei, ej := sortEntries[i], sortEntries[j]
+		cmp := bytes.Compare(ei.accountKey[:], ej.accountKey[:])
+		if cmp != 0 {
+			return cmp < 0
+		}
+		if entries[ei.idx].sequence != entries[ej.idx].sequence {
+			return entries[ei.idx].sequence < entries[ej.idx].sequence
+		}
+		return bytes.Compare(entries[ei.idx].hash[:], entries[ej.idx].hash[:]) < 0
+	})
+
+	// Write sorted results back to the slice
+	sorted := make([]tx.Transaction, len(txns))
+	for i, se := range sortEntries {
+		sorted[i] = entries[se.idx].txn
+	}
+	copy(txns, sorted)
 }
 
 // canonicalSeq returns the effective sequence number for canonical ordering.
@@ -979,6 +1107,19 @@ func (e *TestEnv) EnableOpenLedgerReplay() {
 	if e.lastClosedLedger == nil {
 		e.lastClosedLedger = e.genesisLedger
 	}
+}
+
+// IsReplayEnabled returns whether open-ledger replay is enabled.
+func (e *TestEnv) IsReplayEnabled() bool {
+	return e.replayOnClose
+}
+
+// QueueReimbursement queues an account for fee reimbursement during the next
+// closeWithReplay. The reimbursement is applied after transaction replay but
+// before the ledger is finalized, so it becomes part of the closed ledger
+// state and survives future replays.
+func (e *TestEnv) QueueReimbursement(acc *Account) {
+	e.pendingReimbursements = append(e.pendingReimbursements, acc)
 }
 
 // SubmitPseudo submits a pseudo-transaction (EnableAmendment, SetFee, UNLModify)
