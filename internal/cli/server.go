@@ -239,9 +239,14 @@ func runServer(cmd *cobra.Command, args []string) {
 			consensusAdaptor.AddPendingTx(txBlob)
 		})
 
-		// Expose node identity and peer count to RPC handlers
+		// Expose node identity, peer count, and consensus stats to RPC handlers
 		types.Services.NodePublicKey = consensusComponents.Overlay.Identity().EncodedPublicKey()
 		types.Services.PeerCount = consensusComponents.Overlay.PeerCount
+		engine := consensusComponents.Engine
+		types.Services.LastCloseInfo = func() (int, int) {
+			proposers, convergeTime := engine.GetLastCloseInfo()
+			return proposers, int(convergeTime.Milliseconds())
+		}
 
 		isValidator := globalConfig.IsValidator()
 		serverLog.Info("Running in consensus mode",

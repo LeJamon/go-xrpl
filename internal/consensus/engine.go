@@ -45,6 +45,9 @@ type Engine interface {
 
 	// Timing returns the consensus timing parameters.
 	Timing() Timing
+
+	// GetLastCloseInfo returns the proposer count and convergence time from the last consensus round.
+	GetLastCloseInfo() (proposers int, convergeTime time.Duration)
 }
 
 // Adaptor provides the interface between the consensus engine and
