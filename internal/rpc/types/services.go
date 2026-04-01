@@ -33,6 +33,10 @@ type ServiceContainer struct {
 
 	// PeerCount returns the number of connected peers (nil when not in consensus mode)
 	PeerCount func() int
+
+	// IOLatencyMs returns the current smoothed IO latency in milliseconds.
+	// When nil, io_latency_ms defaults to 0.
+	IOLatencyMs func() int
 }
 
 // LedgerNavigator provides ledger index navigation and mode queries.

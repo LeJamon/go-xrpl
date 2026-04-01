@@ -86,6 +86,7 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Initialize storage from config
 	var db nodestore.Database
+	var ioLatencyTracker *nodestore.IOLatencyTracker
 	nodestorePath := globalConfig.NodeDB.Path
 	if nodestorePath != "" {
 		store, err := kvpebble.New(nodestorePath, 256<<20, 500, false)
@@ -93,7 +94,9 @@ func runServer(cmd *cobra.Command, args []string) {
 			serverLog.Fatal("Failed to create storage backend", "err", err)
 		}
 
-		db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", 10000, 10*time.Minute)
+		kvDB := nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", 10000, 10*time.Minute)
+		db = kvDB
+		ioLatencyTracker = kvDB.IOLatency()
 		serverLog.Info("Storage initialized", "backend", "pebble", "path", nodestorePath)
 	} else {
 		serverLog.Info("Storage initialized", "backend", "in-memory")
@@ -204,6 +207,11 @@ func runServer(cmd *cobra.Command, args []string) {
 	// Wire up RPC services
 	ledgerAdapter := rpc.NewLedgerServiceAdapter(ledgerService)
 	types.InitServices(ledgerAdapter)
+
+	// Wire IO latency tracking from storage layer into RPC
+	if ioLatencyTracker != nil {
+		types.Services.IOLatencyMs = ioLatencyTracker.LatencyMs
+	}
 
 	// Start consensus/networking if not in standalone mode
 	var consensusComponents *adaptor.Components

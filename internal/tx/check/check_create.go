@@ -157,25 +157,8 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Check source trust line freeze (if source is not issuer)
 		// Reference: CreateCheck.cpp L131-145
 		if accountID != issuerID {
-			srcTLKey := keylet.Line(accountID, issuerID, c.SendMax.Currency)
-			srcTLExists, _ := ctx.View.Exists(srcTLKey)
-			if srcTLExists {
-				srcTLData, err := ctx.View.Read(srcTLKey)
-				if err == nil {
-					srcTL, err := state.ParseRippleState(srcTLData)
-					if err == nil {
-						srcIsLow := keylet.IsLowAccount(accountID, issuerID)
-						if srcIsLow {
-							if srcTL.Flags&state.LsfHighFreeze != 0 {
-								return tx.TecFROZEN
-							}
-						} else {
-							if srcTL.Flags&state.LsfLowFreeze != 0 {
-								return tx.TecFROZEN
-							}
-						}
-					}
-				}
+			if isTrustLineFrozen(ctx, accountID, issuerID, c.SendMax.Currency, false) {
+				return tx.TecFROZEN
 			}
 		}
 
@@ -183,26 +166,8 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		// For destination, check if DESTINATION froze their own line (not issuer freeze)
 		// Reference: CreateCheck.cpp L146-159
 		if destID != issuerID {
-			dstTLKey := keylet.Line(destID, issuerID, c.SendMax.Currency)
-			dstTLExists, _ := ctx.View.Exists(dstTLKey)
-			if dstTLExists {
-				dstTLData, err := ctx.View.Read(dstTLKey)
-				if err == nil {
-					dstTL, err := state.ParseRippleState(dstTLData)
-					if err == nil {
-						dstIsLow := keylet.IsLowAccount(destID, issuerID)
-						// Check if the destination froze their own side
-						if dstIsLow {
-							if dstTL.Flags&state.LsfLowFreeze != 0 {
-								return tx.TecFROZEN
-							}
-						} else {
-							if dstTL.Flags&state.LsfHighFreeze != 0 {
-								return tx.TecFROZEN
-							}
-						}
-					}
-				}
+			if isTrustLineFrozen(ctx, destID, issuerID, c.SendMax.Currency, true) {
+				return tx.TecFROZEN
 			}
 		}
 	}
@@ -284,4 +249,37 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	ctx.Account.OwnerCount++
 
 	return tx.TesSUCCESS
+}
+
+// isTrustLineFrozen checks whether the trust line between accountID and issuerID
+// for the given currency is frozen from the perspective of accountID.
+// When checkSelf is false, it checks whether the OTHER side (issuer) froze the line.
+// When checkSelf is true, it checks whether accountID froze their own side of the line.
+func isTrustLineFrozen(ctx *tx.ApplyContext, accountID, issuerID [20]byte, currency string, checkSelf bool) bool {
+	tlKey := keylet.Line(accountID, issuerID, currency)
+	exists, _ := ctx.View.Exists(tlKey)
+	if !exists {
+		return false
+	}
+	tlData, err := ctx.View.Read(tlKey)
+	if err != nil {
+		return false
+	}
+	tl, err := state.ParseRippleState(tlData)
+	if err != nil {
+		return false
+	}
+	isLow := keylet.IsLowAccount(accountID, issuerID)
+	if checkSelf {
+		// Check if accountID froze their own side
+		if isLow {
+			return tl.Flags&state.LsfLowFreeze != 0
+		}
+		return tl.Flags&state.LsfHighFreeze != 0
+	}
+	// Check if the other side (issuer) froze the line
+	if isLow {
+		return tl.Flags&state.LsfHighFreeze != 0
+	}
+	return tl.Flags&state.LsfLowFreeze != 0
 }

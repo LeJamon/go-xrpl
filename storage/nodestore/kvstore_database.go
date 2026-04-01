@@ -16,6 +16,7 @@ type KVDatabaseImpl struct {
 	cache         *Cache
 	negativeCache *NegativeCache
 	name          string
+	ioLatency     *IOLatencyTracker
 	stats         struct {
 		reads             uint64
 		cacheHits         uint64
@@ -34,9 +35,10 @@ func NewKVDatabase(store kvstore.KeyValueStore, name string, cacheSize int, cach
 		cache = NewCache(cacheSize, cacheTTL)
 	}
 	return &KVDatabaseImpl{
-		store: store,
-		cache: cache,
-		name:  name,
+		store:     store,
+		cache:     cache,
+		name:      name,
+		ioLatency: NewIOLatencyTracker(0.1),
 	}
 }
 
@@ -47,8 +49,9 @@ func NewKVDatabaseWithConfig(store kvstore.KeyValueStore, name string, config *D
 	}
 
 	db := &KVDatabaseImpl{
-		store: store,
-		name:  name,
+		store:     store,
+		name:      name,
+		ioLatency: NewIOLatencyTracker(0.1),
 	}
 
 	// Initialize positive cache
@@ -76,9 +79,11 @@ func (d *KVDatabaseImpl) Store(ctx context.Context, node *Node) error {
 	}
 
 	encoded := encodeNodeData(node)
+	start := time.Now()
 	if err := d.store.Put(node.Hash[:], encoded); err != nil {
 		return errors.New("store failed: " + err.Error())
 	}
+	d.ioLatency.Record(time.Since(start))
 
 	atomic.AddUint64(&d.stats.writes, 1)
 	atomic.AddUint64(&d.stats.writeBytes, uint64(len(node.Data)))
@@ -123,7 +128,9 @@ func (d *KVDatabaseImpl) Fetch(ctx context.Context, hash Hash256) (*Node, error)
 		}
 	}
 
+	start := time.Now()
 	data, err := d.store.Get(hash[:])
+	d.ioLatency.Record(time.Since(start))
 	if err != nil {
 		if errors.Is(err, kvstore.ErrNotFound) {
 			// Mark as missing in negative cache
@@ -197,9 +204,11 @@ func (d *KVDatabaseImpl) StoreBatch(ctx context.Context, nodes []*Node) error {
 			return errors.New("store batch failed: " + err.Error())
 		}
 	}
+	start := time.Now()
 	if err := batch.Write(); err != nil {
 		return errors.New("store batch commit failed: " + err.Error())
 	}
+	d.ioLatency.Record(time.Since(start))
 
 	for _, node := range nodes {
 		if node == nil {
@@ -248,6 +257,11 @@ func (d *KVDatabaseImpl) Stats() Statistics {
 	}
 
 	return stats
+}
+
+// IOLatency returns the IO latency tracker for this database.
+func (d *KVDatabaseImpl) IOLatency() *IOLatencyTracker {
+	return d.ioLatency
 }
 
 // Sync forces pending writes to disk.

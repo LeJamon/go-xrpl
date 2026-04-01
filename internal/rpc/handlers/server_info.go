@@ -81,7 +81,7 @@ func buildServerInfo(human bool) map[string]interface{} {
 	info := map[string]interface{}{
 		"build_version":     BuildVersion,
 		"complete_ledgers":  completeLedgers,
-		"io_latency_ms":     1, // TODO: track real IO latency
+		"io_latency_ms":     getIOLatencyMs(),
 		"pubkey_node":       types.Services.NodePublicKey,
 		"server_state":      serverState,
 		"uptime":            uptime,
@@ -228,6 +228,13 @@ func buildServerInfo(human bool) map[string]interface{} {
 func getPeerCount() int {
 	if types.Services.PeerCount != nil {
 		return types.Services.PeerCount()
+	}
+	return 0
+}
+
+func getIOLatencyMs() int {
+	if types.Services.IOLatencyMs != nil {
+		return types.Services.IOLatencyMs()
 	}
 	return 0
 }

@@ -9,11 +9,12 @@ import (
 
 // DatabaseImpl wraps a Backend to implement the Database interface.
 type DatabaseImpl struct {
-	backend       Backend
-	cache         *Cache
-	negativeCache *NegativeCache
-	batchWriter   *BatchWriter
-	stats         struct {
+	backend        Backend
+	cache          *Cache
+	negativeCache  *NegativeCache
+	batchWriter    *BatchWriter
+	ioLatency      *IOLatencyTracker
+	stats          struct {
 		reads             uint64
 		cacheHits         uint64
 		cacheMisses       uint64
@@ -61,8 +62,9 @@ func NewDatabase(backend Backend, cacheSize int, cacheTTL time.Duration) *Databa
 		cache = NewCache(cacheSize, cacheTTL)
 	}
 	return &DatabaseImpl{
-		backend: backend,
-		cache:   cache,
+		backend:   backend,
+		cache:     cache,
+		ioLatency: NewIOLatencyTracker(0.1),
 	}
 }
 
@@ -73,7 +75,8 @@ func NewDatabaseWithConfig(backend Backend, config *DatabaseConfig) (*DatabaseIm
 	}
 
 	db := &DatabaseImpl{
-		backend: backend,
+		backend:   backend,
+		ioLatency: NewIOLatencyTracker(0.1),
 	}
 
 	// Initialize positive cache
@@ -109,7 +112,9 @@ func (d *DatabaseImpl) Store(ctx context.Context, node *Node) error {
 	default:
 	}
 
+	start := time.Now()
 	status := d.backend.Store(node)
+	d.ioLatency.Record(time.Since(start))
 	if status != OK {
 		return errors.New("store failed: " + status.String())
 	}
@@ -157,7 +162,9 @@ func (d *DatabaseImpl) Fetch(ctx context.Context, hash Hash256) (*Node, error) {
 		}
 	}
 
+	start := time.Now()
 	node, status := d.backend.Fetch(hash)
+	d.ioLatency.Record(time.Since(start))
 	if status == NotFound {
 		// Mark as missing in negative cache
 		if d.negativeCache != nil {
@@ -188,7 +195,9 @@ func (d *DatabaseImpl) FetchBatch(ctx context.Context, hashes []Hash256) ([]*Nod
 	default:
 	}
 
+	start := time.Now()
 	nodes, status := d.backend.FetchBatch(hashes)
+	d.ioLatency.Record(time.Since(start))
 	if status != OK && status != NotFound {
 		return nil, errors.New("fetch batch failed: " + status.String())
 	}
@@ -217,7 +226,9 @@ func (d *DatabaseImpl) StoreBatch(ctx context.Context, nodes []*Node) error {
 	default:
 	}
 
+	start := time.Now()
 	status := d.backend.StoreBatch(nodes)
+	d.ioLatency.Record(time.Since(start))
 	if status != OK {
 		return errors.New("store batch failed: " + status.String())
 	}
@@ -363,6 +374,11 @@ func (d *DatabaseImpl) NegativeCache() *NegativeCache {
 // BatchWriter returns the batch writer (may be nil if not configured).
 func (d *DatabaseImpl) BatchWriter() *BatchWriter {
 	return d.batchWriter
+}
+
+// IOLatency returns the IO latency tracker for this database.
+func (d *DatabaseImpl) IOLatency() *IOLatencyTracker {
+	return d.ioLatency
 }
 
 // Sync forces pending writes to disk.
