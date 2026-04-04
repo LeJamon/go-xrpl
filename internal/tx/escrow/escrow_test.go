@@ -68,18 +68,19 @@ func TestEscrowCreateValidation(t *testing.T) {
 				FinishAfter: ptrUint32(700000000),
 			},
 			expectError: true,
-			errorMsg:    "temBAD_AMOUNT: Amount is required",
+			errorMsg:    "temBAD_AMOUNT: Amount must be positive",
 		},
 		{
-			name: "non-XRP amount - temBAD_AMOUNT equivalent",
+			// With featureTokenEscrow, IOU amounts are valid in Validate().
+			// The amendment check is deferred to Apply() where rules are available.
+			name: "non-XRP amount - passes Validate (amendment checked in Apply)",
 			escrow: &EscrowCreate{
 				BaseTx:      *tx.NewBaseTx(tx.TypeEscrowCreate, "rAlice"),
 				Amount:      tx.NewIssuedAmountFromFloat64(100.0, "USD", "rGateway"),
 				Destination: "rBob",
 				FinishAfter: ptrUint32(700000000),
 			},
-			expectError: true,
-			errorMsg:    "temBAD_AMOUNT: escrow can only hold XRP",
+			expectError: false,
 		},
 		{
 			name: "negative amount - temBAD_AMOUNT equivalent",
@@ -115,7 +116,9 @@ func TestEscrowCreateValidation(t *testing.T) {
 			errorMsg:    "temBAD_EXPIRATION: must specify CancelAfter or FinishAfter",
 		},
 		{
-			name: "cancel only without condition (fix1571) - temMALFORMED equivalent",
+			// fix1571 check is amendment-gated and deferred to Apply().
+			// Validate() only checks stateless invariants.
+			name: "cancel only without condition - passes Validate (fix1571 checked in Apply)",
 			escrow: &EscrowCreate{
 				BaseTx:      *tx.NewBaseTx(tx.TypeEscrowCreate, "rAlice"),
 				Amount:      tx.NewXRPAmount(1000000000),
@@ -123,8 +126,7 @@ func TestEscrowCreateValidation(t *testing.T) {
 				CancelAfter: ptrUint32(700000100),
 				// No FinishAfter and no Condition
 			},
-			expectError: true,
-			errorMsg:    "temMALFORMED: must specify FinishAfter or Condition",
+			expectError: false,
 		},
 		{
 			name: "cancel time equals finish time - temBAD_EXPIRATION equivalent",

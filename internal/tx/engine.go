@@ -1141,52 +1141,53 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 		}
 	}
 
-	// Zero-fee rejection: always reject fee=0 when baseFee > 0.
-	if fee == 0 && baseFeeForTx > 0 {
-		return TelINSUF_FEE_P
-	}
-
 	// Fee adequacy check: only when the ledger is open.
-	// Reference: rippled Transactor::checkFee -- "Only check fee is
-	// sufficient when the ledger is open."
+	// Reference: rippled Transactor::checkFee lines 277-290:
+	//   "Only check fee is sufficient when the ledger is open."
+	//   When the view is NOT open, fee=0 is accepted (line 292-293).
 	if e.config.OpenLedger {
 		if fee < baseFeeForTx {
 			return TelINSUF_FEE_P
 		}
 	}
 
-	if feeCalc, ok := tx.(BatchFeeCalculator); ok {
-		batchMinFee := feeCalc.CalculateMinimumFee(e.config.BaseFee)
-		if fee < batchMinFee {
-			return TelINSUF_FEE_P
+	// When fee is zero, skip batch fee check and balance checks.
+	// Reference: rippled Transactor::checkFee line 292-293:
+	//   if (feePaid == beast::zero) return tesSUCCESS;
+	if fee > 0 {
+		if feeCalc, ok := tx.(BatchFeeCalculator); ok {
+			batchMinFee := feeCalc.CalculateMinimumFee(e.config.BaseFee)
+			if fee < batchMinFee {
+				return TelINSUF_FEE_P
+			}
 		}
-	}
 
-	// Determine who pays the fee: delegate (if present) or the source account.
-	// Reference: rippled Transactor::checkFee lines 295-297:
-	//   auto const id = ctx.tx.isFieldPresent(sfDelegate)
-	//       ? ctx.tx.getAccountID(sfDelegate)
-	//       : ctx.tx.getAccountID(sfAccount);
-	feePayerBalance := account.Balance
-	if common.Delegate != "" {
-		delegateID, delegateErr := state.DecodeAccountID(common.Delegate)
-		if delegateErr != nil {
-			return TerNO_ACCOUNT
+		// Determine who pays the fee: delegate (if present) or the source account.
+		// Reference: rippled Transactor::checkFee lines 295-297:
+		//   auto const id = ctx.tx.isFieldPresent(sfDelegate)
+		//       ? ctx.tx.getAccountID(sfDelegate)
+		//       : ctx.tx.getAccountID(sfAccount);
+		feePayerBalance := account.Balance
+		if common.Delegate != "" {
+			delegateID, delegateErr := state.DecodeAccountID(common.Delegate)
+			if delegateErr != nil {
+				return TerNO_ACCOUNT
+			}
+			delegateAccountKey := keylet.Account(delegateID)
+			delegateAccountData, delegateReadErr := e.view.Read(delegateAccountKey)
+			if delegateReadErr != nil || delegateAccountData == nil {
+				return TerNO_ACCOUNT
+			}
+			delegateAccount, delegateParseErr := state.ParseAccountRoot(delegateAccountData)
+			if delegateParseErr != nil {
+				return TefINTERNAL
+			}
+			feePayerBalance = delegateAccount.Balance
 		}
-		delegateAccountKey := keylet.Account(delegateID)
-		delegateAccountData, delegateReadErr := e.view.Read(delegateAccountKey)
-		if delegateReadErr != nil || delegateAccountData == nil {
-			return TerNO_ACCOUNT
-		}
-		delegateAccount, delegateParseErr := state.ParseAccountRoot(delegateAccountData)
-		if delegateParseErr != nil {
-			return TefINTERNAL
-		}
-		feePayerBalance = delegateAccount.Balance
-	}
 
-	if feePayerBalance < fee {
-		return TerINSUF_FEE_B
+		if feePayerBalance < fee {
+			return TerINSUF_FEE_B
+		}
 	}
 
 	// Step 4: checkPermission — delegation permission check

@@ -1,12 +1,15 @@
 package testing
 
 import (
+	"bytes"
 	"crypto/sha512"
+	"encoding/hex"
 	"sort"
 	"strconv"
 	"time"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -93,7 +96,8 @@ func (e *TestEnv) Close() {
 	e.currentSeq++
 
 	// Reset the open-ledger transaction counters for the new ledger.
-	e.openLedgerTxns = nil
+	e.openLedgerSetupTxns = nil
+	e.openLedgerUserTxns = nil
 	e.txInLedger = 0
 	e.closingTxTotal = 0
 	e.closingFeeLevels = nil
@@ -161,7 +165,8 @@ func (e *TestEnv) CloseWithTimeLeap() {
 	}
 	e.ledger = newLedger
 	e.currentSeq++
-	e.openLedgerTxns = nil
+	e.openLedgerSetupTxns = nil
+	e.openLedgerUserTxns = nil
 	e.txInLedger = 0
 	e.closingTxTotal = 0
 	e.closingFeeLevels = nil
@@ -189,22 +194,23 @@ func (e *TestEnv) closeWithReplay() {
 	// Advance time
 	e.clock.Advance(10 * time.Second)
 
-	// Collect all transactions to replay:
-	// 1. Transactions submitted during this open ledger
+	// Collect user transactions to replay:
+	// 1. User transactions submitted during this open ledger
 	// 2. Held transactions from previous ledgers (terPRE_SEQ etc)
-	var allTxns []tx.Transaction
-	allTxns = append(allTxns, e.openLedgerTxns...)
+	var userTxns []tx.Transaction
+	userTxns = append(userTxns, e.openLedgerUserTxns...)
 	for _, held := range e.heldTxns {
-		allTxns = append(allTxns, held...)
+		userTxns = append(userTxns, held...)
 	}
 
 	// Clear held transactions -- they will be re-held if they still fail
 	e.heldTxns = nil
 
-	// Sort transactions in canonical order.
-	// Reference: rippled CanonicalTXSet orders by (account, seqProxy, txID).
-	// We use (account, sequence) as a simplified deterministic ordering.
-	sortCanonical(allTxns)
+	// Sort user transactions using the SHAMap-salted canonical ordering.
+	// This matches rippled's CanonicalTXSet for ledgers where ALL user
+	// transactions come from fixture tx_blobs (identical hashes to rippled).
+	// Setup transactions are excluded from sorting but included in the salt.
+	sortCanonicalSalted(userTxns, e.openLedgerSetupTxns)
 
 	// Create a fresh open ledger from the last closed ledger (parent).
 	// This discards all state changes from the immediate applies.
@@ -219,54 +225,30 @@ func (e *TestEnv) closeWithReplay() {
 	e.closingTxTotal = 0
 	e.closingFeeLevels = nil
 
-	// Apply all transactions with retry passes, matching rippled's
-	// applyTransactions() in BuildLedger.cpp.
-	// Multiple passes are needed because:
-	// - A batch in pass 1 may create objects (Check, Ticket) that
-	//   a standalone transaction needs
-	// - A payment in pass 1 may advance sequences for a later transaction
 	const maxRetryPasses = 5  // LEDGER_RETRY_PASSES in rippled
 	const maxTotalPasses = 10 // LEDGER_TOTAL_PASSES in rippled
 
-	remaining := allTxns
-	certainRetry := true
+	// ── Phase 1: Apply setup transactions in submission order ──
+	// Fund/trust transactions must be applied first to ensure accounts and
+	// trust lines exist before user transactions are replayed. These are
+	// applied in the order they were submitted (not canonical sorted)
+	// because goXRPL's setup transactions produce different hashes than
+	// rippled's (different amounts, different reimbursement mechanism).
+	e.applyWithRetry(e.openLedgerSetupTxns, maxRetryPasses, maxTotalPasses)
 
-	for pass := 0; pass < maxTotalPasses && len(remaining) > 0; pass++ {
-		var retry []tx.Transaction
-		changes := 0
-
-		for _, txn := range remaining {
-			result := e.applyForReplay(txn)
-
-			switch {
-			case result.IsApplied():
-				// Transaction was applied to ledger (tesSUCCESS or tec).
-				// In rippled's applyTransaction(), applied results return
-				// Success and are erased from the canonical set -- NOT retried.
-				// Retrying an applied transaction would cause double fee
-				// charging and state corruption.
-				// Reference: rippled apply.cpp applyTransaction() line 260-275
-				changes++
-			case isRetryable(result):
-				// Transaction may succeed later (terPRE_SEQ etc)
-				retry = append(retry, txn)
-			default:
-				// Permanent failure (tef, tem, tel) -- drop the transaction
-			}
-		}
-
-		remaining = retry
-
-		// A non-retry pass made no changes
-		if changes == 0 && !certainRetry {
-			break
-		}
-
-		// Stop retry passes if no progress
-		if changes == 0 || pass >= maxRetryPasses {
-			certainRetry = false
-		}
+	// Apply queued fee reimbursements between phases.
+	// Trust setup reimburses fees via direct ledger mutation (not a real
+	// transaction). This must be applied after setup replay so the
+	// reimbursement becomes part of the closed ledger state.
+	for _, acc := range e.pendingReimbursements {
+		e.ReimburseFeeDirect(acc)
 	}
+	e.pendingReimbursements = nil
+
+	// ── Phase 2: Apply user transactions in canonical sorted order ──
+	// Fixture transactions are applied in CanonicalTXSet order with retry
+	// passes, matching rippled's applyTransactions() in BuildLedger.cpp.
+	remaining := e.applyWithRetry(userTxns, maxRetryPasses, maxTotalPasses)
 
 	// Any remaining transactions that still failed go back into the held
 	// map for retry in the next ledger.
@@ -305,16 +287,53 @@ func (e *TestEnv) closeWithReplay() {
 	e.currentSeq++
 
 	// Reset transaction tracking for the new open ledger
-	e.openLedgerTxns = nil
+	e.openLedgerSetupTxns = nil
+	e.openLedgerUserTxns = nil
 	e.txInLedger = 0
 	e.closingTxTotal = 0
 	e.closingFeeLevels = nil
 
 	// Update TxQ metrics if applicable
-	// (Not typically used together with replay, but handle for completeness)
 	if e.txQueue != nil {
 		e.drainQueue()
 	}
+}
+
+// applyWithRetry applies a set of transactions with multi-pass retry logic,
+// matching rippled's applyTransactions() in BuildLedger.cpp. Returns any
+// transactions that still failed after all retry passes.
+func (e *TestEnv) applyWithRetry(txns []tx.Transaction, maxRetryPasses, maxTotalPasses int) []tx.Transaction {
+	remaining := txns
+	certainRetry := true
+
+	for pass := 0; pass < maxTotalPasses && len(remaining) > 0; pass++ {
+		var retry []tx.Transaction
+		changes := 0
+
+		for _, txn := range remaining {
+			result := e.applyForReplay(txn)
+
+			switch {
+			case result.IsApplied():
+				changes++
+			case isRetryable(result):
+				retry = append(retry, txn)
+			default:
+				// Permanent failure (tef, tem, tel) -- drop
+			}
+		}
+
+		remaining = retry
+
+		if changes == 0 && !certainRetry {
+			break
+		}
+		if changes == 0 || pass >= maxRetryPasses {
+			certainRetry = false
+		}
+	}
+
+	return remaining
 }
 
 // CloseAt closes ledgers until the ledger reaches the target sequence.
@@ -418,11 +437,18 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 	}
 
 	// Track transaction for replay-on-close.
-	// All submitted transactions (success, tec, or retryable failures) are
-	// recorded so Close() can rebuild the ledger from the parent state.
-	// Reference: rippled's open ledger tx map includes ALL applied txns.
+	// Only applied (tesSUCCESS, tec*) and retryable (ter*) transactions are
+	// included in the replay set. Permanent failures (tem*, tef*, tel*) are
+	// dropped — they never appear in rippled's canonical TX set.
+	// Reference: rippled's open ledger tx map only contains applied txns.
 	if e.replayOnClose {
-		e.openLedgerTxns = append(e.openLedgerTxns, txn)
+		if applyResult.Result.IsApplied() || isRetryable(applyResult.Result) {
+			if e.inSetupMode {
+				e.openLedgerSetupTxns = append(e.openLedgerSetupTxns, txn)
+			} else {
+				e.openLedgerUserTxns = append(e.openLedgerUserTxns, txn)
+			}
+		}
 
 		// For retryable results (terPRE_SEQ etc), also hold the transaction
 		// so it can be retried in subsequent ledgers if the replay doesn't
@@ -645,7 +671,15 @@ func (e *TestEnv) drainQueue() {
 // process. Returns the result code. The transaction is applied to the
 // current e.ledger.
 func (e *TestEnv) applyForReplay(txn tx.Transaction) tx.Result {
-	parentCloseTime := uint32(e.clock.Now().Unix() - 946684800)
+	// Use the parent ledger's close time, not the current clock.
+	// During replay, the clock has already been advanced for the new ledger,
+	// but ParentCloseTime must reflect the PARENT's close time.
+	var parentCloseTime uint32
+	if e.lastClosedLedger != nil {
+		parentCloseTime = uint32(e.lastClosedLedger.CloseTime().Unix() - 946684800)
+	} else {
+		parentCloseTime = uint32(e.clock.Now().Unix() - 946684800)
+	}
 	engineConfig := tx.EngineConfig{
 		BaseFee:                   e.baseFee,
 		ReserveBase:               e.reserveBase,
@@ -697,6 +731,227 @@ func sortCanonical(txns []tx.Transaction) {
 		// Tertiary: fall back to tx type as a tiebreaker
 		return txns[i].TxType() < txns[j].TxType()
 	})
+}
+
+// sortCanonicalSalted sorts transactions using the production CanonicalTXSet
+// ordering from rippled. The sort key is (accountKey, sequence, txHash) where
+// accountKey = accountID XOR salt. The salt is the SHAMap root hash built from
+// the transaction set, matching rippled's RCLConsensus.cpp onClose().
+// Reference: rippled CanonicalTXSet.cpp, internal/ledger/service/canonical_txset.go
+func sortCanonicalSalted(txns []tx.Transaction, extraSaltTxns ...[]tx.Transaction) {
+	if len(txns) <= 1 {
+		return
+	}
+
+	type entry struct {
+		txn      tx.Transaction
+		hash     [32]byte
+		account  [20]byte
+		sequence uint32
+		blob     []byte
+	}
+
+	entries := make([]entry, len(txns))
+	for i, txn := range txns {
+		// Serialize the transaction to binary
+		var blob []byte
+		if raw := txn.GetRawBytes(); len(raw) > 0 {
+			blob = raw
+		} else {
+			flatMap, err := txn.Flatten()
+			if err != nil {
+				continue
+			}
+			hexStr, err := binarycodec.Encode(flatMap)
+			if err != nil {
+				continue
+			}
+			decoded, _ := hex.DecodeString(hexStr)
+			blob = decoded
+		}
+
+		h, _ := tx.ComputeTransactionHash(txn)
+
+		common := txn.GetCommon()
+		var accountID [20]byte
+		_, acctBytes, _ := addresscodec.DecodeClassicAddressToAccountID(common.Account)
+		copy(accountID[:], acctBytes)
+
+		entries[i] = entry{
+			txn:      txn,
+			hash:     h,
+			account:  accountID,
+			sequence: common.SeqProxy(),
+			blob:     blob,
+		}
+	}
+
+	// Compute salt: SHAMap root hash of the transaction set.
+	// Matches rippled's CanonicalTXSet salt (RCLConsensus.cpp onClose).
+	// We compute the tree hash manually instead of using the SHAMap struct
+	// because the SHAMap's Hash() returns stale cached values after insertion.
+	//
+	// The transaction SHAMap uses leaf hash = SHA512Half(TXN\0 + blob),
+	// which equals the transaction hash (the key). Inner nodes use
+	// SHA512Half(MIN\0 + 16 × child_hash).
+	hashes := make([][32]byte, 0, len(entries))
+	for _, e := range entries {
+		hashes = append(hashes, e.hash)
+	}
+	// Include extra transactions (e.g., setup txns) in the salt computation.
+	// In rippled, the salt is the SHAMap root hash of ALL open-ledger transactions,
+	// including fund/trust setup. The extraSaltTxns parameter allows callers to
+	// include these additional transactions so the sort order matches rippled's.
+	// Reference: rippled RCLConsensus.cpp onClose() — builds SHAMap from ALL txs.
+	for _, extra := range extraSaltTxns {
+		for _, txn := range extra {
+			h, err := tx.ComputeTransactionHash(txn)
+			if err == nil {
+				hashes = append(hashes, h)
+			}
+		}
+	}
+	salt := computeTxSetHash(hashes)
+
+	// Debug: show salt and tx ordering
+	// Pre-compute account keys: accountID XOR salt (32 bytes).
+	// Mirrors rippled CanonicalTXSet::accountKey(): copy 20-byte account into
+	// 32-byte uint256 (zero-padded), then XOR with full 32-byte salt.
+	type sortEntry struct {
+		accountKey [32]byte
+		idx        int
+	}
+	sortEntries := make([]sortEntry, len(entries))
+	for i, e := range entries {
+		var key [32]byte
+		copy(key[:20], e.account[:])
+		for j := 0; j < 32; j++ {
+			key[j] ^= salt[j]
+		}
+		sortEntries[i] = sortEntry{accountKey: key, idx: i}
+	}
+
+	sort.SliceStable(sortEntries, func(i, j int) bool {
+		ei, ej := sortEntries[i], sortEntries[j]
+		cmp := bytes.Compare(ei.accountKey[:], ej.accountKey[:])
+		if cmp != 0 {
+			return cmp < 0
+		}
+		if entries[ei.idx].sequence != entries[ej.idx].sequence {
+			return entries[ei.idx].sequence < entries[ej.idx].sequence
+		}
+		return bytes.Compare(entries[ei.idx].hash[:], entries[ej.idx].hash[:]) < 0
+	})
+
+	// Write sorted results back to the slice
+	sorted := make([]tx.Transaction, len(txns))
+	for i, se := range sortEntries {
+		sorted[i] = entries[se.idx].txn
+	}
+	copy(txns, sorted)
+}
+
+// computeTxSetHash computes the SHAMap root hash for a set of transaction
+// hashes, matching rippled's SHAMap(TypeTransaction) behavior. Each hash is
+// both the item key and the leaf hash (since SHA512Half(TXN\0+data) = txHash).
+// The tree uses 16-ary branching on key nibbles. Inner node hash =
+// SHA512Half(MIN\0 + 16 × child_hash), where empty children contribute zeros.
+// Reference: rippled SHAMapTxLeafNode::updateHash(), SHAMapInnerNode::updateHash()
+// txSetTreeNode represents a node in the 16-ary radix tree for computing
+// the SHAMap root hash of a transaction set.
+type txSetTreeNode struct {
+	isLeaf   bool
+	hash     [32]byte           // leaf: tx hash; inner: computed
+	children [16]*txSetTreeNode // inner only
+}
+
+func computeTxSetHash(hashes [][32]byte) [32]byte {
+	if len(hashes) == 0 {
+		return [32]byte{}
+	}
+
+	// Insert all hashes into a 16-ary radix tree
+	root := &txSetTreeNode{}
+
+	for _, h := range hashes {
+		insertIntoTree(root, h, 0)
+	}
+
+	// Compute hashes bottom-up
+	computeTreeHash(root)
+	return root.hash
+}
+
+// insertIntoTree inserts a leaf hash into the radix tree at the given depth.
+func insertIntoTree(node *txSetTreeNode, h [32]byte, depth int) {
+	if depth >= 64 { // 32 bytes × 2 nibbles = 64 levels max
+		return
+	}
+
+	nibble := getNibble(h, depth)
+
+	if node.children[nibble] == nil {
+		// Empty slot — place leaf here
+		node.children[nibble] = &txSetTreeNode{isLeaf: true, hash: h}
+		return
+	}
+
+	child := node.children[nibble]
+	if child.isLeaf {
+		if child.hash == h {
+			return // duplicate
+		}
+		// Collision — split: create inner node, re-insert both
+		inner := &txSetTreeNode{}
+		insertIntoTree(inner, child.hash, depth+1)
+		insertIntoTree(inner, h, depth+1)
+		node.children[nibble] = inner
+		return
+	}
+
+	// Existing inner node — recurse
+	insertIntoTree(child, h, depth+1)
+}
+
+// computeTreeHash recursively computes inner node hashes (post-order).
+// Leaf hashes are already set (= transaction hash).
+// Inner hash = SHA512Half(MIN\0 + 16 × child_hash).
+func computeTreeHash(node *txSetTreeNode) {
+	if node.isLeaf {
+		return // leaf hash is already the tx hash
+	}
+
+	// Compute children first
+	for i := 0; i < 16; i++ {
+		if node.children[i] != nil {
+			computeTreeHash(node.children[i])
+		}
+	}
+
+	// Inner node hash: MIN\0 prefix + 16 child hashes
+	minPrefix := [4]byte{'M', 'I', 'N', 0x00}
+	h := sha512.New()
+	h.Write(minPrefix[:])
+	for i := 0; i < 16; i++ {
+		if node.children[i] != nil {
+			childHash := node.children[i].hash
+			h.Write(childHash[:])
+		} else {
+			h.Write(make([]byte, 32)) // zero hash for empty slot
+		}
+	}
+	full := h.Sum(nil)
+	copy(node.hash[:], full[:32])
+}
+
+// getNibble returns the nibble (4-bit value) at the given position in a hash.
+// Position 0 is the high nibble of byte 0, position 1 is the low nibble, etc.
+func getNibble(h [32]byte, pos int) int {
+	byteIdx := pos / 2
+	if pos%2 == 0 {
+		return int(h[byteIdx] >> 4)
+	}
+	return int(h[byteIdx] & 0x0F)
 }
 
 // canonicalSeq returns the effective sequence number for canonical ordering.
@@ -836,6 +1091,31 @@ func (c *testTxQApplyContext) GetBaseFee(txn tx.Transaction) uint64 {
 	if calc, ok := txn.(baseFeeCalculator); ok {
 		return calc.CalculateMinimumFee(c.env.baseFee)
 	}
+
+	// SetRegularKey free password change: baseFee = 0 when signed with master
+	// key and lsfPasswordSpent is not set.
+	// Reference: rippled SetRegularKey.cpp calculateBaseFee
+	if txn.TxType() == tx.TypeRegularKeySet {
+		common := txn.GetCommon()
+		if common != nil && common.SigningPubKey != "" {
+			sigAddr, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(common.SigningPubKey)
+			if err == nil && sigAddr == common.Account {
+				// Signed with master key. Check if lsfPasswordSpent is set.
+				acctID, acctErr := state.DecodeAccountID(common.Account)
+				if acctErr == nil {
+					accountKey := keylet.Account(acctID)
+					data, readErr := c.env.ledger.Read(accountKey)
+					if readErr == nil && data != nil {
+						accountRoot, parseErr := state.ParseAccountRootFromBytes(data)
+						if parseErr == nil && accountRoot.Flags&state.LsfPasswordSpent == 0 {
+							return 0
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return c.env.baseFee
 }
 
@@ -849,6 +1129,14 @@ func (c *testTxQApplyContext) GetLedgerSequence() uint32 {
 
 func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
 	parentCloseTime := uint32(c.env.clock.Now().Unix() - 946684800)
+	// Transactions applied through the TxQ must NOT check open-ledger fee
+	// adequacy. In rippled, TxQ::tryDirectApply calls ripple::apply() with
+	// tapNONE flags (NOT tapOPEN_LEDGER). The TxQ's own fee-level check is
+	// sufficient; the engine's baseFee floor would incorrectly reject
+	// fee=0 transactions that have already passed fee-level validation.
+	// Reference: rippled NetworkOPsImp::apply (flags = tapNONE),
+	//   TxQ::tryDirectApply (uses same flags as NetworkOPs),
+	//   TxQ::tryClearAccountQueueUpThruTx (uses stored MaybeTx flags)
 	engineConfig := tx.EngineConfig{
 		BaseFee:                   c.env.baseFee,
 		ReserveBase:               c.env.reserveBase,
@@ -859,7 +1147,7 @@ func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (tx.Result, b
 		ParentCloseTime:           parentCloseTime,
 		NetworkID:                 c.env.networkID,
 		ParentHash:                c.env.ledger.ParentHash(),
-		OpenLedger:                c.env.openLedger,
+		OpenLedger:                false,
 	}
 
 	engine := tx.NewEngine(c.env.ledger, engineConfig)
@@ -875,6 +1163,29 @@ func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (tx.Result, b
 		}
 	}
 	return applyResult.Result, applied
+}
+
+func (c *testTxQApplyContext) PreclaimTransaction(txn tx.Transaction, account [20]byte, adjustedBalance uint64, adjustedSeq uint32) tx.Result {
+	// Simplified simulation of rippled's multiTxn preclaim path (TxQ.cpp:1167-1170).
+	// rippled creates a modified view with adjusted balance and sequence,
+	// then runs a full preclaim(). We only check the checkFee portion here
+	// (terINSUF_FEE_B when adjusted balance < fee), which is the primary
+	// check that differs with an adjusted view. Other preclaim failures
+	// (e.g., tecINSUFFICIENT_RESERVE) are not yet simulated.
+	// Reference: rippled Transactor::checkFee (Transactor.cpp line ~310)
+	common := txn.GetCommon()
+	if common == nil {
+		return tx.TefINTERNAL
+	}
+
+	fee, _ := strconv.ParseUint(common.Fee, 10, 64)
+
+	if adjustedBalance < fee {
+		return tx.TerINSUF_FEE_B
+	}
+
+	// If preclaim passes, return 0 (tesSUCCESS) to indicate likely to claim fee.
+	return 0
 }
 
 // testTxQAcceptContext implements txq.AcceptContext for draining the queue.
@@ -901,6 +1212,12 @@ func (c *testTxQAcceptContext) GetAccountSequence(account [20]byte) uint32 {
 
 func (c *testTxQAcceptContext) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
 	parentCloseTime := uint32(c.env.clock.Now().Unix() - 946684800)
+	// TxQ accept (drain on close) applies queued transactions with tapNONE
+	// flags in rippled — NOT tapOPEN_LEDGER. This prevents the engine's
+	// fee adequacy check from rejecting fee=0 transactions that were
+	// already validated by the TxQ's fee-level mechanism.
+	// Reference: rippled TxQ::accept calls MaybeTx::apply with stored
+	//   flags (which have tapRETRY cleared but NOT tapOPEN_LEDGER set)
 	engineConfig := tx.EngineConfig{
 		BaseFee:                   c.env.baseFee,
 		ReserveBase:               c.env.reserveBase,
@@ -911,7 +1228,7 @@ func (c *testTxQAcceptContext) ApplyTransaction(txn tx.Transaction) (tx.Result, 
 		ParentCloseTime:           parentCloseTime,
 		NetworkID:                 c.env.networkID,
 		ParentHash:                c.env.ledger.ParentHash(),
-		OpenLedger:                c.env.openLedger,
+		OpenLedger:                false,
 	}
 
 	engine := tx.NewEngine(c.env.ledger, engineConfig)
@@ -952,6 +1269,25 @@ func (e *TestEnv) recordTxFeeLevel(txn tx.Transaction) {
 		baseFee = calc.CalculateMinimumFee(e.baseFee)
 	}
 
+	// SetRegularKey free password change: baseFee = 0 when signed with master key.
+	// Reference: rippled SetRegularKey.cpp calculateBaseFee + TxQ.cpp getFeeLevelPaid
+	if txn.TxType() == tx.TypeRegularKeySet && common.SigningPubKey != "" {
+		sigAddr, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(common.SigningPubKey)
+		if err == nil && sigAddr == common.Account {
+			acctID, acctErr := state.DecodeAccountID(common.Account)
+			if acctErr == nil {
+				accountKey := keylet.Account(acctID)
+				data, readErr := e.ledger.Read(accountKey)
+				if readErr == nil && data != nil {
+					accountRoot, parseErr := state.ParseAccountRootFromBytes(data)
+					if parseErr == nil && accountRoot.Flags&state.LsfPasswordSpent == 0 {
+						baseFee = 0
+					}
+				}
+			}
+		}
+	}
+
 	feeLevel := txq.ToFeeLevel(feePaid, baseFee)
 	e.closingFeeLevels = append(e.closingFeeLevels, feeLevel)
 }
@@ -979,6 +1315,27 @@ func (e *TestEnv) EnableOpenLedgerReplay() {
 	if e.lastClosedLedger == nil {
 		e.lastClosedLedger = e.genesisLedger
 	}
+}
+
+// IsReplayEnabled returns whether open-ledger replay is enabled.
+func (e *TestEnv) IsReplayEnabled() bool {
+	return e.replayOnClose
+}
+
+// SetInSetupMode controls whether subsequent transactions are tagged as
+// setup (fund/trust) or user (fixture) for replay purposes. Setup
+// transactions are replayed first in submission order; user transactions
+// are replayed second in canonical sorted order.
+func (e *TestEnv) SetInSetupMode(setup bool) {
+	e.inSetupMode = setup
+}
+
+// QueueReimbursement queues an account for fee reimbursement during the next
+// closeWithReplay. The reimbursement is applied after transaction replay but
+// before the ledger is finalized, so it becomes part of the closed ledger
+// state and survives future replays.
+func (e *TestEnv) QueueReimbursement(acc *Account) {
+	e.pendingReimbursements = append(e.pendingReimbursements, acc)
 }
 
 // SubmitPseudo submits a pseudo-transaction (EnableAmendment, SetFee, UNLModify)

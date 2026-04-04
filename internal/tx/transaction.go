@@ -268,7 +268,7 @@ func (c *Common) ToMap() map[string]any {
 	if c.AccountTxnID != "" {
 		m["AccountTxnID"] = c.AccountTxnID
 	}
-	if c.Flags != nil && *c.Flags != 0 {
+	if c.Flags != nil {
 		m["Flags"] = *c.Flags
 	}
 	if c.LastLedgerSequence != nil {

@@ -273,13 +273,20 @@ func deserializeCurrencyCode(data []byte) (string, error) {
 	if bytes.Equal(data[0:12], make([]byte, 12)) && bytes.Equal(data[12:15], []byte{0x58, 0x52, 0x50}) && bytes.Equal(data[15:20], make([]byte, 5)) { // XRP in bytes
 		return "", errInvalidCurrencyCode
 	}
-	iso := strings.ToUpper(string(data[12:15]))
-	ok, _ := regexp.MatchString(IOUCodeRegex, iso)
 
-	if !ok {
-		return strings.ToUpper(hex.EncodeToString(data)), nil
+	// Standard 3-char currency codes have bytes 0-11 and 15-19 all zeros.
+	// Non-standard currencies (e.g., LP token currencies starting with 0x03)
+	// must be returned as the full hex string, not as a 3-char code.
+	if bytes.Equal(data[0:12], make([]byte, 12)) && bytes.Equal(data[15:20], make([]byte, 5)) {
+		iso := strings.ToUpper(string(data[12:15]))
+		ok, _ := regexp.MatchString(IOUCodeRegex, iso)
+		if ok {
+			return iso, nil
+		}
 	}
-	return iso, nil
+
+	// Non-standard currency: return full hex representation
+	return strings.ToUpper(hex.EncodeToString(data)), nil
 }
 
 func deserializeIssuer(data []byte) (string, error) {
@@ -345,16 +352,15 @@ func deserializeMPTAmount(data []byte) (map[string]any, error) {
 
 // verifyXrpValue validates the format of an XRP amount value.
 // XRP values should not contain a decimal point because they are represented as integers as drops.
-// Negative values are allowed (used by NFToken offers pre-fixNFTokenNegOffer).
+// Negative values are rejected — XRP amounts (drops) cannot be negative.
 func verifyXrpValue(value string) error {
-	// Strip optional leading minus sign for validation
-	checkVal := value
-	if strings.HasPrefix(checkVal, "-") {
-		checkVal = checkVal[1:]
+	// XRP amounts (drops) cannot be negative.
+	if strings.HasPrefix(value, "-") {
+		return &InvalidAmountError{value}
 	}
 
 	r := regexp.MustCompile(`\d+`) // regex to match only digits
-	m := r.FindAllString(checkVal, -1)
+	m := r.FindAllString(value, -1)
 
 	if len(m) != 1 {
 		return errInvalidXRPValue
@@ -371,9 +377,7 @@ func verifyXrpValue(value string) error {
 		return nil
 	}
 
-	// Use absolute value for range check
-	absDecimal := new(big.Float).Abs(decimal)
-	if absDecimal.Cmp(big.NewFloat(MinXRP)) == -1 || absDecimal.Cmp(big.NewFloat(MaxDrops)) == 1 {
+	if decimal.Cmp(big.NewFloat(MinXRP)) == -1 || decimal.Cmp(big.NewFloat(MaxDrops)) == 1 {
 		return &InvalidAmountError{value}
 	}
 

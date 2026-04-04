@@ -134,15 +134,20 @@ func buildServerInfo(human bool) map[string]interface{} {
 	}
 
 	// last_close: converge_time_s (float seconds) for human, converge_time (int ms) for machine
+	proposers := 0
+	convergeTimeMs := 0
+	if types.Services.LastCloseInfo != nil {
+		proposers, convergeTimeMs = types.Services.LastCloseInfo()
+	}
 	if human {
 		info["last_close"] = map[string]interface{}{
-			"converge_time_s": 0.0, // TODO: get from consensus
-			"proposers":       0,   // TODO: get from consensus
+			"converge_time_s": float64(convergeTimeMs) / 1000.0,
+			"proposers":       proposers,
 		}
 	} else {
 		info["last_close"] = map[string]interface{}{
-			"converge_time": 0, // TODO: get from consensus (milliseconds)
-			"proposers":     0, // TODO: get from consensus
+			"converge_time": convergeTimeMs,
+			"proposers":     proposers,
 		}
 	}
 

@@ -43,27 +43,43 @@ func checkNoBadOffers(entries []InvariantEntry) *InvariantViolation {
 	return nil
 }
 
-// checkNoZeroEscrow verifies that Escrow entries have a positive XRP amount.
-// Reference: rippled InvariantCheck.cpp — NoZeroEscrow
+// checkNoZeroEscrow verifies that Escrow entries have a valid amount.
+// For XRP escrows, amount must be positive and not exceed InitialXRP.
+// For IOU escrows (TokenEscrow amendment), the IOU amount validity is
+// checked by the escrow transaction's own validation; we skip the
+// XRP-specific checks here.
+// Reference: rippled InvariantCheck.cpp — NoZeroEscrow (lines 267-356)
 func checkNoZeroEscrow(entries []InvariantEntry) *InvariantViolation {
 	for _, e := range entries {
-		if e.EntryType != "Escrow" || e.IsDelete {
+		if e.EntryType != "Escrow" {
 			continue
 		}
-		esc, err := state.ParseEscrow(e.After)
-		if err != nil {
-			continue
-		}
-		if esc.Amount == 0 {
-			return &InvariantViolation{
-				Name:    "NoZeroEscrow",
-				Message: "Escrow entry has zero XRP amount",
+		// Check both before and after entries (matching rippled behavior)
+		for _, data := range [][]byte{e.Before, e.After} {
+			if data == nil {
+				continue
 			}
-		}
-		if esc.Amount > InitialXRP {
-			return &InvariantViolation{
-				Name:    "NoZeroEscrow",
-				Message: fmt.Sprintf("Escrow amount %d exceeds InitialXRP (%d)", esc.Amount, InitialXRP),
+			esc, err := state.ParseEscrow(data)
+			if err != nil {
+				continue
+			}
+			// Only apply XRP-specific checks for XRP escrows.
+			// IOU escrows have IsXRP=false and their amount validity is
+			// enforced by the transaction's own Preflight/Apply logic.
+			if !esc.IsXRP {
+				continue
+			}
+			if esc.Amount == 0 {
+				return &InvariantViolation{
+					Name:    "NoZeroEscrow",
+					Message: "Escrow entry has zero XRP amount",
+				}
+			}
+			if esc.Amount > InitialXRP {
+				return &InvariantViolation{
+					Name:    "NoZeroEscrow",
+					Message: fmt.Sprintf("Escrow amount %d exceeds InitialXRP (%d)", esc.Amount, InitialXRP),
+				}
 			}
 		}
 	}

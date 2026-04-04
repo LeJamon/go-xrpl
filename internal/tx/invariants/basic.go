@@ -59,15 +59,19 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 			netChange += int64(after) - int64(before)
 
 		case "Escrow":
-			// Escrow holds XRP in escrow — count as a balance change
+			// Escrow holds XRP in escrow — count as a balance change.
+			// IOU escrows (TokenEscrow amendment) are skipped because they
+			// don't hold XRP drops.
+			// Reference: rippled InvariantCheck.cpp lines 111-113, 133-135:
+			//   if (isXRP((*before)[sfAmount])) drops_ -= ...
 			var before, after uint64
 			if e.Before != nil {
-				if esc, err := state.ParseEscrow(e.Before); err == nil {
+				if esc, err := state.ParseEscrow(e.Before); err == nil && esc.IsXRP {
 					before = esc.Amount
 				}
 			}
 			if e.After != nil {
-				if esc, err := state.ParseEscrow(e.After); err == nil {
+				if esc, err := state.ParseEscrow(e.After); err == nil && esc.IsXRP {
 					after = esc.Amount
 				}
 			}

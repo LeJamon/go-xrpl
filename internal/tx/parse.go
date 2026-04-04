@@ -74,5 +74,10 @@ func ParseFromBinary(blob []byte) (Transaction, error) {
 	// Set the present fields on the parsed transaction
 	tx.GetCommon().SetPresentFields(presentFields)
 
+	// Preserve the original serialized bytes so that downstream consumers
+	// (e.g. sortCanonicalSalted) can use them for hash/SHAMap computation
+	// without re-encoding, ensuring byte-exact fidelity with the source.
+	tx.SetRawBytes(blob)
+
 	return tx, nil
 }

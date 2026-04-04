@@ -33,6 +33,9 @@ type ServiceContainer struct {
 
 	// PeerCount returns the number of connected peers (nil when not in consensus mode)
 	PeerCount func() int
+
+	// LastCloseInfo returns proposer count and convergence time (ms) from the last consensus round
+	LastCloseInfo func() (proposers int, convergeTimeMs int)
 }
 
 // LedgerNavigator provides ledger index navigation and mode queries.

@@ -219,17 +219,22 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing bool) error
 			}
 		}
 
-		// Peer pressure: if peers have already closed (proposals exist),
-		// close immediately without waiting for the 2s timer.
-		// Matches rippled's startRoundInternal() check (Consensus.h:730-738).
-		if replayed > 0 {
-			if e.closeTimer != nil {
-				e.closeTimer.Stop()
+		// Peer pressure: if more than half of previous proposers have
+		// already closed, consider closing immediately — but still go
+		// through shouldCloseLedger() to enforce timing constraints.
+		// Matches rippled's startRoundInternal() (Consensus.h:732-738)
+		// which calls timerEntry() → phaseOpen() → shouldCloseLedger().
+		if replayed > e.prevProposers/2 {
+			if e.shouldCloseLedger() {
+				if e.closeTimer != nil {
+					e.closeTimer.Stop()
+				}
+				e.closeLedger()
+				// Don't call checkConvergence() here — the establish
+				// timer will evaluate it after fresh proposals arrive
+				// with correct close times. Accepting immediately with
+				// only replayed close times causes hash mismatches.
 			}
-			e.closeLedger()
-			// Immediately check convergence since we already have proposals
-			// from playback — no need to wait for new ones to arrive.
-			e.checkConvergence()
 		}
 	}
 
@@ -417,6 +422,13 @@ func (e *Engine) Timing() consensus.Timing {
 	return e.timing
 }
 
+// GetLastCloseInfo returns the proposer count and convergence time from the last consensus round.
+func (e *Engine) GetLastCloseInfo() (proposers int, convergeTime time.Duration) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.prevProposers, e.prevRoundTime
+}
+
 // Subscribe adds an event subscriber.
 func (e *Engine) Subscribe(sub consensus.EventSubscriber) {
 	e.eventBus.Subscribe(sub)
@@ -529,6 +541,13 @@ func (e *Engine) checkLedger() {
 	ourID := e.prevLedger.ID()
 	netLgr := e.getNetworkLedger()
 	if netLgr != ourID {
+		// If the network proposals reference our parent, we just completed
+		// the round they're still working on — we're ahead, not wrong.
+		// Wait for the network to catch up rather than switching back.
+		if netLgr == e.prevLedger.ParentID() {
+			return
+		}
+
 		// Already targeting this ledger — don't spam
 		if e.mode == consensus.ModeWrongLedger && e.wrongLedgerID == netLgr {
 			return
@@ -735,6 +754,9 @@ func (e *Engine) setPhase(newPhase consensus.Phase) {
 // shouldCloseLedger checks whether the ledger should be closed now.
 // Matches rippled's shouldCloseLedger() (Consensus.cpp:27-103).
 func (e *Engine) shouldCloseLedger() bool {
+	if e.prevLedger == nil {
+		return false
+	}
 	openTime := time.Since(e.state.StartTime)
 	timeSincePrevClose := e.adaptor.Now().Sub(e.prevLedger.CloseTime())
 
@@ -753,9 +775,21 @@ func (e *Engine) shouldCloseLedger() bool {
 		}
 	}
 
+	// Count trusted validators that have validated our previous ledger.
+	// Matches rippled's adaptor_.proposersValidated(prevLedgerID_).
+	proposersValidated := 0
+	if e.prevLedger != nil {
+		prevID := e.prevLedger.ID()
+		for nodeID, v := range e.validations {
+			if e.adaptor.IsTrusted(nodeID) && v.LedgerID == prevID {
+				proposersValidated++
+			}
+		}
+	}
+
 	// Peer pressure: if more than half of previous round's proposers
-	// have already closed, close immediately (matches rippled lines 67-73).
-	if proposersClosed > e.prevProposers/2 {
+	// have already closed or validated, close immediately (matches rippled lines 67-73).
+	if (proposersClosed + proposersValidated) > e.prevProposers/2 {
 		return true
 	}
 
@@ -780,13 +814,23 @@ func (e *Engine) shouldCloseLedger() bool {
 	return true
 }
 
-// startCloseTimer starts the timer for closing the ledger.
+// startCloseTimer starts the timer for evaluating ledger close.
+// Uses min(LedgerMinClose, 1s) matching rippled's heartbeat timer that calls
+// timerEntry() → phaseOpen() → shouldCloseLedger(). This ensures peer
+// pressure (proposersClosed + proposersValidated) is evaluated early,
+// while shouldCloseLedger() still enforces LedgerMinClose for non-peer-
+// pressure closes.
 func (e *Engine) startCloseTimer() {
 	if e.closeTimer != nil {
 		e.closeTimer.Stop()
 	}
 
-	e.closeTimer = time.AfterFunc(e.timing.LedgerMinClose, func() {
+	interval := time.Second
+	if e.timing.LedgerMinClose < interval {
+		interval = e.timing.LedgerMinClose
+	}
+
+	e.closeTimer = time.AfterFunc(interval, func() {
 		e.onCloseTimer()
 	})
 }
@@ -861,19 +905,28 @@ func (e *Engine) closeLedger() {
 	e.startTimeoutTimer()
 }
 
-// startTimeoutTimer starts the timeout timer for the establish phase.
+// startTimeoutTimer starts timers for the establish phase:
+// a periodic heartbeat (matching rippled's timerEntry calling
+// phaseEstablish) and a hard timeout at LedgerMaxClose.
 func (e *Engine) startTimeoutTimer() {
 	if e.timeoutTimer != nil {
 		e.timeoutTimer.Stop()
 	}
 
-	e.timeoutTimer = time.AfterFunc(e.timing.LedgerMaxClose, func() {
-		e.onTimeoutTimer()
+	// Periodic heartbeat to re-evaluate convergence during establish phase.
+	// Matches rippled's timerEntry() → phaseEstablish() on every heartbeat.
+	// Use min(LedgerMinClose, 1s) so tests with fast timing still work.
+	interval := time.Second
+	if e.timing.LedgerMinClose < interval {
+		interval = e.timing.LedgerMinClose
+	}
+	e.timeoutTimer = time.AfterFunc(interval, func() {
+		e.onEstablishTimer()
 	})
 }
 
-// onTimeoutTimer handles the timeout timer firing.
-func (e *Engine) onTimeoutTimer() {
+// onEstablishTimer periodically re-evaluates convergence during establish phase.
+func (e *Engine) onEstablishTimer() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -881,14 +934,36 @@ func (e *Engine) onTimeoutTimer() {
 		return
 	}
 
-	e.eventBus.Publish(&consensus.TimerFiredEvent{
-		Timer:     consensus.TimerRoundTimeout,
-		Round:     e.state.Round,
-		Timestamp: e.adaptor.Now(),
-	})
+	roundTime := time.Since(e.roundStartTime)
 
-	// Force consensus with what we have
-	e.acceptLedger(consensus.ResultTimeout)
+	// Hard timeout: force accept after LedgerMaxClose
+	if roundTime >= e.timing.LedgerMaxClose {
+		e.eventBus.Publish(&consensus.TimerFiredEvent{
+			Timer:     consensus.TimerRoundTimeout,
+			Round:     e.state.Round,
+			Timestamp: e.adaptor.Now(),
+		})
+		e.acceptLedger(consensus.ResultTimeout)
+		return
+	}
+
+	// Update positions and check convergence
+	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil {
+		e.updatePosition()
+	}
+	e.updateCloseTimePosition()
+	e.checkConvergence()
+
+	// Reschedule if still in establish phase
+	if e.phase == consensus.PhaseEstablish {
+		interval := time.Second
+		if e.timing.LedgerMinClose < interval {
+			interval = e.timing.LedgerMinClose
+		}
+		e.timeoutTimer = time.AfterFunc(interval, func() {
+			e.onEstablishTimer()
+		})
+	}
 }
 
 // checkConvergence checks if proposals have converged.
@@ -1006,12 +1081,22 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	}
 
 	// Determine winning close time and apply effCloseTime
-	closeTime := e.determineCloseTime()
+	rawCloseTime := e.determineCloseTime()
 	resolution := e.adaptor.CloseTimeResolution()
 	priorClose := e.prevLedger.CloseTime()
-	closeTime = effCloseTime(closeTime, resolution, priorClose)
+	closeTime := effCloseTime(rawCloseTime, resolution, priorClose)
 
-	_ = priorClose // used by effCloseTime above
+	slog.Debug("acceptLedger close time",
+		"seq", e.prevLedger.Seq()+1,
+		"mode", e.mode,
+		"raw_ct", rawCloseTime.Unix()-946684800,
+		"eff_ct", closeTime.Unix()-946684800,
+		"prior_ct", priorClose.Unix()-946684800,
+		"resolution", resolution,
+		"proposers", len(e.proposals),
+		"has_position", e.state.OurPosition != nil,
+		"ct_consensus", e.haveCloseTimeConsensus,
+	)
 
 	// Get the agreed transaction set
 	var txSet consensus.TxSet
@@ -1248,21 +1333,33 @@ func participantsNeeded(participants, percent int) int {
 // determineCloseTime returns the consensus close time.
 // Uses the close time that was converged on by updateCloseTimePosition().
 // If we have a consensus position with a non-zero close time, use it.
-// For observers (no position), use the most popular peer close time.
-// Otherwise fall back to our own close time.
+// For observers (no position), use the most popular peer close time
+// ROUNDED to the current resolution — matching rippled where all nodes
+// (proposers and observers) use rounded consensus values.
 func (e *Engine) determineCloseTime() time.Time {
 	// If we have a position (from updateCloseTimePosition convergence), use its close time.
+	// This is already rounded by updateCloseTimePosition().
 	if e.state.OurPosition != nil && !e.state.OurPosition.CloseTime.IsZero() {
 		return e.state.OurPosition.CloseTime
 	}
 
-	// For observers: use the most popular peer close time from proposals.
-	// This matches rippled's behavior where non-proposing nodes adopt the
-	// network's close time rather than using their own wall clock.
+	resolution := e.adaptor.CloseTimeResolution()
+
+	// For observers: use the most popular peer close time from proposals,
+	// but ROUND it to the resolution before returning. CloseTimes.Peers
+	// stores raw times; rippled rounds before voting (asCloseTime), so
+	// we must round here to match.
 	if len(e.state.CloseTimes.Peers) > 0 {
+		// Vote on rounded times (matching rippled's updateOurPositions)
+		roundedVotes := make(map[time.Time]int)
+		for t, count := range e.state.CloseTimes.Peers {
+			rounded := roundCloseTime(t, resolution)
+			roundedVotes[rounded] += count
+		}
+
 		var bestTime time.Time
 		bestCount := 0
-		for t, count := range e.state.CloseTimes.Peers {
+		for t, count := range roundedVotes {
 			if count > bestCount {
 				bestTime = t
 				bestCount = count
@@ -1273,7 +1370,7 @@ func (e *Engine) determineCloseTime() time.Time {
 		}
 	}
 
-	return e.state.CloseTimes.Self
+	return roundCloseTime(e.state.CloseTimes.Self, resolution)
 }
 
 // sendValidation creates and broadcasts a validation.
