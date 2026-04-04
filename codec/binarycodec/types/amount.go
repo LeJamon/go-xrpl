@@ -352,7 +352,7 @@ func deserializeMPTAmount(data []byte) (map[string]any, error) {
 
 // verifyXrpValue validates the format of an XRP amount value.
 // XRP values should not contain a decimal point because they are represented as integers as drops.
-// Negative values are allowed (used by NFToken offers pre-fixNFTokenNegOffer).
+// Negative values are rejected — XRP amounts (drops) cannot be negative.
 func verifyXrpValue(value string) error {
 	// XRP amounts (drops) cannot be negative.
 	if strings.HasPrefix(value, "-") {

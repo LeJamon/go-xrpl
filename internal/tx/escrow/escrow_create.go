@@ -388,10 +388,13 @@ func escrowLockIOU(view tx.LedgerView, senderID, issuerID [20]byte, amount tx.Am
 	}
 
 	// Read the trust line between sender and issuer.
-	// In rippled, rippleCredit() would create the trust line if absent via
-	// trustCreate(). For escrow locking the sender should already hold the
-	// token, so the trust line must exist. Return tecINTERNAL on read failure
-	// and tecNO_LINE if the trust line is missing.
+	// Note: rippled's rippleCredit() auto-creates trust lines via trustCreate()
+	// if absent. We intentionally skip auto-creation here because for escrow
+	// locking the sender must already hold the IOU, which requires an existing
+	// trust line. If the trust line is missing, the sender cannot have a balance
+	// to escrow, so TecNO_LINE is the correct result.
+	// TODO: EscrowFinish (unlock) will need trust line auto-creation for the
+	// destination, since the destination may not yet have a trust line to the issuer.
 	trustLineKey := keylet.Line(senderID, issuerID, amount.Currency)
 	trustLineData, err := view.Read(trustLineKey)
 	if err != nil {
