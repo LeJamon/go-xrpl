@@ -754,6 +754,9 @@ func (e *Engine) setPhase(newPhase consensus.Phase) {
 // shouldCloseLedger checks whether the ledger should be closed now.
 // Matches rippled's shouldCloseLedger() (Consensus.cpp:27-103).
 func (e *Engine) shouldCloseLedger() bool {
+	if e.prevLedger == nil {
+		return false
+	}
 	openTime := time.Since(e.state.StartTime)
 	timeSincePrevClose := e.adaptor.Now().Sub(e.prevLedger.CloseTime())
 
@@ -812,7 +815,7 @@ func (e *Engine) shouldCloseLedger() bool {
 }
 
 // startCloseTimer starts the timer for evaluating ledger close.
-// Uses a 1-second interval matching rippled's heartbeat timer that calls
+// Uses min(LedgerMinClose, 1s) matching rippled's heartbeat timer that calls
 // timerEntry() → phaseOpen() → shouldCloseLedger(). This ensures peer
 // pressure (proposersClosed + proposersValidated) is evaluated early,
 // while shouldCloseLedger() still enforces LedgerMinClose for non-peer-
@@ -822,7 +825,12 @@ func (e *Engine) startCloseTimer() {
 		e.closeTimer.Stop()
 	}
 
-	e.closeTimer = time.AfterFunc(time.Second, func() {
+	interval := time.Second
+	if e.timing.LedgerMinClose < interval {
+		interval = e.timing.LedgerMinClose
+	}
+
+	e.closeTimer = time.AfterFunc(interval, func() {
 		e.onCloseTimer()
 	})
 }
@@ -898,7 +906,7 @@ func (e *Engine) closeLedger() {
 }
 
 // startTimeoutTimer starts timers for the establish phase:
-// a periodic 1-second heartbeat (matching rippled's timerEntry calling
+// a periodic heartbeat (matching rippled's timerEntry calling
 // phaseEstablish) and a hard timeout at LedgerMaxClose.
 func (e *Engine) startTimeoutTimer() {
 	if e.timeoutTimer != nil {
@@ -907,7 +915,12 @@ func (e *Engine) startTimeoutTimer() {
 
 	// Periodic heartbeat to re-evaluate convergence during establish phase.
 	// Matches rippled's timerEntry() → phaseEstablish() on every heartbeat.
-	e.timeoutTimer = time.AfterFunc(time.Second, func() {
+	// Use min(LedgerMinClose, 1s) so tests with fast timing still work.
+	interval := time.Second
+	if e.timing.LedgerMinClose < interval {
+		interval = e.timing.LedgerMinClose
+	}
+	e.timeoutTimer = time.AfterFunc(interval, func() {
 		e.onEstablishTimer()
 	})
 }
@@ -943,7 +956,11 @@ func (e *Engine) onEstablishTimer() {
 
 	// Reschedule if still in establish phase
 	if e.phase == consensus.PhaseEstablish {
-		e.timeoutTimer = time.AfterFunc(time.Second, func() {
+		interval := time.Second
+		if e.timing.LedgerMinClose < interval {
+			interval = e.timing.LedgerMinClose
+		}
+		e.timeoutTimer = time.AfterFunc(interval, func() {
 			e.onEstablishTimer()
 		})
 	}

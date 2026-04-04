@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 // mockEngine records calls from the router for testing.
 type mockEngine struct {
+	mu          sync.Mutex
 	proposals   []*consensus.Proposal
 	validations []*consensus.Validation
 	txSets      []consensus.TxSetID
@@ -31,18 +33,36 @@ func (m *mockEngine) GetLastCloseInfo() (int, time.Duration)    { return 0, 0 }
 func (m *mockEngine) OnLedger(consensus.LedgerID, []byte) error { return nil }
 
 func (m *mockEngine) OnProposal(p *consensus.Proposal) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.proposals = append(m.proposals, p)
 	return nil
 }
 
 func (m *mockEngine) OnValidation(v *consensus.Validation) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.validations = append(m.validations, v)
 	return nil
 }
 
 func (m *mockEngine) OnTxSet(id consensus.TxSetID, txs [][]byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.txSets = append(m.txSets, id)
 	return nil
+}
+
+func (m *mockEngine) getProposals() []*consensus.Proposal {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]*consensus.Proposal(nil), m.proposals...)
+}
+
+func (m *mockEngine) getValidations() []*consensus.Validation {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]*consensus.Validation(nil), m.validations...)
 }
 
 func encodePayload(t *testing.T, msg message.Message) []byte {
@@ -83,8 +103,9 @@ func TestRouterDispatchesProposal(t *testing.T) {
 	// Wait for processing
 	time.Sleep(50 * time.Millisecond)
 
-	assert.Len(t, engine.proposals, 1)
-	assert.Equal(t, uint32(1), engine.proposals[0].Position)
+	proposals := engine.getProposals()
+	assert.Len(t, proposals, 1)
+	assert.Equal(t, uint32(1), proposals[0].Position)
 }
 
 func TestRouterDispatchesValidation(t *testing.T) {
@@ -110,7 +131,8 @@ func TestRouterDispatchesValidation(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	assert.Len(t, engine.validations, 1)
+	validations := engine.getValidations()
+	assert.Len(t, validations, 1)
 }
 
 func TestRouterDispatchesTransaction(t *testing.T) {
