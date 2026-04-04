@@ -1092,6 +1092,31 @@ func (c *testTxQApplyContext) GetBaseFee(txn tx.Transaction) uint64 {
 	if calc, ok := txn.(baseFeeCalculator); ok {
 		return calc.CalculateMinimumFee(c.env.baseFee)
 	}
+
+	// SetRegularKey free password change: baseFee = 0 when signed with master
+	// key and lsfPasswordSpent is not set.
+	// Reference: rippled SetRegularKey.cpp calculateBaseFee
+	if txn.TxType() == tx.TypeRegularKeySet {
+		common := txn.GetCommon()
+		if common != nil && common.SigningPubKey != "" {
+			sigAddr, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(common.SigningPubKey)
+			if err == nil && sigAddr == common.Account {
+				// Signed with master key. Check if lsfPasswordSpent is set.
+				acctID, acctErr := state.DecodeAccountID(common.Account)
+				if acctErr == nil {
+					accountKey := keylet.Account(acctID)
+					data, readErr := c.env.ledger.Read(accountKey)
+					if readErr == nil && data != nil {
+						accountRoot, parseErr := state.ParseAccountRootFromBytes(data)
+						if parseErr == nil && accountRoot.Flags&state.LsfPasswordSpent == 0 {
+							return 0
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return c.env.baseFee
 }
 
@@ -1105,6 +1130,14 @@ func (c *testTxQApplyContext) GetLedgerSequence() uint32 {
 
 func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
 	parentCloseTime := uint32(c.env.clock.Now().Unix() - 946684800)
+	// Transactions applied through the TxQ must NOT check open-ledger fee
+	// adequacy. In rippled, TxQ::tryDirectApply calls ripple::apply() with
+	// tapNONE flags (NOT tapOPEN_LEDGER). The TxQ's own fee-level check is
+	// sufficient; the engine's baseFee floor would incorrectly reject
+	// fee=0 transactions that have already passed fee-level validation.
+	// Reference: rippled NetworkOPsImp::apply (flags = tapNONE),
+	//   TxQ::tryDirectApply (uses same flags as NetworkOPs),
+	//   TxQ::tryClearAccountQueueUpThruTx (uses stored MaybeTx flags)
 	engineConfig := tx.EngineConfig{
 		BaseFee:                   c.env.baseFee,
 		ReserveBase:               c.env.reserveBase,
@@ -1115,7 +1148,7 @@ func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (tx.Result, b
 		ParentCloseTime:           parentCloseTime,
 		NetworkID:                 c.env.networkID,
 		ParentHash:                c.env.ledger.ParentHash(),
-		OpenLedger:                c.env.openLedger,
+		OpenLedger:                false,
 	}
 
 	engine := tx.NewEngine(c.env.ledger, engineConfig)
@@ -1131,6 +1164,31 @@ func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (tx.Result, b
 		}
 	}
 	return applyResult.Result, applied
+}
+
+func (c *testTxQApplyContext) PreclaimTransaction(txn tx.Transaction, account [20]byte, adjustedBalance uint64, adjustedSeq uint32) tx.Result {
+	// Simulate rippled's multiTxn preclaim path (TxQ.cpp:1167-1170).
+	// rippled creates a modified view with adjusted balance and sequence,
+	// then runs preclaim(). The most common failure is terINSUF_FEE_B when
+	// the adjusted balance is less than the transaction fee.
+	//
+	// We run a simplified check: if the adjusted balance is less than the fee,
+	// return terINSUF_FEE_B. This matches the checkFee portion of preclaim
+	// which is the primary check that differs with an adjusted view.
+	// Reference: rippled Transactor::checkFee (Transactor.cpp line ~310)
+	common := txn.GetCommon()
+	if common == nil {
+		return tx.TefINTERNAL
+	}
+
+	fee, _ := strconv.ParseUint(common.Fee, 10, 64)
+
+	if adjustedBalance < fee {
+		return tx.TerINSUF_FEE_B
+	}
+
+	// If preclaim passes, return 0 (tesSUCCESS) to indicate likely to claim fee.
+	return 0
 }
 
 // testTxQAcceptContext implements txq.AcceptContext for draining the queue.
@@ -1157,6 +1215,12 @@ func (c *testTxQAcceptContext) GetAccountSequence(account [20]byte) uint32 {
 
 func (c *testTxQAcceptContext) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
 	parentCloseTime := uint32(c.env.clock.Now().Unix() - 946684800)
+	// TxQ accept (drain on close) applies queued transactions with tapNONE
+	// flags in rippled — NOT tapOPEN_LEDGER. This prevents the engine's
+	// fee adequacy check from rejecting fee=0 transactions that were
+	// already validated by the TxQ's fee-level mechanism.
+	// Reference: rippled TxQ::accept calls MaybeTx::apply with stored
+	//   flags (which have tapRETRY cleared but NOT tapOPEN_LEDGER set)
 	engineConfig := tx.EngineConfig{
 		BaseFee:                   c.env.baseFee,
 		ReserveBase:               c.env.reserveBase,
@@ -1167,7 +1231,7 @@ func (c *testTxQAcceptContext) ApplyTransaction(txn tx.Transaction) (tx.Result, 
 		ParentCloseTime:           parentCloseTime,
 		NetworkID:                 c.env.networkID,
 		ParentHash:                c.env.ledger.ParentHash(),
-		OpenLedger:                c.env.openLedger,
+		OpenLedger:                false,
 	}
 
 	engine := tx.NewEngine(c.env.ledger, engineConfig)
@@ -1206,6 +1270,25 @@ func (e *TestEnv) recordTxFeeLevel(txn tx.Transaction) {
 	// calls CalculateMinimumFee for batch transactions.
 	if calc, ok := txn.(baseFeeCalculator); ok {
 		baseFee = calc.CalculateMinimumFee(e.baseFee)
+	}
+
+	// SetRegularKey free password change: baseFee = 0 when signed with master key.
+	// Reference: rippled SetRegularKey.cpp calculateBaseFee + TxQ.cpp getFeeLevelPaid
+	if txn.TxType() == tx.TypeRegularKeySet && common.SigningPubKey != "" {
+		sigAddr, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(common.SigningPubKey)
+		if err == nil && sigAddr == common.Account {
+			acctID, acctErr := state.DecodeAccountID(common.Account)
+			if acctErr == nil {
+				accountKey := keylet.Account(acctID)
+				data, readErr := e.ledger.Read(accountKey)
+				if readErr == nil && data != nil {
+					accountRoot, parseErr := state.ParseAccountRootFromBytes(data)
+					if parseErr == nil && accountRoot.Flags&state.LsfPasswordSpent == 0 {
+						baseFee = 0
+					}
+				}
+			}
+		}
 	}
 
 	feeLevel := txq.ToFeeLevel(feePaid, baseFee)

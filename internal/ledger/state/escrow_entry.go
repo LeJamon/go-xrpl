@@ -9,7 +9,8 @@ import (
 type EscrowData struct {
 	Account         [20]byte
 	DestinationID   [20]byte
-	Amount          uint64
+	Amount          uint64 // XRP drops (only valid when IsXRP is true)
+	IsXRP           bool   // true if the escrow Amount is XRP, false if IOU
 	Condition       string
 	CancelAfter     uint32
 	FinishAfter     uint32
@@ -102,8 +103,22 @@ func ParseEscrow(data []byte) (*EscrowData, error) {
 				return escrow, nil
 			}
 			rawAmount := binary.BigEndian.Uint64(data[offset : offset+8])
-			escrow.Amount = rawAmount & 0x3FFFFFFFFFFFFFFF
-			offset += 8
+			// Bit 63 (top bit) distinguishes XRP from IOU amounts:
+			// 0 = XRP (8 bytes total), 1 = IOU (48 bytes: 8 + 20 currency + 20 issuer)
+			isIOU := rawAmount&0x8000000000000000 != 0
+			if isIOU {
+				// IOU amount: skip 48 bytes total (8 already accounted + 40 more)
+				if offset+48 > len(data) {
+					return escrow, nil
+				}
+				offset += 48
+				// IsXRP stays false (default)
+			} else {
+				// XRP amount: strip the sign bit (bit 62) to get drops
+				escrow.Amount = rawAmount & 0x3FFFFFFFFFFFFFFF
+				escrow.IsXRP = true
+				offset += 8
+			}
 
 		case FieldTypeAccountID:
 			if offset+21 > len(data) {

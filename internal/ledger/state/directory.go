@@ -454,7 +454,8 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, setupFun
 		return nil, ErrDirFull
 	}
 	// Without fixDirectoryLimit, enforce old page limit.
-	if r := view.Rules(); r != nil && !r.Enabled(amendment.FeatureFixDirectoryLimit) && newPage >= DirNodeMaxPages {
+	// When rules are nil (no amendment config), also enforce the old limit.
+	if r := view.Rules(); (r == nil || !r.Enabled(amendment.FeatureFixDirectoryLimit)) && newPage >= DirNodeMaxPages {
 		return nil, ErrDirFull
 	}
 

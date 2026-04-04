@@ -167,11 +167,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Get the amount to escrow
-	amount := e.Amount.Drops()
-	if amount <= 0 {
-		return tx.TemINVALID
-	}
+	isNative := e.Amount.IsNative()
 
 	// Verify destination exists and is not a pseudo-account
 	// Reference: rippled Escrow.cpp:511-512, 373-378
@@ -211,16 +207,24 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		)
 		return tx.TecINSUFFICIENT_RESERVE
 	}
-	if ctx.Account.Balance < reserve+uint64(amount) {
-		ctx.Log.Warn("escrow create: unfunded",
-			"balance", ctx.Account.Balance,
-			"needed", reserve+uint64(amount),
-		)
-		return tx.TecUNFUNDED
-	}
 
-	// Deduct the escrow amount from the account
-	ctx.Account.Balance -= uint64(amount)
+	// For XRP escrows, also check that the sender can afford the amount
+	// on top of the reserve. IOU escrows are deducted from trust lines,
+	// not the XRP balance.
+	// Reference: rippled Escrow.cpp:505-508
+	if isNative {
+		drops := e.Amount.Drops()
+		if drops <= 0 {
+			return tx.TemINVALID
+		}
+		if ctx.Account.Balance < reserve+uint64(drops) {
+			ctx.Log.Warn("escrow create: unfunded",
+				"balance", ctx.Account.Balance,
+				"needed", reserve+uint64(drops),
+			)
+			return tx.TecUNFUNDED
+		}
+	}
 
 	// Create the escrow entry
 	accountID, _ := state.DecodeAccountID(e.Account)
@@ -229,7 +233,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	escrowKey := keylet.Escrow(accountID, sequence)
 
 	// Serialize escrow
-	escrowData, err := serializeEscrow(e, accountID, destID, sequence, uint64(amount))
+	escrowData, err := serializeEscrow(e, accountID, destID, sequence)
 	if err != nil {
 		ctx.Log.Error("escrow create: failed to serialize escrow", "error", err)
 		return tx.TefINTERNAL
@@ -267,14 +271,53 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
+	// For IOU escrows, also insert into the issuer's owner directory.
+	// This helps track the total locked balance.
+	// Reference: rippled Escrow.cpp:575-584
+	if !isNative && !e.Amount.IsMPT() {
+		issuerID, issuerErr := state.DecodeAccountID(e.Amount.Issuer)
+		if issuerErr == nil && issuerID != accountID && issuerID != destID {
+			issuerDirKey := keylet.OwnerDir(issuerID)
+			_, err = state.DirInsert(ctx.View, issuerDirKey, escrowKey.Key, func(dir *state.DirectoryNode) {
+				dir.Owner = issuerID
+			})
+			if err != nil {
+				ctx.Log.Error("escrow create: issuer directory full", "error", err)
+				return tx.TecDIR_FULL
+			}
+		}
+	}
+
+	// Deduct the escrow amount from the sender.
+	// Reference: rippled Escrow.cpp:587-599
+	if isNative {
+		// XRP: deduct from account balance
+		ctx.Account.Balance -= uint64(e.Amount.Drops())
+	} else {
+		// IOU: lock via trust line (rippleCredit sender → issuer)
+		// Reference: rippled escrowLockApplyHelper<Issue>
+		issuerID, issuerErr := state.DecodeAccountID(e.Amount.Issuer)
+		if issuerErr != nil {
+			return tx.TefINTERNAL
+		}
+		if issuerID == accountID {
+			return tx.TecINTERNAL
+		}
+		if lockResult := escrowLockIOU(ctx.View, accountID, issuerID, e.Amount); lockResult != tx.TesSUCCESS {
+			return lockResult
+		}
+	}
+
 	// Increase owner count for the escrow creator
 	ctx.Account.OwnerCount++
 
 	return tx.TesSUCCESS
 }
 
-// serializeEscrow serializes an Escrow ledger entry
-func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint32, amount uint64) ([]byte, error) {
+// serializeEscrow serializes an Escrow ledger entry.
+// For XRP escrows, Amount is a drops string. For IOU escrows, Amount is the
+// full IOU object (value/currency/issuer).
+func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint32) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -285,11 +328,23 @@ func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint3
 		return nil, fmt.Errorf("failed to encode destination address: %w", err)
 	}
 
+	// Amount: XRP uses a drops string, IOU uses {value, currency, issuer} map.
+	var amountVal any
+	if txn.Amount.IsNative() {
+		amountVal = fmt.Sprintf("%d", txn.Amount.Drops())
+	} else {
+		amountVal = map[string]any{
+			"value":    txn.Amount.Value(),
+			"currency": txn.Amount.Currency,
+			"issuer":   txn.Amount.Issuer,
+		}
+	}
+
 	jsonObj := map[string]any{
 		"LedgerEntryType": "Escrow",
 		"Account":         ownerAddress,
 		"Destination":     destAddress,
-		"Amount":          fmt.Sprintf("%d", amount),
+		"Amount":          amountVal,
 		"OwnerNode":       "0",
 		"Flags":           uint32(0),
 	}
@@ -321,4 +376,57 @@ func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint3
 	}
 
 	return hex.DecodeString(hexStr)
+}
+
+// escrowLockIOU locks an IOU amount by transferring it from sender to issuer
+// via the trust line. This is the Go equivalent of rippled's
+// escrowLockApplyHelper<Issue> which calls rippleCredit(sender, issuer, amount).
+// Reference: rippled Escrow.cpp:408-431
+func escrowLockIOU(view tx.LedgerView, senderID, issuerID [20]byte, amount tx.Amount) tx.Result {
+	if amount.IsZero() {
+		return tx.TesSUCCESS
+	}
+
+	// Read the trust line between sender and issuer
+	trustLineKey := keylet.Line(senderID, issuerID, amount.Currency)
+	trustLineData, err := view.Read(trustLineKey)
+	if err != nil || trustLineData == nil {
+		return tx.TecINTERNAL
+	}
+
+	rs, err := state.ParseRippleState(trustLineData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Determine account ordering for balance convention:
+	// positive balance = low account owes high account
+	// rippleCredit(sender, issuer, amount) means sender pays issuer.
+	// When sender is low: subtract from balance (sender pays)
+	// When sender is high: add to balance (sender pays from high side)
+	senderIsLow := state.CompareAccountIDsForLine(senderID, issuerID) < 0
+
+	if senderIsLow {
+		newBalance, err := rs.Balance.Sub(amount)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		rs.Balance = newBalance
+	} else {
+		newBalance, err := rs.Balance.Add(amount)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		rs.Balance = newBalance
+	}
+
+	updated, err := state.SerializeRippleState(rs)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := view.Update(trustLineKey, updated); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	return tx.TesSUCCESS
 }

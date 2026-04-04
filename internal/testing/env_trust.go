@@ -375,28 +375,37 @@ func (e *TestEnv) SetFirstNFTokenSequenceDirect(acc *Account, seq uint32) {
 // preclaim already passed.
 func (e *TestEnv) BumpSequenceAndDeductFee(acc *Account) {
 	e.t.Helper()
+	e.BumpSequenceAndDeductAmount(acc, e.baseFee)
+}
+
+// BumpSequenceAndDeductAmount increments an account's sequence and deducts the
+// specified fee amount directly in the ledger. This is used when the fee to
+// deduct differs from the base fee, e.g., for multi-signed transactions where
+// the fee is baseFee * (1 + numSigners).
+func (e *TestEnv) BumpSequenceAndDeductAmount(acc *Account, fee uint64) {
+	e.t.Helper()
 
 	accountKey := keylet.Account(acc.ID)
 	data, err := e.ledger.Read(accountKey)
 	if err != nil {
-		e.t.Fatalf("BumpSequenceAndDeductFee: failed to read account: %v", err)
+		e.t.Fatalf("BumpSequenceAndDeductAmount: failed to read account: %v", err)
 	}
 
 	accountRoot, err := state.ParseAccountRoot(data)
 	if err != nil {
-		e.t.Fatalf("BumpSequenceAndDeductFee: failed to parse account: %v", err)
+		e.t.Fatalf("BumpSequenceAndDeductAmount: failed to parse account: %v", err)
 	}
 
 	accountRoot.Sequence++
-	accountRoot.Balance -= e.baseFee
+	accountRoot.Balance -= fee
 
 	updated, err := state.SerializeAccountRoot(accountRoot)
 	if err != nil {
-		e.t.Fatalf("BumpSequenceAndDeductFee: failed to serialize: %v", err)
+		e.t.Fatalf("BumpSequenceAndDeductAmount: failed to serialize: %v", err)
 	}
 
 	if err := e.ledger.Update(accountKey, updated); err != nil {
-		e.t.Fatalf("BumpSequenceAndDeductFee: failed to update: %v", err)
+		e.t.Fatalf("BumpSequenceAndDeductAmount: failed to update: %v", err)
 	}
 }
 

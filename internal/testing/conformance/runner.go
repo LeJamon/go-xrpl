@@ -226,6 +226,12 @@ type runner struct {
 	// addresses even when they don't appear with LP token currencies.
 	fixtureUnfundedAddrs map[string]bool
 
+	// fixtureNonAMMAccountAddrs is the set of unfunded addresses that appear
+	// as the Account field of non-AMMCreate transactions. These are user
+	// accounts (e.g., used in AMMVote with terNO_ACCOUNT expected), not AMM
+	// pseudo-accounts, and should not be remapped to AMM addresses.
+	fixtureNonAMMAccountAddrs map[string]bool
+
 	// fixtureSteps stores all fixture steps for use by registerAMMMapping
 	// when it needs to scan for unfunded AMM address candidates.
 	fixtureSteps []Step
@@ -479,7 +485,7 @@ func RunFixture(t *testing.T, fixturePath string) {
 		}
 	}
 
-	fixtureAddrs, fixturePairs, unfundedAddrs := prescanAMMAddresses(fixture.Steps)
+	fixtureAddrs, fixturePairs, unfundedAddrs, nonAMMAcctAddrs := prescanAMMAddresses(fixture.Steps)
 
 	// Build time-leap step index set from the lookup table
 	timeLeapSet := make(map[int]bool)
@@ -527,7 +533,8 @@ func RunFixture(t *testing.T, fixturePath string) {
 		ammAddrMap:           make(map[string]string),
 		fixtureAMMAddrs:      fixtureAddrs,
 		fixtureAMMPairs:      fixturePairs,
-		fixtureUnfundedAddrs: unfundedAddrs,
+		fixtureUnfundedAddrs:      unfundedAddrs,
+		fixtureNonAMMAccountAddrs: nonAMMAcctAddrs,
 		fixtureSteps:         fixture.Steps,
 		timeLeapSteps:        timeLeapSet,
 		initFee:              initFee,
@@ -1117,6 +1124,10 @@ func (r *runner) execTx(stepIdx int, step Step) {
 	// results (via type-specific preflight inside doApply) but goXRPL did not.
 	// Bump the account sequence (and deduct fee for each skipped seq) to align
 	// with the fixture, then resubmit.
+	//
+	// The fee deducted per bump must match the transaction's declared Fee, not
+	// the base fee. Multi-signed transactions have Fee = baseFee * (1 + numSigners),
+	// so using the base fee alone under-deducts and causes balance mismatches.
 	if result.Code == "terPRE_SEQ" && step.ExpectTER != "terPRE_SEQ" {
 		common := parsed.GetCommon()
 		if common.Account != "" && common.Sequence != nil {
@@ -1126,8 +1137,17 @@ func (r *runner) execTx(stepIdx int, step Step) {
 				targetSeq := *common.Sequence
 				const maxSeqBump = 50
 				if targetSeq > currentSeq && targetSeq-currentSeq <= maxSeqBump {
+					// Use the transaction's declared fee for the bump amount.
+					// This matches what rippled would have charged for each
+					// consumed sequence (e.g., multi-sign fee for multi-signed txns).
+					bumpFee := r.env.BaseFee()
+					if common.Fee != "" {
+						if parsedFee, err := strconv.ParseUint(common.Fee, 10, 64); err == nil && parsedFee > 0 {
+							bumpFee = parsedFee
+						}
+					}
 					for currentSeq < targetSeq {
-						r.env.BumpSequenceAndDeductFee(acc)
+						r.env.BumpSequenceAndDeductAmount(acc, bumpFee)
 						currentSeq++
 					}
 					result = r.env.Submit(parsed)
@@ -1890,16 +1910,20 @@ func parseDropsAmount(raw json.RawMessage) (uint64, error) {
 // associated with LP token currencies (03-prefixed 40-char hex). These
 // addresses are AMM pseudo-account addresses that may differ between rippled
 // and goXRPL due to different parentHash values. Returns the set of LP token
-// issuer addresses, the (issuer, currency) pairs for precise matching, and
+// issuer addresses, the (issuer, currency) pairs for precise matching,
 // the set of all addresses that appear in steps but are NOT funded (potential
-// AMM pseudo-account addresses that may not use LP token currencies).
-func prescanAMMAddresses(steps []Step) (map[string]bool, []ammPair, map[string]bool) {
+// AMM pseudo-account addresses that may not use LP token currencies), and
+// the set of unfunded addresses used as the Account field of non-AMMCreate
+// transactions (user accounts, not AMM pseudo-accounts).
+func prescanAMMAddresses(steps []Step) (map[string]bool, []ammPair, map[string]bool, map[string]bool) {
 	addrs := make(map[string]bool)
 	var pairs []ammPair
 
 	// Collect all addresses from all steps, and funded addresses separately.
 	allAddrs := make(map[string]bool)
 	fundedAddrs := make(map[string]bool)
+	// Track addresses used as Account of non-AMMCreate transactions.
+	nonAMMAccountAddrs := make(map[string]bool)
 
 	// Special addresses that should never be remapped.
 	specialAddrs := map[string]bool{
@@ -1920,6 +1944,13 @@ func prescanAMMAddresses(steps []Step) (map[string]bool, []ammPair, map[string]b
 			if json.Unmarshal(step.TxJSON, &txj) == nil {
 				collectLPTokenIssuers(txj, addrs, &pairs)
 				collectAllAddresses(txj, allAddrs)
+				// Track Account of non-AMMCreate transactions
+				if acct, ok := txj["Account"].(string); ok {
+					txType, _ := txj["TransactionType"].(string)
+					if txType != "AMMCreate" {
+						nonAMMAccountAddrs[acct] = true
+					}
+				}
 			}
 		}
 		// Check trust limit_amount
@@ -1945,7 +1976,15 @@ func prescanAMMAddresses(steps []Step) (map[string]bool, []ammPair, map[string]b
 		}
 	}
 
-	return addrs, pairs, unfunded
+	// Filter nonAMMAccountAddrs to only include unfunded addresses
+	nonAMMAcctResult := make(map[string]bool)
+	for addr := range nonAMMAccountAddrs {
+		if unfunded[addr] {
+			nonAMMAcctResult[addr] = true
+		}
+	}
+
+	return addrs, pairs, unfunded, nonAMMAcctResult
 }
 
 // collectAllAddresses recursively walks a JSON map to collect all string
@@ -2106,11 +2145,19 @@ func (r *runner) registerAMMMapping(step Step) {
 		return
 	}
 
-	// Last resort: if there's exactly one unfunded unmapped address total,
+	// Last resort: if there's exactly one unfunded unmapped address total
+	// that is NOT used as the Account of a non-AMMCreate transaction,
 	// it must be this AMM account.
+	// Addresses that appear as the Account field of other transaction types
+	// (e.g., AMMVote, Payment) are user accounts, not AMM pseudo-accounts.
 	var remaining []string
 	for addr := range r.fixtureUnfundedAddrs {
 		if _, alreadyMapped := r.ammAddrMap[addr]; !alreadyMapped {
+			// Exclude addresses that appear as the Account field of
+			// non-AMMCreate transactions — those are user accounts.
+			if r.fixtureNonAMMAccountAddrs[addr] {
+				continue
+			}
 			remaining = append(remaining, addr)
 		}
 	}

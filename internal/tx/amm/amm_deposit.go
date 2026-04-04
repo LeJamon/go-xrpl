@@ -848,15 +848,16 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Check computed deposit amounts are positive (rippled's checkBalance lambda).
-	// Amounts that round to zero drops (for XRP) or are <= 0 (for IOU) are rejected.
-	// Reference: rippled AMMDeposit.cpp deposit() lines 512-514, 558-572
+	// In rippled deposit(), checkBalance rejects amounts <= 0 (beast::zero).
+	// For the primary deposit amount, checkBalance is always called.
+	// For the second deposit amount, checkBalance is only called when amount2Deposit
+	// is not nullopt (i.e., in two-asset modes like tfLPToken, tfTwoAsset).
+	// In single-asset modes, amount2Deposit is nullopt and checkBalance is skipped.
+	// Reference: rippled AMMDeposit.cpp deposit() lines 512-514, 566-572, 590-598
 	isXRP1 := a.Asset.Currency == "" || a.Asset.Currency == "XRP"
 	isXRP2 := a.Asset2.Currency == "" || a.Asset2.Currency == "XRP"
 	checkBalancePositive := func(amt tx.Amount, isXRP bool) tx.Result {
-		if amt.IsZero() {
-			return tx.TesSUCCESS // zero deposit for this asset is ok in some modes
-		}
-		if amt.IsNegative() {
+		if amt.IsNegative() || amt.IsZero() {
 			return tx.TemBAD_AMOUNT
 		}
 		// For XRP, the IOU representation may be non-zero but convert to 0 drops.
@@ -866,11 +867,29 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 		return tx.TesSUCCESS
 	}
-	if r := checkBalancePositive(depositAmount1, isXRP1); r != tx.TesSUCCESS {
-		return r
-	}
-	if r := checkBalancePositive(depositAmount2, isXRP2); r != tx.TesSUCCESS {
-		return r
+	// Match rippled's deposit() checkBalance calling pattern:
+	// - For single-asset deposits: only check the deposited asset
+	//   (rippled passes amount2Deposit = nullopt for the non-deposited asset)
+	// - For two-asset deposits (tfLPToken, tfTwoAsset, tfTwoAssetIfEmpty):
+	//   check both amounts
+	// Reference: rippled AMMDeposit.cpp deposit() lines 566-598
+	if isSingleAssetDeposit {
+		if singleDepositIsAsset2 {
+			if r := checkBalancePositive(depositAmount2, isXRP2); r != tx.TesSUCCESS {
+				return r
+			}
+		} else {
+			if r := checkBalancePositive(depositAmount1, isXRP1); r != tx.TesSUCCESS {
+				return r
+			}
+		}
+	} else {
+		if r := checkBalancePositive(depositAmount1, isXRP1); r != tx.TesSUCCESS {
+			return r
+		}
+		if r := checkBalancePositive(depositAmount2, isXRP2); r != tx.TesSUCCESS {
+			return r
+		}
 	}
 
 	// Check IOU balances first
