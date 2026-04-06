@@ -111,9 +111,15 @@ func NewFromConfig(
 	// Create the router
 	router := NewRouter(engine, adaptor, modeManager, overlay.Messages())
 
-	// Wire operating mode into ledger service for server_info
+	// Wire operating mode into ledger service for server_info.
+	// Matches rippled: report "proposing" when both in full operating mode
+	// and actively proposing in consensus.
 	ledgerSvc.SetServerStateFunc(func() string {
-		return adaptor.GetOperatingMode().String()
+		opMode := adaptor.GetOperatingMode()
+		if opMode == consensus.OpModeFull && engine.IsProposing() {
+			return "proposing"
+		}
+		return opMode.String()
 	})
 
 	return &Components{

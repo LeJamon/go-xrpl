@@ -579,6 +579,7 @@ func TestEngine_PhaseTransitions(t *testing.T) {
 	// Use very short timings for testing
 	config.Timing.LedgerMinClose = 10 * time.Millisecond
 	config.Timing.LedgerMaxClose = 100 * time.Millisecond
+	config.Timing.LedgerMinConsensus = 10 * time.Millisecond
 	config.Timing.LedgerIdleInterval = 20 * time.Millisecond
 
 	engine := NewEngine(adaptor, config)

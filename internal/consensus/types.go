@@ -187,6 +187,11 @@ type Validation struct {
 
 	// LoadFee is the validator's current load-based fee.
 	LoadFee uint32
+
+	// SigningData holds the canonical serialized fields (excluding sfSigningPubKey
+	// and sfSignature) for signature verification. Populated by parseSTValidation
+	// for inbound validations; nil for self-built outbound ones.
+	SigningData []byte
 }
 
 // DisputedTx represents a transaction that validators disagree on.
@@ -263,6 +268,10 @@ type Timing struct {
 	// LedgerIdleInterval is time between ledgers when idle.
 	LedgerIdleInterval time.Duration
 
+	// LedgerMinConsensus is the minimum time to remain in the establish phase
+	// before accepting consensus. Matches rippled's ledgerMIN_CONSENSUS (1950ms).
+	LedgerMinConsensus time.Duration
+
 	// LedgerGranularity is the close time resolution.
 	LedgerGranularity time.Duration
 
@@ -278,6 +287,7 @@ func DefaultTiming() Timing {
 	return Timing{
 		LedgerMinClose:      2 * time.Second,
 		LedgerMaxClose:      10 * time.Second,
+		LedgerMinConsensus:  1950 * time.Millisecond,
 		LedgerIdleInterval:  15 * time.Second,
 		LedgerGranularity:   10 * time.Second,
 		ProposeFreshness:    20 * time.Second,

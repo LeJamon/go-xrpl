@@ -115,7 +115,11 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	validation := ValidationFromMessage(val)
+	validation, err := ValidationFromMessage(val)
+	if err != nil {
+		r.logger.Warn("failed to parse validation", "error", err, "peer", msg.PeerID)
+		return
+	}
 	if err := r.engine.OnValidation(validation); err != nil {
 		r.logger.Debug("engine rejected validation", "error", err, "peer", msg.PeerID)
 	}

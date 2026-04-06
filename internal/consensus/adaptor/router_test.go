@@ -119,8 +119,18 @@ func TestRouterDispatchesValidation(t *testing.T) {
 	defer cancel()
 	go router.Run(ctx)
 
+	// Build a valid STValidation binary payload.
+	testVal := &consensus.Validation{
+		Full:      true,
+		LedgerSeq: 42,
+		SignTime:  time.Unix(946684800+828618000, 0), // XRPL epoch + offset
+		LoadFee:   0,
+	}
+	copy(testVal.LedgerID[:], []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32})
+	copy(testVal.NodeID[:], []byte{0x02, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32})
+	testVal.Signature = make([]byte, 70) // dummy signature
 	val := &message.Validation{
-		Validation: []byte{0x01, 0x02, 0x03},
+		Validation: serializeSTValidation(testVal),
 	}
 
 	inbox <- &peermanagement.InboundMessage{

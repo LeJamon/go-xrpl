@@ -160,28 +160,46 @@ func buildProposalSigningData(p *consensus.Proposal) []byte {
 	return hash[:]
 }
 
-// buildValidationSigningData constructs the data to be signed for a validation.
-// Format: HashPrefixValidation + Flags(4) + LedgerSeq(4) + CloseTime(4) + SigningTime(4) + LedgerID(32)
+// buildValidationSigningData constructs the signing digest for a validation.
+// For inbound validations (SigningData populated by parseSTValidation), the
+// exact wire bytes are used, ensuring compatibility with rippled's signing
+// which may include optional fields (ConsensusHash, Cookie, etc.).
+// For outbound validations (SigningData nil), builds from struct fields.
 func buildValidationSigningData(v *consensus.Validation) []byte {
+	if len(v.SigningData) > 0 {
+		// Inbound: use the exact non-signing bytes from the wire.
+		hash := common.Sha512Half(protocol.HashPrefixValidation[:], v.SigningData)
+		return hash[:]
+	}
+
+	// Outbound: build from struct fields in canonical field order.
 	var buf []byte
 	buf = append(buf, protocol.HashPrefixValidation[:]...)
 
-	// Flags (4 bytes) - Full=1
+	// sfFlags (type 2, field 2)
 	flags := uint32(0)
 	if v.Full {
-		flags |= 0x00000001
+		flags |= vfFullValidation
 	}
+	buf = appendFieldHeader(buf, typeUINT32, fieldFlags)
 	buf = append(buf, byte(flags>>24), byte(flags>>16), byte(flags>>8), byte(flags))
 
-	// LedgerSeq (4 bytes, big-endian)
+	// sfLedgerSequence (type 2, field 6)
+	buf = appendFieldHeader(buf, typeUINT32, fieldLedgerSequence)
 	buf = append(buf, byte(v.LedgerSeq>>24), byte(v.LedgerSeq>>16), byte(v.LedgerSeq>>8), byte(v.LedgerSeq))
 
-	// SignTime as XRPL epoch seconds (4 bytes, big-endian)
+	// sfSigningTime (type 2, field 9)
 	signTimeSec := uint32(v.SignTime.Unix() - xrplEpochOffset)
+	buf = appendFieldHeader(buf, typeUINT32, fieldSigningTime)
 	buf = append(buf, byte(signTimeSec>>24), byte(signTimeSec>>16), byte(signTimeSec>>8), byte(signTimeSec))
 
-	// LedgerID (32 bytes)
+	// sfLedgerHash (type 5, field 1)
+	buf = appendFieldHeader(buf, typeHash256, fieldLedgerHash)
 	buf = append(buf, v.LedgerID[:]...)
+
+	// sfSigningPubKey (type 7, field 3) — included in signing hash per XRPL spec.
+	buf = appendFieldHeader(buf, typeBlob, fieldSigningPubKey)
+	buf = appendVL(buf, v.NodeID[:])
 
 	hash := common.Sha512Half(buf)
 	return hash[:]

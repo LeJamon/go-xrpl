@@ -51,32 +51,22 @@ func ProposalToMessage(p *consensus.Proposal) *message.ProposeSet {
 	}
 }
 
-// ValidationFromMessage converts a decoded Validation message to a consensus.Validation.
-// The validation payload is an opaque blob containing the serialized STValidation.
-// For now, we extract the fields we need from the raw bytes.
-// In a full implementation this would parse the STObject.
-func ValidationFromMessage(msg *message.Validation) *consensus.Validation {
-	v := &consensus.Validation{
-		SeenTime: time.Now(),
+// ValidationFromMessage parses a decoded Validation message (containing an
+// XRPL-binary-encoded STValidation) into a consensus.Validation.
+func ValidationFromMessage(msg *message.Validation) (*consensus.Validation, error) {
+	v, err := parseSTValidation(msg.Validation)
+	if err != nil {
+		return nil, err
 	}
-
-	// The validation field contains the raw STValidation object.
-	// For the router, we store the raw bytes and let the consensus engine
-	// handle detailed parsing via VerifyValidation.
-	// We extract key fields from the STObject in a future phase.
-	// For now, store the raw blob for signature verification.
-	v.Signature = msg.Validation
-
-	return v
+	v.SeenTime = time.Now()
+	return v, nil
 }
 
-// ValidationToMessage converts a consensus.Validation to a Validation message.
+// ValidationToMessage serializes a consensus.Validation to an XRPL-binary-encoded
+// STValidation suitable for the TMValidation protobuf wire format.
 func ValidationToMessage(v *consensus.Validation) *message.Validation {
-	// Build the serialized validation object.
-	// In a full implementation this would serialize to an STObject.
-	// For now, we use the signature as the raw validation payload.
 	return &message.Validation{
-		Validation: v.Signature,
+		Validation: serializeSTValidation(v),
 	}
 }
 
