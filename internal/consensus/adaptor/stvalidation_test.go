@@ -6,11 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/crypto/common"
-	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
-	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -102,30 +99,18 @@ func TestParseSTValidation_MinimalFields(t *testing.T) {
 	assert.NotEmpty(t, parsed.SigningData)
 }
 
-func TestParseSTValidation_SigningDataExcludesPubKeyAndSig(t *testing.T) {
+func TestParseSTValidation_SigningDataExcludesSigOnly(t *testing.T) {
 	orig := buildTestValidation()
 	blob := serializeSTValidation(orig)
 
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
 
-	// SigningData should not contain the sfSigningPubKey (0x73) or sfSignature (0x76) field headers.
-	for i := 0; i < len(parsed.SigningData); i++ {
-		if parsed.SigningData[i] == 0x73 || parsed.SigningData[i] == 0x76 {
-			// These bytes might appear as data values; only flag if they appear
-			// at a field header position. Since we serialize in canonical order,
-			// the signing data should be: Flags + LedgerSeq + SigningTime +
-			// [LoadFee] + [Cookie] + LedgerHash. Check that the total length
-			// is consistent (no room for the VL fields).
-		}
-	}
-
-	// More reliable check: SigningData length should be the blob length
-	// minus the sfSigningPubKey field (1 header + 1 VL + 33 data = 35 bytes)
-	// minus the sfSignature field (1 header + 1 VL + 72 data = 74 bytes).
-	sigFieldSize := 1 + 1 + len(orig.NodeID[:]) // header + VL + 33 bytes
-	sigatureFieldSize := 1 + 1 + len(orig.Signature)
-	expectedSigningLen := len(blob) - sigFieldSize - sigatureFieldSize
+	// SigningData should include all fields except sfSignature.
+	// sfSigningPubKey has isSigningField=true per XRPL spec, so it IS included.
+	// Only sfSignature (isSigningField=false) is excluded.
+	signatureFieldSize := 1 + 1 + len(orig.Signature) // header + VL + data
+	expectedSigningLen := len(blob) - signatureFieldSize
 	assert.Equal(t, expectedSigningLen, len(parsed.SigningData))
 }
 
@@ -309,7 +294,6 @@ func TestSignSerializeParseVerify_Roundtrip(t *testing.T) {
 }
 
 func TestVerifyRippledValidation(t *testing.T) {
-	t.Skip("TODO: fix signing data format to match rippled's STObject signing hash")
 	// Real STValidation captured from a rippled 2.6.2 node in a Kurtosis test network.
 	rawHex := "22800000012600000007293163d07951fa2f307cae2053f9af20873f47bc8895d6ef9b087de9102aad99fa6a4eef215a5017c22905aa36768a95ee860d755531f8e23dc067024f69c9e1b0efb364b59dbbd87321027bd68e66c8f38f73595632131ffac4eeb96ce64fcbc3ed1c3c6b707b17adec1b76473045022100cf3f08913e0a0f2537981fcb2afee8ea10b68269bdaa63669e73787e8851b1b30220470417db44a3242ce1f88ff53ff51e130e045e9678e32678e2d3138524577fd8"
 	rawBytes, err := hex.DecodeString(rawHex)
@@ -318,75 +302,11 @@ func TestVerifyRippledValidation(t *testing.T) {
 	v, err := parseSTValidation(rawBytes)
 	require.NoError(t, err)
 
-	t.Logf("LedgerSeq: %d", v.LedgerSeq)
-	t.Logf("Full: %v", v.Full)
-	t.Logf("NodeID: %x", v.NodeID[:])
-	t.Logf("SigningData len: %d", len(v.SigningData))
-	t.Logf("Signature len: %d", len(v.Signature))
-	t.Logf("SigningData hex: %x", v.SigningData)
-
 	assert.Equal(t, uint32(7), v.LedgerSeq)
 	assert.True(t, v.Full)
 	assert.Equal(t, byte(0x02), v.NodeID[0])
 
-	// Try verification.
 	err = VerifyValidation(v)
-	if err != nil {
-		t.Logf("Verification error: %v", err)
-
-		// Compute expected signing hash manually for debugging.
-		signingHash := common.Sha512Half(protocol.HashPrefixValidation[:], v.SigningData)
-		t.Logf("Computed signing hash: %x", signingHash)
-
-		// Show what the outbound path would compute for comparison.
-		v2 := *v
-		v2.SigningData = nil
-		outboundHash := buildValidationSigningData(&v2)
-		t.Logf("Outbound signing hash: %x", outboundHash)
-	}
-	// Direct verification using btcec, bypassing goXRPL wrapper.
-	{
-		signingHash := common.Sha512Half(protocol.HashPrefixValidation[:], v.SigningData)
-		t.Logf("Direct verify: hash=%x pubkey=%x sig=%x", signingHash, v.NodeID[:], v.Signature[:8])
-
-		// Parse the DER signature directly
-		algo := secp256k1.SECP256K1()
-		result := algo.ValidateDigest(signingHash, v.NodeID[:], v.Signature)
-		t.Logf("Direct ValidateDigest result: %v", result)
-
-		// Try with sfCookie(0) inserted (rippled soeDEFAULT may include it)
-		{
-			// Insert sfCookie(0) at canonical position: after type=2, before type=5
-			// sfCookie: type=3, field=10 → header 0x3A, 8 bytes of zeros
-			var withCookie []byte
-			withCookie = append(withCookie, v.SigningData[:15]...) // flags(5) + seq(5) + sigtime(5)
-			withCookie = append(withCookie, 0x3A)                  // sfCookie header
-			withCookie = append(withCookie, 0, 0, 0, 0, 0, 0, 0, 0) // value = 0
-			withCookie = append(withCookie, v.SigningData[15:]...) // rest
-			cookieHash := common.Sha512Half(protocol.HashPrefixValidation[:], withCookie)
-			t.Logf("With sfCookie(0) hash: %x", cookieHash)
-			cookieResult := algo.ValidateDigest(cookieHash, v.NodeID[:], v.Signature)
-			t.Logf("With sfCookie(0) verify: %v", cookieResult)
-		}
-
-		// Try with just the signing data (no field headers, old format)
-		var buf2 []byte
-		buf2 = append(buf2, protocol.HashPrefixValidation[:]...)
-		// Flags
-		buf2 = append(buf2, 0x80, 0x00, 0x00, 0x01)
-		// LedgerSeq
-		buf2 = append(buf2, 0x00, 0x00, 0x00, 0x07)
-		// SigningTime
-		buf2 = append(buf2, 0x31, 0x63, 0xd0, 0x79)
-		// LedgerHash
-		ledgerHashHex := "fa2f307cae2053f9af20873f47bc8895d6ef9b087de9102aad99fa6a4eef215a"
-		ledgerHash, _ := hex.DecodeString(ledgerHashHex)
-		buf2 = append(buf2, ledgerHash...)
-		oldHash := common.Sha512Half(buf2)
-		t.Logf("Old format (no headers) hash: %x", oldHash)
-		result2 := algo.ValidateDigest(oldHash, v.NodeID[:], v.Signature)
-		t.Logf("Old format verify: %v", result2)
-	}
 	assert.NoError(t, err, "rippled validation should verify correctly")
 }
 

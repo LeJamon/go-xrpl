@@ -197,6 +197,10 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 	buf = appendFieldHeader(buf, typeHash256, fieldLedgerHash)
 	buf = append(buf, v.LedgerID[:]...)
 
+	// sfSigningPubKey (type 7, field 3) — included in signing hash per XRPL spec.
+	buf = appendFieldHeader(buf, typeBlob, fieldSigningPubKey)
+	buf = appendVL(buf, v.NodeID[:])
+
 	hash := common.Sha512Half(buf)
 	return hash[:]
 }

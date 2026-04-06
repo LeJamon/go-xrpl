@@ -318,11 +318,9 @@ func (e *Engine) OnValidation(validation *consensus.Validation) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// TODO: fix signature verification for inbound validations from rippled.
-	// The signing data format needs to be aligned with rippled's STObject
-	// signing hash computation. For now, log but don't reject.
+	// Verify signature
 	if err := e.adaptor.VerifyValidation(validation); err != nil {
-		slog.Debug("validation signature check failed (accepting anyway)", "error", err, "seq", validation.LedgerSeq)
+		return fmt.Errorf("invalid validation signature: %w", err)
 	}
 
 	// Check if from trusted validator
@@ -856,8 +854,12 @@ func (e *Engine) onCloseTimer() {
 		// Close the ledger and move to establish phase
 		e.closeLedger()
 	} else {
-		// Reschedule check in 100ms
-		e.closeTimer = time.AfterFunc(100*time.Millisecond, func() {
+		// Reschedule on next heartbeat, matching rippled's ledgerGRANULARITY (1s).
+		interval := time.Second
+		if e.timing.LedgerMinClose < interval {
+			interval = e.timing.LedgerMinClose
+		}
+		e.closeTimer = time.AfterFunc(interval, func() {
 			e.onCloseTimer()
 		})
 	}
@@ -971,6 +973,12 @@ func (e *Engine) onEstablishTimer() {
 // checkConvergence checks if proposals have converged.
 func (e *Engine) checkConvergence() {
 	if e.phase != consensus.PhaseEstablish {
+		return
+	}
+
+	// Minimum time in establish phase before accepting consensus.
+	// Matches rippled's checkConsensus(): currentAgreeTime <= ledgerMIN_CONSENSUS.
+	if e.adaptor.Now().Sub(e.state.PhaseStart) <= e.timing.LedgerMinConsensus {
 		return
 	}
 

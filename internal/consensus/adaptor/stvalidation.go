@@ -65,8 +65,8 @@ var (
 
 // parseSTValidation parses XRPL-binary-encoded STValidation bytes into a
 // consensus.Validation. It also populates SigningData with the serialized
-// bytes of all fields except sfSigningPubKey and sfSignature, suitable for
-// signature verification.
+// bytes of all fields except sfSignature, suitable for signature verification.
+// sfSigningPubKey is included in SigningData (isSigningField=true per XRPL spec).
 func parseSTValidation(data []byte) (*consensus.Validation, error) {
 	if len(data) < 50 {
 		return nil, fmt.Errorf("stvalidation: data too short (%d bytes)", len(data))
@@ -100,11 +100,11 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 
 		fieldData := data[pos-dataLen : pos]
 
-		// Check if this is a signing field (excluded from signing hash).
-		isSigningField := (typeCode == typeBlob && fieldCode == fieldSigningPubKey) ||
-			(typeCode == typeBlob && fieldCode == fieldSignature)
+		// sfSignature (isSigningField=false) is excluded from the signing hash.
+		// All other fields, including sfSigningPubKey (isSigningField=true), are included.
+		excludeFromSigning := (typeCode == typeBlob && fieldCode == fieldSignature)
 
-		if !isSigningField {
+		if !excludeFromSigning {
 			signingBuf = append(signingBuf, data[fieldStart:pos]...)
 		}
 
@@ -294,22 +294,22 @@ func advanceFixed(data []byte, pos *int, n int) (int, error) {
 }
 
 // skipAmount determines the length of an Amount field.
-// Bit 62 (0x40 in byte 0) is the "not XRP" flag:
+// Bit 63 (0x80 in byte 0) is the "not XRP" flag:
 //   - Clear: XRP amount, always 8 bytes.
 //   - Set:   IOU amount — 48 bytes (8 value + 20 currency + 20 issuer),
-//            UNLESS it's the canonical zero IOU (0x4000000000000000), which is 8 bytes.
+//            UNLESS it's the canonical zero IOU (0x8000000000000000), which is 8 bytes.
 func skipAmount(data []byte, pos *int) (int, error) {
 	if *pos+8 > len(data) {
 		return 0, errShortData
 	}
-	isNotXRP := (data[*pos] & 0x40) != 0
+	isNotXRP := (data[*pos] & 0x80) != 0
 	if !isNotXRP {
 		// XRP amount: always 8 bytes.
 		*pos += 8
 		return 8, nil
 	}
-	// IOU: check for canonical zero (exactly 0x4000000000000000).
-	isZero := data[*pos] == 0x40
+	// IOU: check for canonical zero (exactly 0x8000000000000000).
+	isZero := data[*pos] == 0x80
 	if isZero {
 		for i := 1; i < 8; i++ {
 			if data[*pos+i] != 0 {
