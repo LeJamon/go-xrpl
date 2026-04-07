@@ -27,7 +27,7 @@ func buildTestValidation() *consensus.Validation {
 	for i := range v.NodeID {
 		v.NodeID[i] = byte(i + 0x10)
 	}
-	v.NodeID[0] = 0x02 // valid compressed pubkey prefix
+	v.NodeID[0] = 0x02                           // valid compressed pubkey prefix
 	v.Signature = []byte{0x30, 0x44, 0x02, 0x20} // DER prefix + padding
 	v.Signature = append(v.Signature, make([]byte, 68)...)
 	return v

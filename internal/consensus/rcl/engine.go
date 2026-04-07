@@ -41,9 +41,8 @@ type Engine struct {
 	// Dispute tracking
 	disputes map[consensus.TxID]*consensus.DisputedTx
 
-	// Timers
-	closeTimer   *time.Timer
-	timeoutTimer *time.Timer
+	// Heartbeat ticker — single global timer matching rippled's ledgerGRANULARITY.
+	heartbeat *time.Ticker
 
 	// Lifecycle
 	ctx    context.Context
@@ -193,9 +192,6 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing bool) error
 		Timestamp: e.adaptor.Now(),
 	})
 
-	// Start close timer
-	e.startCloseTimer()
-
 	// Replay buffered proposals matching this round's prevLedger.
 	// Matches rippled's playbackProposals() (Consensus.h:1151).
 	if e.prevLedger != nil && len(e.recentProposals) > 0 {
@@ -226,9 +222,6 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing bool) error
 		// which calls timerEntry() → phaseOpen() → shouldCloseLedger().
 		if replayed > e.prevProposers/2 {
 			if e.shouldCloseLedger() {
-				if e.closeTimer != nil {
-					e.closeTimer.Stop()
-				}
 				e.closeLedger()
 				// Don't call checkConvergence() here — the establish
 				// timer will evaluate it after fresh proposals arrive
@@ -439,31 +432,65 @@ func (e *Engine) Events() <-chan consensus.Event {
 	return e.eventBus.Events()
 }
 
-// run is the main consensus loop.
+// run is the main consensus loop driven by a single global heartbeat,
+// matching rippled's processHeartbeatTimer → timerEntry pattern.
 func (e *Engine) run() {
 	defer e.wg.Done()
+
+	interval := time.Second
+	if e.timing.LedgerMinClose < interval {
+		interval = e.timing.LedgerMinClose
+	}
+	e.heartbeat = time.NewTicker(interval)
+	defer e.heartbeat.Stop()
 
 	for {
 		select {
 		case <-e.ctx.Done():
 			return
-		default:
-			if e.adaptor.GetOperatingMode() == consensus.OpModeFull {
-				e.checkLedgerLocked() // Detect wrong chain (like rippled's timerEntry)
-				e.checkAndStartRound()
-			}
-			time.Sleep(100 * time.Millisecond)
+		case <-e.heartbeat.C:
+			e.timerEntry()
 		}
 	}
 }
 
-// checkAndStartRound checks if we should start a new round.
-// This serves as a fallback in case the auto-advance in acceptLedger
-// didn't trigger (e.g., first round after startup).
-func (e *Engine) checkAndStartRound() {
+// timerEntry is the single heartbeat dispatch, matching rippled's
+// Consensus::timerEntry() (Consensus.h:859-888). Called every
+// ledgerGRANULARITY (1s) and dispatches based on current phase.
+func (e *Engine) timerEntry() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	if e.adaptor.GetOperatingMode() != consensus.OpModeFull {
+		return
+	}
+
+	// Check we're on the correct ledger (matches rippled's checkLedger).
+	if e.phase != consensus.PhaseAccepted {
+		e.checkLedger()
+	}
+
+	switch e.phase {
+	case consensus.PhaseOpen:
+		e.phaseOpen()
+	case consensus.PhaseEstablish:
+		e.phaseEstablish()
+	case consensus.PhaseAccepted:
+		e.checkAndStartRoundInner()
+		// After starting a new round, immediately evaluate the new phase
+		// in the same heartbeat tick. Matches rippled's startRoundInternal
+		// which calls timerEntry() when peer pressure is detected.
+		if e.phase == consensus.PhaseOpen {
+			e.phaseOpen()
+		}
+	}
+}
+
+// checkAndStartRoundInner checks if we should start a new round.
+// This serves as a fallback in case the auto-advance in acceptLedger
+// didn't trigger (e.g., first round after startup).
+// Caller must hold e.mu.
+func (e *Engine) checkAndStartRoundInner() {
 	// Only start if in accepted phase and not on wrong ledger
 	if e.phase != consensus.PhaseAccepted {
 		return
@@ -515,19 +542,6 @@ func (e *Engine) checkAndStartRound() {
 		ParentHash: ledger.ID(),
 	}
 	e.startRoundLocked(round, proposing)
-}
-
-// checkLedgerLocked acquires the lock and calls checkLedger.
-// Only runs during active consensus phases (Open/Establish).
-// Matches rippled's timerEntry() calling checkLedger() on every tick.
-func (e *Engine) checkLedgerLocked() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if e.phase == consensus.PhaseAccepted {
-		return
-	}
-	e.checkLedger()
 }
 
 // checkLedger verifies we are on the correct ledger by comparing our
@@ -699,13 +713,6 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID) {
 		}
 		e.wrongLedgerID = netLedgerID
 		e.setMode(consensus.ModeWrongLedger)
-		// Stop timers to prevent closing/accepting while on wrong chain
-		if e.closeTimer != nil {
-			e.closeTimer.Stop()
-		}
-		if e.timeoutTimer != nil {
-			e.timeoutTimer.Stop()
-		}
 		e.adaptor.RequestLedger(netLedgerID)
 	}
 }
@@ -814,54 +821,18 @@ func (e *Engine) shouldCloseLedger() bool {
 	return true
 }
 
-// startCloseTimer starts the timer for evaluating ledger close.
-// Uses min(LedgerMinClose, 1s) matching rippled's heartbeat timer that calls
-// timerEntry() → phaseOpen() → shouldCloseLedger(). This ensures peer
-// pressure (proposersClosed + proposersValidated) is evaluated early,
-// while shouldCloseLedger() still enforces LedgerMinClose for non-peer-
-// pressure closes.
-func (e *Engine) startCloseTimer() {
-	if e.closeTimer != nil {
-		e.closeTimer.Stop()
-	}
-
-	interval := time.Second
-	if e.timing.LedgerMinClose < interval {
-		interval = e.timing.LedgerMinClose
-	}
-
-	e.closeTimer = time.AfterFunc(interval, func() {
-		e.onCloseTimer()
-	})
-}
-
-// onCloseTimer handles the close timer firing.
-func (e *Engine) onCloseTimer() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if e.phase != consensus.PhaseOpen {
-		return
-	}
-
+// phaseOpen evaluates whether to close the ledger during the open phase.
+// Called by timerEntry on each heartbeat. Matches rippled's phaseOpen()
+// (Consensus.h:1168-1239).
+// Caller must hold e.mu.
+func (e *Engine) phaseOpen() {
 	if e.shouldCloseLedger() {
 		e.eventBus.Publish(&consensus.TimerFiredEvent{
 			Timer:     consensus.TimerLedgerClose,
 			Round:     e.state.Round,
 			Timestamp: e.adaptor.Now(),
 		})
-
-		// Close the ledger and move to establish phase
 		e.closeLedger()
-	} else {
-		// Reschedule on next heartbeat, matching rippled's ledgerGRANULARITY (1s).
-		interval := time.Second
-		if e.timing.LedgerMinClose < interval {
-			interval = e.timing.LedgerMinClose
-		}
-		e.closeTimer = time.AfterFunc(interval, func() {
-			e.onCloseTimer()
-		})
 	}
 }
 
@@ -904,40 +875,13 @@ func (e *Engine) closeLedger() {
 
 	// Move to establish phase
 	e.setPhase(consensus.PhaseEstablish)
-
-	// Start timeout timer
-	e.startTimeoutTimer()
 }
 
-// startTimeoutTimer starts timers for the establish phase:
-// a periodic heartbeat (matching rippled's timerEntry calling
-// phaseEstablish) and a hard timeout at LedgerMaxClose.
-func (e *Engine) startTimeoutTimer() {
-	if e.timeoutTimer != nil {
-		e.timeoutTimer.Stop()
-	}
-
-	// Periodic heartbeat to re-evaluate convergence during establish phase.
-	// Matches rippled's timerEntry() → phaseEstablish() on every heartbeat.
-	// Use min(LedgerMinClose, 1s) so tests with fast timing still work.
-	interval := time.Second
-	if e.timing.LedgerMinClose < interval {
-		interval = e.timing.LedgerMinClose
-	}
-	e.timeoutTimer = time.AfterFunc(interval, func() {
-		e.onEstablishTimer()
-	})
-}
-
-// onEstablishTimer periodically re-evaluates convergence during establish phase.
-func (e *Engine) onEstablishTimer() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if e.phase != consensus.PhaseEstablish {
-		return
-	}
-
+// phaseEstablish re-evaluates convergence during the establish phase.
+// Called by timerEntry on each heartbeat. Matches rippled's phaseEstablish()
+// (Consensus.h:1366-1430).
+// Caller must hold e.mu.
+func (e *Engine) phaseEstablish() {
 	roundTime := time.Since(e.roundStartTime)
 
 	// Hard timeout: force accept after LedgerMaxClose
@@ -957,17 +901,6 @@ func (e *Engine) onEstablishTimer() {
 	}
 	e.updateCloseTimePosition()
 	e.checkConvergence()
-
-	// Reschedule if still in establish phase
-	if e.phase == consensus.PhaseEstablish {
-		interval := time.Second
-		if e.timing.LedgerMinClose < interval {
-			interval = e.timing.LedgerMinClose
-		}
-		e.timeoutTimer = time.AfterFunc(interval, func() {
-			e.onEstablishTimer()
-		})
-	}
 }
 
 // checkConvergence checks if proposals have converged.

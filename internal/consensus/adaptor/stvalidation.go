@@ -40,8 +40,8 @@ const (
 	fieldReserveInc     = 32
 
 	// UINT64 fields (type 3)
-	fieldBaseFee      = 5
-	fieldCookie       = 10
+	fieldBaseFee       = 5
+	fieldCookie        = 10
 	fieldServerVersion = 11
 
 	// Hash256 fields (type 5)
@@ -297,7 +297,7 @@ func advanceFixed(data []byte, pos *int, n int) (int, error) {
 // Bit 63 (0x80 in byte 0) is the "not XRP" flag:
 //   - Clear: XRP amount, always 8 bytes.
 //   - Set:   IOU amount — 48 bytes (8 value + 20 currency + 20 issuer),
-//            UNLESS it's the canonical zero IOU (0x8000000000000000), which is 8 bytes.
+//     UNLESS it's the canonical zero IOU (0x8000000000000000), which is 8 bytes.
 func skipAmount(data []byte, pos *int) (int, error) {
 	if *pos+8 > len(data) {
 		return 0, errShortData
@@ -423,4 +423,3 @@ func appendVL(buf []byte, data []byte) []byte {
 	}
 	return append(buf, data...)
 }
-
