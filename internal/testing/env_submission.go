@@ -3,14 +3,12 @@ package testing
 import (
 	"bytes"
 	"crypto/sha512"
-	"encoding/hex"
 	"sort"
 	"strconv"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -243,6 +241,14 @@ func (e *TestEnv) closeWithReplay() {
 	allTxns = append(allTxns, e.openLedgerUserTxns...)
 	for _, held := range e.heldTxns {
 		allTxns = append(allTxns, held...)
+	}
+
+	// Sort using fixture-recorded canonical salt if available.
+	// This matches rippled's exact transaction ordering during replay.
+	// Without a fixture salt, transactions are applied in submission order.
+	if e.nextCloseSalt != nil {
+		sortCanonicalWithSalt(allTxns, *e.nextCloseSalt)
+		e.nextCloseSalt = nil
 	}
 
 	// Clear held transactions -- they will be re-held if they still fail
@@ -784,43 +790,19 @@ func sortCanonical(txns []tx.Transaction) {
 	})
 }
 
-// sortCanonicalSalted sorts transactions using the production CanonicalTXSet
-// ordering from rippled. The sort key is (accountKey, sequence, txHash) where
-// accountKey = accountID XOR salt. The salt is the SHAMap root hash built from
-// the transaction set, matching rippled's RCLConsensus.cpp onClose().
-// Reference: rippled CanonicalTXSet.cpp, internal/ledger/service/canonical_txset.go
-func sortCanonicalSalted(txns []tx.Transaction, extraSaltTxns ...[]tx.Transaction) {
-	if len(txns) <= 1 {
-		return
-	}
+// canonicalEntry holds pre-computed data for canonical sorting of a transaction.
+type canonicalEntry struct {
+	txn      tx.Transaction
+	hash     [32]byte
+	account  [20]byte
+	sequence uint32
+}
 
-	type entry struct {
-		txn      tx.Transaction
-		hash     [32]byte
-		account  [20]byte
-		sequence uint32
-		blob     []byte
-	}
-
-	entries := make([]entry, len(txns))
+// buildCanonicalEntries pre-computes hashes, account IDs, and sequences for
+// a set of transactions, preparing them for canonical sorting.
+func buildCanonicalEntries(txns []tx.Transaction) []canonicalEntry {
+	entries := make([]canonicalEntry, len(txns))
 	for i, txn := range txns {
-		// Serialize the transaction to binary
-		var blob []byte
-		if raw := txn.GetRawBytes(); len(raw) > 0 {
-			blob = raw
-		} else {
-			flatMap, err := txn.Flatten()
-			if err != nil {
-				continue
-			}
-			hexStr, err := binarycodec.Encode(flatMap)
-			if err != nil {
-				continue
-			}
-			decoded, _ := hex.DecodeString(hexStr)
-			blob = decoded
-		}
-
 		h, _ := tx.ComputeTransactionHash(txn)
 
 		common := txn.GetCommon()
@@ -828,43 +810,20 @@ func sortCanonicalSalted(txns []tx.Transaction, extraSaltTxns ...[]tx.Transactio
 		_, acctBytes, _ := addresscodec.DecodeClassicAddressToAccountID(common.Account)
 		copy(accountID[:], acctBytes)
 
-		entries[i] = entry{
+		entries[i] = canonicalEntry{
 			txn:      txn,
 			hash:     h,
 			account:  accountID,
 			sequence: common.SeqProxy(),
-			blob:     blob,
 		}
 	}
+	return entries
+}
 
-	// Compute salt: SHAMap root hash of the transaction set.
-	// Matches rippled's CanonicalTXSet salt (RCLConsensus.cpp onClose).
-	// We compute the tree hash manually instead of using the SHAMap struct
-	// because the SHAMap's Hash() returns stale cached values after insertion.
-	//
-	// The transaction SHAMap uses leaf hash = SHA512Half(TXN\0 + blob),
-	// which equals the transaction hash (the key). Inner nodes use
-	// SHA512Half(MIN\0 + 16 × child_hash).
-	hashes := make([][32]byte, 0, len(entries))
-	for _, e := range entries {
-		hashes = append(hashes, e.hash)
-	}
-	// Include extra transactions (e.g., setup txns) in the salt computation.
-	// In rippled, the salt is the SHAMap root hash of ALL open-ledger transactions,
-	// including fund/trust setup. The extraSaltTxns parameter allows callers to
-	// include these additional transactions so the sort order matches rippled's.
-	// Reference: rippled RCLConsensus.cpp onClose() — builds SHAMap from ALL txs.
-	for _, extra := range extraSaltTxns {
-		for _, txn := range extra {
-			h, err := tx.ComputeTransactionHash(txn)
-			if err == nil {
-				hashes = append(hashes, h)
-			}
-		}
-	}
-	salt := computeTxSetHash(hashes)
-
-	// Debug: show salt and tx ordering
+// applyCanonicalSort sorts transactions in-place using the CanonicalTXSet
+// ordering with the given salt. The sort key is (accountKey XOR salt, sequence, txHash).
+// Reference: rippled CanonicalTXSet.cpp
+func applyCanonicalSort(txns []tx.Transaction, entries []canonicalEntry, salt [32]byte) {
 	// Pre-compute account keys: accountID XOR salt (32 bytes).
 	// Mirrors rippled CanonicalTXSet::accountKey(): copy 20-byte account into
 	// 32-byte uint256 (zero-padded), then XOR with full 32-byte salt.
@@ -900,6 +859,61 @@ func sortCanonicalSalted(txns []tx.Transaction, extraSaltTxns ...[]tx.Transactio
 		sorted[i] = entries[se.idx].txn
 	}
 	copy(txns, sorted)
+}
+
+// sortCanonicalWithSalt sorts transactions using the production CanonicalTXSet
+// ordering with a pre-computed salt. Used when the fixture provides the exact
+// tx_set_hash from rippled, so we can match rippled's transaction ordering
+// without needing to compute the salt ourselves.
+// Reference: rippled CanonicalTXSet.cpp
+func sortCanonicalWithSalt(txns []tx.Transaction, salt [32]byte) {
+	if len(txns) <= 1 {
+		return
+	}
+	entries := buildCanonicalEntries(txns)
+	applyCanonicalSort(txns, entries, salt)
+}
+
+// sortCanonicalSalted sorts transactions using the production CanonicalTXSet
+// ordering from rippled. The sort key is (accountKey, sequence, txHash) where
+// accountKey = accountID XOR salt. The salt is the SHAMap root hash built from
+// the transaction set, matching rippled's RCLConsensus.cpp onClose().
+// Reference: rippled CanonicalTXSet.cpp, internal/ledger/service/canonical_txset.go
+func sortCanonicalSalted(txns []tx.Transaction, extraSaltTxns ...[]tx.Transaction) {
+	if len(txns) <= 1 {
+		return
+	}
+
+	entries := buildCanonicalEntries(txns)
+
+	// Compute salt: SHAMap root hash of the transaction set.
+	// Matches rippled's CanonicalTXSet salt (RCLConsensus.cpp onClose).
+	// We compute the tree hash manually instead of using the SHAMap struct
+	// because the SHAMap's Hash() returns stale cached values after insertion.
+	//
+	// The transaction SHAMap uses leaf hash = SHA512Half(TXN\0 + blob),
+	// which equals the transaction hash (the key). Inner nodes use
+	// SHA512Half(MIN\0 + 16 × child_hash).
+	hashes := make([][32]byte, 0, len(entries))
+	for _, e := range entries {
+		hashes = append(hashes, e.hash)
+	}
+	// Include extra transactions (e.g., setup txns) in the salt computation.
+	// In rippled, the salt is the SHAMap root hash of ALL open-ledger transactions,
+	// including fund/trust setup. The extraSaltTxns parameter allows callers to
+	// include these additional transactions so the sort order matches rippled's.
+	// Reference: rippled RCLConsensus.cpp onClose() — builds SHAMap from ALL txs.
+	for _, extra := range extraSaltTxns {
+		for _, txn := range extra {
+			h, err := tx.ComputeTransactionHash(txn)
+			if err == nil {
+				hashes = append(hashes, h)
+			}
+		}
+	}
+	salt := computeTxSetHash(hashes)
+
+	applyCanonicalSort(txns, entries, salt)
 }
 
 // computeTxSetHash computes the SHAMap root hash for a set of transaction

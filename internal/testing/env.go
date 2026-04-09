@@ -145,6 +145,11 @@ type TestEnv struct {
 	// before ledger.Close()) so the adjustment is part of the closed ledger
 	// state and survives future replays.
 	pendingReimbursements []*Account
+
+	// nextCloseSalt overrides the canonical sort salt for the next closeWithReplay.
+	// Set from the fixture's tx_set_hash field to match rippled's exact ordering.
+	// Cleared after use.
+	nextCloseSalt *[32]byte
 }
 
 // NewTestEnv creates a new test environment with a genesis ledger.
@@ -339,4 +344,11 @@ func (e *TestEnv) SetBaseFee(baseFee uint64) {
 func (e *TestEnv) SetReserves(reserveBase, reserveIncrement uint64) {
 	e.reserveBase = reserveBase
 	e.reserveIncrement = reserveIncrement
+}
+
+// SetNextCloseSalt sets the canonical sort salt for the next replay close.
+// When set, closeWithReplay() uses this salt instead of computing one from
+// the transaction set. Cleared after use.
+func (e *TestEnv) SetNextCloseSalt(salt [32]byte) {
+	e.nextCloseSalt = &salt
 }

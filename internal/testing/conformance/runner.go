@@ -66,6 +66,7 @@ type Step struct {
 	CloseTime        *uint32         `json:"close_time,omitempty"`
 	LedgerSeq        *uint32         `json:"ledger_seq,omitempty"`
 	ParentCloseTime  *uint32         `json:"parent_close_time,omitempty"`
+	TxSetHash        *string         `json:"tx_set_hash,omitempty"`
 }
 
 // ModifyState describes direct ledger state modifications that bypass normal
@@ -1027,6 +1028,18 @@ func (r *runner) execClose(stepIdx int, step Step) {
 		}
 		r.env.SetTime(targetTime.Add(-resolution))
 	}
+	// If the fixture provides a tx_set_hash, pass it to the environment
+	// as the canonical sort salt. This allows closeWithReplay() to sort
+	// transactions in the exact same order as rippled.
+	if step.TxSetHash != nil {
+		saltBytes, err := hex.DecodeString(*step.TxSetHash)
+		if err == nil && len(saltBytes) == 32 {
+			var salt [32]byte
+			copy(salt[:], saltBytes)
+			r.env.SetNextCloseSalt(salt)
+		}
+	}
+
 	// Use time-leap close if this step index is in the time-leap set.
 	// Time-leap closes reset TxQ fee metrics (txnsExpected) back toward
 	// the minimum, matching rippled's env.close(env.now() + 5s, 10000ms).
