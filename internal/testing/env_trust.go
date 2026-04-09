@@ -20,7 +20,7 @@ func (e *TestEnv) Trust(acc *Account, amount tx.Amount) {
 	seq := e.Seq(acc)
 	ts.Sequence = &seq
 
-	if e.replayOnClose && acc.PublicKey != nil {
+	if acc.PublicKey != nil {
 		ts.SetFlags(ts.GetFlags() | tx.TfFullyCanonicalSig)
 		e.SignWith(ts, acc)
 	}

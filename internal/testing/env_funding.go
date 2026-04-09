@@ -47,7 +47,7 @@ func (e *TestEnv) FundAmount(acc *Account, amount uint64) {
 
 	// When replay-on-close is enabled, sign the transaction so its serialized
 	// bytes are stable for canonical sort salt computation.
-	if e.replayOnClose && master.PublicKey != nil {
+	if master.PublicKey != nil {
 		p.SetFlags(tx.TfFullyCanonicalSig)
 		e.SignWith(p, master)
 	}
@@ -103,7 +103,7 @@ func (e *TestEnv) enableDefaultRipple(acc *Account) {
 		accountSet.NetworkID = &e.networkID
 	}
 
-	if e.replayOnClose && acc.PublicKey != nil {
+	if acc.PublicKey != nil {
 		accountSet.SetFlags(accountSet.GetFlags() | tx.TfFullyCanonicalSig)
 		e.SignWith(accountSet, acc)
 	}
@@ -142,7 +142,7 @@ func (e *TestEnv) FundAmountNoRipple(acc *Account, amount uint64) {
 		pay.NetworkID = &e.networkID
 	}
 
-	if e.replayOnClose && master.PublicKey != nil {
+	if master.PublicKey != nil {
 		pay.SetFlags(tx.TfFullyCanonicalSig)
 		e.SignWith(pay, master)
 	}

@@ -291,33 +291,6 @@ type txqTestConfig struct {
 // Helper to create *uint32 from a literal.
 func u32(v uint32) *uint32 { return &v }
 
-// needsReplayOnClose returns true for fixtures where the closed-ledger state
-// differs from submission-order state because rippled's canonical replay
-// reorders transactions. These fixtures require EnableOpenLedgerReplay to
-// match the expected balances/state in subsequent ledgers.
-func needsReplayOnClose(suite, testcase string) bool {
-	key := suite + "/" + testcase
-	switch key {
-	case "ripple.app.DepositPreauth/Payment failure with invalid credentials.":
-		// Ledger 7 contains Payment(alice, tecNO_PERMISSION) + DepositPreauth(bob).
-		// Canonical replay applies DepositPreauth first, changing Payment to tesSUCCESS.
-		// Without replay, balance mismatches cascade through ledgers 8+.
-		return true
-	case "ripple.app.PayChan/Disallow Incoming Flag":
-		// Ledger 6 contains PayChanCreate(cho→alice, tecNO_PERMISSION) +
-		// AccountSet(alice ClearFlag). Canonical replay may reorder these,
-		// causing cho's PayChanCreate to succeed when alice's flag is cleared first.
-		return true
-	case "ripple.app.AMMExtended/Global Freeze":
-		// Ledger 10 contains AccountSet(G1 SetFlag=GlobalFreeze) +
-		// AMMCreate(A3, tecFROZEN). During rippled's replay, AMMCreate with
-		// tec from preclaim is skipped (likelyToClaimFee=false with tapRETRY),
-		// so the closed ledger state differs from open-ledger submission order.
-		// Without replay, A3's balance and owner_count mismatch at step 32+.
-		return true
-	}
-	return false
-}
 
 // txqConfigLookup maps TxQ fixture test case names to their full
 // TxQ configuration from rippled TxQ_test.cpp makeConfig() calls.
@@ -535,7 +508,7 @@ func RunFixture(t *testing.T, fixturePath string) {
 		t:                         t,
 		accounts:                  make(map[string]*jtx.Account),
 		enableTxQ:                 isTxQSuite,
-		enableReplay:              needsReplayOnClose(fixture.Suite, fixture.Testcase),
+		enableReplay:              true, // Always replay — matches rippled consensus
 		txqCfg:                    txqCfg,
 		directApplySteps:          directApplySet,
 		ammAddrMap:                make(map[string]string),
