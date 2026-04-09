@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
@@ -27,6 +28,13 @@ import (
 // rippled's standalone consensus simulation (BuildLedger.cpp).
 func (e *TestEnv) Close() {
 	e.t.Helper()
+
+	// Apply any pending amendment changes from SetAmendments().
+	// Matches rippled where enableFeature/disableFeature require close()
+	// for changes to take effect.
+	// Reference: rippled Env.cpp: "Env::close() must be called for feature
+	// enable to take place."
+	e.applyPendingAmendments()
 
 	if e.replayOnClose {
 		e.closeWithReplay()
@@ -133,6 +141,9 @@ func (e *TestEnv) Close() {
 // Reference: rippled TxQ::FeeMetrics::update timeLeap handling
 func (e *TestEnv) CloseWithTimeLeap() {
 	e.t.Helper()
+
+	// Apply any pending amendment changes (same as Close).
+	e.applyPendingAmendments()
 
 	closingTxCount := e.closingTxTotal
 	// Round closeTime up to next resolution boundary, matching rippled.
@@ -308,6 +319,23 @@ func (e *TestEnv) closeWithReplay() {
 	if e.txQueue != nil {
 		e.drainQueue()
 	}
+}
+
+// applyPendingAmendments applies any deferred amendment changes from
+// SetAmendments(). Called at the start of Close() and CloseWithTimeLeap().
+// Matches rippled where enableFeature/disableFeature modify config().features
+// but the rules are only rebuilt when the ledger is closed.
+// Reference: rippled Env.cpp: "Env::close() must be called for feature
+// enable to take place."
+func (e *TestEnv) applyPendingAmendments() {
+	if len(e.pendingAmendments) == 0 {
+		return
+	}
+	e.rulesBuilder = amendment.NewRulesBuilder()
+	for _, name := range e.pendingAmendments {
+		e.rulesBuilder.EnableByName(name)
+	}
+	e.pendingAmendments = nil
 }
 
 // applyWithRetry applies a set of transactions with multi-pass retry logic,

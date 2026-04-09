@@ -41,6 +41,13 @@ type TestEnv struct {
 	// Reference: rippled's FeatureBitset in test/jtx/Env.h
 	rulesBuilder *amendment.RulesBuilder
 
+	// pendingAmendments stores amendment names that take effect on next Close().
+	// Matches rippled where enableFeature/disableFeature require close() for
+	// changes to take effect.
+	// Reference: rippled Env.cpp: "Env::close() must be called for feature
+	// enable to take place."
+	pendingAmendments []string
+
 	// NetworkID for engine configuration (0 = mainnet default, >1024 requires NetworkID in txns)
 	networkID uint32
 

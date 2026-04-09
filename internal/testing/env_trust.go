@@ -1,7 +1,6 @@
 package testing
 
 import (
-	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/account"
@@ -436,12 +435,12 @@ func (e *TestEnv) SetDelegate(owner, authorized *Account, permissions []string) 
 }
 
 // SetAmendments replaces the current amendment set with exactly the named amendments.
-// This is used by the conformance runner to configure the exact amendment set from fixtures.
+// Changes are deferred until the next Close(), matching rippled where
+// enableFeature/disableFeature require close() to take effect.
+// Reference: rippled Env.cpp: "Env::close() must be called for feature
+// enable to take place."
 func (e *TestEnv) SetAmendments(names []string) {
-	e.rulesBuilder = amendment.NewRulesBuilder()
-	for _, name := range names {
-		e.rulesBuilder.EnableByName(name)
-	}
+	e.pendingAmendments = names
 }
 
 // ReimburseFeeDirect directly adds baseFee drops back to an account's balance
