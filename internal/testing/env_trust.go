@@ -498,3 +498,28 @@ func (e *TestEnv) ReimburseFeeDirect(acc *Account) {
 		e.t.Fatalf("ReimburseFeeDirect: failed to update master: %v", err)
 	}
 }
+
+// BumpMasterSequence increments master's sequence in the ledger.
+// Used by the conformance runner to account for the implicit Payment
+// that rippled's trust reimbursement consumes.
+func (e *TestEnv) BumpMasterSequence() {
+	e.t.Helper()
+	master := MasterAccount()
+	masterKey := keylet.Account(master.ID)
+	data, err := e.ledger.Read(masterKey)
+	if err != nil {
+		e.t.Fatalf("BumpMasterSequence: failed to read master: %v", err)
+	}
+	masterRoot, err := state.ParseAccountRoot(data)
+	if err != nil {
+		e.t.Fatalf("BumpMasterSequence: failed to parse master: %v", err)
+	}
+	masterRoot.Sequence++
+	updated, err := state.SerializeAccountRoot(masterRoot)
+	if err != nil {
+		e.t.Fatalf("BumpMasterSequence: failed to serialize master: %v", err)
+	}
+	if err := e.ledger.Update(masterKey, updated); err != nil {
+		e.t.Fatalf("BumpMasterSequence: failed to update master: %v", err)
+	}
+}

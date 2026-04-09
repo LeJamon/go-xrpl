@@ -219,8 +219,9 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 	minSlotPriceFrac := numberDiv(tradingFee, state.NewIssuedAmountFromValue(int64(auctionSlotMinFeeFraction)*1e15, -15, "", ""))
 	minSlotPrice := lptAMMBalance.Mul(minSlotPriceFrac, false)
 
-	// Calculate discounted fee
-	_ = amm.TradingFee / uint16(auctionSlotDiscountedFee) // discountedFee for future use
+	// Auction slot discounted fee
+	// Reference: rippled AMMBid.cpp:211-212
+	discountedFee := amm.TradingFee / uint16(auctionSlotDiscountedFee)
 
 	// Get current time from parent ledger close time
 	// Reference: rippled AMMBid.cpp:192 — view.info().parentCloseTime
@@ -355,26 +356,28 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Burn LP tokens: debit bidder's trust line by burn amount, then reduce AMM LPTokenBalance.
-	// Reference: rippled AMMBid.cpp:262 — redeemIOU(account_, saBurn, lpTokens.issue())
-	if isGreater(burn, lptAMMBalance) {
-		ctx.Log.Error("amm bid: LP token burn exceeds AMM balance", "burn", burn, "lptAMMBalance", lptAMMBalance)
-		return tx.TefINTERNAL
+	// Burn LP tokens: adjust, debit bidder's trust line, then reduce AMM LPTokenBalance.
+	// Reference: rippled AMMBid.cpp updateSlot() lines 249-268
+	saBurn := adjustLPTokens(lptAMMBalance, burn, false)
+	if isGreaterOrEqual(saBurn, lptAMMBalance) {
+		ctx.Log.Error("amm bid: LP token burn exceeds AMM balance", "burn", saBurn, "lptAMMBalance", lptAMMBalance)
+		return tx.TecINTERNAL
 	}
-	if !burn.IsZero() {
+	if !saBurn.IsZero() {
 		burnWithIssue := state.NewIssuedAmountFromValue(
-			burn.Mantissa(), burn.Exponent(), lptCurrency, lptIssuer)
+			saBurn.Mantissa(), saBurn.Exponent(), lptCurrency, lptIssuer)
 		if r := redeemLPTokens(ctx.View, accountID, amm.Account, burnWithIssue); r != tx.TesSUCCESS {
 			return r
 		}
 	}
-	newLPBalance, _ := amm.LPTokenBalance.Sub(burn)
+	newLPBalance, _ := amm.LPTokenBalance.Sub(saBurn)
 	amm.LPTokenBalance = newLPBalance
 
 	// Update auction slot
 	amm.AuctionSlot.Account = accountID
 	amm.AuctionSlot.Expiration = currentTime + auctionSlotTotalTimeSecs
 	amm.AuctionSlot.Price = payPrice
+	amm.AuctionSlot.DiscountedFee = discountedFee
 
 	// Parse auth accounts if provided
 	if a.AuthAccounts != nil {

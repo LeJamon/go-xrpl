@@ -307,6 +307,13 @@ func needsReplayOnClose(suite, testcase string) bool {
 		// AccountSet(alice ClearFlag). Canonical replay may reorder these,
 		// causing cho's PayChanCreate to succeed when alice's flag is cleared first.
 		return true
+	case "ripple.app.AMMExtended/Global Freeze":
+		// Ledger 10 contains AccountSet(G1 SetFlag=GlobalFreeze) +
+		// AMMCreate(A3, tecFROZEN). During rippled's replay, AMMCreate with
+		// tec from preclaim is skipped (likelyToClaimFee=false with tapRETRY),
+		// so the closed ledger state differs from open-ledger submission order.
+		// Without replay, A3's balance and owner_count mismatch at step 32+.
+		return true
 	}
 	return false
 }
@@ -432,6 +439,7 @@ type feeVoteConfig struct {
 // test config values (200 drops).
 var feeVoteLookup = map[string]feeVoteConfig{
 	"ripple.app.PayChan/Account Delete": {BaseFee: 10, ReserveBase: 200, ReserveIncrement: 50, FlagLedgerSeq: 256},
+	"ripple.app.AMM/Auto Delete":        {BaseFee: 10, ReserveBase: 200, ReserveIncrement: 50, FlagLedgerSeq: 257},
 }
 
 // txqTimeLeapLookup maps TxQ fixture test case names to the step indices
@@ -594,6 +602,8 @@ func RunFixture(t *testing.T, fixturePath string) {
 						r.accounts = make(map[string]*jtx.Account)
 						r.ammAddrMap = make(map[string]string)
 						r.feeVoteApplied = false
+						r.pendingHeld = nil
+						r.pendingQueued = nil
 						r.setupEnv(r.lastEnvCfg)
 					}
 				}
@@ -811,6 +821,13 @@ func (r *runner) replayTx(step Step) {
 func (r *runner) setupEnv(cfg EnvConfig) {
 	r.lastEnvCfg = cfg
 	r.hadTxSteps = false
+
+	// Clear pending transaction queues — stale transactions from a previous
+	// scope must not leak into the new environment. Without this, a ter*
+	// transaction queued in one scope could be retried after an env_reset,
+	// consuming a sequence number in the new scope and causing tefPAST_SEQ.
+	r.pendingHeld = nil
+	r.pendingQueued = nil
 	genCfg := genesis.DefaultConfig()
 	genCfg.Fees.BaseFee = drops.NewXRPAmount(int64(cfg.BaseFee))
 	genCfg.Fees.ReserveBase = drops.XRPAmount(cfg.ReserveBase)
@@ -995,6 +1012,10 @@ func (r *runner) execTrust(stepIdx int, step Step) {
 	// inside closeWithReplay() (after transaction replay, before ledger close),
 	// ensuring the adjustment survives the rebuild from lastClosedLedger.
 	r.env.ReimburseFeeDirect(acc)
+	// In rippled, trust reimbursement is a real Payment from master, which
+	// consumes a sequence number. Bump master's sequence so fixture txs that
+	// account for it don't get tefPRE_SEQ.
+	r.env.BumpMasterSequence()
 	if r.env.IsReplayEnabled() {
 		r.env.QueueReimbursement(acc)
 	}

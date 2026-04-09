@@ -150,7 +150,11 @@ func (s *BookStep) Rev(
 	s.offersUsed_ = 0
 
 	// Get transfer rates
-	prevStepDebtDir := DebtDirectionRedeems
+	// When there is no previous step (BookStep is the first step in the strand,
+	// meaning the strand source IS the issuer of the input currency), default to
+	// DebtDirectionIssues so no transfer fee is charged on the input side.
+	// Reference: rippled BookStep.cpp revImp() lines 1085-1089
+	prevStepDebtDir := DebtDirectionIssues
 	if s.prevStep != nil {
 		prevStepDebtDir = s.prevStep.DebtDirection(sb, StrandDirectionReverse)
 	}
@@ -456,7 +460,9 @@ func (s *BookStep) Fwd(
 	s.offersUsed_ = 0
 
 	// Get transfer rates
-	prevStepDebtDir := DebtDirectionRedeems
+	// When there is no previous step, default to DebtDirectionIssues
+	// (no transfer fee on input). Reference: rippled BookStep.cpp fwdImp() lines 1256-1260
+	prevStepDebtDir := DebtDirectionIssues
 	if s.prevStep != nil {
 		prevStepDebtDir = s.prevStep.DebtDirection(sb, StrandDirectionForward)
 	}
@@ -1005,9 +1011,11 @@ func (s *BookStep) ValidFwd(sb *PaymentSandbox, afView *PaymentSandbox, in Eithe
 	return true, s.cache.out
 }
 
-// transferRateIn returns the transfer rate for incoming currency
+// transferRateIn returns the transfer rate for incoming currency.
+// No fee when: XRP, issuer is strandDst, or previous step issues.
+// Reference: rippled BookStep.cpp forEachOffer() rate lambda (lines 728-731) + trIn (line 734-735)
 func (s *BookStep) transferRateIn(sb *PaymentSandbox, prevStepDir DebtDirection) uint32 {
-	if s.book.In.IsXRP() {
+	if s.book.In.IsXRP() || s.book.In.Issuer == s.strandDst {
 		return QualityOne
 	}
 
@@ -1019,9 +1027,11 @@ func (s *BookStep) transferRateIn(sb *PaymentSandbox, prevStepDir DebtDirection)
 	return s.GetAccountTransferRate(sb, s.book.In.Issuer)
 }
 
-// transferRateOut returns the transfer rate for outgoing currency
+// transferRateOut returns the transfer rate for outgoing currency.
+// No fee when: XRP, issuer is strandDst, or ownerPaysTransferFee is false.
+// Reference: rippled BookStep.cpp forEachOffer() rate lambda (lines 728-731) + trOut (line 737-738)
 func (s *BookStep) transferRateOut(sb *PaymentSandbox) uint32 {
-	if s.book.Out.IsXRP() {
+	if s.book.Out.IsXRP() || s.book.Out.Issuer == s.strandDst {
 		return QualityOne
 	}
 

@@ -392,6 +392,25 @@ func numberDiv(n, d tx.Amount) tx.Amount {
 	return state.NewIssuedAmountFromValue(iou.Mantissa(), iou.Exponent(), n.Currency, n.Issuer)
 }
 
+// stAmountDiv performs STAmount-style division: n / d.
+// This matches rippled's divide(STAmount, STAmount, Issue) which uses
+// muldiv with +5 rounding, unlike Number division (Guard-based).
+// Used specifically in equalDepositTokens and equalWithdrawTokens where
+// rippled divides STAmount values (not Number values).
+// Reference: rippled STAmount.cpp divide() line 1294
+func stAmountDiv(n, d tx.Amount) tx.Amount {
+	if d.IsZero() {
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
+	}
+	if n.IsZero() {
+		return state.NewIssuedAmountFromValue(0, -100, "", "")
+	}
+	// roundUp=false matches rippled's divide() default rounding behavior
+	// for AMM proportional deposit/withdraw fraction calculations.
+	result := n.Div(d, false)
+	return state.NewIssuedAmountFromValue(result.Mantissa(), result.Exponent(), n.Currency, n.Issuer)
+}
+
 // solveQuadraticEq solves the positive root of quadratic equation:
 //
 //	x = (-b + sqrt(b*b - 4*a*c)) / (2*a)

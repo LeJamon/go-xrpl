@@ -486,7 +486,10 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// frac = tokensAdj / lptBalance
-		frac := numberDiv(toIOUForCalc(tokensAdj), toIOUForCalc(lptBalance))
+		// Use stAmountDiv to match rippled's divide(STAmount, STAmount, Issue)
+		// which adds +5 rounding, unlike Number division.
+		// Reference: rippled AMMDeposit.cpp equalDepositTokens line 661
+		frac := stAmountDiv(toIOUForCalc(tokensAdj), toIOUForCalc(lptBalance))
 		// amounts factor in the adjusted tokens
 		depositAmount1 = getRoundedAsset(fixV1_3, assetBalance1, frac, true)
 		depositAmount2 = getRoundedAsset(fixV1_3, assetBalance2, frac, true)
@@ -997,7 +1000,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		return TecINSUF_RESERVE_LINE
 	}
 
-	// Increment owner count if we created a new LP token trustline
+	// Increment owner count if we created a new LP token trustline.
 	// Reference: rippled - the depositor pays reserve for the LP token trustline
 	if !lptExists {
 		ctx.Account.OwnerCount++

@@ -411,7 +411,9 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 			}
 
 			// frac = tokensAdj / lptBalance
-			frac := numberDiv(toIOUForCalc(tokensAdj), toIOUForCalc(lptBalance))
+			// Use stAmountDiv to match rippled's divide(STAmount, STAmount, Issue)
+			// Reference: rippled AMMWithdraw.cpp equalWithdrawTokens
+			frac := stAmountDiv(toIOUForCalc(tokensAdj), toIOUForCalc(lptBalance))
 			withdrawAmount1 = getRoundedAsset(fixV1_3, assetBalance1, frac, false)
 			withdrawAmount2 = getRoundedAsset(fixV1_3, assetBalance2, frac, false)
 

@@ -248,9 +248,9 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 	amm.TradingFee = newTradingFee
 
 	// Update discounted fee in auction slot
+	// Reference: rippled AMMVote.cpp lines 212-220
 	if amm.AuctionSlot != nil {
-		discountedFee := newTradingFee / auctionSlotDiscountedFee
-		_ = discountedFee
+		amm.AuctionSlot.DiscountedFee = newTradingFee / auctionSlotDiscountedFee
 	}
 
 	// Persist updated AMM

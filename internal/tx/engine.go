@@ -1939,9 +1939,94 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		invEntries := table.CollectEntries()
 		txDeclaredFee := parseTxDeclaredFee(tx, fee)
 		if violation := invariants.CheckInvariants(wrapTxForInvariants(tx), invariants.Result(result), fee, txDeclaredFee, invEntries, table, e.rules()); violation != nil {
-			// First violation: charge fee but revert all state changes (tecINVARIANT_FAILED).
-			// Reference: rippled — first pass returns tec, second would return tef.
+			// Invariant violation: discard all doApply() side effects and apply only
+			// fee deduction + sequence increment, just like the tec recovery path.
+			// Reference: rippled Transactor::apply() lines 1224-1238 — on tecINVARIANT_FAILED,
+			// calls reset(fee) which discards the sandbox, then re-applies fee/seq only.
 			_ = violation // logged in future via journal
+
+			// Don't call table.Apply() — discard all transaction effects.
+			// Create a fresh tecTable for fee-only changes.
+			invTecTable := NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, e.rules())
+
+			// Consume ticket through invTecTable if needed.
+			if isTicket {
+				ticketKey := keylet.Ticket(accountID, *common.TicketSequence)
+				ownerDirKey := keylet.OwnerDir(accountID)
+				var ticketOwnerNode uint64
+				if ticketData, ticketErr := invTecTable.Read(ticketKey); ticketErr == nil && ticketData != nil {
+					ticketOwnerNode = state.GetOwnerNode(ticketData)
+				}
+				state.DirRemove(invTecTable, ownerDirKey, ticketOwnerNode, ticketKey.Key, true)
+				if err := invTecTable.Erase(ticketKey); err != nil {
+					return TefINTERNAL
+				}
+			}
+
+			// Restore account to original state, then apply only fee/sequence.
+			invAccount, invErr := state.ParseAccountRoot(originalAccountData)
+			if invErr != nil {
+				return TefINTERNAL
+			}
+			if !isDelegated {
+				invAccount.Balance -= fee
+			}
+			if !isTicket && common.Sequence != nil {
+				invAccount.Sequence = *common.Sequence + 1
+			}
+			if isTicket && invAccount.OwnerCount > 0 {
+				invAccount.OwnerCount--
+			}
+			if isTicket && invAccount.TicketCount > 0 {
+				invAccount.TicketCount--
+			}
+			invAccount.PreviousTxnID = txHash
+			invAccount.PreviousTxnLgrSeq = e.config.LedgerSequence
+			{
+				var zeroHash [32]byte
+				if invAccount.AccountTxnID != zeroHash {
+					invAccount.AccountTxnID = txHash
+				}
+			}
+
+			invUpdatedData, invSerErr := state.SerializeAccountRoot(invAccount)
+			if invSerErr != nil {
+				return TefINTERNAL
+			}
+			if err := invTecTable.Update(accountKey, invUpdatedData); err != nil {
+				return TefINTERNAL
+			}
+
+			// For delegated transactions, deduct the fee from the delegate.
+			if isDelegated {
+				delegateID, _ := state.DecodeAccountID(common.Delegate)
+				delegateAccountKey := keylet.Account(delegateID)
+				delegateAccountData, delegateReadErr := e.view.Read(delegateAccountKey)
+				if delegateReadErr != nil || delegateAccountData == nil {
+					return TefINTERNAL
+				}
+				delegateAccount, delegateParseErr := state.ParseAccountRoot(delegateAccountData)
+				if delegateParseErr != nil {
+					return TefINTERNAL
+				}
+				delegateAccount.Balance -= fee
+				delegateAccount.PreviousTxnID = txHash
+				delegateAccount.PreviousTxnLgrSeq = e.config.LedgerSequence
+				delegateData, delegateSerErr := state.SerializeAccountRoot(delegateAccount)
+				if delegateSerErr != nil {
+					return TefINTERNAL
+				}
+				if err := invTecTable.Update(delegateAccountKey, delegateData); err != nil {
+					return TefINTERNAL
+				}
+			}
+
+			generatedMeta, applyErr := invTecTable.Apply()
+			if applyErr != nil {
+				return TefINTERNAL
+			}
+			metadata.AffectedNodes = generatedMeta.AffectedNodes
+
 			return TecINVARIANT_FAILED
 		}
 	}
