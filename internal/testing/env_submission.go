@@ -56,6 +56,10 @@ func (e *TestEnv) Close() {
 		e.t.Fatalf("Failed to validate ledger: %v", err)
 	}
 
+	// Re-sync clock to the actual close time from the closed ledger.
+	// Matches rippled's timeKeeper().set(closed()->info().closeTime).
+	e.clock.Set(e.ledger.CloseTime())
+
 	// Store lightweight state root hash in history (matching rippled's LedgerHistory pattern)
 	if h, err := e.ledger.StateMapHash(); err == nil {
 		e.ledgerRootHashes[e.ledger.Sequence()] = h
@@ -144,6 +148,10 @@ func (e *TestEnv) CloseWithTimeLeap() {
 	if err := e.ledger.SetValidated(); err != nil {
 		e.t.Fatalf("Failed to validate ledger: %v", err)
 	}
+
+	// Re-sync clock to the actual close time from the closed ledger.
+	// Matches rippled's timeKeeper().set(closed()->info().closeTime).
+	e.clock.Set(e.ledger.CloseTime())
 
 	if h, err := e.ledger.StateMapHash(); err == nil {
 		e.ledgerRootHashes[e.ledger.Sequence()] = h
@@ -263,6 +271,10 @@ func (e *TestEnv) closeWithReplay() {
 	if err := e.ledger.SetValidated(); err != nil {
 		e.t.Fatalf("closeWithReplay: failed to validate ledger: %v", err)
 	}
+
+	// Re-sync clock to the actual close time from the closed ledger.
+	// Matches rippled's timeKeeper().set(closed()->info().closeTime).
+	e.clock.Set(e.ledger.CloseTime())
 
 	// Store state root hash in history
 	if h, err := e.ledger.StateMapHash(); err == nil {
