@@ -55,25 +55,27 @@ func testSelfPayXferFeeOffer(t *testing.T, disabledFeatures []string) {
 	env.SetTransferRate(gw, 1250000000) // rate 1.25
 	env.Close()
 
+	// Trust() reimburses its fee. Each actor has 2 Trust() calls (BTC + USD)
+	// that are now free, so subtract 2 fewer baseFees from the expected XRP.
 	tests := []selfPayTestData{
 		// ann crosses her own BTC leg; no BTC xfer fee
 		{0, 0, 1, 20, []selfPayActor{
-			{jtx.NewAccount("ann"), 0, uint64(jtx.XRP(3900000)) - 4*baseFee, 20.0, 3000},
-			{jtx.NewAccount("abe"), 0, uint64(jtx.XRP(4100000)) - 3*baseFee, 0, 750},
+			{jtx.NewAccount("ann"), 0, uint64(jtx.XRP(3900000)) - 2*baseFee, 20.0, 3000},
+			{jtx.NewAccount("abe"), 0, uint64(jtx.XRP(4100000)) - 1*baseFee, 0, 750},
 		}},
 		// bev crosses her own USD leg; no USD xfer fee
 		{0, 1, 0, 20, []selfPayActor{
-			{jtx.NewAccount("bev"), 0, uint64(jtx.XRP(4100000)) - 4*baseFee, 7.5, 2000},
-			{jtx.NewAccount("bob2"), 0, uint64(jtx.XRP(3900000)) - 3*baseFee, 10, 0},
+			{jtx.NewAccount("bev"), 0, uint64(jtx.XRP(4100000)) - 2*baseFee, 7.5, 2000},
+			{jtx.NewAccount("bob2"), 0, uint64(jtx.XRP(3900000)) - 1*baseFee, 10, 0},
 		}},
 		// cam crosses both legs; no xfer fee at all
 		{0, 0, 0, 20, []selfPayActor{
-			{jtx.NewAccount("cam"), 0, uint64(jtx.XRP(4000000)) - 5*baseFee, 20.0, 2000},
+			{jtx.NewAccount("cam"), 0, uint64(jtx.XRP(4000000)) - 3*baseFee, 20.0, 2000},
 		}},
 		// deb partially crosses; no USD xfer fee (forward case)
 		{0, 1, 0, 5, []selfPayActor{
-			{jtx.NewAccount("deb"), 1, uint64(jtx.XRP(4040000)) - 4*baseFee, 0.0, 2000},
-			{jtx.NewAccount("dan3"), 1, uint64(jtx.XRP(3960000)) - 3*baseFee, 4, 0},
+			{jtx.NewAccount("deb"), 1, uint64(jtx.XRP(4040000)) - 2*baseFee, 0.0, 2000},
+			{jtx.NewAccount("dan3"), 1, uint64(jtx.XRP(3960000)) - 1*baseFee, 4, 0},
 		}},
 	}
 
@@ -173,15 +175,17 @@ func testSelfPayUnlimitedFunds(t *testing.T, disabledFeatures []string) {
 	env.SetTransferRate(gw, 1250000000) // rate 1.25
 	env.Close()
 
+	// Trust() reimburses its fee. Each actor has 2 Trust() calls (BTC + USD)
+	// that are now free, so subtract 2 fewer baseFees from the expected XRP.
 	tests := []selfPayTestData{
 		// gay crosses her own BTC leg; no BTC xfer fee (forward case)
 		{0, 0, 1, 5, []selfPayActor{
-			{jtx.NewAccount("gay"), 1, uint64(jtx.XRP(3950000)) - 4*baseFee, 5, 2500},
-			{jtx.NewAccount("gar"), 1, uint64(jtx.XRP(4050000)) - 3*baseFee, 0, 1375},
+			{jtx.NewAccount("gay"), 1, uint64(jtx.XRP(3950000)) - 2*baseFee, 5, 2500},
+			{jtx.NewAccount("gar"), 1, uint64(jtx.XRP(4050000)) - 1*baseFee, 0, 1375},
 		}},
 		// hye crosses both legs; no xfer fee (forward case)
 		{0, 0, 0, 5, []selfPayActor{
-			{jtx.NewAccount("hye"), 2, uint64(jtx.XRP(4000000)) - 5*baseFee, 5, 2000},
+			{jtx.NewAccount("hye"), 2, uint64(jtx.XRP(4000000)) - 3*baseFee, 5, 2000},
 		}},
 	}
 

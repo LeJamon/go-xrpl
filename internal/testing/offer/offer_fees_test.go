@@ -38,8 +38,8 @@ func testOfferFeesConsumeFunds(t *testing.T, disabledFeatures []string) {
 	f := env.BaseFee()
 
 	// Reserve: Alice has 3 entries in the ledger, via trust lines
-	// Fees: 1 for each trust limit == 3 + 1 for payment == 4
-	startingXRP := uint64(jtx.XRP(100)) + Reserve(env, 3) + f*4
+	// Fees: Trust() reimburses, so only 1 for offer == 1
+	startingXRP := uint64(jtx.XRP(100)) + Reserve(env, 3) + f*1
 
 	env.FundAmount(gw1, startingXRP)
 	env.FundAmount(gw2, startingXRP)
@@ -98,8 +98,8 @@ func testTransferRateOffer(t *testing.T, disabledFeatures []string) {
 	t.Run("AnnBob", func(t *testing.T) {
 		ann := jtx.NewAccount("ann")
 		bob := jtx.NewAccount("bob")
-		env.FundAmount(ann, uint64(jtx.XRP(100))+Reserve(env, 2)+f*2)
-		env.FundAmount(bob, uint64(jtx.XRP(100))+Reserve(env, 2)+f*2)
+		env.FundAmount(ann, uint64(jtx.XRP(100))+Reserve(env, 2)+f*1)
+		env.FundAmount(bob, uint64(jtx.XRP(100))+Reserve(env, 2)+f*1)
 		env.Close()
 
 		env.Trust(ann, USD(200))
@@ -133,8 +133,8 @@ func testTransferRateOffer(t *testing.T, disabledFeatures []string) {
 	t.Run("CheDeb", func(t *testing.T) {
 		che := jtx.NewAccount("che")
 		deb := jtx.NewAccount("deb")
-		env.FundAmount(che, uint64(jtx.XRP(100))+Reserve(env, 2)+f*2)
-		env.FundAmount(deb, uint64(jtx.XRP(100))+Reserve(env, 2)+f*2)
+		env.FundAmount(che, uint64(jtx.XRP(100))+Reserve(env, 2)+f*1)
+		env.FundAmount(deb, uint64(jtx.XRP(100))+Reserve(env, 2)+f*1)
 		env.Close()
 
 		env.Trust(che, USD(200))
@@ -167,8 +167,8 @@ func testTransferRateOffer(t *testing.T, disabledFeatures []string) {
 		eve := jtx.NewAccount("eve")
 		fyn := jtx.NewAccount("fyn")
 
-		env.FundAmount(eve, uint64(jtx.XRP(20000))+f*2)
-		env.FundAmount(fyn, uint64(jtx.XRP(20000))+f*2)
+		env.FundAmount(eve, uint64(jtx.XRP(20000))+f*1)
+		env.FundAmount(fyn, uint64(jtx.XRP(20000))+f*1)
 		env.Close()
 
 		env.Trust(eve, USD(1000))

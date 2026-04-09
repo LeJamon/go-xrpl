@@ -99,14 +99,14 @@ func testOfferStream_ExpiredOfferCleanup(t *testing.T, disabledFeatures []string
 
 	// alice's IOU balances are unchanged (offer was not filled)
 	jtx.RequireIOUBalance(t, env, alice, gw, "BTC", 10)
-	// alice paid: f(Trust) + f(OfferCreate)
-	jtx.RequireBalance(t, env, alice, startBalance-f-f)
+	// alice paid: f(OfferCreate) only — Trust() reimburses its fee
+	jtx.RequireBalance(t, env, alice, startBalance-f)
 
 	// bob's offer goes into the book (nothing crossed)
 	RequireOfferInLedger(t, env, bob, bobOfferSeq)
 	RequireOfferCount(t, env, bob, 1)
 	jtx.RequireOwnerCount(t, env, bob, 2) // trust line + offer
-	jtx.RequireBalance(t, env, bob, startBalance-f-f)
+	jtx.RequireBalance(t, env, bob, startBalance-f)
 }
 
 // TestOfferStream_UnfundedOfferPruning verifies that an offer whose owner no
@@ -347,9 +347,8 @@ func testOfferStream_PartiallyFilledOffer(t *testing.T, disabledFeatures []strin
 	// bob's offer is fully consumed
 	RequireOfferCount(t, env, bob, 0)
 
-	// alice received XRP(400); paid f(Trust) + f(OfferCreate)
-	// FundAmount gives alice exactly XRP(10000) (AccountSet fee is internal to FundAmount)
-	jtx.RequireBalance(t, env, alice, uint64(jtx.XRP(10000))-2*f+uint64(jtx.XRP(400)))
+	// alice received XRP(400); paid f(OfferCreate) — Trust() reimburses its fee
+	jtx.RequireBalance(t, env, alice, uint64(jtx.XRP(10000))-f+uint64(jtx.XRP(400)))
 	jtx.RequireIOUBalance(t, env, alice, gw, "USD", 600) // gave USD(400)
 
 	// bob spent XRP(400); paid f(OfferCreate)
@@ -579,8 +578,8 @@ func testOfferStream_TecExpiredOnCreate(t *testing.T, disabledFeatures []string)
 	jtx.RequireOwnerCount(t, env, alice, 1) // only trust line
 
 	// Fee is always charged
-	// alice: FundAmount gives XRP(10000) net, Trust(-f), OfferCreate(-f)
-	jtx.RequireBalance(t, env, alice, uint64(jtx.XRP(10000))-f-f)
+	// alice: FundAmount gives XRP(10000) net, OfferCreate(-f) — Trust() reimburses
+	jtx.RequireBalance(t, env, alice, uint64(jtx.XRP(10000))-f)
 	jtx.RequireIOUBalance(t, env, alice, gw, "USD", 1000) // no IOU change
 }
 

@@ -116,13 +116,15 @@ func testSelfCrossOffer2(t *testing.T, disabledFeatures []string) {
 		secondOfferTec string
 	}
 
+	// Trust() reimburses its fee. Each account calls Trust 2x (USD + EUR).
+	// Old: 2 trust(2f) + 2 offers(2f) = 4f. New: 2 offers(2f) = 2f.
 	tests := []testData{
-		{"ann", Reserve(env, 3) + f*4, 1000, 1000, "", ""},
-		{"bev", Reserve(env, 3) + f*4, 1, 1000, "", ""},
-		{"cam", Reserve(env, 3) + f*4, 1000, 1, "", ""},
-		{"deb", Reserve(env, 3) + f*4, 0, 1, "", jtx.TecUNFUNDED_OFFER},
-		{"eve", Reserve(env, 3) + f*4, 1, 0, jtx.TecUNFUNDED_OFFER, ""},
-		{"flo", Reserve(env, 3) + 0, 1000, 1000, jtx.TecINSUF_RESERVE_OFFER, jtx.TecINSUF_RESERVE_OFFER},
+		{"ann", Reserve(env, 3) + f*2, 1000, 1000, "", ""},
+		{"bev", Reserve(env, 3) + f*2, 1, 1000, "", ""},
+		{"cam", Reserve(env, 3) + f*2, 1000, 1, "", ""},
+		{"deb", Reserve(env, 3) + f*2, 0, 1, "", jtx.TecUNFUNDED_OFFER},
+		{"eve", Reserve(env, 3) + f*2, 1, 0, jtx.TecUNFUNDED_OFFER, ""},
+		{"flo", Reserve(env, 3) - 2*f, 1000, 1000, jtx.TecINSUF_RESERVE_OFFER, jtx.TecINSUF_RESERVE_OFFER},
 	}
 
 	for _, tt := range tests {

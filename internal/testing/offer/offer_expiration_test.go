@@ -46,7 +46,8 @@ func testExpiration(t *testing.T, disabledFeatures []string) {
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	jtx.RequireBalance(t, env, alice, startBalance-f)
+	// Trust() reimburses its fee, so alice's balance is unchanged after trust.
+	jtx.RequireBalance(t, env, alice, startBalance)
 	jtx.RequireIOUBalance(t, env, alice, gw, "USD", 1000)
 	RequireOfferCount(t, env, alice, 0)
 	jtx.RequireOwnerCount(t, env, alice, 1)
@@ -64,7 +65,7 @@ func testExpiration(t *testing.T, disabledFeatures []string) {
 		jtx.RequireTxSuccess(t, result)
 	}
 
-	jtx.RequireBalance(t, env, alice, startBalance-f-f)
+	jtx.RequireBalance(t, env, alice, startBalance-f)
 	jtx.RequireIOUBalance(t, env, alice, gw, "USD", 1000)
 	RequireOfferCount(t, env, alice, 0)
 	jtx.RequireOwnerCount(t, env, alice, 1)
@@ -76,14 +77,14 @@ func testExpiration(t *testing.T, disabledFeatures []string) {
 	result = env.Submit(futureOffer)
 	jtx.RequireTxSuccess(t, result)
 
-	jtx.RequireBalance(t, env, alice, startBalance-f-f-f)
+	jtx.RequireBalance(t, env, alice, startBalance-f-f)
 	jtx.RequireIOUBalance(t, env, alice, gw, "USD", 1000)
 	RequireOfferCount(t, env, alice, 1)
 	jtx.RequireOwnerCount(t, env, alice, 2)
 
 	// The offer expires (it's not removed yet)
 	env.Close()
-	jtx.RequireBalance(t, env, alice, startBalance-f-f-f)
+	jtx.RequireBalance(t, env, alice, startBalance-f-f)
 	jtx.RequireIOUBalance(t, env, alice, gw, "USD", 1000)
 	RequireOfferCount(t, env, alice, 1) // Still in ledger even though expired
 	jtx.RequireOwnerCount(t, env, alice, 2)
@@ -92,7 +93,7 @@ func testExpiration(t *testing.T, disabledFeatures []string) {
 	result = env.Submit(OfferCreate(bob, usdOffer, xrpOffer).Build())
 	jtx.RequireTxSuccess(t, result)
 
-	jtx.RequireBalance(t, env, alice, startBalance-f-f-f)
+	jtx.RequireBalance(t, env, alice, startBalance-f-f)
 	jtx.RequireIOUBalance(t, env, alice, gw, "USD", 1000)
 	RequireOfferCount(t, env, alice, 0) // Expired offer removed
 	jtx.RequireOwnerCount(t, env, alice, 1)

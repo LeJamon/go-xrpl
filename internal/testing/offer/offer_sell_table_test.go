@@ -76,14 +76,14 @@ func testSellOfferTable(t *testing.T, disabledFeatures []string) {
 		{account: "flo", fundXrp: uint64(jtx.XRP(10)) + Reserve(env, 0) + 1*f, fundUSD: 0, gwGets: XRP(10), gwPays: USD(20), acctGets: USD(20), acctPays: XRP(20), tec: jtx.TesSUCCESS, spentXrp: jtx.XRP(10) + int64(1*f), finalUSD: 20, offers: 0, owners: 1},
 		{account: "gay", fundXrp: uint64(jtx.XRP(20)) + Reserve(env, 1) + 1*f, fundUSD: 0, gwGets: XRP(10), gwPays: USD(20), acctGets: USD(20), acctPays: XRP(20), tec: jtx.TesSUCCESS, spentXrp: jtx.XRP(10) + int64(1*f), finalUSD: 20, offers: 0, owners: 1},
 		{account: "hye", fundXrp: uint64(jtx.XRP(20)) + Reserve(env, 2) + 1*f, fundUSD: 0, gwGets: XRP(10), gwPays: USD(20), acctGets: USD(20), acctPays: XRP(20), tec: jtx.TesSUCCESS, spentXrp: jtx.XRP(10) + int64(1*f), finalUSD: 20, offers: 1, owners: 2, takerGets: XRP(10), takerPays: USD(10)},
-		// acct pays USD
-		{account: "meg", fundXrp: Reserve(env, 1) + 2*f, fundUSD: 10, gwGets: USD(10), gwPays: XRP(5), acctGets: XRP(10), acctPays: USD(10), tec: jtx.TecINSUF_RESERVE_OFFER, spentXrp: jtx.XRP(0) + int64(2*f), finalUSD: 10, offers: 0, owners: 1},
-		{account: "nia", fundXrp: Reserve(env, 2) + 2*f, fundUSD: 10, gwGets: USD(10), gwPays: XRP(5), acctGets: XRP(10), acctPays: USD(10), tec: jtx.TesSUCCESS, spentXrp: jtx.XRP(0) + int64(2*f), finalUSD: 10, offers: 1, owners: 2, takerGets: USD(10), takerPays: XRP(10)},
-		{account: "ova", fundXrp: Reserve(env, 1) + 2*f, fundUSD: 10, gwGets: USD(10), gwPays: XRP(10), acctGets: XRP(10), acctPays: USD(10), tec: jtx.TesSUCCESS, spentXrp: jtx.XRP(-10) + int64(2*f), finalUSD: 0, offers: 0, owners: 1},
-		{account: "pam", fundXrp: Reserve(env, 1) + 2*f, fundUSD: 10, gwGets: USD(10), gwPays: XRP(20), acctGets: XRP(10), acctPays: USD(10), tec: jtx.TesSUCCESS, spentXrp: jtx.XRP(-20) + int64(2*f), finalUSD: 0, offers: 0, owners: 1},
-		{account: "qui", fundXrp: Reserve(env, 1) + 2*f, fundUSD: 10, gwGets: USD(20), gwPays: XRP(40), acctGets: XRP(10), acctPays: USD(10), tec: jtx.TesSUCCESS, spentXrp: jtx.XRP(-20) + int64(2*f), finalUSD: 0, offers: 0, owners: 1},
-		{account: "rae", fundXrp: Reserve(env, 2) + 2*f, fundUSD: 10, gwGets: USD(5), gwPays: XRP(5), acctGets: XRP(10), acctPays: USD(10), tec: jtx.TesSUCCESS, spentXrp: jtx.XRP(-5) + int64(2*f), finalUSD: 5, offers: 1, owners: 2, takerGets: USD(5), takerPays: XRP(5)},
-		{account: "sue", fundXrp: Reserve(env, 2) + 2*f, fundUSD: 10, gwGets: USD(5), gwPays: XRP(10), acctGets: XRP(10), acctPays: USD(10), tec: jtx.TesSUCCESS, spentXrp: jtx.XRP(-10) + int64(2*f), finalUSD: 5, offers: 1, owners: 2, takerGets: USD(5), takerPays: XRP(5)},
+		// acct pays USD — Trust() reimburses its fee, so reduce fundXrp and spentXrp by f
+		{account: "meg", fundXrp: Reserve(env, 1) + 1*f, fundUSD: 10, gwGets: USD(10), gwPays: XRP(5), acctGets: XRP(10), acctPays: USD(10), tec: jtx.TecINSUF_RESERVE_OFFER, spentXrp: jtx.XRP(0) + int64(1*f), finalUSD: 10, offers: 0, owners: 1},
+		{account: "nia", fundXrp: Reserve(env, 2) + 1*f, fundUSD: 10, gwGets: USD(10), gwPays: XRP(5), acctGets: XRP(10), acctPays: USD(10), tec: jtx.TesSUCCESS, spentXrp: jtx.XRP(0) + int64(1*f), finalUSD: 10, offers: 1, owners: 2, takerGets: USD(10), takerPays: XRP(10)},
+		{account: "ova", fundXrp: Reserve(env, 1) + 1*f, fundUSD: 10, gwGets: USD(10), gwPays: XRP(10), acctGets: XRP(10), acctPays: USD(10), tec: jtx.TesSUCCESS, spentXrp: jtx.XRP(-10) + int64(1*f), finalUSD: 0, offers: 0, owners: 1},
+		{account: "pam", fundXrp: Reserve(env, 1) + 1*f, fundUSD: 10, gwGets: USD(10), gwPays: XRP(20), acctGets: XRP(10), acctPays: USD(10), tec: jtx.TesSUCCESS, spentXrp: jtx.XRP(-20) + int64(1*f), finalUSD: 0, offers: 0, owners: 1},
+		{account: "qui", fundXrp: Reserve(env, 1) + 1*f, fundUSD: 10, gwGets: USD(20), gwPays: XRP(40), acctGets: XRP(10), acctPays: USD(10), tec: jtx.TesSUCCESS, spentXrp: jtx.XRP(-20) + int64(1*f), finalUSD: 0, offers: 0, owners: 1},
+		{account: "rae", fundXrp: Reserve(env, 2) + 1*f, fundUSD: 10, gwGets: USD(5), gwPays: XRP(5), acctGets: XRP(10), acctPays: USD(10), tec: jtx.TesSUCCESS, spentXrp: jtx.XRP(-5) + int64(1*f), finalUSD: 5, offers: 1, owners: 2, takerGets: USD(5), takerPays: XRP(5)},
+		{account: "sue", fundXrp: Reserve(env, 2) + 1*f, fundUSD: 10, gwGets: USD(5), gwPays: XRP(10), acctGets: XRP(10), acctPays: USD(10), tec: jtx.TesSUCCESS, spentXrp: jtx.XRP(-10) + int64(1*f), finalUSD: 5, offers: 1, owners: 2, takerGets: USD(5), takerPays: XRP(5)},
 	}
 
 	for _, tc := range tests {

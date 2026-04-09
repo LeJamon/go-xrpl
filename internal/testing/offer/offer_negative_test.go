@@ -103,11 +103,13 @@ func testNegativeBalance(t *testing.T, disabledFeatures []string) {
 				// Without fixReducedOffersV2, crossing happens with tiny amounts
 				crossingDelta := uint64(1) // 1 drop
 
-				// alice XRP: initial - 3*fee - crossingDelta
-				jtx.RequireBalance(t, env, alice, aliceInitialBalance-f*3-crossingDelta)
+				// alice XRP: initial - 2*fee - crossingDelta
+				// (Trust() reimburses its fee; 2 fees = offer + pay-back)
+				jtx.RequireBalance(t, env, alice, aliceInitialBalance-f*2-crossingDelta)
 
-				// bob XRP: initial - 2*fee + crossingDelta
-				jtx.RequireBalance(t, env, bob, bobInitialBalance-f*2+crossingDelta)
+				// bob XRP: initial - 1*fee + crossingDelta
+				// (Trust() reimburses its fee; 1 fee = offer)
+				jtx.RequireBalance(t, env, bob, bobInitialBalance-f*1+crossingDelta)
 			}
 
 			_ = bobOfferSeq
@@ -237,9 +239,8 @@ func testEnforceNoRipple(t *testing.T, disabledFeatures []string) {
 		jtx.RequireTxSuccess(t, result)
 
 		f := env.BaseFee()
-		// alice pays 3 fees: 2 trust lines + 1 payment
-		// (rippled's env.trust() refunds fees, ours doesn't)
-		jtx.RequireBalance(t, env, alice, uint64(jtx.XRP(10000-50))-3*f)
+		// alice pays 1 fee: payment only (Trust() reimburses its fee)
+		jtx.RequireBalance(t, env, alice, uint64(jtx.XRP(10000-50))-1*f)
 		jtx.RequireIOUBalance(t, env, bob, gw1, "USD", 100)
 		jtx.RequireIOUBalance(t, env, bob, gw2, "USD", 0)
 		jtx.RequireIOUBalance(t, env, carol, gw2, "USD", 50)

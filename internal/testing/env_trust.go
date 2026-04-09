@@ -30,6 +30,10 @@ func (e *TestEnv) Trust(acc *Account, amount tx.Amount) {
 	if !result.Success {
 		e.t.Fatalf("Failed to set trust line for %s: %s", acc.Name, result.Code)
 	}
+
+	// Reimburse the TrustSet fee via Payment from master, matching
+	// rippled's Env::trust() which sends pay(master, account, baseFee).
+	e.ReimburseWithPayment(acc)
 }
 
 // EnableDisallowIncomingCheck enables the DisallowIncomingCheck flag on an account.

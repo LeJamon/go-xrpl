@@ -104,17 +104,20 @@ func testPartialCross(t *testing.T, disabledFeatures []string) {
 		{"gar", Reserve(env, 1) + 0*f, 1, gwPreTrust, 1000, "", uint64(jtx.XRP(1)) + f, 1, 1, 1},
 		{"hal", Reserve(env, 1) + 1*f, 1, gwPreTrust, 1000, "", uint64(jtx.XRP(1)) + f, 1, 1, 1},
 		// Pre-established trust lines: account pre-trusts
-		{"ned", Reserve(env, 1) + 0*f, 1, acctPreTrust, 1000, jtx.TecUNFUNDED_OFFER, 2 * f, 0, 0, 1},
-		{"ole", Reserve(env, 1) + 1*f, 1, acctPreTrust, 1000, jtx.TecUNFUNDED_OFFER, 2 * f, 0, 0, 1},
-		{"pat", Reserve(env, 1) + 2*f, 0, acctPreTrust, 1000, jtx.TecUNFUNDED_OFFER, 2 * f, 0, 0, 1},
-		{"quy", Reserve(env, 1) + 2*f, 1, acctPreTrust, 1000, jtx.TecUNFUNDED_OFFER, 2 * f, 0, 0, 1},
-		{"ron", Reserve(env, 1) + 3*f, 0, acctPreTrust, 1000, jtx.TecINSUF_RESERVE_OFFER, 2 * f, 0, 0, 1},
-		{"syd", 10 + Reserve(env, 1) + 2*f, 1, acctPreTrust, 1000, "", 10 + 2*f, 0.00001, 0, 1},
-		{"ted", uint64(jtx.XRP(20)) + Reserve(env, 1) + 2*f, 1000, acctPreTrust, 1000, "", uint64(jtx.XRP(20)) + 2*f, 20, 0, 1},
-		{"uli", Reserve(env, 2) + 0*f, 0, acctPreTrust, 1000, jtx.TecINSUF_RESERVE_OFFER, 2 * f, 0, 0, 1},
-		{"vic", Reserve(env, 2) + 0*f, 1, acctPreTrust, 1000, "", uint64(jtx.XRP(1)) + 2*f, 1, 0, 1},
-		{"wes", Reserve(env, 2) + 1*f, 0, acctPreTrust, 1000, "", 2 * f, 0, 1, 2},
-		{"xan", Reserve(env, 2) + 1*f, 1, acctPreTrust, 1000, "", uint64(jtx.XRP(1)) + 2*f, 1, 1, 2},
+		// Trust() reimburses its fee. We reduce fundXrp by f to keep the same
+		// balance-before-offer as rippled (which uses env(trust(...)) without
+		// reimbursement). spentXrp also decreases by f since trust is free.
+		{"ned", Reserve(env, 1) - 1*f, 1, acctPreTrust, 1000, jtx.TecUNFUNDED_OFFER, f, 0, 0, 1},
+		{"ole", Reserve(env, 1) + 0*f, 1, acctPreTrust, 1000, jtx.TecUNFUNDED_OFFER, f, 0, 0, 1},
+		{"pat", Reserve(env, 1) + 1*f, 0, acctPreTrust, 1000, jtx.TecUNFUNDED_OFFER, f, 0, 0, 1},
+		{"quy", Reserve(env, 1) + 1*f, 1, acctPreTrust, 1000, jtx.TecUNFUNDED_OFFER, f, 0, 0, 1},
+		{"ron", Reserve(env, 1) + 2*f, 0, acctPreTrust, 1000, jtx.TecINSUF_RESERVE_OFFER, f, 0, 0, 1},
+		{"syd", 10 + Reserve(env, 1) + 1*f, 1, acctPreTrust, 1000, "", 10 + f, 0.00001, 0, 1},
+		{"ted", uint64(jtx.XRP(20)) + Reserve(env, 1) + 1*f, 1000, acctPreTrust, 1000, "", uint64(jtx.XRP(20)) + f, 20, 0, 1},
+		{"uli", Reserve(env, 2) - 1*f, 0, acctPreTrust, 1000, jtx.TecINSUF_RESERVE_OFFER, f, 0, 0, 1},
+		{"vic", Reserve(env, 2) - 1*f, 1, acctPreTrust, 1000, "", uint64(jtx.XRP(1)) + f, 1, 0, 1},
+		{"wes", Reserve(env, 2) + 0*f, 0, acctPreTrust, 1000, "", f, 0, 1, 2},
+		{"xan", Reserve(env, 2) + 0*f, 1, acctPreTrust, 1000, "", uint64(jtx.XRP(1)) + f, 1, 1, 2},
 	}
 
 	for _, tt := range tests {
@@ -237,19 +240,19 @@ func testOfferCrossWithXRP(t *testing.T, reverseOrder bool, disabledFeatures []s
 	// Verify bob got 1 USD
 	jtx.RequireIOUBalance(t, env, bob, gw, "USD", 1)
 
-	// Bob's XRP depends on order
+	// Bob's XRP depends on order. Trust() reimburses its fee.
 	if reverseOrder {
-		jtx.RequireBalance(t, env, bob, uint64(jtx.XRP(10000-4000))-f*2)
+		jtx.RequireBalance(t, env, bob, uint64(jtx.XRP(10000-4000))-f*1)
 	} else {
-		jtx.RequireBalance(t, env, bob, uint64(jtx.XRP(10000-3000))-f*2)
+		jtx.RequireBalance(t, env, bob, uint64(jtx.XRP(10000-3000))-f*1)
 	}
 
 	// Alice gave 1 USD
 	jtx.RequireIOUBalance(t, env, alice, gw, "USD", 499)
 	if reverseOrder {
-		jtx.RequireBalance(t, env, alice, uint64(jtx.XRP(10000+4000))-f*2)
+		jtx.RequireBalance(t, env, alice, uint64(jtx.XRP(10000+4000))-f*1)
 	} else {
-		jtx.RequireBalance(t, env, alice, uint64(jtx.XRP(10000+3000))-f*2)
+		jtx.RequireBalance(t, env, alice, uint64(jtx.XRP(10000+3000))-f*1)
 	}
 }
 
@@ -294,5 +297,5 @@ func testOfferCrossWithLimitOverride(t *testing.T, disabledFeatures []string) {
 	jtx.RequireBalance(t, env, bob, uint64(jtx.XRP(100000-3000))-f*1)
 
 	jtx.RequireIOUBalance(t, env, alice, gw, "USD", 499)
-	jtx.RequireBalance(t, env, alice, uint64(jtx.XRP(100000+3000))-f*2)
+	jtx.RequireBalance(t, env, alice, uint64(jtx.XRP(100000+3000))-f*1)
 }

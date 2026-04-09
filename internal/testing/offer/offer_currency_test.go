@@ -87,9 +87,9 @@ func testCurrencyConversionEntire(t *testing.T, disabledFeatures []string) {
 	jtx.RequireIOUBalance(t, env, alice, gw, "USD", 0)
 
 	// Alice's XRP balance: started with 10000 XRP, gained 500 XRP,
-	// paid 2 fees (trust + self-pay)
+	// paid 1 fee (self-pay; Trust() reimburses its fee)
 	jtx.RequireBalance(t, env, alice,
-		uint64(jtx.XRP(10000))+uint64(jtx.XRP(500))-env.BaseFee()*2)
+		uint64(jtx.XRP(10000))+uint64(jtx.XRP(500))-env.BaseFee()*1)
 
 	// Bob should have 100 USD (received from alice via the offer)
 	jtx.RequireIOUBalance(t, env, bob, gw, "USD", 100)
@@ -217,9 +217,9 @@ func testCurrencyConversionInParts(t *testing.T, disabledFeatures []string) {
 	// Alice should have 160 USD (200 - 40 sent to bob)
 	jtx.RequireIOUBalance(t, env, alice, gw, "USD", 160)
 
-	// Alice should have 10000 + 200 - 2*fee XRP
+	// Alice should have 10000 + 200 - 1*fee XRP (Trust() reimburses its fee)
 	jtx.RequireBalance(t, env, alice,
-		uint64(jtx.XRP(10000))+uint64(jtx.XRP(200))-env.BaseFee()*2)
+		uint64(jtx.XRP(10000))+uint64(jtx.XRP(200))-env.BaseFee()*1)
 
 	// Bob should have 40 USD from the partial consumption
 	jtx.RequireIOUBalance(t, env, bob, gw, "USD", 40)
@@ -247,10 +247,11 @@ func testCurrencyConversionInParts(t *testing.T, disabledFeatures []string) {
 	// Alice should have 100 USD (160 - 60 more sent to bob in second payment)
 	jtx.RequireIOUBalance(t, env, alice, gw, "USD", 100)
 
-	// Alice's XRP: 10000 + 200 (first) + 300 (second, partial) - 4*fee
-	// 4 fees: trust, first self-pay, failed pay (tec - fee claimed), partial pay
+	// Alice's XRP: 10000 + 200 (first) + 300 (second, partial) - 3*fee
+	// 3 fees: first self-pay, failed pay (tec - fee claimed), partial pay
+	// Trust() reimburses its fee.
 	jtx.RequireBalance(t, env, alice,
-		uint64(jtx.XRP(10000))+uint64(jtx.XRP(200))+uint64(jtx.XRP(300))-env.BaseFee()*4)
+		uint64(jtx.XRP(10000))+uint64(jtx.XRP(200))+uint64(jtx.XRP(300))-env.BaseFee()*3)
 
 	// Bob should have 100 USD (40 from first + 60 from second)
 	jtx.RequireIOUBalance(t, env, bob, gw, "USD", 100)

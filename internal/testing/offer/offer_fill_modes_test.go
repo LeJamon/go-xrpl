@@ -90,7 +90,8 @@ func testFillModes(t *testing.T, disabledFeatures []string) {
 						jtx.RequireTxSuccess(t, result)
 					}
 				}
-				jtx.RequireBalance(t, env, alice, startBalance-(f*2))
+				// Trust() reimburses its fee, so alice only paid 1 fee (FoK offer).
+				jtx.RequireBalance(t, env, alice, startBalance-(f*1))
 				jtx.RequireIOUBalance(t, env, alice, gw, "USD", 1000)
 				jtx.RequireOwnerCount(t, env, alice, 1)
 				RequireOfferCount(t, env, alice, 0)
@@ -106,7 +107,7 @@ func testFillModes(t *testing.T, disabledFeatures []string) {
 						FillOrKill().Build())
 				jtx.RequireTxSuccess(t, result)
 
-				jtx.RequireBalance(t, env, alice, startBalance-(f*3)+uint64(jtx.XRP(500)))
+				jtx.RequireBalance(t, env, alice, startBalance-(f*2)+uint64(jtx.XRP(500)))
 				jtx.RequireIOUBalance(t, env, alice, gw, "USD", 500)
 				jtx.RequireOwnerCount(t, env, alice, 1)
 				RequireOfferCount(t, env, alice, 0)
@@ -154,7 +155,8 @@ func testFillModes(t *testing.T, disabledFeatures []string) {
 				jtx.RequireTxSuccess(t, result)
 			}
 		}
-		jtx.RequireBalance(t, env, alice, startBalance-f-f)
+		// Trust() reimburses its fee, so alice only paid 1 fee (IoC offer).
+		jtx.RequireBalance(t, env, alice, startBalance-f)
 		jtx.RequireIOUBalance(t, env, alice, gw, "USD", 1000)
 		jtx.RequireOwnerCount(t, env, alice, 1)
 		RequireOfferCount(t, env, alice, 0)
@@ -169,7 +171,7 @@ func testFillModes(t *testing.T, disabledFeatures []string) {
 				ImmediateOrCancel().Build())
 		jtx.RequireTxSuccess(t, result)
 
-		jtx.RequireBalance(t, env, alice, startBalance-f-f-f+uint64(jtx.XRP(50)))
+		jtx.RequireBalance(t, env, alice, startBalance-f-f+uint64(jtx.XRP(50)))
 		jtx.RequireIOUBalance(t, env, alice, gw, "USD", 950)
 		jtx.RequireOwnerCount(t, env, alice, 1)
 		RequireOfferCount(t, env, alice, 0)
@@ -189,7 +191,7 @@ func testFillModes(t *testing.T, disabledFeatures []string) {
 				ImmediateOrCancel().Build())
 		jtx.RequireTxSuccess(t, result)
 
-		jtx.RequireBalance(t, env, alice, startBalance-f-f-f-f+uint64(jtx.XRP(100)))
+		jtx.RequireBalance(t, env, alice, startBalance-f-f-f+uint64(jtx.XRP(100)))
 		jtx.RequireIOUBalance(t, env, alice, gw, "USD", 900)
 		jtx.RequireOwnerCount(t, env, alice, 1)
 		RequireOfferCount(t, env, alice, 0)

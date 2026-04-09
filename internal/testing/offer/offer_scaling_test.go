@@ -296,8 +296,8 @@ func testTinyOffer(t *testing.T, disabledFeatures []string) {
 		"Expected bob CNY balance = bobsCnyStartBalance - alicesCnyOffer, got mantissa=%d exp=%d",
 		bobCNYBalance.Mantissa(), bobCNYBalance.Exponent())
 
-	// bob XRP: startXrpBalance - fee*2 + drops(1)
-	// Bob paid 2 fees: 1 for trust(CNY) + 1 for OfferCreate.
+	// bob XRP: startXrpBalance - fee*1 + drops(1)
+	// Bob paid 1 fee for OfferCreate (Trust() reimburses its fee).
 	// Bob received 1 drop from alice's crossed passive offer.
-	jtx.RequireBalance(t, env, bob, startXrpBalance-2*f+1)
+	jtx.RequireBalance(t, env, bob, startXrpBalance-1*f+1)
 }

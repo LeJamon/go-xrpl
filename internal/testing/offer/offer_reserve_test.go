@@ -52,7 +52,8 @@ func testInsufficientReserve(t *testing.T, disabledFeatures []string) {
 		result = env.Submit(OfferCreate(alice, xrpOffer, usdOffer(gw)).Build())
 		jtx.RequireTxClaimed(t, result, jtx.TecINSUF_RESERVE_OFFER)
 
-		jtx.RequireBalance(t, env, alice, r-f)
+		// Trust() reimburses its fee, so alice only lost the offer fee.
+		jtx.RequireBalance(t, env, alice, r)
 		jtx.RequireOwnerCount(t, env, alice, 1)
 	})
 
@@ -86,7 +87,8 @@ func testInsufficientReserve(t *testing.T, disabledFeatures []string) {
 		result = env.Submit(OfferCreate(alice, xrpOffer, usdOffer(gw)).Build())
 		jtx.RequireTxSuccess(t, result)
 
-		jtx.RequireBalance(t, env, alice, r-f+uint64(jtx.XRP(500)))
+		// Trust() reimburses its fee.
+		jtx.RequireBalance(t, env, alice, r+uint64(jtx.XRP(500)))
 		jtx.RequireIOUBalance(t, env, alice, gw, "USD", 500)
 		jtx.RequireOwnerCount(t, env, alice, 1)
 
@@ -131,7 +133,8 @@ func testInsufficientReserve(t *testing.T, disabledFeatures []string) {
 		result = env.Submit(OfferCreate(alice, xrpOffer, usdOffer(gw)).Build())
 		jtx.RequireTxSuccess(t, result)
 
-		jtx.RequireBalance(t, env, alice, r-f+uint64(jtx.XRP(1000)))
+		// Trust() reimburses its fee.
+		jtx.RequireBalance(t, env, alice, r+uint64(jtx.XRP(1000)))
 		jtx.RequireIOUBalance(t, env, alice, gw, "USD", 0)
 		jtx.RequireOwnerCount(t, env, alice, 1)
 

@@ -35,8 +35,9 @@ func testSellFlagBasic(t *testing.T, disabledFeatures []string) {
 
 	USD := func(amount float64) tx.Amount { return jtx.USD(gw, amount) }
 
-	// starting_xrp = XRP(100) + reserve(env, 1) + env.current()->fees().base * 2
-	startingXRP := uint64(jtx.XRP(100)) + Reserve(env, 1) + env.BaseFee()*2
+	// starting_xrp = XRP(100) + reserve(env, 1) + baseFee * 1
+	// Trust() reimburses its fee, so only 1 baseFee needed (for the offer).
+	startingXRP := uint64(jtx.XRP(100)) + Reserve(env, 1) + env.BaseFee()*1
 
 	env.FundAmount(gw, uint64(jtx.XRP(1000000)))
 	env.FundAmount(alice, startingXRP)
@@ -87,8 +88,9 @@ func testSellFlagExceedLimit(t *testing.T, disabledFeatures []string) {
 
 	USD := func(amount float64) tx.Amount { return jtx.USD(gw, amount) }
 
-	// starting_xrp = XRP(100) + reserve(env, 1) + env.current()->fees().base * 2
-	startingXRP := uint64(jtx.XRP(100)) + Reserve(env, 1) + env.BaseFee()*2
+	// starting_xrp = XRP(100) + reserve(env, 1) + baseFee * 1
+	// Trust() reimburses its fee, so only 1 baseFee needed (for the offer).
+	startingXRP := uint64(jtx.XRP(100)) + Reserve(env, 1) + env.BaseFee()*1
 
 	env.FundAmount(gw, uint64(jtx.XRP(1000000)))
 	env.FundAmount(alice, startingXRP)
