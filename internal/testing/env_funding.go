@@ -46,8 +46,7 @@ func (e *TestEnv) FundAmount(acc *Account, amount uint64) {
 	}
 
 	// When replay-on-close is enabled, sign the transaction so its serialized
-	// bytes match rippled's. Unsigned transactions produce different hashes,
-	// corrupting the SHAMap salt for canonical sort during ledger close.
+	// bytes are stable for canonical sort salt computation.
 	if e.replayOnClose && master.PublicKey != nil {
 		p.SetFlags(tx.TfFullyCanonicalSig)
 		e.SignWith(p, master)

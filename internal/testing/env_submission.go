@@ -236,15 +236,6 @@ func (e *TestEnv) closeWithReplay() {
 	// rippled's (different amounts, different reimbursement mechanism).
 	e.applyWithRetry(e.openLedgerSetupTxns, maxRetryPasses, maxTotalPasses)
 
-	// Apply queued fee reimbursements between phases.
-	// Trust setup reimburses fees via direct ledger mutation (not a real
-	// transaction). This must be applied after setup replay so the
-	// reimbursement becomes part of the closed ledger state.
-	for _, acc := range e.pendingReimbursements {
-		e.ReimburseFeeDirect(acc)
-	}
-	e.pendingReimbursements = nil
-
 	// ── Phase 2: Apply user transactions in canonical sorted order ──
 	// Fixture transactions are applied in CanonicalTXSet order with retry
 	// passes, matching rippled's applyTransactions() in BuildLedger.cpp.

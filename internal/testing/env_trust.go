@@ -523,3 +523,35 @@ func (e *TestEnv) BumpMasterSequence() {
 		e.t.Fatalf("BumpMasterSequence: failed to update master: %v", err)
 	}
 }
+
+// ReimburseWithPayment submits a real Payment from master to reimburse
+// the TrustSet fee, matching rippled's Env::trust() behavior where trust
+// setup includes a Payment(master → account, baseFee) that costs master
+// 2×baseFee (payment amount + tx fee).
+// The Payment is tracked as a setup transaction when inSetupMode=true,
+// so it participates in canonical sort salt and survives replay-on-close.
+func (e *TestEnv) ReimburseWithPayment(acc *Account) {
+	e.t.Helper()
+	master := e.accounts["master"]
+	if master == nil {
+		e.t.Fatal("ReimburseWithPayment: master account not found")
+	}
+
+	seq := e.Seq(master)
+	p := payment.NewPayment(master.Address, acc.Address, tx.NewXRPAmount(int64(e.baseFee)))
+	p.Fee = formatUint64(e.baseFee)
+	p.Sequence = &seq
+	if e.networkID > 1024 {
+		p.NetworkID = &e.networkID
+	}
+	// Always sign for stable tx hashes (canonical sort salt)
+	if master.PublicKey != nil {
+		p.SetFlags(tx.TfFullyCanonicalSig)
+		e.SignWith(p, master)
+	}
+
+	result := e.Submit(p)
+	if !result.Success {
+		e.t.Fatalf("ReimburseWithPayment: failed for %s: %s", acc.Name, result.Code)
+	}
+}

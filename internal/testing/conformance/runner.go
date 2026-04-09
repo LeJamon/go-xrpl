@@ -1006,19 +1006,10 @@ func (r *runner) execTrust(stepIdx int, step Step) {
 		r.t.Fatalf("Step %d (trust): TrustSet failed for %s: %s", stepIdx, acc.Name, result.Code)
 	}
 
-	// Reimburse the fee directly in the ledger (matching rippled's test framework).
-	// Always reimburse immediately so open-ledger balance checks pass.
-	// When replay is enabled, also queue the reimbursement so it's applied
-	// inside closeWithReplay() (after transaction replay, before ledger close),
-	// ensuring the adjustment survives the rebuild from lastClosedLedger.
-	r.env.ReimburseFeeDirect(acc)
-	// In rippled, trust reimbursement is a real Payment from master, which
-	// consumes a sequence number. Bump master's sequence so fixture txs that
-	// account for it don't get tefPRE_SEQ.
-	r.env.BumpMasterSequence()
-	if r.env.IsReplayEnabled() {
-		r.env.QueueReimbursement(acc)
-	}
+	// Reimburse the TrustSet fee via a real Payment from master, matching
+	// rippled's Env::trust() which submits Payment(master → account, baseFee).
+	// This is tracked as a setup transaction and survives replay-on-close.
+	r.env.ReimburseWithPayment(acc)
 }
 
 // execClose handles a "close" step. With v2 fixtures, the close_time field
