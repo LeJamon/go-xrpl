@@ -919,7 +919,16 @@ func (r *runner) execFund(stepIdx int, step Step) {
 		r.t.Fatalf("Step %d (fund): invalid amount: %v", stepIdx, err)
 	}
 
-	acc := jtx.NewAccountWithAddress(step.Account, step.Address)
+	// Derive keys from account name using the same algorithm as rippled
+	// (SHA512-Half seed → secp256k1 keypair). This produces signed setup
+	// transactions with identical binary serialization to rippled's,
+	// enabling correct SHAMap root hash for canonical sort during replay.
+	acc := jtx.NewAccount(step.Account)
+	if acc.Address != step.Address {
+		// Address doesn't match — use fixture address without keys
+		// (happens for AMM pseudo-accounts or special addresses)
+		acc = jtx.NewAccountWithAddress(step.Account, step.Address)
+	}
 	r.accounts[step.Account] = acc
 
 	// Bypass TxQ and mark as setup for two-phase replay.
