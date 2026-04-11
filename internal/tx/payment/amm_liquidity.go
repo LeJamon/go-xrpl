@@ -74,7 +74,17 @@ func (l *AMMLiquidity) fetchBalances(view *PaymentSandbox) (tx.Amount, tx.Amount
 
 // GetOffer generates an AMM offer. Returns nil if CLOB quality is better.
 // Reference: rippled AMMLiquidity.cpp getOffer()
-func (l *AMMLiquidity) GetOffer(view *PaymentSandbox, clobQuality *Quality) *AMMOffer {
+func (l *AMMLiquidity) GetOffer(view *PaymentSandbox, clobQuality *Quality) (result *AMMOffer) {
+	// Recover from panics (overflow_error equivalents).
+	// In rippled, getOffer() has try/catch blocks for overflow_error and
+	// std::exception. Go panics from IOUAmount overflow serve the same role.
+	// Reference: rippled AMMLiquidity.cpp getOffer() catch blocks lines 224-235
+	defer func() {
+		if r := recover(); r != nil {
+			result = nil
+		}
+	}()
+
 	// Can't generate more offers if multi-path iteration limit reached
 	if l.ammContext.MaxItersReached() {
 		return nil
@@ -110,11 +120,32 @@ func (l *AMMLiquidity) GetOffer(view *PaymentSandbox, clobQuality *Quality) *AMM
 }
 
 // generateOffer creates the actual AMM offer based on path configuration.
+//
+// Overflow handling: In rippled, both generateFibSeqOffer() and
+// changeSpotPriceQuality() can throw std::overflow_error, which is caught
+// in a single catch block. When fixAMMOverflowOffer is NOT enabled, the
+// catch falls back to maxOffer() unconditionally. When it IS enabled, it
+// returns nullopt (no offer). Additionally, if maxOffer itself overflows,
+// a second catch (std::exception) catches it and returns nullopt.
+//
+// In Go, these functions return ok=false instead of panicking. We replicate
+// the catch-block semantics by falling back to maxOffer when the computation
+// fails and fixAMMOverflowOffer is not enabled. maxOffer calls are wrapped
+// with panic recovery to match rippled's second catch block.
+//
+// Reference: rippled AMMLiquidity.cpp getOffer() try/catch block lines 189-236
 func (l *AMMLiquidity) generateOffer(view *PaymentSandbox, poolIn, poolOut tx.Amount, clobQuality *Quality) *AMMOffer {
 	if l.ammContext.MultiPath() {
 		// Multi-path: Fibonacci sequence sizing
 		offerIn, offerOut, ok := l.generateFibSeqOffer(poolIn, poolOut)
 		if !ok {
+			// Fibonacci output exceeds pool balance (equivalent to rippled's
+			// overflow_error from generateFibSeqOffer). Fall back to maxOffer
+			// when fixAMMOverflowOffer is not enabled.
+			// Reference: rippled AMMLiquidity.cpp catch (std::overflow_error)
+			if !l.fixAMMOverflowOffer {
+				return l.safeMaxOffer(poolIn, poolOut)
+			}
 			return nil
 		}
 		if clobQuality != nil {
@@ -128,7 +159,7 @@ func (l *AMMLiquidity) generateOffer(view *PaymentSandbox, poolIn, poolOut tx.Am
 
 	if clobQuality == nil {
 		// No CLOB to compare: return max offer
-		return l.maxOffer(poolIn, poolOut)
+		return l.safeMaxOffer(poolIn, poolOut)
 	}
 
 	// Single-path with CLOB quality: match spot price to CLOB quality
@@ -140,9 +171,20 @@ func (l *AMMLiquidity) generateOffer(view *PaymentSandbox, poolIn, poolOut tx.Am
 		return NewAMMOffer(l, offerIn, offerOut, poolIn, poolOut)
 	}
 
+	// ChangeSpotPriceQuality failed. In rippled this can be either:
+	// 1. std::overflow_error → caught, falls back to maxOffer (pre-fix) or nullopt (post-fix)
+	// 2. Normal nullopt return → falls through to fixAMMv1_2 check
+	//
+	// Without fixAMMOverflowOffer: fall back to maxOffer unconditionally,
+	// matching rippled's overflow_error catch block behavior.
+	// Reference: rippled AMMLiquidity.cpp catch (std::overflow_error) lines 224-231
+	if !l.fixAMMOverflowOffer {
+		return l.safeMaxOffer(poolIn, poolOut)
+	}
+
 	// fixAMMv1_2 fallback: try maxOffer if quality beats CLOB
 	if l.fixAMMv1_2 {
-		maxOff := l.maxOffer(poolIn, poolOut)
+		maxOff := l.safeMaxOffer(poolIn, poolOut)
 		if maxOff != nil {
 			maxQ := QualityFromAmounts(toEitherAmt(maxOff.amountIn), toEitherAmt(maxOff.amountOut))
 			if maxQ.BetterThan(*clobQuality) {
@@ -152,6 +194,20 @@ func (l *AMMLiquidity) generateOffer(view *PaymentSandbox, poolIn, poolOut tx.Am
 	}
 
 	return nil
+}
+
+// safeMaxOffer calls maxOffer with panic recovery.
+// In rippled, maxOffer can throw overflow_error (e.g., when swapAssetIn
+// overflows with extreme inputs). The outer catch(std::exception) in
+// getOffer() catches this and returns nullopt.
+// Reference: rippled AMMLiquidity.cpp getOffer() catch (std::exception) line 232
+func (l *AMMLiquidity) safeMaxOffer(poolIn, poolOut tx.Amount) (result *AMMOffer) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = nil
+		}
+	}()
+	return l.maxOffer(poolIn, poolOut)
 }
 
 // generateFibSeqOffer generates an offer sized by Fibonacci sequence.

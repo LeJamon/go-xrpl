@@ -20,7 +20,7 @@ func ExecuteStrand(
 	strand Strand,
 	maxIn *EitherAmount,
 	requestedOut EitherAmount,
-) StrandResult {
+) (result StrandResult) {
 	if len(strand) == 0 {
 		return StrandResult{
 			Success:  false,
@@ -34,6 +34,25 @@ func ExecuteStrand(
 
 	s := len(strand)
 	ofrsToRm := make(map[[32]byte]bool)
+
+	// Recover from panics (FlowException / overflow equivalents).
+	// In rippled, the entire strand execution is wrapped in try/catch for
+	// FlowException. Panics from IOUAmount overflow or other arithmetic
+	// errors serve the same role. When a panic occurs, return an empty
+	// result (no output) matching rippled's catch behavior.
+	// Reference: rippled StrandFlow.h flow() try/catch lines 126-298
+	defer func() {
+		if r := recover(); r != nil {
+			result = StrandResult{
+				Success:  false,
+				In:       ZeroXRPEitherAmount(),
+				Out:      ZeroXRPEitherAmount(),
+				Sandbox:  nil,
+				OffsToRm: ofrsToRm,
+				Inactive: true,
+			}
+		}
+	}()
 
 	// limitingStep initialized to s (= no limiting step found)
 	// Reference: rippled StrandFlow.h line 130: size_t limitingStep = strand.size()
