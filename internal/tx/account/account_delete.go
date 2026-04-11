@@ -85,25 +85,6 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		"destination", a.Destination,
 	)
 
-	// Check minimum ledger gap: account sequence must be far enough behind the ledger.
-	// Uses addition (seq + 255 > ledgerSeq) instead of subtraction to avoid uint32 underflow.
-	// Reference: rippled DeleteAccount.cpp preclaim():
-	//   constexpr std::uint32_t seqDelta{255};
-	//   if ((*sleAccount)[sfSequence] + seqDelta > ctx.view.seq())
-	//       return tecTOO_SOON;
-	//
-	// Note: In rippled this check is in preclaim() before sequence consumption.
-	// In our engine, Apply() runs after the sequence has already been incremented,
-	// so we use the transaction's Sequence field (pre-increment value) for non-ticket
-	// transactions, and ctx.Account.Sequence (unchanged) for ticket transactions.
-	const seqDelta uint32 = 255
-	acctSeq := ctx.Account.Sequence
-	if a.GetCommon().TicketSequence == nil && a.GetCommon().Sequence != nil {
-		acctSeq = *a.GetCommon().Sequence
-	}
-	if acctSeq+seqDelta > ctx.Config.LedgerSequence {
-		return tx.TecTOO_SOON
-	}
 	rules := ctx.Rules()
 	if len(a.CredentialIDs) > 0 && !rules.Enabled(amendment.FeatureCredentials) {
 		return tx.TemDISABLED
@@ -129,6 +110,8 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 			}
 		}
 	}
+	// NFToken obligations check — must come BEFORE the sequence too-soon check
+	// to match rippled's DeleteAccount::preclaim() order.
 	if rules.Enabled(amendment.FeatureNonFungibleTokensV1) {
 		if ctx.Account.MintedNFTokens != ctx.Account.BurnedNFTokens {
 			return tx.TecHAS_OBLIGATIONS
@@ -139,6 +122,25 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		if succErr == nil && succFound && keyLessEqual(succKey, last.Key) {
 			return tx.TecHAS_OBLIGATIONS
 		}
+	}
+	// Check minimum ledger gap: account sequence must be far enough behind the ledger.
+	// Uses addition (seq + 255 > ledgerSeq) instead of subtraction to avoid uint32 underflow.
+	// Reference: rippled DeleteAccount.cpp preclaim():
+	//   constexpr std::uint32_t seqDelta{255};
+	//   if ((*sleAccount)[sfSequence] + seqDelta > ctx.view.seq())
+	//       return tecTOO_SOON;
+	//
+	// Note: In rippled this check is in preclaim() before sequence consumption.
+	// In our engine, Apply() runs after the sequence has already been incremented,
+	// so we use the transaction's Sequence field (pre-increment value) for non-ticket
+	// transactions, and ctx.Account.Sequence (unchanged) for ticket transactions.
+	const seqDelta uint32 = 255
+	acctSeq := ctx.Account.Sequence
+	if a.GetCommon().TicketSequence == nil && a.GetCommon().Sequence != nil {
+		acctSeq = *a.GetCommon().Sequence
+	}
+	if acctSeq+seqDelta > ctx.Config.LedgerSequence {
+		return tx.TecTOO_SOON
 	}
 	if rules.Enabled(amendment.FeatureFixNFTokenRemint) {
 		firstNFTSeq := uint32(0)
