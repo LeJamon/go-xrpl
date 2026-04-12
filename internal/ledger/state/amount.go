@@ -1175,11 +1175,41 @@ func (a Amount) Div(other Amount, roundUp bool) Amount {
 	bigMinMantissa := new(big.Int).SetInt64(MinMantissa)
 	bigMaxMantissa := new(big.Int).SetUint64(cMaxValue)
 	ten := big.NewInt(10)
+	mod := new(big.Int)
 
-	for bigResult.Cmp(bigMaxMantissa) >= 0 {
-		bigResult.Div(bigResult, ten)
-		resultExp++
+	if !roundUp {
+		// For divide() (roundUp=false), the result goes through rippled's
+		// STAmount constructor → canonicalize() → Number::normalize(), which
+		// uses Guard rounding (round to nearest, tie to even).
+		// We must track guard digits during normalization and apply rounding.
+		// Reference: rippled Number.cpp Number::normalize() lines 178-227
+		var guardDigit int64
+		hasRemainder := false
+		for bigResult.Cmp(bigMaxMantissa) >= 0 {
+			if guardDigit != 0 {
+				hasRemainder = true
+			}
+			bigResult.DivMod(bigResult, ten, mod)
+			guardDigit = mod.Int64()
+			resultExp++
+		}
+		// Apply round-to-nearest (tie to even) matching Number::normalize()
+		mantissa := bigResult.Int64()
+		if guardDigit > 5 || (guardDigit == 5 && (hasRemainder || mantissa%2 == 1)) {
+			mantissa++
+			if mantissa >= int64(cMaxValue) {
+				mantissa /= 10
+				resultExp++
+			}
+		}
+		bigResult.SetInt64(mantissa)
+	} else {
+		for bigResult.Cmp(bigMaxMantissa) >= 0 {
+			bigResult.Div(bigResult, ten)
+			resultExp++
+		}
 	}
+
 	for bigResult.Cmp(bigMinMantissa) < 0 && bigResult.Sign() != 0 {
 		bigResult.Mul(bigResult, ten)
 		resultExp--

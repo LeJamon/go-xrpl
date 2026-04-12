@@ -834,6 +834,17 @@ func withdrawIOUToAccount(
 	amount tx.Amount,
 	enabledFixAMMv1_2 bool,
 ) tx.Result {
+	// When the withdrawer IS the issuer, no trust line is needed between them.
+	// Just debit the AMM's trust line (which is between AMM and issuer).
+	// Reference: rippled accountSend → rippleCredit handles issuer case by only
+	// adjusting the single AMM-issuer trust line.
+	if accountID == issuerID {
+		if err := createOrUpdateAMMTrustline(ammAccountID, asset, amount.Negate(), ctx.View); err != nil {
+			return tx.TefINTERNAL
+		}
+		return tx.TesSUCCESS
+	}
+
 	// Check if withdrawer already has a trust line for this IOU.
 	trustLineKey := keylet.Line(accountID, issuerID, asset.Currency)
 	trustLineExists, err := ctx.View.Exists(trustLineKey)
@@ -1001,7 +1012,13 @@ func createWithdrawTrustLine(
 		return tx.TefINTERNAL
 	}
 
-	// Increment withdrawer's owner count for the new trust line
+	// Increment withdrawer's owner count for the new trust line.
+	// Write through the view (not just ctx.Account) so that subsequent
+	// operations that read the account from the view (e.g., redeemIOUWithCleanup)
+	// see the updated OwnerCount.
+	// Reference: rippled — adjustOwnerCount on the SLE which is immediately
+	// visible through peek().
+	_ = tx.AdjustOwnerCount(ctx.View, accountID, 1)
 	ctx.Account.OwnerCount++
 
 	return tx.TesSUCCESS

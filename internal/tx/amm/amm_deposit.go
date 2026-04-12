@@ -1001,8 +1001,13 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Increment owner count if we created a new LP token trustline.
-	// Reference: rippled - the depositor pays reserve for the LP token trustline
+	// Write through the view (not just ctx.Account) so that subsequent
+	// operations that read the account from the view (e.g., redeemIOUWithCleanup
+	// in AMMWithdraw, or updateTrustLine cleanup) see the updated OwnerCount.
+	// Reference: rippled — adjustOwnerCount on the SLE which is immediately
+	// visible through peek().
 	if !lptExists {
+		_ = tx.AdjustOwnerCount(ctx.View, accountID, 1)
 		ctx.Account.OwnerCount++
 	}
 
