@@ -577,33 +577,16 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 			o.DomainID, // Domain ID for permissioned DEX offer crossing
 		)
 
-		// Convert result amounts back
-		// For remaining offer calculation:
-		// - If GROSS >= originalTakerGets: offer fully consumed, no remaining
-		// - Else: remaining = originalTakerGets - NET (use net delivered amount)
-		// Reference: rippled uses the net amount delivered to matching offers for remaining calculation
+		// Convert result amounts back.
+		// Reference: rippled CreateOffer.cpp flowCross() result handling
 		grossPaid := payment.FromEitherAmount(crossResult.TakerPaid)
-		netPaid := payment.FromEitherAmount(crossResult.TakerPaidNet)
-
-		// Use GROSS for the "fully consumed" check via subtractAmounts clamping
-		// But for actual remaining calculation, use NET when we have a remaining offer
-		// The subtractAmounts function clamps negative to zero, so:
-		// - If GROSS >= original: remaining = 0 (no offer created)
-		// - If GROSS < original: we need remaining = original - NET
-		remainingWithGross := subtractAmounts(saTakerGets, grossPaid)
-		if isAmountZeroOrNegative(remainingWithGross) {
-			// Offer fully consumed with GROSS, use GROSS
-			placeOffer.in = grossPaid
-		} else {
-			// Offer has remainder, use NET for accurate remaining calculation
-			placeOffer.in = netPaid
-		}
-		placeOffer.out = payment.FromEitherAmount(crossResult.TakerGot) // What we received
+		placeOffer.in = payment.FromEitherAmount(crossResult.TakerPaidNet)
+		placeOffer.out = payment.FromEitherAmount(crossResult.TakerGot)
 
 		result = crossResult.Result
 		ctx.Log.Trace("offer crossing done",
 			"result", result,
-			"takerPaid", grossPaid,
+			"takerPaid", placeOffer.in,
 			"takerGot", placeOffer.out,
 		)
 
@@ -693,49 +676,40 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 			crossed = true
 		}
 
-		// Calculate remaining amounts for the new offer
-		// Reference: rippled CreateOffer.cpp lines 491-504 (flowCross)
-		// Rippled preserves the offer quality when calculating remaining amounts.
+		// Calculate remaining amounts for the new offer.
+		// Reference: rippled CreateOffer.cpp lines 429-504 (flowCross afterCross calculation)
 		//
-		// IMPORTANT: When the offer is fully consumed (GROSS >= originalTakerGets),
-		// the taker has paid everything (or more with transfer fees), so NO remaining
-		// offer should be created. We use subtraction which will give zero/negative.
+		// Rippled's approach:
+		// 1. If takerInBalance <= 0: offer fully consumed (funds exhausted)
+		// 2. For sell: subtract NET input from TakerGets, compute TakerPays via quality
+		// 3. For non-sell: subtract output received from TakerPays, compute TakerGets via quality
 		//
-		// When no crossing happened at all (placeOffer is zero), return original amounts
-		// directly to avoid float64 precision errors in ratio calculation.
-		//
-		// Only when partial crossing happened do we use quality preservation.
-		//
-		// For non-sell offers (Flags=0) with remaining:
-		//   1. remainingPays = originalTakerPays - actualAmountOut (XRP received)
-		//   2. remainingGets = remainingPays * (originalTakerGets / originalTakerPays) (quality preserved)
-		//
-		// For sell offers (tfSell):
-		//   1. remainingGets = originalTakerGets - (actualAmountIn / transferRate) (non-gateway amount)
-		//   2. remainingPays = remainingGets * (originalTakerPays / originalTakerGets) (quality preserved)
+		// The quality rate = Quality{takerAmount.out, takerAmount.in}.rate()
+		// where out=TakerPays, in=TakerGets (from taker's perspective).
 		var remainingGets, remainingPays tx.Amount
 
 		noCrossingHappened := isAmountZeroOrNegative(placeOffer.in) && isAmountZeroOrNegative(placeOffer.out)
 
-		if isAmountZeroOrNegative(remainingWithGross) {
-			// Offer fully consumed - taker paid everything (GROSS >= original)
-			// Use subtraction which will give zero/negative, triggering "fully crossed" below
-			remainingGets = subtractAmounts(saTakerGets, placeOffer.in)
-			remainingPays = subtractAmounts(saTakerPays, placeOffer.out)
+		if isAmountZeroOrNegative(takerInBalance) {
+			// Funds exhausted during crossing — no remaining offer
+			// Reference: rippled CreateOffer.cpp lines 435-441
+			remainingGets = zeroAmount(saTakerGets)
+			remainingPays = zeroAmount(saTakerPays)
 		} else if noCrossingHappened {
 			// No crossing happened - return original amounts directly
-			// This avoids float64 precision errors in ratio calculation
+			// Reference: rippled CreateOffer.cpp line 429: afterCross = takerAmount (unchanged)
 			remainingGets = saTakerGets
 			remainingPays = saTakerPays
 		} else if bSell {
-			// Sell offer with remaining: subtract from TakerGets, calculate TakerPays by ratio
+			// Sell offer: subtract NET input from TakerGets, compute TakerPays by quality
 			// Reference: rippled CreateOffer.cpp lines 447-489
-			// rate = Quality{takerAmount.out, takerAmount.in}.rate() = TakerGets/TakerPays
-			// afterCross.out = divRound(afterCross.in, rate, TakerPays.issue, roundUp)
-			// The fixReducedOffersV1 amendment changes the rounding:
-			// - Before: divRound with roundUp=true
-			// - After: divRoundStrict with roundUp=false
+			//   nonGatewayAmountIn = divideRound(actualAmountIn, gatewayXferRate, ...)
+			//   afterCross.in -= nonGatewayAmountIn
+			//   afterCross.out = divRound(afterCross.in, rate, ...) or divRoundStrict
 			remainingGets = subtractAmounts(saTakerGets, placeOffer.in) // placeOffer.in is NET
+			if isAmountNegative(remainingGets) {
+				remainingGets = zeroAmount(saTakerGets)
+			}
 			rate := payment.QualityFromAmounts(
 				payment.ToEitherAmount(saTakerGets),
 				payment.ToEitherAmount(saTakerPays),
@@ -749,11 +723,14 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 				remainingPays = offerDivRound(remainingGets, rate, outNative, outCurrency, outIssuer, true)
 			}
 		} else {
-			// Non-sell offer with remaining: subtract from TakerPays, calculate TakerGets by ratio
-			// Reference: rippled CreateOffer.cpp lines 497-503
-			// afterCross.in = mulRound(afterCross.out, rate, TakerGets.issue, true)
-			// For non-sell offers, always round up (mulRound, non-strict)
+			// Non-sell offer: subtract output received from TakerPays, compute TakerGets by quality
+			// Reference: rippled CreateOffer.cpp lines 491-503
+			//   afterCross.out -= result.actualAmountOut
+			//   afterCross.in = mulRound(afterCross.out, rate, takerAmount.in.issue(), true)
 			remainingPays = subtractAmounts(saTakerPays, placeOffer.out)
+			if isAmountNegative(remainingPays) {
+				remainingPays = zeroAmount(saTakerPays)
+			}
 			rate := payment.QualityFromAmounts(
 				payment.ToEitherAmount(saTakerGets),
 				payment.ToEitherAmount(saTakerPays),
@@ -769,16 +746,17 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 		fullyCrossed := isAmountZeroOrNegative(remainingGets) || isAmountZeroOrNegative(remainingPays)
 
 		// Without fixFillOrKill, FoK requires TakerGets to be fully consumed
-		// (GROSS paid >= original TakerGets), not just TakerPays fully received.
+		// (GROSS paid >= original TakerGets), not just remaining being zero.
 		// The proportional remaining calculation can yield zero even when TakerGets
 		// isn't fully consumed (because TakerPays was fully satisfied at a better rate).
 		// Reference: rippled CreateOffer.cpp: pre-amendment requires full TakerGets
 		// consumption for FoK; post-amendment relaxes non-sell FoK.
+		// Note: goXRPL uses partialPayment=true for FlowCross (unlike rippled which
+		// passes partialPayment=!(txFlags & tfFillOrKill)), so FoK handling is manual.
 		if fullyCrossed && bFillOrKill && !rules.Enabled(amendment.FeatureFixFillOrKill) {
+			remainingWithGross := subtractAmounts(saTakerGets, grossPaid)
 			if !isAmountZeroOrNegative(remainingWithGross) {
-				// FoK not satisfied: TakerGets not fully consumed.
-				// Remaining amounts are zero from proportional calc, so we can't
-				// create a remaining offer. Return FoK failure directly.
+				// FoK not satisfied: TakerGets not fully consumed by GROSS amount.
 				if rules.Enabled(amendment.FeatureFix1578) {
 					return tx.TecKILLED, false
 				}
@@ -972,6 +950,19 @@ func isLegalNetAmount(amt tx.Amount) bool {
 // isAmountZeroOrNegative checks if an amount is zero or negative.
 func isAmountZeroOrNegative(amt tx.Amount) bool {
 	return amt.IsZero() || amt.IsNegative()
+}
+
+// isAmountNegative checks if an amount is strictly negative.
+func isAmountNegative(amt tx.Amount) bool {
+	return amt.IsNegative()
+}
+
+// zeroAmount returns a zero amount matching the type/issue of the given amount.
+func zeroAmount(amt tx.Amount) tx.Amount {
+	if amt.IsNative() {
+		return tx.NewXRPAmount(0)
+	}
+	return tx.NewIssuedAmount(0, -100, amt.Currency, amt.Issuer)
 }
 
 // subtractAmounts subtracts b from a.
