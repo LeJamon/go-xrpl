@@ -508,7 +508,14 @@ func (dc *DeferredCredits) credit(sender, receiver [20]byte, amount tx.Amount, p
 	v, exists := dc.credits[key]
 
 	if !exists {
-		zeroAmt := tx.NewIssuedAmount(0, -100, amount.Currency, amount.Issuer)
+		// Initialize zero amounts matching the type of the credit amount.
+		// XRP amounts must use native zeros to avoid type mismatch in Add/Sub.
+		var zeroAmt tx.Amount
+		if amount.IsNative() {
+			zeroAmt = tx.NewXRPAmount(0)
+		} else {
+			zeroAmt = tx.NewIssuedAmount(0, -100, amount.Currency, amount.Issuer)
+		}
 		v = &deferredValue{
 			lowAcctCredits:     zeroAmt,
 			highAcctCredits:    zeroAmt,
@@ -615,8 +622,17 @@ func (dc *DeferredCredits) apply(to *DeferredCredits) {
 func (s *PaymentSandbox) BalanceHook(account, issuer [20]byte, amount tx.Amount) tx.Amount {
 	currency := amount.Currency
 
-	// Initialize with zeroed amount for delta tracking
-	delta := tx.NewIssuedAmount(0, -100, currency, amount.Issuer)
+	// Initialize with zeroed amount matching the type of the input amount.
+	// XRP amounts are native; IOU amounts are non-native. Mixing types in
+	// Add/Sub operations causes errors, so the delta must be the same type.
+	// Reference: rippled PaymentSandbox::balanceHook uses STAmount which
+	// handles both native and IOU transparently.
+	var delta tx.Amount
+	if amount.IsNative() {
+		delta = tx.NewXRPAmount(0)
+	} else {
+		delta = tx.NewIssuedAmount(0, -100, currency, amount.Issuer)
+	}
 	lastBal := amount
 	minBal := amount
 
@@ -644,7 +660,7 @@ func (s *PaymentSandbox) BalanceHook(account, issuer [20]byte, amount tx.Amount)
 
 	// A negative XRP balance is not an error - just return zero
 	if issuer == [20]byte{} && result.IsNegative() {
-		return tx.NewIssuedAmount(0, -100, currency, amount.Issuer)
+		return tx.NewXRPAmount(0)
 	}
 
 	return result

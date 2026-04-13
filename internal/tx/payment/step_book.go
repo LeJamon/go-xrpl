@@ -2326,11 +2326,36 @@ func (s *BookStep) Check(sb *PaymentSandbox) tx.Result {
 		return tx.TemBAD_PATH
 	}
 
-	// Check that the book has liquidity (CLOB offers or AMM).
-	// Reference: rippled BookStep.cpp check() uses tip() which considers both.
-	tipQ := s.getTipQuality(sb)
-	if tipQ == nil {
-		return tx.TecPATH_DRY
+	// If previous step is a DirectStep, check NoRipple on the trust line
+	// between the DirectStep's source and the book's input issuer.
+	// Reference: rippled BookStep.cpp lines 1384-1397
+	if s.prevStep != nil {
+		if prevDirect, ok := s.prevStep.(*DirectStepI); ok {
+			prev := prevDirect.src
+			cur := s.book.In.Issuer
+			if !s.book.In.IsXRP() {
+				sleLineKey := keylet.Line(prev, cur, s.book.In.Currency)
+				sleLineData, err := sb.Read(sleLineKey)
+				if err != nil || sleLineData == nil {
+					return tx.TerNO_LINE
+				}
+				rs, parseErr := state.ParseRippleState(sleLineData)
+				if parseErr != nil {
+					return tx.TefINTERNAL
+				}
+				// Check cur's NoRipple flag on the prev-cur trust line
+				curIsHigh := state.CompareAccountIDs(cur, prev) > 0
+				var noRippleFlag uint32
+				if curIsHigh {
+					noRippleFlag = state.LsfHighNoRipple
+				} else {
+					noRippleFlag = state.LsfLowNoRipple
+				}
+				if rs.Flags&noRippleFlag != 0 {
+					return tx.TerNO_RIPPLE
+				}
+			}
+		}
 	}
 
 	return tx.TesSUCCESS

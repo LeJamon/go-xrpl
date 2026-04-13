@@ -619,6 +619,11 @@ func ToStrandWithContext(
 			}
 			bookStep := NewBookStep(curIssue, outIssue, src, dst, prevStep, false)
 			bookStep.defaultPath = ctx.IsDefaultPath
+			// Validate book step (noRipple, issuer existence, etc.)
+			// Reference: rippled BookStep.cpp make_BookStepHelper() calls check(ctx)
+			if result := bookStep.Check(view); result != tx.TesSUCCESS {
+				return nil, result
+			}
 			strand = append(strand, bookStep)
 			prevStep = bookStep
 			curIssue = outIssue
@@ -680,6 +685,11 @@ func ToStrandWithContext(
 			}
 			bookStep := NewBookStep(curIssue, outIssue, src, dst, prevStep, false)
 			bookStep.defaultPath = ctx.IsDefaultPath
+			// Validate book step (noRipple, issuer existence, etc.)
+			// Reference: rippled BookStep.cpp make_BookStepHelper() calls check(ctx)
+			if result := bookStep.Check(view); result != tx.TesSUCCESS {
+				return nil, result
+			}
 			strand = append(strand, bookStep)
 			prevStep = bookStep
 			curIssue = outIssue
@@ -947,6 +957,11 @@ func ToStrandLegacy(
 					return nil, nil // Invalid: XRP to XRP book
 				}
 				bookStep := NewBookStep(curIssue, outIssue, src, dst, prevStep, false)
+				// Validate book step (noRipple, issuer existence, etc.)
+				// Reference: rippled BookStep.cpp make_BookStepHelper() calls check(ctx)
+				if result := bookStep.Check(view); result != tx.TesSUCCESS {
+					return nil, nil
+				}
 				strand = append(strand, bookStep)
 				prevStep = bookStep
 				curIssue = outIssue
