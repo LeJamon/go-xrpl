@@ -256,7 +256,7 @@ func SwapAssetOut(poolIn, poolOut, assetOut tx.Amount, tfee uint16, fixAMMv1_1 b
 		state.SetNumberRound(state.RoundDownward)
 		denom := ammSub(nPoolOut, nAssetOut)
 		if denom.Signum() <= 0 {
-			return maxAmountLike(poolIn)
+			return toMaxAmount(poolIn)
 		}
 
 		// Number::setround(Number::upward)
@@ -284,7 +284,7 @@ func SwapAssetOut(poolIn, poolOut, assetOut tx.Amount, tfee uint16, fixAMMv1_1 b
 	fMult := AMMFeeMult(tfee)
 	denom := ammSub(nPoolOut, nAssetOut)
 	if denom.IsZero() || denom.Signum() < 0 {
-		return maxAmountLike(poolIn)
+		return toMaxAmount(poolIn)
 	}
 	numerator := nPoolIn.Mul(nPoolOut, false)
 	ratio := numerator.Div(denom, false)
@@ -611,12 +611,29 @@ func zeroLikeAmount(amt tx.Amount) tx.Amount {
 	return state.NewIssuedAmountFromValue(0, -100, amt.Currency, amt.Issuer)
 }
 
-// maxAmountLike returns the maximum amount for the type of the input.
+// maxAmountLike returns the maximum amount for the type of the input, using
+// cMaxValue/2 to match rippled's maxAmount<IOUAmount>() / maxAmount<STAmount>().
+// Used by maxOffer() in AMMLiquidity for pre-fixAMMOverflowOffer fallback.
+// Reference: rippled AMMLiquidity.cpp lines 99-109: maxAmount<T>()
 func maxAmountLike(amt tx.Amount) tx.Amount {
 	if amt.IsNative() {
 		return state.NewXRPAmountFromInt(math.MaxInt64)
 	}
-	// Max IOU: mantissa = 9999999999999999 (cMaxValue), exponent = 80 (cMaxOffset)
-	// Reference: rippled STAmount.h cMaxValue = 9999999999999999, cMaxOffset = 80
+	// Max IOU: mantissa = cMaxValue/2 = 9999999999999999/2 = 4999999999999999
+	// exponent = cMaxOffset = 80
+	// Reference: rippled AMMLiquidity.cpp line 106:
+	//   return IOUAmount(STAmount::cMaxValue / 2, STAmount::cMaxOffset);
+	return state.NewIssuedAmountFromValue(4999999999999999, 80, amt.Currency, amt.Issuer)
+}
+
+// toMaxAmount returns the full maximum amount for the type of the input.
+// Uses cMaxValue (not halved) to match rippled's toMaxAmount<T>() from
+// AmountConversions.h, used by swapAssetOut when denominator <= 0.
+// Reference: rippled AmountConversions.h lines 153-173: toMaxAmount<T>()
+func toMaxAmount(amt tx.Amount) tx.Amount {
+	if amt.IsNative() {
+		return state.NewXRPAmountFromInt(math.MaxInt64)
+	}
+	// Full max IOU: mantissa = cMaxValue = 9999999999999999, exponent = cMaxOffset = 80
 	return state.NewIssuedAmountFromValue(9999999999999999, 80, amt.Currency, amt.Issuer)
 }
