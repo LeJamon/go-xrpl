@@ -413,10 +413,16 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	// APPLY - Reference: rippled AMMDeposit.cpp applyGuts lines 367-480
 	// =========================================================================
 
-	// Get trading fee - use existing or from transaction for empty AMM
-	tfee := amm.TradingFee
-	if lptBalance.IsZero() && a.TradingFee > 0 {
-		tfee = a.TradingFee
+	// Get trading fee - use existing or from transaction for empty AMM.
+	// When the pool is non-empty, check the auction slot for a discounted fee.
+	// Reference: rippled AMMDeposit.cpp doApply() line 389-391
+	var tfee uint16
+	if lptBalance.IsZero() {
+		if a.TradingFee > 0 {
+			tfee = a.TradingFee
+		}
+	} else {
+		tfee = getAccountTradingFee(amm, accountID, ctx.Config.ParentCloseTime)
 	}
 
 	// Amendment checks

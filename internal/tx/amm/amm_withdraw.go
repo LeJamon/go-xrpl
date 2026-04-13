@@ -227,7 +227,9 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	flags := a.GetFlags()
-	tfee := amm.TradingFee
+	// Get trading fee, potentially discounted for auction slot holders.
+	// Reference: rippled AMMWithdraw.cpp doApply() line 319
+	tfee := getAccountTradingFee(amm, ctx.AccountID, ctx.Config.ParentCloseTime)
 
 	// Get current AMM balances from actual state (not stored in AMM entry)
 	// Needed for preclaim checks below.

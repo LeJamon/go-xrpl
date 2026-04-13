@@ -306,6 +306,29 @@ func EncodeAccountID(accountID [20]byte) (string, error) {
 
 // getFee converts a trading fee in basis points (0-1000) to a fractional Amount.
 // 1000 basis points = 1% = 0.01
+// getAccountTradingFee returns the trading fee for an account interacting with
+// an AMM, potentially discounted if the account holds the auction slot or is
+// an authorized account. This matches rippled's AMMUtils.cpp getTradingFee().
+// Reference: rippled AMMUtils.cpp getTradingFee() lines 179-207
+func getAccountTradingFee(amm *AMMData, accountID [20]byte, parentCloseTime uint32) uint16 {
+	if amm.AuctionSlot != nil {
+		// Check if auction slot is not expired
+		if parentCloseTime < amm.AuctionSlot.Expiration {
+			// Check if account is the auction slot holder
+			if amm.AuctionSlot.Account == accountID {
+				return amm.AuctionSlot.DiscountedFee
+			}
+			// Check authorized accounts
+			for _, authAcct := range amm.AuctionSlot.AuthAccounts {
+				if authAcct == accountID {
+					return amm.AuctionSlot.DiscountedFee
+				}
+			}
+		}
+	}
+	return amm.TradingFee
+}
+
 // Returns fee as an IOU Amount for precise arithmetic.
 // Reference: rippled AMMCore.h getFee(): Number{tfee} / AUCTION_SLOT_FEE_SCALE_FACTOR
 func getFee(fee uint16) tx.Amount {

@@ -215,15 +215,20 @@ func SwapAssetIn(poolIn, poolOut, assetIn tx.Amount, tfee uint16, fixAMMv1_1 boo
 		return fromNumberWithGuard(swapOut, poolOut, state.RoundDownward)
 	}
 
-	// Pre-fixAMMv1_1: simple formula
+	// Pre-fixAMMv1_1: simple formula using Number arithmetic throughout.
+	// In rippled, pool.in/pool.out/assetIn are all Number types, so all
+	// operations (*, /, +, -) use Number::operator which has 16-digit
+	// mantissa with guard-based rounding. We must use numberMul/numberDiv
+	// (not Amount.Mul/Amount.Div which use STAmount::multiply/divide).
+	// Reference: rippled AMMHelpers.h swapAssetIn() pre-amendment path
 	fMult := AMMFeeMult(tfee)
-	assetFee := nAssetIn.Mul(fMult, false)
+	assetFee := numberMul(nAssetIn, fMult)
 	denom := ammAdd(nPoolIn, assetFee)
 	if denom.IsZero() {
 		return zeroLikeAmount(poolOut)
 	}
-	numerator := nPoolIn.Mul(nPoolOut, false)
-	ratio := numerator.Div(denom, false)
+	numerator := numberMul(nPoolIn, nPoolOut)
+	ratio := numberDiv(numerator, denom)
 	result := ammSub(nPoolOut, ratio)
 	if result.Signum() < 0 {
 		return zeroLikeAmount(poolOut)
@@ -280,16 +285,20 @@ func SwapAssetOut(poolIn, poolOut, assetOut tx.Amount, tfee uint16, fixAMMv1_1 b
 		return fromNumberWithGuard(swapIn, poolIn, state.RoundUpward)
 	}
 
-	// Pre-fixAMMv1_1: simple formula
+	// Pre-fixAMMv1_1: simple formula using Number arithmetic throughout.
+	// In rippled, pool.in/pool.out/assetOut are all Number types, so all
+	// operations use Number::operator (16-digit mantissa, guard-based).
+	// We must use numberMul/numberDiv (not Amount.Mul/Amount.Div).
+	// Reference: rippled AMMHelpers.h swapAssetOut() pre-amendment path
 	fMult := AMMFeeMult(tfee)
 	denom := ammSub(nPoolOut, nAssetOut)
 	if denom.IsZero() || denom.Signum() < 0 {
 		return toMaxAmount(poolIn)
 	}
-	numerator := nPoolIn.Mul(nPoolOut, false)
-	ratio := numerator.Div(denom, false)
+	numerator := numberMul(nPoolIn, nPoolOut)
+	ratio := numberDiv(numerator, denom)
 	diff := ammSub(ratio, nPoolIn)
-	result := diff.Div(fMult, true) // round up
+	result := numberDiv(diff, fMult)
 	if result.Signum() < 0 {
 		return zeroLikeAmount(poolIn)
 	}
