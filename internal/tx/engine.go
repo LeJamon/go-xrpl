@@ -1783,7 +1783,6 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		return result
 	}
 	if result.IsTec() {
-		txTypeName := tx.TxType().String()
 		// For tecOVERSIZE and tecKILLED: collect deleted offers from the table
 		// BEFORE discarding, so we can re-remove them from the clean view.
 		// Reference: rippled Transactor.cpp lines 1121-1201:
@@ -1800,6 +1799,28 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 					if entryType == "Offer" {
 						removedOfferKeys = append(removedOfferKeys, key)
 						if len(removedOfferKeys) >= unfundedOfferRemoveLimit {
+							break
+						}
+					}
+				}
+			}
+		}
+
+		// Collect deleted trust line keys for tecINCOMPLETE (AMMDelete) re-deletion.
+		// Reference: rippled Transactor.cpp lines 1139, 1171-1176, 1207-1209:
+		//   ctx_.visit() collects deleted RippleState keys, then reset(), then removeDeletedTrustLines()
+		var removedTrustLineKeys [][32]byte
+		if result == TecINCOMPLETE {
+			const maxDeletableAMMTrustLines = 512
+			for key, entry := range table.GetItems() {
+				if entry.Action == ActionErase {
+					entryType := getLedgerEntryType(entry.Original)
+					if entryType == "" && entry.Current != nil {
+						entryType = getLedgerEntryType(entry.Current)
+					}
+					if entryType == "RippleState" {
+						removedTrustLineKeys = append(removedTrustLineKeys, key)
+						if len(removedTrustLineKeys) >= maxDeletableAMMTrustLines {
 							break
 						}
 					}
@@ -1851,11 +1872,53 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 				return TefINTERNAL
 			}
 		}
-		// AMMDelete with tecINCOMPLETE: trust line deletions must persist.
-		// Reference: rippled AMMDelete.cpp — applies sandbox on both tesSUCCESS and tecINCOMPLETE.
-		if txTypeName == "AMMDelete" && result == TecINCOMPLETE {
-			if _, applyErr := table.Apply(); applyErr != nil {
-				_ = applyErr
+		// tecINCOMPLETE (AMMDelete): re-delete trust lines that were found during processing.
+		// These trust lines were deleted in the (now discarded) sandbox.
+		// Reference: rippled Transactor.cpp lines 1207-1209: removeDeletedTrustLines()
+		//   which calls deleteAMMTrustLine() for each collected trust line key.
+		if len(removedTrustLineKeys) > 0 {
+			for _, lineKey := range removedTrustLineKeys {
+				lineKL := keylet.Keylet{Key: lineKey}
+				lineData, readErr := tecTable.Read(lineKL)
+				if readErr != nil || lineData == nil {
+					continue
+				}
+				rs, parseErr := state.ParseRippleState(lineData)
+				if parseErr != nil {
+					continue
+				}
+				lowID, decodeErr := state.DecodeAccountID(rs.LowLimit.Issuer)
+				if decodeErr != nil {
+					continue
+				}
+				highID, decodeErr := state.DecodeAccountID(rs.HighLimit.Issuer)
+				if decodeErr != nil {
+					continue
+				}
+				// Remove from both owner directories
+				lowDirKey := keylet.OwnerDir(lowID)
+				state.DirRemove(tecTable, lowDirKey, rs.LowNode, lineKey, false)
+				highDirKey := keylet.OwnerDir(highID)
+				state.DirRemove(tecTable, highDirKey, rs.HighNode, lineKey, false)
+				// Erase the trust line
+				_ = tecTable.Erase(lineKL)
+				// Decrement OwnerCount for the non-AMM side that has a reserve.
+				// Reference: rippled View.cpp deleteAMMTrustLine lines 2759-2763
+				lowAcctData, _ := tecTable.Read(keylet.Account(lowID))
+				highAcctData, _ := tecTable.Read(keylet.Account(highID))
+				if lowAcctData != nil && highAcctData != nil {
+					lowAcct, _ := state.ParseAccountRoot(lowAcctData)
+					highAcct, _ := state.ParseAccountRoot(highAcctData)
+					zeroHash := [32]byte{}
+					ammLow := lowAcct.AMMID != zeroHash
+					ammHigh := highAcct.AMMID != zeroHash
+					if rs.Flags&state.LsfLowReserve != 0 && !ammLow {
+						adjustOwnerCountOnView(tecTable, lowID, -1, txHash, e.config.LedgerSequence)
+					}
+					if rs.Flags&state.LsfHighReserve != 0 && !ammHigh {
+						adjustOwnerCountOnView(tecTable, highID, -1, txHash, e.config.LedgerSequence)
+					}
+				}
 			}
 		}
 
