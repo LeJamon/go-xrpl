@@ -1,7 +1,9 @@
 package tx
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
@@ -208,5 +210,14 @@ func decodeBase58Check(input string) ([]byte, error) {
 		return nil, nil
 	}
 
-	return result[:len(result)-4], nil
+	payload := result[:len(result)-4]
+	checksum := result[len(result)-4:]
+
+	h1 := sha256.Sum256(payload)
+	h2 := sha256.Sum256(h1[:])
+	if h2[0] != checksum[0] || h2[1] != checksum[1] || h2[2] != checksum[2] || h2[3] != checksum[3] {
+		return nil, fmt.Errorf("invalid base58check checksum")
+	}
+
+	return payload, nil
 }
