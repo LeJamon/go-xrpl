@@ -78,29 +78,30 @@ func (e *EscrowCreate) Validate() error {
 		return err
 	}
 
-	// Amount must be positive
-	// Reference: rippled Escrow.cpp:146-147
-	if e.Amount.IsZero() || e.Amount.IsNegative() {
-		return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
-	}
-
-	// Non-XRP preflight validation (amendment check deferred to Apply)
-	// Reference: rippled Escrow.cpp preflight lines 94-119
-	if !e.Amount.IsNative() {
-		if e.Amount.IsMPT() {
-			// MPT: check max amount
-			if raw, ok := e.Amount.MPTRaw(); ok {
-				if raw > maxMPTokenAmount {
-					return tx.Errorf(tx.TemBAD_AMOUNT, "MPT amount exceeds maximum")
-				}
-			}
-		} else {
-			// IOU: check bad currency (XRP as currency code is invalid)
-			if e.Amount.Currency == "" || e.Amount.Currency == "XRP" {
-				return tx.Errorf(tx.TemBAD_CURRENCY, "cannot escrow XRP as IOU")
-			}
+	// Rippled checks amount validity differently for XRP vs non-XRP.
+	// For XRP, the zero/negative check runs immediately in preflight.
+	// For non-XRP amounts, the amendment check (featureTokenEscrow) comes
+	// FIRST, and the zero/negative + type-specific checks are in helpers
+	// called after the amendment gate. Since Validate() is stateless (no
+	// rules), we only check XRP here and defer non-XRP to Apply().
+	// Reference: rippled Escrow.cpp preflight lines 130-148
+	if e.Amount.IsNative() {
+		if e.Amount.IsZero() || e.Amount.IsNegative() {
+			return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
+		}
+	} else if !e.Amount.IsMPT() {
+		// IOU: zero/negative check runs in preflight for IOUs (no amendment
+		// dependency). Reference: rippled escrowCreatePreflightHelper<Issue> line 97
+		if e.Amount.IsZero() || e.Amount.IsNegative() {
+			return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
+		}
+		// IOU stateless check: bad currency (XRP as currency code is invalid).
+		if e.Amount.Currency == "" || e.Amount.Currency == "XRP" {
+			return tx.Errorf(tx.TemBAD_CURRENCY, "cannot escrow XRP as IOU")
 		}
 	}
+	// MPT stateless checks (zero/negative, max amount) are deferred to Apply()
+	// where featureMPTokensV1 is checked first (matching rippled's dispatch order).
 
 	// Must have at least one timeout value
 	// Reference: rippled Escrow.cpp:151-152
@@ -188,6 +189,31 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled Escrow.cpp preflight lines 131-148
 	if !e.Amount.IsNative() && !rules.Enabled(amendment.FeatureTokenEscrow) {
 		return tx.TemBAD_AMOUNT
+	}
+
+	// Non-XRP amount validity checks that were deferred from Validate()
+	// because they depend on amendment state (matching rippled's dispatch order).
+	// Reference: rippled escrowCreatePreflightHelper<MPTIssue> lines 106-119
+	// Reference: rippled escrowCreatePreflightHelper<Issue> lines 92-103
+	if !e.Amount.IsNative() {
+		if e.Amount.IsMPT() {
+			if !rules.Enabled(amendment.FeatureMPTokensV1) {
+				return tx.TemDISABLED
+			}
+			if e.Amount.IsZero() || e.Amount.IsNegative() {
+				return tx.TemBAD_AMOUNT
+			}
+			if raw, ok := e.Amount.MPTRaw(); ok {
+				if raw > maxMPTokenAmount {
+					return tx.TemBAD_AMOUNT
+				}
+			}
+		} else {
+			// IOU zero/negative check (deferred from Validate)
+			if e.Amount.IsZero() || e.Amount.IsNegative() {
+				return tx.TemBAD_AMOUNT
+			}
+		}
 	}
 
 	// Amendment-gated preflight: fix1571 requires FinishAfter or Condition
@@ -413,8 +439,14 @@ func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint3
 	if txn.Amount.IsNative() {
 		amountVal = fmt.Sprintf("%d", txn.Amount.Drops())
 	} else if txn.Amount.IsMPT() {
+		// MPT amounts are whole numbers — use MPTRaw() to avoid IOU
+		// normalization which loses precision for large values (>16 digits).
+		mptValue := txn.Amount.Value()
+		if raw, ok := txn.Amount.MPTRaw(); ok {
+			mptValue = fmt.Sprintf("%d", raw)
+		}
 		amountVal = map[string]any{
-			"value":            txn.Amount.Value(),
+			"value":            mptValue,
 			"mpt_issuance_id": txn.Amount.MPTIssuanceID(),
 		}
 	} else {

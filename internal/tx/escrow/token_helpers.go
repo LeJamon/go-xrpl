@@ -111,7 +111,9 @@ func escrowCreatePreclaimMPT(view tx.LedgerView, rules *amendment.Rules, account
 		return tx.TemDISABLED
 	}
 
-	issuerID, err := state.DecodeAccountID(amount.Issuer)
+	// MPT amounts store the issuer in the MPTIssuanceID (last 20 bytes),
+	// not in Amount.Issuer which is empty for MPT.
+	issuerID, err := mptIssuerAccountID(amount.MPTIssuanceID())
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -227,7 +229,9 @@ func escrowFinishPreclaimIOU(view tx.LedgerView, destID [20]byte, amount tx.Amou
 // escrowFinishPreclaimMPT validates MPT escrow finish preconditions.
 // Reference: rippled Escrow.cpp lines 726-758
 func escrowFinishPreclaimMPT(view tx.LedgerView, destID [20]byte, amount tx.Amount) tx.Result {
-	issuerID, err := state.DecodeAccountID(amount.Issuer)
+	// MPT amounts store the issuer in the MPTIssuanceID (last 20 bytes),
+	// not in Amount.Issuer which is empty for MPT.
+	issuerID, err := mptIssuerAccountID(amount.MPTIssuanceID())
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -293,7 +297,9 @@ func escrowCancelPreclaimIOU(view tx.LedgerView, accountID [20]byte, amount tx.A
 // escrowCancelPreclaimMPT validates MPT escrow cancel preconditions.
 // Reference: rippled Escrow.cpp lines 1239-1267
 func escrowCancelPreclaimMPT(view tx.LedgerView, accountID [20]byte, amount tx.Amount) tx.Result {
-	issuerID, err := state.DecodeAccountID(amount.Issuer)
+	// MPT amounts store the issuer in the MPTIssuanceID (last 20 bytes),
+	// not in Amount.Issuer which is empty for MPT.
+	issuerID, err := mptIssuerAccountID(amount.MPTIssuanceID())
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -896,15 +902,26 @@ func reconstructAmountFromEscrow(escrow *state.EscrowData) tx.Amount {
 	return tx.NewXRPAmount(0)
 }
 
-// mptIssuerFromIssuanceID extracts the issuer r-address from a hex-encoded
-// MPTIssuanceID (24 bytes = 4-byte sequence + 20-byte account).
-func mptIssuerFromIssuanceID(hexID string) string {
+// mptIssuerAccountID extracts the raw 20-byte issuer account ID from a
+// hex-encoded MPTIssuanceID (24 bytes = 4-byte sequence + 20-byte account).
+// This is the binary equivalent of rippled's MPTIssue::getIssuer().
+func mptIssuerAccountID(hexID string) ([20]byte, error) {
 	idBytes, err := hex.DecodeString(hexID)
 	if err != nil || len(idBytes) < 24 {
-		return ""
+		return [20]byte{}, fmt.Errorf("invalid MPTIssuanceID hex: %q", hexID)
 	}
 	var accountID [20]byte
 	copy(accountID[:], idBytes[4:24])
+	return accountID, nil
+}
+
+// mptIssuerFromIssuanceID extracts the issuer r-address from a hex-encoded
+// MPTIssuanceID (24 bytes = 4-byte sequence + 20-byte account).
+func mptIssuerFromIssuanceID(hexID string) string {
+	accountID, err := mptIssuerAccountID(hexID)
+	if err != nil {
+		return ""
+	}
 	addr, err := state.EncodeAccountID(accountID)
 	if err != nil {
 		return ""

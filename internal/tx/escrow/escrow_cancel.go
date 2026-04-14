@@ -257,6 +257,18 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			}
 		}
 
+		// When ownerIsSelf, the unlock functions may create new objects
+		// (MPToken or trust line) and adjust OwnerCount through the view.
+		// Re-synchronize ctx.Account so the engine write-back doesn't lose it.
+		if ownerIsSelf {
+			ownerKey := keylet.Account(ownerID)
+			if updatedData, readErr := ctx.View.Read(ownerKey); readErr == nil && updatedData != nil {
+				if updatedAcct, parseErr := state.ParseAccountRoot(updatedData); parseErr == nil {
+					ctx.Account.OwnerCount = updatedAcct.OwnerCount
+				}
+			}
+		}
+
 		// Remove escrow from issuer's owner directory, if present
 		// Reference: rippled Escrow.cpp doApply() lines 1389-1398
 		if escrowEntry.HasIssuerNode {

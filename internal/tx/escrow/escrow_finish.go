@@ -400,6 +400,20 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
+	// When destIsSelf, the unlock functions (escrowUnlockMPT/escrowUnlockIOU)
+	// may create new objects (MPToken or trust line) and adjust the
+	// destination's OwnerCount through the view. Since destAccount is
+	// ctx.Account (the same in-memory object the engine writes back), we must
+	// re-synchronize it with the view so that the OwnerCount update is not
+	// lost when the engine writes ctx.Account back.
+	if destIsSelf && !isXRP {
+		if updatedData, readErr := ctx.View.Read(destKey); readErr == nil && updatedData != nil {
+			if updatedAcct, parseErr := state.ParseAccountRoot(updatedData); parseErr == nil {
+				ctx.Account.OwnerCount = updatedAcct.OwnerCount
+			}
+		}
+	}
+
 	// Write destination account back
 	// Reference: rippled Escrow.cpp doApply() line 1186: ctx_.view().update(sled);
 	if !destIsSelf {

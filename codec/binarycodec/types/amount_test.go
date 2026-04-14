@@ -129,9 +129,9 @@ func TestVerifyMPTValue(t *testing.T) {
 			expErr: &InvalidAmountError{Amount: "100.50"},
 		},
 		{
-			name:   "fail - invalid mpt value - negative number",
+			name:   "pass - valid mpt value - negative number",
 			input:  "-500",
-			expErr: &InvalidAmountError{Amount: "-500"},
+			expErr: nil,
 		},
 		{
 			name:   "fail - invalid mpt value - non-numeric characters",

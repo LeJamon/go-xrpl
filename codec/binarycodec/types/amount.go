@@ -429,18 +429,18 @@ func verifyMPTValue(value string) error {
 		return &InvalidAmountError{Amount: value}
 	}
 
-	if bi.Sign() < 0 {
+	// Negative values are valid for signing/serialization (sign bit used).
+	// Use absolute value for magnitude checks.
+	abs := new(big.Int).Abs(bi)
+
+	// reject any absolute value ≥ 1<<63 so it fits in int64
+	if abs.BitLen() > 63 {
 		return &InvalidAmountError{Amount: value}
 	}
 
-	// reject any value ≥ 1<<63 so v.Uint64() can never overflow
-	if bi.BitLen() > 63 {
-		return &InvalidAmountError{Amount: value}
-	}
-
-	if bi.Sign() != 0 {
+	if abs.Sign() != 0 {
 		mask := new(big.Int).SetUint64(ZeroCurrencyAmountHex)
-		if new(big.Int).And(bi, mask).Sign() != 0 {
+		if new(big.Int).And(abs, mask).Sign() != 0 {
 			return &InvalidAmountError{Amount: value}
 		}
 	}
@@ -653,9 +653,13 @@ func serializeMPTCurrencyValue(value string) ([]byte, error) {
 		return nil, &InvalidAmountError{Amount: value}
 	}
 
-	// verifyMPTValue ensures v ≤ 2^63-1, so v.Uint64() is safe
+	// Use absolute value for encoding (sign is handled separately in the
+	// header byte by serializeMPTCurrencyAmount).
+	abs := new(big.Int).Abs(v)
+
+	// verifyMPTValue ensures |v| ≤ 2^63-1, so Uint64() is safe
 	buf := make([]byte, NativeAmountByteLength)
-	binary.BigEndian.PutUint64(buf, v.Uint64())
+	binary.BigEndian.PutUint64(buf, abs.Uint64())
 	return buf, nil
 }
 
@@ -690,7 +694,13 @@ func serializeMPTCurrencyAmount(valueStr, issuanceHex string) ([]byte, error) {
 	}
 
 	buf := make([]byte, MPTAmountByteLength)
-	buf[0] = MPTMarkerByte
+	// MPT header: bit 0x20 (MPT flag) + bit 0x40 (positive sign).
+	// Negative amounts omit the positive bit.
+	header := byte(MPTAmountFlag) // 0x20
+	if !strings.HasPrefix(valueStr, "-") {
+		header |= MPTSignBitMask // 0x40
+	}
+	buf[0] = header
 	copy(buf[1:MPTValueWithHeaderLength], valBytes)
 	copy(buf[MPTValueWithHeaderLength:], idBytes)
 	return buf, nil
