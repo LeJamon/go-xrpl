@@ -336,7 +336,7 @@ func (t *ApplyStateTable) applyImpl(isDryRun bool) (*Metadata, error) {
 
 		case ActionModify:
 			// Skip if no actual change
-			if bytesEqual(entry.Original, entry.Current) {
+			if bytes.Equal(entry.Original, entry.Current) {
 				continue
 			}
 
@@ -891,19 +891,6 @@ func ledgerEntryTypeName(code uint16) string {
 	default:
 		return fmt.Sprintf("Unknown(0x%04x)", code)
 	}
-}
-
-// bytesEqual compares two byte slices
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // fieldsEqual compares two field values
