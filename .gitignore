@@ -31,3 +31,6 @@ xrpld.toml
 # Built binaries
 xrpld
 main
+
+# Worktrees
+.worktrees/

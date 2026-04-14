@@ -1,6 +1,8 @@
 package txq
 
 import (
+	"sort"
+
 	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
@@ -241,13 +243,9 @@ func (aq *AccountQueue) GetSortedCandidates() []*Candidate {
 	}
 
 	// Sort by SeqProxy
-	for i := 0; i < len(result)-1; i++ {
-		for j := i + 1; j < len(result); j++ {
-			if result[j].SeqProxy.Less(result[i].SeqProxy) {
-				result[i], result[j] = result[j], result[i]
-			}
-		}
-	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].SeqProxy.Less(result[j].SeqProxy)
+	})
 
 	return result
 }
