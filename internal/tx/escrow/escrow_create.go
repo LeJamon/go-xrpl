@@ -209,6 +209,20 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
+	// Token escrow preclaim validation
+	// Reference: rippled Escrow.cpp EscrowCreate::preclaim() lines 362-395
+	if !isNative && rules.Enabled(amendment.FeatureTokenEscrow) {
+		if e.Amount.IsMPT() {
+			if result := escrowCreatePreclaimMPT(ctx.View, rules, ctx.AccountID, destID, e.Amount); result != tx.TesSUCCESS {
+				return result
+			}
+		} else {
+			if result := escrowCreatePreclaimIOU(ctx.View, ctx.AccountID, destID, e.Amount); result != tx.TesSUCCESS {
+				return result
+			}
+		}
+	}
+
 	// Reserve check
 	// Reference: rippled Escrow.cpp:496-509
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
@@ -244,8 +258,34 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	escrowKey := keylet.Escrow(accountID, sequence)
 
+	// Capture transfer rate at escrow creation time.
+	// This is stored in the escrow SLE so that at finish time the effective
+	// rate is min(locked rate, current rate), protecting the destination from
+	// issuer rate increases.
+	// Reference: rippled Escrow.cpp EscrowCreate::doApply() lines 527-545
+	var capturedTransferRate uint32
+	if rules.Enabled(amendment.FeatureTokenEscrow) && !isNative {
+		if e.Amount.IsMPT() {
+			// MPT: get rate from issuance TransferFee
+			mptKey, mptErr := mptIssuanceKeyFromHex(e.Amount.MPTIssuanceID())
+			if mptErr == nil {
+				issuanceData, _ := ctx.View.Read(mptKey)
+				if issuanceData != nil {
+					issuance, _ := state.ParseMPTokenIssuance(issuanceData)
+					if issuance != nil {
+						capturedTransferRate = getMPTTransferRate(issuance.TransferFee)
+					}
+				}
+			}
+		} else {
+			// IOU: get rate from issuer account
+			issuerID, _ := state.DecodeAccountID(e.Amount.Issuer)
+			capturedTransferRate = getTransferRateForIssuer(ctx.View, issuerID)
+		}
+	}
+
 	// Serialize escrow
-	escrowData, err := serializeEscrow(e, accountID, destID, sequence, 0)
+	escrowData, err := serializeEscrow(e, accountID, destID, sequence, capturedTransferRate)
 	if err != nil {
 		ctx.Log.Error("escrow create: failed to serialize escrow", "error", err)
 		return tx.TefINTERNAL
@@ -305,8 +345,14 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	if isNative {
 		// XRP: deduct from account balance
 		ctx.Account.Balance -= uint64(e.Amount.Drops())
+	} else if e.Amount.IsMPT() {
+		// MPT: lock via MPToken/MPTIssuance fields
+		// Reference: rippled View.cpp rippleLockEscrowMPT()
+		if lockResult := escrowLockMPT(ctx.View, accountID, e.Amount); lockResult != tx.TesSUCCESS {
+			return lockResult
+		}
 	} else {
-		// IOU: lock via trust line (rippleCredit sender → issuer)
+		// IOU: lock via trust line (rippleCredit sender -> issuer)
 		// Reference: rippled escrowLockApplyHelper<Issue>
 		issuerID, issuerErr := state.DecodeAccountID(e.Amount.Issuer)
 		if issuerErr != nil {
