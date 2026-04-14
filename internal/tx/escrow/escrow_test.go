@@ -3,6 +3,7 @@ package escrow
 import (
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
@@ -77,6 +78,38 @@ func TestEscrowCreateValidation(t *testing.T) {
 			escrow: &EscrowCreate{
 				BaseTx:      *tx.NewBaseTx(tx.TypeEscrowCreate, "rAlice"),
 				Amount:      tx.NewIssuedAmountFromFloat64(100.0, "USD", "rGateway"),
+				Destination: "rBob",
+				FinishAfter: ptrUint32(700000000),
+			},
+			expectError: false,
+		},
+		{
+			name: "IOU with bad currency (XRP) - temBAD_CURRENCY",
+			escrow: &EscrowCreate{
+				BaseTx:      *tx.NewBaseTx(tx.TypeEscrowCreate, "rAlice"),
+				Amount:      tx.NewIssuedAmountFromFloat64(100.0, "XRP", "rGateway"),
+				Destination: "rBob",
+				FinishAfter: ptrUint32(700000000),
+			},
+			expectError: true,
+			errorMsg:    "temBAD_CURRENCY: cannot escrow XRP as IOU",
+		},
+		{
+			name: "IOU with empty currency - temBAD_CURRENCY",
+			escrow: &EscrowCreate{
+				BaseTx:      *tx.NewBaseTx(tx.TypeEscrowCreate, "rAlice"),
+				Amount:      tx.NewIssuedAmountFromFloat64(100.0, "", "rGateway"),
+				Destination: "rBob",
+				FinishAfter: ptrUint32(700000000),
+			},
+			expectError: true,
+			errorMsg:    "temBAD_CURRENCY: cannot escrow XRP as IOU",
+		},
+		{
+			name: "MPT amount at maximum - valid",
+			escrow: &EscrowCreate{
+				BaseTx:      *tx.NewBaseTx(tx.TypeEscrowCreate, "rAlice"),
+				Amount:      state.NewMPTAmountWithIssuanceID(0x7FFFFFFFFFFFFFFF, "rIssuer", "00000001A407AF5856CFF3379E2FFDDB66CA1AF87C78C5D2"),
 				Destination: "rBob",
 				FinishAfter: ptrUint32(700000000),
 			},

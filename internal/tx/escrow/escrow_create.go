@@ -13,6 +13,10 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
+// maxMPTokenAmount is the maximum MPT value (int64 max).
+// Reference: rippled include/xrpl/protocol/STAmount.h maxMPTokenAmount
+const maxMPTokenAmount int64 = 0x7FFFFFFFFFFFFFFF // 9223372036854775807
+
 func init() {
 	tx.Register(tx.TypeEscrowCreate, func() tx.Transaction {
 		return &EscrowCreate{BaseTx: *tx.NewBaseTx(tx.TypeEscrowCreate, "")}
@@ -80,8 +84,23 @@ func (e *EscrowCreate) Validate() error {
 		return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
 	}
 
-	// Non-XRP amounts require featureTokenEscrow (checked in Apply where rules are available).
-	// Reference: rippled Escrow.cpp:131-148
+	// Non-XRP preflight validation (amendment check deferred to Apply)
+	// Reference: rippled Escrow.cpp preflight lines 94-119
+	if !e.Amount.IsNative() {
+		if e.Amount.IsMPT() {
+			// MPT: check max amount
+			if raw, ok := e.Amount.MPTRaw(); ok {
+				if raw > maxMPTokenAmount {
+					return tx.Errorf(tx.TemBAD_AMOUNT, "MPT amount exceeds maximum")
+				}
+			}
+		} else {
+			// IOU: check bad currency (XRP as currency code is invalid)
+			if e.Amount.Currency == "" || e.Amount.Currency == "XRP" {
+				return tx.Errorf(tx.TemBAD_CURRENCY, "cannot escrow XRP as IOU")
+			}
+		}
+	}
 
 	// Must have at least one timeout value
 	// Reference: rippled Escrow.cpp:151-152
