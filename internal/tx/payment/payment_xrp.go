@@ -83,12 +83,8 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 		// This allows accounts to indicate they don't want to receive XRP
 		// Reference: this matches rippled behavior for direct XRP payments
 		if (destAccount.Flags & state.LsfDisallowXRP) != 0 {
-			senderAccountID, err := state.DecodeAccountID(ctx.Account.Account)
-			if err != nil {
-				return tx.TefINTERNAL
-			}
 			// Only reject if sender is not the destination (self-payments are allowed)
-			if senderAccountID != destAccountID {
+			if ctx.AccountID != destAccountID {
 				return tx.TecNO_TARGET
 			}
 		}
