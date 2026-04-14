@@ -245,7 +245,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	escrowKey := keylet.Escrow(accountID, sequence)
 
 	// Serialize escrow
-	escrowData, err := serializeEscrow(e, accountID, destID, sequence)
+	escrowData, err := serializeEscrow(e, accountID, destID, sequence, 0)
 	if err != nil {
 		ctx.Log.Error("escrow create: failed to serialize escrow", "error", err)
 		return tx.TefINTERNAL
@@ -328,8 +328,10 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 // serializeEscrow serializes an Escrow ledger entry.
 // For XRP escrows, Amount is a drops string. For IOU escrows, Amount is the
-// full IOU object (value/currency/issuer).
-func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint32) ([]byte, error) {
+// full IOU object (value/currency/issuer). For MPT escrows, Amount is
+// {value, mpt_issuance_id}. transferRate is stored when non-zero and not
+// equal to the parity rate (1_000_000_000).
+func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint32, transferRate uint32) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -340,10 +342,16 @@ func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint3
 		return nil, fmt.Errorf("failed to encode destination address: %w", err)
 	}
 
-	// Amount: XRP uses a drops string, IOU uses {value, currency, issuer} map.
+	// Amount: XRP uses a drops string, IOU uses {value, currency, issuer},
+	// MPT uses {value, mpt_issuance_id}.
 	var amountVal any
 	if txn.Amount.IsNative() {
 		amountVal = fmt.Sprintf("%d", txn.Amount.Drops())
+	} else if txn.Amount.IsMPT() {
+		amountVal = map[string]any{
+			"value":            txn.Amount.Value(),
+			"mpt_issuance_id": txn.Amount.MPTIssuanceID(),
+		}
 	} else {
 		amountVal = map[string]any{
 			"value":    txn.Amount.Value(),
@@ -380,6 +388,10 @@ func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint3
 
 	if txn.DestinationTag != nil {
 		jsonObj["DestinationTag"] = *txn.DestinationTag
+	}
+
+	if transferRate > 0 && transferRate != 1_000_000_000 {
+		jsonObj["TransferRate"] = transferRate
 	}
 
 	hexStr, err := binarycodec.Encode(jsonObj)
