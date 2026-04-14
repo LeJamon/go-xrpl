@@ -144,6 +144,8 @@ const (
 	AccountSetFlagDisallowIncomingTrustline uint32 = 15
 	// asfAllowTrustLineClawback enables clawback on trust lines
 	AccountSetFlagAllowTrustLineClawback uint32 = 16
+	// asfAllowTrustLineLocking enables trust-line locking for token escrow
+	AccountSetFlagAllowTrustLineLocking uint32 = 17
 )
 
 // NewAccountSet creates a new AccountSet transaction
@@ -491,6 +493,16 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled SetAccount.cpp doApply() lines 663-668
 	if ctx.Rules().Enabled(amendment.FeatureClawback) && uSetFlag == AccountSetFlagAllowTrustLineClawback {
 		uFlagsOut |= state.LsfAllowTrustLineClawback
+	}
+
+	// AllowTrustLineLocking (gated by featureTokenEscrow)
+	if ctx.Rules().Enabled(amendment.FeatureTokenEscrow) {
+		if uSetFlag == AccountSetFlagAllowTrustLineLocking && (uFlagsIn&state.LsfAllowTrustLineLocking) == 0 {
+			uFlagsOut |= state.LsfAllowTrustLineLocking
+		}
+		if uClearFlag == AccountSetFlagAllowTrustLineLocking && (uFlagsIn&state.LsfAllowTrustLineLocking) != 0 {
+			uFlagsOut &^= state.LsfAllowTrustLineLocking
+		}
 	}
 
 	// Domain

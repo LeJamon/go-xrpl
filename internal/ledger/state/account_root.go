@@ -125,6 +125,9 @@ const (
 	// LsfDisallowIncomingTrustline disallows incoming trust lines
 	LsfDisallowIncomingTrustline uint32 = 0x20000000
 
+	// LsfAllowTrustLineLocking allows trust-line locking for token escrow
+	LsfAllowTrustLineLocking uint32 = 0x40000000
+
 	// LsfAllowTrustLineClawback allows clawback on issued currencies
 	// Once set, this flag CANNOT be cleared
 	LsfAllowTrustLineClawback uint32 = 0x80000000
