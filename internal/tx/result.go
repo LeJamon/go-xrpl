@@ -127,6 +127,7 @@ const (
 	TecLOCKED                             Result = 192
 	TecBAD_CREDENTIALS                    Result = 193
 	TecWRONG_ASSET                        Result = 194
+	TecLIMIT_EXCEEDED                     Result = 195
 	TecPSEUDO_ACCOUNT                     Result = 196
 	TecPRECISION_LOSS                     Result = 197
 	TecNO_DELEGATE_PERMISSION             Result = 198
@@ -398,6 +399,8 @@ func (r Result) String() string {
 		return "tecHOOK_REJECTED"
 	case TecWRONG_ASSET:
 		return "tecWRONG_ASSET"
+	case TecLIMIT_EXCEEDED:
+		return "tecLIMIT_EXCEEDED"
 	case TecPSEUDO_ACCOUNT:
 		return "tecPSEUDO_ACCOUNT"
 	case TecPRECISION_LOSS:
