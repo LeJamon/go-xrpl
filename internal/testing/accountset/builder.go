@@ -168,6 +168,14 @@ func (b *AccountSetBuilder) AllowClawback() *AccountSetBuilder {
 	return b
 }
 
+// AllowTrustLineLocking enables trust-line locking for token escrow.
+// Requires the FeatureTokenEscrow amendment to be enabled.
+func (b *AccountSetBuilder) AllowTrustLineLocking() *AccountSetBuilder {
+	flag := accounttx.AccountSetFlagAllowTrustLineLocking
+	b.setFlag = &flag
+	return b
+}
+
 // AuthorizedMinter sets the account as an authorized NFToken minter.
 // Reference: rippled's token::setMinter(account, minter).
 func (b *AccountSetBuilder) AuthorizedMinter(minter *testing.Account) *AccountSetBuilder {
