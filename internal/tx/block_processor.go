@@ -61,8 +61,8 @@ func NewBlockProcessor(engine *Engine) *BlockProcessor {
 // ApplyTransaction applies a single transaction and returns the result.
 // It handles:
 // - Calling the engine to apply the transaction
-// - Assigning the transaction index
 // - Creating the tx+meta blob
+// The engine assigns TransactionIndex in metadata for applied transactions.
 func (bp *BlockProcessor) ApplyTransaction(transaction Transaction, txBlob []byte) (BlockTxResult, error) {
 	result := BlockTxResult{
 		Index:     bp.txIndex,
@@ -87,19 +87,16 @@ func (bp *BlockProcessor) ApplyTransaction(transaction Transaction, txBlob []byt
 	}
 	result.ApplyResult = applyResult
 
-	// Set the transaction index in the metadata
-	if applyResult.Metadata != nil {
-		applyResult.Metadata.TransactionIndex = bp.txIndex
-	}
-
-	// Create the tx+meta blob for the transaction tree
+	// Create the tx+meta blob for the transaction tree.
+	// The engine assigns TransactionIndex in metadata for applied transactions
+	// (matching rippled's txCount-based indexing), so we don't overwrite it here.
 	txWithMetaBlob, err := CreateTxWithMetaBlob(txBlob, applyResult.Metadata)
 	if err != nil {
 		return result, err
 	}
 	result.TxWithMetaBlob = txWithMetaBlob
 
-	// Increment the transaction index for the next transaction
+	// Increment the processing order counter for the next transaction
 	bp.txIndex++
 
 	return result, nil
