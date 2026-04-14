@@ -291,13 +291,12 @@ func ScaleFeeLevel(snapshot Snapshot, txInLedger uint32) FeeLevel {
 
 	// Compute escalated fee level:
 	// fee_level = multiplier * (current^2) / (target^2)
+	// Uses mulDiv for overflow-safe 128-bit intermediate arithmetic,
+	// matching rippled's scaleFeeLevel which saturates to max on overflow.
 	current := uint64(txInLedger)
 	target := uint64(snapshot.TxnsExpected)
 
-	numerator := snapshot.EscalationMultiplier * current * current
-	denominator := target * target
-
-	return FeeLevel(numerator / denominator)
+	return FeeLevel(mulDiv(snapshot.EscalationMultiplier, current*current, target*target))
 }
 
 // EscalatedSeriesFeeLevel computes the total fee level required for a series
