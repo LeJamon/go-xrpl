@@ -299,7 +299,6 @@ type txqTestConfig struct {
 // Helper to create *uint32 from a literal.
 func u32(v uint32) *uint32 { return &v }
 
-
 // txqConfigLookup maps TxQ fixture test case names to their full
 // TxQ configuration from rippled TxQ_test.cpp makeConfig() calls.
 // Each test's makeConfig overrides are faithfully transcribed here.
@@ -420,9 +419,9 @@ type feeVoteConfig struct {
 // fee-voting mechanism, reducing reserves from genesis values (200 XRP) to
 // test config values (200 drops).
 var feeVoteLookup = map[string]feeVoteConfig{
-	"ripple.app.PayChan/Account Delete":        {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
-	"ripple.app.AMM/Auto Delete":               {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 257},
-	"ripple.app.AccountDelete/Resurrection":    {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
+	"ripple.app.PayChan/Account Delete":     {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
+	"ripple.app.AMM/Auto Delete":            {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 257},
+	"ripple.app.AccountDelete/Resurrection": {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
 }
 
 // txqTimeLeapLookup maps TxQ fixture test case names to the step indices

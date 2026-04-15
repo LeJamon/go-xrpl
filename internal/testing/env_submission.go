@@ -858,19 +858,6 @@ func applyCanonicalSort(txns []tx.Transaction, entries []canonicalEntry, salt [3
 	copy(txns, sorted)
 }
 
-// sortCanonicalWithSalt sorts transactions using the production CanonicalTXSet
-// ordering with a pre-computed salt. Used when the fixture provides the exact
-// tx_set_hash from rippled, so we can match rippled's transaction ordering
-// without needing to compute the salt ourselves.
-// Reference: rippled CanonicalTXSet.cpp
-func sortCanonicalWithSalt(txns []tx.Transaction, salt [32]byte) {
-	if len(txns) <= 1 {
-		return
-	}
-	entries := buildCanonicalEntries(txns)
-	applyCanonicalSort(txns, entries, salt)
-}
-
 // sortCanonicalSalted sorts transactions using the production CanonicalTXSet
 // ordering from rippled. The sort key is (accountKey, sequence, txHash) where
 // accountKey = accountID XOR salt. The salt is the SHAMap root hash built from
