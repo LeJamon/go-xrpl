@@ -253,6 +253,14 @@ type runner struct {
 	// retried during TxQ::accept() on ledger close.
 	pendingQueued []tx.Transaction
 
+	// disabledTxBySeq maps (account address, sequence) to transactions that
+	// returned temDISABLED. When the BumpSequenceAndDeductAmount path bumps
+	// the sequence past one of these, the stored transaction is resubmitted
+	// instead of a plain sequence bump. This matches rippled's behavior where
+	// the open ledger retains submitted transactions and re-applies them when
+	// the required amendment is later enabled.
+	disabledTxBySeq map[string]tx.Transaction // key: "address:seq"
+
 	// initFee stores the post-initFee fee configuration for fixtures that
 	// use rippled's initFee() pattern. Applied after the initial close sequence.
 	initFee *initFeeConfig
@@ -579,6 +587,7 @@ func RunFixture(t *testing.T, fixturePath string) {
 						r.feeVoteApplied = false
 						r.pendingHeld = nil
 						r.pendingQueued = nil
+						r.disabledTxBySeq = nil
 						r.setupEnv(r.lastEnvCfg)
 					}
 				}
@@ -803,6 +812,7 @@ func (r *runner) setupEnv(cfg EnvConfig) {
 	// consuming a sequence number in the new scope and causing tefPAST_SEQ.
 	r.pendingHeld = nil
 	r.pendingQueued = nil
+	r.disabledTxBySeq = nil
 	genCfg := genesis.DefaultConfig()
 	genCfg.Fees.BaseFee = drops.NewXRPAmount(int64(cfg.BaseFee))
 	genCfg.Fees.ReserveBase = drops.XRPAmount(cfg.ReserveBase)
@@ -1159,7 +1169,21 @@ func (r *runner) execTx(stepIdx int, step Step) {
 						}
 					}
 					for currentSeq < targetSeq {
-						r.env.BumpSequenceAndDeductAmount(acc, bumpFee)
+						// Check if this sequence corresponds to a previously
+						// temDISABLED transaction. If so, resubmit that
+						// transaction instead of a plain sequence bump. The
+						// amendment may now be enabled, so the transaction
+						// should pass preflight and be applied normally.
+						// This matches rippled's open ledger behavior where
+						// submitted transactions are retained and re-applied
+						// when the required amendment is enabled.
+						key := fmt.Sprintf("%s:%d", common.Account, currentSeq)
+						if disabledTx, ok := r.disabledTxBySeq[key]; ok {
+							delete(r.disabledTxBySeq, key)
+							r.env.Submit(disabledTx)
+						} else {
+							r.env.BumpSequenceAndDeductAmount(acc, bumpFee)
+						}
 						currentSeq++
 					}
 					result = r.env.Submit(parsed)
@@ -1211,6 +1235,20 @@ func (r *runner) execTx(stepIdx int, step Step) {
 			r.pendingHeld = append(r.pendingHeld, parsed)
 		} else if strings.HasPrefix(result.Code, "ter") && result.Code != "terNO_ACCOUNT" {
 			r.pendingQueued = append(r.pendingQueued, parsed)
+		}
+	}
+
+	// Store temDISABLED transactions keyed by (account, sequence) so they
+	// can be replayed when BumpSequenceAndDeductAmount hits a gap that
+	// matches a previously-disabled transaction.
+	if result.Code == "temDISABLED" {
+		common := parsed.GetCommon()
+		if common.Account != "" && common.Sequence != nil {
+			key := fmt.Sprintf("%s:%d", common.Account, *common.Sequence)
+			if r.disabledTxBySeq == nil {
+				r.disabledTxBySeq = make(map[string]tx.Transaction)
+			}
+			r.disabledTxBySeq[key] = parsed
 		}
 	}
 
