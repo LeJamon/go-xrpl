@@ -192,7 +192,7 @@ func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
 		LedgerIndex: ledgerSeq,
 		LedgerHash:  l.Hash(),
 		Validated:   l.IsValidated(),
-		TxIndex:     0, // TODO: Track transaction index within ledger
+		TxIndex:     s.txPositionIndex[txHash],
 	}, nil
 }
 

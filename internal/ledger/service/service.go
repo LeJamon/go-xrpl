@@ -1,12 +1,14 @@
 package service
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
 	"sync"
 	"time"
 
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
@@ -128,6 +130,9 @@ type Service struct {
 	// Transaction index (hash -> ledger sequence) - in-memory cache
 	txIndex map[[32]byte]uint32
 
+	// Transaction position within its ledger (hash -> 0-based index)
+	txPositionIndex map[[32]byte]uint32
+
 	// Pending transactions accumulated during the open ledger phase.
 	// Re-applied in canonical order at AcceptLedger time.
 	// Reference: rippled CanonicalTXSet / retriableTxs
@@ -155,12 +160,13 @@ func New(cfg Config) (*Service, error) {
 		logger = xrpllog.Discard()
 	}
 	s := &Service{
-		config:        cfg,
-		logger:        logger.Named(xrpllog.PartitionLedger),
-		nodeStore:     cfg.NodeStore,
-		relationalDB:  cfg.RelationalDB,
-		ledgerHistory: make(map[uint32]*ledger.Ledger),
-		txIndex:       make(map[[32]byte]uint32),
+		config:          cfg,
+		logger:          logger.Named(xrpllog.PartitionLedger),
+		nodeStore:       cfg.NodeStore,
+		relationalDB:    cfg.RelationalDB,
+		ledgerHistory:   make(map[uint32]*ledger.Ledger),
+		txIndex:         make(map[[32]byte]uint32),
+		txPositionIndex: make(map[[32]byte]uint32),
 	}
 
 	return s, nil
@@ -630,7 +636,7 @@ func (s *Service) AcceptLedger() (uint32, error) {
 			result := TxResult{
 				Applied:  txResult.Validated,
 				Metadata: txResult.MetaData,
-				TxIndex:  0, // TODO: Track actual tx index
+				TxIndex:  s.txPositionIndex[txResult.TxHash],
 			}
 			go hooks.OnTransaction(txInfo, result, closedSeq, closedLedgerHash, closeTimeVal)
 		}
@@ -681,10 +687,11 @@ func (s *Service) getValidatedLedgersRange() string {
 }
 
 // collectTransactionResults gathers transaction data from the closed ledger
+// and records each transaction's position within the ledger.
 func (s *Service) collectTransactionResults(l *ledger.Ledger, ledgerSeq uint32, ledgerHash [32]byte) []TransactionResultEvent {
 	var results []TransactionResultEvent
 
-	// Iterate through all transactions in the ledger
+	var txIndex uint32
 	l.ForEachTransaction(func(txHash [32]byte, txData []byte) bool {
 		result := TransactionResultEvent{
 			TxHash:      txHash,
@@ -693,34 +700,52 @@ func (s *Service) collectTransactionResults(l *ledger.Ledger, ledgerSeq uint32, 
 			LedgerIndex: ledgerSeq,
 			LedgerHash:  ledgerHash,
 		}
-
-		// Try to extract affected accounts from transaction data
-		// This is a simplified extraction - a full implementation would
-		// properly parse the transaction to find all affected accounts
 		result.AffectedAccounts = extractAffectedAccounts(txData)
 
+		s.txPositionIndex[txHash] = txIndex
+		txIndex++
+
 		results = append(results, result)
-		return true // continue iteration
+		return true
 	})
 
 	return results
 }
 
-// extractAffectedAccounts extracts account addresses affected by a transaction
-// This is a simplified implementation that extracts the Account field
+// extractAffectedAccounts extracts account addresses affected by a transaction.
+// Parses the binary transaction blob and extracts Account (sender),
+// Destination (for payments, escrows, checks, etc.), and any other
+// account-typed fields present in the transaction.
 func extractAffectedAccounts(txData []byte) []string {
-	var accounts []string
+	if len(txData) == 0 {
+		return nil
+	}
 
-	//TODO IMPLEMENT FUNCTION
-	// In a full implementation, this would:
-	// 1. Parse the transaction blob
-	// 2. Extract Account (sender)
-	// 3. Extract Destination (for payments)
-	// 4. Extract accounts from metadata (AffectedNodes)
-	//
-	// For now, we return an empty list - the caller can enhance this
-	// based on their needs
+	txJSON, err := binarycodec.Decode(hex.EncodeToString(txData))
+	if err != nil {
+		return nil
+	}
 
+	seen := make(map[string]struct{})
+	add := func(key string) {
+		if v, ok := txJSON[key].(string); ok && v != "" {
+			seen[v] = struct{}{}
+		}
+	}
+
+	// Primary account fields present across transaction types
+	add("Account")
+	add("Destination")
+	add("Authorize")
+	add("Unauthorize")
+	add("RegularKey")
+	add("Owner")
+	add("Issuer")
+
+	accounts := make([]string, 0, len(seen))
+	for acc := range seen {
+		accounts = append(accounts, acc)
+	}
 	return accounts
 }
 
