@@ -837,13 +837,30 @@ func (e *Engine) phaseOpen() {
 }
 
 // closeLedger transitions from open to establish phase.
+// Reference: rippled Consensus.h closeLedger() (~line 1434)
 func (e *Engine) closeLedger() {
 	// Build our transaction set from pending transactions
 	txs := e.adaptor.GetPendingTxs()
 	txSet, err := e.adaptor.BuildTxSet(txs)
 	if err != nil {
-		// TODO: handle error
-		return
+		slog.Error("Failed to build tx set, falling back to empty set",
+			"t", "Consensus",
+			"round", e.state.Round,
+			"pending_txs", len(txs),
+			"err", err,
+		)
+
+		// Fall back to an empty tx set so consensus can still advance.
+		txSet, err = e.adaptor.BuildTxSet(nil)
+		if err != nil {
+			slog.Error("Failed to build empty tx set, cannot close ledger",
+				"t", "Consensus",
+				"round", e.state.Round,
+				"err", err,
+			)
+			e.setMode(consensus.ModeObserving)
+			return
+		}
 	}
 	e.ourTxSet = txSet
 
