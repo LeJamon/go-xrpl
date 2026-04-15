@@ -220,11 +220,28 @@ func (t *ApplyStateTable) AdjustDropsDestroyed(drops drops.XRPAmount) {
 	t.drops = t.drops.Add(drops)
 }
 
-// ForEach iterates over all state entries
+// ForEach iterates over all state entries, reflecting local modifications.
+// Locally inserted and modified entries use their current data.
+// Locally erased entries are skipped.
+// Base entries not touched locally are passed through unchanged.
 func (t *ApplyStateTable) ForEach(fn func(key [32]byte, data []byte) bool) error {
-	// This needs to iterate over base plus our modifications
-	// For now, delegate to base (this is typically only used for debugging)
-	return t.base.ForEach(fn)
+	// First, yield all locally tracked entries (inserts, modifications, cached reads)
+	for key, entry := range t.items {
+		if entry.Action == ActionErase {
+			continue
+		}
+		if !fn(key, entry.Current) {
+			return nil
+		}
+	}
+
+	// Then iterate the base, skipping any key already in our local items
+	return t.base.ForEach(func(key [32]byte, data []byte) bool {
+		if _, exists := t.items[key]; exists {
+			return true // already yielded or erased — skip
+		}
+		return fn(key, data)
+	})
 }
 
 // Succ returns the first entry with key > the given key.
