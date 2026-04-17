@@ -470,6 +470,15 @@ func (o *Overlay) dispatchReplayDeltaRequest(evt Event) {
 // crash the dispatch loop. The handler is responsible for emitting an
 // EventReplayDeltaReceived (after framing validation) for the downstream
 // fast-catchup consumer.
+//
+// TODO(p2p): there is currently NO consumer of EventReplayDeltaReceived in
+// production code. The handler will keep emitting events into the events
+// channel where the overlay's eventLoop has no case to drain them — the
+// non-blocking pushReceivedEvent send protects against deadlock, but
+// responses are silently lost until a fast-catchup orchestrator subscribes
+// to and processes the event (header deserialization, ledger-hash
+// recomputation, tx SHAMap reconstruction — all of which require
+// internal/ledger and crypto packages that this layer cannot import).
 func (o *Overlay) dispatchReplayDeltaResponse(evt Event) {
 	decoded, err := message.Decode(message.TypeReplayDeltaResponse, evt.Payload)
 	if err != nil {

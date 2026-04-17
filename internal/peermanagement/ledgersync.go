@@ -493,32 +493,6 @@ func (h *LedgerSyncHandler) sendReplayDeltaResponse(peerID PeerID, resp *message
 	}
 }
 
-// ReplayDeltaReceived is the typed payload mirrored by EventReplayDeltaReceived.
-//
-// The fields come straight from the wire response with no parsing or
-// verification performed by the peermanagement layer — that work belongs to
-// the consumer (which can import internal/ledger and crypto packages without
-// violating layering rules). The Event delivered on the events channel
-// carries the re-encoded *message.ReplayDeltaResponse in Event.Payload (see
-// EventLedgerResponse for the same shape). Consumers decode via
-// message.Decode(message.TypeReplayDeltaResponse, evt.Payload).
-//
-// This struct is exported as a documentation handle for the field set the
-// consumer should expect after decoding.
-type ReplayDeltaReceived struct {
-	// LedgerHash is the 32-byte hash echoed back by the peer.
-	LedgerHash []byte
-	// LedgerHeader is the XRPL-binary-encoded LedgerInfo. The consumer must
-	// deserialize, recompute the ledger hash, and compare it against
-	// LedgerHash before trusting any of the fields.
-	LedgerHeader []byte
-	// Transactions is the ordered list of (tx + metadata) leaf blobs that
-	// rippled would have packed via SHAMap iteration. The consumer must
-	// rebuild the tx SHAMap and verify its root matches the txHash field of
-	// the deserialized header before applying anything.
-	Transactions [][]byte
-}
-
 // handleReplayDeltaResponse processes an inbound mtREPLAY_DELTA_RESPONSE and,
 // on a well-formed payload, forwards a re-encoded copy via the events channel
 // as EventReplayDeltaReceived for downstream consumption (fast-catchup).
