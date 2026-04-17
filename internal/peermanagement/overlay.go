@@ -400,6 +400,17 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		return
 	}
 
+	// Serve mtPROOF_PATH_REQ from the local ledger sync handler. Mirrors
+	// rippled's PeerImp::onMessage(TMProofPathRequest) which delegates to
+	// LedgerReplayMsgHandler::processProofPathRequest. The request is
+	// addressed at us — responses are pushed back via the events channel
+	// as EventLedgerResponse. We do not forward inbound requests to
+	// external consumers; only the internal handler answers them.
+	if msgType == message.TypeProofPathReq {
+		o.dispatchProofPathRequest(evt)
+		return
+	}
+
 	slog.Debug("Message received", "t", "Overlay", "type", msgType.String(), "peer", evt.PeerID, "size", len(evt.Payload))
 
 	// Forward to external consumers
@@ -438,6 +449,33 @@ func (o *Overlay) dispatchReplayDeltaRequest(evt Event) {
 	}
 	if err := o.ledgerSync.HandleMessage(o.ctx, evt.PeerID, req); err != nil {
 		slog.Debug("ReplayDeltaRequest handler error", "t", "Overlay", "peer", evt.PeerID, "err", err)
+	}
+}
+
+// dispatchProofPathRequest decodes an inbound mtPROOF_PATH_REQ frame and
+// routes it to the local LedgerSyncHandler. Decode failures are logged
+// and dropped silently — a malformed request from a peer should not
+// crash the dispatch loop.
+//
+// TODO(p2p): the production code currently never calls
+// LedgerSyncHandler.SetProvider, so this handler will short-circuit with
+// no response until the ledger service is wired through. The wiring
+// point should call o.ledgerSync.SetProvider(adapter) once an adapter
+// that implements LedgerProvider over internal/ledger/service is
+// available (importing internal/ledger from this package is a layering
+// violation, so the adapter must live with the wiring code, not here).
+func (o *Overlay) dispatchProofPathRequest(evt Event) {
+	decoded, err := message.Decode(message.TypeProofPathReq, evt.Payload)
+	if err != nil {
+		slog.Debug("ProofPathRequest decode failed", "t", "Overlay", "peer", evt.PeerID, "err", err)
+		return
+	}
+	req, ok := decoded.(*message.ProofPathRequest)
+	if !ok {
+		return
+	}
+	if err := o.ledgerSync.HandleMessage(o.ctx, evt.PeerID, req); err != nil {
+		slog.Debug("ProofPathRequest handler error", "t", "Overlay", "peer", evt.PeerID, "err", err)
 	}
 }
 

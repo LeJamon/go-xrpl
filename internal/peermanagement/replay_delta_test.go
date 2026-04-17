@@ -33,6 +33,9 @@ func (f *fakeReplayDeltaProvider) GetReplayDelta(_ []byte) ([]byte, [][]byte, er
 	f.calls++
 	return f.header, f.txLeaves, f.err
 }
+func (f *fakeReplayDeltaProvider) GetProofPath(_ []byte, _ []byte, _ message.LedgerMapType) ([]byte, [][]byte, error) {
+	return nil, nil, nil
+}
 
 // fixedHash returns a 32-byte ledger hash whose contents are predictable
 // so test assertions remain stable across runs.

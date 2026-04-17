@@ -2,11 +2,29 @@ package peermanagement
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+)
+
+// Sentinel errors returned by LedgerProvider.GetProofPath so the handler
+// can map them back to the appropriate TMReplyError code on the wire.
+//
+// Mirrors rippled's reNO_LEDGER (ledger unknown / not yet immutable) and
+// reNO_NODE (the requested key is not present in the selected map) at
+// rippled/src/xrpld/app/ledger/detail/LedgerReplayMsgHandler.cpp:62-90.
+var (
+	// ErrLedgerNotFound signals the requested ledger is unknown to the
+	// provider or not yet immutable. The handler responds with
+	// ReplyErrorNoLedger.
+	ErrLedgerNotFound = errors.New("ledger not found")
+	// ErrKeyNotFound signals the ledger exists but the requested key has
+	// no leaf in the selected map. The handler responds with
+	// ReplyErrorNoNode.
+	ErrKeyNotFound = errors.New("key not found in ledger map")
 )
 
 // LedgerDataType represents the type of ledger data being requested.
@@ -90,6 +108,32 @@ type LedgerProvider interface {
 	// is unknown or not yet immutable, return (nil, nil, nil) so the
 	// handler can reply with reNO_LEDGER.
 	GetReplayDelta(ledgerHash []byte) (header []byte, txLeaves [][]byte, err error)
+	// GetProofPath returns the serialized ledger header and the wire-order
+	// node path proving the existence of `key` in the requested map of
+	// the given ledger. mapType selects the source map:
+	//   - LedgerMapTransaction (1)  → tx map
+	//   - LedgerMapAccountState (2) → account-state map
+	//
+	// Wire path orientation is leaf-to-root, matching both
+	// shamap.GetProofPath and rippled's SHAMap::getProofPath
+	// (rippled/src/xrpld/shamap/detail/SHAMapSync.cpp:800-833) — that
+	// implementation pops a stack whose top is the leaf, yielding
+	// leaf-first blobs which are then verified by reverse iteration in
+	// SHAMap::verifyProofPath (same file, line 847).
+	//
+	// Return contract:
+	//   - (nil, nil, ErrLedgerNotFound) when the ledger is unknown or not
+	//     yet immutable. The handler emits ReplyErrorNoLedger.
+	//   - (nil, nil, ErrKeyNotFound) when the ledger exists but the key
+	//     has no leaf in the selected map. The handler emits
+	//     ReplyErrorNoNode. Rippled returns reNO_NODE without a header
+	//     in this case (LedgerReplayMsgHandler.cpp:84-90, where header
+	//     packing happens AFTER the no-path early-return), so we mirror
+	//     that and do not require the header here.
+	//   - (header, path, nil) on success.
+	//   - any other error → handler emits ReplyErrorBadRequest and logs
+	//     at warn.
+	GetProofPath(ledgerHash []byte, key []byte, mapType message.LedgerMapType) (header []byte, path [][]byte, err error)
 }
 
 // LedgerSyncHandler handles ledger synchronization messages.
@@ -228,10 +272,117 @@ func (h *LedgerSyncHandler) handleLedgerData(ctx context.Context, peerID PeerID,
 	return nil
 }
 
-// handleProofPathRequest handles proof path requests.
-func (h *LedgerSyncHandler) handleProofPathRequest(ctx context.Context, peerID PeerID, req *message.ProofPathRequest) error {
-	// TODO: Implement proof path generation
+// handleProofPathRequest serves an inbound mtPROOF_PATH_REQ.
+//
+// Mirrors rippled's LedgerReplayMsgHandler::processProofPathRequest
+// (rippled/src/xrpld/app/ledger/detail/LedgerReplayMsgHandler.cpp:40-104):
+//  1. Validate len(key) == 32, len(ledgerHash) == 32, type ∈ {1, 2}.
+//     Any failure → reply with reBAD_REQUEST. The fields key/ledgerHash/
+//     type are echoed back on every reply, even on validation errors —
+//     rippled sets them before any further checks.
+//  2. Look up the ledger by hash. Missing → reBAD_REQUEST is wrong; the
+//     spec says reNO_LEDGER. Provider returns ErrLedgerNotFound here.
+//  3. Walk the selected map (tx or account-state) toward the key. If the
+//     key has no leaf → reNO_NODE (provider returns ErrKeyNotFound).
+//     Note: rippled does NOT pack the ledger header on this path — the
+//     header packing at LedgerReplayMsgHandler.cpp:92-95 runs only after
+//     the no-node early-return, so the reply contains key/ledgerHash/
+//     type and the error code only.
+//  4. On success, emit (header, path) with leaf-to-root path order
+//     matching rippled's wire format (see GetProofPath docstring).
+//
+// The encoded response is pushed onto the events channel as
+// EventLedgerResponse so the overlay can ship it to the requesting peer
+// (mirrors handleGetLedger and handleReplayDeltaRequest).
+func (h *LedgerSyncHandler) handleProofPathRequest(_ context.Context, peerID PeerID, req *message.ProofPathRequest) error {
+	// Validate up-front: independent of any configured provider, matching
+	// rippled's ordering at LedgerReplayMsgHandler.cpp:46-54.
+	if len(req.Key) != 32 || len(req.LedgerHash) != 32 ||
+		(req.MapType != message.LedgerMapTransaction && req.MapType != message.LedgerMapAccountState) {
+		h.sendProofPathResponse(peerID, &message.ProofPathResponse{
+			Key:        req.Key,
+			LedgerHash: req.LedgerHash,
+			MapType:    req.MapType,
+			Error:      message.ReplyErrorBadRequest,
+		})
+		return nil
+	}
+
+	h.mu.RLock()
+	provider := h.provider
+	h.mu.RUnlock()
+
+	if provider == nil {
+		// No provider wired: silently drop (matches handleGetLedger and
+		// handleReplayDeltaRequest).
+		return nil
+	}
+
+	header, path, err := provider.GetProofPath(req.LedgerHash, req.Key, req.MapType)
+	switch {
+	case errors.Is(err, ErrLedgerNotFound):
+		h.sendProofPathResponse(peerID, &message.ProofPathResponse{
+			Key:        req.Key,
+			LedgerHash: req.LedgerHash,
+			MapType:    req.MapType,
+			Error:      message.ReplyErrorNoLedger,
+		})
+		return nil
+	case errors.Is(err, ErrKeyNotFound):
+		// Rippled does not pack the header on the no-node path —
+		// LedgerReplayMsgHandler.cpp:84-90 returns before the header is
+		// serialized at line 92. Mirror that here.
+		h.sendProofPathResponse(peerID, &message.ProofPathResponse{
+			Key:        req.Key,
+			LedgerHash: req.LedgerHash,
+			MapType:    req.MapType,
+			Error:      message.ReplyErrorNoNode,
+		})
+		return nil
+	case err != nil:
+		slog.Warn("ProofPath provider error",
+			"t", "LedgerSync",
+			"peer", peerID,
+			"err", err,
+		)
+		h.sendProofPathResponse(peerID, &message.ProofPathResponse{
+			Key:        req.Key,
+			LedgerHash: req.LedgerHash,
+			MapType:    req.MapType,
+			Error:      message.ReplyErrorBadRequest,
+		})
+		return nil
+	}
+
+	h.sendProofPathResponse(peerID, &message.ProofPathResponse{
+		Key:          req.Key,
+		LedgerHash:   req.LedgerHash,
+		MapType:      req.MapType,
+		LedgerHeader: header,
+		Path:         path,
+	})
 	return nil
+}
+
+// sendProofPathResponse encodes the response and best-effort delivers it
+// onto the events channel for the overlay to ship to the requesting peer.
+// Drops the response (with a warn log) if the events channel is full —
+// same non-blocking pattern as sendReplayDeltaResponse.
+func (h *LedgerSyncHandler) sendProofPathResponse(peerID PeerID, resp *message.ProofPathResponse) {
+	if h.events == nil {
+		return
+	}
+	encoded, err := message.Encode(resp)
+	if err != nil {
+		slog.Warn("ProofPath encode failed", "t", "LedgerSync", "peer", peerID, "err", err)
+		return
+	}
+	select {
+	case h.events <- Event{Type: EventLedgerResponse, PeerID: peerID, Payload: encoded}:
+	default:
+		slog.Warn("ProofPath response dropped: events channel full",
+			"t", "LedgerSync", "peer", peerID, "bytes", len(encoded))
+	}
 }
 
 // handleProofPathResponse handles proof path responses.
