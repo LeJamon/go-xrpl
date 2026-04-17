@@ -105,6 +105,20 @@ func (s *OverlaySender) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, 
 	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
 }
 
+// RequestReplayDelta asks a specific peer for a fast-catchup replay delta
+// (header + every tx blob, in tx-map order) for the given ledger hash.
+// Mirrors rippled's LedgerDeltaAcquire::trigger which sends a
+// TMReplayDeltaRequest via PeerSet::sendRequest
+// (rippled/src/xrpld/app/ledger/detail/LedgerDeltaAcquire.cpp:124-156).
+func (s *OverlaySender) RequestReplayDelta(peerID uint64, hash [32]byte) error {
+	msg := &message.ReplayDeltaRequest{LedgerHash: hash[:]}
+	frame, err := encodeFrame(message.TypeReplayDeltaReq, msg)
+	if err != nil {
+		return fmt.Errorf("encode replay delta request: %w", err)
+	}
+	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
+}
+
 // RequestStateNodes sends a GetLedger request for account state SHAMap nodes.
 func (s *OverlaySender) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
 	msg := &message.GetLedger{

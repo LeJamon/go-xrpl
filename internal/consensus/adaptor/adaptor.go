@@ -33,6 +33,7 @@ type NetworkSender interface {
 	RequestLedger(id consensus.LedgerID) error
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error
 	RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error
+	RequestReplayDelta(peerID uint64, hash [32]byte) error
 	RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error
 	SendToPeer(peerID uint64, frame []byte) error
 }
@@ -48,6 +49,7 @@ func (n *noopSender) RequestTxSet(consensus.TxSetID) error                     {
 func (n *noopSender) RequestLedger(consensus.LedgerID) error                   { return nil }
 func (n *noopSender) RequestLedgerByHashAndSeq([32]byte, uint32) error         { return nil }
 func (n *noopSender) RequestLedgerBaseFromPeer(uint64, [32]byte, uint32) error { return nil }
+func (n *noopSender) RequestReplayDelta(uint64, [32]byte) error                { return nil }
 func (n *noopSender) RequestStateNodes(uint64, [32]byte, [][]byte) error       { return nil }
 func (n *noopSender) SendToPeer(uint64, []byte) error                          { return nil }
 
@@ -156,8 +158,32 @@ func (a *Adaptor) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq ui
 	return a.sender.RequestLedgerBaseFromPeer(peerID, hash, seq)
 }
 
+// RequestReplayDelta delegates to the network sender. Mirrors the
+// outbound side of rippled's LedgerDeltaAcquire which sends a single
+// TMReplayDeltaRequest and awaits one TMReplayDeltaResponse.
+func (a *Adaptor) RequestReplayDelta(peerID uint64, hash [32]byte) error {
+	return a.sender.RequestReplayDelta(peerID, hash)
+}
+
 func (a *Adaptor) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
 	return a.sender.RequestStateNodes(peerID, ledgerHash, nodeIDs)
+}
+
+// GetParentLedgerForReplay returns the validated ledger at seq-1, which is
+// the prior ledger needed to replay a delta into seq. Returns nil if the
+// parent is unknown or the request is for a ledger we cannot anchor on
+// (seq <= 1, no service wired). Mirrors the rippled
+// LedgerDeltaAcquire::trigger requirement that the parent ledger is
+// already locally available before issuing the delta request.
+func (a *Adaptor) GetParentLedgerForReplay(seq uint32) *ledger.Ledger {
+	if seq <= 1 || a.ledgerService == nil {
+		return nil
+	}
+	parent, err := a.ledgerService.GetLedgerBySequence(seq - 1)
+	if err != nil || parent == nil {
+		return nil
+	}
+	return parent
 }
 
 func (a *Adaptor) SendToPeer(peerID uint64, frame []byte) error {
