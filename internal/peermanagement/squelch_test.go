@@ -161,6 +161,51 @@ func TestPeerSquelchExpire_FiltersThenAllowsAfterExpiry(t *testing.T) {
 	assert.False(t, stillThere, "expired entry should have been cleared")
 }
 
+// TestBroadcastFromValidator_SkipsSquelchedPeers verifies the outbound
+// reduce-relay filter: a validator-originated message is delivered to all
+// connected peers EXCEPT those that have squelched the originating
+// validator. Mirrors rippled PeerImp.cpp:240-256.
+func TestBroadcastFromValidator_SkipsSquelchedPeers(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	o := &Overlay{
+		peers:  make(map[PeerID]*Peer),
+		events: make(chan Event, 8),
+	}
+
+	endpoint := Endpoint{Host: "127.0.0.1", Port: 51235}
+	allowed := NewPeer(PeerID(1), endpoint, false, id, make(chan Event, 1))
+	squelched := NewPeer(PeerID(2), endpoint, false, id, make(chan Event, 1))
+
+	allowed.setState(PeerStateConnected)
+	squelched.setState(PeerStateConnected)
+
+	o.peers[allowed.ID()] = allowed
+	o.peers[squelched.ID()] = squelched
+
+	validator := []byte("validator-V")
+	require.True(t, squelched.AddSquelch(validator, MinUnsquelchExpire))
+
+	payload := []byte("validation-frame")
+	require.NoError(t, o.BroadcastFromValidator(validator, payload))
+
+	// `allowed` must have received exactly the payload.
+	select {
+	case got := <-allowed.send:
+		assert.Equal(t, payload, got)
+	default:
+		t.Fatal("allowed peer did not receive the broadcast")
+	}
+
+	// `squelched` must NOT have received anything.
+	select {
+	case got := <-squelched.send:
+		t.Fatalf("squelched peer received a frame it should have been filtered: %q", got)
+	default:
+	}
+}
+
 // TestPeerAddSquelch_RejectsInvalidDuration verifies that AddSquelch
 // rejects out-of-range durations and clears any prior squelch (matching
 // rippled Squelch::addSquelch semantics).

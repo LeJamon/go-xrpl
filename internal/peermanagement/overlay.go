@@ -655,15 +655,9 @@ func (o *Overlay) Connect(addr string) error {
 
 // Broadcast sends a message to all connected peers.
 //
-// TODO(reduce-relay): For mtVALIDATION/mtPROPOSE_LEDGER specifically, the
-// outbound path must consult Peer.ExpireSquelch(validatorPubKey) and skip
-// peers that have squelched the originating validator. Today this Broadcast
-// is validator-key-blind (raw bytes only), so the per-peer squelch state
-// added in handleSquelch is enforced for inbound state changes only.
-// Wiring requires either a BroadcastFromValidator(key, msg) variant or a
-// higher-level relay path that decodes the proposal/validation to extract
-// the pubkey before fanout. See rippled PeerImp.cpp:240-256 for the
-// reference filter.
+// Use BroadcastFromValidator for messages originating from a specific
+// validator (mtVALIDATION, mtPROPOSE_LEDGER) so the reduce-relay squelch
+// filter is honored.
 func (o *Overlay) Broadcast(msg []byte) error {
 	o.peersMu.RLock()
 	defer o.peersMu.RUnlock()
@@ -672,6 +666,27 @@ func (o *Overlay) Broadcast(msg []byte) error {
 		if peer.State() == PeerStateConnected {
 			peer.Send(msg)
 		}
+	}
+	return nil
+}
+
+// BroadcastFromValidator sends a validator-originated message (proposal or
+// validation) to all connected peers, skipping peers that have squelched the
+// originating validator. Mirrors rippled's per-peer squelch filter at
+// PeerImp.cpp:240-256: the squelch is consulted before each outbound send,
+// and expired squelches auto-clear via Peer.ExpireSquelch.
+func (o *Overlay) BroadcastFromValidator(validator []byte, msg []byte) error {
+	o.peersMu.RLock()
+	defer o.peersMu.RUnlock()
+
+	for _, peer := range o.peers {
+		if peer.State() != PeerStateConnected {
+			continue
+		}
+		if !peer.ExpireSquelch(validator) {
+			continue
+		}
+		peer.Send(msg)
 	}
 	return nil
 }

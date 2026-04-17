@@ -25,7 +25,7 @@ func (s *OverlaySender) BroadcastProposal(proposal *consensus.Proposal) error {
 	if err != nil {
 		return fmt.Errorf("encode proposal: %w", err)
 	}
-	return s.overlay.Broadcast(frame)
+	return s.overlay.BroadcastFromValidator(proposal.NodeID[:], frame)
 }
 
 func (s *OverlaySender) BroadcastValidation(validation *consensus.Validation) error {
@@ -34,7 +34,7 @@ func (s *OverlaySender) BroadcastValidation(validation *consensus.Validation) er
 	if err != nil {
 		return fmt.Errorf("encode validation: %w", err)
 	}
-	return s.overlay.Broadcast(frame)
+	return s.overlay.BroadcastFromValidator(validation.NodeID[:], frame)
 }
 
 func (s *OverlaySender) RelayProposal(proposal *consensus.Proposal) error {
