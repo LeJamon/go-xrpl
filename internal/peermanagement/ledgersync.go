@@ -493,10 +493,96 @@ func (h *LedgerSyncHandler) sendReplayDeltaResponse(peerID PeerID, resp *message
 	}
 }
 
-// handleReplayDeltaResponse handles replay delta responses.
-func (h *LedgerSyncHandler) handleReplayDeltaResponse(ctx context.Context, peerID PeerID, resp *message.ReplayDeltaResponse) error {
-	// TODO: Process replay delta
+// ReplayDeltaReceived is the typed payload mirrored by EventReplayDeltaReceived.
+//
+// The fields come straight from the wire response with no parsing or
+// verification performed by the peermanagement layer — that work belongs to
+// the consumer (which can import internal/ledger and crypto packages without
+// violating layering rules). The Event delivered on the events channel
+// carries the re-encoded *message.ReplayDeltaResponse in Event.Payload (see
+// EventLedgerResponse for the same shape). Consumers decode via
+// message.Decode(message.TypeReplayDeltaResponse, evt.Payload).
+//
+// This struct is exported as a documentation handle for the field set the
+// consumer should expect after decoding.
+type ReplayDeltaReceived struct {
+	// LedgerHash is the 32-byte hash echoed back by the peer.
+	LedgerHash []byte
+	// LedgerHeader is the XRPL-binary-encoded LedgerInfo. The consumer must
+	// deserialize, recompute the ledger hash, and compare it against
+	// LedgerHash before trusting any of the fields.
+	LedgerHeader []byte
+	// Transactions is the ordered list of (tx + metadata) leaf blobs that
+	// rippled would have packed via SHAMap iteration. The consumer must
+	// rebuild the tx SHAMap and verify its root matches the txHash field of
+	// the deserialized header before applying anything.
+	Transactions [][]byte
+}
+
+// handleReplayDeltaResponse processes an inbound mtREPLAY_DELTA_RESPONSE and,
+// on a well-formed payload, forwards a re-encoded copy via the events channel
+// as EventReplayDeltaReceived for downstream consumption (fast-catchup).
+//
+// Mirrors rippled's LedgerReplayMsgHandler::processReplayDeltaResponse
+// (rippled/src/xrpld/app/ledger/detail/LedgerReplayMsgHandler.cpp:221-293)
+// only at the framing-validity layer — header deserialization, ledger-hash
+// recomputation, per-tx parsing and tx-map reconstruction are all deferred to
+// the consumer. The peermanagement package must NOT import internal/ledger or
+// crypto/, so we cannot perform any of those checks here.
+//
+// Drop conditions (no event emitted, no error returned):
+//   - Error flag is non-zero (peer signaled it could not satisfy the
+//     request — there's no payload to surface).
+//   - LedgerHash, LedgerHeader, or Transactions is empty/nil — without all
+//     three, the consumer cannot do anything useful with the response.
+//
+// We do not have a peer-charging system, so malformed responses are silently
+// dropped at debug level; this matches how the rest of this handler treats
+// unverifiable inputs.
+func (h *LedgerSyncHandler) handleReplayDeltaResponse(_ context.Context, peerID PeerID, resp *message.ReplayDeltaResponse) error {
+	if resp.Error != message.ReplyErrorNone {
+		slog.Debug("ReplayDeltaResponse: peer signaled error",
+			"t", "LedgerSync", "peer", peerID, "err", resp.Error)
+		return nil
+	}
+	if len(resp.LedgerHash) == 0 || len(resp.LedgerHeader) == 0 || len(resp.Transactions) == 0 {
+		slog.Debug("ReplayDeltaResponse: dropping malformed payload",
+			"t", "LedgerSync", "peer", peerID,
+			"hash_len", len(resp.LedgerHash),
+			"header_len", len(resp.LedgerHeader),
+			"tx_count", len(resp.Transactions),
+		)
+		return nil
+	}
+
+	// Re-encode to keep the on-channel payload shape consistent with the
+	// other ledger-sync events (EventLedgerResponse), so a single consumer
+	// pattern (message.Decode + type assertion) covers both directions.
+	encoded, err := message.Encode(resp)
+	if err != nil {
+		slog.Warn("ReplayDeltaResponse re-encode failed",
+			"t", "LedgerSync", "peer", peerID, "err", err)
+		return nil
+	}
+	h.pushEvent(EventReplayDeltaReceived, peerID, encoded)
 	return nil
+}
+
+// pushEvent best-effort delivers an event onto the handler's event channel
+// using the same non-blocking pattern as sendReplayDeltaResponse and
+// sendProofPathResponse: a full channel results in a warn-level drop log
+// rather than a deadlock on the dispatch path.
+func (h *LedgerSyncHandler) pushEvent(eventType EventType, peerID PeerID, payload []byte) {
+	if h.events == nil {
+		return
+	}
+	select {
+	case h.events <- Event{Type: eventType, PeerID: peerID, Payload: payload}:
+	default:
+		slog.Warn("Event dropped: events channel full",
+			"t", "LedgerSync", "type", eventType.String(),
+			"peer", peerID, "bytes", len(payload))
+	}
 }
 
 // CreateRequest creates a new ledger data request.

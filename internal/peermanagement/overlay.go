@@ -411,6 +411,18 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		return
 	}
 
+	// Consume mtREPLAY_DELTA_RESPONSE from the local ledger sync handler.
+	// Mirrors rippled's PeerImp::onMessage(TMReplayDeltaResponse) which
+	// delegates to LedgerReplayMsgHandler::processReplayDeltaResponse. The
+	// response answers a request WE sent earlier; the handler validates
+	// framing and re-publishes the payload as EventReplayDeltaReceived for
+	// the downstream fast-catchup consumer. We do not forward responses to
+	// external Messages() consumers — only the internal handler routes them.
+	if msgType == message.TypeReplayDeltaResponse {
+		o.dispatchReplayDeltaResponse(evt)
+		return
+	}
+
 	slog.Debug("Message received", "t", "Overlay", "type", msgType.String(), "peer", evt.PeerID, "size", len(evt.Payload))
 
 	// Forward to external consumers
@@ -449,6 +461,27 @@ func (o *Overlay) dispatchReplayDeltaRequest(evt Event) {
 	}
 	if err := o.ledgerSync.HandleMessage(o.ctx, evt.PeerID, req); err != nil {
 		slog.Debug("ReplayDeltaRequest handler error", "t", "Overlay", "peer", evt.PeerID, "err", err)
+	}
+}
+
+// dispatchReplayDeltaResponse decodes an inbound mtREPLAY_DELTA_RESPONSE
+// frame and routes it to the local LedgerSyncHandler. Decode failures are
+// logged and dropped silently — a malformed response from a peer should not
+// crash the dispatch loop. The handler is responsible for emitting an
+// EventReplayDeltaReceived (after framing validation) for the downstream
+// fast-catchup consumer.
+func (o *Overlay) dispatchReplayDeltaResponse(evt Event) {
+	decoded, err := message.Decode(message.TypeReplayDeltaResponse, evt.Payload)
+	if err != nil {
+		slog.Debug("ReplayDeltaResponse decode failed", "t", "Overlay", "peer", evt.PeerID, "err", err)
+		return
+	}
+	resp, ok := decoded.(*message.ReplayDeltaResponse)
+	if !ok {
+		return
+	}
+	if err := o.ledgerSync.HandleMessage(o.ctx, evt.PeerID, resp); err != nil {
+		slog.Debug("ReplayDeltaResponse handler error", "t", "Overlay", "peer", evt.PeerID, "err", err)
 	}
 }
 

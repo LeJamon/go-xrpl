@@ -79,6 +79,18 @@ const (
 
 	// EventLedgerResponse is emitted when ledger data needs to be sent to a peer.
 	EventLedgerResponse
+
+	// EventReplayDeltaReceived is emitted when a peer responds to one of our
+	// outbound mtREPLAY_DELTA_REQUEST messages with a non-error payload that
+	// at minimum carries the ledger hash, the serialized ledger header, and
+	// at least one transaction blob. The peermanagement layer performs no
+	// header deserialization or hash verification — it forwards the raw
+	// (re-encoded) protobuf payload so that the consumer (which can import
+	// the ledger / crypto packages without violating layering rules) can
+	// validate the response and orchestrate fast-catchup. The payload is
+	// the wire-encoded *message.ReplayDeltaResponse, decoded via
+	// message.Decode(message.TypeReplayDeltaResponse, evt.Payload).
+	EventReplayDeltaReceived
 )
 
 // String returns the string representation of an EventType.
@@ -102,6 +114,8 @@ func (e EventType) String() string {
 		return "EndpointsReceived"
 	case EventLedgerResponse:
 		return "LedgerResponse"
+	case EventReplayDeltaReceived:
+		return "ReplayDeltaReceived"
 	default:
 		return "Unknown"
 	}
