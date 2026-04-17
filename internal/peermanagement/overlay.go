@@ -416,17 +416,13 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		return
 	}
 
-	// Consume mtREPLAY_DELTA_RESPONSE from the local ledger sync handler.
-	// Mirrors rippled's PeerImp::onMessage(TMReplayDeltaResponse) which
-	// delegates to LedgerReplayMsgHandler::processReplayDeltaResponse. The
-	// response answers a request WE sent earlier; the handler validates
-	// framing and re-publishes the payload as EventReplayDeltaReceived for
-	// the downstream fast-catchup consumer. We do not forward responses to
-	// external Messages() consumers — only the internal handler routes them.
-	if msgType == message.TypeReplayDeltaResponse {
-		o.dispatchReplayDeltaResponse(evt)
-		return
-	}
+	// mtREPLAY_DELTA_RESPONSE is NOT intercepted here. Like every other
+	// peer-originated reply (mtLEDGER_DATA, mtTRANSACTION, mtVALIDATION),
+	// it must reach the consensus router via the overlay's Messages()
+	// channel. The router maintains the matching InboundReplayDelta state
+	// and is the only place that can verify the response and adopt the
+	// resulting ledger. Mirrors rippled's PeerImp dispatching the message
+	// through the same path it dispatches all consensus traffic.
 
 	slog.Debug("Message received", "t", "Overlay", "type", msgType.String(), "peer", evt.PeerID, "size", len(evt.Payload))
 
@@ -461,36 +457,6 @@ func (o *Overlay) dispatchReplayDeltaRequest(evt Event) {
 	}
 	if err := o.ledgerSync.HandleMessage(o.ctx, evt.PeerID, req); err != nil {
 		slog.Debug("ReplayDeltaRequest handler error", "t", "Overlay", "peer", evt.PeerID, "err", err)
-	}
-}
-
-// dispatchReplayDeltaResponse decodes an inbound mtREPLAY_DELTA_RESPONSE
-// frame and routes it to the local LedgerSyncHandler. Decode failures are
-// logged and dropped silently — a malformed response from a peer should not
-// crash the dispatch loop. The handler is responsible for emitting an
-// EventReplayDeltaReceived (after framing validation) for the downstream
-// fast-catchup consumer.
-//
-// TODO(p2p): there is currently NO consumer of EventReplayDeltaReceived in
-// production code. The handler will keep emitting events into the events
-// channel where the overlay's eventLoop has no case to drain them — the
-// non-blocking pushReceivedEvent send protects against deadlock, but
-// responses are silently lost until a fast-catchup orchestrator subscribes
-// to and processes the event (header deserialization, ledger-hash
-// recomputation, tx SHAMap reconstruction — all of which require
-// internal/ledger and crypto packages that this layer cannot import).
-func (o *Overlay) dispatchReplayDeltaResponse(evt Event) {
-	decoded, err := message.Decode(message.TypeReplayDeltaResponse, evt.Payload)
-	if err != nil {
-		slog.Debug("ReplayDeltaResponse decode failed", "t", "Overlay", "peer", evt.PeerID, "err", err)
-		return
-	}
-	resp, ok := decoded.(*message.ReplayDeltaResponse)
-	if !ok {
-		return
-	}
-	if err := o.ledgerSync.HandleMessage(o.ctx, evt.PeerID, resp); err != nil {
-		slog.Debug("ReplayDeltaResponse handler error", "t", "Overlay", "peer", evt.PeerID, "err", err)
 	}
 }
 

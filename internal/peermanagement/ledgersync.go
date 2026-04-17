@@ -187,6 +187,13 @@ func (h *LedgerSyncHandler) SetProvider(provider LedgerProvider) {
 }
 
 // HandleMessage handles a ledger sync message.
+//
+// mtREPLAY_DELTA_RESPONSE intentionally has no arm here: orchestration of an
+// outbound replay-delta acquisition (state machine, hash verification,
+// adoption) lives in the consensus router, which receives the response via
+// the overlay's Messages() channel. Delivering the response twice — once to
+// the router, once to this handler — would create competing consumers and a
+// race on the inbound-acquisition state.
 func (h *LedgerSyncHandler) HandleMessage(ctx context.Context, peerID PeerID, msg message.Message) error {
 	switch m := msg.(type) {
 	case *message.GetLedger:
@@ -199,8 +206,6 @@ func (h *LedgerSyncHandler) HandleMessage(ctx context.Context, peerID PeerID, ms
 		return h.handleProofPathResponse(ctx, peerID, m)
 	case *message.ReplayDeltaRequest:
 		return h.handleReplayDeltaRequest(ctx, peerID, m)
-	case *message.ReplayDeltaResponse:
-		return h.handleReplayDeltaResponse(ctx, peerID, m)
 	}
 	return nil
 }
@@ -490,76 +495,6 @@ func (h *LedgerSyncHandler) sendReplayDeltaResponse(peerID PeerID, resp *message
 	default:
 		slog.Warn("ReplayDelta response dropped: events channel full",
 			"t", "LedgerSync", "peer", peerID, "bytes", len(encoded))
-	}
-}
-
-// handleReplayDeltaResponse processes an inbound mtREPLAY_DELTA_RESPONSE and,
-// on a well-formed payload, forwards a re-encoded copy via the events channel
-// as EventReplayDeltaReceived for downstream consumption (fast-catchup).
-//
-// Mirrors rippled's LedgerReplayMsgHandler::processReplayDeltaResponse
-// (rippled/src/xrpld/app/ledger/detail/LedgerReplayMsgHandler.cpp:221-293)
-// only at the framing-validity layer — header deserialization, ledger-hash
-// recomputation, per-tx parsing and tx-map reconstruction are all deferred to
-// the consumer. The peermanagement package must NOT import internal/ledger or
-// crypto/, so we cannot perform any of those checks here.
-//
-// Drop conditions (no event emitted, no error returned):
-//   - Error flag is non-zero (peer signaled it could not satisfy the
-//     request — there's no payload to surface).
-//   - LedgerHash, LedgerHeader, or Transactions is empty/nil — without all
-//     three, the consumer cannot do anything useful with the response.
-//
-// We do not have a peer-charging system, so malformed responses are silently
-// dropped at debug level; this matches how the rest of this handler treats
-// unverifiable inputs.
-func (h *LedgerSyncHandler) handleReplayDeltaResponse(_ context.Context, peerID PeerID, resp *message.ReplayDeltaResponse) error {
-	if resp.Error != message.ReplyErrorNone {
-		slog.Debug("ReplayDeltaResponse: peer signaled error",
-			"t", "LedgerSync", "peer", peerID, "err", resp.Error)
-		return nil
-	}
-	if len(resp.LedgerHash) == 0 || len(resp.LedgerHeader) == 0 || len(resp.Transactions) == 0 {
-		slog.Debug("ReplayDeltaResponse: dropping malformed payload",
-			"t", "LedgerSync", "peer", peerID,
-			"hash_len", len(resp.LedgerHash),
-			"header_len", len(resp.LedgerHeader),
-			"tx_count", len(resp.Transactions),
-		)
-		return nil
-	}
-
-	// Re-encode to keep the on-channel payload shape consistent with the
-	// other ledger-sync events (EventLedgerResponse), so a single consumer
-	// pattern (message.Decode + type assertion) covers both directions.
-	encoded, err := message.Encode(resp)
-	if err != nil {
-		slog.Warn("ReplayDeltaResponse re-encode failed",
-			"t", "LedgerSync", "peer", peerID, "err", err)
-		return nil
-	}
-	h.pushReceivedEvent(EventReplayDeltaReceived, peerID, encoded)
-	return nil
-}
-
-// pushReceivedEvent best-effort delivers an INBOUND event (one we received
-// from a peer and are surfacing to downstream consumers) onto the handler's
-// event channel. Distinct from sendReplayDeltaResponse / sendProofPathResponse
-// which encode + emit OUTBOUND EventLedgerResponse events to be shipped to
-// peers — those responsibilities (encoding the wire form, choosing the egress
-// event type) must not be folded into this helper. Same non-blocking
-// select-default pattern: a full channel yields a warn-level drop, never a
-// deadlock on the dispatch path.
-func (h *LedgerSyncHandler) pushReceivedEvent(eventType EventType, peerID PeerID, payload []byte) {
-	if h.events == nil {
-		return
-	}
-	select {
-	case h.events <- Event{Type: eventType, PeerID: peerID, Payload: payload}:
-	default:
-		slog.Warn("Event dropped: events channel full",
-			"t", "LedgerSync", "type", eventType.String(),
-			"peer", peerID, "bytes", len(payload))
 	}
 }
 
