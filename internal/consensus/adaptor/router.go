@@ -371,8 +371,38 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 			}
 		}
 
+		// Hash-divergence catch-up. A late-join node (or a node whose
+		// consensus ran in isolation while disconnected) can end up at
+		// the same seq as its peers but with a different ledger hash.
+		// The seq-based branches above don't fire because ourSeq ==
+		// peerSeq; we need to detect that our LCL hash differs from the
+		// peer's and acquire theirs. Mirrors rippled's wrongLedger mode
+		// recovery path where the node asks a peer for the fork it's
+		// seeing network consensus on. Only fire if we're NOT already
+		// acquiring that hash (startLedgerAcquisition dedupes internally
+		// via the replayer / inboundLedger guards, but checking here
+		// saves a lookup in the hot path).
+		svc := r.adaptor.LedgerService()
+		if svc != nil && sc.LedgerSeq > 1 && len(sc.LedgerHash) == 32 {
+			closed := svc.GetClosedLedger()
+			if closed != nil {
+				ourSeq := closed.Sequence()
+				ourHash := closed.Hash()
+				if ourSeq == sc.LedgerSeq && ourHash != peerHash {
+					r.logger.Warn("ledger hash divergence at same seq, acquiring peer's ledger",
+						"seq", sc.LedgerSeq,
+						"our_hash", fmt.Sprintf("%x", ourHash[:8]),
+						"peer_hash", fmt.Sprintf("%x", peerHash[:8]),
+						"peer", msg.PeerID,
+					)
+					r.startLedgerAcquisition(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
+					return
+				}
+			}
+		}
+
 		// Check if we're behind and need to catch up
-		r.checkBehind(sc.LedgerSeq, peerHash)
+		r.checkBehind(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
 	}
 }
 
@@ -577,19 +607,18 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger) error {
 
 // checkBehind compares the peer's ledger seq to ours and handles
 // catch-up. When we're within 1 ledger of the peer and not yet in Full
-// mode, transitions to Full to start consensus.
+// mode, transitions to Full to start consensus. When we're behind by
+// more than 1 seq, arms an acquisition for the peer's tip.
 //
-// Scope note (Gap 7): this function currently fires acquisition for
-// only the single peer-advertised tip. A true range-based walk would
-// fan out across every missing seq between ourLCL+1 and peerSeq, but
-// that requires knowing the intermediate ledger hashes — which we
-// only discover by walking backward from the tip via header.ParentHash
-// (mirroring rippled's LedgerReplayer backward chain). Since the
-// Replayer coordinator now supports concurrent in-flight acquisitions,
-// that backward-walk policy is a follow-up item — landing the
-// coordinator and migrating off the single-slot field is the bounded
-// deliverable for this task.
-func (r *Router) checkBehind(peerSeq uint32, peerHash [32]byte) {
+// Scope note (Gap 7): fires acquisition for only the single
+// peer-advertised tip. A true range-based walk would fan out across
+// every missing seq between ourLCL+1 and peerSeq via header.ParentHash
+// (mirroring rippled's LedgerReplayer backward chain). The Replayer
+// coordinator supports concurrent in-flight acquisitions, so the
+// backward-walk policy is a follow-up; this function handles the
+// common one-step-behind case and chains forward as new status changes
+// arrive.
+func (r *Router) checkBehind(peerSeq uint32, peerHash [32]byte, peerID uint64) {
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
 		return
@@ -617,16 +646,20 @@ func (r *Router) checkBehind(peerSeq uint32, peerHash [32]byte) {
 		return
 	}
 
-	r.logger.Info("behind network",
+	r.logger.Info("behind network, acquiring peer tip",
 		"our_seq", ourSeq,
 		"peer_seq", peerSeq,
 		"gap", peerSeq-ourSeq,
+		"peer", peerID,
 	)
 
-	// Request the peer's closed ledger by hash and sequence
-	if err := r.adaptor.RequestLedgerByHashAndSeq(peerHash, peerSeq); err != nil {
-		r.logger.Debug("failed to request ledger", "seq", peerSeq, "error", err)
-	}
+	// Arm a real acquisition instead of broadcasting a bare
+	// mtGET_LEDGER. RequestLedgerByHashAndSeq would broadcast the
+	// request but never arm the InboundLedger state machine, so any
+	// response would arrive with no active consumer and be dropped.
+	// startLedgerAcquisition picks replay-delta or legacy per the
+	// routing policy and both paths install their own state machines.
+	r.startLedgerAcquisition(peerSeq, peerHash, peerID)
 }
 
 // ourLCLMatchesPeers checks if our closed ledger hash matches what the
