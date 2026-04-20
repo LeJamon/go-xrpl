@@ -145,7 +145,6 @@ type LedgerSyncHandler struct {
 
 	// Request callbacks
 	onLedgerData func(ctx context.Context, peerID PeerID, data *message.LedgerData)
-	onProofPath  func(ctx context.Context, peerID PeerID, response *message.ProofPathResponse)
 
 	// Data provider for responding to requests
 	provider LedgerProvider
@@ -172,13 +171,6 @@ func (h *LedgerSyncHandler) SetLedgerDataCallback(fn func(ctx context.Context, p
 	h.onLedgerData = fn
 }
 
-// SetProofPathCallback sets the callback for incoming proof paths.
-func (h *LedgerSyncHandler) SetProofPathCallback(fn func(ctx context.Context, peerID PeerID, response *message.ProofPathResponse)) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.onProofPath = fn
-}
-
 // SetProvider sets the ledger data provider for responding to requests.
 func (h *LedgerSyncHandler) SetProvider(provider LedgerProvider) {
 	h.mu.Lock()
@@ -202,8 +194,6 @@ func (h *LedgerSyncHandler) HandleMessage(ctx context.Context, peerID PeerID, ms
 		return h.handleLedgerData(ctx, peerID, m)
 	case *message.ProofPathRequest:
 		return h.handleProofPathRequest(ctx, peerID, m)
-	case *message.ProofPathResponse:
-		return h.handleProofPathResponse(ctx, peerID, m)
 	case *message.ReplayDeltaRequest:
 		return h.handleReplayDeltaRequest(ctx, peerID, m)
 	}
@@ -388,19 +378,6 @@ func (h *LedgerSyncHandler) sendProofPathResponse(peerID PeerID, resp *message.P
 		slog.Warn("ProofPath response dropped: events channel full",
 			"t", "LedgerSync", "peer", peerID, "bytes", len(encoded))
 	}
-}
-
-// handleProofPathResponse handles proof path responses.
-func (h *LedgerSyncHandler) handleProofPathResponse(ctx context.Context, peerID PeerID, resp *message.ProofPathResponse) error {
-	h.mu.RLock()
-	callback := h.onProofPath
-	h.mu.RUnlock()
-
-	if callback != nil {
-		callback(ctx, peerID, resp)
-	}
-
-	return nil
 }
 
 // handleReplayDeltaRequest serves an inbound mtREPLAY_DELTA_REQUEST.
