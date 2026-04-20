@@ -16,6 +16,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/shamap"
 )
@@ -107,6 +108,11 @@ func (r *ReplayDelta) Hash() [32]byte { return r.hash }
 
 // PeerID returns the peer we asked for the delta.
 func (r *ReplayDelta) PeerID() uint64 { return r.peerID }
+
+// Parent returns the parent ledger this acquisition is anchored on.
+// Used by the consensus router to source per-ledger engine config (fees,
+// amendment rules) before invoking Apply().
+func (r *ReplayDelta) Parent() *ledger.Ledger { return r.parent }
 
 // Seq returns the ledger sequence under acquisition. Derived from the
 // parent ledger because the request itself only carries the hash.
@@ -337,6 +343,215 @@ func (r *ReplayDelta) AdvanceCreatedForTest(delta time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.created = r.created.Add(-delta)
+}
+
+// AppendTxForTest appends a synthetic DecodedTx to r.txs so a sibling
+// package's test can simulate a peer sending a divergent tx set
+// (e.g., a duplicate hash that triggers tefALREADY on the second
+// apply). Production code never calls this — it lives outside a
+// *_test.go because it must be reachable from internal/testing/p2p.
+func (r *ReplayDelta) AppendTxForTest(dtx DecodedTx) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.txs = append(r.txs, dtx)
+}
+
+// Apply re-derives the new ledger by replaying every orderedTx through the
+// engine against a mutable copy of the parent's state, then verifies the
+// resulting state-map and tx-map roots match the target header.
+//
+// Mirrors rippled's BuildLedger.cpp::buildLedger (replay variant): build a
+// child of parent at header.closeTime, apply each tx in TransactionIndex
+// order (naturally assigned by the engine), commit, verify both roots.
+//
+// Returns the fully-derived ledger on success, or an error with a clear
+// divergence marker on failure. Only call after IsComplete(); errors here
+// mean either the peer lied or our engine diverges from rippled.
+//
+// The supplied EngineConfig provides shared (non-per-ledger) settings
+// (BaseFee, ReserveBase, NetworkID, Logger, etc.). Per-ledger fields
+// — LedgerSequence, ParentCloseTime, ParentHash, Rules — are overridden
+// here from the verified target header / parent.
+//
+// Reference:
+//   - rippled/src/xrpld/app/ledger/detail/BuildLedger.cpp:225-248
+//   - rippled/src/xrpld/app/ledger/detail/BuildLedger.cpp:38-86
+func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.state != StateComplete {
+		return nil, fmt.Errorf("Apply called before response verified (state=%d)", r.state)
+	}
+	if r.parent == nil {
+		return nil, errors.New("cannot apply replay delta without parent ledger")
+	}
+	if r.result == nil {
+		return nil, errors.New("verified result missing — replay delta state corrupt")
+	}
+
+	// The header verified by GotResponse is the one carried in r.result.
+	// Use it as the source of truth for per-ledger fields the engine
+	// needs — close time, sequence, drops baseline, target hashes.
+	hdr := r.result.Header()
+
+	// Build a mutable child ledger anchored on the parent. Mirror
+	// rippled's Ledger(parent, closeTime) constructor: child inherits
+	// the parent's totalCoins and chains its parent linkage from the
+	// PARENT (not the deserialized response header) — the
+	// xrplEpochToTime round-trip in DeserializeHeader collapses an
+	// XRPL epoch of 0 to a Go zero time, which would then produce a
+	// nonsense uint32 in calculateLedgerHash. The parent's in-memory
+	// time.Time round-trips faithfully through Close().
+	stateMap, err := r.parent.StateMapSnapshot()
+	if err != nil {
+		return nil, fmt.Errorf("snapshot parent state: %w", err)
+	}
+	txMap, err := shamap.New(shamap.TypeTransaction)
+	if err != nil {
+		return nil, fmt.Errorf("create empty tx map: %w", err)
+	}
+	openHdr := header.LedgerHeader{
+		LedgerIndex:         hdr.LedgerIndex,
+		ParentHash:          r.parent.Hash(),
+		ParentCloseTime:     r.parent.CloseTime(),
+		CloseTime:           hdr.CloseTime,
+		CloseTimeResolution: hdr.CloseTimeResolution,
+		// Drops baseline matches rippled's Ledger(parent, closeTime)
+		// constructor: child inherits parent's totalCoins; Close()
+		// subtracts dropsDestroyed accumulated during apply.
+		Drops: r.parent.TotalDrops(),
+	}
+	child := ledger.NewOpenWithHeader(openHdr, stateMap, txMap, r.parent.GetFees())
+
+	// Override per-ledger config fields from the verified header /
+	// parent. The caller's EngineConfig keeps fees, network ID, logger,
+	// etc.; we only stamp the values that depend on which ledger we're
+	// replaying. ApplyFlags = TapNONE matches rippled's
+	// `retryAssured=false` for the replay path: replay is deterministic,
+	// any terRETRY indicates divergence.
+	engineCfg.LedgerSequence = hdr.LedgerIndex
+	engineCfg.ParentCloseTime = parentCloseTimeRippleEpoch(r.parent)
+	engineCfg.ParentHash = r.parent.Hash()
+	engineCfg.ApplyFlags = tx.TapNONE
+	engineCfg.OpenLedger = false
+	if engineCfg.Rules == nil {
+		// Caller didn't supply rules: derive from the parent's
+		// Amendments SLE so the engine sees the same amendment set
+		// that was active when these txs were first applied.
+		rules, rulesErr := ledger.LoadAmendmentsFromLedger(r.parent)
+		if rulesErr != nil {
+			return nil, fmt.Errorf("load amendment rules from parent: %w", rulesErr)
+		}
+		engineCfg.Rules = rules
+	}
+
+	engine := tx.NewEngine(child, engineCfg)
+
+	// Replay each tx in TransactionIndex order. The engine assigns
+	// metadata.TransactionIndex internally from its txCount counter,
+	// matching rippled's OpenView::txCount() behavior — so we don't
+	// need to feed an index per tx.
+	for _, dtx := range r.txs {
+		txn, parseErr := tx.ParseFromBinary(dtx.TxBytes)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse tx %x: %w", dtx.Hash[:8], parseErr)
+		}
+		txn.SetRawBytes(dtx.TxBytes)
+
+		result := engine.Apply(txn)
+		switch {
+		case result.Result.IsSuccess(), result.Result.IsTec():
+			// Both produce ledger entries and consume a TransactionIndex.
+			// Anchor the verified leaf blob (peer's tx + peer's metadata,
+			// already verified by GotResponse) into the child's tx map so
+			// the resulting TxHash matches header.TxHash exactly. Using
+			// our locally-generated metadata would diverge byte-for-byte
+			// from the peer's even when the AffectedNodes are
+			// semantically equivalent.
+			if err := child.AddTransactionWithMeta(dtx.Hash, dtx.LeafBlob); err != nil {
+				return nil, fmt.Errorf("install tx leaf %x: %w", dtx.Hash[:8], err)
+			}
+		case result.Result.ShouldRetry():
+			return nil, fmt.Errorf("tx %x requires retry but replay is non-retryable (got %s)",
+				dtx.Hash[:8], result.Result.String())
+		default:
+			// tef*, tem*, tel* — these indicate the tx shouldn't have
+			// been in this ledger. Either the peer is lying or our
+			// engine diverges from rippled.
+			return nil, fmt.Errorf("tx %x diverged from rippled: result=%s (engine bug or peer fork)",
+				dtx.Hash[:8], result.Result.String())
+		}
+	}
+
+	// Close the ledger. This freezes both maps, computes AccountHash and
+	// TxHash from their roots, deducts dropsDestroyed from totalCoins,
+	// updates the LedgerHashes skip list, and computes the final hash.
+	// Mirrors rippled's buildLedgerImpl :60-66 sequence
+	// (accum.apply / updateSkipList / flushDirty / setAccepted).
+	if err := child.Close(hdr.CloseTime, hdr.CloseFlags); err != nil {
+		return nil, fmt.Errorf("close replayed ledger: %w", err)
+	}
+
+	// Verify the rebuilt tx-map root. This should be impossible to fail
+	// after GotResponse succeeded (we re-installed the same verified
+	// leaves), but checking guards against silent leaf-blob corruption.
+	gotTxRoot, err := child.TxMapHash()
+	if err != nil {
+		return nil, fmt.Errorf("compute replayed tx map hash: %w", err)
+	}
+	if gotTxRoot != hdr.TxHash {
+		return nil, fmt.Errorf("tx map root mismatch after replay: computed %x header %x",
+			gotTxRoot[:8], hdr.TxHash[:8])
+	}
+
+	// The critical correctness check: replayed state-map root must equal
+	// the target header's AccountHash. Any divergence here means our
+	// engine produced different state from rippled's — feeding such a
+	// ledger into consensus would split us off the network.
+	gotStateRoot, err := child.StateMapHash()
+	if err != nil {
+		return nil, fmt.Errorf("compute replayed state map hash: %w", err)
+	}
+	if gotStateRoot != hdr.AccountHash {
+		return nil, fmt.Errorf(
+			"state map root mismatch: expected %x got %x — engine diverges from rippled (seq=%d hash=%x)",
+			hdr.AccountHash[:8], gotStateRoot[:8], hdr.LedgerIndex, hdr.Hash[:8])
+	}
+
+	// Sanity check: the canonical hash Close() computed from our maps
+	// must match the verified header hash. If the two hashes match on
+	// roots + the parent linkage, this is guaranteed by construction —
+	// but we double-check rather than silently emitting a different hash
+	// to downstream consumers.
+	if child.Hash() != hdr.Hash {
+		return nil, fmt.Errorf("ledger hash mismatch after close: got %x expected %x",
+			child.Hash(), hdr.Hash)
+	}
+
+	r.logger.Info("replay delta applied",
+		"seq", hdr.LedgerIndex,
+		"hash", hex.EncodeToString(hdr.Hash[:8]),
+		"txs", len(r.txs),
+	)
+	return child, nil
+}
+
+// parentCloseTimeRippleEpoch returns the parent ledger's close time as
+// Ripple-epoch seconds (rippled's NetClock::time_point format). Mirrors
+// the tx.EngineConfig.ParentCloseTime contract used elsewhere in the
+// engine. The Ripple epoch is 2000-01-01 UTC.
+func parentCloseTimeRippleEpoch(parent *ledger.Ledger) uint32 {
+	const rippleEpochUnix int64 = 946684800
+	t := parent.CloseTime()
+	if t.IsZero() {
+		return 0
+	}
+	secs := t.Unix() - rippleEpochUnix
+	if secs < 0 {
+		return 0
+	}
+	return uint32(secs)
 }
 
 // parentStateSnapshot returns an immutable snapshot of the parent state

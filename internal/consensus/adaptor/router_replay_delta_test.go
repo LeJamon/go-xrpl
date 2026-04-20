@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
@@ -183,6 +184,35 @@ func buildResponseAgainstParent(t *testing.T, svc *service.Service, txCount int)
 	return resp, expected, hdr.LedgerIndex
 }
 
+// buildEmptyClosedSuccessorResponse constructs a wire response carrying
+// a real Close()-generated header for the empty-tx successor of the
+// service's current closed ledger. This exercises the same Close() path
+// (skip-list update, drops accounting, hash derivation) that Apply
+// runs, so the response's AccountHash / TxHash / Hash all match what
+// Apply will recompute. Use this rather than a hand-built header when
+// you want the apply step to succeed end-to-end.
+func buildEmptyClosedSuccessorResponse(t *testing.T, svc *service.Service) (*message.ReplayDeltaResponse, [32]byte, uint32) {
+	t.Helper()
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+
+	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	open, err := ledger.NewOpen(parent, closeTime)
+	require.NoError(t, err)
+	require.NoError(t, open.Close(closeTime, 0))
+	hdr := open.Header()
+
+	hdrBytes, err := header.AddRaw(hdr, false)
+	require.NoError(t, err)
+
+	resp := &message.ReplayDeltaResponse{
+		LedgerHash:   hdr.Hash[:],
+		LedgerHeader: hdrBytes,
+		Transactions: nil,
+	}
+	return resp, hdr.Hash, hdr.LedgerIndex
+}
+
 // makeRouter wires a router against a real adaptor + recording sender,
 // returning the pieces tests will poke and inspect.
 func makeRouter(t *testing.T) (*Router, *Adaptor, *recordingSender, *service.Service) {
@@ -235,10 +265,17 @@ func TestRouter_NoParent_FallsBackToLegacy(t *testing.T) {
 
 // TestRouter_ReplayDeltaResponse_Routed verifies that an inbound
 // mtREPLAY_DELTA_RESPONSE for the active acquisition reaches the
-// InboundReplayDelta verifier and adopts the new ledger.
+// InboundReplayDelta verifier, runs the post-state derivation in
+// Apply(), and adopts the resulting ledger.
+//
+// We use an empty tx set so Apply trivially succeeds without needing
+// real, parseable tx blobs — the goal here is to verify routing +
+// post-state adoption wiring, not engine semantics. The Apply path
+// itself is exhaustively covered in
+// internal/ledger/inbound/replay_delta_apply_test.go.
 func TestRouter_ReplayDeltaResponse_Routed(t *testing.T) {
 	r, a, _, svc := makeRouter(t)
-	resp, expectedHash, seq := buildResponseAgainstParent(t, svc, 2)
+	resp, expectedHash, seq := buildEmptyClosedSuccessorResponse(t, svc)
 
 	// Arm an acquisition for the same hash.
 	parent := svc.GetClosedLedger()
@@ -311,6 +348,99 @@ func TestRouter_MaintenanceTick_TimeoutFallback(t *testing.T) {
 	r.maintenanceTick()
 	assert.Nil(t, r.inboundReplayDelta, "tick must clear the timed-out acquisition")
 	require.Len(t, rs.legacyCalls(), 1, "tick must re-issue via the legacy path")
+}
+
+// TestRouter_ReplayDeltaApply_AdoptsDerivedLedger verifies that the
+// router runs Apply (not just GotResponse) and adopts the
+// post-state-derived ledger. Specifically: the adopted ledger's
+// StateMapHash must differ from the parent's — the empty-tx successor
+// has an updated state map (LedgerHashes skip-list), so a router
+// path that cheaply forwarded the parent's state map would fail this
+// invariant.
+func TestRouter_ReplayDeltaApply_AdoptsDerivedLedger(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+
+	// Build a genesis successor at seq 2 — there's no skip-list update
+	// for prevIndex=1 (genesis ledger), so the state map root would be
+	// unchanged. Step the service forward one ledger first so we
+	// actually exercise the skip-list mutation Close() runs.
+	_, err := svc.AcceptLedger()
+	require.NoError(t, err)
+
+	resp, expectedHash, seq := buildEmptyClosedSuccessorResponse(t, svc)
+	parent = svc.GetClosedLedger()
+	parentState, err := parent.StateMapHash()
+	require.NoError(t, err)
+
+	require.NoError(t, r.startReplayDeltaAcquisition(seq, expectedHash, 7, parent))
+
+	payload, err := message.Encode(resp)
+	require.NoError(t, err)
+
+	r.handleMessage(&peermanagement.InboundMessage{
+		PeerID:  7,
+		Type:    uint16(message.TypeReplayDeltaResponse),
+		Payload: payload,
+	})
+
+	require.Nil(t, r.inboundReplayDelta, "successful adoption must clear the active acquisition")
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	assert.Equal(t, expectedHash, closed.Hash(),
+		"adopted ledger must be the verified successor")
+	closedState, err := closed.StateMapHash()
+	require.NoError(t, err)
+	assert.NotEqual(t, parentState, closedState,
+		"adopted state map must reflect the post-Close skip-list update — proves Apply ran")
+}
+
+// TestRouter_ReplayDeltaApply_StateMismatchFallsBack verifies that
+// when the response carries a tx-map root that GotResponse accepts
+// but a state-map root that Apply rejects (post-state derivation
+// disagrees with the header), the router abandons the replay-delta
+// acquisition and re-issues via the legacy mtGET_LEDGER path. This is
+// the safety net: a peer that lies about AccountHash, or our own
+// engine diverging from rippled, must NOT silently produce a corrupt
+// closed ledger.
+func TestRouter_ReplayDeltaApply_StateMismatchFallsBack(t *testing.T) {
+	r, _, rs, svc := makeRouter(t)
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+
+	// Build a real Close-derived empty-tx response, then tamper with
+	// AccountHash and re-derive the byte-level header hash so
+	// GotResponse still passes (header hash + tx-map root remain
+	// internally consistent). Apply will then catch the state-map
+	// divergence and fall back.
+	resp, _, _ := buildEmptyClosedSuccessorResponse(t, svc)
+	parsed, err := header.DeserializeHeader(resp.LedgerHeader, false)
+	require.NoError(t, err)
+	parsed.AccountHash[0] ^= 0xFF
+	hdrBytes, err := header.AddRaw(*parsed, false)
+	require.NoError(t, err)
+	tampered := common.Sha512Half(protocol.HashPrefixLedgerMaster.Bytes(), hdrBytes)
+	resp.LedgerHash = tampered[:]
+	resp.LedgerHeader = hdrBytes
+
+	require.NoError(t, r.startReplayDeltaAcquisition(parent.Sequence()+1, tampered, 7, parent))
+
+	payload, err := message.Encode(resp)
+	require.NoError(t, err)
+
+	r.handleMessage(&peermanagement.InboundMessage{
+		PeerID:  7,
+		Type:    uint16(message.TypeReplayDeltaResponse),
+		Payload: payload,
+	})
+
+	assert.Nil(t, r.inboundReplayDelta,
+		"failed Apply must clear the replay state")
+	require.Len(t, rs.legacyCalls(), 1,
+		"router must fall back to the legacy path on state-map mismatch")
+	assert.Equal(t, tampered, rs.legacyCalls()[0].hash)
+	assert.NotNil(t, r.inboundLedger, "legacy acquisition must be armed for retry")
 }
 
 // TestRouter_IgnoresUnsolicitedReplayDeltaResponse verifies that a

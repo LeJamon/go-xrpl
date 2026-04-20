@@ -493,13 +493,32 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	verified, err := r.inboundReplayDelta.Result()
-	r.inboundReplayDelta = nil
+	// GotResponse verified the header hash and the tx-map root. Apply
+	// re-derives the post-state by replaying every tx through the
+	// engine against a mutable copy of the parent's state, then
+	// verifies the resulting AccountHash matches the target header —
+	// the only proof we have that our engine doesn't diverge from
+	// rippled. Without this step the adopted ledger would carry the
+	// parent's stale state map, breaking consensus on the next round.
+	parent := r.inboundReplayDelta.Parent()
+	engineCfg := r.adaptor.EngineConfigForReplay(parent)
+	derived, err := r.inboundReplayDelta.Apply(engineCfg)
 	if err != nil {
-		r.logger.Warn("replay delta marked complete but result unavailable", "error", err)
+		seq := r.inboundReplayDelta.Seq()
+		hash := r.inboundReplayDelta.Hash()
+		peerID := r.inboundReplayDelta.PeerID()
+		r.inboundReplayDelta = nil
+		r.logger.Warn("replay delta apply failed; falling back to legacy",
+			"seq", seq,
+			"hash", fmt.Sprintf("%x", hash[:8]),
+			"peer", peerID,
+			"error", err,
+		)
+		r.startLedgerAcquisitionLegacy(seq, hash, peerID)
 		return
 	}
-	if err := r.adoptVerifiedLedger(verified); err != nil {
+	r.inboundReplayDelta = nil
+	if err := r.adoptVerifiedLedger(derived); err != nil {
 		r.logger.Warn("failed to adopt replay-delta ledger", "error", err)
 	}
 }

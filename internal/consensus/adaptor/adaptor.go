@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 var (
@@ -167,6 +168,21 @@ func (a *Adaptor) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 
 func (a *Adaptor) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
 	return a.sender.RequestStateNodes(peerID, ledgerHash, nodeIDs)
+}
+
+// EngineConfigForReplay returns the shared (non-per-ledger)
+// tx.EngineConfig used when replaying a historical ledger anchored on
+// `parent`. Fees come from the parent's FeeSettings SLE; network and
+// logger come from the service config.
+//
+// The caller (typically ReplayDelta.Apply) overrides the per-ledger
+// fields — LedgerSequence, ParentCloseTime, ParentHash, Rules,
+// ApplyFlags, OpenLedger — from the verified target header.
+func (a *Adaptor) EngineConfigForReplay(parent *ledger.Ledger) tx.EngineConfig {
+	if a.ledgerService == nil {
+		return tx.EngineConfig{}
+	}
+	return a.ledgerService.EngineConfigForReplay(parent)
 }
 
 // GetParentLedgerForReplay returns the validated ledger at seq-1, which is

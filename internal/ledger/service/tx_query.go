@@ -152,6 +152,31 @@ func (s *Service) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint6
 	return readFeesFromLedger(s.openLedger)
 }
 
+// EngineConfigForReplay returns the shared (non-per-ledger) engine
+// configuration for replaying a closed ledger anchored on `parent`.
+// Fees come from the parent's FeeSettings SLE — replay must use the
+// fees that were active when the original txs ran. NetworkID and
+// Logger come from the service config.
+//
+// The caller is expected to override the per-ledger fields
+// (LedgerSequence, ParentCloseTime, ParentHash, Rules, ApplyFlags,
+// OpenLedger) from the target header before passing this config to the
+// engine. ReplayDelta.Apply() does this automatically.
+//
+// Reference: rippled BuildLedger.cpp uses the parent's view to source
+// fees; per-ledger values are stamped from the closed-ledger info.
+func (s *Service) EngineConfigForReplay(parent *ledger.Ledger) tx.EngineConfig {
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(parent)
+	return tx.EngineConfig{
+		BaseFee:                   baseFee,
+		ReserveBase:               reserveBase,
+		ReserveIncrement:          reserveIncrement,
+		NetworkID:                 s.config.NetworkID,
+		SkipSignatureVerification: false, // replay re-checks signatures
+		Logger:                    s.config.Logger,
+	}
+}
+
 // TransactionResult contains a transaction and its metadata
 type TransactionResult struct {
 	TxData      []byte

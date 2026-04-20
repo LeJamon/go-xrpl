@@ -262,6 +262,15 @@ func (e *TestEnv) Ledger() *ledger.Ledger {
 	return e.ledger
 }
 
+// LastClosedLedger returns the most recently closed ledger (LCL), the
+// parent of the current open ledger. Useful for replay-style tests that
+// need to anchor on a real, fully-constructed parent ledger (e.g.,
+// post-state derivation tests that replay txs from one closed ledger
+// into a verified successor).
+func (e *TestEnv) LastClosedLedger() *ledger.Ledger {
+	return e.lastClosedLedger
+}
+
 // LedgerSeq returns the current ledger sequence number.
 func (e *TestEnv) LedgerSeq() uint32 {
 	return e.ledger.Sequence()
