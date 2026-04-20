@@ -397,6 +397,228 @@ Loop:
 	assert.Equal(t, child.Sequence(), got.Sequence())
 }
 
+// TestTwoOverlay_Squelch_RoundTrip drives a full wire round-trip of
+// a TMSquelch frame between two real Overlay instances. A tells B to
+// squelch validator V; B decodes the frame and records the squelch on
+// its view of A. The test verifies the squelch state becomes observable
+// on B's side within 1s. Mirrors rippled's OverlayImpl::squelch which
+// is the transport counterpart of the reduce-relay selection logic.
+func TestTwoOverlay_Squelch_RoundTrip(t *testing.T) {
+	if testing.Short() {
+		t.Skip("two-overlay squelch round-trip is heavyweight; skipped in -short mode")
+	}
+
+	a, cancelA := startOverlay(t)
+	defer cancelA()
+	defer a.Stop()
+
+	b, cancelB := startOverlay(t)
+	defer cancelB()
+	defer b.Stop()
+
+	require.NoError(t, b.Connect(a.ListenAddr()),
+		"two overlays must complete the XRPL TLS+HTTP handshake")
+	waitForPeers(t, a, b, 5*time.Second)
+
+	// Both overlays see exactly one peer.
+	infosA := a.Peers()
+	infosB := b.Peers()
+	require.Len(t, infosA, 1)
+	require.Len(t, infosB, 1)
+	peerBOnA := infosA[0].ID // A's view of B (inbound)
+	peerAOnB := infosB[0].ID // B's view of A (outbound)
+
+	// A 33-byte validator pub-key — matches rippled's secp256k1-compressed
+	// format. The exact bytes are irrelevant; only the map-key round-trip
+	// is under test.
+	validator := make([]byte, 33)
+	for i := range validator {
+		validator[i] = byte(0x10 | i)
+	}
+
+	// A squelches V on its view of B (peerBOnA). The overlay sends a
+	// TMSquelch frame to B; B's handleSquelchMessage records it on its
+	// peer-view-of-A.
+	a.IssueSquelch(validator, peerBOnA, true, 5*time.Minute)
+
+	// Poll for the squelch to show up on B's side. We bound the wait to
+	// 1s per the spec; on localhost this is typically delivered in single
+	// digits of milliseconds.
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		if b.IsValidatorSquelchedOnPeer(peerAOnB, validator) {
+			// Also verify the inverse removal path end-to-end: A
+			// clears the squelch; B must observe it gone.
+			a.IssueSquelch(validator, peerBOnA, false, 0)
+			deadline2 := time.Now().Add(1 * time.Second)
+			for time.Now().Before(deadline2) {
+				if !b.IsValidatorSquelchedOnPeer(peerAOnB, validator) {
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			t.Fatal("B kept the squelch after A sent an unsquelch")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("B never observed the squelch A sent over the wire")
+}
+
+// TestTwoOverlay_ProofPath_RoundTrip drives a full wire round-trip of
+// mtPROOF_PATH_REQ → mtPROOF_PATH_RESPONSE between two real Overlay
+// instances. B requests a proof for a known key in A's state map; A
+// serves it from a real in-memory lookup; B decodes and verifies the
+// returned path against A's state root.
+func TestTwoOverlay_ProofPath_RoundTrip(t *testing.T) {
+	if testing.Short() {
+		t.Skip("two-overlay proof-path is heavyweight; skipped in -short mode")
+	}
+
+	// Build a small immutable ledger and pick one known key from the
+	// tx map to prove against.
+	parent, child := makeImmutableLedger(t, 3)
+	var knownKey [32]byte
+	txMap, err := child.TxMapSnapshot()
+	require.NoError(t, err)
+	require.NoError(t, txMap.ForEach(func(item *shamap.Item) bool {
+		knownKey = item.Key()
+		return false // stop on first item
+	}))
+
+	// The lookup must serve proofs for the tx map of the child ledger.
+	// Build a provider whose GetProofPath returns the serialized
+	// leaf-to-root nodes from the real SHAMap.
+	lookup := &inMemoryLookup{byHash: map[[32]byte]*ledger.Ledger{
+		parent.Hash(): parent,
+		child.Hash():  child,
+	}}
+	provider := &proofPathLookupProvider{
+		base: &lookupProvider{lookup: lookup},
+		tx: func(hash []byte, key []byte) ([]byte, [][]byte, error) {
+			l, ok := lookup.byHash[toArr32(hash)]
+			if !ok {
+				return nil, nil, peermanagement.ErrLedgerNotFound
+			}
+			txSnap, err := l.TxMapSnapshot()
+			if err != nil {
+				return nil, nil, err
+			}
+			var k [32]byte
+			copy(k[:], key)
+			proof, err := txSnap.GetProofPath(k)
+			if err != nil {
+				return nil, nil, err
+			}
+			if proof == nil || !proof.Found {
+				return nil, nil, peermanagement.ErrKeyNotFound
+			}
+			hdr, err := header.AddRaw(l.Header(), false)
+			if err != nil {
+				return nil, nil, err
+			}
+			return hdr, proof.Path, nil
+		},
+	}
+
+	a, cancelA := startOverlay(t)
+	defer cancelA()
+	defer a.Stop()
+
+	b, cancelB := startOverlay(t)
+	defer cancelB()
+	defer b.Stop()
+
+	a.LedgerSync().SetProvider(provider)
+
+	require.NoError(t, b.Connect(a.ListenAddr()))
+	waitForPeers(t, a, b, 5*time.Second)
+
+	infosB := b.Peers()
+	require.Len(t, infosB, 1)
+	peerAOnB := infosB[0].ID
+
+	// B sends the proof-path request via the overlay Send API. The
+	// frame is built here rather than going through OverlaySender
+	// because no sender method exists for proof-path; this exercises
+	// the overlay's Send path directly (same path sender methods take).
+	hash := child.Hash()
+	req := &message.ProofPathRequest{
+		Key:        knownKey[:],
+		LedgerHash: hash[:],
+		MapType:    message.LedgerMapTransaction,
+	}
+	encoded, err := message.Encode(req)
+	require.NoError(t, err)
+	frame, err := message.BuildWireMessage(message.TypeProofPathReq, encoded)
+	require.NoError(t, err)
+	require.NoError(t, b.Send(peerAOnB, frame))
+
+	// Read B.Messages() until the proof-path response lands.
+	var resp *message.ProofPathResponse
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+Loop:
+	for {
+		select {
+		case msg := <-b.Messages():
+			if message.MessageType(msg.Type) != message.TypeProofPathResponse {
+				continue
+			}
+			decoded, err := message.Decode(message.TypeProofPathResponse, msg.Payload)
+			require.NoError(t, err)
+			resp = decoded.(*message.ProofPathResponse)
+			break Loop
+		case <-timer.C:
+			t.Fatal("B never received the proof-path response from A over the wire")
+		}
+	}
+
+	require.Equal(t, message.ReplyErrorNone, resp.Error)
+	require.NotEmpty(t, resp.Path)
+
+	// Verify the proof against A's tx-map root. The root hash lives on
+	// the ledger header — we pull it out of the child directly since
+	// it's the same ledger A serialized.
+	txRoot := child.Header().TxHash
+	assert.True(t,
+		shamap.VerifyProofPath(txRoot, knownKey, resp.Path),
+		"proof returned by A must verify against the tx-map root")
+}
+
+// proofPathLookupProvider wraps lookupProvider and overrides
+// GetProofPath with a closure, so the proof-path round-trip test can
+// drive a real SHAMap lookup without duplicating the replay-delta
+// plumbing in the shared lookup helper.
+type proofPathLookupProvider struct {
+	base *lookupProvider
+	tx   func(hash, key []byte) ([]byte, [][]byte, error)
+}
+
+func (p *proofPathLookupProvider) GetLedgerHeader(hash []byte, seq uint32) ([]byte, error) {
+	return p.base.GetLedgerHeader(hash, seq)
+}
+func (p *proofPathLookupProvider) GetAccountStateNode(h, n []byte) ([]byte, error) {
+	return p.base.GetAccountStateNode(h, n)
+}
+func (p *proofPathLookupProvider) GetTransactionNode(h, n []byte) ([]byte, error) {
+	return p.base.GetTransactionNode(h, n)
+}
+func (p *proofPathLookupProvider) GetReplayDelta(h []byte) ([]byte, [][]byte, error) {
+	return p.base.GetReplayDelta(h)
+}
+func (p *proofPathLookupProvider) GetProofPath(h, k []byte, m message.LedgerMapType) ([]byte, [][]byte, error) {
+	if m != message.LedgerMapTransaction {
+		return nil, nil, peermanagement.ErrKeyNotFound
+	}
+	return p.tx(h, k)
+}
+
+func toArr32(b []byte) [32]byte {
+	var out [32]byte
+	copy(out[:], b)
+	return out
+}
+
 func formatUint(v uint64) string {
 	if v == 0 {
 		return "0"

@@ -831,6 +831,34 @@ func (o *Overlay) Identity() *Identity {
 	return o.identity
 }
 
+// IssueSquelch hand-rolls a TMSquelch frame to the given peer, marking
+// the given validator's messages as to-be-squelched (or cleared when
+// squelch=false). This is the same path the reduce-relay system takes
+// when it autonomously squelches a peer — mirroring rippled's
+// OverlayImpl::squelch — but is exposed as a deliberate API so callers
+// (including integration tests) can drive squelch state changes
+// without having to reach a natural squelch threshold.
+func (o *Overlay) IssueSquelch(validator []byte, peerID PeerID, squelch bool, duration time.Duration) {
+	o.handleSquelch(validator, peerID, squelch, duration)
+}
+
+// IsValidatorSquelchedOnPeer reports whether the local peer with the
+// given PeerID currently has an active squelch for `validator`. It is
+// the programmatic counterpart of peer.ExpireSquelch, which returns
+// true when there is NO active squelch — this wrapper inverts so the
+// name matches the usual intuition (true = this peer has been told to
+// squelch this validator). Useful for end-to-end tests that verify
+// TMSquelch was parsed and recorded by the receiver.
+func (o *Overlay) IsValidatorSquelchedOnPeer(peerID PeerID, validator []byte) bool {
+	o.peersMu.RLock()
+	peer, exists := o.peers[peerID]
+	o.peersMu.RUnlock()
+	if !exists {
+		return false
+	}
+	return !peer.ExpireSquelch(validator)
+}
+
 // addPeer adds a peer to the overlay.
 func (o *Overlay) addPeer(peer *Peer) {
 	o.peersMu.Lock()
