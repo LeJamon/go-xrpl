@@ -69,6 +69,7 @@ type ReplayDelta struct {
 	hash    [32]byte
 	peerID  uint64
 	parent  *ledger.Ledger
+	clock   Clock
 	created time.Time
 	logger  *slog.Logger
 
@@ -91,14 +92,25 @@ type ReplayDelta struct {
 // Phase B does not run that replay — it only verifies framing and exposes
 // the ordered txs — so parent is held but not mutated here.
 func NewReplayDelta(hash [32]byte, peerID uint64, parent *ledger.Ledger, logger *slog.Logger) *ReplayDelta {
+	return NewReplayDeltaWithClock(hash, peerID, parent, logger, SystemClock)
+}
+
+// NewReplayDeltaWithClock is like NewReplayDelta but accepts an explicit
+// Clock so tests (or any caller with its own time source) can drive
+// timeout behavior without touching the wall clock.
+func NewReplayDeltaWithClock(hash [32]byte, peerID uint64, parent *ledger.Ledger, logger *slog.Logger, clock Clock) *ReplayDelta {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if clock == nil {
+		clock = SystemClock
 	}
 	return &ReplayDelta{
 		hash:    hash,
 		peerID:  peerID,
 		parent:  parent,
-		created: time.Now(),
+		clock:   clock,
+		created: clock.Now(),
 		state:   StateWantBase,
 		logger:  logger,
 	}
@@ -148,7 +160,7 @@ func (r *ReplayDelta) IsTimedOut() bool {
 	if r.state == StateComplete || r.state == StateFailed {
 		return false
 	}
-	return time.Since(r.created) > replayDeltaTimeout
+	return r.clock.Now().Sub(r.created) > replayDeltaTimeout
 }
 
 // Result returns the ledger reconstructed from the verified delta. Only
@@ -342,18 +354,6 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 		"peer", r.peerID,
 	)
 	return nil
-}
-
-// AdvanceCreatedForTest is a test-only hook that rewinds the
-// acquisition's start time by `delta`, simulating timer expiry without
-// sleeping. Production code paths never invoke it (and never should);
-// it lives in this file rather than a *_test.go because it must be
-// importable from sibling packages' tests (router-level fallback
-// integration tests in internal/consensus/adaptor).
-func (r *ReplayDelta) AdvanceCreatedForTest(delta time.Duration) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.created = r.created.Add(-delta)
 }
 
 // AppendTxForTest appends a synthetic DecodedTx to r.txs so a sibling

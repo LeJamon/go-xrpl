@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
+	"github.com/LeJamon/goXRPLd/internal/ledger/inbound/inboundtest"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
@@ -337,13 +338,19 @@ func TestRouter_FallsBackToLegacyOnReplayFailure(t *testing.T) {
 func TestRouter_MaintenanceTick_TimeoutFallback(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
 	parent := svc.GetClosedLedger()
+
+	// Install a fake clock so we can age the acquisition past its timeout
+	// without wall-clock waits. Must be set before startReplayDeltaAcquisition
+	// so the new ReplayDelta adopts it as its time source.
+	clock := inboundtest.NewFakeClock(time.Now())
+	r.SetInboundClock(clock)
+
 	target := [32]byte{0xAB}
 	require.NoError(t, r.startReplayDeltaAcquisition(parent.Sequence()+1, target, 7, parent))
 
-	// Advance the acquisition's clock past the timeout without sleeping.
-	rd := r.inboundReplayDelta
-	require.NotNil(t, rd)
-	rd.AdvanceCreatedForTest(time.Hour)
+	// Advance the fake past replayDeltaTimeout (~30s); IsTimedOut reads the
+	// same clock via the injected dependency.
+	clock.Advance(time.Hour)
 
 	r.maintenanceTick()
 	assert.Nil(t, r.inboundReplayDelta, "tick must clear the timed-out acquisition")

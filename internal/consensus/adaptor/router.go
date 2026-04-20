@@ -52,18 +52,34 @@ type Router struct {
 	// verification failure (which falls back to the legacy path), or on
 	// timeout via maintenanceTick.
 	inboundReplayDelta *inbound.ReplayDelta
+
+	// inboundClock is the clock used when arming new inbound acquisitions.
+	// Defaults to the wall clock; tests swap in a FakeClock via
+	// SetInboundClock so they can drive timeouts deterministically.
+	inboundClock inbound.Clock
 }
 
 // NewRouter creates a new Router.
 func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManager, inbox <-chan *peermanagement.InboundMessage) *Router {
 	return &Router{
-		engine:      engine,
-		adaptor:     adaptor,
-		modeManager: modeManager,
-		inbox:       inbox,
-		logger:      slog.Default().With("component", "consensus-router"),
-		peerStates:  make(map[peermanagement.PeerID]*peerLedgerState),
+		engine:       engine,
+		adaptor:      adaptor,
+		modeManager:  modeManager,
+		inbox:        inbox,
+		logger:       slog.Default().With("component", "consensus-router"),
+		peerStates:   make(map[peermanagement.PeerID]*peerLedgerState),
+		inboundClock: inbound.SystemClock,
 	}
+}
+
+// SetInboundClock overrides the clock used by new inbound acquisitions.
+// Intended for tests that need to drive timeout behavior deterministically;
+// production callers never invoke this.
+func (r *Router) SetInboundClock(c inbound.Clock) {
+	if c == nil {
+		c = inbound.SystemClock
+	}
+	r.inboundClock = c
 }
 
 // Run reads messages from the overlay and dispatches them.
@@ -404,7 +420,7 @@ func (r *Router) startReplayDeltaAcquisition(seq uint32, hash [32]byte, peerID u
 		"hash", fmt.Sprintf("%x", hash[:8]),
 		"peer", peerID,
 	)
-	r.inboundReplayDelta = inbound.NewReplayDelta(hash, peerID, parent, r.logger)
+	r.inboundReplayDelta = inbound.NewReplayDeltaWithClock(hash, peerID, parent, r.logger, r.inboundClock)
 	if err := r.adaptor.RequestReplayDelta(peerID, hash); err != nil {
 		r.logger.Warn("failed to request replay delta from peer", "error", err)
 		r.inboundReplayDelta = nil
