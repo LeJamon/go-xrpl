@@ -15,11 +15,14 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 )
 
-// inboundReplayDeltaTickInterval drives the periodic check for an
-// in-flight replay-delta acquisition that has timed out. Tick rate is
-// well below the acquisition timeout so a stuck request is detected
-// promptly without burning CPU on a fast-path message loop.
-const inboundReplayDeltaTickInterval = 5 * time.Second
+// inboundReplayDeltaTickInterval drives the periodic check for
+// in-flight replay-delta acquisitions — both the sub-task retry
+// (peer rotation every subTaskRetryInterval=250ms) and the outer
+// budget timeout (replayDeltaTimeout=10s). Tick must be at or below
+// the sub-task interval so rotation signals aren't missed; 100ms
+// adds a small safety margin without CPU cost (the tick body
+// short-circuits in the common case of no pending work).
+const inboundReplayDeltaTickInterval = 100 * time.Millisecond
 
 // peerLedgerState tracks the latest ledger info reported by a peer.
 type peerLedgerState struct {
@@ -53,7 +56,28 @@ type Router struct {
 	// catchup burst across many ledgers can parallelize instead of
 	// serializing. Mirrors rippled's LedgerReplayer.
 	replayer *inbound.Replayer
+
+	// messageSeen dedups inbound proposal / validation payloads so the
+	// reduce-relay slot only feeds on DUPLICATE arrivals, mirroring
+	// rippled's HashRouter::addSuppressionPeer !added branch at
+	// PeerImp.cpp:1730-1738. Counting first-seen messages would
+	// accelerate selection and produce earlier squelches than rippled
+	// does for the same traffic pattern.
+	messageSeen *messageSuppression
 }
+
+// messageDedupTTL is how long a proposal/validation hash is
+// remembered for duplicate-detection purposes. Rippled uses a
+// round-bounded HashRouter; 30s comfortably covers a consensus round
+// while aging out cross-round stragglers so the dedup table doesn't
+// grow unbounded under sustained gossip.
+const messageDedupTTL = 30 * time.Second
+
+// messageDedupMaxEntries caps the dedup table size. One entry per
+// unique (validator, position, txSet, closeTime) tuple in a healthy
+// 100-validator round; 4096 gives ~40x headroom before the trim
+// fires. Cheap memory — 32-byte key + 24-byte time.
+const messageDedupMaxEntries = 4096
 
 // NewRouter creates a new Router.
 func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManager, inbox <-chan *peermanagement.InboundMessage) *Router {
@@ -66,6 +90,7 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManag
 		logger:      logger,
 		peerStates:  make(map[peermanagement.PeerID]*peerLedgerState),
 		replayer:    inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
+		messageSeen: newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
 	}
 }
 
@@ -124,7 +149,45 @@ func (r *Router) Run(ctx context.Context) {
 // means we don't have to reason about a peer response racing the
 // timeout fallback for the same hash).
 func (r *Router) maintenanceTick() {
-	// Reap replay-delta timeouts and fall back to the legacy path.
+	// Sub-task retry loop: rotate peers on silent-peer timeouts BEFORE
+	// the outer budget kicks in. Matches rippled's LedgerDeltaAcquire
+	// peer-swap (LedgerReplayer.h:49-57 — 250ms × 10 rotations inside a
+	// larger outer budget). Without rotation, a single silent peer
+	// burns the full 10s before the legacy fallback fires.
+	for _, rd := range r.replayer.SubTaskTimedOut() {
+		tried := rd.TriedPeers()
+		// Ask the overlay for a fresh replay-capable peer, excluding
+		// every peer we've already tried for this hash.
+		candidates := r.adaptor.ReplayCapablePeersExcluding(tried, 1)
+		if len(candidates) == 0 {
+			// No fresh peer available — can't rotate; the outer
+			// budget below will eventually time this out and fall
+			// back to the legacy path. Log so operators can see
+			// replay-capacity exhaustion in diagnostics.
+			r.logger.Debug("replay-delta sub-task timed out but no fresh peer available",
+				"seq", rd.Seq(),
+				"hash", fmt.Sprintf("%x", rd.Hash()),
+				"retry_count", rd.RetryCount(),
+			)
+			continue
+		}
+		newPeer := candidates[0]
+		rd.NoteSubTaskRetry(newPeer)
+		if err := r.adaptor.RequestReplayDelta(newPeer, rd.Hash()); err != nil {
+			r.logger.Debug("replay-delta retry request failed",
+				"seq", rd.Seq(),
+				"hash", fmt.Sprintf("%x", rd.Hash()),
+				"peer", newPeer,
+				"err", err,
+			)
+			// Next tick will try yet another peer. Continue rather
+			// than return so we process other in-flight retries.
+		}
+	}
+
+	// Reap acquisitions that exceeded the OUTER budget. At this point
+	// either the sub-task loop exhausted retries or the overall
+	// replayDeltaTimeout fired — either way, abandon and fall back.
 	for _, entry := range r.replayer.TimedOut() {
 		r.logger.Warn("replay delta acquisition timed out, falling back to legacy",
 			"seq", entry.Seq,
@@ -217,18 +280,24 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 
 	proposal := ProposalFromMessage(proposeSet)
 	originPeer := uint64(msg.PeerID)
+
+	// Record duplicate-status BEFORE OnProposal so the reduce-relay
+	// gate sees the state that existed at ingress. Hash the raw
+	// payload: this is rippled's HashRouter semantics (same bytes
+	// from different peers => "duplicate").
+	isDuplicate := !r.messageSeen.observe(hashPayload(msg.Payload))
+
 	if err := r.engine.OnProposal(proposal, originPeer); err != nil {
 		r.logger.Debug("engine rejected proposal", "error", err, "peer", msg.PeerID)
 		return
 	}
 
-	// Feed the reduce-relay slot for this validator so mtSQUELCH can
-	// eventually fire when peer activity crosses the thresholds.
-	// Mirrors rippled's PeerImp::updateSlotAndSquelch on TMProposeSet
-	// (PeerImp.cpp:1737). Gating on trusted keeps untrusted chatter out
-	// of the relay selection input, matching rippled's trust-gated
-	// selection.
-	if r.adaptor.IsTrusted(proposal.NodeID) {
+	// Feed the reduce-relay slot ONLY on duplicate arrivals, matching
+	// rippled's PeerImp.cpp:1730-1738 where updateSlotAndSquelch fires
+	// inside the `!added` branch of HashRouter::addSuppressionPeer.
+	// Trust gate still applies — untrusted chatter never influences
+	// selection, per rippled's trust-gated design.
+	if isDuplicate && r.adaptor.IsTrusted(proposal.NodeID) {
 		r.adaptor.UpdateRelaySlot(proposal.NodeID[:], originPeer)
 	}
 }
@@ -263,15 +332,20 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	}
 
 	originPeer := uint64(msg.PeerID)
+
+	// Observe-before-engine for consistent duplicate accounting —
+	// same rationale as handleProposal.
+	isDuplicate := !r.messageSeen.observe(hashPayload(msg.Payload))
+
 	if err := r.engine.OnValidation(validation, originPeer); err != nil {
 		r.logger.Debug("engine rejected validation", "error", err, "peer", msg.PeerID)
 		return
 	}
 
-	// Feed the reduce-relay slot on inbound validations too. Mirrors
-	// rippled's PeerImp::updateSlotAndSquelch on TMValidation
-	// (PeerImp.cpp:2385,3013,3049). Trust gate same as handleProposal.
-	if r.adaptor.IsTrusted(validation.NodeID) {
+	// Feed the reduce-relay slot ONLY on duplicate arrivals. Mirrors
+	// rippled's TMValidation path at PeerImp.cpp:2385,3013,3049 which
+	// runs the same HashRouter duplicate check as TMProposeSet.
+	if isDuplicate && r.adaptor.IsTrusted(validation.NodeID) {
 		r.adaptor.UpdateRelaySlot(validation.NodeID[:], originPeer)
 	}
 }

@@ -336,9 +336,23 @@ const (
 	FeatureValidatorListPropagation Feature = iota
 	FeatureLedgerReplay
 	FeatureCompression
-	FeatureReduceRelay
+	// FeatureVpReduceRelay corresponds to rippled's vprr
+	// (validator-proposal reduce-relay). Gating on this feature
+	// controls validator-proposal + validation relay suppression and
+	// TMSquelch for validators.
+	FeatureVpReduceRelay
+	// FeatureTxReduceRelay corresponds to rippled's txrr (transaction
+	// reduce-relay). A peer may enable TXRR without VPRR and
+	// vice-versa; they are independent in rippled's Handshake.cpp.
+	FeatureTxReduceRelay
 	FeatureTransactionBatching
 )
+
+// FeatureReduceRelay is kept as a transitional alias for the VPRR
+// flag so existing callers that "check for reduce-relay" continue to
+// compile; new code should pick FeatureVpReduceRelay or
+// FeatureTxReduceRelay explicitly.
+const FeatureReduceRelay = FeatureVpReduceRelay
 
 // String returns the string representation of a feature.
 func (f Feature) String() string {
@@ -349,8 +363,10 @@ func (f Feature) String() string {
 		return "ledgerReplay"
 	case FeatureCompression:
 		return "compression"
-	case FeatureReduceRelay:
-		return "reduceRelay"
+	case FeatureVpReduceRelay:
+		return "vpReduceRelay"
+	case FeatureTxReduceRelay:
+		return "txReduceRelay"
 	case FeatureTransactionBatching:
 		return "transactionBatching"
 	default:
@@ -358,7 +374,8 @@ func (f Feature) String() string {
 	}
 }
 
-// ParseFeature parses a feature string.
+// ParseFeature parses a feature string. Accepts both "reduceRelay"
+// (legacy) and the explicit vprr/txrr names.
 func ParseFeature(s string) (Feature, bool) {
 	switch strings.ToLower(s) {
 	case "validatorlistpropagation":
@@ -367,8 +384,10 @@ func ParseFeature(s string) (Feature, bool) {
 		return FeatureLedgerReplay, true
 	case "compression":
 		return FeatureCompression, true
-	case "reducerelay":
-		return FeatureReduceRelay, true
+	case "reducerelay", "vpreducerelay", "vprr":
+		return FeatureVpReduceRelay, true
+	case "txreducerelay", "txrr":
+		return FeatureTxReduceRelay, true
 	case "transactionbatching":
 		return FeatureTransactionBatching, true
 	default:
@@ -623,8 +642,16 @@ func ParseProtocolCtlFeatures(headers http.Header) *FeatureSet {
 	if FeatureEnabled(headers, FeatureNameLedgerReplay) {
 		fs.Enable(FeatureLedgerReplay)
 	}
-	if FeatureEnabled(headers, FeatureNameTXRR) || FeatureEnabled(headers, FeatureNameVPRR) {
-		fs.Enable(FeatureReduceRelay)
+	// Track txrr and vprr independently. Rippled's Handshake.cpp
+	// publishes two separate features so operators can enable one
+	// without the other; collapsing them into a single flag loses the
+	// ability to correctly gate per-feature behavior (TMSquelch is
+	// VPRR, tx relay suppression is TXRR).
+	if FeatureEnabled(headers, FeatureNameTXRR) {
+		fs.Enable(FeatureTxReduceRelay)
+	}
+	if FeatureEnabled(headers, FeatureNameVPRR) {
+		fs.Enable(FeatureVpReduceRelay)
 	}
 
 	return fs

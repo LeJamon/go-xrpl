@@ -20,21 +20,27 @@ import (
 // EvictBadDataThreshold is the bad-data BALANCE at which the overlay
 // disconnects a peer. IncBadData adds a per-reason weight (see
 // BadDataWeight) and a background decay halves the balance every
-// badDataDecayInterval — together this mirrors rippled's Resource::
-// Consumer model: persistent offenders accumulate faster than decay
-// and evict; chatty-but-honest peers decay below threshold. 1000
-// corresponds roughly to 2.5 × feeInvalidData (a peer that sent two
-// truly-malformed pieces of data AND failed another request) or 100 ×
-// feeRequestNoReply (a peer that failed 100 trivial requests in a
-// single decay window).
-const EvictBadDataThreshold = 1000
+// badDataDecayInterval — together this approximates rippled's
+// Resource::Consumer model: persistent offenders accumulate faster
+// than decay and evict; chatty-but-honest peers decay below threshold.
+// 25000 matches rippled's dropThreshold constant in
+// src/xrpld/overlay/Resource/impl/Tuning.h:30-40 (NOT its much lower
+// minGossipBalance — those are distinct gates). Calibration: a peer
+// sending one genuinely-corrupt message per decay window
+// (weightInvalidData=400) asymptotically approaches 800 (below the
+// 25000 threshold), so sporadic offenders survive; sustained
+// multi-hundred-per-window abuse crosses the threshold within seconds.
+const EvictBadDataThreshold = 25000
 
 // badDataDecayInterval is the cadence at which Peer.DecayBadData
-// halves the balance. Paired with EvictBadDataThreshold: a peer that
-// sustains IncBadData at weight feeInvalidData (400) every
-// badDataDecayInterval will asymptotically approach balance=800, below
-// threshold, so sporadic offenders survive. A peer charging that much
-// faster WILL cross the threshold within a few intervals.
+// halves the balance. Go's step-halving every 10s decays about twice
+// as fast as rippled's continuous ~32s exponential window; this is an
+// intentional difference — goXRPL recovers faster from transient bad
+// behavior while still evicting sustained abuse within a few
+// intervals. Paired with the 25000 threshold, a rapid burst of
+// malformed data (say, 70 × 400 = 28000 within one interval) evicts
+// immediately; a steady stream of one such message per interval
+// asymptotes at 800 and never crosses the threshold.
 const badDataDecayInterval = 10 * time.Second
 
 // Bad-data weights mirror rippled's Resource::Fees.cpp:26-43. They
@@ -82,7 +88,6 @@ func BadDataWeight(reason string) int {
 		"replay-delta-req-unnegotiated",
 		"replay-delta-resp-unnegotiated",
 		"proof-path-resp-unnegotiated",
-		"squelch-unnegotiated",
 		"proposal-decode",
 		"validation-decode",
 		"validation-parse",
@@ -582,18 +587,21 @@ func (o *Overlay) onMessageReceived(evt Event) {
 
 	// Handle TMSquelch at the transport level — update per-peer squelch
 	// state and do not forward to external consumers. Mirrors rippled's
-	// PeerImp::onMessage(TMSquelch).
+	// PeerImp::onMessage(TMSquelch) at PeerImp.cpp:2691-2732, which
+	// applies every inbound TMSquelch unconditionally. Feature
+	// negotiation governs what WE SEND (we only emit TMSquelch to peers
+	// who advertised reduce-relay), not what we accept: a squelch
+	// directive is harmless if applied — it only suppresses what we
+	// send next — and rejecting it creates a not-actually-rippled
+	// attack surface where a hostile peer could advertise one capability
+	// set to us and another to a neighbor to desync squelch state.
 	if msgType == message.TypeSquelch {
-		// Gate inbound TMSquelch on the peer having negotiated
-		// vpReduceRelay in handshake. Rippled drops TMSquelch from
-		// peers that didn't opt into the reduce-relay feature; a peer
-		// that sends TMSquelch without advertising the feature is
-		// either buggy or probing — charge it.
-		if !o.PeerSupports(evt.PeerID, FeatureReduceRelay) {
-			slog.Debug("TMSquelch from peer without reduce-relay feature; dropping",
+		// TMSquelch is a validator-proposal concept (VPRR). We log,
+		// not drop, a squelch from a peer that didn't negotiate vprr —
+		// rippled applies the squelch regardless of feature gate.
+		if !o.PeerSupports(evt.PeerID, FeatureVpReduceRelay) {
+			slog.Debug("TMSquelch from peer without vprr feature; applying anyway (parity with rippled)",
 				"t", "Overlay", "peer", evt.PeerID)
-			o.IncPeerBadData(evt.PeerID, "squelch-unnegotiated")
-			return
 		}
 		o.handleSquelchMessage(evt)
 		return

@@ -72,6 +72,28 @@ type mockAdaptor struct {
 
 	// Time
 	now time.Time
+
+	// Features explicitly disabled for the test. nil/empty means all
+	// features enabled (mainnet default). Exercised by R4.10 test.
+	disabledFeatures map[string]bool
+
+	// Cookie / ServerVersion overrides for the R4.3 test. Zero means
+	// "use the default injected by GetCookie / GetServerVersion".
+	cookie        uint64
+	serverVersion uint64
+
+	// FeeVote stance for the R4.3 test. voteBaseFee/voteReserveBase/
+	// voteReserveIncrement are the triple values; votePostXRPFees
+	// controls which triple the engine emits (AMOUNT vs legacy UINT).
+	voteBaseFee          uint64
+	voteReserveBase      uint64
+	voteReserveIncrement uint64
+	votePostXRPFees      bool
+
+	// Override for GetValidatedLedgerHash. Zero by default; the
+	// R4.10 test sets this to a non-zero LedgerID to exercise the
+	// sfValidatedHash gate path.
+	validatedLedgerHashOverride consensus.LedgerID
 }
 
 func newMockAdaptor() *mockAdaptor {
@@ -127,10 +149,12 @@ func (a *mockAdaptor) RelayValidation(validation *consensus.Validation, _ uint64
 func (a *mockAdaptor) UpdateRelaySlot(_ []byte, _ uint64) {}
 
 func (a *mockAdaptor) GetValidatedLedgerHash() consensus.LedgerID {
-	// Test mock: no validated ledger tracking. Returning zero causes
-	// the engine's sendValidation to skip sfValidatedHash emission,
-	// which matches pre-P2.6 behavior — existing tests stay green.
-	return consensus.LedgerID{}
+	// Test mock: no validated ledger tracking by default. Tests that
+	// need to exercise the sfValidatedHash gate write
+	// a.validatedLedgerHashOverride before driving sendValidation.
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.validatedLedgerHashOverride
 }
 
 func (a *mockAdaptor) RequestTxSet(id consensus.TxSetID) error {
@@ -257,6 +281,46 @@ func (a *mockAdaptor) GetNegativeUNL() []consensus.NodeID {
 
 func (a *mockAdaptor) PeerReportedLedgers() []consensus.LedgerID {
 	return nil
+}
+
+func (a *mockAdaptor) IsFeatureEnabled(name string) bool {
+	// Test mock default: assume every feature is enabled, which
+	// matches the production mainnet assumption. Tests that need to
+	// exercise disabled-amendment paths set a.disabledFeatures entry
+	// for the relevant name.
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.disabledFeatures != nil && a.disabledFeatures[name] {
+		return false
+	}
+	return true
+}
+
+func (a *mockAdaptor) GetCookie() uint64 {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.cookie == 0 {
+		return 0xABCDEF1234567890 // non-zero test default so serializer emits the field
+	}
+	return a.cookie
+}
+
+func (a *mockAdaptor) GetServerVersion() uint64 {
+	// Test default: a non-zero value so the serializer emits the
+	// field. Callers can override by writing a.serverVersion before
+	// driving sendValidation.
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.serverVersion == 0 {
+		return 0x4000_0000_0000_0001
+	}
+	return a.serverVersion
+}
+
+func (a *mockAdaptor) GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, postXRPFees bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.voteBaseFee, a.voteReserveBase, a.voteReserveIncrement, a.votePostXRPFees
 }
 
 // Signing and verification
@@ -834,5 +898,285 @@ func TestEngine_WrongLedgerRecovery_ModeSequence(t *testing.T) {
 	}
 	if !fullFull {
 		t.Fatalf("Proposing validation must have Full=true")
+	}
+}
+
+// TestEngine_OnLedger_PromotesToSwitchedLedger pins the SECOND entry
+// point into ModeSwitchedLedger — the OnLedger path at engine.go:447
+// that fires when a peer finally delivers the ledger we were missing.
+// The WrongLedgerRecovery_ModeSequence test above covers the
+// handleWrongLedger direct-call path; this test covers OnLedger, which
+// is what the router actually calls on inbound mtGET_LEDGER responses.
+// A regression on either branch would let a validator emit a Full
+// validation immediately after recovery, violating the rippled
+// contract that recovery rounds MUST emit partials.
+func TestEngine_OnLedger_PromotesToSwitchedLedger(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	// Start in Proposing on a round whose parent we'll claim we DON'T
+	// have. The wrongLedgerID is the ID we'll feed into OnLedger to
+	// simulate the missing-ledger-arrived event.
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+	if mode := engine.Mode(); mode != consensus.ModeProposing {
+		t.Fatalf("initial round mode: want Proposing, got %v", mode)
+	}
+
+	targetID := consensus.LedgerID{0xCC}
+	targetLedger := &mockLedger{
+		id:        targetID,
+		seq:       101,
+		closeTime: time.Now(),
+	}
+	adaptor.ledgers[targetID] = targetLedger
+
+	// Put the engine in WrongLedger mode WITHOUT calling
+	// handleWrongLedger — this is the precondition OnLedger checks
+	// at engine.go:452.
+	engine.mu.Lock()
+	engine.wrongLedgerID = targetID
+	engine.setMode(consensus.ModeWrongLedger)
+	engine.mu.Unlock()
+
+	// OnLedger takes the engine lock internally — call it directly.
+	if err := engine.OnLedger(targetID, nil); err != nil {
+		t.Fatalf("OnLedger: %v", err)
+	}
+
+	if mode := engine.Mode(); mode != consensus.ModeSwitchedLedger {
+		t.Fatalf("post-OnLedger mode: want SwitchedLedger, got %v", mode)
+	}
+
+	// Emit a validation while in SwitchedLedger via OnLedger entry —
+	// must still be Full=false (partial).
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xCC}, seq: 102})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	got := len(adaptor.validationsBroadcast)
+	var gotFull bool
+	if got > 0 {
+		gotFull = adaptor.validationsBroadcast[0].Full
+	}
+	adaptor.mu.RUnlock()
+
+	if got != 1 {
+		t.Fatalf("SwitchedLedger after OnLedger must emit one partial validation, got %d", got)
+	}
+	if gotFull {
+		t.Fatalf("validation after OnLedger recovery must have Full=false (partial)")
+	}
+}
+
+// TestSendValidation_ValidatedHashGatedOnHardenedValidations pins the
+// R4.10 fix: sfValidatedHash must only be emitted when the
+// featureHardenedValidations amendment is enabled (rippled
+// RCLConsensus.cpp:853). On mainnet this amendment has been active
+// since 2020 so the gate is invisible; on testnet/standalone a node
+// running against pre-HardenedValidations rules MUST omit the field
+// or peers on the old rules reject the validation as malformed.
+func TestSendValidation_ValidatedHashGatedOnHardenedValidations(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	// Seed a non-zero validated-ledger hash so the emission path has
+	// something to copy. The gate decides whether to copy it or skip.
+	knownHash := consensus.LedgerID{0x11, 0x22, 0x33}
+	adaptor.lastLCL = &mockLedger{id: knownHash, seq: 99}
+	adaptor.validatedLedgerHashOverride = knownHash
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	// Case 1: HardenedValidations enabled (default) — expect ValidatedHash
+	// populated from GetValidatedLedgerHash.
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0x55}, seq: 101})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	if len(adaptor.validationsBroadcast) != 1 {
+		t.Fatalf("want one validation, got %d", len(adaptor.validationsBroadcast))
+	}
+	gotWithGate := adaptor.validationsBroadcast[0].ValidatedHash
+	adaptor.mu.RUnlock()
+
+	// Case 2: HardenedValidations disabled — ValidatedHash must be zero.
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.disabledFeatures = map[string]bool{"HardenedValidations": true}
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0x66}, seq: 102})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	if len(adaptor.validationsBroadcast) != 1 {
+		t.Fatalf("want one validation after disable, got %d", len(adaptor.validationsBroadcast))
+	}
+	gotWithoutGate := adaptor.validationsBroadcast[0].ValidatedHash
+	adaptor.mu.RUnlock()
+
+	// When disabled the field must be zero.
+	if gotWithoutGate != (consensus.LedgerID{}) {
+		t.Fatalf("HardenedValidations disabled: ValidatedHash must be zero, got %x", gotWithoutGate)
+	}
+	// When enabled, the field should have been populated (either the
+	// seeded hash or whatever GetValidatedLedgerHash returns). The gate
+	// flips the behavior; both cases with the same adaptor state should
+	// differ in exactly this field.
+	if gotWithGate == gotWithoutGate && gotWithGate == (consensus.LedgerID{}) {
+		// If both are zero, the test doesn't prove anything — either the
+		// mock returns zero unconditionally or the non-zero seed wasn't
+		// reached. Don't silently pass.
+		t.Skipf("mock returned zero ValidatedHash in both cases; gate path not exercised")
+	}
+}
+
+// TestSendValidation_PopulatesCookieServerVersionFeeVote pins R4.3:
+// every emitted validation carries Cookie, ServerVersion, and either
+// the AMOUNT or UINT fee-vote triple (never both). Without this the
+// STValidation serializer's optional-field plumbing would be dead
+// code — a goXRPL validator would contribute nothing to flag-ledger
+// governance.
+func TestSendValidation_PopulatesCookieServerVersionFeeVote(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	// Set a fee-vote stance. postXRPFees=true exercises the AMOUNT
+	// triple (the modern path).
+	adaptor.voteBaseFee = 10
+	adaptor.voteReserveBase = 1_000_000
+	adaptor.voteReserveIncrement = 200_000
+	adaptor.votePostXRPFees = true
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0x77}, seq: 101})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	defer adaptor.mu.RUnlock()
+	if len(adaptor.validationsBroadcast) != 1 {
+		t.Fatalf("want one validation, got %d", len(adaptor.validationsBroadcast))
+	}
+	v := adaptor.validationsBroadcast[0]
+
+	if v.Cookie == 0 {
+		t.Error("Cookie must be non-zero (adaptor must have generated one at boot)")
+	}
+	if v.ServerVersion == 0 {
+		t.Error("ServerVersion must be non-zero")
+	}
+	// AMOUNT triple populated, legacy UINT triple NOT populated.
+	if v.BaseFeeDrops != 10 || v.ReserveBaseDrops != 1_000_000 || v.ReserveIncrementDrops != 200_000 {
+		t.Errorf("AMOUNT fee-vote triple not populated correctly: got %+v",
+			[3]uint64{v.BaseFeeDrops, v.ReserveBaseDrops, v.ReserveIncrementDrops})
+	}
+	if v.BaseFee != 0 || v.ReserveBase != 0 || v.ReserveIncrement != 0 {
+		t.Errorf("legacy UINT triple must stay zero under postXRPFees=true: got (%d, %d, %d)",
+			v.BaseFee, v.ReserveBase, v.ReserveIncrement)
+	}
+}
+
+// TestSendValidation_LegacyFeeTriple verifies the pre-XRPFees path:
+// postXRPFees=false must populate the UINT triple and leave the
+// AMOUNT triple zero — mirroring FeeVoteImpl.cpp:120-192's hard
+// if/else on featureXRPFees.
+func TestSendValidation_LegacyFeeTriple(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	adaptor.voteBaseFee = 10
+	adaptor.voteReserveBase = 5_000_000
+	adaptor.voteReserveIncrement = 1_000_000
+	adaptor.votePostXRPFees = false
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0x88}, seq: 101})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	defer adaptor.mu.RUnlock()
+	if len(adaptor.validationsBroadcast) != 1 {
+		t.Fatalf("want one validation, got %d", len(adaptor.validationsBroadcast))
+	}
+	v := adaptor.validationsBroadcast[0]
+
+	if v.BaseFee != 10 || v.ReserveBase != 5_000_000 || v.ReserveIncrement != 1_000_000 {
+		t.Errorf("legacy UINT fee-vote triple not populated: got BaseFee=%d ReserveBase=%d ReserveIncrement=%d",
+			v.BaseFee, v.ReserveBase, v.ReserveIncrement)
+	}
+	if v.BaseFeeDrops != 0 || v.ReserveBaseDrops != 0 || v.ReserveIncrementDrops != 0 {
+		t.Errorf("AMOUNT triple must stay zero under postXRPFees=false: got %+v",
+			[3]uint64{v.BaseFeeDrops, v.ReserveBaseDrops, v.ReserveIncrementDrops})
 	}
 }

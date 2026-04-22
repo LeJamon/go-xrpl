@@ -29,15 +29,17 @@ type ledgerLookup interface {
 	GetLedgerBySequence(seq uint32) (*ledger.Ledger, error)
 }
 
-// Compile-time interface check: the new adapter must satisfy LedgerProvider
-// in full so a single provider can be wired in production (covers the legacy
-// mtGET_LEDGER path AND the replay/proof-path paths).
+// Compile-time interface check.
 var _ peermanagement.LedgerProvider = (*LedgerProvider)(nil)
 
 // LedgerProvider implements peermanagement.LedgerProvider on top of the
-// goXRPL ledger service. The five methods cover both legacy mtGET_LEDGER
-// (header / state node / tx node lookups) and the LedgerReplay protocol
-// (mtREPLAY_DELTA_REQ / mtPROOF_PATH_REQ).
+// goXRPL ledger service. It answers the LedgerReplay protocol paths
+// (mtREPLAY_DELTA_REQ / mtPROOF_PATH_REQ) for the overlay; the legacy
+// mtGET_LEDGER(LedgerInfoBase) path is NOT routed through this provider —
+// the consensus router's handleGetLedger (router.go) answers those requests
+// directly from the ledger service. The adapter exists so peermanagement
+// can reach the ledger service without importing internal/ledger, which is
+// forbidden by the layering boundary between the two packages.
 type LedgerProvider struct {
 	svc ledgerLookup
 }

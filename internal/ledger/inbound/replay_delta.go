@@ -21,19 +21,25 @@ import (
 	"github.com/LeJamon/goXRPLd/shamap"
 )
 
-// replayDeltaTimeout caps how long a single replay-delta acquisition can
-// wait for its response. Does NOT mirror rippled's sub-task timeout
-// (SUB_TASK_TIMEOUT=250ms × SUB_TASK_MAX_TIMEOUTS=10 → effective 2.5s
-// at LedgerReplayer.h:49-51). Rippled's tighter budget works because it
-// retries against a different peer on each sub-task timeout; we don't
-// have that retry loop yet, so a 2.5s budget would fall through to the
-// legacy path before most responses have a chance to arrive over a
-// realistic WAN RTT. 30s is chosen to sit well above typical cross-AZ
-// round-trips plus peer processing, so a single delivered reply is
-// almost always used and the legacy fallback only fires on genuine
-// failure. If we ever port rippled's per-peer sub-task retry, drop
-// this to 2.5s and correspondingly tighten inboundReplayDeltaTickInterval.
-const replayDeltaTimeout = 30 * time.Second
+// replayDeltaTimeout caps the TOTAL budget a replay-delta acquisition
+// is allowed across its entire retry loop (sub-task timeouts +
+// peer-swaps + legacy fallback). Crossing this budget triggers the
+// outer-failure path in the router, which abandons the acquisition
+// and re-arms via the legacy mtGET_LEDGER path. Sized to comfortably
+// cover rippled's inner budget (SubTaskRetry × Max + FallbackTime ≈
+// 2.5s + 2s = 4.5s) with safety margin for slow WAN RTTs.
+const replayDeltaTimeout = 10 * time.Second
+
+// subTaskRetryInterval is the per-peer sub-task timeout. A request
+// that hasn't received a matching response within this window is
+// considered dropped and the router rotates to a new peer. Matches
+// rippled's LedgerReplayer.h:49 SUB_TASK_TIMEOUT.
+const subTaskRetryInterval = 250 * time.Millisecond
+
+// subTaskRetryMax caps how many distinct peers are tried before the
+// outer budget kicks in and we fall back to the legacy path. Matches
+// rippled's LedgerReplayer.h:51 SUB_TASK_MAX_TIMEOUTS.
+const subTaskRetryMax = 10
 
 // DecodedTx pairs a verified transaction with its metadata-derived index.
 // Returned (in TransactionIndex order) by ReplayDelta.OrderedTxs() once
@@ -87,6 +93,19 @@ type ReplayDelta struct {
 	result  *ledger.Ledger // pre-apply: parent state carried through
 	derived *ledger.Ledger // post-apply: state map re-derived by the engine
 	txs     []DecodedTx
+
+	// subTaskStart is the time of the last wire request (initial send
+	// or peer rotation). Drives IsSubTaskTimedOut without touching
+	// `created` (which bounds the outer budget).
+	subTaskStart time.Time
+	// retryCount is the number of peer rotations performed so far. At
+	// subTaskRetryMax the caller escalates to the legacy path.
+	retryCount int
+	// triedPeers remembers peers already asked; the router passes this
+	// to ReplayCapablePeersExcluding so we don't loop back to a silent
+	// peer. Stored as a slice (not a set) because subTaskRetryMax is
+	// small and we need deterministic iteration.
+	triedPeers []uint64
 }
 
 // NewReplayDelta creates a ReplayDelta acquisition for the ledger
@@ -113,14 +132,17 @@ func NewReplayDeltaWithClock(hash [32]byte, peerID uint64, parent *ledger.Ledger
 	if clock == nil {
 		clock = SystemClock
 	}
+	now := clock.Now()
 	return &ReplayDelta{
-		hash:    hash,
-		peerID:  peerID,
-		parent:  parent,
-		clock:   clock,
-		created: clock.Now(),
-		state:   StateWantBase,
-		logger:  logger,
+		hash:         hash,
+		peerID:       peerID,
+		parent:       parent,
+		clock:        clock,
+		created:      now,
+		subTaskStart: now,
+		state:        StateWantBase,
+		logger:       logger,
+		triedPeers:   []uint64{peerID},
 	}
 }
 
@@ -159,9 +181,13 @@ func (r *ReplayDelta) IsComplete() bool {
 	return r.state == StateComplete
 }
 
-// IsTimedOut reports whether the request has outlived its budget without
-// reaching a terminal state. The consensus router polls this and falls
-// back to the legacy acquisition path when it returns true.
+// IsTimedOut reports whether the request has outlived its OUTER
+// budget (replayDeltaTimeout) — the hard ceiling beyond which the
+// router abandons the replay-delta path entirely and falls back to
+// the legacy mtGET_LEDGER acquisition. The sub-task retry loop
+// typically recovers long before this ceiling fires; it exists as a
+// safety net for edge cases like the entire tried-peer set going
+// silent simultaneously.
 func (r *ReplayDelta) IsTimedOut() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -169,6 +195,65 @@ func (r *ReplayDelta) IsTimedOut() bool {
 		return false
 	}
 	return r.clock.Now().Sub(r.created) > replayDeltaTimeout
+}
+
+// IsSubTaskTimedOut reports whether the current peer has held the
+// request past the sub-task window without delivering a response.
+// The router rotates peers on this signal, matching rippled's
+// LedgerDeltaAcquire::onTimer rotation semantics
+// (LedgerDeltaAcquire.cpp, driven by SUB_TASK_TIMEOUT at
+// LedgerReplayer.h:49).
+func (r *ReplayDelta) IsSubTaskTimedOut() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state == StateComplete || r.state == StateFailed {
+		return false
+	}
+	return r.clock.Now().Sub(r.subTaskStart) > subTaskRetryInterval
+}
+
+// RetriesExhausted reports whether we've already rotated through
+// subTaskRetryMax peers without a successful response. When true,
+// the router stops rotating and waits for the outer budget (or
+// bypasses it by calling Abandon directly).
+func (r *ReplayDelta) RetriesExhausted() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.retryCount >= subTaskRetryMax
+}
+
+// RetryCount returns the number of peer rotations performed so far.
+// Used by the router's maintenance tick and by tests to assert the
+// retry loop ran as expected.
+func (r *ReplayDelta) RetryCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.retryCount
+}
+
+// TriedPeers returns a snapshot of peer IDs we've already asked.
+// The router hands this to ReplayCapablePeersExcluding so the next
+// rotation picks a fresh peer.
+func (r *ReplayDelta) TriedPeers() []uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]uint64, len(r.triedPeers))
+	copy(out, r.triedPeers)
+	return out
+}
+
+// NoteSubTaskRetry advances the sub-task state to a new peer:
+// updates peerID, resets the sub-task timer, and appends to
+// triedPeers so subsequent rotations don't cycle back. Caller is
+// responsible for issuing the new wire request to newPeerID.
+// Matches rippled's LedgerDeltaAcquire::trigger-next-peer flow.
+func (r *ReplayDelta) NoteSubTaskRetry(newPeerID uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.peerID = newPeerID
+	r.subTaskStart = r.clock.Now()
+	r.retryCount++
+	r.triedPeers = append(r.triedPeers, newPeerID)
 }
 
 // Result returns the ledger reconstructed from the verified delta. Only

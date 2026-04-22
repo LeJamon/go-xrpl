@@ -295,6 +295,77 @@ func TestInboundReplayDelta_Timeout(t *testing.T) {
 	assert.False(t, rd.IsTimedOut(), "terminal state silences IsTimedOut")
 }
 
+// TestInboundReplayDelta_SubTaskRetryLoop exercises the R4.8 peer-swap
+// machinery. Mirrors rippled's LedgerDeltaAcquire sub-task rotation
+// (LedgerReplayer.h:49-51 SUB_TASK_TIMEOUT=250ms × SUB_TASK_MAX=10):
+// a peer that hasn't answered within the sub-task window is rotated
+// by NoteSubTaskRetry, which resets the sub-task clock and records
+// the new peer in TriedPeers. RetriesExhausted fires after
+// subTaskRetryMax rotations so the router knows to stop rotating and
+// let the outer budget escalate to the legacy fallback.
+func TestInboundReplayDelta_SubTaskRetryLoop(t *testing.T) {
+	parent := makeGenesisLedger(t)
+	rd := NewReplayDelta([32]byte{0xAA}, 100, parent, nil)
+
+	// Fresh acquisition: sub-task not yet timed out, no retries done.
+	assert.False(t, rd.IsSubTaskTimedOut(), "fresh request not sub-task-timed-out")
+	assert.False(t, rd.RetriesExhausted(), "no retries yet")
+	assert.Equal(t, 0, rd.RetryCount())
+	assert.Equal(t, []uint64{100}, rd.TriedPeers(), "initial peer must be tracked")
+
+	// Rewind the sub-task clock to simulate 250ms elapsed without a
+	// response. Can't use clock injection here (SystemClock is fixed),
+	// so we poke the private field — same technique as the outer
+	// timeout test above.
+	rd.mu.Lock()
+	rd.subTaskStart = time.Now().Add(-2 * subTaskRetryInterval)
+	rd.mu.Unlock()
+	assert.True(t, rd.IsSubTaskTimedOut(),
+		"sub-task must time out after subTaskRetryInterval elapsed")
+
+	// Rotate to a new peer: sub-task timer resets, retryCount advances,
+	// triedPeers grows.
+	rd.NoteSubTaskRetry(200)
+	assert.Equal(t, uint64(200), rd.PeerID(), "peer ID must advance")
+	assert.Equal(t, 1, rd.RetryCount())
+	assert.Equal(t, []uint64{100, 200}, rd.TriedPeers())
+	assert.False(t, rd.IsSubTaskTimedOut(),
+		"NoteSubTaskRetry must reset the sub-task clock")
+
+	// Exhaust retries by driving the loop subTaskRetryMax-1 more times.
+	for i := 2; i <= subTaskRetryMax; i++ {
+		rd.NoteSubTaskRetry(uint64(100 + i*100))
+	}
+	assert.True(t, rd.RetriesExhausted(),
+		"after subTaskRetryMax rotations RetriesExhausted must fire")
+	assert.Equal(t, subTaskRetryMax, rd.RetryCount())
+
+	// After exhaustion a subsequent sub-task timeout does NOT produce
+	// a further retry from the router (SubTaskTimedOut filter in the
+	// replayer skips exhausted entries).
+	r := NewReplayer(nil, nil, 1)
+	r.inFlight[rd.Hash()] = rd
+	assert.Empty(t, r.SubTaskTimedOut(),
+		"exhausted acquisition must not appear in SubTaskTimedOut")
+}
+
+// TestInboundReplayDelta_SubTaskTimeoutDoesNotFireInTerminalState
+// verifies the short-circuit on state==Complete/Failed: once an
+// acquisition reaches a terminal state the sub-task retry machinery
+// goes quiet, matching the same guard on IsTimedOut.
+func TestInboundReplayDelta_SubTaskTimeoutDoesNotFireInTerminalState(t *testing.T) {
+	parent := makeGenesisLedger(t)
+	rd := NewReplayDelta([32]byte{0xBB}, 42, parent, nil)
+
+	rd.mu.Lock()
+	rd.subTaskStart = time.Now().Add(-2 * subTaskRetryInterval)
+	rd.state = StateComplete
+	rd.mu.Unlock()
+
+	assert.False(t, rd.IsSubTaskTimedOut(),
+		"terminal state must silence IsSubTaskTimedOut (no rotation after success)")
+}
+
 // TestInboundReplayDelta_ParentHashMismatch verifies the parent-linkage
 // invariant: a peer that returns a header whose ParentHash differs from
 // our parent's hash is rejected (defends against fork-serving peers).

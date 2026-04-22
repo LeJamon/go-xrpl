@@ -371,7 +371,8 @@ func TestFeatureString(t *testing.T) {
 		{FeatureValidatorListPropagation, "validatorListPropagation"},
 		{FeatureLedgerReplay, "ledgerReplay"},
 		{FeatureCompression, "compression"},
-		{FeatureReduceRelay, "reduceRelay"},
+		{FeatureVpReduceRelay, "vpReduceRelay"},
+		{FeatureTxReduceRelay, "txReduceRelay"},
 		{FeatureTransactionBatching, "transactionBatching"},
 		{Feature(99), "unknown"},
 	}
@@ -851,49 +852,58 @@ func TestMakeFeaturesResponseHeader(t *testing.T) {
 	}
 }
 
-// TestParseProtocolCtlFeatures tests full feature set parsing
+// TestParseProtocolCtlFeatures tests full feature set parsing. VPRR and
+// TXRR are tracked independently — rippled's Handshake.cpp publishes
+// them as separate flags, so an operator may enable one without the
+// other. Tests pin both the "all on" and the "only one" cases.
 func TestParseProtocolCtlFeatures(t *testing.T) {
 	tests := []struct {
 		name      string
 		header    string
 		hasCompr  bool
 		hasReplay bool
-		hasReduce bool
+		hasVPRR   bool
+		hasTXRR   bool
 	}{
 		{
 			name:      "all_features",
 			header:    "compr=lz4;ledgerreplay=1;vprr=1;txrr=1",
 			hasCompr:  true,
 			hasReplay: true,
-			hasReduce: true,
+			hasVPRR:   true,
+			hasTXRR:   true,
 		},
 		{
 			name:      "only_compression",
 			header:    "compr=lz4",
 			hasCompr:  true,
 			hasReplay: false,
-			hasReduce: false,
+			hasVPRR:   false,
+			hasTXRR:   false,
 		},
 		{
 			name:      "only_vprr",
 			header:    "vprr=1",
 			hasCompr:  false,
 			hasReplay: false,
-			hasReduce: true,
+			hasVPRR:   true,
+			hasTXRR:   false,
 		},
 		{
 			name:      "only_txrr",
 			header:    "txrr=1",
 			hasCompr:  false,
 			hasReplay: false,
-			hasReduce: true,
+			hasVPRR:   false,
+			hasTXRR:   true,
 		},
 		{
 			name:      "empty_header",
 			header:    "",
 			hasCompr:  false,
 			hasReplay: false,
-			hasReduce: false,
+			hasVPRR:   false,
+			hasTXRR:   false,
 		},
 	}
 
@@ -908,7 +918,10 @@ func TestParseProtocolCtlFeatures(t *testing.T) {
 
 			assert.Equal(t, tt.hasCompr, fs.Has(FeatureCompression))
 			assert.Equal(t, tt.hasReplay, fs.Has(FeatureLedgerReplay))
-			assert.Equal(t, tt.hasReduce, fs.Has(FeatureReduceRelay))
+			assert.Equal(t, tt.hasVPRR, fs.Has(FeatureVpReduceRelay),
+				"vprr flag must be tracked independently of txrr")
+			assert.Equal(t, tt.hasTXRR, fs.Has(FeatureTxReduceRelay),
+				"txrr flag must be tracked independently of vprr")
 		})
 	}
 }

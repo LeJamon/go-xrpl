@@ -251,3 +251,56 @@ func TestPeerAddSquelch_RejectsInvalidDuration(t *testing.T) {
 	assert.Equal(t, uint32(weightInvalidData*2), peer.BadDataCount(),
 		"rejected too-long duration must charge a second feeInvalidData (2 events × 400)")
 }
+
+// TestOverlay_InboundSquelch_FromUnnegotiatedPeer verifies that an
+// inbound TMSquelch from a peer that did NOT negotiate reduce-relay is
+// still applied (parity with rippled PeerImp.cpp:2691-2732). Feature
+// negotiation governs what we SEND, not what we accept — rejecting
+// inbound squelches would create a not-actually-rippled divergence.
+// Regression guard against the historic stricter gate that charged
+// feeInvalidData (400) and dropped the squelch.
+func TestOverlay_InboundSquelch_FromUnnegotiatedPeer(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	o := &Overlay{
+		peers:  make(map[PeerID]*Peer),
+		events: make(chan Event, 8),
+	}
+
+	endpoint := Endpoint{Host: "127.0.0.1", Port: 51235}
+	peer := NewPeer(PeerID(42), endpoint, false, id, make(chan Event, 1))
+	// NOTE: no capabilities set — simulates a peer that didn't
+	// advertise reduce-relay in handshake. PeerSupports(..., Feature
+	// ReduceRelay) will therefore return false.
+	o.peers[peer.ID()] = peer
+
+	validator := make([]byte, 33)
+	for i := range validator {
+		validator[i] = byte(i + 1)
+	}
+
+	sq := &message.Squelch{
+		Squelch:         true,
+		ValidatorPubKey: validator,
+		SquelchDuration: uint32(MinUnsquelchExpire / time.Second),
+	}
+	payload, err := message.Encode(sq)
+	require.NoError(t, err)
+
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeSquelch),
+		Payload:     payload,
+	})
+
+	// Squelch must have been applied: ExpireSquelch returns false
+	// (messages from this validator are dropped).
+	assert.False(t, peer.ExpireSquelch(validator),
+		"inbound TMSquelch must apply even from an unnegotiated peer (rippled parity)")
+
+	// No bad-data charge: accepting a squelch from an unnegotiated
+	// peer is not a protocol violation per rippled.
+	assert.Equal(t, uint32(0), peer.BadDataCount(),
+		"inbound TMSquelch from unnegotiated peer must NOT charge bad-data (regression guard for historic stricter gate)")
+}

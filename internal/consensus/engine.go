@@ -193,6 +193,39 @@ type Adaptor interface {
 	// treats nil as "all trusted validators contribute to quorum".
 	GetNegativeUNL() []NodeID
 
+	// IsFeatureEnabled reports whether the named amendment is enabled
+	// on the rules of the currently-validated (or otherwise most
+	// authoritative) ledger. Used by the engine to gate optional
+	// STValidation fields that rippled only emits under specific
+	// amendments — e.g., sfValidatedHash requires featureHardenedValidations
+	// (RCLConsensus.cpp:853). Adaptors that can't read rules (no ledger
+	// yet, adaptor-only test harness) SHOULD return true to preserve
+	// the mainnet-default behavior of emitting the optional fields.
+	IsFeatureEnabled(name string) bool
+
+	// GetCookie returns the validator's per-boot sfCookie value —
+	// generated once at adaptor construction from a CSPRNG. Emitted on
+	// every outgoing validation so peers can detect a validator
+	// restart. Mirrors rippled RCLConsensus.cpp:813-818.
+	GetCookie() uint64
+
+	// GetServerVersion returns the sfServerVersion value the validator
+	// advertises — an implementation + version identifier. Different
+	// implementations (rippled vs goXRPL) use different high-byte tags
+	// so network-wide version accounting can distinguish them. Zero
+	// means "not included" and the serializer will skip the field.
+	GetServerVersion() uint64
+
+	// GetFeeVote returns this validator's fee-vote stance for emission
+	// on every validation. postXRPFees reflects the parent ledger's
+	// rules: when true the engine populates the AMOUNT triple
+	// (sfBaseFeeDrops/sfReserveBaseDrops/sfReserveIncrementDrops);
+	// when false it populates the legacy UINT triple
+	// (sfBaseFee/sfReserveBase/sfReserveIncrement). Matches rippled's
+	// FeeVoteImpl.cpp:120-192 mutual-exclusive gate. Zero values from
+	// the adaptor mean "no vote" and the serializer omits the fields.
+	GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, postXRPFees bool)
+
 	// PeerReportedLedgers returns the last-closed ledger hashes that
 	// overlay peers have advertised via statusChange messages. Used
 	// by getNetworkLedger as a fallback signal when peer proposals

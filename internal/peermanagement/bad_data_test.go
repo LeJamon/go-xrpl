@@ -173,3 +173,35 @@ func TestOverlay_EvictBadDataPeers_RemovesOffendersOnly(t *testing.T) {
 	assert.True(t, goodAfter,
 		"peer below EvictBadDataThreshold must survive an eviction tick")
 }
+
+// TestOverlay_NoEviction_AfterSingleInvalidData guards against a
+// regression to the historic 1000-threshold, which was 25× more
+// aggressive than rippled and evicted honest peers after a single
+// malformed message + a handful of decode misses. At the rippled-parity
+// 25000 threshold a single weightInvalidData (400) charge — the
+// heaviest bad-data weight — must NOT evict; a peer needs sustained
+// abuse to cross.
+func TestOverlay_NoEviction_AfterSingleInvalidData(t *testing.T) {
+	o := &Overlay{
+		peers:  make(map[PeerID]*Peer),
+		events: make(chan Event, 8),
+	}
+
+	peer := newTestPeer(t, PeerID(300))
+	o.peers[peer.ID()] = peer
+
+	// One feeInvalidData-equivalent charge.
+	peer.IncBadData("replay-delta-verify")
+	require.Equal(t, uint32(weightInvalidData), peer.BadDataCount(),
+		"single invalid-data charge should land at weightInvalidData")
+	require.Less(t, uint32(weightInvalidData), uint32(EvictBadDataThreshold),
+		"threshold must be well above a single invalid-data charge")
+
+	o.evictBadDataPeers()
+
+	o.peersMu.RLock()
+	_, stillThere := o.peers[peer.ID()]
+	o.peersMu.RUnlock()
+	assert.True(t, stillThere,
+		"peer charged one feeInvalidData must NOT be evicted (regression guard for threshold=1000)")
+}

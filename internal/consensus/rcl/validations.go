@@ -287,16 +287,12 @@ func (vt *ValidationTracker) checkFullValidation(ledgerID consensus.LedgerID) {
 		return
 	}
 
-	trustedCount := 0
 	var sampleSeq uint32
-	for nodeID, v := range ledgerVals {
-		if sampleSeq == 0 {
-			sampleSeq = v.LedgerSeq
-		}
-		if vt.trusted[nodeID] && !vt.negUNL[nodeID] {
-			trustedCount++
-		}
+	for _, v := range ledgerVals {
+		sampleSeq = v.LedgerSeq
+		break
 	}
+	trustedCount := vt.countTrustedExcludingNegUNLLocked(ledgerVals)
 
 	if trustedCount >= vt.quorum {
 		vt.fired[ledgerID] = struct{}{}
@@ -352,7 +348,12 @@ func (vt *ValidationTracker) GetValidationCount(ledgerID consensus.LedgerID) int
 	return len(ledgerVals)
 }
 
-// GetTrustedValidationCount returns the count of trusted validations.
+// GetTrustedValidationCount returns the count of trusted validations
+// for a ledger, EXCLUDING validators currently on the negative UNL.
+// Matches rippled's LedgerMaster.cpp:886,952,1120 where every trusted
+// count flows through negativeUNLFilter before comparison — so any
+// consumer of this method (quorum gate, server_info, future LedgerTrie
+// port) sees consistent, filtered numbers.
 func (vt *ValidationTracker) GetTrustedValidationCount(ledgerID consensus.LedgerID) int {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
@@ -361,10 +362,17 @@ func (vt *ValidationTracker) GetTrustedValidationCount(ledgerID consensus.Ledger
 	if !exists {
 		return 0
 	}
+	return vt.countTrustedExcludingNegUNLLocked(ledgerVals)
+}
 
+// countTrustedExcludingNegUNLLocked counts validators in ledgerVals
+// that are trusted AND not on the negUNL. Caller must hold vt.mu.
+func (vt *ValidationTracker) countTrustedExcludingNegUNLLocked(
+	ledgerVals map[consensus.NodeID]*consensus.Validation,
+) int {
 	count := 0
 	for nodeID := range ledgerVals {
-		if vt.trusted[nodeID] {
+		if vt.trusted[nodeID] && !vt.negUNL[nodeID] {
 			count++
 		}
 	}
@@ -377,12 +385,16 @@ func (vt *ValidationTracker) GetTrustedValidationCount(ledgerID consensus.Ledger
 // which returns the ledger with the most validation SUPPORT on its
 // ancestor chain — we approximate "support" with a flat trusted-count
 // at the exact ledger ID. Good enough when trusted validators broadly
-// agree; a full LedgerTrie port is a follow-up item.
+// agree; a full LedgerTrie port is a follow-up item. Inherits the
+// negUNL filter from GetTrustedValidationCount.
 func (vt *ValidationTracker) GetTrustedSupport(ledgerID consensus.LedgerID) int {
 	return vt.GetTrustedValidationCount(ledgerID)
 }
 
-// IsFullyValidated returns true if the ledger has reached full validation.
+// IsFullyValidated returns true if the ledger has reached full
+// validation. Uses the negUNL-filtered trusted count, so a ledger
+// reaches full validation with the same quorum whether or not a
+// validator happens to be temporarily disabled.
 func (vt *ValidationTracker) IsFullyValidated(ledgerID consensus.LedgerID) bool {
 	return vt.GetTrustedValidationCount(ledgerID) >= vt.quorum
 }
@@ -395,11 +407,14 @@ func (vt *ValidationTracker) GetLatestValidation(nodeID consensus.NodeID) *conse
 }
 
 // GetCurrentValidators returns nodes that have recently validated.
+// Uses the injected clock (vt.now) so tests and production share the
+// same network-adjusted time source that Add() uses for its isCurrent
+// check — keeps "recent" consistent across both reads and writes.
 func (vt *ValidationTracker) GetCurrentValidators() []consensus.NodeID {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 
-	cutoff := time.Now().Add(-vt.freshness)
+	cutoff := vt.now().Add(-vt.freshness)
 	var result []consensus.NodeID
 
 	for nodeID, v := range vt.byNode {

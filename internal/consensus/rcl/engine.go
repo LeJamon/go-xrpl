@@ -1604,6 +1604,31 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 		SignTime:  e.adaptor.Now(),
 		SeenTime:  e.adaptor.Now(),
 		Full:      full,
+		// Cookie + ServerVersion on every validation — matches
+		// rippled RCLConsensus.cpp:803-818 where both are populated
+		// unconditionally. Zero values from the adaptor cause the
+		// serializer to omit the field (rippled's skip-if-absent
+		// behavior).
+		Cookie:        e.adaptor.GetCookie(),
+		ServerVersion: e.adaptor.GetServerVersion(),
+	}
+
+	// Fee vote: emit the AMOUNT triple under post-XRPFees rules, the
+	// legacy UINT triple otherwise. Rippled's FeeVoteImpl.cpp:120-192
+	// is a hard if/else on featureXRPFees; the adaptor's postXRPFees
+	// flag mirrors that decision so the two paths never co-emit.
+	// Zero values from the adaptor mean "no vote" and the serializer
+	// omits the fields.
+	if baseFee, reserveBase, reserveIncrement, postXRPFees := e.adaptor.GetFeeVote(); baseFee != 0 || reserveBase != 0 || reserveIncrement != 0 {
+		if postXRPFees {
+			validation.BaseFeeDrops = baseFee
+			validation.ReserveBaseDrops = reserveBase
+			validation.ReserveIncrementDrops = reserveIncrement
+		} else {
+			validation.BaseFee = baseFee
+			validation.ReserveBase = uint32(reserveBase)
+			validation.ReserveIncrement = uint32(reserveIncrement)
+		}
 	}
 
 	// Tie the validation to the tx-set we converged on, so peers can
@@ -1617,13 +1642,17 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 	}
 
 	// Attach the most-recent fully-validated LCL hash we know about.
-	// Rippled emits sfValidatedHash on every validation under
-	// featureHardenedValidations (RCLConsensus.cpp:858-859); it gives
-	// peers a second fork-detection signal beyond sfLedgerHash.
+	// Rippled emits sfValidatedHash ONLY under featureHardenedValidations
+	// (RCLConsensus.cpp:853). On mainnet that amendment has been active
+	// since 2020 so this is always true; on testnet/standalone a node
+	// running against pre-HardenedValidations rules must omit the field
+	// or peers on the old rules reject the validation as malformed.
 	// GetValidatedLedgerHash returns the zero LedgerID on a node that
-	// hasn't yet crossed quorum — in that case we skip emission.
-	if vh := e.adaptor.GetValidatedLedgerHash(); vh != (consensus.LedgerID{}) {
-		copy(validation.ValidatedHash[:], vh[:])
+	// hasn't yet crossed quorum — in that case we also skip emission.
+	if e.adaptor.IsFeatureEnabled("HardenedValidations") {
+		if vh := e.adaptor.GetValidatedLedgerHash(); vh != (consensus.LedgerID{}) {
+			copy(validation.ValidatedHash[:], vh[:])
+		}
 	}
 
 	if err := e.adaptor.SignValidation(validation); err != nil {

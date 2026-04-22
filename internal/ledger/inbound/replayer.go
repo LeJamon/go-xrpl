@@ -236,6 +236,27 @@ func (r *Replayer) TimedOut() []TimedOutEntry {
 	return out
 }
 
+// SubTaskTimedOut returns acquisitions whose current peer has gone
+// silent past subTaskRetryInterval but are still within the outer
+// budget and have retry attempts remaining. The caller rotates each
+// to a new peer by calling ReplayDelta.NoteSubTaskRetry(newPeerID)
+// and re-issuing the wire request. Separated from TimedOut so the
+// router handles rotation vs. abandon distinctly.
+func (r *Replayer) SubTaskTimedOut() []*ReplayDelta {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var out []*ReplayDelta
+	for _, rd := range r.inFlight {
+		if rd.IsSubTaskTimedOut() && !rd.IsTimedOut() && !rd.RetriesExhausted() {
+			out = append(out, rd)
+		}
+	}
+	// Stable order by seq for deterministic test assertions.
+	sort.Slice(out, func(i, j int) bool { return out[i].Seq() < out[j].Seq() })
+	return out
+}
+
 // Count returns the current number of in-flight acquisitions.
 func (r *Replayer) Count() int {
 	r.mu.Lock()

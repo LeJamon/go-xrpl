@@ -232,6 +232,21 @@ func TestValidationTracker_NegativeUNL_ExcludedFromQuorum(t *testing.T) {
 		t.Fatalf("fully-validated callback fired with negUNL validator counted (fired=%d)", fired)
 	}
 
+	// The other trusted-count read paths must also honor the negUNL
+	// filter — matches rippled's LedgerMaster.cpp wrapping every
+	// trusted count through negativeUNLFilter. Without the filter here
+	// a caller comparing GetTrustedValidationCount >= quorum would
+	// disagree with the firing gate.
+	if got := vt.GetTrustedValidationCount(ledger); got != 2 {
+		t.Fatalf("GetTrustedValidationCount must exclude negUNL: got %d, want 2", got)
+	}
+	if got := vt.GetTrustedSupport(ledger); got != 2 {
+		t.Fatalf("GetTrustedSupport must exclude negUNL: got %d, want 2", got)
+	}
+	if vt.IsFullyValidated(ledger) {
+		t.Fatal("IsFullyValidated must honor negUNL filter and return false (only 2 non-negUNL trusted)")
+	}
+
 	// Clear D from negUNL and re-Add its validation — now effective
 	// count = 3 and quorum is reached.
 	vt.SetNegativeUNL(nil)

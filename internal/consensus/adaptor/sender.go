@@ -146,6 +146,37 @@ func (s *OverlaySender) PeerSupportsReplay(peerID uint64) bool {
 	return s.overlay.PeerSupports(peermanagement.PeerID(peerID), peermanagement.FeatureLedgerReplay)
 }
 
+// ReplayCapablePeersExcluding returns up to `max` peer IDs that
+// advertised ledger-replay via handshake, omitting IDs in `excluded`.
+// Uses the overlay's Peers() snapshot and filters by PeerSupports.
+// O(n*m) in peers × excluded, which is fine for realistic n (< 100)
+// and m (< subTaskRetryMax = 10).
+func (s *OverlaySender) ReplayCapablePeersExcluding(excluded []uint64, max int) []uint64 {
+	if max <= 0 {
+		return nil
+	}
+	excludedSet := make(map[uint64]struct{}, len(excluded))
+	for _, id := range excluded {
+		excludedSet[id] = struct{}{}
+	}
+	peers := s.overlay.Peers()
+	out := make([]uint64, 0, max)
+	for _, p := range peers {
+		id := uint64(p.ID)
+		if _, skip := excludedSet[id]; skip {
+			continue
+		}
+		if !s.overlay.PeerSupports(p.ID, peermanagement.FeatureLedgerReplay) {
+			continue
+		}
+		out = append(out, id)
+		if len(out) >= max {
+			break
+		}
+	}
+	return out
+}
+
 // IncPeerBadData forwards to Overlay.IncPeerBadData. Called by the
 // consensus router via Adaptor.IncPeerBadData when it detects malformed
 // or invalid data from a peer (e.g., replay-delta verification

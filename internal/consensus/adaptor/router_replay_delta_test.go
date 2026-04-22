@@ -36,6 +36,12 @@ type recordingSender struct {
 	// ledger-replay" path without extra setup; tests that want to cover
 	// the no-support fallback flip this to false.
 	peerSupportsReplay bool
+
+	// availableReplayPeers is the pool returned by
+	// ReplayCapablePeersExcluding. Empty by default — tests exercising
+	// the R4.8 peer-swap retry loop populate this to drive the
+	// rotation path.
+	availableReplayPeers []uint64
 }
 
 type replayDeltaCall struct {
@@ -87,6 +93,33 @@ func (s *recordingSender) PeerSupportsReplay(uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.peerSupportsReplay
+}
+
+// ReplayCapablePeersExcluding: tests may pre-populate availableReplayPeers
+// to exercise the peer-swap retry loop. When empty the router's rotate
+// path falls straight through to the legacy fallback, which is what the
+// pre-R4.8 tests implicitly assume.
+func (s *recordingSender) ReplayCapablePeersExcluding(excluded []uint64, max int) []uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.availableReplayPeers) == 0 {
+		return nil
+	}
+	excludedSet := make(map[uint64]struct{}, len(excluded))
+	for _, id := range excluded {
+		excludedSet[id] = struct{}{}
+	}
+	out := make([]uint64, 0, max)
+	for _, id := range s.availableReplayPeers {
+		if _, skip := excludedSet[id]; skip {
+			continue
+		}
+		out = append(out, id)
+		if len(out) >= max {
+			break
+		}
+	}
+	return out
 }
 
 // newRecordingAdaptor wires a fresh adaptor against the supplied service

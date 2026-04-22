@@ -4,12 +4,15 @@
 package adaptor
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
@@ -58,6 +61,14 @@ type NetworkSender interface {
 	// that would silently drop them. Returns false conservatively when
 	// the peer is unknown or the handshake has not completed.
 	PeerSupportsReplay(peerID uint64) bool
+	// ReplayCapablePeersExcluding returns up to `max` peer IDs that
+	// advertised the ledger-replay feature in handshake, omitting
+	// peer IDs in `excluded`. Used by the replay-delta retry loop to
+	// rotate peers on a sub-task timeout — mirrors rippled's
+	// LedgerReplayer peer-swap mechanism (LedgerDeltaAcquire::onTimer
+	// picks a new PeerSet entry on each sub-task tick). Returns an
+	// empty slice when no eligible peers exist.
+	ReplayCapablePeersExcluding(excluded []uint64, max int) []uint64
 	// IncPeerBadData attributes a malformed/invalid-data event to the
 	// peer so the overlay can charge it toward the eviction threshold.
 	// Called by the consensus router when verification of a peer-sent
@@ -83,6 +94,7 @@ func (n *noopSender) RequestReplayDelta(uint64, [32]byte) error                {
 func (n *noopSender) RequestStateNodes(uint64, [32]byte, [][]byte) error       { return nil }
 func (n *noopSender) SendToPeer(uint64, []byte) error                          { return nil }
 func (n *noopSender) PeerSupportsReplay(uint64) bool                           { return false }
+func (n *noopSender) ReplayCapablePeersExcluding([]uint64, int) []uint64       { return nil }
 func (n *noopSender) IncPeerBadData(uint64, string)                            {}
 
 // Compile-time interface check.
@@ -123,7 +135,42 @@ type Adaptor struct {
 	peerLCLsMu sync.RWMutex
 	peerLCLs   map[uint64]consensus.LedgerID
 
+	// cookie is a random 64-bit value generated at adaptor creation
+	// (one-shot per boot), emitted via sfCookie on every validation.
+	// Matches rippled's RCLConsensus.cpp:813-818 which reads from
+	// std::random_device once per instance.
+	cookie uint64
+
+	// feeVote is this validator's fee-vote stance, copied from Config
+	// at construction. Zero values mean "no vote".
+	feeVote FeeVoteStance
+
 	logger *slog.Logger
+}
+
+// goXRPLServerVersionTag identifies this implementation in the
+// sfServerVersion field. Rippled uses the top bit (0x8000...) as its
+// own identifier; goXRPL must NOT set that — setting it would
+// misrepresent this node as a rippled instance in any peer counting
+// version statistics on the network. We pick a distinct non-rippled
+// high-byte pattern so operators running both implementations can
+// tell them apart at a glance.
+const goXRPLServerVersionTag uint64 = 0x4000_0000_0000_0000
+
+// FeeVoteStance is this validator's desired fee structure — what it
+// wants the network to converge on at the next flag ledger. Emitted
+// on every validation as either the legacy UINT triple
+// (BaseFee/ReserveBase/ReserveIncrement) or the post-XRPFees AMOUNT
+// triple (BaseFeeDrops/ReserveBaseDrops/ReserveIncrementDrops).
+// The adaptor picks which set to emit based on the parent ledger's
+// rules — matches rippled's FeeVoteImpl.cpp:120-192 hard if/else
+// gate on featureXRPFees.
+//
+// Zero values mean "no vote" — the serializer skips the fields.
+type FeeVoteStance struct {
+	BaseFee          uint64
+	ReserveBase      uint32
+	ReserveIncrement uint32
 }
 
 // Config holds configuration for the Adaptor.
@@ -132,6 +179,10 @@ type Config struct {
 	Sender        NetworkSender
 	Identity      *ValidatorIdentity
 	Validators    []consensus.NodeID // UNL
+	// FeeVote is the validator's fee-vote stance. Zero values mean no
+	// vote. Production callers wire this from the [voting] stanza of
+	// the toml config (same semantics as rippled's FeeVoteSetup).
+	FeeVote FeeVoteStance
 }
 
 // New creates a new Adaptor.
@@ -153,6 +204,24 @@ func New(cfg Config) *Adaptor {
 		quorum = 1
 	}
 
+	// Cookie: generate a random 64-bit value at boot. Matches
+	// rippled's RCLConsensus.cpp:813-818 which reads one value from
+	// std::random_device for the lifetime of the instance. On the
+	// astronomically-improbable read error we fall back to a
+	// time-derived value — any non-zero cookie satisfies the wire
+	// format; the value carries no security-critical meaning.
+	var cookieBytes [8]byte
+	if _, err := rand.Read(cookieBytes[:]); err != nil {
+		binary.BigEndian.PutUint64(cookieBytes[:], uint64(time.Now().UnixNano()))
+	}
+	cookie := binary.BigEndian.Uint64(cookieBytes[:])
+	if cookie == 0 {
+		// Serializer treats zero as "omit" — bump to 1 in the
+		// infinitesimal case of an all-zero read so the field is
+		// always emitted (matches rippled's always-populated contract).
+		cookie = 1
+	}
+
 	return &Adaptor{
 		ledgerService:     cfg.LedgerService,
 		sender:            sender,
@@ -164,6 +233,8 @@ func New(cfg Config) *Adaptor {
 		txSetCache:        NewTxSetCache(),
 		pendingTxs:        make(map[consensus.TxID][]byte),
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
+		cookie:            cookie,
+		feeVote:           cfg.FeeVote,
 		logger:            slog.Default().With("component", "consensus-adaptor"),
 	}
 }
@@ -278,6 +349,14 @@ func (a *Adaptor) EngineConfigForReplay(parent *ledger.Ledger) tx.EngineConfig {
 // same decision applies to both real overlay peers and test doubles.
 func (a *Adaptor) PeerSupportsReplay(peerID uint64) bool {
 	return a.sender.PeerSupportsReplay(peerID)
+}
+
+// ReplayCapablePeersExcluding returns up to `max` peer IDs that
+// advertised ledger-replay, omitting peer IDs in `excluded`. Used by
+// the replay-delta retry loop to rotate peers on sub-task timeout —
+// matches rippled's LedgerDeltaAcquire::onTimer peer-swap.
+func (a *Adaptor) ReplayCapablePeersExcluding(excluded []uint64, max int) []uint64 {
+	return a.sender.ReplayCapablePeersExcluding(excluded, max)
 }
 
 // IncPeerBadData attributes an invalid-data event to the peer via the
@@ -574,6 +653,73 @@ func (a *Adaptor) GetNegativeUNL() []consensus.NodeID {
 		out = append(out, id)
 	}
 	return out
+}
+
+// GetCookie returns this adaptor's boot-lifetime cookie for emission
+// via sfCookie on every outgoing validation. Matches rippled's
+// one-shot-per-boot semantics (RCLConsensus.cpp:813-818).
+func (a *Adaptor) GetCookie() uint64 {
+	return a.cookie
+}
+
+// GetServerVersion returns the 64-bit version identifier this
+// validator advertises via sfServerVersion. The encoding deliberately
+// differs from rippled's (top bit 0x8000...) to avoid misrepresenting
+// goXRPL as rippled in peer version-counting statistics; we use
+// 0x4000... as a goXRPL tag and OR in a package version number.
+func (a *Adaptor) GetServerVersion() uint64 {
+	// Low bits are available for a semantic version encoding in the
+	// future; for now they stay zero so the tag byte is sufficient to
+	// identify a goXRPL validator.
+	return goXRPLServerVersionTag
+}
+
+// GetFeeVote returns this validator's fee-vote stance and whether the
+// post-XRPFees rules should apply. postXRPFees is read from the
+// parent ledger's rules so voting switches the instant the amendment
+// activates — mirrors rippled's FeeVoteImpl.cpp:120-192 hard gate.
+// Zero stance values mean "no vote" and the serializer will omit the
+// fields.
+func (a *Adaptor) GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, postXRPFees bool) {
+	return a.feeVote.BaseFee,
+		uint64(a.feeVote.ReserveBase),
+		uint64(a.feeVote.ReserveIncrement),
+		a.IsFeatureEnabled("XRPFees")
+}
+
+// IsFeatureEnabled reports whether the named amendment is enabled on
+// the rules of the currently-validated ledger. Used by the engine to
+// gate optional STValidation fields rippled only emits under specific
+// amendments (sfValidatedHash under featureHardenedValidations, etc).
+//
+// Returns true on "unknown" as a safe default:
+//   - no ledger service wired (test harness): preserves mainnet-default
+//     emission so behavior-pinning tests that don't bother with rules
+//     still see the fields they expect;
+//   - no validated ledger yet (pre-sync): we haven't learned the
+//     network rules, but emission of fields gated by default-yes
+//     amendments (like HardenedValidations, VoteDefaultYes) is the
+//     safe assumption on mainnet;
+//   - unknown feature name: treat as enabled so a typo doesn't silently
+//     drop emission on mainnet. The test path exercises the false case
+//     explicitly by passing rules with the feature disabled.
+func (a *Adaptor) IsFeatureEnabled(name string) bool {
+	if a.ledgerService == nil {
+		return true
+	}
+	l := a.ledgerService.GetValidatedLedger()
+	if l == nil {
+		return true
+	}
+	rules := l.Rules()
+	if rules == nil {
+		return true
+	}
+	f := amendment.GetFeatureByName(name)
+	if f == nil {
+		return true
+	}
+	return rules.Enabled(f.ID)
 }
 
 // --- Time operations ---
