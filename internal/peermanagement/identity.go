@@ -310,6 +310,16 @@ func ParsePublicKeyToken(encoded string) (*PublicKeyToken, error) {
 	}
 
 	keyBytes := payload[1:]
+
+	// Reject ed25519-tagged keys (0xED prefix). Rippled's handshake
+	// explicitly rejects non-secp256k1 node public keys at
+	// Handshake.cpp:294-295; we mirror that with an explicit check so
+	// the failure mode is a clear "unsupported key type" rather than a
+	// generic btcec parse error buried in the handshake log.
+	if len(keyBytes) > 0 && keyBytes[0] == 0xED {
+		return nil, errors.New("unsupported node public key type: ed25519 (rippled requires secp256k1)")
+	}
+
 	return NewPublicKeyToken(keyBytes)
 }
 

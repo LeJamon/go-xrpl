@@ -172,7 +172,10 @@ func startOverlay(t *testing.T) (*peermanagement.Overlay, context.CancelFunc) {
 		peermanagement.WithMaxPeers(4),
 		peermanagement.WithMaxInbound(2),
 		peermanagement.WithMaxOutbound(2),
-		peermanagement.WithReduceRelay(false),
+		// Reduce-relay ON so TMSquelch is accepted across the handshake
+		// negotiation (see Overlay.peerNegotiatedLedgerReplay-style gate
+		// in onMessageReceived for vpReduceRelay).
+		peermanagement.WithReduceRelay(true),
 		peermanagement.WithCompression(false),
 	)
 	require.NoError(t, err)

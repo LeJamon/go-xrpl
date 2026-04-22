@@ -209,6 +209,29 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 		buf = append(buf, byte(v.LoadFee>>24), byte(v.LoadFee>>16), byte(v.LoadFee>>8), byte(v.LoadFee))
 	}
 
+	// sfReserveBase (type 2, field 31) — optional flag-ledger fee vote
+	// (legacy pre-XRPFees form). Must stay in sync with
+	// serializeSTValidation emission order.
+	if v.ReserveBase != 0 {
+		buf = appendFieldHeader(buf, typeUINT32, fieldReserveBase)
+		buf = append(buf, byte(v.ReserveBase>>24), byte(v.ReserveBase>>16), byte(v.ReserveBase>>8), byte(v.ReserveBase))
+	}
+
+	// sfReserveIncrement (type 2, field 32) — optional flag-ledger fee vote.
+	if v.ReserveIncrement != 0 {
+		buf = appendFieldHeader(buf, typeUINT32, fieldReserveInc)
+		buf = append(buf, byte(v.ReserveIncrement>>24), byte(v.ReserveIncrement>>16), byte(v.ReserveIncrement>>8), byte(v.ReserveIncrement))
+	}
+
+	// sfBaseFee (type 3, field 5) — optional flag-ledger fee vote
+	// (legacy pre-XRPFees form).
+	if v.BaseFee != 0 {
+		buf = appendFieldHeader(buf, typeUINT64, fieldBaseFee)
+		for i := 7; i >= 0; i-- {
+			buf = append(buf, byte(v.BaseFee>>(i*8)))
+		}
+	}
+
 	// sfCookie (type 3, field 10) — optional
 	if v.Cookie != 0 {
 		buf = appendFieldHeader(buf, typeUINT64, fieldCookie)
@@ -223,6 +246,20 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 		for i := 7; i >= 0; i-- {
 			buf = append(buf, byte(v.ServerVersion>>(i*8)))
 		}
+	}
+
+	// --- AMOUNT fields (type 6) — post-featureXRPFees fee votes ---
+	if v.BaseFeeDrops != 0 {
+		buf = appendFieldHeader(buf, typeAmount, fieldBaseFeeDrops)
+		buf = appendXRPAmount(buf, v.BaseFeeDrops)
+	}
+	if v.ReserveBaseDrops != 0 {
+		buf = appendFieldHeader(buf, typeAmount, fieldReserveBaseDrops)
+		buf = appendXRPAmount(buf, v.ReserveBaseDrops)
+	}
+	if v.ReserveIncrementDrops != 0 {
+		buf = appendFieldHeader(buf, typeAmount, fieldReserveIncrementDrops)
+		buf = appendXRPAmount(buf, v.ReserveIncrementDrops)
 	}
 
 	// sfLedgerHash (type 5, field 1)

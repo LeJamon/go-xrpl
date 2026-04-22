@@ -62,7 +62,15 @@ func BadDataWeight(reason string) int {
 	case "replay-delta-verify",
 		"ledger-data-base",
 		"ledger-data-state",
-		"squelch-duration":
+		"squelch-duration",
+		"squelch-map-full",
+		"proposal-malformed-prev-ledger-size",
+		"proposal-malformed-txset-size",
+		"proposal-malformed-sig-size",
+		"proposal-malformed-pubkey-size",
+		"validation-malformed-ledger-hash-zero",
+		"validation-malformed-node-id-zero",
+		"validation-malformed-sig-size":
 		return weightInvalidData
 	// Syntactically-bad requests: decode failures and wrong-field reqs.
 	case "replay-delta-resp-decode",
@@ -72,6 +80,10 @@ func BadDataWeight(reason string) int {
 		"proof-path-req-bad",
 		"proof-path-req-unnegotiated",
 		"replay-delta-req-unnegotiated",
+		"squelch-unnegotiated",
+		"proposal-decode",
+		"validation-decode",
+		"validation-parse",
 		"ledger-data-decode":
 		return weightMalformedReq
 	// A peer that didn't respond or returned benign "no data" — lowest.
@@ -570,6 +582,17 @@ func (o *Overlay) onMessageReceived(evt Event) {
 	// state and do not forward to external consumers. Mirrors rippled's
 	// PeerImp::onMessage(TMSquelch).
 	if msgType == message.TypeSquelch {
+		// Gate inbound TMSquelch on the peer having negotiated
+		// vpReduceRelay in handshake. Rippled drops TMSquelch from
+		// peers that didn't opt into the reduce-relay feature; a peer
+		// that sends TMSquelch without advertising the feature is
+		// either buggy or probing — charge it.
+		if !o.PeerSupports(evt.PeerID, FeatureReduceRelay) {
+			slog.Debug("TMSquelch from peer without reduce-relay feature; dropping",
+				"t", "Overlay", "peer", evt.PeerID)
+			o.IncPeerBadData(evt.PeerID, "squelch-unnegotiated")
+			return
+		}
 		o.handleSquelchMessage(evt)
 		return
 	}

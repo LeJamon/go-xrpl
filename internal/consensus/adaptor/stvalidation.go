@@ -53,8 +53,19 @@ const (
 	fieldSigningPubKey = 3
 	fieldSignature     = 6
 
-	// Vector256 fields (type 19)
-	fieldAmendments = 19
+	// Vector256 fields (type 19).
+	// sfAmendments is VECTOR256 field 3 per rippled
+	// include/xrpl/protocol/detail/sfields.macro:306. The previous
+	// value of 19 matched the TYPE code, not the field code — a
+	// common confusion. With the wrong field code, outbound
+	// flag-ledger votes were malformed and inbound amendment votes
+	// from rippled peers never matched the parser switch.
+	fieldAmendments = 3
+
+	// Amount fields (type 6) — post-featureXRPFees fee-voting.
+	fieldBaseFeeDrops          = 22
+	fieldReserveBaseDrops      = 23
+	fieldReserveIncrementDrops = 24
 )
 
 // Validation flags. Kept in sync with rippled's STValidation.h.
@@ -139,11 +150,35 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 		case typeCode == typeUINT32 && fieldCode == fieldLoadFee:
 			v.LoadFee = binary.BigEndian.Uint32(fieldData)
 
+		case typeCode == typeUINT32 && fieldCode == fieldReserveBase:
+			v.ReserveBase = binary.BigEndian.Uint32(fieldData)
+
+		case typeCode == typeUINT32 && fieldCode == fieldReserveInc:
+			v.ReserveIncrement = binary.BigEndian.Uint32(fieldData)
+
+		case typeCode == typeUINT64 && fieldCode == fieldBaseFee:
+			v.BaseFee = binary.BigEndian.Uint64(fieldData)
+
 		case typeCode == typeUINT64 && fieldCode == fieldCookie:
 			v.Cookie = binary.BigEndian.Uint64(fieldData)
 
 		case typeCode == typeUINT64 && fieldCode == fieldServerVersion:
 			v.ServerVersion = binary.BigEndian.Uint64(fieldData)
+
+		case typeCode == typeAmount && fieldCode == fieldBaseFeeDrops:
+			if amt, ok := parseXRPAmount(fieldData); ok {
+				v.BaseFeeDrops = amt
+			}
+
+		case typeCode == typeAmount && fieldCode == fieldReserveBaseDrops:
+			if amt, ok := parseXRPAmount(fieldData); ok {
+				v.ReserveBaseDrops = amt
+			}
+
+		case typeCode == typeAmount && fieldCode == fieldReserveIncrementDrops:
+			if amt, ok := parseXRPAmount(fieldData); ok {
+				v.ReserveIncrementDrops = amt
+			}
 
 		case typeCode == typeHash256 && fieldCode == fieldLedgerHash:
 			if len(fieldData) == 32 {
@@ -231,7 +266,28 @@ func serializeSTValidation(v *consensus.Validation) []byte {
 		buf = binary.BigEndian.AppendUint32(buf, v.LoadFee)
 	}
 
+	// sfReserveBase (field 31) — optional flag-ledger fee vote (legacy
+	// pre-XRPFees form). Rippled RCLConsensus.cpp:882-883 via
+	// FeeVote::doValidation.
+	if v.ReserveBase != 0 {
+		buf = appendFieldHeader(buf, typeUINT32, fieldReserveBase)
+		buf = binary.BigEndian.AppendUint32(buf, v.ReserveBase)
+	}
+
+	// sfReserveIncrement (field 32) — optional flag-ledger fee vote.
+	if v.ReserveIncrement != 0 {
+		buf = appendFieldHeader(buf, typeUINT32, fieldReserveInc)
+		buf = binary.BigEndian.AppendUint32(buf, v.ReserveIncrement)
+	}
+
 	// --- UINT64 fields (type 3) ---
+
+	// sfBaseFee (field 5) — optional flag-ledger fee vote (legacy
+	// pre-XRPFees form).
+	if v.BaseFee != 0 {
+		buf = appendFieldHeader(buf, typeUINT64, fieldBaseFee)
+		buf = binary.BigEndian.AppendUint64(buf, v.BaseFee)
+	}
 
 	// sfCookie (field 10) — optional
 	if v.Cookie != 0 {
@@ -245,6 +301,27 @@ func serializeSTValidation(v *consensus.Validation) []byte {
 	if v.ServerVersion != 0 {
 		buf = appendFieldHeader(buf, typeUINT64, fieldServerVersion)
 		buf = binary.BigEndian.AppendUint64(buf, v.ServerVersion)
+	}
+
+	// --- Amount fields (type 6) ---
+
+	// Post-featureXRPFees fee-voting fields (rippled uses AMOUNT-typed
+	// variants once XRPFees is enabled). Encoded as 8-byte XRP amounts
+	// with the native (high-bit-clear) flag. Only emitted when the
+	// corresponding non-zero field is set; the adaptor decides which
+	// pair (legacy UINT vs. AMOUNT) to populate based on the parent
+	// ledger's amendments.
+	if v.BaseFeeDrops != 0 {
+		buf = appendFieldHeader(buf, typeAmount, fieldBaseFeeDrops)
+		buf = appendXRPAmount(buf, v.BaseFeeDrops)
+	}
+	if v.ReserveBaseDrops != 0 {
+		buf = appendFieldHeader(buf, typeAmount, fieldReserveBaseDrops)
+		buf = appendXRPAmount(buf, v.ReserveBaseDrops)
+	}
+	if v.ReserveIncrementDrops != 0 {
+		buf = appendFieldHeader(buf, typeAmount, fieldReserveIncrementDrops)
+		buf = appendXRPAmount(buf, v.ReserveIncrementDrops)
 	}
 
 	// --- Hash256 fields (type 5) ---
@@ -499,6 +576,37 @@ func appendFieldHeader(buf []byte, typeCode, fieldCode int) []byte {
 		return append(buf, byte(fieldCode), byte(typeCode))
 	}
 	return append(buf, 0, byte(typeCode), byte(fieldCode))
+}
+
+// parseXRPAmount decodes an 8-byte native XRPL Amount into a drops
+// value. Returns (_, false) if the "not XRP" flag is set (i.e. an IOU)
+// — fee-vote fields are always native, so an IOU here indicates a
+// malformed validation and is dropped silently.
+func parseXRPAmount(data []byte) (uint64, bool) {
+	if len(data) != 8 {
+		return 0, false
+	}
+	raw := binary.BigEndian.Uint64(data)
+	if raw&(1<<63) != 0 {
+		return 0, false // IOU form — not expected for fee-vote fields.
+	}
+	// Strip the positive-sign bit; remaining 62 bits carry drops.
+	return raw &^ (1 << 62), true
+}
+
+// appendXRPAmount appends an XRPL-encoded native Amount (8 bytes).
+// Rippled Amount encoding: bit 63 = "not XRP" flag (clear for XRP),
+// bit 62 = sign bit (always set for positive / non-negative), lower
+// bits carry the drops value. Used to emit the post-featureXRPFees
+// fee-vote fields (sfBaseFeeDrops, sfReserveBaseDrops,
+// sfReserveIncrementDrops) which are AMOUNT-typed.
+func appendXRPAmount(buf []byte, drops uint64) []byte {
+	// High bit clear = XRP; second-highest bit set = positive.
+	// drops must fit in 62 bits, which is enforced by the XRPL total
+	// drops invariant (< 100 billion XRP × 10^6 drops/XRP).
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], drops|(1<<62))
+	return append(buf, encoded[:]...)
 }
 
 // appendVL appends a variable-length encoded blob (length prefix + data).

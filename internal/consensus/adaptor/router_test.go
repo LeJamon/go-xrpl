@@ -83,13 +83,15 @@ func TestRouterDispatchesProposal(t *testing.T) {
 	defer cancel()
 	go router.Run(ctx)
 
-	// Create a ProposeSet message
+	// Create a ProposeSet message with sizes inside the bounds
+	// validateProposeBounds enforces (post-PR #264 review: 64-72 byte
+	// signature, 33-byte pubkey, 32-byte hashes).
 	proposeSet := &message.ProposeSet{
 		ProposeSeq:     1,
 		CurrentTxHash:  make([]byte, 32),
 		NodePubKey:     make([]byte, 33),
 		CloseTime:      timeToXrplEpoch(time.Now()),
-		Signature:      []byte{0x01, 0x02},
+		Signature:      make([]byte, signatureMinLen),
 		PreviousLedger: make([]byte, 32),
 	}
 	proposeSet.NodePubKey[0] = 0x02 // valid compressed key prefix

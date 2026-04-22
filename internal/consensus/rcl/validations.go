@@ -117,13 +117,60 @@ func (vt *ValidationTracker) SetFullyValidatedCallback(fn func(ledgerID consensu
 	vt.onFullyValidated = fn
 }
 
+// Validation freshness windows mirror rippled's Validations.h:626
+// isCurrent gate:
+//   - validationCurrentWall: SignTime must be within this window of
+//     wall-clock NOW (both past and future). A validation signed too
+//     long ago is stale; one signed too far ahead is either clock-
+//     skewed or forged. Rippled default: 5 minutes.
+//   - validationCurrentLocal: SeenTime must be within this window of
+//     wall-clock NOW (local-clock sanity). Rippled default: 3 minutes.
+//   - validationCurrentEarly: negative — how far into the FUTURE a
+//     SignTime may drift before we reject. Separately bounded because
+//     the forward bound is normally tighter than the backward one.
+//     Rippled default: 3 minutes.
+const (
+	validationCurrentWall  = 5 * time.Minute
+	validationCurrentLocal = 3 * time.Minute
+	validationCurrentEarly = 3 * time.Minute
+)
+
+// isCurrent reports whether a validation's sign-time and seen-time are
+// close enough to now to be considered "current" in rippled's sense.
+// Mirrors RCLValidations.cpp::isCurrent → Validations::isCurrent. now
+// is the wall clock; in production this is time.Now(). Passed as a
+// parameter so tests can drive deterministic freshness checks.
+func isCurrent(now, signTime, seenTime time.Time) bool {
+	// Wall-clock window on the signature timestamp. signTime too far
+	// in the past: the validator sent this hours ago and we just saw
+	// it — interoperating peers already moved on. Too far in the
+	// future: clock skew or forgery.
+	if signTime.Before(now.Add(-validationCurrentWall)) {
+		return false
+	}
+	if signTime.After(now.Add(validationCurrentEarly)) {
+		return false
+	}
+	// Local-clock window on the receive timestamp. Detects a peer
+	// queuing stale validations and dumping them on us later.
+	// SeenTime is zero for self-built validations — skip this check
+	// then, since there's no delivery to time-bound.
+	if !seenTime.IsZero() && seenTime.Before(now.Add(-validationCurrentLocal)) {
+		return false
+	}
+	return true
+}
+
 // Add adds a validation to the tracker.
 // Returns true if this is a new validation (not duplicate).
 //
-// Inbound filters match rippled's LedgerMaster.cpp:886,952:
+// Inbound filters match rippled's LedgerMaster.cpp:886,952 and
+// Validations.h:626 isCurrent:
 //   - Only Full validations count toward quorum. Partial validations
 //     (Full=false) indicate a node that hasn't applied the ledger
 //     yet and can't attest to its state root. We drop them entirely.
+//   - Stale or clock-skewed validations (outside the wall/local
+//     windows defined above) are rejected via isCurrent.
 //   - Validations with seq below minSeq are rejected. Once a ledger
 //     accepts, validations for seqs many rounds back are noise that
 //     can never retroactively become quorum; keeping them in memory
@@ -138,6 +185,15 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 	// fully applied the ledger and its signature doesn't anchor the
 	// state root. Rippled's LedgerMaster.cpp:886 filters the same way.
 	if !validation.Full {
+		return false
+	}
+
+	// Freshness window. Rejects validations signed too long ago or
+	// too far in the future (clock-skewed / forged) and validations
+	// delivered to us after too much local-clock drift. Without this
+	// gate a peer can keep year-old validations alive as long as the
+	// sequence number is in range — pointless memory + noise.
+	if !isCurrent(time.Now(), validation.SignTime, validation.SeenTime) {
 		return false
 	}
 

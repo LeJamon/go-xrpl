@@ -217,6 +217,29 @@ type Validation struct {
 	// on.
 	Amendments [][32]byte
 
+	// Fee-voting fields. Rippled emits these on flag ledgers via
+	// FeeVote::doValidation (RCLConsensus.cpp:882-883). Pre-XRPFees
+	// amendment nodes emit the UINT32/UINT64 legacy forms; post-
+	// XRPFees they emit the AMOUNT "Drops" variants. We model both
+	// sets; the adaptor populates whichever is appropriate for the
+	// parent ledger's amendment set. Zero values mean "not emitted".
+
+	// BaseFee is sfBaseFee (UINT64 field 5, legacy drops).
+	BaseFee uint64
+	// ReserveBase is sfReserveBase (UINT32 field 31, legacy drops).
+	ReserveBase uint32
+	// ReserveIncrement is sfReserveIncrement (UINT32 field 32, legacy
+	// drops).
+	ReserveIncrement uint32
+
+	// BaseFeeDrops is sfBaseFeeDrops (AMOUNT field 22, post-XRPFees).
+	// XRP-denominated drops amount encoded as an Amount.
+	BaseFeeDrops uint64
+	// ReserveBaseDrops is sfReserveBaseDrops (AMOUNT field 23).
+	ReserveBaseDrops uint64
+	// ReserveIncrementDrops is sfReserveIncrementDrops (AMOUNT field 24).
+	ReserveIncrementDrops uint64
+
 	// SigningData holds the canonical serialized fields (excluding
 	// sfSignature, but INCLUDING sfSigningPubKey) for signature
 	// verification. Populated by parseSTValidation for inbound

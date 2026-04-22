@@ -419,6 +419,15 @@ func (p *Peer) pingLoop(ctx context.Context) error {
 	}
 }
 
+// maxSquelchesPerPeer caps the per-peer squelch map to bound memory
+// under adversarial input. A peer cannot squelch more than this many
+// distinct validators at a time; once the cap is reached further
+// AddSquelch calls for NEW validators are refused (existing entries
+// may still be refreshed). Rippled doesn't document a fixed cap but
+// its per-peer Slot has the same intent; 128 comfortably covers a
+// UNL of realistic size while preventing unbounded growth.
+const maxSquelchesPerPeer = 128
+
 // AddSquelch records a squelch instruction received from this peer for the
 // given validator. Mirrors rippled's `Squelch::addSquelch`: returns false
 // (and removes any prior squelch) when duration is outside the allowed
@@ -429,15 +438,32 @@ func (p *Peer) pingLoop(ctx context.Context) error {
 // the increment here (the only place the duration is checked) so callers
 // in the overlay message layer don't need a separate "did we reject it"
 // branch and so the counter can never miss a rejection.
+//
+// Returns false when the per-peer squelch map is full AND the validator
+// is not already present — prevents a peer from spamming squelches for
+// random validator keys to grow our memory footprint. An existing entry
+// is still refreshable regardless of cap.
 func (p *Peer) AddSquelch(validator []byte, duration time.Duration) bool {
 	if duration < MinUnsquelchExpire || duration > MaxUnsquelchExpirePeers {
 		p.RemoveSquelch(validator)
 		p.IncBadData("squelch-duration")
 		return false
 	}
+	key := string(validator)
 	p.squelchMu.Lock()
-	p.squelchMap[string(validator)] = time.Now().Add(duration)
+	_, exists := p.squelchMap[key]
+	full := !exists && len(p.squelchMap) >= maxSquelchesPerPeer
+	if !full {
+		p.squelchMap[key] = time.Now().Add(duration)
+	}
 	p.squelchMu.Unlock()
+	if full {
+		// Cap hit with a fresh key — refuse the insert and charge
+		// the peer for overflowing our buffer. IncBadData only
+		// touches an atomic counter so it's safe outside squelchMu.
+		p.IncBadData("squelch-map-full")
+		return false
+	}
 	return true
 }
 

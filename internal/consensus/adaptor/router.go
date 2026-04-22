@@ -179,14 +179,39 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 	}
 }
 
+// Bounds used to reject malformed TMProposeSet / TMValidation frames
+// before they reach the engine. Out-of-range values get
+// feeInvalidData attributed to the sender, mirroring rippled's
+// PeerImp charge on malformed consensus frames.
+//
+// signatureMinLen / signatureMaxLen bracket a valid DER-encoded
+// secp256k1 signature (rippled rejects anything outside this range
+// before attempting verify).
+const (
+	signatureMinLen = 64
+	signatureMaxLen = 72
+)
+
 func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	decoded, err := message.Decode(message.TypeProposeLedger, msg.Payload)
 	if err != nil {
 		r.logger.Warn("failed to decode proposal", "error", err, "peer", msg.PeerID)
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "proposal-decode")
 		return
 	}
 	proposeSet, ok := decoded.(*message.ProposeSet)
 	if !ok {
+		return
+	}
+
+	// Bounds checks BEFORE the engine sees the frame. Rippled charges
+	// feeInvalidData on malformed TMProposeSet at PeerImp — we mirror
+	// that so a peer can't cost-free spam oversized or
+	// implausibly-hoppy consensus traffic.
+	if badField, ok := validateProposeBounds(proposeSet); !ok {
+		r.logger.Debug("dropping malformed proposal",
+			"peer", msg.PeerID, "bad_field", badField)
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "proposal-malformed-"+badField)
 		return
 	}
 
@@ -212,6 +237,7 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	decoded, err := message.Decode(message.TypeValidation, msg.Payload)
 	if err != nil {
 		r.logger.Warn("failed to decode validation", "error", err, "peer", msg.PeerID)
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "validation-decode")
 		return
 	}
 	val, ok := decoded.(*message.Validation)
@@ -222,8 +248,20 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	validation, err := ValidationFromMessage(val)
 	if err != nil {
 		r.logger.Warn("failed to parse validation", "error", err, "peer", msg.PeerID)
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "validation-parse")
 		return
 	}
+
+	// Post-parse bounds: the validation struct must carry sane hash
+	// and signature sizes. Rippled drops and charges at PeerImp before
+	// the engine sees it; same rationale as in handleProposal.
+	if badField, ok := validateValidationBounds(validation); !ok {
+		r.logger.Debug("dropping malformed validation",
+			"peer", msg.PeerID, "bad_field", badField)
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "validation-malformed-"+badField)
+		return
+	}
+
 	originPeer := uint64(msg.PeerID)
 	if err := r.engine.OnValidation(validation, originPeer); err != nil {
 		r.logger.Debug("engine rejected validation", "error", err, "peer", msg.PeerID)
@@ -236,6 +274,49 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	if r.adaptor.IsTrusted(validation.NodeID) {
 		r.adaptor.UpdateRelaySlot(validation.NodeID[:], originPeer)
 	}
+}
+
+// validateProposeBounds returns ("", true) when the decoded ProposeSet
+// is within the bounds rippled enforces at PeerImp::onMessage; returns
+// (field_label, false) on the first violation so the caller can
+// attribute the charge with a specific reason.
+func validateProposeBounds(p *message.ProposeSet) (string, bool) {
+	if p == nil {
+		return "nil", false
+	}
+	if len(p.PreviousLedger) != 32 {
+		return "prev-ledger-size", false
+	}
+	if len(p.CurrentTxHash) != 32 {
+		return "txset-size", false
+	}
+	if n := len(p.Signature); n < signatureMinLen || n > signatureMaxLen {
+		return "sig-size", false
+	}
+	// Node pubkey is always a 33-byte compressed secp256k1 point.
+	if len(p.NodePubKey) != 33 {
+		return "pubkey-size", false
+	}
+	return "", true
+}
+
+// validateValidationBounds returns ("", true) when the parsed
+// Validation has sane lengths on the post-decode struct fields. Same
+// attribution contract as validateProposeBounds.
+func validateValidationBounds(v *consensus.Validation) (string, bool) {
+	if v == nil {
+		return "nil", false
+	}
+	if v.LedgerID == (consensus.LedgerID{}) {
+		return "ledger-hash-zero", false
+	}
+	if v.NodeID == (consensus.NodeID{}) {
+		return "node-id-zero", false
+	}
+	if n := len(v.Signature); n < signatureMinLen || n > signatureMaxLen {
+		return "sig-size", false
+	}
+	return "", true
 }
 
 func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {

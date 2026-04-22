@@ -297,10 +297,12 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	}
 
 	// Always buffer proposals for future playback, even between rounds.
-	// Matches rippled's recentPeerPositions_ (Consensus.h:629).
-	// Keep max 5 per node to limit memory.
+	// Matches rippled's recentPeerPositions_ (Consensus.h:754): cap at
+	// 10 positions per node. The earlier 5-entry cap drifted from
+	// rippled's value and would truncate a trusted validator's
+	// cross-round trail under sustained gossip.
 	positions := e.recentProposals[proposal.NodeID]
-	if len(positions) >= 5 {
+	if len(positions) >= 10 {
 		positions = positions[1:] // drop oldest
 	}
 	e.recentProposals[proposal.NodeID] = append(positions, proposal)
@@ -375,13 +377,22 @@ func (e *Engine) OnValidation(validation *consensus.Validation, originPeer uint6
 	// Check if from trusted validator
 	trusted := e.adaptor.IsTrusted(validation.NodeID)
 
-	// Store validation
-	e.validations[validation.NodeID] = validation
+	// Store validation. Also cap to trusted-only to bound memory under
+	// adversarial validator spam — an untrusted key can send us
+	// arbitrary validations and the map would grow unbounded.
+	if trusted {
+		e.validations[validation.NodeID] = validation
+	}
 
 	// Feed into the tracker — this is the gate that advances
-	// server_info.validated_ledger once quorum of trusted
-	// validations accumulates for a given ledger.
-	if e.validationTracker != nil {
+	// server_info.validated_ledger once quorum of trusted validations
+	// accumulates for a given ledger. Trust-gate here as well: the
+	// tracker filters by trusted at quorum-count time, but without
+	// this gate a byNode entry gets created for every untrusted
+	// validator the network gossips, wasting memory on keys that
+	// can never contribute to quorum. Rippled's LedgerMaster.cpp:886
+	// filters on both Full and trusted before Add.
+	if trusted && e.validationTracker != nil {
 		e.validationTracker.Add(validation)
 	}
 
