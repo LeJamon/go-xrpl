@@ -19,6 +19,7 @@ func TestValidationTracker_Add(t *testing.T) {
 		LedgerSeq: 100,
 		NodeID:    node1,
 		SignTime:  time.Now(),
+		Full:      true,
 	}
 
 	v2 := &consensus.Validation{
@@ -26,6 +27,7 @@ func TestValidationTracker_Add(t *testing.T) {
 		LedgerSeq: 100,
 		NodeID:    node2,
 		SignTime:  time.Now(),
+		Full:      true,
 	}
 
 	// Add first validation
@@ -61,9 +63,9 @@ func TestValidationTracker_TrustedValidations(t *testing.T) {
 	vt.SetTrusted([]consensus.NodeID{node1, node2})
 
 	// Add validations
-	vt.Add(&consensus.Validation{LedgerID: ledger1, LedgerSeq: 100, NodeID: node1, SignTime: time.Now()})
-	vt.Add(&consensus.Validation{LedgerID: ledger1, LedgerSeq: 100, NodeID: node2, SignTime: time.Now()})
-	vt.Add(&consensus.Validation{LedgerID: ledger1, LedgerSeq: 100, NodeID: node3, SignTime: time.Now()})
+	vt.Add(&consensus.Validation{LedgerID: ledger1, LedgerSeq: 100, NodeID: node1, SignTime: time.Now(), Full: true})
+	vt.Add(&consensus.Validation{LedgerID: ledger1, LedgerSeq: 100, NodeID: node2, SignTime: time.Now(), Full: true})
+	vt.Add(&consensus.Validation{LedgerID: ledger1, LedgerSeq: 100, NodeID: node3, SignTime: time.Now(), Full: true})
 
 	// Total should be 3
 	if vt.GetValidationCount(ledger1) != 3 {
@@ -101,6 +103,7 @@ func TestValidationTracker_FullyValidated(t *testing.T) {
 			LedgerSeq: 100,
 			NodeID:    nodes[i],
 			SignTime:  time.Now(),
+			Full:      true,
 		})
 	}
 
@@ -115,6 +118,7 @@ func TestValidationTracker_FullyValidated(t *testing.T) {
 		LedgerSeq: 100,
 		NodeID:    nodes[quorum-1],
 		SignTime:  time.Now(),
+		Full:      true,
 	})
 
 	// Should be fully validated now
@@ -140,6 +144,7 @@ func TestValidationTracker_FullyValidated(t *testing.T) {
 		LedgerSeq: 100,
 		NodeID:    extraNode,
 		SignTime:  time.Now(),
+		Full:      true,
 	})
 	if fireCount != 1 {
 		t.Errorf("Callback must be idempotent, re-fired (count=%d)", fireCount)
@@ -159,6 +164,7 @@ func TestValidationTracker_NewerValidation(t *testing.T) {
 		LedgerSeq: 100,
 		NodeID:    node1,
 		SignTime:  time.Now(),
+		Full:      true,
 	})
 
 	// Add newer validation for ledger 2
@@ -167,6 +173,7 @@ func TestValidationTracker_NewerValidation(t *testing.T) {
 		LedgerSeq: 101,
 		NodeID:    node1,
 		SignTime:  time.Now(),
+		Full:      true,
 	}) {
 		t.Error("Newer validation should be added")
 	}
@@ -183,6 +190,7 @@ func TestValidationTracker_NewerValidation(t *testing.T) {
 		LedgerSeq: 100,
 		NodeID:    node1,
 		SignTime:  time.Now(),
+		Full:      true,
 	}) {
 		t.Error("Older validation should not be added")
 	}
@@ -198,9 +206,9 @@ func TestValidationTracker_Stats(t *testing.T) {
 	ledger2 := consensus.LedgerID{2}
 
 	// Add validations
-	vt.Add(&consensus.Validation{LedgerID: ledger1, LedgerSeq: 100, NodeID: nodes[0], SignTime: time.Now()})
-	vt.Add(&consensus.Validation{LedgerID: ledger1, LedgerSeq: 100, NodeID: nodes[1], SignTime: time.Now()})
-	vt.Add(&consensus.Validation{LedgerID: ledger2, LedgerSeq: 101, NodeID: nodes[2], SignTime: time.Now()})
+	vt.Add(&consensus.Validation{LedgerID: ledger1, LedgerSeq: 100, NodeID: nodes[0], SignTime: time.Now(), Full: true})
+	vt.Add(&consensus.Validation{LedgerID: ledger1, LedgerSeq: 100, NodeID: nodes[1], SignTime: time.Now(), Full: true})
+	vt.Add(&consensus.Validation{LedgerID: ledger2, LedgerSeq: 101, NodeID: nodes[2], SignTime: time.Now(), Full: true})
 
 	stats := vt.GetStats()
 

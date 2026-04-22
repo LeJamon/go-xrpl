@@ -201,6 +201,22 @@ type Validation struct {
 	// Zero means "not included".
 	ServerVersion uint64
 
+	// ValidatedHash is sfValidatedHash — the hash of the most
+	// recent ledger THIS validator considers fully validated at the
+	// time of signing (rippled RCLConsensus.cpp:858-859). Emitted when
+	// the featureHardenedValidations amendment is enabled on the
+	// parent. Peers use this as an additional fork-detection signal.
+	// Zero-hash means "not included".
+	ValidatedHash [32]byte
+
+	// Amendments is sfAmendments — the list of amendment IDs this
+	// validator wishes to vote FOR on the current flag ledger. Only
+	// populated on flag ledgers (seq % 256 == 0) when the validator
+	// has amendments to propose (rippled RCLConsensus.cpp:886-894).
+	// Empty means either not a flag ledger or no amendments to vote
+	// on.
+	Amendments [][32]byte
+
 	// SigningData holds the canonical serialized fields (excluding
 	// sfSignature, but INCLUDING sfSigningPubKey) for signature
 	// verification. Populated by parseSTValidation for inbound

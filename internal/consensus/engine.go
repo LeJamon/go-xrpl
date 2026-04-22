@@ -19,11 +19,19 @@ type Engine interface {
 	// The proposing parameter indicates if this node should propose.
 	StartRound(round RoundID, proposing bool) error
 
-	// OnProposal handles an incoming proposal from a peer.
-	OnProposal(proposal *Proposal) error
+	// OnProposal handles an incoming proposal. originPeer is the overlay
+	// peer ID that delivered the message, or 0 for self-originated
+	// proposals (unused on production ingress but convenient for tests).
+	// The engine passes originPeer through to the adaptor's relay path
+	// so gossip forwards can exclude the originator — mirrors rippled's
+	// PeerImp::onMessage(TMProposeSet) behavior.
+	OnProposal(proposal *Proposal, originPeer uint64) error
 
-	// OnValidation handles an incoming validation from a peer.
-	OnValidation(validation *Validation) error
+	// OnValidation handles an incoming validation. Same originPeer
+	// semantics as OnProposal — mirrors rippled's
+	// PeerImp::onMessage(TMValidation) which feeds updateSlotAndSquelch
+	// and the gossip-forward path with the originating peer excluded.
+	OnValidation(validation *Validation, originPeer uint64) error
 
 	// OnTxSet handles receiving a transaction set we requested.
 	OnTxSet(id TxSetID, txs [][]byte) error
@@ -56,14 +64,37 @@ type Engine interface {
 type Adaptor interface {
 	// Network operations
 
-	// BroadcastProposal sends a proposal to all peers.
+	// BroadcastProposal sends OUR OWN proposal to all peers. Not
+	// subject to per-peer squelch filtering — we always deliver our
+	// self-originated traffic. Mirrors rippled's OverlayImpl which
+	// skips the squelch filter for self-originated broadcasts.
 	BroadcastProposal(proposal *Proposal) error
 
-	// BroadcastValidation sends a validation to all peers.
+	// BroadcastValidation sends OUR OWN validation to all peers. Same
+	// no-filter semantics as BroadcastProposal.
 	BroadcastValidation(validation *Validation) error
 
-	// RelayProposal forwards a peer's proposal to other peers.
-	RelayProposal(proposal *Proposal) error
+	// RelayProposal forwards a peer's proposal to other peers, honoring
+	// the per-peer squelch filter and excluding the originating peer
+	// (exceptPeer). Pass 0 for exceptPeer to send to all peers (e.g.
+	// for tests that synthesize a relay without an origin).
+	RelayProposal(proposal *Proposal, exceptPeer uint64) error
+
+	// RelayValidation forwards a peer's validation to other peers,
+	// honoring the per-peer squelch filter and excluding the
+	// originating peer (exceptPeer). Same semantics as RelayProposal.
+	// Mirrors rippled's gossip-forward path for TMValidation in
+	// OverlayImpl::relay.
+	RelayValidation(validation *Validation, exceptPeer uint64) error
+
+	// UpdateRelaySlot feeds the reduce-relay state machine with an
+	// inbound validator message from peerID. Mirrors rippled's
+	// PeerImp::onMessage(TMProposeSet/TMValidation) calling
+	// updateSlotAndSquelch — this is what drives the reduce-relay
+	// selection logic to emit mtSQUELCH once peer activity crosses
+	// the configured thresholds. Router calls this on every trusted
+	// inbound proposal/validation.
+	UpdateRelaySlot(validatorKey []byte, peerID uint64)
 
 	// RequestTxSet requests a transaction set from peers.
 	RequestTxSet(id TxSetID) error
@@ -78,6 +109,15 @@ type Adaptor interface {
 
 	// GetLastClosedLedger returns the most recently closed ledger.
 	GetLastClosedLedger() (Ledger, error)
+
+	// GetValidatedLedgerHash returns the hash of the most recent ledger
+	// this node considers FULLY VALIDATED (trusted-validation quorum
+	// reached). Zero LedgerID when no ledger has crossed quorum yet —
+	// callers must treat the zero value as "not available" and skip
+	// emission (e.g., sfValidatedHash in STValidation). Separate from
+	// GetLastClosedLedger which returns the consensus-closed view, not
+	// the network-agreement view.
+	GetValidatedLedgerHash() LedgerID
 
 	// BuildLedger constructs a new ledger from a transaction set.
 	BuildLedger(parent Ledger, txSet TxSet, closeTime time.Time) (Ledger, error)

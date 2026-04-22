@@ -76,12 +76,14 @@ type Peer struct {
 	closeCh   chan struct{}
 	closed    atomic.Bool
 
-	// badData is a monotonic counter of invalid-data events attributed to
-	// this peer (malformed responses, failed verifications, out-of-range
-	// protocol values, etc.). Mirrors rippled's fee.update(feeInvalidData)
-	// accumulator at a coarser granularity. Incremented via IncBadData and
-	// read by the maintenance loop for eviction decisions.
-	badData atomic.Uint32
+	// badDataBalance tracks the weighted invalid-data "fee" this peer
+	// owes, modeled on rippled's Resource::Consumer balance. Each bad-
+	// data event adds a weight from BadDataWeight(reason); a background
+	// decay in the overlay halves the balance every
+	// badDataDecayInterval so a chatty-but-honest peer can recover while
+	// a persistent offender eventually evicts. Stored as int64 to
+	// accommodate potential negative values from decay overshoot.
+	badDataBalance atomic.Int64
 }
 
 // PeerConfig holds peer connection configuration.
@@ -440,21 +442,56 @@ func (p *Peer) AddSquelch(validator []byte, duration time.Duration) bool {
 }
 
 // IncBadData records an invalid-data event attributed to this peer and
-// returns the new cumulative count. `reason` is a short stable label
-// used for diagnostic logging (e.g., "replay-delta-verify",
-// "squelch-duration", "ledger-data-hash").
+// returns the new cumulative balance. `reason` is a short stable label
+// used both for diagnostic logging AND to look up a per-reason weight
+// via BadDataWeight — mirrors rippled's Resource::Consumer which
+// charges different fee amounts (feeInvalidData=400,
+// feeMalformedRequest=200, feeRequestNoReply=10) depending on the
+// severity of the offense.
 func (p *Peer) IncBadData(reason string) uint32 {
-	n := p.badData.Add(1)
+	w := BadDataWeight(reason)
+	n := p.badDataBalance.Add(int64(w))
 	slog.Debug("peer bad data",
-		"t", "Peer", "peer", p.id, "reason", reason, "count", n,
+		"t", "Peer", "peer", p.id, "reason", reason,
+		"weight", w, "balance", n,
 		"endpoint", p.endpoint.String(),
 	)
-	return n
+	if n < 0 {
+		return 0
+	}
+	return uint32(n)
 }
 
-// BadDataCount returns the cumulative invalid-data count for this peer.
-// Thread-safe.
-func (p *Peer) BadDataCount() uint32 { return p.badData.Load() }
+// BadDataCount returns the cumulative invalid-data balance for this
+// peer (clamped to non-negative). Thread-safe. The return type stays
+// uint32 for compatibility with callers that treat this as a count;
+// the underlying storage is int64 to handle decay overshoot.
+func (p *Peer) BadDataCount() uint32 {
+	n := p.badDataBalance.Load()
+	if n < 0 {
+		return 0
+	}
+	return uint32(n)
+}
+
+// DecayBadData halves the bad-data balance. Called by the overlay's
+// maintenance loop on a fixed cadence so transient protocol hiccups
+// (a flaky peer throwing a few malformed compression frames) don't
+// accumulate to eviction over a long session. Rippled's Resource::
+// Fees.cpp:26-43 uses a similar exponential decay. The floor at 0
+// prevents the balance from going meaningfully negative.
+func (p *Peer) DecayBadData() {
+	for {
+		cur := p.badDataBalance.Load()
+		if cur <= 0 {
+			return
+		}
+		next := cur / 2
+		if p.badDataBalance.CompareAndSwap(cur, next) {
+			return
+		}
+	}
+}
 
 // RemoveSquelch deletes any squelch entry for the given validator.
 // Mirrors rippled's `Squelch::removeSquelch`.

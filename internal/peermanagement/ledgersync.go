@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
@@ -166,6 +167,18 @@ type LedgerSyncHandler struct {
 
 	// Event channel for sending responses
 	events chan<- Event
+
+	// droppedResponses counts how many response events we had to drop
+	// because the events channel was full (slow consumer). Exposed via
+	// DroppedResponses so the overlay can aggregate into server_info.
+	droppedResponses atomic.Uint64
+}
+
+// DroppedResponses returns the cumulative count of ledger-sync
+// responses dropped due to back-pressure on the events channel.
+// Surfaced by the overlay's DroppedLedgerResponses.
+func (h *LedgerSyncHandler) DroppedResponses() uint64 {
+	return h.droppedResponses.Load()
 }
 
 // NewLedgerSyncHandler creates a new ledger sync handler.
@@ -410,6 +423,7 @@ func (h *LedgerSyncHandler) sendProofPathResponse(peerID PeerID, resp *message.P
 	select {
 	case h.events <- Event{Type: EventLedgerResponse, PeerID: peerID, Payload: frame}:
 	default:
+		h.droppedResponses.Add(1)
 		slog.Warn("ProofPath response dropped: events channel full",
 			"t", "LedgerSync", "peer", peerID, "bytes", len(frame))
 	}
@@ -425,9 +439,12 @@ func (h *LedgerSyncHandler) sendProofPathResponse(peerID PeerID, resp *message.P
 //  3. Pack the ledger header (addRaw on LedgerInfo) and every leaf blob in
 //     the tx map, in tx-map iteration order.
 //  4. Defensive size cap: if the response payload would exceed
-//     MaxReplayDeltaResponseBytes, reply with reBAD_REQUEST (closest match
-//     in TMReplyError, which has no reTOO_BUSY) and drop the populated
-//     transaction list. Logged at warn level.
+//     MaxReplayDeltaResponseBytes, reply with reNO_LEDGER and drop the
+//     populated transaction list. TMReplyError has no reTOO_BUSY; we
+//     pick reNO_LEDGER over reBAD_REQUEST because the request itself is
+//     well-formed — we just can't serve a response of this size. The
+//     lighter error avoids charging the requester feeMalformedRequest
+//     on rippled's side (PeerImp.cpp:1545-1548).
 //
 // The encoded response is pushed onto the events channel as
 // EventLedgerResponse so the overlay can ship it to the requesting peer
@@ -462,6 +479,12 @@ func (h *LedgerSyncHandler) handleReplayDeltaRequest(_ context.Context, peerID P
 	}
 
 	// Defensive size cap: refuse to encode a response above our ceiling.
+	// Use ReplyErrorNoLedger rather than ReplyErrorBadRequest — the
+	// request isn't malformed, we just can't serve the response at this
+	// size. Rippled's PeerImp.cpp:1545-1548 charges feeMalformedRequest
+	// (200 drops) for reBAD_REQUEST vs feeRequestNoReply (10 drops) for
+	// everything else, so the lighter error code avoids wrongly fee-
+	// charging an honest requester.
 	total := len(header)
 	for _, tx := range txLeaves {
 		total += len(tx)
@@ -475,7 +498,7 @@ func (h *LedgerSyncHandler) handleReplayDeltaRequest(_ context.Context, peerID P
 		)
 		h.sendReplayDeltaResponse(peerID, &message.ReplayDeltaResponse{
 			LedgerHash: req.LedgerHash,
-			Error:      message.ReplyErrorBadRequest,
+			Error:      message.ReplyErrorNoLedger,
 		})
 		return nil
 	}
@@ -518,6 +541,7 @@ func (h *LedgerSyncHandler) sendReplayDeltaResponse(peerID PeerID, resp *message
 	select {
 	case h.events <- Event{Type: EventLedgerResponse, PeerID: peerID, Payload: frame}:
 	default:
+		h.droppedResponses.Add(1)
 		slog.Warn("ReplayDelta response dropped: events channel full",
 			"t", "LedgerSync", "peer", peerID, "bytes", len(frame))
 	}

@@ -32,14 +32,14 @@ func (m *mockEngine) Timing() consensus.Timing                  { return consens
 func (m *mockEngine) GetLastCloseInfo() (int, time.Duration)    { return 0, 0 }
 func (m *mockEngine) OnLedger(consensus.LedgerID, []byte) error { return nil }
 
-func (m *mockEngine) OnProposal(p *consensus.Proposal) error {
+func (m *mockEngine) OnProposal(p *consensus.Proposal, _ uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.proposals = append(m.proposals, p)
 	return nil
 }
 
-func (m *mockEngine) OnValidation(v *consensus.Validation) error {
+func (m *mockEngine) OnValidation(v *consensus.Validation, _ uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.validations = append(m.validations, v)

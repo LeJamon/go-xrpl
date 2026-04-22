@@ -52,6 +52,9 @@ const (
 	// Blob/VL fields (type 7)
 	fieldSigningPubKey = 3
 	fieldSignature     = 6
+
+	// Vector256 fields (type 19)
+	fieldAmendments = 19
 )
 
 // Validation flags. Kept in sync with rippled's STValidation.h.
@@ -152,6 +155,24 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 				copy(v.ConsensusHash[:], fieldData)
 			}
 
+		case typeCode == typeHash256 && fieldCode == fieldValidatedHash:
+			if len(fieldData) == 32 {
+				copy(v.ValidatedHash[:], fieldData)
+			}
+
+		case typeCode == typeVector256 && fieldCode == fieldAmendments:
+			// Vector256 is VL-wrapped concat of 32-byte IDs. fieldData
+			// is the VL payload, so iterate in 32-byte chunks.
+			if len(fieldData)%32 == 0 {
+				n := len(fieldData) / 32
+				v.Amendments = make([][32]byte, 0, n)
+				for i := 0; i < n; i++ {
+					var id [32]byte
+					copy(id[:], fieldData[i*32:(i+1)*32])
+					v.Amendments = append(v.Amendments, id)
+				}
+			}
+
 		case typeCode == typeBlob && fieldCode == fieldSigningPubKey:
 			if len(fieldData) == 33 {
 				copy(v.NodeID[:], fieldData)
@@ -241,6 +262,16 @@ func serializeSTValidation(v *consensus.Validation) []byte {
 		buf = append(buf, v.ConsensusHash[:]...)
 	}
 
+	// sfValidatedHash (field 25) — optional. Rippled emits this under
+	// featureHardenedValidations (RCLConsensus.cpp:858-859); it's the
+	// hash of the validator's current fully-validated ledger at sign
+	// time, giving peers an additional fork-detection signal beyond
+	// sfLedgerHash. Zero-hash means "not set".
+	if v.ValidatedHash != ([32]byte{}) {
+		buf = appendFieldHeader(buf, typeHash256, fieldValidatedHash)
+		buf = append(buf, v.ValidatedHash[:]...)
+	}
+
 	// --- Blob/VL fields (type 7) ---
 
 	// sfSigningPubKey (field 3)
@@ -252,6 +283,23 @@ func serializeSTValidation(v *consensus.Validation) []byte {
 	if len(v.Signature) > 0 {
 		buf = appendFieldHeader(buf, typeBlob, fieldSignature)
 		buf = appendVL(buf, v.Signature)
+	}
+
+	// --- Vector256 fields (type 19) ---
+
+	// sfAmendments (field 19, type Vector256) — flag-ledger amendment
+	// vote. Rippled emits this on isVotingLedger (RCLConsensus.cpp:
+	// 886-894); each entry is a 32-byte amendment ID the validator
+	// wishes to signal support for. Encoded as VL(concat(ids)).
+	// Emitted last because Vector256 (type 19) follows typeBlob (7)
+	// in canonical ordering.
+	if len(v.Amendments) > 0 {
+		buf = appendFieldHeader(buf, typeVector256, fieldAmendments)
+		blob := make([]byte, 0, 32*len(v.Amendments))
+		for _, id := range v.Amendments {
+			blob = append(blob, id[:]...)
+		}
+		buf = appendVL(buf, blob)
 	}
 
 	return buf

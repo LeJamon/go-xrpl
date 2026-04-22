@@ -53,7 +53,7 @@ func TestReplayDelta_Apply_Integration(t *testing.T) {
 	// Build + sign a real Payment alice → bob using the env's signer.
 	aliceSeq := env.Seq(alice)
 	pay := payment.NewPayment(alice.Address, bob.Address,
-		tx.NewXRPAmount(int64(xrplgoTesting.XRP(123))))
+		tx.NewXRPAmount(xrplgoTesting.XRP(123)))
 	pay.Sequence = &aliceSeq
 	pay.Fee = "10"
 	env.SignWith(pay, alice)
@@ -142,7 +142,7 @@ func TestReplayDelta_Apply_DivergenceFromTef(t *testing.T) {
 
 	aliceSeq := env.Seq(alice)
 	pay := payment.NewPayment(alice.Address, bob.Address,
-		tx.NewXRPAmount(int64(xrplgoTesting.XRP(123))))
+		tx.NewXRPAmount(xrplgoTesting.XRP(123)))
 	pay.Sequence = &aliceSeq
 	pay.Fee = "10"
 	env.SignWith(pay, alice)

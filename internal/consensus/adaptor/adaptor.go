@@ -26,10 +26,23 @@ var (
 // NetworkSender abstracts the P2P overlay for sending messages.
 // This allows testing the adaptor without a real network.
 type NetworkSender interface {
+	// BroadcastProposal / BroadcastValidation send OUR OWN traffic —
+	// unfiltered, because rippled deliberately omits the squelch filter
+	// for self-originated broadcasts (OverlayImpl.cpp:1133-1137).
 	BroadcastProposal(proposal *consensus.Proposal) error
 	BroadcastValidation(validation *consensus.Validation) error
 	BroadcastStatusChange(sc *message.StatusChange) error
-	RelayProposal(proposal *consensus.Proposal) error
+	// RelayProposal / RelayValidation forward a peer-originated message
+	// to other peers, subject to the per-peer squelch filter and
+	// excluding exceptPeer (the originator). Pass 0 for exceptPeer to
+	// broadcast to all peers unfiltered — used only by synthetic test
+	// paths.
+	RelayProposal(proposal *consensus.Proposal, exceptPeer uint64) error
+	RelayValidation(validation *consensus.Validation, exceptPeer uint64) error
+	// UpdateRelaySlot feeds the reduce-relay slot for validatorKey with
+	// a message from peerID. Drives the mtSQUELCH selection logic.
+	// Mirrors rippled's PeerImp::updateSlotAndSquelch.
+	UpdateRelaySlot(validatorKey []byte, peerID uint64)
 	RequestTxSet(id consensus.TxSetID) error
 	RequestLedger(id consensus.LedgerID) error
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error
@@ -57,7 +70,9 @@ type noopSender struct{}
 func (n *noopSender) BroadcastProposal(*consensus.Proposal) error              { return nil }
 func (n *noopSender) BroadcastValidation(*consensus.Validation) error          { return nil }
 func (n *noopSender) BroadcastStatusChange(*message.StatusChange) error        { return nil }
-func (n *noopSender) RelayProposal(*consensus.Proposal) error                  { return nil }
+func (n *noopSender) RelayProposal(*consensus.Proposal, uint64) error          { return nil }
+func (n *noopSender) RelayValidation(*consensus.Validation, uint64) error      { return nil }
+func (n *noopSender) UpdateRelaySlot([]byte, uint64)                           {}
 func (n *noopSender) RequestTxSet(consensus.TxSetID) error                     { return nil }
 func (n *noopSender) RequestLedger(consensus.LedgerID) error                   { return nil }
 func (n *noopSender) RequestLedgerByHashAndSeq([32]byte, uint32) error         { return nil }
@@ -192,8 +207,26 @@ func (a *Adaptor) BroadcastValidation(validation *consensus.Validation) error {
 	return a.sender.BroadcastValidation(validation)
 }
 
-func (a *Adaptor) RelayProposal(proposal *consensus.Proposal) error {
-	return a.sender.RelayProposal(proposal)
+// RelayProposal forwards a peer-originated proposal to other peers,
+// excluding exceptPeer (the originator). Pass 0 for exceptPeer to
+// forward to everyone.
+func (a *Adaptor) RelayProposal(proposal *consensus.Proposal, exceptPeer uint64) error {
+	return a.sender.RelayProposal(proposal, exceptPeer)
+}
+
+// RelayValidation forwards a peer-originated validation to other peers,
+// excluding exceptPeer (the originator). Mirrors RelayProposal; used
+// by the engine's OnValidation to implement gossip forward.
+func (a *Adaptor) RelayValidation(validation *consensus.Validation, exceptPeer uint64) error {
+	return a.sender.RelayValidation(validation, exceptPeer)
+}
+
+// UpdateRelaySlot feeds the reduce-relay slot for validatorKey with an
+// inbound message from peerID. Called by the consensus router on every
+// trusted proposal/validation to keep the squelch selection logic
+// moving. Mirrors rippled's PeerImp::updateSlotAndSquelch.
+func (a *Adaptor) UpdateRelaySlot(validatorKey []byte, peerID uint64) {
+	a.sender.UpdateRelaySlot(validatorKey, peerID)
 }
 
 func (a *Adaptor) RequestTxSet(id consensus.TxSetID) error {
@@ -297,6 +330,23 @@ func (a *Adaptor) GetLastClosedLedger() (consensus.Ledger, error) {
 		return nil, ErrLedgerNotFound
 	}
 	return WrapLedger(l), nil
+}
+
+// GetValidatedLedgerHash returns the hash of the most recent ledger
+// the node considers fully validated. Mirrors rippled's
+// LedgerMaster::getValidatedLedger consulted at RCLConsensus.cpp:858
+// to populate sfValidatedHash. Returns the zero LedgerID when no
+// ledger has yet crossed trusted-validation quorum (the engine-side
+// consumer should not emit the field in that case).
+func (a *Adaptor) GetValidatedLedgerHash() consensus.LedgerID {
+	if a.ledgerService == nil {
+		return consensus.LedgerID{}
+	}
+	vl := a.ledgerService.GetValidatedLedger()
+	if vl == nil {
+		return consensus.LedgerID{}
+	}
+	return consensus.LedgerID(vl.Hash())
 }
 
 func (a *Adaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time) (consensus.Ledger, error) {

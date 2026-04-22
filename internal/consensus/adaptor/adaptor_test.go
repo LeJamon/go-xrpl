@@ -331,7 +331,8 @@ func TestNetworkSenderNoopDefault(t *testing.T) {
 	// Network operations should not panic with noop sender
 	assert.NoError(t, a.BroadcastProposal(&consensus.Proposal{}))
 	assert.NoError(t, a.BroadcastValidation(&consensus.Validation{}))
-	assert.NoError(t, a.RelayProposal(&consensus.Proposal{}))
+	assert.NoError(t, a.RelayProposal(&consensus.Proposal{}, 0))
+	assert.NoError(t, a.RelayValidation(&consensus.Validation{}, 0))
 	assert.NoError(t, a.RequestTxSet(consensus.TxSetID{}))
 	assert.NoError(t, a.RequestLedger(consensus.LedgerID{}))
 }

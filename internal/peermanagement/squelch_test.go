@@ -161,11 +161,11 @@ func TestPeerSquelchExpire_FiltersThenAllowsAfterExpiry(t *testing.T) {
 	assert.False(t, stillThere, "expired entry should have been cleared")
 }
 
-// TestBroadcastFromValidator_SkipsSquelchedPeers verifies the outbound
-// reduce-relay filter: a validator-originated message is delivered to all
+// TestRelayFromValidator_SkipsSquelchedPeers verifies the relay-forward
+// filter: a peer-originated validator message is delivered to all
 // connected peers EXCEPT those that have squelched the originating
 // validator. Mirrors rippled PeerImp.cpp:240-256.
-func TestBroadcastFromValidator_SkipsSquelchedPeers(t *testing.T) {
+func TestRelayFromValidator_SkipsSquelchedPeers(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)
 
@@ -188,7 +188,9 @@ func TestBroadcastFromValidator_SkipsSquelchedPeers(t *testing.T) {
 	require.True(t, squelched.AddSquelch(validator, MinUnsquelchExpire))
 
 	payload := []byte("validation-frame")
-	require.NoError(t, o.BroadcastFromValidator(validator, payload))
+	// exceptPeer = 0 means no peer is excluded by origin — this test
+	// exercises only the squelch filter, not the origin-exclusion.
+	require.NoError(t, o.RelayFromValidator(validator, PeerID(0), payload))
 
 	// `allowed` must have received exactly the payload.
 	select {
@@ -235,14 +237,17 @@ func TestPeerAddSquelch_RejectsInvalidDuration(t *testing.T) {
 	assert.True(t, peer.ExpireSquelch(validator),
 		"prior squelch should have been cleared by the rejected AddSquelch")
 
-	assert.Equal(t, uint32(1), peer.BadDataCount(),
-		"rejected too-short duration must record exactly one bad-data event")
+	// BadDataCount is now a weighted balance (see peer.go badDataBalance
+	// + overlay.go BadDataWeight). "squelch-duration" is charged at the
+	// feeInvalidData tier — one offense adds weightInvalidData (400).
+	assert.Equal(t, uint32(weightInvalidData), peer.BadDataCount(),
+		"rejected too-short duration must charge feeInvalidData (1 event × 400)")
 
 	// Try a too-long duration.
 	tooLong := MaxUnsquelchExpirePeers + time.Second
 	assert.False(t, peer.AddSquelch(validator, tooLong),
 		"duration above MaxUnsquelchExpirePeers must be rejected")
 
-	assert.Equal(t, uint32(2), peer.BadDataCount(),
-		"rejected too-long duration must record a second bad-data event")
+	assert.Equal(t, uint32(weightInvalidData*2), peer.BadDataCount(),
+		"rejected too-long duration must charge a second feeInvalidData (2 events × 400)")
 }

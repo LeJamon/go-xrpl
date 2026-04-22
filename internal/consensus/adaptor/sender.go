@@ -19,28 +19,62 @@ func NewOverlaySender(overlay *peermanagement.Overlay) *OverlaySender {
 	return &OverlaySender{overlay: overlay}
 }
 
+// BroadcastProposal sends OUR OWN proposal to every connected peer
+// WITHOUT applying the squelch filter. Rippled skips the filter for
+// self-originated broadcasts (OverlayImpl.cpp:1133-1137); a peer that
+// squelches our own pubkey should NOT cause our own proposals to
+// disappear from the network.
 func (s *OverlaySender) BroadcastProposal(proposal *consensus.Proposal) error {
 	msg := ProposalToMessage(proposal)
 	frame, err := encodeFrame(message.TypeProposeLedger, msg)
 	if err != nil {
 		return fmt.Errorf("encode proposal: %w", err)
 	}
-	return s.overlay.BroadcastFromValidator(proposal.NodeID[:], frame)
+	return s.overlay.Broadcast(frame)
 }
 
+// BroadcastValidation sends OUR OWN validation to every connected peer
+// WITHOUT applying the squelch filter. Same rationale as
+// BroadcastProposal.
 func (s *OverlaySender) BroadcastValidation(validation *consensus.Validation) error {
 	msg := ValidationToMessage(validation)
 	frame, err := encodeFrame(message.TypeValidation, msg)
 	if err != nil {
 		return fmt.Errorf("encode validation: %w", err)
 	}
-	return s.overlay.BroadcastFromValidator(validation.NodeID[:], frame)
+	return s.overlay.Broadcast(frame)
 }
 
-func (s *OverlaySender) RelayProposal(proposal *consensus.Proposal) error {
-	// RelayProposal is the same as BroadcastProposal for now.
-	// In a full implementation, we'd exclude the originating peer.
-	return s.BroadcastProposal(proposal)
+// RelayProposal forwards a peer-originated proposal to other peers,
+// honoring the per-peer squelch filter on the ORIGINATING validator's
+// pubkey (so peers that have signaled they no longer need that
+// validator's gossip are skipped) and excluding the originating peer
+// itself. Mirrors rippled's OverlayImpl::relay for TMProposeSet.
+func (s *OverlaySender) RelayProposal(proposal *consensus.Proposal, exceptPeer uint64) error {
+	msg := ProposalToMessage(proposal)
+	frame, err := encodeFrame(message.TypeProposeLedger, msg)
+	if err != nil {
+		return fmt.Errorf("encode proposal: %w", err)
+	}
+	return s.overlay.RelayFromValidator(proposal.NodeID[:], peermanagement.PeerID(exceptPeer), frame)
+}
+
+// RelayValidation forwards a peer-originated validation to other peers
+// with the same filter semantics as RelayProposal.
+func (s *OverlaySender) RelayValidation(validation *consensus.Validation, exceptPeer uint64) error {
+	msg := ValidationToMessage(validation)
+	frame, err := encodeFrame(message.TypeValidation, msg)
+	if err != nil {
+		return fmt.Errorf("encode validation: %w", err)
+	}
+	return s.overlay.RelayFromValidator(validation.NodeID[:], peermanagement.PeerID(exceptPeer), frame)
+}
+
+// UpdateRelaySlot feeds the overlay's reduce-relay state machine with
+// an inbound validator message. Mirrors rippled's
+// PeerImp::updateSlotAndSquelch call in onMessage(TMProposeSet/TMValidation).
+func (s *OverlaySender) UpdateRelaySlot(validatorKey []byte, peerID uint64) {
+	s.overlay.OnValidatorMessage(validatorKey, peermanagement.PeerID(peerID))
 }
 
 func (s *OverlaySender) RequestTxSet(id consensus.TxSetID) error {

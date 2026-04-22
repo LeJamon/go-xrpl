@@ -235,9 +235,31 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 		buf = append(buf, v.ConsensusHash[:]...)
 	}
 
+	// sfValidatedHash (type 5, field 25) — optional. Must stay in
+	// sync with serializeSTValidation which emits this after
+	// sfConsensusHash.
+	if v.ValidatedHash != ([32]byte{}) {
+		buf = appendFieldHeader(buf, typeHash256, fieldValidatedHash)
+		buf = append(buf, v.ValidatedHash[:]...)
+	}
+
 	// sfSigningPubKey (type 7, field 3) — included in signing hash per XRPL spec.
 	buf = appendFieldHeader(buf, typeBlob, fieldSigningPubKey)
 	buf = appendVL(buf, v.NodeID[:])
+
+	// sfAmendments (type 19, field 19) — optional flag-ledger vote.
+	// Must stay in sync with serializeSTValidation which emits this
+	// AFTER sfSigningPubKey and would appear in the signing preimage
+	// the same way (sfSignature, which comes last, is the only field
+	// excluded from signing).
+	if len(v.Amendments) > 0 {
+		buf = appendFieldHeader(buf, typeVector256, fieldAmendments)
+		blob := make([]byte, 0, 32*len(v.Amendments))
+		for _, id := range v.Amendments {
+			blob = append(blob, id[:]...)
+		}
+		buf = appendVL(buf, blob)
+	}
 
 	hash := common.Sha512Half(buf)
 	return hash[:]

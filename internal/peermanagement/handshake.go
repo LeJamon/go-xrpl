@@ -59,10 +59,10 @@ type HandshakeConfig struct {
 	// advertisement — if we don't tell peers we support a feature, they
 	// won't send it to us and they won't accept it from us. Matches
 	// rippled's Handshake.cpp / peerFeatureEnabled.
-	EnableLedgerReplay         bool
-	EnableCompression          bool
-	EnableVPReduceRelay        bool
-	EnableTxReduceRelay        bool
+	EnableLedgerReplay  bool
+	EnableCompression   bool
+	EnableVPReduceRelay bool
+	EnableTxReduceRelay bool
 }
 
 // DefaultHandshakeConfig returns default handshake configuration.
@@ -175,6 +175,13 @@ func WriteRawHandshakeRequest(w io.Writer, req *http.Request) error {
 	writeHeader(HeaderSessionSignature)
 	writeHeader(HeaderNetworkID)
 	writeHeader(HeaderNetworkTime)
+	// X-Protocol-Ctl advertises the features (ledgerreplay, compr, vprr,
+	// txrr) the outbound side is willing to negotiate. Missing from the
+	// initial whitelist — without it the peer's inbound parser sees an
+	// empty feature set and refuses to serve feature-gated requests
+	// like mtREPLAY_DELTA_REQ and mtPROOF_PATH_REQ. Mirrors rippled's
+	// makeHandshakeHeaders writing the same header on outbound.
+	writeHeader(HeaderProtocolCtl)
 	buf.WriteString("\r\n")
 	_, err := w.Write(buf.Bytes())
 	return err
@@ -441,16 +448,18 @@ func (fs *FeatureSet) Intersect(other *FeatureSet) *FeatureSet {
 }
 
 // PeerCapabilities represents the negotiated capabilities of a peer.
+//
+// Only fields that are actually populated during handshake (via
+// ParseProtocolCtlFeatures) are kept here. Previously this struct
+// carried ProtocolMajor/Minor, ListeningPort, SupportsCrawl, and
+// IsValidator — none of which were ever written, so every HasFeature-
+// adjacent query silently returned the zero value. Removing them
+// avoids dead code and makes the wire contract explicit: if a field
+// shows up here, the handshake populates it.
 type PeerCapabilities struct {
 	mu sync.RWMutex
 
-	ProtocolMajor int
-	ProtocolMinor int
-	Features      *FeatureSet
-	NetworkID     uint32
-	ListeningPort uint16
-	SupportsCrawl bool
-	IsValidator   bool
+	Features *FeatureSet
 }
 
 // NewPeerCapabilities creates new peer capabilities.

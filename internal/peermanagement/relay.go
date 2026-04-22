@@ -207,6 +207,14 @@ func (s *ValidatorSlot) DeletePeer(validator []byte, peerID PeerID, erase bool) 
 		delete(s.considered, peerID)
 	}
 
+	// Rippled's Slot.h:479-480 unconditionally resets Count and
+	// LastMessage on the deleted peer, regardless of whether it was
+	// Selected or in Considered. Preserve that behavior so a later
+	// re-appearance of the same peer ID starts from a clean slate
+	// instead of inheriting whatever Count it had when it left.
+	peer.Count = 0
+	peer.LastMessage = now
+
 	if erase {
 		delete(s.peers, peerID)
 	}

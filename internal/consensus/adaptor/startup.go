@@ -117,6 +117,13 @@ func NewFromConfig(
 	// Create the router
 	router := NewRouter(engine, adaptor, modeManager, overlay.Messages())
 
+	// Plumb peer disconnect notifications back through the router so
+	// per-peer state (peerStates for catch-up, peerLCLs for the
+	// getNetworkLedger vote) is cleaned the instant a peer goes away.
+	// Without this a disconnected peer's stale LCL keeps influencing
+	// consensus convergence.
+	overlay.SetPeerDisconnectCallback(router.HandlePeerDisconnect)
+
 	// Wire operating mode into ledger service for server_info.
 	// Matches rippled: report "proposing" when both in full operating mode
 	// and actively proposing in consensus.

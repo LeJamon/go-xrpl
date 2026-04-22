@@ -15,8 +15,12 @@ import (
 )
 
 // DefaultMaxInFlightReplays caps concurrent replay-delta acquisitions.
-// Matches rippled's informal ceiling for LedgerReplayer pending tasks;
-// 16 is enough to cover a catchup burst without hammering a single peer.
+// Chosen to cover a catchup burst without monopolizing a peer's
+// request-serving capacity. Does NOT mirror a specific rippled
+// constant — rippled's MAX_TASKS=10 is for full LedgerReplayTasks
+// (multi-ledger jobs), not per-ledger sub-acquisitions, and rippled
+// has no explicit cap on in-flight LedgerDeltaAcquire instances. 16
+// is our own tuning knob; bump it if catchup stalls with many peers.
 const DefaultMaxInFlightReplays = 16
 
 // Sentinel errors the Replayer returns so callers can distinguish

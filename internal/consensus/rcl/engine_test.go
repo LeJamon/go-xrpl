@@ -64,6 +64,7 @@ type mockAdaptor struct {
 	proposalsBroadcast   []*consensus.Proposal
 	validationsBroadcast []*consensus.Validation
 	proposalsRelayed     []*consensus.Proposal
+	validationsRelayed   []*consensus.Validation
 	txSetsRequested      []consensus.TxSetID
 	ledgersRequested     []consensus.LedgerID
 	modeChanges          []consensus.Mode
@@ -109,11 +110,27 @@ func (a *mockAdaptor) BroadcastValidation(validation *consensus.Validation) erro
 	return nil
 }
 
-func (a *mockAdaptor) RelayProposal(proposal *consensus.Proposal) error {
+func (a *mockAdaptor) RelayProposal(proposal *consensus.Proposal, _ uint64) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.proposalsRelayed = append(a.proposalsRelayed, proposal)
 	return nil
+}
+
+func (a *mockAdaptor) RelayValidation(validation *consensus.Validation, _ uint64) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.validationsRelayed = append(a.validationsRelayed, validation)
+	return nil
+}
+
+func (a *mockAdaptor) UpdateRelaySlot(_ []byte, _ uint64) {}
+
+func (a *mockAdaptor) GetValidatedLedgerHash() consensus.LedgerID {
+	// Test mock: no validated ledger tracking. Returning zero causes
+	// the engine's sendValidation to skip sfValidatedHash emission,
+	// which matches pre-P2.6 behavior — existing tests stay green.
+	return consensus.LedgerID{}
 }
 
 func (a *mockAdaptor) RequestTxSet(id consensus.TxSetID) error {
@@ -411,7 +428,7 @@ func TestEngine_OnProposal(t *testing.T) {
 		Timestamp:      time.Now(),
 	}
 
-	if err := engine.OnProposal(proposal); err != nil {
+	if err := engine.OnProposal(proposal, 0); err != nil {
 		t.Fatalf("Failed to process proposal: %v", err)
 	}
 
@@ -446,7 +463,7 @@ func TestEngine_OnProposal_Untrusted(t *testing.T) {
 		Timestamp:      time.Now(),
 	}
 
-	if err := engine.OnProposal(proposal); err != nil {
+	if err := engine.OnProposal(proposal, 0); err != nil {
 		t.Fatalf("Failed to process proposal: %v", err)
 	}
 
@@ -479,7 +496,7 @@ func TestEngine_OnValidation(t *testing.T) {
 		Full:      true,
 	}
 
-	if err := engine.OnValidation(validation); err != nil {
+	if err := engine.OnValidation(validation, 0); err != nil {
 		t.Fatalf("Failed to process validation: %v", err)
 	}
 }

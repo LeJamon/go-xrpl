@@ -188,8 +188,10 @@ func TestReplayDeltaRequest_NoProvider(t *testing.T) {
 // TestReplayDeltaRequest_OversizedResponse drives the defensive size cap.
 // A provider returns a payload whose total bytes exceed
 // MaxReplayDeltaResponseBytes; the handler must refuse to encode the tx
-// list and instead reply with reBAD_REQUEST (the closest TMReplyError to
-// "too busy", which the proto enum lacks).
+// list and reply with reNO_LEDGER — NOT reBAD_REQUEST. The request
+// itself is well-formed; we just can't serve at this size, so the
+// lighter "no ledger available" code avoids charging the requester
+// feeMalformedRequest on rippled's side (PeerImp.cpp:1545-1548).
 func TestReplayDeltaRequest_OversizedResponse(t *testing.T) {
 	// Header is small; the tx leaves push us past the cap.
 	header := []byte("hdr")
@@ -216,7 +218,7 @@ func TestReplayDeltaRequest_OversizedResponse(t *testing.T) {
 	require.NoError(t, err)
 
 	resp := drainReplayDeltaResponse(t, events)
-	assert.Equal(t, message.ReplyErrorBadRequest, resp.Error)
+	assert.Equal(t, message.ReplyErrorNoLedger, resp.Error)
 	assert.Equal(t, hash, resp.LedgerHash)
 	assert.Empty(t, resp.LedgerHeader, "oversized response must drop the header")
 	assert.Empty(t, resp.Transactions, "oversized response must drop the tx list")

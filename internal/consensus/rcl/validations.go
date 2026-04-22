@@ -20,6 +20,13 @@ type ValidationTracker struct {
 	// trusted is the set of trusted validators
 	trusted map[consensus.NodeID]bool
 
+	// negUNL is the set of validators disabled via the negative-UNL
+	// mechanism. They contribute to the UNL size accounting but do NOT
+	// count toward the full-validation quorum for a ledger — matching
+	// rippled's LedgerMaster.cpp:886,952 where negative-UNL entries
+	// are filtered before the quorum comparison.
+	negUNL map[consensus.NodeID]bool
+
 	// quorum is the number of validations needed for finality
 	quorum int
 
@@ -31,6 +38,13 @@ type ValidationTracker struct {
 	// validations keep arriving after the threshold is crossed.
 	fired map[consensus.LedgerID]struct{}
 
+	// minSeq is the sequence floor for accepting new validations.
+	// Validations with LedgerSeq < minSeq are rejected in Add(). The
+	// gate prevents a flood of far-stale validations from a broken peer
+	// from inflating memory or tripping old-ledger quorum firings.
+	// Caller (the engine) advances minSeq as ledgers accept.
+	minSeq uint32
+
 	// callbacks
 	onFullyValidated func(ledgerID consensus.LedgerID, ledgerSeq uint32)
 }
@@ -41,6 +55,7 @@ func NewValidationTracker(quorum int, freshness time.Duration) *ValidationTracke
 		validations: make(map[consensus.LedgerID]map[consensus.NodeID]*consensus.Validation),
 		byNode:      make(map[consensus.NodeID]*consensus.Validation),
 		trusted:     make(map[consensus.NodeID]bool),
+		negUNL:      make(map[consensus.NodeID]bool),
 		quorum:      quorum,
 		freshness:   freshness,
 		fired:       make(map[consensus.LedgerID]struct{}),
@@ -65,6 +80,33 @@ func (vt *ValidationTracker) SetQuorum(quorum int) {
 	vt.quorum = quorum
 }
 
+// SetNegativeUNL replaces the current negative-UNL set. Validators on
+// the negative-UNL are still considered trusted for message acceptance
+// but are excluded from the quorum count in checkFullValidation —
+// matching rippled's behavior of disabling temporarily-offline
+// validators without removing them from the config. Pass nil or an
+// empty slice to clear the negUNL.
+func (vt *ValidationTracker) SetNegativeUNL(nodes []consensus.NodeID) {
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
+	vt.negUNL = make(map[consensus.NodeID]bool, len(nodes))
+	for _, n := range nodes {
+		vt.negUNL[n] = true
+	}
+}
+
+// SetMinSeq advances the sequence floor below which incoming
+// validations are rejected. Called by the engine after a ledger is
+// accepted to discard far-stale validations without holding them in
+// memory. Passing a value <= current minSeq is a no-op.
+func (vt *ValidationTracker) SetMinSeq(seq uint32) {
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
+	if seq > vt.minSeq {
+		vt.minSeq = seq
+	}
+}
+
 // SetFullyValidatedCallback sets the callback for when a ledger is fully validated.
 // Fired once per ledger the first time trusted-validation count crosses the quorum
 // threshold. Seq is passed alongside the ledger ID so the callee can look up or
@@ -77,9 +119,32 @@ func (vt *ValidationTracker) SetFullyValidatedCallback(fn func(ledgerID consensu
 
 // Add adds a validation to the tracker.
 // Returns true if this is a new validation (not duplicate).
+//
+// Inbound filters match rippled's LedgerMaster.cpp:886,952:
+//   - Only Full validations count toward quorum. Partial validations
+//     (Full=false) indicate a node that hasn't applied the ledger
+//     yet and can't attest to its state root. We drop them entirely.
+//   - Validations with seq below minSeq are rejected. Once a ledger
+//     accepts, validations for seqs many rounds back are noise that
+//     can never retroactively become quorum; keeping them in memory
+//     wastes work on every checkFullValidation pass.
+//   - Per-node newer-seq-only rule: a node's latest validation
+//     supersedes any earlier one. Same as before.
 func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
+
+	// Reject partial validations — a node signaling Full=false has not
+	// fully applied the ledger and its signature doesn't anchor the
+	// state root. Rippled's LedgerMaster.cpp:886 filters the same way.
+	if !validation.Full {
+		return false
+	}
+
+	// Reject far-stale validations below the sequence floor.
+	if vt.minSeq > 0 && validation.LedgerSeq < vt.minSeq {
+		return false
+	}
 
 	// Check if this is a newer validation from this node
 	existing, hasExisting := vt.byNode[validation.NodeID]
@@ -115,6 +180,11 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 // Zero-quorum edge case (empty UNL): requires at least one tracked
 // validation for the ledger before firing, so we don't spuriously
 // promote a ledger hash we haven't seen any validator sign.
+//
+// Negative-UNL filter: a validator on the negUNL is trusted for
+// message acceptance but excluded from the quorum count here, matching
+// rippled's LedgerMaster.cpp:952. Same-quorum with a validator
+// temporarily disabled shouldn't require one MORE validation to finalize.
 func (vt *ValidationTracker) checkFullValidation(ledgerID consensus.LedgerID) {
 	if vt.onFullyValidated == nil {
 		return
@@ -133,7 +203,7 @@ func (vt *ValidationTracker) checkFullValidation(ledgerID consensus.LedgerID) {
 		if sampleSeq == 0 {
 			sampleSeq = v.LedgerSeq
 		}
-		if vt.trusted[nodeID] {
+		if vt.trusted[nodeID] && !vt.negUNL[nodeID] {
 			trustedCount++
 		}
 	}
@@ -209,6 +279,17 @@ func (vt *ValidationTracker) GetTrustedValidationCount(ledgerID consensus.Ledger
 		}
 	}
 	return count
+}
+
+// GetTrustedSupport is an alias for GetTrustedValidationCount named for
+// the LedgerTrie-style preference heuristic used in checkLedger. Rippled
+// picks a network ledger via vals.getPreferred() (RCLConsensus.cpp:301)
+// which returns the ledger with the most validation SUPPORT on its
+// ancestor chain — we approximate "support" with a flat trusted-count
+// at the exact ledger ID. Good enough when trusted validators broadly
+// agree; a full LedgerTrie port is a follow-up item.
+func (vt *ValidationTracker) GetTrustedSupport(ledgerID consensus.LedgerID) int {
+	return vt.GetTrustedValidationCount(ledgerID)
 }
 
 // IsFullyValidated returns true if the ledger has reached full validation.

@@ -36,12 +36,15 @@ func TestPeer_BadDataCount_StartsAtZero(t *testing.T) {
 func TestPeer_BadDataCount_IncrementsMonotonic(t *testing.T) {
 	peer := newTestPeer(t, PeerID(2))
 
-	assert.Equal(t, uint32(1), peer.IncBadData("r1"),
-		"first increment returns the post-increment count")
-	assert.Equal(t, uint32(2), peer.IncBadData("r2"))
-	assert.Equal(t, uint32(3), peer.IncBadData("r3"))
+	// r1/r2/r3 are unrecognized reasons, so each charges
+	// weightDefaultBadData. IncBadData returns the running balance.
+	w := uint32(weightDefaultBadData)
+	assert.Equal(t, w, peer.IncBadData("r1"),
+		"first increment returns the post-increment balance")
+	assert.Equal(t, 2*w, peer.IncBadData("r2"))
+	assert.Equal(t, 3*w, peer.IncBadData("r3"))
 
-	assert.Equal(t, uint32(3), peer.BadDataCount(),
+	assert.Equal(t, 3*w, peer.BadDataCount(),
 		"BadDataCount must reflect all increments")
 }
 
@@ -67,7 +70,11 @@ func TestPeer_BadDataCount_Concurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	assert.Equal(t, uint32(goroutines*perG), peer.BadDataCount(),
+	// "concurrent" is unrecognized, so each call charges
+	// weightDefaultBadData. The atomic balance must equal the total
+	// weight without any lost updates.
+	expected := uint32(goroutines * perG * weightDefaultBadData)
+	assert.Equal(t, expected, peer.BadDataCount(),
 		"concurrent increments must all be counted — no lost updates")
 }
 
@@ -86,8 +93,10 @@ func TestPeer_AddSquelch_RejectsInvalidAndIncrementsBadData(t *testing.T) {
 	assert.False(t, peer.AddSquelch(validator, tooShort),
 		"out-of-range duration must be rejected")
 
-	assert.Equal(t, uint32(1), peer.BadDataCount(),
-		"rejection must record exactly one bad-data event")
+	// "squelch-duration" is charged at the feeInvalidData tier per
+	// BadDataWeight, so one rejection adds weightInvalidData.
+	assert.Equal(t, uint32(weightInvalidData), peer.BadDataCount(),
+		"rejection must record exactly one feeInvalidData charge")
 }
 
 // TestOverlay_IncPeerBadData_Attributes verifies the overlay-level
@@ -103,9 +112,10 @@ func TestOverlay_IncPeerBadData_Attributes(t *testing.T) {
 	peer := newTestPeer(t, PeerID(10))
 	o.peers[peer.ID()] = peer
 
-	assert.Equal(t, uint32(1), o.IncPeerBadData(peer.ID(), "unit"))
-	assert.Equal(t, uint32(2), o.IncPeerBadData(peer.ID(), "unit"))
-	assert.Equal(t, uint32(2), peer.BadDataCount())
+	// Each "unit" call adds weightDefaultBadData to the balance.
+	assert.Equal(t, uint32(weightDefaultBadData), o.IncPeerBadData(peer.ID(), "unit"))
+	assert.Equal(t, uint32(2*weightDefaultBadData), o.IncPeerBadData(peer.ID(), "unit"))
+	assert.Equal(t, uint32(2*weightDefaultBadData), peer.BadDataCount())
 
 	// Unknown peer: must no-op and return 0, not panic or insert.
 	assert.Equal(t, uint32(0), o.IncPeerBadData(PeerID(999), "unknown"))
@@ -127,11 +137,15 @@ func TestOverlay_EvictBadDataPeers_RemovesOffendersOnly(t *testing.T) {
 	o.peers[offender.ID()] = offender
 	o.peers[good.ID()] = good
 
-	// Charge the offender past the threshold; leave the good peer alone.
-	for i := uint32(0); i < EvictBadDataThreshold; i++ {
+	// Charge the offender past the threshold via weighted IncBadData.
+	// "unit" is unrecognized so it falls back to weightDefaultBadData
+	// per BadDataWeight; we need ceil(threshold/weight) calls to cross.
+	hitsToEvict := (EvictBadDataThreshold + weightDefaultBadData - 1) / weightDefaultBadData
+	for i := 0; i < hitsToEvict; i++ {
 		offender.IncBadData("unit")
 	}
-	require.Equal(t, uint32(EvictBadDataThreshold), offender.BadDataCount())
+	require.GreaterOrEqual(t, offender.BadDataCount(), uint32(EvictBadDataThreshold),
+		"offender must be at or past threshold after %d charges", hitsToEvict)
 	require.Equal(t, uint32(0), good.BadDataCount())
 
 	o.evictBadDataPeers()
@@ -147,7 +161,8 @@ func TestOverlay_EvictBadDataPeers_RemovesOffendersOnly(t *testing.T) {
 		"well-behaved peer must not be evicted")
 
 	// Below-threshold peers don't get evicted even on subsequent ticks.
-	for i := uint32(0); i < EvictBadDataThreshold-1; i++ {
+	// Stop one charge short of crossing.
+	for i := 0; i < hitsToEvict-1; i++ {
 		good.IncBadData("unit")
 	}
 	o.evictBadDataPeers()

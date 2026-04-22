@@ -562,4 +562,3 @@ func TestRouter_IgnoresUnsolicitedReplayDeltaResponse(t *testing.T) {
 
 	assert.Equal(t, 0, r.replayer.Count(), "unsolicited response must not arm the verifier")
 }
-

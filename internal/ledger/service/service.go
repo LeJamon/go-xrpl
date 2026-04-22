@@ -1222,6 +1222,19 @@ func (s *Service) stashPendingValidationLocked(hash [32]byte, event *LedgerAccep
 	for len(s.pendingValidationOrder) > pendingValidationMaxLen {
 		oldest := s.pendingValidationOrder[0]
 		s.pendingValidationOrder = s.pendingValidationOrder[1:]
+		// Silently losing the oldest pending event when the cap is hit
+		// means a LedgerAcceptedEvent never fires for that hash even if
+		// it later reaches quorum — a failure mode that doesn't exist
+		// in rippled. Log via the service's configured logger at warn
+		// level so an operator noticing a stuck-validation issue can
+		// see it; keep the cap in place so a node that never reaches
+		// quorum (bad UNL, partition) can't leak memory.
+		if s.logger != nil {
+			s.logger.Warn("pendingValidation LRU drop — event lost for this ledger hash",
+				"hash", fmt.Sprintf("%x", oldest[:8]),
+				"cap", pendingValidationMaxLen,
+			)
+		}
 		delete(s.pendingValidation, oldest)
 	}
 }
