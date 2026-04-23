@@ -174,6 +174,47 @@ func TestOverlay_EvictBadDataPeers_RemovesOffendersOnly(t *testing.T) {
 		"peer below EvictBadDataThreshold must survive an eviction tick")
 }
 
+// TestBadDataWeight_Reclassification_R5_6 pins the R5.6 fix: bad
+// signatures / pubkey formats must charge feeInvalidSignature(2000),
+// bad hashes / malformed requests must charge feeMalformedRequest(200),
+// and genuine data corruption must charge feeInvalidData(400). The
+// pre-R5.6 behavior mapped all of these to 400 — attackers spamming
+// bad-sig frames took 5× longer to evict than in rippled.
+func TestBadDataWeight_Reclassification_R5_6(t *testing.T) {
+	tests := []struct {
+		reason string
+		want   int
+	}{
+		// Signature offenses — heaviest.
+		{"proposal-malformed-sig-size", weightInvalidSignature},
+		{"proposal-malformed-pubkey-size", weightInvalidSignature},
+		{"validation-malformed-sig-size", weightInvalidSignature},
+		// Genuine data corruption / protocol violation.
+		{"replay-delta-verify", weightInvalidData},
+		{"ledger-data-base", weightInvalidData},
+		{"ledger-data-state", weightInvalidData},
+		{"squelch-duration", weightInvalidData},
+		// Bad hashes / malformed requests — reclassified from invalid-data to malformed-req.
+		{"proposal-malformed-prev-ledger-size", weightMalformedReq},
+		{"proposal-malformed-txset-size", weightMalformedReq},
+		{"validation-malformed-ledger-hash-zero", weightMalformedReq},
+		{"validation-malformed-node-id-zero", weightMalformedReq},
+		{"proposal-decode", weightMalformedReq},
+		{"validation-decode", weightMalformedReq},
+		// No-reply stays lowest.
+		{"no-reply", weightRequestNoReply},
+		// Unrecognized falls back to default.
+		{"totally-unknown-reason", weightDefaultBadData},
+	}
+	for _, tc := range tests {
+		t.Run(tc.reason, func(t *testing.T) {
+			got := BadDataWeight(tc.reason)
+			assert.Equal(t, tc.want, got,
+				"reason %q: wrong weight (rippled parity violated)", tc.reason)
+		})
+	}
+}
+
 // TestOverlay_NoEviction_AfterSingleInvalidData guards against a
 // regression to the historic 1000-threshold, which was 25× more
 // aggressive than rippled and evicted honest peers after a single

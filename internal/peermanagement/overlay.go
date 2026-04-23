@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,43 +44,62 @@ const EvictBadDataThreshold = 25000
 // asymptotes at 800 and never crosses the threshold.
 const badDataDecayInterval = 10 * time.Second
 
-// Bad-data weights mirror rippled's Resource::Fees.cpp:26-43. They
+// Bad-data weights mirror rippled's Resource::Fees.cpp:26-30. They
 // scale the per-reason severity of an IncBadData call:
-//   - feeInvalidData (400)      — a peer sent genuinely corrupt data
-//   - feeMalformedRequest (200) — a peer sent a syntactically bad req
-//   - feeRequestNoReply (10)    — a peer didn't answer a request
+//   - feeInvalidSignature (2000) — bad signature / wrong pubkey format
+//   - feeInvalidData      (400)  — genuinely corrupt data
+//   - feeMalformedRequest (200)  — syntactically bad request / bad hash
+//   - feeRequestNoReply   (10)   — peer didn't answer a request
 //
 // Keeping the numbers at rippled's values means an operator familiar
 // with rippled's tuning can port reasoning across implementations.
+// Signature offenses are the heaviest — a peer forging or mangling
+// signatures is either broken or hostile and a small number of such
+// events should approach the eviction threshold.
 const (
-	weightInvalidData    = 400
-	weightMalformedReq   = 200
-	weightRequestNoReply = 10
-	weightDefaultBadData = 100 // fallback for unrecognized reasons
+	weightInvalidSignature = 2000
+	weightInvalidData      = 400
+	weightMalformedReq     = 200
+	weightRequestNoReply   = 10
+	weightDefaultBadData   = 100 // fallback for unrecognized reasons
 )
 
 // BadDataWeight returns the weight to charge IncBadData for `reason`.
-// Maps reason labels used throughout the codebase to rippled's fee
-// tiers. Unrecognized reasons fall back to weightDefaultBadData so a
-// new bad-data source doesn't accidentally ship with zero weight.
+// Maps reason labels to rippled's fee tiers. Unrecognized reasons fall
+// back to weightDefaultBadData so a new bad-data source doesn't
+// accidentally ship with zero weight.
+//
+// Classification rationale per rippled PeerImp.cpp:
+//   - sig-size / pubkey-size → feeInvalidSignature (PeerImp.cpp:1683-1686)
+//   - ledger-hash / txset / prev-ledger-size / node-id-zero → feeMalformedRequest
+//     (PeerImp.cpp:1693: "bad hashes")
+//   - verify / decode / wire-corruption → feeInvalidData
+//   - no-reply → feeRequestNoReply
 func BadDataWeight(reason string) int {
 	switch reason {
-	// Genuine wire corruption / protocol violation — highest weight.
+	// Bad signatures and malformed pubkeys — heaviest charge.
+	// Rippled: feeInvalidSignature at PeerImp.cpp:1683-1686 for
+	// ProposeSet, equivalent path for Validation.
+	case "proposal-malformed-sig-size",
+		"proposal-malformed-pubkey-size",
+		"validation-malformed-sig-size":
+		return weightInvalidSignature
+	// Genuine data corruption / protocol violation — next-heaviest.
 	case "replay-delta-verify",
 		"ledger-data-base",
 		"ledger-data-state",
 		"squelch-duration",
 		"squelch-map-full",
-		"proposal-malformed-prev-ledger-size",
+		"squelch-malformed-pubkey":
+		return weightInvalidData
+	// Malformed requests: decode failures, bad hashes, wrong-field
+	// requests. Rippled: feeMalformedRequest at PeerImp.cpp:1693 for
+	// "bad hashes" and at PeerImp.cpp:1476 for bad requests.
+	case "proposal-malformed-prev-ledger-size",
 		"proposal-malformed-txset-size",
-		"proposal-malformed-sig-size",
-		"proposal-malformed-pubkey-size",
 		"validation-malformed-ledger-hash-zero",
 		"validation-malformed-node-id-zero",
-		"validation-malformed-sig-size":
-		return weightInvalidData
-	// Syntactically-bad requests: decode failures and wrong-field reqs.
-	case "replay-delta-resp-decode",
+		"replay-delta-resp-decode",
 		"replay-delta-req-decode",
 		"replay-delta-req-bad",
 		"proof-path-req-decode",
@@ -469,31 +489,56 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	}
 	req.Body.Close()
 
+	// R5.2 PARTIAL: full signature verification is blocked by the
+	// MakeSharedValue asymmetry (Go's TLS 1.2 server never populates
+	// c.serverFinished — see KNOWN ISSUE comment in
+	// handshake.go:MakeSharedValue). What we CAN do cheaply and
+	// soundly is the self-connection and network-ID checks, which
+	// don't depend on the signature. Those two alone close the
+	// mainnet↔testnet cross-connect and loopback-spoof gaps.
+	// Full signature verification is tracked as a follow-up in
+	// tasks/pr264-round5-fixes.md.
+	if peerPubKeyStr := req.Header.Get(HeaderPublicKey); peerPubKeyStr != "" {
+		if peerPubKeyStr == o.identity.EncodedPublicKey() {
+			return NewHandshakeError(peer.Endpoint(), "verify", ErrSelfConnection)
+		}
+		if pk, err := ParsePublicKeyToken(peerPubKeyStr); err == nil {
+			peer.mu.Lock()
+			peer.remotePubKey = pk
+			peer.mu.Unlock()
+		}
+	}
+	if netIDStr := req.Header.Get(HeaderNetworkID); netIDStr != "" && o.cfg.NetworkID > 0 {
+		if netID, err := strconv.ParseUint(netIDStr, 10, 32); err == nil {
+			if uint32(netID) != o.cfg.NetworkID {
+				return NewHandshakeError(peer.Endpoint(), "verify", ErrNetworkMismatch)
+			}
+		}
+	}
+
+	hsCfg := HandshakeConfig{
+		UserAgent:           o.cfg.UserAgent,
+		NetworkID:           o.cfg.NetworkID,
+		CrawlPublic:         false,
+		EnableLedgerReplay:  o.cfg.EnableLedgerReplay,
+		EnableCompression:   o.cfg.EnableCompression,
+		EnableVPReduceRelay: o.cfg.EnableVPReduceRelay,
+		EnableTxReduceRelay: o.cfg.EnableTxReduceRelay,
+	}
+
 	// Capture the peer's advertised protocol features from the handshake
 	// request headers so downstream code can query e.g. whether this peer
 	// supports ledger-replay before issuing a replay-delta request.
 	caps := NewPeerCapabilities()
 	caps.Features = ParseProtocolCtlFeatures(req.Header)
 
-	// Store the buffered reader + capabilities on the peer for the readLoop
+	// Store the buffered reader + capabilities on the peer for the readLoop.
 	peer.mu.Lock()
 	peer.bufReader = bufReader
 	peer.capabilities = caps
 	peer.mu.Unlock()
 
-	// Build and send response. Advertise our supported features so the
-	// peer knows what to send (and what to accept from) us.
-	cfg := HandshakeConfig{
-		UserAgent:           o.cfg.UserAgent,
-		NetworkID:           o.cfg.NetworkID,
-		CrawlPublic:         false,
-		EnableLedgerReplay:  o.cfg.EnableLedgerReplay,
-		EnableCompression:   o.cfg.EnableCompression,
-		EnableVPReduceRelay: o.cfg.EnableReduceRelay,
-		EnableTxReduceRelay: o.cfg.EnableReduceRelay,
-	}
-
-	resp := BuildHandshakeResponse(o.identity, sharedValue, cfg)
+	resp := BuildHandshakeResponse(o.identity, sharedValue, hsCfg)
 	if err := resp.Write(tlsConn); err != nil {
 		return NewHandshakeError(peer.Endpoint(), "send_response", err)
 	}
@@ -774,10 +819,21 @@ func (o *Overlay) handleSquelchMessage(evt Event) {
 	decoded, err := message.Decode(message.TypeSquelch, evt.Payload)
 	if err != nil {
 		slog.Debug("Squelch decode failed", "t", "Overlay", "peer", evt.PeerID, "err", err)
+		o.IncPeerBadData(evt.PeerID, "squelch-malformed-pubkey")
 		return
 	}
 	sq, ok := decoded.(*message.Squelch)
-	if !ok || len(sq.ValidatorPubKey) == 0 {
+	if !ok {
+		return
+	}
+	// Validator pubkey must be a 33-byte compressed secp256k1 point.
+	// Rippled charges feeInvalidData on empty/wrong-length at
+	// PeerImp.cpp:2701-2712. Silently dropping here let a peer spam
+	// bogus TMSquelch frames without penalty.
+	if len(sq.ValidatorPubKey) != 33 {
+		slog.Debug("Squelch malformed pubkey",
+			"t", "Overlay", "peer", evt.PeerID, "len", len(sq.ValidatorPubKey))
+		o.IncPeerBadData(evt.PeerID, "squelch-malformed-pubkey")
 		return
 	}
 
@@ -1039,8 +1095,8 @@ func (o *Overlay) Connect(addr string) error {
 		CrawlPublic:         false,
 		EnableLedgerReplay:  o.cfg.EnableLedgerReplay,
 		EnableCompression:   o.cfg.EnableCompression,
-		EnableVPReduceRelay: o.cfg.EnableReduceRelay,
-		EnableTxReduceRelay: o.cfg.EnableReduceRelay,
+		EnableVPReduceRelay: o.cfg.EnableVPReduceRelay,
+		EnableTxReduceRelay: o.cfg.EnableTxReduceRelay,
 	}
 
 	o.events <- Event{

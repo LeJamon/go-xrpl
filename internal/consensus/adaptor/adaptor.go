@@ -4,11 +4,13 @@
 package adaptor
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -145,6 +147,11 @@ type Adaptor struct {
 	// at construction. Zero values mean "no vote".
 	feeVote FeeVoteStance
 
+	// amendmentVoteIDs are the amendment IDs this validator wishes to
+	// vote FOR on the next flag ledger. Resolved from Config.AmendmentVote
+	// names at construction (unknown names logged and dropped).
+	amendmentVoteIDs [][32]byte
+
 	logger *slog.Logger
 }
 
@@ -183,6 +190,14 @@ type Config struct {
 	// vote. Production callers wire this from the [voting] stanza of
 	// the toml config (same semantics as rippled's FeeVoteSetup).
 	FeeVote FeeVoteStance
+	// AmendmentVote lists amendments (by name, as defined in the
+	// amendment registry) this validator wishes to vote FOR on the
+	// next flag ledger. Unknown names are dropped at construction
+	// time with a warning; already-enabled amendments are filtered
+	// on every emission (not at construction) since the enabled set
+	// changes over time. Same semantics as rippled's [amendments]
+	// stanza.
+	AmendmentVote []string
 }
 
 // New creates a new Adaptor.
@@ -222,6 +237,21 @@ func New(cfg Config) *Adaptor {
 		cookie = 1
 	}
 
+	// Resolve amendment-vote names to IDs. Unknown names are logged
+	// and dropped — an operator with a stale config shouldn't block
+	// node boot. Same behavior as rippled silently skipping unknown
+	// amendments from [amendments].
+	logger := slog.Default().With("component", "consensus-adaptor")
+	var amendmentVoteIDs [][32]byte
+	for _, name := range cfg.AmendmentVote {
+		f := amendment.GetFeatureByName(name)
+		if f == nil {
+			logger.Warn("unknown amendment in vote config; ignoring", "name", name)
+			continue
+		}
+		amendmentVoteIDs = append(amendmentVoteIDs, f.ID)
+	}
+
 	return &Adaptor{
 		ledgerService:     cfg.LedgerService,
 		sender:            sender,
@@ -235,7 +265,8 @@ func New(cfg Config) *Adaptor {
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
 		cookie:            cookie,
 		feeVote:           cfg.FeeVote,
-		logger:            slog.Default().With("component", "consensus-adaptor"),
+		amendmentVoteIDs:  amendmentVoteIDs,
+		logger:            logger,
 	}
 }
 
@@ -685,6 +716,54 @@ func (a *Adaptor) GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, p
 		uint64(a.feeVote.ReserveBase),
 		uint64(a.feeVote.ReserveIncrement),
 		a.IsFeatureEnabled("XRPFees")
+}
+
+// GetAmendmentVote returns the list of amendment IDs this validator
+// wishes to vote FOR on the next flag ledger, filtered against the
+// current ledger's already-enabled amendments so we don't re-vote for
+// active ones. Matches rippled's AmendmentTable::doValidation.
+//
+// Returns nil when:
+//   - the validator has no configured vote (AmendmentVote empty);
+//   - no ledger is available to filter against (pre-sync);
+//   - every configured amendment is already enabled on the current ledger.
+//
+// Output is a freshly-allocated slice; the result is canonically
+// sorted by amendment ID so two validators with the same stance
+// produce byte-identical validations.
+func (a *Adaptor) GetAmendmentVote() [][32]byte {
+	if len(a.amendmentVoteIDs) == 0 {
+		return nil
+	}
+
+	// Filter out amendments already enabled on the currently-validated
+	// ledger. Absence of a ledger or rules defaults to "nothing
+	// filtered" — safe because an un-synced node isn't validating.
+	var rules *amendment.Rules
+	if a.ledgerService != nil {
+		if l := a.ledgerService.GetValidatedLedger(); l != nil {
+			rules = l.Rules()
+		}
+	}
+
+	out := make([][32]byte, 0, len(a.amendmentVoteIDs))
+	for _, id := range a.amendmentVoteIDs {
+		if rules != nil && rules.Enabled(id) {
+			continue
+		}
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+
+	// Canonical sort — rippled's sfAmendments is written in sorted
+	// order, so emit the same ordering for byte-identical validations
+	// between two validators with the same stance.
+	sort.Slice(out, func(i, j int) bool {
+		return bytes.Compare(out[i][:], out[j][:]) < 0
+	})
+	return out
 }
 
 // IsFeatureEnabled reports whether the named amendment is enabled on

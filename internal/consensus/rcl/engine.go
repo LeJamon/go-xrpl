@@ -973,15 +973,16 @@ func (e *Engine) shouldCloseLedger() bool {
 	}
 
 	// Count trusted validators that have validated our previous ledger.
-	// Matches rippled's adaptor_.proposersValidated(prevLedgerID_).
+	// Reads the PERSISTENT validation tracker (not the round-scoped
+	// e.validations, which is reset at round start and so always zero
+	// at the beginning of a round before any current-round validations
+	// arrive). Matches rippled's adaptor_.proposersValidated() at
+	// RCLConsensus.cpp:281 which reads the persistent Validations
+	// store. Fixes the pre-R5.9 behavior where early-close peer
+	// pressure from validations was invisible until mid-round.
 	proposersValidated := 0
-	if e.prevLedger != nil {
-		prevID := e.prevLedger.ID()
-		for nodeID, v := range e.validations {
-			if e.adaptor.IsTrusted(nodeID) && v.LedgerID == prevID {
-				proposersValidated++
-			}
-		}
+	if e.prevLedger != nil && e.validationTracker != nil {
+		proposersValidated = e.validationTracker.ProposersValidated(e.prevLedger.ID())
 	}
 
 	// Peer pressure: if more than half of previous round's proposers
@@ -1580,6 +1581,15 @@ func (e *Engine) determineCloseTime() time.Time {
 	return roundCloseTime(e.state.CloseTimes.Self, resolution)
 }
 
+// isVotingLedger reports whether a validation for this ledger should
+// carry fee-vote and amendment-vote fields. Matches rippled
+// Ledger.cpp:951-953: a flag ledger is one whose sequence is 1 less
+// than a multiple of 256 (i.e., (seq+1) % 256 == 0). The validation
+// for that ledger carries the vote for the next flag cycle.
+func isVotingLedger(ledgerSeq uint32) bool {
+	return (ledgerSeq+1)%256 == 0
+}
+
 // sendValidation creates and broadcasts a validation.
 //
 // The Full flag on the emitted validation reflects whether we were
@@ -1597,38 +1607,65 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 
 	full := e.mode == consensus.ModeProposing
 
-	validation := &consensus.Validation{
-		LedgerID:  ledger.ID(),
-		LedgerSeq: ledger.Seq(),
-		NodeID:    nodeID,
-		SignTime:  e.adaptor.Now(),
-		SeenTime:  e.adaptor.Now(),
-		Full:      full,
-		// Cookie + ServerVersion on every validation — matches
-		// rippled RCLConsensus.cpp:803-818 where both are populated
-		// unconditionally. Zero values from the adaptor cause the
-		// serializer to omit the field (rippled's skip-if-absent
-		// behavior).
-		Cookie:        e.adaptor.GetCookie(),
-		ServerVersion: e.adaptor.GetServerVersion(),
+	cookie := e.adaptor.GetCookie()
+	serverVersion := e.adaptor.GetServerVersion()
+
+	// R5.10 guards — enforce invariants that the serializer relies
+	// on (it gates emission on non-zero) AND that rippled expects
+	// present (RCLConsensus.cpp:803-818 populates both unconditionally
+	// under HardenedValidations). A future refactor that accidentally
+	// zeros either should fail loudly here rather than silently
+	// ship malformed validations.
+	if cookie == 0 {
+		slog.Warn("sendValidation: cookie is zero — adaptor must generate one at boot (R5.10 invariant violated); emitting without cookie")
+	}
+	if serverVersion == 0 {
+		slog.Warn("sendValidation: serverVersion is zero — adaptor must advertise a build tag (R5.10 invariant violated); emitting without serverVersion")
 	}
 
-	// Fee vote: emit the AMOUNT triple under post-XRPFees rules, the
-	// legacy UINT triple otherwise. Rippled's FeeVoteImpl.cpp:120-192
-	// is a hard if/else on featureXRPFees; the adaptor's postXRPFees
-	// flag mirrors that decision so the two paths never co-emit.
-	// Zero values from the adaptor mean "no vote" and the serializer
-	// omits the fields.
-	if baseFee, reserveBase, reserveIncrement, postXRPFees := e.adaptor.GetFeeVote(); baseFee != 0 || reserveBase != 0 || reserveIncrement != 0 {
-		if postXRPFees {
-			validation.BaseFeeDrops = baseFee
-			validation.ReserveBaseDrops = reserveBase
-			validation.ReserveIncrementDrops = reserveIncrement
-		} else {
-			validation.BaseFee = baseFee
-			validation.ReserveBase = uint32(reserveBase)
-			validation.ReserveIncrement = uint32(reserveIncrement)
+	validation := &consensus.Validation{
+		LedgerID:      ledger.ID(),
+		LedgerSeq:     ledger.Seq(),
+		NodeID:        nodeID,
+		SignTime:      e.adaptor.Now(),
+		SeenTime:      e.adaptor.Now(),
+		Full:          full,
+		Cookie:        cookie,
+		ServerVersion: serverVersion,
+	}
+
+	// Fee vote + amendment vote emission is gated on isVotingLedger.
+	// Rippled emits these ONLY on flag ledgers — the validation signed
+	// for ledger seq covers the transition to seq+1; on the flag
+	// boundary (seq+1)%256 == 0) we attach the vote for the next
+	// flag-ledger cycle. Emitting on every ledger inflates bandwidth
+	// ~256× and confuses peer aggregators that accept these fields
+	// only on the expected boundary. Matches
+	// Ledger.cpp:951-953 isVotingLedger + RCLConsensus.cpp:879.
+	if isVotingLedger(ledger.Seq()) {
+		// Fee vote: emit the AMOUNT triple under post-XRPFees rules, the
+		// legacy UINT triple otherwise. Rippled's FeeVoteImpl.cpp:120-192
+		// is a hard if/else on featureXRPFees; the adaptor's postXRPFees
+		// flag mirrors that decision so the two paths never co-emit.
+		// Zero values from the adaptor mean "no vote" and the serializer
+		// omits the fields.
+		if baseFee, reserveBase, reserveIncrement, postXRPFees := e.adaptor.GetFeeVote(); baseFee != 0 || reserveBase != 0 || reserveIncrement != 0 {
+			if postXRPFees {
+				validation.BaseFeeDrops = baseFee
+				validation.ReserveBaseDrops = reserveBase
+				validation.ReserveIncrementDrops = reserveIncrement
+			} else {
+				validation.BaseFee = baseFee
+				validation.ReserveBase = uint32(reserveBase)
+				validation.ReserveIncrement = uint32(reserveIncrement)
+			}
 		}
+
+		// Amendment vote — populated alongside fee vote on flag
+		// ledgers only. See R5.3. Adaptor returns nil when there is
+		// no vote to cast (non-validators, empty stance, all
+		// amendments already enabled).
+		validation.Amendments = e.adaptor.GetAmendmentVote()
 	}
 
 	// Tie the validation to the tx-set we converged on, so peers can

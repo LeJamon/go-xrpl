@@ -3,6 +3,7 @@ package adaptor
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/LeJamon/goXRPLd/config"
@@ -53,6 +54,16 @@ func (c *Components) Stop() {
 	}
 	if c.Engine != nil {
 		_ = c.Engine.Stop()
+	}
+	// Drain any in-flight replay-delta acquisitions. Router is
+	// already cancelled above so no new acquisitions can arrive; we
+	// just need to clear the map so we don't leak state into a
+	// subsequent Start. Log the count for observability.
+	if c.Router != nil {
+		if remaining := c.Router.StopReplayer(); remaining > 0 {
+			slog.Info("replay-delta acquisitions drained at shutdown",
+				"t", "Components.Stop", "in_flight_at_stop", remaining)
+		}
 	}
 	if c.overlayCancel != nil {
 		c.overlayCancel()

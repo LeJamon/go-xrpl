@@ -98,6 +98,17 @@ func MakeSharedValue(conn *tls.Conn) ([]byte, error) {
 		return nil, fmt.Errorf("%w: finished messages are empty", ErrHandshakeFailed)
 	}
 
+	// KNOWN ISSUE: on Go's TLS 1.2 server side, `c.serverFinished`
+	// stays all-zeros in a full (non-resume) handshake because
+	// handshake_server.go:119 calls `sendFinished(nil)` and never
+	// copies the verify bytes back into the field. Only the
+	// CLIENT side sees both fields populated. As a result, server
+	// and client compute DIFFERENT sharedValues from the same
+	// connection — signature verification based on this value
+	// cannot currently work both ways. R5.2 documents the fix as
+	// a follow-up (requires computing the finished-message
+	// equivalent via master secret + transcript hash instead of
+	// reading the stdlib field).
 	return MakeSharedValueFromFinished(clientBytes, serverBytes)
 }
 

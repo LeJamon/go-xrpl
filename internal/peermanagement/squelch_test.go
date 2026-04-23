@@ -252,6 +252,58 @@ func TestPeerAddSquelch_RejectsInvalidDuration(t *testing.T) {
 		"rejected too-long duration must charge a second feeInvalidData (2 events × 400)")
 }
 
+// TestOverlay_InboundSquelch_MalformedPubkey_Charges pins R5.8: a
+// TMSquelch whose ValidatorPubKey isn't a 33-byte compressed secp256k1
+// point must charge feeInvalidData (weightInvalidData = 400) against
+// the sending peer. Pre-R5.8 behavior silently dropped these frames,
+// letting an attacker spam bogus TMSquelches without penalty.
+// Matches rippled PeerImp.cpp:2701-2712.
+func TestOverlay_InboundSquelch_MalformedPubkey_Charges(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	o := &Overlay{
+		peers:  make(map[PeerID]*Peer),
+		events: make(chan Event, 8),
+	}
+
+	endpoint := Endpoint{Host: "127.0.0.1", Port: 51235}
+	peer := NewPeer(PeerID(77), endpoint, false, id, make(chan Event, 1))
+	o.peers[peer.ID()] = peer
+
+	// 32-byte pubkey — wrong length; rippled expects 33-byte compressed.
+	badValidator := make([]byte, 32)
+	for i := range badValidator {
+		badValidator[i] = byte(i)
+	}
+
+	sq := &message.Squelch{
+		Squelch:         true,
+		ValidatorPubKey: badValidator,
+		SquelchDuration: uint32(MinUnsquelchExpire / time.Second),
+	}
+	payload, err := message.Encode(sq)
+	require.NoError(t, err)
+
+	require.Equal(t, uint32(0), peer.BadDataCount(),
+		"peer must start at zero bad-data")
+
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeSquelch),
+		Payload:     payload,
+	})
+
+	assert.Equal(t, uint32(weightInvalidData), peer.BadDataCount(),
+		"malformed TMSquelch pubkey must charge feeInvalidData (400)")
+
+	// Squelch must NOT have been applied.
+	validator33 := make([]byte, 33)
+	copy(validator33, badValidator)
+	assert.True(t, peer.ExpireSquelch(validator33),
+		"malformed-pubkey squelch must not have installed a squelch entry")
+}
+
 // TestOverlay_InboundSquelch_FromUnnegotiatedPeer verifies that an
 // inbound TMSquelch from a peer that did NOT negotiate reduce-relay is
 // still applied (parity with rippled PeerImp.cpp:2691-2732). Feature

@@ -94,6 +94,9 @@ type mockAdaptor struct {
 	// R4.10 test sets this to a non-zero LedgerID to exercise the
 	// sfValidatedHash gate path.
 	validatedLedgerHashOverride consensus.LedgerID
+
+	// Amendment vote stance for the R5.3 test. Empty means no vote.
+	amendmentVote [][32]byte
 }
 
 func newMockAdaptor() *mockAdaptor {
@@ -321,6 +324,17 @@ func (a *mockAdaptor) GetFeeVote() (baseFee, reserveBase, reserveIncrement uint6
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.voteBaseFee, a.voteReserveBase, a.voteReserveIncrement, a.votePostXRPFees
+}
+
+func (a *mockAdaptor) GetAmendmentVote() [][32]byte {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if len(a.amendmentVote) == 0 {
+		return nil
+	}
+	out := make([][32]byte, len(a.amendmentVote))
+	copy(out, a.amendmentVote)
+	return out
 }
 
 // Signing and verification
@@ -1101,8 +1115,11 @@ func TestSendValidation_PopulatesCookieServerVersionFeeVote(t *testing.T) {
 	adaptor.validationsBroadcast = nil
 	adaptor.mu.Unlock()
 
+	// Use a flag-ledger seq (255 → 255+1=256) so the R5.4 isVotingLedger
+	// gate allows fee-vote emission; on non-flag ledgers the fields
+	// are deliberately omitted.
 	engine.mu.Lock()
-	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0x77}, seq: 101})
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0x77}, seq: 255})
 	engine.mu.Unlock()
 
 	adaptor.mu.RLock()
@@ -1160,8 +1177,9 @@ func TestSendValidation_LegacyFeeTriple(t *testing.T) {
 	adaptor.validationsBroadcast = nil
 	adaptor.mu.Unlock()
 
+	// Flag-ledger seq — see R5.4 gate comment on the AMOUNT-triple test.
 	engine.mu.Lock()
-	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0x88}, seq: 101})
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0x88}, seq: 255})
 	engine.mu.Unlock()
 
 	adaptor.mu.RLock()
@@ -1178,5 +1196,82 @@ func TestSendValidation_LegacyFeeTriple(t *testing.T) {
 	if v.BaseFeeDrops != 0 || v.ReserveBaseDrops != 0 || v.ReserveIncrementDrops != 0 {
 		t.Errorf("AMOUNT triple must stay zero under postXRPFees=false: got %+v",
 			[3]uint64{v.BaseFeeDrops, v.ReserveBaseDrops, v.ReserveIncrementDrops})
+	}
+}
+
+// TestSendValidation_FeeVoteOnlyOnFlagLedger pins R5.4: fee-vote and
+// amendment-vote fields must be emitted ONLY on flag-ledger
+// validations ((seq+1)%256==0). Pre-R5.4 behavior emitted them every
+// ledger, inflating validation bandwidth ~256×.
+func TestSendValidation_FeeVoteOnlyOnFlagLedger(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.voteBaseFee = 10
+	adaptor.voteReserveBase = 1_000_000
+	adaptor.voteReserveIncrement = 200_000
+	adaptor.votePostXRPFees = true
+	// Set a single amendment in the vote stance so we can verify
+	// amendments emission is also gated.
+	adaptor.amendmentVote = [][32]byte{{0x01, 0x02, 0x03}}
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	// Non-flag seq (101): fee-vote + amendments must be omitted.
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0x77}, seq: 101})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	if len(adaptor.validationsBroadcast) != 1 {
+		adaptor.mu.RUnlock()
+		t.Fatalf("want one validation on seq=101, got %d", len(adaptor.validationsBroadcast))
+	}
+	nonFlag := adaptor.validationsBroadcast[0]
+	adaptor.mu.RUnlock()
+
+	if nonFlag.BaseFeeDrops != 0 || nonFlag.ReserveBaseDrops != 0 || nonFlag.ReserveIncrementDrops != 0 {
+		t.Errorf("non-flag ledger must omit AMOUNT fee-vote triple: got %+v",
+			[3]uint64{nonFlag.BaseFeeDrops, nonFlag.ReserveBaseDrops, nonFlag.ReserveIncrementDrops})
+	}
+	if len(nonFlag.Amendments) != 0 {
+		t.Errorf("non-flag ledger must omit Amendments: got %d IDs", len(nonFlag.Amendments))
+	}
+
+	// Flag seq (255 → 255+1=256): fee-vote + amendments must be present.
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0x99}, seq: 255})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	defer adaptor.mu.RUnlock()
+	if len(adaptor.validationsBroadcast) != 1 {
+		t.Fatalf("want one validation on seq=255, got %d", len(adaptor.validationsBroadcast))
+	}
+	flag := adaptor.validationsBroadcast[0]
+	if flag.BaseFeeDrops != 10 {
+		t.Errorf("flag ledger must carry fee-vote AMOUNT triple: got BaseFeeDrops=%d", flag.BaseFeeDrops)
+	}
+	if len(flag.Amendments) != 1 {
+		t.Errorf("flag ledger must carry Amendments vote: got %d IDs", len(flag.Amendments))
 	}
 }

@@ -14,14 +14,20 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 )
 
-// DefaultMaxInFlightReplays caps concurrent replay-delta acquisitions.
-// Chosen to cover a catchup burst without monopolizing a peer's
-// request-serving capacity. Does NOT mirror a specific rippled
-// constant — rippled's MAX_TASKS=10 is for full LedgerReplayTasks
-// (multi-ledger jobs), not per-ledger sub-acquisitions, and rippled
-// has no explicit cap on in-flight LedgerDeltaAcquire instances. 16
-// is our own tuning knob; bump it if catchup stalls with many peers.
+// DefaultMaxInFlightReplays caps GLOBAL concurrent replay-delta
+// acquisitions. Chosen to cover a catchup burst without monopolizing
+// a peer's request-serving capacity.
 const DefaultMaxInFlightReplays = 16
+
+// MaxPerPeerReplays caps the number of in-flight replay-delta
+// acquisitions issued to a SINGLE peer. Mirrors rippled's
+// LedgerReplayer.h:55 MAX_PEERS_PER_LEDGER=2, used to prevent a
+// single peer from being overloaded (and to avoid silent-peer failure
+// modes where all 16 global slots land on the same silent peer).
+// Enforced at Acquire time — when the cap is reached Acquire returns
+// ErrPerPeerCapacityFull and the caller picks a different peer via
+// ReplayCapablePeersExcluding.
+const MaxPerPeerReplays = 2
 
 // Sentinel errors the Replayer returns so callers can distinguish
 // duplicate/capacity/unmatched conditions without string-matching.
@@ -35,6 +41,12 @@ var (
 	// is at its maxInFlight cap. The caller should back off and retry
 	// after some existing acquisition completes or is abandoned.
 	ErrCapacityFull = errors.New("replay delta acquisition capacity full")
+
+	// ErrPerPeerCapacityFull signals Acquire was called while the
+	// peer specified already has MaxPerPeerReplays in-flight. Caller
+	// picks a different peer (rippled's LedgerReplayer.h:55
+	// MAX_PEERS_PER_LEDGER semantic).
+	ErrPerPeerCapacityFull = errors.New("replay delta per-peer capacity full")
 
 	// ErrNoMatchingAcquisition signals HandleResponse received a
 	// response whose LedgerHash doesn't match any in-flight acquisition.
@@ -127,6 +139,19 @@ func (r *Replayer) Acquire(hash [32]byte, peerID uint64, parent *ledger.Ledger) 
 		return nil, ErrCapacityFull
 	}
 
+	// R5.14 per-peer cap. Count how many in-flight acquisitions are
+	// currently targeting peerID; if >= MaxPerPeerReplays the caller
+	// must pick a different peer via ReplayCapablePeersExcluding.
+	perPeer := 0
+	for _, rd := range r.inFlight {
+		if rd.PeerID() == peerID {
+			perPeer++
+		}
+	}
+	if perPeer >= MaxPerPeerReplays {
+		return nil, ErrPerPeerCapacityFull
+	}
+
 	rd := NewReplayDeltaWithClock(hash, peerID, parent, r.logger, r.clock)
 	r.inFlight[hash] = rd
 	return rd, nil
@@ -185,6 +210,28 @@ func (r *Replayer) Complete(hash [32]byte) {
 // acquisition" vs "we finished it" tells a clearer story.
 func (r *Replayer) Abandon(hash [32]byte) {
 	r.Complete(hash)
+}
+
+// Stop drains the coordinator's in-flight map on shutdown. Returns the
+// number of acquisitions that were in flight at stop time. Intended
+// to be called from Components.Stop() during graceful shutdown so
+// operators have an observable "N replay-delta acquisitions still
+// pending at shutdown" count, and so subsequent calls to Acquire
+// from late-arriving traffic don't spuriously grow the map post-stop.
+//
+// Implementation: we simply clear the map. ReplayDelta instances are
+// single-struct values (no goroutines of their own); the router's
+// Run() goroutine owns the message loop that was feeding them, so
+// once the context cancels the router stops and nothing will try to
+// advance these acquisitions further. Callers that need a softer
+// handoff (e.g., "log each outstanding replay at stop") can iterate
+// the slice returned by InFlight() before calling Stop.
+func (r *Replayer) Stop() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := len(r.inFlight)
+	r.inFlight = make(map[[32]byte]*ReplayDelta)
+	return n
 }
 
 // InFlight returns a snapshot of hashes currently being acquired.

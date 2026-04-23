@@ -89,6 +89,62 @@ func TestReplayer_Acquire_CapacityFull(t *testing.T) {
 	assert.Equal(t, 2, rep.Count())
 }
 
+// TestReplayer_Stop_Drains pins R5.15: Stop() clears all in-flight
+// acquisitions and returns the prior count. Protects against leaking
+// map entries across a shutdown→restart cycle and gives operators a
+// single "pending at shutdown" number for diagnostics.
+func TestReplayer_Stop_Drains(t *testing.T) {
+	parent := makeGenesisLedger(t)
+	rep := NewReplayer(nil, nil, 10)
+
+	_, err := rep.Acquire(hashN(1), 7, parent)
+	require.NoError(t, err)
+	_, err = rep.Acquire(hashN(2), 8, parent)
+	require.NoError(t, err)
+	_, err = rep.Acquire(hashN(3), 9, parent)
+	require.NoError(t, err)
+	require.Equal(t, 3, rep.Count())
+
+	remaining := rep.Stop()
+	assert.Equal(t, 3, remaining,
+		"Stop must return the pre-drain in-flight count")
+	assert.Equal(t, 0, rep.Count(),
+		"Stop must leave the replayer empty so subsequent reuse starts clean")
+
+	// Idempotent: Stop on an empty replayer returns 0, doesn't panic.
+	assert.Equal(t, 0, rep.Stop())
+}
+
+// TestReplayer_Acquire_PerPeerCap pins R5.14: a single peer cannot
+// hold more than MaxPerPeerReplays (=2) concurrent replay-delta
+// acquisitions. Mirrors rippled LedgerReplayer.h:55 MAX_PEERS_PER_LEDGER.
+// Without this cap, all DefaultMaxInFlightReplays=16 slots could end
+// up targeting one silent peer and burning the whole catchup budget.
+func TestReplayer_Acquire_PerPeerCap(t *testing.T) {
+	parent := makeGenesisLedger(t)
+	// Global cap well above per-peer cap so we can exercise the latter.
+	rep := NewReplayer(nil, nil, 10)
+
+	// Peer 7: first two acquisitions succeed.
+	_, err := rep.Acquire(hashN(1), 7, parent)
+	require.NoError(t, err)
+	_, err = rep.Acquire(hashN(2), 7, parent)
+	require.NoError(t, err)
+
+	// Third on peer 7 hits the per-peer cap.
+	rd, err := rep.Acquire(hashN(3), 7, parent)
+	assert.Nil(t, rd)
+	assert.ErrorIs(t, err, ErrPerPeerCapacityFull,
+		"3rd acquisition on same peer must hit per-peer cap")
+
+	// But a different peer can still acquire.
+	_, err = rep.Acquire(hashN(4), 8, parent)
+	assert.NoError(t, err,
+		"different peer must NOT be blocked by another peer's per-peer count")
+
+	assert.Equal(t, 3, rep.Count())
+}
+
 // TestReplayer_HandleResponse_RoutesByHash installs two in-flight
 // acquisitions and feeds a response for one. Only that one advances;
 // the other remains in StateWantBase. This is the core guarantee of

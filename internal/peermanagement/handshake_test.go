@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -224,6 +225,37 @@ func TestVerifyPeerHandshake_MissingSignature(t *testing.T) {
 	_, err := VerifyPeerHandshake(headers, make([]byte, 32), "nLocalKey", DefaultHandshakeConfig())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "Session-Signature")
+}
+
+// TestParsePublicKeyToken_RejectsEd25519Prefix pins R5.13: the 0xED
+// (ed25519) key-type prefix must be rejected at parse time. Rippled
+// requires secp256k1 for node public keys (Handshake.cpp:294-295) —
+// an ed25519 validator key is different from a node key, and a peer
+// advertising the wrong family is either misconfigured or hostile.
+// Regression guard against a future btcec refactor that might
+// accidentally accept 33-byte ed25519 keys (which share the same
+// compressed length).
+func TestParsePublicKeyToken_RejectsEd25519Prefix(t *testing.T) {
+	// Build a synthetic node-pubkey payload with the ed25519 0xED
+	// prefix in the key-bytes position. The token format is:
+	//   [NodePublicKeyPrefix=0x1C] [33 key bytes starting with 0xED] [4-byte checksum]
+	keyBytes := make([]byte, CompressedPubKeyLen)
+	keyBytes[0] = 0xED
+	for i := 1; i < CompressedPubKeyLen; i++ {
+		keyBytes[i] = byte(i)
+	}
+
+	payload := make([]byte, 1+CompressedPubKeyLen)
+	payload[0] = NodePublicKeyPrefix
+	copy(payload[1:], keyBytes)
+	checksum := doubleSHA256Identity(payload)[:ChecksumLen]
+	full := append(payload, checksum...)
+	encoded := addresscodec.EncodeBase58(full)
+
+	_, err := ParsePublicKeyToken(encoded)
+	require.Error(t, err, "ed25519-tagged node key must be rejected at parse time")
+	assert.Contains(t, err.Error(), "ed25519",
+		"error message should name the rejected key type for operator clarity")
 }
 
 // TestVerifyPeerHandshake_SelfConnection tests self-connection detection
@@ -847,6 +879,55 @@ func TestMakeFeaturesResponseHeader(t *testing.T) {
 			}
 			for _, exclude := range tt.wantExcludes {
 				assert.NotContains(t, result, exclude)
+			}
+		})
+	}
+}
+
+// TestMakeFeaturesRequestHeader_IndependentVPRRTXRR pins R5.12: the
+// two reduce-relay flags advertise independently on the wire. An
+// operator who enables only VPRR must NOT see txrr=1 on the
+// handshake, and vice versa. Matches rippled's Handshake.cpp which
+// treats them as independent toggles.
+func TestMakeFeaturesRequestHeader_IndependentVPRRTXRR(t *testing.T) {
+	tests := []struct {
+		name          string
+		compr, replay bool
+		txrr, vprr    bool
+		wantContains  []string
+		wantExcludes  []string
+	}{
+		{
+			name:         "only_vprr",
+			vprr:         true,
+			wantContains: []string{"vprr=1"},
+			wantExcludes: []string{"txrr=1"},
+		},
+		{
+			name:         "only_txrr",
+			txrr:         true,
+			wantContains: []string{"txrr=1"},
+			wantExcludes: []string{"vprr=1"},
+		},
+		{
+			name:         "both",
+			vprr:         true,
+			txrr:         true,
+			wantContains: []string{"vprr=1", "txrr=1"},
+		},
+		{
+			name:         "neither",
+			wantExcludes: []string{"vprr=1", "txrr=1"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			hdr := MakeFeaturesRequestHeader(tc.compr, tc.replay, tc.txrr, tc.vprr)
+			for _, want := range tc.wantContains {
+				assert.Contains(t, hdr, want)
+			}
+			for _, nope := range tc.wantExcludes {
+				assert.NotContains(t, hdr, nope)
 			}
 		})
 	}

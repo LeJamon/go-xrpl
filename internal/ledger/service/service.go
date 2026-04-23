@@ -1396,7 +1396,17 @@ func (s *Service) ReAdoptLedgerHeader(h *header.LedgerHeader) error {
 // AdoptLedgerWithState adopts a ledger using a fully-fetched state map from a peer.
 // Unlike AdoptLedgerHeader which reuses genesis state, this uses the real state tree
 // fetched via the TMGetLedger/TMLedgerData protocol.
-func (s *Service) AdoptLedgerWithState(h *header.LedgerHeader, stateMap *shamap.SHAMap) error {
+//
+// txMap is the verified transaction SHAMap when arriving via the
+// replay-delta path (rippled LedgerDeltaAcquire installs the peer-
+// provided tx-blob tree at LedgerDeltaAcquire.cpp:209). Pass nil for
+// header-only state catchup, in which case we reuse genesis's empty
+// tx map — matches pre-replay-delta behavior. Dropping the peer-
+// provided tx map on replay-delta adoption (the pre-R5.1 bug) left
+// `tx`, `tx_history`, `account_tx`, `transaction_entry` RPCs unable
+// to answer queries against adopted ledgers, and prevented re-serving
+// replay-delta requests for those ledgers to other peers.
+func (s *Service) AdoptLedgerWithState(h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1404,10 +1414,16 @@ func (s *Service) AdoptLedgerWithState(h *header.LedgerHeader, stateMap *shamap.
 		return errors.New("no genesis ledger available")
 	}
 
-	// Create empty tx map
-	txMap, err := s.genesisLedger.TxMapSnapshot()
-	if err != nil {
-		return fmt.Errorf("failed to snapshot tx map: %w", err)
+	// Use the caller-supplied tx map when available (replay-delta
+	// adoption path); fall back to an empty genesis-shaped tx map for
+	// the header-only state catchup path that has no per-ledger tx
+	// content to install.
+	if txMap == nil {
+		empty, err := s.genesisLedger.TxMapSnapshot()
+		if err != nil {
+			return fmt.Errorf("failed to snapshot empty tx map: %w", err)
+		}
+		txMap = empty
 	}
 
 	adopted := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})

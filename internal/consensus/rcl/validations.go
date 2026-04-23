@@ -166,25 +166,39 @@ const (
 
 // isCurrent reports whether a validation's sign-time and seen-time are
 // close enough to now to be considered "current" in rippled's sense.
-// Mirrors RCLValidations.cpp::isCurrent → Validations::isCurrent. now
-// is the wall clock; in production this is time.Now(). Passed as a
-// parameter so tests can drive deterministic freshness checks.
+// Exact mirror of Validations.h:148-166 isCurrent:
+//
+//	signTime > (now - validationCURRENT_EARLY) &&
+//	signTime < (now + validationCURRENT_WALL) &&
+//	(seenTime == 0 || seenTime < (now + validationCURRENT_LOCAL))
+//
+// Note on constant names: rippled's EARLY bounds the PAST on signTime
+// (not "early" in the usual sense of future-side); WALL bounds the
+// FUTURE on signTime. The prior goXRPL implementation had the two
+// swapped and used a past-bound on seenTime — three wire-parity bugs
+// that would desync freshness decisions between Go and rippled peers
+// under clock skew.
+//
+// `now` is the network-adjusted time from the adaptor so the freshness
+// window honors the close-offset consensus has converged on.
 func isCurrent(now, signTime, seenTime time.Time) bool {
-	// Wall-clock window on the signature timestamp. signTime too far
-	// in the past: the validator sent this hours ago and we just saw
-	// it — interoperating peers already moved on. Too far in the
-	// future: clock skew or forgery.
-	if signTime.Before(now.Add(-validationCurrentWall)) {
+	// Past bound on signTime (rippled uses EARLY=3m here, NOT WALL=5m):
+	// a validation signed more than EARLY in the past is stale —
+	// interoperating peers already moved on.
+	if !signTime.After(now.Add(-validationCurrentEarly)) {
 		return false
 	}
-	if signTime.After(now.Add(validationCurrentEarly)) {
+	// Future bound on signTime (rippled uses WALL=5m, NOT EARLY=3m):
+	// a validation signed beyond WALL in the future indicates clock
+	// skew or forgery.
+	if !signTime.Before(now.Add(validationCurrentWall)) {
 		return false
 	}
-	// Local-clock window on the receive timestamp. Detects a peer
-	// queuing stale validations and dumping them on us later.
-	// SeenTime is zero for self-built validations — skip this check
-	// then, since there's no delivery to time-bound.
-	if !seenTime.IsZero() && seenTime.Before(now.Add(-validationCurrentLocal)) {
+	// Future bound on seenTime (rippled uses LOCAL=3m): detects a peer
+	// with a fast local clock queuing validations "from the future"
+	// and dumping them on us. SeenTime == 0 for self-built validations
+	// — skip the check since there's no delivery moment to bound.
+	if !seenTime.IsZero() && !seenTime.Before(now.Add(validationCurrentLocal)) {
 		return false
 	}
 	return true
@@ -397,6 +411,38 @@ func (vt *ValidationTracker) GetTrustedSupport(ledgerID consensus.LedgerID) int 
 // validator happens to be temporarily disabled.
 func (vt *ValidationTracker) IsFullyValidated(ledgerID consensus.LedgerID) bool {
 	return vt.GetTrustedValidationCount(ledgerID) >= vt.quorum
+}
+
+// ProposersValidated returns the count of trusted validators whose
+// MOST RECENT (highest-seq) full validation points at ledgerID. This
+// is the peer-pressure signal rippled uses in shouldCloseLedger via
+// adaptor_.proposersValidated(prevLedgerID_) at RCLConsensus.cpp:281.
+//
+// Reads the persistent byNode map (not the round-scoped validations
+// map on the engine), so the signal is available from the moment a
+// new round begins — before any current-round validations have
+// arrived. negUNL'd validators are excluded, matching the quorum
+// semantics at Validations.h:849-899.
+func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int {
+	vt.mu.RLock()
+	defer vt.mu.RUnlock()
+
+	count := 0
+	for nodeID, v := range vt.byNode {
+		if !vt.trusted[nodeID] {
+			continue
+		}
+		if vt.negUNL[nodeID] {
+			continue
+		}
+		if !v.Full {
+			continue
+		}
+		if v.LedgerID == ledgerID {
+			count++
+		}
+	}
+	return count
 }
 
 // GetLatestValidation returns the latest validation from a node.

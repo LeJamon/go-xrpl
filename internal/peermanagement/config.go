@@ -60,9 +60,19 @@ type Config struct {
 	// Features — advertised via X-Protocol-Ctl during handshake so
 	// peers know which optional protocol extensions we speak. Matches
 	// rippled's compr / vprr / txrr / ledgerreplay feature toggles.
-	EnableReduceRelay  bool
-	EnableCompression  bool
-	EnableLedgerReplay bool
+	//
+	// EnableReduceRelay is a legacy alias that enables BOTH vprr and
+	// txrr at once. New code should set EnableVPReduceRelay and
+	// EnableTxReduceRelay independently so an operator can run one
+	// without the other — matches rippled's Handshake.cpp handling of
+	// the two features as independent toggles. When EnableReduceRelay
+	// is set, it is propagated to both at Validate() time if either
+	// specific toggle is still false.
+	EnableReduceRelay   bool
+	EnableVPReduceRelay bool
+	EnableTxReduceRelay bool
+	EnableCompression   bool
+	EnableLedgerReplay  bool
 
 	// Clock function for testing
 	Clock func() time.Time
@@ -255,6 +265,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Clock == nil {
 		return errors.New("Clock function cannot be nil")
+	}
+	// Legacy EnableReduceRelay propagates to both specific flags when
+	// the caller hasn't set them independently. Matches rippled's
+	// behavior where enabling "reduce-relay" as a whole turns on both
+	// vprr and txrr.
+	if c.EnableReduceRelay {
+		c.EnableVPReduceRelay = true
+		c.EnableTxReduceRelay = true
 	}
 	return nil
 }

@@ -52,12 +52,17 @@ func newMessageSuppression(ttl time.Duration, maxSize int) *messageSuppression {
 	}
 }
 
-// observe records that a message with the given hash was received. It
-// returns true if this is the FIRST time we've seen the hash within
-// the TTL window, false if a previous observation is still live.
-// Callers use the false return to distinguish duplicates — rippled's
-// `!added` branch — and feed the reduce-relay slot accordingly.
-func (s *messageSuppression) observe(hash [32]byte) (firstSeen bool) {
+// observe records that a message with the given hash was received.
+// Returns (firstSeen, lastSeenAt):
+//   - firstSeen=true, lastSeenAt=zero: never observed before (or TTL expired).
+//   - firstSeen=false, lastSeenAt=prior observation time: a duplicate
+//     within the TTL window; caller uses lastSeenAt to gate
+//     reduce-relay slot feeding on the IDLED window (rippled
+//     PeerImp.cpp:1736 checks `now - relayed < IDLED`).
+//
+// The stored time is always refreshed to `now` on every observe so a
+// steady stream of duplicates stays live in the cache.
+func (s *messageSuppression) observe(hash [32]byte) (firstSeen bool, lastSeenAt time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -88,8 +93,8 @@ func (s *messageSuppression) observe(hash [32]byte) (firstSeen bool) {
 
 	if seenAt, ok := s.seen[hash]; ok && now.Sub(seenAt) < s.ttl {
 		s.seen[hash] = now // refresh so a steady stream of duplicates stays live
-		return false
+		return false, seenAt
 	}
 	s.seen[hash] = now
-	return true
+	return true, time.Time{}
 }

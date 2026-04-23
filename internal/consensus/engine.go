@@ -226,6 +226,17 @@ type Adaptor interface {
 	// the adaptor mean "no vote" and the serializer omits the fields.
 	GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, postXRPFees bool)
 
+	// GetAmendmentVote returns the list of amendment IDs this
+	// validator wishes to vote FOR on the next flag ledger. The
+	// engine calls this on flag-ledger validations only (see
+	// isVotingLedger). Returns nil on non-validators or when no
+	// amendments require a vote. Matches rippled's
+	// AmendmentTable::doValidation (RCLConsensus.cpp:888-893).
+	//
+	// Implementations should filter amendments already enabled on
+	// the current ledger so we don't re-vote for active ones.
+	GetAmendmentVote() [][32]byte
+
 	// PeerReportedLedgers returns the last-closed ledger hashes that
 	// overlay peers have advertised via statusChange messages. Used
 	// by getNetworkLedger as a fallback signal when peer proposals

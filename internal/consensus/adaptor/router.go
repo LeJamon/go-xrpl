@@ -101,6 +101,17 @@ func (r *Router) SetInboundClock(c inbound.Clock) {
 	r.replayer.SetClock(c)
 }
 
+// StopReplayer drains the replayer's in-flight map and returns the
+// number of acquisitions that were still pending at stop time. Called
+// from Components.Stop() during graceful shutdown. Exposes only the
+// count so callers don't reach into the replayer's internals.
+func (r *Router) StopReplayer() int {
+	if r.replayer == nil {
+		return 0
+	}
+	return r.replayer.Stop()
+}
+
 // HandlePeerDisconnect drops all per-peer state the router holds for
 // peerID: the peer's last-reported ledger, its status-change vote in
 // the engine's getNetworkLedger fold, and any lingering acquisition
@@ -281,23 +292,25 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	proposal := ProposalFromMessage(proposeSet)
 	originPeer := uint64(msg.PeerID)
 
-	// Record duplicate-status BEFORE OnProposal so the reduce-relay
-	// gate sees the state that existed at ingress. Hash the raw
-	// payload: this is rippled's HashRouter semantics (same bytes
-	// from different peers => "duplicate").
-	isDuplicate := !r.messageSeen.observe(hashPayload(msg.Payload))
+	// Record duplicate-status + last-sighting BEFORE OnProposal.
+	// Hash the raw payload: rippled's HashRouter semantics — same
+	// bytes from different peers => "duplicate".
+	firstSeen, lastSeen := r.messageSeen.observe(hashPayload(msg.Payload))
 
 	if err := r.engine.OnProposal(proposal, originPeer); err != nil {
 		r.logger.Debug("engine rejected proposal", "error", err, "peer", msg.PeerID)
 		return
 	}
 
-	// Feed the reduce-relay slot ONLY on duplicate arrivals, matching
-	// rippled's PeerImp.cpp:1730-1738 where updateSlotAndSquelch fires
-	// inside the `!added` branch of HashRouter::addSuppressionPeer.
-	// Trust gate still applies — untrusted chatter never influences
-	// selection, per rippled's trust-gated design.
-	if isDuplicate && r.adaptor.IsTrusted(proposal.NodeID) {
+	// Feed the reduce-relay slot on duplicates that arrive within
+	// IDLED of the previous sighting. Matches rippled
+	// PeerImp.cpp:1730-1738 exactly: `!added && relayed &&
+	// (now - *relayed) < IDLED`. NOTE: no trust gate here — rippled
+	// feeds the slot for both trusted and untrusted duplicates
+	// (trust-specific branching happens later for relay decisions).
+	// Gating on trust pre-R5.7 under-squelched untrusted gossip
+	// vs. what the rest of the network does.
+	if !firstSeen && time.Since(lastSeen) < peermanagement.Idled {
 		r.adaptor.UpdateRelaySlot(proposal.NodeID[:], originPeer)
 	}
 }
@@ -335,17 +348,16 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 
 	// Observe-before-engine for consistent duplicate accounting —
 	// same rationale as handleProposal.
-	isDuplicate := !r.messageSeen.observe(hashPayload(msg.Payload))
+	firstSeen, lastSeen := r.messageSeen.observe(hashPayload(msg.Payload))
 
 	if err := r.engine.OnValidation(validation, originPeer); err != nil {
 		r.logger.Debug("engine rejected validation", "error", err, "peer", msg.PeerID)
 		return
 	}
 
-	// Feed the reduce-relay slot ONLY on duplicate arrivals. Mirrors
-	// rippled's TMValidation path at PeerImp.cpp:2385,3013,3049 which
-	// runs the same HashRouter duplicate check as TMProposeSet.
-	if isDuplicate && r.adaptor.IsTrusted(validation.NodeID) {
+	// Same IDLED-gated, no-trust-gate feeding as handleProposal.
+	// Mirrors rippled's TMValidation path at PeerImp.cpp:2385.
+	if !firstSeen && time.Since(lastSeen) < peermanagement.Idled {
 		r.adaptor.UpdateRelaySlot(validation.NodeID[:], originPeer)
 	}
 }
@@ -838,7 +850,19 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 // adoptVerifiedLedger commits a ledger reconstructed from a verified
 // replay delta. Mirrors completeInboundLedger's adoption logic: install
 // state and tx maps via the ledger service, advance to Tracking if
-// we're below it, and log the new tip.
+// we're below it, and log the new tip. Mirrors rippled's
+// LedgerDeltaAcquire.cpp:209 which installs the peer-provided tx-blob
+// tree alongside the state map.
+//
+// R5.17 follow-up: rippled's LedgerMaster::tryAdvance cascades
+// follow-on adoptions when an out-of-order replay-delta arrival
+// unblocks a previously-held child ledger. goXRPL does not yet
+// maintain a held-ledgers queue, so out-of-order arrivals simply
+// wait for the next statusChange / replay-delta cycle to re-trigger.
+// This is a catchup-speed issue, not a safety issue. A full
+// tryAdvance port is tracked separately (requires a new held-ledgers
+// map in internal/ledger/service plus signaling from the router to
+// the service on each adoption).
 func (r *Router) adoptVerifiedLedger(l *ledger.Ledger) error {
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
@@ -849,7 +873,15 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger) error {
 	if err != nil {
 		return fmt.Errorf("snapshot state map: %w", err)
 	}
-	if err := svc.AdoptLedgerWithState(&hdr, stateMap); err != nil {
+	// Pass the verified tx map through so the adopted ledger carries
+	// real transactions — without this, tx/tx_history/account_tx RPCs
+	// can't answer for replay-delta-adopted ledgers and we can't
+	// re-serve the replay-delta to other peers. See R5.1.
+	txMap, err := l.TxMapSnapshot()
+	if err != nil {
+		return fmt.Errorf("snapshot tx map: %w", err)
+	}
+	if err := svc.AdoptLedgerWithState(&hdr, stateMap, txMap); err != nil {
 		return fmt.Errorf("adopt with state: %w", err)
 	}
 	if r.adaptor.GetOperatingMode() < consensus.OpModeTracking {
@@ -1117,7 +1149,12 @@ func (r *Router) completeInboundLedger() {
 		return
 	}
 
-	if err := svc.AdoptLedgerWithState(h, stateMap); err != nil {
+	// Legacy header+state catchup path: no per-ledger tx tree is
+	// fetched in this mode (only the header and state map), so pass
+	// nil and let AdoptLedgerWithState install the genesis-shaped
+	// empty tx map. The replay-delta path at adoptVerifiedLedger
+	// (below) passes the verified tx map — see R5.1.
+	if err := svc.AdoptLedgerWithState(h, stateMap, nil); err != nil {
 		r.logger.Warn("inbound ledger: failed to adopt with state", "error", err)
 		return
 	}

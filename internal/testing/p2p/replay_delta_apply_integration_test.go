@@ -190,8 +190,10 @@ func TestReplayDelta_Apply_DivergenceFromTef(t *testing.T) {
 		SkipSignatureVerification: false,
 	})
 	require.Error(t, err, "Apply must reject divergent tef result")
-	assert.Contains(t, err.Error(), "diverged from rippled",
-		"divergence error must explain why the tx was rejected")
+	// Post-R5.16: match the typed sentinel instead of string contents
+	// so the error wording can evolve without breaking tests.
+	assert.ErrorIs(t, err, inbound.ErrReplayTxDiverged,
+		"divergence must surface as ErrReplayTxDiverged sentinel")
 	// The exact tef code depends on which guard fires first — for a
 	// duplicate tx whose first copy advanced the account's sequence,
 	// the second copy is rejected as tefPAST_SEQ rather than

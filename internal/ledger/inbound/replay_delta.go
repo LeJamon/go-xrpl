@@ -21,6 +21,29 @@ import (
 	"github.com/LeJamon/goXRPLd/shamap"
 )
 
+// Sentinel errors returned by the replay-delta apply path. R5.16 —
+// callers use errors.Is for matching so the wording can evolve
+// without breaking test assertions on string contents.
+var (
+	// ErrReplayTxParse wraps parse failures on peer-supplied tx blobs.
+	// Either a peer fork or wire corruption that escaped GotResponse.
+	ErrReplayTxParse = errors.New("replay delta: parse tx failed")
+
+	// ErrReplayTxDiverged signals the engine returned a non-success,
+	// non-tec, non-retry result code (tef/tem/tel) on a tx that
+	// rippled successfully applied. State-hash arbitration at the end
+	// of Apply may still save the adoption, but the Apply caller
+	// typically fails the replay-delta and falls back to legacy.
+	ErrReplayTxDiverged = errors.New("replay delta: tx result diverges from peer")
+
+	// ErrReplayLeafInstall wraps SHAMap AddTransactionWithMeta
+	// failures when installing a verified leaf blob into the child
+	// ledger's tx map. Rare — indicates a corrupt leaf byte stream
+	// that survived GotResponse's hash check, which is theoretically
+	// impossible without hash-collision-level corruption.
+	ErrReplayLeafInstall = errors.New("replay delta: install tx leaf failed")
+)
+
 // replayDeltaTimeout caps the TOTAL budget a replay-delta acquisition
 // is allowed across its entire retry loop (sub-task timeouts +
 // peer-swaps + legacy fallback). Crossing this budget triggers the
@@ -559,7 +582,7 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 	for _, dtx := range r.txs {
 		txn, parseErr := tx.ParseFromBinary(dtx.TxBytes)
 		if parseErr != nil {
-			return nil, fmt.Errorf("parse tx %x: %w", dtx.Hash[:8], parseErr)
+			return nil, fmt.Errorf("%w: tx %x: %w", ErrReplayTxParse, dtx.Hash[:8], parseErr)
 		}
 		txn.SetRawBytes(dtx.TxBytes)
 
@@ -574,28 +597,31 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 			// from the peer's even when the AffectedNodes are
 			// semantically equivalent.
 			if err := child.AddTransactionWithMeta(dtx.Hash, dtx.LeafBlob); err != nil {
-				return nil, fmt.Errorf("install tx leaf %x: %w", dtx.Hash[:8], err)
+				return nil, fmt.Errorf("%w: tx %x: %w", ErrReplayLeafInstall, dtx.Hash[:8], err)
 			}
 		case result.Result.ShouldRetry():
-			// Replay is deterministic on canonical input: the txs we're
-			// replaying are exactly the ones that built the target
-			// ledger, in the order rippled originally applied them. A
-			// ShouldRetry here means the FIRST pass against our engine
-			// produced a terRETRY, which in turn means either (a) our
-			// engine diverges from rippled's apply semantics for this
-			// tx, or (b) the peer fed us a non-canonical ordering.
-			// Rippled's BuildLedger.cpp runs a retry pass before
-			// failing; we don't because on canonical input the retry
-			// should never be needed — if it IS needed, that's a bug
-			// to surface rather than paper over with a second pass.
-			return nil, fmt.Errorf("tx %x: ShouldRetry on replay (engine divergence or non-canonical input) got %s",
-				dtx.Hash[:8], result.Result.String())
+			// Rippled's BuildLedger.cpp:246 DISCARDS the ApplyResult
+			// during replay — a terRETRY during canonical-input replay
+			// is silently ignored rather than escalated. Parity: log,
+			// install the tx leaf (state-hash arbitration will catch
+			// a genuine engine divergence at the end of Apply), and
+			// continue. The pre-R5.11 hard-fail triggered spurious
+			// legacy-catchup fallbacks whenever goXRPL's engine had
+			// any small behavioral difference, even on semantically
+			// correct ledgers.
+			r.logger.Warn("replay tx returned ShouldRetry; continuing (matches rippled BuildLedger.cpp:246)",
+				"tx", fmt.Sprintf("%x", dtx.Hash[:8]),
+				"ter", result.Result.String(),
+			)
+			if err := child.AddTransactionWithMeta(dtx.Hash, dtx.LeafBlob); err != nil {
+				return nil, fmt.Errorf("%w: tx %x after ShouldRetry: %w", ErrReplayLeafInstall, dtx.Hash[:8], err)
+			}
 		default:
 			// tef*, tem*, tel* — these indicate the tx shouldn't have
 			// been in this ledger. Either the peer is lying or our
 			// engine diverges from rippled.
-			return nil, fmt.Errorf("tx %x diverged from rippled: result=%s (engine bug or peer fork)",
-				dtx.Hash[:8], result.Result.String())
+			return nil, fmt.Errorf("%w: tx %x result=%s",
+				ErrReplayTxDiverged, dtx.Hash[:8], result.Result.String())
 		}
 	}
 

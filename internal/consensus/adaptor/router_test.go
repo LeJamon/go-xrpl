@@ -352,6 +352,61 @@ func TestRouter_UpdateRelaySlot_DuplicatesOnly(t *testing.T) {
 		"UpdateRelaySlot must be fed with the DUPLICATE peer's ID (the second arrival)")
 }
 
+// TestRouter_UpdateRelaySlot_UntrustedValidator pins R5.7: untrusted
+// validator duplicates MUST feed the reduce-relay slot — rippled's
+// PeerImp.cpp:1730-1748 calls updateSlotAndSquelch before the
+// isTrusted branch, so both trusted and untrusted duplicates drive
+// selection. Pre-R5.7 gating on IsTrusted under-squelched untrusted
+// gossip vs. rippled's behavior.
+func TestRouter_UpdateRelaySlot_UntrustedValidator(t *testing.T) {
+	engine := &mockEngine{}
+
+	svc := newTestLedgerService(t)
+
+	// Adaptor has NO trusted validators — the test pubkey is
+	// therefore untrusted. Rippled still feeds the slot on duplicate
+	// arrivals for this validator.
+	sender := &countingSender{}
+	adaptor := New(Config{
+		LedgerService: svc,
+		Sender:        sender,
+		Validators:    nil, // empty UNL
+	})
+
+	inbox := make(chan *peermanagement.InboundMessage, 10)
+	router := NewRouter(engine, adaptor, nil, inbox)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go router.Run(ctx)
+
+	untrustedPubKey := make([]byte, 33)
+	untrustedPubKey[0] = 0x02
+	for i := 1; i < 33; i++ {
+		untrustedPubKey[i] = byte(0x80 | i) // distinct from the earlier test
+	}
+
+	proposeSet := &message.ProposeSet{
+		ProposeSeq:     1,
+		CurrentTxHash:  make([]byte, 32),
+		NodePubKey:     untrustedPubKey,
+		CloseTime:      timeToXrplEpoch(time.Unix(1_700_000_001, 0)),
+		Signature:      make([]byte, signatureMinLen),
+		PreviousLedger: make([]byte, 32),
+	}
+	payload := encodePayload(t, proposeSet)
+
+	inbox <- &peermanagement.InboundMessage{PeerID: 1, Type: uint16(message.TypeProposeLedger), Payload: payload}
+	time.Sleep(30 * time.Millisecond)
+	inbox <- &peermanagement.InboundMessage{PeerID: 2, Type: uint16(message.TypeProposeLedger), Payload: payload}
+	time.Sleep(30 * time.Millisecond)
+
+	calls := sender.getCalls()
+	require.Len(t, calls, 1,
+		"untrusted-validator duplicate MUST still fire UpdateRelaySlot (rippled fires regardless of trust)")
+	assert.Equal(t, uint64(2), calls[0].PeerID)
+}
+
 func TestRouterStopsOnChannelClose(t *testing.T) {
 	engine := &mockEngine{}
 	adaptor := newTestAdaptor(t)

@@ -274,6 +274,12 @@ func (p *Peer) performHandshake(ctx context.Context, tlsConn *tls.Conn) error {
 	}
 	resp.Body.Close()
 
+	// R5.2 NOTE: outbound handshake verification is disabled for the
+	// same reason as the inbound side — MakeSharedValue produces
+	// asymmetric values on Go TLS 1.2 client vs server, so
+	// signature verification would reject every honest peer today.
+	// See the long comment in overlay.go:performInboundHandshake.
+
 	// Capture the peer's advertised protocol features from the handshake
 	// response headers so downstream code can query e.g. whether this peer
 	// supports ledger-replay before issuing a replay-delta request.
