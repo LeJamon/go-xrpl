@@ -600,6 +600,75 @@ func PeerFeatureEnabled(headers http.Header, feature, value string, localEnabled
 	return localEnabled && IsFeatureValue(headers, feature, value)
 }
 
+// VerifyHandshakeHeadersNoSig runs the subset of rippled's verifyHandshake
+// checks that DON'T require the TLS shared-value (i.e., signature
+// verification). Used by both inbound and outbound handshake paths to
+// enforce parity without the MakeSharedValue asymmetry on Go TLS 1.2
+// that blocks full signature verification (see
+// tasks/pr264-round5-fixes.md R5.2).
+//
+// Checks:
+//   - Public-Key header present and base58-parseable as a secp256k1
+//     node key (0xED ed25519 prefixes are rejected at parse time).
+//   - Self-connection: peer's Public-Key must differ from localPubKey.
+//   - Network-ID: must match localNetworkID exactly. Unlike the
+//     pre-R6.1 inbound code, a local NetworkID==0 still enforces that
+//     the peer either omits the header OR advertises 0; a testnet
+//     peer's Network-ID=1 is rejected even when we're on mainnet.
+//   - Network-Time: if the peer advertised it, the skew must be
+//     within NetworkClockTolerance of local wall clock.
+//
+// Returns (peerPubKey, nil) on success. The returned token is nil
+// when the peer omitted Public-Key — callers decide whether to treat
+// that as fatal (rippled does).
+func VerifyHandshakeHeadersNoSig(
+	headers http.Header,
+	localPubKey string,
+	localNetworkID uint32,
+) (*PublicKeyToken, error) {
+	peerPubKeyStr := headers.Get(HeaderPublicKey)
+	if peerPubKeyStr == "" {
+		return nil, fmt.Errorf("%w: missing %s", ErrInvalidHandshake, HeaderPublicKey)
+	}
+	if peerPubKeyStr == localPubKey {
+		return nil, ErrSelfConnection
+	}
+	peerPubKey, err := ParsePublicKeyToken(peerPubKeyStr)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidHandshake, err)
+	}
+
+	if netIDStr := headers.Get(HeaderNetworkID); netIDStr != "" {
+		netID, err := strconv.ParseUint(netIDStr, 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("malformed Network-ID %q: %w", netIDStr, err)
+		}
+		if uint32(netID) != localNetworkID {
+			return nil, fmt.Errorf("%w: peer=%d local=%d", ErrNetworkMismatch, netID, localNetworkID)
+		}
+	} else if localNetworkID != 0 {
+		// Peer omitted Network-ID but we require a non-default
+		// network. Rippled rejects this symmetrically.
+		return nil, fmt.Errorf("%w: peer omitted Network-ID (local expects %d)",
+			ErrNetworkMismatch, localNetworkID)
+	}
+
+	if netTimeStr := headers.Get(HeaderNetworkTime); netTimeStr != "" {
+		netTime, err := strconv.ParseInt(netTimeStr, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("malformed Network-Time %q: %w", netTimeStr, err)
+		}
+		peerTime := time.Unix(netTime+XRPLEpochOffset, 0)
+		diff := time.Since(peerTime)
+		if diff < -NetworkClockTolerance || diff > NetworkClockTolerance {
+			return nil, fmt.Errorf("%w: clock skew %v exceeds tolerance %v",
+				ErrHandshakeFailed, diff, NetworkClockTolerance)
+		}
+	}
+
+	return peerPubKey, nil
+}
+
 // MakeFeaturesRequestHeader creates the X-Protocol-Ctl header value for a request.
 // Reference: rippled Handshake.cpp makeFeaturesRequestHeader()
 func MakeFeaturesRequestHeader(comprEnabled, ledgerReplayEnabled, txReduceRelayEnabled, vpReduceRelayEnabled bool) string {

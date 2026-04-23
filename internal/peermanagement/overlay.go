@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -99,6 +98,8 @@ func BadDataWeight(reason string) int {
 		"proposal-malformed-txset-size",
 		"validation-malformed-ledger-hash-zero",
 		"validation-malformed-node-id-zero",
+		"handshake-malformed-networkid",
+		"handshake-malformed-networktime",
 		"replay-delta-resp-decode",
 		"replay-delta-req-decode",
 		"replay-delta-req-bad",
@@ -489,32 +490,33 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	}
 	req.Body.Close()
 
-	// R5.2 PARTIAL: full signature verification is blocked by the
-	// MakeSharedValue asymmetry (Go's TLS 1.2 server never populates
-	// c.serverFinished — see KNOWN ISSUE comment in
-	// handshake.go:MakeSharedValue). What we CAN do cheaply and
-	// soundly is the self-connection and network-ID checks, which
-	// don't depend on the signature. Those two alone close the
-	// mainnet↔testnet cross-connect and loopback-spoof gaps.
-	// Full signature verification is tracked as a follow-up in
+	// R5.2 PARTIAL + R6.1 + R6.2: verify everything the handshake
+	// can enforce without the TLS shared-value signature (which is
+	// blocked by Go's c.serverFinished asymmetry — see
+	// handshake.go:MakeSharedValue KNOWN ISSUE). Covers:
+	//   - Public-Key presence + parseability + self-connection
+	//   - Network-ID exact match (incl. mainnet rejecting testnet)
+	//   - Network-Time ±20s skew tolerance
+	// Full signature verification tracked in
 	// tasks/pr264-round5-fixes.md.
-	if peerPubKeyStr := req.Header.Get(HeaderPublicKey); peerPubKeyStr != "" {
-		if peerPubKeyStr == o.identity.EncodedPublicKey() {
-			return NewHandshakeError(peer.Endpoint(), "verify", ErrSelfConnection)
+	peerPubKey, verifyErr := VerifyHandshakeHeadersNoSig(
+		req.Header,
+		o.identity.EncodedPublicKey(),
+		o.cfg.NetworkID,
+	)
+	if verifyErr != nil {
+		// Charge malformed-field cases (ParseUint failures on
+		// Network-ID/Network-Time, unparseable Public-Key).
+		// Self-connection and network-mismatch aren't the peer's
+		// fault per se, so don't charge those.
+		if !errors.Is(verifyErr, ErrSelfConnection) && !errors.Is(verifyErr, ErrNetworkMismatch) {
+			o.IncPeerBadData(peer.ID(), "handshake-malformed-networkid")
 		}
-		if pk, err := ParsePublicKeyToken(peerPubKeyStr); err == nil {
-			peer.mu.Lock()
-			peer.remotePubKey = pk
-			peer.mu.Unlock()
-		}
+		return NewHandshakeError(peer.Endpoint(), "verify", verifyErr)
 	}
-	if netIDStr := req.Header.Get(HeaderNetworkID); netIDStr != "" && o.cfg.NetworkID > 0 {
-		if netID, err := strconv.ParseUint(netIDStr, 10, 32); err == nil {
-			if uint32(netID) != o.cfg.NetworkID {
-				return NewHandshakeError(peer.Endpoint(), "verify", ErrNetworkMismatch)
-			}
-		}
-	}
+	peer.mu.Lock()
+	peer.remotePubKey = peerPubKey
+	peer.mu.Unlock()
 
 	hsCfg := HandshakeConfig{
 		UserAgent:           o.cfg.UserAgent,

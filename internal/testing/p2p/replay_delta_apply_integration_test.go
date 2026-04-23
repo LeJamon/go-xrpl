@@ -123,13 +123,17 @@ func TestReplayDelta_Apply_Integration(t *testing.T) {
 // TestReplayDelta_Apply_DivergenceFromTef verifies the tef-result
 // divergence error: when Apply replays a tx that the engine rejects
 // with a tef* result (here: a duplicate tx, triggering tefALREADY),
-// it surfaces a clear divergence error naming the tx hash + result
-// code rather than silently producing a corrupt ledger.
+// it no longer hard-fails — R6.4 brings parity with rippled's
+// BuildLedger.cpp:244-247 which DISCARDS the ApplyResult during
+// replay. tef/tem/tel are log-and-continue; the state-hash check at
+// the end of Apply catches real divergence.
 //
-// We build the same parent + tx pair as the success test, then poke a
-// second copy of the same DecodedTx into r.txs so the engine sees the
-// same tx hash twice in a row — second pass returns tefALREADY.
-func TestReplayDelta_Apply_DivergenceFromTef(t *testing.T) {
+// We still build a duplicate-tx scenario because it's a reliable way
+// to trigger tef, but the assertion flips: Apply must NOT return
+// ErrReplayTxDiverged. Whatever error surfaces (or nil + wrong
+// state hash) must originate from a later arbitration stage, not
+// the pre-R6.4 hard-fail in the apply switch.
+func TestReplayDelta_Apply_TefDuringReplay_IsSilentlySkipped(t *testing.T) {
 	env := xrplgoTesting.NewTestEnv(t)
 	env.VerifySignatures = true
 
@@ -189,18 +193,14 @@ func TestReplayDelta_Apply_DivergenceFromTef(t *testing.T) {
 		ReserveIncrement:          50_000_000,
 		SkipSignatureVerification: false,
 	})
-	require.Error(t, err, "Apply must reject divergent tef result")
-	// Post-R5.16: match the typed sentinel instead of string contents
-	// so the error wording can evolve without breaking tests.
-	assert.ErrorIs(t, err, inbound.ErrReplayTxDiverged,
-		"divergence must surface as ErrReplayTxDiverged sentinel")
-	// The exact tef code depends on which guard fires first — for a
-	// duplicate tx whose first copy advanced the account's sequence,
-	// the second copy is rejected as tefPAST_SEQ rather than
-	// tefALREADY. Either way the error must surface the result code
-	// so an operator can correlate with rippled's logs.
-	assert.Contains(t, err.Error(), "tef",
-		"divergence error must name the tef* result code")
+	// R6.4: tef* during replay must NOT surface as ErrReplayTxDiverged.
+	// Any other error (or success with a later state-hash mismatch)
+	// is acceptable — the critical guarantee is that we no longer
+	// hard-fail here, which the pre-R6.4 behavior did.
+	if err != nil {
+		assert.NotErrorIs(t, err, inbound.ErrReplayTxDiverged,
+			"tef during replay must no longer produce ErrReplayTxDiverged (rippled parity — BuildLedger.cpp:244-247 discards ApplyResult)")
+	}
 }
 
 // injectDuplicateTx appends a duplicate of r.txs[0] to r.txs so Apply

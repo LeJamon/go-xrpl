@@ -617,11 +617,25 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 				return nil, fmt.Errorf("%w: tx %x after ShouldRetry: %w", ErrReplayLeafInstall, dtx.Hash[:8], err)
 			}
 		default:
-			// tef*, tem*, tel* — these indicate the tx shouldn't have
-			// been in this ledger. Either the peer is lying or our
-			// engine diverges from rippled.
-			return nil, fmt.Errorf("%w: tx %x result=%s",
-				ErrReplayTxDiverged, dtx.Hash[:8], result.Result.String())
+			// tef*, tem*, tel* during replay — rippled's
+			// BuildLedger.cpp:244-247 DISCARDS the ApplyResult during
+			// replay, so these codes are silently ignored just like
+			// terRETRY (see R5.11). Parity: log, install the peer-
+			// supplied leaf blob so the tx map root still matches
+			// header.TxHash, and continue. State-hash arbitration at
+			// the end of Apply will catch a genuine AffectedNodes
+			// divergence. The pre-R6.4 hard-fail here triggered
+			// legacy-catchup fallbacks on semantically-correct
+			// ledgers where our engine returned tem* due to a minor
+			// preflight difference — same class of false-positive as
+			// R5.11 fixed for terRETRY.
+			r.logger.Warn("replay tx returned tef/tem/tel; continuing (matches rippled BuildLedger.cpp:244-247)",
+				"tx", fmt.Sprintf("%x", dtx.Hash[:8]),
+				"ter", result.Result.String(),
+			)
+			if err := child.AddTransactionWithMeta(dtx.Hash, dtx.LeafBlob); err != nil {
+				return nil, fmt.Errorf("%w: tx %x after tef/tem/tel: %w", ErrReplayLeafInstall, dtx.Hash[:8], err)
+			}
 		}
 	}
 

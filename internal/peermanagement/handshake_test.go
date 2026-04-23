@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/stretchr/testify/assert"
@@ -225,6 +226,129 @@ func TestVerifyPeerHandshake_MissingSignature(t *testing.T) {
 	_, err := VerifyPeerHandshake(headers, make([]byte, 32), "nLocalKey", DefaultHandshakeConfig())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "Session-Signature")
+}
+
+// TestVerifyHandshakeHeadersNoSig covers R6.1 + R6.2: the inbound
+// handshake's non-signature verification path. Each subtest exercises
+// one failure mode that rippled enforces but pre-R6 goXRPL silently
+// accepted or mis-handled.
+func TestVerifyHandshakeHeadersNoSig(t *testing.T) {
+	localId, err := NewIdentity()
+	require.NoError(t, err)
+	remoteId, err := NewIdentity()
+	require.NoError(t, err)
+
+	mkHeaders := func(pubKey, netID, netTime string) http.Header {
+		h := http.Header{}
+		if pubKey != "" {
+			h.Set(HeaderPublicKey, pubKey)
+		}
+		if netID != "" {
+			h.Set(HeaderNetworkID, netID)
+		}
+		if netTime != "" {
+			h.Set(HeaderNetworkTime, netTime)
+		}
+		return h
+	}
+	xrplNow := func() string {
+		return strconvUnixXRPL(time.Now())
+	}
+
+	t.Run("happy_path_mainnet", func(t *testing.T) {
+		h := mkHeaders(remoteId.EncodedPublicKey(), "", xrplNow())
+		pk, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 0)
+		require.NoError(t, err)
+		require.NotNil(t, pk)
+		assert.Equal(t, remoteId.EncodedPublicKey(), pk.Encode())
+	})
+
+	t.Run("mainnet_rejects_nonzero_networkid", func(t *testing.T) {
+		// Pre-R6.1: mainnet (NetworkID=0) silently accepted any
+		// Network-ID the peer advertised. Now we reject.
+		h := mkHeaders(remoteId.EncodedPublicKey(), "1", xrplNow())
+		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 0)
+		assert.ErrorIs(t, err, ErrNetworkMismatch,
+			"mainnet must reject a peer advertising Network-ID=1 (testnet)")
+	})
+
+	t.Run("non_default_network_peer_missing_netid", func(t *testing.T) {
+		// Symmetric case: we're on network 2, peer omits Network-ID.
+		h := mkHeaders(remoteId.EncodedPublicKey(), "", xrplNow())
+		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 2)
+		assert.ErrorIs(t, err, ErrNetworkMismatch,
+			"non-default-network node must reject a peer omitting Network-ID")
+	})
+
+	t.Run("malformed_networkid_rejected", func(t *testing.T) {
+		// Pre-R6.1: ParseUint failures were silently ignored.
+		h := mkHeaders(remoteId.EncodedPublicKey(), "not-a-number", xrplNow())
+		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 0)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "malformed Network-ID")
+	})
+
+	t.Run("malformed_networktime_rejected", func(t *testing.T) {
+		// R6.2: Network-Time was never checked in performInboundHandshake.
+		h := mkHeaders(remoteId.EncodedPublicKey(), "", "not-a-number")
+		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 0)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "malformed Network-Time")
+	})
+
+	t.Run("network_time_clock_skew", func(t *testing.T) {
+		// Peer timestamp 5 minutes ahead of our clock — way beyond
+		// NetworkClockTolerance (20s).
+		farFuture := strconvUnixXRPL(time.Now().Add(5 * time.Minute))
+		h := mkHeaders(remoteId.EncodedPublicKey(), "", farFuture)
+		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 0)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "clock skew")
+	})
+
+	t.Run("self_connection", func(t *testing.T) {
+		h := mkHeaders(localId.EncodedPublicKey(), "", xrplNow())
+		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 0)
+		assert.ErrorIs(t, err, ErrSelfConnection)
+	})
+
+	t.Run("missing_public_key", func(t *testing.T) {
+		h := mkHeaders("", "", xrplNow())
+		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 0)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Public-Key")
+	})
+}
+
+// strconvUnixXRPL formats a time as XRPL epoch seconds (like rippled's
+// Network-Time header builder). Test helper for R6.2 tests.
+func strconvUnixXRPL(t time.Time) string {
+	xrplSec := t.Unix() - XRPLEpochOffset
+	return fmtInt(xrplSec)
+}
+
+func fmtInt(n int64) string {
+	// Simple base-10 stringification without importing another package.
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	buf := make([]byte, 0, 20)
+	for n > 0 {
+		buf = append(buf, byte('0'+n%10))
+		n /= 10
+	}
+	if neg {
+		buf = append(buf, '-')
+	}
+	// reverse
+	for i, j := 0, len(buf)-1; i < j; i, j = i+1, j-1 {
+		buf[i], buf[j] = buf[j], buf[i]
+	}
+	return string(buf)
 }
 
 // TestParsePublicKeyToken_RejectsEd25519Prefix pins R5.13: the 0xED

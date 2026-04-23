@@ -288,7 +288,15 @@ func NewRelay(cfg *Config, onSquelch SquelchCallback) *Relay {
 
 // OnMessage handles an incoming validator message.
 func (r *Relay) OnMessage(validatorKey []byte, peerID PeerID) {
-	if !r.cfg.EnableReduceRelay {
+	// R6.3: gate on either the specific VPRR flag OR the legacy
+	// omnibus flag. Pre-R6.3 only checked EnableReduceRelay, which
+	// meant an operator who set only EnableVPReduceRelay=true (after
+	// R5.12 split the flags) would advertise VPRR in handshake but
+	// leave this engine dormant, silently disabling reduce-relay for
+	// the whole node. Relay is the validator-proposal slot machine
+	// (mtSQUELCH for TMProposeSet/TMValidation), so VPRR is the
+	// correct gate; TXRR governs tx-relay which is handled elsewhere.
+	if !r.cfg.EnableVPReduceRelay && !r.cfg.EnableReduceRelay {
 		return
 	}
 
