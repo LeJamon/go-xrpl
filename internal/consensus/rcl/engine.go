@@ -35,6 +35,14 @@ type Engine struct {
 	ourTxSet  consensus.TxSet
 	converged bool
 
+	// deadNodes tracks validators that have bowed out of the current
+	// consensus round by sending a proposal with Position == seqLeave
+	// (0xFFFFFFFF). Matches rippled's deadNodes_ set (Consensus.h:632).
+	// Any further proposal from a dead node is dropped until the next
+	// round clears the set (startRoundLocked), mirroring rippled's
+	// Consensus.h:722.
+	deadNodes map[consensus.NodeID]struct{}
+
 	// Validation tracking
 	validations map[consensus.NodeID]*consensus.Validation
 
@@ -116,6 +124,7 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 		validations:     make(map[consensus.NodeID]*consensus.Validation),
 		disputes:        make(map[consensus.TxID]*consensus.DisputedTx),
 		recentProposals: make(map[consensus.NodeID][]*consensus.Proposal),
+		deadNodes:       make(map[consensus.NodeID]struct{}),
 	}
 }
 
@@ -220,6 +229,11 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	// Reset tracking maps
 	e.proposals = make(map[consensus.NodeID]*consensus.Proposal)
 	e.disputes = make(map[consensus.TxID]*consensus.DisputedTx)
+	// deadNodes is scoped to a single consensus round — a validator that
+	// bowed out of the prior round is free to rejoin in the new one.
+	// Matches rippled's Consensus.h:722 (startRoundInternal clears
+	// deadNodes_ alongside currPeerPositions_).
+	e.deadNodes = make(map[consensus.NodeID]struct{})
 	e.converged = false
 	e.ourTxSet = nil
 	e.haveCloseTimeConsensus = false
@@ -321,6 +335,37 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	// Reject proposals referencing a different previous ledger.
 	// Matches rippled Consensus.h:776-781.
 	if e.prevLedger != nil && proposal.PreviousLedger != e.prevLedger.ID() {
+		return nil
+	}
+
+	// Ignore proposals from nodes already marked dead this round. This
+	// guard must come before the bow-out arm below: rippled's
+	// Consensus.h:785-789 drops the message outright before it ever
+	// reaches the position-update code, so a node that's already dead
+	// cannot keep re-inserting itself by repeatedly sending seqLeave.
+	if _, dead := e.deadNodes[proposal.NodeID]; dead {
+		return nil
+	}
+
+	// isBowOut: a validator bowing out of consensus sets ProposeSeq to
+	// seqLeave (0xFFFFFFFF) on its final position so peers know to stop
+	// counting it for the rest of the round. Mirrors rippled's
+	// ConsensusProposal.h:68,154-156 and the handling in
+	// Consensus.h:804-817: erase the current position, record the node
+	// as dead, and (when E2/per-tx dispute tracking lands) un-vote its
+	// contribution from every active dispute. Without this gate the
+	// final seqLeave position would persist in e.proposals and keep
+	// "voting" forever, skewing convergence and tie-break logic.
+	const seqLeave = uint32(0xFFFFFFFF)
+	if proposal.Position == seqLeave {
+		delete(e.proposals, proposal.NodeID)
+		e.deadNodes[proposal.NodeID] = struct{}{}
+		// TODO(E2 per-tx dispute tracking): iterate e.disputes here and
+		// unvote proposal.NodeID from each entry, matching rippled's
+		// Consensus.h:809-811 (for each dispute: it.second.unVote(peerID)).
+		// The current DisputedTx carries aggregate Yays/Nays counts only,
+		// so there's nothing to unvote yet; adding the per-node vote set
+		// is the E2 task.
 		return nil
 	}
 

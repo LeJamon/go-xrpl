@@ -1499,3 +1499,198 @@ func TestSendValidation_HardenedValidations_VotingLedger_EmitsBoth(t *testing.T)
 		t.Errorf("voting-ledger HV: ServerVersion must carry adaptor value, got %x", v.ServerVersion)
 	}
 }
+
+// Task 2.4 (B4): tests for isBowOut (seqLeave == 0xFFFFFFFF) detection.
+// Rippled reference: ConsensusProposal.h:68,154-156 and Consensus.h:804-817.
+// A validator bowing out sets ProposeSeq to seqLeave so peers know to stop
+// counting them for the remainder of the round. We must evict their current
+// position and refuse further proposals until the next round clears the set.
+
+// TestOnProposal_BowOutEvictsNode feeds a valid proposal from node X, then
+// a seqLeave proposal from X, and asserts that the stored position for X is
+// cleared. Mirrors rippled's Consensus.h:812-814 where peerPositions gets
+// erase(peerID) on bow-out and the nodeID is inserted into deadNodes_.
+func TestOnProposal_BowOutEvictsNode(t *testing.T) {
+	adaptor := newMockAdaptor()
+	bowingNode := consensus.NodeID{2}
+	adaptor.setTrusted([]consensus.NodeID{bowingNode, {3}})
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	// Initial proposal — should be stored.
+	first := &consensus.Proposal{
+		Round:          round,
+		NodeID:         bowingNode,
+		Position:       0,
+		TxSet:          consensus.TxSetID{1},
+		CloseTime:      time.Now(),
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(first, 0); err != nil {
+		t.Fatalf("first OnProposal: %v", err)
+	}
+
+	engine.mu.RLock()
+	_, stored := engine.proposals[bowingNode]
+	engine.mu.RUnlock()
+	if !stored {
+		t.Fatalf("precondition: first proposal from bowingNode should have been stored")
+	}
+
+	// Bow-out proposal — Position == seqLeave (0xFFFFFFFF).
+	bowOut := &consensus.Proposal{
+		Round:          round,
+		NodeID:         bowingNode,
+		Position:       0xFFFFFFFF,
+		TxSet:          consensus.TxSetID{2},
+		CloseTime:      time.Now(),
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(bowOut, 0); err != nil {
+		t.Fatalf("bow-out OnProposal: %v", err)
+	}
+
+	engine.mu.RLock()
+	_, stillStored := engine.proposals[bowingNode]
+	_, dead := engine.deadNodes[bowingNode]
+	engine.mu.RUnlock()
+
+	if stillStored {
+		t.Errorf("expected bowed-out node %v to be evicted from proposals map", bowingNode)
+	}
+	if !dead {
+		t.Errorf("expected bowed-out node %v to be recorded in deadNodes set", bowingNode)
+	}
+}
+
+// TestOnProposal_DeadNodeLaterProposalIgnored verifies that once a node
+// bows out, any subsequent proposal it sends in the same round is ignored.
+// Matches rippled's Consensus.h:785-789 guard.
+func TestOnProposal_DeadNodeLaterProposalIgnored(t *testing.T) {
+	adaptor := newMockAdaptor()
+	bowingNode := consensus.NodeID{2}
+	adaptor.setTrusted([]consensus.NodeID{bowingNode, {3}})
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	bowOut := &consensus.Proposal{
+		Round:          round,
+		NodeID:         bowingNode,
+		Position:       0xFFFFFFFF,
+		TxSet:          consensus.TxSetID{2},
+		CloseTime:      time.Now(),
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(bowOut, 0); err != nil {
+		t.Fatalf("bow-out OnProposal: %v", err)
+	}
+
+	// A "normal" proposal after bow-out must be silently dropped.
+	followUp := &consensus.Proposal{
+		Round:          round,
+		NodeID:         bowingNode,
+		Position:       1,
+		TxSet:          consensus.TxSetID{3},
+		CloseTime:      time.Now(),
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(followUp, 0); err != nil {
+		t.Fatalf("follow-up OnProposal: %v", err)
+	}
+
+	engine.mu.RLock()
+	_, stored := engine.proposals[bowingNode]
+	engine.mu.RUnlock()
+	if stored {
+		t.Errorf("expected follow-up proposal from dead node %v to be ignored, but it was stored", bowingNode)
+	}
+}
+
+// TestStartRound_ClearsDeadNodes verifies that a new round clears the
+// deadNodes set so a validator can rejoin consensus in the next round.
+// Matches rippled's Consensus.h:722 (startRoundInternal clears deadNodes_).
+func TestStartRound_ClearsDeadNodes(t *testing.T) {
+	adaptor := newMockAdaptor()
+	bowingNode := consensus.NodeID{2}
+	adaptor.setTrusted([]consensus.NodeID{bowingNode, {3}})
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	round1 := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round1, true); err != nil {
+		t.Fatalf("StartRound round1: %v", err)
+	}
+
+	// Bow out in round 1.
+	bowOut := &consensus.Proposal{
+		Round:          round1,
+		NodeID:         bowingNode,
+		Position:       0xFFFFFFFF,
+		TxSet:          consensus.TxSetID{2},
+		CloseTime:      time.Now(),
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(bowOut, 0); err != nil {
+		t.Fatalf("bow-out OnProposal: %v", err)
+	}
+
+	engine.mu.RLock()
+	_, deadAfterBow := engine.deadNodes[bowingNode]
+	engine.mu.RUnlock()
+	if !deadAfterBow {
+		t.Fatalf("precondition: bowingNode should be marked dead after bow-out")
+	}
+
+	// Start the next round — deadNodes must reset.
+	round2 := consensus.RoundID{Seq: 102, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round2, true); err != nil {
+		t.Fatalf("StartRound round2: %v", err)
+	}
+
+	engine.mu.RLock()
+	_, stillDead := engine.deadNodes[bowingNode]
+	engine.mu.RUnlock()
+	if stillDead {
+		t.Fatalf("expected deadNodes to be cleared after StartRound, but %v is still marked dead", bowingNode)
+	}
+
+	// And a fresh proposal from the previously-bowed node must be accepted
+	// again in the new round.
+	rejoin := &consensus.Proposal{
+		Round:          round2,
+		NodeID:         bowingNode,
+		Position:       0,
+		TxSet:          consensus.TxSetID{5},
+		CloseTime:      time.Now(),
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(rejoin, 0); err != nil {
+		t.Fatalf("rejoin OnProposal: %v", err)
+	}
+
+	engine.mu.RLock()
+	_, stored := engine.proposals[bowingNode]
+	engine.mu.RUnlock()
+	if !stored {
+		t.Errorf("expected rejoined proposal from %v to be accepted in the new round", bowingNode)
+	}
+}
