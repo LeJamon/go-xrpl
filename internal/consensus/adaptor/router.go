@@ -293,9 +293,13 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	originPeer := uint64(msg.PeerID)
 
 	// Record duplicate-status + last-sighting BEFORE OnProposal.
-	// Hash the raw payload: rippled's HashRouter semantics — same
-	// bytes from different peers => "duplicate".
-	firstSeen, lastSeen := r.messageSeen.observe(hashPayload(msg.Payload))
+	// Hash the DECODED fields via hashProposalSuppression (matches
+	// rippled's proposalUniqueId at RCLCxPeerPos.cpp:66-83). Hashing
+	// the raw protobuf envelope would desync dedup from rippled peers
+	// that see the same message with different optional-field framing
+	// (e.g., deprecated `hops` included or omitted) — same semantic
+	// proposal, but different byte payload.
+	firstSeen, lastSeen := r.messageSeen.observe(hashProposalSuppression(proposal))
 
 	if err := r.engine.OnProposal(proposal, originPeer); err != nil {
 		r.logger.Debug("engine rejected proposal", "error", err, "peer", msg.PeerID)
@@ -346,9 +350,16 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 
 	originPeer := uint64(msg.PeerID)
 
-	// Observe-before-engine for consistent duplicate accounting —
-	// same rationale as handleProposal.
-	firstSeen, lastSeen := r.messageSeen.observe(hashPayload(msg.Payload))
+	// Observe-before-engine for consistent duplicate accounting. Hash
+	// the INNER STValidation blob carried in TMValidation.validation —
+	// matches rippled's PeerImp.cpp:2374 (`sha512Half(makeSlice(
+	// m->validation()))`). Hashing the TMValidation envelope instead
+	// would desync dedup from rippled peers the same way handleProposal
+	// would if it hashed the TMProposeSet envelope: deprecated outer
+	// fields vary, inner canonical blob does not. We use the raw
+	// inbound bytes here — NOT a re-serialized copy — so a lossy or
+	// reordered round-trip can't silently diverge the hash.
+	firstSeen, lastSeen := r.messageSeen.observe(hashValidationSuppression(val.Validation))
 
 	if err := r.engine.OnValidation(validation, originPeer); err != nil {
 		r.logger.Debug("engine rejected validation", "error", err, "peer", msg.PeerID)
