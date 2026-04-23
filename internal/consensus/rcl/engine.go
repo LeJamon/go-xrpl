@@ -1146,8 +1146,50 @@ func (e *Engine) closeLedger() {
 func (e *Engine) phaseEstablish() {
 	roundTime := time.Since(e.roundStartTime)
 
-	// Hard timeout: force accept after LedgerMaxClose
-	if roundTime >= e.timing.LedgerMaxClose {
+	// Absolute hard ceiling: abandon the round once we exceed the
+	// ledgerABANDON_CONSENSUS clamp. Rippled treats this state as
+	// ConsensusState::Expired (Consensus.cpp:253-263) and responds by
+	// calling leaveConsensus() (Consensus.h:1760-1785): bow out of
+	// proposing, then fall through to accept — do NOT restart the round
+	// with an empty set. We mirror that here: setMode(Observing) if we
+	// were proposing, then accept with ResultAbandoned so higher layers
+	// can distinguish a hard abandon from the soft LedgerMaxConsensus
+	// force-accept below.
+	if e.timing.LedgerAbandonConsensus > 0 && e.abandonDeadlineExceeded(roundTime) {
+		slog.Warn("consensus taken too long, abandoning round",
+			"t", "Consensus",
+			"round", e.state.Round,
+			"round_time", roundTime,
+			"prev_round_time", e.prevRoundTime,
+			"max_consensus", e.timing.LedgerMaxConsensus,
+			"abandon_consensus", e.timing.LedgerAbandonConsensus,
+		)
+		e.eventBus.Publish(&consensus.TimerFiredEvent{
+			Timer:     consensus.TimerRoundTimeout,
+			Round:     e.state.Round,
+			Timestamp: e.adaptor.Now(),
+		})
+		// Rippled's leaveConsensus: stop proposing if we were.
+		if e.mode == consensus.ModeProposing {
+			e.setMode(consensus.ModeObserving)
+		}
+		e.acceptLedger(consensus.ResultAbandoned)
+		return
+	}
+
+	// Soft timeout: force accept after LedgerMaxConsensus.
+	// Pre-E3 this gated on the goXRPL-only LedgerMaxClose=10s; it is
+	// now rippled's ledgerMAX_CONSENSUS=15s, keeping the same force-
+	// accept action but pushed out to match rippled's deadline. The
+	// legacy LedgerMaxClose field is still honored for source-compat
+	// when set smaller than LedgerMaxConsensus — it takes precedence
+	// so tests can dial the trigger down without also having to reset
+	// LedgerMaxConsensus.
+	softDeadline := e.timing.LedgerMaxConsensus
+	if e.timing.LedgerMaxClose > 0 && e.timing.LedgerMaxClose < softDeadline {
+		softDeadline = e.timing.LedgerMaxClose
+	}
+	if softDeadline > 0 && roundTime >= softDeadline {
 		e.eventBus.Publish(&consensus.TimerFiredEvent{
 			Timer:     consensus.TimerRoundTimeout,
 			Round:     e.state.Round,
@@ -1163,6 +1205,35 @@ func (e *Engine) phaseEstablish() {
 	}
 	e.updateCloseTimePosition()
 	e.checkConvergence()
+}
+
+// abandonDeadlineExceeded reports whether the current round has run
+// past the ledgerABANDON_CONSENSUS clamp. The effective hard deadline
+// is std::clamp(prevRoundTime * factor, LedgerMaxConsensus,
+// LedgerAbandonConsensus) — see Consensus.cpp:253-258.
+// Caller must hold e.mu.
+func (e *Engine) abandonDeadlineExceeded(roundTime time.Duration) bool {
+	lo := e.timing.LedgerMaxConsensus
+	hi := e.timing.LedgerAbandonConsensus
+	if hi <= 0 {
+		return false
+	}
+	// Rippled's clamp(maxAgreeTime, lo, hi): factor×previous, clamped
+	// to [lo, hi]. Factor 0 (not configured) disables the scaling and
+	// falls back to the absolute ceiling.
+	var deadline time.Duration
+	if e.timing.LedgerAbandonConsensusFactor > 0 && e.prevRoundTime > 0 {
+		deadline = e.prevRoundTime * time.Duration(e.timing.LedgerAbandonConsensusFactor)
+	} else {
+		deadline = hi
+	}
+	if lo > 0 && deadline < lo {
+		deadline = lo
+	}
+	if deadline > hi {
+		deadline = hi
+	}
+	return roundTime > deadline
 }
 
 // checkConvergence checks if proposals have converged.

@@ -1849,3 +1849,217 @@ func TestSendValidation_ClockMonotonic_NormalCase(t *testing.T) {
 			second.SignTime, second.SeenTime)
 	}
 }
+
+// TestConsensus_MaxConsensusSoftTimeoutTransitions pins the behavior
+// of the E3 soft deadline: once a round exceeds LedgerMaxConsensus
+// (rippled's ledgerMAX_CONSENSUS = 15s, ConsensusParms.h:95), the
+// engine force-accepts the round with ResultTimeout and transitions
+// from Establish → Accepted. This is the rename-migrated action
+// that, pre-E3, fired at the goXRPL-only LedgerMaxClose=10s. It must
+// NOT trigger a bow-out (that is reserved for the hard abandon
+// branch at 120s, covered by TestConsensus_AbandonHardTimeout).
+func TestConsensus_MaxConsensusSoftTimeoutTransitions(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	// Default 15s soft / 120s hard. Override LedgerMaxClose to match
+	// LedgerMaxConsensus exactly so the legacy alias doesn't preempt
+	// the soft-deadline check.
+	config := DefaultConfig()
+	config.Timing.LedgerMaxConsensus = 15 * time.Second
+	config.Timing.LedgerMaxClose = 15 * time.Second
+	config.Timing.LedgerAbandonConsensus = 120 * time.Second
+	config.Timing.LedgerAbandonConsensusFactor = 10
+
+	engine := NewEngine(adaptor, config)
+
+	subscriber := &testSubscriber{events: make(chan consensus.Event, 32)}
+	engine.Subscribe(subscriber)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	// Force the engine into Establish with a known roundStartTime
+	// 16s in the past — just past the 15s soft deadline but before
+	// the factor-scaled hard abandon ceiling (see prevRoundTime
+	// below). This mirrors rippled's window between ledgerMAX_
+	// CONSENSUS and the std::clamp'd ledgerABANDON_CONSENSUS:
+	// currentAgreeTime > ledgerMAX_CONSENSUS (relaxes threshold)
+	// but currentAgreeTime <= clamp(prevRoundTime * factor,
+	// ledgerMAX_CONSENSUS, ledgerABANDON_CONSENSUS) (no abandon).
+	engine.mu.Lock()
+	engine.setPhase(consensus.PhaseEstablish)
+	engine.roundStartTime = time.Now().Add(-16 * time.Second)
+	// prevRoundTime × factor = 2s × 10 = 20s. std::clamp pins the
+	// hard deadline to 20s (between the 15s low and the 120s high).
+	// At 16s we are past the soft (15s) but short of the hard (20s),
+	// so the hard branch must NOT fire.
+	engine.prevRoundTime = 2 * time.Second
+	engine.phaseEstablish()
+	phaseAfter := engine.phase
+	modeAfter := engine.mode
+	engine.mu.Unlock()
+
+	// Soft timeout force-accepts → phase must have transitioned out
+	// of Establish (to Accepted). The exact target depends on the
+	// auto-advance in acceptLedger; either Accepted or Open (next
+	// round) is acceptable, as long as we left Establish.
+	if phaseAfter == consensus.PhaseEstablish {
+		t.Errorf("soft timeout: phase should have transitioned out of Establish, got %v", phaseAfter)
+	}
+
+	// Soft timeout MUST NOT bow out a proposing validator — that's
+	// the hard-abandon semantic, not the soft one.
+	if modeAfter == consensus.ModeObserving {
+		t.Errorf("soft timeout must NOT bow out (mode=Observing); got mode=%v — that is the hard-abandon behavior", modeAfter)
+	}
+
+	// Drain events and assert we saw a ConsensusReachedEvent with
+	// ResultTimeout, not ResultAbandoned.
+	sawTimeout := false
+	sawAbandoned := false
+	deadline := time.After(500 * time.Millisecond)
+drain:
+	for {
+		select {
+		case ev := <-subscriber.events:
+			if cre, ok := ev.(*consensus.ConsensusReachedEvent); ok {
+				switch cre.Result {
+				case consensus.ResultTimeout:
+					sawTimeout = true
+				case consensus.ResultAbandoned:
+					sawAbandoned = true
+				}
+			}
+		case <-deadline:
+			break drain
+		}
+	}
+	if !sawTimeout {
+		t.Errorf("expected ConsensusReachedEvent with ResultTimeout from soft deadline")
+	}
+	if sawAbandoned {
+		t.Errorf("soft timeout must not emit ResultAbandoned")
+	}
+}
+
+// TestConsensus_AbandonHardTimeout pins the behavior of the E3 hard
+// deadline: once a round exceeds the ledgerABANDON_CONSENSUS clamp
+// (rippled's 15s..120s clamp, ConsensusParms.h:113), the engine
+// abandons the round. Per rippled Consensus.cpp:253-263 + Consensus.h:
+// 1760-1785, this means:
+//
+//  1. We treat the state as ConsensusState::Expired.
+//  2. leaveConsensus() is called — if we were proposing, we bow out
+//     to Observing (Consensus.h:1802-1817).
+//  3. The accept step still runs with a distinct Result so callers
+//     can tell a hard abandon from a soft force-accept.
+//
+// goXRPL surfaces (3) as ResultAbandoned.
+func TestConsensus_AbandonHardTimeout(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	config := DefaultConfig()
+	config.Timing.LedgerMaxConsensus = 15 * time.Second
+	config.Timing.LedgerMaxClose = 15 * time.Second
+	config.Timing.LedgerAbandonConsensus = 120 * time.Second
+	config.Timing.LedgerAbandonConsensusFactor = 10
+
+	engine := NewEngine(adaptor, config)
+
+	subscriber := &testSubscriber{events: make(chan consensus.Event, 32)}
+	engine.Subscribe(subscriber)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	// Confirm the engine entered ModeProposing — the abandon branch
+	// must demote a proposing validator (rippled leaveConsensus).
+	engine.mu.Lock()
+	if engine.mode != consensus.ModeProposing {
+		engine.mu.Unlock()
+		t.Fatalf("setup: expected ModeProposing after StartRound, got %v", engine.mode)
+	}
+	// Force the engine into Establish with a roundStartTime 121s in
+	// the past — past the absolute 120s hard ceiling. Set
+	// prevRoundTime high so the factor×clamp would produce a huge
+	// deadline; the hard abandon ceiling must still fire.
+	engine.setPhase(consensus.PhaseEstablish)
+	engine.roundStartTime = time.Now().Add(-121 * time.Second)
+	engine.prevRoundTime = 60 * time.Second // factor×60s=600s, clamped down to 120s
+	engine.phaseEstablish()
+	phaseAfter := engine.phase
+	modeAfter := engine.mode
+	engine.mu.Unlock()
+
+	// Hard abandon must transition out of Establish.
+	if phaseAfter == consensus.PhaseEstablish {
+		t.Errorf("hard abandon: phase should have transitioned out of Establish, got %v", phaseAfter)
+	}
+
+	// Hard abandon bows a proposing validator out to Observing
+	// (rippled leaveConsensus). After auto-advance in acceptLedger
+	// we may re-promote, but at minimum we must NOT still be
+	// ModeProposing on the same round — the round was abandoned.
+	// Accept either Observing (bow-out held through the new round
+	// setup) or the post-advance promotion back to Proposing if the
+	// new round re-promoted cleanly. What we assert is that the
+	// bow-out step ran: the adaptor.modeChanges transcript must
+	// contain an Observing transition.
+	adaptor.mu.RLock()
+	sawObserving := false
+	for _, m := range adaptor.modeChanges {
+		if m == consensus.ModeObserving {
+			sawObserving = true
+			break
+		}
+	}
+	adaptor.mu.RUnlock()
+	if !sawObserving {
+		t.Errorf("hard abandon: expected bow-out to ModeObserving (rippled leaveConsensus), modeChanges=%v, final mode=%v", adaptor.modeChanges, modeAfter)
+	}
+
+	// Drain events and assert ResultAbandoned was emitted.
+	sawAbandoned := false
+	sawTimeout := false
+	deadline := time.After(500 * time.Millisecond)
+drain:
+	for {
+		select {
+		case ev := <-subscriber.events:
+			if cre, ok := ev.(*consensus.ConsensusReachedEvent); ok {
+				switch cre.Result {
+				case consensus.ResultAbandoned:
+					sawAbandoned = true
+				case consensus.ResultTimeout:
+					sawTimeout = true
+				}
+			}
+		case <-deadline:
+			break drain
+		}
+	}
+	if !sawAbandoned {
+		t.Errorf("expected ConsensusReachedEvent with ResultAbandoned from hard abandon")
+	}
+	if sawTimeout {
+		t.Errorf("hard abandon must not emit ResultTimeout (that is the soft branch)")
+	}
+}

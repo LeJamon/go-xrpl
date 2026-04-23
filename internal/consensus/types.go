@@ -92,6 +92,12 @@ const (
 
 	// ResultFail means consensus failed for this round.
 	ResultFail
+
+	// ResultAbandoned means the round was hard-abandoned because its
+	// duration exceeded the ledgerABANDON_CONSENSUS clamp (15s..120s).
+	// Matches rippled's ConsensusState::Expired (ConsensusTypes.h:191),
+	// which triggers leaveConsensus() to bow out before the accept step.
+	ResultAbandoned
 )
 
 // String returns the string representation of the result.
@@ -105,6 +111,8 @@ func (r Result) String() string {
 		return "movedOn"
 	case ResultFail:
 		return "fail"
+	case ResultAbandoned:
+		return "abandoned"
 	default:
 		return "unknown"
 	}
@@ -342,7 +350,11 @@ type Timing struct {
 	// LedgerMinClose is minimum time a ledger stays open.
 	LedgerMinClose time.Duration
 
-	// LedgerMaxClose is maximum time before forcing close.
+	// LedgerMaxClose is a legacy alias for LedgerMaxConsensus kept for
+	// source compatibility. New code should read LedgerMaxConsensus.
+	// Prior to E3 this was a goXRPL-only 10s hard timeout that did not
+	// correspond to any rippled constant — DefaultTiming now pins it to
+	// LedgerMaxConsensus (15s) so call-sites retain matching semantics.
 	LedgerMaxClose time.Duration
 
 	// LedgerIdleInterval is time between ledgers when idle.
@@ -351,6 +363,24 @@ type Timing struct {
 	// LedgerMinConsensus is the minimum time to remain in the establish phase
 	// before accepting consensus. Matches rippled's ledgerMIN_CONSENSUS (1950ms).
 	LedgerMinConsensus time.Duration
+
+	// LedgerMaxConsensus is the soft deadline for the establish phase.
+	// After this duration the engine forces acceptance (ResultTimeout)
+	// rather than waiting further. Matches rippled's ledgerMAX_CONSENSUS
+	// (ConsensusParms.h:95 = 15s).
+	LedgerMaxConsensus time.Duration
+
+	// LedgerAbandonConsensus is the absolute hard ceiling for a
+	// consensus round. If the round exceeds this duration it is
+	// abandoned — we bow out and emit ResultAbandoned. Matches
+	// rippled's ledgerABANDON_CONSENSUS (ConsensusParms.h:113 = 120s).
+	LedgerAbandonConsensus time.Duration
+
+	// LedgerAbandonConsensusFactor scales the previous round's duration
+	// to produce the actual abandon clamp. The effective hard deadline
+	// is clamp(prevRoundTime * factor, LedgerMaxConsensus, LedgerAbandonConsensus).
+	// Matches rippled's ledgerABANDON_CONSENSUS_FACTOR (ConsensusParms.h:105 = 10).
+	LedgerAbandonConsensusFactor int
 
 	// LedgerGranularity is the close time resolution.
 	LedgerGranularity time.Duration
@@ -365,13 +395,16 @@ type Timing struct {
 // DefaultTiming returns the default consensus timing parameters.
 func DefaultTiming() Timing {
 	return Timing{
-		LedgerMinClose:      2 * time.Second,
-		LedgerMaxClose:      10 * time.Second,
-		LedgerMinConsensus:  1950 * time.Millisecond,
-		LedgerIdleInterval:  15 * time.Second,
-		LedgerGranularity:   10 * time.Second,
-		ProposeFreshness:    20 * time.Second,
-		ValidationFreshness: 20 * time.Second,
+		LedgerMinClose:               2 * time.Second,
+		LedgerMaxConsensus:           15 * time.Second,
+		LedgerMaxClose:               15 * time.Second, // legacy alias, kept in sync with LedgerMaxConsensus
+		LedgerAbandonConsensus:       120 * time.Second,
+		LedgerAbandonConsensusFactor: 10,
+		LedgerMinConsensus:           1950 * time.Millisecond,
+		LedgerIdleInterval:           15 * time.Second,
+		LedgerGranularity:            10 * time.Second,
+		ProposeFreshness:             20 * time.Second,
+		ValidationFreshness:          20 * time.Second,
 	}
 }
 
