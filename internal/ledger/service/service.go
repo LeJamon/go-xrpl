@@ -626,33 +626,11 @@ func (s *Service) AcceptLedger() (uint32, error) {
 	// Calculate validated ledgers range string
 	validatedLedgers := s.getValidatedLedgersRange()
 
-	// Fire event hooks after state is updated
-	if s.hooks != nil && s.hooks.OnLedgerClosed != nil {
-		txCount := len(txResults)
-		hooks := s.hooks
-		info := ledgerInfo
-		vl := validatedLedgers
-		go hooks.OnLedgerClosed(info, txCount, vl)
-	}
-
-	// Fire transaction hooks for each transaction
-	if s.hooks != nil && s.hooks.OnTransaction != nil {
-		hooks := s.hooks
-		closeTimeVal := closeTime
-		for _, txResult := range txResults {
-			txInfo := TransactionInfo{
-				Hash:             txResult.TxHash,
-				TxBlob:           txResult.TxData,
-				AffectedAccounts: txResult.AffectedAccounts,
-			}
-			result := TxResult{
-				Applied:  txResult.Validated,
-				Metadata: txResult.MetaData,
-				TxIndex:  s.txPositionIndex[txResult.TxHash],
-			}
-			go hooks.OnTransaction(txInfo, result, closedSeq, closedLedgerHash, closeTimeVal)
-		}
-	}
+	// Fire structured event hooks for the newly-closed ledger. In the
+	// standalone path the ledger is already validated (line above sets
+	// s.validatedLedger), so the legacy eventCallback fires immediately
+	// rather than being stashed for SetValidatedLedger to drain.
+	s.fireLedgerClosedHooksLocked(ledgerInfo, txResults, closeTime, validatedLedgers)
 
 	// Fire legacy event callback for backward compatibility
 	if s.eventCallback != nil {
@@ -673,6 +651,56 @@ func (s *Service) AcceptLedger() (uint32, error) {
 	)
 
 	return closedSeq, nil
+}
+
+// fireLedgerClosedHooksLocked fires hooks.OnLedgerClosed and
+// hooks.OnTransaction for a ledger that has transitioned to closed.
+// Each hook dispatch runs on its own goroutine so subscriber callbacks
+// cannot block the ledger service or deadlock against s.mu. Safe to
+// call with s.hooks == nil or individual hook fields nil.
+//
+// Caller must hold s.mu. Shared by the standalone close path and the
+// peer-adopt path so WebSocket `ledger` and `transactions` streams see
+// every closed ledger regardless of whether it was closed locally or
+// adopted from a peer — a silent divergence from rippled before F3
+// where peer-adopted ledgers never reached stream subscribers.
+func (s *Service) fireLedgerClosedHooksLocked(
+	info *LedgerInfo,
+	txResults []TransactionResultEvent,
+	closeTime time.Time,
+	validatedLedgers string,
+) {
+	if s.hooks == nil {
+		return
+	}
+
+	if s.hooks.OnLedgerClosed != nil {
+		txCount := len(txResults)
+		hooks := s.hooks
+		capturedInfo := info
+		capturedRange := validatedLedgers
+		go hooks.OnLedgerClosed(capturedInfo, txCount, capturedRange)
+	}
+
+	if s.hooks.OnTransaction != nil {
+		hooks := s.hooks
+		ledgerSeq := info.Sequence
+		ledgerHash := info.Hash
+		closeTimeVal := closeTime
+		for _, txResult := range txResults {
+			txInfo := TransactionInfo{
+				Hash:             txResult.TxHash,
+				TxBlob:           txResult.TxData,
+				AffectedAccounts: txResult.AffectedAccounts,
+			}
+			result := TxResult{
+				Applied:  txResult.Validated,
+				Metadata: txResult.MetaData,
+				TxIndex:  s.txPositionIndex[txResult.TxHash],
+			}
+			go hooks.OnTransaction(txInfo, result, ledgerSeq, ledgerHash, closeTimeVal)
+		}
+	}
 }
 
 // getValidatedLedgersRange returns a string representation of validated ledger range
@@ -1450,12 +1478,12 @@ func (s *Service) AdoptLedgerWithState(h *header.LedgerHeader, stateMap *shamap.
 		s.logger.Error("Failed to persist adopted ledger", "seq", h.LedgerIndex, "err", err)
 	}
 
-	// Populate the in-memory tx-index so tx-hash lookups resolve to this
-	// seq. collectTransactionResults walks the tx map and writes to
-	// s.txIndex + s.txPositionIndex as a side effect; we don't need the
-	// returned results here (no subscribers to dispatch to yet — that's
-	// Task 1.2).
-	_ = s.collectTransactionResults(adopted, h.LedgerIndex, h.Hash)
+	// Populate the in-memory tx-index and capture per-tx event records
+	// so hooks.OnTransaction + stream subscribers see every adopted tx.
+	// collectTransactionResults walks the tx map and writes to s.txIndex
+	// + s.txPositionIndex as a side effect AND returns the per-tx
+	// TransactionResultEvent slice that hook dispatch needs.
+	txResults := s.collectTransactionResults(adopted, h.LedgerIndex, h.Hash)
 
 	// Create new open ledger on top
 	openLedger, err := ledger.NewOpen(adopted, time.Now())
@@ -1463,6 +1491,42 @@ func (s *Service) AdoptLedgerWithState(h *header.LedgerHeader, stateMap *shamap.
 		return fmt.Errorf("failed to create open ledger: %w", err)
 	}
 	s.openLedger = openLedger
+
+	// Fire hooks.OnLedgerClosed + hooks.OnTransaction so WebSocket
+	// `ledger` and `transactions` stream subscribers see peer-adopted
+	// ledgers. Without this, the streams silently skip every ledger
+	// the node catches up to — an observable divergence from rippled,
+	// whose pubLedger path fires for both consensus-closed and sync-
+	// adopted ledgers.
+	ledgerInfo := &LedgerInfo{
+		Sequence:   h.LedgerIndex,
+		Hash:       h.Hash,
+		ParentHash: adopted.ParentHash(),
+		CloseTime:  adopted.CloseTime(),
+		TotalDrops: adopted.TotalDrops(),
+		Validated:  adopted.IsValidated(),
+		Closed:     adopted.IsClosed(),
+	}
+	validatedLedgers := s.getValidatedLedgersRange()
+	// Peer-adopted ledgers carry a close time from the adopted header,
+	// not from local consensus — use adopted.CloseTime() so downstream
+	// subscribers see the network-agreed close time (matches the Header
+	// field that was just populated by NewFromHeader).
+	s.fireLedgerClosedHooksLocked(ledgerInfo, txResults, adopted.CloseTime(), validatedLedgers)
+
+	// The legacy eventCallback is meant to fire on *validated*, not
+	// *closed*. Peer-adopted ledgers advance s.closedLedger but not
+	// s.validatedLedger (the quorum gate at SetValidatedLedger owns
+	// that transition). Stash the event keyed by hash so the next
+	// SetValidatedLedger(seq, hash) for this ledger drains it —
+	// the exact same pattern AcceptConsensusResult uses.
+	if s.eventCallback != nil {
+		event := &LedgerAcceptedEvent{
+			LedgerInfo:         ledgerInfo,
+			TransactionResults: txResults,
+		}
+		s.stashPendingValidationLocked(h.Hash, event)
+	}
 
 	s.logger.Info("Adopted ledger with full state from peer",
 		"seq", h.LedgerIndex,
