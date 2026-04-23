@@ -854,15 +854,15 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 // LedgerDeltaAcquire.cpp:209 which installs the peer-provided tx-blob
 // tree alongside the state map.
 //
-// R5.17 follow-up: rippled's LedgerMaster::tryAdvance cascades
-// follow-on adoptions when an out-of-order replay-delta arrival
-// unblocks a previously-held child ledger. goXRPL does not yet
-// maintain a held-ledgers queue, so out-of-order arrivals simply
-// wait for the next statusChange / replay-delta cycle to re-trigger.
-// This is a catchup-speed issue, not a safety issue. A full
-// tryAdvance port is tracked separately (requires a new held-ledgers
-// map in internal/ledger/service plus signaling from the router to
-// the service on each adoption).
+// F6: routed through SubmitHeldAdoption rather than AdoptLedgerWithState.
+// This gives us rippled's tryAdvance behavior for free: if the awaited
+// parent seq is already in history and its hash matches the verified
+// ledger's ParentHash, SubmitHeldAdoption fast-paths into the immediate
+// adopt (same call-shape as before). If the parent hasn't landed yet
+// — i.e. the replay-delta arrived out of order — the ledger is stashed
+// in the held-adoptions map keyed by its awaited parent seq, and
+// cascade-promoted automatically from inside the parent's eventual
+// adopt. The router no longer needs to observe ordering.
 func (r *Router) adoptVerifiedLedger(l *ledger.Ledger) error {
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
@@ -881,7 +881,7 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger) error {
 	if err != nil {
 		return fmt.Errorf("snapshot tx map: %w", err)
 	}
-	if err := svc.AdoptLedgerWithState(&hdr, stateMap, txMap); err != nil {
+	if err := svc.SubmitHeldAdoption(&hdr, stateMap, txMap); err != nil {
 		return fmt.Errorf("adopt with state: %w", err)
 	}
 	if r.adaptor.GetOperatingMode() < consensus.OpModeTracking {
@@ -1151,10 +1151,17 @@ func (r *Router) completeInboundLedger() {
 
 	// Legacy header+state catchup path: no per-ledger tx tree is
 	// fetched in this mode (only the header and state map), so pass
-	// nil and let AdoptLedgerWithState install the genesis-shaped
-	// empty tx map. The replay-delta path at adoptVerifiedLedger
-	// (below) passes the verified tx map — see R5.1.
-	if err := svc.AdoptLedgerWithState(h, stateMap, nil); err != nil {
+	// nil and let the service install the genesis-shaped empty tx
+	// map. The replay-delta path at adoptVerifiedLedger (above)
+	// passes the verified tx map — see R5.1.
+	//
+	// F6: same as the replay-delta path, route through
+	// SubmitHeldAdoption so out-of-order catchup arrivals either
+	// fast-path (parent already present) or stash for cascade when
+	// the awaited parent lands. Legacy mtGET_LEDGER is sequential at
+	// the wire level today, but nothing in the protocol forbids
+	// interleaving — the held-queue is the correct seam regardless.
+	if err := svc.SubmitHeldAdoption(h, stateMap, nil); err != nil {
 		r.logger.Warn("inbound ledger: failed to adopt with state", "error", err)
 		return
 	}

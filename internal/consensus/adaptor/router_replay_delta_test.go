@@ -595,3 +595,147 @@ func TestRouter_IgnoresUnsolicitedReplayDeltaResponse(t *testing.T) {
 
 	assert.Equal(t, 0, r.replayer.Count(), "unsolicited response must not arm the verifier")
 }
+
+// buildSuccessorAgainstParent is the same close-and-serialize dance as
+// buildEmptyClosedSuccessorResponse, but against an arbitrary parent
+// Ledger object rather than svc.GetClosedLedger(). This lets the F6
+// cascade test construct a two-link chain (N+1, N+2) where N+1 is
+// held in-memory rather than installed in svc history — exactly the
+// situation the router must handle when a replay-delta for N+2
+// arrives ahead of N+1.
+func buildSuccessorAgainstParent(t *testing.T, parent *ledger.Ledger) (*message.ReplayDeltaResponse, *ledger.Ledger, [32]byte, uint32) {
+	t.Helper()
+	// Offset by seq so each ledger in a chain has a distinct close time
+	// — the hash derivation consumes close time, so identical values
+	// would make chained successors collide.
+	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC).Add(time.Duration(parent.Sequence()) * time.Second)
+	open, err := ledger.NewOpen(parent, closeTime)
+	require.NoError(t, err)
+	require.NoError(t, open.Close(closeTime, 0))
+	hdr := open.Header()
+
+	hdrBytes, err := header.AddRaw(hdr, false)
+	require.NoError(t, err)
+
+	resp := &message.ReplayDeltaResponse{
+		LedgerHash:   hdr.Hash[:],
+		LedgerHeader: hdrBytes,
+		Transactions: nil,
+	}
+	return resp, open, hdr.Hash, hdr.LedgerIndex
+}
+
+// TestRouter_ReplayDelta_CascadesOutOfOrderArrival is the F6 integration
+// test. It wires the replay-delta path end-to-end (acquisition →
+// response → Apply → adopt) and drives an OUT-OF-ORDER arrival: the
+// seq N+2 response reaches the router before the seq N+1 response.
+// The router is expected to route both through SubmitHeldAdoption,
+// which stashes N+2 until N+1 lands and then cascade-promotes it.
+//
+// Without the F6 wiring this test would fail at two points:
+//  1. On delivery of the N+2 response, AdoptLedgerWithState would
+//     return an error (parent-hash mismatch against the then-current
+//     closedLedger at seq N) and the derived ledger would be lost —
+//     svc's closedLedger never advances past N+1 even after N+1
+//     arrives.
+//  2. svc.GetLedgerByHash(N+2) would stay error-returning because no
+//     second acquisition round retries N+2.
+func TestRouter_ReplayDelta_CascadesOutOfOrderArrival(t *testing.T) {
+	r, a, _, svc := makeRouter(t)
+
+	// Step svc past genesis once so we have a real N-at-seq-2 parent
+	// whose hash is consistent with a Close()-derived successor at
+	// seq 3 (the genesis ledger's skip-list is a special case — same
+	// reasoning as TestRouter_ReplayDeltaApply_AdoptsDerivedLedger).
+	_, err := svc.AcceptLedger()
+	require.NoError(t, err)
+
+	parentN := svc.GetClosedLedger()
+	require.NotNil(t, parentN)
+	parentSeq := parentN.Sequence()
+
+	// Build the N+1 response against parentN AND keep the N+1 ledger
+	// object in-memory so we can chain N+2 off of it. N+1 is NOT
+	// installed in svc history yet — the whole point of this test is
+	// to deliver N+2 before N+1 is adopted.
+	respN1, ledgerN1, hashN1, seqN1 := buildSuccessorAgainstParent(t, parentN)
+	respN2, _, hashN2, seqN2 := buildSuccessorAgainstParent(t, ledgerN1)
+	require.Equal(t, parentSeq+1, seqN1)
+	require.Equal(t, parentSeq+2, seqN2)
+	require.NotEqual(t, hashN1, hashN2, "chained successors must have distinct hashes")
+
+	// --- Out-of-order delivery: N+2 arrives first ---
+	//
+	// Arm an acquisition for N+2 with ledgerN1 as the parent object.
+	// startReplayDeltaAcquisition takes the parent Ledger directly, so
+	// we can supply an in-memory N+1 that svc doesn't yet know about.
+	// Apply will use it to derive N+2's post-state; the router then
+	// hands the derived ledger to SubmitHeldAdoption, which must stash
+	// because svc has no N+1 in ledgerHistory.
+	require.NoError(t, r.startReplayDeltaAcquisition(seqN2, hashN2, 7, ledgerN1))
+	payloadN2, err := message.Encode(respN2)
+	require.NoError(t, err)
+	r.handleMessage(&peermanagement.InboundMessage{
+		PeerID:  7,
+		Type:    uint16(message.TypeReplayDeltaResponse),
+		Payload: payloadN2,
+	})
+
+	// N+2's acquisition has completed (verified + applied), but the
+	// adopt was stashed — not persisted to history.
+	require.Equal(t, 0, r.replayer.Count(),
+		"N+2 acquisition must be cleared once the response is verified and adopt routed")
+	_, err = svc.GetLedgerByHash(hashN2)
+	require.Error(t, err,
+		"N+2 must NOT be in svc history yet — parent seq N+1 has not arrived, so SubmitHeldAdoption must stash")
+	assert.Equal(t, parentSeq, svc.GetClosedLedger().Sequence(),
+		"closedLedger must not advance when the replay-delta is stashed")
+
+	// --- In-order arrival: N+1 lands and cascades N+2 ---
+	//
+	// Arm and deliver N+1. Its ParentHash matches parentN.Hash()
+	// (parentN IS in svc history), so SubmitHeldAdoption fast-paths
+	// into the adopt, which then runs cascadeHeldAdoptionsLocked and
+	// finds the N+2 entry keyed by seqN1. N+2's ParentHash ==
+	// hashN1, so the cascade promotes it.
+	require.NoError(t, r.startReplayDeltaAcquisition(seqN1, hashN1, 9, parentN))
+	payloadN1, err := message.Encode(respN1)
+	require.NoError(t, err)
+	r.handleMessage(&peermanagement.InboundMessage{
+		PeerID:  9,
+		Type:    uint16(message.TypeReplayDeltaResponse),
+		Payload: payloadN1,
+	})
+
+	require.Equal(t, 0, r.replayer.Count(),
+		"N+1 adoption should clear the acquisition")
+
+	// Both N+1 AND N+2 must be in svc history. This is the F6
+	// contract: a single AdoptLedgerWithState at the parent seq
+	// drains every held child whose ParentHash matches.
+	gotN1, err := svc.GetLedgerByHash(hashN1)
+	require.NoError(t, err, "N+1 must be adopted by its own response")
+	assert.Equal(t, hashN1, gotN1.Hash())
+
+	gotN2, err := svc.GetLedgerByHash(hashN2)
+	require.NoError(t, err,
+		"N+2 must be cascade-adopted when its awaited parent N+1 lands — this fails without F6 wiring")
+	assert.Equal(t, hashN2, gotN2.Hash())
+
+	// closedLedger must advance to the cascade tip (N+2), not stop
+	// at N+1. This is the observable signal that the cascade ran
+	// end-to-end through the router — half-cascades (stop at N+1)
+	// leave the node visibly behind until the inbound loop retries.
+	assert.Equal(t, hashN2, svc.GetClosedLedger().Hash(),
+		"closedLedger must advance to the cascade tip N+2")
+	assert.Equal(t, seqN2, svc.GetClosedLedger().Sequence())
+
+	// Cascade-driven adoption still advances operating mode to
+	// Tracking. Router's adoptVerifiedLedger only runs the
+	// SetOperatingMode branch for the outer ledger (N+1); N+2 is
+	// promoted from inside the service and the router never sees it.
+	// But the N+1 adoption already did the Tracking transition, so
+	// the final state must be >= Tracking regardless.
+	assert.True(t, a.GetOperatingMode() >= consensus.OpModeTracking,
+		"operating mode must be at least Tracking after cascade (was %s)", a.GetOperatingMode())
+}
