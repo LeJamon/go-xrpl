@@ -1607,36 +1607,43 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 
 	full := e.mode == consensus.ModeProposing
 
-	cookie := e.adaptor.GetCookie()
-	serverVersion := e.adaptor.GetServerVersion()
-
-	// R5.10 guards — enforce invariants that the serializer relies
-	// on (it gates emission on non-zero) AND that rippled expects
-	// present (RCLConsensus.cpp:803-818 populates both unconditionally
-	// under HardenedValidations). A future refactor that accidentally
-	// zeros either should fail loudly here rather than silently
-	// ship malformed validations.
-	if cookie == 0 {
-		slog.Warn("sendValidation: cookie is zero — adaptor must generate one at boot (R5.10 invariant violated); emitting without cookie")
-	}
-	if serverVersion == 0 {
-		slog.Warn("sendValidation: serverVersion is zero — adaptor must advertise a build tag (R5.10 invariant violated); emitting without serverVersion")
-	}
-
 	validation := &consensus.Validation{
-		LedgerID:      ledger.ID(),
-		LedgerSeq:     ledger.Seq(),
-		NodeID:        nodeID,
-		SignTime:      e.adaptor.Now(),
-		SeenTime:      e.adaptor.Now(),
-		Full:          full,
-		Cookie:        cookie,
-		ServerVersion: serverVersion,
+		LedgerID:  ledger.ID(),
+		LedgerSeq: ledger.Seq(),
+		NodeID:    nodeID,
+		SignTime:  e.adaptor.Now(),
+		SeenTime:  e.adaptor.Now(),
+		Full:      full,
 		// R6b.5b: emit local load_fee (sfLoadFee) — rippled
 		// RCLConsensus.cpp:851 always populates this under
 		// HardenedValidations. Zero means "no load info",
 		// serializer omits the field.
 		LoadFee: e.adaptor.GetLoadFee(),
+	}
+
+	// B1: sfCookie and sfServerVersion are scoped inside rippled's
+	// `if (rules().enabled(featureHardenedValidations))` block at
+	// RCLConsensus.cpp:853-867. Before HV is active (pre-2020 on
+	// mainnet, any modern testnet/standalone on old rules) peers
+	// reject validations that carry these fields because the preimage
+	// they compute for signature verification omits them. sfCookie
+	// emits on every HV-enabled validation; sfServerVersion emits
+	// ONLY on voting ledgers within the same block (cpp:864-866 —
+	// "Report our server version every flag ledger").
+	if e.adaptor.IsFeatureEnabled("HardenedValidations") {
+		cookie := e.adaptor.GetCookie()
+		if cookie == 0 {
+			slog.Warn("sendValidation: cookie is zero under HardenedValidations — adaptor must generate one at boot; emitting without cookie")
+		}
+		validation.Cookie = cookie
+
+		if isVotingLedger(ledger.Seq()) {
+			serverVersion := e.adaptor.GetServerVersion()
+			if serverVersion == 0 {
+				slog.Warn("sendValidation: serverVersion is zero on voting ledger under HardenedValidations — adaptor must advertise a build tag; emitting without serverVersion")
+			}
+			validation.ServerVersion = serverVersion
+		}
 	}
 
 	// Fee vote + amendment vote emission is gated on isVotingLedger.

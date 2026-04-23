@@ -1327,3 +1327,171 @@ func TestSendValidation_FeeVoteOnlyOnFlagLedger(t *testing.T) {
 		t.Errorf("flag ledger must carry Amendments vote: got %d IDs", len(flag.Amendments))
 	}
 }
+
+// TestSendValidation_PreHardenedValidations_OmitsCookieAndServerVersion
+// pins B1: with featureHardenedValidations DISABLED, sendValidation
+// must leave Cookie and ServerVersion zero on the emitted validation.
+// Rippled RCLConsensus.cpp:853-867 scopes both fields inside the
+// `if (rules().enabled(featureHardenedValidations))` block, so a node
+// running against pre-HardenedValidations rules MUST omit them or
+// peers on the old rules compute a different preimage and reject the
+// signature.
+func TestSendValidation_PreHardenedValidations_OmitsCookieAndServerVersion(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	// Give the adaptor explicit non-zero Cookie/ServerVersion so we can
+	// prove the engine itself (not the mock) is suppressing them.
+	adaptor.cookie = 0xDEADBEEF_CAFEBABE
+	adaptor.serverVersion = 0x4000_0000_DEAD_BEEF
+
+	// Disable HardenedValidations so the gate should zero out both
+	// fields regardless of whether we're on a voting ledger.
+	adaptor.disabledFeatures = map[string]bool{"HardenedValidations": true}
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	// Use a voting-ledger seq (255+1=256) to prove the voting-ledger
+	// path also respects the HardenedValidations gate — rippled emits
+	// sfServerVersion only inside the HV block AND only on voting
+	// ledgers; if HV is off, neither condition matters.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xCA}, seq: 255})
+	engine.mu.Unlock()
+
+	// Verify the struct itself (what the adaptor sees pre-sign).
+	adaptor.mu.RLock()
+	defer adaptor.mu.RUnlock()
+	if len(adaptor.validationsBroadcast) != 1 {
+		t.Fatalf("want one validation, got %d", len(adaptor.validationsBroadcast))
+	}
+	v := adaptor.validationsBroadcast[0]
+	if v.Cookie != 0 {
+		t.Errorf("pre-HardenedValidations: Cookie must be zero, got %x", v.Cookie)
+	}
+	if v.ServerVersion != 0 {
+		t.Errorf("pre-HardenedValidations: ServerVersion must be zero, got %x", v.ServerVersion)
+	}
+}
+
+// TestSendValidation_HardenedValidations_NonVotingLedger_OmitsServerVersion
+// pins the rippled voting-ledger scope for sfServerVersion
+// (RCLConsensus.cpp:864-866). With HardenedValidations ON but a
+// non-voting ledger sequence, Cookie must be populated but
+// ServerVersion must stay zero. Rippled gates sfServerVersion on
+// BOTH HV enabled AND ledger.isVotingLedger() — miss either side and
+// the field is omitted.
+func TestSendValidation_HardenedValidations_NonVotingLedger_OmitsServerVersion(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.cookie = 0x1234_5678_9ABC_DEF0
+	adaptor.serverVersion = 0x4000_0000_1111_2222
+
+	// HardenedValidations enabled (default mock behavior) — don't set
+	// disabledFeatures.
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	// seq=100 → (100+1)%256 != 0 — non-voting ledger. Cookie must
+	// still emit (unconditional under HV), ServerVersion must not.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xBB}, seq: 100})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	defer adaptor.mu.RUnlock()
+	if len(adaptor.validationsBroadcast) != 1 {
+		t.Fatalf("want one validation, got %d", len(adaptor.validationsBroadcast))
+	}
+	v := adaptor.validationsBroadcast[0]
+	if v.Cookie != 0x1234_5678_9ABC_DEF0 {
+		t.Errorf("HardenedValidations enabled: Cookie must carry adaptor value, got %x", v.Cookie)
+	}
+	if v.ServerVersion != 0 {
+		t.Errorf("non-voting ledger: ServerVersion must be zero, got %x", v.ServerVersion)
+	}
+}
+
+// TestSendValidation_HardenedValidations_VotingLedger_EmitsBoth pins
+// the positive case of B1: HardenedValidations ON and isVotingLedger()
+// true (the only branch where rippled RCLConsensus.cpp:861-866 sets
+// both sfCookie AND sfServerVersion). Also asserts that the full
+// serialized validation carries the sfServerVersion field code
+// (type=3, field=11), not just the struct value — defense-in-depth
+// check against the serializer short-circuiting on zero.
+func TestSendValidation_HardenedValidations_VotingLedger_EmitsBoth(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.cookie = 0xAAAA_BBBB_CCCC_DDDD
+	adaptor.serverVersion = 0x4000_0000_DEAD_FEED
+
+	// HardenedValidations enabled (default mock behavior).
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	// seq=255 → (255+1)%256 == 0 — voting ledger. Both fields must
+	// be present.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xCC}, seq: 255})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	defer adaptor.mu.RUnlock()
+	if len(adaptor.validationsBroadcast) != 1 {
+		t.Fatalf("want one validation, got %d", len(adaptor.validationsBroadcast))
+	}
+	v := adaptor.validationsBroadcast[0]
+	if v.Cookie != 0xAAAA_BBBB_CCCC_DDDD {
+		t.Errorf("voting-ledger HV: Cookie must carry adaptor value, got %x", v.Cookie)
+	}
+	if v.ServerVersion != 0x4000_0000_DEAD_FEED {
+		t.Errorf("voting-ledger HV: ServerVersion must carry adaptor value, got %x", v.ServerVersion)
+	}
+}
