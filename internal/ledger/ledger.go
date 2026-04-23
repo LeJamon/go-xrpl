@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/drops"
+	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -138,13 +139,29 @@ func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
 		return nil, errors.New("failed to create tx map: " + err.Error())
 	}
 
+	// Compute the child's close-time resolution dynamically. Rippled
+	// adjusts the bin width each close based on whether the prior
+	// round agreed (LedgerTiming.h:78-122, invoked from Ledger.cpp:291).
+	// The parent's CloseFlags already encode previousAgree via
+	// sLCF_NoConsensusTime (header.GetCloseAgree). Keeping the
+	// computation in the ledger constructor matches rippled exactly
+	// and lets every NewOpen callsite (consensus, service, replay,
+	// test env) pick up the dynamic binning without plumbing
+	// previousAgree through their signatures.
+	newLedgerSeq := parent.header.LedgerIndex + 1
+	newResolution := consensus.GetNextLedgerTimeResolution(
+		parent.header.CloseTimeResolution,
+		parent.header.GetCloseAgree(),
+		newLedgerSeq,
+	)
+
 	// Create new header based on parent
 	newHeader := header.LedgerHeader{
-		LedgerIndex:         parent.header.LedgerIndex + 1,
+		LedgerIndex:         newLedgerSeq,
 		ParentHash:          parent.header.Hash,
 		ParentCloseTime:     parent.header.CloseTime,
 		CloseTime:           closeTime,
-		CloseTimeResolution: parent.header.CloseTimeResolution,
+		CloseTimeResolution: newResolution,
 		Drops:               parent.header.Drops,
 		// Hash, TxHash, AccountHash will be set when closed
 	}
