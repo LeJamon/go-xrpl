@@ -791,12 +791,12 @@ func TestDefaultConfig(t *testing.T) {
 		t.Error("LedgerMaxClose should not be zero")
 	}
 
-	if config.Thresholds.MinConsensusPct == 0 {
-		t.Error("MinConsensusPct should not be zero")
+	if config.Thresholds.EarlyConvergencePct == 0 {
+		t.Error("EarlyConvergencePct should not be zero")
 	}
 
-	if config.Thresholds.MaxConsensusPct == 0 {
-		t.Error("MaxConsensusPct should not be zero")
+	if config.Thresholds.MinConsensusPct == 0 {
+		t.Error("MinConsensusPct should not be zero")
 	}
 }
 

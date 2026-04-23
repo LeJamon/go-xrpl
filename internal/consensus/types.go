@@ -409,22 +409,41 @@ func DefaultTiming() Timing {
 }
 
 // Thresholds holds consensus threshold parameters.
+//
+// Note on terminology: rippled defines a single consensus percentage,
+// minCONSENSUS_PCT = 80 (see rippled/src/xrpld/consensus/ConsensusParms.h:79),
+// which is the threshold above which consensus may be declared. goXRPL
+// layers an additional lower gate (EarlyConvergencePct) used to mark a
+// round as "converged" earlier than the accept threshold — this is a
+// goXRPL-local construct and has no direct rippled counterpart. The
+// accept threshold itself (MinConsensusPct below) is arithmetically
+// identical to rippled's minCONSENSUS_PCT.
 type Thresholds struct {
-	// MinConsensusPct is the minimum percentage for initial consensus.
-	MinConsensusPct int
+	// EarlyConvergencePct is the percentage of trusted proposals that must
+	// agree on a tx set for a round to be marked "converged" (but not yet
+	// accepted). This is a goXRPL-local early-convergence gate and has no
+	// direct equivalent in rippled.
+	EarlyConvergencePct int
 
 	// IncreaseConsensusPct is the percentage increase per round.
 	IncreaseConsensusPct int
 
-	// MaxConsensusPct is the maximum consensus percentage required.
-	MaxConsensusPct int
+	// MinConsensusPct is the minimum percentage of trusted proposals that
+	// must agree on a tx set before consensus may be declared. This
+	// corresponds directly to rippled's minCONSENSUS_PCT = 80 (see
+	// rippled/src/xrpld/consensus/ConsensusParms.h:79).
+	MinConsensusPct int
 }
 
 // DefaultThresholds returns the default consensus thresholds.
+//
+// MinConsensusPct = 80 matches rippled's minCONSENSUS_PCT
+// (rippled/src/xrpld/consensus/ConsensusParms.h:79). EarlyConvergencePct
+// is a goXRPL-local earlier gate used to flag convergence before accept.
 func DefaultThresholds() Thresholds {
 	return Thresholds{
-		MinConsensusPct:      50,
+		EarlyConvergencePct:  50,
 		IncreaseConsensusPct: 5,
-		MaxConsensusPct:      80,
+		MinConsensusPct:      80,
 	}
 }

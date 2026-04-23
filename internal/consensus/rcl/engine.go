@@ -1275,7 +1275,7 @@ func (e *Engine) checkConvergence() {
 	// round consensus are separate gates — conflating them here pinned
 	// the threshold at validation-quorum (3) even when that exceeded
 	// the available participants. Use pure percentage of participants.
-	threshold := (trustedProposals*e.thresholds.MinConsensusPct + 99) / 100
+	threshold := (trustedProposals*e.thresholds.EarlyConvergencePct + 99) / 100
 	if threshold < 1 {
 		threshold = 1
 	}
@@ -1292,7 +1292,7 @@ func (e *Engine) checkConvergence() {
 			}
 
 			// Check if we have TX consensus
-			if count >= (trustedProposals*e.thresholds.MaxConsensusPct)/100 {
+			if count >= (trustedProposals*e.thresholds.MinConsensusPct)/100 {
 				// Also need close time consensus before accepting
 				// (matching rippled Consensus.h:1406-1411)
 				if !e.haveCloseTimeConsensus {
