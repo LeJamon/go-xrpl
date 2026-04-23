@@ -81,6 +81,15 @@ type Engine struct {
 	// while in ModeWrongLedger. Prevents spamming handleWrongLedger.
 	wrongLedgerID consensus.LedgerID
 
+	// lastSignTime is the monotonic floor for emitted validation
+	// SignTime. If the adaptor clock regresses (NTP step, leap-second
+	// correction, VM pause/resume), sendValidation bumps SignTime to
+	// lastSignTime + 1s so peers never see a non-monotonic sequence of
+	// validations from the same node. Matches rippled's
+	// RCLConsensus::Adaptor::lastValidationTime_ (RCLConsensus.cpp:825-828).
+	// Protected by e.mu (same lock as sendValidation's other state).
+	lastSignTime time.Time
+
 	// Stats
 	roundCount     uint64
 	consensusCount uint64
@@ -1652,12 +1661,25 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 
 	full := e.mode == consensus.ModeProposing
 
+	// Compute SignTime under a monotonic floor. If the adaptor clock
+	// regresses (NTP step, leap-second correction, VM pause/resume) the
+	// emitted SignTime could be older than the prior validation from
+	// this node, so peers would reject it as stale. Bump to
+	// lastSignTime + 1s in that case to preserve monotonicity. Matches
+	// rippled RCLConsensus.cpp:825-828. SeenTime mirrors SignTime (as
+	// before) so the two remain equal on emission.
+	signTime := e.adaptor.Now()
+	if !e.lastSignTime.IsZero() && !signTime.After(e.lastSignTime) {
+		signTime = e.lastSignTime.Add(1 * time.Second)
+	}
+	e.lastSignTime = signTime
+
 	validation := &consensus.Validation{
 		LedgerID:  ledger.ID(),
 		LedgerSeq: ledger.Seq(),
 		NodeID:    nodeID,
-		SignTime:  e.adaptor.Now(),
-		SeenTime:  e.adaptor.Now(),
+		SignTime:  signTime,
+		SeenTime:  signTime,
 		Full:      full,
 		// R6b.5b: emit local load_fee (sfLoadFee) — rippled
 		// RCLConsensus.cpp:851 always populates this under

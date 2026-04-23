@@ -1694,3 +1694,158 @@ func TestStartRound_ClearsDeadNodes(t *testing.T) {
 		t.Errorf("expected rejoined proposal from %v to be accepted in the new round", bowingNode)
 	}
 }
+
+// Task 2.5 (B5): tests for monotonic SignTime on emitted validations.
+// Rippled reference: RCLConsensus.cpp:825-828 — if the wall clock regresses
+// (NTP step, leap-second correction, VM pause/resume), the validation sign
+// time is bumped to lastValidationTime_ + 1s so peers never see a non-
+// monotonic sequence of validations from the same node.
+
+// TestSendValidation_ClockRegressionPreservesMonotonic drives sendValidation
+// twice with a regressing fake clock and asserts the second SignTime is
+// exactly first + 1s (NOT the regressed adaptor.Now() value). Without this
+// guard, peers treat the second validation as stale and drop it — matching
+// rippled's behavior where older-than-last validations are rejected.
+func TestSendValidation_ClockRegressionPreservesMonotonic(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	// Pin the clock to a known value so both observations are deterministic.
+	baseTime := time.Unix(1_700_000_000, 0).UTC()
+	adaptor.now = baseTime
+	adaptor.mu.Unlock()
+
+	// First emission — SignTime should equal the fake clock.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xA1}, seq: 101})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	if len(adaptor.validationsBroadcast) != 1 {
+		adaptor.mu.RUnlock()
+		t.Fatalf("want one validation after first send, got %d", len(adaptor.validationsBroadcast))
+	}
+	first := adaptor.validationsBroadcast[0]
+	adaptor.mu.RUnlock()
+
+	if !first.SignTime.Equal(baseTime) {
+		t.Errorf("first SignTime: want %v, got %v", baseTime, first.SignTime)
+	}
+	if !first.SeenTime.Equal(first.SignTime) {
+		t.Errorf("first SeenTime must equal SignTime: got SignTime=%v SeenTime=%v",
+			first.SignTime, first.SeenTime)
+	}
+
+	// Regress the clock by 5 seconds (simulates NTP step / VM pause-resume).
+	adaptor.mu.Lock()
+	adaptor.now = baseTime.Add(-5 * time.Second)
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xA2}, seq: 102})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	if len(adaptor.validationsBroadcast) != 2 {
+		adaptor.mu.RUnlock()
+		t.Fatalf("want two validations after second send, got %d", len(adaptor.validationsBroadcast))
+	}
+	second := adaptor.validationsBroadcast[1]
+	adaptor.mu.RUnlock()
+
+	// Second SignTime must be first + 1s, NOT the regressed adaptor.Now().
+	want := first.SignTime.Add(1 * time.Second)
+	if !second.SignTime.Equal(want) {
+		t.Errorf("clock regressed: second SignTime: want %v (first + 1s), got %v",
+			want, second.SignTime)
+	}
+	if !second.SeenTime.Equal(second.SignTime) {
+		t.Errorf("second SeenTime must equal SignTime: got SignTime=%v SeenTime=%v",
+			second.SignTime, second.SeenTime)
+	}
+}
+
+// TestSendValidation_ClockMonotonic_NormalCase confirms the monotonic floor
+// does NOT inject an artificial step when the adaptor clock advances
+// normally. With a 3-second forward step, the second SignTime should be
+// exactly adaptor.Now() (first + 3s), not first + 1s.
+func TestSendValidation_ClockMonotonic_NormalCase(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	baseTime := time.Unix(1_700_000_000, 0).UTC()
+	adaptor.now = baseTime
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xB1}, seq: 201})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	first := adaptor.validationsBroadcast[0]
+	adaptor.mu.RUnlock()
+
+	// Advance the clock 3 seconds forward — normal progression.
+	adaptor.mu.Lock()
+	adaptor.now = baseTime.Add(3 * time.Second)
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xB2}, seq: 202})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	if len(adaptor.validationsBroadcast) != 2 {
+		adaptor.mu.RUnlock()
+		t.Fatalf("want two validations, got %d", len(adaptor.validationsBroadcast))
+	}
+	second := adaptor.validationsBroadcast[1]
+	adaptor.mu.RUnlock()
+
+	// The difference must be exactly 3s — no artificial +1s step.
+	diff := second.SignTime.Sub(first.SignTime)
+	if diff != 3*time.Second {
+		t.Errorf("normal clock advance: want SignTime difference 3s, got %v", diff)
+	}
+	// Second SignTime must equal adaptor.Now() — NOT the monotonic floor.
+	want := baseTime.Add(3 * time.Second)
+	if !second.SignTime.Equal(want) {
+		t.Errorf("second SignTime: want %v (adaptor.Now), got %v", want, second.SignTime)
+	}
+	if !second.SeenTime.Equal(second.SignTime) {
+		t.Errorf("second SeenTime must equal SignTime: got SignTime=%v SeenTime=%v",
+			second.SignTime, second.SeenTime)
+	}
+}
