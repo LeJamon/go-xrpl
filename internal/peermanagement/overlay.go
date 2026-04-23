@@ -710,22 +710,26 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		return
 	}
 
-	// Handle TMSquelch at the transport level — update per-peer squelch
-	// state and do not forward to external consumers. Mirrors rippled's
-	// PeerImp::onMessage(TMSquelch) at PeerImp.cpp:2691-2732, which
-	// applies every inbound TMSquelch unconditionally. Feature
-	// negotiation governs what WE SEND (we only emit TMSquelch to peers
-	// who advertised reduce-relay), not what we accept: a squelch
-	// directive is harmless if applied — it only suppresses what we
-	// send next — and rejecting it creates a not-actually-rippled
-	// attack surface where a hostile peer could advertise one capability
-	// set to us and another to a neighbor to desync squelch state.
+	// Inbound TMSquelch is accepted UNCONDITIONALLY. Rippled
+	// PeerImp::onMessage(TMSquelch) at PeerImp.cpp:2684-2721 does the
+	// same — there is no per-peer gating on vpReduceRelay for incoming
+	// squelches. Feature negotiation governs what WE SEND (we only
+	// emit TMSquelch to peers who advertised reduce-relay), not what
+	// we accept: a squelch directive is harmless when applied — it
+	// only suppresses what we send next — and rejecting it creates a
+	// not-actually-rippled attack surface where a hostile peer could
+	// advertise one capability set to us and another to a neighbor
+	// to desync squelch state.
+	//
+	// C3 note: an earlier round-2 commit message claimed this path
+	// gated on vpReduceRelay and charged-then-dropped peers that
+	// hadn't negotiated it. The code has always accepted
+	// unconditionally, matching rippled — the commit message was
+	// inaccurate and this comment is the canonical statement of
+	// intended behavior.
 	if msgType == message.TypeSquelch {
-		// TMSquelch is a validator-proposal concept (VPRR). We log,
-		// not drop, a squelch from a peer that didn't negotiate vprr —
-		// rippled applies the squelch regardless of feature gate.
 		if !o.PeerSupports(evt.PeerID, FeatureVpReduceRelay) {
-			slog.Debug("TMSquelch from peer without vprr feature; applying anyway (parity with rippled)",
+			slog.Debug("TMSquelch from peer without vprr feature; accepting (matches rippled)",
 				"t", "Overlay", "peer", evt.PeerID)
 		}
 		o.handleSquelchMessage(evt)
