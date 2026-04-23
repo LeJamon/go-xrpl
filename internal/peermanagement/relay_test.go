@@ -368,6 +368,242 @@ func TestRelay_DeleteIdlePeers_EvictsStaleEntries(t *testing.T) {
 	}
 }
 
+// TestSlot_IgnoredSquelch_FiresCallback pins G4: when a peer in
+// RelayPeerSquelched state continues to relay a validator's messages,
+// the slot must invoke its ignored-squelch callback with the offending
+// peer's ID so the overlay can charge reputation. Mirrors rippled's
+// Slot::update firing the ignored_squelch_callback at Slot.h:329-331.
+//
+// Without this the only enforcement of squelch is advisory — a peer
+// that ignores our TMSquelch frames keeps wasting bandwidth with zero
+// accountability.
+func TestSlot_IgnoredSquelch_FiresCallback(t *testing.T) {
+	mock := newMockSquelchCallback()
+	slot := NewValidatorSlot(3, mock.callback)
+
+	var (
+		charges   []PeerID
+		chargesMu sync.Mutex
+	)
+	slot.onIgnoredSquelch = func(peerID PeerID) {
+		chargesMu.Lock()
+		defer chargesMu.Unlock()
+		charges = append(charges, peerID)
+	}
+
+	validator := []byte("test-validator-squelch-ignored")
+
+	// Install PeerID(7) directly in RelayPeerSquelched state with an
+	// Expire far in the future so Update does NOT treat it as
+	// expired-and-return-to-counting. LastMessage set to now so the
+	// is-fresh check succeeds.
+	now := time.Now()
+	slot.mu.Lock()
+	slot.peers[PeerID(7)] = &RelayPeerInfo{
+		State:       RelayPeerSquelched,
+		Expire:      now.Add(10 * time.Minute),
+		LastMessage: now,
+	}
+	slot.mu.Unlock()
+
+	// Feed a message from the squelched peer. Update must fire the
+	// ignored-squelch callback exactly once, attributed to PeerID(7).
+	slot.Update(validator, PeerID(7))
+
+	chargesMu.Lock()
+	defer chargesMu.Unlock()
+	if len(charges) != 1 {
+		t.Fatalf("expected exactly 1 ignored-squelch charge, got %d: %v", len(charges), charges)
+	}
+	if charges[0] != PeerID(7) {
+		t.Fatalf("charge attributed to wrong peer: got %v, want PeerID(7)", charges[0])
+	}
+}
+
+// TestSlot_UnsquelchedRelay_DoesNotCharge pins the negative baseline
+// for G4: a peer NOT in RelayPeerSquelched state must never trigger
+// the ignored-squelch callback, regardless of slot state or message
+// volume. Guards against a latent bug where the charge path fires on
+// every incoming message and inflates bad-data balances for well-
+// behaved peers.
+func TestSlot_UnsquelchedRelay_DoesNotCharge(t *testing.T) {
+	mock := newMockSquelchCallback()
+	slot := NewValidatorSlot(3, mock.callback)
+
+	var chargeCount int
+	slot.onIgnoredSquelch = func(peerID PeerID) {
+		chargeCount++
+	}
+
+	validator := []byte("test-validator-ok")
+
+	// Drive a handful of messages from a single unsquelched peer —
+	// the Update path transitions RelayPeerCounting → considered →
+	// (not enough peers to select) but never enters Squelched for
+	// this peer. Charge must stay at 0.
+	for i := 0; i < 5; i++ {
+		slot.Update(validator, PeerID(1))
+	}
+
+	if chargeCount != 0 {
+		t.Fatalf("unsquelched peer must not trigger ignored-squelch callback; got %d calls", chargeCount)
+	}
+
+	// Also verify a Selected peer does not trigger the callback.
+	// Install PeerID(2) directly in RelayPeerSelected state.
+	now := time.Now()
+	slot.mu.Lock()
+	slot.peers[PeerID(2)] = &RelayPeerInfo{
+		State:       RelayPeerSelected,
+		LastMessage: now,
+	}
+	slot.state = RelaySlotSelected
+	slot.mu.Unlock()
+
+	slot.Update(validator, PeerID(2))
+	if chargeCount != 0 {
+		t.Fatalf("selected peer must not trigger ignored-squelch callback; got %d calls", chargeCount)
+	}
+}
+
+// TestSlot_IgnoredSquelch_ExpiredDoesNotCharge pins G4's expired-
+// squelch behavior matching rippled Slot.h:307-314: when a squelched
+// peer's Expire has passed, Update must transition it back to
+// Counting and NOT fire the ignored-squelch callback — the squelch
+// window itself is over, so the relay is no longer "ignored."
+func TestSlot_IgnoredSquelch_ExpiredDoesNotCharge(t *testing.T) {
+	mock := newMockSquelchCallback()
+	slot := NewValidatorSlot(3, mock.callback)
+
+	var chargeCount int
+	slot.onIgnoredSquelch = func(peerID PeerID) {
+		chargeCount++
+	}
+
+	validator := []byte("test-validator-expired")
+
+	// Squelched with Expire already in the past.
+	now := time.Now()
+	slot.mu.Lock()
+	slot.peers[PeerID(9)] = &RelayPeerInfo{
+		State:       RelayPeerSquelched,
+		Expire:      now.Add(-time.Second),
+		LastMessage: now,
+	}
+	slot.mu.Unlock()
+
+	slot.Update(validator, PeerID(9))
+
+	if chargeCount != 0 {
+		t.Fatalf("expired-squelch relay must not charge; got %d calls", chargeCount)
+	}
+
+	// Peer should have transitioned to Counting.
+	slot.mu.RLock()
+	state := slot.peers[PeerID(9)].State
+	slot.mu.RUnlock()
+	if state != RelayPeerCounting {
+		t.Fatalf("expected peer state Counting after expiry, got %v", state)
+	}
+}
+
+// TestRelay_SquelchedPeerRelayChargesPeer is the overlay-level G4
+// assertion: when the Relay layer sees a message from a peer it has
+// already marked Squelched for a given validator, it must propagate
+// that event to the overlay-supplied ignored-squelch callback so the
+// peer's bad-data balance rises.
+func TestRelay_SquelchedPeerRelayChargesPeer(t *testing.T) {
+	var now time.Time
+	start := time.Now()
+	now = start
+	clock := func() time.Time { return now }
+
+	cfg := &Config{
+		EnableVPReduceRelay: true,
+		Clock:               clock,
+	}
+
+	var (
+		charges   []PeerID
+		chargesMu sync.Mutex
+	)
+	ignoredCb := func(peerID PeerID) {
+		chargesMu.Lock()
+		defer chargesMu.Unlock()
+		charges = append(charges, peerID)
+	}
+
+	mock := newMockSquelchCallback()
+	relay := NewRelayWithIgnoredCallback(cfg, mock.callback, ignoredCb)
+
+	// Advance past bootup so OnMessage is active.
+	now = start.Add(WaitOnBootup + time.Minute)
+
+	validator := []byte("test-validator-charge")
+
+	// Seed a slot with PeerID(42) already in Squelched state with an
+	// Expire far in the future so Update's expired-squelch branch
+	// doesn't mask the ignored-relay callback.
+	relay.OnMessage(validator, PeerID(42))
+
+	relay.mu.RLock()
+	slot := relay.slots[string(validator)]
+	relay.mu.RUnlock()
+	if slot == nil {
+		t.Fatalf("slot was not created by OnMessage")
+	}
+	slot.mu.Lock()
+	slot.peers[PeerID(42)] = &RelayPeerInfo{
+		State:       RelayPeerSquelched,
+		Expire:      now.Add(10 * time.Minute),
+		LastMessage: now,
+	}
+	slot.mu.Unlock()
+
+	// The squelched peer keeps relaying. Expect exactly one charge.
+	relay.OnMessage(validator, PeerID(42))
+
+	chargesMu.Lock()
+	defer chargesMu.Unlock()
+	if len(charges) != 1 || charges[0] != PeerID(42) {
+		t.Fatalf("expected one charge for PeerID(42), got: %v", charges)
+	}
+}
+
+// TestRelay_UnsquelchedPeerRelayDoesNotCharge is the negative G4
+// baseline at the Relay level: routine traffic from an unsquelched
+// peer must never trigger the ignored-squelch callback.
+func TestRelay_UnsquelchedPeerRelayDoesNotCharge(t *testing.T) {
+	var now time.Time
+	start := time.Now()
+	now = start
+	clock := func() time.Time { return now }
+
+	cfg := &Config{
+		EnableVPReduceRelay: true,
+		Clock:               clock,
+	}
+
+	var charges int
+	ignoredCb := func(peerID PeerID) { charges++ }
+
+	mock := newMockSquelchCallback()
+	relay := NewRelayWithIgnoredCallback(cfg, mock.callback, ignoredCb)
+
+	now = start.Add(WaitOnBootup + time.Minute)
+
+	validator := []byte("test-validator-ok")
+
+	// A handful of messages from one unsquelched peer.
+	for i := 0; i < 5; i++ {
+		relay.OnMessage(validator, PeerID(1))
+	}
+
+	if charges != 0 {
+		t.Fatalf("unsquelched peer must not be charged; got %d calls", charges)
+	}
+}
+
 // TestRelay_DeleteIdlePeers_DemotesSelectedBelowQuorum pins G2's
 // safety rule: if a slot was in Selected state and the sweep reduces
 // the remaining peer count below MaxSelectedPeers, the slot must be

@@ -51,6 +51,23 @@ type RelayPeerInfo struct {
 // SquelchCallback is called when a peer should be squelched/unsquelched.
 type SquelchCallback func(validator []byte, peerID PeerID, squelch bool, duration time.Duration)
 
+// IgnoredSquelchCallback is called when a peer keeps relaying a
+// validator's messages after being placed in the Squelched state —
+// i.e., the peer is ignoring a TMSquelch we previously sent it.
+//
+// Mirrors rippled's ignored_squelch_callback at Slot.h:112-113,
+// invoked inside Slot::update at Slot.h:329-331. The overlay uses
+// this signal to charge the offending peer's reputation (bad-data
+// balance) so sustained squelch-violations eventually evict the peer
+// rather than leaving squelch enforcement purely advisory.
+//
+// Invoked from the hot receive path, OUTSIDE any slot mutex —
+// implementations must be non-blocking. The callback carries only the
+// peerID because the charge is per-peer: a peer can ignore the squelch
+// for multiple validators, and each event should land on the same
+// peer's balance.
+type IgnoredSquelchCallback func(peerID PeerID)
+
 // ValidatorSlot manages peer selection for a specific validator.
 type ValidatorSlot struct {
 	mu sync.RWMutex
@@ -62,6 +79,15 @@ type ValidatorSlot struct {
 	state            RelaySlotState
 	maxSelectedPeers int
 	onSquelch        SquelchCallback
+
+	// onIgnoredSquelch is fired when an incoming validator message
+	// originates from a peer currently in RelayPeerSquelched state —
+	// i.e., the peer is ignoring a TMSquelch we previously sent it.
+	// Set once at slot construction by Relay.OnMessage (which
+	// propagates it from Overlay wiring); leaving it nil simply
+	// disables the charge. Invoked OUTSIDE s.mu to avoid inverting
+	// lock order with the overlay's peers map.
+	onIgnoredSquelch IgnoredSquelchCallback
 }
 
 // NewValidatorSlot creates a new reduce-relay slot for a validator.
@@ -81,8 +107,22 @@ func NewValidatorSlot(maxSelected int, onSquelch SquelchCallback) *ValidatorSlot
 
 // Update processes a message from a peer.
 func (s *ValidatorSlot) Update(validator []byte, peerID PeerID) {
+	// ignoredSquelch is set under s.mu when we detect the peer is
+	// still Squelched, then invoked AFTER releasing the lock. Lock
+	// ordering: never call into overlay-registered callbacks while
+	// holding the slot mutex — the overlay's IncPeerBadData takes its
+	// own peers map lock and we must not invert that order.
+	var (
+		fireIgnoredSquelch bool
+		ignoredCb          IgnoredSquelchCallback
+	)
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer func() {
+		s.mu.Unlock()
+		if fireIgnoredSquelch && ignoredCb != nil {
+			ignoredCb(peerID)
+		}
+	}()
 
 	now := time.Now()
 	peer, exists := s.peers[peerID]
@@ -99,6 +139,11 @@ func (s *ValidatorSlot) Update(validator []byte, peerID PeerID) {
 	}
 
 	if peer.State == RelayPeerSquelched && now.After(peer.Expire) {
+		// Squelch window has elapsed — transition the peer back to
+		// Counting and return. No ignored-squelch charge: the peer
+		// isn't ignoring us anymore, the squelch simply expired on its
+		// own schedule. Matches rippled Slot.h:307-314 where the
+		// callback is NOT invoked on expired-squelch traffic.
 		peer.State = RelayPeerCounting
 		peer.LastMessage = now
 		s.initCounting()
@@ -106,6 +151,17 @@ func (s *ValidatorSlot) Update(validator []byte, peerID PeerID) {
 	}
 
 	peer.LastMessage = now
+
+	// G4: the peer is still Squelched and the squelch has NOT expired
+	// — yet it relayed a validator message anyway. Mirrors rippled's
+	// Slot::update at Slot.h:329-331 which calls the
+	// ignored_squelch_callback here. Stage the invocation; the defer
+	// above fires it after we release s.mu so the callback can freely
+	// take the overlay's peers map lock without risking inversion.
+	if peer.State == RelayPeerSquelched {
+		fireIgnoredSquelch = true
+		ignoredCb = s.onIgnoredSquelch
+	}
 
 	if s.state != RelaySlotCounting || peer.State == RelayPeerSquelched {
 		return
@@ -359,22 +415,40 @@ type Relay struct {
 	cfg   *Config
 	clock func() time.Time
 
-	onSquelch SquelchCallback
-	startTime time.Time
+	onSquelch        SquelchCallback
+	onIgnoredSquelch IgnoredSquelchCallback
+	startTime        time.Time
 }
 
-// NewRelay creates a new Relay manager.
+// NewRelay creates a new Relay manager with no ignored-squelch
+// callback. Equivalent to NewRelayWithIgnoredCallback(cfg, onSquelch,
+// nil). Existing callers (and tests that don't exercise G4) keep
+// using this.
 func NewRelay(cfg *Config, onSquelch SquelchCallback) *Relay {
+	return NewRelayWithIgnoredCallback(cfg, onSquelch, nil)
+}
+
+// NewRelayWithIgnoredCallback creates a Relay that additionally
+// invokes onIgnoredSquelch(peerID) every time a peer in the Squelched
+// state relays a validator's message. The callback is propagated to
+// every ValidatorSlot the Relay creates. Pass nil to disable the
+// charge (falls back to NewRelay semantics).
+func NewRelayWithIgnoredCallback(
+	cfg *Config,
+	onSquelch SquelchCallback,
+	onIgnoredSquelch IgnoredSquelchCallback,
+) *Relay {
 	clock := time.Now
 	if cfg.Clock != nil {
 		clock = cfg.Clock
 	}
 	return &Relay{
-		slots:     make(map[string]*ValidatorSlot),
-		cfg:       cfg,
-		clock:     clock,
-		onSquelch: onSquelch,
-		startTime: clock(),
+		slots:            make(map[string]*ValidatorSlot),
+		cfg:              cfg,
+		clock:            clock,
+		onSquelch:        onSquelch,
+		onIgnoredSquelch: onIgnoredSquelch,
+		startTime:        clock(),
 	}
 }
 
@@ -402,6 +476,11 @@ func (r *Relay) OnMessage(validatorKey []byte, peerID PeerID) {
 	slot, exists := r.slots[keyHex]
 	if !exists {
 		slot = NewValidatorSlot(MaxSelectedPeers, r.onSquelch)
+		// Propagate the ignored-squelch callback so every slot this
+		// Relay hands out shares one reputation-charge sink. Set
+		// before Update is called so even the first inbound message
+		// from a (hypothetically pre-squelched) peer lands on it.
+		slot.onIgnoredSquelch = r.onIgnoredSquelch
 		r.slots[keyHex] = slot
 	}
 	r.mu.Unlock()

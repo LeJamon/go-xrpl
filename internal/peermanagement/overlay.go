@@ -95,6 +95,16 @@ func BadDataWeight(reason string) int {
 	// Malformed requests: decode failures, bad hashes, wrong-field
 	// requests. Rippled: feeMalformedRequest at PeerImp.cpp:1693 for
 	// "bad hashes" and at PeerImp.cpp:1476 for bad requests.
+	//
+	// "squelch-ignored" lives here (G4): a peer that keeps relaying a
+	// validator's messages after being squelched is mis-behaving at
+	// the protocol level, but a single event is not catastrophic —
+	// sustained ignore (many per decay window) accumulates toward
+	// eviction while a one-off (packet already in flight when the
+	// squelch landed) decays below threshold. Rippled's upstream only
+	// increments a traffic counter here (OverlayImpl.cpp:1435-1437);
+	// goXRPL additionally charges reputation so repeat offenders are
+	// actually evicted rather than just counted.
 	case "proposal-malformed-prev-ledger-size",
 		"proposal-malformed-txset-size",
 		"validation-malformed-ledger-hash-zero",
@@ -113,7 +123,8 @@ func BadDataWeight(reason string) int {
 		"proposal-decode",
 		"validation-decode",
 		"validation-parse",
-		"ledger-data-decode":
+		"ledger-data-decode",
+		"squelch-ignored":
 		return weightMalformedReq
 	// A peer that didn't respond or returned benign "no data" — lowest.
 	case "no-reply":
@@ -305,7 +316,6 @@ func New(opts ...Option) (*Overlay, error) {
 		cfg:           cfg,
 		identity:      identity,
 		discovery:     NewDiscovery(&cfg, events),
-		relay:         NewRelay(&cfg, nil), // squelch callback set below
 		ledgerSync:    NewLedgerSyncHandler(events),
 		peers:         make(map[PeerID]*Peer),
 		events:        events,
@@ -314,10 +324,31 @@ func New(opts ...Option) (*Overlay, error) {
 		clockForIndex: time.Now,
 	}
 
-	// Set squelch callback for reduce-relay
-	o.relay.onSquelch = o.handleSquelch
+	// Wire reduce-relay callbacks. The squelch callback constructs and
+	// dispatches TMSquelch frames to individual peers; the ignored-
+	// squelch callback charges a peer's bad-data balance whenever it
+	// keeps relaying a validator's messages after being squelched.
+	// Both are set at construction — Relay never swaps them at runtime.
+	// Mirrors rippled's OverlayImpl wiring where SquelchHandler +
+	// ignored_squelch_callback are passed into Slot at construction
+	// (Slot.h:121-132 + Slot.h:112-113).
+	o.relay = NewRelayWithIgnoredCallback(&cfg, o.handleSquelch, o.chargeIgnoredSquelch)
 
 	return o, nil
+}
+
+// chargeIgnoredSquelch is the Relay-layer callback fired when a peer
+// keeps relaying a validator's messages despite being squelched. We
+// charge the peer's bad-data balance under a stable reason label so
+// operators watching bad-data metrics can attribute the increase to
+// squelch-ignored behavior specifically. Per rippled Slot.h:329-331,
+// this is the only place we learn that a peer ignored our TMSquelch
+// — there is no separate protocol signal.
+//
+// Non-blocking; safe to invoke from the hot receive path because
+// IncPeerBadData is a single map lookup + atomic add.
+func (o *Overlay) chargeIgnoredSquelch(peerID PeerID) {
+	o.IncPeerBadData(peerID, "squelch-ignored")
 }
 
 // loadOrCreateIdentity loads existing identity or creates a new one.
