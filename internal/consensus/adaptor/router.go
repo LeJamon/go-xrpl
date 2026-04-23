@@ -412,9 +412,18 @@ func validateProposeBounds(p *message.ProposeSet) (string, bool) {
 	if n := len(p.Signature); n < signatureMinLen || n > signatureMaxLen {
 		return "sig-size", false
 	}
-	// Node pubkey is always a 33-byte compressed secp256k1 point.
+	// Proposal pubkeys must be compressed secp256k1 (0x02/0x03 prefix).
+	// ed25519 validators (0xED prefix) are not allowed in propose-set
+	// per rippled PeerImp.cpp:1679-1680
+	// (publicKeyType(...) != KeyType::secp256k1). The length-only check
+	// would pass a 33-byte ed25519 key (0xED || 32 bytes), letting the
+	// peer slip through without attribution, so the prefix gate runs
+	// alongside the size gate.
 	if len(p.NodePubKey) != 33 {
 		return "pubkey-size", false
+	}
+	if p.NodePubKey[0] != 0x02 && p.NodePubKey[0] != 0x03 {
+		return "pubkey-type", false
 	}
 	return "", true
 }
