@@ -20,11 +20,14 @@ import (
 const DefaultMaxInFlightReplays = 16
 
 // MaxPerPeerReplays caps the number of in-flight replay-delta
-// acquisitions issued to a SINGLE peer. Mirrors rippled's
-// LedgerReplayer.h:55 MAX_PEERS_PER_LEDGER=2, used to prevent a
-// single peer from being overloaded (and to avoid silent-peer failure
-// modes where all 16 global slots land on the same silent peer).
-// Enforced at Acquire time — when the cap is reached Acquire returns
+// acquisitions issued to a SINGLE peer. This is goXRPL's own tuning
+// knob — rippled's LedgerReplayer.h has several similar-but-distinct
+// constants (MAX_NO_FEATURE_PEER_COUNT, SUB_TASK_MAX_TIMEOUTS) that
+// govern related but different concerns. The value 2 is chosen to
+// prevent a single peer from being overloaded and to avoid the
+// silent-peer failure mode where all DefaultMaxInFlightReplays=16
+// global slots land on one unresponsive peer. Enforced at Acquire
+// time — when the cap is reached Acquire returns
 // ErrPerPeerCapacityFull and the caller picks a different peer via
 // ReplayCapablePeersExcluding.
 const MaxPerPeerReplays = 2

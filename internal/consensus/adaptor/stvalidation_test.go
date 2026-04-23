@@ -442,3 +442,122 @@ func TestSignVerifyRoundTrip_AllOptionalFields(t *testing.T) {
 	assert.NoError(t, VerifyValidation(reparsed),
 		"signature must verify against the reparsed wire bytes — divergence here means serializer and signing preimage disagree on field order")
 }
+
+// TestParseSTValidation_CloseTime pins R6b.5c: the parser must
+// surface sfCloseTime onto Validation.CloseTime when present. Rippled
+// lists this field as soeOPTIONAL (STValidation.cpp:63); pre-R6b.5c
+// the Go parser silently discarded it, so RPC consumers that need
+// per-validation close times couldn't get them.
+func TestParseSTValidation_CloseTime(t *testing.T) {
+	// Craft a minimal validation wire payload with sfCloseTime set.
+	// We build it by hand (type UINT32, field 7) and append the
+	// minimal required fields around it so the parser doesn't bail
+	// on missing mandatory fields.
+	closeEpoch := uint32(946684800 + 123456789 - 946684800) // XRPL epoch seconds
+	var closeTimeBytes [4]byte
+	binary.BigEndian.PutUint32(closeTimeBytes[:], closeEpoch)
+
+	// Build a representative validation via the serializer, then
+	// inject sfCloseTime into its byte stream. Easiest: build a
+	// Validation with the struct field set and go through a full
+	// sign/serialize/reparse cycle below once that path learns to
+	// emit sfCloseTime. For now, verify the parser direction only
+	// by crafting the minimal wire frame.
+	//
+	// Minimal required validation: flags(UINT32 field 2),
+	// ledger_sequence(UINT32 field 6), signing_time(UINT32 field 9),
+	// ledger_hash(HASH256 field 1), node_id(VL(pubkey) field 3),
+	// signature(VL field 6). We include sfCloseTime (UINT32 field 7)
+	// in canonical position between ledger_sequence and
+	// signing_time.
+	buf := make([]byte, 0, 256)
+
+	// flags (type 2, field 2) — full validation
+	buf = appendFieldHeader(buf, typeUINT32, fieldFlags)
+	var flagsBytes [4]byte
+	binary.BigEndian.PutUint32(flagsBytes[:], vfFullValidation)
+	buf = append(buf, flagsBytes[:]...)
+
+	// ledger_sequence (type 2, field 6)
+	buf = appendFieldHeader(buf, typeUINT32, fieldLedgerSequence)
+	var seqBytes [4]byte
+	binary.BigEndian.PutUint32(seqBytes[:], 999)
+	buf = append(buf, seqBytes[:]...)
+
+	// close_time (type 2, field 7) — THE field under test
+	buf = appendFieldHeader(buf, typeUINT32, fieldCloseTime)
+	buf = append(buf, closeTimeBytes[:]...)
+
+	// signing_time (type 2, field 9)
+	buf = appendFieldHeader(buf, typeUINT32, fieldSigningTime)
+	var sigTimeBytes [4]byte
+	binary.BigEndian.PutUint32(sigTimeBytes[:], 946684800+1_000_000-946684800)
+	buf = append(buf, sigTimeBytes[:]...)
+
+	// ledger_hash (type 5, field 1) — must be non-zero to pass the
+	// required-fields check at the end of parseSTValidation.
+	buf = appendFieldHeader(buf, typeHash256, fieldLedgerHash)
+	ledgerHash := make([]byte, 32)
+	for i := range ledgerHash {
+		ledgerHash[i] = byte(i + 1)
+	}
+	buf = append(buf, ledgerHash...)
+
+	// signing_pubkey / node_id (type 7, field 3) — 33-byte secp256k1
+	nodeID := make([]byte, 33)
+	nodeID[0] = 0x02
+	buf = appendFieldHeader(buf, typeBlob, fieldSigningPubKey)
+	buf = append(buf, 33) // VL length
+	buf = append(buf, nodeID...)
+
+	// signature (type 7, field 6) — dummy; parser doesn't verify here
+	buf = appendFieldHeader(buf, typeBlob, fieldSignature)
+	buf = append(buf, 70)
+	buf = append(buf, make([]byte, 70)...)
+
+	v, err := parseSTValidation(buf)
+	require.NoError(t, err, "parser must accept a validation with sfCloseTime")
+	assert.False(t, v.CloseTime.IsZero(),
+		"CloseTime must be populated when sfCloseTime is present")
+	assert.Equal(t, int64(closeEpoch)+946684800, v.CloseTime.Unix(),
+		"CloseTime must decode back to the original XRPL epoch seconds")
+}
+
+// TestSFieldTypeCodes_MatchRippled pins R6b.4: every type constant in
+// stvalidation.go must match rippled's SField.h values. Off-by-N is
+// latent only until a validation field of that type is added; a future
+// field would then sort in the wrong (type<<16)|field position.
+//
+// Source of truth: rippled/include/xrpl/protocol/SField.h:65-87.
+func TestSFieldTypeCodes_MatchRippled(t *testing.T) {
+	expectations := map[string]struct {
+		got  int
+		want int
+	}{
+		"UINT16":    {typeUINT16, 1},
+		"UINT32":    {typeUINT32, 2},
+		"UINT64":    {typeUINT64, 3},
+		"HASH128":   {typeHash128, 4},
+		"HASH256":   {typeHash256, 5},
+		"AMOUNT":    {typeAmount, 6},
+		"VL":        {typeBlob, 7},
+		"ACCOUNT":   {typeAccountID, 8},
+		"OBJECT":    {typeSTObject, 14},
+		"ARRAY":     {typeSTArray, 15},
+		"UINT8":     {typeUINT8, 16},
+		"HASH160":   {typeHash160, 17},
+		"PATHSET":   {typePathSet, 18},
+		"VECTOR256": {typeVector256, 19},
+		"UINT96":    {typeUINT96, 20},
+		"UINT192":   {typeUINT192, 21},
+		"UINT384":   {typeUINT384, 22},
+		"UINT512":   {typeUINT512, 23},
+	}
+	for name, tc := range expectations {
+		t.Run(name, func(t *testing.T) {
+			if tc.got != tc.want {
+				t.Errorf("%s: got %d, want %d (see rippled SField.h:65-87)", name, tc.got, tc.want)
+			}
+		})
+	}
+}

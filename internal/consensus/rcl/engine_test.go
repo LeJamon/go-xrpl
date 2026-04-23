@@ -97,6 +97,9 @@ type mockAdaptor struct {
 
 	// Amendment vote stance for the R5.3 test. Empty means no vote.
 	amendmentVote [][32]byte
+
+	// Load fee for R6b.5b — emitted as sfLoadFee. Zero by default.
+	loadFee uint32
 }
 
 func newMockAdaptor() *mockAdaptor {
@@ -318,6 +321,12 @@ func (a *mockAdaptor) GetServerVersion() uint64 {
 		return 0x4000_0000_0000_0001
 	}
 	return a.serverVersion
+}
+
+func (a *mockAdaptor) GetLoadFee() uint32 {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.loadFee
 }
 
 func (a *mockAdaptor) GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, postXRPFees bool) {
@@ -1143,6 +1152,49 @@ func TestSendValidation_PopulatesCookieServerVersionFeeVote(t *testing.T) {
 	if v.BaseFee != 0 || v.ReserveBase != 0 || v.ReserveIncrement != 0 {
 		t.Errorf("legacy UINT triple must stay zero under postXRPFees=true: got (%d, %d, %d)",
 			v.BaseFee, v.ReserveBase, v.ReserveIncrement)
+	}
+}
+
+// TestSendValidation_PopulatesLoadFee pins R6b.5b: when the adaptor
+// reports a non-zero local load fee, sendValidation copies it into
+// the emitted validation's LoadFee field. Matches rippled
+// RCLConsensus.cpp:851 which always populates sfLoadFee under
+// HardenedValidations.
+func TestSendValidation_PopulatesLoadFee(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.loadFee = 12345
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xAA}, seq: 101})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	defer adaptor.mu.RUnlock()
+	if len(adaptor.validationsBroadcast) != 1 {
+		t.Fatalf("want one validation, got %d", len(adaptor.validationsBroadcast))
+	}
+	v := adaptor.validationsBroadcast[0]
+	if v.LoadFee != 12345 {
+		t.Errorf("LoadFee not populated from adaptor: got %d, want 12345", v.LoadFee)
 	}
 }
 

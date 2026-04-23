@@ -176,6 +176,13 @@ type Validation struct {
 	// SeenTime is when we received this validation.
 	SeenTime time.Time
 
+	// CloseTime is sfCloseTime from the ledger header the validator
+	// signed. Optional per rippled STValidation.cpp:63 (soeOPTIONAL)
+	// and populated only when the parser sees it. Not used by the
+	// engine today — surfaced for RPC consumers that need per-
+	// validation close times. Zero time.Time means "not present".
+	CloseTime time.Time
+
 	// Signature is the validator's signature.
 	Signature []byte
 

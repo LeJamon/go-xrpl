@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"sync"
 	"time"
@@ -628,10 +629,42 @@ func (a *Adaptor) GetTrustedValidators() []consensus.NodeID {
 	return result
 }
 
+// GetQuorum returns the current quorum requirement, recomputed on
+// every call to account for negative-UNL changes. Matches rippled's
+// ValidatorList.cpp:2061-2087 which recomputes quorum on every
+// UNL/negUNL change as ceil(0.8 * (trusted - disabled)). Pre-R6b.3
+// goXRPL froze quorum at Adaptor construction, so partial-UNL
+// outages slowed finality relative to rippled.
 func (a *Adaptor) GetQuorum() int {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.quorum
+	trusted := len(a.trustedValidators)
+	disabled := len(a.GetNegativeUNL())
+	return computeQuorum(trusted, disabled)
+}
+
+// computeQuorum is the pure arithmetic behind GetQuorum — extracted
+// for testability. Returns the minimum number of trusted, non-negUNL
+// validator signatures required to fully validate a ledger:
+//
+//   - standalone (trusted==0): 0 — no quorum gate.
+//   - effective > 0: ceil(0.8 * effective). Minimum 1 to stay live.
+//   - effective <= 0 with a non-empty trusted set (every validator
+//     on negUNL): math.MaxInt. We return an unreachable quorum so
+//     no validation count can ever fire checkFullValidation against
+//     a fully-disabled UNL. The alternative (quorum==1) would let
+//     any transient vote fire a spurious full-validation callback.
+func computeQuorum(trusted, disabled int) int {
+	if trusted == 0 {
+		return 0
+	}
+	effective := trusted - disabled
+	if effective <= 0 {
+		return math.MaxInt
+	}
+	q := (effective*4 + 4) / 5
+	if q < 1 {
+		q = 1
+	}
+	return q
 }
 
 // GetNegativeUNL reads the ltNEGATIVE_UNL SLE from the current validated
@@ -711,6 +744,15 @@ func (a *Adaptor) GetServerVersion() uint64 {
 // activates — mirrors rippled's FeeVoteImpl.cpp:120-192 hard gate.
 // Zero stance values mean "no vote" and the serializer will omit the
 // fields.
+// GetLoadFee returns the local load_fee advertised on outbound
+// validations. Today we have no feedback loop so we always return 0
+// — the serializer treats that as "omit", matching rippled's
+// behavior on a validator with minimum load. Future work can wire
+// this to a LoadFeeTrack-equivalent.
+func (a *Adaptor) GetLoadFee() uint32 {
+	return 0
+}
+
 func (a *Adaptor) GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, postXRPFees bool) {
 	return a.feeVote.BaseFee,
 		uint64(a.feeVote.ReserveBase),

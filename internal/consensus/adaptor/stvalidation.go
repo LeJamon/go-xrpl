@@ -8,7 +8,11 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 )
 
-// XRPL SField type codes.
+// XRPL SField type codes — mirror rippled
+// include/xrpl/protocol/SField.h:65-87. Off-by-2 for UINT384/UINT512
+// was latent (no validation field uses these types) but breaks the
+// (type<<16)|field canonical sort order for any future-added field
+// of those types.
 const (
 	typeUINT16    = 1
 	typeUINT32    = 2
@@ -24,8 +28,10 @@ const (
 	typeHash160   = 17
 	typePathSet   = 18
 	typeVector256 = 19
-	typeUINT384   = 20
-	typeUINT512   = 21
+	typeUINT96    = 20
+	typeUINT192   = 21
+	typeUINT384   = 22
+	typeUINT512   = 23
 )
 
 // Known field codes within their type groups.
@@ -146,6 +152,16 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 		case typeCode == typeUINT32 && fieldCode == fieldSigningTime:
 			epoch := binary.BigEndian.Uint32(fieldData)
 			v.SignTime = xrplEpochToTime(epoch)
+
+		case typeCode == typeUINT32 && fieldCode == fieldCloseTime:
+			// sfCloseTime is optional per rippled
+			// STValidation.cpp:63 — some validators omit it.
+			// Pre-R6b.5c the parser silently discarded this field;
+			// now we surface it on the Validation struct for RPC
+			// consumers. Does not affect signature verification
+			// (SigningData still captures the raw bytes).
+			epoch := binary.BigEndian.Uint32(fieldData)
+			v.CloseTime = xrplEpochToTime(epoch)
 
 		case typeCode == typeUINT32 && fieldCode == fieldLoadFee:
 			v.LoadFee = binary.BigEndian.Uint32(fieldData)

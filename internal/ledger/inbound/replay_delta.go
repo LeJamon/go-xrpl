@@ -1,6 +1,7 @@
 package inbound
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes"
 	"github.com/LeJamon/goXRPLd/crypto/common"
@@ -575,6 +577,19 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 
 	engine := tx.NewEngine(child, engineCfg)
 
+	// R6b.1: on a flag ledger with featureNegativeUNL, apply pending
+	// ValidatorToDisable / ValidatorToReEnable transitions BEFORE
+	// applying any txs. Mirrors rippled BuildLedger.cpp:50-53. Without
+	// this, every 256th ledger's replay-delta produces a wrong
+	// AccountHash on networks with featureNegativeUNL and falls back
+	// to legacy catchup. seq%256==0 is rippled's isFlagLedger check
+	// (Ledger.cpp:946-958).
+	if child.Sequence()%256 == 0 && engineCfg.Rules != nil && engineCfg.Rules.Enabled(amendment.FeatureNegativeUNL) {
+		if err := child.UpdateNegativeUNL(); err != nil {
+			return nil, fmt.Errorf("flag-ledger updateNegativeUNL: %w", err)
+		}
+	}
+
 	// Replay each tx in TransactionIndex order. The engine assigns
 	// metadata.TransactionIndex internally from its txCount counter,
 	// matching rippled's OpenView::txCount() behavior — so we don't
@@ -587,6 +602,28 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 		txn.SetRawBytes(dtx.TxBytes)
 
 		result := engine.Apply(txn)
+
+		// R6b.2a: compare engine-generated meta against the peer-supplied
+		// meta so operators can see when our engine drifts from rippled's
+		// AffectedNodes semantics. We still INSTALL peer meta (below) for
+		// byte-parity of the tx map root with header.TxHash — the log is
+		// pure telemetry for now. A later round can gate adoption on this
+		// comparison and fall back to legacy on mismatch, but today we
+		// don't have enough data on goXRPL-vs-rippled meta drift rates to
+		// risk catchup regressions. Rippled's BuildLedger.cpp:244-247
+		// uses engine meta exclusively — that's the end-state we want.
+		if result.Metadata != nil && len(dtx.MetaBytes) > 0 {
+			if engineMeta, mErr := tx.SerializeMetadata(result.Metadata); mErr == nil {
+				if len(engineMeta) > 0 && !bytes.Equal(engineMeta, dtx.MetaBytes) {
+					r.logger.Warn("replay tx: engine-generated meta differs from peer meta — engine may diverge from rippled AffectedNodes semantics",
+						"tx", fmt.Sprintf("%x", dtx.Hash[:8]),
+						"engine_meta_len", len(engineMeta),
+						"peer_meta_len", len(dtx.MetaBytes),
+					)
+				}
+			}
+		}
+
 		switch {
 		case result.Result.IsSuccess(), result.Result.IsTec():
 			// Both produce ledger entries and consume a TransactionIndex.

@@ -1632,6 +1632,11 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 		Full:          full,
 		Cookie:        cookie,
 		ServerVersion: serverVersion,
+		// R6b.5b: emit local load_fee (sfLoadFee) — rippled
+		// RCLConsensus.cpp:851 always populates this under
+		// HardenedValidations. Zero means "no load info",
+		// serializer omits the field.
+		LoadFee: e.adaptor.GetLoadFee(),
 	}
 
 	// Fee vote + amendment vote emission is gated on isVotingLedger.

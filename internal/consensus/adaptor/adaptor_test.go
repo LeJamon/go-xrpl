@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -69,6 +70,38 @@ func TestAdaptorCreation(t *testing.T) {
 	validators := a.GetTrustedValidators()
 	assert.Len(t, validators, 1)
 	assert.Equal(t, key, validators[0])
+}
+
+// TestComputeQuorum pins R6b.3 dynamic quorum math. Mirrors
+// rippled's ValidatorList.cpp:2061-2087 ceil(0.8 * (trusted - disabled)).
+// Pre-R6b.3 quorum was frozen at ceil(0.8 * trusted) at Adaptor
+// construction and never recomputed, so partial-UNL outages slowed
+// finality vs. rippled.
+func TestComputeQuorum(t *testing.T) {
+	tests := []struct {
+		name     string
+		trusted  int
+		disabled int
+		want     int
+	}{
+		{"standalone", 0, 0, 0},
+		{"single_validator_no_negunl", 1, 0, 1},
+		{"five_validators_no_negunl", 5, 0, 4},
+		{"five_validators_two_negunl", 5, 2, 3},   // ceil(0.8*3) = 3
+		{"five_validators_four_negunl", 5, 4, 1},  // ceil(0.8*1) = 1
+		{"ten_validators_three_negunl", 10, 3, 6}, // ceil(0.8*7) = 6
+		// Edge: all trusted on negUNL → unreachable quorum.
+		{"all_disabled", 5, 5, math.MaxInt},
+		// More disabled than trusted (shouldn't happen but must be safe)
+		{"over_disabled", 5, 7, math.MaxInt},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := computeQuorum(tc.trusted, tc.disabled)
+			assert.Equal(t, tc.want, got,
+				"computeQuorum(trusted=%d, disabled=%d)", tc.trusted, tc.disabled)
+		})
+	}
 }
 
 func TestAdaptorNonValidator(t *testing.T) {

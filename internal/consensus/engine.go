@@ -216,6 +216,13 @@ type Adaptor interface {
 	// means "not included" and the serializer will skip the field.
 	GetServerVersion() uint64
 
+	// GetLoadFee returns the local load_fee the validator advertises
+	// on every outbound validation (sfLoadFee). Rippled emits this
+	// under HardenedValidations from the local LoadFeeTrack —
+	// RCLConsensus.cpp:851. Adaptors without a load-feedback loop
+	// should return 0; the serializer treats 0 as omit.
+	GetLoadFee() uint32
+
 	// GetFeeVote returns this validator's fee-vote stance for emission
 	// on every validation. postXRPFees reflects the parent ledger's
 	// rules: when true the engine populates the AMOUNT triple

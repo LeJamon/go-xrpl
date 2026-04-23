@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
+	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/shamap"
@@ -512,6 +514,92 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 	l.state = StateClosed
 
 	return nil
+}
+
+// UpdateNegativeUNL applies pending ValidatorToDisable /
+// ValidatorToReEnable transitions on the NegativeUNL SLE, as part of
+// flag-ledger processing. Mirrors rippled Ledger.cpp:752-799.
+//
+// On a flag ledger (seq % 256 == 0), rippled processes the negUNL
+// transitions BEFORE applying any transactions. goXRPL previously
+// skipped this step on the replay-delta path — every 256th ledger
+// would fail the final hash check on networks with
+// featureNegativeUNL and fall back to legacy catchup. R6b.1 adds
+// this method; the replay-delta Apply path calls it for flag
+// ledgers.
+//
+// Safe to call on any ledger. No-op when there's no NegativeUNL SLE
+// or when neither ValidatorToDisable nor ValidatorToReEnable is
+// set.
+//
+// Caller must NOT hold l.mu — this method acquires it internally.
+func (l *Ledger) UpdateNegativeUNL() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.state != StateOpen {
+		return ErrInvalidState
+	}
+
+	// Read current NegativeUNL SLE.
+	key := keylet.NegativeUNL().Key
+	item, exists, err := l.stateMap.Get(key)
+	if err != nil || !exists || item == nil {
+		return nil // no SLE → nothing to do
+	}
+	data := item.Data()
+	if len(data) == 0 {
+		return nil
+	}
+
+	sle, err := pseudo.ParseNegativeUNLSLE(data)
+	if err != nil {
+		return fmt.Errorf("parse NegativeUNL SLE: %w", err)
+	}
+
+	hasToDisable := len(sle.ValidatorToDisable) > 0
+	hasToReEnable := len(sle.ValidatorToReEnable) > 0
+	if !hasToDisable && !hasToReEnable {
+		return nil
+	}
+
+	// Filter DisabledValidators: drop any entry matching
+	// ValidatorToReEnable. Matches rippled Ledger.cpp:765-776.
+	if hasToReEnable {
+		filtered := sle.DisabledValidators[:0]
+		for _, dv := range sle.DisabledValidators {
+			if bytes.Equal(dv, sle.ValidatorToReEnable) {
+				continue
+			}
+			filtered = append(filtered, dv)
+		}
+		sle.DisabledValidators = filtered
+	}
+
+	// Append ValidatorToDisable (if any) as a new DisabledValidators
+	// entry. Rippled also stamps the current ledger seq as
+	// sfFirstLedgerSequence; goXRPL's NegativeUNLSLE today flattens
+	// DisabledValidators to a [][]byte of pubkeys — the sfFirstLedger
+	// stamping is a SLE serialization concern for a follow-up.
+	if hasToDisable {
+		sle.DisabledValidators = append(sle.DisabledValidators, sle.ValidatorToDisable)
+	}
+
+	// Clear the transition fields.
+	sle.ValidatorToDisable = nil
+	sle.ValidatorToReEnable = nil
+
+	// Serialize + write back (or erase if the SLE is now empty).
+	if len(sle.DisabledValidators) == 0 {
+		// Equivalent to rippled's rawErase(sle) at Ledger.cpp:797.
+		return l.stateMap.Delete(key)
+	}
+
+	newData, err := pseudo.SerializeNegativeUNLSLE(sle)
+	if err != nil {
+		return fmt.Errorf("serialize updated NegativeUNL SLE: %w", err)
+	}
+	return l.stateMap.Put(key, newData)
 }
 
 // updateSkipList updates the LedgerHashes SLE(s) in the state map.
