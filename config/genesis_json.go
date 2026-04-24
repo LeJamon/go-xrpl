@@ -183,7 +183,6 @@ func (g *GenesisJSON) ToGenesisConfig() (*GenesisConfig, error) {
 
 	config := &GenesisConfig{}
 
-	// Parse total coins
 	totalCoins := g.Ledger.TotalCoins
 	if totalCoins == "" {
 		totalCoins = g.Ledger.TotalCoinsAlt
@@ -195,14 +194,11 @@ func (g *GenesisJSON) ToGenesisConfig() (*GenesisConfig, error) {
 		}
 	}
 
-	// Parse close time resolution
 	if g.Ledger.CloseTimeResolution > 0 {
 		config.CloseTimeResolution = uint32(g.Ledger.CloseTimeResolution)
 	}
 
-	// Parse fee settings
 	if state.FeeSettings != nil {
-		// Parse BaseFee from hex string
 		baseFee, err := parseHexFee(state.FeeSettings.BaseFee)
 		if err != nil {
 			return nil, fmt.Errorf("invalid BaseFee: %w", err)
@@ -212,7 +208,6 @@ func (g *GenesisJSON) ToGenesisConfig() (*GenesisConfig, error) {
 		config.ReserveIncrement = drops.NewXRPAmount(int64(state.FeeSettings.ReserveIncrement))
 	}
 
-	// Parse amendments
 	if state.Amendments != nil && len(state.Amendments.Amendments) > 0 {
 		config.Amendments = make([][32]byte, 0, len(state.Amendments.Amendments))
 		for _, hexHash := range state.Amendments.Amendments {
@@ -224,7 +219,6 @@ func (g *GenesisJSON) ToGenesisConfig() (*GenesisConfig, error) {
 		}
 	}
 
-	// Parse accounts
 	if len(state.Accounts) > 0 {
 		config.InitialAccounts = make([]InitialAccountConfig, 0, len(state.Accounts))
 		for _, acc := range state.Accounts {
@@ -301,7 +295,6 @@ func (g *GenesisJSON) Validate() error {
 		totalBalance += balance
 	}
 
-	// Check total balance matches total coins
 	if totalCoins != "" {
 		total, _ := strconv.ParseUint(totalCoins, 10, 64)
 		if totalBalance != total {
@@ -314,7 +307,6 @@ func (g *GenesisJSON) Validate() error {
 
 // parseHexFee parses a hex fee string (e.g., "A" or "0A") to uint64
 func parseHexFee(hexStr string) (uint64, error) {
-	// Remove 0x prefix if present
 	hexStr = strings.TrimPrefix(hexStr, "0x")
 	hexStr = strings.TrimPrefix(hexStr, "0X")
 

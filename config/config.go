@@ -237,13 +237,11 @@ func (c *Config) GetWebSocketPorts() map[string]PortConfig {
 
 // containsProtocol checks if a protocol string contains a specific protocol
 func containsProtocol(protocols, target string) bool {
-	// Simple implementation - could be enhanced for more complex parsing
 	return contains(protocols, target)
 }
 
 // contains checks if a string contains a substring (case-insensitive)
 func contains(s, substr string) bool {
-	// Simple case-insensitive contains check
 	for i := 0; i <= len(s)-len(substr); i++ {
 		if s[i:i+len(substr)] == substr {
 			return true

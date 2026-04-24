@@ -197,7 +197,6 @@ func (p *PortConfig) validateProtocols() error {
 		}
 	}
 
-	// Check for invalid combinations
 	if hasWebSocket && hasNonWebSocket {
 		return fmt.Errorf("websocket and non-websocket protocols cannot be combined on the same port")
 	}

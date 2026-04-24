@@ -20,7 +20,6 @@ type VLConfig struct {
 
 // Validate performs validation on the crawl configuration
 func (c *CrawlConfig) Validate() error {
-	// Validate flag values (should be 0 or 1)
 	if c.Overlay != 0 && c.Overlay != 1 {
 		return fmt.Errorf("crawl overlay must be 0 or 1, got %d", c.Overlay)
 	}
@@ -39,7 +38,6 @@ func (c *CrawlConfig) Validate() error {
 
 // Validate performs validation on the VL configuration
 func (v *VLConfig) Validate() error {
-	// Validate enable flag
 	if v.Enable != 0 && v.Enable != 1 {
 		return fmt.Errorf("vl enable must be 0 or 1, got %d", v.Enable)
 	}

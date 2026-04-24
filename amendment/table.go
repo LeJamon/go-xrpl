@@ -110,22 +110,18 @@ func (t *AmendmentTable) GetDesired() [][32]byte {
 	result := make([][32]byte, 0)
 
 	for _, f := range AllFeatures() {
-		// Skip if already enabled
 		if t.enabled[f.ID] {
 			continue
 		}
 
-		// Skip if not supported
 		if f.Supported != SupportedYes {
 			continue
 		}
 
-		// Skip if vetoed
 		if t.vetoed[f.ID] {
 			continue
 		}
 
-		// Skip obsolete features
 		if f.Vote == VoteObsolete {
 			continue
 		}

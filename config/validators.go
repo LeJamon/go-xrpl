@@ -16,28 +16,24 @@ type ValidatorsConfig struct {
 
 // Validate performs validation on the validators configuration
 func (v *ValidatorsConfig) Validate() error {
-	// Validate individual validator keys
 	for i, validator := range v.Validators {
 		if err := validateValidatorKey(validator); err != nil {
 			return fmt.Errorf("invalid validator at index %d: %w", i, err)
 		}
 	}
 
-	// Validate validator list sites
 	for i, site := range v.ValidatorListSites {
 		if err := validateValidatorListSite(site); err != nil {
 			return fmt.Errorf("invalid validator_list_site at index %d: %w", i, err)
 		}
 	}
 
-	// Validate validator list keys
 	for i, key := range v.ValidatorListKeys {
 		if err := validateValidatorListKey(key); err != nil {
 			return fmt.Errorf("invalid validator_list_key at index %d: %w", i, err)
 		}
 	}
 
-	// Validate threshold
 	if v.ValidatorListThreshold < 0 {
 		return fmt.Errorf("validator_list_threshold must be non-negative, got %d", v.ValidatorListThreshold)
 	}
@@ -197,12 +193,10 @@ func ParseValidatorsTxt(content string) (*ValidatorsConfig, error) {
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 
-		// Skip empty lines and comments
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 
-		// Check for section headers
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
 			currentSection = strings.Trim(line, "[]")
 			continue
@@ -217,7 +211,6 @@ func ParseValidatorsTxt(content string) (*ValidatorsConfig, error) {
 		case "validator_list_keys":
 			config.ValidatorListKeys = append(config.ValidatorListKeys, line)
 		case "validator_list_threshold":
-			// This is typically just a number, parse it
 			var threshold int
 			if _, err := fmt.Sscanf(line, "%d", &threshold); err == nil {
 				config.ValidatorListThreshold = threshold

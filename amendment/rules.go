@@ -165,8 +165,6 @@ func (b *RulesBuilder) Build() *Rules {
 	return NewRules(enabledIDs)
 }
 
-// Helper functions for common amendment checks
-
 // FlowEnabled returns true if the Flow amendment is enabled.
 func (r *Rules) FlowEnabled() bool {
 	return r.Enabled(FeatureFlow)

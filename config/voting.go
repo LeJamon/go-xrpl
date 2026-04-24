@@ -12,17 +12,14 @@ type VotingConfig struct {
 
 // Validate performs validation on the voting configuration
 func (v *VotingConfig) Validate() error {
-	// Validate reference_fee
 	if v.ReferenceFee < 0 {
 		return fmt.Errorf("reference_fee must be non-negative, got %d", v.ReferenceFee)
 	}
 
-	// Validate account_reserve
 	if v.AccountReserve < 0 {
 		return fmt.Errorf("account_reserve must be non-negative, got %d", v.AccountReserve)
 	}
 
-	// Validate owner_reserve
 	if v.OwnerReserve < 0 {
 		return fmt.Errorf("owner_reserve must be non-negative, got %d", v.OwnerReserve)
 	}

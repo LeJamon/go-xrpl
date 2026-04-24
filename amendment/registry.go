@@ -8,14 +8,12 @@ import (
 	"sync"
 )
 
-// Global feature registry
 var (
 	registryMu     sync.RWMutex
 	features       = make(map[[32]byte]*Feature)
 	featuresByName = make(map[string]*Feature)
 )
 
-// Feature IDs - computed at init time
 var (
 	// Active features (newest first, matching rippled order)
 	FeatureFixDirectoryLimit             [32]byte
@@ -125,7 +123,6 @@ var (
 
 func init() {
 	// Register all features matching rippled's features.macro
-	// Active features (newest first)
 	registerFix("fixDirectoryLimit", SupportedYes, VoteDefaultNo, &FeatureFixDirectoryLimit)
 	registerFix("fixPriceOracleOrder", SupportedNo, VoteDefaultNo, &FeatureFixPriceOracleOrder)
 	registerFix("fixMPTDeliveredAmount", SupportedNo, VoteDefaultNo, &FeatureFixMPTDeliveredAmount)

@@ -157,12 +157,10 @@ func (n *NodeDBConfig) GetType() string {
 	}
 }
 
-// GetCacheSize returns cache size
 func (n *NodeDBConfig) GetCacheSize() int {
 	return n.CacheSize
 }
 
-// GetCacheAge returns cache age
 func (n *NodeDBConfig) GetCacheAge() int {
 	return n.CacheAge
 }
@@ -173,37 +171,30 @@ func (n *NodeDBConfig) ShouldCreateCache() bool {
 	return n.OnlineDelete == 0 && (n.CacheSize != 0 || n.CacheAge != 0)
 }
 
-// GetEarliestSeq returns the earliest sequence
 func (n *NodeDBConfig) GetEarliestSeq() int {
 	return n.EarliestSeq
 }
 
-// IsOnlineDeleteEnabled returns true if online delete is enabled
 func (n *NodeDBConfig) IsOnlineDeleteEnabled() bool {
 	return n.OnlineDelete > 0
 }
 
-// IsAdvisoryDeleteEnabled returns true if advisory delete is enabled
 func (n *NodeDBConfig) IsAdvisoryDeleteEnabled() bool {
 	return n.AdvisoryDelete == 1
 }
 
-// GetDeleteBatch returns delete batch size
 func (n *NodeDBConfig) GetDeleteBatch() int {
 	return n.DeleteBatch
 }
 
-// GetBackOffMilliseconds returns back off time
 func (n *NodeDBConfig) GetBackOffMilliseconds() int {
 	return n.BackOffMilliseconds
 }
 
-// GetAgeThresholdSeconds returns age threshold
 func (n *NodeDBConfig) GetAgeThresholdSeconds() int {
 	return n.AgeThresholdSeconds
 }
 
-// GetRecoveryWaitSeconds returns recovery wait time
 func (n *NodeDBConfig) GetRecoveryWaitSeconds() int {
 	return n.RecoveryWaitSeconds
 }
@@ -220,12 +211,10 @@ func (s *SQLiteConfig) GetEffectiveSettings() (journalMode, synchronous, tempSto
 	return s.JournalMode, s.Synchronous, s.TempStore
 }
 
-// GetPageSize returns page size
 func (s *SQLiteConfig) GetPageSize() int {
 	return s.PageSize
 }
 
-// GetJournalSizeLimit returns journal size limit
 func (s *SQLiteConfig) GetJournalSizeLimit() int {
 	return s.JournalSizeLimit
 }

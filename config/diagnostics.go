@@ -110,7 +110,6 @@ func isValidAddressPort(addr string) bool {
 		return false // No colon found
 	}
 
-	// Check if port part is numeric
 	portStr := addr[lastColon+1:]
 	if portStr == "" {
 		return false

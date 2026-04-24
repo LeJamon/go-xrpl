@@ -184,7 +184,6 @@ journal_size_limit = 1582080
 	err := os.WriteFile(mainConfigPath, []byte(configContent), 0644)
 	require.NoError(t, err)
 
-	// Create validators file in the same dir
 	validatorsContent := `
 validator_list_sites = ["https://test.example.com"]
 validator_list_keys = ["ED264807102805220DA0F312E71FC2C69E1552C9C5790F6C25E3729DEB573D58"]

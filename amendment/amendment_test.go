@@ -48,13 +48,11 @@ func TestFeatureID(t *testing.T) {
 }
 
 func TestFeatureRegistry(t *testing.T) {
-	// Check that features are registered
 	count := FeatureCount()
 	if count < 80 {
 		t.Errorf("Expected at least 80 features, got %d", count)
 	}
 
-	// Check Flow feature exists
 	flow := GetFeatureByName("Flow")
 	if flow == nil {
 		t.Fatal("Flow feature not found")
@@ -69,7 +67,6 @@ func TestFeatureRegistry(t *testing.T) {
 		t.Error("Flow should be VoteDefaultYes")
 	}
 
-	// Check AMM feature exists
 	amm := GetFeatureByName("AMM")
 	if amm == nil {
 		t.Fatal("AMM feature not found")
@@ -78,7 +75,6 @@ func TestFeatureRegistry(t *testing.T) {
 		t.Error("AMM should be VoteDefaultNo")
 	}
 
-	// Check retired feature
 	multiSign := GetFeatureByName("MultiSign")
 	if multiSign == nil {
 		t.Fatal("MultiSign feature not found")
@@ -87,7 +83,6 @@ func TestFeatureRegistry(t *testing.T) {
 		t.Error("MultiSign should be retired")
 	}
 
-	// Check obsolete feature
 	nftV1 := GetFeatureByName("NonFungibleTokensV1")
 	if nftV1 == nil {
 		t.Fatal("NonFungibleTokensV1 feature not found")
@@ -130,12 +125,10 @@ func TestAmendmentTable(t *testing.T) {
 		t.Error("Flow should be enabled after Enable()")
 	}
 
-	// Check support
 	if !table.IsSupported(FeatureFlow) {
 		t.Error("Flow should be supported")
 	}
 
-	// Check enabled count
 	if table.EnabledCount() != 1 {
 		t.Errorf("Expected 1 enabled, got %d", table.EnabledCount())
 	}
