@@ -299,7 +299,7 @@ func TestManifest_Revoked_WithEphemeral_Rejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	decoded["Sequence"] = uint32(manifest.RevokedSequence)
+	decoded["Sequence"] = manifest.RevokedSequence
 	corruptedHex, err := binarycodec.Encode(decoded)
 	if err != nil {
 		t.Fatalf("re-encode: %v", err)
