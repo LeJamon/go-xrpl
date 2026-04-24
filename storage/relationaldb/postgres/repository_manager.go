@@ -111,6 +111,13 @@ func (rm *RepositoryManager) System() relationaldb.SystemRepository {
 	return rm.systemRepo
 }
 
+// Validation returns the validation archive repository. Stubbed nil until
+// the PostgreSQL impl lands — callers gating on a non-nil value treat the
+// archive as disabled.
+func (rm *RepositoryManager) Validation() relationaldb.ValidationRepository {
+	return nil
+}
+
 func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relationaldb.TransactionContext) error) error {
 	tx, err := rm.systemRepo.Begin(ctx)
 	if err != nil {

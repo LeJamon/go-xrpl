@@ -176,6 +176,7 @@ type RepositoryManager interface {
 	Ledger() LedgerRepository
 	Transaction() TransactionRepository
 	AccountTransaction() AccountTransactionRepository
+	Validation() ValidationRepository
 	System() SystemRepository
 
 	// Connection management
