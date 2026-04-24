@@ -1,4 +1,3 @@
-// TODO missing sle method related to payment chanel
 package paychan
 
 import (
@@ -40,12 +39,10 @@ func NewPaymentChannelFund(account, channel string, amount tx.Amount) *PaymentCh
 	}
 }
 
-// TxType returns the transaction type
 func (p *PaymentChannelFund) TxType() tx.Type {
 	return tx.TypePaymentChannelFund
 }
 
-// Validate validates the PaymentChannelFund transaction
 // Reference: rippled PayChan.cpp PayChanFund::preflight()
 func (p *PaymentChannelFund) Validate() error {
 	if err := p.BaseTx.Validate(); err != nil {
@@ -95,7 +92,6 @@ func (p *PaymentChannelFund) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeaturePayChan}
 }
 
-// Apply applies a PaymentChannelFund transaction
 // Reference: rippled PayChan.cpp PayChanFund::doApply()
 func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
 	ctx.Log.Trace("payment channel fund apply",

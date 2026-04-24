@@ -37,12 +37,10 @@ func NewNFTokenAcceptOffer(account string) *NFTokenAcceptOffer {
 	}
 }
 
-// TxType returns the transaction type
 func (n *NFTokenAcceptOffer) TxType() tx.Type {
 	return tx.TypeNFTokenAcceptOffer
 }
 
-// Validate validates the NFTokenAcceptOffer transaction
 // Reference: rippled NFTokenAcceptOffer.cpp preflight
 func (n *NFTokenAcceptOffer) Validate() error {
 	if err := n.BaseTx.Validate(); err != nil {
@@ -102,7 +100,6 @@ func (n *NFTokenAcceptOffer) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureNonFungibleTokensV1}
 }
 
-// Apply applies the NFTokenAcceptOffer transaction to the ledger.
 // Reference: rippled NFTokenAcceptOffer.cpp preclaim + doApply
 // IMPORTANT: Check order must match rippled's preclaim exactly:
 //  1. Load offers (existence, expiration, negative amount)

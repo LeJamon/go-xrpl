@@ -193,7 +193,6 @@ func checkNFTTrustlineDeepFrozen(view tx.LedgerView, accountID [20]byte, currenc
 		return tx.TesSUCCESS
 	}
 
-	// Check issuer exists
 	issuerKey := keylet.Account(issuerID)
 	issuerData, err := view.Read(issuerKey)
 	if err != nil || issuerData == nil {
@@ -261,7 +260,6 @@ func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) tx.
 	}
 
 	// Third party: sender → issuer (with transfer rate) and issuer → receiver
-	// Get transfer rate from issuer
 	transferRate := getTransferRate(view, issuerID)
 	if transferRate != 0 && transferRate != qualityOne {
 		// Charge sender the amount * transferRate / QUALITY_ONE
@@ -499,7 +497,6 @@ func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, a
 		return tx.TefINTERNAL
 	}
 
-	// Set balance based on sender's position
 	// Convention: positive balance = LOW account holds tokens
 	// When sender is HIGH (paying LOW): LOW receives → balance = +amount
 	// When sender is LOW (paying HIGH): HIGH receives → balance = -amount

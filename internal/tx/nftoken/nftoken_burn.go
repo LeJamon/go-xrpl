@@ -37,19 +37,16 @@ func NewNFTokenBurn(account, nftokenID string) *NFTokenBurn {
 	}
 }
 
-// TxType returns the transaction type
 func (n *NFTokenBurn) TxType() tx.Type {
 	return tx.TypeNFTokenBurn
 }
 
-// Validate validates the NFTokenBurn transaction
 // Reference: rippled NFTokenBurn.cpp preflight
 func (n *NFTokenBurn) Validate() error {
 	if err := n.BaseTx.Validate(); err != nil {
 		return err
 	}
 
-	// Check for invalid flags
 	if n.GetFlags()&^tfBurnNFToken != 0 {
 		return tx.Errorf(tx.TemINVALID_FLAG, "invalid NFTokenBurn flags")
 	}
@@ -71,7 +68,6 @@ func (n *NFTokenBurn) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureNonFungibleTokensV1}
 }
 
-// Apply applies the NFTokenBurn transaction to the ledger.
 // Reference: rippled NFTokenBurn.cpp doApply
 func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 	ctx.Log.Trace("nftoken burn apply",
@@ -150,7 +146,6 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 		return result
 	}
 
-	// Update owner count for pages removed
 	if ownerID != accountID {
 		ownerKey := keylet.Account(ownerID)
 		ownerData, err := ctx.View.Read(ownerKey)
@@ -198,7 +193,6 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Delete associated buy and sell offers
 	// Reference: rippled NFTokenBurn.cpp:108-139
 	selfDeleted := 0
 	if !fixV1_2 {

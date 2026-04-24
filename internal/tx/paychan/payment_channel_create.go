@@ -53,12 +53,10 @@ func NewPaymentChannelCreate(account, destination string, amount tx.Amount, sett
 	}
 }
 
-// TxType returns the transaction type
 func (p *PaymentChannelCreate) TxType() tx.Type {
 	return tx.TypePaymentChannelCreate
 }
 
-// Validate validates the PaymentChannelCreate transaction
 // Reference: rippled PayChan.cpp PayChanCreate::preflight()
 func (p *PaymentChannelCreate) Validate() error {
 	if err := p.BaseTx.Validate(); err != nil {
@@ -132,7 +130,6 @@ func (p *PaymentChannelCreate) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeaturePayChan}
 }
 
-// Apply applies a PaymentChannelCreate transaction
 // Reference: rippled PayChan.cpp PayChanCreate::doApply()
 func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	ctx.Log.Trace("payment channel create apply",
@@ -211,7 +208,6 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Create pay channel
 	accountID, _ := state.DecodeAccountID(p.Account)
 	sequence := p.GetCommon().SeqProxy()
 	channelKey := keylet.PayChannel(accountID, destID, sequence)

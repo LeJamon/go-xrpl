@@ -29,12 +29,10 @@ func NewOfferCancel(account string, offerSequence uint32) *OfferCancel {
 	}
 }
 
-// TxType returns the transaction type
 func (o *OfferCancel) TxType() tx.Type {
 	return tx.TypeOfferCancel
 }
 
-// Validate validates the OfferCancel transaction
 // Reference: rippled CancelOffer.cpp preflight()
 func (o *OfferCancel) Validate() error {
 	if err := o.BaseTx.Validate(); err != nil {
@@ -53,7 +51,6 @@ func (o *OfferCancel) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(o)
 }
 
-// Apply applies an OfferCancel transaction to the ledger state.
 // Reference: rippled CancelOffer.cpp preclaim() + doApply()
 func (o *OfferCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Preclaim: Account sequence must be strictly greater than OfferSequence
@@ -96,7 +93,6 @@ func (o *OfferCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// Create SLE for the offer for metadata tracking
 	sleOffer := state.NewSLEOffer(offerKey.Key)
 	sleOffer.LoadFromLedgerOffer(ledgerOffer)
 	sleOffer.MarkAsDeleted()
@@ -121,12 +117,10 @@ func (o *OfferCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefBAD_LEDGER
 	}
 
-	// Delete the offer from ledger
 	if err := ctx.View.Erase(offerKey); err != nil {
 		return tx.TefINTERNAL
 	}
 
-	// Decrement owner count
 	if ctx.Account.OwnerCount > 0 {
 		ctx.Account.OwnerCount--
 	}

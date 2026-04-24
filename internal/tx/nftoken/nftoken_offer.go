@@ -32,11 +32,9 @@ func deleteTokenOffer(view tx.LedgerView, offerKL keylet.Keylet) error {
 		return err
 	}
 
-	// Remove from owner's directory
 	ownerDirKey := keylet.OwnerDir(offer.Owner)
 	state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
 
-	// Remove from NFTBuys or NFTSells directory
 	isSellOffer := offer.Flags&lsfSellNFToken != 0
 	var tokenDirKey keylet.Keylet
 	if isSellOffer {
@@ -113,11 +111,9 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 			adjustOwnerCountViaView(view, offer.Owner, -1)
 		}
 
-		// Remove from owner directory
 		ownerDirKey := keylet.OwnerDir(offer.Owner)
 		state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
 
-		// Erase the offer
 		view.Erase(offerKL)
 
 		result.TotalDeleted++
@@ -192,10 +188,8 @@ func tokenOfferCreateApply(
 		return tx.TecINSUFFICIENT_RESERVE
 	}
 
-	// Create offer key
 	offerKey := keylet.NFTokenOffer(accountID, seqProxy)
 
-	// Insert into owner's directory
 	ownerDirKey := keylet.OwnerDir(accountID)
 	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, offerKey.Key, nil)
 	if err != nil {
@@ -211,7 +205,6 @@ func tokenOfferCreateApply(
 	}
 	offerNode := tokenDirResult.Page
 
-	// Serialize the offer
 	flags := NFTokenCreateOfferFlagSellNFToken // Always a sell offer
 
 	offerData, err := serializeNFTokenOfferRaw(
@@ -228,7 +221,6 @@ func tokenOfferCreateApply(
 		return tx.TefINTERNAL
 	}
 
-	// Increase owner count
 	ctx.Account.OwnerCount++
 
 	return tx.TesSUCCESS

@@ -95,7 +95,6 @@ func NewOfferCreate(account string, takerGets, takerPays tx.Amount) *OfferCreate
 	}
 }
 
-// TxType returns the transaction type
 func (o *OfferCreate) TxType() tx.Type {
 	return tx.TypeOfferCreate
 }
@@ -109,7 +108,6 @@ func (o *OfferCreate) Validate() error {
 		return err
 	}
 
-	// Check for invalid flags
 	// Reference: rippled CreateOffer.cpp preflight() lines 61-65
 	flags := o.GetFlags()
 	if flags&tfOfferCreateMask != 0 {
@@ -130,13 +128,11 @@ func (o *OfferCreate) Validate() error {
 		return tx.Errorf(tx.TemINVALID_FLAG, "tfHybrid requires DomainID")
 	}
 
-	// Check expiration
 	// Reference: lines 82-88
 	if o.Expiration != nil && *o.Expiration == 0 {
 		return tx.Errorf(tx.TemBAD_EXPIRATION, "expiration cannot be zero")
 	}
 
-	// Check OfferSequence
 	// Reference: lines 90-95
 	if o.OfferSequence != nil && *o.OfferSequence == 0 {
 		return tx.Errorf(tx.TemBAD_SEQUENCE, "OfferSequence cannot be zero")
@@ -154,7 +150,6 @@ func (o *OfferCreate) Validate() error {
 		return tx.Errorf(tx.TemBAD_OFFER, "TakerGets is required")
 	}
 
-	// Check amounts are present and valid
 	// Reference: lines 97-101
 	if !isLegalNetAmount(saTakerPays) || !isLegalNetAmount(saTakerGets) {
 		return tx.Errorf(tx.TemBAD_AMOUNT, "invalid amount")
@@ -172,7 +167,6 @@ func (o *OfferCreate) Validate() error {
 		return tx.Errorf(tx.TemBAD_OFFER, "amounts must be positive")
 	}
 
-	// Get currency and issuer info
 	uPaysCurrency := saTakerPays.Currency
 	uPaysIssuerID := saTakerPays.Issuer
 	uGetsCurrency := saTakerGets.Currency
@@ -193,7 +187,6 @@ func (o *OfferCreate) Validate() error {
 		return tx.Errorf(tx.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
 	}
 
-	// Check issuer consistency
 	// Reference: lines 132-137
 	if saTakerPays.IsNative() != (uPaysIssuerID == "") {
 		return tx.Errorf(tx.TemBAD_ISSUER, "issuer mismatch for TakerPays")
@@ -314,7 +307,6 @@ func (o *OfferCreate) Preflight(rules *amendment.Rules) error {
 		return tx.Errorf(tx.TemDISABLED, "DomainID requires PermissionedDEX amendment")
 	}
 
-	// Check tfHybrid without PermissionedDEX
 	// Reference: lines 67-68
 	flags := o.GetFlags()
 	if !rules.PermissionedDEXEnabled() && (flags&tfHybrid != 0) {
@@ -335,7 +327,6 @@ func (o *OfferCreate) Preclaim(ctx *tx.ApplyContext) tx.Result {
 	uPaysIssuerID := saTakerPays.Issuer
 	uGetsIssuerID := saTakerGets.Issuer
 
-	// Check global freeze on both issuers
 	// Reference: lines 165-170
 	if uPaysIssuerID != "" {
 		if tx.IsGlobalFrozen(ctx.View, uPaysIssuerID) {
@@ -365,7 +356,6 @@ func (o *OfferCreate) Preclaim(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Check if offer has expired
 	// Reference: lines 189-200
 	if hasExpired(ctx, o.Expiration) {
 		if rules.DepositPreauthEnabled() {
@@ -414,7 +404,6 @@ func (o *OfferCreate) ApplyCreate(ctx *tx.ApplyContext) tx.Result {
 	sb := payment.NewPaymentSandbox(ctx.View)
 	sbCancel := payment.NewPaymentSandbox(ctx.View)
 
-	// Set transaction context on both sandboxes
 	sb.SetTransactionContext(ctx.TxHash, ctx.Config.LedgerSequence)
 	sbCancel.SetTransactionContext(ctx.TxHash, ctx.Config.LedgerSequence)
 
@@ -495,7 +484,6 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 	if o.OfferSequence != nil {
 		sleCancel := peekOffer(ctx.View, ctx.AccountID, *o.OfferSequence)
 		if sleCancel != nil {
-			// Delete in main sandbox
 			result = offerDeleteInView(sb, sleCancel)
 			// Delete in cancel sandbox (same operation)
 			_ = offerDeleteInView(sbCancel, sleCancel)
@@ -507,7 +495,6 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 		}
 	}
 
-	// Check if offer has expired
 	// Reference: lines 623-636
 	if hasExpired(ctx, o.Expiration) {
 		if rules.DepositPreauthEnabled() {
@@ -668,7 +655,6 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 			return tx.TesSUCCESS, true // Apply main sandbox with crossing results
 		}
 
-		// Check if any crossing happened
 		// Reference: line 744-745
 		// Use isAmountZeroOrNegative because FromEitherAmount returns "0" for zero amounts,
 		// not empty string ""
@@ -741,7 +727,6 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 			remainingGets = offerMulRound(remainingPays, rate, outNative, outCurrency, outIssuer, true)
 		}
 
-		// Check if offer is fully filled
 		// Reference: rippled CreateOffer.cpp lines 757-761
 		fullyCrossed := isAmountZeroOrNegative(remainingGets) || isAmountZeroOrNegative(remainingPays)
 
@@ -802,7 +787,6 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 		return tx.TesSUCCESS, true // Crossing happened - apply main sandbox
 	}
 
-	// Check reserve for new offer
 	// Reference: rippled CreateOffer.cpp lines 811-834
 	// IMPORTANT: Read OwnerCount fresh from the sandbox, not from ctx.Account.
 	// The crossing may have modified OwnerCount (e.g., trust line deletion).
@@ -845,7 +829,6 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 	}
 	bookDirKey := keylet.Quality(bookBase, uRate)
 
-	// Add to owner directory
 	// Reference: lines 839-848
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 	ownerDirResult, err := state.DirInsert(sb, ownerDirKey, offerKey.Key, func(dir *state.DirectoryNode) {
@@ -855,14 +838,12 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 		return tx.TefINTERNAL, false
 	}
 
-	// Increment owner count
 	// Reference: line 851
 	ctx.Account.OwnerCount++
 
 	// Check if book exists (for OrderBookDB tracking)
 	bookExisted, _ := sb.Exists(bookDirKey)
 
-	// Add to book directory
 	// Reference: lines 884-893
 	bookDirResult, err := state.DirInsert(sb, bookDirKey, offerKey.Key, func(dir *state.DirectoryNode) {
 		dir.TakerPaysCurrency = takerPaysCurrency
@@ -876,7 +857,6 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 		return tx.TefINTERNAL, false
 	}
 
-	// Create the offer SLE
 	// Reference: lines 895-910
 	ledgerOffer := &state.LedgerOffer{
 		Account:           ctx.Account.Account,
@@ -891,13 +871,11 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 		PreviousTxnLgrSeq: ctx.Config.LedgerSequence,
 	}
 
-	// Set expiration if specified
 	// Reference: line 903-904
 	if o.Expiration != nil {
 		ledgerOffer.Expiration = *o.Expiration
 	}
 
-	// Set offer flags
 	// Reference: lines 905-910
 	if bPassive {
 		ledgerOffer.Flags |= lsfOfferPassive
@@ -906,7 +884,6 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 		ledgerOffer.Flags |= lsfOfferSell
 	}
 
-	// Set DomainID if specified
 	if o.DomainID != nil {
 		ledgerOffer.DomainID = *o.DomainID
 	}
@@ -1368,7 +1345,6 @@ func checkAcceptAsset(ctx *tx.ApplyContext, issuerID [20]byte, currency string, 
 		return tx.TesSUCCESS
 	}
 
-	// Check RequireAuth flag on issuer
 	// Reference: lines 258-282
 	if (issuerAccount.Flags & state.LsfRequireAuth) != 0 {
 		trustLineKey := keylet.Line(ctx.AccountID, issuerID, currency)
@@ -1402,7 +1378,6 @@ func checkAcceptAsset(ctx *tx.ApplyContext, issuerID [20]byte, currency string, 
 		return tx.TesSUCCESS
 	}
 
-	// Check for deep freeze on trustline
 	// Reference: lines 293-309
 	trustLineKey := keylet.Line(ctx.AccountID, issuerID, currency)
 	trustLineData, err := ctx.View.Read(trustLineKey)
@@ -1416,7 +1391,6 @@ func checkAcceptAsset(ctx *tx.ApplyContext, issuerID [20]byte, currency string, 
 		return tx.TesSUCCESS
 	}
 
-	// Check deep freeze
 	deepFrozen := (rs.Flags & (state.LsfLowDeepFreeze | state.LsfHighDeepFreeze)) != 0
 	if deepFrozen {
 		return tx.TecFROZEN
@@ -1434,7 +1408,6 @@ func accountInDomain(view tx.LedgerView, accountID [20]byte, domainID [32]byte, 
 // applyTickSize applies tick size rounding to offer amounts.
 // Reference: rippled CreateOffer.cpp lines 643-685
 func applyTickSize(view tx.LedgerView, takerPays, takerGets tx.Amount, bSell bool, rules *amendment.Rules) (tx.Amount, tx.Amount) {
-	// Get tick sizes from both issuers
 	tickSize := maxTickSize
 
 	if !takerPays.IsNative() {
@@ -1600,20 +1573,14 @@ func multiplyByQuality(amount tx.Amount, quality uint64, currency, issuer string
 		}
 	}
 
-	// Get quality as rate
 	rateRat := qualityToRate(quality)
-
-	// Result = amount * rate
 	result := new(big.Rat).Mul(amtRat, rateRat)
 
-	// Convert result to the target type
 	if currency == "" || currency == "XRP" {
-		// Return XRP amount
 		f, _ := result.Float64()
 		return tx.NewXRPAmount(int64(f + 0.5)) // Round
 	}
 
-	// Return IOU amount - normalize to mantissa/exponent form
 	return ratToIssuedAmount(result, currency, issuer, true)
 }
 
@@ -1653,20 +1620,14 @@ func divideByQuality(amount tx.Amount, quality uint64, currency, issuer string) 
 		}
 	}
 
-	// Get quality as rate
 	rateRat := qualityToRate(quality)
-
-	// Result = amount / rate
 	result := new(big.Rat).Quo(amtRat, rateRat)
 
-	// Convert result to the target type
 	if currency == "" || currency == "XRP" {
-		// Return XRP amount
 		f, _ := result.Float64()
 		return tx.NewXRPAmount(int64(f + 0.5)) // Round
 	}
 
-	// Return IOU amount - normalize to mantissa/exponent form
 	return ratToIssuedAmount(result, currency, issuer, true)
 }
 
@@ -1712,7 +1673,6 @@ func ratToIssuedAmount(rat *big.Rat, currency, issuer string, roundUp bool) tx.A
 		}
 	}
 
-	// Get final mantissa with rounding
 	intPart := new(big.Int).Quo(scaled.Num(), scaled.Denom())
 	remainder := new(big.Int).Mod(scaled.Num(), scaled.Denom())
 
@@ -1747,28 +1707,24 @@ func peekOffer(view tx.LedgerView, accountID [20]byte, sequence uint32) *state.L
 // offerDeleteInView removes an offer from the given view without modifying account state.
 // This is used by the two-sandbox pattern to delete offers in both sandboxes.
 func offerDeleteInView(view tx.LedgerView, offer *state.LedgerOffer) tx.Result {
-	// Get offer key
 	accountID, err := state.DecodeAccountID(offer.Account)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 	offerKey := keylet.Offer(accountID, offer.Sequence)
 
-	// Remove from owner directory
 	ownerDirKey := keylet.OwnerDir(accountID)
 	_, err = state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKey.Key, false)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
-	// Remove from book directory
 	bookDirKey := keylet.Keylet{Type: 100, Key: offer.BookDirectory}
 	_, err = state.DirRemove(view, bookDirKey, offer.BookNode, offerKey.Key, false)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
-	// Delete the offer
 	if err := view.Erase(offerKey); err != nil {
 		return tx.TefINTERNAL
 	}
@@ -1808,7 +1764,6 @@ func parseFee(ctx *tx.ApplyContext) uint64 {
 // applyHybridInSandbox handles hybrid offer placement in a specific view/sandbox.
 // Reference: rippled CreateOffer.cpp applyHybrid() lines 528-573
 func applyHybridInSandbox(view tx.LedgerView, ctx *tx.ApplyContext, offer *state.LedgerOffer, offerKey keylet.Keylet, takerPays, takerGets tx.Amount, domainBookDir keylet.Keylet) tx.Result {
-	// Set hybrid flag
 	offer.Flags |= lsfHybrid
 
 	// Also place in open book (without domain)
@@ -1822,7 +1777,6 @@ func applyHybridInSandbox(view tx.LedgerView, ctx *tx.ApplyContext, offer *state
 	bookBase := keylet.BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer)
 	openBookDirKey := keylet.Quality(bookBase, uRate)
 
-	// Add to open book directory
 	bookDirResult, err := state.DirInsert(view, openBookDirKey, offerKey.Key, func(dir *state.DirectoryNode) {
 		dir.TakerPaysCurrency = takerPaysCurrency
 		dir.TakerPaysIssuer = takerPaysIssuer
@@ -1835,7 +1789,6 @@ func applyHybridInSandbox(view tx.LedgerView, ctx *tx.ApplyContext, offer *state
 		return tx.TefINTERNAL
 	}
 
-	// Store additional book info in offer
 	offer.AdditionalBookDirectory = openBookDirKey.Key
 	offer.AdditionalBookNode = bookDirResult.Page
 
