@@ -52,10 +52,11 @@ type Config struct {
 	SSLVerifyDir  string `toml:"ssl_verify_dir" mapstructure:"ssl_verify_dir"`
 
 	// 6. Database
-	NodeDB       NodeDBConfig `toml:"node_db" mapstructure:"node_db"`
-	ImportDB     NodeDBConfig `toml:"import_db" mapstructure:"import_db"`
-	DatabasePath string       `toml:"database_path" mapstructure:"database_path"`
-	SQLite       SQLiteConfig `toml:"sqlite" mapstructure:"sqlite"`
+	NodeDB            NodeDBConfig            `toml:"node_db" mapstructure:"node_db"`
+	ImportDB          NodeDBConfig            `toml:"import_db" mapstructure:"import_db"`
+	DatabasePath      string                  `toml:"database_path" mapstructure:"database_path"`
+	SQLite            SQLiteConfig            `toml:"sqlite" mapstructure:"sqlite"`
+	ValidationArchive ValidationArchiveConfig `toml:"validation_archive" mapstructure:"validation_archive"`
 
 	// 7. Diagnostics
 	DebugLogfile string        `toml:"debug_logfile" mapstructure:"debug_logfile"`

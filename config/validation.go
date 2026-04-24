@@ -40,6 +40,9 @@ func ValidateConfig(config *Config) error {
 	if err := config.SQLite.Validate(); err != nil {
 		errors = append(errors, fmt.Sprintf("sqlite: %s", err.Error()))
 	}
+	if err := config.ValidationArchive.Validate(); err != nil {
+		errors = append(errors, fmt.Sprintf("validation_archive: %s", err.Error()))
+	}
 
 	// 6. Validate diagnostics configuration
 	if err := config.Logging.Validate(); err != nil {
