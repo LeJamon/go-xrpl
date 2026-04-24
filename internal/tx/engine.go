@@ -1575,7 +1575,6 @@ func (e *Engine) checkBatchSign(signers []BatchSignerInfo) Result {
 			return TefBAD_AUTH
 		}
 
-		// Read the signer's account root
 		signerAccountKey := keylet.Account(signerAccountID)
 		signerAccountData, readErr := e.view.Read(signerAccountKey)
 
@@ -1617,7 +1616,6 @@ func (e *Engine) checkBatchSign(signers []BatchSignerInfo) Result {
 // the account's SignerList. This mirrors rippled's checkMultiSign.
 // Reference: rippled Transactor::checkMultiSign in Transactor.cpp lines 742-911
 func (e *Engine) checkBatchMultiSign(accountID [20]byte, txSigners []SignerInfo) Result {
-	// Read the account's SignerList
 	signerListKey := keylet.SignerList(accountID)
 	signerListData, err := e.view.Read(signerListKey)
 	if err != nil || signerListData == nil {
@@ -1666,7 +1664,6 @@ func (e *Engine) checkBatchMultiSign(accountID [20]byte, txSigners []SignerInfo)
 			signingAcctIDFromPubKey = addr
 		}
 
-		// Read the signer's account root
 		signerAccountKey := keylet.Account(txSignerAccountID)
 		signerAccountData, readErr := e.view.Read(signerAccountKey)
 
@@ -2045,7 +2042,6 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 				if decodeErr != nil {
 					continue
 				}
-				// Remove from both owner directories
 				lowDirKey := keylet.OwnerDir(lowID)
 				state.DirRemove(tecTable, lowDirKey, rs.LowNode, lineKey, false)
 				highDirKey := keylet.OwnerDir(highID)
@@ -2165,15 +2161,11 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 				if decodeErr != nil {
 					continue
 				}
-				// Remove from owner directory
 				ownerDirKey := keylet.OwnerDir(ownerID)
 				state.DirRemove(tecTable, ownerDirKey, offerObj.OwnerNode, offerKey, false)
-				// Remove from book directory
 				bookDirKey := keylet.Keylet{Type: 100, Key: offerObj.BookDirectory}
 				state.DirRemove(tecTable, bookDirKey, offerObj.BookNode, offerKey, false)
-				// Erase the offer
 				_ = tecTable.Erase(offerKL)
-				// Decrement owner count
 				adjustOwnerCountOnView(tecTable, ownerID, -1, txHash, e.config.LedgerSequence)
 			}
 		}
@@ -2448,7 +2440,6 @@ func deleteNFTokenOfferOnView(view LedgerView, offerKL keylet.Keylet, txHash [32
 		return
 	}
 
-	// Remove from owner's directory
 	ownerDirKey := keylet.OwnerDir(offer.Owner)
 	state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
 
@@ -2463,9 +2454,6 @@ func deleteNFTokenOfferOnView(view LedgerView, offerKL keylet.Keylet, txHash [32
 	}
 	state.DirRemove(view, tokenDirKey, offer.NFTokenOfferNode, offerKL.Key, false)
 
-	// Erase the offer
 	_ = view.Erase(offerKL)
-
-	// Decrement owner count
 	adjustOwnerCountOnView(view, offer.Owner, -1, txHash, ledgerSeq)
 }

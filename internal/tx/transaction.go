@@ -348,7 +348,6 @@ type BaseTx struct {
 	txType Type
 }
 
-// TxType returns the transaction type
 func (b *BaseTx) TxType() Type {
 	return b.txType
 }
@@ -358,12 +357,10 @@ func (b *BaseTx) GetCommon() *Common {
 	return &b.Common
 }
 
-// Validate validates the base transaction
 func (b *BaseTx) Validate() error {
 	return b.Common.Validate()
 }
 
-// Flatten returns a flat map of transaction fields
 func (b *BaseTx) Flatten() (map[string]any, error) {
 	return b.Common.ToMap(), nil
 }

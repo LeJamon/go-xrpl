@@ -73,7 +73,6 @@ func ToJSON(tx Transaction) ([]byte, error) {
 	return json.Marshal(flat)
 }
 
-// Validate validates a transaction and returns any errors
 func Validate(tx Transaction) error {
 	return tx.Validate()
 }

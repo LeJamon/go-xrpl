@@ -65,13 +65,11 @@ func ParseFromBinary(blob []byte) (Transaction, error) {
 		return nil, errors.New("failed to marshal decoded transaction: " + err.Error())
 	}
 
-	// Parse the JSON into a transaction
 	tx, err := ParseJSON(jsonBytes)
 	if err != nil {
 		return nil, err
 	}
 
-	// Set the present fields on the parsed transaction
 	tx.GetCommon().SetPresentFields(presentFields)
 
 	// Preserve the original serialized bytes so that downstream consumers
