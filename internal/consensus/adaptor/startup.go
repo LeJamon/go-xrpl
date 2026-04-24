@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/consensus/rcl"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
+	"github.com/LeJamon/goXRPLd/internal/manifest"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
 )
 
@@ -20,6 +21,12 @@ type Components struct {
 	Adaptor     *Adaptor
 	Router      *Router
 	ModeManager *ModeManager
+
+	// Manifests is the validator-manifest cache shared by the router
+	// (wire ingest), the consensus engine (ephemeral→master
+	// translation), and the RPC layer (manifest method). Always
+	// non-nil — starts empty and fills as peers gossip manifests.
+	Manifests *manifest.Cache
 
 	// cancel functions for background goroutines
 	overlayCancel context.CancelFunc
@@ -134,11 +141,27 @@ func NewFromConfig(
 	// Create mode manager
 	modeManager := NewModeManager(adaptor)
 
+	// Validator manifest cache. Shared across the engine (for
+	// ephemeral→master translation in ValidationTracker), the router
+	// (for ingesting + relaying TMManifests), and the RPC layer (for
+	// the `manifest` method). Peers gossip manifests; until one
+	// arrives the cache is empty and every ephemeral key round-trips
+	// as itself.
+	manifestCache := manifest.NewCache()
+
 	// Create the RCL consensus engine
 	engine := rcl.NewEngine(adaptor, rcl.DefaultConfig())
 
+	// Translate ephemeral signing keys → master keys before quorum
+	// arithmetic. Mirrors rippled RCLValidations.cpp:165-186's
+	// calcNodeID(getTrustedKey(signingKey) ?? signingKey).
+	engine.SetManifestResolver(func(nid consensus.NodeID) consensus.NodeID {
+		return consensus.NodeID(manifestCache.GetMasterKey([33]byte(nid)))
+	})
+
 	// Create the router
 	router := NewRouter(engine, adaptor, modeManager, overlay.Messages())
+	router.SetManifestCache(manifestCache, overlay)
 
 	// Plumb peer disconnect notifications back through the router so
 	// per-peer state (peerStates for catch-up, peerLCLs for the
@@ -164,6 +187,7 @@ func NewFromConfig(
 		Adaptor:     adaptor,
 		Router:      router,
 		ModeManager: modeManager,
+		Manifests:   manifestCache,
 	}, nil
 }
 

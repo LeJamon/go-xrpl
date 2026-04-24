@@ -247,6 +247,11 @@ func runServer(cmd *cobra.Command, args []string) {
 			proposers, convergeTime := engine.GetLastCloseInfo()
 			return proposers, int(convergeTime.Milliseconds())
 		}
+		// Expose the validator-manifest cache to the `manifest` RPC.
+		// The cache is shared — the router writes inbound manifests,
+		// the engine reads for ephemeral→master translation, and this
+		// RPC reads for external queries.
+		types.Services.Manifests = consensusComponents.Manifests
 
 		isValidator := globalConfig.IsValidator()
 		serverLog.Info("Running in consensus mode",

@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/inbound"
+	"github.com/LeJamon/goXRPLd/internal/manifest"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 )
@@ -64,6 +65,17 @@ type Router struct {
 	// accelerate selection and produce earlier squelches than rippled
 	// does for the same traffic pattern.
 	messageSeen *messageSuppression
+
+	// manifests is the validator manifest cache. Wired by the
+	// Components bootstrap so the router can apply inbound TMManifests
+	// frames and — on Accepted — relay them to other peers.
+	// May be nil in tests that don't exercise the manifest path.
+	manifests *manifest.Cache
+
+	// overlay is held so the router can relay accepted manifests
+	// directly via Overlay.BroadcastExcept. Nil in tests that
+	// construct a router without manifest support.
+	overlay *peermanagement.Overlay
 }
 
 // messageDedupTTL is how long a proposal/validation hash is
@@ -92,6 +104,15 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManag
 		replayer:    inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
 		messageSeen: newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
 	}
+}
+
+// SetManifestCache installs the validator-manifest cache and the
+// overlay handle used to relay accepted manifests. Calling with a nil
+// cache disables the TMManifests path (the dispatch switch silently
+// drops inbound manifest frames). Safe to call before Run.
+func (r *Router) SetManifestCache(cache *manifest.Cache, overlay *peermanagement.Overlay) {
+	r.manifests = cache
+	r.overlay = overlay
 }
 
 // SetInboundClock overrides the clock used by new inbound replay-delta
@@ -248,9 +269,84 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 		r.handleLedgerData(msg)
 	case message.TypeReplayDeltaResponse:
 		r.handleReplayDeltaResponse(msg)
+	case message.TypeManifests:
+		r.handleManifests(msg)
 	default:
 		// Not a consensus message — ignore
 	}
+}
+
+// handleManifests ingests a TMManifests frame. For each serialized
+// manifest in the list: deserialize, apply to the cache, and — on
+// Accepted — relay the single-manifest frame to every peer except the
+// origin. Matches rippled's OverlayImpl::onManifests at
+// OverlayImpl.cpp:633-686 (minus the DB persistence of UNL-master
+// manifests and the pubManifest subscription — both out of scope for
+// this PR per tasks/pr-manifests-round1.md).
+//
+// Decode failures attribute "manifest-decode" badData to the sender
+// (mirrors rippled charging feeInvalidData on malformed TMManifests at
+// PeerImp.cpp). A mix of valid and invalid entries in the same frame
+// results in the valid ones being applied; the frame isn't rejected
+// wholesale.
+func (r *Router) handleManifests(msg *peermanagement.InboundMessage) {
+	if r.manifests == nil {
+		// Cache not wired (tests or minimal configs) — silently drop.
+		return
+	}
+
+	decoded, err := message.Decode(message.TypeManifests, msg.Payload)
+	if err != nil {
+		r.logger.Warn("failed to decode manifests frame", "error", err, "peer", msg.PeerID)
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "manifests-decode")
+		return
+	}
+	mfs, ok := decoded.(*message.Manifests)
+	if !ok || len(mfs.List) == 0 {
+		return
+	}
+
+	for _, wire := range mfs.List {
+		parsed, err := manifest.Deserialize(wire.STObject)
+		if err != nil {
+			r.logger.Debug("manifest parse failed",
+				"error", err, "peer", msg.PeerID)
+			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "manifest-parse")
+			continue
+		}
+		switch d := r.manifests.ApplyManifest(parsed); d {
+		case manifest.Accepted:
+			r.relayManifest(msg.PeerID, wire.STObject)
+		case manifest.Invalid, manifest.BadMasterKey, manifest.BadEphemeralKey:
+			// Charge the sender — they gave us a manifest that
+			// passed structural parse but failed the cache's
+			// invariants (signature, key reuse, etc.).
+			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "manifest-"+d.String())
+		case manifest.Stale:
+			// Expected and harmless: a peer gossiped a manifest we
+			// already have at equal or higher seq. No action.
+		}
+	}
+}
+
+// relayManifest rebroadcasts a single accepted manifest to every peer
+// except the origin. Wraps the serialized STObject in a TMManifests
+// frame (a list of one) — matching rippled's per-manifest relay
+// (OverlayImpl.cpp:633-686 loops through and relays each one via
+// overlay_.foreach).
+func (r *Router) relayManifest(exceptPeer peermanagement.PeerID, serialized []byte) {
+	if r.overlay == nil {
+		return
+	}
+	relayMsg := &message.Manifests{
+		List: []message.Manifest{{STObject: serialized}},
+	}
+	frame, err := encodeFrame(message.TypeManifests, relayMsg)
+	if err != nil {
+		r.logger.Warn("failed to encode manifest relay frame", "error", err)
+		return
+	}
+	_ = r.overlay.BroadcastExcept(exceptPeer, frame)
 }
 
 // Bounds used to reject malformed TMProposeSet / TMValidation frames

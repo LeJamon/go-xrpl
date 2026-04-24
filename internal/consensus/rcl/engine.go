@@ -129,6 +129,13 @@ type Engine struct {
 	// Stats
 	roundCount     uint64
 	consensusCount uint64
+
+	// manifestResolver is set (once, at bootstrap) to the validator
+	// manifest cache's GetMasterKey function, so the ValidationTracker
+	// can translate ephemeral signing keys → master keys before
+	// quorum arithmetic. Nil means "no translation" (default identity
+	// function inside the tracker). See SetManifestResolver.
+	manifestResolver func(consensus.NodeID) consensus.NodeID
 }
 
 // avalancheState tracks the close time voting threshold escalation.
@@ -176,6 +183,20 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 	}
 }
 
+// SetManifestResolver installs the validator-manifest resolver used by
+// the ValidationTracker to translate ephemeral signing keys to master
+// keys. Safe to call before or after Start; if the tracker isn't yet
+// constructed, the resolver is staged on the engine and applied when
+// Start builds the tracker.
+func (e *Engine) SetManifestResolver(fn func(consensus.NodeID) consensus.NodeID) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.manifestResolver = fn
+	if e.validationTracker != nil {
+		e.validationTracker.SetManifestResolver(fn)
+	}
+}
+
 // Start begins the consensus engine.
 func (e *Engine) Start(ctx context.Context) error {
 	e.mu.Lock()
@@ -196,6 +217,9 @@ func (e *Engine) Start(ctx context.Context) error {
 	// flips the ledger service's validated_ledger pointer.
 	e.validationTracker = NewValidationTracker(e.adaptor.GetQuorum(), 5*time.Minute)
 	e.validationTracker.SetTrusted(e.adaptor.GetTrustedValidators())
+	if e.manifestResolver != nil {
+		e.validationTracker.SetManifestResolver(e.manifestResolver)
+	}
 	// Use the adaptor's network-adjusted clock for freshness checks.
 	// Rippled's Validations::isCurrent uses app_.timeKeeper().closeTime()
 	// — matching here avoids rejecting our own just-signed validation

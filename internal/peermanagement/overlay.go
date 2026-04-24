@@ -1285,6 +1285,29 @@ func (o *Overlay) Broadcast(msg []byte) error {
 	return nil
 }
 
+// BroadcastExcept sends a message to every connected peer except the
+// one identified by exceptPeer. Used for gossip of peer-originated
+// messages that are NOT per-validator (manifests) — the per-validator
+// squelch filter in RelayFromValidator doesn't apply. Pass 0 for
+// exceptPeer to fall through to a plain Broadcast. Mirrors rippled's
+// OverlayImpl::foreach used to relay TMManifests at
+// OverlayImpl.cpp:633-686.
+func (o *Overlay) BroadcastExcept(exceptPeer PeerID, msg []byte) error {
+	o.peersMu.RLock()
+	defer o.peersMu.RUnlock()
+
+	for id, peer := range o.peers {
+		if id == exceptPeer {
+			continue
+		}
+		if peer.State() != PeerStateConnected {
+			continue
+		}
+		peer.Send(msg)
+	}
+	return nil
+}
+
 // RelayFromValidator forwards a peer-originated validator message
 // (proposal or validation) to other connected peers, applying the
 // per-peer squelch filter on the ORIGINATING validator's pubkey AND

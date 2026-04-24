@@ -17,6 +17,27 @@ type MethodDispatcher interface {
 	ExecuteMethod(method string, params []byte) (interface{}, *RpcError)
 }
 
+// ManifestLookup is the read-only facet of the validator-manifest cache
+// that the `manifest` RPC needs. Expressed as an interface (not a
+// concrete type) so internal/rpc/types doesn't import
+// internal/manifest, avoiding a cycle once the handler grows.
+type ManifestLookup interface {
+	// GetMasterKey resolves an ephemeral signing key to its master
+	// key via the cached manifest. Returns the input unchanged if no
+	// manifest maps it — matches rippled ManifestCache::getMasterKey.
+	GetMasterKey(signingKey [33]byte) [33]byte
+	// GetSigningKey returns the current ephemeral signing key for a
+	// master key, or false if unknown / revoked.
+	GetSigningKey(masterKey [33]byte) ([33]byte, bool)
+	// GetManifest returns the raw serialized manifest bytes for a
+	// master key, or false if unknown / revoked.
+	GetManifest(masterKey [33]byte) ([]byte, bool)
+	// GetSequence returns the stored manifest's sequence number.
+	GetSequence(masterKey [33]byte) (uint32, bool)
+	// GetDomain returns the stored manifest's domain.
+	GetDomain(masterKey [33]byte) (string, bool)
+}
+
 // ServiceContainer holds references to all services needed by RPC handlers
 type ServiceContainer struct {
 	// LedgerService provides ledger operations
@@ -36,6 +57,12 @@ type ServiceContainer struct {
 
 	// LastCloseInfo returns proposer count and convergence time (ms) from the last consensus round
 	LastCloseInfo func() (proposers int, convergeTimeMs int)
+
+	// Manifests is the validator-manifest lookup used by the
+	// `manifest` RPC method. Nil until the consensus components are
+	// built (e.g. in standalone mode without p2p); handlers must
+	// nil-check before use.
+	Manifests ManifestLookup
 }
 
 // LedgerNavigator provides ledger index navigation and mode queries.
