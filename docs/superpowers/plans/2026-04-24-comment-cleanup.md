@@ -991,12 +991,32 @@ Expected: empty. Any hit here means a preserved comment slipped through and need
 
 ## Review
 
-Leave this section blank until Task 11 completes, then append:
+- Total commits: 16 (plus the two spec/plan doc commits on main)
+- Files touched: 209
+- Lines added: 28 (gofmt re-alignments after trailing-comment removal, plus 2 oracle godoc rewrites that preserve the rippled cross-reference on the new line)
+- Lines removed: 1638
+- Net: -1610 lines
+- Packages affected: codec, crypto, drops, keylet, protocol, ledger/entry, shamap, storage, amendment, config, internal/rpc, all 24 internal/tx/ subpackages, internal/tx/ top-level, internal/consensus, internal/testing, internal/txq, tree-wide *_test.go
+- Preservation audit final check: PASS. Net rippled-reference content unchanged; the two oracle godoc edits move "matches rippled's DeleteOracle::preflight()" / "matches rippled's SetOracle::preflight()" onto the godoc summary line rather than a separate trailing line.
+- Regressions: zero. Package-level fail list on this branch is identical to baseline main at `173ebf9` (notably `codec/binarycodec/types TestSerializeXrpAmount` panic and the tx-subpackage failures already present on main).
 
-- Total commits: _
-- Total lines removed: _
-- Files touched: _
-- Packages affected: _
-- Preservation audit final check: PASS / FAIL
+### Commits (newest → oldest)
 
-If any commit needed to be reverted, list it and the reason.
+1. `7a9ace0` chore(tests): prune non-informative comments in *_test.go files
+2. `7c84258` chore(txq): prune non-informative comments
+3. `fe697a0` style(tx): remove residual godoc-restatement comments from all tx subpackages
+4. `60e6010` chore(testing): prune non-informative comments in testing helpers
+5. `1b257dc` chore(consensus): prune non-informative comments in adaptor package
+6. `6948c62` chore(tx): prune non-informative comments in top-level tx package
+7. `1d9c809` chore(tx/payment,permissioneddomain,pseudo,signerlist,ticket,trustset,vault,xchain): prune non-informative comments
+8. `879a12d` chore(tx/nftoken,offer,oracle,paychan): prune non-informative comments
+9. `eb8257b` chore(tx/did,escrow,ledgerstatefix,mpt): prune non-informative comments
+10. `1c5b74b` chore(tx/clawback,credential,delegate,depositpreauth): prune non-informative comments
+11. `74d421c` chore(tx/account,amm,batch,check): prune non-informative comments
+12. `a379ad4` chore(rpc): prune non-informative comments
+13. `eb375af` chore(amendment,config): prune non-informative comments
+14. `f325500` chore(ledger,shamap,storage): prune non-informative comments
+15. `373d266` chore(crypto,drops,keylet,protocol): prune non-informative comments
+16. `7f4ef8b` chore(codec): prune non-informative comments
+
+No commits were reverted. One indentation bug introduced mid-run by a subagent in `internal/txq/apply.go` was caught and corrected before the txq commit landed.
