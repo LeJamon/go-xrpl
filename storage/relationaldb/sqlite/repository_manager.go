@@ -23,6 +23,7 @@ type RepositoryManager struct {
 	transactionRepo        *TransactionRepository
 	accountTransactionRepo *AccountTransactionRepository
 	systemRepo             *SystemRepository
+	validationRepo         *ValidationRepository
 }
 
 // Compile-time interface check
@@ -80,6 +81,10 @@ func (rm *RepositoryManager) Open(ctx context.Context) error {
 		rm.close()
 		return relationaldb.NewSchemaError("open", "failed to initialize ledger schema", err)
 	}
+	if err := rm.initValidationSchema(ctx); err != nil {
+		rm.close()
+		return relationaldb.NewSchemaError("open", "failed to initialize validation schema", err)
+	}
 	if err := rm.initTxSchema(ctx); err != nil {
 		rm.close()
 		return relationaldb.NewSchemaError("open", "failed to initialize transaction schema", err)
@@ -89,6 +94,7 @@ func (rm *RepositoryManager) Open(ctx context.Context) error {
 	rm.transactionRepo = NewTransactionRepository(rm.txDB)
 	rm.accountTransactionRepo = NewAccountTransactionRepository(rm.txDB)
 	rm.systemRepo = NewSystemRepository(rm.ledgerDB, rm.txDB)
+	rm.validationRepo = NewValidationRepository(rm.ledgerDB)
 
 	return nil
 }
@@ -115,6 +121,7 @@ func (rm *RepositoryManager) close() error {
 	rm.transactionRepo = nil
 	rm.accountTransactionRepo = nil
 	rm.systemRepo = nil
+	rm.validationRepo = nil
 
 	if firstErr != nil {
 		return relationaldb.NewConnectionError("close", "failed to close database", firstErr)
@@ -138,11 +145,8 @@ func (rm *RepositoryManager) System() relationaldb.SystemRepository {
 	return rm.systemRepo
 }
 
-// Validation returns the validation archive repository. Stubbed nil until
-// the SQLite impl lands — callers gating on a non-nil value treat the
-// archive as disabled.
 func (rm *RepositoryManager) Validation() relationaldb.ValidationRepository {
-	return nil
+	return rm.validationRepo
 }
 
 func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relationaldb.TransactionContext) error) error {
@@ -201,6 +205,37 @@ func (rm *RepositoryManager) initLedgerSchema(ctx context.Context) error {
 			trans_set_hash BLOB NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_ledgers_seq ON ledgers(ledger_seq)`,
+	}
+	for _, q := range queries {
+		if _, err := rm.ledgerDB.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// initValidationSchema installs the on-disk validation archive table.
+// Cohabits ledger.db — see ValidationRepository for the rationale.
+// Columns mirror rippled's historical Validations DDL (DBInit.h,
+// pre-May-2019) with SeenTime + Flags added for receive-side forensics.
+func (rm *RepositoryManager) initValidationSchema(ctx context.Context) error {
+	queries := []string{
+		`CREATE TABLE IF NOT EXISTS validations (
+			ledger_seq   INTEGER NOT NULL,
+			initial_seq  INTEGER NOT NULL,
+			ledger_hash  BLOB NOT NULL,
+			node_pubkey  BLOB NOT NULL,
+			signature    BLOB NOT NULL,
+			sign_time    INTEGER NOT NULL,
+			seen_time    INTEGER NOT NULL,
+			flags        INTEGER NOT NULL,
+			raw          BLOB NOT NULL,
+			PRIMARY KEY (ledger_hash, node_pubkey)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_validations_seq       ON validations(ledger_seq)`,
+		`CREATE INDEX IF NOT EXISTS idx_validations_node      ON validations(node_pubkey, ledger_seq)`,
+		`CREATE INDEX IF NOT EXISTS idx_validations_sign_time ON validations(sign_time)`,
+		`CREATE INDEX IF NOT EXISTS idx_validations_initial   ON validations(initial_seq, ledger_seq)`,
 	}
 	for _, q := range queries {
 		if _, err := rm.ledgerDB.ExecContext(ctx, q); err != nil {
