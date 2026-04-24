@@ -332,7 +332,7 @@ func TestDisputeTracker_UpdateDisputes(t *testing.T) {
 	// Peer's tx set contains tx1 but not tx2. UpdateDisputes should
 	// yield Yays=1 on tx1 and Nays=1 on tx2.
 	peerTxSet := &mockTxSet{
-		id:       consensus.TxSetID{1},
+		id:          consensus.TxSetID{1},
 		containsTxs: map[consensus.TxID]bool{tx1: true},
 	}
 
