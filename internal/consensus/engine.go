@@ -78,23 +78,34 @@ type Adaptor interface {
 	// the per-peer squelch filter and excluding the originating peer
 	// (exceptPeer). Pass 0 for exceptPeer to send to all peers (e.g.
 	// for tests that synthesize a relay without an origin).
+	// Proposal.SuppressionHash is used by the overlay to record each
+	// recipient in its reverse index for a later duplicate-arrival
+	// lookup (B3) — callers must ensure the field is populated for
+	// peer-forwarded proposals.
 	RelayProposal(proposal *Proposal, exceptPeer uint64) error
 
 	// RelayValidation forwards a peer's validation to other peers,
 	// honoring the per-peer squelch filter and excluding the
-	// originating peer (exceptPeer). Same semantics as RelayProposal.
-	// Mirrors rippled's gossip-forward path for TMValidation in
-	// OverlayImpl::relay.
+	// originating peer (exceptPeer). Same semantics as RelayProposal;
+	// uses Validation.SuppressionHash for the reverse-index record.
 	RelayValidation(validation *Validation, exceptPeer uint64) error
 
 	// UpdateRelaySlot feeds the reduce-relay state machine with an
-	// inbound validator message from peerID. Mirrors rippled's
-	// PeerImp::onMessage(TMProposeSet/TMValidation) calling
-	// updateSlotAndSquelch — this is what drives the reduce-relay
-	// selection logic to emit mtSQUELCH once peer activity crosses
-	// the configured thresholds. Router calls this on every trusted
-	// inbound proposal/validation.
-	UpdateRelaySlot(validatorKey []byte, peerID uint64)
+	// inbound validator message from originPeer AND every peer in
+	// seenPeers (known-havers from the overlay's reverse index).
+	// Mirrors rippled's PeerImp::onMessage(TMProposeSet/TMValidation)
+	// calling updateSlotAndSquelch with the full haveMessage set
+	// (PeerImp.cpp:3013-3017, 3049-3054) — feeding multi-path
+	// delivery evidence per duplicate is what lets selection converge
+	// at the same rate rippled does. Router calls this on every
+	// trusted inbound proposal/validation duplicate.
+	UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPeers []uint64)
+
+	// PeersThatHave returns peer IDs known to have the message with
+	// suppressionHash. Populated at outbound relay and queried on
+	// inbound duplicates so UpdateRelaySlot can be fed the whole
+	// known-haver set (B3). Returns nil when unknown or aged out.
+	PeersThatHave(suppressionHash [32]byte) []uint64
 
 	// RequestTxSet requests a transaction set from peers.
 	RequestTxSet(id TxSetID) error
@@ -329,6 +340,12 @@ type TxSet interface {
 
 	// Txs returns the transactions in the set.
 	Txs() [][]byte
+
+	// TxIDs returns the hashes of every transaction in the set, in
+	// the same order as Txs() so callers can zip the two slices
+	// together. Used by consensus dispute tracking to diff two tx
+	// sets without re-deriving tx IDs from blobs.
+	TxIDs() []TxID
 
 	// Contains checks if a transaction is in the set.
 	Contains(id TxID) bool

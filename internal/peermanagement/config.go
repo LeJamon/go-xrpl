@@ -61,6 +61,16 @@ type Config struct {
 	// peers know which optional protocol extensions we speak. Matches
 	// rippled's compr / vprr / txrr / ledgerreplay feature toggles.
 	//
+	// All three reduce-relay flags default to false to match rippled
+	// (Config.h:248 sets VP_REDUCE_RELAY_BASE_SQUELCH_ENABLE=false,
+	// Config.h:258 sets TX_REDUCE_RELAY_ENABLE=false, Config.cpp:755-762
+	// preserves false when the cfg omits the section). Reduce-relay
+	// is opt-in: an operator must explicitly set one of these flags
+	// (or WithReduceRelay(true)) to advertise vprr/txrr and activate
+	// the slot-squelching engine. Shipping with the flags on would
+	// cause a stock goXRPL node to squelch traffic on a stock rippled
+	// network where the peer majority does not reciprocate.
+	//
 	// EnableReduceRelay is a legacy alias that enables BOTH vprr and
 	// txrr at once. New code should set EnableVPReduceRelay and
 	// EnableTxReduceRelay independently so an operator can run one
@@ -73,6 +83,15 @@ type Config struct {
 	EnableTxReduceRelay bool
 	EnableCompression   bool
 	EnableLedgerReplay  bool
+
+	// LocalValidatorPubKey is the compressed secp256k1 public key (33
+	// bytes) of the local validator identity, when this node is acting
+	// as a validator. Nil/empty for observer nodes. Used by
+	// handleSquelchMessage to drop inbound TMSquelch frames that target
+	// our own validator — otherwise a hostile peer could silence our
+	// own proposals/validations on the RelayFromValidator path.
+	// Matches rippled PeerImp.cpp:2715-2721.
+	LocalValidatorPubKey []byte
 
 	// Clock function for testing
 	Clock func() time.Time
@@ -96,9 +115,15 @@ func DefaultConfig() Config {
 		MessageBufferSize: DefaultMessageBufferSize,
 		SendBufferSize:    DefaultSendBufferSize,
 
-		EnableReduceRelay:  true,
-		EnableCompression:  true,
-		EnableLedgerReplay: true,
+		// Reduce-relay is opt-in; rippled defaults all three to false
+		// (Config.h:248, Config.h:258, Config.cpp:755-762). Leaving
+		// these zero-valued avoids advertising vprr/txrr on a stock
+		// rippled network where peers don't reciprocate.
+		EnableReduceRelay:   false,
+		EnableVPReduceRelay: false,
+		EnableTxReduceRelay: false,
+		EnableCompression:   true,
+		EnableLedgerReplay:  true,
 
 		Clock: time.Now,
 	}
@@ -199,6 +224,11 @@ func WithIdleTimeout(d time.Duration) Option {
 }
 
 // WithReduceRelay enables or disables reduce-relay optimization.
+// Reduce-relay is opt-in and defaults to false to match rippled
+// (Config.h:248, Config.cpp:755-762). Setting this to true activates
+// both vprr and txrr via the Validate() cascade; callers who need
+// one without the other should set EnableVPReduceRelay or
+// EnableTxReduceRelay directly on the Config instead.
 func WithReduceRelay(enabled bool) Option {
 	return func(c *Config) {
 		c.EnableReduceRelay = enabled
@@ -226,6 +256,24 @@ func WithLedgerReplay(enabled bool) Option {
 func WithClock(clock func() time.Time) Option {
 	return func(c *Config) {
 		c.Clock = clock
+	}
+}
+
+// WithLocalValidatorPubKey sets the compressed secp256k1 public key
+// (33 bytes) of the local validator identity, so inbound TMSquelch
+// frames targeting our own validator can be dropped. Observer nodes
+// should omit this option (the filter becomes a no-op). Matches
+// rippled PeerImp.cpp:2715-2721 which ignores TMSquelch addressed to
+// app_.getValidationPublicKey().
+func WithLocalValidatorPubKey(key []byte) Option {
+	return func(c *Config) {
+		if len(key) == 0 {
+			c.LocalValidatorPubKey = nil
+			return
+		}
+		// Defensive copy so callers cannot mutate config state after
+		// construction.
+		c.LocalValidatorPubKey = append([]byte(nil), key...)
 	}
 }
 
@@ -269,7 +317,11 @@ func (c *Config) Validate() error {
 	// Legacy EnableReduceRelay propagates to both specific flags when
 	// the caller hasn't set them independently. Matches rippled's
 	// behavior where enabling "reduce-relay" as a whole turns on both
-	// vprr and txrr.
+	// vprr and txrr. The default is false (see DefaultConfig), so this
+	// cascade only fires when an operator explicitly opts into
+	// reduce-relay via the legacy omnibus flag (either in the config
+	// file or via WithReduceRelay(true)). It remains load-bearing for
+	// that opt-in path.
 	if c.EnableReduceRelay {
 		c.EnableVPReduceRelay = true
 		c.EnableTxReduceRelay = true

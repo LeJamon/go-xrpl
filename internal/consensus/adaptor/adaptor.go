@@ -44,13 +44,22 @@ type NetworkSender interface {
 	// to other peers, subject to the per-peer squelch filter and
 	// excluding exceptPeer (the originator). Pass 0 for exceptPeer to
 	// broadcast to all peers unfiltered — used only by synthetic test
-	// paths.
+	// paths. Proposal.SuppressionHash / Validation.SuppressionHash
+	// (populated by the consensus router) is used by the overlay to
+	// record each recipient under that key so a later duplicate from a
+	// different peer can look up the whole known-haver set and feed
+	// the reduce-relay slot with all of them (B3,
+	// PeerImp.cpp:3010-3017 / 3044-3054).
 	RelayProposal(proposal *consensus.Proposal, exceptPeer uint64) error
 	RelayValidation(validation *consensus.Validation, exceptPeer uint64) error
 	// UpdateRelaySlot feeds the reduce-relay slot for validatorKey with
-	// a message from peerID. Drives the mtSQUELCH selection logic.
-	// Mirrors rippled's PeerImp::updateSlotAndSquelch.
-	UpdateRelaySlot(validatorKey []byte, peerID uint64)
+	// originPeer AND every peer in seenPeers (peers known to already
+	// have the message per the overlay's reverse index). Drives the
+	// mtSQUELCH selection logic. Mirrors rippled's
+	// PeerImp::updateSlotAndSquelch with the full haveMessage set at
+	// PeerImp.cpp:3013-3017. Implementations dedupe originPeer from
+	// seenPeers to avoid double-counting.
+	UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPeers []uint64)
 	RequestTxSet(id consensus.TxSetID) error
 	RequestLedger(id consensus.LedgerID) error
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error
@@ -78,6 +87,14 @@ type NetworkSender interface {
 	// response (replay delta, ledger data, etc.) fails. Safe no-op for
 	// unknown peers. `reason` is a short stable label for logs.
 	IncPeerBadData(peerID uint64, reason string)
+	// PeersThatHave returns the set of peer IDs the overlay knows have
+	// the message whose router-level suppression hash is
+	// suppressionHash (populated during outbound relay). Returns nil if
+	// unknown or the bucket has aged out. B3: the router uses this to
+	// feed the reduce-relay slot with all known-havers on a duplicate
+	// arrival, matching rippled's haveMessage set semantics
+	// (PeerImp.cpp:3010-3017).
+	PeersThatHave(suppressionHash [32]byte) []uint64
 }
 
 // noopSender is a no-op NetworkSender for standalone or test use.
@@ -88,7 +105,7 @@ func (n *noopSender) BroadcastValidation(*consensus.Validation) error          {
 func (n *noopSender) BroadcastStatusChange(*message.StatusChange) error        { return nil }
 func (n *noopSender) RelayProposal(*consensus.Proposal, uint64) error          { return nil }
 func (n *noopSender) RelayValidation(*consensus.Validation, uint64) error      { return nil }
-func (n *noopSender) UpdateRelaySlot([]byte, uint64)                           {}
+func (n *noopSender) UpdateRelaySlot([]byte, uint64, []uint64)                 {}
 func (n *noopSender) RequestTxSet(consensus.TxSetID) error                     { return nil }
 func (n *noopSender) RequestLedger(consensus.LedgerID) error                   { return nil }
 func (n *noopSender) RequestLedgerByHashAndSeq([32]byte, uint32) error         { return nil }
@@ -99,6 +116,7 @@ func (n *noopSender) SendToPeer(uint64, []byte) error                          {
 func (n *noopSender) PeerSupportsReplay(uint64) bool                           { return false }
 func (n *noopSender) ReplayCapablePeersExcluding([]uint64, int) []uint64       { return nil }
 func (n *noopSender) IncPeerBadData(uint64, string)                            {}
+func (n *noopSender) PeersThatHave([32]byte) []uint64                          { return nil }
 
 // Compile-time interface check.
 var _ consensus.Adaptor = (*Adaptor)(nil)
@@ -312,26 +330,41 @@ func (a *Adaptor) BroadcastValidation(validation *consensus.Validation) error {
 	return a.sender.BroadcastValidation(validation)
 }
 
+// PeersThatHave returns the set of peer IDs the overlay knows have
+// the message whose suppression-hash is `suppressionHash`. Thin
+// delegate to NetworkSender.PeersThatHave so higher layers (the
+// consensus router) can query without pulling in the overlay import.
+func (a *Adaptor) PeersThatHave(suppressionHash [32]byte) []uint64 {
+	return a.sender.PeersThatHave(suppressionHash)
+}
+
 // RelayProposal forwards a peer-originated proposal to other peers,
 // excluding exceptPeer (the originator). Pass 0 for exceptPeer to
-// forward to everyone.
+// forward to everyone. Uses proposal.SuppressionHash (populated by
+// the consensus router) so the overlay can record each recipient in
+// its reverse index — queried by the router on later duplicates to
+// feed the full known-haver set into the reduce-relay slot (B3).
 func (a *Adaptor) RelayProposal(proposal *consensus.Proposal, exceptPeer uint64) error {
 	return a.sender.RelayProposal(proposal, exceptPeer)
 }
 
 // RelayValidation forwards a peer-originated validation to other peers,
-// excluding exceptPeer (the originator). Mirrors RelayProposal; used
-// by the engine's OnValidation to implement gossip forward.
+// excluding exceptPeer (the originator). Mirrors RelayProposal; uses
+// validation.SuppressionHash for the reverse-index record.
 func (a *Adaptor) RelayValidation(validation *consensus.Validation, exceptPeer uint64) error {
 	return a.sender.RelayValidation(validation, exceptPeer)
 }
 
-// UpdateRelaySlot feeds the reduce-relay slot for validatorKey with an
-// inbound message from peerID. Called by the consensus router on every
-// trusted proposal/validation to keep the squelch selection logic
-// moving. Mirrors rippled's PeerImp::updateSlotAndSquelch.
-func (a *Adaptor) UpdateRelaySlot(validatorKey []byte, peerID uint64) {
-	a.sender.UpdateRelaySlot(validatorKey, peerID)
+// UpdateRelaySlot feeds the reduce-relay slot for validatorKey with
+// originPeer AND every peer in seenPeers (known-havers). Called by
+// the consensus router on every trusted proposal/validation duplicate
+// to keep the squelch selection logic moving. Mirrors rippled's
+// PeerImp::updateSlotAndSquelch with the full haveMessage set at
+// PeerImp.cpp:3013-3017 — feeding multiple known-havers per
+// duplicate is what lets selection converge at the same rate rippled
+// does (B3).
+func (a *Adaptor) UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPeers []uint64) {
+	a.sender.UpdateRelaySlot(validatorKey, originPeer, seenPeers)
 }
 
 func (a *Adaptor) RequestTxSet(id consensus.TxSetID) error {

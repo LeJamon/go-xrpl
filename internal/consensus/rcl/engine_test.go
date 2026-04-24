@@ -25,19 +25,53 @@ func (l *mockLedger) CloseTime() time.Time         { return l.closeTime }
 func (l *mockLedger) TxSetID() consensus.TxSetID   { return l.txSetID }
 func (l *mockLedger) Bytes() []byte                { return nil }
 
-// mockTxSet implements consensus.TxSet for testing
+// mockTxSet implements consensus.TxSet for testing. containsTxs, if
+// non-nil, drives Contains(id); otherwise Contains always returns
+// false (matching the legacy behavior some older tests rely on).
+// txIDs is kept in insertion order, parallel to txs, so TxIDs() and
+// Txs() can be zipped — matching the documented contract on the
+// interface.
 type mockTxSet struct {
-	id  consensus.TxSetID
-	txs [][]byte
+	id          consensus.TxSetID
+	txs         [][]byte
+	txIDs       []consensus.TxID
+	containsTxs map[consensus.TxID]bool
 }
 
-func (ts *mockTxSet) ID() consensus.TxSetID           { return ts.id }
-func (ts *mockTxSet) Txs() [][]byte                   { return ts.txs }
-func (ts *mockTxSet) Size() int                       { return len(ts.txs) }
-func (ts *mockTxSet) Contains(id consensus.TxID) bool { return false }
-func (ts *mockTxSet) Add(tx []byte) error             { ts.txs = append(ts.txs, tx); return nil }
-func (ts *mockTxSet) Remove(id consensus.TxID) error  { return nil }
-func (ts *mockTxSet) Bytes() []byte                   { return nil }
+func (ts *mockTxSet) ID() consensus.TxSetID { return ts.id }
+func (ts *mockTxSet) Txs() [][]byte         { return ts.txs }
+func (ts *mockTxSet) Size() int             { return len(ts.txs) }
+func (ts *mockTxSet) TxIDs() []consensus.TxID {
+	if ts.txIDs != nil {
+		out := make([]consensus.TxID, len(ts.txIDs))
+		copy(out, ts.txIDs)
+		return out
+	}
+	// Fallback for legacy construction sites that populate only
+	// containsTxs — iteration order is non-deterministic here but
+	// the legacy tests that follow this path don't care.
+	result := make([]consensus.TxID, 0, len(ts.containsTxs))
+	for id, ok := range ts.containsTxs {
+		if ok {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+func (ts *mockTxSet) Contains(id consensus.TxID) bool {
+	if ts.containsTxs != nil {
+		return ts.containsTxs[id]
+	}
+	return false
+}
+func (ts *mockTxSet) Add(tx []byte) error { ts.txs = append(ts.txs, tx); return nil }
+func (ts *mockTxSet) Remove(id consensus.TxID) error {
+	if ts.containsTxs != nil {
+		delete(ts.containsTxs, id)
+	}
+	return nil
+}
+func (ts *mockTxSet) Bytes() []byte { return nil }
 
 // mockAdaptor implements consensus.Adaptor for testing
 type mockAdaptor struct {
@@ -152,7 +186,11 @@ func (a *mockAdaptor) RelayValidation(validation *consensus.Validation, _ uint64
 	return nil
 }
 
-func (a *mockAdaptor) UpdateRelaySlot(_ []byte, _ uint64) {}
+func (a *mockAdaptor) UpdateRelaySlot(_ []byte, _ uint64, _ []uint64) {}
+
+// PeersThatHave returns nil — the rcl engine tests never query the
+// overlay's reverse index since they go through a mockAdaptor.
+func (a *mockAdaptor) PeersThatHave(_ [32]byte) []uint64 { return nil }
 
 func (a *mockAdaptor) GetValidatedLedgerHash() consensus.LedgerID {
 	// Test mock: no validated ledger tracking by default. Tests that
@@ -225,8 +263,28 @@ func (a *mockAdaptor) GetTxSet(id consensus.TxSetID) (consensus.TxSet, error) {
 }
 
 func (a *mockAdaptor) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
-	txSet := &mockTxSet{txs: txs}
-	// Generate a simple ID based on length
+	// Derive per-tx IDs from the blob prefix so the resulting TxSet
+	// reports Contains/TxIDs correctly. Dispute-integration tests
+	// build blobs as the tx ID padded to 32 bytes; legacy tests pass
+	// nil or empty blobs and only care about the set ID, so they
+	// still get a valid (if all-zero-id) mockTxSet.
+	ids := make([]consensus.TxID, 0, len(txs))
+	contains := make(map[consensus.TxID]bool, len(txs))
+	for _, blob := range txs {
+		var id consensus.TxID
+		if len(blob) >= len(id) {
+			copy(id[:], blob[:len(id)])
+		}
+		ids = append(ids, id)
+		contains[id] = true
+	}
+	txSet := &mockTxSet{
+		txs:         txs,
+		txIDs:       ids,
+		containsTxs: contains,
+	}
+	// Keep the length-based TxSetID for backward-compat: older tests
+	// reference it as {byte(len(txs)), 0,...}.
 	txSet.id = consensus.TxSetID{byte(len(txs))}
 	a.mu.Lock()
 	a.txSets[txSet.id] = txSet
@@ -787,12 +845,12 @@ func TestDefaultConfig(t *testing.T) {
 		t.Error("LedgerMaxClose should not be zero")
 	}
 
-	if config.Thresholds.MinConsensusPct == 0 {
-		t.Error("MinConsensusPct should not be zero")
+	if config.Thresholds.EarlyConvergencePct == 0 {
+		t.Error("EarlyConvergencePct should not be zero")
 	}
 
-	if config.Thresholds.MaxConsensusPct == 0 {
-		t.Error("MaxConsensusPct should not be zero")
+	if config.Thresholds.MinConsensusPct == 0 {
+		t.Error("MinConsensusPct should not be zero")
 	}
 }
 
@@ -1325,5 +1383,737 @@ func TestSendValidation_FeeVoteOnlyOnFlagLedger(t *testing.T) {
 	}
 	if len(flag.Amendments) != 1 {
 		t.Errorf("flag ledger must carry Amendments vote: got %d IDs", len(flag.Amendments))
+	}
+}
+
+// TestSendValidation_PreHardenedValidations_OmitsCookieAndServerVersion
+// pins B1: with featureHardenedValidations DISABLED, sendValidation
+// must leave Cookie and ServerVersion zero on the emitted validation.
+// Rippled RCLConsensus.cpp:853-867 scopes both fields inside the
+// `if (rules().enabled(featureHardenedValidations))` block, so a node
+// running against pre-HardenedValidations rules MUST omit them or
+// peers on the old rules compute a different preimage and reject the
+// signature.
+func TestSendValidation_PreHardenedValidations_OmitsCookieAndServerVersion(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	// Give the adaptor explicit non-zero Cookie/ServerVersion so we can
+	// prove the engine itself (not the mock) is suppressing them.
+	adaptor.cookie = 0xDEADBEEF_CAFEBABE
+	adaptor.serverVersion = 0x4000_0000_DEAD_BEEF
+
+	// Disable HardenedValidations so the gate should zero out both
+	// fields regardless of whether we're on a voting ledger.
+	adaptor.disabledFeatures = map[string]bool{"HardenedValidations": true}
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	// Use a voting-ledger seq (255+1=256) to prove the voting-ledger
+	// path also respects the HardenedValidations gate — rippled emits
+	// sfServerVersion only inside the HV block AND only on voting
+	// ledgers; if HV is off, neither condition matters.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xCA}, seq: 255})
+	engine.mu.Unlock()
+
+	// Verify the struct itself (what the adaptor sees pre-sign).
+	adaptor.mu.RLock()
+	defer adaptor.mu.RUnlock()
+	if len(adaptor.validationsBroadcast) != 1 {
+		t.Fatalf("want one validation, got %d", len(adaptor.validationsBroadcast))
+	}
+	v := adaptor.validationsBroadcast[0]
+	if v.Cookie != 0 {
+		t.Errorf("pre-HardenedValidations: Cookie must be zero, got %x", v.Cookie)
+	}
+	if v.ServerVersion != 0 {
+		t.Errorf("pre-HardenedValidations: ServerVersion must be zero, got %x", v.ServerVersion)
+	}
+}
+
+// TestSendValidation_HardenedValidations_NonVotingLedger_OmitsServerVersion
+// pins the rippled voting-ledger scope for sfServerVersion
+// (RCLConsensus.cpp:864-866). With HardenedValidations ON but a
+// non-voting ledger sequence, Cookie must be populated but
+// ServerVersion must stay zero. Rippled gates sfServerVersion on
+// BOTH HV enabled AND ledger.isVotingLedger() — miss either side and
+// the field is omitted.
+func TestSendValidation_HardenedValidations_NonVotingLedger_OmitsServerVersion(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.cookie = 0x1234_5678_9ABC_DEF0
+	adaptor.serverVersion = 0x4000_0000_1111_2222
+
+	// HardenedValidations enabled (default mock behavior) — don't set
+	// disabledFeatures.
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	// seq=100 → (100+1)%256 != 0 — non-voting ledger. Cookie must
+	// still emit (unconditional under HV), ServerVersion must not.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xBB}, seq: 100})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	defer adaptor.mu.RUnlock()
+	if len(adaptor.validationsBroadcast) != 1 {
+		t.Fatalf("want one validation, got %d", len(adaptor.validationsBroadcast))
+	}
+	v := adaptor.validationsBroadcast[0]
+	if v.Cookie != 0x1234_5678_9ABC_DEF0 {
+		t.Errorf("HardenedValidations enabled: Cookie must carry adaptor value, got %x", v.Cookie)
+	}
+	if v.ServerVersion != 0 {
+		t.Errorf("non-voting ledger: ServerVersion must be zero, got %x", v.ServerVersion)
+	}
+}
+
+// TestSendValidation_HardenedValidations_VotingLedger_EmitsBoth pins
+// the positive case of B1: HardenedValidations ON and isVotingLedger()
+// true (the only branch where rippled RCLConsensus.cpp:861-866 sets
+// both sfCookie AND sfServerVersion). Also asserts that the full
+// serialized validation carries the sfServerVersion field code
+// (type=3, field=11), not just the struct value — defense-in-depth
+// check against the serializer short-circuiting on zero.
+func TestSendValidation_HardenedValidations_VotingLedger_EmitsBoth(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.cookie = 0xAAAA_BBBB_CCCC_DDDD
+	adaptor.serverVersion = 0x4000_0000_DEAD_FEED
+
+	// HardenedValidations enabled (default mock behavior).
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	// seq=255 → (255+1)%256 == 0 — voting ledger. Both fields must
+	// be present.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xCC}, seq: 255})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	defer adaptor.mu.RUnlock()
+	if len(adaptor.validationsBroadcast) != 1 {
+		t.Fatalf("want one validation, got %d", len(adaptor.validationsBroadcast))
+	}
+	v := adaptor.validationsBroadcast[0]
+	if v.Cookie != 0xAAAA_BBBB_CCCC_DDDD {
+		t.Errorf("voting-ledger HV: Cookie must carry adaptor value, got %x", v.Cookie)
+	}
+	if v.ServerVersion != 0x4000_0000_DEAD_FEED {
+		t.Errorf("voting-ledger HV: ServerVersion must carry adaptor value, got %x", v.ServerVersion)
+	}
+}
+
+// Task 2.4 (B4): tests for isBowOut (seqLeave == 0xFFFFFFFF) detection.
+// Rippled reference: ConsensusProposal.h:68,154-156 and Consensus.h:804-817.
+// A validator bowing out sets ProposeSeq to seqLeave so peers know to stop
+// counting them for the remainder of the round. We must evict their current
+// position and refuse further proposals until the next round clears the set.
+
+// TestOnProposal_BowOutEvictsNode feeds a valid proposal from node X, then
+// a seqLeave proposal from X, and asserts that the stored position for X is
+// cleared. Mirrors rippled's Consensus.h:812-814 where peerPositions gets
+// erase(peerID) on bow-out and the nodeID is inserted into deadNodes_.
+func TestOnProposal_BowOutEvictsNode(t *testing.T) {
+	adaptor := newMockAdaptor()
+	bowingNode := consensus.NodeID{2}
+	adaptor.setTrusted([]consensus.NodeID{bowingNode, {3}})
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	// Initial proposal — should be stored.
+	first := &consensus.Proposal{
+		Round:          round,
+		NodeID:         bowingNode,
+		Position:       0,
+		TxSet:          consensus.TxSetID{1},
+		CloseTime:      time.Now(),
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(first, 0); err != nil {
+		t.Fatalf("first OnProposal: %v", err)
+	}
+
+	engine.mu.RLock()
+	_, stored := engine.proposals[bowingNode]
+	engine.mu.RUnlock()
+	if !stored {
+		t.Fatalf("precondition: first proposal from bowingNode should have been stored")
+	}
+
+	// Bow-out proposal — Position == seqLeave (0xFFFFFFFF).
+	bowOut := &consensus.Proposal{
+		Round:          round,
+		NodeID:         bowingNode,
+		Position:       0xFFFFFFFF,
+		TxSet:          consensus.TxSetID{2},
+		CloseTime:      time.Now(),
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(bowOut, 0); err != nil {
+		t.Fatalf("bow-out OnProposal: %v", err)
+	}
+
+	engine.mu.RLock()
+	_, stillStored := engine.proposals[bowingNode]
+	_, dead := engine.deadNodes[bowingNode]
+	engine.mu.RUnlock()
+
+	if stillStored {
+		t.Errorf("expected bowed-out node %v to be evicted from proposals map", bowingNode)
+	}
+	if !dead {
+		t.Errorf("expected bowed-out node %v to be recorded in deadNodes set", bowingNode)
+	}
+}
+
+// TestOnProposal_DeadNodeLaterProposalIgnored verifies that once a node
+// bows out, any subsequent proposal it sends in the same round is ignored.
+// Matches rippled's Consensus.h:785-789 guard.
+func TestOnProposal_DeadNodeLaterProposalIgnored(t *testing.T) {
+	adaptor := newMockAdaptor()
+	bowingNode := consensus.NodeID{2}
+	adaptor.setTrusted([]consensus.NodeID{bowingNode, {3}})
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	bowOut := &consensus.Proposal{
+		Round:          round,
+		NodeID:         bowingNode,
+		Position:       0xFFFFFFFF,
+		TxSet:          consensus.TxSetID{2},
+		CloseTime:      time.Now(),
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(bowOut, 0); err != nil {
+		t.Fatalf("bow-out OnProposal: %v", err)
+	}
+
+	// A "normal" proposal after bow-out must be silently dropped.
+	followUp := &consensus.Proposal{
+		Round:          round,
+		NodeID:         bowingNode,
+		Position:       1,
+		TxSet:          consensus.TxSetID{3},
+		CloseTime:      time.Now(),
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(followUp, 0); err != nil {
+		t.Fatalf("follow-up OnProposal: %v", err)
+	}
+
+	engine.mu.RLock()
+	_, stored := engine.proposals[bowingNode]
+	engine.mu.RUnlock()
+	if stored {
+		t.Errorf("expected follow-up proposal from dead node %v to be ignored, but it was stored", bowingNode)
+	}
+}
+
+// TestStartRound_ClearsDeadNodes verifies that a new round clears the
+// deadNodes set so a validator can rejoin consensus in the next round.
+// Matches rippled's Consensus.h:722 (startRoundInternal clears deadNodes_).
+func TestStartRound_ClearsDeadNodes(t *testing.T) {
+	adaptor := newMockAdaptor()
+	bowingNode := consensus.NodeID{2}
+	adaptor.setTrusted([]consensus.NodeID{bowingNode, {3}})
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	round1 := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round1, true); err != nil {
+		t.Fatalf("StartRound round1: %v", err)
+	}
+
+	// Bow out in round 1.
+	bowOut := &consensus.Proposal{
+		Round:          round1,
+		NodeID:         bowingNode,
+		Position:       0xFFFFFFFF,
+		TxSet:          consensus.TxSetID{2},
+		CloseTime:      time.Now(),
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(bowOut, 0); err != nil {
+		t.Fatalf("bow-out OnProposal: %v", err)
+	}
+
+	engine.mu.RLock()
+	_, deadAfterBow := engine.deadNodes[bowingNode]
+	engine.mu.RUnlock()
+	if !deadAfterBow {
+		t.Fatalf("precondition: bowingNode should be marked dead after bow-out")
+	}
+
+	// Start the next round — deadNodes must reset.
+	round2 := consensus.RoundID{Seq: 102, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round2, true); err != nil {
+		t.Fatalf("StartRound round2: %v", err)
+	}
+
+	engine.mu.RLock()
+	_, stillDead := engine.deadNodes[bowingNode]
+	engine.mu.RUnlock()
+	if stillDead {
+		t.Fatalf("expected deadNodes to be cleared after StartRound, but %v is still marked dead", bowingNode)
+	}
+
+	// And a fresh proposal from the previously-bowed node must be accepted
+	// again in the new round.
+	rejoin := &consensus.Proposal{
+		Round:          round2,
+		NodeID:         bowingNode,
+		Position:       0,
+		TxSet:          consensus.TxSetID{5},
+		CloseTime:      time.Now(),
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(rejoin, 0); err != nil {
+		t.Fatalf("rejoin OnProposal: %v", err)
+	}
+
+	engine.mu.RLock()
+	_, stored := engine.proposals[bowingNode]
+	engine.mu.RUnlock()
+	if !stored {
+		t.Errorf("expected rejoined proposal from %v to be accepted in the new round", bowingNode)
+	}
+}
+
+// Task 2.5 (B5): tests for monotonic SignTime on emitted validations.
+// Rippled reference: RCLConsensus.cpp:825-828 — if the wall clock regresses
+// (NTP step, leap-second correction, VM pause/resume), the validation sign
+// time is bumped to lastValidationTime_ + 1s so peers never see a non-
+// monotonic sequence of validations from the same node.
+
+// TestSendValidation_ClockRegressionPreservesMonotonic drives sendValidation
+// twice with a regressing fake clock and asserts the second SignTime is
+// exactly first + 1s (NOT the regressed adaptor.Now() value). Without this
+// guard, peers treat the second validation as stale and drop it — matching
+// rippled's behavior where older-than-last validations are rejected.
+func TestSendValidation_ClockRegressionPreservesMonotonic(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	// Pin the clock to a known value so both observations are deterministic.
+	baseTime := time.Unix(1_700_000_000, 0).UTC()
+	adaptor.now = baseTime
+	adaptor.mu.Unlock()
+
+	// First emission — SignTime should equal the fake clock.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xA1}, seq: 101})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	if len(adaptor.validationsBroadcast) != 1 {
+		adaptor.mu.RUnlock()
+		t.Fatalf("want one validation after first send, got %d", len(adaptor.validationsBroadcast))
+	}
+	first := adaptor.validationsBroadcast[0]
+	adaptor.mu.RUnlock()
+
+	if !first.SignTime.Equal(baseTime) {
+		t.Errorf("first SignTime: want %v, got %v", baseTime, first.SignTime)
+	}
+	if !first.SeenTime.Equal(first.SignTime) {
+		t.Errorf("first SeenTime must equal SignTime: got SignTime=%v SeenTime=%v",
+			first.SignTime, first.SeenTime)
+	}
+
+	// Regress the clock by 5 seconds (simulates NTP step / VM pause-resume).
+	adaptor.mu.Lock()
+	adaptor.now = baseTime.Add(-5 * time.Second)
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xA2}, seq: 102})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	if len(adaptor.validationsBroadcast) != 2 {
+		adaptor.mu.RUnlock()
+		t.Fatalf("want two validations after second send, got %d", len(adaptor.validationsBroadcast))
+	}
+	second := adaptor.validationsBroadcast[1]
+	adaptor.mu.RUnlock()
+
+	// Second SignTime must be first + 1s, NOT the regressed adaptor.Now().
+	want := first.SignTime.Add(1 * time.Second)
+	if !second.SignTime.Equal(want) {
+		t.Errorf("clock regressed: second SignTime: want %v (first + 1s), got %v",
+			want, second.SignTime)
+	}
+	if !second.SeenTime.Equal(second.SignTime) {
+		t.Errorf("second SeenTime must equal SignTime: got SignTime=%v SeenTime=%v",
+			second.SignTime, second.SeenTime)
+	}
+}
+
+// TestSendValidation_ClockMonotonic_NormalCase confirms the monotonic floor
+// does NOT inject an artificial step when the adaptor clock advances
+// normally. With a 3-second forward step, the second SignTime should be
+// exactly adaptor.Now() (first + 3s), not first + 1s.
+func TestSendValidation_ClockMonotonic_NormalCase(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	baseTime := time.Unix(1_700_000_000, 0).UTC()
+	adaptor.now = baseTime
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xB1}, seq: 201})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	first := adaptor.validationsBroadcast[0]
+	adaptor.mu.RUnlock()
+
+	// Advance the clock 3 seconds forward — normal progression.
+	adaptor.mu.Lock()
+	adaptor.now = baseTime.Add(3 * time.Second)
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xB2}, seq: 202})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	if len(adaptor.validationsBroadcast) != 2 {
+		adaptor.mu.RUnlock()
+		t.Fatalf("want two validations, got %d", len(adaptor.validationsBroadcast))
+	}
+	second := adaptor.validationsBroadcast[1]
+	adaptor.mu.RUnlock()
+
+	// The difference must be exactly 3s — no artificial +1s step.
+	diff := second.SignTime.Sub(first.SignTime)
+	if diff != 3*time.Second {
+		t.Errorf("normal clock advance: want SignTime difference 3s, got %v", diff)
+	}
+	// Second SignTime must equal adaptor.Now() — NOT the monotonic floor.
+	want := baseTime.Add(3 * time.Second)
+	if !second.SignTime.Equal(want) {
+		t.Errorf("second SignTime: want %v (adaptor.Now), got %v", want, second.SignTime)
+	}
+	if !second.SeenTime.Equal(second.SignTime) {
+		t.Errorf("second SeenTime must equal SignTime: got SignTime=%v SeenTime=%v",
+			second.SignTime, second.SeenTime)
+	}
+}
+
+// TestConsensus_MaxConsensusSoftTimeoutTransitions pins the behavior
+// of the E3 soft deadline: once a round exceeds LedgerMaxConsensus
+// (rippled's ledgerMAX_CONSENSUS = 15s, ConsensusParms.h:95), the
+// engine force-accepts the round with ResultTimeout and transitions
+// from Establish → Accepted. This is the rename-migrated action
+// that, pre-E3, fired at the goXRPL-only LedgerMaxClose=10s. It must
+// NOT trigger a bow-out (that is reserved for the hard abandon
+// branch at 120s, covered by TestConsensus_AbandonHardTimeout).
+func TestConsensus_MaxConsensusSoftTimeoutTransitions(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	// Default 15s soft / 120s hard. Override LedgerMaxClose to match
+	// LedgerMaxConsensus exactly so the legacy alias doesn't preempt
+	// the soft-deadline check.
+	config := DefaultConfig()
+	config.Timing.LedgerMaxConsensus = 15 * time.Second
+	config.Timing.LedgerMaxClose = 15 * time.Second
+	config.Timing.LedgerAbandonConsensus = 120 * time.Second
+	config.Timing.LedgerAbandonConsensusFactor = 10
+
+	engine := NewEngine(adaptor, config)
+
+	subscriber := &testSubscriber{events: make(chan consensus.Event, 32)}
+	engine.Subscribe(subscriber)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	// Force the engine into Establish with a known roundStartTime
+	// 16s in the past — just past the 15s soft deadline but before
+	// the factor-scaled hard abandon ceiling (see prevRoundTime
+	// below). This mirrors rippled's window between ledgerMAX_
+	// CONSENSUS and the std::clamp'd ledgerABANDON_CONSENSUS:
+	// currentAgreeTime > ledgerMAX_CONSENSUS (relaxes threshold)
+	// but currentAgreeTime <= clamp(prevRoundTime * factor,
+	// ledgerMAX_CONSENSUS, ledgerABANDON_CONSENSUS) (no abandon).
+	engine.mu.Lock()
+	engine.setPhase(consensus.PhaseEstablish)
+	engine.roundStartTime = time.Now().Add(-16 * time.Second)
+	// prevRoundTime × factor = 2s × 10 = 20s. std::clamp pins the
+	// hard deadline to 20s (between the 15s low and the 120s high).
+	// At 16s we are past the soft (15s) but short of the hard (20s),
+	// so the hard branch must NOT fire.
+	engine.prevRoundTime = 2 * time.Second
+	engine.phaseEstablish()
+	phaseAfter := engine.phase
+	modeAfter := engine.mode
+	engine.mu.Unlock()
+
+	// Soft timeout force-accepts → phase must have transitioned out
+	// of Establish (to Accepted). The exact target depends on the
+	// auto-advance in acceptLedger; either Accepted or Open (next
+	// round) is acceptable, as long as we left Establish.
+	if phaseAfter == consensus.PhaseEstablish {
+		t.Errorf("soft timeout: phase should have transitioned out of Establish, got %v", phaseAfter)
+	}
+
+	// Soft timeout MUST NOT bow out a proposing validator — that's
+	// the hard-abandon semantic, not the soft one.
+	if modeAfter == consensus.ModeObserving {
+		t.Errorf("soft timeout must NOT bow out (mode=Observing); got mode=%v — that is the hard-abandon behavior", modeAfter)
+	}
+
+	// Drain events and assert we saw a ConsensusReachedEvent with
+	// ResultTimeout, not ResultAbandoned.
+	sawTimeout := false
+	sawAbandoned := false
+	deadline := time.After(500 * time.Millisecond)
+drain:
+	for {
+		select {
+		case ev := <-subscriber.events:
+			if cre, ok := ev.(*consensus.ConsensusReachedEvent); ok {
+				switch cre.Result {
+				case consensus.ResultTimeout:
+					sawTimeout = true
+				case consensus.ResultAbandoned:
+					sawAbandoned = true
+				}
+			}
+		case <-deadline:
+			break drain
+		}
+	}
+	if !sawTimeout {
+		t.Errorf("expected ConsensusReachedEvent with ResultTimeout from soft deadline")
+	}
+	if sawAbandoned {
+		t.Errorf("soft timeout must not emit ResultAbandoned")
+	}
+}
+
+// TestConsensus_AbandonHardTimeout pins the behavior of the E3 hard
+// deadline: once a round exceeds the ledgerABANDON_CONSENSUS clamp
+// (rippled's 15s..120s clamp, ConsensusParms.h:113), the engine
+// abandons the round. Per rippled Consensus.cpp:253-263 + Consensus.h:
+// 1760-1785, this means:
+//
+//  1. We treat the state as ConsensusState::Expired.
+//  2. leaveConsensus() is called — if we were proposing, we bow out
+//     to Observing (Consensus.h:1802-1817).
+//  3. The accept step still runs with a distinct Result so callers
+//     can tell a hard abandon from a soft force-accept.
+//
+// goXRPL surfaces (3) as ResultAbandoned.
+func TestConsensus_AbandonHardTimeout(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	config := DefaultConfig()
+	config.Timing.LedgerMaxConsensus = 15 * time.Second
+	config.Timing.LedgerMaxClose = 15 * time.Second
+	config.Timing.LedgerAbandonConsensus = 120 * time.Second
+	config.Timing.LedgerAbandonConsensusFactor = 10
+
+	engine := NewEngine(adaptor, config)
+
+	subscriber := &testSubscriber{events: make(chan consensus.Event, 32)}
+	engine.Subscribe(subscriber)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	// Confirm the engine entered ModeProposing — the abandon branch
+	// must demote a proposing validator (rippled leaveConsensus).
+	engine.mu.Lock()
+	if engine.mode != consensus.ModeProposing {
+		engine.mu.Unlock()
+		t.Fatalf("setup: expected ModeProposing after StartRound, got %v", engine.mode)
+	}
+	// Force the engine into Establish with a roundStartTime 121s in
+	// the past — past the absolute 120s hard ceiling. Set
+	// prevRoundTime high so the factor×clamp would produce a huge
+	// deadline; the hard abandon ceiling must still fire.
+	engine.setPhase(consensus.PhaseEstablish)
+	engine.roundStartTime = time.Now().Add(-121 * time.Second)
+	engine.prevRoundTime = 60 * time.Second // factor×60s=600s, clamped down to 120s
+	engine.phaseEstablish()
+	phaseAfter := engine.phase
+	modeAfter := engine.mode
+	engine.mu.Unlock()
+
+	// Hard abandon must transition out of Establish.
+	if phaseAfter == consensus.PhaseEstablish {
+		t.Errorf("hard abandon: phase should have transitioned out of Establish, got %v", phaseAfter)
+	}
+
+	// Hard abandon bows a proposing validator out to Observing
+	// (rippled leaveConsensus). After auto-advance in acceptLedger
+	// we may re-promote, but at minimum we must NOT still be
+	// ModeProposing on the same round — the round was abandoned.
+	// Accept either Observing (bow-out held through the new round
+	// setup) or the post-advance promotion back to Proposing if the
+	// new round re-promoted cleanly. What we assert is that the
+	// bow-out step ran: the adaptor.modeChanges transcript must
+	// contain an Observing transition.
+	adaptor.mu.RLock()
+	sawObserving := false
+	for _, m := range adaptor.modeChanges {
+		if m == consensus.ModeObserving {
+			sawObserving = true
+			break
+		}
+	}
+	adaptor.mu.RUnlock()
+	if !sawObserving {
+		t.Errorf("hard abandon: expected bow-out to ModeObserving (rippled leaveConsensus), modeChanges=%v, final mode=%v", adaptor.modeChanges, modeAfter)
+	}
+
+	// Drain events and assert ResultAbandoned was emitted.
+	sawAbandoned := false
+	sawTimeout := false
+	deadline := time.After(500 * time.Millisecond)
+drain:
+	for {
+		select {
+		case ev := <-subscriber.events:
+			if cre, ok := ev.(*consensus.ConsensusReachedEvent); ok {
+				switch cre.Result {
+				case consensus.ResultAbandoned:
+					sawAbandoned = true
+				case consensus.ResultTimeout:
+					sawTimeout = true
+				}
+			}
+		case <-deadline:
+			break drain
+		}
+	}
+	if !sawAbandoned {
+		t.Errorf("expected ConsensusReachedEvent with ResultAbandoned from hard abandon")
+	}
+	if sawTimeout {
+		t.Errorf("hard abandon must not emit ResultTimeout (that is the soft branch)")
 	}
 }

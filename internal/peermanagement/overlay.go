@@ -2,6 +2,7 @@ package peermanagement
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -94,6 +95,16 @@ func BadDataWeight(reason string) int {
 	// Malformed requests: decode failures, bad hashes, wrong-field
 	// requests. Rippled: feeMalformedRequest at PeerImp.cpp:1693 for
 	// "bad hashes" and at PeerImp.cpp:1476 for bad requests.
+	//
+	// "squelch-ignored" lives here (G4): a peer that keeps relaying a
+	// validator's messages after being squelched is mis-behaving at
+	// the protocol level, but a single event is not catastrophic —
+	// sustained ignore (many per decay window) accumulates toward
+	// eviction while a one-off (packet already in flight when the
+	// squelch landed) decays below threshold. Rippled's upstream only
+	// increments a traffic counter here (OverlayImpl.cpp:1435-1437);
+	// goXRPL additionally charges reputation so repeat offenders are
+	// actually evicted rather than just counted.
 	case "proposal-malformed-prev-ledger-size",
 		"proposal-malformed-txset-size",
 		"validation-malformed-ledger-hash-zero",
@@ -112,7 +123,8 @@ func BadDataWeight(reason string) int {
 		"proposal-decode",
 		"validation-decode",
 		"validation-parse",
-		"ledger-data-decode":
+		"ledger-data-decode",
+		"squelch-ignored":
 		return weightMalformedReq
 	// A peer that didn't respond or returned benign "no data" — lowest.
 	case "no-reply":
@@ -120,6 +132,28 @@ func BadDataWeight(reason string) int {
 	default:
 		return weightDefaultBadData
 	}
+}
+
+// RelayedIndexTTL bounds how long a suppression-key → peers entry is
+// kept in the reverse index. Must match the consensus router's
+// messageDedupTTL so that a hash remains queryable for as long as the
+// router may observe duplicates for it. If the index expired before
+// the dedup window, a duplicate hitting router.handleProposal could
+// find no "peers that have the message" entry and under-feed the
+// slot — the exact bug B3 was filed to fix.
+const RelayedIndexTTL = 30 * time.Second
+
+// RelayedIndexMaxEntries caps memory for the reverse index under
+// adversarial traffic. Sized to match the adaptor's dedup cap so both
+// age out together under sustained churn.
+const RelayedIndexMaxEntries = 4096
+
+// relayedEntry is one bucket in the reverse index — the set of peers
+// we know "have" a given suppression-key, plus the last-update time
+// for TTL reaping.
+type relayedEntry struct {
+	peers  map[PeerID]struct{}
+	seenAt time.Time
 }
 
 // Overlay is the central orchestrator for XRPL peer-to-peer networking.
@@ -137,6 +171,18 @@ type Overlay struct {
 	peers   map[PeerID]*Peer
 	peersMu sync.RWMutex
 	nextID  atomic.Uint64
+
+	// relayedIndex maps suppression-hash → set of peers known to have
+	// that message. Populated as we forward a validator message (each
+	// recipient joins the set) and queried by the consensus router on
+	// duplicate arrivals so ALL known-havers feed the reduce-relay
+	// slot — not just the peer that delivered the current duplicate.
+	// Matches rippled's overlay().relay returning the haveMessage set
+	// that is then passed to updateSlotAndSquelch
+	// (PeerImp.cpp:3010-3017 for proposals, 3044-3054 for validations).
+	relayedIndex   map[[32]byte]*relayedEntry
+	relayedIndexMu sync.Mutex
+	clockForIndex  func() time.Time
 
 	// Coordination channels
 	events   chan Event
@@ -173,6 +219,16 @@ type Overlay struct {
 // higher layer (e.g., consensus startup) can wire a LedgerProvider that
 // imports internal/ledger packages — which this layer cannot.
 func (o *Overlay) LedgerSync() *LedgerSyncHandler { return o.ledgerSync }
+
+// localValidatorPubKey returns the compressed secp256k1 public key of
+// the local validator, or nil when this node is not acting as a
+// validator. Used as a cheap passthrough by handleSquelchMessage so
+// the self-target filter doesn't need to reach into cfg directly.
+// Kept unexported — higher layers plumb the pubkey in via
+// WithLocalValidatorPubKey at overlay construction.
+func (o *Overlay) localValidatorPubKey() []byte {
+	return o.cfg.LocalValidatorPubKey
+}
 
 // IncPeerBadData records an invalid-data event attributed to the peer
 // with the given PeerID. Returns the new cumulative count, or 0 when
@@ -257,20 +313,42 @@ func New(opts ...Option) (*Overlay, error) {
 	events := make(chan Event, 256)
 
 	o := &Overlay{
-		cfg:        cfg,
-		identity:   identity,
-		discovery:  NewDiscovery(&cfg, events),
-		relay:      NewRelay(&cfg, nil), // squelch callback set below
-		ledgerSync: NewLedgerSyncHandler(events),
-		peers:      make(map[PeerID]*Peer),
-		events:     events,
-		messages:   make(chan *InboundMessage, 256),
+		cfg:           cfg,
+		identity:      identity,
+		discovery:     NewDiscovery(&cfg, events),
+		ledgerSync:    NewLedgerSyncHandler(events),
+		peers:         make(map[PeerID]*Peer),
+		events:        events,
+		messages:      make(chan *InboundMessage, 256),
+		relayedIndex:  make(map[[32]byte]*relayedEntry),
+		clockForIndex: time.Now,
 	}
 
-	// Set squelch callback for reduce-relay
-	o.relay.onSquelch = o.handleSquelch
+	// Wire reduce-relay callbacks. The squelch callback constructs and
+	// dispatches TMSquelch frames to individual peers; the ignored-
+	// squelch callback charges a peer's bad-data balance whenever it
+	// keeps relaying a validator's messages after being squelched.
+	// Both are set at construction — Relay never swaps them at runtime.
+	// Mirrors rippled's OverlayImpl wiring where SquelchHandler +
+	// ignored_squelch_callback are passed into Slot at construction
+	// (Slot.h:121-132 + Slot.h:112-113).
+	o.relay = NewRelayWithIgnoredCallback(&cfg, o.handleSquelch, o.chargeIgnoredSquelch)
 
 	return o, nil
+}
+
+// chargeIgnoredSquelch is the Relay-layer callback fired when a peer
+// keeps relaying a validator's messages despite being squelched. We
+// charge the peer's bad-data balance under a stable reason label so
+// operators watching bad-data metrics can attribute the increase to
+// squelch-ignored behavior specifically. Per rippled Slot.h:329-331,
+// this is the only place we learn that a peer ignored our TMSquelch
+// — there is no separate protocol signal.
+//
+// Non-blocking; safe to invoke from the hot receive path because
+// IncPeerBadData is a single map lookup + atomic add.
+func (o *Overlay) chargeIgnoredSquelch(peerID PeerID) {
+	o.IncPeerBadData(peerID, "squelch-ignored")
 }
 
 // loadOrCreateIdentity loads existing identity or creates a new one.
@@ -632,22 +710,26 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		return
 	}
 
-	// Handle TMSquelch at the transport level — update per-peer squelch
-	// state and do not forward to external consumers. Mirrors rippled's
-	// PeerImp::onMessage(TMSquelch) at PeerImp.cpp:2691-2732, which
-	// applies every inbound TMSquelch unconditionally. Feature
-	// negotiation governs what WE SEND (we only emit TMSquelch to peers
-	// who advertised reduce-relay), not what we accept: a squelch
-	// directive is harmless if applied — it only suppresses what we
-	// send next — and rejecting it creates a not-actually-rippled
-	// attack surface where a hostile peer could advertise one capability
-	// set to us and another to a neighbor to desync squelch state.
+	// Inbound TMSquelch is accepted UNCONDITIONALLY. Rippled
+	// PeerImp::onMessage(TMSquelch) at PeerImp.cpp:2684-2721 does the
+	// same — there is no per-peer gating on vpReduceRelay for incoming
+	// squelches. Feature negotiation governs what WE SEND (we only
+	// emit TMSquelch to peers who advertised reduce-relay), not what
+	// we accept: a squelch directive is harmless when applied — it
+	// only suppresses what we send next — and rejecting it creates a
+	// not-actually-rippled attack surface where a hostile peer could
+	// advertise one capability set to us and another to a neighbor
+	// to desync squelch state.
+	//
+	// C3 note: an earlier round-2 commit message claimed this path
+	// gated on vpReduceRelay and charged-then-dropped peers that
+	// hadn't negotiated it. The code has always accepted
+	// unconditionally, matching rippled — the commit message was
+	// inaccurate and this comment is the canonical statement of
+	// intended behavior.
 	if msgType == message.TypeSquelch {
-		// TMSquelch is a validator-proposal concept (VPRR). We log,
-		// not drop, a squelch from a peer that didn't negotiate vprr —
-		// rippled applies the squelch regardless of feature gate.
 		if !o.PeerSupports(evt.PeerID, FeatureVpReduceRelay) {
-			slog.Debug("TMSquelch from peer without vprr feature; applying anyway (parity with rippled)",
+			slog.Debug("TMSquelch from peer without vprr feature; accepting (matches rippled)",
 				"t", "Overlay", "peer", evt.PeerID)
 		}
 		o.handleSquelchMessage(evt)
@@ -839,6 +921,19 @@ func (o *Overlay) handleSquelchMessage(evt Event) {
 		return
 	}
 
+	// Rippled PeerImp.cpp:2715-2721 drops any inbound squelch whose
+	// target pubkey is our own validator — otherwise a peer could
+	// silence our own traffic on the RelayFromValidator path
+	// (self-silencing DoS). goXRPL additionally charges the sending
+	// peer a bad-data event so repeated attempts feed the eviction
+	// threshold; rippled just logs-and-returns there.
+	if ownPubKey := o.localValidatorPubKey(); len(ownPubKey) == 33 && bytes.Equal(sq.ValidatorPubKey, ownPubKey) {
+		slog.Debug("Squelch dropped: targets local validator",
+			"t", "Overlay", "peer", evt.PeerID)
+		o.IncPeerBadData(evt.PeerID, "squelch-targets-self")
+		return
+	}
+
 	o.peersMu.RLock()
 	peer, exists := o.peers[evt.PeerID]
 	o.peersMu.RUnlock()
@@ -959,6 +1054,17 @@ func (o *Overlay) maintenanceLoop(ctx context.Context) error {
 	decayTicker := time.NewTicker(badDataDecayInterval)
 	defer decayTicker.Stop()
 
+	// idleSweepTicker drives the reduce-relay idle-peer sweep (G2).
+	// Cadence is Idled/2 (4s) so no relay peer stays referenced more
+	// than ~1.5x the idle threshold before being evicted — matches
+	// rippled's OverlayImpl.cpp:107-111 which triggers
+	// Slots::deleteIdlePeers every 4 timer ticks of its 1s timer
+	// (Tuning::checkIdlePeers=4). Without this sweep, r.slots only
+	// shrinks on explicit RemovePeer and accumulates stale entries
+	// for validators we no longer see.
+	idleSweepTicker := time.NewTicker(Idled / 2)
+	defer idleSweepTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -967,6 +1073,10 @@ func (o *Overlay) maintenanceLoop(ctx context.Context) error {
 			o.performMaintenance()
 		case <-decayTicker.C:
 			o.decayBadData()
+		case now := <-idleSweepTicker.C:
+			if o.relay != nil {
+				o.relay.deleteIdlePeers(now)
+			}
 		}
 	}
 }
@@ -1181,15 +1291,27 @@ func (o *Overlay) Broadcast(msg []byte) error {
 // excluding the originating peer (exceptPeer). Pass 0 for exceptPeer
 // when no peer should be excluded (e.g. tests that synthesize a relay).
 //
+// suppressionHash is the consensus-router suppression key for this
+// message (same [32]byte used by the dedup cache). Every peer we
+// actually send to is recorded in the reverse index so a later
+// duplicate arrival from ANOTHER peer can query
+// Overlay.PeersThatHave(suppressionHash) and feed the reduce-relay
+// slot with the full set of known-havers — matching rippled's
+// haveMessage return from overlay_.relay at PeerImp.cpp:3010-3017 /
+// 3044-3054.
+//
 // Mirrors rippled's gossip-forward path in OverlayImpl::relay: the
 // squelch is consulted before each outbound send (PeerImp.cpp:240-256)
 // and expired squelches auto-clear via Peer.ExpireSquelch. Self-origin
 // is handled by a separate code path (see Broadcast) that skips the
 // filter entirely.
-func (o *Overlay) RelayFromValidator(validator []byte, exceptPeer PeerID, msg []byte) error {
-	o.peersMu.RLock()
-	defer o.peersMu.RUnlock()
+func (o *Overlay) RelayFromValidator(validator []byte, suppressionHash [32]byte, exceptPeer PeerID, msg []byte) error {
+	// Collect the set of peers we actually forwarded to, under the
+	// peer-map RLock. Record into the reverse index AFTER releasing
+	// that lock so we never nest index-mutex inside peers-mutex.
+	var forwarded []PeerID
 
+	o.peersMu.RLock()
 	for id, peer := range o.peers {
 		if id == exceptPeer {
 			continue
@@ -1201,8 +1323,108 @@ func (o *Overlay) RelayFromValidator(validator []byte, exceptPeer PeerID, msg []
 			continue
 		}
 		peer.Send(msg)
+		forwarded = append(forwarded, id)
+	}
+	o.peersMu.RUnlock()
+
+	if len(forwarded) > 0 {
+		o.recordRelayedPeers(suppressionHash, forwarded)
 	}
 	return nil
+}
+
+// recordRelayedPeers adds peerIDs to the reverse-index bucket for
+// suppressionHash, trimming expired buckets if we hit the size cap.
+// Safe for concurrent callers.
+func (o *Overlay) recordRelayedPeers(suppressionHash [32]byte, peerIDs []PeerID) {
+	if o.relayedIndex == nil {
+		return
+	}
+	clock := o.clockForIndex
+	if clock == nil {
+		clock = time.Now
+	}
+	now := clock()
+
+	o.relayedIndexMu.Lock()
+	defer o.relayedIndexMu.Unlock()
+
+	// Trim if we're at capacity. A cheap TTL sweep rather than a
+	// formal LRU — the index is a cache, not a hot path.
+	if len(o.relayedIndex) >= RelayedIndexMaxEntries {
+		cutoff := now.Add(-RelayedIndexTTL)
+		for h, e := range o.relayedIndex {
+			if e.seenAt.Before(cutoff) {
+				delete(o.relayedIndex, h)
+			}
+		}
+		// If that didn't free enough space (adversarial churn), drop
+		// half the map — bounded worst case, same shape as the
+		// messageSuppression eviction in the consensus router.
+		if len(o.relayedIndex) >= RelayedIndexMaxEntries {
+			i := 0
+			for h := range o.relayedIndex {
+				if i >= RelayedIndexMaxEntries/2 {
+					break
+				}
+				delete(o.relayedIndex, h)
+				i++
+			}
+		}
+	}
+
+	entry, ok := o.relayedIndex[suppressionHash]
+	if !ok {
+		entry = &relayedEntry{peers: make(map[PeerID]struct{})}
+		o.relayedIndex[suppressionHash] = entry
+	}
+	for _, id := range peerIDs {
+		entry.peers[id] = struct{}{}
+	}
+	entry.seenAt = now
+}
+
+// PeersThatHave returns the set of peer IDs known to have the message
+// whose suppression-hash is `suppressionHash`. Entries are populated
+// when we relay a validator message outward (RelayFromValidator) and
+// expire after RelayedIndexTTL.
+//
+// Returns nil when the hash is unknown or the bucket has aged out —
+// callers treat both equivalently (nothing to feed the slot with
+// beyond the current originPeer).
+//
+// Thread-safe. The returned slice is a private copy the caller may
+// mutate freely.
+func (o *Overlay) PeersThatHave(suppressionHash [32]byte) []PeerID {
+	if o.relayedIndex == nil {
+		return nil
+	}
+	clock := o.clockForIndex
+	if clock == nil {
+		clock = time.Now
+	}
+
+	o.relayedIndexMu.Lock()
+	defer o.relayedIndexMu.Unlock()
+
+	entry, ok := o.relayedIndex[suppressionHash]
+	if !ok {
+		return nil
+	}
+	// Lazy-expire: if the bucket is older than TTL, drop it and report
+	// "unknown". Keeps queries from returning stale peers after the
+	// dedup window has elapsed (which would feed the slot with
+	// counters the rest of the network would have dropped long ago).
+	if clock().Sub(entry.seenAt) >= RelayedIndexTTL {
+		delete(o.relayedIndex, suppressionHash)
+		return nil
+	}
+
+	out := make([]PeerID, 0, len(entry.peers))
+	for id := range entry.peers {
+		out = append(out, id)
+	}
+	return out
 }
 
 // OnValidatorMessage is called by the consensus router on every inbound

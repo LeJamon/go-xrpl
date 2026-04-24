@@ -47,6 +47,17 @@ func (ts *TxSetImpl) Txs() [][]byte {
 	return result
 }
 
+func (ts *TxSetImpl) TxIDs() []consensus.TxID {
+	// Return in the same order as Txs() so callers can zip the two
+	// slices. ts.index maps id→position into ts.txs, so the reverse
+	// walk writes each id at its canonical slot.
+	result := make([]consensus.TxID, len(ts.txs))
+	for id, idx := range ts.index {
+		result[idx] = id
+	}
+	return result
+}
+
 func (ts *TxSetImpl) Contains(id consensus.TxID) bool {
 	_, ok := ts.index[id]
 	return ok

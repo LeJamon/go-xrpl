@@ -31,11 +31,18 @@ var (
 	// Either a peer fork or wire corruption that escaped GotResponse.
 	ErrReplayTxParse = errors.New("replay delta: parse tx failed")
 
-	// ErrReplayTxDiverged signals the engine returned a non-success,
-	// non-tec, non-retry result code (tef/tem/tel) on a tx that
-	// rippled successfully applied. State-hash arbitration at the end
-	// of Apply may still save the adoption, but the Apply caller
-	// typically fails the replay-delta and falls back to legacy.
+	// ErrReplayTxDiverged signals the engine returned a non-applied
+	// result (terRETRY / tef* / tem* / tel*) on a tx that rippled
+	// successfully applied (the peer served it in the delta, so its
+	// canonical ledger embedded it). Rippled's BuildLedger.cpp:246 +
+	// Transactor.cpp:1108,1215-1267 only rawTxInsert's the tx leaf
+	// when applied==true (tes / tec); anything else drops the tx from
+	// the view. Installing the peer-supplied leaf on non-applied
+	// branches was a goXRPL-only divergence (see R6.4) that papered
+	// over a real engine disagreement — when the engine rejects a tx
+	// that rippled accepted, AccountHash will diverge regardless, so
+	// preserving the leaf bought nothing and obscured the root cause.
+	// Fail loudly instead so the replay falls back to legacy catchup.
 	ErrReplayTxDiverged = errors.New("replay delta: tx result diverges from peer")
 
 	// ErrReplayLeafInstall wraps SHAMap AddTransactionWithMeta
@@ -624,55 +631,40 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 			}
 		}
 
-		switch {
-		case result.Result.IsSuccess(), result.Result.IsTec():
-			// Both produce ledger entries and consume a TransactionIndex.
-			// Anchor the verified leaf blob (peer's tx + peer's metadata,
-			// already verified by GotResponse) into the child's tx map so
-			// the resulting TxHash matches header.TxHash exactly. Using
-			// our locally-generated metadata would diverge byte-for-byte
-			// from the peer's even when the AffectedNodes are
-			// semantically equivalent.
-			if err := child.AddTransactionWithMeta(dtx.Hash, dtx.LeafBlob); err != nil {
-				return nil, fmt.Errorf("%w: tx %x: %w", ErrReplayLeafInstall, dtx.Hash[:8], err)
-			}
-		case result.Result.ShouldRetry():
-			// Rippled's BuildLedger.cpp:246 DISCARDS the ApplyResult
-			// during replay — a terRETRY during canonical-input replay
-			// is silently ignored rather than escalated. Parity: log,
-			// install the tx leaf (state-hash arbitration will catch
-			// a genuine engine divergence at the end of Apply), and
-			// continue. The pre-R5.11 hard-fail triggered spurious
-			// legacy-catchup fallbacks whenever goXRPL's engine had
-			// any small behavioral difference, even on semantically
-			// correct ledgers.
-			r.logger.Warn("replay tx returned ShouldRetry; continuing (matches rippled BuildLedger.cpp:246)",
+		// D5 — install the peer-supplied leaf only on applied==true
+		// (tes / tec), matching rippled's Transactor.cpp:1108 +
+		// 1215-1267 + BuildLedger.cpp:246. Anything else (ter / tef /
+		// tem / tel) means the engine DROPPED the tx from the view;
+		// rippled never rawTxInsert's such txs, so neither do we. If
+		// the peer's canonical ledger contains that tx, AccountHash
+		// will diverge at the post-Close check — but we fail here
+		// instead, so the error message points at the actual engine
+		// disagreement rather than a downstream hash symptom.
+		//
+		// Historical note: the pre-D5 switch (R5.11 + R6.4) tried to
+		// paper over engine disagreements by installing the peer leaf
+		// anyway and letting the AccountHash safety net catch genuine
+		// divergence. The reasoning was that small preflight differences
+		// were producing false-positive legacy-catchup fallbacks. That
+		// trade-off was wrong — if the engine disagrees on whether a
+		// tx applies, the state the peer claims we should reach is
+		// unreachable from our engine regardless, so preserving the
+		// leaf bought nothing and obscured the real divergence.
+		if !result.Result.IsApplied() {
+			r.logger.Warn("replay tx returned non-applied result — engine diverges from peer",
 				"tx", fmt.Sprintf("%x", dtx.Hash[:8]),
 				"ter", result.Result.String(),
+				"note", "rippled only rawTxInsert's when applied==true (Transactor.cpp:1108,1215-1267)",
 			)
-			if err := child.AddTransactionWithMeta(dtx.Hash, dtx.LeafBlob); err != nil {
-				return nil, fmt.Errorf("%w: tx %x after ShouldRetry: %w", ErrReplayLeafInstall, dtx.Hash[:8], err)
-			}
-		default:
-			// tef*, tem*, tel* during replay — rippled's
-			// BuildLedger.cpp:244-247 DISCARDS the ApplyResult during
-			// replay, so these codes are silently ignored just like
-			// terRETRY (see R5.11). Parity: log, install the peer-
-			// supplied leaf blob so the tx map root still matches
-			// header.TxHash, and continue. State-hash arbitration at
-			// the end of Apply will catch a genuine AffectedNodes
-			// divergence. The pre-R6.4 hard-fail here triggered
-			// legacy-catchup fallbacks on semantically-correct
-			// ledgers where our engine returned tem* due to a minor
-			// preflight difference — same class of false-positive as
-			// R5.11 fixed for terRETRY.
-			r.logger.Warn("replay tx returned tef/tem/tel; continuing (matches rippled BuildLedger.cpp:244-247)",
-				"tx", fmt.Sprintf("%x", dtx.Hash[:8]),
-				"ter", result.Result.String(),
-			)
-			if err := child.AddTransactionWithMeta(dtx.Hash, dtx.LeafBlob); err != nil {
-				return nil, fmt.Errorf("%w: tx %x after tef/tem/tel: %w", ErrReplayLeafInstall, dtx.Hash[:8], err)
-			}
+			return nil, fmt.Errorf("%w: tx %x returned %s; rippled only embeds tes/tec txs",
+				ErrReplayTxDiverged, dtx.Hash[:8], result.Result.String())
+		}
+		// Applied path (tes / tec): anchor the verified peer leaf so the
+		// rebuilt TxHash matches header.TxHash byte-for-byte. Using our
+		// locally-generated metadata would diverge even when the
+		// AffectedNodes are semantically equivalent.
+		if err := child.AddTransactionWithMeta(dtx.Hash, dtx.LeafBlob); err != nil {
+			return nil, fmt.Errorf("%w: tx %x: %w", ErrReplayLeafInstall, dtx.Hash[:8], err)
 		}
 	}
 

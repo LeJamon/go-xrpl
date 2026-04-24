@@ -190,7 +190,10 @@ func TestRelayFromValidator_SkipsSquelchedPeers(t *testing.T) {
 	payload := []byte("validation-frame")
 	// exceptPeer = 0 means no peer is excluded by origin — this test
 	// exercises only the squelch filter, not the origin-exclusion.
-	require.NoError(t, o.RelayFromValidator(validator, PeerID(0), payload))
+	// The suppressionHash is unused by this test (reverse-index is
+	// populated but never read), so any sentinel value works.
+	var hash [32]byte
+	require.NoError(t, o.RelayFromValidator(validator, hash, PeerID(0), payload))
 
 	// `allowed` must have received exactly the payload.
 	select {
@@ -302,6 +305,116 @@ func TestOverlay_InboundSquelch_MalformedPubkey_Charges(t *testing.T) {
 	copy(validator33, badValidator)
 	assert.True(t, peer.ExpireSquelch(validator33),
 		"malformed-pubkey squelch must not have installed a squelch entry")
+}
+
+// TestHandleSquelchMessage_DropsSelfTargetingSquelch pins Task 4.2 (G3):
+// an inbound TMSquelch whose ValidatorPubKey equals the local validator
+// pubkey must be dropped WITHOUT installing a squelch — otherwise a
+// hostile peer could silence our own validator's traffic on the
+// RelayFromValidator path. Matches rippled PeerImp.cpp:2715-2721.
+// The peer is charged "squelch-targets-self" so repeat offenders evict.
+func TestHandleSquelchMessage_DropsSelfTargetingSquelch(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	// Configure the local validator pubkey P (33-byte compressed).
+	localValidator := make([]byte, 33)
+	for i := range localValidator {
+		localValidator[i] = byte(0xAA)
+	}
+
+	o := &Overlay{
+		cfg:    Config{LocalValidatorPubKey: localValidator},
+		peers:  make(map[PeerID]*Peer),
+		events: make(chan Event, 8),
+	}
+
+	endpoint := Endpoint{Host: "127.0.0.1", Port: 51235}
+	peer := NewPeer(PeerID(99), endpoint, false, id, make(chan Event, 1))
+	o.peers[peer.ID()] = peer
+
+	// Peer sends a TMSquelch targeting OUR validator pubkey.
+	sq := &message.Squelch{
+		Squelch:         true,
+		ValidatorPubKey: localValidator,
+		SquelchDuration: uint32(MinUnsquelchExpire / time.Second),
+	}
+	payload, err := message.Encode(sq)
+	require.NoError(t, err)
+
+	require.Equal(t, uint32(0), peer.BadDataCount(),
+		"peer must start at zero bad-data")
+
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeSquelch),
+		Payload:     payload,
+	})
+
+	// AddSquelch must NOT have been called — ExpireSquelch returns true
+	// for any validator we have not squelched.
+	assert.True(t, peer.ExpireSquelch(localValidator),
+		"self-targeted squelch must not have installed a squelch entry")
+
+	// Peer is charged for attempting to silence our own validator.
+	// "squelch-targets-self" falls through to weightDefaultBadData (100).
+	assert.Equal(t, uint32(weightDefaultBadData), peer.BadDataCount(),
+		"self-targeting TMSquelch must charge bad-data (squelch-targets-self)")
+}
+
+// TestHandleSquelchMessage_AllowsOtherValidatorSquelch is the
+// companion regression guard: a TMSquelch targeting a validator pubkey
+// Q ≠ P (our local validator) must still be applied normally. Ensures
+// the G3 filter does not clobber the common case.
+func TestHandleSquelchMessage_AllowsOtherValidatorSquelch(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	// Local validator pubkey P.
+	localValidator := make([]byte, 33)
+	for i := range localValidator {
+		localValidator[i] = byte(0xAA)
+	}
+
+	// Other validator pubkey Q, distinct from P.
+	otherValidator := make([]byte, 33)
+	for i := range otherValidator {
+		otherValidator[i] = byte(0xBB)
+	}
+
+	o := &Overlay{
+		cfg:    Config{LocalValidatorPubKey: localValidator},
+		peers:  make(map[PeerID]*Peer),
+		events: make(chan Event, 8),
+	}
+
+	endpoint := Endpoint{Host: "127.0.0.1", Port: 51235}
+	peer := NewPeer(PeerID(100), endpoint, false, id, make(chan Event, 1))
+	o.peers[peer.ID()] = peer
+
+	sq := &message.Squelch{
+		Squelch:         true,
+		ValidatorPubKey: otherValidator,
+		SquelchDuration: uint32(MinUnsquelchExpire / time.Second),
+	}
+	payload, err := message.Encode(sq)
+	require.NoError(t, err)
+
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeSquelch),
+		Payload:     payload,
+	})
+
+	// AddSquelch must have run — ExpireSquelch returns false while the
+	// squelch is active.
+	assert.False(t, peer.ExpireSquelch(otherValidator),
+		"other-validator squelch must have been installed")
+
+	// No bad-data charge: applying a squelch for another validator is
+	// the normal, valid case.
+	assert.Equal(t, uint32(0), peer.BadDataCount(),
+		"applying a squelch for a different validator must not charge bad-data")
 }
 
 // TestOverlay_InboundSquelch_FromUnnegotiatedPeer verifies that an

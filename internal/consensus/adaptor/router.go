@@ -293,9 +293,19 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	originPeer := uint64(msg.PeerID)
 
 	// Record duplicate-status + last-sighting BEFORE OnProposal.
-	// Hash the raw payload: rippled's HashRouter semantics — same
-	// bytes from different peers => "duplicate".
-	firstSeen, lastSeen := r.messageSeen.observe(hashPayload(msg.Payload))
+	// Hash the DECODED fields via hashProposalSuppression (matches
+	// rippled's proposalUniqueId at RCLCxPeerPos.cpp:66-83). Hashing
+	// the raw protobuf envelope would desync dedup from rippled peers
+	// that see the same message with different optional-field framing
+	// (e.g., deprecated `hops` included or omitted) — same semantic
+	// proposal, but different byte payload.
+	//
+	// B3: stash the hash on the Proposal so the downstream relay path
+	// can thread it to Overlay's reverse index without recomputing
+	// (matches rippled's RCLCxPeerPos::suppressionID() instance member).
+	suppressionHash := hashProposalSuppression(proposal)
+	proposal.SuppressionHash = suppressionHash
+	firstSeen, lastSeen := r.messageSeen.observe(suppressionHash)
 
 	if err := r.engine.OnProposal(proposal, originPeer); err != nil {
 		r.logger.Debug("engine rejected proposal", "error", err, "peer", msg.PeerID)
@@ -310,8 +320,16 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	// (trust-specific branching happens later for relay decisions).
 	// Gating on trust pre-R5.7 under-squelched untrusted gossip
 	// vs. what the rest of the network does.
+	//
+	// B3: feed the slot with the FULL set of known-havers, not just
+	// originPeer. seenPeers is the overlay's reverse-index entry
+	// populated when we previously relayed this message outward —
+	// matching rippled's haveMessage set from overlay_.relay
+	// (PeerImp.cpp:3010-3017) which is then passed whole to
+	// updateSlotAndSquelch.
 	if !firstSeen && time.Since(lastSeen) < peermanagement.Idled {
-		r.adaptor.UpdateRelaySlot(proposal.NodeID[:], originPeer)
+		seenPeers := r.adaptor.PeersThatHave(suppressionHash)
+		r.adaptor.UpdateRelaySlot(proposal.NodeID[:], originPeer, seenPeers)
 	}
 }
 
@@ -346,9 +364,22 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 
 	originPeer := uint64(msg.PeerID)
 
-	// Observe-before-engine for consistent duplicate accounting —
-	// same rationale as handleProposal.
-	firstSeen, lastSeen := r.messageSeen.observe(hashPayload(msg.Payload))
+	// Observe-before-engine for consistent duplicate accounting. Hash
+	// the INNER STValidation blob carried in TMValidation.validation —
+	// matches rippled's PeerImp.cpp:2374 (`sha512Half(makeSlice(
+	// m->validation()))`). Hashing the TMValidation envelope instead
+	// would desync dedup from rippled peers the same way handleProposal
+	// would if it hashed the TMProposeSet envelope: deprecated outer
+	// fields vary, inner canonical blob does not. We use the raw
+	// inbound bytes here — NOT a re-serialized copy — so a lossy or
+	// reordered round-trip can't silently diverge the hash.
+	// B3: stash the hash on the Validation so the downstream relay
+	// path can thread it to Overlay's reverse index without
+	// recomputing (matches rippled's pattern of computing
+	// sha512Half(m->validation()) once per inbound and carrying it).
+	suppressionHash := hashValidationSuppression(val.Validation)
+	validation.SuppressionHash = suppressionHash
+	firstSeen, lastSeen := r.messageSeen.observe(suppressionHash)
 
 	if err := r.engine.OnValidation(validation, originPeer); err != nil {
 		r.logger.Debug("engine rejected validation", "error", err, "peer", msg.PeerID)
@@ -356,9 +387,11 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	}
 
 	// Same IDLED-gated, no-trust-gate feeding as handleProposal.
-	// Mirrors rippled's TMValidation path at PeerImp.cpp:2385.
+	// Mirrors rippled's TMValidation path at PeerImp.cpp:2385 and the
+	// B3 haveMessage expansion at PeerImp.cpp:3049-3054.
 	if !firstSeen && time.Since(lastSeen) < peermanagement.Idled {
-		r.adaptor.UpdateRelaySlot(validation.NodeID[:], originPeer)
+		seenPeers := r.adaptor.PeersThatHave(suppressionHash)
+		r.adaptor.UpdateRelaySlot(validation.NodeID[:], originPeer, seenPeers)
 	}
 }
 
@@ -379,9 +412,18 @@ func validateProposeBounds(p *message.ProposeSet) (string, bool) {
 	if n := len(p.Signature); n < signatureMinLen || n > signatureMaxLen {
 		return "sig-size", false
 	}
-	// Node pubkey is always a 33-byte compressed secp256k1 point.
+	// Proposal pubkeys must be compressed secp256k1 (0x02/0x03 prefix).
+	// ed25519 validators (0xED prefix) are not allowed in propose-set
+	// per rippled PeerImp.cpp:1679-1680
+	// (publicKeyType(...) != KeyType::secp256k1). The length-only check
+	// would pass a 33-byte ed25519 key (0xED || 32 bytes), letting the
+	// peer slip through without attribution, so the prefix gate runs
+	// alongside the size gate.
 	if len(p.NodePubKey) != 33 {
 		return "pubkey-size", false
+	}
+	if p.NodePubKey[0] != 0x02 && p.NodePubKey[0] != 0x03 {
+		return "pubkey-type", false
 	}
 	return "", true
 }
@@ -854,15 +896,15 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 // LedgerDeltaAcquire.cpp:209 which installs the peer-provided tx-blob
 // tree alongside the state map.
 //
-// R5.17 follow-up: rippled's LedgerMaster::tryAdvance cascades
-// follow-on adoptions when an out-of-order replay-delta arrival
-// unblocks a previously-held child ledger. goXRPL does not yet
-// maintain a held-ledgers queue, so out-of-order arrivals simply
-// wait for the next statusChange / replay-delta cycle to re-trigger.
-// This is a catchup-speed issue, not a safety issue. A full
-// tryAdvance port is tracked separately (requires a new held-ledgers
-// map in internal/ledger/service plus signaling from the router to
-// the service on each adoption).
+// F6: routed through SubmitHeldAdoption rather than AdoptLedgerWithState.
+// This gives us rippled's tryAdvance behavior for free: if the awaited
+// parent seq is already in history and its hash matches the verified
+// ledger's ParentHash, SubmitHeldAdoption fast-paths into the immediate
+// adopt (same call-shape as before). If the parent hasn't landed yet
+// — i.e. the replay-delta arrived out of order — the ledger is stashed
+// in the held-adoptions map keyed by its awaited parent seq, and
+// cascade-promoted automatically from inside the parent's eventual
+// adopt. The router no longer needs to observe ordering.
 func (r *Router) adoptVerifiedLedger(l *ledger.Ledger) error {
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
@@ -881,7 +923,7 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger) error {
 	if err != nil {
 		return fmt.Errorf("snapshot tx map: %w", err)
 	}
-	if err := svc.AdoptLedgerWithState(&hdr, stateMap, txMap); err != nil {
+	if err := svc.SubmitHeldAdoption(&hdr, stateMap, txMap); err != nil {
 		return fmt.Errorf("adopt with state: %w", err)
 	}
 	if r.adaptor.GetOperatingMode() < consensus.OpModeTracking {
@@ -1151,10 +1193,17 @@ func (r *Router) completeInboundLedger() {
 
 	// Legacy header+state catchup path: no per-ledger tx tree is
 	// fetched in this mode (only the header and state map), so pass
-	// nil and let AdoptLedgerWithState install the genesis-shaped
-	// empty tx map. The replay-delta path at adoptVerifiedLedger
-	// (below) passes the verified tx map — see R5.1.
-	if err := svc.AdoptLedgerWithState(h, stateMap, nil); err != nil {
+	// nil and let the service install the genesis-shaped empty tx
+	// map. The replay-delta path at adoptVerifiedLedger (above)
+	// passes the verified tx map — see R5.1.
+	//
+	// F6: same as the replay-delta path, route through
+	// SubmitHeldAdoption so out-of-order catchup arrivals either
+	// fast-path (parent already present) or stash for cascade when
+	// the awaited parent lands. Legacy mtGET_LEDGER is sequential at
+	// the wire level today, but nothing in the protocol forbids
+	// interleaving — the held-queue is the correct seam regardless.
+	if err := svc.SubmitHeldAdoption(h, stateMap, nil); err != nil {
 		r.logger.Warn("inbound ledger: failed to adopt with state", "error", err)
 		return
 	}

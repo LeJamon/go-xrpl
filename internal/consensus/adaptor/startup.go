@@ -79,8 +79,25 @@ func NewFromConfig(
 	appCfg *config.Config,
 	ledgerSvc *service.Service,
 ) (*Components, error) {
+	// Create validator identity first (nil if not a validator) so we can
+	// pass its pubkey into the overlay for the self-target TMSquelch
+	// filter (Task 4.2 / G3: without this a peer could silence our own
+	// validator's traffic on the RelayFromValidator path).
+	var identity *ValidatorIdentity
+	if appCfg.ValidationSeed != "" {
+		var err error
+		identity, err = NewValidatorIdentity(appCfg.ValidationSeed)
+		if err != nil {
+			return nil, fmt.Errorf("create validator identity: %w", err)
+		}
+	}
+
 	// Build overlay options from app config
 	overlayOpts := OverlayOptionsFromConfig(appCfg)
+	if identity != nil && len(identity.PublicKey) == 33 {
+		overlayOpts = append(overlayOpts,
+			peermanagement.WithLocalValidatorPubKey(identity.PublicKey))
+	}
 
 	overlay, err := peermanagement.New(overlayOpts...)
 	if err != nil {
@@ -96,15 +113,6 @@ func NewFromConfig(
 	// internal/ledger, so the adapter installed here lets both layers
 	// reach the ledger without breaking that layering boundary.
 	overlay.LedgerSync().SetProvider(NewLedgerProvider(ledgerSvc))
-
-	// Create validator identity (nil if not a validator)
-	var identity *ValidatorIdentity
-	if appCfg.ValidationSeed != "" {
-		identity, err = NewValidatorIdentity(appCfg.ValidationSeed)
-		if err != nil {
-			return nil, fmt.Errorf("create validator identity: %w", err)
-		}
-	}
 
 	// Load UNL from config
 	validators, err := ParseValidatorKeys(appCfg)

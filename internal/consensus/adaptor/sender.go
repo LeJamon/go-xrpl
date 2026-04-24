@@ -50,31 +50,52 @@ func (s *OverlaySender) BroadcastValidation(validation *consensus.Validation) er
 // pubkey (so peers that have signaled they no longer need that
 // validator's gossip are skipped) and excluding the originating peer
 // itself. Mirrors rippled's OverlayImpl::relay for TMProposeSet.
+//
+// proposal.SuppressionHash is the router-level dedup key (populated
+// by the consensus router from the canonical proposalUniqueId hash at
+// parse time). The overlay registers each recipient against that key
+// in its reverse index; the index is queried by the consensus router
+// on a later duplicate arrival so the slot is fed with the full set
+// of known-havers (B3, PeerImp.cpp:3010-3017).
 func (s *OverlaySender) RelayProposal(proposal *consensus.Proposal, exceptPeer uint64) error {
 	msg := ProposalToMessage(proposal)
 	frame, err := encodeFrame(message.TypeProposeLedger, msg)
 	if err != nil {
 		return fmt.Errorf("encode proposal: %w", err)
 	}
-	return s.overlay.RelayFromValidator(proposal.NodeID[:], peermanagement.PeerID(exceptPeer), frame)
+	return s.overlay.RelayFromValidator(proposal.NodeID[:], proposal.SuppressionHash, peermanagement.PeerID(exceptPeer), frame)
 }
 
 // RelayValidation forwards a peer-originated validation to other peers
-// with the same filter semantics as RelayProposal.
+// with the same filter semantics as RelayProposal. Uses
+// validation.SuppressionHash for the reverse-index record.
 func (s *OverlaySender) RelayValidation(validation *consensus.Validation, exceptPeer uint64) error {
 	msg := ValidationToMessage(validation)
 	frame, err := encodeFrame(message.TypeValidation, msg)
 	if err != nil {
 		return fmt.Errorf("encode validation: %w", err)
 	}
-	return s.overlay.RelayFromValidator(validation.NodeID[:], peermanagement.PeerID(exceptPeer), frame)
+	return s.overlay.RelayFromValidator(validation.NodeID[:], validation.SuppressionHash, peermanagement.PeerID(exceptPeer), frame)
 }
 
 // UpdateRelaySlot feeds the overlay's reduce-relay state machine with
 // an inbound validator message. Mirrors rippled's
 // PeerImp::updateSlotAndSquelch call in onMessage(TMProposeSet/TMValidation).
-func (s *OverlaySender) UpdateRelaySlot(validatorKey []byte, peerID uint64) {
-	s.overlay.OnValidatorMessage(validatorKey, peermanagement.PeerID(peerID))
+//
+// seenPeers is the set of peers already known to have this message
+// (from Overlay.PeersThatHave). Rippled's overlay_.relay returns that
+// set as haveMessage and PeerImp passes it whole to
+// updateSlotAndSquelch (PeerImp.cpp:3013-3017) so multi-path delivery
+// evidence is counted — not just the current duplicate's origin. We
+// dedupe originPeer out of seenPeers so no peer is double-counted.
+func (s *OverlaySender) UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPeers []uint64) {
+	s.overlay.OnValidatorMessage(validatorKey, peermanagement.PeerID(originPeer))
+	for _, p := range seenPeers {
+		if p == originPeer {
+			continue
+		}
+		s.overlay.OnValidatorMessage(validatorKey, peermanagement.PeerID(p))
+	}
 }
 
 func (s *OverlaySender) RequestTxSet(id consensus.TxSetID) error {
@@ -184,6 +205,24 @@ func (s *OverlaySender) ReplayCapablePeersExcluding(excluded []uint64, max int) 
 // peers.
 func (s *OverlaySender) IncPeerBadData(peerID uint64, reason string) {
 	s.overlay.IncPeerBadData(peermanagement.PeerID(peerID), reason)
+}
+
+// PeersThatHave returns the peer IDs the overlay knows have the
+// message with this suppression hash. Populated by the overlay as
+// messages are relayed outward (see Overlay.RelayFromValidator); the
+// consensus router queries this on duplicate arrivals so the
+// reduce-relay slot gets fed with every known-haver (B3,
+// PeerImp.cpp:3010-3017).
+func (s *OverlaySender) PeersThatHave(suppressionHash [32]byte) []uint64 {
+	raw := s.overlay.PeersThatHave(suppressionHash)
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]uint64, len(raw))
+	for i, p := range raw {
+		out[i] = uint64(p)
+	}
+	return out
 }
 
 // RequestReplayDelta asks a specific peer for a fast-catchup replay delta

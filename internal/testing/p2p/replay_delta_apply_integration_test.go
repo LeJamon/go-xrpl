@@ -120,20 +120,26 @@ func TestReplayDelta_Apply_Integration(t *testing.T) {
 	assert.Equal(t, wantTx, gotTx, "derived TxHash must match successor's")
 }
 
-// TestReplayDelta_Apply_DivergenceFromTef verifies the tef-result
-// divergence error: when Apply replays a tx that the engine rejects
-// with a tef* result (here: a duplicate tx, triggering tefALREADY),
-// it no longer hard-fails — R6.4 brings parity with rippled's
-// BuildLedger.cpp:244-247 which DISCARDS the ApplyResult during
-// replay. tef/tem/tel are log-and-continue; the state-hash check at
-// the end of Apply catches real divergence.
+// TestReplay_TefTxDoesNotInstallPeerLeaf verifies D5 — the apply
+// switch installs the peer-supplied tx leaf only when the engine
+// returned applied==true (tes / tec). On tef / tem / tel / ter, the
+// leaf is DROPPED and replay fails loudly with ErrReplayTxDiverged.
 //
-// We still build a duplicate-tx scenario because it's a reliable way
-// to trigger tef, but the assertion flips: Apply must NOT return
-// ErrReplayTxDiverged. Whatever error surfaces (or nil + wrong
-// state hash) must originate from a later arbitration stage, not
-// the pre-R6.4 hard-fail in the apply switch.
-func TestReplayDelta_Apply_TefDuringReplay_IsSilentlySkipped(t *testing.T) {
+// This reverses the earlier R6.4 "preserve peer leaf on all branches
+// and let the AccountHash check be the safety net" policy. Rippled's
+// Transactor.cpp:1108 + 1215-1267 sets applied = isTesSuccess(result)
+// (tec claims also promote to applied at :1215), and
+// BuildLedger.cpp:246 calls rawTxInsert only when applied==true —
+// everything else silently drops the tx from the view. Preserving
+// the leaf was a goXRPL-only divergence: if the engine disagrees
+// with the peer on whether a tx applies, AccountHash diverges
+// regardless, so the leaf-preservation bought nothing and obscured
+// the real disagreement.
+//
+// We trigger tef by replaying a duplicate tx (engine returns
+// tefALREADY on the second apply). That's a reliable, real-engine
+// path to a tef result during replay.
+func TestReplay_TefTxDoesNotInstallPeerLeaf(t *testing.T) {
 	env := xrplgoTesting.NewTestEnv(t)
 	env.VerifySignatures = true
 
@@ -168,11 +174,11 @@ func TestReplayDelta_Apply_TefDuringReplay_IsSilentlySkipped(t *testing.T) {
 	require.NoError(t, err)
 	successorHash := successor.Hash()
 
-	// Wire response carrying ONE tx (legitimate). GotResponse builds
-	// r.txs from this. We then poke a second DecodedTx with the same
-	// hash + blob into r.txs to simulate a divergent peer feeding us
-	// a duplicate — the engine produces tefALREADY on the second
-	// apply, which Apply must surface as an explicit divergence error.
+	// Wire response carries ONE legitimate tx; GotResponse builds r.txs
+	// from it. We then force-inject a second DecodedTx with the same
+	// hash + blob to simulate a divergent delta — the engine returns
+	// tefALREADY on the duplicate apply, which D5 must surface as
+	// ErrReplayTxDiverged instead of silently installing the peer leaf.
 	resp := &message.ReplayDeltaResponse{
 		LedgerHash:   successorHash[:],
 		LedgerHeader: hdrBytes,
@@ -181,10 +187,7 @@ func TestReplayDelta_Apply_TefDuringReplay_IsSilentlySkipped(t *testing.T) {
 	rd := inbound.NewReplayDelta(successorHash, 7, parent, nil)
 	require.NoError(t, rd.GotResponse(resp))
 
-	// Force-inject a second copy of the same DecodedTx — equivalent to
-	// receiving a delta whose tx set contains the same hash twice.
-	// The package-level helper below (in the same package since this
-	// test lives in p2p/) reaches into ReplayDelta to mutate r.txs.
+	// Duplicate hash in the replay set → tefALREADY on the second apply.
 	injectDuplicateTx(rd)
 
 	_, err = rd.Apply(tx.EngineConfig{
@@ -193,14 +196,9 @@ func TestReplayDelta_Apply_TefDuringReplay_IsSilentlySkipped(t *testing.T) {
 		ReserveIncrement:          50_000_000,
 		SkipSignatureVerification: false,
 	})
-	// R6.4: tef* during replay must NOT surface as ErrReplayTxDiverged.
-	// Any other error (or success with a later state-hash mismatch)
-	// is acceptable — the critical guarantee is that we no longer
-	// hard-fail here, which the pre-R6.4 behavior did.
-	if err != nil {
-		assert.NotErrorIs(t, err, inbound.ErrReplayTxDiverged,
-			"tef during replay must no longer produce ErrReplayTxDiverged (rippled parity — BuildLedger.cpp:244-247 discards ApplyResult)")
-	}
+	require.Error(t, err, "tef during replay must fail the replay loudly (D5 — only applied==true installs peer leaf)")
+	assert.ErrorIs(t, err, inbound.ErrReplayTxDiverged,
+		"tef during replay must surface as ErrReplayTxDiverged rather than silently continuing")
 }
 
 // injectDuplicateTx appends a duplicate of r.txs[0] to r.txs so Apply
