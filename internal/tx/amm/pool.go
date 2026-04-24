@@ -62,10 +62,7 @@ func ammAccountHolds(view tx.LedgerView, ammAccountID [20]byte, asset tx.Asset) 
 // ammPoolHolds returns the balances of both assets in the AMM pool.
 // Reference: rippled AMMUtils.cpp ammPoolHolds
 func ammPoolHolds(view tx.LedgerView, ammAccountID [20]byte, asset1, asset2 tx.Asset, fhZeroIfFrozen bool) (tx.Amount, tx.Amount) {
-	// Get balance of first asset
 	balance1 := ammAccountHolds(view, ammAccountID, asset1)
-
-	// Get balance of second asset
 	balance2 := ammAccountHolds(view, ammAccountID, asset2)
 
 	// Check for frozen assets if requested
