@@ -67,6 +67,13 @@ type ValidationTracker struct {
 
 	// callbacks
 	onFullyValidated func(ledgerID consensus.LedgerID, ledgerSeq uint32)
+
+	// onStale is fired once per validation dropped by ExpireOld, after
+	// the tracker's internal maps have been mutated but before returning
+	// to the caller. Invoked outside vt.mu so callbacks (e.g. the archive
+	// writer's channel send) may do I/O without risking lock-order
+	// inversion. Nil means "no archive wired."
+	onStale func(*consensus.Validation)
 }
 
 // NewValidationTracker creates a new validation tracker.
@@ -172,6 +179,18 @@ func (vt *ValidationTracker) SetFullyValidatedCallback(fn func(ledgerID consensu
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
 	vt.onFullyValidated = fn
+}
+
+// SetOnStale installs a callback invoked once per validation dropped by
+// ExpireOld. Mirrors rippled's Validations<Adaptor>::onStale contract —
+// consumed by the on-disk validation archive to persist stale validations
+// before they leave memory. Callback runs outside the tracker's mutex so it
+// may do blocking work (channel send to a batched writer); callers must
+// ensure it does not call back into the tracker. Pass nil to disable.
+func (vt *ValidationTracker) SetOnStale(fn func(*consensus.Validation)) {
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
+	vt.onStale = fn
 }
 
 // Validation freshness windows mirror rippled's Validations.h:626
@@ -506,19 +525,46 @@ func (vt *ValidationTracker) GetCurrentValidators() []consensus.NodeID {
 	return result
 }
 
-// ExpireOld removes old validations.
+// ExpireOld drops validations whose LedgerSeq is below minSeq from every
+// internal index, then fires onStale (if set) for each dropped validation
+// outside the mutex. All validations for a given ledger share a LedgerSeq,
+// so the staleness decision is taken from any one sample per ledger.
+//
+// Fixes a prior bug where byNode entries survived deletion — the node's
+// latest-validation pointer was kept pointing at a Validation removed from
+// the per-ledger map.
 func (vt *ValidationTracker) ExpireOld(minSeq uint32) {
 	vt.mu.Lock()
-	defer vt.mu.Unlock()
+
+	onStale := vt.onStale
+	var stale []*consensus.Validation
 
 	for ledgerID, ledgerVals := range vt.validations {
+		var sample *consensus.Validation
 		for _, v := range ledgerVals {
-			if v.LedgerSeq < minSeq {
-				delete(vt.validations, ledgerID)
-				delete(vt.fired, ledgerID)
-			}
+			sample = v
 			break
 		}
+		if sample == nil || sample.LedgerSeq >= minSeq {
+			continue
+		}
+		for nodeID, v := range ledgerVals {
+			stale = append(stale, v)
+			if latest, ok := vt.byNode[nodeID]; ok && latest == v {
+				delete(vt.byNode, nodeID)
+			}
+		}
+		delete(vt.validations, ledgerID)
+		delete(vt.fired, ledgerID)
+	}
+
+	vt.mu.Unlock()
+
+	if onStale == nil {
+		return
+	}
+	for _, v := range stale {
+		onStale(v)
 	}
 }
 
