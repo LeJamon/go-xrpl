@@ -267,26 +267,30 @@ func (pt *ProposalTracker) Clear() {
 	pt.byTxSet = make(map[consensus.TxSetID]map[consensus.NodeID]bool)
 }
 
-// DisputeTracker tracks disputed transactions during consensus.
+// DisputeTracker tracks disputed transactions and their per-peer
+// votes during a consensus round. Mirrors the role of rippled's
+// Result::disputes map plus the DisputedTx<> mutation API
+// (rippled/src/xrpld/consensus/DisputedTx.h).
 type DisputeTracker struct {
 	mu sync.RWMutex
 
-	// disputes maps tx ID to dispute info
 	disputes map[consensus.TxID]*consensus.DisputedTx
-
-	// ourVotes tracks our votes on disputes
-	ourVotes map[consensus.TxID]bool
 }
 
 // NewDisputeTracker creates a new dispute tracker.
 func NewDisputeTracker() *DisputeTracker {
 	return &DisputeTracker{
 		disputes: make(map[consensus.TxID]*consensus.DisputedTx),
-		ourVotes: make(map[consensus.TxID]bool),
 	}
 }
 
-// CreateDispute creates a new disputed transaction.
+// CreateDispute registers a new disputed transaction. If the dispute
+// already exists, the existing entry is returned unchanged. OurVote
+// is seeded from the caller (it should be set to whether the tx is
+// in our current proposed tx set).
+//
+// Matches the construction arm of rippled's createDisputes
+// (Consensus.h:1867-1884).
 func (dt *DisputeTracker) CreateDispute(txID consensus.TxID, tx []byte, ourVote bool) *consensus.DisputedTx {
 	dt.mu.Lock()
 	defer dt.mu.Unlock()
@@ -296,40 +300,191 @@ func (dt *DisputeTracker) CreateDispute(txID consensus.TxID, tx []byte, ourVote 
 	}
 
 	dispute := &consensus.DisputedTx{
-		TxID:    txID,
-		Tx:      tx,
-		OurVote: ourVote,
-		Yays:    0,
-		Nays:    0,
+		TxID:           txID,
+		Tx:             tx,
+		OurVote:        ourVote,
+		Votes:          make(map[consensus.NodeID]bool),
+		AvalancheState: consensus.AvalancheInit,
 	}
-
-	if ourVote {
-		dispute.Yays = 1
-	} else {
-		dispute.Nays = 1
-	}
-
 	dt.disputes[txID] = dispute
-	dt.ourVotes[txID] = ourVote
-
 	return dispute
 }
 
-// AddVote records a vote on a disputed transaction.
-func (dt *DisputeTracker) AddVote(txID consensus.TxID, include bool) {
+// SetVote records a peer's yes/no vote on a disputed transaction.
+// Returns true iff the vote was newly inserted OR changed from a
+// previous value; returns false if the peer already held this exact
+// vote (no count adjustment needed).
+//
+// The returned bool matches rippled's DisputedTx::setVote contract:
+// callers use it to reset peerUnchangedCounter_ (Consensus.h:1879,
+// 1906) to detect rounds where some peer is still actively updating.
+func (dt *DisputeTracker) SetVote(txID consensus.TxID, peerID consensus.NodeID, yes bool) bool {
 	dt.mu.Lock()
 	defer dt.mu.Unlock()
 
 	dispute, exists := dt.disputes[txID]
 	if !exists {
-		return
+		return false
 	}
 
-	if include {
+	prev, had := dispute.Votes[peerID]
+	switch {
+	case !had:
+		dispute.Votes[peerID] = yes
+		if yes {
+			dispute.Yays++
+		} else {
+			dispute.Nays++
+		}
+		return true
+	case prev == yes:
+		return false
+	case yes:
+		dispute.Votes[peerID] = true
+		dispute.Nays--
 		dispute.Yays++
-	} else {
+		return true
+	default:
+		dispute.Votes[peerID] = false
+		dispute.Yays--
 		dispute.Nays++
+		return true
 	}
+}
+
+// UnVote removes a peer's contribution from every active dispute.
+// Called when the peer bows out of the round (isBowOut), when its
+// last-known proposal ages past proposeFRESHNESS, or when it is
+// otherwise forcibly removed from currPeerPositions_.
+//
+// Matches rippled's bow-out loop at Consensus.h:807-811 and the
+// stale-proposal loop at Consensus.h:1517-1520.
+func (dt *DisputeTracker) UnVote(peerID consensus.NodeID) {
+	dt.mu.Lock()
+	defer dt.mu.Unlock()
+
+	for _, dispute := range dt.disputes {
+		vote, had := dispute.Votes[peerID]
+		if !had {
+			continue
+		}
+		delete(dispute.Votes, peerID)
+		if vote {
+			dispute.Yays--
+		} else {
+			dispute.Nays--
+		}
+	}
+}
+
+// UpdateDisputes records a peer's position across every active
+// dispute: for each dispute, the peer votes YES iff the disputed tx
+// appears in peerTxSet, else NO. Returns true iff any vote changed.
+//
+// Matches rippled's updateDisputes (Consensus.h:1892-1908).
+func (dt *DisputeTracker) UpdateDisputes(peerID consensus.NodeID, peerTxSet consensus.TxSet) bool {
+	if peerTxSet == nil {
+		return false
+	}
+	dt.mu.Lock()
+	defer dt.mu.Unlock()
+
+	changed := false
+	for txID, dispute := range dt.disputes {
+		yes := peerTxSet.Contains(txID)
+		prev, had := dispute.Votes[peerID]
+		switch {
+		case !had:
+			dispute.Votes[peerID] = yes
+			if yes {
+				dispute.Yays++
+			} else {
+				dispute.Nays++
+			}
+			changed = true
+		case prev == yes:
+			// no-op
+		case yes:
+			dispute.Votes[peerID] = true
+			dispute.Nays--
+			dispute.Yays++
+			changed = true
+		default:
+			dispute.Votes[peerID] = false
+			dispute.Yays--
+			dispute.Nays++
+			changed = true
+		}
+	}
+	return changed
+}
+
+// UpdateOurVote re-evaluates our vote on every dispute given the
+// current convergePercent and avalanche thresholds, mirroring
+// rippled's DisputedTx::updateVote (DisputedTx.h:278-338) applied
+// across all disputes as in updateOurPositions (Consensus.h:1536-1564).
+//
+// For each dispute:
+//   - If we already agree with the peer tally (ourVote=yes && nays==0,
+//     or ourVote=no && yays==0), skip.
+//   - Advance the dispute's avalanche state if allowed by percentTime
+//     and MinRounds.
+//   - When proposing, compute weight = (yays*100 + (ourVote ? 100 : 0))
+//     / (yays + nays + 1); flip our vote iff weight > requiredPct.
+//   - When not proposing, flip iff yays > nays (observer rule — we
+//     don't outweigh proposers, just recognize consensus).
+//
+// Returns the list of TxIDs whose OurVote flipped this call. The
+// engine uses that list to rebuild the proposed tx set.
+func (dt *DisputeTracker) UpdateOurVote(percentTime int, proposing bool, parms consensus.ConsensusParms) []consensus.TxID {
+	dt.mu.Lock()
+	defer dt.mu.Unlock()
+
+	var changed []consensus.TxID
+	for txID, dispute := range dt.disputes {
+		if dispute.OurVote && dispute.Nays == 0 {
+			continue
+		}
+		if !dispute.OurVote && dispute.Yays == 0 {
+			continue
+		}
+
+		dispute.AvalancheCounter++
+		requiredPct, newState := parms.NeededWeight(
+			dispute.AvalancheState,
+			percentTime,
+			dispute.AvalancheCounter,
+			parms.MinRounds,
+		)
+		if newState != nil {
+			dispute.AvalancheState = *newState
+			dispute.AvalancheCounter = 0
+		}
+
+		var newVote bool
+		if proposing {
+			ownContribution := 0
+			if dispute.OurVote {
+				ownContribution = 100
+			}
+			weight := (dispute.Yays*100 + ownContribution) /
+				(dispute.Yays + dispute.Nays + 1)
+			newVote = weight > requiredPct
+		} else {
+			// Observer: just recognize the majority, don't try to
+			// add our own weight.
+			newVote = dispute.Yays > dispute.Nays
+		}
+
+		if newVote == dispute.OurVote {
+			dispute.CurrentVoteCounter++
+			continue
+		}
+		dispute.CurrentVoteCounter = 0
+		dispute.OurVote = newVote
+		changed = append(changed, txID)
+	}
+	return changed
 }
 
 // GetDispute returns a disputed transaction.
@@ -337,6 +492,14 @@ func (dt *DisputeTracker) GetDispute(txID consensus.TxID) *consensus.DisputedTx 
 	dt.mu.RLock()
 	defer dt.mu.RUnlock()
 	return dt.disputes[txID]
+}
+
+// Has reports whether a dispute exists for the given TxID.
+func (dt *DisputeTracker) Has(txID consensus.TxID) bool {
+	dt.mu.RLock()
+	defer dt.mu.RUnlock()
+	_, ok := dt.disputes[txID]
+	return ok
 }
 
 // GetAll returns all disputed transactions.
@@ -349,64 +512,6 @@ func (dt *DisputeTracker) GetAll() []*consensus.DisputedTx {
 		result = append(result, d)
 	}
 	return result
-}
-
-// Resolve determines which transactions should be included.
-// Returns (include, exclude) lists.
-func (dt *DisputeTracker) Resolve(threshold float64) ([]consensus.TxID, []consensus.TxID) {
-	dt.mu.RLock()
-	defer dt.mu.RUnlock()
-
-	var include, exclude []consensus.TxID
-
-	for txID, dispute := range dt.disputes {
-		total := dispute.Yays + dispute.Nays
-		if total == 0 {
-			continue
-		}
-
-		if float64(dispute.Yays)/float64(total) >= threshold {
-			include = append(include, txID)
-		} else {
-			exclude = append(exclude, txID)
-		}
-	}
-
-	return include, exclude
-}
-
-// UpdateOurVote updates our vote on a dispute.
-func (dt *DisputeTracker) UpdateOurVote(txID consensus.TxID, include bool) {
-	dt.mu.Lock()
-	defer dt.mu.Unlock()
-
-	dispute, exists := dt.disputes[txID]
-	if !exists {
-		return
-	}
-
-	oldVote, hadVote := dt.ourVotes[txID]
-	if hadVote && oldVote == include {
-		return // No change
-	}
-
-	// Update vote counts
-	if hadVote {
-		if oldVote {
-			dispute.Yays--
-		} else {
-			dispute.Nays--
-		}
-	}
-
-	if include {
-		dispute.Yays++
-	} else {
-		dispute.Nays++
-	}
-
-	dispute.OurVote = include
-	dt.ourVotes[txID] = include
 }
 
 // Count returns the number of disputes.
@@ -422,5 +527,4 @@ func (dt *DisputeTracker) Clear() {
 	defer dt.mu.Unlock()
 
 	dt.disputes = make(map[consensus.TxID]*consensus.DisputedTx)
-	dt.ourVotes = make(map[consensus.TxID]bool)
 }

@@ -53,7 +53,43 @@ type Engine struct {
 	validationTracker *ValidationTracker
 
 	// Dispute tracking
-	disputes map[consensus.TxID]*consensus.DisputedTx
+	//
+	// disputeTracker owns the per-tx DisputedTx entries and the
+	// per-peer vote map, matching rippled's Result::disputes. It is
+	// written by createDisputesAgainst / OnProposal / OnTxSet /
+	// UpdateOurPositions and read during checkConvergence.
+	disputeTracker *DisputeTracker
+
+	// acquiredTxSets caches peer tx sets we have in memory, keyed
+	// by TxSetID. Populated by our own BuildTxSet output and by
+	// OnTxSet. Matches rippled's acquired_ (Consensus.h:606) — the
+	// dispute wiring reads this to learn which txs a peer's
+	// position actually contains.
+	acquiredTxSets map[consensus.TxSetID]consensus.TxSet
+
+	// comparesTxSets dedupes createDisputes. Matches rippled's
+	// Result::compares (Consensus.h:1829) — once we have diffed
+	// against a given peer tx set, the set is recorded here so
+	// subsequent repeats are cheap no-ops.
+	comparesTxSets map[consensus.TxSetID]struct{}
+
+	// parms holds the avalanche-threshold parameters used by
+	// DisputedTx::updateVote (per-tx re-voting). Mirrors rippled's
+	// ConsensusParms.
+	parms consensus.ConsensusParms
+
+	// peerUnchangedCounter counts consecutive phaseEstablish ticks
+	// during which NO peer flipped a dispute vote. Matches rippled's
+	// peerUnchangedCounter_ (Consensus.h) — used by stall detection
+	// on disputes.
+	peerUnchangedCounter int
+
+	// establishCounter counts phaseEstablish ticks since closeLedger,
+	// mirroring rippled's establishCounter_ (Consensus.h). Currently
+	// surfaced only as the per-dispute AvalancheCounter floor; kept
+	// here for parity and so future stall-expiration logic can gate
+	// ResultExpired on "minimum rounds at each avalanche level".
+	establishCounter int
 
 	// Heartbeat ticker — single global timer matching rippled's ledgerGRANULARITY.
 	heartbeat *time.Ticker
@@ -131,7 +167,10 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 		phase:           consensus.PhaseAccepted,
 		proposals:       make(map[consensus.NodeID]*consensus.Proposal),
 		validations:     make(map[consensus.NodeID]*consensus.Validation),
-		disputes:        make(map[consensus.TxID]*consensus.DisputedTx),
+		disputeTracker:  NewDisputeTracker(),
+		acquiredTxSets:  make(map[consensus.TxSetID]consensus.TxSet),
+		comparesTxSets:  make(map[consensus.TxSetID]struct{}),
+		parms:           consensus.DefaultConsensusParms(),
 		recentProposals: make(map[consensus.NodeID][]*consensus.Proposal),
 		deadNodes:       make(map[consensus.NodeID]struct{}),
 	}
@@ -237,7 +276,11 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 
 	// Reset tracking maps
 	e.proposals = make(map[consensus.NodeID]*consensus.Proposal)
-	e.disputes = make(map[consensus.TxID]*consensus.DisputedTx)
+	e.disputeTracker = NewDisputeTracker()
+	e.acquiredTxSets = make(map[consensus.TxSetID]consensus.TxSet)
+	e.comparesTxSets = make(map[consensus.TxSetID]struct{})
+	e.peerUnchangedCounter = 0
+	e.establishCounter = 0
 	// deadNodes is scoped to a single consensus round — a validator that
 	// bowed out of the prior round is free to rejoin in the new one.
 	// Matches rippled's Consensus.h:722 (startRoundInternal clears
@@ -361,20 +404,20 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	// counting it for the rest of the round. Mirrors rippled's
 	// ConsensusProposal.h:68,154-156 and the handling in
 	// Consensus.h:804-817: erase the current position, record the node
-	// as dead, and (when E2/per-tx dispute tracking lands) un-vote its
-	// contribution from every active dispute. Without this gate the
-	// final seqLeave position would persist in e.proposals and keep
-	// "voting" forever, skewing convergence and tie-break logic.
+	// as dead, and un-vote its contribution from every active dispute.
+	// Without this gate the final seqLeave position would persist in
+	// e.proposals and keep "voting" forever, skewing convergence and
+	// tie-break logic.
 	const seqLeave = uint32(0xFFFFFFFF)
 	if proposal.Position == seqLeave {
 		delete(e.proposals, proposal.NodeID)
 		e.deadNodes[proposal.NodeID] = struct{}{}
-		// TODO(E2 per-tx dispute tracking): iterate e.disputes here and
-		// unvote proposal.NodeID from each entry, matching rippled's
-		// Consensus.h:809-811 (for each dispute: it.second.unVote(peerID)).
-		// The current DisputedTx carries aggregate Yays/Nays counts only,
-		// so there's nothing to unvote yet; adding the per-node vote set
-		// is the E2 task.
+		// Strip this peer's contribution from every active dispute
+		// so its (now-final) vote stops counting toward convergence.
+		// Matches rippled Consensus.h:807-811.
+		if e.disputeTracker != nil {
+			e.disputeTracker.UnVote(proposal.NodeID)
+		}
 		return nil
 	}
 
@@ -407,9 +450,33 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 		e.adaptor.RelayProposal(proposal, originPeer)
 	}
 
-	// Check if we need the transaction set
-	if _, err := e.adaptor.GetTxSet(proposal.TxSet); err != nil {
+	// Check if we need the transaction set. If the adaptor already
+	// has it, cache it locally for dispute wiring — rippled's
+	// gotTxSet(Consensus.h:843-844) fires eagerly in the same
+	// scenario.
+	if peerSet, err := e.adaptor.GetTxSet(proposal.TxSet); err == nil && peerSet != nil {
+		if _, already := e.acquiredTxSets[proposal.TxSet]; !already {
+			e.acquiredTxSets[proposal.TxSet] = peerSet
+		}
+	} else {
 		e.adaptor.RequestTxSet(proposal.TxSet)
+	}
+
+	// If we already hold the peer's tx set (either from our own
+	// closeLedger, a prior OnTxSet, or the GetTxSet above), run the
+	// create/update-disputes loop for this position. Matches rippled's
+	// peerProposal path at Consensus.h:836-852: if the proposal's
+	// position is in acquired_, updateDisputes(nodeID, txSet);
+	// otherwise acquireTxSet is fired and the update happens later in
+	// gotTxSet. Self-originated proposals are gated out because we
+	// already seeded them in closeLedger.
+	if e.ourTxSet != nil && proposal.TxSet != e.ourTxSet.ID() {
+		if peerSet, ok := e.acquiredTxSets[proposal.TxSet]; ok {
+			e.createDisputesAgainst(peerSet)
+			if e.disputeTracker.UpdateDisputes(proposal.NodeID, peerSet) {
+				e.peerUnchangedCounter = 0
+			}
+		}
 	}
 
 	// If in establish phase, check for convergence
@@ -489,12 +556,115 @@ func (e *Engine) OnTxSet(id consensus.TxSetID, txs [][]byte) error {
 		return fmt.Errorf("tx set ID mismatch: expected %x, got %x", id, txSet.ID())
 	}
 
+	// Cache for dispute wiring. Matches rippled's gotTxSet arm at
+	// Consensus.h:906 (acquired_.emplace). Late-arriving tx sets
+	// retroactively populate any dispute whose disputed tx appears
+	// in the new set for some peer.
+	if _, already := e.acquiredTxSets[id]; !already {
+		e.acquiredTxSets[id] = txSet
+		if e.ourTxSet != nil && id != e.ourTxSet.ID() {
+			e.createDisputesAgainst(txSet)
+			for nodeID, p := range e.proposals {
+				if p.TxSet == id {
+					if e.disputeTracker.UpdateDisputes(nodeID, txSet) {
+						e.peerUnchangedCounter = 0
+					}
+				}
+			}
+		}
+	}
+
 	// If in establish phase, check for convergence
 	if e.phase == consensus.PhaseEstablish {
 		e.checkConvergence()
 	}
 
 	return nil
+}
+
+// createDisputesAgainst diffs a peer's tx set against our current
+// proposed tx set and creates a DisputedTx entry for every tx found
+// in only one side of the symmetric difference. For each new dispute
+// it back-fills per-peer votes from acquired peer positions so the
+// count starts out correct.
+//
+// Matches rippled's createDisputes (Consensus.h:1821-1888). Caller
+// must hold e.mu.
+func (e *Engine) createDisputesAgainst(peerTxSet consensus.TxSet) {
+	if e.ourTxSet == nil || peerTxSet == nil {
+		return
+	}
+	id := peerTxSet.ID()
+	if _, seen := e.comparesTxSets[id]; seen {
+		return
+	}
+	e.comparesTxSets[id] = struct{}{}
+
+	if id == e.ourTxSet.ID() {
+		return
+	}
+
+	ourIDs := e.ourTxSet.TxIDs()
+	peerIDs := peerTxSet.TxIDs()
+
+	ours := make(map[consensus.TxID]struct{}, len(ourIDs))
+	for _, txID := range ourIDs {
+		ours[txID] = struct{}{}
+	}
+	peers := make(map[consensus.TxID]struct{}, len(peerIDs))
+	for _, txID := range peerIDs {
+		peers[txID] = struct{}{}
+	}
+
+	// txs only in our set: seed ourVote=true and peer-vote=false.
+	ourBlobs := e.ourTxSet.Txs()
+	for idx, txID := range ourIDs {
+		if _, also := peers[txID]; also {
+			continue
+		}
+		if e.disputeTracker.Has(txID) {
+			continue
+		}
+		var blob []byte
+		if idx < len(ourBlobs) {
+			blob = ourBlobs[idx]
+		}
+		dispute := e.disputeTracker.CreateDispute(txID, blob, true)
+		e.seedDisputeVotes(dispute.TxID)
+	}
+
+	// txs only in peer's set: seed ourVote=false.
+	peerBlobs := peerTxSet.Txs()
+	for idx, txID := range peerIDs {
+		if _, also := ours[txID]; also {
+			continue
+		}
+		if e.disputeTracker.Has(txID) {
+			continue
+		}
+		var blob []byte
+		if idx < len(peerBlobs) {
+			blob = peerBlobs[idx]
+		}
+		dispute := e.disputeTracker.CreateDispute(txID, blob, false)
+		e.seedDisputeVotes(dispute.TxID)
+	}
+}
+
+// seedDisputeVotes walks every known peer proposal with an acquired
+// tx set and records that peer's vote on the new dispute. Runs once
+// when a dispute is created (rippled Consensus.h:1874-1881).
+// Caller must hold e.mu.
+func (e *Engine) seedDisputeVotes(txID consensus.TxID) {
+	for nodeID, p := range e.proposals {
+		peerSet, ok := e.acquiredTxSets[p.TxSet]
+		if !ok {
+			continue
+		}
+		if e.disputeTracker.SetVote(txID, nodeID, peerSet.Contains(txID)) {
+			e.peerUnchangedCounter = 0
+		}
+	}
 }
 
 // OnLedger handles receiving a ledger we were missing.
@@ -887,7 +1057,11 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID) {
 	// (only if this is a new target ledger)
 	if e.prevLedger == nil || netLedgerID != e.prevLedger.ID() {
 		e.proposals = make(map[consensus.NodeID]*consensus.Proposal)
-		e.disputes = make(map[consensus.TxID]*consensus.DisputedTx)
+		e.disputeTracker = NewDisputeTracker()
+		e.acquiredTxSets = make(map[consensus.TxSetID]consensus.TxSet)
+		e.comparesTxSets = make(map[consensus.TxSetID]struct{})
+		e.peerUnchangedCounter = 0
+		e.establishCounter = 0
 		e.converged = false
 		e.haveCloseTimeConsensus = false
 		if e.state != nil {
@@ -1108,6 +1282,11 @@ func (e *Engine) closeLedger() {
 		}
 	}
 	e.ourTxSet = txSet
+	// Our own tx set is immediately "acquired" — matches rippled's
+	// closeLedger at Consensus.h:1449 (acquired_.emplace after
+	// adaptor_.onClose). Dispute wiring reads this to recognize
+	// proposals that reference our position.
+	e.acquiredTxSets[txSet.ID()] = txSet
 
 	// Use raw now — rippled sets rawCloseTimes_.self = now_ (Consensus.h:1441).
 	// Rounding only happens later via effCloseTime() at acceptance.
@@ -1132,6 +1311,15 @@ func (e *Engine) closeLedger() {
 				e.state.OurPosition = proposal
 				e.adaptor.BroadcastProposal(proposal)
 			}
+		}
+	}
+
+	// Seed disputes against every peer position whose tx set we
+	// already hold. Matches rippled's closeLedger loop at
+	// Consensus.h:1461-1467.
+	for _, p := range e.proposals {
+		if peerSet, ok := e.acquiredTxSets[p.TxSet]; ok {
+			e.createDisputesAgainst(peerSet)
 		}
 	}
 
@@ -1199,6 +1387,12 @@ func (e *Engine) phaseEstablish() {
 		return
 	}
 
+	// Increment round counters used by dispute stall detection and
+	// avalanche minimum-rounds gating. Matches rippled's
+	// phaseEstablish at Consensus.h:1373-1374.
+	e.establishCounter++
+	e.peerUnchangedCounter++
+
 	// Update positions and check convergence
 	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil {
 		e.updatePosition()
@@ -1236,7 +1430,15 @@ func (e *Engine) abandonDeadlineExceeded(roundTime time.Duration) bool {
 	return roundTime > deadline
 }
 
-// checkConvergence checks if proposals have converged.
+// checkConvergence drives the accept gate. Matches rippled's
+// phaseEstablish → haveConsensus flow (Consensus.h:1400-1422):
+// once we've spent ledgerMIN_CONSENSUS in establish and enough peers
+// match our position, we accept. The popularity-of-whole-tx-set vote
+// that previously lived here was strictly coarser than per-tx
+// re-voting and would strand a node whose position differed from
+// every peer in the small-set symmetric-difference case (issue #266).
+// Per-tx migration now happens in updatePosition, driven by the
+// dispute tracker.
 func (e *Engine) checkConvergence() {
 	if e.phase != consensus.PhaseEstablish {
 		return
@@ -1248,117 +1450,241 @@ func (e *Engine) checkConvergence() {
 		return
 	}
 
-	// Count proposals for each tx set. We include ourselves as a
-	// participant when proposing, mirroring rippled's checkConsensus
-	// (agreeing/total both include count_self). Without this, a 3-node
-	// UNL whose threshold uses quorum=3 can never converge: peers
-	// contribute at most 2 trusted proposals, the winning set never
-	// reaches 3, and every round hits LedgerMaxClose (10s timeout).
-	txSetCounts := make(map[consensus.TxSetID]int)
-	trustedProposals := 0
-
-	for nodeID, proposal := range e.proposals {
-		if e.adaptor.IsTrusted(nodeID) {
-			txSetCounts[proposal.TxSet]++
-			trustedProposals++
-		}
+	agree, disagree := e.countAgreement()
+	total := agree + disagree
+	if total == 0 {
+		return
 	}
 
-	// Add our own position to the count if we're a proposing validator.
-	if e.mode == consensus.ModeProposing && e.ourTxSet != nil {
-		txSetCounts[e.ourTxSet.ID()]++
-		trustedProposals++
+	// EarlyConvergencePct is a goXRPL-local gate for flagging a round
+	// as "converged" for observability (e.g., server_info). Acceptance
+	// uses MinConsensusPct (rippled's minCONSENSUS_PCT=80).
+	if agree*100 >= total*e.thresholds.EarlyConvergencePct {
+		e.converged = true
+		e.state.Converged = true
 	}
 
-	// Round-level convergence is a percentage of participants, not a
-	// validation-quorum check. Rippled's LedgerMaster::checkAccept and
-	// round consensus are separate gates — conflating them here pinned
-	// the threshold at validation-quorum (3) even when that exceeded
-	// the available participants. Use pure percentage of participants.
-	threshold := (trustedProposals*e.thresholds.EarlyConvergencePct + 99) / 100
-	if threshold < 1 {
-		threshold = 1
+	if agree*100 < total*e.thresholds.MinConsensusPct {
+		return
 	}
 
-	for txSetID, count := range txSetCounts {
-		if count >= threshold {
-			e.converged = true
-			e.state.Converged = true
-
-			// If it's not our tx set, we should adopt it
-			if e.ourTxSet == nil || e.ourTxSet.ID() != txSetID {
-				// Request the winning tx set if we don't have it
-				e.adaptor.RequestTxSet(txSetID)
-			}
-
-			// Check if we have TX consensus
-			if count >= (trustedProposals*e.thresholds.MinConsensusPct)/100 {
-				// Also need close time consensus before accepting
-				// (matching rippled Consensus.h:1406-1411)
-				if !e.haveCloseTimeConsensus {
-					// Update close time position — this may establish CT consensus.
-					e.updateCloseTimePosition()
-					if !e.haveCloseTimeConsensus {
-						return // Keep going until CT consensus is reached
-					}
-				}
-				e.acceptLedger(consensus.ResultSuccess)
-			}
+	// Close-time consensus is required before accepting — match
+	// rippled Consensus.h:1406-1411.
+	if !e.haveCloseTimeConsensus {
+		e.updateCloseTimePosition()
+		if !e.haveCloseTimeConsensus {
 			return
 		}
 	}
 
-	// Update our position (tx set + close time) if proposing and not converged
-	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil {
-		e.updatePosition()
-	}
-
-	// Always update close time position during establish phase
-	e.updateCloseTimePosition()
+	e.acceptLedger(consensus.ResultSuccess)
 }
 
-// updatePosition updates our proposal position based on peer proposals.
+// countAgreement returns the number of participating proposers whose
+// current position matches ours (agree) and the number whose
+// position differs (disagree). When we are proposing, we count
+// ourselves as an agreeing participant, matching rippled's
+// haveConsensus where currPeerPositions_ excludes self and the
+// threshold denominator adds +1 for the proposer. (Our e.proposals
+// map likewise excludes self.)
+//
+// Matches rippled's haveConsensus tally (Consensus.h:1688-1707).
+// Caller must hold e.mu.
+func (e *Engine) countAgreement() (agree, disagree int) {
+	var ourTxSet consensus.TxSetID
+	haveOurs := false
+	if e.state != nil && e.state.OurPosition != nil {
+		ourTxSet = e.state.OurPosition.TxSet
+		haveOurs = true
+	} else if e.ourTxSet != nil {
+		ourTxSet = e.ourTxSet.ID()
+		haveOurs = true
+	}
+	if !haveOurs {
+		// Observer without a position: count peer-peer agreement on
+		// the most popular tx set. This preserves the pre-E2 behavior
+		// for non-proposing nodes that still need a convergence
+		// signal for acceptLedger.
+		counts := make(map[consensus.TxSetID]int)
+		for nodeID, p := range e.proposals {
+			if e.adaptor.IsTrusted(nodeID) {
+				counts[p.TxSet]++
+			}
+		}
+		var best int
+		for _, c := range counts {
+			if c > best {
+				best = c
+			}
+		}
+		agree = best
+		for _, c := range counts {
+			if c != best {
+				disagree += c
+			}
+		}
+		return agree, disagree
+	}
+
+	for nodeID, p := range e.proposals {
+		if !e.adaptor.IsTrusted(nodeID) {
+			continue
+		}
+		if p.TxSet == ourTxSet {
+			agree++
+		} else {
+			disagree++
+		}
+	}
+	if e.mode == consensus.ModeProposing {
+		agree++
+	}
+	return agree, disagree
+}
+
+// updatePosition runs the per-tx dispute re-vote and, if any
+// dispute flipped our vote, rebuilds our tx set from the inclusion
+// decisions and rebroadcasts the new position.
+//
+// Matches rippled's updateOurPositions TX arm (Consensus.h:1492-1678):
+// stale-proposal pruning with unVote, disputeTracker.UpdateOurVote,
+// rebuild ourTxSet via ± the flipped disputes, sign/propose, and
+// ripple the new position through updateDisputes for peers matching.
+//
+// Caller must hold e.mu.
 func (e *Engine) updatePosition() {
-	// Find the most popular tx set among trusted validators
-	txSetCounts := make(map[consensus.TxSetID]int)
-	for nodeID, proposal := range e.proposals {
-		if e.adaptor.IsTrusted(nodeID) {
-			txSetCounts[proposal.TxSet]++
+	if e.state == nil {
+		return
+	}
+
+	// Prune stale peer proposals. A peer that stops proposing within
+	// a round loses its votes on every dispute so it can't coast.
+	// Matches rippled Consensus.h:1509-1528.
+	cutoff := e.adaptor.Now().Add(-e.timing.ProposeFreshness)
+	for nodeID, p := range e.proposals {
+		if p.Timestamp.IsZero() {
+			continue
+		}
+		if p.Timestamp.Before(cutoff) {
+			delete(e.proposals, nodeID)
+			if e.disputeTracker != nil {
+				e.disputeTracker.UnVote(nodeID)
+			}
 		}
 	}
 
-	var bestTxSet consensus.TxSetID
-	bestCount := 0
-	for txSetID, count := range txSetCounts {
-		if count > bestCount {
-			bestTxSet = txSetID
-			bestCount = count
+	if e.disputeTracker == nil || e.ourTxSet == nil {
+		return
+	}
+
+	// Re-vote each dispute given the current converge percent. Only
+	// proposing nodes can shift their own position; observers still
+	// run the state-machine bookkeeping so avalanche levels are
+	// consistent across the round, but we gate flips on proposing.
+	proposing := e.mode == consensus.ModeProposing
+	changed := e.disputeTracker.UpdateOurVote(e.convergePercent(), proposing, e.parms)
+	if !proposing || len(changed) == 0 {
+		return
+	}
+
+	// Rebuild our proposed tx set from the dispute decisions. We
+	// start from the current ourTxSet blob list + txID index, then
+	// for each changed dispute: if the new vote is yes, add the tx
+	// blob (from the dispute); otherwise drop it.
+	currentBlobs := e.ourTxSet.Txs()
+	currentIDs := e.ourTxSet.TxIDs()
+	idSet := make(map[consensus.TxID]int, len(currentIDs))
+	for idx, id := range currentIDs {
+		idSet[id] = idx
+	}
+
+	newBlobs := make([][]byte, 0, len(currentBlobs)+len(changed))
+	keep := make(map[consensus.TxID]bool, len(currentIDs))
+	for _, id := range currentIDs {
+		keep[id] = true
+	}
+	for _, txID := range changed {
+		dispute := e.disputeTracker.GetDispute(txID)
+		if dispute == nil {
+			continue
+		}
+		if dispute.OurVote {
+			if !keep[txID] {
+				keep[txID] = true
+			}
+		} else {
+			keep[txID] = false
+		}
+	}
+	// Preserve original order for txs we keep that were already in
+	// ours, then append newly-voted-in disputes.
+	for idx, id := range currentIDs {
+		if keep[id] {
+			newBlobs = append(newBlobs, currentBlobs[idx])
+		}
+	}
+	for _, txID := range changed {
+		if _, already := idSet[txID]; already {
+			continue
+		}
+		if !keep[txID] {
+			continue
+		}
+		dispute := e.disputeTracker.GetDispute(txID)
+		if dispute == nil || dispute.Tx == nil {
+			continue
+		}
+		newBlobs = append(newBlobs, dispute.Tx)
+	}
+
+	newTxSet, err := e.adaptor.BuildTxSet(newBlobs)
+	if err != nil || newTxSet == nil {
+		slog.Warn("updatePosition: failed to rebuild tx set after dispute re-vote",
+			"err", err,
+		)
+		return
+	}
+
+	// No-op if rebuilding produced the same set (all flips cancelled
+	// each other out, or BuildTxSet deduped).
+	if newTxSet.ID() == e.ourTxSet.ID() {
+		return
+	}
+
+	e.ourTxSet = newTxSet
+	e.acquiredTxSets[newTxSet.ID()] = newTxSet
+	// Broadcasting a new position requires BOTH the current OurPosition
+	// (for the Position sequence bump) and a prevLedger (for the
+	// PreviousLedger field). A unit-test harness that seeds the engine
+	// without calling Start() has prevLedger == nil — we still want
+	// ourTxSet to update so the per-tx re-vote is observable, we just
+	// can't emit a proposal in that scenario.
+	if e.state.OurPosition != nil && e.prevLedger != nil {
+		nodeID, _ := e.adaptor.GetValidatorKey()
+		proposal := &consensus.Proposal{
+			Round:          e.state.Round,
+			NodeID:         nodeID,
+			Position:       e.state.OurPosition.Position + 1,
+			TxSet:          newTxSet.ID(),
+			CloseTime:      e.state.OurPosition.CloseTime,
+			PreviousLedger: e.prevLedger.ID(),
+			Timestamp:      e.adaptor.Now(),
+		}
+		if err := e.adaptor.SignProposal(proposal); err == nil {
+			e.state.OurPosition = proposal
+			e.adaptor.BroadcastProposal(proposal)
 		}
 	}
 
-	// If the best is different from ours, consider changing
-	if e.ourTxSet != nil && bestTxSet != e.ourTxSet.ID() && bestCount > len(e.proposals)/2 {
-		// Adopt the popular tx set
-		txSet, err := e.adaptor.GetTxSet(bestTxSet)
-		if err == nil {
-			e.ourTxSet = txSet
-
-			// Broadcast new position
-			nodeID, _ := e.adaptor.GetValidatorKey()
-			proposal := &consensus.Proposal{
-				Round:          e.state.Round,
-				NodeID:         nodeID,
-				Position:       e.state.OurPosition.Position + 1,
-				TxSet:          txSet.ID(),
-				CloseTime:      e.state.OurPosition.CloseTime,
-				PreviousLedger: e.prevLedger.ID(),
-				Timestamp:      e.adaptor.Now(),
-			}
-
-			if err := e.adaptor.SignProposal(proposal); err == nil {
-				e.state.OurPosition = proposal
-				e.adaptor.BroadcastProposal(proposal)
-			}
+	// Refresh per-peer votes for peers whose position matches the
+	// new set — rippled's Consensus.h:1665-1670 path after
+	// result_->position change.
+	for nodeID, p := range e.proposals {
+		if p.TxSet != newTxSet.ID() {
+			continue
+		}
+		if e.disputeTracker.UpdateDisputes(nodeID, newTxSet) {
+			e.peerUnchangedCounter = 0
 		}
 	}
 }

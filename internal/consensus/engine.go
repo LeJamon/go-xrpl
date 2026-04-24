@@ -341,6 +341,12 @@ type TxSet interface {
 	// Txs returns the transactions in the set.
 	Txs() [][]byte
 
+	// TxIDs returns the hashes of every transaction in the set, in
+	// the same order as Txs() so callers can zip the two slices
+	// together. Used by consensus dispute tracking to diff two tx
+	// sets without re-deriving tx IDs from blobs.
+	TxIDs() []TxID
+
 	// Contains checks if a transaction is in the set.
 	Contains(id TxID) bool
 

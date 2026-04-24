@@ -25,19 +25,53 @@ func (l *mockLedger) CloseTime() time.Time         { return l.closeTime }
 func (l *mockLedger) TxSetID() consensus.TxSetID   { return l.txSetID }
 func (l *mockLedger) Bytes() []byte                { return nil }
 
-// mockTxSet implements consensus.TxSet for testing
+// mockTxSet implements consensus.TxSet for testing. containsTxs, if
+// non-nil, drives Contains(id); otherwise Contains always returns
+// false (matching the legacy behavior some older tests rely on).
+// txIDs is kept in insertion order, parallel to txs, so TxIDs() and
+// Txs() can be zipped — matching the documented contract on the
+// interface.
 type mockTxSet struct {
-	id  consensus.TxSetID
-	txs [][]byte
+	id          consensus.TxSetID
+	txs         [][]byte
+	txIDs       []consensus.TxID
+	containsTxs map[consensus.TxID]bool
 }
 
-func (ts *mockTxSet) ID() consensus.TxSetID           { return ts.id }
-func (ts *mockTxSet) Txs() [][]byte                   { return ts.txs }
-func (ts *mockTxSet) Size() int                       { return len(ts.txs) }
-func (ts *mockTxSet) Contains(id consensus.TxID) bool { return false }
-func (ts *mockTxSet) Add(tx []byte) error             { ts.txs = append(ts.txs, tx); return nil }
-func (ts *mockTxSet) Remove(id consensus.TxID) error  { return nil }
-func (ts *mockTxSet) Bytes() []byte                   { return nil }
+func (ts *mockTxSet) ID() consensus.TxSetID { return ts.id }
+func (ts *mockTxSet) Txs() [][]byte         { return ts.txs }
+func (ts *mockTxSet) Size() int             { return len(ts.txs) }
+func (ts *mockTxSet) TxIDs() []consensus.TxID {
+	if ts.txIDs != nil {
+		out := make([]consensus.TxID, len(ts.txIDs))
+		copy(out, ts.txIDs)
+		return out
+	}
+	// Fallback for legacy construction sites that populate only
+	// containsTxs — iteration order is non-deterministic here but
+	// the legacy tests that follow this path don't care.
+	result := make([]consensus.TxID, 0, len(ts.containsTxs))
+	for id, ok := range ts.containsTxs {
+		if ok {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+func (ts *mockTxSet) Contains(id consensus.TxID) bool {
+	if ts.containsTxs != nil {
+		return ts.containsTxs[id]
+	}
+	return false
+}
+func (ts *mockTxSet) Add(tx []byte) error { ts.txs = append(ts.txs, tx); return nil }
+func (ts *mockTxSet) Remove(id consensus.TxID) error {
+	if ts.containsTxs != nil {
+		delete(ts.containsTxs, id)
+	}
+	return nil
+}
+func (ts *mockTxSet) Bytes() []byte { return nil }
 
 // mockAdaptor implements consensus.Adaptor for testing
 type mockAdaptor struct {
@@ -229,8 +263,28 @@ func (a *mockAdaptor) GetTxSet(id consensus.TxSetID) (consensus.TxSet, error) {
 }
 
 func (a *mockAdaptor) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
-	txSet := &mockTxSet{txs: txs}
-	// Generate a simple ID based on length
+	// Derive per-tx IDs from the blob prefix so the resulting TxSet
+	// reports Contains/TxIDs correctly. Dispute-integration tests
+	// build blobs as the tx ID padded to 32 bytes; legacy tests pass
+	// nil or empty blobs and only care about the set ID, so they
+	// still get a valid (if all-zero-id) mockTxSet.
+	ids := make([]consensus.TxID, 0, len(txs))
+	contains := make(map[consensus.TxID]bool, len(txs))
+	for _, blob := range txs {
+		var id consensus.TxID
+		if len(blob) >= len(id) {
+			copy(id[:], blob[:len(id)])
+		}
+		ids = append(ids, id)
+		contains[id] = true
+	}
+	txSet := &mockTxSet{
+		txs:         txs,
+		txIDs:       ids,
+		containsTxs: contains,
+	}
+	// Keep the length-based TxSetID for backward-compat: older tests
+	// reference it as {byte(len(txs)), 0,...}.
 	txSet.id = consensus.TxSetID{byte(len(txs))}
 	a.mu.Lock()
 	a.txSets[txSet.id] = txSet
