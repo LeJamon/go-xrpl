@@ -26,7 +26,6 @@ func serializePathCurrency(currency string) ([]byte, error) {
 	return serializeIssuedCurrencyCode(currency)
 }
 
-// PathSet type declaration
 type PathSet struct{}
 
 // ErrInvalidPathSet is an error that's thrown when an invalid path set is provided.

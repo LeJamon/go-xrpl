@@ -8,7 +8,6 @@ import (
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
 )
 
-// Errors
 var (
 	errNotValidXChainBridge = errors.New("not a valid xchain bridge")
 )

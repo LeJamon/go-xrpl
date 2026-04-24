@@ -22,8 +22,6 @@ const (
 )
 
 var (
-	// Static errors
-
 	// ErrInvalidQuality is returned when the quality is invalid.
 	ErrInvalidQuality = errors.New("invalid quality")
 )
@@ -51,18 +49,15 @@ func EncodeQuality(quality string) (string, error) {
 	if bigDecimal.UnscaledValue == "" {
 		zeroAmount := make([]byte, 8)
 		binary.BigEndian.PutUint64(zeroAmount, uint64(zeroQualityHex))
-		// if the value is zero, then return the zero currency amount hex
 		return hex.EncodeToString(zeroAmount), nil
 	}
 
-	// convert the unscaled value to an unsigned integer
 	mantissa, err := strconv.ParseUint(bigDecimal.UnscaledValue, 10, 64)
 
 	if err != nil {
 		return "", err
 	}
 
-	// get the scale
 	exp := bigDecimal.Scale
 
 	serialized := make([]byte, 8)
@@ -91,26 +86,20 @@ func DecodeQuality(quality string) (string, error) {
 	mantissaBytes := append([]byte{0}, bytes[1:]...)
 	mantissa := binary.BigEndian.Uint64(mantissaBytes)
 
-	// Convert mantissa to string
 	mantissaStr := strconv.FormatUint(mantissa, 10)
 
-	// Add decimal point based on exponent
 	if exp < 0 {
-		// Need to add leading zeros
 		if len(mantissaStr) <= -exp {
 			zeros := strings.Repeat("0", -exp-len(mantissaStr)+1)
 			mantissaStr = "0." + zeros + mantissaStr
 		} else {
-			// Insert decimal point from right to left
 			insertPos := len(mantissaStr) + exp
 			mantissaStr = mantissaStr[:insertPos] + "." + mantissaStr[insertPos:]
 		}
 	} else if exp > 0 {
-		// Add trailing zeros
 		mantissaStr += strings.Repeat("0", exp)
 	}
 
-	// Trim trailing zeros after decimal point
 	if strings.Contains(mantissaStr, ".") {
 		mantissaStr = strings.TrimRight(mantissaStr, "0")
 		mantissaStr = strings.TrimRight(mantissaStr, ".")

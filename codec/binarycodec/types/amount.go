@@ -93,7 +93,6 @@ type InvalidAmountError struct {
 	Amount string
 }
 
-// Error method for InvalidAmountError returns a formatted error string.
 func (e *InvalidAmountError) Error() string {
 	return fmt.Sprintf("value '%s' is an invalid amount", e.Amount)
 }
@@ -103,7 +102,6 @@ type OutOfRangeError struct {
 	Type string
 }
 
-// Error method for OutOfRangeError returns a formatted error string.
 func (e *OutOfRangeError) Error() string {
 	return fmt.Sprintf("%s is out of range", e.Type)
 }
@@ -113,7 +111,6 @@ type InvalidCodeError struct {
 	Disallowed string
 }
 
-// Error method for InvalidCodeError returns a formatted error string.
 func (e *InvalidCodeError) Error() string {
 	return fmt.Sprintf("'%s' is/are disallowed or invalid", e.Disallowed)
 }

@@ -13,8 +13,6 @@ import (
 )
 
 var (
-	// Static errors
-
 	// ErrSigningClaimFieldNotFound is returned when the 'Channel' & 'Amount' fields are both required, but were not found.
 	ErrSigningClaimFieldNotFound = errors.New("'Channel' & 'Amount' fields are both required, but were not found")
 	// ErrBatchFlagsFieldNotFound is returned when the 'flags' field is missing.
@@ -43,13 +41,8 @@ const (
 func Encode(json map[string]any) (string, error) {
 	st := types.NewSTObject(serdes.NewBinarySerializer(serdes.NewFieldIDCodec(definitions.Get())))
 
-	// Iterate over the keys in the provided JSON
 	for k := range json {
-		// Get the FieldIdNameMap from the definitions package
 		fh := definitions.Get().Fields[k]
-
-		// If the field is not found in the FieldIdNameMap, delete it from the JSON
-
 		if fh == nil {
 			delete(json, k)
 			continue
@@ -151,26 +144,22 @@ func EncodeForSigningBatch(json map[string]any) (string, error) {
 		return "", ErrBatchTxIDsFieldNotFound
 	}
 
-	// Extract and validate txIDs
 	txIDsInterface, ok := json["txIDs"].([]string)
 	if !ok {
 		return "", ErrBatchTxIDsNotArray
 	}
 
-	// Validate flags type
 	_, ok = json["flags"].(uint32)
 	if !ok {
 		return "", ErrBatchFlagsNotUInt32
 	}
 
-	// Create UInt32 for flags
 	flagsType := &types.UInt32{}
 	flagsBytes, err := flagsType.FromJSON(json["flags"])
 	if err != nil {
 		return "", err
 	}
 
-	// Create UInt32 for txIDs length
 	txIDsLengthType := &types.UInt32{}
 	txIDsLength := len(txIDsInterface)
 	if txIDsLength > math.MaxUint32 {
@@ -181,10 +170,8 @@ func EncodeForSigningBatch(json map[string]any) (string, error) {
 		return "", err
 	}
 
-	// Build the result string
 	result := batchPrefix + hex.EncodeToString(flagsBytes) + hex.EncodeToString(txIDsLengthBytes)
 
-	// Add each transaction ID
 	for _, txID := range txIDsInterface {
 		hash256 := types.NewHash256()
 		txIDBytes, err := hash256.FromJSON(txID)

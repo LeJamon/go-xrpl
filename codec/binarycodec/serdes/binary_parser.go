@@ -9,8 +9,6 @@ import (
 )
 
 var (
-	// Static errors
-
 	// ErrParserOutOfBound is returned when the parser is out of bounds.
 	ErrParserOutOfBound = errors.New("parser out of bounds")
 	// ErrInvalidTypecode is returned when the typecode is invalid.
@@ -86,7 +84,6 @@ func (p *BinaryParser) readFieldHeader() (*definitions.FieldHeader, error) {
 		}
 	}
 
-	// Return the field header
 	return &definitions.FieldHeader{
 		TypeCode:  int32(typeCode),
 		FieldCode: int32(fieldCode),

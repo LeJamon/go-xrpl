@@ -22,17 +22,14 @@ type ErrInvalidHexString struct {
 	Err error
 }
 
-// Error method for ErrInvalidHashLength formats the error message.
 func (e *ErrInvalidHashLength) Error() string {
 	return fmt.Sprintf("invalid hash length expected length %v", e.Expected)
 }
 
-// Error method for ErrInvalidHashType formats the error message.
 func (e *ErrInvalidHashType) Error() string {
 	return "invalid hash type"
 }
 
-// Error method for ErrInvalidHexString formats the error message.
 func (e *ErrInvalidHexString) Error() string {
 	return "error decoding hex string: " + e.Err.Error()
 }

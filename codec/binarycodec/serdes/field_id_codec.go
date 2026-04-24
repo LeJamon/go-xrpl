@@ -8,8 +8,6 @@ import (
 )
 
 var (
-	// Static errors
-
 	// ErrInvalidFieldIDLength is returned when the field ID length is invalid.
 	ErrInvalidFieldIDLength = errors.New("invalid field ID length")
 )

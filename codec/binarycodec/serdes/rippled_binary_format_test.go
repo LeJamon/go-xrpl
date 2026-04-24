@@ -584,7 +584,6 @@ func TestVLEncodedFieldTypes(t *testing.T) {
 func TestSerializedFieldOrder(t *testing.T) {
 	defs := definitions.Get()
 
-	// Get field instances and verify ordering
 	fields := []string{
 		"TransactionType", // type=1, field=2
 		"Flags",           // type=2, field=2

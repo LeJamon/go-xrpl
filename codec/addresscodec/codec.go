@@ -145,7 +145,6 @@ func EncodeSeed(entropy []byte, encodingType interfaces.CryptoImplementation) (s
 
 // DecodeSeed returns the decoded seed and its corresponding algorithm.
 func DecodeSeed(seed string) ([]byte, interfaces.CryptoImplementation, error) {
-	// decoded := DecodeBase58(seed)
 	decoded, err := Base58CheckDecode(seed)
 
 	if err != nil {

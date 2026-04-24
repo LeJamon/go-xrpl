@@ -17,7 +17,6 @@ type ErrInvalidVector256Type struct {
 	Got string
 }
 
-// Error implements the error interface, providing a descriptive error message for ErrInvalidVector256Type.
 func (e *ErrInvalidVector256Type) Error() string {
 	return fmt.Sprintf("Invalid type to construct Vector256 from. Expected []string, got %v", e.Got)
 }
