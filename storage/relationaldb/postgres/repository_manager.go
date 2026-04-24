@@ -18,6 +18,7 @@ type RepositoryManager struct {
 	transactionRepo        *TransactionRepository
 	accountTransactionRepo *AccountTransactionRepository
 	systemRepo             *SystemRepository
+	validationRepo         *ValidationRepository
 }
 
 // NewRepositoryManager creates a new PostgreSQL repository manager
@@ -70,6 +71,7 @@ func (rm *RepositoryManager) Open(ctx context.Context) error {
 	rm.transactionRepo = NewTransactionRepository(rm.db)
 	rm.accountTransactionRepo = NewAccountTransactionRepository(rm.db)
 	rm.systemRepo = NewSystemRepository(rm.db)
+	rm.validationRepo = NewValidationRepository(rm.db)
 
 	return nil
 }
@@ -87,6 +89,7 @@ func (rm *RepositoryManager) Close(ctx context.Context) error {
 	rm.transactionRepo = nil
 	rm.accountTransactionRepo = nil
 	rm.systemRepo = nil
+	rm.validationRepo = nil
 
 	if err != nil {
 		return relationaldb.NewConnectionError("close", "failed to close database connection", err)
@@ -111,11 +114,8 @@ func (rm *RepositoryManager) System() relationaldb.SystemRepository {
 	return rm.systemRepo
 }
 
-// Validation returns the validation archive repository. Stubbed nil until
-// the PostgreSQL impl lands — callers gating on a non-nil value treat the
-// archive as disabled.
 func (rm *RepositoryManager) Validation() relationaldb.ValidationRepository {
-	return nil
+	return rm.validationRepo
 }
 
 func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relationaldb.TransactionContext) error) error {
@@ -181,6 +181,22 @@ func (rm *RepositoryManager) initSchema(ctx context.Context) error {
 			PRIMARY KEY (trans_id, account)
 		)`,
 
+		// Validations table — rippled's pre-May-2019 historical schema,
+		// augmented with seen_time + flags for receive-side forensics.
+		`CREATE TABLE IF NOT EXISTS validations (
+			ledger_seq   BIGINT NOT NULL,
+			initial_seq  BIGINT NOT NULL,
+			ledger_hash  BYTEA NOT NULL,
+			node_pubkey  BYTEA NOT NULL,
+			signature    BYTEA NOT NULL,
+			sign_time    BIGINT NOT NULL,
+			seen_time    BIGINT NOT NULL,
+			flags        BIGINT NOT NULL,
+			raw          BYTEA NOT NULL,
+			created_at   TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			PRIMARY KEY (ledger_hash, node_pubkey)
+		)`,
+
 		// Indexes matching rippled's performance optimizations
 		`CREATE INDEX IF NOT EXISTS idx_ledgers_seq ON ledgers(ledger_seq)`,
 		`CREATE INDEX IF NOT EXISTS idx_ledgers_closing_time ON ledgers(closing_time)`,
@@ -188,6 +204,10 @@ func (rm *RepositoryManager) initSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_account_transactions_account ON account_transactions(account)`,
 		`CREATE INDEX IF NOT EXISTS idx_account_transactions_ledger_seq ON account_transactions(ledger_seq)`,
 		`CREATE INDEX IF NOT EXISTS idx_account_transactions_account_ledger_txn ON account_transactions(account, ledger_seq, txn_seq)`,
+		`CREATE INDEX IF NOT EXISTS idx_validations_seq       ON validations(ledger_seq)`,
+		`CREATE INDEX IF NOT EXISTS idx_validations_node      ON validations(node_pubkey, ledger_seq)`,
+		`CREATE INDEX IF NOT EXISTS idx_validations_sign_time ON validations(sign_time)`,
+		`CREATE INDEX IF NOT EXISTS idx_validations_initial   ON validations(initial_seq, ledger_seq)`,
 	}
 
 	for _, query := range queries {
