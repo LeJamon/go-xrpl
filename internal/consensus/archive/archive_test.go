@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -263,6 +264,91 @@ func TestArchive_NilRepo_OnStaleIsNoop(t *testing.T) {
 	// Must not panic, must not block.
 	for i := uint32(1); i <= 10; i++ {
 		a.OnStale(mkVal(i, 1))
+	}
+}
+
+// flakyRepo wraps fakeRepo and returns an error from SaveBatch a
+// configurable number of times before succeeding. Exercises the
+// retry-once policy in the writer loop.
+type flakyRepo struct {
+	*fakeRepo
+	mu          sync.Mutex
+	failures    int
+	failureLeft int
+}
+
+func (f *flakyRepo) SaveBatch(ctx context.Context, vs []*relationaldb.ValidationRecord) error {
+	f.mu.Lock()
+	if f.failureLeft > 0 {
+		f.failureLeft--
+		f.failures++
+		f.mu.Unlock()
+		return errors.New("transient repo failure")
+	}
+	f.mu.Unlock()
+	return f.fakeRepo.SaveBatch(ctx, vs)
+}
+
+func TestArchive_SaveBatch_RetryOnceThenSucceed(t *testing.T) {
+	base := &fakeRepo{}
+	repo := &flakyRepo{fakeRepo: base, failureLeft: 1} // first attempt fails, retry succeeds
+	a := New(repo, Config{BatchSize: 1, FlushInterval: time.Hour, DeleteBatch: 1}, nil)
+	defer a.Close(context.Background())
+
+	a.OnStale(mkVal(100, 0x01))
+	if err := a.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if base.rowCount() != 1 {
+		t.Fatalf("retry path lost the row: rowCount=%d, want 1", base.rowCount())
+	}
+	if repo.failures != 1 {
+		t.Fatalf("expected exactly 1 failed attempt before success, got %d", repo.failures)
+	}
+}
+
+func TestArchive_SaveBatch_PersistentFailure_DropsAndContinues(t *testing.T) {
+	base := &fakeRepo{}
+	// More failures than retries → batch is dropped after attempts.
+	repo := &flakyRepo{fakeRepo: base, failureLeft: 100}
+	a := New(repo, Config{BatchSize: 1, FlushInterval: time.Hour, DeleteBatch: 1}, nil)
+	defer a.Close(context.Background())
+
+	a.OnStale(mkVal(100, 0x01))
+	if err := a.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Failed batch must be dropped — no row in the underlying repo.
+	if base.rowCount() != 0 {
+		t.Fatalf("permanently failing batch was not dropped: rowCount=%d", base.rowCount())
+	}
+
+	// Writer must still be alive: a follow-up validation under a
+	// recovered repo should land. Reset the failure counter.
+	repo.mu.Lock()
+	repo.failureLeft = 0
+	repo.mu.Unlock()
+
+	a.OnStale(mkVal(101, 0x02))
+	if err := a.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if base.rowCount() != 1 {
+		t.Fatalf("writer dead after persistent failure: rowCount=%d, want 1", base.rowCount())
+	}
+}
+
+func TestArchive_FlushAfterClose_ReturnsErrClosed(t *testing.T) {
+	repo := &fakeRepo{}
+	a := New(repo, Config{BatchSize: 1, FlushInterval: time.Hour, DeleteBatch: 1}, nil)
+
+	if err := a.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Flush(context.Background()); err != ErrClosed {
+		t.Fatalf("Flush after Close returned %v, want ErrClosed", err)
 	}
 }
 

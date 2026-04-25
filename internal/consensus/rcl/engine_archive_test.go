@@ -157,3 +157,89 @@ func TestEngine_Stop_ClosesArchive(t *testing.T) {
 		t.Fatalf("Stop did not close the archive; closeCalls=%d", arc.closeCalls.Load())
 	}
 }
+
+// TestEngine_SetArchive_NilDetaches verifies that SetArchive(nil) clears
+// the tracker's onStale callback. Without that, a Close()d archive whose
+// pointer was overwritten could still receive channel sends from the
+// tracker — use-after-close.
+func TestEngine_SetArchive_NilDetaches(t *testing.T) {
+	adaptor := newMockAdaptor()
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Stop() })
+
+	arc := &fakeArchive{}
+	engine.SetArchive(arc)
+	engine.SetArchive(nil) // detach
+
+	v := &consensus.Validation{
+		LedgerSeq: 100, LedgerID: consensus.LedgerID{0x1},
+		NodeID: consensus.NodeID{0x2}, SignTime: time.Now(), Full: true,
+	}
+	if !engine.validationTracker.Add(v) {
+		t.Fatal("Add returned false; precondition broken")
+	}
+	engine.validationTracker.ExpireOld(200)
+
+	if got := arc.staleCount(); got != 0 {
+		t.Fatalf("detached archive received %d stale rows; want 0", got)
+	}
+}
+
+// TestEngine_SetArchive_ConcurrentWithCallback exercises the race the
+// reviewer flagged: the fully-validated callback reads e.archive while
+// other goroutines call SetArchive / SetInMemoryLedgers. Run under
+// `go test -race` to verify no race is reported.
+func TestEngine_SetArchive_ConcurrentWithCallback(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.setTrusted([]consensus.NodeID{{1}, {2}, {3}})
+	adaptor.quorum = 2
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Stop() })
+
+	arc1 := &fakeArchive{}
+	arc2 := &fakeArchive{}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Goroutine A: hammer SetArchive / SetInMemoryLedgers.
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			if i%2 == 0 {
+				engine.SetArchive(arc1)
+			} else {
+				engine.SetArchive(arc2)
+			}
+			engine.SetInMemoryLedgers(uint32(50 + i))
+		}
+	}()
+
+	// Goroutine B: drive Add() to fire the fully-validated callback
+	// repeatedly. Quorum=2 so two trusted validations per ledger fire
+	// the callback.
+	go func() {
+		defer wg.Done()
+		now := time.Now()
+		for seq := uint32(100); seq < 200; seq++ {
+			ledger := consensus.LedgerID{byte(seq), byte(seq >> 8)}
+			for _, n := range []consensus.NodeID{{1}, {2}} {
+				v := &consensus.Validation{
+					LedgerSeq: seq, LedgerID: ledger, NodeID: n,
+					SignTime: now, Full: true,
+				}
+				engine.validationTracker.Add(v)
+			}
+		}
+	}()
+
+	wg.Wait()
+}
