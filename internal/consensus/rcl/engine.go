@@ -217,17 +217,23 @@ func (e *Engine) SetManifestResolver(fn func(consensus.NodeID) consensus.NodeID)
 	}
 }
 
-// SetArchive wires an on-disk validation archive into the engine. Must
-// be called before Start; post-Start calls are accepted but the OnStale
-// hook is only installed when the tracker is built in Start. Pass nil to
-// detach. Safe to call concurrently with Stop but not with Start.
+// SetArchive wires an on-disk validation archive into the engine. May
+// be called before or after Start. Pass nil to detach — the tracker's
+// onStale callback is cleared so the just-detached archive can be
+// Close()d without risking a use-after-close channel send. Safe to call
+// concurrently with Stop but not with Start.
 func (e *Engine) SetArchive(a ValidationArchive) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.archive = a
-	if e.validationTracker != nil && a != nil {
-		e.validationTracker.SetOnStale(a.OnStale)
+	if e.validationTracker == nil {
+		return
 	}
+	if a == nil {
+		e.validationTracker.SetOnStale(nil)
+		return
+	}
+	e.validationTracker.SetOnStale(a.OnStale)
 }
 
 // SetInMemoryLedgers configures how many fully-validated ledgers of
@@ -272,16 +278,27 @@ func (e *Engine) Start(ctx context.Context) error {
 	if e.archive != nil {
 		e.validationTracker.SetOnStale(e.archive.OnStale)
 	}
+	tracker := e.validationTracker
 	e.validationTracker.SetFullyValidatedCallback(func(ledgerID consensus.LedgerID, seq uint32) {
 		e.adaptor.OnLedgerFullyValidated(ledgerID, seq)
-		if e.archive != nil {
-			e.archive.NoteFullyValidated(seq)
+
+		// Snapshot mutable fields under e.mu — SetArchive /
+		// SetInMemoryLedgers may race with this callback.
+		e.mu.RLock()
+		arc := e.archive
+		inMem := e.inMemoryLedgers
+		e.mu.RUnlock()
+
+		if arc != nil {
+			arc.NoteFullyValidated(seq)
 		}
 		// Drive the in-memory retention window. ExpireOld fires the
 		// onStale callback for each evicted validation, so the archive
-		// captures it before the tracker drops it.
-		if n := e.inMemoryLedgers; n > 0 && seq > n {
-			e.validationTracker.ExpireOld(seq - n)
+		// captures it before the tracker drops it. Called outside e.mu
+		// because ExpireOld may dispatch onStale callbacks that block
+		// briefly on the archive's channel send.
+		if inMem > 0 && seq > inMem {
+			tracker.ExpireOld(seq - inMem)
 		}
 	})
 
@@ -294,15 +311,21 @@ func (e *Engine) Start(ctx context.Context) error {
 
 // Stop gracefully shuts down the consensus engine. If an archive is
 // wired, its writer goroutine is drained and committed before Stop
-// returns so no stale validations are lost across shutdown.
+// returns so no stale validations are lost across shutdown — modulo
+// SaveBatch failures (which the writer logs and re-queues; see
+// Archive.run for the retry policy).
 func (e *Engine) Stop() error {
 	e.cancel()
 	e.wg.Wait()
 	e.eventBus.Stop()
-	if e.archive != nil {
+
+	e.mu.RLock()
+	arc := e.archive
+	e.mu.RUnlock()
+	if arc != nil {
 		// Bounded close — a stuck archive must not hang shutdown.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = e.archive.Close(ctx)
+		_ = arc.Close(ctx)
 		cancel()
 	}
 	return nil
