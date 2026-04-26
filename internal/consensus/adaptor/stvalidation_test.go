@@ -70,6 +70,41 @@ func TestParseSTValidation_PopulatesRaw(t *testing.T) {
 	}
 }
 
+// TestSTValidation_FlagsRoundTrip pins the wire-flag fidelity gap from
+// review round 2: parseSTValidation must capture the full sfFlags word,
+// and SerializeSTValidation must re-emit it verbatim, so the archive's
+// flags column reflects what the validator signed (not a synthesized
+// constant).
+func TestSTValidation_FlagsRoundTrip(t *testing.T) {
+	orig := buildTestValidation()
+	// A vendor flag bit the standard parser doesn't otherwise recognize.
+	const customVendorBit = 0x00010000
+	orig.Flags = vfFullyCanonicalSig | vfFullValidation | customVendorBit
+
+	blob := SerializeSTValidation(orig)
+	parsed, err := parseSTValidation(blob)
+	require.NoError(t, err)
+
+	if parsed.Flags != orig.Flags {
+		t.Fatalf("Flags lost on round-trip:\n got  0x%08x\n want 0x%08x", parsed.Flags, orig.Flags)
+	}
+	if !parsed.Full {
+		t.Error("Full bit derived from Flags should be true")
+	}
+
+	// Backward-compat: a Validation with Flags=0 still serializes to the
+	// canonical pair when Full=true (older constructors didn't know
+	// about Flags).
+	legacy := buildTestValidation()
+	legacy.Flags = 0 // explicit
+	legacyBlob := SerializeSTValidation(legacy)
+	legacyParsed, err := parseSTValidation(legacyBlob)
+	require.NoError(t, err)
+	if legacyParsed.Flags != (vfFullyCanonicalSig | vfFullValidation) {
+		t.Fatalf("legacy Flags=0 should synthesize canonical pair; got 0x%08x", legacyParsed.Flags)
+	}
+}
+
 func TestParseSTValidation_MinimalFields(t *testing.T) {
 	// Build minimal STValidation: Flags + LedgerSequence + SigningTime +
 	// LedgerHash + SigningPubKey + Signature.

@@ -381,11 +381,6 @@ func toRecord(v *consensus.Validation, initialSeq uint32) *relationaldb.Validati
 		return nil
 	}
 
-	flags := uint32(0)
-	if v.Full {
-		flags |= 0x80000001
-	}
-
 	if initialSeq == 0 {
 		initialSeq = v.LedgerSeq
 	}
@@ -396,8 +391,13 @@ func toRecord(v *consensus.Validation, initialSeq uint32) *relationaldb.Validati
 		NodePubKey: append([]byte(nil), v.NodeID[:]...),
 		SignTime:   v.SignTime,
 		SeenTime:   v.SeenTime,
-		Flags:      flags,
-		Raw:        append([]byte(nil), raw...),
+		// Flags carries the original wire sfFlags word (parser fills
+		// it from the inbound blob, signer fills it at sign time).
+		// Forensic queries SELECT flags FROM validations therefore
+		// read what the validator actually signed, not a synthesized
+		// constant.
+		Flags: v.Flags,
+		Raw:   append([]byte(nil), raw...),
 	}
 	copy(rec.LedgerHash[:], v.LedgerID[:])
 	return rec

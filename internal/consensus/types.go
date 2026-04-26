@@ -205,7 +205,16 @@ type Validation struct {
 	Signature []byte
 
 	// Full indicates if this is a full validation (vs partial).
+	// Derived from (Flags & vfFullValidation) != 0; carried alongside
+	// Flags so existing call sites that branch on Full keep working.
 	Full bool
+
+	// Flags is the original sfFlags wire word as signed by the
+	// validator. parseSTValidation captures it verbatim; outbound
+	// self-built validations set vfFullValidation | vfFullyCanonicalSig.
+	// Consumers reading the field should mask known bits — rippled may
+	// set additional vendor flags we don't yet recognize.
+	Flags uint32
 
 	// Cookie is a unique identifier for this validation session.
 	Cookie uint64

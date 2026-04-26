@@ -144,6 +144,7 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 		switch {
 		case typeCode == typeUINT32 && fieldCode == fieldFlags:
 			flags := binary.BigEndian.Uint32(fieldData)
+			v.Flags = flags
 			v.Full = (flags & vfFullValidation) != 0
 
 		case typeCode == typeUINT32 && fieldCode == fieldLedgerSequence:
@@ -262,12 +263,19 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 
 	// --- UINT32 fields (type 2) ---
 
-	// sfFlags (field 2). Rippled stamps vfFullyCanonicalSig on every
-	// outbound validation; we match that so canonical-sig-strict peers
-	// don't need to special-case us.
-	flags := uint32(vfFullyCanonicalSig)
-	if v.Full {
-		flags |= vfFullValidation
+	// sfFlags (field 2). For round-trip fidelity, prefer the original
+	// wire word captured by parseSTValidation (so we re-emit any vendor
+	// bits the validator set). For self-built validations whose Flags
+	// field is zero, synthesize the rippled-canonical pair: stamp
+	// vfFullyCanonicalSig on every outbound validation so canonical-sig-
+	// strict peers don't need to special-case us, plus vfFullValidation
+	// when v.Full.
+	flags := v.Flags
+	if flags == 0 {
+		flags = vfFullyCanonicalSig
+		if v.Full {
+			flags |= vfFullValidation
+		}
 	}
 	buf = appendFieldHeader(buf, typeUINT32, fieldFlags)
 	buf = binary.BigEndian.AppendUint32(buf, flags)
