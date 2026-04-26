@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/consensus/adaptor"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 
@@ -374,11 +373,11 @@ func toRecord(v *consensus.Validation, initialSeq uint32) *relationaldb.Validati
 
 	raw := v.Raw
 	if len(raw) == 0 {
-		// Self-built or legacy validation that never carried wire bytes.
-		// Re-serialize so the archive row is always replayable.
-		raw = adaptor.SerializeSTValidation(v)
-	}
-	if len(raw) == 0 {
+		// All Validations reaching the tracker either come from the wire
+		// (parseSTValidation populates Raw) or from our own signer
+		// (ValidationToMessage populates Raw at broadcast time). A
+		// missing Raw means a programming error upstream — log and skip
+		// rather than re-serialize, which would silently mask the bug.
 		return nil
 	}
 
