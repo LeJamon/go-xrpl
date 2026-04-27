@@ -215,6 +215,76 @@ func TestValidationTracker_TrieGetPreferred(t *testing.T) {
 	}
 }
 
+// TestValidationTracker_TrieGetPreferred_LargestIssuedAffectsDescent
+// verifies that a non-zero largestIssued actually changes the descent
+// decision through the full Add() → trie path. Ports the structure of
+// rippled's "Changing largestSeq perspective" case
+// (LedgerTrie_test.cpp:506-591) at the ValidationTracker level.
+//
+// Topology after the 5 validations are accepted:
+//
+//	root -> a -> ab -> abde   (2 trusted at abde)
+//	          \-> ac -> acf   (1 trusted at acf)
+//
+// At largestIssued=1 the trie descends to ab (its 3-2 branchSupport
+// margin against ac exceeds the uncommitted at seq 1).
+//
+// At largestIssued=3 the seq-2 validations seed uncommitted before
+// descent starts, so the same 3-2 margin no longer beats uncommitted
+// and the descent stops at the common ancestor "a".
+func TestValidationTracker_TrieGetPreferred_LargestIssuedAffectsDescent(t *testing.T) {
+	vt := NewValidationTracker(2, 5*time.Minute)
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	b := ledgertrie.NewTestLedgerBuilder()
+	a := b.Build("a")
+	ab := b.Build("ab")
+	ac := b.Build("ac")
+	acf := b.Build("acf")
+	abde := b.Build("abde")
+	provider := newMapAncestryProvider()
+	provider.add(a)
+	provider.add(ab)
+	provider.add(ac)
+	provider.add(acf)
+	provider.add(abde)
+
+	n1 := consensus.NodeID{1} // votes ab
+	n2 := consensus.NodeID{2} // votes ac
+	n3 := consensus.NodeID{3} // votes acf
+	n4 := consensus.NodeID{4} // votes abde
+	n5 := consensus.NodeID{5} // votes abde
+	vt.SetTrusted([]consensus.NodeID{n1, n2, n3, n4, n5})
+	vt.SetLedgerAncestryProvider(provider)
+
+	vt.Add(makeTrustedValidation(n1, ab.ID(), ab.Seq(), now))
+	vt.Add(makeTrustedValidation(n2, ac.ID(), ac.Seq(), now))
+	vt.Add(makeTrustedValidation(n3, acf.ID(), acf.Seq(), now))
+	vt.Add(makeTrustedValidation(n4, abde.ID(), abde.Seq(), now))
+	vt.Add(makeTrustedValidation(n5, abde.ID(), abde.Seq(), now))
+
+	idAt1, _, ok := vt.GetPreferred(1)
+	if !ok {
+		t.Fatal("GetPreferred(1): no result")
+	}
+	if idAt1 != ab.ID() {
+		t.Errorf("GetPreferred(1): want ab (3-2 margin descent), got different ID")
+	}
+
+	idAt3, _, ok := vt.GetPreferred(3)
+	if !ok {
+		t.Fatal("GetPreferred(3): no result")
+	}
+	if idAt3 != a.ID() {
+		t.Errorf("GetPreferred(3): want a (descent halted by uncommitted), got different ID")
+	}
+
+	if idAt1 == idAt3 {
+		t.Errorf("largestIssued must change the descent decision: both queries returned %v", idAt1)
+	}
+}
+
 // TestValidationTracker_TrieDisabled_FallsBack keeps the existing
 // flat-count behaviour when no ancestry provider is installed.
 func TestValidationTracker_TrieDisabled_FallsBack(t *testing.T) {

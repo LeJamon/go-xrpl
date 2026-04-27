@@ -315,6 +315,23 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 		}
 	}()
 
+	// Pre-resolve the validation's ledger ancestry without holding
+	// vt.mu. ancestry.LedgerByID may walk ParentHash on a cold LRU; if
+	// we did this under the write lock every concurrent Add() would
+	// serialise behind us. updateTrieLocked re-checks the resolved ID
+	// matches and falls back to a lock-bound resolve on a rare race
+	// (provider swapped between here and the lock acquire).
+	vt.mu.RLock()
+	ancestrySnap := vt.ancestry
+	trieEnabled := vt.trie != nil
+	vt.mu.RUnlock()
+	var preResolvedLedger ledgertrie.Ledger
+	if trieEnabled && ancestrySnap != nil {
+		if l, ok := ancestrySnap.LedgerByID(validation.LedgerID); ok {
+			preResolvedLedger = l
+		}
+	}
+
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
 
@@ -374,7 +391,7 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 	// latest tip feeds branchSupport. Only fires when a provider is
 	// wired — see SetLedgerAncestryProvider.
 	if vt.trusted[resolvedID] && !vt.negUNL[resolvedID] {
-		vt.updateTrieLocked(resolvedID, validation.LedgerID)
+		vt.updateTrieLocked(resolvedID, validation.LedgerID, preResolvedLedger)
 	}
 
 	// Capture the fire-tuple under the lock; the deferred dispatcher
@@ -523,16 +540,39 @@ func (vt *ValidationTracker) countTrustedExcludingNegUNLLocked(
 // Inherits the negUNL filter: validators on the negative-UNL never
 // enter the trie, so their validations don't contribute support.
 func (vt *ValidationTracker) GetTrustedSupport(ledgerID consensus.LedgerID) int {
+	// Snapshot trie+ancestry pointers under vt.mu, then drop the lock
+	// before resolving the ledger. The ancestry provider has its own
+	// internal synchronisation; on a cold LRU the parent walk may take
+	// long enough that holding vt.mu would serialise every concurrent
+	// Add() behind us. Re-acquire vt.mu only for the trie query itself,
+	// which is cheap.
 	vt.mu.RLock()
-	if vt.trie != nil && vt.ancestry != nil {
-		if lgr, ok := vt.ancestry.LedgerByID(ledgerID); ok {
-			n := vt.trie.BranchSupport(lgr)
-			vt.mu.RUnlock()
-			return int(n)
-		}
-	}
+	trie := vt.trie
+	ancestry := vt.ancestry
 	vt.mu.RUnlock()
-	return vt.GetTrustedValidationCount(ledgerID)
+
+	if trie == nil || ancestry == nil {
+		return vt.GetTrustedValidationCount(ledgerID)
+	}
+
+	lgr, ok := ancestry.LedgerByID(ledgerID)
+	if !ok {
+		return vt.GetTrustedValidationCount(ledgerID)
+	}
+
+	vt.mu.RLock()
+	defer vt.mu.RUnlock()
+	// SetLedgerAncestryProvider may have swapped the trie out while we
+	// were resolving ancestry. The trie's internal state is only
+	// mutated under vt.mu, so a stable pointer is safe to query.
+	if vt.trie != trie {
+		ledgerVals, exists := vt.validations[ledgerID]
+		if !exists {
+			return 0
+		}
+		return vt.countTrustedExcludingNegUNLLocked(ledgerVals)
+	}
+	return int(trie.BranchSupport(lgr))
 }
 
 // GetPreferred returns the network-preferred ledger ID (and its

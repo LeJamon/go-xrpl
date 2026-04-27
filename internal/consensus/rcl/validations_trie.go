@@ -69,13 +69,18 @@ func (vt *ValidationTracker) rebuildTrieLocked() {
 // the new one. Silent no-op when the trie is not wired or ancestry
 // for newLedgerID is unavailable.
 //
+// preResolved is an optional pre-walked ancestry chain captured by the
+// caller before taking vt.mu — Add() resolves outside the lock so a
+// cold-LRU walk does not serialise concurrent inserts. When nil, this
+// function falls back to ancestry.LedgerByID under the lock (the rare
+// race path where the provider was swapped between resolve and lock).
+//
 // Mirrors rippled's Validations::updateTrie (Validations.h:415-470)
 // but keyed off the pre-computed trieTips map rather than re-reading
-// lastValidations — which Go's locking forces us to do lock-free in
-// a hot path.
+// lastValidations.
 //
 // Caller must hold vt.mu (write).
-func (vt *ValidationTracker) updateTrieLocked(nodeID consensus.NodeID, newLedgerID consensus.LedgerID) {
+func (vt *ValidationTracker) updateTrieLocked(nodeID consensus.NodeID, newLedgerID consensus.LedgerID, preResolved ledgertrie.Ledger) {
 	if vt.trie == nil || vt.ancestry == nil {
 		return
 	}
@@ -91,12 +96,19 @@ func (vt *ValidationTracker) updateTrieLocked(nodeID consensus.NodeID, newLedger
 		return
 	}
 
-	lgr, ok := vt.ancestry.LedgerByID(newLedgerID)
-	if !ok {
-		// We don't know the new ledger's ancestry. Leave any existing
-		// trie entry for this validator in place; flat-count semantics
-		// will at least still reflect the prior tip.
-		return
+	lgr := preResolved
+	if lgr == nil || lgr.ID() != newLedgerID {
+		// Either the caller didn't pre-resolve (rebuildTrieLocked path)
+		// or the provider was swapped between resolve and lock. Resolve
+		// fresh — accepting the contention cost in this rare path.
+		var ok bool
+		lgr, ok = vt.ancestry.LedgerByID(newLedgerID)
+		if !ok {
+			// We don't know the new ledger's ancestry. Leave any existing
+			// trie entry for this validator in place; flat-count semantics
+			// will at least still reflect the prior tip.
+			return
+		}
 	}
 
 	if prev, existed := vt.trieTips[nodeID]; existed {

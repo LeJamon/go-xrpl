@@ -17,8 +17,8 @@ type fakeHeader struct {
 	parent [32]byte
 }
 
-func (h *fakeHeader) Sequence() uint32    { return h.seq }
-func (h *fakeHeader) Hash() [32]byte      { return h.hash }
+func (h *fakeHeader) Sequence() uint32     { return h.seq }
+func (h *fakeHeader) Hash() [32]byte       { return h.hash }
 func (h *fakeHeader) ParentHash() [32]byte { return h.parent }
 
 // buildChain produces headers seq 1..n, each with a deterministic
