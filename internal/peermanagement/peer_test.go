@@ -189,8 +189,9 @@ func TestPeerConfig(t *testing.T) {
 	cfg := DefaultPeerConfig()
 
 	assert.Equal(t, DefaultSendBufferSize, cfg.SendBufferSize)
-	assert.NotNil(t, cfg.TLSConfig)
-	assert.True(t, cfg.TLSConfig.InsecureSkipVerify) // XRPL uses self-signed certs
+	// PeerTLSConfig is intentionally nil in the default — callers must
+	// supply CertPEM/KeyPEM derived from the local Identity.
+	assert.Nil(t, cfg.PeerTLSConfig)
 }
 
 // TestPeerConstants tests that constants have expected values
