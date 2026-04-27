@@ -256,11 +256,21 @@ func runServer(cmd *cobra.Command, args []string) {
 		// Expose the local validator's signing key to validator_info.
 		// Mirrors rippled's getValidationPublicKey gate: empty means
 		// the server is not configured as a validator and the handler
-		// returns "not a validator".
-		if vid, err := consensusComponents.Adaptor.GetValidatorKey(); err == nil {
+		// returns "not a validator". ErrNoValidatorKey is the expected
+		// non-validator path; any other error is unexpected and worth
+		// surfacing — silence would make a misconfigured validator
+		// indistinguishable from an observer node.
+		switch vid, err := consensusComponents.Adaptor.GetValidatorKey(); {
+		case err == nil:
 			pk := make([]byte, 33)
 			copy(pk, vid[:])
 			types.Services.ValidatorPublicKey = pk
+		case errors.Is(err, adaptor.ErrNoValidatorKey):
+			// Not a validator — leave ValidatorPublicKey empty.
+		default:
+			serverLog.Warn("unexpected error reading validator key for validator_info",
+				"err", err,
+			)
 		}
 
 		isValidator := globalConfig.IsValidator()
