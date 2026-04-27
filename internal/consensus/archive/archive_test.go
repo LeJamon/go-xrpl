@@ -20,9 +20,8 @@ type fakeRepo struct {
 	batches  int
 	saveWait time.Duration
 
-	deletes      []int64 // maxSeq arguments in order
-	deleteReturn int64
-	deleteErr    error
+	deletes   []int64 // maxSeq arguments in order
+	deleteErr error
 }
 
 func (f *fakeRepo) Save(ctx context.Context, v *relationaldb.ValidationRecord) error {

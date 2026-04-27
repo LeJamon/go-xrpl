@@ -250,7 +250,7 @@ func TestValidationArchive_EngineDrivenFlow(t *testing.T) {
 	// deterministic LedgerID here and only swap NodeID).
 	sharedLedger := consensus.LedgerID{0xCA, 0xFE, 0xBA, 0xBE}
 	for _, n := range []consensus.NodeID{{1}, {2}} {
-		v := mkValidation(300, byte(n[0]))
+		v := mkValidation(300, n[0])
 		v.LedgerID = sharedLedger
 		v.NodeID = n
 		if !tracker.Add(v) {
