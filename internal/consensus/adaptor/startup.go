@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/LeJamon/goXRPLd/config"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/goXRPLd/internal/consensus/archive"
 	"github.com/LeJamon/goXRPLd/internal/consensus/rcl"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/manifest"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
+	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 
 // Components holds all the consensus/networking components created by NewFromConfig.
@@ -27,6 +30,13 @@ type Components struct {
 	// translation), and the RPC layer (manifest method). Always
 	// non-nil — starts empty and fills as peers gossip manifests.
 	Manifests *manifest.Cache
+
+	// Archive is the on-disk validation archive, when enabled.
+	// Nil if disabled in config or if no relational DB is configured.
+	// The engine owns the lifecycle (drain + Close on Stop), but it's
+	// surfaced here so the read-path can plumb it into RPC services
+	// without re-resolving from config.
+	Archive *archive.Archive
 
 	// cancel functions for background goroutines
 	overlayCancel context.CancelFunc
@@ -82,9 +92,14 @@ func (c *Components) Stop() {
 
 // NewFromConfig creates and wires all consensus/networking components from the app config.
 // Returns nil Components if the node is in standalone mode.
+//
+// validationRepo is optional — pass nil to disable the on-disk validation
+// archive. When non-nil and [validation_archive] is enabled in config,
+// stale validations are persisted via a batched async writer.
 func NewFromConfig(
 	appCfg *config.Config,
 	ledgerSvc *service.Service,
+	validationRepo relationaldb.ValidationRepository,
 ) (*Components, error) {
 	// Create validator identity first (nil if not a validator) so we can
 	// pass its pubkey into the overlay for the self-target TMSquelch
@@ -155,6 +170,24 @@ func NewFromConfig(
 		return consensus.NodeID(manifestCache.GetMasterKey([33]byte(nid)))
 	})
 
+	// On-disk validation archive. Skipped when the relational DB is
+	// unavailable or the operator has disabled the section in TOML —
+	// either way the engine runs unchanged with the tracker in pure
+	// in-memory mode. When enabled, ExpireOld in the fully-validated
+	// callback streams pruned validations into the writer goroutine.
+	var validationArchive *archive.Archive
+	if validationRepo != nil && appCfg.ValidationArchive.Enabled {
+		archCfg := appCfg.ValidationArchive.WithDefaults()
+		validationArchive = archive.New(validationRepo, archive.Config{
+			RetentionLedgers: archCfg.RetentionLedgers,
+			BatchSize:        archCfg.BatchSize,
+			FlushInterval:    time.Duration(archCfg.FlushIntervalMs) * time.Millisecond,
+			DeleteBatch:      archCfg.DeleteBatch,
+		}, slog.Default().With("component", "validation_archive"))
+		engine.SetArchive(validationArchive)
+		engine.SetInMemoryLedgers(archCfg.InMemoryLedgers)
+	}
+
 	router := NewRouter(engine, adaptor, modeManager, overlay.Messages())
 	router.SetManifestCache(manifestCache, overlay)
 
@@ -183,6 +216,7 @@ func NewFromConfig(
 		Router:      router,
 		ModeManager: modeManager,
 		Manifests:   manifestCache,
+		Archive:     validationArchive,
 	}, nil
 }
 

@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"testing"
@@ -35,7 +36,7 @@ func buildTestValidation() *consensus.Validation {
 
 func TestParseSTValidation_Roundtrip(t *testing.T) {
 	orig := buildTestValidation()
-	blob := serializeSTValidation(orig)
+	blob := SerializeSTValidation(orig)
 
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
@@ -48,6 +49,60 @@ func TestParseSTValidation_Roundtrip(t *testing.T) {
 	assert.Equal(t, orig.Cookie, parsed.Cookie)
 	assert.Equal(t, orig.LoadFee, parsed.LoadFee)
 	assert.WithinDuration(t, orig.SignTime, parsed.SignTime, time.Second)
+}
+
+func TestParseSTValidation_PopulatesRaw(t *testing.T) {
+	orig := buildTestValidation()
+	blob := SerializeSTValidation(orig)
+
+	parsed, err := parseSTValidation(blob)
+	require.NoError(t, err)
+
+	if !bytes.Equal(parsed.Raw, blob) {
+		t.Fatalf("Raw mismatch:\n got  %x\n want %x", parsed.Raw, blob)
+	}
+
+	// Raw must be an independent copy: mutating the input after parse
+	// must not corrupt what the archive later persists.
+	blob[0] ^= 0xFF
+	if parsed.Raw[0] == blob[0] {
+		t.Fatal("Raw aliases input buffer — must be a copy")
+	}
+}
+
+// TestSTValidation_FlagsRoundTrip pins the wire-flag fidelity gap from
+// review round 2: parseSTValidation must capture the full sfFlags word,
+// and SerializeSTValidation must re-emit it verbatim, so the archive's
+// flags column reflects what the validator signed (not a synthesized
+// constant).
+func TestSTValidation_FlagsRoundTrip(t *testing.T) {
+	orig := buildTestValidation()
+	// A vendor flag bit the standard parser doesn't otherwise recognize.
+	const customVendorBit = 0x00010000
+	orig.Flags = vfFullyCanonicalSig | vfFullValidation | customVendorBit
+
+	blob := SerializeSTValidation(orig)
+	parsed, err := parseSTValidation(blob)
+	require.NoError(t, err)
+
+	if parsed.Flags != orig.Flags {
+		t.Fatalf("Flags lost on round-trip:\n got  0x%08x\n want 0x%08x", parsed.Flags, orig.Flags)
+	}
+	if !parsed.Full {
+		t.Error("Full bit derived from Flags should be true")
+	}
+
+	// Backward-compat: a Validation with Flags=0 still serializes to the
+	// canonical pair when Full=true (older constructors didn't know
+	// about Flags).
+	legacy := buildTestValidation()
+	legacy.Flags = 0 // explicit
+	legacyBlob := SerializeSTValidation(legacy)
+	legacyParsed, err := parseSTValidation(legacyBlob)
+	require.NoError(t, err)
+	if legacyParsed.Flags != (vfFullyCanonicalSig | vfFullValidation) {
+		t.Fatalf("legacy Flags=0 should synthesize canonical pair; got 0x%08x", legacyParsed.Flags)
+	}
 }
 
 func TestParseSTValidation_MinimalFields(t *testing.T) {
@@ -101,7 +156,7 @@ func TestParseSTValidation_MinimalFields(t *testing.T) {
 
 func TestParseSTValidation_SigningDataExcludesSigOnly(t *testing.T) {
 	orig := buildTestValidation()
-	blob := serializeSTValidation(orig)
+	blob := SerializeSTValidation(orig)
 
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
@@ -135,7 +190,7 @@ func TestParseSTValidation_MissingRequiredFields(t *testing.T) {
 
 func TestParseSTValidation_UnknownFieldsSkipped(t *testing.T) {
 	orig := buildTestValidation()
-	blob := serializeSTValidation(orig)
+	blob := SerializeSTValidation(orig)
 
 	// Insert an unknown UINT32 field (type=2, field=15 = 0x2F) before the last field.
 	// Find sfSigningPubKey (0x73) position and insert before it.
@@ -178,7 +233,7 @@ func TestParseSTValidation_UnknownFieldsSkipped(t *testing.T) {
 
 func TestSerializeSTValidation_CanonicalOrder(t *testing.T) {
 	v := buildTestValidation()
-	blob := serializeSTValidation(v)
+	blob := SerializeSTValidation(v)
 
 	// Verify field order by checking field header bytes appear in order.
 	var fieldHeaders []byte
@@ -230,7 +285,7 @@ func TestSerializeSTValidation_CanonicalOrder(t *testing.T) {
 
 func TestValidationFromMessage_Integration(t *testing.T) {
 	orig := buildTestValidation()
-	blob := serializeSTValidation(orig)
+	blob := SerializeSTValidation(orig)
 
 	msg := &message.Validation{Validation: blob}
 	parsed, err := ValidationFromMessage(msg)
@@ -271,7 +326,7 @@ func TestSignSerializeParseVerify_Roundtrip(t *testing.T) {
 	require.NoError(t, err, "direct verify failed")
 
 	// Serialize to wire format
-	blob := serializeSTValidation(orig)
+	blob := SerializeSTValidation(orig)
 	require.NotEmpty(t, blob)
 
 	// Parse back (inbound path)
@@ -355,7 +410,7 @@ func TestSerializeSTValidation_CanonicalOrder_Hash256BeforeAmount(t *testing.T) 
 	v.ReserveBaseDrops = 20
 	v.ReserveIncrementDrops = 5
 
-	blob := serializeSTValidation(v)
+	blob := SerializeSTValidation(v)
 	require.NotEmpty(t, blob)
 
 	// Walk each top-level field header and record the type code. We

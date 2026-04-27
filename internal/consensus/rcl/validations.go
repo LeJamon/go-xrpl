@@ -67,6 +67,13 @@ type ValidationTracker struct {
 
 	// callbacks
 	onFullyValidated func(ledgerID consensus.LedgerID, ledgerSeq uint32)
+
+	// onStale is fired once per validation dropped by ExpireOld, after
+	// the tracker's internal maps have been mutated but before returning
+	// to the caller. Invoked outside vt.mu so callbacks (e.g. the archive
+	// writer's channel send) may do I/O without risking lock-order
+	// inversion. Nil means "no archive wired."
+	onStale func(*consensus.Validation)
 }
 
 // NewValidationTracker creates a new validation tracker.
@@ -174,6 +181,18 @@ func (vt *ValidationTracker) SetFullyValidatedCallback(fn func(ledgerID consensu
 	vt.onFullyValidated = fn
 }
 
+// SetOnStale installs a callback invoked once per validation dropped by
+// ExpireOld. Mirrors rippled's Validations<Adaptor>::onStale contract —
+// consumed by the on-disk validation archive to persist stale validations
+// before they leave memory. Callback runs outside the tracker's mutex so it
+// may do blocking work (channel send to a batched writer); callers must
+// ensure it does not call back into the tracker. Pass nil to disable.
+func (vt *ValidationTracker) SetOnStale(fn func(*consensus.Validation)) {
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
+	vt.onStale = fn
+}
+
 // Validation freshness windows mirror rippled's Validations.h:626
 // isCurrent gate:
 //   - validationCurrentWall: SignTime must be within this window of
@@ -248,7 +267,27 @@ func isCurrent(now, signTime, seenTime time.Time) bool {
 //     wastes work on every checkFullValidation pass.
 //   - Per-node newer-seq-only rule: a node's latest validation
 //     supersedes any earlier one. Same as before.
+//
+// onFullyValidated is fired OUTSIDE vt.mu so the callback may take other
+// locks (engine.mu, archive channel send) or call back into the tracker
+// (e.g. ExpireOld) without deadlocking. Mirrors the lock-free callback
+// dispatch ExpireOld already uses for onStale.
+//
+// Defer order is LIFO: vt.mu.Unlock runs first (released before the
+// callback), then the captured fire-tuple is dispatched.
 func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
+	var (
+		fireID     consensus.LedgerID
+		fireSeq    uint32
+		shouldFire bool
+		cb         func(consensus.LedgerID, uint32)
+	)
+	defer func() {
+		if shouldFire && cb != nil {
+			cb(fireID, fireSeq)
+		}
+	}()
+
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
 
@@ -304,17 +343,21 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 	}
 	ledgerVals[resolvedID] = validation
 
-	// Check for full validation
-	vt.checkFullValidation(validation.LedgerID)
-
+	// Capture the fire-tuple under the lock; the deferred dispatcher
+	// invokes onFullyValidated after vt.mu.Unlock has run.
+	fireID, fireSeq, shouldFire = vt.checkFullValidationLocked(validation.LedgerID)
+	cb = vt.onFullyValidated
 	return true
 }
 
-// checkFullValidation checks if a ledger has reached full validation.
-// Fires the callback exactly once per ledger — the first time trusted
-// count crosses the quorum threshold. Subsequent adds for the same
-// ledger are ignored to avoid repeatedly flipping server_info's
-// validated_ledger on every late-arriving peer validation.
+// checkFullValidationLocked records that a ledger crossed the quorum
+// threshold (via vt.fired) and returns the (id, seq, shouldFire) tuple
+// the caller needs to invoke onFullyValidated outside the lock.
+//
+// Fires (well, requests-fire-by) exactly once per ledger — the first
+// time trusted count crosses the quorum threshold. Subsequent adds for
+// the same ledger are ignored to avoid repeatedly flipping
+// server_info's validated_ledger on every late-arriving peer validation.
 //
 // Zero-quorum edge case (empty UNL): requires at least one tracked
 // validation for the ledger before firing, so we don't spuriously
@@ -324,16 +367,18 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 // message acceptance but excluded from the quorum count here, matching
 // rippled's LedgerMaster.cpp:952. Same-quorum with a validator
 // temporarily disabled shouldn't require one MORE validation to finalize.
-func (vt *ValidationTracker) checkFullValidation(ledgerID consensus.LedgerID) {
+//
+// Caller MUST hold vt.mu.
+func (vt *ValidationTracker) checkFullValidationLocked(ledgerID consensus.LedgerID) (consensus.LedgerID, uint32, bool) {
 	if vt.onFullyValidated == nil {
-		return
+		return ledgerID, 0, false
 	}
 	if _, done := vt.fired[ledgerID]; done {
-		return
+		return ledgerID, 0, false
 	}
 	ledgerVals, exists := vt.validations[ledgerID]
 	if !exists || len(ledgerVals) == 0 {
-		return
+		return ledgerID, 0, false
 	}
 
 	var sampleSeq uint32
@@ -345,8 +390,9 @@ func (vt *ValidationTracker) checkFullValidation(ledgerID consensus.LedgerID) {
 
 	if trustedCount >= vt.quorum {
 		vt.fired[ledgerID] = struct{}{}
-		vt.onFullyValidated(ledgerID, sampleSeq)
+		return ledgerID, sampleSeq, true
 	}
+	return ledgerID, 0, false
 }
 
 // GetValidations returns all validations for a ledger.
@@ -506,19 +552,46 @@ func (vt *ValidationTracker) GetCurrentValidators() []consensus.NodeID {
 	return result
 }
 
-// ExpireOld removes old validations.
+// ExpireOld drops validations whose LedgerSeq is below minSeq from every
+// internal index, then fires onStale (if set) for each dropped validation
+// outside the mutex. All validations for a given ledger share a LedgerSeq,
+// so the staleness decision is taken from any one sample per ledger.
+//
+// Fixes a prior bug where byNode entries survived deletion — the node's
+// latest-validation pointer was kept pointing at a Validation removed from
+// the per-ledger map.
 func (vt *ValidationTracker) ExpireOld(minSeq uint32) {
 	vt.mu.Lock()
-	defer vt.mu.Unlock()
+
+	onStale := vt.onStale
+	var stale []*consensus.Validation
 
 	for ledgerID, ledgerVals := range vt.validations {
+		var sample *consensus.Validation
 		for _, v := range ledgerVals {
-			if v.LedgerSeq < minSeq {
-				delete(vt.validations, ledgerID)
-				delete(vt.fired, ledgerID)
-			}
+			sample = v
 			break
 		}
+		if sample == nil || sample.LedgerSeq >= minSeq {
+			continue
+		}
+		for nodeID, v := range ledgerVals {
+			stale = append(stale, v)
+			if latest, ok := vt.byNode[nodeID]; ok && latest == v {
+				delete(vt.byNode, nodeID)
+			}
+		}
+		delete(vt.validations, ledgerID)
+		delete(vt.fired, ledgerID)
+	}
+
+	vt.mu.Unlock()
+
+	if onStale == nil {
+		return
+	}
+	for _, v := range stale {
+		onStale(v)
 	}
 }
 

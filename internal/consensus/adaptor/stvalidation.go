@@ -144,6 +144,7 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 		switch {
 		case typeCode == typeUINT32 && fieldCode == fieldFlags:
 			flags := binary.BigEndian.Uint32(fieldData)
+			v.Flags = flags
 			v.Full = (flags & vfFullValidation) != 0
 
 		case typeCode == typeUINT32 && fieldCode == fieldLedgerSequence:
@@ -236,6 +237,7 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 	}
 
 	v.SigningData = signingBuf
+	v.Raw = append([]byte(nil), data...)
 
 	// Validate required fields were present.
 	if v.LedgerSeq == 0 || v.LedgerID == (consensus.LedgerID{}) || v.NodeID == (consensus.NodeID{}) {
@@ -245,7 +247,7 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 	return v, nil
 }
 
-// serializeSTValidation produces XRPL-binary-encoded STValidation bytes from a
+// SerializeSTValidation produces XRPL-binary-encoded STValidation bytes from a
 // consensus.Validation. Fields are written in canonical order (ascending type
 // code, then ascending field code within each type).
 //
@@ -253,17 +255,27 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 // sfFlags, matching rippled's STValidation::sign semantics. Optional
 // supplementary fields (Cookie, LoadFee, ConsensusHash, ServerVersion) are
 // emitted only when non-zero.
-func serializeSTValidation(v *consensus.Validation) []byte {
+//
+// Exported so external packages (the validation archive) can reserialize
+// self-built validations whose Raw field is nil.
+func SerializeSTValidation(v *consensus.Validation) []byte {
 	var buf []byte
 
 	// --- UINT32 fields (type 2) ---
 
-	// sfFlags (field 2). Rippled stamps vfFullyCanonicalSig on every
-	// outbound validation; we match that so canonical-sig-strict peers
-	// don't need to special-case us.
-	flags := uint32(vfFullyCanonicalSig)
-	if v.Full {
-		flags |= vfFullValidation
+	// sfFlags (field 2). For round-trip fidelity, prefer the original
+	// wire word captured by parseSTValidation (so we re-emit any vendor
+	// bits the validator set). For self-built validations whose Flags
+	// field is zero, synthesize the rippled-canonical pair: stamp
+	// vfFullyCanonicalSig on every outbound validation so canonical-sig-
+	// strict peers don't need to special-case us, plus vfFullValidation
+	// when v.Full.
+	flags := v.Flags
+	if flags == 0 {
+		flags = vfFullyCanonicalSig
+		if v.Full {
+			flags |= vfFullValidation
+		}
 	}
 	buf = appendFieldHeader(buf, typeUINT32, fieldFlags)
 	buf = binary.BigEndian.AppendUint32(buf, flags)

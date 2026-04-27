@@ -193,6 +193,23 @@ zero_basefee_transaction_feelevel = 256000
 # Optional Sections
 # =============================================================================
 
+# On-disk validation archive (optional). When enabled, validations
+# pruned from ValidationTracker are persisted to a `validations` table
+# in the relational DB so forensic tooling can query historical
+# validations. Omit the section to disable; uncomment + adjust to tune.
+#
+# Note: SQLite is the default backend, sharing ledger.db with single-
+# writer concurrency. Sustained ledger-write pressure can therefore
+# back up the archive's writer goroutine; under sustained overload
+# OnStale logs a warning and drops, rather than blocking consensus.
+# [validation_archive]
+# enabled            = true   # default false; set true to turn on
+# retention_ledgers  = 10000  # 0 = keep forever
+# batch_size         = 128    # rows per commit
+# flush_interval_ms  = 1000   # max latency for partial batches
+# delete_batch       = 1000   # max rows per retention sweep
+# in_memory_ledgers  = 256    # tracker eviction window (rippled minimum)
+
 # Performance logging (optional)
 # [perf]
 # perf_log = "/var/log/xrpld/perf.log"

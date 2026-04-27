@@ -434,3 +434,82 @@ func TestValidationTracker_Stats(t *testing.T) {
 		t.Errorf("Expected 2 ledgers tracked, got %d", stats.LedgersTracked)
 	}
 }
+
+func TestValidationTracker_ExpireOld_FiresOnStale(t *testing.T) {
+	vt := NewValidationTracker(1, 5*time.Minute)
+
+	nodeA := consensus.NodeID{0xA}
+	nodeB := consensus.NodeID{0xB}
+	ledgerOld := consensus.LedgerID{1}
+	ledgerKeep := consensus.LedgerID{2}
+
+	vOldA := &consensus.Validation{LedgerID: ledgerOld, LedgerSeq: 100, NodeID: nodeA, SignTime: time.Now(), Full: true}
+	vOldB := &consensus.Validation{LedgerID: ledgerOld, LedgerSeq: 100, NodeID: nodeB, SignTime: time.Now(), Full: true}
+	vKeep := &consensus.Validation{LedgerID: ledgerKeep, LedgerSeq: 300, NodeID: nodeA, SignTime: time.Now(), Full: true}
+
+	vt.Add(vOldA)
+	vt.Add(vOldB)
+	vt.Add(vKeep)
+
+	var fired []*consensus.Validation
+	vt.SetOnStale(func(v *consensus.Validation) { fired = append(fired, v) })
+
+	vt.ExpireOld(200)
+
+	if len(fired) != 2 {
+		t.Fatalf("expected 2 onStale fires, got %d", len(fired))
+	}
+	// Both must be the seq=100 pair; the seq=300 validation is not stale.
+	for _, v := range fired {
+		if v.LedgerSeq != 100 {
+			t.Errorf("stale validation at seq %d leaked; expected only seq 100", v.LedgerSeq)
+		}
+	}
+	if got := vt.GetValidationCount(ledgerOld); got != 0 {
+		t.Errorf("stale ledger still has %d validations; expected 0", got)
+	}
+	if got := vt.GetValidationCount(ledgerKeep); got != 1 {
+		t.Errorf("current ledger lost validations: count=%d, expected 1", got)
+	}
+}
+
+func TestValidationTracker_ExpireOld_ClearsByNode(t *testing.T) {
+	vt := NewValidationTracker(1, 5*time.Minute)
+
+	nodeA := consensus.NodeID{0xA}
+	ledger := consensus.LedgerID{1}
+
+	vt.Add(&consensus.Validation{LedgerID: ledger, LedgerSeq: 100, NodeID: nodeA, SignTime: time.Now(), Full: true})
+	if vt.GetLatestValidation(nodeA) == nil {
+		t.Fatal("precondition: Add should have populated byNode")
+	}
+
+	vt.ExpireOld(200)
+
+	if vt.GetLatestValidation(nodeA) != nil {
+		t.Fatal("ExpireOld left stale entry in byNode map")
+	}
+}
+
+// ExpireOld's onStale hook runs outside the tracker mutex: a callback that
+// calls back into the tracker must not deadlock.
+func TestValidationTracker_ExpireOld_OnStaleRunsOutsideLock(t *testing.T) {
+	vt := NewValidationTracker(1, 5*time.Minute)
+	vt.Add(&consensus.Validation{LedgerID: consensus.LedgerID{1}, LedgerSeq: 100, NodeID: consensus.NodeID{1}, SignTime: time.Now(), Full: true})
+
+	done := make(chan struct{})
+	vt.SetOnStale(func(*consensus.Validation) {
+		// Re-entering the tracker under the lock would deadlock if we
+		// were still holding vt.mu at callback time.
+		_ = vt.GetValidationCount(consensus.LedgerID{1})
+		close(done)
+	})
+
+	vt.ExpireOld(200)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("onStale callback deadlocked or never fired")
+	}
+}

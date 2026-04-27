@@ -64,9 +64,17 @@ func ValidationFromMessage(msg *message.Validation) (*consensus.Validation, erro
 
 // ValidationToMessage serializes a consensus.Validation to an XRPL-binary-encoded
 // STValidation suitable for the TMValidation protobuf wire format.
+//
+// Caches the wire bytes on v.Raw if not already populated, so downstream
+// consumers (the validation archive, suppression-hash computation) can
+// reuse the canonical blob without a second serialize pass.
 func ValidationToMessage(v *consensus.Validation) *message.Validation {
+	blob := SerializeSTValidation(v)
+	if len(v.Raw) == 0 {
+		v.Raw = append([]byte(nil), blob...)
+	}
 	return &message.Validation{
-		Validation: serializeSTValidation(v),
+		Validation: blob,
 	}
 }
 

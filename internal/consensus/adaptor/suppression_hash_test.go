@@ -212,7 +212,7 @@ func TestSuppression_ProposalSemanticIdentity_SameHash(t *testing.T) {
 // at PeerImp.cpp:2374. NOT the TMValidation protobuf envelope.
 func TestSuppression_ValidationHash_OfSerializedBlob(t *testing.T) {
 	val := buildTestValidation()
-	blob := serializeSTValidation(val)
+	blob := SerializeSTValidation(val)
 
 	got := hashValidationSuppression(blob)
 
@@ -237,7 +237,7 @@ func TestSuppression_ValidationHash_OfSerializedBlob(t *testing.T) {
 // matching rippled.
 func TestSuppression_ValidationInnerBlobDomain_SameHash(t *testing.T) {
 	v := buildTestValidation()
-	blob := serializeSTValidation(v)
+	blob := SerializeSTValidation(v)
 
 	// Envelope A: the minimal TMValidation our Encode path emits.
 	envelopeA, err := message.Encode(&message.Validation{Validation: blob})

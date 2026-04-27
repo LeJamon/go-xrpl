@@ -170,7 +170,7 @@ func buildProposalSigningData(p *consensus.Proposal) []byte {
 //
 // For outbound validations (SigningData nil), we regenerate the preimage
 // from struct fields. It MUST stay byte-identical to what
-// serializeSTValidation emits (minus sfSignature); otherwise a freshly-
+// SerializeSTValidation emits (minus sfSignature); otherwise a freshly-
 // signed validation would fail verification when parsed back from the
 // wire. When extending the wire format, update both functions together.
 func buildValidationSigningData(v *consensus.Validation) []byte {
@@ -181,12 +181,12 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 	}
 
 	// Outbound: rebuild from struct fields in canonical field order,
-	// matching serializeSTValidation byte-for-byte.
+	// matching SerializeSTValidation byte-for-byte.
 	var buf []byte
 	buf = append(buf, protocol.HashPrefixValidation[:]...)
 
 	// sfFlags (type 2, field 2). Canonical-sig flag always set on
-	// outbound — must match serializeSTValidation.
+	// outbound — must match SerializeSTValidation.
 	flags := uint32(vfFullyCanonicalSig)
 	if v.Full {
 		flags |= vfFullValidation
@@ -211,7 +211,7 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 
 	// sfReserveBase (type 2, field 31) — optional flag-ledger fee vote
 	// (legacy pre-XRPFees form). Must stay in sync with
-	// serializeSTValidation emission order.
+	// SerializeSTValidation emission order.
 	if v.ReserveBase != 0 {
 		buf = appendFieldHeader(buf, typeUINT32, fieldReserveBase)
 		buf = append(buf, byte(v.ReserveBase>>24), byte(v.ReserveBase>>16), byte(v.ReserveBase>>8), byte(v.ReserveBase))
@@ -250,7 +250,7 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 
 	// --- HASH256 fields (type 5) — must precede AMOUNT (type 6) per
 	// canonical ascending-type ordering. Order must stay byte-identical
-	// to serializeSTValidation — any drift silently breaks our own
+	// to SerializeSTValidation — any drift silently breaks our own
 	// self-verify round-trip.
 
 	// sfLedgerHash (type 5, field 1)
@@ -289,7 +289,7 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 
 	// sfAmendments — VECTOR256 (type 19) FIELD 3 per rippled
 	// sfields.macro:306. The older value 19 confused type with field.
-	// Must stay in sync with serializeSTValidation which emits this
+	// Must stay in sync with SerializeSTValidation which emits this
 	// AFTER sfSigningPubKey; sfSignature comes last and is the only
 	// field excluded from the signing preimage.
 	if len(v.Amendments) > 0 {

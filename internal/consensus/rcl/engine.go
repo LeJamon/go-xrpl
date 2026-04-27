@@ -136,6 +136,26 @@ type Engine struct {
 	// quorum arithmetic. Nil means "no translation" (default identity
 	// function inside the tracker). See SetManifestResolver.
 	manifestResolver func(consensus.NodeID) consensus.NodeID
+
+	// archive, when non-nil, persists stale validations dropped by the
+	// tracker. Wired via SetArchive — optional, the engine functions
+	// identically when nil.
+	archive ValidationArchive
+
+	// inMemoryLedgers is the tracker's in-memory retention window: after
+	// a ledger becomes fully validated at seq S, validations for ledgers
+	// below (S - inMemoryLedgers) are dropped and streamed into the
+	// archive via OnStale. Zero disables auto-expiry.
+	inMemoryLedgers uint32
+}
+
+// ValidationArchive is the subset of the archive API the consensus engine
+// consumes. Defined here so the rcl package does not depend on the
+// concrete archive type — test doubles can satisfy it with two methods.
+type ValidationArchive interface {
+	OnStale(*consensus.Validation)
+	NoteFullyValidated(seq uint32)
+	Close(ctx context.Context) error
 }
 
 // avalancheState tracks the close time voting threshold escalation.
@@ -197,6 +217,36 @@ func (e *Engine) SetManifestResolver(fn func(consensus.NodeID) consensus.NodeID)
 	}
 }
 
+// SetArchive wires an on-disk validation archive into the engine. May
+// be called before or after Start. Pass nil to detach — the tracker's
+// onStale callback is cleared so the just-detached archive can be
+// Close()d without risking a use-after-close channel send. Safe to call
+// concurrently with Stop but not with Start.
+func (e *Engine) SetArchive(a ValidationArchive) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.archive = a
+	if e.validationTracker == nil {
+		return
+	}
+	if a == nil {
+		e.validationTracker.SetOnStale(nil)
+		return
+	}
+	e.validationTracker.SetOnStale(a.OnStale)
+}
+
+// SetInMemoryLedgers configures how many fully-validated ledgers of
+// validation history the tracker holds in memory. Every time a ledger
+// becomes fully validated at seq S, validations for ledgers below
+// (S - n) are evicted (and streamed into the archive via OnStale).
+// Zero disables auto-eviction.
+func (e *Engine) SetInMemoryLedgers(n uint32) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.inMemoryLedgers = n
+}
+
 // Start begins the consensus engine.
 func (e *Engine) Start(ctx context.Context) error {
 	e.mu.Lock()
@@ -225,8 +275,31 @@ func (e *Engine) Start(ctx context.Context) error {
 	// — matching here avoids rejecting our own just-signed validation
 	// by the accumulated close-time offset on a skewed node.
 	e.validationTracker.SetNow(e.adaptor.Now)
+	if e.archive != nil {
+		e.validationTracker.SetOnStale(e.archive.OnStale)
+	}
+	tracker := e.validationTracker
 	e.validationTracker.SetFullyValidatedCallback(func(ledgerID consensus.LedgerID, seq uint32) {
 		e.adaptor.OnLedgerFullyValidated(ledgerID, seq)
+
+		// Snapshot mutable fields under e.mu — SetArchive /
+		// SetInMemoryLedgers may race with this callback.
+		e.mu.RLock()
+		arc := e.archive
+		inMem := e.inMemoryLedgers
+		e.mu.RUnlock()
+
+		if arc != nil {
+			arc.NoteFullyValidated(seq)
+		}
+		// Drive the in-memory retention window. ExpireOld fires the
+		// onStale callback for each evicted validation, so the archive
+		// captures it before the tracker drops it. Called outside e.mu
+		// because ExpireOld may dispatch onStale callbacks that block
+		// briefly on the archive's channel send.
+		if inMem > 0 && seq > inMem {
+			tracker.ExpireOld(seq - inMem)
+		}
 	})
 
 	// Start the main loop
@@ -236,11 +309,25 @@ func (e *Engine) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully shuts down the consensus engine.
+// Stop gracefully shuts down the consensus engine. If an archive is
+// wired, its writer goroutine is drained and committed before Stop
+// returns so no stale validations are lost across shutdown — modulo
+// SaveBatch failures (which the writer logs and re-queues; see
+// Archive.run for the retry policy).
 func (e *Engine) Stop() error {
 	e.cancel()
 	e.wg.Wait()
 	e.eventBus.Stop()
+
+	e.mu.RLock()
+	arc := e.archive
+	e.mu.RUnlock()
+	if arc != nil {
+		// Bounded close — a stuck archive must not hang shutdown.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = arc.Close(ctx)
+		cancel()
+	}
 	return nil
 }
 
