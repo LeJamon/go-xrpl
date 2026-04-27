@@ -261,6 +261,43 @@ func (i *Identity) TLSCertificate() tls.Certificate {
 	return cert
 }
 
+// TLSCertificatePEM returns the PEM-encoded self-signed TLS certificate and
+// private key for this identity. Uses a fresh P256 key (separate from the
+// secp256k1 node identity) so the peertls package can construct an
+// OpenSSL-backed connection without going through stdlib crypto/tls.
+func (i *Identity) TLSCertificatePEM() (certPEM, keyPEM []byte, err error) {
+	tlsKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("identity: generate TLS key: %w", err)
+	}
+
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			CommonName: i.EncodedPublicKey(),
+		},
+		NotBefore:             now,
+		NotAfter:              now.Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &tlsKey.PublicKey, tlsKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("identity: create TLS certificate: %w", err)
+	}
+
+	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyDER, err := x509.MarshalECPrivateKey(tlsKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("identity: marshal TLS key: %w", err)
+	}
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	return certPEM, keyPEM, nil
+}
+
 // PublicKeyToken represents an XRPL node public key (from peer handshake).
 type PublicKeyToken struct {
 	key *btcec.PublicKey
