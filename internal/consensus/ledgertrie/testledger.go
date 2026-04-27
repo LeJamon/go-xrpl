@@ -5,7 +5,6 @@ import (
 )
 
 // TestLedger is a deterministic in-memory ledger for unit tests.
-// Modeled on rippled's csf::Ledger (src/test/csf/ledgers.h).
 type TestLedger struct {
 	id        consensus.LedgerID
 	seq       uint32
@@ -14,12 +13,8 @@ type TestLedger struct {
 
 func (l *TestLedger) ID() consensus.LedgerID { return l.id }
 func (l *TestLedger) Seq() uint32            { return l.seq }
+func (l *TestLedger) MinSeq() uint32         { return 0 }
 
-// MinSeq is 0; TestLedger retains its full ancestry.
-func (l *TestLedger) MinSeq() uint32 { return 0 }
-
-// Ancestor returns the zero LedgerID for s outside [MinSeq, Seq],
-// mirroring RCLValidatedLedger::operator[] (RCLValidations.cpp:79-95).
 func (l *TestLedger) Ancestor(s uint32) consensus.LedgerID {
 	if s > l.seq {
 		return consensus.LedgerID{}
@@ -28,13 +23,10 @@ func (l *TestLedger) Ancestor(s uint32) consensus.LedgerID {
 }
 
 // TestLedgerBuilder constructs TestLedgers from path strings: Build("abc")
-// is genesis → 'a' → 'b' → 'c' (seq 3); "ab" and "abc" share the "ab"
-// prefix. Mirrors LedgerHistoryHelper (LedgerTrie_test.cpp).
-//
-// Each path rune is written into byte `depth` of the LedgerID, so
-// lexicographic byte-order on IDs agrees with rune-order on paths —
-// preserving the implicit ordering rippled tests rely on. Limited to
-// ASCII paths shorter than 32 bytes.
+// is genesis → 'a' → 'b' → 'c'; "ab" and "abc" share the "ab" prefix.
+// Each path rune is written into byte `depth` of the LedgerID so
+// lexicographic byte-order on IDs agrees with rune-order on paths.
+// Limited to ASCII paths shorter than 32 bytes.
 type TestLedgerBuilder struct {
 	genesis  *TestLedger
 	children map[childKey]*TestLedger
@@ -58,7 +50,7 @@ func NewTestLedgerBuilder() *TestLedgerBuilder {
 
 func (b *TestLedgerBuilder) Genesis() *TestLedger { return b.genesis }
 
-// Build returns the (memoized) ledger for s. Empty s returns genesis.
+// Build returns the memoized ledger for s; empty s returns genesis.
 func (b *TestLedgerBuilder) Build(s string) *TestLedger {
 	if len(s) >= 32 {
 		panic("TestLedgerBuilder: path too long for 32-byte ID encoding")

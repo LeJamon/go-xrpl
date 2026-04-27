@@ -3,8 +3,7 @@ package ledgertrie
 import "github.com/LeJamon/goXRPLd/internal/consensus"
 
 // span is the half-open interval [start, end) of a ledger's ancestry,
-// always non-empty. Port of ledger_trie_detail::Span<Ledger>
-// (LedgerTrie.h:77-198).
+// always non-empty.
 type span struct {
 	start  uint32
 	end    uint32
@@ -40,18 +39,15 @@ func (s span) before(spot uint32) (span, bool) { return s.sub(s.start, spot) }
 
 func (s span) startID() consensus.LedgerID { return s.ledger.Ancestor(s.start) }
 
-// diff is Span::diff (LedgerTrie.h:144-148).
 func (s span) diff(o Ledger) uint32 { return s.clamp(Mismatch(s.ledger, o)) }
 
-// tip is Span::tip (LedgerTrie.h:151-156).
 func (s span) tip() SpanTip {
 	tipSeq := s.end - 1
 	return SpanTip{Seq: tipSeq, ID: s.ledger.Ancestor(tipSeq), ledger: s.ledger}
 }
 
 // mergeSpans combines two adjacent spans, taking the ledger from the
-// higher-end span so the tip resolves correctly. Port of free `merge`
-// (LedgerTrie.h:189-197).
+// higher-end span so the tip resolves correctly.
 func mergeSpans(a, b span) span {
 	lo := a.start
 	if b.start < lo {
@@ -63,8 +59,7 @@ func mergeSpans(a, b span) span {
 	return span{start: lo, end: a.end, ledger: a.ledger}
 }
 
-// node is a trie node. Port of ledger_trie_detail::Node<Ledger>
-// (LedgerTrie.h:201-269).
+// node is a trie node.
 type node struct {
 	s             span
 	tipSupport    uint32
@@ -79,8 +74,7 @@ func newEmptyNode(genesis Ledger) *node {
 
 func newNodeFromSpan(s span) *node { return &node{s: s} }
 
-// eraseChild swap-pops child from n.children. Mirrors Node::erase
-// (LedgerTrie.h:227-239).
+// eraseChild swap-pops child from n.children.
 func (n *node) eraseChild(child *node) {
 	for i, c := range n.children {
 		if c == child {

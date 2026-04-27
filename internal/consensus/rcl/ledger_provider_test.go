@@ -111,7 +111,7 @@ func TestLedgerProvider_MissingLinkTruncates(t *testing.T) {
 		t.Errorf("Seq: got %d, want 5", lgr.Seq())
 	}
 	if lgr.MinSeq() != 3 {
-		t.Errorf("MinSeq: got %d, want 3 (truncated at seq-3 — seq-2 lookup failed)", lgr.MinSeq())
+		t.Errorf("MinSeq: got %d, want 3 (truncated at seq-3 — seq-3 record lookup failed)", lgr.MinSeq())
 	}
 	if lgr.Ancestor(2) != (consensus.LedgerID{}) {
 		t.Errorf("Ancestor(2) below MinSeq should be zero")

@@ -148,11 +148,8 @@ type Engine struct {
 	// archive via OnStale. Zero disables auto-expiry.
 	inMemoryLedgers uint32
 
-	// ledgerAncestry is the provider the ValidationTracker uses to
-	// resolve LedgerID → ancestry for the LedgerTrie. Staged here by
-	// the startup wiring (which has access to the concrete ledger
-	// service) and applied to the tracker in Start. Nil means the
-	// tracker keeps its flat-count semantics. See SetLedgerAncestryProvider.
+	// ledgerAncestry is staged by startup wiring and applied to the
+	// tracker in Start. Nil keeps flat-count semantics.
 	ledgerAncestry LedgerAncestryProvider
 }
 
@@ -254,11 +251,8 @@ func (e *Engine) SetInMemoryLedgers(n uint32) {
 	e.inMemoryLedgers = n
 }
 
-// SetLedgerAncestryProvider installs the provider the ValidationTracker
-// uses to resolve LedgerID → ancestry for the LedgerTrie. Safe to call
-// before or after Start; when called before Start, the provider is
-// staged and applied to the tracker at Start time. Pass nil to drop
-// back to flat-count support.
+// SetLedgerAncestryProvider installs the trie's ancestry provider.
+// Safe before or after Start; nil reverts to flat-count support.
 func (e *Engine) SetLedgerAncestryProvider(p LedgerAncestryProvider) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

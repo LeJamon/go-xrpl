@@ -76,22 +76,16 @@ type ValidationTracker struct {
 	// inversion. Nil means "no archive wired."
 	onStale func(*consensus.Validation)
 
-	// ancestry resolves a LedgerID to a ledger carrying its ancestor
-	// chain so the trie can walk from genesis → tip on insert. May be
-	// nil — when unset, the tracker falls back to the flat trusted
-	// hash-count for support queries. See SetLedgerAncestryProvider
-	// in validations_trie.go.
+	// ancestry resolves LedgerID → ancestry for the trie. nil disables
+	// the trie; the tracker then falls back to flat hash-count support.
 	ancestry LedgerAncestryProvider
 
-	// trie maintains branchSupport for the latest trusted validation
-	// of every (trusted, not negUNL) validator. Populated on Add()
-	// only when ancestry is set. nil means "trie disabled".
+	// trie holds branchSupport for trusted-and-not-negUNL validators'
+	// latest tips. nil when ancestry is unset.
 	trie *ledgertrie.Trie
 
-	// trieTips tracks which ledger each trusted validator currently
-	// holds in the trie, so a newer validation from the same node can
-	// remove the old tip before inserting the new one. Matches
-	// rippled's lastValidations map (Validations.h:366-371).
+	// trieTips records each validator's current trie tip so a newer
+	// validation can remove the old before inserting the new.
 	trieTips map[consensus.NodeID]ledgertrie.Ledger
 }
 
@@ -145,13 +139,8 @@ func (vt *ValidationTracker) SetNow(fn func() time.Time) {
 	vt.now = fn
 }
 
-// SetTrusted updates the set of trusted validators.
-//
-// If the ancestry trie is wired, rebuilds trie membership from the
-// current byNode / negUNL state so newly-trusted validators contribute
-// their latest tip and de-trusted ones no longer count. Mirrors
-// rippled's Validations::trustChanged (Validations.h:472-499) which
-// calls updateTrie on every trust flip.
+// SetTrusted updates the set of trusted validators and rebuilds the
+// trie if wired so de-trusted validators stop contributing support.
 func (vt *ValidationTracker) SetTrusted(nodes []consensus.NodeID) {
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
@@ -315,12 +304,8 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 		}
 	}()
 
-	// Pre-resolve the validation's ledger ancestry without holding
-	// vt.mu. ancestry.LedgerByID may walk ParentHash on a cold LRU; if
-	// we did this under the write lock every concurrent Add() would
-	// serialise behind us. updateTrieLocked re-checks the resolved ID
-	// matches and falls back to a lock-bound resolve on a rare race
-	// (provider swapped between here and the lock acquire).
+	// Pre-resolve ancestry outside vt.mu — cold-LRU walks would
+	// otherwise serialise concurrent Add()s behind us.
 	vt.mu.RLock()
 	ancestrySnap := vt.ancestry
 	trieEnabled := vt.trie != nil
@@ -387,9 +372,6 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 	}
 	ledgerVals[resolvedID] = validation
 
-	// Maintain the ancestry trie: trusted-and-not-negUNL validators'
-	// latest tip feeds branchSupport. Only fires when a provider is
-	// wired — see SetLedgerAncestryProvider.
 	if vt.trusted[resolvedID] && !vt.negUNL[resolvedID] {
 		vt.updateTrieLocked(resolvedID, validation.LedgerID, preResolvedLedger)
 	}
@@ -525,27 +507,13 @@ func (vt *ValidationTracker) countTrustedExcludingNegUNLLocked(
 	return count
 }
 
-// GetTrustedSupport returns the "support" for a ledger ID the way
-// rippled's vals.getPreferred() sees it — the count of trusted
-// validators whose latest validation commits to this ledger OR ANY
-// DESCENDANT of it on the ancestry trie. Mirrors LedgerTrie::
-// branchSupport (LedgerTrie.h:610-623).
-//
-// When a LedgerAncestryProvider is wired and resolves the ledger,
-// returns the trie's branchSupport. Otherwise falls back to the flat
-// trusted-count at the exact ID (via GetTrustedValidationCount) —
-// production nodes without an ancestry provider and tests that
-// construct bare ValidationTrackers keep their existing behaviour.
-//
-// Inherits the negUNL filter: validators on the negative-UNL never
-// enter the trie, so their validations don't contribute support.
+// GetTrustedSupport returns the trie's branchSupport for ledgerID —
+// the count of trusted-and-not-negUNL validators committing to this
+// ledger or any descendant. Falls back to the flat trusted count when
+// the trie or ancestry is unavailable.
 func (vt *ValidationTracker) GetTrustedSupport(ledgerID consensus.LedgerID) int {
-	// Snapshot trie+ancestry pointers under vt.mu, then drop the lock
-	// before resolving the ledger. The ancestry provider has its own
-	// internal synchronisation; on a cold LRU the parent walk may take
-	// long enough that holding vt.mu would serialise every concurrent
-	// Add() behind us. Re-acquire vt.mu only for the trie query itself,
-	// which is cheap.
+	// Snapshot pointers, drop the lock for ancestry resolution, then
+	// re-acquire for the cheap trie query.
 	vt.mu.RLock()
 	trie := vt.trie
 	ancestry := vt.ancestry
@@ -562,9 +530,7 @@ func (vt *ValidationTracker) GetTrustedSupport(ledgerID consensus.LedgerID) int 
 
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
-	// SetLedgerAncestryProvider may have swapped the trie out while we
-	// were resolving ancestry. The trie's internal state is only
-	// mutated under vt.mu, so a stable pointer is safe to query.
+	// Trie may have been swapped while we resolved ancestry.
 	if vt.trie != trie {
 		ledgerVals, exists := vt.validations[ledgerID]
 		if !exists {
@@ -575,16 +541,10 @@ func (vt *ValidationTracker) GetTrustedSupport(ledgerID consensus.LedgerID) int 
 	return int(trie.BranchSupport(lgr))
 }
 
-// GetPreferred returns the network-preferred ledger ID (and its
-// sequence) as decided by the ancestry trie. The second return is
-// true when a trie-based decision was made; false when the trie is
-// not wired, is empty, or lacks ancestry for the relevant ledgers.
-//
-// Port of rippled's Validations::getPreferred (Validations.h, called
-// at RCLConsensus.cpp:301). Mirrors the same largestIssued semantics:
-// pass the highest sequence number for which this node has already
-// issued a validation so the trie can seed uncommitted support from
-// earlier sequences.
+// GetPreferred returns the network-preferred ledger ID and sequence
+// as decided by the ancestry trie. ok is false when the trie is not
+// wired or empty. largestIssued is the highest sequence this node has
+// already validated; it seeds uncommitted support from earlier seqs.
 func (vt *ValidationTracker) GetPreferred(largestIssued uint32) (consensus.LedgerID, uint32, bool) {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
@@ -664,22 +624,9 @@ func (vt *ValidationTracker) GetCurrentValidators() []consensus.NodeID {
 	return result
 }
 
-// ExpireOld drops validations whose LedgerSeq is below minSeq from every
-// internal index, then fires onStale (if set) for each dropped validation
-// outside the mutex. All validations for a given ledger share a LedgerSeq,
-// so the staleness decision is taken from any one sample per ledger.
-//
-// When a validator's latest validation is dropped, its trie tip is also
-// removed (and trieTips entry cleared) so phantom branchSupport doesn't
-// linger on the now-stale tip. Mirrors rippled's
-// Validations::removeTrie call before erasing from current_
-// (Validations.h:519-523). Without this the ancestor of the stale tip
-// would over-count in GetTrustedSupport until the same validator
-// submitted a fresh validation.
-//
-// Fixes a prior bug where byNode entries survived deletion — the node's
-// latest-validation pointer was kept pointing at a Validation removed from
-// the per-ledger map.
+// ExpireOld drops validations below minSeq from every index and fires
+// onStale outside the mutex. Trie tips for dropped validators are also
+// removed so phantom branchSupport doesn't linger on stale ancestors.
 func (vt *ValidationTracker) ExpireOld(minSeq uint32) {
 	vt.mu.Lock()
 
@@ -699,9 +646,6 @@ func (vt *ValidationTracker) ExpireOld(minSeq uint32) {
 			stale = append(stale, v)
 			if latest, ok := vt.byNode[nodeID]; ok && latest == v {
 				delete(vt.byNode, nodeID)
-				// Drop the validator's trie tip too — without this its
-				// support phantom-counts on ancestors of the stale tip
-				// until the validator submits a fresh validation.
 				if vt.trie != nil {
 					if prev, ok := vt.trieTips[nodeID]; ok {
 						vt.trie.Remove(prev, 1)

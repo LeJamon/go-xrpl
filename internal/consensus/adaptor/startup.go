@@ -188,12 +188,6 @@ func NewFromConfig(
 		engine.SetInMemoryLedgers(archCfg.InMemoryLedgers)
 	}
 
-	// Wire the LedgerTrie's ancestry provider to the local ledger
-	// service. The trie uses this on every trusted validation Add()
-	// to walk the ledger's ParentHash chain and roll tip support up
-	// into branchSupport — replacing the flat-count approximation
-	// the ValidationTracker fell back on when no provider was
-	// present.
 	engine.SetLedgerAncestryProvider(rcl.NewLedgerProvider(ledgerSvc))
 
 	// Create the router
