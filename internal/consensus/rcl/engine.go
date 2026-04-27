@@ -147,6 +147,13 @@ type Engine struct {
 	// below (S - inMemoryLedgers) are dropped and streamed into the
 	// archive via OnStale. Zero disables auto-expiry.
 	inMemoryLedgers uint32
+
+	// ledgerAncestry is the provider the ValidationTracker uses to
+	// resolve LedgerID → ancestry for the LedgerTrie. Staged here by
+	// the startup wiring (which has access to the concrete ledger
+	// service) and applied to the tracker in Start. Nil means the
+	// tracker keeps its flat-count semantics. See SetLedgerAncestryProvider.
+	ledgerAncestry LedgerAncestryProvider
 }
 
 // ValidationArchive is the subset of the archive API the consensus engine
@@ -247,6 +254,20 @@ func (e *Engine) SetInMemoryLedgers(n uint32) {
 	e.inMemoryLedgers = n
 }
 
+// SetLedgerAncestryProvider installs the provider the ValidationTracker
+// uses to resolve LedgerID → ancestry for the LedgerTrie. Safe to call
+// before or after Start; when called before Start, the provider is
+// staged and applied to the tracker at Start time. Pass nil to drop
+// back to flat-count support.
+func (e *Engine) SetLedgerAncestryProvider(p LedgerAncestryProvider) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.ledgerAncestry = p
+	if e.validationTracker != nil {
+		e.validationTracker.SetLedgerAncestryProvider(p)
+	}
+}
+
 // Start begins the consensus engine.
 func (e *Engine) Start(ctx context.Context) error {
 	e.mu.Lock()
@@ -269,6 +290,9 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.validationTracker.SetTrusted(e.adaptor.GetTrustedValidators())
 	if e.manifestResolver != nil {
 		e.validationTracker.SetManifestResolver(e.manifestResolver)
+	}
+	if e.ledgerAncestry != nil {
+		e.validationTracker.SetLedgerAncestryProvider(e.ledgerAncestry)
 	}
 	// Use the adaptor's network-adjusted clock for freshness checks.
 	// Rippled's Validations::isCurrent uses app_.timeKeeper().closeTime()
