@@ -101,6 +101,15 @@ type ServiceContainer struct {
 	// validations. Nil when the archive is disabled or the relational
 	// DB is not configured; handlers must nil-check before use.
 	ValidationArchive ValidationArchiveLookup
+
+	// ValidatorPublicKey is the local validator's signing public key
+	// (33-byte compressed secp256k1) — i.e. the key this server signs
+	// validations with. Empty when the server is not configured as a
+	// validator. Mirrors rippled's Application::getValidationPublicKey;
+	// validator_info uses emptiness to decide notValidator vs the full
+	// response and uses the bytes to look up self-signed validations
+	// in the archive.
+	ValidatorPublicKey []byte
 }
 
 // LedgerNavigator provides ledger index navigation and mode queries.

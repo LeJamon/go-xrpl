@@ -43,21 +43,6 @@ func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (int
 	return map[string]interface{}{}, nil
 }
 
-// ValidatorInfoMethod handles the validator_info RPC method.
-// STUB: Returns notValidator. Requires validator configuration.
-//
-// TODO [validator]: Implement when adding validator support.
-//   - Reference: rippled ValidatorInfo.cpp
-//   - Returns: master_key, ephemeral_key, seq, domain, signing_key, token
-//   - Requires: Server to be configured as a validator with keys
-//   - In standalone mode, correctly returns notValidator
-type ValidatorInfoMethod struct{ AdminHandler }
-
-func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	return nil, types.NewRpcError(types.RpcNOT_VALIDATOR, "notValidator", "notValidator",
-		"This server is not configured as a validator")
-}
-
 // CanDeleteMethod handles the can_delete RPC method.
 // STUB: Returns notEnabled. Requires SHAMapStore advisory delete.
 //
