@@ -2,15 +2,12 @@ package peermanagement
 
 import (
 	"bytes"
-	"crypto/sha512"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,78 +95,6 @@ func DefaultHandshakeConfig() HandshakeConfig {
 		CrawlPublic:        false,
 		EnableLedgerReplay: true, // Phase B wires the server+client paths
 	}
-}
-
-// MakeSharedValue computes the shared value from TLS finished messages.
-// This uses reflection to access the private clientFinished and serverFinished
-// fields from the TLS connection. Requires TLS 1.2 (these fields don't exist in TLS 1.3).
-// The algorithm: SHA512(SHA512(clientFinished) XOR SHA512(serverFinished)).
-func MakeSharedValue(conn *tls.Conn) ([]byte, error) {
-	v := reflect.ValueOf(conn).Elem()
-
-	clientFinished := v.FieldByName("clientFinished")
-	if !clientFinished.IsValid() {
-		return nil, fmt.Errorf("%w: clientFinished field not found (requires TLS 1.2)", ErrHandshakeFailed)
-	}
-	serverFinished := v.FieldByName("serverFinished")
-	if !serverFinished.IsValid() {
-		return nil, fmt.Errorf("%w: serverFinished field not found (requires TLS 1.2)", ErrHandshakeFailed)
-	}
-
-	clientBytes := clientFinished.Bytes()
-	serverBytes := serverFinished.Bytes()
-
-	if len(clientBytes) == 0 || len(serverBytes) == 0 {
-		return nil, fmt.Errorf("%w: finished messages are empty", ErrHandshakeFailed)
-	}
-
-	// KNOWN ISSUE: on Go's TLS 1.2 server side, `c.serverFinished`
-	// stays all-zeros in a full (non-resume) handshake because
-	// handshake_server.go:119 calls `sendFinished(nil)` and never
-	// copies the verify bytes back into the field. Only the
-	// CLIENT side sees both fields populated. As a result, server
-	// and client compute DIFFERENT sharedValues from the same
-	// connection — signature verification based on this value
-	// cannot currently work both ways. R5.2 documents the fix as
-	// a follow-up (requires computing the finished-message
-	// equivalent via master secret + transcript hash instead of
-	// reading the stdlib field).
-	return MakeSharedValueFromFinished(clientBytes, serverBytes)
-}
-
-// MakeSharedValueFromFinished computes the shared value from raw finished messages.
-func MakeSharedValueFromFinished(localFinished, peerFinished []byte) ([]byte, error) {
-	if len(localFinished) < 12 || len(peerFinished) < 12 {
-		return nil, fmt.Errorf("%w: finished message too short", ErrHandshakeFailed)
-	}
-
-	h1 := sha512.New()
-	h1.Write(localFinished)
-	cookie1 := h1.Sum(nil)
-
-	h2 := sha512.New()
-	h2.Write(peerFinished)
-	cookie2 := h2.Sum(nil)
-
-	result := make([]byte, 64)
-	allZero := true
-	for i := 0; i < 64; i++ {
-		result[i] = cookie1[i] ^ cookie2[i]
-		if result[i] != 0 {
-			allZero = false
-		}
-	}
-
-	if allZero {
-		return nil, fmt.Errorf("%w: identical finished messages", ErrHandshakeFailed)
-	}
-
-	h := sha512.New()
-	h.Write(result)
-	finalHash := h.Sum(nil)
-
-	// sha512Half — return first 32 bytes, matching rippled's makeSharedValue
-	return finalHash[:32], nil
 }
 
 // BuildHandshakeRequest builds an HTTP upgrade request for peer connection.
@@ -755,75 +680,6 @@ func PeerFeatureEnabled(headers http.Header, feature, value string, localEnabled
 	return localEnabled && IsFeatureValue(headers, feature, value)
 }
 
-// VerifyHandshakeHeadersNoSig runs the subset of rippled's verifyHandshake
-// checks that DON'T require the TLS shared-value (i.e., signature
-// verification). Used by both inbound and outbound handshake paths to
-// enforce parity without the MakeSharedValue asymmetry on Go TLS 1.2
-// that blocks full signature verification (see
-// tasks/pr264-round5-fixes.md R5.2).
-//
-// Checks:
-//   - Public-Key header present and base58-parseable as a secp256k1
-//     node key (0xED ed25519 prefixes are rejected at parse time).
-//   - Self-connection: peer's Public-Key must differ from localPubKey.
-//   - Network-ID: must match localNetworkID exactly. Unlike the
-//     pre-R6.1 inbound code, a local NetworkID==0 still enforces that
-//     the peer either omits the header OR advertises 0; a testnet
-//     peer's Network-ID=1 is rejected even when we're on mainnet.
-//   - Network-Time: if the peer advertised it, the skew must be
-//     within NetworkClockTolerance of local wall clock.
-//
-// Returns (peerPubKey, nil) on success. The returned token is nil
-// when the peer omitted Public-Key — callers decide whether to treat
-// that as fatal (rippled does).
-func VerifyHandshakeHeadersNoSig(
-	headers http.Header,
-	localPubKey string,
-	localNetworkID uint32,
-) (*PublicKeyToken, error) {
-	peerPubKeyStr := headers.Get(HeaderPublicKey)
-	if peerPubKeyStr == "" {
-		return nil, fmt.Errorf("%w: missing %s", ErrInvalidHandshake, HeaderPublicKey)
-	}
-	if peerPubKeyStr == localPubKey {
-		return nil, ErrSelfConnection
-	}
-	peerPubKey, err := ParsePublicKeyToken(peerPubKeyStr)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidHandshake, err)
-	}
-
-	if netIDStr := headers.Get(HeaderNetworkID); netIDStr != "" {
-		netID, err := strconv.ParseUint(netIDStr, 10, 32)
-		if err != nil {
-			return nil, fmt.Errorf("malformed Network-ID %q: %w", netIDStr, err)
-		}
-		if uint32(netID) != localNetworkID {
-			return nil, fmt.Errorf("%w: peer=%d local=%d", ErrNetworkMismatch, netID, localNetworkID)
-		}
-	} else if localNetworkID != 0 {
-		// Peer omitted Network-ID but we require a non-default
-		// network. Rippled rejects this symmetrically.
-		return nil, fmt.Errorf("%w: peer omitted Network-ID (local expects %d)",
-			ErrNetworkMismatch, localNetworkID)
-	}
-
-	if netTimeStr := headers.Get(HeaderNetworkTime); netTimeStr != "" {
-		netTime, err := strconv.ParseInt(netTimeStr, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("malformed Network-Time %q: %w", netTimeStr, err)
-		}
-		peerTime := time.Unix(netTime+XRPLEpochOffset, 0)
-		diff := time.Since(peerTime)
-		if diff < -NetworkClockTolerance || diff > NetworkClockTolerance {
-			return nil, fmt.Errorf("%w: clock skew %v exceeds tolerance %v",
-				ErrHandshakeFailed, diff, NetworkClockTolerance)
-		}
-	}
-
-	return peerPubKey, nil
-}
-
 // HandshakeExtras carries the headers parsed by ParseHandshakeExtras.
 type HandshakeExtras struct {
 	InstanceCookie uint64
@@ -836,9 +692,8 @@ type HandshakeExtras struct {
 }
 
 // ValidateServerDomain enforces verifyHandshake's Server-Domain check
-// (Handshake.cpp:235-239). Run BEFORE VerifyHandshakeHeadersNoSig to
-// match rippled's verify order (Server-Domain → Network-ID →
-// Network-Time → Public-Key → ...).
+// (Handshake.cpp:235-239). Run first to match rippled's verify order
+// (Server-Domain → Network-ID → Network-Time → Public-Key → ...).
 func ValidateServerDomain(headers http.Header) (string, error) {
 	v := headers.Get(HeaderServerDomain)
 	if v == "" {

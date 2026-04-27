@@ -56,6 +56,53 @@ go test ./internal/testing/offer/... -run TestOfferCreateValidation
 ./scripts/conformance-summary.sh --failing
 ```
 
+## Building
+
+`goxrpl` uses CGO to call OpenSSL for the peer-to-peer TLS handshake — required to compute the
+session-signature shared value matching rippled's `SSL_get_finished` / `SSL_get_peer_finished`
+flow. You need OpenSSL development headers installed on the build host.
+
+### macOS
+
+```bash
+brew install openssl@3 pkg-config
+export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig"
+go build ./cmd/xrpld
+```
+
+### Ubuntu / Debian
+
+```bash
+sudo apt install -y libssl-dev pkg-config
+go build ./cmd/xrpld
+```
+
+### Alpine (or static-linked Linux build)
+
+```bash
+apk add --no-cache gcc musl-dev pkgconf openssl-dev openssl-libs-static
+CGO_ENABLED=1 go build -ldflags="-linkmode external -extldflags '-static'" ./cmd/xrpld
+```
+
+### CGO-disabled builds
+
+`CGO_ENABLED=0 go build ./cmd/xrpld` is supported. The resulting binary cannot
+connect to or accept peers (peertls returns `ErrSessionSigUnsupported`), but RPC,
+WebSocket, tx, codec, and all other subsystems work unchanged. Useful for contributors
+without an OpenSSL toolchain.
+
+### Running interop tests
+
+A docker-based interop test against a real rippled instance lives at
+`internal/peermanagement/peertls/tls_interop_test.go`. It is gated by a build tag and
+an env var so CI never runs it:
+
+```bash
+PEERTLS_DOCKER_INTEROP=1 go test -tags 'docker' \
+    ./internal/peermanagement/peertls/ \
+    -run TestHandshake_Interop_RippledDocker
+```
+
 ## Architecture
 
 ```

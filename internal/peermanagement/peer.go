@@ -3,8 +3,8 @@ package peermanagement
 import (
 	"bufio"
 	"context"
-	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/goXRPLd/internal/peermanagement/peertls"
 )
 
 // PeerState represents the peer connection state.
@@ -102,18 +103,15 @@ type Peer struct {
 // PeerConfig holds peer connection configuration.
 type PeerConfig struct {
 	SendBufferSize int
-	TLSConfig      *tls.Config
+	PeerTLSConfig  *peertls.Config
 }
 
 // DefaultPeerConfig returns the default peer configuration.
+// Callers must populate PeerTLSConfig with cert + key from the local
+// Identity before invoking Connect.
 func DefaultPeerConfig() PeerConfig {
 	return PeerConfig{
 		SendBufferSize: DefaultSendBufferSize,
-		TLSConfig: &tls.Config{
-			InsecureSkipVerify: true,
-			MinVersion:         tls.VersionTLS12,
-			MaxVersion:         tls.VersionTLS12,
-		},
 	}
 }
 
@@ -277,6 +275,11 @@ func (p *Peer) Connect(ctx context.Context, cfg PeerConfig) error {
 	p.state = PeerStateConnecting
 	p.mu.Unlock()
 
+	if cfg.PeerTLSConfig == nil {
+		p.setState(PeerStateDisconnected)
+		return errors.New("peer.Connect: PeerTLSConfig required")
+	}
+
 	addr := p.endpoint.String()
 
 	dialer := &net.Dialer{Timeout: DefaultConnectTimeout}
@@ -286,14 +289,14 @@ func (p *Peer) Connect(ctx context.Context, cfg PeerConfig) error {
 		return NewEndpointError(p.endpoint, "connect", err)
 	}
 
-	tlsConfig := cfg.TLSConfig
-	if tlsConfig == nil {
-		tlsConfig = DefaultPeerConfig().TLSConfig
-	}
-
-	tlsConn := tls.Client(tcpConn, tlsConfig)
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
+	tlsConn, err := peertls.Client(tcpConn, cfg.PeerTLSConfig)
+	if err != nil {
 		tcpConn.Close()
+		p.setState(PeerStateDisconnected)
+		return NewHandshakeError(p.endpoint, "tls_setup", err)
+	}
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		tlsConn.Close()
 		p.setState(PeerStateDisconnected)
 		return NewHandshakeError(p.endpoint, "tls", err)
 	}
@@ -321,8 +324,8 @@ func (p *Peer) AcceptConnection(conn net.Conn) {
 }
 
 // performHandshake performs the XRPL HTTP upgrade handshake.
-func (p *Peer) performHandshake(ctx context.Context, tlsConn *tls.Conn) error {
-	sharedValue, err := MakeSharedValue(tlsConn)
+func (p *Peer) performHandshake(ctx context.Context, tlsConn peertls.PeerConn) error {
+	sharedValue, err := tlsConn.SharedValue()
 	if err != nil {
 		return NewHandshakeError(p.endpoint, "shared_value", err)
 	}
@@ -343,14 +346,10 @@ func (p *Peer) performHandshake(ctx context.Context, tlsConn *tls.Conn) error {
 	tlsConn.SetDeadline(deadline)
 	defer tlsConn.SetDeadline(time.Time{})
 
-	// Write the request as raw bytes (rippled's HTTP parser is strict
-	// and rejects the extra headers that Go's http.Request.Write adds).
 	if err := WriteRawHandshakeRequest(tlsConn, req); err != nil {
 		return NewHandshakeError(p.endpoint, "send_request", err)
 	}
 
-	// Use a buffered reader to parse the HTTP response precisely
-	// without consuming binary protocol data that follows it.
 	p.mu.Lock()
 	p.bufReader = bufio.NewReader(tlsConn)
 	p.mu.Unlock()
@@ -365,19 +364,25 @@ func (p *Peer) performHandshake(ctx context.Context, tlsConn *tls.Conn) error {
 		n, _ := resp.Body.Read(body)
 		resp.Body.Close()
 		return NewHandshakeError(p.endpoint, "verify",
-			fmt.Errorf("%w: got status %d, headers: %v, body: %s", ErrInvalidHandshake, resp.StatusCode, resp.Header, string(body[:n])))
+			fmt.Errorf("%w: got status %d, headers: %v, body: %s",
+				ErrInvalidHandshake, resp.StatusCode, resp.Header, string(body[:n])))
 	}
 	resp.Body.Close()
 
-	// R5.2 NOTE: outbound handshake verification is disabled for the
-	// same reason as the inbound side — MakeSharedValue produces
-	// asymmetric values on Go TLS 1.2 client vs server, so
-	// signature verification would reject every honest peer today.
-	// See the long comment in overlay.go:performInboundHandshake.
+	// Full session-signature verification — the whole point of #269.
+	peerPubKey, err := VerifyPeerHandshake(
+		resp.Header,
+		sharedValue,
+		p.identity.EncodedPublicKey(),
+		p.handshakeCfg,
+	)
+	if err != nil {
+		return NewHandshakeError(p.endpoint, "verify", err)
+	}
+	p.mu.Lock()
+	p.remotePubKey = peerPubKey
+	p.mu.Unlock()
 
-	// Capture the peer's advertised protocol features from the handshake
-	// response headers so downstream code can query e.g. whether this peer
-	// supports ledger-replay before issuing a replay-delta request.
 	caps := NewPeerCapabilities()
 	caps.Features = ParseProtocolCtlFeatures(resp.Header)
 	p.mu.Lock()

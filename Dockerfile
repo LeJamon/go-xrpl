@@ -1,7 +1,7 @@
 # Stage 1: Build
 FROM golang:1.24-alpine AS builder
 
-RUN apk add --no-cache git
+RUN apk add --no-cache git gcc musl-dev pkgconf openssl-dev openssl-libs-static
 
 WORKDIR /src
 
@@ -10,7 +10,10 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /usr/local/bin/goxrpl ./cmd/xrpld
+RUN CGO_ENABLED=1 go build \
+    -trimpath \
+    -ldflags="-s -w -linkmode external -extldflags '-static'" \
+    -o /usr/local/bin/goxrpl ./cmd/xrpld
 
 # Stage 2: Runtime
 FROM gcr.io/distroless/static:nonroot

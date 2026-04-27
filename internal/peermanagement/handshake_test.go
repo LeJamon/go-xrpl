@@ -19,67 +19,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMakeSharedValueFromFinished tests the TLS cookie generation
-// Reference: rippled Handshake.cpp makeSharedValue - XOR of SHA-512 hashes
-func TestMakeSharedValueFromFinished(t *testing.T) {
-	// Simulate TLS finished messages
-	localFinished := []byte("local_finished_message_12345678")
-	peerFinished := []byte("peer_finished_message_12345678_")
-
-	sharedValue, err := MakeSharedValueFromFinished(localFinished, peerFinished)
-	require.NoError(t, err)
-	require.NotNil(t, sharedValue)
-
-	// Should be 32 bytes (256 bits)
-	assert.Len(t, sharedValue, 32)
-
-	// Same inputs should produce same output
-	sharedValue2, err := MakeSharedValueFromFinished(localFinished, peerFinished)
-	require.NoError(t, err)
-	assert.Equal(t, sharedValue, sharedValue2)
-
-	// Different inputs should produce different output
-	differentPeer := []byte("different_peer_message_1234567_")
-	differentValue, err := MakeSharedValueFromFinished(localFinished, differentPeer)
-	require.NoError(t, err)
-	assert.NotEqual(t, sharedValue, differentValue)
-}
-
-// TestMakeSharedValueFromFinished_TooShort tests minimum length requirement
-// Reference: rippled Handshake.cpp - constexpr std::size_t sslMinimumFinishedLength = 12
-func TestMakeSharedValueFromFinished_TooShort(t *testing.T) {
-	tests := []struct {
-		name          string
-		localFinished []byte
-		peerFinished  []byte
-	}{
-		{"local_too_short", []byte("short"), []byte("valid_finished_msg")},
-		{"peer_too_short", []byte("valid_finished_msg"), []byte("short")},
-		{"both_too_short", []byte("short"), []byte("also")},
-		{"empty_local", []byte{}, []byte("valid_finished_msg")},
-		{"empty_peer", []byte("valid_finished_msg"), []byte{}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := MakeSharedValueFromFinished(tt.localFinished, tt.peerFinished)
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), "too short")
-		})
-	}
-}
-
-// TestMakeSharedValueFromFinished_Identical tests rejection of identical messages
-// Reference: rippled Handshake.cpp - "Cookie generation: identical finished messages"
-func TestMakeSharedValueFromFinished_Identical(t *testing.T) {
-	// Identical messages would XOR to zero
-	sameMessage := []byte("identical_message_1234567890")
-
-	_, err := MakeSharedValueFromFinished(sameMessage, sameMessage)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "identical")
-}
-
 // TestBuildHandshakeRequest tests building an HTTP upgrade request
 // Reference: rippled Handshake.cpp makeRequest
 func TestBuildHandshakeRequest(t *testing.T) {
@@ -235,100 +174,8 @@ func TestVerifyPeerHandshake_MissingSignature(t *testing.T) {
 	assert.Contains(t, err.Error(), "Session-Signature")
 }
 
-// TestVerifyHandshakeHeadersNoSig covers R6.1 + R6.2: the inbound
-// handshake's non-signature verification path. Each subtest exercises
-// one failure mode that rippled enforces but pre-R6 goXRPL silently
-// accepted or mis-handled.
-func TestVerifyHandshakeHeadersNoSig(t *testing.T) {
-	localId, err := NewIdentity()
-	require.NoError(t, err)
-	remoteId, err := NewIdentity()
-	require.NoError(t, err)
-
-	mkHeaders := func(pubKey, netID, netTime string) http.Header {
-		h := http.Header{}
-		if pubKey != "" {
-			h.Set(HeaderPublicKey, pubKey)
-		}
-		if netID != "" {
-			h.Set(HeaderNetworkID, netID)
-		}
-		if netTime != "" {
-			h.Set(HeaderNetworkTime, netTime)
-		}
-		return h
-	}
-	xrplNow := func() string {
-		return strconvUnixXRPL(time.Now())
-	}
-
-	t.Run("happy_path_mainnet", func(t *testing.T) {
-		h := mkHeaders(remoteId.EncodedPublicKey(), "", xrplNow())
-		pk, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 0)
-		require.NoError(t, err)
-		require.NotNil(t, pk)
-		assert.Equal(t, remoteId.EncodedPublicKey(), pk.Encode())
-	})
-
-	t.Run("mainnet_rejects_nonzero_networkid", func(t *testing.T) {
-		// Pre-R6.1: mainnet (NetworkID=0) silently accepted any
-		// Network-ID the peer advertised. Now we reject.
-		h := mkHeaders(remoteId.EncodedPublicKey(), "1", xrplNow())
-		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 0)
-		assert.ErrorIs(t, err, ErrNetworkMismatch,
-			"mainnet must reject a peer advertising Network-ID=1 (testnet)")
-	})
-
-	t.Run("non_default_network_peer_missing_netid", func(t *testing.T) {
-		// Symmetric case: we're on network 2, peer omits Network-ID.
-		h := mkHeaders(remoteId.EncodedPublicKey(), "", xrplNow())
-		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 2)
-		assert.ErrorIs(t, err, ErrNetworkMismatch,
-			"non-default-network node must reject a peer omitting Network-ID")
-	})
-
-	t.Run("malformed_networkid_rejected", func(t *testing.T) {
-		// Pre-R6.1: ParseUint failures were silently ignored.
-		h := mkHeaders(remoteId.EncodedPublicKey(), "not-a-number", xrplNow())
-		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 0)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "malformed Network-ID")
-	})
-
-	t.Run("malformed_networktime_rejected", func(t *testing.T) {
-		// R6.2: Network-Time was never checked in performInboundHandshake.
-		h := mkHeaders(remoteId.EncodedPublicKey(), "", "not-a-number")
-		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 0)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "malformed Network-Time")
-	})
-
-	t.Run("network_time_clock_skew", func(t *testing.T) {
-		// Peer timestamp 5 minutes ahead of our clock — way beyond
-		// NetworkClockTolerance (20s).
-		farFuture := strconvUnixXRPL(time.Now().Add(5 * time.Minute))
-		h := mkHeaders(remoteId.EncodedPublicKey(), "", farFuture)
-		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 0)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "clock skew")
-	})
-
-	t.Run("self_connection", func(t *testing.T) {
-		h := mkHeaders(localId.EncodedPublicKey(), "", xrplNow())
-		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 0)
-		assert.ErrorIs(t, err, ErrSelfConnection)
-	})
-
-	t.Run("missing_public_key", func(t *testing.T) {
-		h := mkHeaders("", "", xrplNow())
-		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 0)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "Public-Key")
-	})
-}
-
 // strconvUnixXRPL formats a time as XRPL epoch seconds (like rippled's
-// Network-Time header builder). Test helper for R6.2 tests.
+// Network-Time header builder). Test helper.
 func strconvUnixXRPL(t time.Time) string {
 	xrplSec := t.Unix() - XRPLEpochOffset
 	return fmtInt(xrplSec)
@@ -1214,39 +1061,6 @@ func buildAllHeadersRequest(t *testing.T, id *Identity, cfg HandshakeConfig, pee
 		addAddressHeaders(req.Header, cfg, peerRemote)
 	}
 	return req.Header
-}
-
-// Strict rippled parity: Instance-Cookie round-trips but is NEVER
-// compared (Handshake.cpp:226-362). Self-connection stays pubkey-only
-// at line 322. This test verifies both halves.
-func TestHandshake_InstanceCookie_DetectsSelfConnection(t *testing.T) {
-	id, err := NewIdentity()
-	require.NoError(t, err)
-
-	const cookie uint64 = 0xDEADBEEFCAFEBABE
-	cfg := DefaultHandshakeConfig()
-	cfg.InstanceCookie = cookie
-
-	headers := buildAllHeadersRequest(t, id, cfg, nil)
-	require.Equal(t, strconv.FormatUint(cookie, 10), headers.Get(HeaderInstanceCookie))
-
-	// Round-trip: cookie parsed and surfaced on extras even when the
-	// "local" view shares the same nonce. Strict rippled parity — no
-	// cookie comparison happens.
-	extras, err := ParseHandshakeExtras(headers, nil, nil)
-	require.NoError(t, err)
-	assert.Equal(t, cookie, extras.InstanceCookie)
-
-	// The rippled-canonical self-connection signal is pubkey identity
-	// (Handshake.cpp:322 publicKey == app.nodeIdentity().first). Verify
-	// that path still fires when the peer's pubkey matches our own.
-	netTime := strconvUnixXRPL(time.Now())
-	selfHeaders := http.Header{}
-	selfHeaders.Set(HeaderPublicKey, id.EncodedPublicKey())
-	selfHeaders.Set(HeaderNetworkTime, netTime)
-	_, err = VerifyHandshakeHeadersNoSig(selfHeaders, id.EncodedPublicKey(), 0)
-	assert.ErrorIs(t, err, ErrSelfConnection,
-		"matching Public-Key triggers self-connection — the only signal rippled uses")
 }
 
 // Closed-Ledger / Previous-Ledger hints round-trip and end up readable
