@@ -253,6 +253,16 @@ func runServer(cmd *cobra.Command, args []string) {
 		// RPC reads for external queries.
 		types.Services.Manifests = consensusComponents.Manifests
 
+		// Expose the local validator's signing key to validator_info.
+		// Mirrors rippled's getValidationPublicKey gate: empty means
+		// the server is not configured as a validator and the handler
+		// returns "not a validator".
+		if vid, err := consensusComponents.Adaptor.GetValidatorKey(); err == nil {
+			pk := make([]byte, 33)
+			copy(pk, vid[:])
+			types.Services.ValidatorPublicKey = pk
+		}
+
 		isValidator := globalConfig.IsValidator()
 		serverLog.Info("Running in consensus mode",
 			"validator", isValidator,
