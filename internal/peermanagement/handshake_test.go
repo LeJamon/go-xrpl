@@ -1191,6 +1191,14 @@ func TestPeerFeatureEnabled(t *testing.T) {
 	}
 }
 
+// newTestOverlayWithPeers returns a partially-initialised Overlay
+// whose only valid surface is the peers map + peersMu — enough to
+// drive PeersWithClosedLedger / PeersJSON in tests that don't need a
+// running overlay.
+func newTestOverlayWithPeers(peers map[PeerID]*Peer) *Overlay {
+	return &Overlay{peers: peers}
+}
+
 // buildAllHeadersRequest builds a handshake request with every issue-#270
 // header set. peerRemote drives Remote-IP / Local-IP emission.
 func buildAllHeadersRequest(t *testing.T, id *Identity, cfg HandshakeConfig, peerRemote net.IP) http.Header {
@@ -1258,8 +1266,8 @@ func TestHandshake_ClosedLedgerHint_ReadableAfterHandshake(t *testing.T) {
 	}
 
 	headers := buildAllHeadersRequest(t, id, cfg, nil)
-	require.Equal(t, hex.EncodeToString(closed[:]), headers.Get(HeaderClosedLedger))
-	require.Equal(t, hex.EncodeToString(parent[:]), headers.Get(HeaderPreviousLedger))
+	require.Equal(t, strings.ToUpper(hex.EncodeToString(closed[:])), headers.Get(HeaderClosedLedger))
+	require.Equal(t, strings.ToUpper(hex.EncodeToString(parent[:])), headers.Get(HeaderPreviousLedger))
 
 	extras, err := ParseHandshakeExtras(headers, nil, nil)
 	require.NoError(t, err)
@@ -1361,8 +1369,8 @@ func TestHandshake_AllHeaders_RoundTrip(t *testing.T) {
 		// Wire-level checks: each header is present in the right form.
 		assert.Equal(t, strconv.FormatUint(senderCfg.InstanceCookie, 10), headers.Get(HeaderInstanceCookie))
 		assert.Equal(t, "validator.example.com", headers.Get(HeaderServerDomain))
-		assert.Equal(t, hex.EncodeToString(closed[:]), headers.Get(HeaderClosedLedger))
-		assert.Equal(t, hex.EncodeToString(parent[:]), headers.Get(HeaderPreviousLedger))
+		assert.Equal(t, strings.ToUpper(hex.EncodeToString(closed[:])), headers.Get(HeaderClosedLedger))
+		assert.Equal(t, strings.ToUpper(hex.EncodeToString(parent[:])), headers.Get(HeaderPreviousLedger))
 		assert.Equal(t, pB.String(), headers.Get(HeaderRemoteIP))
 		assert.Equal(t, pA.String(), headers.Get(HeaderLocalIP))
 
@@ -1396,8 +1404,8 @@ func TestHandshake_AllHeaders_RoundTrip(t *testing.T) {
 		// rippled-style consistency contract on us either.
 		assert.Equal(t, strconv.FormatUint(senderCfg.InstanceCookie, 10), resp.Header.Get(HeaderInstanceCookie))
 		assert.Equal(t, "validator.example.com", resp.Header.Get(HeaderServerDomain))
-		assert.Equal(t, hex.EncodeToString(closed[:]), resp.Header.Get(HeaderClosedLedger))
-		assert.Equal(t, hex.EncodeToString(parent[:]), resp.Header.Get(HeaderPreviousLedger))
+		assert.Equal(t, strings.ToUpper(hex.EncodeToString(closed[:])), resp.Header.Get(HeaderClosedLedger))
+		assert.Equal(t, strings.ToUpper(hex.EncodeToString(parent[:])), resp.Header.Get(HeaderPreviousLedger))
 		assert.Equal(t, pB.String(), resp.Header.Get(HeaderRemoteIP))
 		assert.Equal(t, pA.String(), resp.Header.Get(HeaderLocalIP))
 
@@ -1409,12 +1417,13 @@ func TestHandshake_AllHeaders_RoundTrip(t *testing.T) {
 	})
 
 	t.Run("malformed_server_domain_rejected", func(t *testing.T) {
-		// Mutate just the Server-Domain field to verify the parser
-		// rejects malformed values per Handshake.cpp:235-239.
+		// Server-Domain is the first thing rippled validates
+		// (Handshake.cpp:235-239), so the dedicated validator runs
+		// upstream of ParseHandshakeExtras.
 		headers := buildAllHeadersRequest(t, id, senderCfg, pB)
 		headers.Set(HeaderServerDomain, "-bad.example.com") // leading hyphen
 
-		_, err := ParseHandshakeExtras(headers, pB, pA)
+		_, err := ValidateServerDomain(headers)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid Server-Domain")
 	})
@@ -1445,16 +1454,17 @@ func TestLedgerSync_PreferredPeersForLedger_ConsumesClosedLedgerHint(t *testing.
 		return p
 	}
 
-	overlay := &Overlay{peers: map[PeerID]*Peer{}}
-	overlay.peers[1] = mkPeer(1, &target)             // matches → expected
-	other := [32]byte{0xAA}
-	overlay.peers[2] = mkPeer(2, &other)              // different hint → filtered
-	overlay.peers[3] = mkPeer(3, nil)                 // no hint → filtered
-	overlay.peers[4] = mkPeer(4, &target)             // matches → expected
-	overlay.peers[5] = NewPeer(5, Endpoint{}, false, id, nil)
-	// peer 5 left disconnected with matching hint to verify state filter
-	overlay.peers[5].applyHandshakeExtras(HandshakeExtras{
-		ClosedLedger: target, HasLedgerHints: true,
+	overlay := newTestOverlayWithPeers(map[PeerID]*Peer{
+		1: mkPeer(1, &target), // matches → expected
+		2: mkPeer(2, &[32]byte{0xAA}), // different hint → filtered
+		3: mkPeer(3, nil),     // no hint → filtered
+		4: mkPeer(4, &target), // matches → expected
+		// peer 5: disconnected with matching hint → filtered by state.
+		5: func() *Peer {
+			p := NewPeer(5, Endpoint{}, false, id, nil)
+			p.applyHandshakeExtras(HandshakeExtras{ClosedLedger: target, HasLedgerHints: true})
+			return p
+		}(),
 	})
 
 	got := overlay.PeersWithClosedLedger(target)
@@ -1547,6 +1557,22 @@ func TestIsPublicIP_BeastParity(t *testing.T) {
 	}
 }
 
+// ipFamilyEqual must match boost::asio::ip::address::operator==:
+// "::ffff:1.2.3.4" (v6 textual form) and "1.2.3.4" (v4 textual form)
+// are treated as different addresses despite normalising to the same
+// bytes via net.ParseIP.
+func TestIpFamilyEqual_BoostParity(t *testing.T) {
+	v4 := net.ParseIP("1.2.3.4")
+	v4mapped := net.ParseIP("::ffff:1.2.3.4")
+	require.NotNil(t, v4)
+	require.NotNil(t, v4mapped)
+
+	assert.True(t, ipFamilyEqual(v4, v4, false, false), "same v4 must be equal")
+	assert.False(t, ipFamilyEqual(v4, v4mapped, false, true), "v4 vs v4-mapped-v6 must differ")
+	assert.False(t, ipFamilyEqual(v4mapped, v4, true, false), "v4-mapped-v6 vs v4 must differ")
+	assert.True(t, ipFamilyEqual(v4mapped, v4mapped, true, true), "same v4-mapped-v6 must be equal")
+}
+
 // isWellFormedDomain matches rippled's isProperlyFormedTomlDomain
 // (StringUtilities.cpp:131-156).
 func TestIsWellFormedDomain_TomlParity(t *testing.T) {
@@ -1605,8 +1631,8 @@ func TestWriteRawHandshakeRequest_EmitsAllNewHeaders(t *testing.T) {
 	for _, h := range []string{
 		HeaderInstanceCookie + ": ",
 		HeaderServerDomain + ": example.com",
-		HeaderClosedLedger + ": " + hex.EncodeToString(closed[:]),
-		HeaderPreviousLedger + ": " + hex.EncodeToString(parent[:]),
+		HeaderClosedLedger + ": " + strings.ToUpper(hex.EncodeToString(closed[:])),
+		HeaderPreviousLedger + ": " + strings.ToUpper(hex.EncodeToString(parent[:])),
 		HeaderRemoteIP + ": 203.0.113.5",
 		HeaderLocalIP + ": 198.51.100.10",
 	} {

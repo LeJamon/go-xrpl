@@ -70,7 +70,9 @@ type HandshakeConfig struct {
 	EnableVPReduceRelay bool
 	EnableTxReduceRelay bool
 
-	// InstanceCookie is emitted on every handshake; 0 suppresses it.
+	// InstanceCookie is emitted on every handshake. Production wiring
+	// goes through Overlay where the value is generated non-zero;
+	// callers that build a HandshakeConfig directly own setting it.
 	InstanceCookie uint64
 	// ServerDomain is the operator domain; empty suppresses the header.
 	ServerDomain string
@@ -275,16 +277,16 @@ func addHandshakeHeaders(h http.Header, id *Identity, sharedValue []byte, cfg Ha
 		h.Set(HeaderProtocolCtl, ctl)
 	}
 
-	if cfg.InstanceCookie != 0 {
-		h.Set(HeaderInstanceCookie, strconv.FormatUint(cfg.InstanceCookie, 10))
-	}
+	// Always emitted (rippled Handshake.cpp:208).
+	h.Set(HeaderInstanceCookie, strconv.FormatUint(cfg.InstanceCookie, 10))
 	if cfg.ServerDomain != "" {
 		h.Set(HeaderServerDomain, cfg.ServerDomain)
 	}
 	if cfg.LedgerHintProvider != nil {
 		if hints, ok := cfg.LedgerHintProvider(); ok {
-			h.Set(HeaderClosedLedger, hex.EncodeToString(hints.Closed[:]))
-			h.Set(HeaderPreviousLedger, hex.EncodeToString(hints.Parent[:]))
+			// Uppercase to match rippled's strHex.
+			h.Set(HeaderClosedLedger, strings.ToUpper(hex.EncodeToString(hints.Closed[:])))
+			h.Set(HeaderPreviousLedger, strings.ToUpper(hex.EncodeToString(hints.Parent[:])))
 		}
 	}
 }
@@ -298,6 +300,37 @@ func addAddressHeaders(h http.Header, cfg HandshakeConfig, peerRemote net.IP) {
 	if cfg.PublicIP != nil && !cfg.PublicIP.IsUnspecified() {
 		h.Set(HeaderLocalIP, cfg.PublicIP.String())
 	}
+}
+
+// ipFamilyEqual compares two IPs taking address family into account
+// (v4 vs v6) to mirror boost::asio::ip::address::operator==, which
+// treats ::ffff:1.2.3.4 and 1.2.3.4 as distinct because their family
+// differs. Go's net.IP.Equal is family-agnostic and would equate them.
+//
+// Heuristic: a 4-byte slice or a v4-mapped 16-byte slice is "v4". Any
+// other 16-byte slice is "v6". headerIPv6Form lets the caller pass the
+// original textual form so a header value like "::ffff:1.2.3.4" stays
+// classified as v6 even after net.ParseIP normalises it to the same
+// bytes as "1.2.3.4".
+func ipFamilyEqual(a, b net.IP, aIsV6Text, bIsV6Text bool) bool {
+	if ipFamilyV4(a, aIsV6Text) != ipFamilyV4(b, bIsV6Text) {
+		return false
+	}
+	return a.Equal(b)
+}
+
+func ipFamilyV4(ip net.IP, isV6Text bool) bool {
+	if isV6Text {
+		return false
+	}
+	return ip.To4() != nil
+}
+
+// isIPv6Text returns true when s is written in IPv6 textual form
+// (contains a colon). Used to distinguish "::ffff:1.2.3.4" from
+// "1.2.3.4" since net.ParseIP normalises both to the same bytes.
+func isIPv6Text(s string) bool {
+	return strings.Contains(s, ":")
 }
 
 // isPublicIP mirrors beast::IP::is_public: !is_private && !is_multicast.
@@ -802,10 +835,29 @@ type HandshakeExtras struct {
 	LocalIPSelf    string // peer's view of their own public IP
 }
 
-// ParseHandshakeExtras enforces verifyHandshake (Server-Domain at 235-239,
-// Local-IP/Remote-IP at 325-359) and PeerImp::run (ledger-hash malformed
-// at 175-191, Previous-without-Closed at 193-194). Instance-Cookie is
-// stored only. peerRemote == nil disables the IP comparisons.
+// ValidateServerDomain enforces verifyHandshake's Server-Domain check
+// (Handshake.cpp:235-239). Run BEFORE VerifyHandshakeHeadersNoSig to
+// match rippled's verify order (Server-Domain → Network-ID →
+// Network-Time → Public-Key → ...).
+func ValidateServerDomain(headers http.Header) (string, error) {
+	v := headers.Get(HeaderServerDomain)
+	if v == "" {
+		return "", nil
+	}
+	if !isWellFormedDomain(v) {
+		return "", fmt.Errorf("%w: invalid Server-Domain %q",
+			ErrInvalidHandshake, v)
+	}
+	return v, nil
+}
+
+// ParseHandshakeExtras enforces the post-signature checks: ledger-hash
+// malformed (PeerImp.cpp:175-191), Previous-without-Closed
+// (PeerImp.cpp:193-194), Local-IP / Remote-IP consistency
+// (Handshake.cpp:325-359). Instance-Cookie is stored only.
+// Server-Domain is handled separately by ValidateServerDomain (which
+// must run first to match rippled's order). peerRemote == nil
+// disables the IP comparisons.
 func ParseHandshakeExtras(
 	headers http.Header,
 	localPublicIP net.IP,
@@ -822,11 +874,9 @@ func ParseHandshakeExtras(
 		out.InstanceCookie = cookie
 	}
 
+	// Server-Domain is validated upstream by ValidateServerDomain
+	// (rippled order); we just surface the value here.
 	if v := headers.Get(HeaderServerDomain); v != "" {
-		if !isWellFormedDomain(v) {
-			return out, fmt.Errorf("%w: invalid Server-Domain %q",
-				ErrInvalidHandshake, v)
-		}
 		out.ServerDomain = v
 	}
 
@@ -861,7 +911,8 @@ func ParseHandshakeExtras(
 				ErrInvalidHandshake, v)
 		}
 		out.LocalIPSelf = localReported.String()
-		if peerRemote != nil && isPublicIP(peerRemote) && !peerRemote.Equal(localReported) {
+		if peerRemote != nil && isPublicIP(peerRemote) &&
+			!ipFamilyEqual(peerRemote, localReported, false, isIPv6Text(v)) {
 			return out, fmt.Errorf("%w: Incorrect Local-IP: %s instead of %s",
 				ErrInvalidHandshake, peerRemote.String(), localReported.String())
 		}
@@ -876,7 +927,7 @@ func ParseHandshakeExtras(
 		out.RemoteIPSelf = remoteReported.String()
 		if peerRemote != nil && isPublicIP(peerRemote) &&
 			localPublicIP != nil && !localPublicIP.IsUnspecified() &&
-			!remoteReported.Equal(localPublicIP) {
+			!ipFamilyEqual(remoteReported, localPublicIP, isIPv6Text(v), false) {
 			return out, fmt.Errorf("%w: Incorrect Remote-IP: %s instead of %s",
 				ErrInvalidHandshake, localPublicIP.String(), remoteReported.String())
 		}

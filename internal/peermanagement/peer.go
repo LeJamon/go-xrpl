@@ -354,6 +354,9 @@ func (p *Peer) performHandshake(ctx context.Context, tlsConn *tls.Conn) error {
 	p.capabilities = caps
 	p.mu.Unlock()
 
+	if _, err := ValidateServerDomain(resp.Header); err != nil {
+		return NewHandshakeError(p.endpoint, "verify_extras", err)
+	}
 	extras, err := ParseHandshakeExtras(
 		resp.Header,
 		p.handshakeCfg.PublicIP,

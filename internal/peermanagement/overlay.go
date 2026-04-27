@@ -638,6 +638,13 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	}
 	req.Body.Close()
 
+	// Server-Domain runs first (rippled Handshake.cpp:235-239 — the
+	// first throw in verifyHandshake).
+	if _, err := ValidateServerDomain(req.Header); err != nil {
+		o.IncPeerBadData(peer.ID(), "handshake-malformed-extras")
+		return NewHandshakeError(peer.Endpoint(), "verify_extras", err)
+	}
+
 	// R5.2 PARTIAL + R6.1 + R6.2: verify everything the handshake
 	// can enforce without the TLS shared-value signature (which is
 	// blocked by Go's c.serverFinished asymmetry — see
