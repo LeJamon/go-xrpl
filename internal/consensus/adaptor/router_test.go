@@ -255,9 +255,9 @@ func TestRouterStopsOnContextCancel(t *testing.T) {
 // overlay's reverse index, not just the duplicate's originator.
 type countingSender struct {
 	noopSender
-	mu             sync.Mutex
-	calls          []countingRelaySlotCall
-	peersThatHave  map[[32]byte][]uint64
+	mu            sync.Mutex
+	calls         []countingRelaySlotCall
+	peersThatHave map[[32]byte][]uint64
 }
 
 type countingRelaySlotCall struct {

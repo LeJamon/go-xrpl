@@ -311,8 +311,8 @@ func TestAdoptLedgerWithState_MultiLevelCascade(t *testing.T) {
 	require.NoError(t, svc.SubmitHeldAdoption(fx102.hdr, fx102.stateMap, fx102.txMap))
 
 	svc.mu.RLock()
-	_, has102Parent := svc.heldAdoptions[baseSeq]     // 102 waits on 101
-	_, has103Parent := svc.heldAdoptions[baseSeq+1]   // 103 waits on 102
+	_, has102Parent := svc.heldAdoptions[baseSeq]   // 102 waits on 101
+	_, has103Parent := svc.heldAdoptions[baseSeq+1] // 103 waits on 102
 	svc.mu.RUnlock()
 	require.True(t, has102Parent, "102 must stash under parent-seq 101")
 	require.True(t, has103Parent, "103 must stash under parent-seq 102")

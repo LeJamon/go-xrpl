@@ -8,10 +8,10 @@ import "testing"
 // stepped coarser (rippled's "increase"), finer ("decrease"), or
 // stayed the same ("equal"). The rippled test asserts:
 //
-//   run(previousAgree=false, rounds=10):
-//     increase = 3, decrease = 0, equal = 7
-//   run(previousAgree=false, rounds=100):  // test repeats false
-//     increase = 3, decrease = 0, equal = 97
+//	run(previousAgree=false, rounds=10):
+//	  increase = 3, decrease = 0, equal = 7
+//	run(previousAgree=false, rounds=100):  // test repeats false
+//	  increase = 3, decrease = 0, equal = 97
 //
 // The `increase`/`decrease` names follow rippled's test source
 // comparing by seconds-per-bin: "nextCloseResolution > closeResolution"
