@@ -17,11 +17,6 @@ func newSpanFromLedger(l Ledger) span {
 	return span{start: 0, end: l.Seq() + 1, ledger: l}
 }
 
-// newSpan constructs a span directly; start must be < end.
-func newSpan(start, end uint32, l Ledger) span {
-	return span{start: start, end: end, ledger: l}
-}
-
 // clamp forces val into [start, end].
 func (s span) clamp(val uint32) uint32 {
 	if val < s.start {
@@ -91,11 +86,6 @@ type node struct {
 // newEmptyNode is the genesis-root node used by an empty trie.
 func newEmptyNode(genesis Ledger) *node {
 	return &node{s: span{start: 0, end: 1, ledger: genesis}}
-}
-
-// newNodeFromLedger creates a leaf node covering the ledger's full span.
-func newNodeFromLedger(l Ledger) *node {
-	return &node{s: newSpanFromLedger(l), tipSupport: 1, branchSupport: 1}
 }
 
 // newNodeFromSpan wraps an existing span into a node. tipSupport and

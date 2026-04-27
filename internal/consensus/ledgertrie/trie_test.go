@@ -36,33 +36,10 @@ func newTestTrie() (*Trie, *TestLedgerBuilder) {
 // support at each named ledger. After every op we verify the trie's
 // own invariants.
 
-type trieOp struct {
-	kind  string // "insert" | "remove"
-	path  string // ledger string; "" = genesis
-	count uint32
-}
-
 type trieAssertion struct {
-	path     string
-	tip      uint32
-	branch   uint32
-	hasEntry bool // if false: tip/branch asserted to be 0
-}
-
-// applyOp runs a single op against the trie. Returns the Remove
-// result (only meaningful for "remove").
-func applyOp(t *testing.T, trie *Trie, b *TestLedgerBuilder, op trieOp) bool {
-	t.Helper()
-	l := b.Build(op.path)
-	switch op.kind {
-	case "insert":
-		trie.Insert(l, op.count)
-		return true
-	case "remove":
-		return trie.Remove(l, op.count)
-	}
-	t.Fatalf("unknown op kind %q", op.kind)
-	return false
+	path   string
+	tip    uint32
+	branch uint32
 }
 
 func assertSupport(t *testing.T, trie *Trie, b *TestLedgerBuilder, a trieAssertion) {
