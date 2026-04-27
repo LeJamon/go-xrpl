@@ -205,16 +205,6 @@ func runServer(cmd *cobra.Command, args []string) {
 	ledgerAdapter := rpc.NewLedgerServiceAdapter(ledgerService)
 	types.InitServices(ledgerAdapter)
 
-	// Surface the on-disk validation archive to RPC handlers
-	// (validator_info → recent_validations). Stays nil when the
-	// relational DB is not configured, in which case the handler
-	// silently omits the recent_validations field.
-	if repoManager != nil {
-		if vrepo := repoManager.Validation(); vrepo != nil {
-			types.Services.ValidationArchive = rpc.NewValidationArchiveAdapter(vrepo)
-		}
-	}
-
 	// Start consensus/networking if not in standalone mode
 	var consensusComponents *adaptor.Components
 	if !standalone {
@@ -265,10 +255,8 @@ func runServer(cmd *cobra.Command, args []string) {
 
 		// Expose the local validator's signing key to validator_info.
 		// Mirrors rippled's getValidationPublicKey gate: empty means
-		// "not configured as a validator" and the handler short-
-		// circuits to notValidator. GetValidatorKey returns the same
-		// 33-byte secp256k1 key the archive stores under, so the
-		// recent_validations lookup can use it verbatim.
+		// the server is not configured as a validator and the handler
+		// returns "not a validator".
 		if vid, err := consensusComponents.Adaptor.GetValidatorKey(); err == nil {
 			pk := make([]byte, 33)
 			copy(pk, vid[:])

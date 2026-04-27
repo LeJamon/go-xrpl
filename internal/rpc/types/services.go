@@ -17,39 +17,6 @@ type MethodDispatcher interface {
 	ExecuteMethod(method string, params []byte) (interface{}, *RpcError)
 }
 
-// ValidationArchiveLookup is the read-only facet of the on-disk
-// validation archive that historical-query RPC handlers can consume.
-// Expressed as an interface so internal/rpc/types stays free of
-// storage/relationaldb dependencies and the handler can mock it.
-type ValidationArchiveLookup interface {
-	// GetValidationsForLedger returns every archived validation for a
-	// given ledger sequence. Order unspecified.
-	GetValidationsForLedger(ledgerSeq uint32) ([]ArchivedValidation, error)
-	// GetValidationsByValidator returns up to `limit` most-recent
-	// archived validations from the given node public key. limit <= 0
-	// applies no bound.
-	GetValidationsByValidator(nodeKey []byte, limit int) ([]ArchivedValidation, error)
-	// GetValidationCount returns the total number of archived rows.
-	GetValidationCount() (int64, error)
-}
-
-// ArchivedValidation is the RPC-shaped projection of a validation row.
-// Kept here (rather than re-exporting relationaldb.ValidationRecord) so
-// the RPC layer never depends on the storage package.
-//
-// The signature is part of Raw (sfSignature in the canonical XRPL wire
-// format) — handlers that need it parse Raw via the binary codec rather
-// than reading a separate column.
-type ArchivedValidation struct {
-	LedgerSeq  uint32
-	LedgerHash [32]byte
-	NodePubKey []byte
-	SignTimeS  int64 // unix seconds
-	SeenTimeS  int64
-	Flags      uint32
-	Raw        []byte // canonical STValidation wire bytes (includes signature)
-}
-
 // ManifestLookup is the read-only facet of the validator-manifest cache
 // that the `manifest` RPC needs. Expressed as an interface (not a
 // concrete type) so internal/rpc/types doesn't import
@@ -97,18 +64,10 @@ type ServiceContainer struct {
 	// nil-check before use.
 	Manifests ManifestLookup
 
-	// ValidationArchive provides historical access to archived stale
-	// validations. Nil when the archive is disabled or the relational
-	// DB is not configured; handlers must nil-check before use.
-	ValidationArchive ValidationArchiveLookup
-
 	// ValidatorPublicKey is the local validator's signing public key
-	// (33-byte compressed secp256k1) — i.e. the key this server signs
-	// validations with. Empty when the server is not configured as a
-	// validator. Mirrors rippled's Application::getValidationPublicKey;
-	// validator_info uses emptiness to decide notValidator vs the full
-	// response and uses the bytes to look up self-signed validations
-	// in the archive.
+	// (33-byte compressed). Empty when the server is not configured
+	// as a validator. Mirrors rippled's Application::getValidationPublicKey
+	// — validator_info uses emptiness to gate the notValidator response.
 	ValidatorPublicKey []byte
 }
 

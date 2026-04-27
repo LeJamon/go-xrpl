@@ -484,9 +484,9 @@ func TestValidatorInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNOT_VALIDATOR, rpcErr.Code)
-		// Message contains "validator" (can be "not a validator" or "not configured as a validator")
-		assert.Contains(t, rpcErr.Message, "validator")
+		// Rippled's not_validator_error() = make_param_error("not a validator").
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "not a validator", rpcErr.Message)
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {
@@ -1219,7 +1219,7 @@ func TestMissingMethodsNilLedgerService(t *testing.T) {
 
 	// ValidatorInfoMethod and CanDeleteMethod don't depend on ledger service.
 	// They return their own domain-specific errors unconditionally.
-	// - ValidatorInfo: returns RpcNOT_VALIDATOR (server not configured as validator)
+	// - ValidatorInfo: returns RpcINVALID_PARAMS / "not a validator" (mirrors rippled's not_validator_error())
 	// - CanDelete: returns RpcNOT_ENABLED (advisory delete not configured)
 	// This matches rippled where validator_info has NO_CONDITION and can_delete
 	// checks advisoryDelete() before touching ledger state.
