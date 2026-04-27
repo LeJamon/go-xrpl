@@ -82,10 +82,17 @@ func TestLedgerProvider_BuildsFullAncestry(t *testing.T) {
 	}
 }
 
-func TestLedgerProvider_MissingLinkFailsCleanly(t *testing.T) {
+func TestLedgerProvider_MissingLinkTruncates(t *testing.T) {
+	// When the walk-back hits a missing parent, buildChain returns a
+	// partial chain rather than failing. MinSeq advances to the lowest
+	// seq still reachable; below that Ancestor returns zero. Mirrors
+	// rippled's behaviour for ledgers older than the keylet::skip
+	// window (RCLValidations.cpp:79-95 / 99-114).
 	tip, byHash := buildChain(5, 'b')
-	// Delete the seq-3 header from the lookup so the walk-back fails
-	// when it reaches the seq-4 ledger and tries to load its parent.
+	// Delete the seq-3 header. The walk captures seq-3's hash from
+	// seq-4's ParentHash, then tries to load seq-3's record to read
+	// its own ParentHash — that lookup fails and the walk truncates.
+	// Result: ancestors cover seqs [3,4], MinSeq=3.
 	var s3Hash [32]byte
 	for h, lh := range byHash {
 		if lh.Sequence() == 3 {
@@ -96,8 +103,126 @@ func TestLedgerProvider_MissingLinkFailsCleanly(t *testing.T) {
 	delete(byHash, s3Hash)
 
 	p := newTestProvider(byHash)
-	if _, ok := p.LedgerByID(consensus.LedgerID(tip.hash)); ok {
-		t.Fatal("LedgerByID should fail when chain has a gap")
+	lgr, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
+	if !ok {
+		t.Fatal("LedgerByID should succeed for partial chain")
+	}
+	if lgr.Seq() != 5 {
+		t.Errorf("Seq: got %d, want 5", lgr.Seq())
+	}
+	if lgr.MinSeq() != 3 {
+		t.Errorf("MinSeq: got %d, want 3 (truncated at seq-3 — seq-2 lookup failed)", lgr.MinSeq())
+	}
+	if lgr.Ancestor(2) != (consensus.LedgerID{}) {
+		t.Errorf("Ancestor(2) below MinSeq should be zero")
+	}
+	if lgr.Ancestor(5) != consensus.LedgerID(tip.hash) {
+		t.Errorf("Ancestor(5) should equal tip ID")
+	}
+	// Within [MinSeq, Seq] the entries match.
+	if lgr.Ancestor(3)[1] != 'b' {
+		t.Errorf("Ancestor(3) tag should be 'b'")
+	}
+}
+
+func TestLedgerProvider_BoundedAtMaxAncestors(t *testing.T) {
+	// Walk depth is capped at maxProviderAncestors (256). For a tip at
+	// seq 1000, MinSeq must be 1000-256=744 — not 0 — and the cache
+	// entry must hold exactly 256 ancestors regardless of available
+	// chain depth.
+	const tipSeq = uint32(1000)
+	tip, byHash := buildChain(tipSeq, 'e')
+
+	p := newTestProvider(byHash)
+	lgr, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
+	if !ok {
+		t.Fatal("LedgerByID should succeed")
+	}
+	if lgr.Seq() != tipSeq {
+		t.Errorf("Seq: got %d, want %d", lgr.Seq(), tipSeq)
+	}
+	wantMin := tipSeq - maxProviderAncestors
+	if lgr.MinSeq() != wantMin {
+		t.Errorf("MinSeq: got %d, want %d (256-ancestor cap)", lgr.MinSeq(), wantMin)
+	}
+	// Below MinSeq Ancestor returns zero — no panic.
+	if lgr.Ancestor(100) != (consensus.LedgerID{}) {
+		t.Errorf("Ancestor(100) below MinSeq should be zero")
+	}
+	// Within range entries are real.
+	if lgr.Ancestor(wantMin)[1] != 'e' {
+		t.Errorf("Ancestor(%d) tag should be 'e'", wantMin)
+	}
+	if lgr.Ancestor(tipSeq - 1)[1] != 'e' {
+		t.Errorf("Ancestor(%d) tag should be 'e'", tipSeq-1)
+	}
+}
+
+func TestLedgerProvider_AncestorOutOfRangeReturnsZero(t *testing.T) {
+	// Defensive parity with rippled's RCLValidatedLedger::operator[]
+	// (RCLValidations.cpp:79-95): Ancestor of an out-of-range seq must
+	// return the zero LedgerID rather than panicking.
+	tip, byHash := buildChain(5, 'f')
+	p := newTestProvider(byHash)
+	lgr, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
+	if !ok {
+		t.Fatal("LedgerByID should succeed")
+	}
+	if lgr.Ancestor(999) != (consensus.LedgerID{}) {
+		t.Errorf("Ancestor(s > seq) should return zero")
+	}
+}
+
+func TestLedgerProvider_LRUEvicts(t *testing.T) {
+	// Filling the cache beyond providerCacheCapacity must evict the
+	// oldest entries; the cache stays bounded.
+	tag := byte('g')
+	p := newLedgerProviderFromLookup(func(h [32]byte) (LedgerHeader, error) {
+		// Synthesize headers on demand so we don't need to materialize
+		// thousands up front.
+		seq := uint32(h[0]) | uint32(h[1])<<8 | uint32(h[2])<<16
+		if seq == 0 || h[31] != tag {
+			return nil, errors.New("not found")
+		}
+		var parent [32]byte
+		if seq > 1 {
+			parent[0] = byte((seq - 1) & 0xff)
+			parent[1] = byte(((seq - 1) >> 8) & 0xff)
+			parent[2] = byte(((seq - 1) >> 16) & 0xff)
+			parent[31] = tag
+		}
+		return &fakeHeader{seq: seq, hash: h, parent: parent}, nil
+	})
+
+	// Insert providerCacheCapacity+50 distinct ledger IDs.
+	makeID := func(seq uint32) consensus.LedgerID {
+		var id consensus.LedgerID
+		id[0] = byte(seq & 0xff)
+		id[1] = byte((seq >> 8) & 0xff)
+		id[2] = byte((seq >> 16) & 0xff)
+		id[31] = tag
+		return id
+	}
+	for s := uint32(1); s <= providerCacheCapacity+50; s++ {
+		if _, ok := p.LedgerByID(makeID(s)); !ok {
+			t.Fatalf("insert seq=%d should succeed", s)
+		}
+	}
+
+	p.mu.Lock()
+	cacheLen := p.lru.Len()
+	mapLen := len(p.cache)
+	p.mu.Unlock()
+
+	if cacheLen > providerCacheCapacity {
+		t.Errorf("LRU not bounded: got %d entries, want ≤%d", cacheLen, providerCacheCapacity)
+	}
+	if cacheLen != mapLen {
+		t.Errorf("LRU/map size mismatch: %d vs %d", cacheLen, mapLen)
+	}
+	// First-inserted entry should have been evicted.
+	if _, ok := p.cacheGet(makeID(1)); ok {
+		t.Errorf("oldest entry (seq=1) should have been evicted")
 	}
 }
 

@@ -311,3 +311,49 @@ func TestValidationTracker_TrieDisabled_FallsBack(t *testing.T) {
 		t.Errorf("GetPreferred without trie should return ok=false")
 	}
 }
+
+// TestValidationTracker_ExpireOldDropsTrieTip verifies that ExpireOld
+// removes a stale validator's tip from the trie. Without this fix the
+// validator's branchSupport would phantom-count on ancestors of the
+// expired tip until the validator submitted a fresh validation.
+// Mirrors rippled's removeTrie call in Validations::eraseFromCurrent
+// (Validations.h:519-523).
+func TestValidationTracker_ExpireOldDropsTrieTip(t *testing.T) {
+	vt := NewValidationTracker(2, 5*time.Minute)
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	b := ledgertrie.NewTestLedgerBuilder()
+	ab := b.Build("ab")   // seq 2 — common ancestor
+	abc := b.Build("abc") // seq 3
+	abd := b.Build("abd") // seq 3
+	provider := newMapAncestryProvider()
+	provider.add(ab) // GetTrustedSupport(ab) needs ab resolvable
+	provider.add(abc)
+	provider.add(abd)
+
+	n1 := consensus.NodeID{1}
+	n2 := consensus.NodeID{2}
+	vt.SetTrusted([]consensus.NodeID{n1, n2})
+	vt.SetLedgerAncestryProvider(provider)
+
+	vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now))
+	vt.Add(makeTrustedValidation(n2, abd.ID(), abd.Seq(), now))
+
+	// Both validators back the common ancestor "ab" through their tips.
+	if got := vt.GetTrustedSupport(ab.ID()); got != 2 {
+		t.Fatalf("pre-expire branchSupport(ab): got %d, want 2", got)
+	}
+
+	// Expire validations below seq 4 — drops both tips.
+	vt.ExpireOld(4)
+
+	// After expiry the trie must drop both tips. branchSupport on any
+	// ancestor falls to 0 — no phantom support survives.
+	if got := vt.GetTrustedSupport(ab.ID()); got != 0 {
+		t.Errorf("post-expire branchSupport(ab): got %d, want 0 (trie tip leaked)", got)
+	}
+	if got := vt.GetTrustedSupport(abc.ID()); got != 0 {
+		t.Errorf("post-expire branchSupport(abc): got %d, want 0", got)
+	}
+}

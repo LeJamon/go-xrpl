@@ -12,30 +12,55 @@ import (
 )
 
 // Ledger is the interface the trie needs. Ledgers have a unique-history
-// invariant: if a[s] == b[s] then a[p] == b[p] for all p < s.
+// invariant: if a[s] == b[s] then a[p] == b[p] for all p < s within
+// each ledger's known-ancestor range.
+//
+// Production ledgers (rippled's RCLValidatedLedger / our providerLedger)
+// only carry the most recent ~256 ancestors via the keylet::skip SLE.
+// MinSeq() reports the earliest seq for which Ancestor() returns a
+// real ID; below it Ancestor() returns the zero LedgerID to signal
+// "out of range". Test ledgers that cache the full chain return 0.
 type Ledger interface {
 	// ID returns the ledger's own identifier (== Ancestor(Seq())).
 	ID() consensus.LedgerID
 	// Seq returns this ledger's sequence number.
 	Seq() uint32
-	// Ancestor returns the ID of the ancestor at sequence s. s must be
-	// <= Seq(); Ancestor(0) is the genesis ID.
+	// MinSeq returns the lowest seq for which Ancestor returns a
+	// non-zero ID. 0 for ledgers that retain their full ancestry.
+	MinSeq() uint32
+	// Ancestor returns the ID of the ancestor at sequence s. For s
+	// outside [MinSeq(), Seq()] the implementation returns the zero
+	// LedgerID. Ancestor(0) is the genesis ID for unbounded ledgers.
 	Ancestor(s uint32) consensus.LedgerID
 }
 
 // Mismatch returns the first sequence number at which a and b's
-// ancestries differ. If one is a strict ancestor of the other it
-// returns min(a.Seq(), b.Seq())+1. Port of the free `mismatch`
-// function expected by LedgerTrie.h:329-332.
+// ancestries differ, restricted to the overlap of their known ranges
+// [max(a.MinSeq, b.MinSeq), min(a.Seq, b.Seq)]. When the entire
+// overlap mismatches — or there is no overlap — returns 1, matching
+// rippled's RCLValidations.cpp:99-114 fallback ("assume divergence
+// post-genesis"). When ancestries agree throughout the overlap,
+// returns min(a.Seq, b.Seq)+1.
 func Mismatch(a, b Ledger) uint32 {
-	lo := a.Seq()
-	if b.Seq() < lo {
-		lo = b.Seq()
+	upper := a.Seq()
+	if b.Seq() < upper {
+		upper = b.Seq()
 	}
-	// Binary search over [0, lo] for the first s with a[s] != b[s].
-	// Unique-history makes the predicate monotone.
-	hi := lo
-	var low uint32 = 0
+	lower := a.MinSeq()
+	if bm := b.MinSeq(); bm > lower {
+		lower = bm
+	}
+	if lower > upper {
+		// No overlap of known ranges; assume divergence is post-genesis.
+		return 1
+	}
+
+	// Binary search in [lower, upper] for the first seq where a[s]
+	// disagrees with b[s]. Unique-history makes the "match" predicate
+	// monotone within the overlap (matches above s implies matches at
+	// every p in [lower, s]).
+	low := lower
+	hi := upper + 1
 	for low < hi {
 		mid := low + (hi-low)/2
 		if a.Ancestor(mid) == b.Ancestor(mid) {
@@ -44,10 +69,10 @@ func Mismatch(a, b Ledger) uint32 {
 			hi = mid
 		}
 	}
-	// At this point low == hi; if a[low]==b[low] then they agree up
-	// to sequence `lo`, so the first mismatch (if any) is at lo+1.
-	if low == lo && a.Ancestor(low) == b.Ancestor(low) {
-		return lo + 1
+	if low == lower {
+		// Mismatch at the lowest known seq — divergence is below our
+		// visibility. Per the rippled fallback, return 1.
+		return 1
 	}
 	return low
 }

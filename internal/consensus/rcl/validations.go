@@ -669,6 +669,14 @@ func (vt *ValidationTracker) GetCurrentValidators() []consensus.NodeID {
 // outside the mutex. All validations for a given ledger share a LedgerSeq,
 // so the staleness decision is taken from any one sample per ledger.
 //
+// When a validator's latest validation is dropped, its trie tip is also
+// removed (and trieTips entry cleared) so phantom branchSupport doesn't
+// linger on the now-stale tip. Mirrors rippled's
+// Validations::removeTrie call before erasing from current_
+// (Validations.h:519-523). Without this the ancestor of the stale tip
+// would over-count in GetTrustedSupport until the same validator
+// submitted a fresh validation.
+//
 // Fixes a prior bug where byNode entries survived deletion — the node's
 // latest-validation pointer was kept pointing at a Validation removed from
 // the per-ledger map.
@@ -691,6 +699,15 @@ func (vt *ValidationTracker) ExpireOld(minSeq uint32) {
 			stale = append(stale, v)
 			if latest, ok := vt.byNode[nodeID]; ok && latest == v {
 				delete(vt.byNode, nodeID)
+				// Drop the validator's trie tip too — without this its
+				// support phantom-counts on ancestors of the stale tip
+				// until the validator submits a fresh validation.
+				if vt.trie != nil {
+					if prev, ok := vt.trieTips[nodeID]; ok {
+						vt.trie.Remove(prev, 1)
+						delete(vt.trieTips, nodeID)
+					}
+				}
 			}
 		}
 		delete(vt.validations, ledgerID)

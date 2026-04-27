@@ -125,4 +125,5 @@ type genesisLedger struct{}
 
 func (genesisLedger) ID() consensus.LedgerID               { return consensus.LedgerID{} }
 func (genesisLedger) Seq() uint32                          { return 0 }
+func (genesisLedger) MinSeq() uint32                       { return 0 }
 func (genesisLedger) Ancestor(s uint32) consensus.LedgerID { return consensus.LedgerID{} }

@@ -22,11 +22,16 @@ func (l *TestLedger) ID() consensus.LedgerID { return l.id }
 // Seq implements Ledger.
 func (l *TestLedger) Seq() uint32 { return l.seq }
 
-// Ancestor implements Ledger. Callers must supply s <= Seq().
+// MinSeq implements Ledger. TestLedger retains its full ancestry, so
+// it can answer Ancestor(s) for any s in [0, Seq()].
+func (l *TestLedger) MinSeq() uint32 { return 0 }
+
+// Ancestor implements Ledger. For s outside [MinSeq(), Seq()] returns
+// the zero LedgerID, mirroring rippled's RCLValidatedLedger::operator[]
+// out-of-range fallback (RCLValidations.cpp:79-95).
 func (l *TestLedger) Ancestor(s uint32) consensus.LedgerID {
 	if s > l.seq {
-		// Defensive: mirror rippled's XRPL_ASSERT panic-on-misuse.
-		panic("TestLedger.Ancestor: s > seq")
+		return consensus.LedgerID{}
 	}
 	return l.ancestors[s]
 }
