@@ -343,14 +343,23 @@ func VerifyPeerHandshake(headers http.Header, sharedValue []byte, localPubKey st
 		return nil, ErrSelfConnection
 	}
 
+	// Network-ID parity with rippled (Handshake.cpp:241-250). goXRPL
+	// treats cfg.NetworkID==0 as the default network (mainnet); a peer
+	// advertising any other value is on a different network. A peer
+	// that omits Network-ID is only acceptable when we are also on the
+	// default network — a non-default-network node must reject peers
+	// that fail to declare a network.
 	if netIDStr := headers.Get(HeaderNetworkID); netIDStr != "" {
 		netID, err := strconv.ParseUint(netIDStr, 10, 32)
 		if err != nil {
 			return nil, fmt.Errorf("invalid network ID: %w", err)
 		}
-		if cfg.NetworkID > 0 && uint32(netID) != cfg.NetworkID {
+		if uint32(netID) != cfg.NetworkID {
 			return nil, fmt.Errorf("%w: expected %d, got %d", ErrNetworkMismatch, cfg.NetworkID, netID)
 		}
+	} else if cfg.NetworkID != 0 {
+		return nil, fmt.Errorf("%w: peer omitted Network-ID (local expects %d)",
+			ErrNetworkMismatch, cfg.NetworkID)
 	}
 
 	if netTimeStr := headers.Get(HeaderNetworkTime); netTimeStr != "" {

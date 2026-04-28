@@ -282,6 +282,55 @@ func TestVerifyPeerHandshake_NetworkMismatch(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNetworkMismatch)
 }
 
+// TestVerifyPeerHandshake_MainnetRejectsNonzeroNetworkID pins rippled
+// parity for Handshake.cpp:241-250: a node on the default network
+// (NetworkID=0) must reject a peer advertising Network-ID=1 (testnet).
+func TestVerifyPeerHandshake_MainnetRejectsNonzeroNetworkID(t *testing.T) {
+	localId, _ := NewIdentity()
+	remoteId, _ := NewIdentity()
+	sharedValue := make([]byte, 32)
+
+	remoteCfg := DefaultHandshakeConfig()
+	remoteCfg.NetworkID = 1
+	resp := BuildHandshakeResponse(remoteId, sharedValue, remoteCfg)
+
+	localCfg := DefaultHandshakeConfig() // NetworkID=0
+	_, err := VerifyPeerHandshake(
+		resp.Header,
+		sharedValue,
+		localId.EncodedPublicKey(),
+		localCfg,
+	)
+	assert.ErrorIs(t, err, ErrNetworkMismatch,
+		"mainnet must reject a peer advertising Network-ID=1")
+}
+
+// TestVerifyPeerHandshake_NonDefaultRejectsMissingNetworkID pins the
+// symmetric case: a node on a non-default network must reject peers
+// that omit the Network-ID header entirely.
+func TestVerifyPeerHandshake_NonDefaultRejectsMissingNetworkID(t *testing.T) {
+	localId, _ := NewIdentity()
+	remoteId, _ := NewIdentity()
+	sharedValue := make([]byte, 32)
+
+	// Remote omits NetworkID by using the default (0).
+	remoteCfg := DefaultHandshakeConfig()
+	resp := BuildHandshakeResponse(remoteId, sharedValue, remoteCfg)
+
+	// Local is on a non-default network.
+	localCfg := DefaultHandshakeConfig()
+	localCfg.NetworkID = 2
+
+	_, err := VerifyPeerHandshake(
+		resp.Header,
+		sharedValue,
+		localId.EncodedPublicKey(),
+		localCfg,
+	)
+	assert.ErrorIs(t, err, ErrNetworkMismatch,
+		"non-default-network node must reject peers omitting Network-ID")
+}
+
 // TestVerifyPeerHandshake_InvalidSignature tests invalid signature rejection
 func TestVerifyPeerHandshake_InvalidSignature(t *testing.T) {
 	localId, _ := NewIdentity()
