@@ -18,11 +18,11 @@ func computeSharedValue(local, peer []byte) ([]byte, error) {
 	h1 := sha512.Sum512(local)
 	h2 := sha512.Sum512(peer)
 
-	var xor [64]byte
+	var mixed [sha512.Size]byte
 	allZero := true
-	for i := 0; i < 64; i++ {
-		xor[i] = h1[i] ^ h2[i]
-		if xor[i] != 0 {
+	for i := range mixed {
+		mixed[i] = h1[i] ^ h2[i]
+		if mixed[i] != 0 {
 			allZero = false
 		}
 	}
@@ -30,7 +30,7 @@ func computeSharedValue(local, peer []byte) ([]byte, error) {
 		return nil, errors.New("peertls: identical local and peer Finished")
 	}
 
-	final := sha512.Sum512(xor[:])
+	final := sha512.Sum512(mixed[:])
 	out := make([]byte, 32)
 	copy(out, final[:32])
 	return out, nil
