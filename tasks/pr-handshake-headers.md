@@ -27,7 +27,7 @@ Constants for `Closed-Ledger` and `Previous-Ledger` already exist at `internal/p
 - Emit all six on outbound (`BuildHandshakeRequest`) and on inbound (`BuildHandshakeResponse`).
 - Parse all six on inbound and outbound; store on `Peer`. **Strict rippled parity**: Instance-Cookie is stored only, never compared — `verifyHandshake` does not inspect it; self-connection detection stays pubkey-only at `Handshake.cpp:322`.
 - IP consistency checks: faithfully reproduce `verifyHandshake` lines 325-359.
-- Wire `Closed-Ledger` hints into peer selection: `Overlay.PeersWithClosedLedger` plus `LedgerSyncHandler.PreferredPeersForLedger` so callers driving catchup ask peers that already advertise the target ledger first (matches rippled `NetworkOPs` consuming `PeerImp::closedLedgerHash_`).
+- Expose `Closed-Ledger` hints as a peer-selection primitive: `Overlay.PeersWithClosedLedger` plus `LedgerSyncHandler.PreferredPeersForLedger` filter peers by their last-known closed-ledger hash (seeded from the handshake hint, refreshed by `mtSTATUS_CHANGE`). This is a coarse filter only — it is NOT a port of rippled's catchup peer selection, which goes through `PeerImp::hasLedger(hash, seq)` and inspects `[minLedger_, maxLedger_]` plus the `recentLedgers_` ring (state goXRPL does not yet track per peer).
 - Surface peer info through the RPC `peers` handler: `types.PeerSource` interface plus `Server.SetPeerSource`; `Overlay.PeersJSON()` produces the per-peer entries with `server_domain`, `closed_ledger`, `previous_ledger`, `remote_ip`, `local_ip`. CLI wires the overlay in when running in consensus mode.
 - Four acceptance tests as named in the issue, plus targeted tests for the catchup picker and the RPC handler.
 

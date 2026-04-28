@@ -84,8 +84,8 @@ func TestComputeSharedValue_IdenticalRejected(t *testing.T) {
 // TestComputeSharedValue_BoundaryValid pins that the 12-byte minimum
 // is inclusive — exactly 12 bytes on each side must succeed.
 func TestComputeSharedValue_BoundaryValid(t *testing.T) {
-	local := []byte("aaaaaaaaaaaa")  // 12 bytes
-	peer := []byte("bbbbbbbbbbbb")   // 12 bytes
+	local := []byte("aaaaaaaaaaaa") // 12 bytes
+	peer := []byte("bbbbbbbbbbbb")  // 12 bytes
 	sv, err := computeSharedValue(local, peer)
 	if err != nil {
 		t.Fatalf("12 bytes must be accepted: %v", err)

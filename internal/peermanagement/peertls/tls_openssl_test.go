@@ -210,7 +210,7 @@ func TestHandshake_ConcurrentReadWrite(t *testing.T) {
 	writeErr := make(chan error, 1)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < rounds; i++ {
+		for range rounds {
 			if _, err := clientConn.Write([]byte(payload)); err != nil {
 				writeErr <- err
 				return

@@ -2,6 +2,7 @@
 
 #include "shim.h"
 
+#include <limits.h>
 #include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
@@ -169,13 +170,21 @@ void peertls_free(peertls_ssl* s) {
 
 int peertls_handshake(peertls_ssl* s) {
     if (!s || !s->ssl) return PEERTLS_ERR_OTHER;
+    /* Clear any leftover error from a prior op on this thread so that
+     * peertls_last_error() reflects only this call's error queue. */
+    ERR_clear_error();
     int rc = SSL_do_handshake(s->ssl);
     if (rc == 1) return 0;
+    /* rc == 0 is "controlled shutdown" per SSL_do_handshake(3) — NOT
+     * success. map_ssl_error routes it through SSL_get_error and emits
+     * PEERTLS_ERR_ZERO_RET (or another negative code). Do not add a
+     * fast-path that treats rc == 0 as success. */
     return map_ssl_error(s->ssl, rc);
 }
 
 int peertls_read(peertls_ssl* s, void* buf, int len) {
     if (!s || !s->ssl) return PEERTLS_ERR_OTHER;
+    ERR_clear_error();
     int rc = SSL_read(s->ssl, buf, len);
     if (rc > 0) return rc;
     return map_ssl_error(s->ssl, rc);
@@ -183,6 +192,7 @@ int peertls_read(peertls_ssl* s, void* buf, int len) {
 
 int peertls_write(peertls_ssl* s, const void* buf, int len) {
     if (!s || !s->ssl) return PEERTLS_ERR_OTHER;
+    ERR_clear_error();
     int rc = SSL_write(s->ssl, buf, len);
     if (rc > 0) return rc;
     return map_ssl_error(s->ssl, rc);
@@ -209,24 +219,40 @@ int peertls_bio_write(peertls_ssl* s, const void* buf, int len) {
 }
 
 int peertls_get_finished(peertls_ssl* s, void* buf, int len) {
-    if (!s || !s->ssl) return 0;
-    return (int)SSL_get_finished(s->ssl, buf, (size_t)len);
+    if (!s || !s->ssl || len <= 0) return 0;
+    /* SSL_get_finished returns the FULL Finished length even when our
+     * buffer is smaller — the caller uses (returned > buf_len) to detect
+     * truncation. Clamp the size_t result to INT_MAX before downcasting
+     * so the contract stays well-defined for any future cipher whose
+     * verify_data exceeds INT_MAX bytes. */
+    size_t r = SSL_get_finished(s->ssl, buf, (size_t)len);
+    if (r > (size_t)INT_MAX) return INT_MAX;
+    return (int)r;
 }
 
 int peertls_get_peer_finished(peertls_ssl* s, void* buf, int len) {
-    if (!s || !s->ssl) return 0;
-    return (int)SSL_get_peer_finished(s->ssl, buf, (size_t)len);
+    if (!s || !s->ssl || len <= 0) return 0;
+    size_t r = SSL_get_peer_finished(s->ssl, buf, (size_t)len);
+    if (r > (size_t)INT_MAX) return INT_MAX;
+    return (int)r;
 }
 
 int peertls_shutdown(peertls_ssl* s) {
     if (!s || !s->ssl) return PEERTLS_ERR_OTHER;
+    ERR_clear_error();
     int rc = SSL_shutdown(s->ssl);
     if (rc >= 0) return 0;
     return map_ssl_error(s->ssl, rc);
 }
 
 const char* peertls_last_error(void) {
+    /* C11 _Thread_local; falls back to GCC __thread on pre-C11
+     * compilers (clang/gcc both honor __thread). */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+    static _Thread_local char buf[256];
+#else
     static __thread char buf[256];
+#endif
     unsigned long e = ERR_peek_last_error();
     if (e == 0) return "";
     ERR_error_string_n(e, buf, sizeof(buf));

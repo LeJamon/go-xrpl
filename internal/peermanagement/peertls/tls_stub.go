@@ -32,13 +32,13 @@ type stubConn struct{}
 
 var _ PeerConn = (*stubConn)(nil)
 
-func (s *stubConn) Read([]byte) (int, error)              { return 0, ErrSessionSigUnsupported }
-func (s *stubConn) Write([]byte) (int, error)             { return 0, ErrSessionSigUnsupported }
-func (s *stubConn) Close() error                          { return ErrSessionSigUnsupported }
-func (s *stubConn) LocalAddr() net.Addr                   { return nil }
-func (s *stubConn) RemoteAddr() net.Addr                  { return nil }
-func (s *stubConn) SetDeadline(time.Time) error           { return ErrSessionSigUnsupported }
-func (s *stubConn) SetReadDeadline(time.Time) error       { return ErrSessionSigUnsupported }
-func (s *stubConn) SetWriteDeadline(time.Time) error      { return ErrSessionSigUnsupported }
+func (s *stubConn) Read([]byte) (int, error)               { return 0, ErrSessionSigUnsupported }
+func (s *stubConn) Write([]byte) (int, error)              { return 0, ErrSessionSigUnsupported }
+func (s *stubConn) Close() error                           { return nil }
+func (s *stubConn) LocalAddr() net.Addr                    { return nil }
+func (s *stubConn) RemoteAddr() net.Addr                   { return nil }
+func (s *stubConn) SetDeadline(time.Time) error            { return ErrSessionSigUnsupported }
+func (s *stubConn) SetReadDeadline(time.Time) error        { return ErrSessionSigUnsupported }
+func (s *stubConn) SetWriteDeadline(time.Time) error       { return ErrSessionSigUnsupported }
 func (s *stubConn) HandshakeContext(context.Context) error { return ErrSessionSigUnsupported }
-func (s *stubConn) SharedValue() ([]byte, error)          { return nil, ErrSessionSigUnsupported }
+func (s *stubConn) SharedValue() ([]byte, error)           { return nil, ErrSessionSigUnsupported }

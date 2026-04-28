@@ -327,39 +327,31 @@ func isWellFormedDomain(s string) bool {
 	return true
 }
 
-// VerifyPeerHandshake validates the handshake headers and verifies the session signature.
+// VerifyPeerHandshake validates the handshake headers and verifies the
+// session signature. Check order mirrors rippled's verifyHandshake
+// (Handshake.cpp:227-362) starting from Network-ID:
+// Network-ID → Network-Time → Public-Key → Session-Signature → self-connection.
+//
+// Server-Domain (Handshake.cpp:235-239 — the very first throw) is the
+// caller's responsibility via ValidateServerDomain. It must be invoked
+// BEFORE this function so a malformed Server-Domain is rejected before
+// any signature work.
 func VerifyPeerHandshake(headers http.Header, sharedValue []byte, localPubKey string, cfg HandshakeConfig) (*PublicKeyToken, error) {
-	pubKeyStr := headers.Get(HeaderPublicKey)
-	if pubKeyStr == "" {
-		return nil, fmt.Errorf("%w: missing %s", ErrInvalidHandshake, HeaderPublicKey)
-	}
-
-	pubKey, err := ParsePublicKeyToken(pubKeyStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid public key: %w", err)
-	}
-
-	if pubKeyStr == localPubKey {
-		return nil, ErrSelfConnection
-	}
-
-	// Network-ID parity with rippled (Handshake.cpp:241-250). goXRPL
-	// treats cfg.NetworkID==0 as the default network (mainnet); a peer
-	// advertising any other value is on a different network. A peer
-	// that omits Network-ID is only acceptable when we are also on the
-	// default network — a non-default-network node must reject peers
-	// that fail to declare a network.
+	// Network-ID parity with rippled (Handshake.cpp:241-250). cfg.NetworkID
+	// == 0 stands in for rippled's `std::optional<networkID>` being unseated
+	// (mainnet / no network configured): in that mode the header is not
+	// checked at all, even if the peer advertises a non-zero value. A peer
+	// that omits Network-ID is always accepted — rippled only enforces the
+	// match when both the header is present AND the local networkID is
+	// seated.
 	if netIDStr := headers.Get(HeaderNetworkID); netIDStr != "" {
 		netID, err := strconv.ParseUint(netIDStr, 10, 32)
 		if err != nil {
 			return nil, fmt.Errorf("invalid network ID: %w", err)
 		}
-		if uint32(netID) != cfg.NetworkID {
+		if cfg.NetworkID != 0 && uint32(netID) != cfg.NetworkID {
 			return nil, fmt.Errorf("%w: expected %d, got %d", ErrNetworkMismatch, cfg.NetworkID, netID)
 		}
-	} else if cfg.NetworkID != 0 {
-		return nil, fmt.Errorf("%w: peer omitted Network-ID (local expects %d)",
-			ErrNetworkMismatch, cfg.NetworkID)
 	}
 
 	if netTimeStr := headers.Get(HeaderNetworkTime); netTimeStr != "" {
@@ -378,6 +370,16 @@ func VerifyPeerHandshake(headers http.Header, sharedValue []byte, localPubKey st
 		}
 	}
 
+	pubKeyStr := headers.Get(HeaderPublicKey)
+	if pubKeyStr == "" {
+		return nil, fmt.Errorf("%w: missing %s", ErrInvalidHandshake, HeaderPublicKey)
+	}
+
+	pubKey, err := ParsePublicKeyToken(pubKeyStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid public key: %w", err)
+	}
+
 	sigStr := headers.Get(HeaderSessionSignature)
 	if sigStr == "" {
 		return nil, fmt.Errorf("%w: missing %s", ErrInvalidHandshake, HeaderSessionSignature)
@@ -390,6 +392,10 @@ func VerifyPeerHandshake(headers http.Header, sharedValue []byte, localPubKey st
 
 	if err := verifySessionSignature(pubKey, sharedValue, sigBytes); err != nil {
 		return nil, err
+	}
+
+	if pubKeyStr == localPubKey {
+		return nil, ErrSelfConnection
 	}
 
 	return pubKey, nil

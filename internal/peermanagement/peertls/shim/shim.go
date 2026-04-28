@@ -231,11 +231,15 @@ func (s *SSL) BIOWrite(buf []byte) (int, error) {
 }
 
 // GetFinished copies up to len(buf) bytes of the local-side Finished
-// message into buf and returns the number of bytes copied.
+// message into buf and returns the number of bytes copied. The OS
+// thread is locked across the cgo call so the OpenSSL per-thread error
+// queue stays consistent with any subsequent shim op on this goroutine.
 func (s *SSL) GetFinished(buf []byte) int {
 	if len(buf) == 0 {
 		return 0
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	n := C.peertls_get_finished(s.p, unsafe.Pointer(&buf[0]), C.int(len(buf)))
 	return int(n)
 }
@@ -246,17 +250,21 @@ func (s *SSL) GetPeerFinished(buf []byte) int {
 	if len(buf) == 0 {
 		return 0
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	n := C.peertls_get_peer_finished(s.p, unsafe.Pointer(&buf[0]), C.int(len(buf)))
 	return int(n)
 }
 
 // Shutdown sends close_notify.
 func (s *SSL) Shutdown() error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	rc := C.peertls_shutdown(s.p)
 	if rc == 0 {
 		return nil
 	}
-	return CodeToErr(int(rc))
+	return enrichLastError(CodeToErr(int(rc)))
 }
 
 // LastError returns the latest OpenSSL error string from this thread,

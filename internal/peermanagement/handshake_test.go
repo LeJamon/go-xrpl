@@ -282,10 +282,12 @@ func TestVerifyPeerHandshake_NetworkMismatch(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNetworkMismatch)
 }
 
-// TestVerifyPeerHandshake_MainnetRejectsNonzeroNetworkID pins rippled
-// parity for Handshake.cpp:241-250: a node on the default network
-// (NetworkID=0) must reject a peer advertising Network-ID=1 (testnet).
-func TestVerifyPeerHandshake_MainnetRejectsNonzeroNetworkID(t *testing.T) {
+// TestVerifyPeerHandshake_MainnetAcceptsNonzeroNetworkIDFromPeer pins
+// rippled parity for Handshake.cpp:241-250: when the local network is
+// the default (NetworkID=0, equivalent to rippled's unseated optional),
+// the Network-ID header is NOT checked. A mainnet node accepts a peer
+// advertising any Network-ID value.
+func TestVerifyPeerHandshake_MainnetAcceptsNonzeroNetworkIDFromPeer(t *testing.T) {
 	localId, _ := NewIdentity()
 	remoteId, _ := NewIdentity()
 	sharedValue := make([]byte, 32)
@@ -301,14 +303,15 @@ func TestVerifyPeerHandshake_MainnetRejectsNonzeroNetworkID(t *testing.T) {
 		localId.EncodedPublicKey(),
 		localCfg,
 	)
-	assert.ErrorIs(t, err, ErrNetworkMismatch,
-		"mainnet must reject a peer advertising Network-ID=1")
+	require.NoError(t, err,
+		"rippled parity: mainnet must accept any peer Network-ID — Handshake.cpp only checks when local networkID is seated")
 }
 
-// TestVerifyPeerHandshake_NonDefaultRejectsMissingNetworkID pins the
-// symmetric case: a node on a non-default network must reject peers
-// that omit the Network-ID header entirely.
-func TestVerifyPeerHandshake_NonDefaultRejectsMissingNetworkID(t *testing.T) {
+// TestVerifyPeerHandshake_NonDefaultAcceptsMissingNetworkID pins the
+// symmetric case: rippled silently accepts peers that omit Network-ID
+// even when the local node is on a non-default network. The header is
+// only checked when present.
+func TestVerifyPeerHandshake_NonDefaultAcceptsMissingNetworkID(t *testing.T) {
 	localId, _ := NewIdentity()
 	remoteId, _ := NewIdentity()
 	sharedValue := make([]byte, 32)
@@ -327,8 +330,8 @@ func TestVerifyPeerHandshake_NonDefaultRejectsMissingNetworkID(t *testing.T) {
 		localId.EncodedPublicKey(),
 		localCfg,
 	)
-	assert.ErrorIs(t, err, ErrNetworkMismatch,
-		"non-default-network node must reject peers omitting Network-ID")
+	require.NoError(t, err,
+		"rippled parity: missing Network-ID header is always accepted — Handshake.cpp:241 only enters the check when the header is present")
 }
 
 // TestVerifyPeerHandshake_InvalidSignature tests invalid signature rejection
@@ -1312,8 +1315,8 @@ func TestLedgerSync_PreferredPeersForLedger_ConsumesClosedLedgerHint(t *testing.
 		p.setState(PeerStateConnected)
 		if hint != nil {
 			p.applyHandshakeExtras(HandshakeExtras{
-				ClosedLedger:   *hint,
-				PreviousLedger: parent,
+				ClosedLedger:    *hint,
+				PreviousLedger:  parent,
 				HasClosedLedger: true,
 			})
 		}
@@ -1321,10 +1324,10 @@ func TestLedgerSync_PreferredPeersForLedger_ConsumesClosedLedgerHint(t *testing.
 	}
 
 	overlay := newTestOverlayWithPeers(map[PeerID]*Peer{
-		1: mkPeer(1, &target), // matches → expected
+		1: mkPeer(1, &target),         // matches → expected
 		2: mkPeer(2, &[32]byte{0xAA}), // different hint → filtered
-		3: mkPeer(3, nil),     // no hint → filtered
-		4: mkPeer(4, &target), // matches → expected
+		3: mkPeer(3, nil),             // no hint → filtered
+		4: mkPeer(4, &target),         // matches → expected
 		// peer 5: disconnected with matching hint → filtered by state.
 		5: func() *Peer {
 			p := NewPeer(5, Endpoint{}, false, id, nil)
@@ -1355,8 +1358,8 @@ func TestApplyStatusChange_RippledSemantics(t *testing.T) {
 			initialParent[i] = byte(0x22)
 		}
 		p.applyHandshakeExtras(HandshakeExtras{
-			ClosedLedger:   initialClosed,
-			PreviousLedger: initialParent,
+			ClosedLedger:    initialClosed,
+			PreviousLedger:  initialParent,
 			HasClosedLedger: true,
 		})
 		return p

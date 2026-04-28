@@ -5,6 +5,8 @@ package peertls
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"net"
 	"net/http"
 	"os"
@@ -27,9 +29,18 @@ func TestHandshake_Interop_RippledDocker(t *testing.T) {
 		image = "xrpllabsofficial/xrpld:latest"
 	}
 
+	// Suffix the container name with random hex so concurrent test
+	// runs (e.g. `go test -count N`, parallel CI shards) don't collide
+	// on a fixed name.
+	var nonce [4]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		t.Fatalf("rand: %v", err)
+	}
+	containerName := "peertls-interop-269-" + hex.EncodeToString(nonce[:])
+
 	cidBytes, err := exec.Command("docker", "run", "-d",
 		"-p", "0:51235",
-		"--name", "peertls-interop-269",
+		"--name", containerName,
 		image,
 	).Output()
 	if err != nil {

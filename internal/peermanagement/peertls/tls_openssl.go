@@ -268,7 +268,7 @@ func (c *conn) bioWriteAllLocked() error {
 // drainBIOLocked reads everything currently pending on the network
 // BIO into a fresh slice. Caller must hold sslMu.
 func (c *conn) drainBIOLocked() []byte {
-	var out []byte
+	out := make([]byte, 0, pumpBufSize)
 	buf := make([]byte, pumpBufSize)
 	for {
 		n, err := c.ssl.BIORead(buf)
@@ -438,33 +438,45 @@ func (c *conn) SetWriteDeadline(t time.Time) error { return c.inner.SetWriteDead
 // in principle. We reject that explicitly: hashing a truncated copy
 // would silently desynchronise from rippled, which uses a 1024-byte
 // buffer (Handshake.cpp:132).
+//
+// sslMu is held only across the cgo Finished extraction. The SHA-512
+// hashing in computeSharedValue runs on copies after the lock is
+// released so it can't block concurrent Read/Write/Close.
 func (c *conn) SharedValue() ([]byte, error) {
+	localCopy, peerCopy, err := c.snapshotFinishedLocked()
+	if err != nil {
+		return nil, err
+	}
+	return computeSharedValue(localCopy, peerCopy)
+}
+
+func (c *conn) snapshotFinishedLocked() (local, peer []byte, err error) {
 	c.sslMu.Lock()
 	defer c.sslMu.Unlock()
 	if c.closed.Load() {
-		return nil, net.ErrClosed
+		return nil, nil, net.ErrClosed
 	}
 	if !c.handshake {
-		return nil, ErrHandshakeIncomplete
+		return nil, nil, ErrHandshakeIncomplete
 	}
-	local := make([]byte, finishedBufSize)
-	peer := make([]byte, finishedBufSize)
+	localBuf := make([]byte, finishedBufSize)
+	peerBuf := make([]byte, finishedBufSize)
 
-	ln := c.ssl.GetFinished(local)
+	ln := c.ssl.GetFinished(localBuf)
 	if ln < 12 {
-		return nil, fmt.Errorf("peertls: local Finished too short (%d bytes)", ln)
+		return nil, nil, fmt.Errorf("peertls: local Finished too short (%d bytes)", ln)
 	}
-	if ln > len(local) {
-		return nil, fmt.Errorf("peertls: local Finished length %d exceeds buffer %d",
-			ln, len(local))
+	if ln > len(localBuf) {
+		return nil, nil, fmt.Errorf("peertls: local Finished length %d exceeds buffer %d",
+			ln, len(localBuf))
 	}
-	pn := c.ssl.GetPeerFinished(peer)
+	pn := c.ssl.GetPeerFinished(peerBuf)
 	if pn < 12 {
-		return nil, fmt.Errorf("peertls: peer Finished too short (%d bytes)", pn)
+		return nil, nil, fmt.Errorf("peertls: peer Finished too short (%d bytes)", pn)
 	}
-	if pn > len(peer) {
-		return nil, fmt.Errorf("peertls: peer Finished length %d exceeds buffer %d",
-			pn, len(peer))
+	if pn > len(peerBuf) {
+		return nil, nil, fmt.Errorf("peertls: peer Finished length %d exceeds buffer %d",
+			pn, len(peerBuf))
 	}
-	return computeSharedValue(local[:ln], peer[:pn])
+	return localBuf[:ln:ln], peerBuf[:pn:pn], nil
 }

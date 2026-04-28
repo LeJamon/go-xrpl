@@ -284,12 +284,18 @@ func WithLocalValidatorPubKey(key []byte) Option {
 	}
 }
 
+// WithServerDomain sets the operator domain emitted in the
+// `Server-Domain` handshake header. An empty value suppresses the
+// header (matching rippled's behavior when no domain is configured).
 func WithServerDomain(domain string) Option {
 	return func(c *Config) {
 		c.ServerDomain = domain
 	}
 }
 
+// WithPublicIP sets the node's observed public address. Used to emit
+// the `Local-IP` handshake header and to validate the peer's
+// `Remote-IP` self-report. A nil or unspecified IP suppresses both.
 func WithPublicIP(ip net.IP) Option {
 	return func(c *Config) {
 		c.PublicIP = ip

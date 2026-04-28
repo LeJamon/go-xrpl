@@ -315,12 +315,19 @@ func (p *Peer) Connect(ctx context.Context, cfg PeerConfig) error {
 	return nil
 }
 
-// AcceptConnection sets the connection for an inbound peer.
-func (p *Peer) AcceptConnection(conn net.Conn) {
+// AcceptConnection sets the connection for an inbound peer. Returns
+// ErrAlreadyConnected if the peer is not in the Disconnected state —
+// without this check a concurrent AcceptConnection / Connect could
+// clobber an in-flight handshake.
+func (p *Peer) AcceptConnection(conn net.Conn) error {
 	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.state != PeerStateDisconnected {
+		return ErrAlreadyConnected
+	}
 	p.conn = conn
 	p.state = PeerStateConnecting
-	p.mu.Unlock()
+	return nil
 }
 
 // performHandshake performs the XRPL HTTP upgrade handshake.
@@ -343,8 +350,10 @@ func (p *Peer) performHandshake(ctx context.Context, tlsConn peertls.PeerConn) e
 	if !ok {
 		deadline = time.Now().Add(DefaultHandshakeTimeout)
 	}
-	tlsConn.SetDeadline(deadline)
-	defer tlsConn.SetDeadline(time.Time{})
+	if err := tlsConn.SetDeadline(deadline); err != nil {
+		return NewHandshakeError(p.endpoint, "set_deadline", err)
+	}
+	defer func() { _ = tlsConn.SetDeadline(time.Time{}) }()
 
 	if err := WriteRawHandshakeRequest(tlsConn, req); err != nil {
 		return NewHandshakeError(p.endpoint, "send_request", err)
@@ -369,6 +378,14 @@ func (p *Peer) performHandshake(ctx context.Context, tlsConn peertls.PeerConn) e
 	}
 	resp.Body.Close()
 
+	// Server-Domain runs first to match rippled's verifyHandshake
+	// (Handshake.cpp:235-239 — the very first throw, before signature
+	// verification). A malformed Server-Domain from a peer with a
+	// valid signature must still be rejected before any further work.
+	if _, err := ValidateServerDomain(resp.Header); err != nil {
+		return NewHandshakeError(p.endpoint, "verify_extras", err)
+	}
+
 	// Full session-signature verification — the whole point of #269.
 	peerPubKey, err := VerifyPeerHandshake(
 		resp.Header,
@@ -389,9 +406,6 @@ func (p *Peer) performHandshake(ctx context.Context, tlsConn peertls.PeerConn) e
 	p.capabilities = caps
 	p.mu.Unlock()
 
-	if _, err := ValidateServerDomain(resp.Header); err != nil {
-		return NewHandshakeError(p.endpoint, "verify_extras", err)
-	}
 	extras, err := ParseHandshakeExtras(
 		resp.Header,
 		p.handshakeCfg.PublicIP,

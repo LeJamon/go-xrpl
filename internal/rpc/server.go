@@ -26,6 +26,9 @@ type Server struct {
 	peerSource atomic.Pointer[types.PeerSource]
 }
 
+// SetPeerSource registers the source of per-peer entries served by the
+// `peers` RPC handler. Passing nil detaches the source so the handler
+// returns an empty list. Safe to call concurrently with reads.
 func (s *Server) SetPeerSource(src types.PeerSource) {
 	if src == nil {
 		s.peerSource.Store(nil)

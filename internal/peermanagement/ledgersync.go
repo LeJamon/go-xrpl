@@ -206,9 +206,11 @@ func (h *LedgerSyncHandler) SetProvider(provider LedgerProvider) {
 	h.provider = provider
 }
 
-// PreferredPeersForLedger returns peer IDs whose Closed-Ledger
-// handshake hint matches target. Empty when no lookup is wired or no
-// peer matches.
+// PreferredPeersForLedger returns peer IDs whose last-known
+// Closed-Ledger hash matches target. Empty when no lookup is wired or
+// no peer matches. Filters by a single advertised hash only — does not
+// replicate rippled's PeerImp::hasLedger(hash, seq) range/recent-set
+// logic used by InboundLedger catchup.
 func (h *LedgerSyncHandler) PreferredPeersForLedger(target [32]byte) []PeerID {
 	h.mu.RLock()
 	lookup := h.peerHintLookup
