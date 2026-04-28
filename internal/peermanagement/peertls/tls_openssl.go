@@ -17,11 +17,15 @@ import (
 
 const (
 	// finishedBufSize is the working buffer size for SSL_get_finished /
-	// SSL_get_peer_finished. TLS 1.2 verify_data is 12 bytes for every
-	// cipher suite the shim's pinned cipher list negotiates
-	// (TLSv1.2:!CBC:!DSS:!PSK:!eNULL:!aNULL); 64 is comfortable headroom
-	// and OpenSSL truncates / reports the actual length anyway.
-	finishedBufSize = 64
+	// SSL_get_peer_finished. Matches rippled's hashLastMessage buffer
+	// (Handshake.cpp:132 — `unsigned char buf[1024]`). TLS 1.2
+	// verify_data is 12 bytes for every cipher suite the shim's pinned
+	// cipher list negotiates, but `SSL_get_finished` returns the FULL
+	// message length and only copies `min(count, length)` — using 1024
+	// matches rippled and removes any chance of `SharedValue` panicking
+	// on a `local[:ln]` slice if a future cipher suite uses a larger
+	// verify_data.
+	finishedBufSize = 1024
 	// pumpBufSize sizes the working buffers for moving TLS records
 	// between the network BIO and the underlying net.Conn. 16 KiB is
 	// the maximum TLS record size.
@@ -90,6 +94,11 @@ type conn struct {
 
 	inMu  sync.Mutex
 	outMu sync.Mutex
+
+	// pendingIn holds bytes read from inner but not yet accepted by the
+	// network BIO (BIO ring was full). Drained on the next pump. Owned
+	// by inMu — only the goroutine that holds inMu touches it.
+	pendingIn []byte
 
 	closed    atomic.Bool
 	closeOnce sync.Once
@@ -194,7 +203,23 @@ func (c *conn) handshakeStep() (out []byte, done bool, err error) {
 // BIO. The "Locked" suffix denotes the caller owns inMu (so only one
 // goroutine ever reads from inner). sslMu is acquired internally only
 // for the BIO_write — never held across inner.Read.
+//
+// BIO_write on a BIO_pair has partial-write semantics: when the BIO
+// ring is partially full, BIO_write accepts only what fits and
+// returns the count. We stash any unaccepted tail on pendingIn and
+// drain it at the start of the next pump (after the caller has run a
+// fresh SSL_do_handshake or SSL_read that consumed BIO bytes). This
+// prevents silently dropping wire bytes if a peer pipelines records.
 func (c *conn) pumpInboundLocked() error {
+	if len(c.pendingIn) > 0 {
+		if err := c.bioWriteAllLocked(); err != nil {
+			return err
+		}
+		// Whether or not we drained pendingIn, hand control back so
+		// the caller's outer loop runs an SSL step.
+		return nil
+	}
+
 	buf := make([]byte, pumpBufSize)
 	n, err := c.inner.Read(buf)
 	if err != nil {
@@ -206,13 +231,38 @@ func (c *conn) pumpInboundLocked() error {
 	if n == 0 {
 		return nil
 	}
+
+	c.sslMu.Lock()
+	if c.closed.Load() {
+		c.sslMu.Unlock()
+		return net.ErrClosed
+	}
+	w, werr := c.ssl.BIOWrite(buf[:n])
+	c.sslMu.Unlock()
+	if werr != nil {
+		return werr
+	}
+	if w < n {
+		// Buffer the tail; next pumpInboundLocked drains it.
+		c.pendingIn = append(c.pendingIn[:0], buf[w:n]...)
+	}
+	return nil
+}
+
+// bioWriteAllLocked drains as much of c.pendingIn into the BIO as the
+// BIO will currently accept. Caller owns inMu; sslMu is acquired here.
+func (c *conn) bioWriteAllLocked() error {
 	c.sslMu.Lock()
 	defer c.sslMu.Unlock()
 	if c.closed.Load() {
 		return net.ErrClosed
 	}
-	_, werr := c.ssl.BIOWrite(buf[:n])
-	return werr
+	w, werr := c.ssl.BIOWrite(c.pendingIn)
+	if werr != nil {
+		return werr
+	}
+	c.pendingIn = c.pendingIn[w:]
+	return nil
 }
 
 // drainBIOLocked reads everything currently pending on the network
@@ -260,10 +310,12 @@ func (c *conn) Read(b []byte) (int, error) {
 		case errors.Is(err, shim.ErrZeroRet):
 			return 0, io.EOF
 		case err == nil:
-			// Spurious 0-byte SSL_read; treat as WantRead.
-			if perr := c.pumpInboundLocked(); perr != nil {
-				return 0, perr
-			}
+			// SSL_read returning (0, nil) is a protocol-level
+			// invariant violation — the C shim only returns rc==0
+			// for clean shutdown (mapped to ErrZeroRet) and rc>0
+			// for actual data. Surface it instead of silently
+			// looping.
+			return 0, errors.New("peertls: SSL_read returned 0 bytes with no error")
 		default:
 			return 0, err
 		}
@@ -380,6 +432,12 @@ func (c *conn) SetWriteDeadline(t time.Time) error { return c.inner.SetWriteDead
 
 // SharedValue computes the rippled-compatible 32-byte shared value:
 // sha512Half(sha512(local_finished) XOR sha512(peer_finished)).
+//
+// `SSL_get_finished` returns the *full* Finished message length even
+// when the buffer is smaller, so `ln`/`pn` can exceed `finishedBufSize`
+// in principle. We reject that explicitly: hashing a truncated copy
+// would silently desynchronise from rippled, which uses a 1024-byte
+// buffer (Handshake.cpp:132).
 func (c *conn) SharedValue() ([]byte, error) {
 	c.sslMu.Lock()
 	defer c.sslMu.Unlock()
@@ -396,9 +454,17 @@ func (c *conn) SharedValue() ([]byte, error) {
 	if ln < 12 {
 		return nil, fmt.Errorf("peertls: local Finished too short (%d bytes)", ln)
 	}
+	if ln > len(local) {
+		return nil, fmt.Errorf("peertls: local Finished length %d exceeds buffer %d",
+			ln, len(local))
+	}
 	pn := c.ssl.GetPeerFinished(peer)
 	if pn < 12 {
 		return nil, fmt.Errorf("peertls: peer Finished too short (%d bytes)", pn)
+	}
+	if pn > len(peer) {
+		return nil, fmt.Errorf("peertls: peer Finished length %d exceeds buffer %d",
+			pn, len(peer))
 	}
 	return computeSharedValue(local[:ln], peer[:pn])
 }
