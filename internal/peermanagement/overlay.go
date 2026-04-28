@@ -644,12 +644,17 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 		return NewHandshakeError(peer.Endpoint(), "verify_extras", err)
 	}
 
+	// Build the handshake config once and share it with both
+	// VerifyPeerHandshake and BuildHandshakeResponse so the inbound
+	// and outbound paths cannot diverge.
+	hsCfg := o.handshakeConfigFor()
+
 	// Full session-signature verification — the whole point of #269.
 	peerPubKey, verifyErr := VerifyPeerHandshake(
 		req.Header,
 		sharedValue,
 		o.identity.EncodedPublicKey(),
-		o.handshakeConfigFor(),
+		hsCfg,
 	)
 	if verifyErr != nil {
 		if !errors.Is(verifyErr, ErrSelfConnection) && !errors.Is(verifyErr, ErrNetworkMismatch) {
@@ -660,8 +665,6 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	peer.mu.Lock()
 	peer.remotePubKey = peerPubKey
 	peer.mu.Unlock()
-
-	hsCfg := o.handshakeConfigFor()
 
 	peerRemote := tcpRemoteIP(tlsConn)
 	extras, extraErr := ParseHandshakeExtras(
