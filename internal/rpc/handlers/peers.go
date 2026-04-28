@@ -6,20 +6,19 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
-// PeersMethod handles the peers RPC method.
-// STUB: Returns empty peer list. Network-only — not needed for standalone mode.
-//
-// TODO [network]: Implement when adding P2P networking layer.
-//   - Requires: Overlay/PeerManager service providing connected peer info
-//   - Reference: rippled Peers.cpp → context.app.overlay().json()
-//   - Response should include per-peer: address, port, latency, version,
-//     ledger sequence, complete_ledgers range, cluster status
+// PeersMethod returns peers from ctx.PeerSource (rippled Peers.cpp).
+// Empty list when no source is wired (standalone mode).
 type PeersMethod struct{ AdminHandler }
 
 func (m *PeersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	return map[string]interface{}{
-		"peers": []interface{}{},
-	}, nil
+	var peers []map[string]any
+	if ctx.PeerSource != nil {
+		peers = ctx.PeerSource.PeersJSON()
+	}
+	if peers == nil {
+		peers = []map[string]any{}
+	}
+	return map[string]any{"peers": peers}, nil
 }
 
 // PeerReservationsAddMethod handles the peer_reservations_add RPC method.

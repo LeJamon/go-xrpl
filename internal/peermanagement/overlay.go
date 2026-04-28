@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -111,6 +113,7 @@ func BadDataWeight(reason string) int {
 		"validation-malformed-node-id-zero",
 		"handshake-malformed-networkid",
 		"handshake-malformed-networktime",
+		"handshake-malformed-extras",
 		"replay-delta-resp-decode",
 		"replay-delta-req-decode",
 		"replay-delta-req-bad",
@@ -161,6 +164,14 @@ type relayedEntry struct {
 type Overlay struct {
 	cfg      Config
 	identity *Identity
+
+	// instanceCookie: immutable post-New, lock-free.
+	instanceCookie uint64
+
+	// ledgerHintProvider: wired by a higher layer (avoids importing
+	// internal/ledger). Guarded by hintMu.
+	hintMu             sync.RWMutex
+	ledgerHintProvider func() (LedgerHints, bool)
 
 	// Components
 	discovery  *Discovery
@@ -219,6 +230,64 @@ type Overlay struct {
 // higher layer (e.g., consensus startup) can wire a LedgerProvider that
 // imports internal/ledger packages — which this layer cannot.
 func (o *Overlay) LedgerSync() *LedgerSyncHandler { return o.ledgerSync }
+
+// PeersWithClosedLedger returns peers whose last-known Closed-Ledger
+// hash equals target. The hash is seeded from the handshake hint and
+// refreshed by inbound mtSTATUS_CHANGE messages, mirroring the
+// PeerImp::closedLedgerHash_ field in rippled. This is a primitive for
+// callers that want a coarse "who advertised this LCL" filter; it is
+// NOT an analogue of rippled's catchup peer selection, which goes
+// through PeerImp::hasLedger(hash, seq) over [minLedger_, maxLedger_]
+// and the recentLedgers_ ring — state goXRPL does not yet track per
+// peer.
+func (o *Overlay) PeersWithClosedLedger(target [32]byte) []PeerID {
+	o.peersMu.RLock()
+	defer o.peersMu.RUnlock()
+
+	var matches []PeerID
+	for id, peer := range o.peers {
+		if peer.State() != PeerStateConnected {
+			continue
+		}
+		closed, ok := peer.ClosedLedger()
+		if ok && closed == target {
+			matches = append(matches, id)
+		}
+	}
+	return matches
+}
+
+// SetLedgerHintProvider wires the hint source; nil suppresses headers.
+func (o *Overlay) SetLedgerHintProvider(fn func() (LedgerHints, bool)) {
+	o.hintMu.Lock()
+	o.ledgerHintProvider = fn
+	o.hintMu.Unlock()
+}
+
+func (o *Overlay) ledgerHintProviderSnapshot() func() (LedgerHints, bool) {
+	o.hintMu.RLock()
+	defer o.hintMu.RUnlock()
+	return o.ledgerHintProvider
+}
+
+// generateInstanceCookie returns a value in [1, MAX-1] to match rippled
+// `1 + rand_int(prng, MAX-1)` from Application.cpp — both 0 and MAX are
+// excluded. Rejection sampling on the two boundary values keeps the
+// distribution uniform; the rejection probability is 2/2^64.
+func generateInstanceCookie() (uint64, error) {
+	const maxU64 = ^uint64(0)
+	for {
+		var b [8]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			return 0, err
+		}
+		v := binary.BigEndian.Uint64(b[:])
+		if v == 0 || v == maxU64 {
+			continue
+		}
+		return v, nil
+	}
+}
 
 // localValidatorPubKey returns the compressed secp256k1 public key of
 // the local validator, or nil when this node is not acting as a
@@ -310,18 +379,24 @@ func New(opts ...Option) (*Overlay, error) {
 		return nil, fmt.Errorf("identity error: %w", err)
 	}
 
+	cookie, err := generateInstanceCookie()
+	if err != nil {
+		return nil, fmt.Errorf("instance cookie: %w", err)
+	}
+
 	events := make(chan Event, 256)
 
 	o := &Overlay{
-		cfg:           cfg,
-		identity:      identity,
-		discovery:     NewDiscovery(&cfg, events),
-		ledgerSync:    NewLedgerSyncHandler(events),
-		peers:         make(map[PeerID]*Peer),
-		events:        events,
-		messages:      make(chan *InboundMessage, 256),
-		relayedIndex:  make(map[[32]byte]*relayedEntry),
-		clockForIndex: time.Now,
+		cfg:            cfg,
+		identity:       identity,
+		instanceCookie: cookie,
+		discovery:      NewDiscovery(&cfg, events),
+		ledgerSync:     NewLedgerSyncHandler(events),
+		peers:          make(map[PeerID]*Peer),
+		events:         events,
+		messages:       make(chan *InboundMessage, 256),
+		relayedIndex:   make(map[[32]byte]*relayedEntry),
+		clockForIndex:  time.Now,
 	}
 
 	// Wire reduce-relay callbacks. The squelch callback constructs and
@@ -333,6 +408,8 @@ func New(opts ...Option) (*Overlay, error) {
 	// ignored_squelch_callback are passed into Slot at construction
 	// (Slot.h:121-132 + Slot.h:112-113).
 	o.relay = NewRelayWithIgnoredCallback(&cfg, o.handleSquelch, o.chargeIgnoredSquelch)
+
+	o.ledgerSync.SetPeerLedgerHintLookup(o.PeersWithClosedLedger)
 
 	return o, nil
 }
@@ -568,6 +645,13 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	}
 	req.Body.Close()
 
+	// Server-Domain runs first (rippled Handshake.cpp:235-239 — the
+	// first throw in verifyHandshake).
+	if _, err := ValidateServerDomain(req.Header); err != nil {
+		o.IncPeerBadData(peer.ID(), "handshake-malformed-extras")
+		return NewHandshakeError(peer.Endpoint(), "verify_extras", err)
+	}
+
 	// R5.2 PARTIAL + R6.1 + R6.2: verify everything the handshake
 	// can enforce without the TLS shared-value signature (which is
 	// blocked by Go's c.serverFinished asymmetry — see
@@ -596,15 +680,19 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	peer.remotePubKey = peerPubKey
 	peer.mu.Unlock()
 
-	hsCfg := HandshakeConfig{
-		UserAgent:           o.cfg.UserAgent,
-		NetworkID:           o.cfg.NetworkID,
-		CrawlPublic:         false,
-		EnableLedgerReplay:  o.cfg.EnableLedgerReplay,
-		EnableCompression:   o.cfg.EnableCompression,
-		EnableVPReduceRelay: o.cfg.EnableVPReduceRelay,
-		EnableTxReduceRelay: o.cfg.EnableTxReduceRelay,
+	hsCfg := o.handshakeConfigFor()
+
+	peerRemote := tcpRemoteIP(tlsConn)
+	extras, extraErr := ParseHandshakeExtras(
+		req.Header,
+		o.cfg.PublicIP,
+		peerRemote,
+	)
+	if extraErr != nil {
+		o.IncPeerBadData(peer.ID(), "handshake-malformed-extras")
+		return NewHandshakeError(peer.Endpoint(), "verify_extras", extraErr)
 	}
+	peer.applyHandshakeExtras(extras)
 
 	// Capture the peer's advertised protocol features from the handshake
 	// request headers so downstream code can query e.g. whether this peer
@@ -619,11 +707,30 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	peer.mu.Unlock()
 
 	resp := BuildHandshakeResponse(o.identity, sharedValue, hsCfg)
+	addAddressHeaders(resp.Header, hsCfg, peerRemote)
 	if err := resp.Write(tlsConn); err != nil {
 		return NewHandshakeError(peer.Endpoint(), "send_response", err)
 	}
 
 	return nil
+}
+
+// handshakeConfigFor builds the per-handshake config used by both
+// inbound and outbound paths so they cannot drift.
+func (o *Overlay) handshakeConfigFor() HandshakeConfig {
+	return HandshakeConfig{
+		UserAgent:           o.cfg.UserAgent,
+		NetworkID:           o.cfg.NetworkID,
+		CrawlPublic:         false,
+		EnableLedgerReplay:  o.cfg.EnableLedgerReplay,
+		EnableCompression:   o.cfg.EnableCompression,
+		EnableVPReduceRelay: o.cfg.EnableVPReduceRelay,
+		EnableTxReduceRelay: o.cfg.EnableTxReduceRelay,
+		InstanceCookie:      o.instanceCookie,
+		ServerDomain:        o.cfg.ServerDomain,
+		PublicIP:            o.cfg.PublicIP,
+		LedgerHintProvider:  o.ledgerHintProviderSnapshot(),
+	}
 }
 
 // eventLoop processes internal events.
@@ -733,6 +840,13 @@ func (o *Overlay) onMessageReceived(evt Event) {
 				"t", "Overlay", "peer", evt.PeerID)
 		}
 		o.handleSquelchMessage(evt)
+		return
+	}
+
+	// mtSTATUS_CHANGE refreshes Closed-/Previous-Ledger hints
+	// (PeerImp.cpp:1812-1862).
+	if msgType == message.TypeStatusChange {
+		o.handleStatusChange(evt)
 		return
 	}
 
@@ -895,6 +1009,25 @@ func (o *Overlay) dispatchProofPathRequest(evt Event) {
 			o.IncPeerBadData(evt.PeerID, "proof-path-req-bad")
 		}
 	}
+}
+
+func (o *Overlay) handleStatusChange(evt Event) {
+	decoded, err := message.Decode(message.TypeStatusChange, evt.Payload)
+	if err != nil {
+		slog.Debug("StatusChange decode failed", "t", "Overlay", "peer", evt.PeerID, "err", err)
+		return
+	}
+	sc, ok := decoded.(*message.StatusChange)
+	if !ok {
+		return
+	}
+	o.peersMu.RLock()
+	peer, exists := o.peers[evt.PeerID]
+	o.peersMu.RUnlock()
+	if !exists {
+		return
+	}
+	peer.applyStatusChange(sc.LedgerHash, sc.LedgerHashPrevious, sc.NewEvent == message.NodeEventLostSync)
 }
 
 // handleSquelchMessage processes an inbound TMSquelch from a peer and
@@ -1201,15 +1334,7 @@ func (o *Overlay) Connect(addr string) error {
 
 	peerID := PeerID(o.nextID.Add(1))
 	peer := NewPeer(peerID, endpoint, false, o.identity, o.events)
-	peer.handshakeCfg = HandshakeConfig{
-		UserAgent:           o.cfg.UserAgent,
-		NetworkID:           o.cfg.NetworkID,
-		CrawlPublic:         false,
-		EnableLedgerReplay:  o.cfg.EnableLedgerReplay,
-		EnableCompression:   o.cfg.EnableCompression,
-		EnableVPReduceRelay: o.cfg.EnableVPReduceRelay,
-		EnableTxReduceRelay: o.cfg.EnableTxReduceRelay,
-	}
+	peer.handshakeCfg = o.handshakeConfigFor()
 
 	o.events <- Event{
 		Type:     EventPeerConnecting,
@@ -1488,6 +1613,35 @@ func (o *Overlay) Peers() []PeerInfo {
 		result = append(result, peer.Info())
 	}
 	return result
+}
+
+// PeersJSON implements types.PeerSource for the `peers` RPC method.
+// Strict subset of rippled PeerImp::json (PeerImp.cpp:388-503): only
+// fields that rippled actually emits AND for which goXRPL has the data.
+// Missing rippled fields (network_id, version, protocol, latency,
+// complete_ledgers, track, status, load, metrics, cluster/name) are
+// tracked as separate follow-ups.
+func (o *Overlay) PeersJSON() []map[string]any {
+	list := o.Peers()
+	out := make([]map[string]any, 0, len(list))
+	for _, p := range list {
+		entry := map[string]any{
+			"address":    p.Endpoint.String(),
+			"public_key": p.PublicKey,
+			"uptime":     int64(time.Since(p.ConnectedAt).Seconds()),
+		}
+		if p.Inbound {
+			entry["inbound"] = true
+		}
+		if p.ServerDomain != "" {
+			entry["server_domain"] = p.ServerDomain
+		}
+		if p.ClosedLedger != "" {
+			entry["ledger"] = p.ClosedLedger
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // PeerCount returns the number of connected peers.

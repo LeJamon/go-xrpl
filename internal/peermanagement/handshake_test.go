@@ -1,8 +1,15 @@
 package peermanagement
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"math"
+	"net"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -263,21 +270,36 @@ func TestVerifyHandshakeHeadersNoSig(t *testing.T) {
 		assert.Equal(t, remoteId.EncodedPublicKey(), pk.Encode())
 	})
 
-	t.Run("mainnet_rejects_nonzero_networkid", func(t *testing.T) {
-		// Pre-R6.1: mainnet (NetworkID=0) silently accepted any
-		// Network-ID the peer advertised. Now we reject.
+	t.Run("unconfigured_local_accepts_any_peer_networkid", func(t *testing.T) {
+		// localNetworkID=0 means "unconfigured" (rippled
+		// `networkID = std::nullopt`). Handshake.cpp:241-250 only
+		// throws inside `if (networkID && nid != *networkID)`, so
+		// any peer-advertised Network-ID is accepted when we have
+		// no local config.
 		h := mkHeaders(remoteId.EncodedPublicKey(), "1", xrplNow())
 		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 0)
+		require.NoError(t, err,
+			"unconfigured local Network-ID must accept any peer Network-ID to mirror rippled")
+	})
+
+	t.Run("configured_local_rejects_mismatched_peer_networkid", func(t *testing.T) {
+		// With a non-zero local Network-ID, a peer advertising a
+		// different Network-ID is rejected — rippled's
+		// `networkID && nid != *networkID` enters and throws.
+		h := mkHeaders(remoteId.EncodedPublicKey(), "1", xrplNow())
+		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 2)
 		assert.ErrorIs(t, err, ErrNetworkMismatch,
-			"mainnet must reject a peer advertising Network-ID=1 (testnet)")
+			"configured local Network-ID=2 must reject peer advertising Network-ID=1")
 	})
 
 	t.Run("non_default_network_peer_missing_netid", func(t *testing.T) {
-		// Symmetric case: we're on network 2, peer omits Network-ID.
+		// Rippled (Handshake.cpp:241-250) only enters the comparison
+		// branch when Network-ID is present; a missing header is
+		// silently accepted regardless of local config.
 		h := mkHeaders(remoteId.EncodedPublicKey(), "", xrplNow())
 		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 2)
-		assert.ErrorIs(t, err, ErrNetworkMismatch,
-			"non-default-network node must reject a peer omitting Network-ID")
+		require.NoError(t, err,
+			"missing Network-ID is silently accepted to mirror rippled")
 	})
 
 	t.Run("malformed_networkid_rejected", func(t *testing.T) {
@@ -1182,5 +1204,591 @@ func TestPeerFeatureEnabled(t *testing.T) {
 			got := PeerFeatureEnabled(headers, tt.feature, tt.value, tt.localEnabled)
 			assert.Equal(t, tt.want, got)
 		})
+	}
+}
+
+// newTestOverlayWithPeers returns a partially-initialised Overlay
+// whose only valid surface is the peers map + peersMu — enough to
+// drive PeersWithClosedLedger / PeersJSON in tests that don't need a
+// running overlay.
+func newTestOverlayWithPeers(peers map[PeerID]*Peer) *Overlay {
+	return &Overlay{peers: peers}
+}
+
+// buildAllHeadersRequest builds a handshake request with every issue-#270
+// header set. peerRemote drives Remote-IP / Local-IP emission.
+func buildAllHeadersRequest(t *testing.T, id *Identity, cfg HandshakeConfig, peerRemote net.IP) http.Header {
+	t.Helper()
+	sharedValue := make([]byte, 32)
+	for i := range sharedValue {
+		sharedValue[i] = byte(i + 7)
+	}
+	req, err := BuildHandshakeRequest(id, sharedValue, cfg)
+	require.NoError(t, err)
+	if peerRemote != nil {
+		addAddressHeaders(req.Header, cfg, peerRemote)
+	}
+	return req.Header
+}
+
+// Strict rippled parity: Instance-Cookie round-trips but is NEVER
+// compared (Handshake.cpp:226-362). Self-connection stays pubkey-only
+// at line 322. This test verifies both halves.
+func TestHandshake_InstanceCookie_DetectsSelfConnection(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	const cookie uint64 = 0xDEADBEEFCAFEBABE
+	cfg := DefaultHandshakeConfig()
+	cfg.InstanceCookie = cookie
+
+	headers := buildAllHeadersRequest(t, id, cfg, nil)
+	require.Equal(t, strconv.FormatUint(cookie, 10), headers.Get(HeaderInstanceCookie))
+
+	// Strict rippled parity: the cookie is on the wire (Handshake.cpp:208)
+	// but verifyHandshake never inspects it. ParseHandshakeExtras must
+	// not fail on it and must not surface a typed value.
+	_, err = ParseHandshakeExtras(headers, nil, nil)
+	require.NoError(t, err)
+
+	// The rippled-canonical self-connection signal is pubkey identity
+	// (Handshake.cpp:322 publicKey == app.nodeIdentity().first). Verify
+	// that path still fires when the peer's pubkey matches our own.
+	netTime := strconvUnixXRPL(time.Now())
+	selfHeaders := http.Header{}
+	selfHeaders.Set(HeaderPublicKey, id.EncodedPublicKey())
+	selfHeaders.Set(HeaderNetworkTime, netTime)
+	_, err = VerifyHandshakeHeadersNoSig(selfHeaders, id.EncodedPublicKey(), 0)
+	assert.ErrorIs(t, err, ErrSelfConnection,
+		"matching Public-Key triggers self-connection — the only signal rippled uses")
+}
+
+// Closed-Ledger / Previous-Ledger hints round-trip and end up readable
+// on Peer accessors (mirrors PeerImp storing closedLedgerHash_).
+func TestHandshake_ClosedLedgerHint_ReadableAfterHandshake(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	var closed, parent [32]byte
+	for i := range closed {
+		closed[i] = byte(i + 1)
+		parent[i] = byte(0xFF - i)
+	}
+
+	cfg := DefaultHandshakeConfig()
+	cfg.LedgerHintProvider = func() (LedgerHints, bool) {
+		return LedgerHints{Closed: closed, Parent: parent}, true
+	}
+
+	headers := buildAllHeadersRequest(t, id, cfg, nil)
+	require.Equal(t, strings.ToUpper(hex.EncodeToString(closed[:])), headers.Get(HeaderClosedLedger))
+	require.Equal(t, strings.ToUpper(hex.EncodeToString(parent[:])), headers.Get(HeaderPreviousLedger))
+
+	extras, err := ParseHandshakeExtras(headers, nil, nil)
+	require.NoError(t, err)
+	assert.True(t, extras.HasClosedLedger, "Closed-Ledger header must mark closed hint as present")
+	assert.True(t, extras.HasPreviousLedger, "Previous-Ledger header must mark previous hint as present")
+	assert.Equal(t, closed, extras.ClosedLedger)
+	assert.Equal(t, parent, extras.PreviousLedger)
+
+	// Confirm Peer accessor surface produces the same values.
+	peer := NewPeer(1, Endpoint{Host: "127.0.0.1", Port: 1234}, true, id, nil)
+	peer.applyHandshakeExtras(extras)
+	gotClosed, ok := peer.ClosedLedger()
+	require.True(t, ok)
+	assert.Equal(t, closed, gotClosed)
+	gotParent, hasParent := peer.PreviousLedger()
+	assert.True(t, hasParent)
+	assert.Equal(t, parent, gotParent)
+}
+
+// Rippled accepts Closed-Ledger without Previous-Ledger
+// (PeerImp.cpp:198-201 — each is set independently). The peer must
+// surface only the closed hint, with PreviousLedger() reporting
+// "absent" rather than the zero hash.
+func TestHandshake_ClosedLedgerWithoutPrevious(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	var closed [32]byte
+	for i := range closed {
+		closed[i] = byte(i + 1)
+	}
+
+	headers := http.Header{}
+	headers.Set(HeaderClosedLedger, strings.ToUpper(hex.EncodeToString(closed[:])))
+
+	extras, err := ParseHandshakeExtras(headers, nil, nil)
+	require.NoError(t, err)
+	assert.True(t, extras.HasClosedLedger)
+	assert.False(t, extras.HasPreviousLedger,
+		"missing Previous-Ledger must not be inferred from Closed-Ledger presence")
+	assert.Equal(t, closed, extras.ClosedLedger)
+	assert.Equal(t, [32]byte{}, extras.PreviousLedger)
+
+	peer := NewPeer(1, Endpoint{Host: "127.0.0.1", Port: 1234}, true, id, nil)
+	peer.applyHandshakeExtras(extras)
+	gotClosed, hasClosed := peer.ClosedLedger()
+	require.True(t, hasClosed)
+	assert.Equal(t, closed, gotClosed)
+	_, hasPrev := peer.PreviousLedger()
+	assert.False(t, hasPrev,
+		"PreviousLedger() must report absent when peer omitted the header")
+}
+
+// Remote-IP consistency check per Handshake.cpp:340-359.
+func TestHandshake_RemoteIPSelfReported_MatchesTcpConn(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	publicIP := net.ParseIP("198.51.100.1")
+	cfg := DefaultHandshakeConfig()
+	cfg.PublicIP = publicIP
+
+	t.Run("matching_public_ip_passes", func(t *testing.T) {
+		headers := buildAllHeadersRequest(t, id, cfg, publicIP)
+		require.Equal(t, "198.51.100.1", headers.Get(HeaderRemoteIP))
+
+		_, err := ParseHandshakeExtras(headers, publicIP, publicIP)
+		require.NoError(t, err)
+	})
+
+	t.Run("mismatched_public_ip_rejected", func(t *testing.T) {
+		headers := buildAllHeadersRequest(t, id, cfg, publicIP)
+		// Peer claims our IP is 203.0.113.5 — but our config says
+		// otherwise and they connected from a public address. Reject.
+		headers.Set(HeaderRemoteIP, "203.0.113.5")
+
+		_, err := ParseHandshakeExtras(headers, publicIP, publicIP)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrInvalidHandshake))
+		assert.Contains(t, err.Error(), "Incorrect Remote-IP")
+	})
+
+	t.Run("loopback_peer_skips_check", func(t *testing.T) {
+		// Same mismatched header, but the peer connected from
+		// loopback — rippled and we both skip the comparison.
+		headers := buildAllHeadersRequest(t, id, cfg, publicIP)
+		headers.Set(HeaderRemoteIP, "203.0.113.5")
+
+		_, err := ParseHandshakeExtras(headers, publicIP, net.ParseIP("127.0.0.1"))
+		require.NoError(t, err)
+	})
+
+	t.Run("malformed_remote_ip_rejected", func(t *testing.T) {
+		headers := buildAllHeadersRequest(t, id, cfg, publicIP)
+		headers.Set(HeaderRemoteIP, "not-an-ip")
+
+		_, err := ParseHandshakeExtras(headers, publicIP, publicIP)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrInvalidHandshake))
+		assert.Contains(t, err.Error(), "invalid Remote-IP")
+	})
+}
+
+// Round-trip topology: sender A (public IP pA) → receiver B (public IP pB).
+// Verifies the full set of issue-#270 headers + IP consistency
+// (Handshake.cpp:325-359).
+func TestHandshake_AllHeaders_RoundTrip(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	pA := net.ParseIP("198.51.100.42") // sender's public IP
+	pB := net.ParseIP("203.0.113.7")   // receiver's public IP
+
+	var closed, parent [32]byte
+	for i := range closed {
+		closed[i] = byte(i)
+		parent[i] = byte(0xA0 + i)
+	}
+
+	// Sender's HandshakeConfig: PublicIP = pA. Sender sees peer (B) at
+	// pB, so addAddressHeaders emits Remote-IP=pB, Local-IP=pA.
+	senderCfg := DefaultHandshakeConfig()
+	senderCfg.InstanceCookie = 0x1234567890ABCDEF
+	senderCfg.ServerDomain = "validator.example.com"
+	senderCfg.PublicIP = pA
+	senderCfg.LedgerHintProvider = func() (LedgerHints, bool) {
+		return LedgerHints{Closed: closed, Parent: parent}, true
+	}
+
+	t.Run("request_path", func(t *testing.T) {
+		// Build with sender's view: peer (B) is at pB.
+		headers := buildAllHeadersRequest(t, id, senderCfg, pB)
+
+		// Wire-level checks: each header is present in the right form.
+		assert.Equal(t, strconv.FormatUint(senderCfg.InstanceCookie, 10), headers.Get(HeaderInstanceCookie))
+		assert.Equal(t, "validator.example.com", headers.Get(HeaderServerDomain))
+		assert.Equal(t, strings.ToUpper(hex.EncodeToString(closed[:])), headers.Get(HeaderClosedLedger))
+		assert.Equal(t, strings.ToUpper(hex.EncodeToString(parent[:])), headers.Get(HeaderPreviousLedger))
+		assert.Equal(t, pB.String(), headers.Get(HeaderRemoteIP))
+		assert.Equal(t, pA.String(), headers.Get(HeaderLocalIP))
+
+		// Existing X-Protocol-Ctl / Public-Key / Network-Time still emitted.
+		assert.NotEmpty(t, headers.Get(HeaderPublicKey))
+		assert.NotEmpty(t, headers.Get(HeaderSessionSignature))
+		assert.NotEmpty(t, headers.Get(HeaderNetworkTime))
+
+		// Parse from the receiver (B)'s vantage: peerRemote=pA,
+		// localPublicIP=pB. Strict rippled parity: only the headers
+		// rippled stores typed (Server-Domain, Closed/Previous-Ledger)
+		// surface on extras. Instance-Cookie and IP self-reports are
+		// validated and discarded.
+		extras, err := ParseHandshakeExtras(headers, pB, pA)
+		require.NoError(t, err)
+		assert.Equal(t, senderCfg.ServerDomain, extras.ServerDomain)
+		assert.True(t, extras.HasClosedLedger)
+		assert.True(t, extras.HasPreviousLedger)
+		assert.Equal(t, closed, extras.ClosedLedger)
+		assert.Equal(t, parent, extras.PreviousLedger)
+	})
+
+	t.Run("response_path", func(t *testing.T) {
+		sharedValue := make([]byte, 32)
+		resp := BuildHandshakeResponse(id, sharedValue, senderCfg)
+		// Sender (now the responder) sees peer (now the requester) at
+		// pB and emits its own Local-IP = pA.
+		addAddressHeaders(resp.Header, senderCfg, pB)
+
+		// Symmetric checks. The response must carry the same six
+		// headers — without them the inbound peer can't enforce the
+		// rippled-style consistency contract on us either.
+		assert.Equal(t, strconv.FormatUint(senderCfg.InstanceCookie, 10), resp.Header.Get(HeaderInstanceCookie))
+		assert.Equal(t, "validator.example.com", resp.Header.Get(HeaderServerDomain))
+		assert.Equal(t, strings.ToUpper(hex.EncodeToString(closed[:])), resp.Header.Get(HeaderClosedLedger))
+		assert.Equal(t, strings.ToUpper(hex.EncodeToString(parent[:])), resp.Header.Get(HeaderPreviousLedger))
+		assert.Equal(t, pB.String(), resp.Header.Get(HeaderRemoteIP))
+		assert.Equal(t, pA.String(), resp.Header.Get(HeaderLocalIP))
+
+		extras, err := ParseHandshakeExtras(resp.Header, pB, pA)
+		require.NoError(t, err)
+		assert.Equal(t, senderCfg.ServerDomain, extras.ServerDomain)
+		assert.True(t, extras.HasClosedLedger)
+		assert.True(t, extras.HasPreviousLedger)
+	})
+
+	t.Run("malformed_server_domain_rejected", func(t *testing.T) {
+		// Server-Domain is the first thing rippled validates
+		// (Handshake.cpp:235-239), so the dedicated validator runs
+		// upstream of ParseHandshakeExtras.
+		headers := buildAllHeadersRequest(t, id, senderCfg, pB)
+		headers.Set(HeaderServerDomain, "-bad.example.com") // leading hyphen
+
+		_, err := ValidateServerDomain(headers)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid Server-Domain")
+	})
+}
+
+// Catchup peer-picker reads Closed-Ledger handshake hints (rippled
+// NetworkOPs / PeerImp::closedLedgerHash_).
+func TestLedgerSync_PreferredPeersForLedger_ConsumesClosedLedgerHint(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	var target, parent [32]byte
+	for i := range target {
+		target[i] = byte(0xCC)
+		parent[i] = byte(0xBB)
+	}
+
+	mkPeer := func(idNum PeerID, hint *[32]byte) *Peer {
+		p := NewPeer(idNum, Endpoint{Host: "127.0.0.1", Port: 1000 + uint16(idNum)}, false, id, nil)
+		p.setState(PeerStateConnected)
+		if hint != nil {
+			p.applyHandshakeExtras(HandshakeExtras{
+				ClosedLedger:      *hint,
+				PreviousLedger:    parent,
+				HasClosedLedger:   true,
+				HasPreviousLedger: true,
+			})
+		}
+		return p
+	}
+
+	overlay := newTestOverlayWithPeers(map[PeerID]*Peer{
+		1: mkPeer(1, &target), // matches → expected
+		2: mkPeer(2, &[32]byte{0xAA}), // different hint → filtered
+		3: mkPeer(3, nil),     // no hint → filtered
+		4: mkPeer(4, &target), // matches → expected
+		// peer 5: disconnected with matching hint → filtered by state.
+		5: func() *Peer {
+			p := NewPeer(5, Endpoint{}, false, id, nil)
+			p.applyHandshakeExtras(HandshakeExtras{ClosedLedger: target, HasClosedLedger: true})
+			return p
+		}(),
+	})
+
+	got := overlay.PeersWithClosedLedger(target)
+	want := map[PeerID]struct{}{1: {}, 4: {}}
+	assert.Len(t, got, len(want))
+	for _, id := range got {
+		_, ok := want[id]
+		assert.True(t, ok, "unexpected peer %d in result", id)
+	}
+}
+
+// applyStatusChange mirrors PeerImp.cpp:1812-1862.
+func TestApplyStatusChange_RippledSemantics(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	mk := func() *Peer {
+		p := NewPeer(1, Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
+		var initialClosed, initialParent [32]byte
+		for i := range initialClosed {
+			initialClosed[i] = byte(0x11)
+			initialParent[i] = byte(0x22)
+		}
+		p.applyHandshakeExtras(HandshakeExtras{
+			ClosedLedger:      initialClosed,
+			PreviousLedger:    initialParent,
+			HasClosedLedger:   true,
+			HasPreviousLedger: true,
+		})
+		return p
+	}
+
+	t.Run("lost_sync_zeroes_both", func(t *testing.T) {
+		p := mk()
+		p.applyStatusChange(nil, nil, true)
+		_, hasC := p.ClosedLedger()
+		_, hasP := p.PreviousLedger()
+		assert.False(t, hasC)
+		assert.False(t, hasP)
+	})
+
+	t.Run("updates_to_new_pair", func(t *testing.T) {
+		p := mk()
+		var newClosed, newParent [32]byte
+		for i := range newClosed {
+			newClosed[i] = byte(0xAA)
+			newParent[i] = byte(0xBB)
+		}
+		p.applyStatusChange(newClosed[:], newParent[:], false)
+		gotC, hasC := p.ClosedLedger()
+		gotP, hasP := p.PreviousLedger()
+		assert.True(t, hasC)
+		assert.True(t, hasP)
+		assert.Equal(t, newClosed, gotC)
+		assert.Equal(t, newParent, gotP)
+	})
+
+	t.Run("missing_closed_zeroes_closed_only", func(t *testing.T) {
+		p := mk()
+		var newParent [32]byte
+		for i := range newParent {
+			newParent[i] = byte(0xCC)
+		}
+		p.applyStatusChange(nil, newParent[:], false)
+		_, hasC := p.ClosedLedger()
+		gotP, hasP := p.PreviousLedger()
+		assert.False(t, hasC)
+		assert.True(t, hasP)
+		assert.Equal(t, newParent, gotP)
+	})
+
+	t.Run("malformed_closed_zeroes_closed", func(t *testing.T) {
+		p := mk()
+		p.applyStatusChange([]byte{0x01, 0x02}, nil, false) // 2 bytes ≠ 32
+		_, hasC := p.ClosedLedger()
+		_, hasP := p.PreviousLedger()
+		assert.False(t, hasC)
+		assert.False(t, hasP)
+	})
+}
+
+// Malformed Closed-Ledger / Previous-Ledger / Previous-without-Closed
+// must fail the handshake (PeerImp.cpp:175-194).
+func TestHandshake_MalformedLedgerHashRejected(t *testing.T) {
+	t.Run("malformed_closed_ledger", func(t *testing.T) {
+		h := http.Header{}
+		h.Set(HeaderClosedLedger, "not-hex-not-base64")
+		_, err := ParseHandshakeExtras(h, nil, nil)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidHandshake)
+		assert.Contains(t, err.Error(), "malformed Closed-Ledger")
+	})
+
+	t.Run("malformed_previous_ledger", func(t *testing.T) {
+		var closed [32]byte
+		closed[0] = 0xAA
+		h := http.Header{}
+		h.Set(HeaderClosedLedger, hex.EncodeToString(closed[:]))
+		h.Set(HeaderPreviousLedger, "garbage")
+		_, err := ParseHandshakeExtras(h, nil, nil)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidHandshake)
+		assert.Contains(t, err.Error(), "malformed Previous-Ledger")
+	})
+
+	t.Run("previous_without_closed", func(t *testing.T) {
+		var parent [32]byte
+		parent[0] = 0xBB
+		h := http.Header{}
+		h.Set(HeaderPreviousLedger, hex.EncodeToString(parent[:]))
+		_, err := ParseHandshakeExtras(h, nil, nil)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidHandshake)
+		assert.Contains(t, err.Error(), "Previous-Ledger without Closed-Ledger")
+	})
+}
+
+// generateInstanceCookie must produce values in [1, MAX-1] (both 0 and
+// MAX excluded) to match rippled `1 + rand_int(prng, MAX-1)`.
+func TestInstanceCookie_GeneratorRange(t *testing.T) {
+	for i := 0; i < 10000; i++ {
+		v, err := generateInstanceCookie()
+		require.NoError(t, err)
+		assert.NotZero(t, v, "cookie must never be zero")
+		assert.NotEqual(t, uint64(math.MaxUint64), v,
+			"cookie must never be MAX (rippled excludes both 0 and MAX)")
+	}
+}
+
+// isPublicIP must mirror beast::IP::is_public: IPv4 link-local stays
+// public (rippled IPAddressV4.cpp only flags RFC1918+loopback); IPv6
+// link-local is private to match rippled IPAddressV6.cpp's `(byte0 &
+// 0xfd)` catching fe80::/10. Loopback / RFC1918 / multicast are private
+// in both families.
+func TestIsPublicIP_BeastParity(t *testing.T) {
+	cases := []struct {
+		name string
+		ip   string
+		want bool
+	}{
+		{"public_v4", "8.8.8.8", true},
+		{"link_local_v4", "169.254.1.1", true},
+		{"loopback_v4", "127.0.0.1", false},
+		{"rfc1918_10", "10.0.0.1", false},
+		{"rfc1918_172_16", "172.16.5.4", false},
+		{"rfc1918_192_168", "192.168.1.1", false},
+		{"multicast_v4", "224.0.0.1", false},
+		{"unspecified_v4", "0.0.0.0", false},
+		{"public_v6", "2001:db8::1", true},
+		{"loopback_v6", "::1", false},
+		{"unspecified_v6", "::", false},
+		{"ula_v6", "fc00::1", false},
+		{"link_local_v6", "fe80::1", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isPublicIP(net.ParseIP(tc.ip)))
+		})
+	}
+}
+
+// ipFamilyEqual must match boost::asio::ip::address::operator==:
+// "::ffff:1.2.3.4" (v6 textual form) and "1.2.3.4" (v4 textual form)
+// are treated as different addresses despite normalising to the same
+// bytes via net.ParseIP.
+func TestIpFamilyEqual_BoostParity(t *testing.T) {
+	v4 := net.ParseIP("1.2.3.4")
+	v4mapped := net.ParseIP("::ffff:1.2.3.4")
+	require.NotNil(t, v4)
+	require.NotNil(t, v4mapped)
+
+	assert.True(t, ipFamilyEqual(v4, v4, false, false), "same v4 must be equal")
+	assert.False(t, ipFamilyEqual(v4, v4mapped, false, true), "v4 vs v4-mapped-v6 must differ")
+	assert.False(t, ipFamilyEqual(v4mapped, v4, true, false), "v4-mapped-v6 vs v4 must differ")
+	assert.True(t, ipFamilyEqual(v4mapped, v4mapped, true, true), "same v4-mapped-v6 must be equal")
+}
+
+// isWellFormedDomain must agree with rippled's regex
+// (StringUtilities.cpp:142-153). Go regexp has no lookarounds, so the
+// no-leading/trailing-hyphen rule is encoded directly.
+func TestIsWellFormedDomain_RegexCrossCheck(t *testing.T) {
+	rippledLike := regexp.MustCompile(
+		`^([A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$`,
+	)
+	check := func(s string) bool {
+		if len(s) < 4 || len(s) > 128 {
+			return false
+		}
+		return rippledLike.MatchString(s)
+	}
+
+	inputs := []string{
+		"a.io", "example.com", "validator.example.com", "node-1.example.org",
+		"a.b.c.d.example.com", "X-1.X-2.example.io",
+		"localhost", "example", "a.b", "x.123", "a.b.c",
+		"-bad.example.com", "bad-.example.com", "_bad.example.com",
+		"example.com.", "example..com", ".example.com",
+		"", "a",
+		strings.Repeat("a", 64) + ".example.com",
+		strings.Repeat("a", 200) + ".com",
+		"foo.bar.MUSEUM",
+	}
+	for _, s := range inputs {
+		want := check(s)
+		got := isWellFormedDomain(s)
+		assert.Equal(t, want, got, "isWellFormedDomain(%q): want=%v got=%v", s, want, got)
+	}
+}
+
+// isWellFormedDomain matches rippled's isProperlyFormedTomlDomain
+// (StringUtilities.cpp:131-156).
+func TestIsWellFormedDomain_TomlParity(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"valid_two_label", "a.io", true},
+		{"valid_subdomain", "validator.example.com", true},
+		{"valid_with_digits", "node-1.example.org", true},
+		{"too_short", "a.b", false},
+		{"too_long", strings.Repeat("a", 120) + ".example.com", false},
+		{"single_label", "example", false},
+		{"numeric_tld", "x.123", false},
+		{"one_char_tld", "a.b.c", false},
+		{"trailing_dot", "example.com.", false},
+		{"leading_hyphen_label", "-bad.example.com", false},
+		{"trailing_hyphen_label", "bad-.example.com", false},
+		{"empty", "", false},
+		{"underscore", "bad_label.example.com", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isWellFormedDomain(tc.in))
+		})
+	}
+}
+
+// WriteRawHandshakeRequest must place every issue-#270 header on the
+// wire — the whitelist in the writer is otherwise uncovered.
+func TestWriteRawHandshakeRequest_EmitsAllNewHeaders(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	var closed, parent [32]byte
+	for i := range closed {
+		closed[i] = byte(i)
+		parent[i] = byte(0x80 + i)
+	}
+	cfg := DefaultHandshakeConfig()
+	cfg.InstanceCookie = 0xCAFEBABE12345678
+	cfg.ServerDomain = "example.com"
+	cfg.PublicIP = net.ParseIP("198.51.100.10")
+	cfg.LedgerHintProvider = func() (LedgerHints, bool) {
+		return LedgerHints{Closed: closed, Parent: parent}, true
+	}
+	req, err := BuildHandshakeRequest(id, make([]byte, 32), cfg)
+	require.NoError(t, err)
+	addAddressHeaders(req.Header, cfg, net.ParseIP("203.0.113.5"))
+
+	var buf bytes.Buffer
+	require.NoError(t, WriteRawHandshakeRequest(&buf, req))
+	wire := buf.String()
+
+	for _, h := range []string{
+		HeaderInstanceCookie + ": ",
+		HeaderServerDomain + ": example.com",
+		HeaderClosedLedger + ": " + strings.ToUpper(hex.EncodeToString(closed[:])),
+		HeaderPreviousLedger + ": " + strings.ToUpper(hex.EncodeToString(parent[:])),
+		HeaderRemoteIP + ": 203.0.113.5",
+		HeaderLocalIP + ": 198.51.100.10",
+	} {
+		assert.Contains(t, wire, h, "missing %s on the wire", h)
 	}
 }

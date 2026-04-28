@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -84,6 +86,17 @@ type Peer struct {
 	// a persistent offender eventually evicts. Stored as int64 to
 	// accommodate potential negative values from decay overshoot.
 	badDataBalance atomic.Int64
+
+	// closedLedger / previousLedger are also refreshed by inbound
+	// mtSTATUS_CHANGE (PeerImp.cpp:1812-1862). Rippled stores both as
+	// typed `closedLedgerHash_` / `previousLedgerHash_` on PeerImp.
+	// serverDomain mirrors rippled's `domain()` accessor reading from
+	// its `headers_["Server-Domain"]` map.
+	serverDomain      string
+	closedLedger      [32]byte
+	previousLedger    [32]byte
+	hasClosedLedger   bool
+	hasPreviousLedger bool
 }
 
 // PeerConfig holds peer connection configuration.
@@ -176,6 +189,74 @@ func (p *Peer) Capabilities() *PeerCapabilities {
 	return p.capabilities
 }
 
+func (p *Peer) applyHandshakeExtras(x HandshakeExtras) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.serverDomain = x.ServerDomain
+	if x.HasClosedLedger {
+		p.closedLedger = x.ClosedLedger
+		p.hasClosedLedger = true
+	} else {
+		p.closedLedger = [32]byte{}
+		p.hasClosedLedger = false
+	}
+	if x.HasPreviousLedger {
+		p.previousLedger = x.PreviousLedger
+		p.hasPreviousLedger = true
+	} else {
+		p.previousLedger = [32]byte{}
+		p.hasPreviousLedger = false
+	}
+}
+
+// applyStatusChange mirrors rippled PeerImp.cpp:1812-1862.
+func (p *Peer) applyStatusChange(closed, previous []byte, lostSync bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if lostSync {
+		p.hasClosedLedger = false
+		p.hasPreviousLedger = false
+		p.closedLedger = [32]byte{}
+		p.previousLedger = [32]byte{}
+		return
+	}
+	if len(closed) == 32 {
+		copy(p.closedLedger[:], closed)
+		p.hasClosedLedger = true
+	} else {
+		p.hasClosedLedger = false
+		p.closedLedger = [32]byte{}
+	}
+	if len(previous) == 32 {
+		copy(p.previousLedger[:], previous)
+		p.hasPreviousLedger = true
+	} else {
+		p.hasPreviousLedger = false
+		p.previousLedger = [32]byte{}
+	}
+}
+
+// ServerDomain mirrors rippled's `PeerImp::domain()` (PeerImp.cpp:842).
+func (p *Peer) ServerDomain() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.serverDomain
+}
+
+// ClosedLedger returns (hash, ok); ok is false when no valid hint.
+func (p *Peer) ClosedLedger() ([32]byte, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.closedLedger, p.hasClosedLedger
+}
+
+// PreviousLedger returns (hash, ok); ok is false when no valid hint.
+func (p *Peer) PreviousLedger() ([32]byte, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.previousLedger, p.hasPreviousLedger
+}
+
 // Connect establishes connection to the peer (outbound).
 func (p *Peer) Connect(ctx context.Context, cfg PeerConfig) error {
 	p.mu.Lock()
@@ -241,6 +322,10 @@ func (p *Peer) performHandshake(ctx context.Context, tlsConn *tls.Conn) error {
 		return NewHandshakeError(p.endpoint, "build_request", err)
 	}
 
+	if peerIP := tcpRemoteIP(tlsConn); peerIP != nil {
+		addAddressHeaders(req.Header, p.handshakeCfg, peerIP)
+	}
+
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		deadline = time.Now().Add(DefaultHandshakeTimeout)
@@ -289,7 +374,32 @@ func (p *Peer) performHandshake(ctx context.Context, tlsConn *tls.Conn) error {
 	p.capabilities = caps
 	p.mu.Unlock()
 
+	if _, err := ValidateServerDomain(resp.Header); err != nil {
+		return NewHandshakeError(p.endpoint, "verify_extras", err)
+	}
+	extras, err := ParseHandshakeExtras(
+		resp.Header,
+		p.handshakeCfg.PublicIP,
+		tcpRemoteIP(tlsConn),
+	)
+	if err != nil {
+		return NewHandshakeError(p.endpoint, "verify_extras", err)
+	}
+	p.applyHandshakeExtras(extras)
+
 	return nil
+}
+
+func tcpRemoteIP(conn net.Conn) net.IP {
+	addr, ok := conn.RemoteAddr().(*net.TCPAddr)
+	if !ok {
+		host, _, err := net.SplitHostPort(conn.RemoteAddr().String())
+		if err != nil {
+			return nil
+		}
+		return net.ParseIP(host)
+	}
+	return addr.IP
 }
 
 // Run starts the peer's read/write/ping loops.
@@ -622,6 +732,12 @@ type PeerInfo struct {
 	ConnectedAt time.Time
 	MessagesIn  uint64
 	MessagesOut uint64
+
+	// Handshake-derived state mirroring what rippled stores typed on
+	// PeerImp. ClosedLedger is upper-case hex (rippled `peers`
+	// convention via `to_string(closedLedgerHash)`), "" when absent.
+	ServerDomain string
+	ClosedLedger string
 }
 
 // Info returns read-only information about the peer.
@@ -636,14 +752,21 @@ func (p *Peer) Info() PeerInfo {
 
 	stats := p.traffic.GetTotalStats()
 
+	var closedLedger string
+	if p.hasClosedLedger {
+		closedLedger = strings.ToUpper(hex.EncodeToString(p.closedLedger[:]))
+	}
+
 	return PeerInfo{
-		ID:          p.id,
-		Endpoint:    p.endpoint,
-		Inbound:     p.inbound,
-		State:       p.state,
-		PublicKey:   pubKey,
-		ConnectedAt: p.createdAt,
-		MessagesIn:  stats.MessagesIn,
-		MessagesOut: stats.MessagesOut,
+		ID:           p.id,
+		Endpoint:     p.endpoint,
+		Inbound:      p.inbound,
+		State:        p.state,
+		PublicKey:    pubKey,
+		ConnectedAt:  p.createdAt,
+		MessagesIn:   stats.MessagesIn,
+		MessagesOut:  stats.MessagesOut,
+		ServerDomain: p.serverDomain,
+		ClosedLedger: closedLedger,
 	}
 }

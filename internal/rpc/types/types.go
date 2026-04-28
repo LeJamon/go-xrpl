@@ -43,6 +43,11 @@ const (
 	NeedsClosedLedger
 )
 
+// PeerSource produces the per-peer entries the `peers` RPC returns.
+type PeerSource interface {
+	PeersJSON() []map[string]any
+}
+
 // RPC Context contains request-specific information
 type RpcContext struct {
 	Context    context.Context
@@ -50,6 +55,7 @@ type RpcContext struct {
 	ApiVersion int
 	IsAdmin    bool
 	ClientIP   string
+	PeerSource PeerSource
 }
 
 // Method handler interface - all RPC methods implement this

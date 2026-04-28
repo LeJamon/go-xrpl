@@ -18,6 +18,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/consensus/adaptor"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
+	"github.com/LeJamon/goXRPLd/internal/peermanagement"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	"github.com/LeJamon/goXRPLd/internal/rpc"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -222,6 +223,15 @@ func runServer(cmd *cobra.Command, args []string) {
 		// broadcast it to peers and add to the consensus pending pool.
 		overlay := consensusComponents.Overlay
 		consensusAdaptor := consensusComponents.Adaptor
+
+		// Closed-Ledger / Previous-Ledger hints (Handshake.cpp:219-223).
+		overlay.SetLedgerHintProvider(func() (peermanagement.LedgerHints, bool) {
+			cl := ledgerService.GetClosedLedger()
+			if cl == nil {
+				return peermanagement.LedgerHints{}, false
+			}
+			return peermanagement.LedgerHints{Closed: cl.Hash(), Parent: cl.ParentHash()}, true
+		})
 		ledgerAdapter.SetTxBroadcaster(func(txBlob []byte) {
 			txMsg := &message.Transaction{
 				RawTransaction: txBlob,
@@ -279,6 +289,9 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Create HTTP JSON-RPC server with 30 second timeout
 	httpServer := rpc.NewServer(30 * time.Second)
+	if consensusComponents != nil && consensusComponents.Overlay != nil {
+		httpServer.SetPeerSource(consensusComponents.Overlay)
+	}
 
 	types.Services.SetDispatcher(httpServer)
 
