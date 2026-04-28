@@ -194,10 +194,20 @@ func (p *Peer) applyHandshakeExtras(x HandshakeExtras) {
 	defer p.mu.Unlock()
 	p.instanceCookie = x.InstanceCookie
 	p.serverDomain = x.ServerDomain
-	p.closedLedger = x.ClosedLedger
-	p.previousLedger = x.PreviousLedger
-	p.hasClosedLedger = x.HasLedgerHints
-	p.hasPreviousLedger = x.HasLedgerHints
+	if x.HasClosedLedger {
+		p.closedLedger = x.ClosedLedger
+		p.hasClosedLedger = true
+	} else {
+		p.closedLedger = [32]byte{}
+		p.hasClosedLedger = false
+	}
+	if x.HasPreviousLedger {
+		p.previousLedger = x.PreviousLedger
+		p.hasPreviousLedger = true
+	} else {
+		p.previousLedger = [32]byte{}
+		p.hasPreviousLedger = false
+	}
 	p.remoteIPSelfReport = x.RemoteIPSelf
 	p.localIPSelfReport = x.LocalIPSelf
 }

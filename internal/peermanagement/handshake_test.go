@@ -280,11 +280,13 @@ func TestVerifyHandshakeHeadersNoSig(t *testing.T) {
 	})
 
 	t.Run("non_default_network_peer_missing_netid", func(t *testing.T) {
-		// Symmetric case: we're on network 2, peer omits Network-ID.
+		// Rippled (Handshake.cpp:241-250) only enters the comparison
+		// branch when Network-ID is present; a missing header is
+		// silently accepted regardless of local config.
 		h := mkHeaders(remoteId.EncodedPublicKey(), "", xrplNow())
 		_, err := VerifyHandshakeHeadersNoSig(h, localId.EncodedPublicKey(), 2)
-		assert.ErrorIs(t, err, ErrNetworkMismatch,
-			"non-default-network node must reject a peer omitting Network-ID")
+		require.NoError(t, err,
+			"missing Network-ID is silently accepted to mirror rippled")
 	})
 
 	t.Run("malformed_networkid_rejected", func(t *testing.T) {
@@ -1272,7 +1274,8 @@ func TestHandshake_ClosedLedgerHint_ReadableAfterHandshake(t *testing.T) {
 
 	extras, err := ParseHandshakeExtras(headers, nil, nil)
 	require.NoError(t, err)
-	assert.True(t, extras.HasLedgerHints, "ClosedLedger header must mark hints as present")
+	assert.True(t, extras.HasClosedLedger, "Closed-Ledger header must mark closed hint as present")
+	assert.True(t, extras.HasPreviousLedger, "Previous-Ledger header must mark previous hint as present")
 	assert.Equal(t, closed, extras.ClosedLedger)
 	assert.Equal(t, parent, extras.PreviousLedger)
 
@@ -1285,6 +1288,40 @@ func TestHandshake_ClosedLedgerHint_ReadableAfterHandshake(t *testing.T) {
 	gotParent, hasParent := peer.PreviousLedger()
 	assert.True(t, hasParent)
 	assert.Equal(t, parent, gotParent)
+}
+
+// Rippled accepts Closed-Ledger without Previous-Ledger
+// (PeerImp.cpp:198-201 — each is set independently). The peer must
+// surface only the closed hint, with PreviousLedger() reporting
+// "absent" rather than the zero hash.
+func TestHandshake_ClosedLedgerWithoutPrevious(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	var closed [32]byte
+	for i := range closed {
+		closed[i] = byte(i + 1)
+	}
+
+	headers := http.Header{}
+	headers.Set(HeaderClosedLedger, strings.ToUpper(hex.EncodeToString(closed[:])))
+
+	extras, err := ParseHandshakeExtras(headers, nil, nil)
+	require.NoError(t, err)
+	assert.True(t, extras.HasClosedLedger)
+	assert.False(t, extras.HasPreviousLedger,
+		"missing Previous-Ledger must not be inferred from Closed-Ledger presence")
+	assert.Equal(t, closed, extras.ClosedLedger)
+	assert.Equal(t, [32]byte{}, extras.PreviousLedger)
+
+	peer := NewPeer(1, Endpoint{Host: "127.0.0.1", Port: 1234}, true, id, nil)
+	peer.applyHandshakeExtras(extras)
+	gotClosed, hasClosed := peer.ClosedLedger()
+	require.True(t, hasClosed)
+	assert.Equal(t, closed, gotClosed)
+	_, hasPrev := peer.PreviousLedger()
+	assert.False(t, hasPrev,
+		"PreviousLedger() must report absent when peer omitted the header")
 }
 
 // Remote-IP consistency check per Handshake.cpp:340-359.
@@ -1388,7 +1425,8 @@ func TestHandshake_AllHeaders_RoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, senderCfg.InstanceCookie, extras.InstanceCookie)
 		assert.Equal(t, senderCfg.ServerDomain, extras.ServerDomain)
-		assert.True(t, extras.HasLedgerHints)
+		assert.True(t, extras.HasClosedLedger)
+		assert.True(t, extras.HasPreviousLedger)
 		assert.Equal(t, closed, extras.ClosedLedger)
 		assert.Equal(t, parent, extras.PreviousLedger)
 		assert.Equal(t, pB.String(), extras.RemoteIPSelf)
@@ -1416,7 +1454,8 @@ func TestHandshake_AllHeaders_RoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, senderCfg.InstanceCookie, extras.InstanceCookie)
 		assert.Equal(t, senderCfg.ServerDomain, extras.ServerDomain)
-		assert.True(t, extras.HasLedgerHints)
+		assert.True(t, extras.HasClosedLedger)
+		assert.True(t, extras.HasPreviousLedger)
 	})
 
 	t.Run("malformed_server_domain_rejected", func(t *testing.T) {
@@ -1449,9 +1488,10 @@ func TestLedgerSync_PreferredPeersForLedger_ConsumesClosedLedgerHint(t *testing.
 		p.setState(PeerStateConnected)
 		if hint != nil {
 			p.applyHandshakeExtras(HandshakeExtras{
-				ClosedLedger:   *hint,
-				PreviousLedger: parent,
-				HasLedgerHints: true,
+				ClosedLedger:      *hint,
+				PreviousLedger:    parent,
+				HasClosedLedger:   true,
+				HasPreviousLedger: true,
 			})
 		}
 		return p
@@ -1465,7 +1505,7 @@ func TestLedgerSync_PreferredPeersForLedger_ConsumesClosedLedgerHint(t *testing.
 		// peer 5: disconnected with matching hint → filtered by state.
 		5: func() *Peer {
 			p := NewPeer(5, Endpoint{}, false, id, nil)
-			p.applyHandshakeExtras(HandshakeExtras{ClosedLedger: target, HasLedgerHints: true})
+			p.applyHandshakeExtras(HandshakeExtras{ClosedLedger: target, HasClosedLedger: true})
 			return p
 		}(),
 	})
@@ -1492,9 +1532,10 @@ func TestApplyStatusChange_RippledSemantics(t *testing.T) {
 			initialParent[i] = byte(0x22)
 		}
 		p.applyHandshakeExtras(HandshakeExtras{
-			ClosedLedger:   initialClosed,
-			PreviousLedger: initialParent,
-			HasLedgerHints: true,
+			ClosedLedger:      initialClosed,
+			PreviousLedger:    initialParent,
+			HasClosedLedger:   true,
+			HasPreviousLedger: true,
 		})
 		return p
 	}

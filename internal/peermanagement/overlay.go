@@ -232,8 +232,9 @@ type Overlay struct {
 func (o *Overlay) LedgerSync() *LedgerSyncHandler { return o.ledgerSync }
 
 // PeersWithClosedLedger returns peers whose Closed-Ledger handshake
-// hint matches target. Mirrors rippled NetworkOPs picking peers via
-// PeerImp::closedLedgerHash_.
+// hint matches target. goXRPL-side optimization for the catchup peer
+// picker — rippled's NetworkOPs uses closedLedgerHash_ for consensus
+// LCL voting (getPreferredLCL), not for routing fetch requests.
 func (o *Overlay) PeersWithClosedLedger(target [32]byte) []PeerID {
 	o.peersMu.RLock()
 	defer o.peersMu.RUnlock()

@@ -766,10 +766,10 @@ func PeerFeatureEnabled(headers http.Header, feature, value string, localEnabled
 //   - Public-Key header present and base58-parseable as a secp256k1
 //     node key (0xED ed25519 prefixes are rejected at parse time).
 //   - Self-connection: peer's Public-Key must differ from localPubKey.
-//   - Network-ID: must match localNetworkID exactly. Unlike the
-//     pre-R6.1 inbound code, a local NetworkID==0 still enforces that
-//     the peer either omits the header OR advertises 0; a testnet
-//     peer's Network-ID=1 is rejected even when we're on mainnet.
+//   - Network-ID: if the peer advertised it, must match localNetworkID
+//     exactly. A missing Network-ID is silently accepted regardless of
+//     localNetworkID, mirroring rippled (Handshake.cpp:241-250 only
+//     enters the comparison branch when the header is present).
 //   - Network-Time: if the peer advertised it, the skew must be
 //     within NetworkClockTolerance of local wall clock.
 //
@@ -801,11 +801,6 @@ func VerifyHandshakeHeadersNoSig(
 		if uint32(netID) != localNetworkID {
 			return nil, fmt.Errorf("%w: peer=%d local=%d", ErrNetworkMismatch, netID, localNetworkID)
 		}
-	} else if localNetworkID != 0 {
-		// Peer omitted Network-ID but we require a non-default
-		// network. Rippled rejects this symmetrically.
-		return nil, fmt.Errorf("%w: peer omitted Network-ID (local expects %d)",
-			ErrNetworkMismatch, localNetworkID)
 	}
 
 	if netTimeStr := headers.Get(HeaderNetworkTime); netTimeStr != "" {
@@ -825,14 +820,17 @@ func VerifyHandshakeHeadersNoSig(
 }
 
 // HandshakeExtras carries the headers parsed by ParseHandshakeExtras.
+// Closed-Ledger and Previous-Ledger track presence independently to
+// match rippled (PeerImp.cpp:198-201).
 type HandshakeExtras struct {
-	InstanceCookie uint64
-	ServerDomain   string
-	ClosedLedger   [32]byte
-	PreviousLedger [32]byte
-	HasLedgerHints bool
-	RemoteIPSelf   string // peer's view of our public IP
-	LocalIPSelf    string // peer's view of their own public IP
+	InstanceCookie    uint64
+	ServerDomain      string
+	ClosedLedger      [32]byte
+	PreviousLedger    [32]byte
+	HasClosedLedger   bool
+	HasPreviousLedger bool
+	RemoteIPSelf      string // peer's view of our public IP
+	LocalIPSelf       string // peer's view of their own public IP
 }
 
 // ValidateServerDomain enforces verifyHandshake's Server-Domain check
@@ -887,9 +885,8 @@ func ParseHandshakeExtras(
 				ErrInvalidHandshake, v, err)
 		}
 		out.ClosedLedger = h
-		out.HasLedgerHints = true
+		out.HasClosedLedger = true
 	}
-	var hasPrevious bool
 	if v := headers.Get(HeaderPreviousLedger); v != "" {
 		h, err := parseLedgerHashHeader(v)
 		if err != nil {
@@ -897,9 +894,9 @@ func ParseHandshakeExtras(
 				ErrInvalidHandshake, v, err)
 		}
 		out.PreviousLedger = h
-		hasPrevious = true
+		out.HasPreviousLedger = true
 	}
-	if hasPrevious && !out.HasLedgerHints {
+	if out.HasPreviousLedger && !out.HasClosedLedger {
 		return out, fmt.Errorf("%w: Previous-Ledger without Closed-Ledger",
 			ErrInvalidHandshake)
 	}
