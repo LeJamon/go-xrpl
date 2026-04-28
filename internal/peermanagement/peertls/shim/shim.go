@@ -15,6 +15,8 @@ import "C"
 
 import (
 	"errors"
+	"fmt"
+	"runtime"
 	"unsafe"
 )
 
@@ -55,6 +57,36 @@ func CodeToErr(code int) error {
 	}
 }
 
+// enrichLastError returns err annotated with the OpenSSL last-error
+// string from the *current OS thread*. Caller must have run the SSL
+// operation that produced err under runtime.LockOSThread so the
+// thread-local error queue still belongs to that operation.
+//
+// Only ErrSSL and ErrSyscall carry detailed OpenSSL error data; the
+// other shim errors are control-flow signals (WantRead/WantWrite/...)
+// and would only return stale strings.
+func enrichLastError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, ErrSSL) && !errors.Is(err, ErrSyscall) {
+		return err
+	}
+	detail := lastErrorLocked()
+	if detail == "" {
+		return err
+	}
+	return fmt.Errorf("%w: %s", err, detail)
+}
+
+func lastErrorLocked() string {
+	c := C.peertls_last_error()
+	if c == nil {
+		return ""
+	}
+	return C.GoString(c)
+}
+
 // Ctx wraps peertls_ctx*.
 type Ctx struct{ p *C.peertls_ctx }
 
@@ -88,13 +120,15 @@ func (c *Ctx) UseCertPEM(cert, key []byte) error {
 	if len(cert) == 0 || len(key) == 0 {
 		return errors.New("peertls/shim: cert and key must be non-empty")
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	rc := C.peertls_ctx_use_cert_pem(
 		c.p,
 		(*C.char)(unsafe.Pointer(&cert[0])), C.int(len(cert)),
 		(*C.char)(unsafe.Pointer(&key[0])), C.int(len(key)),
 	)
 	if rc != 0 {
-		return CodeToErr(int(rc))
+		return enrichLastError(CodeToErr(int(rc)))
 	}
 	return nil
 }
@@ -120,12 +154,19 @@ func (s *SSL) Free() {
 // Handshake drives one step of the TLS handshake. Returns nil on
 // completion, ErrWantRead/ErrWantWrite if the pump must do more I/O, or
 // another error.
+//
+// The cgo call and the OpenSSL last-error pickup must happen on the
+// same OS thread (the per-thread error queue is thread-local). We
+// runtime.LockOSThread for the duration of the pair so the goroutine
+// can't be migrated between them.
 func (s *SSL) Handshake() error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	rc := C.peertls_handshake(s.p)
 	if rc == 0 {
 		return nil
 	}
-	return CodeToErr(int(rc))
+	return enrichLastError(CodeToErr(int(rc)))
 }
 
 // Read decrypts up to len(buf) bytes. Returns (n, nil) on success or
@@ -134,6 +175,8 @@ func (s *SSL) Read(buf []byte) (int, error) {
 	if len(buf) == 0 {
 		return 0, nil
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	rc := C.peertls_read(s.p, unsafe.Pointer(&buf[0]), C.int(len(buf)))
 	if rc > 0 {
 		return int(rc), nil
@@ -141,7 +184,7 @@ func (s *SSL) Read(buf []byte) (int, error) {
 	if rc == 0 {
 		return 0, ErrZeroRet
 	}
-	return 0, CodeToErr(int(rc))
+	return 0, enrichLastError(CodeToErr(int(rc)))
 }
 
 // Write encrypts len(buf) bytes. Same return convention as Read.
@@ -149,11 +192,13 @@ func (s *SSL) Write(buf []byte) (int, error) {
 	if len(buf) == 0 {
 		return 0, nil
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	rc := C.peertls_write(s.p, unsafe.Pointer(&buf[0]), C.int(len(buf)))
 	if rc > 0 {
 		return int(rc), nil
 	}
-	return 0, CodeToErr(int(rc))
+	return 0, enrichLastError(CodeToErr(int(rc)))
 }
 
 // BIORead drains pending TLS record bytes from the network BIO.
@@ -162,9 +207,11 @@ func (s *SSL) BIORead(buf []byte) (int, error) {
 	if len(buf) == 0 {
 		return 0, nil
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	rc := C.peertls_bio_read(s.p, unsafe.Pointer(&buf[0]), C.int(len(buf)))
 	if rc < 0 {
-		return 0, CodeToErr(int(rc))
+		return 0, enrichLastError(CodeToErr(int(rc)))
 	}
 	return int(rc), nil
 }
@@ -174,9 +221,11 @@ func (s *SSL) BIOWrite(buf []byte) (int, error) {
 	if len(buf) == 0 {
 		return 0, nil
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	rc := C.peertls_bio_write(s.p, unsafe.Pointer(&buf[0]), C.int(len(buf)))
 	if rc < 0 {
-		return 0, CodeToErr(int(rc))
+		return 0, enrichLastError(CodeToErr(int(rc)))
 	}
 	return int(rc), nil
 }

@@ -64,6 +64,17 @@ peertls_ctx* peertls_ctx_new(int is_server) {
      * anchor). Matches make_SSLContext.cpp:391 verify_none. */
     SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
 
+    /* Server-side: enable RFC 7919 auto-DH so DHE-RSA cipher suites in
+     * the pinned list can negotiate. Without this, a peer that prefers
+     * DHE-RSA (or supports nothing else) would silently fail the
+     * handshake. SSL_CTX_set_dh_auto picks ≥ 2048-bit named groups
+     * (ftdhe2048/3072/4096) — at least as strong as rippled's static
+     * 2048-bit defaultDH (make_SSLContext.cpp:80-88) and portable
+     * across OpenSSL 1.1.1 / 3.x without deprecated DH APIs. */
+    if (is_server) {
+        SSL_CTX_set_dh_auto(ctx, 1);
+    }
+
     peertls_ctx* out = calloc(1, sizeof(*out));
     if (!out) {
         SSL_CTX_free(ctx);
