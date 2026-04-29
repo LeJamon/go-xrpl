@@ -43,9 +43,13 @@ const (
 	NeedsClosedLedger
 )
 
-// PeerSource produces the per-peer entries the `peers` RPC returns.
+// PeerSource produces the data the `peers` RPC returns. PeersJSON
+// emits one entry per connected peer; ClusterJSON populates the
+// top-level cluster object (rippled doPeers Peers.cpp:59-80) with
+// each [cluster_nodes] member except the local node.
 type PeerSource interface {
 	PeersJSON() []map[string]any
+	ClusterJSON() map[string]any
 }
 
 // RPC Context contains request-specific information

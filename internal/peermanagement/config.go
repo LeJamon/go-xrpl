@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net"
 	"time"
+
+	"github.com/LeJamon/goXRPLd/internal/peermanagement/cluster"
 )
 
 // Default configuration values.
@@ -93,6 +95,15 @@ type Config struct {
 	// own proposals/validations on the RelayFromValidator path.
 	// Matches rippled PeerImp.cpp:2715-2721.
 	LocalValidatorPubKey []byte
+
+	// ClusterNodes lists base58-encoded node public keys (with an
+	// optional trailing comment as the human-readable name) for peers
+	// that should be treated as cluster members. Mirrors the
+	// [cluster_nodes] section in rippled.cfg. Parsed by
+	// cluster.Registry.Load at construction time; a malformed entry
+	// fails Overlay startup, matching rippled Application init which
+	// aborts when Cluster::load returns false.
+	ClusterNodes []string
 
 	// ServerDomain populates the Server-Domain header; "" suppresses it.
 	ServerDomain string
@@ -283,6 +294,24 @@ func WithLocalValidatorPubKey(key []byte) Option {
 		c.LocalValidatorPubKey = append([]byte(nil), key...)
 	}
 }
+
+// WithClusterNodes sets the [cluster_nodes] entries (base58 node
+// pubkey + optional trailing comment used as the human-readable
+// name). Each entry is parsed by cluster.Registry.Load at Overlay
+// construction; a malformed value fails startup. Mirrors rippled's
+// behavior in Application init where Cluster::load failure aborts the
+// node.
+func WithClusterNodes(entries ...string) Option {
+	return func(c *Config) {
+		c.ClusterNodes = append([]string(nil), entries...)
+	}
+}
+
+// Cluster type alias re-exports the registry pointer so that
+// downstream callers (e.g. RPC wiring) don't need to import the
+// cluster sub-package directly when they already depend on
+// peermanagement.
+type Cluster = cluster.Registry
 
 // WithServerDomain sets the operator domain emitted in the
 // `Server-Domain` handshake header. An empty value suppresses the

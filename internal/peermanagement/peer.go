@@ -699,14 +699,15 @@ func (p *Peer) setState(state PeerState) {
 
 // PeerInfo is a read-only snapshot of peer state.
 type PeerInfo struct {
-	ID          PeerID
-	Endpoint    Endpoint
-	Inbound     bool
-	State       PeerState
-	PublicKey   string
-	ConnectedAt time.Time
-	MessagesIn  uint64
-	MessagesOut uint64
+	ID             PeerID
+	Endpoint       Endpoint
+	Inbound        bool
+	State          PeerState
+	PublicKey      string
+	PublicKeyBytes []byte
+	ConnectedAt    time.Time
+	MessagesIn     uint64
+	MessagesOut    uint64
 
 	ServerDomain    string
 	ClosedLedger    string
@@ -717,9 +718,13 @@ func (p *Peer) Info() PeerInfo {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	var pubKey string
+	var (
+		pubKey      string
+		pubKeyBytes []byte
+	)
 	if p.remotePubKey != nil {
 		pubKey = p.remotePubKey.Encode()
+		pubKeyBytes = p.remotePubKey.Bytes()
 	}
 
 	stats := p.traffic.GetTotalStats()
@@ -740,6 +745,7 @@ func (p *Peer) Info() PeerInfo {
 		Inbound:         p.inbound,
 		State:           p.state,
 		PublicKey:       pubKey,
+		PublicKeyBytes:  pubKeyBytes,
 		ConnectedAt:     p.createdAt,
 		MessagesIn:      stats.MessagesIn,
 		MessagesOut:     stats.MessagesOut,

@@ -12,10 +12,12 @@ import (
 )
 
 type fakePeerSource struct {
-	peers []map[string]any
+	peers   []map[string]any
+	cluster map[string]any
 }
 
 func (f *fakePeerSource) PeersJSON() []map[string]any { return f.peers }
+func (f *fakePeerSource) ClusterJSON() map[string]any { return f.cluster }
 
 func TestPeersMethod_NilSourceReturnsEmptyList(t *testing.T) {
 	m := &handlers.PeersMethod{}
@@ -60,4 +62,40 @@ func TestPeersMethod_PassesThroughSource(t *testing.T) {
 	assert.Equal(t, "ABCD", peers[0]["ledger"])
 	assert.NotContains(t, peers[0], "closed_ledger", "rippled uses 'ledger' for the closed-ledger hash")
 	assert.NotContains(t, peers[0], "inbound", "inbound is only emitted when true")
+}
+
+func TestPeersMethod_RelaysClusterMap(t *testing.T) {
+	src := &fakePeerSource{
+		peers: []map[string]any{
+			{
+				"address":    "192.0.2.50:51235",
+				"public_key": "nHB...",
+				"cluster":    true,
+				"name":       "primary",
+			},
+		},
+		cluster: map[string]any{
+			"nMate1": map[string]any{"tag": "mate-name"},
+		},
+	}
+	m := &handlers.PeersMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleAdmin,
+		IsAdmin:    true,
+		PeerSource: src,
+	}
+
+	result, rpcErr := m.Handle(ctx, json.RawMessage(`{}`))
+	require.Nil(t, rpcErr)
+
+	resp := result.(map[string]any)
+	peers := resp["peers"].([]map[string]any)
+	require.Len(t, peers, 1)
+	assert.Equal(t, true, peers[0]["cluster"])
+	assert.Equal(t, "primary", peers[0]["name"])
+
+	cluster := resp["cluster"].(map[string]any)
+	mate := cluster["nMate1"].(map[string]any)
+	assert.Equal(t, "mate-name", mate["tag"])
 }
