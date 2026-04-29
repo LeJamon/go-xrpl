@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	rootcrypto "github.com/LeJamon/goXRPLd/crypto"
 	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
 )
 
@@ -360,6 +361,9 @@ func VerifyPeerHandshake(headers http.Header, sharedValue []byte, localPubKey st
 }
 
 func verifySessionSignature(pubKey *PublicKeyToken, sharedValue, signature []byte) error {
+	if rootcrypto.ECDSACanonicality(signature) == rootcrypto.CanonicityNone {
+		return fmt.Errorf("%w: malformed DER signature", ErrInvalidSignature)
+	}
 	if !secp256k1.VerifyDigestBytes(sharedValue, pubKey.Bytes(), signature) {
 		return ErrInvalidSignature
 	}
