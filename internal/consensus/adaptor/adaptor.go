@@ -1074,8 +1074,8 @@ func (a *Adaptor) broadcastStatus(event message.NodeEvent) {
 		LedgerHash:         hash[:],
 		LedgerHashPrevious: parentHash[:],
 		NetworkTime:        networkTime,
-		FirstSeq:           firstSeq,
-		LastSeq:            lastSeq,
+		FirstSeq:           &firstSeq,
+		LastSeq:            &lastSeq,
 	}
 
 	if err := a.sender.BroadcastStatusChange(sc); err != nil {

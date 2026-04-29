@@ -13,7 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
+	rootcrypto "github.com/LeJamon/goXRPLd/crypto"
+	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
 )
 
 const (
@@ -360,12 +361,10 @@ func VerifyPeerHandshake(headers http.Header, sharedValue []byte, localPubKey st
 }
 
 func verifySessionSignature(pubKey *PublicKeyToken, sharedValue, signature []byte) error {
-	sig, err := ecdsa.ParseDERSignature(signature)
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidSignature, err)
+	if rootcrypto.ECDSACanonicality(signature) == rootcrypto.CanonicityNone {
+		return fmt.Errorf("%w: malformed DER signature", ErrInvalidSignature)
 	}
-	// sharedValue is already a 32-byte digest; verify it directly.
-	if !sig.Verify(sharedValue, pubKey.BtcecKey()) {
+	if !secp256k1.VerifyDigestBytes(sharedValue, pubKey.Bytes(), signature) {
 		return ErrInvalidSignature
 	}
 	return nil

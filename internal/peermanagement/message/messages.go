@@ -68,8 +68,8 @@ type StatusChange struct {
 	LedgerHash         []byte     `json:"ledger_hash,omitempty"`
 	LedgerHashPrevious []byte     `json:"ledger_hash_previous,omitempty"`
 	NetworkTime        uint64     `json:"network_time,omitempty"`
-	FirstSeq           uint32     `json:"first_seq,omitempty"`
-	LastSeq            uint32     `json:"last_seq,omitempty"`
+	FirstSeq           *uint32    `json:"first_seq,omitempty"`
+	LastSeq            *uint32    `json:"last_seq,omitempty"`
 }
 
 func (s *StatusChange) Type() MessageType { return TypeStatusChange }

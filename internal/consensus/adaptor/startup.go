@@ -264,6 +264,13 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 	// is a 0/1 int to match rippled's [ledger_replay] stanza semantics.
 	opts = append(opts, peermanagement.WithLedgerReplay(appCfg.LedgerReplay != 0))
 
+	// Cluster nodes from [cluster_nodes]. A malformed entry will fail
+	// peermanagement.New, matching rippled's Application init which
+	// aborts the node when Cluster::load returns false.
+	if len(appCfg.ClusterNodes) > 0 {
+		opts = append(opts, peermanagement.WithClusterNodes(appCfg.ClusterNodes...))
+	}
+
 	return opts
 }
 

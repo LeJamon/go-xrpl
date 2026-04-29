@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/internal/peermanagement/cluster"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/peertls"
 	"golang.org/x/sync/errgroup"
@@ -165,13 +167,20 @@ type Overlay struct {
 	cfg      Config
 	identity *Identity
 
+	// cluster is the registry of nodes loaded from [cluster_nodes].
+	// Always non-nil post-construction (an empty registry stands in
+	// when no entries are configured) so call sites can dereference
+	// without nil checks. Mirrors rippled's app_.cluster() which is
+	// always present even when the section is empty.
+	cluster *cluster.Registry
+
 	// instanceCookie: immutable post-New, lock-free.
 	instanceCookie uint64
 
-	// ledgerHintProvider: wired by a higher layer (avoids importing
-	// internal/ledger). Guarded by hintMu.
-	hintMu             sync.RWMutex
-	ledgerHintProvider func() (LedgerHints, bool)
+	// Higher-layer callbacks (avoid importing internal/ledger here).
+	providersMu         sync.RWMutex
+	ledgerHintProvider  func() (LedgerHints, bool)
+	validLedgerProvider func() (seq uint32, age time.Duration, ok bool)
 
 	// Components
 	discovery  *Discovery
@@ -259,33 +268,47 @@ func (o *Overlay) PeersWithClosedLedger(target [32]byte) []PeerID {
 
 // SetLedgerHintProvider wires the hint source; nil suppresses headers.
 func (o *Overlay) SetLedgerHintProvider(fn func() (LedgerHints, bool)) {
-	o.hintMu.Lock()
+	o.providersMu.Lock()
 	o.ledgerHintProvider = fn
-	o.hintMu.Unlock()
+	o.providersMu.Unlock()
 }
 
 func (o *Overlay) ledgerHintProviderSnapshot() func() (LedgerHints, bool) {
-	o.hintMu.RLock()
-	defer o.hintMu.RUnlock()
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
 	return o.ledgerHintProvider
 }
 
-// generateInstanceCookie returns a value in [1, MAX-1] to match rippled
-// `1 + rand_int(prng, MAX-1)` from Application.cpp — both 0 and MAX are
-// excluded. Rejection sampling on the two boundary values keeps the
-// distribution uniform; the rejection probability is 2/2^64.
+// SetValidLedgerProvider wires the validated-ledger source used by
+// handleStatusChange (PeerImp.cpp:1885-1890). ok=false suppresses
+// tracking updates.
+func (o *Overlay) SetValidLedgerProvider(fn func() (seq uint32, age time.Duration, ok bool)) {
+	o.providersMu.Lock()
+	o.validLedgerProvider = fn
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) validLedgerProviderSnapshot() func() (seq uint32, age time.Duration, ok bool) {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.validLedgerProvider
+}
+
+// generateInstanceCookie matches rippled Application.cpp:
+//
+//	1 + rand_int(crypto_prng(), MAX_UINT64 - 1)
+//
+// where rand_int returns a closed interval, so the result is uniform
+// in [1, MAX_UINT64]. Only 0 is rejected.
 func generateInstanceCookie() (uint64, error) {
-	const maxU64 = ^uint64(0)
 	for {
 		var b [8]byte
 		if _, err := rand.Read(b[:]); err != nil {
 			return 0, err
 		}
-		v := binary.BigEndian.Uint64(b[:])
-		if v == 0 || v == maxU64 {
-			continue
+		if v := binary.BigEndian.Uint64(b[:]); v != 0 {
+			return v, nil
 		}
-		return v, nil
 	}
 }
 
@@ -384,11 +407,17 @@ func New(opts ...Option) (*Overlay, error) {
 		return nil, fmt.Errorf("instance cookie: %w", err)
 	}
 
+	clusterReg := cluster.New()
+	if err := clusterReg.Load(cfg.ClusterNodes); err != nil {
+		return nil, fmt.Errorf("invalid cluster_nodes: %w", err)
+	}
+
 	events := make(chan Event, 256)
 
 	o := &Overlay{
 		cfg:            cfg,
 		identity:       identity,
+		cluster:        clusterReg,
 		instanceCookie: cookie,
 		discovery:      NewDiscovery(&cfg, events),
 		ledgerSync:     NewLedgerSyncHandler(events),
@@ -1013,7 +1042,27 @@ func (o *Overlay) handleStatusChange(evt Event) {
 	if !exists {
 		return
 	}
-	peer.applyStatusChange(sc.LedgerHash, sc.LedgerHashPrevious, sc.NewEvent == message.NodeEventLostSync)
+	peer.applyStatusChange(
+		sc.LedgerHash,
+		sc.LedgerHashPrevious,
+		sc.NewEvent == message.NodeEventLostSync,
+		sc.FirstSeq,
+		sc.LastSeq,
+	)
+
+	// PeerImp.cpp:1885-1890: gate on a fresh (<2 min) validated ledger.
+	if sc.LedgerSeq == 0 {
+		return
+	}
+	provider := o.validLedgerProviderSnapshot()
+	if provider == nil {
+		return
+	}
+	validSeq, age, ok := provider()
+	if !ok || validSeq == 0 || age >= 2*time.Minute {
+		return
+	}
+	peer.CheckTracking(sc.LedgerSeq, validSeq)
 }
 
 // handleSquelchMessage processes an inbound TMSquelch from a peer and
@@ -1080,7 +1129,8 @@ func (o *Overlay) handlePing(evt Event) {
 		return
 	}
 
-	if ping.PType == message.PingTypePing {
+	switch ping.PType {
+	case message.PingTypePing:
 		pong := &message.Ping{
 			PType:    message.PingTypePong,
 			Seq:      ping.Seq,
@@ -1095,6 +1145,13 @@ func (o *Overlay) handlePing(evt Event) {
 			return
 		}
 		o.Send(evt.PeerID, wireMsg)
+	case message.PingTypePong:
+		o.peersMu.RLock()
+		peer, exists := o.peers[evt.PeerID]
+		o.peersMu.RUnlock()
+		if exists {
+			peer.OnPong(ping.Seq, time.Now())
+		}
 	}
 }
 
@@ -1602,17 +1659,13 @@ func (o *Overlay) Peers() []PeerInfo {
 	return result
 }
 
-// PeersJSON implements types.PeerSource for the `peers` RPC method.
-// Strict subset of rippled PeerImp::json (PeerImp.cpp:388-503): only
-// fields that rippled actually emits AND for which goXRPL has the data.
-// Missing rippled fields (network_id, version, protocol, latency,
-// complete_ledgers, track, status, metrics, cluster/name) are tracked
-// as separate follow-ups.
-//
-// `load` is rippled's Resource::Consumer::balance() (PeerImp.cpp:414);
-// goXRPL surfaces its narrower badDataBalance under the same name so
-// operators see the per-peer charge accumulator. Emitted unconditionally
-// to match rippled.
+// Cluster returns the registry of cluster-trusted node identities
+// loaded from [cluster_nodes]. Always non-nil post-construction.
+func (o *Overlay) Cluster() *cluster.Registry { return o.cluster }
+
+// PeersJSON implements types.PeerSource for the `peers` RPC method,
+// emitting the subset of rippled PeerImp::json (PeerImp.cpp:388-503)
+// fields for which goXRPL has data.
 func (o *Overlay) PeersJSON() []map[string]any {
 	list := o.Peers()
 	out := make([]map[string]any, 0, len(list))
@@ -1632,8 +1685,76 @@ func (o *Overlay) PeersJSON() []map[string]any {
 		if p.ClosedLedger != "" {
 			entry["ledger"] = p.ClosedLedger
 		}
+		if p.CompleteLedgers != "" {
+			entry["complete_ledgers"] = p.CompleteLedgers
+		}
+		// cluster + name: PeerImp.cpp:399-406.
+		if len(p.PublicKeyBytes) > 0 {
+			if member, ok := o.cluster.Member(p.PublicKeyBytes); ok {
+				entry["cluster"] = true
+				if member.Name != "" {
+					entry["name"] = member.Name
+				}
+			}
+		}
+		// PeerImp.cpp:437-450: omit when converged.
+		switch p.Tracking {
+		case PeerTrackingDiverged:
+			entry["track"] = "diverged"
+		case PeerTrackingUnknown:
+			entry["track"] = "unknown"
+		}
+		if p.HasLatency {
+			entry["latency"] = uint32(p.Latency / time.Millisecond)
+		}
 		out = append(out, entry)
 	}
+	return out
+}
+
+// clusterFeeRef mirrors rippled's LoadFeeTrack::getLoadBase() default.
+// Replace with a live reference once goXRPL grows a load-fee tracker.
+const clusterFeeRef uint32 = 256
+
+// ClusterJSON returns the top-level cluster object for the `peers`
+// RPC response, mirroring rippled doPeers (Peers.cpp:59-80).
+func (o *Overlay) ClusterJSON() map[string]any {
+	out := map[string]any{}
+	if o == nil || o.cluster == nil {
+		return out
+	}
+
+	var selfKey []byte
+	if o.identity != nil {
+		selfKey = o.identity.PublicKey()
+	}
+
+	now := o.cfg.Clock()
+
+	o.cluster.ForEach(func(m cluster.Member) {
+		if len(selfKey) > 0 && bytes.Equal(selfKey, m.Identity) {
+			return
+		}
+		encoded, err := addresscodec.EncodeNodePublicKey(m.Identity)
+		if err != nil || encoded == "" {
+			return
+		}
+		entry := map[string]any{}
+		if m.Name != "" {
+			entry["tag"] = m.Name
+		}
+		if m.LoadFee != clusterFeeRef && m.LoadFee != 0 {
+			entry["fee"] = float64(m.LoadFee) / float64(clusterFeeRef)
+		}
+		if !m.ReportTime.IsZero() {
+			age := int64(now.Sub(m.ReportTime).Seconds())
+			if age < 0 {
+				age = 0
+			}
+			entry["age"] = age
+		}
+		out[encoded] = entry
+	})
 	return out
 }
 

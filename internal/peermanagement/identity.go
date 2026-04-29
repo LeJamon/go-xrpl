@@ -19,14 +19,13 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
-	btcecdsa "github.com/btcsuite/btcd/btcec/v2/ecdsa"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
 )
 
 var (
 	ErrInvalidPrivateKey = errors.New("invalid private key")
-	ErrSignatureFailed   = errors.New("failed to sign message")
 )
 
 const (
@@ -127,12 +126,7 @@ func (i *Identity) Sign(message []byte) ([]byte, error) {
 	h.Write(message)
 	hash := h.Sum(nil)[:32]
 
-	sig := btcecdsa.Sign(i.privateKey, hash)
-	if sig == nil {
-		return nil, ErrSignatureFailed
-	}
-
-	return sig.Serialize(), nil
+	return secp256k1.SignDigestBytes(hash, i.privateKey.Serialize())
 }
 
 // SignDigest signs a pre-hashed 32-byte digest (used for session sigs).
@@ -140,13 +134,7 @@ func (i *Identity) SignDigest(digest []byte) ([]byte, error) {
 	if i.privateKey == nil {
 		return nil, ErrInvalidPrivateKey
 	}
-
-	sig := btcecdsa.Sign(i.privateKey, digest)
-	if sig == nil {
-		return nil, ErrSignatureFailed
-	}
-
-	return sig.Serialize(), nil
+	return secp256k1.SignDigestBytes(digest, i.privateKey.Serialize())
 }
 
 // PublicKey returns the raw compressed public key bytes.

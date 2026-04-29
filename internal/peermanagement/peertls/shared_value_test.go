@@ -54,7 +54,6 @@ func TestComputeSharedValue_TooShort(t *testing.T) {
 		{"exactly 11 peer", make([]byte, 12), make([]byte, 11)},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := computeSharedValue(tc.local, tc.peer)
 			if err == nil {
