@@ -1080,7 +1080,8 @@ func (o *Overlay) handlePing(evt Event) {
 		return
 	}
 
-	if ping.PType == message.PingTypePing {
+	switch ping.PType {
+	case message.PingTypePing:
 		pong := &message.Ping{
 			PType:    message.PingTypePong,
 			Seq:      ping.Seq,
@@ -1095,6 +1096,13 @@ func (o *Overlay) handlePing(evt Event) {
 			return
 		}
 		o.Send(evt.PeerID, wireMsg)
+	case message.PingTypePong:
+		o.peersMu.RLock()
+		peer, exists := o.peers[evt.PeerID]
+		o.peersMu.RUnlock()
+		if exists {
+			peer.OnPong(ping.Seq, time.Now())
+		}
 	}
 }
 
@@ -1605,7 +1613,7 @@ func (o *Overlay) Peers() []PeerInfo {
 // PeersJSON implements types.PeerSource for the `peers` RPC method.
 // Strict subset of rippled PeerImp::json (PeerImp.cpp:388-503): only
 // fields that rippled actually emits AND for which goXRPL has the data.
-// Missing rippled fields (network_id, version, protocol, latency,
+// Missing rippled fields (network_id, version, protocol,
 // complete_ledgers, track, status, load, metrics, cluster/name) are
 // tracked as separate follow-ups.
 func (o *Overlay) PeersJSON() []map[string]any {
@@ -1625,6 +1633,12 @@ func (o *Overlay) PeersJSON() []map[string]any {
 		}
 		if p.ClosedLedger != "" {
 			entry["ledger"] = p.ClosedLedger
+		}
+		// Match rippled PeerImp::json (PeerImp.cpp:421-425): emit
+		// latency only when measured. Round to milliseconds — rippled
+		// uses std::chrono::round<milliseconds> on the rtt sample.
+		if p.HasLatency {
+			entry["latency"] = uint32(p.Latency.Round(time.Millisecond) / time.Millisecond)
 		}
 		out = append(out, entry)
 	}

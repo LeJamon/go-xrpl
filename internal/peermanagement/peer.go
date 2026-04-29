@@ -88,6 +88,15 @@ type Peer struct {
 	previousLedger    [32]byte
 	hasClosedLedger   bool
 	hasPreviousLedger bool
+
+	// latency: EWMA-smoothed round-trip time from ping/pong correlation.
+	// Mirrors rippled PeerImp's recentLock_/latency_/lastPingSeq_ pair —
+	// hasLatency distinguishes "never measured" from a measured zero,
+	// matching std::optional<milliseconds>.
+	latencyMu     sync.RWMutex
+	pingsInFlight map[uint32]time.Time
+	latency       time.Duration
+	hasLatency    bool
 }
 
 type PeerConfig struct {
@@ -105,18 +114,19 @@ func DefaultPeerConfig() PeerConfig {
 
 func NewPeer(id PeerID, endpoint Endpoint, inbound bool, identity *Identity, events chan<- Event) *Peer {
 	return &Peer{
-		id:         id,
-		endpoint:   endpoint,
-		inbound:    inbound,
-		identity:   identity,
-		state:      PeerStateDisconnected,
-		send:       make(chan []byte, DefaultSendBufferSize),
-		events:     events,
-		score:      NewPeerScore(),
-		traffic:    NewTrafficCounter(),
-		squelchMap: make(map[string]time.Time),
-		createdAt:  time.Now(),
-		closeCh:    make(chan struct{}),
+		id:            id,
+		endpoint:      endpoint,
+		inbound:       inbound,
+		identity:      identity,
+		state:         PeerStateDisconnected,
+		send:          make(chan []byte, DefaultSendBufferSize),
+		events:        events,
+		score:         NewPeerScore(),
+		traffic:       NewTrafficCounter(),
+		squelchMap:    make(map[string]time.Time),
+		pingsInFlight: make(map[uint32]time.Time),
+		createdAt:     time.Now(),
+		closeCh:       make(chan struct{}),
 	}
 }
 
@@ -509,9 +519,11 @@ func (p *Peer) pingLoop(ctx context.Context) error {
 		case <-p.closeCh:
 			return nil
 		case <-ticker.C:
+			now := time.Now()
+			seq := uint32(now.UnixMilli() & 0xFFFFFFFF)
 			ping := &message.Ping{
 				PType: message.PingTypePing,
-				Seq:   uint32(time.Now().UnixMilli() & 0xFFFFFFFF),
+				Seq:   seq,
 			}
 			encoded, err := message.Encode(ping)
 			if err != nil {
@@ -521,11 +533,88 @@ func (p *Peer) pingLoop(ctx context.Context) error {
 			if err != nil {
 				continue
 			}
+			p.recordPingSent(seq, now)
 			if err := p.Send(wireMsg); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+// pingInFlightTTL bounds memory when a peer never replies. Pongs that
+// arrive past the TTL are treated as missing and don't update latency.
+const pingInFlightTTL = 30 * time.Second
+
+// pingsInFlightCap caps the in-flight map under adversarial conditions
+// (e.g. peer never pongs and our ping cadence keeps firing).
+const pingsInFlightCap = 16
+
+// recordPingSent stamps the send time for `seq` and trims any stale
+// entries past pingInFlightTTL. Caller must not hold latencyMu.
+func (p *Peer) recordPingSent(seq uint32, sentAt time.Time) {
+	p.latencyMu.Lock()
+	defer p.latencyMu.Unlock()
+	cutoff := sentAt.Add(-pingInFlightTTL)
+	for k, t := range p.pingsInFlight {
+		if t.Before(cutoff) {
+			delete(p.pingsInFlight, k)
+		}
+	}
+	if len(p.pingsInFlight) >= pingsInFlightCap {
+		// Evict the oldest entry to bound memory.
+		var (
+			oldestKey  uint32
+			oldestTime time.Time
+			haveOldest bool
+		)
+		for k, t := range p.pingsInFlight {
+			if !haveOldest || t.Before(oldestTime) {
+				oldestKey = k
+				oldestTime = t
+				haveOldest = true
+			}
+		}
+		if haveOldest {
+			delete(p.pingsInFlight, oldestKey)
+		}
+	}
+	p.pingsInFlight[seq] = sentAt
+}
+
+// OnPong correlates an incoming Pong with a previously-sent Ping by
+// `seq` and updates the smoothed latency. Pongs whose seq is unknown
+// (already trimmed, never sent, or wrong cookie) are ignored — matching
+// rippled PeerImp::onMessage(TMPing) which only updates on a seq match.
+//
+// Smoothing matches rippled: latency_ = (latency_ * 7 + rtt) / 8.
+// First measurement seeds latency_ directly without smoothing.
+func (p *Peer) OnPong(seq uint32, receivedAt time.Time) {
+	p.latencyMu.Lock()
+	defer p.latencyMu.Unlock()
+	sentAt, ok := p.pingsInFlight[seq]
+	if !ok {
+		return
+	}
+	delete(p.pingsInFlight, seq)
+	rtt := receivedAt.Sub(sentAt)
+	if rtt < 0 {
+		rtt = 0
+	}
+	if !p.hasLatency {
+		p.latency = rtt
+		p.hasLatency = true
+		return
+	}
+	p.latency = (p.latency*7 + rtt) / 8
+}
+
+// Latency returns the EWMA-smoothed round-trip time and whether any
+// measurement has been recorded (the second return mirrors rippled's
+// std::optional<milliseconds> latency_).
+func (p *Peer) Latency() (time.Duration, bool) {
+	p.latencyMu.RLock()
+	defer p.latencyMu.RUnlock()
+	return p.latency, p.hasLatency
 }
 
 // maxSquelchesPerPeer bounds memory under adversarial input. Existing
@@ -676,7 +765,9 @@ func (p *Peer) setState(state PeerState) {
 }
 
 // PeerInfo is a read-only snapshot of peer state. ClosedLedger is
-// upper-case hex (rippled convention) or "" when absent.
+// upper-case hex (rippled convention) or "" when absent. HasLatency
+// distinguishes "not yet measured" from a measured zero, matching
+// rippled's std::optional<milliseconds> latency_.
 type PeerInfo struct {
 	ID          PeerID
 	Endpoint    Endpoint
@@ -689,6 +780,9 @@ type PeerInfo struct {
 
 	ServerDomain string
 	ClosedLedger string
+
+	Latency    time.Duration
+	HasLatency bool
 }
 
 func (p *Peer) Info() PeerInfo {
@@ -707,6 +801,8 @@ func (p *Peer) Info() PeerInfo {
 		closedLedger = strings.ToUpper(hex.EncodeToString(p.closedLedger[:]))
 	}
 
+	latency, hasLatency := p.Latency()
+
 	return PeerInfo{
 		ID:           p.id,
 		Endpoint:     p.endpoint,
@@ -718,5 +814,7 @@ func (p *Peer) Info() PeerInfo {
 		MessagesOut:  stats.MessagesOut,
 		ServerDomain: p.serverDomain,
 		ClosedLedger: closedLedger,
+		Latency:      latency,
+		HasLatency:   hasLatency,
 	}
 }
