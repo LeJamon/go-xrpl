@@ -5,14 +5,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"math"
 	"net"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/stretchr/testify/assert"
@@ -176,37 +174,6 @@ func TestVerifyPeerHandshake_MissingSignature(t *testing.T) {
 	_, err := VerifyPeerHandshake(headers, make([]byte, 32), "nLocalKey", DefaultHandshakeConfig())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "Session-Signature")
-}
-
-// strconvUnixXRPL formats a time as XRPL epoch seconds (like rippled's
-// Network-Time header builder). Test helper.
-func strconvUnixXRPL(t time.Time) string {
-	xrplSec := t.Unix() - XRPLEpochOffset
-	return fmtInt(xrplSec)
-}
-
-func fmtInt(n int64) string {
-	// Simple base-10 stringification without importing another package.
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	buf := make([]byte, 0, 20)
-	for n > 0 {
-		buf = append(buf, byte('0'+n%10))
-		n /= 10
-	}
-	if neg {
-		buf = append(buf, '-')
-	}
-	// reverse
-	for i, j := 0, len(buf)-1; i < j; i, j = i+1, j-1 {
-		buf[i], buf[j] = buf[j], buf[i]
-	}
-	return string(buf)
 }
 
 // TestParsePublicKeyToken_RejectsEd25519Prefix pins R5.13: the 0xED
@@ -1545,15 +1512,14 @@ func TestHandshake_MalformedLedgerHashRejected(t *testing.T) {
 	})
 }
 
-// generateInstanceCookie must produce values in [1, MAX-1] (both 0 and
-// MAX excluded) to match rippled `1 + rand_int(prng, MAX-1)`.
+// generateInstanceCookie must produce values in [1, MAX_UINT64] to
+// match rippled `1 + rand_int(prng, MAX_UINT64 - 1)`, which uses a
+// closed interval and so includes MAX_UINT64. Only 0 is excluded.
 func TestInstanceCookie_GeneratorRange(t *testing.T) {
 	for i := 0; i < 10000; i++ {
 		v, err := generateInstanceCookie()
 		require.NoError(t, err)
 		assert.NotZero(t, v, "cookie must never be zero")
-		assert.NotEqual(t, uint64(math.MaxUint64), v,
-			"cookie must never be MAX (rippled excludes both 0 and MAX)")
 	}
 }
 
@@ -1611,8 +1577,8 @@ func TestIpFamilyEqual_BoostParity(t *testing.T) {
 // as address_v6, otherwise a peer announcing "::ffff:x.x.x.x" while
 // connecting via AF_INET6 is incorrectly rejected as family-mismatched.
 func TestSocketIPIsV6_FamilyFromByteLength(t *testing.T) {
-	v4Socket := net.IP{1, 2, 3, 4}                                         // AF_INET socket
-	v6Socket := net.ParseIP("2001:db8::1")                                 // AF_INET6 socket
+	v4Socket := net.IP{1, 2, 3, 4}                                                 // AF_INET socket
+	v6Socket := net.ParseIP("2001:db8::1")                                         // AF_INET6 socket
 	v4MappedSocket := net.IP{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 1, 2, 3, 4} // AF_INET6 receiving v4
 
 	assert.False(t, socketIPIsV6(v4Socket), "4-byte socket IP is AF_INET")

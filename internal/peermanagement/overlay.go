@@ -270,22 +270,21 @@ func (o *Overlay) ledgerHintProviderSnapshot() func() (LedgerHints, bool) {
 	return o.ledgerHintProvider
 }
 
-// generateInstanceCookie returns a value in [1, MAX-1] to match rippled
-// `1 + rand_int(prng, MAX-1)` from Application.cpp — both 0 and MAX are
-// excluded. Rejection sampling on the two boundary values keeps the
-// distribution uniform; the rejection probability is 2/2^64.
+// generateInstanceCookie matches rippled Application.cpp:
+//
+//	1 + rand_int(crypto_prng(), MAX_UINT64 - 1)
+//
+// where rand_int returns a closed interval, so the result is uniform
+// in [1, MAX_UINT64]. Only 0 is rejected.
 func generateInstanceCookie() (uint64, error) {
-	const maxU64 = ^uint64(0)
 	for {
 		var b [8]byte
 		if _, err := rand.Read(b[:]); err != nil {
 			return 0, err
 		}
-		v := binary.BigEndian.Uint64(b[:])
-		if v == 0 || v == maxU64 {
-			continue
+		if v := binary.BigEndian.Uint64(b[:]); v != 0 {
+			return v, nil
 		}
-		return v, nil
 	}
 }
 
