@@ -1711,6 +1711,11 @@ func (o *Overlay) PeersJSON() []map[string]any {
 		if p.HasLatency {
 			entry["latency"] = uint32(p.Latency / time.Millisecond)
 		}
+		// PeerImp.cpp:416-417: version sourced from User-Agent (inbound)
+		// or Server (outbound) header.
+		if p.Version != "" {
+			entry["version"] = p.Version
+		}
 		out = append(out, entry)
 	}
 	return out

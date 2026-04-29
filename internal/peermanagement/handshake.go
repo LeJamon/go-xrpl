@@ -603,6 +603,10 @@ type HandshakeExtras struct {
 	PreviousLedger    [32]byte
 	HasClosedLedger   bool
 	HasPreviousLedger bool
+	// Raw version headers; applyHandshakeExtras picks one by direction,
+	// mirroring PeerImp::getVersion (PeerImp.cpp:381-386).
+	UserAgentHeader string
+	ServerHeader    string
 }
 
 // ValidateServerDomain enforces verifyHandshake's Server-Domain check
@@ -648,6 +652,9 @@ func ParseHandshakeExtras(
 	if v := headers.Get(HeaderNetworkID); v != "" {
 		out.NetworkID = v
 	}
+
+	out.UserAgentHeader = headers.Get(HeaderUserAgent)
+	out.ServerHeader = headers.Get(HeaderServer)
 
 	if v := headers.Get(HeaderClosedLedger); v != "" {
 		h, err := parseLedgerHashHeader(v)
