@@ -553,7 +553,6 @@ func (o *Overlay) acceptLoop(ctx context.Context) error {
 	}
 }
 
-// handleInbound handles an incoming peer connection.
 func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -562,7 +561,6 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 		}
 	}()
 
-	// Check if we can accept more inbound connections
 	if !o.canAcceptInbound() {
 		slog.Info("Inbound rejected: no slots", "t", "Overlay", "remote", conn.RemoteAddr())
 		conn.Close()
@@ -588,7 +586,6 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	// Perform handshake
 	if err := o.performInboundHandshake(ctx, peer, tlsConn); err != nil {
 		slog.Info("Inbound handshake failed", "t", "Overlay", "remote", remoteAddr, "err", err)
 		conn.Close()
@@ -602,7 +599,6 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	// Reject duplicate: if we already have a connection to this IP.
 	if o.isConnectedTo(endpoint) {
 		conn.Close()
 		return
@@ -613,7 +609,6 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 
 	o.addPeer(peer)
 
-	// Run peer read/write loops
 	go func() {
 		err := peer.Run(ctx)
 		if err != nil {
@@ -623,10 +618,9 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 	}()
 }
 
-// performInboundHandshake handles the inbound handshake.
 func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsConn peertls.PeerConn) error {
-	// The TLS handshake is lazy after Accept(); we must complete it
-	// before computing the shared value from Finished bytes.
+	// Accept() does not drive the handshake; complete it before reading
+	// the Finished bytes for SharedValue.
 	handshakeCtx, cancel := context.WithTimeout(ctx, o.cfg.HandshakeTimeout)
 	defer cancel()
 	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
@@ -1370,7 +1364,6 @@ func (o *Overlay) Connect(addr string) error {
 
 	o.addPeer(peer)
 
-	// Run peer read/write loops
 	go func() {
 		err := peer.Run(o.ctx)
 		if err != nil {

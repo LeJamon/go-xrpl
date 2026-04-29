@@ -39,39 +39,20 @@ peertls_ctx* peertls_ctx_new(int is_server) {
     SSL_CTX* ctx = SSL_CTX_new(m);
     if (!ctx) return NULL;
 
-    /* Force TLS 1.2 only — matches rippled make_SSLContext.cpp. */
     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
     SSL_CTX_set_max_proto_version(ctx, TLS1_2_VERSION);
-
-    /* Cipher list pinned to rippled's
-     * (make_SSLContext.cpp: "TLSv1.2:!CBC:!DSS:!PSK:!eNULL:!aNULL").
-     * Excludes CBC (Lucky13), anonymous + null suites, and deprecated
-     * key-exchange families. */
     SSL_CTX_set_cipher_list(ctx, "TLSv1.2:!CBC:!DSS:!PSK:!eNULL:!aNULL");
 
-    /* Hardening flags matching rippled (make_SSLContext.cpp:104, 352-376):
-     *   - SSL_OP_SINGLE_DH_USE: per-session DH parameters.
-     *   - SSL_OP_NO_COMPRESSION: defeats CRIME (RFC 7457).
-     *   - SSL_OP_NO_RENEGOTIATION: blocks client renegotiation
-     *     (CVE-2021-3499 mitigation; also lets us treat WANT_READ from
-     *     SSL_write as a protocol error in the Go pump). */
     long opts = SSL_OP_SINGLE_DH_USE | SSL_OP_NO_COMPRESSION;
 #ifdef SSL_OP_NO_RENEGOTIATION
     opts |= SSL_OP_NO_RENEGOTIATION;
 #endif
     SSL_CTX_set_options(ctx, opts);
 
-    /* Rippled peers don't validate certs (Public-Key header is the trust
-     * anchor). Matches make_SSLContext.cpp:391 verify_none. */
+    /* Public-Key header is the trust anchor; X.509 verification is unused. */
     SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
 
-    /* Server-side: enable RFC 7919 auto-DH so DHE-RSA cipher suites in
-     * the pinned list can negotiate. Without this, a peer that prefers
-     * DHE-RSA (or supports nothing else) would silently fail the
-     * handshake. SSL_CTX_set_dh_auto picks ≥ 2048-bit named groups
-     * (ftdhe2048/3072/4096) — at least as strong as rippled's static
-     * 2048-bit defaultDH (make_SSLContext.cpp:80-88) and portable
-     * across OpenSSL 1.1.1 / 3.x without deprecated DH APIs. */
+    /* Without this, DHE-RSA suites silently fail the handshake. */
     if (is_server) {
         SSL_CTX_set_dh_auto(ctx, 1);
     }
@@ -135,7 +116,7 @@ peertls_ssl* peertls_new(peertls_ctx* ctx) {
 
     BIO* internal = NULL;
     BIO* network  = NULL;
-    /* 0 size == default 17 KiB, large enough for any TLS record. */
+    /* 0 = default 17 KiB ring, fits any TLS record. */
     if (BIO_new_bio_pair(&internal, 0, &network, 0) != 1) {
         SSL_free(ssl);
         return NULL;
@@ -170,15 +151,10 @@ void peertls_free(peertls_ssl* s) {
 
 int peertls_handshake(peertls_ssl* s) {
     if (!s || !s->ssl) return PEERTLS_ERR_OTHER;
-    /* Clear any leftover error from a prior op on this thread so that
-     * peertls_last_error() reflects only this call's error queue. */
     ERR_clear_error();
     int rc = SSL_do_handshake(s->ssl);
     if (rc == 1) return 0;
-    /* rc == 0 is "controlled shutdown" per SSL_do_handshake(3) — NOT
-     * success. map_ssl_error routes it through SSL_get_error and emits
-     * PEERTLS_ERR_ZERO_RET (or another negative code). Do not add a
-     * fast-path that treats rc == 0 as success. */
+    /* rc == 0 is "controlled shutdown" per SSL_do_handshake(3), NOT success. */
     return map_ssl_error(s->ssl, rc);
 }
 
@@ -203,9 +179,6 @@ int peertls_bio_read(peertls_ssl* s, void* buf, int len) {
     if (BIO_ctrl_pending(s->network_bio) == 0) return 0;
     int rc = BIO_read(s->network_bio, buf, len);
     if (rc > 0) return rc;
-    /* BIO_read failed: distinguish "retry" (no data right now) from
-     * a real BIO error using BIO_should_retry. The retry case is the
-     * same as 0 pending; an unrecoverable error surfaces as SSL. */
     if (BIO_should_retry(s->network_bio)) return 0;
     return PEERTLS_ERR_SSL;
 }
@@ -220,11 +193,8 @@ int peertls_bio_write(peertls_ssl* s, const void* buf, int len) {
 
 int peertls_get_finished(peertls_ssl* s, void* buf, int len) {
     if (!s || !s->ssl || len <= 0) return 0;
-    /* SSL_get_finished returns the FULL Finished length even when our
-     * buffer is smaller — the caller uses (returned > buf_len) to detect
-     * truncation. Clamp the size_t result to INT_MAX before downcasting
-     * so the contract stays well-defined for any future cipher whose
-     * verify_data exceeds INT_MAX bytes. */
+    /* Returns the FULL Finished length even when buf is smaller; caller
+     * detects truncation via (returned > buf_len). */
     size_t r = SSL_get_finished(s->ssl, buf, (size_t)len);
     if (r > (size_t)INT_MAX) return INT_MAX;
     return (int)r;
@@ -246,8 +216,6 @@ int peertls_shutdown(peertls_ssl* s) {
 }
 
 const char* peertls_last_error(void) {
-    /* C11 _Thread_local; falls back to GCC __thread on pre-C11
-     * compilers (clang/gcc both honor __thread). */
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
     static _Thread_local char buf[256];
 #else

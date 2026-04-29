@@ -5,11 +5,8 @@ import (
 	"errors"
 )
 
-// computeSharedValue mirrors rippled's makeSharedValue:
-//
-//	sha512Half(sha512(local) XOR sha512(peer))
-//
-// where sha512Half is the first 32 bytes of SHA-512.
+// computeSharedValue returns sha512Half(sha512(local) XOR sha512(peer)),
+// the rippled session-signature input.
 func computeSharedValue(local, peer []byte) ([]byte, error) {
 	if len(local) < 12 || len(peer) < 12 {
 		return nil, errors.New("peertls: Finished message shorter than 12 bytes")
