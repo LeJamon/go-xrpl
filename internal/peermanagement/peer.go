@@ -581,6 +581,18 @@ func (p *Peer) BadDataCount() uint32 {
 	return uint32(n)
 }
 
+// Load is the per-peer charge balance surfaced as `load` in the peers
+// RPC, matching rippled's PeerImp::json (PeerImp.cpp:414):
+//
+//	ret[jss::load] = usage_.balance();
+//
+// rippled's Resource::Consumer::balance() can be negative when decay
+// outruns recent charges; we mirror that signed semantics directly off
+// badDataBalance.
+func (p *Peer) Load() int64 {
+	return p.badDataBalance.Load()
+}
+
 // DecayBadData halves the balance. Called periodically by the overlay
 // so transient errors don't accumulate to eviction.
 func (p *Peer) DecayBadData() {
@@ -689,6 +701,7 @@ type PeerInfo struct {
 
 	ServerDomain string
 	ClosedLedger string
+	Load         int64
 }
 
 func (p *Peer) Info() PeerInfo {
@@ -718,5 +731,6 @@ func (p *Peer) Info() PeerInfo {
 		MessagesOut:  stats.MessagesOut,
 		ServerDomain: p.serverDomain,
 		ClosedLedger: closedLedger,
+		Load:         p.badDataBalance.Load(),
 	}
 }

@@ -1606,8 +1606,13 @@ func (o *Overlay) Peers() []PeerInfo {
 // Strict subset of rippled PeerImp::json (PeerImp.cpp:388-503): only
 // fields that rippled actually emits AND for which goXRPL has the data.
 // Missing rippled fields (network_id, version, protocol, latency,
-// complete_ledgers, track, status, load, metrics, cluster/name) are
-// tracked as separate follow-ups.
+// complete_ledgers, track, status, metrics, cluster/name) are tracked
+// as separate follow-ups.
+//
+// `load` is rippled's Resource::Consumer::balance() (PeerImp.cpp:414);
+// goXRPL surfaces its narrower badDataBalance under the same name so
+// operators see the per-peer charge accumulator. Emitted unconditionally
+// to match rippled.
 func (o *Overlay) PeersJSON() []map[string]any {
 	list := o.Peers()
 	out := make([]map[string]any, 0, len(list))
@@ -1616,6 +1621,7 @@ func (o *Overlay) PeersJSON() []map[string]any {
 			"address":    p.Endpoint.String(),
 			"public_key": p.PublicKey,
 			"uptime":     int64(time.Since(p.ConnectedAt).Seconds()),
+			"load":       p.Load,
 		}
 		if p.Inbound {
 			entry["inbound"] = true
