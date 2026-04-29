@@ -106,6 +106,11 @@ type Peer struct {
 
 	firstLedgerSeq uint32
 	lastLedgerSeq  uint32
+
+	latencyMu     sync.RWMutex
+	pingsInFlight map[uint32]time.Time
+	latency       time.Duration
+	hasLatency    bool
 }
 
 type PeerConfig struct {
@@ -123,18 +128,19 @@ func DefaultPeerConfig() PeerConfig {
 
 func NewPeer(id PeerID, endpoint Endpoint, inbound bool, identity *Identity, events chan<- Event) *Peer {
 	return &Peer{
-		id:         id,
-		endpoint:   endpoint,
-		inbound:    inbound,
-		identity:   identity,
-		state:      PeerStateDisconnected,
-		send:       make(chan []byte, DefaultSendBufferSize),
-		events:     events,
-		score:      NewPeerScore(),
-		traffic:    NewTrafficCounter(),
-		squelchMap: make(map[string]time.Time),
-		createdAt:  time.Now(),
-		closeCh:    make(chan struct{}),
+		id:            id,
+		endpoint:      endpoint,
+		inbound:       inbound,
+		identity:      identity,
+		state:         PeerStateDisconnected,
+		send:          make(chan []byte, DefaultSendBufferSize),
+		events:        events,
+		score:         NewPeerScore(),
+		traffic:       NewTrafficCounter(),
+		squelchMap:    make(map[string]time.Time),
+		pingsInFlight: make(map[uint32]time.Time),
+		createdAt:     time.Now(),
+		closeCh:       make(chan struct{}),
 	}
 }
 
@@ -586,9 +592,11 @@ func (p *Peer) pingLoop(ctx context.Context) error {
 		case <-p.closeCh:
 			return nil
 		case <-ticker.C:
+			now := time.Now()
+			seq := uint32(now.UnixMilli())
 			ping := &message.Ping{
 				PType: message.PingTypePing,
-				Seq:   uint32(time.Now().UnixMilli() & 0xFFFFFFFF),
+				Seq:   seq,
 			}
 			encoded, err := message.Encode(ping)
 			if err != nil {
@@ -598,11 +606,90 @@ func (p *Peer) pingLoop(ctx context.Context) error {
 			if err != nil {
 				continue
 			}
+			p.recordPingSent(seq, now)
 			if err := p.Send(wireMsg); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+const (
+	pingInFlightTTL  = 30 * time.Second
+	pingsInFlightCap = 16
+)
+
+func (p *Peer) recordPingSent(seq uint32, sentAt time.Time) {
+	p.latencyMu.Lock()
+	defer p.latencyMu.Unlock()
+	cutoff := sentAt.Add(-pingInFlightTTL)
+	for k, t := range p.pingsInFlight {
+		if t.Before(cutoff) {
+			delete(p.pingsInFlight, k)
+		}
+	}
+	if len(p.pingsInFlight) >= pingsInFlightCap {
+		var (
+			oldestKey  uint32
+			oldestTime time.Time
+			haveOldest bool
+		)
+		for k, t := range p.pingsInFlight {
+			if !haveOldest || t.Before(oldestTime) {
+				oldestKey = k
+				oldestTime = t
+				haveOldest = true
+			}
+		}
+		if haveOldest {
+			delete(p.pingsInFlight, oldestKey)
+		}
+	}
+	p.pingsInFlight[seq] = sentAt
+}
+
+// roundMillisHalfEven rounds d to the nearest millisecond, breaking
+// ties toward the even multiple — mirrors C++ std::chrono::round.
+func roundMillisHalfEven(d time.Duration) time.Duration {
+	if d < 0 {
+		return 0
+	}
+	const ms = int64(time.Millisecond)
+	n := int64(d)
+	q, r := n/ms, n%ms
+	if r > ms/2 || (r == ms/2 && q%2 != 0) {
+		q++
+	}
+	return time.Duration(q) * time.Millisecond
+}
+
+// OnPong correlates a Pong with the matching Ping by seq and updates
+// the EWMA-smoothed latency. Mirrors PeerImp::onMessage(TMPing)
+// (PeerImp.cpp:1099-1118): rtt is rounded to ms, then smoothed at ms
+// granularity via latency = (latency*7 + rtt) / 8.
+func (p *Peer) OnPong(seq uint32, receivedAt time.Time) {
+	p.latencyMu.Lock()
+	defer p.latencyMu.Unlock()
+	sentAt, ok := p.pingsInFlight[seq]
+	if !ok {
+		return
+	}
+	delete(p.pingsInFlight, seq)
+	rtt := roundMillisHalfEven(receivedAt.Sub(sentAt))
+	if !p.hasLatency {
+		p.latency = rtt
+		p.hasLatency = true
+		return
+	}
+	prev := int64(p.latency / time.Millisecond)
+	sample := int64(rtt / time.Millisecond)
+	p.latency = time.Duration((prev*7+sample)/8) * time.Millisecond
+}
+
+func (p *Peer) Latency() (time.Duration, bool) {
+	p.latencyMu.RLock()
+	defer p.latencyMu.RUnlock()
+	return p.latency, p.hasLatency
 }
 
 // maxSquelchesPerPeer bounds memory under adversarial input. Existing
@@ -768,6 +855,9 @@ type PeerInfo struct {
 	ClosedLedger    string
 	CompleteLedgers string
 	Tracking        PeerTracking
+
+	Latency    time.Duration
+	HasLatency bool
 }
 
 func (p *Peer) Info() PeerInfo {
@@ -795,6 +885,8 @@ func (p *Peer) Info() PeerInfo {
 		completeLedgers = fmt.Sprintf("%d - %d", p.firstLedgerSeq, p.lastLedgerSeq)
 	}
 
+	latency, hasLatency := p.Latency()
+
 	return PeerInfo{
 		ID:              p.id,
 		Endpoint:        p.endpoint,
@@ -809,5 +901,7 @@ func (p *Peer) Info() PeerInfo {
 		ClosedLedger:    closedLedger,
 		CompleteLedgers: completeLedgers,
 		Tracking:        PeerTracking(p.tracking.Load()),
+		Latency:         latency,
+		HasLatency:      hasLatency,
 	}
 }

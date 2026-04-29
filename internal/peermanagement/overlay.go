@@ -1129,7 +1129,8 @@ func (o *Overlay) handlePing(evt Event) {
 		return
 	}
 
-	if ping.PType == message.PingTypePing {
+	switch ping.PType {
+	case message.PingTypePing:
 		pong := &message.Ping{
 			PType:    message.PingTypePong,
 			Seq:      ping.Seq,
@@ -1144,6 +1145,13 @@ func (o *Overlay) handlePing(evt Event) {
 			return
 		}
 		o.Send(evt.PeerID, wireMsg)
+	case message.PingTypePong:
+		o.peersMu.RLock()
+		peer, exists := o.peers[evt.PeerID]
+		o.peersMu.RUnlock()
+		if exists {
+			peer.OnPong(ping.Seq, time.Now())
+		}
 	}
 }
 
@@ -1694,6 +1702,9 @@ func (o *Overlay) PeersJSON() []map[string]any {
 			entry["track"] = "diverged"
 		case PeerTrackingUnknown:
 			entry["track"] = "unknown"
+		}
+		if p.HasLatency {
+			entry["latency"] = uint32(p.Latency / time.Millisecond)
 		}
 		out = append(out, entry)
 	}
