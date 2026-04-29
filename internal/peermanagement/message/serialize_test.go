@@ -114,6 +114,8 @@ func TestEndpointsRoundtrip(t *testing.T) {
 }
 
 func TestStatusChangeRoundtrip(t *testing.T) {
+	first := uint32(100000)
+	last := uint32(1000000)
 	original := &StatusChange{
 		NewStatus:          NodeStatusValidating,
 		NewEvent:           NodeEventAcceptedLedger,
@@ -121,8 +123,8 @@ func TestStatusChangeRoundtrip(t *testing.T) {
 		LedgerHash:         bytes.Repeat([]byte{0xAB}, 32),
 		LedgerHashPrevious: bytes.Repeat([]byte{0xCD}, 32),
 		NetworkTime:        1234567890,
-		FirstSeq:           100000,
-		LastSeq:            1000000,
+		FirstSeq:           &first,
+		LastSeq:            &last,
 	}
 
 	encoded, err := Encode(original)

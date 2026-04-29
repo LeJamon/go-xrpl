@@ -115,8 +115,8 @@ message TMStatusChange {
     bytes ledger_hash = 4;
     bytes ledger_hash_previous = 5;
     uint64 network_time = 6;
-    uint32 first_seq = 7;
-    uint32 last_seq = 8;
+    optional uint32 first_seq = 7;
+    optional uint32 last_seq = 8;
 }
 
 // Ledger proposal

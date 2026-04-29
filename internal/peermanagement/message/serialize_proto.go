@@ -433,8 +433,8 @@ func fromProto(msgType MessageType, protoMsg pb.Message) (Message, error) {
 			LedgerHash:         p.GetLedgerHash(),
 			LedgerHashPrevious: p.GetLedgerHashPrevious(),
 			NetworkTime:        p.GetNetworkTime(),
-			FirstSeq:           p.GetFirstSeq(),
-			LastSeq:            p.GetLastSeq(),
+			FirstSeq:           p.FirstSeq,
+			LastSeq:            p.LastSeq,
 		}, nil
 
 	case TypeHaveSet:
