@@ -1682,6 +1682,10 @@ func (o *Overlay) PeersJSON() []map[string]any {
 		if p.ServerDomain != "" {
 			entry["server_domain"] = p.ServerDomain
 		}
+		// PeerImp.cpp:411-412: emit only when the peer set a Network-ID.
+		if p.NetworkID != "" {
+			entry["network_id"] = p.NetworkID
+		}
 		if p.ClosedLedger != "" {
 			entry["ledger"] = p.ClosedLedger
 		}

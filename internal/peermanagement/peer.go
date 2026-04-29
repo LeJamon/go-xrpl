@@ -99,6 +99,7 @@ type Peer struct {
 	tracking atomic.Int32
 
 	serverDomain      string
+	networkID         string
 	closedLedger      [32]byte
 	previousLedger    [32]byte
 	hasClosedLedger   bool
@@ -198,6 +199,7 @@ func (p *Peer) applyHandshakeExtras(x HandshakeExtras) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.serverDomain = x.ServerDomain
+	p.networkID = x.NetworkID
 	if x.HasClosedLedger {
 		p.closedLedger = x.ClosedLedger
 		p.hasClosedLedger = true
@@ -296,6 +298,15 @@ func (p *Peer) ServerDomain() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.serverDomain
+}
+
+// NetworkID reports the peer's reported Network-ID handshake header,
+// or "" if the peer omitted it. Mirrors rippled PeerImp's
+// headers_["Network-ID"] passthrough (PeerImp.cpp:411-412).
+func (p *Peer) NetworkID() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.networkID
 }
 
 // ClosedLedger reports the peer's last closed-ledger hint, or ok=false.
@@ -856,6 +867,7 @@ type PeerInfo struct {
 	MessagesOut    uint64
 
 	ServerDomain    string
+	NetworkID       string
 	ClosedLedger    string
 	CompleteLedgers string
 	Tracking        PeerTracking
@@ -903,6 +915,7 @@ func (p *Peer) Info() PeerInfo {
 		MessagesIn:      stats.MessagesIn,
 		MessagesOut:     stats.MessagesOut,
 		ServerDomain:    p.serverDomain,
+		NetworkID:       p.networkID,
 		ClosedLedger:    closedLedger,
 		CompleteLedgers: completeLedgers,
 		Tracking:        PeerTracking(p.tracking.Load()),
