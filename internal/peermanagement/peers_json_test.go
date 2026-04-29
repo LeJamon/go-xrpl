@@ -43,7 +43,7 @@ func TestOverlay_PeersJSON_EmitsLoad(t *testing.T) {
 		"rippled emits `load` unconditionally even when zero")
 	assert.Equal(t, int64(250), by["10.0.0.2:51235"]["load"])
 	assert.Equal(t, int64(-7), by["10.0.0.3:51235"]["load"],
-		"rippled's Resource::Consumer::balance() can be negative")
+		"signed JSON contract is preserved (rippled-style decay could go negative)")
 
 	for addr, entry := range by {
 		_, hasLoad := entry["load"]
@@ -61,7 +61,8 @@ func TestPeer_Load_TracksBadDataBalance(t *testing.T) {
 	p.IncBadData("invalid-message")
 	assert.Greater(t, p.Load(), int64(0))
 
-	// negative balance is allowed (decay-overshoot semantics)
+	// signed return type is preserved so the JSON contract still holds
+	// if decay is ever rewritten to allow negatives (rippled-style)
 	p.badDataBalance.Store(-3)
 	assert.Equal(t, int64(-3), p.Load())
 }
