@@ -715,10 +715,12 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 
 	caps := NewPeerCapabilities()
 	caps.Features = ParseProtocolCtlFeatures(req.Header)
+	protocol := ParseHandshakeProtocolVersion(req.Header.Get(HeaderUpgrade))
 
 	peer.mu.Lock()
 	peer.bufReader = bufReader
 	peer.capabilities = caps
+	peer.protocolVersion = protocol
 	peer.mu.Unlock()
 
 	resp := BuildHandshakeResponse(o.identity, sharedValue, hsCfg)
@@ -1707,6 +1709,9 @@ func (o *Overlay) PeersJSON() []map[string]any {
 		if p.HasLatency {
 			entry["latency"] = uint32(p.Latency / time.Millisecond)
 		}
+		// PeerImp.cpp:419 — emit unconditionally (rippled always has a
+		// negotiated value once the handshake has completed).
+		entry["protocol"] = p.Protocol
 		out = append(out, entry)
 	}
 	return out

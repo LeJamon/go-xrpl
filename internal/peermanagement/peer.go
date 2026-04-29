@@ -104,6 +104,11 @@ type Peer struct {
 	hasClosedLedger   bool
 	hasPreviousLedger bool
 
+	// protocolVersion: negotiated peer-protocol token (e.g. "XRPL/2.2").
+	// Mirrors rippled PeerImp::protocol_, surfaced via `protocol` in the
+	// peers RPC (PeerImp.cpp:419).
+	protocolVersion string
+
 	firstLedgerSeq uint32
 	lastLedgerSeq  uint32
 
@@ -298,6 +303,20 @@ func (p *Peer) ServerDomain() string {
 	return p.serverDomain
 }
 
+// ProtocolVersion returns the negotiated peer-protocol token (e.g.
+// "XRPL/2.2") captured during the handshake, or "" if unknown.
+func (p *Peer) ProtocolVersion() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.protocolVersion
+}
+
+func (p *Peer) setProtocolVersion(v string) {
+	p.mu.Lock()
+	p.protocolVersion = v
+	p.mu.Unlock()
+}
+
 // ClosedLedger reports the peer's last closed-ledger hint, or ok=false.
 func (p *Peer) ClosedLedger() ([32]byte, bool) {
 	p.mu.RLock()
@@ -449,8 +468,10 @@ func (p *Peer) performHandshake(ctx context.Context, tlsConn peertls.PeerConn) e
 
 	caps := NewPeerCapabilities()
 	caps.Features = ParseProtocolCtlFeatures(resp.Header)
+	protocol := ParseHandshakeProtocolVersion(resp.Header.Get(HeaderUpgrade))
 	p.mu.Lock()
 	p.capabilities = caps
+	p.protocolVersion = protocol
 	p.mu.Unlock()
 
 	extras, err := ParseHandshakeExtras(
@@ -863,6 +884,8 @@ type PeerInfo struct {
 
 	Latency    time.Duration
 	HasLatency bool
+
+	Protocol string
 }
 
 func (p *Peer) Info() PeerInfo {
@@ -909,5 +932,6 @@ func (p *Peer) Info() PeerInfo {
 		Load:            p.Load(),
 		Latency:         latency,
 		HasLatency:      hasLatency,
+		Protocol:        p.protocolVersion,
 	}
 }
