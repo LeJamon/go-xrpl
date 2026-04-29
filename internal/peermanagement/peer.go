@@ -44,6 +44,25 @@ func (s PeerState) String() string {
 	}
 }
 
+// PeerTracking is the per-peer consensus-convergence state. Mirrors
+// rippled PeerImp::Tracking (PeerImp.h:58). Defaults to Unknown until
+// enough StatusChange messages and a fresh local validated ledger
+// produce a comparison.
+type PeerTracking int32
+
+const (
+	PeerTrackingUnknown PeerTracking = iota
+	PeerTrackingConverged
+	PeerTrackingDiverged
+)
+
+// Tuning constants for convergence comparison. Mirrors rippled
+// Tuning.h convergedLedgerLimit / divergedLedgerLimit.
+const (
+	convergedLedgerLimit uint32 = 24
+	divergedLedgerLimit  uint32 = 128
+)
+
 // Peer represents a connection to an XRPL peer node.
 type Peer struct {
 	mu sync.RWMutex
@@ -80,6 +99,8 @@ type Peer struct {
 	// cadence by the overlay so transient errors decay. int64 because
 	// decay can overshoot zero.
 	badDataBalance atomic.Int64
+
+	tracking atomic.Int32
 
 	serverDomain      string
 	closedLedger      [32]byte
@@ -228,6 +249,41 @@ func (p *Peer) applyStatusChange(closed, previous []byte, lostSync bool, firstSe
 	} else {
 		p.firstLedgerSeq = *firstSeq
 		p.lastLedgerSeq = *lastSeq
+	}
+}
+
+// Tracking returns the current consensus-convergence state.
+func (p *Peer) Tracking() PeerTracking {
+	return PeerTracking(p.tracking.Load())
+}
+
+// SetTracking overrides the convergence state. Exposed for tests.
+func (p *Peer) SetTracking(t PeerTracking) {
+	p.tracking.Store(int32(t))
+}
+
+// CheckTracking compares a peer-reported ledger sequence against the
+// local validated ledger sequence and updates Tracking accordingly.
+// Mirrors rippled PeerImp::checkTracking (PeerImp.cpp:1986-2005):
+//
+//   - diff < convergedLedgerLimit  → Converged
+//   - diff > divergedLedgerLimit   → Diverged (sticky once set)
+//   - in between                   → no change
+func (p *Peer) CheckTracking(peerSeq, validSeq uint32) {
+	if peerSeq == 0 || validSeq == 0 {
+		return
+	}
+	var diff uint32
+	if peerSeq > validSeq {
+		diff = peerSeq - validSeq
+	} else {
+		diff = validSeq - peerSeq
+	}
+	if diff < convergedLedgerLimit {
+		p.tracking.Store(int32(PeerTrackingConverged))
+	}
+	if diff > divergedLedgerLimit && PeerTracking(p.tracking.Load()) != PeerTrackingDiverged {
+		p.tracking.Store(int32(PeerTrackingDiverged))
 	}
 }
 
@@ -712,6 +768,7 @@ type PeerInfo struct {
 	ServerDomain    string
 	ClosedLedger    string
 	CompleteLedgers string
+	Tracking        PeerTracking
 }
 
 func (p *Peer) Info() PeerInfo {
@@ -752,5 +809,6 @@ func (p *Peer) Info() PeerInfo {
 		ServerDomain:    p.serverDomain,
 		ClosedLedger:    closedLedger,
 		CompleteLedgers: completeLedgers,
+		Tracking:        PeerTracking(p.tracking.Load()),
 	}
 }

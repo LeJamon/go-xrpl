@@ -182,6 +182,13 @@ type Overlay struct {
 	hintMu             sync.RWMutex
 	ledgerHintProvider func() (LedgerHints, bool)
 
+	// validLedgerProvider: returns the local node's most recent
+	// validated ledger sequence and its age, used to drive per-peer
+	// tracking convergence comparisons. Wired by a higher layer to
+	// avoid importing internal/ledger. Guarded by hintMu (same lock —
+	// both fields are wired/read on similar lifecycles).
+	validLedgerProvider func() (seq uint32, age time.Duration, ok bool)
+
 	// Components
 	discovery  *Discovery
 	relay      *Relay
@@ -277,6 +284,22 @@ func (o *Overlay) ledgerHintProviderSnapshot() func() (LedgerHints, bool) {
 	o.hintMu.RLock()
 	defer o.hintMu.RUnlock()
 	return o.ledgerHintProvider
+}
+
+// SetValidLedgerProvider wires the local validated-ledger source used
+// by handleStatusChange to drive per-peer tracking convergence checks.
+// fn returns (seq, age, ok); ok=false suppresses tracking updates,
+// matching rippled's "validated ledger age < 2min" gate (PeerImp.cpp:1885-1890).
+func (o *Overlay) SetValidLedgerProvider(fn func() (seq uint32, age time.Duration, ok bool)) {
+	o.hintMu.Lock()
+	o.validLedgerProvider = fn
+	o.hintMu.Unlock()
+}
+
+func (o *Overlay) validLedgerProviderSnapshot() func() (seq uint32, age time.Duration, ok bool) {
+	o.hintMu.RLock()
+	defer o.hintMu.RUnlock()
+	return o.validLedgerProvider
 }
 
 // generateInstanceCookie matches rippled Application.cpp:
@@ -1034,6 +1057,20 @@ func (o *Overlay) handleStatusChange(evt Event) {
 		sc.FirstSeq,
 		sc.LastSeq,
 	)
+
+	// PeerImp.cpp:1885-1890: gate on a fresh (<2 min) validated ledger.
+	if sc.LedgerSeq == 0 {
+		return
+	}
+	provider := o.validLedgerProviderSnapshot()
+	if provider == nil {
+		return
+	}
+	validSeq, age, ok := provider()
+	if !ok || validSeq == 0 || age >= 2*time.Minute {
+		return
+	}
+	peer.CheckTracking(sc.LedgerSeq, validSeq)
 }
 
 // handleSquelchMessage processes an inbound TMSquelch from a peer and
@@ -1658,6 +1695,13 @@ func (o *Overlay) PeersJSON() []map[string]any {
 					entry["name"] = member.Name
 				}
 			}
+		}
+		// PeerImp.cpp:437-450: omit when converged.
+		switch p.Tracking {
+		case PeerTrackingDiverged:
+			entry["track"] = "diverged"
+		case PeerTrackingUnknown:
+			entry["track"] = "unknown"
 		}
 		out = append(out, entry)
 	}

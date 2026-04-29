@@ -232,6 +232,18 @@ func runServer(cmd *cobra.Command, args []string) {
 			}
 			return peermanagement.LedgerHints{Closed: cl.Hash(), Parent: cl.ParentHash()}, true
 		})
+
+		// Validated-ledger source for per-peer tracking convergence
+		// (PeerImp.cpp:1885-1890). overlay.handleStatusChange compares
+		// peer-reported ledger seqs against this baseline.
+		overlay.SetValidLedgerProvider(func() (uint32, time.Duration, bool) {
+			vl := ledgerService.GetValidatedLedger()
+			if vl == nil {
+				return 0, 0, false
+			}
+			age := time.Since(vl.CloseTime())
+			return vl.Sequence(), age, true
+		})
 		ledgerAdapter.SetTxBroadcaster(func(txBlob []byte) {
 			txMsg := &message.Transaction{
 				RawTransaction: txBlob,
