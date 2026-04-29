@@ -44,10 +44,7 @@ func (s PeerState) String() string {
 	}
 }
 
-// PeerTracking is the per-peer consensus-convergence state. Mirrors
-// rippled PeerImp::Tracking (PeerImp.h:58). Defaults to Unknown until
-// enough StatusChange messages and a fresh local validated ledger
-// produce a comparison.
+// PeerTracking mirrors rippled PeerImp::Tracking (PeerImp.h:58).
 type PeerTracking int32
 
 const (
@@ -56,8 +53,7 @@ const (
 	PeerTrackingDiverged
 )
 
-// Tuning constants for convergence comparison. Mirrors rippled
-// Tuning.h convergedLedgerLimit / divergedLedgerLimit.
+// rippled Tuning.h.
 const (
 	convergedLedgerLimit uint32 = 24
 	divergedLedgerLimit  uint32 = 128
@@ -252,23 +248,17 @@ func (p *Peer) applyStatusChange(closed, previous []byte, lostSync bool, firstSe
 	}
 }
 
-// Tracking returns the current consensus-convergence state.
 func (p *Peer) Tracking() PeerTracking {
 	return PeerTracking(p.tracking.Load())
 }
 
-// SetTracking overrides the convergence state. Exposed for tests.
-func (p *Peer) SetTracking(t PeerTracking) {
+func (p *Peer) setTracking(t PeerTracking) {
 	p.tracking.Store(int32(t))
 }
 
-// CheckTracking compares a peer-reported ledger sequence against the
-// local validated ledger sequence and updates Tracking accordingly.
-// Mirrors rippled PeerImp::checkTracking (PeerImp.cpp:1986-2005):
-//
-//   - diff < convergedLedgerLimit  → Converged
-//   - diff > divergedLedgerLimit   → Diverged (sticky once set)
-//   - in between                   → no change
+// CheckTracking mirrors rippled PeerImp::checkTracking (PeerImp.cpp:1986-2005).
+// CAS on the diverged branch keeps a concurrent Converged write from
+// being clobbered (rippled holds recentLock_; CAS is the lock-free equivalent).
 func (p *Peer) CheckTracking(peerSeq, validSeq uint32) {
 	if peerSeq == 0 || validSeq == 0 {
 		return
@@ -281,9 +271,18 @@ func (p *Peer) CheckTracking(peerSeq, validSeq uint32) {
 	}
 	if diff < convergedLedgerLimit {
 		p.tracking.Store(int32(PeerTrackingConverged))
+		return
 	}
-	if diff > divergedLedgerLimit && PeerTracking(p.tracking.Load()) != PeerTrackingDiverged {
-		p.tracking.Store(int32(PeerTrackingDiverged))
+	if diff > divergedLedgerLimit {
+		for {
+			cur := p.tracking.Load()
+			if PeerTracking(cur) == PeerTrackingDiverged {
+				return
+			}
+			if p.tracking.CompareAndSwap(cur, int32(PeerTrackingDiverged)) {
+				return
+			}
+		}
 	}
 }
 

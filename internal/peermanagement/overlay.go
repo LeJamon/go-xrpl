@@ -177,16 +177,9 @@ type Overlay struct {
 	// instanceCookie: immutable post-New, lock-free.
 	instanceCookie uint64
 
-	// ledgerHintProvider: wired by a higher layer (avoids importing
-	// internal/ledger). Guarded by hintMu.
-	hintMu             sync.RWMutex
-	ledgerHintProvider func() (LedgerHints, bool)
-
-	// validLedgerProvider: returns the local node's most recent
-	// validated ledger sequence and its age, used to drive per-peer
-	// tracking convergence comparisons. Wired by a higher layer to
-	// avoid importing internal/ledger. Guarded by hintMu (same lock —
-	// both fields are wired/read on similar lifecycles).
+	// Higher-layer callbacks (avoid importing internal/ledger here).
+	providersMu         sync.RWMutex
+	ledgerHintProvider  func() (LedgerHints, bool)
 	validLedgerProvider func() (seq uint32, age time.Duration, ok bool)
 
 	// Components
@@ -275,30 +268,29 @@ func (o *Overlay) PeersWithClosedLedger(target [32]byte) []PeerID {
 
 // SetLedgerHintProvider wires the hint source; nil suppresses headers.
 func (o *Overlay) SetLedgerHintProvider(fn func() (LedgerHints, bool)) {
-	o.hintMu.Lock()
+	o.providersMu.Lock()
 	o.ledgerHintProvider = fn
-	o.hintMu.Unlock()
+	o.providersMu.Unlock()
 }
 
 func (o *Overlay) ledgerHintProviderSnapshot() func() (LedgerHints, bool) {
-	o.hintMu.RLock()
-	defer o.hintMu.RUnlock()
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
 	return o.ledgerHintProvider
 }
 
-// SetValidLedgerProvider wires the local validated-ledger source used
-// by handleStatusChange to drive per-peer tracking convergence checks.
-// fn returns (seq, age, ok); ok=false suppresses tracking updates,
-// matching rippled's "validated ledger age < 2min" gate (PeerImp.cpp:1885-1890).
+// SetValidLedgerProvider wires the validated-ledger source used by
+// handleStatusChange (PeerImp.cpp:1885-1890). ok=false suppresses
+// tracking updates.
 func (o *Overlay) SetValidLedgerProvider(fn func() (seq uint32, age time.Duration, ok bool)) {
-	o.hintMu.Lock()
+	o.providersMu.Lock()
 	o.validLedgerProvider = fn
-	o.hintMu.Unlock()
+	o.providersMu.Unlock()
 }
 
 func (o *Overlay) validLedgerProviderSnapshot() func() (seq uint32, age time.Duration, ok bool) {
-	o.hintMu.RLock()
-	defer o.hintMu.RUnlock()
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
 	return o.validLedgerProvider
 }
 
