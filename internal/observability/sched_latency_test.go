@@ -2,8 +2,6 @@ package observability
 
 import (
 	"context"
-	"math"
-	"runtime/metrics"
 	"testing"
 	"time"
 )
@@ -15,22 +13,71 @@ func TestSchedLatencyMs_ZeroBeforeFirstSample(t *testing.T) {
 	}
 }
 
-func TestSchedLatencyMs_NonNegative(t *testing.T) {
+func TestSchedLatencyMs_HealthyServerReportsNearZero(t *testing.T) {
 	resetForTest()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	StartSchedLatencySampler(ctx)
 
+	// Wait for at least one sample tick + the spawned goroutine to
+	// land. On any non-pathological CI runner the elapsed should be
+	// well under 100ms.
 	deadline := time.Now().Add(2 * SamplerInterval)
 	for time.Now().Before(deadline) {
-		if got := SchedLatencyMs(); got >= 0 {
+		if publishedNs.Load() > 0 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if got := SchedLatencyMs(); got < 0 {
+	got := SchedLatencyMs()
+	if got < 0 {
 		t.Errorf("SchedLatencyMs() = %d, want >= 0", got)
+	}
+	// Healthy single-test runner should NEVER report >100ms — that
+	// would mean the sampler waited longer than the sample interval
+	// for a P, which on a non-saturated host doesn't happen.
+	if got > 100 {
+		t.Errorf("SchedLatencyMs() = %d, want <= 100 on a healthy runner", got)
+	}
+}
+
+func TestPostSample_PublishesElapsed(t *testing.T) {
+	resetForTest()
+	postSample()
+
+	// Spawned goroutine writes asynchronously. Poll briefly.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if publishedNs.Load() > 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := publishedNs.Load(); got <= 0 {
+		t.Errorf("publishedNs = %d, want > 0 after postSample", got)
+	}
+}
+
+func TestPostSample_OverwritesPreviousValue(t *testing.T) {
+	resetForTest()
+	publishedNs.Store(int64(50 * time.Millisecond))
+
+	postSample()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	var got int64
+	for time.Now().Before(deadline) {
+		got = publishedNs.Load()
+		if got != int64(50*time.Millisecond) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got == int64(50*time.Millisecond) {
+		t.Error("publishedNs was not overwritten by postSample")
+	}
+	if got <= 0 {
+		t.Errorf("publishedNs = %d, want > 0 after overwrite", got)
 	}
 }
 
@@ -40,8 +87,10 @@ func TestStartSchedLatencySampler_IdempotentStart(t *testing.T) {
 	defer cancel()
 
 	StartSchedLatencySampler(ctx)
-	StartSchedLatencySampler(ctx) // second call must be a no-op
 	StartSchedLatencySampler(ctx)
+	StartSchedLatencySampler(ctx)
+	// Survival is the assertion; double-start would race the publish
+	// loop and the test runner would flag the race detector.
 }
 
 func TestStartSchedLatencySampler_StopsOnCancel(t *testing.T) {
@@ -51,75 +100,8 @@ func TestStartSchedLatencySampler_StopsOnCancel(t *testing.T) {
 	StartSchedLatencySampler(ctx)
 	time.Sleep(2 * SamplerInterval)
 	cancel()
-	// No assertion beyond "doesn't deadlock or panic" — the goroutine
-	// is independent and observably stops by ctx.Done().
-}
-
-// Histogram bucket boundaries (seconds): [0, 1ms, 10ms, 100ms, 1s, +Inf]
-var testBuckets = []float64{0, 0.001, 0.01, 0.1, 1.0, math.Inf(1)}
-
-func histogram(counts []uint64) *metrics.Float64Histogram {
-	return &metrics.Float64Histogram{
-		Counts:  counts,
-		Buckets: testBuckets,
-	}
-}
-
-func TestMaxIntervalNs_NoNewSamples(t *testing.T) {
-	h := histogram([]uint64{0, 100, 0, 0, 0})
-	prev := []uint64{0, 100, 0, 0, 0}
-	if got := maxIntervalNs(h, prev); got != 0 {
-		t.Errorf("expected 0 when no new samples, got %d", got)
-	}
-}
-
-func TestMaxIntervalNs_PicksHighestBucketWithDiff(t *testing.T) {
-	// 100 new samples in the 1-10ms bucket → upper bound = 10ms.
-	h := histogram([]uint64{0, 100, 0, 0, 0})
-	prev := []uint64{0, 0, 0, 0, 0}
-	want := int64(10 * time.Millisecond)
-	if got := maxIntervalNs(h, prev); got != want {
-		t.Errorf("expected %d ns (10ms), got %d", want, got)
-	}
-}
-
-func TestMaxIntervalNs_DiffIgnoresOlderBuckets(t *testing.T) {
-	// New samples landed in 10-100ms (5 new) and 100ms-1s (1 new).
-	// Highest with diff is 100ms-1s → upper bound = 1s.
-	h := histogram([]uint64{0, 100, 105, 1, 0})
-	prev := []uint64{0, 100, 100, 0, 0}
-	want := int64(1 * time.Second)
-	if got := maxIntervalNs(h, prev); got != want {
-		t.Errorf("expected %d ns (1s), got %d", want, got)
-	}
-}
-
-func TestMaxIntervalNs_InfBucketClampsToLowerBound(t *testing.T) {
-	// 50 new samples in the +Inf bucket → upper bound is +Inf, so
-	// fall back to the lower bound = 1s.
-	h := histogram([]uint64{0, 0, 0, 0, 50})
-	prev := []uint64{0, 0, 0, 0, 0}
-	want := int64(1 * time.Second)
-	if got := maxIntervalNs(h, prev); got != want {
-		t.Errorf("expected %d ns (1s, clamped from +Inf), got %d", want, got)
-	}
-}
-
-func TestMaxIntervalNs_NilHistogram(t *testing.T) {
-	if got := maxIntervalNs(nil, nil); got != 0 {
-		t.Errorf("expected 0 for nil histogram, got %d", got)
-	}
-}
-
-func TestMaxIntervalNs_PrevShorterThanCurrent(t *testing.T) {
-	// prev was empty (e.g. process startup) — every bucket counts
-	// as new. Highest non-empty is index 1 → upper = 10ms.
-	h := histogram([]uint64{0, 5, 0, 0, 0})
-	prev := []uint64{}
-	want := int64(10 * time.Millisecond)
-	if got := maxIntervalNs(h, prev); got != want {
-		t.Errorf("expected %d ns, got %d", want, got)
-	}
+	// Goroutine exits on ctx.Done(); this test asserts no deadlock /
+	// no panic on shutdown.
 }
 
 func TestSchedLatencyMs_CeilSemantics(t *testing.T) {
@@ -128,9 +110,9 @@ func TestSchedLatencyMs_CeilSemantics(t *testing.T) {
 		want int
 	}{
 		{0, 0},
-		{500_000, 1},               // 500us → ceil = 1ms
+		{500_000, 1},               // 500us → ceil to 1ms
 		{1_000_000, 1},             // exactly 1ms
-		{1_100_000, 2},             // 1.1ms → ceil = 2ms
+		{1_100_000, 2},             // 1.1ms → ceil to 2ms
 		{int64(time.Second), 1000}, // 1s → 1000ms
 	}
 	for _, tt := range tests {
