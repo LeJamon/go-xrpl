@@ -24,7 +24,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, err
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -35,7 +35,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	}
 
 	limit := ClampLimit(request.Limit, LimitAccountNFTokens, ctx.IsAdmin)
-	result, err := types.Services.Ledger.GetAccountNFTs(
+	result, err := ctx.Services.Ledger.GetAccountNFTs(
 		request.Account,
 		ledgerIndex,
 		limit,

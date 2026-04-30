@@ -38,29 +38,23 @@ func (m *accountOffersMock) GetAccountOffers(account string, ledgerIndex string,
 	}, nil
 }
 
-// setupAccountOffersTestServices sets up the test services with the accountOffersMock
-func setupAccountOffersTestServices(mock *accountOffersMock) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
-		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
-	}
+// newAccountOffersTestServices builds a *types.ServiceContainer wrapping the mock.
+func newAccountOffersTestServices(mock *accountOffersMock) *types.ServiceContainer {
+	return &types.ServiceContainer{Ledger: mock}
 }
 
 // TestAccountOffersErrorValidation tests error handling for invalid inputs
 // Based on rippled AccountOffers_test.cpp testBadInput()
 func TestAccountOffersErrorValidation(t *testing.T) {
 	mock := newAccountOffersMock()
-	cleanup := setupAccountOffersTestServices(mock)
-	defer cleanup()
+	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -195,14 +189,14 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 // Based on rippled AccountOffers_test.cpp testNonAdminMinLimit()
 func TestAccountOffersNonAdminMinLimit(t *testing.T) {
 	mock := newAccountOffersMock()
-	cleanup := setupAccountOffersTestServices(mock)
-	defer cleanup()
+	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -286,14 +280,14 @@ func TestAccountOffersNonAdminMinLimit(t *testing.T) {
 // Based on rippled AccountOffers_test.cpp testSequential()
 func TestAccountOffersSequentialRetrieval(t *testing.T) {
 	mock := newAccountOffersMock()
-	cleanup := setupAccountOffersTestServices(mock)
-	defer cleanup()
+	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -438,14 +432,14 @@ func TestAccountOffersSequentialRetrieval(t *testing.T) {
 // Based on rippled account_offers response structure
 func TestAccountOffersResponseFields(t *testing.T) {
 	mock := newAccountOffersMock()
-	cleanup := setupAccountOffersTestServices(mock)
-	defer cleanup()
+	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -533,14 +527,14 @@ func TestAccountOffersResponseFields(t *testing.T) {
 // TestAccountOffersEmptyOffers tests response for account with no offers
 func TestAccountOffersEmptyOffers(t *testing.T) {
 	mock := newAccountOffersMock()
-	cleanup := setupAccountOffersTestServices(mock)
-	defer cleanup()
+	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -584,8 +578,7 @@ func TestAccountOffersEmptyOffers(t *testing.T) {
 // Based on rippled AccountOffers_test.cpp testSequential() with admin limit=1
 func TestAccountOffersMarkerPagination(t *testing.T) {
 	mock := newAccountOffersMock()
-	cleanup := setupAccountOffersTestServices(mock)
-	defer cleanup()
+	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
 	ctx := &types.RpcContext{
@@ -593,6 +586,7 @@ func TestAccountOffersMarkerPagination(t *testing.T) {
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
 		IsAdmin:    true,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -755,14 +749,14 @@ func TestAccountOffersMarkerPagination(t *testing.T) {
 // Based on rippled AccountOffers_test.cpp response validation
 func TestAccountOffersOfferFields(t *testing.T) {
 	mock := newAccountOffersMock()
-	cleanup := setupAccountOffersTestServices(mock)
-	defer cleanup()
+	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -939,16 +933,14 @@ func TestAccountOffersOfferFields(t *testing.T) {
 // TestAccountOffersServiceUnavailable tests behavior when ledger service is not available
 func TestAccountOffersServiceUnavailable(t *testing.T) {
 	method := &handlers.AccountOffersMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
-	}
 
 	t.Run("Services nil", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = nil
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   nil,
+		}
 
 		params := map[string]interface{}{
 			"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
@@ -965,9 +957,12 @@ func TestAccountOffersServiceUnavailable(t *testing.T) {
 	})
 
 	t.Run("Ledger nil", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = &types.ServiceContainer{Ledger: nil}
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: nil},
+		}
 
 		params := map[string]interface{}{
 			"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
@@ -1004,14 +999,14 @@ func TestAccountOffersMethodMetadata(t *testing.T) {
 // TestAccountOffersLedgerSpecification tests different ledger index specifications
 func TestAccountOffersLedgerSpecification(t *testing.T) {
 	mock := newAccountOffersMock()
-	cleanup := setupAccountOffersTestServices(mock)
-	defer cleanup()
+	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -1064,14 +1059,14 @@ func TestAccountOffersLedgerSpecification(t *testing.T) {
 // Based on rippled AccountOffers_test.cpp testBadInput() - testInvalidAccountParam lambda
 func TestAccountOffersInvalidAccountTypes(t *testing.T) {
 	mock := newAccountOffersMock()
-	cleanup := setupAccountOffersTestServices(mock)
-	defer cleanup()
+	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	invalidParams := []struct {
@@ -1114,14 +1109,14 @@ func TestAccountOffersInvalidAccountTypes(t *testing.T) {
 // Based on rippled AccountOffers_test.cpp testBadInput() - empty account and bogus account
 func TestAccountOffersMalformedAddresses(t *testing.T) {
 	mock := newAccountOffersMock()
-	cleanup := setupAccountOffersTestServices(mock)
-	defer cleanup()
+	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Set up mock to return "account not found" for all address lookups
@@ -1179,14 +1174,14 @@ func TestAccountOffersMalformedAddresses(t *testing.T) {
 // TestAccountOffersServiceError tests behavior when the ledger service returns an error
 func TestAccountOffersServiceError(t *testing.T) {
 	mock := newAccountOffersMock()
-	cleanup := setupAccountOffersTestServices(mock)
-	defer cleanup()
+	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"

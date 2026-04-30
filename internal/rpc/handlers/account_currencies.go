@@ -24,7 +24,7 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, err
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -35,7 +35,7 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 
 	// Get account currencies from the ledger service
-	result, err := types.Services.Ledger.GetAccountCurrencies(
+	result, err := ctx.Services.Ledger.GetAccountCurrencies(
 		request.Account,
 		ledgerIndex,
 	)

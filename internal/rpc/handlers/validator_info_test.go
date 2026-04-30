@@ -60,20 +60,19 @@ func makeValidatorPubKey(prefix byte) []byte {
 	return pk
 }
 
-func installServices(pk []byte, manifests types.ManifestLookup) func() {
-	prev := types.Services
-	types.Services = &types.ServiceContainer{
+func installServices(pk []byte, manifests types.ManifestLookup) *types.ServiceContainer {
+	return &types.ServiceContainer{
 		ValidatorPublicKey: pk,
 		Manifests:          manifests,
 	}
-	return func() { types.Services = prev }
 }
 
-func adminCtx() *types.RpcContext {
+func adminCtx(services *types.ServiceContainer) *types.RpcContext {
 	return &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 }
 
@@ -89,11 +88,10 @@ func decodeResponse(t *testing.T, result interface{}) map[string]interface{} {
 // TestValidatorInfo_NotConfigured pins rippled's testErrors:
 // `error_message == "not a validator"` with rpcINVALID_PARAMS code.
 func TestValidatorInfo_NotConfigured(t *testing.T) {
-	cleanup := installServices(nil, nil)
-	defer cleanup()
+	services := installServices(nil, nil)
 
 	method := &handlers.ValidatorInfoMethod{}
-	result, rpcErr := method.Handle(adminCtx(), nil)
+	result, rpcErr := method.Handle(adminCtx(services), nil)
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
@@ -111,11 +109,10 @@ func TestValidatorInfo_MasterOnly(t *testing.T) {
 	expectedMaster, err := addresscodec.EncodeNodePublicKey(pk)
 	require.NoError(t, err)
 
-	cleanup := installServices(pk, nil)
-	defer cleanup()
+	services := installServices(pk, nil)
 
 	method := &handlers.ValidatorInfoMethod{}
-	result, rpcErr := method.Handle(adminCtx(), nil)
+	result, rpcErr := method.Handle(adminCtx(services), nil)
 	require.Nil(t, rpcErr)
 	require.NotNil(t, result)
 
@@ -151,11 +148,10 @@ func TestValidatorInfo_WithManifest(t *testing.T) {
 		seqFor:      map[[33]byte]uint32{masterArr: seq},
 		domainFor:   map[[33]byte]string{masterArr: domain},
 	}
-	cleanup := installServices(signingKey, manifests)
-	defer cleanup()
+	services := installServices(signingKey, manifests)
 
 	method := &handlers.ValidatorInfoMethod{}
-	result, rpcErr := method.Handle(adminCtx(), nil)
+	result, rpcErr := method.Handle(adminCtx(services), nil)
 	require.Nil(t, rpcErr)
 
 	resp := decodeResponse(t, result)
@@ -188,11 +184,10 @@ func TestValidatorInfo_SeqZeroSerialises(t *testing.T) {
 		masterFor: map[[33]byte][33]byte{signingArr: masterArr},
 		seqFor:    map[[33]byte]uint32{masterArr: 0},
 	}
-	cleanup := installServices(signingKey, manifests)
-	defer cleanup()
+	services := installServices(signingKey, manifests)
 
 	method := &handlers.ValidatorInfoMethod{}
-	result, rpcErr := method.Handle(adminCtx(), nil)
+	result, rpcErr := method.Handle(adminCtx(services), nil)
 	require.Nil(t, rpcErr)
 
 	resp := decodeResponse(t, result)
@@ -223,11 +218,10 @@ func TestValidatorInfo_ManifestCachePresentNoMapping(t *testing.T) {
 
 	// Empty fake — every Get* returns the not-found path, and
 	// GetMasterKey returns the input unchanged (matches rippled).
-	cleanup := installServices(pk, &fakeManifestLookup{})
-	defer cleanup()
+	services := installServices(pk, &fakeManifestLookup{})
 
 	method := &handlers.ValidatorInfoMethod{}
-	result, rpcErr := method.Handle(adminCtx(), nil)
+	result, rpcErr := method.Handle(adminCtx(services), nil)
 	require.Nil(t, rpcErr)
 	require.NotNil(t, result)
 
@@ -244,11 +238,10 @@ func TestValidatorInfo_ManifestCachePresentNoMapping(t *testing.T) {
 // a 33-byte NodeID, but the field is a []byte so we still verify the
 // internal-error path rather than silently truncating or panicking.
 func TestValidatorInfo_InvalidPublicKeyLength(t *testing.T) {
-	cleanup := installServices(make([]byte, 32), nil) // wrong length
-	defer cleanup()
+	services := installServices(make([]byte, 32), nil) // wrong length
 
 	method := &handlers.ValidatorInfoMethod{}
-	result, rpcErr := method.Handle(adminCtx(), nil)
+	result, rpcErr := method.Handle(adminCtx(services), nil)
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)

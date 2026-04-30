@@ -20,14 +20,14 @@ import (
 // trusted_validator_keys, publisher_lists, validation_quorum are present.
 func TestValidatorsResponseStructure(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.ValidatorsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	result, rpcErr := method.Handle(ctx, nil)
@@ -57,14 +57,14 @@ func TestValidatorsResponseStructure(t *testing.T) {
 // trusted_validator_keys.size() == 0 and publisher_lists.size() == 0.
 func TestValidatorsEmptyList(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.ValidatorsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	result, rpcErr := method.Handle(ctx, nil)
@@ -121,14 +121,14 @@ func TestValidatorsMethodMetadata(t *testing.T) {
 // The validators method accepts no parameters but should not fail if extras are sent.
 func TestValidatorsWithParams(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.ValidatorsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params, err := json.Marshal(map[string]interface{}{
@@ -150,14 +150,14 @@ func TestValidatorsWithParams(t *testing.T) {
 // status == "success" and the result to contain validation key fields.
 func TestValidationCreateReturnsKeyPair(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.ValidationCreateMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Call without params (generate random key pair)
@@ -177,14 +177,14 @@ func TestValidationCreateReturnsKeyPair(t *testing.T) {
 // "BAWL MAN JADE MOON DOVE GEM SON NOW HAD ADEN GLOW TIRE" and expects success.
 func TestValidationCreateWithSecret(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.ValidationCreateMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params, err := json.Marshal(map[string]interface{}{
@@ -237,14 +237,14 @@ func TestValidationCreateMethodMetadata(t *testing.T) {
 // is the correct response.
 func TestConsensusInfoResponseStructure(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.ConsensusInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	result, rpcErr := method.Handle(ctx, nil)
@@ -296,14 +296,14 @@ func TestConsensusInfoMethodMetadata(t *testing.T) {
 // The consensus_info method accepts no parameters but should not fail if extras are sent.
 func TestConsensusInfoWithParams(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.ConsensusInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params, err := json.Marshal(map[string]interface{}{
@@ -323,12 +323,11 @@ func TestConsensusInfoWithParams(t *testing.T) {
 // Reference: rippled Stop.cpp — returns message "ripple server stopping".
 func TestStopReturnsStoppingMessage(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	// Set up a shutdown function that records it was called
 	shutdownCalled := false
-	types.Services.ShutdownFunc = func() {
+	services.ShutdownFunc = func() {
 		shutdownCalled = true
 	}
 
@@ -337,6 +336,7 @@ func TestStopReturnsStoppingMessage(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	result, rpcErr := method.Handle(ctx, nil)
@@ -385,16 +385,12 @@ func TestStopMethodMetadata(t *testing.T) {
 // TestStopServiceUnavailable tests behavior when Services is nil.
 // When the service container is not initialized, stop should return an internal error.
 func TestStopServiceUnavailable(t *testing.T) {
-	// Temporarily set Services to nil
-	oldServices := types.Services
-	types.Services = nil
-	defer func() { types.Services = oldServices }()
-
 	method := &handlers.StopMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	result, rpcErr := method.Handle(ctx, nil)
@@ -411,17 +407,17 @@ func TestStopServiceUnavailable(t *testing.T) {
 // When the shutdown function is not set, stop should return an internal error.
 func TestStopShutdownFuncNil(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
-	// ShutdownFunc is nil by default in setupTestServices
-	types.Services.ShutdownFunc = nil
+	// ShutdownFunc is nil by default
+	services.ShutdownFunc = nil
 
 	method := &handlers.StopMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	result, rpcErr := method.Handle(ctx, nil)
@@ -437,11 +433,10 @@ func TestStopShutdownFuncNil(t *testing.T) {
 // TestStopWithParams tests that providing params does not affect stop behavior.
 func TestStopWithParams(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	shutdownCalled := false
-	types.Services.ShutdownFunc = func() {
+	services.ShutdownFunc = func() {
 		shutdownCalled = true
 	}
 
@@ -450,6 +445,7 @@ func TestStopWithParams(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params, err := json.Marshal(map[string]interface{}{

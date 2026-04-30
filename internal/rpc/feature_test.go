@@ -18,14 +18,14 @@ import (
 // Based on rippled Feature_test.cpp testNoParams()
 func TestFeatureNoParams(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	method := &handlers.FeatureMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Call with nil params (no parameters)
@@ -76,14 +76,14 @@ func TestFeatureNoParams(t *testing.T) {
 // TestFeatureNoParamsEmptyObject tests that calling feature with empty params returns all features.
 func TestFeatureNoParamsEmptyObject(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	method := &handlers.FeatureMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	paramsJSON, err := json.Marshal(map[string]interface{}{})
@@ -109,14 +109,14 @@ func TestFeatureNoParamsEmptyObject(t *testing.T) {
 // Based on rippled Feature_test.cpp testSingleFeature()
 func TestFeatureSingleLookupByName(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	method := &handlers.FeatureMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Pick the first feature from the registry to test with
@@ -158,14 +158,14 @@ func TestFeatureSingleLookupByName(t *testing.T) {
 // Based on rippled Feature_test.cpp testNonAdmin - single feature by hex
 func TestFeatureSingleLookupByHexID(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	method := &handlers.FeatureMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Pick a feature and use its hex ID
@@ -207,14 +207,14 @@ func TestFeatureSingleLookupByHexID(t *testing.T) {
 // Based on rippled Feature_test.cpp testInvalidFeature()
 func TestFeatureInvalidName(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	method := &handlers.FeatureMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -249,14 +249,14 @@ func TestFeatureInvalidName(t *testing.T) {
 // Based on rippled Feature_test.cpp testNoParams() - validates enabled/supported/vetoed fields
 func TestFeatureResponseStructure(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	method := &handlers.FeatureMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	result, rpcErr := method.Handle(ctx, nil)

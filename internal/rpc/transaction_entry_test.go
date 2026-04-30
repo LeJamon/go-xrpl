@@ -117,13 +117,9 @@ func (m *mockLedgerServiceTE) addLedger(lr *mockLedgerReaderTE) {
 	m.ledgersByHash[lr.hash] = lr
 }
 
-func setupTestServicesTE(mock *mockLedgerServiceTE) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
+func newTransactionEntryTestServices(mock *mockLedgerServiceTE) *types.ServiceContainer {
+	return &types.ServiceContainer{
 		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
 	}
 }
 
@@ -133,14 +129,14 @@ func setupTestServicesTE(mock *mockLedgerServiceTE) func() {
 // Based on rippled TransactionEntry_test.cpp testBadInput (no params case).
 func TestTransactionEntryMissingTxHash(t *testing.T) {
 	mock := newMockLedgerServiceTE()
-	cleanup := setupTestServicesTE(mock)
-	defer cleanup()
+	services := newTransactionEntryTestServices(mock)
 
 	method := &handlers.TransactionEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -187,14 +183,14 @@ func TestTransactionEntryMissingTxHash(t *testing.T) {
 // Based on rippled TransactionEntry_test.cpp (DEADBEEF case and too-short/too-long cases).
 func TestTransactionEntryInvalidTxHash(t *testing.T) {
 	mock := newMockLedgerServiceTE()
-	cleanup := setupTestServicesTE(mock)
-	defer cleanup()
+	services := newTransactionEntryTestServices(mock)
 
 	method := &handlers.TransactionEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -245,8 +241,7 @@ func TestTransactionEntryInvalidTxHash(t *testing.T) {
 // Based on rippled TransactionEntry_test.cpp testRequest (ledger_index and ledger_hash lookups).
 func TestTransactionEntryLedgerResolution(t *testing.T) {
 	mock := newMockLedgerServiceTE()
-	cleanup := setupTestServicesTE(mock)
-	defer cleanup()
+	services := newTransactionEntryTestServices(mock)
 
 	// Add a ledger at sequence 2
 	ledger2 := newMockLedgerReaderTE(2)
@@ -283,6 +278,7 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("by ledger_index integer", func(t *testing.T) {
@@ -377,8 +373,7 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 // Based on rippled TransactionEntry_test.cpp (valid structure but tx not found case).
 func TestTransactionEntryTxNotFound(t *testing.T) {
 	mock := newMockLedgerServiceTE()
-	cleanup := setupTestServicesTE(mock)
-	defer cleanup()
+	services := newTransactionEntryTestServices(mock)
 
 	// Add a ledger but no transactions
 	ledger2 := newMockLedgerReaderTE(2)
@@ -389,6 +384,7 @@ func TestTransactionEntryTxNotFound(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	txHashStr := "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
@@ -409,8 +405,7 @@ func TestTransactionEntryTxNotFound(t *testing.T) {
 // ledger than requested returns an error.
 func TestTransactionEntryTxNotInRequestedLedger(t *testing.T) {
 	mock := newMockLedgerServiceTE()
-	cleanup := setupTestServicesTE(mock)
-	defer cleanup()
+	services := newTransactionEntryTestServices(mock)
 
 	// Add two ledgers
 	ledger2 := newMockLedgerReaderTE(2)
@@ -447,6 +442,7 @@ func TestTransactionEntryTxNotInRequestedLedger(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Request with ledger 3, but tx is in ledger 2
@@ -468,8 +464,7 @@ func TestTransactionEntryTxNotInRequestedLedger(t *testing.T) {
 // Based on rippled TransactionEntry_test.cpp testRequest (checking response members).
 func TestTransactionEntryResponseStructure(t *testing.T) {
 	mock := newMockLedgerServiceTE()
-	cleanup := setupTestServicesTE(mock)
-	defer cleanup()
+	services := newTransactionEntryTestServices(mock)
 
 	ledger2 := newMockLedgerReaderTE(2)
 	ledger2.closeTime = 10
@@ -502,6 +497,7 @@ func TestTransactionEntryResponseStructure(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := map[string]interface{}{
@@ -545,16 +541,14 @@ func TestTransactionEntryResponseStructure(t *testing.T) {
 // TestTransactionEntryServiceUnavailable tests behavior when ledger service is not available.
 func TestTransactionEntryServiceUnavailable(t *testing.T) {
 	method := &handlers.TransactionEntryMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
-	}
 
 	t.Run("Services is nil", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = nil
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   nil,
+		}
 
 		params := map[string]interface{}{
 			"tx_hash":      "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05",
@@ -571,9 +565,12 @@ func TestTransactionEntryServiceUnavailable(t *testing.T) {
 	})
 
 	t.Run("Services.Ledger is nil", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = &types.ServiceContainer{Ledger: nil}
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: nil},
+		}
 
 		params := map[string]interface{}{
 			"tx_hash":      "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05",
@@ -610,14 +607,14 @@ func TestTransactionEntryMethodMetadata(t *testing.T) {
 // TestTransactionEntryInvalidLedgerHash tests that an invalid ledger_hash returns an error.
 func TestTransactionEntryInvalidLedgerHash(t *testing.T) {
 	mock := newMockLedgerServiceTE()
-	cleanup := setupTestServicesTE(mock)
-	defer cleanup()
+	services := newTransactionEntryTestServices(mock)
 
 	method := &handlers.TransactionEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	txHashStr := "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"

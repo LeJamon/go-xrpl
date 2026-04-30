@@ -12,16 +12,16 @@ import (
 type LedgerAcceptMethod struct{}
 
 func (m *LedgerAcceptMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	if !types.Services.Ledger.IsStandalone() {
+	if !ctx.Services.Ledger.IsStandalone() {
 		return nil, types.NewRpcError(types.RpcNOT_STANDALONE, "notStandalone", "notStandalone",
 			"ledger_accept is only available in standalone mode")
 	}
 
-	closedSeq, err := types.Services.Ledger.AcceptLedger()
+	closedSeq, err := ctx.Services.Ledger.AcceptLedger()
 	if err != nil {
 		return nil, types.RpcErrorInternal("Failed to accept ledger: " + err.Error())
 	}

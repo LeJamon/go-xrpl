@@ -106,14 +106,9 @@ func (m *mockLedgerServiceBC) addLedger(lr *mockLedgerReaderBC) {
 	m.ledgersByHash[lr.hash] = lr
 }
 
-func setupTestServicesBC(mock *mockLedgerServiceBC) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
-		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
-	}
+// newTestServicesBC builds a *types.ServiceContainer wrapping the mock.
+func newTestServicesBC(mock *mockLedgerServiceBC) *types.ServiceContainer {
+	return &types.ServiceContainer{Ledger: mock}
 }
 
 // Tests
@@ -122,8 +117,7 @@ func setupTestServicesBC(mock *mockLedgerServiceBC) func() {
 // Based on rippled BookChanges_test.cpp testConventionalLedgerInputStrings.
 func TestBookChangesValidLedgerIndexVariants(t *testing.T) {
 	mock := newMockLedgerServiceBC()
-	cleanup := setupTestServicesBC(mock)
-	defer cleanup()
+	services := newTestServicesBC(mock)
 
 	// Add ledgers for validated (2), current (3), closed (2)
 	ledger2 := newMockLedgerReaderBC(2)
@@ -139,6 +133,7 @@ func TestBookChangesValidLedgerIndexVariants(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -198,8 +193,7 @@ func TestBookChangesValidLedgerIndexVariants(t *testing.T) {
 // (non_conventional_ledger_input case).
 func TestBookChangesInvalidLedger(t *testing.T) {
 	mock := newMockLedgerServiceBC()
-	cleanup := setupTestServicesBC(mock)
-	defer cleanup()
+	services := newTestServicesBC(mock)
 
 	// Add only ledger 2 - ledger 999 does not exist
 	ledger2 := newMockLedgerReaderBC(2)
@@ -210,6 +204,7 @@ func TestBookChangesInvalidLedger(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("non-existent ledger index", func(t *testing.T) {
@@ -231,8 +226,7 @@ func TestBookChangesInvalidLedger(t *testing.T) {
 // Based on rippled BookChanges_test.cpp testLedgerInputDefaultBehavior (ledger with no offers).
 func TestBookChangesEmptyChanges(t *testing.T) {
 	mock := newMockLedgerServiceBC()
-	cleanup := setupTestServicesBC(mock)
-	defer cleanup()
+	services := newTestServicesBC(mock)
 
 	// Add a ledger with no transactions (hence no offer changes)
 	ledger2 := newMockLedgerReaderBC(2)
@@ -243,6 +237,7 @@ func TestBookChangesEmptyChanges(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := map[string]interface{}{
@@ -269,8 +264,7 @@ func TestBookChangesEmptyChanges(t *testing.T) {
 // Based on rippled BookChanges_test.cpp expected response format.
 func TestBookChangesResponseStructure(t *testing.T) {
 	mock := newMockLedgerServiceBC()
-	cleanup := setupTestServicesBC(mock)
-	defer cleanup()
+	services := newTestServicesBC(mock)
 
 	ledger2 := newMockLedgerReaderBC(2)
 	ledger2.closeTime = 42
@@ -281,6 +275,7 @@ func TestBookChangesResponseStructure(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := map[string]interface{}{
@@ -338,8 +333,7 @@ func TestBookChangesResponseStructure(t *testing.T) {
 // Based on rippled BookChanges_test.cpp testLedgerInputDefaultBehavior.
 func TestBookChangesDefaultLedger(t *testing.T) {
 	mock := newMockLedgerServiceBC()
-	cleanup := setupTestServicesBC(mock)
-	defer cleanup()
+	services := newTestServicesBC(mock)
 
 	ledger2 := newMockLedgerReaderBC(2)
 	ledger2.validated = true
@@ -350,6 +344,7 @@ func TestBookChangesDefaultLedger(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Empty params: should default to validated ledger (index 2)
@@ -372,16 +367,14 @@ func TestBookChangesDefaultLedger(t *testing.T) {
 // TestBookChangesServiceUnavailable tests behavior when the ledger service is not available.
 func TestBookChangesServiceUnavailable(t *testing.T) {
 	method := &handlers.BookChangesMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
-	}
 
 	t.Run("Services is nil", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = nil
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   nil,
+		}
 
 		params := map[string]interface{}{
 			"ledger_index": "validated",
@@ -397,9 +390,12 @@ func TestBookChangesServiceUnavailable(t *testing.T) {
 	})
 
 	t.Run("Services.Ledger is nil", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = &types.ServiceContainer{Ledger: nil}
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: nil},
+		}
 
 		params := map[string]interface{}{
 			"ledger_index": "validated",
@@ -435,8 +431,7 @@ func TestBookChangesMethodMetadata(t *testing.T) {
 // TestBookChangesNilParams tests that nil params are handled gracefully.
 func TestBookChangesNilParams(t *testing.T) {
 	mock := newMockLedgerServiceBC()
-	cleanup := setupTestServicesBC(mock)
-	defer cleanup()
+	services := newTestServicesBC(mock)
 
 	ledger2 := newMockLedgerReaderBC(2)
 	mock.addLedger(ledger2)
@@ -446,6 +441,7 @@ func TestBookChangesNilParams(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	result, rpcErr := method.Handle(ctx, nil)

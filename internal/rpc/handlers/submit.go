@@ -44,7 +44,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		return nil, types.RpcErrorInvalidParams("Either tx_blob or tx_json must be provided")
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -72,7 +72,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	} else if hasSigningCreds {
 		// Sign-and-submit path: sign the transaction first, then submit the blob.
 		// This matches rippled's behavior in doSubmit() when tx_blob is absent.
-		signed, rpcErr := signTransactionJSON(request.TxJson, signCredentials{
+		signed, rpcErr := signTransactionJSON(ctx.Services, request.TxJson, signCredentials{
 			Secret:     request.Secret,
 			Seed:       request.Seed,
 			SeedHex:    request.SeedHex,
@@ -110,7 +110,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 
 	// Submit the transaction with the original signed blob.
 	// The blob is needed for canonical re-ordering during AcceptLedger.
-	result, err := types.Services.Ledger.SubmitTransaction(txJSON, txBlobHex)
+	result, err := ctx.Services.Ledger.SubmitTransaction(txJSON, txBlobHex)
 	if err != nil {
 		return nil, types.RpcErrorInternal("Failed to submit transaction: " + err.Error())
 	}
@@ -129,7 +129,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 				},
 			}
 			storedData, _ := json.Marshal(storedTx)
-			_ = types.Services.Ledger.StoreTransaction(txHash, storedData)
+			_ = ctx.Services.Ledger.StoreTransaction(txHash, storedData)
 		}
 	}
 
@@ -144,7 +144,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		txJsonMap["hash"] = txHashStr
 	}
 
-	baseFee, _, _ := types.Services.Ledger.GetCurrentFees()
+	baseFee, _, _ := ctx.Services.Ledger.GetCurrentFees()
 
 	// Build response with independent boolean fields matching rippled's
 	// Transaction::SubmitResult struct. "accepted" = any() in rippled.
@@ -174,7 +174,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 
 	// Add account_sequence_next and account_sequence_available
 	if account, ok := txJsonMap["Account"].(string); ok {
-		if acctInfo, err := types.Services.Ledger.GetAccountInfo(account, "current"); err == nil {
+		if acctInfo, err := ctx.Services.Ledger.GetAccountInfo(account, "current"); err == nil {
 			response["account_sequence_next"] = acctInfo.Sequence
 			response["account_sequence_available"] = acctInfo.Sequence
 		}

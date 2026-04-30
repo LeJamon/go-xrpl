@@ -24,6 +24,7 @@ type Server struct {
 	registry   *types.MethodRegistry
 	timeout    time.Duration
 	peerSource atomic.Pointer[types.PeerSource]
+	services   *types.ServiceContainer
 }
 
 // SetPeerSource registers the source of per-peer entries served by the
@@ -44,11 +45,14 @@ func (s *Server) loadPeerSource() types.PeerSource {
 	return nil
 }
 
-// NewServer creates a new RPC server with the given timeout
-func NewServer(timeout time.Duration) *Server {
+// NewServer creates a new RPC server with the given timeout and the
+// service container handlers will read through ctx.Services. The
+// container may be nil for test contexts that exercise routing only.
+func NewServer(timeout time.Duration, services *types.ServiceContainer) *Server {
 	server := &Server{
 		registry: types.NewMethodRegistry(),
 		timeout:  timeout,
+		services: services,
 	}
 
 	// Register all RPC methods
@@ -56,6 +60,11 @@ func NewServer(timeout time.Duration) *Server {
 
 	return server
 }
+
+// Services returns the service container wired to this server. Used by
+// callers that need to attach the dispatcher (this server itself) or
+// the shutdown hook after construction.
+func (s *Server) Services() *types.ServiceContainer { return s.services }
 
 // XrplRequest represents an XRPL JSON-RPC request
 // Format: {"method": "method_name", "params": [{...}]}
@@ -122,6 +131,7 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		IsAdmin:    role == types.RoleAdmin,
 		ClientIP:   clientIP,
 		PeerSource: s.loadPeerSource(),
+		Services:   s.services,
 	}
 
 	result, rpcErr := s.executeMethod(method, nil, ctx)
@@ -164,6 +174,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		IsAdmin:    role == types.RoleAdmin,
 		ClientIP:   clientIP,
 		PeerSource: s.loadPeerSource(),
+		Services:   s.services,
 	}
 
 	// Parse API version from params if present
@@ -218,8 +229,8 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types
 	// When the server is amendment-blocked, methods with any condition
 	// other than NoCondition are blocked with rpcAMENDMENT_BLOCKED.
 	if handler.RequiredCondition() != types.NoCondition {
-		if types.Services != nil && types.Services.Ledger != nil {
-			if types.Services.Ledger.IsAmendmentBlocked() {
+		if ctx.Services != nil && ctx.Services.Ledger != nil {
+			if ctx.Services.Ledger.IsAmendmentBlocked() {
 				return nil, types.NewRpcError(types.RpcAMENDMENT_BLOCKED,
 					"amendmentBlocked", "amendmentBlocked",
 					"Amendment blocked, need upgrade.")

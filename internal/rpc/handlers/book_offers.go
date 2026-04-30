@@ -27,7 +27,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, types.RpcErrorInvalidParams("Both taker_gets and taker_pays are required")
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -60,7 +60,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	// Clamp the limit using rippled's bookOffers range {0, 60, 100}.
 	// When the user omits "limit" (zero value), ClampLimit returns the default (60).
 	limit := ClampLimit(request.Limit, LimitBookOffers, ctx.IsAdmin)
-	result, err := types.Services.Ledger.GetBookOffers(takerGets, takerPays, ledgerIndex, limit)
+	result, err := ctx.Services.Ledger.GetBookOffers(takerGets, takerPays, ledgerIndex, limit)
 	if err != nil {
 		return nil, types.RpcErrorInternal("Failed to get book offers: " + err.Error())
 	}

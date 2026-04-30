@@ -220,8 +220,7 @@ func TestApiVersionAllMethodsSupportV1(t *testing.T) {
 
 func TestApiVersionMethodsWorkWithEachVersion(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	// Handlers that can be invoked with minimal params and still produce a
 	// non-version-related response (success or a domain error, but NOT a
@@ -267,6 +266,7 @@ func TestApiVersionMethodsWorkWithEachVersion(t *testing.T) {
 					Context:    context.Background(),
 					Role:       types.RoleGuest,
 					ApiVersion: ver,
+					Services:   services,
 				}
 
 				var paramsJSON json.RawMessage

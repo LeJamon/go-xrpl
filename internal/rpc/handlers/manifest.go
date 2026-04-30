@@ -58,10 +58,10 @@ func (m *ManifestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// Manifest cache isn't wired in standalone / pre-consensus setups
 	// — return the sparse response so clients can still probe the
 	// method without a 500.
-	if types.Services == nil || types.Services.Manifests == nil {
+	if ctx.Services == nil || ctx.Services.Manifests == nil {
 		return resp, nil
 	}
-	cache := types.Services.Manifests
+	cache := ctx.Services.Manifests
 
 	// Callers may pass EITHER the master key or its ephemeral signing
 	// key. GetMasterKey collapses both into the master; if the input

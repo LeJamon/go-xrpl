@@ -43,7 +43,7 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	var nftID [32]byte
 	copy(nftID[:], nftIDBytes)
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -72,7 +72,7 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		}
 	}
 
-	result, err := types.Services.Ledger.GetNFTBuyOffers(nftID, ledgerIndex, limit, marker)
+	result, err := ctx.Services.Ledger.GetNFTBuyOffers(nftID, ledgerIndex, limit, marker)
 	if err != nil {
 		if err.Error() == "ledger not found" {
 			return nil, types.RpcErrorLgrNotFound("Ledger not found.")

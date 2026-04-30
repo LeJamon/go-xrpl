@@ -114,14 +114,14 @@ func TestLedgerBasicRequest(t *testing.T) {
 		}
 		return nil, errors.New("ledger not found")
 	}
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("Default params returns validated ledger", func(t *testing.T) {
@@ -185,14 +185,14 @@ func TestLedgerBadInput(t *testing.T) {
 		}
 		return nil, errors.New("ledger not found")
 	}
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -241,14 +241,14 @@ func TestLedgerCurrentRequest(t *testing.T) {
 		}
 		return nil, errors.New("not found")
 	}
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := map[string]interface{}{
@@ -294,14 +294,14 @@ func TestLedgerFullOption(t *testing.T) {
 		}
 		return nil, errors.New("not found")
 	}
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("Transactions true returns tx hashes", func(t *testing.T) {
@@ -364,14 +364,14 @@ func TestLedgerAccountsOption(t *testing.T) {
 		}
 		return nil, errors.New("not found")
 	}
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// The accounts option requests account state. Even without account state
@@ -409,14 +409,14 @@ func TestLedgerLookupByHash(t *testing.T) {
 		}
 		return nil, errors.New("ledger not found")
 	}
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	hashStr := hex.EncodeToString(expectedHash[:])
@@ -489,14 +489,14 @@ func TestLedgerResponseStructure(t *testing.T) {
 		}
 		return nil, errors.New("not found")
 	}
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := map[string]interface{}{
@@ -557,16 +557,14 @@ func TestLedgerResponseStructure(t *testing.T) {
 // TestLedgerServiceUnavailable tests behavior when ledger service is not available
 func TestLedgerServiceUnavailable(t *testing.T) {
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
-	}
 
 	t.Run("Nil services", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = nil
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   nil,
+		}
 
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
@@ -576,9 +574,12 @@ func TestLedgerServiceUnavailable(t *testing.T) {
 	})
 
 	t.Run("Nil ledger in services", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = &types.ServiceContainer{Ledger: nil}
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: nil},
+		}
 
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
@@ -596,14 +597,14 @@ func TestLedgerNilLedgerReturned(t *testing.T) {
 	mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
 		return nil, errors.New("not found")
 	}
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	result, rpcErr := method.Handle(ctx, nil)
@@ -648,14 +649,14 @@ func TestLedgerLookupByIndex(t *testing.T) {
 		}
 		return nil, errors.New("not found")
 	}
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("closed keyword", func(t *testing.T) {

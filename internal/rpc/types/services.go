@@ -6,11 +6,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-// Services provides access to core services from RPC handlers
-// This is a singleton that holds references to the services
-// needed by RPC method handlers.
-var Services *ServiceContainer
-
 // MethodDispatcher allows forwarding RPC calls to the method registry.
 // Used by the 'json' RPC method to proxy calls.
 type MethodDispatcher interface {
@@ -583,9 +578,11 @@ type NFTOffersResult struct {
 	Marker      string         `json:"marker,omitempty"` // Only present when more results available
 }
 
-// InitServices initializes the service container
-func InitServices(ledger LedgerService) {
-	Services = &ServiceContainer{
+// NewServiceContainer constructs a ServiceContainer wired to the given
+// ledger service. Callers attach the dispatcher, peer hooks, manifest
+// cache, etc. afterwards as components come online.
+func NewServiceContainer(ledger LedgerService) *ServiceContainer {
+	return &ServiceContainer{
 		Ledger: ledger,
 	}
 }

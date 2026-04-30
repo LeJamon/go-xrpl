@@ -55,14 +55,10 @@ func (m *mockLedgerServiceServerInfo) GetServerInfo() types.LedgerServerInfo {
 	}
 }
 
-// setupTestServicesServerInfo initializes the Services singleton with a server_info mock for testing
-func setupTestServicesServerInfo(mock *mockLedgerServiceServerInfo) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
+// servicesForServerInfo builds a per-test ServiceContainer with a server_info mock.
+func servicesForServerInfo(mock *mockLedgerServiceServerInfo) *types.ServiceContainer {
+	return &types.ServiceContainer{
 		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
 	}
 }
 
@@ -73,14 +69,14 @@ func setupTestServicesServerInfo(mock *mockLedgerServiceServerInfo) func() {
 // Based on rippled ServerInfo_test.cpp: BEAST_EXPECT(info.isMember(jss::build_version));
 func TestServerInfoResponseFields(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	cleanup := setupTestServicesServerInfo(mock)
-	defer cleanup()
+	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("info.build_version field present", func(t *testing.T) {
@@ -274,14 +270,14 @@ func TestServerInfoResponseFields(t *testing.T) {
 // TestServerInfoValidatedLedgerFields tests the validated_ledger nested object fields
 func TestServerInfoValidatedLedgerFields(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	cleanup := setupTestServicesServerInfo(mock)
-	defer cleanup()
+	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("validated_ledger.age field present", func(t *testing.T) {
@@ -401,14 +397,14 @@ func TestServerInfoValidatedLedgerFields(t *testing.T) {
 // Based on rippled's NetworkOPs operating modes
 func TestServerInfoServerStates(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	cleanup := setupTestServicesServerInfo(mock)
-	defer cleanup()
+	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Valid server states per XRPL documentation
@@ -444,14 +440,14 @@ func TestServerInfoServerStates(t *testing.T) {
 func TestServerInfoStandaloneMode(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
 	mock.standalone = true
-	cleanup := setupTestServicesServerInfo(mock)
-	defer cleanup()
+	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("Standalone mode returns correct server_state", func(t *testing.T) {
@@ -499,8 +495,7 @@ func TestServerInfoStandaloneMode(t *testing.T) {
 // TestServerInfoApiVersions tests server_info across different API versions
 func TestServerInfoApiVersions(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	cleanup := setupTestServicesServerInfo(mock)
-	defer cleanup()
+	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
 
@@ -512,6 +507,7 @@ func TestServerInfoApiVersions(t *testing.T) {
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: apiVersion,
+				Services:   services,
 			}
 
 			result, rpcErr := method.Handle(ctx, nil)
@@ -546,16 +542,12 @@ func TestServerInfoMethodSupportedApiVersions(t *testing.T) {
 
 // TestServerInfoServiceUnavailable tests behavior when ledger service is not available
 func TestServerInfoServiceUnavailable(t *testing.T) {
-	// Temporarily set Services to nil
-	oldServices := types.Services
-	types.Services = nil
-	defer func() { types.Services = oldServices }()
-
 	method := &handlers.ServerInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	result, rpcErr := method.Handle(ctx, nil)
@@ -568,16 +560,12 @@ func TestServerInfoServiceUnavailable(t *testing.T) {
 
 // TestServerInfoServiceNilLedger tests behavior when ledger service is nil
 func TestServerInfoServiceNilLedger(t *testing.T) {
-	// Set Services with nil Ledger
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{Ledger: nil}
-	defer func() { types.Services = oldServices }()
-
 	method := &handlers.ServerInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   &types.ServiceContainer{Ledger: nil},
 	}
 
 	result, rpcErr := method.Handle(ctx, nil)
@@ -612,14 +600,14 @@ func TestServerInfoMethodMetadata(t *testing.T) {
 // TestServerInfoCompleteLedgersFormat tests various complete_ledgers string formats
 func TestServerInfoCompleteLedgersFormat(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	cleanup := setupTestServicesServerInfo(mock)
-	defer cleanup()
+	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -672,14 +660,14 @@ func TestServerInfoCompleteLedgersFormat(t *testing.T) {
 // TestServerInfoStateAccounting tests the state_accounting field
 func TestServerInfoStateAccounting(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	cleanup := setupTestServicesServerInfo(mock)
-	defer cleanup()
+	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("state_accounting contains all states", func(t *testing.T) {
@@ -711,14 +699,14 @@ func TestServerInfoStateAccounting(t *testing.T) {
 // TestServerInfoTimeField tests the time field format
 func TestServerInfoTimeField(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	cleanup := setupTestServicesServerInfo(mock)
-	defer cleanup()
+	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("time field present and formatted", func(t *testing.T) {
@@ -744,14 +732,14 @@ func TestServerInfoTimeField(t *testing.T) {
 // TestServerInfoFeeCalculations tests fee conversions from drops to XRP
 func TestServerInfoFeeCalculations(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	cleanup := setupTestServicesServerInfo(mock)
-	defer cleanup()
+	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -823,14 +811,14 @@ func TestServerInfoFeeCalculations(t *testing.T) {
 // TestServerStateMethod tests the server_state RPC method
 func TestServerStateMethod(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	cleanup := setupTestServicesServerInfo(mock)
-	defer cleanup()
+	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerStateMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("server_state returns state wrapper", func(t *testing.T) {
@@ -894,15 +882,12 @@ func TestServerStateMethodMetadata(t *testing.T) {
 
 // TestServerStateServiceUnavailable tests behavior when ledger service is not available
 func TestServerStateServiceUnavailable(t *testing.T) {
-	oldServices := types.Services
-	types.Services = nil
-	defer func() { types.Services = oldServices }()
-
 	method := &handlers.ServerStateMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	result, rpcErr := method.Handle(ctx, nil)
@@ -918,14 +903,14 @@ func TestServerStateServiceUnavailable(t *testing.T) {
 // TestServerInfoWithDifferentLedgerStates tests server_info with various ledger states
 func TestServerInfoWithDifferentLedgerStates(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	cleanup := setupTestServicesServerInfo(mock)
-	defer cleanup()
+	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -989,14 +974,14 @@ func TestServerInfoWithDifferentLedgerStates(t *testing.T) {
 // TestServerInfoWithParams tests that server_info ignores any parameters passed
 func TestServerInfoWithParams(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	cleanup := setupTestServicesServerInfo(mock)
-	defer cleanup()
+	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// server_info takes no parameters, but should not error if params are passed

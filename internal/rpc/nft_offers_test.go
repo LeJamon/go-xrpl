@@ -149,14 +149,10 @@ func (m *mockNFTOffersLedgerService) GetClosedLedgerView() (types.LedgerStateVie
 	return nil, errors.New("not implemented in mock")
 }
 
-// setupNFTOffersTestServices initializes the Services singleton with a mock for testing
-func setupNFTOffersTestServices(mock *mockNFTOffersLedgerService) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
+// newNFTOffersTestServices builds a per-test ServiceContainer wrapping mock.
+func newNFTOffersTestServices(mock *mockNFTOffersLedgerService) *types.ServiceContainer {
+	return &types.ServiceContainer{
 		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
 	}
 }
 
@@ -166,14 +162,14 @@ func setupNFTOffersTestServices(mock *mockNFTOffersLedgerService) func() {
 // Reference: rippled NFTOffers_test.cpp testErrors()
 func TestNftBuyOffersErrorValidation(t *testing.T) {
 	mock := newMockNFTOffersLedgerService()
-	cleanup := setupNFTOffersTestServices(mock)
-	defer cleanup()
+	services := newNFTOffersTestServices(mock)
 
 	method := &handlers.NftBuyOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -267,14 +263,14 @@ func TestNftBuyOffersErrorValidation(t *testing.T) {
 // TestNftBuyOffersSuccess tests successful retrieval of NFT buy offers
 func TestNftBuyOffersSuccess(t *testing.T) {
 	mock := newMockNFTOffersLedgerService()
-	cleanup := setupNFTOffersTestServices(mock)
-	defer cleanup()
+	services := newNFTOffersTestServices(mock)
 
 	method := &handlers.NftBuyOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Setup mock to return some buy offers
@@ -338,14 +334,14 @@ func TestNftBuyOffersSuccess(t *testing.T) {
 // TestNftBuyOffersWithIOUAmount tests NFT buy offers with IOU amounts
 func TestNftBuyOffersWithIOUAmount(t *testing.T) {
 	mock := newMockNFTOffersLedgerService()
-	cleanup := setupNFTOffersTestServices(mock)
-	defer cleanup()
+	services := newNFTOffersTestServices(mock)
 
 	method := &handlers.NftBuyOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Setup mock to return a buy offer with IOU amount
@@ -396,14 +392,14 @@ func TestNftBuyOffersWithIOUAmount(t *testing.T) {
 // TestNftBuyOffersWithPagination tests NFT buy offers with pagination
 func TestNftBuyOffersWithPagination(t *testing.T) {
 	mock := newMockNFTOffersLedgerService()
-	cleanup := setupNFTOffersTestServices(mock)
-	defer cleanup()
+	services := newNFTOffersTestServices(mock)
 
 	method := &handlers.NftBuyOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Setup mock to return paginated results
@@ -449,14 +445,14 @@ func TestNftBuyOffersWithPagination(t *testing.T) {
 // TestNftSellOffersErrorValidation tests error handling for invalid inputs
 func TestNftSellOffersErrorValidation(t *testing.T) {
 	mock := newMockNFTOffersLedgerService()
-	cleanup := setupNFTOffersTestServices(mock)
-	defer cleanup()
+	services := newNFTOffersTestServices(mock)
 
 	method := &handlers.NftSellOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -533,14 +529,14 @@ func TestNftSellOffersErrorValidation(t *testing.T) {
 // TestNftSellOffersSuccess tests successful retrieval of NFT sell offers
 func TestNftSellOffersSuccess(t *testing.T) {
 	mock := newMockNFTOffersLedgerService()
-	cleanup := setupNFTOffersTestServices(mock)
-	defer cleanup()
+	services := newNFTOffersTestServices(mock)
 
 	method := &handlers.NftSellOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// lsfSellNFToken flag
@@ -589,14 +585,14 @@ func TestNftSellOffersSuccess(t *testing.T) {
 // TestNftSellOffersEmptyResult tests when no sell offers exist
 func TestNftSellOffersEmptyResult(t *testing.T) {
 	mock := newMockNFTOffersLedgerService()
-	cleanup := setupNFTOffersTestServices(mock)
-	defer cleanup()
+	services := newNFTOffersTestServices(mock)
 
 	method := &handlers.NftSellOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Setup mock to return empty result
@@ -630,17 +626,12 @@ func TestNftSellOffersEmptyResult(t *testing.T) {
 
 // TestNftBuyOffersServiceUnavailable tests response when ledger service is unavailable
 func TestNftBuyOffersServiceUnavailable(t *testing.T) {
-	oldServices := types.Services
-	types.Services = nil
-	defer func() {
-		types.Services = oldServices
-	}()
-
 	method := &handlers.NftBuyOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	params := map[string]interface{}{
@@ -657,17 +648,12 @@ func TestNftBuyOffersServiceUnavailable(t *testing.T) {
 
 // TestNftSellOffersServiceUnavailable tests response when ledger service is unavailable
 func TestNftSellOffersServiceUnavailable(t *testing.T) {
-	oldServices := types.Services
-	types.Services = nil
-	defer func() {
-		types.Services = oldServices
-	}()
-
 	method := &handlers.NftSellOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	params := map[string]interface{}{

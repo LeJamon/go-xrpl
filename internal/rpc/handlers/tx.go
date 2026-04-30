@@ -41,7 +41,7 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interf
 		return nil, types.RpcErrorInvalidParams("Missing required parameter: transaction")
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -55,7 +55,7 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interf
 	copy(txHash[:], txHashBytes)
 
 	// Look up the transaction
-	txInfo, err := types.Services.Ledger.GetTransaction(txHash)
+	txInfo, err := ctx.Services.Ledger.GetTransaction(txHash)
 	if err != nil {
 		return nil, &types.RpcError{
 			Code:        -1,
@@ -92,7 +92,7 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interf
 	// Resolve close time from the containing ledger
 	var closeTimeSec int64
 	if txInfo.LedgerIndex > 0 {
-		if ledger, err := types.Services.Ledger.GetLedgerBySequence(txInfo.LedgerIndex); err == nil {
+		if ledger, err := ctx.Services.Ledger.GetLedgerBySequence(txInfo.LedgerIndex); err == nil {
 			closeTimeSec = ledger.CloseTime()
 		}
 	}
@@ -226,11 +226,11 @@ func (m *TxMethod) buildResponseV2(
 
 // lookupByCTID looks up a transaction using a CTID (Compact Transaction ID)
 func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex uint16, binary bool) (interface{}, *types.RpcError) {
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	ledger, err := types.Services.Ledger.GetLedgerBySequence(ledgerSeq)
+	ledger, err := ctx.Services.Ledger.GetLedgerBySequence(ledgerSeq)
 	if err != nil {
 		return nil, &types.RpcError{
 			Code:        -1,

@@ -56,14 +56,10 @@ func (m *mockLedgerEntryService) GetLedgerEntry(entryKey [32]byte, ledgerIndex s
 	}, nil
 }
 
-// setupLedgerEntryTestServices initializes the Services singleton with a mock for ledger_entry testing
-func setupLedgerEntryTestServices(mock *mockLedgerEntryService) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
+// newLedgerEntryTestServices builds a per-test ServiceContainer wrapping mock.
+func newLedgerEntryTestServices(mock *mockLedgerEntryService) *types.ServiceContainer {
+	return &types.ServiceContainer{
 		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
 	}
 }
 
@@ -73,14 +69,14 @@ func setupLedgerEntryTestServices(mock *mockLedgerEntryService) func() {
 // Based on rippled LedgerEntry_test.cpp testLedgerEntryInvalid() and testLedgerEntryAccountRoot()
 func TestLedgerEntryDirectIndexLookup(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validIndex := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
@@ -216,14 +212,14 @@ func TestLedgerEntryDirectIndexLookup(t *testing.T) {
 // Based on rippled LedgerEntry_test.cpp testLedgerEntryCheck()
 func TestLedgerEntryCheck(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	checkIndex := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
@@ -322,14 +318,14 @@ func TestLedgerEntryCheck(t *testing.T) {
 // Based on rippled LedgerEntry_test.cpp testLedgerEntryPayChan()
 func TestLedgerEntryPaymentChannel(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	payChanIndex := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
@@ -429,14 +425,14 @@ func TestLedgerEntryPaymentChannel(t *testing.T) {
 // Note: Current implementation only supports lookup by direct index string, not by owner/dir_root objects
 func TestLedgerEntryDirectory(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	dirRootIndex := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
@@ -534,14 +530,14 @@ func TestLedgerEntryDirectory(t *testing.T) {
 // TestLedgerEntryNFTPage tests NFT page lookup by page index
 func TestLedgerEntryNFTPage(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	nftPageIndex := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
@@ -639,14 +635,14 @@ func TestLedgerEntryNFTPage(t *testing.T) {
 // TestLedgerEntryMissingEntryType tests error when no entry type is specified
 func TestLedgerEntryMissingEntryType(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -689,14 +685,14 @@ func TestLedgerEntryMissingEntryType(t *testing.T) {
 // Based on rippled ledger specification behavior
 func TestLedgerEntryLedgerSpecification(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validIndex := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
@@ -878,14 +874,14 @@ func TestLedgerEntryLedgerSpecification(t *testing.T) {
 // TestLedgerEntryResponseFields tests that the response contains expected fields
 func TestLedgerEntryResponseFields(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validIndex := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
@@ -966,16 +962,14 @@ func TestLedgerEntryResponseFields(t *testing.T) {
 // TestLedgerEntryServiceUnavailable tests behavior when ledger service is not available
 func TestLedgerEntryServiceUnavailable(t *testing.T) {
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
-	}
 
 	t.Run("Services is nil", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = nil
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   nil,
+		}
 
 		params := map[string]interface{}{
 			"index": "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
@@ -992,9 +986,12 @@ func TestLedgerEntryServiceUnavailable(t *testing.T) {
 	})
 
 	t.Run("Services.Ledger is nil", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = &types.ServiceContainer{Ledger: nil}
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: nil},
+		}
 
 		params := map[string]interface{}{
 			"index": "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
@@ -1035,14 +1032,14 @@ func TestLedgerEntryMethodMetadata(t *testing.T) {
 // TestLedgerEntryTypePriority tests that index takes priority over other entry types
 func TestLedgerEntryTypePriority(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	indexValue := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
@@ -1088,14 +1085,14 @@ func TestLedgerEntryTypePriority(t *testing.T) {
 // The mock returns a default result for any keylet, so these should succeed.
 func TestLedgerEntryImplementedTypes(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("account_root by address", func(t *testing.T) {
@@ -1181,14 +1178,14 @@ func TestLedgerEntryImplementedTypes(t *testing.T) {
 // TestLedgerEntryInvalidParameters tests various invalid parameter scenarios
 func TestLedgerEntryInvalidParameters(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -1259,14 +1256,14 @@ func TestLedgerEntryInvalidParameters(t *testing.T) {
 // TestLedgerEntryNotFoundErrorCode tests that entry not found returns correct error code
 func TestLedgerEntryNotFoundErrorCode(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.ledgerEntryErr = errors.New("entry not found")
@@ -1292,14 +1289,14 @@ func TestLedgerEntryNotFoundErrorCode(t *testing.T) {
 // Based on rippled LedgerEntry_test.cpp testLedgerEntryAccountRoot()
 func TestLedgerEntryAccountRoot(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	accountRootIndex := "9CE54C3B934E473A995B477E92EC229F99CED5B62BF4D2ACE4DC42719103AE2F"
@@ -1414,14 +1411,14 @@ func TestLedgerEntryAccountRoot(t *testing.T) {
 // Based on rippled LedgerEntry_test.cpp testLedgerEntryEscrow()
 func TestLedgerEntryEscrow(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	escrowIndex := "DC5F3851D8A1AB622F957761E5963BC5BD439D5C24AC6AD7AC4523F0640A0BF5"
@@ -1512,14 +1509,14 @@ func TestLedgerEntryEscrow(t *testing.T) {
 // Based on rippled LedgerEntry_test.cpp testLedgerEntryOffer()
 func TestLedgerEntryOffer(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	offerIndex := "E7D0EC33B0C2A0F2C9E16CCCA8E12F88F4F9CEFEC3D82C1E68F5B4CC4B3DEEEF"
@@ -1610,14 +1607,14 @@ func TestLedgerEntryOffer(t *testing.T) {
 // Based on rippled LedgerEntry_test.cpp testLedgerEntryRippleState()
 func TestLedgerEntryRippleState(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	rippleStateIndex := "B7F9C5E1A8D4F2C3E6B9A8D7C5E4F3A2B1C9D8E7F6A5B4C3D2E1F0A9B8C7D6E5"
@@ -1708,14 +1705,14 @@ func TestLedgerEntryRippleState(t *testing.T) {
 // Based on rippled LedgerEntry_test.cpp testLedgerEntryTicket()
 func TestLedgerEntryTicket(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	ticketIndex := "C8D2A5E4B7F1C3D6E9A8B7C5D4E3F2A1B9C8D7E6F5A4B3C2D1E0F9A8B7C6D5E4"
@@ -1806,14 +1803,14 @@ func TestLedgerEntryTicket(t *testing.T) {
 // Based on rippled LedgerEntry_test.cpp testLedgerEntryDepositPreauth()
 func TestLedgerEntryDepositPreauth(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	depositPreauthIndex := "F1E2D3C4B5A6978869504132B4C5D6E7F8A9B0C1D2E3F4A5B6C7D8E9F0A1B2C3"
@@ -1904,14 +1901,14 @@ func TestLedgerEntryDepositPreauth(t *testing.T) {
 // Based on rippled AMM ledger entry tests
 func TestLedgerEntryAMM(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	ammIndex := "A1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8A9B0C1D2E3F4A5B6C7D8E9F0A1B2"
@@ -2002,14 +1999,14 @@ func TestLedgerEntryAMM(t *testing.T) {
 // Based on rippled LedgerEntry_test.cpp testLedgerEntryInvalid()
 func TestLedgerEntryInvalidLedgerSpecification(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validIndex := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
@@ -2079,14 +2076,14 @@ func TestLedgerEntryInvalidLedgerSpecification(t *testing.T) {
 // Based on rippled behavior where requesting an AccountRoot index via check field fails
 func TestLedgerEntryUnexpectedType(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Test requesting an entry using the wrong type
@@ -2126,14 +2123,14 @@ func TestLedgerEntryUnexpectedType(t *testing.T) {
 // TestLedgerEntryMultipleTypes tests behavior when multiple entry types are specified
 func TestLedgerEntryMultipleTypes(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	index1 := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
@@ -2179,14 +2176,14 @@ func TestLedgerEntryMultipleTypes(t *testing.T) {
 // Based on rippled LedgerEntry_test.cpp malformed request handling
 func TestLedgerEntryMalformedRequests(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -2257,8 +2254,7 @@ func TestLedgerEntryMalformedRequests(t *testing.T) {
 // TestLedgerEntryAPIVersions tests that the method works correctly with different API versions
 func TestLedgerEntryAPIVersions(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 
@@ -2281,6 +2277,7 @@ func TestLedgerEntryAPIVersions(t *testing.T) {
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: version,
+				Services:   services,
 			}
 
 			params := map[string]interface{}{
@@ -2303,14 +2300,14 @@ func TestLedgerEntryAPIVersions(t *testing.T) {
 // TestLedgerEntryHexValidation tests hex string validation for various entry types
 func TestLedgerEntryHexValidation(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -2473,14 +2470,14 @@ func TestLedgerEntryHexValidation(t *testing.T) {
 // first and falls back to parseHex if the value is a string.
 func TestLedgerEntryHexFallback(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validHex := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
@@ -2544,14 +2541,14 @@ func TestLedgerEntryHexFallback(t *testing.T) {
 // TestLedgerEntryVault tests vault entry lookup by hex and by object form
 func TestLedgerEntryVault(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	vaultHex := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
@@ -2605,14 +2602,14 @@ func TestLedgerEntryVault(t *testing.T) {
 // TestLedgerEntryDelegate tests delegate entry lookup by hex and by object form
 func TestLedgerEntryDelegate(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	delegateHex := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
@@ -2665,14 +2662,14 @@ func TestLedgerEntryDelegate(t *testing.T) {
 // TestLedgerEntryBridge tests bridge entry lookup by hex string
 func TestLedgerEntryBridge(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("bridge by hex string", func(t *testing.T) {
@@ -2705,14 +2702,14 @@ func TestLedgerEntryBridge(t *testing.T) {
 // TestLedgerEntryXChainClaimID tests xchain_owned_claim_id entry lookup by hex
 func TestLedgerEntryXChainClaimID(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("xchain_owned_claim_id by hex string", func(t *testing.T) {
@@ -2748,14 +2745,14 @@ func TestLedgerEntryXChainClaimID(t *testing.T) {
 // matching rippled's parseTicket() which expects jss::ticket_seq
 func TestLedgerEntryTicketConformance(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("ticket by account and ticket_seq", func(t *testing.T) {
@@ -2794,14 +2791,14 @@ func TestLedgerEntryTicketConformance(t *testing.T) {
 // uses uppercase hex encoding, matching rippled's output.
 func TestLedgerEntryUppercaseHex(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.ledgerEntryResult = &types.LedgerEntryResult{
@@ -2842,14 +2839,14 @@ func TestLedgerEntryUppercaseHex(t *testing.T) {
 // TestLedgerEntryEscrowHexFallback tests escrow specifically with hex vs object form
 func TestLedgerEntryEscrowHexFallback(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("escrow by hex string", func(t *testing.T) {
@@ -2887,14 +2884,14 @@ func TestLedgerEntryEscrowHexFallback(t *testing.T) {
 // TestLedgerEntryOfferHexFallback tests offer specifically with hex vs object form
 func TestLedgerEntryOfferHexFallback(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("offer by hex string", func(t *testing.T) {
@@ -2932,14 +2929,14 @@ func TestLedgerEntryOfferHexFallback(t *testing.T) {
 // TestLedgerEntryOracleHexFallback tests oracle with hex vs object form
 func TestLedgerEntryOracleHexFallback(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("oracle by hex string", func(t *testing.T) {
@@ -2977,14 +2974,14 @@ func TestLedgerEntryOracleHexFallback(t *testing.T) {
 // TestLedgerEntryAMMHexFallback tests AMM with hex vs object form
 func TestLedgerEntryAMMHexFallback(t *testing.T) {
 	mock := newMockLedgerEntryService()
-	cleanup := setupLedgerEntryTestServices(mock)
-	defer cleanup()
+	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("amm by hex string", func(t *testing.T) {

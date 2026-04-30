@@ -38,7 +38,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		return nil, types.RpcErrorInvalidParams("Must specify either (asset + asset2) or amm_account, but not both or neither")
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -62,7 +62,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		copy(accountIDArray[:], accountID)
 		accountKey := keylet.Account(accountIDArray)
 
-		accountEntry, lookupErr := types.Services.Ledger.GetLedgerEntry(accountKey.Key, ledgerIndex)
+		accountEntry, lookupErr := ctx.Services.Ledger.GetLedgerEntry(accountKey.Key, ledgerIndex)
 		if lookupErr != nil {
 			return nil, &types.RpcError{
 				Code:    19,
@@ -105,7 +105,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		ammKey = ammKeylet.Key
 	}
 
-	ammEntry, err := types.Services.Ledger.GetLedgerEntry(ammKey, ledgerIndex)
+	ammEntry, err := ctx.Services.Ledger.GetLedgerEntry(ammKey, ledgerIndex)
 	if err != nil {
 		return nil, types.RpcErrorActNotFound("AMM not found")
 	}
@@ -169,7 +169,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	// rippled: ammAuctionTimeSlot(ledger->info().parentCloseTime, auctionSlot)
 	var parentCloseTime uint64
 	if ammEntry.LedgerIndex > 0 {
-		if lr, lrErr := types.Services.Ledger.GetLedgerBySequence(ammEntry.LedgerIndex); lrErr == nil && lr != nil {
+		if lr, lrErr := ctx.Services.Ledger.GetLedgerBySequence(ammEntry.LedgerIndex); lrErr == nil && lr != nil {
 			pct := lr.ParentCloseTime()
 			if pct > 0 {
 				parentCloseTime = uint64(pct)

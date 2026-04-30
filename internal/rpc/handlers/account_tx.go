@@ -34,7 +34,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return nil, err
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -95,7 +95,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		}
 	}
 
-	result, err := types.Services.Ledger.GetAccountTransactions(
+	result, err := ctx.Services.Ledger.GetAccountTransactions(
 		request.Account,
 		int64(ledgerIndexMin),
 		int64(ledgerIndexMax),
@@ -133,7 +133,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 			return entry
 		}
 		entry := &ledgerCacheEntry{}
-		ledger, lookupErr := types.Services.Ledger.GetLedgerBySequence(seq)
+		ledger, lookupErr := ctx.Services.Ledger.GetLedgerBySequence(seq)
 		if lookupErr == nil && ledger != nil {
 			entry.hash = ledger.Hash()
 			entry.closeTimeSec = ledger.CloseTime()
@@ -143,7 +143,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return entry
 	}
 
-	serverInfo := types.Services.Ledger.GetServerInfo()
+	serverInfo := ctx.Services.Ledger.GetServerInfo()
 	networkID := serverInfo.NetworkID
 
 	isV2 := ctx.ApiVersion > 1

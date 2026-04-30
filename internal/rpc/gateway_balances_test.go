@@ -165,14 +165,10 @@ func (m *mockGatewayBalancesLedgerService) GetClosedLedgerView() (types.LedgerSt
 	return nil, errors.New("not implemented in mock")
 }
 
-// setupGatewayBalancesTestServices initializes the Services singleton with a mock for testing
-func setupGatewayBalancesTestServices(mock *mockGatewayBalancesLedgerService) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
+// newGatewayBalancesTestServices builds a per-test ServiceContainer wrapping mock.
+func newGatewayBalancesTestServices(mock *mockGatewayBalancesLedgerService) *types.ServiceContainer {
+	return &types.ServiceContainer{
 		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
 	}
 }
 
@@ -180,14 +176,14 @@ func setupGatewayBalancesTestServices(mock *mockGatewayBalancesLedgerService) fu
 // Based on rippled GatewayBalances_test.cpp
 func TestGatewayBalancesErrorValidation(t *testing.T) {
 	mock := newMockGatewayBalancesLedgerService()
-	cleanup := setupGatewayBalancesTestServices(mock)
-	defer cleanup()
+	services := newGatewayBalancesTestServices(mock)
 
 	method := &handlers.GatewayBalancesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -267,8 +263,7 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 // Based on rippled GatewayBalances_test.cpp testGWBApiVersions
 func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 	mock := newMockGatewayBalancesLedgerService()
-	cleanup := setupGatewayBalancesTestServices(mock)
-	defer cleanup()
+	services := newGatewayBalancesTestServices(mock)
 
 	method := &handlers.GatewayBalancesMethod{}
 
@@ -281,6 +276,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := map[string]interface{}{
@@ -304,6 +300,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion2,
+			Services:   services,
 		}
 
 		params := map[string]interface{}{
@@ -325,14 +322,14 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 // Based on rippled GatewayBalances_test.cpp testGWB
 func TestGatewayBalancesBasic(t *testing.T) {
 	mock := newMockGatewayBalancesLedgerService()
-	cleanup := setupGatewayBalancesTestServices(mock)
-	defer cleanup()
+	services := newGatewayBalancesTestServices(mock)
 
 	method := &handlers.GatewayBalancesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -559,14 +556,14 @@ func TestGatewayBalancesBasic(t *testing.T) {
 // TestGatewayBalancesHotwalletFormats tests different hotwallet parameter formats
 func TestGatewayBalancesHotwalletFormats(t *testing.T) {
 	mock := newMockGatewayBalancesLedgerService()
-	cleanup := setupGatewayBalancesTestServices(mock)
-	defer cleanup()
+	services := newGatewayBalancesTestServices(mock)
 
 	method := &handlers.GatewayBalancesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -641,15 +638,12 @@ func TestGatewayBalancesHotwalletFormats(t *testing.T) {
 
 // TestGatewayBalancesServiceUnavailable tests behavior when ledger service is not available
 func TestGatewayBalancesServiceUnavailable(t *testing.T) {
-	oldServices := types.Services
-	types.Services = nil
-	defer func() { types.Services = oldServices }()
-
 	method := &handlers.GatewayBalancesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	params := map[string]interface{}{
@@ -686,14 +680,14 @@ func TestGatewayBalancesMethodMetadata(t *testing.T) {
 // TestGatewayBalancesResponseFields tests that all required fields are present
 func TestGatewayBalancesResponseFields(t *testing.T) {
 	mock := newMockGatewayBalancesLedgerService()
-	cleanup := setupGatewayBalancesTestServices(mock)
-	defer cleanup()
+	services := newGatewayBalancesTestServices(mock)
 
 	method := &handlers.GatewayBalancesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.gatewayBalancesResult = &types.GatewayBalancesResult{

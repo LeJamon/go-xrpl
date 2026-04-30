@@ -10,11 +10,11 @@ import (
 type LedgerCurrentMethod struct{}
 
 func (m *LedgerCurrentMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	seq := types.Services.Ledger.GetCurrentLedgerIndex()
+	seq := ctx.Services.Ledger.GetCurrentLedgerIndex()
 	if seq == 0 {
 		return nil, &types.RpcError{Code: -1, ErrorString: "lgrNotFound", Message: "No current ledger"}
 	}

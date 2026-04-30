@@ -169,14 +169,10 @@ func (m *mockDepositAuthorizedLedgerService) GetClosedLedgerView() (types.Ledger
 	return nil, errors.New("not implemented in mock")
 }
 
-// setupDepositAuthorizedTestServices initializes the Services singleton with a mock for testing
-func setupDepositAuthorizedTestServices(mock *mockDepositAuthorizedLedgerService) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
+// newDepositAuthorizedTestServices builds a per-test ServiceContainer wrapping mock.
+func newDepositAuthorizedTestServices(mock *mockDepositAuthorizedLedgerService) *types.ServiceContainer {
+	return &types.ServiceContainer{
 		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
 	}
 }
 
@@ -186,14 +182,14 @@ func setupDepositAuthorizedTestServices(mock *mockDepositAuthorizedLedgerService
 // Based on rippled DepositAuthorized_test.cpp testErrors()
 func TestDepositAuthorizedErrorValidation(t *testing.T) {
 	mock := newMockDepositAuthorizedLedgerService()
-	cleanup := setupDepositAuthorizedTestServices(mock)
-	defer cleanup()
+	services := newDepositAuthorizedTestServices(mock)
 
 	method := &handlers.DepositAuthorizedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -302,14 +298,14 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 // Based on rippled DepositAuthorized_test.cpp testValid()
 func TestDepositAuthorizedBasicAuthorized(t *testing.T) {
 	mock := newMockDepositAuthorizedLedgerService()
-	cleanup := setupDepositAuthorizedTestServices(mock)
-	defer cleanup()
+	services := newDepositAuthorizedTestServices(mock)
 
 	method := &handlers.DepositAuthorizedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Alice can deposit to Becky (no DepositAuth set)
@@ -349,14 +345,14 @@ func TestDepositAuthorizedBasicAuthorized(t *testing.T) {
 // Based on rippled DepositAuthorized_test.cpp testValid() - becky can deposit to herself
 func TestDepositAuthorizedSelfDeposit(t *testing.T) {
 	mock := newMockDepositAuthorizedLedgerService()
-	cleanup := setupDepositAuthorizedTestServices(mock)
-	defer cleanup()
+	services := newDepositAuthorizedTestServices(mock)
 
 	method := &handlers.DepositAuthorizedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Becky can always deposit to herself, even with DepositAuth set
@@ -390,14 +386,14 @@ func TestDepositAuthorizedSelfDeposit(t *testing.T) {
 // Based on rippled DepositAuthorized_test.cpp testValid()
 func TestDepositAuthorizedNotAuthorized(t *testing.T) {
 	mock := newMockDepositAuthorizedLedgerService()
-	cleanup := setupDepositAuthorizedTestServices(mock)
-	defer cleanup()
+	services := newDepositAuthorizedTestServices(mock)
 
 	method := &handlers.DepositAuthorizedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Alice is NOT authorized to deposit to Becky (DepositAuth set, no preauth)
@@ -431,14 +427,14 @@ func TestDepositAuthorizedNotAuthorized(t *testing.T) {
 // Based on rippled DepositAuthorized_test.cpp testValid()
 func TestDepositAuthorizedWithPreauth(t *testing.T) {
 	mock := newMockDepositAuthorizedLedgerService()
-	cleanup := setupDepositAuthorizedTestServices(mock)
-	defer cleanup()
+	services := newDepositAuthorizedTestServices(mock)
 
 	method := &handlers.DepositAuthorizedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Alice is authorized to deposit to Becky (DepositAuth set, with preauth)
@@ -472,14 +468,14 @@ func TestDepositAuthorizedWithPreauth(t *testing.T) {
 // Based on rippled DepositAuthorized_test.cpp testValid()
 func TestDepositAuthorizedReciprocal(t *testing.T) {
 	mock := newMockDepositAuthorizedLedgerService()
-	cleanup := setupDepositAuthorizedTestServices(mock)
-	defer cleanup()
+	services := newDepositAuthorizedTestServices(mock)
 
 	method := &handlers.DepositAuthorizedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Becky can deposit to Alice even though Alice can't deposit to Becky
@@ -514,18 +510,12 @@ func TestDepositAuthorizedReciprocal(t *testing.T) {
 
 // TestDepositAuthorizedServiceUnavailable tests response when ledger service is unavailable
 func TestDepositAuthorizedServiceUnavailable(t *testing.T) {
-	// Set Services to nil
-	oldServices := types.Services
-	types.Services = nil
-	defer func() {
-		types.Services = oldServices
-	}()
-
 	method := &handlers.DepositAuthorizedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	params := map[string]interface{}{
@@ -566,14 +556,14 @@ func TestDepositAuthorizedMethodMetadata(t *testing.T) {
 // Reference: rippled DepositAuthorized.cpp — parseBase58 → rpcACT_MALFORMED
 func TestDepositAuthorizedAddressValidation(t *testing.T) {
 	mock := newMockDepositAuthorizedLedgerService()
-	cleanup := setupDepositAuthorizedTestServices(mock)
-	defer cleanup()
+	services := newDepositAuthorizedTestServices(mock)
 
 	method := &handlers.DepositAuthorizedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -662,14 +652,14 @@ func TestDepositAuthorizedAddressValidation(t *testing.T) {
 // Reference: rippled DepositAuthorized.cpp — credential parsing loop + sorted.emplace()
 func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 	mock := newMockDepositAuthorizedLedgerService()
-	cleanup := setupDepositAuthorizedTestServices(mock)
-	defer cleanup()
+	services := newDepositAuthorizedTestServices(mock)
 
 	method := &handlers.DepositAuthorizedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validCred1 := "A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2"

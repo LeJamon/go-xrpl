@@ -88,14 +88,14 @@ func newTestServer() *Server {
 func TestAmendmentBlockedMethodsReturnError(t *testing.T) {
 	mock := newMockLedgerService()
 	mock.amendmentBlocked = true
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	server := newTestServer()
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	for _, method := range blockedMethods {
@@ -120,14 +120,14 @@ func TestAmendmentBlockedMethodsReturnError(t *testing.T) {
 func TestAmendmentBlockedUnblockedMethodsStillWork(t *testing.T) {
 	mock := newMockLedgerService()
 	mock.amendmentBlocked = true
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	server := newTestServer()
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	for _, method := range unblockedMethods {
@@ -152,14 +152,14 @@ func TestAmendmentBlockedUnblockedMethodsStillWork(t *testing.T) {
 func TestAmendmentNotBlockedAllMethodsWork(t *testing.T) {
 	mock := newMockLedgerService()
 	mock.amendmentBlocked = false
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	server := newTestServer()
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	allMethods := append(blockedMethods, unblockedMethods...)
@@ -182,14 +182,14 @@ func TestAmendmentNotBlockedAllMethodsWork(t *testing.T) {
 func TestAmendmentBlockedErrorFormat(t *testing.T) {
 	mock := newMockLedgerService()
 	mock.amendmentBlocked = true
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	server := newTestServer()
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Use submit as a representative blocked method

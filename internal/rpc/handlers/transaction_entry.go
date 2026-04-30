@@ -34,7 +34,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 		return nil, types.NewRpcError(-1, "fieldNotFoundTransaction", "fieldNotFoundTransaction", "Missing field 'tx_hash'.")
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -48,7 +48,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	copy(txHash[:], txHashBytes)
 
 	// Look up the transaction
-	txInfo, err := types.Services.Ledger.GetTransaction(txHash)
+	txInfo, err := ctx.Services.Ledger.GetTransaction(txHash)
 	if err != nil || txInfo == nil {
 		return nil, &types.RpcError{
 			Code:        -1,
@@ -58,7 +58,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	}
 
 	// Resolve the target ledger and verify the transaction is in it
-	targetSeq, rpcErr := m.resolveTargetLedger(request.LedgerHash, request.LedgerIndex)
+	targetSeq, rpcErr := m.resolveTargetLedger(ctx.Services, request.LedgerHash, request.LedgerIndex)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -80,7 +80,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 
 	ledgerHash := txInfo.LedgerHash
 	if ledgerHash == "" {
-		ledger, err := types.Services.Ledger.GetLedgerBySequence(targetSeq)
+		ledger, err := ctx.Services.Ledger.GetLedgerBySequence(targetSeq)
 		if err == nil && ledger != nil {
 			h := ledger.Hash()
 			ledgerHash = fmt.Sprintf("%X", h)
@@ -113,7 +113,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 		}
 		if txInfo.Validated {
 			response["ledger_index"] = txInfo.LedgerIndex
-			if targetLedger, err := types.Services.Ledger.GetLedgerBySequence(targetSeq); err == nil {
+			if targetLedger, err := ctx.Services.Ledger.GetLedgerBySequence(targetSeq); err == nil {
 				closeTimeSec := targetLedger.CloseTime()
 				if closeTimeSec > 0 {
 					closeTime := rippleEpochTime.Add(secondsToDuration(closeTimeSec))
@@ -132,7 +132,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 }
 
 // resolveTargetLedger resolves the ledger sequence from the request params.
-func (m *TransactionEntryMethod) resolveTargetLedger(ledgerHash string, ledgerIndex any) (uint32, *types.RpcError) {
+func (m *TransactionEntryMethod) resolveTargetLedger(services *types.ServiceContainer, ledgerHash string, ledgerIndex any) (uint32, *types.RpcError) {
 	// If ledger_hash is provided, resolve by hash
 	if ledgerHash != "" {
 		hashBytes, err := hex.DecodeString(ledgerHash)
@@ -141,7 +141,7 @@ func (m *TransactionEntryMethod) resolveTargetLedger(ledgerHash string, ledgerIn
 		}
 		var hash [32]byte
 		copy(hash[:], hashBytes)
-		ledger, err := types.Services.Ledger.GetLedgerByHash(hash)
+		ledger, err := services.Ledger.GetLedgerByHash(hash)
 		if err != nil || ledger == nil {
 			return 0, types.RpcErrorLgrNotFound("Ledger not found")
 		}
@@ -156,11 +156,11 @@ func (m *TransactionEntryMethod) resolveTargetLedger(ledgerHash string, ledgerIn
 		case string:
 			switch v {
 			case "validated":
-				return types.Services.Ledger.GetValidatedLedgerIndex(), nil
+				return services.Ledger.GetValidatedLedgerIndex(), nil
 			case "closed":
-				return types.Services.Ledger.GetClosedLedgerIndex(), nil
+				return services.Ledger.GetClosedLedgerIndex(), nil
 			case "current":
-				return types.Services.Ledger.GetCurrentLedgerIndex(), nil
+				return services.Ledger.GetCurrentLedgerIndex(), nil
 			default:
 				seq, err := strconv.ParseUint(v, 10, 32)
 				if err != nil {
@@ -172,5 +172,5 @@ func (m *TransactionEntryMethod) resolveTargetLedger(ledgerHash string, ledgerIn
 	}
 
 	// Default to validated ledger
-	return types.Services.Ledger.GetValidatedLedgerIndex(), nil
+	return services.Ledger.GetValidatedLedgerIndex(), nil
 }

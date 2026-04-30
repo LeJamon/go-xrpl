@@ -32,7 +32,7 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		}
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -47,28 +47,28 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		}
 		var hash [32]byte
 		copy(hash[:], hashBytes)
-		targetLedger, lookupErr = types.Services.Ledger.GetLedgerByHash(hash)
+		targetLedger, lookupErr = ctx.Services.Ledger.GetLedgerByHash(hash)
 	} else if request.LedgerIndex != "" {
 		ledgerIndexStr := request.LedgerIndex.String()
 		switch ledgerIndexStr {
 		case "validated":
-			seq := types.Services.Ledger.GetValidatedLedgerIndex()
-			targetLedger, lookupErr = types.Services.Ledger.GetLedgerBySequence(seq)
+			seq := ctx.Services.Ledger.GetValidatedLedgerIndex()
+			targetLedger, lookupErr = ctx.Services.Ledger.GetLedgerBySequence(seq)
 		case "closed":
-			seq := types.Services.Ledger.GetClosedLedgerIndex()
-			targetLedger, lookupErr = types.Services.Ledger.GetLedgerBySequence(seq)
+			seq := ctx.Services.Ledger.GetClosedLedgerIndex()
+			targetLedger, lookupErr = ctx.Services.Ledger.GetLedgerBySequence(seq)
 		case "current":
-			seq := types.Services.Ledger.GetCurrentLedgerIndex()
-			targetLedger, lookupErr = types.Services.Ledger.GetLedgerBySequence(seq)
+			seq := ctx.Services.Ledger.GetCurrentLedgerIndex()
+			targetLedger, lookupErr = ctx.Services.Ledger.GetLedgerBySequence(seq)
 			if lookupErr != nil {
 				// Open ledger may not be in history yet; fall back to closed ledger.
-				seq = types.Services.Ledger.GetClosedLedgerIndex()
-				targetLedger, lookupErr = types.Services.Ledger.GetLedgerBySequence(seq)
+				seq = ctx.Services.Ledger.GetClosedLedgerIndex()
+				targetLedger, lookupErr = ctx.Services.Ledger.GetLedgerBySequence(seq)
 			}
 		default:
 			var seq uint32
 			if _, scanErr := fmt.Sscanf(ledgerIndexStr, "%d", &seq); scanErr == nil {
-				targetLedger, lookupErr = types.Services.Ledger.GetLedgerBySequence(seq)
+				targetLedger, lookupErr = ctx.Services.Ledger.GetLedgerBySequence(seq)
 			} else {
 				return nil, types.RpcErrorInvalidParams("Invalid ledger_index: " + ledgerIndexStr)
 			}
@@ -76,8 +76,8 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	} else {
 		// Default to validated (rippled defaults to current via lookupLedger,
 		// but for ledger_header the common usage is validated)
-		seq := types.Services.Ledger.GetValidatedLedgerIndex()
-		targetLedger, lookupErr = types.Services.Ledger.GetLedgerBySequence(seq)
+		seq := ctx.Services.Ledger.GetValidatedLedgerIndex()
+		targetLedger, lookupErr = ctx.Services.Ledger.GetLedgerBySequence(seq)
 	}
 
 	if lookupErr != nil || targetLedger == nil {

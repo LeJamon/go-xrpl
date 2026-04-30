@@ -25,7 +25,7 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		return nil, err
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -63,7 +63,7 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	}
 
 	// Get gateway balances from the ledger service
-	result, err := types.Services.Ledger.GetGatewayBalances(
+	result, err := ctx.Services.Ledger.GetGatewayBalances(
 		request.Account,
 		hotWallets,
 		ledgerIndex,

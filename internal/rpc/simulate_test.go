@@ -38,13 +38,9 @@ func (m *mockLedgerServiceSimulate) SimulateTransaction(txJSON []byte) (*types.S
 	return m.simulateResult, nil
 }
 
-func setupTestServicesSimulate(mock *mockLedgerServiceSimulate) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
+func newSimulateTestServices(mock *mockLedgerServiceSimulate) *types.ServiceContainer {
+	return &types.ServiceContainer{
 		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
 	}
 }
 
@@ -53,14 +49,14 @@ const validAccountAddress = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
 func TestSimulateMethod_ParamErrors(t *testing.T) {
 	mock := newMockLedgerServiceSimulate()
-	cleanup := setupTestServicesSimulate(mock)
-	defer cleanup()
+	services := newSimulateTestServices(mock)
 
 	method := &handlers.SimulateMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -204,14 +200,14 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 
 func TestSimulateMethod_TxnSignature(t *testing.T) {
 	mock := newMockLedgerServiceSimulate()
-	cleanup := setupTestServicesSimulate(mock)
-	defer cleanup()
+	services := newSimulateTestServices(mock)
 
 	method := &handlers.SimulateMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,
+		Services:   services,
 	}
 
 	t.Run("Signed transaction — non-empty TxnSignature", func(t *testing.T) {
@@ -273,14 +269,14 @@ func TestSimulateMethod_TxnSignature(t *testing.T) {
 
 func TestSimulateMethod_SignedMultisig(t *testing.T) {
 	mock := newMockLedgerServiceSimulate()
-	cleanup := setupTestServicesSimulate(mock)
-	defer cleanup()
+	services := newSimulateTestServices(mock)
 
 	method := &handlers.SimulateMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,
+		Services:   services,
 	}
 
 	t.Run("Signed multisig transaction — non-empty signer TxnSignature", func(t *testing.T) {
@@ -383,14 +379,14 @@ func TestSimulateMethod_SignedMultisig(t *testing.T) {
 
 func TestSimulateMethod_BatchRejection(t *testing.T) {
 	mock := newMockLedgerServiceSimulate()
-	cleanup := setupTestServicesSimulate(mock)
-	defer cleanup()
+	services := newSimulateTestServices(mock)
 
 	method := &handlers.SimulateMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,
+		Services:   services,
 	}
 
 	params := map[string]interface{}{
@@ -411,14 +407,14 @@ func TestSimulateMethod_BatchRejection(t *testing.T) {
 
 func TestSimulateMethod_SuccessfulSimulation(t *testing.T) {
 	mock := newMockLedgerServiceSimulate()
-	cleanup := setupTestServicesSimulate(mock)
-	defer cleanup()
+	services := newSimulateTestServices(mock)
 
 	method := &handlers.SimulateMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,
+		Services:   services,
 	}
 
 	params := map[string]interface{}{
@@ -454,14 +450,14 @@ func TestSimulateMethod_SuccessfulSimulation(t *testing.T) {
 
 func TestSimulateMethod_SrcActMalformed(t *testing.T) {
 	mock := newMockLedgerServiceSimulate()
-	cleanup := setupTestServicesSimulate(mock)
-	defer cleanup()
+	services := newSimulateTestServices(mock)
 
 	method := &handlers.SimulateMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,
+		Services:   services,
 	}
 
 	params := map[string]interface{}{

@@ -27,7 +27,7 @@ func (m *JsonMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (inte
 		return nil, types.RpcErrorInvalidParams("Missing required parameter: method")
 	}
 
-	if types.Services == nil || types.Services.Dispatcher == nil {
+	if ctx.Services == nil || ctx.Services.Dispatcher == nil {
 		return nil, types.RpcErrorInternal("Method dispatcher not available")
 	}
 
@@ -44,5 +44,5 @@ func (m *JsonMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (inte
 		}
 	}
 
-	return types.Services.Dispatcher.ExecuteMethod(request.Method, forwardParams)
+	return ctx.Services.Dispatcher.ExecuteMethod(request.Method, forwardParams)
 }

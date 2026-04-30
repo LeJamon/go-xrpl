@@ -10,10 +10,10 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
-// RequireLedgerService checks that the ledger service is available.
-// Returns an RpcError if the service is nil.
-func RequireLedgerService() *types.RpcError {
-	if types.Services == nil || types.Services.Ledger == nil {
+// RequireLedgerService checks that the ledger service is available
+// on the request's service container. Returns an RpcError if not.
+func RequireLedgerService(services *types.ServiceContainer) *types.RpcError {
+	if services == nil || services.Ledger == nil {
 		return types.RpcErrorInternal("Ledger service not available")
 	}
 	return nil

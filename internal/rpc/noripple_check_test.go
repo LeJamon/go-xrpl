@@ -163,14 +163,10 @@ func (m *mockNoRippleCheckLedgerService) GetClosedLedgerView() (types.LedgerStat
 	return nil, errors.New("not implemented in mock")
 }
 
-// setupNoRippleCheckTestServices initializes the Services singleton with a mock for testing
-func setupNoRippleCheckTestServices(mock *mockNoRippleCheckLedgerService) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
+// newNoRippleCheckTestServices builds a per-test ServiceContainer wrapping mock.
+func newNoRippleCheckTestServices(mock *mockNoRippleCheckLedgerService) *types.ServiceContainer {
+	return &types.ServiceContainer{
 		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
 	}
 }
 
@@ -180,14 +176,14 @@ func setupNoRippleCheckTestServices(mock *mockNoRippleCheckLedgerService) func()
 // Based on rippled NoRippleCheck_test.cpp testBadInput()
 func TestNoRippleCheckErrorValidation(t *testing.T) {
 	mock := newMockNoRippleCheckLedgerService()
-	cleanup := setupNoRippleCheckTestServices(mock)
-	defer cleanup()
+	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -275,14 +271,14 @@ func TestNoRippleCheckErrorValidation(t *testing.T) {
 // Based on rippled NoRippleCheck_test.cpp testBasic(user=true, problems=false)
 func TestNoRippleCheckUserRoleNoProblems(t *testing.T) {
 	mock := newMockNoRippleCheckLedgerService()
-	cleanup := setupNoRippleCheckTestServices(mock)
-	defer cleanup()
+	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// User with no problems: DefaultRipple not set, NoRipple set on trust lines
@@ -325,14 +321,14 @@ func TestNoRippleCheckUserRoleNoProblems(t *testing.T) {
 // Based on rippled NoRippleCheck_test.cpp testBasic(user=true, problems=true)
 func TestNoRippleCheckUserRoleWithProblems(t *testing.T) {
 	mock := newMockNoRippleCheckLedgerService()
-	cleanup := setupNoRippleCheckTestServices(mock)
-	defer cleanup()
+	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// User with problems: DefaultRipple set (bad), NoRipple not set on trust lines (bad)
@@ -377,14 +373,14 @@ func TestNoRippleCheckUserRoleWithProblems(t *testing.T) {
 // Based on rippled NoRippleCheck_test.cpp testBasic(user=false, problems=false)
 func TestNoRippleCheckGatewayRoleNoProblems(t *testing.T) {
 	mock := newMockNoRippleCheckLedgerService()
-	cleanup := setupNoRippleCheckTestServices(mock)
-	defer cleanup()
+	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Gateway with no problems: DefaultRipple set, NoRipple not set on trust lines
@@ -422,14 +418,14 @@ func TestNoRippleCheckGatewayRoleNoProblems(t *testing.T) {
 // Based on rippled NoRippleCheck_test.cpp testBasic(user=false, problems=true)
 func TestNoRippleCheckGatewayRoleWithProblems(t *testing.T) {
 	mock := newMockNoRippleCheckLedgerService()
-	cleanup := setupNoRippleCheckTestServices(mock)
-	defer cleanup()
+	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Gateway with problems: DefaultRipple not set (bad), NoRipple set on trust lines (bad)
@@ -474,14 +470,14 @@ func TestNoRippleCheckGatewayRoleWithProblems(t *testing.T) {
 // Based on rippled NoRippleCheck_test.cpp testBasic with transactions=true
 func TestNoRippleCheckWithTransactionsUser(t *testing.T) {
 	mock := newMockNoRippleCheckLedgerService()
-	cleanup := setupNoRippleCheckTestServices(mock)
-	defer cleanup()
+	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// User with problems requesting transactions (only TrustSet, no AccountSet since DefaultRipple should not be set)
@@ -538,14 +534,14 @@ func TestNoRippleCheckWithTransactionsUser(t *testing.T) {
 // Based on rippled NoRippleCheck_test.cpp testBasic with transactions=true
 func TestNoRippleCheckWithTransactionsGateway(t *testing.T) {
 	mock := newMockNoRippleCheckLedgerService()
-	cleanup := setupNoRippleCheckTestServices(mock)
-	defer cleanup()
+	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Gateway with problems requesting transactions (AccountSet + TrustSet)
@@ -616,14 +612,14 @@ func TestNoRippleCheckWithTransactionsGateway(t *testing.T) {
 // Based on rippled NoRippleCheck.cpp API version check
 func TestNoRippleCheckTransactionsFieldValidationAPIv2(t *testing.T) {
 	mock := newMockNoRippleCheckLedgerService()
-	cleanup := setupNoRippleCheckTestServices(mock)
-	defer cleanup()
+	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion2,
+		Services:   services,
 	}
 
 	// In API v2, transactions must be a boolean, not a string
@@ -641,14 +637,14 @@ func TestNoRippleCheckTransactionsFieldValidationAPIv2(t *testing.T) {
 // TestNoRippleCheckTransactionsFieldAPIv1 tests that API v1 accepts transactions as any truthy value
 func TestNoRippleCheckTransactionsFieldAPIv1(t *testing.T) {
 	mock := newMockNoRippleCheckLedgerService()
-	cleanup := setupNoRippleCheckTestServices(mock)
-	defer cleanup()
+	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.noRippleCheckResult = &types.NoRippleCheckResult{
@@ -671,18 +667,12 @@ func TestNoRippleCheckTransactionsFieldAPIv1(t *testing.T) {
 
 // TestNoRippleCheckServiceUnavailable tests response when ledger service is unavailable
 func TestNoRippleCheckServiceUnavailable(t *testing.T) {
-	// Set Services to nil
-	oldServices := types.Services
-	types.Services = nil
-	defer func() {
-		types.Services = oldServices
-	}()
-
 	method := &handlers.NoRippleCheckMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	params := map[string]interface{}{
@@ -703,14 +693,14 @@ func TestNoRippleCheckServiceUnavailable(t *testing.T) {
 // TestNoRippleCheckWithLimit tests the limit parameter
 func TestNoRippleCheckWithLimit(t *testing.T) {
 	mock := newMockNoRippleCheckLedgerService()
-	cleanup := setupNoRippleCheckTestServices(mock)
-	defer cleanup()
+	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.noRippleCheckResult = &types.NoRippleCheckResult{

@@ -54,14 +54,14 @@ func TestLedgerClosedBasicSuccess(t *testing.T) {
 		return nil, errors.New("not found")
 	}
 
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerClosedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	result, rpcErr := method.Handle(ctx, nil)
@@ -114,14 +114,14 @@ func TestLedgerClosedHashFormat(t *testing.T) {
 		return nil, errors.New("not found")
 	}
 
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerClosedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	result, rpcErr := method.Handle(ctx, nil)
@@ -152,16 +152,14 @@ func TestLedgerClosedHashFormat(t *testing.T) {
 // TestLedgerClosedServiceUnavailable tests behavior when ledger service is not available
 func TestLedgerClosedServiceUnavailable(t *testing.T) {
 	method := &handlers.LedgerClosedMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
-	}
 
 	t.Run("Nil services", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = nil
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   nil,
+		}
 
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
@@ -171,9 +169,12 @@ func TestLedgerClosedServiceUnavailable(t *testing.T) {
 	})
 
 	t.Run("Nil ledger in services", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = &types.ServiceContainer{Ledger: nil}
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: nil},
+		}
 
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
@@ -188,9 +189,12 @@ func TestLedgerClosedServiceUnavailable(t *testing.T) {
 				closedLedgerIndex: 0,
 			},
 		}
-		oldServices := types.Services
-		types.Services = &types.ServiceContainer{Ledger: mock}
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: mock},
+		}
 
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
@@ -205,9 +209,12 @@ func TestLedgerClosedServiceUnavailable(t *testing.T) {
 		mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
 			return nil, errors.New("storage error")
 		}
-		oldServices := types.Services
-		types.Services = &types.ServiceContainer{Ledger: mock}
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: mock},
+		}
 
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)

@@ -149,9 +149,9 @@ type signResult struct {
 // The feeOpts parameter controls auto-fee behavior: if Fee is not present in
 // tx_json and auto-fill is active, the network fee is computed and checked
 // against the limit baseFee * feeOpts.Mult / feeOpts.Div.
-func signTransactionJSON(txJSON json.RawMessage, creds signCredentials, offline bool, apiVersion int, feeOpts feeOptions) (*signResult, *types.RpcError) {
+func signTransactionJSON(services *types.ServiceContainer, txJSON json.RawMessage, creds signCredentials, offline bool, apiVersion int, feeOpts feeOptions) (*signResult, *types.RpcError) {
 	// Check if ledger service is available (needed for auto-filling fields)
-	if !offline && (types.Services == nil || types.Services.Ledger == nil) {
+	if !offline && (services == nil || services.Ledger == nil) {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
@@ -194,7 +194,7 @@ func signTransactionJSON(txJSON json.RawMessage, creds signCredentials, offline 
 		// Auto-fill Fee if not present, with fee_mult_max/fee_div_max limit check.
 		// This matches rippled's checkFee() in TransactionSign.cpp.
 		if _, ok := txMap["Fee"]; !ok {
-			baseFee, _, _ := types.Services.Ledger.GetCurrentFees()
+			baseFee, _, _ := services.Ledger.GetCurrentFees()
 
 			// In a full implementation, networkFee would incorporate load-based
 			// fee escalation. For now, networkFee == baseFee.
@@ -216,7 +216,7 @@ func signTransactionJSON(txJSON json.RawMessage, creds signCredentials, offline 
 		if _, ok := txMap["Sequence"]; !ok {
 			// TODO: When ledger lookup is available, auto-fill from account state.
 			// For now, attempt to get account info.
-			info, err := types.Services.Ledger.GetAccountInfo(address, "current")
+			info, err := services.Ledger.GetAccountInfo(address, "current")
 			if err != nil {
 				return nil, types.RpcErrorInternal("Failed to get account sequence: " + err.Error())
 			}
@@ -225,7 +225,7 @@ func signTransactionJSON(txJSON json.RawMessage, creds signCredentials, offline 
 
 		// Set LastLedgerSequence if not present (current + 4)
 		if _, ok := txMap["LastLedgerSequence"]; !ok {
-			currentLedger := types.Services.Ledger.GetCurrentLedgerIndex()
+			currentLedger := services.Ledger.GetCurrentLedgerIndex()
 			txMap["LastLedgerSequence"] = currentLedger + 4
 		}
 
@@ -234,7 +234,7 @@ func signTransactionJSON(txJSON json.RawMessage, creds signCredentials, offline 
 		// legacy networks (ID <= 1024) must NOT include NetworkID;
 		// new networks (ID > 1024) require it and it is auto-filled here.
 		if _, ok := txMap["NetworkID"]; !ok {
-			serverInfo := types.Services.Ledger.GetServerInfo()
+			serverInfo := services.Ledger.GetServerInfo()
 			if serverInfo.NetworkID > 1024 {
 				txMap["NetworkID"] = serverInfo.NetworkID
 			}

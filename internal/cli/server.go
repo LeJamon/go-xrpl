@@ -214,7 +214,7 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Wire up RPC services
 	ledgerAdapter := rpc.NewLedgerServiceAdapter(ledgerService)
-	types.InitServices(ledgerAdapter)
+	services := types.NewServiceContainer(ledgerAdapter)
 
 	// Start consensus/networking if not in standalone mode
 	var consensusComponents *adaptor.Components
@@ -269,10 +269,10 @@ func runServer(cmd *cobra.Command, args []string) {
 		})
 
 		// Expose node identity, peer count, and consensus stats to RPC handlers
-		types.Services.NodePublicKey = consensusComponents.Overlay.Identity().EncodedPublicKey()
-		types.Services.PeerCount = consensusComponents.Overlay.PeerCount
+		services.NodePublicKey = consensusComponents.Overlay.Identity().EncodedPublicKey()
+		services.PeerCount = consensusComponents.Overlay.PeerCount
 		engine := consensusComponents.Engine
-		types.Services.LastCloseInfo = func() (int, int) {
+		services.LastCloseInfo = func() (int, int) {
 			proposers, convergeTime := engine.GetLastCloseInfo()
 			return proposers, int(convergeTime.Milliseconds())
 		}
@@ -280,7 +280,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		// The cache is shared — the router writes inbound manifests,
 		// the engine reads for ephemeral→master translation, and this
 		// RPC reads for external queries.
-		types.Services.Manifests = consensusComponents.Manifests
+		services.Manifests = consensusComponents.Manifests
 
 		// Expose the local validator's signing key to validator_info.
 		// Mirrors rippled's getValidationPublicKey gate: empty means
@@ -289,7 +289,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		if vid, err := consensusComponents.Adaptor.GetValidatorKey(); err == nil {
 			pk := make([]byte, 33)
 			copy(pk, vid[:])
-			types.Services.ValidatorPublicKey = pk
+			services.ValidatorPublicKey = pk
 		}
 
 		isValidator := globalConfig.IsValidator()
@@ -307,15 +307,15 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 
 	// Create HTTP JSON-RPC server with 30 second timeout
-	httpServer := rpc.NewServer(30 * time.Second)
+	httpServer := rpc.NewServer(30*time.Second, services)
 	if consensusComponents != nil && consensusComponents.Overlay != nil {
 		httpServer.SetPeerSource(consensusComponents.Overlay)
 	}
 
-	types.Services.SetDispatcher(httpServer)
+	services.SetDispatcher(httpServer)
 
 	// Create WebSocket server for real-time subscriptions
-	wsServer := rpc.NewWebSocketServer(30 * time.Second)
+	wsServer := rpc.NewWebSocketServer(30*time.Second, services)
 	wsServer.RegisterAllMethods()
 
 	// Create a ledger info provider adapter for WebSocket subscribe responses
@@ -387,7 +387,7 @@ func runServer(cmd *cobra.Command, args []string) {
 
 		// Update persistent path_find sessions on ledger close
 		wsServer.UpdatePathFindSessions(func() (types.LedgerStateView, error) {
-			return types.Services.Ledger.GetClosedLedgerView()
+			return services.Ledger.GetClosedLedgerView()
 		})
 
 		serverLog.Debug("Broadcasted ledger",
@@ -508,7 +508,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	// shutdownCh lets the RPC stop command trigger the same path
 	shutdownCh := make(chan struct{}, 1)
 
-	types.Services.SetShutdownFunc(func() {
+	services.SetShutdownFunc(func() {
 		serverLog.Info("Shutdown requested via RPC stop command")
 		shutdownCh <- struct{}{}
 	})

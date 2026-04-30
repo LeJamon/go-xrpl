@@ -37,7 +37,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return nil, types.RpcErrorInvalidParams("Must specify either vault_id or (owner + seq)")
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -69,7 +69,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		vaultKey = vaultKeylet.Key
 	}
 
-	vaultEntry, err := types.Services.Ledger.GetLedgerEntry(vaultKey, ledgerIndex)
+	vaultEntry, err := ctx.Services.Ledger.GetLedgerEntry(vaultKey, ledgerIndex)
 	if err != nil {
 		return nil, &types.RpcError{
 			Code:    21,
@@ -90,7 +90,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 			var mptIssuanceKey [32]byte
 			copy(mptIssuanceKey[:], shareMPTIDBytes)
 
-			mptIssuanceEntry, mptErr := types.Services.Ledger.GetLedgerEntry(mptIssuanceKey, ledgerIndex)
+			mptIssuanceEntry, mptErr := ctx.Services.Ledger.GetLedgerEntry(mptIssuanceKey, ledgerIndex)
 			if mptErr == nil {
 				mptIssuanceDecoded, mptDecodeErr := binarycodec.Decode(hex.EncodeToString(mptIssuanceEntry.Node))
 				if mptDecodeErr == nil {

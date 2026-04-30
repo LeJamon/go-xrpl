@@ -26,7 +26,7 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	}
 
 	// Read the enabled amendments from the ledger.
-	enabledSet := m.getEnabledAmendments()
+	enabledSet := m.getEnabledAmendments(ctx.Services)
 
 	// If a specific feature is requested, return just that one
 	if request.Feature != "" {
@@ -78,12 +78,12 @@ func (m *FeatureMethod) handleSingleFeature(feature string, enabledSet map[[32]b
 // the set of amendment hashes that are actually enabled on-ledger.
 // Returns nil if the ledger is unavailable, meaning the caller should fall back
 // to deriving enabled status from the registry defaults.
-func (m *FeatureMethod) getEnabledAmendments() map[[32]byte]bool {
-	if types.Services == nil || types.Services.Ledger == nil {
+func (m *FeatureMethod) getEnabledAmendments(services *types.ServiceContainer) map[[32]byte]bool {
+	if services == nil || services.Ledger == nil {
 		return nil
 	}
 
-	view, err := types.Services.Ledger.GetClosedLedgerView()
+	view, err := services.Ledger.GetClosedLedgerView()
 	if err != nil || view == nil {
 		return nil
 	}
