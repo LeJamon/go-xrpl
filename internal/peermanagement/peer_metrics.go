@@ -17,6 +17,10 @@ const rollingWindowSeconds = 30
 // accumBytes. Once at least one second has elapsed since intervalStart,
 // we close the bucket — pushing accumBytes/elapsedSeconds onto the
 // rolling buffer and recomputing the mean — then reset the interval.
+//
+// While the peer is idle (no addMessage calls), the rolling mean
+// freezes at its last value rather than decaying to zero. Matches
+// rippled, which only flushes the bucket inside add_message.
 type byteMetrics struct {
 	mu sync.Mutex
 
@@ -41,6 +45,13 @@ func newByteMetrics(clock func() time.Time) *byteMetrics {
 
 // addMessage records bytes transferred on the wire. Mirrors
 // PeerImp::Metrics::add_message (PeerImp.cpp:3514).
+//
+// Granularity differs from rippled: rippled fires once per
+// async_read_some / async_write completion (potentially sub-message for
+// large reads), while goXRPL's read/write loops fire once per complete
+// protocol message. Cumulative totals match exactly; the rolling-window
+// distribution can differ slightly when a single message spans more
+// than a second on a slow link.
 func (m *byteMetrics) addMessage(bytes uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -74,6 +85,14 @@ func (m *byteMetrics) addMessage(bytes uint64) {
 	m.accumBytes = 0
 }
 
+// tick flushes the rolling-window bucket if a second boundary has
+// elapsed since the last bucket close, without recording new bytes.
+// Test-only: production code never calls this directly because
+// addMessage already runs the flush on activity.
+func (m *byteMetrics) tick() {
+	m.addMessage(0)
+}
+
 // totalBytesSnapshot returns the cumulative byte count.
 func (m *byteMetrics) totalBytesSnapshot() uint64 {
 	m.mu.Lock()
@@ -88,16 +107,17 @@ func (m *byteMetrics) averageBytes() uint64 {
 	return m.rollingAvgBytes
 }
 
-// peerMetrics groups receive and send byteMetrics for a single peer,
-// matching rippled's anonymous metrics_ struct (PeerImp.h:226-230).
+// peerMetrics groups send and receive byteMetrics for a single peer.
+// Field order matches rippled's anonymous metrics_ struct — sent then
+// recv (PeerImp.h:226-230).
 type peerMetrics struct {
-	recv *byteMetrics
 	sent *byteMetrics
+	recv *byteMetrics
 }
 
 func newPeerMetrics(clock func() time.Time) *peerMetrics {
 	return &peerMetrics{
-		recv: newByteMetrics(clock),
 		sent: newByteMetrics(clock),
+		recv: newByteMetrics(clock),
 	}
 }

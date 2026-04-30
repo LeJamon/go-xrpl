@@ -9,15 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeClock returns the value at *now and lets the test tick it
-// deterministically. Used to drive byteMetrics through second-boundary
-// transitions without relying on real time.
-type fakeClock struct {
-	now *time.Time
-}
-
-func (f fakeClock) Now() time.Time { return *f.now }
-
 // TestByteMetrics_TotalBytesAccumulates pins the cumulative semantics
 // of metrics_.recv.total_bytes() / metrics_.sent.total_bytes()
 // (PeerImp.cpp:3547-3551): every byte ever passed in must be counted,
@@ -57,7 +48,7 @@ func TestByteMetrics_RollingAveragePartialFill(t *testing.T) {
 	// One second of activity at 3000 B/s.
 	m.addMessage(3000)
 	clockNow = clockNow.Add(1 * time.Second)
-	m.addMessage(0) // bucket flush at the boundary
+	m.tick() // flush the bucket at the boundary
 
 	// avg = 3000 / 30 (29 zero buckets pre-filled).
 	assert.EqualValues(t, 3000/rollingWindowSeconds, m.averageBytes())
@@ -75,7 +66,7 @@ func TestByteMetrics_RollingAverageSteadyState(t *testing.T) {
 	for i := 0; i < rollingWindowSeconds; i++ {
 		m.addMessage(bps)
 		clockNow = clockNow.Add(1 * time.Second)
-		m.addMessage(0) // close out the bucket
+		m.tick() // close out the bucket
 	}
 
 	assert.EqualValues(t, bps, m.averageBytes(),
@@ -91,21 +82,21 @@ func TestByteMetrics_RollingAverageDropsOldest(t *testing.T) {
 	clockNow := now
 	m := newByteMetrics(func() time.Time { return clockNow })
 
-	tick := func(bytes uint64) {
+	step := func(bytes uint64) {
 		m.addMessage(bytes)
 		clockNow = clockNow.Add(1 * time.Second)
-		m.addMessage(0)
+		m.tick()
 	}
 
 	// Seed bucket 0 with a distinctive large value.
-	tick(60_000)
+	step(60_000)
 	// Fill the remaining 29 buckets with a steady value.
 	for i := 0; i < rollingWindowSeconds-1; i++ {
-		tick(1000)
+		step(1000)
 	}
-	// One more tick should evict bucket 0; the steady value must now
+	// One more step should evict bucket 0; the steady value must now
 	// dominate the mean.
-	tick(1000)
+	step(1000)
 
 	assert.EqualValues(t, 1000, m.averageBytes(),
 		"after rollingWindowSeconds+1 fills, the seed bucket must be evicted")
@@ -135,6 +126,10 @@ func TestOverlay_PeersJSON_EmitsMetricsObject(t *testing.T) {
 
 	p := NewPeer(1, Endpoint{Host: "10.0.0.1", Port: 51235}, false, id, nil)
 	p.setState(PeerStateConnected)
+	// Frozen clock so the avg_bps_* assertions don't race a real
+	// 1-second boundary on slow CI.
+	frozen := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	p.metrics = newPeerMetrics(func() time.Time { return frozen })
 
 	// Drive the per-peer counters through the same surface PeerImp's
 	// async read/write callbacks would (PeerImp.cpp:911, 970).
