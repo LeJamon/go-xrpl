@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1534,7 +1535,7 @@ func TestApplyStatusChange_RippledSemantics(t *testing.T) {
 
 	t.Run("lost_sync_zeroes_both", func(t *testing.T) {
 		p := mk()
-		p.applyStatusChange(nil, nil, true, nil, nil, 0)
+		p.applyStatusChange(&message.StatusChange{NewEvent: message.NodeEventLostSync})
 		_, hasC := p.ClosedLedger()
 		_, hasP := p.PreviousLedger()
 		assert.False(t, hasC)
@@ -1548,7 +1549,7 @@ func TestApplyStatusChange_RippledSemantics(t *testing.T) {
 			newClosed[i] = byte(0xAA)
 			newParent[i] = byte(0xBB)
 		}
-		p.applyStatusChange(newClosed[:], newParent[:], false, nil, nil, 0)
+		p.applyStatusChange(&message.StatusChange{LedgerHash: newClosed[:], LedgerHashPrevious: newParent[:]})
 		gotC, hasC := p.ClosedLedger()
 		gotP, hasP := p.PreviousLedger()
 		assert.True(t, hasC)
@@ -1563,7 +1564,7 @@ func TestApplyStatusChange_RippledSemantics(t *testing.T) {
 		for i := range newParent {
 			newParent[i] = byte(0xCC)
 		}
-		p.applyStatusChange(nil, newParent[:], false, nil, nil, 0)
+		p.applyStatusChange(&message.StatusChange{LedgerHashPrevious: newParent[:]})
 		_, hasC := p.ClosedLedger()
 		gotP, hasP := p.PreviousLedger()
 		assert.False(t, hasC)
@@ -1573,7 +1574,7 @@ func TestApplyStatusChange_RippledSemantics(t *testing.T) {
 
 	t.Run("malformed_closed_zeroes_closed", func(t *testing.T) {
 		p := mk()
-		p.applyStatusChange([]byte{0x01, 0x02}, nil, false, nil, nil, 0) // 2 bytes ≠ 32
+		p.applyStatusChange(&message.StatusChange{LedgerHash: []byte{0x01, 0x02}}) // 2 bytes ≠ 32
 		_, hasC := p.ClosedLedger()
 		_, hasP := p.PreviousLedger()
 		assert.False(t, hasC)
@@ -1583,7 +1584,7 @@ func TestApplyStatusChange_RippledSemantics(t *testing.T) {
 	// PeerImp.cpp:1874-1883 — ledger range update + clamp.
 	t.Run("ledger_range_valid_pair_stored", func(t *testing.T) {
 		p := mk()
-		p.applyStatusChange(nil, nil, false, u32(100), u32(200), 0)
+		p.applyStatusChange(&message.StatusChange{FirstSeq: u32(100), LastSeq: u32(200)})
 		minSeq, maxSeq := p.LedgerRange()
 		assert.Equal(t, uint32(100), minSeq)
 		assert.Equal(t, uint32(200), maxSeq)
@@ -1591,7 +1592,7 @@ func TestApplyStatusChange_RippledSemantics(t *testing.T) {
 
 	t.Run("ledger_range_first_zero_clamped", func(t *testing.T) {
 		p := mk()
-		p.applyStatusChange(nil, nil, false, u32(0), u32(200), 0)
+		p.applyStatusChange(&message.StatusChange{FirstSeq: u32(0), LastSeq: u32(200)})
 		minSeq, maxSeq := p.LedgerRange()
 		assert.Equal(t, uint32(0), minSeq)
 		assert.Equal(t, uint32(0), maxSeq)
@@ -1599,7 +1600,7 @@ func TestApplyStatusChange_RippledSemantics(t *testing.T) {
 
 	t.Run("ledger_range_last_zero_clamped", func(t *testing.T) {
 		p := mk()
-		p.applyStatusChange(nil, nil, false, u32(100), u32(0), 0)
+		p.applyStatusChange(&message.StatusChange{FirstSeq: u32(100), LastSeq: u32(0)})
 		minSeq, maxSeq := p.LedgerRange()
 		assert.Equal(t, uint32(0), minSeq)
 		assert.Equal(t, uint32(0), maxSeq)
@@ -1607,7 +1608,7 @@ func TestApplyStatusChange_RippledSemantics(t *testing.T) {
 
 	t.Run("ledger_range_inverted_clamped", func(t *testing.T) {
 		p := mk()
-		p.applyStatusChange(nil, nil, false, u32(200), u32(100), 0)
+		p.applyStatusChange(&message.StatusChange{FirstSeq: u32(200), LastSeq: u32(100)})
 		minSeq, maxSeq := p.LedgerRange()
 		assert.Equal(t, uint32(0), minSeq)
 		assert.Equal(t, uint32(0), maxSeq)
@@ -1617,8 +1618,8 @@ func TestApplyStatusChange_RippledSemantics(t *testing.T) {
 	// block, so the previously-advertised range must persist.
 	t.Run("ledger_range_lost_sync_preserves_range", func(t *testing.T) {
 		p := mk()
-		p.applyStatusChange(nil, nil, false, u32(100), u32(200), 0)
-		p.applyStatusChange(nil, nil, true, nil, nil, 0)
+		p.applyStatusChange(&message.StatusChange{FirstSeq: u32(100), LastSeq: u32(200)})
+		p.applyStatusChange(&message.StatusChange{NewEvent: message.NodeEventLostSync})
 		minSeq, maxSeq := p.LedgerRange()
 		assert.Equal(t, uint32(100), minSeq)
 		assert.Equal(t, uint32(200), maxSeq)
@@ -1629,8 +1630,8 @@ func TestApplyStatusChange_RippledSemantics(t *testing.T) {
 	// previously-stored range.
 	t.Run("ledger_range_absent_preserves_existing", func(t *testing.T) {
 		p := mk()
-		p.applyStatusChange(nil, nil, false, u32(100), u32(200), 0)
-		p.applyStatusChange(nil, nil, false, nil, nil, 0)
+		p.applyStatusChange(&message.StatusChange{FirstSeq: u32(100), LastSeq: u32(200)})
+		p.applyStatusChange(&message.StatusChange{})
 		minSeq, maxSeq := p.LedgerRange()
 		assert.Equal(t, uint32(100), minSeq)
 		assert.Equal(t, uint32(200), maxSeq)
@@ -1638,7 +1639,7 @@ func TestApplyStatusChange_RippledSemantics(t *testing.T) {
 
 	t.Run("info_complete_ledgers_formatted", func(t *testing.T) {
 		p := mk()
-		p.applyStatusChange(nil, nil, false, u32(100), u32(200), 0)
+		p.applyStatusChange(&message.StatusChange{FirstSeq: u32(100), LastSeq: u32(200)})
 		assert.Equal(t, "100 - 200", p.Info().CompleteLedgers,
 			"matches rippled PeerImp.cpp:434-435 format with surrounding spaces")
 	})
@@ -1877,7 +1878,7 @@ func TestPeersJSON_CompleteLedgers(t *testing.T) {
 
 	t.Run("emits_when_range_advertised", func(t *testing.T) {
 		p := NewPeer(1, Endpoint{Host: "192.0.2.1", Port: 51235}, false, id, nil)
-		p.applyStatusChange(nil, nil, false, u32(100), u32(200), 0)
+		p.applyStatusChange(&message.StatusChange{FirstSeq: u32(100), LastSeq: u32(200)})
 
 		o := newTestOverlayWithPeers(map[PeerID]*Peer{1: p})
 		entries := o.PeersJSON()
@@ -1896,7 +1897,7 @@ func TestPeersJSON_CompleteLedgers(t *testing.T) {
 
 	t.Run("absent_after_clamp_on_invalid_range", func(t *testing.T) {
 		p := NewPeer(1, Endpoint{Host: "192.0.2.1", Port: 51235}, false, id, nil)
-		p.applyStatusChange(nil, nil, false, u32(0), u32(200), 0) // first=0 → clamped to (0,0)
+		p.applyStatusChange(&message.StatusChange{FirstSeq: u32(0), LastSeq: u32(200)}) // first=0 → clamped to (0,0)
 
 		o := newTestOverlayWithPeers(map[PeerID]*Peer{1: p})
 		entries := o.PeersJSON()

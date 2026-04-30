@@ -1187,14 +1187,7 @@ func (o *Overlay) handleStatusChange(evt Event) {
 		sc.NetworkTime = uint64(time.Now().Unix() - rippleEpochUnix)
 	}
 
-	effectiveStatus := peer.applyStatusChange(
-		sc.LedgerHash,
-		sc.LedgerHashPrevious,
-		sc.NewEvent == message.NodeEventLostSync,
-		sc.FirstSeq,
-		sc.LastSeq,
-		sc.NewStatus,
-	)
+	effectiveStatus := peer.applyStatusChange(sc)
 
 	// PeerImp.cpp:1812-1830 — rippled's lostSync handling returns
 	// before either checkTracking or pubPeerStatus runs. Match that

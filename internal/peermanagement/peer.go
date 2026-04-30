@@ -251,7 +251,7 @@ func (p *Peer) applyHandshakeExtras(x HandshakeExtras) {
 // additionally mutates the local `m` to carry the prior enum, so the
 // pubPeerStatus callback (which reads `m`, not last_status_) still sees
 // the inherited value once. We model the same split:
-//   - lastStatus is overwritten verbatim with the wire's newStatus (zero
+//   - lastStatus is overwritten verbatim with the wire's NewStatus (zero
 //     argument drops the prior value, matching rippled's `peers` RPC).
 //   - The returned effective status is the wire value when set, or the
 //     prior lastStatus otherwise — consumed by handleStatusChange's
@@ -260,44 +260,47 @@ func (p *Peer) applyHandshakeExtras(x HandshakeExtras) {
 // The lostSync early-return runs after the lastStatus write, so a
 // lostSync update carrying a NewStatus still records it — but
 // handleStatusChange returns before any publish (PeerImp.cpp:1830).
-func (p *Peer) applyStatusChange(closed, previous []byte, lostSync bool, firstSeq, lastSeq *uint32, newStatus message.NodeStatus) message.NodeStatus {
+func (p *Peer) applyStatusChange(sc *message.StatusChange) message.NodeStatus {
+	if sc == nil {
+		return 0
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	effective := newStatus
-	if newStatus == 0 {
+	effective := sc.NewStatus
+	if sc.NewStatus == 0 {
 		effective = p.lastStatus
 	}
-	p.lastStatus = newStatus
-	if lostSync {
+	p.lastStatus = sc.NewStatus
+	if sc.NewEvent == message.NodeEventLostSync {
 		p.hasClosedLedger = false
 		p.hasPreviousLedger = false
 		p.closedLedger = [32]byte{}
 		p.previousLedger = [32]byte{}
 		return effective
 	}
-	if len(closed) == 32 {
-		copy(p.closedLedger[:], closed)
+	if len(sc.LedgerHash) == 32 {
+		copy(p.closedLedger[:], sc.LedgerHash)
 		p.hasClosedLedger = true
 	} else {
 		p.hasClosedLedger = false
 		p.closedLedger = [32]byte{}
 	}
-	if len(previous) == 32 {
-		copy(p.previousLedger[:], previous)
+	if len(sc.LedgerHashPrevious) == 32 {
+		copy(p.previousLedger[:], sc.LedgerHashPrevious)
 		p.hasPreviousLedger = true
 	} else {
 		p.hasPreviousLedger = false
 		p.previousLedger = [32]byte{}
 	}
-	if firstSeq == nil || lastSeq == nil {
+	if sc.FirstSeq == nil || sc.LastSeq == nil {
 		return effective
 	}
-	if *firstSeq == 0 || *lastSeq == 0 || *lastSeq < *firstSeq {
+	if *sc.FirstSeq == 0 || *sc.LastSeq == 0 || *sc.LastSeq < *sc.FirstSeq {
 		p.firstLedgerSeq = 0
 		p.lastLedgerSeq = 0
 	} else {
-		p.firstLedgerSeq = *firstSeq
-		p.lastLedgerSeq = *lastSeq
+		p.firstLedgerSeq = *sc.FirstSeq
+		p.lastLedgerSeq = *sc.LastSeq
 	}
 	return effective
 }
