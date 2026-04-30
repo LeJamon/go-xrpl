@@ -35,7 +35,7 @@ func TestPeer_ApplyStatusChange_StoresNewStatus(t *testing.T) {
 	}
 	for _, ns := range cases {
 		p := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
-		p.applyStatusChange(nil, nil, false, nil, nil, ns)
+		p.applyStatusChange(&message.StatusChange{NewStatus: ns})
 		assert.Equal(t, ns, p.LastStatus())
 		assert.Equal(t, ns, p.Info().Status)
 	}
@@ -53,16 +53,16 @@ func TestPeer_ApplyStatusChange_StatusRetention(t *testing.T) {
 	require.NoError(t, err)
 
 	p := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
-	p.applyStatusChange(nil, nil, false, nil, nil, message.NodeStatusConnecting)
+	p.applyStatusChange(&message.StatusChange{NewStatus: message.NodeStatusConnecting})
 	require.Equal(t, message.NodeStatusConnecting, p.LastStatus())
 
-	p.applyStatusChange(nil, nil, false, nil, nil, message.NodeStatusValidating)
+	p.applyStatusChange(&message.StatusChange{NewStatus: message.NodeStatusValidating})
 	assert.Equal(t, message.NodeStatusValidating, p.LastStatus())
 
 	// PeerImp.cpp:1802 / 1807: `last_status_ = *m;` runs verbatim in
 	// both branches. m has no newstatus → stored last_status_.newstatus()
 	// becomes false, so subsequent `peers` RPC reads drop the field.
-	p.applyStatusChange(nil, nil, false, nil, nil, 0)
+	p.applyStatusChange(&message.StatusChange{})
 	assert.Equal(t, message.NodeStatus(0), p.LastStatus(),
 		"absent new_status must drop the prior stored value (rippled `last_status_ = *m;`)")
 }
@@ -80,20 +80,20 @@ func TestPeer_ApplyStatusChange_StatusInheritedToPublished(t *testing.T) {
 
 	p := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
 
-	got := p.applyStatusChange(nil, nil, false, nil, nil, message.NodeStatusValidating)
+	got := p.applyStatusChange(&message.StatusChange{NewStatus: message.NodeStatusValidating})
 	assert.Equal(t, message.NodeStatusValidating, got, "wire-set status returned verbatim")
 	assert.Equal(t, message.NodeStatusValidating, p.LastStatus())
 
 	// status-less follow-up: published value inherits the prior enum,
 	// stored value is dropped.
-	got = p.applyStatusChange(nil, nil, false, nil, nil, 0)
+	got = p.applyStatusChange(&message.StatusChange{})
 	assert.Equal(t, message.NodeStatusValidating, got,
 		"absent new_status must inherit prior for pubPeerStatus (PeerImp.cpp:1808)")
 	assert.Equal(t, message.NodeStatus(0), p.LastStatus(),
 		"but stored last_status_ is dropped (PeerImp.cpp:1807)")
 
 	// second status-less message: nothing left to inherit.
-	got = p.applyStatusChange(nil, nil, false, nil, nil, 0)
+	got = p.applyStatusChange(&message.StatusChange{})
 	assert.Equal(t, message.NodeStatus(0), got,
 		"after the prior is dropped, subsequent status-less messages publish no status")
 }
@@ -107,7 +107,7 @@ func TestPeer_ApplyStatusChange_StatusRecordedOnLostSync(t *testing.T) {
 	require.NoError(t, err)
 
 	p := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
-	p.applyStatusChange(nil, nil, true, nil, nil, message.NodeStatusValidating)
+	p.applyStatusChange(&message.StatusChange{NewStatus: message.NodeStatusValidating, NewEvent: message.NodeEventLostSync})
 	assert.Equal(t, message.NodeStatusValidating, p.LastStatus())
 }
 
@@ -378,7 +378,7 @@ func TestOverlay_PeersJSON_StatusField(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := NewPeer(PeerID(1), Endpoint{Host: "192.0.2.1", Port: 51235}, false, id, nil)
 			if tc.status != 0 {
-				p.applyStatusChange(nil, nil, false, nil, nil, tc.status)
+				p.applyStatusChange(&message.StatusChange{NewStatus: tc.status})
 			}
 
 			o := newTestOverlayWithPeers(map[PeerID]*Peer{1: p})
@@ -405,7 +405,7 @@ func TestOverlay_PeersJSON_StatusOmittedForOutOfRangeEnum(t *testing.T) {
 	require.NoError(t, err)
 
 	p := NewPeer(PeerID(1), Endpoint{Host: "192.0.2.1", Port: 51235}, false, id, nil)
-	p.applyStatusChange(nil, nil, false, nil, nil, message.NodeStatus(99))
+	p.applyStatusChange(&message.StatusChange{NewStatus: message.NodeStatus(99)})
 
 	o := newTestOverlayWithPeers(map[PeerID]*Peer{1: p})
 	entries := o.PeersJSON()
