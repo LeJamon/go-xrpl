@@ -1,17 +1,29 @@
 // Package observability hosts process-level metrics surfaced to RPC.
 //
 // The Go analog of rippled's beast::io_latency_probe lives here: a
-// ~100ms-cadence sampler that posts one goroutine, measures how long
-// the runtime takes to schedule it onto a P, and atomically stores
-// that elapsed time. The RPC server_info handler reads it via
+// ~100ms-cadence sampler that yields to the Go scheduler, measures
+// how long it takes to be rescheduled, and atomically stores that
+// elapsed time. The RPC server_info handler reads it via
 // SchedLatencyMs.
 //
 // Rippled reference: rippled/include/xrpl/beast/asio/io_latency_probe.h
 // and rippled/src/xrpld/app/main/Application.cpp:98-160. Rippled
 // posts a sample task to its io_service (a shared pool of N=6 worker
-// threads) and measures the queue-wait before any worker dispatches
-// it. The Go analog is a `go func()` against the runtime's runqueue,
-// which is dispatched by GOMAXPROCS Ps — same shape, different pool.
+// threads) and measures how long the task waits in the queue before
+// any worker dispatches it. The Go analog uses runtime.Gosched():
+// the sampler goroutine voluntarily returns to the runqueue, and the
+// runtime picks the next runnable goroutine. The time until the
+// sampler is picked again is the queue-wait — the same physical
+// quantity rippled measures, surfaced through the Go scheduler
+// instead of an explicit thread pool.
+//
+// This must use Gosched, NOT a `go func()` spawn-and-wait pattern.
+// `go func()` followed by a channel receive lets the runtime hand
+// the local P directly to the spawned goroutine when the parent
+// blocks, bypassing contention; under a saturating CPU storm the
+// measured elapsed stays in the microseconds. Empirical comparison:
+// approach A (spawn) reads ~5us under a 64-goroutine storm; approach
+// B (Gosched) reads 50-156ms — the latter is the correct signal.
 //
 // Storage and read semantics match rippled exactly: a single atomic
 // last-write-wins value (rippled stores std::atomic<milliseconds>;
@@ -19,11 +31,17 @@
 // sample overwrites the prior one, so the value is volatile and
 // self-resetting — a stale spike is overwritten by the next healthy
 // sample within ~100ms.
+//
+// Cadence is adaptive, matching rippled's `when = now + period -
+// 2*elapsed` rule (io_latency_probe.h:226-247): under low latency
+// samples space ~100ms apart; under contention the next sample fires
+// sooner, down to immediate repost when 2*elapsed >= period.
 package observability
 
 import (
 	"context"
 	"math"
+	"runtime"
 	"sync/atomic"
 	"time"
 )
@@ -51,32 +69,39 @@ func StartSchedLatencySampler(ctx context.Context) {
 }
 
 func runSampler(ctx context.Context) {
-	ticker := time.NewTicker(SamplerInterval)
-	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			postSample()
+		default:
+		}
+		elapsed := sampleOnce()
+		wait := nextWait(elapsed)
+		if wait <= 0 {
+			// 2*elapsed >= period: repost immediately, no timer.
+			// Mirrors io_latency_probe.h:234-241 — a high-latency
+			// system samples continuously to keep the metric fresh.
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
 		}
 	}
 }
 
-// postSample is the Go analog of rippled's m_ios.post(sample_op).
-// `posted` is captured before the `go` statement, mirroring
-// sample_op's `m_start = Clock::now()` at construction time
-// (io_latency_probe.h:113). The spawned goroutine measures
-// time.Since(posted) on its first instruction — that's the time it
-// spent waiting in the runqueue for a P to dispatch it, exactly the
-// same quantity rippled measures inside sample_op::operator()
-// (io_latency_probe.h:215-218).
-func postSample() {
+// sampleOnce captures the time, yields to the scheduler, then
+// measures how long it took to be rescheduled. That elapsed is the
+// runqueue-wait time, the Go-runtime equivalent of rippled's
+// io_service queue-wait (io_latency_probe.h:215-218). The result is
+// stored to publishedNs and returned for the cadence calculation.
+func sampleOnce() time.Duration {
 	posted := time.Now()
-	go func() {
-		elapsed := time.Since(posted)
-		publishedNs.Store(int64(elapsed))
-	}()
+	runtime.Gosched()
+	elapsed := time.Since(posted)
+	publishedNs.Store(int64(elapsed))
+	return elapsed
 }
 
 // SchedLatencyMs returns the most recent sample in milliseconds
@@ -89,6 +114,19 @@ func SchedLatencyMs() int {
 		return 0
 	}
 	return int(math.Ceil(float64(ns) / float64(time.Millisecond)))
+}
+
+// nextWait returns how long to sleep before the next sample, given
+// the elapsed time of the just-completed one. Mirrors
+// io_latency_probe.h:231-241: the next-fire time is `period - 2*elapsed`,
+// clamped to zero so a heavily-contended system does not negatively
+// time-travel the next post.
+func nextWait(elapsed time.Duration) time.Duration {
+	wait := SamplerInterval - 2*elapsed
+	if wait < 0 {
+		return 0
+	}
+	return wait
 }
 
 // resetForTest clears the published value and the started flag so
