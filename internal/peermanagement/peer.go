@@ -318,6 +318,8 @@ func (p *Peer) ProtocolVersion() string {
 	return p.protocolVersion
 }
 
+// setProtocolVersion is for tests; production paths set protocolVersion
+// inline under p.mu alongside capabilities.
 func (p *Peer) setProtocolVersion(v string) {
 	p.mu.Lock()
 	p.protocolVersion = v

@@ -36,8 +36,20 @@ func (v protocolVersion) less(o protocolVersion) bool {
 
 // supportedProtocols mirrors rippled supportedProtocolList
 // (ProtocolVersion.cpp:40-44). Must stay strictly ascending — duplicates
-// are forbidden.
+// are forbidden. Enforced by init() below, mirroring rippled's
+// static_assert (ProtocolVersion.cpp:50-72).
 var supportedProtocols = []protocolVersion{{2, 1}, {2, 2}}
+
+func init() {
+	if len(supportedProtocols) == 0 {
+		panic("peermanagement: supportedProtocols must not be empty")
+	}
+	for i := 1; i < len(supportedProtocols); i++ {
+		if !supportedProtocols[i-1].less(supportedProtocols[i]) {
+			panic(fmt.Sprintf("peermanagement: supportedProtocols must be strictly ascending, got %v", supportedProtocols))
+		}
+	}
+}
 
 const (
 	HeaderUpgrade          = "Upgrade"
@@ -172,6 +184,32 @@ func BuildHandshakeResponse(id *Identity, sharedValue []byte, cfg HandshakeConfi
 
 	addHandshakeHeaders(resp.Header, id, sharedValue, cfg)
 
+	return resp
+}
+
+// BuildHandshakeErrorResponse mirrors rippled OverlayImpl::makeErrorResponse
+// (OverlayImpl.cpp:371-386). rippled returns 400 Bad Request — not 426
+// Upgrade Required — with the failure reason embedded in the status
+// line as "Bad Request (<text>)" so a misconfigured peer can read why
+// the upgrade was refused before the connection is closed.
+func BuildHandshakeErrorResponse(userAgent, remoteAddr, text string) *http.Response {
+	resp := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Status:     fmt.Sprintf("%d Bad Request (%s)", http.StatusBadRequest, text),
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+		Header:     make(http.Header),
+		Body:       http.NoBody,
+	}
+	if userAgent != "" {
+		resp.Header.Set(HeaderServer, userAgent)
+	}
+	if remoteAddr != "" {
+		resp.Header.Set("Remote-Address", remoteAddr)
+	}
+	resp.Header.Set(HeaderConnection, "close")
+	resp.ContentLength = 0
 	return resp
 }
 

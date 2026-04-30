@@ -718,6 +718,20 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	protocol := NegotiateProtocolVersion(req.Header.Get(HeaderUpgrade))
 	if protocol == "" {
 		o.IncPeerBadData(peer.ID(), "handshake-protocol-negotiation")
+		// Mirror rippled OverlayImpl.cpp:227 — write a 400 Bad Request
+		// back so a misconfigured peer sees the rejection reason
+		// instead of a TCP RST. Best-effort: a write error here is
+		// shadowed by the negotiation failure we are already returning.
+		var remoteAddr string
+		if peerRemote != nil {
+			remoteAddr = peerRemote.String()
+		}
+		errResp := BuildHandshakeErrorResponse(
+			hsCfg.UserAgent,
+			remoteAddr,
+			"Unable to agree on a protocol version",
+		)
+		_ = errResp.Write(tlsConn)
 		return NewHandshakeError(peer.Endpoint(), "verify",
 			fmt.Errorf("%w: unable to agree on a protocol version (peer offered %q)",
 				ErrInvalidHandshake, req.Header.Get(HeaderUpgrade)))

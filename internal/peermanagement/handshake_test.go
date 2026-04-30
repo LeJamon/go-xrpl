@@ -404,6 +404,57 @@ func TestSupportedProtocolVersions(t *testing.T) {
 	assert.Equal(t, "XRPL/2.1, XRPL/2.2", SupportedProtocolVersions())
 }
 
+// TestSupportedProtocolsStrictlyAscending mirrors rippled's static_assert
+// (ProtocolVersion.cpp:50-72). The init() guard panics on bad data; this
+// test is a positive-direction check that the live list is well-formed.
+func TestSupportedProtocolsStrictlyAscending(t *testing.T) {
+	require.NotEmpty(t, supportedProtocols)
+	for i := 1; i < len(supportedProtocols); i++ {
+		require.Truef(t, supportedProtocols[i-1].less(supportedProtocols[i]),
+			"supportedProtocols[%d]=%v must be < supportedProtocols[%d]=%v",
+			i-1, supportedProtocols[i-1], i, supportedProtocols[i])
+	}
+}
+
+// TestBuildHandshakeErrorResponse mirrors rippled OverlayImpl::makeErrorResponse
+// (OverlayImpl.cpp:371-386): 400 Bad Request with the failure text in
+// the reason phrase, Server / Remote-Address headers, Connection: close.
+func TestBuildHandshakeErrorResponse(t *testing.T) {
+	resp := BuildHandshakeErrorResponse(
+		"goXRPL-test/1.0",
+		"203.0.113.7",
+		"Unable to agree on a protocol version",
+	)
+	require.NotNil(t, resp)
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Equal(t, "400 Bad Request (Unable to agree on a protocol version)", resp.Status)
+	assert.Equal(t, "close", resp.Header.Get(HeaderConnection))
+	assert.Equal(t, "goXRPL-test/1.0", resp.Header.Get(HeaderServer))
+	assert.Equal(t, "203.0.113.7", resp.Header.Get("Remote-Address"))
+	assert.Equal(t, int64(0), resp.ContentLength)
+
+	// Round-trip through Write so we exercise the full wire format
+	// goXRPL emits to a misconfigured peer.
+	var buf bytes.Buffer
+	require.NoError(t, resp.Write(&buf))
+	wire := buf.String()
+	assert.Contains(t, wire, "HTTP/1.1 400 Bad Request (Unable to agree on a protocol version)")
+	assert.Contains(t, wire, "Connection: close")
+	assert.Contains(t, wire, "Server: goXRPL-test/1.0")
+	assert.Contains(t, wire, "Remote-Address: 203.0.113.7")
+}
+
+// TestBuildHandshakeErrorResponse_OmitsBlankHeaders confirms the Server
+// and Remote-Address headers are omitted when empty, so we don't emit
+// e.g. "Remote-Address: <nil>" if tcpRemoteIP returns nil.
+func TestBuildHandshakeErrorResponse_OmitsBlankHeaders(t *testing.T) {
+	resp := BuildHandshakeErrorResponse("", "", "fail")
+	assert.Empty(t, resp.Header.Get(HeaderServer))
+	assert.Empty(t, resp.Header.Get("Remote-Address"))
+	assert.Equal(t, "close", resp.Header.Get(HeaderConnection))
+}
+
 // TestNetworkTime tests that network time is set in headers
 func TestNetworkTime(t *testing.T) {
 	id, _ := NewIdentity()
