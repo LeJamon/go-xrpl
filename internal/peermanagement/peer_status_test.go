@@ -42,10 +42,12 @@ func TestPeer_ApplyStatusChange_StoresNewStatus(t *testing.T) {
 }
 
 // TestPeer_ApplyStatusChange_StatusRetention covers rippled's
-// last_status_ retention semantics (PeerImp.cpp:1799-1810):
-//   - a non-zero NewStatus overwrites the prior value
-//   - a TMStatusChange that omits new_status preserves the
-//     previously-recorded enum (the "preserve old status" branch)
+// last_status_ retention semantics (PeerImp.cpp:1799-1810). Both
+// branches end with `last_status_ = *m;`, so a TMStatusChange that
+// omits new_status DROPS the stored value — the "preserve old status"
+// comment refers only to the inherited value rippled mutates onto the
+// local message `m` (consumed by pubPeerStatus, see
+// TestPeer_ApplyStatusChange_StatusInheritedToPublished).
 func TestPeer_ApplyStatusChange_StatusRetention(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)
@@ -57,11 +59,43 @@ func TestPeer_ApplyStatusChange_StatusRetention(t *testing.T) {
 	p.applyStatusChange(nil, nil, false, nil, nil, message.NodeStatusValidating)
 	assert.Equal(t, message.NodeStatusValidating, p.LastStatus())
 
-	// rippled PeerImp.cpp:1801-1809: when the inbound TMStatusChange
-	// has no newstatus, last_status_.newstatus() is preserved.
+	// PeerImp.cpp:1802 / 1807: `last_status_ = *m;` runs verbatim in
+	// both branches. m has no newstatus → stored last_status_.newstatus()
+	// becomes false, so subsequent `peers` RPC reads drop the field.
 	p.applyStatusChange(nil, nil, false, nil, nil, 0)
-	assert.Equal(t, message.NodeStatusValidating, p.LastStatus(),
-		"absent new_status must preserve prior value (rippled sticky retention)")
+	assert.Equal(t, message.NodeStatus(0), p.LastStatus(),
+		"absent new_status must drop the prior stored value (rippled `last_status_ = *m;`)")
+}
+
+// TestPeer_ApplyStatusChange_StatusInheritedToPublished covers
+// rippled's PeerImp.cpp:1804-1808 — when the inbound message has no
+// new_status, the local `m` is mutated to carry the prior enum so the
+// pubPeerStatus callback (which reads `m`, not last_status_) emits the
+// inherited value once. applyStatusChange's return value is the
+// post-inheritance status the publisher must use; it differs from
+// LastStatus() in exactly this case.
+func TestPeer_ApplyStatusChange_StatusInheritedToPublished(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	p := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
+
+	got := p.applyStatusChange(nil, nil, false, nil, nil, message.NodeStatusValidating)
+	assert.Equal(t, message.NodeStatusValidating, got, "wire-set status returned verbatim")
+	assert.Equal(t, message.NodeStatusValidating, p.LastStatus())
+
+	// status-less follow-up: published value inherits the prior enum,
+	// stored value is dropped.
+	got = p.applyStatusChange(nil, nil, false, nil, nil, 0)
+	assert.Equal(t, message.NodeStatusValidating, got,
+		"absent new_status must inherit prior for pubPeerStatus (PeerImp.cpp:1808)")
+	assert.Equal(t, message.NodeStatus(0), p.LastStatus(),
+		"but stored last_status_ is dropped (PeerImp.cpp:1807)")
+
+	// second status-less message: nothing left to inherit.
+	got = p.applyStatusChange(nil, nil, false, nil, nil, 0)
+	assert.Equal(t, message.NodeStatus(0), got,
+		"after the prior is dropped, subsequent status-less messages publish no status")
 }
 
 // TestPeer_ApplyStatusChange_StatusRecordedOnLostSync covers the
@@ -139,14 +173,160 @@ func TestOverlay_handleStatusChange_PublishesPeerStatus(t *testing.T) {
 	require.Equal(t, 1, fired, "publisher must fire exactly once for non-lostSync")
 	assert.Equal(t, "VALIDATING", got.Status, "rippled PeerImp.cpp:1908 — UPPERCASE")
 	assert.Equal(t, "ACCEPTED_LEDGER", got.Action, "rippled PeerImp.cpp:1924")
-	assert.Equal(t, uint32(150), got.LedgerIndex)
-	assert.Equal(t, uint32(700_000_000), got.Date)
-	assert.Equal(t, uint32(100), got.LedgerIndexMin)
-	assert.Equal(t, uint32(200), got.LedgerIndexMax)
+	require.NotNil(t, got.LedgerIndex)
+	assert.Equal(t, uint32(150), *got.LedgerIndex)
+	require.NotNil(t, got.Date)
+	assert.Equal(t, uint32(700_000_000), *got.Date)
+	require.NotNil(t, got.LedgerIndexMin)
+	assert.Equal(t, uint32(100), *got.LedgerIndexMin)
+	require.NotNil(t, got.LedgerIndexMax)
+	assert.Equal(t, uint32(200), *got.LedgerIndexMax)
 	assert.Equal(t,
 		"ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
 		got.LedgerHash,
 		"PeerImp.cpp:1948 hex-encodes peer.closedLedgerHash_, not the wire bytes")
+}
+
+// TestOverlay_handleStatusChange_PublishedStatusInheritsPrior covers
+// rippled's PeerImp.cpp:1804-1808 carry-over: a status-less follow-up
+// message must publish the prior status to subscribers (rippled's
+// `m->set_newstatus(status)` mutation on the local message), even
+// though `last_status_` itself has been overwritten with the new
+// (status-less) wire value.
+func TestOverlay_handleStatusChange_PublishedStatusInheritsPrior(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	peer := NewPeer(PeerID(7), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
+	o := newTestOverlayWithPeers(map[PeerID]*Peer{7: peer})
+
+	var got []PeerStatusUpdate
+	o.SetPeerStatusPublisher(func(u PeerStatusUpdate) { got = append(got, u) })
+
+	encode := func(sc *message.StatusChange) []byte {
+		b, err := message.Encode(sc)
+		require.NoError(t, err)
+		return b
+	}
+
+	// Seed the peer with a known status.
+	o.handleStatusChange(Event{PeerID: 7, Payload: encode(&message.StatusChange{
+		NewStatus:   message.NodeStatusValidating,
+		NewEvent:    message.NodeEventAcceptedLedger,
+		LedgerSeq:   100,
+		NetworkTime: 1,
+	})})
+	require.Len(t, got, 1)
+	assert.Equal(t, "VALIDATING", got[0].Status)
+
+	// Status-less follow-up. Published Status must inherit VALIDATING.
+	o.handleStatusChange(Event{PeerID: 7, Payload: encode(&message.StatusChange{
+		NewEvent:    message.NodeEventClosingLedger,
+		LedgerSeq:   101,
+		NetworkTime: 2,
+	})})
+	require.Len(t, got, 2)
+	assert.Equal(t, "VALIDATING", got[1].Status,
+		"PeerImp.cpp:1808 — pubPeerStatus reads the inherited m->newstatus()")
+	assert.Equal(t, message.NodeStatus(0), peer.LastStatus(),
+		"but stored last_status_ has been overwritten by the wire (PeerImp.cpp:1807)")
+
+	// Second status-less message: nothing to inherit anymore.
+	o.handleStatusChange(Event{PeerID: 7, Payload: encode(&message.StatusChange{
+		NewEvent:    message.NodeEventClosingLedger,
+		LedgerSeq:   102,
+		NetworkTime: 3,
+	})})
+	require.Len(t, got, 3)
+	assert.Equal(t, "", got[2].Status,
+		"after the prior is dropped, subsequent publishes carry no status")
+}
+
+// TestOverlay_handleStatusChange_LedgerHashZerosOnMalformedWire covers
+// PeerImp.cpp:1842-1851 + 1941-1948. When wire bytes for ledger_hash
+// are present but not 32 bytes, applyStatusChange clears the peer's
+// stored closedLedgerHash_; rippled still emits the field but with the
+// 64-character zero hex string.
+func TestOverlay_handleStatusChange_LedgerHashZerosOnMalformedWire(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	peer := NewPeer(PeerID(7), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
+	o := newTestOverlayWithPeers(map[PeerID]*Peer{7: peer})
+
+	var got PeerStatusUpdate
+	o.SetPeerStatusPublisher(func(u PeerStatusUpdate) { got = u })
+
+	sc := &message.StatusChange{
+		NewStatus:   message.NodeStatusConnected,
+		NewEvent:    message.NodeEventClosingLedger,
+		LedgerSeq:   1,
+		LedgerHash:  []byte{0x01, 0x02}, // 2 bytes ≠ 32 → malformed
+		NetworkTime: 1,
+	}
+	encoded, err := message.Encode(sc)
+	require.NoError(t, err)
+
+	o.handleStatusChange(Event{PeerID: 7, Payload: encoded})
+
+	assert.Equal(t,
+		"0000000000000000000000000000000000000000000000000000000000000000",
+		got.LedgerHash,
+		"PeerImp.cpp:1948 emits hex of the cleared closedLedgerHash_, not the wire bytes")
+}
+
+// TestOverlay_handleStatusChange_AutoFillsDate covers
+// PeerImp.cpp:1796-1797 — rippled stamps networktime with the local
+// clock when the wire didn't carry it. The published Date must be
+// non-nil even when the peer omitted network_time.
+func TestOverlay_handleStatusChange_AutoFillsDate(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	peer := NewPeer(PeerID(7), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
+	o := newTestOverlayWithPeers(map[PeerID]*Peer{7: peer})
+
+	var got PeerStatusUpdate
+	o.SetPeerStatusPublisher(func(u PeerStatusUpdate) { got = u })
+
+	sc := &message.StatusChange{
+		NewEvent:  message.NodeEventClosingLedger,
+		LedgerSeq: 1,
+		// NetworkTime omitted on purpose.
+	}
+	encoded, err := message.Encode(sc)
+	require.NoError(t, err)
+
+	o.handleStatusChange(Event{PeerID: 7, Payload: encoded})
+
+	require.NotNil(t, got.Date, "PeerImp.cpp:1796-1797 — networktime auto-filled")
+	assert.Greater(t, *got.Date, uint32(0))
+}
+
+// TestOverlay_SetPeerStatusPublisher_Disconnect verifies the doc
+// comment: passing nil to SetPeerStatusPublisher silences the sink so
+// subsequent handleStatusChange events emit no callbacks.
+func TestOverlay_SetPeerStatusPublisher_Disconnect(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	peer := NewPeer(PeerID(7), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
+	o := newTestOverlayWithPeers(map[PeerID]*Peer{7: peer})
+
+	var fired int
+	o.SetPeerStatusPublisher(func(u PeerStatusUpdate) { fired++ })
+	o.SetPeerStatusPublisher(nil)
+
+	sc := &message.StatusChange{
+		NewStatus: message.NodeStatusConnecting,
+		NewEvent:  message.NodeEventClosingLedger,
+		LedgerSeq: 1,
+	}
+	encoded, err := message.Encode(sc)
+	require.NoError(t, err)
+
+	o.handleStatusChange(Event{PeerID: 7, Payload: encoded})
+	assert.Equal(t, 0, fired, "SetPeerStatusPublisher(nil) must disconnect the sink")
 }
 
 // TestOverlay_handleStatusChange_LostSyncSuppressesPublish covers

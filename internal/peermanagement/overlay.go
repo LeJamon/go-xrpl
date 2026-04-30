@@ -25,6 +25,12 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// rippleEpochUnix is the Unix timestamp of the XRPL epoch
+// (2000-01-01 00:00:00 UTC). Used to convert local time to the
+// uint32 Ripple-Epoch seconds rippled stamps onto TMStatusChange
+// messages at PeerImp.cpp:1796-1797.
+const rippleEpochUnix int64 = 946684800
+
 // EvictBadDataThreshold is the bad-data BALANCE at which the overlay
 // disconnects a peer. IncBadData adds a per-reason weight (see
 // BadDataWeight) and a background decay halves the balance every
@@ -303,34 +309,43 @@ func (o *Overlay) validLedgerProviderSnapshot() func() (seq uint32, age time.Dur
 }
 
 // PeerStatusUpdate captures the post-decode TMStatusChange fields the
-// RPC layer needs to materialize a peer_status WebSocket event.
-// Mirrors the JSON shape produced by rippled's pubPeerStatus callback
-// at PeerImp.cpp:1892-1963: each field maps 1:1 onto the wire object,
-// and zero/empty values mean "field absent" (the RPC layer omits them
-// via `omitempty` to match rippled's `if (m->has_xxx)` gates).
+// RPC layer needs to materialize a peer_status WebSocket event. Pointer
+// fields preserve protobuf has-presence; nil means "wire field absent,
+// rippled's `if (m->has_xxx)` gate is false" and the RPC layer omits the
+// JSON field. Mirrors PeerImp.cpp:1892-1963.
 type PeerStatusUpdate struct {
-	// Status mirrors PeerImp.cpp:1895-1915: emitted when the inbound
-	// message carries a NewStatus, in rippled's UPPERCASE spelling.
+	// Status mirrors PeerImp.cpp:1895-1915. UPPERCASE spelling.
+	// Carries the post-inheritance value returned by applyStatusChange,
+	// so a status-less wire message still emits the prior enum once
+	// (rippled's `m->set_newstatus(status)` mutation at PeerImp.cpp:1808).
 	Status string
-	// Action mirrors PeerImp.cpp:1917-1934: emitted when the message
-	// carries a NewEvent. Note that LOST_SYNC never reaches the
-	// callback in rippled — the early-return at 1812-1830 fires
-	// before pubPeerStatus is invoked — so the action field is
-	// limited to CLOSING_LEDGER/ACCEPTED_LEDGER/SWITCHED_LEDGER.
+	// Action mirrors PeerImp.cpp:1917-1934 — CLOSING_LEDGER,
+	// ACCEPTED_LEDGER, SWITCHED_LEDGER. LOST_SYNC is unreachable
+	// because handleStatusChange returns at PeerImp.cpp:1830 before
+	// the publish.
 	Action string
-	// LedgerIndex mirrors PeerImp.cpp:1936-1939 (`has_ledgerseq`).
-	LedgerIndex uint32
 	// LedgerHash mirrors PeerImp.cpp:1941-1949: rippled re-reads the
-	// peer's closedLedgerHash_ under recentLock_ rather than the raw
-	// wire bytes, so callers must source this from the peer state
-	// AFTER applyStatusChange.
+	// peer's closedLedgerHash_ under recentLock_ rather than echoing
+	// the raw wire bytes. When wire bytes were malformed, that stored
+	// hash is zeroed at PeerImp.cpp:1850 and rippled emits the
+	// 64-char zero hex string — so callers must ALWAYS emit a value
+	// when has_ledgerhash, falling back to "00…00" if the peer's
+	// post-apply state was cleared.
 	LedgerHash string
-	// Date mirrors PeerImp.cpp:1951-1954 (`has_networktime`).
-	Date uint32
+	// LedgerIndex mirrors PeerImp.cpp:1936-1939 (`has_ledgerseq`).
+	// nil = field absent; non-nil = emit (even when value is 0 — a
+	// peer can legitimately advertise the genesis seq).
+	LedgerIndex *uint32
+	// Date mirrors PeerImp.cpp:1951-1954 (`has_networktime`). rippled
+	// auto-stamps this at PeerImp.cpp:1796-1797 when the wire didn't
+	// carry it, so handleStatusChange does the same and Date is
+	// always non-nil here.
+	Date *uint32
 	// LedgerIndexMin / LedgerIndexMax mirror PeerImp.cpp:1956-1960
-	// (`has_firstseq && has_lastseq`).
-	LedgerIndexMin uint32
-	LedgerIndexMax uint32
+	// (`has_firstseq && has_lastseq`). Both are nil unless both wire
+	// fields were present.
+	LedgerIndexMin *uint32
+	LedgerIndexMax *uint32
 }
 
 // SetPeerStatusPublisher wires a sink for pubPeerStatus events.
@@ -372,10 +387,12 @@ func peerStatusUpperName(s message.NodeStatus) string {
 	}
 }
 
-// peerStatusActionName mirrors PeerImp.cpp:1921-1934. The lostSync
-// case is intentionally excluded: rippled's lostSync branch returns
-// before pubPeerStatus runs (PeerImp.cpp:1812-1830). Unknown enums
-// fall through silently.
+// peerStatusActionName mirrors PeerImp.cpp:1921-1934. handleStatusChange
+// returns at PeerImp.cpp:1830 before pubPeerStatus is invoked for
+// neLOST_SYNC, so the LOST_SYNC arm is unreachable today — it's wired
+// up anyway to match rippled's switch verbatim and stay correct if a
+// future change relaxes the early-return invariant. Unknown enums fall
+// through silently.
 func peerStatusActionName(e message.NodeEvent) string {
 	switch e {
 	case message.NodeEventClosingLedger:
@@ -384,6 +401,8 @@ func peerStatusActionName(e message.NodeEvent) string {
 		return "ACCEPTED_LEDGER"
 	case message.NodeEventSwitchedLedger:
 		return "SWITCHED_LEDGER"
+	case message.NodeEventLostSync:
+		return "LOST_SYNC"
 	default:
 		return ""
 	}
@@ -1159,7 +1178,16 @@ func (o *Overlay) handleStatusChange(evt Event) {
 	if !exists {
 		return
 	}
-	peer.applyStatusChange(
+	// PeerImp.cpp:1796-1797 — rippled stamps the wire's networktime
+	// with the local clock when the peer didn't include it, so the
+	// pubPeerStatus emit at PeerImp.cpp:1951-1954 always carries a
+	// `date`. Mirror that here, mutating sc so the auto-filled value
+	// is observable to subscribers.
+	if sc.NetworkTime == 0 {
+		sc.NetworkTime = uint64(time.Now().Unix() - rippleEpochUnix)
+	}
+
+	effectiveStatus := peer.applyStatusChange(
 		sc.LedgerHash,
 		sc.LedgerHashPrevious,
 		sc.NewEvent == message.NodeEventLostSync,
@@ -1190,30 +1218,50 @@ func (o *Overlay) handleStatusChange(evt Event) {
 
 	// PeerImp.cpp:1892-1963 — publish to peer_status subscribers.
 	if pub := o.peerStatusPublisherSnapshot(); pub != nil {
-		var ledgerHashHex string
+		// PeerImp.cpp:1941-1948 emits ledger_hash whenever the wire
+		// carried the field, sourcing the value from the peer's
+		// post-apply closedLedgerHash_. When the wire bytes were
+		// malformed, applyStatusChange clears that storage and
+		// rippled emits the all-zeros 64-char hex string. Match both
+		// branches.
+		var ledgerHash string
 		if len(sc.LedgerHash) > 0 {
-			// PeerImp.cpp:1941-1948 re-reads peer.closedLedgerHash_
-			// under recentLock_ rather than echoing the raw wire
-			// bytes — the read-back captures whatever
-			// applyStatusChange retained (32-byte values stored,
-			// malformed wire bytes cleared).
 			if h, ok := peer.ClosedLedger(); ok {
-				ledgerHashHex = strings.ToUpper(hex.EncodeToString(h[:]))
+				ledgerHash = strings.ToUpper(hex.EncodeToString(h[:]))
+			} else {
+				ledgerHash = strings.Repeat("0", 64)
 			}
 		}
-		var firstSeq, lastSeq uint32
+		// PeerImp.cpp:1956-1960 — emit min/max only when both wire
+		// fields were present. nil-on-absence keeps that paired gate
+		// without conflating value 0 with "absent".
+		var minSeq, maxSeq *uint32
 		if sc.FirstSeq != nil && sc.LastSeq != nil {
-			firstSeq = *sc.FirstSeq
-			lastSeq = *sc.LastSeq
+			f, l := *sc.FirstSeq, *sc.LastSeq
+			minSeq, maxSeq = &f, &l
 		}
+		// PeerImp.cpp:1936-1939 (`has_ledgerseq`). The decoder loses
+		// proto-presence for ledger_seq (see
+		// internal/peermanagement/proto/ripple.pb.go), so use 0 as
+		// the absence proxy — XRPL ledger sequences start at the
+		// genesis ledger 1, no real peer broadcasts has_ledgerseq=0.
+		var ledgerIndex *uint32
+		if sc.LedgerSeq != 0 {
+			ls := sc.LedgerSeq
+			ledgerIndex = &ls
+		}
+		// PeerImp.cpp:1951-1954 — Date is always set thanks to the
+		// auto-fill above. Truncate uint64 → uint32 to match
+		// rippled's `Json::UInt(...)` cast (Json::UInt is uint32_t).
+		dateVal := uint32(sc.NetworkTime)
 		pub(PeerStatusUpdate{
-			Status:         peerStatusUpperName(sc.NewStatus),
+			Status:         peerStatusUpperName(effectiveStatus),
 			Action:         peerStatusActionName(sc.NewEvent),
-			LedgerIndex:    sc.LedgerSeq,
-			LedgerHash:     ledgerHashHex,
-			Date:           uint32(sc.NetworkTime),
-			LedgerIndexMin: firstSeq,
-			LedgerIndexMax: lastSeq,
+			LedgerIndex:    ledgerIndex,
+			LedgerHash:     ledgerHash,
+			Date:           &dateVal,
+			LedgerIndexMin: minSeq,
+			LedgerIndexMax: maxSeq,
 		})
 	}
 }

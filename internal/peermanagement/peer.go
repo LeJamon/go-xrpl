@@ -243,24 +243,37 @@ func (p *Peer) applyHandshakeExtras(x HandshakeExtras) {
 // Mirrors rippled PeerImp.cpp:1812-1883: lostSync clears closed/previous
 // ledger only; the (firstSeq, lastSeq) range is updated only when both
 // fields are present, then clamped to (0,0) if either is zero or inverted.
-// newStatus mirrors rippled PeerImp.cpp:1799-1810: last_status_.newstatus()
-// is sticky — the field is overwritten only when the inbound message carries
-// a non-zero NewStatus. A zero argument signals "no new_status in this wire
-// message" and preserves the previously-recorded enum (rippled's "preserve
-// old status" branch). The retention runs before the lostSync early-return,
-// so a lostSync update carrying a NewStatus still records it.
-func (p *Peer) applyStatusChange(closed, previous []byte, lostSync bool, firstSeq, lastSeq *uint32, newStatus message.NodeStatus) {
+//
+// newStatus mirrors rippled PeerImp.cpp:1799-1810. Read carefully: rippled's
+// branches both end with `last_status_ = *m;`, which copy-assigns the
+// inbound proto verbatim — so the stored last_status_.newstatus() is
+// dropped whenever the wire message has no newstatus. The else-branch
+// additionally mutates the local `m` to carry the prior enum, so the
+// pubPeerStatus callback (which reads `m`, not last_status_) still sees
+// the inherited value once. We model the same split:
+//   - lastStatus is overwritten verbatim with the wire's newStatus (zero
+//     argument drops the prior value, matching rippled's `peers` RPC).
+//   - The returned effective status is the wire value when set, or the
+//     prior lastStatus otherwise — consumed by handleStatusChange's
+//     pubPeerStatus emit so subscribers receive the inherited enum.
+//
+// The lostSync early-return runs after the lastStatus write, so a
+// lostSync update carrying a NewStatus still records it — but
+// handleStatusChange returns before any publish (PeerImp.cpp:1830).
+func (p *Peer) applyStatusChange(closed, previous []byte, lostSync bool, firstSeq, lastSeq *uint32, newStatus message.NodeStatus) message.NodeStatus {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if newStatus != 0 {
-		p.lastStatus = newStatus
+	effective := newStatus
+	if newStatus == 0 {
+		effective = p.lastStatus
 	}
+	p.lastStatus = newStatus
 	if lostSync {
 		p.hasClosedLedger = false
 		p.hasPreviousLedger = false
 		p.closedLedger = [32]byte{}
 		p.previousLedger = [32]byte{}
-		return
+		return effective
 	}
 	if len(closed) == 32 {
 		copy(p.closedLedger[:], closed)
@@ -277,7 +290,7 @@ func (p *Peer) applyStatusChange(closed, previous []byte, lostSync bool, firstSe
 		p.previousLedger = [32]byte{}
 	}
 	if firstSeq == nil || lastSeq == nil {
-		return
+		return effective
 	}
 	if *firstSeq == 0 || *lastSeq == 0 || *lastSeq < *firstSeq {
 		p.firstLedgerSeq = 0
@@ -286,6 +299,7 @@ func (p *Peer) applyStatusChange(closed, previous []byte, lostSync bool, firstSe
 		p.firstLedgerSeq = *firstSeq
 		p.lastLedgerSeq = *lastSeq
 	}
+	return effective
 }
 
 func (p *Peer) Tracking() PeerTracking {
@@ -380,9 +394,14 @@ func (p *Peer) LedgerRange() (uint32, uint32) {
 }
 
 // LastStatus returns the peer's most recently advertised NodeStatus
-// (rippled's last_status_.newstatus()). Returns 0 (nsUNKNOWN) if the
-// peer has not sent a TMStatusChange with new_status set — matching
-// rippled PeerImp::json's `if (last_status.has_newstatus())` gate.
+// (rippled's last_status_.newstatus()). Returns 0 (nsUNKNOWN) when the
+// peer has never sent a TMStatusChange with new_status, OR when the
+// most recent TMStatusChange omitted new_status — both cases drop the
+// stored value, mirroring rippled's `last_status_ = *m;` overwrite at
+// PeerImp.cpp:1802 / 1807. This is what the `peers` RPC's
+// `if (last_status.has_newstatus())` gate (PeerImp.cpp:463) reads;
+// the per-event pubPeerStatus inheritance is a separate path that
+// flows through applyStatusChange's return value.
 func (p *Peer) LastStatus() message.NodeStatus {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
