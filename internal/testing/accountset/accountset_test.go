@@ -647,3 +647,50 @@ func TestAccountSet_Ticket(t *testing.T) {
 	env.Close()
 	jtx.RequireTxFail(t, result, "tefNO_TICKET")
 }
+
+// TestAccountSet_DirIsEmpty_AnchorEmptyWithContinuation guards rippled's
+// dirIsEmpty() semantics: the anchor (root) page may have an empty Indexes
+// slice while continuation pages still hold entries. In that case the
+// directory is NOT empty and asfRequireAuth / asfAllowTrustLineClawback must
+// be rejected with tecOWNERS.
+//
+// Reference: rippled View.cpp dirIsEmpty (lines 905-911) and
+// SetAccount.cpp preclaim() lines 269-307.
+func TestAccountSet_DirIsEmpty_AnchorEmptyWithContinuation(t *testing.T) {
+	t.Run("RequireAuth", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.Fund(alice)
+		env.Fund(bob)
+		env.Close()
+
+		// Seed the anchor page so it exists, then force it to look empty
+		// while IndexNext points at a (fictitious) continuation page.
+		// ownerDirIsEmpty must consult IndexNext and report the directory
+		// as non-empty.
+		env.SetSignerList(alice, 1, []jtx.TestSigner{{Account: bob, Weight: 1}})
+		env.Close()
+		require.NoError(t, env.ForceOwnerDirEmptyAnchorWithNext(alice, 1))
+
+		result := env.Submit(AccountSet(alice).
+			SetFlag(accounttx.AccountSetFlagRequireAuth).Build())
+		jtx.RequireTxFail(t, result, "tecOWNERS")
+	})
+
+	t.Run("AllowTrustLineClawback", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.Fund(alice)
+		env.Fund(bob)
+		env.Close()
+
+		env.SetSignerList(alice, 1, []jtx.TestSigner{{Account: bob, Weight: 1}})
+		env.Close()
+		require.NoError(t, env.ForceOwnerDirEmptyAnchorWithNext(alice, 1))
+
+		result := env.Submit(AccountSet(alice).AllowClawback().Build())
+		jtx.RequireTxFail(t, result, "tecOWNERS")
+	})
+}

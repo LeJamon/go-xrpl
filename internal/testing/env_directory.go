@@ -166,3 +166,39 @@ func updateUint64Field(data []byte, fieldName string, value uint64) ([]byte, err
 	}
 	return result, nil
 }
+
+// ForceOwnerDirEmptyAnchorWithNext rewrites the anchor (root) page of an
+// account's owner directory to have an empty Indexes slice while leaving
+// IndexNext pointing at a non-zero continuation page. This reproduces the
+// state rippled's dirIsEmpty must guard against: an emptied anchor whose
+// directory is still non-empty because subsequent pages remain.
+//
+// Reference: rippled View.cpp dirIsEmpty().
+func (e *TestEnv) ForceOwnerDirEmptyAnchorWithNext(acc *Account, nextPage uint64) error {
+	e.t.Helper()
+	if nextPage == 0 {
+		return fmt.Errorf("nextPage must be non-zero")
+	}
+
+	dirRootKey := keylet.OwnerDir(acc.ID)
+	rootData, err := e.ledger.Read(dirRootKey)
+	if err != nil || rootData == nil {
+		return fmt.Errorf("directory root not found")
+	}
+	root, err := state.ParseDirectoryNode(rootData)
+	if err != nil {
+		return fmt.Errorf("failed to parse root: %v", err)
+	}
+
+	root.Indexes = nil
+	root.IndexNext = nextPage
+
+	updated, err := state.SerializeDirectoryNode(root, false)
+	if err != nil {
+		return fmt.Errorf("failed to serialize root: %v", err)
+	}
+	if err := e.ledger.Update(dirRootKey, updated); err != nil {
+		return fmt.Errorf("failed to update root: %v", err)
+	}
+	return nil
+}
