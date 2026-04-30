@@ -561,6 +561,12 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 // ownerDirIsEmpty reports whether the account's owner directory has no
 // entries. Missing, unreadable, or unparseable directories are treated as
 // empty — matching rippled's dirIsEmpty semantics.
+//
+// An anchor (root) page may be empty of indexes while subsequent pages
+// still hold entries; in that case IndexNext is non-zero and the directory
+// is not empty.
+//
+// Reference: rippled View.cpp dirIsEmpty (lines 905-911).
 func ownerDirIsEmpty(view tx.LedgerView, accountID [20]byte) bool {
 	key := keylet.OwnerDir(accountID)
 	exists, err := view.Exists(key)
@@ -575,5 +581,8 @@ func ownerDirIsEmpty(view tx.LedgerView, accountID [20]byte) bool {
 	if err != nil {
 		return true
 	}
-	return len(dirNode.Indexes) == 0
+	if len(dirNode.Indexes) > 0 {
+		return false
+	}
+	return dirNode.IndexNext == 0
 }
