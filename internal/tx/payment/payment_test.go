@@ -81,7 +81,7 @@ func TestPaymentValidation(t *testing.T) {
 				Destination: "",
 			},
 			expectError: true,
-			errorMsg:    "Destination is required",
+			errorMsg:    "temDST_NEEDED: Destination is required",
 		},
 		{
 			name: "missing amount - temBAD_AMOUNT equivalent",
@@ -91,10 +91,14 @@ func TestPaymentValidation(t *testing.T) {
 				Destination: "rBob",
 			},
 			expectError: true,
-			errorMsg:    "Amount is required",
+			errorMsg:    "temBAD_AMOUNT: Amount is required",
 		},
 		{
-			name: "missing account - temBAD_SRC_ACCOUNT equivalent",
+			// internal/tx/transaction.go:191 — common BaseTx validation
+			// returns a bare "Account is required" without the temXXX
+			// prefix. This pre-empts payment-specific preflight, so we
+			// match the upstream error verbatim.
+			name: "missing account",
 			payment: &Payment{
 				BaseTx:      tx.BaseTx{Common: tx.Common{TransactionType: "Payment"}},
 				Amount:      xrpAmount("1000000"),
@@ -104,7 +108,12 @@ func TestPaymentValidation(t *testing.T) {
 			errorMsg:    "Account is required",
 		},
 
-		// Payment to self validation
+		// Payment to self validation — rippled Payment.cpp:159-166:
+		// temREDUNDANT iff account == dst && equalTokens && !hasPaths.
+		// Same-asset to-self without paths/SendMax is rejected for both
+		// XRP and IOU; cross-currency to-self (e.g. SendMax in a
+		// different asset) bypasses the equalTokens check and is
+		// allowed.
 		{
 			name: "XRP payment to self - temREDUNDANT equivalent",
 			payment: &Payment{
@@ -113,16 +122,27 @@ func TestPaymentValidation(t *testing.T) {
 				Destination: "rAlice",
 			},
 			expectError: true,
-			errorMsg:    "temREDUNDANT: cannot send XRP to self without path",
+			errorMsg:    "temREDUNDANT: cannot send to self without path",
 		},
 		{
-			name: "IOU payment to self is allowed (for cross-currency)",
+			name: "same-asset IOU payment to self - temREDUNDANT equivalent",
 			payment: &Payment{
 				BaseTx:      *tx.NewBaseTx(tx.TypePayment, "rAlice"),
 				Amount:      iouAmount("100", "USD", "rGateway"),
 				Destination: "rAlice",
 			},
-			expectError: false, // IOU payments to self are allowed for cross-currency
+			expectError: true,
+			errorMsg:    "temREDUNDANT: cannot send to self without path",
+		},
+		{
+			name: "cross-currency IOU-to-self with SendMax is allowed",
+			payment: &Payment{
+				BaseTx:      *tx.NewBaseTx(tx.TypePayment, "rAlice"),
+				Amount:      iouAmount("100", "USD", "rGateway"),
+				Destination: "rAlice",
+				SendMax:     ptrAmount(iouAmount("110", "EUR", "rGateway")),
+			},
+			expectError: false,
 		},
 	}
 
@@ -202,10 +222,14 @@ func TestPaymentAmounts(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "IOU payment - scientific notation",
+			// parseIOUValueFromString (internal/ledger/state/amount.go:579)
+			// accepts decimal strings only — scientific notation isn't
+			// part of the JSON wire shape, so we exercise the equivalent
+			// large-magnitude value as a plain decimal.
+			name: "IOU payment - very large decimal value",
 			payment: &Payment{
 				BaseTx:      *tx.NewBaseTx(tx.TypePayment, "rAlice"),
-				Amount:      iouAmount("1e10", "USD", "rGateway"),
+				Amount:      iouAmount("10000000000", "USD", "rGateway"),
 				Destination: "rBob",
 			},
 			expectError: false,
@@ -467,6 +491,10 @@ func TestPaymentDeliverMin(t *testing.T) {
 
 // TestPaymentPaths tests Paths field handling.
 // Inspired by rippled's path handling tests in PayStrand_test.cpp.
+//
+// Flatten() converts [][]PathStep into the binary-codec wire shape:
+// []any of []any of map[string]any. The map fields are lower-cased
+// (rippled wire convention: jss::account / jss::currency / jss::issuer).
 func TestPaymentPaths(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -487,18 +515,10 @@ func TestPaymentPaths(t *testing.T) {
 				},
 			},
 			checkMap: func(t *testing.T, m map[string]any) {
-				paths, ok := m["Paths"].([][]PathStep)
-				if !ok {
-					t.Fatalf("Paths should be [][]PathStep, got %T", m["Paths"])
-				}
-				if len(paths) != 1 {
-					t.Errorf("expected 1 path, got %d", len(paths))
-				}
-				if len(paths[0]) != 1 {
-					t.Errorf("expected 1 step in path, got %d", len(paths[0]))
-				}
-				if paths[0][0].Currency != "XRP" {
-					t.Errorf("expected currency=XRP, got %v", paths[0][0].Currency)
+				paths := requirePathSet(t, m, 1)
+				steps := requirePathSteps(t, paths[0], 1)
+				if got := steps[0]["currency"]; got != "XRP" {
+					t.Errorf("expected currency=XRP, got %v", got)
 				}
 			},
 		},
@@ -518,16 +538,8 @@ func TestPaymentPaths(t *testing.T) {
 				},
 			},
 			checkMap: func(t *testing.T, m map[string]any) {
-				paths, ok := m["Paths"].([][]PathStep)
-				if !ok {
-					t.Fatalf("Paths should be [][]PathStep, got %T", m["Paths"])
-				}
-				if len(paths) != 1 {
-					t.Errorf("expected 1 path, got %d", len(paths))
-				}
-				if len(paths[0]) != 3 {
-					t.Errorf("expected 3 steps in path, got %d", len(paths[0]))
-				}
+				paths := requirePathSet(t, m, 1)
+				requirePathSteps(t, paths[0], 3)
 			},
 		},
 		{
@@ -547,13 +559,7 @@ func TestPaymentPaths(t *testing.T) {
 				},
 			},
 			checkMap: func(t *testing.T, m map[string]any) {
-				paths, ok := m["Paths"].([][]PathStep)
-				if !ok {
-					t.Fatalf("Paths should be [][]PathStep, got %T", m["Paths"])
-				}
-				if len(paths) != 2 {
-					t.Errorf("expected 2 paths, got %d", len(paths))
-				}
+				requirePathSet(t, m, 2)
 			},
 		},
 		{
@@ -582,12 +588,10 @@ func TestPaymentPaths(t *testing.T) {
 				},
 			},
 			checkMap: func(t *testing.T, m map[string]any) {
-				paths, ok := m["Paths"].([][]PathStep)
-				if !ok {
-					t.Fatalf("Paths should be [][]PathStep, got %T", m["Paths"])
-				}
-				if paths[0][0].Account != "rCarol" {
-					t.Errorf("expected account=rCarol, got %v", paths[0][0].Account)
+				paths := requirePathSet(t, m, 1)
+				steps := requirePathSteps(t, paths[0], 1)
+				if got := steps[0]["account"]; got != "rCarol" {
+					t.Errorf("expected account=rCarol, got %v", got)
 				}
 			},
 		},
@@ -602,6 +606,41 @@ func TestPaymentPaths(t *testing.T) {
 			tt.checkMap(t, m)
 		})
 	}
+}
+
+// requirePathSet asserts that m["Paths"] is the wire-shaped []any of
+// path arrays produced by (*Payment).Flatten and returns it.
+func requirePathSet(t *testing.T, m map[string]any, want int) []any {
+	t.Helper()
+	paths, ok := m["Paths"].([]any)
+	if !ok {
+		t.Fatalf("Paths should be []any, got %T", m["Paths"])
+	}
+	if len(paths) != want {
+		t.Fatalf("expected %d path(s), got %d", want, len(paths))
+	}
+	return paths
+}
+
+// requirePathSteps unwraps a single path entry into its step-maps.
+func requirePathSteps(t *testing.T, path any, want int) []map[string]any {
+	t.Helper()
+	steps, ok := path.([]any)
+	if !ok {
+		t.Fatalf("path should be []any, got %T", path)
+	}
+	if len(steps) != want {
+		t.Fatalf("expected %d step(s), got %d", want, len(steps))
+	}
+	out := make([]map[string]any, len(steps))
+	for i, s := range steps {
+		m, ok := s.(map[string]any)
+		if !ok {
+			t.Fatalf("path step %d should be map[string]any, got %T", i, s)
+		}
+		out[i] = m
+	}
+	return out
 }
 
 // TestPaymentFlatten tests the Flatten method for Payment.
@@ -778,7 +817,8 @@ func TestPaymentFlagConstants(t *testing.T) {
 }
 
 // TestPaymentZeroAmount tests handling of zero amounts.
-// Inspired by rippled's amount validation tests.
+// rippled Payment.cpp:148-152 — preflight rejects dstAmount <= zero
+// with temBAD_AMOUNT for both native and IOU.
 func TestPaymentZeroAmount(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -792,9 +832,7 @@ func TestPaymentZeroAmount(t *testing.T) {
 				Amount:      xrpAmount("0"),
 				Destination: "rBob",
 			},
-			// Zero amount validation is typically done at a higher level
-			// The basic validation just checks if Value is not empty
-			expectError: false,
+			expectError: true,
 		},
 		{
 			name: "zero IOU amount string",
@@ -803,7 +841,7 @@ func TestPaymentZeroAmount(t *testing.T) {
 				Amount:      iouAmount("0", "USD", "rGateway"),
 				Destination: "rBob",
 			},
-			expectError: false,
+			expectError: true,
 		},
 	}
 
@@ -973,13 +1011,12 @@ func TestPaymentCrossCurrency(t *testing.T) {
 			t.Errorf("expected SendMax currency=USD, got %v", sendMax["currency"])
 		}
 
-		// Verify Paths includes XRP hop
-		paths, ok := m["Paths"].([][]PathStep)
-		if !ok {
-			t.Fatal("Paths should be [][]PathStep")
-		}
-		if len(paths) != 1 || paths[0][0].Currency != "XRP" {
-			t.Error("expected path with XRP hop")
+		// Verify Paths includes XRP hop. Flatten serializes Paths as
+		// []any of []any of map[string]any (binary-codec wire shape).
+		paths := requirePathSet(t, m, 1)
+		steps := requirePathSteps(t, paths[0], 1)
+		if got := steps[0]["currency"]; got != "XRP" {
+			t.Errorf("expected currency=XRP at first hop, got %v", got)
 		}
 	})
 
@@ -1088,8 +1125,9 @@ func TestDeliverMinValidation(t *testing.T) {
 			errorMsg:    "temBAD_AMOUNT: DeliverMin currency must match Amount",
 		},
 
-		// DeliverMin must not exceed Amount
-		// Reference: rippled DeliverMin_test.cpp line 61-64
+		// DeliverMin must not exceed Amount.
+		// rippled Payment.cpp:232-238 — preflight returns temBAD_AMOUNT
+		// when dMin > dstAmount.
 		{
 			name: "DeliverMin exceeds Amount - temBAD_AMOUNT",
 			payment: func() *Payment {
@@ -1103,7 +1141,8 @@ func TestDeliverMinValidation(t *testing.T) {
 				p.DeliverMin = &deliverMin
 				return p
 			}(),
-			expectError: false, // This is validated in apply, not preflight
+			expectError: true,
+			errorMsg:    "temBAD_AMOUNT: DeliverMin cannot exceed Amount",
 		},
 
 		// Valid DeliverMin with tfPartialPayment
@@ -1201,7 +1240,11 @@ func TestPartialPaymentXRPRestriction(t *testing.T) {
 			errorMsg:    "temBAD_SEND_XRP_PARTIAL",
 		},
 		{
-			name: "tfPartialPayment with XRP-to-XRP (with XRP SendMax) - temBAD_SEND_XRP_PARTIAL",
+			// rippled Payment.cpp:168-173 — XRP-direct + SendMax returns
+			// temBAD_SEND_XRP_MAX before the partial-payment branch
+			// (Payment.cpp:182-188) is reached. Order is intentional;
+			// match it so we surface the same error code as rippled.
+			name: "tfPartialPayment with XRP-to-XRP (with XRP SendMax) - temBAD_SEND_XRP_MAX",
 			payment: func() *Payment {
 				p := &Payment{
 					BaseTx:      *tx.NewBaseTx(tx.TypePayment, "rAlice"),
@@ -1213,7 +1256,7 @@ func TestPartialPaymentXRPRestriction(t *testing.T) {
 				return p
 			}(),
 			expectError: true,
-			errorMsg:    "temBAD_SEND_XRP_PARTIAL",
+			errorMsg:    "temBAD_SEND_XRP_MAX",
 		},
 		{
 			name: "tfPartialPayment with IOU - allowed",
