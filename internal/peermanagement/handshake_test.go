@@ -39,10 +39,10 @@ func TestBuildHandshakeRequest(t *testing.T) {
 	assert.Equal(t, "GET", req.Method)
 	assert.Equal(t, "/", req.URL.Path)
 
-	// Upgrade header should contain protocol versions
-	upgrade := req.Header.Get(HeaderUpgrade)
-	assert.Contains(t, upgrade, "XRPL")
-	assert.Contains(t, upgrade, "RTXP")
+	// Upgrade header advertises every supported version (rippled
+	// makeRequest, Handshake.cpp:377; supportedProtocolList,
+	// ProtocolVersion.cpp:40-44).
+	assert.Equal(t, SupportedProtocolVersions(), req.Header.Get(HeaderUpgrade))
 
 	// Connection header
 	assert.Equal(t, "Upgrade", req.Header.Get(HeaderConnection))
@@ -98,7 +98,7 @@ func TestBuildHandshakeResponse(t *testing.T) {
 	cfg := DefaultHandshakeConfig()
 	cfg.CrawlPublic = true
 
-	resp := BuildHandshakeResponse(id, sharedValue, cfg)
+	resp := BuildHandshakeResponse(id, sharedValue, cfg, "")
 	require.NotNil(t, resp)
 
 	// Status should be 101 Switching Protocols
@@ -138,7 +138,7 @@ func TestVerifyPeerHandshake(t *testing.T) {
 	cfg := DefaultHandshakeConfig()
 
 	// Create response headers from remote
-	resp := BuildHandshakeResponse(remoteId, sharedValue, cfg)
+	resp := BuildHandshakeResponse(remoteId, sharedValue, cfg, "")
 
 	// Verify the handshake
 	pubKey, err := VerifyPeerHandshake(
@@ -214,7 +214,7 @@ func TestVerifyPeerHandshake_SelfConnection(t *testing.T) {
 	sharedValue := make([]byte, 32)
 
 	cfg := DefaultHandshakeConfig()
-	resp := BuildHandshakeResponse(id, sharedValue, cfg)
+	resp := BuildHandshakeResponse(id, sharedValue, cfg, "")
 
 	// Try to verify with same identity (self-connection)
 	_, err := VerifyPeerHandshake(
@@ -237,7 +237,7 @@ func TestVerifyPeerHandshake_NetworkMismatch(t *testing.T) {
 	// Remote uses network ID 1
 	remoteCfg := DefaultHandshakeConfig()
 	remoteCfg.NetworkID = 1
-	resp := BuildHandshakeResponse(remoteId, sharedValue, remoteCfg)
+	resp := BuildHandshakeResponse(remoteId, sharedValue, remoteCfg, "")
 
 	// Local expects network ID 2
 	localCfg := DefaultHandshakeConfig()
@@ -265,7 +265,7 @@ func TestVerifyPeerHandshake_MainnetAcceptsNonzeroNetworkIDFromPeer(t *testing.T
 
 	remoteCfg := DefaultHandshakeConfig()
 	remoteCfg.NetworkID = 1
-	resp := BuildHandshakeResponse(remoteId, sharedValue, remoteCfg)
+	resp := BuildHandshakeResponse(remoteId, sharedValue, remoteCfg, "")
 
 	localCfg := DefaultHandshakeConfig() // NetworkID=0
 	_, err := VerifyPeerHandshake(
@@ -289,7 +289,7 @@ func TestVerifyPeerHandshake_NonDefaultAcceptsMissingNetworkID(t *testing.T) {
 
 	// Remote omits NetworkID by using the default (0).
 	remoteCfg := DefaultHandshakeConfig()
-	resp := BuildHandshakeResponse(remoteId, sharedValue, remoteCfg)
+	resp := BuildHandshakeResponse(remoteId, sharedValue, remoteCfg, "")
 
 	// Local is on a non-default network.
 	localCfg := DefaultHandshakeConfig()
@@ -317,7 +317,7 @@ func TestVerifyPeerHandshake_InvalidSignature(t *testing.T) {
 	cfg := DefaultHandshakeConfig()
 
 	// Create response with sharedValue1
-	resp := BuildHandshakeResponse(remoteId, sharedValue1, cfg)
+	resp := BuildHandshakeResponse(remoteId, sharedValue1, cfg, "")
 
 	// Try to verify with different shared value
 	_, err := VerifyPeerHandshake(
@@ -330,26 +330,129 @@ func TestVerifyPeerHandshake_InvalidSignature(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidSignature)
 }
 
-// TestParseHandshakeProtocolVersion tests protocol version parsing
-func TestParseHandshakeProtocolVersion(t *testing.T) {
+// TestNegotiateProtocolVersion ports rippled's ProtocolVersion_test
+// "Protocol version negotiation" cases (rippled/src/test/overlay/
+// ProtocolVersion_test.cpp:80-97) plus a handful of goXRPL-specific
+// shapes. supportedProtocols is [{2,1},{2,2}] — the negotiated version
+// is the max of the intersection with the peer's offered list.
+func TestNegotiateProtocolVersion(t *testing.T) {
 	tests := []struct {
-		input    string
-		expected string
+		name  string
+		input string
+		want  string
 	}{
-		{"XRPL/2.2", "XRPL/2.2"},
-		{"RTXP/1.2", "RTXP/1.2"},
-		{"XRPL/2.2, RTXP/1.2", "XRPL/2.2"},
-		{"  XRPL/2.0  ", "XRPL/2.0"},
-		{"HTTP/1.1", ""},
-		{"", ""},
+		{"empty", "", ""},
+		{"single_supported_max", "XRPL/2.2", "XRPL/2.2"},
+		{"single_supported_older", "XRPL/2.1", "XRPL/2.1"},
+		{"rtxp_only_rejected", "RTXP/1.2", ""},
+		{"rtxp_filtered_out", "XRPL/2.2, RTXP/1.2", "XRPL/2.2"},
+		// rippled fixture: pick max of intersection (2.0 unsupported,
+		// 2.1 supported).
+		{"max_of_intersection_2_1", "RTXP/1.2, XRPL/2.0, XRPL/2.1", "XRPL/2.1"},
+		// rippled fixture: peer offers a future version we don't speak.
+		{"max_of_intersection_2_2", "RTXP/1.2, XRPL/2.2, XRPL/2.3, XRPL/999.999", "XRPL/2.2"},
+		// Original Finding 1 case: first-token parser would have picked
+		// XRPL/2.1; rippled negotiation picks XRPL/2.2.
+		{"unordered_picks_max", "XRPL/2.1, XRPL/2.2", "XRPL/2.2"},
+		{"reordered_picks_max", "XRPL/2.2, XRPL/2.1", "XRPL/2.2"},
+		// rippled fixture: nothing in common.
+		{"no_intersection", "XRPL/999.999, WebSocket/1.0", ""},
+		// Anchored regex must reject leading-zero / unsupported / sub-2 tokens.
+		{"leading_zero_rejected", "XRPL/02.0", ""},
+		{"sub_two_major_rejected", "XRPL/1.0", ""},
+		{"empty_minor_rejected", "XRPL/2.", ""},
+		{"surrounding_whitespace", "  XRPL/2.2  ", "XRPL/2.2"},
+		{"unknown_only", "FOO/1.0", ""},
+		{"http_only", "HTTP/1.1", ""},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			result := ParseHandshakeProtocolVersion(tt.input)
-			assert.Equal(t, tt.expected, result)
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, NegotiateProtocolVersion(tt.input))
 		})
 	}
+}
+
+// TestVerifyOutboundProtocolVersion mirrors rippled's outbound check
+// (ConnectAttempt.cpp:340-351): the server's response must contain
+// exactly one supported version.
+func TestVerifyOutboundProtocolVersion(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"single_supported_2_2", "XRPL/2.2", "XRPL/2.2"},
+		{"single_supported_2_1", "XRPL/2.1", "XRPL/2.1"},
+		{"single_unsupported", "XRPL/3.0", ""},
+		{"multiple_rejected", "XRPL/2.1, XRPL/2.2", ""},
+		{"rtxp_rejected", "RTXP/1.2", ""},
+		{"empty", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, VerifyOutboundProtocolVersion(tt.input))
+		})
+	}
+}
+
+// TestSupportedProtocolVersions pins the comma-joined header value so
+// downstream interop assertions catch accidental edits to the supported
+// set.
+func TestSupportedProtocolVersions(t *testing.T) {
+	assert.Equal(t, "XRPL/2.1, XRPL/2.2", SupportedProtocolVersions())
+}
+
+// TestSupportedProtocolsStrictlyAscending mirrors rippled's static_assert
+// (ProtocolVersion.cpp:50-72). The init() guard panics on bad data; this
+// test is a positive-direction check that the live list is well-formed.
+func TestSupportedProtocolsStrictlyAscending(t *testing.T) {
+	require.NotEmpty(t, supportedProtocols)
+	for i := 1; i < len(supportedProtocols); i++ {
+		require.Truef(t, supportedProtocols[i-1].less(supportedProtocols[i]),
+			"supportedProtocols[%d]=%v must be < supportedProtocols[%d]=%v",
+			i-1, supportedProtocols[i-1], i, supportedProtocols[i])
+	}
+}
+
+// TestBuildHandshakeErrorResponse mirrors rippled OverlayImpl::makeErrorResponse
+// (OverlayImpl.cpp:371-386): 400 Bad Request with the failure text in
+// the reason phrase, Server / Remote-Address headers, Connection: close.
+func TestBuildHandshakeErrorResponse(t *testing.T) {
+	resp := BuildHandshakeErrorResponse(
+		"goXRPL-test/1.0",
+		"203.0.113.7",
+		"Unable to agree on a protocol version",
+	)
+	require.NotNil(t, resp)
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Equal(t, "400 Bad Request (Unable to agree on a protocol version)", resp.Status)
+	assert.Equal(t, "close", resp.Header.Get(HeaderConnection))
+	assert.Equal(t, "goXRPL-test/1.0", resp.Header.Get(HeaderServer))
+	assert.Equal(t, "203.0.113.7", resp.Header.Get("Remote-Address"))
+	assert.Equal(t, int64(0), resp.ContentLength)
+
+	// Round-trip through Write so we exercise the full wire format
+	// goXRPL emits to a misconfigured peer.
+	var buf bytes.Buffer
+	require.NoError(t, resp.Write(&buf))
+	wire := buf.String()
+	assert.Contains(t, wire, "HTTP/1.1 400 Bad Request (Unable to agree on a protocol version)")
+	assert.Contains(t, wire, "Connection: close")
+	assert.Contains(t, wire, "Server: goXRPL-test/1.0")
+	assert.Contains(t, wire, "Remote-Address: 203.0.113.7")
+}
+
+// TestBuildHandshakeErrorResponse_OmitsBlankHeaders confirms the Server
+// and Remote-Address headers are omitted when empty, so we don't emit
+// e.g. "Remote-Address: <nil>" if tcpRemoteIP returns nil.
+func TestBuildHandshakeErrorResponse_OmitsBlankHeaders(t *testing.T) {
+	resp := BuildHandshakeErrorResponse("", "", "fail")
+	assert.Empty(t, resp.Header.Get(HeaderServer))
+	assert.Empty(t, resp.Header.Get("Remote-Address"))
+	assert.Equal(t, "close", resp.Header.Get(HeaderConnection))
 }
 
 // TestNetworkTime tests that network time is set in headers
@@ -1323,7 +1426,7 @@ func TestHandshake_AllHeaders_RoundTrip(t *testing.T) {
 
 	t.Run("response_path", func(t *testing.T) {
 		sharedValue := make([]byte, 32)
-		resp := BuildHandshakeResponse(id, sharedValue, senderCfg)
+		resp := BuildHandshakeResponse(id, sharedValue, senderCfg, "")
 		// Sender (now the responder) sees peer (now the requester) at
 		// pB and emits its own Local-IP = pA.
 		addAddressHeaders(resp.Header, senderCfg, pBSock)
