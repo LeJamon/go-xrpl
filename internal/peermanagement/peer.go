@@ -122,6 +122,8 @@ type Peer struct {
 	firstLedgerSeq uint32
 	lastLedgerSeq  uint32
 
+	lastStatus message.NodeStatus
+
 	latencyMu     sync.RWMutex
 	pingsInFlight map[uint32]time.Time
 	latency       time.Duration
@@ -241,9 +243,13 @@ func (p *Peer) applyHandshakeExtras(x HandshakeExtras) {
 // Mirrors rippled PeerImp.cpp:1812-1883: lostSync clears closed/previous
 // ledger only; the (firstSeq, lastSeq) range is updated only when both
 // fields are present, then clamped to (0,0) if either is zero or inverted.
-func (p *Peer) applyStatusChange(closed, previous []byte, lostSync bool, firstSeq, lastSeq *uint32) {
+// newStatus mirrors rippled's last_status_ retention: the latest TMStatusChange
+// is stored verbatim, so a lostSync update with a NewStatus still records it.
+// A zero (nsUNKNOWN) value means "no status reported in the latest update".
+func (p *Peer) applyStatusChange(closed, previous []byte, lostSync bool, firstSeq, lastSeq *uint32, newStatus message.NodeStatus) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.lastStatus = newStatus
 	if lostSync {
 		p.hasClosedLedger = false
 		p.hasPreviousLedger = false
@@ -366,6 +372,16 @@ func (p *Peer) LedgerRange() (uint32, uint32) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.firstLedgerSeq, p.lastLedgerSeq
+}
+
+// LastStatus returns the peer's most recently advertised NodeStatus
+// (rippled's last_status_.newstatus()). Returns 0 (nsUNKNOWN) if the
+// peer has not sent a TMStatusChange with new_status set — matching
+// rippled PeerImp::json's `if (last_status.has_newstatus())` gate.
+func (p *Peer) LastStatus() message.NodeStatus {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lastStatus
 }
 
 func (p *Peer) Connect(ctx context.Context, cfg PeerConfig) error {
@@ -938,6 +954,8 @@ type PeerInfo struct {
 
 	Protocol string
 
+	Status message.NodeStatus
+
 	// Per-peer wire byte counters and rolling-window throughput.
 	// Mirrors rippled PeerImp::metrics_ (PeerImp.h:226-230). Emitted
 	// under the `metrics` object in `peers` RPC.
@@ -994,6 +1012,7 @@ func (p *Peer) Info() PeerInfo {
 		Latency:         latency,
 		HasLatency:      hasLatency,
 		Protocol:        p.protocolVersion,
+		Status:          p.lastStatus,
 		TotalBytesRecv:  p.metrics.recv.totalBytesSnapshot(),
 		TotalBytesSent:  p.metrics.sent.totalBytesSnapshot(),
 		AvgBpsRecv:      p.metrics.recv.averageBytes(),

@@ -1071,6 +1071,7 @@ func (o *Overlay) handleStatusChange(evt Event) {
 		sc.NewEvent == message.NodeEventLostSync,
 		sc.FirstSeq,
 		sc.LastSeq,
+		sc.NewStatus,
 	)
 
 	// PeerImp.cpp:1885-1890: gate on a fresh (<2 min) validated ledger.
@@ -1742,6 +1743,10 @@ func (o *Overlay) PeersJSON() []map[string]any {
 		// PeerImp.cpp:419 — emit unconditionally (rippled always has a
 		// negotiated value once the handshake has completed).
 		entry["protocol"] = p.Protocol
+		// PeerImp.cpp:463-491 — emit only when last_status_.has_newstatus().
+		if s := nodeStatusRPCName(p.Status); s != "" {
+			entry["status"] = s
+		}
 		// PeerImp.cpp:493-501: emit the metrics object — rippled formats
 		// each value with std::to_string, so they're decimal strings.
 		entry["metrics"] = map[string]any{
@@ -1753,6 +1758,26 @@ func (o *Overlay) PeersJSON() []map[string]any {
 		out = append(out, entry)
 	}
 	return out
+}
+
+// nodeStatusRPCName mirrors PeerImp.cpp:463-491. Returns the empty
+// string for nsUNKNOWN (no status reported) or any unknown enum value,
+// signaling the caller to omit the `status` field entirely.
+func nodeStatusRPCName(s message.NodeStatus) string {
+	switch s {
+	case message.NodeStatusConnecting:
+		return "connecting"
+	case message.NodeStatusConnected:
+		return "connected"
+	case message.NodeStatusMonitoring:
+		return "monitoring"
+	case message.NodeStatusValidating:
+		return "validating"
+	case message.NodeStatusShutting:
+		return "shutting"
+	default:
+		return ""
+	}
 }
 
 // clusterFeeRef mirrors rippled's LoadFeeTrack::getLoadBase() default.
