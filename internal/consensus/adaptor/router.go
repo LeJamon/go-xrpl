@@ -76,12 +76,6 @@ type Router struct {
 	// directly via Overlay.BroadcastExcept. Nil in tests that
 	// construct a router without manifest support.
 	overlay *peermanagement.Overlay
-
-	// probe measures scheduling latency of this Router goroutine,
-	// surfaced via server_info.io_latency_ms. Nil disables the probe
-	// path; the select case becomes a nil-channel receive that never
-	// fires.
-	probe *IOLatencyProbe
 }
 
 // messageDedupTTL is how long a proposal/validation hash is
@@ -128,13 +122,6 @@ func (r *Router) SetInboundClock(c inbound.Clock) {
 	r.replayer.SetClock(c)
 }
 
-// SetIOLatencyProbe installs a probe whose samples are recorded each
-// time the Router goroutine drains its channel. Calling with nil
-// disables the probe path. Safe to call before Run.
-func (r *Router) SetIOLatencyProbe(probe *IOLatencyProbe) {
-	r.probe = probe
-}
-
 // StopReplayer drains the replayer's in-flight map and returns the
 // number of acquisitions that were still pending at stop time. Called
 // from Components.Stop() during graceful shutdown. Exposes only the
@@ -170,12 +157,6 @@ func (r *Router) HandlePeerDisconnect(peerID peermanagement.PeerID) {
 func (r *Router) Run(ctx context.Context) {
 	ticker := time.NewTicker(inboundReplayDeltaTickInterval)
 	defer ticker.Stop()
-
-	var probeCh <-chan time.Time
-	if r.probe != nil {
-		probeCh = r.probe.Ch()
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -187,8 +168,6 @@ func (r *Router) Run(ctx context.Context) {
 			r.handleMessage(msg)
 		case <-ticker.C:
 			r.maintenanceTick()
-		case ts := <-probeCh:
-			r.probe.RecordSample(ts)
 		}
 	}
 }

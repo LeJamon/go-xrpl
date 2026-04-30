@@ -81,7 +81,7 @@ func buildServerInfo(human bool) map[string]interface{} {
 	info := map[string]interface{}{
 		"build_version":     BuildVersion,
 		"complete_ledgers":  completeLedgers,
-		"io_latency_ms":     ioLatencyMs(),
+		"io_latency_ms":     schedLatencyMs(),
 		"pubkey_node":       types.Services.NodePublicKey,
 		"server_state":      serverState,
 		"uptime":            uptime,
@@ -235,13 +235,4 @@ func getPeerCount() int {
 		return types.Services.PeerCount()
 	}
 	return 0
-}
-
-// ioLatencyMs returns the consensus-router scheduling latency (ms, ceil),
-// or 0 when the probe is not wired (e.g. standalone mode).
-func ioLatencyMs() int {
-	if types.Services.IOLatencyMs == nil {
-		return 0
-	}
-	return types.Services.IOLatencyMs()
 }
