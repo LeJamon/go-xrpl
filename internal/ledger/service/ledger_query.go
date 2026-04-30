@@ -8,6 +8,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 
@@ -131,12 +132,9 @@ type LedgerDataItem struct {
 	Data  []byte `json:"data"`
 }
 
-// RippleEpoch is January 1, 2000 00:00:00 UTC
-var RippleEpoch = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-
 // toRippleTime converts a time.Time to seconds since Ripple epoch
 func toRippleTime(t time.Time) int64 {
-	return t.Unix() - RippleEpoch.Unix()
+	return t.Unix() - protocol.RippleEpochUnix
 }
 
 // formatCloseTimeHuman formats close time in XRPL human-readable format

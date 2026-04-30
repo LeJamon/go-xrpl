@@ -443,14 +443,13 @@ func CalculateLedgerHash(h header.LedgerHeader) [32]byte {
 	data = append(data, h.AccountHash[:]...)
 
 	// Parent close time (uint32, seconds since ripple epoch - Jan 1, 2000)
-	const rippleEpochUnix int64 = 946684800
 	parentCloseBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(parentCloseBytes, uint32(h.ParentCloseTime.Unix()-rippleEpochUnix))
+	binary.BigEndian.PutUint32(parentCloseBytes, uint32(h.ParentCloseTime.Unix()-protocol.RippleEpochUnix))
 	data = append(data, parentCloseBytes...)
 
 	// Close time (uint32, seconds since ripple epoch - Jan 1, 2000)
 	closeTimeBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(closeTimeBytes, uint32(h.CloseTime.Unix()-rippleEpochUnix))
+	binary.BigEndian.PutUint32(closeTimeBytes, uint32(h.CloseTime.Unix()-protocol.RippleEpochUnix))
 	data = append(data, closeTimeBytes...)
 
 	// Close time resolution (uint8)

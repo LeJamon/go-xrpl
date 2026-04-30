@@ -23,6 +23,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
+	"github.com/LeJamon/goXRPLd/protocol"
 	kvpebble "github.com/LeJamon/goXRPLd/storage/kvstore/pebble"
 	"github.com/LeJamon/goXRPLd/storage/nodestore"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
@@ -339,8 +340,7 @@ func runServer(cmd *cobra.Command, args []string) {
 
 		baseFee, reserveBase, reserveInc := ledgerService.GetCurrentFees()
 
-		rippleEpoch := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-		ledgerTime := uint32(event.LedgerInfo.CloseTime.Unix() - rippleEpoch.Unix())
+		ledgerTime := uint32(event.LedgerInfo.CloseTime.Unix() - protocol.RippleEpochUnix)
 
 		ledgerCloseEvent := &rpc.LedgerCloseEvent{
 			Type:             "ledgerClosed",
@@ -573,8 +573,7 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 
 	baseFee, reserveBase, reserveInc := a.ledgerService.GetCurrentFees()
 
-	rippleEpoch := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-	ledgerTime := uint32(validatedLedger.CloseTime().Unix() - rippleEpoch.Unix())
+	ledgerTime := uint32(validatedLedger.CloseTime().Unix() - protocol.RippleEpochUnix)
 
 	hash := validatedLedger.Hash()
 	serverInfo := a.ledgerService.GetServerInfo()

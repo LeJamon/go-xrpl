@@ -731,12 +731,11 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 // the tx.EngineConfig.ParentCloseTime contract used elsewhere in the
 // engine. The Ripple epoch is 2000-01-01 UTC.
 func parentCloseTimeRippleEpoch(parent *ledger.Ledger) uint32 {
-	const rippleEpochUnix int64 = 946684800
 	t := parent.CloseTime()
 	if t.IsZero() {
 		return 0
 	}
-	secs := t.Unix() - rippleEpochUnix
+	secs := t.Unix() - protocol.RippleEpochUnix
 	if secs < 0 {
 		return 0
 	}

@@ -22,14 +22,9 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/cluster"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/peertls"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"golang.org/x/sync/errgroup"
 )
-
-// rippleEpochUnix is the Unix timestamp of the XRPL epoch
-// (2000-01-01 00:00:00 UTC). Used to convert local time to the
-// uint32 Ripple-Epoch seconds rippled stamps onto TMStatusChange
-// messages at PeerImp.cpp:1796-1797.
-const rippleEpochUnix int64 = 946684800
 
 // EvictBadDataThreshold is the bad-data BALANCE at which the overlay
 // disconnects a peer. IncBadData adds a per-reason weight (see
@@ -387,12 +382,10 @@ func peerStatusUpperName(s message.NodeStatus) string {
 	}
 }
 
-// peerStatusActionName mirrors PeerImp.cpp:1921-1934. handleStatusChange
-// returns at PeerImp.cpp:1830 before pubPeerStatus is invoked for
-// neLOST_SYNC, so the LOST_SYNC arm is unreachable today — it's wired
-// up anyway to match rippled's switch verbatim and stay correct if a
-// future change relaxes the early-return invariant. Unknown enums fall
-// through silently.
+// peerStatusActionName mirrors PeerImp.cpp:1921-1932. handleStatusChange
+// returns at PeerImp.cpp:1830 before pubPeerStatus runs for neLOST_SYNC,
+// so the LOST_SYNC arm is unreachable from this call site and intentionally
+// omitted. Unknown enums fall through silently.
 func peerStatusActionName(e message.NodeEvent) string {
 	switch e {
 	case message.NodeEventClosingLedger:
@@ -401,8 +394,6 @@ func peerStatusActionName(e message.NodeEvent) string {
 		return "ACCEPTED_LEDGER"
 	case message.NodeEventSwitchedLedger:
 		return "SWITCHED_LEDGER"
-	case message.NodeEventLostSync:
-		return "LOST_SYNC"
 	default:
 		return ""
 	}
@@ -1184,7 +1175,7 @@ func (o *Overlay) handleStatusChange(evt Event) {
 	// `date`. Mirror that here, mutating sc so the auto-filled value
 	// is observable to subscribers.
 	if sc.NetworkTime == 0 {
-		sc.NetworkTime = uint64(time.Now().Unix() - rippleEpochUnix)
+		sc.NetworkTime = uint64(time.Now().Unix() - protocol.RippleEpochUnix)
 	}
 
 	effectiveStatus := peer.applyStatusChange(sc)

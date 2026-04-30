@@ -18,6 +18,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	_ "github.com/LeJamon/goXRPLd/internal/tx/all"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/shamap"
 	"github.com/spf13/cobra"
 )
@@ -334,9 +335,8 @@ func executeReplayVerbose(state *StateFixture, env *EnvFixture, txs *TxsFixture,
 		return nil, nil, fmt.Errorf("parsing parent_hash: %w", err)
 	}
 
-	rippleEpoch := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-	closeTime := rippleEpoch.Add(time.Duration(env.CloseTime) * time.Second)
-	parentCloseTime := rippleEpoch.Add(time.Duration(env.ParentCloseTime) * time.Second)
+	closeTime := time.Unix(protocol.RippleEpochUnix+int64(env.CloseTime), 0).UTC()
+	parentCloseTime := time.Unix(protocol.RippleEpochUnix+int64(env.ParentCloseTime), 0).UTC()
 
 	ledgerHeader := header.LedgerHeader{
 		LedgerIndex:         env.LedgerIndex,

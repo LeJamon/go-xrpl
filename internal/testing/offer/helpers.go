@@ -9,11 +9,9 @@ import (
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/stretchr/testify/require"
 )
-
-// rippleEpoch is the number of seconds between Unix epoch and Ripple epoch (Jan 1, 2000 00:00:00 UTC).
-const rippleEpoch int64 = 946684800
 
 // featureSet defines a set of disabled features for testing.
 type featureSet struct {
@@ -81,12 +79,12 @@ func Reserve(env *jtx.TestEnv, count uint32) uint64 {
 // Equivalent to rippled's lastClose(env) in Offer_test.cpp.
 func LastClose(env *jtx.TestEnv) uint32 {
 	unixSecs := env.Now().Unix()
-	return uint32(unixSecs - rippleEpoch)
+	return uint32(unixSecs - protocol.RippleEpochUnix)
 }
 
 // RippleTimeFromUnix converts a time.Time to Ripple epoch seconds.
 func RippleTimeFromUnix(t time.Time) uint32 {
-	return uint32(t.Unix() - rippleEpoch)
+	return uint32(t.Unix() - protocol.RippleEpochUnix)
 }
 
 // OfferInLedger checks if an offer exists in the ledger by account and sequence.

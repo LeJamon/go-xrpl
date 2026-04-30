@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 func init() {
@@ -275,10 +276,10 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	closeTime := uint64(ctx.Config.ParentCloseTime)
 	lastUpdateTime := uint64(o.LastUpdateTime)
 
-	if lastUpdateTime < RippleEpochOffset {
+	if lastUpdateTime < uint64(protocol.RippleEpochUnix) {
 		return tx.TecINVALID_UPDATE_TIME
 	}
-	lastUpdateTimeEpoch := lastUpdateTime - RippleEpochOffset
+	lastUpdateTimeEpoch := lastUpdateTime - uint64(protocol.RippleEpochUnix)
 
 	// Validate that lastUpdateTimeEpoch is within maxLastUpdateTimeDelta of closeTime.
 	// The lower-bound subtraction (closeTime - delta) is guarded to prevent underflow.

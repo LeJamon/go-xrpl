@@ -9,6 +9,7 @@ import (
 	oracletest "github.com/LeJamon/goXRPLd/internal/testing/oracle"
 	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -557,9 +558,9 @@ func TestInvalidSet(t *testing.T) {
 		}
 
 		// Compute close time in XRPL epoch
-		closeTimeXRPL := uint32(env.Now().Unix()) - oracletest.XRPLEpochOffset
+		closeTimeXRPL := uint32(env.Now().Unix()) - uint32(protocol.RippleEpochUnix)
 		// LastUpdateTime too old: closeTime - 301 (in Unix = epoch + XRPL epoch offset)
-		tooOld := (closeTimeXRPL - 301) + oracletest.XRPLEpochOffset
+		tooOld := (closeTimeXRPL - 301) + uint32(protocol.RippleEpochUnix)
 		result = env.Submit(oracletest.OracleSet(owner, 1, tooOld).
 			AddPrice("XRP", "USD", 740, 1).
 			Fee(baseFee).
@@ -588,8 +589,8 @@ func TestInvalidSet(t *testing.T) {
 			env.Close()
 		}
 
-		closeTimeXRPL := uint32(env.Now().Unix()) - oracletest.XRPLEpochOffset
-		tooNew := (closeTimeXRPL + 311) + oracletest.XRPLEpochOffset
+		closeTimeXRPL := uint32(env.Now().Unix()) - uint32(protocol.RippleEpochUnix)
+		tooNew := (closeTimeXRPL + 311) + uint32(protocol.RippleEpochUnix)
 		result = env.Submit(oracletest.OracleSet(owner, 1, tooNew).
 			AddPrice("XRP", "USD", 740, 1).
 			Fee(baseFee).
@@ -653,7 +654,7 @@ func TestInvalidSet(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 
 		// Update with time < epoch_offset (946684800)
-		result = env.Submit(oracletest.OracleSet(owner, 1, oracletest.XRPLEpochOffset-1).
+		result = env.Submit(oracletest.OracleSet(owner, 1, uint32(protocol.RippleEpochUnix)-1).
 			AddPrice("XRP", "USD", 740, 1).
 			Fee(baseFee).
 			Build())

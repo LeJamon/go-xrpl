@@ -5,14 +5,12 @@ import (
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
-
-// RippleEpoch is January 1, 2000 00:00:00 UTC - used for XRPL time calculations
-var RippleEpochRPC = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // ToRippleTime converts a time.Time to seconds since Ripple epoch
 func ToRippleTime(t time.Time) uint32 {
-	return uint32(t.Unix() - RippleEpochRPC.Unix())
+	return uint32(t.Unix() - protocol.RippleEpochUnix)
 }
 
 // LedgerCloseEvent represents a ledger close notification sent to subscribers

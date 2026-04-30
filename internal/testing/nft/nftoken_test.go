@@ -18,6 +18,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx/account"
 	"github.com/LeJamon/goXRPLd/internal/tx/nftoken"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // TestDiagnosticMultiPage verifies NFTokenPage handling with multiple pages
@@ -1403,7 +1404,7 @@ func TestCreateOfferExpiration(t *testing.T) {
 	// Future expiration - create and then test expired acceptance
 	t.Run("ExpiredOfferCantBeAccepted", func(t *testing.T) {
 		// Use a time far enough in the future to create the offer
-		futureTime := uint32(env.Now().Unix()-946684800) + 25
+		futureTime := uint32(env.Now().Unix()-protocol.RippleEpochUnix) + 25
 		offerIndex := nft.GetOfferIndex(env, issuer)
 		result := env.Submit(nft.NFTokenCreateSellOffer(issuer, nftID, tx.NewXRPAmount(0)).
 			Expiration(futureTime).Build())

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // Engine implements the RCL consensus algorithm.
@@ -1833,9 +1834,9 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	slog.Debug("acceptLedger close time",
 		"seq", e.prevLedger.Seq()+1,
 		"mode", e.mode,
-		"raw_ct", rawCloseTime.Unix()-946684800,
-		"eff_ct", closeTime.Unix()-946684800,
-		"prior_ct", priorClose.Unix()-946684800,
+		"raw_ct", rawCloseTime.Unix()-protocol.RippleEpochUnix,
+		"eff_ct", closeTime.Unix()-protocol.RippleEpochUnix,
+		"prior_ct", priorClose.Unix()-protocol.RippleEpochUnix,
 		"resolution", resolution,
 		"proposers", len(e.proposals),
 		"has_position", e.state.OurPosition != nil,

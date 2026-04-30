@@ -21,8 +21,4 @@ const (
 	// MaxPriceScale is the maximum allowed scale value for price data
 	// Reference: rippled Oracle_test.cpp line 354 tests maxPriceScale + 1 = 9 fails
 	MaxPriceScale = 8
-
-	// RippleEpochOffset is the number of seconds between Unix epoch (Jan 1, 1970)
-	// and Ripple epoch (Jan 1, 2000). This equals 946684800 seconds.
-	RippleEpochOffset = 946684800
 )

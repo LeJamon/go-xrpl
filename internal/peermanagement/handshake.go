@@ -17,6 +17,7 @@ import (
 
 	rootcrypto "github.com/LeJamon/goXRPLd/crypto"
 	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // protocolVersion is a (major, minor) peer-protocol pair. Mirrors
@@ -70,11 +71,7 @@ const (
 	HeaderServer           = "Server"
 )
 
-const (
-	// XRPLEpochOffset converts Unix seconds to XRPL epoch (2000-01-01).
-	XRPLEpochOffset       = 946684800
-	NetworkClockTolerance = 20 * time.Second
-)
+const NetworkClockTolerance = 20 * time.Second
 
 type HandshakeConfig struct {
 	UserAgent   string
@@ -218,7 +215,7 @@ func addHandshakeHeaders(h http.Header, id *Identity, sharedValue []byte, cfg Ha
 		h.Set(HeaderNetworkID, strconv.FormatUint(uint64(cfg.NetworkID), 10))
 	}
 
-	networkTime := uint64(time.Now().Unix()) - XRPLEpochOffset
+	networkTime := uint64(time.Now().Unix() - protocol.RippleEpochUnix)
 	h.Set(HeaderNetworkTime, strconv.FormatUint(networkTime, 10))
 	h.Set(HeaderPublicKey, id.EncodedPublicKey())
 
@@ -381,7 +378,7 @@ func VerifyPeerHandshake(headers http.Header, sharedValue []byte, localPubKey st
 			return nil, fmt.Errorf("invalid network time: %w", err)
 		}
 
-		peerTime := time.Unix(netTime+XRPLEpochOffset, 0)
+		peerTime := time.Unix(netTime+protocol.RippleEpochUnix, 0)
 		diff := time.Since(peerTime)
 		if diff < 0 {
 			diff = -diff

@@ -13,6 +13,7 @@ import (
 	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/payment"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -230,8 +231,7 @@ func buildClosedSuccessor(
 
 	parentCloseTime := uint32(0)
 	if !parent.CloseTime().IsZero() {
-		const rippleEpochUnix int64 = 946684800
-		parentCloseTime = uint32(parent.CloseTime().Unix() - rippleEpochUnix)
+		parentCloseTime = uint32(parent.CloseTime().Unix() - protocol.RippleEpochUnix)
 	}
 
 	engine := tx.NewEngine(child, tx.EngineConfig{

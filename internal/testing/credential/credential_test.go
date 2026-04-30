@@ -15,9 +15,8 @@ import (
 	acctx "github.com/LeJamon/goXRPLd/internal/tx/account"
 	credtx "github.com/LeJamon/goXRPLd/internal/tx/credential"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
-
-const rippleEpoch = 946684800
 
 // xrpAccount is the XRPL zero account address (20 bytes of zero).
 // This matches rippled's xrpAccount() / noAccount().
@@ -30,7 +29,7 @@ func credentialKeylet(subject, issuer *jtx.Account, credType string) keylet.Keyl
 
 // rippleTime returns the current Ripple epoch time from the test environment.
 func rippleTime(env *jtx.TestEnv) uint32 {
-	return uint32(env.Now().Unix() - rippleEpoch)
+	return uint32(env.Now().Unix() - protocol.RippleEpochUnix)
 }
 
 // TestSuccessful tests the basic credential lifecycle: create, accept, delete.

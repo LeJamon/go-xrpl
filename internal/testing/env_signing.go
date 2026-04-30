@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // DecodeAddress decodes an XRPL address to a 20-byte account ID.
@@ -240,7 +241,7 @@ func (e *TestEnv) autoFillForSigning(txn tx.Transaction) {
 func (e *TestEnv) submitWithSigVerification(txn tx.Transaction) TxResult {
 	e.t.Helper()
 
-	parentCloseTime := uint32(e.clock.Now().Unix() - 946684800)
+	parentCloseTime := uint32(e.clock.Now().Unix() - protocol.RippleEpochUnix)
 	engineConfig := tx.EngineConfig{
 		BaseFee:                   e.baseFee,
 		ReserveBase:               e.reserveBase,

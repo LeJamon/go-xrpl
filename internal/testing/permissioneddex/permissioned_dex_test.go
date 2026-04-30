@@ -17,6 +17,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // requireResult asserts the transaction result matches the expected code.
@@ -42,10 +43,8 @@ func xrpUsdEurPath(gw *jtx.Account) [][]payment.PathStep {
 }
 
 // rippleTimeNow returns the current ledger time as Ripple epoch seconds.
-// The Ripple epoch is Jan 1, 2000 00:00:00 UTC (946684800 Unix seconds).
 func rippleTimeNow(env *jtx.TestEnv) uint32 {
-	const rippleEpoch int64 = 946684800
-	return uint32(env.Now().Unix() - rippleEpoch)
+	return uint32(env.Now().Unix() - protocol.RippleEpochUnix)
 }
 
 // badDomain is a nonexistent domain ID (hex).

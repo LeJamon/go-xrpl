@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/txq"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // Close closes the current ledger and advances to a new one.
@@ -462,7 +463,7 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 	// parent ledger's closeTime (OpenView.cpp line 106), not from the
 	// network time. Using the ledger header ensures consistency between
 	// initial apply and replay-on-close.
-	parentCloseTime := uint32(e.ledger.ParentCloseTime().Unix() - 946684800)
+	parentCloseTime := uint32(e.ledger.ParentCloseTime().Unix() - protocol.RippleEpochUnix)
 	engineConfig := tx.EngineConfig{
 		BaseFee:                   e.baseFee,
 		ReserveBase:               e.reserveBase,
@@ -730,7 +731,7 @@ func (e *TestEnv) applyForReplay(txn tx.Transaction, certainRetry bool) (tx.Resu
 	// Use the ledger's stored ParentCloseTime, matching applyDirect().
 	// Both paths use the ledger header so time-dependent checks produce
 	// the same result during initial apply and during replay.
-	parentCloseTime := uint32(e.ledger.ParentCloseTime().Unix() - 946684800)
+	parentCloseTime := uint32(e.ledger.ParentCloseTime().Unix() - protocol.RippleEpochUnix)
 	engineConfig := tx.EngineConfig{
 		BaseFee:                   e.baseFee,
 		ReserveBase:               e.reserveBase,
@@ -1176,7 +1177,7 @@ func (c *testTxQApplyContext) GetLedgerSequence() uint32 {
 }
 
 func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
-	parentCloseTime := uint32(c.env.clock.Now().Unix() - 946684800)
+	parentCloseTime := uint32(c.env.clock.Now().Unix() - protocol.RippleEpochUnix)
 	// Transactions applied through the TxQ must NOT check open-ledger fee
 	// adequacy. In rippled, TxQ::tryDirectApply calls ripple::apply() with
 	// tapNONE flags (NOT tapOPEN_LEDGER). The TxQ's own fee-level check is
@@ -1259,7 +1260,7 @@ func (c *testTxQAcceptContext) GetAccountSequence(account [20]byte) uint32 {
 }
 
 func (c *testTxQAcceptContext) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
-	parentCloseTime := uint32(c.env.clock.Now().Unix() - 946684800)
+	parentCloseTime := uint32(c.env.clock.Now().Unix() - protocol.RippleEpochUnix)
 	// TxQ accept (drain on close) applies queued transactions with tapNONE
 	// flags in rippled — NOT tapOPEN_LEDGER. This prevents the engine's
 	// fee adequacy check from rejecting fee=0 transactions that were
@@ -1391,7 +1392,7 @@ func (e *TestEnv) SubmitPseudo(transaction interface{}) TxResult {
 		return TxResult{Code: "temINVALID", Success: false, Message: "Invalid transaction type"}
 	}
 
-	parentCloseTime := uint32(e.clock.Now().Unix() - 946684800)
+	parentCloseTime := uint32(e.clock.Now().Unix() - protocol.RippleEpochUnix)
 	engineConfig := tx.EngineConfig{
 		BaseFee:                   e.baseFee,
 		ReserveBase:               e.reserveBase,
