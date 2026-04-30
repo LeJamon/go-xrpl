@@ -58,6 +58,11 @@ type ServiceContainer struct {
 	// LastCloseInfo returns proposer count and convergence time (ms) from the last consensus round
 	LastCloseInfo func() (proposers int, convergeTimeMs int)
 
+	// IOLatencyMs returns the most recent consensus-router scheduling
+	// latency in milliseconds (ceil). Nil in standalone mode where no
+	// router goroutine exists; the handler treats nil as 0.
+	IOLatencyMs func() int
+
 	// Manifests is the validator-manifest lookup used by the
 	// `manifest` RPC method. Nil until the consensus components are
 	// built (e.g. in standalone mode without p2p); handlers must

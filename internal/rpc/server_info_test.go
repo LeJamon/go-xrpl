@@ -152,6 +152,35 @@ func TestServerInfoResponseFields(t *testing.T) {
 		assert.GreaterOrEqual(t, ioLatency, float64(0))
 	})
 
+	t.Run("info.io_latency_ms reflects probe value when wired", func(t *testing.T) {
+		types.Services.IOLatencyMs = func() int { return 42 }
+		t.Cleanup(func() { types.Services.IOLatencyMs = nil })
+
+		result, rpcErr := method.Handle(ctx, nil)
+		require.Nil(t, rpcErr)
+
+		resultJSON, _ := json.Marshal(result)
+		var resp map[string]interface{}
+		json.Unmarshal(resultJSON, &resp)
+		info := resp["info"].(map[string]interface{})
+
+		assert.Equal(t, float64(42), info["io_latency_ms"])
+	})
+
+	t.Run("info.io_latency_ms is 0 when probe not wired", func(t *testing.T) {
+		types.Services.IOLatencyMs = nil
+
+		result, rpcErr := method.Handle(ctx, nil)
+		require.Nil(t, rpcErr)
+
+		resultJSON, _ := json.Marshal(result)
+		var resp map[string]interface{}
+		json.Unmarshal(resultJSON, &resp)
+		info := resp["info"].(map[string]interface{})
+
+		assert.Equal(t, float64(0), info["io_latency_ms"])
+	})
+
 	t.Run("info.last_close fields present", func(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr)
