@@ -151,56 +151,18 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		accountID := ctx.AccountID
 
-		// Check source trust line freeze (if source is not issuer)
+		// Check source trust line freeze (if source is not issuer): the issuer's
+		// freeze of the source side blocks the source from sending.
 		// Reference: CreateCheck.cpp L131-145
-		if accountID != issuerID {
-			srcTLKey := keylet.Line(accountID, issuerID, c.SendMax.Currency)
-			srcTLExists, _ := ctx.View.Exists(srcTLKey)
-			if srcTLExists {
-				srcTLData, err := ctx.View.Read(srcTLKey)
-				if err == nil {
-					srcTL, err := state.ParseRippleState(srcTLData)
-					if err == nil {
-						srcIsLow := keylet.IsLowAccount(accountID, issuerID)
-						if srcIsLow {
-							if srcTL.Flags&state.LsfHighFreeze != 0 {
-								return tx.TecFROZEN
-							}
-						} else {
-							if srcTL.Flags&state.LsfLowFreeze != 0 {
-								return tx.TecFROZEN
-							}
-						}
-					}
-				}
-			}
+		if isTrustLineFrozenByCounterparty(ctx.View, accountID, issuerID, c.SendMax.Currency) {
+			return tx.TecFROZEN
 		}
 
-		// Check destination trust line freeze (if dest is not issuer)
-		// For destination, check if DESTINATION froze their own line (not issuer freeze)
+		// Check destination trust line freeze (if dest is not issuer): check if
+		// the destination froze their own side (not issuer freeze).
 		// Reference: CreateCheck.cpp L146-159
-		if destID != issuerID {
-			dstTLKey := keylet.Line(destID, issuerID, c.SendMax.Currency)
-			dstTLExists, _ := ctx.View.Exists(dstTLKey)
-			if dstTLExists {
-				dstTLData, err := ctx.View.Read(dstTLKey)
-				if err == nil {
-					dstTL, err := state.ParseRippleState(dstTLData)
-					if err == nil {
-						dstIsLow := keylet.IsLowAccount(destID, issuerID)
-						// Check if the destination froze their own side
-						if dstIsLow {
-							if dstTL.Flags&state.LsfLowFreeze != 0 {
-								return tx.TecFROZEN
-							}
-						} else {
-							if dstTL.Flags&state.LsfHighFreeze != 0 {
-								return tx.TecFROZEN
-							}
-						}
-					}
-				}
-			}
+		if isTrustLineFrozenBySelf(ctx.View, destID, issuerID, c.SendMax.Currency) {
+			return tx.TecFROZEN
 		}
 	}
 
@@ -281,4 +243,58 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	ctx.Account.OwnerCount++
 
 	return tx.TesSUCCESS
+}
+
+// isTrustLineFrozenByCounterparty reports whether the trust line between
+// account and issuer is frozen on the counterparty's (issuer's) side. Returns
+// false when account == issuer, the line does not exist, or the line cannot be
+// read or parsed (matching the silent-skip behavior of rippled's CreateCheck).
+func isTrustLineFrozenByCounterparty(view tx.LedgerView, accountID, issuerID [20]byte, currency string) bool {
+	if accountID == issuerID {
+		return false
+	}
+	tl, ok := readRippleState(view, accountID, issuerID, currency)
+	if !ok {
+		return false
+	}
+	freezeFlag := uint32(state.LsfHighFreeze)
+	if !keylet.IsLowAccount(accountID, issuerID) {
+		freezeFlag = state.LsfLowFreeze
+	}
+	return tl.Flags&freezeFlag != 0
+}
+
+// isTrustLineFrozenBySelf reports whether the trust line between account and
+// issuer is frozen on the account's own side. Returns false when account ==
+// issuer, the line does not exist, or the line cannot be read or parsed.
+func isTrustLineFrozenBySelf(view tx.LedgerView, accountID, issuerID [20]byte, currency string) bool {
+	if accountID == issuerID {
+		return false
+	}
+	tl, ok := readRippleState(view, accountID, issuerID, currency)
+	if !ok {
+		return false
+	}
+	freezeFlag := uint32(state.LsfLowFreeze)
+	if !keylet.IsLowAccount(accountID, issuerID) {
+		freezeFlag = state.LsfHighFreeze
+	}
+	return tl.Flags&freezeFlag != 0
+}
+
+func readRippleState(view tx.LedgerView, accountID, issuerID [20]byte, currency string) (*state.RippleState, bool) {
+	key := keylet.Line(accountID, issuerID, currency)
+	exists, _ := view.Exists(key)
+	if !exists {
+		return nil, false
+	}
+	data, err := view.Read(key)
+	if err != nil {
+		return nil, false
+	}
+	tl, err := state.ParseRippleState(data)
+	if err != nil {
+		return nil, false
+	}
+	return tl, true
 }

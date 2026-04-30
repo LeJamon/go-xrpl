@@ -308,28 +308,15 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled SetAccount.cpp preclaim() lines 281-307
 	if ctx.Rules().Enabled(amendment.FeatureClawback) {
 		if uSetFlag == AccountSetFlagAllowTrustLineClawback {
-			// Cannot set clawback if NoFreeze is already set
-			if (uFlagsIn & state.LsfNoFreeze) != 0 {
+			if uFlagsIn&state.LsfNoFreeze != 0 {
 				return tx.TecNO_PERMISSION
 			}
-			// Owner directory must be empty
-			ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-			dirExists, dirErr := ctx.View.Exists(ownerDirKey)
-			if dirErr == nil && dirExists {
-				dirData, readErr := ctx.View.Read(ownerDirKey)
-				if readErr == nil {
-					dirNode, parseErr := state.ParseDirectoryNode(dirData)
-					if parseErr == nil && len(dirNode.Indexes) > 0 {
-						return tx.TecOWNERS
-					}
-				}
+			if !ownerDirIsEmpty(ctx.View, ctx.AccountID) {
+				return tx.TecOWNERS
 			}
 		}
-		if uSetFlag == AccountSetFlagNoFreeze {
-			// Cannot set NoFreeze if clawback is already set
-			if (uFlagsIn & state.LsfAllowTrustLineClawback) != 0 {
-				return tx.TecNO_PERMISSION
-			}
+		if uSetFlag == AccountSetFlagNoFreeze && uFlagsIn&state.LsfAllowTrustLineClawback != 0 {
+			return tx.TecNO_PERMISSION
 		}
 	}
 
@@ -344,17 +331,8 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	bSetRequireAuth := (a.GetFlags()&AccountSetTxFlagRequireAuth != 0) ||
 		uSetFlag == AccountSetFlagRequireAuth
 	if bSetRequireAuth && (uFlagsIn&state.LsfRequireAuth) == 0 {
-		// Owner directory must be empty to set RequireAuth
-		ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-		dirExists, dirErr := ctx.View.Exists(ownerDirKey)
-		if dirErr == nil && dirExists {
-			dirData, readErr := ctx.View.Read(ownerDirKey)
-			if readErr == nil {
-				dirNode, parseErr := state.ParseDirectoryNode(dirData)
-				if parseErr == nil && len(dirNode.Indexes) > 0 {
-					return tx.TecOWNERS
-				}
-			}
+		if !ownerDirIsEmpty(ctx.View, ctx.AccountID) {
+			return tx.TecOWNERS
 		}
 		uFlagsOut |= state.LsfRequireAuth
 	}
@@ -578,4 +556,24 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	return tx.TesSUCCESS
+}
+
+// ownerDirIsEmpty reports whether the account's owner directory has no
+// entries. Missing, unreadable, or unparseable directories are treated as
+// empty — matching rippled's dirIsEmpty semantics.
+func ownerDirIsEmpty(view tx.LedgerView, accountID [20]byte) bool {
+	key := keylet.OwnerDir(accountID)
+	exists, err := view.Exists(key)
+	if err != nil || !exists {
+		return true
+	}
+	data, err := view.Read(key)
+	if err != nil {
+		return true
+	}
+	dirNode, err := state.ParseDirectoryNode(data)
+	if err != nil {
+		return true
+	}
+	return len(dirNode.Indexes) == 0
 }
