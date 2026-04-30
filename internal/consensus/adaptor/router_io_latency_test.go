@@ -36,6 +36,39 @@ func TestRouter_IOLatencyProbe_Drained(t *testing.T) {
 	t.Fatalf("expected LatencyMs > 0 after router drains probe, got %d", probe.LatencyMs())
 }
 
+// TestComponents_IOLatencyProbe_StartedAndStopped verifies the probe is
+// instantiated, started by Components.Start, and torn down by Stop.
+func TestComponents_IOLatencyProbe_StartedAndStopped(t *testing.T) {
+	probe := NewIOLatencyProbe(nil)
+	components := &Components{
+		IOLatency: probe,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	probe.Start(ctx, 10*time.Millisecond)
+
+	select {
+	case <-probe.Ch():
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("probe ticker did not produce a tick after Start")
+	}
+
+	components.IOLatency.Stop()
+
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-probe.Ch():
+	default:
+	}
+	select {
+	case <-probe.Ch():
+		t.Error("probe ticker still producing after Stop")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 // TestRouter_NoProbe_NoCrash verifies a router without a probe runs cleanly.
 // The nil-channel case must be silently disabled in the select.
 func TestRouter_NoProbe_NoCrash(t *testing.T) {

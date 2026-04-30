@@ -38,6 +38,12 @@ type Components struct {
 	// without re-resolving from config.
 	Archive *archive.Archive
 
+	// IOLatency measures scheduling latency of the Router goroutine and
+	// is exposed to RPC via server_info.io_latency_ms. Nil only when
+	// the consensus path is disabled (standalone mode), in which case
+	// the RPC handler reports 0.
+	IOLatency *IOLatencyProbe
+
 	// cancel functions for background goroutines
 	overlayCancel context.CancelFunc
 	routerCancel  context.CancelFunc
@@ -59,6 +65,14 @@ func (c *Components) Start() error {
 	// Start message router
 	routerCtx, routerCancel := context.WithCancel(context.Background())
 	c.routerCancel = routerCancel
+
+	// Start the IO latency probe ticker before launching the router so
+	// the probe channel is non-empty when Run begins selecting. Mirrors
+	// rippled's beast::io_latency_probe attached to the io_service thread.
+	if c.IOLatency != nil {
+		c.IOLatency.Start(routerCtx, DefaultProbePeriod)
+	}
+
 	go c.Router.Run(routerCtx)
 
 	return nil
@@ -66,6 +80,9 @@ func (c *Components) Start() error {
 
 // Stop gracefully shuts down all components.
 func (c *Components) Stop() {
+	if c.IOLatency != nil {
+		c.IOLatency.Stop()
+	}
 	if c.routerCancel != nil {
 		c.routerCancel()
 	}
@@ -194,6 +211,12 @@ func NewFromConfig(
 	router := NewRouter(engine, adaptor, modeManager, overlay.Messages())
 	router.SetManifestCache(manifestCache, overlay)
 
+	// Wire the IO latency probe into the router goroutine so the select
+	// loop measures its own scheduling delay. Mirrors rippled's
+	// beast::io_latency_probe attached to the io_service thread.
+	ioLatencyProbe := NewIOLatencyProbe(slog.Default().With("component", "io_latency"))
+	router.SetIOLatencyProbe(ioLatencyProbe)
+
 	// Plumb peer disconnect notifications back through the router so
 	// per-peer state (peerStates for catch-up, peerLCLs for the
 	// getNetworkLedger vote) is cleaned the instant a peer goes away.
@@ -220,6 +243,7 @@ func NewFromConfig(
 		ModeManager: modeManager,
 		Manifests:   manifestCache,
 		Archive:     validationArchive,
+		IOLatency:   ioLatencyProbe,
 	}, nil
 }
 
