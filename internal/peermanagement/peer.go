@@ -81,6 +81,7 @@ type Peer struct {
 
 	score   *PeerScore
 	traffic *TrafficCounter
+	metrics *peerMetrics
 
 	// squelchMap: per-validator squelch deadlines. Messages from a
 	// squelched validator are not relayed to this peer until expiry.
@@ -139,6 +140,7 @@ func NewPeer(id PeerID, endpoint Endpoint, inbound bool, identity *Identity, eve
 		events:        events,
 		score:         NewPeerScore(),
 		traffic:       NewTrafficCounter(),
+		metrics:       newPeerMetrics(nil),
 		squelchMap:    make(map[string]time.Time),
 		pingsInFlight: make(map[uint32]time.Time),
 		createdAt:     time.Now(),
@@ -555,6 +557,17 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			return err
 		}
 
+		// Account wire bytes (header + on-the-wire payload, before
+		// decompression) — matches rippled metrics_.recv.add_message at
+		// PeerImp.cpp:911 which uses bytes_transferred from the socket.
+		wireBytes := uint64(len(payload))
+		if header.Compressed {
+			wireBytes += HeaderSizeCompressed
+		} else {
+			wireBytes += HeaderSizeUncompressed
+		}
+		p.metrics.recv.addMessage(wireBytes)
+
 		if header.Compressed {
 			payload, err = DecompressLZ4(payload, int(header.UncompressedSize))
 			if err != nil {
@@ -591,10 +604,14 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 				return ErrConnectionClosed
 			}
 
-			_, err := conn.Write(data)
+			n, err := conn.Write(data)
 			if err != nil {
 				return err
 			}
+			// Mirrors rippled metrics_.sent.add_message at
+			// PeerImp.cpp:970 — account whatever the socket reports as
+			// transferred.
+			p.metrics.sent.addMessage(uint64(n))
 		}
 	}
 }
@@ -883,6 +900,14 @@ type PeerInfo struct {
 
 	Latency    time.Duration
 	HasLatency bool
+
+	// Per-peer wire byte counters and rolling-window throughput.
+	// Mirrors rippled PeerImp::metrics_ (PeerImp.h:226-230). Emitted
+	// under the `metrics` object in `peers` RPC.
+	TotalBytesRecv uint64
+	TotalBytesSent uint64
+	AvgBpsRecv     uint64
+	AvgBpsSent     uint64
 }
 
 func (p *Peer) Info() PeerInfo {
@@ -931,5 +956,9 @@ func (p *Peer) Info() PeerInfo {
 		Load:            p.Load(),
 		Latency:         latency,
 		HasLatency:      hasLatency,
+		TotalBytesRecv:  p.metrics.recv.totalBytesSnapshot(),
+		TotalBytesSent:  p.metrics.sent.totalBytesSnapshot(),
+		AvgBpsRecv:      p.metrics.recv.averageBytes(),
+		AvgBpsSent:      p.metrics.sent.averageBytes(),
 	}
 }

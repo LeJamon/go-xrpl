@@ -24,6 +24,7 @@ func makeClusterTestPeer(t *testing.T, id *Identity, host string, port uint16) *
 		remotePubKey: tok,
 		state:        PeerStateConnected,
 		traffic:      NewTrafficCounter(),
+		metrics:      newPeerMetrics(nil),
 		score:        NewPeerScore(),
 		squelchMap:   make(map[string]time.Time),
 		createdAt:    time.Now(),

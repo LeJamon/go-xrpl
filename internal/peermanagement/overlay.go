@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1715,6 +1716,14 @@ func (o *Overlay) PeersJSON() []map[string]any {
 		// or Server (outbound) header.
 		if p.Version != "" {
 			entry["version"] = p.Version
+		}
+		// PeerImp.cpp:493-501: emit the metrics object — rippled formats
+		// each value with std::to_string, so they're decimal strings.
+		entry["metrics"] = map[string]any{
+			"total_bytes_recv": strconv.FormatUint(p.TotalBytesRecv, 10),
+			"total_bytes_sent": strconv.FormatUint(p.TotalBytesSent, 10),
+			"avg_bps_recv":     strconv.FormatUint(p.AvgBpsRecv, 10),
+			"avg_bps_sent":     strconv.FormatUint(p.AvgBpsSent, 10),
 		}
 		out = append(out, entry)
 	}
