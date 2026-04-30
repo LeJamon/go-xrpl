@@ -443,22 +443,25 @@ func TestVaultDepositValidation(t *testing.T) {
 			errMsg:  "VaultID cannot be zero",
 		},
 		{
+			// rippled VaultDeposit.cpp:53-54 collapses missing / zero
+			// / negative into a single temBAD_AMOUNT — they all surface
+			// the same "must be positive" message in goXRPL.
 			name:    "invalid - missing Amount",
 			tx:      NewVaultDeposit("rOwner", makeValidVaultID(), tx.Amount{}),
 			wantErr: true,
-			errMsg:  "Amount is required",
+			errMsg:  "Amount must be positive",
 		},
 		{
 			name:    "invalid - zero Amount",
 			tx:      NewVaultDeposit("rOwner", makeValidVaultID(), tx.NewXRPAmount(0)),
 			wantErr: true,
-			errMsg:  "positive",
+			errMsg:  "Amount must be positive",
 		},
 		{
 			name:    "invalid - negative Amount",
 			tx:      NewVaultDeposit("rOwner", makeValidVaultID(), tx.NewXRPAmount(-100)),
 			wantErr: true,
-			errMsg:  "positive",
+			errMsg:  "Amount must be positive",
 		},
 		{
 			name: "invalid - universal flags set",
@@ -548,22 +551,24 @@ func TestVaultWithdrawValidation(t *testing.T) {
 			errMsg:  "VaultID cannot be zero",
 		},
 		{
+			// rippled VaultWithdraw.cpp:51-52 — missing / zero /
+			// negative all surface as temBAD_AMOUNT.
 			name:    "invalid - missing Amount",
 			tx:      NewVaultWithdraw("rOwner", makeValidVaultID(), tx.Amount{}),
 			wantErr: true,
-			errMsg:  "Amount is required",
+			errMsg:  "Amount must be positive",
 		},
 		{
 			name:    "invalid - zero Amount",
 			tx:      NewVaultWithdraw("rOwner", makeValidVaultID(), tx.NewXRPAmount(0)),
 			wantErr: true,
-			errMsg:  "positive",
+			errMsg:  "Amount must be positive",
 		},
 		{
 			name:    "invalid - negative Amount",
 			tx:      NewVaultWithdraw("rOwner", makeValidVaultID(), tx.NewXRPAmount(-100)),
 			wantErr: true,
-			errMsg:  "positive",
+			errMsg:  "Amount must be positive",
 		},
 		{
 			name: "invalid - DestinationTag without Destination",
