@@ -98,6 +98,83 @@ func TestOverlay_handleStatusChange_PropagatesNewStatus(t *testing.T) {
 	assert.Equal(t, message.NodeStatusMonitoring, peer.LastStatus())
 }
 
+// TestOverlay_handleStatusChange_PublishesPeerStatus mirrors rippled's
+// pubPeerStatus callback at PeerImp.cpp:1892-1963. The publisher must
+// receive UPPERCASE status / action strings, the wire ledger fields,
+// and a hex-encoded ledger_hash sourced from the peer's stored
+// closedLedger (PeerImp.cpp:1941-1948 re-reads under recentLock_).
+func TestOverlay_handleStatusChange_PublishesPeerStatus(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	peer := NewPeer(PeerID(7), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
+	o := newTestOverlayWithPeers(map[PeerID]*Peer{7: peer})
+
+	var got PeerStatusUpdate
+	var fired int
+	o.SetPeerStatusPublisher(func(u PeerStatusUpdate) {
+		fired++
+		got = u
+	})
+
+	closed := make([]byte, 32)
+	for i := range closed {
+		closed[i] = byte(0xAB)
+	}
+	first, last := uint32(100), uint32(200)
+	sc := &message.StatusChange{
+		NewStatus:   message.NodeStatusValidating,
+		NewEvent:    message.NodeEventAcceptedLedger,
+		LedgerSeq:   150,
+		LedgerHash:  closed,
+		NetworkTime: 700_000_000,
+		FirstSeq:    &first,
+		LastSeq:     &last,
+	}
+	encoded, err := message.Encode(sc)
+	require.NoError(t, err)
+
+	o.handleStatusChange(Event{PeerID: 7, Payload: encoded})
+
+	require.Equal(t, 1, fired, "publisher must fire exactly once for non-lostSync")
+	assert.Equal(t, "VALIDATING", got.Status, "rippled PeerImp.cpp:1908 — UPPERCASE")
+	assert.Equal(t, "ACCEPTED_LEDGER", got.Action, "rippled PeerImp.cpp:1924")
+	assert.Equal(t, uint32(150), got.LedgerIndex)
+	assert.Equal(t, uint32(700_000_000), got.Date)
+	assert.Equal(t, uint32(100), got.LedgerIndexMin)
+	assert.Equal(t, uint32(200), got.LedgerIndexMax)
+	assert.Equal(t,
+		"ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+		got.LedgerHash,
+		"PeerImp.cpp:1948 hex-encodes peer.closedLedgerHash_, not the wire bytes")
+}
+
+// TestOverlay_handleStatusChange_LostSyncSuppressesPublish covers
+// PeerImp.cpp:1812-1830 — rippled's lostSync branch returns before
+// pubPeerStatus is invoked, so subscribers never see a LOST_SYNC
+// peer_status event.
+func TestOverlay_handleStatusChange_LostSyncSuppressesPublish(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	peer := NewPeer(PeerID(7), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
+	o := newTestOverlayWithPeers(map[PeerID]*Peer{7: peer})
+
+	var fired int
+	o.SetPeerStatusPublisher(func(u PeerStatusUpdate) { fired++ })
+
+	sc := &message.StatusChange{
+		NewEvent:  message.NodeEventLostSync,
+		LedgerSeq: 0,
+	}
+	encoded, err := message.Encode(sc)
+	require.NoError(t, err)
+
+	o.handleStatusChange(Event{PeerID: 7, Payload: encoded})
+	assert.Equal(t, 0, fired,
+		"lostSync must not publish (PeerImp.cpp:1830 returns before pubPeerStatus)")
+}
+
 // TestOverlay_PeersJSON_StatusField mirrors PeerImp.cpp:463-491 — the
 // `status` field is emitted with the rippled spelling for each known
 // NodeStatus, and omitted when the peer has not reported one.

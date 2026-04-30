@@ -313,6 +313,24 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	publisher := rpc.NewPublisher(wsServer.GetSubscriptionManager())
 
+	// Wire pubPeerStatus → peer_status WebSocket subscription. Mirrors
+	// rippled NetworkOPs::pubPeerStatus (NetworkOPs.cpp:2514-2540) which
+	// broadcasts to InfoSubs registered for the sPeerStatus stream.
+	if consensusComponents != nil && consensusComponents.Overlay != nil {
+		consensusComponents.Overlay.SetPeerStatusPublisher(func(u peermanagement.PeerStatusUpdate) {
+			publisher.PublishPeerStatus(&rpc.PeerStatusEvent{
+				Type:           "peerStatusChange",
+				Status:         u.Status,
+				Action:         u.Action,
+				Date:           u.Date,
+				LedgerHash:     u.LedgerHash,
+				LedgerIndex:    u.LedgerIndex,
+				LedgerIndexMin: u.LedgerIndexMin,
+				LedgerIndexMax: u.LedgerIndexMax,
+			})
+		})
+	}
+
 	// Wire up ledger service events to WebSocket broadcasts
 	ledgerService.SetEventCallback(func(event *service.LedgerAcceptedEvent) {
 		if event == nil || event.LedgerInfo == nil {

@@ -6,12 +6,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -182,6 +184,11 @@ type Overlay struct {
 	providersMu         sync.RWMutex
 	ledgerHintProvider  func() (LedgerHints, bool)
 	validLedgerProvider func() (seq uint32, age time.Duration, ok bool)
+	// peerStatusPublisher: optional sink for pubPeerStatus updates.
+	// Wired by the RPC layer to broadcast over the peer_status
+	// WebSocket subscription. nil-safe — no-op when unset (tests,
+	// embedded usage, or RPC disabled).
+	peerStatusPublisher func(PeerStatusUpdate)
 
 	// Components
 	discovery  *Discovery
@@ -293,6 +300,93 @@ func (o *Overlay) validLedgerProviderSnapshot() func() (seq uint32, age time.Dur
 	o.providersMu.RLock()
 	defer o.providersMu.RUnlock()
 	return o.validLedgerProvider
+}
+
+// PeerStatusUpdate captures the post-decode TMStatusChange fields the
+// RPC layer needs to materialize a peer_status WebSocket event.
+// Mirrors the JSON shape produced by rippled's pubPeerStatus callback
+// at PeerImp.cpp:1892-1963: each field maps 1:1 onto the wire object,
+// and zero/empty values mean "field absent" (the RPC layer omits them
+// via `omitempty` to match rippled's `if (m->has_xxx)` gates).
+type PeerStatusUpdate struct {
+	// Status mirrors PeerImp.cpp:1895-1915: emitted when the inbound
+	// message carries a NewStatus, in rippled's UPPERCASE spelling.
+	Status string
+	// Action mirrors PeerImp.cpp:1917-1934: emitted when the message
+	// carries a NewEvent. Note that LOST_SYNC never reaches the
+	// callback in rippled — the early-return at 1812-1830 fires
+	// before pubPeerStatus is invoked — so the action field is
+	// limited to CLOSING_LEDGER/ACCEPTED_LEDGER/SWITCHED_LEDGER.
+	Action string
+	// LedgerIndex mirrors PeerImp.cpp:1936-1939 (`has_ledgerseq`).
+	LedgerIndex uint32
+	// LedgerHash mirrors PeerImp.cpp:1941-1949: rippled re-reads the
+	// peer's closedLedgerHash_ under recentLock_ rather than the raw
+	// wire bytes, so callers must source this from the peer state
+	// AFTER applyStatusChange.
+	LedgerHash string
+	// Date mirrors PeerImp.cpp:1951-1954 (`has_networktime`).
+	Date uint32
+	// LedgerIndexMin / LedgerIndexMax mirror PeerImp.cpp:1956-1960
+	// (`has_firstseq && has_lastseq`).
+	LedgerIndexMin uint32
+	LedgerIndexMax uint32
+}
+
+// SetPeerStatusPublisher wires a sink for pubPeerStatus events.
+// Mirrors rippled's NetworkOPs::pubPeerStatus (NetworkOPs.cpp:2514) —
+// the overlay invokes this callback for every non-lostSync TMStatusChange
+// after state has been recorded, mirroring PeerImp.cpp:1892-1963.
+// Passing nil disconnects the sink.
+func (o *Overlay) SetPeerStatusPublisher(fn func(PeerStatusUpdate)) {
+	o.providersMu.Lock()
+	o.peerStatusPublisher = fn
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) peerStatusPublisherSnapshot() func(PeerStatusUpdate) {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.peerStatusPublisher
+}
+
+// peerStatusUpperName mirrors PeerImp.cpp:1899-1913: the pubPeerStatus
+// callback emits status names in UPPERCASE (CONNECTING/...), distinct
+// from the lowercase strings used by the `peers` RPC at
+// PeerImp.cpp:467-485. Returns "" for nsUNKNOWN or any unknown enum
+// (rippled's switch falls through silently for the latter).
+func peerStatusUpperName(s message.NodeStatus) string {
+	switch s {
+	case message.NodeStatusConnecting:
+		return "CONNECTING"
+	case message.NodeStatusConnected:
+		return "CONNECTED"
+	case message.NodeStatusMonitoring:
+		return "MONITORING"
+	case message.NodeStatusValidating:
+		return "VALIDATING"
+	case message.NodeStatusShutting:
+		return "SHUTTING"
+	default:
+		return ""
+	}
+}
+
+// peerStatusActionName mirrors PeerImp.cpp:1921-1934. The lostSync
+// case is intentionally excluded: rippled's lostSync branch returns
+// before pubPeerStatus runs (PeerImp.cpp:1812-1830). Unknown enums
+// fall through silently.
+func peerStatusActionName(e message.NodeEvent) string {
+	switch e {
+	case message.NodeEventClosingLedger:
+		return "CLOSING_LEDGER"
+	case message.NodeEventAcceptedLedger:
+		return "ACCEPTED_LEDGER"
+	case message.NodeEventSwitchedLedger:
+		return "SWITCHED_LEDGER"
+	default:
+		return ""
+	}
 }
 
 // generateInstanceCookie matches rippled Application.cpp:
@@ -1074,19 +1168,54 @@ func (o *Overlay) handleStatusChange(evt Event) {
 		sc.NewStatus,
 	)
 
-	// PeerImp.cpp:1885-1890: gate on a fresh (<2 min) validated ledger.
-	if sc.LedgerSeq == 0 {
+	// PeerImp.cpp:1812-1830 — rippled's lostSync handling returns
+	// before either checkTracking or pubPeerStatus runs. Match that
+	// flow so a lostSync update never surfaces as a peer_status
+	// WebSocket event.
+	if sc.NewEvent == message.NodeEventLostSync {
 		return
 	}
-	provider := o.validLedgerProviderSnapshot()
-	if provider == nil {
-		return
+
+	// PeerImp.cpp:1885-1890: tracking check is gated on a fresh
+	// (<2 min) validated ledger. The gate must NOT short-circuit
+	// pubPeerStatus, which rippled invokes unconditionally for
+	// non-lostSync messages at PeerImp.cpp:1892-1963.
+	if sc.LedgerSeq != 0 {
+		if provider := o.validLedgerProviderSnapshot(); provider != nil {
+			if validSeq, age, ok := provider(); ok && validSeq != 0 && age < 2*time.Minute {
+				peer.CheckTracking(sc.LedgerSeq, validSeq)
+			}
+		}
 	}
-	validSeq, age, ok := provider()
-	if !ok || validSeq == 0 || age >= 2*time.Minute {
-		return
+
+	// PeerImp.cpp:1892-1963 — publish to peer_status subscribers.
+	if pub := o.peerStatusPublisherSnapshot(); pub != nil {
+		var ledgerHashHex string
+		if len(sc.LedgerHash) > 0 {
+			// PeerImp.cpp:1941-1948 re-reads peer.closedLedgerHash_
+			// under recentLock_ rather than echoing the raw wire
+			// bytes — the read-back captures whatever
+			// applyStatusChange retained (32-byte values stored,
+			// malformed wire bytes cleared).
+			if h, ok := peer.ClosedLedger(); ok {
+				ledgerHashHex = strings.ToUpper(hex.EncodeToString(h[:]))
+			}
+		}
+		var firstSeq, lastSeq uint32
+		if sc.FirstSeq != nil && sc.LastSeq != nil {
+			firstSeq = *sc.FirstSeq
+			lastSeq = *sc.LastSeq
+		}
+		pub(PeerStatusUpdate{
+			Status:         peerStatusUpperName(sc.NewStatus),
+			Action:         peerStatusActionName(sc.NewEvent),
+			LedgerIndex:    sc.LedgerSeq,
+			LedgerHash:     ledgerHashHex,
+			Date:           uint32(sc.NetworkTime),
+			LedgerIndexMin: firstSeq,
+			LedgerIndexMax: lastSeq,
+		})
 	}
-	peer.CheckTracking(sc.LedgerSeq, validSeq)
 }
 
 // handleSquelchMessage processes an inbound TMSquelch from a peer and
