@@ -41,10 +41,12 @@ func TestPeer_ApplyStatusChange_StoresNewStatus(t *testing.T) {
 	}
 }
 
-// TestPeer_ApplyStatusChange_StatusOverwritten verifies that a
-// subsequent TMStatusChange replaces the prior status — rippled's
-// last_status_ tracks only the latest message.
-func TestPeer_ApplyStatusChange_StatusOverwritten(t *testing.T) {
+// TestPeer_ApplyStatusChange_StatusRetention covers rippled's
+// last_status_ retention semantics (PeerImp.cpp:1799-1810):
+//   - a non-zero NewStatus overwrites the prior value
+//   - a TMStatusChange that omits new_status preserves the
+//     previously-recorded enum (the "preserve old status" branch)
+func TestPeer_ApplyStatusChange_StatusRetention(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)
 
@@ -55,11 +57,11 @@ func TestPeer_ApplyStatusChange_StatusOverwritten(t *testing.T) {
 	p.applyStatusChange(nil, nil, false, nil, nil, message.NodeStatusValidating)
 	assert.Equal(t, message.NodeStatusValidating, p.LastStatus())
 
-	// A subsequent TMStatusChange that omits new_status (proto3 default)
-	// must reset the recorded status — rippled re-evaluates
-	// has_newstatus() against the latest message only.
+	// rippled PeerImp.cpp:1801-1809: when the inbound TMStatusChange
+	// has no newstatus, last_status_.newstatus() is preserved.
 	p.applyStatusChange(nil, nil, false, nil, nil, 0)
-	assert.Equal(t, message.NodeStatus(0), p.LastStatus())
+	assert.Equal(t, message.NodeStatusValidating, p.LastStatus(),
+		"absent new_status must preserve prior value (rippled sticky retention)")
 }
 
 // TestPeer_ApplyStatusChange_StatusRecordedOnLostSync covers the

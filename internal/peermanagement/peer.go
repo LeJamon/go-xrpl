@@ -243,13 +243,18 @@ func (p *Peer) applyHandshakeExtras(x HandshakeExtras) {
 // Mirrors rippled PeerImp.cpp:1812-1883: lostSync clears closed/previous
 // ledger only; the (firstSeq, lastSeq) range is updated only when both
 // fields are present, then clamped to (0,0) if either is zero or inverted.
-// newStatus mirrors rippled's last_status_ retention: the latest TMStatusChange
-// is stored verbatim, so a lostSync update with a NewStatus still records it.
-// A zero (nsUNKNOWN) value means "no status reported in the latest update".
+// newStatus mirrors rippled PeerImp.cpp:1799-1810: last_status_.newstatus()
+// is sticky — the field is overwritten only when the inbound message carries
+// a non-zero NewStatus. A zero argument signals "no new_status in this wire
+// message" and preserves the previously-recorded enum (rippled's "preserve
+// old status" branch). The retention runs before the lostSync early-return,
+// so a lostSync update carrying a NewStatus still records it.
 func (p *Peer) applyStatusChange(closed, previous []byte, lostSync bool, firstSeq, lastSeq *uint32, newStatus message.NodeStatus) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.lastStatus = newStatus
+	if newStatus != 0 {
+		p.lastStatus = newStatus
+	}
 	if lostSync {
 		p.hasClosedLedger = false
 		p.hasPreviousLedger = false

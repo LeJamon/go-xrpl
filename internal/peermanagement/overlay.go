@@ -1744,8 +1744,15 @@ func (o *Overlay) PeersJSON() []map[string]any {
 		// negotiated value once the handshake has completed).
 		entry["protocol"] = p.Protocol
 		// PeerImp.cpp:463-491 — emit only when last_status_.has_newstatus().
-		if s := nodeStatusRPCName(p.Status); s != "" {
+		if s, known := nodeStatusRPCName(p.Status); s != "" {
 			entry["status"] = s
+		} else if !known && p.Status != 0 {
+			// PeerImp.cpp:487-490 — rippled logs a journal warning
+			// when last_status_.newstatus() falls outside the known
+			// enum, then drops the field. Mirror the diagnostic so
+			// out-of-range values aren't silent.
+			slog.Warn("Unknown peer status",
+				"t", "Overlay", "peer", p.ID, "status", int32(p.Status))
 		}
 		// PeerImp.cpp:493-501: emit the metrics object — rippled formats
 		// each value with std::to_string, so they're decimal strings.
@@ -1760,23 +1767,27 @@ func (o *Overlay) PeersJSON() []map[string]any {
 	return out
 }
 
-// nodeStatusRPCName mirrors PeerImp.cpp:463-491. Returns the empty
-// string for nsUNKNOWN (no status reported) or any unknown enum value,
-// signaling the caller to omit the `status` field entirely.
-func nodeStatusRPCName(s message.NodeStatus) string {
+// nodeStatusRPCName mirrors PeerImp.cpp:463-491. Returns the rippled
+// spelling for each known NodeStatus and a `known` flag distinguishing
+// "no status reported" (nsUNKNOWN, known=true) from "unrecognized
+// enum value" (known=false). The caller omits the `status` field for
+// either case but logs only the unknown-enum case, matching rippled.
+func nodeStatusRPCName(s message.NodeStatus) (string, bool) {
 	switch s {
+	case 0:
+		return "", true
 	case message.NodeStatusConnecting:
-		return "connecting"
+		return "connecting", true
 	case message.NodeStatusConnected:
-		return "connected"
+		return "connected", true
 	case message.NodeStatusMonitoring:
-		return "monitoring"
+		return "monitoring", true
 	case message.NodeStatusValidating:
-		return "validating"
+		return "validating", true
 	case message.NodeStatusShutting:
-		return "shutting"
+		return "shutting", true
 	default:
-		return ""
+		return "", false
 	}
 }
 
