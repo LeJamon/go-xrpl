@@ -266,6 +266,7 @@ func runServer(cmd *cobra.Command, args []string) {
 			proposers, convergeTime := engine.GetLastCloseInfo()
 			return proposers, int(convergeTime.Milliseconds())
 		}
+		types.Services.IOLatencyMs = consensusComponents.IOLatency.LatencyMs
 		// Expose the validator-manifest cache to the `manifest` RPC.
 		// The cache is shared — the router writes inbound manifests,
 		// the engine reads for ephemeral→master translation, and this
