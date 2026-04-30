@@ -1704,6 +1704,10 @@ func (o *Overlay) PeersJSON() []map[string]any {
 		if p.ServerDomain != "" {
 			entry["server_domain"] = p.ServerDomain
 		}
+		// PeerImp.cpp:411-412: emit only when the peer set a Network-ID.
+		if p.NetworkID != "" {
+			entry["network_id"] = p.NetworkID
+		}
 		if p.ClosedLedger != "" {
 			entry["ledger"] = p.ClosedLedger
 		}
@@ -1728,6 +1732,11 @@ func (o *Overlay) PeersJSON() []map[string]any {
 		}
 		if p.HasLatency {
 			entry["latency"] = uint32(p.Latency / time.Millisecond)
+		}
+		// PeerImp.cpp:416-417: version sourced from User-Agent (inbound)
+		// or Server (outbound) header.
+		if p.Version != "" {
+			entry["version"] = p.Version
 		}
 		// PeerImp.cpp:419 — emit unconditionally (rippled always has a
 		// negotiated value once the handshake has completed).

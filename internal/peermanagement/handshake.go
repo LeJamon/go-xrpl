@@ -751,10 +751,15 @@ func PeerFeatureEnabled(headers http.Header, feature, value string, localEnabled
 // wire but are validated-and-discarded (matching rippled PeerImp).
 type HandshakeExtras struct {
 	ServerDomain      string
+	NetworkID         string
 	ClosedLedger      [32]byte
 	PreviousLedger    [32]byte
 	HasClosedLedger   bool
 	HasPreviousLedger bool
+	// Raw version headers; applyHandshakeExtras picks one by direction,
+	// mirroring PeerImp::getVersion (PeerImp.cpp:381-386).
+	UserAgentHeader string
+	ServerHeader    string
 }
 
 // ValidateServerDomain enforces verifyHandshake's Server-Domain check
@@ -791,6 +796,18 @@ func ParseHandshakeExtras(
 	if v := headers.Get(HeaderServerDomain); v != "" {
 		out.ServerDomain = v
 	}
+
+	// Network-ID: rippled (Handshake.cpp:241-249) parses-and-validates
+	// the value but stores the raw header on PeerImp::headers_, surfacing
+	// it as a string in PeerImp::json (PeerImp.cpp:411-412). Numeric
+	// validation + mismatch rejection happens upstream in
+	// VerifyPeerHandshake; here we just round-trip the original string.
+	if v := headers.Get(HeaderNetworkID); v != "" {
+		out.NetworkID = v
+	}
+
+	out.UserAgentHeader = headers.Get(HeaderUserAgent)
+	out.ServerHeader = headers.Get(HeaderServer)
 
 	if v := headers.Get(HeaderClosedLedger); v != "" {
 		h, err := parseLedgerHashHeader(v)

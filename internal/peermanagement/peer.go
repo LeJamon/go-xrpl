@@ -99,6 +99,8 @@ type Peer struct {
 	tracking atomic.Int32
 
 	serverDomain      string
+	networkID         string
+	userAgent         string
 	closedLedger      [32]byte
 	previousLedger    [32]byte
 	hasClosedLedger   bool
@@ -210,6 +212,13 @@ func (p *Peer) applyHandshakeExtras(x HandshakeExtras) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.serverDomain = x.ServerDomain
+	p.networkID = x.NetworkID
+	// PeerImp::getVersion (PeerImp.cpp:381-386) picks by direction.
+	if p.inbound {
+		p.userAgent = x.UserAgentHeader
+	} else {
+		p.userAgent = x.ServerHeader
+	}
 	if x.HasClosedLedger {
 		p.closedLedger = x.ClosedLedger
 		p.hasClosedLedger = true
@@ -308,6 +317,15 @@ func (p *Peer) ServerDomain() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.serverDomain
+}
+
+// NetworkID reports the peer's reported Network-ID handshake header,
+// or "" if the peer omitted it. Mirrors rippled PeerImp's
+// headers_["Network-ID"] passthrough (PeerImp.cpp:411-412).
+func (p *Peer) NetworkID() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.networkID
 }
 
 // ProtocolVersion returns the negotiated peer-protocol token (e.g.
@@ -891,6 +909,8 @@ type PeerInfo struct {
 	MessagesOut    uint64
 
 	ServerDomain    string
+	NetworkID       string
+	Version         string
 	ClosedLedger    string
 	CompleteLedgers string
 	Tracking        PeerTracking
@@ -940,6 +960,8 @@ func (p *Peer) Info() PeerInfo {
 		MessagesIn:      stats.MessagesIn,
 		MessagesOut:     stats.MessagesOut,
 		ServerDomain:    p.serverDomain,
+		NetworkID:       p.networkID,
+		Version:         p.userAgent,
 		ClosedLedger:    closedLedger,
 		CompleteLedgers: completeLedgers,
 		Tracking:        PeerTracking(p.tracking.Load()),
