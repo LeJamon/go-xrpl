@@ -18,6 +18,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/consensus/adaptor"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
+	"github.com/LeJamon/goXRPLd/internal/observability"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	"github.com/LeJamon/goXRPLd/internal/rpc"
@@ -201,6 +202,14 @@ func runServer(cmd *cobra.Command, args []string) {
 	if err := ledgerService.Start(); err != nil {
 		serverLog.Fatal("Failed to start ledger service", "err", err)
 	}
+
+	// Start the goroutine-scheduling-latency sampler. Runs in both
+	// standalone and consensus modes; cancelled when runServer returns.
+	// Mirrors rippled's beast::io_latency_probe lifetime
+	// (rippled/src/xrpld/app/main/Application.cpp:1537).
+	samplerCtx, cancelSampler := context.WithCancel(context.Background())
+	defer cancelSampler()
+	observability.StartSchedLatencySampler(samplerCtx)
 
 	// Wire up RPC services
 	ledgerAdapter := rpc.NewLedgerServiceAdapter(ledgerService)

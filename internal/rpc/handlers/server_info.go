@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/internal/observability"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/LeJamon/goXRPLd/version"
 )
@@ -81,7 +82,7 @@ func buildServerInfo(human bool) map[string]interface{} {
 	info := map[string]interface{}{
 		"build_version":     BuildVersion,
 		"complete_ledgers":  completeLedgers,
-		"io_latency_ms":     schedLatencyMs(),
+		"io_latency_ms":     observability.SchedLatencyMs(),
 		"pubkey_node":       types.Services.NodePublicKey,
 		"server_state":      serverState,
 		"uptime":            uptime,
