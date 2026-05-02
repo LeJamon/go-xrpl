@@ -79,6 +79,13 @@ type Config struct {
 	WebsocketPingFrequency int                      `toml:"websocket_ping_frequency" mapstructure:"websocket_ping_frequency"`
 	ServerDomain           string                   `toml:"server_domain" mapstructure:"server_domain"`
 
+	// WebSocketAllowedOrigins restricts which Origin headers may upgrade to a
+	// WebSocket connection. An empty list allows all origins, matching
+	// rippled's default behavior. Entries are matched against the host:port of
+	// the request Origin (case-insensitive on host); the literal value "*"
+	// also allows all origins.
+	WebSocketAllowedOrigins []string `toml:"websocket_allowed_origins" mapstructure:"websocket_allowed_origins"`
+
 	// Genesis file path (JSON format)
 	// If empty, uses built-in default genesis configuration
 	GenesisFile               string `toml:"genesis_file" mapstructure:"genesis_file"`

@@ -314,8 +314,10 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	services.SetDispatcher(httpServer)
 
-	// Create WebSocket server for real-time subscriptions
-	wsServer := rpc.NewWebSocketServer(30*time.Second, services)
+	// Create WebSocket server for real-time subscriptions. The configured
+	// allowlist restricts Origin headers; an empty list allows all origins
+	// (matching rippled's default).
+	wsServer := rpc.NewWebSocketServer(30*time.Second, services, globalConfig.WebSocketAllowedOrigins)
 	wsServer.RegisterAllMethods()
 
 	// Create a ledger info provider adapter for WebSocket subscribe responses
