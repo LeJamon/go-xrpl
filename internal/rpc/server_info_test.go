@@ -5,11 +5,27 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// testNodePublicKey returns a deterministic node public key for fixtures
+// (33-byte secp256k1 compressed form, base58-encoded with the node prefix).
+func testNodePublicKey() string {
+	var pk [33]byte
+	pk[0] = 0x02
+	for i := 1; i < 33; i++ {
+		pk[i] = byte(i)
+	}
+	encoded, err := addresscodec.EncodeNodePublicKey(pk[:])
+	if err != nil {
+		panic(err)
+	}
+	return encoded
+}
 
 // mockLedgerServiceServerInfo extends mockLedgerService with server_info-specific behavior
 type mockLedgerServiceServerInfo struct {
@@ -58,7 +74,8 @@ func (m *mockLedgerServiceServerInfo) GetServerInfo() types.LedgerServerInfo {
 // servicesForServerInfo builds a per-test ServiceContainer with a server_info mock.
 func servicesForServerInfo(mock *mockLedgerServiceServerInfo) *types.ServiceContainer {
 	return &types.ServiceContainer{
-		Ledger: mock,
+		Ledger:        mock,
+		NodePublicKey: testNodePublicKey(),
 	}
 }
 
