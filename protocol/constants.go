@@ -22,3 +22,9 @@ const (
 	// NFTokenTransferFeeMax is the maximum NFToken transfer fee in basis points (50000 = 50%).
 	NFTokenTransferFeeMax uint16 = 50000
 )
+
+// RippleEpochUnix is the Unix timestamp of the XRPL epoch (2000-01-01
+// 00:00:00 UTC). Subtract from a Unix-seconds value to convert to
+// Ripple-Epoch seconds, the on-the-wire format rippled stamps onto
+// network-time fields.
+const RippleEpochUnix int64 = 946684800

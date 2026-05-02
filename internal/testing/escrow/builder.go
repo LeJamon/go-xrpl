@@ -8,20 +8,17 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	escrowtx "github.com/LeJamon/goXRPLd/internal/tx/escrow"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
-
-// RippleEpoch is the Unix timestamp for the Ripple epoch (January 1, 2000 00:00:00 UTC).
-// All Ripple timestamps are seconds since this epoch.
-const RippleEpoch = 946684800
 
 // ToRippleTime converts a Go time.Time to Ripple epoch time.
 func ToRippleTime(t time.Time) uint32 {
-	return uint32(t.Unix() - RippleEpoch)
+	return uint32(t.Unix() - protocol.RippleEpochUnix)
 }
 
 // FromRippleTime converts a Ripple epoch time to Go time.Time.
 func FromRippleTime(rippleTime uint32) time.Time {
-	return time.Unix(int64(rippleTime)+RippleEpoch, 0)
+	return time.Unix(int64(rippleTime)+protocol.RippleEpochUnix, 0)
 }
 
 // EscrowCreateBuilder provides a fluent interface for building EscrowCreate transactions.

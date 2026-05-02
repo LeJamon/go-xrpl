@@ -9,6 +9,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +19,7 @@ func buildTestValidation() *consensus.Validation {
 	v := &consensus.Validation{
 		Full:      true,
 		LedgerSeq: 100,
-		SignTime:  time.Unix(946684800+828618000, 0),
+		SignTime:  time.Unix(protocol.RippleEpochUnix+828618000, 0),
 		Cookie:    12345,
 		LoadFee:   5000,
 	}
@@ -508,7 +509,7 @@ func TestParseSTValidation_CloseTime(t *testing.T) {
 	// We build it by hand (type UINT32, field 7) and append the
 	// minimal required fields around it so the parser doesn't bail
 	// on missing mandatory fields.
-	closeEpoch := uint32(946684800 + 123456789 - 946684800) // XRPL epoch seconds
+	closeEpoch := uint32(123456789) // XRPL epoch seconds
 	var closeTimeBytes [4]byte
 	binary.BigEndian.PutUint32(closeTimeBytes[:], closeEpoch)
 
@@ -546,7 +547,7 @@ func TestParseSTValidation_CloseTime(t *testing.T) {
 	// signing_time (type 2, field 9)
 	buf = appendFieldHeader(buf, typeUINT32, fieldSigningTime)
 	var sigTimeBytes [4]byte
-	binary.BigEndian.PutUint32(sigTimeBytes[:], 946684800+1_000_000-946684800)
+	binary.BigEndian.PutUint32(sigTimeBytes[:], 1_000_000)
 	buf = append(buf, sigTimeBytes[:]...)
 
 	// ledger_hash (type 5, field 1) — must be non-zero to pass the
@@ -574,7 +575,7 @@ func TestParseSTValidation_CloseTime(t *testing.T) {
 	require.NoError(t, err, "parser must accept a validation with sfCloseTime")
 	assert.False(t, v.CloseTime.IsZero(),
 		"CloseTime must be populated when sfCloseTime is present")
-	assert.Equal(t, int64(closeEpoch)+946684800, v.CloseTime.Unix(),
+	assert.Equal(t, int64(closeEpoch)+protocol.RippleEpochUnix, v.CloseTime.Unix(),
 		"CloseTime must decode back to the original XRPL epoch seconds")
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/statecompare"
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/shamap"
 	"github.com/spf13/cobra"
 )
@@ -425,9 +426,8 @@ func processBlock(
 	}
 
 	// Setup ledger header
-	rippleEpoch := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-	closeTime := rippleEpoch.Add(time.Duration(postSnapshot.CloseTime) * time.Second)
-	parentCloseTime := rippleEpoch.Add(time.Duration(preSnapshot.CloseTime) * time.Second)
+	closeTime := time.Unix(protocol.RippleEpochUnix+int64(postSnapshot.CloseTime), 0).UTC()
+	parentCloseTime := time.Unix(protocol.RippleEpochUnix+int64(preSnapshot.CloseTime), 0).UTC()
 
 	ledgerHeader := header.LedgerHeader{
 		LedgerIndex:         targetLedger,

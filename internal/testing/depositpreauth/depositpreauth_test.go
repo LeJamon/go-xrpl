@@ -17,17 +17,16 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx/depositpreauth"
 	paymentPkg "github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/stretchr/testify/require"
 )
 
 // xrpAccount is the XRPL zero account address (20 bytes of zero).
 const xrpAccount = "rrrrrrrrrrrrrrrrrrrrrhoLvTp"
 
-const rippleEpoch = 946684800
-
 // rippleTime returns the current Ripple epoch time from the test environment.
 func rippleTime(env *jtx.TestEnv) uint32 {
-	return uint32(env.Now().Unix() - rippleEpoch)
+	return uint32(env.Now().Unix() - protocol.RippleEpochUnix)
 }
 
 // credentialKeylet computes the keylet for a credential.

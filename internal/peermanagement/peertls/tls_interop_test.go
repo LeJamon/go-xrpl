@@ -23,12 +23,8 @@ import (
 	btcecdsa "github.com/btcsuite/btcd/btcec/v2/ecdsa"
 
 	"github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
-
-// XRPL epoch (2000-01-01) offset from unix epoch — matches
-// peermanagement.XRPLEpochOffset. Inlined to keep this leaf-package
-// test free of circular imports back to peermanagement.
-const xrplEpochOffset = 946684800
 
 // nodePublicKeyPrefix is the base58 prefix byte for XRPL node public
 // keys (results in 'n' prefix). Mirrors peermanagement.NodePublicKeyPrefix.
@@ -135,7 +131,7 @@ func TestHandshake_Interop_RippledDocker(t *testing.T) {
 	nodePub := encodeNodePublicKey(priv.PubKey().SerializeCompressed())
 	sig := btcecdsa.Sign(priv, sharedValue).Serialize()
 	sigB64 := base64.StdEncoding.EncodeToString(sig)
-	netTime := strconv.FormatUint(uint64(time.Now().Unix())-xrplEpochOffset, 10)
+	netTime := strconv.FormatUint(uint64(time.Now().Unix()-protocol.RippleEpochUnix), 10)
 
 	req := "GET / HTTP/1.1\r\n" +
 		"User-Agent: peertls-interop-test\r\n" +

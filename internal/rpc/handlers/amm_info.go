@@ -11,6 +11,7 @@ import (
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // AMMInfoMethod handles the amm_info RPC method
@@ -205,14 +206,10 @@ const (
 	auctionSlotIntervalDuration = totalTimeSlotSecs / auctionSlotTimeIntervals // 4320 seconds
 )
 
-// rippleEpochOffset is the number of seconds between Unix epoch (1970-01-01)
-// and Ripple epoch (2000-01-01): 946684800 seconds.
-const rippleEpochOffset = 946684800
-
 // rippleEpochToISO8601 converts a Ripple epoch timestamp to an ISO 8601 string.
 // Matches rippled's to_iso8601() in AMMInfo.cpp.
 func rippleEpochToISO8601(rippleSeconds uint32) string {
-	unixTime := int64(rippleSeconds) + rippleEpochOffset
+	unixTime := int64(rippleSeconds) + protocol.RippleEpochUnix
 	t := time.Unix(unixTime, 0).UTC()
 	return t.Format("2006-01-02T15:04:05+0000")
 }

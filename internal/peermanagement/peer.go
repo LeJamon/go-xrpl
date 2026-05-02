@@ -122,6 +122,8 @@ type Peer struct {
 	firstLedgerSeq uint32
 	lastLedgerSeq  uint32
 
+	lastStatus message.NodeStatus
+
 	latencyMu     sync.RWMutex
 	pingsInFlight map[uint32]time.Time
 	latency       time.Duration
@@ -241,40 +243,66 @@ func (p *Peer) applyHandshakeExtras(x HandshakeExtras) {
 // Mirrors rippled PeerImp.cpp:1812-1883: lostSync clears closed/previous
 // ledger only; the (firstSeq, lastSeq) range is updated only when both
 // fields are present, then clamped to (0,0) if either is zero or inverted.
-func (p *Peer) applyStatusChange(closed, previous []byte, lostSync bool, firstSeq, lastSeq *uint32) {
+//
+// newStatus mirrors rippled PeerImp.cpp:1799-1810. Read carefully: rippled's
+// branches both end with `last_status_ = *m;`, which copy-assigns the
+// inbound proto verbatim — so the stored last_status_.newstatus() is
+// dropped whenever the wire message has no newstatus. The else-branch
+// additionally mutates the local `m` to carry the prior enum, so the
+// pubPeerStatus callback (which reads `m`, not last_status_) still sees
+// the inherited value once. We model the same split:
+//   - lastStatus is overwritten verbatim with the wire's NewStatus (zero
+//     argument drops the prior value, matching rippled's `peers` RPC).
+//   - The returned effective status is the wire value when set, or the
+//     prior lastStatus otherwise — consumed by handleStatusChange's
+//     pubPeerStatus emit so subscribers receive the inherited enum.
+//
+// The lostSync early-return runs after the lastStatus write, so a
+// lostSync update carrying a NewStatus still records it — but
+// handleStatusChange returns before any publish (PeerImp.cpp:1830).
+func (p *Peer) applyStatusChange(sc *message.StatusChange) message.NodeStatus {
+	if sc == nil {
+		return 0
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if lostSync {
+	effective := sc.NewStatus
+	if sc.NewStatus == 0 {
+		effective = p.lastStatus
+	}
+	p.lastStatus = sc.NewStatus
+	if sc.NewEvent == message.NodeEventLostSync {
 		p.hasClosedLedger = false
 		p.hasPreviousLedger = false
 		p.closedLedger = [32]byte{}
 		p.previousLedger = [32]byte{}
-		return
+		return effective
 	}
-	if len(closed) == 32 {
-		copy(p.closedLedger[:], closed)
+	if len(sc.LedgerHash) == 32 {
+		copy(p.closedLedger[:], sc.LedgerHash)
 		p.hasClosedLedger = true
 	} else {
 		p.hasClosedLedger = false
 		p.closedLedger = [32]byte{}
 	}
-	if len(previous) == 32 {
-		copy(p.previousLedger[:], previous)
+	if len(sc.LedgerHashPrevious) == 32 {
+		copy(p.previousLedger[:], sc.LedgerHashPrevious)
 		p.hasPreviousLedger = true
 	} else {
 		p.hasPreviousLedger = false
 		p.previousLedger = [32]byte{}
 	}
-	if firstSeq == nil || lastSeq == nil {
-		return
+	if sc.FirstSeq == nil || sc.LastSeq == nil {
+		return effective
 	}
-	if *firstSeq == 0 || *lastSeq == 0 || *lastSeq < *firstSeq {
+	if *sc.FirstSeq == 0 || *sc.LastSeq == 0 || *sc.LastSeq < *sc.FirstSeq {
 		p.firstLedgerSeq = 0
 		p.lastLedgerSeq = 0
 	} else {
-		p.firstLedgerSeq = *firstSeq
-		p.lastLedgerSeq = *lastSeq
+		p.firstLedgerSeq = *sc.FirstSeq
+		p.lastLedgerSeq = *sc.LastSeq
 	}
+	return effective
 }
 
 func (p *Peer) Tracking() PeerTracking {
@@ -366,6 +394,21 @@ func (p *Peer) LedgerRange() (uint32, uint32) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.firstLedgerSeq, p.lastLedgerSeq
+}
+
+// LastStatus returns the peer's most recently advertised NodeStatus
+// (rippled's last_status_.newstatus()). Returns 0 (nsUNKNOWN) when the
+// peer has never sent a TMStatusChange with new_status, OR when the
+// most recent TMStatusChange omitted new_status — both cases drop the
+// stored value, mirroring rippled's `last_status_ = *m;` overwrite at
+// PeerImp.cpp:1802 / 1807. This is what the `peers` RPC's
+// `if (last_status.has_newstatus())` gate (PeerImp.cpp:463) reads;
+// the per-event pubPeerStatus inheritance is a separate path that
+// flows through applyStatusChange's return value.
+func (p *Peer) LastStatus() message.NodeStatus {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lastStatus
 }
 
 func (p *Peer) Connect(ctx context.Context, cfg PeerConfig) error {
@@ -938,6 +981,8 @@ type PeerInfo struct {
 
 	Protocol string
 
+	Status message.NodeStatus
+
 	// Per-peer wire byte counters and rolling-window throughput.
 	// Mirrors rippled PeerImp::metrics_ (PeerImp.h:226-230). Emitted
 	// under the `metrics` object in `peers` RPC.
@@ -994,6 +1039,7 @@ func (p *Peer) Info() PeerInfo {
 		Latency:         latency,
 		HasLatency:      hasLatency,
 		Protocol:        p.protocolVersion,
+		Status:          p.lastStatus,
 		TotalBytesRecv:  p.metrics.recv.totalBytesSnapshot(),
 		TotalBytesSent:  p.metrics.sent.totalBytesSnapshot(),
 		AvgBpsRecv:      p.metrics.recv.averageBytes(),

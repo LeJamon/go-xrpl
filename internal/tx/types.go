@@ -5,8 +5,6 @@ import "fmt"
 // Type represents a transaction type code
 type Type uint16
 
-const RippleEpoch int64 = 946684800
-
 // All transaction type codes from rippled
 const (
 	TypeInvalid Type = 0xFFFF // Invalid/unknown type

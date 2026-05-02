@@ -70,13 +70,10 @@ func (v *VaultDeposit) Validate() error {
 		return ErrVaultIDZero
 	}
 
-	// Amount is required and must be positive
-	// Reference: rippled VaultDeposit.cpp:53-54
-	if v.Amount.IsZero() {
-		return ErrVaultAmountRequired
-	}
-	amountVal := v.Amount.Float64()
-	if amountVal <= 0 {
+	// Amount must be positive — rippled VaultDeposit.cpp:53-54 returns
+	// temBAD_AMOUNT for any sfAmount <= beast::zero (covers default,
+	// explicit zero, and negative), so one check suffices.
+	if v.Amount.Float64() <= 0 {
 		return ErrVaultAmountNotPos
 	}
 

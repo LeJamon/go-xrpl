@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // ProposalFromMessage converts a decoded ProposeSet message to a consensus.Proposal.
@@ -110,9 +111,9 @@ func HaveSetToMessage(id consensus.TxSetID, status message.TxSetStatus) *message
 }
 
 func xrplEpochToTime(epoch uint32) time.Time {
-	return time.Unix(int64(epoch)+xrplEpochOffset, 0)
+	return time.Unix(int64(epoch)+protocol.RippleEpochUnix, 0)
 }
 
 func timeToXrplEpoch(t time.Time) uint32 {
-	return uint32(t.Unix() - xrplEpochOffset)
+	return uint32(t.Unix() - protocol.RippleEpochUnix)
 }

@@ -5,14 +5,12 @@ import (
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
-
-// RippleEpoch is January 1, 2000 00:00:00 UTC - used for XRPL time calculations
-var RippleEpochRPC = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // ToRippleTime converts a time.Time to seconds since Ripple epoch
 func ToRippleTime(t time.Time) uint32 {
-	return uint32(t.Unix() - RippleEpochRPC.Unix())
+	return uint32(t.Unix() - protocol.RippleEpochUnix)
 }
 
 // LedgerCloseEvent represents a ledger close notification sent to subscribers
@@ -217,18 +215,27 @@ func NewManifestEvent(masterKey, signingKey, signature string, sequence uint32) 
 }
 
 // PeerStatusEvent represents peer connection status changes
-// This is sent to subscribers of the "peer_status" stream
+// This is sent to subscribers of the "peer_status" stream.
+// Mirrors rippled PeerImp.cpp:1892-1963 (pubPeerStatus callback) wrapped
+// by NetworkOPs.cpp:2514-2540 which adds `type: "peerStatusChange"`.
+//
+// Pointer fields preserve protobuf has-presence: nil = wire field
+// absent (rippled's `if (m->has_xxx)` is false → JSON field omitted),
+// non-nil = emit even when value is 0. This distinction matters because
+// JSON `omitempty` on a bare uint32 cannot distinguish "absent" from
+// "value 0", but rippled's emit gates rely on the protobuf has-bit.
 type PeerStatusEvent struct {
-	Type           string `json:"type"`                       // Always "peerStatusChange"
-	Action         string `json:"action"`                     // Action type (see constants below)
-	Date           uint32 `json:"date"`                       // Time of status change (Ripple epoch)
-	LedgerHash     string `json:"ledger_hash,omitempty"`      // Ledger hash (if relevant)
-	LedgerIndex    uint32 `json:"ledger_index,omitempty"`     // Ledger index (if relevant)
-	LedgerIndexMax uint32 `json:"ledger_index_max,omitempty"` // Max ledger index peer has
-	LedgerIndexMin uint32 `json:"ledger_index_min,omitempty"` // Min ledger index peer has
+	Type           string  `json:"type"`                       // Always "peerStatusChange"
+	Status         string  `json:"status,omitempty"`           // Peer's advertised status (UPPERCASE: CONNECTING/CONNECTED/MONITORING/VALIDATING/SHUTTING)
+	Action         string  `json:"action,omitempty"`           // Action type (see constants below)
+	Date           *uint32 `json:"date,omitempty"`             // Time of status change (Ripple epoch). Auto-stamped by the overlay so always non-nil in practice (PeerImp.cpp:1796-1797).
+	LedgerHash     string  `json:"ledger_hash,omitempty"`      // Ledger hash (peer's post-apply closedLedgerHash_; empty if wire didn't carry has_ledgerhash)
+	LedgerIndex    *uint32 `json:"ledger_index,omitempty"`     // Ledger index — nil when peer didn't advertise ledger_seq
+	LedgerIndexMax *uint32 `json:"ledger_index_max,omitempty"` // Max ledger index peer has — nil unless paired with min (PeerImp.cpp:1956-1960)
+	LedgerIndexMin *uint32 `json:"ledger_index_min,omitempty"` // Min ledger index peer has — nil unless paired with max
 }
 
-// Peer status actions
+// Peer status actions — rippled PeerImp.cpp:1921-1932.
 const (
 	PeerActionClosingLedger  = "CLOSING_LEDGER"
 	PeerActionAcceptedLedger = "ACCEPTED_LEDGER"
@@ -236,12 +243,21 @@ const (
 	PeerActionLostSync       = "LOST_SYNC"
 )
 
+// Peer status strings — rippled PeerImp.cpp:1899-1913.
+const (
+	PeerStatusConnecting = "CONNECTING"
+	PeerStatusConnected  = "CONNECTED"
+	PeerStatusMonitoring = "MONITORING"
+	PeerStatusValidating = "VALIDATING"
+	PeerStatusShutting   = "SHUTTING"
+)
+
 // NewPeerStatusEvent creates a new PeerStatusEvent
 func NewPeerStatusEvent(action string, date uint32) *PeerStatusEvent {
 	return &PeerStatusEvent{
 		Type:   "peerStatusChange",
 		Action: action,
-		Date:   date,
+		Date:   &date,
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 
@@ -74,8 +75,8 @@ func (r *LedgerRepository) scanLedgerInfo(row interface {
 	copy(info.AccountHash[:], accountHashBytes)
 	copy(info.TransactionHash[:], txHashBytes)
 	info.TotalCoins = relationaldb.Amount(totalCoins)
-	info.CloseTime = time.Unix(closingTime+946684800, 0).UTC()
-	info.ParentCloseTime = time.Unix(prevClosingTime+946684800, 0).UTC()
+	info.CloseTime = time.Unix(closingTime+protocol.RippleEpochUnix, 0).UTC()
+	info.ParentCloseTime = time.Unix(prevClosingTime+protocol.RippleEpochUnix, 0).UTC()
 
 	return &info, nil
 }
@@ -207,8 +208,8 @@ func (r *LedgerRepository) GetHashesByRange(ctx context.Context, minSeq, maxSeq 
 }
 
 func (r *LedgerRepository) SaveValidatedLedger(ctx context.Context, ledger *relationaldb.LedgerInfo, current bool) error {
-	closingTime := ledger.CloseTime.Unix() - 946684800
-	prevClosingTime := ledger.ParentCloseTime.Unix() - 946684800
+	closingTime := ledger.CloseTime.Unix() - protocol.RippleEpochUnix
+	prevClosingTime := ledger.ParentCloseTime.Unix() - protocol.RippleEpochUnix
 
 	query := `INSERT INTO ledgers (ledger_hash, ledger_seq, prev_hash, account_set_hash, trans_set_hash,
 			  total_coins, closing_time, prev_closing_time, close_time_res, close_flags)

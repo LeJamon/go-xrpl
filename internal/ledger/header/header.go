@@ -5,13 +5,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"time"
+
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // LCFNoConsensusTime Ledger close flags
 const LCFNoConsensusTime uint8 = 0x01
-
-// xrplEpochOffset is the difference between Unix epoch and XRPL epoch (2000-01-01 00:00:00 UTC).
-const xrplEpochOffset int64 = 946684800
 
 const (
 	// SizeBase matches rippled's serialized ledger header format exactly.
@@ -198,7 +197,7 @@ func timeToXRPLEpoch(t time.Time) uint32 {
 	if t.IsZero() {
 		return 0
 	}
-	secs := t.Unix() - xrplEpochOffset
+	secs := t.Unix() - protocol.RippleEpochUnix
 	if secs < 0 {
 		return 0
 	}
@@ -211,5 +210,5 @@ func xrplEpochToTime(epoch uint32) time.Time {
 	if epoch == 0 {
 		return time.Time{}
 	}
-	return time.Unix(int64(epoch)+xrplEpochOffset, 0)
+	return time.Unix(int64(epoch)+protocol.RippleEpochUnix, 0)
 }

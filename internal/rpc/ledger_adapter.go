@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 
@@ -125,15 +126,12 @@ func (a *ledgerReaderAdapter) TotalDrops() uint64 {
 	return a.l.TotalDrops()
 }
 
-// rippleEpoch is 2000-01-01T00:00:00Z in Unix seconds
-const rippleEpoch int64 = 946684800
-
 func (a *ledgerReaderAdapter) CloseTime() int64 {
 	t := a.l.CloseTime()
 	if t.IsZero() {
 		return 0
 	}
-	return t.Unix() - rippleEpoch
+	return t.Unix() - protocol.RippleEpochUnix
 }
 
 func (a *ledgerReaderAdapter) CloseTimeResolution() uint32 {
@@ -149,7 +147,7 @@ func (a *ledgerReaderAdapter) ParentCloseTime() int64 {
 	if t.IsZero() {
 		return 0
 	}
-	return t.Unix() - rippleEpoch
+	return t.Unix() - protocol.RippleEpochUnix
 }
 
 func (a *ledgerReaderAdapter) TxMapHash() [32]byte {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // Common errors for gRPC handlers
@@ -164,12 +165,9 @@ func formatHash(hash [32]byte) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// RippleEpoch is January 1, 2000 00:00:00 UTC (XRPL epoch)
-var RippleEpoch = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-
 // toRippleTime converts a time.Time to seconds since the Ripple epoch.
 func toRippleTime(t time.Time) uint32 {
-	return uint32(t.Unix() - RippleEpoch.Unix())
+	return uint32(t.Unix() - protocol.RippleEpochUnix)
 }
 
 // getLedgerEntryType extracts the ledger entry type from serialized data.

@@ -26,6 +26,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx/amm"
 	"github.com/LeJamon/goXRPLd/internal/tx/trustset"
 	"github.com/LeJamon/goXRPLd/internal/txq"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // Fixture represents a single xrpl-fixtures test vector file.
@@ -152,8 +153,9 @@ type AccountState struct {
 	Flags      *uint32 `json:"flags,omitempty"`
 }
 
-// rippleEpoch is Jan 1, 2000 00:00:00 UTC — the Ripple epoch start.
-var rippleEpoch = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+// rippleEpoch is Jan 1, 2000 00:00:00 UTC as a time.Time value, derived
+// from the canonical protocol.RippleEpochUnix constant.
+var rippleEpoch = time.Unix(protocol.RippleEpochUnix, 0).UTC()
 
 // defaultEnvConfig returns rippled's standard test defaults for fixtures
 // that don't specify an env section. Matches rippled's jtx::Env default

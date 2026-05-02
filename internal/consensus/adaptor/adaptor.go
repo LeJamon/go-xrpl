@@ -24,6 +24,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 var (
@@ -1062,7 +1063,7 @@ func (a *Adaptor) broadcastStatus(event message.NodeEvent) {
 	}
 
 	// NetworkTime: XRPL epoch seconds (rippled sends seconds, not microseconds)
-	networkTime := uint64(time.Now().Unix() - xrplEpochOffset)
+	networkTime := uint64(time.Now().Unix() - protocol.RippleEpochUnix)
 
 	firstSeq := uint32(2) // genesis sequence
 	lastSeq := l.Sequence()

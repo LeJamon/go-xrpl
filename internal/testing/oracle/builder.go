@@ -9,9 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx/oracle"
 )
 
-// XRPLEpochOffset is the XRPL epoch (Jan 1, 2000 00:00:00 UTC) in Unix seconds.
-const XRPLEpochOffset = 946684800
-
 // OracleSetBuilder provides a fluent interface for building OracleSet transactions.
 type OracleSetBuilder struct {
 	account           *testing.Account

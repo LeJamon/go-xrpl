@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx/depositpreauth"
 	paymentPkg "github.com/LeJamon/goXRPLd/internal/tx/payment"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -820,12 +821,9 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 	t.Log("DepositPreauth credentials test passed")
 }
 
-// rippleEpoch is the XRPL epoch start (2000-01-01 00:00:00 UTC).
-const rippleEpoch = 946684800
-
 // rippleTime returns the current Ripple epoch time from the test environment.
 func rippleTime(env *xrplgoTesting.TestEnv) uint32 {
-	return uint32(env.Now().Unix() - rippleEpoch)
+	return uint32(env.Now().Unix() - protocol.RippleEpochUnix)
 }
 
 // credentialKeylet computes the keylet for a credential given subject, issuer, and raw credential type.

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 
@@ -37,22 +38,18 @@ func (r *ValidationRepository) getExecutor() executor {
 const validationSelectCols = `ledger_seq, initial_seq, ledger_hash, node_pubkey,
 	sign_time, seen_time, flags, raw`
 
-// xrplEpochOffset matches the SQLite backend so times round-trip across
-// backends without drift. See the SQLite impl for rationale.
-const xrplEpochOffset int64 = 946684800
-
 func toXRPLEpochSeconds(t time.Time) int64 {
 	if t.IsZero() {
 		return 0
 	}
-	return t.Unix() - xrplEpochOffset
+	return t.Unix() - protocol.RippleEpochUnix
 }
 
 func fromXRPLEpochSeconds(s int64) time.Time {
 	if s == 0 {
 		return time.Time{}
 	}
-	return time.Unix(s+xrplEpochOffset, 0).UTC()
+	return time.Unix(s+protocol.RippleEpochUnix, 0).UTC()
 }
 
 func (r *ValidationRepository) Save(ctx context.Context, v *relationaldb.ValidationRecord) error {

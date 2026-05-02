@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -124,7 +125,7 @@ func TestCheck_CreateValid(t *testing.T) {
 	t.Run("OptionalFields", func(t *testing.T) {
 		// Expiration
 		result := env.Submit(check.CheckCreate(alice, bob, USD(50)).
-			Expiration(uint32(env.Now().Unix()-946684800) + 1).Build())
+			Expiration(uint32(env.Now().Unix()-protocol.RippleEpochUnix) + 1).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
@@ -148,7 +149,7 @@ func TestCheck_CreateValid(t *testing.T) {
 
 		// All optional fields combined
 		result = env.Submit(check.CheckCreate(alice, bob, USD(50)).
-			Expiration(uint32(env.Now().Unix()-946684800) + 1).
+			Expiration(uint32(env.Now().Unix()-protocol.RippleEpochUnix) + 1).
 			SourceTag(12).
 			DestTag(13).
 			InvoiceID("0000000000000000000000000000000000000000000000000000000000000004").Build())
@@ -518,7 +519,7 @@ func TestCheck_CreateInvalid(t *testing.T) {
 	// Expired expiration
 	t.Run("ExpiredExpiration", func(t *testing.T) {
 		// Ripple epoch: current close time
-		now := uint32(env.Now().Unix() - 946684800)
+		now := uint32(env.Now().Unix() - protocol.RippleEpochUnix)
 		result := env.Submit(check.CheckCreate(alice, bob, USD(50)).Expiration(now).Build())
 		require.Equal(t, "tecEXPIRED", result.Code)
 		env.Close()
@@ -1212,7 +1213,7 @@ func TestCheck_CashInvalid(t *testing.T) {
 	env.Close()
 
 	// Create an expiring check
-	now := uint32(env.Now().Unix() - 946684800)
+	now := uint32(env.Now().Unix() - protocol.RippleEpochUnix)
 	chkIDExp := check.GetCheckID(alice, env.Seq(alice))
 	env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10))).Expiration(now + 1).Build())
 	env.Close()
@@ -1503,7 +1504,7 @@ func TestCheck_CancelValid(t *testing.T) {
 	env.Close()
 
 	// Three checks that expire in 10 minutes.
-	now := uint32(env.Now().Unix() - 946684800)
+	now := uint32(env.Now().Unix() - protocol.RippleEpochUnix)
 	chkIDNotExp1 := check.GetCheckID(alice, env.Seq(alice))
 	env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10))).Expiration(now + 600).Build())
 	env.Close()
@@ -1520,7 +1521,7 @@ func TestCheck_CancelValid(t *testing.T) {
 	// Re-capture now so that expiration is in the future during creation.
 	// All three are created without intermediate Close() calls since Close()
 	// advances time by 10 seconds, which would expire them.
-	now = uint32(env.Now().Unix() - 946684800)
+	now = uint32(env.Now().Unix() - protocol.RippleEpochUnix)
 	chkIDExp1 := check.GetCheckID(alice, env.Seq(alice))
 	env.Submit(check.CheckCreate(alice, bob, USD(10)).Expiration(now + 1).Build())
 

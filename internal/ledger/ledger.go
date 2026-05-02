@@ -887,8 +887,6 @@ func (l *Ledger) SerializeHeader() []byte {
 	return data
 }
 
-const rippleEpochUnix int64 = 946684800
-
 // calculateLedgerHash computes the hash of a ledger header
 // This is duplicated from genesis package to avoid circular imports
 func calculateLedgerHash(h header.LedgerHeader) [32]byte {
@@ -909,11 +907,11 @@ func calculateLedgerHash(h header.LedgerHeader) [32]byte {
 	data = append(data, h.AccountHash[:]...)
 
 	parentCloseBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(parentCloseBytes, uint32(h.ParentCloseTime.Unix()-rippleEpochUnix))
+	binary.BigEndian.PutUint32(parentCloseBytes, uint32(h.ParentCloseTime.Unix()-protocol.RippleEpochUnix))
 	data = append(data, parentCloseBytes...)
 
 	closeTimeBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(closeTimeBytes, uint32(h.CloseTime.Unix()-rippleEpochUnix))
+	binary.BigEndian.PutUint32(closeTimeBytes, uint32(h.CloseTime.Unix()-protocol.RippleEpochUnix))
 	data = append(data, closeTimeBytes...)
 
 	data = append(data, byte(h.CloseTimeResolution))

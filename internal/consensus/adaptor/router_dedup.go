@@ -7,16 +7,8 @@ import (
 
 	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
-
-// xrplEpochUnixOffset is the delta between Unix epoch (1970-01-01) and
-// XRPL NetClock epoch (2000-01-01). The proposal close-time field on
-// the wire — and in rippled's proposalUniqueId hash input — is seconds
-// since the XRPL epoch, NOT seconds since Unix epoch. Keeping this
-// separate from the converter.go alias documents intent at the call
-// site where the difference matters most (divergent hashes = dedup
-// desync across mixed Go/rippled peers).
-const xrplEpochUnixOffset int64 = 946684800
 
 // hashProposalSuppression returns the suppression key for a proposal,
 // matching rippled's proposalUniqueId at
@@ -37,7 +29,7 @@ const xrplEpochUnixOffset int64 = 946684800
 //   - `add32(closeTime.time_since_epoch().count())` feeds the XRPL
 //     NetClock count — seconds since the XRPL epoch (2000-01-01 UTC),
 //     NOT Unix epoch. We derive that count from Proposal.CloseTime via
-//     `Unix() - xrplEpochUnixOffset`, exactly matching the converter's
+//     `Unix() - protocol.RippleEpochUnix`, exactly matching the converter's
 //     wire-format convention.
 //   - `addVL` writes rippled's variable-length length prefix (1–3 bytes,
 //     see Serializer::addEncoded) followed by the raw bytes. For the
@@ -71,7 +63,7 @@ func hashProposalSuppression(p *consensus.Proposal) [32]byte {
 	// pre-epoch Time still produces a deterministic hash rather than
 	// wrapping to a large positive uint32.
 	var closeTimeSec uint32
-	if ct := p.CloseTime.Unix() - xrplEpochUnixOffset; ct > 0 {
+	if ct := p.CloseTime.Unix() - protocol.RippleEpochUnix; ct > 0 {
 		closeTimeSec = uint32(ct)
 	}
 	buf = binary.BigEndian.AppendUint32(buf, closeTimeSec)

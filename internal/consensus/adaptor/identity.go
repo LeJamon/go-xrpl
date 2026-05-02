@@ -147,7 +147,7 @@ func buildProposalSigningData(p *consensus.Proposal) []byte {
 	buf = append(buf, byte(p.Position>>24), byte(p.Position>>16), byte(p.Position>>8), byte(p.Position))
 
 	// CloseTime as XRPL epoch seconds (4 bytes, big-endian)
-	closeTimeSec := uint32(p.CloseTime.Unix() - xrplEpochOffset)
+	closeTimeSec := uint32(p.CloseTime.Unix() - protocol.RippleEpochUnix)
 	buf = append(buf, byte(closeTimeSec>>24), byte(closeTimeSec>>16), byte(closeTimeSec>>8), byte(closeTimeSec))
 
 	// PreviousLedger (32 bytes)
@@ -199,7 +199,7 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 	buf = append(buf, byte(v.LedgerSeq>>24), byte(v.LedgerSeq>>16), byte(v.LedgerSeq>>8), byte(v.LedgerSeq))
 
 	// sfSigningTime (type 2, field 9)
-	signTimeSec := uint32(v.SignTime.Unix() - xrplEpochOffset)
+	signTimeSec := uint32(v.SignTime.Unix() - protocol.RippleEpochUnix)
 	buf = appendFieldHeader(buf, typeUINT32, fieldSigningTime)
 	buf = append(buf, byte(signTimeSec>>24), byte(signTimeSec>>16), byte(signTimeSec>>8), byte(signTimeSec))
 
@@ -305,5 +305,3 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 	return hash[:]
 }
 
-// xrplEpochOffset is the difference between Unix epoch and XRPL epoch (2000-01-01 00:00:00 UTC).
-const xrplEpochOffset int64 = 946684800

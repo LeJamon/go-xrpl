@@ -34,7 +34,6 @@ var (
 	ErrVaultDataEmpty        = tx.Errorf(tx.TemMALFORMED, "Data cannot be empty if present")
 	ErrVaultDomainIDZero     = tx.Errorf(tx.TemMALFORMED, "DomainID cannot be zero")
 	ErrVaultDomainNotPrivate = tx.Errorf(tx.TemMALFORMED, "DomainID only allowed on private vaults")
-	ErrVaultAmountRequired   = tx.Errorf(tx.TemBAD_AMOUNT, "Amount is required")
 	ErrVaultAmountNotPos     = tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
 	ErrVaultHolderRequired   = tx.Errorf(tx.TemMALFORMED, "Holder is required")
 	ErrVaultHolderIsSelf     = tx.Errorf(tx.TemMALFORMED, "Holder cannot be same as issuer")

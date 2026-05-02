@@ -7,12 +7,11 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	paychan "github.com/LeJamon/goXRPLd/internal/tx/paychan"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
-const RippleEpoch = 946684800
-
 func ToRippleTime(t time.Time) uint32 {
-	return uint32(t.Unix() - RippleEpoch)
+	return uint32(t.Unix() - protocol.RippleEpochUnix)
 }
 
 type ChannelCreateBuilder struct {

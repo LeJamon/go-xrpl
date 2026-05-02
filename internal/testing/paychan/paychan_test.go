@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/testing/credential"
 	"github.com/LeJamon/goXRPLd/internal/testing/depositpreauth"
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/protocol"
 
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/stretchr/testify/require"
@@ -676,7 +677,7 @@ func TestPayChan_Expiration(t *testing.T) {
 	require.Equal(t, minExpiration, exp)
 
 	// Advance past expiration
-	env.SetTime(time.Unix(int64(minExpiration)+RippleEpoch, 0))
+	env.SetTime(time.Unix(int64(minExpiration)+protocol.RippleEpochUnix, 0))
 	env.Close()
 
 	// Try to extend the expiration after the expiration has already passed

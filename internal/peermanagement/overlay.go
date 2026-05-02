@@ -6,12 +6,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,6 +22,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/cluster"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/peertls"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -182,6 +185,11 @@ type Overlay struct {
 	providersMu         sync.RWMutex
 	ledgerHintProvider  func() (LedgerHints, bool)
 	validLedgerProvider func() (seq uint32, age time.Duration, ok bool)
+	// peerStatusPublisher: optional sink for pubPeerStatus updates.
+	// Wired by the RPC layer to broadcast over the peer_status
+	// WebSocket subscription. nil-safe — no-op when unset (tests,
+	// embedded usage, or RPC disabled).
+	peerStatusPublisher func(PeerStatusUpdate)
 
 	// Components
 	discovery  *Discovery
@@ -293,6 +301,102 @@ func (o *Overlay) validLedgerProviderSnapshot() func() (seq uint32, age time.Dur
 	o.providersMu.RLock()
 	defer o.providersMu.RUnlock()
 	return o.validLedgerProvider
+}
+
+// PeerStatusUpdate captures the post-decode TMStatusChange fields the
+// RPC layer needs to materialize a peer_status WebSocket event. Pointer
+// fields preserve protobuf has-presence; nil means "wire field absent,
+// rippled's `if (m->has_xxx)` gate is false" and the RPC layer omits the
+// JSON field. Mirrors PeerImp.cpp:1892-1963.
+type PeerStatusUpdate struct {
+	// Status mirrors PeerImp.cpp:1895-1915. UPPERCASE spelling.
+	// Carries the post-inheritance value returned by applyStatusChange,
+	// so a status-less wire message still emits the prior enum once
+	// (rippled's `m->set_newstatus(status)` mutation at PeerImp.cpp:1808).
+	Status string
+	// Action mirrors PeerImp.cpp:1917-1934 — CLOSING_LEDGER,
+	// ACCEPTED_LEDGER, SWITCHED_LEDGER. LOST_SYNC is unreachable
+	// because handleStatusChange returns at PeerImp.cpp:1830 before
+	// the publish.
+	Action string
+	// LedgerHash mirrors PeerImp.cpp:1941-1949: rippled re-reads the
+	// peer's closedLedgerHash_ under recentLock_ rather than echoing
+	// the raw wire bytes. When wire bytes were malformed, that stored
+	// hash is zeroed at PeerImp.cpp:1850 and rippled emits the
+	// 64-char zero hex string — so callers must ALWAYS emit a value
+	// when has_ledgerhash, falling back to "00…00" if the peer's
+	// post-apply state was cleared.
+	LedgerHash string
+	// LedgerIndex mirrors PeerImp.cpp:1936-1939 (`has_ledgerseq`).
+	// nil = field absent; non-nil = emit (even when value is 0 — a
+	// peer can legitimately advertise the genesis seq).
+	LedgerIndex *uint32
+	// Date mirrors PeerImp.cpp:1951-1954 (`has_networktime`). rippled
+	// auto-stamps this at PeerImp.cpp:1796-1797 when the wire didn't
+	// carry it, so handleStatusChange does the same and Date is
+	// always non-nil here.
+	Date *uint32
+	// LedgerIndexMin / LedgerIndexMax mirror PeerImp.cpp:1956-1960
+	// (`has_firstseq && has_lastseq`). Both are nil unless both wire
+	// fields were present.
+	LedgerIndexMin *uint32
+	LedgerIndexMax *uint32
+}
+
+// SetPeerStatusPublisher wires a sink for pubPeerStatus events.
+// Mirrors rippled's NetworkOPs::pubPeerStatus (NetworkOPs.cpp:2514) —
+// the overlay invokes this callback for every non-lostSync TMStatusChange
+// after state has been recorded, mirroring PeerImp.cpp:1892-1963.
+// Passing nil disconnects the sink.
+func (o *Overlay) SetPeerStatusPublisher(fn func(PeerStatusUpdate)) {
+	o.providersMu.Lock()
+	o.peerStatusPublisher = fn
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) peerStatusPublisherSnapshot() func(PeerStatusUpdate) {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.peerStatusPublisher
+}
+
+// peerStatusUpperName mirrors PeerImp.cpp:1899-1913: the pubPeerStatus
+// callback emits status names in UPPERCASE (CONNECTING/...), distinct
+// from the lowercase strings used by the `peers` RPC at
+// PeerImp.cpp:467-485. Returns "" for nsUNKNOWN or any unknown enum
+// (rippled's switch falls through silently for the latter).
+func peerStatusUpperName(s message.NodeStatus) string {
+	switch s {
+	case message.NodeStatusConnecting:
+		return "CONNECTING"
+	case message.NodeStatusConnected:
+		return "CONNECTED"
+	case message.NodeStatusMonitoring:
+		return "MONITORING"
+	case message.NodeStatusValidating:
+		return "VALIDATING"
+	case message.NodeStatusShutting:
+		return "SHUTTING"
+	default:
+		return ""
+	}
+}
+
+// peerStatusActionName mirrors PeerImp.cpp:1921-1932. handleStatusChange
+// returns at PeerImp.cpp:1830 before pubPeerStatus runs for neLOST_SYNC,
+// so the LOST_SYNC arm is unreachable from this call site and intentionally
+// omitted. Unknown enums fall through silently.
+func peerStatusActionName(e message.NodeEvent) string {
+	switch e {
+	case message.NodeEventClosingLedger:
+		return "CLOSING_LEDGER"
+	case message.NodeEventAcceptedLedger:
+		return "ACCEPTED_LEDGER"
+	case message.NodeEventSwitchedLedger:
+		return "SWITCHED_LEDGER"
+	default:
+		return ""
+	}
 }
 
 // generateInstanceCookie matches rippled Application.cpp:
@@ -1065,27 +1169,85 @@ func (o *Overlay) handleStatusChange(evt Event) {
 	if !exists {
 		return
 	}
-	peer.applyStatusChange(
-		sc.LedgerHash,
-		sc.LedgerHashPrevious,
-		sc.NewEvent == message.NodeEventLostSync,
-		sc.FirstSeq,
-		sc.LastSeq,
-	)
+	// PeerImp.cpp:1796-1797 — rippled stamps the wire's networktime
+	// with the local clock when the peer didn't include it, so the
+	// pubPeerStatus emit at PeerImp.cpp:1951-1954 always carries a
+	// `date`. Mirror that here, mutating sc so the auto-filled value
+	// is observable to subscribers.
+	if sc.NetworkTime == 0 {
+		sc.NetworkTime = uint64(time.Now().Unix() - protocol.RippleEpochUnix)
+	}
 
-	// PeerImp.cpp:1885-1890: gate on a fresh (<2 min) validated ledger.
-	if sc.LedgerSeq == 0 {
+	effectiveStatus := peer.applyStatusChange(sc)
+
+	// PeerImp.cpp:1812-1830 — rippled's lostSync handling returns
+	// before either checkTracking or pubPeerStatus runs. Match that
+	// flow so a lostSync update never surfaces as a peer_status
+	// WebSocket event.
+	if sc.NewEvent == message.NodeEventLostSync {
 		return
 	}
-	provider := o.validLedgerProviderSnapshot()
-	if provider == nil {
-		return
+
+	// PeerImp.cpp:1885-1890: tracking check is gated on a fresh
+	// (<2 min) validated ledger. The gate must NOT short-circuit
+	// pubPeerStatus, which rippled invokes unconditionally for
+	// non-lostSync messages at PeerImp.cpp:1892-1963.
+	if sc.LedgerSeq != 0 {
+		if provider := o.validLedgerProviderSnapshot(); provider != nil {
+			if validSeq, age, ok := provider(); ok && validSeq != 0 && age < 2*time.Minute {
+				peer.CheckTracking(sc.LedgerSeq, validSeq)
+			}
+		}
 	}
-	validSeq, age, ok := provider()
-	if !ok || validSeq == 0 || age >= 2*time.Minute {
-		return
+
+	// PeerImp.cpp:1892-1963 — publish to peer_status subscribers.
+	if pub := o.peerStatusPublisherSnapshot(); pub != nil {
+		// PeerImp.cpp:1941-1948 emits ledger_hash whenever the wire
+		// carried the field, sourcing the value from the peer's
+		// post-apply closedLedgerHash_. When the wire bytes were
+		// malformed, applyStatusChange clears that storage and
+		// rippled emits the all-zeros 64-char hex string. Match both
+		// branches.
+		var ledgerHash string
+		if len(sc.LedgerHash) > 0 {
+			if h, ok := peer.ClosedLedger(); ok {
+				ledgerHash = strings.ToUpper(hex.EncodeToString(h[:]))
+			} else {
+				ledgerHash = strings.Repeat("0", 64)
+			}
+		}
+		// PeerImp.cpp:1956-1960 — emit min/max only when both wire
+		// fields were present. nil-on-absence keeps that paired gate
+		// without conflating value 0 with "absent".
+		var minSeq, maxSeq *uint32
+		if sc.FirstSeq != nil && sc.LastSeq != nil {
+			f, l := *sc.FirstSeq, *sc.LastSeq
+			minSeq, maxSeq = &f, &l
+		}
+		// PeerImp.cpp:1936-1939 (`has_ledgerseq`). The decoder loses
+		// proto-presence for ledger_seq (see
+		// internal/peermanagement/proto/ripple.pb.go), so use 0 as
+		// the absence proxy — XRPL ledger sequences start at the
+		// genesis ledger 1, no real peer broadcasts has_ledgerseq=0.
+		var ledgerIndex *uint32
+		if sc.LedgerSeq != 0 {
+			ls := sc.LedgerSeq
+			ledgerIndex = &ls
+		}
+		// PeerImp.cpp:1951-1954 — Date is always set thanks to the
+		// auto-fill above. Truncate uint64 → uint32 to match
+		// rippled's `Json::UInt(...)` cast (Json::UInt is uint32_t).
+		dateVal := uint32(sc.NetworkTime)
+		pub(PeerStatusUpdate{
+			Status:         peerStatusUpperName(effectiveStatus),
+			Action:         peerStatusActionName(sc.NewEvent),
+			LedgerIndex:    ledgerIndex,
+			LedgerHash:     ledgerHash,
+			Date:           &dateVal,
+			LedgerIndexMin: minSeq,
+			LedgerIndexMax: maxSeq,
+		})
 	}
-	peer.CheckTracking(sc.LedgerSeq, validSeq)
 }
 
 // handleSquelchMessage processes an inbound TMSquelch from a peer and
@@ -1742,6 +1904,17 @@ func (o *Overlay) PeersJSON() []map[string]any {
 		// PeerImp.cpp:419 — emit unconditionally (rippled always has a
 		// negotiated value once the handshake has completed).
 		entry["protocol"] = p.Protocol
+		// PeerImp.cpp:463-491 — emit only when last_status_.has_newstatus().
+		if s, known := nodeStatusRPCName(p.Status); s != "" {
+			entry["status"] = s
+		} else if !known && p.Status != 0 {
+			// PeerImp.cpp:487-490 — rippled logs a journal warning
+			// when last_status_.newstatus() falls outside the known
+			// enum, then drops the field. Mirror the diagnostic so
+			// out-of-range values aren't silent.
+			slog.Warn("Unknown peer status",
+				"t", "Overlay", "peer", p.ID, "status", int32(p.Status))
+		}
 		// PeerImp.cpp:493-501: emit the metrics object — rippled formats
 		// each value with std::to_string, so they're decimal strings.
 		entry["metrics"] = map[string]any{
@@ -1753,6 +1926,30 @@ func (o *Overlay) PeersJSON() []map[string]any {
 		out = append(out, entry)
 	}
 	return out
+}
+
+// nodeStatusRPCName mirrors PeerImp.cpp:463-491. Returns the rippled
+// spelling for each known NodeStatus and a `known` flag distinguishing
+// "no status reported" (nsUNKNOWN, known=true) from "unrecognized
+// enum value" (known=false). The caller omits the `status` field for
+// either case but logs only the unknown-enum case, matching rippled.
+func nodeStatusRPCName(s message.NodeStatus) (string, bool) {
+	switch s {
+	case 0:
+		return "", true
+	case message.NodeStatusConnecting:
+		return "connecting", true
+	case message.NodeStatusConnected:
+		return "connected", true
+	case message.NodeStatusMonitoring:
+		return "monitoring", true
+	case message.NodeStatusValidating:
+		return "validating", true
+	case message.NodeStatusShutting:
+		return "shutting", true
+	default:
+		return "", false
+	}
 }
 
 // clusterFeeRef mirrors rippled's LoadFeeTrack::getLoadBase() default.
