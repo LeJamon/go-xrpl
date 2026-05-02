@@ -15,6 +15,7 @@ var (
 	ErrSelfConnection     = errors.New("cannot connect to self")
 	ErrSlotUnavailable    = errors.New("no connection slot available")
 	ErrConnectionClosed   = errors.New("connection closed")
+	ErrPingTimeout        = errors.New("peer ping timeout")
 
 	// Handshake errors
 	ErrHandshakeFailed  = errors.New("handshake failed")
