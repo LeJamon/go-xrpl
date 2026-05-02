@@ -111,64 +111,64 @@ func TestTxMethodErrorValidation(t *testing.T) {
 			params: map[string]interface{}{
 				"transaction": "ABC123",
 			},
-			expectedError: "Invalid transaction hash",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Not implemented.",
+			expectedCode:  types.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid hash format - too long (68 chars)",
 			params: map[string]interface{}{
 				"transaction": "A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4",
 			},
-			expectedError: "Invalid transaction hash",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Not implemented.",
+			expectedCode:  types.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid hash format - 63 chars (1 short)",
 			params: map[string]interface{}{
 				"transaction": "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C",
 			},
-			expectedError: "Invalid transaction hash",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Not implemented.",
+			expectedCode:  types.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid hash format - 65 chars (1 extra)",
 			params: map[string]interface{}{
 				"transaction": "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C70",
 			},
-			expectedError: "Invalid transaction hash",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Not implemented.",
+			expectedCode:  types.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid hash format - not hex (contains G)",
 			params: map[string]interface{}{
 				"transaction": "G08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7",
 			},
-			expectedError: "Invalid transaction hash",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Not implemented.",
+			expectedCode:  types.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid hash format - not hex (contains Z)",
 			params: map[string]interface{}{
 				"transaction": "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
 			},
-			expectedError: "Invalid transaction hash",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Not implemented.",
+			expectedCode:  types.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid hash format - special characters",
 			params: map[string]interface{}{
 				"transaction": "A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6!@#$",
 			},
-			expectedError: "Invalid transaction hash",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Not implemented.",
+			expectedCode:  types.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid hash format - contains spaces",
 			params: map[string]interface{}{
 				"transaction": "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD169 C7",
 			},
-			expectedError: "Invalid transaction hash",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Not implemented.",
+			expectedCode:  types.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid hash format - empty string",

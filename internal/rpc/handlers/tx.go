@@ -9,7 +9,6 @@ import (
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
-	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 // TxMethod handles the tx RPC method
@@ -63,30 +62,9 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interf
 			Message:     "Transaction not found",
 		}
 	}
-	// Split the VL-encoded blob into tx bytes and meta bytes
-	txBytes, metaBytes, err := tx.SplitTxWithMetaBlob(txInfo.TxData)
-	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to split transaction blob: " + err.Error())
-	}
-
-	// Decode transaction binary to JSON
-	txJSON, err := binarycodec.Decode(hex.EncodeToString(txBytes))
+	storedTx, err := decodeTxBlob(txInfo.TxData)
 	if err != nil {
 		return nil, types.RpcErrorInternal("Failed to decode transaction data")
-	}
-
-	// Decode metadata binary to JSON
-	var metaJSON map[string]interface{}
-	if len(metaBytes) > 0 {
-		metaJSON, err = binarycodec.Decode(hex.EncodeToString(metaBytes))
-		if err != nil {
-			return nil, types.RpcErrorInternal("Failed to decode transaction metadata")
-		}
-	}
-
-	storedTx := StoredTransaction{
-		TxJSON: txJSON,
-		Meta:   metaJSON,
 	}
 
 	// Resolve close time from the containing ledger
