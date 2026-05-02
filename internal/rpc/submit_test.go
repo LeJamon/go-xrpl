@@ -50,28 +50,24 @@ func (m *mockLedgerServiceSubmit) StoreTransaction(txHash [32]byte, txData []byt
 	return nil
 }
 
-// setupTestServicesSubmit initializes the Services singleton with a submit mock for testing
-func setupTestServicesSubmit(mock *mockLedgerServiceSubmit) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
+// newSubmitTestServices builds a per-test ServiceContainer wrapping mock.
+func newSubmitTestServices(mock *mockLedgerServiceSubmit) *types.ServiceContainer {
+	return &types.ServiceContainer{
 		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
 	}
 }
 
 // TestSubmitMethodErrorValidation tests error handling for invalid inputs
 func TestSubmitMethodErrorValidation(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -176,14 +172,14 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 // TestSubmitMethodValidTxJson tests valid tx_json submission
 func TestSubmitMethodValidTxJson(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -296,14 +292,14 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 // TestSubmitMethodResponseFields tests that response contains expected fields
 func TestSubmitMethodResponseFields(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.submitResult = &types.SubmitResult{
@@ -399,14 +395,14 @@ func TestSubmitMethodResponseFields(t *testing.T) {
 // TestSubmitMethodEngineResults tests various engine result codes
 func TestSubmitMethodEngineResults(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	baseTxJson := map[string]interface{}{
@@ -576,14 +572,14 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 // during the unmarshal to map[string]interface{} in the method itself.
 func TestSubmitMethodMalformedTransaction(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Note: The current implementation uses json.RawMessage for tx_json,
@@ -665,15 +661,12 @@ func TestSubmitMethodMalformedTransaction(t *testing.T) {
 
 // TestSubmitMethodServiceUnavailable tests behavior when ledger service is not available
 func TestSubmitMethodServiceUnavailable(t *testing.T) {
-	oldServices := types.Services
-	types.Services = nil
-	defer func() { types.Services = oldServices }()
-
 	method := &handlers.SubmitMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	params := map[string]interface{}{
@@ -697,15 +690,12 @@ func TestSubmitMethodServiceUnavailable(t *testing.T) {
 
 // TestSubmitMethodServiceNilLedger tests behavior when ledger service is nil
 func TestSubmitMethodServiceNilLedger(t *testing.T) {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{Ledger: nil}
-	defer func() { types.Services = oldServices }()
-
 	method := &handlers.SubmitMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
+		Services:   &types.ServiceContainer{Ledger: nil},
 	}
 
 	params := map[string]interface{}{
@@ -730,14 +720,14 @@ func TestSubmitMethodServiceNilLedger(t *testing.T) {
 // TestSubmitMethodSubmitError tests handling of ledger service errors
 func TestSubmitMethodSubmitError(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -806,14 +796,14 @@ func TestSubmitMethodMetadata(t *testing.T) {
 // TestSubmitMethodOptionalParams tests optional parameters
 func TestSubmitMethodOptionalParams(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	baseTxJson := map[string]interface{}{
@@ -923,14 +913,14 @@ func TestSubmitMethodOptionalParams(t *testing.T) {
 // the key, signs the transaction, and submits the signed blob.
 func TestSubmitMethodSigningCredentials(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -1024,8 +1014,7 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 // API v2 should include "hash" at the root level of the response.
 func TestSubmitMethodApiV2Response(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
 
@@ -1043,6 +1032,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := map[string]interface{}{
@@ -1076,6 +1066,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion2,
+			Services:   services,
 		}
 
 		params := map[string]interface{}{
@@ -1110,6 +1101,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion3,
+			Services:   services,
 		}
 
 		params := map[string]interface{}{
@@ -1140,8 +1132,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 // For API v2+: Amount is removed, DeliverMax replaces it.
 func TestSubmitMethodDeliverMax(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
 
@@ -1150,6 +1141,7 @@ func TestSubmitMethodDeliverMax(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := map[string]interface{}{
@@ -1191,6 +1183,7 @@ func TestSubmitMethodDeliverMax(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion2,
+			Services:   services,
 		}
 
 		params := map[string]interface{}{
@@ -1233,6 +1226,7 @@ func TestSubmitMethodDeliverMax(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion2,
+			Services:   services,
 		}
 
 		params := map[string]interface{}{
@@ -1272,14 +1266,14 @@ func TestSubmitMethodDeliverMax(t *testing.T) {
 // matching rippled's Transaction::SubmitResult struct.
 func TestSubmitMethodIndependentBooleans(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	baseTxJson := map[string]interface{}{

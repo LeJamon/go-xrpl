@@ -51,7 +51,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -64,7 +64,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	// Apply limit clamping matching rippled's readLimitField with noRippleCheck tuning
 	limit := ClampLimit(request.Limit, LimitNoRippleCheck, ctx.IsAdmin)
 
-	result, err := types.Services.Ledger.GetNoRippleCheck(
+	result, err := ctx.Services.Ledger.GetNoRippleCheck(
 		request.Account,
 		request.Role,
 		ledgerIndex,

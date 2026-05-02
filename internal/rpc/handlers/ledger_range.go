@@ -35,11 +35,11 @@ func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, types.RpcErrorInvalidParams("Ledger range too large (max 1000 ledgers)")
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	result, err := types.Services.Ledger.GetLedgerRange(request.StartLedger, request.StopLedger)
+	result, err := ctx.Services.Ledger.GetLedgerRange(request.StartLedger, request.StopLedger)
 	if err != nil {
 		return nil, types.RpcErrorInternal("Failed to get ledger range: " + err.Error())
 	}

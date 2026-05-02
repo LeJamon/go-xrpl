@@ -21,11 +21,11 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return nil, err
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	result, err := types.Services.Ledger.GetTransactionHistory(request.Start)
+	result, err := ctx.Services.Ledger.GetTransactionHistory(request.Start)
 	if err != nil {
 		if err.Error() == "transaction history not available (no database configured)" {
 			return nil, &types.RpcError{

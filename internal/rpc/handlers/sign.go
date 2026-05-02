@@ -40,7 +40,7 @@ func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (inte
 	}
 
 	// Sign the transaction using the shared helper
-	signed, rpcErr := signTransactionJSON(request.TxJson, signCredentials{
+	signed, rpcErr := signTransactionJSON(ctx.Services, request.TxJson, signCredentials{
 		Secret:     request.Secret,
 		Seed:       request.Seed,
 		SeedHex:    request.SeedHex,

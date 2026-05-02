@@ -164,29 +164,23 @@ func (m *mockAccountNFTsLedgerService) GetClosedLedgerView() (types.LedgerStateV
 	return nil, errors.New("not implemented in mock")
 }
 
-// setupAccountNFTsTestServices initializes the Services singleton with a mock for testing
-func setupAccountNFTsTestServices(mock *mockAccountNFTsLedgerService) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
-		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
-	}
+// newAccountNFTsTestServices builds a *types.ServiceContainer wrapping the mock.
+func newAccountNFTsTestServices(mock *mockAccountNFTsLedgerService) *types.ServiceContainer {
+	return &types.ServiceContainer{Ledger: mock}
 }
 
 // TestAccountNFTsErrorValidation tests error handling for invalid inputs
 // Based on rippled AccountObjects_test.cpp testAccountNFTs()
 func TestAccountNFTsErrorValidation(t *testing.T) {
 	mock := newMockAccountNFTsLedgerService()
-	cleanup := setupAccountNFTsTestServices(mock)
-	defer cleanup()
+	services := newAccountNFTsTestServices(mock)
 
 	method := &handlers.AccountNftsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -283,14 +277,14 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 // Based on rippled AccountObjects_test.cpp testAccountNFTs() - testInvalidAccountParam
 func TestAccountNFTsInvalidAccountTypes(t *testing.T) {
 	mock := newMockAccountNFTsLedgerService()
-	cleanup := setupAccountNFTsTestServices(mock)
-	defer cleanup()
+	services := newAccountNFTsTestServices(mock)
 
 	method := &handlers.AccountNftsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// These test cases mirror rippled's testInvalidAccountParam lambda
@@ -332,14 +326,14 @@ func TestAccountNFTsInvalidAccountTypes(t *testing.T) {
 // Based on rippled NFToken_test.cpp
 func TestAccountNFTsBasic(t *testing.T) {
 	mock := newMockAccountNFTsLedgerService()
-	cleanup := setupAccountNFTsTestServices(mock)
-	defer cleanup()
+	services := newAccountNFTsTestServices(mock)
 
 	method := &handlers.AccountNftsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	bobAccount := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
@@ -483,14 +477,14 @@ func TestAccountNFTsBasic(t *testing.T) {
 // Based on rippled NFToken_test.cpp
 func TestAccountNFTsOptionalFields(t *testing.T) {
 	mock := newMockAccountNFTsLedgerService()
-	cleanup := setupAccountNFTsTestServices(mock)
-	defer cleanup()
+	services := newAccountNFTsTestServices(mock)
 
 	method := &handlers.AccountNftsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	bobAccount := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
@@ -627,14 +621,14 @@ func TestAccountNFTsOptionalFields(t *testing.T) {
 // TestAccountNFTsLedgerSpecification tests different ledger index specifications
 func TestAccountNFTsLedgerSpecification(t *testing.T) {
 	mock := newMockAccountNFTsLedgerService()
-	cleanup := setupAccountNFTsTestServices(mock)
-	defer cleanup()
+	services := newAccountNFTsTestServices(mock)
 
 	method := &handlers.AccountNftsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -759,14 +753,14 @@ func TestAccountNFTsLedgerSpecification(t *testing.T) {
 // Based on rippled AccountObjects_test.cpp testNFTsMarker()
 func TestAccountNFTsPagination(t *testing.T) {
 	mock := newMockAccountNFTsLedgerService()
-	cleanup := setupAccountNFTsTestServices(mock)
-	defer cleanup()
+	services := newAccountNFTsTestServices(mock)
 
 	method := &handlers.AccountNftsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	bobAccount := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
@@ -867,15 +861,12 @@ func TestAccountNFTsPagination(t *testing.T) {
 
 // TestAccountNFTsServiceUnavailable tests behavior when ledger service is not available
 func TestAccountNFTsServiceUnavailable(t *testing.T) {
-	oldServices := types.Services
-	types.Services = nil
-	defer func() { types.Services = oldServices }()
-
 	method := &handlers.AccountNftsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	params := map[string]interface{}{
@@ -912,14 +903,14 @@ func TestAccountNFTsMethodMetadata(t *testing.T) {
 // TestAccountNFTsResponseFields tests that all required fields are present
 func TestAccountNFTsResponseFields(t *testing.T) {
 	mock := newMockAccountNFTsLedgerService()
-	cleanup := setupAccountNFTsTestServices(mock)
-	defer cleanup()
+	services := newAccountNFTsTestServices(mock)
 
 	method := &handlers.AccountNftsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	bobAccount := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"

@@ -11,16 +11,16 @@ import (
 type LedgerClosedMethod struct{}
 
 func (m *LedgerClosedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	seq := types.Services.Ledger.GetClosedLedgerIndex()
+	seq := ctx.Services.Ledger.GetClosedLedgerIndex()
 	if seq == 0 {
 		return nil, &types.RpcError{Code: -1, ErrorString: "lgrNotFound", Message: "No closed ledger"}
 	}
 
-	ledger, err := types.Services.Ledger.GetLedgerBySequence(seq)
+	ledger, err := ctx.Services.Ledger.GetLedgerBySequence(seq)
 	if err != nil {
 		return nil, &types.RpcError{Code: -1, ErrorString: "lgrNotFound", Message: "Closed ledger not found"}
 	}

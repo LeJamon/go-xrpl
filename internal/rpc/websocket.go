@@ -33,6 +33,7 @@ type WebSocketServer struct {
 	timeout             time.Duration
 	ledgerInfoProvider  types.LedgerInfoProvider
 	connLimiter         *ConnLimiter
+	services            *types.ServiceContainer
 }
 
 // WebSocketConnection represents a single WebSocket connection
@@ -49,8 +50,11 @@ type WebSocketConnection struct {
 	portCtx         *PortContext     // per-port config for role determination
 }
 
-// NewWebSocketServer creates a new WebSocket server
-func NewWebSocketServer(timeout time.Duration) *WebSocketServer {
+// NewWebSocketServer creates a new WebSocket server. The provided
+// service container is attached to every RpcContext routed through the
+// server so handlers reach the ledger via ctx.Services. May be nil for
+// test contexts.
+func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer) *WebSocketServer {
 	return &WebSocketServer{
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
@@ -66,6 +70,7 @@ func NewWebSocketServer(timeout time.Duration) *WebSocketServer {
 		methodRegistry: types.NewMethodRegistry(),
 		connections:    make(map[string]*WebSocketConnection),
 		timeout:        timeout,
+		services:       services,
 	}
 }
 
@@ -264,6 +269,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 		ApiVersion: apiVersion,
 		IsAdmin:    role == types.RoleAdmin,
 		ClientIP:   clientIP,
+		Services:   ws.services,
 	}
 
 	// Handle subscription commands specially
@@ -408,7 +414,12 @@ func (ws *WebSocketServer) handlePathFindCreate(wsConn *WebSocketConnection, ctx
 		return
 	}
 
-	view, err := types.Services.Ledger.GetClosedLedgerView()
+	if ctx.Services == nil || ctx.Services.Ledger == nil {
+		ws.sendError(wsConn, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
+			"No closed ledger available"), cmd.ID)
+		return
+	}
+	view, err := ctx.Services.Ledger.GetClosedLedgerView()
 	if err != nil {
 		ws.sendError(wsConn, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
 			"No closed ledger available"), cmd.ID)

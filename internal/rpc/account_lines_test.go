@@ -162,29 +162,23 @@ func (m *mockAccountLinesLedgerService) GetClosedLedgerView() (types.LedgerState
 	return nil, errors.New("not implemented in mock")
 }
 
-// setupAccountLinesTestServices initializes the Services singleton with a mock for testing
-func setupAccountLinesTestServices(mock *mockAccountLinesLedgerService) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
-		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
-	}
+// newAccountLinesTestServices builds a *types.ServiceContainer wrapping the mock.
+func newAccountLinesTestServices(mock *mockAccountLinesLedgerService) *types.ServiceContainer {
+	return &types.ServiceContainer{Ledger: mock}
 }
 
 // TestAccountLinesErrorValidation tests error handling for invalid inputs
 // Based on rippled AccountLines_test.cpp testAccountLines()
 func TestAccountLinesErrorValidation(t *testing.T) {
 	mock := newMockAccountLinesLedgerService()
-	cleanup := setupAccountLinesTestServices(mock)
-	defer cleanup()
+	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -315,14 +309,14 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 // Based on rippled AccountLines_test.cpp testInvalidAccountParam lambda (lines 60-76)
 func TestAccountLinesInvalidAccountTypes(t *testing.T) {
 	mock := newMockAccountLinesLedgerService()
-	cleanup := setupAccountLinesTestServices(mock)
-	defer cleanup()
+	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// These test cases mirror rippled's testInvalidAccountParam lambda
@@ -367,14 +361,14 @@ func TestAccountLinesInvalidAccountTypes(t *testing.T) {
 // Based on rippled AccountLines_test.cpp lines 102-124
 func TestAccountLinesLedgerSpecification(t *testing.T) {
 	mock := newMockAccountLinesLedgerService()
-	cleanup := setupAccountLinesTestServices(mock)
-	defer cleanup()
+	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -589,14 +583,14 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 // Based on rippled AccountLines_test.cpp lines 242-270
 func TestAccountLinesPeerFilter(t *testing.T) {
 	mock := newMockAccountLinesLedgerService()
-	cleanup := setupAccountLinesTestServices(mock)
-	defer cleanup()
+	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -722,14 +716,14 @@ func TestAccountLinesPeerFilter(t *testing.T) {
 // Based on rippled AccountLines_test.cpp lines 271-342
 func TestAccountLinesPagination(t *testing.T) {
 	mock := newMockAccountLinesLedgerService()
-	cleanup := setupAccountLinesTestServices(mock)
-	defer cleanup()
+	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -963,14 +957,14 @@ func TestAccountLinesPagination(t *testing.T) {
 // Based on rippled AccountLines_test.cpp lines 343-392
 func TestAccountLinesResponseFields(t *testing.T) {
 	mock := newMockAccountLinesLedgerService()
-	cleanup := setupAccountLinesTestServices(mock)
-	defer cleanup()
+	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -1195,16 +1189,12 @@ func TestAccountLinesResponseFields(t *testing.T) {
 
 // TestAccountLinesServiceUnavailable tests behavior when ledger service is not available
 func TestAccountLinesServiceUnavailable(t *testing.T) {
-	// Temporarily set types.Services to nil
-	oldServices := types.Services
-	types.Services = nil
-	defer func() { types.Services = oldServices }()
-
 	method := &handlers.AccountLinesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	params := map[string]interface{}{
@@ -1223,16 +1213,12 @@ func TestAccountLinesServiceUnavailable(t *testing.T) {
 
 // TestAccountLinesServiceNilLedger tests behavior when ledger service is nil
 func TestAccountLinesServiceNilLedger(t *testing.T) {
-	// Set types.Services with nil Ledger
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{Ledger: nil}
-	defer func() { types.Services = oldServices }()
-
 	method := &handlers.AccountLinesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   &types.ServiceContainer{Ledger: nil},
 	}
 
 	params := map[string]interface{}{
@@ -1270,14 +1256,14 @@ func TestAccountLinesMethodMetadata(t *testing.T) {
 // Based on rippled AccountLines_test.cpp malformed account tests
 func TestAccountLinesMalformedAddresses(t *testing.T) {
 	mock := newMockAccountLinesLedgerService()
-	cleanup := setupAccountLinesTestServices(mock)
-	defer cleanup()
+	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Malformed addresses are now caught by ValidateAccount at handler level
@@ -1320,14 +1306,14 @@ func TestAccountLinesMalformedAddresses(t *testing.T) {
 // Based on rippled AccountLines_test.cpp testAccountLinesHistory lambda (lines 181-206)
 func TestAccountLinesHistoricLedgers(t *testing.T) {
 	mock := newMockAccountLinesLedgerService()
-	cleanup := setupAccountLinesTestServices(mock)
-	defer cleanup()
+	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -1410,14 +1396,14 @@ func TestAccountLinesHistoricLedgers(t *testing.T) {
 // Based on rippled AccountLines_test.cpp testAccountLinesMarker (lines 395-478)
 func TestAccountLinesMarkerOwnership(t *testing.T) {
 	mock := newMockAccountLinesLedgerService()
-	cleanup := setupAccountLinesTestServices(mock)
-	defer cleanup()
+	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("Marker from alice's account cannot be used for becky's account", func(t *testing.T) {
@@ -1447,14 +1433,14 @@ func TestAccountLinesMarkerOwnership(t *testing.T) {
 // Based on rippled AccountLines_test.cpp testAccountLineDelete (lines 480-554)
 func TestAccountLinesDeletedEntry(t *testing.T) {
 	mock := newMockAccountLinesLedgerService()
-	cleanup := setupAccountLinesTestServices(mock)
-	defer cleanup()
+	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("Marker becomes invalid when pointed entry is deleted", func(t *testing.T) {
@@ -1482,14 +1468,14 @@ func TestAccountLinesDeletedEntry(t *testing.T) {
 // Based on rippled AccountLines_test.cpp testAccountLinesWalkMarkers (lines 556-773)
 func TestAccountLinesWalkMarkers(t *testing.T) {
 	mock := newMockAccountLinesLedgerService()
-	cleanup := setupAccountLinesTestServices(mock)
-	defer cleanup()
+	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"

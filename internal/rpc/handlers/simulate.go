@@ -54,7 +54,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		return nil, types.RpcErrorInvalidParams("Neither `tx_blob` nor `tx_json` included.")
 	}
 
-	if types.Services == nil || types.Services.Ledger == nil {
+	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
@@ -164,7 +164,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// Autofill NetworkID if not present and network ID > 1024.
 	// Matches rippled's autofillTx() in Simulate.cpp.
 	if _, ok := txJsonMap["NetworkID"]; !ok {
-		serverInfo := types.Services.Ledger.GetServerInfo()
+		serverInfo := ctx.Services.Ledger.GetServerInfo()
 		if serverInfo.NetworkID > 1024 {
 			txJsonMap["NetworkID"] = serverInfo.NetworkID
 		}
@@ -183,7 +183,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	}
 
 	// Run the transaction in simulation mode (snapshot, no commit)
-	result, err := types.Services.Ledger.SimulateTransaction(txJSON)
+	result, err := ctx.Services.Ledger.SimulateTransaction(txJSON)
 	if err != nil {
 		return nil, types.RpcErrorInternal("Simulation failed: " + err.Error())
 	}

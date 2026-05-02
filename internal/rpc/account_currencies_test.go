@@ -168,29 +168,23 @@ func (m *mockAccountCurrenciesLedgerService) GetClosedLedgerView() (types.Ledger
 	return nil, errors.New("not implemented in mock")
 }
 
-// setupAccountCurrenciesTestServices initializes the Services singleton with a mock for testing
-func setupAccountCurrenciesTestServices(mock *mockAccountCurrenciesLedgerService) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
-		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
-	}
+// newAccountCurrenciesTestServices builds a *types.ServiceContainer wrapping the mock.
+func newAccountCurrenciesTestServices(mock *mockAccountCurrenciesLedgerService) *types.ServiceContainer {
+	return &types.ServiceContainer{Ledger: mock}
 }
 
 // TestAccountCurrenciesBadInput tests error handling for invalid inputs
 // Based on rippled AccountCurrencies_test.cpp testBadInput()
 func TestAccountCurrenciesBadInput(t *testing.T) {
 	mock := newMockAccountCurrenciesLedgerService()
-	cleanup := setupAccountCurrenciesTestServices(mock)
-	defer cleanup()
+	services := newAccountCurrenciesTestServices(mock)
 
 	method := &handlers.AccountCurrenciesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -303,14 +297,14 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 // Based on rippled AccountCurrencies_test.cpp testBasic()
 func TestAccountCurrenciesBasic(t *testing.T) {
 	mock := newMockAccountCurrenciesLedgerService()
-	cleanup := setupAccountCurrenciesTestServices(mock)
-	defer cleanup()
+	services := newAccountCurrenciesTestServices(mock)
 
 	method := &handlers.AccountCurrenciesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -516,14 +510,14 @@ func TestAccountCurrenciesBasic(t *testing.T) {
 // TestAccountCurrenciesResponseFields tests that all required fields are present
 func TestAccountCurrenciesResponseFields(t *testing.T) {
 	mock := newMockAccountCurrenciesLedgerService()
-	cleanup := setupAccountCurrenciesTestServices(mock)
-	defer cleanup()
+	services := newAccountCurrenciesTestServices(mock)
 
 	method := &handlers.AccountCurrenciesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.accountCurrenciesResult = &types.AccountCurrenciesResult{
@@ -560,15 +554,12 @@ func TestAccountCurrenciesResponseFields(t *testing.T) {
 
 // TestAccountCurrenciesServiceUnavailable tests behavior when ledger service is not available
 func TestAccountCurrenciesServiceUnavailable(t *testing.T) {
-	oldServices := types.Services
-	types.Services = nil
-	defer func() { types.Services = oldServices }()
-
 	method := &handlers.AccountCurrenciesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	params := map[string]interface{}{

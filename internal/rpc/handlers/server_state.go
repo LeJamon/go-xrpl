@@ -11,11 +11,11 @@ import (
 type ServerStateMethod struct{ BaseHandler }
 
 func (m *ServerStateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	state := buildServerInfo(false)
+	state := buildServerInfo(ctx.Services, false)
 
 	response := map[string]interface{}{
 		"state": state,

@@ -34,7 +34,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		return nil, err
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -50,7 +50,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		}
 		var hash [32]byte
 		copy(hash[:], hashBytes)
-		targetLedger, err = types.Services.Ledger.GetLedgerByHash(hash)
+		targetLedger, err = ctx.Services.Ledger.GetLedgerByHash(hash)
 		if err != nil {
 			return nil, &types.RpcError{Code: -1, ErrorString: "lgrNotFound", Message: "Ledger not found"}
 		}
@@ -63,26 +63,26 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 
 		switch ledgerIndex {
 		case "validated":
-			seq := types.Services.Ledger.GetValidatedLedgerIndex()
+			seq := ctx.Services.Ledger.GetValidatedLedgerIndex()
 			if seq == 0 {
 				return nil, &types.RpcError{Code: -1, ErrorString: "lgrNotFound", Message: "No validated ledger"}
 			}
-			targetLedger, err = types.Services.Ledger.GetLedgerBySequence(seq)
+			targetLedger, err = ctx.Services.Ledger.GetLedgerBySequence(seq)
 			validated = true
 		case "current":
-			seq := types.Services.Ledger.GetCurrentLedgerIndex()
-			targetLedger, err = types.Services.Ledger.GetLedgerBySequence(seq)
+			seq := ctx.Services.Ledger.GetCurrentLedgerIndex()
+			targetLedger, err = ctx.Services.Ledger.GetLedgerBySequence(seq)
 			validated = false
 		case "closed":
-			seq := types.Services.Ledger.GetClosedLedgerIndex()
-			targetLedger, err = types.Services.Ledger.GetLedgerBySequence(seq)
+			seq := ctx.Services.Ledger.GetClosedLedgerIndex()
+			targetLedger, err = ctx.Services.Ledger.GetLedgerBySequence(seq)
 			validated = targetLedger != nil && targetLedger.IsValidated()
 		default:
 			seq, parseErr := strconv.ParseUint(ledgerIndex, 10, 32)
 			if parseErr != nil {
 				return nil, types.RpcErrorInvalidParams("Invalid ledger_index")
 			}
-			targetLedger, err = types.Services.Ledger.GetLedgerBySequence(uint32(seq))
+			targetLedger, err = ctx.Services.Ledger.GetLedgerBySequence(uint32(seq))
 			if err != nil {
 				return nil, &types.RpcError{Code: -1, ErrorString: "lgrNotFound", Message: "Ledger not found"}
 			}
@@ -110,7 +110,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	closeTimeHuman := closeTime.UTC().Format("2006-Jan-02 15:04:05.000000000 UTC")
 	closeTimeISO := closeTime.UTC().Format(time.RFC3339)
 
-	_, reserveBase, reserveInc := types.Services.Ledger.GetCurrentFees()
+	_, reserveBase, reserveInc := ctx.Services.Ledger.GetCurrentFees()
 
 	ledgerInfo := map[string]interface{}{
 		"accepted":              true,

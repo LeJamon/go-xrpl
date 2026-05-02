@@ -40,13 +40,9 @@ func (m *mockLedgerServiceTxHistory) GetTransactionHistory(startIndex uint32) (*
 	}, nil
 }
 
-func setupTestServicesTxHistory(mock *mockLedgerServiceTxHistory) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
+func newTxHistoryTestServices(mock *mockLedgerServiceTxHistory) *types.ServiceContainer {
+	return &types.ServiceContainer{
 		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
 	}
 }
 
@@ -56,14 +52,14 @@ func setupTestServicesTxHistory(mock *mockLedgerServiceTxHistory) func() {
 // Based on rippled TransactionHistory_test.cpp testRequest.
 func TestTxHistoryBasicRequest(t *testing.T) {
 	mock := newMockLedgerServiceTxHistory()
-	cleanup := setupTestServicesTxHistory(mock)
-	defer cleanup()
+	services := newTxHistoryTestServices(mock)
 
 	method := &handlers.TxHistoryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("start=0", func(t *testing.T) {
@@ -136,14 +132,14 @@ func TestTxHistoryBasicRequest(t *testing.T) {
 // Based on rippled TransactionHistory_test.cpp empty history scenario.
 func TestTxHistoryEmptyResult(t *testing.T) {
 	mock := newMockLedgerServiceTxHistory()
-	cleanup := setupTestServicesTxHistory(mock)
-	defer cleanup()
+	services := newTxHistoryTestServices(mock)
 
 	method := &handlers.TxHistoryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.txHistoryResult = &types.TxHistoryResult{
@@ -174,14 +170,14 @@ func TestTxHistoryEmptyResult(t *testing.T) {
 // Based on rippled TransactionHistory_test.cpp response validation.
 func TestTxHistoryResponseStructure(t *testing.T) {
 	mock := newMockLedgerServiceTxHistory()
-	cleanup := setupTestServicesTxHistory(mock)
-	defer cleanup()
+	services := newTxHistoryTestServices(mock)
 
 	method := &handlers.TxHistoryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.txHistoryResult = &types.TxHistoryResult{
@@ -220,14 +216,14 @@ func TestTxHistoryResponseStructure(t *testing.T) {
 // Based on rippled TransactionHistory_test.cpp - tx_history requires a database.
 func TestTxHistoryDatabaseNotConfigured(t *testing.T) {
 	mock := newMockLedgerServiceTxHistory()
-	cleanup := setupTestServicesTxHistory(mock)
-	defer cleanup()
+	services := newTxHistoryTestServices(mock)
 
 	method := &handlers.TxHistoryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.txHistoryErr = errors.New("transaction history not available (no database configured)")
@@ -247,16 +243,14 @@ func TestTxHistoryDatabaseNotConfigured(t *testing.T) {
 // TestTxHistoryServiceUnavailable tests behavior when the ledger service is not available.
 func TestTxHistoryServiceUnavailable(t *testing.T) {
 	method := &handlers.TxHistoryMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleUser,
-		ApiVersion: types.ApiVersion1,
-	}
 
 	t.Run("Services is nil", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = nil
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleUser,
+			ApiVersion: types.ApiVersion1,
+			Services:   nil,
+		}
 
 		params := map[string]interface{}{
 			"start": 0,
@@ -272,9 +266,12 @@ func TestTxHistoryServiceUnavailable(t *testing.T) {
 	})
 
 	t.Run("Services.Ledger is nil", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = &types.ServiceContainer{Ledger: nil}
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleUser,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: nil},
+		}
 
 		params := map[string]interface{}{
 			"start": 0,
@@ -293,14 +290,14 @@ func TestTxHistoryServiceUnavailable(t *testing.T) {
 // TestTxHistoryInternalError tests behavior when the service returns a generic error.
 func TestTxHistoryInternalError(t *testing.T) {
 	mock := newMockLedgerServiceTxHistory()
-	cleanup := setupTestServicesTxHistory(mock)
-	defer cleanup()
+	services := newTxHistoryTestServices(mock)
 
 	method := &handlers.TxHistoryMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.txHistoryErr = errors.New("internal database failure")

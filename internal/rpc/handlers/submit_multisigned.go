@@ -26,7 +26,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, types.RpcErrorMissingField("tx_json")
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -182,7 +182,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, types.RpcErrorInternal("Failed to marshal transaction: " + encErr.Error())
 	}
 
-	result, submitErr := types.Services.Ledger.SubmitTransaction(txJSON)
+	result, submitErr := ctx.Services.Ledger.SubmitTransaction(txJSON)
 	if submitErr != nil {
 		return nil, types.RpcErrorInternal("Transaction submission failed: " + submitErr.Error())
 	}

@@ -53,7 +53,7 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		}
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -71,7 +71,7 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	//   3. Credential expiry — checkExpired(sleCred, parentCloseTime) → rpcBAD_CREDENTIALS "credentials are expired"
 	//   4. Credential ownership — sleCred[sfSubject] == srcAcct → rpcBAD_CREDENTIALS "credentials doesn't belong to the root account"
 	//   5. Credential duplicates by (issuer, credentialType) — rpcBAD_CREDENTIALS "duplicates in credentials"
-	result, err := types.Services.Ledger.GetDepositAuthorized(
+	result, err := ctx.Services.Ledger.GetDepositAuthorized(
 		request.SourceAccount,
 		request.DestinationAccount,
 		ledgerIndex,

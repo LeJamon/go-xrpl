@@ -24,7 +24,7 @@ func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		_ = json.Unmarshal(params, &request)
 	}
 
-	if types.Services == nil || types.Services.Ledger == nil {
+	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
@@ -47,11 +47,11 @@ func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 type LedgerRequestMethod struct{ AdminHandler }
 
 func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if types.Services == nil || types.Services.Ledger == nil {
+	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
-	if types.Services.Ledger.IsStandalone() {
+	if ctx.Services.Ledger.IsStandalone() {
 		return nil, types.NewRpcError(types.RpcNOT_SYNCED, "notSynced", "notSynced",
 			"Not synced to the network")
 	}
@@ -70,7 +70,7 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 type TxReduceRelayMethod struct{}
 
 func (m *TxReduceRelayMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if types.Services == nil || types.Services.Ledger == nil {
+	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
@@ -119,11 +119,11 @@ func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		return nil, types.RpcErrorInvalidParams("Missing required parameter: ip")
 	}
 
-	if types.Services == nil || types.Services.Ledger == nil {
+	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
-	if types.Services.Ledger.IsStandalone() {
+	if ctx.Services.Ledger.IsStandalone() {
 		return nil, types.NewRpcError(types.RpcNOT_SYNCED, "notSynced", "notSynced",
 			"Cannot connect to peers in standalone mode")
 	}
@@ -148,7 +148,7 @@ func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 type UnlListMethod struct{ AdminHandler }
 
 func (m *UnlListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if types.Services == nil || types.Services.Ledger == nil {
+	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
@@ -167,7 +167,7 @@ func (m *UnlListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 type BlackListMethod struct{ AdminHandler }
 
 func (m *BlackListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if types.Services == nil || types.Services.Ledger == nil {
+	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 

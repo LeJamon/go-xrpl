@@ -18,7 +18,7 @@ import (
 type LedgerCleanerMethod struct{ AdminHandler }
 
 func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if types.Services == nil || types.Services.Ledger == nil {
+	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
@@ -36,7 +36,7 @@ func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 type PrintMethod struct{ AdminHandler }
 
 func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if types.Services == nil || types.Services.Ledger == nil {
+	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
@@ -69,11 +69,11 @@ func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 type GetCountsMethod struct{ AdminHandler }
 
 func (m *GetCountsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if types.Services == nil || types.Services.Ledger == nil {
+	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
-	serverInfo := types.Services.Ledger.GetServerInfo()
+	serverInfo := ctx.Services.Ledger.GetServerInfo()
 	return map[string]interface{}{
 		"standalone": serverInfo.Standalone,
 	}, nil
@@ -137,7 +137,7 @@ func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 type LogRotateMethod struct{ AdminHandler }
 
 func (m *LogRotateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if types.Services == nil || types.Services.Ledger == nil {
+	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 

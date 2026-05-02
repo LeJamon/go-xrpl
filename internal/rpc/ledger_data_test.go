@@ -70,14 +70,14 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 		return newDefaultLedgerDataResult(int(limit), false), nil
 	}
 
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("JSON mode default limit is 256", func(t *testing.T) {
@@ -223,14 +223,14 @@ func TestLedgerDataBinaryMode(t *testing.T) {
 		return newDefaultLedgerDataResult(3, false), nil
 	}
 
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("Binary false returns JSON objects", func(t *testing.T) {
@@ -300,14 +300,14 @@ func TestLedgerDataTypeFilter(t *testing.T) {
 		return newDefaultLedgerDataResult(5, false), nil
 	}
 
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// The type parameter is passed through to the service layer.
@@ -343,14 +343,14 @@ func TestLedgerDataMarkerPagination(t *testing.T) {
 		return newDefaultLedgerDataResult(3, false), nil
 	}
 
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("First page has marker and limit", func(t *testing.T) {
@@ -429,14 +429,14 @@ func TestLedgerDataResponseStructure(t *testing.T) {
 		}, nil
 	}
 
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := map[string]interface{}{
@@ -492,16 +492,14 @@ func TestLedgerDataResponseStructure(t *testing.T) {
 // TestLedgerDataServiceUnavailable tests behavior when ledger service is not available
 func TestLedgerDataServiceUnavailable(t *testing.T) {
 	method := &handlers.LedgerDataMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
-	}
 
 	t.Run("Nil services", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = nil
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   nil,
+		}
 
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
@@ -511,9 +509,12 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 	})
 
 	t.Run("Nil ledger in services", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = &types.ServiceContainer{Ledger: nil}
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: nil},
+		}
 
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
@@ -529,9 +530,12 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 		mock.getLedgerDataFn = func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 			return nil, errors.New("storage unavailable")
 		}
-		oldServices := types.Services
-		types.Services = &types.ServiceContainer{Ledger: mock}
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: mock},
+		}
 
 		params := map[string]interface{}{
 			"ledger_index": "current",
@@ -600,14 +604,14 @@ func TestLedgerDataLedgerHeader(t *testing.T) {
 		return result, nil
 	}
 
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("First query includes ledger header JSON with uppercase hashes", func(t *testing.T) {
@@ -682,14 +686,14 @@ func TestLedgerDataEmptyState(t *testing.T) {
 		return newDefaultLedgerDataResult(0, false), nil
 	}
 
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := map[string]interface{}{

@@ -24,14 +24,11 @@ func newMockLedgerServiceMissingMethods() *mockLedgerServiceMissingMethods {
 	}
 }
 
-// setupTestServicesMissingMethods initializes Services for testing
-func setupTestServicesMissingMethods(mock *mockLedgerServiceMissingMethods) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
+// servicesForMissingMethods builds a per-test ServiceContainer for tests
+// that exercise the "missing methods" handlers.
+func servicesForMissingMethods(mock *mockLedgerServiceMissingMethods) *types.ServiceContainer {
+	return &types.ServiceContainer{
 		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
 	}
 }
 
@@ -40,8 +37,7 @@ func setupTestServicesMissingMethods(mock *mockLedgerServiceMissingMethods) func
 
 func TestFetchInfoMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.FetchInfoMethod{}
 
@@ -50,6 +46,7 @@ func TestFetchInfoMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"clear": true}`)
@@ -67,6 +64,7 @@ func TestFetchInfoMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -92,8 +90,7 @@ func TestFetchInfoMethod(t *testing.T) {
 
 func TestOwnerInfoMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.OwnerInfoMethod{}
 
@@ -102,6 +99,7 @@ func TestOwnerInfoMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -116,6 +114,7 @@ func TestOwnerInfoMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"account": ""}`)
@@ -132,6 +131,7 @@ func TestOwnerInfoMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}`)
@@ -152,8 +152,7 @@ func TestOwnerInfoMethod(t *testing.T) {
 
 func TestLedgerHeaderMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.LedgerHeaderMethod{}
 
@@ -163,6 +162,7 @@ func TestLedgerHeaderMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"ledger_index": "current"}`)
@@ -179,6 +179,7 @@ func TestLedgerHeaderMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"ledger_index": "validated"}`)
@@ -206,8 +207,7 @@ func TestLedgerHeaderMethod(t *testing.T) {
 
 func TestLedgerRequestMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.LedgerRequestMethod{}
 
@@ -217,6 +217,7 @@ func TestLedgerRequestMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"ledger_index": 100}`)
@@ -237,8 +238,7 @@ func TestLedgerRequestMethod(t *testing.T) {
 
 func TestLedgerCleanerMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.LedgerCleanerMethod{}
 
@@ -248,6 +248,7 @@ func TestLedgerCleanerMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -266,8 +267,7 @@ func TestLedgerCleanerMethod(t *testing.T) {
 
 func TestLedgerDiffMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.LedgerDiffMethod{}
 
@@ -276,6 +276,7 @@ func TestLedgerDiffMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -296,8 +297,7 @@ func TestLedgerDiffMethod(t *testing.T) {
 
 func TestSimulateMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.SimulateMethod{}
 
@@ -307,6 +307,7 @@ func TestSimulateMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{}`)
@@ -323,6 +324,7 @@ func TestSimulateMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"tx_json": {}, "tx_blob": "1200"}`)
@@ -350,8 +352,7 @@ func TestSimulateMethod(t *testing.T) {
 
 func TestTxReduceRelayMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.TxReduceRelayMethod{}
 
@@ -360,6 +361,7 @@ func TestTxReduceRelayMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -387,8 +389,7 @@ func TestTxReduceRelayMethod(t *testing.T) {
 func TestConnectMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
 	mock.standalone = true // Standalone mode
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.ConnectMethod{}
 
@@ -398,6 +399,7 @@ func TestConnectMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"ip": "127.0.0.1", "port": 51235}`)
@@ -414,6 +416,7 @@ func TestConnectMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{}`)
@@ -433,8 +436,7 @@ func TestConnectMethod(t *testing.T) {
 
 func TestPrintMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.PrintMethod{}
 
@@ -443,6 +445,7 @@ func TestPrintMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -467,8 +470,7 @@ func TestPrintMethod(t *testing.T) {
 
 func TestValidatorInfoMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.ValidatorInfoMethod{}
 
@@ -478,6 +480,7 @@ func TestValidatorInfoMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -498,8 +501,7 @@ func TestValidatorInfoMethod(t *testing.T) {
 
 func TestCanDeleteMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.CanDeleteMethod{}
 
@@ -509,6 +511,7 @@ func TestCanDeleteMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -528,8 +531,7 @@ func TestCanDeleteMethod(t *testing.T) {
 
 func TestGetAggregatePriceMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.GetAggregatePriceMethod{}
 
@@ -543,6 +545,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"base_asset": "XRP", "quote_asset": "USD"}`)
@@ -560,6 +563,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"base_asset": "XRP", "quote_asset": "USD", "oracles": []}`)
@@ -576,6 +580,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"base_asset": "XRP", "quote_asset": "USD", "oracles": "bad"}`)
@@ -592,6 +597,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"quote_asset": "USD", "oracles": [` + validOracle + `]}`)
@@ -608,6 +614,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"base_asset": "XRP", "oracles": [` + validOracle + `]}`)
@@ -624,6 +631,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"base_asset": "XRP", "quote_asset": "USD", "oracles": [` + validOracle + `], "trim": 0}`)
@@ -639,6 +647,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"base_asset": "XRP", "quote_asset": "USD", "oracles": [` + validOracle + `], "trim": 26}`)
@@ -654,6 +663,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		// empty string
@@ -678,6 +688,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"base_asset": "XRP", "quote_asset": "USD", "oracles": [{"oracle_document_id": 1}]}`)
@@ -694,6 +705,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"base_asset": "XRP", "quote_asset": "USD", "oracles": [{"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}]}`)
@@ -710,6 +722,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		// float trim
@@ -726,6 +739,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		// non-numeric time_threshold
@@ -747,8 +761,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 
 func TestGetCountsMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.GetCountsMethod{}
 
@@ -758,6 +771,7 @@ func TestGetCountsMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -777,8 +791,7 @@ func TestGetCountsMethod(t *testing.T) {
 
 func TestLogLevelMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.LogLevelMethod{}
 
@@ -787,6 +800,7 @@ func TestLogLevelMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -800,6 +814,7 @@ func TestLogLevelMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"severity": "invalid_level"}`)
@@ -819,6 +834,7 @@ func TestLogLevelMethod(t *testing.T) {
 					Context:    context.Background(),
 					Role:       types.RoleAdmin,
 					ApiVersion: types.ApiVersion1,
+					Services:   services,
 				}
 
 				params, _ := json.Marshal(map[string]string{"severity": level})
@@ -839,8 +855,7 @@ func TestLogLevelMethod(t *testing.T) {
 
 func TestLogRotateMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.LogRotateMethod{}
 
@@ -849,6 +864,7 @@ func TestLogRotateMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -870,8 +886,7 @@ func TestLogRotateMethod(t *testing.T) {
 
 func TestAMMInfoMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.AMMInfoMethod{}
 
@@ -881,6 +896,7 @@ func TestAMMInfoMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"amm_account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}`)
@@ -897,6 +913,7 @@ func TestAMMInfoMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{
@@ -917,6 +934,7 @@ func TestAMMInfoMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{}`)
@@ -932,6 +950,7 @@ func TestAMMInfoMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{
@@ -955,8 +974,7 @@ func TestAMMInfoMethod(t *testing.T) {
 
 func TestVaultInfoMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.VaultInfoMethod{}
 
@@ -966,6 +984,7 @@ func TestVaultInfoMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"vault_id": "0000000000000000000000000000000000000000000000000000000000000000"}`)
@@ -982,6 +1001,7 @@ func TestVaultInfoMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"owner": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", "seq": 1}`)
@@ -998,6 +1018,7 @@ func TestVaultInfoMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"vault_id": "invalid_hex"}`)
@@ -1013,6 +1034,7 @@ func TestVaultInfoMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{}`)
@@ -1028,6 +1050,7 @@ func TestVaultInfoMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{
@@ -1050,8 +1073,7 @@ func TestVaultInfoMethod(t *testing.T) {
 
 func TestUnlListMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.UnlListMethod{}
 
@@ -1060,6 +1082,7 @@ func TestUnlListMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -1080,8 +1103,7 @@ func TestUnlListMethod(t *testing.T) {
 
 func TestBlackListMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	cleanup := setupTestServicesMissingMethods(mock)
-	defer cleanup()
+	services := servicesForMissingMethods(mock)
 
 	method := &handlers.BlackListMethod{}
 
@@ -1090,6 +1112,7 @@ func TestBlackListMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -1106,6 +1129,7 @@ func TestBlackListMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		params := json.RawMessage(`{"threshold": 100}`)
@@ -1124,14 +1148,11 @@ func TestBlackListMethod(t *testing.T) {
 
 func TestMissingMethodsServiceUnavailable(t *testing.T) {
 	// Test all methods handle nil Services gracefully
-	oldServices := types.Services
-	types.Services = nil
-	defer func() { types.Services = oldServices }()
-
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	methods := []struct {
@@ -1180,14 +1201,11 @@ func TestMissingMethodsServiceUnavailable(t *testing.T) {
 
 func TestMissingMethodsNilLedgerService(t *testing.T) {
 	// Test all methods handle nil Ledger gracefully
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{Ledger: nil}
-	defer func() { types.Services = oldServices }()
-
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
+		Services:   &types.ServiceContainer{Ledger: nil},
 	}
 
 	// Methods that depend on ledger service should return RpcINTERNAL when Ledger is nil

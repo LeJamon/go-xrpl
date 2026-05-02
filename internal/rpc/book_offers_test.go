@@ -31,28 +31,23 @@ func newBookOffersMock() *bookOffersMock {
 	}
 }
 
-func setupBookOffersTestServices(mock *bookOffersMock) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
-		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
-	}
+// newBookOffersTestServices builds a *types.ServiceContainer wrapping the mock.
+func newBookOffersTestServices(mock *bookOffersMock) *types.ServiceContainer {
+	return &types.ServiceContainer{Ledger: mock}
 }
 
 // TestBookOffersErrorValidation tests error handling for invalid inputs
 // Based on rippled Book_test.cpp testBookOfferErrors()
 func TestBookOffersErrorValidation(t *testing.T) {
 	mock := newBookOffersMock()
-	cleanup := setupBookOffersTestServices(mock)
-	defer cleanup()
+	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -179,14 +174,14 @@ func TestBookOffersErrorValidation(t *testing.T) {
 // In rippled, XRP amounts in book_offers use {currency: "XRP"} object format
 func TestBookOffersXRPAmountHandling(t *testing.T) {
 	mock := newBookOffersMock()
-	cleanup := setupBookOffersTestServices(mock)
-	defer cleanup()
+	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Track what arguments are passed to GetBookOffers
@@ -273,14 +268,14 @@ func TestBookOffersXRPAmountHandling(t *testing.T) {
 // Based on rippled Book_test.cpp testTrackOffers() book_offers call
 func TestBookOffersValidRequestWithOffers(t *testing.T) {
 	mock := newBookOffersMock()
-	cleanup := setupBookOffersTestServices(mock)
-	defer cleanup()
+	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	expectedOffers := []types.BookOffer{
@@ -391,14 +386,14 @@ func TestBookOffersValidRequestWithOffers(t *testing.T) {
 // Based on rippled Book_test.cpp testOneSideEmptyBook() - empty offers array
 func TestBookOffersEmptyOrderBook(t *testing.T) {
 	mock := newBookOffersMock()
-	cleanup := setupBookOffersTestServices(mock)
-	defer cleanup()
+	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
@@ -444,14 +439,14 @@ func TestBookOffersEmptyOrderBook(t *testing.T) {
 // Based on rippled Book_test.cpp testBookOfferLimits()
 func TestBookOffersLimitParameter(t *testing.T) {
 	mock := newBookOffersMock()
-	cleanup := setupBookOffersTestServices(mock)
-	defer cleanup()
+	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Track the limit passed to GetBookOffers
@@ -552,14 +547,14 @@ func TestBookOffersLimitParameter(t *testing.T) {
 // Based on rippled book_offers response format (offers array, ledger_index, validated)
 func TestBookOffersResponseStructure(t *testing.T) {
 	mock := newBookOffersMock()
-	cleanup := setupBookOffersTestServices(mock)
-	defer cleanup()
+	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
@@ -641,14 +636,14 @@ func TestBookOffersResponseStructure(t *testing.T) {
 // Based on rippled Book_test.cpp testTrackOffers() field assertions
 func TestBookOffersOfferFields(t *testing.T) {
 	mock := newBookOffersMock()
-	cleanup := setupBookOffersTestServices(mock)
-	defer cleanup()
+	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
@@ -762,11 +757,6 @@ func TestBookOffersOfferFields(t *testing.T) {
 // TestBookOffersServiceUnavailable tests behavior when ledger service is not available
 func TestBookOffersServiceUnavailable(t *testing.T) {
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
-	}
 
 	params := map[string]interface{}{
 		"taker_pays": map[string]interface{}{
@@ -781,9 +771,12 @@ func TestBookOffersServiceUnavailable(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("Services is nil", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = nil
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   nil,
+		}
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 
@@ -794,9 +787,12 @@ func TestBookOffersServiceUnavailable(t *testing.T) {
 	})
 
 	t.Run("Ledger is nil", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = &types.ServiceContainer{Ledger: nil}
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: nil},
+		}
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 
@@ -810,14 +806,14 @@ func TestBookOffersServiceUnavailable(t *testing.T) {
 // TestBookOffersServiceError tests behavior when GetBookOffers returns an error
 func TestBookOffersServiceError(t *testing.T) {
 	mock := newBookOffersMock()
-	cleanup := setupBookOffersTestServices(mock)
-	defer cleanup()
+	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
@@ -864,14 +860,14 @@ func TestBookOffersMethodMetadata(t *testing.T) {
 // TestBookOffersLedgerIndexPassthrough tests that the ledger_index is forwarded to the service
 func TestBookOffersLedgerIndexPassthrough(t *testing.T) {
 	mock := newBookOffersMock()
-	cleanup := setupBookOffersTestServices(mock)
-	defer cleanup()
+	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	var capturedLedgerIndex string
@@ -942,14 +938,14 @@ func TestBookOffersLedgerIndexPassthrough(t *testing.T) {
 // TestBookOffersNilOffersArray tests that nil offers are serialized as an empty array
 func TestBookOffersNilOffersArray(t *testing.T) {
 	mock := newBookOffersMock()
-	cleanup := setupBookOffersTestServices(mock)
-	defer cleanup()
+	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {

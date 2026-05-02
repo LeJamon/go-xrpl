@@ -28,12 +28,12 @@ type validatorInfoResponse struct {
 	Domain string  `json:"domain,omitempty"`
 }
 
-func (m *ValidatorInfoMethod) Handle(_ *types.RpcContext, _ json.RawMessage) (interface{}, *types.RpcError) {
-	if types.Services == nil || len(types.Services.ValidatorPublicKey) == 0 {
+func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (interface{}, *types.RpcError) {
+	if ctx.Services == nil || len(ctx.Services.ValidatorPublicKey) == 0 {
 		return nil, types.RpcErrorInvalidParams("not a validator")
 	}
 
-	validationPK := types.Services.ValidatorPublicKey
+	validationPK := ctx.Services.ValidatorPublicKey
 	if len(validationPK) != 33 {
 		return nil, types.RpcErrorInternal("validator public key has invalid length")
 	}
@@ -42,8 +42,8 @@ func (m *ValidatorInfoMethod) Handle(_ *types.RpcContext, _ json.RawMessage) (in
 	copy(keyArr[:], validationPK)
 
 	masterKey := keyArr
-	if types.Services.Manifests != nil {
-		masterKey = types.Services.Manifests.GetMasterKey(keyArr)
+	if ctx.Services.Manifests != nil {
+		masterKey = ctx.Services.Manifests.GetMasterKey(keyArr)
 	}
 
 	masterB58, err := addresscodec.EncodeNodePublicKey(masterKey[:])
@@ -64,14 +64,14 @@ func (m *ValidatorInfoMethod) Handle(_ *types.RpcContext, _ json.RawMessage) (in
 		}
 		resp.EphemeralKey = ephB58
 
-		if manifestBytes, ok := types.Services.Manifests.GetManifest(masterKey); ok {
+		if manifestBytes, ok := ctx.Services.Manifests.GetManifest(masterKey); ok {
 			resp.Manifest = base64.StdEncoding.EncodeToString(manifestBytes)
 		}
-		if seq, ok := types.Services.Manifests.GetSequence(masterKey); ok {
+		if seq, ok := ctx.Services.Manifests.GetSequence(masterKey); ok {
 			s := seq
 			resp.Seq = &s
 		}
-		if domain, ok := types.Services.Manifests.GetDomain(masterKey); ok {
+		if domain, ok := ctx.Services.Manifests.GetDomain(masterKey); ok {
 			resp.Domain = domain
 		}
 	}

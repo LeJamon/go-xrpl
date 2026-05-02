@@ -60,6 +60,13 @@ type RpcContext struct {
 	IsAdmin    bool
 	ClientIP   string
 	PeerSource PeerSource
+	// Services is the per-request service container handlers read to
+	// reach the ledger service, dispatcher, manifest cache, etc. The
+	// HTTP/WebSocket dispatchers populate this from the server's wired
+	// container; tests construct RpcContext directly with whatever
+	// fixtures they need. Replaces the former package-level
+	// types.Services global.
+	Services *ServiceContainer
 }
 
 // Method handler interface - all RPC methods implement this

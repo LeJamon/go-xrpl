@@ -91,16 +91,13 @@ func deterministicEd25519KeypairRPC(seed byte) ([]byte, []byte) {
 	return append([]byte{0xED}, pub...), priv
 }
 
-// withServices replaces the global types.Services for the duration of a
-// test and restores it on cleanup.
-func withServices(t *testing.T, cache types.ManifestLookup) {
-	t.Helper()
-	prev := types.Services
-	types.Services = &types.ServiceContainer{Manifests: cache}
-	t.Cleanup(func() { types.Services = prev })
+// servicesForCache builds a per-test ServiceContainer wired to the given
+// manifest cache.
+func servicesForCache(cache types.ManifestLookup) *types.ServiceContainer {
+	return &types.ServiceContainer{Manifests: cache}
 }
 
-func callManifestRPC(t *testing.T, publicKey string) (map[string]any, *types.RpcError) {
+func callManifestRPC(t *testing.T, services *types.ServiceContainer, publicKey string) (map[string]any, *types.RpcError) {
 	t.Helper()
 	var params json.RawMessage
 	if publicKey != "" {
@@ -110,7 +107,7 @@ func callManifestRPC(t *testing.T, publicKey string) (map[string]any, *types.Rpc
 		params = json.RawMessage(`{}`)
 	}
 	method := &handlers.ManifestMethod{}
-	result, rpcErr := method.Handle(&types.RpcContext{}, params)
+	result, rpcErr := method.Handle(&types.RpcContext{Services: services}, params)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -124,7 +121,7 @@ func callManifestRPC(t *testing.T, publicKey string) (map[string]any, *types.Rpc
 
 func TestRPC_Manifest_ReturnsStoredState_ByMasterKey(t *testing.T) {
 	cache, master, ephemeral, serialized := buildAndApplyManifest(t)
-	withServices(t, cache)
+	services := servicesForCache(cache)
 
 	masterB58, err := addresscodec.EncodeNodePublicKey(master[:])
 	if err != nil {
@@ -135,7 +132,7 @@ func TestRPC_Manifest_ReturnsStoredState_ByMasterKey(t *testing.T) {
 		t.Fatalf("encode ephemeral: %v", err)
 	}
 
-	out, rpcErr := callManifestRPC(t, masterB58)
+	out, rpcErr := callManifestRPC(t, services, masterB58)
 	if rpcErr != nil {
 		t.Fatalf("rpc error: %v", rpcErr)
 	}
@@ -168,14 +165,14 @@ func TestRPC_Manifest_ReturnsStoredState_ByMasterKey(t *testing.T) {
 
 func TestRPC_Manifest_ByEphemeralKey_ResolvesToMaster(t *testing.T) {
 	cache, master, ephemeral, _ := buildAndApplyManifest(t)
-	withServices(t, cache)
+	services := servicesForCache(cache)
 
 	masterB58, _ := addresscodec.EncodeNodePublicKey(master[:])
 	ephemeralB58, _ := addresscodec.EncodeNodePublicKey(ephemeral[:])
 
 	// Query with the EPHEMERAL key — the handler must resolve up to
 	// the master via GetMasterKey and return the master in details.
-	out, rpcErr := callManifestRPC(t, ephemeralB58)
+	out, rpcErr := callManifestRPC(t, services, ephemeralB58)
 	if rpcErr != nil {
 		t.Fatalf("rpc error: %v", rpcErr)
 	}
@@ -190,12 +187,12 @@ func TestRPC_Manifest_ByEphemeralKey_ResolvesToMaster(t *testing.T) {
 
 func TestRPC_Manifest_UnknownKey_ReturnsSparseResponse(t *testing.T) {
 	cache := manifest.NewCache()
-	withServices(t, cache)
+	services := servicesForCache(cache)
 
 	unknownBytes, _ := deterministicEd25519KeypairRPC(0x99)
 	unknownB58, _ := addresscodec.EncodeNodePublicKey(unknownBytes)
 
-	out, rpcErr := callManifestRPC(t, unknownB58)
+	out, rpcErr := callManifestRPC(t, services, unknownB58)
 	if rpcErr != nil {
 		t.Fatalf("rpc error: %v", rpcErr)
 	}
@@ -212,9 +209,9 @@ func TestRPC_Manifest_UnknownKey_ReturnsSparseResponse(t *testing.T) {
 
 func TestRPC_Manifest_MissingPublicKey_InvalidParams(t *testing.T) {
 	cache := manifest.NewCache()
-	withServices(t, cache)
+	services := servicesForCache(cache)
 
-	_, rpcErr := callManifestRPC(t, "")
+	_, rpcErr := callManifestRPC(t, services, "")
 	if rpcErr == nil {
 		t.Fatal("expected error on missing public_key")
 	}

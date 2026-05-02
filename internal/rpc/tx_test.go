@@ -64,14 +64,10 @@ func (m *mockLedgerServiceTx) GetLedgerRange(minSeq, maxSeq uint32) (*types.Ledg
 	}, nil
 }
 
-// setupTestServicesTx initializes the Services singleton with a tx mock for testing
-func setupTestServicesTx(mock *mockLedgerServiceTx) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
+// servicesForTx builds a per-test ServiceContainer with a tx mock.
+func servicesForTx(mock *mockLedgerServiceTx) *types.ServiceContainer {
+	return &types.ServiceContainer{
 		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
 	}
 }
 
@@ -81,14 +77,14 @@ func setupTestServicesTx(mock *mockLedgerServiceTx) func() {
 // Based on rippled Transaction_test.cpp
 func TestTxMethodErrorValidation(t *testing.T) {
 	mock := newMockLedgerServiceTx()
-	cleanup := setupTestServicesTx(mock)
-	defer cleanup()
+	services := servicesForTx(mock)
 
 	method := &handlers.TxMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -278,14 +274,14 @@ func TestTxMethodErrorValidation(t *testing.T) {
 // Based on rippled Transaction_test.cpp testRequest
 func TestTxMethodLookupByHash(t *testing.T) {
 	mock := newMockLedgerServiceTx()
-	cleanup := setupTestServicesTx(mock)
-	defer cleanup()
+	services := servicesForTx(mock)
 
 	method := &handlers.TxMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Valid 64-character transaction hash
@@ -394,14 +390,14 @@ func TestTxMethodLookupByHash(t *testing.T) {
 // Based on rippled Transaction_test.cpp testBinaryRequest
 func TestTxMethodBinaryOption(t *testing.T) {
 	mock := newMockLedgerServiceTx()
-	cleanup := setupTestServicesTx(mock)
-	defer cleanup()
+	services := servicesForTx(mock)
 
 	method := &handlers.TxMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validHash := "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7"
@@ -1027,14 +1023,14 @@ func TestCTIDFormatValidation(t *testing.T) {
 // Based on rippled Transaction_test.cpp testRangeRequest
 func TestTxMethodLedgerRange(t *testing.T) {
 	mock := newMockLedgerServiceTx()
-	cleanup := setupTestServicesTx(mock)
-	defer cleanup()
+	services := servicesForTx(mock)
 
 	method := &handlers.TxMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validHash := "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7"
@@ -1272,14 +1268,14 @@ func boolPtr(b bool) *bool {
 // Based on rippled Transaction_test.cpp testRequest and testBinaryRequest
 func TestTxMethodResponseFields(t *testing.T) {
 	mock := newMockLedgerServiceTx()
-	cleanup := setupTestServicesTx(mock)
-	defer cleanup()
+	services := servicesForTx(mock)
 
 	method := &handlers.TxMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validHash := "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7"
@@ -1421,16 +1417,12 @@ func TestTxMethodResponseFields(t *testing.T) {
 
 // TestTxMethodServiceUnavailable tests behavior when ledger service is not available
 func TestTxMethodServiceUnavailable(t *testing.T) {
-	// Temporarily set Services to nil
-	oldServices := types.Services
-	types.Services = nil
-	defer func() { types.Services = oldServices }()
-
 	method := &handlers.TxMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	params := map[string]interface{}{
@@ -1449,16 +1441,12 @@ func TestTxMethodServiceUnavailable(t *testing.T) {
 
 // TestTxMethodServiceNilLedger tests behavior when ledger service is nil
 func TestTxMethodServiceNilLedger(t *testing.T) {
-	// Set Services with nil Ledger
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{Ledger: nil}
-	defer func() { types.Services = oldServices }()
-
 	method := &handlers.TxMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   &types.ServiceContainer{Ledger: nil},
 	}
 
 	params := map[string]interface{}{
@@ -1500,8 +1488,7 @@ func TestTxMethodMetadata(t *testing.T) {
 // Based on rippled Transaction_test.cpp testRequest with api_version parameter
 func TestTxMethodApiVersions(t *testing.T) {
 	mock := newMockLedgerServiceTx()
-	cleanup := setupTestServicesTx(mock)
-	defer cleanup()
+	services := servicesForTx(mock)
 
 	method := &handlers.TxMethod{}
 
@@ -1536,6 +1523,7 @@ func TestTxMethodApiVersions(t *testing.T) {
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: version,
+				Services:   services,
 			}
 
 			params := map[string]interface{}{
@@ -1653,14 +1641,14 @@ func TestCTIDNetworkIDInResponse(t *testing.T) {
 // TestTxMethodEdgeCases tests various edge cases
 func TestTxMethodEdgeCases(t *testing.T) {
 	mock := newMockLedgerServiceTx()
-	cleanup := setupTestServicesTx(mock)
-	defer cleanup()
+	services := servicesForTx(mock)
 
 	method := &handlers.TxMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("Transaction with corrupted stored data", func(t *testing.T) {
@@ -1735,14 +1723,14 @@ func TestTxMethodEdgeCases(t *testing.T) {
 // TestTxMethodInternalErrors tests internal error handling
 func TestTxMethodInternalErrors(t *testing.T) {
 	mock := newMockLedgerServiceTx()
-	cleanup := setupTestServicesTx(mock)
-	defer cleanup()
+	services := servicesForTx(mock)
 
 	method := &handlers.TxMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("Database error during lookup", func(t *testing.T) {

@@ -12,12 +12,12 @@ import (
 type StopMethod struct{ AdminHandler }
 
 func (m *StopMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if types.Services == nil || types.Services.ShutdownFunc == nil {
+	if ctx.Services == nil || ctx.Services.ShutdownFunc == nil {
 		return nil, types.RpcErrorInternal("Shutdown function not available")
 	}
 
 	// Trigger shutdown asynchronously so the response can be sent first
-	types.Services.ShutdownFunc()
+	ctx.Services.ShutdownFunc()
 
 	response := map[string]interface{}{
 		"message": "ripple server stopping",

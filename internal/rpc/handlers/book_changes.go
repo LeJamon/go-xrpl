@@ -38,21 +38,21 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, err
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
 	// Resolve ledger - default to validated
-	ledgerSeq := types.Services.Ledger.GetValidatedLedgerIndex()
+	ledgerSeq := ctx.Services.Ledger.GetValidatedLedgerIndex()
 	if request.LedgerIndex != "" {
 		li := request.LedgerIndex.String()
 		switch li {
 		case "current":
-			ledgerSeq = types.Services.Ledger.GetCurrentLedgerIndex()
+			ledgerSeq = ctx.Services.Ledger.GetCurrentLedgerIndex()
 		case "closed":
-			ledgerSeq = types.Services.Ledger.GetClosedLedgerIndex()
+			ledgerSeq = ctx.Services.Ledger.GetClosedLedgerIndex()
 		case "validated":
-			ledgerSeq = types.Services.Ledger.GetValidatedLedgerIndex()
+			ledgerSeq = ctx.Services.Ledger.GetValidatedLedgerIndex()
 		default:
 			if n, err := strconv.ParseUint(li, 10, 32); err == nil {
 				ledgerSeq = uint32(n)
@@ -60,7 +60,7 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	targetLedger, err := types.Services.Ledger.GetLedgerBySequence(ledgerSeq)
+	targetLedger, err := ctx.Services.Ledger.GetLedgerBySequence(ledgerSeq)
 	if err != nil {
 		// For the current (open) ledger, return empty changes since no
 		// transactions have been finalized yet.

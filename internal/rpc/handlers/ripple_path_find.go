@@ -103,7 +103,7 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		srcCurrencies = append(srcCurrencies, issue)
 	}
 
-	view, err := types.Services.Ledger.GetClosedLedgerView()
+	view, err := ctx.Services.Ledger.GetClosedLedgerView()
 	if err != nil {
 		return nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
 			"No closed ledger available")

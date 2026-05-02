@@ -99,7 +99,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -165,7 +165,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		}
 
 		oracleKeylet := keylet.Oracle(accountID, documentID)
-		oracleEntry, lookupErr := types.Services.Ledger.GetLedgerEntry(oracleKeylet.Key, ledgerIndex)
+		oracleEntry, lookupErr := ctx.Services.Ledger.GetLedgerEntry(oracleKeylet.Key, ledgerIndex)
 		if lookupErr != nil {
 			continue
 		}

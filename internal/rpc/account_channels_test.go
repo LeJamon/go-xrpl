@@ -166,29 +166,23 @@ func (m *mockAccountChannelsLedgerService) GetClosedLedgerView() (types.LedgerSt
 	return nil, errors.New("not implemented in mock")
 }
 
-// setupAccountChannelsTestServices initializes the Services singleton with a mock for testing
-func setupAccountChannelsTestServices(mock *mockAccountChannelsLedgerService) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
-		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
-	}
+// newAccountChannelsTestServices builds a *types.ServiceContainer wrapping the mock.
+func newAccountChannelsTestServices(mock *mockAccountChannelsLedgerService) *types.ServiceContainer {
+	return &types.ServiceContainer{Ledger: mock}
 }
 
 // TestAccountChannelsErrorValidation tests error handling for invalid inputs
 // Based on rippled PayChan_test.cpp testAccountChannels()
 func TestAccountChannelsErrorValidation(t *testing.T) {
 	mock := newMockAccountChannelsLedgerService()
-	cleanup := setupAccountChannelsTestServices(mock)
-	defer cleanup()
+	services := newAccountChannelsTestServices(mock)
 
 	method := &handlers.AccountChannelsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -284,14 +278,14 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 // Based on rippled PayChan_test.cpp testSimple()
 func TestAccountChannelsSimple(t *testing.T) {
 	mock := newMockAccountChannelsLedgerService()
-	cleanup := setupAccountChannelsTestServices(mock)
-	defer cleanup()
+	services := newAccountChannelsTestServices(mock)
 
 	method := &handlers.AccountChannelsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -477,14 +471,14 @@ func TestAccountChannelsSimple(t *testing.T) {
 // Based on rippled AccountChannels.cpp destination_account parameter handling
 func TestAccountChannelsDestinationFilter(t *testing.T) {
 	mock := newMockAccountChannelsLedgerService()
-	cleanup := setupAccountChannelsTestServices(mock)
-	defer cleanup()
+	services := newAccountChannelsTestServices(mock)
 
 	method := &handlers.AccountChannelsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -570,14 +564,14 @@ func TestAccountChannelsDestinationFilter(t *testing.T) {
 // Based on rippled PayChan_test.cpp channel creation with various options
 func TestAccountChannelsOptionalFields(t *testing.T) {
 	mock := newMockAccountChannelsLedgerService()
-	cleanup := setupAccountChannelsTestServices(mock)
-	defer cleanup()
+	services := newAccountChannelsTestServices(mock)
 
 	method := &handlers.AccountChannelsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -770,14 +764,14 @@ func TestAccountChannelsOptionalFields(t *testing.T) {
 // TestAccountChannelsLedgerSpecification tests different ledger index specifications
 func TestAccountChannelsLedgerSpecification(t *testing.T) {
 	mock := newMockAccountChannelsLedgerService()
-	cleanup := setupAccountChannelsTestServices(mock)
-	defer cleanup()
+	services := newAccountChannelsTestServices(mock)
 
 	method := &handlers.AccountChannelsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -900,15 +894,12 @@ func TestAccountChannelsLedgerSpecification(t *testing.T) {
 
 // TestAccountChannelsServiceUnavailable tests behavior when ledger service is not available
 func TestAccountChannelsServiceUnavailable(t *testing.T) {
-	oldServices := types.Services
-	types.Services = nil
-	defer func() { types.Services = oldServices }()
-
 	method := &handlers.AccountChannelsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	params := map[string]interface{}{
@@ -945,14 +936,14 @@ func TestAccountChannelsMethodMetadata(t *testing.T) {
 // TestAccountChannelsMultipleChannels tests retrieval of multiple channels
 func TestAccountChannelsMultipleChannels(t *testing.T) {
 	mock := newMockAccountChannelsLedgerService()
-	cleanup := setupAccountChannelsTestServices(mock)
-	defer cleanup()
+	services := newAccountChannelsTestServices(mock)
 
 	method := &handlers.AccountChannelsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"

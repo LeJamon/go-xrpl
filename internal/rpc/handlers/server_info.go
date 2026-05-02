@@ -33,11 +33,11 @@ func resolveHostID() string {
 type ServerInfoMethod struct{ BaseHandler }
 
 func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	info := buildServerInfo(true)
+	info := buildServerInfo(ctx.Services, true)
 
 	response := map[string]interface{}{
 		"info": info,
@@ -49,9 +49,9 @@ func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 // buildServerInfo constructs the info/state object.
 // When human is true it produces the server_info format (XRP decimals, converge_time_s, hostid).
 // When human is false it produces the server_state format (drops integers, converge_time, load_base, etc.).
-func buildServerInfo(human bool) map[string]interface{} {
-	serverInfo := types.Services.Ledger.GetServerInfo()
-	baseFee, reserveBase, reserveIncrement := types.Services.Ledger.GetCurrentFees()
+func buildServerInfo(services *types.ServiceContainer, human bool) map[string]interface{} {
+	serverInfo := services.Ledger.GetServerInfo()
+	baseFee, reserveBase, reserveIncrement := services.Ledger.GetCurrentFees()
 
 	// Uptime in seconds
 	uptimeDuration := time.Since(serverStartTime)
@@ -83,11 +83,11 @@ func buildServerInfo(human bool) map[string]interface{} {
 		"build_version":     BuildVersion,
 		"complete_ledgers":  completeLedgers,
 		"io_latency_ms":     observability.SchedLatencyMs(),
-		"pubkey_node":       types.Services.NodePublicKey,
+		"pubkey_node":       services.NodePublicKey,
 		"server_state":      serverState,
 		"uptime":            uptime,
 		"validation_quorum": 1, // TODO: get from consensus/validators
-		"peers":             getPeerCount(),
+		"peers":             getPeerCount(services),
 
 		// Overflow/disconnect counters (string in rippled)
 		"jq_trans_overflow":          "0", // TODO: track real overflow count
@@ -137,8 +137,8 @@ func buildServerInfo(human bool) map[string]interface{} {
 	// last_close: converge_time_s (float seconds) for human, converge_time (int ms) for machine
 	proposers := 0
 	convergeTimeMs := 0
-	if types.Services.LastCloseInfo != nil {
-		proposers, convergeTimeMs = types.Services.LastCloseInfo()
+	if services.LastCloseInfo != nil {
+		proposers, convergeTimeMs = services.LastCloseInfo()
 	}
 	if human {
 		info["last_close"] = map[string]interface{}{
@@ -224,16 +224,16 @@ func buildServerInfo(human bool) map[string]interface{} {
 	}
 
 	// amendment_blocked: rippled only includes this when true
-	if types.Services.Ledger.IsAmendmentBlocked() {
+	if services.Ledger.IsAmendmentBlocked() {
 		info["amendment_blocked"] = true
 	}
 
 	return info
 }
 
-func getPeerCount() int {
-	if types.Services.PeerCount != nil {
-		return types.Services.PeerCount()
+func getPeerCount(services *types.ServiceContainer) int {
+	if services.PeerCount != nil {
+		return services.PeerCount()
 	}
 	return 0
 }

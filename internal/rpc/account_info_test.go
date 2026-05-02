@@ -145,30 +145,24 @@ func (m *mockLedgerService) GetClosedLedgerView() (types.LedgerStateView, error)
 	return nil, errors.New("not implemented in mock")
 }
 
-// setupTestServices initializes the Services singleton with a mock for testing.
+// newTestServices builds a *types.ServiceContainer wrapping the given LedgerService.
 // Accepts any type that implements types.LedgerService.
-func setupTestServices(mock types.LedgerService) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
-		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
-	}
+func newTestServices(mock types.LedgerService) *types.ServiceContainer {
+	return &types.ServiceContainer{Ledger: mock}
 }
 
 // TestAccountInfoErrorValidation tests error handling for invalid inputs
 // Based on rippled AccountInfo_test.cpp testErrors()
 func TestAccountInfoErrorValidation(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	method := &handlers.AccountInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -303,14 +297,14 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 // Based on rippled's ledger specification behavior
 func TestAccountInfoLedgerSpecification(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	method := &handlers.AccountInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -505,14 +499,14 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 // Based on rippled account_info response structure
 func TestAccountInfoResponseFields(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	method := &handlers.AccountInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -692,14 +686,14 @@ func TestAccountInfoResponseFields(t *testing.T) {
 // Based on rippled AccountInfo_test.cpp testInvalidAccountParam
 func TestAccountInfoInvalidAccountTypes(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	method := &handlers.AccountInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// These test cases mirror rippled's testInvalidAccountParam lambda
@@ -744,14 +738,14 @@ func TestAccountInfoInvalidAccountTypes(t *testing.T) {
 // Based on rippled AccountInfo_test.cpp malformed account tests
 func TestAccountInfoMalformedAddresses(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	method := &handlers.AccountInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	malformedAddresses := []struct {
@@ -792,16 +786,12 @@ func TestAccountInfoMalformedAddresses(t *testing.T) {
 
 // TestAccountInfoServiceUnavailable tests behavior when ledger service is not available
 func TestAccountInfoServiceUnavailable(t *testing.T) {
-	// Temporarily set Services to nil
-	oldServices := types.Services
-	types.Services = nil
-	defer func() { types.Services = oldServices }()
-
 	method := &handlers.AccountInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	params := map[string]interface{}{
@@ -820,16 +810,12 @@ func TestAccountInfoServiceUnavailable(t *testing.T) {
 
 // TestAccountInfoServiceNilLedger tests behavior when ledger service is nil
 func TestAccountInfoServiceNilLedger(t *testing.T) {
-	// Set Services with nil Ledger
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{Ledger: nil}
-	defer func() { types.Services = oldServices }()
-
 	method := &handlers.AccountInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   &types.ServiceContainer{Ledger: nil},
 	}
 
 	params := map[string]interface{}{
@@ -866,14 +852,14 @@ func TestAccountInfoMethodMetadata(t *testing.T) {
 // TestAccountInfoStrictMode tests the strict parameter behavior
 func TestAccountInfoStrictMode(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	method := &handlers.AccountInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -919,14 +905,14 @@ func TestAccountInfoStrictMode(t *testing.T) {
 // TestAccountInfoLedgerIndexFormats tests different ledger_index format handling
 func TestAccountInfoLedgerIndexFormats(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := newTestServices(mock)
 
 	method := &handlers.AccountInfoMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"

@@ -253,13 +253,13 @@ func TestWalletPropose_Metadata(t *testing.T) {
 
 func TestSign_MissingTxJson(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{"secret": "sn3nxiW7v8KXzPzAqzyHXbSSKNuN9"}`)
@@ -271,13 +271,13 @@ func TestSign_MissingTxJson(t *testing.T) {
 
 func TestSign_MissingCredentials(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -296,13 +296,13 @@ func TestSign_MissingCredentials(t *testing.T) {
 
 func TestSign_InvalidKeyType(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -323,13 +323,13 @@ func TestSign_InvalidKeyType(t *testing.T) {
 
 func TestSign_InvalidSeed(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -353,13 +353,13 @@ func TestSign_InvalidSeed(t *testing.T) {
 
 func TestSign_AccountMismatch(t *testing.T) {
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Account in tx_json doesn't match the key derived from seed_hex
@@ -379,15 +379,11 @@ func TestSign_AccountMismatch(t *testing.T) {
 }
 
 func TestSign_LedgerServiceUnavailable(t *testing.T) {
-	// Services set to nil
-	oldServices := types.Services
-	types.Services = nil
-	defer func() { types.Services = oldServices }()
-
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	params := json.RawMessage(`{
@@ -407,14 +403,11 @@ func TestSign_LedgerServiceUnavailable(t *testing.T) {
 
 func TestSign_OfflineMode(t *testing.T) {
 	// No services needed for offline mode
-	oldServices := types.Services
-	types.Services = nil
-	defer func() { types.Services = oldServices }()
-
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	// Use passphrase and provide all required fields
@@ -467,13 +460,13 @@ func TestSign_FeeMultMax_DefaultAccepted(t *testing.T) {
 	// With default fee_mult_max=10 and fee_div_max=1, a baseFee of 10
 	// should be accepted (10 <= 10*10/1 = 100).
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// No Fee in tx_json, auto-fill will kick in
@@ -501,13 +494,13 @@ func TestSign_FeeMultMax_ZeroRejects(t *testing.T) {
 	// fee_mult_max=0 means limit = baseFee * 0 / 1 = 0.
 	// Since networkFee (10) > 0, should return rpcHIGH_FEE.
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -530,13 +523,13 @@ func TestSign_FeeDivMax_LargeRejects(t *testing.T) {
 	// fee_div_max=100 means limit = baseFee * 10 / 100 = 1.
 	// Since networkFee (10) > 1, should return rpcHIGH_FEE.
 	mock := newMockLedgerService()
-	cleanup := setupTestServices(mock)
-	defer cleanup()
+	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -1004,13 +997,13 @@ func TestSignFor_Metadata(t *testing.T) {
 
 func TestSubmitMultisigned_MissingTxJson(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{}`)
@@ -1021,13 +1014,13 @@ func TestSubmitMultisigned_MissingTxJson(t *testing.T) {
 
 func TestSubmitMultisigned_MissingAccount(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -1048,13 +1041,13 @@ func TestSubmitMultisigned_MissingAccount(t *testing.T) {
 
 func TestSubmitMultisigned_NonEmptySigningPubKey(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -1076,13 +1069,13 @@ func TestSubmitMultisigned_NonEmptySigningPubKey(t *testing.T) {
 
 func TestSubmitMultisigned_EmptySignersArray(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -1104,13 +1097,13 @@ func TestSubmitMultisigned_EmptySignersArray(t *testing.T) {
 
 func TestSubmitMultisigned_InvalidSignerFormat(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -1136,13 +1129,13 @@ func TestSubmitMultisigned_InvalidSignerFormat(t *testing.T) {
 
 func TestSubmitMultisigned_MissingSignerAccount(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -1171,13 +1164,13 @@ func TestSubmitMultisigned_MissingSignerAccount(t *testing.T) {
 
 func TestSubmitMultisigned_MissingSigningPubKey(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -1206,13 +1199,13 @@ func TestSubmitMultisigned_MissingSigningPubKey(t *testing.T) {
 
 func TestSubmitMultisigned_MissingTxnSignature(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -1241,13 +1234,13 @@ func TestSubmitMultisigned_MissingTxnSignature(t *testing.T) {
 
 func TestSubmitMultisigned_SignersNotSorted(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	cleanup := setupTestServicesSubmit(mock)
-	defer cleanup()
+	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// Signers not sorted by account (rP... < rH... is false alphabetically)
@@ -1284,14 +1277,11 @@ func TestSubmitMultisigned_SignersNotSorted(t *testing.T) {
 }
 
 func TestSubmitMultisigned_LedgerServiceUnavailable(t *testing.T) {
-	oldServices := types.Services
-	types.Services = nil
-	defer func() { types.Services = oldServices }()
-
 	handler := &handlers.SubmitMultisignedMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   nil,
 	}
 
 	params := json.RawMessage(`{

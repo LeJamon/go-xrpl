@@ -35,16 +35,9 @@ func newAccountObjectsMock() *accountObjectsMock {
 	}
 }
 
-// setupAccountObjectsTestServices wires the accountObjectsMock into the global
-// types.Services singleton and returns a cleanup function.
-func setupAccountObjectsTestServices(mock *accountObjectsMock) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
-		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
-	}
+// newAccountObjectsTestServices builds a *types.ServiceContainer wrapping the mock.
+func newAccountObjectsTestServices(mock *accountObjectsMock) *types.ServiceContainer {
+	return &types.ServiceContainer{Ledger: mock}
 }
 
 // Test: Error cases – missing / invalid / malformed account
@@ -52,14 +45,14 @@ func setupAccountObjectsTestServices(mock *accountObjectsMock) func() {
 
 func TestAccountObjectsErrorValidation(t *testing.T) {
 	mock := newAccountObjectsMock()
-	cleanup := setupAccountObjectsTestServices(mock)
-	defer cleanup()
+	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -196,14 +189,14 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 
 func TestAccountObjectsResponseStructure(t *testing.T) {
 	mock := newAccountObjectsMock()
-	cleanup := setupAccountObjectsTestServices(mock)
-	defer cleanup()
+	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -320,14 +313,14 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 
 func TestAccountObjectsEmptyAccount(t *testing.T) {
 	mock := newAccountObjectsMock()
-	cleanup := setupAccountObjectsTestServices(mock)
-	defer cleanup()
+	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -379,14 +372,14 @@ func TestAccountObjectsEmptyAccount(t *testing.T) {
 
 func TestAccountObjectsTypeFiltering(t *testing.T) {
 	mock := newAccountObjectsMock()
-	cleanup := setupAccountObjectsTestServices(mock)
-	defer cleanup()
+	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -455,14 +448,14 @@ func TestAccountObjectsTypeFiltering(t *testing.T) {
 
 func TestAccountObjectsDeletionBlockersOnly(t *testing.T) {
 	mock := newAccountObjectsMock()
-	cleanup := setupAccountObjectsTestServices(mock)
-	defer cleanup()
+	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -525,14 +518,14 @@ func TestAccountObjectsDeletionBlockersOnly(t *testing.T) {
 
 func TestAccountObjectsPagination(t *testing.T) {
 	mock := newAccountObjectsMock()
-	cleanup := setupAccountObjectsTestServices(mock)
-	defer cleanup()
+	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -669,14 +662,14 @@ func TestAccountObjectsPagination(t *testing.T) {
 
 func TestAccountObjectsLedgerSpecification(t *testing.T) {
 	mock := newAccountObjectsMock()
-	cleanup := setupAccountObjectsTestServices(mock)
-	defer cleanup()
+	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -766,11 +759,6 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 
 func TestAccountObjectsServiceUnavailable(t *testing.T) {
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
-	}
 
 	params := map[string]interface{}{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
@@ -779,9 +767,12 @@ func TestAccountObjectsServiceUnavailable(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("Services is nil", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = nil
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   nil,
+		}
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 
@@ -792,9 +783,12 @@ func TestAccountObjectsServiceUnavailable(t *testing.T) {
 	})
 
 	t.Run("Ledger is nil", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = &types.ServiceContainer{Ledger: nil}
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: nil},
+		}
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 
@@ -828,14 +822,14 @@ func TestAccountObjectsMethodMetadata(t *testing.T) {
 
 func TestAccountObjectsInvalidAccountTypes(t *testing.T) {
 	mock := newAccountObjectsMock()
-	cleanup := setupAccountObjectsTestServices(mock)
-	defer cleanup()
+	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	invalidParams := []struct {
@@ -879,14 +873,14 @@ func TestAccountObjectsInvalidAccountTypes(t *testing.T) {
 
 func TestAccountObjectsMalformedAddresses(t *testing.T) {
 	mock := newAccountObjectsMock()
-	cleanup := setupAccountObjectsTestServices(mock)
-	defer cleanup()
+	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	malformedAddresses := []struct {
@@ -941,14 +935,14 @@ func TestAccountObjectsMalformedAddresses(t *testing.T) {
 
 func TestAccountObjectsServiceErrors(t *testing.T) {
 	mock := newAccountObjectsMock()
-	cleanup := setupAccountObjectsTestServices(mock)
-	defer cleanup()
+	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -997,14 +991,14 @@ func TestAccountObjectsServiceErrors(t *testing.T) {
 
 func TestAccountObjectsAccountEcho(t *testing.T) {
 	mock := newAccountObjectsMock()
-	cleanup := setupAccountObjectsTestServices(mock)
-	defer cleanup()
+	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -1042,8 +1036,7 @@ func TestAccountObjectsAccountEcho(t *testing.T) {
 
 func TestAccountObjectsApiVersions(t *testing.T) {
 	mock := newAccountObjectsMock()
-	cleanup := setupAccountObjectsTestServices(mock)
-	defer cleanup()
+	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -1065,6 +1058,7 @@ func TestAccountObjectsApiVersions(t *testing.T) {
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: version,
+				Services:   services,
 			}
 
 			params := map[string]interface{}{

@@ -21,12 +21,12 @@ import (
 type FeeMethod struct{}
 
 func (m *FeeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	baseFee, _, _ := types.Services.Ledger.GetCurrentFees()
-	currentLedgerIndex := types.Services.Ledger.GetCurrentLedgerIndex()
+	baseFee, _, _ := ctx.Services.Ledger.GetCurrentFees()
+	currentLedgerIndex := ctx.Services.Ledger.GetCurrentLedgerIndex()
 
 	baseFeeStr := fmt.Sprintf("%d", baseFee)
 
@@ -39,7 +39,7 @@ func (m *FeeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (inter
 	// max_queue_size = ledgersInQueue * txPerLedger.
 	expectedLedgerSize := "32"
 	maxQueueSize := "640"
-	if types.Services.Ledger.IsStandalone() {
+	if ctx.Services.Ledger.IsStandalone() {
 		expectedLedgerSize = "1000"
 		maxQueueSize = "20000"
 	}

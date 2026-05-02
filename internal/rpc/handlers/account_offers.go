@@ -25,7 +25,7 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, err
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -36,7 +36,7 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	}
 
 	limit := ClampLimit(request.Limit, LimitAccountOffers, ctx.IsAdmin)
-	result, err := types.Services.Ledger.GetAccountOffers(request.Account, ledgerIndex, limit)
+	result, err := ctx.Services.Ledger.GetAccountOffers(request.Account, ledgerIndex, limit)
 	if err != nil {
 		if err.Error() == "account not found" {
 			return nil, &types.RpcError{

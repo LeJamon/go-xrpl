@@ -33,14 +33,9 @@ func (m *accountTxMock) GetAccountTransactions(account string, ledgerMin, ledger
 	return nil, errors.New("not implemented")
 }
 
-func setupTestServicesAccountTx(mock *accountTxMock) func() {
-	oldServices := types.Services
-	types.Services = &types.ServiceContainer{
-		Ledger: mock,
-	}
-	return func() {
-		types.Services = oldServices
-	}
+// newTestServicesAccountTx builds a *types.ServiceContainer wrapping the mock.
+func newTestServicesAccountTx(mock *accountTxMock) *types.ServiceContainer {
+	return &types.ServiceContainer{Ledger: mock}
 }
 
 // Error Validation Tests
@@ -49,14 +44,14 @@ func setupTestServicesAccountTx(mock *accountTxMock) func() {
 // TestAccountTxErrorValidation tests error handling for invalid inputs
 func TestAccountTxErrorValidation(t *testing.T) {
 	mock := newAccountTxMock()
-	cleanup := setupTestServicesAccountTx(mock)
-	defer cleanup()
+	services := newTestServicesAccountTx(mock)
 
 	method := &handlers.AccountTxMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	tests := []struct {
@@ -190,8 +185,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 
 func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 	mock := newAccountTxMock()
-	cleanup := setupTestServicesAccountTx(mock)
-	defer cleanup()
+	services := newTestServicesAccountTx(mock)
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -201,6 +195,7 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
@@ -234,6 +229,7 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
@@ -264,6 +260,7 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
@@ -307,8 +304,7 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 
 func TestAccountTxBinaryMode(t *testing.T) {
 	mock := newAccountTxMock()
-	cleanup := setupTestServicesAccountTx(mock)
-	defer cleanup()
+	services := newTestServicesAccountTx(mock)
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -329,6 +325,7 @@ func TestAccountTxBinaryMode(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion2,
+			Services:   services,
 		}
 
 		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
@@ -392,6 +389,7 @@ func TestAccountTxBinaryMode(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
+			Services:   services,
 		}
 
 		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
@@ -445,8 +443,7 @@ func TestAccountTxBinaryMode(t *testing.T) {
 
 func TestAccountTxForwardReverse(t *testing.T) {
 	mock := newAccountTxMock()
-	cleanup := setupTestServicesAccountTx(mock)
-	defer cleanup()
+	services := newTestServicesAccountTx(mock)
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -454,6 +451,7 @@ func TestAccountTxForwardReverse(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("Forward=true passes forward flag", func(t *testing.T) {
@@ -536,8 +534,7 @@ func TestAccountTxForwardReverse(t *testing.T) {
 
 func TestAccountTxMarkerPagination(t *testing.T) {
 	mock := newAccountTxMock()
-	cleanup := setupTestServicesAccountTx(mock)
-	defer cleanup()
+	services := newTestServicesAccountTx(mock)
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -545,6 +542,7 @@ func TestAccountTxMarkerPagination(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("No marker returns first page", func(t *testing.T) {
@@ -633,8 +631,7 @@ func TestAccountTxMarkerPagination(t *testing.T) {
 
 func TestAccountTxResponseStructure(t *testing.T) {
 	mock := newAccountTxMock()
-	cleanup := setupTestServicesAccountTx(mock)
-	defer cleanup()
+	services := newTestServicesAccountTx(mock)
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -642,6 +639,7 @@ func TestAccountTxResponseStructure(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("Response contains all required fields", func(t *testing.T) {
@@ -767,8 +765,7 @@ func TestAccountTxResponseStructure(t *testing.T) {
 
 func TestAccountTxEmptyAccount(t *testing.T) {
 	mock := newAccountTxMock()
-	cleanup := setupTestServicesAccountTx(mock)
-	defer cleanup()
+	services := newTestServicesAccountTx(mock)
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -776,6 +773,7 @@ func TestAccountTxEmptyAccount(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
@@ -815,8 +813,7 @@ func TestAccountTxEmptyAccount(t *testing.T) {
 
 func TestAccountTxMultipleTransactions(t *testing.T) {
 	mock := newAccountTxMock()
-	cleanup := setupTestServicesAccountTx(mock)
-	defer cleanup()
+	services := newTestServicesAccountTx(mock)
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -854,6 +851,7 @@ func TestAccountTxMultipleTransactions(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion2,
+			Services:   services,
 		}
 
 		params := map[string]interface{}{
@@ -900,6 +898,7 @@ func TestAccountTxMultipleTransactions(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion2,
+			Services:   services,
 		}
 
 		params := map[string]interface{}{
@@ -951,11 +950,6 @@ func TestAccountTxMultipleTransactions(t *testing.T) {
 
 func TestAccountTxServiceUnavailable(t *testing.T) {
 	method := &handlers.AccountTxMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
-	}
 
 	params := map[string]interface{}{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
@@ -964,9 +958,12 @@ func TestAccountTxServiceUnavailable(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("Services is nil", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = nil
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   nil,
+		}
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 
@@ -977,9 +974,12 @@ func TestAccountTxServiceUnavailable(t *testing.T) {
 	})
 
 	t.Run("Services.Ledger is nil", func(t *testing.T) {
-		oldServices := types.Services
-		types.Services = &types.ServiceContainer{Ledger: nil}
-		defer func() { types.Services = oldServices }()
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: nil},
+		}
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 
@@ -994,14 +994,14 @@ func TestAccountTxServiceUnavailable(t *testing.T) {
 
 func TestAccountTxTransactionHistoryNotAvailable(t *testing.T) {
 	mock := newAccountTxMock()
-	cleanup := setupTestServicesAccountTx(mock)
-	defer cleanup()
+	services := newTestServicesAccountTx(mock)
 
 	method := &handlers.AccountTxMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
@@ -1044,8 +1044,7 @@ func TestAccountTxMethodMetadata(t *testing.T) {
 
 func TestAccountTxLimitParameter(t *testing.T) {
 	mock := newAccountTxMock()
-	cleanup := setupTestServicesAccountTx(mock)
-	defer cleanup()
+	services := newTestServicesAccountTx(mock)
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -1053,6 +1052,7 @@ func TestAccountTxLimitParameter(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("Custom limit is passed to service", func(t *testing.T) {
@@ -1121,8 +1121,7 @@ func TestAccountTxInjectDeliveredAmount(t *testing.T) {
 	// indirectly through the handler's JSON mode behavior.
 
 	mock := newAccountTxMock()
-	cleanup := setupTestServicesAccountTx(mock)
-	defer cleanup()
+	services := newTestServicesAccountTx(mock)
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -1130,6 +1129,7 @@ func TestAccountTxInjectDeliveredAmount(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	// We test indirectly: when a Payment transaction is decoded in JSON mode,
@@ -1194,8 +1194,7 @@ func TestAccountTxInjectDeliveredAmount(t *testing.T) {
 
 func TestAccountTxServiceErrors(t *testing.T) {
 	mock := newAccountTxMock()
-	cleanup := setupTestServicesAccountTx(mock)
-	defer cleanup()
+	services := newTestServicesAccountTx(mock)
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -1203,6 +1202,7 @@ func TestAccountTxServiceErrors(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	t.Run("Generic service error", func(t *testing.T) {
@@ -1265,8 +1265,7 @@ func TestAccountTxServiceErrors(t *testing.T) {
 
 func TestAccountTxValidatedField(t *testing.T) {
 	mock := newAccountTxMock()
-	cleanup := setupTestServicesAccountTx(mock)
-	defer cleanup()
+	services := newTestServicesAccountTx(mock)
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -1274,6 +1273,7 @@ func TestAccountTxValidatedField(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	txHash := [32]byte{0x01}
@@ -1326,8 +1326,7 @@ func TestAccountTxValidatedField(t *testing.T) {
 
 func TestAccountTxAccountPassedToService(t *testing.T) {
 	mock := newAccountTxMock()
-	cleanup := setupTestServicesAccountTx(mock)
-	defer cleanup()
+	services := newTestServicesAccountTx(mock)
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -1335,6 +1334,7 @@ func TestAccountTxAccountPassedToService(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {

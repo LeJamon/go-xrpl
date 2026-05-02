@@ -27,7 +27,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, err
 	}
 
-	if err := RequireLedgerService(); err != nil {
+	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -54,7 +54,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		}
 	}
 
-	result, err := types.Services.Ledger.GetLedgerData(ledgerIndex, limit, markerStr)
+	result, err := ctx.Services.Ledger.GetLedgerData(ledgerIndex, limit, markerStr)
 	if err != nil {
 		return nil, types.RpcErrorInternal("Failed to get ledger data: " + err.Error())
 	}
