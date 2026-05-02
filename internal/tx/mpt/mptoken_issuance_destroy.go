@@ -10,9 +10,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeMPTokenIssuanceDestroy, func() tx.Transaction {
+	if err := tx.Register(tx.TypeMPTokenIssuanceDestroy, func() tx.Transaction {
 		return &MPTokenIssuanceDestroy{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenIssuanceDestroy, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // MPTokenIssuanceDestroy destroys a multi-purpose token issuance.

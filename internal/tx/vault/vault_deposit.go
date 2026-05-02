@@ -9,9 +9,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeVaultDeposit, func() tx.Transaction {
+	if err := tx.Register(tx.TypeVaultDeposit, func() tx.Transaction {
 		return &VaultDeposit{BaseTx: *tx.NewBaseTx(tx.TypeVaultDeposit, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // VaultDeposit deposits assets into a vault.

@@ -7,9 +7,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeAMMVote, func() tx.Transaction {
+	if err := tx.Register(tx.TypeAMMVote, func() tx.Transaction {
 		return &AMMVote{BaseTx: *tx.NewBaseTx(tx.TypeAMMVote, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // AMMVote votes on the trading fee for an AMM.

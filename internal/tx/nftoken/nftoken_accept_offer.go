@@ -11,9 +11,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeNFTokenAcceptOffer, func() tx.Transaction {
+	if err := tx.Register(tx.TypeNFTokenAcceptOffer, func() tx.Transaction {
 		return &NFTokenAcceptOffer{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenAcceptOffer, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // NFTokenAcceptOffer accepts an NFToken offer.

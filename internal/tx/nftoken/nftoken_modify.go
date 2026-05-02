@@ -10,9 +10,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeNFTokenModify, func() tx.Transaction {
+	if err := tx.Register(tx.TypeNFTokenModify, func() tx.Transaction {
 		return &NFTokenModify{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenModify, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // NFTokenModify modifies an existing NFToken.

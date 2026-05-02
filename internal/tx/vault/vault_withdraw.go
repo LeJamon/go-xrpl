@@ -9,9 +9,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeVaultWithdraw, func() tx.Transaction {
+	if err := tx.Register(tx.TypeVaultWithdraw, func() tx.Transaction {
 		return &VaultWithdraw{BaseTx: *tx.NewBaseTx(tx.TypeVaultWithdraw, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // VaultWithdraw withdraws assets from a vault.

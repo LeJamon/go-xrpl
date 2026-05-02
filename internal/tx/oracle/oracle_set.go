@@ -11,9 +11,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeOracleSet, func() tx.Transaction {
+	if err := tx.Register(tx.TypeOracleSet, func() tx.Transaction {
 		return &OracleSet{BaseTx: *tx.NewBaseTx(tx.TypeOracleSet, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // OracleSet creates or updates a price oracle.

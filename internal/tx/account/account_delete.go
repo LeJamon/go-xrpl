@@ -15,9 +15,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeAccountDelete, func() tx.Transaction {
+	if err := tx.Register(tx.TypeAccountDelete, func() tx.Transaction {
 		return &AccountDelete{BaseTx: *tx.NewBaseTx(tx.TypeAccountDelete, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 type AccountDelete struct {

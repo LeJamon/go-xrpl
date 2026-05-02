@@ -34,9 +34,11 @@ var notDelegatableTxTypes = map[uint16]bool{
 const granularPermissionMin = 65536
 
 func init() {
-	tx.Register(tx.TypeDelegateSet, func() tx.Transaction {
+	if err := tx.Register(tx.TypeDelegateSet, func() tx.Transaction {
 		return &DelegateSet{BaseTx: *tx.NewBaseTx(tx.TypeDelegateSet, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // DelegateSet sets up delegation for an account.

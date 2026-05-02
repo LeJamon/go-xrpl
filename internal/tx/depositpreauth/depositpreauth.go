@@ -28,9 +28,11 @@ const (
 )
 
 func init() {
-	tx.Register(tx.TypeDepositPreauth, func() tx.Transaction {
+	if err := tx.Register(tx.TypeDepositPreauth, func() tx.Transaction {
 		return &DepositPreauth{BaseTx: *tx.NewBaseTx(tx.TypeDepositPreauth, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // CredentialSpec identifies a credential by issuer and type.

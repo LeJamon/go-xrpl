@@ -10,9 +10,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeFee, func() tx.Transaction {
+	if err := tx.Register(tx.TypeFee, func() tx.Transaction {
 		return &SetFee{BaseTx: *tx.NewBaseTx(tx.TypeFee, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // SetFee errors matching rippled

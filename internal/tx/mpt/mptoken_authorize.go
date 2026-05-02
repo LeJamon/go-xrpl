@@ -11,9 +11,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeMPTokenAuthorize, func() tx.Transaction {
+	if err := tx.Register(tx.TypeMPTokenAuthorize, func() tx.Transaction {
 		return &MPTokenAuthorize{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenAuthorize, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // MPTokenAuthorize authorizes or unauthorizes MPToken operations.

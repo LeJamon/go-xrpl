@@ -13,9 +13,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypePermissionedDomainSet, func() tx.Transaction {
+	if err := tx.Register(tx.TypePermissionedDomainSet, func() tx.Transaction {
 		return &PermissionedDomainSet{BaseTx: *tx.NewBaseTx(tx.TypePermissionedDomainSet, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // PermissionedDomainSet creates or modifies a permissioned domain.

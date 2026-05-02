@@ -6,9 +6,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeAMMDelete, func() tx.Transaction {
+	if err := tx.Register(tx.TypeAMMDelete, func() tx.Transaction {
 		return &AMMDelete{BaseTx: *tx.NewBaseTx(tx.TypeAMMDelete, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // AMMDelete deletes an empty AMM.

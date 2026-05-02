@@ -8,9 +8,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeAMMBid, func() tx.Transaction {
+	if err := tx.Register(tx.TypeAMMBid, func() tx.Transaction {
 		return &AMMBid{BaseTx: *tx.NewBaseTx(tx.TypeAMMBid, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // AMMBid places a bid on an AMM auction slot.

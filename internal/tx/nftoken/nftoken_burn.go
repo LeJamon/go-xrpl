@@ -10,9 +10,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeNFTokenBurn, func() tx.Transaction {
+	if err := tx.Register(tx.TypeNFTokenBurn, func() tx.Transaction {
 		return &NFTokenBurn{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenBurn, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // NFTokenBurn burns an NFToken.

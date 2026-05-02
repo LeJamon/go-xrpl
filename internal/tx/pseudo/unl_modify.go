@@ -8,9 +8,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeUNLModify, func() tx.Transaction {
+	if err := tx.Register(tx.TypeUNLModify, func() tx.Transaction {
 		return &UNLModify{BaseTx: *tx.NewBaseTx(tx.TypeUNLModify, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // UNLModify is a pseudo-transaction that modifies the Negative UNL.

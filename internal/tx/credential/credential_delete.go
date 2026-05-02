@@ -10,9 +10,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeCredentialDelete, func() tx.Transaction {
+	if err := tx.Register(tx.TypeCredentialDelete, func() tx.Transaction {
 		return &CredentialDelete{BaseTx: *tx.NewBaseTx(tx.TypeCredentialDelete, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // CredentialDelete deletes a credential.

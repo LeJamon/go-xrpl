@@ -10,9 +10,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeCredentialAccept, func() tx.Transaction {
+	if err := tx.Register(tx.TypeCredentialAccept, func() tx.Transaction {
 		return &CredentialAccept{BaseTx: *tx.NewBaseTx(tx.TypeCredentialAccept, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // CredentialAccept accepts a credential.

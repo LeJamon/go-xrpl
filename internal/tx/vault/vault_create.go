@@ -10,9 +10,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeVaultCreate, func() tx.Transaction {
+	if err := tx.Register(tx.TypeVaultCreate, func() tx.Transaction {
 		return &VaultCreate{BaseTx: *tx.NewBaseTx(tx.TypeVaultCreate, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // VaultCreate creates a new vault.

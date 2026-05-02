@@ -16,9 +16,11 @@ type OfferCancel struct {
 }
 
 func init() {
-	tx.Register(tx.TypeOfferCancel, func() tx.Transaction {
+	if err := tx.Register(tx.TypeOfferCancel, func() tx.Transaction {
 		return &OfferCancel{BaseTx: *tx.NewBaseTx(tx.TypeOfferCancel, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // NewOfferCancel creates a new OfferCancel transaction

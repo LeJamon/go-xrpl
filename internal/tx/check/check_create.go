@@ -8,9 +8,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeCheckCreate, func() tx.Transaction {
+	if err := tx.Register(tx.TypeCheckCreate, func() tx.Transaction {
 		return &CheckCreate{BaseTx: *tx.NewBaseTx(tx.TypeCheckCreate, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 type CheckCreate struct {

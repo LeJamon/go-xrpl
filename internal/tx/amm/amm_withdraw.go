@@ -8,9 +8,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeAMMWithdraw, func() tx.Transaction {
+	if err := tx.Register(tx.TypeAMMWithdraw, func() tx.Transaction {
 		return &AMMWithdraw{BaseTx: *tx.NewBaseTx(tx.TypeAMMWithdraw, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // AMMWithdraw withdraws assets from an AMM.

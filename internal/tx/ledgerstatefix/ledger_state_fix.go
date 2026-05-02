@@ -11,9 +11,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeLedgerStateFix, func() tx.Transaction {
+	if err := tx.Register(tx.TypeLedgerStateFix, func() tx.Transaction {
 		return &LedgerStateFix{BaseTx: *tx.NewBaseTx(tx.TypeLedgerStateFix, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // LedgerStateFix fix types

@@ -9,9 +9,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeTrustSet, func() tx.Transaction {
+	if err := tx.Register(tx.TypeTrustSet, func() tx.Transaction {
 		return &TrustSet{BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // TrustSet creates or modifies a trust line between two accounts.

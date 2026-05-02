@@ -14,9 +14,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypePaymentChannelClaim, func() tx.Transaction {
+	if err := tx.Register(tx.TypePaymentChannelClaim, func() tx.Transaction {
 		return &PaymentChannelClaim{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelClaim, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // PaymentChannelClaim claims XRP from a payment channel.

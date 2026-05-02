@@ -8,9 +8,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeAMMDeposit, func() tx.Transaction {
+	if err := tx.Register(tx.TypeAMMDeposit, func() tx.Transaction {
 		return &AMMDeposit{BaseTx: *tx.NewBaseTx(tx.TypeAMMDeposit, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // AMMDeposit deposits assets into an AMM.

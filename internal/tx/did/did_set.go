@@ -10,9 +10,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeDIDSet, func() tx.Transaction {
+	if err := tx.Register(tx.TypeDIDSet, func() tx.Transaction {
 		return &DIDSet{BaseTx: *tx.NewBaseTx(tx.TypeDIDSet, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // DIDSet creates or updates a DID document.

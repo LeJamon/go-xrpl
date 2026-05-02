@@ -8,9 +8,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeOracleDelete, func() tx.Transaction {
+	if err := tx.Register(tx.TypeOracleDelete, func() tx.Transaction {
 		return &OracleDelete{BaseTx: *tx.NewBaseTx(tx.TypeOracleDelete, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // OracleDelete deletes a price oracle.
