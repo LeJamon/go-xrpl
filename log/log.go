@@ -37,6 +37,7 @@ const (
 	LevelInfo  = slog.LevelInfo  //  0
 	LevelWarn  = slog.LevelWarn  //  4
 	LevelError = slog.LevelError //  8
+	LevelFatal = slog.Level(12)
 )
 
 // Logger is the main logging interface for goXRPL.
@@ -104,6 +105,8 @@ func parseLevel(s string) (Level, bool) {
 		return LevelWarn, true
 	case "error":
 		return LevelError, true
+	case "fatal":
+		return LevelFatal, true
 	default:
 		return LevelInfo, false
 	}
@@ -124,8 +127,10 @@ func LevelName(l Level) string {
 		return "info"
 	case l <= LevelWarn:
 		return "warn"
-	default:
+	case l <= LevelError:
 		return "error"
+	default:
+		return "fatal"
 	}
 }
 
