@@ -426,8 +426,8 @@ func processBlock(
 	}
 
 	// Setup ledger header
-	closeTime := time.Unix(protocol.RippleEpochUnix+int64(postSnapshot.CloseTime), 0).UTC()
-	parentCloseTime := time.Unix(protocol.RippleEpochUnix+int64(preSnapshot.CloseTime), 0).UTC()
+	closeTime := time.Unix(protocol.RippleEpochUnix+postSnapshot.CloseTime, 0).UTC()
+	parentCloseTime := time.Unix(protocol.RippleEpochUnix+preSnapshot.CloseTime, 0).UTC()
 
 	ledgerHeader := header.LedgerHeader{
 		LedgerIndex:         targetLedger,

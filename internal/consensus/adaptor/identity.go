@@ -304,4 +304,3 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 	hash := common.Sha512Half(buf)
 	return hash[:]
 }
-

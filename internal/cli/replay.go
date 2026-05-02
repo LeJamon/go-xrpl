@@ -335,8 +335,8 @@ func executeReplayVerbose(state *StateFixture, env *EnvFixture, txs *TxsFixture,
 		return nil, nil, fmt.Errorf("parsing parent_hash: %w", err)
 	}
 
-	closeTime := time.Unix(protocol.RippleEpochUnix+int64(env.CloseTime), 0).UTC()
-	parentCloseTime := time.Unix(protocol.RippleEpochUnix+int64(env.ParentCloseTime), 0).UTC()
+	closeTime := time.Unix(protocol.RippleEpochUnix+env.CloseTime, 0).UTC()
+	parentCloseTime := time.Unix(protocol.RippleEpochUnix+env.ParentCloseTime, 0).UTC()
 
 	ledgerHeader := header.LedgerHeader{
 		LedgerIndex:         env.LedgerIndex,

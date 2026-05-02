@@ -257,7 +257,7 @@ func isTrustLineFrozenByCounterparty(view tx.LedgerView, accountID, issuerID [20
 	if !ok {
 		return false
 	}
-	freezeFlag := uint32(state.LsfHighFreeze)
+	freezeFlag := state.LsfHighFreeze
 	if !keylet.IsLowAccount(accountID, issuerID) {
 		freezeFlag = state.LsfLowFreeze
 	}
@@ -275,7 +275,7 @@ func isTrustLineFrozenBySelf(view tx.LedgerView, accountID, issuerID [20]byte, c
 	if !ok {
 		return false
 	}
-	freezeFlag := uint32(state.LsfLowFreeze)
+	freezeFlag := state.LsfLowFreeze
 	if !keylet.IsLowAccount(accountID, issuerID) {
 		freezeFlag = state.LsfHighFreeze
 	}
