@@ -130,13 +130,13 @@ func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
 	// Snapshot the parent state map as mutable
 	stateMap, err := parent.stateMap.Snapshot(true)
 	if err != nil {
-		return nil, errors.New("failed to snapshot state map: " + err.Error())
+		return nil, fmt.Errorf("failed to snapshot state map: %w", err)
 	}
 
 	// Create empty transaction map
 	txMap, err := shamap.New(shamap.TypeTransaction)
 	if err != nil {
-		return nil, errors.New("failed to create tx map: " + err.Error())
+		return nil, fmt.Errorf("failed to create tx map: %w", err)
 	}
 
 	// Compute the child's close-time resolution dynamically. Rippled
@@ -498,10 +498,10 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 
 	// Make maps immutable
 	if err := l.stateMap.SetImmutable(); err != nil {
-		return errors.New("failed to make state map immutable: " + err.Error())
+		return fmt.Errorf("failed to make state map immutable: %w", err)
 	}
 	if err := l.txMap.SetImmutable(); err != nil {
-		return errors.New("failed to make tx map immutable: " + err.Error())
+		return fmt.Errorf("failed to make tx map immutable: %w", err)
 	}
 
 	// Update drops (subtract destroyed)
@@ -510,12 +510,12 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 	// Get hashes
 	accountHash, err := l.stateMap.Hash()
 	if err != nil {
-		return errors.New("failed to get state map hash: " + err.Error())
+		return fmt.Errorf("failed to get state map hash: %w", err)
 	}
 
 	txHash, err := l.txMap.Hash()
 	if err != nil {
-		return errors.New("failed to get tx map hash: " + err.Error())
+		return fmt.Errorf("failed to get tx map hash: %w", err)
 	}
 
 	// Update header

@@ -111,7 +111,7 @@ func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
