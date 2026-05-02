@@ -641,7 +641,7 @@ func TestLedgerEntryMissingEntryType(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
+		ApiVersion: types.ApiVersion2,
 		Services:   services,
 	}
 
