@@ -775,7 +775,7 @@ func (s *PaymentSandbox) ApplyToView(view tx.LedgerView) error {
 	for key := range s.deletions {
 		if finalState := s.getDeletedFinalState(key); finalState != nil {
 			if err := view.Update(keylet.Keylet{Key: key}, finalState); err != nil {
-				_ = err
+				return err
 			}
 		}
 		if err := view.Erase(keylet.Keylet{Key: key}); err != nil {
