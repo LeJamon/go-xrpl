@@ -60,11 +60,6 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		case "current":
 			seq := ctx.Services.Ledger.GetCurrentLedgerIndex()
 			targetLedger, lookupErr = ctx.Services.Ledger.GetLedgerBySequence(seq)
-			if lookupErr != nil {
-				// Open ledger may not be in history yet; fall back to closed ledger.
-				seq = ctx.Services.Ledger.GetClosedLedgerIndex()
-				targetLedger, lookupErr = ctx.Services.Ledger.GetLedgerBySequence(seq)
-			}
 		default:
 			var seq uint32
 			if _, scanErr := fmt.Sscanf(ledgerIndexStr, "%d", &seq); scanErr == nil {
