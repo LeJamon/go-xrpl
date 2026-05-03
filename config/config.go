@@ -84,6 +84,11 @@ type Config struct {
 	// rippled's default behavior. Entries are matched against the host:port of
 	// the request Origin (case-insensitive on host); the literal value "*"
 	// also allows all origins.
+	//
+	// This allowlist constrains browser-originated requests only: clients that
+	// send no Origin header (curl, Node-based xrpl.js) are not blocked even
+	// when an allowlist is configured. Pair with a network-level control
+	// (firewall, reverse proxy, mTLS) for stricter access policies.
 	WebSocketAllowedOrigins []string `toml:"websocket_allowed_origins" mapstructure:"websocket_allowed_origins"`
 
 	// Genesis file path (JSON format)

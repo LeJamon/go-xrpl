@@ -58,19 +58,20 @@ type WebSocketConnection struct {
 // test contexts.
 //
 // allowedOrigins controls which Origin headers may upgrade to a WebSocket
-// connection. An empty list (or a list containing "*") allows all origins,
-// matching rippled's default behavior. Otherwise, the request Origin's host
-// (with optional port) is matched case-insensitively against the list.
-// Passed as a variadic for backwards compatibility with existing callers
-// that do not configure an allowlist.
-func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer, allowedOrigins ...[]string) *WebSocketServer {
-	var origins []string
-	if len(allowedOrigins) > 0 {
-		origins = allowedOrigins[0]
-	}
+// connection. nil or an empty list (or a list containing "*") allows all
+// origins, matching rippled's default behavior. Otherwise, the request
+// Origin's host (with optional port) is matched case-insensitively against
+// the list.
+//
+// Note: requests without an Origin header (curl, Node-based xrpl.js) are
+// always permitted because Origin enforcement is meaningful only for
+// browser-originated requests. An operator who wants to fully restrict
+// access by network identity should layer a network-level control (firewall,
+// reverse proxy, mTLS) in addition to this allowlist.
+func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer, allowedOrigins []string) *WebSocketServer {
 	return &WebSocketServer{
 		upgrader: websocket.Upgrader{
-			CheckOrigin: makeCheckOrigin(origins),
+			CheckOrigin: makeCheckOrigin(allowedOrigins),
 			// Don't require specific subprotocol - xrpl.js doesn't use one
 		},
 		subscriptionManager: &subscription.Manager{
