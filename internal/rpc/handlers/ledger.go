@@ -121,7 +121,6 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		"close_time_iso":        closeTimeISO,
 		"close_time_resolution": targetLedger.CloseTimeResolution(),
 		"closed":                targetLedger.IsClosed(),
-		"hash":                  ledgerHash,
 		"ledger_hash":           ledgerHash,
 		"ledger_index":          strconv.FormatUint(uint64(targetLedger.Sequence()), 10),
 		"parent_close_time":     targetLedger.ParentCloseTime(),

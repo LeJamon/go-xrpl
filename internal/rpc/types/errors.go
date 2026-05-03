@@ -250,6 +250,16 @@ func RpcErrorMissingField(field string) *RpcError {
 	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", "Missing field '"+field+"'.")
 }
 
+// RpcErrorFieldNotFoundTransaction returns the transaction_entry-specific
+// error when the tx_hash field is missing. Rippled emits the literal string
+// "fieldNotFoundTransaction" (rippled/src/xrpld/rpc/handlers/TransactionEntry.cpp:48,
+// asserted by rippled/src/test/rpc/TransactionEntry_test.cpp:49); this helper
+// preserves that wire token rather than collapsing into the generic
+// invalidParams response.
+func RpcErrorFieldNotFoundTransaction() *RpcError {
+	return NewRpcError(RpcUNKNOWN, "fieldNotFoundTransaction", "fieldNotFoundTransaction", "Missing field 'tx_hash'.")
+}
+
 // RpcErrorInvalidField returns an error for invalid field value (matches rippled invalid_field_error)
 func RpcErrorInvalidField(field string) *RpcError {
 	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", "Invalid field '"+field+"'.")
