@@ -27,10 +27,11 @@ func NewSTObject(bs interfaces.BinarySerializer) *STObject {
 // and value), and then serializing each field instance.
 // This method returns an error if the JSON input is not a valid object.
 func (t *STObject) FromJSON(json any) ([]byte, error) {
-	if _, ok := json.(map[string]any); !ok {
+	jsonMap, ok := json.(map[string]any)
+	if !ok {
 		return nil, errNotValidJSON
 	}
-	fimap, err := createFieldInstanceMapFromJson(json.(map[string]any))
+	fimap, err := createFieldInstanceMapFromJson(jsonMap)
 
 	if err != nil {
 		return nil, err
