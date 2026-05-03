@@ -88,7 +88,13 @@ func TestDivergence_PrintHashesAndSLEs(t *testing.T) {
 //   sfReserveBase (UInt32)     = 10_000_000
 //   sfReserveIncrement (UInt32)= 2_000_000
 //   sfReferenceFeeUnits (UInt32)= 10
-//   + commonFields: sfLedgerEntryType=0x0066 (FeeSettings=102), sfFlags=0
+//   + commonFields: sfLedgerEntryType=0x0073 (FeeSettings=115,
+//     ledger_entries.macro:312), sfFlags=0.
+//
+// Field-id encoding rule (rippled Serializer.cpp): when fieldCode >= 16,
+// the header is (typeCode<<4)|0 followed by a separate byte holding the
+// fieldCode. So sfReferenceFeeUnits (type=2, field=30) is `20 1E`, not
+// `21 1E` — `21` would mean (type=2, field=1) which is sfFlags.
 func TestDivergence_LegacyFeeSettingsExpectedBytes(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Amendments = nil // legacy
@@ -103,24 +109,26 @@ func TestDivergence_LegacyFeeSettingsExpectedBytes(t *testing.T) {
 	}
 	got := hex.EncodeToString(item.Data())
 	t.Logf("legacy FeeSettings SLE bytes: %s", got)
-	// Manual XRPL binary codec assembly for verification:
-	// fields are sorted by (typeCode, fieldCode):
-	//   UInt16 LedgerEntryType (typeCode=1, fieldCode=1)  -> 0x11 + 0x0066
-	//   UInt32 Flags (typeCode=2, fieldCode=2)            -> 0x22 + 0x00000000
-	//   UInt32 ReferenceFeeUnits (typeCode=2, fieldCode=30)-> 0x21 0x1E + 0x0000000A
-	//   UInt32 ReserveBase (typeCode=2, fieldCode=31)     -> 0x21 0x1F + 0x00989680
-	//   UInt32 ReserveIncrement (typeCode=2, fieldCode=32)-> 0x21 0x20 + 0x001E8480
-	//   UInt64 BaseFee (typeCode=3, fieldCode=5)          -> 0x35 + 0x000000000000000A
-	// Expected hex: "11006622000000002211E000000000A211F00989680212001E8480350000000000000000A"
-	// (printed for human comparison; not asserted because field layout is established by the codec)
-	if len(got) == 0 {
-		t.Fatal("empty FeeSettings bytes")
+	// Fields sorted by (typeCode, fieldCode):
+	//   UInt16 LedgerEntryType  (t=1, f=1)  -> 11 + 0073
+	//   UInt32 Flags            (t=2, f=2)  -> 22 + 00000000
+	//   UInt32 ReferenceFeeUnits(t=2, f=30) -> 20 1E + 0000000A
+	//   UInt32 ReserveBase      (t=2, f=31) -> 20 1F + 00989680
+	//   UInt32 ReserveIncrement (t=2, f=32) -> 20 20 + 001E8480
+	//   UInt64 BaseFee          (t=3, f=5)  -> 35 + 000000000000000A
+	const want = "1100732200000000201e0000000a201f009896802020001e848035000000000000000a"
+	if got != want {
+		t.Fatalf("legacy FeeSettings SLE bytes diverged from rippled wire format\n got:  %s\n want: %s", got, want)
 	}
 }
 
-// TestDivergence_AccountRootDefaultBytes prints exactly what the genesis
-// AccountRoot SLE serializes to, so we can compare against rippled's
-// equivalent byte stream from Ledger.cpp:186-192.
+// TestDivergence_AccountRootDefaultBytes asserts the exact byte stream
+// produced for the genesis AccountRoot SLE, so any drift from rippled's
+// Ledger.cpp:186-192 layout is caught here rather than only via the
+// downstream account_hash mismatch.
+//
+// The genesis account ID is deterministic (DefaultConfig derives it
+// from the well-known seed), so this assertion is stable.
 func TestDivergence_AccountRootDefaultBytes(t *testing.T) {
 	cfg := DefaultConfig()
 	gen, err := Create(cfg)
@@ -134,12 +142,18 @@ func TestDivergence_AccountRootDefaultBytes(t *testing.T) {
 	}
 	got := hex.EncodeToString(item.Data())
 	t.Logf("Genesis AccountRoot SLE bytes: %s", got)
-	// rippled sets only sfSequence=1, sfAccount=<id>, sfBalance=INITIAL_XRP.
-	// commonFields auto-fill: sfLedgerEntryType=0x0061, sfFlags=0.
-	// soeREQUIRED defaults: sfOwnerCount=0, sfPreviousTxnID=0, sfPreviousTxnLgrSeq=0.
-	// goXRPL must produce the same bytes for the genesis hash to match.
-	if len(got) < 80 {
-		t.Fatal("AccountRoot bytes suspiciously short")
+	// Fields sorted by (typeCode, fieldCode):
+	//   UInt16 LedgerEntryType  (t=1, f=1)   -> 11 + 0061 (AccountRoot=97)
+	//   UInt32 Flags            (t=2, f=2)   -> 22 + 00000000
+	//   UInt32 Sequence         (t=2, f=4)   -> 24 + 00000001
+	//   UInt32 PreviousTxnLgrSeq(t=2, f=5)   -> 25 + 00000000
+	//   UInt32 OwnerCount       (t=2, f=13)  -> 2D + 00000000
+	//   Hash256 PreviousTxnID   (t=5, f=5)   -> 55 + <32 zero bytes>
+	//   Amount  Balance         (t=6, f=2)   -> 62 + 416345785D8A0000 (INITIAL_XRP, native)
+	//   Blob    AccountID       (t=8, f=1)   -> 81 14 + <20-byte genesis account>
+	const want = "1100612200000000240000000125000000002d0000000055000000000000000000000000000000000000000000000000000000000000000062416345785d8a00008114b5f762798a53d543a014caf8b297cff8f2f937e8"
+	if got != want {
+		t.Fatalf("Genesis AccountRoot SLE bytes diverged from rippled wire format\n got:  %s\n want: %s", got, want)
 	}
 }
 
