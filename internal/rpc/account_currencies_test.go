@@ -50,7 +50,7 @@ func (m *mockAccountCurrenciesLedgerService) GetClosedLedgerIndex() uint32 {
 func (m *mockAccountCurrenciesLedgerService) GetValidatedLedgerIndex() uint32 {
 	return m.validatedLedgerIndex
 }
-func (m *mockAccountCurrenciesLedgerService) AcceptLedger() (uint32, error) {
+func (m *mockAccountCurrenciesLedgerService) AcceptLedger(context.Context) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }
 func (m *mockAccountCurrenciesLedgerService) IsStandalone() bool { return m.standalone }

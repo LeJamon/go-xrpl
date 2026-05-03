@@ -12,9 +12,10 @@ import (
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 
-// persistLedger writes the ledger state to storage backends
-func (s *Service) persistLedger(l *ledger.Ledger) error {
-	ctx := context.Background()
+// persistLedger writes the ledger state to storage backends.
+// The caller-supplied ctx is forwarded to every storage backend call so
+// shutdown / request cancellation propagates through the persistence layer.
+func (s *Service) persistLedger(ctx context.Context, l *ledger.Ledger) error {
 	seq := l.Sequence()
 
 	// Persist to NodeStore if configured

@@ -48,7 +48,7 @@ func (m *mockGatewayBalancesLedgerService) GetClosedLedgerIndex() uint32 { retur
 func (m *mockGatewayBalancesLedgerService) GetValidatedLedgerIndex() uint32 {
 	return m.validatedLedgerIndex
 }
-func (m *mockGatewayBalancesLedgerService) AcceptLedger() (uint32, error) {
+func (m *mockGatewayBalancesLedgerService) AcceptLedger(context.Context) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }
 func (m *mockGatewayBalancesLedgerService) IsStandalone() bool { return m.standalone }

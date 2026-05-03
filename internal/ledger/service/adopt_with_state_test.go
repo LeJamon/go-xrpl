@@ -106,7 +106,7 @@ func TestAdoptLedgerWithState_PreservesTxMap(t *testing.T) {
 		AccountHash: expectedStateRoot,
 	}
 
-	require.NoError(t, svc.AdoptLedgerWithState(hdr, stateMap, txMap),
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap),
 		"AdoptLedgerWithState must accept a caller-supplied tx map")
 
 	// The adopted ledger must carry the caller-supplied tx map.
@@ -163,7 +163,7 @@ func TestAdoptLedgerWithState_NilTxMapFallsBackToEmpty(t *testing.T) {
 		AccountHash: stateRoot,
 	}
 
-	require.NoError(t, svc.AdoptLedgerWithState(hdr, stateMap, nil),
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, nil),
 		"AdoptLedgerWithState must accept nil txMap (legacy catchup path)")
 
 	adopted, err := svc.GetLedgerByHash(adoptedHash)
@@ -225,7 +225,7 @@ func TestAdoptLedgerWithState_PersistsToRelationalDB(t *testing.T) {
 		AccountHash: stateRoot,
 	}
 
-	require.NoError(t, svc.AdoptLedgerWithState(hdr, stateMap, txMap))
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 
 	// Both adopted transactions must now be retrievable from the DB.
 	for _, wantID := range [][32]byte{id1, id2} {
@@ -285,7 +285,7 @@ func TestAdoptLedgerWithState_PopulatesTxIndex(t *testing.T) {
 		AccountHash: stateRoot,
 	}
 
-	require.NoError(t, svc.AdoptLedgerWithState(hdr, stateMap, txMap))
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 
 	for _, id := range [][32]byte{id1, id2, id3} {
 		seq, ok := svc.txIndex[id]

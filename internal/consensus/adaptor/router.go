@@ -1018,7 +1018,11 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger) error {
 	if err != nil {
 		return fmt.Errorf("snapshot tx map: %w", err)
 	}
-	if err := svc.SubmitHeldAdoption(&hdr, stateMap, txMap); err != nil {
+	// context.TODO: adoptVerifiedLedger is reached from a peer-message
+	// handler stack that does not currently carry a context. Threading
+	// one through the message-dispatch chain is tracked separately from
+	// this issue (#185).
+	if err := svc.SubmitHeldAdoption(context.TODO(), &hdr, stateMap, txMap); err != nil {
 		return fmt.Errorf("adopt with state: %w", err)
 	}
 	if r.adaptor.GetOperatingMode() < consensus.OpModeTracking {
@@ -1298,7 +1302,9 @@ func (r *Router) completeInboundLedger() {
 	// the awaited parent lands. Legacy mtGET_LEDGER is sequential at
 	// the wire level today, but nothing in the protocol forbids
 	// interleaving — the held-queue is the correct seam regardless.
-	if err := svc.SubmitHeldAdoption(h, stateMap, nil); err != nil {
+	// context.TODO: same as adoptVerifiedLedger — reached from a peer-
+	// message handler stack with no plumbed context. See note there.
+	if err := svc.SubmitHeldAdoption(context.TODO(), h, stateMap, nil); err != nil {
 		r.logger.Warn("inbound ledger: failed to adopt with state", "error", err)
 		return
 	}

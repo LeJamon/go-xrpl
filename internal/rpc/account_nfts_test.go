@@ -46,7 +46,7 @@ func (m *mockAccountNFTsLedgerService) GetClosedLedgerIndex() uint32  { return m
 func (m *mockAccountNFTsLedgerService) GetValidatedLedgerIndex() uint32 {
 	return m.validatedLedgerIndex
 }
-func (m *mockAccountNFTsLedgerService) AcceptLedger() (uint32, error) {
+func (m *mockAccountNFTsLedgerService) AcceptLedger(context.Context) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }
 func (m *mockAccountNFTsLedgerService) IsStandalone() bool { return m.standalone }

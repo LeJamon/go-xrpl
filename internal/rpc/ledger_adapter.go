@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -49,8 +50,8 @@ func (a *LedgerServiceAdapter) GetValidatedLedgerIndex() uint32 {
 }
 
 // AcceptLedger closes the current open ledger (standalone mode only)
-func (a *LedgerServiceAdapter) AcceptLedger() (uint32, error) {
-	return a.svc.AcceptLedger()
+func (a *LedgerServiceAdapter) AcceptLedger(ctx context.Context) (uint32, error) {
+	return a.svc.AcceptLedger(ctx)
 }
 
 // IsStandalone returns true if running in standalone mode

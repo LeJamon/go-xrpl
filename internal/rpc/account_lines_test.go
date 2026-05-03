@@ -46,7 +46,7 @@ func (m *mockAccountLinesLedgerService) GetClosedLedgerIndex() uint32  { return 
 func (m *mockAccountLinesLedgerService) GetValidatedLedgerIndex() uint32 {
 	return m.validatedLedgerIndex
 }
-func (m *mockAccountLinesLedgerService) AcceptLedger() (uint32, error) {
+func (m *mockAccountLinesLedgerService) AcceptLedger(context.Context) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }
 func (m *mockAccountLinesLedgerService) IsStandalone() bool                    { return m.standalone }

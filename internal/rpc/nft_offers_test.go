@@ -44,7 +44,7 @@ func newMockNFTOffersLedgerService() *mockNFTOffersLedgerService {
 func (m *mockNFTOffersLedgerService) GetCurrentLedgerIndex() uint32   { return m.currentLedgerIndex }
 func (m *mockNFTOffersLedgerService) GetClosedLedgerIndex() uint32    { return m.closedLedgerIndex }
 func (m *mockNFTOffersLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
-func (m *mockNFTOffersLedgerService) AcceptLedger() (uint32, error) {
+func (m *mockNFTOffersLedgerService) AcceptLedger(context.Context) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }
 func (m *mockNFTOffersLedgerService) IsStandalone() bool { return m.standalone }

@@ -1,6 +1,8 @@
 package types
 
 import (
+	"context"
+
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -71,7 +73,7 @@ type LedgerNavigator interface {
 	GetCurrentLedgerIndex() uint32
 	GetClosedLedgerIndex() uint32
 	GetValidatedLedgerIndex() uint32
-	AcceptLedger() (uint32, error)
+	AcceptLedger(ctx context.Context) (uint32, error)
 	IsStandalone() bool
 }
 

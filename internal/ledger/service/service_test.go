@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
@@ -69,7 +70,7 @@ func TestAcceptLedger(t *testing.T) {
 	initialOpenSeq := svc.GetCurrentLedgerIndex()
 
 	// Accept the ledger (like ledger_accept RPC)
-	closedSeq, err := svc.AcceptLedger()
+	closedSeq, err := svc.AcceptLedger(context.TODO())
 	if err != nil {
 		t.Fatalf("Failed to accept ledger: %v", err)
 	}
@@ -111,7 +112,7 @@ func TestAcceptMultipleLedgers(t *testing.T) {
 
 	// Accept 5 ledgers
 	for i := 0; i < 5; i++ {
-		closedSeq, err := svc.AcceptLedger()
+		closedSeq, err := svc.AcceptLedger(context.TODO())
 		if err != nil {
 			t.Fatalf("Failed to accept ledger %d: %v", i, err)
 		}
@@ -151,7 +152,7 @@ func TestGetLedgerBySequence(t *testing.T) {
 	}
 
 	// Accept a ledger to create more history
-	_, err = svc.AcceptLedger()
+	_, err = svc.AcceptLedger(context.TODO())
 	if err != nil {
 		t.Fatalf("Failed to accept ledger: %v", err)
 	}
@@ -236,7 +237,7 @@ func TestNotStandaloneError(t *testing.T) {
 	}
 
 	// AcceptLedger should fail when not in standalone mode
-	_, err = svc.AcceptLedger()
+	_, err = svc.AcceptLedger(context.TODO())
 	if err != ErrNotStandalone {
 		t.Errorf("Expected ErrNotStandalone, got %v", err)
 	}

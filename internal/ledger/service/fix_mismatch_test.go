@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/drops"
@@ -105,7 +106,7 @@ func TestAdoptLedgerWithState_FixMismatchInvalidatesDivergedTail(t *testing.T) {
 		AccountHash: stateRoot,
 	}
 
-	require.NoError(t, svc.AdoptLedgerWithState(hdrD, stateMap, txMap))
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdrD, stateMap, txMap))
 
 	svc.mu.RLock()
 	defer svc.mu.RUnlock()
@@ -177,7 +178,7 @@ func TestAdoptLedgerWithState_NoMismatchNoOp(t *testing.T) {
 		AccountHash: stateRoot,
 	}
 
-	require.NoError(t, svc.AdoptLedgerWithState(hdrD, stateMap, txMap))
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdrD, stateMap, txMap))
 
 	svc.mu.RLock()
 	defer svc.mu.RUnlock()
@@ -255,7 +256,7 @@ func TestAdoptLedgerWithState_FixMismatchValidatedLedgerInvalidationLogsError(t 
 		AccountHash: stateRoot,
 	}
 
-	require.NoError(t, svc.AdoptLedgerWithState(hdrD, stateMap, txMap))
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdrD, stateMap, txMap))
 
 	svc.mu.RLock()
 	defer svc.mu.RUnlock()
@@ -325,7 +326,7 @@ func TestAdoptLedgerWithState_FixMismatchPurgesTxIndex(t *testing.T) {
 		AccountHash: stateRoot,
 	}
 
-	require.NoError(t, svc.AdoptLedgerWithState(hdrD, stateMap, txMap))
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdrD, stateMap, txMap))
 
 	svc.mu.RLock()
 	defer svc.mu.RUnlock()

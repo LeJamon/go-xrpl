@@ -46,7 +46,7 @@ func (m *mockNoRippleCheckLedgerService) GetClosedLedgerIndex() uint32  { return
 func (m *mockNoRippleCheckLedgerService) GetValidatedLedgerIndex() uint32 {
 	return m.validatedLedgerIndex
 }
-func (m *mockNoRippleCheckLedgerService) AcceptLedger() (uint32, error) {
+func (m *mockNoRippleCheckLedgerService) AcceptLedger(context.Context) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }
 func (m *mockNoRippleCheckLedgerService) IsStandalone() bool { return m.standalone }

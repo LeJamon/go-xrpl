@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
@@ -384,7 +385,7 @@ func TestAdaptor_OnLedgerFullyValidated_FlipsValidatedLedger(t *testing.T) {
 	// genesis. AcceptLedger advances closed and (in standalone mode)
 	// validated to the same ledger.
 	svc := a.ledgerService
-	closedSeq, err := svc.AcceptLedger()
+	closedSeq, err := svc.AcceptLedger(context.TODO())
 	require.NoError(t, err)
 	closed := svc.GetClosedLedger()
 	require.NotNil(t, closed)
@@ -419,7 +420,7 @@ func TestAdaptor_OnLedgerFullyValidated_HashMismatchIsNoop(t *testing.T) {
 
 	// Get to seq=2 via standalone close; capture the existing
 	// validated state so we can prove it didn't move.
-	closedSeq, err := svc.AcceptLedger()
+	closedSeq, err := svc.AcceptLedger(context.TODO())
 	require.NoError(t, err)
 	priorValidated := svc.GetValidatedLedger()
 	require.NotNil(t, priorValidated)
