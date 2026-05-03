@@ -22,6 +22,8 @@ type LedgerServiceAdapter struct {
 	txBroadcaster func(txBlob []byte) // called after successful submit to relay tx to peers
 }
 
+var _ types.LedgerService = (*LedgerServiceAdapter)(nil)
+
 // NewLedgerServiceAdapter creates a new adapter
 func NewLedgerServiceAdapter(svc *service.Service) *LedgerServiceAdapter {
 	return &LedgerServiceAdapter{svc: svc}
@@ -175,7 +177,7 @@ func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte, txBlobHex ...str
 		return &types.SubmitResult{
 			EngineResult:        "temMALFORMED",
 			EngineResultCode:    -299,
-			EngineResultMessage: "Transaction is malformed: " + err.Error(),
+			EngineResultMessage: fmt.Sprintf("Transaction is malformed: %v", err),
 			Applied:             false,
 		}, nil
 	}
@@ -207,7 +209,7 @@ func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte, txBlobHex ...str
 		return &types.SubmitResult{
 			EngineResult:        "tefINTERNAL",
 			EngineResultCode:    -199,
-			EngineResultMessage: "Internal error: " + err.Error(),
+			EngineResultMessage: fmt.Sprintf("Internal error: %v", err),
 			Applied:             false,
 		}, nil
 	}
@@ -823,7 +825,7 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 		return &types.SubmitResult{
 			EngineResult:        "temMALFORMED",
 			EngineResultCode:    -299,
-			EngineResultMessage: "Transaction is malformed: " + err.Error(),
+			EngineResultMessage: fmt.Sprintf("Transaction is malformed: %v", err),
 			Applied:             false,
 		}, nil
 	}
@@ -833,7 +835,7 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 		return &types.SubmitResult{
 			EngineResult:        "tefINTERNAL",
 			EngineResultCode:    -199,
-			EngineResultMessage: "Internal error: " + err.Error(),
+			EngineResultMessage: fmt.Sprintf("Internal error: %v", err),
 			Applied:             false,
 		}, nil
 	}

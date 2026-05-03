@@ -247,7 +247,7 @@ func (s *Service) Start() error {
 	// Create genesis ledger
 	genesisResult, err := genesis.Create(s.config.GenesisConfig)
 	if err != nil {
-		return errors.New("failed to create genesis ledger: " + err.Error())
+		return fmt.Errorf("failed to create genesis ledger: %w", err)
 	}
 
 	// Convert genesis to Ledger.
@@ -274,13 +274,13 @@ func (s *Service) Start() error {
 		// Reference: rippled Application.cpp startGenesisLedger()
 		nextLedger, err := ledger.NewOpen(genesisLedger, time.Now())
 		if err != nil {
-			return errors.New("failed to create next ledger: " + err.Error())
+			return fmt.Errorf("failed to create next ledger: %w", err)
 		}
 		if err := nextLedger.Close(time.Now(), 0); err != nil {
-			return errors.New("failed to close initial ledger: " + err.Error())
+			return fmt.Errorf("failed to close initial ledger: %w", err)
 		}
 		if err := nextLedger.SetValidated(); err != nil {
-			return errors.New("failed to validate initial ledger: " + err.Error())
+			return fmt.Errorf("failed to validate initial ledger: %w", err)
 		}
 		s.closedLedger = nextLedger
 		s.validatedLedger = nextLedger
@@ -289,7 +289,7 @@ func (s *Service) Start() error {
 		// Create the open ledger (ledger 3)
 		openLedger, err := ledger.NewOpen(nextLedger, time.Now())
 		if err != nil {
-			return errors.New("failed to create open ledger: " + err.Error())
+			return fmt.Errorf("failed to create open ledger: %w", err)
 		}
 		s.openLedger = openLedger
 	} else {
@@ -302,7 +302,7 @@ func (s *Service) Start() error {
 		// Create open ledger (seq 2) on top of genesis — will be replaced on adoption
 		openLedger, err := ledger.NewOpen(genesisLedger, time.Now())
 		if err != nil {
-			return errors.New("failed to create open ledger: " + err.Error())
+			return fmt.Errorf("failed to create open ledger: %w", err)
 		}
 		s.openLedger = openLedger
 	}
@@ -433,7 +433,7 @@ func (s *Service) AcceptLedger() (uint32, error) {
 		// Create a fresh open ledger from the LCL
 		freshLedger, err := ledger.NewOpen(s.closedLedger, closeTime)
 		if err != nil {
-			return 0, errors.New("failed to create fresh ledger for canonical reapply: " + err.Error())
+			return 0, fmt.Errorf("failed to create fresh ledger for canonical reapply: %w", err)
 		}
 
 		// Read fees from the LCL for the engine config
@@ -479,7 +479,7 @@ func (s *Service) AcceptLedger() (uint32, error) {
 			// Rebuild fresh from LCL each pass
 			freshLedger, err = ledger.NewOpen(s.closedLedger, closeTime)
 			if err != nil {
-				return 0, errors.New("failed to create fresh ledger: " + err.Error())
+				return 0, fmt.Errorf("failed to create fresh ledger: %w", err)
 			}
 			engineConfig.LedgerSequence = freshLedger.Sequence()
 			engine := tx.NewEngine(freshLedger, engineConfig)
@@ -611,18 +611,18 @@ func (s *Service) AcceptLedger() (uint32, error) {
 
 	// Close the current open ledger
 	if err := s.openLedger.Close(closeTime, 0); err != nil {
-		return 0, errors.New("failed to close ledger: " + err.Error())
+		return 0, fmt.Errorf("failed to close ledger: %w", err)
 	}
 
 	// In standalone mode, immediately validate
 	if err := s.openLedger.SetValidated(); err != nil {
-		return 0, errors.New("failed to validate ledger: " + err.Error())
+		return 0, fmt.Errorf("failed to validate ledger: %w", err)
 	}
 
 	// Persist the closed ledger to storage backends (nodestore and/or relational DB).
 	// persistLedger has internal nil guards for each backend.
 	if err := s.persistLedger(s.openLedger); err != nil {
-		return 0, errors.New("failed to persist ledger: " + err.Error())
+		return 0, fmt.Errorf("failed to persist ledger: %w", err)
 	}
 
 	// Store the closed ledger in memory cache
@@ -647,7 +647,7 @@ func (s *Service) AcceptLedger() (uint32, error) {
 	// Create new open ledger
 	newOpen, err := ledger.NewOpen(s.closedLedger, time.Now())
 	if err != nil {
-		return 0, errors.New("failed to create new open ledger: " + err.Error())
+		return 0, fmt.Errorf("failed to create new open ledger: %w", err)
 	}
 	s.openLedger = newOpen
 
@@ -1168,7 +1168,7 @@ func (s *Service) AcceptConsensusResult(parent *ledger.Ledger, txBlobs [][]byte,
 		// Multi-pass application (same as AcceptLedger)
 		freshLedger, err := ledger.NewOpen(s.closedLedger, closeTime)
 		if err != nil {
-			return 0, errors.New("failed to create fresh ledger for consensus: " + err.Error())
+			return 0, fmt.Errorf("failed to create fresh ledger for consensus: %w", err)
 		}
 
 		baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
@@ -1200,7 +1200,7 @@ func (s *Service) AcceptConsensusResult(parent *ledger.Ledger, txBlobs [][]byte,
 		for pass := 0; pass < totalPasses; pass++ {
 			freshLedger, err = ledger.NewOpen(s.closedLedger, closeTime)
 			if err != nil {
-				return 0, errors.New("failed to create fresh ledger: " + err.Error())
+				return 0, fmt.Errorf("failed to create fresh ledger: %w", err)
 			}
 			engineConfig.LedgerSequence = freshLedger.Sequence()
 			engine := tx.NewEngine(freshLedger, engineConfig)
@@ -1318,14 +1318,14 @@ func (s *Service) AcceptConsensusResult(parent *ledger.Ledger, txBlobs [][]byte,
 
 	// Close the ledger with the consensus-agreed close time
 	if err := s.openLedger.Close(closeTime, 0); err != nil {
-		return 0, errors.New("failed to close ledger: " + err.Error())
+		return 0, fmt.Errorf("failed to close ledger: %w", err)
 	}
 
 	// Do NOT auto-validate — validation comes from the consensus validation tracker.
 
 	// Persist
 	if err := s.persistLedger(s.openLedger); err != nil {
-		return 0, errors.New("failed to persist ledger: " + err.Error())
+		return 0, fmt.Errorf("failed to persist ledger: %w", err)
 	}
 
 	closedSeq := s.openLedger.Sequence()
@@ -1351,7 +1351,7 @@ func (s *Service) AcceptConsensusResult(parent *ledger.Ledger, txBlobs [][]byte,
 	// Create new open ledger
 	newOpen, err := ledger.NewOpen(s.closedLedger, time.Now())
 	if err != nil {
-		return 0, errors.New("failed to create new open ledger: " + err.Error())
+		return 0, fmt.Errorf("failed to create new open ledger: %w", err)
 	}
 	s.openLedger = newOpen
 

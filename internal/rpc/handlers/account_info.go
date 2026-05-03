@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
@@ -37,7 +38,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	var rawFields map[string]json.RawMessage
 	if params != nil {
 		if err := json.Unmarshal(params, &rawFields); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
@@ -103,7 +104,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		if err.Error() == "account not found" {
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
-		return nil, types.RpcErrorInternal("Failed to get account info: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account info: %v", err))
 	}
 
 	// Build account_data by decoding the full SLE binary via binarycodec,

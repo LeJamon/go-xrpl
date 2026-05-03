@@ -56,7 +56,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 
 	result, err := ctx.Services.Ledger.GetLedgerData(ledgerIndex, limit, markerStr)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to get ledger data: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get ledger data: %v", err))
 	}
 
 	// Build state array based on binary flag

@@ -15,7 +15,7 @@ import (
 type UInt64 struct{}
 
 // ErrInvalidUInt64String is returned when a value is not a valid string representation of a UInt64.
-var ErrInvalidUInt64String = errors.New("invalid UInt64 string, value should be a string representation of a UInt64")
+var ErrInvalidUInt64String = errors.New("invalid UInt64 value")
 
 // FromJSON converts a JSON value into a serialized byte slice representing a 64-bit unsigned integer.
 // Accepts either a hex string (e.g. "2E4" for 740) or a numeric value (float64, int, int64, uint64).

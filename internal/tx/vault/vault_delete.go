@@ -72,6 +72,11 @@ func (v *VaultDelete) RequiredAmendments() [][32]byte {
 }
 
 func (v *VaultDelete) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("vault delete apply",
+		"account", v.Account,
+		"vaultID", v.VaultID,
+	)
+
 	if v.VaultID == "" {
 		return tx.TemINVALID
 	}

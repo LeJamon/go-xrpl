@@ -127,6 +127,12 @@ func (v *VaultCreate) RequiredAmendments() [][32]byte {
 }
 
 func (v *VaultCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("vault create apply",
+		"account", v.Account,
+		"asset", v.Asset,
+		"flags", v.GetFlags(),
+	)
+
 	if v.Asset.Currency == "" {
 		return tx.TemINVALID
 	}

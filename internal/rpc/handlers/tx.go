@@ -32,7 +32,7 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interf
 	if request.CTID != "" && request.Transaction == "" {
 		ctidLedgerSeq, ctidTxIndex, err := parseCTID(request.CTID)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid ctid: " + err.Error())
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid ctid: %v", err))
 		}
 		return m.lookupByCTID(ctx, ctidLedgerSeq, ctidTxIndex, request.Binary)
 	}
@@ -66,7 +66,7 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interf
 	// Split the VL-encoded blob into tx bytes and meta bytes
 	txBytes, metaBytes, err := tx.SplitTxWithMetaBlob(txInfo.TxData)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to split transaction blob: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to split transaction blob: %v", err))
 	}
 
 	// Decode transaction binary to JSON
