@@ -305,7 +305,10 @@ func Flow(
 				remainingIn = &ri
 			}
 
-			// Apply the best strand's sandbox changes
+			// Apply the best strand's sandbox changes. A parent-mismatch here
+			// is a programmer-invariant violation; rippled's outer try/catch in
+			// Flow.cpp / RippleCalc.cpp surfaces this as tecINTERNAL (fee
+			// claimed), so we mirror that result code here.
 			if best.sandbox != nil {
 				if err := best.sandbox.Apply(accumSandbox); err != nil {
 					return FlowResult{
@@ -313,7 +316,7 @@ func Flow(
 						Out:             totalOut,
 						Sandbox:         accumSandbox,
 						RemovableOffers: allOfrsToRm,
-						Result:          tx.TefINTERNAL,
+						Result:          tx.TecINTERNAL,
 					}
 				}
 			}
@@ -611,11 +614,13 @@ func RippleCalculate(
 	// Execute flow with FlowSortStrands amendment flag
 	result := Flow(sandbox, strands, outReq, partialPayment, qualityLimit, sendMax, ammCtx, rcOpts.flowSortStrands)
 
-	// Apply flow sandbox changes back to the main sandbox
+	// Apply flow sandbox changes back to the main sandbox. Mirror rippled's
+	// RippleCalc.cpp outer try/catch which returns tecINTERNAL on exceptions
+	// from the apply step.
 	if result.Result == tx.TesSUCCESS || result.Result == tx.TecPATH_PARTIAL {
 		if result.Sandbox != nil {
 			if err := result.Sandbox.Apply(sandbox); err != nil {
-				return ZeroXRPEitherAmount(), ZeroXRPEitherAmount(), nil, nil, tx.TefINTERNAL
+				return ZeroXRPEitherAmount(), ZeroXRPEitherAmount(), nil, nil, tx.TecINTERNAL
 			}
 		}
 	}

@@ -218,8 +218,10 @@ func FlowCross(
 	// For now, always allow partial (FoK is handled by caller)
 	result := Flow(sandbox, strands, deliver, true, &takerQuality, &sendMax, ammCtx, flowSortStrands)
 
-	// Apply the flow sandbox changes to our root sandbox
-	// Reference: rippled CreateOffer.cpp line 711: psbFlow.apply(sb)
+	// Apply the flow sandbox changes to our root sandbox.
+	// Reference: rippled CreateOffer.cpp line 711: psbFlow.apply(sb).
+	// On parent-mismatch invariant violations rippled's outer try/catch
+	// returns tecINTERNAL, so we mirror that result code here.
 	if result.Sandbox != nil {
 		if err := result.Sandbox.Apply(sandbox); err != nil {
 			return FlowCrossResult{
@@ -228,7 +230,7 @@ func FlowCross(
 				TakerPaidNet:    ZeroXRPEitherAmount(),
 				Sandbox:         sandbox,
 				RemovableOffers: nil,
-				Result:          tx.TefINTERNAL,
+				Result:          tx.TecINTERNAL,
 			}
 		}
 	}
