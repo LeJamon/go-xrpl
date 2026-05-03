@@ -89,6 +89,12 @@ func (v *VaultDeposit) RequiredAmendments() [][32]byte {
 }
 
 func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("vault deposit apply",
+		"account", v.Account,
+		"vaultID", v.VaultID,
+		"amount", v.Amount,
+	)
+
 	if v.VaultID == "" || v.Amount.IsZero() {
 		return tx.TemINVALID
 	}
@@ -110,5 +116,12 @@ func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 		ctx.Account.Balance -= amount
 	}
+
+	ctx.Log.Debug("vault deposit: shares issued",
+		"account", v.Account,
+		"vaultID", v.VaultID,
+		"amount", v.Amount,
+		"shares", v.Amount,
+	)
 	return tx.TesSUCCESS
 }
