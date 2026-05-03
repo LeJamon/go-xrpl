@@ -143,7 +143,10 @@ type Database interface {
 	Close() error
 
 	// Sync forces any pending writes to be flushed to disk.
-	Sync() error
+	// The supplied ctx unblocks the caller on cancellation; the
+	// underlying backend flush is uninterruptible and continues
+	// running so partial fsync state is never observed.
+	Sync(ctx context.Context) error
 }
 
 // Statistics holds performance metrics for the NodeStore.

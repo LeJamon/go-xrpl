@@ -358,11 +358,23 @@ func (d *DatabaseImpl) BatchWriter() *BatchWriter {
 	return d.batchWriter
 }
 
-// Sync forces pending writes to disk.
-func (d *DatabaseImpl) Sync() error {
-	status := d.backend.Sync()
-	if status != OK {
-		return errors.New("sync failed: " + status.String())
+// Sync forces pending writes to disk. The flush itself is
+// uninterruptible (a partial fsync would be worse than blocking),
+// but ctx cancellation unblocks the caller while the flush continues
+// in the background.
+func (d *DatabaseImpl) Sync(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	return nil
+	done := make(chan Status, 1)
+	go func() { done <- d.backend.Sync() }()
+	select {
+	case status := <-done:
+		if status != OK {
+			return errors.New("sync failed: " + status.String())
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

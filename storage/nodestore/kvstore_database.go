@@ -244,15 +244,28 @@ func (d *KVDatabaseImpl) Stats() Statistics {
 	return stats
 }
 
-// Sync forces pending writes to disk.
-func (d *KVDatabaseImpl) Sync() error {
+// Sync forces pending writes to disk. The flush itself is
+// uninterruptible; ctx cancellation unblocks the caller while the
+// underlying store flush continues in the background.
+func (d *KVDatabaseImpl) Sync(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	type syncer interface {
 		Sync() error
 	}
-	if s, ok := d.store.(syncer); ok {
-		return s.Sync()
+	s, ok := d.store.(syncer)
+	if !ok {
+		return nil
 	}
-	return nil
+	done := make(chan error, 1)
+	go func() { done <- s.Sync() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Close closes the database.

@@ -318,8 +318,9 @@ type AccountTransaction struct {
 	Meta        []byte   `json:"meta,omitempty"`
 }
 
-// GetAccountTransactions retrieves transaction history for an account
-func (s *Service) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *relationaldb.AccountTxMarker, forward bool) (*AccountTxResult, error) {
+// GetAccountTransactions retrieves transaction history for an account.
+// The supplied ctx is forwarded to the relational DB query.
+func (s *Service) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *relationaldb.AccountTxMarker, forward bool) (*AccountTxResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -363,7 +364,6 @@ func (s *Service) GetAccountTransactions(account string, ledgerMin, ledgerMax in
 		maxLedger = relationaldb.LedgerIndex(s.validatedLedger.Sequence())
 	}
 
-	ctx := context.Background()
 	options := relationaldb.AccountTxPageOptions{
 		Account:   accountID,
 		MinLedger: minLedger,
@@ -412,8 +412,9 @@ type TxHistoryResult struct {
 	Transactions []AccountTransaction `json:"txs"`
 }
 
-// GetTransactionHistory retrieves recent transactions
-func (s *Service) GetTransactionHistory(startIndex uint32) (*TxHistoryResult, error) {
+// GetTransactionHistory retrieves recent transactions.
+// The supplied ctx is forwarded to the relational DB query.
+func (s *Service) GetTransactionHistory(ctx context.Context, startIndex uint32) (*TxHistoryResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -421,7 +422,6 @@ func (s *Service) GetTransactionHistory(startIndex uint32) (*TxHistoryResult, er
 		return nil, errors.New("transaction history not available (no database configured)")
 	}
 
-	ctx := context.Background()
 	txInfos, err := s.relationalDB.Transaction().GetTxHistory(ctx, relationaldb.LedgerIndex(startIndex), 20)
 	if err != nil {
 		return nil, err

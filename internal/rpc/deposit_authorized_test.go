@@ -105,13 +105,13 @@ func (m *mockDepositAuthorizedLedgerService) GetAccountOffers(account string, le
 func (m *mockDepositAuthorizedLedgerService) GetBookOffers(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetTransactionHistory(startIndex uint32) (*types.TxHistoryResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetTransactionHistory(ctx context.Context, startIndex uint32) (*types.TxHistoryResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetLedgerRange(minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockDepositAuthorizedLedgerService) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {

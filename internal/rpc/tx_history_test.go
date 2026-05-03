@@ -27,7 +27,7 @@ func newMockLedgerServiceTxHistory() *mockLedgerServiceTxHistory {
 	}
 }
 
-func (m *mockLedgerServiceTxHistory) GetTransactionHistory(startIndex uint32) (*types.TxHistoryResult, error) {
+func (m *mockLedgerServiceTxHistory) GetTransactionHistory(ctx context.Context, startIndex uint32) (*types.TxHistoryResult, error) {
 	if m.txHistoryErr != nil {
 		return nil, m.txHistoryErr
 	}

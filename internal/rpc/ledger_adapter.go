@@ -411,7 +411,7 @@ func (a *LedgerServiceAdapter) GetBookOffers(takerGets, takerPays types.Amount, 
 }
 
 // GetAccountTransactions retrieves transaction history for an account
-func (a *LedgerServiceAdapter) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+func (a *LedgerServiceAdapter) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 	// Convert RPC marker to service marker
 	var svcMarker *relationaldb.AccountTxMarker
 	if marker != nil {
@@ -421,7 +421,7 @@ func (a *LedgerServiceAdapter) GetAccountTransactions(account string, ledgerMin,
 		}
 	}
 
-	result, err := a.svc.GetAccountTransactions(account, ledgerMin, ledgerMax, limit, svcMarker, forward)
+	result, err := a.svc.GetAccountTransactions(ctx, account, ledgerMin, ledgerMax, limit, svcMarker, forward)
 	if err != nil {
 		return nil, err
 	}
@@ -458,8 +458,8 @@ func (a *LedgerServiceAdapter) GetAccountTransactions(account string, ledgerMin,
 }
 
 // GetTransactionHistory retrieves recent transactions
-func (a *LedgerServiceAdapter) GetTransactionHistory(startIndex uint32) (*types.TxHistoryResult, error) {
-	result, err := a.svc.GetTransactionHistory(startIndex)
+func (a *LedgerServiceAdapter) GetTransactionHistory(ctx context.Context, startIndex uint32) (*types.TxHistoryResult, error) {
+	result, err := a.svc.GetTransactionHistory(ctx, startIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -482,8 +482,8 @@ func (a *LedgerServiceAdapter) GetTransactionHistory(startIndex uint32) (*types.
 }
 
 // GetLedgerRange retrieves ledger hashes for a range of sequences
-func (a *LedgerServiceAdapter) GetLedgerRange(minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
-	result, err := a.svc.GetLedgerRange(minSeq, maxSeq)
+func (a *LedgerServiceAdapter) GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
+	result, err := a.svc.GetLedgerRange(ctx, minSeq, maxSeq)
 	if err != nil {
 		return nil, err
 	}

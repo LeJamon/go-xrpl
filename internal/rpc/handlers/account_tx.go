@@ -96,6 +96,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 
 	result, err := ctx.Services.Ledger.GetAccountTransactions(
+		ctx.Context,
 		request.Account,
 		int64(ledgerIndexMin),
 		int64(ledgerIndexMax),

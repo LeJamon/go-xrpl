@@ -12,20 +12,37 @@ import (
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 
-// persistLedger writes the ledger state to storage backends.
-// The caller-supplied ctx is forwarded to every storage backend call so
-// shutdown / request cancellation propagates through the persistence layer.
+// persistLedger writes the ledger state to storage backends. The
+// caller-supplied ctx is forwarded to every storage backend call so
+// shutdown / request cancellation propagates through the persistence
+// layer.
+//
+// Atomicity boundaries:
+//
+//   - NodeStore is the durable ledger store; relational DB is a
+//     supplementary index. NodeStore is persisted (and synced) FIRST,
+//     so a relational failure leaves the canonical ledger durable and
+//     the index can be rebuilt.
+//   - Within NodeStore, state nodes are written before the header.
+//     A mid-write failure leaves orphaned (unreferenced) state nodes
+//     rather than a header pointing at missing state — readers see
+//     the ledger as ABSENT, not CORRUPT.
+//   - The relational DB writes (SaveValidatedLedger + per-tx index
+//     entries) run inside a single WithTransaction call, so they
+//     either all commit or all roll back on the transactional repo.
+//     Note: SQLite splits ledger metadata and tx data across two
+//     databases; SaveValidatedLedger on SQLite is non-transactional
+//     (see storage/relationaldb/sqlite/transaction_context.go) — this
+//     is a backend limitation, not introduced here.
 func (s *Service) persistLedger(ctx context.Context, l *ledger.Ledger) error {
 	seq := l.Sequence()
 
-	// Persist to NodeStore if configured
 	if s.nodeStore != nil {
 		if err := s.persistToNodeStore(ctx, l, seq); err != nil {
 			return err
 		}
 	}
 
-	// Persist to RelationalDB if configured
 	if s.relationalDB != nil {
 		if err := s.persistToRelationalDB(ctx, l); err != nil {
 			return err
@@ -74,19 +91,21 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 		return err
 	}
 
-	// Sync to ensure durability
-	return s.nodeStore.Sync()
+	// Single fsync once both state nodes and header are durable.
+	// Sync is uninterruptible at the backend; ctx cancellation only
+	// unblocks the caller (see DatabaseImpl.Sync).
+	return s.nodeStore.Sync(ctx)
 }
 
-// persistToRelationalDB writes ledger metadata and transactions to the relational database
+// persistToRelationalDB writes ledger metadata and transactions to the
+// relational database inside a single transaction so the per-tx index
+// entries either all commit or all roll back on cancel / DB error.
 func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) error {
 	h := l.Header()
 
-	// Get state and tx map hashes
 	stateHash, _ := l.StateMapHash()
 	txHash, _ := l.TxMapHash()
 
-	// Create ledger info for storage
 	ledgerInfo := &relationaldb.LedgerInfo{
 		Hash:            relationaldb.Hash(l.Hash()),
 		Sequence:        relationaldb.LedgerIndex(h.LedgerIndex),
@@ -100,83 +119,89 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 		CloseFlags:      uint32(h.CloseFlags),
 	}
 
-	// Save validated ledger
-	if err := s.relationalDB.Ledger().SaveValidatedLedger(ctx, ledgerInfo, true); err != nil {
-		return err
-	}
-
-	// Persist transactions to the relational DB for account_tx / tx_history queries
 	seq := relationaldb.LedgerIndex(l.Sequence())
 
-	l.ForEachTransaction(func(txHashBytes [32]byte, txData []byte) bool {
-		txBlob, metaBlob, err := tx.SplitTxWithMetaBlob(txData)
-		if err != nil {
-			s.logger.Warn("failed to split tx+meta blob", "tx", hex.EncodeToString(txHashBytes[:8]), "error", err)
-			return true // skip this tx, continue
+	return s.relationalDB.WithTransaction(ctx, func(txCtx relationaldb.TransactionContext) error {
+		if err := txCtx.Ledger().SaveValidatedLedger(ctx, ledgerInfo, true); err != nil {
+			return err
 		}
 
-		// Extract Account (sender) and optional Destination from the tx blob
-		var accountID relationaldb.AccountID
-		var destinationID relationaldb.AccountID
+		var loopErr error
+		_ = l.ForEachTransaction(func(txHashBytes [32]byte, txData []byte) bool {
+			if err := ctx.Err(); err != nil {
+				loopErr = err
+				return false
+			}
 
-		txBlobHex := hex.EncodeToString(txBlob)
-		txJSON, decErr := binarycodec.Decode(txBlobHex)
-		if decErr == nil {
-			if accountStr, ok := txJSON["Account"].(string); ok {
-				if _, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(accountStr); err == nil && len(accountBytes) == 20 {
-					copy(accountID[:], accountBytes)
+			txBlob, metaBlob, err := tx.SplitTxWithMetaBlob(txData)
+			if err != nil {
+				// Bad blob is a data issue, not a DB issue —
+				// skip this tx, keep the ledger persist alive.
+				s.logger.Warn("failed to split tx+meta blob", "tx", hex.EncodeToString(txHashBytes[:8]), "error", err)
+				return true
+			}
+
+			var accountID relationaldb.AccountID
+			var destinationID relationaldb.AccountID
+
+			txBlobHex := hex.EncodeToString(txBlob)
+			if txJSON, decErr := binarycodec.Decode(txBlobHex); decErr == nil {
+				if accountStr, ok := txJSON["Account"].(string); ok {
+					if _, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(accountStr); err == nil && len(accountBytes) == 20 {
+						copy(accountID[:], accountBytes)
+					}
+				}
+				if destStr, ok := txJSON["Destination"].(string); ok {
+					if _, destBytes, err := addresscodec.DecodeClassicAddressToAccountID(destStr); err == nil && len(destBytes) == 20 {
+						copy(destinationID[:], destBytes)
+					}
 				}
 			}
-			if destStr, ok := txJSON["Destination"].(string); ok {
-				if _, destBytes, err := addresscodec.DecodeClassicAddressToAccountID(destStr); err == nil && len(destBytes) == 20 {
-					copy(destinationID[:], destBytes)
+
+			var txnSeq uint32
+			if len(metaBlob) > 0 {
+				metaHex := hex.EncodeToString(metaBlob)
+				if metaJSON, err := binarycodec.Decode(metaHex); err == nil {
+					if v, ok := metaJSON["TransactionIndex"].(float64); ok {
+						txnSeq = uint32(v)
+					}
 				}
 			}
-		}
 
-		// Extract TransactionIndex from metadata
-		var txnSeq uint32
-		if len(metaBlob) > 0 {
-			metaHex := hex.EncodeToString(metaBlob)
-			if metaJSON, err := binarycodec.Decode(metaHex); err == nil {
-				if v, ok := metaJSON["TransactionIndex"].(float64); ok {
-					txnSeq = uint32(v)
+			txInfo := &relationaldb.TransactionInfo{
+				Hash:      relationaldb.Hash(txHashBytes),
+				LedgerSeq: seq,
+				TxnSeq:    txnSeq,
+				Status:    "validated",
+				RawTxn:    txBlob,
+				TxnMeta:   metaBlob,
+				Account:   accountID,
+			}
+
+			// DB errors propagate so the whole ledger rolls back —
+			// partial tx index is worse than a retried persist.
+			if err := txCtx.Transaction().SaveTransaction(ctx, txInfo); err != nil {
+				loopErr = err
+				return false
+			}
+
+			if !accountID.IsZero() {
+				if err := txCtx.AccountTransaction().SaveAccountTransaction(ctx, accountID, txInfo); err != nil {
+					loopErr = err
+					return false
 				}
 			}
-		}
 
-		txInfo := &relationaldb.TransactionInfo{
-			Hash:      relationaldb.Hash(txHashBytes),
-			LedgerSeq: seq,
-			TxnSeq:    txnSeq,
-			Status:    "validated",
-			RawTxn:    txBlob,
-			TxnMeta:   metaBlob,
-			Account:   accountID,
-		}
+			if !destinationID.IsZero() && destinationID != accountID {
+				if err := txCtx.AccountTransaction().SaveAccountTransaction(ctx, destinationID, txInfo); err != nil {
+					loopErr = err
+					return false
+				}
+			}
 
-		// Save to transactions table
-		if err := s.relationalDB.Transaction().SaveTransaction(ctx, txInfo); err != nil {
-			s.logger.Warn("failed to save transaction", "tx", hex.EncodeToString(txHashBytes[:8]), "error", err)
 			return true
-		}
+		})
 
-		// Index for the sender account
-		if !accountID.IsZero() {
-			if err := s.relationalDB.AccountTransaction().SaveAccountTransaction(ctx, accountID, txInfo); err != nil {
-				s.logger.Warn("failed to save account tx index", "tx", hex.EncodeToString(txHashBytes[:8]), "error", err)
-			}
-		}
-
-		// Index for the destination account (if present and different from sender)
-		if !destinationID.IsZero() && destinationID != accountID {
-			if err := s.relationalDB.AccountTransaction().SaveAccountTransaction(ctx, destinationID, txInfo); err != nil {
-				s.logger.Warn("failed to save destination tx index", "tx", hex.EncodeToString(txHashBytes[:8]), "error", err)
-			}
-		}
-
-		return true // continue
+		return loopErr
 	})
-
-	return nil
 }

@@ -101,13 +101,13 @@ func (m *mockNoRippleCheckLedgerService) GetAccountOffers(account string, ledger
 func (m *mockNoRippleCheckLedgerService) GetBookOffers(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetTransactionHistory(startIndex uint32) (*types.TxHistoryResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetTransactionHistory(ctx context.Context, startIndex uint32) (*types.TxHistoryResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetLedgerRange(minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockNoRippleCheckLedgerService) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
