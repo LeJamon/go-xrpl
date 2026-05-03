@@ -10,14 +10,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeCheckCancel, func() tx.Transaction {
-		return &CheckCancel{BaseTx: *tx.NewBaseTx(tx.TypeCheckCancel, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // CheckCancel cancels a Check.
 type CheckCancel struct {
 	tx.BaseTx

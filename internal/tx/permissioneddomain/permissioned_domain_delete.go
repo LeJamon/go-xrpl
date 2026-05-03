@@ -9,14 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypePermissionedDomainDelete, func() tx.Transaction {
-		return &PermissionedDomainDelete{BaseTx: *tx.NewBaseTx(tx.TypePermissionedDomainDelete, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // PermissionedDomainDelete deletes a permissioned domain.
 // Reference: rippled PermissionedDomainDelete.cpp
 type PermissionedDomainDelete struct {

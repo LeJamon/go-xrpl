@@ -8,14 +8,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeVaultDelete, func() tx.Transaction {
-		return &VaultDelete{BaseTx: *tx.NewBaseTx(tx.TypeVaultDelete, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // VaultDelete deletes a vault.
 type VaultDelete struct {
 	tx.BaseTx

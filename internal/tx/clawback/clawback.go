@@ -10,14 +10,6 @@ import (
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeClawback, func() tx.Transaction {
-		return &Clawback{BaseTx: *tx.NewBaseTx(tx.TypeClawback, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // Clawback errors
 var (
 	ErrClawbackAmountRequired  = tx.Errorf(tx.TemBAD_AMOUNT, "Amount is required")

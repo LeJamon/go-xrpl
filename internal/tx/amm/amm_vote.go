@@ -6,14 +6,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeAMMVote, func() tx.Transaction {
-		return &AMMVote{BaseTx: *tx.NewBaseTx(tx.TypeAMMVote, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // AMMVote votes on the trading fee for an AMM.
 type AMMVote struct {
 	tx.BaseTx

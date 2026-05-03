@@ -9,19 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeSignerListSet, func() tx.Transaction {
-		return &SignerListSet{BaseTx: *tx.NewBaseTx(tx.TypeSignerListSet, "")}
-	}); err != nil {
-		panic(err)
-	}
-	if err := tx.Register(tx.TypeRegularKeySet, func() tx.Transaction {
-		return &SetRegularKey{BaseTx: *tx.NewBaseTx(tx.TypeRegularKeySet, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // SignerListSet sets or clears a list of signers for multi-signing.
 type SignerListSet struct {
 	tx.BaseTx

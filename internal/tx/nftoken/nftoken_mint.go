@@ -7,14 +7,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeNFTokenMint, func() tx.Transaction {
-		return &NFTokenMint{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenMint, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // NFTokenMint mints a new NFToken.
 type NFTokenMint struct {
 	tx.BaseTx

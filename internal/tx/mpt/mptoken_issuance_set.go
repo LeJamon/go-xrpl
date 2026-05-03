@@ -11,14 +11,6 @@ import (
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeMPTokenIssuanceSet, func() tx.Transaction {
-		return &MPTokenIssuanceSet{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenIssuanceSet, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // MPTokenIssuanceSet modifies a multi-purpose token issuance.
 type MPTokenIssuanceSet struct {
 	tx.BaseTx

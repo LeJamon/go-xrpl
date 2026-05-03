@@ -7,14 +7,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeAMMWithdraw, func() tx.Transaction {
-		return &AMMWithdraw{BaseTx: *tx.NewBaseTx(tx.TypeAMMWithdraw, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // AMMWithdraw withdraws assets from an AMM.
 type AMMWithdraw struct {
 	tx.BaseTx

@@ -9,14 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeNFTokenBurn, func() tx.Transaction {
-		return &NFTokenBurn{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenBurn, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // NFTokenBurn burns an NFToken.
 type NFTokenBurn struct {
 	tx.BaseTx

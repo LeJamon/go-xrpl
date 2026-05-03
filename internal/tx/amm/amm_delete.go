@@ -5,14 +5,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeAMMDelete, func() tx.Transaction {
-		return &AMMDelete{BaseTx: *tx.NewBaseTx(tx.TypeAMMDelete, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // AMMDelete deletes an empty AMM.
 type AMMDelete struct {
 	tx.BaseTx

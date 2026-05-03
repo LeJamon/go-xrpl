@@ -44,14 +44,6 @@ type OfferCreate struct {
 	DomainID *[32]byte `json:"DomainID,omitempty" xrpl:"DomainID,omitempty"`
 }
 
-func init() {
-	if err := tx.Register(tx.TypeOfferCreate, func() tx.Transaction {
-		return &OfferCreate{BaseTx: *tx.NewBaseTx(tx.TypeOfferCreate, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // UnmarshalJSON handles DomainID as a hex string from the binary codec.
 func (o *OfferCreate) UnmarshalJSON(data []byte) error {
 	type Alias OfferCreate

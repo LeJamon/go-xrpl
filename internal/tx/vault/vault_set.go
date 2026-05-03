@@ -8,14 +8,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeVaultSet, func() tx.Transaction {
-		return &VaultSet{BaseTx: *tx.NewBaseTx(tx.TypeVaultSet, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // VaultSet modifies a vault.
 type VaultSet struct {
 	tx.BaseTx

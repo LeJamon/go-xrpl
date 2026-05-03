@@ -7,14 +7,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeEscrowCancel, func() tx.Transaction {
-		return &EscrowCancel{BaseTx: *tx.NewBaseTx(tx.TypeEscrowCancel, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // EscrowCancel cancels an escrow, returning the escrowed XRP to the creator.
 type EscrowCancel struct {
 	tx.BaseTx

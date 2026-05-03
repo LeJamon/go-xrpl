@@ -9,14 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeCredentialAccept, func() tx.Transaction {
-		return &CredentialAccept{BaseTx: *tx.NewBaseTx(tx.TypeCredentialAccept, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // CredentialAccept accepts a credential.
 type CredentialAccept struct {
 	tx.BaseTx

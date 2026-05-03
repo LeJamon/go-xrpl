@@ -7,14 +7,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeAMMBid, func() tx.Transaction {
-		return &AMMBid{BaseTx: *tx.NewBaseTx(tx.TypeAMMBid, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // AMMBid places a bid on an AMM auction slot.
 type AMMBid struct {
 	tx.BaseTx

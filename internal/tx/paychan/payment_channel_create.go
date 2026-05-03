@@ -9,14 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypePaymentChannelCreate, func() tx.Transaction {
-		return &PaymentChannelCreate{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelCreate, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // PaymentChannelCreate creates a payment channel.
 // Reference: rippled PayChan.cpp PayChanCreate
 type PaymentChannelCreate struct {

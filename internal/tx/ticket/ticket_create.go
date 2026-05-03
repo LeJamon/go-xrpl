@@ -7,14 +7,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeTicketCreate, func() tx.Transaction {
-		return &TicketCreate{BaseTx: *tx.NewBaseTx(tx.TypeTicketCreate, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // TicketCreate creates tickets for future transactions.
 type TicketCreate struct {
 	tx.BaseTx

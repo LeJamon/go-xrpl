@@ -7,14 +7,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeAMMCreate, func() tx.Transaction {
-		return &AMMCreate{BaseTx: *tx.NewBaseTx(tx.TypeAMMCreate, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // AMMCreate creates an Automated Market Maker (AMM) instance.
 type AMMCreate struct {
 	tx.BaseTx

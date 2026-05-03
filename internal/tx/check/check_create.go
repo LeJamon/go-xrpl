@@ -7,14 +7,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeCheckCreate, func() tx.Transaction {
-		return &CheckCreate{BaseTx: *tx.NewBaseTx(tx.TypeCheckCreate, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 type CheckCreate struct {
 	tx.BaseTx
 

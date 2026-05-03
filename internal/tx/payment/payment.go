@@ -7,14 +7,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx/permissioneddomain"
 )
 
-func init() {
-	if err := tx.Register(tx.TypePayment, func() tx.Transaction {
-		return &Payment{BaseTx: *tx.NewBaseTx(tx.TypePayment, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // Payment transaction moves value from one account to another.
 // It is the most fundamental transaction type in the XRPL.
 type Payment struct {

@@ -9,14 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeCredentialDelete, func() tx.Transaction {
-		return &CredentialDelete{BaseTx: *tx.NewBaseTx(tx.TypeCredentialDelete, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // CredentialDelete deletes a credential.
 type CredentialDelete struct {
 	tx.BaseTx

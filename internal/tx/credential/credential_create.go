@@ -10,14 +10,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeCredentialCreate, func() tx.Transaction {
-		return &CredentialCreate{BaseTx: *tx.NewBaseTx(tx.TypeCredentialCreate, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // CredentialCreate creates a credential.
 type CredentialCreate struct {
 	tx.BaseTx

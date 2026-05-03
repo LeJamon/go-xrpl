@@ -9,14 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeMPTokenIssuanceDestroy, func() tx.Transaction {
-		return &MPTokenIssuanceDestroy{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenIssuanceDestroy, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // MPTokenIssuanceDestroy destroys a multi-purpose token issuance.
 type MPTokenIssuanceDestroy struct {
 	tx.BaseTx

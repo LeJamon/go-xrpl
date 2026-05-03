@@ -33,14 +33,6 @@ var notDelegatableTxTypes = map[uint16]bool{
 // Reference: rippled Permissions.h — GranularPermissionType values start at 65537
 const granularPermissionMin = 65536
 
-func init() {
-	if err := tx.Register(tx.TypeDelegateSet, func() tx.Transaction {
-		return &DelegateSet{BaseTx: *tx.NewBaseTx(tx.TypeDelegateSet, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // DelegateSet sets up delegation for an account.
 // Reference: rippled DelegateSet.cpp
 type DelegateSet struct {

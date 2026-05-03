@@ -7,14 +7,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeAMMDeposit, func() tx.Transaction {
-		return &AMMDeposit{BaseTx: *tx.NewBaseTx(tx.TypeAMMDeposit, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // AMMDeposit deposits assets into an AMM.
 type AMMDeposit struct {
 	tx.BaseTx

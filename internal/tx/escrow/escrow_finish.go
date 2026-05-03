@@ -12,14 +12,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	if err := tx.Register(tx.TypeEscrowFinish, func() tx.Transaction {
-		return &EscrowFinish{BaseTx: *tx.NewBaseTx(tx.TypeEscrowFinish, "")}
-	}); err != nil {
-		panic(err)
-	}
-}
-
 // EscrowFinish completes an escrow, releasing the escrowed XRP.
 type EscrowFinish struct {
 	tx.BaseTx
