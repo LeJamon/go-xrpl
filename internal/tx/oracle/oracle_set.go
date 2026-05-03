@@ -10,12 +10,6 @@ import (
 	"github.com/LeJamon/goXRPLd/protocol"
 )
 
-func init() {
-	tx.Register(tx.TypeOracleSet, func() tx.Transaction {
-		return &OracleSet{BaseTx: *tx.NewBaseTx(tx.TypeOracleSet, "")}
-	})
-}
-
 // OracleSet creates or updates a price oracle.
 type OracleSet struct {
 	tx.BaseTx

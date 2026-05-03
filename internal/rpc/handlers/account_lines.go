@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
@@ -52,7 +53,7 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 				Message: "Account not found.",
 			}
 		}
-		return nil, types.RpcErrorInternal("Failed to get account lines: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account lines: %v", err))
 	}
 
 	// Filter out default-state trust lines when ignore_default is true

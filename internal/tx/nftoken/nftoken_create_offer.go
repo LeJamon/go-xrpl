@@ -9,12 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeNFTokenCreateOffer, func() tx.Transaction {
-		return &NFTokenCreateOffer{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenCreateOffer, "")}
-	})
-}
-
 // NFTokenCreateOffer creates an offer to buy or sell an NFToken.
 type NFTokenCreateOffer struct {
 	tx.BaseTx

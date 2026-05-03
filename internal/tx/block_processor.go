@@ -1,5 +1,7 @@
 package tx
 
+import "fmt"
+
 // BlockProcessor handles batch application of transactions to a ledger.
 // It wraps the Engine to provide higher-level functionality:
 // - Applying multiple transactions in sequence
@@ -114,7 +116,7 @@ func (bp *BlockProcessor) ApplyTransactions(transactions []ParsedTx) (*BlockResu
 		if err != nil {
 			// Log the error but continue with other transactions
 			// The error is captured in the result
-			txResult.ApplyResult.Message = "block processor error: " + err.Error()
+			txResult.ApplyResult.Message = fmt.Sprintf("block processor error: %v", err)
 		}
 
 		result.Transactions = append(result.Transactions, txResult)

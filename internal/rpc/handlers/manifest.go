@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 
 	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -33,7 +34,7 @@ func (m *ManifestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
@@ -45,7 +46,7 @@ func (m *ManifestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// rejects non-base58 or wrong-type inputs with rpcPUBLIC_MALFORMED.
 	rawKey, err := addresscodec.DecodeNodePublicKey(request.PublicKey)
 	if err != nil {
-		return nil, types.RpcErrorInvalidParams("invalid node public key: " + err.Error())
+		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("invalid node public key: %v", err))
 	}
 	if len(rawKey) != 33 {
 		return nil, types.RpcErrorInvalidParams("node public key must be 33 bytes")
@@ -82,7 +83,7 @@ func (m *ManifestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 
 	masterB58, err := addresscodec.EncodeNodePublicKey(master[:])
 	if err != nil {
-		return nil, types.RpcErrorInternal("encode master key: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("encode master key: %v", err))
 	}
 
 	details := map[string]interface{}{
@@ -92,7 +93,7 @@ func (m *ManifestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	if ephOK {
 		ephB58, err := addresscodec.EncodeNodePublicKey(ephemeral[:])
 		if err != nil {
-			return nil, types.RpcErrorInternal("encode ephemeral key: " + err.Error())
+			return nil, types.RpcErrorInternal(fmt.Sprintf("encode ephemeral key: %v", err))
 		}
 		details["ephemeral_key"] = ephB58
 	}

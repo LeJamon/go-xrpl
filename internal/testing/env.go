@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/all"
 	"github.com/LeJamon/goXRPLd/internal/txq"
 	"github.com/LeJamon/goXRPLd/shamap"
 )
@@ -150,6 +151,10 @@ type TestEnv struct {
 func NewTestEnv(t *testing.T) *TestEnv {
 	t.Helper()
 
+	// Ensure every transaction type is registered before tests run.
+	// Idempotent — safe to call from any test environment constructor.
+	all.RegisterAll()
+
 	// Create genesis ledger with test configuration matching rippled's test env
 	// (200 XRP base reserve, 50 XRP increment -- see rippled/src/test/jtx/impl/envconfig.cpp)
 	genesisConfig := genesis.DefaultConfig()
@@ -259,6 +264,9 @@ func (e *TestEnv) enablePebbleBacking(t *testing.T) {
 // NewTestEnvWithConfig creates a new test environment with custom genesis configuration.
 func NewTestEnvWithConfig(t *testing.T, cfg genesis.Config) *TestEnv {
 	t.Helper()
+
+	// Ensure every transaction type is registered before tests run.
+	all.RegisterAll()
 
 	genesisResult, err := genesis.Create(cfg)
 	if err != nil {

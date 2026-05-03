@@ -9,12 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeNFTokenBurn, func() tx.Transaction {
-		return &NFTokenBurn{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenBurn, "")}
-	})
-}
-
 // NFTokenBurn burns an NFToken.
 type NFTokenBurn struct {
 	tx.BaseTx

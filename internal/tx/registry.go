@@ -17,14 +17,15 @@ var (
 )
 
 // Register registers a transaction type factory. Called from init() in each transaction type file.
-// Panics if the type is already registered (indicates a bug).
-func Register(t Type, factory func() Transaction) {
+// Returns an error if the type is already registered.
+func Register(t Type, factory func() Transaction) error {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	if _, exists := registry[t]; exists {
-		panic(fmt.Sprintf("tx: transaction type %d (%s) already registered", t, t.String()))
+		return fmt.Errorf("tx: transaction type %d (%s) already registered", t, t.String())
 	}
 	registry[t] = factory
+	return nil
 }
 
 // NewFromType creates a new transaction of the given type using the registered factory.

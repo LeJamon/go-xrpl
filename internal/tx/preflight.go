@@ -10,11 +10,48 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
-// preflight performs initial validation on the transaction
+// preflight performs initial validation on the transaction.
+// Mirrors rippled Transactor::preflight() which composes preflight0/preflight1/preflight2
+// and the per-tx-type preflight. The blocks below are extracted helpers so this
+// top-level function reads as a high-level pipeline.
 func (e *Engine) preflight(tx Transaction) Result {
-	// Validate common fields
 	common := tx.GetCommon()
 
+	// preflight0: trivial common-field presence + amendment + flag checks.
+	if result := e.preflightCommonFields(tx, common); result != TesSUCCESS {
+		return result
+	}
+
+	// preflight1 — fee, sequence, memos, structural multi-sign + signature checks.
+	if result := e.validateFee(common); result != TesSUCCESS {
+		return result
+	}
+	if result := e.preflightSequence(common); result != TesSUCCESS {
+		return result
+	}
+	if result := e.validateMemos(common); result != TesSUCCESS {
+		return result
+	}
+	if result := e.preflightMultiSignStructure(tx, common); result != TesSUCCESS {
+		return result
+	}
+	if result := e.verifySignatures(tx); result != TesSUCCESS {
+		return result
+	}
+
+	// preflight2 — tx-type-specific validation
+	if err := tx.Validate(); err != nil {
+		// Try to extract a specific TER code from the error message
+		// Many Validate() implementations include the TER code as a prefix (e.g., "temREDUNDANT: message")
+		return parseValidationError(err)
+	}
+
+	return TesSUCCESS
+}
+
+// preflightCommonFields handles the trivial common-field, amendment, and flag
+// checks that rippled performs in preflight0/early preflight1.
+func (e *Engine) preflightCommonFields(tx Transaction, common *Common) Result {
 	// Account is required
 	if common.Account == "" {
 		return TemBAD_SRC_ACCOUNT
@@ -62,11 +99,12 @@ func (e *Engine) preflight(tx Transaction) Result {
 		return TemINVALID_FLAG
 	}
 
-	// Fee validation
-	if result := e.validateFee(common); result != TesSUCCESS {
-		return result
-	}
+	return TesSUCCESS
+}
 
+// preflightSequence enforces the Sequence/TicketSequence/AccountTxnID rules
+// from rippled Transactor::preflight1() lines 142-153.
+func (e *Engine) preflightSequence(common *Common) Result {
 	// Sequence must be present (unless using tickets)
 	if common.Sequence == nil && common.TicketSequence == nil {
 		return TemBAD_SEQUENCE
@@ -80,86 +118,81 @@ func (e *Engine) preflight(tx Transaction) Result {
 
 	// SourceTag validation - if present, it's already a uint32 via JSON parsing
 	// No additional validation needed as the type system ensures it's valid
+	return TesSUCCESS
+}
 
-	// Memo validation
-	if result := e.validateMemos(common); result != TesSUCCESS {
-		return result
+// preflightMultiSignStructure performs the structural multi-sign validation
+// (sort, uniqueness, self-sign rejection) that runs regardless of
+// SkipSignatureVerification.
+// Reference: rippled STTx.cpp multiSignHelper() lines 468-485
+func (e *Engine) preflightMultiSignStructure(tx Transaction, common *Common) Result {
+	if !IsMultiSigned(tx) {
+		return TesSUCCESS
 	}
+	txAccountID, acctErr := state.DecodeAccountID(common.Account)
+	if acctErr != nil {
+		return TemBAD_SRC_ACCOUNT
+	}
+	var lastAccountID [20]byte // zero-initialized — less than any real ID
+	for _, sw := range common.Signers {
+		signerID, decErr := state.DecodeAccountID(sw.Signer.Account)
+		if decErr != nil {
+			return TemBAD_SIGNATURE
+		}
+		// The account owner may not multisign for themselves.
+		if signerID == txAccountID {
+			return TemBAD_SIGNATURE
+		}
+		// No duplicate signers allowed.
+		if signerID == lastAccountID {
+			return TemBAD_SIGNATURE
+		}
+		// Accounts must be in order by binary AccountID.
+		if bytes.Compare(lastAccountID[:], signerID[:]) > 0 {
+			return TemBAD_SIGNATURE
+		}
+		lastAccountID = signerID
+	}
+	return TesSUCCESS
+}
 
-	// Multi-sign structural validation: signers must be sorted by binary
-	// AccountID, unique, and none may equal the transaction's own Account.
-	// These are format checks (not cryptographic) and run regardless of
-	// SkipSignatureVerification.
-	// Reference: rippled STTx.cpp multiSignHelper() lines 468-485
+// verifySignatures performs cryptographic signature verification (single or multi)
+// when SkipSignatureVerification is false. Authorization checks (master/regular
+// key) live in preclaim.
+func (e *Engine) verifySignatures(tx Transaction) Result {
+	if e.config.SkipSignatureVerification {
+		return TesSUCCESS
+	}
 	if IsMultiSigned(tx) {
-		txAccountID, acctErr := state.DecodeAccountID(common.Account)
-		if acctErr != nil {
-			return TemBAD_SRC_ACCOUNT
-		}
-		var lastAccountID [20]byte // zero-initialized — less than any real ID
-		for _, sw := range common.Signers {
-			signerID, decErr := state.DecodeAccountID(sw.Signer.Account)
-			if decErr != nil {
+		// Multi-signed transactions require signer list lookup
+		lookup := &engineSignerListLookup{view: e.view}
+		if err := VerifyMultiSignature(tx, lookup); err != nil {
+			switch err {
+			case ErrNotMultiSigning:
+				return TefNOT_MULTI_SIGNING
+			case ErrBadQuorum:
+				return TefBAD_QUORUM
+			case ErrBadSignature:
+				return TefBAD_SIGNATURE
+			case ErrMasterDisabled:
+				return TefMASTER_DISABLED
+			case ErrNoSigners:
 				return TemBAD_SIGNATURE
-			}
-			// The account owner may not multisign for themselves.
-			if signerID == txAccountID {
+			case ErrDuplicateSigner:
 				return TemBAD_SIGNATURE
-			}
-			// No duplicate signers allowed.
-			if signerID == lastAccountID {
+			case ErrSignersNotSorted:
 				return TemBAD_SIGNATURE
-			}
-			// Accounts must be in order by binary AccountID.
-			if bytes.Compare(lastAccountID[:], signerID[:]) > 0 {
-				return TemBAD_SIGNATURE
-			}
-			lastAccountID = signerID
-		}
-	}
-
-	// Verify signature (unless skipped for testing)
-	if !e.config.SkipSignatureVerification {
-		// Check if this is a multi-signed transaction
-		if IsMultiSigned(tx) {
-			// Multi-signed transactions require signer list lookup
-			lookup := &engineSignerListLookup{view: e.view}
-			if err := VerifyMultiSignature(tx, lookup); err != nil {
-				switch err {
-				case ErrNotMultiSigning:
-					return TefNOT_MULTI_SIGNING
-				case ErrBadQuorum:
-					return TefBAD_QUORUM
-				case ErrBadSignature:
-					return TefBAD_SIGNATURE
-				case ErrMasterDisabled:
-					return TefMASTER_DISABLED
-				case ErrNoSigners:
-					return TemBAD_SIGNATURE
-				case ErrDuplicateSigner:
-					return TemBAD_SIGNATURE
-				case ErrSignersNotSorted:
-					return TemBAD_SIGNATURE
-				default:
-					return TefBAD_SIGNATURE
-				}
-			}
-		} else {
-			// Single-signed transaction — verify cryptographic signature validity.
-			// The signing key authorization (master vs regular key) is checked in preclaim.
-			if err := VerifySignature(tx); err != nil {
-				return TemBAD_SIGNATURE
+			default:
+				return TefBAD_SIGNATURE
 			}
 		}
+		return TesSUCCESS
 	}
-
-	// Transaction-specific validation
-	if err := tx.Validate(); err != nil {
-		// Try to extract a specific TER code from the error message
-		// Many Validate() implementations include the TER code as a prefix (e.g., "temREDUNDANT: message")
-		return parseValidationError(err)
+	// Single-signed transaction — verify cryptographic signature validity.
+	// The signing key authorization (master vs regular key) is checked in preclaim.
+	if err := VerifySignature(tx); err != nil {
+		return TemBAD_SIGNATURE
 	}
-
 	return TesSUCCESS
 }
 

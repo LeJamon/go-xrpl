@@ -33,13 +33,13 @@ func (o *OfferCreate) processCancelRequest(ctx *tx.ApplyContext, sb, sbCancel *p
 
 // crossOutcome captures everything takerCross hands back to applyGuts.
 type crossOutcome struct {
-	terminated   bool
-	result       tx.Result
-	applyMain    bool
-	saTakerPays  tx.Amount
-	saTakerGets  tx.Amount
-	uRate        uint64
-	crossed      bool
+	terminated  bool
+	result      tx.Result
+	applyMain   bool
+	saTakerPays tx.Amount
+	saTakerGets tx.Amount
+	uRate       uint64
+	crossed     bool
 }
 
 // invokeFlowCross wires the OfferCreate inputs and currently-active

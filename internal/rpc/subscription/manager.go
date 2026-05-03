@@ -2,6 +2,7 @@ package subscription
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
@@ -138,13 +139,13 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 			if err := json.Unmarshal(book.TakerGets, &takerGets); err != nil {
 				return &types.RpcError{
 					Code:    types.RpcINVALID_PARAMS,
-					Message: "Invalid taker_gets: " + err.Error(),
+					Message: fmt.Sprintf("Invalid taker_gets: %v", err),
 				}
 			}
 			if err := json.Unmarshal(book.TakerPays, &takerPays); err != nil {
 				return &types.RpcError{
 					Code:    types.RpcINVALID_PARAMS,
-					Message: "Invalid taker_pays: " + err.Error(),
+					Message: fmt.Sprintf("Invalid taker_pays: %v", err),
 				}
 			}
 

@@ -9,12 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeVaultClawback, func() tx.Transaction {
-		return &VaultClawback{BaseTx: *tx.NewBaseTx(tx.TypeVaultClawback, "")}
-	})
-}
-
 type VaultClawback struct {
 	tx.BaseTx
 
@@ -117,6 +111,13 @@ func (v *VaultClawback) RequiredAmendments() [][32]byte {
 }
 
 func (v *VaultClawback) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("vault clawback apply",
+		"account", v.Account,
+		"vaultID", v.VaultID,
+		"holder", v.Holder,
+		"amount", v.Amount,
+	)
+
 	if v.VaultID == "" || v.Holder == "" {
 		return tx.TemINVALID
 	}

@@ -18,6 +18,8 @@ func NewListener(inner net.Listener, _ *Config) net.Listener {
 
 type stubListener struct{ inner net.Listener }
 
+var _ net.Listener = (*stubListener)(nil)
+
 func (s *stubListener) Accept() (net.Conn, error) { return nil, ErrSessionSigUnsupported }
 func (s *stubListener) Close() error              { return s.inner.Close() }
 func (s *stubListener) Addr() net.Addr            { return s.inner.Addr() }

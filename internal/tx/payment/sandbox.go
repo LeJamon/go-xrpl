@@ -2,6 +2,7 @@ package payment
 
 import (
 	"bytes"
+	"errors"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/drops"
@@ -685,10 +686,11 @@ func (s *PaymentSandbox) AdjustOwnerCount(account [20]byte, cur, next uint32) {
 	s.tab.ownerCount(account, cur, next)
 }
 
-// Apply merges this sandbox's changes into a parent PaymentSandbox
-func (s *PaymentSandbox) Apply(to *PaymentSandbox) {
+// Apply merges this sandbox's changes into a parent PaymentSandbox.
+// Returns an error if to is not this sandbox's parent.
+func (s *PaymentSandbox) Apply(to *PaymentSandbox) error {
 	if s.parent != to {
-		panic("PaymentSandbox.Apply: parent mismatch")
+		return errors.New("PaymentSandbox.Apply: parent mismatch")
 	}
 
 	// Apply ledger item changes
@@ -762,20 +764,21 @@ func (s *PaymentSandbox) Apply(to *PaymentSandbox) {
 
 	// Apply drops destroyed
 	to.dropsDestroyed = to.dropsDestroyed.Add(s.dropsDestroyed)
+	return nil
 }
 
 // ApplyToView merges this sandbox's changes into an underlying LedgerView.
 // This should only be called on a root sandbox (parent == nil).
 func (s *PaymentSandbox) ApplyToView(view tx.LedgerView) error {
 	if s.parent != nil {
-		panic("PaymentSandbox.ApplyToView: not a root sandbox")
+		return errors.New("PaymentSandbox.ApplyToView: not a root sandbox")
 	}
 
 	// Apply deletions - but first apply any final state modifications
 	for key := range s.deletions {
 		if finalState := s.getDeletedFinalState(key); finalState != nil {
 			if err := view.Update(keylet.Keylet{Key: key}, finalState); err != nil {
-				_ = err
+				return err
 			}
 		}
 		if err := view.Erase(keylet.Keylet{Key: key}); err != nil {

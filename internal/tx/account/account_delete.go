@@ -14,12 +14,6 @@ import (
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
-func init() {
-	tx.Register(tx.TypeAccountDelete, func() tx.Transaction {
-		return &AccountDelete{BaseTx: *tx.NewBaseTx(tx.TypeAccountDelete, "")}
-	})
-}
-
 type AccountDelete struct {
 	tx.BaseTx
 	Destination    string   `json:"Destination" xrpl:"Destination"`

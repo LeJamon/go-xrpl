@@ -55,9 +55,6 @@ func (o *OfferCreate) placeRemainingOffer(
 	// Reference: line 851
 	ctx.Account.OwnerCount++
 
-	// Check if book exists (for OrderBookDB tracking)
-	bookExisted, _ := sb.Exists(bookDirKey)
-
 	// Reference: lines 884-893
 	bookDirResult, err := state.DirInsert(sb, bookDirKey, offerKey.Key, func(dir *state.DirectoryNode) {
 		dir.TakerPaysCurrency = takerPaysCurrency
@@ -119,9 +116,6 @@ func (o *OfferCreate) placeRemainingOffer(
 	if err := sb.Insert(offerKey, offerData); err != nil {
 		return tx.TefINTERNAL, false
 	}
-
-	// Track new book in OrderBookDB (not implemented yet)
-	_ = bookExisted
 
 	return tx.TesSUCCESS, true // Apply main sandbox
 }

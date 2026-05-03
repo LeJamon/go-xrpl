@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec"
@@ -171,7 +172,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 				Message: "Account not found.",
 			}
 		}
-		return nil, types.RpcErrorInternal("Failed to get account objects: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account objects: %v", err))
 	}
 
 	// Build account_objects array with deserialized fields

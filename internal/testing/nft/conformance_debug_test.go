@@ -5,13 +5,9 @@ import (
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
-
-	// Import all tx types
-	_ "github.com/LeJamon/goXRPLd/internal/tx/all"
-
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 )
 
 // TestConformanceMintBurn mimics the conformance test flow:

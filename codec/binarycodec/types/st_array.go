@@ -20,7 +20,7 @@ const (
 type STArray struct{}
 
 // ErrNotSTObjectInSTArray is returned when a non-STObject value is found in an STArray.
-var ErrNotSTObjectInSTArray = errors.New("not STObject in STArray. Array fields must be STObjects")
+var ErrNotSTObjectInSTArray = errors.New("STArray fields must be STObjects")
 
 // FromJSON is a method that takes a JSON value (which should be a slice of JSON objects),
 // and converts it to a byte slice, representing the serialized form of the STArray.

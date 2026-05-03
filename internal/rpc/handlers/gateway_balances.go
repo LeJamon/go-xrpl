@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
@@ -90,7 +91,7 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 			}
 			return nil, types.RpcErrorInvalidParams("Invalid field 'hotwallet'.")
 		}
-		return nil, types.RpcErrorInternal("Failed to get gateway balances: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get gateway balances: %v", err))
 	}
 
 	// Build response matching rippled's GatewayBalances.cpp format.

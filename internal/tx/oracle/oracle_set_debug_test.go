@@ -3,12 +3,18 @@ package oracle_test
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"testing"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/tx"
-	_ "github.com/LeJamon/goXRPLd/internal/tx/all"
+	"github.com/LeJamon/goXRPLd/internal/tx/all"
 )
+
+func TestMain(m *testing.M) {
+	all.RegisterAll()
+	os.Exit(m.Run())
+}
 
 func TestOracleSetRoundtrip(t *testing.T) {
 	txJSON := `{

@@ -59,7 +59,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		// Decode tx_blob to get tx_json
 		decoded, err := binarycodec.Decode(request.TxBlob)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid tx_blob: " + err.Error())
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_blob: %v", err))
 		}
 		txJsonMap = decoded
 		txBlobHex = request.TxBlob
@@ -112,7 +112,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	// The blob is needed for canonical re-ordering during AcceptLedger.
 	result, err := ctx.Services.Ledger.SubmitTransaction(txJSON, txBlobHex)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to submit transaction: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to submit transaction: %v", err))
 	}
 	txHashStr := CalculateTxHash(txBlobHex)
 
