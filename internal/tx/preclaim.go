@@ -11,8 +11,9 @@ import (
 
 // preclaim validates the transaction against the current ledger state.
 // Mirrors rippled's Transactor::operator()() pre-application pipeline:
-//   checkSeqProxy → checkPriorTxAndLastLedger → checkFee → checkPermission →
-//   checkSign (+ checkBatchSign) → tx-type preclaim.
+//
+//	checkSeqProxy → checkPriorTxAndLastLedger → checkFee → checkPermission →
+//	checkSign (+ checkBatchSign) → tx-type preclaim.
 func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 	common := tx.GetCommon()
 
@@ -295,7 +296,8 @@ func (e *Engine) checkPermission(tx Transaction, common *Common, accountID [20]b
 // Reference: rippled Transactor::checkSign in Transactor.cpp.
 // When a delegate is present, the idAccount for signature checking is the
 // delegate. Reference: rippled line 602:
-//   auto const idAccount = ctx.tx[~sfDelegate].value_or(ctx.tx[sfAccount]);
+//
+//	auto const idAccount = ctx.tx[~sfDelegate].value_or(ctx.tx[sfAccount]);
 func (e *Engine) checkSign(tx Transaction, common *Common) Result {
 	if IsMultiSigned(tx) {
 		return e.checkMultiSign(common)
