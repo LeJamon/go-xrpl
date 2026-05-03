@@ -9,12 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeVaultCreate, func() tx.Transaction {
-		return &VaultCreate{BaseTx: *tx.NewBaseTx(tx.TypeVaultCreate, "")}
-	})
-}
-
 // VaultCreate creates a new vault.
 type VaultCreate struct {
 	tx.BaseTx

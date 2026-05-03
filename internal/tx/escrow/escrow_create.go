@@ -17,12 +17,6 @@ import (
 // Reference: rippled include/xrpl/protocol/STAmount.h maxMPTokenAmount
 const maxMPTokenAmount int64 = 0x7FFFFFFFFFFFFFFF
 
-func init() {
-	tx.Register(tx.TypeEscrowCreate, func() tx.Transaction {
-		return &EscrowCreate{BaseTx: *tx.NewBaseTx(tx.TypeEscrowCreate, "")}
-	})
-}
-
 // EscrowCreate creates an escrow that holds XRP until certain conditions are met.
 type EscrowCreate struct {
 	tx.BaseTx

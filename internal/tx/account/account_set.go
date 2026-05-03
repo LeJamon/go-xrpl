@@ -31,12 +31,6 @@ func isValidPublicKey(key []byte) bool {
 	return false
 }
 
-func init() {
-	tx.Register(tx.TypeAccountSet, func() tx.Transaction {
-		return &AccountSet{BaseTx: *tx.NewBaseTx(tx.TypeAccountSet, "")}
-	})
-}
-
 // AccountSet modifies the properties of an account in the XRP Ledger.
 type AccountSet struct {
 	tx.BaseTx

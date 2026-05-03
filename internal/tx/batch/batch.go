@@ -9,12 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeBatch, func() tx.Transaction {
-		return &Batch{BaseTx: *tx.NewBaseTx(tx.TypeBatch, "")}
-	})
-}
-
 // Batch is a transaction that contains multiple inner transactions.
 type Batch struct {
 	tx.BaseTx

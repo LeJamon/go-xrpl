@@ -8,12 +8,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeVaultDeposit, func() tx.Transaction {
-		return &VaultDeposit{BaseTx: *tx.NewBaseTx(tx.TypeVaultDeposit, "")}
-	})
-}
-
 // VaultDeposit deposits assets into a vault.
 type VaultDeposit struct {
 	tx.BaseTx

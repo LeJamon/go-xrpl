@@ -8,12 +8,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeDIDDelete, func() tx.Transaction {
-		return &DIDDelete{BaseTx: *tx.NewBaseTx(tx.TypeDIDDelete, "")}
-	})
-}
-
 // DIDDelete deletes a DID document.
 type DIDDelete struct {
 	tx.BaseTx

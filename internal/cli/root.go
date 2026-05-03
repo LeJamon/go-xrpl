@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/LeJamon/goXRPLd/config"
+	"github.com/LeJamon/goXRPLd/internal/tx/all"
 	"github.com/LeJamon/goXRPLd/version"
 	"github.com/spf13/cobra"
 )
@@ -35,6 +36,10 @@ Go conventions and patterns while maintaining protocol compatibility.`,
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
+	// Register every transaction type with the tx registry before any
+	// subcommand can run. Safe to call multiple times.
+	all.RegisterAll()
+
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

@@ -27,12 +27,6 @@ const (
 	maxCredentialTypeLength = 64
 )
 
-func init() {
-	tx.Register(tx.TypeDepositPreauth, func() tx.Transaction {
-		return &DepositPreauth{BaseTx: *tx.NewBaseTx(tx.TypeDepositPreauth, "")}
-	})
-}
-
 // CredentialSpec identifies a credential by issuer and type.
 // Reference: rippled's AuthorizeCredentials inner object
 type CredentialSpec struct {

@@ -8,12 +8,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeVaultWithdraw, func() tx.Transaction {
-		return &VaultWithdraw{BaseTx: *tx.NewBaseTx(tx.TypeVaultWithdraw, "")}
-	})
-}
-
 // VaultWithdraw withdraws assets from a vault.
 type VaultWithdraw struct {
 	tx.BaseTx

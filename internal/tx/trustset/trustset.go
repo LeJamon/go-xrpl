@@ -8,12 +8,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeTrustSet, func() tx.Transaction {
-		return &TrustSet{BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "")}
-	})
-}
-
 // TrustSet creates or modifies a trust line between two accounts.
 type TrustSet struct {
 	tx.BaseTx

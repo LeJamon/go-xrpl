@@ -9,12 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeNFTokenModify, func() tx.Transaction {
-		return &NFTokenModify{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenModify, "")}
-	})
-}
-
 // NFTokenModify modifies an existing NFToken.
 type NFTokenModify struct {
 	tx.BaseTx
