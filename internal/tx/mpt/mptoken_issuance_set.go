@@ -12,9 +12,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeMPTokenIssuanceSet, func() tx.Transaction {
+	if err := tx.Register(tx.TypeMPTokenIssuanceSet, func() tx.Transaction {
 		return &MPTokenIssuanceSet{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenIssuanceSet, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // MPTokenIssuanceSet modifies a multi-purpose token issuance.

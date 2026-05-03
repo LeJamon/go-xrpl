@@ -14,9 +14,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeMPTokenIssuanceCreate, func() tx.Transaction {
+	if err := tx.Register(tx.TypeMPTokenIssuanceCreate, func() tx.Transaction {
 		return &MPTokenIssuanceCreate{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenIssuanceCreate, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // MPTokenIssuanceCreate creates a new multi-purpose token issuance.

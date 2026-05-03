@@ -10,9 +10,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypePaymentChannelCreate, func() tx.Transaction {
+	if err := tx.Register(tx.TypePaymentChannelCreate, func() tx.Transaction {
 		return &PaymentChannelCreate{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelCreate, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // PaymentChannelCreate creates a payment channel.

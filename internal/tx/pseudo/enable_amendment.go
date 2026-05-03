@@ -14,9 +14,11 @@ var (
 )
 
 func init() {
-	tx.Register(tx.TypeAmendment, func() tx.Transaction {
+	if err := tx.Register(tx.TypeAmendment, func() tx.Transaction {
 		return &EnableAmendment{BaseTx: *tx.NewBaseTx(tx.TypeAmendment, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // EnableAmendment is a pseudo-transaction that enables or tracks amendment voting.

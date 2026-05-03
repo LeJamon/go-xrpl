@@ -11,9 +11,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeNFTokenCancelOffer, func() tx.Transaction {
+	if err := tx.Register(tx.TypeNFTokenCancelOffer, func() tx.Transaction {
 		return &NFTokenCancelOffer{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenCancelOffer, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // NFTokenCancelOffer cancels NFToken offers.

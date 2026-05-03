@@ -9,9 +9,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeVaultDelete, func() tx.Transaction {
+	if err := tx.Register(tx.TypeVaultDelete, func() tx.Transaction {
 		return &VaultDelete{BaseTx: *tx.NewBaseTx(tx.TypeVaultDelete, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // VaultDelete deletes a vault.

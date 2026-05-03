@@ -11,9 +11,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeCheckCancel, func() tx.Transaction {
+	if err := tx.Register(tx.TypeCheckCancel, func() tx.Transaction {
 		return &CheckCancel{BaseTx: *tx.NewBaseTx(tx.TypeCheckCancel, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // CheckCancel cancels a Check.

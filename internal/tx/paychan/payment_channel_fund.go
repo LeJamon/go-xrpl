@@ -10,9 +10,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypePaymentChannelFund, func() tx.Transaction {
+	if err := tx.Register(tx.TypePaymentChannelFund, func() tx.Transaction {
 		return &PaymentChannelFund{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelFund, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // PaymentChannelFund adds more XRP to a payment channel.

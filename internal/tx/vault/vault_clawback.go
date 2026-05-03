@@ -10,9 +10,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeVaultClawback, func() tx.Transaction {
+	if err := tx.Register(tx.TypeVaultClawback, func() tx.Transaction {
 		return &VaultClawback{BaseTx: *tx.NewBaseTx(tx.TypeVaultClawback, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 type VaultClawback struct {

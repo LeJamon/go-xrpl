@@ -10,9 +10,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypePermissionedDomainDelete, func() tx.Transaction {
+	if err := tx.Register(tx.TypePermissionedDomainDelete, func() tx.Transaction {
 		return &PermissionedDomainDelete{BaseTx: *tx.NewBaseTx(tx.TypePermissionedDomainDelete, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // PermissionedDomainDelete deletes a permissioned domain.

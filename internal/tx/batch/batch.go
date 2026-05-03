@@ -10,9 +10,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeBatch, func() tx.Transaction {
+	if err := tx.Register(tx.TypeBatch, func() tx.Transaction {
 		return &Batch{BaseTx: *tx.NewBaseTx(tx.TypeBatch, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // Batch is a transaction that contains multiple inner transactions.

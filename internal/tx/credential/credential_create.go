@@ -11,9 +11,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeCredentialCreate, func() tx.Transaction {
+	if err := tx.Register(tx.TypeCredentialCreate, func() tx.Transaction {
 		return &CredentialCreate{BaseTx: *tx.NewBaseTx(tx.TypeCredentialCreate, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // CredentialCreate creates a credential.

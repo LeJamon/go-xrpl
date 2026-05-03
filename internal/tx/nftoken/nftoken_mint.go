@@ -8,9 +8,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeNFTokenMint, func() tx.Transaction {
+	if err := tx.Register(tx.TypeNFTokenMint, func() tx.Transaction {
 		return &NFTokenMint{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenMint, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // NFTokenMint mints a new NFToken.

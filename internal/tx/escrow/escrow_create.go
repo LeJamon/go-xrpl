@@ -18,9 +18,11 @@ import (
 const maxMPTokenAmount int64 = 0x7FFFFFFFFFFFFFFF
 
 func init() {
-	tx.Register(tx.TypeEscrowCreate, func() tx.Transaction {
+	if err := tx.Register(tx.TypeEscrowCreate, func() tx.Transaction {
 		return &EscrowCreate{BaseTx: *tx.NewBaseTx(tx.TypeEscrowCreate, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // EscrowCreate creates an escrow that holds XRP until certain conditions are met.

@@ -8,9 +8,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeAMMCreate, func() tx.Transaction {
+	if err := tx.Register(tx.TypeAMMCreate, func() tx.Transaction {
 		return &AMMCreate{BaseTx: *tx.NewBaseTx(tx.TypeAMMCreate, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // AMMCreate creates an Automated Market Maker (AMM) instance.

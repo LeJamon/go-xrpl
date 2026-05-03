@@ -11,9 +11,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeCheckCash, func() tx.Transaction {
+	if err := tx.Register(tx.TypeCheckCash, func() tx.Transaction {
 		return &CheckCash{BaseTx: *tx.NewBaseTx(tx.TypeCheckCash, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // CheckCash cashes a Check, drawing from the sender's balance.

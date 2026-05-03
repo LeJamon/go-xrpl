@@ -13,9 +13,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeEscrowFinish, func() tx.Transaction {
+	if err := tx.Register(tx.TypeEscrowFinish, func() tx.Transaction {
 		return &EscrowFinish{BaseTx: *tx.NewBaseTx(tx.TypeEscrowFinish, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // EscrowFinish completes an escrow, releasing the escrowed XRP.

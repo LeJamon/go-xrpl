@@ -10,9 +10,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeNFTokenCreateOffer, func() tx.Transaction {
+	if err := tx.Register(tx.TypeNFTokenCreateOffer, func() tx.Transaction {
 		return &NFTokenCreateOffer{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenCreateOffer, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // NFTokenCreateOffer creates an offer to buy or sell an NFToken.

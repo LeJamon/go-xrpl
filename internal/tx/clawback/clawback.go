@@ -11,9 +11,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeClawback, func() tx.Transaction {
+	if err := tx.Register(tx.TypeClawback, func() tx.Transaction {
 		return &Clawback{BaseTx: *tx.NewBaseTx(tx.TypeClawback, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // Clawback errors

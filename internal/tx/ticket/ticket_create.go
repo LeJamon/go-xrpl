@@ -8,9 +8,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeTicketCreate, func() tx.Transaction {
+	if err := tx.Register(tx.TypeTicketCreate, func() tx.Transaction {
 		return &TicketCreate{BaseTx: *tx.NewBaseTx(tx.TypeTicketCreate, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // TicketCreate creates tickets for future transactions.

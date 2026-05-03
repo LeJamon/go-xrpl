@@ -221,7 +221,16 @@ func FlowCross(
 	// Apply the flow sandbox changes to our root sandbox
 	// Reference: rippled CreateOffer.cpp line 711: psbFlow.apply(sb)
 	if result.Sandbox != nil {
-		result.Sandbox.Apply(sandbox)
+		if err := result.Sandbox.Apply(sandbox); err != nil {
+			return FlowCrossResult{
+				TakerGot:        ZeroXRPEitherAmount(),
+				TakerPaid:       ZeroXRPEitherAmount(),
+				TakerPaidNet:    ZeroXRPEitherAmount(),
+				Sandbox:         sandbox,
+				RemovableOffers: nil,
+				Result:          tx.TefINTERNAL,
+			}
+		}
 	}
 
 	// Calculate GROSS and NET amounts for the taker's payment

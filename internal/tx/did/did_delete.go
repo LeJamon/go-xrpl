@@ -9,9 +9,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeDIDDelete, func() tx.Transaction {
+	if err := tx.Register(tx.TypeDIDDelete, func() tx.Transaction {
 		return &DIDDelete{BaseTx: *tx.NewBaseTx(tx.TypeDIDDelete, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // DIDDelete deletes a DID document.

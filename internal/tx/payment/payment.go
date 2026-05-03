@@ -8,9 +8,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypePayment, func() tx.Transaction {
+	if err := tx.Register(tx.TypePayment, func() tx.Transaction {
 		return &Payment{BaseTx: *tx.NewBaseTx(tx.TypePayment, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // Payment transaction moves value from one account to another.

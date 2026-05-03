@@ -8,9 +8,11 @@ import (
 )
 
 func init() {
-	tx.Register(tx.TypeAMMClawback, func() tx.Transaction {
+	if err := tx.Register(tx.TypeAMMClawback, func() tx.Transaction {
 		return &AMMClawback{BaseTx: *tx.NewBaseTx(tx.TypeAMMClawback, "")}
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // AMMClawback claws back tokens from an AMM.
