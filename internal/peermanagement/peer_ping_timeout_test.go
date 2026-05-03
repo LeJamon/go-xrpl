@@ -56,3 +56,20 @@ func TestPeer_StaleInFlightPing_PongClearsStale(t *testing.T) {
 	_, _, ok := p.staleInFlightPing(now.Add(pingTimeout+time.Hour), pingTimeout)
 	assert.False(t, ok, "answered ping is removed from in-flight map and cannot trigger timeout")
 }
+
+// TestPeer_RunPingTick_StalePingReturnsErrPingTimeout pins the
+// integration the predicate tests above only cover in pieces:
+// runPingTick (the per-tick body of pingLoop, reached via Run())
+// must surface ErrPingTimeout when an in-flight ping has aged past
+// the threshold. Pre-populating with age = 2*pingTimeout means a
+// future regression that swapped the stale-check and the
+// recordPingSent GC sweep would evict the entry before it could be
+// flagged — and this test would fail.
+func TestPeer_RunPingTick_StalePingReturnsErrPingTimeout(t *testing.T) {
+	p := newLatencyTestPeer(t)
+	now := time.Now()
+	p.recordPingSent(7, now.Add(-2*pingTimeout))
+
+	err := p.runPingTick(now)
+	require.ErrorIs(t, err, ErrPingTimeout)
+}

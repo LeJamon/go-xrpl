@@ -705,34 +705,47 @@ func (p *Peer) pingLoop(ctx context.Context) error {
 		case <-p.closeCh:
 			return nil
 		case <-ticker.C:
-			now := time.Now()
-			if seq, age, ok := p.staleInFlightPing(now, pingTimeout); ok {
-				slog.Warn("peer ping timeout",
-					"t", "Peer", "peer", p.id,
-					"endpoint", p.endpoint.String(),
-					"seq", seq, "age", age,
-				)
-				return ErrPingTimeout
-			}
-			seq := uint32(now.UnixMilli())
-			ping := &message.Ping{
-				PType: message.PingTypePing,
-				Seq:   seq,
-			}
-			encoded, err := message.Encode(ping)
-			if err != nil {
-				continue
-			}
-			wireMsg, err := message.BuildWireMessage(message.TypePing, encoded)
-			if err != nil {
-				continue
-			}
-			p.recordPingSent(seq, now)
-			if err := p.Send(wireMsg); err != nil {
+			if err := p.runPingTick(time.Now()); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+// runPingTick performs the per-tick body of pingLoop. Returns
+// ErrPingTimeout when the oldest in-flight ping has reached
+// pingTimeout, the Send error when the new ping cannot be queued,
+// or nil when the ping was sent (or this tick was skipped due to
+// an encoding hiccup). Extracted from pingLoop so the timeout
+// path is exercisable without driving a real ticker, locking the
+// stale-check-before-record ordering required for correctness.
+func (p *Peer) runPingTick(now time.Time) error {
+	if seq, age, ok := p.staleInFlightPing(now, pingTimeout); ok {
+		slog.Warn("peer ping timeout",
+			"t", "Peer", "peer", p.id,
+			"endpoint", p.endpoint.String(),
+			"seq", seq, "age", age,
+		)
+		return ErrPingTimeout
+	}
+	seq := uint32(now.UnixMilli())
+	ping := &message.Ping{
+		PType: message.PingTypePing,
+		Seq:   seq,
+	}
+	encoded, err := message.Encode(ping)
+	if err != nil {
+		return nil
+	}
+	wireMsg, err := message.BuildWireMessage(message.TypePing, encoded)
+	if err != nil {
+		return nil
+	}
+	p.recordPingSent(seq, now)
+	if err := p.Send(wireMsg); err != nil {
+		return err
+	}
+	return nil
 }
 
 const (
