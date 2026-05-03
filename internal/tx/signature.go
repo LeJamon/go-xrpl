@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -101,7 +102,7 @@ func VerifySignature(tx Transaction) error {
 	// Get the message that was signed
 	signingPayload, err := getSigningPayload(tx)
 	if err != nil {
-		return errors.New("failed to get signing payload: " + err.Error())
+		return fmt.Errorf("failed to get signing payload: %w", err)
 	}
 
 	// Verify the signature based on the key type
@@ -147,7 +148,7 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup) error {
 	}
 	signerList, err := lookup.GetSignerList(idAccount)
 	if err != nil {
-		return errors.New("failed to get signer list: " + err.Error())
+		return fmt.Errorf("failed to get signer list: %w", err)
 	}
 	if signerList == nil {
 		return ErrNotMultiSigning
@@ -173,7 +174,7 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup) error {
 	// Each signer signs a different message (transaction + their account ID suffix)
 	txMap, err := tx.Flatten()
 	if err != nil {
-		return errors.New("failed to flatten transaction: " + err.Error())
+		return fmt.Errorf("failed to flatten transaction: %w", err)
 	}
 
 	// Verify signers are sorted by binary AccountID (required by XRPL).
@@ -278,7 +279,7 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup) error {
 		// Get the multi-signing payload for this specific signer
 		signingPayload, err := binarycodec.EncodeForMultisigning(copyMap(txMap), txSignerAccount)
 		if err != nil {
-			return errors.New("failed to encode for multi-signing: " + err.Error())
+			return fmt.Errorf("failed to encode for multi-signing: %w", err)
 		}
 
 		// Verify the signature
@@ -365,7 +366,7 @@ func SignTransaction(tx Transaction, privateKeyHex string) (string, error) {
 	// Get the signing payload
 	signingPayload, err := getSigningPayload(tx)
 	if err != nil {
-		return "", errors.New("failed to get signing payload: " + err.Error())
+		return "", fmt.Errorf("failed to get signing payload: %w", err)
 	}
 
 	// Decode the private key to determine the algorithm
@@ -394,7 +395,7 @@ func SignTransaction(tx Transaction, privateKeyHex string) (string, error) {
 		algo := ed25519.ED25519()
 		signature, err = algo.Sign(msgStr, privateKeyHex)
 		if err != nil {
-			return "", errors.New("ED25519 signing failed: " + err.Error())
+			return "", fmt.Errorf("ED25519 signing failed: %w", err)
 		}
 
 	case 0x00:
@@ -402,7 +403,7 @@ func SignTransaction(tx Transaction, privateKeyHex string) (string, error) {
 		algo := secp256k1.SECP256K1()
 		signature, err = algo.Sign(msgStr, privateKeyHex)
 		if err != nil {
-			return "", errors.New("SECP256K1 signing failed: " + err.Error())
+			return "", fmt.Errorf("SECP256K1 signing failed: %w", err)
 		}
 
 	default:
@@ -430,7 +431,7 @@ func CalculateMultiSigFee(baseFee uint64, numSigners int) uint64 {
 func CalculateMultiSigFeeDrops(baseFeeDrops string, numSigners int) (string, error) {
 	baseFee, err := strconv.ParseUint(baseFeeDrops, 10, 64)
 	if err != nil {
-		return "", errors.New("invalid base fee: " + err.Error())
+		return "", fmt.Errorf("invalid base fee: %w", err)
 	}
 
 	totalFee := CalculateMultiSigFee(baseFee, numSigners)
@@ -451,13 +452,13 @@ func SignTransactionForMultiSign(tx Transaction, signerAccount string, privateKe
 	// Flatten the transaction to a map
 	txMap, err := tx.Flatten()
 	if err != nil {
-		return "", errors.New("failed to flatten transaction: " + err.Error())
+		return "", fmt.Errorf("failed to flatten transaction: %w", err)
 	}
 
 	// Get the multi-signing payload for this specific signer
 	signingPayload, err := binarycodec.EncodeForMultisigning(txMap, signerAccount)
 	if err != nil {
-		return "", errors.New("failed to encode for multi-signing: " + err.Error())
+		return "", fmt.Errorf("failed to encode for multi-signing: %w", err)
 	}
 
 	// Decode the private key to determine the algorithm
@@ -486,7 +487,7 @@ func SignTransactionForMultiSign(tx Transaction, signerAccount string, privateKe
 		algo := ed25519.ED25519()
 		signature, err = algo.Sign(msgStr, privateKeyHex)
 		if err != nil {
-			return "", errors.New("ED25519 signing failed: " + err.Error())
+			return "", fmt.Errorf("ED25519 signing failed: %w", err)
 		}
 
 	case 0x00:
@@ -494,7 +495,7 @@ func SignTransactionForMultiSign(tx Transaction, signerAccount string, privateKe
 		algo := secp256k1.SECP256K1()
 		signature, err = algo.Sign(msgStr, privateKeyHex)
 		if err != nil {
-			return "", errors.New("SECP256K1 signing failed: " + err.Error())
+			return "", fmt.Errorf("SECP256K1 signing failed: %w", err)
 		}
 
 	default:
@@ -519,7 +520,7 @@ func AddMultiSigner(tx Transaction, account, publicKey, signature string) error 
 	// Decode the new signer's AccountID for binary comparison
 	newID, err := state.DecodeAccountID(account)
 	if err != nil {
-		return errors.New("invalid signer account: " + err.Error())
+		return fmt.Errorf("invalid signer account: %w", err)
 	}
 
 	// Create the new signer entry

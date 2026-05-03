@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
@@ -34,13 +35,13 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	// Parse taker_gets amount
 	takerGets, err := ParseAmountFromJSON(request.TakerGets)
 	if err != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid taker_gets: " + err.Error())
+		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid taker_gets: %v", err))
 	}
 
 	// Parse taker_pays amount
 	takerPays, err := ParseAmountFromJSON(request.TakerPays)
 	if err != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid taker_pays: " + err.Error())
+		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid taker_pays: %v", err))
 	}
 
 	// Validate currencies (rippled rejects non-standard currency codes)
@@ -62,7 +63,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	limit := ClampLimit(request.Limit, LimitBookOffers, ctx.IsAdmin)
 	result, err := ctx.Services.Ledger.GetBookOffers(takerGets, takerPays, ledgerIndex, limit)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to get book offers: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
 	}
 
 	// Build response matching rippled's book_offers structure.

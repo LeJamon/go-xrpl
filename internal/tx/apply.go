@@ -2,6 +2,7 @@ package tx
 
 import (
 	"encoding/hex"
+	"fmt"
 
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
@@ -52,7 +53,7 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 		return ApplyResult{
 			Result:  TefINTERNAL,
 			Applied: false,
-			Message: "failed to compute transaction hash: " + err.Error(),
+			Message: fmt.Sprintf("failed to compute transaction hash: %v", err),
 		}
 	}
 
@@ -313,7 +314,7 @@ func (e *Engine) applyPseudoTransaction(tx Transaction) ApplyResult {
 		return ApplyResult{
 			Result:  TefINTERNAL,
 			Applied: false,
-			Message: "failed to compute transaction hash: " + err.Error(),
+			Message: fmt.Sprintf("failed to compute transaction hash: %v", err),
 		}
 	}
 
@@ -355,7 +356,7 @@ func (e *Engine) applyPseudoTransaction(tx Transaction) ApplyResult {
 				Result:   TefINTERNAL,
 				Applied:  false,
 				Metadata: metadata,
-				Message:  "failed to apply state changes: " + err.Error(),
+				Message:  fmt.Sprintf("failed to apply state changes: %v", err),
 			}
 		}
 		metadata.AffectedNodes = generatedMeta.AffectedNodes

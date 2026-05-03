@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
@@ -41,7 +42,7 @@ func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 	result, err := ctx.Services.Ledger.GetLedgerRange(request.StartLedger, request.StopLedger)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to get ledger range: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get ledger range: %v", err))
 	}
 
 	// Build ledgers array

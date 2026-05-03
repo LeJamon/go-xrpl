@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
@@ -33,7 +34,7 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 				Message: "Transaction history not available. Database not configured.",
 			}
 		}
-		return nil, types.RpcErrorInternal("Failed to get transaction history: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get transaction history: %v", err))
 	}
 
 	// Build transactions array with deserialized JSON

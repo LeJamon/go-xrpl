@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -35,7 +36,7 @@ func (m *ChannelAuthorizeMethod) Handle(ctx *types.RpcContext, params json.RawMe
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
@@ -113,20 +114,20 @@ func (m *ChannelAuthorizeMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	}
 	messageHex, err := binarycodec.EncodeForSigningClaim(claimJSON)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to encode claim: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode claim: %v", err))
 	}
 
 	// Convert hex message to raw bytes for signing
 	messageBytes, err := hex.DecodeString(messageHex)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to decode message: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to decode message: %v", err))
 	}
 
 	// Sign the message
 	// The Sign functions expect the raw message bytes (as a string)
 	signature, err := signMessage(messageBytes, privateKeyHex, request.KeyType)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Exception occurred during signing: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Exception occurred during signing: %v", err))
 	}
 
 	response := map[string]interface{}{

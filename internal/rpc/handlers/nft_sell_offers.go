@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -83,7 +84,7 @@ func (m *NftSellOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		if err.Error() == "invalid marker" {
 			return nil, types.RpcErrorInvalidParams("Invalid marker")
 		}
-		return nil, types.RpcErrorInternal("Failed to get NFT sell offers: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get NFT sell offers: %v", err))
 	}
 
 	return buildNFTOffersResponse(nftIDHex, result, limit), nil

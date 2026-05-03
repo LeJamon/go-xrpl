@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
@@ -60,7 +61,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		// Lookup by owner + seq
 		_, ownerBytes, err := addresscodec.DecodeClassicAddressToAccountID(request.Owner)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid owner address: " + err.Error())
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid owner address: %v", err))
 		}
 		var ownerID [20]byte
 		copy(ownerID[:], ownerBytes)

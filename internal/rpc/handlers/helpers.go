@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
@@ -26,7 +27,7 @@ func ParseParams(params json.RawMessage, dest interface{}) *types.RpcError {
 		return nil
 	}
 	if err := json.Unmarshal(params, dest); err != nil {
-		return types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
+		return types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 	}
 	return nil
 }

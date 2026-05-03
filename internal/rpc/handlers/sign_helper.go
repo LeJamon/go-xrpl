@@ -171,13 +171,13 @@ func signTransactionJSON(services *types.ServiceContainer, txJSON json.RawMessag
 	// Derive address from public key
 	address, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(publicKey)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to derive address: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to derive address: %v", err))
 	}
 
 	// Parse the transaction JSON
 	var txMap map[string]interface{}
 	if err := json.Unmarshal(txJSON, &txMap); err != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid tx_json: " + err.Error())
+		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
 
 	// Verify the account matches the signing key
@@ -218,7 +218,7 @@ func signTransactionJSON(services *types.ServiceContainer, txJSON json.RawMessag
 			// For now, attempt to get account info.
 			info, err := services.Ledger.GetAccountInfo(address, "current")
 			if err != nil {
-				return nil, types.RpcErrorInternal("Failed to get account sequence: " + err.Error())
+				return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account sequence: %v", err))
 			}
 			txMap["Sequence"] = info.Sequence
 		}
@@ -245,12 +245,12 @@ func signTransactionJSON(services *types.ServiceContainer, txJSON json.RawMessag
 
 	txBytes, err := json.Marshal(txMap)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to marshal transaction: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to marshal transaction: %v", err))
 	}
 
 	transaction, err := tx.ParseJSON(txBytes)
 	if err != nil {
-		return nil, types.RpcErrorInvalidParams("Failed to parse transaction: " + err.Error())
+		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Failed to parse transaction: %v", err))
 	}
 
 	txCommon := transaction.GetCommon()
@@ -258,14 +258,14 @@ func signTransactionJSON(services *types.ServiceContainer, txJSON json.RawMessag
 
 	signature, err := tx.SignTransaction(transaction, privateKey)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to sign transaction: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to sign transaction: %v", err))
 	}
 
 	txMap["TxnSignature"] = signature
 
 	txBlob, err := binarycodec.Encode(txMap)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to encode transaction: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode transaction: %v", err))
 	}
 
 	txHash := CalculateTxHash(txBlob)

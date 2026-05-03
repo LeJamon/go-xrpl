@@ -31,7 +31,7 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
@@ -138,13 +138,13 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	}
 	messageHex, err := binarycodec.EncodeForSigningClaim(claimJSON)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to encode claim: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode claim: %v", err))
 	}
 
 	// Convert hex message to raw bytes for verification
 	messageBytes, err := hex.DecodeString(messageHex)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to decode message: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to decode message: %v", err))
 	}
 
 	// Verify the signature

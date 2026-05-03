@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
@@ -58,7 +59,7 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		if len(err.Error()) > 32 && err.Error()[:32] == "invalid destination_account addr" {
 			return nil, types.RpcErrorInvalidParams("Destination account malformed.")
 		}
-		return nil, types.RpcErrorInternal("Failed to get account channels: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account channels: %v", err))
 	}
 
 	// Build channels array with proper field handling

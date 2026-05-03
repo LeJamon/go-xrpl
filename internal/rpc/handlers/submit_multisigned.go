@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
@@ -33,7 +34,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	// Parse the transaction JSON
 	var txMap map[string]interface{}
 	if err := json.Unmarshal(request.TxJson, &txMap); err != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid tx_json: " + err.Error())
+		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
 
 	// --- checkMultiSignFields (rippled TransactionSign.cpp:1032-1057) ---

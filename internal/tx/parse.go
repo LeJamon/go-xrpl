@@ -3,7 +3,7 @@ package tx
 import (
 	"encoding/hex"
 	"encoding/json"
-	"errors"
+	"fmt"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 )
@@ -19,12 +19,12 @@ func ParseJSON(data []byte) (Transaction, error) {
 			TransactionType string `json:"TransactionType"`
 		}
 		if err := json.Unmarshal(data, &header); err != nil {
-			return nil, errors.New("failed to parse transaction: " + err.Error())
+			return nil, fmt.Errorf("failed to parse transaction: %w", err)
 		}
 		txType, _ := TypeFromName(header.TransactionType)
 		var baseTx BaseTx
 		if err := json.Unmarshal(data, &baseTx); err != nil {
-			return nil, errors.New("failed to parse transaction: " + err.Error())
+			return nil, fmt.Errorf("failed to parse transaction: %w", err)
 		}
 		baseTx.txType = txType
 		return &baseTx, nil
@@ -49,7 +49,7 @@ func ParseFromBinary(blob []byte) (Transaction, error) {
 	// Decode binary to JSON map
 	jsonMap, err := binarycodec.Decode(hexStr)
 	if err != nil {
-		return nil, errors.New("failed to decode binary transaction: " + err.Error())
+		return nil, fmt.Errorf("failed to decode binary transaction: %w", err)
 	}
 
 	// Extract present fields from the decoded map
@@ -62,7 +62,7 @@ func ParseFromBinary(blob []byte) (Transaction, error) {
 	// Convert map to JSON bytes
 	jsonBytes, err := json.Marshal(jsonMap)
 	if err != nil {
-		return nil, errors.New("failed to marshal decoded transaction: " + err.Error())
+		return nil, fmt.Errorf("failed to marshal decoded transaction: %w", err)
 	}
 
 	tx, err := ParseJSON(jsonBytes)
