@@ -109,6 +109,14 @@ func (v *VaultSet) RequiredAmendments() [][32]byte {
 }
 
 func (v *VaultSet) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("vault set apply",
+		"account", v.Account,
+		"vaultID", v.VaultID,
+		"hasData", v.Data != "",
+		"hasDomainID", v.DomainID != "",
+		"hasAssetsMaximum", v.AssetsMaximum != nil,
+	)
+
 	if v.VaultID == "" {
 		return tx.TemINVALID
 	}
