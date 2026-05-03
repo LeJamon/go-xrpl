@@ -22,6 +22,8 @@ type LedgerServiceAdapter struct {
 	txBroadcaster func(txBlob []byte) // called after successful submit to relay tx to peers
 }
 
+var _ types.LedgerService = (*LedgerServiceAdapter)(nil)
+
 // NewLedgerServiceAdapter creates a new adapter
 func NewLedgerServiceAdapter(svc *service.Service) *LedgerServiceAdapter {
 	return &LedgerServiceAdapter{svc: svc}
