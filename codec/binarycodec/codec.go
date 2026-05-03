@@ -170,7 +170,11 @@ func EncodeForSigningBatch(json map[string]any) (string, error) {
 		return "", err
 	}
 
-	result := batchPrefix + hex.EncodeToString(flagsBytes) + hex.EncodeToString(txIDsLengthBytes)
+	var sb strings.Builder
+	sb.Grow(len(batchPrefix) + 2*len(flagsBytes) + 2*len(txIDsLengthBytes) + txIDsLength*2*types.HashLengthBytes)
+	sb.WriteString(batchPrefix)
+	sb.WriteString(hex.EncodeToString(flagsBytes))
+	sb.WriteString(hex.EncodeToString(txIDsLengthBytes))
 
 	for _, txID := range txIDsInterface {
 		hash256 := types.NewHash256()
@@ -178,10 +182,10 @@ func EncodeForSigningBatch(json map[string]any) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		result += hex.EncodeToString(txIDBytes)
+		sb.WriteString(hex.EncodeToString(txIDBytes))
 	}
 
-	return strings.ToUpper(result), nil
+	return strings.ToUpper(sb.String()), nil
 }
 
 // removeNonSigningFields removes the fields from a JSON transaction object that should not be signed.
