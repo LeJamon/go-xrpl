@@ -257,12 +257,11 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup) error {
 		} else {
 			// May be a Regular Key case
 			// The public key must hash to the signer's regular key
-			flags, regularKey, lookupErr := lookup.GetAccountInfo(txSignerAccount)
+			_, regularKey, lookupErr := lookup.GetAccountInfo(txSignerAccount)
 			if lookupErr != nil {
 				// Non-phantom signer lacks account root
 				return ErrBadSignature
 			}
-			_ = flags // flags checked above if needed
 
 			if regularKey == "" {
 				// Account lacks RegularKey
