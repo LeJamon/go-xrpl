@@ -133,15 +133,15 @@ func validateRequiredFields(config *Config) []string {
 	}
 
 	// Network
-	if config.NetworkID == nil {
+	if config.NetworkID.IsZero() {
 		missing = append(missing, "missing required field: network_id")
 	}
 
 	// Ledger
-	if config.LedgerHistory == nil {
+	if config.LedgerHistory.IsZero() {
 		missing = append(missing, "missing required field: ledger_history")
 	}
-	if config.FetchDepth == nil {
+	if config.FetchDepth.IsZero() {
 		missing = append(missing, "missing required field: fetch_depth")
 	}
 
@@ -385,7 +385,7 @@ func validateCrossReferences(config *Config) error {
 	}
 
 	for i, cmd := range config.RPCStartup {
-		if _, hasCommand := cmd["command"]; !hasCommand {
+		if cmd.Command == "" {
 			return fmt.Errorf("rpc_startup command at index %d missing 'command' field", i)
 		}
 	}

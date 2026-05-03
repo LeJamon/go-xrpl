@@ -338,9 +338,9 @@ func TestConfigValidation_CompleteConfig(t *testing.T) {
 			Path: "/tmp/test",
 		},
 		DatabasePath:     "/tmp/test",
-		NetworkID:        "main",
-		LedgerHistory:    256,
-		FetchDepth:       "full",
+		NetworkID:        NetworkID{Set: true, Name: "main"},
+		LedgerHistory:    LedgerHistory{Set: true, Count: 256},
+		FetchDepth:       FetchDepth{Set: true, Full: true},
 		NodeSize:         "tiny",
 		DebugLogfile:     "/tmp/debug.log",
 		RelayProposals:   "trusted",
@@ -394,9 +394,9 @@ func TestConfigValidation_InvalidPort(t *testing.T) {
 			Path: "/tmp/test",
 		},
 		DatabasePath:     "/tmp/test",
-		NetworkID:        "main",
-		LedgerHistory:    256,
-		FetchDepth:       "full",
+		NetworkID:        NetworkID{Set: true, Name: "main"},
+		LedgerHistory:    LedgerHistory{Set: true, Count: 256},
+		FetchDepth:       FetchDepth{Set: true, Full: true},
 		NodeSize:         "tiny",
 		DebugLogfile:     "/tmp/debug.log",
 		RelayProposals:   "trusted",
@@ -446,9 +446,9 @@ func TestNetworkDefaults(t *testing.T) {
 
 func TestConfigHelperMethods(t *testing.T) {
 	config := &Config{
-		NetworkID:     "main",
-		LedgerHistory: 1000,
-		FetchDepth:    "full",
+		NetworkID:     NetworkID{Set: true, Name: "main"},
+		LedgerHistory: LedgerHistory{Set: true, Count: 1000},
+		FetchDepth:    FetchDepth{Set: true, Full: true},
 	}
 
 	networkID, err := config.GetNetworkID()

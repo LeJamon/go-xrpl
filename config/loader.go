@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
 
@@ -20,9 +21,17 @@ func LoadConfig(paths ConfigPaths) (*Config, error) {
 		return nil, fmt.Errorf("failed to load main config: %w", err)
 	}
 
-	// Unmarshal into struct
+	// Unmarshal into struct.
+	// The custom decode hook is required so viper can decode the typed
+	// union fields (LedgerHistory, FetchDepth, NetworkID) and the typed
+	// RPCStartup entries from raw TOML scalars/tables. The remaining hooks
+	// preserve viper's default behaviour for time durations and slices.
 	var config Config
-	if err := v.Unmarshal(&config); err != nil {
+	if err := v.Unmarshal(&config, viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
+		configDecodeHook(),
+		mapstructure.StringToTimeDurationHookFunc(),
+		mapstructure.StringToSliceHookFunc(","),
+	))); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
