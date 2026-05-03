@@ -49,8 +49,13 @@ shaky.
 **is** the operating-mode never legitimately reaching Full.
 
 Additionally, `ourLCLMatchesPeers()` (`router.go:1132`) returns `true`
-when no peer reports our seq — meaning once the router *does* promote
-to Full, it will silently fork if the network has moved past us.
+when no tracked peer reports our exact seq. The promote-to-Full path
+is gated by `peerSeq <= ourSeq+1` (`router.go:1064`), so this is not
+an unbounded fork risk — but it does mean we will silently transition
+to Full while exactly one seq behind a peer if no other peer is at
+our seq, then validate against a stale LCL. The fix is to count
+peers at `ourSeq` *and* `ourSeq+1` (or refuse the transition when
+`total == 0`) rather than treating "no signal" as agreement.
 
 **Why this drives the bug:** without proposing mode, goXRPL
 - never originates proposals → its tx submissions are not relayed to
