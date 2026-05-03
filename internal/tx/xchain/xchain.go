@@ -524,20 +524,54 @@ func (x *XChainAddAccountCreateAttestation) RequiredAmendments() [][32]byte {
 }
 
 func (x *XChainCreateBridge) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("xchain create bridge apply",
+		"account", x.Account,
+		"lockingChainDoor", x.XChainBridge.LockingChainDoor,
+		"lockingChainIssue", x.XChainBridge.LockingChainIssue,
+		"issuingChainDoor", x.XChainBridge.IssuingChainDoor,
+		"issuingChainIssue", x.XChainBridge.IssuingChainIssue,
+		"signatureReward", x.SignatureReward,
+		"hasMinAccountCreateAmount", x.MinAccountCreateAmount != nil,
+	)
 	ctx.Account.OwnerCount++
 	return tx.TesSUCCESS
 }
 
 func (x *XChainModifyBridge) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("xchain modify bridge apply",
+		"account", x.Account,
+		"lockingChainDoor", x.XChainBridge.LockingChainDoor,
+		"lockingChainIssue", x.XChainBridge.LockingChainIssue,
+		"issuingChainDoor", x.XChainBridge.IssuingChainDoor,
+		"issuingChainIssue", x.XChainBridge.IssuingChainIssue,
+		"hasSignatureReward", x.SignatureReward != nil,
+		"hasMinAccountCreateAmount", x.MinAccountCreateAmount != nil,
+		"flags", x.GetFlags(),
+	)
 	return tx.TesSUCCESS
 }
 
 func (x *XChainCreateClaimID) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("xchain create claim id apply",
+		"account", x.Account,
+		"lockingChainDoor", x.XChainBridge.LockingChainDoor,
+		"issuingChainDoor", x.XChainBridge.IssuingChainDoor,
+		"signatureReward", x.SignatureReward,
+		"otherChainSource", x.OtherChainSource,
+	)
 	ctx.Account.OwnerCount++
 	return tx.TesSUCCESS
 }
 
 func (x *XChainCommit) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("xchain commit apply",
+		"account", x.Account,
+		"lockingChainDoor", x.XChainBridge.LockingChainDoor,
+		"issuingChainDoor", x.XChainBridge.IssuingChainDoor,
+		"claimID", x.XChainClaimID,
+		"amount", x.Amount,
+		"otherChainDestination", x.OtherChainDestination,
+	)
 	if x.Amount.IsNative() {
 		amount := uint64(x.Amount.Drops())
 		if ctx.Account.Balance < amount {
@@ -549,6 +583,14 @@ func (x *XChainCommit) Apply(ctx *tx.ApplyContext) tx.Result {
 }
 
 func (x *XChainClaim) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("xchain claim apply",
+		"account", x.Account,
+		"lockingChainDoor", x.XChainBridge.LockingChainDoor,
+		"issuingChainDoor", x.XChainBridge.IssuingChainDoor,
+		"claimID", x.XChainClaimID,
+		"destination", x.Destination,
+		"amount", x.Amount,
+	)
 	if x.Amount.IsNative() {
 		amount := uint64(x.Amount.Drops())
 		destID, err := state.DecodeAccountID(x.Destination)
@@ -570,6 +612,14 @@ func (x *XChainClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 }
 
 func (x *XChainAccountCreateCommit) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("xchain account create commit apply",
+		"account", x.Account,
+		"lockingChainDoor", x.XChainBridge.LockingChainDoor,
+		"issuingChainDoor", x.XChainBridge.IssuingChainDoor,
+		"destination", x.Destination,
+		"amount", x.Amount,
+		"signatureReward", x.SignatureReward,
+	)
 	if x.Amount.IsNative() {
 		amount := uint64(x.Amount.Drops())
 		if ctx.Account.Balance < amount {
@@ -581,9 +631,23 @@ func (x *XChainAccountCreateCommit) Apply(ctx *tx.ApplyContext) tx.Result {
 }
 
 func (x *XChainAddClaimAttestation) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("xchain add claim attestation apply",
+		"account", x.Account,
+		"lockingChainDoor", x.XChainBridge.LockingChainDoor,
+		"issuingChainDoor", x.XChainBridge.IssuingChainDoor,
+		"claimID", x.XChainClaimID,
+		"attestationSignerAccount", x.AttestationSignerAccount,
+	)
 	return tx.TesSUCCESS
 }
 
 func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("xchain add account create attestation apply",
+		"account", x.Account,
+		"lockingChainDoor", x.XChainBridge.LockingChainDoor,
+		"issuingChainDoor", x.XChainBridge.IssuingChainDoor,
+		"createCount", x.XChainAccountCreateCount,
+		"attestationSignerAccount", x.AttestationSignerAccount,
+	)
 	return tx.TesSUCCESS
 }
