@@ -361,6 +361,9 @@ func validateMiscSettings(config *Config) error {
 	if err := ValidateWebsocketPingFrequency(config.WebsocketPingFrequency); err != nil {
 		return err
 	}
+	if err := config.WebSocket.Validate(); err != nil {
+		return err
+	}
 
 	return nil
 }

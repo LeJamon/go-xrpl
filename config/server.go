@@ -4,7 +4,74 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 )
+
+// Default WebSocket connection limits and timeouts. These mirror the values
+// hardcoded in internal/rpc/websocket.go before WebSocketConfig was introduced
+// and preserve historical behavior when the [websocket] section is omitted.
+const (
+	DefaultWebSocketMaxReadSize  int64         = 512 * 1024
+	DefaultWebSocketReadTimeout  time.Duration = 90 * time.Second
+	DefaultWebSocketWriteTimeout time.Duration = 10 * time.Second
+	DefaultWebSocketPingInterval time.Duration = 30 * time.Second
+	DefaultWebSocketPongTimeout  time.Duration = 30 * time.Second
+)
+
+// WebSocketConfig holds tunable limits and timeouts applied to every
+// WebSocket connection. All zero-valued fields fall back to the matching
+// Default* constants so existing deployments that omit the [websocket]
+// section behave identically to before this struct existed.
+type WebSocketConfig struct {
+	MaxReadSize  int64         `toml:"max_read_size" mapstructure:"max_read_size"`
+	ReadTimeout  time.Duration `toml:"read_timeout" mapstructure:"read_timeout"`
+	WriteTimeout time.Duration `toml:"write_timeout" mapstructure:"write_timeout"`
+	PingInterval time.Duration `toml:"ping_interval" mapstructure:"ping_interval"`
+	PongTimeout  time.Duration `toml:"pong_timeout" mapstructure:"pong_timeout"`
+}
+
+// WithDefaults returns a copy of cfg with any zero-valued field replaced by
+// the matching Default* constant. Callers should use the returned value
+// instead of the original to ensure every limit is set.
+func (cfg WebSocketConfig) WithDefaults() WebSocketConfig {
+	if cfg.MaxReadSize <= 0 {
+		cfg.MaxReadSize = DefaultWebSocketMaxReadSize
+	}
+	if cfg.ReadTimeout <= 0 {
+		cfg.ReadTimeout = DefaultWebSocketReadTimeout
+	}
+	if cfg.WriteTimeout <= 0 {
+		cfg.WriteTimeout = DefaultWebSocketWriteTimeout
+	}
+	if cfg.PingInterval <= 0 {
+		cfg.PingInterval = DefaultWebSocketPingInterval
+	}
+	if cfg.PongTimeout <= 0 {
+		cfg.PongTimeout = DefaultWebSocketPongTimeout
+	}
+	return cfg
+}
+
+// Validate ensures negative durations or sizes are rejected. Zero values
+// are allowed and resolved by WithDefaults at use time.
+func (cfg WebSocketConfig) Validate() error {
+	if cfg.MaxReadSize < 0 {
+		return fmt.Errorf("websocket.max_read_size must be non-negative, got %d", cfg.MaxReadSize)
+	}
+	if cfg.ReadTimeout < 0 {
+		return fmt.Errorf("websocket.read_timeout must be non-negative, got %s", cfg.ReadTimeout)
+	}
+	if cfg.WriteTimeout < 0 {
+		return fmt.Errorf("websocket.write_timeout must be non-negative, got %s", cfg.WriteTimeout)
+	}
+	if cfg.PingInterval < 0 {
+		return fmt.Errorf("websocket.ping_interval must be non-negative, got %s", cfg.PingInterval)
+	}
+	if cfg.PongTimeout < 0 {
+		return fmt.Errorf("websocket.pong_timeout must be non-negative, got %s", cfg.PongTimeout)
+	}
+	return nil
+}
 
 // ServerConfig represents the [server] section
 // This defines the ports that the server will listen on and default values
