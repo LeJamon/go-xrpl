@@ -736,18 +736,23 @@ func (p *Peer) pingLoop(ctx context.Context) error {
 }
 
 const (
-	pingInFlightTTL  = 30 * time.Second
-	pingsInFlightCap = 16
 	// pingTimeout: disconnect when the oldest unanswered ping reaches
 	// this age. Mirrors rippled's PeerImp::onTimer "Already waiting for
-	// PONG → fail('Ping Timeout')" (PeerImp.cpp:731-736); rippled's
-	// timer fires every 60s so a single missed cycle drops the peer.
-	// goXRPL pings every 15s, so 30s = ~2 cycles of grace.
-	pingTimeout = 30 * time.Second
+	// PONG → fail('Ping Timeout')" (PeerImp.cpp:731-736) with rippled's
+	// 60s peerTimerInterval (PeerImp.cpp:61) — a single missed cycle
+	// drops the peer. goXRPL's 15s ticker means actual disconnect lands
+	// in [60s, 75s] from the unanswered ping, vs rippled's [60s, 120s].
+	pingTimeout = 60 * time.Second
+	// pingInFlightTTL must be >= pingTimeout: recordPingSent's GC sweep
+	// runs after staleInFlightPing on each tick, so trimming earlier
+	// would evict the very entry the timeout check is about to flag.
+	pingInFlightTTL  = pingTimeout
+	pingsInFlightCap = 16
 )
 
 // staleInFlightPing returns the oldest in-flight ping whose age has
-// reached threshold. Pure read against the latency map for testability.
+// reached threshold. Pure read against the pingsInFlight map for
+// testability.
 func (p *Peer) staleInFlightPing(now time.Time, threshold time.Duration) (seq uint32, age time.Duration, ok bool) {
 	p.latencyMu.RLock()
 	defer p.latencyMu.RUnlock()
