@@ -73,3 +73,27 @@ func TestPeer_RunPingTick_StalePingReturnsErrPingTimeout(t *testing.T) {
 	err := p.runPingTick(now)
 	require.ErrorIs(t, err, ErrPingTimeout)
 }
+
+// TestPeer_RunPingTick_HappyPathRecordsAndSends pins the non-timeout
+// branch: with no stale ping, runPingTick records the freshly-issued
+// seq in pingsInFlight and queues exactly one wire message on
+// p.send. Guards against silent regressions that would drop the
+// recordPingSent call or short-circuit the Send.
+func TestPeer_RunPingTick_HappyPathRecordsAndSends(t *testing.T) {
+	p := newLatencyTestPeer(t)
+	now := time.Now()
+
+	require.NoError(t, p.runPingTick(now))
+
+	p.latencyMu.RLock()
+	inFlight := len(p.pingsInFlight)
+	p.latencyMu.RUnlock()
+	assert.Equal(t, 1, inFlight, "happy path records exactly one in-flight ping")
+
+	select {
+	case msg := <-p.send:
+		assert.NotEmpty(t, msg, "ping must be queued on the send channel")
+	default:
+		t.Fatal("expected a wire message on p.send after a successful tick")
+	}
+}

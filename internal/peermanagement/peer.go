@@ -752,9 +752,10 @@ const (
 	// pingTimeout: disconnect when the oldest unanswered ping reaches
 	// this age. Mirrors rippled's PeerImp::onTimer "Already waiting for
 	// PONG → fail('Ping Timeout')" (PeerImp.cpp:731-736) with rippled's
-	// 60s peerTimerInterval (PeerImp.cpp:61) — a single missed cycle
-	// drops the peer. goXRPL's 15s ticker means actual disconnect lands
-	// in [60s, 75s] from the unanswered ping, vs rippled's [60s, 120s].
+	// 60s peerTimerInterval (PeerImp.cpp:61). At the moment the
+	// disconnect fires, the unanswered ping's age is ≈60s in both
+	// implementations; the 15s tick only changes when goXRPL first
+	// probes a quiet peer (≈15s from connect, vs rippled's ≈60s).
 	pingTimeout = 60 * time.Second
 	// pingInFlightTTL must be >= pingTimeout: recordPingSent's GC sweep
 	// runs after staleInFlightPing on each tick, so trimming earlier
