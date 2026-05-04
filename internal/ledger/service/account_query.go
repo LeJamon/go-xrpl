@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"strconv"
@@ -77,7 +78,7 @@ func (s *Service) GetAccountInfo(account string, ledgerIndex string) (*AccountIn
 	// Decode the account address to get the account ID
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, errors.New("invalid account address: " + err.Error())
+		return nil, fmt.Errorf("invalid account address: %w", err)
 	}
 
 	var accountID [20]byte
@@ -89,7 +90,7 @@ func (s *Service) GetAccountInfo(account string, ledgerIndex string) (*AccountIn
 	// Check if account exists
 	exists, err := targetLedger.Exists(accountKey)
 	if err != nil {
-		return nil, errors.New("failed to check account existence: " + err.Error())
+		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
 		return nil, errors.New("account not found")
@@ -98,13 +99,13 @@ func (s *Service) GetAccountInfo(account string, ledgerIndex string) (*AccountIn
 	// Read the account data
 	data, err := targetLedger.Read(accountKey)
 	if err != nil {
-		return nil, errors.New("failed to read account: " + err.Error())
+		return nil, fmt.Errorf("failed to read account: %w", err)
 	}
 
 	// Parse the account root
 	accountRoot, err := state.ParseAccountRootFromBytes(data)
 	if err != nil {
-		return nil, errors.New("failed to parse account data: " + err.Error())
+		return nil, fmt.Errorf("failed to parse account data: %w", err)
 	}
 
 	return &AccountInfoResult{
@@ -169,7 +170,7 @@ func (s *Service) GetAccountLines(account string, ledgerIndex string, peer strin
 	// Decode the account address
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, errors.New("invalid account address: " + err.Error())
+		return nil, fmt.Errorf("invalid account address: %w", err)
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
@@ -180,7 +181,7 @@ func (s *Service) GetAccountLines(account string, ledgerIndex string, peer strin
 	if peer != "" {
 		_, peerIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(peer)
 		if err != nil {
-			return nil, errors.New("invalid peer address: " + err.Error())
+			return nil, fmt.Errorf("invalid peer address: %w", err)
 		}
 		copy(peerID[:], peerIDBytes)
 		hasPeer = true
@@ -329,7 +330,7 @@ func (s *Service) GetAccountOffers(account string, ledgerIndex string, limit uin
 	// Decode the account address
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, errors.New("invalid account address: " + err.Error())
+		return nil, fmt.Errorf("invalid account address: %w", err)
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
@@ -451,7 +452,7 @@ func (s *Service) GetAccountObjects(account string, ledgerIndex string, objType 
 
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, errors.New("invalid account address: " + err.Error())
+		return nil, fmt.Errorf("invalid account address: %w", err)
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
@@ -549,7 +550,7 @@ func (s *Service) GetAccountChannels(account string, destinationAccount string, 
 	// Decode the account address
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, errors.New("invalid account address: " + err.Error())
+		return nil, fmt.Errorf("invalid account address: %w", err)
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
@@ -558,7 +559,7 @@ func (s *Service) GetAccountChannels(account string, destinationAccount string, 
 	accountKey := keylet.Account(accountID)
 	exists, err := targetLedger.Exists(accountKey)
 	if err != nil {
-		return nil, errors.New("failed to check account existence: " + err.Error())
+		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
 		return nil, errors.New("account not found")
@@ -570,7 +571,7 @@ func (s *Service) GetAccountChannels(account string, destinationAccount string, 
 	if destinationAccount != "" {
 		_, destIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(destinationAccount)
 		if err != nil {
-			return nil, errors.New("invalid destination_account address: " + err.Error())
+			return nil, fmt.Errorf("invalid destination_account address: %w", err)
 		}
 		copy(destID[:], destIDBytes)
 		hasDestFilter = true
@@ -697,7 +698,7 @@ func (s *Service) GetAccountCurrencies(account string, ledgerIndex string) (*Acc
 	// Decode the account address
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, errors.New("invalid account address: " + err.Error())
+		return nil, fmt.Errorf("invalid account address: %w", err)
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
@@ -706,7 +707,7 @@ func (s *Service) GetAccountCurrencies(account string, ledgerIndex string) (*Acc
 	accountKey := keylet.Account(accountID)
 	exists, err := targetLedger.Exists(accountKey)
 	if err != nil {
-		return nil, errors.New("failed to check account existence: " + err.Error())
+		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
 		return nil, errors.New("account not found")
@@ -880,7 +881,7 @@ func (s *Service) GetAccountNFTs(account string, ledgerIndex string, limit uint3
 	// Decode the account address
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, errors.New("invalid account address: " + err.Error())
+		return nil, fmt.Errorf("invalid account address: %w", err)
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
@@ -889,7 +890,7 @@ func (s *Service) GetAccountNFTs(account string, ledgerIndex string, limit uint3
 	accountKey := keylet.Account(accountID)
 	exists, err := targetLedger.Exists(accountKey)
 	if err != nil {
-		return nil, errors.New("failed to check account existence: " + err.Error())
+		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
 		return nil, errors.New("account not found")
@@ -992,7 +993,7 @@ func (s *Service) GetGatewayBalances(account string, hotWallets []string, ledger
 	// Decode the account address
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, errors.New("invalid account address: " + err.Error())
+		return nil, fmt.Errorf("invalid account address: %w", err)
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
@@ -1001,7 +1002,7 @@ func (s *Service) GetGatewayBalances(account string, hotWallets []string, ledger
 	accountKey := keylet.Account(accountID)
 	exists, err := targetLedger.Exists(accountKey)
 	if err != nil {
-		return nil, errors.New("failed to check account existence: " + err.Error())
+		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
 		return nil, errors.New("account not found")
@@ -1209,7 +1210,7 @@ func (s *Service) GetNoRippleCheck(account string, role string, ledgerIndex stri
 	// Decode the account address
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, errors.New("invalid account address: " + err.Error())
+		return nil, fmt.Errorf("invalid account address: %w", err)
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
@@ -1218,7 +1219,7 @@ func (s *Service) GetNoRippleCheck(account string, role string, ledgerIndex stri
 	accountKey := keylet.Account(accountID)
 	exists, err := targetLedger.Exists(accountKey)
 	if err != nil {
-		return nil, errors.New("failed to check account existence: " + err.Error())
+		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
 		return nil, errors.New("account not found")
@@ -1227,12 +1228,12 @@ func (s *Service) GetNoRippleCheck(account string, role string, ledgerIndex stri
 	// Read the account data to get flags and sequence
 	data, err := targetLedger.Read(accountKey)
 	if err != nil {
-		return nil, errors.New("failed to read account: " + err.Error())
+		return nil, fmt.Errorf("failed to read account: %w", err)
 	}
 
 	accountRoot, err := state.ParseAccountRootFromBytes(data)
 	if err != nil {
-		return nil, errors.New("failed to parse account data: " + err.Error())
+		return nil, fmt.Errorf("failed to parse account data: %w", err)
 	}
 
 	// Validate role
@@ -1449,7 +1450,7 @@ func (s *Service) GetDepositAuthorized(sourceAccount string, destinationAccount 
 	// Decode the source account address
 	_, srcIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(sourceAccount)
 	if err != nil {
-		return nil, errors.New("invalid source_account address: " + err.Error())
+		return nil, fmt.Errorf("invalid source_account address: %w", err)
 	}
 	var srcID [20]byte
 	copy(srcID[:], srcIDBytes)
@@ -1457,7 +1458,7 @@ func (s *Service) GetDepositAuthorized(sourceAccount string, destinationAccount 
 	// Decode the destination account address
 	_, dstIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(destinationAccount)
 	if err != nil {
-		return nil, errors.New("invalid destination_account address: " + err.Error())
+		return nil, fmt.Errorf("invalid destination_account address: %w", err)
 	}
 	var dstID [20]byte
 	copy(dstID[:], dstIDBytes)
@@ -1466,7 +1467,7 @@ func (s *Service) GetDepositAuthorized(sourceAccount string, destinationAccount 
 	srcKey := keylet.Account(srcID)
 	exists, err := targetLedger.Exists(srcKey)
 	if err != nil {
-		return nil, errors.New("failed to check source account existence: " + err.Error())
+		return nil, fmt.Errorf("failed to check source account existence: %w", err)
 	}
 	if !exists {
 		return nil, errors.New("source account not found")
@@ -1476,7 +1477,7 @@ func (s *Service) GetDepositAuthorized(sourceAccount string, destinationAccount 
 	dstKey := keylet.Account(dstID)
 	exists, err = targetLedger.Exists(dstKey)
 	if err != nil {
-		return nil, errors.New("failed to check destination account existence: " + err.Error())
+		return nil, fmt.Errorf("failed to check destination account existence: %w", err)
 	}
 	if !exists {
 		return nil, errors.New("destination account not found")
@@ -1485,12 +1486,12 @@ func (s *Service) GetDepositAuthorized(sourceAccount string, destinationAccount 
 	// Read the destination account data to get flags
 	dstData, err := targetLedger.Read(dstKey)
 	if err != nil {
-		return nil, errors.New("failed to read destination account: " + err.Error())
+		return nil, fmt.Errorf("failed to read destination account: %w", err)
 	}
 
 	dstAccountRoot, err := state.ParseAccountRootFromBytes(dstData)
 	if err != nil {
-		return nil, errors.New("failed to parse destination account data: " + err.Error())
+		return nil, fmt.Errorf("failed to parse destination account data: %w", err)
 	}
 
 	// Check if DepositAuth flag is set on destination
@@ -1517,7 +1518,7 @@ func (s *Service) GetDepositAuthorized(sourceAccount string, destinationAccount 
 		depositPreauthKey := keylet.DepositPreauth(dstID, srcID)
 		exists, err := targetLedger.Exists(depositPreauthKey)
 		if err != nil {
-			return nil, errors.New("failed to check deposit preauthorization: " + err.Error())
+			return nil, fmt.Errorf("failed to check deposit preauthorization: %w", err)
 		}
 		depositAuthorized = exists
 
@@ -1527,7 +1528,7 @@ func (s *Service) GetDepositAuthorized(sourceAccount string, destinationAccount 
 			credPreauthKey := keylet.DepositPreauthCredentials(dstID, sortedCredPairs)
 			exists, err := targetLedger.Exists(credPreauthKey)
 			if err != nil {
-				return nil, errors.New("failed to check credential deposit preauthorization: " + err.Error())
+				return nil, fmt.Errorf("failed to check credential deposit preauthorization: %w", err)
 			}
 			depositAuthorized = exists
 		}

@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 
 	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -48,7 +49,7 @@ func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (
 
 	masterB58, err := addresscodec.EncodeNodePublicKey(masterKey[:])
 	if err != nil {
-		return nil, types.RpcErrorInternal("encode master key: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("encode master key: %v", err))
 	}
 	resp := validatorInfoResponse{MasterKey: masterB58}
 
@@ -60,7 +61,7 @@ func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (
 	if masterKey != keyArr {
 		ephB58, err := addresscodec.EncodeNodePublicKey(keyArr[:])
 		if err != nil {
-			return nil, types.RpcErrorInternal("encode ephemeral key: " + err.Error())
+			return nil, types.RpcErrorInternal(fmt.Sprintf("encode ephemeral key: %v", err))
 		}
 		resp.EphemeralKey = ephB58
 

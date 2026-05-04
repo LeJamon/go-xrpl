@@ -11,8 +11,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/stretchr/testify/require"
-
-	_ "github.com/LeJamon/goXRPLd/internal/tx/all"
 )
 
 // Fake ED25519 validator public key (33 bytes: 0xED prefix + 32 bytes)

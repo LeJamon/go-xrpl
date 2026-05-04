@@ -13,9 +13,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/stretchr/testify/require"
-
-	// Import all tx types so they register
-	_ "github.com/LeJamon/goXRPLd/internal/tx/all"
 )
 
 // makeAmendmentHash returns the uppercase hex hash for a known amendment name.

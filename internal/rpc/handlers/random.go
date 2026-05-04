@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -17,7 +18,7 @@ func (m *RandomMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	randomBytes := make([]byte, 32)
 	_, err := rand.Read(randomBytes)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to generate random data: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to generate random data: %v", err))
 	}
 
 	response := map[string]interface{}{

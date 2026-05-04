@@ -207,19 +207,19 @@ func Create(cfg Config) (*GenesisLedger, error) {
 	// Generate genesis account from passphrase
 	accountID, address, err := GenerateAccountIDFromPassphrase(passphrase)
 	if err != nil {
-		return nil, errors.New("failed to generate genesis account: " + err.Error())
+		return nil, fmt.Errorf("failed to generate genesis account: %w", err)
 	}
 
 	// Create state map (account state tree)
 	stateMap, err := shamap.New(shamap.TypeState)
 	if err != nil {
-		return nil, errors.New("failed to create state map: " + err.Error())
+		return nil, fmt.Errorf("failed to create state map: %w", err)
 	}
 
 	// Create transaction map (empty for genesis)
 	txMap, err := shamap.New(shamap.TypeTransaction)
 	if err != nil {
-		return nil, errors.New("failed to create transaction map: " + err.Error())
+		return nil, fmt.Errorf("failed to create transaction map: %w", err)
 	}
 
 	// Calculate genesis account balance (total XRP minus initial accounts)
@@ -233,51 +233,51 @@ func Create(cfg Config) (*GenesisLedger, error) {
 
 	// 1. Create genesis account with remaining XRP
 	if err := createGenesisAccountWithBalance(stateMap, accountID, genesisBalance); err != nil {
-		return nil, errors.New("failed to create genesis account: " + err.Error())
+		return nil, fmt.Errorf("failed to create genesis account: %w", err)
 	}
 
 	// 2. Create initial accounts if specified
 	for _, acc := range cfg.InitialAccounts {
 		accID, err := DecodeAddress(acc.Address)
 		if err != nil {
-			return nil, errors.New("failed to decode address " + acc.Address + ": " + err.Error())
+			return nil, fmt.Errorf("failed to decode address %s: %w", acc.Address, err)
 		}
 		if err := createInitialAccount(stateMap, accID, acc.Balance, acc.Sequence, acc.Flags); err != nil {
-			return nil, errors.New("failed to create account " + acc.Address + ": " + err.Error())
+			return nil, fmt.Errorf("failed to create account %s: %w", acc.Address, err)
 		}
 	}
 
 	// 3. Create fee settings
 	if err := createFeeSettings(stateMap, cfg); err != nil {
-		return nil, errors.New("failed to create fee settings: " + err.Error())
+		return nil, fmt.Errorf("failed to create fee settings: %w", err)
 	}
 
 	// 4. Create amendments if specified
 	if len(cfg.Amendments) > 0 {
 		if err := createAmendments(stateMap, cfg.Amendments); err != nil {
-			return nil, errors.New("failed to create amendments: " + err.Error())
+			return nil, fmt.Errorf("failed to create amendments: %w", err)
 		}
 	}
 
 	// Make state map immutable
 	if err := stateMap.SetImmutable(); err != nil {
-		return nil, errors.New("failed to make state map immutable: " + err.Error())
+		return nil, fmt.Errorf("failed to make state map immutable: %w", err)
 	}
 
 	// Make tx map immutable
 	if err := txMap.SetImmutable(); err != nil {
-		return nil, errors.New("failed to make tx map immutable: " + err.Error())
+		return nil, fmt.Errorf("failed to make tx map immutable: %w", err)
 	}
 
 	// Get hashes
 	accountHash, err := stateMap.Hash()
 	if err != nil {
-		return nil, errors.New("failed to get state map hash: " + err.Error())
+		return nil, fmt.Errorf("failed to get state map hash: %w", err)
 	}
 
 	txHash, err := txMap.Hash()
 	if err != nil {
-		return nil, errors.New("failed to get tx map hash: " + err.Error())
+		return nil, fmt.Errorf("failed to get tx map hash: %w", err)
 	}
 
 	// Create ledger header

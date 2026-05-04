@@ -7,12 +7,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeOracleDelete, func() tx.Transaction {
-		return &OracleDelete{BaseTx: *tx.NewBaseTx(tx.TypeOracleDelete, "")}
-	})
-}
-
 // OracleDelete deletes a price oracle.
 type OracleDelete struct {
 	tx.BaseTx

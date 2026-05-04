@@ -160,16 +160,21 @@ func (c *TreeNodeCache) Contains(hash [32]byte) bool {
 // When a subtree is marked as "full", we know all its nodes are present locally,
 // which allows skipping sync checks for that entire subtree.
 // This significantly improves sync performance for large trees.
+//
+// The cache uses an LRU eviction policy: when at capacity, the least
+// recently touched entry is evicted. Both reads (IsFull) and writes
+// (MarkFull, Touch) update recency.
 type FullBelowCache struct {
-	mu      sync.RWMutex
-	fullSet map[[32]byte]struct{}
+	mu      sync.Mutex
 	maxSize int
+	fullSet map[[32]byte]*list.Element
+	lruList *list.List
 }
 
 // NewFullBelowCache creates a new FullBelowCache.
 //
 // Parameters:
-//   - maxSize: maximum number of hashes to track (0 = unlimited, use with caution)
+//   - maxSize: maximum number of hashes to track (0 = use default size)
 //
 // Returns a new FullBelowCache instance.
 func NewFullBelowCache(maxSize int) *FullBelowCache {
@@ -178,53 +183,62 @@ func NewFullBelowCache(maxSize int) *FullBelowCache {
 	}
 
 	return &FullBelowCache{
-		fullSet: make(map[[32]byte]struct{}, maxSize),
+		fullSet: make(map[[32]byte]*list.Element, maxSize),
+		lruList: list.New(),
 		maxSize: maxSize,
 	}
 }
 
 // IsFull returns true if the subtree rooted at the given hash is fully synced.
+// On a hit, the entry is moved to the front of the LRU list (touched).
 func (c *FullBelowCache) IsFull(hash [32]byte) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	_, found := c.fullSet[hash]
-	return found
+	elem, found := c.fullSet[hash]
+	if !found {
+		return false
+	}
+	c.lruList.MoveToFront(elem)
+	return true
 }
 
 // MarkFull marks the subtree rooted at the given hash as fully synced.
-// If the cache is full, older entries may be evicted (FIFO-like behavior).
+// If the cache is at capacity, the least recently used entry is evicted.
+// If the hash is already present, it is moved to the front of the LRU list.
 func (c *FullBelowCache) MarkFull(hash [32]byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if _, found := c.fullSet[hash]; found {
+	c.markFullLocked(hash)
+}
+
+// markFullLocked inserts hash into the cache or refreshes its recency.
+// Caller must hold c.mu.
+func (c *FullBelowCache) markFullLocked(hash [32]byte) {
+	if elem, found := c.fullSet[hash]; found {
+		c.lruList.MoveToFront(elem)
 		return
 	}
 
-	// Simple eviction strategy: if at max size, clear half the cache
-	// This is a simplistic approach; a more sophisticated implementation
-	// would use generational tracking or LRU
-	if len(c.fullSet) >= c.maxSize {
-		c.evictHalf()
+	for c.lruList.Len() >= c.maxSize {
+		c.evictOldestLocked()
 	}
 
-	c.fullSet[hash] = struct{}{}
+	elem := c.lruList.PushFront(hash)
+	c.fullSet[hash] = elem
 }
 
-// evictHalf removes approximately half of the entries.
-// Caller must hold the write lock.
-func (c *FullBelowCache) evictHalf() {
-	target := len(c.fullSet) / 2
-	count := 0
-
-	for hash := range c.fullSet {
-		if count >= target {
-			break
-		}
-		delete(c.fullSet, hash)
-		count++
+// evictOldestLocked removes the least recently used entry.
+// Caller must hold c.mu.
+func (c *FullBelowCache) evictOldestLocked() {
+	elem := c.lruList.Back()
+	if elem == nil {
+		return
 	}
+	hash := elem.Value.([32]byte)
+	c.lruList.Remove(elem)
+	delete(c.fullSet, hash)
 }
 
 // Unmark removes the full marking for a hash.
@@ -232,21 +246,26 @@ func (c *FullBelowCache) evictHalf() {
 func (c *FullBelowCache) Unmark(hash [32]byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.fullSet, hash)
+
+	if elem, found := c.fullSet[hash]; found {
+		c.lruList.Remove(elem)
+		delete(c.fullSet, hash)
+	}
 }
 
 // Clear removes all entries from the cache.
 func (c *FullBelowCache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.fullSet = make(map[[32]byte]struct{}, c.maxSize)
+	c.fullSet = make(map[[32]byte]*list.Element, c.maxSize)
+	c.lruList = list.New()
 }
 
 // Size returns the current number of entries in the cache.
 func (c *FullBelowCache) Size() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return len(c.fullSet)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lruList.Len()
 }
 
 // MaxSize returns the maximum capacity of the cache.
@@ -263,25 +282,28 @@ func (c *FullBelowCache) Reset(maxSize int) {
 		maxSize = 65536
 	}
 
-	c.fullSet = make(map[[32]byte]struct{}, maxSize)
+	c.fullSet = make(map[[32]byte]*list.Element, maxSize)
+	c.lruList = list.New()
 	c.maxSize = maxSize
 }
 
 // GetAllFull returns a copy of all hashes currently marked as full.
 // This is useful for debugging or persisting cache state.
+// Order is not guaranteed and this method does not affect LRU recency.
 func (c *FullBelowCache) GetAllFull() [][32]byte {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	result := make([][32]byte, 0, len(c.fullSet))
-	for hash := range c.fullSet {
-		result = append(result, hash)
+	result := make([][32]byte, 0, c.lruList.Len())
+	for elem := c.lruList.Front(); elem != nil; elem = elem.Next() {
+		result = append(result, elem.Value.([32]byte))
 	}
 	return result
 }
 
 // Touch marks a hash as full if and only if all its children are also full.
 // This is used to propagate "fullness" up the tree during sync.
+// Looking up children also refreshes their LRU recency.
 //
 // Parameters:
 //   - hash: the hash to potentially mark
@@ -292,20 +314,19 @@ func (c *FullBelowCache) Touch(hash [32]byte, childHashes [][32]byte) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if _, found := c.fullSet[hash]; found {
+	if elem, found := c.fullSet[hash]; found {
+		c.lruList.MoveToFront(elem)
 		return true
 	}
 
 	for _, childHash := range childHashes {
-		if _, found := c.fullSet[childHash]; !found {
+		elem, found := c.fullSet[childHash]
+		if !found {
 			return false
 		}
+		c.lruList.MoveToFront(elem)
 	}
 
-	// All children are full, mark this node as full
-	if len(c.fullSet) >= c.maxSize {
-		c.evictHalf()
-	}
-	c.fullSet[hash] = struct{}{}
+	c.markFullLocked(hash)
 	return true
 }

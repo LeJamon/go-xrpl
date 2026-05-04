@@ -307,7 +307,15 @@ func Flow(
 
 			// Apply the best strand's sandbox changes
 			if best.sandbox != nil {
-				best.sandbox.Apply(accumSandbox)
+				if err := best.sandbox.Apply(accumSandbox); err != nil {
+					return FlowResult{
+						In:              totalIn,
+						Out:             totalOut,
+						Sandbox:         accumSandbox,
+						RemovableOffers: allOfrsToRm,
+						Result:          tx.TefINTERNAL,
+					}
+				}
 			}
 			// Update AMM iteration counter
 			// Reference: rippled StrandFlow.h line 798: ammContext.update()
@@ -606,7 +614,9 @@ func RippleCalculate(
 	// Apply flow sandbox changes back to the main sandbox
 	if result.Result == tx.TesSUCCESS || result.Result == tx.TecPATH_PARTIAL {
 		if result.Sandbox != nil {
-			result.Sandbox.Apply(sandbox)
+			if err := result.Sandbox.Apply(sandbox); err != nil {
+				return ZeroXRPEitherAmount(), ZeroXRPEitherAmount(), nil, nil, tx.TefINTERNAL
+			}
 		}
 	}
 

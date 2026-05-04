@@ -10,12 +10,6 @@ import (
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
-func init() {
-	tx.Register(tx.TypeMPTokenAuthorize, func() tx.Transaction {
-		return &MPTokenAuthorize{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenAuthorize, "")}
-	})
-}
-
 // MPTokenAuthorize authorizes or unauthorizes MPToken operations.
 type MPTokenAuthorize struct {
 	tx.BaseTx

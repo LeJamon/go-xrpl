@@ -545,7 +545,9 @@ func doShutdown(
 		_ = srv.Shutdown(ctx)
 	}
 
-	wsServer.Close()
+	if err := wsServer.Close(ctx); err != nil {
+		logger.Warn("WebSocket server shutdown timed out", "err", err)
+	}
 
 	// Stop consensus components (if running)
 	if consensusComponents != nil {

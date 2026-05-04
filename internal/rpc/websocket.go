@@ -34,6 +34,9 @@ type WebSocketServer struct {
 	ledgerInfoProvider  types.LedgerInfoProvider
 	connLimiter         *ConnLimiter
 	services            *types.ServiceContainer
+	// wg tracks per-connection goroutines (read loop, send pump, ping loop)
+	// so Close can join them on shutdown.
+	wg sync.WaitGroup
 }
 
 // WebSocketConnection represents a single WebSocket connection
@@ -133,8 +136,15 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ws.subscriptionManager.AddConnection(legacyConn)
 
 	// Start connection handlers
-	go ws.handleConnection(wsConn)
-	go ws.handleSend(wsConn)
+	ws.wg.Add(2)
+	go func() {
+		defer ws.wg.Done()
+		ws.handleConnection(wsConn)
+	}()
+	go func() {
+		defer ws.wg.Done()
+		ws.handleSend(wsConn)
+	}()
 }
 
 // handleConnection processes messages from a WebSocket connection
@@ -150,7 +160,11 @@ func (ws *WebSocketServer) handleConnection(wsConn *WebSocketConnection) {
 	})
 
 	// Start ping goroutine to keep connection alive
-	go ws.pingLoop(wsConn)
+	ws.wg.Add(1)
+	go func() {
+		defer ws.wg.Done()
+		ws.pingLoop(wsConn)
+	}()
 
 	// Read loop - this is blocking and runs until error or close
 	for {
@@ -729,15 +743,31 @@ func (ws *WebSocketServer) GetSubscriptionManager() *subscription.Manager {
 	return ws.subscriptionManager
 }
 
-// Close gracefully closes all active WebSocket connections.
-func (ws *WebSocketServer) Close() {
+// Close gracefully closes all active WebSocket connections and waits for
+// all per-connection goroutines (read loop, send pump, ping loop) to exit.
+// The wait is bounded by ctx so a misbehaving handler cannot stall shutdown
+// indefinitely; if ctx expires first, Close returns ctx.Err().
+func (ws *WebSocketServer) Close(ctx context.Context) error {
 	ws.connectionsMutex.Lock()
-	defer ws.connectionsMutex.Unlock()
 	for _, conn := range ws.connections {
 		conn.conn.WriteMessage(
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"),
 		)
+		conn.cancel()
 		conn.conn.Close()
+	}
+	ws.connectionsMutex.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		ws.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }

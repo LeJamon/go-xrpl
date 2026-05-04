@@ -10,12 +10,6 @@ import (
 	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
-func init() {
-	tx.Register(tx.TypeNFTokenAcceptOffer, func() tx.Transaction {
-		return &NFTokenAcceptOffer{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenAcceptOffer, "")}
-	})
-}
-
 // NFTokenAcceptOffer accepts an NFToken offer.
 type NFTokenAcceptOffer struct {
 	tx.BaseTx

@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
@@ -71,7 +72,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 			}
 			accountID, err := decodeAccountID(addr)
 			if err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid account_root address: " + err.Error())
+				return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid account_root address: %v", err))
 			}
 			entryKey = keylet.Account(accountID).Key
 			keySet = true
@@ -153,7 +154,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 			}
 			accountID, err := decodeAccountID(addr)
 			if err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid did address: " + err.Error())
+				return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid did address: %v", err))
 			}
 			entryKey = keylet.DID(accountID).Key
 			keySet = true
@@ -308,7 +309,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 			}
 			accountID, err := decodeAccountID(addr)
 			if err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid signer_list address: " + err.Error())
+				return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid signer_list address: %v", err))
 			}
 			entryKey = keylet.SignerList(accountID).Key
 			keySet = true
@@ -371,7 +372,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		if err.Error() == "entry not found" {
 			return nil, types.RpcErrorEntryNotFound("Requested ledger entry not found.")
 		}
-		return nil, types.RpcErrorInternal("Failed to get ledger entry: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get ledger entry: %v", err))
 	}
 
 	response := map[string]interface{}{
@@ -465,11 +466,11 @@ func parseAMMKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 
 	issue1Currency, issue1Issuer, err := parseCurrencyIssuer(req.Asset)
 	if err != nil {
-		return [32]byte{}, types.RpcErrorInvalidParams("Invalid amm asset: " + err.Error())
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid amm asset: %v", err))
 	}
 	issue2Currency, issue2Issuer, err := parseCurrencyIssuer(req.Asset2)
 	if err != nil {
-		return [32]byte{}, types.RpcErrorInvalidParams("Invalid amm asset2: " + err.Error())
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid amm asset2: %v", err))
 	}
 
 	return keylet.AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency).Key, nil
@@ -494,11 +495,11 @@ func parseCredentialKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 	}
 	subjectID, err := decodeAccountID(req.Subject)
 	if err != nil {
-		return [32]byte{}, types.RpcErrorInvalidParams("Invalid credential subject: " + err.Error())
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid credential subject: %v", err))
 	}
 	issuerID, err := decodeAccountID(req.Issuer)
 	if err != nil {
-		return [32]byte{}, types.RpcErrorInvalidParams("Invalid credential issuer: " + err.Error())
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid credential issuer: %v", err))
 	}
 	credType, err := hex.DecodeString(req.CredentialType)
 	if err != nil {
@@ -528,11 +529,11 @@ func parseDelegateKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 	}
 	accountID, err := decodeAccountID(req.Account)
 	if err != nil {
-		return [32]byte{}, types.RpcErrorInvalidParams("Invalid delegate account: " + err.Error())
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid delegate account: %v", err))
 	}
 	authorizeID, err := decodeAccountID(req.Authorize)
 	if err != nil {
-		return [32]byte{}, types.RpcErrorInvalidParams("Invalid delegate authorize: " + err.Error())
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid delegate authorize: %v", err))
 	}
 	return keylet.DelegateKeylet(accountID, authorizeID).Key, nil
 }
@@ -556,11 +557,11 @@ func parseDepositPreauthKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) 
 	}
 	ownerID, err := decodeAccountID(req.Owner)
 	if err != nil {
-		return [32]byte{}, types.RpcErrorInvalidParams("Invalid deposit_preauth owner: " + err.Error())
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid deposit_preauth owner: %v", err))
 	}
 	authID, err := decodeAccountID(req.Authorized)
 	if err != nil {
-		return [32]byte{}, types.RpcErrorInvalidParams("Invalid deposit_preauth authorized: " + err.Error())
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid deposit_preauth authorized: %v", err))
 	}
 	return keylet.DepositPreauth(ownerID, authID).Key, nil
 }
@@ -604,7 +605,7 @@ func parseDirectoryKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 	if req.Owner != "" {
 		accountID, err := decodeAccountID(req.Owner)
 		if err != nil {
-			return [32]byte{}, types.RpcErrorInvalidParams("Invalid directory owner: " + err.Error())
+			return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid directory owner: %v", err))
 		}
 		ownerDir := keylet.OwnerDir(accountID)
 		return keylet.DirPage(ownerDir.Key, req.SubIndex).Key, nil
@@ -631,7 +632,7 @@ func parseEscrowKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 	}
 	accountID, err := decodeAccountID(req.Owner)
 	if err != nil {
-		return [32]byte{}, types.RpcErrorInvalidParams("Invalid escrow owner: " + err.Error())
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid escrow owner: %v", err))
 	}
 	return keylet.Escrow(accountID, req.Seq).Key, nil
 }
@@ -660,7 +661,7 @@ func parseMPTokenKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 	copy(mptID[:], idBytes)
 	accountID, err := decodeAccountID(req.Account)
 	if err != nil {
-		return [32]byte{}, types.RpcErrorInvalidParams("Invalid mptoken account: " + err.Error())
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid mptoken account: %v", err))
 	}
 	return keylet.MPTokenByID(mptID, accountID).Key, nil
 }
@@ -683,7 +684,7 @@ func parseOfferKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 	}
 	accountID, err := decodeAccountID(req.Account)
 	if err != nil {
-		return [32]byte{}, types.RpcErrorInvalidParams("Invalid offer account: " + err.Error())
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid offer account: %v", err))
 	}
 	return keylet.Offer(accountID, req.Seq).Key, nil
 }
@@ -706,7 +707,7 @@ func parseOracleKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 	}
 	accountID, err := decodeAccountID(req.Account)
 	if err != nil {
-		return [32]byte{}, types.RpcErrorInvalidParams("Invalid oracle account: " + err.Error())
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid oracle account: %v", err))
 	}
 	return keylet.Oracle(accountID, req.OracleDocumentID).Key, nil
 }
@@ -729,7 +730,7 @@ func parsePermissionedDomainKeylet(raw json.RawMessage) ([32]byte, *types.RpcErr
 	}
 	accountID, err := decodeAccountID(req.Account)
 	if err != nil {
-		return [32]byte{}, types.RpcErrorInvalidParams("Invalid permissioned_domain account: " + err.Error())
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid permissioned_domain account: %v", err))
 	}
 	return keylet.PermissionedDomain(accountID, req.Seq).Key, nil
 }
@@ -748,11 +749,11 @@ func parseRippleStateKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 	}
 	account1, err := decodeAccountID(req.Accounts[0])
 	if err != nil {
-		return [32]byte{}, types.RpcErrorInvalidParams("Invalid ripple_state account[0]: " + err.Error())
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid ripple_state account[0]: %v", err))
 	}
 	account2, err := decodeAccountID(req.Accounts[1])
 	if err != nil {
-		return [32]byte{}, types.RpcErrorInvalidParams("Invalid ripple_state account[1]: " + err.Error())
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid ripple_state account[1]: %v", err))
 	}
 	return keylet.Line(account1, account2, req.Currency).Key, nil
 }
@@ -775,7 +776,7 @@ func parseTicketKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 	}
 	accountID, err := decodeAccountID(req.Account)
 	if err != nil {
-		return [32]byte{}, types.RpcErrorInvalidParams("Invalid ticket account: " + err.Error())
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid ticket account: %v", err))
 	}
 	return keylet.Ticket(accountID, req.TicketSeq).Key, nil
 }
@@ -798,7 +799,7 @@ func parseVaultKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 	}
 	accountID, err := decodeAccountID(req.Owner)
 	if err != nil {
-		return [32]byte{}, types.RpcErrorInvalidParams("Invalid vault owner: " + err.Error())
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid vault owner: %v", err))
 	}
 	return keylet.Vault(accountID, req.Seq).Key, nil
 }

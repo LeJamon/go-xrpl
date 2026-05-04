@@ -15,12 +15,6 @@ type OfferCancel struct {
 	OfferSequence uint32 `json:"OfferSequence" xrpl:"OfferSequence"`
 }
 
-func init() {
-	tx.Register(tx.TypeOfferCancel, func() tx.Transaction {
-		return &OfferCancel{BaseTx: *tx.NewBaseTx(tx.TypeOfferCancel, "")}
-	})
-}
-
 // NewOfferCancel creates a new OfferCancel transaction
 func NewOfferCancel(account string, offerSequence uint32) *OfferCancel {
 	return &OfferCancel{

@@ -31,7 +31,7 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interf
 	if request.CTID != "" && request.Transaction == "" {
 		ctidLedgerSeq, ctidTxIndex, err := parseCTID(request.CTID)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid ctid: " + err.Error())
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid ctid: %v", err))
 		}
 		return m.lookupByCTID(ctx, ctidLedgerSeq, ctidTxIndex, request.Binary)
 	}

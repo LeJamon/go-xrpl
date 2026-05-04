@@ -10,8 +10,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
 	"github.com/stretchr/testify/require"
-
-	_ "github.com/LeJamon/goXRPLd/internal/tx/all"
 )
 
 // TestPseudoTx_IsPseudoTransaction verifies that the type system correctly

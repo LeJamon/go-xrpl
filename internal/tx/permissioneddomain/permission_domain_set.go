@@ -12,12 +12,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypePermissionedDomainSet, func() tx.Transaction {
-		return &PermissionedDomainSet{BaseTx: *tx.NewBaseTx(tx.TypePermissionedDomainSet, "")}
-	})
-}
-
 // PermissionedDomainSet creates or modifies a permissioned domain.
 // Reference: rippled PermissionedDomainSet.cpp
 type PermissionedDomainSet struct {

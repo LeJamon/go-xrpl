@@ -13,19 +13,19 @@ import (
 )
 
 var (
-	// ErrSigningClaimFieldNotFound is returned when the 'Channel' & 'Amount' fields are both required, but were not found.
-	ErrSigningClaimFieldNotFound = errors.New("'Channel' & 'Amount' fields are both required, but were not found")
-	// ErrBatchFlagsFieldNotFound is returned when the 'flags' field is missing.
-	ErrBatchFlagsFieldNotFound = errors.New("no field `flags`")
-	// ErrBatchTxIDsFieldNotFound is returned when the 'txIDs' field is missing.
-	ErrBatchTxIDsFieldNotFound = errors.New("no field `txIDs`")
-	// ErrBatchTxIDsNotArray is returned when the 'txIDs' field is not an array.
+	// ErrSigningClaimFieldNotFound is returned when the channel and amount fields are not both present.
+	ErrSigningClaimFieldNotFound = errors.New("channel and amount fields are required")
+	// ErrBatchFlagsFieldNotFound is returned when the flags field is missing.
+	ErrBatchFlagsFieldNotFound = errors.New("missing flags field")
+	// ErrBatchTxIDsFieldNotFound is returned when the txIDs field is missing.
+	ErrBatchTxIDsFieldNotFound = errors.New("missing txIDs field")
+	// ErrBatchTxIDsNotArray is returned when the txIDs field is not an array.
 	ErrBatchTxIDsNotArray = errors.New("txIDs field must be an array")
 	// ErrBatchTxIDNotString is returned when a txID is not a string.
 	ErrBatchTxIDNotString = errors.New("each txID must be a string")
-	// ErrBatchFlagsNotUInt32 is returned when the 'flags' field is not a uint32.
+	// ErrBatchFlagsNotUInt32 is returned when the flags field is not a uint32.
 	ErrBatchFlagsNotUInt32 = errors.New("flags field must be a uint32")
-	// ErrBatchTxIDsLengthTooLong is returned when the 'txIDs' field is too long.
+	// ErrBatchTxIDsLengthTooLong is returned when the txIDs field is too long.
 	ErrBatchTxIDsLengthTooLong = errors.New("txIDs length exceeds maximum uint32 value")
 )
 
@@ -170,7 +170,11 @@ func EncodeForSigningBatch(json map[string]any) (string, error) {
 		return "", err
 	}
 
-	result := batchPrefix + hex.EncodeToString(flagsBytes) + hex.EncodeToString(txIDsLengthBytes)
+	var sb strings.Builder
+	sb.Grow(len(batchPrefix) + 2*len(flagsBytes) + 2*len(txIDsLengthBytes) + txIDsLength*2*types.HashLengthBytes)
+	sb.WriteString(batchPrefix)
+	sb.WriteString(hex.EncodeToString(flagsBytes))
+	sb.WriteString(hex.EncodeToString(txIDsLengthBytes))
 
 	for _, txID := range txIDsInterface {
 		hash256 := types.NewHash256()
@@ -178,10 +182,10 @@ func EncodeForSigningBatch(json map[string]any) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		result += hex.EncodeToString(txIDBytes)
+		sb.WriteString(hex.EncodeToString(txIDBytes))
 	}
 
-	return strings.ToUpper(result), nil
+	return strings.ToUpper(sb.String()), nil
 }
 
 // removeNonSigningFields removes the fields from a JSON transaction object that should not be signed.

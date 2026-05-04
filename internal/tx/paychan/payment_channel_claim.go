@@ -13,12 +13,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypePaymentChannelClaim, func() tx.Transaction {
-		return &PaymentChannelClaim{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelClaim, "")}
-	})
-}
-
 // PaymentChannelClaim claims XRP from a payment channel.
 // Reference: rippled PayChan.cpp PayChanClaim
 type PaymentChannelClaim struct {

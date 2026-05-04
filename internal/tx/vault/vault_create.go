@@ -9,12 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeVaultCreate, func() tx.Transaction {
-		return &VaultCreate{BaseTx: *tx.NewBaseTx(tx.TypeVaultCreate, "")}
-	})
-}
-
 // VaultCreate creates a new vault.
 type VaultCreate struct {
 	tx.BaseTx
@@ -133,6 +127,12 @@ func (v *VaultCreate) RequiredAmendments() [][32]byte {
 }
 
 func (v *VaultCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("vault create apply",
+		"account", v.Account,
+		"asset", v.Asset,
+		"flags", v.GetFlags(),
+	)
+
 	if v.Asset.Currency == "" {
 		return tx.TemINVALID
 	}

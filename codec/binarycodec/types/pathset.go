@@ -29,7 +29,7 @@ func serializePathCurrency(currency string) ([]byte, error) {
 type PathSet struct{}
 
 // ErrInvalidPathSet is an error that's thrown when an invalid path set is provided.
-var ErrInvalidPathSet = errors.New("invalid type to construct PathSet from. Expected []any of []any")
+var ErrInvalidPathSet = errors.New("invalid path set: expected [][]any")
 
 // FromJSON attempts to serialize a path set from a JSON representation of a slice of paths to a byte array.
 // It returns the byte array representation of the path set, or an error if the provided json does not represent a valid path set.
@@ -73,7 +73,7 @@ func (p PathSet) ToJSON(parser interfaces.BinaryParser, _ ...int) (any, error) {
 			for i, step := range path {
 				stepMap, ok := step.(map[string]any)
 				if !ok {
-					return nil, fmt.Errorf("step is not of type map[string]any")
+					return nil, errors.New("step is not of type map[string]any")
 				}
 				// Calculate type by combining flags
 				stepType := 0

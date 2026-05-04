@@ -7,12 +7,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeNFTokenMint, func() tx.Transaction {
-		return &NFTokenMint{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenMint, "")}
-	})
-}
-
 // NFTokenMint mints a new NFToken.
 type NFTokenMint struct {
 	tx.BaseTx
