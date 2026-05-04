@@ -527,7 +527,9 @@ func TestLedgerResponseStructure(t *testing.T) {
 	assert.Contains(t, ledger, "close_time_iso")
 	assert.Contains(t, ledger, "close_time_resolution")
 	assert.Contains(t, ledger, "closed")
-	assert.Contains(t, ledger, "hash")
+	// rippled emits only "ledger_hash" on the inner ledger object
+	// (LedgerToJson.cpp:78). No top-level "hash" alias.
+	assert.NotContains(t, ledger, "hash")
 	assert.Contains(t, ledger, "ledger_hash")
 	assert.Contains(t, ledger, "ledger_index")
 	assert.Contains(t, ledger, "parent_close_time")
