@@ -1,9 +1,14 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Pins each Default* constant to the value hardcoded in
@@ -125,12 +130,95 @@ func TestWebSocketConfig_Validate_RejectsBelowMinimumDuration(t *testing.T) {
 
 func TestWebSocketConfig_Validate_AcceptsAtAndAboveMinimum(t *testing.T) {
 	cfg := WebSocketConfig{
+		MaxReadSize:  minWebSocketReadSize,
 		ReadTimeout:  minWebSocketDuration,
 		WriteTimeout: minWebSocketDuration,
 		PingInterval: minWebSocketDuration,
 		PongTimeout:  minWebSocketDuration,
 	}
 	if err := cfg.Validate(); err != nil {
-		t.Errorf("durations exactly at minWebSocketDuration must validate, got %v", err)
+		t.Errorf("values exactly at the configured minimums must validate, got %v", err)
 	}
+}
+
+// Validate must reject positive-but-trivially-small MaxReadSize values
+// that would reject every realistic XRPL command frame at runtime.
+func TestWebSocketConfig_Validate_RejectsBelowMinimumReadSize(t *testing.T) {
+	for _, size := range []int64{1, 64, minWebSocketReadSize - 1} {
+		err := WebSocketConfig{MaxReadSize: size}.Validate()
+		if err == nil {
+			t.Fatalf("expected error for sub-minimum MaxReadSize=%d, got nil", size)
+		}
+		if !strings.Contains(err.Error(), "max_read_size") {
+			t.Errorf("error %q missing field token %q", err, "max_read_size")
+		}
+	}
+}
+
+// End-to-end check that the [websocket] TOML section round-trips through
+// the loader: every field tag must match the documented key and the
+// duration decode-hook must convert "120s" / "20s" / etc. into
+// time.Duration. A regression here (renamed tag, dropped DecodeHook on a
+// future viper bump) would silently fall back to defaults at runtime.
+func TestLoadConfig_WebSocketSectionRoundTrips(t *testing.T) {
+	tempDir := t.TempDir()
+	mainConfigPath := filepath.Join(tempDir, "test_config.toml")
+
+	body := completeTestConfig() + `
+[websocket]
+max_read_size = 1048576
+read_timeout  = "120s"
+write_timeout = "15s"
+ping_interval = "20s"
+pong_timeout  = "60s"
+`
+	require.NoError(t, os.WriteFile(mainConfigPath, []byte(body), 0644))
+
+	cfg, err := LoadConfig(ConfigPaths{Main: mainConfigPath})
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	assert.Equal(t, int64(1048576), cfg.WebSocket.MaxReadSize)
+	assert.Equal(t, 120*time.Second, cfg.WebSocket.ReadTimeout)
+	assert.Equal(t, 15*time.Second, cfg.WebSocket.WriteTimeout)
+	assert.Equal(t, 20*time.Second, cfg.WebSocket.PingInterval)
+	assert.Equal(t, 60*time.Second, cfg.WebSocket.PongTimeout)
+}
+
+// Omitting the [websocket] section must yield a zero-value
+// WebSocketConfig that, after WithDefaults, reproduces pre-refactor
+// behavior — the contract the deprecation comment in config.go promises.
+func TestLoadConfig_WebSocketSectionOmittedYieldsDefaults(t *testing.T) {
+	tempDir := t.TempDir()
+	mainConfigPath := filepath.Join(tempDir, "test_config.toml")
+	require.NoError(t, os.WriteFile(mainConfigPath, []byte(completeTestConfig()), 0644))
+
+	cfg, err := LoadConfig(ConfigPaths{Main: mainConfigPath})
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Equal(t, WebSocketConfig{}, cfg.WebSocket)
+
+	defaulted := cfg.WebSocket.WithDefaults()
+	assert.Equal(t, DefaultWebSocketMaxReadSize, defaulted.MaxReadSize)
+	assert.Equal(t, DefaultWebSocketReadTimeout, defaulted.ReadTimeout)
+	assert.Equal(t, DefaultWebSocketWriteTimeout, defaulted.WriteTimeout)
+	assert.Equal(t, DefaultWebSocketPingInterval, defaulted.PingInterval)
+	assert.Equal(t, DefaultWebSocketPongTimeout, defaulted.PongTimeout)
+}
+
+// A sub-minimum value in the loaded TOML must surface as a Validate error
+// from the loader, not silently fall through to runtime.
+func TestLoadConfig_WebSocketSectionRejectsBadValues(t *testing.T) {
+	tempDir := t.TempDir()
+	mainConfigPath := filepath.Join(tempDir, "test_config.toml")
+
+	body := completeTestConfig() + `
+[websocket]
+read_timeout = "30ns"
+`
+	require.NoError(t, os.WriteFile(mainConfigPath, []byte(body), 0644))
+
+	_, err := LoadConfig(ConfigPaths{Main: mainConfigPath})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read_timeout")
 }

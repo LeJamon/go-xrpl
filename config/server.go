@@ -24,6 +24,12 @@ const (
 // of a millisecond and burn CPU.
 const minWebSocketDuration = 100 * time.Millisecond
 
+// minWebSocketReadSize is the lower bound enforced by Validate on
+// MaxReadSize. It guards against trivially-broken values (e.g., a
+// single-digit byte cap) that would reject every realistic XRPL command
+// frame and render the server unreachable.
+const minWebSocketReadSize int64 = 1024
+
 // WebSocketConfig holds tunable limits and timeouts applied to every
 // WebSocket connection. Zero-valued fields fall back to the matching
 // Default* constants via WithDefaults, so existing deployments that omit
@@ -59,13 +65,16 @@ func (cfg WebSocketConfig) WithDefaults() WebSocketConfig {
 }
 
 // Validate rejects values that cannot reasonably drive the WebSocket
-// server. Sizes must be non-negative; durations must either be zero (use
-// the default) or at least minWebSocketDuration. The zero/positive split
-// keeps "[websocket] omitted" valid while catching unit typos that would
-// otherwise produce sub-millisecond timers at runtime.
+// server. Sizes and durations must either be zero (use the default) or
+// at least their respective minimum. The zero/positive split keeps
+// "[websocket] omitted" valid while catching unit typos and
+// trivially-broken values that would silently break the server at runtime.
 func (cfg WebSocketConfig) Validate() error {
 	if cfg.MaxReadSize < 0 {
 		return fmt.Errorf("websocket.max_read_size must be non-negative, got %d", cfg.MaxReadSize)
+	}
+	if cfg.MaxReadSize > 0 && cfg.MaxReadSize < minWebSocketReadSize {
+		return fmt.Errorf("websocket.max_read_size must be >= %d bytes (likely unit typo), got %d", minWebSocketReadSize, cfg.MaxReadSize)
 	}
 	if err := validateWebSocketDuration("read_timeout", cfg.ReadTimeout); err != nil {
 		return err
