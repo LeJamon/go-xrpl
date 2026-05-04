@@ -340,16 +340,19 @@ func (s *Service) GetValidatedLedger() *ledger.Ledger {
 	return s.validatedLedger
 }
 
-// GetLedgerBySequence returns a ledger by its sequence number
+// GetLedgerBySequence returns a ledger by its sequence number, falling back
+// to the open ledger when its sequence matches (mirrors rippled RPCHelpers.cpp:498-508).
 func (s *Service) GetLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	l, ok := s.ledgerHistory[seq]
-	if !ok {
-		return nil, ErrLedgerNotFound
+	if l, ok := s.ledgerHistory[seq]; ok {
+		return l, nil
 	}
-	return l, nil
+	if s.openLedger != nil && s.openLedger.Sequence() == seq {
+		return s.openLedger, nil
+	}
+	return nil, ErrLedgerNotFound
 }
 
 // GetLedgerByHash returns a ledger by its hash

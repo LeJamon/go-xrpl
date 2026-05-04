@@ -362,9 +362,9 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 	if !keySet {
 		if ctx.ApiVersion >= types.ApiVersion2 {
-			return nil, types.RpcErrorInvalidParams("Must specify object to look up. No ledger_entry params provided.")
+			return nil, types.RpcErrorInvalidParams("")
 		}
-		return nil, types.RpcErrorUnknownOption("Must specify object to look up")
+		return nil, types.RpcErrorUnknownOption("")
 	}
 
 	result, err := ctx.Services.Ledger.GetLedgerEntry(entryKey, ledgerIndex)

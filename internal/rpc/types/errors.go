@@ -103,7 +103,7 @@ const (
 	RpcNO_PF_REQUEST = 53 // No pathfinding request in progress (rippled: rpcNO_PF_REQUEST)
 
 	// Implementation status errors
-	RpcNOT_IMPL      = 47 // Feature not implemented
+	RpcNOT_IMPL      = 74 // rippled rpcNOT_IMPL
 	RpcNOT_VALIDATOR = 48 // Server is not configured as a validator
 	RpcNOT_SYNCED    = 49 // Not synced to network
 
@@ -250,12 +250,9 @@ func RpcErrorMissingField(field string) *RpcError {
 	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", "Missing field '"+field+"'.")
 }
 
-// RpcErrorFieldNotFoundTransaction returns the transaction_entry-specific
-// error when the tx_hash field is missing. Rippled emits the literal string
-// "fieldNotFoundTransaction" (rippled/src/xrpld/rpc/handlers/TransactionEntry.cpp:48,
-// asserted by rippled/src/test/rpc/TransactionEntry_test.cpp:49); this helper
-// preserves that wire token rather than collapsing into the generic
-// invalidParams response.
+// RpcErrorFieldNotFoundTransaction matches rippled TransactionEntry.cpp:48,
+// which sets the bare "fieldNotFoundTransaction" token on the result body
+// without a numeric code; we use rpcUNKNOWN (-1) as the closest approximation.
 func RpcErrorFieldNotFoundTransaction() *RpcError {
 	return NewRpcError(RpcUNKNOWN, "fieldNotFoundTransaction", "fieldNotFoundTransaction", "Missing field 'tx_hash'.")
 }
