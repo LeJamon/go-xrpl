@@ -39,8 +39,8 @@ func TestPeer_StaleInFlightPing_AtThresholdReportsStale(t *testing.T) {
 func TestPeer_StaleInFlightPing_PicksOldest(t *testing.T) {
 	p := newLatencyTestPeer(t)
 	base := time.Now()
-	p.recordPingSent(1, base)                   // oldest
-	p.recordPingSent(2, base.Add(time.Second))  // newer
+	p.recordPingSent(1, base)                    // oldest
+	p.recordPingSent(2, base.Add(time.Second))   // newer
 	p.recordPingSent(3, base.Add(2*time.Second)) // newest
 
 	seq, _, ok := p.staleInFlightPing(base.Add(pingTimeout), pingTimeout)
