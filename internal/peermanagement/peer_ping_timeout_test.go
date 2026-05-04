@@ -111,26 +111,20 @@ func TestPeer_OnPong_ClearsOlderInFlight(t *testing.T) {
 	assert.False(t, stale, "no stale candidate after responsive pong sweeps older entries")
 }
 
-// TestPeer_OnPong_DelayedPongForSweptSeqIsNoOp pins the silent-drop
-// behavior for pongs whose seq was already evicted by a more-recent
-// matching pong. Mirrors rippled's PeerImp::onMessage(TMPing) where a
-// pong with seq != lastPingSeq_ is ignored (PeerImp.cpp:1099-1118).
-// Without this guarantee, a refactor that panicked or double-counted
-// latency on the unmatched pong would silently slip past the existing
-// sweep test.
+// Pongs whose seq was already swept by a more-recent matching pong
+// are silently dropped. Mirrors rippled PeerImp.cpp:1099-1118 (pong
+// with seq != lastPingSeq_ ignored).
 func TestPeer_OnPong_DelayedPongForSweptSeqIsNoOp(t *testing.T) {
 	p := newLatencyTestPeer(t)
 	base := time.Now()
 	p.recordPingSent(1, base)
 	p.recordPingSent(2, base.Add(time.Second))
 
-	// Pong for seq=2 sweeps seq=1 (older).
 	p.OnPong(2, base.Add(time.Second+5*time.Millisecond))
 
 	latencyAfterFirst, hadFirst := p.Latency()
 	require.True(t, hadFirst, "first pong must seed latency")
 
-	// Delayed pong for seq=1 arrives after seq=1 was swept.
 	p.OnPong(1, base.Add(2*time.Second))
 
 	latencyAfter, ok := p.Latency()
@@ -144,11 +138,6 @@ func TestPeer_OnPong_DelayedPongForSweptSeqIsNoOp(t *testing.T) {
 	assert.Equal(t, 0, inFlight, "delayed pong must not resurrect entries")
 }
 
-// TestOverlay_NotePeerRunEnded_IncrementsPingTimeoutCounter pins the
-// wire from peer.Run returning ErrPingTimeout to the operator-visible
-// counter. Without this, a future refactor that swallowed the sentinel
-// error in Run() (e.g. by wrapping it in a generic disconnect type)
-// would silently zero out PingTimeoutDisconnects().
 func TestOverlay_NotePeerRunEnded_IncrementsPingTimeoutCounter(t *testing.T) {
 	o := &Overlay{}
 
@@ -157,21 +146,16 @@ func TestOverlay_NotePeerRunEnded_IncrementsPingTimeoutCounter(t *testing.T) {
 	o.notePeerRunEnded(ErrPingTimeout)
 	assert.Equal(t, uint64(1), o.PingTimeoutDisconnects())
 
-	// errors.Is recognises wrapped sentinels — guards against a future
-	// caller that wraps the error with %w on its way back up Run().
+	// errors.Is must follow %w wrappers so a future Run() that wraps
+	// the sentinel still bumps the counter.
 	o.notePeerRunEnded(fmt.Errorf("peer dropped: %w", ErrPingTimeout))
 	assert.Equal(t, uint64(2), o.PingTimeoutDisconnects())
 
-	// Unrelated errors must not advance the ping-timeout counter.
 	o.notePeerRunEnded(errors.New("connection reset"))
 	o.notePeerRunEnded(ErrConnectionClosed)
 	assert.Equal(t, uint64(2), o.PingTimeoutDisconnects(),
 		"only ErrPingTimeout (and wrappers) bump the counter")
 
-	// Nil — the no-error path Run() takes when ctx is cancelled — must
-	// also not bump the counter; notePeerRunEnded is only ever called
-	// after Run returns a non-nil error in production, but the helper
-	// must be defensive against future call sites.
 	o.notePeerRunEnded(nil)
 	assert.Equal(t, uint64(2), o.PingTimeoutDisconnects())
 }
