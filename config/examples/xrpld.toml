@@ -28,7 +28,7 @@ ips = [
 relay_proposals = "trusted"      # all, trusted, drop_untrusted
 relay_validations = "all"        # all, trusted, drop_untrusted
 ledger_history = 256             # integer, "full", or "none"
-fetch_depth = "full"             # integer or "full"
+fetch_depth = "full"             # integer, "full", or "none" (values < 10 are clamped to 10)
 
 # Path finding
 path_search = 2

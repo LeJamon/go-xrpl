@@ -365,7 +365,14 @@ func validateMiscSettings(config *Config) error {
 	return nil
 }
 
-// validateCrossReferences validates cross-references between different config sections
+// validateCrossReferences validates cross-references between different config sections.
+//
+// The online_delete vs ledger_history check mirrors rippled's
+// SHAMapStoreImp.cpp:148-154 invariant ("online_delete must not be less than
+// ledger_history"). With ledger_history = "full" rippled stores uint32::max,
+// so the comparison always fires; LedgerHistory.Value() returns math.MaxInt32
+// to preserve that semantic here. The Full case is reported with a friendlier
+// message so the error doesn't expose the sentinel.
 func validateCrossReferences(config *Config) error {
 	ledgerHistory, err := config.GetLedgerHistory()
 	if err != nil {
@@ -373,6 +380,10 @@ func validateCrossReferences(config *Config) error {
 	}
 
 	if config.NodeDB.OnlineDelete > 0 && ledgerHistory > 0 && config.NodeDB.OnlineDelete < ledgerHistory {
+		if config.LedgerHistory.Full {
+			return fmt.Errorf("online_delete (%d) must be greater than or equal to ledger_history (\"full\")",
+				config.NodeDB.OnlineDelete)
+		}
 		return fmt.Errorf("online_delete (%d) must be greater than or equal to ledger_history (%d)",
 			config.NodeDB.OnlineDelete, ledgerHistory)
 	}

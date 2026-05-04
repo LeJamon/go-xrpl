@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,11 +110,24 @@ func TestTypedFields_LedgerHistory_Full(t *testing.T) {
 
 	assert.True(t, cfg.LedgerHistory.Set)
 	assert.True(t, cfg.LedgerHistory.Full)
-	assert.Equal(t, -1, cfg.LedgerHistory.Value())
+	assert.Equal(t, math.MaxInt32, cfg.LedgerHistory.Value())
 
 	got, err := cfg.GetLedgerHistory()
 	require.NoError(t, err)
-	assert.Equal(t, -1, got)
+	assert.Equal(t, math.MaxInt32, got)
+}
+
+// TestTypedFields_LedgerHistory_FullCaseInsensitive verifies parity with
+// rippled's boost::iequals comparison (Config.cpp:653, 656).
+func TestTypedFields_LedgerHistory_FullCaseInsensitive(t *testing.T) {
+	for _, v := range []string{"Full", "FULL", "fUlL", "None", "NONE"} {
+		t.Run(v, func(t *testing.T) {
+			toml := "ledger_history = \"" + v + "\"\nfetch_depth = \"full\"\nnetwork_id = \"main\"\n" + baseTOMLWithoutUnionFields()
+			cfg, err := writeAndLoad(t, toml)
+			require.NoError(t, err)
+			assert.True(t, cfg.LedgerHistory.Set)
+		})
+	}
 }
 
 func TestTypedFields_LedgerHistory_None(t *testing.T) {
@@ -154,7 +168,50 @@ func TestTypedFields_FetchDepth_Full(t *testing.T) {
 
 	assert.True(t, cfg.FetchDepth.Set)
 	assert.True(t, cfg.FetchDepth.Full)
-	assert.Equal(t, -1, cfg.FetchDepth.Value())
+	assert.Equal(t, math.MaxInt32, cfg.FetchDepth.Value())
+}
+
+// TestTypedFields_FetchDepth_None verifies parity with rippled's
+// "none" string handling (Config.cpp:664-665), which sets FETCH_DEPTH=0
+// and is then clamped to the minimum of 10 by the < 10 floor.
+func TestTypedFields_FetchDepth_None(t *testing.T) {
+	toml := "ledger_history = 256\nfetch_depth = \"none\"\nnetwork_id = \"main\"\n" + baseTOMLWithoutUnionFields()
+	cfg, err := writeAndLoad(t, toml)
+	require.NoError(t, err)
+
+	assert.True(t, cfg.FetchDepth.Set)
+	assert.False(t, cfg.FetchDepth.Full)
+	assert.Equal(t, 0, cfg.FetchDepth.Count)
+	// rippled clamps any sub-10 value (including the 0 produced by "none") up to 10.
+	got, err := cfg.GetFetchDepth()
+	require.NoError(t, err)
+	assert.Equal(t, 10, got)
+}
+
+// TestTypedFields_FetchDepth_FullCaseInsensitive matches rippled's
+// boost::iequals (Config.cpp:664-666).
+func TestTypedFields_FetchDepth_FullCaseInsensitive(t *testing.T) {
+	for _, v := range []string{"Full", "FULL", "None", "NONE"} {
+		t.Run(v, func(t *testing.T) {
+			toml := "ledger_history = 256\nfetch_depth = \"" + v + "\"\nnetwork_id = \"main\"\n" + baseTOMLWithoutUnionFields()
+			cfg, err := writeAndLoad(t, toml)
+			require.NoError(t, err)
+			assert.True(t, cfg.FetchDepth.Set)
+		})
+	}
+}
+
+// TestTypedFields_FetchDepth_BelowMinClamps reproduces rippled's hard floor:
+// any explicit fetch_depth < 10 is raised to 10 (Config.cpp:671-672).
+func TestTypedFields_FetchDepth_BelowMinClamps(t *testing.T) {
+	toml := "ledger_history = 256\nfetch_depth = 5\nnetwork_id = \"main\"\n" + baseTOMLWithoutUnionFields()
+	cfg, err := writeAndLoad(t, toml)
+	require.NoError(t, err)
+
+	assert.Equal(t, 5, cfg.FetchDepth.Count)
+	got, err := cfg.GetFetchDepth()
+	require.NoError(t, err)
+	assert.Equal(t, 10, got)
 }
 
 func TestTypedFields_FetchDepth_Invalid(t *testing.T) {
@@ -202,6 +259,23 @@ func TestTypedFields_NetworkID_UnknownName(t *testing.T) {
 	_, err := writeAndLoad(t, toml)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown network name")
+}
+
+// TestTypedFields_NetworkID_DigitString matches rippled's
+// beast::lexicalCastThrow<uint32_t> fallback (Config.cpp:531-532): a
+// quoted digit string parses as a numeric network ID.
+func TestTypedFields_NetworkID_DigitString(t *testing.T) {
+	toml := "ledger_history = 256\nfetch_depth = \"full\"\nnetwork_id = \"21338\"\n" + baseTOMLWithoutUnionFields()
+	cfg, err := writeAndLoad(t, toml)
+	require.NoError(t, err)
+
+	assert.True(t, cfg.NetworkID.Set)
+	assert.Equal(t, 21338, cfg.NetworkID.ID)
+	assert.Empty(t, cfg.NetworkID.Name)
+
+	got, err := cfg.GetNetworkID()
+	require.NoError(t, err)
+	assert.Equal(t, 21338, got)
 }
 
 func TestTypedFields_RPCStartup(t *testing.T) {
@@ -256,6 +330,24 @@ func TestTypedFields_AbsentFieldsReportedAsMissing(t *testing.T) {
 	for _, want := range []string{"network_id", "ledger_history", "fetch_depth"} {
 		assert.True(t, strings.Contains(msg, "missing required field: "+want), "expected missing-field error for %q in:\n%s", want, msg)
 	}
+}
+
+// TestTypedFields_LedgerHistoryFull_RejectsOnlineDelete reproduces the
+// rippled invariant in SHAMapStoreImp.cpp:148-154: with ledger_history="full"
+// (LEDGER_HISTORY = uint32::max) any positive online_delete is necessarily
+// less than ledger_history and must be rejected. Before this fix the Go
+// short-circuit on `ledgerHistory > 0` (with the old -1 sentinel) silently
+// accepted such configs.
+func TestTypedFields_LedgerHistoryFull_RejectsOnlineDelete(t *testing.T) {
+	cfg := &Config{
+		LedgerHistory: LedgerHistory{Set: true, Full: true},
+		FetchDepth:    FetchDepth{Set: true, Full: true},
+		NetworkID:     NetworkID{Set: true, Name: "main"},
+		NodeDB:        NodeDBConfig{OnlineDelete: 256},
+	}
+	err := validateCrossReferences(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ledger_history (\"full\")")
 }
 
 func TestTypedFields_ZeroValueIsZero(t *testing.T) {

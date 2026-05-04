@@ -30,7 +30,7 @@ type Config struct {
 	RelayProposals         string        `toml:"relay_proposals" mapstructure:"relay_proposals"`
 	RelayValidations       string        `toml:"relay_validations" mapstructure:"relay_validations"`
 	LedgerHistory          LedgerHistory `toml:"ledger_history" mapstructure:"ledger_history"` // integer, "full", or "none"
-	FetchDepth             FetchDepth    `toml:"fetch_depth" mapstructure:"fetch_depth"`       // integer or "full"
+	FetchDepth             FetchDepth    `toml:"fetch_depth" mapstructure:"fetch_depth"`       // integer, "full", or "none"
 	ValidationSeed         string        `toml:"validation_seed" mapstructure:"validation_seed"`
 	ValidatorToken         string        `toml:"validator_token" mapstructure:"validator_token"`
 	ValidatorKeyRevocation string        `toml:"validator_key_revocation" mapstructure:"validator_key_revocation"`
@@ -138,7 +138,10 @@ func (c *Config) GetNetworkID() (int, error) {
 	}
 }
 
-// GetLedgerHistory returns the ledger history as an integer or -1 for "full"
+// GetLedgerHistory returns the configured ledger history as an integer.
+// "full" maps to math.MaxInt32 (matching rippled's uint32 max sentinel)
+// so that downstream comparisons such as the online_delete cross-check
+// fire the same way they do in rippled.
 func (c *Config) GetLedgerHistory() (int, error) {
 	if !c.LedgerHistory.Set {
 		return 0, fmt.Errorf("ledger_history is required but not set")
@@ -146,7 +149,9 @@ func (c *Config) GetLedgerHistory() (int, error) {
 	return c.LedgerHistory.Value(), nil
 }
 
-// GetFetchDepth returns the fetch depth as an integer or -1 for "full"
+// GetFetchDepth returns the configured fetch depth as an integer.
+// "full" maps to math.MaxInt32, and any explicit count below 10 is
+// raised to 10 to mirror rippled's hard floor (Config.cpp:671-672).
 func (c *Config) GetFetchDepth() (int, error) {
 	if !c.FetchDepth.Set {
 		return 0, fmt.Errorf("fetch_depth is required but not set")

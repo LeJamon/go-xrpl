@@ -2,14 +2,21 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"reflect"
+	"strconv"
+	"strings"
 
 	"github.com/go-viper/mapstructure/v2"
 )
 
+// fetchDepthMin mirrors rippled's hard floor (Config.cpp:671-672).
+const fetchDepthMin = 10
+
 // LedgerHistory is a typed union for the `ledger_history` TOML key.
 // TOML accepts an integer (number of ledgers to keep) or one of the
-// strings "full" or "none".
+// strings "full" or "none" (case-insensitive, matching rippled's
+// boost::iequals comparison in Config.cpp:653-657).
 type LedgerHistory struct {
 	// Set is true once a value has been parsed; false means the key was absent.
 	Set bool
@@ -23,16 +30,21 @@ type LedgerHistory struct {
 func (lh LedgerHistory) IsZero() bool { return !lh.Set }
 
 // Value returns the integer representation used elsewhere in the codebase:
-// the explicit count, -1 for "full", or 0 for "none".
+// the explicit count, or math.MaxInt32 for "full" (matching rippled's
+// std::numeric_limits<uint32_t>::max() behaviour in Config.cpp:654-655 so
+// that downstream comparisons such as `online_delete < ledger_history`
+// fire the same way as in rippled — see SHAMapStoreImp.cpp:148-154).
 func (lh LedgerHistory) Value() int {
 	if lh.Full {
-		return -1
+		return math.MaxInt32
 	}
 	return lh.Count
 }
 
 // FetchDepth is a typed union for the `fetch_depth` TOML key.
-// TOML accepts an integer or the string "full".
+// TOML accepts an integer or one of the strings "full" or "none"
+// (case-insensitive, matching rippled's boost::iequals comparison in
+// Config.cpp:664-666).
 type FetchDepth struct {
 	Set   bool
 	Full  bool
@@ -41,17 +53,24 @@ type FetchDepth struct {
 
 func (fd FetchDepth) IsZero() bool { return !fd.Set }
 
-// Value returns the integer representation: explicit count or -1 for "full".
+// Value returns the integer representation: math.MaxInt32 for "full",
+// otherwise the explicit count clamped to a minimum of 10 (rippled's
+// FETCH_DEPTH < 10 → 10 floor in Config.cpp:671-672).
 func (fd FetchDepth) Value() int {
 	if fd.Full {
-		return -1
+		return math.MaxInt32
+	}
+	if fd.Count < fetchDepthMin {
+		return fetchDepthMin
 	}
 	return fd.Count
 }
 
 // NetworkID is a typed union for the `network_id` TOML key.
 // TOML accepts an integer (network ID) or one of the named strings
-// "main", "testnet", "devnet".
+// "main", "testnet", "devnet". A digit-string (e.g. "21338") is parsed
+// numerically to match rippled's beast::lexicalCastThrow<uint32_t>
+// fallback in Config.cpp:531-532.
 type NetworkID struct {
 	Set  bool
 	ID   int
@@ -122,14 +141,16 @@ func decodeLedgerHistory(data any) (LedgerHistory, error) {
 	case float64:
 		return LedgerHistory{Set: true, Count: int(v)}, nil
 	case string:
-		switch v {
-		case "full":
+		switch {
+		case strings.EqualFold(v, "full"):
 			return LedgerHistory{Set: true, Full: true}, nil
-		case "none":
+		case strings.EqualFold(v, "none"):
 			return LedgerHistory{Set: true, Count: 0}, nil
-		default:
-			return LedgerHistory{}, fmt.Errorf("invalid ledger_history value: %q (expected integer, \"full\", or \"none\")", v)
 		}
+		if n, err := strconv.Atoi(v); err == nil {
+			return LedgerHistory{Set: true, Count: n}, nil
+		}
+		return LedgerHistory{}, fmt.Errorf("invalid ledger_history value: %q (expected integer, \"full\", or \"none\")", v)
 	case nil:
 		return LedgerHistory{}, nil
 	default:
@@ -148,10 +169,16 @@ func decodeFetchDepth(data any) (FetchDepth, error) {
 	case float64:
 		return FetchDepth{Set: true, Count: int(v)}, nil
 	case string:
-		if v == "full" {
+		switch {
+		case strings.EqualFold(v, "full"):
 			return FetchDepth{Set: true, Full: true}, nil
+		case strings.EqualFold(v, "none"):
+			return FetchDepth{Set: true, Count: 0}, nil
 		}
-		return FetchDepth{}, fmt.Errorf("invalid fetch_depth value: %q (expected integer or \"full\")", v)
+		if n, err := strconv.Atoi(v); err == nil {
+			return FetchDepth{Set: true, Count: n}, nil
+		}
+		return FetchDepth{}, fmt.Errorf("invalid fetch_depth value: %q (expected integer, \"full\", or \"none\")", v)
 	case nil:
 		return FetchDepth{}, nil
 	default:
@@ -170,6 +197,15 @@ func decodeNetworkID(data any) (NetworkID, error) {
 	case float64:
 		return NetworkID{Set: true, ID: int(v)}, nil
 	case string:
+		// Rippled's named-string aliases are case-sensitive (Config.cpp:525-530
+		// uses operator==). Other strings fall through to a uint32 lexical_cast.
+		switch v {
+		case "main", "testnet", "devnet":
+			return NetworkID{Set: true, Name: v}, nil
+		}
+		if n, err := strconv.ParseUint(v, 10, 32); err == nil {
+			return NetworkID{Set: true, ID: int(n)}, nil
+		}
 		return NetworkID{Set: true, Name: v}, nil
 	case nil:
 		return NetworkID{}, nil

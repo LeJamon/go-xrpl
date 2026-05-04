@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -461,7 +462,7 @@ func TestConfigHelperMethods(t *testing.T) {
 
 	fetchDepth, err := config.GetFetchDepth()
 	assert.NoError(t, err)
-	assert.Equal(t, -1, fetchDepth) // -1 means "full"
+	assert.Equal(t, math.MaxInt32, fetchDepth) // "full" maps to MaxInt32
 }
 
 func TestConfigHelperMethods_NilErrors(t *testing.T) {
