@@ -30,7 +30,7 @@ type Config struct {
 	RelayProposals         string        `toml:"relay_proposals" mapstructure:"relay_proposals"`
 	RelayValidations       string        `toml:"relay_validations" mapstructure:"relay_validations"`
 	LedgerHistory          LedgerHistory `toml:"ledger_history" mapstructure:"ledger_history"` // integer, "full", or "none"
-	FetchDepth             FetchDepth    `toml:"fetch_depth" mapstructure:"fetch_depth"`       // integer, "full", or "none"
+	FetchDepth             FetchDepth    `toml:"fetch_depth" mapstructure:"fetch_depth"`       // integer, "full", or "none"; values < 10 are raised to 10
 	ValidationSeed         string        `toml:"validation_seed" mapstructure:"validation_seed"`
 	ValidatorToken         string        `toml:"validator_token" mapstructure:"validator_token"`
 	ValidatorKeyRevocation string        `toml:"validator_key_revocation" mapstructure:"validator_key_revocation"`

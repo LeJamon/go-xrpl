@@ -231,5 +231,8 @@ func decodeRPCStartupCommand(data any) (RPCStartupCommand, error) {
 		}
 		cmd.Params[k] = v
 	}
+	if cmd.Command == "" {
+		return RPCStartupCommand{}, fmt.Errorf("rpc_startup entry missing 'command' field")
+	}
 	return cmd, nil
 }
