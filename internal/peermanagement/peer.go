@@ -695,7 +695,22 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 }
 
 func (p *Peer) pingLoop(ctx context.Context) error {
-	ticker := time.NewTicker(15 * time.Second)
+	// First probe at t≈pingTimeout matches rippled's setTimer+onTimer
+	// envelope (PeerImp.cpp:61,690-748): disconnect-on-silence at
+	// t≈2*pingTimeout.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-p.closeCh:
+		return nil
+	case <-time.After(pingTimeout):
+	}
+
+	if err := p.runPingTick(time.Now()); err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(pingProbeInterval)
 	defer ticker.Stop()
 
 	for {
@@ -705,32 +720,89 @@ func (p *Peer) pingLoop(ctx context.Context) error {
 		case <-p.closeCh:
 			return nil
 		case <-ticker.C:
-			now := time.Now()
-			seq := uint32(now.UnixMilli())
-			ping := &message.Ping{
-				PType: message.PingTypePing,
-				Seq:   seq,
-			}
-			encoded, err := message.Encode(ping)
-			if err != nil {
-				continue
-			}
-			wireMsg, err := message.BuildWireMessage(message.TypePing, encoded)
-			if err != nil {
-				continue
-			}
-			p.recordPingSent(seq, now)
-			if err := p.Send(wireMsg); err != nil {
+			if err := p.runPingTick(time.Now()); err != nil {
 				return err
 			}
 		}
 	}
 }
 
+func (p *Peer) runPingTick(now time.Time) error {
+	if seq, age, ok := p.staleInFlightPing(now, pingTimeout); ok {
+		slog.Warn("peer ping timeout",
+			"t", "Peer", "peer", p.id,
+			"endpoint", p.endpoint.String(),
+			"seq", seq, "age", age,
+		)
+		return ErrPingTimeout
+	}
+	seq := uint32(now.UnixMilli())
+	ping := &message.Ping{
+		PType: message.PingTypePing,
+		Seq:   seq,
+	}
+	encoded, err := message.Encode(ping)
+	if err != nil {
+		return nil
+	}
+	wireMsg, err := message.BuildWireMessage(message.TypePing, encoded)
+	if err != nil {
+		return nil
+	}
+	p.recordPingSent(seq, now)
+	if err := p.Send(wireMsg); err != nil {
+		return err
+	}
+	return nil
+}
+
 const (
-	pingInFlightTTL  = 30 * time.Second
+	// pingTimeout: disconnect when the oldest unanswered ping reaches
+	// this age, and the cold-start delay before pingLoop's first
+	// probe. Mirrors rippled's peerTimerInterval (PeerImp.cpp:61) and
+	// the fail("Ping Timeout") branch at PeerImp.cpp:731-736.
+	pingTimeout = 60 * time.Second
+	// pingProbeInterval: cadence after the first probe. Finer than
+	// rippled's 60s peerTimerInterval; OnPong's sweep coalesces
+	// concurrent in-flight pings so the disconnect criterion stays
+	// "no pong for ≥pingTimeout".
+	pingProbeInterval = 15 * time.Second
+	// pingInFlightTTL bounds map growth between successful pongs. Set
+	// equal to pingTimeout so recordPingSent's GC sweep cannot evict
+	// an entry that staleInFlightPing would still treat as live: any
+	// entry with age < pingTimeout has age < pingInFlightTTL and is
+	// retained, while stale entries (age >= pingTimeout) trigger the
+	// disconnect on this tick before a future tick's GC could mask
+	// them. Any TTL smaller than pingTimeout would silently shrink
+	// the disconnect window.
+	pingInFlightTTL  = pingTimeout
 	pingsInFlightCap = 16
 )
+
+func (p *Peer) staleInFlightPing(now time.Time, threshold time.Duration) (seq uint32, age time.Duration, ok bool) {
+	p.latencyMu.RLock()
+	defer p.latencyMu.RUnlock()
+	var (
+		oldestSeq  uint32
+		oldestSent time.Time
+		have       bool
+	)
+	for s, t := range p.pingsInFlight {
+		if !have || t.Before(oldestSent) {
+			oldestSeq = s
+			oldestSent = t
+			have = true
+		}
+	}
+	if !have {
+		return 0, 0, false
+	}
+	age = now.Sub(oldestSent)
+	if age < threshold {
+		return 0, 0, false
+	}
+	return oldestSeq, age, true
+}
 
 func (p *Peer) recordPingSent(seq uint32, sentAt time.Time) {
 	p.latencyMu.Lock()
@@ -780,6 +852,18 @@ func roundMillisHalfEven(d time.Duration) time.Duration {
 // the EWMA-smoothed latency. Mirrors PeerImp::onMessage(TMPing)
 // (PeerImp.cpp:1099-1118): rtt is rounded to ms, then smoothed at ms
 // granularity via latency = (latency*7 + rtt) / 8.
+//
+// A matching pong also evicts every pending entry sent at-or-before
+// the matched send-time. Rippled keeps a single in-flight ping
+// (PeerImp.h:115 `std::optional<uint32_t> lastPingSeq_`), so its 60s
+// ping-timeout fires only when the most-recent cycle goes
+// unanswered. goXRPL ticks at 15s and may queue several pings while
+// a pong is in transit; without this sweep, a peer that drops one
+// ping per 60s window but otherwise responds promptly would be
+// evicted by staleInFlightPing's oldest-wins check, while rippled
+// would keep it. Clearing older entries makes the disconnect
+// criterion "no pong for ≥pingTimeout" instead of "any single ping
+// ≥pingTimeout old", matching rippled's single-cycle semantics.
 func (p *Peer) OnPong(seq uint32, receivedAt time.Time) {
 	p.latencyMu.Lock()
 	defer p.latencyMu.Unlock()
@@ -788,6 +872,11 @@ func (p *Peer) OnPong(seq uint32, receivedAt time.Time) {
 		return
 	}
 	delete(p.pingsInFlight, seq)
+	for s, t := range p.pingsInFlight {
+		if !t.After(sentAt) {
+			delete(p.pingsInFlight, s)
+		}
+	}
 	rtt := roundMillisHalfEven(receivedAt.Sub(sentAt))
 	if !p.hasLatency {
 		p.latency = rtt

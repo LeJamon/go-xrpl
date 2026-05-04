@@ -236,6 +236,11 @@ type Overlay struct {
 	// droppedMessages so the two traffic classes can be distinguished.
 	droppedLedgerResponses atomic.Uint64
 
+	// pingTimeoutDisconnects counts peers torn down because the oldest
+	// in-flight ping aged past pingTimeout. Mirrors rippled's
+	// fail("Ping Timeout") at PeerImp.cpp:731-736.
+	pingTimeoutDisconnects atomic.Uint64
+
 	// Network
 	listener net.Listener
 
@@ -747,6 +752,7 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 		err := peer.Run(ctx)
 		if err != nil {
 			slog.Info("Inbound peer run ended", "t", "Overlay", "remote", remoteAddr, "err", err)
+			o.notePeerRunEnded(err)
 		}
 		o.removePeer(peerID)
 	}()
@@ -1083,6 +1089,20 @@ func (o *Overlay) onMessageReceived(evt Event) {
 // router/engine can't keep up with network ingress.
 func (o *Overlay) DroppedMessages() uint64 {
 	return o.droppedMessages.Load()
+}
+
+// PingTimeoutDisconnects returns the cumulative count of peers torn
+// down because they failed to answer pings within pingTimeout. A
+// nonzero, growing value flags either a flaky network or peers that
+// have stopped servicing the overlay protocol.
+func (o *Overlay) PingTimeoutDisconnects() uint64 {
+	return o.pingTimeoutDisconnects.Load()
+}
+
+func (o *Overlay) notePeerRunEnded(err error) {
+	if errors.Is(err, ErrPingTimeout) {
+		o.pingTimeoutDisconnects.Add(1)
+	}
 }
 
 // DroppedLedgerResponses returns the cumulative count of ledger-sync
@@ -1610,6 +1630,7 @@ func (o *Overlay) Connect(addr string) error {
 		err := peer.Run(o.ctx)
 		if err != nil {
 			slog.Info("Peer run ended", "t", "Overlay", "addr", addr, "err", err)
+			o.notePeerRunEnded(err)
 		}
 		o.removePeer(peerID)
 	}()
