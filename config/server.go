@@ -15,13 +15,19 @@ const (
 	DefaultWebSocketReadTimeout  time.Duration = 90 * time.Second
 	DefaultWebSocketWriteTimeout time.Duration = 10 * time.Second
 	DefaultWebSocketPingInterval time.Duration = 30 * time.Second
-	DefaultWebSocketPongTimeout  time.Duration = 30 * time.Second
+	DefaultWebSocketPongTimeout  time.Duration = 90 * time.Second
 )
 
+// minWebSocketDuration is the lower bound enforced by Validate on every
+// duration field. It guards against unit typos (e.g., "30ns" instead of
+// "30s") that would otherwise pin the read/write/ping loops at fractions
+// of a millisecond and burn CPU.
+const minWebSocketDuration = 100 * time.Millisecond
+
 // WebSocketConfig holds tunable limits and timeouts applied to every
-// WebSocket connection. All zero-valued fields fall back to the matching
-// Default* constants so existing deployments that omit the [websocket]
-// section behave identically to before this struct existed.
+// WebSocket connection. Zero-valued fields fall back to the matching
+// Default* constants via WithDefaults, so existing deployments that omit
+// the [websocket] section behave identically to before this struct existed.
 type WebSocketConfig struct {
 	MaxReadSize  int64         `toml:"max_read_size" mapstructure:"max_read_size"`
 	ReadTimeout  time.Duration `toml:"read_timeout" mapstructure:"read_timeout"`
@@ -52,23 +58,39 @@ func (cfg WebSocketConfig) WithDefaults() WebSocketConfig {
 	return cfg
 }
 
-// Validate ensures negative durations or sizes are rejected. Zero values
-// are allowed and resolved by WithDefaults at use time.
+// Validate rejects values that cannot reasonably drive the WebSocket
+// server. Sizes must be non-negative; durations must either be zero (use
+// the default) or at least minWebSocketDuration. The zero/positive split
+// keeps "[websocket] omitted" valid while catching unit typos that would
+// otherwise produce sub-millisecond timers at runtime.
 func (cfg WebSocketConfig) Validate() error {
 	if cfg.MaxReadSize < 0 {
 		return fmt.Errorf("websocket.max_read_size must be non-negative, got %d", cfg.MaxReadSize)
 	}
-	if cfg.ReadTimeout < 0 {
-		return fmt.Errorf("websocket.read_timeout must be non-negative, got %s", cfg.ReadTimeout)
+	if err := validateWebSocketDuration("read_timeout", cfg.ReadTimeout); err != nil {
+		return err
 	}
-	if cfg.WriteTimeout < 0 {
-		return fmt.Errorf("websocket.write_timeout must be non-negative, got %s", cfg.WriteTimeout)
+	if err := validateWebSocketDuration("write_timeout", cfg.WriteTimeout); err != nil {
+		return err
 	}
-	if cfg.PingInterval < 0 {
-		return fmt.Errorf("websocket.ping_interval must be non-negative, got %s", cfg.PingInterval)
+	if err := validateWebSocketDuration("ping_interval", cfg.PingInterval); err != nil {
+		return err
 	}
-	if cfg.PongTimeout < 0 {
-		return fmt.Errorf("websocket.pong_timeout must be non-negative, got %s", cfg.PongTimeout)
+	if err := validateWebSocketDuration("pong_timeout", cfg.PongTimeout); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateWebSocketDuration(field string, d time.Duration) error {
+	if d == 0 {
+		return nil
+	}
+	if d < 0 {
+		return fmt.Errorf("websocket.%s must be non-negative, got %s", field, d)
+	}
+	if d < minWebSocketDuration {
+		return fmt.Errorf("websocket.%s must be >= %s (likely unit typo), got %s", field, minWebSocketDuration, d)
 	}
 	return nil
 }

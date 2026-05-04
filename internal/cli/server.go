@@ -317,7 +317,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	// Create WebSocket server for real-time subscriptions. Connection
 	// limits and timeouts come from the [websocket] config section; an
 	// omitted section yields the historical defaults via WithDefaults().
-	wsServer := rpc.NewWebSocketServer(30*time.Second, services, globalConfig.WebSocket)
+	wsServer := rpc.NewWebSocketServer(services, globalConfig.WebSocket)
 	wsServer.RegisterAllMethods()
 
 	// Create a ledger info provider adapter for WebSocket subscribe responses

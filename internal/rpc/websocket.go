@@ -31,7 +31,6 @@ type WebSocketServer struct {
 	methodRegistry      *types.MethodRegistry
 	connections         map[string]*WebSocketConnection
 	connectionsMutex    sync.RWMutex
-	timeout             time.Duration
 	wsConfig            config.WebSocketConfig
 	ledgerInfoProvider  types.LedgerInfoProvider
 	connLimiter         *ConnLimiter
@@ -61,7 +60,7 @@ type WebSocketConnection struct {
 // test contexts. wsCfg supplies tunable read/write/ping limits; any
 // zero-valued field is replaced by its config.Default* counterpart so
 // callers may pass a zero-value struct to keep historical behavior.
-func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer, wsCfg config.WebSocketConfig) *WebSocketServer {
+func NewWebSocketServer(services *types.ServiceContainer, wsCfg config.WebSocketConfig) *WebSocketServer {
 	return &WebSocketServer{
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
@@ -76,7 +75,6 @@ func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer,
 		},
 		methodRegistry: types.NewMethodRegistry(),
 		connections:    make(map[string]*WebSocketConnection),
-		timeout:        timeout,
 		wsConfig:       wsCfg.WithDefaults(),
 		services:       services,
 	}

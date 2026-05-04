@@ -75,11 +75,15 @@ type Config struct {
 	BetaRPCAPI     int         `toml:"beta_rpc_api" mapstructure:"beta_rpc_api"`
 
 	// Special startup commands
-	RPCStartup             []RPCStartupCommand `toml:"rpc_startup" mapstructure:"rpc_startup"`
-	WebsocketPingFrequency int                 `toml:"websocket_ping_frequency" mapstructure:"websocket_ping_frequency"`
-	ServerDomain           string              `toml:"server_domain" mapstructure:"server_domain"`
+	RPCStartup []RPCStartupCommand `toml:"rpc_startup" mapstructure:"rpc_startup"`
 
-	// WebSocket connection limits and timeouts. Omitting the [websocket]
+	// Deprecated: top-level websocket_ping_frequency is unused; configure
+	// websocket.ping_interval under the [websocket] section instead.
+	// Retained so existing configs continue to parse.
+	WebsocketPingFrequency int    `toml:"websocket_ping_frequency" mapstructure:"websocket_ping_frequency"`
+	ServerDomain           string `toml:"server_domain" mapstructure:"server_domain"`
+
+	// WebSocket connection limits and timeouts. An omitted [websocket]
 	// section preserves the historical hardcoded values via WithDefaults().
 	WebSocket WebSocketConfig `toml:"websocket" mapstructure:"websocket"`
 
