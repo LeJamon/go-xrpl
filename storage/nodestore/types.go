@@ -146,6 +146,14 @@ type Database interface {
 	// The supplied ctx unblocks the caller on cancellation; the
 	// underlying backend flush is uninterruptible and continues
 	// running so partial fsync state is never observed.
+	//
+	// Concurrency contract: callers MUST serialise Sync invocations.
+	// On ctx cancellation Sync returns to the caller while the
+	// in-flight backend flush is still running; a subsequent Sync
+	// would invoke the backend concurrently with that flush, and
+	// not all backends are required to be re-entrant. The current
+	// in-tree caller (Service.persistLedger) is serialised by the
+	// Service mutex.
 	Sync(ctx context.Context) error
 }
 

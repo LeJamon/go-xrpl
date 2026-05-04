@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -344,11 +345,12 @@ func (s *Server) writeXrplError(w http.ResponseWriter, method string, request in
 // method to forward calls through the same method registry.
 func (s *Server) ExecuteMethod(method string, params []byte) (interface{}, *types.RpcError) {
 	ctx := &types.RpcContext{
-		Context:    nil,
+		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.DefaultApiVersion,
 		IsAdmin:    false,
 		PeerSource: s.loadPeerSource(),
+		Services:   s.services,
 	}
 	return s.executeMethod(method, json.RawMessage(params), ctx)
 }

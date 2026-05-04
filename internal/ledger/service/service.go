@@ -622,8 +622,15 @@ func (s *Service) AcceptLedger(ctx context.Context) (uint32, error) {
 
 	// Persist the closed ledger to storage backends (nodestore and/or relational DB).
 	// persistLedger has internal nil guards for each backend.
+	//
+	// Match rippled: LedgerMaster::setFullLedger -> pendSaveValidated
+	// discards the bool return and the chain advance proceeds regardless
+	// (rippled/src/xrpld/app/ledger/detail/LedgerMaster.cpp:831,972).
+	// Treating SQL persistence failure as fatal here would diverge from
+	// rippled and risk forks on transient relational-DB issues.
 	if err := s.persistLedger(ctx, s.openLedger); err != nil {
-		return 0, errors.New("failed to persist ledger: " + err.Error())
+		s.logger.Error("failed to persist closed ledger; chain advance continues",
+			"seq", s.openLedger.Sequence(), "err", err)
 	}
 
 	// Store the closed ledger in memory cache
@@ -1324,9 +1331,15 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 
 	// Do NOT auto-validate — validation comes from the consensus validation tracker.
 
-	// Persist
+	// Persist. Match rippled's LedgerMaster::setFullLedger ->
+	// pendSaveValidated: the bool return is discarded and the chain
+	// advance proceeds regardless. Treating persist failure as fatal
+	// here would diverge from rippled and risk forks on transient
+	// relational-DB issues.
+	// Reference: rippled/src/xrpld/app/ledger/detail/LedgerMaster.cpp:831,972
 	if err := s.persistLedger(ctx, s.openLedger); err != nil {
-		return 0, errors.New("failed to persist ledger: " + err.Error())
+		s.logger.Error("failed to persist consensus-closed ledger; chain advance continues",
+			"seq", s.openLedger.Sequence(), "err", err)
 	}
 
 	closedSeq := s.openLedger.Sequence()

@@ -17,6 +17,13 @@ import (
 // shutdown / request cancellation propagates through the persistence
 // layer.
 //
+// Caller contract: chain-advance call sites must log and discard the
+// returned error, mirroring rippled's LedgerMaster::setFullLedger ->
+// pendSaveValidated which discards the bool return
+// (rippled/src/xrpld/app/ledger/detail/LedgerMaster.cpp:831,972).
+// Treating persistence failure as fatal would diverge from rippled
+// and risk forks on transient storage issues.
+//
 // Atomicity boundaries:
 //
 //   - NodeStore is the durable ledger store; relational DB is a
@@ -27,13 +34,18 @@ import (
 //     A mid-write failure leaves orphaned (unreferenced) state nodes
 //     rather than a header pointing at missing state — readers see
 //     the ledger as ABSENT, not CORRUPT.
-//   - The relational DB writes (SaveValidatedLedger + per-tx index
-//     entries) run inside a single WithTransaction call, so they
-//     either all commit or all roll back on the transactional repo.
-//     Note: SQLite splits ledger metadata and tx data across two
-//     databases; SaveValidatedLedger on SQLite is non-transactional
-//     (see storage/relationaldb/sqlite/transaction_context.go) — this
-//     is a backend limitation, not introduced here.
+//   - The per-tx relational writes (SaveTransaction +
+//     SaveAccountTransaction) run inside a single WithTransaction
+//     call, matching rippled's soci::transaction over the per-tx
+//     INSERT loop in
+//     rippled/src/xrpld/app/rdb/backend/detail/Node.cpp:272-349.
+//     Caveat: on SQLite, SaveValidatedLedger writes the ledger row
+//     on a separate ledger DB connection that is non-transactional
+//     (see storage/relationaldb/sqlite/transaction_context.go), so
+//     a tx-loop rollback can leave an already-written ledger row in
+//     place. This split mirrors rippled's two-DB layout
+//     (Node.cpp:264 uses ldgDB outside the txnDB transaction) and is
+//     a backend limitation, not introduced here.
 func (s *Service) persistLedger(ctx context.Context, l *ledger.Ledger) error {
 	seq := l.Sequence()
 
@@ -100,6 +112,13 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 // persistToRelationalDB writes ledger metadata and transactions to the
 // relational database inside a single transaction so the per-tx index
 // entries either all commit or all roll back on cancel / DB error.
+//
+// WithTransaction is invoked directly on RepositoryManager, bypassing
+// Manager.ExecuteInTransaction's retry layer. The persist call site
+// in service.go logs and discards the error to match rippled's
+// fail-soft pendSaveValidated; retrying inside the transactional
+// scope would not help if the failure is the chain-advance ordering
+// itself, and would lengthen the time the Service mutex is held.
 func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) error {
 	h := l.Header()
 
