@@ -22,7 +22,7 @@ func (m *LedgerAcceptMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 			"ledger_accept is only available in standalone mode")
 	}
 
-	closedSeq, err := ctx.Services.Ledger.AcceptLedger()
+	closedSeq, err := ctx.Services.Ledger.AcceptLedger(ctx.Context)
 	if err != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to accept ledger: %v", err))
 	}

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -408,7 +409,7 @@ func (s *Service) GetValidatedLedgerIndex() uint32 {
 // When pending transactions exist, they are sorted using CanonicalTXSet ordering
 // and re-applied from a fresh copy of the LCL, matching rippled's behavior.
 // Reference: rippled NetworkOPs::acceptLedgerTransaction / CanonicalTXSet
-func (s *Service) AcceptLedger() (uint32, error) {
+func (s *Service) AcceptLedger(ctx context.Context) (uint32, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -624,8 +625,15 @@ func (s *Service) AcceptLedger() (uint32, error) {
 
 	// Persist the closed ledger to storage backends (nodestore and/or relational DB).
 	// persistLedger has internal nil guards for each backend.
-	if err := s.persistLedger(s.openLedger); err != nil {
-		return 0, fmt.Errorf("failed to persist ledger: %w", err)
+	//
+	// Match rippled: LedgerMaster::setFullLedger -> pendSaveValidated
+	// discards the bool return and the chain advance proceeds regardless
+	// (rippled/src/xrpld/app/ledger/detail/LedgerMaster.cpp:831,972).
+	// Treating SQL persistence failure as fatal here would diverge from
+	// rippled and risk forks on transient relational-DB issues.
+	if err := s.persistLedger(ctx, s.openLedger); err != nil {
+		s.logger.Error("failed to persist closed ledger; chain advance continues",
+			"seq", s.openLedger.Sequence(), "err", err)
 	}
 
 	// Store the closed ledger in memory cache
@@ -1130,7 +1138,7 @@ type LedgerInfo struct {
 //
 // The multi-pass retry logic is the same as AcceptLedger to match rippled's
 // BuildLedger behavior.
-func (s *Service) AcceptConsensusResult(parent *ledger.Ledger, txBlobs [][]byte, closeTime time.Time) (uint32, error) {
+func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledger, txBlobs [][]byte, closeTime time.Time) (uint32, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1326,9 +1334,15 @@ func (s *Service) AcceptConsensusResult(parent *ledger.Ledger, txBlobs [][]byte,
 
 	// Do NOT auto-validate — validation comes from the consensus validation tracker.
 
-	// Persist
-	if err := s.persistLedger(s.openLedger); err != nil {
-		return 0, fmt.Errorf("failed to persist ledger: %w", err)
+	// Persist. Match rippled's LedgerMaster::setFullLedger ->
+	// pendSaveValidated: the bool return is discarded and the chain
+	// advance proceeds regardless. Treating persist failure as fatal
+	// here would diverge from rippled and risk forks on transient
+	// relational-DB issues.
+	// Reference: rippled/src/xrpld/app/ledger/detail/LedgerMaster.cpp:831,972
+	if err := s.persistLedger(ctx, s.openLedger); err != nil {
+		s.logger.Error("failed to persist consensus-closed ledger; chain advance continues",
+			"seq", s.openLedger.Sequence(), "err", err)
 	}
 
 	closedSeq := s.openLedger.Sequence()
@@ -1664,7 +1678,7 @@ const heldAdoptionCascadeMax = 256
 //
 // Mirrors rippled's tryAdvance cascade shape, flattened to single-hop
 // (see comment on heldAdoptions for the scope trade-off).
-func (s *Service) SubmitHeldAdoption(h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
+func (s *Service) SubmitHeldAdoption(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
 	if h == nil {
 		return errors.New("SubmitHeldAdoption: nil header")
 	}
@@ -1689,7 +1703,7 @@ func (s *Service) SubmitHeldAdoption(h *header.LedgerHeader, stateMap *shamap.SH
 		if parent, ok := s.ledgerHistory[parentSeq]; ok {
 			parentHash := parent.Hash()
 			if parentHash == h.ParentHash {
-				return s.adoptLedgerWithStateLocked(h, stateMap, txMap, 0)
+				return s.adoptLedgerWithStateLocked(ctx, h, stateMap, txMap, 0)
 			}
 			// Parent seq present but on a different fork. Stashing would
 			// create a never-draining entry (the real fork's parent-seq
@@ -1726,7 +1740,7 @@ func (s *Service) SubmitHeldAdoption(h *header.LedgerHeader, stateMap *shamap.SH
 // full of stale forks can't defer eviction forever.
 //
 // Caller must hold s.mu (write).
-func (s *Service) cascadeHeldAdoptionsLocked(adopted *ledger.Ledger, depth int) {
+func (s *Service) cascadeHeldAdoptionsLocked(ctx context.Context, adopted *ledger.Ledger, depth int) {
 	// Purge stale entries first so a single adopt sweeps them all out.
 	s.evictExpiredHeldAdoptionsLocked()
 
@@ -1763,7 +1777,7 @@ func (s *Service) cascadeHeldAdoptionsLocked(adopted *ledger.Ledger, depth int) 
 		"hash", fmt.Sprintf("%x", held.header.Hash[:8]),
 		"depth", depth+1,
 	)
-	if err := s.adoptLedgerWithStateLocked(held.header, held.stateMap, held.txMap, depth+1); err != nil {
+	if err := s.adoptLedgerWithStateLocked(ctx, held.header, held.stateMap, held.txMap, depth+1); err != nil {
 		// Adoption of the held entry failed (e.g. persistence error on
 		// the cascade hop). Log and stop — the outer adopt already
 		// succeeded, so we do not surface the cascade error upwards.
@@ -1943,10 +1957,10 @@ func (s *Service) ReAdoptLedgerHeader(h *header.LedgerHeader) error {
 // `tx`, `tx_history`, `account_tx`, `transaction_entry` RPCs unable
 // to answer queries against adopted ledgers, and prevented re-serving
 // replay-delta requests for those ledgers to other peers.
-func (s *Service) AdoptLedgerWithState(h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
+func (s *Service) AdoptLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.adoptLedgerWithStateLocked(h, stateMap, txMap, 0)
+	return s.adoptLedgerWithStateLocked(ctx, h, stateMap, txMap, 0)
 }
 
 // adoptLedgerWithStateLocked is the lock-free core of AdoptLedgerWithState.
@@ -1954,6 +1968,7 @@ func (s *Service) AdoptLedgerWithState(h *header.LedgerHeader, stateMap *shamap.
 // depth of the held-orphan cascade (F6); the public entrypoints pass 0
 // and the cascade helper recurses with depth+1 until heldAdoptionCascadeMax.
 func (s *Service) adoptLedgerWithStateLocked(
+	ctx context.Context,
 	h *header.LedgerHeader,
 	stateMap *shamap.SHAMap,
 	txMap *shamap.SHAMap,
@@ -2005,7 +2020,7 @@ func (s *Service) adoptLedgerWithStateLocked(
 	// Persist the adopted ledger exactly as the local close path does so
 	// tx/account_tx/tx_history/transaction_entry RPCs can answer queries
 	// against it. Matches LedgerMaster::setFullLedger -> pendSaveValidated.
-	if err := s.persistLedger(adopted); err != nil {
+	if err := s.persistLedger(ctx, adopted); err != nil {
 		// Degrade gracefully: the in-memory state is still correct and the
 		// next consensus close will re-try persistence. Log loudly because
 		// a persistent failure breaks tx RPCs silently.
@@ -2091,7 +2106,7 @@ func (s *Service) adoptLedgerWithStateLocked(
 	// before seq N+1) otherwise stall until the inbound loop happens to
 	// re-request them. Also evicts entries older than heldAdoptionTTL so
 	// the stash doesn't accumulate stale forks across adopt calls.
-	s.cascadeHeldAdoptionsLocked(adopted, cascadeDepth)
+	s.cascadeHeldAdoptionsLocked(ctx, adopted, cascadeDepth)
 
 	return nil
 }

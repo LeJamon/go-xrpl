@@ -5,6 +5,7 @@ package adaptor
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -504,7 +505,11 @@ func (a *Adaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, cl
 	if w, ok := parent.(*LedgerWrapper); ok {
 		parentLedger = w.Unwrap()
 	}
-	seq, err := a.ledgerService.AcceptConsensusResult(parentLedger, txSet.Txs(), closeTime)
+	// context.TODO: the consensus.Adaptor.BuildLedger interface does not
+	// propagate a context. Until that interface gains one, persistence
+	// here cannot be cancelled by the consensus engine. Tracked separately
+	// from this issue (#185).
+	seq, err := a.ledgerService.AcceptConsensusResult(context.TODO(), parentLedger, txSet.Txs(), closeTime)
 	if err != nil {
 		return nil, err
 	}

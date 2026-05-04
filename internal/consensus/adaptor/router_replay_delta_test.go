@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"context"
 	"encoding/hex"
 	"sync"
 	"testing"
@@ -450,7 +451,7 @@ func TestRouter_ReplayDeltaApply_AdoptsDerivedLedger(t *testing.T) {
 	// for prevIndex=1 (genesis ledger), so the state map root would be
 	// unchanged. Step the service forward one ledger first so we
 	// actually exercise the skip-list mutation Close() runs.
-	_, err := svc.AcceptLedger()
+	_, err := svc.AcceptLedger(context.TODO())
 	require.NoError(t, err)
 
 	resp, expectedHash, seq := buildEmptyClosedSuccessorResponse(t, svc)
@@ -647,7 +648,7 @@ func TestRouter_ReplayDelta_CascadesOutOfOrderArrival(t *testing.T) {
 	// whose hash is consistent with a Close()-derived successor at
 	// seq 3 (the genesis ledger's skip-list is a special case — same
 	// reasoning as TestRouter_ReplayDeltaApply_AdoptsDerivedLedger).
-	_, err := svc.AcceptLedger()
+	_, err := svc.AcceptLedger(context.TODO())
 	require.NoError(t, err)
 
 	parentN := svc.GetClosedLedger()

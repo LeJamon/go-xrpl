@@ -53,7 +53,7 @@ func (m *mockLedgerServiceTx) GetNetworkID() uint16 {
 	return m.networkID
 }
 
-func (m *mockLedgerServiceTx) GetLedgerRange(minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
+func (m *mockLedgerServiceTx) GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
 	if m.ledgerRangeError != nil {
 		return nil, m.ledgerRangeError
 	}

@@ -19,8 +19,9 @@ type LedgerRangeResult struct {
 	Hashes      map[uint32][32]byte `json:"hashes"`
 }
 
-// GetLedgerRange retrieves ledger hashes for a range of sequences
-func (s *Service) GetLedgerRange(minSeq, maxSeq uint32) (*LedgerRangeResult, error) {
+// GetLedgerRange retrieves ledger hashes for a range of sequences.
+// The supplied ctx is forwarded to the relational DB lookup.
+func (s *Service) GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*LedgerRangeResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -39,7 +40,6 @@ func (s *Service) GetLedgerRange(minSeq, maxSeq uint32) (*LedgerRangeResult, err
 
 	// If we have RelationalDB, fill in gaps
 	if s.relationalDB != nil && len(result.Hashes) < int(maxSeq-minSeq+1) {
-		ctx := context.Background()
 		hashPairs, err := s.relationalDB.Ledger().GetHashesByRange(ctx,
 			relationaldb.LedgerIndex(minSeq),
 			relationaldb.LedgerIndex(maxSeq))

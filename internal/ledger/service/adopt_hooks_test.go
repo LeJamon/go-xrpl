@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -75,7 +76,7 @@ func TestAdoptLedgerWithState_FiresOnLedgerClosedHook(t *testing.T) {
 		CloseTime:   time.Unix(1700000000, 0),
 	}
 
-	require.NoError(t, svc.AdoptLedgerWithState(hdr, stateMap, txMap))
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 
 	// Wait for the goroutine-dispatched hook to fire.
 	select {
@@ -143,7 +144,7 @@ func TestAdoptLedgerWithState_FiresOnTransactionHook(t *testing.T) {
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
-	require.NoError(t, svc.AdoptLedgerWithState(hdr, stateMap, txMap))
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 
 	// Wait for both tx dispatches.
 	deadline := time.After(2 * time.Second)
@@ -213,7 +214,7 @@ func TestAdoptLedgerWithState_StashesLegacyEventUntilValidated(t *testing.T) {
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
-	require.NoError(t, svc.AdoptLedgerWithState(hdr, stateMap, txMap))
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 
 	// Give any erroneously-dispatched callback a chance to run.
 	select {
@@ -295,7 +296,7 @@ func TestAdoptLedgerWithState_NoHooksInstalled_IsQuiet(t *testing.T) {
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
-	require.NoError(t, svc.AdoptLedgerWithState(hdr, stateMap, txMap),
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap),
 		"adopt must succeed even when no hooks or eventCallback are installed")
 
 	// No pending stash entry should exist when there is no eventCallback.

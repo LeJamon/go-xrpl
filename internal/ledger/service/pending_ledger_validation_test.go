@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -66,7 +67,7 @@ func TestSetValidatedLedger_StashesWhenSeqMissing_FiresOnAdopt(t *testing.T) {
 
 	// When the adopt path installs this ledger, the stashed validation
 	// must be drained and validatedLedger promoted to the adopted ledger.
-	require.NoError(t, svc.AdoptLedgerWithState(hdr, stateMap, txMap))
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 
 	assert.Equal(t, adoptedSeq, svc.GetValidatedLedgerIndex(),
 		"AdoptLedgerWithState must drain the stashed validation and promote validatedLedger")
@@ -123,7 +124,7 @@ func TestSetValidatedLedger_StashExpires(t *testing.T) {
 	svc.mu.Unlock()
 
 	// Adopt — the drain must see the stale entry and refuse to promote.
-	require.NoError(t, svc.AdoptLedgerWithState(hdr, stateMap, txMap))
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 
 	assert.Equal(t, startValidated, svc.GetValidatedLedgerIndex(),
 		"expired stash must NOT promote validatedLedger on adopt")
@@ -187,7 +188,7 @@ func TestSetValidatedLedger_StashHashMismatch(t *testing.T) {
 	require.Equal(t, validatedHashA, entry.expectedHash)
 
 	// Adopt B. Must NOT promote — fork signal.
-	require.NoError(t, svc.AdoptLedgerWithState(hdr, stateMap, txMap))
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 
 	assert.Equal(t, startValidated, svc.GetValidatedLedgerIndex(),
 		"hash mismatch between stashed validation and adopted ledger must NOT promote")
@@ -274,7 +275,7 @@ func TestAdoptLedgerWithState_EventCallbackFiresAfterValidationFirstRace(t *test
 	// matching-hash, non-expired stash and promotes validatedLedger
 	// to the adopted ledger. Because no SetValidatedLedger will arrive
 	// later for this hash, the legacy eventCallback MUST fire inline.
-	require.NoError(t, svc.AdoptLedgerWithState(hdr, stateMap, txMap))
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
 
 	assert.Equal(t, adoptedSeq, svc.GetValidatedLedgerIndex(),
 		"F4 drain must promote validatedLedger on matching adopt")
@@ -377,7 +378,7 @@ func TestAcceptConsensusResult_EventCallbackFiresAfterValidationFirstRace(t *tes
 	require.NotNil(t, parent)
 	expectedSeq := parent.Sequence() + 1
 	closeTime := time.Unix(1700000000, 0)
-	_, err = probeSvc.AcceptConsensusResult(parent, nil, closeTime)
+	_, err = probeSvc.AcceptConsensusResult(context.TODO(), parent, nil, closeTime)
 	require.NoError(t, err)
 
 	// Capture the hash that the deterministic close produced.
@@ -403,7 +404,7 @@ func TestAcceptConsensusResult_EventCallbackFiresAfterValidationFirstRace(t *tes
 	// Close the consensus ledger. F4 drain sees the matching-hash,
 	// non-expired stash and promotes validatedLedger. eventCallback MUST
 	// fire inline because no later SetValidatedLedger will arrive.
-	closedSeq, err := svc.AcceptConsensusResult(parentReal, nil, closeTime)
+	closedSeq, err := svc.AcceptConsensusResult(context.TODO(), parentReal, nil, closeTime)
 	require.NoError(t, err)
 	require.Equal(t, expectedSeq, closedSeq)
 

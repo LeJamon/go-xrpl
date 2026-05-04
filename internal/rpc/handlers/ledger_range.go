@@ -40,7 +40,7 @@ func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, err
 	}
 
-	result, err := ctx.Services.Ledger.GetLedgerRange(request.StartLedger, request.StopLedger)
+	result, err := ctx.Services.Ledger.GetLedgerRange(ctx.Context, request.StartLedger, request.StopLedger)
 	if err != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get ledger range: %v", err))
 	}

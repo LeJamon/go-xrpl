@@ -1,6 +1,8 @@
 package types
 
 import (
+	"context"
+
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -71,7 +73,7 @@ type LedgerNavigator interface {
 	GetCurrentLedgerIndex() uint32
 	GetClosedLedgerIndex() uint32
 	GetValidatedLedgerIndex() uint32
-	AcceptLedger() (uint32, error)
+	AcceptLedger(ctx context.Context) (uint32, error)
 	IsStandalone() bool
 }
 
@@ -82,7 +84,7 @@ type LedgerAccessor interface {
 	GetServerInfo() LedgerServerInfo
 	GetGenesisAccount() (string, error)
 	GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64)
-	GetLedgerRange(minSeq, maxSeq uint32) (*LedgerRangeResult, error)
+	GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*LedgerRangeResult, error)
 	GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*LedgerEntryResult, error)
 	GetLedgerData(ledgerIndex string, limit uint32, marker string) (*LedgerDataResult, error)
 	GetClosedLedgerView() (LedgerStateView, error)
@@ -95,7 +97,7 @@ type TransactionSubmitter interface {
 	SimulateTransaction(txJSON []byte) (*SubmitResult, error)
 	GetTransaction(txHash [32]byte) (*TransactionInfo, error)
 	StoreTransaction(txHash [32]byte, txData []byte) error
-	GetTransactionHistory(startIndex uint32) (*TxHistoryResult, error)
+	GetTransactionHistory(ctx context.Context, startIndex uint32) (*TxHistoryResult, error)
 }
 
 // AccountQuerier provides account-related read operations.
@@ -103,7 +105,7 @@ type AccountQuerier interface {
 	GetAccountInfo(account string, ledgerIndex string) (*AccountInfo, error)
 	GetAccountLines(account string, ledgerIndex string, peer string, limit uint32) (*AccountLinesResult, error)
 	GetAccountOffers(account string, ledgerIndex string, limit uint32) (*AccountOffersResult, error)
-	GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *AccountTxMarker, forward bool) (*AccountTxResult, error)
+	GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *AccountTxMarker, forward bool) (*AccountTxResult, error)
 	GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*AccountChannelsResult, error)
 	GetAccountCurrencies(account string, ledgerIndex string) (*AccountCurrenciesResult, error)
 	GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*AccountObjectsResult, error)

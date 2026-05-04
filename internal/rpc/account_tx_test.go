@@ -17,7 +17,7 @@ import (
 // accountTxMock wraps mockLedgerService and overrides GetAccountTransactions
 type accountTxMock struct {
 	*mockLedgerService
-	getAccountTransactionsFn func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error)
+	getAccountTransactionsFn func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error)
 }
 
 func newAccountTxMock() *accountTxMock {
@@ -26,9 +26,9 @@ func newAccountTxMock() *accountTxMock {
 	}
 }
 
-func (m *accountTxMock) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+func (m *accountTxMock) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 	if m.getAccountTransactionsFn != nil {
-		return m.getAccountTransactionsFn(account, ledgerMin, ledgerMax, limit, marker, forward)
+		return m.getAccountTransactionsFn(ctx, account, ledgerMin, ledgerMax, limit, marker, forward)
 	}
 	return nil, errors.New("not implemented")
 }
@@ -97,7 +97,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 			expectedError: "Account not found.",
 			expectedCode:  19, // actNotFound
 			setupMock: func() {
-				mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+				mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 					return nil, errors.New("account not found")
 				}
 			},
@@ -198,7 +198,7 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 			Services:   services,
 		}
 
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			// With -1 defaults, the handler should pass through
 			assert.Equal(t, validAccount, account)
 			return &types.AccountTxResult{
@@ -232,7 +232,7 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 			Services:   services,
 		}
 
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			// When omitted, Go zero values are 0. The handler passes them through.
 			return &types.AccountTxResult{
 				Account:      account,
@@ -263,7 +263,7 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 			Services:   services,
 		}
 
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			assert.Equal(t, int64(1), ledgerMin)
 			assert.Equal(t, int64(3), ledgerMax)
 			return &types.AccountTxResult{
@@ -328,7 +328,7 @@ func TestAccountTxBinaryMode(t *testing.T) {
 			Services:   services,
 		}
 
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			return &types.AccountTxResult{
 				Account:   account,
 				LedgerMin: 1,
@@ -392,7 +392,7 @@ func TestAccountTxBinaryMode(t *testing.T) {
 			Services:   services,
 		}
 
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			return &types.AccountTxResult{
 				Account:   account,
 				LedgerMin: 1,
@@ -455,7 +455,7 @@ func TestAccountTxForwardReverse(t *testing.T) {
 	}
 
 	t.Run("Forward=true passes forward flag", func(t *testing.T) {
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			assert.True(t, forward, "forward flag should be true")
 			return &types.AccountTxResult{
 				Account:      account,
@@ -480,7 +480,7 @@ func TestAccountTxForwardReverse(t *testing.T) {
 	})
 
 	t.Run("Forward=false (default reverse ordering)", func(t *testing.T) {
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			assert.False(t, forward, "forward flag should be false")
 			return &types.AccountTxResult{
 				Account:      account,
@@ -505,7 +505,7 @@ func TestAccountTxForwardReverse(t *testing.T) {
 	})
 
 	t.Run("Forward omitted defaults to false", func(t *testing.T) {
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			assert.False(t, forward, "forward flag should default to false")
 			return &types.AccountTxResult{
 				Account:      account,
@@ -546,7 +546,7 @@ func TestAccountTxMarkerPagination(t *testing.T) {
 	}
 
 	t.Run("No marker returns first page", func(t *testing.T) {
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			assert.Nil(t, marker, "marker should be nil for first page")
 			return &types.AccountTxResult{
 				Account:      account,
@@ -584,7 +584,7 @@ func TestAccountTxMarkerPagination(t *testing.T) {
 	})
 
 	t.Run("Marker passed to service for next page", func(t *testing.T) {
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			require.NotNil(t, marker, "marker should be provided for second page")
 			assert.Equal(t, uint32(5), marker.LedgerSeq)
 			assert.Equal(t, uint32(1), marker.TxnSeq)
@@ -643,7 +643,7 @@ func TestAccountTxResponseStructure(t *testing.T) {
 	}
 
 	t.Run("Response contains all required fields", func(t *testing.T) {
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			return &types.AccountTxResult{
 				Account:      account,
 				LedgerMin:    1,
@@ -692,7 +692,7 @@ func TestAccountTxResponseStructure(t *testing.T) {
 	})
 
 	t.Run("Response with marker present", func(t *testing.T) {
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			return &types.AccountTxResult{
 				Account:      account,
 				LedgerMin:    1,
@@ -728,7 +728,7 @@ func TestAccountTxResponseStructure(t *testing.T) {
 	})
 
 	t.Run("Response without marker when no more results", func(t *testing.T) {
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			return &types.AccountTxResult{
 				Account:      account,
 				LedgerMin:    1,
@@ -776,7 +776,7 @@ func TestAccountTxEmptyAccount(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+	mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 		return &types.AccountTxResult{
 			Account:      account,
 			LedgerMin:    1,
@@ -831,7 +831,7 @@ func TestAccountTxMultipleTransactions(t *testing.T) {
 	txBlob := []byte{0x12, 0x00, 0x00}
 	meta := []byte{0x20, 0x1C, 0x00, 0x00, 0x00, 0x01}
 
-	mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+	mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 		return &types.AccountTxResult{
 			Account:   account,
 			LedgerMin: 1,
@@ -1004,7 +1004,7 @@ func TestAccountTxTransactionHistoryNotAvailable(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+	mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 		return nil, errors.New("transaction history not available (no database configured)")
 	}
 
@@ -1056,7 +1056,7 @@ func TestAccountTxLimitParameter(t *testing.T) {
 	}
 
 	t.Run("Custom limit is passed to service", func(t *testing.T) {
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			assert.Equal(t, uint32(10), limit, "Limit should be passed through")
 			return &types.AccountTxResult{
 				Account:      account,
@@ -1089,7 +1089,7 @@ func TestAccountTxLimitParameter(t *testing.T) {
 	})
 
 	t.Run("Default limit (0) when not specified", func(t *testing.T) {
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			assert.Equal(t, uint32(0), limit, "Limit should default to 0 when not specified")
 			return &types.AccountTxResult{
 				Account:      account,
@@ -1143,7 +1143,7 @@ func TestAccountTxInjectDeliveredAmount(t *testing.T) {
 
 	txHash := [32]byte{0xAA, 0xBB, 0xCC}
 
-	mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+	mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 		return &types.AccountTxResult{
 			Account:   account,
 			LedgerMin: 1,
@@ -1206,7 +1206,7 @@ func TestAccountTxServiceErrors(t *testing.T) {
 	}
 
 	t.Run("Generic service error", func(t *testing.T) {
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			return nil, errors.New("database connection failed")
 		}
 
@@ -1224,7 +1224,7 @@ func TestAccountTxServiceErrors(t *testing.T) {
 	})
 
 	t.Run("Account not found error", func(t *testing.T) {
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			return nil, errors.New("account not found")
 		}
 
@@ -1242,7 +1242,7 @@ func TestAccountTxServiceErrors(t *testing.T) {
 	})
 
 	t.Run("Transaction history not available", func(t *testing.T) {
-		mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			return nil, errors.New("transaction history not available (no database configured)")
 		}
 
@@ -1280,7 +1280,7 @@ func TestAccountTxValidatedField(t *testing.T) {
 	txBlob := []byte{0x12, 0x00}
 	meta := []byte{0x20, 0x1C}
 
-	mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+	mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 		return &types.AccountTxResult{
 			Account:   account,
 			LedgerMin: 1,
@@ -1337,7 +1337,7 @@ func TestAccountTxAccountPassedToService(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getAccountTransactionsFn = func(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+	mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 		assert.Equal(t, validAccount, account, "Account should be passed to service")
 		return &types.AccountTxResult{
 			Account:      account,

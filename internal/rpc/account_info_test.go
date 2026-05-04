@@ -40,10 +40,12 @@ func newMockLedgerService() *mockLedgerService {
 	}
 }
 
-func (m *mockLedgerService) GetCurrentLedgerIndex() uint32         { return m.currentLedgerIndex }
-func (m *mockLedgerService) GetClosedLedgerIndex() uint32          { return m.closedLedgerIndex }
-func (m *mockLedgerService) GetValidatedLedgerIndex() uint32       { return m.validatedLedgerIndex }
-func (m *mockLedgerService) AcceptLedger() (uint32, error)         { return m.closedLedgerIndex + 1, nil }
+func (m *mockLedgerService) GetCurrentLedgerIndex() uint32   { return m.currentLedgerIndex }
+func (m *mockLedgerService) GetClosedLedgerIndex() uint32    { return m.closedLedgerIndex }
+func (m *mockLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
+func (m *mockLedgerService) AcceptLedger(context.Context) (uint32, error) {
+	return m.closedLedgerIndex + 1, nil
+}
 func (m *mockLedgerService) IsStandalone() bool                    { return m.standalone }
 func (m *mockLedgerService) GetServerInfo() types.LedgerServerInfo { return m.serverInfo }
 func (m *mockLedgerService) GetGenesisAccount() (string, error) {
@@ -95,13 +97,13 @@ func (m *mockLedgerService) GetAccountOffers(account string, ledgerIndex string,
 func (m *mockLedgerService) GetBookOffers(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockLedgerService) GetAccountTransactions(account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+func (m *mockLedgerService) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockLedgerService) GetTransactionHistory(startIndex uint32) (*types.TxHistoryResult, error) {
+func (m *mockLedgerService) GetTransactionHistory(ctx context.Context, startIndex uint32) (*types.TxHistoryResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockLedgerService) GetLedgerRange(minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
+func (m *mockLedgerService) GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockLedgerService) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
