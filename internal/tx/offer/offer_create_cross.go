@@ -204,7 +204,7 @@ func (o *OfferCreate) takerCross(
 		ctx, saTakerPays, saTakerGets, placeOffer.in, placeOffer.out, takerInBalance, bSell,
 	)
 
-	if outcome, done := evaluateFillOrKill(rules, saTakerGets, grossPaid, remainingGets, remainingPays, bFillOrKill); done {
+	if outcome, done := evaluatePostCrossTermination(rules, saTakerGets, grossPaid, remainingGets, remainingPays, bFillOrKill); done {
 		return outcome
 	}
 
@@ -221,13 +221,13 @@ func (o *OfferCreate) takerCross(
 	}
 }
 
-// evaluateFillOrKill decides what to do once we know the post-cross
+// evaluatePostCrossTermination decides what to do once we know the post-cross
 // remainder. It returns (outcome, true) when the offer is either fully
 // crossed or the FillOrKill flag forces an early termination, and
 // (zero, false) when applyGuts should continue and place the remainder.
 //
 // Reference: rippled CreateOffer.cpp lines 757-795
-func evaluateFillOrKill(
+func evaluatePostCrossTermination(
 	rules *amendment.Rules,
 	saTakerGets, grossPaid, remainingGets, remainingPays tx.Amount,
 	bFillOrKill bool,
