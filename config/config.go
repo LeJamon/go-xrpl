@@ -83,8 +83,6 @@ type Config struct {
 	WebsocketPingFrequency int    `toml:"websocket_ping_frequency" mapstructure:"websocket_ping_frequency"`
 	ServerDomain           string `toml:"server_domain" mapstructure:"server_domain"`
 
-	// WebSocket connection limits and timeouts. An omitted [websocket]
-	// section preserves the historical hardcoded values via WithDefaults().
 	WebSocket WebSocketConfig `toml:"websocket" mapstructure:"websocket"`
 
 	// Genesis file path (JSON format)

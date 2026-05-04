@@ -11,10 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Pins each Default* constant to the value hardcoded in
-// internal/rpc/websocket.go before WebSocketConfig was introduced. If any
-// of these flip, "[websocket] omitted" no longer reproduces historical
-// behavior — which is the contract WebSocketConfig promises.
+// Pins each Default* constant to its expected value. If any of these
+// flip, "[websocket] omitted" no longer yields the contract documented
+// on WebSocketConfig.
 func TestWebSocketConfig_DefaultsMatchPreRefactorConstants(t *testing.T) {
 	cases := []struct {
 		name string
@@ -186,8 +185,8 @@ pong_timeout  = "60s"
 }
 
 // Omitting the [websocket] section must yield a zero-value
-// WebSocketConfig that, after WithDefaults, reproduces pre-refactor
-// behavior — the contract the deprecation comment in config.go promises.
+// WebSocketConfig that defaults correctly via WithDefaults — the
+// contract documented on WebSocketConfig.
 func TestLoadConfig_WebSocketSectionOmittedYieldsDefaults(t *testing.T) {
 	tempDir := t.TempDir()
 	mainConfigPath := filepath.Join(tempDir, "test_config.toml")

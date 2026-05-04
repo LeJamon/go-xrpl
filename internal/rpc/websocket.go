@@ -54,12 +54,11 @@ type WebSocketConnection struct {
 	portCtx         *PortContext     // per-port config for role determination
 }
 
-// NewWebSocketServer creates a new WebSocket server. The provided
-// service container is attached to every RpcContext routed through the
-// server so handlers reach the ledger via ctx.Services. May be nil for
-// test contexts. wsCfg supplies tunable read/write/ping limits; any
-// zero-valued field is replaced by its config.Default* counterpart so
-// callers may pass a zero-value struct to keep historical behavior.
+// NewWebSocketServer creates a new WebSocket server. The service
+// container is attached to every RpcContext routed through the server
+// so handlers reach the ledger via ctx.Services; nil is allowed for
+// test contexts. Zero-valued wsCfg fields fall back to their
+// config.Default* counterparts.
 func NewWebSocketServer(services *types.ServiceContainer, wsCfg config.WebSocketConfig) *WebSocketServer {
 	return &WebSocketServer{
 		upgrader: websocket.Upgrader{

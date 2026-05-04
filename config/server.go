@@ -7,9 +7,8 @@ import (
 	"time"
 )
 
-// Default WebSocket connection limits and timeouts. These mirror the values
-// hardcoded in internal/rpc/websocket.go before WebSocketConfig was introduced
-// and preserve historical behavior when the [websocket] section is omitted.
+// Default WebSocket connection limits and timeouts applied when the
+// [websocket] section is omitted from config.
 const (
 	DefaultWebSocketMaxReadSize  int64         = 512 * 1024
 	DefaultWebSocketReadTimeout  time.Duration = 90 * time.Second
@@ -30,10 +29,10 @@ const minWebSocketDuration = 100 * time.Millisecond
 // frame and render the server unreachable.
 const minWebSocketReadSize int64 = 1024
 
-// WebSocketConfig holds tunable limits and timeouts applied to every
-// WebSocket connection. Zero-valued fields fall back to the matching
-// Default* constants via WithDefaults, so existing deployments that omit
-// the [websocket] section behave identically to before this struct existed.
+// WebSocketConfig holds tunable per-connection WebSocket limits and
+// timeouts. Zero-valued fields fall back to the matching Default*
+// constants via WithDefaults, so an omitted [websocket] section yields
+// the documented defaults.
 type WebSocketConfig struct {
 	MaxReadSize  int64         `toml:"max_read_size" mapstructure:"max_read_size"`
 	ReadTimeout  time.Duration `toml:"read_timeout" mapstructure:"read_timeout"`
@@ -42,9 +41,9 @@ type WebSocketConfig struct {
 	PongTimeout  time.Duration `toml:"pong_timeout" mapstructure:"pong_timeout"`
 }
 
-// WithDefaults returns a copy of cfg with any zero-valued field replaced by
-// the matching Default* constant. Callers should use the returned value
-// instead of the original to ensure every limit is set.
+// WithDefaults returns a copy of cfg with each zero-valued field
+// replaced by its matching Default* constant. Use the returned value;
+// the receiver is unchanged.
 func (cfg WebSocketConfig) WithDefaults() WebSocketConfig {
 	if cfg.MaxReadSize <= 0 {
 		cfg.MaxReadSize = DefaultWebSocketMaxReadSize
@@ -64,11 +63,10 @@ func (cfg WebSocketConfig) WithDefaults() WebSocketConfig {
 	return cfg
 }
 
-// Validate rejects values that cannot reasonably drive the WebSocket
-// server. Sizes and durations must either be zero (use the default) or
-// at least their respective minimum. The zero/positive split keeps
-// "[websocket] omitted" valid while catching unit typos and
-// trivially-broken values that would silently break the server at runtime.
+// Validate accepts zero (use the default) or values >= their minimum.
+// The zero/positive split keeps "[websocket] omitted" valid while
+// catching unit typos and trivially-broken values that would silently
+// break the server at runtime.
 func (cfg WebSocketConfig) Validate() error {
 	if cfg.MaxReadSize < 0 {
 		return fmt.Errorf("websocket.max_read_size must be non-negative, got %d", cfg.MaxReadSize)
