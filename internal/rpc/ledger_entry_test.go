@@ -641,26 +641,23 @@ func TestLedgerEntryMissingEntryType(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
+		ApiVersion: types.ApiVersion2,
 		Services:   services,
 	}
 
 	tests := []struct {
-		name          string
-		params        map[string]interface{}
-		expectedError string
+		name   string
+		params map[string]interface{}
 	}{
 		{
-			name:          "Empty params - must specify object type",
-			params:        map[string]interface{}{},
-			expectedError: "Must specify object to look up",
+			name:   "Empty params - must specify object type",
+			params: map[string]interface{}{},
 		},
 		{
 			name: "Only ledger_index specified - must specify object type",
 			params: map[string]interface{}{
 				"ledger_index": "validated",
 			},
-			expectedError: "Must specify object to look up",
 		},
 	}
 
@@ -673,7 +670,8 @@ func TestLedgerEntryMissingEntryType(t *testing.T) {
 
 			assert.Nil(t, result, "Expected nil result for error case")
 			require.NotNil(t, rpcErr, "Expected RPC error")
-			assert.Contains(t, rpcErr.Message, tc.expectedError)
+			assert.Equal(t, "invalidParams", rpcErr.ErrorString)
+			assert.Empty(t, rpcErr.Message)
 			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 		})
 	}

@@ -8,12 +8,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeVaultWithdraw, func() tx.Transaction {
-		return &VaultWithdraw{BaseTx: *tx.NewBaseTx(tx.TypeVaultWithdraw, "")}
-	})
-}
-
 // VaultWithdraw withdraws assets from a vault.
 type VaultWithdraw struct {
 	tx.BaseTx
@@ -109,6 +103,12 @@ func (v *VaultWithdraw) RequiredAmendments() [][32]byte {
 }
 
 func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
+	ctx.Log.Trace("vault withdraw apply",
+		"account", v.Account,
+		"vaultID", v.VaultID,
+		"amount", v.Amount,
+	)
+
 	if v.VaultID == "" || v.Amount.IsZero() {
 		return tx.TemINVALID
 	}
@@ -127,5 +127,12 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 		amount := uint64(v.Amount.Drops())
 		ctx.Account.Balance += amount
 	}
+
+	ctx.Log.Debug("vault withdraw: shares redeemed",
+		"account", v.Account,
+		"vaultID", v.VaultID,
+		"amount", v.Amount,
+		"shares", v.Amount,
+	)
 	return tx.TesSUCCESS
 }

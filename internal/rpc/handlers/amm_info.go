@@ -93,12 +93,12 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		// Look up AMM by asset pair
 		issue1Issuer, issue1Currency, err := parseIssue(request.Asset)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid asset: " + err.Error())
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid asset: %v", err))
 		}
 
 		issue2Issuer, issue2Currency, err := parseIssue(request.Asset2)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid asset2: " + err.Error())
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid asset2: %v", err))
 		}
 
 		ammKeylet := keylet.AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency)

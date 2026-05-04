@@ -7,12 +7,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeCheckCreate, func() tx.Transaction {
-		return &CheckCreate{BaseTx: *tx.NewBaseTx(tx.TypeCheckCreate, "")}
-	})
-}
-
 type CheckCreate struct {
 	tx.BaseTx
 

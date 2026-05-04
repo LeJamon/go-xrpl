@@ -59,6 +59,11 @@ func (l *listener) Addr() net.Addr { return l.inner.Addr() }
 //     without re-entering the wire from two goroutines.
 //   - closed: set by Close before SSL/CTX are freed; sslMu critical
 //     sections check it to avoid use-after-free.
+var (
+	_ PeerConn     = (*conn)(nil)
+	_ net.Listener = (*listener)(nil)
+)
+
 type conn struct {
 	inner net.Conn
 

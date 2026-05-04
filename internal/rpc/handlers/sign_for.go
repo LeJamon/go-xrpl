@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -30,7 +31,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
@@ -75,7 +76,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	// Parse the transaction JSON
 	var txMap map[string]interface{}
 	if err := json.Unmarshal(request.TxJson, &txMap); err != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid tx_json: " + err.Error())
+		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
 
 	// Verify that Account field exists in transaction
@@ -114,13 +115,13 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	// Encode for multisigning (adds the signer's account as suffix)
 	signingPayload, err := binarycodec.EncodeForMultisigning(txMapForSigning, request.Account)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to encode for multisigning: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode for multisigning: %v", err))
 	}
 
 	// Sign the payload
 	signature, err := signPayload(signingPayload, privateKey, keyType)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to sign transaction: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to sign transaction: %v", err))
 	}
 
 	newSigner := map[string]interface{}{
@@ -150,7 +151,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 
 	txBlob, err := binarycodec.Encode(txMap)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to encode transaction: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode transaction: %v", err))
 	}
 
 	txHash := CalculateTxHash(txBlob)

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
@@ -206,7 +207,7 @@ func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
 	// Get the transaction data
 	txData, found, err := l.GetTransaction(txHash)
 	if err != nil {
-		return nil, errors.New("failed to get transaction: " + err.Error())
+		return nil, fmt.Errorf("failed to get transaction: %w", err)
 	}
 	if !found {
 		return nil, errors.New("transaction not found in ledger")
@@ -254,7 +255,7 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 	// Create a snapshot of the open ledger's state map for isolation
 	snapshot, err := s.openLedger.StateMapSnapshot()
 	if err != nil {
-		return nil, errors.New("failed to create ledger snapshot: " + err.Error())
+		return nil, fmt.Errorf("failed to create ledger snapshot: %w", err)
 	}
 
 	// Create a temporary ledger view backed by the snapshot
@@ -332,7 +333,7 @@ func (s *Service) GetAccountTransactions(ctx context.Context, account string, le
 	// Decode account address
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, errors.New("invalid account address: " + err.Error())
+		return nil, fmt.Errorf("invalid account address: %w", err)
 	}
 	var accountID relationaldb.AccountID
 	copy(accountID[:], accountIDBytes)

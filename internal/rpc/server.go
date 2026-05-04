@@ -28,6 +28,8 @@ type Server struct {
 	services   *types.ServiceContainer
 }
 
+var _ types.MethodDispatcher = (*Server)(nil)
+
 // SetPeerSource registers the source of per-peer entries served by the
 // `peers` RPC handler. Passing nil detaches the source so the handler
 // returns an empty list. Safe to call concurrently with reads.

@@ -7,12 +7,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeAMMClawback, func() tx.Transaction {
-		return &AMMClawback{BaseTx: *tx.NewBaseTx(tx.TypeAMMClawback, "")}
-	})
-}
-
 // AMMClawback claws back tokens from an AMM.
 type AMMClawback struct {
 	tx.BaseTx

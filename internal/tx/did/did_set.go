@@ -9,12 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeDIDSet, func() tx.Transaction {
-		return &DIDSet{BaseTx: *tx.NewBaseTx(tx.TypeDIDSet, "")}
-	})
-}
-
 // DIDSet creates or updates a DID document.
 type DIDSet struct {
 	tx.BaseTx

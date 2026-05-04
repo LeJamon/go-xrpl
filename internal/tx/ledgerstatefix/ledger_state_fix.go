@@ -10,12 +10,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeLedgerStateFix, func() tx.Transaction {
-		return &LedgerStateFix{BaseTx: *tx.NewBaseTx(tx.TypeLedgerStateFix, "")}
-	})
-}
-
 // LedgerStateFix fix types
 // Reference: rippled LedgerStateFix.h FixType enum
 const (

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 
@@ -32,7 +33,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
@@ -104,7 +105,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		// Generate random seed
 		entropy = make([]byte, 16)
 		if _, err := rand.Read(entropy); err != nil {
-			return nil, types.RpcErrorInternal("Failed to generate random seed: " + err.Error())
+			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to generate random seed: %v", err))
 		}
 	}
 
@@ -117,21 +118,21 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		algo := ed25519.ED25519()
 		privateKey, publicKey, err = algo.DeriveKeypair(entropy, false)
 		if err != nil {
-			return nil, types.RpcErrorInternal("Failed to derive keypair: " + err.Error())
+			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to derive keypair: %v", err))
 		}
 		encodedSeed, err = addresscodec.EncodeSeed(entropy, algo)
 		if err != nil {
-			return nil, types.RpcErrorInternal("Failed to encode seed: " + err.Error())
+			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode seed: %v", err))
 		}
 	} else {
 		algo := secp256k1.SECP256K1()
 		privateKey, publicKey, err = algo.DeriveKeypair(entropy, false)
 		if err != nil {
-			return nil, types.RpcErrorInternal("Failed to derive keypair: " + err.Error())
+			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to derive keypair: %v", err))
 		}
 		encodedSeed, err = addresscodec.EncodeSeed(entropy, algo)
 		if err != nil {
-			return nil, types.RpcErrorInternal("Failed to encode seed: " + err.Error())
+			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode seed: %v", err))
 		}
 	}
 	_ = privateKey // Private key is derived but not returned (security)
@@ -139,17 +140,17 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	// Derive account address from public key
 	accountID, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(publicKey)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to derive account address: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to derive account address: %v", err))
 	}
 
 	// Encode public key in base58
 	pubKeyBytes, err := hex.DecodeString(publicKey)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to decode public key: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to decode public key: %v", err))
 	}
 	encodedPublicKey, err := addresscodec.EncodeAccountPublicKey(pubKeyBytes)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to encode public key: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode public key: %v", err))
 	}
 
 	// Encode seed as RFC-1751 human-readable words (master_key)

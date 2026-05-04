@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
@@ -19,7 +20,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	var rawParams map[string]json.RawMessage
 	if params != nil {
 		if err := json.Unmarshal(params, &rawParams); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	} else {
 		rawParams = make(map[string]json.RawMessage)
@@ -185,7 +186,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// Run the transaction in simulation mode (snapshot, no commit)
 	result, err := ctx.Services.Ledger.SimulateTransaction(txJSON)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Simulation failed: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Simulation failed: %v", err))
 	}
 
 	response := map[string]interface{}{

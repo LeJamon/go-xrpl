@@ -103,7 +103,7 @@ const (
 	RpcNO_PF_REQUEST = 53 // No pathfinding request in progress (rippled: rpcNO_PF_REQUEST)
 
 	// Implementation status errors
-	RpcNOT_IMPL      = 47 // Feature not implemented
+	RpcNOT_IMPL      = 74 // rippled rpcNOT_IMPL
 	RpcNOT_VALIDATOR = 48 // Server is not configured as a validator
 	RpcNOT_SYNCED    = 49 // Not synced to network
 
@@ -248,6 +248,13 @@ func RpcErrorSigningMalformed() *RpcError {
 // RpcErrorMissingField returns an error for missing required field (matches rippled missing_field_error)
 func RpcErrorMissingField(field string) *RpcError {
 	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", "Missing field '"+field+"'.")
+}
+
+// RpcErrorFieldNotFoundTransaction matches rippled TransactionEntry.cpp:48,
+// which sets the bare "fieldNotFoundTransaction" token on the result body
+// without a numeric code; we use rpcUNKNOWN (-1) as the closest approximation.
+func RpcErrorFieldNotFoundTransaction() *RpcError {
+	return NewRpcError(RpcUNKNOWN, "fieldNotFoundTransaction", "fieldNotFoundTransaction", "Missing field 'tx_hash'.")
 }
 
 // RpcErrorInvalidField returns an error for invalid field value (matches rippled invalid_field_error)

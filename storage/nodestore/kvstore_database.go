@@ -3,6 +3,7 @@ package nodestore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -75,7 +76,7 @@ func (d *KVDatabaseImpl) Store(ctx context.Context, node *Node) error {
 
 	encoded := encodeNodeData(node)
 	if err := d.store.Put(node.Hash[:], encoded); err != nil {
-		return errors.New("store failed: " + err.Error())
+		return fmt.Errorf("store failed: %w", err)
 	}
 
 	atomic.AddUint64(&d.stats.writes, 1)
@@ -127,7 +128,7 @@ func (d *KVDatabaseImpl) Fetch(ctx context.Context, hash Hash256) (*Node, error)
 			}
 			return nil, nil
 		}
-		return nil, errors.New("fetch failed: " + err.Error())
+		return nil, fmt.Errorf("fetch failed: %w", err)
 	}
 
 	node, err := decodeNodeData(hash, data)
@@ -188,11 +189,11 @@ func (d *KVDatabaseImpl) StoreBatch(ctx context.Context, nodes []*Node) error {
 		}
 		encoded := encodeNodeData(node)
 		if err := batch.Put(node.Hash[:], encoded); err != nil {
-			return errors.New("store batch failed: " + err.Error())
+			return fmt.Errorf("store batch failed: %w", err)
 		}
 	}
 	if err := batch.Write(); err != nil {
-		return errors.New("store batch commit failed: " + err.Error())
+		return fmt.Errorf("store batch commit failed: %w", err)
 	}
 
 	for _, node := range nodes {

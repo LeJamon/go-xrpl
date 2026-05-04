@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
@@ -53,7 +54,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 				Message: "Account malformed.",
 			}
 		}
-		return nil, types.RpcErrorInternal("Failed to get account NFTs: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account NFTs: %v", err))
 	}
 
 	// Build NFTs array with proper field handling

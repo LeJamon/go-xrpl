@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
@@ -23,7 +24,7 @@ func (m *LedgerAcceptMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 
 	closedSeq, err := ctx.Services.Ledger.AcceptLedger(ctx.Context)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to accept ledger: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to accept ledger: %v", err))
 	}
 
 	response := map[string]interface{}{

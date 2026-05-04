@@ -375,7 +375,7 @@ func TestFullBelowCache(t *testing.T) {
 	t.Run("EvictionOnOverflow", func(t *testing.T) {
 		cache := NewFullBelowCache(10)
 
-		// Fill the cache
+		// Fill the cache.
 		for i := byte(0); i < 10; i++ {
 			cache.MarkFull([32]byte{i})
 		}
@@ -384,12 +384,83 @@ func TestFullBelowCache(t *testing.T) {
 			t.Errorf("Cache size should be 10, got %d", cache.Size())
 		}
 
-		// Add one more - should trigger eviction
+		// Add one more - should trigger LRU eviction of the oldest entry.
 		cache.MarkFull([32]byte{100})
 
-		// Size should be around 5-6 after evicting half
-		if cache.Size() > 6 {
-			t.Errorf("Cache size should be reduced after eviction, got %d", cache.Size())
+		if cache.Size() != 10 {
+			t.Errorf("Cache size should remain at 10 after LRU eviction, got %d", cache.Size())
+		}
+
+		// The first inserted hash should have been evicted.
+		if cache.IsFull([32]byte{0}) {
+			t.Error("Oldest entry should have been evicted by LRU policy")
+		}
+
+		// The newly inserted hash and the most recently inserted ones should remain.
+		if !cache.IsFull([32]byte{100}) {
+			t.Error("Newly inserted entry should be present")
+		}
+		if !cache.IsFull([32]byte{9}) {
+			t.Error("Most recent pre-overflow entry should still be present")
+		}
+	})
+
+	t.Run("LRUTouchOnRead", func(t *testing.T) {
+		cache := NewFullBelowCache(10)
+
+		// Fill the cache.
+		for i := byte(0); i < 10; i++ {
+			cache.MarkFull([32]byte{i})
+		}
+
+		// Touch the oldest entry via IsFull so it becomes the most recently used.
+		if !cache.IsFull([32]byte{0}) {
+			t.Fatal("hash 0 should be present before touch")
+		}
+
+		// Insert a new entry forcing eviction; the touched entry must survive
+		// and the next-oldest (hash 1) must be evicted.
+		cache.MarkFull([32]byte{200})
+
+		if !cache.IsFull([32]byte{0}) {
+			t.Error("Touched entry (hash 0) should survive eviction")
+		}
+		if cache.IsFull([32]byte{1}) {
+			t.Error("Hash 1 should have been evicted after hash 0 was touched")
+		}
+	})
+
+	t.Run("LRUEvictsLeastRecentlyUsed", func(t *testing.T) {
+		cache := NewFullBelowCache(100)
+
+		// Insert 100 distinct hashes.
+		for i := 0; i < 100; i++ {
+			var h [32]byte
+			h[0] = byte(i)
+			h[1] = byte(i >> 8)
+			cache.MarkFull(h)
+		}
+
+		// Touch a known one so it becomes the most recently used.
+		var keep [32]byte
+		keep[0] = 42
+		if !cache.IsFull(keep) {
+			t.Fatal("expected keep entry to be present before touch")
+		}
+
+		// Trigger 50 evictions by inserting fresh entries.
+		for i := 0; i < 50; i++ {
+			var h [32]byte
+			h[0] = byte(200 + i)
+			cache.MarkFull(h)
+		}
+
+		if cache.Size() != 100 {
+			t.Errorf("size should remain at maxSize=100, got %d", cache.Size())
+		}
+
+		if !cache.IsFull(keep) {
+			t.Error("touched entry should survive 50 evictions under LRU policy")
 		}
 	})
 

@@ -10,12 +10,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeCheckCash, func() tx.Transaction {
-		return &CheckCash{BaseTx: *tx.NewBaseTx(tx.TypeCheckCash, "")}
-	})
-}
-
 // CheckCash cashes a Check, drawing from the sender's balance.
 type CheckCash struct {
 	tx.BaseTx

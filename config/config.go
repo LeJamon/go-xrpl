@@ -27,24 +27,24 @@ type Config struct {
 	TransactionQueue TransactionQueueConfig `toml:"transaction_queue" mapstructure:"transaction_queue"`
 
 	// 3. Ripple Protocol
-	RelayProposals         string      `toml:"relay_proposals" mapstructure:"relay_proposals"`
-	RelayValidations       string      `toml:"relay_validations" mapstructure:"relay_validations"`
-	LedgerHistory          interface{} `toml:"ledger_history" mapstructure:"ledger_history"` // can be int or "full"
-	FetchDepth             interface{} `toml:"fetch_depth" mapstructure:"fetch_depth"`
-	ValidationSeed         string      `toml:"validation_seed" mapstructure:"validation_seed"`
-	ValidatorToken         string      `toml:"validator_token" mapstructure:"validator_token"`
-	ValidatorKeyRevocation string      `toml:"validator_key_revocation" mapstructure:"validator_key_revocation"`
-	ValidatorsFile         string      `toml:"validators_file" mapstructure:"validators_file"`
-	PathSearch             int         `toml:"path_search" mapstructure:"path_search"`
-	PathSearchFast         int         `toml:"path_search_fast" mapstructure:"path_search_fast"`
-	PathSearchMax          int         `toml:"path_search_max" mapstructure:"path_search_max"`
-	PathSearchOld          int         `toml:"path_search_old" mapstructure:"path_search_old"`
-	FeeDefault             int         `toml:"fee_default" mapstructure:"fee_default"`
-	Workers                int         `toml:"workers" mapstructure:"workers"`
-	IOWorkers              int         `toml:"io_workers" mapstructure:"io_workers"`
-	PrefetchWorkers        int         `toml:"prefetch_workers" mapstructure:"prefetch_workers"`
-	NetworkID              interface{} `toml:"network_id" mapstructure:"network_id"` // can be int or string
-	LedgerReplay           int         `toml:"ledger_replay" mapstructure:"ledger_replay"`
+	RelayProposals         string        `toml:"relay_proposals" mapstructure:"relay_proposals"`
+	RelayValidations       string        `toml:"relay_validations" mapstructure:"relay_validations"`
+	LedgerHistory          LedgerHistory `toml:"ledger_history" mapstructure:"ledger_history"` // integer, "full", or "none"
+	FetchDepth             FetchDepth    `toml:"fetch_depth" mapstructure:"fetch_depth"`       // integer, "full", or "none"; values < 10 are raised to 10
+	ValidationSeed         string        `toml:"validation_seed" mapstructure:"validation_seed"`
+	ValidatorToken         string        `toml:"validator_token" mapstructure:"validator_token"`
+	ValidatorKeyRevocation string        `toml:"validator_key_revocation" mapstructure:"validator_key_revocation"`
+	ValidatorsFile         string        `toml:"validators_file" mapstructure:"validators_file"`
+	PathSearch             int           `toml:"path_search" mapstructure:"path_search"`
+	PathSearchFast         int           `toml:"path_search_fast" mapstructure:"path_search_fast"`
+	PathSearchMax          int           `toml:"path_search_max" mapstructure:"path_search_max"`
+	PathSearchOld          int           `toml:"path_search_old" mapstructure:"path_search_old"`
+	FeeDefault             int           `toml:"fee_default" mapstructure:"fee_default"`
+	Workers                int           `toml:"workers" mapstructure:"workers"`
+	IOWorkers              int           `toml:"io_workers" mapstructure:"io_workers"`
+	PrefetchWorkers        int           `toml:"prefetch_workers" mapstructure:"prefetch_workers"`
+	NetworkID              NetworkID     `toml:"network_id" mapstructure:"network_id"` // integer or named string ("main", "testnet", "devnet")
+	LedgerReplay           int           `toml:"ledger_replay" mapstructure:"ledger_replay"`
 
 	// 4. HTTPS Client
 	SSLVerify     int    `toml:"ssl_verify" mapstructure:"ssl_verify"`
@@ -75,9 +75,9 @@ type Config struct {
 	BetaRPCAPI     int         `toml:"beta_rpc_api" mapstructure:"beta_rpc_api"`
 
 	// Special startup commands
-	RPCStartup             []map[string]interface{} `toml:"rpc_startup" mapstructure:"rpc_startup"`
-	WebsocketPingFrequency int                      `toml:"websocket_ping_frequency" mapstructure:"websocket_ping_frequency"`
-	ServerDomain           string                   `toml:"server_domain" mapstructure:"server_domain"`
+	RPCStartup             []RPCStartupCommand `toml:"rpc_startup" mapstructure:"rpc_startup"`
+	WebsocketPingFrequency int                 `toml:"websocket_ping_frequency" mapstructure:"websocket_ping_frequency"`
+	ServerDomain           string              `toml:"server_domain" mapstructure:"server_domain"`
 
 	// Genesis file path (JSON format)
 	// If empty, uses built-in default genesis configuration
@@ -116,70 +116,47 @@ func (c *Config) GetValidatorsPath() string {
 	return c.validatorsPath
 }
 
-// GetNetworkID returns the network ID as an integer
+// GetNetworkID returns the network ID as an integer.
+// String network names ("main", "testnet", "devnet") are mapped to their
+// canonical IDs (0, 1, 2). Unknown names return an error.
 func (c *Config) GetNetworkID() (int, error) {
-	switch v := c.NetworkID.(type) {
-	case int:
-		return v, nil
-	case int64:
-		return int(v), nil
-	case string:
-		switch v {
-		case "main":
-			return 0, nil
-		case "testnet":
-			return 1, nil
-		case "devnet":
-			return 2, nil
-		default:
-			return 0, fmt.Errorf("unknown network name: %s", v)
-		}
-	case nil:
+	if !c.NetworkID.Set {
 		return 0, fmt.Errorf("network_id is required but not set")
+	}
+	if c.NetworkID.Name == "" {
+		return c.NetworkID.ID, nil
+	}
+	switch c.NetworkID.Name {
+	case "main":
+		return 0, nil
+	case "testnet":
+		return 1, nil
+	case "devnet":
+		return 2, nil
 	default:
-		return 0, fmt.Errorf("invalid network_id type: %T", v)
+		return 0, fmt.Errorf("unknown network name: %s", c.NetworkID.Name)
 	}
 }
 
-// GetLedgerHistory returns the ledger history as an integer or -1 for "full"
+// GetLedgerHistory returns the configured ledger history as an integer.
+// "full" maps to math.MaxInt32 (matching rippled's uint32 max sentinel)
+// so that downstream comparisons such as the online_delete cross-check
+// fire the same way they do in rippled.
 func (c *Config) GetLedgerHistory() (int, error) {
-	switch v := c.LedgerHistory.(type) {
-	case int:
-		return v, nil
-	case int64:
-		return int(v), nil
-	case string:
-		if v == "full" {
-			return -1, nil
-		}
-		if v == "none" {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("invalid ledger_history value: %s", v)
-	case nil:
+	if !c.LedgerHistory.Set {
 		return 0, fmt.Errorf("ledger_history is required but not set")
-	default:
-		return 0, fmt.Errorf("invalid ledger_history type: %T", v)
 	}
+	return c.LedgerHistory.Value(), nil
 }
 
-// GetFetchDepth returns the fetch depth as an integer or -1 for "full"
+// GetFetchDepth returns the configured fetch depth as an integer.
+// "full" maps to math.MaxInt32, and any explicit count below 10 is
+// raised to 10 to mirror rippled's hard floor (Config.cpp:671-672).
 func (c *Config) GetFetchDepth() (int, error) {
-	switch v := c.FetchDepth.(type) {
-	case int:
-		return v, nil
-	case int64:
-		return int(v), nil
-	case string:
-		if v == "full" {
-			return -1, nil
-		}
-		return 0, fmt.Errorf("invalid fetch_depth value: %s", v)
-	case nil:
+	if !c.FetchDepth.Set {
 		return 0, fmt.Errorf("fetch_depth is required but not set")
-	default:
-		return 0, fmt.Errorf("invalid fetch_depth type: %T", v)
 	}
+	return c.FetchDepth.Value(), nil
 }
 
 // IsValidator returns true if this node is configured as a validator

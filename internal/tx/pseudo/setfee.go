@@ -9,12 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypeFee, func() tx.Transaction {
-		return &SetFee{BaseTx: *tx.NewBaseTx(tx.TypeFee, "")}
-	})
-}
-
 // SetFee errors matching rippled
 var (
 	ErrSetFeeBadSrcAccount = tx.Errorf(tx.TemBAD_SRC_ACCOUNT, "SetFee must have zero account")

@@ -174,7 +174,11 @@ func TestTransactionEntryMissingTxHash(t *testing.T) {
 			require.NotNil(t, rpcErr, "Expected RPC error when tx_hash is missing")
 			assert.Contains(t, rpcErr.Message, "tx_hash",
 				"Error should reference tx_hash parameter")
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			// Rippled emits the literal token "fieldNotFoundTransaction" for
+			// this case (TransactionEntry.cpp:48 / TransactionEntry_test.cpp:49),
+			// not the generic invalidParams.
+			assert.Equal(t, "fieldNotFoundTransaction", rpcErr.ErrorString)
+			assert.Equal(t, types.RpcUNKNOWN, rpcErr.Code)
 		})
 	}
 }

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
@@ -52,7 +53,7 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 				Message: "Account malformed.",
 			}
 		}
-		return nil, types.RpcErrorInternal("Failed to get account currencies: " + err.Error())
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account currencies: %v", err))
 	}
 
 	// Build response

@@ -29,7 +29,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 	var raw map[string]json.RawMessage
 	if params != nil {
 		if err := json.Unmarshal(params, &raw); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 	if raw == nil {

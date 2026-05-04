@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"sync"
 
@@ -56,7 +57,7 @@ type pathFindCreateRequest struct {
 func ParseAndCreateSession(params json.RawMessage, id interface{}) (*PathFindSession, *rpctypes.RpcError) {
 	var request pathFindCreateRequest
 	if err := json.Unmarshal(params, &request); err != nil {
-		return nil, rpctypes.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
+		return nil, rpctypes.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 	}
 
 	// Validate required fields

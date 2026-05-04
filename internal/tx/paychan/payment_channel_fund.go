@@ -9,12 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-func init() {
-	tx.Register(tx.TypePaymentChannelFund, func() tx.Transaction {
-		return &PaymentChannelFund{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelFund, "")}
-	})
-}
-
 // PaymentChannelFund adds more XRP to a payment channel.
 // Reference: rippled PayChan.cpp PayChanFund
 type PaymentChannelFund struct {

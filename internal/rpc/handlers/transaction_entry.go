@@ -31,7 +31,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	}
 
 	if request.TxHash == "" {
-		return nil, types.NewRpcError(-1, "fieldNotFoundTransaction", "fieldNotFoundTransaction", "Missing field 'tx_hash'.")
+		return nil, types.RpcErrorFieldNotFoundTransaction()
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
