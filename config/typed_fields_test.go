@@ -181,8 +181,9 @@ func TestTypedFields_FetchDepth_None(t *testing.T) {
 
 	assert.True(t, cfg.FetchDepth.Set)
 	assert.False(t, cfg.FetchDepth.Full)
-	assert.Equal(t, 0, cfg.FetchDepth.Count)
-	// rippled clamps any sub-10 value (including the 0 produced by "none") up to 10.
+	// Rippled mutates FETCH_DEPTH itself (Config.cpp:671-672); the decoder
+	// applies the same clamp so Count is observably the post-floor value.
+	assert.Equal(t, 10, cfg.FetchDepth.Count)
 	got, err := cfg.GetFetchDepth()
 	require.NoError(t, err)
 	assert.Equal(t, 10, got)
@@ -208,7 +209,9 @@ func TestTypedFields_FetchDepth_BelowMinClamps(t *testing.T) {
 	cfg, err := writeAndLoad(t, toml)
 	require.NoError(t, err)
 
-	assert.Equal(t, 5, cfg.FetchDepth.Count)
+	// Clamp is applied at decode time so direct field reads see the floor
+	// rather than the raw 5.
+	assert.Equal(t, 10, cfg.FetchDepth.Count)
 	got, err := cfg.GetFetchDepth()
 	require.NoError(t, err)
 	assert.Equal(t, 10, got)
@@ -258,7 +261,44 @@ func TestTypedFields_NetworkID_UnknownName(t *testing.T) {
 	toml := "ledger_history = 256\nfetch_depth = \"full\"\nnetwork_id = \"someothernet\"\n" + baseTOMLWithoutUnionFields()
 	_, err := writeAndLoad(t, toml)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown network name")
+	assert.Contains(t, err.Error(), "invalid network_id")
+}
+
+// TestTypedFields_NetworkID_EmptyString rejects network_id = "" the same
+// way rippled's lexicalCastThrow<uint32_t>("") does (Config.cpp:531-532).
+// Without the explicit reject, an empty string would silently decode to
+// ID = 0 (mainnet).
+func TestTypedFields_NetworkID_EmptyString(t *testing.T) {
+	toml := "ledger_history = 256\nfetch_depth = \"full\"\nnetwork_id = \"\"\n" + baseTOMLWithoutUnionFields()
+	_, err := writeAndLoad(t, toml)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid network_id")
+}
+
+// TestTypedFields_RejectNegativeAndOverflow checks that the numeric
+// branches mirror rippled's lexicalCastThrow<uint32_t>: negative integers
+// and integers > uint32::max are rejected at decode time rather than
+// silently truncated.
+func TestTypedFields_RejectNegativeAndOverflow(t *testing.T) {
+	cases := []struct {
+		name string
+		toml string
+		msg  string
+	}{
+		{"ledger_history negative", "ledger_history = -5\nfetch_depth = \"full\"\nnetwork_id = \"main\"\n", "ledger_history"},
+		{"ledger_history overflow", "ledger_history = 5000000000\nfetch_depth = \"full\"\nnetwork_id = \"main\"\n", "ledger_history"},
+		{"fetch_depth negative", "ledger_history = 256\nfetch_depth = -1\nnetwork_id = \"main\"\n", "fetch_depth"},
+		{"fetch_depth overflow", "ledger_history = 256\nfetch_depth = 5000000000\nnetwork_id = \"main\"\n", "fetch_depth"},
+		{"network_id negative", "ledger_history = 256\nfetch_depth = \"full\"\nnetwork_id = -1\n", "network_id"},
+		{"network_id overflow", "ledger_history = 256\nfetch_depth = \"full\"\nnetwork_id = 5000000000\n", "network_id"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := writeAndLoad(t, tc.toml+baseTOMLWithoutUnionFields())
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.msg)
+		})
+	}
 }
 
 // TestTypedFields_NetworkID_DigitString matches rippled's
@@ -302,11 +342,6 @@ rpc_startup = [
 	require.True(t, ok, "expected streams to be []any, got %T", cfg.RPCStartup[1].Params["streams"])
 	require.Len(t, streams, 1)
 	assert.Equal(t, "ledger", streams[0])
-
-	// AsMap round-trips back to the legacy shape.
-	m := cfg.RPCStartup[0].AsMap()
-	assert.Equal(t, "log_level", m["command"])
-	assert.Equal(t, "warning", m["severity"])
 }
 
 func TestTypedFields_RPCStartup_MissingCommand(t *testing.T) {

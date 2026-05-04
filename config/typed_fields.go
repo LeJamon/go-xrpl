@@ -30,10 +30,11 @@ type LedgerHistory struct {
 func (lh LedgerHistory) IsZero() bool { return !lh.Set }
 
 // Value returns the integer representation used elsewhere in the codebase:
-// the explicit count, or math.MaxInt32 for "full" (matching rippled's
-// std::numeric_limits<uint32_t>::max() behaviour in Config.cpp:654-655 so
-// that downstream comparisons such as `online_delete < ledger_history`
-// fire the same way as in rippled — see SHAMapStoreImp.cpp:148-154).
+// the explicit count, or a sufficiently large sentinel (math.MaxInt32) for
+// "full". Rippled uses std::numeric_limits<uint32_t>::max() (Config.cpp:654-655);
+// math.MaxInt32 is not numerically equal but is large enough to fire the
+// downstream `online_delete < ledger_history` comparison the same way as
+// rippled — see SHAMapStoreImp.cpp:148-154.
 func (lh LedgerHistory) Value() int {
 	if lh.Full {
 		return math.MaxInt32
@@ -45,6 +46,11 @@ func (lh LedgerHistory) Value() int {
 // TOML accepts an integer or one of the strings "full" or "none"
 // (case-insensitive, matching rippled's boost::iequals comparison in
 // Config.cpp:664-666).
+//
+// The decoder clamps any explicit count below 10 up to 10 to mirror
+// rippled's hard floor (Config.cpp:671-672), so `Count` is the value
+// that callers should observe and `Value()` is a thin convenience over
+// the same number.
 type FetchDepth struct {
 	Set   bool
 	Full  bool
@@ -54,14 +60,10 @@ type FetchDepth struct {
 func (fd FetchDepth) IsZero() bool { return !fd.Set }
 
 // Value returns the integer representation: math.MaxInt32 for "full",
-// otherwise the explicit count clamped to a minimum of 10 (rippled's
-// FETCH_DEPTH < 10 → 10 floor in Config.cpp:671-672).
+// otherwise `Count` (which the decoder has already clamped to >= 10).
 func (fd FetchDepth) Value() int {
 	if fd.Full {
 		return math.MaxInt32
-	}
-	if fd.Count < fetchDepthMin {
-		return fetchDepthMin
 	}
 	return fd.Count
 }
@@ -70,7 +72,8 @@ func (fd FetchDepth) Value() int {
 // TOML accepts an integer (network ID) or one of the named strings
 // "main", "testnet", "devnet". A digit-string (e.g. "21338") is parsed
 // numerically to match rippled's beast::lexicalCastThrow<uint32_t>
-// fallback in Config.cpp:531-532.
+// fallback in Config.cpp:531-532. Any other string (including empty) is
+// rejected at decode time, mirroring rippled's lexical-cast throw.
 type NetworkID struct {
 	Set  bool
 	ID   int
@@ -89,20 +92,6 @@ type RPCStartupCommand struct {
 	Command string
 	// Params holds all other key/value pairs for this entry.
 	Params map[string]any
-}
-
-// AsMap returns a map containing the command plus all params, preserving
-// the legacy `[]map[string]interface{}` shape for downstream consumers
-// that need to forward the data unchanged.
-func (c RPCStartupCommand) AsMap() map[string]any {
-	out := make(map[string]any, len(c.Params)+1)
-	for k, v := range c.Params {
-		out[k] = v
-	}
-	if c.Command != "" {
-		out["command"] = c.Command
-	}
-	return out
 }
 
 // configDecodeHook returns a mapstructure decode hook that converts raw
@@ -130,16 +119,46 @@ func configDecodeHook() mapstructure.DecodeHookFunc {
 	}
 }
 
-func decodeLedgerHistory(data any) (LedgerHistory, error) {
+// asUint32 normalises a numeric `data` value into a non-negative int that
+// fits in a uint32, mirroring rippled's beast::lexicalCastThrow<uint32_t>
+// rejection of negatives and out-of-range values. Returns ok=false when
+// `data` is not a recognised numeric type.
+func asUint32(field string, data any) (n int, ok bool, err error) {
+	checkRange := func(v int64) (int, error) {
+		if v < 0 || v > math.MaxUint32 {
+			return 0, fmt.Errorf("invalid %s value: %d (out of range [0, %d])", field, v, uint32(math.MaxUint32))
+		}
+		return int(v), nil
+	}
 	switch v := data.(type) {
 	case int:
-		return LedgerHistory{Set: true, Count: v}, nil
+		out, err := checkRange(int64(v))
+		return out, true, err
 	case int64:
-		return LedgerHistory{Set: true, Count: int(v)}, nil
+		out, err := checkRange(v)
+		return out, true, err
 	case uint64:
-		return LedgerHistory{Set: true, Count: int(v)}, nil
+		if v > math.MaxUint32 {
+			return 0, true, fmt.Errorf("invalid %s value: %d (out of range [0, %d])", field, v, uint32(math.MaxUint32))
+		}
+		return int(v), true, nil
 	case float64:
-		return LedgerHistory{Set: true, Count: int(v)}, nil
+		if v < 0 || v > math.MaxUint32 || v != math.Trunc(v) {
+			return 0, true, fmt.Errorf("invalid %s value: %v (must be a non-negative integer ≤ %d)", field, v, uint32(math.MaxUint32))
+		}
+		return int(v), true, nil
+	}
+	return 0, false, nil
+}
+
+func decodeLedgerHistory(data any) (LedgerHistory, error) {
+	if n, ok, err := asUint32("ledger_history", data); ok {
+		if err != nil {
+			return LedgerHistory{}, err
+		}
+		return LedgerHistory{Set: true, Count: n}, nil
+	}
+	switch v := data.(type) {
 	case string:
 		switch {
 		case strings.EqualFold(v, "full"):
@@ -147,8 +166,8 @@ func decodeLedgerHistory(data any) (LedgerHistory, error) {
 		case strings.EqualFold(v, "none"):
 			return LedgerHistory{Set: true, Count: 0}, nil
 		}
-		if n, err := strconv.Atoi(v); err == nil {
-			return LedgerHistory{Set: true, Count: n}, nil
+		if n, err := strconv.ParseUint(v, 10, 32); err == nil {
+			return LedgerHistory{Set: true, Count: int(n)}, nil
 		}
 		return LedgerHistory{}, fmt.Errorf("invalid ledger_history value: %q (expected integer, \"full\", or \"none\")", v)
 	case nil:
@@ -159,24 +178,28 @@ func decodeLedgerHistory(data any) (LedgerHistory, error) {
 }
 
 func decodeFetchDepth(data any) (FetchDepth, error) {
+	clamp := func(n int) int {
+		if n < fetchDepthMin {
+			return fetchDepthMin
+		}
+		return n
+	}
+	if n, ok, err := asUint32("fetch_depth", data); ok {
+		if err != nil {
+			return FetchDepth{}, err
+		}
+		return FetchDepth{Set: true, Count: clamp(n)}, nil
+	}
 	switch v := data.(type) {
-	case int:
-		return FetchDepth{Set: true, Count: v}, nil
-	case int64:
-		return FetchDepth{Set: true, Count: int(v)}, nil
-	case uint64:
-		return FetchDepth{Set: true, Count: int(v)}, nil
-	case float64:
-		return FetchDepth{Set: true, Count: int(v)}, nil
 	case string:
 		switch {
 		case strings.EqualFold(v, "full"):
 			return FetchDepth{Set: true, Full: true}, nil
 		case strings.EqualFold(v, "none"):
-			return FetchDepth{Set: true, Count: 0}, nil
+			return FetchDepth{Set: true, Count: clamp(0)}, nil
 		}
-		if n, err := strconv.Atoi(v); err == nil {
-			return FetchDepth{Set: true, Count: n}, nil
+		if n, err := strconv.ParseUint(v, 10, 32); err == nil {
+			return FetchDepth{Set: true, Count: clamp(int(n))}, nil
 		}
 		return FetchDepth{}, fmt.Errorf("invalid fetch_depth value: %q (expected integer, \"full\", or \"none\")", v)
 	case nil:
@@ -187,18 +210,17 @@ func decodeFetchDepth(data any) (FetchDepth, error) {
 }
 
 func decodeNetworkID(data any) (NetworkID, error) {
+	if n, ok, err := asUint32("network_id", data); ok {
+		if err != nil {
+			return NetworkID{}, err
+		}
+		return NetworkID{Set: true, ID: n}, nil
+	}
 	switch v := data.(type) {
-	case int:
-		return NetworkID{Set: true, ID: v}, nil
-	case int64:
-		return NetworkID{Set: true, ID: int(v)}, nil
-	case uint64:
-		return NetworkID{Set: true, ID: int(v)}, nil
-	case float64:
-		return NetworkID{Set: true, ID: int(v)}, nil
 	case string:
 		// Rippled's named-string aliases are case-sensitive (Config.cpp:525-530
-		// uses operator==). Other strings fall through to a uint32 lexical_cast.
+		// uses operator==). Other strings fall through to a uint32 lexical_cast,
+		// which throws on empty / non-digit / out-of-range input.
 		switch v {
 		case "main", "testnet", "devnet":
 			return NetworkID{Set: true, Name: v}, nil
@@ -206,7 +228,7 @@ func decodeNetworkID(data any) (NetworkID, error) {
 		if n, err := strconv.ParseUint(v, 10, 32); err == nil {
 			return NetworkID{Set: true, ID: int(n)}, nil
 		}
-		return NetworkID{Set: true, Name: v}, nil
+		return NetworkID{}, fmt.Errorf("invalid network_id value: %q (expected integer or one of \"main\", \"testnet\", \"devnet\")", v)
 	case nil:
 		return NetworkID{}, nil
 	default:
