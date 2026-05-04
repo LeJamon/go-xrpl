@@ -695,7 +695,25 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 }
 
 func (p *Peer) pingLoop(ctx context.Context) error {
-	ticker := time.NewTicker(15 * time.Second)
+	// Delay the first probe by pingTimeout so the cold-start envelope
+	// matches rippled: first ping at t≈pingTimeout (PeerImp.cpp:61's
+	// setTimer + onTimer chain), first disconnect-on-silence at
+	// t≈2*pingTimeout. Without this delay, goXRPL's pingProbeInterval
+	// tick would send the first ping at t≈pingProbeInterval and evict
+	// a never-answering peer ~45s earlier than rippled.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-p.closeCh:
+		return nil
+	case <-time.After(pingTimeout):
+	}
+
+	if err := p.runPingTick(time.Now()); err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(pingProbeInterval)
 	defer ticker.Stop()
 
 	for {
@@ -745,11 +763,25 @@ const (
 	// pingTimeout: disconnect when the oldest unanswered ping reaches
 	// this age. Mirrors rippled's PeerImp::onTimer "Already waiting for
 	// PONG → fail('Ping Timeout')" (PeerImp.cpp:731-736) with rippled's
-	// 60s peerTimerInterval (PeerImp.cpp:61). At the moment the
-	// disconnect fires, the unanswered ping's age is ≈60s in both
-	// implementations; the 15s tick only changes when goXRPL first
-	// probes a quiet peer (≈15s from connect, vs rippled's ≈60s).
+	// 60s peerTimerInterval (PeerImp.cpp:61). The disconnect criterion
+	// is the same in both implementations: an unanswered ping reaches
+	// age 60s.
+	//
+	// pingLoop also uses pingTimeout as the cold-start delay before
+	// the first probe. Together with pingProbeInterval-cadence ticks
+	// thereafter, this matches rippled's cold-start envelope (first
+	// ping at t≈pingTimeout, first disconnect-on-silence at
+	// t≈2*pingTimeout). Steady-state probing is finer in goXRPL
+	// (every pingProbeInterval) for better latency resolution; the
+	// OnPong sweep keeps the disconnect criterion equivalent under
+	// partial pong loss — see OnPong's doc.
 	pingTimeout = 60 * time.Second
+	// pingProbeInterval: cadence of pings after the first one.
+	// Finer than rippled's 60s peerTimerInterval for tighter latency
+	// estimation; multiple pings can be in flight concurrently and
+	// are coalesced by OnPong's sweep so the disconnect criterion
+	// remains "no pong for ≥pingTimeout".
+	pingProbeInterval = 15 * time.Second
 	// pingInFlightTTL bounds map growth between successful pongs. Set
 	// equal to pingTimeout so recordPingSent's GC sweep cannot evict
 	// an entry that staleInFlightPing would still treat as live: any
