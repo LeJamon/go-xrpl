@@ -236,11 +236,9 @@ type Overlay struct {
 	// droppedMessages so the two traffic classes can be distinguished.
 	droppedLedgerResponses atomic.Uint64
 
-	// pingTimeoutDisconnects counts peers torn down because pingLoop's
-	// oldest in-flight ping aged past pingTimeout (peer.go runPingTick).
-	// Mirrors rippled's fail("Ping Timeout") at PeerImp.cpp:731-736.
-	// Surfaced via PingTimeoutDisconnects() so operators can distinguish
-	// silent-peer eviction from other connection-error counters.
+	// pingTimeoutDisconnects counts peers torn down because the oldest
+	// in-flight ping aged past pingTimeout. Mirrors rippled's
+	// fail("Ping Timeout") at PeerImp.cpp:731-736.
 	pingTimeoutDisconnects atomic.Uint64
 
 	// Network
@@ -1101,10 +1099,6 @@ func (o *Overlay) PingTimeoutDisconnects() uint64 {
 	return o.pingTimeoutDisconnects.Load()
 }
 
-// notePeerRunEnded centralises post-Run accounting shared between the
-// inbound and outbound peer goroutines so a future error class (e.g.
-// a "Not useful" tracking-divergence eviction, mirroring rippled's
-// PeerImp::onTimer at PeerImp.cpp:711-728) is wired in once.
 func (o *Overlay) notePeerRunEnded(err error) {
 	if errors.Is(err, ErrPingTimeout) {
 		o.pingTimeoutDisconnects.Add(1)

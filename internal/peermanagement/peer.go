@@ -712,13 +712,6 @@ func (p *Peer) pingLoop(ctx context.Context) error {
 	}
 }
 
-// runPingTick performs the per-tick body of pingLoop. Returns
-// ErrPingTimeout when the oldest in-flight ping has reached
-// pingTimeout, the Send error when the new ping cannot be queued,
-// or nil when the ping was sent (or this tick was skipped due to
-// an encoding hiccup). Extracted from pingLoop so the timeout
-// path is exercisable without driving a real ticker, locking the
-// stale-check-before-record ordering required for correctness.
 func (p *Peer) runPingTick(now time.Time) error {
 	if seq, age, ok := p.staleInFlightPing(now, pingTimeout); ok {
 		slog.Warn("peer ping timeout",
@@ -769,9 +762,6 @@ const (
 	pingsInFlightCap = 16
 )
 
-// staleInFlightPing returns the oldest in-flight ping whose age has
-// reached threshold. Pure read against the pingsInFlight map for
-// testability.
 func (p *Peer) staleInFlightPing(now time.Time, threshold time.Duration) (seq uint32, age time.Duration, ok bool) {
 	p.latencyMu.RLock()
 	defer p.latencyMu.RUnlock()
