@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/config"
 	"github.com/LeJamon/goXRPLd/internal/rpc/subscription"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
@@ -30,7 +31,7 @@ type WebSocketServer struct {
 	methodRegistry      *types.MethodRegistry
 	connections         map[string]*WebSocketConnection
 	connectionsMutex    sync.RWMutex
-	timeout             time.Duration
+	wsConfig            config.WebSocketConfig
 	ledgerInfoProvider  types.LedgerInfoProvider
 	connLimiter         *ConnLimiter
 	services            *types.ServiceContainer
@@ -53,11 +54,12 @@ type WebSocketConnection struct {
 	portCtx         *PortContext     // per-port config for role determination
 }
 
-// NewWebSocketServer creates a new WebSocket server. The provided
-// service container is attached to every RpcContext routed through the
-// server so handlers reach the ledger via ctx.Services. May be nil for
-// test contexts.
-func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer) *WebSocketServer {
+// NewWebSocketServer creates a new WebSocket server. The service
+// container is attached to every RpcContext routed through the server
+// so handlers reach the ledger via ctx.Services; nil is allowed for
+// test contexts. Zero-valued wsCfg fields fall back to their
+// config.Default* counterparts.
+func NewWebSocketServer(services *types.ServiceContainer, wsCfg config.WebSocketConfig) *WebSocketServer {
 	return &WebSocketServer{
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
@@ -72,7 +74,7 @@ func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer)
 		},
 		methodRegistry: types.NewMethodRegistry(),
 		connections:    make(map[string]*WebSocketConnection),
-		timeout:        timeout,
+		wsConfig:       wsCfg.WithDefaults(),
 		services:       services,
 	}
 }
@@ -151,11 +153,11 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (ws *WebSocketServer) handleConnection(wsConn *WebSocketConnection) {
 	defer ws.closeConnection(wsConn)
 
-	wsConn.conn.SetReadLimit(512 * 1024) // 512KB max message size
+	wsConn.conn.SetReadLimit(ws.wsConfig.MaxReadSize)
 
 	// Set up pong handler to reset read deadline on pong received
 	wsConn.conn.SetPongHandler(func(string) error {
-		wsConn.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		wsConn.conn.SetReadDeadline(time.Now().Add(ws.wsConfig.PongTimeout))
 		return nil
 	})
 
@@ -168,7 +170,7 @@ func (ws *WebSocketServer) handleConnection(wsConn *WebSocketConnection) {
 
 	// Read loop - this is blocking and runs until error or close
 	for {
-		wsConn.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		wsConn.conn.SetReadDeadline(time.Now().Add(ws.wsConfig.ReadTimeout))
 
 		// Read message from WebSocket (blocking)
 		_, message, err := wsConn.conn.ReadMessage()
@@ -192,7 +194,7 @@ func (ws *WebSocketServer) handleConnection(wsConn *WebSocketConnection) {
 
 // pingLoop sends periodic pings to keep the connection alive
 func (ws *WebSocketServer) pingLoop(wsConn *WebSocketConnection) {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(ws.wsConfig.PingInterval)
 	defer ticker.Stop()
 
 	for {
@@ -200,7 +202,7 @@ func (ws *WebSocketServer) pingLoop(wsConn *WebSocketConnection) {
 		case <-wsConn.ctx.Done():
 			return
 		case <-ticker.C:
-			wsConn.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			wsConn.conn.SetWriteDeadline(time.Now().Add(ws.wsConfig.WriteTimeout))
 			if err := wsConn.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				wsLog().Debug("WebSocket ping failed", "err", err)
 				return
@@ -218,7 +220,7 @@ func (ws *WebSocketServer) handleSend(wsConn *WebSocketConnection) {
 		case <-wsConn.closeChannel:
 			return
 		case message := <-wsConn.sendChannel:
-			wsConn.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			wsConn.conn.SetWriteDeadline(time.Now().Add(ws.wsConfig.WriteTimeout))
 			if err := wsConn.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				wsLog().Debug("WebSocket send failed", "err", err)
 				return

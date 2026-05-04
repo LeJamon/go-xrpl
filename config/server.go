@@ -4,7 +4,103 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 )
+
+// Default WebSocket connection limits and timeouts applied when the
+// [websocket] section is omitted from config.
+const (
+	DefaultWebSocketMaxReadSize  int64         = 512 * 1024
+	DefaultWebSocketReadTimeout  time.Duration = 90 * time.Second
+	DefaultWebSocketWriteTimeout time.Duration = 10 * time.Second
+	DefaultWebSocketPingInterval time.Duration = 30 * time.Second
+	DefaultWebSocketPongTimeout  time.Duration = 90 * time.Second
+)
+
+// minWebSocketDuration is the lower bound enforced by Validate on every
+// duration field. It guards against unit typos (e.g., "30ns" instead of
+// "30s") that would otherwise pin the read/write/ping loops at fractions
+// of a millisecond and burn CPU.
+const minWebSocketDuration = 100 * time.Millisecond
+
+// minWebSocketReadSize is the lower bound enforced by Validate on
+// MaxReadSize. It guards against trivially-broken values (e.g., a
+// single-digit byte cap) that would reject every realistic XRPL command
+// frame and render the server unreachable.
+const minWebSocketReadSize int64 = 1024
+
+// WebSocketConfig holds tunable per-connection WebSocket limits and
+// timeouts. Zero-valued fields fall back to the matching Default*
+// constants via WithDefaults, so an omitted [websocket] section yields
+// the documented defaults.
+type WebSocketConfig struct {
+	MaxReadSize  int64         `toml:"max_read_size" mapstructure:"max_read_size"`
+	ReadTimeout  time.Duration `toml:"read_timeout" mapstructure:"read_timeout"`
+	WriteTimeout time.Duration `toml:"write_timeout" mapstructure:"write_timeout"`
+	PingInterval time.Duration `toml:"ping_interval" mapstructure:"ping_interval"`
+	PongTimeout  time.Duration `toml:"pong_timeout" mapstructure:"pong_timeout"`
+}
+
+// WithDefaults returns a copy of cfg with each zero-valued field
+// replaced by its matching Default* constant. Use the returned value;
+// the receiver is unchanged.
+func (cfg WebSocketConfig) WithDefaults() WebSocketConfig {
+	if cfg.MaxReadSize <= 0 {
+		cfg.MaxReadSize = DefaultWebSocketMaxReadSize
+	}
+	if cfg.ReadTimeout <= 0 {
+		cfg.ReadTimeout = DefaultWebSocketReadTimeout
+	}
+	if cfg.WriteTimeout <= 0 {
+		cfg.WriteTimeout = DefaultWebSocketWriteTimeout
+	}
+	if cfg.PingInterval <= 0 {
+		cfg.PingInterval = DefaultWebSocketPingInterval
+	}
+	if cfg.PongTimeout <= 0 {
+		cfg.PongTimeout = DefaultWebSocketPongTimeout
+	}
+	return cfg
+}
+
+// Validate accepts zero (use the default) or values >= their minimum.
+// The zero/positive split keeps "[websocket] omitted" valid while
+// catching unit typos and trivially-broken values that would silently
+// break the server at runtime.
+func (cfg WebSocketConfig) Validate() error {
+	if cfg.MaxReadSize < 0 {
+		return fmt.Errorf("websocket.max_read_size must be non-negative, got %d", cfg.MaxReadSize)
+	}
+	if cfg.MaxReadSize > 0 && cfg.MaxReadSize < minWebSocketReadSize {
+		return fmt.Errorf("websocket.max_read_size must be >= %d bytes (likely unit typo), got %d", minWebSocketReadSize, cfg.MaxReadSize)
+	}
+	if err := validateWebSocketDuration("read_timeout", cfg.ReadTimeout); err != nil {
+		return err
+	}
+	if err := validateWebSocketDuration("write_timeout", cfg.WriteTimeout); err != nil {
+		return err
+	}
+	if err := validateWebSocketDuration("ping_interval", cfg.PingInterval); err != nil {
+		return err
+	}
+	if err := validateWebSocketDuration("pong_timeout", cfg.PongTimeout); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateWebSocketDuration(field string, d time.Duration) error {
+	if d == 0 {
+		return nil
+	}
+	if d < 0 {
+		return fmt.Errorf("websocket.%s must be non-negative, got %s", field, d)
+	}
+	if d < minWebSocketDuration {
+		return fmt.Errorf("websocket.%s must be >= %s (likely unit typo), got %s", field, minWebSocketDuration, d)
+	}
+	return nil
+}
 
 // ServerConfig represents the [server] section
 // This defines the ports that the server will listen on and default values

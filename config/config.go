@@ -75,9 +75,15 @@ type Config struct {
 	BetaRPCAPI     int         `toml:"beta_rpc_api" mapstructure:"beta_rpc_api"`
 
 	// Special startup commands
-	RPCStartup             []RPCStartupCommand `toml:"rpc_startup" mapstructure:"rpc_startup"`
-	WebsocketPingFrequency int                 `toml:"websocket_ping_frequency" mapstructure:"websocket_ping_frequency"`
-	ServerDomain           string              `toml:"server_domain" mapstructure:"server_domain"`
+	RPCStartup []RPCStartupCommand `toml:"rpc_startup" mapstructure:"rpc_startup"`
+
+	// Deprecated: top-level websocket_ping_frequency is unused; configure
+	// websocket.ping_interval under the [websocket] section instead.
+	// Retained so existing configs continue to parse.
+	WebsocketPingFrequency int    `toml:"websocket_ping_frequency" mapstructure:"websocket_ping_frequency"`
+	ServerDomain           string `toml:"server_domain" mapstructure:"server_domain"`
+
+	WebSocket WebSocketConfig `toml:"websocket" mapstructure:"websocket"`
 
 	// Genesis file path (JSON format)
 	// If empty, uses built-in default genesis configuration

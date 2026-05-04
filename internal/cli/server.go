@@ -314,8 +314,7 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	services.SetDispatcher(httpServer)
 
-	// Create WebSocket server for real-time subscriptions
-	wsServer := rpc.NewWebSocketServer(30*time.Second, services)
+	wsServer := rpc.NewWebSocketServer(services, globalConfig.WebSocket)
 	wsServer.RegisterAllMethods()
 
 	// Create a ledger info provider adapter for WebSocket subscribe responses
