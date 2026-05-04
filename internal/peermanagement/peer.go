@@ -757,9 +757,14 @@ const (
 	// implementations; the 15s tick only changes when goXRPL first
 	// probes a quiet peer (≈15s from connect, vs rippled's ≈60s).
 	pingTimeout = 60 * time.Second
-	// pingInFlightTTL must be >= pingTimeout: recordPingSent's GC sweep
-	// runs after staleInFlightPing on each tick, so trimming earlier
-	// would evict the very entry the timeout check is about to flag.
+	// pingInFlightTTL bounds map growth between successful pongs. Set
+	// equal to pingTimeout so recordPingSent's GC sweep cannot evict
+	// an entry that staleInFlightPing would still treat as live: any
+	// entry with age < pingTimeout has age < pingInFlightTTL and is
+	// retained, while stale entries (age >= pingTimeout) trigger the
+	// disconnect on this tick before a future tick's GC could mask
+	// them. Any TTL smaller than pingTimeout would silently shrink
+	// the disconnect window.
 	pingInFlightTTL  = pingTimeout
 	pingsInFlightCap = 16
 )
@@ -840,6 +845,18 @@ func roundMillisHalfEven(d time.Duration) time.Duration {
 // the EWMA-smoothed latency. Mirrors PeerImp::onMessage(TMPing)
 // (PeerImp.cpp:1099-1118): rtt is rounded to ms, then smoothed at ms
 // granularity via latency = (latency*7 + rtt) / 8.
+//
+// A matching pong also evicts every pending entry sent at-or-before
+// the matched send-time. Rippled keeps a single in-flight ping
+// (PeerImp.h:115 `std::optional<uint32_t> lastPingSeq_`), so its 60s
+// ping-timeout fires only when the most-recent cycle goes
+// unanswered. goXRPL ticks at 15s and may queue several pings while
+// a pong is in transit; without this sweep, a peer that drops one
+// ping per 60s window but otherwise responds promptly would be
+// evicted by staleInFlightPing's oldest-wins check, while rippled
+// would keep it. Clearing older entries makes the disconnect
+// criterion "no pong for ≥pingTimeout" instead of "any single ping
+// ≥pingTimeout old", matching rippled's single-cycle semantics.
 func (p *Peer) OnPong(seq uint32, receivedAt time.Time) {
 	p.latencyMu.Lock()
 	defer p.latencyMu.Unlock()
@@ -848,6 +865,11 @@ func (p *Peer) OnPong(seq uint32, receivedAt time.Time) {
 		return
 	}
 	delete(p.pingsInFlight, seq)
+	for s, t := range p.pingsInFlight {
+		if !t.After(sentAt) {
+			delete(p.pingsInFlight, s)
+		}
+	}
 	rtt := roundMillisHalfEven(receivedAt.Sub(sentAt))
 	if !p.hasLatency {
 		p.latency = rtt

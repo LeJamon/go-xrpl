@@ -754,9 +754,7 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 		err := peer.Run(ctx)
 		if err != nil {
 			slog.Info("Inbound peer run ended", "t", "Overlay", "remote", remoteAddr, "err", err)
-			if errors.Is(err, ErrPingTimeout) {
-				o.pingTimeoutDisconnects.Add(1)
-			}
+			o.notePeerRunEnded(err)
 		}
 		o.removePeer(peerID)
 	}()
@@ -1101,6 +1099,16 @@ func (o *Overlay) DroppedMessages() uint64 {
 // have stopped servicing the overlay protocol.
 func (o *Overlay) PingTimeoutDisconnects() uint64 {
 	return o.pingTimeoutDisconnects.Load()
+}
+
+// notePeerRunEnded centralises post-Run accounting shared between the
+// inbound and outbound peer goroutines so a future error class (e.g.
+// a "Not useful" tracking-divergence eviction, mirroring rippled's
+// PeerImp::onTimer at PeerImp.cpp:711-728) is wired in once.
+func (o *Overlay) notePeerRunEnded(err error) {
+	if errors.Is(err, ErrPingTimeout) {
+		o.pingTimeoutDisconnects.Add(1)
+	}
 }
 
 // DroppedLedgerResponses returns the cumulative count of ledger-sync
@@ -1628,6 +1636,7 @@ func (o *Overlay) Connect(addr string) error {
 		err := peer.Run(o.ctx)
 		if err != nil {
 			slog.Info("Peer run ended", "t", "Overlay", "addr", addr, "err", err)
+			o.notePeerRunEnded(err)
 		}
 		o.removePeer(peerID)
 	}()

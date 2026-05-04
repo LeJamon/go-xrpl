@@ -74,6 +74,41 @@ func TestPeer_RunPingTick_StalePingReturnsErrPingTimeout(t *testing.T) {
 	require.ErrorIs(t, err, ErrPingTimeout)
 }
 
+// TestPeer_OnPong_ClearsOlderInFlight pins the single-cycle semantics
+// adopted to match rippled (PeerImp.h:115's lone std::optional<uint32>
+// lastPingSeq_): a matching pong evicts every in-flight entry sent
+// at-or-before the matched send-time, so a peer that responds to the
+// most recent ping is never disconnected by a still-pending older
+// one. Without this, goXRPL's 15s tick + 60s timeout would evict
+// peers under partial pong loss that rippled keeps.
+func TestPeer_OnPong_ClearsOlderInFlight(t *testing.T) {
+	p := newLatencyTestPeer(t)
+	base := time.Now()
+	p.recordPingSent(1, base)                    // older, will be lost
+	p.recordPingSent(2, base.Add(time.Second))   // older, will be lost
+	p.recordPingSent(3, base.Add(2*time.Second)) // matched
+	p.recordPingSent(4, base.Add(3*time.Second)) // newer than the matched, must survive
+
+	p.OnPong(3, base.Add(2*time.Second+10*time.Millisecond))
+
+	p.latencyMu.RLock()
+	_, has1 := p.pingsInFlight[1]
+	_, has2 := p.pingsInFlight[2]
+	_, has3 := p.pingsInFlight[3]
+	_, has4 := p.pingsInFlight[4]
+	p.latencyMu.RUnlock()
+
+	assert.False(t, has1, "older ping must be cleared by matching pong")
+	assert.False(t, has2, "older ping must be cleared by matching pong")
+	assert.False(t, has3, "matched ping must be cleared")
+	assert.True(t, has4, "ping sent after the matched one must survive")
+
+	// At the moment seq=1 would have aged out (had it not been cleared),
+	// the surviving seq=4 is only pingTimeout-3s old — still fresh.
+	_, _, stale := p.staleInFlightPing(base.Add(pingTimeout), pingTimeout)
+	assert.False(t, stale, "no stale candidate after responsive pong sweeps older entries")
+}
+
 // TestPeer_RunPingTick_HappyPathRecordsAndSends pins the non-timeout
 // branch: with no stale ping, runPingTick records the freshly-issued
 // seq in pingsInFlight and queues exactly one wire message on
