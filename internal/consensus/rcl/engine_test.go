@@ -2158,3 +2158,74 @@ drain:
 		t.Errorf("hard abandon must not emit ResultTimeout (that is the soft branch)")
 	}
 }
+
+// TestEngine_IsProposing_LockFreeWhileWriterHoldsMu pins the issue
+// #381 follow-up: the RPC server_info hot path
+// (Service.GetServerInfo holds ledger.s.mu.RLock → serverStateFunc →
+// engine.IsProposing) used to acquire e.mu.RLock, which deadlocked
+// against any engine writer that needed ledger.s.mu (e.g.
+// OnValidation → fullyValidatedCallback → SetValidatedLedger). With
+// the atomic mode mirror, IsProposing must complete immediately
+// regardless of who currently holds e.mu — including a writer that
+// will never release.
+func TestEngine_IsProposing_LockFreeWhileWriterHoldsMu(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	// Drive the engine into ModeProposing so IsProposing must return
+	// true. StartRound takes e.mu under the hood.
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if !engine.IsProposing() {
+		t.Fatalf("preconditions: expected IsProposing=true after StartRound(true) in OpModeFull")
+	}
+
+	// Simulate a stuck writer: hold e.mu.Lock() until the test ends.
+	writerHasLock := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	go func() {
+		engine.mu.Lock()
+		close(writerHasLock)
+		<-releaseWriter
+		engine.mu.Unlock()
+	}()
+	defer close(releaseWriter)
+	<-writerHasLock
+
+	// IsProposing must NOT block on the contended e.mu — the read
+	// is served from the atomic mirror. Run on a separate goroutine
+	// with a tight timeout so a regression cannot pass by simply
+	// being slow.
+	done := make(chan bool, 1)
+	go func() {
+		done <- engine.IsProposing()
+	}()
+
+	select {
+	case got := <-done:
+		if !got {
+			t.Errorf("IsProposing returned false while we are in ModeProposing")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("IsProposing blocked while a writer holds e.mu — atomic " +
+			"mode mirror regression (issue #381 follow-up)")
+	}
+
+	// Mode() shares the same atomic-read fast path; verify it too.
+	doneMode := make(chan consensus.Mode, 1)
+	go func() {
+		doneMode <- engine.Mode()
+	}()
+	select {
+	case got := <-doneMode:
+		if got != consensus.ModeProposing {
+			t.Errorf("Mode returned %v while we are in ModeProposing", got)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Mode blocked while a writer holds e.mu — atomic mode mirror regression")
+	}
+}

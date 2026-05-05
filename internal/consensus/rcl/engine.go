@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/consensus"
@@ -26,8 +27,16 @@ type Engine struct {
 	eventBus *consensus.EventBus
 
 	// Current state
-	mode       consensus.Mode
-	phase      consensus.Phase
+	mode  consensus.Mode
+	phase consensus.Phase
+	// modeAtomic mirrors mode for lock-free reads on the RPC hot path
+	// (server_info → serverStateFunc → IsProposing). The lock-free
+	// read also breaks an ABBA deadlock between OnValidation
+	// (e.mu.Lock → fullyValidatedCallback → ledgerService.s.mu.Lock)
+	// and GetServerInfo (s.mu.RLock → serverStateFunc →
+	// e.mu.RLock). Writes happen inside setMode, which is always
+	// called with e.mu held. Issue #381 follow-up.
+	modeAtomic atomic.Int32
 	state      *consensus.RoundState
 	prevLedger consensus.Ledger
 
@@ -190,7 +199,7 @@ func DefaultConfig() Config {
 
 // NewEngine creates a new RCL consensus engine.
 func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
-	return &Engine{
+	e := &Engine{
 		timing:          config.Timing,
 		thresholds:      config.Thresholds,
 		adaptor:         adaptor,
@@ -206,6 +215,8 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 		recentProposals: make(map[consensus.NodeID][]*consensus.Proposal),
 		deadNodes:       make(map[consensus.NodeID]struct{}),
 	}
+	e.modeAtomic.Store(int32(e.mode))
+	return e
 }
 
 // SetManifestResolver installs the validator-manifest resolver used by
@@ -839,11 +850,11 @@ func (e *Engine) State() *consensus.RoundState {
 	return e.state
 }
 
-// Mode returns the current operating mode.
+// Mode returns the current consensus mode. Reads the atomic mirror
+// so the call is lock-free — see modeAtomic on Engine for the
+// rationale (RPC hot path + ABBA deadlock with ledger service mu).
 func (e *Engine) Mode() consensus.Mode {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.mode
+	return consensus.Mode(e.modeAtomic.Load())
 }
 
 // Phase returns the current consensus phase.
@@ -853,11 +864,11 @@ func (e *Engine) Phase() consensus.Phase {
 	return e.phase
 }
 
-// IsProposing returns true if we're actively proposing.
+// IsProposing returns true if we're actively proposing. Lock-free
+// read of the atomic mode mirror; called from the RPC server_info
+// hot path while ledger.service.s.mu is held — see modeAtomic.
 func (e *Engine) IsProposing() bool {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.mode == consensus.ModeProposing
+	return consensus.Mode(e.modeAtomic.Load()) == consensus.ModeProposing
 }
 
 // Timing returns the consensus timing parameters.
@@ -1265,7 +1276,7 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID) {
 	}
 }
 
-// setMode changes the consensus mode.
+// setMode changes the consensus mode. Caller must hold e.mu.
 func (e *Engine) setMode(newMode consensus.Mode) {
 	if e.mode == newMode {
 		return
@@ -1273,6 +1284,12 @@ func (e *Engine) setMode(newMode consensus.Mode) {
 
 	oldMode := e.mode
 	e.mode = newMode
+	// Mirror to the atomic so IsProposing / Mode can read without
+	// taking e.mu.RLock(). The store is paired with the Lock-held
+	// write to e.mode above, so a lock-free reader observes either
+	// the old or new value (no torn read for an int32) — sufficient
+	// for the server_info "are we proposing?" snapshot semantics.
+	e.modeAtomic.Store(int32(newMode))
 
 	e.eventBus.Publish(&consensus.ModeChangedEvent{
 		OldMode:   oldMode,
