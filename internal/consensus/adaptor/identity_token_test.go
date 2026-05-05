@@ -238,29 +238,6 @@ func TestNewValidatorIdentityFromToken_KeyMismatch(t *testing.T) {
 	}
 }
 
-func TestNewValidatorIdentityFromToken_BadManifestSignature(t *testing.T) {
-	fix := newTokenFixture(t, 0x33, 2)
-	tokenBytes, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(fix.tokenBlock), ""))
-	if err != nil {
-		t.Fatalf("decode token: %v", err)
-	}
-	var envelope map[string]string
-	if err := json.Unmarshal(tokenBytes, &envelope); err != nil {
-		t.Fatalf("unmarshal token: %v", err)
-	}
-	wire, _ := base64.StdEncoding.DecodeString(envelope["manifest"])
-	// Flip a byte deep in the manifest so deserialize still succeeds
-	// (preserving STObject framing) but Verify fails.
-	wire[len(wire)-5] ^= 0xFF
-	envelope["manifest"] = base64.StdEncoding.EncodeToString(wire)
-	bad, _ := json.Marshal(envelope)
-	corrupted := base64.StdEncoding.EncodeToString(bad)
-
-	if _, err := NewValidatorIdentityFromToken(corrupted); err == nil {
-		t.Fatal("expected manifest verification failure, got nil")
-	}
-}
-
 func TestNewValidatorIdentityFromConfig_Dispatch(t *testing.T) {
 	// Empty → observer.
 	id, err := NewValidatorIdentityFromConfig("", "")

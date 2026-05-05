@@ -117,13 +117,14 @@ func NewValidatorIdentity(seed string) (*ValidatorIdentity, error) {
 //
 // Steps mirror rippled ValidatorKeys.cpp:42-71:
 //  1. Parse the token into manifest + 32-byte secret.
-//  2. Decode and parse the embedded manifest.
-//  3. Verify the manifest's signatures.
-//  4. Derive the public key from the secret and confirm it matches the
+//  2. Decode and parse the embedded manifest (structural invariants
+//     only; signatures are not verified here, matching rippled — the
+//     ManifestCache verifies on apply).
+//  3. Derive the public key from the secret and confirm it matches the
 //     manifest's SigningPubKey — protects against a swapped or corrupt
 //     token blob where the secret no longer signs the declared
 //     ephemeral key.
-//  5. Store master, signing, signing-priv, and the wire-format manifest
+//  4. Store master, signing, signing-priv, and the wire-format manifest
 //     so #372 can broadcast it.
 func NewValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
 	if block == "" {
@@ -140,9 +141,6 @@ func NewValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
 	m, err := manifest.Deserialize(wire)
 	if err != nil {
 		return nil, fmt.Errorf("validator_token: deserialize manifest: %w", err)
-	}
-	if err := m.Verify(); err != nil {
-		return nil, fmt.Errorf("validator_token: verify manifest: %w", err)
 	}
 
 	pub, err := secp256k1.SECP256K1().DerivePublicKeyFromSecret(tok.ValidationSecret[:])
