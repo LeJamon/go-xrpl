@@ -2,6 +2,7 @@ package negativeunlvote
 
 import (
 	"encoding/hex"
+	"fmt"
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec"
@@ -486,9 +487,10 @@ func TestDoVoting_BoundaryParticipation(t *testing.T) {
 
 // TestDoVoting_LocalCountAboveWindow covers the rippled "Too many!"
 // branch at NegativeUNLVote.cpp:236-244 — myValidationCount >
-// FlagLedgerInterval returns empty (no vote). The Go port treats
-// this as a normal no-vote rather than a producer error, matching
-// the observed effect on consensus.
+// FlagLedgerInterval. Rippled logs at error severity and returns
+// empty (no vote). The Go port returns nil blobs (no vote) AND
+// surfaces ErrLocalCountExceedsWindow so the caller can log at
+// error severity, matching rippled's observability.
 func TestDoVoting_LocalCountAboveWindow(t *testing.T) {
 	myKey := makeKey(0xAA)
 	weak := makeKey(0xBB)
@@ -501,7 +503,8 @@ func TestDoVoting_LocalCountAboveWindow(t *testing.T) {
 	}
 
 	blobs, err := v.DoVoting(1024, [32]byte{0xDE, 0xAD}, unl, State{}, scoreTable)
-	require.NoError(t, err, "above-window must NOT surface as a producer error")
+	require.ErrorIs(t, err, ErrLocalCountExceedsWindow,
+		"above-window must surface ErrLocalCountExceedsWindow so the caller can log at error severity")
 	assert.Nil(t, blobs, "myCount > FlagLedgerInterval must NOT vote")
 }
 
@@ -534,4 +537,202 @@ func TestDoVoting_ScoreTableMissingUNLMember(t *testing.T) {
 	assert.Equal(t, hex.EncodeToString(silent[:]),
 		stringFold(tx["UNLModifyValidator"]),
 		"the silent (missing-from-scoreTable) validator must be the picked candidate")
+}
+
+// makeKeyN produces a deterministic 33-byte master pubkey indexed by
+// idx. Unlike makeKey (which fills bytes 1..32 with the same byte
+// tag and so collides above 256 distinct values), makeKeyN encodes
+// the index across the first three bytes so up to 65535 distinct
+// pubkeys can be generated for the combination tests.
+func makeKeyN(idx int) [33]byte {
+	var k [33]byte
+	k[0] = 0x02
+	k[1] = byte(idx >> 8)
+	k[2] = byte(idx)
+	return k
+}
+
+// buildCombinationFixture builds the (unl, negUNL, scoreTable) tuple
+// rippled's testFindAllCandidatesCombination uses for combination 1
+// (NegativeUNL_test.cpp:1185-1257): every UNL member gets the same
+// score, the first floor(unlSize * nUnlPercent / 100) members are
+// placed on the negUNL.
+func buildCombinationFixture(unlSize, nUnlPercent int, score uint32) (
+	map[consensus.NodeID][33]byte,
+	map[consensus.NodeID]struct{},
+	map[consensus.NodeID]uint32,
+) {
+	nodeIDs := make([]consensus.NodeID, unlSize)
+	keys := make([][33]byte, unlSize)
+	for i := 0; i < unlSize; i++ {
+		keys[i] = makeKeyN(i)
+		nodeIDs[i] = keyToNodeID(keys[i])
+	}
+	unl := make(map[consensus.NodeID][33]byte, unlSize)
+	scoreTable := make(map[consensus.NodeID]uint32, unlSize)
+	for i, n := range nodeIDs {
+		unl[n] = keys[i]
+		scoreTable[n] = score
+	}
+	negSize := unlSize * nUnlPercent / 100
+	negUNL := make(map[consensus.NodeID]struct{}, negSize)
+	for i := 0; i < negSize; i++ {
+		negUNL[nodeIDs[i]] = struct{}{}
+	}
+	return unl, negUNL, scoreTable
+}
+
+// TestFindAllCandidates_RippledCombination1 mirrors rippled's
+// testFindAllCandidatesCombination combination 1
+// (NegativeUNL_test.cpp:1185-1257) — a parameterized grid over
+// (unlSize, nUnlPercent, score) covering every boundary score and
+// the no-/half-/full-negUNL cases. This is rippled's parity bar for
+// findAllCandidates and catches off-by-one drift in the canAdd cap
+// or the strict-inequality watermark thresholds.
+func TestFindAllCandidates_RippledCombination1(t *testing.T) {
+	unlSizes := []int{34, 35, 80}
+	nUnlPercents := []int{0, 50, 100}
+	scores := []uint32{
+		0,
+		LowWaterMark - 1,
+		LowWaterMark,
+		LowWaterMark + 1,
+		HighWaterMark - 1,
+		HighWaterMark,
+		HighWaterMark + 1,
+		MinLocalValsToVote,
+	}
+
+	v := NewVoter(nodeID(0xA0))
+
+	for _, us := range unlSizes {
+		for _, np := range nUnlPercents {
+			for _, score := range scores {
+				name := fmt.Sprintf("us=%d/np=%d/score=%d", us, np, score)
+				t.Run(name, func(t *testing.T) {
+					unl, negUNL, scoreTable := buildCombinationFixture(us, np, score)
+					require.Equal(t, us, len(unl))
+					require.Equal(t, us*np/100, len(negUNL))
+					require.Equal(t, us, len(scoreTable))
+
+					var toDisableExpect, toReEnableExpect int
+					switch np {
+					case 0:
+						if score < LowWaterMark {
+							toDisableExpect = us
+						}
+					case 50:
+						if score > HighWaterMark {
+							toReEnableExpect = us * np / 100
+						}
+					case 100:
+						if score > HighWaterMark {
+							toReEnableExpect = us
+						}
+					}
+
+					c := v.findAllCandidates(unl, negUNL, scoreTable)
+					assert.Equal(t, toDisableExpect, len(c.toDisable),
+						"toDisable count mismatch")
+					assert.Equal(t, toReEnableExpect, len(c.toReEnable),
+						"toReEnable count mismatch")
+				})
+			}
+		}
+	}
+}
+
+// TestFindAllCandidates_RippledCombination2 mirrors rippled's
+// testFindAllCandidatesCombination combination 2
+// (NegativeUNL_test.cpp:1258-1334) — the first 16 nodes get pairs of
+// scores from the boundary array, every node beyond gets
+// MinLocalValsToVote (= scores.back()), and the negUNL is built per
+// percent rule. The expected counts encode the cap-and-watermark
+// arithmetic across (unlSize, nUnlPercent) without enumerating every
+// score: a single failure here flags drift in the candidate-set
+// composition that combination 1 cannot reach.
+func TestFindAllCandidates_RippledCombination2(t *testing.T) {
+	unlSizes := []int{34, 35, 80}
+	nUnlPercents := []int{0, 50, 100}
+	scores := []uint32{
+		0,
+		LowWaterMark - 1,
+		LowWaterMark,
+		LowWaterMark + 1,
+		HighWaterMark - 1,
+		HighWaterMark,
+		HighWaterMark + 1,
+		MinLocalValsToVote,
+	}
+
+	v := NewVoter(nodeID(0xA0))
+
+	build := func(unlSize, nUnlPercent int) (
+		map[consensus.NodeID][33]byte,
+		map[consensus.NodeID]struct{},
+		map[consensus.NodeID]uint32,
+	) {
+		nodeIDs := make([]consensus.NodeID, unlSize)
+		keys := make([][33]byte, unlSize)
+		for i := 0; i < unlSize; i++ {
+			keys[i] = makeKeyN(i)
+			nodeIDs[i] = keyToNodeID(keys[i])
+		}
+		unl := make(map[consensus.NodeID][33]byte, unlSize)
+		for i, n := range nodeIDs {
+			unl[n] = keys[i]
+		}
+		scoreTable := make(map[consensus.NodeID]uint32, unlSize)
+		nIdx := 0
+		for _, sc := range scores {
+			scoreTable[nodeIDs[nIdx]] = sc
+			nIdx++
+			scoreTable[nodeIDs[nIdx]] = sc
+			nIdx++
+		}
+		tail := scores[len(scores)-1]
+		for ; nIdx < unlSize; nIdx++ {
+			scoreTable[nodeIDs[nIdx]] = tail
+		}
+		negUNL := make(map[consensus.NodeID]struct{})
+		switch nUnlPercent {
+		case 100:
+			for _, n := range nodeIDs {
+				negUNL[n] = struct{}{}
+			}
+		case 50:
+			for i := 1; i < unlSize; i += 2 {
+				negUNL[nodeIDs[i]] = struct{}{}
+			}
+		}
+		return unl, negUNL, scoreTable
+	}
+
+	for _, us := range unlSizes {
+		for _, np := range nUnlPercents {
+			name := fmt.Sprintf("us=%d/np=%d", us, np)
+			t.Run(name, func(t *testing.T) {
+				unl, negUNL, scoreTable := build(us, np)
+				require.Equal(t, us, len(unl))
+				require.Equal(t, us*np/100, len(negUNL))
+				require.Equal(t, us, len(scoreTable))
+
+				var toDisableExpect, toReEnableExpect int
+				switch np {
+				case 0:
+					toDisableExpect = 4
+				case 50:
+					toReEnableExpect = len(negUNL) - 6
+				case 100:
+					toReEnableExpect = len(negUNL) - 12
+				}
+
+				c := v.findAllCandidates(unl, negUNL, scoreTable)
+				assert.Equal(t, toDisableExpect, len(c.toDisable),
+					"toDisable count mismatch")
+				assert.Equal(t, toReEnableExpect, len(c.toReEnable),
+					"toReEnable count mismatch")
+			})
+		}
+	}
 }

@@ -26,6 +26,7 @@ package negativeunlvote
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -36,6 +37,15 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
 )
+
+// ErrLocalCountExceedsWindow is returned when the local node's validation
+// count over the score-table window exceeds FlagLedgerInterval. Mirrors
+// rippled's "Too many!" branch at NegativeUNLVote.cpp:236-244, which
+// rippled logs at error severity. Callers should treat this as a no-vote
+// (the returned blob list is nil) and surface the error for operator
+// visibility — the impossible-state branch indicates an upstream bug
+// (e.g. duplicate validations attributed to the local node).
+var ErrLocalCountExceedsWindow = errors.New("negativeunlvote: local validation count exceeds flag-ledger window")
 
 const (
 	// flagLedgerInterval is the period (in ledgers) the producer
@@ -90,15 +100,24 @@ const (
 //
 // Mirrors prevLedger->negativeUNL() / validatorToDisable() /
 // validatorToReEnable() at NegativeUNLVote.cpp:61-78.
+//
+// Invariant: ToDisablePending and ToReEnablePending must not reference
+// the same validator key. The NegativeUNL SLE enforces this at the tx
+// layer (UNLModify Apply rejects a re-enable for a validator already
+// staged for disable, and vice versa). The producer relies on that
+// invariant; passing both pointers set to the same key would silently
+// drop the validator from effectiveNegUNL.
 type State struct {
 	// DisabledKeys are the master pubkeys currently on the
 	// negUNL — i.e. excluded from quorum.
 	DisabledKeys [][33]byte
 	// ToDisablePending stages a validator for disabling on the
-	// upcoming flag ledger. Nil when no change is pending.
+	// upcoming flag ledger. Nil when no change is pending. Must not
+	// alias ToReEnablePending — see the State doc comment.
 	ToDisablePending *[33]byte
 	// ToReEnablePending stages a validator for re-enabling on the
-	// upcoming flag ledger. Nil when no change is pending.
+	// upcoming flag ledger. Nil when no change is pending. Must not
+	// alias ToDisablePending — see the State doc comment.
 	ToReEnablePending *[33]byte
 }
 
@@ -228,14 +247,18 @@ func (v *Voter) DoVoting(
 	//   == MinLocalValsToVote       → no vote (rippled's else branch
 	//                                 catches the boundary because the
 	//                                 else-if uses strict `>`)
-	//   > FlagLedgerInterval        → no vote (rippled's "Too many!"
-	//                                 branch — a logic error in
-	//                                 rippled, treated as a normal
-	//                                 no-vote here to match the
-	//                                 observed effect on consensus).
+	//   > FlagLedgerInterval        → no vote AND surface
+	//                                 ErrLocalCountExceedsWindow so
+	//                                 the caller can log at error
+	//                                 severity. Rippled logs the same
+	//                                 condition with JLOG(j_.error())
+	//                                 and returns empty (no vote).
 	myCount := scoreTable[v.myID]
-	if myCount <= MinLocalValsToVote || myCount > flagLedgerInterval {
+	if myCount <= MinLocalValsToVote {
 		return nil, nil
+	}
+	if myCount > flagLedgerInterval {
+		return nil, fmt.Errorf("%w: %d > %d", ErrLocalCountExceedsWindow, myCount, flagLedgerInterval)
 	}
 
 	// Build the trusted-key index once.
@@ -308,7 +331,7 @@ func (v *Voter) DoVoting(
 	return blobs, nil
 }
 
-type candidates struct {
+type candidateSet struct {
 	toDisable  []consensus.NodeID
 	toReEnable []consensus.NodeID
 }
@@ -321,7 +344,7 @@ func (v *Voter) findAllCandidates(
 	unl map[consensus.NodeID][33]byte,
 	negUNL map[consensus.NodeID]struct{},
 	scoreTable map[consensus.NodeID]uint32,
-) candidates {
+) candidateSet {
 	maxListed := int(math.Ceil(float64(len(unl)) * MaxListedFraction))
 	listed := 0
 	for n := range unl {
@@ -334,7 +357,7 @@ func (v *Voter) findAllCandidates(
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
-	var c candidates
+	var c candidateSet
 	for nodeID, score := range scoreTable {
 		_, isNegUNL := negUNL[nodeID]
 		_, isNew := v.newValidators[nodeID]
