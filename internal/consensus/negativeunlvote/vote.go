@@ -32,7 +32,6 @@ import (
 	"sync"
 
 	"github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
@@ -440,35 +439,17 @@ func compareNodeID20(a, b [20]byte) int {
 	return 0
 }
 
-// zeroAccount is the base58-encoded all-zero AccountID used as the
-// source account on every XRPL pseudo-transaction (rippled
-// AccountID()). The wire form serializes to a 20-byte zero blob.
-const zeroAccount = "rrrrrrrrrrrrrrrrrrrrrhoLvTp"
-
 // buildUNLModifyTx serializes a UNLModify pseudo-tx for inclusion in
 // the proposal initial set. Wire format mirrors rippled's
 // NegativeUNLVote::addTx at NegativeUNLVote.cpp:110-140 — zero
 // account, zero fee, empty signing pubkey, sequence 0.
 func buildUNLModifyTx(seq uint32, validator [33]byte, modify Modify) ([]byte, error) {
 	disabling := uint8(modify)
-	zeroSeq := uint32(0)
 	utx := &pseudo.UNLModify{
-		BaseTx:             *tx.NewBaseTx(tx.TypeUNLModify, zeroAccount),
+		BaseTx:             *tx.NewBaseTx(tx.TypeUNLModify, pseudo.ZeroAccount),
 		UNLModifyDisabling: &disabling,
 		LedgerSequence:     &seq,
 		UNLModifyValidator: hex.EncodeToString(validator[:]),
 	}
-	utx.Common.Fee = "0"
-	utx.Common.SigningPubKey = ""
-	utx.Common.Sequence = &zeroSeq
-
-	flat, err := utx.Flatten()
-	if err != nil {
-		return nil, fmt.Errorf("flatten UNLModify: %w", err)
-	}
-	hexStr, err := binarycodec.Encode(flat)
-	if err != nil {
-		return nil, fmt.Errorf("encode UNLModify: %w", err)
-	}
-	return hex.DecodeString(hexStr)
+	return pseudo.EncodePseudoTx(utx)
 }

@@ -736,3 +736,58 @@ func TestFindAllCandidates_RippledCombination2(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildUNLModifyTx_PseudoTxWireFormat pins the UNLModify
+// pseudo-tx wire shape against rippled's REQUIRED/OPTIONAL common
+// field rules. This guards the byte-level output of
+// buildUNLModifyTx, which now routes through pseudo.EncodePseudoTx
+// — a behaviour change from the previous in-place serialization
+// that omitted sfSigningPubKey and emitted sfFlags=0.
+//
+// rippled references:
+//   - TxFormats.cpp:34, 44 — sfFlags is soeOPTIONAL,
+//     sfSigningPubKey is soeREQUIRED
+//   - STObject.cpp:162-168 — set(SOTemplate) writes
+//     defaultObject for REQUIRED (empty VL for SigningPubKey) and
+//     nonPresentObject for OPTIONAL (Flags)
+//   - STObject.cpp:907-921 — STI_NOTPRESENT fields are filtered
+//     out of the serialized blob
+//   - NegativeUNLVote.cpp:110-140 — addTx assembles the pseudo-tx
+//     without setting sfFlags
+//
+// Asserting the bytes here means a regression in the encoder
+// (e.g., a future "always emit Flags" change) fails this test
+// with a precise message rather than silently diverging the
+// transaction ID and breaking flag-ledger SHAMap consensus on
+// the negative-UNL pseudo-tx position.
+func TestBuildUNLModifyTx_PseudoTxWireFormat(t *testing.T) {
+	validator := makeKey(0x42)
+	blob, err := buildUNLModifyTx(99999, validator, ToDisable)
+	require.NoError(t, err)
+	require.NotNil(t, blob)
+
+	hexBlob := hex.EncodeToString(blob)
+	// sfSigningPubKey (field id 0x73 = type 7 / fieldCode 3) must
+	// appear as VL(0) — bytes "7300". For UNLModify the next
+	// field in canonical sort order is sfUNLModifyValidator
+	// (0x70 0x13), so SigningPubKey ends with "73007013" rather
+	// than the "730081" pattern used by SetFee.
+	assert.Contains(t, hexBlob, "73007013",
+		"UNLModify blob must carry sfSigningPubKey VL(0) immediately before sfUNLModifyValidator")
+	// sfFlags (UInt32 type marker 0x22 + 4 zero bytes) must not
+	// appear; rippled marks sfFlags as soeOPTIONAL and
+	// NegativeUNLVote::addTx never sets it. STObject::add filters
+	// STI_NOTPRESENT optionals out of the serialized blob.
+	assert.NotContains(t, hexBlob, "2200000000",
+		"UNLModify blob must not carry sfFlags=0 (rippled omits soeOPTIONAL nonPresent fields)")
+
+	stx, err := binarycodec.Decode(hexBlob)
+	require.NoError(t, err, "UNLModify blob must round-trip through binarycodec.Decode")
+
+	got, ok := stx["SigningPubKey"]
+	assert.True(t, ok, "decoded UNLModify must include SigningPubKey")
+	assert.Equal(t, "", got, "SigningPubKey must decode as empty")
+
+	_, hasFlags := stx["Flags"]
+	assert.False(t, hasFlags, "decoded UNLModify must not include Flags")
+}

@@ -558,11 +558,20 @@ func (a *Adaptor) GetPendingTxs() [][]byte {
 	return blobs
 }
 
-// GenerateFlagLedgerPseudoTxs is a stub: vote-tally producers (fee
-// vote, amendment vote) are not yet implemented in goXRPL. See
-// follow-up issues #369 (fee) and #370 (amendments). Returns nil so
-// the engine's injection step at closeLedger is a no-op until those
-// land — matching the pre-#367 behavior of never injecting.
+// GenerateFlagLedgerPseudoTxs is currently a stub. The fee-vote
+// algorithm lives in internal/consensus/feevote (ported in #369)
+// and is exercised by package-level tests against synthetic vote
+// inputs; the amendment-vote producer is still TODO (#370).
+//
+// Wiring fee-vote into this method needs the same per-seq
+// validation history extension to ValidationTracker called out on
+// GenerateNegativeUNLPseudoTx below — once that lands, the fee
+// votes can be extracted from the prior voting ledger's
+// validations and fed into feevote.DoVoting.
+//
+// Returning nil keeps the engine's injection step a no-op until
+// the wiring lands — matching the pre-#367 behavior of never
+// injecting.
 func (a *Adaptor) GenerateFlagLedgerPseudoTxs(_ consensus.Ledger) [][]byte {
 	return nil
 }
