@@ -413,3 +413,59 @@ func TestOverlay_PeersJSON_StatusOmittedForOutOfRangeEnum(t *testing.T) {
 	_, present := entries[0]["status"]
 	assert.False(t, present, "unknown enum values must not surface as `status`")
 }
+
+// TestOverlay_onMessageReceived_StatusChangeReachesRouter pins issue
+// #381: an inbound TMStatusChange must be forwarded to o.messages so
+// the consensus router's handleStatusChange runs. PR #270 introduced
+// an early-return after the overlay-level handleStatusChange that
+// severed this path; without forwarding, a fresh observer node never
+// kicks off ledger acquisition, never leaves OpModeDisconnected, and
+// the engine's heartbeat loop is a no-op forever.
+func TestOverlay_onMessageReceived_StatusChangeReachesRouter(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	peer := NewPeer(PeerID(7), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
+
+	o := &Overlay{
+		peers:    map[PeerID]*Peer{7: peer},
+		messages: make(chan *InboundMessage, 4),
+	}
+
+	closed := make([]byte, 32)
+	for i := range closed {
+		closed[i] = byte(0xCD)
+	}
+	sc := &message.StatusChange{
+		NewStatus:  message.NodeStatusValidating,
+		NewEvent:   message.NodeEventClosingLedger,
+		LedgerSeq:  389,
+		LedgerHash: closed,
+	}
+	encoded, err := message.Encode(sc)
+	require.NoError(t, err)
+
+	o.onMessageReceived(Event{
+		PeerID:      7,
+		MessageType: uint16(message.TypeStatusChange),
+		Payload:     encoded,
+	})
+
+	// Overlay-level handler must still record the peer's last status —
+	// covered by TestOverlay_handleStatusChange_PropagatesNewStatus.
+	assert.Equal(t, message.NodeStatusValidating, peer.LastStatus())
+
+	// Forward to consensus router must have happened. Without this the
+	// router cannot drive initial-sync ledger acquisition.
+	select {
+	case msg := <-o.messages:
+		require.NotNil(t, msg, "forwarded InboundMessage must be non-nil")
+		assert.Equal(t, PeerID(7), msg.PeerID)
+		assert.Equal(t, uint16(message.TypeStatusChange), msg.Type)
+		assert.Equal(t, encoded, msg.Payload)
+	default:
+		t.Fatal("TMStatusChange was not forwarded to o.messages — issue #381 regression: " +
+			"the consensus router will never see peer status, never start ledger " +
+			"acquisition, and the engine will never advance past genesis")
+	}
+}

@@ -55,9 +55,14 @@ test-pkg pkg:
 test-docker:
     PEERTLS_DOCKER_INTEROP=1 go test -tags docker -timeout 300s -v -run TestHandshake_Interop_RippledDocker ./internal/peermanagement/peertls/
 
-# Run go vet on the module.
+# Run go vet on the module. The stdmethods analyzer is disabled because
+# it false-positives on gomock-generated recorder types: a recorder
+# method must be named after the mocked interface method (e.g.
+# ReadByte) but returns *gomock.Call, which stdmethods compares against
+# io.ByteReader's signature. See golang/mock#648. Every other analyzer
+# stays enabled.
 vet:
-    go vet ./...
+    go vet -stdmethods=false ./...
 
 # Run golangci-lint pinned to the CI version (auto-installs if missing).
 lint:
