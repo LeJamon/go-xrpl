@@ -279,13 +279,17 @@ func (c *Common) ToMap() map[string]any {
 	if c.AccountTxnID != "" {
 		m["AccountTxnID"] = c.AccountTxnID
 	}
-	// Flags is always serialized, even when 0. rippled's STObject always
-	// includes Flags as a required field. Omitting it produces a different
-	// binary serialization and different tx hash.
+	// sfFlags is soeOPTIONAL in rippled's common-fields template
+	// (TxFormats.cpp:34). STObject::set(SOTemplate) at
+	// STObject.cpp:165 stores it as nonPresentObject when the
+	// assembler did not set it, and STObject::add at
+	// STObject.cpp:907-921 filters STI_NOTPRESENT fields out of the
+	// serialized blob. So when c.Flags is nil, the wire format must
+	// carry no Flags bytes — emitting Flags=0 anyway would shift the
+	// serialized field sequence and produce a different transaction
+	// ID than rippled computes for the same JSON.
 	if c.Flags != nil {
 		m["Flags"] = *c.Flags
-	} else {
-		m["Flags"] = uint32(0)
 	}
 	if c.LastLedgerSequence != nil {
 		m["LastLedgerSequence"] = *c.LastLedgerSequence

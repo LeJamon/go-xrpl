@@ -32,28 +32,21 @@ func applyPseudoTxDefaults(c *tx.Common) {
 // present in the encoded blob (matching rippled's STObject::add
 // behaviour at STObject.cpp:881-921 — every field with a default
 // value emitted by set(SOTemplate) is serialized, including the
-// empty Blob for sfSigningPubKey), drops sfFlags so the blob does
-// not carry an STI_NOTPRESENT optional that rippled would omit, and
-// returns the binary blob.
+// empty Blob for sfSigningPubKey), and returns the binary blob.
 //
 // Common.ToMap omits SigningPubKey when empty, but rippled's wire
 // format always carries it as VL(0) for pseudo-tx because it is a
-// REQUIRED common field. We re-inject it after Flatten so the codec
-// emits the trailing 0x73 0x00 bytes.
+// REQUIRED common field (TxFormats.cpp:44 → soeREQUIRED →
+// STObject.cpp:165 writes a defaultObject). We re-inject it after
+// Flatten so the codec emits the trailing 0x73 0x00 bytes.
 //
-// Common.ToMap conversely emits Flags=0 unconditionally, but rippled
-// declares sfFlags as soeOPTIONAL in the common-fields template
-// (TxFormats.cpp:34) and STObject::set(SOTemplate) at
-// STObject.cpp:156-169 stores it as nonPresentObject when not set by
-// the assembler. STObject::add at STObject.cpp:907-921 filters
-// STI_NOTPRESENT fields out of the serialized blob. The pseudo-tx
+// sfFlags is soeOPTIONAL (TxFormats.cpp:34) and the pseudo-tx
 // assemblers in rippled (FeeVoteImpl::doVoting at
 // FeeVoteImpl.cpp:297-319; NegativeUNLVote::addTx at
-// NegativeUNLVote.cpp:110-140) never set sfFlags, so rippled's blob
-// has no Flags bytes. We delete it after Flatten to match — leaving
-// it in would shift the serialized field sequence and produce a
-// different transaction ID, breaking SHAMap consensus on the flag
-// ledger position.
+// NegativeUNLVote.cpp:110-140) never set it. Common.ToMap honors
+// this by omitting Flags when c.Flags is nil, so no special
+// handling is needed here — applyPseudoTxDefaults does not touch
+// Flags.
 func EncodePseudoTx(stx tx.Transaction) ([]byte, error) {
 	applyPseudoTxDefaults(stx.GetCommon())
 
@@ -64,7 +57,6 @@ func EncodePseudoTx(stx tx.Transaction) ([]byte, error) {
 	if _, ok := flat["SigningPubKey"]; !ok {
 		flat["SigningPubKey"] = ""
 	}
-	delete(flat, "Flags")
 
 	hexStr, err := binarycodec.Encode(flat)
 	if err != nil {

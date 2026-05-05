@@ -72,6 +72,22 @@ type Stance struct {
 // STValidation. Each field is independent: a validator may emit
 // any subset, and a missing or out-of-range value is treated as
 // "noVote" — counted as a vote for current at tally time.
+//
+// Preconditions on extractor (the future STValidation→Vote
+// adapter, deferred per #369): the extractor MUST set the field
+// to nil ("noVote") when:
+//
+//   - post-XRPFees: the STAmount is non-native (IOU). Mirrors
+//     FeeVoteImpl.cpp:222 (`field->native()` guard).
+//   - pre-XRPFees: the STUInt64 exceeds INT64_MAX. Mirrors
+//     FeeVoteImpl.cpp:254 (`vote <= numeric_limits<int64>::max()`
+//     guard, which precedes isLegalAmountSigned).
+//   - either mode: the XRPAmount is negative. Mirrors
+//     isLegalAmountSigned's lower bound at SystemParameters.h:58.
+//
+// applyVote here only enforces the upper bound (MaxLegalDrops);
+// the other three conditions are structurally unrepresentable in
+// *uint64 and so MUST be filtered upstream.
 type Vote struct {
 	BaseFee          *uint64
 	ReserveBase      *uint64
@@ -229,6 +245,14 @@ func buildSetFeeTx(seq uint32, current, chosen Stance, xrpFeesEnabled bool) ([]b
 // dropsAs<std::uint32_t>(current) at FeeVoteImpl.cpp:312-316: if
 // the chosen XRPAmount cannot fit in uint32, fall back to the
 // current ledger setting rather than silently truncating.
+//
+// If fallback itself exceeds UINT32_MAX the low 32 bits are
+// returned. This is unreachable on any real ledger — pre-XRPFees
+// reserves are sourced from on-chain FeeSettings whose uint32
+// fields cannot exceed UINT32_MAX by construction. Documented
+// here so the divergence from rippled's `T(drops_)` cast (which
+// is implementation-defined for an out-of-range XRPAmount) is
+// explicit.
 func narrowToUint32(chosen, fallback uint64) uint32 {
 	if chosen > math.MaxUint32 {
 		return uint32(fallback)
