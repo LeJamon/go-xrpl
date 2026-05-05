@@ -2318,20 +2318,30 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 
 // roundCloseTime rounds a close time to the nearest multiple of resolution.
 // Rounds up if the close time is at the midpoint.
-// Reference: rippled LedgerTiming.h roundCloseTime()
+//
+// Mirrors rippled's chrono integer math at LedgerTiming.h:131-143 over
+// NetClock::time_point (XRPL-epoch seconds). Rippled's input has
+// integer-second precision; we match that semantics by truncating
+// time.Time's sub-second component before rounding, so two validators
+// with skewed nanosecond clocks reduce to the same integer-second
+// input and round to the same boundary.
+//
+// Doing the modulo in XRPL-epoch space (rather than Unix epoch) is
+// equivalent at any resolution that divides RippleEpochUnix — which
+// covers every resolution rippled currently uses — but matches
+// rippled byte-for-byte without depending on that coincidence.
 func roundCloseTime(closeTime time.Time, resolution time.Duration) time.Time {
 	if closeTime.IsZero() {
 		return closeTime
 	}
-	// Add half the resolution for rounding
-	adjusted := closeTime.Add(resolution / 2)
-	// Truncate to the nearest resolution boundary using Unix seconds
-	epoch := adjusted.Unix()
 	resSec := int64(resolution.Seconds())
 	if resSec <= 0 {
 		return closeTime
 	}
-	return time.Unix(epoch-(epoch%resSec), 0).UTC()
+	xrplSec := closeTime.Unix() - protocol.RippleEpochUnix
+	xrplSec += resSec / 2
+	xrplSec -= xrplSec % resSec
+	return time.Unix(xrplSec+protocol.RippleEpochUnix, 0).UTC()
 }
 
 // effCloseTime calculates the effective ledger close time.

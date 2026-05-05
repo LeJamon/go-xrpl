@@ -105,6 +105,19 @@ func TestComputeQuorum(t *testing.T) {
 	}
 }
 
+// TestAdaptor_CookieIsAlwaysNonZero pins the boot-cookie contract
+// rippled relies on for sfCookie under HardenedValidations
+// (RCLConsensus.cpp:813-818): the cookie generated at construction is
+// never zero, so soeDEFAULT serialization always includes the field.
+// Issue #363 E2.
+func TestAdaptor_CookieIsAlwaysNonZero(t *testing.T) {
+	for i := 0; i < 16; i++ {
+		a := newTestAdaptor(t)
+		assert.NotZero(t, a.GetCookie(),
+			"Adaptor.cookie must be non-zero at boot; serializer omits zero (soeDEFAULT)")
+	}
+}
+
 func TestAdaptorNonValidator(t *testing.T) {
 	svc := newTestLedgerService(t)
 	a := New(Config{
