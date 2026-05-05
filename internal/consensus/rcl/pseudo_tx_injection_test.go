@@ -62,6 +62,39 @@ func TestCloseLedger_NoInjectionWhenNotProposing(t *testing.T) {
 		"non-proposing mode must NOT inject pseudo-txs")
 }
 
+// TestCloseLedger_StandaloneInjectsEvenWhenNotProposing pins the
+// `app_.config().standalone() ||` half of rippled's gate at
+// RCLConsensus.cpp:352. A standalone-config node must inject
+// pseudo-txs even when consensus mode is not ModeProposing — the
+// non-proposing path is reachable in single-node test setups, and
+// dropping the injection there silently changes the tx-set hash
+// versus rippled.
+func TestCloseLedger_StandaloneInjectsEvenWhenNotProposing(t *testing.T) {
+	flagBlob := []byte{0xCA, 0xFE, 0xBA, 0xBE}
+
+	prev := &mockLedger{id: consensus.LedgerID{0xCA, 0xFE}, seq: 256}
+	a := newMockAdaptor()
+	a.lastLCL = prev
+	a.ledgers[prev.ID()] = prev
+	a.flagLedgerPseudoTxs = [][]byte{flagBlob}
+	a.standalone = true
+
+	engine := NewEngine(a, DefaultConfig())
+	round := consensus.RoundID{Seq: prev.Seq() + 1, ParentHash: prev.ID()}
+	require.NoError(t, engine.StartRound(round, false))
+
+	engine.mu.Lock()
+	engine.prevLedger = prev
+	engine.setMode(consensus.ModeObserving)
+	engine.setPhase(consensus.PhaseOpen)
+	engine.mu.Unlock()
+
+	engine.closeLedger()
+	require.NotNil(t, engine.ourTxSet)
+	assert.True(t, containsBlob(engine.ourTxSet.Txs(), flagBlob),
+		"standalone mode must inject pseudo-txs even when not in ModeProposing")
+}
+
 // TestCloseLedger_NegUNLGatedOnFeature pins the rippled gate at
 // RCLConsensus.cpp:368-370: NegativeUNL pseudo-tx is only injected
 // when the featureNegativeUNL amendment is enabled.

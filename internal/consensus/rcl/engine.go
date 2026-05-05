@@ -1393,17 +1393,20 @@ func (e *Engine) closeLedger() {
 
 	// Inject flag-ledger / voting-ledger pseudo-txs BEFORE building
 	// the tx set, so the resulting tx-set hash matches what rippled
-	// computes for the same round (RCLConsensus.cpp:351-381). Gated
-	// on ModeProposing, which excludes wrongLedger by definition,
-	// matching rippled's `proposing && !wrongLCL`.
-	if e.mode == consensus.ModeProposing && e.prevLedger != nil {
+	// computes for the same round (RCLConsensus.cpp:351-381). The
+	// gate mirrors rippled's `standalone() || (proposing && !wrongLCL)`
+	// at RCLConsensus.cpp:352 — ModeProposing already excludes
+	// wrongLedger by construction, and the standalone branch keeps
+	// single-node test setups injecting pseudo-txs even when they
+	// haven't transitioned to proposing.
+	if e.prevLedger != nil && (e.mode == consensus.ModeProposing || e.adaptor.IsStandalone()) {
 		prev := e.prevLedger
 		switch {
 		case consensus.IsFlagLedger(prev.Seq()):
 			if extra := e.adaptor.GenerateFlagLedgerPseudoTxs(prev); len(extra) > 0 {
 				txs = append(txs, extra...)
 			}
-		case consensus.IsVotingLedger(prev.Seq()) && e.adaptor.IsFeatureEnabled("NegativeUNL"):
+		case consensus.IsVotingLedger(prev.Seq()) && e.adaptor.IsFeatureEnabledOnLedger(prev, "NegativeUNL"):
 			if extra := e.adaptor.GenerateNegativeUNLPseudoTx(prev); len(extra) > 0 {
 				txs = append(txs, extra)
 			}
