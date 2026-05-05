@@ -70,6 +70,18 @@ type Cache struct {
 	// when the master rotates (old ephemeral removed) or revokes
 	// (entry removed so lookups no longer resolve).
 	signingToMaster map[[33]byte][33]byte
+
+	// seq advances every time an existing master's entry is replaced
+	// with a higher-sequence manifest. Mirrors rippled's
+	// ManifestCache::seq_ at Manifest.cpp:538: the counter is the
+	// "something has changed" signal a downstream emitter (here, the
+	// Router's TMManifests frame cache) consults to decide whether the
+	// previously-encoded frame is still current. Like rippled, first-
+	// inserts do NOT advance seq — first-insert paths are reachable
+	// without an existing entry to "update" so the counter stays put;
+	// the manifest is still in byMaster and will be picked up the next
+	// time the cache is fully walked.
+	seq uint64
 }
 
 // NewCache returns an empty Cache.
@@ -135,17 +147,36 @@ func (c *Cache) ApplyManifest(m *Manifest) Disposition {
 	// Drop the previous ephemeral mapping (if any) before installing
 	// the new one; otherwise a validation signed with the OLD
 	// ephemeral would still resolve to the master after rotation.
-	if prev, ok := c.byMaster[m.MasterKey]; ok {
-		if !prev.Revoked() {
-			delete(c.signingToMaster, prev.SigningKey)
-		}
+	prev, isUpdate := c.byMaster[m.MasterKey]
+	if isUpdate && !prev.Revoked() {
+		delete(c.signingToMaster, prev.SigningKey)
 	}
 
 	c.byMaster[m.MasterKey] = m
 	if !m.Revoked() {
 		c.signingToMaster[m.SigningKey] = m.MasterKey
 	}
+	if isUpdate {
+		// Match rippled Manifest.cpp:538: bump only when an existing
+		// entry is replaced. The first insert is rare ("should only
+		// ever happen once per validator run" per the rippled comment)
+		// and is handled by the consumer's never-built sentinel.
+		c.seq++
+	}
 	return Accepted
+}
+
+// Sequence returns the cache's "something has changed" counter.
+// Increments every time an existing master's manifest is replaced with
+// a higher-sequence one (key rotation or revocation). First-inserts
+// don't advance it — see ApplyManifest. Mirrors rippled
+// ManifestCache::sequence() at Manifest.h:278-281, used by emitters to
+// short-circuit re-encoding the TMManifests frame when nothing has
+// changed since the last build.
+func (c *Cache) Sequence() uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.seq
 }
 
 // GetMasterKey returns the master key associated with a signing key.

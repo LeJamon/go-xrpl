@@ -85,6 +85,21 @@ type Router struct {
 	// path still needs r.overlay directly because BroadcastExcept has
 	// no equivalent on the sender interface.
 	overrideManifestSender manifestSender
+
+	// manifestFrameMu guards the cached TMManifests emission frame and
+	// its companion sequence cursor. Mirrors the (manifestMessage_,
+	// manifestListSeq_) pair on rippled's OverlayImpl
+	// (OverlayImpl.cpp:1184-1212): re-encode only when manifests.Sequence
+	// has advanced past the value seen at last build, so back-to-back
+	// peer connects reuse the same encoded bytes without re-walking the
+	// cache. manifestFrameBuilt is the never-built sentinel — a zero
+	// manifestFrameSeq is a valid cursor (a fresh cache starts at 0),
+	// so we need an explicit "have we ever built?" flag rather than
+	// using the zero value as the sentinel.
+	manifestFrameMu    sync.Mutex
+	manifestFrame      []byte
+	manifestFrameSeq   uint64
+	manifestFrameBuilt bool
 }
 
 // messageDedupTTL is how long a proposal/validation hash is

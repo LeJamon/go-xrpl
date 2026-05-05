@@ -205,7 +205,7 @@ func TestRouter_LocalManifestEmission_NilCacheSkips(t *testing.T) {
 	}
 	router, _, _ := routerWithCache(t, sender, 0, 0)
 	// Drop the cache entirely — exercises the r.manifests == nil
-	// guard in manifestsForEmission.
+	// guard in cachedManifestFrame.
 	router.manifests = nil
 
 	router.SendLocalManifestTo(peermanagement.PeerID(1))
@@ -284,4 +284,90 @@ func TestRouter_SendLocalManifestTo_SwallowsSenderError(t *testing.T) {
 	// between addPeer and the connect callback firing — the emitter
 	// is expected to log and move on.
 	router.SendLocalManifestTo(peermanagement.PeerID(1))
+}
+
+// Two back-to-back emissions with no cache mutation between them must
+// produce the SAME frame bytes — this is the rippled
+// (manifestMessage_, manifestListSeq_) reuse property at
+// OverlayImpl.cpp:1184-1212. Identity here means "same backing array",
+// which proves the second emission did not re-encode.
+func TestRouter_CachedManifestFrame_ReusedAcrossEmissions(t *testing.T) {
+	sender := &fakeManifestSender{}
+	router, _, _ := routerWithCache(t, sender, 0xB1, 6)
+
+	router.SendLocalManifestTo(peermanagement.PeerID(1))
+	router.SendLocalManifestTo(peermanagement.PeerID(2))
+	if len(sender.sends) != 2 {
+		t.Fatalf("expected 2 Sends, got %d", len(sender.sends))
+	}
+
+	first := router.manifestFrame
+	if first == nil {
+		t.Fatalf("frame cache empty after first Send")
+	}
+	if seq := router.manifestFrameSeq; seq != 0 {
+		// First-insert path doesn't bump cache.Sequence (rippled
+		// Manifest.cpp:507-518 parity), so the cursor stays at 0.
+		t.Fatalf("cached cursor: got %d want 0 (first-insert quirk)", seq)
+	}
+
+	router.SendLocalManifestTo(peermanagement.PeerID(3))
+	if got := router.manifestFrame; &got[0] != &first[0] {
+		t.Errorf("frame re-encoded despite unchanged cache (backing arrays differ)")
+	}
+}
+
+// A subsequent ApplyManifest that REPLACES an existing master must bump
+// cache.Sequence and force the next emission to re-encode.
+func TestRouter_CachedManifestFrame_RebuiltOnSequenceAdvance(t *testing.T) {
+	sender := &fakeManifestSender{}
+	router, cache, _ := routerWithCache(t, sender, 0xC2, 1)
+
+	router.SendLocalManifestTo(peermanagement.PeerID(1))
+	first := router.manifestFrame
+
+	// Mint a higher-sequence manifest under the SAME master+ephemeral
+	// keypair (newTokenFixture is seed-deterministic — same seed byte
+	// = same keys; only the sequence differs). This hits the update
+	// branch in cache.ApplyManifest, which is the only path that bumps
+	// Sequence — matching rippled Manifest.cpp:538.
+	rotated := newTokenFixture(t, 0xC2, 7)
+	rotatedID, err := NewValidatorIdentityFromToken(rotated.tokenBlock)
+	if err != nil {
+		t.Fatalf("rotated identity: %v", err)
+	}
+	if d := cache.ApplyManifest(rotatedID.Manifest); d != manifest.Accepted {
+		t.Fatalf("apply rotated manifest: %s", d)
+	}
+	if seq := cache.Sequence(); seq != 1 {
+		t.Fatalf("cache.Sequence after update: got %d want 1", seq)
+	}
+
+	router.SendLocalManifestTo(peermanagement.PeerID(2))
+	if router.manifestFrame == nil {
+		t.Fatalf("frame cache empty after rotation")
+	}
+	if &router.manifestFrame[0] == &first[0] {
+		t.Errorf("frame NOT re-encoded after Sequence advance — cache cursor stuck")
+	}
+	if router.manifestFrameSeq != 1 {
+		t.Errorf("cached cursor: got %d want 1", router.manifestFrameSeq)
+	}
+}
+
+// Empty cache hits the "cache the empty fact" branch — second call
+// must NOT re-walk SerializedAll.
+func TestRouter_CachedManifestFrame_EmptyCacheCachesNegative(t *testing.T) {
+	sender := &fakeManifestSender{
+		peers: []peermanagement.PeerInfo{{}},
+	}
+	router, _, _ := routerWithCache(t, sender, 0, 0)
+
+	router.SendLocalManifestTo(peermanagement.PeerID(1))
+	if !router.manifestFrameBuilt {
+		t.Errorf("empty-cache path did not record the negative result")
+	}
+	if router.manifestFrame != nil {
+		t.Errorf("empty cache should cache nil frame, got %d bytes", len(router.manifestFrame))
+	}
 }

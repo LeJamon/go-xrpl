@@ -19,7 +19,8 @@ type manifestSender interface {
 // encodeManifestsFrame wraps one or more wire-format manifest STObjects
 // in a TMManifests frame ready for Overlay.Broadcast / Overlay.Send.
 // Mirrors rippled OverlayImpl::getManifestsMessage which builds a
-// TMManifests carrying every ValidatorManifests entry (Manifest.cpp:1184-1212).
+// TMManifests carrying every ValidatorManifests entry
+// (OverlayImpl.cpp:1184-1212).
 //
 // Shared by relayManifest (single-manifest gossip from a peer) and the
 // local-manifest emission paths in #372 so both produce byte-identical
@@ -42,24 +43,19 @@ func encodeManifestsFrame(serialized ...[]byte) ([]byte, error) {
 // construction). Any encode error is logged and swallowed: emission is
 // best-effort, the next reconnect will retry on its own.
 func (r *Router) SendLocalManifestTo(peerID peermanagement.PeerID) {
-	wires := r.manifestsForEmission()
-	if len(wires) == 0 {
+	frame := r.cachedManifestFrame()
+	if len(frame) == 0 {
 		return
 	}
 	sender := r.manifestEmitter()
 	if sender == nil {
 		return
 	}
-	frame, err := encodeManifestsFrame(wires...)
-	if err != nil {
-		r.logger.Warn("failed to encode local manifest frame for peer", "error", err, "peer", peerID)
-		return
-	}
 	if err := sender.Send(peerID, frame); err != nil {
 		// Peer may have raced a disconnect between addPeer and the
-		// callback. ErrPeerNotFound is benign; surface other errors at
-		// debug to aid diagnosis without spamming logs on a flapping
-		// peer.
+		// callback. ErrPeerNotFound / ErrConnectionClosed are benign;
+		// surface at debug to aid diagnosis without spamming logs on a
+		// flapping peer.
 		r.logger.Debug("send local manifest to peer failed", "error", err, "peer", peerID)
 	}
 }
@@ -69,8 +65,8 @@ func (r *Router) SendLocalManifestTo(peerID peermanagement.PeerID) {
 // was queued for (0 when there's nothing to broadcast or no peers are
 // connected) so callers can decide whether to log the emission.
 func (r *Router) BroadcastLocalManifest() int {
-	wires := r.manifestsForEmission()
-	if len(wires) == 0 {
+	frame := r.cachedManifestFrame()
+	if len(frame) == 0 {
 		return 0
 	}
 	sender := r.manifestEmitter()
@@ -79,11 +75,6 @@ func (r *Router) BroadcastLocalManifest() int {
 	}
 	peers := sender.Peers()
 	if len(peers) == 0 {
-		return 0
-	}
-	frame, err := encodeManifestsFrame(wires...)
-	if err != nil {
-		r.logger.Warn("failed to encode local manifest frame", "error", err)
 		return 0
 	}
 	if err := sender.Broadcast(frame); err != nil {
@@ -121,14 +112,54 @@ func (r *Router) HandlePeerConnect(peerID peermanagement.PeerID) {
 	r.SendLocalManifestTo(peerID)
 }
 
-// manifestsForEmission returns the wire bytes of every cached validator
-// manifest, in arbitrary order. Centralizes the "what do we have to
-// gossip?" decision so the per-peer and broadcast paths can't drift on
-// the skip-case logic. Returns nil when the cache is empty (observer /
-// seed-only mode, or fresh boot before any peer has gossiped anything).
-func (r *Router) manifestsForEmission() [][]byte {
+// cachedManifestFrame returns the encoded TMManifests frame for the
+// current state of the manifest cache, building it on demand and
+// reusing it across calls until the cache's Sequence advances. Mirrors
+// rippled OverlayImpl::getManifestsMessage at OverlayImpl.cpp:1184-1212,
+// which compares manifestListSeq_ against ManifestCache::sequence() and
+// only rebuilds the cached protocol::Message on a mismatch — so a burst
+// of post-handshake emissions reuses the same encoded bytes instead of
+// re-walking the cache per peer.
+//
+// Returns nil when the cache is unwired, empty, or fails to encode.
+// Encode failures are NOT cached so a transient error doesn't pin a
+// stale frame; the next caller re-attempts.
+func (r *Router) cachedManifestFrame() []byte {
 	if r.manifests == nil {
 		return nil
 	}
-	return r.manifests.SerializedAll()
+
+	// Read sequence outside the frame lock so we never nest the cache's
+	// RLock under our own mutex. A racing increment between this read
+	// and the lock acquisition just causes the next caller to rebuild —
+	// not a correctness issue.
+	seq := r.manifests.Sequence()
+
+	r.manifestFrameMu.Lock()
+	defer r.manifestFrameMu.Unlock()
+
+	if r.manifestFrameBuilt && r.manifestFrameSeq == seq {
+		return r.manifestFrame
+	}
+
+	wires := r.manifests.SerializedAll()
+	if len(wires) == 0 {
+		// Empty cache — cache that fact too so the next call doesn't
+		// re-walk byMaster only to find it still empty.
+		r.manifestFrame = nil
+		r.manifestFrameSeq = seq
+		r.manifestFrameBuilt = true
+		return nil
+	}
+
+	frame, err := encodeManifestsFrame(wires...)
+	if err != nil {
+		r.logger.Warn("failed to encode local manifest frame", "error", err)
+		return nil
+	}
+
+	r.manifestFrame = frame
+	r.manifestFrameSeq = seq
+	r.manifestFrameBuilt = true
+	return frame
 }
