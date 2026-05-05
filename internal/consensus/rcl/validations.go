@@ -284,10 +284,17 @@ func isCurrent(now, signTime, seenTime time.Time) bool {
 //   - Per-node newer-seq-only rule: a node's latest validation
 //     supersedes any earlier one. Same as before.
 //
-// onFullyValidated is fired OUTSIDE vt.mu so the callback may take other
-// locks (engine.mu, archive channel send) or call back into the tracker
-// (e.g. ExpireOld) without deadlocking. Mirrors the lock-free callback
-// dispatch ExpireOld already uses for onStale.
+// onFullyValidated is fired OUTSIDE vt.mu so the callback may call
+// back into the tracker (e.g. ExpireOld) or take other locks that
+// vt.mu doesn't shadow without deadlocking. Mirrors the lock-free
+// callback dispatch ExpireOld already uses for onStale.
+//
+// IMPORTANT: the engine's callers (OnValidation, sendValidation) hold
+// engine.e.mu.Lock when they call Add, so the callback runs under that
+// write lock too. The callback MUST NOT take engine.e.mu (RLock or
+// otherwise) — Go's RWMutex is non-recursive and would self-deadlock.
+// Adding new locks the callback may need is fine as long as they are
+// not already held by the caller chain.
 //
 // Defer order is LIFO: vt.mu.Unlock runs first (released before the
 // callback), then the captured fire-tuple is dispatched.

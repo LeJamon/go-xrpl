@@ -2159,6 +2159,64 @@ drain:
 	}
 }
 
+// TestEngine_OnValidation_NoSelfDeadlockOnQuorum pins the issue
+// #381 root cause: ValidationTracker.Add fires the
+// fully-validated callback synchronously on the goroutine that
+// called OnValidation — and OnValidation already holds e.mu.Lock.
+// A defensive e.mu.RLock inside the callback self-deadlocks
+// because Go's RWMutex is non-recursive. Once a single
+// fully-validated ledger fires, the engine writer never returns,
+// the heartbeat parks, and every RPC reader piles up.
+func TestEngine_OnValidation_NoSelfDeadlockOnQuorum(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.quorum = 1
+	adaptor.opMode = consensus.OpModeFull
+	trusted := consensus.NodeID{2}
+	adaptor.setTrusted([]consensus.NodeID{trusted})
+	adaptor.now = time.Now()
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	// Start wires the ValidationTracker and its fully-validated
+	// callback (engine.go SetFullyValidatedCallback) — without
+	// Start the tracker is nil and OnValidation skips Add, hiding
+	// the bug. The bug only fires when quorum is actually reached.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	validation := &consensus.Validation{
+		LedgerID:  consensus.LedgerID{101},
+		LedgerSeq: 101,
+		NodeID:    trusted,
+		SignTime:  adaptor.now,
+		SeenTime:  adaptor.now,
+		Full:      true,
+	}
+
+	// OnValidation must return cleanly even though Add fires the
+	// fully-validated callback (quorum=1, one trusted validator,
+	// one Full validation = quorum reached). Run on a separate
+	// goroutine with a tight timeout so a regression of the
+	// e.mu.RLock self-deadlock cannot pass by hanging.
+	done := make(chan error, 1)
+	go func() {
+		done <- engine.OnValidation(validation, 1)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("OnValidation returned unexpected error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnValidation did not return — fully-validated callback " +
+			"self-deadlocked on e.mu (issue #381 root cause)")
+	}
+}
+
 // TestEngine_IsProposing_LockFreeWhileWriterHoldsMu pins the issue
 // #381 follow-up: the RPC server_info hot path
 // (Service.GetServerInfo holds ledger.s.mu.RLock → serverStateFunc →

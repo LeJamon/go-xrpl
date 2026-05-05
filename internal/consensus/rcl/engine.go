@@ -37,8 +37,14 @@ type Engine struct {
 	// e.mu.RLock). Writes happen inside setMode, which is always
 	// called with e.mu held. Issue #381 follow-up.
 	modeAtomic atomic.Int32
-	state      *consensus.RoundState
-	prevLedger consensus.Ledger
+	// lastCloseAtomic mirrors (prevProposers, prevRoundTime) for
+	// lock-free reads from GetLastCloseInfo. Same RPC-hot-path
+	// rationale as modeAtomic — server_info handler calls into this
+	// via the LastCloseInfo callback (cli/server.go). Writes happen
+	// from acceptLedger under e.mu via storeLastCloseLocked.
+	lastCloseAtomic atomic.Pointer[lastCloseInfo]
+	state           *consensus.RoundState
+	prevLedger      consensus.Ledger
 
 	// Proposal tracking
 	proposals map[consensus.NodeID]*consensus.Proposal
@@ -149,14 +155,18 @@ type Engine struct {
 
 	// archive, when non-nil, persists stale validations dropped by the
 	// tracker. Wired via SetArchive — optional, the engine functions
-	// identically when nil.
-	archive ValidationArchive
+	// identically when nil. Stored via an atomic pointer so the
+	// fully-validated callback can read it lock-free, even when
+	// validationTracker.Add is invoked outside e.mu (e.g. from tests
+	// or future callers that bypass OnValidation).
+	archive atomic.Pointer[archiveBox]
 
 	// inMemoryLedgers is the tracker's in-memory retention window: after
 	// a ledger becomes fully validated at seq S, validations for ledgers
 	// below (S - inMemoryLedgers) are dropped and streamed into the
-	// archive via OnStale. Zero disables auto-expiry.
-	inMemoryLedgers uint32
+	// archive via OnStale. Zero disables auto-expiry. Atomic for the
+	// same reason as archive.
+	inMemoryLedgers atomic.Uint32
 
 	// ledgerAncestry is staged by startup wiring and applied to the
 	// tracker in Start. Nil keeps flat-count semantics.
@@ -170,6 +180,19 @@ type ValidationArchive interface {
 	OnStale(*consensus.Validation)
 	NoteFullyValidated(seq uint32)
 	Close(ctx context.Context) error
+}
+
+// archiveBox wraps a ValidationArchive interface so it can be carried
+// by atomic.Pointer. atomic.Value would also work but panics on a nil
+// store and on type changes; atomic.Pointer is simpler.
+type archiveBox struct{ a ValidationArchive }
+
+// loadArchive returns the currently-installed archive (or nil).
+func (e *Engine) loadArchive() ValidationArchive {
+	if box := e.archive.Load(); box != nil {
+		return box.a
+	}
+	return nil
 }
 
 // avalancheState tracks the close time voting threshold escalation.
@@ -241,7 +264,11 @@ func (e *Engine) SetManifestResolver(fn func(consensus.NodeID) consensus.NodeID)
 func (e *Engine) SetArchive(a ValidationArchive) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.archive = a
+	if a == nil {
+		e.archive.Store(nil)
+	} else {
+		e.archive.Store(&archiveBox{a: a})
+	}
 	if e.validationTracker == nil {
 		return
 	}
@@ -258,9 +285,7 @@ func (e *Engine) SetArchive(a ValidationArchive) {
 // (S - n) are evicted (and streamed into the archive via OnStale).
 // Zero disables auto-eviction.
 func (e *Engine) SetInMemoryLedgers(n uint32) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.inMemoryLedgers = n
+	e.inMemoryLedgers.Store(n)
 }
 
 // SetLedgerAncestryProvider installs the trie's ancestry provider.
@@ -305,28 +330,35 @@ func (e *Engine) Start(ctx context.Context) error {
 	// — matching here avoids rejecting our own just-signed validation
 	// by the accumulated close-time offset on a skewed node.
 	e.validationTracker.SetNow(e.adaptor.Now)
-	if e.archive != nil {
-		e.validationTracker.SetOnStale(e.archive.OnStale)
+	if arc := e.loadArchive(); arc != nil {
+		e.validationTracker.SetOnStale(arc.OnStale)
 	}
 	tracker := e.validationTracker
 	e.validationTracker.SetFullyValidatedCallback(func(ledgerID consensus.LedgerID, seq uint32) {
+		// Contract notes (issue #381 follow-up):
+		//   - The production callers of validationTracker.Add
+		//     (Engine.OnValidation, Engine.sendValidation) invoke it
+		//     with e.mu.Lock held. Tests can also drive Add directly
+		//     without that lock. The callback must therefore work in
+		//     both modes — meaning it MUST NOT take e.mu (Go's
+		//     RWMutex is non-recursive: a defensive RLock under the
+		//     held write lock self-deadlocks).
+		//   - e.archive and e.inMemoryLedgers are read via atomics so
+		//     a concurrent SetArchive / SetInMemoryLedgers cannot
+		//     race the read here.
 		e.adaptor.OnLedgerFullyValidated(ledgerID, seq)
 
-		// Snapshot mutable fields under e.mu — SetArchive /
-		// SetInMemoryLedgers may race with this callback.
-		e.mu.RLock()
-		arc := e.archive
-		inMem := e.inMemoryLedgers
-		e.mu.RUnlock()
+		arc := e.loadArchive()
+		inMem := e.inMemoryLedgers.Load()
 
 		if arc != nil {
 			arc.NoteFullyValidated(seq)
 		}
 		// Drive the in-memory retention window. ExpireOld fires the
 		// onStale callback for each evicted validation, so the archive
-		// captures it before the tracker drops it. Called outside e.mu
-		// because ExpireOld may dispatch onStale callbacks that block
-		// briefly on the archive's channel send.
+		// captures it before the tracker drops it. ExpireOld takes
+		// vt.mu but does NOT touch e.mu, so calling it from inside
+		// a held e.mu write lock does not deadlock.
 		if inMem > 0 && seq > inMem {
 			tracker.ExpireOld(seq - inMem)
 		}
@@ -349,10 +381,7 @@ func (e *Engine) Stop() error {
 	e.wg.Wait()
 	e.eventBus.Stop()
 
-	e.mu.RLock()
-	arc := e.archive
-	e.mu.RUnlock()
-	if arc != nil {
+	if arc := e.loadArchive(); arc != nil {
 		// Bounded close — a stuck archive must not hang shutdown.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = arc.Close(ctx)
@@ -876,11 +905,33 @@ func (e *Engine) Timing() consensus.Timing {
 	return e.timing
 }
 
-// GetLastCloseInfo returns the proposer count and convergence time from the last consensus round.
+// lastCloseInfo packs the two values returned by GetLastCloseInfo
+// into a single allocation so atomic.Pointer can publish them
+// together without tearing.
+type lastCloseInfo struct {
+	Proposers int
+	RoundTime time.Duration
+}
+
+// GetLastCloseInfo returns the proposer count and convergence time
+// from the last consensus round. Lock-free read of the atomic mirror
+// — see lastCloseAtomic on Engine for the rationale.
 func (e *Engine) GetLastCloseInfo() (proposers int, convergeTime time.Duration) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.prevProposers, e.prevRoundTime
+	if info := e.lastCloseAtomic.Load(); info != nil {
+		return info.Proposers, info.RoundTime
+	}
+	return 0, 0
+}
+
+// storeLastCloseLocked publishes the round-completion stats to the
+// atomic mirror. Caller must hold e.mu (writes to e.prevProposers /
+// e.prevRoundTime are also expected to happen under that lock so the
+// fields and the atomic stay consistent).
+func (e *Engine) storeLastCloseLocked() {
+	e.lastCloseAtomic.Store(&lastCloseInfo{
+		Proposers: e.prevProposers,
+		RoundTime: e.prevRoundTime,
+	})
 }
 
 // Subscribe adds an event subscriber.
@@ -2020,6 +2071,9 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		}
 	}
 	e.prevProposers = trustedCount
+	// Publish to the lock-free mirror read by GetLastCloseInfo on
+	// the RPC hot path.
+	e.storeLastCloseLocked()
 
 	// Update state for next round
 	e.prevLedger = newLedger
