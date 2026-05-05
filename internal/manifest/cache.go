@@ -226,3 +226,25 @@ func (c *Cache) Revoked(masterKey [33]byte) bool {
 	}
 	return m.Revoked()
 }
+
+// SerializedAll returns the wire bytes of every cached manifest in
+// arbitrary order, with each entry defensively copied. Used by the
+// post-handshake TMManifests emission to gossip the entire aggregated
+// cache to a freshly-connected peer, mirroring rippled's
+// OverlayImpl::getManifestsMessage which calls
+// ValidatorManifests::for_each_manifest (Manifest.cpp:1184-1212).
+func (c *Cache) SerializedAll() [][]byte {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if len(c.byMaster) == 0 {
+		return nil
+	}
+	out := make([][]byte, 0, len(c.byMaster))
+	for _, m := range c.byMaster {
+		if len(m.Serialized) == 0 {
+			continue
+		}
+		out = append(out, append([]byte(nil), m.Serialized...))
+	}
+	return out
+}

@@ -77,12 +77,14 @@ type Router struct {
 	// construct a router without manifest support.
 	overlay *peermanagement.Overlay
 
-	// testManifestSender, when non-nil, replaces r.overlay for the
+	// overrideManifestSender, when non-nil, replaces r.overlay for the
 	// local-manifest emission paths (SendLocalManifestTo /
 	// BroadcastLocalManifest). Tests install a fake here to observe
 	// the emitted frame without standing up real listeners; production
-	// leaves it nil so the real overlay is used.
-	testManifestSender manifestSender
+	// leaves it nil so the real overlay is used. The relayManifest
+	// path still needs r.overlay directly because BroadcastExcept has
+	// no equivalent on the sender interface.
+	overrideManifestSender manifestSender
 }
 
 // messageDedupTTL is how long a proposal/validation hash is

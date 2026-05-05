@@ -18,9 +18,8 @@ type manifestSender interface {
 
 // encodeManifestsFrame wraps one or more wire-format manifest STObjects
 // in a TMManifests frame ready for Overlay.Broadcast / Overlay.Send.
-// Mirrors rippled OverlayImpl::sendEndpoints which emits manifests
-// alongside endpoints in the post-handshake window — every peer
-// receives the same TMManifests payload.
+// Mirrors rippled OverlayImpl::getManifestsMessage which builds a
+// TMManifests carrying every ValidatorManifests entry (Manifest.cpp:1184-1212).
 //
 // Shared by relayManifest (single-manifest gossip from a peer) and the
 // local-manifest emission paths in #372 so both produce byte-identical
@@ -37,26 +36,21 @@ func encodeManifestsFrame(serialized ...[]byte) ([]byte, error) {
 	return encodeFrame(message.TypeManifests, &message.Manifests{List: list})
 }
 
-// SendLocalManifestTo sends our local validator manifest to a single
-// peer. Returns nil and emits nothing when:
-//   - the router has no overlay handle (test-only construction);
-//   - we have no local validator (observer mode);
-//   - the local validator is seed-only (no manifest to broadcast — the
-//     legacy path where master == signing has nothing to gossip).
-//
-// Any encode error is logged and swallowed: emission is best-effort.
-// The caller does not get a chance to retry per-peer because the next
-// reconnect will just trigger another HandlePeerConnect anyway.
+// SendLocalManifestTo sends the aggregated TMManifests frame (every
+// cached validator manifest) to a single peer. Returns nil and emits
+// nothing when the cache is empty or no sender is wired (test-only
+// construction). Any encode error is logged and swallowed: emission is
+// best-effort, the next reconnect will retry on its own.
 func (r *Router) SendLocalManifestTo(peerID peermanagement.PeerID) {
-	wire := r.localManifestBytes()
-	if wire == nil {
+	wires := r.manifestsForEmission()
+	if len(wires) == 0 {
 		return
 	}
 	sender := r.manifestEmitter()
 	if sender == nil {
 		return
 	}
-	frame, err := encodeManifestsFrame(wire)
+	frame, err := encodeManifestsFrame(wires...)
 	if err != nil {
 		r.logger.Warn("failed to encode local manifest frame for peer", "error", err, "peer", peerID)
 		return
@@ -70,30 +64,26 @@ func (r *Router) SendLocalManifestTo(peerID peermanagement.PeerID) {
 	}
 }
 
-// BroadcastLocalManifest gossips our local validator manifest to every
-// currently-connected peer. Used by the startup one-shot broadcast and
-// (in #373) by the periodic re-emission timer. Same skip cases as
-// SendLocalManifestTo.
-//
-// Returns the number of peers the frame was queued for (0 when there's
-// nothing to broadcast or no peers connected) so callers can decide
-// whether to log the emission.
+// BroadcastLocalManifest gossips the aggregated TMManifests frame to
+// every currently-connected peer. Returns the number of peers the frame
+// was queued for (0 when there's nothing to broadcast or no peers are
+// connected) so callers can decide whether to log the emission.
 func (r *Router) BroadcastLocalManifest() int {
-	wire := r.localManifestBytes()
-	if wire == nil {
+	wires := r.manifestsForEmission()
+	if len(wires) == 0 {
 		return 0
 	}
 	sender := r.manifestEmitter()
 	if sender == nil {
 		return 0
 	}
-	frame, err := encodeManifestsFrame(wire)
-	if err != nil {
-		r.logger.Warn("failed to encode local manifest frame", "error", err)
-		return 0
-	}
 	peers := sender.Peers()
 	if len(peers) == 0 {
+		return 0
+	}
+	frame, err := encodeManifestsFrame(wires...)
+	if err != nil {
+		r.logger.Warn("failed to encode local manifest frame", "error", err)
 		return 0
 	}
 	if err := sender.Broadcast(frame); err != nil {
@@ -104,12 +94,12 @@ func (r *Router) BroadcastLocalManifest() int {
 }
 
 // manifestEmitter returns the sender used by SendLocalManifestTo /
-// BroadcastLocalManifest. Falls back to nil when the router has
-// neither a real overlay nor a test override — in that case the
-// emission paths short-circuit instead of segfaulting.
+// BroadcastLocalManifest. Falls back to nil when the router has neither
+// a real overlay nor a test override — in that case the emission paths
+// short-circuit instead of segfaulting.
 func (r *Router) manifestEmitter() manifestSender {
-	if r.testManifestSender != nil {
-		return r.testManifestSender
+	if r.overrideManifestSender != nil {
+		return r.overrideManifestSender
 	}
 	if r.overlay == nil {
 		return nil
@@ -119,27 +109,26 @@ func (r *Router) manifestEmitter() manifestSender {
 
 // HandlePeerConnect is the callback wired into Overlay.SetPeerConnectCallback.
 // Fires once a peer has finished its handshake and joined the overlay;
-// emits our local manifest so the peer can resolve our ephemeral signing
-// key back to the trusted master before our first validation arrives.
+// emits the cached validator manifests so the peer can resolve every
+// known ephemeral signing key back to its trusted master before any
+// validation arrives.
 //
-// Mirrors rippled OverlayImpl::sendEndpoints which always emits the
-// local manifest (when one exists) immediately after a peer is added.
-// Skip cases (seed-only, no overlay) are handled inside
+// Mirrors rippled PeerImp::doProtocolStart (PeerImp.cpp:851-886) which
+// sends overlay_.getManifestsMessage() in the post-handshake window.
+// Skip cases (cache empty, no overlay) are handled inside
 // SendLocalManifestTo so this stays a thin event-loop trampoline.
 func (r *Router) HandlePeerConnect(peerID peermanagement.PeerID) {
 	r.SendLocalManifestTo(peerID)
 }
 
-// localManifestBytes returns the wire bytes of our local validator
-// manifest, or nil if we have nothing to emit. Centralizes the
-// "do we have a manifest to broadcast?" decision so the per-peer and
-// broadcast paths can't drift on the skip-case logic.
-func (r *Router) localManifestBytes() []byte {
-	if r.adaptor == nil || r.adaptor.identity == nil {
+// manifestsForEmission returns the wire bytes of every cached validator
+// manifest, in arbitrary order. Centralizes the "what do we have to
+// gossip?" decision so the per-peer and broadcast paths can't drift on
+// the skip-case logic. Returns nil when the cache is empty (observer /
+// seed-only mode, or fresh boot before any peer has gossiped anything).
+func (r *Router) manifestsForEmission() [][]byte {
+	if r.manifests == nil {
 		return nil
 	}
-	if len(r.adaptor.identity.SerializedMfst) == 0 {
-		return nil
-	}
-	return r.adaptor.identity.SerializedMfst
+	return r.manifests.SerializedAll()
 }

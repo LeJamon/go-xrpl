@@ -58,7 +58,6 @@ func (f *fakeManifestSender) Peers() []peermanagement.PeerInfo {
 // gives tests a single payload to compare against the expected one.
 func frameToManifestBytes(t *testing.T, frame []byte) [][]byte {
 	t.Helper()
-	// Read the wire header off the front of the frame.
 	r := bytes.NewReader(frame)
 	hdr, payload, err := message.ReadMessage(r)
 	if err != nil {
@@ -82,34 +81,41 @@ func frameToManifestBytes(t *testing.T, frame []byte) [][]byte {
 	return out
 }
 
-// withTokenIdentity attaches a synthetic token-mode identity to the
-// adaptor so the manifest emitter has something to broadcast. The
-// fixture comes from identity_token_test.go's newTokenFixture; see
-// that file for the token construction details.
-func withTokenIdentity(t *testing.T, ad *Adaptor, seed byte, seq uint32) *ValidatorIdentity {
+// routerWithCache builds a router with a fresh manifest cache attached
+// and a fake sender installed. The optional `seed` and `seq` mint a
+// token-mode identity whose manifest is applied to the cache so the
+// emission paths have something to gossip — mirroring the production
+// startup path that seeds the local manifest into the shared cache.
+//
+// Pass empty seed/seq=0 to skip seeding (observer mode: empty cache).
+func routerWithCache(t *testing.T, sender manifestSender, seedKey byte, seq uint32) (*Router, *manifest.Cache, *ValidatorIdentity) {
 	t.Helper()
-	fix := newTokenFixture(t, seed, seq)
-	id, err := NewValidatorIdentityFromToken(fix.tokenBlock)
-	if err != nil {
-		t.Fatalf("NewValidatorIdentityFromToken: %v", err)
-	}
-	ad.identity = id
-	return id
-}
+	ad := newTestAdaptor(t)
+	cache := manifest.NewCache()
 
-func newRouterWithSender(t *testing.T, ad *Adaptor, sender manifestSender) *Router {
-	t.Helper()
+	var id *ValidatorIdentity
+	if seq != 0 {
+		fix := newTokenFixture(t, seedKey, seq)
+		var err error
+		id, err = NewValidatorIdentityFromToken(fix.tokenBlock)
+		if err != nil {
+			t.Fatalf("NewValidatorIdentityFromToken: %v", err)
+		}
+		ad.identity = id
+		if d := cache.ApplyManifest(id.Manifest); d != manifest.Accepted {
+			t.Fatalf("seed local manifest into cache: %s", d)
+		}
+	}
+
 	router := NewRouter(&mockEngine{}, ad, nil, nil)
-	router.testManifestSender = sender
-	return router
+	router.manifests = cache
+	router.overrideManifestSender = sender
+	return router, cache, id
 }
 
 func TestRouter_SendLocalManifestTo_EmitsExpectedFrame(t *testing.T) {
-	ad := newTestAdaptor(t)
-	id := withTokenIdentity(t, ad, 0x42, 5)
-
 	sender := &fakeManifestSender{}
-	router := newRouterWithSender(t, ad, sender)
+	router, _, id := routerWithCache(t, sender, 0x42, 5)
 
 	router.SendLocalManifestTo(peermanagement.PeerID(17))
 
@@ -128,9 +134,6 @@ func TestRouter_SendLocalManifestTo_EmitsExpectedFrame(t *testing.T) {
 		t.Errorf("emitted manifest bytes do not match local manifest")
 	}
 
-	// Round-trip the emitted bytes through Deserialize: confirms the
-	// payload is recognized as a valid manifest by the same decoder
-	// rippled and our cache use, not just byte-equal to the source.
 	parsed, err := manifest.Deserialize(wire[0])
 	if err != nil {
 		t.Fatalf("emitted manifest fails Deserialize: %v", err)
@@ -144,15 +147,12 @@ func TestRouter_SendLocalManifestTo_EmitsExpectedFrame(t *testing.T) {
 }
 
 func TestRouter_BroadcastLocalManifest_EmitsToAllPeers(t *testing.T) {
-	ad := newTestAdaptor(t)
-	id := withTokenIdentity(t, ad, 0x55, 3)
-
 	sender := &fakeManifestSender{
 		// Stub three peers — the count shapes the return value and is
 		// what BroadcastLocalManifest checks before calling Broadcast.
 		peers: []peermanagement.PeerInfo{{}, {}, {}},
 	}
-	router := newRouterWithSender(t, ad, sender)
+	router, _, id := routerWithCache(t, sender, 0x55, 3)
 
 	n := router.BroadcastLocalManifest()
 	if n != 3 {
@@ -169,11 +169,8 @@ func TestRouter_BroadcastLocalManifest_EmitsToAllPeers(t *testing.T) {
 }
 
 func TestRouter_BroadcastLocalManifest_NoPeersIsNoOp(t *testing.T) {
-	ad := newTestAdaptor(t)
-	withTokenIdentity(t, ad, 0x66, 2)
-
 	sender := &fakeManifestSender{} // empty Peers()
-	router := newRouterWithSender(t, ad, sender)
+	router, _, _ := routerWithCache(t, sender, 0x66, 2)
 
 	if n := router.BroadcastLocalManifest(); n != 0 {
 		t.Errorf("expected 0 with no peers, got %d", n)
@@ -183,56 +180,91 @@ func TestRouter_BroadcastLocalManifest_NoPeersIsNoOp(t *testing.T) {
 	}
 }
 
-func TestRouter_LocalManifestEmission_SeedOnlySkips(t *testing.T) {
-	ad := newTestAdaptor(t)
-	// Seed-only identity has no Manifest / no SerializedMfst.
-	seedID, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
-	if err != nil {
-		t.Fatalf("NewValidatorIdentity: %v", err)
-	}
-	if seedID.Manifest != nil || len(seedID.SerializedMfst) != 0 {
-		t.Fatal("precondition: seed identity must carry no manifest")
-	}
-	ad.identity = seedID
-
+// Empty-cache mode covers both observer (no validator at all) and
+// seed-only (validator without a token-mode manifest). In both cases
+// nothing has been applied to the cache and emission must skip.
+func TestRouter_LocalManifestEmission_EmptyCacheSkips(t *testing.T) {
 	sender := &fakeManifestSender{
 		peers: []peermanagement.PeerInfo{{}},
 	}
-	router := newRouterWithSender(t, ad, sender)
+	// seq=0 → routerWithCache skips seeding.
+	router, _, _ := routerWithCache(t, sender, 0, 0)
 
 	router.SendLocalManifestTo(peermanagement.PeerID(1))
 	if n := router.BroadcastLocalManifest(); n != 0 {
-		t.Errorf("seed-only broadcast should return 0, got %d", n)
+		t.Errorf("empty-cache broadcast should return 0, got %d", n)
 	}
 	if len(sender.sends) != 0 || len(sender.bcasts) != 0 {
-		t.Errorf("seed-only must not emit: sends=%d bcasts=%d", len(sender.sends), len(sender.bcasts))
+		t.Errorf("empty cache must not emit: sends=%d bcasts=%d", len(sender.sends), len(sender.bcasts))
 	}
 }
 
-func TestRouter_LocalManifestEmission_NoIdentitySkips(t *testing.T) {
-	ad := newTestAdaptor(t)
-	ad.identity = nil
-
+func TestRouter_LocalManifestEmission_NilCacheSkips(t *testing.T) {
 	sender := &fakeManifestSender{
 		peers: []peermanagement.PeerInfo{{}},
 	}
-	router := newRouterWithSender(t, ad, sender)
+	router, _, _ := routerWithCache(t, sender, 0, 0)
+	// Drop the cache entirely — exercises the r.manifests == nil
+	// guard in manifestsForEmission.
+	router.manifests = nil
 
 	router.SendLocalManifestTo(peermanagement.PeerID(1))
 	if n := router.BroadcastLocalManifest(); n != 0 {
-		t.Errorf("no-identity broadcast should return 0, got %d", n)
+		t.Errorf("nil-cache broadcast should return 0, got %d", n)
 	}
 	if len(sender.sends) != 0 || len(sender.bcasts) != 0 {
-		t.Errorf("no-identity must not emit: sends=%d bcasts=%d", len(sender.sends), len(sender.bcasts))
+		t.Errorf("nil cache must not emit: sends=%d bcasts=%d", len(sender.sends), len(sender.bcasts))
+	}
+}
+
+// Two cached manifests (local + a peer-gossiped one) must both end up
+// in the emitted frame — this is the rippled getManifestsMessage
+// parity property.
+func TestRouter_LocalManifestEmission_AggregatesCache(t *testing.T) {
+	sender := &fakeManifestSender{}
+	router, cache, id := routerWithCache(t, sender, 0x91, 4)
+
+	// Mint a second token-mode identity and apply its manifest to the
+	// cache as if it had been gossiped by a trusted peer.
+	otherFix := newTokenFixture(t, 0xA3, 11)
+	other, err := NewValidatorIdentityFromToken(otherFix.tokenBlock)
+	if err != nil {
+		t.Fatalf("NewValidatorIdentityFromToken (other): %v", err)
+	}
+	if d := cache.ApplyManifest(other.Manifest); d != manifest.Accepted {
+		t.Fatalf("apply remote manifest: %s", d)
+	}
+
+	router.SendLocalManifestTo(peermanagement.PeerID(7))
+	if len(sender.sends) != 1 {
+		t.Fatalf("expected 1 Send, got %d", len(sender.sends))
+	}
+
+	got := frameToManifestBytes(t, sender.sends[0].frame)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 manifests in aggregated frame, got %d", len(got))
+	}
+	// Cache iteration order is map-random; check both expected payloads
+	// appear regardless of order.
+	want := map[string]bool{
+		string(id.SerializedMfst):    false,
+		string(other.SerializedMfst): false,
+	}
+	for _, w := range got {
+		if _, ok := want[string(w)]; ok {
+			want[string(w)] = true
+		}
+	}
+	for k, seen := range want {
+		if !seen {
+			t.Errorf("aggregated frame missing manifest %x...", []byte(k)[:8])
+		}
 	}
 }
 
 func TestRouter_HandlePeerConnect_DelegatesToSendLocalManifest(t *testing.T) {
-	ad := newTestAdaptor(t)
-	withTokenIdentity(t, ad, 0x77, 9)
-
 	sender := &fakeManifestSender{}
-	router := newRouterWithSender(t, ad, sender)
+	router, _, _ := routerWithCache(t, sender, 0x77, 9)
 
 	router.HandlePeerConnect(peermanagement.PeerID(42))
 
@@ -245,11 +277,8 @@ func TestRouter_HandlePeerConnect_DelegatesToSendLocalManifest(t *testing.T) {
 }
 
 func TestRouter_SendLocalManifestTo_SwallowsSenderError(t *testing.T) {
-	ad := newTestAdaptor(t)
-	withTokenIdentity(t, ad, 0x88, 1)
-
 	sender := &fakeManifestSender{sendErr: errors.New("peer gone")}
-	router := newRouterWithSender(t, ad, sender)
+	router, _, _ := routerWithCache(t, sender, 0x88, 1)
 
 	// Must not panic / propagate. The peer can race a disconnect
 	// between addPeer and the connect callback firing — the emitter
