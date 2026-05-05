@@ -193,10 +193,7 @@ func TestDoVoting_LedgerSequenceIsUpcoming(t *testing.T) {
 
 // TestVotableValue_PicksHighestCountWithinWindow exercises the
 // inner getVotes loop directly: the most-voted in-window value
-// wins, ties broken by iteration order (rippled accepts whichever
-// entry the first reaches `> weight`, so it's effectively a
-// "last-tied wins" pattern that depends on map iteration; we
-// match this without testing tie ordering).
+// wins.
 func TestVotableValue_PicksHighestCountWithinWindow(t *testing.T) {
 	v := newVotableValue(10, 14) // window = [10, 14]
 	v.addVote(11)
@@ -205,6 +202,94 @@ func TestVotableValue_PicksHighestCountWithinWindow(t *testing.T) {
 	chosen, changed := v.getVotes()
 	assert.True(t, changed)
 	assert.EqualValues(t, 11, chosen, "11 has 2 votes, beats 13 (1) and seed-target 14 (1)")
+}
+
+// TestVotableValue_TieBreakLowestKeyWins pins the deterministic
+// tie-break order: with two in-window values at equal vote counts,
+// the lowest key wins. Mirrors rippled's std::map ascending-key
+// iteration with strict `val > weight` at FeeVoteImpl.cpp:74-83.
+//
+// Without this guarantee, two goXRPL nodes given identical inputs
+// could pick different values from Go's randomized map iteration —
+// the resulting SetFee blobs would diverge across the network.
+func TestVotableValue_TieBreakLowestKeyWins(t *testing.T) {
+	// Run repeatedly: a non-deterministic implementation would
+	// occasionally pick 12 or 13 across iterations; the
+	// deterministic implementation always picks 11.
+	for i := 0; i < 64; i++ {
+		v := newVotableValue(10, 14) // window = [10, 14], seeds voteMap[14]=1
+		v.addVote(11)
+		v.addVote(12)
+		v.addVote(13)
+		// All four values now have count 1 — first ascending-key
+		// in-window value wins → 11 (10 == current loses on
+		// strict `count > weight`).
+		chosen, changed := v.getVotes()
+		assert.True(t, changed)
+		assert.EqualValues(t, 11, chosen,
+			"iter %d: tie at count=1 → lowest in-window key (11) wins, not %d", i, chosen)
+	}
+}
+
+// TestBuildSetFeeTx_EmitsEmptySigningPubKey pins the wire-format
+// requirement that pseudo-tx blobs carry sfSigningPubKey as an
+// empty VL (field code 0x73, length 0x00). rippled's STTx ctor at
+// STTx.cpp:113-128 calls set(format->getSOTemplate()), inserting a
+// default-constructed empty Blob for every REQUIRED common field
+// (TxFormats.cpp:32-50); STObject::add at STObject.cpp:881-921
+// then serializes the empty Blob. Omitting it changes the blob
+// length and hence the txID — diverging consensus.
+func TestBuildSetFeeTx_EmitsEmptySigningPubKey(t *testing.T) {
+	current := Stance{BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000}
+	target := Stance{BaseFee: 12, ReserveBase: 11_000_000, ReserveIncrement: 2_500_000}
+
+	for _, xrpFees := range []bool{false, true} {
+		blob, err := DoVoting(1024, current, target, nil, xrpFees)
+		require.NoError(t, err)
+		require.NotNil(t, blob)
+
+		// Empty sfSigningPubKey serializes as the two bytes 0x73 0x00.
+		// We assert the byte sequence appears anywhere in the blob —
+		// canonical-sort field order is verified by the codec
+		// round-trip below.
+		assert.Contains(t, hex.EncodeToString(blob), "7300",
+			"xrpFeesEnabled=%v: blob must include sfSigningPubKey VL(0)", xrpFees)
+
+		stx := decodeTx(t, blob)
+		got, ok := stx["SigningPubKey"]
+		assert.True(t, ok, "xrpFeesEnabled=%v: decoded tx must include SigningPubKey", xrpFees)
+		assert.Equal(t, "", got, "xrpFeesEnabled=%v: SigningPubKey must decode as empty", xrpFees)
+	}
+}
+
+// TestBuildSetFeeTx_PreXRPFeesReserveOverflowFallsBackToCurrent
+// pins the dropsAs<uint32>(current) fallback at
+// FeeVoteImpl.cpp:312-316: when the chosen pre-XRPFees ReserveBase
+// or ReserveIncrement does not fit in uint32, rippled emits the
+// CURRENT value, not a silent truncation of chosen.
+//
+// Triggered here by setting target above UINT32_MAX so getVotes
+// picks an out-of-range value. The window
+// [current, target] then spans up to 2^33, and the seeded
+// voteMap[target]=1 wins because no other vote is in the window.
+func TestBuildSetFeeTx_PreXRPFeesReserveOverflowFallsBackToCurrent(t *testing.T) {
+	overflow := uint64(1) << 33 // > UINT32_MAX
+	current := Stance{BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000}
+	target := Stance{
+		BaseFee:          11,
+		ReserveBase:      overflow,
+		ReserveIncrement: overflow,
+	}
+
+	blob, err := DoVoting(1024, current, target, nil, false /* pre-XRPFees */)
+	require.NoError(t, err)
+	require.NotNil(t, blob, "BaseFee changed → tx emitted")
+
+	stx := decodeTx(t, blob)
+	assert.EqualValues(t, current.ReserveBase, asUint(stx["ReserveBase"]),
+		"chosen ReserveBase > UINT32_MAX → fall back to current, not truncate")
+	assert.EqualValues(t, current.ReserveIncrement, asUint(stx["ReserveIncrement"]),
+		"chosen ReserveIncrement > UINT32_MAX → fall back to current")
 }
 
 func decodeTx(t *testing.T, blob []byte) map[string]any {
