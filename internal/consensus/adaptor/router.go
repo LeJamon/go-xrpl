@@ -1032,6 +1032,15 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger) error {
 		"seq", hdr.LedgerIndex,
 		"hash", fmt.Sprintf("%x", hdr.Hash[:8]),
 	)
+	// Notify the consensus engine so it can flip out of
+	// ModeWrongLedger via Engine.OnLedger (rcl/engine.go:801). Without
+	// this, the engine remains stuck in wrongLedger indefinitely after
+	// a successful inbound acquisition. Issue #359.
+	if r.engine != nil {
+		if err := r.engine.OnLedger(consensus.LedgerID(hdr.Hash), nil); err != nil {
+			r.logger.Debug("engine rejected adopted ledger", "error", err, "seq", hdr.LedgerIndex)
+		}
+	}
 	return nil
 }
 
@@ -1319,4 +1328,12 @@ func (r *Router) completeInboundLedger() {
 		"hash", fmt.Sprintf("%x", h.Hash[:8]),
 		"account_hash", fmt.Sprintf("%x", h.AccountHash[:8]),
 	)
+	// Notify the consensus engine so it can flip out of
+	// ModeWrongLedger via Engine.OnLedger. Mirrors the replay-delta
+	// path in adoptVerifiedLedger — see Issue #359.
+	if r.engine != nil {
+		if err := r.engine.OnLedger(consensus.LedgerID(h.Hash), nil); err != nil {
+			r.logger.Debug("engine rejected adopted ledger", "error", err, "seq", h.LedgerIndex)
+		}
+	}
 }

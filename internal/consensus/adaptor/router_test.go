@@ -20,18 +20,31 @@ type mockEngine struct {
 	proposals   []*consensus.Proposal
 	validations []*consensus.Validation
 	txSets      []consensus.TxSetID
+	ledgers     []consensus.LedgerID
 }
 
-func (m *mockEngine) Start(context.Context) error               { return nil }
-func (m *mockEngine) Stop() error                               { return nil }
-func (m *mockEngine) StartRound(consensus.RoundID, bool) error  { return nil }
-func (m *mockEngine) State() *consensus.RoundState              { return nil }
-func (m *mockEngine) Mode() consensus.Mode                      { return consensus.ModeObserving }
-func (m *mockEngine) Phase() consensus.Phase                    { return consensus.PhaseOpen }
-func (m *mockEngine) IsProposing() bool                         { return false }
-func (m *mockEngine) Timing() consensus.Timing                  { return consensus.DefaultTiming() }
-func (m *mockEngine) GetLastCloseInfo() (int, time.Duration)    { return 0, 0 }
-func (m *mockEngine) OnLedger(consensus.LedgerID, []byte) error { return nil }
+func (m *mockEngine) Start(context.Context) error              { return nil }
+func (m *mockEngine) Stop() error                              { return nil }
+func (m *mockEngine) StartRound(consensus.RoundID, bool) error { return nil }
+func (m *mockEngine) State() *consensus.RoundState             { return nil }
+func (m *mockEngine) Mode() consensus.Mode                     { return consensus.ModeObserving }
+func (m *mockEngine) Phase() consensus.Phase                   { return consensus.PhaseOpen }
+func (m *mockEngine) IsProposing() bool                        { return false }
+func (m *mockEngine) Timing() consensus.Timing                 { return consensus.DefaultTiming() }
+func (m *mockEngine) GetLastCloseInfo() (int, time.Duration)   { return 0, 0 }
+
+func (m *mockEngine) OnLedger(id consensus.LedgerID, _ []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ledgers = append(m.ledgers, id)
+	return nil
+}
+
+func (m *mockEngine) getLedgers() []consensus.LedgerID {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]consensus.LedgerID(nil), m.ledgers...)
+}
 
 func (m *mockEngine) OnProposal(p *consensus.Proposal, _ uint64) error {
 	m.mu.Lock()
