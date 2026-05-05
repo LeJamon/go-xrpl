@@ -76,6 +76,30 @@ type Router struct {
 	// directly via Overlay.BroadcastExcept. Nil in tests that
 	// construct a router without manifest support.
 	overlay *peermanagement.Overlay
+
+	// overrideManifestSender, when non-nil, replaces r.overlay for the
+	// local-manifest emission paths (SendLocalManifestTo /
+	// BroadcastLocalManifest). Tests install a fake here to observe
+	// the emitted frame without standing up real listeners; production
+	// leaves it nil so the real overlay is used. The relayManifest
+	// path still needs r.overlay directly because BroadcastExcept has
+	// no equivalent on the sender interface.
+	overrideManifestSender manifestSender
+
+	// manifestFrameMu guards the cached TMManifests emission frame and
+	// its companion sequence cursor. Mirrors the (manifestMessage_,
+	// manifestListSeq_) pair on rippled's OverlayImpl
+	// (OverlayImpl.cpp:1184-1212): re-encode only when manifests.Sequence
+	// has advanced past the value seen at last build, so back-to-back
+	// peer connects reuse the same encoded bytes without re-walking the
+	// cache. manifestFrameBuilt is the never-built sentinel — a zero
+	// manifestFrameSeq is a valid cursor (a fresh cache starts at 0),
+	// so we need an explicit "have we ever built?" flag rather than
+	// using the zero value as the sentinel.
+	manifestFrameMu    sync.Mutex
+	manifestFrame      []byte
+	manifestFrameSeq   uint64
+	manifestFrameBuilt bool
 }
 
 // messageDedupTTL is how long a proposal/validation hash is
@@ -333,15 +357,13 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) {
 // except the origin. Wraps the serialized STObject in a TMManifests
 // frame (a list of one) — matching rippled's per-manifest relay
 // (OverlayImpl.cpp:633-686 loops through and relays each one via
-// overlay_.foreach).
+// overlay_.foreach). Shares its framing with the local-manifest
+// emission paths in manifest_emit.go.
 func (r *Router) relayManifest(exceptPeer peermanagement.PeerID, serialized []byte) {
 	if r.overlay == nil {
 		return
 	}
-	relayMsg := &message.Manifests{
-		List: []message.Manifest{{STObject: serialized}},
-	}
-	frame, err := encodeFrame(message.TypeManifests, relayMsg)
+	frame, err := encodeManifestsFrame(serialized)
 	if err != nil {
 		r.logger.Warn("failed to encode manifest relay frame", "error", err)
 		return

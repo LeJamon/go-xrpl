@@ -157,6 +157,22 @@ func NewFromConfig(
 	// as itself.
 	manifestCache := manifest.NewCache()
 
+	// Seed the local validator's manifest into the cache when running
+	// in token mode so the post-handshake TMManifests emission walks
+	// every cached entry — local + aggregated remote — matching
+	// rippled's OverlayImpl::getManifestsMessage which iterates
+	// ValidatorManifests::for_each_manifest (Manifest.cpp:1184-1212).
+	// In observer / seed-only mode there is nothing to seed and the
+	// cache stays cold until peers gossip something.
+	if identity != nil && identity.Manifest != nil {
+		if d := manifestCache.ApplyManifest(identity.Manifest); d != manifest.Accepted {
+			return nil, fmt.Errorf("seed local manifest into cache: disposition=%s", d)
+		}
+	} else {
+		slog.Info("local validator manifest not configured; TMManifests emission limited to peer-gossiped entries",
+			"t", "adaptor.NewFromConfig")
+	}
+
 	engine := rcl.NewEngine(adaptor, rcl.DefaultConfig())
 
 	// Translate ephemeral signing keys → master keys before quorum
@@ -196,6 +212,16 @@ func NewFromConfig(
 	// Without this a disconnected peer's stale LCL keeps influencing
 	// consensus convergence.
 	overlay.SetPeerDisconnectCallback(router.HandlePeerDisconnect)
+
+	// Emit cached validator manifests (local + aggregated remote) the
+	// moment a peer's handshake completes. Mirrors rippled
+	// PeerImp::doProtocolStart (PeerImp.cpp:851-886) which sends
+	// OverlayImpl::getManifestsMessage — i.e. every entry in
+	// ValidatorManifests — so the new peer can resolve our ephemeral
+	// signing key (and any other validator's) back to its trusted
+	// master before any validation it receives. Skip cases (cache
+	// empty, no overlay) are absorbed inside SendLocalManifestTo.
+	overlay.SetPeerConnectCallback(router.HandlePeerConnect)
 
 	// Wire operating mode into ledger service for server_info.
 	// Matches rippled: report "proposing" when both in full operating mode

@@ -313,3 +313,61 @@ func TestManifest_Revoked_WithEphemeral_Rejected(t *testing.T) {
 		t.Fatal("Deserialize: got nil, want rejection of revoked + ephemeral")
 	}
 }
+
+// Sequence() tracks rippled's seq_++ semantics: only the UPDATE branch
+// in ApplyManifest advances the counter (Manifest.cpp:538). First-
+// inserts and Stale re-applies leave it alone.
+func TestManifest_Sequence_AdvancesOnlyOnUpdate(t *testing.T) {
+	c := manifest.NewCache()
+	if got := c.Sequence(); got != 0 {
+		t.Fatalf("fresh cache Sequence: got %d want 0", got)
+	}
+
+	// First insert under master A.
+	aSeq1Bytes, _, _ := buildManifest(t, 1, false, 0x21, 0x22)
+	aSeq1, err := manifest.Deserialize(aSeq1Bytes)
+	if err != nil {
+		t.Fatalf("Deserialize aSeq1: %v", err)
+	}
+	if d := c.ApplyManifest(aSeq1); d != manifest.Accepted {
+		t.Fatalf("first insert: %s", d)
+	}
+	if got := c.Sequence(); got != 0 {
+		t.Errorf("Sequence after first insert: got %d want 0 (rippled first-insert quirk)", got)
+	}
+
+	// First insert under a SECOND master B — still a first-insert, so
+	// no bump.
+	bSeq1Bytes, _, _ := buildManifest(t, 1, false, 0x23, 0x24)
+	bSeq1, err := manifest.Deserialize(bSeq1Bytes)
+	if err != nil {
+		t.Fatalf("Deserialize bSeq1: %v", err)
+	}
+	if d := c.ApplyManifest(bSeq1); d != manifest.Accepted {
+		t.Fatalf("second master first insert: %s", d)
+	}
+	if got := c.Sequence(); got != 0 {
+		t.Errorf("Sequence after second first-insert: got %d want 0", got)
+	}
+
+	// Update master A → seq must bump.
+	aSeq2Bytes, _, _ := buildManifest(t, 2, false, 0x21, 0x25)
+	aSeq2, err := manifest.Deserialize(aSeq2Bytes)
+	if err != nil {
+		t.Fatalf("Deserialize aSeq2: %v", err)
+	}
+	if d := c.ApplyManifest(aSeq2); d != manifest.Accepted {
+		t.Fatalf("update aSeq2: %s", d)
+	}
+	if got := c.Sequence(); got != 1 {
+		t.Errorf("Sequence after update: got %d want 1", got)
+	}
+
+	// Stale re-apply must NOT bump.
+	if d := c.ApplyManifest(aSeq1); d != manifest.Stale {
+		t.Fatalf("stale re-apply: %s", d)
+	}
+	if got := c.Sequence(); got != 1 {
+		t.Errorf("Sequence after stale: got %d want 1", got)
+	}
+}
