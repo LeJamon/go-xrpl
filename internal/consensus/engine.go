@@ -131,7 +131,10 @@ type Adaptor interface {
 	GetValidatedLedgerHash() LedgerID
 
 	// BuildLedger constructs a new ledger from a transaction set.
-	BuildLedger(parent Ledger, txSet TxSet, closeTime time.Time) (Ledger, error)
+	// closeTimeCorrect is true when consensus agreed on the close time;
+	// when false, the resulting header carries sLCF_NoConsensusTime so
+	// the hash matches what rippled produces in the same case.
+	BuildLedger(parent Ledger, txSet TxSet, closeTime time.Time, closeTimeCorrect bool) (Ledger, error)
 
 	// ValidateLedger checks if a ledger is valid.
 	ValidateLedger(ledger Ledger) error

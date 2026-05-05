@@ -497,7 +497,7 @@ func (a *Adaptor) GetValidatedLedgerHash() consensus.LedgerID {
 	return consensus.LedgerID(vl.Hash())
 }
 
-func (a *Adaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time) (consensus.Ledger, error) {
+func (a *Adaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, closeTimeCorrect bool) (consensus.Ledger, error) {
 	// Unwrap the parent to get the concrete ledger for the service.
 	// This is critical for chain switching: the parent may differ from
 	// the service's internal closedLedger after wrong ledger detection.
@@ -509,7 +509,7 @@ func (a *Adaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, cl
 	// propagate a context. Until that interface gains one, persistence
 	// here cannot be cancelled by the consensus engine. Tracked separately
 	// from this issue (#185).
-	seq, err := a.ledgerService.AcceptConsensusResult(context.TODO(), parentLedger, txSet.Txs(), closeTime)
+	seq, err := a.ledgerService.AcceptConsensusResult(context.TODO(), parentLedger, txSet.Txs(), closeTime, closeTimeCorrect)
 	if err != nil {
 		return nil, err
 	}

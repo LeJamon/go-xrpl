@@ -228,7 +228,7 @@ func (a *mockAdaptor) GetLastClosedLedger() (consensus.Ledger, error) {
 	return a.lastLCL, nil
 }
 
-func (a *mockAdaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time) (consensus.Ledger, error) {
+func (a *mockAdaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, _ bool) (consensus.Ledger, error) {
 	newLedger := &mockLedger{
 		id:        consensus.LedgerID{byte(parent.Seq() + 1)},
 		seq:       parent.Seq() + 1,

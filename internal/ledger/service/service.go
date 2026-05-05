@@ -1138,7 +1138,7 @@ type LedgerInfo struct {
 //
 // The multi-pass retry logic is the same as AcceptLedger to match rippled's
 // BuildLedger behavior.
-func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledger, txBlobs [][]byte, closeTime time.Time) (uint32, error) {
+func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledger, txBlobs [][]byte, closeTime time.Time, closeTimeCorrect bool) (uint32, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1327,8 +1327,15 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 	// Reset pending transactions
 	s.pendingTxs = nil
 
-	// Close the ledger with the consensus-agreed close time
-	if err := s.openLedger.Close(closeTime, 0); err != nil {
+	// Close the ledger with the consensus-agreed close time. Match
+	// rippled's Ledger.cpp:367 — when consensus did not agree on
+	// closeTime, set sLCF_NoConsensusTime so the hash matches what
+	// rippled produces in the same case (Issue #361).
+	var closeFlags uint8
+	if !closeTimeCorrect {
+		closeFlags = header.LCFNoConsensusTime
+	}
+	if err := s.openLedger.Close(closeTime, closeFlags); err != nil {
 		return 0, fmt.Errorf("failed to close ledger: %w", err)
 	}
 

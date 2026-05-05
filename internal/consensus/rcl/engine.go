@@ -1873,7 +1873,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	}
 
 	// Build the new ledger
-	newLedger, err := e.adaptor.BuildLedger(e.prevLedger, txSet, closeTime)
+	newLedger, err := e.adaptor.BuildLedger(e.prevLedger, txSet, closeTime, e.haveCloseTimeConsensus)
 	if err != nil {
 		return
 	}
