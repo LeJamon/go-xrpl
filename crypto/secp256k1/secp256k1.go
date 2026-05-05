@@ -357,6 +357,19 @@ func (c SECP256K1CryptoAlgorithm) DeriveValidatorKeypair(seed []byte) (string, s
 	return c.DeriveKeypair(seed, true)
 }
 
+// DerivePublicKeyFromSecret returns the 33-byte compressed secp256k1
+// public key for a raw 32-byte secret. Mirrors rippled's
+// derivePublicKey(KeyType::secp256k1, SecretKey) used by validator-token
+// loading, where the JSON `validation_secret_key` already is the raw
+// scalar (no seed expansion).
+func (c SECP256K1CryptoAlgorithm) DerivePublicKeyFromSecret(secret []byte) ([]byte, error) {
+	if len(secret) != 32 {
+		return nil, ErrInvalidPrivateKey
+	}
+	_, pubKey := btcec.PrivKeyFromBytes(secret)
+	return pubKey.SerializeCompressed(), nil
+}
+
 // DeriveAccountKeypair derives an account keypair from a seed.
 // This is a convenience function that calls DeriveKeypair with validator=false.
 func (c SECP256K1CryptoAlgorithm) DeriveAccountKeypair(seed []byte) (string, string, error) {

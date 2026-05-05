@@ -105,20 +105,16 @@ func NewFromConfig(
 	// pass its pubkey into the overlay for the self-target TMSquelch
 	// filter (Task 4.2 / G3: without this a peer could silence our own
 	// validator's traffic on the RelayFromValidator path).
-	var identity *ValidatorIdentity
-	if appCfg.ValidationSeed != "" {
-		var err error
-		identity, err = NewValidatorIdentity(appCfg.ValidationSeed)
-		if err != nil {
-			return nil, fmt.Errorf("create validator identity: %w", err)
-		}
+	identity, err := NewValidatorIdentityFromConfig(appCfg.ValidationSeed, appCfg.ValidatorToken)
+	if err != nil {
+		return nil, fmt.Errorf("create validator identity: %w", err)
 	}
 
 	// Build overlay options from app config
 	overlayOpts := OverlayOptionsFromConfig(appCfg)
-	if identity != nil && len(identity.PublicKey) == 33 {
+	if identity != nil {
 		overlayOpts = append(overlayOpts,
-			peermanagement.WithLocalValidatorPubKey(identity.PublicKey))
+			peermanagement.WithLocalValidatorPubKey(identity.SigningPubKey()))
 	}
 
 	overlay, err := peermanagement.New(overlayOpts...)

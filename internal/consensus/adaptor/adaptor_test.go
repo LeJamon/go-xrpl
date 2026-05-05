@@ -352,8 +352,11 @@ func TestValidatorIdentityFromSeed(t *testing.T) {
 	identity, err = NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
 	assert.NoError(t, err)
 	assert.NotNil(t, identity)
-	assert.Len(t, identity.PublicKey, 33) // compressed secp256k1
+	// Seed-only identity: master == signing == NodeID, no manifest.
+	assert.Equal(t, identity.MasterKey, identity.SigningKey)
 	assert.NotEqual(t, consensus.NodeID{}, identity.NodeID)
+	assert.Nil(t, identity.Manifest)
+	assert.Nil(t, identity.SerializedMfst)
 }
 
 func TestLedgerWrapper(t *testing.T) {

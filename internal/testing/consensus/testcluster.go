@@ -66,7 +66,7 @@ func NewTestCluster(t *testing.T, n int) *TestCluster {
 		identities[i] = id
 		validatorNodeIDs[i] = id.NodeID
 
-		key, err := addresscodec.EncodeNodePublicKey(id.PublicKey)
+		key, err := addresscodec.EncodeNodePublicKey(id.SigningPubKey())
 		if err != nil {
 			t.Fatalf("encode node key %d: %v", i, err)
 		}
