@@ -558,6 +558,21 @@ func (a *Adaptor) GetPendingTxs() [][]byte {
 	return blobs
 }
 
+// GenerateFlagLedgerPseudoTxs is a stub: vote-tally producers (fee
+// vote, amendment vote) are not yet implemented in goXRPL. See
+// follow-up issues #369 (fee) and #370 (amendments). Returns nil so
+// the engine's injection step at closeLedger is a no-op until those
+// land — matching the pre-#367 behavior of never injecting.
+func (a *Adaptor) GenerateFlagLedgerPseudoTxs(_ consensus.Ledger) [][]byte {
+	return nil
+}
+
+// GenerateNegativeUNLPseudoTx is a stub: NegativeUNLVote tally is
+// not yet implemented. See follow-up issue #368.
+func (a *Adaptor) GenerateNegativeUNLPseudoTx(_ consensus.Ledger) []byte {
+	return nil
+}
+
 func (a *Adaptor) GetTxSet(id consensus.TxSetID) (consensus.TxSet, error) {
 	ts, ok := a.txSetCache.Get(id)
 	if !ok {

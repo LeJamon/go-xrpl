@@ -147,6 +147,31 @@ type Adaptor interface {
 	// GetPendingTxs returns transactions waiting to be included.
 	GetPendingTxs() [][]byte
 
+	// GenerateFlagLedgerPseudoTxs returns the fee-vote and
+	// amendment-vote pseudo-transaction blobs to inject into the
+	// proposal initial set when prevLedger is a flag ledger. Mirrors
+	// rippled's RCLConsensus.cpp:354-367 — when the previous ledger is
+	// a flag ledger, validators tally fee and amendment votes from the
+	// validations of the ledger before that and emit SetFee /
+	// EnableAmendment pseudo-txs reflecting the consensus.
+	//
+	// Returns nil when no votes apply or when the local node is not
+	// eligible to inject (non-validating, wrongLCL). Adaptors that
+	// don't implement vote tallying yet (most goXRPL builds today)
+	// should return nil — the engine treats nil as "no pseudo-txs",
+	// matching the behavior before #367 landed. The actual vote-tally
+	// producers ship in #368/#369/#370.
+	GenerateFlagLedgerPseudoTxs(prevLedger Ledger) [][]byte
+
+	// GenerateNegativeUNLPseudoTx returns the NegativeUNL pseudo-tx
+	// to inject when prevLedger is a voting ledger AND the
+	// featureNegativeUNL amendment is enabled. Mirrors rippled
+	// RCLConsensus.cpp:368-380.
+	//
+	// Returns nil when no NegUNL changes are required. Adaptors
+	// without NegativeUNLVote support return nil.
+	GenerateNegativeUNLPseudoTx(prevLedger Ledger) []byte
+
 	// GetTxSet returns a transaction set by ID.
 	GetTxSet(id TxSetID) (TxSet, error)
 

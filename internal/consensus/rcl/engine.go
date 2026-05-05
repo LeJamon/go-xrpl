@@ -1390,6 +1390,26 @@ func (e *Engine) phaseOpen() {
 func (e *Engine) closeLedger() {
 	// Build our transaction set from pending transactions
 	txs := e.adaptor.GetPendingTxs()
+
+	// Inject flag-ledger / voting-ledger pseudo-txs BEFORE building
+	// the tx set, so the resulting tx-set hash matches what rippled
+	// computes for the same round (RCLConsensus.cpp:351-381). Gated
+	// on ModeProposing, which excludes wrongLedger by definition,
+	// matching rippled's `proposing && !wrongLCL`.
+	if e.mode == consensus.ModeProposing && e.prevLedger != nil {
+		prev := e.prevLedger
+		switch {
+		case consensus.IsFlagLedger(prev.Seq()):
+			if extra := e.adaptor.GenerateFlagLedgerPseudoTxs(prev); len(extra) > 0 {
+				txs = append(txs, extra...)
+			}
+		case consensus.IsVotingLedger(prev.Seq()) && e.adaptor.IsFeatureEnabled("NegativeUNL"):
+			if extra := e.adaptor.GenerateNegativeUNLPseudoTx(prev); len(extra) > 0 {
+				txs = append(txs, extra)
+			}
+		}
+	}
+
 	txSet, err := e.adaptor.BuildTxSet(txs)
 	if err != nil {
 		slog.Error("Failed to build tx set, falling back to empty set",
@@ -2162,15 +2182,6 @@ func (e *Engine) determineCloseTime() time.Time {
 	return roundCloseTime(e.state.CloseTimes.Self, resolution)
 }
 
-// isVotingLedger reports whether a validation for this ledger should
-// carry fee-vote and amendment-vote fields. Matches rippled
-// Ledger.cpp:951-953: a flag ledger is one whose sequence is 1 less
-// than a multiple of 256 (i.e., (seq+1) % 256 == 0). The validation
-// for that ledger carries the vote for the next flag cycle.
-func isVotingLedger(ledgerSeq uint32) bool {
-	return (ledgerSeq+1)%256 == 0
-}
-
 // sendValidation creates and broadcasts a validation.
 //
 // The Full flag on the emitted validation reflects whether we were
@@ -2231,7 +2242,7 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 		}
 		validation.Cookie = cookie
 
-		if isVotingLedger(ledger.Seq()) {
+		if consensus.IsVotingLedger(ledger.Seq()) {
 			serverVersion := e.adaptor.GetServerVersion()
 			if serverVersion == 0 {
 				slog.Warn("sendValidation: serverVersion is zero on voting ledger under HardenedValidations — adaptor must advertise a build tag; emitting without serverVersion")
@@ -2248,7 +2259,7 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 	// ~256× and confuses peer aggregators that accept these fields
 	// only on the expected boundary. Matches
 	// Ledger.cpp:951-953 isVotingLedger + RCLConsensus.cpp:879.
-	if isVotingLedger(ledger.Seq()) {
+	if consensus.IsVotingLedger(ledger.Seq()) {
 		// Fee vote: emit the AMOUNT triple under post-XRPFees rules, the
 		// legacy UINT triple otherwise. Rippled's FeeVoteImpl.cpp:120-192
 		// is a hard if/else on featureXRPFees; the adaptor's postXRPFees

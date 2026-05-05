@@ -134,6 +134,12 @@ type mockAdaptor struct {
 
 	// Load fee for R6b.5b — emitted as sfLoadFee. Zero by default.
 	loadFee uint32
+
+	// Pseudo-tx producer overrides for #367 tests. nil means the
+	// stub returns nil (no injection), matching the production
+	// adaptor's pre-vote-tally behavior.
+	flagLedgerPseudoTxs [][]byte
+	negativeUNLPseudoTx []byte
 }
 
 func newMockAdaptor() *mockAdaptor {
@@ -296,6 +302,18 @@ func (a *mockAdaptor) GetPendingTxs() [][]byte {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.pendingTxs
+}
+
+func (a *mockAdaptor) GenerateFlagLedgerPseudoTxs(_ consensus.Ledger) [][]byte {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.flagLedgerPseudoTxs
+}
+
+func (a *mockAdaptor) GenerateNegativeUNLPseudoTx(_ consensus.Ledger) []byte {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.negativeUNLPseudoTx
 }
 
 func (a *mockAdaptor) HasTx(id consensus.TxID) bool {

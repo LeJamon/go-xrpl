@@ -64,6 +64,35 @@ const increaseLedgerTimeResolutionEvery uint32 = 8
 // seconds). Matches rippled LedgerTiming.h:53.
 const decreaseLedgerTimeResolutionEvery uint32 = 1
 
+// FlagLedgerInterval is the period (in ledgers) on which validators
+// vote on amendments and fee/reserve changes. Matches rippled's
+// FLAG_LEDGER_INTERVAL constant (Ledger.cpp).
+const FlagLedgerInterval uint32 = 256
+
+// IsFlagLedger reports whether the ledger at the given sequence is a
+// flag ledger — the ledger on which fee and amendment vote results
+// take effect. Matches rippled Ledger.cpp `isFlagLedger`: true when
+// seq is non-zero and divisible by FlagLedgerInterval.
+//
+// Pseudo-txs from a flag ledger's voting cycle are injected into the
+// ledger AFTER the flag ledger; rippled gates this on
+// `prevLedger.isFlagLedger()` in RCLConsensus.cpp:354.
+func IsFlagLedger(seq uint32) bool {
+	return seq != 0 && seq%FlagLedgerInterval == 0
+}
+
+// IsVotingLedger reports whether the validation for the ledger at the
+// given sequence carries fee-vote and amendment-vote fields — i.e.
+// the ledger BEFORE a flag ledger. Matches rippled Ledger.cpp:
+// (seq + 1) % FlagLedgerInterval == 0.
+//
+// In rippled this also gates NegativeUNL pseudo-tx injection at
+// RCLConsensus.cpp:368-380 (when prevLedger is a voting ledger the
+// upcoming ledger is a flag ledger and NegUNL changes apply).
+func IsVotingLedger(seq uint32) bool {
+	return (seq+1)%FlagLedgerInterval == 0
+}
+
 // GetNextLedgerTimeResolution returns the close-time resolution, in
 // seconds, for the ledger at sequence newLedgerSeq, given the parent
 // ledger's resolution and whether the prior consensus round agreed
