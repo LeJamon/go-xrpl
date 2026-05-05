@@ -567,8 +567,22 @@ func (a *Adaptor) GenerateFlagLedgerPseudoTxs(_ consensus.Ledger) [][]byte {
 	return nil
 }
 
-// GenerateNegativeUNLPseudoTx is a stub: NegativeUNLVote tally is
-// not yet implemented. See follow-up issue #368.
+// GenerateNegativeUNLPseudoTx is currently a stub. The vote-tally
+// algorithm itself lives in internal/consensus/negativeunlvote
+// (ported in #368) and is exercised by package-level tests against
+// synthetic score tables, but the production wiring still needs:
+//
+//   - per-seq validation history in ValidationTracker (today
+//     validations are only indexed by LedgerID; the algorithm needs
+//     to query "validations for ancestor at seq N by hash H" across
+//     the last FlagLedgerInterval ledgers);
+//   - state-map read access on consensus.Ledger so the producer can
+//     fetch the NegativeUNL SLE and the LedgerHashes skip-list of
+//     prevLedger.
+//
+// Returning nil keeps the engine's injection step a no-op until
+// those land — which preserves the pre-#367 behavior of never
+// injecting a NegUNL pseudo-tx.
 func (a *Adaptor) GenerateNegativeUNLPseudoTx(_ consensus.Ledger) []byte {
 	return nil
 }
