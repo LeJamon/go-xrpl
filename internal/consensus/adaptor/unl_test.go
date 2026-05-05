@@ -17,7 +17,7 @@ func TestDecodeValidatorKey(t *testing.T) {
 	require.NoError(t, err)
 
 	// Encode the public key as a base58 node public key
-	encoded, err := addresscodec.EncodeNodePublicKey(identity.PublicKey)
+	encoded, err := addresscodec.EncodeNodePublicKey(identity.SigningPubKey())
 	require.NoError(t, err)
 	assert.True(t, len(encoded) > 0)
 	assert.Equal(t, byte('n'), encoded[0])
@@ -36,13 +36,13 @@ func TestDecodeValidatorKeyInvalid(t *testing.T) {
 func TestNewUNL(t *testing.T) {
 	id1, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
 	require.NoError(t, err)
-	key1, err := addresscodec.EncodeNodePublicKey(id1.PublicKey)
+	key1, err := addresscodec.EncodeNodePublicKey(id1.SigningPubKey())
 	require.NoError(t, err)
 
 	// Use a second secp256k1 seed
 	id2, err := NewValidatorIdentity("spqPaiDYkYJ2H7cpziSk9XWyAeCPE")
 	require.NoError(t, err)
-	key2, err := addresscodec.EncodeNodePublicKey(id2.PublicKey)
+	key2, err := addresscodec.EncodeNodePublicKey(id2.SigningPubKey())
 	require.NoError(t, err)
 
 	unl, err := NewUNL([]string{key1, key2})
@@ -60,7 +60,7 @@ func TestNewUNL(t *testing.T) {
 func TestUNLDeduplication(t *testing.T) {
 	id, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
 	require.NoError(t, err)
-	key, err := addresscodec.EncodeNodePublicKey(id.PublicKey)
+	key, err := addresscodec.EncodeNodePublicKey(id.SigningPubKey())
 	require.NoError(t, err)
 
 	// Duplicate keys should be deduplicated
@@ -110,7 +110,7 @@ func TestUNLQuorum(t *testing.T) {
 	for _, seed := range seeds {
 		id, err := NewValidatorIdentity(seed)
 		require.NoError(t, err)
-		key, err := addresscodec.EncodeNodePublicKey(id.PublicKey)
+		key, err := addresscodec.EncodeNodePublicKey(id.SigningPubKey())
 		require.NoError(t, err)
 		keys = append(keys, key)
 	}

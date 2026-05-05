@@ -3,45 +3,93 @@ package adaptor
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
 
 	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/goXRPLd/internal/manifest"
 	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 var (
-	ErrNoValidatorKey = errors.New("no validator key configured")
-	ErrInvalidSeed    = errors.New("invalid validator seed")
+	ErrNoValidatorKey           = errors.New("no validator key configured")
+	ErrInvalidSeed              = errors.New("invalid validator seed")
+	ErrTokenManifestKeyMismatch = errors.New("validator_token: signing key in manifest does not match validation_secret_key")
+	ErrTokenAndSeed             = errors.New("validator_token and validation_seed are mutually exclusive")
 )
 
-// ValidatorIdentity holds the validator's signing keys.
-// If nil or empty, the node operates as a non-validator (observer).
+// ValidatorIdentity holds the validator's signing keys and, when
+// configured via [validator_token], its master-signed manifest.
+//
+// Two configuration paths populate this struct:
+//
+//   - validator_token (preferred): MasterKey is the long-term identity
+//     declared in the manifest; SigningKey is the rotatable ephemeral
+//     key used to sign every consensus message; Manifest carries the
+//     master-signed binding so peers can resolve SigningKey → MasterKey.
+//
+//   - validation_seed (legacy): MasterKey == SigningKey, derived
+//     directly from the seed; Manifest is nil. Peers cannot rotate
+//     keys without operator intervention on every peer in this mode.
+//
+// NodeID currently equals SigningKey for wire-format compatibility
+// (sfSigningPubKey carries 33 bytes; consensus.NodeID is also 33 bytes
+// and is used both as the wire signing pubkey and as the in-memory
+// identifier). Rippled's true NodeID is calcNodeID(masterKey) — a
+// 20-byte RIPEMD-160 — and the manifest cache resolver in startup.go
+// already maps the signing-pubkey-shaped NodeID back to a master-shaped
+// one via GetMasterKey. Migrating consensus.NodeID to the 20-byte form
+// is tracked as a separate sub-issue per #371.
 type ValidatorIdentity struct {
-	// PublicKey is the compressed secp256k1 public key (33 bytes).
-	PublicKey []byte
-	// PrivateKey is the hex-encoded private key (for signing).
-	PrivateKey string
-	// NodeID is the consensus NodeID derived from the public key.
+	// MasterKey is the 33-byte compressed master public key declared in
+	// the manifest. In seed-only mode it equals SigningKey.
+	MasterKey [33]byte
+
+	// SigningKey is the 33-byte compressed ephemeral public key used
+	// to sign validations and proposals. In seed-only mode it equals
+	// MasterKey.
+	SigningKey [33]byte
+
+	// NodeID is the validator's wire-level identifier. Currently set
+	// to SigningKey to keep the existing
+	// {Validation,Proposal}.NodeID == sfSigningPubKey contract intact;
+	// see the type-level comment for the deferred migration.
 	NodeID consensus.NodeID
+
+	// Manifest is the parsed local manifest when configured via
+	// validator_token. Nil in seed-only mode. Used by #372 to drive
+	// TMManifests emission.
+	Manifest *manifest.Manifest
+
+	// SerializedMfst is the wire bytes of the local manifest, kept so
+	// emission (#372) can broadcast the exact payload peers expect
+	// without re-encoding through the codec.
+	SerializedMfst []byte
+
+	// signingPriv is the hex-encoded signing private key (with or
+	// without the leading "00" prefix; secp256k1.SignDigest accepts
+	// both). Unexported so callers cannot accidentally leak the secret.
+	signingPriv string
 }
 
-// NewValidatorIdentity creates a ValidatorIdentity from a seed string.
-// The seed can be in base58 (sXXX...) format.
-// Uses secp256k1 with validator=true derivation, matching rippled.
+// NewValidatorIdentity creates a seed-only identity. The seed is the
+// base58 [validation_seed] string. Returns nil if seed is empty (the
+// observer / non-validator case).
+//
+// Master and signing keys are identical in this mode, matching rippled's
+// ValidatorKeys.cpp:84-89 fallback when [validator_token] is absent.
 func NewValidatorIdentity(seed string) (*ValidatorIdentity, error) {
 	if seed == "" {
-		return nil, nil // not a validator
+		return nil, nil
 	}
 
-	// Decode the seed from base58
 	decodedSeed, _, err := addresscodec.DecodeSeed(seed)
 	if err != nil {
 		return nil, ErrInvalidSeed
 	}
 
-	// Derive validator keypair using secp256k1 (validator=true uses root generator directly)
 	algo := secp256k1.SECP256K1()
 	privKeyHex, pubKeyHex, err := algo.DeriveKeypair(decodedSeed, true)
 	if err != nil {
@@ -52,20 +100,103 @@ func NewValidatorIdentity(seed string) (*ValidatorIdentity, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(pubKeyBytes) != 33 {
+		return nil, fmt.Errorf("derived pubkey: unexpected length %d", len(pubKeyBytes))
+	}
 
-	var nodeID consensus.NodeID
-	copy(nodeID[:], pubKeyBytes)
-
-	return &ValidatorIdentity{
-		PublicKey:  pubKeyBytes,
-		PrivateKey: privKeyHex,
-		NodeID:     nodeID,
-	}, nil
+	vi := &ValidatorIdentity{signingPriv: privKeyHex}
+	copy(vi.MasterKey[:], pubKeyBytes)
+	copy(vi.SigningKey[:], pubKeyBytes)
+	copy(vi.NodeID[:], pubKeyBytes)
+	return vi, nil
 }
 
-// Sign signs a pre-computed digest with the validator's private key using secp256k1.
-// The data parameter must be a SHA-512Half digest (32 bytes).
-// Matches rippled's signDigest() which passes the hash directly to secp256k1.
+// NewValidatorIdentityFromToken creates a master/ephemeral split
+// identity from a `[validator_token]` config block. The block is the
+// raw multi-line section text (whitespace tolerated).
+//
+// Steps mirror rippled ValidatorKeys.cpp:42-71:
+//  1. Parse the token into manifest + 32-byte secret.
+//  2. Decode and parse the embedded manifest (structural invariants
+//     only; signatures are not verified here, matching rippled — the
+//     ManifestCache verifies on apply).
+//  3. Derive the public key from the secret and confirm it matches the
+//     manifest's SigningPubKey — protects against a swapped or corrupt
+//     token blob where the secret no longer signs the declared
+//     ephemeral key.
+//  4. Store master, signing, signing-priv, and the wire-format manifest
+//     so #372 can broadcast it.
+func NewValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
+	if block == "" {
+		return nil, ErrNoValidatorKey
+	}
+	tok, err := manifest.LoadValidatorToken(block)
+	if err != nil {
+		return nil, err
+	}
+	wire, err := tok.DecodeManifest()
+	if err != nil {
+		return nil, err
+	}
+	m, err := manifest.Deserialize(wire)
+	if err != nil {
+		return nil, fmt.Errorf("validator_token: deserialize manifest: %w", err)
+	}
+
+	pub, err := secp256k1.SECP256K1().DerivePublicKeyFromSecret(tok.ValidationSecret[:])
+	if err != nil {
+		return nil, fmt.Errorf("validator_token: derive pubkey: %w", err)
+	}
+	var derived [33]byte
+	copy(derived[:], pub)
+	if derived != m.SigningKey {
+		return nil, ErrTokenManifestKeyMismatch
+	}
+
+	vi := &ValidatorIdentity{
+		MasterKey:      m.MasterKey,
+		SigningKey:     m.SigningKey,
+		Manifest:       m,
+		SerializedMfst: append([]byte(nil), m.Serialized...),
+		signingPriv:    hex.EncodeToString(tok.ValidationSecret[:]),
+	}
+	copy(vi.NodeID[:], m.SigningKey[:])
+	return vi, nil
+}
+
+// NewValidatorIdentityFromConfig dispatches to the seed or token
+// constructor based on which field the operator configured. Returns nil
+// when neither is set (observer mode), matching rippled which treats an
+// empty validator config as a non-validating node.
+//
+// Both configured at once is a fatal misconfiguration (rippled
+// ValidatorKeys.cpp:31-38 sets configInvalid_ in that case); the
+// equivalent here is a returned error so cmd/xrpld can surface it
+// before the consensus engine starts.
+func NewValidatorIdentityFromConfig(seed, token string) (*ValidatorIdentity, error) {
+	if seed != "" && token != "" {
+		return nil, ErrTokenAndSeed
+	}
+	if token != "" {
+		return NewValidatorIdentityFromToken(token)
+	}
+	return NewValidatorIdentity(seed)
+}
+
+// SigningPubKey returns the 33-byte compressed signing public key as a
+// fresh slice. Convenience for callers wiring overlay options that
+// expect a []byte (peermanagement.WithLocalValidatorPubKey).
+func (vi *ValidatorIdentity) SigningPubKey() []byte {
+	if vi == nil {
+		return nil
+	}
+	return append([]byte(nil), vi.SigningKey[:]...)
+}
+
+// Sign signs a pre-computed digest with the ephemeral signing key using
+// secp256k1. The data parameter must be a SHA-512Half digest (32 bytes).
+// Matches rippled's signDigest() which passes the hash directly to
+// secp256k1.
 func (vi *ValidatorIdentity) Sign(data []byte) ([]byte, error) {
 	if vi == nil {
 		return nil, ErrNoValidatorKey
@@ -73,7 +204,7 @@ func (vi *ValidatorIdentity) Sign(data []byte) ([]byte, error) {
 	algo := secp256k1.SECP256K1()
 	var digest [32]byte
 	copy(digest[:], data)
-	return algo.SignDigest(digest, vi.PrivateKey)
+	return algo.SignDigest(digest, vi.signingPriv)
 }
 
 // Verify verifies a signature against a public key.
