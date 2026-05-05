@@ -212,22 +212,27 @@ func TestVotableValue_PicksHighestCountWithinWindow(t *testing.T) {
 // Without this guarantee, two goXRPL nodes given identical inputs
 // could pick different values from Go's randomized map iteration —
 // the resulting SetFee blobs would diverge across the network.
+//
+// The case is constructed so two distinct in-window keys (11 and
+// 13) reach the same vote count (2), and that count strictly
+// exceeds every other in-window key's count. Under ascending-key
+// iteration with `val > weight`, the first key to reach the max
+// wins (11); a `val >= weight` bug, descending iteration, or
+// random map-order would let 13 win on at least some runs.
 func TestVotableValue_TieBreakLowestKeyWins(t *testing.T) {
-	// Run repeatedly: a non-deterministic implementation would
-	// occasionally pick 12 or 13 across iterations; the
-	// deterministic implementation always picks 11.
 	for i := 0; i < 64; i++ {
 		v := newVotableValue(10, 14) // window = [10, 14], seeds voteMap[14]=1
 		v.addVote(11)
-		v.addVote(12)
+		v.addVote(11)
 		v.addVote(13)
-		// All four values now have count 1 — first ascending-key
-		// in-window value wins → 11 (10 == current loses on
-		// strict `count > weight`).
+		v.addVote(13)
+		// voteMap = {11:2, 13:2, 14:1}. Both 11 and 13 are in
+		// window and tied at the max count. Ascending iteration
+		// with strict-greater picks the first to reach the max → 11.
 		chosen, changed := v.getVotes()
 		assert.True(t, changed)
 		assert.EqualValues(t, 11, chosen,
-			"iter %d: tie at count=1 → lowest in-window key (11) wins, not %d", i, chosen)
+			"iter %d: tie at count=2 between 11 and 13 → lowest in-window key (11) wins, not %d", i, chosen)
 	}
 }
 
@@ -248,17 +253,51 @@ func TestBuildSetFeeTx_EmitsEmptySigningPubKey(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, blob)
 
-		// Empty sfSigningPubKey serializes as the two bytes 0x73 0x00.
-		// We assert the byte sequence appears anywhere in the blob —
-		// canonical-sort field order is verified by the codec
-		// round-trip below.
-		assert.Contains(t, hex.EncodeToString(blob), "7300",
-			"xrpFeesEnabled=%v: blob must include sfSigningPubKey VL(0)", xrpFees)
+		// Empty sfSigningPubKey serializes as 0x73 0x00 followed by
+		// the next-larger field tag in canonical sort order. After
+		// sfSigningPubKey (code 0x73) the next present common field
+		// in a pseudo-tx is sfAccount (code 0x81). Asserting the
+		// 3-byte sequence "730081" pins both the empty VL byte and
+		// its position in the sort order.
+		assert.Contains(t, hex.EncodeToString(blob), "730081",
+			"xrpFeesEnabled=%v: blob must include sfSigningPubKey VL(0) followed by sfAccount", xrpFees)
 
 		stx := decodeTx(t, blob)
 		got, ok := stx["SigningPubKey"]
 		assert.True(t, ok, "xrpFeesEnabled=%v: decoded tx must include SigningPubKey", xrpFees)
 		assert.Equal(t, "", got, "xrpFeesEnabled=%v: SigningPubKey must decode as empty", xrpFees)
+	}
+}
+
+// TestBuildSetFeeTx_OmitsFlags pins the inverse of the
+// SigningPubKey requirement: rippled declares sfFlags as
+// soeOPTIONAL in the common-fields template (TxFormats.cpp:34) and
+// FeeVoteImpl::doVoting (FeeVoteImpl.cpp:297-319) never sets it on
+// the assembled STTx, so STObject::set(SOTemplate) at
+// STObject.cpp:156-169 leaves it as STI_NOTPRESENT and
+// STObject::add at STObject.cpp:907-921 filters it out of the
+// serialized blob. The Go encoder must match — emitting Flags=0
+// would prepend `2200000000` to the blob, shift every later field,
+// and produce a different transaction ID. Validators that disagree
+// on the txID cannot converge their SHAMaps on the flag-ledger
+// pseudo-tx position, so consensus on the fee change fails.
+func TestBuildSetFeeTx_OmitsFlags(t *testing.T) {
+	current := Stance{BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000}
+	target := Stance{BaseFee: 12, ReserveBase: 11_000_000, ReserveIncrement: 2_500_000}
+
+	for _, xrpFees := range []bool{false, true} {
+		blob, err := DoVoting(1024, current, target, nil, xrpFees)
+		require.NoError(t, err)
+		require.NotNil(t, blob)
+
+		hexBlob := hex.EncodeToString(blob)
+		assert.NotContains(t, hexBlob, "2200000000",
+			"xrpFeesEnabled=%v: blob must not carry sfFlags=0 (rippled omits soeOPTIONAL nonPresent fields)", xrpFees)
+
+		stx := decodeTx(t, blob)
+		_, hasFlags := stx["Flags"]
+		assert.False(t, hasFlags,
+			"xrpFeesEnabled=%v: decoded tx must not include Flags", xrpFees)
 	}
 }
 
