@@ -1020,10 +1020,18 @@ func (o *Overlay) onMessageReceived(evt Event) {
 	}
 
 	// mtSTATUS_CHANGE refreshes Closed-/Previous-Ledger hints
-	// (PeerImp.cpp:1812-1862).
+	// (PeerImp.cpp:1812-1862) and is then forwarded to the consensus
+	// router. The overlay handler updates per-peer state +
+	// peer_status WS publishing; the consensus router needs the same
+	// frame to update its peer-LCL view (Adaptor.UpdatePeerLCL feeds
+	// getNetworkLedger) and to drive initial-sync ledger acquisition
+	// (startLedgerAcquisition / checkBehind). Splitting at the
+	// overlay and dropping here would leave the router blind to peer
+	// status — a fresh node would never leave OpModeDisconnected and
+	// the engine's timerEntry would never advance (issue #381).
 	if msgType == message.TypeStatusChange {
 		o.handleStatusChange(evt)
-		return
+		// fall through to the o.messages forward
 	}
 
 	// Serve mtREPLAY_DELTA_REQ from the local ledger sync handler. Mirrors
