@@ -134,6 +134,17 @@ type mockAdaptor struct {
 
 	// Load fee for R6b.5b — emitted as sfLoadFee. Zero by default.
 	loadFee uint32
+
+	// Pseudo-tx producer overrides for #367 tests. nil means the
+	// stub returns nil (no injection), matching the production
+	// adaptor's pre-vote-tally behavior.
+	flagLedgerPseudoTxs [][]byte
+	negativeUNLPseudoTx []byte
+
+	// standalone toggles the IsStandalone() return for tests that
+	// exercise rippled's `standalone() || (proposing && !wrongLCL)`
+	// OR-branch at RCLConsensus.cpp:352.
+	standalone bool
 }
 
 func newMockAdaptor() *mockAdaptor {
@@ -298,6 +309,18 @@ func (a *mockAdaptor) GetPendingTxs() [][]byte {
 	return a.pendingTxs
 }
 
+func (a *mockAdaptor) GenerateFlagLedgerPseudoTxs(_ consensus.Ledger) [][]byte {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.flagLedgerPseudoTxs
+}
+
+func (a *mockAdaptor) GenerateNegativeUNLPseudoTx(_ consensus.Ledger) []byte {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.negativeUNLPseudoTx
+}
+
 func (a *mockAdaptor) HasTx(id consensus.TxID) bool {
 	return false
 }
@@ -358,6 +381,24 @@ func (a *mockAdaptor) IsFeatureEnabled(name string) bool {
 		return false
 	}
 	return true
+}
+
+func (a *mockAdaptor) IsFeatureEnabledOnLedger(_ consensus.Ledger, name string) bool {
+	// Mock collapses the "rules of THIS ledger" into the same
+	// disabledFeatures map used by IsFeatureEnabled — tests that need
+	// per-ledger divergence are not in scope yet.
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.disabledFeatures != nil && a.disabledFeatures[name] {
+		return false
+	}
+	return true
+}
+
+func (a *mockAdaptor) IsStandalone() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.standalone
 }
 
 func (a *mockAdaptor) GetCookie() uint64 {

@@ -147,6 +147,36 @@ type Adaptor interface {
 	// GetPendingTxs returns transactions waiting to be included.
 	GetPendingTxs() [][]byte
 
+	// GenerateFlagLedgerPseudoTxs returns the fee-vote and
+	// amendment-vote pseudo-transaction blobs to inject into the
+	// proposal initial set when prevLedger is a flag ledger. Mirrors
+	// rippled's RCLConsensus.cpp:354-367 — when the previous ledger is
+	// a flag ledger, validators tally fee and amendment votes from the
+	// validations of the ledger before that and emit SetFee /
+	// EnableAmendment pseudo-txs reflecting the consensus.
+	//
+	// The producer is also responsible for the quorum gate at
+	// RCLConsensus.cpp:361 (`validations.size() >= quorum`) and the
+	// negativeUNLFilter at RCLConsensus.cpp:358 — the engine does not
+	// pre-check those.
+	//
+	// Returns nil when no votes apply (insufficient validations, no
+	// vote stance to emit, etc.). Adaptors that don't implement vote
+	// tallying yet (most goXRPL builds today) should return nil — the
+	// engine treats nil as "no pseudo-txs", matching the behavior
+	// before #367 landed. The actual vote-tally producers ship in
+	// #368/#369/#370.
+	GenerateFlagLedgerPseudoTxs(prevLedger Ledger) [][]byte
+
+	// GenerateNegativeUNLPseudoTx returns the NegativeUNL pseudo-tx
+	// to inject when prevLedger is a voting ledger AND the
+	// featureNegativeUNL amendment is enabled. Mirrors rippled
+	// RCLConsensus.cpp:368-380.
+	//
+	// Returns nil when no NegUNL changes are required. Adaptors
+	// without NegativeUNLVote support return nil.
+	GenerateNegativeUNLPseudoTx(prevLedger Ledger) []byte
+
 	// GetTxSet returns a transaction set by ID.
 	GetTxSet(id TxSetID) (TxSet, error)
 
@@ -216,6 +246,30 @@ type Adaptor interface {
 	// yet, adaptor-only test harness) SHOULD return true to preserve
 	// the mainnet-default behavior of emitting the optional fields.
 	IsFeatureEnabled(name string) bool
+
+	// IsFeatureEnabledOnLedger reports whether the named amendment is
+	// enabled in the rules of the given ledger. Mirrors rippled's
+	// `prevLedger->rules().enabled(featureX)` pattern (e.g.
+	// RCLConsensus.cpp:370 for featureNegativeUNL): the gate is read
+	// from the rules of the ledger consensus is building on, NOT from
+	// the most-recently validated ledger. Disagreement between the two
+	// is possible during sync or right after a fork heal — see
+	// IsFeatureEnabled for the laxer "validated view" variant used by
+	// the validation-broadcast path.
+	//
+	// Returns false on unknown feature, on a nil ledger, or when rules
+	// can't be resolved — matching rippled's `Rules::enabled` (a miss
+	// in the amendment table is "not enabled"). This is the strict
+	// semantic for a gate; the lax "treat unknown as enabled" default
+	// of IsFeatureEnabled is intentionally NOT shared here.
+	IsFeatureEnabledOnLedger(ledger Ledger, name string) bool
+
+	// IsStandalone reports whether the node is configured for
+	// standalone (single-node) operation. Mirrors rippled's
+	// `app_.config().standalone()` check at RCLConsensus.cpp:352,
+	// which forces pseudo-tx injection in standalone mode even when
+	// consensus is not in the proposing state.
+	IsStandalone() bool
 
 	// GetCookie returns the validator's per-boot sfCookie value —
 	// generated once at adaptor construction from a CSPRNG. Emitted on

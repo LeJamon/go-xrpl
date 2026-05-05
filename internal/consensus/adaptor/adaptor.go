@@ -558,6 +558,21 @@ func (a *Adaptor) GetPendingTxs() [][]byte {
 	return blobs
 }
 
+// GenerateFlagLedgerPseudoTxs is a stub: vote-tally producers (fee
+// vote, amendment vote) are not yet implemented in goXRPL. See
+// follow-up issues #369 (fee) and #370 (amendments). Returns nil so
+// the engine's injection step at closeLedger is a no-op until those
+// land — matching the pre-#367 behavior of never injecting.
+func (a *Adaptor) GenerateFlagLedgerPseudoTxs(_ consensus.Ledger) [][]byte {
+	return nil
+}
+
+// GenerateNegativeUNLPseudoTx is a stub: NegativeUNLVote tally is
+// not yet implemented. See follow-up issue #368.
+func (a *Adaptor) GenerateNegativeUNLPseudoTx(_ consensus.Ledger) []byte {
+	return nil
+}
+
 func (a *Adaptor) GetTxSet(id consensus.TxSetID) (consensus.TxSet, error) {
 	ts, ok := a.txSetCache.Get(id)
 	if !ok {
@@ -880,6 +895,50 @@ func (a *Adaptor) IsFeatureEnabled(name string) bool {
 		return true
 	}
 	return rules.Enabled(f.ID)
+}
+
+// IsFeatureEnabledOnLedger reports whether the named amendment is
+// enabled in the rules of the supplied ledger. Mirrors rippled's
+// `prevLedger->rules().enabled(featureX)` at RCLConsensus.cpp:370:
+// rules are read from THAT specific ledger, not from the validated
+// view, and a miss in the amendment table is "not enabled" (not
+// "assume enabled" — the lax default of IsFeatureEnabled is for
+// the validation-broadcast path, not for engine-level gates).
+//
+// Returns false when the ledger is nil, when it does not unwrap to
+// a *ledger.Ledger this adaptor recognises, when rules are nil, or
+// when the feature name is unknown. That matches rippled's
+// Rules::enabled semantics for a strict gate.
+func (a *Adaptor) IsFeatureEnabledOnLedger(l consensus.Ledger, name string) bool {
+	if l == nil {
+		return false
+	}
+	w, ok := l.(*LedgerWrapper)
+	if !ok {
+		return false
+	}
+	rules := w.Unwrap().Rules()
+	if rules == nil {
+		return false
+	}
+	f := amendment.GetFeatureByName(name)
+	if f == nil {
+		return false
+	}
+	return rules.Enabled(f.ID)
+}
+
+// IsStandalone reports whether the node is configured for standalone
+// (single-node) operation. Mirrors rippled's
+// `app_.config().standalone()` at RCLConsensus.cpp:352. Used by the
+// engine to bypass the proposing-mode gate on flag-ledger pseudo-tx
+// injection (matching rippled's `standalone() || (proposing &&
+// !wrongLCL)` OR-form).
+func (a *Adaptor) IsStandalone() bool {
+	if a.ledgerService == nil {
+		return false
+	}
+	return a.ledgerService.IsStandalone()
 }
 
 // --- Time operations ---
