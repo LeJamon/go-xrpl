@@ -224,6 +224,15 @@ type Overlay struct {
 	// no subscriber is registered.
 	onPeerDisconnect func(PeerID)
 
+	// onPeerConnect fires once a peer has finished its handshake and
+	// been added to the overlay's peer map. Higher layers use this to
+	// trigger post-connect emissions like the local manifest broadcast
+	// (#372 / rippled OverlayImpl::sendEndpoints which emits manifests
+	// alongside endpoints in the post-handshake window). Same blocking
+	// contract as onPeerDisconnect: runs on the event loop, must not
+	// block.
+	onPeerConnect func(PeerID)
+
 	// droppedMessages counts how many times the non-blocking send to
 	// the messages channel hit its default branch (downstream consumer
 	// slow). Exposed via DroppedMessages() so server_info / telemetry
@@ -919,6 +928,12 @@ func (o *Overlay) onPeerConnected(evt Event) {
 	if !evt.Inbound {
 		o.discovery.MarkConnected(evt.Endpoint.String(), evt.PeerID)
 	}
+	// Notify higher layers AFTER discovery state is updated so any work
+	// they do (e.g. sending us-originated frames to the peer) sees a
+	// fully-bookkept overlay. Mirrors the disconnect callback ordering.
+	if cb := o.onPeerConnect; cb != nil {
+		cb(evt.PeerID)
+	}
 }
 
 func (o *Overlay) onPeerHandshakeComplete(evt Event) {
@@ -948,6 +963,19 @@ func (o *Overlay) onPeerDisconnected(evt Event) {
 // per-peer state. Prefer this over polling Peers().
 func (o *Overlay) SetPeerDisconnectCallback(cb func(PeerID)) {
 	o.onPeerDisconnect = cb
+}
+
+// SetPeerConnectCallback registers a callback fired after a peer's
+// handshake has completed and the peer is in the overlay's peer map.
+// Same blocking contract as SetPeerDisconnectCallback: runs on the
+// event loop and MUST NOT block. Passing nil clears the callback.
+//
+// Used by the consensus router to send our local validator manifest
+// to a freshly-connected peer (#372), so peers configured under
+// validator-list publishing can resolve our signing key back to the
+// trusted master.
+func (o *Overlay) SetPeerConnectCallback(cb func(PeerID)) {
+	o.onPeerConnect = cb
 }
 
 func (o *Overlay) onPeerFailed(evt Event) {

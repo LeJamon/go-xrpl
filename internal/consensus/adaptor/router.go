@@ -76,6 +76,13 @@ type Router struct {
 	// directly via Overlay.BroadcastExcept. Nil in tests that
 	// construct a router without manifest support.
 	overlay *peermanagement.Overlay
+
+	// testManifestSender, when non-nil, replaces r.overlay for the
+	// local-manifest emission paths (SendLocalManifestTo /
+	// BroadcastLocalManifest). Tests install a fake here to observe
+	// the emitted frame without standing up real listeners; production
+	// leaves it nil so the real overlay is used.
+	testManifestSender manifestSender
 }
 
 // messageDedupTTL is how long a proposal/validation hash is
@@ -333,15 +340,13 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) {
 // except the origin. Wraps the serialized STObject in a TMManifests
 // frame (a list of one) — matching rippled's per-manifest relay
 // (OverlayImpl.cpp:633-686 loops through and relays each one via
-// overlay_.foreach).
+// overlay_.foreach). Shares its framing with the local-manifest
+// emission paths in manifest_emit.go.
 func (r *Router) relayManifest(exceptPeer peermanagement.PeerID, serialized []byte) {
 	if r.overlay == nil {
 		return
 	}
-	relayMsg := &message.Manifests{
-		List: []message.Manifest{{STObject: serialized}},
-	}
-	frame, err := encodeFrame(message.TypeManifests, relayMsg)
+	frame, err := encodeManifestsFrame(serialized)
 	if err != nil {
 		r.logger.Warn("failed to encode manifest relay frame", "error", err)
 		return

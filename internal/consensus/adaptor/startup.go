@@ -39,9 +39,22 @@ type Components struct {
 	Archive *archive.Archive
 
 	// cancel functions for background goroutines
-	overlayCancel context.CancelFunc
-	routerCancel  context.CancelFunc
+	overlayCancel       context.CancelFunc
+	routerCancel        context.CancelFunc
+	manifestStartCancel context.CancelFunc
 }
+
+// startupManifestBroadcastDelay is how long Components.Start waits
+// after wiring everything up before its one-shot local-manifest
+// broadcast. The per-peer connect callback already handles the
+// common case (a peer connects after we're up); the startup
+// broadcast is the safety net for peers that connected during the
+// brief window between Overlay.Run starting and the connect callback
+// being able to do useful work, plus revoked-manifest propagation
+// per #372 spec. Short enough to be effectively immediate from an
+// operator's view, long enough to let the initial connection burst
+// settle so the broadcast actually has someone to broadcast to.
+const startupManifestBroadcastDelay = 2 * time.Second
 
 // Start launches all background goroutines (overlay, engine, router).
 func (c *Components) Start() error {
@@ -61,11 +74,58 @@ func (c *Components) Start() error {
 	c.routerCancel = routerCancel
 	go c.Router.Run(routerCtx)
 
+	// One-shot startup local-manifest broadcast. Validators configured
+	// via [validator_token] need every peer to know the master ↔
+	// signing-key binding before our first validation lands; the
+	// per-peer connect callback handles new peers, but a brief startup
+	// delay + Broadcast covers peers that joined in the gap between
+	// Overlay.Run starting and the callback being meaningful, and
+	// propagates revoked manifests at boot per rippled's pattern.
+	// Skipped at log-once granularity for seed-only / observer nodes.
+	manifestCtx, manifestCancel := context.WithCancel(context.Background())
+	c.manifestStartCancel = manifestCancel
+	go c.runStartupManifestBroadcast(manifestCtx)
+
 	return nil
+}
+
+// runStartupManifestBroadcast sleeps for startupManifestBroadcastDelay
+// then emits one TMManifests broadcast for our local manifest. Returns
+// early if the context is cancelled (Stop) or if there's no manifest to
+// emit (observer / seed-only mode); the latter is logged once at INFO
+// so operators can see at boot why the validator isn't gossiping.
+func (c *Components) runStartupManifestBroadcast(ctx context.Context) {
+	if c.Router == nil {
+		return
+	}
+	if c.Router.localManifestBytes() == nil {
+		// Observer or legacy seed-only validator — nothing to
+		// broadcast. One INFO line at boot makes the silence
+		// debuggable.
+		slog.Info("local validator manifest not configured; TMManifests emission skipped",
+			"t", "Components.Start")
+		return
+	}
+
+	timer := time.NewTimer(startupManifestBroadcastDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-timer.C:
+	}
+
+	if n := c.Router.BroadcastLocalManifest(); n > 0 {
+		slog.Info("startup local manifest broadcast",
+			"t", "Components.Start", "peers", n)
+	}
 }
 
 // Stop gracefully shuts down all components.
 func (c *Components) Stop() {
+	if c.manifestStartCancel != nil {
+		c.manifestStartCancel()
+	}
 	if c.routerCancel != nil {
 		c.routerCancel()
 	}
@@ -196,6 +256,15 @@ func NewFromConfig(
 	// Without this a disconnected peer's stale LCL keeps influencing
 	// consensus convergence.
 	overlay.SetPeerDisconnectCallback(router.HandlePeerDisconnect)
+
+	// Send our local validator manifest to each peer the moment its
+	// handshake completes. Mirrors rippled OverlayImpl::sendEndpoints
+	// which emits the local manifest in the post-handshake window so
+	// the peer's ManifestCache can resolve our ephemeral signing key
+	// back to the trusted master before our first validation arrives.
+	// Skip cases (no validator, seed-only, no overlay) are absorbed
+	// inside SendLocalManifestTo.
+	overlay.SetPeerConnectCallback(router.HandlePeerConnect)
 
 	// Wire operating mode into ledger service for server_info.
 	// Matches rippled: report "proposing" when both in full operating mode
