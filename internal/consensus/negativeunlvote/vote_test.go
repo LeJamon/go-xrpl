@@ -27,17 +27,23 @@ func nodeID(tag byte) consensus.NodeID {
 	return consensus.NodeID(makeKey(tag))
 }
 
-// fullScoreTable returns scoreTable[nid] = HighWaterMark+1 for
-// every key in keys, plus the local node at MinLocalValsToVote+1
+// fullScoreTable returns scoreTable[nid] = HighWaterMark+1 for every
+// non-local key in keys, plus the local node at MinLocalValsToVote+1
 // so DoVoting clears the local-participation gate by default. The
-// local-node assignment runs LAST so it overrides any HighWaterMark
-// score the loop wrote when myKey is also in keys.
+// local node is set unconditionally — including the case where myID
+// is also a member of keys — so the helper is robust to call sites
+// that include myKey in the UNL list.
 func fullScoreTable(myID consensus.NodeID, keys [][33]byte) map[consensus.NodeID]uint32 {
-	st := map[consensus.NodeID]uint32{}
-	for _, k := range keys {
-		st[keyToNodeID(k)] = HighWaterMark + 1
+	st := map[consensus.NodeID]uint32{
+		myID: MinLocalValsToVote + 1,
 	}
-	st[myID] = MinLocalValsToVote + 1
+	for _, k := range keys {
+		nid := keyToNodeID(k)
+		if nid == myID {
+			continue
+		}
+		st[nid] = HighWaterMark + 1
+	}
 	return st
 }
 
@@ -270,4 +276,262 @@ func stringFold(v any) string {
 		return string(out)
 	}
 	return ""
+}
+
+// expectedChoose mirrors choose() byte-for-byte using the same
+// calcNodeID-then-XOR comparator. Used as the oracle for parity tests
+// against rippled's NegativeUNLVote::choose at NegativeUNLVote.cpp:
+// 142-161. If choose's comparator drifts (e.g. back to a 32-byte XOR
+// over the raw pubkey), these tests will catch the divergence.
+func expectedChoose(pad [32]byte, cands []consensus.NodeID) consensus.NodeID {
+	var bestKey [20]byte
+	var best consensus.NodeID
+	for i, c := range cands {
+		nid := calcNodeID(c)
+		var k [20]byte
+		for j := 0; j < 20; j++ {
+			k[j] = nid[j] ^ pad[j]
+		}
+		if i == 0 {
+			best, bestKey = c, k
+			continue
+		}
+		less := false
+		for j := 0; j < 20; j++ {
+			if k[j] != bestKey[j] {
+				less = k[j] < bestKey[j]
+				break
+			}
+		}
+		if less {
+			best, bestKey = c, k
+		}
+	}
+	return best
+}
+
+// TestChoose_RippledParity_PicksMinCalcNodeIDXorPad asserts that
+// choose() picks the candidate whose calcNodeID(pubkey) XOR pad[:20]
+// is minimal — the exact comparator rippled uses at
+// NegativeUNLVote.cpp:142-161 + PublicKey.cpp:319-327. This test
+// would fail if choose() reverted to comparing the raw 33-byte
+// pubkey with a 32-byte pad, which would silently desync Go votes
+// from rippled votes on a mixed validator network.
+func TestChoose_RippledParity_PicksMinCalcNodeIDXorPad(t *testing.T) {
+	cands := []consensus.NodeID{nodeID(0x11), nodeID(0x22), nodeID(0x33), nodeID(0x44)}
+
+	for _, padTag := range []byte{0x00, 0xFF, 0xA5, 0x5A} {
+		var pad [32]byte
+		for i := range pad {
+			pad[i] = padTag
+		}
+		got := choose(pad, cands)
+		want := expectedChoose(pad, cands)
+		assert.Equal(t, want, got,
+			"pad=0x%02X: choose picked the wrong candidate; comparator must use calcNodeID(pubkey) XOR pad[:20]", padTag)
+	}
+}
+
+// TestChoose_PadAffectsPick asserts that two distinct pads can
+// produce different picks. This catches a comparator that ignores
+// the pad (e.g. a stub that always returns candidates[0]).
+func TestChoose_PadAffectsPick(t *testing.T) {
+	cands := []consensus.NodeID{nodeID(0x11), nodeID(0x22), nodeID(0x33), nodeID(0x44), nodeID(0x55)}
+
+	var padZero [32]byte
+	var padFF [32]byte
+	for i := range padFF {
+		padFF[i] = 0xFF
+	}
+
+	pickZero := choose(padZero, cands)
+	pickFF := choose(padFF, cands)
+	assert.NotEqual(t, pickZero, pickFF,
+		"choose with all-0 vs all-FF pads must produce different picks for this candidate set")
+}
+
+// TestFindAllCandidates_BoundaryScores asserts the strict-inequality
+// boundary in NegativeUNLVote.cpp:282 (`score < negativeUNLLowWaterMark`)
+// and :292 (`score > negativeUNLHighWaterMark`): a validator with
+// score == LowWaterMark is NOT a toDisable candidate, and one with
+// score == HighWaterMark is NOT a toReEnable candidate. rippled's
+// testFindAllCandidatesCombination at NegativeUNL_test.cpp:1175-1183
+// includes these boundary scores in its grid; we cover them
+// directly here.
+func TestFindAllCandidates_BoundaryScores(t *testing.T) {
+	myKey := makeKey(0xAA)
+	atLow := makeKey(0xBB)
+	atHigh := makeKey(0xCC)
+	other := makeKey(0xDD)
+	v := NewVoter(keyToNodeID(myKey))
+
+	unlKeys := [][33]byte{myKey, atLow, atHigh, other}
+	unl := map[consensus.NodeID][33]byte{}
+	for _, k := range unlKeys {
+		unl[keyToNodeID(k)] = k
+	}
+	negUNL := map[consensus.NodeID]struct{}{
+		keyToNodeID(atHigh): {},
+	}
+	scoreTable := map[consensus.NodeID]uint32{
+		keyToNodeID(myKey):  HighWaterMark + 1,
+		keyToNodeID(atLow):  LowWaterMark,  // exactly at boundary — NOT a candidate
+		keyToNodeID(atHigh): HighWaterMark, // exactly at boundary — NOT a candidate
+		keyToNodeID(other):  HighWaterMark + 1,
+	}
+
+	c := v.findAllCandidates(unl, negUNL, scoreTable)
+	assert.Empty(t, c.toDisable, "score == LowWaterMark must not be a toDisable candidate (rippled uses strict `<`)")
+	assert.Empty(t, c.toReEnable, "score == HighWaterMark must not be a toReEnable candidate (rippled uses strict `>`)")
+}
+
+// TestDoVoting_AllBadScores_CapEnforced exercises the
+// MaxListedFraction cap with a UNL large enough that the cap is >1
+// and many candidates qualify. With 8 validators and 0% currently
+// disabled, ceil(8*0.25)=2 are allowed on the negUNL; canAdd is true
+// (since listed=0 < 2), so the candidate scan runs, but DoVoting
+// always picks at most one toDisable per round. The 25% cap is
+// re-tested when votes are applied, so producing one tx per round
+// matches rippled's behavior.
+func TestDoVoting_AllBadScores_CapEnforced(t *testing.T) {
+	myKey := makeKey(0xAA)
+	v := NewVoter(keyToNodeID(myKey))
+
+	unl := [][33]byte{myKey}
+	for i := byte(1); i <= 7; i++ {
+		unl = append(unl, makeKey(0xB0+i))
+	}
+
+	// Local node above MinLocalValsToVote, every other validator
+	// below LowWaterMark.
+	scoreTable := map[consensus.NodeID]uint32{
+		keyToNodeID(myKey): MinLocalValsToVote + 1,
+	}
+	for _, k := range unl {
+		nid := keyToNodeID(k)
+		if nid == keyToNodeID(myKey) {
+			continue
+		}
+		scoreTable[nid] = LowWaterMark - 1
+	}
+
+	blobs, err := v.DoVoting(1024, [32]byte{0xAB, 0xCD}, unl, State{}, scoreTable)
+	require.NoError(t, err)
+	require.Len(t, blobs, 1, "DoVoting returns at most one toDisable per round")
+
+	tx := decodeTx(t, blobs[0])
+	assert.EqualValues(t, 1, asUint(tx["UNLModifyDisabling"]),
+		"the single emitted tx must be a ToDisable")
+}
+
+// TestDoVoting_NewValidatorExpired_BecomesCandidate covers rippled's
+// case 9 in testFindAllCandidates (NegativeUNL_test.cpp:1136-1144):
+// a validator added via NewValidators is exempt from ToDisable while
+// inside the skip window; once seq advances past
+// NewValidatorDisableSkip, PurgeNewValidators removes it and a bad
+// score makes it a candidate. PR #375 shipped only the not-yet-
+// expired half of this case.
+func TestDoVoting_NewValidatorExpired_BecomesCandidate(t *testing.T) {
+	myKey := makeKey(0xAA)
+	good := makeKey(0xBB)
+	exFresh := makeKey(0xCC)
+	v := NewVoter(keyToNodeID(myKey))
+	unl := [][33]byte{myKey, good, exFresh}
+
+	addedAt := uint32(900)
+	v.NewValidators(addedAt, []consensus.NodeID{keyToNodeID(exFresh)})
+
+	// Upcoming seq is past the skip window:
+	//   addedAt + NewValidatorDisableSkip + 2  → strictly > skip,
+	//   so PurgeNewValidators removes the entry.
+	upcomingSeq := addedAt + NewValidatorDisableSkip + 2
+	require.Greater(t, upcomingSeq-addedAt, NewValidatorDisableSkip,
+		"sanity: upcoming seq must be past the skip window")
+
+	scoreTable := fullScoreTable(v.myID, unl)
+	scoreTable[keyToNodeID(exFresh)] = LowWaterMark - 1
+
+	blobs, err := v.DoVoting(upcomingSeq-1, [32]byte{0x06}, unl, State{}, scoreTable)
+	require.NoError(t, err)
+	require.Len(t, blobs, 1, "expired new validator with bad score must produce a ToDisable")
+
+	tx := decodeTx(t, blobs[0])
+	assert.EqualValues(t, 1, asUint(tx["UNLModifyDisabling"]),
+		"sfUNLModifyDisabling must be 1 for the expired-then-bad-score case")
+	assert.Equal(t, hex.EncodeToString(exFresh[:]),
+		stringFold(tx["UNLModifyValidator"]),
+		"validator field must be the (now-expired) fresh validator")
+}
+
+// TestDoVoting_BoundaryParticipation covers the rippled boundary
+// where myValidationCount == MinLocalValsToVote. Rippled's else-if
+// at NegativeUNLVote.cpp:230-231 uses strict `>`, so the boundary
+// falls into the "Too many!" else-branch and returns empty. The Go
+// port must match: at exactly MinLocalValsToVote, do not vote.
+func TestDoVoting_BoundaryParticipation(t *testing.T) {
+	myKey := makeKey(0xAA)
+	weak := makeKey(0xBB)
+	v := NewVoter(keyToNodeID(myKey))
+	unl := [][33]byte{myKey, weak}
+
+	scoreTable := map[consensus.NodeID]uint32{
+		v.myID:            MinLocalValsToVote, // exactly at boundary
+		keyToNodeID(weak): LowWaterMark - 1,   // would be toDisable if we voted
+	}
+
+	blobs, err := v.DoVoting(1024, [32]byte{0xDE, 0xAD}, unl, State{}, scoreTable)
+	require.NoError(t, err)
+	assert.Nil(t, blobs, "myCount == MinLocalValsToVote must NOT vote (rippled uses strict `>`)")
+}
+
+// TestDoVoting_LocalCountAboveWindow covers the rippled "Too many!"
+// branch at NegativeUNLVote.cpp:236-244 — myValidationCount >
+// FlagLedgerInterval returns empty (no vote). The Go port treats
+// this as a normal no-vote rather than a producer error, matching
+// the observed effect on consensus.
+func TestDoVoting_LocalCountAboveWindow(t *testing.T) {
+	myKey := makeKey(0xAA)
+	weak := makeKey(0xBB)
+	v := NewVoter(keyToNodeID(myKey))
+	unl := [][33]byte{myKey, weak}
+
+	scoreTable := map[consensus.NodeID]uint32{
+		v.myID:            flagLedgerInterval + 1,
+		keyToNodeID(weak): LowWaterMark - 1,
+	}
+
+	blobs, err := v.DoVoting(1024, [32]byte{0xDE, 0xAD}, unl, State{}, scoreTable)
+	require.NoError(t, err, "above-window must NOT surface as a producer error")
+	assert.Nil(t, blobs, "myCount > FlagLedgerInterval must NOT vote")
+}
+
+// TestDoVoting_ScoreTableMissingUNLMember covers the API-boundary
+// invariant introduced to match rippled's buildScoreTable at
+// NegativeUNLVote.cpp:197-200: every UNL member is treated as score
+// 0 if absent from the supplied scoreTable. Without the zero-fill
+// inside DoVoting, a UNL member silently absent would never become
+// a toDisable candidate even though rippled would always count it
+// as a non-validator with score 0.
+func TestDoVoting_ScoreTableMissingUNLMember(t *testing.T) {
+	myKey := makeKey(0xAA)
+	silent := makeKey(0xBB) // never validated — missing from scoreTable
+	other := makeKey(0xCC)
+	v := NewVoter(keyToNodeID(myKey))
+	unl := [][33]byte{myKey, silent, other}
+
+	scoreTable := map[consensus.NodeID]uint32{
+		v.myID:             MinLocalValsToVote + 1,
+		keyToNodeID(other): HighWaterMark + 1,
+		// silent intentionally omitted
+	}
+
+	blobs, err := v.DoVoting(1024, [32]byte{0x07}, unl, State{}, scoreTable)
+	require.NoError(t, err)
+	require.Len(t, blobs, 1, "silent UNL member (missing from scoreTable) must be treated as score 0 → toDisable")
+
+	tx := decodeTx(t, blobs[0])
+	assert.EqualValues(t, 1, asUint(tx["UNLModifyDisabling"]))
+	assert.Equal(t, hex.EncodeToString(silent[:]),
+		stringFold(tx["UNLModifyValidator"]),
+		"the silent (missing-from-scoreTable) validator must be the picked candidate")
 }

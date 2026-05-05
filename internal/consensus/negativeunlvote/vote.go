@@ -30,6 +30,7 @@ import (
 	"math"
 	"sync"
 
+	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -166,13 +167,28 @@ func (v *Voter) PurgeNewValidators(seq uint32) {
 }
 
 // keyToNodeID is the local node-id derivation goXRPL uses today. It
-// mirrors the layout of consensus.NodeID (33-byte compressed pubkey)
-// rather than rippled's 20-byte RIPEMD-160 hash. Cross-implementation
-// pseudo-tx parity is unaffected because the chosen candidate (the
-// pubkey) is what ends up in sfUNLModifyValidator on the wire — the
-// NodeID is only used as the score-table key locally.
+// mirrors the layout of consensus.NodeID (33-byte compressed pubkey),
+// whereas rippled's NodeID is the 20-byte RIPEMD-160(SHA256(pubkey))
+// hash produced by calcNodeID (PublicKey.cpp:319-327). The 33-byte
+// pubkey is what travels on the wire as sfUNLModifyValidator, and the
+// score-table key is local. Candidate selection — see choose() —
+// reduces each pubkey through the same calcNodeID hash before XOR/min,
+// so a Go validator and a rippled validator on the same network with
+// the same inputs converge on the same picked candidate.
 func keyToNodeID(k [33]byte) consensus.NodeID {
 	return consensus.NodeID(k)
+}
+
+// calcNodeID derives rippled's 20-byte NodeID from a 33-byte master
+// pubkey: RIPEMD-160(SHA256(pubkey)). Mirrors calcNodeID at
+// rippled/src/libxrpl/protocol/PublicKey.cpp:319-327. Used by choose()
+// to make the candidate-picking comparator agree byte-for-byte with
+// rippled across implementations.
+func calcNodeID(pubkey [33]byte) [20]byte {
+	h := addresscodec.Sha256RipeMD160(pubkey[:])
+	var out [20]byte
+	copy(out[:], h)
+	return out
 }
 
 // DoVoting runs the producer end-to-end and returns the serialized
@@ -191,6 +207,13 @@ func keyToNodeID(k [33]byte) consensus.NodeID {
 // the caller; the engine treats a non-nil error as a producer
 // failure and falls through to no-injection rather than blocking the
 // round.
+//
+// scoreTable contract: callers may pass an under-populated table —
+// any UNL key missing from scoreTable is treated as score 0,
+// matching rippled's buildScoreTable invariant
+// (NegativeUNLVote.cpp:197-200) where every UNL member is initialized
+// to 0 before the validation-count loop. This is enforced inside
+// DoVoting; callers do not have to pre-fill themselves.
 func (v *Voter) DoVoting(
 	prevLedgerSeq uint32,
 	prevLedgerHash [32]byte,
@@ -198,24 +221,41 @@ func (v *Voter) DoVoting(
 	state State,
 	scoreTable map[consensus.NodeID]uint32,
 ) ([][]byte, error) {
-	// Refuse to vote if local participation is insufficient. See
-	// buildScoreTable's myValidationCount check at
-	// NegativeUNLVote.cpp:216-244.
+	// Refuse to vote if local participation is insufficient. Mirrors
+	// buildScoreTable's myValidationCount branching at
+	// NegativeUNLVote.cpp:221-244. The boundaries are exact:
+	//   < MinLocalValsToVote        → no vote (low participation)
+	//   == MinLocalValsToVote       → no vote (rippled's else branch
+	//                                 catches the boundary because the
+	//                                 else-if uses strict `>`)
+	//   > FlagLedgerInterval        → no vote (rippled's "Too many!"
+	//                                 branch — a logic error in
+	//                                 rippled, treated as a normal
+	//                                 no-vote here to match the
+	//                                 observed effect on consensus).
 	myCount := scoreTable[v.myID]
-	if myCount < MinLocalValsToVote {
+	if myCount <= MinLocalValsToVote || myCount > flagLedgerInterval {
 		return nil, nil
-	}
-
-	// Cannot exceed FlagLedgerInterval validations in the window —
-	// rippled treats this as a logic error and refuses to vote.
-	if myCount > flagLedgerInterval {
-		return nil, fmt.Errorf("negativeunlvote: local validation count %d exceeds window %d", myCount, flagLedgerInterval)
 	}
 
 	// Build the trusted-key index once.
 	unlNodeIDs := make(map[consensus.NodeID][33]byte, len(unlKeys))
 	for _, k := range unlKeys {
 		unlNodeIDs[keyToNodeID(k)] = k
+	}
+
+	// Establish rippled's scoreTable invariant: every UNL member must
+	// have an entry, with 0 for non-validators (NegativeUNLVote.cpp:
+	// 197-200). Done on a local copy so the caller's map is not
+	// mutated.
+	filledScoreTable := make(map[consensus.NodeID]uint32, len(scoreTable)+len(unlNodeIDs))
+	for n, s := range scoreTable {
+		filledScoreTable[n] = s
+	}
+	for n := range unlNodeIDs {
+		if _, ok := filledScoreTable[n]; !ok {
+			filledScoreTable[n] = 0
+		}
 	}
 
 	// Resolve the effective negUNL for the upcoming flag ledger
@@ -237,7 +277,7 @@ func (v *Voter) DoVoting(
 	upcomingSeq := prevLedgerSeq + 1
 	v.PurgeNewValidators(upcomingSeq)
 
-	candidates := v.findAllCandidates(unlNodeIDs, negUnlNodeIDs, scoreTable)
+	candidates := v.findAllCandidates(unlNodeIDs, negUnlNodeIDs, filledScoreTable)
 
 	var blobs [][]byte
 	if len(candidates.toDisable) > 0 {
@@ -324,23 +364,27 @@ func (v *Voter) findAllCandidates(
 
 // choose deterministically picks one NodeID from candidates using
 // the prevLedger hash as the random pad. Mirrors
-// NegativeUNLVote.cpp:142-161 — XOR with the pad and pick the
-// minimum. This converges every validator on the same choice
-// without coordination.
+// NegativeUNLVote::choose at NegativeUNLVote.cpp:142-161 — XOR with
+// the pad and pick the minimum. This converges every validator on
+// the same choice without coordination.
 //
-// goXRPL's NodeID is 33 bytes vs rippled's 20; we XOR over the
-// first 32 bytes (matching the hash-pad width) and treat them as a
-// big-endian comparison key.
+// rippled's comparator is over 20-byte calcNodeID values
+// (RIPEMD-160(SHA256(pubkey))) XORed with the first 20 bytes of the
+// 32-byte randomPad. goXRPL's consensus.NodeID is the 33-byte master
+// pubkey, so we hash through calcNodeID inside the comparator: this
+// produces the same picked candidate as rippled given the same
+// pubkeys and the same prevLedger.hash, preserving cross-implementation
+// vote convergence on a mixed Go+rippled validator network.
 func choose(randomPad [32]byte, candidates []consensus.NodeID) consensus.NodeID {
 	if len(candidates) == 0 {
 		var zero consensus.NodeID
 		return zero
 	}
 	best := candidates[0]
-	bestKey := xorKey(best, randomPad)
+	bestKey := xorCalcNodeID(best, randomPad)
 	for i := 1; i < len(candidates); i++ {
-		k := xorKey(candidates[i], randomPad)
-		if compareKey(k, bestKey) < 0 {
+		k := xorCalcNodeID(candidates[i], randomPad)
+		if compareNodeID20(k, bestKey) < 0 {
 			best = candidates[i]
 			bestKey = k
 		}
@@ -348,16 +392,21 @@ func choose(randomPad [32]byte, candidates []consensus.NodeID) consensus.NodeID 
 	return best
 }
 
-func xorKey(n consensus.NodeID, pad [32]byte) [32]byte {
-	var out [32]byte
-	for i := 0; i < 32; i++ {
-		out[i] = n[i] ^ pad[i]
+// xorCalcNodeID computes calcNodeID(pubkey) ^ randomPad[:20]. Matches
+// rippled's `candidates[j] ^ randomPad` at NegativeUNLVote.cpp:155
+// once randomPad is truncated via `NodeID::fromVoid(randomPadData.data())`
+// at NegativeUNLVote.cpp:151.
+func xorCalcNodeID(n consensus.NodeID, pad [32]byte) [20]byte {
+	nid := calcNodeID(n)
+	var out [20]byte
+	for i := 0; i < 20; i++ {
+		out[i] = nid[i] ^ pad[i]
 	}
 	return out
 }
 
-func compareKey(a, b [32]byte) int {
-	for i := 0; i < 32; i++ {
+func compareNodeID20(a, b [20]byte) int {
+	for i := 0; i < 20; i++ {
 		switch {
 		case a[i] < b[i]:
 			return -1
