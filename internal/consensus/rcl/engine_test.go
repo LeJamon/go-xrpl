@@ -2158,3 +2158,132 @@ drain:
 		t.Errorf("hard abandon must not emit ResultTimeout (that is the soft branch)")
 	}
 }
+
+// TestEngine_OnValidation_NoSelfDeadlockOnQuorum pins the issue
+// #381 root cause: ValidationTracker.Add fires the
+// fully-validated callback synchronously on the goroutine that
+// called OnValidation — and OnValidation already holds e.mu.Lock.
+// A defensive e.mu.RLock inside the callback self-deadlocks
+// because Go's RWMutex is non-recursive. Once a single
+// fully-validated ledger fires, the engine writer never returns,
+// the heartbeat parks, and every RPC reader piles up.
+func TestEngine_OnValidation_NoSelfDeadlockOnQuorum(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.quorum = 1
+	adaptor.opMode = consensus.OpModeFull
+	trusted := consensus.NodeID{2}
+	adaptor.setTrusted([]consensus.NodeID{trusted})
+	adaptor.now = time.Now()
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	// Start wires the ValidationTracker and its fully-validated
+	// callback (engine.go SetFullyValidatedCallback) — without
+	// Start the tracker is nil and OnValidation skips Add, hiding
+	// the bug. The bug only fires when quorum is actually reached.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	validation := &consensus.Validation{
+		LedgerID:  consensus.LedgerID{101},
+		LedgerSeq: 101,
+		NodeID:    trusted,
+		SignTime:  adaptor.now,
+		SeenTime:  adaptor.now,
+		Full:      true,
+	}
+
+	// OnValidation must return cleanly even though Add fires the
+	// fully-validated callback (quorum=1, one trusted validator,
+	// one Full validation = quorum reached). Run on a separate
+	// goroutine with a tight timeout so a regression of the
+	// e.mu.RLock self-deadlock cannot pass by hanging.
+	done := make(chan error, 1)
+	go func() {
+		done <- engine.OnValidation(validation, 1)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("OnValidation returned unexpected error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnValidation did not return — fully-validated callback " +
+			"self-deadlocked on e.mu (issue #381 root cause)")
+	}
+}
+
+// TestEngine_IsProposing_LockFreeWhileWriterHoldsMu pins the issue
+// #381 follow-up: the RPC server_info hot path
+// (Service.GetServerInfo holds ledger.s.mu.RLock → serverStateFunc →
+// engine.IsProposing) used to acquire e.mu.RLock, which deadlocked
+// against any engine writer that needed ledger.s.mu (e.g.
+// OnValidation → fullyValidatedCallback → SetValidatedLedger). With
+// the atomic mode mirror, IsProposing must complete immediately
+// regardless of who currently holds e.mu — including a writer that
+// will never release.
+func TestEngine_IsProposing_LockFreeWhileWriterHoldsMu(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	// Drive the engine into ModeProposing so IsProposing must return
+	// true. StartRound takes e.mu under the hood.
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if !engine.IsProposing() {
+		t.Fatalf("preconditions: expected IsProposing=true after StartRound(true) in OpModeFull")
+	}
+
+	// Simulate a stuck writer: hold e.mu.Lock() until the test ends.
+	writerHasLock := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	go func() {
+		engine.mu.Lock()
+		close(writerHasLock)
+		<-releaseWriter
+		engine.mu.Unlock()
+	}()
+	defer close(releaseWriter)
+	<-writerHasLock
+
+	// IsProposing must NOT block on the contended e.mu — the read
+	// is served from the atomic mirror. Run on a separate goroutine
+	// with a tight timeout so a regression cannot pass by simply
+	// being slow.
+	done := make(chan bool, 1)
+	go func() {
+		done <- engine.IsProposing()
+	}()
+
+	select {
+	case got := <-done:
+		if !got {
+			t.Errorf("IsProposing returned false while we are in ModeProposing")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("IsProposing blocked while a writer holds e.mu — atomic " +
+			"mode mirror regression (issue #381 follow-up)")
+	}
+
+	// Mode() shares the same atomic-read fast path; verify it too.
+	doneMode := make(chan consensus.Mode, 1)
+	go func() {
+		doneMode <- engine.Mode()
+	}()
+	select {
+	case got := <-doneMode:
+		if got != consensus.ModeProposing {
+			t.Errorf("Mode returned %v while we are in ModeProposing", got)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Mode blocked while a writer holds e.mu — atomic mode mirror regression")
+	}
+}
