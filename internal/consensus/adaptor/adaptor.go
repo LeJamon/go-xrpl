@@ -558,16 +558,18 @@ func (a *Adaptor) GetPendingTxs() [][]byte {
 	return blobs
 }
 
-// GenerateFlagLedgerPseudoTxs is currently a stub. The fee-vote
-// algorithm lives in internal/consensus/feevote (ported in #369)
-// and is exercised by package-level tests against synthetic vote
-// inputs; the amendment-vote producer is still TODO (#370).
+// GenerateFlagLedgerPseudoTxs is currently a stub. Both producers
+// are now ported as algorithm-only packages:
 //
-// Wiring fee-vote into this method needs the same per-seq
+//   - fee voting → internal/consensus/feevote (#369)
+//   - amendment voting → internal/consensus/amendmentvote (#370)
+//
+// Each is exercised by package-level tests against synthetic
+// inputs. Wiring them into this method needs the same per-seq
 // validation history extension to ValidationTracker called out on
-// GenerateNegativeUNLPseudoTx below — once that lands, the fee
-// votes can be extracted from the prior voting ledger's
-// validations and fed into feevote.DoVoting.
+// GenerateNegativeUNLPseudoTx below; once that lands, the prior
+// voting-ledger's trusted validations can feed both producers and
+// the resulting blobs are concatenated as the return.
 //
 // Returning nil keeps the engine's injection step a no-op until
 // the wiring lands — matching the pre-#367 behavior of never
