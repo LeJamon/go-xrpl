@@ -229,6 +229,77 @@ func TestAddRootNodeErrors(t *testing.T) {
 	}
 }
 
+// TestGetMissingNodes_PathNodeIDs is a regression test for issue #395.
+// GetMissingNodes must populate MissingNode.NodeID with the path-based
+// identifier of each missing inner node so the caller can request that
+// exact subtree from a peer. Earlier the inbound-ledger acquisition
+// only ever requested the root NodeID with QueryDepth=2, which caps
+// observable depth at 2; any missing node deeper than that could never
+// be filled and catch-up wedged with "1 missing node" forever.
+func TestGetMissingNodes_PathNodeIDs(t *testing.T) {
+	// Populate a source map with keys whose top nibble fans out across
+	// several branches at the root, guaranteeing the root has multiple
+	// inner-node children that get reported as missing once we sync
+	// only the root into a destination map.
+	source, err := New(TypeState)
+	if err != nil {
+		t.Fatalf("New source: %v", err)
+	}
+	for branch := byte(0); branch < 8; branch++ {
+		for i := byte(0); i < 4; i++ {
+			var key [32]byte
+			key[0] = (branch << 4) | i
+			if err := source.Put(key, make([]byte, 12)); err != nil {
+				t.Fatalf("Put: %v", err)
+			}
+		}
+	}
+
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+
+	// Sync only the root into the destination — every non-empty branch
+	// at depth 1 should now be reported as missing with a non-root
+	// NodeID we can ship to a peer.
+	dest, err := New(TypeState)
+	if err != nil {
+		t.Fatalf("New dest: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+
+	missing := dest.GetMissingNodes(64, nil)
+	if len(missing) == 0 {
+		t.Fatal("expected missing nodes after syncing only root, got none")
+	}
+
+	seen := make(map[[33]byte]struct{}, len(missing))
+	for _, m := range missing {
+		if m.NodeID.IsRoot() {
+			t.Errorf("missing node at depth %d should not have root NodeID", m.Depth)
+		}
+		if int(m.NodeID.Depth()) != m.Depth {
+			t.Errorf("NodeID depth %d != MissingNode.Depth %d", m.NodeID.Depth(), m.Depth)
+		}
+		var k [33]byte
+		copy(k[:], m.NodeID.Bytes())
+		if _, dup := seen[k]; dup {
+			t.Errorf("duplicate NodeID for missing node at depth %d", m.Depth)
+		}
+		seen[k] = struct{}{}
+		if err := m.NodeID.Validate(); err != nil {
+			t.Errorf("missing NodeID is malformed: %v", err)
+		}
+	}
+}
+
 func TestAddKnownNodeErrors(t *testing.T) {
 	sMap, err := New(TypeState)
 	if err != nil {

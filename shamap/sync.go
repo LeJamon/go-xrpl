@@ -84,6 +84,12 @@ type MissingNode struct {
 	ParentHash [32]byte
 	// Branch is the branch index in the parent node (0-15 for inner nodes)
 	Branch int
+	// NodeID is the path-based identifier of the missing node, used to
+	// request the node from a peer via TMGetLedger. The peer locates a
+	// node by its tree path (depth + key prefix), not by its hash, so
+	// requesting by Hash alone is insufficient — without NodeID, the
+	// caller can only ever ask for the root.
+	NodeID NodeID
 }
 
 // String returns a string representation of the MissingNode.
@@ -131,6 +137,7 @@ func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode
 	type workItem struct {
 		node       Node
 		nodeHash   [32]byte
+		nodeID     NodeID
 		parentHash [32]byte
 		depth      int
 		branch     int
@@ -144,6 +151,7 @@ func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode
 		queue = append(queue, workItem{
 			node:     sm.root,
 			nodeHash: rootHash,
+			nodeID:   NewRootNodeID(),
 			depth:    0,
 			branch:   -1,
 		})
@@ -184,6 +192,14 @@ func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode
 				continue
 			}
 
+			// Compute the child's path-based NodeID so a downstream
+			// caller can request this exact subtree from a peer (the
+			// peer locates a node by its NodeID, not by its hash).
+			childNodeID, err := item.nodeID.ChildNodeID(uint8(branch))
+			if err != nil {
+				continue
+			}
+
 			// Check if child is missing (hash present but no child node)
 			child, err := inner.Child(branch)
 			if err != nil {
@@ -198,6 +214,7 @@ func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode
 						Depth:      item.depth + 1,
 						ParentHash: item.nodeHash,
 						Branch:     branch,
+						NodeID:     childNodeID,
 					})
 
 					if maxNodes > 0 && len(missing) >= maxNodes {
@@ -209,6 +226,7 @@ func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode
 				queue = append(queue, workItem{
 					node:       child,
 					nodeHash:   childHash,
+					nodeID:     childNodeID,
 					parentHash: item.nodeHash,
 					depth:      item.depth + 1,
 					branch:     branch,
@@ -421,6 +439,7 @@ func (sm *SHAMap) getMissingNodesUnsafe(maxNodes int, filter SyncFilter) []Missi
 	type workItem struct {
 		node       Node
 		nodeHash   [32]byte
+		nodeID     NodeID
 		parentHash [32]byte
 		depth      int
 		branch     int
@@ -433,6 +452,7 @@ func (sm *SHAMap) getMissingNodesUnsafe(maxNodes int, filter SyncFilter) []Missi
 		queue = append(queue, workItem{
 			node:     sm.root,
 			nodeHash: rootHash,
+			nodeID:   NewRootNodeID(),
 			depth:    0,
 			branch:   -1,
 		})
@@ -469,6 +489,11 @@ func (sm *SHAMap) getMissingNodesUnsafe(maxNodes int, filter SyncFilter) []Missi
 				continue
 			}
 
+			childNodeID, err := item.nodeID.ChildNodeID(uint8(branch))
+			if err != nil {
+				continue
+			}
+
 			child, err := inner.Child(branch)
 			if err != nil {
 				continue
@@ -481,6 +506,7 @@ func (sm *SHAMap) getMissingNodesUnsafe(maxNodes int, filter SyncFilter) []Missi
 						Depth:      item.depth + 1,
 						ParentHash: item.nodeHash,
 						Branch:     branch,
+						NodeID:     childNodeID,
 					})
 
 					if maxNodes > 0 && len(missing) >= maxNodes {
@@ -491,6 +517,7 @@ func (sm *SHAMap) getMissingNodesUnsafe(maxNodes int, filter SyncFilter) []Missi
 				queue = append(queue, workItem{
 					node:       child,
 					nodeHash:   childHash,
+					nodeID:     childNodeID,
 					parentHash: item.nodeHash,
 					depth:      item.depth + 1,
 					branch:     branch,

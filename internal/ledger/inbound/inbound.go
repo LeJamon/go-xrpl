@@ -211,8 +211,31 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 	return nil
 }
 
-// NeedsMissingNodeIDs returns the wire-encoded nodeIDs of missing SHAMap nodes.
-// Returns nil if the state map is complete or not yet created.
+// missingNodeBatch caps how many missing-node IDs we ship per
+// TMGetLedger request. Each request fans out to one peer response
+// containing the requested subtree(s) plus QueryDepth=2 worth of
+// descendants, so 16 keeps the response well under rippled's
+// 256-node-per-reply ceiling while still amortizing several missing
+// nodes per round trip.
+const missingNodeBatch = 16
+
+// NeedsMissingNodeIDs returns the wire-encoded NodeIDs of missing
+// SHAMap inner nodes that the peer should ship back, ordered by depth
+// so root-adjacent subtrees fill before deeper ones.
+//
+// Earlier this function unconditionally requested the SHAMap root with
+// QueryDepth=2 and ignored the actual missing-node enumeration. That
+// worked for tiny test ledgers (everything fits in root + 2 levels)
+// but on a real network it deadlocked catch-up: once depth 0..2 was
+// populated, any node at depth ≥3 stayed permanently missing because
+// we kept asking for the same root subtree the peer had already
+// served. The "1 missing node" log loop in issue #395 surfaced
+// exactly this — `IsComplete()` never flips to true and the inbound
+// acquisition wedges until the outer timeout.
+//
+// Returns nil if no nodes are missing or the map isn't ready to be
+// fed; otherwise returns up to missingNodeBatch path-based NodeIDs
+// from GetMissingNodes.
 func (l *Ledger) NeedsMissingNodeIDs() [][]byte {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -221,17 +244,15 @@ func (l *Ledger) NeedsMissingNodeIDs() [][]byte {
 		return nil
 	}
 
-	missing := l.stateMap.GetMissingNodes(256, nil)
+	missing := l.stateMap.GetMissingNodes(missingNodeBatch, nil)
 	if len(missing) == 0 {
 		return nil
 	}
 
-	// Request the root with queryDepth=2 which returns fat nodes
-	// (root + children + grandchildren). For small state trees this
-	// returns everything in one shot.
-	rootID := shamap.NewRootNodeID()
-	nodeIDs := [][]byte{rootID.Bytes()}
-
+	nodeIDs := make([][]byte, 0, len(missing))
+	for i := range missing {
+		nodeIDs = append(nodeIDs, missing[i].NodeID.Bytes())
+	}
 	return nodeIDs
 }
 
