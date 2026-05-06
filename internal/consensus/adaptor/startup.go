@@ -39,9 +39,23 @@ type Components struct {
 	Archive *archive.Archive
 
 	// cancel functions for background goroutines
-	overlayCancel context.CancelFunc
-	routerCancel  context.CancelFunc
+	overlayCancel          context.CancelFunc
+	routerCancel           context.CancelFunc
+	manifestPeriodicCancel context.CancelFunc
 }
+
+// periodicManifestBroadcastInterval is how often Components.Start
+// re-emits the cached aggregate TMManifests frame. Rippled has no
+// equivalent loop: its 1-second OverlayImpl timer
+// (OverlayImpl.cpp:84-114) handles endpoints / autoConnect / tx
+// queue / idle-peer pruning but never emits manifests, and
+// getManifestsMessage (OverlayImpl.cpp:1185) is invoked only from
+// PeerImp::run after each handshake. That on-connect-only model
+// leaves peers who join after our boot burst depending on an
+// indirect relay; this loop closes the gap. Duplicate frames are
+// wire-compatible — rippled returns Stale via applyManifest
+// (Manifest.cpp:399).
+const periodicManifestBroadcastInterval = 5 * time.Minute
 
 // Start launches all background goroutines (overlay, engine, router).
 func (c *Components) Start() error {
@@ -61,11 +75,42 @@ func (c *Components) Start() error {
 	c.routerCancel = routerCancel
 	go c.Router.Run(routerCtx)
 
+	// Periodic re-emission. Cheap when there's nothing to broadcast:
+	// the emission path short-circuits on an empty / unwired cache.
+	periodicCtx, periodicCancel := context.WithCancel(context.Background())
+	c.manifestPeriodicCancel = periodicCancel
+	go c.runPeriodicManifestBroadcast(periodicCtx, periodicManifestBroadcastInterval)
+
 	return nil
+}
+
+// runPeriodicManifestBroadcast re-emits the cached manifest frame on
+// the configured tick. Skip cases (empty / unwired cache, no peers)
+// are handled inside BroadcastLocalManifest.
+func (c *Components) runPeriodicManifestBroadcast(ctx context.Context, interval time.Duration) {
+	if c.Router == nil || interval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if n := c.Router.BroadcastLocalManifest(); n > 0 {
+				slog.Info("periodic local manifest broadcast",
+					"t", "Components.runPeriodicManifestBroadcast", "peers", n)
+			}
+		}
+	}
 }
 
 // Stop gracefully shuts down all components.
 func (c *Components) Stop() {
+	if c.manifestPeriodicCancel != nil {
+		c.manifestPeriodicCancel()
+	}
 	if c.routerCancel != nil {
 		c.routerCancel()
 	}
