@@ -181,13 +181,19 @@ func TestNewValidatorIdentityFromToken_HappyPath(t *testing.T) {
 	if len(id.SerializedMfst) == 0 {
 		t.Error("SerializedMfst must be populated for #372 emission")
 	}
-	// NodeID is the signing key for wire compatibility (see identity.go
-	// type comment) — pin that explicitly so the migration sub-issue
-	// has to update this assertion deliberately.
-	var asNode consensus.NodeID
-	copy(asNode[:], fix.signingPub[:])
-	if id.NodeID != asNode {
-		t.Errorf("NodeID should equal SigningKey for now: got %x", id.NodeID)
+	// NodeID is calcNodeID(MasterKey) — the 20-byte master-derived
+	// identifier matching rippled's NodeID. It must NOT match the
+	// signing pubkey (token mode rotates the ephemeral key) and it
+	// must match the canonical calcNodeID derivation so peers compute
+	// the same identifier for our master key.
+	wantNodeID := consensus.CalcNodeID(fix.masterPub)
+	if id.NodeID != wantNodeID {
+		t.Errorf("NodeID = %x, want calcNodeID(MasterKey) = %x", id.NodeID, wantNodeID)
+	}
+	// Sanity: a calcNodeID over the signing key would diverge from the
+	// master-derived value when keys are rotated (token mode).
+	if id.NodeID == consensus.CalcNodeID(fix.signingPub) {
+		t.Error("NodeID coincides with calcNodeID(SigningKey); token mode must derive from master")
 	}
 }
 
@@ -201,7 +207,6 @@ func TestNewValidatorIdentityFromToken_SignVerifyValidation(t *testing.T) {
 	v := &consensus.Validation{
 		LedgerID:  consensus.LedgerID{0x01, 0x02},
 		LedgerSeq: 42,
-		NodeID:    id.NodeID,
 		SignTime:  time.Unix(protocol.RippleEpochUnix+1000, 0),
 		Full:      true,
 	}

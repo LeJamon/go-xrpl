@@ -227,7 +227,15 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 
 		case typeCode == typeBlob && fieldCode == fieldSigningPubKey:
 			if len(fieldData) == 33 {
-				copy(v.NodeID[:], fieldData)
+				copy(v.SigningPubKey[:], fieldData)
+				// Default NodeID to calcNodeID(signingKey). The
+				// consensus router substitutes the master-derived
+				// NodeID via the manifest cache after parsing when
+				// the validator has rotated keys; in the absence of
+				// a manifest mapping the signing-key-derived value
+				// matches rippled's calcNodeID(getTrustedKey(...) ??
+				// signingKey) fallback at RCLValidations.cpp:165-186.
+				v.NodeID = consensus.CalcNodeID(v.SigningPubKey)
 			}
 
 		case typeCode == typeBlob && fieldCode == fieldSignature:
@@ -239,8 +247,11 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 	v.SigningData = signingBuf
 	v.Raw = append([]byte(nil), data...)
 
-	// Validate required fields were present.
-	if v.LedgerSeq == 0 || v.LedgerID == (consensus.LedgerID{}) || v.NodeID == (consensus.NodeID{}) {
+	// Validate required fields were present. SigningPubKey doubles as
+	// the presence check for sfSigningPubKey: parseSTValidation only
+	// populates it when the wire field is exactly 33 bytes, so a zero
+	// SigningPubKey means the field was missing or malformed.
+	if v.LedgerSeq == 0 || v.LedgerID == (consensus.LedgerID{}) || v.SigningPubKey == (consensus.SigningPubKey{}) {
 		return nil, errMissingFields
 	}
 
@@ -390,10 +401,12 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 
 	// --- Blob/VL fields (type 7) ---
 
-	// sfSigningPubKey (field 3)
-	pubKey := v.NodeID[:]
+	// sfSigningPubKey (field 3) — emit the 33-byte ephemeral signing
+	// key, NOT the 20-byte NodeID. NodeID is master-derived in-memory
+	// state (calcNodeID(masterKey)); the wire field carries the
+	// ephemeral signing key the validator actually signed with.
 	buf = appendFieldHeader(buf, typeBlob, fieldSigningPubKey)
-	buf = appendVL(buf, pubKey)
+	buf = appendVL(buf, v.SigningPubKey[:])
 
 	// sfSignature (field 6)
 	if len(v.Signature) > 0 {

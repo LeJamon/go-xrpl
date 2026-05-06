@@ -41,8 +41,12 @@ func mkValidation(seq uint32, node byte) *consensus.Validation {
 	v.LedgerID[0] = byte(seq >> 8)
 	v.LedgerID[1] = byte(seq)
 	v.LedgerID[31] = node
-	v.NodeID[0] = 0x02
-	v.NodeID[32] = node
+	// SigningPubKey: synthetic 33-byte compressed key (0x02 prefix +
+	// node-discriminator). This drives the archive's NodePubKey column;
+	// NodeID is the calcNodeID derivation used by trust map keying.
+	v.SigningPubKey[0] = 0x02
+	v.SigningPubKey[32] = node
+	v.NodeID = consensus.CalcNodeID([33]byte(v.SigningPubKey))
 	return v
 }
 
@@ -87,7 +91,7 @@ func TestValidationArchive_StaleValidationWrittenOnPrune(t *testing.T) {
 	if got.LedgerHash != relationaldb.Hash(v.LedgerID) {
 		t.Errorf("LedgerHash mismatch:\n got  %x\n want %x", got.LedgerHash, v.LedgerID)
 	}
-	if string(got.NodePubKey) != string(v.NodeID[:]) {
+	if string(got.NodePubKey) != string(v.SigningPubKey[:]) {
 		t.Errorf("NodePubKey mismatch")
 	}
 	if string(got.Raw) != string(v.Raw) {

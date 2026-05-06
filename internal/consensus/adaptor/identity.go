@@ -34,14 +34,13 @@ var (
 //     directly from the seed; Manifest is nil. Peers cannot rotate
 //     keys without operator intervention on every peer in this mode.
 //
-// NodeID currently equals SigningKey for wire-format compatibility
-// (sfSigningPubKey carries 33 bytes; consensus.NodeID is also 33 bytes
-// and is used both as the wire signing pubkey and as the in-memory
-// identifier). Rippled's true NodeID is calcNodeID(masterKey) — a
-// 20-byte RIPEMD-160 — and the manifest cache resolver in startup.go
-// already maps the signing-pubkey-shaped NodeID back to a master-shaped
-// one via GetMasterKey. Migrating consensus.NodeID to the 20-byte form
-// is tracked as a separate sub-issue per #371.
+// NodeID is the 20-byte calcNodeID(MasterKey) identifier matching
+// rippled's NodeID type (rippled/include/xrpl/protocol/UintTypes.h:59).
+// Wire frames carry the 33-byte SigningKey via sfSigningPubKey /
+// TMProposeSet.nodepubkey; the consensus router resolves the signing
+// key to its master via the manifest cache before populating NodeID
+// on inbound Proposals / Validations, so all in-memory maps key on
+// the master-derived identifier consistently with rippled.
 type ValidatorIdentity struct {
 	// MasterKey is the 33-byte compressed master public key declared in
 	// the manifest. In seed-only mode it equals SigningKey.
@@ -52,10 +51,10 @@ type ValidatorIdentity struct {
 	// MasterKey.
 	SigningKey [33]byte
 
-	// NodeID is the validator's wire-level identifier. Currently set
-	// to SigningKey to keep the existing
-	// {Validation,Proposal}.NodeID == sfSigningPubKey contract intact;
-	// see the type-level comment for the deferred migration.
+	// NodeID is the validator's master-derived 20-byte identifier
+	// (calcNodeID(MasterKey)). Distinct from SigningKey: rotating the
+	// ephemeral signing key does not change NodeID, matching rippled's
+	// long-term identity model.
 	NodeID consensus.NodeID
 
 	// Manifest is the parsed local manifest when configured via
@@ -107,7 +106,7 @@ func NewValidatorIdentity(seed string) (*ValidatorIdentity, error) {
 	vi := &ValidatorIdentity{signingPriv: privKeyHex}
 	copy(vi.MasterKey[:], pubKeyBytes)
 	copy(vi.SigningKey[:], pubKeyBytes)
-	copy(vi.NodeID[:], pubKeyBytes)
+	vi.NodeID = consensus.CalcNodeID(vi.MasterKey)
 	return vi, nil
 }
 
@@ -160,7 +159,7 @@ func NewValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
 		SerializedMfst: append([]byte(nil), m.Serialized...),
 		signingPriv:    hex.EncodeToString(tok.ValidationSecret[:]),
 	}
-	copy(vi.NodeID[:], m.SigningKey[:])
+	vi.NodeID = consensus.CalcNodeID(vi.MasterKey)
 	return vi, nil
 }
 
@@ -225,6 +224,8 @@ func (vi *ValidatorIdentity) SignProposal(proposal *consensus.Proposal) error {
 	if vi == nil {
 		return ErrNoValidatorKey
 	}
+	proposal.SigningPubKey = consensus.SigningPubKey(vi.SigningKey)
+	proposal.NodeID = vi.NodeID
 	data := buildProposalSigningData(proposal)
 	sig, err := vi.Sign(data)
 	if err != nil {
@@ -234,10 +235,13 @@ func (vi *ValidatorIdentity) SignProposal(proposal *consensus.Proposal) error {
 	return nil
 }
 
-// VerifyProposal verifies a proposal's signature.
+// VerifyProposal verifies a proposal's signature against its
+// SigningPubKey. NodeID is the master-derived 20-byte identifier and
+// is not a verification key — only the ephemeral SigningPubKey
+// (sfSigningPubKey on the wire) is what the proposal was signed with.
 func VerifyProposal(proposal *consensus.Proposal) error {
 	data := buildProposalSigningData(proposal)
-	if !Verify(proposal.NodeID[:], data, proposal.Signature) {
+	if !Verify(proposal.SigningPubKey[:], data, proposal.Signature) {
 		return errors.New("invalid proposal signature")
 	}
 	return nil
@@ -250,6 +254,8 @@ func (vi *ValidatorIdentity) SignValidation(validation *consensus.Validation) er
 	if vi == nil {
 		return ErrNoValidatorKey
 	}
+	validation.SigningPubKey = consensus.SigningPubKey(vi.SigningKey)
+	validation.NodeID = vi.NodeID
 	data := buildValidationSigningData(validation)
 	sig, err := vi.Sign(data)
 	if err != nil {
@@ -259,10 +265,14 @@ func (vi *ValidatorIdentity) SignValidation(validation *consensus.Validation) er
 	return nil
 }
 
-// VerifyValidation verifies a validation's signature.
+// VerifyValidation verifies a validation's signature against its
+// SigningPubKey. NodeID is the master-derived 20-byte identifier and
+// is not a verification key — only the ephemeral SigningPubKey
+// (sfSigningPubKey on the wire) is what the validation was signed
+// with.
 func VerifyValidation(validation *consensus.Validation) error {
 	data := buildValidationSigningData(validation)
-	if !Verify(validation.NodeID[:], data, validation.Signature) {
+	if !Verify(validation.SigningPubKey[:], data, validation.Signature) {
 		return errors.New("invalid validation signature")
 	}
 	return nil
@@ -414,9 +424,12 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 		buf = appendXRPAmount(buf, v.ReserveIncrementDrops)
 	}
 
-	// sfSigningPubKey (type 7, field 3) — included in signing hash per XRPL spec.
+	// sfSigningPubKey (type 7, field 3) — included in signing hash per
+	// XRPL spec. Emit the 33-byte ephemeral signing key, NOT the
+	// master-derived 20-byte NodeID; the wire preimage rippled hashes
+	// is over the ephemeral key it signed with.
 	buf = appendFieldHeader(buf, typeBlob, fieldSigningPubKey)
-	buf = appendVL(buf, v.NodeID[:])
+	buf = appendVL(buf, v.SigningPubKey[:])
 
 	// sfAmendments — VECTOR256 (type 19) FIELD 3 per rippled
 	// sfields.macro:306. The older value 19 confused type with field.

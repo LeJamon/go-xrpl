@@ -25,7 +25,7 @@ func makeKey(tag byte) [33]byte {
 }
 
 func nodeID(tag byte) consensus.NodeID {
-	return consensus.NodeID(makeKey(tag))
+	return consensus.CalcNodeID(makeKey(tag))
 }
 
 // fullScoreTable returns scoreTable[nid] = HighWaterMark+1 for every
@@ -280,18 +280,18 @@ func stringFold(v any) string {
 }
 
 // expectedChoose mirrors choose() byte-for-byte using the same
-// calcNodeID-then-XOR comparator. Used as the oracle for parity tests
+// NodeID-XOR-pad comparator. Used as the oracle for parity tests
 // against rippled's NegativeUNLVote::choose at NegativeUNLVote.cpp:
-// 142-161. If choose's comparator drifts (e.g. back to a 32-byte XOR
-// over the raw pubkey), these tests will catch the divergence.
+// 142-161. consensus.NodeID is the 20-byte calcNodeID(masterKey)
+// digest already, so the XOR is direct (no rehash). If choose's
+// comparator drifts, these tests will catch the divergence.
 func expectedChoose(pad [32]byte, cands []consensus.NodeID) consensus.NodeID {
 	var bestKey [20]byte
 	var best consensus.NodeID
 	for i, c := range cands {
-		nid := calcNodeID(c)
 		var k [20]byte
 		for j := 0; j < 20; j++ {
-			k[j] = nid[j] ^ pad[j]
+			k[j] = c[j] ^ pad[j]
 		}
 		if i == 0 {
 			best, bestKey = c, k

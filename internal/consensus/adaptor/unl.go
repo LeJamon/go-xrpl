@@ -69,8 +69,13 @@ func (u *UNL) Size() int {
 	return len(u.validators)
 }
 
-// DecodeValidatorKey decodes a base58-encoded node public key (n-prefixed)
-// into a consensus.NodeID (33-byte compressed public key).
+// DecodeValidatorKey decodes a base58-encoded n-prefixed node public
+// key into the 20-byte consensus.NodeID identifier rippled uses for
+// trust / quorum lookups. The base58 form configured by operators (in
+// `[validators]`) carries a 33-byte master public key; this helper
+// applies calcNodeID (RIPEMD-160(SHA-256(masterPubKey))) so the trust
+// set is keyed identically to the inbound NodeID values populated by
+// the consensus router.
 func DecodeValidatorKey(key string) (nodeID consensus.NodeID, err error) {
 	// Guard against panics in the base58 decoder for malformed input
 	defer func() {
@@ -86,8 +91,9 @@ func DecodeValidatorKey(key string) (nodeID consensus.NodeID, err error) {
 	if len(decoded) != 33 {
 		return consensus.NodeID{}, fmt.Errorf("unexpected key length: got %d, want 33", len(decoded))
 	}
-	copy(nodeID[:], decoded)
-	return nodeID, nil
+	var master [33]byte
+	copy(master[:], decoded)
+	return consensus.CalcNodeID(master), nil
 }
 
 // CalcQuorum computes the quorum for n validators matching rippled.

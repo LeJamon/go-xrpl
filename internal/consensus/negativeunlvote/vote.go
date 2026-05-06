@@ -31,7 +31,6 @@ import (
 	"math"
 	"sync"
 
-	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
@@ -184,29 +183,15 @@ func (v *Voter) PurgeNewValidators(seq uint32) {
 	}
 }
 
-// keyToNodeID is the local node-id derivation goXRPL uses today. It
-// mirrors the layout of consensus.NodeID (33-byte compressed pubkey),
-// whereas rippled's NodeID is the 20-byte RIPEMD-160(SHA256(pubkey))
-// hash produced by calcNodeID (PublicKey.cpp:319-327). The 33-byte
-// pubkey is what travels on the wire as sfUNLModifyValidator, and the
-// score-table key is local. Candidate selection — see choose() —
-// reduces each pubkey through the same calcNodeID hash before XOR/min,
-// so a Go validator and a rippled validator on the same network with
-// the same inputs converge on the same picked candidate.
+// keyToNodeID derives the canonical 20-byte consensus.NodeID from a
+// 33-byte master pubkey via RIPEMD-160(SHA256(pubkey)). Matches
+// rippled's calcNodeID at PublicKey.cpp:319-327. The 33-byte pubkey
+// travels on the wire as sfUNLModifyValidator while the score table
+// is keyed by the calcNodeID-derived NodeID — same shape rippled uses
+// for trust / negUNL maps, so a Go validator and a rippled validator
+// on the same network converge on the same picked candidate.
 func keyToNodeID(k [33]byte) consensus.NodeID {
-	return consensus.NodeID(k)
-}
-
-// calcNodeID derives rippled's 20-byte NodeID from a 33-byte master
-// pubkey: RIPEMD-160(SHA256(pubkey)). Mirrors calcNodeID at
-// rippled/src/libxrpl/protocol/PublicKey.cpp:319-327. Used by choose()
-// to make the candidate-picking comparator agree byte-for-byte with
-// rippled across implementations.
-func calcNodeID(pubkey [33]byte) [20]byte {
-	h := addresscodec.Sha256RipeMD160(pubkey[:])
-	var out [20]byte
-	copy(out[:], h)
-	return out
+	return consensus.CalcNodeID(k)
 }
 
 // DoVoting runs the producer end-to-end and returns the serialized
@@ -414,15 +399,16 @@ func choose(randomPad [32]byte, candidates []consensus.NodeID) consensus.NodeID 
 	return best
 }
 
-// xorCalcNodeID computes calcNodeID(pubkey) ^ randomPad[:20]. Matches
-// rippled's `candidates[j] ^ randomPad` at NegativeUNLVote.cpp:155
-// once randomPad is truncated via `NodeID::fromVoid(randomPadData.data())`
-// at NegativeUNLVote.cpp:151.
+// xorCalcNodeID computes NodeID ^ randomPad[:20]. Matches rippled's
+// `candidates[j] ^ randomPad` at NegativeUNLVote.cpp:155 once
+// randomPad is truncated via
+// `NodeID::fromVoid(randomPadData.data())` at NegativeUNLVote.cpp:151.
+// consensus.NodeID is already the 20-byte calcNodeID(masterKey) value
+// rippled uses; XORing the input directly avoids a redundant rehash.
 func xorCalcNodeID(n consensus.NodeID, pad [32]byte) [20]byte {
-	nid := calcNodeID(n)
 	var out [20]byte
 	for i := 0; i < 20; i++ {
-		out[i] = nid[i] ^ pad[i]
+		out[i] = n[i] ^ pad[i]
 	}
 	return out
 }

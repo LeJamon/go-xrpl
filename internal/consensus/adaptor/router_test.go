@@ -143,7 +143,8 @@ func TestRouterDispatchesValidation(t *testing.T) {
 		LoadFee:   0,
 	}
 	copy(testVal.LedgerID[:], []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32})
-	copy(testVal.NodeID[:], []byte{0x02, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32})
+	copy(testVal.SigningPubKey[:], []byte{0x02, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32})
+	testVal.NodeID = consensus.CalcNodeID([33]byte(testVal.SigningPubKey))
 	testVal.Signature = make([]byte, 70) // dummy signature
 	val := &message.Validation{
 		Validation: SerializeSTValidation(testVal),
@@ -637,12 +638,14 @@ func TestRouterStopsOnChannelClose(t *testing.T) {
 }
 
 func TestConverterProposalRoundTrip(t *testing.T) {
+	signing := consensus.SigningPubKey{0x02, 0x03}
 	original := &consensus.Proposal{
 		Round: consensus.RoundID{
 			Seq:        5,
 			ParentHash: [32]byte{0x01},
 		},
-		NodeID:         consensus.NodeID{0x02, 0x03},
+		SigningPubKey:  signing,
+		NodeID:         consensus.CalcNodeID([33]byte(signing)),
 		Position:       3,
 		TxSet:          consensus.TxSetID{0x04},
 		CloseTime:      time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC),
@@ -654,6 +657,7 @@ func TestConverterProposalRoundTrip(t *testing.T) {
 	restored := ProposalFromMessage(msg)
 
 	assert.Equal(t, original.Position, restored.Position)
+	assert.Equal(t, original.SigningPubKey, restored.SigningPubKey)
 	assert.Equal(t, original.NodeID, restored.NodeID)
 	assert.Equal(t, original.TxSet, restored.TxSet)
 	assert.Equal(t, original.PreviousLedger, restored.PreviousLedger)

@@ -217,12 +217,13 @@ func NewFromConfig(
 
 	engine := rcl.NewEngine(adaptor, rcl.DefaultConfig())
 
-	// Translate ephemeral signing keys → master keys before quorum
-	// arithmetic. Mirrors rippled RCLValidations.cpp:165-186's
-	// calcNodeID(getTrustedKey(signingKey) ?? signingKey).
-	engine.SetManifestResolver(func(nid consensus.NodeID) consensus.NodeID {
-		return consensus.NodeID(manifestCache.GetMasterKey([33]byte(nid)))
-	})
+	// Ephemeral → master translation now happens at the router seam
+	// before validations / proposals reach the engine, via
+	// Router.resolveMasterNodeID and the manifest cache wired through
+	// SetManifestCache. NodeID values arriving at the engine are
+	// already master-shaped 20-byte calcNodeID(masterKey) digests —
+	// matching rippled RCLValidations.cpp:165-186 — so the engine no
+	// longer needs a per-Add resolver hook.
 
 	// On-disk validation archive. Skipped when the relational DB is
 	// unavailable or the operator has disabled the section in TOML —

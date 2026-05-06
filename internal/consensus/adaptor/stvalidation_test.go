@@ -26,10 +26,11 @@ func buildTestValidation() *consensus.Validation {
 	for i := range v.LedgerID {
 		v.LedgerID[i] = byte(i + 1)
 	}
-	for i := range v.NodeID {
-		v.NodeID[i] = byte(i + 0x10)
+	for i := range v.SigningPubKey {
+		v.SigningPubKey[i] = byte(i + 0x10)
 	}
-	v.NodeID[0] = 0x02                           // valid compressed pubkey prefix
+	v.SigningPubKey[0] = 0x02 // valid compressed pubkey prefix
+	v.NodeID = consensus.CalcNodeID([33]byte(v.SigningPubKey))
 	v.Signature = []byte{0x30, 0x44, 0x02, 0x20} // DER prefix + padding
 	v.Signature = append(v.Signature, make([]byte, 68)...)
 	return v
@@ -45,6 +46,7 @@ func TestParseSTValidation_Roundtrip(t *testing.T) {
 	assert.Equal(t, orig.Full, parsed.Full)
 	assert.Equal(t, orig.LedgerSeq, parsed.LedgerSeq)
 	assert.Equal(t, orig.LedgerID, parsed.LedgerID)
+	assert.Equal(t, orig.SigningPubKey, parsed.SigningPubKey)
 	assert.Equal(t, orig.NodeID, parsed.NodeID)
 	assert.Equal(t, orig.Signature, parsed.Signature)
 	assert.Equal(t, orig.Cookie, parsed.Cookie)
@@ -149,8 +151,8 @@ func TestParseSTValidation_MinimalFields(t *testing.T) {
 	assert.True(t, parsed.Full)
 	assert.Equal(t, uint32(50), parsed.LedgerSeq)
 	assert.Equal(t, ledgerHash, [32]byte(parsed.LedgerID))
-	assert.Equal(t, pubKey[0], parsed.NodeID[0])
-	assert.Equal(t, pubKey[1], parsed.NodeID[1])
+	assert.Equal(t, pubKey[0], parsed.SigningPubKey[0])
+	assert.Equal(t, pubKey[1], parsed.SigningPubKey[1])
 	assert.Len(t, parsed.Signature, 70)
 	assert.NotEmpty(t, parsed.SigningData)
 }
@@ -311,7 +313,6 @@ func TestSignSerializeParseVerify_Roundtrip(t *testing.T) {
 		LedgerSeq: 42,
 		SignTime:  time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC),
 		Full:      true,
-		NodeID:    identity.NodeID,
 	}
 	for i := range orig.LedgerID {
 		orig.LedgerID[i] = byte(i + 1)
@@ -360,7 +361,7 @@ func TestVerifyRippledValidation(t *testing.T) {
 
 	assert.Equal(t, uint32(7), v.LedgerSeq)
 	assert.True(t, v.Full)
-	assert.Equal(t, byte(0x02), v.NodeID[0])
+	assert.Equal(t, byte(0x02), v.SigningPubKey[0])
 
 	err = VerifyValidation(v)
 	assert.NoError(t, err, "rippled validation should verify correctly")
