@@ -79,13 +79,16 @@ func TestXRPAmountSerialization(t *testing.T) {
 			expectedHex: "416345785d8a0000",
 			expectError: false,
 		},
-		// Invalid values
+		// Negative XRP drops are valid in the codec: ledger objects such as
+		// NFToken sell offers may carry signed amounts. The absolute value is
+		// encoded without the positive sign bit (matches rippled STAmount).
 		{
-			name:        "negative XRP - should fail",
+			name:        "negative one drop",
 			drops:       "-1",
-			expectedHex: "",
-			expectError: true,
+			expectedHex: "0000000000000001",
+			expectError: false,
 		},
+		// Invalid values
 		{
 			name:        "decimal XRP - should fail",
 			drops:       "1.5",

@@ -182,11 +182,14 @@ func TestXRPAmountEncoding_RippledVectors(t *testing.T) {
 			description: "exceeds max XRP drops",
 		},
 		{
-			name:        "negative XRP not allowed",
+			// Negative XRP drops are accepted at the codec layer so ledger
+			// objects (e.g., NFToken sell offers) can carry signed amounts.
+			// The absolute value is encoded without the positive sign bit.
+			name:        "negative one drop",
 			drops:       "-1",
-			expectedHex: "",
-			expectError: true,
-			description: "negative XRP not allowed in serialization",
+			expectedHex: "0000000000000001",
+			expectError: false,
+			description: "negative XRP encodes |val| without positive sign bit",
 		},
 	}
 
