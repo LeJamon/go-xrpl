@@ -29,30 +29,59 @@ const amendmentMajorityTimeout = 14 * 24 * time.Hour
 // the feature-flag oracle (rules.Enabled(...) replacement) since
 // *ledger.Ledger doesn't carry an amendment.Rules struct.
 //
-// On read or parse failure, returns empty maps and logs at warn —
-// "no amendments enabled" is a safe degradation: it just means
-// the legacy / pre-fix code paths are taken.
+// On read or parse failure returns ok=false; the producer falls
+// through to nil. Fail-closed mirrors rippled's
+// RCLConsensus.cpp::onClose — there is no try/catch around
+// amendmentTable.doVoting, so a malformed Amendments SLE
+// propagates the exception and suppresses the round. Treating a
+// corrupted SLE as "no amendments enabled" would let GotMajority /
+// Enable fire spuriously on every tracked amendment.
+//
+// A genuinely empty SLE (len(data)==0 — pre-bootstrap genesis
+// state) is a successful read of empty state, not corruption, and
+// returns ok=true with empty maps.
 func (a *Adaptor) readAmendmentsSLE(prev *ledger.Ledger) (
 	enabled map[[32]byte]bool,
 	majorities map[[32]byte]time.Time,
+	ok bool,
+) {
+	data, err := prev.Read(keylet.Amendments())
+	if err != nil {
+		a.logger.Warn("flag-ledger producer: failed to read Amendments SLE; suppressing this round",
+			"err", err, "seq", prev.Sequence())
+		return nil, nil, false
+	}
+	enabled, majorities, ok = parseAmendmentsSLEBytes(data)
+	if !ok {
+		a.logger.Warn("flag-ledger producer: failed to parse Amendments SLE; suppressing this round",
+			"seq", prev.Sequence())
+	}
+	return enabled, majorities, ok
+}
+
+// parseAmendmentsSLEBytes is the pure-data half of readAmendmentsSLE
+// — extracted so the parse-failure branch is unit-testable without
+// having to inject corrupt bytes through a *ledger.Ledger (which is
+// immutable on the closed-ledger path used by the producer).
+//
+// Returns ok=false ONLY on parse failure of non-empty data. An
+// empty input (len(data)==0, the pre-bootstrap genesis state) is a
+// successful read of empty state and returns ok=true with empty
+// maps — matching the rippled ledger walk that finds no SLE at the
+// keylet.Amendments() index.
+func parseAmendmentsSLEBytes(data []byte) (
+	enabled map[[32]byte]bool,
+	majorities map[[32]byte]time.Time,
+	ok bool,
 ) {
 	enabled = map[[32]byte]bool{}
 	majorities = map[[32]byte]time.Time{}
-
-	data, err := prev.Read(keylet.Amendments())
-	if err != nil {
-		a.logger.Warn("flag-ledger producer: failed to read Amendments SLE",
-			"err", err, "seq", prev.Sequence())
-		return enabled, majorities
-	}
 	if len(data) == 0 {
-		return enabled, majorities
+		return enabled, majorities, true
 	}
 	sle, err := pseudo.ParseAmendmentsSLE(data)
 	if err != nil {
-		a.logger.Warn("flag-ledger producer: failed to parse Amendments SLE",
-			"err", err, "seq", prev.Sequence())
-		return enabled, majorities
+		return nil, nil, false
 	}
 	for _, h := range sle.Amendments {
 		enabled[h] = true
@@ -64,7 +93,7 @@ func (a *Adaptor) readAmendmentsSLE(prev *ledger.Ledger) (
 		// runs over a uniform clock.
 		majorities[m.Amendment] = time.Unix(protocol.RippleEpochUnix+int64(m.CloseTime), 0).UTC()
 	}
-	return enabled, majorities
+	return enabled, majorities, true
 }
 
 // runFeeVote runs the FeeVote producer against the parent
@@ -114,22 +143,19 @@ func (a *Adaptor) runFeeVote(
 		}
 	}
 
-	// Local target stance from the operator config. Zero values
-	// mean "no preference" — fall back to current so the algorithm
-	// sees a no-change signal for that field.
+	// Local target stance from the operator config. Each field is
+	// guaranteed non-zero here — adaptor.New() substituted the
+	// rippled FeeSetup defaults (Config.h:65-78) for any field the
+	// operator left unset. We deliberately do NOT fall back to
+	// `current` for zero fields: rippled's FeeVoteImpl.cpp:114-117
+	// constructor takes the supplied FeeSetup verbatim and never
+	// re-defaults at doVoting time, so an operator who somehow
+	// supplied a zero (e.g. via a bug elsewhere) should produce a
+	// zero vote, not silently inherit the parent ledger's setting.
 	target := feevote.Stance{
 		BaseFee:          a.feeVote.BaseFee,
 		ReserveBase:      uint64(a.feeVote.ReserveBase),
 		ReserveIncrement: uint64(a.feeVote.ReserveIncrement),
-	}
-	if target.BaseFee == 0 {
-		target.BaseFee = current.BaseFee
-	}
-	if target.ReserveBase == 0 {
-		target.ReserveBase = current.ReserveBase
-	}
-	if target.ReserveIncrement == 0 {
-		target.ReserveIncrement = current.ReserveIncrement
 	}
 
 	votes := make([]feevote.Vote, 0, len(parentValidations))
@@ -194,6 +220,15 @@ func extractFeeVote(v *consensus.Validation, xrpFeesEnabled bool) feevote.Vote {
 // at the boundary in readAmendmentsSLE) and the trusted
 // validations' sfAmendments. Returns the serialized
 // EnableAmendment blobs or nil.
+//
+// Vote tallies are routed through a.trustedVotes — a 24h
+// per-validator cache mirroring rippled's TrustedVotes at
+// AmendmentTable.cpp:75-286 — so a validator that drops briefly
+// near a flag ledger doesn't cause an amendment to flap between
+// GotMajority and LostMajority across consecutive rounds. Both
+// TrustedValidations (the threshold denominator) and Votes flow
+// from the cache; the raw parentValidations slice is fed into
+// the cache via RecordVotes and not used afterwards.
 func (a *Adaptor) runAmendmentVote(
 	prev *ledger.Ledger,
 	upcomingSeq uint32,
@@ -201,11 +236,13 @@ func (a *Adaptor) runAmendmentVote(
 	enabled map[[32]byte]bool,
 	majority map[[32]byte]time.Time,
 ) [][]byte {
-	votes := make(map[amendmentvote.Amendment]int)
-	for _, v := range parentValidations {
-		for _, h := range v.Amendments {
-			votes[h]++
-		}
+	closeTime := prev.Header().CloseTime
+	a.trustedVotes.RecordVotes(closeTime, parentValidations)
+	available, rawVotes := a.trustedVotes.GetVotes()
+
+	votes := make(map[amendmentvote.Amendment]int, len(rawVotes))
+	for k, v := range rawVotes {
+		votes[k] = v
 	}
 
 	stances := make(map[amendmentvote.Amendment]amendmentvote.Stance, len(a.amendmentVoteIDs))
@@ -215,9 +252,9 @@ func (a *Adaptor) runAmendmentVote(
 
 	in := amendmentvote.Inputs{
 		UpcomingSeq:        upcomingSeq,
-		CloseTime:          prev.Header().CloseTime,
+		CloseTime:          closeTime,
 		MajorityTimeout:    amendmentMajorityTimeout,
-		TrustedValidations: len(parentValidations),
+		TrustedValidations: available,
 		Votes:              votes,
 		Enabled:            enabled,
 		Majority:           majority,

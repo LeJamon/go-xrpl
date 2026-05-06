@@ -172,6 +172,74 @@ func TestGenerateFlagLedgerPseudoTxs_AmendmentVoteSeedsGotMajority(t *testing.T)
 		"expected EnableAmendment(synthetic, GotMajority) when our single trusted validator votes for it")
 }
 
+// TestFeeVote_EmptyConfigUsesRippledDefaults pins Item 1: with no
+// FeeVote stanza in the config, adaptor.New() must seed each field
+// from rippled's FeeSetup defaults (Config.h:65-78) so an
+// unconfigured validator votes toward those defaults rather than
+// no-change.
+func TestFeeVote_EmptyConfigUsesRippledDefaults(t *testing.T) {
+	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
+	require.NoError(t, err)
+	a := New(Config{
+		LedgerService: newTestLedgerService(t),
+		Identity:      identity,
+		Validators:    []consensus.NodeID{identity.NodeID},
+	})
+	assert.EqualValues(t, 10, a.feeVote.BaseFee,
+		"empty BaseFee → rippled FeeSetup default reference_fee=10")
+	assert.EqualValues(t, 10_000_000, a.feeVote.ReserveBase,
+		"empty ReserveBase → rippled FeeSetup default account_reserve=10*DROPS_PER_XRP")
+	assert.EqualValues(t, 2_000_000, a.feeVote.ReserveIncrement,
+		"empty ReserveIncrement → rippled FeeSetup default owner_reserve=2*DROPS_PER_XRP")
+}
+
+// TestFeeVote_PartialConfigKeepsExplicitFields verifies the
+// per-field substitution: an operator who sets BaseFee but leaves
+// reserves zero must keep their explicit BaseFee and inherit the
+// rippled defaults for the unset reserve fields.
+func TestFeeVote_PartialConfigKeepsExplicitFields(t *testing.T) {
+	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
+	require.NoError(t, err)
+	a := New(Config{
+		LedgerService: newTestLedgerService(t),
+		Identity:      identity,
+		Validators:    []consensus.NodeID{identity.NodeID},
+		FeeVote:       FeeVoteStance{BaseFee: 25}, // reserves left zero
+	})
+	assert.EqualValues(t, 25, a.feeVote.BaseFee, "explicit BaseFee preserved")
+	assert.EqualValues(t, 10_000_000, a.feeVote.ReserveBase,
+		"unset ReserveBase → rippled default")
+	assert.EqualValues(t, 2_000_000, a.feeVote.ReserveIncrement,
+		"unset ReserveIncrement → rippled default")
+}
+
+// TestParseAmendmentsSLEBytes_FailsClosedOnGarbage pins Item 2:
+// the bytes-half of readAmendmentsSLE returns ok=false on parse
+// error so GenerateFlagLedgerPseudoTxs can suppress the round.
+// Mirrors rippled's RCLConsensus::onClose, which has no try/catch
+// around amendmentTable.doVoting — a malformed Amendments SLE
+// propagates the exception and prevents pseudo-tx emission. The
+// alternative ("no amendments enabled") would let GotMajority /
+// Enable fire spuriously on every tracked amendment.
+func TestParseAmendmentsSLEBytes_FailsClosedOnGarbage(t *testing.T) {
+	corrupt := []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
+	enabled, majorities, ok := parseAmendmentsSLEBytes(corrupt)
+	assert.False(t, ok, "garbage SLE bytes must return ok=false")
+	assert.Nil(t, enabled, "ok=false must zero enabled to prevent partial-state misuse")
+	assert.Nil(t, majorities, "ok=false must zero majorities to prevent partial-state misuse")
+}
+
+// TestParseAmendmentsSLEBytes_EmptyIsBootstrap pins the
+// genesis-bootstrap path: an empty SLE (no entry installed) is a
+// successful read of empty state, NOT corruption — returns
+// ok=true with empty maps so producers can run normally.
+func TestParseAmendmentsSLEBytes_EmptyIsBootstrap(t *testing.T) {
+	enabled, majorities, ok := parseAmendmentsSLEBytes(nil)
+	assert.True(t, ok, "empty SLE is bootstrap state, not corruption")
+	assert.Empty(t, enabled)
+	assert.Empty(t, majorities)
+}
+
 // TestGenerateFlagLedgerPseudoTxs_NoLedgerService is the defensive
 // path: an adaptor with no ledger service returns nil rather than
 // panicking.

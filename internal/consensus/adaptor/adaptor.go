@@ -173,6 +173,12 @@ type Adaptor struct {
 	// names at construction (unknown names logged and dropped).
 	amendmentVoteIDs [][32]byte
 
+	// trustedVotes caches per-validator amendment votes for 24h to
+	// dampen amendment "flapping" when a flaky validator drops
+	// briefly. See trusted_votes.go and rippled's TrustedVotes at
+	// AmendmentTable.cpp:75-286.
+	trustedVotes *TrustedVotes
+
 	logger *slog.Logger
 }
 
@@ -194,11 +200,28 @@ const goXRPLServerVersionTag uint64 = 0x4000_0000_0000_0000
 // rules — matches rippled's FeeVoteImpl.cpp:120-192 hard if/else
 // gate on featureXRPFees.
 //
-// Zero values mean "no vote" — the serializer skips the fields.
+// Zero values on any individual field mean "operator did not set
+// this field" — adaptor.New() substitutes the rippled FeeSetup
+// default (Config.h:65-78) so an unconfigured validator votes
+// toward those defaults rather than abstaining.
 type FeeVoteStance struct {
 	BaseFee          uint64
 	ReserveBase      uint32
 	ReserveIncrement uint32
+}
+
+// defaultFeeVote returns the rippled FeeSetup defaults — a validator
+// with no [voting] stanza in its config votes toward these values.
+// Mirrors the default-constructed FeeSetup at
+// rippled/src/xrpld/core/Config.h:65-78
+// (reference_fee=10, account_reserve=10*DROPS_PER_XRP=10_000_000,
+// owner_reserve=2*DROPS_PER_XRP=2_000_000).
+func defaultFeeVote() FeeVoteStance {
+	return FeeVoteStance{
+		BaseFee:          10,
+		ReserveBase:      10_000_000,
+		ReserveIncrement: 2_000_000,
+	}
 }
 
 // Config holds configuration for the Adaptor.
@@ -273,6 +296,32 @@ func New(cfg Config) *Adaptor {
 		amendmentVoteIDs = append(amendmentVoteIDs, f.ID)
 	}
 
+	// Initialize the per-validator amendment-vote cache and seed it
+	// with the current trusted set so RecordVotes accepts validations
+	// from any UNL member from round one. UNL changes after boot
+	// must call trustedVotes.TrustChanged again to keep the cache in
+	// sync — currently the trusted set is static post-construction.
+	trustedVotes := NewTrustedVotes()
+	trustedVotes.TrustChanged(cfg.Validators)
+
+	// Substitute rippled FeeSetup defaults on a per-field basis: an
+	// operator may set BaseFee but leave reserves zero, and we want
+	// each unset field to fall back to the rippled default
+	// (Config.h:65-78) rather than to "abstain". An empty config thus
+	// votes toward 10/10_000_000/2_000_000 — matching rippled's
+	// default-constructed FeeSetup.
+	feeVote := cfg.FeeVote
+	defaults := defaultFeeVote()
+	if feeVote.BaseFee == 0 {
+		feeVote.BaseFee = defaults.BaseFee
+	}
+	if feeVote.ReserveBase == 0 {
+		feeVote.ReserveBase = defaults.ReserveBase
+	}
+	if feeVote.ReserveIncrement == 0 {
+		feeVote.ReserveIncrement = defaults.ReserveIncrement
+	}
+
 	return &Adaptor{
 		ledgerService:     cfg.LedgerService,
 		sender:            sender,
@@ -285,8 +334,9 @@ func New(cfg Config) *Adaptor {
 		pendingTxs:        make(map[consensus.TxID][]byte),
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
 		cookie:            cookie,
-		feeVote:           cfg.FeeVote,
+		feeVote:           feeVote,
 		amendmentVoteIDs:  amendmentVoteIDs,
+		trustedVotes:      trustedVotes,
 		logger:            logger,
 	}
 }
@@ -608,7 +658,10 @@ func (a *Adaptor) GenerateFlagLedgerPseudoTxs(prevLedger consensus.Ledger, paren
 		return nil
 	}
 
-	enabled, majorities := a.readAmendmentsSLE(prev)
+	enabled, majorities, ok := a.readAmendmentsSLE(prev)
+	if !ok {
+		return nil
+	}
 
 	var blobs [][]byte
 	if extra := a.runFeeVote(prev, upcomingSeq, filtered, enabled); len(extra) > 0 {
