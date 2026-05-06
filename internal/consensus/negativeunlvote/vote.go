@@ -375,12 +375,10 @@ func (v *Voter) findAllCandidates(
 // the pad and pick the minimum. This converges every validator on
 // the same choice without coordination.
 //
-// rippled's comparator is over 20-byte calcNodeID values
-// (RIPEMD-160(SHA256(pubkey))) XORed with the first 20 bytes of the
-// 32-byte randomPad. goXRPL's consensus.NodeID is the 33-byte master
-// pubkey, so we hash through calcNodeID inside the comparator: this
-// produces the same picked candidate as rippled given the same
-// pubkeys and the same prevLedger.hash, preserving cross-implementation
+// consensus.NodeID is already the 20-byte calcNodeID(masterKey)
+// digest rippled uses, so the comparator XORs candidates directly
+// against the first 20 bytes of the 32-byte randomPad — no rehash —
+// matching rippled byte-for-byte and preserving cross-implementation
 // vote convergence on a mixed Go+rippled validator network.
 func choose(randomPad [32]byte, candidates []consensus.NodeID) consensus.NodeID {
 	if len(candidates) == 0 {
