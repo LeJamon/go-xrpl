@@ -236,7 +236,15 @@ func (a *Adaptor) runAmendmentVote(
 	enabled map[[32]byte]bool,
 	majority map[[32]byte]time.Time,
 ) [][]byte {
-	closeTime := prev.Header().CloseTime
+	// Use prev's parent close time, not prev's own close time:
+	// rippled passes lastClosedLedger->parentCloseTime() into
+	// AmendmentTable::doVoting (AmendmentTable.h:157), which is the
+	// close time of the ledger whose validations we're tallying
+	// (parentValidations come from prev's parent). Pairing the
+	// validations with prev's close time would drift the 24h
+	// trusted-vote cache expiry and the majority-window enable
+	// check by one round.
+	closeTime := prev.Header().ParentCloseTime
 	a.trustedVotes.RecordVotes(closeTime, parentValidations)
 	available, rawVotes := a.trustedVotes.GetVotes()
 

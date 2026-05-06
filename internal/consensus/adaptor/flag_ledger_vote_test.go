@@ -6,7 +6,11 @@ import (
 	"time"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/goXRPLd/internal/ledger/header"
+	"github.com/LeJamon/goXRPLd/shamap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -238,6 +242,52 @@ func TestParseAmendmentsSLEBytes_EmptyIsBootstrap(t *testing.T) {
 	assert.True(t, ok, "empty SLE is bootstrap state, not corruption")
 	assert.Empty(t, enabled)
 	assert.Empty(t, majorities)
+}
+
+// TestRunAmendmentVote_UsesParentCloseTime pins the rippled-parity
+// time choice at AmendmentTable.h:157: doVoting is invoked with
+// lastClosedLedger->parentCloseTime() — the close time of the
+// ledger whose validations are being tallied — not the close time
+// of the flag ledger itself. Pairing the parent-validations with
+// prev's own close time would drift the 24h trusted-vote cache
+// expiry and the majority-window enable check by one round.
+//
+// Build a synthetic prev with ParentCloseTime far enough below
+// CloseTime that the cache timeout is unambiguous, run the
+// producer, and verify the recorded timeout is parent-anchored.
+func TestRunAmendmentVote_UsesParentCloseTime(t *testing.T) {
+	a := newTestAdaptorWithConfig(t, FeeVoteStance{}, nil)
+
+	stateMap, err := shamap.New(shamap.TypeState)
+	require.NoError(t, err)
+	txMap, err := shamap.New(shamap.TypeTransaction)
+	require.NoError(t, err)
+
+	parentClose := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	flagClose := parentClose.Add(time.Hour)
+	prev := ledger.NewFromHeader(header.LedgerHeader{
+		LedgerIndex:     256,
+		ParentCloseTime: parentClose,
+		CloseTime:       flagClose,
+	}, stateMap, txMap, drops.Fees{})
+
+	val := &consensus.Validation{
+		NodeID:     a.identity.NodeID,
+		Amendments: [][32]byte{{0xA1}},
+	}
+	a.runAmendmentVote(prev, prev.Sequence()+1, []*consensus.Validation{val}, nil, nil)
+
+	entry, ok := a.trustedVotes.recordedVotes[a.identity.NodeID]
+	require.True(t, ok, "self-validation must register in trusted-vote cache")
+	require.True(t, entry.hasTimeout(),
+		"recordVotes must seat the timeout for a fresh validation")
+
+	want := parentClose.Add(trustedVotesTimeout)
+	assert.True(t, entry.timeout.Equal(want),
+		"timeout must be ParentCloseTime+24h (got %s, want %s); "+
+			"if this drifts to flagClose+24h the producer regressed to "+
+			"prev.CloseTime, breaking AmendmentTable.h:157 parity",
+		entry.timeout, want)
 }
 
 // TestGenerateFlagLedgerPseudoTxs_NoLedgerService is the defensive
