@@ -211,8 +211,14 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 	return nil
 }
 
-// NeedsMissingNodeIDs returns the wire-encoded nodeIDs of missing SHAMap nodes.
-// Returns nil if the state map is complete or not yet created.
+// missingNodeBatch caps NodeIDs per TMGetLedger request. Sits between
+// rippled's blind-request cap (reqNodes=12) and reply cap
+// (reqNodesReply=128, InboundLedger.cpp).
+const missingNodeBatch = 16
+
+// NeedsMissingNodeIDs returns up to missingNodeBatch wire-encoded
+// path-based NodeIDs of missing SHAMap inner nodes, ordered by depth.
+// Returns nil if the state map is complete or not yet ready (issue #395).
 func (l *Ledger) NeedsMissingNodeIDs() [][]byte {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -221,17 +227,15 @@ func (l *Ledger) NeedsMissingNodeIDs() [][]byte {
 		return nil
 	}
 
-	missing := l.stateMap.GetMissingNodes(256, nil)
+	missing := l.stateMap.GetMissingNodes(missingNodeBatch, nil)
 	if len(missing) == 0 {
 		return nil
 	}
 
-	// Request the root with queryDepth=2 which returns fat nodes
-	// (root + children + grandchildren). For small state trees this
-	// returns everything in one shot.
-	rootID := shamap.NewRootNodeID()
-	nodeIDs := [][]byte{rootID.Bytes()}
-
+	nodeIDs := make([][]byte, 0, len(missing))
+	for i := range missing {
+		nodeIDs = append(nodeIDs, missing[i].NodeID.Bytes())
+	}
 	return nodeIDs
 }
 

@@ -229,6 +229,66 @@ func TestAddRootNodeErrors(t *testing.T) {
 	}
 }
 
+// Regression for issue #395: GetMissingNodes must populate
+// MissingNode.NodeID with each missing node's path-based identifier so
+// the caller can request that exact subtree from a peer.
+func TestGetMissingNodes_PathNodeIDs(t *testing.T) {
+	source, err := New(TypeState)
+	if err != nil {
+		t.Fatalf("New source: %v", err)
+	}
+	for branch := byte(0); branch < 8; branch++ {
+		for i := byte(0); i < 4; i++ {
+			var key [32]byte
+			key[0] = (branch << 4) | i
+			if err := source.Put(key, make([]byte, 12)); err != nil {
+				t.Fatalf("Put: %v", err)
+			}
+		}
+	}
+
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+
+	dest, err := New(TypeState)
+	if err != nil {
+		t.Fatalf("New dest: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+
+	missing := dest.GetMissingNodes(64, nil)
+	if len(missing) == 0 {
+		t.Fatal("expected missing nodes after syncing only root, got none")
+	}
+
+	seen := make(map[[33]byte]struct{}, len(missing))
+	for _, m := range missing {
+		if m.NodeID.IsRoot() {
+			t.Errorf("missing node at depth %d should not have root NodeID", m.Depth)
+		}
+		if int(m.NodeID.Depth()) != m.Depth {
+			t.Errorf("NodeID depth %d != MissingNode.Depth %d", m.NodeID.Depth(), m.Depth)
+		}
+		var k [33]byte
+		copy(k[:], m.NodeID.Bytes())
+		if _, dup := seen[k]; dup {
+			t.Errorf("duplicate NodeID for missing node at depth %d", m.Depth)
+		}
+		seen[k] = struct{}{}
+		if err := m.NodeID.Validate(); err != nil {
+			t.Errorf("missing NodeID is malformed: %v", err)
+		}
+	}
+}
+
 func TestAddKnownNodeErrors(t *testing.T) {
 	sMap, err := New(TypeState)
 	if err != nil {

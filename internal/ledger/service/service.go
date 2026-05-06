@@ -1503,9 +1503,10 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 
 // pendingValidationMaxLen caps the pending-validation stash so a node
 // that never reaches quorum (misconfigured UNL, network partition) can't
-// leak memory. 16 ledgers ≈ 48s at 3s rounds — larger than any realistic
-// quorum-wait window but small enough to be bounded.
-const pendingValidationMaxLen = 16
+// leak memory. At 3s ledger close, 256 entries ≈ 13 minutes — large
+// enough to cover extended catch-up without evicting in-flight quorum
+// notifications (issue #395).
+const pendingValidationMaxLen = 256
 
 // stashPendingValidationLocked stores an accepted event keyed by hash
 // for later eventCallback dispatch once the ledger is fully validated.
