@@ -1503,19 +1503,9 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 
 // pendingValidationMaxLen caps the pending-validation stash so a node
 // that never reaches quorum (misconfigured UNL, network partition) can't
-// leak memory.
-//
-// Sized for a node performing extended catch-up: at 3s ledger close
-// times 256 entries ≈ 13 minutes of buffered (ledger, validation)
-// gossip — comfortably larger than any realistic acquisition or chain-
-// switch window. The previous 16-entry cap (~48s) was too small under
-// steady network production: while a node closed and tried to acquire
-// peer ledgers, validations for hashes the node hadn't yet adopted
-// arrived faster than the stash could drain, evicting the very
-// notifications needed to certify the catch-up target. Issue #395
-// surfaced this as `pendingValidation LRU drop — event lost for this
-// ledger hash cap=16` repeating until the node never crosses
-// validated quorum on any acquired ledger.
+// leak memory. At 3s ledger close, 256 entries ≈ 13 minutes — large
+// enough to cover extended catch-up without evicting in-flight quorum
+// notifications (issue #395).
 const pendingValidationMaxLen = 256
 
 // stashPendingValidationLocked stores an accepted event keyed by hash

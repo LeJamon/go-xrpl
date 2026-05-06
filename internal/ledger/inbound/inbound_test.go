@@ -11,14 +11,9 @@ import (
 	"github.com/LeJamon/goXRPLd/shamap"
 )
 
-// TestNeedsMissingNodeIDs_RequestsActualMissingNodes is a regression
-// test for issue #395. After GotBase has installed the state-map root,
-// NeedsMissingNodeIDs must return path-based NodeIDs of the actual
-// missing inner nodes — not just the root NodeID. The previous
-// implementation always returned [rootID], which left any subtree
-// rooted at depth ≥3 permanently unrequestable (peer responses to a
-// root request top out at QueryDepth=2), wedging legacy catch-up with
-// the "1 missing node" symptom in the bug report.
+// Regression for issue #395: after GotBase, NeedsMissingNodeIDs must
+// surface path-based NodeIDs of the actual missing inner nodes, not
+// just the root NodeID.
 func TestNeedsMissingNodeIDs_RequestsActualMissingNodes(t *testing.T) {
 	source, err := shamap.New(shamap.TypeState)
 	if err != nil {
@@ -42,8 +37,6 @@ func TestNeedsMissingNodeIDs_RequestsActualMissingNodes(t *testing.T) {
 		t.Fatalf("serialize root: %v", err)
 	}
 
-	// Build a header that points at the source map's root so GotBase
-	// will install it as the AccountHash anchor.
 	hdr := header.LedgerHeader{
 		LedgerIndex: 100,
 		AccountHash: rootHash,
@@ -69,8 +62,6 @@ func TestNeedsMissingNodeIDs_RequestsActualMissingNodes(t *testing.T) {
 		t.Fatal("expected missing node IDs after GotBase, got none")
 	}
 
-	// Pre-fix this returned a single rootID; the fix must surface real
-	// non-root subtree NodeIDs so we can pull deep nodes from peers.
 	root := shamap.NewRootNodeID().Bytes()
 	if len(ids) == 1 && bytes.Equal(ids[0], root) {
 		t.Fatalf("regression: NeedsMissingNodeIDs returned only rootID; deep nodes can never be requested")

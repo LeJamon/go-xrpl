@@ -84,11 +84,9 @@ type MissingNode struct {
 	ParentHash [32]byte
 	// Branch is the branch index in the parent node (0-15 for inner nodes)
 	Branch int
-	// NodeID is the path-based identifier of the missing node, used to
-	// request the node from a peer via TMGetLedger. The peer locates a
-	// node by its tree path (depth + key prefix), not by its hash, so
-	// requesting by Hash alone is insufficient — without NodeID, the
-	// caller can only ever ask for the root.
+	// NodeID is the path-based identifier of the missing node. Required
+	// for TMGetLedger requests because peers locate nodes by tree path,
+	// not by hash.
 	NodeID NodeID
 }
 
@@ -192,9 +190,6 @@ func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode
 				continue
 			}
 
-			// Compute the child's path-based NodeID so a downstream
-			// caller can request this exact subtree from a peer (the
-			// peer locates a node by its NodeID, not by its hash).
 			childNodeID, err := item.nodeID.ChildNodeID(uint8(branch))
 			if err != nil {
 				continue

@@ -229,18 +229,10 @@ func TestAddRootNodeErrors(t *testing.T) {
 	}
 }
 
-// TestGetMissingNodes_PathNodeIDs is a regression test for issue #395.
-// GetMissingNodes must populate MissingNode.NodeID with the path-based
-// identifier of each missing inner node so the caller can request that
-// exact subtree from a peer. Earlier the inbound-ledger acquisition
-// only ever requested the root NodeID with QueryDepth=2, which caps
-// observable depth at 2; any missing node deeper than that could never
-// be filled and catch-up wedged with "1 missing node" forever.
+// Regression for issue #395: GetMissingNodes must populate
+// MissingNode.NodeID with each missing node's path-based identifier so
+// the caller can request that exact subtree from a peer.
 func TestGetMissingNodes_PathNodeIDs(t *testing.T) {
-	// Populate a source map with keys whose top nibble fans out across
-	// several branches at the root, guaranteeing the root has multiple
-	// inner-node children that get reported as missing once we sync
-	// only the root into a destination map.
 	source, err := New(TypeState)
 	if err != nil {
 		t.Fatalf("New source: %v", err)
@@ -264,9 +256,6 @@ func TestGetMissingNodes_PathNodeIDs(t *testing.T) {
 		t.Fatalf("SerializeRoot: %v", err)
 	}
 
-	// Sync only the root into the destination — every non-empty branch
-	// at depth 1 should now be reported as missing with a non-root
-	// NodeID we can ship to a peer.
 	dest, err := New(TypeState)
 	if err != nil {
 		t.Fatalf("New dest: %v", err)

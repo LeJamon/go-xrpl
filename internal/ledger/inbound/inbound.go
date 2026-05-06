@@ -211,31 +211,14 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 	return nil
 }
 
-// missingNodeBatch caps how many missing-node IDs we ship per
-// TMGetLedger request. Each request fans out to one peer response
-// containing the requested subtree(s) plus QueryDepth=2 worth of
-// descendants, so 16 keeps the response well under rippled's
-// 256-node-per-reply ceiling while still amortizing several missing
-// nodes per round trip.
+// missingNodeBatch caps NodeIDs per TMGetLedger request. Sits between
+// rippled's blind-request cap (reqNodes=12) and reply cap
+// (reqNodesReply=128, InboundLedger.cpp).
 const missingNodeBatch = 16
 
-// NeedsMissingNodeIDs returns the wire-encoded NodeIDs of missing
-// SHAMap inner nodes that the peer should ship back, ordered by depth
-// so root-adjacent subtrees fill before deeper ones.
-//
-// Earlier this function unconditionally requested the SHAMap root with
-// QueryDepth=2 and ignored the actual missing-node enumeration. That
-// worked for tiny test ledgers (everything fits in root + 2 levels)
-// but on a real network it deadlocked catch-up: once depth 0..2 was
-// populated, any node at depth ≥3 stayed permanently missing because
-// we kept asking for the same root subtree the peer had already
-// served. The "1 missing node" log loop in issue #395 surfaced
-// exactly this — `IsComplete()` never flips to true and the inbound
-// acquisition wedges until the outer timeout.
-//
-// Returns nil if no nodes are missing or the map isn't ready to be
-// fed; otherwise returns up to missingNodeBatch path-based NodeIDs
-// from GetMissingNodes.
+// NeedsMissingNodeIDs returns up to missingNodeBatch wire-encoded
+// path-based NodeIDs of missing SHAMap inner nodes, ordered by depth.
+// Returns nil if the state map is complete or not yet ready (issue #395).
 func (l *Ledger) NeedsMissingNodeIDs() [][]byte {
 	l.mu.Lock()
 	defer l.mu.Unlock()
