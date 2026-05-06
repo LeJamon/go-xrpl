@@ -131,7 +131,7 @@ func init() {
 	registerFix("fixEnforceNFTokenTrustlineV2", SupportedYes, VoteDefaultNo, &FeatureFixEnforceNFTokenTrustlineV2)
 	registerFix("fixAMMv1_3", SupportedYes, VoteDefaultNo, &FeatureFixAMMv1_3)
 	registerFeature("PermissionedDEX", SupportedYes, VoteDefaultNo, &FeaturePermissionedDEX)
-	registerFeature("Batch", SupportedNo, VoteDefaultNo, &FeatureBatch)
+	registerFeature("Batch", SupportedYes, VoteDefaultNo, &FeatureBatch)
 	registerFeature("SingleAssetVault", SupportedNo, VoteDefaultNo, &FeatureSingleAssetVault)
 	registerFeature("PermissionDelegation", SupportedNo, VoteDefaultNo, &FeaturePermissionDelegation)
 	registerFix("fixPayChanCancelAfter", SupportedYes, VoteDefaultNo, &FeatureFixPayChanCancelAfter)

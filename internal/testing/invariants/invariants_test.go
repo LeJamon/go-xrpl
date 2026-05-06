@@ -16,6 +16,7 @@
 package invariants_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -121,8 +122,10 @@ func TestInvariant_Escrow(t *testing.T) {
 	seq := env.Seq(alice)
 	jtx.RequireTxSuccess(t, env.Submit(ec))
 
-	// Advance time and finish
+	// Advance time past FinishAfter and close so ParentCloseTime is updated.
+	// EscrowFinish reads ParentCloseTime from the ledger header, not the clock.
 	env.AdvanceTime(5 * time.Second)
+	env.Close()
 	ef := escrow.EscrowFinish(bob, alice, seq).Build()
 	jtx.RequireTxSuccess(t, env.Submit(ef))
 }
@@ -142,9 +145,10 @@ func TestInvariant_AccountDelete(t *testing.T) {
 		env.Close()
 	}
 
-	// Delete alice's account
+	// Delete alice's account. AccountDelete's special fee is one
+	// ReserveIncrement (50 XRP). Reference: rippled AccountDelete::calculateBaseFee.
 	delTx := acctx.NewAccountDelete(alice.Address, bob.Address)
-	delTx.Fee = "5000000" // 5 XRP minimum fee for AccountDelete
+	delTx.Fee = fmt.Sprintf("%d", env.ReserveIncrement())
 	result := env.Submit(delTx)
 	jtx.RequireTxSuccess(t, result)
 }
@@ -199,8 +203,10 @@ func TestInvariant_EscrowCreate_AmountConserved(t *testing.T) {
 		t.Errorf("after EscrowCreate: alice balance want %d, got %d", aliceStart-escrowed-baseFee, aliceAfterCreate)
 	}
 
-	// Finish: bob receives the escrowed amount
+	// Finish: bob receives the escrowed amount.
+	// Advance time past FinishAfter and close so ParentCloseTime is updated.
 	env.AdvanceTime(5 * time.Second)
+	env.Close()
 	bobStart := env.Balance(bob)
 	jtx.RequireTxSuccess(t, env.Submit(escrow.EscrowFinish(bob, alice, seq).Build()))
 	bobEnd := env.Balance(bob)

@@ -528,10 +528,10 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 				}
 			}
 
-			// alice XRP: initial(30000 XRP) - trustSetFee(10) - createFee(10) - withdrawFee(10)
-			// Note: our env uses baseFee=10 for AMMCreate (rippled uses 50 XRP special fee)
+			// alice XRP: initial(30000 XRP) - trustSetFee(10) - createFee(50M) - withdrawFee(10)
+			// AMMCreate's special fee is one ReserveIncrement (50 XRP).
 			aliceXRP := env.TestEnv.Balance(env.Alice)
-			expectedAliceXRP := uint64(jtx.XRP(30000)) - 10 - 10 - 10
+			expectedAliceXRP := uint64(jtx.XRP(30000)) - 10 - env.TestEnv.ReserveIncrement() - 10
 			if aliceXRP != expectedAliceXRP {
 				t.Errorf("alice XRP: got %d, want %d", aliceXRP, expectedAliceXRP)
 			}
@@ -705,9 +705,10 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 				t.Errorf("nataly XRP: got %d, want %d", natalyBal, xrpBalance+5)
 			}
 
-			// alice: initial(30000 XRP) - trustLineFee - createFee - withdrawFee + 80 pool rounding
-			// TestAMM setup creates a USD trust line for alice, costing baseFee
-			aliceExpected := uint64(jtx.XRP(30000)) - baseFee - baseFee - baseFee + 80
+			// alice: initial(30000 XRP) - trustLineFee - createFee(ReserveIncrement) - withdrawFee + 80 pool rounding
+			// TestAMM setup creates a USD trust line for alice, costing baseFee.
+			// AMMCreate's special fee is one ReserveIncrement (50 XRP).
+			aliceExpected := uint64(jtx.XRP(30000)) - baseFee - env.TestEnv.ReserveIncrement() - baseFee + 80
 			aliceXRP := env.TestEnv.Balance(env.Alice)
 			if aliceXRP != aliceExpected {
 				t.Errorf("alice XRP: got %d, want %d", aliceXRP, aliceExpected)
@@ -782,7 +783,7 @@ func TestAMMBookStep_Selection(t *testing.T) {
 			// Compute AMM account
 			usdAsset := tx.Asset{Currency: "USD", Issuer: env.GW.Address}
 			ethAsset := tx.Asset{Currency: "ETH", Issuer: gw1.Address}
-			ammAccAddr := amm.AMMAccount(t, usdAsset, ethAsset)
+			ammAccAddr := amm.AMMAccount(t, env, usdAsset, ethAsset)
 
 			// Save AMM balances before payment
 			ammUSD := env.TestEnv.BalanceIOU(ammAccAddr, "USD", env.GW)
@@ -1309,7 +1310,7 @@ func TestAMMBookStep_FixOverflowOffer(t *testing.T) {
 			// Get AMM account
 			usdGHAsset := tx.Asset{Currency: "USD", Issuer: gatehub.Address}
 			usdBITAsset := tx.Asset{Currency: "USD", Issuer: bitstamp.Address}
-			ammAcc := amm.AMMAccount(t, usdGHAsset, usdBITAsset)
+			ammAcc := amm.AMMAccount(t, env, usdGHAsset, usdBITAsset)
 
 			// Create CLOB offers for the alternative path
 			// offer1: trader wants usdBIT(1) for btcGH(offer1BtcGH)
@@ -1406,7 +1407,7 @@ func TestAMMBookStep_SwapRounding(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
 
-	ammAcc := amm.AMMAccount(t, amm.XRP(), env.USD)
+	ammAcc := amm.AMMAccount(t, env, amm.XRP(), env.USD)
 
 	// Save starting balances
 	xrpBefore := env.AMMPoolXRP(ammAcc)
@@ -1466,7 +1467,7 @@ func TestAMMBookStep_FixAMMOfferBlockedByLOB(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
-		ammAcc := amm.AMMAccount(t, amm.XRP(), env.USD)
+		ammAcc := amm.AMMAccount(t, env, amm.XRP(), env.USD)
 
 		// Carol creates offer: buy USD(0.49) sell XRP(1)
 		offerTx := offerbuild.OfferCreate(env.Carol,
@@ -1521,7 +1522,7 @@ func TestAMMBookStep_FixAMMOfferBlockedByLOB(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
-		ammAcc := amm.AMMAccount(t, amm.XRP(), env.USD)
+		ammAcc := amm.AMMAccount(t, env, amm.XRP(), env.USD)
 
 		// Carol creates offer: buy XRP(100) sell USD(55)
 		offerTx := offerbuild.OfferCreate(env.Carol,
@@ -1579,7 +1580,7 @@ func TestAMMBookStep_LPTokenBalance(t *testing.T) {
 		env.Close()
 
 		// Alice deposits IOUAmount{1876123487565916, -15} LP tokens
-		lptRef := amm.LPTokenAmount(amm.XRP(), env.USD, 0)
+		lptRef := amm.LPTokenAmount(env, amm.XRP(), env.USD, 0)
 		aliceLPT := tx.NewIssuedAmount(1_876123487565916, -15, lptRef.Currency, lptRef.Issuer)
 		depAlice := amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
 			LPTokenOut(aliceLPT).
@@ -1589,7 +1590,7 @@ func TestAMMBookStep_LPTokenBalance(t *testing.T) {
 		env.Close()
 
 		// Carol deposits 1000000 LP tokens
-		carolLPT := amm.LPTokenAmount(amm.XRP(), env.USD, 1_000_000)
+		carolLPT := amm.LPTokenAmount(env, amm.XRP(), env.USD, 1_000_000)
 		depCarol := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
 			LPTokenOut(carolLPT).
 			LPToken().
@@ -1741,7 +1742,7 @@ func TestAMMBookStep_OfferCrossWithLimitOverride(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
 
-	ammAcc := amm.AMMAccount(t, amm.XRP(),
+	ammAcc := amm.AMMAccount(t, env, amm.XRP(),
 		tx.Asset{Currency: "USD", Issuer: env.GW.Address})
 
 	// Bob offers: buy USD(1), sell XRP(3000)
@@ -1802,7 +1803,7 @@ func TestAMMBookStep_CurrencyConversionEntire(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
 
-	ammAcc := amm.AMMAccount(t, env.USD, amm.XRP())
+	ammAcc := amm.AMMAccount(t, env, env.USD, amm.XRP())
 
 	// Alice pays herself XRP(500) with sendmax USD(100)
 	payTx := payment.Pay(env.Alice, env.Alice, uint64(jtx.XRP(500))).
@@ -1992,7 +1993,7 @@ func TestAMMBookStep_CrossCurrencyBridged(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
 
-	ammAcc := amm.AMMAccount(t,
+	ammAcc := amm.AMMAccount(t, env,
 		tx.Asset{Currency: "USD", Issuer: gw1.Address},
 		tx.Asset{Currency: "XRP"})
 
@@ -2086,7 +2087,7 @@ func TestAMMBookStep_OfferFeesConsumeFunds(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
 
-	ammAcc := amm.AMMAccount(t, amm.XRP(),
+	ammAcc := amm.AMMAccount(t, env, amm.XRP(),
 		tx.Asset{Currency: "USD", Issuer: gw1.Address})
 
 	// Alice has used 3 trust line fees (30 drops) + now creates offer (10 drops)
@@ -2235,7 +2236,7 @@ func TestAMMBookStep_SellFlagExceedLimit(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
 
-	ammAcc := amm.AMMAccount(t, amm.XRP(), tx.Asset{Currency: "USD", Issuer: env.GW.Address})
+	ammAcc := amm.AMMAccount(t, env, amm.XRP(), tx.Asset{Currency: "USD", Issuer: env.GW.Address})
 
 	// Alice creates offer: TakerPays=USD(100), TakerGets=XRP(200), tfSell
 	// Alice has 350,000,020 - 10(trust fee) = 350,000,010 drops.
@@ -2370,7 +2371,7 @@ func TestAMMBookStep_BridgedCross(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(createTx1))
 		env.Close()
 
-		ammAlice := amm.AMMAccount(t, amm.XRP(),
+		ammAlice := amm.AMMAccount(t, env, amm.XRP(),
 			tx.Asset{Currency: "USD", Issuer: env.GW.Address})
 
 		// Bob creates AMM: EUR(10000)/XRP(10100)
@@ -2380,7 +2381,7 @@ func TestAMMBookStep_BridgedCross(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(createTx2))
 		env.Close()
 
-		ammBob := amm.AMMAccount(t,
+		ammBob := amm.AMMAccount(t, env,
 			tx.Asset{Currency: "EUR", Issuer: env.GW.Address}, amm.XRP())
 
 		// Carol offers: buy USD(100), sell EUR(100) — bridges through XRP
@@ -2442,7 +2443,7 @@ func TestAMMBookStep_BridgedCross(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
-		ammAlice := amm.AMMAccount(t, amm.XRP(),
+		ammAlice := amm.AMMAccount(t, env, amm.XRP(),
 			tx.Asset{Currency: "USD", Issuer: env.GW.Address})
 
 		// Bob creates CLOB offer: buy EUR(100), sell XRP(100)
@@ -2508,7 +2509,7 @@ func TestAMMBookStep_BridgedCross(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
-		ammBob := amm.AMMAccount(t,
+		ammBob := amm.AMMAccount(t, env,
 			tx.Asset{Currency: "EUR", Issuer: env.GW.Address}, amm.XRP())
 
 		// Carol offers: buy USD(100), sell EUR(100)
@@ -2588,7 +2589,7 @@ func TestAMMBookStep_SellWithFillOrKill(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
-		ammAcc := amm.AMMAccount(t, amm.XRP(), tx.Asset{Currency: "USD", Issuer: env.GW.Address})
+		ammAcc := amm.AMMAccount(t, env, amm.XRP(), tx.Asset{Currency: "USD", Issuer: env.GW.Address})
 
 		// Alice: sell | fillOrKill: buy USD(2), sell XRP(220)
 		offerTx := offerbuild.OfferCreate(env.Alice,
@@ -2626,7 +2627,7 @@ func TestAMMBookStep_SellWithFillOrKill(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
-		ammAcc := amm.AMMAccount(t, amm.XRP(), tx.Asset{Currency: "USD", Issuer: env.GW.Address})
+		ammAcc := amm.AMMAccount(t, env, amm.XRP(), tx.Asset{Currency: "USD", Issuer: env.GW.Address})
 
 		// Alice: sell | fillOrKill: buy USD(10), sell XRP(1500)
 		// tfSell means she sells all 1500 XRP and gets more than 10 USD
@@ -2756,7 +2757,7 @@ func TestAMMBookStep_SelfIssueOffer(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
 
-	ammAcc := amm.AMMAccount(t, amm.XRP(),
+	ammAcc := amm.AMMAccount(t, env, amm.XRP(),
 		tx.Asset{Currency: "USD", Issuer: env.Bob.Address})
 
 	// Alice creates offer: buy USD_bob(100), sell XRP(100)
@@ -2913,7 +2914,7 @@ func TestAMMBookStep_DirectToDirectPath(t *testing.T) {
 
 	// Verify AMM was consumed up to first cam offer quality
 	// (exact amounts depend on fixAMMv1_1, checking approximate)
-	ammAcc := amm.AMMAccount(t,
+	ammAcc := amm.AMMAccount(t, env,
 		tx.Asset{Currency: "BUX", Issuer: ann.Address},
 		tx.Asset{Currency: "BUX", Issuer: bob.Address})
 
@@ -2958,7 +2959,7 @@ func TestAMMBookStep_RequireAuth(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
 
-	ammAcc := amm.AMMAccount(t,
+	ammAcc := amm.AMMAccount(t, env,
 		tx.Asset{Currency: "USD", Issuer: env.GW.Address},
 		amm.XRP())
 
@@ -3021,7 +3022,8 @@ func TestAMMBookStep_FalseDry(t *testing.T) {
 	env.Close()
 
 	ammXRPPool := env.TestEnv.ReserveIncrement() * 2 // increment * 2
-	bobFund := env.TestEnv.ReserveBase() + 5*env.TestEnv.ReserveIncrement() + 10 + ammXRPPool
+	// AMMCreate's special fee is one ReserveIncrement.
+	bobFund := env.TestEnv.ReserveBase() + 5*env.TestEnv.ReserveIncrement() + 10 + ammXRPPool + env.TestEnv.ReserveIncrement()
 	env.TestEnv.FundAmount(env.Bob, bobFund)
 	env.Close()
 
@@ -3109,7 +3111,7 @@ func TestAMMBookStep_BookStep(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
-		ammAcc := amm.AMMAccount(t,
+		ammAcc := amm.AMMAccount(t, env,
 			tx.Asset{Currency: "BTC", Issuer: env.GW.Address},
 			tx.Asset{Currency: "USD", Issuer: env.GW.Address})
 
@@ -3162,7 +3164,7 @@ func TestAMMBookStep_BookStep(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
-		ammAcc := amm.AMMAccount(t, amm.XRP(),
+		ammAcc := amm.AMMAccount(t, env, amm.XRP(),
 			tx.Asset{Currency: "USD", Issuer: env.GW.Address})
 
 		// alice pays carol 50 USD via XRP→USD AMM, sendmax XRP(50)
@@ -3206,7 +3208,7 @@ func TestAMMBookStep_BookStep(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
-		ammAcc := amm.AMMAccount(t,
+		ammAcc := amm.AMMAccount(t, env,
 			tx.Asset{Currency: "USD", Issuer: env.GW.Address},
 			amm.XRP())
 
@@ -3322,7 +3324,7 @@ func TestAMMBookStep_LimitQuality(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
 
-	ammAcc := amm.AMMAccount(t, amm.XRP(),
+	ammAcc := amm.AMMAccount(t, env, amm.XRP(),
 		tx.Asset{Currency: "USD", Issuer: env.GW.Address})
 
 	// Bob creates CLOB offer: buy XRP(100), sell USD(50) — quality 0.5 (worse)
@@ -3618,7 +3620,7 @@ func TestAMMBookStep_Payment(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
 
-	ammAcc := amm.AMMAccount(t, amm.XRP(), env.USD)
+	ammAcc := amm.AMMAccount(t, env, amm.XRP(), env.USD)
 
 	// becky pays herself USD(10) via AMM, path(~USD), sendmax(XRP(10))
 	payTx := payment.PayIssued(becky, becky, amm.IOUAmount(env.GW, "USD", 10)).
@@ -3738,7 +3740,7 @@ func TestAMMBookStep_RippleState(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
 
-	ammAcc := amm.AMMAccount(t, amm.XRP(),
+	ammAcc := amm.AMMAccount(t, env, amm.XRP(),
 		tx.Asset{Currency: "USD", Issuer: g1.Address})
 
 	// Unfrozen: alice can pay bob
@@ -3815,7 +3817,7 @@ func TestAMMBookStep_OffersWhenFrozen(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
 
-	ammAcc := amm.AMMAccount(t, amm.XRP(),
+	ammAcc := amm.AMMAccount(t, env, amm.XRP(),
 		tx.Asset{Currency: "USD", Issuer: g1.Address})
 
 	// A2 pays G1 USD(1) through AMM path

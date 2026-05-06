@@ -54,18 +54,20 @@ func testTickSizeRange(t *testing.T, disabledFeatures []string) {
 		result = env.Submit(accountset.AccountSet(gw).TickSize(3).Build())
 		jtx.RequireTxSuccess(t, result)
 
-		// Set tick size to maxTickSize (15) -> success, but clears the field
+		// Set tick size to maxTickSize (16) -> success, but clears the field.
+		// Reference: rippled Quality.h maxTickSize = 16; SetAccount.cpp clears
+		// the TickSize field when set to maxTickSize.
+		result = env.Submit(accountset.AccountSet(gw).TickSize(16).Build())
+		jtx.RequireTxSuccess(t, result)
+
+		// Set tick size to maxTickSize - 1 (15) -> success
 		result = env.Submit(accountset.AccountSet(gw).TickSize(15).Build())
 		jtx.RequireTxSuccess(t, result)
 
-		// Set tick size to maxTickSize - 1 (14) -> success
-		result = env.Submit(accountset.AccountSet(gw).TickSize(14).Build())
-		jtx.RequireTxSuccess(t, result)
-
-		// Try to set tick size above maximum (16 > maxTickSize=15) -> temBAD_TICK_SIZE
-		result = env.Submit(accountset.AccountSet(gw).TickSize(16).Build())
+		// Try to set tick size above maximum (17 > maxTickSize=16) -> temBAD_TICK_SIZE
+		result = env.Submit(accountset.AccountSet(gw).TickSize(17).Build())
 		require.Equal(t, "temBAD_TICK_SIZE", result.Code,
-			"TickSize 16 should fail with temBAD_TICK_SIZE, got %s", result.Code)
+			"TickSize 17 should fail with temBAD_TICK_SIZE, got %s", result.Code)
 
 		// Set tick size to 0 -> success, clears the field
 		result = env.Submit(accountset.AccountSet(gw).TickSize(0).Build())

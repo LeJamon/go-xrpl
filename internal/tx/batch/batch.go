@@ -362,6 +362,7 @@ func (b *Batch) applyAllOrNothing(ctx *tx.ApplyContext, innerTxns []tx.Transacti
 		TxHash:    ctx.TxHash,
 		Metadata:  ctx.Metadata,
 		Engine:    ctx.Engine,
+		Log:       ctx.Log,
 	}
 
 	for _, innerTx := range innerTxns {
@@ -500,6 +501,7 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) tx.Resu
 		TxHash:    ctx.TxHash,
 		Metadata:  ctx.Metadata,
 		Engine:    ctx.Engine,
+		Log:       ctx.Log,
 	}
 
 	// Apply the inner transaction (skip if delegate check failed)

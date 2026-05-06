@@ -575,9 +575,13 @@ func TestSet(t *testing.T) {
 		// Advance ledger far enough for account deletion
 		env.IncLedgerSeqForAccDel(carol)
 
+		// AccountDelete requires a special fee (one ReserveIncrement = 50 XRP).
+		// Reference: rippled AccountDelete::calculateBaseFee.
+		delFee := fmt.Sprintf("%d", env.ReserveIncrement())
+
 		// AccountDelete should fail with tecHAS_OBLIGATIONS
 		delTx := acctx.NewAccountDelete(carol.Address, alice.Address)
-		delTx.Fee = fmt.Sprintf("%d", 10)
+		delTx.Fee = delFee
 		result := env.Submit(delTx)
 		if result.Code != "tecHAS_OBLIGATIONS" {
 			t.Errorf("Expected tecHAS_OBLIGATIONS, got %s", result.Code)
@@ -593,7 +597,7 @@ func TestSet(t *testing.T) {
 
 		// Now account deletion should succeed
 		delTx2 := acctx.NewAccountDelete(carol.Address, alice.Address)
-		delTx2.Fee = fmt.Sprintf("%d", 10)
+		delTx2.Fee = delFee
 		result2 := env.Submit(delTx2)
 		if !result2.Success {
 			t.Errorf("Expected account deletion to succeed after domains cleared, got %s: %s", result2.Code, result2.Message)

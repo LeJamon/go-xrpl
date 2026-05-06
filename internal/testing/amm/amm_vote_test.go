@@ -153,7 +153,7 @@ func TestFeeVote(t *testing.T) {
 
 		// Carol deposits to become an LP
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.IOUAmount(env.GW, "LPT", 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)

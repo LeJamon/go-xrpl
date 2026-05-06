@@ -8,12 +8,24 @@ import (
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/amendment"
+	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/stretchr/testify/require"
 )
+
+// newAmendmentTestEnv builds a test env with no amendments in the genesis
+// Amendments SLE. This isolates EnableAmendment-pseudo-tx tests from the
+// default set of VoteDefaultYes amendments that genesis enables, so the
+// expected counts in this file (0/1/2) match what each test produces.
+func newAmendmentTestEnv(t *testing.T) *jtx.TestEnv {
+	t.Helper()
+	cfg := genesis.DefaultConfig()
+	cfg.Amendments = nil
+	return jtx.NewTestEnvWithConfig(t, cfg)
+}
 
 // makeAmendmentHash returns the uppercase hex hash for a known amendment name.
 func makeAmendmentHash(name string) string {
@@ -47,7 +59,7 @@ func newEnableAmendment(amendmentHash string, flags uint32) *pseudo.EnableAmendm
 // TestEnableAmendment_Enable tests that an amendment with no flags gets enabled.
 // Reference: rippled Change.cpp applyAmendment() lines 318-335
 func TestEnableAmendment_Enable(t *testing.T) {
-	env := jtx.NewTestEnv(t)
+	env := newAmendmentTestEnv(t)
 
 	// Use a real amendment hash
 	amendmentHash := makeAmendmentHash("fixNFTokenPageLinks")
@@ -75,7 +87,7 @@ func TestEnableAmendment_Enable(t *testing.T) {
 
 // TestEnableAmendment_EnableMultiple tests enabling multiple amendments sequentially.
 func TestEnableAmendment_EnableMultiple(t *testing.T) {
-	env := jtx.NewTestEnv(t)
+	env := newAmendmentTestEnv(t)
 
 	hash1 := makeAmendmentHash("fixNFTokenPageLinks")
 	hash2 := makeAmendmentHash("AMM")
@@ -100,7 +112,7 @@ func TestEnableAmendment_EnableMultiple(t *testing.T) {
 // returns tefALREADY.
 // Reference: rippled Change.cpp applyAmendment() lines 265-267
 func TestEnableAmendment_AlreadyEnabled(t *testing.T) {
-	env := jtx.NewTestEnv(t)
+	env := newAmendmentTestEnv(t)
 
 	amendmentHash := makeAmendmentHash("fixNFTokenPageLinks")
 
@@ -116,7 +128,7 @@ func TestEnableAmendment_AlreadyEnabled(t *testing.T) {
 // TestEnableAmendment_GotMajority tests that tfGotMajority adds to the majorities tracking.
 // Reference: rippled Change.cpp applyAmendment() lines 303-317
 func TestEnableAmendment_GotMajority(t *testing.T) {
-	env := jtx.NewTestEnv(t)
+	env := newAmendmentTestEnv(t)
 
 	amendmentHash := makeAmendmentHash("fixNFTokenPageLinks")
 
@@ -148,7 +160,7 @@ func TestEnableAmendment_GotMajority(t *testing.T) {
 // already in the majorities list returns tefALREADY.
 // Reference: rippled Change.cpp applyAmendment() lines 288-289
 func TestEnableAmendment_GotMajorityAlready(t *testing.T) {
-	env := jtx.NewTestEnv(t)
+	env := newAmendmentTestEnv(t)
 
 	amendmentHash := makeAmendmentHash("fixNFTokenPageLinks")
 	const tfGotMajority uint32 = 0x00010000
@@ -165,7 +177,7 @@ func TestEnableAmendment_GotMajorityAlready(t *testing.T) {
 // TestEnableAmendment_LostMajority tests that tfLostMajority removes from the majorities list.
 // Reference: rippled Change.cpp applyAmendment() lines 300-301, filtering logic
 func TestEnableAmendment_LostMajority(t *testing.T) {
-	env := jtx.NewTestEnv(t)
+	env := newAmendmentTestEnv(t)
 
 	amendmentHash := makeAmendmentHash("fixNFTokenPageLinks")
 	const tfGotMajority uint32 = 0x00010000
@@ -192,7 +204,7 @@ func TestEnableAmendment_LostMajority(t *testing.T) {
 // NOT in the majorities list returns tefALREADY.
 // Reference: rippled Change.cpp applyAmendment() lines 300-301
 func TestEnableAmendment_LostMajorityNotInList(t *testing.T) {
-	env := jtx.NewTestEnv(t)
+	env := newAmendmentTestEnv(t)
 
 	amendmentHash := makeAmendmentHash("fixNFTokenPageLinks")
 	const tfLostMajority uint32 = 0x00020000
@@ -206,7 +218,7 @@ func TestEnableAmendment_LostMajorityNotInList(t *testing.T) {
 // returns temINVALID_FLAG.
 // Reference: rippled Change.cpp applyAmendment() lines 274-275
 func TestEnableAmendment_BothFlags(t *testing.T) {
-	env := jtx.NewTestEnv(t)
+	env := newAmendmentTestEnv(t)
 
 	amendmentHash := makeAmendmentHash("fixNFTokenPageLinks")
 	const tfGotMajority uint32 = 0x00010000
@@ -220,7 +232,7 @@ func TestEnableAmendment_BothFlags(t *testing.T) {
 // amendment returns tefALREADY.
 // Reference: rippled Change.cpp applyAmendment() lines 265-267
 func TestEnableAmendment_GotMajorityOnEnabled(t *testing.T) {
-	env := jtx.NewTestEnv(t)
+	env := newAmendmentTestEnv(t)
 
 	amendmentHash := makeAmendmentHash("fixNFTokenPageLinks")
 	const tfGotMajority uint32 = 0x00010000
@@ -238,7 +250,7 @@ func TestEnableAmendment_GotMajorityOnEnabled(t *testing.T) {
 // amendment returns tefALREADY.
 // Reference: rippled Change.cpp applyAmendment() lines 265-267
 func TestEnableAmendment_LostMajorityOnEnabled(t *testing.T) {
-	env := jtx.NewTestEnv(t)
+	env := newAmendmentTestEnv(t)
 
 	amendmentHash := makeAmendmentHash("fixNFTokenPageLinks")
 	const tfLostMajority uint32 = 0x00020000
@@ -255,7 +267,7 @@ func TestEnableAmendment_LostMajorityOnEnabled(t *testing.T) {
 // TestEnableAmendment_FullLifecycle tests the complete amendment lifecycle:
 // gotMajority → lostMajority → gotMajority → enable
 func TestEnableAmendment_FullLifecycle(t *testing.T) {
-	env := jtx.NewTestEnv(t)
+	env := newAmendmentTestEnv(t)
 
 	amendmentHash := makeAmendmentHash("fixNFTokenPageLinks")
 	const tfGotMajority uint32 = 0x00010000
@@ -290,7 +302,7 @@ func TestEnableAmendment_FullLifecycle(t *testing.T) {
 // the targeted amendment and leaves others intact.
 // Reference: rippled Change.cpp applyAmendment() lines 282-297
 func TestEnableAmendment_MajoritiesPassThrough(t *testing.T) {
-	env := jtx.NewTestEnv(t)
+	env := newAmendmentTestEnv(t)
 
 	hash1 := makeAmendmentHash("fixNFTokenPageLinks")
 	hash2 := makeAmendmentHash("AMM")

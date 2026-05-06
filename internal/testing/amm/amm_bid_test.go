@@ -19,7 +19,7 @@ func TestInvalidBid(t *testing.T) {
 
 		// First deposit as Carol to become LP
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
@@ -29,7 +29,7 @@ func TestInvalidBid(t *testing.T) {
 		env.Close()
 
 		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
-			BidMin(amm.LPTokenAmount(amm.XRP(), env.USD, 0)).
+			BidMin(amm.LPTokenAmount(env, amm.XRP(), env.USD, 0)).
 			Flags(amm.TfWithdrawAll).
 			Build()
 		result = env.Submit(bidTx)
@@ -47,7 +47,7 @@ func TestInvalidBid(t *testing.T) {
 
 		// First deposit as Carol to become LP
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
@@ -57,7 +57,7 @@ func TestInvalidBid(t *testing.T) {
 		env.Close()
 
 		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
-			BidMin(amm.LPTokenAmount(amm.XRP(), env.USD, 0)).
+			BidMin(amm.LPTokenAmount(env, amm.XRP(), env.USD, 0)).
 			Build()
 		result = env.Submit(bidTx)
 
@@ -74,7 +74,7 @@ func TestInvalidBid(t *testing.T) {
 
 		// First deposit as Carol to become LP
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
@@ -84,7 +84,7 @@ func TestInvalidBid(t *testing.T) {
 		env.Close()
 
 		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
-			BidMin(amm.LPTokenAmount(amm.XRP(), env.USD, -100)).
+			BidMin(amm.LPTokenAmount(env, amm.XRP(), env.USD, -100)).
 			Build()
 		result = env.Submit(bidTx)
 
@@ -101,7 +101,7 @@ func TestInvalidBid(t *testing.T) {
 
 		// First deposit as Carol to become LP
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
@@ -111,7 +111,7 @@ func TestInvalidBid(t *testing.T) {
 		env.Close()
 
 		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
-			BidMax(amm.LPTokenAmount(amm.XRP(), env.USD, 0)).
+			BidMax(amm.LPTokenAmount(env, amm.XRP(), env.USD, 0)).
 			Build()
 		result = env.Submit(bidTx)
 
@@ -128,7 +128,7 @@ func TestInvalidBid(t *testing.T) {
 
 		// First deposit as Carol to become LP
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
@@ -157,7 +157,7 @@ func TestInvalidBid(t *testing.T) {
 
 		bad := jtx.NewAccount("bad")
 		bidTx := amm.AMMBid(bad, amm.XRP(), env.USD).
-			BidMax(amm.LPTokenAmount(amm.XRP(), env.USD, 100)).
+			BidMax(amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)).
 			Build()
 		result := env.Submit(jtx.WithSeq(bidTx, 1))
 
@@ -174,7 +174,7 @@ func TestInvalidBid(t *testing.T) {
 
 		// Carol hasn't deposited, so she can't bid
 		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
-			BidMin(amm.LPTokenAmount(amm.XRP(), env.USD, 100)).
+			BidMin(amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)).
 			Build()
 		result := env.Submit(bidTx)
 
@@ -190,7 +190,7 @@ func TestInvalidBid(t *testing.T) {
 		env := setupAMM(t)
 
 		bidTx := amm.AMMBid(env.Alice, env.USD, env.GBP).
-			BidMax(amm.LPTokenAmount(amm.XRP(), env.USD, 100)).
+			BidMax(amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)).
 			Build()
 		result := env.Submit(bidTx)
 
@@ -217,7 +217,7 @@ func TestInvalidBid(t *testing.T) {
 
 		// Try to bid on deleted AMM
 		bidTx := amm.AMMBid(env.Alice, amm.XRP(), env.USD).
-			BidMax(amm.LPTokenAmount(amm.XRP(), env.USD, 100)).
+			BidMax(amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)).
 			Build()
 		result = env.Submit(bidTx)
 
@@ -251,7 +251,7 @@ func TestInvalidBid(t *testing.T) {
 
 		// First deposit as Carol to become LP with limited tokens
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
@@ -283,7 +283,7 @@ func TestBid(t *testing.T) {
 
 		// First deposit as Carol to become LP
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
@@ -312,7 +312,7 @@ func TestBid(t *testing.T) {
 
 		// First deposit as Carol to become LP
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
@@ -361,7 +361,7 @@ func TestBid(t *testing.T) {
 
 		// First deposit as Carol to become LP
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
@@ -411,7 +411,7 @@ func TestBid(t *testing.T) {
 
 		// First deposit as Carol to become LP
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
@@ -441,7 +441,7 @@ func TestBid(t *testing.T) {
 
 		// Carol deposits to become LP
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)

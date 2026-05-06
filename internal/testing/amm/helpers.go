@@ -233,12 +233,30 @@ func IOU(issuer *jtx.Account, currency string, amount float64) tx.Amount {
 }
 
 // LPTokenAmount creates an LP token amount for the given AMM asset pair.
-// This generates the proper LP token currency (starting with 03) and uses the AMM account as issuer.
-// Reference: rippled test fixtures use amm.lptIssue() which is the real LP token issue.
-func LPTokenAmount(asset1, asset2 tx.Asset, amount float64) tx.Amount {
+// It generates the proper LP token currency (starting with 03) and resolves
+// the AMM pseudo-account issuer from env's ledger when the AMM exists.
+//
+// Reference: rippled test fixtures use amm.lptIssue() which is the real LP
+// token issue. The pseudo-account address is derived iteratively from the
+// parent ledger hash (View::createPseudoAccount), so it cannot be computed
+// from the asset pair alone — we must read the AMM SLE.
+//
+// Pre-AMMCreate callers can still use this helper: they get a placeholder
+// issuer derived from the AMM keylet which is enough for parameter-binding
+// in builders that do not require the real issuer (e.g. Currency-only
+// validation in AMMDeposit/AMMWithdraw).
+func LPTokenAmount(env *AMMTestEnv, asset1, asset2 tx.Asset, amount float64) tx.Amount {
 	lptCurrency := coreAmm.GenerateAMMLPTCurrency(asset1.Currency, asset2.Currency)
-	ammAccountAddr := coreAmm.ComputeAMMAccountAddress(asset1, asset2)
-	return tx.NewIssuedAmountFromFloat64(amount, lptCurrency, ammAccountAddr)
+	var issuer string
+	if env != nil {
+		if ammAcc := env.ReadAMMAccount(asset1, asset2); ammAcc != nil {
+			issuer = ammAcc.Address
+		}
+	}
+	if issuer == "" {
+		issuer = coreAmm.ComputeAMMAccountAddress(asset1, asset2)
+	}
+	return tx.NewIssuedAmountFromFloat64(amount, lptCurrency, issuer)
 }
 
 // LPTokenAmountFromLedger creates an LP token amount using the real AMM pseudo-account
@@ -332,25 +350,17 @@ func TestAMM(t *testing.T, pool *[2]tx.Amount, tradingFee uint16, callback TestA
 	callback(env, ammAcc)
 }
 
-// AMMAccount derives the AMM pseudo-account for the given asset pair.
-// It uses a cache populated by AMMCreate to return the correct address.
-func AMMAccount(t *testing.T, asset1, asset2 tx.Asset) *jtx.Account {
+// AMMAccount returns the AMM pseudo-account for the given asset pair, looked
+// up from the AMM SLE in env's ledger. AMMCreate uses an iterative
+// pseudo-account derivation that depends on the parent ledger hash, so the
+// account address cannot be computed from the asset pair alone.
+func AMMAccount(t *testing.T, env *AMMTestEnv, asset1, asset2 tx.Asset) *jtx.Account {
 	t.Helper()
-	addr := coreAmm.ComputeAMMAccountAddress(asset1, asset2)
-	if addr == "" {
-		t.Fatalf("AMMAccount: failed to compute address for %s/%s", asset1.Currency, asset2.Currency)
+	ammAcc := env.ReadAMMAccount(asset1, asset2)
+	if ammAcc == nil {
+		t.Fatalf("AMMAccount: AMM not found in ledger for %s/%s", asset1.Currency, asset2.Currency)
 	}
-	_, idBytes, err := addresscodec.DecodeClassicAddressToAccountID(addr)
-	if err != nil {
-		t.Fatalf("AMMAccount: decode address error: %v", err)
-	}
-	var id20 [20]byte
-	copy(id20[:], idBytes)
-	return &jtx.Account{
-		Name:    "amm",
-		Address: addr,
-		ID:      id20,
-	}
+	return ammAcc
 }
 
 // ReadAMMAccount reads the AMM pseudo-account from the ledger.

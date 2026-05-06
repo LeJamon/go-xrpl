@@ -87,6 +87,7 @@ func TestAccountSet_MostFlags(t *testing.T) {
 		accounttx.AccountSetFlagDisallowIncomingNFTokenOffer: true, // DisallowIncoming amendment
 		accounttx.AccountSetFlagDisallowIncomingTrustline:    true, // DisallowIncoming amendment
 		accounttx.AccountSetFlagAllowTrustLineClawback:       true, // Can't be cleared
+		accounttx.AccountSetFlagAllowTrustLineLocking:        true, // AllowTokenLocking amendment
 	}
 
 	testFlags := func(goodFlags []uint32) {

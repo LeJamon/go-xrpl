@@ -7,10 +7,12 @@
 package amm_test
 
 import (
+	"encoding/hex"
 	"fmt"
 	"testing"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/amm"
@@ -24,12 +26,30 @@ import (
 	paymentPkg "github.com/LeJamon/goXRPLd/internal/tx/payment"
 )
 
-// ammAccount computes the AMM pseudo-account for the given asset pair and returns
-// a *jtx.Account suitable for use with test builders (payment, escrow, etc.).
-func ammAccount(t *testing.T, asset1, asset2 tx.Asset) *jtx.Account {
+// ammAccount looks up the AMM SLE for the given asset pair in env and returns
+// a *jtx.Account holding the pseudo-account derived during AMMCreate.
+//
+// Note: the pseudo-account address depends on parentHash and is not derivable
+// from the asset pair alone — we must read it back from the AMM ledger entry.
+func ammAccount(t *testing.T, env *amm.AMMTestEnv, asset1, asset2 tx.Asset) *jtx.Account {
 	t.Helper()
 
-	addr := coreAmm.ComputeAMMAccountAddress(asset1, asset2)
+	ammKeylet := coreAmm.ComputeAMMKeylet(asset1, asset2)
+	data, err := env.LedgerEntry(ammKeylet)
+	if err != nil || len(data) == 0 {
+		t.Fatalf("AMM ledger entry not found for asset pair: %v", err)
+	}
+
+	jsonMap, err := binarycodec.Decode(hex.EncodeToString(data))
+	if err != nil {
+		t.Fatalf("Failed to decode AMM ledger entry: %v", err)
+	}
+
+	addr, ok := jsonMap["Account"].(string)
+	if !ok || addr == "" {
+		t.Fatalf("AMM ledger entry has no Account field")
+	}
+
 	_, idBytes, err := addresscodec.DecodeClassicAddressToAccountID(addr)
 	if err != nil {
 		t.Fatalf("Failed to decode AMM account address %s: %v", addr, err)
@@ -60,7 +80,7 @@ func TestInvalidAMMPayment(t *testing.T) {
 	t.Run("DirectPaymentsToAMM", func(t *testing.T) {
 		// Use setupAMM which creates XRP(10000)/USD(10000) AMM via alice.
 		env := setupAMM(t)
-		ammAcc := ammAccount(t, amm.XRP(), env.USD)
+		ammAcc := ammAccount(t, env, amm.XRP(), env.USD)
 
 		// Pay XRP to AMM -> tecNO_PERMISSION
 		t.Run("PayXRP", func(t *testing.T) {
@@ -89,7 +109,7 @@ func TestInvalidAMMPayment(t *testing.T) {
 	// Reference: lines 3651-3660 -- escrow to AMM account -> tecNO_PERMISSION.
 	t.Run("EscrowToAMM", func(t *testing.T) {
 		env := setupAMM(t)
-		ammAcc := ammAccount(t, amm.XRP(), env.USD)
+		ammAcc := ammAccount(t, env, amm.XRP(), env.USD)
 
 		now := env.Now()
 		finishTime := escrow.ToRippleTime(now) + 1
@@ -108,7 +128,7 @@ func TestInvalidAMMPayment(t *testing.T) {
 	// Reference: lines 3662-3676 -- payment channel to AMM account -> tecNO_PERMISSION.
 	t.Run("PayChanToAMM", func(t *testing.T) {
 		env := setupAMM(t)
-		ammAcc := ammAccount(t, amm.XRP(), env.USD)
+		ammAcc := ammAccount(t, env, amm.XRP(), env.USD)
 
 		channelTx := paychan.ChannelCreate(
 			env.Carol,
@@ -124,7 +144,7 @@ func TestInvalidAMMPayment(t *testing.T) {
 	// Reference: lines 3678-3682 -- check to AMM account -> tecNO_PERMISSION.
 	t.Run("CheckToAMM", func(t *testing.T) {
 		env := setupAMM(t)
-		ammAcc := ammAccount(t, amm.XRP(), env.USD)
+		ammAcc := ammAccount(t, env, amm.XRP(), env.USD)
 
 		checkTx := check.CheckCreate(env.Carol, ammAcc, amm.XRPAmount(100)).Build()
 		result := env.Submit(checkTx)
@@ -202,7 +222,7 @@ func TestInvalidAMMPayment(t *testing.T) {
 		// Freeze AMM's trust line
 		t.Run("FreezeAMMTrustLine", func(t *testing.T) {
 			env := setupAMM(t)
-			ammAcc := ammAccount(t, amm.XRP(), env.USD)
+			ammAcc := ammAccount(t, env, amm.XRP(), env.USD)
 
 			// gw freezes the USD trust line for the AMM account
 			env.TestEnv.FreezeTrustLine(env.GW, ammAcc, "USD")
@@ -266,7 +286,7 @@ func TestAMMFlags(t *testing.T) {
 	env := setupAMM(t)
 
 	// Compute AMM account address.
-	ammAcc := ammAccount(t, amm.XRP(), env.USD)
+	ammAcc := ammAccount(t, env, amm.XRP(), env.USD)
 
 	info := env.AccountInfo(ammAcc)
 	if info == nil {
@@ -331,7 +351,7 @@ func TestAMMRippling(t *testing.T) {
 	env.Close()
 
 	// Compute the AMM account for TSTA/TSTB.
-	ammAcc := ammAccount(t, assetA, assetB)
+	ammAcc := ammAccount(t, env, assetA, assetB)
 
 	// D tries to trust AMM for TST -> tecNO_PERMISSION.
 	// The issue used is {currency: TST, issuer: ammAccount}.
@@ -371,7 +391,7 @@ func TestAMMID(t *testing.T) {
 	env := setupAMM(t)
 
 	// Compute AMM account address.
-	ammAcc := ammAccount(t, amm.XRP(), env.USD)
+	ammAcc := ammAccount(t, env, amm.XRP(), env.USD)
 
 	// Verify AMM account exists with correct flags.
 	info := env.AccountInfo(ammAcc)

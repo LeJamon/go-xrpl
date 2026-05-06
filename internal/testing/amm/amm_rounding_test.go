@@ -89,7 +89,7 @@ func setupGBPEURPoolWithBob(t *testing.T, gbpPool, eurPool float64,
 	env.PayIOU(env.GW, env.Bob, "EUR", eurFund)
 	env.Close()
 
-	ammAcc := amm.AMMAccount(t, env.GBP, env.EUR)
+	ammAcc := amm.AMMAccount(t, env, env.GBP, env.EUR)
 	return env, ammAcc
 }
 
@@ -139,7 +139,7 @@ func setupGBPEURPoolAliceOnly(t *testing.T, gbpPool, eurPool float64, tradingFee
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
 
-	ammAcc := amm.AMMAccount(t, env.GBP, env.EUR)
+	ammAcc := amm.AMMAccount(t, env, env.GBP, env.EUR)
 	return env, ammAcc
 }
 
@@ -201,7 +201,7 @@ func TestDepositAndWithdrawRounding(t *testing.T) {
 			}
 
 			// LP token issue from the AMM
-			lptRef := amm.LPTokenAmount(amm.XRP(), XPM, 0)
+			lptRef := amm.LPTokenAmount(env, amm.XRP(), XPM, 0)
 			lptCurrency := lptRef.Currency
 			lptIssuer := lptRef.Issuer
 
@@ -256,7 +256,7 @@ func TestDepositAndWithdrawRounding(t *testing.T) {
 		t.Run("SingleAssetWithdraw/"+suffix, func(t *testing.T) {
 			setupAndBurn(t, 0, func(env *amm.AMMTestEnv) {
 				// Read XPM pool balance before withdraw
-				ammAcc := amm.AMMAccount(t, amm.XRP(), XPM)
+				ammAcc := amm.AMMAccount(t, env, amm.XRP(), XPM)
 				amount2Before := env.AMMPoolIOUPrecise(ammAcc, env.GW, "XPM")
 
 				// Withdraw tiny XPM: {1, -5} = 0.00001
@@ -416,7 +416,7 @@ func TestDepositRounding(t *testing.T) {
 			env, _ := setupGBPEURPoolWithBob(t, 7000, 30000, 100000, 100000, 0, fixV1_3)
 
 			// LP token amount: IOUAmount(101234567890123456, -16)
-			lptRef := amm.LPTokenAmount(env.GBP, env.EUR, 0)
+			lptRef := amm.LPTokenAmount(env, env.GBP, env.EUR, 0)
 			tokens := tx.NewIssuedAmount(101234567890123456, -16, lptRef.Currency, lptRef.Issuer)
 
 			depTx := amm.AMMDeposit(env.Bob, env.GBP, env.EUR).
@@ -450,7 +450,7 @@ func TestDepositRounding(t *testing.T) {
 					env, _ := setupGBPEURPoolWithBob(t, 7000, 30000, 100000, 1000000, 0, fixV1_3)
 
 					// Build LP token amount with specific mantissa/exponent
-					lptRef := amm.LPTokenAmount(env.GBP, env.EUR, 0)
+					lptRef := amm.LPTokenAmount(env, env.GBP, env.EUR, 0)
 					tokens := tx.NewIssuedAmount(tc.mantissa, tc.exponent, lptRef.Currency, lptRef.Issuer)
 
 					// EUR(1e6) as asset1In
@@ -512,7 +512,7 @@ func TestWithdrawRounding(t *testing.T) {
 			env, _ := setupGBPEURPoolAliceOnly(t, 7000, 30000, 0, fixV1_3)
 
 			// Alice withdraws 1,000 LP tokens
-			lptRef := amm.LPTokenAmount(env.GBP, env.EUR, 1000)
+			lptRef := amm.LPTokenAmount(env, env.GBP, env.EUR, 1000)
 			wdTx := amm.AMMWithdraw(env.Alice, env.GBP, env.EUR).
 				LPTokenIn(lptRef).
 				LPToken().
@@ -606,7 +606,7 @@ func TestWithdrawRounding(t *testing.T) {
 			env, _ := setupGBPEURPoolAliceOnly(t, 7000, 30000, 0, fixV1_3)
 
 			// Alice withdraws 1,000 LP tokens as GBP(100)
-			lptRef := amm.LPTokenAmount(env.GBP, env.EUR, 1000)
+			lptRef := amm.LPTokenAmount(env, env.GBP, env.EUR, 1000)
 			gbp100 := amm.IOUAmount(env.GW, "GBP", 100)
 
 			wdTx := amm.AMMWithdraw(env.Alice, env.GBP, env.EUR).
@@ -632,7 +632,7 @@ func TestWithdrawRounding(t *testing.T) {
 			// maxEP is IOUAmount{2} — a raw IOUAmount, not an STAmount with issue
 			// In rippled: .maxEP = IOUAmount{2} creates a number value for the EP
 			// For the withdraw builder, EPrice needs the LP token issue
-			lptRef := amm.LPTokenAmount(env.GBP, env.EUR, 0)
+			lptRef := amm.LPTokenAmount(env, env.GBP, env.EUR, 0)
 			ep := tx.NewIssuedAmount(2, 0, lptRef.Currency, lptRef.Issuer)
 
 			wdTx := amm.AMMWithdraw(env.Alice, env.GBP, env.EUR).

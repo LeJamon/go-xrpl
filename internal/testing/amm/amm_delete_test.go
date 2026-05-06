@@ -174,7 +174,7 @@ func TestAutoDeleteAMM(t *testing.T) {
 			env.Close()
 
 			// Create trust line for LP tokens
-			lptAmount := amm.LPTokenAmount(xrpAsset, usdAsset, 10000)
+			lptAmount := amm.LPTokenAmount(env, xrpAsset, usdAsset, 10000)
 			trustTx := trustset.TrustSet(a, lptAmount).Build()
 			result := env.Submit(trustTx)
 			if !result.Success {
@@ -201,7 +201,7 @@ func TestAutoDeleteAMM(t *testing.T) {
 
 		// Bid should fail with tecAMM_EMPTY
 		bidTx := amm.AMMBid(env.Alice, xrpAsset, usdAsset).
-			BidMin(amm.LPTokenAmount(xrpAsset, usdAsset, 1000)).
+			BidMin(amm.LPTokenAmount(env, xrpAsset, usdAsset, 1000)).
 			Build()
 		result = env.Submit(bidTx)
 		amm.ExpectTER(t, result, amm.TecAMM_EMPTY)
@@ -213,7 +213,7 @@ func TestAutoDeleteAMM(t *testing.T) {
 
 		// Withdraw should fail with tecAMM_EMPTY
 		withdrawTx2 := amm.AMMWithdraw(env.Alice, xrpAsset, usdAsset).
-			LPTokenIn(amm.LPTokenAmount(xrpAsset, usdAsset, 100)).
+			LPTokenIn(amm.LPTokenAmount(env, xrpAsset, usdAsset, 100)).
 			LPToken().
 			Build()
 		result = env.Submit(withdrawTx2)
@@ -288,7 +288,7 @@ func TestAutoDeleteAMM(t *testing.T) {
 			env.FundAmount(a, uint64(jtx.XRP(1000)))
 			env.Close()
 
-			lptAmount := amm.LPTokenAmount(xrpAsset, usdAsset, 10000)
+			lptAmount := amm.LPTokenAmount(env, xrpAsset, usdAsset, 10000)
 			trustTx := trustset.TrustSet(a, lptAmount).Build()
 			result := env.Submit(trustTx)
 			if !result.Success {
