@@ -77,17 +77,15 @@ func TestDecide_GotMajority(t *testing.T) {
 }
 
 func TestDecide_LostMajority(t *testing.T) {
-	// Ledger has majority, validators fell off — emit lostMajority
-	// regardless of local stance.
 	a := makeAmendment(0xBB)
 	in := Inputs{
 		UpcomingSeq:        1024,
 		CloseTime:          baseTime,
 		MajorityTimeout:    14 * 24 * time.Hour,
 		TrustedValidations: 10,
-		Votes:              map[Amendment]int{a: 4}, // below threshold
+		Votes:              map[Amendment]int{a: 4},
 		Majority:           map[Amendment]time.Time{a: baseTime.Add(-time.Hour)},
-		Stances:            map[Amendment]Stance{a: VoteAbstain}, // not voting yes locally
+		Stances:            map[Amendment]Stance{a: VoteAbstain},
 		StrictMajority:     true,
 	}
 	got := Decide(in)
@@ -142,7 +140,7 @@ func TestDecide_AlreadyEnabledSkipped(t *testing.T) {
 		Votes:              map[Amendment]int{a: 10},
 		Majority:           map[Amendment]time.Time{a: baseTime.Add(-30 * 24 * time.Hour)},
 		Stances:            map[Amendment]Stance{a: VoteUp},
-		Enabled:            map[Amendment]bool{a: true}, // already on
+		Enabled:            map[Amendment]bool{a: true},
 		StrictMajority:     true,
 	}
 	got := Decide(in)
@@ -156,7 +154,7 @@ func TestDecide_ObsoleteStanceNeverVotes(t *testing.T) {
 		CloseTime:          baseTime,
 		MajorityTimeout:    14 * 24 * time.Hour,
 		TrustedValidations: 10,
-		Votes:              map[Amendment]int{a: 10}, // strong validator support
+		Votes:              map[Amendment]int{a: 10},
 		Stances:            map[Amendment]Stance{a: VoteObsolete},
 		StrictMajority:     true,
 	}
@@ -165,8 +163,9 @@ func TestDecide_ObsoleteStanceNeverVotes(t *testing.T) {
 }
 
 func TestDecide_AbstainStanceNeverVotes(t *testing.T) {
-	// VoteAbstain must produce no gotMajority — only VoteUp does.
-	// (Abstain still allows lostMajority, see other test.)
+	// Abstain must NOT propose gotMajority — only VoteUp does. The
+	// LostMajority case for abstain is covered by
+	// TestDecide_LostMajorityFiresEvenForAbstain.
 	a := makeAmendment(0xEF)
 	in := Inputs{
 		UpcomingSeq:        1024,

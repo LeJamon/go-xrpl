@@ -11,10 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newTestAdaptorWithConfig is newTestAdaptor with the operator
-// config knobs (FeeVote, AmendmentVote) exposed for the
-// flag-ledger-vote tests. Reuses the same standalone service +
-// validator seed.
+// newTestAdaptorWithConfig is newTestAdaptor with FeeVote and
+// AmendmentVote config knobs exposed.
 func newTestAdaptorWithConfig(t *testing.T, fee FeeVoteStance, amendmentVote []string) *Adaptor {
 	t.Helper()
 	svc := newTestLedgerService(t)
@@ -90,8 +88,8 @@ func TestGenerateFlagLedgerPseudoTxs_FeeVoteSeedsSetFee(t *testing.T) {
 	stx := decodeTx(t, blobs[0])
 	assert.Equal(t, "SetFee", stx["TransactionType"],
 		"emitted blob must be a SetFee pseudo-tx")
-	// LedgerSequence carries upcoming seq = parent + 1.
-	assert.EqualValues(t, prev.Sequence()+1, asUint(stx["LedgerSequence"]))
+	assert.EqualValues(t, prev.Sequence()+1, asUint(stx["LedgerSequence"]),
+		"LedgerSequence carries upcoming seq = parent + 1")
 }
 
 // TestExcludeNegativeUNL_DropsBannedValidators is a pure-helper
@@ -176,8 +174,7 @@ func TestGenerateFlagLedgerPseudoTxs_AmendmentVoteSeedsGotMajority(t *testing.T)
 
 // TestGenerateFlagLedgerPseudoTxs_NoLedgerService is the defensive
 // path: an adaptor with no ledger service returns nil rather than
-// panicking. Tests that construct adaptors directly (without going
-// through Components) hit this path.
+// panicking.
 func TestGenerateFlagLedgerPseudoTxs_NoLedgerService(t *testing.T) {
 	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
 	require.NoError(t, err)
