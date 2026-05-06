@@ -84,9 +84,6 @@ func (c *Components) Start() error {
 	return nil
 }
 
-// runPeriodicManifestBroadcast re-emits the cached manifest frame on
-// the configured tick. Skip cases (empty / unwired cache, no peers)
-// are handled inside BroadcastLocalManifest.
 func (c *Components) runPeriodicManifestBroadcast(ctx context.Context, interval time.Duration) {
 	if c.Router == nil || interval <= 0 {
 		return

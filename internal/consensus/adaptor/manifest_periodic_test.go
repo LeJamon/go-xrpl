@@ -8,9 +8,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
 )
 
-// waitForBroadcasts polls until n Broadcast calls have landed or the
-// deadline expires; returns the observed count either way so callers
-// can produce a meaningful failure message.
 func waitForBroadcasts(sender *fakeManifestSender, n int, timeout time.Duration) int {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
