@@ -217,13 +217,6 @@ func NewFromConfig(
 
 	engine := rcl.NewEngine(adaptor, rcl.DefaultConfig())
 
-	// Translate ephemeral signing keys → master keys before quorum
-	// arithmetic. Mirrors rippled RCLValidations.cpp:165-186's
-	// calcNodeID(getTrustedKey(signingKey) ?? signingKey).
-	engine.SetManifestResolver(func(nid consensus.NodeID) consensus.NodeID {
-		return consensus.NodeID(manifestCache.GetMasterKey([33]byte(nid)))
-	})
-
 	// On-disk validation archive. Skipped when the relational DB is
 	// unavailable or the operator has disabled the section in TOML —
 	// either way the engine runs unchanged with the tracker in pure

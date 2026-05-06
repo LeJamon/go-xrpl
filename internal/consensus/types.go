@@ -127,8 +127,25 @@ type RoundID struct {
 	ParentHash [32]byte
 }
 
-// NodeID uniquely identifies a node in the network.
-type NodeID [33]byte // Compressed public key
+// NodeID uniquely identifies a validator in the network. It is the
+// 20-byte RIPEMD-160(SHA-256(masterPubKey)) hash matching rippled's
+// calcNodeID (rippled/src/libxrpl/protocol/PublicKey.cpp:319-327 and
+// rippled/include/xrpl/protocol/UintTypes.h:59 — base_uint<160>).
+//
+// NodeID is distinct from the 33-byte compressed signing public key
+// that travels on the wire as sfSigningPubKey: the wire field carries
+// the rotatable ephemeral key, while NodeID identifies the long-term
+// master key behind it. Use CalcNodeID to derive a NodeID from a
+// master pubkey; the consensus router resolves an inbound message's
+// signing key to its master via the manifest cache before populating
+// NodeID, so all in-memory maps key on the master shape consistently.
+type NodeID [20]byte
+
+// SigningPubKey is a 33-byte compressed XRPL public key (secp256k1
+// 0x02/0x03 prefix or ed25519 0xED prefix). It carries the ephemeral
+// signing key on Proposal/Validation — the bytes that go on the wire
+// as sfSigningPubKey and that the signature verifier consumes.
+type SigningPubKey [33]byte
 
 // TxID uniquely identifies a transaction.
 type TxID [32]byte
@@ -144,8 +161,16 @@ type Proposal struct {
 	// Round identifies which consensus round this proposal is for.
 	Round RoundID
 
-	// NodeID is the proposing validator's public key.
+	// NodeID is the proposing validator's master-derived 20-byte
+	// identifier. Populated from SigningPubKey via CalcNodeID, with
+	// the consensus router substituting the master key from the
+	// manifest cache before quorum lookups.
 	NodeID NodeID
+
+	// SigningPubKey is the 33-byte compressed ephemeral signing key
+	// the proposal was signed with — the bytes carried on the wire as
+	// TMProposeSet.nodepubkey and consumed by VerifyProposal.
+	SigningPubKey SigningPubKey
 
 	// Position is the sequence number of this proposal (0, 1, 2...).
 	// Validators can update their position during establish phase.
@@ -185,8 +210,16 @@ type Validation struct {
 	// LedgerSeq is the sequence number of the validated ledger.
 	LedgerSeq uint32
 
-	// NodeID is the validating node's public key.
+	// NodeID is the validating node's master-derived 20-byte
+	// identifier. Populated from SigningPubKey via CalcNodeID, with
+	// the consensus router substituting the master key from the
+	// manifest cache before trust / quorum lookups.
 	NodeID NodeID
+
+	// SigningPubKey is the 33-byte compressed ephemeral signing key
+	// the validation was signed with — the bytes carried on the wire
+	// as sfSigningPubKey and consumed by VerifyValidation.
+	SigningPubKey SigningPubKey
 
 	// SignTime is when the validation was signed.
 	SignTime time.Time

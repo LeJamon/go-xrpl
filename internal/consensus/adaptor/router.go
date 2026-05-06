@@ -408,6 +408,7 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	}
 
 	proposal := ProposalFromMessage(proposeSet)
+	r.resolveMasterNodeID(&proposal.NodeID, proposal.SigningPubKey)
 	originPeer := uint64(msg.PeerID)
 
 	// Record duplicate-status + last-sighting BEFORE OnProposal.
@@ -447,7 +448,7 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	// updateSlotAndSquelch.
 	if !firstSeen && time.Since(lastSeen) < peermanagement.Idled {
 		seenPeers := r.adaptor.PeersThatHave(suppressionHash)
-		r.adaptor.UpdateRelaySlot(proposal.NodeID[:], originPeer, seenPeers)
+		r.adaptor.UpdateRelaySlot(proposal.SigningPubKey[:], originPeer, seenPeers)
 	}
 }
 
@@ -469,6 +470,7 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "validation-parse")
 		return
 	}
+	r.resolveMasterNodeID(&validation.NodeID, validation.SigningPubKey)
 
 	// Post-parse bounds: the validation struct must carry sane hash
 	// and signature sizes. Rippled drops and charges at PeerImp before
@@ -509,8 +511,35 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	// B3 haveMessage expansion at PeerImp.cpp:3049-3054.
 	if !firstSeen && time.Since(lastSeen) < peermanagement.Idled {
 		seenPeers := r.adaptor.PeersThatHave(suppressionHash)
-		r.adaptor.UpdateRelaySlot(validation.NodeID[:], originPeer, seenPeers)
+		r.adaptor.UpdateRelaySlot(validation.SigningPubKey[:], originPeer, seenPeers)
 	}
+}
+
+// resolveMasterNodeID looks the inbound signing pubkey up in the
+// manifest cache and, when a manifest binds it to a master pubkey,
+// rewrites *nid to calcNodeID(masterKey). Mirrors rippled's
+// RCLValidations.cpp:165-186 calcNodeID(getTrustedKey(signingKey) ??
+// signingKey): in the absence of a manifest mapping the parser's
+// initial calcNodeID(signingKey) value is preserved untouched, so
+// non-rotated validators still round-trip through the engine on the
+// signing-derived NodeID.
+//
+// Wiring: the manifest cache is installed on the router via
+// SetManifestCache before Run(). When the cache is nil (tests
+// constructing a bare router), this is a no-op and the parser default
+// stands.
+func (r *Router) resolveMasterNodeID(nid *consensus.NodeID, signing consensus.SigningPubKey) {
+	if r.manifests == nil {
+		return
+	}
+	master := r.manifests.GetMasterKey([33]byte(signing))
+	// GetMasterKey returns the input unchanged when no manifest has
+	// bound this signing key to a master — leave nid alone in that
+	// case so we don't redundantly rehash.
+	if master == [33]byte(signing) {
+		return
+	}
+	*nid = consensus.CalcNodeID(master)
 }
 
 // validateProposeBounds returns ("", true) when the decoded ProposeSet
@@ -556,8 +585,8 @@ func validateValidationBounds(v *consensus.Validation) (string, bool) {
 	if v.LedgerID == (consensus.LedgerID{}) {
 		return "ledger-hash-zero", false
 	}
-	if v.NodeID == (consensus.NodeID{}) {
-		return "node-id-zero", false
+	if v.SigningPubKey == (consensus.SigningPubKey{}) {
+		return "signing-pubkey-zero", false
 	}
 	if n := len(v.Signature); n < signatureMinLen || n > signatureMaxLen {
 		return "sig-size", false

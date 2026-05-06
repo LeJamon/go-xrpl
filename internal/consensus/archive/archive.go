@@ -414,7 +414,11 @@ func toRecord(v *consensus.Validation, initialSeq uint32) *relationaldb.Validati
 	rec := &relationaldb.ValidationRecord{
 		LedgerSeq:  relationaldb.LedgerIndex(v.LedgerSeq),
 		InitialSeq: relationaldb.LedgerIndex(initialSeq),
-		NodePubKey: append([]byte(nil), v.NodeID[:]...),
+		// Persist the 33-byte ephemeral signing pubkey: that is the
+		// public key whose signature is in v.Signature, and the form
+		// rippled stores for forensic queries. The 20-byte NodeID is
+		// derivable from this via calcNodeID when needed.
+		NodePubKey: append([]byte(nil), v.SigningPubKey[:]...),
 		SignTime:   v.SignTime,
 		SeenTime:   v.SeenTime,
 		// Flags carries the original wire sfFlags word (parser fills

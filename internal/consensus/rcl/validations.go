@@ -55,17 +55,6 @@ type ValidationTracker struct {
 	// Caller (the engine) advances minSeq as ledgers accept.
 	minSeq uint32
 
-	// resolver translates a validator's signing public key to its
-	// master public key via the manifest cache. Applied at Add() so
-	// every internal map is keyed by master — matching rippled's
-	// RCLValidations.cpp:165-186 which calls calcNodeID(masterKey ??
-	// signingKey) before handing off to Validations::add. When the
-	// signing key has no manifest mapping the resolver returns the
-	// input unchanged, so non-validator peers still round-trip
-	// correctly. Default is the identity function (tests that never
-	// wire a cache keep working).
-	resolver func(consensus.NodeID) consensus.NodeID
-
 	// callbacks
 	onFullyValidated func(ledgerID consensus.LedgerID, ledgerSeq uint32)
 
@@ -103,24 +92,7 @@ func NewValidationTracker(quorum int, freshness time.Duration) *ValidationTracke
 		quorum:      quorum,
 		freshness:   freshness,
 		fired:       make(map[consensus.LedgerID]struct{}),
-		resolver:    func(n consensus.NodeID) consensus.NodeID { return n },
 	}
-}
-
-// SetManifestResolver installs a function that translates a validator's
-// signing public key to its master public key. Applied at Add() before
-// the NodeID is used as a map key, so quorum / trusted-set / negUNL
-// lookups operate on master keys even when the validator has rotated
-// its ephemeral signing key. Pass nil to reset to the identity
-// function (no translation). Safe to call at any time.
-func (vt *ValidationTracker) SetManifestResolver(fn func(consensus.NodeID) consensus.NodeID) {
-	vt.mu.Lock()
-	defer vt.mu.Unlock()
-	if fn == nil {
-		vt.resolver = func(n consensus.NodeID) consensus.NodeID { return n }
-		return
-	}
-	vt.resolver = fn
 }
 
 // SetNow replaces the clock used by isCurrent for freshness checks.
@@ -353,12 +325,13 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 		return false
 	}
 
-	// Resolve ephemeral signing key to master key via the manifest
-	// resolver so every map below is keyed by master. A validator that
-	// has rotated its ephemeral key still counts as one participant in
-	// trusted / negUNL / quorum arithmetic. Mirrors rippled's
-	// RCLValidations.cpp:165-186 calcNodeID(masterKey ?? signingKey).
-	resolvedID := vt.resolver(validation.NodeID)
+	// validation.NodeID is already master-shaped on entry — the
+	// consensus router resolved the ephemeral signing pubkey through
+	// the manifest cache before calling OnValidation. We can use it
+	// directly as the map key, matching rippled's RCLValidations.cpp:
+	// 165-186 calcNodeID(masterKey ?? signingKey) (the resolution now
+	// happens at the wire seam, not here).
+	resolvedID := validation.NodeID
 
 	// Check if this is a newer validation from this node
 	existing, hasExisting := vt.byNode[resolvedID]

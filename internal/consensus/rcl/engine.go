@@ -146,13 +146,6 @@ type Engine struct {
 	roundCount     uint64
 	consensusCount uint64
 
-	// manifestResolver is set (once, at bootstrap) to the validator
-	// manifest cache's GetMasterKey function, so the ValidationTracker
-	// can translate ephemeral signing keys → master keys before
-	// quorum arithmetic. Nil means "no translation" (default identity
-	// function inside the tracker). See SetManifestResolver.
-	manifestResolver func(consensus.NodeID) consensus.NodeID
-
 	// archive, when non-nil, persists stale validations dropped by the
 	// tracker. Wired via SetArchive — optional, the engine functions
 	// identically when nil. Stored via an atomic pointer so the
@@ -242,20 +235,6 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 	return e
 }
 
-// SetManifestResolver installs the validator-manifest resolver used by
-// the ValidationTracker to translate ephemeral signing keys to master
-// keys. Safe to call before or after Start; if the tracker isn't yet
-// constructed, the resolver is staged on the engine and applied when
-// Start builds the tracker.
-func (e *Engine) SetManifestResolver(fn func(consensus.NodeID) consensus.NodeID) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.manifestResolver = fn
-	if e.validationTracker != nil {
-		e.validationTracker.SetManifestResolver(fn)
-	}
-}
-
 // SetArchive wires an on-disk validation archive into the engine. May
 // be called before or after Start. Pass nil to detach — the tracker's
 // onStale callback is cleared so the just-detached archive can be
@@ -319,9 +298,6 @@ func (e *Engine) Start(ctx context.Context) error {
 	// flips the ledger service's validated_ledger pointer.
 	e.validationTracker = NewValidationTracker(e.adaptor.GetQuorum(), 5*time.Minute)
 	e.validationTracker.SetTrusted(e.adaptor.GetTrustedValidators())
-	if e.manifestResolver != nil {
-		e.validationTracker.SetManifestResolver(e.manifestResolver)
-	}
 	if e.ledgerAncestry != nil {
 		e.validationTracker.SetLedgerAncestryProvider(e.ledgerAncestry)
 	}

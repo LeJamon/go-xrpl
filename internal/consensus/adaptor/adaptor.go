@@ -939,9 +939,14 @@ func (a *Adaptor) GetNegativeUNL() []consensus.NodeID {
 			// rest of the list.
 			continue
 		}
-		var id consensus.NodeID
-		copy(id[:], pubKey)
-		out = append(out, id)
+		// NegativeUNL entries store 33-byte master public keys; the
+		// in-memory NodeID they need to match against is the 20-byte
+		// calcNodeID(master) digest. Mirrors rippled's
+		// LedgerMaster.cpp:886,952 which compares against the
+		// calcNodeID-derived identifier in the trust map.
+		var master [33]byte
+		copy(master[:], pubKey)
+		out = append(out, consensus.CalcNodeID(master))
 	}
 	return out
 }

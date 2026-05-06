@@ -40,10 +40,10 @@ func buildSuppressionTestProposal() *consensus.Proposal {
 	for i := range prevLedger {
 		prevLedger[i] = byte(0x80 + i)
 	}
-	var nodeID consensus.NodeID
-	nodeID[0] = 0x02 // valid compressed secp256k1 prefix
-	for i := 1; i < len(nodeID); i++ {
-		nodeID[i] = byte(i)
+	var signingPub consensus.SigningPubKey
+	signingPub[0] = 0x02 // valid compressed secp256k1 prefix
+	for i := 1; i < len(signingPub); i++ {
+		signingPub[i] = byte(i)
 	}
 	sig := make([]byte, 70)
 	for i := range sig {
@@ -54,7 +54,8 @@ func buildSuppressionTestProposal() *consensus.Proposal {
 		TxSet:          txSet,
 		PreviousLedger: prevLedger,
 		CloseTime:      time.Unix(1_700_000_000, 0),
-		NodeID:         nodeID,
+		NodeID:         consensus.CalcNodeID([33]byte(signingPub)),
+		SigningPubKey:  signingPub,
 		Signature:      sig,
 	}
 }
@@ -97,7 +98,7 @@ func TestSuppression_ProposalHash_FieldsMatter(t *testing.T) {
 		{"TxSet", func(p *consensus.Proposal) { p.TxSet[0] ^= 0xFF }},
 		{"PreviousLedger", func(p *consensus.Proposal) { p.PreviousLedger[31] ^= 0xFF }},
 		{"CloseTime", func(p *consensus.Proposal) { p.CloseTime = p.CloseTime.Add(1 * time.Second) }},
-		{"NodeID", func(p *consensus.Proposal) { p.NodeID[32] ^= 0x01 }},
+		{"SigningPubKey", func(p *consensus.Proposal) { p.SigningPubKey[32] ^= 0x01 }},
 		{"Signature", func(p *consensus.Proposal) { p.Signature[0] ^= 0x01 }},
 	}
 

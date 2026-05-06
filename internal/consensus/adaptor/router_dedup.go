@@ -67,9 +67,12 @@ func hashProposalSuppression(p *consensus.Proposal) [32]byte {
 		closeTimeSec = uint32(ct)
 	}
 	buf = binary.BigEndian.AppendUint32(buf, closeTimeSec)
-	// addVL(publicKey) — length prefix + NodeID (33-byte compressed key).
-	buf = appendVLPrefix(buf, len(p.NodeID))
-	buf = append(buf, p.NodeID[:]...)
+	// addVL(publicKey) — length prefix + the 33-byte ephemeral
+	// signing pubkey. Rippled hashes the wire pubkey (signing key)
+	// here, NOT the master-derived NodeID. Using NodeID would break
+	// suppression-hash parity with rippled peers.
+	buf = appendVLPrefix(buf, len(p.SigningPubKey))
+	buf = append(buf, p.SigningPubKey[:]...)
 	// addVL(signature) — length prefix + raw signature bytes.
 	buf = appendVLPrefix(buf, len(p.Signature))
 	buf = append(buf, p.Signature...)

@@ -98,8 +98,9 @@ func mkVal(seq uint32, node byte) *consensus.Validation {
 	}
 	v.LedgerID[0] = byte(seq)
 	v.LedgerID[31] = node
-	v.NodeID[0] = 0x02
-	v.NodeID[32] = node
+	v.SigningPubKey[0] = 0x02
+	v.SigningPubKey[32] = node
+	v.NodeID = consensus.CalcNodeID([33]byte(v.SigningPubKey))
 	return v
 }
 

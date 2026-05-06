@@ -19,9 +19,14 @@ func ProposalFromMessage(msg *message.ProposeSet) *consensus.Proposal {
 	// CloseTime: XRPL epoch seconds → time.Time
 	p.CloseTime = xrplEpochToTime(msg.CloseTime)
 
-	// NodeID from public key (33 bytes compressed)
+	// SigningPubKey carries the ephemeral 33-byte compressed key the
+	// proposal was signed with (the wire's TMProposeSet.nodepubkey).
+	// NodeID is derived from it via calcNodeID; the consensus router
+	// substitutes the master-derived NodeID via the manifest cache
+	// when a mapping exists (see Router.handleProposal).
 	if len(msg.NodePubKey) == 33 {
-		copy(p.NodeID[:], msg.NodePubKey)
+		copy(p.SigningPubKey[:], msg.NodePubKey)
+		p.NodeID = consensus.CalcNodeID(p.SigningPubKey)
 	}
 
 	// TxSet hash
@@ -41,11 +46,13 @@ func ProposalFromMessage(msg *message.ProposeSet) *consensus.Proposal {
 }
 
 // ProposalToMessage converts a consensus.Proposal to a ProposeSet message.
+// The wire's NodePubKey field carries the 33-byte ephemeral signing key
+// (sfSigningPubKey semantics), not the 20-byte master-derived NodeID.
 func ProposalToMessage(p *consensus.Proposal) *message.ProposeSet {
 	return &message.ProposeSet{
 		ProposeSeq:     p.Position,
 		CurrentTxHash:  p.TxSet[:],
-		NodePubKey:     p.NodeID[:],
+		NodePubKey:     p.SigningPubKey[:],
 		CloseTime:      timeToXrplEpoch(p.CloseTime),
 		Signature:      p.Signature,
 		PreviousLedger: p.PreviousLedger[:],
