@@ -188,7 +188,9 @@ func TestAccountSetTransferRate(t *testing.T) {
 }
 
 // TestAccountSetTickSize tests TickSize validation.
-// Reference: rippled Quality.h minTickSize=3, maxTickSize=15
+// Reference: rippled Quality.h minTickSize=3, maxTickSize=16 and SetAccount.cpp:149-155
+// rippled treats TickSize == maxTickSize (16) as a request to clear the field, so it
+// passes preflight validation. Only values outside the [3, 16] band (apart from 0) fail.
 func TestAccountSetTickSize(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -213,8 +215,13 @@ func TestAccountSetTickSize(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name:        "tick size 15 (max)",
+			name:        "tick size 15",
 			tickSize:    15,
+			expectError: false,
+		},
+		{
+			name:        "tick size 16 (max - treated as clear)",
+			tickSize:    16,
 			expectError: false,
 		},
 		// Invalid tick sizes
@@ -222,19 +229,19 @@ func TestAccountSetTickSize(t *testing.T) {
 			name:        "tick size 1 - temBAD_TICK_SIZE",
 			tickSize:    1,
 			expectError: true,
-			errorMsg:    "temBAD_TICK_SIZE: tick size must be 0 or 3-15",
+			errorMsg:    "temBAD_TICK_SIZE: tick size must be 0 or 3-16",
 		},
 		{
 			name:        "tick size 2 - temBAD_TICK_SIZE",
 			tickSize:    2,
 			expectError: true,
-			errorMsg:    "temBAD_TICK_SIZE: tick size must be 0 or 3-15",
+			errorMsg:    "temBAD_TICK_SIZE: tick size must be 0 or 3-16",
 		},
 		{
-			name:        "tick size 16 - temBAD_TICK_SIZE",
-			tickSize:    16,
+			name:        "tick size 17 - temBAD_TICK_SIZE",
+			tickSize:    17,
 			expectError: true,
-			errorMsg:    "temBAD_TICK_SIZE: tick size must be 0 or 3-15",
+			errorMsg:    "temBAD_TICK_SIZE: tick size must be 0 or 3-16",
 		},
 	}
 

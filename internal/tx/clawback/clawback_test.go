@@ -3,12 +3,18 @@ package clawback
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
-
 	"github.com/LeJamon/goXRPLd/amendment"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const testMPTIssuanceID = "000000000000000000000001000000000000000000000001"
+
+func newTestMPTAmount(value int64, issuer string) state.Amount {
+	return state.NewMPTAmountWithIssuanceID(value, issuer, testMPTIssuanceID)
+}
 
 // Clawback Validation Tests
 // Based on rippled Clawback_test.cpp
@@ -33,7 +39,7 @@ func TestClawbackValidation(t *testing.T) {
 			name: "valid - MPToken clawback with Holder",
 			tx: &Clawback{
 				BaseTx: *tx.NewBaseTx(tx.TypeClawback, "rIssuer"),
-				Amount: tx.NewIssuedAmountFromFloat64(100.0, "MPT", "rIssuer"),
+				Amount: newTestMPTAmount(100, "rIssuer"),
 				Holder: "rHolder",
 			},
 			wantErr: false,
@@ -89,11 +95,11 @@ func TestClawbackValidation(t *testing.T) {
 			name: "invalid - MPToken clawback - Holder same as issuer",
 			tx: &Clawback{
 				BaseTx: *tx.NewBaseTx(tx.TypeClawback, "rIssuer"),
-				Amount: tx.NewIssuedAmountFromFloat64(100.0, "MPT", "rIssuer"),
+				Amount: newTestMPTAmount(100, "rIssuer"),
 				Holder: "rIssuer", // Same as Account
 			},
 			wantErr: true,
-			errMsg:  "issuer",
+			errMsg:  "Holder cannot be the same as issuer",
 		},
 		{
 			name: "invalid - universal flags set",
@@ -200,7 +206,7 @@ func TestClawbackRequiredAmendments(t *testing.T) {
 	})
 
 	t.Run("MPToken clawback requires Clawback and MPTokensV1 amendments", func(t *testing.T) {
-		clawbackTx := NewMPTokenClawback("rIssuer", "rHolder", "000000000000000000000001", tx.NewIssuedAmountFromFloat64(100.0, "MPT", "rIssuer"))
+		clawbackTx := NewMPTokenClawback("rIssuer", "rHolder", testMPTIssuanceID, newTestMPTAmount(100, "rIssuer"))
 		amendments := clawbackTx.RequiredAmendments()
 		assert.Contains(t, amendments, amendment.FeatureClawback)
 		assert.Contains(t, amendments, amendment.FeatureMPTokensV1)
