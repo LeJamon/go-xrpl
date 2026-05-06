@@ -296,11 +296,9 @@ func New(cfg Config) *Adaptor {
 		amendmentVoteIDs = append(amendmentVoteIDs, f.ID)
 	}
 
-	// Initialize the per-validator amendment-vote cache and seed it
-	// with the current trusted set so RecordVotes accepts validations
-	// from any UNL member from round one. UNL changes after boot
-	// must call trustedVotes.TrustChanged again to keep the cache in
-	// sync — currently the trusted set is static post-construction.
+	// Seed the amendment-vote cache with the initial UNL so
+	// RecordVotes accepts validations from round one. Re-call
+	// TrustChanged whenever the trusted set mutates at runtime.
 	trustedVotes := NewTrustedVotes()
 	trustedVotes.TrustChanged(cfg.Validators)
 
@@ -615,10 +613,10 @@ func (a *Adaptor) GetPendingTxs() [][]byte {
 // :358 and the quorum gate at :361 — both producers run only when
 // the negUNL-filtered validation set meets the current quorum.
 //
-// The producers themselves live in internal/consensus/feevote
-// (#369) and internal/consensus/amendmentvote (#370); this method
-// is the boundary that resolves prevLedger state, the local
-// stance, and parentValidations into the producers' input shape.
+// The producers live in internal/consensus/feevote and
+// internal/consensus/amendmentvote; this method resolves
+// prevLedger state, the local stance, and parentValidations into
+// the producers' input shape.
 //
 // Returns nil when the ledger service is missing, the parent
 // ledger isn't readable, or the negUNL-filtered validation set

@@ -18,9 +18,6 @@ import (
 // majority on the ledger before it's enabled. Mainnet config:
 // 14 days. Mirrors rippled's default at AmendmentTable.cpp via
 // SET_AMENDMENT_MAJORITY_TIME (Application.cpp:1216-1220).
-//
-// Constant for now — operators don't currently have a knob to
-// override it; if that changes the value moves into Config.
 const amendmentMajorityTimeout = 14 * 24 * time.Hour
 
 // readAmendmentsSLE pulls the parent ledger's Amendments SLE
@@ -59,16 +56,11 @@ func (a *Adaptor) readAmendmentsSLE(prev *ledger.Ledger) (
 	return enabled, majorities, ok
 }
 
-// parseAmendmentsSLEBytes is the pure-data half of readAmendmentsSLE
-// — extracted so the parse-failure branch is unit-testable without
-// having to inject corrupt bytes through a *ledger.Ledger (which is
-// immutable on the closed-ledger path used by the producer).
-//
-// Returns ok=false ONLY on parse failure of non-empty data. An
-// empty input (len(data)==0, the pre-bootstrap genesis state) is a
-// successful read of empty state and returns ok=true with empty
-// maps — matching the rippled ledger walk that finds no SLE at the
-// keylet.Amendments() index.
+// parseAmendmentsSLEBytes returns ok=false ONLY on parse failure
+// of non-empty data. An empty input (len(data)==0, the
+// pre-bootstrap genesis state) is a successful read of empty state
+// and returns ok=true with empty maps — matching the rippled
+// ledger walk that finds no SLE at the keylet.Amendments() index.
 func parseAmendmentsSLEBytes(data []byte) (
 	enabled map[[32]byte]bool,
 	majorities map[[32]byte]time.Time,
