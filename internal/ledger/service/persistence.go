@@ -24,6 +24,19 @@ import (
 // Treating persistence failure as fatal would diverge from rippled
 // and risk forks on transient storage issues.
 //
+// Both backends are best-effort at the rippled-equivalent boundary:
+//
+//   - NodeStore failures are logged and swallowed inside
+//     persistToNodeStore, mirroring rippled's
+//     NodeStore::Database::store / ::sync void returns
+//     (rippled/src/xrpld/nodestore/detail/DatabaseNodeImp.h:109-124).
+//     A nodestore failure must NOT short-circuit the relational
+//     persist — rippled's saveValidatedLedger calls store(...) and
+//     unconditionally proceeds to the SQL writes
+//     (rippled/src/xrpld/app/rdb/backend/detail/Node.cpp:228-229).
+//   - Relational failures bubble up so the call site can log them,
+//     but the call site discards the error (chain advance continues).
+//
 // Atomicity boundaries:
 //
 //   - NodeStore is the durable ledger store; relational DB is a
@@ -50,9 +63,7 @@ func (s *Service) persistLedger(ctx context.Context, l *ledger.Ledger) error {
 	seq := l.Sequence()
 
 	if s.nodeStore != nil {
-		if err := s.persistToNodeStore(ctx, l, seq); err != nil {
-			return err
-		}
+		s.persistToNodeStore(ctx, l, seq)
 	}
 
 	if s.relationalDB != nil {
@@ -64,13 +75,18 @@ func (s *Service) persistLedger(ctx context.Context, l *ledger.Ledger) error {
 	return nil
 }
 
-// persistToNodeStore writes ledger state to the nodestore
-func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq uint32) error {
-	// Collect nodes to store in batch
+// persistToNodeStore writes ledger state to the nodestore.
+//
+// Mirrors rippled's NodeStore::Database::store and ::sync, which
+// return void: backend errors are logged and swallowed, never
+// propagated to the chain-advance code
+// (rippled/src/xrpld/nodestore/detail/DatabaseNodeImp.h:109-124).
+// Returning errors here would diverge from rippled and risk forks if
+// any caller forgot to log-and-discard.
+func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq uint32) {
 	var nodes []*nodestore.Node
 
-	// Persist state map entries
-	err := l.ForEach(func(key [32]byte, data []byte) bool {
+	iterErr := l.ForEach(func(key [32]byte, data []byte) bool {
 		node := &nodestore.Node{
 			Type:      nodestore.NodeAccount,
 			Hash:      nodestore.Hash256(key),
@@ -80,18 +96,20 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 		nodes = append(nodes, node)
 		return true
 	})
-	if err != nil {
-		return err
+	if iterErr != nil {
+		s.logger.Error("nodestore persist: state map iteration failed; ledger state not written",
+			"seq", seq, "err", iterErr)
+		return
 	}
 
-	// Store nodes in batch for efficiency
 	if len(nodes) > 0 {
 		if err := s.nodeStore.StoreBatch(ctx, nodes); err != nil {
-			return err
+			s.logger.Error("nodestore persist: StoreBatch failed; chain advance continues",
+				"seq", seq, "nodes", len(nodes), "err", err)
+			return
 		}
 	}
 
-	// Persist ledger header
 	headerData := l.SerializeHeader()
 	headerNode := &nodestore.Node{
 		Type:      nodestore.NodeLedger,
@@ -100,13 +118,18 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 		LedgerSeq: seq,
 	}
 	if err := s.nodeStore.Store(ctx, headerNode); err != nil {
-		return err
+		s.logger.Error("nodestore persist: header Store failed; chain advance continues",
+			"seq", seq, "err", err)
+		return
 	}
 
 	// Single fsync once both state nodes and header are durable.
 	// Sync is uninterruptible at the backend; ctx cancellation only
 	// unblocks the caller (see DatabaseImpl.Sync).
-	return s.nodeStore.Sync(ctx)
+	if err := s.nodeStore.Sync(ctx); err != nil {
+		s.logger.Error("nodestore persist: Sync failed; chain advance continues",
+			"seq", seq, "err", err)
+	}
 }
 
 // persistToRelationalDB writes ledger metadata and transactions to the
