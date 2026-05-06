@@ -1339,6 +1339,17 @@ func (e *TestEnv) recordTxFeeLevel(txn tx.Transaction) {
 
 	feeLevel := txq.ToFeeLevel(feePaid, baseFee)
 	e.closingFeeLevels = append(e.closingFeeLevels, feeLevel)
+
+	// Inner batch txns are counted as separate entries in the closed ledger's
+	// tx map (matching rippled), so they each contribute a fee level entry to
+	// keep closingFeeLevels aligned with closingTxTotal. Inner txns inherit
+	// the outer batch's effective fee level — the outer batch fee covers all
+	// inner txns per Batch.cpp::CalculateBaseFee.
+	if counter, ok := txn.(innerTxCounter); ok {
+		for i := uint32(0); i < uint32(counter.InnerTxCount()); i++ {
+			e.closingFeeLevels = append(e.closingFeeLevels, feeLevel)
+		}
+	}
 }
 
 func (c *testTxQAcceptContext) GetParentHash() [32]byte {

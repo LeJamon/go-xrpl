@@ -19,13 +19,15 @@ type AMMCreateBuilder struct {
 }
 
 // AMMCreate creates a new AMMCreateBuilder.
+// The default fee matches rippled's AMMCreate::calculateBaseFee — one owner
+// reserve increment (50,000,000 drops).
 func AMMCreate(account *jtx.Account, amount1, amount2 tx.Amount) *AMMCreateBuilder {
 	return &AMMCreateBuilder{
 		account:    account,
 		amount1:    amount1,
 		amount2:    amount2,
 		tradingFee: 0,
-		fee:        "10",
+		fee:        "50000000",
 	}
 }
 

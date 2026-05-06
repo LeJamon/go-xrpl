@@ -1221,7 +1221,7 @@ func TestAMMExtended_Multisign_WithDisabledMaster(t *testing.T) {
 	// Multisigned AMMDeposit (proportional, 1_000_000 LP tokens)
 	t.Run("Deposit", func(t *testing.T) {
 		depositTx := amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.SubmitMultiSigned(depositTx, []*jtx.Account{becky, bogie})
@@ -1232,7 +1232,7 @@ func TestAMMExtended_Multisign_WithDisabledMaster(t *testing.T) {
 	// Multisigned AMMWithdraw
 	t.Run("Withdraw", func(t *testing.T) {
 		withdrawTx := amm.AMMWithdraw(env.Alice, amm.XRP(), env.USD).
-			LPTokenIn(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+			LPTokenIn(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.SubmitMultiSigned(withdrawTx, []*jtx.Account{becky, bogie})
@@ -1251,7 +1251,7 @@ func TestAMMExtended_Multisign_WithDisabledMaster(t *testing.T) {
 	// Multisigned AMMBid
 	t.Run("Bid", func(t *testing.T) {
 		bidTx := amm.AMMBid(env.Alice, amm.XRP(), env.USD).
-			BidMin(amm.LPTokenAmount(amm.XRP(), env.USD, 100)).
+			BidMin(amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)).
 			Build()
 		result := env.SubmitMultiSigned(bidTx, []*jtx.Account{becky, bogie})
 		jtx.RequireTxSuccess(t, result)

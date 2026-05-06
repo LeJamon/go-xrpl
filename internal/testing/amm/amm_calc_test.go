@@ -322,7 +322,7 @@ func TestAMMCalc_DepositByLPTokens(t *testing.T) {
 		env.Close()
 
 		// Carol deposits specifying LP token amount
-		lpAmt := amm.LPTokenAmount(amm.XRP(), env.USD, 1000)
+		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000)
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
 			LPTokenOut(lpAmt).
 			LPToken().
@@ -345,7 +345,7 @@ func TestAMMCalc_DepositByLPTokens(t *testing.T) {
 		env.Close()
 
 		// Carol deposits XRP for specific LP tokens
-		lpAmt := amm.LPTokenAmount(amm.XRP(), env.USD, 500)
+		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 500)
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
 			Amount(amm.XRPAmount(5000)). // maximum XRP to spend
 			LPTokenOut(lpAmt).
@@ -372,7 +372,7 @@ func TestAMMCalc_WithdrawByLPTokens(t *testing.T) {
 		env.Close()
 
 		// Withdraw by burning LP tokens (proportional withdrawal)
-		lpAmt := amm.LPTokenAmount(amm.XRP(), env.USD, 1000)
+		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000)
 		withdrawTx := amm.AMMWithdraw(env.Alice, amm.XRP(), env.USD).
 			LPTokenIn(lpAmt).
 			LPToken().
@@ -395,7 +395,7 @@ func TestAMMCalc_WithdrawByLPTokens(t *testing.T) {
 		env.Close()
 
 		// Withdraw USD by burning specific LP tokens
-		lpAmt := amm.LPTokenAmount(amm.XRP(), env.USD, 500)
+		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 500)
 		withdrawTx := amm.AMMWithdraw(env.Alice, amm.XRP(), env.USD).
 			Amount(amm.IOUAmount(env.GW, "USD", 5000)). // maximum USD to receive
 			LPTokenIn(lpAmt).

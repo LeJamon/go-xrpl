@@ -274,7 +274,7 @@ func TestInvalidWithdraw(t *testing.T) {
 
 		bad := jtx.NewAccount("bad")
 		withdrawTx := amm.AMMWithdraw(bad, amm.XRP(), env.USD).
-			LPTokenIn(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+			LPTokenIn(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(jtx.WithSeq(withdrawTx, 1))
@@ -414,7 +414,7 @@ func TestWithdraw(t *testing.T) {
 
 		// First deposit as Carol to have tokens to withdraw
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.IOUAmount(env.GW, "LPT", 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
@@ -427,7 +427,7 @@ func TestWithdraw(t *testing.T) {
 
 		// Withdraw all Carol's tokens
 		withdrawTx := amm.AMMWithdraw(env.Carol, amm.XRP(), env.USD).
-			LPTokenIn(amm.IOUAmount(env.GW, "LPT", 1000000)).
+			LPTokenIn(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result = env.Submit(withdrawTx)
@@ -612,7 +612,7 @@ func TestWithdraw(t *testing.T) {
 
 		// Deposit 10% of pool
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.IOUAmount(env.GW, "LPT", 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)

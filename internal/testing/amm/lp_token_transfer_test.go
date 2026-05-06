@@ -47,7 +47,7 @@ func setupLPTokenEnv(t *testing.T) *amm.AMMTestEnv {
 	// This is a proportional deposit — the pool determines amounts automatically.
 	// Reference: rippled deposit(carol, 10) uses LPToken mode
 	depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-		LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+		LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 		LPToken().
 		Build()
 	result = env.Submit(depositTx)
@@ -58,7 +58,7 @@ func setupLPTokenEnv(t *testing.T) *amm.AMMTestEnv {
 
 	// Bob deposits using tfLPToken mode to get 1,000,000 LP tokens.
 	depositTx2 := amm.AMMDeposit(env.Bob, amm.XRP(), env.USD).
-		LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+		LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 		LPToken().
 		Build()
 	result = env.Submit(depositTx2)
@@ -77,7 +77,7 @@ func TestLPTokenTransfer_DirectStep(t *testing.T) {
 		env := setupLPTokenEnv(t)
 
 		// Bob sends LP tokens to Carol (both are LPs)
-		lpAmt := amm.LPTokenAmount(amm.XRP(), env.USD, 100)
+		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)
 		payTx := payment.PayIssued(env.Bob, env.Carol, lpAmt).Build()
 		result := env.Submit(payTx)
 		if result.Success {
@@ -97,7 +97,7 @@ func TestLPTokenTransfer_DirectStep(t *testing.T) {
 		env.Close()
 
 		// Carol tries to send LP tokens to Bob
-		lpAmt := amm.LPTokenAmount(amm.XRP(), env.USD, 100)
+		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)
 		payTx := payment.PayIssued(env.Carol, env.Bob, lpAmt).Build()
 		result := env.Submit(payTx)
 		if !result.Success {
@@ -116,7 +116,7 @@ func TestLPTokenTransfer_DirectStep(t *testing.T) {
 		env.Close()
 
 		// Bob sends LP tokens to frozen Carol - should succeed
-		lpAmt := amm.LPTokenAmount(amm.XRP(), env.USD, 100)
+		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)
 		payTx := payment.PayIssued(env.Bob, env.Carol, lpAmt).Build()
 		result := env.Submit(payTx)
 		if result.Success {
@@ -132,7 +132,7 @@ func TestLPTokenTransfer_DirectStep(t *testing.T) {
 		// direct payments. We verify this by attempting a send.
 		env := setupLPTokenEnv(t)
 
-		lpAmt := amm.LPTokenAmount(amm.XRP(), env.USD, 100)
+		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)
 		// Attempt to pay to a non-existent account (stand-in for AMM pseudo-account).
 		// In practice, the AMM account rejects direct payments.
 		nonExistent := jtx.NewAccount("amm_pseudo")
@@ -155,7 +155,7 @@ func TestLPTokenTransfer_BookStep(t *testing.T) {
 		env := setupLPTokenEnv(t)
 
 		// Carol creates an offer selling LP tokens for XRP
-		lpAmt := amm.LPTokenAmount(amm.XRP(), env.USD, 500)
+		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 500)
 		offerTx := offerbuild.OfferCreate(env.Carol, amm.XRPAmount(500), lpAmt).Build()
 		result := env.Submit(offerTx)
 		if !result.Success {
@@ -181,7 +181,7 @@ func TestLPTokenTransfer_BookStep(t *testing.T) {
 		env := setupLPTokenEnv(t)
 
 		// Bob creates an offer to sell LP tokens for XRP
-		lpAmt := amm.LPTokenAmount(amm.XRP(), env.USD, 500)
+		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 500)
 		offerTx := offerbuild.OfferCreate(env.Bob, amm.XRPAmount(500), lpAmt).Build()
 		result := env.Submit(offerTx)
 		if !result.Success {
@@ -209,7 +209,7 @@ func TestLPTokenTransfer_OfferCreation(t *testing.T) {
 		env.Close()
 
 		// Carol tries to create offer selling LP tokens
-		lpAmt := amm.LPTokenAmount(amm.XRP(), env.USD, 500)
+		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 500)
 		offerTx := offerbuild.OfferCreate(env.Carol, amm.XRPAmount(500), lpAmt).Build()
 		result := env.Submit(offerTx)
 		if !result.Success {
@@ -228,7 +228,7 @@ func TestLPTokenTransfer_OfferCreation(t *testing.T) {
 		env.Close()
 
 		// Carol tries to create offer buying LP tokens (pays XRP, gets LP tokens)
-		lpAmt := amm.LPTokenAmount(amm.XRP(), env.USD, 500)
+		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 500)
 		offerTx := offerbuild.OfferCreate(env.Carol, lpAmt, amm.XRPAmount(500)).Build()
 		result := env.Submit(offerTx)
 		t.Logf("Frozen Carol buy LP offer: success=%v code=%s", result.Success, result.Code)
@@ -243,7 +243,7 @@ func TestLPTokenTransfer_OfferCrossing(t *testing.T) {
 		// underlying currency is frozen.
 		env := setupLPTokenEnv(t)
 
-		lpAmt := amm.LPTokenAmount(amm.XRP(), env.USD, 200)
+		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 200)
 
 		// Bob creates an offer selling LP tokens for XRP
 		sellTx := offerbuild.OfferCreate(env.Bob, amm.XRPAmount(200), lpAmt).Build()
@@ -277,7 +277,7 @@ func TestLPTokenTransfer_GlobalFreeze(t *testing.T) {
 		env.Close()
 
 		// Bob tries to send LP tokens to Carol
-		lpAmt := amm.LPTokenAmount(amm.XRP(), env.USD, 100)
+		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)
 		payTx := payment.PayIssued(env.Bob, env.Carol, lpAmt).Build()
 		result := env.Submit(payTx)
 		if !result.Success {
@@ -327,7 +327,7 @@ func TestLPTokenTransfer_MultipleLPs(t *testing.T) {
 
 		// Carol deposits using LPToken mode
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 1000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000)).
 			LPToken().
 			Build()
 		result = env.Submit(depositTx)
@@ -363,7 +363,7 @@ func TestLPTokenTransfer_MultipleLPs(t *testing.T) {
 
 		// Carol deposits using LPToken mode
 		depositTx := amm.AMMDeposit(env.Carol, env.EUR, env.USD).
-			LPTokenOut(amm.LPTokenAmount(env.EUR, env.USD, 100)).
+			LPTokenOut(amm.LPTokenAmount(env, env.EUR, env.USD, 100)).
 			LPToken().
 			Build()
 		result = env.Submit(depositTx)
@@ -419,7 +419,7 @@ func TestLPTokenTransfer_WithdrawAllAsLastLP(t *testing.T) {
 
 		// Carol deposits using LPToken mode
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 100000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 100000)).
 			LPToken().
 			Build()
 		result = env.Submit(depositTx)
@@ -473,8 +473,8 @@ func TestAMMTokens_LPTokenXRPOfferCrossing(t *testing.T) {
 
 			// Compute price: ammAssetOut(XRP(10B drops), token1(10M), token1(5M), 0)
 			xrpBalance := tx.NewXRPAmount(10_000_000_000) // 10,000 XRP in drops
-			lpTotal := amm.LPTokenAmount(xrpAsset, usdAsset, 10_000_000)
-			lpHalf := amm.LPTokenAmount(xrpAsset, usdAsset, 5_000_000)
+			lpTotal := amm.LPTokenAmount(env, xrpAsset, usdAsset, 10_000_000)
+			lpHalf := amm.LPTokenAmount(env, xrpAsset, usdAsset, 5_000_000)
 			priceXRP := amm.AMMAssetOut(xrpBalance, lpTotal, lpHalf, 0)
 			t.Logf("priceXRP for 5M LP tokens: %s", priceXRP.Value())
 
@@ -513,7 +513,7 @@ func TestAMMTokens_LPTokenXRPOfferCrossing(t *testing.T) {
 			}
 
 			// Carol bids with bidMin=100 LP tokens
-			bidMinAmt := amm.LPTokenAmount(xrpAsset, usdAsset, 100)
+			bidMinAmt := amm.LPTokenAmount(env, xrpAsset, usdAsset, 100)
 			bidTx := amm.AMMBid(env.Carol, xrpAsset, usdAsset).BidMin(bidMinAmt).Build()
 			result = env.Submit(bidTx)
 			if !result.Success {
@@ -556,8 +556,8 @@ func TestAMMTokens_LPTokenXRPOfferCrossing(t *testing.T) {
 			actualCarolXRP2 := env.TestEnv.Balance(env.Carol)
 			// expectedCarolXRP2 is setup-adjusted: 30B - 7.5B + ammAssetOut - 6*baseFee
 			// We compute the expected using ammAssetOut:
-			lpAfterBid := amm.LPTokenAmount(xrpAsset, usdAsset, 9_999_900)
-			carolLPAfterBid := amm.LPTokenAmount(xrpAsset, usdAsset, 4_999_900)
+			lpAfterBid := amm.LPTokenAmount(env, xrpAsset, usdAsset, 9_999_900)
+			carolLPAfterBid := amm.LPTokenAmount(env, xrpAsset, usdAsset, 4_999_900)
 			priceXRP2 := amm.AMMAssetOut(xrpBalance, lpAfterBid, carolLPAfterBid, 0)
 			t.Logf("priceXRP2 (carol withdraw): %s", priceXRP2.Value())
 
@@ -597,7 +597,7 @@ func TestAMMTokens_TwoAMMLPTokenOfferCrossing(t *testing.T) {
 
 			// Carol deposits 1,000,000 LP tokens into AMM1 (XRP/USD)
 			depositTx := amm.AMMDeposit(env.Carol, xrpAsset, usdAsset).
-				LPTokenOut(amm.LPTokenAmount(xrpAsset, usdAsset, 1_000_000)).
+				LPTokenOut(amm.LPTokenAmount(env, xrpAsset, usdAsset, 1_000_000)).
 				LPToken().
 				Build()
 			result := env.Submit(depositTx)
@@ -626,7 +626,7 @@ func TestAMMTokens_TwoAMMLPTokenOfferCrossing(t *testing.T) {
 
 			// Carol deposits 1,000,000 LP tokens into AMM2 (XRP/EUR)
 			depositTx2 := amm.AMMDeposit(env.Carol, xrpAsset, eurAsset).
-				LPTokenOut(amm.LPTokenAmount(xrpAsset, eurAsset, 1_000_000)).
+				LPTokenOut(amm.LPTokenAmount(env, xrpAsset, eurAsset, 1_000_000)).
 				LPToken().
 				Build()
 			result = env.Submit(depositTx2)
@@ -636,8 +636,8 @@ func TestAMMTokens_TwoAMMLPTokenOfferCrossing(t *testing.T) {
 			env.Close()
 
 			// token1 = AMM1 LP tokens (XRP/USD), token2 = AMM2 LP tokens (XRP/EUR)
-			token1_100 := amm.LPTokenAmount(xrpAsset, usdAsset, 100)
-			token2_100 := amm.LPTokenAmount(xrpAsset, eurAsset, 100)
+			token1_100 := amm.LPTokenAmount(env, xrpAsset, usdAsset, 100)
+			token2_100 := amm.LPTokenAmount(env, xrpAsset, eurAsset, 100)
 
 			// Alice: passive offer — alice receives 100 token1, pays 100 token2
 			aliceOfferTx := offerbuild.OfferCreate(env.Alice, token1_100, token2_100).Passive().Build()
@@ -714,7 +714,7 @@ func TestAMMTokens_DirectLPTokenPayment(t *testing.T) {
 
 	// Carol deposits 1,000,000 LP tokens worth of assets
 	depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-		LPTokenOut(amm.LPTokenAmount(amm.XRP(), env.USD, 1000000)).
+		LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 		LPToken().
 		Build()
 	result = env.Submit(depositTx)

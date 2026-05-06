@@ -1659,10 +1659,13 @@ func TestEscrow_MetaAndOwnership(t *testing.T) {
 		bc := keylet.Escrow(bruce.ID, bseq)
 		require.True(t, env.LedgerEntryExists(bc))
 
-		// Alice's dir has 1 (ab), Bruce's dir has 2 (ab + bc), Carol's dir has 1 (bc)
+		// Only the source's OwnerCount is incremented for an escrow; the
+		// destination's directory tracks the entry but does not bump its
+		// OwnerCount. Reference: rippled Escrow.cpp:561-602 — adjustOwnerCount
+		// is invoked for sle (source) only.
 		require.Equal(t, uint32(1), env.OwnerCount(alice))
-		require.Equal(t, uint32(2), env.OwnerCount(bruce))
-		require.Equal(t, uint32(1), env.OwnerCount(carol))
+		require.Equal(t, uint32(1), env.OwnerCount(bruce))
+		require.Equal(t, uint32(0), env.OwnerCount(carol))
 
 		env.Close()
 
@@ -1676,7 +1679,7 @@ func TestEscrow_MetaAndOwnership(t *testing.T) {
 
 		require.Equal(t, uint32(0), env.OwnerCount(alice))
 		require.Equal(t, uint32(1), env.OwnerCount(bruce))
-		require.Equal(t, uint32(1), env.OwnerCount(carol))
+		require.Equal(t, uint32(0), env.OwnerCount(carol))
 
 		env.Close()
 

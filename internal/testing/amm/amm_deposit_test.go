@@ -257,7 +257,7 @@ func TestDeposit(t *testing.T) {
 
 		// Deposit proportional amount (1M LP tokens = 10% of 10M pool)
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.IOUAmount(env.GW, "LPT", 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)

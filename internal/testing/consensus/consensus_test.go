@@ -32,10 +32,12 @@ func TestClusterNodesHaveSameGenesis(t *testing.T) {
 	cluster := NewTestCluster(t, 3)
 	defer cluster.Stop()
 
-	// All nodes should start with the same LCL (sequence 2)
+	// In consensus mode, nodes stay at genesis (seq 1) until they adopt a
+	// peer's closed ledger. All nodes should report the same starting LCL.
+	// Reference: ledger/service.Service.Start consensus-mode branch (Standalone=false).
 	for i, node := range cluster.Nodes {
 		seq := node.Service.GetClosedLedgerIndex()
-		assert.Equal(t, uint32(2), seq, "node %d should start at LCL 2", i)
+		assert.Equal(t, uint32(1), seq, "node %d should start at genesis LCL 1", i)
 	}
 }
 

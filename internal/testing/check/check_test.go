@@ -320,7 +320,7 @@ func TestCheck_CreateInvalid(t *testing.T) {
 	// Bad fee
 	t.Run("BadFee", func(t *testing.T) {
 		result := env.Submit(check.CheckCreate(alice, bob, USD(50)).Fee(0).Build())
-		require.Equal(t, "temBAD_FEE", result.Code)
+		require.Equal(t, "telINSUF_FEE_P", result.Code)
 		env.Close()
 	})
 
@@ -1690,7 +1690,7 @@ func TestCheck_CancelInvalid(t *testing.T) {
 	t.Run("BadFee", func(t *testing.T) {
 		fakeChkID := check.GetCheckID(alice, env.Seq(alice))
 		result := env.Submit(check.CheckCancel(bob, fakeChkID).Fee(0).Build())
-		require.Equal(t, "temBAD_FEE", result.Code)
+		require.Equal(t, "telINSUF_FEE_P", result.Code)
 		env.Close()
 	})
 
