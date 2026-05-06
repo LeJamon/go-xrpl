@@ -13,21 +13,21 @@
 //     already enabled, classify against three signals:
 //
 //     - hasValMajority — did votes ≥ threshold (lax) or > threshold
-//       (strict, post-fixAmendmentMajorityCalc)? With exactly one
-//       trusted validator, both modes degrade to ≥.
+//     (strict, post-fixAmendmentMajorityCalc)? With exactly one
+//     trusted validator, both modes degrade to ≥.
 //     - hasLedgerMajority — is the amendment recorded in the
-//       parent ledger's majority list (the sfMajorities SLE)?
+//     parent ledger's majority list (the sfMajorities SLE)?
 //     - vote — is this server voting yes locally (Stance == Up)?
 //
 //  3. Emit one of three actions, mirroring AmendmentTable.cpp:902-924:
 //
 //     - tfGotMajority — validators say yes, ledger doesn't yet
-//       record majority, AND we're voting yes locally.
+//     record majority, AND we're voting yes locally.
 //     - tfLostMajority — ledger records majority but validators
-//       fell off (regardless of local stance).
+//     fell off (regardless of local stance).
 //     - 0 (enable) — ledger records majority, the timer has
-//       expired (majorityTime + majorityTimeout ≤ closeTime), AND
-//       we're voting yes locally.
+//     expired (majorityTime + majorityTimeout ≤ closeTime), AND
+//     we're voting yes locally.
 //
 //     All other classifications produce no action.
 //
