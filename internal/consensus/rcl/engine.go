@@ -872,6 +872,18 @@ func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
 	return nil
 }
 
+// parentValidations returns the trusted validations the engine has
+// recorded for the given ledger ID — passed to
+// Adaptor.GenerateFlagLedgerPseudoTxs so the producer can tally
+// fee/amendment votes from validations of prevLedger. Returns nil
+// when the tracker hasn't been wired (test fixtures, early startup).
+func (e *Engine) parentValidations(id consensus.LedgerID) []*consensus.Validation {
+	if e.validationTracker == nil {
+		return nil
+	}
+	return e.validationTracker.GetTrustedValidations(id)
+}
+
 // State returns the current consensus state.
 func (e *Engine) State() *consensus.RoundState {
 	e.mu.RLock()
@@ -1471,7 +1483,8 @@ func (e *Engine) closeLedger() {
 		prev := e.prevLedger
 		switch {
 		case consensus.IsFlagLedger(prev.Seq()):
-			if extra := e.adaptor.GenerateFlagLedgerPseudoTxs(prev); len(extra) > 0 {
+			parentVals := e.parentValidations(prev.ID())
+			if extra := e.adaptor.GenerateFlagLedgerPseudoTxs(prev, parentVals); len(extra) > 0 {
 				txs = append(txs, extra...)
 			}
 		case consensus.IsVotingLedger(prev.Seq()) && e.adaptor.IsFeatureEnabledOnLedger(prev, "NegativeUNL"):

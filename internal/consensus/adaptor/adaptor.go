@@ -558,24 +558,49 @@ func (a *Adaptor) GetPendingTxs() [][]byte {
 	return blobs
 }
 
-// GenerateFlagLedgerPseudoTxs is currently a stub. Both producers
-// are now ported as algorithm-only packages:
+// GenerateFlagLedgerPseudoTxs runs the fee-vote and amendment-vote
+// producers and returns their concatenated pseudo-tx blobs to
+// inject into the proposal initial set. Mirrors rippled
+// RCLConsensus.cpp:354-367.
 //
-//   - fee voting → internal/consensus/feevote (#369)
-//   - amendment voting → internal/consensus/amendmentvote (#370)
+// The producers themselves live in internal/consensus/feevote
+// (#369) and internal/consensus/amendmentvote (#370); this method
+// is the boundary that resolves prevLedger state, the local
+// stance, and parentValidations into the producers' input shape.
 //
-// Each is exercised by package-level tests against synthetic
-// inputs. Wiring them into this method needs the same per-seq
-// validation history extension to ValidationTracker called out on
-// GenerateNegativeUNLPseudoTx below; once that lands, the prior
-// voting-ledger's trusted validations can feed both producers and
-// the resulting blobs are concatenated as the return.
+// Returns nil when the ledger service is missing or the parent
+// ledger isn't readable. Per-producer parse / read failures are
+// logged at warn and that producer falls through to nil — a
+// malformed FeeSettings SLE doesn't suppress amendment-vote
+// emission and vice versa.
 //
-// Returning nil keeps the engine's injection step a no-op until
-// the wiring lands — matching the pre-#367 behavior of never
-// injecting.
-func (a *Adaptor) GenerateFlagLedgerPseudoTxs(_ consensus.Ledger) [][]byte {
-	return nil
+// Both producers need to know which feature amendments are
+// enabled on prevLedger (XRPFees gates the fee wire format;
+// fixAmendmentMajorityCalc switches the amendment threshold
+// strict-vs-lax). The base *ledger.Ledger doesn't carry an
+// amendment.Rules struct (Ledger.Rules returns nil), so we read
+// the Amendments SLE once at this boundary and pass the parsed
+// enabled-set down to both runners.
+func (a *Adaptor) GenerateFlagLedgerPseudoTxs(prevLedger consensus.Ledger, parentValidations []*consensus.Validation) [][]byte {
+	if a.ledgerService == nil {
+		return nil
+	}
+	prev, err := a.ledgerService.GetLedgerByHash([32]byte(prevLedger.ID()))
+	if err != nil || prev == nil {
+		return nil
+	}
+	upcomingSeq := prev.Sequence() + 1
+
+	enabled, majorities := a.readAmendmentsSLE(prev)
+
+	var blobs [][]byte
+	if extra := a.runFeeVote(prev, upcomingSeq, parentValidations, enabled); len(extra) > 0 {
+		blobs = append(blobs, extra...)
+	}
+	if extra := a.runAmendmentVote(prev, upcomingSeq, parentValidations, enabled, majorities); len(extra) > 0 {
+		blobs = append(blobs, extra...)
+	}
+	return blobs
 }
 
 // GenerateNegativeUNLPseudoTx is currently a stub. The vote-tally

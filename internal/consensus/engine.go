@@ -155,18 +155,19 @@ type Adaptor interface {
 	// validations of the ledger before that and emit SetFee /
 	// EnableAmendment pseudo-txs reflecting the consensus.
 	//
+	// parentValidations are the trusted validations that referenced
+	// prevLedger.ID() — i.e. the votes the producer should tally.
+	// The engine pulls them from its validation tracker and passes
+	// them through; the adaptor does not have direct tracker access.
+	//
 	// The producer is also responsible for the quorum gate at
 	// RCLConsensus.cpp:361 (`validations.size() >= quorum`) and the
 	// negativeUNLFilter at RCLConsensus.cpp:358 — the engine does not
 	// pre-check those.
 	//
 	// Returns nil when no votes apply (insufficient validations, no
-	// vote stance to emit, etc.). Adaptors that don't implement vote
-	// tallying yet (most goXRPL builds today) should return nil — the
-	// engine treats nil as "no pseudo-txs", matching the behavior
-	// before #367 landed. The actual vote-tally producers ship in
-	// #368/#369/#370.
-	GenerateFlagLedgerPseudoTxs(prevLedger Ledger) [][]byte
+	// vote stance to emit, etc.).
+	GenerateFlagLedgerPseudoTxs(prevLedger Ledger, parentValidations []*Validation) [][]byte
 
 	// GenerateNegativeUNLPseudoTx returns the NegativeUNL pseudo-tx
 	// to inject when prevLedger is a voting ledger AND the
