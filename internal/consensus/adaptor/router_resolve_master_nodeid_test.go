@@ -155,7 +155,7 @@ func TestRouter_ResolveMasterNodeID_HelperContract(t *testing.T) {
 	router.SetManifestCache(cache, nil)
 
 	t.Run("known mapping rewrites to calcNodeID(master)", func(t *testing.T) {
-		nid := consensus.CalcNodeID(ephemeral) // parser default
+		nid := consensus.CalcNodeID(ephemeral)
 		router.resolveMasterNodeID(&nid, consensus.SigningPubKey(ephemeral))
 		if nid != consensus.CalcNodeID(master) {
 			t.Fatalf("nid = %x, want calcNodeID(master) = %x", nid, consensus.CalcNodeID(master))

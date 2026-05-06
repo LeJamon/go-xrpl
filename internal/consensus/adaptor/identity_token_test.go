@@ -190,8 +190,6 @@ func TestNewValidatorIdentityFromToken_HappyPath(t *testing.T) {
 	if id.NodeID != wantNodeID {
 		t.Errorf("NodeID = %x, want calcNodeID(MasterKey) = %x", id.NodeID, wantNodeID)
 	}
-	// Sanity: a calcNodeID over the signing key would diverge from the
-	// master-derived value when keys are rotated (token mode).
 	if id.NodeID == consensus.CalcNodeID(fix.signingPub) {
 		t.Error("NodeID coincides with calcNodeID(SigningKey); token mode must derive from master")
 	}

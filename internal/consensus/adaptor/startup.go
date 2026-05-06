@@ -217,14 +217,6 @@ func NewFromConfig(
 
 	engine := rcl.NewEngine(adaptor, rcl.DefaultConfig())
 
-	// Ephemeral → master translation now happens at the router seam
-	// before validations / proposals reach the engine, via
-	// Router.resolveMasterNodeID and the manifest cache wired through
-	// SetManifestCache. NodeID values arriving at the engine are
-	// already master-shaped 20-byte calcNodeID(masterKey) digests —
-	// matching rippled RCLValidations.cpp:165-186 — so the engine no
-	// longer needs a per-Add resolver hook.
-
 	// On-disk validation archive. Skipped when the relational DB is
 	// unavailable or the operator has disabled the section in TOML —
 	// either way the engine runs unchanged with the tracker in pure
