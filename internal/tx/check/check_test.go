@@ -62,7 +62,7 @@ func TestCheckCreateValidation(t *testing.T) {
 				SendMax:     tx.NewXRPAmount(10000000000),
 			},
 			expectError: true,
-			errorMsg:    "Destination is required",
+			errorMsg:    "temDST_NEEDED: Destination is required",
 		},
 		{
 			name: "missing SendMax - temBAD_AMOUNT equivalent",
@@ -72,7 +72,7 @@ func TestCheckCreateValidation(t *testing.T) {
 				SendMax:     tx.Amount{},
 			},
 			expectError: true,
-			errorMsg:    "SendMax is required",
+			errorMsg:    "temBAD_AMOUNT: SendMax must be positive",
 		},
 		{
 			name: "check to self - temREDUNDANT equivalent",
@@ -82,7 +82,7 @@ func TestCheckCreateValidation(t *testing.T) {
 				SendMax:     tx.NewXRPAmount(10000000000),
 			},
 			expectError: true,
-			errorMsg:    "cannot create check to self",
+			errorMsg:    "temREDUNDANT: cannot create check to self",
 		},
 		{
 			name: "missing account",
@@ -166,7 +166,7 @@ func TestCheckCashValidation(t *testing.T) {
 				Amount:  ptrAmount(tx.NewXRPAmount(10000000000)),
 			},
 			expectError: true,
-			errorMsg:    "CheckID is required",
+			errorMsg:    "temMALFORMED: CheckID is required",
 		},
 		{
 			name: "missing both Amount and DeliverMin - temMALFORMED equivalent",
@@ -175,7 +175,7 @@ func TestCheckCashValidation(t *testing.T) {
 				CheckID: "49647F0D748DC3FE26BDACBC57F251AADEFFF391403EC9BF87C97F67E9977FB0",
 			},
 			expectError: true,
-			errorMsg:    "must specify Amount or DeliverMin",
+			errorMsg:    "temMALFORMED: must specify exactly one of Amount or DeliverMin",
 		},
 		{
 			name: "both Amount and DeliverMin specified - temMALFORMED equivalent",
@@ -186,7 +186,7 @@ func TestCheckCashValidation(t *testing.T) {
 				DeliverMin: ptrAmount(tx.NewXRPAmount(5000000000)),
 			},
 			expectError: true,
-			errorMsg:    "cannot specify both Amount and DeliverMin",
+			errorMsg:    "temMALFORMED: must specify exactly one of Amount or DeliverMin",
 		},
 		{
 			name: "missing account",

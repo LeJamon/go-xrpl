@@ -220,7 +220,7 @@ func (a *AccountSet) Validate() error {
 	if a.TickSize != nil {
 		ts := *a.TickSize
 		if ts != 0 && (ts < protocol.TickSizeMin || ts > protocol.TickSizeMax) {
-			return tx.Errorf(tx.TemBAD_TICK_SIZE, "tick size must be 0 or 3-15")
+			return tx.Errorf(tx.TemBAD_TICK_SIZE, "tick size must be 0 or 3-16")
 		}
 	}
 

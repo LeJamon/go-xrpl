@@ -51,6 +51,10 @@ func (c *CheckCreate) Validate() error {
 		return err
 	}
 
+	if c.Destination == "" {
+		return tx.Errorf(tx.TemDST_NEEDED, "Destination is required")
+	}
+
 	// Cannot create check to self
 	// Reference: CreateCheck.cpp L47-52
 	if c.Account == c.Destination {
