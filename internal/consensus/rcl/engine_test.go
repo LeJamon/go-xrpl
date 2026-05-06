@@ -309,7 +309,7 @@ func (a *mockAdaptor) GetPendingTxs() [][]byte {
 	return a.pendingTxs
 }
 
-func (a *mockAdaptor) GenerateFlagLedgerPseudoTxs(_ consensus.Ledger) [][]byte {
+func (a *mockAdaptor) GenerateFlagLedgerPseudoTxs(_ consensus.Ledger, _ []*consensus.Validation) [][]byte {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.flagLedgerPseudoTxs

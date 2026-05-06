@@ -18,6 +18,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/goXRPLd/internal/consensus/amendmentvote"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
@@ -168,10 +169,20 @@ type Adaptor struct {
 	// at construction. Zero values mean "no vote".
 	feeVote FeeVoteStance
 
-	// amendmentVoteIDs are the amendment IDs this validator wishes to
-	// vote FOR on the next flag ledger. Resolved from Config.AmendmentVote
-	// names at construction (unknown names logged and dropped).
-	amendmentVoteIDs [][32]byte
+	// amendmentStances is this validator's per-amendment voting
+	// stance, seeded from the registry's per-feature Vote behavior
+	// at construction and overridden by Config.AmendmentVote. Mirrors
+	// rippled's amendmentMap_ vote field
+	// (AmendmentTable.cpp:556-580). Amendments not in the map default
+	// to VoteAbstain on lookup; obsolete amendments cannot be
+	// overridden to VoteUp.
+	amendmentStances map[[32]byte]amendmentvote.Stance
+
+	// trustedVotes caches per-validator amendment votes for 24h to
+	// dampen amendment "flapping" when a flaky validator drops
+	// briefly. See trusted_votes.go and rippled's TrustedVotes at
+	// AmendmentTable.cpp:75-286.
+	trustedVotes *TrustedVotes
 
 	logger *slog.Logger
 }
@@ -194,11 +205,28 @@ const goXRPLServerVersionTag uint64 = 0x4000_0000_0000_0000
 // rules — matches rippled's FeeVoteImpl.cpp:120-192 hard if/else
 // gate on featureXRPFees.
 //
-// Zero values mean "no vote" — the serializer skips the fields.
+// Zero values on any individual field mean "operator did not set
+// this field" — adaptor.New() substitutes the rippled FeeSetup
+// default (Config.h:65-78) so an unconfigured validator votes
+// toward those defaults rather than abstaining.
 type FeeVoteStance struct {
 	BaseFee          uint64
 	ReserveBase      uint32
 	ReserveIncrement uint32
+}
+
+// defaultFeeVote returns the rippled FeeSetup defaults — a validator
+// with no [voting] stanza in its config votes toward these values.
+// Mirrors the default-constructed FeeSetup at
+// rippled/src/xrpld/core/Config.h:65-78
+// (reference_fee=10, account_reserve=10*DROPS_PER_XRP=10_000_000,
+// owner_reserve=2*DROPS_PER_XRP=2_000_000).
+func defaultFeeVote() FeeVoteStance {
+	return FeeVoteStance{
+		BaseFee:          10,
+		ReserveBase:      10_000_000,
+		ReserveIncrement: 2_000_000,
+	}
 }
 
 // Config holds configuration for the Adaptor.
@@ -258,19 +286,64 @@ func New(cfg Config) *Adaptor {
 		cookie = 1
 	}
 
-	// Resolve amendment-vote names to IDs. Unknown names are logged
-	// and dropped — an operator with a stale config shouldn't block
-	// node boot. Same behavior as rippled silently skipping unknown
-	// amendments from [amendments].
+	// Seed per-amendment stances from the registry so an
+	// unconfigured validator votes the way rippled would: every
+	// supported feature defaults to its registered VoteBehavior
+	// (DefaultYes → VoteUp, DefaultNo → VoteAbstain via map lookup,
+	// Obsolete → VoteObsolete). Mirrors the constructor walk at
+	// AmendmentTable.cpp:556-580.
 	logger := slog.Default().With("component", "consensus-adaptor")
-	var amendmentVoteIDs [][32]byte
+	amendmentStances := make(map[[32]byte]amendmentvote.Stance)
+	for _, f := range amendment.AllFeatures() {
+		switch {
+		case f.Vote == amendment.VoteObsolete:
+			amendmentStances[f.ID] = amendmentvote.VoteObsolete
+		case f.Supported == amendment.SupportedYes && f.Vote == amendment.VoteDefaultYes && !f.Retired:
+			amendmentStances[f.ID] = amendmentvote.VoteUp
+		}
+	}
+
+	// Layer Config.AmendmentVote on top as operator overrides to
+	// VoteUp — same role as rippled's [amendments] stanza. Unknown
+	// names are logged and dropped (stale config must not block
+	// boot). Obsolete amendments cannot be promoted to VoteUp:
+	// rippled's persistVote refuses obsolete entries
+	// (AmendmentTable.cpp:728-733).
 	for _, name := range cfg.AmendmentVote {
 		f := amendment.GetFeatureByName(name)
 		if f == nil {
 			logger.Warn("unknown amendment in vote config; ignoring", "name", name)
 			continue
 		}
-		amendmentVoteIDs = append(amendmentVoteIDs, f.ID)
+		if f.Vote == amendment.VoteObsolete {
+			logger.Warn("obsolete amendment cannot be voted up; ignoring", "name", name)
+			continue
+		}
+		amendmentStances[f.ID] = amendmentvote.VoteUp
+	}
+
+	// Seed the amendment-vote cache with the initial UNL so
+	// RecordVotes accepts validations from round one. Re-call
+	// TrustChanged whenever the trusted set mutates at runtime.
+	trustedVotes := NewTrustedVotes()
+	trustedVotes.TrustChanged(cfg.Validators)
+
+	// Substitute rippled FeeSetup defaults on a per-field basis: an
+	// operator may set BaseFee but leave reserves zero, and we want
+	// each unset field to fall back to the rippled default
+	// (Config.h:65-78) rather than to "abstain". An empty config thus
+	// votes toward 10/10_000_000/2_000_000 — matching rippled's
+	// default-constructed FeeSetup.
+	feeVote := cfg.FeeVote
+	defaults := defaultFeeVote()
+	if feeVote.BaseFee == 0 {
+		feeVote.BaseFee = defaults.BaseFee
+	}
+	if feeVote.ReserveBase == 0 {
+		feeVote.ReserveBase = defaults.ReserveBase
+	}
+	if feeVote.ReserveIncrement == 0 {
+		feeVote.ReserveIncrement = defaults.ReserveIncrement
 	}
 
 	return &Adaptor{
@@ -285,8 +358,9 @@ func New(cfg Config) *Adaptor {
 		pendingTxs:        make(map[consensus.TxID][]byte),
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
 		cookie:            cookie,
-		feeVote:           cfg.FeeVote,
-		amendmentVoteIDs:  amendmentVoteIDs,
+		feeVote:           feeVote,
+		amendmentStances:  amendmentStances,
+		trustedVotes:      trustedVotes,
 		logger:            logger,
 	}
 }
@@ -558,22 +632,98 @@ func (a *Adaptor) GetPendingTxs() [][]byte {
 	return blobs
 }
 
-// GenerateFlagLedgerPseudoTxs is currently a stub. The fee-vote
-// algorithm lives in internal/consensus/feevote (ported in #369)
-// and is exercised by package-level tests against synthetic vote
-// inputs; the amendment-vote producer is still TODO (#370).
+// GenerateFlagLedgerPseudoTxs runs the fee-vote and amendment-vote
+// producers and returns their concatenated pseudo-tx blobs to
+// inject into the proposal initial set. Mirrors rippled
+// RCLConsensus.cpp:354-367, including the negative-UNL filter at
+// :358 and the quorum gate at :361 — both producers run only when
+// the negUNL-filtered validation set meets the current quorum.
 //
-// Wiring fee-vote into this method needs the same per-seq
-// validation history extension to ValidationTracker called out on
-// GenerateNegativeUNLPseudoTx below — once that lands, the fee
-// votes can be extracted from the prior voting ledger's
-// validations and fed into feevote.DoVoting.
+// The producers live in internal/consensus/feevote and
+// internal/consensus/amendmentvote; this method resolves
+// prevLedger state, the local stance, and parentValidations into
+// the producers' input shape.
 //
-// Returning nil keeps the engine's injection step a no-op until
-// the wiring lands — matching the pre-#367 behavior of never
-// injecting.
-func (a *Adaptor) GenerateFlagLedgerPseudoTxs(_ consensus.Ledger) [][]byte {
-	return nil
+// Returns nil when the ledger service is missing, the parent
+// ledger isn't readable, or the negUNL-filtered validation set
+// falls below quorum. Per-producer parse / read failures are
+// logged at warn and that producer falls through to nil — a
+// malformed FeeSettings SLE doesn't suppress amendment-vote
+// emission and vice versa.
+//
+// Both producers need to know which feature amendments are
+// enabled on prevLedger (XRPFees gates the fee wire format;
+// fixAmendmentMajorityCalc switches the amendment threshold
+// strict-vs-lax). The base *ledger.Ledger doesn't carry an
+// amendment.Rules struct (Ledger.Rules returns nil), so we read
+// the Amendments SLE once at this boundary and pass the parsed
+// enabled-set down to both runners.
+func (a *Adaptor) GenerateFlagLedgerPseudoTxs(prevLedger consensus.Ledger, parentValidations []*consensus.Validation) [][]byte {
+	if a.ledgerService == nil {
+		return nil
+	}
+	prev, err := a.ledgerService.GetLedgerByHash([32]byte(prevLedger.ID()))
+	if err != nil || prev == nil {
+		return nil
+	}
+	upcomingSeq := prev.Sequence() + 1
+
+	// Strip validations from validators currently on the negative
+	// UNL — they don't count toward quorum and their amendment /
+	// fee votes are not tallied. Mirrors RCLConsensus.cpp:358's
+	// negativeUNLFilter wrapping getTrustedForLedger.
+	filtered := a.filterNegativeUNL(parentValidations)
+
+	// Quorum gate: with fewer than quorum validations of prev's
+	// parent (post-negUNL filter) we don't have enough signal to
+	// produce pseudo-txs. Standalone (zero trusted validators)
+	// reports quorum 0 and falls through. RCLConsensus.cpp:361.
+	if len(filtered) < a.GetQuorum() {
+		return nil
+	}
+
+	enabled, majorities, ok := a.readAmendmentsSLE(prev)
+	if !ok {
+		return nil
+	}
+
+	var blobs [][]byte
+	if extra := a.runFeeVote(prev, upcomingSeq, filtered, enabled); len(extra) > 0 {
+		blobs = append(blobs, extra...)
+	}
+	if extra := a.runAmendmentVote(prev, upcomingSeq, filtered, enabled, majorities); len(extra) > 0 {
+		blobs = append(blobs, extra...)
+	}
+	return blobs
+}
+
+// filterNegativeUNL returns vals minus any validations signed by
+// validators currently on the negative UNL. Mirrors rippled's
+// ValidatorList::negativeUNLFilter at RCLConsensus.cpp:358.
+func (a *Adaptor) filterNegativeUNL(vals []*consensus.Validation) []*consensus.Validation {
+	return excludeNegativeUNL(vals, a.GetNegativeUNL())
+}
+
+// excludeNegativeUNL is the pure-arithmetic core of the negUNL
+// filter — extracted for testability without standing up a
+// NegativeUNL SLE in the ledger fixture. Empty negUNL returns vals
+// unchanged (no allocation).
+func excludeNegativeUNL(vals []*consensus.Validation, negUNL []consensus.NodeID) []*consensus.Validation {
+	if len(vals) == 0 || len(negUNL) == 0 {
+		return vals
+	}
+	skip := make(map[consensus.NodeID]struct{}, len(negUNL))
+	for _, id := range negUNL {
+		skip[id] = struct{}{}
+	}
+	out := make([]*consensus.Validation, 0, len(vals))
+	for _, v := range vals {
+		if _, banned := skip[v.NodeID]; banned {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 // GenerateNegativeUNLPseudoTx is currently a stub. The vote-tally
@@ -851,7 +1001,7 @@ func (a *Adaptor) GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, p
 // sorted by amendment ID so two validators with the same stance
 // produce byte-identical validations.
 func (a *Adaptor) GetAmendmentVote() [][32]byte {
-	if len(a.amendmentVoteIDs) == 0 {
+	if len(a.amendmentStances) == 0 {
 		return nil
 	}
 
@@ -865,8 +1015,11 @@ func (a *Adaptor) GetAmendmentVote() [][32]byte {
 		}
 	}
 
-	out := make([][32]byte, 0, len(a.amendmentVoteIDs))
-	for _, id := range a.amendmentVoteIDs {
+	out := make([][32]byte, 0, len(a.amendmentStances))
+	for id, stance := range a.amendmentStances {
+		if stance != amendmentvote.VoteUp {
+			continue
+		}
 		if rules != nil && rules.Enabled(id) {
 			continue
 		}
