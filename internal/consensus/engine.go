@@ -155,17 +155,17 @@ type Adaptor interface {
 	// validations of the ledger before that and emit SetFee /
 	// EnableAmendment pseudo-txs reflecting the consensus.
 	//
-	// parentValidations are the trusted validations that referenced
-	// prevLedger.ID() — i.e. the votes the producer should tally.
-	// The engine pulls them from its validation tracker and passes
-	// them through; the adaptor does not have direct tracker access.
+	// parentValidations are the trusted validations of prevLedger's
+	// parent (the ledger before the flag). The engine sources them
+	// from its validation tracker via prevLedger.ParentID() — matching
+	// rippled's getTrustedForLedger(prevLedger->parentHash, prev.seq()-1)
+	// at RCLConsensus.cpp:359-360.
 	//
-	// The producer is also responsible for the quorum gate at
-	// RCLConsensus.cpp:361 (`validations.size() >= quorum`) and the
-	// negativeUNLFilter at RCLConsensus.cpp:358 — the engine does not
-	// pre-check those.
+	// The adaptor applies the negative-UNL filter (RCLConsensus.cpp:358)
+	// and the quorum gate (RCLConsensus.cpp:361) internally, so the
+	// engine passes the raw trusted set through unchanged.
 	//
-	// Returns nil when no votes apply (insufficient validations, no
+	// Returns nil when no votes apply (below-quorum validations, no
 	// vote stance to emit, etc.).
 	GenerateFlagLedgerPseudoTxs(prevLedger Ledger, parentValidations []*Validation) [][]byte
 

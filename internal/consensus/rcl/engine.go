@@ -875,8 +875,11 @@ func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
 // parentValidations returns the trusted validations the engine has
 // recorded for the given ledger ID — passed to
 // Adaptor.GenerateFlagLedgerPseudoTxs so the producer can tally
-// fee/amendment votes from validations of prevLedger. Returns nil
-// when the tracker hasn't been wired (test fixtures, early startup).
+// fee/amendment votes. Callers pass prevLedger.ParentID() (the flag
+// ledger's parent) so the lookup matches rippled's
+// RCLConsensus.cpp:359-360 getTrustedForLedger(prevLedger->parentHash,
+// prevLedger->seq() - 1). Returns nil when the tracker hasn't been
+// wired (test fixtures, early startup).
 func (e *Engine) parentValidations(id consensus.LedgerID) []*consensus.Validation {
 	if e.validationTracker == nil {
 		return nil
@@ -1483,7 +1486,7 @@ func (e *Engine) closeLedger() {
 		prev := e.prevLedger
 		switch {
 		case consensus.IsFlagLedger(prev.Seq()):
-			parentVals := e.parentValidations(prev.ID())
+			parentVals := e.parentValidations(prev.ParentID())
 			if extra := e.adaptor.GenerateFlagLedgerPseudoTxs(prev, parentVals); len(extra) > 0 {
 				txs = append(txs, extra...)
 			}

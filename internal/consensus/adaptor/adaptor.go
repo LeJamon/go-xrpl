@@ -561,15 +561,18 @@ func (a *Adaptor) GetPendingTxs() [][]byte {
 // GenerateFlagLedgerPseudoTxs runs the fee-vote and amendment-vote
 // producers and returns their concatenated pseudo-tx blobs to
 // inject into the proposal initial set. Mirrors rippled
-// RCLConsensus.cpp:354-367.
+// RCLConsensus.cpp:354-367, including the negative-UNL filter at
+// :358 and the quorum gate at :361 — both producers run only when
+// the negUNL-filtered validation set meets the current quorum.
 //
 // The producers themselves live in internal/consensus/feevote
 // (#369) and internal/consensus/amendmentvote (#370); this method
 // is the boundary that resolves prevLedger state, the local
 // stance, and parentValidations into the producers' input shape.
 //
-// Returns nil when the ledger service is missing or the parent
-// ledger isn't readable. Per-producer parse / read failures are
+// Returns nil when the ledger service is missing, the parent
+// ledger isn't readable, or the negUNL-filtered validation set
+// falls below quorum. Per-producer parse / read failures are
 // logged at warn and that producer falls through to nil — a
 // malformed FeeSettings SLE doesn't suppress amendment-vote
 // emission and vice versa.
@@ -591,16 +594,59 @@ func (a *Adaptor) GenerateFlagLedgerPseudoTxs(prevLedger consensus.Ledger, paren
 	}
 	upcomingSeq := prev.Sequence() + 1
 
+	// Strip validations from validators currently on the negative
+	// UNL — they don't count toward quorum and their amendment /
+	// fee votes are not tallied. Mirrors RCLConsensus.cpp:358's
+	// negativeUNLFilter wrapping getTrustedForLedger.
+	filtered := a.filterNegativeUNL(parentValidations)
+
+	// Quorum gate: with fewer than quorum validations of prev's
+	// parent (post-negUNL filter) we don't have enough signal to
+	// produce pseudo-txs. Standalone (zero trusted validators)
+	// reports quorum 0 and falls through. RCLConsensus.cpp:361.
+	if len(filtered) < a.GetQuorum() {
+		return nil
+	}
+
 	enabled, majorities := a.readAmendmentsSLE(prev)
 
 	var blobs [][]byte
-	if extra := a.runFeeVote(prev, upcomingSeq, parentValidations, enabled); len(extra) > 0 {
+	if extra := a.runFeeVote(prev, upcomingSeq, filtered, enabled); len(extra) > 0 {
 		blobs = append(blobs, extra...)
 	}
-	if extra := a.runAmendmentVote(prev, upcomingSeq, parentValidations, enabled, majorities); len(extra) > 0 {
+	if extra := a.runAmendmentVote(prev, upcomingSeq, filtered, enabled, majorities); len(extra) > 0 {
 		blobs = append(blobs, extra...)
 	}
 	return blobs
+}
+
+// filterNegativeUNL returns vals minus any validations signed by
+// validators currently on the negative UNL. Mirrors rippled's
+// ValidatorList::negativeUNLFilter at RCLConsensus.cpp:358.
+func (a *Adaptor) filterNegativeUNL(vals []*consensus.Validation) []*consensus.Validation {
+	return excludeNegativeUNL(vals, a.GetNegativeUNL())
+}
+
+// excludeNegativeUNL is the pure-arithmetic core of the negUNL
+// filter — extracted for testability without standing up a
+// NegativeUNL SLE in the ledger fixture. Empty negUNL returns vals
+// unchanged (no allocation).
+func excludeNegativeUNL(vals []*consensus.Validation, negUNL []consensus.NodeID) []*consensus.Validation {
+	if len(vals) == 0 || len(negUNL) == 0 {
+		return vals
+	}
+	skip := make(map[consensus.NodeID]struct{}, len(negUNL))
+	for _, id := range negUNL {
+		skip[id] = struct{}{}
+	}
+	out := make([]*consensus.Validation, 0, len(vals))
+	for _, v := range vals {
+		if _, banned := skip[v.NodeID]; banned {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 // GenerateNegativeUNLPseudoTx is currently a stub. The vote-tally

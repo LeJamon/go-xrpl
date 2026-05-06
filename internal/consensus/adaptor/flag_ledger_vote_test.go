@@ -29,18 +29,21 @@ func newTestAdaptorWithConfig(t *testing.T, fee FeeVoteStance, amendmentVote []s
 	})
 }
 
-// TestGenerateFlagLedgerPseudoTxs_NoStanceNoBlobs verifies the
-// quiet path: a freshly-started node with no fee or amendment
-// vote stance produces no pseudo-txs at flag-ledger close.
-func TestGenerateFlagLedgerPseudoTxs_NoStanceNoBlobs(t *testing.T) {
+// TestGenerateFlagLedgerPseudoTxs_BelowQuorumNoBlobs pins the
+// quorum gate at RCLConsensus.cpp:361: with the trusted set
+// non-empty (quorum >= 1) and zero validations passed in, the
+// producer falls through to nil before any fee or amendment work.
+func TestGenerateFlagLedgerPseudoTxs_BelowQuorumNoBlobs(t *testing.T) {
 	a := newTestAdaptor(t)
 	prev := a.ledgerService.GetClosedLedger()
 	require.NotNil(t, prev)
 	wrapped := WrapLedger(prev)
 
+	require.Equal(t, 1, a.GetQuorum(), "single-validator UNL must yield quorum=1")
+
 	blobs := a.GenerateFlagLedgerPseudoTxs(wrapped, nil)
 	assert.Nil(t, blobs,
-		"no fee target, no amendment stance, no validations → no pseudo-txs")
+		"len(filtered)=0 < quorum=1 → no pseudo-txs (RCLConsensus.cpp:361)")
 }
 
 // TestGenerateFlagLedgerPseudoTxs_FeeVoteSeedsSetFee pins the
@@ -50,7 +53,10 @@ func TestGenerateFlagLedgerPseudoTxs_NoStanceNoBlobs(t *testing.T) {
 //
 // Genesis FeeSettings carries the standalone defaults; a target
 // 10× the base fee is well outside that, so the algorithm picks
-// target.
+// target. We pass a self-validation of the parent so the post-
+// quorum-gate code runs (RCLConsensus.cpp:361 requires
+// validations.size() >= quorum, which is 1 in this single-validator
+// fixture).
 func TestGenerateFlagLedgerPseudoTxs_FeeVoteSeedsSetFee(t *testing.T) {
 	a := newTestAdaptorWithConfig(t, FeeVoteStance{
 		BaseFee:          100, // genesis is 10
@@ -61,7 +67,24 @@ func TestGenerateFlagLedgerPseudoTxs_FeeVoteSeedsSetFee(t *testing.T) {
 	require.NotNil(t, prev)
 	wrapped := WrapLedger(prev)
 
-	blobs := a.GenerateFlagLedgerPseudoTxs(wrapped, nil)
+	// Self-validation that votes for the target fees. Both legacy
+	// and post-XRPFees field sets are populated so the test is
+	// agnostic to whichever wire format the parent ledger's
+	// amendment state selects.
+	val := &consensus.Validation{
+		LedgerID:              wrapped.ParentID(),
+		LedgerSeq:             wrapped.Seq() - 1,
+		NodeID:                a.identity.NodeID,
+		SignTime:              time.Now(),
+		BaseFee:               100,
+		ReserveBase:           50_000_000,
+		ReserveIncrement:      5_000_000,
+		BaseFeeDrops:          100,
+		ReserveBaseDrops:      50_000_000,
+		ReserveIncrementDrops: 5_000_000,
+	}
+
+	blobs := a.GenerateFlagLedgerPseudoTxs(wrapped, []*consensus.Validation{val})
 	require.Len(t, blobs, 1, "fee target differs from current → one SetFee blob")
 
 	stx := decodeTx(t, blobs[0])
@@ -69,6 +92,35 @@ func TestGenerateFlagLedgerPseudoTxs_FeeVoteSeedsSetFee(t *testing.T) {
 		"emitted blob must be a SetFee pseudo-tx")
 	// LedgerSequence carries upcoming seq = parent + 1.
 	assert.EqualValues(t, prev.Sequence()+1, asUint(stx["LedgerSequence"]))
+}
+
+// TestExcludeNegativeUNL_DropsBannedValidators is a pure-helper
+// test of the negUNL filter at RCLConsensus.cpp:358: validations
+// signed by validators in the negUNL set are dropped before the
+// quorum count and before vote tallying.
+func TestExcludeNegativeUNL_DropsBannedValidators(t *testing.T) {
+	good := consensus.NodeID{0x01}
+	banned := consensus.NodeID{0x02}
+	keep := consensus.NodeID{0x03}
+	vals := []*consensus.Validation{
+		{NodeID: good},
+		{NodeID: banned},
+		{NodeID: keep},
+	}
+
+	out := excludeNegativeUNL(vals, []consensus.NodeID{banned})
+	require.Len(t, out, 2, "one validator on negUNL → two validations remain")
+	assert.Equal(t, good, out[0].NodeID)
+	assert.Equal(t, keep, out[1].NodeID)
+}
+
+// TestExcludeNegativeUNL_EmptyNegUNLPassesThrough verifies the
+// no-allocation fast path: an empty negUNL returns the input slice
+// header unchanged.
+func TestExcludeNegativeUNL_EmptyNegUNLPassesThrough(t *testing.T) {
+	vals := []*consensus.Validation{{NodeID: consensus.NodeID{0x01}}}
+	out := excludeNegativeUNL(vals, nil)
+	assert.Equal(t, vals, out, "empty negUNL → unchanged input")
 }
 
 // TestGenerateFlagLedgerPseudoTxs_AmendmentVoteSeedsGotMajority
