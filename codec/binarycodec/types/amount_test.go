@@ -40,7 +40,7 @@ func TestVerifyXrpValue(t *testing.T) {
 		{
 			name:   "pass - valid xrp value - no decimal - negative value",
 			input:  "-125000708",
-			expErr: &InvalidAmountError{Amount: "-125000708"},
+			expErr: nil,
 		},
 	}
 	for _, tt := range tests {
@@ -183,10 +183,13 @@ func TestSerializeXrpAmount(t *testing.T) {
 			expErr:         nil,
 		},
 		{
-			name:           "fail - invalid xrp value - negative",
+			// Negative XRP drops are accepted at the codec layer so ledger objects
+			// such as NFToken sell offers can carry signed amounts; the absolute
+			// value is encoded without the positive sign bit.
+			name:           "pass - valid xrp value - negative",
 			input:          "-125000708",
-			expectedOutput: nil,
-			expErr:         &InvalidAmountError{Amount: "-125000708"},
+			expectedOutput: []byte{0x00, 0x00, 0x00, 0x00, 0x07, 0x73, 0x5C, 0x04},
+			expErr:         nil,
 		},
 		{
 			name:           "fail - invalid xrp value - decimal",
@@ -223,7 +226,8 @@ func TestSerializeXrpAmount(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := serializeXrpAmount(tt.input)
 			if tt.expErr != nil {
-				require.EqualError(t, tt.expErr, err.Error())
+				require.Error(t, err)
+				require.Equal(t, tt.expErr.Error(), err.Error())
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, tt.expectedOutput, got)
