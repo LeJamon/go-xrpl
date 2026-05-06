@@ -5,9 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/goXRPLd/internal/consensus/amendmentvote"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/shamap"
@@ -142,7 +144,7 @@ func TestGenerateFlagLedgerPseudoTxs_AmendmentVoteSeedsGotMajority(t *testing.T)
 	for i := range synthetic {
 		synthetic[i] = 0xC1
 	}
-	a.amendmentVoteIDs = [][32]byte{synthetic}
+	a.amendmentStances = map[[32]byte]amendmentvote.Stance{synthetic: amendmentvote.VoteUp}
 
 	prev := a.ledgerService.GetClosedLedger()
 	require.NotNil(t, prev)
@@ -174,6 +176,102 @@ func TestGenerateFlagLedgerPseudoTxs_AmendmentVoteSeedsGotMajority(t *testing.T)
 	}
 	assert.True(t, found,
 		"expected EnableAmendment(synthetic, GotMajority) when our single trusted validator votes for it")
+}
+
+// TestAmendmentStances_SeededFromRegistry verifies the constructor
+// walks amendment.AllFeatures() and seeds the stance map from each
+// feature's registered VoteBehavior, mirroring rippled's
+// AmendmentTable.cpp:556-580 — DefaultYes amendments default to
+// VoteUp, Obsolete amendments default to VoteObsolete, DefaultNo
+// amendments are absent from the map (lookup returns VoteAbstain).
+// Without this, an unconfigured Go validator silently abstains on
+// every amendment a rippled validator would auto-upvote.
+func TestAmendmentStances_SeededFromRegistry(t *testing.T) {
+	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
+	require.NoError(t, err)
+	a := New(Config{
+		LedgerService: newTestLedgerService(t),
+		Identity:      identity,
+		Validators:    []consensus.NodeID{identity.NodeID},
+	})
+
+	upvoted, obsolete, defaultNoSeen := 0, 0, 0
+	for _, f := range amendment.AllFeatures() {
+		stance, present := a.amendmentStances[f.ID]
+		switch {
+		case f.Vote == amendment.VoteObsolete:
+			require.True(t, present, "obsolete amendment %q must seed VoteObsolete", f.Name)
+			assert.Equal(t, amendmentvote.VoteObsolete, stance,
+				"obsolete amendment %q must be VoteObsolete", f.Name)
+			obsolete++
+		case f.Supported == amendment.SupportedYes && f.Vote == amendment.VoteDefaultYes && !f.Retired:
+			require.True(t, present, "default-yes amendment %q must seed VoteUp", f.Name)
+			assert.Equal(t, amendmentvote.VoteUp, stance,
+				"default-yes supported non-retired amendment %q must be VoteUp", f.Name)
+			upvoted++
+		case f.Vote == amendment.VoteDefaultNo:
+			assert.False(t, present,
+				"default-no amendment %q must NOT be in stances (lookup returns VoteAbstain)", f.Name)
+			defaultNoSeen++
+		}
+	}
+	assert.Greater(t, upvoted, 0, "registry must contain at least one default-yes amendment")
+	assert.Greater(t, obsolete, 0, "registry must contain at least one obsolete amendment")
+	assert.Greater(t, defaultNoSeen, 0, "registry must contain at least one default-no amendment")
+}
+
+// TestAmendmentStances_ConfigOverridesUpvote verifies an operator
+// can promote a default-no amendment to VoteUp via
+// Config.AmendmentVote — the same role rippled's [amendments]
+// stanza plays at AmendmentTable.cpp:584-598.
+func TestAmendmentStances_ConfigOverridesUpvote(t *testing.T) {
+	// Pick a default-no, supported, non-retired feature from the
+	// registry. fixDirectoryLimit fits this profile in the current
+	// registry; if that ever flips we'll fail loudly here rather
+	// than silently testing the wrong branch.
+	target := amendment.GetFeatureByName("fixDirectoryLimit")
+	require.NotNil(t, target)
+	require.Equal(t, amendment.VoteDefaultNo, target.Vote,
+		"test premise: target must be VoteDefaultNo (registry changed?)")
+
+	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
+	require.NoError(t, err)
+	a := New(Config{
+		LedgerService: newTestLedgerService(t),
+		Identity:      identity,
+		Validators:    []consensus.NodeID{identity.NodeID},
+		AmendmentVote: []string{target.Name},
+	})
+
+	stance, present := a.amendmentStances[target.ID]
+	require.True(t, present, "operator-listed amendment must enter stances")
+	assert.Equal(t, amendmentvote.VoteUp, stance,
+		"Config.AmendmentVote must override default-no to VoteUp")
+}
+
+// TestAmendmentStances_ConfigCannotOverrideObsolete pins rippled's
+// AmendmentTable.cpp:728-733 contract: persistVote refuses to flip
+// an obsolete amendment's vote. Listing such an amendment in
+// Config.AmendmentVote must NOT promote it to VoteUp.
+func TestAmendmentStances_ConfigCannotOverrideObsolete(t *testing.T) {
+	target := amendment.GetFeatureByName("NonFungibleTokensV1")
+	require.NotNil(t, target)
+	require.Equal(t, amendment.VoteObsolete, target.Vote,
+		"test premise: target must be VoteObsolete (registry changed?)")
+
+	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
+	require.NoError(t, err)
+	a := New(Config{
+		LedgerService: newTestLedgerService(t),
+		Identity:      identity,
+		Validators:    []consensus.NodeID{identity.NodeID},
+		AmendmentVote: []string{target.Name},
+	})
+
+	stance, present := a.amendmentStances[target.ID]
+	require.True(t, present, "obsolete amendment seeded by registry walk")
+	assert.Equal(t, amendmentvote.VoteObsolete, stance,
+		"Config.AmendmentVote must NOT promote obsolete amendments to VoteUp")
 }
 
 // TestFeeVote_EmptyConfigUsesRippledDefaults pins Item 1: with no

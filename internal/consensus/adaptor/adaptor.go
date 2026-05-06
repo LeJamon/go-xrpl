@@ -18,6 +18,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/goXRPLd/internal/consensus/amendmentvote"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
@@ -168,10 +169,14 @@ type Adaptor struct {
 	// at construction. Zero values mean "no vote".
 	feeVote FeeVoteStance
 
-	// amendmentVoteIDs are the amendment IDs this validator wishes to
-	// vote FOR on the next flag ledger. Resolved from Config.AmendmentVote
-	// names at construction (unknown names logged and dropped).
-	amendmentVoteIDs [][32]byte
+	// amendmentStances is this validator's per-amendment voting
+	// stance, seeded from the registry's per-feature Vote behavior
+	// at construction and overridden by Config.AmendmentVote. Mirrors
+	// rippled's amendmentMap_ vote field
+	// (AmendmentTable.cpp:556-580). Amendments not in the map default
+	// to VoteAbstain on lookup; obsolete amendments cannot be
+	// overridden to VoteUp.
+	amendmentStances map[[32]byte]amendmentvote.Stance
 
 	// trustedVotes caches per-validator amendment votes for 24h to
 	// dampen amendment "flapping" when a flaky validator drops
@@ -281,19 +286,40 @@ func New(cfg Config) *Adaptor {
 		cookie = 1
 	}
 
-	// Resolve amendment-vote names to IDs. Unknown names are logged
-	// and dropped — an operator with a stale config shouldn't block
-	// node boot. Same behavior as rippled silently skipping unknown
-	// amendments from [amendments].
+	// Seed per-amendment stances from the registry so an
+	// unconfigured validator votes the way rippled would: every
+	// supported feature defaults to its registered VoteBehavior
+	// (DefaultYes → VoteUp, DefaultNo → VoteAbstain via map lookup,
+	// Obsolete → VoteObsolete). Mirrors the constructor walk at
+	// AmendmentTable.cpp:556-580.
 	logger := slog.Default().With("component", "consensus-adaptor")
-	var amendmentVoteIDs [][32]byte
+	amendmentStances := make(map[[32]byte]amendmentvote.Stance)
+	for _, f := range amendment.AllFeatures() {
+		switch {
+		case f.Vote == amendment.VoteObsolete:
+			amendmentStances[f.ID] = amendmentvote.VoteObsolete
+		case f.Supported == amendment.SupportedYes && f.Vote == amendment.VoteDefaultYes && !f.Retired:
+			amendmentStances[f.ID] = amendmentvote.VoteUp
+		}
+	}
+
+	// Layer Config.AmendmentVote on top as operator overrides to
+	// VoteUp — same role as rippled's [amendments] stanza. Unknown
+	// names are logged and dropped (stale config must not block
+	// boot). Obsolete amendments cannot be promoted to VoteUp:
+	// rippled's persistVote refuses obsolete entries
+	// (AmendmentTable.cpp:728-733).
 	for _, name := range cfg.AmendmentVote {
 		f := amendment.GetFeatureByName(name)
 		if f == nil {
 			logger.Warn("unknown amendment in vote config; ignoring", "name", name)
 			continue
 		}
-		amendmentVoteIDs = append(amendmentVoteIDs, f.ID)
+		if f.Vote == amendment.VoteObsolete {
+			logger.Warn("obsolete amendment cannot be voted up; ignoring", "name", name)
+			continue
+		}
+		amendmentStances[f.ID] = amendmentvote.VoteUp
 	}
 
 	// Seed the amendment-vote cache with the initial UNL so
@@ -333,7 +359,7 @@ func New(cfg Config) *Adaptor {
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
 		cookie:            cookie,
 		feeVote:           feeVote,
-		amendmentVoteIDs:  amendmentVoteIDs,
+		amendmentStances:  amendmentStances,
 		trustedVotes:      trustedVotes,
 		logger:            logger,
 	}
@@ -975,7 +1001,7 @@ func (a *Adaptor) GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, p
 // sorted by amendment ID so two validators with the same stance
 // produce byte-identical validations.
 func (a *Adaptor) GetAmendmentVote() [][32]byte {
-	if len(a.amendmentVoteIDs) == 0 {
+	if len(a.amendmentStances) == 0 {
 		return nil
 	}
 
@@ -989,8 +1015,11 @@ func (a *Adaptor) GetAmendmentVote() [][32]byte {
 		}
 	}
 
-	out := make([][32]byte, 0, len(a.amendmentVoteIDs))
-	for _, id := range a.amendmentVoteIDs {
+	out := make([][32]byte, 0, len(a.amendmentStances))
+	for id, stance := range a.amendmentStances {
+		if stance != amendmentvote.VoteUp {
+			continue
+		}
 		if rules != nil && rules.Enabled(id) {
 			continue
 		}

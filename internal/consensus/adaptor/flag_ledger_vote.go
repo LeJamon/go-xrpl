@@ -245,9 +245,9 @@ func (a *Adaptor) runAmendmentVote(
 		votes[k] = v
 	}
 
-	stances := make(map[amendmentvote.Amendment]amendmentvote.Stance, len(a.amendmentVoteIDs))
-	for _, id := range a.amendmentVoteIDs {
-		stances[id] = amendmentvote.VoteUp
+	stances := make(map[amendmentvote.Amendment]amendmentvote.Stance, len(a.amendmentStances))
+	for id, stance := range a.amendmentStances {
+		stances[id] = stance
 	}
 
 	in := amendmentvote.Inputs{
