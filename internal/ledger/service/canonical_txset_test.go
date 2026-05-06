@@ -17,7 +17,7 @@ func TestCanonicalSortEmpty(t *testing.T) {
 
 func TestCanonicalSortSingle(t *testing.T) {
 	txs := []pendingTx{
-		{hash: [32]byte{0x01}, account: [20]byte{0xAA}, sequence: 1},
+		{hash: [32]byte{0x01}, account: [20]byte{0xAA}, seqProxy: 1},
 	}
 	canonicalSort(txs)
 	if txs[0].hash[0] != 0x01 {
@@ -32,8 +32,8 @@ func TestCanonicalSortByAccountKey(t *testing.T) {
 	account2 := [20]byte{0xFF}
 
 	txs := []pendingTx{
-		{txBlob: []byte{1}, hash: makeHash(1), account: account2, sequence: 1},
-		{txBlob: []byte{2}, hash: makeHash(2), account: account1, sequence: 1},
+		{txBlob: []byte{1}, hash: makeHash(1), account: account2, seqProxy: 1},
+		{txBlob: []byte{2}, hash: makeHash(2), account: account1, seqProxy: 1},
 	}
 
 	canonicalSort(txs)
@@ -63,22 +63,45 @@ func TestCanonicalSortBySequence(t *testing.T) {
 	// Same account, different sequences
 	account := [20]byte{0x42}
 	txs := []pendingTx{
-		{txBlob: []byte{1}, hash: makeHash(3), account: account, sequence: 10},
-		{txBlob: []byte{2}, hash: makeHash(1), account: account, sequence: 5},
-		{txBlob: []byte{3}, hash: makeHash(2), account: account, sequence: 8},
+		{txBlob: []byte{1}, hash: makeHash(3), account: account, seqProxy: 10},
+		{txBlob: []byte{2}, hash: makeHash(1), account: account, seqProxy: 5},
+		{txBlob: []byte{3}, hash: makeHash(2), account: account, seqProxy: 8},
 	}
 
 	canonicalSort(txs)
 
 	// Same account => sorted by sequence
-	if txs[0].sequence != 5 {
-		t.Errorf("expected sequence 5 first, got %d", txs[0].sequence)
+	if txs[0].seqProxy != 5 {
+		t.Errorf("expected sequence 5 first, got %d", txs[0].seqProxy)
 	}
-	if txs[1].sequence != 8 {
-		t.Errorf("expected sequence 8 second, got %d", txs[1].sequence)
+	if txs[1].seqProxy != 8 {
+		t.Errorf("expected sequence 8 second, got %d", txs[1].seqProxy)
 	}
-	if txs[2].sequence != 10 {
-		t.Errorf("expected sequence 10 third, got %d", txs[2].sequence)
+	if txs[2].seqProxy != 10 {
+		t.Errorf("expected sequence 10 third, got %d", txs[2].seqProxy)
+	}
+}
+
+func TestCanonicalSortSeqBeforeTicket(t *testing.T) {
+	// Same account: a sequence-based txn must sort before a ticket-based txn
+	// regardless of numeric value, matching rippled's SeqProxy::operator<.
+	// This guarantees that ticket-creating txns (sequence-based) sort before
+	// ticket-consuming txns (ticket-based) and that an account-creating txn
+	// is applied before a batch that uses an earlier-issued ticket.
+	account := [20]byte{0x42}
+	const ticketBit = uint64(1) << 32
+	txs := []pendingTx{
+		{txBlob: []byte{1}, hash: makeHash(1), account: account, seqProxy: ticketBit | 6}, // ticket value 6
+		{txBlob: []byte{2}, hash: makeHash(2), account: account, seqProxy: 16},             // sequence value 16
+	}
+
+	canonicalSort(txs)
+
+	if txs[0].seqProxy != 16 {
+		t.Errorf("expected sequence-based (16) first, got seqProxy=%#x", txs[0].seqProxy)
+	}
+	if txs[1].seqProxy != ticketBit|6 {
+		t.Errorf("expected ticket-based (6) second, got seqProxy=%#x", txs[1].seqProxy)
 	}
 }
 
@@ -90,9 +113,9 @@ func TestCanonicalSortByTxID(t *testing.T) {
 	hash3 := [32]byte{0x03}
 
 	txs := []pendingTx{
-		{txBlob: []byte{1}, hash: hash3, account: account, sequence: 1},
-		{txBlob: []byte{2}, hash: hash1, account: account, sequence: 1},
-		{txBlob: []byte{3}, hash: hash2, account: account, sequence: 1},
+		{txBlob: []byte{1}, hash: hash3, account: account, seqProxy: 1},
+		{txBlob: []byte{2}, hash: hash1, account: account, seqProxy: 1},
+		{txBlob: []byte{3}, hash: hash2, account: account, seqProxy: 1},
 	}
 
 	canonicalSort(txs)
@@ -113,10 +136,10 @@ func TestCanonicalSortDeterministic(t *testing.T) {
 	// Sorting the same set twice should produce the same result
 	makeTxs := func() []pendingTx {
 		return []pendingTx{
-			{txBlob: []byte{1}, hash: makeHash(5), account: [20]byte{0xAA}, sequence: 3},
-			{txBlob: []byte{2}, hash: makeHash(2), account: [20]byte{0xBB}, sequence: 1},
-			{txBlob: []byte{3}, hash: makeHash(8), account: [20]byte{0xCC}, sequence: 2},
-			{txBlob: []byte{4}, hash: makeHash(1), account: [20]byte{0xAA}, sequence: 1},
+			{txBlob: []byte{1}, hash: makeHash(5), account: [20]byte{0xAA}, seqProxy: 3},
+			{txBlob: []byte{2}, hash: makeHash(2), account: [20]byte{0xBB}, seqProxy: 1},
+			{txBlob: []byte{3}, hash: makeHash(8), account: [20]byte{0xCC}, seqProxy: 2},
+			{txBlob: []byte{4}, hash: makeHash(1), account: [20]byte{0xAA}, seqProxy: 1},
 		}
 	}
 

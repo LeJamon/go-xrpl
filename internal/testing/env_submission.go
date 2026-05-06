@@ -793,7 +793,7 @@ type canonicalEntry struct {
 	txn      tx.Transaction
 	hash     [32]byte
 	account  [20]byte
-	sequence uint32
+	seqProxy uint64
 }
 
 // buildCanonicalEntries pre-computes hashes, account IDs, and sequences for
@@ -812,7 +812,7 @@ func buildCanonicalEntries(txns []tx.Transaction) []canonicalEntry {
 			txn:      txn,
 			hash:     h,
 			account:  accountID,
-			sequence: common.SeqProxy(),
+			seqProxy: canonicalSeq(common),
 		}
 	}
 	return entries
@@ -845,8 +845,8 @@ func applyCanonicalSort(txns []tx.Transaction, entries []canonicalEntry, salt [3
 		if cmp != 0 {
 			return cmp < 0
 		}
-		if entries[ei.idx].sequence != entries[ej.idx].sequence {
-			return entries[ei.idx].sequence < entries[ej.idx].sequence
+		if entries[ei.idx].seqProxy != entries[ej.idx].seqProxy {
+			return entries[ei.idx].seqProxy < entries[ej.idx].seqProxy
 		}
 		return bytes.Compare(entries[ei.idx].hash[:], entries[ej.idx].hash[:]) < 0
 	})
@@ -1003,11 +1003,12 @@ func getNibble(h [32]byte, pos int) int {
 	return int(h[byteIdx] & 0x0F)
 }
 
-// canonicalSeq returns the effective sequence number for canonical ordering.
-// Sequence-based transactions sort before ticket-based ones (sequence values
-// are typically lower than ticket sequence values in practice).
-// Reference: rippled SeqProxy ordering: Seq < Ticket when values equal,
-// but in practice sequence numbers are always present.
+// canonicalSeq returns the effective sequence number for canonical ordering,
+// encoding both the SeqProxy type and value into a single uint64. All
+// sequence-based txns sort before all ticket-based txns regardless of value,
+// matching rippled's SeqProxy::operator< (the type bit dominates the value).
+// This guarantees ticket-creating txns sort before ticket-consuming txns.
+// Reference: rippled SeqProxy.h operator< (Seq=0 < Ticket=1).
 func canonicalSeq(c *tx.Common) uint64 {
 	if c.Sequence != nil && *c.Sequence != 0 {
 		return uint64(*c.Sequence)

@@ -105,7 +105,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte) 
 				txBlob:   rawBlob,
 				hash:     txHash,
 				account:  accountID,
-				sequence: common.SeqProxy(),
+				seqProxy: encodeSeqProxy(common),
 			})
 		}
 	}
