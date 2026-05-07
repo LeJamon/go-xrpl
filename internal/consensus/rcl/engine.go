@@ -1012,13 +1012,35 @@ func (e *Engine) timerEntry() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if e.adaptor.GetOperatingMode() != consensus.OpModeFull {
+	opMode := e.adaptor.GetOperatingMode()
+	if opMode == consensus.OpModeDisconnected {
+		// No peers — nothing to do. Run nothing, including checkLedger
+		// (which has nothing to check against anyway).
 		return
 	}
 
-	// Check we're on the correct ledger (matches rippled's checkLedger).
+	// checkLedger runs in EVERY non-disconnected mode. This is the
+	// recovery path back to Full from Syncing/Tracking: when we're
+	// behind and acquire a peer's tip via inbound, the next checkLedger
+	// tick detects the LCL mismatch (or match) and either fires
+	// handleWrongLedger to switch our prev OR — if our prev now matches
+	// peers' — letting the consensus router transition us back to Full.
+	//
+	// Previously this whole function early-returned for any opMode !=
+	// OpModeFull. That wedged the engine permanently in Tracking after
+	// my Layer 5 ModeManager fix dropped us to Syncing on a wrongLedger
+	// detection: the heartbeat stopped firing checkLedger, no recovery
+	// attempts, no path back to Full. validated_seq frozen forever.
 	if e.phase != consensus.PhaseAccepted {
 		e.checkLedger()
+	}
+
+	// Phase-specific work that PRODUCES new rounds / ledgers only runs
+	// in Full mode. In Syncing/Tracking we don't propose and don't
+	// auto-start new rounds — we wait for inbound ledger acquisition
+	// to resync us.
+	if opMode != consensus.OpModeFull {
+		return
 	}
 
 	switch e.phase {
