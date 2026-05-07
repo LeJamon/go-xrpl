@@ -237,6 +237,15 @@ func NewFromConfig(
 
 	engine.SetLedgerAncestryProvider(rcl.NewLedgerProvider(ledgerSvc))
 
+	// Wire the mode manager to listen for engine ModeChangedEvent so
+	// the network-level OperatingMode (Full/Syncing/Tracking) tracks
+	// the consensus engine's view of our LCL. Without this subscription
+	// the engine could drop into wrongLedger silently while opMode
+	// stayed at Full — and Full is what gates startRoundLocked into
+	// proposing, so we'd keep emitting positions on a side chain.
+	// See ModeManager.OnEvent for the transition rules.
+	engine.Subscribe(modeManager)
+
 	// Create the router
 	router := NewRouter(engine, adaptor, modeManager, overlay.Messages())
 	router.SetManifestCache(manifestCache, overlay)

@@ -128,6 +128,44 @@ func (m *ModeManager) SetMode(mode consensus.OperatingMode) {
 	m.transitionLocked(mode)
 }
 
+// OnEvent implements consensus.EventSubscriber. The mode manager
+// subscribes to the engine's event bus so the operator-visible
+// OperatingMode (used by server_info and gating proposing in
+// startRoundLocked) reflects what the consensus engine actually
+// observes about our LCL.
+//
+// We listen for ModeChangedEvent and translate the internal
+// consensus.Mode (proposing/observing/wrongLedger/switchedLedger)
+// into the network-level OperatingMode transitions defined in this
+// type's struct doc:
+//   - new == ModeWrongLedger
+//       → OnWrongLedger (Full/Tracking → Syncing). This stops us
+//         from proposing while we're on a side chain — the only
+//         protocol-correct posture, since proposals on a wrong
+//         parent never count toward peers' quorum. Mirrors
+//         rippled's effective behavior where wrongLedger mode
+//         keeps validating_=false until handleWrongLedger
+//         succeeds.
+//   - new in {ModeSwitchedLedger, ModeProposing, ModeObserving}
+//     coming OUT of ModeWrongLedger
+//       → OnLCLAcquired (Syncing → Tracking). We have the right
+//         parent again; bump up to Tracking. The Tracking →
+//         Full transition fires elsewhere on validations
+//         confirming our chain.
+func (m *ModeManager) OnEvent(event consensus.Event) {
+	mc, ok := event.(*consensus.ModeChangedEvent)
+	if !ok {
+		return
+	}
+	if mc.NewMode == consensus.ModeWrongLedger {
+		m.OnWrongLedger()
+		return
+	}
+	if mc.OldMode == consensus.ModeWrongLedger {
+		m.OnLCLAcquired()
+	}
+}
+
 // transitionLocked performs a mode transition while holding the lock.
 func (m *ModeManager) transitionLocked(newMode consensus.OperatingMode) {
 	if m.mode == newMode {
