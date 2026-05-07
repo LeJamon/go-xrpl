@@ -647,15 +647,31 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 	}
 	txMsg, ok := decoded.(*message.Transaction)
 	if !ok {
+		r.logger.Warn("decoded transaction has unexpected type",
+			"peer", msg.PeerID,
+			"got", fmt.Sprintf("%T", decoded))
 		return
 	}
 
 	blob := TransactionFromMessage(txMsg)
 	if len(blob) == 0 {
+		r.logger.Warn("inbound transaction has empty blob",
+			"peer", msg.PeerID,
+			"status", txMsg.Status)
 		return
 	}
 
 	r.adaptor.AddPendingTx(blob)
+	// Greppable INFO: every successful inbound TMTransaction. Count
+	// these vs the soak loadgen's tx_rate to spot peer-level drops.
+	// `kurtosis service logs xrpl-soak goxrpl-0 -a | grep "event=tx-inbound"`
+	r.logger.Info("inbound tx accepted into pending pool",
+		"t", "consensus",
+		"event", "tx-inbound",
+		"peer", msg.PeerID,
+		"blob_size", len(blob),
+		"status", txMsg.Status,
+	)
 }
 
 func (r *Router) handleHaveSet(msg *peermanagement.InboundMessage) {
