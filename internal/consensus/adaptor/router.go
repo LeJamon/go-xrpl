@@ -808,13 +808,26 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 		blobs = append(blobs, node.NodeData)
 	}
 
-	r.logger.Debug("received tx-set from peer",
+	r.logger.Info("received tx-set from peer",
+		"t", "consensus",
+		"event", "txset-recv",
 		"txset", fmt.Sprintf("%x", txSetID[:8]),
-		"txs", len(blobs))
+		"node_count", len(blobs),
+		"first_node_len", func() int {
+			if len(blobs) > 0 {
+				return len(blobs[0])
+			}
+			return 0
+		}(),
+	)
 
 	if err := r.engine.OnTxSet(txSetID, blobs); err != nil {
-		r.logger.Debug("engine rejected tx-set", "error", err,
-			"txset", fmt.Sprintf("%x", txSetID[:8]))
+		r.logger.Info("engine rejected tx-set",
+			"t", "consensus",
+			"event", "txset-reject",
+			"error", err.Error(),
+			"txset", fmt.Sprintf("%x", txSetID[:8]),
+			"node_count", len(blobs))
 	}
 }
 
