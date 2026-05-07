@@ -812,7 +812,6 @@ func TestRouter_ReplayDelta_Issue397_AutoArmsParentOnStash(t *testing.T) {
 		assert.Equal(t, seqN1, armedSeq,
 			"auto-arm must target the awaited parent seq")
 	}
-
 }
 
 // autoArmTarget returns the hash and seq of the single auto-armed
