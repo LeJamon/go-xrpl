@@ -670,7 +670,17 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		"hash_len", len(req.LedgerHash),
 	)
 
-	// Only handle base (header) requests for now
+	// liTS_CANDIDATE: peer wants the transactions in a candidate tx set
+	// we acquired during a consensus round. Mirrors rippled's
+	// PeerImp::getTxSet (PeerImp.cpp:3255-3287) — the ledger_hash field
+	// carries the tx-set ID, and the response is TMLedgerData with
+	// type=liTS_CANDIDATE and one node per transaction blob.
+	if req.InfoType == message.LedgerInfoTsCandidate {
+		r.serveTxSet(msg.PeerID, req)
+		return
+	}
+
+	// Only handle base (header) requests beyond this point.
 	if req.InfoType != message.LedgerInfoBase {
 		return
 	}
@@ -714,6 +724,97 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 
 	if err := r.adaptor.SendToPeer(uint64(msg.PeerID), frame); err != nil {
 		r.logger.Debug("failed to send ledger_data to peer", "error", err, "peer", msg.PeerID)
+	}
+}
+
+// serveTxSet replies to a peer's TMGetLedger{itype=liTS_CANDIDATE}
+// with the transactions of the requested tx set, encoded as
+// TMLedgerData{type=liTS_CANDIDATE, ledger_hash=<txSetID>,
+// nodes=[<tx blob>...]}.
+//
+// Mirrors rippled's PeerImp::getTxSet (PeerImp.cpp:3255-3287): the
+// ledger_hash field carries the tx-set's hash, and the response is
+// what the requester feeds into its dispute tracker so peer positions
+// stop being opaque hashes.
+func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger) {
+	if len(req.LedgerHash) != 32 {
+		return
+	}
+	var txSetID consensus.TxSetID
+	copy(txSetID[:], req.LedgerHash)
+
+	ts, ok := r.adaptor.txSetCache.Get(txSetID)
+	if !ok {
+		r.logger.Debug("peer requested tx-set we don't have",
+			"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]))
+		return
+	}
+
+	blobs := ts.Txs()
+	nodes := make([]message.LedgerNode, 0, len(blobs))
+	for _, blob := range blobs {
+		nodes = append(nodes, message.LedgerNode{NodeData: blob})
+	}
+
+	resp := &message.LedgerData{
+		LedgerHash:    req.LedgerHash,
+		LedgerSeq:     0, // tx-set responses carry no ledger seq (rippled sets 0 too)
+		InfoType:      message.LedgerInfoTsCandidate,
+		Nodes:         nodes,
+		RequestCookie: uint32(req.RequestCookie),
+	}
+
+	frame, err := encodeFrame(message.TypeLedgerData, resp)
+	if err != nil {
+		r.logger.Warn("failed to encode tx-set response", "error", err)
+		return
+	}
+
+	if err := r.adaptor.SendToPeer(uint64(peerID), frame); err != nil {
+		r.logger.Debug("failed to send tx-set response", "error", err, "peer", peerID)
+		return
+	}
+	r.logger.Debug("served tx-set to peer",
+		"peer", peerID,
+		"txset", fmt.Sprintf("%x", txSetID[:8]),
+		"txs", len(blobs))
+}
+
+// handleTxSetData consumes a TMLedgerData{type=liTS_CANDIDATE} response
+// from a peer. The ledger_hash field carries the tx-set ID we asked for
+// in RequestTxSet; each node's NodeData is one transaction blob.
+//
+// We hand the assembled blob list to the consensus engine via OnTxSet,
+// which builds a TxSet, caches it (so future peers can request it from
+// us), and triggers createDisputes against our current ourTxSet so the
+// dispute tracker knows about every tx in the symmetric difference.
+//
+// We do NOT verify the response hash here against the recomputed tx-set
+// ID — engine.OnTxSet does that via a TxSet.ID() check before storing.
+// A peer responding with mismatched contents is silently dropped at
+// that gate.
+func (r *Router) handleTxSetData(ld *message.LedgerData) {
+	if len(ld.LedgerHash) != 32 {
+		return
+	}
+	var txSetID consensus.TxSetID
+	copy(txSetID[:], ld.LedgerHash)
+
+	blobs := make([][]byte, 0, len(ld.Nodes))
+	for _, node := range ld.Nodes {
+		if len(node.NodeData) == 0 {
+			continue
+		}
+		blobs = append(blobs, node.NodeData)
+	}
+
+	r.logger.Debug("received tx-set from peer",
+		"txset", fmt.Sprintf("%x", txSetID[:8]),
+		"txs", len(blobs))
+
+	if err := r.engine.OnTxSet(txSetID, blobs); err != nil {
+		r.logger.Debug("engine rejected tx-set", "error", err,
+			"txset", fmt.Sprintf("%x", txSetID[:8]))
 	}
 }
 
@@ -1336,6 +1437,18 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 		"itype", ld.InfoType,
 		"has_inbound", r.inboundLedger != nil,
 	)
+
+	// liTS_CANDIDATE: response to a tx-set request we made during a
+	// consensus round. The hash field is the tx-set ID; each node carries
+	// one transaction blob. Mirrors rippled's
+	// InboundTransactions::gotData feeding the engine via gotTxSet
+	// (consensus-time only). Without this branch the engine never
+	// acquires peer tx sets, never builds disputes against them, and
+	// stays at propose_seq=0 — see #401 layer 3.
+	if ld.InfoType == message.LedgerInfoTsCandidate {
+		r.handleTxSetData(ld)
+		return
+	}
 
 	// Feed data to active inbound ledger acquisition
 	if r.inboundLedger != nil {

@@ -98,9 +98,24 @@ func (s *OverlaySender) UpdateRelaySlot(validatorKey []byte, originPeer uint64, 
 	}
 }
 
+// RequestTxSet asks peers for the contents of a transaction set we know
+// the hash of but don't yet hold. Sends TMGetLedger with itype=
+// liTS_CANDIDATE and ledger_hash=txSetID, mirroring rippled's protocol
+// (PeerImp::getTxSet at PeerImp.cpp:3255-3287 reads the txSetHash off
+// the ledger_hash field and replies with TMLedgerData{type=liTS_CANDIDATE}).
+//
+// Previously this method emitted TMHaveTransactionSet{status=tsNEED},
+// which rippled's onMessage(TMHaveTransactionSet) silently drops for any
+// status != tsHAVE (PeerImp.cpp:2008-2031). The result was that goxrpl
+// could never acquire a peer's tx set, never created disputes against
+// it, and never advanced its proposal — leaving propose_seq=0 forever
+// and stalling consensus convergence with rippled (issue #401, layer 3).
 func (s *OverlaySender) RequestTxSet(id consensus.TxSetID) error {
-	msg := HaveSetToMessage(id, message.TxSetStatusNeed)
-	frame, err := encodeFrame(message.TypeHaveSet, msg)
+	msg := &message.GetLedger{
+		InfoType:   message.LedgerInfoTsCandidate,
+		LedgerHash: id[:],
+	}
+	frame, err := encodeFrame(message.TypeGetLedger, msg)
 	if err != nil {
 		return fmt.Errorf("encode txset request: %w", err)
 	}
