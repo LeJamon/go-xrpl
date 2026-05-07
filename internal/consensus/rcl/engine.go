@@ -1478,7 +1478,22 @@ func (e *Engine) shouldCloseLedger() bool {
 
 	// Peer pressure: if more than half of previous round's proposers
 	// have already closed or validated, close immediately (matches rippled lines 67-73).
-	if (proposersClosed + proposersValidated) > e.prevProposers/2 {
+	//
+	// Pressure is gated on a minimum open time (LedgerMinClose, 2s).
+	// Without this gate, an empty round in a partial-UNL situation
+	// where only 1 trusted peer's proposals reach us results in
+	// e.prevProposers ≈ 1, so prevProposers/2 = 0 and ANY single peer
+	// "closing" trips the pressure check immediately. The local
+	// engine then races through new rounds at sub-second cadence and
+	// gets so far ahead of the network's validated tip that rippled's
+	// proposals (referencing the network's actual prevLedger) are
+	// dropped at OnProposal's prevLedger filter — making the situation
+	// worse on the next round (our prevProposers stays at 1). This
+	// 2-second floor mirrors rippled's spirit (Consensus.cpp:84-88
+	// preserves the minimum open time even under peer pressure) and
+	// breaks the runaway feedback loop observed in the live testnet.
+	if openTime >= e.timing.LedgerMinClose &&
+		(proposersClosed+proposersValidated) > e.prevProposers/2 {
 		return true
 	}
 
