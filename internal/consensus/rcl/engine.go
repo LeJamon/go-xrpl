@@ -609,6 +609,41 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 		e.adaptor.RelayProposal(proposal, originPeer)
 	}
 
+	// Greppable INFO log: every trusted peer proposal we ingest. Pin
+	// the seq, peer, position seq, the tx-set ID they're voting for
+	// and ours, and whether their tx-set was a cache hit. Lets a
+	// post-run grep tell whether tx-set divergence means "different
+	// IDs" (with cache miss → RequestTxSet) or "same ID, different
+	// content" (cache hit but hash math diverges). Use:
+	//   docker logs <goxrpl> | grep "t=consensus event=propose-recv"
+	if trusted {
+		var ourTxSet consensus.TxSetID
+		ourTxLen := -1
+		if e.ourTxSet != nil {
+			ourTxSet = e.ourTxSet.ID()
+			ourTxLen = e.ourTxSet.Size()
+		}
+		_, peerCacheHit := e.acquiredTxSets[proposal.TxSet]
+		if !peerCacheHit {
+			if cached, _ := e.adaptor.GetTxSet(proposal.TxSet); cached != nil {
+				peerCacheHit = true
+			}
+		}
+		slog.Info("proposal received",
+			"t", "consensus",
+			"event", "propose-recv",
+			"seq", proposal.Round.Seq,
+			"peer", originPeer,
+			"node", fmt.Sprintf("%x", proposal.NodeID[:6]),
+			"pos_seq", proposal.Position,
+			"peer_txset", fmt.Sprintf("%x", proposal.TxSet[:8]),
+			"our_txset", fmt.Sprintf("%x", ourTxSet[:8]),
+			"our_tx_count", ourTxLen,
+			"peer_txset_cache_hit", peerCacheHit,
+			"diff", proposal.TxSet != ourTxSet,
+		)
+	}
+
 	// Check if we need the transaction set. If the adaptor already
 	// has it, cache it locally for dispute wiring — rippled's
 	// gotTxSet(Consensus.h:843-844) fires eagerly in the same
@@ -1812,7 +1847,38 @@ func (e *Engine) updatePosition() {
 	// run the state-machine bookkeeping so avalanche levels are
 	// consistent across the round, but we gate flips on proposing.
 	proposing := e.mode == consensus.ModeProposing
+	disputeCount := e.disputeTracker.Count()
 	changed := e.disputeTracker.UpdateOurVote(e.convergePercent(), proposing, e.parms)
+
+	// Greppable INFO log: per-tick dispute resolution decision.
+	// Dispute count == 0 is the smoking gun for "tx-set divergence
+	// without disputes" — which means createDisputesAgainst never
+	// ran for the peer's tx-set (cache miss + no acquisition + no
+	// re-attempt). len(changed) > 0 means we'll rebuild ourTxSet
+	// and broadcast a new position. Use:
+	//   docker logs <goxrpl> | grep "t=consensus event=update-position"
+	if disputeCount > 0 || proposing {
+		var ourSetID consensus.TxSetID
+		ourSetSize := -1
+		if e.ourTxSet != nil {
+			ourSetID = e.ourTxSet.ID()
+			ourSetSize = e.ourTxSet.Size()
+		}
+		slog.Info("update position",
+			"t", "consensus",
+			"event", "update-position",
+			"seq", e.state.Round.Seq,
+			"mode", e.mode.String(),
+			"converge_pct", e.convergePercent(),
+			"disputes", disputeCount,
+			"flipped", len(changed),
+			"our_txset", fmt.Sprintf("%x", ourSetID[:8]),
+			"our_tx_count", ourSetSize,
+			"acquired_txsets", len(e.acquiredTxSets),
+			"peer_proposals", len(e.proposals),
+		)
+	}
+
 	if !proposing || len(changed) == 0 {
 		return
 	}
