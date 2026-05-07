@@ -2288,6 +2288,86 @@ func TestEngine_IsProposing_LockFreeWhileWriterHoldsMu(t *testing.T) {
 	}
 }
 
+// TestAcceptLedger_NoCloseTimeConsensus_DeterministicFallback pins
+// the issue #401 root-cause fix: when close-time consensus FAILS,
+// acceptLedger must use parentCloseTime + 1s — DETERMINISTICALLY —
+// for the new ledger's close time. Mirrors rippled
+// RCLConsensus.cpp:481-488.
+//
+// Before the fix, the no-consensus path fell through to
+// determineCloseTime → CloseTimes.Self (the local clock), so each
+// node hashed a different ledger header for the same seq. That
+// drove every subsequent locally-emitted validation onto a hash
+// that disagreed with the network's accepted hash, peers' Byzantine
+// Behavior Detector flagged us, and quorum became unreachable.
+//
+// We pin two properties:
+//  1. With haveCloseTimeConsensus=false and a wildly skewed local
+//     clock, the produced ledger's close time is exactly
+//     parentCloseTime + 1s — independent of the local clock.
+//  2. With haveCloseTimeConsensus=true, the engine still goes through
+//     determineCloseTime / effCloseTime (regression guard).
+func TestAcceptLedger_NoCloseTimeConsensus_DeterministicFallback(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	// Anchor parent ledger close time to a fixed, well-known value so
+	// the assertion does not depend on wall-clock at test time.
+	parentClose := time.Unix(1_700_000_000, 0).UTC()
+	parent := &mockLedger{
+		id:        consensus.LedgerID{0x01},
+		seq:       50,
+		closeTime: parentClose,
+	}
+	adaptor.lastLCL = parent
+	adaptor.ledgers[parent.ID()] = parent
+
+	// Pin the local clock far away from parentClose+1s so a regression
+	// to "Self fallback" is unambiguously observable.
+	adaptor.now = parentClose.Add(37 * time.Second)
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: parent.Seq() + 1, ParentHash: parent.ID()}
+	engine.StartRound(round, true)
+
+	// Drive acceptLedger directly with no close-time consensus.
+	engine.mu.Lock()
+	engine.prevLedger = parent
+	engine.haveCloseTimeConsensus = false
+	// Seed CloseTimes.Self to the same skewed clock so determineCloseTime
+	// (if it were still wired) would pick this value — making the
+	// regression visible. Real production inits Self from adaptor.Now().
+	engine.state.CloseTimes.Self = adaptor.now
+	engine.setPhase(consensus.PhaseEstablish)
+	engine.acceptLedger(consensus.ResultSuccess)
+	engine.mu.Unlock()
+
+	got := adaptor.lastLCL.CloseTime()
+	want := parentClose.Add(time.Second)
+	if !got.Equal(want) {
+		t.Fatalf("no-consensus close time: want %v (parentClose+1s, "+
+			"deterministic fallback), got %v — engine fell through "+
+			"to local-clock fallback, divergence regression of #401",
+			want, got)
+	}
+
+	// Sanity check: the local clock was skewed far enough that a
+	// regression would be unmistakable.
+	if got.Equal(adaptor.now) {
+		t.Fatalf("close time matches local clock — fallback path is "+
+			"using CloseTimes.Self (regression of #401 root-cause fix)")
+	}
+}
+
 // TestSendValidation_CanValidateSeq_DedupsSameAndOlderSeq pins the
 // issue #401 fix: sendValidation MUST silently drop a second emission
 // at the same — or any earlier — ledger sequence, no matter the hash.

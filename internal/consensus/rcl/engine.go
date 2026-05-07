@@ -1920,11 +1920,32 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		return
 	}
 
-	// Determine winning close time and apply effCloseTime
-	rawCloseTime := e.determineCloseTime()
-	resolution := e.adaptor.CloseTimeResolution()
+	// Determine the close time for the new ledger. Mirror rippled's
+	// fork at RCLConsensus.cpp:481-496:
+	//   - When close-time consensus IS reached, run determineCloseTime
+	//     and effCloseTime (rounds to resolution, ensures monotonicity
+	//     against the parent's close time).
+	//   - When close-time consensus FAILS, fall back DETERMINISTICALLY
+	//     to parentCloseTime + 1s.
+	//
+	// Without the deterministic fallback, determineCloseTime walks
+	// through to CloseTimes.Self — each node's local clock — so every
+	// node hashes a different ledger header for the same seq the moment
+	// the network can't agree on a closeTime. That divergence cascades:
+	// next round's parent differs across nodes, every locally-emitted
+	// validation conflicts with the network's accepted hash, peers'
+	// Byzantine Behavior Detector flags us permanently, quorum becomes
+	// unreachable. This is the root cause of issue #401.
 	priorClose := e.prevLedger.CloseTime()
-	closeTime := effCloseTime(rawCloseTime, resolution, priorClose)
+	resolution := e.adaptor.CloseTimeResolution()
+	var rawCloseTime, closeTime time.Time
+	if e.haveCloseTimeConsensus {
+		rawCloseTime = e.determineCloseTime()
+		closeTime = effCloseTime(rawCloseTime, resolution, priorClose)
+	} else {
+		closeTime = priorClose.Add(time.Second)
+		rawCloseTime = closeTime
+	}
 
 	slog.Debug("acceptLedger close time",
 		"seq", e.prevLedger.Seq()+1,
