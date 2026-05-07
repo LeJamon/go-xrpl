@@ -2368,6 +2368,88 @@ func TestAcceptLedger_NoCloseTimeConsensus_DeterministicFallback(t *testing.T) {
 	}
 }
 
+// TestAcceptLedger_WrongLedger_NoOpAndNoEmit pins the issue #401
+// layer-4 fix: when our consensus mode is wrongLedger, acceptLedger
+// must NOT advance the round, NOT store a built ledger, and NOT
+// broadcast a validation.
+//
+// Mirrors rippled's protocol behavior: updateOurPositions returns
+// early in wrongLedger mode (Consensus.h), so accept_ never fires.
+// Building a ledger on top of our wrong prevLedger using peers'
+// tx-set + close-time would produce a Frankenstein hash matching no
+// node's view — a silent broadcast of a divergent attestation that
+// counts toward zero quorum and may be flagged Byzantine.
+//
+// Properties pinned:
+//  1. Phase stays at Establish (round NOT advanced).
+//  2. No validation broadcast (gate suppressed before sendValidation).
+//  3. Re-running acceptLedger after mode is restored to Proposing
+//     proceeds normally (gate is mode-conditional, not permanent).
+func TestAcceptLedger_WrongLedger_NoOpAndNoEmit(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	// Force mode to wrongLedger, drive acceptLedger directly.
+	engine.mu.Lock()
+	engine.setMode(consensus.ModeWrongLedger)
+	engine.setPhase(consensus.PhaseEstablish)
+	engine.acceptLedger(consensus.ResultSuccess)
+	phaseInWrong := engine.phase
+	engine.mu.Unlock()
+
+	if phaseInWrong != consensus.PhaseEstablish {
+		t.Fatalf("wrongLedger acceptLedger must NOT advance phase; "+
+			"want Establish, got %v — round was force-accepted on "+
+			"a parent peers don't recognize", phaseInWrong)
+	}
+
+	adaptor.mu.RLock()
+	emittedDuringWrong := len(adaptor.validationsBroadcast)
+	adaptor.mu.RUnlock()
+	if emittedDuringWrong != 0 {
+		t.Fatalf("wrongLedger acceptLedger must NOT broadcast a "+
+			"validation; got %d emissions — Frankenstein hash "+
+			"would be flagged Byzantine by peers (#401)",
+			emittedDuringWrong)
+	}
+
+	// Restoring mode and calling acceptLedger again must proceed
+	// normally (Success path emits one validation). This pins that
+	// the gate is mode-conditional, not a permanent kill switch.
+	engine.mu.Lock()
+	engine.setMode(consensus.ModeProposing)
+	// Phase stayed at Establish from the suppressed call above, so
+	// we don't need to re-set it.
+	engine.acceptLedger(consensus.ResultSuccess)
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	emittedAfterRestore := len(adaptor.validationsBroadcast)
+	adaptor.mu.RUnlock()
+	if emittedAfterRestore != 1 {
+		t.Fatalf("post-restore acceptLedger must emit exactly one "+
+			"validation; got %d — gate is leaking past the "+
+			"mode==wrongLedger condition", emittedAfterRestore)
+	}
+}
+
 // TestSendValidation_CanValidateSeq_DedupsSameAndOlderSeq pins the
 // issue #401 fix: sendValidation MUST silently drop a second emission
 // at the same — or any earlier — ledger sequence, no matter the hash.

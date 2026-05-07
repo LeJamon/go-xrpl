@@ -1925,6 +1925,34 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		return
 	}
 
+	// Mirror rippled: when mode==wrongLedger, our prevLedger is on a
+	// chain peers don't recognize. Building a ledger on top of it
+	// (using the peer-popular tx-set + close-time we computed from
+	// THEIR positions) would produce a "Frankenstein" hash matching
+	// no node's view; storing it would corrupt our local store, the
+	// auto-advance would extend that bad chain, and a validation
+	// emitted for it would never count toward any quorum. Rippled
+	// avoids this implicitly by having updateOurPositions return
+	// early when mode==wrongLedger (Consensus.h), so accept_ never
+	// fires. We mirror that explicitly here.
+	//
+	// The round stays at PhaseEstablish. checkLedger (called from
+	// OnProposal) keeps retrying handleWrongLedger; once we acquire
+	// the right LCL, startRoundLocked resets phase to Open and the
+	// next round runs cleanly with the network's parent. This is
+	// the ONLY protocol-correct action — anything else broadcasts
+	// a divergent attestation. See issue #401 layer 4.
+	if e.mode == consensus.ModeWrongLedger {
+		slog.Info("acceptLedger suppressed",
+			"t", "consensus",
+			"event", "accept-skip-wrong-lcl",
+			"seq", e.prevLedger.Seq()+1,
+			"result", result.String(),
+			"wrong_lcl", fmt.Sprintf("%x", e.wrongLedgerID[:8]),
+		)
+		return
+	}
+
 	// Determine the close time for the new ledger. Mirror rippled's
 	// fork at RCLConsensus.cpp:481-496:
 	//   - When close-time consensus IS reached, run determineCloseTime
