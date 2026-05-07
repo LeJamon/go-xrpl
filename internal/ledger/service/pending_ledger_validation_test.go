@@ -203,15 +203,14 @@ func TestSetValidatedLedger_StashHashMismatch(t *testing.T) {
 }
 
 // TestSetValidatedLedger_StashesOnForkDivergence pins parity with
-// rippled's LedgerMaster::checkAccept(hash, seq), which is hash-keyed:
-// when the validated hash differs from the one we have at that seq,
-// rippled still calls getInboundLedgers().acquire(hash, seq, GENERIC)
-// (LedgerMaster.cpp:904-918). Our seq-keyed map must mirror by stashing
-// the (seq, expectedHash) pair on hash mismatch so a later acquisition-
-// then-adopt at the validated hash drains the stash and promotes
-// validated. The handler-fire side is guarded by seq > closedLedger
-// (the fork-divergence case typically sits at closed), so this test
-// also pins that the handler is NOT invoked for seq <= closed.
+// rippled's hash-keyed LedgerMaster::checkAccept(hash, seq): when the
+// validated hash differs from the one we have at that seq, rippled
+// still calls getInboundLedgers().acquire(hash, seq, GENERIC)
+// (LedgerMaster.cpp:904-918). Our seq-keyed map mirrors by stashing
+// the (seq, expectedHash) pair on hash mismatch so a later
+// acquisition-then-adopt at the validated hash drains the stash and
+// promotes validated. The handler-fire side is guarded by
+// seq > closedLedger; this test pins both halves.
 func TestSetValidatedLedger_StashesOnForkDivergence(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)
@@ -228,7 +227,6 @@ func TestSetValidatedLedger_StashesOnForkDivergence(t *testing.T) {
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
-	// Adopt locally at hash B.
 	var localHashB [32]byte
 	localHashB[0] = 0xD1
 	adoptedSeq := svc.GetClosedLedgerIndex() + 1
@@ -243,8 +241,7 @@ func TestSetValidatedLedger_StashesOnForkDivergence(t *testing.T) {
 		"setup: adopt must advance closedLedger so the fork case sits at seq == closed")
 	startValidated := svc.GetValidatedLedgerIndex()
 
-	// Wire a handler that records every fire so we can assert it is
-	// NOT invoked in the seq <= closed regime.
+	// Records every handler fire so we can assert none happened.
 	var (
 		mu    sync.Mutex
 		fires []uint32

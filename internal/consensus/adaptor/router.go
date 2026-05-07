@@ -129,12 +129,9 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManag
 		replayer:    inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
 		messageSeen: newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
 	}
-	// Wire the validation-stash hook so the router arms an acquisition
-	// the moment SetValidatedLedger stashes for a seq beyond our closed
-	// tip. Without this, the validation-tracker quorum decision sits
+	// Without this hook, the validation-tracker quorum decision sits
 	// silently in pendingLedgerValidations and validated_ledger.seq
 	// stays frozen even as consensus reports "fully validated".
-	// (Follow-up to issue #397.)
 	if adaptor != nil {
 		if svc := adaptor.LedgerService(); svc != nil {
 			svc.SetOnPendingValidationStashed(r.armValidationStashAcquisition)
@@ -1117,11 +1114,9 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 	return nil
 }
 
-// armValidationStashAcquisition fires an acquisition for a (seq, hash)
-// pair that SetValidatedLedger just stashed in pendingLedgerValidations
-// because ledgerHistory had no entry at seq matching expectedHash.
-// Wired as the onPendingValidationStashed callback on the ledger
-// service in NewRouter.
+// armValidationStashAcquisition arms an inbound acquisition for a
+// (seq, hash) pair that SetValidatedLedger stashed because we don't
+// have that exact ledger.
 //
 // Mirrors rippled's LedgerMaster::checkAccept(hash, seq), which calls
 // app_.getInboundLedgers().acquire(hash, seq, ...) on the same condition
@@ -1134,9 +1129,8 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 // Prefers a peer whose advertised LCL is at or above seq so the request
 // goes to a peer that can actually serve the ledger; falls back to any
 // tracked peer if none qualify (the maintenance tick rotates on silent-
-// peer timeouts). If no peers are tracked yet (early startup window),
-// skip — peer-status-change handlers will drive the acquisition once
-// peers connect.
+// peer timeouts). If no peers are tracked yet, skip — peer-status-change
+// handlers will drive the acquisition once peers connect.
 func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 	defer func() {
 		if rv := recover(); rv != nil {
@@ -1154,11 +1148,9 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 	if svc == nil {
 		return
 	}
-	// At-or-below-closed guard: at this height we either already have the
-	// ledger in history (in which case SetValidatedLedger took the inline
-	// hash-check branch) or it was evicted; the divergent-fork status-
-	// change handler is the right path for that case. Mirrors PR #398's
-	// armParentAcquisition guard.
+	// At or below closed: we either already have it locally or it was
+	// evicted; the divergent-fork status-change handler drives any
+	// reacquisition at active height.
 	if seq <= svc.GetClosedLedgerIndex() {
 		return
 	}

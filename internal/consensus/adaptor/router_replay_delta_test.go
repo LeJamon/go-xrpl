@@ -829,23 +829,22 @@ func autoArmTarget(rs *recordingSender) ([32]byte, uint32) {
 	return [32]byte{}, 0
 }
 
-// TestRouter_Issue397_AutoArmsAcquisitionOnValidationStash pins the
-// follow-up to #397: when SetValidatedLedger fires for a seq beyond our
-// closed ledger and ledgerHistory[seq] is empty, the router must arm an
-// acquisition for (seq, hash). Without this, validation-tracker quorum
-// decisions for ledgers we have not yet adopted sit silently in
-// pendingLedgerValidations until the entry expires, and validated_
-// ledger.seq stays frozen even while consensus reports "fully validated".
+// TestRouter_Issue397_AutoArmsAcquisitionOnValidationStash: when
+// SetValidatedLedger fires for a seq beyond our closed ledger and
+// ledgerHistory has nothing for it, the router must arm an acquisition
+// for (seq, hash). Without this, validation-tracker quorum decisions
+// for ledgers we have not yet adopted sit silently in
+// pendingLedgerValidations until the entry expires, and
+// validated_ledger.seq stays frozen even while consensus reports
+// "fully validated".
 //
 // Mirrors rippled's LedgerMaster::checkAccept(hash, seq) (LedgerMaster.cpp:917-919),
 // which calls app_.getInboundLedgers().acquire(hash, seq, ...) on the
-// same condition. PR #398 added the analogous arming for the held-
-// adoption stash; this test pins arming for the validation stash.
+// same condition.
 func TestRouter_Issue397_AutoArmsAcquisitionOnValidationStash(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
 
-	// Register a tracked peer so the router has a target for the
-	// acquisition. The recordingSender defaults to peerSupportsReplay=true.
+	// recordingSender defaults to peerSupportsReplay=true.
 	const peerID peermanagement.PeerID = 7
 	r.peersMu.Lock()
 	r.peerStates[peerID] = &peerLedgerState{
@@ -853,8 +852,7 @@ func TestRouter_Issue397_AutoArmsAcquisitionOnValidationStash(t *testing.T) {
 	}
 	r.peersMu.Unlock()
 
-	// Validation tracker fires for a seq well beyond our closed tip.
-	// Hash is arbitrary — we only need to verify the router asks for it.
+	// Hash is arbitrary — we only verify the router asks for it.
 	var validatedHash [32]byte
 	for i := range validatedHash {
 		validatedHash[i] = byte(0xA0 + i%16)
@@ -863,8 +861,6 @@ func TestRouter_Issue397_AutoArmsAcquisitionOnValidationStash(t *testing.T) {
 
 	svc.SetValidatedLedger(validatedSeq, validatedHash)
 
-	// Stash sanity: SetValidatedLedger must have stashed the (seq, hash)
-	// pair (no ledgerHistory entry yet — pre-condition for arming).
 	require.Eventually(t, func() bool {
 		return len(rs.replayCalls())+len(rs.legacyCalls()) >= 1
 	}, time.Second, 10*time.Millisecond,
@@ -883,15 +879,13 @@ func TestRouter_Issue397_AutoArmsAcquisitionOnValidationStash(t *testing.T) {
 	}
 }
 
-// TestRouter_Issue397_NoAcquisitionWhenNoPeers pins the no-peer guard:
-// when SetValidatedLedger stashes but the router has no tracked peers,
-// no acquisition is armed (peer-status-change handlers will drive it
-// once peers reconnect). Without this, dispatching to peerID=0 races
-// against the wire layer's per-peer routing.
+// TestRouter_Issue397_NoAcquisitionWhenNoPeers: when SetValidatedLedger
+// stashes but the router has no tracked peers, no acquisition is armed.
+// Dispatching to peerID=0 would race against the wire layer's per-peer
+// routing; peer-status-change handlers drive acquisition once peers
+// reconnect.
 func TestRouter_Issue397_NoAcquisitionWhenNoPeers(t *testing.T) {
 	_, _, rs, svc := makeRouter(t)
-
-	// No peer registered in r.peerStates.
 
 	var validatedHash [32]byte
 	for i := range validatedHash {
