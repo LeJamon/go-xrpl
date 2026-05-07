@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,14 +59,22 @@ type WebSocketConnection struct {
 // service container is attached to every RpcContext routed through the
 // server so handlers reach the ledger via ctx.Services. May be nil for
 // test contexts.
-func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer) *WebSocketServer {
+//
+// allowedOrigins controls which Origin headers may upgrade to a WebSocket
+// connection. nil or an empty list (or a list containing "*") allows all
+// origins, matching rippled's default behavior. Otherwise, the request
+// Origin's host (with optional port) is matched case-insensitively against
+// the list.
+//
+// Note: requests without an Origin header (curl, Node-based xrpl.js) are
+// always permitted because Origin enforcement is meaningful only for
+// browser-originated requests. An operator who wants to fully restrict
+// access by network identity should layer a network-level control (firewall,
+// reverse proxy, mTLS) in addition to this allowlist.
+func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer, allowedOrigins []string) *WebSocketServer {
 	return &WebSocketServer{
 		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool {
-				// TODO: Implement proper origin checking for security
-				// For now, allow all origins (matching rippled behavior)
-				return true
-			},
+			CheckOrigin: makeCheckOrigin(allowedOrigins),
 			// Don't require specific subprotocol - xrpl.js doesn't use one
 		},
 		subscriptionManager: &subscription.Manager{
@@ -74,6 +84,63 @@ func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer)
 		connections:    make(map[string]*WebSocketConnection),
 		timeout:        timeout,
 		services:       services,
+	}
+}
+
+// makeCheckOrigin builds a websocket.Upgrader CheckOrigin function from a
+// configurable allowlist. An empty allowlist (or "*") permits any origin,
+// preserving the historical "allow all" default and matching rippled's
+// behavior. Non-empty allowlists are matched case-insensitively against
+// the request Origin's host (with optional :port). Malformed Origin
+// headers are rejected when an allowlist is configured.
+func makeCheckOrigin(allowed []string) func(*http.Request) bool {
+	cleaned := make([]string, 0, len(allowed))
+	allowAll := len(allowed) == 0
+	for _, entry := range allowed {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if entry == "*" {
+			allowAll = true
+			continue
+		}
+		cleaned = append(cleaned, strings.ToLower(entry))
+	}
+
+	if allowAll {
+		return func(*http.Request) bool { return true }
+	}
+
+	allowSet := make(map[string]struct{}, len(cleaned))
+	for _, h := range cleaned {
+		allowSet[h] = struct{}{}
+	}
+
+	return func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			// Non-browser clients (curl, native xrpl.js in Node) do not send
+			// Origin. Allow them through; an allowlist only constrains
+			// browser-originated requests where Origin is mandatory.
+			return true
+		}
+		u, err := url.Parse(origin)
+		if err != nil || u.Host == "" {
+			return false
+		}
+		host := strings.ToLower(u.Host)
+		if _, ok := allowSet[host]; ok {
+			return true
+		}
+		// Also try the bare hostname without port, so an allowlist entry of
+		// "example.com" matches an Origin of "https://example.com:8443".
+		if h := u.Hostname(); h != "" {
+			if _, ok := allowSet[strings.ToLower(h)]; ok {
+				return true
+			}
+		}
+		return false
 	}
 }
 
