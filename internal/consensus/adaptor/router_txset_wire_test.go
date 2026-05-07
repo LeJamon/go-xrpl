@@ -254,11 +254,14 @@ func TestRequestTxSet_WireFormat(t *testing.T) {
 		0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20,
 	}
 
-	// These two lines are exactly what OverlaySender.RequestTxSet does;
+	// These lines are exactly what OverlaySender.RequestTxSet does;
 	// keep them in sync if that function changes.
+	rootNodeID := make([]byte, 33)
 	msg := &message.GetLedger{
 		InfoType:   message.LedgerInfoTsCandidate,
 		LedgerHash: id[:],
+		QueryDepth: 3,
+		NodeIDs:    [][]byte{rootNodeID},
 	}
 	frame, err := encodeFrame(message.TypeGetLedger, msg)
 	require.NoError(t, err)
@@ -272,4 +275,14 @@ func TestRequestTxSet_WireFormat(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, message.LedgerInfoTsCandidate, req.InfoType)
 	assert.Equal(t, id[:], req.LedgerHash)
+	assert.Equal(t, uint32(3), req.QueryDepth,
+		"query_depth must be set so rippled returns the whole "+
+			"tx-set tree in one round-trip")
+	require.Len(t, req.NodeIDs, 1,
+		"node_ids must contain at least the root SHAMap node ID — "+
+			"rippled rejects with 'Invalid ledger node IDs' otherwise "+
+			"(PeerImp.cpp:1435-1438, #401 layer 3 follow-up)")
+	assert.Len(t, req.NodeIDs[0], 33,
+		"SHAMap node ID is 32 bytes path + 1 byte depth = 33 bytes "+
+			"(SHAMapNodeID::getRawString)")
 }

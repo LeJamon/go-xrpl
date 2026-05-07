@@ -100,20 +100,34 @@ func (s *OverlaySender) UpdateRelaySlot(validatorKey []byte, originPeer uint64, 
 
 // RequestTxSet asks peers for the contents of a transaction set we know
 // the hash of but don't yet hold. Sends TMGetLedger with itype=
-// liTS_CANDIDATE and ledger_hash=txSetID, mirroring rippled's protocol
-// (PeerImp::getTxSet at PeerImp.cpp:3255-3287 reads the txSetHash off
-// the ledger_hash field and replies with TMLedgerData{type=liTS_CANDIDATE}).
+// liTS_CANDIDATE, ledger_hash=txSetID, query_depth=3, and a single
+// node_ids entry pointing at the SHAMap root.
 //
-// Previously this method emitted TMHaveTransactionSet{status=tsNEED},
-// which rippled's onMessage(TMHaveTransactionSet) silently drops for any
-// status != tsHAVE (PeerImp.cpp:2008-2031). The result was that goxrpl
-// could never acquire a peer's tx set, never created disputes against
-// it, and never advanced its proposal — leaving propose_seq=0 forever
-// and stalling consensus convergence with rippled (issue #401, layer 3).
+// Mirrors rippled's TransactionAcquire::trigger initial request
+// (TransactionAcquire.cpp:128-137):
+//
+//   tmGL.set_ledgerhash(hash);
+//   tmGL.set_itype(protocol::liTS_CANDIDATE);
+//   tmGL.set_querydepth(3);
+//   *(tmGL.add_nodeids()) = SHAMapNodeID().getRawString();
+//
+// The node_ids field is REQUIRED for any itype != liBASE — rippled's
+// PeerImp::onMessage(TMGetLedger) at PeerImp.cpp:1435-1438 rejects
+// the message with "Invalid ledger node IDs" if nodeids_size() <= 0.
+// Without the root node ID + query_depth, rippled silently drops the
+// request and never sends back the tx-set, so goxrpl never acquires
+// peer tx-sets, never creates per-tx disputes, and the avalanche
+// resolution can't converge across goxrpl/rippled. Issue #401 layer 3.
+//
+// SHAMapNodeID root encoding (rippled SHAMapNodeID::getRawString):
+//   33 bytes total = 32 bytes path (zero for root) + 1 byte depth (0).
 func (s *OverlaySender) RequestTxSet(id consensus.TxSetID) error {
+	rootNodeID := make([]byte, 33) // 32 zeros + 1 depth byte (0)
 	msg := &message.GetLedger{
 		InfoType:   message.LedgerInfoTsCandidate,
 		LedgerHash: id[:],
+		QueryDepth: 3,
+		NodeIDs:    [][]byte{rootNodeID},
 	}
 	frame, err := encodeFrame(message.TypeGetLedger, msg)
 	if err != nil {
