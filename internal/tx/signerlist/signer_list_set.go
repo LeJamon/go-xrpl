@@ -3,6 +3,7 @@ package signerlist
 import (
 	"sort"
 
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -200,14 +201,24 @@ func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Account.RegularKey = ""
 	}
 
-	// If this was a free password change (fee=0), mark the password as spent.
-	// Reference: rippled SetRegularKey.cpp doApply — sets lsfPasswordSpent
-	// when the open ledger fee was 0 (the one-time free password change).
-	if ctx.Config.BaseFee > 0 {
-		fee := s.GetCommon().Fee
-		if fee == "0" {
-			ctx.Account.Flags |= state.LsfPasswordSpent
+	// Mark password spent if this tx QUALIFIED for the free
+	// password-change discount (signed by master key on an account
+	// without lsfPasswordSpent set). Match rippled's
+	// SetRegularKey.cpp doApply: it sets lsfPasswordSpent based on
+	// "mFeeDue == 0" (the calculated minimum fee), NOT on the fee
+	// the user actually paid. Goxrpl was checking
+	// `s.GetCommon().Fee == "0"`, which mishandled the case where
+	// the user paid more than the minimum and broke account_hash
+	// parity at every SetRegularKey in the soak network.
+	common := s.GetCommon()
+	signedWithMaster := false
+	if spk := common.SigningPubKey; spk != "" {
+		if sigAddr, sigErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(spk); sigErr == nil && sigAddr == common.Account {
+			signedWithMaster = true
 		}
+	}
+	if signedWithMaster && (ctx.Account.Flags&state.LsfPasswordSpent) == 0 {
+		ctx.Account.Flags |= state.LsfPasswordSpent
 	}
 
 	return tx.TesSUCCESS
