@@ -1580,12 +1580,41 @@ func (e *Engine) closeLedger() {
 	}
 
 	// Seed disputes against every peer position whose tx set we
-	// already hold. Matches rippled's closeLedger loop at
-	// Consensus.h:1461-1467.
+	// already hold, AND fire tx-set acquisition for the peers whose
+	// position we DON'T hold yet. Matches rippled's closeLedger loop
+	// at Consensus.h:1461-1467 plus the implicit acquisition that
+	// rippled's playbackProposals path performs via gotTxSet.
+	//
+	// Without the request half, replayed (buffered) proposals from
+	// the previous round's tail end sit in e.proposals with no
+	// dispute creation possible — RequestTxSet has only ever been
+	// called from OnProposal, which doesn't re-fire for replayed
+	// proposals. The result is the seq=17 stall pattern observed in
+	// the live testnet: 12 seconds of "disputes=0 acquired_txsets=1
+	// peer_proposals=3" before fresh OnProposal calls finally
+	// triggered acquisition. By then the round had timed out.
+	requested := make(map[consensus.TxSetID]struct{})
 	for _, p := range e.proposals {
 		if peerSet, ok := e.acquiredTxSets[p.TxSet]; ok {
 			e.createDisputesAgainst(peerSet)
+			continue
 		}
+		if e.ourTxSet != nil && p.TxSet == e.ourTxSet.ID() {
+			continue
+		}
+		// Try the wider adaptor cache first; if it has the set, lift it
+		// into acquiredTxSets and create disputes immediately. Otherwise
+		// dedupe-by-id and fire one RequestTxSet per unknown set.
+		if peerSet, err := e.adaptor.GetTxSet(p.TxSet); err == nil && peerSet != nil {
+			e.acquiredTxSets[p.TxSet] = peerSet
+			e.createDisputesAgainst(peerSet)
+			continue
+		}
+		if _, already := requested[p.TxSet]; already {
+			continue
+		}
+		requested[p.TxSet] = struct{}{}
+		e.adaptor.RequestTxSet(p.TxSet)
 	}
 
 	// Move to establish phase
