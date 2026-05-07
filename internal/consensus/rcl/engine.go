@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1301,6 +1302,8 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID) {
 		// promoted back to ModeProposing normally — so we still get
 		// full participation, just not on the recovery round itself.
 		slog.Info("Switching to network ledger",
+			"t", "consensus",
+			"event", "switch-lcl",
 			"seq", newLedger.Seq(),
 			"hash", fmt.Sprintf("%x", netLedgerID[:8]),
 		)
@@ -1319,6 +1322,8 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID) {
 	} else {
 		// Not found — enter wrong ledger mode and request from peers
 		slog.Info("Cannot acquire network ledger, entering wrongLedger mode",
+			"t", "consensus",
+			"event", "wrong-lcl",
 			"hash", fmt.Sprintf("%x", netLedgerID[:8]),
 		)
 		if e.state != nil {
@@ -1939,24 +1944,45 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	priorClose := e.prevLedger.CloseTime()
 	resolution := e.adaptor.CloseTimeResolution()
 	var rawCloseTime, closeTime time.Time
+	var ctBranch string
 	if e.haveCloseTimeConsensus {
 		rawCloseTime = e.determineCloseTime()
 		closeTime = effCloseTime(rawCloseTime, resolution, priorClose)
+		ctBranch = "consensus"
 	} else {
 		closeTime = priorClose.Add(time.Second)
 		rawCloseTime = closeTime
+		ctBranch = "fallback"
 	}
 
-	slog.Debug("acceptLedger close time",
+	// Greppable INFO log: per-round close-time decision. Mirrors the
+	// inputs and outputs of rippled's RCLConsensus::doAccept close-time
+	// fork (RCLConsensus.cpp:481-496) so we can compare goxrpl's
+	// position.closeTime + closeTimeCorrect with rippled's per-round
+	// debug dump field-for-field. Use:
+	//   docker logs <goxrpl> | grep "t=consensus event=accept-ct"
+	var ourPosCT int64
+	var ourPosSeq uint32
+	if e.state != nil && e.state.OurPosition != nil {
+		ourPosCT = e.state.OurPosition.CloseTime.Unix() - protocol.RippleEpochUnix
+		ourPosSeq = e.state.OurPosition.Position
+	}
+	slog.Info("close-time decision",
+		"t", "consensus",
+		"event", "accept-ct",
 		"seq", e.prevLedger.Seq()+1,
-		"mode", e.mode,
-		"raw_ct", rawCloseTime.Unix()-protocol.RippleEpochUnix,
-		"eff_ct", closeTime.Unix()-protocol.RippleEpochUnix,
-		"prior_ct", priorClose.Unix()-protocol.RippleEpochUnix,
-		"resolution", resolution,
-		"proposers", len(e.proposals),
-		"has_position", e.state.OurPosition != nil,
-		"ct_consensus", e.haveCloseTimeConsensus,
+		"mode", e.mode.String(),
+		"have_ct_consensus", e.haveCloseTimeConsensus,
+		"ct_branch", ctBranch,
+		"raw_ct_xrpl", rawCloseTime.Unix()-protocol.RippleEpochUnix,
+		"eff_ct_xrpl", closeTime.Unix()-protocol.RippleEpochUnix,
+		"prior_ct_xrpl", priorClose.Unix()-protocol.RippleEpochUnix,
+		"our_pos_ct_xrpl", ourPosCT,
+		"our_pos_seq", ourPosSeq,
+		"self_ct_xrpl", e.state.CloseTimes.Self.Unix()-protocol.RippleEpochUnix,
+		"resolution_s", int(resolution.Seconds()),
+		"peer_ct_count", len(e.state.CloseTimes.Peers),
+		"proposer_count", len(e.proposals),
 	)
 
 	// Get the agreed transaction set
@@ -2038,7 +2064,33 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// rounds emit a PARTIAL validation (Full=false) — peers rely on
 	// these as early liveness signals before full quorum materializes.
 	consensusFail := result != consensus.ResultSuccess
-	if e.adaptor.IsValidator() && !consensusFail {
+	isValidator := e.adaptor.IsValidator()
+	canValidate := newLedger.Seq() > e.ourLastValidatedSeq
+	willEmit := isValidator && !consensusFail && canValidate
+
+	// Greppable INFO log: validation gate decision. Lets us tell at a
+	// glance which arm of rippled's gate (RCLConsensus.cpp:587-594)
+	// suppressed an emission — e.g. "consensus_fail=true" means we hit
+	// the soft timeout (ResultTimeout/Abandoned/MovedOn), which is
+	// rippled's Expired path zeroing validating_. Use:
+	//   docker logs <goxrpl> | grep "t=consensus event=validate-gate"
+	newLedgerID := newLedger.ID()
+	hashShort := fmt.Sprintf("%x", newLedgerID[:8])
+	slog.Info("validation gate",
+		"t", "consensus",
+		"event", "validate-gate",
+		"seq", newLedger.Seq(),
+		"hash", hashShort,
+		"result", result.String(),
+		"is_validator", isValidator,
+		"consensus_fail", consensusFail,
+		"can_validate_seq", canValidate,
+		"our_last_validated_seq", e.ourLastValidatedSeq,
+		"mode", e.mode.String(),
+		"decision", emitDecision(willEmit, isValidator, consensusFail, canValidate),
+	)
+
+	if willEmit {
 		e.sendValidation(newLedger)
 	}
 
@@ -2168,6 +2220,7 @@ func (e *Engine) updateCloseTimePosition() {
 	neededWeight := e.getCloseTimeNeededWeight()
 	threshVote := participantsNeeded(participants, neededWeight)
 	threshConsensus := participantsNeeded(participants, 75) // avCT_CONSENSUS_PCT
+	threshVoteInitial := threshVote
 
 	// Find winning close time
 	var consensusCloseTime time.Time
@@ -2182,18 +2235,117 @@ func (e *Engine) updateCloseTimePosition() {
 		}
 	}
 
+	// Greppable INFO log: close-time avalanche tally per timer tick.
+	// Surfaces the exact vote distribution and threshold math so we
+	// can compare to rippled's per-tick close-time decision and tell
+	// whether goxrpl is converging on the SAME close_time bucket as
+	// rippled. Use:
+	//   docker logs <goxrpl> | grep "t=consensus event=ct-avalanche"
+	votesSummary := summarizeCloseTimeVotes(closeTimeVotes)
+	var consensusCT int64
+	if !consensusCloseTime.IsZero() {
+		consensusCT = consensusCloseTime.Unix() - protocol.RippleEpochUnix
+	}
+	var ourPosCT int64
+	var ourPosSeq uint32
+	if e.state.OurPosition != nil {
+		ourPosCT = e.state.OurPosition.CloseTime.Unix() - protocol.RippleEpochUnix
+		ourPosSeq = e.state.OurPosition.Position
+	}
+	slog.Info("close-time avalanche",
+		"t", "consensus",
+		"event", "ct-avalanche",
+		"seq", e.state.Round.Seq,
+		"mode", e.mode.String(),
+		"converge_pct", e.convergePercent(),
+		"avalanche_state", closeTimeAvalancheStateName(e.closeTimeAvalancheState),
+		"needed_weight", neededWeight,
+		"thresh_vote", threshVoteInitial,
+		"thresh_consensus", threshConsensus,
+		"participants", participants,
+		"have_consensus", e.haveCloseTimeConsensus,
+		"consensus_ct_xrpl", consensusCT,
+		"our_pos_ct_xrpl", ourPosCT,
+		"our_pos_seq", ourPosSeq,
+		"votes", votesSummary,
+	)
+
 	// Update our proposal if close time changed
 	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil && !consensusCloseTime.IsZero() {
 		ourRounded := roundCloseTime(e.state.OurPosition.CloseTime, resolution)
 		if consensusCloseTime != ourRounded {
+			oldCT := e.state.OurPosition.CloseTime.Unix() - protocol.RippleEpochUnix
 			e.state.OurPosition.CloseTime = consensusCloseTime
 			e.state.OurPosition.Position++
 			e.state.OurPosition.Timestamp = e.adaptor.Now()
 			if err := e.adaptor.SignProposal(e.state.OurPosition); err == nil {
 				e.adaptor.BroadcastProposal(e.state.OurPosition)
 			}
+			// Greppable INFO log: our position close-time bumped to the
+			// avalanche-winning bucket. Each bump emits a new proposal
+			// (Position++); rippled does the same in
+			// updateOurPositions (Consensus.h:1565-1610). Use:
+			//   docker logs <goxrpl> | grep "t=consensus event=ct-bump"
+			slog.Info("our close-time bumped",
+				"t", "consensus",
+				"event", "ct-bump",
+				"seq", e.state.Round.Seq,
+				"old_ct_xrpl", oldCT,
+				"new_ct_xrpl", consensusCT,
+				"new_pos_seq", e.state.OurPosition.Position,
+			)
 		}
 	}
+}
+
+// summarizeCloseTimeVotes returns a compact "ct1=count1 ct2=count2"
+// rendering of the close-time vote distribution for log lines, where
+// each ctN is the rounded close time in XRPL-epoch seconds. Bounded
+// to the first 8 entries so a pathological round can't blow the log.
+func summarizeCloseTimeVotes(votes map[time.Time]int) string {
+	if len(votes) == 0 {
+		return "(empty)"
+	}
+	type kv struct {
+		ct    int64
+		count int
+	}
+	all := make([]kv, 0, len(votes))
+	for t, c := range votes {
+		all = append(all, kv{ct: t.Unix() - protocol.RippleEpochUnix, count: c})
+	}
+	limit := len(all)
+	if limit > 8 {
+		limit = 8
+	}
+	var b strings.Builder
+	for i := 0; i < limit; i++ {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "%d=%d", all[i].ct, all[i].count)
+	}
+	if len(all) > limit {
+		fmt.Fprintf(&b, " (+%d more)", len(all)-limit)
+	}
+	return b.String()
+}
+
+// closeTimeAvalancheStateName returns a short name for the avalanche
+// stage the close-time tally is currently in. Lets the diagnostic log
+// say "mid" / "late" / "stuck" instead of an integer.
+func closeTimeAvalancheStateName(s avalancheState) string {
+	switch s {
+	case avalancheInit:
+		return "init"
+	case avalancheMid:
+		return "mid"
+	case avalancheLate:
+		return "late"
+	case avalancheStuck:
+		return "stuck"
+	}
+	return "unknown"
 }
 
 // getCloseTimeNeededWeight returns the minimum vote percentage for close time
@@ -2426,6 +2578,12 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 	}
 
 	if err := e.adaptor.SignValidation(validation); err != nil {
+		slog.Warn("validation sign failed",
+			"t", "consensus",
+			"event", "validate-sign-fail",
+			"seq", ledger.Seq(),
+			"error", err,
+		)
 		return
 	}
 
@@ -2436,6 +2594,20 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 	// after broadcast. Mirrors rippled's handleNewValidation feeding
 	// the local Validations tracker before TMValidation goes out.
 	e.ourLastValidatedSeq = ledger.Seq()
+
+	// Greppable INFO log: actual validation broadcast. Pin the seq, the
+	// hash we attest, and whether it's Full so we can correlate against
+	// rippled's "Val for X by Y" logs. Use:
+	//   docker logs <goxrpl> | grep "t=consensus event=validate-emit"
+	ledgerID := ledger.ID()
+	slog.Info("validation emitted",
+		"t", "consensus",
+		"event", "validate-emit",
+		"seq", ledger.Seq(),
+		"hash", fmt.Sprintf("%x", ledgerID[:8]),
+		"full", full,
+		"sign_time_xrpl", signTime.Unix()-protocol.RippleEpochUnix,
+	)
 
 	e.adaptor.BroadcastValidation(validation)
 
@@ -2477,6 +2649,27 @@ func roundCloseTime(closeTime time.Time, resolution time.Duration) time.Time {
 	xrplSec += resSec / 2
 	xrplSec -= xrplSec % resSec
 	return time.Unix(xrplSec+protocol.RippleEpochUnix, 0).UTC()
+}
+
+// emitDecision returns a short human-readable label naming which arm
+// of the rippled-style validation gate (validating_ && !consensusFail
+// && canValidateSeq) decided emit/no-emit. Used by the validate-gate
+// diagnostic log so a grep over goxrpl's logs surfaces the exact
+// suppression cause without needing to cross-reference the booleans.
+func emitDecision(emit, isValidator, consensusFail, canValidate bool) string {
+	if emit {
+		return "emit"
+	}
+	if !isValidator {
+		return "skip:not-validator"
+	}
+	if consensusFail {
+		return "skip:consensus-fail"
+	}
+	if !canValidate {
+		return "skip:already-validated-seq"
+	}
+	return "skip:unknown"
 }
 
 // effCloseTime calculates the effective ledger close time.
