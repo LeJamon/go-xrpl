@@ -682,10 +682,15 @@ func TestRouter_ReplayDelta_CascadesOutOfOrderArrival(t *testing.T) {
 		Payload: payloadN2,
 	})
 
-	// N+2's acquisition has completed (verified + applied), but the
-	// adopt was stashed — not persisted to history.
-	require.Equal(t, 0, r.replayer.Count(),
-		"N+2 acquisition must be cleared once the response is verified and adopt routed")
+	// N+2's verified acquisition slot has been cleared, and the adopt
+	// was stashed (not persisted to history). Issue #397: when
+	// SubmitHeldAdoption stashes, the router auto-arms a backward-
+	// chain acquisition for the awaited parent (N+1). So the in-flight
+	// count is now 1 — the auto-armed N+1 slot — not 0.
+	require.Equal(t, 1, r.replayer.Count(),
+		"after stash the router must auto-arm a backward-chain acquisition for the missing parent")
+	require.True(t, r.replayer.Has(hashN1),
+		"the auto-armed acquisition must target the awaited parent hash N+1")
 	_, err = svc.GetLedgerByHash(hashN2)
 	require.Error(t, err,
 		"N+2 must NOT be in svc history yet — parent seq N+1 has not arrived, so SubmitHeldAdoption must stash")
@@ -694,12 +699,11 @@ func TestRouter_ReplayDelta_CascadesOutOfOrderArrival(t *testing.T) {
 
 	// --- In-order arrival: N+1 lands and cascades N+2 ---
 	//
-	// Arm and deliver N+1. Its ParentHash matches parentN.Hash()
-	// (parentN IS in svc history), so SubmitHeldAdoption fast-paths
-	// into the adopt, which then runs cascadeHeldAdoptionsLocked and
-	// finds the N+2 entry keyed by seqN1. N+2's ParentHash ==
-	// hashN1, so the cascade promotes it.
-	require.NoError(t, r.startReplayDeltaAcquisition(seqN1, hashN1, 9, parentN))
+	// The router auto-armed the N+1 acquisition above. Deliver N+1's
+	// response into the existing slot. SubmitHeldAdoption fast-paths
+	// into the adopt (parentN IS in svc history), then runs
+	// cascadeHeldAdoptionsLocked and finds the N+2 entry keyed by
+	// seqN1. N+2's ParentHash == hashN1, so the cascade promotes it.
 	payloadN1, err := message.Encode(respN1)
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
@@ -739,4 +743,123 @@ func TestRouter_ReplayDelta_CascadesOutOfOrderArrival(t *testing.T) {
 	// the final state must be >= Tracking regardless.
 	assert.True(t, a.GetOperatingMode() >= consensus.OpModeTracking,
 		"operating mode must be at least Tracking after cascade (was %s)", a.GetOperatingMode())
+}
+
+// TestRouter_ReplayDelta_Issue397_AutoArmsParentOnStash is the issue
+// #397 regression. Reproduces the steady-state symptom: the node is
+// multiple ledgers behind the network, checkBehind acquires only the
+// peer's tip, and the tip's replay-delta arrives with a parent that is
+// not in svc history. Without backward-chaining, the candidate sits in
+// heldAdoptions until heldAdoptionTTL evicts it; the validation-tracker
+// notification for the tip stashes in pendingLedgerValidations but
+// never promotes because ledgerHistory[seq] is never populated; RPC
+// validated_ledger.seq stays at genesis indefinitely.
+//
+// The fix wires SubmitHeldAdoption to return Stashed=true on the
+// missing-parent path, and adoptVerifiedLedger / completeInboundLedger
+// auto-arm an acquisition for the awaited parent seq+hash. The chain
+// converges as each backward acquisition arrives and stashes one step
+// further back, until a parent that DOES match svc history lands and
+// the existing cascade promotes the chain forward (covered by
+// TestRouter_ReplayDelta_CascadesOutOfOrderArrival).
+//
+// This test pins the auto-arm signal: the observable evidence that the
+// router fires a backward-chain request when SubmitHeldAdoption stashes
+// instead of leaving the candidate to age out at heldAdoptionTTL.
+func TestRouter_ReplayDelta_Issue397_AutoArmsParentOnStash(t *testing.T) {
+	r, _, rs, svc := makeRouter(t)
+
+	// Step svc past genesis so we have a real parent at seq 2 whose
+	// hash chains correctly into a Close()-derived successor at seq 3
+	// (genesis's skip-list is a special case).
+	_, err := svc.AcceptLedger(context.TODO())
+	require.NoError(t, err)
+
+	parentN := svc.GetClosedLedger()
+	require.NotNil(t, parentN)
+	parentSeq := parentN.Sequence()
+
+	// Build a 2-link chain in-memory: N+1 (the gap) and N+2 (the tip).
+	// Only parentN is in svc history; N+1 is NOT — that is the gap.
+	_, ledgerN1, hashN1, seqN1 := buildSuccessorAgainstParent(t, parentN)
+	respN2, _, hashN2, seqN2 := buildSuccessorAgainstParent(t, ledgerN1)
+	require.Equal(t, parentSeq+1, seqN1)
+	require.Equal(t, parentSeq+2, seqN2)
+	require.NotEqual(t, hashN1, hashN2)
+
+	// --- Tip-only acquisition: arm N+2 (the peer's tip). ledgerN1 is
+	// supplied as the in-memory parent so the replay-delta verifier
+	// passes; we want the test to exercise the post-Apply adopt path,
+	// not the verification path. ---
+	require.NoError(t, r.startReplayDeltaAcquisition(seqN2, hashN2, 7, ledgerN1))
+
+	// Reset the recording sender so the assertion below sees only the
+	// auto-arm, not the manual N+2 arm above.
+	rs.mu.Lock()
+	rs.replayDeltaCalls = nil
+	rs.legacyBaseCalls = nil
+	rs.mu.Unlock()
+
+	// Deliver N+2's response. SubmitHeldAdoption must stash (N+1 is
+	// not in svc history) and the router must auto-arm a backward-
+	// chain acquisition for (seqN+1, hashN+1).
+	payloadN2, err := message.Encode(respN2)
+	require.NoError(t, err)
+	r.handleMessage(&peermanagement.InboundMessage{
+		PeerID:  7,
+		Type:    uint16(message.TypeReplayDeltaResponse),
+		Payload: payloadN2,
+	})
+
+	// Stash assertion: N+2 must not be in svc history (parent missing
+	// → SubmitHeldAdoption stashed) and closedLedger must not advance.
+	// These hold both before and after the fix.
+	_, err = svc.GetLedgerByHash(hashN2)
+	require.Error(t, err, "N+2 must be stashed, not adopted")
+	assert.Equal(t, parentSeq, svc.GetClosedLedger().Sequence(),
+		"closedLedger must not advance while N+2 is stashed")
+
+	// Auto-arm assertion (the fix for issue #397).
+	//
+	// Before the fix: nothing fires after the stash; len(replay) +
+	// len(legacy) == 0, the held entry sits until heldAdoptionTTL=60s
+	// evicts it, and the chain stays stuck.
+	//
+	// After the fix: armParentAcquisition fires startLedgerAcquisition
+	// for (seqN+1, hashN+1). startLedgerAcquisition picks replay-delta
+	// when GetParentLedgerForReplay can supply a parent at seqN+0; in
+	// this scenario svc.GetLedgerBySequence(parentSeq) will return
+	// parentN, so the replay-delta path is exercised. Either path is
+	// acceptable for this contract — both terminate at the network
+	// layer with a request for the awaited parent's hash.
+	totalAutoArmCalls := len(rs.replayCalls()) + len(rs.legacyCalls())
+	require.Equal(t, 1, totalAutoArmCalls,
+		"router must auto-arm exactly one backward-chain acquisition (issue #397)")
+
+	armedHash, armedSeq := autoArmTarget(rs)
+	assert.Equal(t, hashN1, armedHash,
+		"auto-arm must target the awaited parent hash (issue #397)")
+	if armedSeq != 0 {
+		// Only the legacy path carries seq on the wire — replay-delta
+		// is hash-keyed. When legacy was chosen, also pin the seq.
+		assert.Equal(t, seqN1, armedSeq,
+			"auto-arm must target the awaited parent seq")
+	}
+
+}
+
+// autoArmTarget returns the hash and seq of the single auto-armed
+// acquisition recorded against rs. seq is 0 when the call took the
+// replay-delta path (which is hash-keyed on the wire). Caller asserts
+// totalAutoArmCalls == 1 before invoking.
+func autoArmTarget(rs *recordingSender) ([32]byte, uint32) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if len(rs.replayDeltaCalls) == 1 {
+		return rs.replayDeltaCalls[0].hash, 0
+	}
+	if len(rs.legacyBaseCalls) == 1 {
+		return rs.legacyBaseCalls[0].hash, rs.legacyBaseCalls[0].seq
+	}
+	return [32]byte{}, 0
 }
