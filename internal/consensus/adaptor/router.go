@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/manifest"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/goXRPLd/shamap"
 )
 
 // inboundReplayDeltaTickInterval drives the periodic check for
@@ -781,18 +782,20 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 }
 
 // handleTxSetData consumes a TMLedgerData{type=liTS_CANDIDATE} response
-// from a peer. The ledger_hash field carries the tx-set ID we asked for
-// in RequestTxSet; each node's NodeData is one transaction blob.
+// from a peer. The ledger_hash field carries the tx-set ID we asked
+// for in RequestTxSet; each node carries one SHAMap node (root, inner,
+// or leaf) — NOT a raw transaction. Mirrors rippled's
+// TransactionAcquire::takeNodes (TransactionAcquire.cpp:175-235):
+// rebuild the SHAMap from the wire nodes, then iterate leaves to get
+// the actual transactions.
 //
-// We hand the assembled blob list to the consensus engine via OnTxSet,
-// which builds a TxSet, caches it (so future peers can request it from
-// us), and triggers createDisputes against our current ourTxSet so the
-// dispute tracker knows about every tx in the symmetric difference.
-//
-// We do NOT verify the response hash here against the recomputed tx-set
-// ID — engine.OnTxSet does that via a TxSet.ID() check before storing.
-// A peer responding with mismatched contents is silently dropped at
-// that gate.
+// The previous implementation treated each node.NodeData as a raw tx
+// blob, which silently failed every OnTxSet ID-check (the recomputed
+// SHAMap of "blobs as txs" yields a totally different ID than the
+// expected txSetID). The 97 incoming itype=3 responses observed in
+// the testnet went through here and were rejected without a log,
+// so disputes never got created and ourTxSet never converged on the
+// peer's set.
 func (r *Router) handleTxSetData(ld *message.LedgerData) {
 	if len(ld.LedgerHash) != 32 {
 		return
@@ -800,35 +803,130 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 	var txSetID consensus.TxSetID
 	copy(txSetID[:], ld.LedgerHash)
 
-	blobs := make([][]byte, 0, len(ld.Nodes))
-	for _, node := range ld.Nodes {
+	txMap, err := shamap.New(shamap.TypeTransaction)
+	if err != nil {
+		r.logger.Info("tx-set sync: shamap construction failed",
+			"t", "consensus", "event", "txset-reject",
+			"txset", fmt.Sprintf("%x", txSetID[:8]),
+			"error", err.Error())
+		return
+	}
+	if err := txMap.StartSync(); err != nil {
+		r.logger.Info("tx-set sync: StartSync failed",
+			"t", "consensus", "event", "txset-reject",
+			"txset", fmt.Sprintf("%x", txSetID[:8]),
+			"error", err.Error())
+		return
+	}
+
+	// Add the root first. Rippled's TransactionAcquire detects root
+	// via SHAMapNodeID::isRoot() (depth=0, all-zero path); the wire
+	// encoding is 33 bytes of zeros (SHAMapNodeID::getRawString).
+	rootIdx := -1
+	for i, node := range ld.Nodes {
+		if isShamapRootNodeID(node.NodeID) {
+			rootIdx = i
+			break
+		}
+	}
+	if rootIdx < 0 {
+		r.logger.Info("tx-set sync: no root node in response",
+			"t", "consensus", "event", "txset-reject",
+			"txset", fmt.Sprintf("%x", txSetID[:8]),
+			"node_count", len(ld.Nodes))
+		return
+	}
+	if err := txMap.AddRootNode([32]byte(txSetID), ld.Nodes[rootIdx].NodeData); err != nil {
+		r.logger.Info("tx-set sync: AddRootNode failed",
+			"t", "consensus", "event", "txset-reject",
+			"txset", fmt.Sprintf("%x", txSetID[:8]),
+			"error", err.Error())
+		return
+	}
+
+	// Add the rest. Each non-root node is identified by its content
+	// hash (computed by the deserializer). AddKnownNode verifies the
+	// hash matches a node referenced by the partial tree before
+	// adding — bad nodes are silently rejected.
+	added := 0
+	for i, node := range ld.Nodes {
+		if i == rootIdx {
+			continue
+		}
 		if len(node.NodeData) == 0 {
 			continue
 		}
-		blobs = append(blobs, node.NodeData)
+		n, err := shamap.DeserializeNodeFromWire(node.NodeData)
+		if err != nil {
+			continue
+		}
+		if err := n.UpdateHash(); err != nil {
+			continue
+		}
+		nodeHash := n.Hash()
+		if err := txMap.AddKnownNode(nodeHash, node.NodeData); err == nil {
+			added++
+		}
+	}
+
+	if err := txMap.FinishSync(); err != nil {
+		// Partial — query_depth=3 doesn't always pull the whole tree.
+		// Without a recursive-fetch loop (rippled's
+		// TransactionAcquire::trigger fires getMissingNodes follow-ups
+		// here), we can't complete the sync in one round-trip and
+		// dispute creation has to wait for the next peer-driven attempt.
+		// Silent return is OK because OnProposal will keep retrying as
+		// new proposals arrive.
+		r.logger.Info("tx-set sync: incomplete",
+			"t", "consensus", "event", "txset-incomplete",
+			"txset", fmt.Sprintf("%x", txSetID[:8]),
+			"root_added", true,
+			"non_root_added", added,
+			"err", err.Error())
+		return
+	}
+
+	// Walk the leaves — each Item.Data() is one serialized transaction
+	// blob. Order matches the SHAMap key order; engine.OnTxSet
+	// recomputes the SHAMap ID and rejects on mismatch.
+	blobs := make([][]byte, 0, added+1)
+	if err := txMap.ForEach(func(item *shamap.Item) bool {
+		blobs = append(blobs, item.Data())
+		return true
+	}); err != nil {
+		return
 	}
 
 	r.logger.Info("received tx-set from peer",
-		"t", "consensus",
-		"event", "txset-recv",
+		"t", "consensus", "event", "txset-recv",
 		"txset", fmt.Sprintf("%x", txSetID[:8]),
-		"node_count", len(blobs),
-		"first_node_len", func() int {
-			if len(blobs) > 0 {
-				return len(blobs[0])
-			}
-			return 0
-		}(),
-	)
+		"node_count", len(ld.Nodes),
+		"tx_count", len(blobs))
 
 	if err := r.engine.OnTxSet(txSetID, blobs); err != nil {
 		r.logger.Info("engine rejected tx-set",
-			"t", "consensus",
-			"event", "txset-reject",
+			"t", "consensus", "event", "txset-reject",
 			"error", err.Error(),
 			"txset", fmt.Sprintf("%x", txSetID[:8]),
-			"node_count", len(blobs))
+			"tx_count", len(blobs))
 	}
+}
+
+// isShamapRootNodeID returns true when the wire NodeID encodes the
+// SHAMap root: 33 bytes of zeros (32-byte zero path + 1 byte depth=0).
+// Rippled uses this exact encoding via SHAMapNodeID().getRawString
+// (SHAMapNodeID.cpp ~ line 30) when seeding TransactionAcquire's
+// initial request and on every response that includes the root.
+func isShamapRootNodeID(b []byte) bool {
+	if len(b) != shamap.NodeIDSize {
+		return false
+	}
+	for _, by := range b {
+		if by != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
