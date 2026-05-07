@@ -2166,6 +2166,32 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		return
 	}
 
+	// Greppable INFO log: every BuildLedger result. Pins all the
+	// inputs that go into the ledger header hash so a post-run grep
+	// can identify exactly which input differs vs rippled's
+	// "Built ledger #N" hash for the same seq. Use:
+	//   docker logs <goxrpl> | grep "t=consensus event=ledger-built"
+	parentID := e.prevLedger.ID()
+	parentClose := e.prevLedger.CloseTime()
+	newID := newLedger.ID()
+	txSetID := txSet.ID()
+	slog.Info("ledger built",
+		"t", "consensus",
+		"event", "ledger-built",
+		"seq", newLedger.Seq(),
+		"hash", fmt.Sprintf("%x", newID[:8]),
+		"parent_seq", e.prevLedger.Seq(),
+		"parent_hash", fmt.Sprintf("%x", parentID[:8]),
+		"parent_ct_xrpl", parentClose.Unix()-protocol.RippleEpochUnix,
+		"close_time_xrpl", closeTime.Unix()-protocol.RippleEpochUnix,
+		"close_time_correct", e.haveCloseTimeConsensus,
+		"resolution_s", int(resolution.Seconds()),
+		"tx_set", fmt.Sprintf("%x", txSetID[:8]),
+		"tx_count", txSet.Size(),
+		"result", result.String(),
+		"mode", e.mode.String(),
+	)
+
 	// Validate and store
 	if err := e.adaptor.ValidateLedger(newLedger); err != nil {
 		return
