@@ -1925,24 +1925,25 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		return
 	}
 
-	// Mirror rippled: when mode==wrongLedger, our prevLedger is on a
-	// chain peers don't recognize. Building a ledger on top of it
-	// (using the peer-popular tx-set + close-time we computed from
-	// THEIR positions) would produce a "Frankenstein" hash matching
-	// no node's view; storing it would corrupt our local store, the
-	// auto-advance would extend that bad chain, and a validation
-	// emitted for it would never count toward any quorum. Rippled
-	// avoids this implicitly by having updateOurPositions return
-	// early when mode==wrongLedger (Consensus.h), so accept_ never
-	// fires. We mirror that explicitly here.
+	// Mirror rippled: when mode==wrongLedger AND the round reached
+	// ResultSuccess, suppress acceptance. The Success path would
+	// build a ledger from peer-popular tx-set + close-time on top
+	// of OUR prevLedger (which peers don't recognize) — a
+	// "Frankenstein" hash matching no node's view. Storing and
+	// auto-advancing on it cascades a side chain.
 	//
-	// The round stays at PhaseEstablish. checkLedger (called from
-	// OnProposal) keeps retrying handleWrongLedger; once we acquire
-	// the right LCL, startRoundLocked resets phase to Open and the
-	// next round runs cleanly with the network's parent. This is
-	// the ONLY protocol-correct action — anything else broadcasts
-	// a divergent attestation. See issue #401 layer 4.
-	if e.mode == consensus.ModeWrongLedger {
+	// For ResultTimeout / ResultAbandoned in wrongLedger we
+	// intentionally let acceptance proceed: the validation gate
+	// already suppresses emission via consensusFail, but the round
+	// MUST advance to break the wedge — otherwise phaseEstablish
+	// keeps retrying ResultAbandoned forever (every tick once the
+	// hard deadline is exceeded), the round never moves to
+	// PhaseAccepted, and handleWrongLedger never gets a chance to
+	// restart the engine on a freshly acquired LCL. The Frankenstein
+	// chain we build in this case carries no validation, so peers
+	// don't act on it; checkLedger detects the mismatch on the next
+	// inbound proposal and triggers handleWrongLedger normally.
+	if e.mode == consensus.ModeWrongLedger && result == consensus.ResultSuccess {
 		slog.Info("acceptLedger suppressed",
 			"t", "consensus",
 			"event", "accept-skip-wrong-lcl",
