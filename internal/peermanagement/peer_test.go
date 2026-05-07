@@ -198,7 +198,7 @@ func TestPeerConfig(t *testing.T) {
 func TestPeerConstants(t *testing.T) {
 	assert.Equal(t, 10*time.Second, DefaultConnectTimeout)
 	assert.Equal(t, 5*time.Second, DefaultHandshakeTimeout)
-	assert.Equal(t, 4096, DefaultSendBufferSize)
+	assert.Equal(t, 64, DefaultSendBufferSize)
 }
 
 // TestEndpoint tests Endpoint type

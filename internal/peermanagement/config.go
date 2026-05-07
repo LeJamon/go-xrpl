@@ -20,18 +20,12 @@ const (
 
 	DefaultEventBufferSize   = 256
 	DefaultMessageBufferSize = 256
-	// DefaultSendBufferSize bounds the outbound queue per peer. The
-	// previous 64-slot value caused silent drops under bursty
-	// traffic (consensus proposals/validations + tx relay) — every
-	// frame above the cap was rejected by Peer.Send's non-blocking
-	// select, returning ErrConnectionClosed without actually closing
-	// the peer. Symptom on the live testnet: rippled saw goxrpl-
-	// originated TMTransaction frames in only ~7% of heartbeats,
-	// open-ledger pools desynced, and consensus split 3-vs-2 at
-	// every round past validated_seq=19. 4096 gives the writer
-	// goroutine ample headroom for cross-implementation latency
-	// spikes — rippled's PeerImp send_ vector has no hard cap.
-	DefaultSendBufferSize = 4096
+	// DefaultSendBufferSize bounds the outbound queue per peer.
+	// Drops past the cap are no longer silent — Peer.Send returns
+	// ErrSendBufferFull (a distinct sentinel) and Overlay.Broadcast
+	// surfaces the drop at WARN, so capacity issues are correlatable
+	// with consensus stalls.
+	DefaultSendBufferSize = 64
 
 	DefaultUserAgent = "goXRPL/0.1.0"
 )
