@@ -166,7 +166,7 @@ func TestPeer_SendBufferFull(t *testing.T) {
 
 	// Next send should fail with buffer full
 	err = peer.Send([]byte("overflow"))
-	assert.ErrorIs(t, err, ErrConnectionClosed)
+	assert.ErrorIs(t, err, ErrSendBufferFull)
 }
 
 // TestPeer_InboundOutbound tests inbound/outbound distinction
@@ -198,7 +198,7 @@ func TestPeerConfig(t *testing.T) {
 func TestPeerConstants(t *testing.T) {
 	assert.Equal(t, 10*time.Second, DefaultConnectTimeout)
 	assert.Equal(t, 5*time.Second, DefaultHandshakeTimeout)
-	assert.Equal(t, 64, DefaultSendBufferSize)
+	assert.Equal(t, 4096, DefaultSendBufferSize)
 }
 
 // TestEndpoint tests Endpoint type

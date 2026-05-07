@@ -1005,7 +1005,13 @@ func (p *Peer) Send(data []byte) error {
 	case p.send <- data:
 		return nil
 	default:
-		return ErrConnectionClosed
+		// Distinct from connection-closed: buffer is full because the
+		// writer can't drain fast enough. Returning ErrConnectionClosed
+		// here masked the real cause and gave callers no signal to
+		// react. With the larger buffer this should be rare; when it
+		// happens, the slot/metric path can promote it to a peer
+		// disconnect.
+		return ErrSendBufferFull
 	}
 }
 

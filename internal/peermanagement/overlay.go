@@ -1688,9 +1688,20 @@ func (o *Overlay) Broadcast(msg []byte) error {
 	o.peersMu.RLock()
 	defer o.peersMu.RUnlock()
 
-	for _, peer := range o.peers {
-		if peer.State() == PeerStateConnected {
-			peer.Send(msg)
+	for id, peer := range o.peers {
+		if peer.State() != PeerStateConnected {
+			continue
+		}
+		if err := peer.Send(msg); err != nil && errors.Is(err, ErrSendBufferFull) {
+			// Surface buffer-full so we can correlate with consensus
+			// stalls; a silent drop here previously masked the
+			// TMTransaction relay loss that desynced rippled's open
+			// ledger pool at issue #401.
+			slog.Warn("broadcast: peer send buffer full, frame dropped",
+				"t", "Overlay",
+				"peer", id,
+				"frame_size", len(msg),
+			)
 		}
 	}
 	return nil
