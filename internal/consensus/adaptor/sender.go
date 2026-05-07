@@ -136,6 +136,35 @@ func (s *OverlaySender) RequestTxSet(id consensus.TxSetID) error {
 	return s.overlay.Broadcast(frame)
 }
 
+// RequestTxSetMissingNodes sends a TMGetLedger{liTS_CANDIDATE} that
+// asks for SPECIFIC SHAMap nodes by their path-based NodeIDs. Used
+// after RequestTxSet returns a partial tree — mirrors rippled's
+// TransactionAcquire::trigger second branch
+// (TransactionAcquire.cpp:144-171), which iterates
+// mMap->getMissingNodes() and packs them into the nodeids field of
+// a follow-up request.
+//
+// nodeIDs are the 33-byte SHAMapNodeID wire encodings (32 path
+// bytes + 1 depth byte), as returned by goxrpl's
+// shamap.NodeID.Bytes(). Each peer responds with the requested
+// node + descendants up to query_depth=3.
+func (s *OverlaySender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte) error {
+	if len(nodeIDs) == 0 {
+		return fmt.Errorf("RequestTxSetMissingNodes: nodeIDs must be non-empty")
+	}
+	msg := &message.GetLedger{
+		InfoType:   message.LedgerInfoTsCandidate,
+		LedgerHash: id[:],
+		QueryDepth: 3,
+		NodeIDs:    nodeIDs,
+	}
+	frame, err := encodeFrame(message.TypeGetLedger, msg)
+	if err != nil {
+		return fmt.Errorf("encode txset missing-nodes request: %w", err)
+	}
+	return s.overlay.Broadcast(frame)
+}
+
 func (s *OverlaySender) BroadcastStatusChange(sc *message.StatusChange) error {
 	frame, err := encodeFrame(message.TypeStatusChange, sc)
 	if err != nil {

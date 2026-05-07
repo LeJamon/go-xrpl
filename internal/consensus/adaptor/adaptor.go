@@ -64,6 +64,14 @@ type NetworkSender interface {
 	// seenPeers to avoid double-counting.
 	UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPeers []uint64)
 	RequestTxSet(id consensus.TxSetID) error
+	// RequestTxSetMissingNodes requests specific SHAMap nodes for an
+	// in-progress tx-set acquisition. Mirrors rippled's
+	// TransactionAcquire::trigger second branch
+	// (TransactionAcquire.cpp:144-171): after the initial root
+	// request returns a partial tree, follow up with a request for
+	// each missing node by its SHAMap path-based NodeID. nodeIDs
+	// must each be exactly 33 bytes (32 path bytes + 1 depth byte).
+	RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte) error
 	RequestLedger(id consensus.LedgerID) error
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error
 	RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error
@@ -110,7 +118,10 @@ func (n *noopSender) RelayProposal(*consensus.Proposal, uint64) error          {
 func (n *noopSender) RelayValidation(*consensus.Validation, uint64) error      { return nil }
 func (n *noopSender) UpdateRelaySlot([]byte, uint64, []uint64)                 {}
 func (n *noopSender) RequestTxSet(consensus.TxSetID) error                     { return nil }
-func (n *noopSender) RequestLedger(consensus.LedgerID) error                   { return nil }
+func (n *noopSender) RequestTxSetMissingNodes(consensus.TxSetID, [][]byte) error {
+	return nil
+}
+func (n *noopSender) RequestLedger(consensus.LedgerID) error { return nil }
 func (n *noopSender) RequestLedgerByHashAndSeq([32]byte, uint32) error         { return nil }
 func (n *noopSender) RequestLedgerBaseFromPeer(uint64, [32]byte, uint32) error { return nil }
 func (n *noopSender) RequestReplayDelta(uint64, [32]byte) error                { return nil }
@@ -445,6 +456,10 @@ func (a *Adaptor) UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPe
 
 func (a *Adaptor) RequestTxSet(id consensus.TxSetID) error {
 	return a.sender.RequestTxSet(id)
+}
+
+func (a *Adaptor) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte) error {
+	return a.sender.RequestTxSetMissingNodes(id, nodeIDs)
 }
 
 func (a *Adaptor) RequestLedger(id consensus.LedgerID) error {

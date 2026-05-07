@@ -102,7 +102,40 @@ type Router struct {
 	manifestFrame      []byte
 	manifestFrameSeq   uint64
 	manifestFrameBuilt bool
+
+	// txSetAcquireMu guards txSetAcquire — the in-flight tx-set
+	// acquisition state, keyed by tx-set ID. Mirrors rippled's
+	// app_.getInboundTransactions() handle: each entry holds a
+	// partially-populated SHAMap that accumulates nodes across
+	// multiple TMLedgerData{liTS_CANDIDATE} responses until the tree
+	// is complete and the leaves can be handed to engine.OnTxSet.
+	// Without this, an initial root-only response (depth=3 doesn't
+	// always cover the whole tree) is wasted — the next response
+	// can't pick up where the previous left off.
+	txSetAcquireMu sync.Mutex
+	txSetAcquire   map[consensus.TxSetID]*txSetAcquireState
 }
+
+// txSetAcquireState tracks an in-progress tx-set acquisition
+// across multiple TMLedgerData responses. Reset whenever a fresh
+// RequestTxSet kicks off a new acquire for the same ID.
+type txSetAcquireState struct {
+	txMap *shamap.SHAMap
+	// startedAt is when the acquire began. Used by the TTL sweep
+	// to drop entries that never completed.
+	startedAt time.Time
+	// lastUpdate is the most recent time a node was added or a
+	// retry was fired. Used by the TTL sweep.
+	lastUpdate time.Time
+}
+
+// txSetAcquireTTL bounds how long a partial tx-set acquisition
+// lingers after its last update before being garbage-collected.
+// Tx-sets are round-scoped (LedgerMaxConsensus = 15s by default),
+// so a 60s window covers retries plus the round itself with
+// margin. Drops beyond this never fire OnTxSet but also can't
+// leak memory under a permanently-stalled consumer.
+const txSetAcquireTTL = 60 * time.Second
 
 // messageDedupTTL is how long a proposal/validation hash is
 // remembered for duplicate-detection purposes. Rippled uses a
@@ -121,14 +154,15 @@ const messageDedupMaxEntries = 4096
 func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManager, inbox <-chan *peermanagement.InboundMessage) *Router {
 	logger := slog.Default().With("component", "consensus-router")
 	r := &Router{
-		engine:      engine,
-		adaptor:     adaptor,
-		modeManager: modeManager,
-		inbox:       inbox,
-		logger:      logger,
-		peerStates:  make(map[peermanagement.PeerID]*peerLedgerState),
-		replayer:    inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
-		messageSeen: newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
+		engine:       engine,
+		adaptor:      adaptor,
+		modeManager:  modeManager,
+		inbox:        inbox,
+		logger:       logger,
+		peerStates:   make(map[peermanagement.PeerID]*peerLedgerState),
+		replayer:     inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
+		messageSeen:  newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
+		txSetAcquire: make(map[consensus.TxSetID]*txSetAcquireState),
 	}
 	// Without this hook, the validation-tracker quorum decision sits
 	// silently in pendingLedgerValidations and validated_ledger.seq
@@ -783,19 +817,19 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 
 // handleTxSetData consumes a TMLedgerData{type=liTS_CANDIDATE} response
 // from a peer. The ledger_hash field carries the tx-set ID we asked
-// for in RequestTxSet; each node carries one SHAMap node (root, inner,
-// or leaf) — NOT a raw transaction. Mirrors rippled's
-// TransactionAcquire::takeNodes (TransactionAcquire.cpp:175-235):
-// rebuild the SHAMap from the wire nodes, then iterate leaves to get
-// the actual transactions.
+// for; each node carries one SHAMap node (root, inner, or leaf) —
+// NOT a raw transaction. Mirrors rippled's
+// TransactionAcquire::takeNodes (TransactionAcquire.cpp:175-235): add
+// nodes into a SHAMap that accumulates ACROSS multiple responses,
+// then either finish (extract leaves → engine.OnTxSet) or fire a
+// follow-up RequestTxSetMissingNodes for the still-missing nodes
+// (TransactionAcquire.cpp:144-171).
 //
-// The previous implementation treated each node.NodeData as a raw tx
-// blob, which silently failed every OnTxSet ID-check (the recomputed
-// SHAMap of "blobs as txs" yields a totally different ID than the
-// expected txSetID). The 97 incoming itype=3 responses observed in
-// the testnet went through here and were rejected without a log,
-// so disputes never got created and ourTxSet never converged on the
-// peer's set.
+// State is keyed by tx-set ID in r.txSetAcquire so a second response
+// can pick up where the first left off. Without this, query_depth=3
+// from the root can return a partial tree (rippled's softMaxReplyNodes
+// cap, deeper trees, etc.) and the missing-nodes path never fires —
+// the sync stalls and dispute resolution never sees the peer's set.
 func (r *Router) handleTxSetData(ld *message.LedgerData) {
 	if len(ld.LedgerHash) != 32 {
 		return
@@ -803,54 +837,58 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 	var txSetID consensus.TxSetID
 	copy(txSetID[:], ld.LedgerHash)
 
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		r.logger.Info("tx-set sync: shamap construction failed",
-			"t", "consensus", "event", "txset-reject",
-			"txset", fmt.Sprintf("%x", txSetID[:8]),
-			"error", err.Error())
-		return
-	}
-	if err := txMap.StartSync(); err != nil {
-		r.logger.Info("tx-set sync: StartSync failed",
-			"t", "consensus", "event", "txset-reject",
-			"txset", fmt.Sprintf("%x", txSetID[:8]),
-			"error", err.Error())
-		return
-	}
-
-	// Add the root first. Rippled's TransactionAcquire detects root
-	// via SHAMapNodeID::isRoot() (depth=0, all-zero path); the wire
-	// encoding is 33 bytes of zeros (SHAMapNodeID::getRawString).
-	rootIdx := -1
-	for i, node := range ld.Nodes {
-		if isShamapRootNodeID(node.NodeID) {
-			rootIdx = i
-			break
+	r.txSetAcquireMu.Lock()
+	state, exists := r.txSetAcquire[txSetID]
+	if !exists {
+		txMap, err := shamap.New(shamap.TypeTransaction)
+		if err != nil {
+			r.txSetAcquireMu.Unlock()
+			r.logger.Info("tx-set sync: shamap construction failed",
+				"t", "consensus", "event", "txset-reject",
+				"txset", fmt.Sprintf("%x", txSetID[:8]),
+				"error", err.Error())
+			return
 		}
+		if err := txMap.StartSync(); err != nil {
+			r.txSetAcquireMu.Unlock()
+			r.logger.Info("tx-set sync: StartSync failed",
+				"t", "consensus", "event", "txset-reject",
+				"txset", fmt.Sprintf("%x", txSetID[:8]),
+				"error", err.Error())
+			return
+		}
+		state = &txSetAcquireState{txMap: txMap, startedAt: time.Now()}
+		r.txSetAcquire[txSetID] = state
 	}
-	if rootIdx < 0 {
-		r.logger.Info("tx-set sync: no root node in response",
-			"t", "consensus", "event", "txset-reject",
-			"txset", fmt.Sprintf("%x", txSetID[:8]),
-			"node_count", len(ld.Nodes))
-		return
-	}
-	if err := txMap.AddRootNode([32]byte(txSetID), ld.Nodes[rootIdx].NodeData); err != nil {
-		r.logger.Info("tx-set sync: AddRootNode failed",
-			"t", "consensus", "event", "txset-reject",
-			"txset", fmt.Sprintf("%x", txSetID[:8]),
-			"error", err.Error())
-		return
+	state.lastUpdate = time.Now()
+	r.sweepStaleTxSetAcquireLocked()
+	txMap := state.txMap
+	r.txSetAcquireMu.Unlock()
+
+	// Root is identified by 33 zero bytes (SHAMapNodeID::getRawString
+	// for depth=0, all-zero path). AddRootNode is idempotent — calls
+	// after the root is set return ErrRootAlreadySet, which we treat
+	// as success.
+	for _, node := range ld.Nodes {
+		if !isShamapRootNodeID(node.NodeID) {
+			continue
+		}
+		if err := txMap.AddRootNode([32]byte(txSetID), node.NodeData); err != nil &&
+			!errors.Is(err, shamap.ErrRootAlreadySet) {
+			r.logger.Info("tx-set sync: AddRootNode failed",
+				"t", "consensus", "event", "txset-reject",
+				"txset", fmt.Sprintf("%x", txSetID[:8]),
+				"error", err.Error())
+		}
+		break
 	}
 
-	// Add the rest. Each non-root node is identified by its content
-	// hash (computed by the deserializer). AddKnownNode verifies the
-	// hash matches a node referenced by the partial tree before
-	// adding — bad nodes are silently rejected.
+	// Add non-root nodes. AddKnownNode rejects nodes whose hash doesn't
+	// match a referenced-but-missing slot in the partial tree, so
+	// stray data is silently ignored without corrupting the sync.
 	added := 0
-	for i, node := range ld.Nodes {
-		if i == rootIdx {
+	for _, node := range ld.Nodes {
+		if isShamapRootNodeID(node.NodeID) {
 			continue
 		}
 		if len(node.NodeData) == 0 {
@@ -870,32 +908,54 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 	}
 
 	if err := txMap.FinishSync(); err != nil {
-		// Partial — query_depth=3 doesn't always pull the whole tree.
-		// Without a recursive-fetch loop (rippled's
-		// TransactionAcquire::trigger fires getMissingNodes follow-ups
-		// here), we can't complete the sync in one round-trip and
-		// dispute creation has to wait for the next peer-driven attempt.
-		// Silent return is OK because OnProposal will keep retrying as
-		// new proposals arrive.
-		r.logger.Info("tx-set sync: incomplete",
-			"t", "consensus", "event", "txset-incomplete",
+		// Still incomplete. Mirror rippled's TransactionAcquire::trigger
+		// second branch (TransactionAcquire.cpp:144-171): pull the
+		// missing-node IDs from the partial tree and fire a follow-up
+		// request.
+		missing := txMap.GetMissingNodes(256, nil)
+		if len(missing) == 0 {
+			// Tree thinks it's complete but FinishSync still failed.
+			// Drop this acquire — the next OnProposal-triggered
+			// RequestTxSet will start fresh.
+			r.deleteTxSetAcquire(txSetID)
+			r.logger.Info("tx-set sync: stuck",
+				"t", "consensus", "event", "txset-reject",
+				"txset", fmt.Sprintf("%x", txSetID[:8]),
+				"err", err.Error())
+			return
+		}
+		nodeIDs := make([][]byte, len(missing))
+		for i, m := range missing {
+			nodeIDs[i] = m.NodeID.Bytes()
+		}
+		r.logger.Info("tx-set sync: requesting missing nodes",
+			"t", "consensus", "event", "txset-retry",
 			"txset", fmt.Sprintf("%x", txSetID[:8]),
-			"root_added", true,
 			"non_root_added", added,
-			"err", err.Error())
+			"missing", len(missing),
+		)
+		if reqErr := r.adaptor.RequestTxSetMissingNodes(txSetID, nodeIDs); reqErr != nil {
+			r.logger.Info("tx-set sync: missing-nodes request failed",
+				"t", "consensus", "event", "txset-reject",
+				"txset", fmt.Sprintf("%x", txSetID[:8]),
+				"error", reqErr.Error())
+		}
 		return
 	}
 
-	// Walk the leaves — each Item.Data() is one serialized transaction
-	// blob. Order matches the SHAMap key order; engine.OnTxSet
-	// recomputes the SHAMap ID and rejects on mismatch.
+	// Complete. Walk leaves to recover the transaction blobs and feed
+	// the engine. Then drop the acquire so the next request for the
+	// same hash starts fresh (in case dispute resolution flips us back
+	// to the same tx-set).
 	blobs := make([][]byte, 0, added+1)
 	if err := txMap.ForEach(func(item *shamap.Item) bool {
 		blobs = append(blobs, item.Data())
 		return true
 	}); err != nil {
+		r.deleteTxSetAcquire(txSetID)
 		return
 	}
+	r.deleteTxSetAcquire(txSetID)
 
 	r.logger.Info("received tx-set from peer",
 		"t", "consensus", "event", "txset-recv",
@@ -909,6 +969,28 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 			"error", err.Error(),
 			"txset", fmt.Sprintf("%x", txSetID[:8]),
 			"tx_count", len(blobs))
+	}
+}
+
+// deleteTxSetAcquire removes the partial acquire state for txSetID.
+// Used on completion, hard failure, and TTL sweep.
+func (r *Router) deleteTxSetAcquire(txSetID consensus.TxSetID) {
+	r.txSetAcquireMu.Lock()
+	delete(r.txSetAcquire, txSetID)
+	r.txSetAcquireMu.Unlock()
+}
+
+// sweepStaleTxSetAcquireLocked drops acquire entries that haven't
+// been updated within txSetAcquireTTL. Caller must hold
+// r.txSetAcquireMu. Bounded memory under a permanent stall: even
+// if every acquire stalls and never completes, entries time out
+// after 60s.
+func (r *Router) sweepStaleTxSetAcquireLocked() {
+	cutoff := time.Now().Add(-txSetAcquireTTL)
+	for id, state := range r.txSetAcquire {
+		if state.lastUpdate.Before(cutoff) {
+			delete(r.txSetAcquire, id)
+		}
 	}
 }
 

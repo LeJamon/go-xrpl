@@ -279,8 +279,11 @@ func TestRequestTxSet_WireFormat(t *testing.T) {
 	assert.Equal(t, message.LedgerInfoTsCandidate, req.InfoType)
 	assert.Equal(t, id[:], req.LedgerHash)
 	assert.Equal(t, uint32(3), req.QueryDepth,
-		"query_depth must be set so rippled returns the whole "+
-			"tx-set tree in one round-trip")
+		"query_depth=3 matches rippled's TransactionAcquire.cpp:131; "+
+			"the response may not include the whole tree, in which "+
+			"case the acquire path needs to retry with the missing "+
+			"node IDs (rippled's TransactionAcquire::trigger second "+
+			"branch at TransactionAcquire.cpp:144-171)")
 	require.Len(t, req.NodeIDs, 1,
 		"node_ids must contain at least the root SHAMap node ID — "+
 			"rippled rejects with 'Invalid ledger node IDs' otherwise "+
