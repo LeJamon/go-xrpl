@@ -89,7 +89,12 @@ func MetadataToMap(meta *Metadata) map[string]any {
 			if node.NodeType == "ModifiedNode" && node.PreviousTxnLgrSeq != 0 {
 				innerNode["PreviousTxnLgrSeq"] = node.PreviousTxnLgrSeq
 			}
-			if node.NodeType == "ModifiedNode" && node.PreviousTxnID != "" {
+			// Mirror rippled: PreviousTxnID is soeOPTIONAL Hash256 and
+			// omitted when zero. Genesis-touching txs leave it zero; if
+			// we emit the field, the SHAMap tx-tree leaf hash drifts
+			// 33 bytes off rippled's, which breaks #401 validation
+			// quorum the moment goxrpl's tx-tree-root hash differs.
+			if node.NodeType == "ModifiedNode" && node.PreviousTxnID != "" && !isZeroHashHex(node.PreviousTxnID) {
 				innerNode["PreviousTxnID"] = node.PreviousTxnID
 			}
 

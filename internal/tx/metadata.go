@@ -115,8 +115,14 @@ func affectedNodeToRippledFormat(n AffectedNode) (map[string]any, error) {
 		inner["PreviousFields"] = n.PreviousFields
 	}
 
-	// PreviousTxnID (omit if empty)
-	if n.PreviousTxnID != "" {
+	// PreviousTxnID — omit if empty OR all-zero. Rippled
+	// (STObject::add) omits soeOPTIONAL Hash256 fields whose value is
+	// the default (uint256{0}). The genesis-account case hits this:
+	// the master account has no prior tx, so its PreviousTxnID stays
+	// at its default zero. Including the field added 33 bytes
+	// (1 field-code + 32 hash-bytes) to every meta blob touching
+	// genesis, breaking SHAMap tx-tree-root parity with rippled.
+	if n.PreviousTxnID != "" && !isZeroHashHex(n.PreviousTxnID) {
 		inner["PreviousTxnID"] = n.PreviousTxnID
 	}
 
@@ -134,4 +140,21 @@ func affectedNodeToRippledFormat(n AffectedNode) (map[string]any, error) {
 	return map[string]any{
 		n.NodeType: inner,
 	}, nil
+}
+
+// isZeroHashHex reports whether s is the canonical 64-character
+// hex string for the all-zero 256-bit hash. Accepts both upper and
+// lower case; tolerates the empty string. Used by metadata
+// serialization to mirror rippled's "omit defaulted optional fields"
+// behavior — see affectedNodeToRippledFormat.
+func isZeroHashHex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < 64; i++ {
+		if s[i] != '0' {
+			return false
+		}
+	}
+	return true
 }

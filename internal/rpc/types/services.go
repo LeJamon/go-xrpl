@@ -2,6 +2,7 @@ package types
 
 import (
 	"context"
+	"time"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/drops"
@@ -74,6 +75,7 @@ type LedgerNavigator interface {
 	GetClosedLedgerIndex() uint32
 	GetValidatedLedgerIndex() uint32
 	AcceptLedger(ctx context.Context) (uint32, error)
+	AcceptLedgerAt(ctx context.Context, closeTime time.Time) (uint32, error)
 	IsStandalone() bool
 }
 

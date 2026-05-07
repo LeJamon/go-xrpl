@@ -428,6 +428,15 @@ func (s *Service) GetValidatedLedgerIndex() uint32 {
 // and re-applied from a fresh copy of the LCL, matching rippled's behavior.
 // Reference: rippled NetworkOPs::acceptLedgerTransaction / CanonicalTXSet
 func (s *Service) AcceptLedger(ctx context.Context) (uint32, error) {
+	return s.AcceptLedgerAt(ctx, time.Time{})
+}
+
+// AcceptLedgerAt is AcceptLedger with an explicit close_time. Pass a
+// zero time.Time to fall back to time.Now() (the standard behavior).
+// An explicit value lets differential / replay tests keep close_time
+// byte-identical between implementations so the LedgerHashes skip-list
+// SLE doesn't propagate clock skew into state.
+func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Time) (uint32, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -443,7 +452,10 @@ func (s *Service) AcceptLedger(ctx context.Context) (uint32, error) {
 		return 0, ErrNoClosedLedger
 	}
 
-	closeTime := time.Now()
+	closeTime := explicitCloseTime
+	if closeTime.IsZero() {
+		closeTime = time.Now()
+	}
 
 	// If there are pending transactions, re-apply them in canonical order
 	// on a fresh ledger built from the LCL. This matches rippled's behavior
