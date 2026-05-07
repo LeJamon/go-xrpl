@@ -134,35 +134,48 @@ func (m *ModeManager) SetMode(mode consensus.OperatingMode) {
 // startRoundLocked) reflects what the consensus engine actually
 // observes about our LCL.
 //
-// We listen for ModeChangedEvent and translate the internal
-// consensus.Mode (proposing/observing/wrongLedger/switchedLedger)
-// into the network-level OperatingMode transitions defined in this
-// type's struct doc:
-//   - new == ModeWrongLedger
-//       → OnWrongLedger (Full/Tracking → Syncing). This stops us
-//         from proposing while we're on a side chain — the only
-//         protocol-correct posture, since proposals on a wrong
-//         parent never count toward peers' quorum. Mirrors
-//         rippled's effective behavior where wrongLedger mode
-//         keeps validating_=false until handleWrongLedger
-//         succeeds.
-//   - new in {ModeSwitchedLedger, ModeProposing, ModeObserving}
-//     coming OUT of ModeWrongLedger
-//       → OnLCLAcquired (Syncing → Tracking). We have the right
-//         parent again; bump up to Tracking. The Tracking →
-//         Full transition fires elsewhere on validations
-//         confirming our chain.
+// We translate the engine's internal Mode into the network-level
+// OperatingMode by consulting the ADAPTOR'S ACTUAL CURRENT opMode,
+// not the ModeManager's locally-tracked m.mode. The state-machine
+// path through {OnPeerConnected, OnLCLMismatch, OnLCLAcquired,
+// OnValidationsReceived} is bypassed in production by direct
+// SetOperatingMode calls (router.go, adaptor.AdoptLedgerFromHeader),
+// so m.mode is not a reliable view of reality. Reading the adaptor
+// directly keeps us protocol-correct regardless of which path
+// promoted us to Full earlier.
+//
+// Transitions:
+//   - new == ModeWrongLedger AND opMode is Full/Tracking
+//       → opMode := Syncing. Stops startRoundLocked from picking
+//         ModeProposing on the next round; we have no business
+//         proposing on a side chain peers don't recognize.
+//         Mirrors rippled's wrongLedger behavior which keeps
+//         validating_=false until handleWrongLedger succeeds.
+//   - old == ModeWrongLedger AND opMode is Syncing
+//       → opMode := Tracking. We have the right parent again;
+//         the Tracking → Full bump fires elsewhere when
+//         validations on the recovered chain confirm we're
+//         caught up.
 func (m *ModeManager) OnEvent(event consensus.Event) {
 	mc, ok := event.(*consensus.ModeChangedEvent)
 	if !ok {
 		return
 	}
+	current := m.adaptor.GetOperatingMode()
 	if mc.NewMode == consensus.ModeWrongLedger {
-		m.OnWrongLedger()
+		if current == consensus.OpModeFull || current == consensus.OpModeTracking {
+			m.mu.Lock()
+			m.transitionLocked(consensus.OpModeSyncing)
+			m.mu.Unlock()
+		}
 		return
 	}
 	if mc.OldMode == consensus.ModeWrongLedger {
-		m.OnLCLAcquired()
+		if current == consensus.OpModeSyncing {
+			m.mu.Lock()
+			m.transitionLocked(consensus.OpModeTracking)
+			m.mu.Unlock()
+		}
 	}
 }
 

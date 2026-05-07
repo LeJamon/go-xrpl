@@ -174,6 +174,56 @@ func TestModeManager_OnEvent_LeavingWrongLedgerBumpsToTracking(t *testing.T) {
 	}
 }
 
+// TestModeManager_OnEvent_BypassedStateMachine pins the issue
+// #401 layer-5 follow-up: in production, the network-level
+// OperatingMode is promoted to Full by direct SetOperatingMode
+// calls in router.go and adaptor.AdoptLedgerFromHeader, NOT
+// through ModeManager's state machine. So m.mode stays at its
+// initial value (Connected after first peer connects) while the
+// actual adaptor.GetOperatingMode() returns Full. When a
+// ModeChangedEvent{wrongLedger} fires in this scenario, OnEvent
+// MUST consult the adaptor's actual opMode and trigger the
+// Full → Syncing transition — otherwise the engine drops to
+// wrongLedger silently while opMode stays at Full and
+// startRoundLocked keeps re-promoting us to ModeProposing.
+//
+// This is the smoking-gun bug observed in the live harness at
+// seq=14 onwards: engine logs "Consensus mode changed to
+// wrongLedger" but no "Operating mode changed" line ever
+// appears, because the m.mode-vs-adaptor.opMode mismatch
+// silently no-op'd OnWrongLedger.
+func TestModeManager_OnEvent_BypassedStateMachine(t *testing.T) {
+	mm := newTestModeManager(t)
+	// Mimic production: Connected via state machine, then opMode is
+	// directly bumped to Full by some other path (router /
+	// AdoptLedgerFromHeader). m.mode stays at Connected.
+	mm.OnPeerConnected()
+	mm.adaptor.SetOperatingMode(consensus.OpModeFull)
+
+	// Sanity: m.mode is NOT Full but adaptor says Full.
+	if mm.Mode() != consensus.OpModeConnected {
+		t.Fatalf("preconditions: m.mode want Connected, got %v", mm.Mode())
+	}
+	if mm.adaptor.GetOperatingMode() != consensus.OpModeFull {
+		t.Fatalf("preconditions: adaptor opMode want Full, got %v",
+			mm.adaptor.GetOperatingMode())
+	}
+
+	// Engine drops to wrongLedger. OnEvent must transition opMode
+	// Full → Syncing despite m.mode being at Connected.
+	mm.OnEvent(&consensus.ModeChangedEvent{
+		OldMode: consensus.ModeProposing,
+		NewMode: consensus.ModeWrongLedger,
+	})
+
+	if got := mm.Mode(); got != consensus.OpModeSyncing {
+		t.Fatalf("ModeChangedEvent{wrongLedger} when adaptor.opMode "+
+			"is Full must transition to Syncing regardless of "+
+			"m.mode; got %v — bypassed-state-machine path "+
+			"silently no-op'd (#401 layer 5 follow-up)", got)
+	}
+}
+
 // TestModeManager_OnEvent_IgnoresUnrelatedEvents pins the
 // safety property that OnEvent silently drops events it doesn't
 // care about — no panic, no spurious transition. The event bus
