@@ -142,6 +142,18 @@ type Engine struct {
 	// Protected by e.mu (same lock as sendValidation's other state).
 	lastSignTime time.Time
 
+	// ourLastValidatedSeq is the highest ledger sequence this node has
+	// already broadcast a validation for. acceptLedger and sendValidation
+	// refuse to emit a second validation at the same (or earlier) seq —
+	// mirroring rippled's per-node SeqEnforcer (Validations.h:625-665) and
+	// Validations::canValidateSeq (Validations.h:830). Without this guard,
+	// a divergent local close followed by a foreign-LCL acquisition can
+	// race two distinct validations for the same seq onto the wire, and
+	// peers' Byzantine Behavior Detector flags us permanently for
+	// "Conflicting validation for N" — see issue #401.
+	// Protected by e.mu (same lock as sendValidation's other state).
+	ourLastValidatedSeq uint32
+
 	// Stats
 	roundCount     uint64
 	consensusCount uint64
@@ -1984,21 +1996,28 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		Timestamp: e.adaptor.Now(),
 	})
 
-	// Emit our validation whenever we're a validator AND we're not on
-	// a confirmed-wrong ledger. Rippled RCLConsensus.cpp:587-594 calls
-	// validate(built, result.txns, proposing) whenever validating_ is
-	// true AND !consensusFail AND canValidateSeq — regardless of mode.
-	// The `proposing` flag is passed INTO validate() and only controls
-	// whether vfFullValidation is set inside the validation, not
-	// whether the validation is sent at all.
+	// Match rippled's emission gate at RCLConsensus.cpp:587-594:
+	//   validating_ && !consensusFail && canValidateSeq(seq)
+	// where:
+	//   - !consensusFail means rippled's result.state != MovedOn. The
+	//     timeout/abandoned paths in phaseEstablish are rippled's
+	//     Expired path which calls leaveConsensus() and zeros
+	//     validating_; our equivalent is "result != ResultSuccess".
+	//   - canValidateSeq guards against emitting a second validation
+	//     for a seq we already validated. Without it, after our local
+	//     close diverges from the network and we acquire the network's
+	//     hash, a subsequent re-accept can race two distinct validations
+	//     for the same seq onto the wire. Rippled's Byzantine Behavior
+	//     Detector then flags us as "Conflicting validation for N",
+	//     permanently disqualifying us from quorum (#401).
 	//
-	// So switchedLedger rounds emit a PARTIAL validation (Full=false):
-	// they attest "I saw this ledger close" without claiming "I drove
-	// the tx-set". Rippled peers rely on partial validations as an
-	// early liveness signal before full quorum materializes. My prior
-	// blanket suppression was stricter than rippled and left recovery
-	// rounds invisible to the network.
-	if e.adaptor.IsValidator() && e.mode != consensus.ModeWrongLedger {
+	// Mode is intentionally NOT a gate here. Rippled emits regardless
+	// of mode; the mode (proposing vs switchedLedger/observing) only
+	// controls the Full flag inside sendValidation. SwitchedLedger
+	// rounds emit a PARTIAL validation (Full=false) — peers rely on
+	// these as early liveness signals before full quorum materializes.
+	consensusFail := result != consensus.ResultSuccess
+	if e.adaptor.IsValidator() && !consensusFail {
 		e.sendValidation(newLedger)
 	}
 
@@ -2258,6 +2277,16 @@ func (e *Engine) determineCloseTime() time.Time {
 // count toward quorum (LedgerMaster.cpp:886 filters Full=false out of
 // the trusted count).
 func (e *Engine) sendValidation(ledger consensus.Ledger) {
+	// canValidateSeq guard. Mirrors rippled's per-node SeqEnforcer
+	// (Validations.h:625-665, canValidateSeq Validations.h:830): never
+	// emit a second validation for a seq we have already validated. A
+	// monotonically-increasing seq is the only one accepted; equal or
+	// lower silently drops. Defensive in-function check so callers
+	// (production gate AND direct test invocation) cannot bypass.
+	if ledger.Seq() <= e.ourLastValidatedSeq {
+		return
+	}
+
 	nodeID, err := e.adaptor.GetValidatorKey()
 	if err != nil {
 		return
@@ -2378,6 +2407,14 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 	if err := e.adaptor.SignValidation(validation); err != nil {
 		return
 	}
+
+	// Bump the SeqEnforcer floor before sending. Once signed, the
+	// validation could leak to peers regardless of whether the
+	// adaptor's Broadcast call returns an error, so commit the
+	// "we've validated this seq" state at signing time rather than
+	// after broadcast. Mirrors rippled's handleNewValidation feeding
+	// the local Validations tracker before TMValidation goes out.
+	e.ourLastValidatedSeq = ledger.Seq()
 
 	e.adaptor.BroadcastValidation(validation)
 

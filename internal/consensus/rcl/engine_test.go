@@ -2287,3 +2287,155 @@ func TestEngine_IsProposing_LockFreeWhileWriterHoldsMu(t *testing.T) {
 		t.Fatal("Mode blocked while a writer holds e.mu — atomic mode mirror regression")
 	}
 }
+
+// TestSendValidation_CanValidateSeq_DedupsSameAndOlderSeq pins the
+// issue #401 fix: sendValidation MUST silently drop a second emission
+// at the same — or any earlier — ledger sequence, no matter the hash.
+//
+// Without this guard, when our local close diverges from the network's
+// accepted hash, a subsequent re-accept (e.g. after acquiring the
+// foreign LCL) can race two distinct validations for the same seq onto
+// the wire. Rippled's Byzantine Behavior Detector flags us permanently
+// for "Conflicting validation for N" (RCLValidations.cpp:236-240,
+// Validations.h:625-665), and our validations stop counting toward
+// quorum forever. Mirrors rippled's per-node SeqEnforcer, the engine
+// of canValidateSeq (Validations.h:830).
+func TestSendValidation_CanValidateSeq_DedupsSameAndOlderSeq(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	// First emission at seq=101 hash=A — must broadcast.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xA1}, seq: 101})
+	engine.mu.Unlock()
+
+	// Second emission at the SAME seq with a DIFFERENT hash — must be
+	// silently dropped. This is the production scenario that triggers
+	// the Byzantine flag at peers (#401).
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xB2}, seq: 101})
+	engine.mu.Unlock()
+
+	// Third emission at an EARLIER seq — must also be silently dropped.
+	// SeqEnforcer requires strictly increasing seqs.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xC3}, seq: 100})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	emitted := append([]*consensus.Validation(nil), adaptor.validationsBroadcast...)
+	adaptor.mu.RUnlock()
+
+	if len(emitted) != 1 {
+		t.Fatalf("canValidateSeq guard: want exactly one emission for "+
+			"seq=101 (same-seq and earlier-seq calls dropped), got %d",
+			len(emitted))
+	}
+	if emitted[0].LedgerID != (consensus.LedgerID{0xA1}) {
+		t.Fatalf("the kept emission must be the FIRST (seq=101 hash=A1), "+
+			"got hash=%x — guard let a later same-seq emission overwrite",
+			emitted[0].LedgerID)
+	}
+
+	// Fourth emission at a LATER seq — must broadcast normally.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xD4}, seq: 102})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	emitted = append([]*consensus.Validation(nil), adaptor.validationsBroadcast...)
+	adaptor.mu.RUnlock()
+
+	if len(emitted) != 2 {
+		t.Fatalf("strictly-increasing seq must pass: want 2 emissions "+
+			"after seq=102, got %d", len(emitted))
+	}
+	if emitted[1].LedgerSeq != 102 {
+		t.Fatalf("second kept emission seq: want 102, got %d", emitted[1].LedgerSeq)
+	}
+}
+
+// TestAcceptLedger_ConsensusFailSuppressesValidation pins the issue
+// #401 fix at the production gate: acceptLedger must NOT emit a
+// validation when the round failed to converge. Mirrors rippled's
+// gate at RCLConsensus.cpp:587-594 — `validating_ && !consensusFail`.
+//
+// In rippled, the timeout/Expired path zeros validating_ via
+// leaveConsensus(); we encode the same intent by passing a non-Success
+// Result enum into acceptLedger. Without this gate a divergent local
+// close still emits, peers see a hash that differs from their accepted
+// LCL, and our validator gets Byzantine-flagged.
+func TestAcceptLedger_ConsensusFailSuppressesValidation(t *testing.T) {
+	cases := []struct {
+		name   string
+		result consensus.Result
+		want   int // emissions expected
+	}{
+		{"Success_emits", consensus.ResultSuccess, 1},
+		{"Timeout_suppressed", consensus.ResultTimeout, 0},
+		{"Abandoned_suppressed", consensus.ResultAbandoned, 0},
+		{"MovedOn_suppressed", consensus.ResultMovedOn, 0},
+		{"Fail_suppressed", consensus.ResultFail, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			adaptor := newMockAdaptor()
+			adaptor.validator = true
+			adaptor.opMode = consensus.OpModeFull
+
+			engine := NewEngine(adaptor, DefaultConfig())
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if err := engine.Start(ctx); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			defer engine.Stop()
+
+			round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+			engine.StartRound(round, true)
+
+			// Seed the engine with a tx-set + position so acceptLedger
+			// has something to build with; use the inbound proposal path
+			// to drive it without reproducing the entire FSM here.
+			adaptor.mu.Lock()
+			adaptor.validationsBroadcast = nil
+			adaptor.mu.Unlock()
+
+			// Drive acceptLedger directly. The phase guard at the top
+			// requires PhaseEstablish — StartRound transitions Open →
+			// Establish on the first timer tick, so force it.
+			engine.mu.Lock()
+			engine.setPhase(consensus.PhaseEstablish)
+			engine.acceptLedger(tc.result)
+			engine.mu.Unlock()
+
+			adaptor.mu.RLock()
+			got := len(adaptor.validationsBroadcast)
+			adaptor.mu.RUnlock()
+
+			if got != tc.want {
+				t.Fatalf("result=%v: want %d emissions, got %d "+
+					"(consensusFail gate did not match rippled "+
+					"RCLConsensus.cpp:587-594)", tc.result, tc.want, got)
+			}
+		})
+	}
+}
