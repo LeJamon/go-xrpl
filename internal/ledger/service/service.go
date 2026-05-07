@@ -1492,23 +1492,26 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	s.mu.Lock()
 	l, ok := s.ledgerHistory[seq]
-	if !ok {
-		// Validation tracker raced ahead of the peer-adoption loop:
-		// quorum was reached for seq N before our local adopt/close
-		// installed seq N into ledgerHistory. Stash the (seq, hash)
-		// pair so the next insertion at that seq can promote to
-		// validated if the hash matches. Without this stash, the
-		// validation is dropped and server_info.validated_ledger
-		// lags closed_ledger indefinitely.
+	// Mirrors rippled's LedgerMaster::checkAccept(hash, seq), which is
+	// hash-keyed: getLedgerByHash(hash) returns null both when nothing
+	// sits at that seq AND when something else does, and the acquire
+	// fires unconditionally on null (LedgerMaster.cpp:904-918). Our seq-
+	// keyed map turns that single rippled branch into two: no entry, or
+	// entry-with-different-hash (a fork at the same height). Both must
+	// stash and arm acquisition for the validated hash. The acquired
+	// ledger lands via adoptLedgerWithStateLocked, which overwrites
+	// ledgerHistory[seq] and runs fixMismatchLocked; the seq-keyed stash
+	// then drains on hash match and promotes the adopted ledger to
+	// validated.
+	if !ok || l.Hash() != expectedHash {
 		s.stashPendingLedgerValidationLocked(seq, expectedHash)
 		// Capture the arm-acquisition handler before unlocking so a
 		// concurrent SetOnPendingValidationStashed cannot race the
 		// dispatch decision. Only fire when seq is strictly above the
-		// closed ledger — at or below, we either already have it in
-		// history (the ledgerHistory[seq] hit branch above would have
-		// fired) or it was evicted, in which case the divergent-fork
-		// path drives any reacquisition. Mirrors PR #398's parentSeq
-		// <= closed guard in armParentAcquisition.
+		// closed ledger — at or below, the divergent-fork status-
+		// change handler is the right path for any reacquisition.
+		// Mirrors PR #398's parentSeq <= closed guard in
+		// armParentAcquisition.
 		var (
 			handler func(uint32, [32]byte)
 			fire    bool
@@ -1527,10 +1530,6 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 		if fire {
 			go handler(seq, expectedHash)
 		}
-		return
-	}
-	if l.Hash() != expectedHash {
-		s.mu.Unlock()
 		return
 	}
 	_ = l.SetValidated()

@@ -202,6 +202,87 @@ func TestSetValidatedLedger_StashHashMismatch(t *testing.T) {
 		"drain must delete hash-mismatched entries on the seq-adopt side")
 }
 
+// TestSetValidatedLedger_StashesOnForkDivergence pins parity with
+// rippled's LedgerMaster::checkAccept(hash, seq), which is hash-keyed:
+// when the validated hash differs from the one we have at that seq,
+// rippled still calls getInboundLedgers().acquire(hash, seq, GENERIC)
+// (LedgerMaster.cpp:904-918). Our seq-keyed map must mirror by stashing
+// the (seq, expectedHash) pair on hash mismatch so a later acquisition-
+// then-adopt at the validated hash drains the stash and promotes
+// validated. The handler-fire side is guarded by seq > closedLedger
+// (the fork-divergence case typically sits at closed), so this test
+// also pins that the handler is NOT invoked for seq <= closed.
+func TestSetValidatedLedger_StashesOnForkDivergence(t *testing.T) {
+	cfg := DefaultConfig()
+	svc, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+
+	txMap, err := shamap.New(shamap.TypeTransaction)
+	require.NoError(t, err)
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
+
+	stateMap, err := shamap.New(shamap.TypeState)
+	require.NoError(t, err)
+	stateRoot, err := stateMap.Hash()
+	require.NoError(t, err)
+
+	// Adopt locally at hash B.
+	var localHashB [32]byte
+	localHashB[0] = 0xD1
+	adoptedSeq := svc.GetClosedLedgerIndex() + 1
+	hdr := &header.LedgerHeader{
+		LedgerIndex: adoptedSeq,
+		Hash:        localHashB,
+		TxHash:      txRoot,
+		AccountHash: stateRoot,
+	}
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
+	require.Equal(t, adoptedSeq, svc.GetClosedLedgerIndex(),
+		"setup: adopt must advance closedLedger so the fork case sits at seq == closed")
+	startValidated := svc.GetValidatedLedgerIndex()
+
+	// Wire a handler that records every fire so we can assert it is
+	// NOT invoked in the seq <= closed regime.
+	var (
+		mu    sync.Mutex
+		fires []uint32
+	)
+	svc.SetOnPendingValidationStashed(func(seq uint32, _ [32]byte) {
+		mu.Lock()
+		fires = append(fires, seq)
+		mu.Unlock()
+	})
+
+	// Quorum validates a *different* hash A at the same seq — fork.
+	var validatedHashA [32]byte
+	validatedHashA[0] = 0xD2
+	svc.SetValidatedLedger(adoptedSeq, validatedHashA)
+
+	// Stash must hold the validated hash so a future re-adopt at hash A
+	// (after fixMismatch + acquisition) can drain and promote.
+	svc.mu.RLock()
+	entry, stashed := svc.pendingLedgerValidations[adoptedSeq]
+	svc.mu.RUnlock()
+	require.True(t, stashed,
+		"hash-mismatched validation must stash so a later acquired+adopted matching hash can promote")
+	assert.Equal(t, validatedHashA, entry.expectedHash,
+		"stashed entry must carry the validated hash, not the locally-adopted one")
+
+	// Validated must NOT advance — fork safety.
+	assert.Equal(t, startValidated, svc.GetValidatedLedgerIndex(),
+		"hash mismatch must NOT promote validated")
+
+	// Handler must NOT fire — seq <= closed guard.
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	gotFires := append([]uint32(nil), fires...)
+	mu.Unlock()
+	assert.Empty(t, gotFires,
+		"onPendingValidationStashed must not fire for seq <= closedLedger; the divergent-fork status-change path drives reacquisition at active height")
+}
+
 // TestAdoptLedgerWithState_EventCallbackFiresAfterValidationFirstRace pins
 // the validation-first race fix: when SetValidatedLedger arrives BEFORE the
 // adopt path installs the ledger, the subsequent adopt's F4 drain promotes

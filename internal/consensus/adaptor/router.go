@@ -1119,8 +1119,9 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 
 // armValidationStashAcquisition fires an acquisition for a (seq, hash)
 // pair that SetValidatedLedger just stashed in pendingLedgerValidations
-// because ledgerHistory[seq] was empty. Wired as the
-// onPendingValidationStashed callback on the ledger service in NewRouter.
+// because ledgerHistory had no entry at seq matching expectedHash.
+// Wired as the onPendingValidationStashed callback on the ledger
+// service in NewRouter.
 //
 // Mirrors rippled's LedgerMaster::checkAccept(hash, seq), which calls
 // app_.getInboundLedgers().acquire(hash, seq, ...) on the same condition
@@ -1130,12 +1131,22 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 // handler, which acquires the peer's CURRENT tip — not the seq the
 // validation tracker just told us reached quorum.
 //
-// Picks any tracked peer; the underlying startLedgerAcquisition prefers
-// replay-delta when a parent is locally available and falls back to
-// legacy mtGET_LEDGER otherwise. If no peers are tracked yet (early
-// startup window), skip — peer-status-change handlers will drive the
-// acquisition once peers connect.
+// Prefers a peer whose advertised LCL is at or above seq so the request
+// goes to a peer that can actually serve the ledger; falls back to any
+// tracked peer if none qualify (the maintenance tick rotates on silent-
+// peer timeouts). If no peers are tracked yet (early startup window),
+// skip — peer-status-change handlers will drive the acquisition once
+// peers connect.
 func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
+	defer func() {
+		if rv := recover(); rv != nil {
+			r.logger.Error("armValidationStashAcquisition panic recovered",
+				"seq", seq,
+				"hash", fmt.Sprintf("%x", hash[:8]),
+				"panic", rv,
+			)
+		}
+	}()
 	if seq == 0 {
 		return
 	}
@@ -1153,12 +1164,23 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 	}
 
 	r.peersMu.RLock()
-	var preferredPeerID uint64
-	for pid := range r.peerStates {
-		preferredPeerID = uint64(pid)
-		break
+	var (
+		preferredPeerID uint64
+		fallbackPeerID  uint64
+	)
+	for pid, st := range r.peerStates {
+		if fallbackPeerID == 0 {
+			fallbackPeerID = uint64(pid)
+		}
+		if st != nil && st.LedgerSeq >= seq {
+			preferredPeerID = uint64(pid)
+			break
+		}
 	}
 	r.peersMu.RUnlock()
+	if preferredPeerID == 0 {
+		preferredPeerID = fallbackPeerID
+	}
 	if preferredPeerID == 0 {
 		// No tracked peers yet — peer status changes will drive the
 		// acquisition once peers connect. Avoid sending to peerID=0
