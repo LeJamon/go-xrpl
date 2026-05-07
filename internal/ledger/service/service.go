@@ -1673,6 +1673,25 @@ const heldAdoptionTTL = 60 * time.Second
 // magnitude above any legitimate cascade length.
 const heldAdoptionCascadeMax = 256
 
+// SubmitHeldAdoptionResult describes the disposition of a candidate
+// ledger passed to SubmitHeldAdoption. When Stashed is true the caller
+// should arm a backward acquisition for (ParentSeq, ParentHash) — without
+// that, the stash entry will age out at heldAdoptionTTL (issue #397).
+type SubmitHeldAdoptionResult struct {
+	// Adopted means the awaited parent was already in history at the
+	// expected hash and the candidate was fast-pathed into the adopt.
+	Adopted bool
+
+	// Stashed means the candidate is parked in the held-adoption stash
+	// pending cascade-promotion at the parent seq.
+	Stashed bool
+
+	// ParentSeq, ParentHash describe the awaited parent. Set whenever
+	// h.LedgerIndex > 1, regardless of outcome.
+	ParentSeq  uint32
+	ParentHash [32]byte
+}
+
 // SubmitHeldAdoption routes a fetched replay-delta either to immediate
 // adoption (when the awaited parent seq is already in history and its
 // hash matches the supplied ParentHash) or to the held-orphan stash
@@ -1686,12 +1705,18 @@ const heldAdoptionCascadeMax = 256
 //
 // Mirrors rippled's tryAdvance cascade shape, flattened to single-hop
 // (see comment on heldAdoptions for the scope trade-off).
-func (s *Service) SubmitHeldAdoption(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
+func (s *Service) SubmitHeldAdoption(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) (SubmitHeldAdoptionResult, error) {
 	if h == nil {
-		return errors.New("SubmitHeldAdoption: nil header")
+		return SubmitHeldAdoptionResult{}, errors.New("SubmitHeldAdoption: nil header")
 	}
 	if stateMap == nil {
-		return errors.New("SubmitHeldAdoption: nil state map")
+		return SubmitHeldAdoptionResult{}, errors.New("SubmitHeldAdoption: nil state map")
+	}
+
+	res := SubmitHeldAdoptionResult{}
+	if h.LedgerIndex > 1 {
+		res.ParentSeq = h.LedgerIndex - 1
+		res.ParentHash = h.ParentHash
 	}
 
 	s.mu.Lock()
@@ -1711,7 +1736,11 @@ func (s *Service) SubmitHeldAdoption(ctx context.Context, h *header.LedgerHeader
 		if parent, ok := s.ledgerHistory[parentSeq]; ok {
 			parentHash := parent.Hash()
 			if parentHash == h.ParentHash {
-				return s.adoptLedgerWithStateLocked(ctx, h, stateMap, txMap, 0)
+				if err := s.adoptLedgerWithStateLocked(ctx, h, stateMap, txMap, 0); err != nil {
+					return res, err
+				}
+				res.Adopted = true
+				return res, nil
 			}
 			// Parent seq present but on a different fork. Stashing would
 			// create a never-draining entry (the real fork's parent-seq
@@ -1722,7 +1751,7 @@ func (s *Service) SubmitHeldAdoption(ctx context.Context, h *header.LedgerHeader
 				"parent_have", fmt.Sprintf("%x", parentHash[:8]),
 				"parent_want", fmt.Sprintf("%x", h.ParentHash[:8]),
 			)
-			return nil
+			return res, nil
 		}
 	}
 
@@ -1733,7 +1762,8 @@ func (s *Service) SubmitHeldAdoption(ctx context.Context, h *header.LedgerHeader
 		txMap:    txMap,
 		at:       time.Now(),
 	}
-	return nil
+	res.Stashed = true
+	return res, nil
 }
 
 // cascadeHeldAdoptionsLocked promotes a held child whose awaited parent

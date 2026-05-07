@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/inbound"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/manifest"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
@@ -1029,8 +1030,9 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 		r.startLedgerAcquisitionLegacy(seq, hash, peerID)
 		return
 	}
+	peerID := rd.PeerID()
 	r.replayer.Complete(rd.Hash())
-	if err := r.adoptVerifiedLedger(derived); err != nil {
+	if err := r.adoptVerifiedLedger(derived, peerID); err != nil {
 		r.logger.Warn("failed to adopt replay-delta ledger", "error", err)
 	}
 }
@@ -1048,10 +1050,14 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 // ledger's ParentHash, SubmitHeldAdoption fast-paths into the immediate
 // adopt (same call-shape as before). If the parent hasn't landed yet
 // — i.e. the replay-delta arrived out of order — the ledger is stashed
-// in the held-adoptions map keyed by its awaited parent seq, and
-// cascade-promoted automatically from inside the parent's eventual
-// adopt. The router no longer needs to observe ordering.
-func (r *Router) adoptVerifiedLedger(l *ledger.Ledger) error {
+// in the held-adoptions map keyed by its awaited parent seq.
+//
+// When SubmitHeldAdoption stashes, we arm a backward-chain acquisition
+// for the awaited parent (issue #397). Without this, a tip-only
+// acquisition policy (checkBehind) leaves stashed candidates waiting
+// for parents that are never requested, and they age out at
+// heldAdoptionTTL.
+func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
 		return errors.New("no ledger service")
@@ -1073,7 +1079,8 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger) error {
 	// handler stack that does not currently carry a context. Threading
 	// one through the message-dispatch chain is tracked separately from
 	// this issue (#185).
-	if err := svc.SubmitHeldAdoption(context.TODO(), &hdr, stateMap, txMap); err != nil {
+	res, err := svc.SubmitHeldAdoption(context.TODO(), &hdr, stateMap, txMap)
+	if err != nil {
 		return fmt.Errorf("adopt with state: %w", err)
 	}
 	if r.adaptor.GetOperatingMode() < consensus.OpModeTracking {
@@ -1092,7 +1099,34 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger) error {
 			r.logger.Debug("engine rejected adopted ledger", "error", err, "seq", hdr.LedgerIndex)
 		}
 	}
+	if res.Stashed {
+		r.armParentAcquisition(svc, res.ParentSeq, res.ParentHash, peerID)
+	}
 	return nil
+}
+
+// armParentAcquisition fires a backward-chain acquisition for the
+// parent of a stashed held-adoption candidate (issue #397). Caller
+// invokes after SubmitHeldAdoption returns Stashed=true.
+//
+// Skips if the parent seq is at or below our closed ledger — in that
+// regime we already have something at this height locally, and either
+// (a) the SubmitHeldAdoption fast-path would have adopted, or (b) the
+// divergent-fork drop fired. Either way another acquisition won't
+// help.
+func (r *Router) armParentAcquisition(svc *service.Service, parentSeq uint32, parentHash [32]byte, preferredPeerID uint64) {
+	if parentSeq == 0 {
+		return
+	}
+	if parentSeq <= svc.GetClosedLedgerIndex() {
+		return
+	}
+	r.logger.Info("arming backward-chain acquisition for stashed held-adoption parent",
+		"parent_seq", parentSeq,
+		"parent_hash", fmt.Sprintf("%x", parentHash[:8]),
+		"preferred_peer", preferredPeerID,
+	)
+	r.startLedgerAcquisition(parentSeq, parentHash, preferredPeerID)
 }
 
 // checkBehind decides what to do based on how far behind a peer
@@ -1344,6 +1378,7 @@ func (r *Router) completeInboundLedger() {
 		r.logger.Warn("inbound ledger: failed to get result", "error", err)
 		return
 	}
+	peerID := il.PeerID()
 
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
@@ -1364,7 +1399,8 @@ func (r *Router) completeInboundLedger() {
 	// interleaving — the held-queue is the correct seam regardless.
 	// context.TODO: same as adoptVerifiedLedger — reached from a peer-
 	// message handler stack with no plumbed context. See note there.
-	if err := svc.SubmitHeldAdoption(context.TODO(), h, stateMap, nil); err != nil {
+	res, err := svc.SubmitHeldAdoption(context.TODO(), h, stateMap, nil)
+	if err != nil {
 		r.logger.Warn("inbound ledger: failed to adopt with state", "error", err)
 		return
 	}
@@ -1386,5 +1422,8 @@ func (r *Router) completeInboundLedger() {
 		if err := r.engine.OnLedger(consensus.LedgerID(h.Hash), nil); err != nil {
 			r.logger.Debug("engine rejected adopted ledger", "error", err, "seq", h.LedgerIndex)
 		}
+	}
+	if res.Stashed {
+		r.armParentAcquisition(svc, res.ParentSeq, res.ParentHash, peerID)
 	}
 }
