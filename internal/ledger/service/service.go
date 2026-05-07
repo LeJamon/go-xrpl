@@ -1673,31 +1673,22 @@ const heldAdoptionTTL = 60 * time.Second
 // magnitude above any legitimate cascade length.
 const heldAdoptionCascadeMax = 256
 
-// SubmitHeldAdoptionResult describes what SubmitHeldAdoption did with
-// the supplied candidate ledger. Callers that drive ledger acquisition
-// use Stashed to chain backward: when Stashed is true, the candidate is
-// waiting on a parent that is not yet in history, and the caller should
-// arm an acquisition for (ParentSeq, ParentHash) so the chain converges
-// rather than aging out at heldAdoptionTTL. See issue #397.
+// SubmitHeldAdoptionResult describes the disposition of a candidate
+// ledger passed to SubmitHeldAdoption. When Stashed is true the caller
+// should arm a backward acquisition for (ParentSeq, ParentHash) — without
+// that, the stash entry will age out at heldAdoptionTTL (issue #397).
 type SubmitHeldAdoptionResult struct {
-	// Adopted is true when the candidate was fast-pathed into the active
-	// adoption (its awaited parent was already in history at the expected
-	// hash). When true, callers do not need to drive backward acquisition.
+	// Adopted means the awaited parent was already in history at the
+	// expected hash and the candidate was fast-pathed into the adopt.
 	Adopted bool
 
-	// Stashed is true when the candidate was placed in the held-adoption
-	// stash awaiting cascade-promotion at the parent seq. When true,
-	// callers SHOULD arm a backward acquisition for (ParentSeq,
-	// ParentHash) — without that, the stash entry will age out at
-	// heldAdoptionTTL and the chain stays stuck.
+	// Stashed means the candidate is parked in the held-adoption stash
+	// pending cascade-promotion at the parent seq.
 	Stashed bool
 
-	// ParentSeq is the awaited parent's sequence (= h.LedgerIndex - 1).
-	// Set whenever h.LedgerIndex > 1, regardless of outcome.
-	ParentSeq uint32
-
-	// ParentHash is the awaited parent's hash (= h.ParentHash). Set
-	// whenever h.LedgerIndex > 1, regardless of outcome.
+	// ParentSeq, ParentHash describe the awaited parent. Set whenever
+	// h.LedgerIndex > 1, regardless of outcome.
+	ParentSeq  uint32
 	ParentHash [32]byte
 }
 
@@ -1711,13 +1702,6 @@ type SubmitHeldAdoptionResult struct {
 // Safe to call concurrently. Nil header or nil stateMap is rejected;
 // nil txMap is allowed (legacy catchup path — AdoptLedgerWithState
 // falls back to the genesis-shaped empty tx map).
-//
-// Returns a SubmitHeldAdoptionResult describing whether the candidate
-// was adopted immediately, stashed, or dropped (Adopted == Stashed ==
-// false), and — when applicable — the awaited parent's seq+hash so the
-// caller can drive backward acquisition. See issue #397: without
-// backward-chaining, a tip-only acquisition policy lets every candidate
-// age out at heldAdoptionTTL.
 //
 // Mirrors rippled's tryAdvance cascade shape, flattened to single-hop
 // (see comment on heldAdoptions for the scope trade-off).

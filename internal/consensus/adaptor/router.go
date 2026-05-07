@@ -1056,9 +1056,7 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 // for the awaited parent (issue #397). Without this, a tip-only
 // acquisition policy (checkBehind) leaves stashed candidates waiting
 // for parents that are never requested, and they age out at
-// heldAdoptionTTL. peerID is the source of the replay delta — used as
-// the preferred peer for the parent acquisition; existing dedup in
-// startLedgerAcquisition makes redundant calls cheap.
+// heldAdoptionTTL.
 func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
@@ -1115,10 +1113,7 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 // regime we already have something at this height locally, and either
 // (a) the SubmitHeldAdoption fast-path would have adopted, or (b) the
 // divergent-fork drop fired. Either way another acquisition won't
-// help. Above our closed seq, we don't have the parent, so request it.
-//
-// Dedup happens inside startLedgerAcquisition.isAcquiring; this
-// function does not need to track in-flight state.
+// help.
 func (r *Router) armParentAcquisition(svc *service.Service, parentSeq uint32, parentHash [32]byte, preferredPeerID uint64) {
 	if parentSeq == 0 {
 		return
