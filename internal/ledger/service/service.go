@@ -168,6 +168,15 @@ type Service struct {
 	// eviction of pendingLedgerValidations.
 	pendingLedgerValidationsOrder []uint32
 
+	// onPendingValidationStashed, if non-nil, is invoked off-thread when
+	// SetValidatedLedger stashes a validation for a seq beyond the closed
+	// ledger. Without this kick, validation-tracker quorum decisions for
+	// ledgers we have not yet adopted sit silently in
+	// pendingLedgerValidations and validated_ledger.seq stays frozen.
+	// Mirrors rippled's LedgerMaster::checkAccept which calls
+	// getInboundLedgers().acquire(hash, seq, ...) on the same condition.
+	onPendingValidationStashed func(seq uint32, hash [32]byte)
+
 	// heldAdoptions stashes replay-delta adoptions that arrived out of
 	// order (child seq before parent seq). Keyed by the *awaited parent
 	// seq* so a successful adopt at seq N can pop the child at seq N+1
@@ -223,6 +232,15 @@ func (s *Service) SetEventCallback(callback EventCallback) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.eventCallback = callback
+}
+
+// SetOnPendingValidationStashed registers a handler invoked off-thread
+// when SetValidatedLedger stashes a validation that doesn't match a
+// ledger we have. Pass nil to unwire.
+func (s *Service) SetOnPendingValidationStashed(handler func(seq uint32, hash [32]byte)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onPendingValidationStashed = handler
 }
 
 // SetEventHooks sets the event hooks for ledger events
@@ -1470,20 +1488,42 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	s.mu.Lock()
 	l, ok := s.ledgerHistory[seq]
-	if !ok {
-		// Validation tracker raced ahead of the peer-adoption loop:
-		// quorum was reached for seq N before our local adopt/close
-		// installed seq N into ledgerHistory. Stash the (seq, hash)
-		// pair so the next insertion at that seq can promote to
-		// validated if the hash matches. Without this stash, the
-		// validation is dropped and server_info.validated_ledger
-		// lags closed_ledger indefinitely.
+	// Mirrors rippled's LedgerMaster::checkAccept(hash, seq), which is
+	// hash-keyed: getLedgerByHash(hash) returns null both when nothing
+	// sits at that seq AND when something else does, and the acquire
+	// fires unconditionally on null (LedgerMaster.cpp:904-918). Our seq-
+	// keyed map turns that single rippled branch into two: no entry, or
+	// entry-with-different-hash (a fork at the same height). Both must
+	// stash and arm acquisition for the validated hash. The acquired
+	// ledger lands via adoptLedgerWithStateLocked, which overwrites
+	// ledgerHistory[seq] and runs fixMismatchLocked; the seq-keyed stash
+	// then drains on hash match and promotes the adopted ledger to
+	// validated.
+	if !ok || l.Hash() != expectedHash {
 		s.stashPendingLedgerValidationLocked(seq, expectedHash)
+		// Capture the handler before unlocking so a concurrent
+		// SetOnPendingValidationStashed cannot race the dispatch
+		// decision. Fire only when seq is strictly above closed —
+		// at or below, the divergent-fork status-change handler is
+		// the right path for any reacquisition.
+		var (
+			handler func(uint32, [32]byte)
+			fire    bool
+		)
+		if s.onPendingValidationStashed != nil {
+			closedSeq := uint32(0)
+			if s.closedLedger != nil {
+				closedSeq = s.closedLedger.Sequence()
+			}
+			if seq > closedSeq {
+				handler = s.onPendingValidationStashed
+				fire = true
+			}
+		}
 		s.mu.Unlock()
-		return
-	}
-	if l.Hash() != expectedHash {
-		s.mu.Unlock()
+		if fire {
+			go handler(seq, expectedHash)
+		}
 		return
 	}
 	_ = l.SetValidated()
@@ -1565,12 +1605,14 @@ type pendingValidationEntry struct {
 	at           time.Time
 }
 
-// pendingValidationTTL bounds how long a stashed validation is considered
-// fresh enough to promote on later adopt/close. 30s is comfortably larger
-// than the quorum-gossip window (a few seconds in practice) but small
-// enough that a truly stale validation — one where the adopt path is
-// lagging minutes behind — fails safe by refusing promotion.
-const pendingValidationTTL = 30 * time.Second
+// pendingValidationTTL bounds how long a stashed validation is
+// considered fresh enough to promote on later adopt/close. The
+// 10-minute window covers deep-gap catchup, where backward-chain
+// adoption walks one hop per peer round-trip — "validation arrived
+// for seq N" to "ledger at seq N adopted" can take several minutes.
+// pendingValidationMaxLen=256 already bounds memory and the on-drain
+// hash check guarantees fork safety, so a generous TTL is safe.
+const pendingValidationTTL = 10 * time.Minute
 
 // stashPendingLedgerValidationLocked stores a (seq, expectedHash, at) entry
 // for later drain when ledgerHistory[seq] is populated. LRU-evicts the

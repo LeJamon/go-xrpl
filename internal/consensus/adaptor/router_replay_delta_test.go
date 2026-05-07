@@ -828,3 +828,77 @@ func autoArmTarget(rs *recordingSender) ([32]byte, uint32) {
 	}
 	return [32]byte{}, 0
 }
+
+// TestRouter_Issue397_AutoArmsAcquisitionOnValidationStash: when
+// SetValidatedLedger fires for a seq beyond our closed ledger and
+// ledgerHistory has nothing for it, the router must arm an acquisition
+// for (seq, hash). Without this, validation-tracker quorum decisions
+// for ledgers we have not yet adopted sit silently in
+// pendingLedgerValidations until the entry expires, and
+// validated_ledger.seq stays frozen even while consensus reports
+// "fully validated".
+//
+// Mirrors rippled's LedgerMaster::checkAccept(hash, seq) (LedgerMaster.cpp:917-919),
+// which calls app_.getInboundLedgers().acquire(hash, seq, ...) on the
+// same condition.
+func TestRouter_Issue397_AutoArmsAcquisitionOnValidationStash(t *testing.T) {
+	r, _, rs, svc := makeRouter(t)
+
+	// recordingSender defaults to peerSupportsReplay=true.
+	const peerID peermanagement.PeerID = 7
+	r.peersMu.Lock()
+	r.peerStates[peerID] = &peerLedgerState{
+		LedgerSeq: svc.GetClosedLedgerIndex() + 100,
+	}
+	r.peersMu.Unlock()
+
+	// Hash is arbitrary — we only verify the router asks for it.
+	var validatedHash [32]byte
+	for i := range validatedHash {
+		validatedHash[i] = byte(0xA0 + i%16)
+	}
+	validatedSeq := svc.GetClosedLedgerIndex() + 5
+
+	svc.SetValidatedLedger(validatedSeq, validatedHash)
+
+	require.Eventually(t, func() bool {
+		return len(rs.replayCalls())+len(rs.legacyCalls()) >= 1
+	}, time.Second, 10*time.Millisecond,
+		"router must auto-arm an acquisition when SetValidatedLedger stashes a validation for a seq beyond closed_ledger")
+
+	totalCalls := len(rs.replayCalls()) + len(rs.legacyCalls())
+	require.Equal(t, 1, totalCalls,
+		"router must auto-arm exactly one acquisition for the stashed validation")
+
+	armedHash, armedSeq := autoArmTarget(rs)
+	assert.Equal(t, validatedHash, armedHash,
+		"auto-armed acquisition must target the stashed validation's hash")
+	if armedSeq != 0 {
+		assert.Equal(t, validatedSeq, armedSeq,
+			"auto-armed acquisition must carry the stashed validation's seq (legacy path)")
+	}
+}
+
+// TestRouter_Issue397_NoAcquisitionWhenNoPeers: when SetValidatedLedger
+// stashes but the router has no tracked peers, no acquisition is armed.
+// Dispatching to peerID=0 would race against the wire layer's per-peer
+// routing; peer-status-change handlers drive acquisition once peers
+// reconnect.
+func TestRouter_Issue397_NoAcquisitionWhenNoPeers(t *testing.T) {
+	_, _, rs, svc := makeRouter(t)
+
+	var validatedHash [32]byte
+	for i := range validatedHash {
+		validatedHash[i] = byte(0x30 + i%16)
+	}
+	validatedSeq := svc.GetClosedLedgerIndex() + 5
+
+	svc.SetValidatedLedger(validatedSeq, validatedHash)
+
+	// Wait briefly so any errant goroutine would have fired by now.
+	time.Sleep(50 * time.Millisecond)
+
+	totalCalls := len(rs.replayCalls()) + len(rs.legacyCalls())
+	assert.Equal(t, 0, totalCalls,
+		"router must NOT arm an acquisition when no peers are tracked")
+}
