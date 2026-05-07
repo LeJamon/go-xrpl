@@ -119,7 +119,7 @@ const messageDedupMaxEntries = 4096
 // NewRouter creates a new Router.
 func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManager, inbox <-chan *peermanagement.InboundMessage) *Router {
 	logger := slog.Default().With("component", "consensus-router")
-	return &Router{
+	r := &Router{
 		engine:      engine,
 		adaptor:     adaptor,
 		modeManager: modeManager,
@@ -129,6 +129,18 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManag
 		replayer:    inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
 		messageSeen: newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
 	}
+	// Wire the validation-stash hook so the router arms an acquisition
+	// the moment SetValidatedLedger stashes for a seq beyond our closed
+	// tip. Without this, the validation-tracker quorum decision sits
+	// silently in pendingLedgerValidations and validated_ledger.seq
+	// stays frozen even as consensus reports "fully validated".
+	// (Follow-up to issue #397.)
+	if adaptor != nil {
+		if svc := adaptor.LedgerService(); svc != nil {
+			svc.SetOnPendingValidationStashed(r.armValidationStashAcquisition)
+		}
+	}
+	return r
 }
 
 // SetManifestCache installs the validator-manifest cache and the
@@ -1103,6 +1115,63 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 		r.armParentAcquisition(svc, res.ParentSeq, res.ParentHash, peerID)
 	}
 	return nil
+}
+
+// armValidationStashAcquisition fires an acquisition for a (seq, hash)
+// pair that SetValidatedLedger just stashed in pendingLedgerValidations
+// because ledgerHistory[seq] was empty. Wired as the
+// onPendingValidationStashed callback on the ledger service in NewRouter.
+//
+// Mirrors rippled's LedgerMaster::checkAccept(hash, seq), which calls
+// app_.getInboundLedgers().acquire(hash, seq, ...) on the same condition
+// (LedgerMaster.cpp:917-919). Without this kick, a deep gap (network
+// well ahead of our closed ledger) leaves the stashed validation idle:
+// the only acquisition driver is the tip-walking peer-status-change
+// handler, which acquires the peer's CURRENT tip — not the seq the
+// validation tracker just told us reached quorum.
+//
+// Picks any tracked peer; the underlying startLedgerAcquisition prefers
+// replay-delta when a parent is locally available and falls back to
+// legacy mtGET_LEDGER otherwise. If no peers are tracked yet (early
+// startup window), skip — peer-status-change handlers will drive the
+// acquisition once peers connect.
+func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
+	if seq == 0 {
+		return
+	}
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		return
+	}
+	// At-or-below-closed guard: at this height we either already have the
+	// ledger in history (in which case SetValidatedLedger took the inline
+	// hash-check branch) or it was evicted; the divergent-fork status-
+	// change handler is the right path for that case. Mirrors PR #398's
+	// armParentAcquisition guard.
+	if seq <= svc.GetClosedLedgerIndex() {
+		return
+	}
+
+	r.peersMu.RLock()
+	var preferredPeerID uint64
+	for pid := range r.peerStates {
+		preferredPeerID = uint64(pid)
+		break
+	}
+	r.peersMu.RUnlock()
+	if preferredPeerID == 0 {
+		// No tracked peers yet — peer status changes will drive the
+		// acquisition once peers connect. Avoid sending to peerID=0
+		// (no recipient).
+		return
+	}
+
+	r.logger.Info("arming acquisition for stashed validation",
+		"seq", seq,
+		"hash", fmt.Sprintf("%x", hash[:8]),
+		"preferred_peer", preferredPeerID,
+	)
+	r.startLedgerAcquisition(seq, hash, preferredPeerID)
 }
 
 // armParentAcquisition fires a backward-chain acquisition for the
