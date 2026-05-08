@@ -471,30 +471,25 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	proposal.SuppressionHash = suppressionHash
 	firstSeen, lastSeen := r.messageSeen.observe(suppressionHash)
 
+	// Drop duplicates BEFORE the engine path — same rationale as
+	// handleValidation. Rippled's PeerImp.cpp:1730-1738 returns early
+	// on `!added` from addSuppressionPeer; we mirror that. The engine
+	// already processed the first instance; re-running OnProposal just
+	// re-runs ECDSA verify. We still feed the IDLED-gated relay slot
+	// on dupes for squelch accounting.
+	if !firstSeen {
+		if time.Since(lastSeen) < peermanagement.Idled {
+			seenPeers := r.adaptor.PeersThatHave(suppressionHash)
+			r.adaptor.UpdateRelaySlot(proposal.SigningPubKey[:], originPeer, seenPeers)
+		}
+		return
+	}
+
 	if err := r.engine.OnProposal(proposal, originPeer); err != nil {
 		r.logger.Debug("engine rejected proposal", "error", err, "peer", msg.PeerID)
 		return
 	}
-
-	// Feed the reduce-relay slot on duplicates that arrive within
-	// IDLED of the previous sighting. Matches rippled
-	// PeerImp.cpp:1730-1738 exactly: `!added && relayed &&
-	// (now - *relayed) < IDLED`. NOTE: no trust gate here — rippled
-	// feeds the slot for both trusted and untrusted duplicates
-	// (trust-specific branching happens later for relay decisions).
-	// Gating on trust pre-R5.7 under-squelched untrusted gossip
-	// vs. what the rest of the network does.
-	//
-	// B3: feed the slot with the FULL set of known-havers, not just
-	// originPeer. seenPeers is the overlay's reverse-index entry
-	// populated when we previously relayed this message outward —
-	// matching rippled's haveMessage set from overlay_.relay
-	// (PeerImp.cpp:3010-3017) which is then passed whole to
-	// updateSlotAndSquelch.
-	if !firstSeen && time.Since(lastSeen) < peermanagement.Idled {
-		seenPeers := r.adaptor.PeersThatHave(suppressionHash)
-		r.adaptor.UpdateRelaySlot(proposal.SigningPubKey[:], originPeer, seenPeers)
-	}
+	_ = lastSeen
 }
 
 func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
@@ -546,6 +541,27 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	validation.SuppressionHash = suppressionHash
 	firstSeen, lastSeen := r.messageSeen.observe(suppressionHash)
 
+	// Drop duplicates BEFORE the engine path. Rippled's PeerImp does
+	// the equivalent at `addSuppressionPeer` — if we've already seen
+	// this exact validation blob (from any peer), the engine already
+	// processed it and re-running OnValidation just re-runs the
+	// secp256k1 ECDSA verify. pprof on a 5-validator soak showed 64%
+	// of total CPU spent re-verifying duplicate validations because
+	// every peer forwards the same blob (5 validators × ~4 peers each
+	// = each validation seen ~4 times). Falling through here multiplies
+	// signature verification cost by the duplicate count and makes
+	// catch-up rounds CPU-bound when they should be sig-cost-bound.
+	//
+	// We still update the relay slot below so squelch accounting stays
+	// in sync — that's the rippled IDLED-window pattern unchanged.
+	if !firstSeen {
+		if time.Since(lastSeen) < peermanagement.Idled {
+			seenPeers := r.adaptor.PeersThatHave(suppressionHash)
+			r.adaptor.UpdateRelaySlot(validation.SigningPubKey[:], originPeer, seenPeers)
+		}
+		return
+	}
+
 	if err := r.engine.OnValidation(validation, originPeer); err != nil {
 		r.logger.Info("engine rejected validation",
 			"t", "consensus",
@@ -566,13 +582,10 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 		"seq", validation.LedgerSeq,
 		"hash_short", fmt.Sprintf("%x", validation.LedgerID[:8]))
 
-	// Same IDLED-gated, no-trust-gate feeding as handleProposal.
-	// Mirrors rippled's TMValidation path at PeerImp.cpp:2385 and the
-	// B3 haveMessage expansion at PeerImp.cpp:3049-3054.
-	if !firstSeen && time.Since(lastSeen) < peermanagement.Idled {
-		seenPeers := r.adaptor.PeersThatHave(suppressionHash)
-		r.adaptor.UpdateRelaySlot(validation.SigningPubKey[:], originPeer, seenPeers)
-	}
+	// firstSeen=true here (duplicates were dropped above). lastSeen
+	// is referenced in the dup branch only, so silence the unused
+	// warning for first-seen locals.
+	_ = lastSeen
 }
 
 // resolveMasterNodeID looks the inbound signing pubkey up in the
