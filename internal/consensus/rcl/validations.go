@@ -578,6 +578,38 @@ func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int
 	return count
 }
 
+// ProposersFinished counts trusted (non-negUNL) validators whose
+// most recent full validation is for a ledger sequence STRICTLY
+// AFTER prevSeq. Used by phaseEstablish to detect "the network has
+// moved past the round we're trying to participate in" — a pure-Go
+// equivalent of rippled's adaptor_.proposersFinished(prevSeq) used
+// by checkConsensus to return ConsensusState::MovedOn.
+//
+// Returning MovedOn lets the engine bail out of an establish phase
+// that can no longer reach consensus (peers stopped proposing for
+// our seq because they validated and moved on) instead of sitting
+// idle until the soft timeout fires.
+func (vt *ValidationTracker) ProposersFinished(prevSeq uint32) int {
+	vt.mu.RLock()
+	defer vt.mu.RUnlock()
+	count := 0
+	for nodeID, v := range vt.byNode {
+		if !vt.trusted[nodeID] {
+			continue
+		}
+		if vt.negUNL[nodeID] {
+			continue
+		}
+		if !v.Full {
+			continue
+		}
+		if v.LedgerSeq > prevSeq {
+			count++
+		}
+	}
+	return count
+}
+
 // GetLatestValidation returns the latest validation from a node.
 func (vt *ValidationTracker) GetLatestValidation(nodeID consensus.NodeID) *consensus.Validation {
 	vt.mu.RLock()
