@@ -273,6 +273,35 @@ func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 	return sm.insertKnownNode(nodeHash, node)
 }
 
+// AddKnownNodeWire adds a node from wire data, computing the hash itself.
+// Equivalent to AddKnownNode but skips the redundant external-hash check
+// when the caller does not already have an authoritative hash. The
+// computed hash is still trusted for tree placement.
+//
+// Per pprof on the catch-up hot path, callers that previously
+// deserialize+UpdateHash to extract the hash and then call AddKnownNode
+// (which repeats both) were paying ~10% of total CPU on duplicate work.
+// This entry point eliminates that duplication.
+func (sm *SHAMap) AddKnownNodeWire(data []byte) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if sm.state != StateSyncing {
+		return ErrSyncNotInProgress
+	}
+	if len(data) == 0 {
+		return ErrInvalidNodeData
+	}
+	node, err := DeserializeNodeFromWire(data)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidNodeData, err)
+	}
+	if err := node.UpdateHash(); err != nil {
+		return fmt.Errorf("failed to compute node hash: %w", err)
+	}
+	return sm.insertKnownNode(node.Hash(), node)
+}
+
 // insertKnownNode inserts a node at the correct location in the tree.
 // The caller must hold the write lock.
 func (sm *SHAMap) insertKnownNode(nodeHash [32]byte, node Node) error {

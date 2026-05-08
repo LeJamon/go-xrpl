@@ -163,30 +163,17 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 
 	added := 0
 	for _, node := range nodes {
-		if len(node.NodeID) == shamap.NodeIDSize {
-			// Response includes nodeID — extract the hash from the data itself
-			// The AddKnownNode method verifies the hash matches
-		}
-
 		if len(node.NodeData) == 0 {
 			continue
 		}
-
-		// Deserialize to get the hash, then add
-		n, err := shamap.DeserializeNodeFromWire(node.NodeData)
-		if err != nil {
-			l.logger.Debug("inbound ledger: skip invalid node", "error", err)
-			continue
-		}
-		if err := n.UpdateHash(); err != nil {
-			l.logger.Debug("inbound ledger: skip node with bad hash", "error", err)
-			continue
-		}
-
-		nodeHash := n.Hash()
-		if err := l.stateMap.AddKnownNode(nodeHash, node.NodeData); err != nil {
-			// May already have this node — not an error
-			l.logger.Debug("inbound ledger: AddKnownNode", "error", err, "hash", fmt.Sprintf("%x", nodeHash[:8]))
+		// AddKnownNodeWire deserializes + hashes ONCE. Previously we
+		// did the same work here just to extract the hash, then
+		// AddKnownNode redid both. That doubled CPU on the catch-up
+		// hot path — pprof showed ~10% of total CPU spent in
+		// duplicate Sha512Half/UpdateHash on every state node we
+		// ingested. Now the hash check happens exactly once.
+		if err := l.stateMap.AddKnownNodeWire(node.NodeData); err != nil {
+			l.logger.Debug("inbound ledger: AddKnownNodeWire", "error", err)
 			continue
 		}
 		added++
