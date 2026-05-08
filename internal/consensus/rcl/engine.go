@@ -2449,52 +2449,11 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// If not Full, the router will keep re-adopting until caught up,
 	// then transition to Full, at which point checkAndStartRound kicks in.
 	if e.adaptor.GetOperatingMode() == consensus.OpModeFull {
-		// Round-boundary preferred-LCL check, mirroring rippled's
-		// NetworkOPsImp::endConsensus → checkLastClosedLedger
-		// (NetworkOPs.cpp:1881-1984). Between rounds, rippled
-		// computes a preferred LCL from
-		// (validations.getPreferredLCL, peer LCL counts) and if it
-		// differs from our locally-built ledger calls
-		// switchLastClosedLedger to JUMP onto the network's chain
-		// before starting the next round. Without this jump, a node
-		// that built a divergent local ledger (different tx-set,
-		// different close-time, MovedOn, etc.) auto-advances onto
-		// its own side branch and crawls forward one wrong-LCL
-		// recovery per round forever.
-		//
-		// The MovedOn handler intentionally does NOT do this jump
-		// itself — that matches rippled, where MovedOn just transitions
-		// to accepted and onAccept builds a local ledger; the
-		// round-boundary preferred-LCL check is what actually
-		// repositions the engine. Goxrpl's auto-advance was the
-		// missing piece, the analogue of rippled reading prev from
-		// LedgerMaster::getCurrentLedger() (whose parent was just
-		// switched by checkLastClosedLedger).
-		if e.validationTracker != nil {
-			candidateID, candidateSeq, ok := e.validationTracker.GetPreferred(newLedger.Seq())
-			if !ok {
-				candidateID, candidateSeq, ok = e.validationTracker.PreferredFromValidations(newLedger.Seq())
-			}
-			localID := newLedger.ID()
-			if ok && candidateID != localID && candidateSeq >= newLedger.Seq() {
-				localBytes := localID
-				slog.Info("preferred LCL differs from local accept; jumping",
-					"t", "consensus",
-					"event", "preferred-lcl-jump",
-					"local_seq", newLedger.Seq(),
-					"local_hash", fmt.Sprintf("%x", localBytes[:8]),
-					"preferred_seq", candidateSeq,
-					"preferred_hash", fmt.Sprintf("%x", candidateID[:8]),
-				)
-				e.handleWrongLedger(candidateID)
-				return
-			}
-		}
-
-		// No preferred LCL or it matches what we just built — auto
-		// advance normally. Not a recovery — if the previous round
-		// WAS a switchedLedger round, this advancement is exactly
-		// where we promote back to ModeProposing.
+		// Auto-advance to the next round after a successful accept. Not
+		// a recovery — if the previous round WAS a switchedLedger round,
+		// this advancement is exactly where we promote back to
+		// ModeProposing (recovering=false means startRoundLocked picks
+		// Proposing for a trusted validator in OpModeFull).
 		proposing := e.adaptor.IsValidator()
 		nextRound := consensus.RoundID{
 			Seq:        newLedger.Seq() + 1,
