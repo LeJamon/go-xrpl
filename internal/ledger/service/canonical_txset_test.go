@@ -9,7 +9,7 @@ import (
 
 func TestCanonicalSortEmpty(t *testing.T) {
 	var txs []pendingTx
-	canonicalSort(txs)
+	canonicalSort(txs, [32]byte{})
 	if len(txs) != 0 {
 		t.Error("expected empty slice after sorting empty input")
 	}
@@ -19,7 +19,7 @@ func TestCanonicalSortSingle(t *testing.T) {
 	txs := []pendingTx{
 		{hash: [32]byte{0x01}, account: [20]byte{0xAA}, sequence: 1},
 	}
-	canonicalSort(txs)
+	canonicalSort(txs, [32]byte{})
 	if txs[0].hash[0] != 0x01 {
 		t.Error("single element should remain unchanged")
 	}
@@ -36,11 +36,11 @@ func TestCanonicalSortByAccountKey(t *testing.T) {
 		{txBlob: []byte{2}, hash: makeHash(2), account: account1, sequence: 1},
 	}
 
-	canonicalSort(txs)
+	canonicalSort(txs, [32]byte{})
 
 	// The salt is computed from the sorted hashes, so account keys depend on it.
 	// We just verify the sort is stable and deterministic.
-	salt := computeSalt(txs)
+	salt := [32]byte{}
 	key1 := computeAccountKey(account1, salt)
 	key2 := computeAccountKey(account2, salt)
 
@@ -68,7 +68,7 @@ func TestCanonicalSortBySequence(t *testing.T) {
 		{txBlob: []byte{3}, hash: makeHash(2), account: account, sequence: 8},
 	}
 
-	canonicalSort(txs)
+	canonicalSort(txs, [32]byte{})
 
 	// Same account => sorted by sequence
 	if txs[0].sequence != 5 {
@@ -95,7 +95,7 @@ func TestCanonicalSortByTxID(t *testing.T) {
 		{txBlob: []byte{3}, hash: hash2, account: account, sequence: 1},
 	}
 
-	canonicalSort(txs)
+	canonicalSort(txs, [32]byte{})
 
 	// Same account, same sequence => sorted by txID (hash)
 	if txs[0].hash != hash1 {
@@ -123,8 +123,8 @@ func TestCanonicalSortDeterministic(t *testing.T) {
 	txs1 := makeTxs()
 	txs2 := makeTxs()
 
-	canonicalSort(txs1)
-	canonicalSort(txs2)
+	canonicalSort(txs1, [32]byte{})
+	canonicalSort(txs2, [32]byte{})
 
 	for i := range txs1 {
 		if txs1[i].hash != txs2[i].hash {
@@ -134,34 +134,9 @@ func TestCanonicalSortDeterministic(t *testing.T) {
 	}
 }
 
-func TestComputeSalt(t *testing.T) {
-	// SHAMap leaf nodes require >= 12 bytes of data
-	blob1 := make([]byte, 16)
-	blob1[0] = 0x01
-	blob2 := make([]byte, 16)
-	blob2[0] = 0x02
-
-	txs := []pendingTx{
-		{hash: makeHash(2), txBlob: blob2},
-		{hash: makeHash(1), txBlob: blob1},
-	}
-
-	salt := computeSalt(txs)
-	var zero [32]byte
-	if salt == zero {
-		t.Error("salt should not be zero")
-	}
-
-	// Verify it's deterministic regardless of input order
-	txsReversed := []pendingTx{
-		{hash: makeHash(1), txBlob: blob1},
-		{hash: makeHash(2), txBlob: blob2},
-	}
-	saltReversed := computeSalt(txsReversed)
-	if salt != saltReversed {
-		t.Error("salt should be the same regardless of input order")
-	}
-}
+// TestComputeSalt removed: canonicalSort now takes the salt as an
+// explicit argument (= LCL hash) rather than deriving it from the
+// tx-set. There's no in-package salt to test.
 
 func TestComputeAccountKey(t *testing.T) {
 	account := [20]byte{0xFF, 0x00, 0xAA}

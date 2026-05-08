@@ -6,7 +6,6 @@ import (
 
 	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/shamap"
 )
 
 // pendingTx holds a transaction that was applied during the open ledger phase.
@@ -21,17 +20,16 @@ type pendingTx struct {
 
 // canonicalSort sorts pending transactions using the CanonicalTXSet ordering from rippled.
 // The sort key is (accountKey, sequence, txID) where accountKey = account XOR salt[:20].
-// The salt is derived from the SHA-512Half of all transaction hashes concatenated in
-// sorted order, approximating rippled's SHAMap hash of the transaction set.
-// Reference: rippled CanonicalTXSet.cpp
-func canonicalSort(txs []pendingTx) {
+// The salt is the LCL's ledger hash — see rippled CanonicalTXSet's constructor
+// `CanonicalTXSet(LedgerHash const& salt)`. The previous implementation used the
+// SHAMap hash of the new tx set as salt, which produced a different sort order from
+// rippled and broke sfTransactionIndex parity in metadata, forking the network at
+// every multi-tx ledger.
+// Reference: rippled CanonicalTXSet.cpp / CanonicalTXSet.h
+func canonicalSort(txs []pendingTx, salt [32]byte) {
 	if len(txs) <= 1 {
 		return
 	}
-
-	// Compute the salt: SHA-512Half of all tx hashes concatenated in sorted (hash) order.
-	// This approximates the SHAMap hash used as salt in rippled's CanonicalTXSet.
-	salt := computeSalt(txs)
 
 	// Pre-compute the account keys (account XOR salt[:20]) for sorting.
 	// In rippled, account is copied into a 32-byte uint256 (padded with zeros),
@@ -69,25 +67,6 @@ func canonicalSort(txs []pendingTx) {
 		sorted[i] = *e.tx
 	}
 	copy(txs, sorted)
-}
-
-// computeSalt returns a deterministic salt derived from the transaction set.
-// Matches rippled: builds a SHAMap of type TRANSACTION with each tx blob
-// keyed by its hash (node type tnTRANSACTION_NM), then returns the root hash.
-// Reference: rippled RCLConsensus.cpp onClose() lines 335-349
-func computeSalt(txs []pendingTx) [32]byte {
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		return [32]byte{}
-	}
-	for _, ptx := range txs {
-		_ = txMap.PutWithNodeType(ptx.hash, ptx.txBlob, shamap.NodeTypeTransactionNoMeta)
-	}
-	hash, err := txMap.Hash()
-	if err != nil {
-		return [32]byte{}
-	}
-	return hash
 }
 
 // parsePendingTx creates a pendingTx from a raw transaction blob.

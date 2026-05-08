@@ -461,8 +461,9 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	// on a fresh ledger built from the LCL. This matches rippled's behavior
 	// where open ledger transactions are re-ordered via CanonicalTXSet.
 	if len(s.pendingTxs) > 0 {
-		// Sort pending transactions in canonical order
-		canonicalSort(s.pendingTxs)
+		// Sort pending transactions in canonical order. Salt = LCL hash
+		// (rippled's CanonicalTXSet salt convention).
+		canonicalSort(s.pendingTxs, s.closedLedger.Hash())
 
 		// Create a fresh open ledger from the LCL
 		freshLedger, err := ledger.NewOpen(s.closedLedger, closeTime)
@@ -1203,8 +1204,10 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 			pending = append(pending, ptx)
 		}
 
-		// Sort in canonical order
-		canonicalSort(pending)
+		// Sort in canonical order. Salt = LCL hash (= parent's hash for
+		// the consensus round we just completed), matching rippled's
+		// CanonicalTXSet salt convention.
+		canonicalSort(pending, s.closedLedger.Hash())
 
 		// Multi-pass application (same as AcceptLedger)
 		freshLedger, err := ledger.NewOpen(s.closedLedger, closeTime)
