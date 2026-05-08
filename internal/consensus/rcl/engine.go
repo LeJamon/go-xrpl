@@ -1791,20 +1791,16 @@ func (e *Engine) phaseEstablish() {
 
 	// MovedOn detection. Rippled's checkConsensus returns
 	// ConsensusState::MovedOn when 80% of the previous round's
-	// proposers have already validated a ledger AFTER our prev. In
-	// rippled the recovery is: accept the round (consensusFail =
-	// true so no validation emitted) and let LedgerMaster::switchLCL
-	// + vals.getPreferred() reposition the engine onto the network's
-	// actual tip — one switch can cover many ledgers.
-	//
-	// Goxrpl auto-advance after acceptLedger only moves prev forward
-	// by one (the locally-built MovedOn ledger), which can't possibly
-	// match the network's hash. The next round then wrongLedgers and
-	// recovers — a churn loop, with goxrpl crawling forward one
-	// MovedOn at a time. To match rippled's behaviour we route
-	// straight to handleWrongLedger here, targeting the trie's
-	// preferred tip from validationTracker.GetPreferred(): the same
-	// hash rippled's switchLCL would land on.
+	// proposers have already validated a ledger AFTER our prev —
+	// i.e., the network has finished the round we're trying to
+	// participate in and proceeded to the next one. Without this
+	// check goxrpl sits in establish until the 15s soft-timeout
+	// fires, even though peer proposals for our seq stopped arriving
+	// long ago because peers already moved on. Soak runs showed this
+	// pattern on every wrong-LCL recovery round: by the time we
+	// acquire the network LCL and start the establish phase, peers
+	// have validated the very ledger we're now trying to converge
+	// on, so no one is proposing for our round anymore.
 	//
 	// Gated on roundTime > LedgerMinConsensus so we don't bail out
 	// before peers have had a chance to send proposals normally.
@@ -1813,28 +1809,7 @@ func (e *Engine) phaseEstablish() {
 		roundTime > e.timing.LedgerMinConsensus {
 		finished := e.validationTracker.ProposersFinished(e.prevLedger.Seq())
 		if finished*100 >= int(e.prevProposers)*e.thresholds.MinConsensusPct {
-			preferredID, preferredSeq, ok := e.validationTracker.GetPreferred(e.prevLedger.Seq())
-			if ok && preferredID != e.prevLedger.ID() && preferredSeq > e.prevLedger.Seq() {
-				slog.Info("consensus moved on, switching to preferred",
-					"t", "consensus",
-					"event", "moved-on",
-					"seq", e.state.Round.Seq,
-					"finished", finished,
-					"prev_proposers", e.prevProposers,
-					"our_seq", e.prevLedger.Seq(),
-					"preferred_seq", preferredSeq,
-					"preferred", fmt.Sprintf("%x", preferredID[:8]),
-					"round_time_ms", roundTime.Milliseconds(),
-				)
-				e.handleWrongLedger(preferredID)
-				return
-			}
-			// No trie tip available (ancestry provider stalled, or
-			// trie hasn't accumulated enough data) — fall back to
-			// acceptLedger(MovedOn) which lets checkLedger pick up
-			// the wrongLedger correction on the next tick. Slower
-			// than the direct switch above, but never gets stuck.
-			slog.Info("consensus moved on, accepting (no preferred tip)",
+			slog.Info("consensus moved on, accepting",
 				"t", "consensus",
 				"event", "moved-on",
 				"seq", e.state.Round.Seq,
