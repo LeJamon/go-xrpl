@@ -1755,37 +1755,20 @@ func (e *Engine) phaseEstablish() {
 	// Gated on roundTime > LedgerMinConsensus so we don't bail out
 	// before peers have had a chance to send proposals normally.
 	// prevProposers > 0 avoids divide-by-zero on the bootstrap round.
-	//
-	// Lag gate: only fire MovedOn when the network is at most one
-	// ledger ahead. If the network's max validated seq is much higher
-	// than our prev (we're catching up), MovedOn here would just
-	// auto-advance our local chain by one and we'd immediately
-	// wrongLedger again — a churn loop, since the local seq we
-	// "accept" can't possibly match the network's hash. The right
-	// recovery for a deep lag is the wrongLedger / inbound-acquisition
-	// path, which jumps straight to the validated tip. MovedOn is
-	// only useful for the "we finished slightly late and peers ran one
-	// more round during our catch-up" case.
 	if e.prevLedger != nil && e.validationTracker != nil && e.prevProposers > 0 &&
 		roundTime > e.timing.LedgerMinConsensus {
-		netMaxSeq := e.validationTracker.MaxTrustedValidatedSeq()
-		ourSeq := e.prevLedger.Seq()
-		if netMaxSeq > ourSeq && netMaxSeq <= ourSeq+1 {
-			finished := e.validationTracker.ProposersFinished(ourSeq)
-			if finished*100 >= int(e.prevProposers)*e.thresholds.MinConsensusPct {
-				slog.Info("consensus moved on, accepting",
-					"t", "consensus",
-					"event", "moved-on",
-					"seq", e.state.Round.Seq,
-					"finished", finished,
-					"prev_proposers", e.prevProposers,
-					"net_max_seq", netMaxSeq,
-					"our_seq", ourSeq,
-					"round_time_ms", roundTime.Milliseconds(),
-				)
-				e.acceptLedger(consensus.ResultMovedOn)
-				return
-			}
+		finished := e.validationTracker.ProposersFinished(e.prevLedger.Seq())
+		if finished*100 >= int(e.prevProposers)*e.thresholds.MinConsensusPct {
+			slog.Info("consensus moved on, accepting",
+				"t", "consensus",
+				"event", "moved-on",
+				"seq", e.state.Round.Seq,
+				"finished", finished,
+				"prev_proposers", e.prevProposers,
+				"round_time_ms", roundTime.Milliseconds(),
+			)
+			e.acceptLedger(consensus.ResultMovedOn)
+			return
 		}
 	}
 

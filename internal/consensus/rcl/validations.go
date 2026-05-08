@@ -610,33 +610,6 @@ func (vt *ValidationTracker) ProposersFinished(prevSeq uint32) int {
 	return count
 }
 
-// MaxTrustedValidatedSeq returns the highest ledger sequence
-// validated by any current trusted (non-negUNL) validator, or 0 if
-// none. Used to estimate the network's tip so the engine can decide
-// whether to fire MovedOn (we're slightly behind, skip the dead
-// round) versus delegate to wrongLedger recovery (we're far behind,
-// need to acquire a tip and rebase).
-func (vt *ValidationTracker) MaxTrustedValidatedSeq() uint32 {
-	vt.mu.RLock()
-	defer vt.mu.RUnlock()
-	var max uint32
-	for nodeID, v := range vt.byNode {
-		if !vt.trusted[nodeID] {
-			continue
-		}
-		if vt.negUNL[nodeID] {
-			continue
-		}
-		if !v.Full {
-			continue
-		}
-		if v.LedgerSeq > max {
-			max = v.LedgerSeq
-		}
-	}
-	return max
-}
-
 // GetLatestValidation returns the latest validation from a node.
 func (vt *ValidationTracker) GetLatestValidation(nodeID consensus.NodeID) *consensus.Validation {
 	vt.mu.RLock()
