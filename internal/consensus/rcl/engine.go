@@ -1739,6 +1739,39 @@ func (e *Engine) phaseEstablish() {
 		return
 	}
 
+	// MovedOn detection. Rippled's checkConsensus returns
+	// ConsensusState::MovedOn when 80% of the previous round's
+	// proposers have already validated a ledger AFTER our prev —
+	// i.e., the network has finished the round we're trying to
+	// participate in and proceeded to the next one. Without this
+	// check goxrpl sits in establish until the 15s soft-timeout
+	// fires, even though peer proposals for our seq stopped arriving
+	// long ago because peers already moved on. Soak runs showed this
+	// pattern on every wrong-LCL recovery round: by the time we
+	// acquire the network LCL and start the establish phase, peers
+	// have validated the very ledger we're now trying to converge
+	// on, so no one is proposing for our round anymore.
+	//
+	// Gated on roundTime > LedgerMinConsensus so we don't bail out
+	// before peers have had a chance to send proposals normally.
+	// prevProposers > 0 avoids divide-by-zero on the bootstrap round.
+	if e.prevLedger != nil && e.validationTracker != nil && e.prevProposers > 0 &&
+		roundTime > e.timing.LedgerMinConsensus {
+		finished := e.validationTracker.ProposersFinished(e.prevLedger.Seq())
+		if finished*100 >= int(e.prevProposers)*e.thresholds.MinConsensusPct {
+			slog.Info("consensus moved on, accepting",
+				"t", "consensus",
+				"event", "moved-on",
+				"seq", e.state.Round.Seq,
+				"finished", finished,
+				"prev_proposers", e.prevProposers,
+				"round_time_ms", roundTime.Milliseconds(),
+			)
+			e.acceptLedger(consensus.ResultMovedOn)
+			return
+		}
+	}
+
 	// Increment round counters used by dispute stall detection and
 	// avalanche minimum-rounds gating. Matches rippled's
 	// phaseEstablish at Consensus.h:1373-1374.
