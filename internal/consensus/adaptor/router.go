@@ -547,9 +547,24 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	firstSeen, lastSeen := r.messageSeen.observe(suppressionHash)
 
 	if err := r.engine.OnValidation(validation, originPeer); err != nil {
-		r.logger.Debug("engine rejected validation", "error", err, "peer", msg.PeerID)
+		r.logger.Info("engine rejected validation",
+			"t", "consensus",
+			"event", "validation-rejected",
+			"error", err.Error(),
+			"peer", msg.PeerID)
 		return
 	}
+	// Greppable INFO: every successful inbound validation. Used by
+	// the soak network monitor to verify validation propagation
+	// rippled→goxrpl. Without this we couldn't tell if validations
+	// were dropped at decode, parse, bounds, suppression, or engine
+	// reject; now each step logs and the count is observable.
+	r.logger.Info("inbound validation accepted",
+		"t", "consensus",
+		"event", "validation-recv",
+		"peer", msg.PeerID,
+		"seq", validation.LedgerSeq,
+		"hash_short", fmt.Sprintf("%x", validation.LedgerID[:8]))
 
 	// Same IDLED-gated, no-trust-gate feeding as handleProposal.
 	// Mirrors rippled's TMValidation path at PeerImp.cpp:2385 and the
