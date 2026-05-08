@@ -979,6 +979,17 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 		"node_count", len(ld.Nodes),
 		"tx_count", len(blobs))
 
+	// Skip engine.OnTxSet on empty extractions. Happens when a
+	// duplicate response arrives for an already-completed acquire:
+	// the ID-keyed state was deleted on the prior success, the
+	// duplicate's nodes can't reconstruct a tree without the root
+	// (peers usually only resend non-root), and ForEach yields 0
+	// items. The engine would then fail with "tx set ID mismatch:
+	// expected X got 000…0" — not a real bug, just noise. Drop it.
+	if len(blobs) == 0 {
+		return
+	}
+
 	if err := r.engine.OnTxSet(txSetID, blobs); err != nil {
 		r.logger.Info("engine rejected tx-set",
 			"t", "consensus", "event", "txset-reject",

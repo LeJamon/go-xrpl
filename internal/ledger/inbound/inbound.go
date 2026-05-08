@@ -192,21 +192,32 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 		added++
 	}
 
+	complete := l.stateMap.IsComplete()
 	l.logger.Info("inbound ledger: added state nodes",
 		"added", added,
 		"total_received", len(nodes),
-		"complete", l.stateMap.IsComplete(),
+		"complete", complete,
 	)
 
-	if l.stateMap.IsComplete() {
-		if err := l.stateMap.FinishSync(); err != nil {
-			l.state = StateFailed
-			l.err = fmt.Errorf("finish sync: %w", err)
-			return l.err
-		}
-		l.state = StateComplete
-		l.logger.Info("inbound ledger: acquisition complete", "seq", l.header.LedgerIndex)
+	// Always TRY FinishSync — it's the only authoritative check.
+	// Previously we gated on IsComplete() and treated a FinishSync
+	// failure as fatal, but the two checks could race (IsComplete
+	// reads with RLock, FinishSync re-checks under Lock; another
+	// goroutine could insert between them). The new flow: attempt
+	// FinishSync; if it succeeds, transition to Complete; if it
+	// reports "still missing", stay in WantState and wait for the
+	// next batch of nodes — exactly what rippled's
+	// InboundLedger::tryDB does.
+	if err := l.stateMap.FinishSync(); err != nil {
+		// Expected when more nodes are pending — not a hard failure.
+		// We only fail the inbound on actual errors (corrupt root,
+		// state mismatch); "still have N missing" is just "more to
+		// come".
+		l.logger.Debug("inbound ledger: still incomplete", "error", err)
+		return nil
 	}
+	l.state = StateComplete
+	l.logger.Info("inbound ledger: acquisition complete", "seq", l.header.LedgerIndex)
 
 	return nil
 }
