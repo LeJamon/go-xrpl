@@ -652,10 +652,28 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 		}
 	}
 
-	// FinalFields: fields with sMD_Always | sMD_ChangeNew
-	for name, currValue := range currFields {
-		if shouldIncludeInFinalFields(name) {
-			node.FinalFields[name] = currValue
+	// FinalFields: rippled emits all sMD_Always|sMD_ChangeNew fields
+	// when ANY business field actually changed. When a node is only
+	// thread-touched (PreviousTxnID/Seq bumped to point at this tx but
+	// no business field content changed) rippled emits the
+	// ModifiedNode with no FinalFields/PreviousFields at all.
+	// `node.PreviousFields` is already gated on actual changes above,
+	// so its emptiness signals the thread-touch-only case.
+	hasBusinessChange := len(node.PreviousFields) > 0
+	if hasBusinessChange {
+		for name, currValue := range currFields {
+			if shouldIncludeInFinalFields(name) {
+				node.FinalFields[name] = currValue
+			}
+		}
+	} else {
+		// No PreviousFields content means no sMD_ChangeOrig field
+		// changed — but a sMD_Always field (like RootIndex) still
+		// goes in FinalFields unconditionally if it exists.
+		for name, currValue := range currFields {
+			if getFieldMetadata(name)&sMD_Always != 0 {
+				node.FinalFields[name] = currValue
+			}
 		}
 	}
 
