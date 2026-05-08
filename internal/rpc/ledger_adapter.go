@@ -222,9 +222,26 @@ func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte, txBlobHex ...str
 		}, nil
 	}
 
-	// Relay the transaction to P2P peers if successfully applied
+	// Relay the transaction to P2P peers whenever it isn't a hard
+	// failure. Matches rippled's NetworkOPs::processTransaction at
+	// NetworkOPs.cpp which relays unless the engine returned a
+	// tem/tef/tel result (parse / authentication / local-only
+	// failure). tesSUCCESS, tec (charged-fee), and ter (retry-able)
+	// all relay so peers can include the tx in their own pool.
+	//
+	// PRIOR bug: gated on result.Applied, so any tx that wasn't
+	// applied to the open ledger immediately (ter-class soft
+	// failures, queue-depth retries) was dropped from the network.
+	// Rippled validators never saw those txs; goxrpl re-tried them
+	// across rounds and eventually included them in its own
+	// consensus position. Network built the same prev state from
+	// different tx-sets → divergent seq=N hashes → permanent fork
+	// at bootstrap. This was the "missing TMTransaction relay on
+	// submit" half of issue #401's root cause documented in
+	// memory/issue-401-divergence-root-cause.md.
 	broadcast := false
-	if result.Applied && rawBlob != nil && a.txBroadcaster != nil {
+	relayable := !result.Result.IsTem() && !result.Result.IsTef() && !result.Result.IsTel()
+	if relayable && rawBlob != nil && a.txBroadcaster != nil {
 		a.txBroadcaster(rawBlob)
 		broadcast = true
 	}
