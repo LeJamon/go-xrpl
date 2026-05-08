@@ -1301,26 +1301,8 @@ func (e *Engine) getNetworkLedger() consensus.LedgerID {
 // handleWrongLedger switches the engine to the network's preferred ledger.
 // Matches rippled's handleWrongLedger() (Consensus.h:1062-1113).
 func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID) {
-	// Step 1: Stop proposing (like rippled's leaveConsensus). Skip
-	// when we ALREADY have the new ledger locally — that's the
-	// catching-up case where we just adopted netLgr from a peer
-	// status / inbound-acquisition path. Dropping to Observing
-	// there forces a Proposing → Observing → SwitchedLedger →
-	// Proposing cycle on every close that we never finish in time
-	// to actually emit a proposal, which is what made goxrpl a
-	// silent follower in the soak network (rippled-side proposers
-	// counter showed 2 instead of 4). The available-locally path
-	// below transitions to ModeSwitchedLedger via startRoundLocked
-	// for one round (rippled's spec), and the NEXT round naturally
-	// goes to Proposing — without us ever spending time in
-	// Observing in the catching-up case.
-	haveLocally := false
-	if l, _ := e.adaptor.GetLedger(netLedgerID); l != nil {
-		haveLocally = true
-	} else if lcl, _ := e.adaptor.GetLastClosedLedger(); lcl != nil && lcl.ID() == netLedgerID {
-		haveLocally = true
-	}
-	if e.mode == consensus.ModeProposing && !haveLocally {
+	// Step 1: Stop proposing (like rippled's leaveConsensus)
+	if e.mode == consensus.ModeProposing {
 		e.setMode(consensus.ModeObserving)
 	}
 
@@ -1376,25 +1358,11 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID) {
 		// round (via acceptLedger auto-advance) a trusted validator is
 		// promoted back to ModeProposing normally — so we still get
 		// full participation, just not on the recovery round itself.
-		// "Catching up" detection: if newLedger's parent IS our current
-		// prevLedger AND we still hold a tx-set we built for the round
-		// we just closed, we're not switching CHAINS — we're just
-		// advancing one step on the SAME chain. Skip the recovery
-		// round (which would suppress our proposal/validation per
-		// rippled's SwitchedLedger spec) and go straight to a normal
-		// proposing round on top of newLedger. Otherwise we never get
-		// out of SwitchedLedger when rippled keeps advancing faster
-		// than we close.
-		recovering := true
-		if e.prevLedger != nil && newLedger.ParentID() == e.prevLedger.ID() {
-			recovering = false
-		}
 		slog.Info("Switching to network ledger",
 			"t", "consensus",
 			"event", "switch-lcl",
 			"seq", newLedger.Seq(),
 			"hash", fmt.Sprintf("%x", netLedgerID[:8]),
-			"recovering", recovering,
 		)
 		e.prevLedger = newLedger
 		e.wrongLedgerID = consensus.LedgerID{}
@@ -1407,7 +1375,7 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID) {
 		}
 		proposing := e.adaptor.IsValidator() &&
 			e.adaptor.GetOperatingMode() == consensus.OpModeFull
-		e.startRoundLocked(nextRound, proposing, recovering)
+		e.startRoundLocked(nextRound, proposing, true)
 	} else {
 		// Not found — enter wrong ledger mode and request from peers
 		slog.Info("Cannot acquire network ledger, entering wrongLedger mode",
