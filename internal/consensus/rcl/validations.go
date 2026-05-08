@@ -560,8 +560,28 @@ func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 
+	// Read the per-ledger validations map, NOT byNode. byNode keeps
+	// only the LATEST validation per node — once a validator advances
+	// past ledgerID and validates seq+1, the byNode entry overwrites
+	// and ProposersValidated(ledgerID) returns 0 even though every
+	// validator did validate it. Rippled's adaptor_.proposersValidated
+	// reads byLedger (RCLValidations / LedgerMaster.cpp), which keeps
+	// the per-ledger entry alive for the validation-archive horizon.
+	//
+	// The bug surfaced in shouldCloseLedger: the peer-pressure short
+	// circuit (proposersClosed + proposersValidated > prevProposers/2)
+	// uses this count to skip LedgerMinClose=1s when peers have
+	// already moved on. With the byNode read, the short-circuit never
+	// fired once peers ran one round ahead of us, so every open phase
+	// burned the full 1s minimum even though shouldCloseLedger should
+	// have closed immediately. That 1s is exactly the gap that keeps
+	// goxrpl one round behind rippled in soak.
+	perLedger, ok := vt.validations[ledgerID]
+	if !ok {
+		return 0
+	}
 	count := 0
-	for nodeID, v := range vt.byNode {
+	for nodeID, v := range perLedger {
 		if !vt.trusted[nodeID] {
 			continue
 		}
@@ -571,9 +591,7 @@ func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int
 		if !v.Full {
 			continue
 		}
-		if v.LedgerID == ledgerID {
-			count++
-		}
+		count++
 	}
 	return count
 }
