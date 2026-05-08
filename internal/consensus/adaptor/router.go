@@ -1254,18 +1254,24 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 		return
 	}
 
-	// If already acquiring this exact hash, skip
+	// If already acquiring this exact hash, skip.
 	if r.inboundLedger != nil {
 		if r.inboundLedger.Hash() == hash {
 			return
 		}
-		// Acquiring a different (older) hash — abandon it for the newer one
-		if r.inboundLedger.IsTimedOut() {
-			r.logger.Info("inbound ledger: timed out, retrying with new peer",
-				"old_seq", r.inboundLedger.Seq(),
-				"new_seq", seq,
-			)
+		// Different hash already in flight. Only abandon it on timeout.
+		// Replacing on every status change burst-fires TMGetLedger
+		// frames at the same peer faster than rippled's resource
+		// limiter allows, getting goxrpl charged + disconnected.
+		// Better to let the in-flight finish and retry on the next
+		// tick — backward-chain walks one ledger at a time.
+		if !r.inboundLedger.IsTimedOut() {
+			return
 		}
+		r.logger.Info("inbound ledger: timed out, retrying with new peer",
+			"old_seq", r.inboundLedger.Seq(),
+			"new_seq", seq,
+		)
 		r.inboundLedger = nil
 	}
 
@@ -1518,11 +1524,26 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 // (a) the SubmitHeldAdoption fast-path would have adopted, or (b) the
 // divergent-fork drop fired. Either way another acquisition won't
 // help.
+//
+// Also skips when a legacy acquisition is already in flight (regardless
+// of which seq/hash). The held-adoption cascade can fire dozens of
+// armParentAcquisition calls in a single processing tick; without this
+// gate each call replaces the previous in-flight inboundLedger, and
+// the resulting burst of TMGetLedger frames trips rippled's
+// per-peer resource charge ("Peer:WRN failed: charge: Resources" at
+// PeerImp.cpp ~1450) and the connection is dropped. The next pass
+// of the cascade naturally re-arms the still-needed parent once the
+// current acquisition finishes — backward chain still walks, just one
+// step at a time.
 func (r *Router) armParentAcquisition(svc *service.Service, parentSeq uint32, parentHash [32]byte, preferredPeerID uint64) {
 	if parentSeq == 0 {
 		return
 	}
 	if parentSeq <= svc.GetClosedLedgerIndex() {
+		return
+	}
+	if r.inboundLedger != nil && !r.inboundLedger.IsTimedOut() {
+		// Legacy slot is busy — let the cascade re-evaluate later.
 		return
 	}
 	r.logger.Info("arming backward-chain acquisition for stashed held-adoption parent",
