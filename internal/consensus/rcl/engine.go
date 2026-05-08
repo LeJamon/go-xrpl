@@ -1156,31 +1156,33 @@ func (e *Engine) checkLedger() {
 			return
 		}
 
-		// Switch preference: pick whichever ledger has MORE trusted
-		// validation support, not strictly fully-validated. Rippled
-		// uses vals.getPreferred() (RCLConsensus.cpp:301) which walks a
-		// LedgerTrie and returns the ledger with the most validation
-		// support on its ancestor chain; our approximation compares
-		// the flat trusted-count at each exact hash.
+		// Safety gate: require at least ONE trusted validation backing
+		// the peer ledger. Otherwise we'd flip on proposals alone,
+		// reintroducing the thrash the original support check was
+		// installed to prevent. getNetworkLedger has already
+		// established that a majority of trusted proposers point at
+		// netLgr (the bestCount > len(votes)/2 check), so we're not
+		// flipping on a minority view; we just need to confirm the
+		// network actually validated this ledger.
 		//
-		// The OLD behavior — "only switch if netLgr is fully validated"
-		// — could strand a catch-up node on the wrong branch. Example:
-		// 2-of-3 trusted validators back the peer branch, but neither
-		// has crossed quorum yet because our OWN validation for the
-		// same seq is on the other branch. The new rule lets us switch
-		// as soon as the PEER branch has MORE support than ours —
-		// including the case where we have zero support for ours
-		// (which is the common case when we're on a stale branch to
-		// begin with).
-		//
-		// Safety gate: require at least ONE trusted validation on the
-		// peer branch. Otherwise we'd flip on nothing but proposals,
-		// reintroducing the proposals-only thrash the old gate was
-		// installed to prevent.
+		// PRIOR bug: this code also gated on `netSupport <= ourSupport`
+		// to prefer "branch with more support". In the forward-chain
+		// steady-state case both branches accrue equal validation
+		// counts (each successive ledger gets validated by the same
+		// UNL), so netSupport == ourSupport and we never advanced. The
+		// node would sit on its current LCL until the 16s soft-timeout
+		// forced a wrong-LCL recovery, then catch up via switch-LCL,
+		// then sit again the next round. Soak runs showed every other
+		// round timing out for this exact reason. Rippled's
+		// vals.getPreferred() (RCLConsensus.cpp:301) walks a LedgerTrie
+		// where validation support naturally accumulates along the
+		// ancestor chain, so a newer ledger always strictly beats its
+		// parent. We don't have a trie; majority-of-proposers + at
+		// least one validation is the closest equivalent that doesn't
+		// strand us when the network legitimately advances.
 		if e.validationTracker != nil {
 			netSupport := e.validationTracker.GetTrustedSupport(netLgr)
-			ourSupport := e.validationTracker.GetTrustedSupport(ourID)
-			if netSupport == 0 || netSupport <= ourSupport {
+			if netSupport == 0 {
 				return
 			}
 		}
