@@ -1209,6 +1209,23 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		// CanonicalTXSet salt convention.
 		canonicalSort(pending, s.closedLedger.Hash())
 
+		// Pre-parse every tx blob ONCE here so the multi-pass apply
+		// loop below can re-use the parsed Transaction objects across
+		// passes instead of re-parsing 3-6 times per tx (was visible
+		// in profile traces of slow ledger closes that fell behind
+		// rippled's pace and triggered checkLedger/wrongLedger
+		// thrash). Mirrors rippled's ApplyView keeping a single
+		// CanonicalTXSet entry across multi-pass apply.
+		parsed := make([]tx.Transaction, len(pending))
+		for i, ptx := range pending {
+			t, parseErr := tx.ParseFromBinary(ptx.txBlob)
+			if parseErr == nil {
+				t.SetRawBytes(ptx.txBlob)
+				parsed[i] = t
+			}
+			// nil entries become txFailed at apply time below.
+		}
+
 		// Multi-pass application (same as AcceptLedger)
 		freshLedger, err := ledger.NewOpen(s.closedLedger, closeTime)
 		if err != nil {
@@ -1247,13 +1264,17 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 				return 0, fmt.Errorf("failed to create fresh ledger: %w", err)
 			}
 			engineConfig.LedgerSequence = freshLedger.Sequence()
+			// pass>0 has already verified every signature on pass 0.
+			// Mirrors rippled's tapRETRY: tx are re-applied against
+			// fresh state but signature checks are not redone.
+			engineConfig.SkipSignatureVerification = pass > 0
 			engine := tx.NewEngine(freshLedger, engineConfig)
 			blockProcessor := tx.NewBlockProcessor(engine)
 
 			changes := 0
 			hasRetry := false
 
-			for _, ptx := range pending {
+			for i, ptx := range pending {
 				st := statuses[ptx.hash]
 				if st == txFailed {
 					continue
@@ -1262,12 +1283,11 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 					continue
 				}
 
-				transaction, parseErr := tx.ParseFromBinary(ptx.txBlob)
-				if parseErr != nil {
+				transaction := parsed[i]
+				if transaction == nil {
 					statuses[ptx.hash] = txFailed
 					continue
 				}
-				transaction.SetRawBytes(ptx.txBlob)
 
 				result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
 				if applyErr != nil {
@@ -1303,16 +1323,15 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 
 			// Retry tec*/ter* transactions
 			if pass > 0 {
-				for _, ptx := range pending {
+				for i, ptx := range pending {
 					if statuses[ptx.hash] != txRetry {
 						continue
 					}
-					transaction, parseErr := tx.ParseFromBinary(ptx.txBlob)
-					if parseErr != nil {
+					transaction := parsed[i]
+					if transaction == nil {
 						statuses[ptx.hash] = txFailed
 						continue
 					}
-					transaction.SetRawBytes(ptx.txBlob)
 
 					result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
 					if applyErr != nil {
