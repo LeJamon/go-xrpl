@@ -1514,8 +1514,31 @@ func (e *Engine) shouldCloseLedger() bool {
 
 	// Peer pressure: if more than half of previous round's proposers
 	// have already closed or validated, close immediately (matches rippled lines 67-73).
-	if (proposersClosed + proposersValidated) > e.prevProposers/2 {
+	closed := proposersClosed + proposersValidated
+	if closed > e.prevProposers/2 {
+		slog.Info("shouldClose peer-pressure",
+			"t", "consensus",
+			"event", "should-close-pressure",
+			"prev_proposers", e.prevProposers,
+			"closed", proposersClosed,
+			"validated", proposersValidated,
+			"open_ms", openTime.Milliseconds(),
+		)
 		return true
+	}
+	// One-shot trace per round when peer-pressure DIDN'T fire so we
+	// can see the inputs. Rate-limit by openTime to avoid log spam:
+	// only emit on the first tick (open_ms < 250ms) and once after
+	// 1s when the LedgerMinClose path takes over.
+	if openTime < 100*time.Millisecond || (openTime > 1000*time.Millisecond && openTime < 1100*time.Millisecond) {
+		slog.Info("shouldClose peer-pressure miss",
+			"t", "consensus",
+			"event", "should-close-miss",
+			"prev_proposers", e.prevProposers,
+			"closed", proposersClosed,
+			"validated", proposersValidated,
+			"open_ms", openTime.Milliseconds(),
+		)
 	}
 
 	// No transactions: only close at the idle interval.
@@ -1739,6 +1762,33 @@ func (e *Engine) phaseEstablish() {
 		return
 	}
 
+	// Run convergence checks BEFORE the MovedOn gate. Rippled's
+	// checkConsensus returns one of {Yes, No, MovedOn, Expired} in a
+	// single call where Yes wins over MovedOn — meaning a node that
+	// has reached consensus accepts normally even if peers have also
+	// finished. Goxrpl had MovedOn ahead of checkConvergence here, so
+	// every round where peers finished within ~50ms of us would
+	// short-circuit to MovedOn before our own checkConvergence got a
+	// chance to accept normally. Result: chronic 1-round lag, all
+	// rounds ending in MovedOn, never in Success.
+	//
+	// Order now: increment counters, update positions / close-time,
+	// run checkConvergence (which calls acceptLedger on success).
+	// checkConvergence returns the engine to phaseEstablish only when
+	// it didn't accept; THEN MovedOn evaluates.
+	e.establishCounter++
+	e.peerUnchangedCounter++
+
+	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil {
+		e.updatePosition()
+	}
+	e.updateCloseTimePosition()
+	e.checkConvergence()
+	if e.phase != consensus.PhaseEstablish {
+		// checkConvergence accepted — round is over.
+		return
+	}
+
 	// MovedOn detection. Rippled's checkConsensus returns
 	// ConsensusState::MovedOn when 80% of the previous round's
 	// proposers have already validated a ledger AFTER our prev. In
@@ -1810,19 +1860,6 @@ func (e *Engine) phaseEstablish() {
 			return
 		}
 	}
-
-	// Increment round counters used by dispute stall detection and
-	// avalanche minimum-rounds gating. Matches rippled's
-	// phaseEstablish at Consensus.h:1373-1374.
-	e.establishCounter++
-	e.peerUnchangedCounter++
-
-	// Update positions and check convergence
-	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil {
-		e.updatePosition()
-	}
-	e.updateCloseTimePosition()
-	e.checkConvergence()
 }
 
 // abandonDeadlineExceeded reports whether the current round has run
