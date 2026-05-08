@@ -1009,8 +1009,27 @@ func (e *Engine) run() {
 // Consensus::timerEntry() (Consensus.h:859-888). Called every
 // ledgerGRANULARITY (1s) and dispatches based on current phase.
 func (e *Engine) timerEntry() {
+	tickStart := time.Now()
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	defer func() {
+		e.mu.Unlock()
+		// Greppable INFO: timerEntry tick wall-clock duration. If
+		// this is regularly >100ms, the consensus loop can't keep up
+		// with the 250ms heartbeat and rounds time out. Logged at
+		// every tick so we can correlate slow ticks with phase /
+		// mode and find the slow inner step. Cheap (one log line per
+		// tick, ~4/sec).
+		dur := time.Since(tickStart)
+		if dur > 50*time.Millisecond {
+			slog.Info("timer tick slow",
+				"t", "consensus",
+				"event", "tick-slow",
+				"dur_ms", dur.Milliseconds(),
+				"phase", e.phase.String(),
+				"mode", e.mode.String(),
+			)
+		}
+	}()
 
 	opMode := e.adaptor.GetOperatingMode()
 	if opMode == consensus.OpModeDisconnected {
@@ -1423,6 +1442,23 @@ func (e *Engine) setPhase(newPhase consensus.Phase) {
 	}
 
 	oldPhase := e.phase
+	// Greppable INFO: per-round phase durations. Used to profile
+	// where the 15s soft-timeout budget goes when goxrpl rounds run
+	// long. Compute the duration spent in oldPhase using
+	// state.PhaseStart, which is reset on every transition.
+	oldPhaseDuration := time.Duration(0)
+	if e.state != nil && !e.state.PhaseStart.IsZero() {
+		oldPhaseDuration = e.adaptor.Now().Sub(e.state.PhaseStart)
+	}
+	slog.Info("phase transition",
+		"t", "consensus",
+		"event", "phase-transition",
+		"from", oldPhase.String(),
+		"to", newPhase.String(),
+		"from_duration_ms", oldPhaseDuration.Milliseconds(),
+		"mode", e.mode.String(),
+	)
+
 	e.phase = newPhase
 	if e.state != nil {
 		e.state.Phase = newPhase
