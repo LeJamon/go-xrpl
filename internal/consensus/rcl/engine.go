@@ -1763,7 +1763,21 @@ func (e *Engine) phaseEstablish() {
 		roundTime > e.timing.LedgerMinConsensus {
 		finished := e.validationTracker.ProposersFinished(e.prevLedger.Seq())
 		if finished*100 >= int(e.prevProposers)*e.thresholds.MinConsensusPct {
+			// First try the trie's preferred tip (matches rippled's
+			// vals.getPreferred()). When the trie can't resolve
+			// ancestry — typical during deep catch-up where we
+			// don't have the network's tip locally — fall back to
+			// PreferredFromValidations, which votes purely by
+			// validator-tip popularity from the byNode map. Either
+			// way, we route through handleWrongLedger so the engine
+			// goes through the same acquire-then-restart path
+			// rippled's switchLCL drives after MovedOn.
 			preferredID, preferredSeq, ok := e.validationTracker.GetPreferred(e.prevLedger.Seq())
+			source := "trie"
+			if !ok {
+				preferredID, preferredSeq, ok = e.validationTracker.PreferredFromValidations(e.prevLedger.Seq())
+				source = "validations"
+			}
 			if ok && preferredID != e.prevLedger.ID() && preferredSeq > e.prevLedger.Seq() {
 				slog.Info("consensus moved on, switching to preferred",
 					"t", "consensus",
@@ -1774,16 +1788,16 @@ func (e *Engine) phaseEstablish() {
 					"our_seq", e.prevLedger.Seq(),
 					"preferred_seq", preferredSeq,
 					"preferred", fmt.Sprintf("%x", preferredID[:8]),
+					"source", source,
 					"round_time_ms", roundTime.Milliseconds(),
 				)
 				e.handleWrongLedger(preferredID)
 				return
 			}
-			// No trie tip available (ancestry provider stalled, or
-			// trie hasn't accumulated enough data) — fall back to
-			// acceptLedger(MovedOn) which lets checkLedger pick up
-			// the wrongLedger correction on the next tick. Slower
-			// than the direct switch above, but never gets stuck.
+			// Truly no usable tip (no trusted validator has a
+			// validation past our prev) — accept MovedOn and let
+			// checkLedger pick up wrongLedger correction on the
+			// next tick.
 			slog.Info("consensus moved on, accepting (no preferred tip)",
 				"t", "consensus",
 				"event", "moved-on",
