@@ -2449,15 +2449,77 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// If not Full, the router will keep re-adopting until caught up,
 	// then transition to Full, at which point checkAndStartRound kicks in.
 	if e.adaptor.GetOperatingMode() == consensus.OpModeFull {
-		// Auto-advance to the next round after a successful accept. Not
-		// a recovery — if the previous round WAS a switchedLedger round,
-		// this advancement is exactly where we promote back to
-		// ModeProposing (recovering=false means startRoundLocked picks
-		// Proposing for a trusted validator in OpModeFull).
+		// Round-boundary preferred-LCL jump (cheap variant). Soak
+		// instrumentation showed every round entering establish in
+		// mode=wrongLedger because checkLedger flipped us within ~50ms
+		// of auto-advance — our locally-built newLedger.ID() doesn't
+		// match what the network agreed on, so the very first
+		// checkLedger tick after auto-advance routes through
+		// handleWrongLedger and we never get to propose. Result:
+		// `update-position` fires 0 times in 5 minutes, validators
+		// never converge.
+		//
+		// Fix: ask the validation tracker for the network's preferred
+		// LCL BEFORE starting the next round. If it's different from
+		// our locally-built ledger AND we already have it locally
+		// (the common case during steady-state where we've been
+		// inbound-acquiring peer ledgers anyway), set it as prev
+		// directly. The next round starts with the right prev → first
+		// checkLedger tick agrees → mode stays proposing → closeLedger
+		// fires → OurPosition is set → updatePosition / dispute
+		// avalanche actually run.
+		//
+		// If we DON'T have the preferred ledger locally, fall through
+		// to handleWrongLedger which acquires it (matches rippled's
+		// NetworkOPsImp::checkLastClosedLedger calling
+		// app_.getInboundLedgers().acquire when GetLedgerByHash misses).
+		// This is the slow path b39fa18 tried to use unconditionally
+		// — it stalls because acquisition takes seconds. Conditional
+		// use only when truly needed avoids the stall.
+		nextPrev := newLedger
+		if e.validationTracker != nil {
+			candidateID, candidateSeq, ok := e.validationTracker.GetPreferred(newLedger.Seq())
+			if !ok {
+				candidateID, candidateSeq, ok = e.validationTracker.PreferredFromValidations(newLedger.Seq())
+			}
+			localID := newLedger.ID()
+			if ok && candidateID != localID && candidateSeq >= newLedger.Seq() {
+				if cached, err := e.adaptor.GetLedger(candidateID); err == nil && cached != nil {
+					localBytes := localID
+					slog.Info("preferred LCL differs; jumping prev to cached ledger",
+						"t", "consensus",
+						"event", "preferred-lcl-jump-cached",
+						"local_seq", newLedger.Seq(),
+						"local_hash", fmt.Sprintf("%x", localBytes[:8]),
+						"preferred_seq", candidateSeq,
+						"preferred_hash", fmt.Sprintf("%x", candidateID[:8]),
+					)
+					nextPrev = cached
+					e.prevLedger = cached
+				} else {
+					localBytes := localID
+					slog.Info("preferred LCL differs; routing through handleWrongLedger (acquire)",
+						"t", "consensus",
+						"event", "preferred-lcl-jump-acquire",
+						"local_seq", newLedger.Seq(),
+						"local_hash", fmt.Sprintf("%x", localBytes[:8]),
+						"preferred_seq", candidateSeq,
+						"preferred_hash", fmt.Sprintf("%x", candidateID[:8]),
+					)
+					e.handleWrongLedger(candidateID)
+					return
+				}
+			}
+		}
+
+		// Auto-advance with prev pointing at either our locally-built
+		// ledger (no preferred-LCL drift) OR the network's preferred
+		// (we just retargeted). Not a recovery — startRoundLocked
+		// picks ModeProposing for a trusted validator in OpModeFull.
 		proposing := e.adaptor.IsValidator()
 		nextRound := consensus.RoundID{
-			Seq:        newLedger.Seq() + 1,
-			ParentHash: newLedger.ID(),
+			Seq:        nextPrev.Seq() + 1,
+			ParentHash: nextPrev.ID(),
 		}
 		e.startRoundLocked(nextRound, proposing, false)
 	}

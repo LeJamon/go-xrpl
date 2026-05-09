@@ -628,6 +628,71 @@ func (vt *ValidationTracker) ProposersFinished(prevSeq uint32) int {
 	return count
 }
 
+// PreferredFromValidations returns the most-popular trusted-validator
+// tip whose seq is >= minSeq, ignoring whether we have local ancestry
+// for it. This is the no-trie fallback for GetPreferred during deep
+// catch-up: when the network's tip is exactly the ledger we don't have
+// locally yet, the trie's ancestry walk fails and GetPreferred returns
+// nothing. Each trusted (non-negUNL) validator's most-recent full
+// validation contributes one vote for its (LedgerID, LedgerSeq); ties
+// broken by higher seq then lexicographic ID for determinism.
+//
+// Returns (zero, 0, false) when no trusted validator has a validation
+// at minSeq or above.
+func (vt *ValidationTracker) PreferredFromValidations(minSeq uint32) (consensus.LedgerID, uint32, bool) {
+	vt.mu.RLock()
+	defer vt.mu.RUnlock()
+
+	type tally struct {
+		count int
+		seq   uint32
+	}
+	tips := make(map[consensus.LedgerID]tally)
+	for nodeID, v := range vt.byNode {
+		if !vt.trusted[nodeID] || vt.negUNL[nodeID] {
+			continue
+		}
+		if !v.Full {
+			continue
+		}
+		if v.LedgerSeq < minSeq {
+			continue
+		}
+		t := tips[v.LedgerID]
+		t.count++
+		t.seq = v.LedgerSeq
+		tips[v.LedgerID] = t
+	}
+	if len(tips) == 0 {
+		return consensus.LedgerID{}, 0, false
+	}
+	var bestID consensus.LedgerID
+	var best tally
+	first := true
+	for id, t := range tips {
+		better := first ||
+			t.count > best.count ||
+			(t.count == best.count && t.seq > best.seq) ||
+			(t.count == best.count && t.seq == best.seq && lexLessLgrID(id, bestID))
+		if better {
+			bestID = id
+			best = t
+			first = false
+		}
+	}
+	return bestID, best.seq, true
+}
+
+// lexLessLgrID is a deterministic tie-breaker for PreferredFromValidations.
+func lexLessLgrID(a, b consensus.LedgerID) bool {
+	for i := 0; i < len(a); i++ {
+		if a[i] != b[i] {
+			return a[i] < b[i]
+		}
+	}
+	return false
+}
+
 // GetLatestValidation returns the latest validation from a node.
 func (vt *ValidationTracker) GetLatestValidation(nodeID consensus.NodeID) *consensus.Validation {
 	vt.mu.RLock()
