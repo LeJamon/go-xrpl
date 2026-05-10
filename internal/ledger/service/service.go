@@ -461,9 +461,15 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	// on a fresh ledger built from the LCL. This matches rippled's behavior
 	// where open ledger transactions are re-ordered via CanonicalTXSet.
 	if len(s.pendingTxs) > 0 {
-		// Sort pending transactions in canonical order. Salt = LCL hash
-		// (rippled's CanonicalTXSet salt convention).
-		canonicalSort(s.pendingTxs, s.closedLedger.Hash())
+		// Sort pending transactions in canonical order. Salt is the
+		// SHAMap root of the tx set, matching rippled's consensus-build
+		// convention at RCLConsensus.cpp:512:
+		//     CanonicalTXSet retriableTxs{result.txns.map_->getHash()...}
+		// In standalone there is no remote-agreed tx set, but the local
+		// pending pool plays the same role and SHAMap-roots identically
+		// regardless of input order. See canonical_txset.go for the
+		// per-call-site salt rules.
+		canonicalSort(s.pendingTxs, computeSalt(s.pendingTxs))
 
 		// Create a fresh open ledger from the LCL
 		freshLedger, err := ledger.NewOpen(s.closedLedger, closeTime)
@@ -1236,10 +1242,16 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 			pending = append(pending, ptx)
 		}
 
-		// Sort in canonical order. Salt = LCL hash (= parent's hash for
-		// the consensus round we just completed), matching rippled's
-		// CanonicalTXSet salt convention.
-		canonicalSort(pending, s.closedLedger.Hash())
+		// Sort in canonical order. Salt is the SHAMap root of the
+		// agreed tx set — matches rippled's consensus-build convention
+		// at RCLConsensus.cpp:512:
+		//     CanonicalTXSet retriableTxs{result.txns.map_->getHash()...}
+		// (NOT the LCL hash — that variant is for held-tx replay,
+		// LedgerMaster.cpp:461.) Different salt → different tied-account
+		// XOR → different sfTransactionIndex → different metadata roots,
+		// which forks the network at any multi-tx ledger with same-account
+		// ties. See canonical_txset.go for the per-call-site salt rules.
+		canonicalSort(pending, computeSalt(pending))
 
 		canonicalTxHashes = make([]string, 0, len(pending))
 		for _, ptx := range pending {
@@ -2398,7 +2410,12 @@ func (s *Service) FilterApplicableTxs(parent *ledger.Ledger, txBlobs [][]byte) [
 	if len(pending) == 0 {
 		return nil
 	}
-	canonicalSort(pending, parent.Hash())
+	// Salt = SHAMap root of the candidate tx set, matching rippled's
+	// consensus-build convention. The propose-time filter must use the
+	// same salt the build path will use, otherwise propose-time apply
+	// order ≠ build-time apply order → tec/ter outcomes drift between
+	// the position we share and the ledger we build.
+	canonicalSort(pending, computeSalt(pending))
 
 	parsed := make([]tx.Transaction, len(pending))
 	for i, ptx := range pending {

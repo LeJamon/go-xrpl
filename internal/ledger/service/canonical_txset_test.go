@@ -134,9 +134,61 @@ func TestCanonicalSortDeterministic(t *testing.T) {
 	}
 }
 
-// TestComputeSalt removed: canonicalSort now takes the salt as an
-// explicit argument (= LCL hash) rather than deriving it from the
-// tx-set. There's no in-package salt to test.
+// TestComputeSaltOrderIndependent locks in the rippled-faithful salt
+// contract: the salt is the SHAMap root over (txID → tx_blob), and a
+// SHAMap key-orders by hash, so the root is identical regardless of
+// the order in which txs are passed to computeSalt. Every validator
+// that agrees on the tx set computes the same salt without first
+// having to canonical-sort.
+//
+// Reference: rippled RCLConsensus.cpp:512 passes
+// `result.txns.map_->getHash()` — the SHAMap root of the agreed
+// RCLTxSet (RCLCxTx.h:62-90, items added with tnTRANSACTION_NM
+// keyed by tx hash). Goxrpl's computeSalt mirrors that construction.
+func TestComputeSaltOrderIndependent(t *testing.T) {
+	// SHAMap leaves require data ≥ 12 bytes ("item data too small"
+	// otherwise) — real tx blobs always satisfy this, so use 16-byte
+	// synthetic blobs that exercise the real insert path.
+	mkBlob := func(seed byte) []byte {
+		b := make([]byte, 16)
+		for i := range b {
+			b[i] = seed + byte(i)
+		}
+		return b
+	}
+	txs := []pendingTx{
+		{txBlob: mkBlob(0x10), hash: makeHash(1), account: [20]byte{0xAA}, sequence: 1},
+		{txBlob: mkBlob(0x20), hash: makeHash(2), account: [20]byte{0xAA}, sequence: 2},
+		{txBlob: mkBlob(0x30), hash: makeHash(3), account: [20]byte{0xAA}, sequence: 3},
+	}
+
+	salt1 := computeSalt(txs)
+
+	// Permute and re-compute. Same root expected — SHAMap keys by tx
+	// hash so insertion order does not affect the root.
+	permuted := []pendingTx{txs[2], txs[0], txs[1]}
+	salt2 := computeSalt(permuted)
+	if salt1 != salt2 {
+		t.Errorf("computeSalt is order-dependent: %x vs %x", salt1[:8], salt2[:8])
+	}
+
+	// Empty set is the documented fallback: deterministic.
+	emptySalt1 := computeSalt(nil)
+	emptySalt2 := computeSalt([]pendingTx{})
+	if emptySalt1 != emptySalt2 {
+		t.Errorf("computeSalt diverges on nil vs empty slice: %x vs %x",
+			emptySalt1[:8], emptySalt2[:8])
+	}
+
+	// Different valid inputs MUST produce different salts (otherwise
+	// the salt would be useless as a tied-account-ordering randomizer).
+	other := []pendingTx{
+		{txBlob: mkBlob(0xFF), hash: makeHash(99), account: [20]byte{0xAA}, sequence: 1},
+	}
+	if computeSalt(other) == salt1 {
+		t.Error("computeSalt collapsed two different tx sets to the same salt")
+	}
+}
 
 func TestComputeAccountKey(t *testing.T) {
 	account := [20]byte{0xFF, 0x00, 0xAA}
