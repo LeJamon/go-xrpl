@@ -2223,10 +2223,22 @@ func (s *Service) adoptLedgerWithStateLocked(
 	// LedgerMaster.cpp:849-862.
 	s.fixMismatchLocked(adopted)
 
-	// Same reasoning as ReAdoptLedgerHeader: peer-adopted ledgers advance
-	// closedLedger but not validatedLedger. The quorum gate owns that.
+	// Install the adopted entry into ledgerHistory[seq] — that's
+	// fork-of-truth for by-seq lookups regardless of whether the seq
+	// is forward, backward, or equal to current. Only ADVANCE
+	// s.closedLedger when the new seq is strictly greater than what
+	// we currently hold; backward-chain acquisitions (cascade-adopt
+	// from heldAdoptions filling history) MUST NOT regress the
+	// closed-reference pointer. Without this gate, goxrpl's
+	// closed_ledger.seq oscillates downward each time a held parent
+	// arrives — and the engine, ModeManager (Tracking → Full gate),
+	// and RPC consumers all see a regressing tip.
 	canonical := s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
-	s.closedLedger = canonical
+	advanced := false
+	if s.closedLedger == nil || canonical.Sequence() > s.closedLedger.Sequence() {
+		s.closedLedger = canonical
+		advanced = true
+	}
 	s.needsInitialSync = false
 
 	// Install-skipped (validated entry already at this seq with a
@@ -2275,12 +2287,21 @@ func (s *Service) adoptLedgerWithStateLocked(
 	// TransactionResultEvent slice that hook dispatch needs.
 	txResults := s.collectTransactionResults(adopted, h.LedgerIndex, h.Hash)
 
-	// Create new open ledger on top
-	openLedger, err := ledger.NewOpen(adopted, time.Now())
-	if err != nil {
-		return fmt.Errorf("failed to create open ledger: %w", err)
+	// Create new open ledger on top — but ONLY when this adoption
+	// actually advanced s.closedLedger forward. A backward-fill
+	// (parent acquisition during cascade) installed `adopted` into
+	// ledgerHistory[seq] for by-seq lookups but didn't move the
+	// closed-reference; rebuilding s.openLedger on top of the older
+	// adopted seq would silently regress the engine's open view to
+	// stale state. Persistence + hooks still fire below — they're
+	// per-seq events tied to history, not to the closed reference.
+	if advanced {
+		openLedger, err := ledger.NewOpen(adopted, time.Now())
+		if err != nil {
+			return fmt.Errorf("failed to create open ledger: %w", err)
+		}
+		s.openLedger = openLedger
 	}
-	s.openLedger = openLedger
 
 	// Fire hooks.OnLedgerClosed + hooks.OnTransaction so WebSocket
 	// `ledger` and `transactions` stream subscribers see peer-adopted
