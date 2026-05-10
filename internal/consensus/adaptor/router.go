@@ -555,11 +555,21 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	}
 
 	if err := r.engine.OnValidation(validation, originPeer); err != nil {
+		// Diagnostic dump on rejection so a soak rerun can capture the
+		// exact bytes for offline reproduction. Revert once the all-5
+		// UNL bootstrap stall is root-caused — see issue #401 follow-up.
 		r.logger.Info("engine rejected validation",
 			"t", "consensus",
 			"event", "validation-rejected",
 			"error", err.Error(),
-			"peer", msg.PeerID)
+			"peer", msg.PeerID,
+			"raw_hex", fmt.Sprintf("%x", val.Validation),
+			"signdata_hex", fmt.Sprintf("%x", validation.SigningData),
+			"sig_hex", fmt.Sprintf("%x", validation.Signature),
+			"pubkey_hex", fmt.Sprintf("%x", validation.SigningPubKey[:]),
+			"seq", validation.LedgerSeq,
+			"flags", fmt.Sprintf("0x%08x", validation.Flags),
+			"ledger_short", fmt.Sprintf("%x", validation.LedgerID[:8]))
 		return
 	}
 	r.logger.Info("inbound validation accepted",
