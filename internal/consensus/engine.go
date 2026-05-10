@@ -145,7 +145,22 @@ type Adaptor interface {
 	// Transaction operations
 
 	// GetPendingTxs returns transactions waiting to be included.
+	// This is the raw relay-pool view, with no apply-time filter.
+	// Used for the open-phase "anyTransactions" gate. Consensus
+	// position formation must use GetProposableTxs instead.
 	GetPendingTxs() [][]byte
+
+	// GetProposableTxs returns the subset of pending transactions that
+	// would successfully apply against `parent`'s state, in canonical
+	// order. Mirrors rippled's `OpenLedger.current()->txs` filter at
+	// proposal time (RCLConsensus.cpp:333-349) — only txs that already
+	// applied successfully to the open view make it into the position.
+	// This is what the engine's closeLedger uses to form OurPosition.
+	//
+	// Implementations may return GetPendingTxs() unchanged when no
+	// open-ledger filter is available (e.g. test mocks). Returns nil
+	// for an empty parent or empty input.
+	GetProposableTxs(parent Ledger) [][]byte
 
 	// GenerateFlagLedgerPseudoTxs returns the fee-vote and
 	// amendment-vote pseudo-transaction blobs to inject into the

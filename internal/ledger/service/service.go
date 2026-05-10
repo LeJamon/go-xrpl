@@ -2359,3 +2359,189 @@ func (s *Service) GetPendingTxBlobs() [][]byte {
 	}
 	return blobs
 }
+
+// FilterApplicableTxs runs goxrpl's multi-pass apply loop against a
+// fresh open view of `parent`, returning only the blobs that would
+// successfully apply (success or tec-after-retry) — i.e. the subset
+// that would end up in the closed ledger if these txs were accepted
+// via consensus.
+//
+// Mirrors rippled's `OpenLedger.current()->txs` filter: when forming a
+// consensus position the validator proposes only txs that already
+// applied to its open view (RCLConsensus.cpp:333-349). Goxrpl's pending
+// pool is a raw relay map with no apply-time filter, so without this
+// step our initial position is a SUPERSET of rippled's (conflicts,
+// tef/tem/tel results, fee-escalated, etc. all included), causing
+// position divergence even before disputes run.
+//
+// Side-effect-free: does not mutate s.openLedger, s.txIndex, or
+// s.pendingTxs. Safe to call concurrently — takes only a read lock.
+//
+// Closure timestamp is `time.Now()`; callers that care about exact
+// header timestamps should use AcceptConsensusResult instead — this
+// helper exists for tx-set selection only.
+func (s *Service) FilterApplicableTxs(parent *ledger.Ledger, txBlobs [][]byte) [][]byte {
+	if parent == nil || len(txBlobs) == 0 {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	pending := make([]pendingTx, 0, len(txBlobs))
+	for _, blob := range txBlobs {
+		ptx, err := parsePendingTx(blob)
+		if err != nil {
+			continue
+		}
+		pending = append(pending, ptx)
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	canonicalSort(pending, parent.Hash())
+
+	parsed := make([]tx.Transaction, len(pending))
+	for i, ptx := range pending {
+		t, err := tx.ParseFromBinary(ptx.txBlob)
+		if err == nil {
+			t.SetRawBytes(ptx.txBlob)
+			parsed[i] = t
+		}
+	}
+
+	closeTime := time.Now()
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(parent)
+	engineConfig := tx.EngineConfig{
+		BaseFee:                   baseFee,
+		ReserveBase:               reserveBase,
+		ReserveIncrement:          reserveIncrement,
+		SkipSignatureVerification: false,
+		NetworkID:                 s.config.NetworkID,
+		Logger:                    s.config.Logger,
+	}
+
+	type txStatus int
+	const (
+		txPending txStatus = iota
+		txSucceeded
+		txRetry
+		txFailed
+	)
+	statuses := make(map[[32]byte]txStatus, len(pending))
+
+	const (
+		totalPasses = 3
+		retryPasses = 1
+	)
+
+	certainRetry := true
+	for pass := 0; pass < totalPasses; pass++ {
+		freshLedger, err := ledger.NewOpen(parent, closeTime)
+		if err != nil {
+			return nil
+		}
+		engineConfig.LedgerSequence = freshLedger.Sequence()
+		engineConfig.SkipSignatureVerification = pass > 0
+		engine := tx.NewEngine(freshLedger, engineConfig)
+		blockProcessor := tx.NewBlockProcessor(engine)
+
+		changes := 0
+		hasRetry := false
+
+		for i, ptx := range pending {
+			st := statuses[ptx.hash]
+			if st == txFailed {
+				continue
+			}
+			if pass > 0 && st == txRetry {
+				continue
+			}
+			transaction := parsed[i]
+			if transaction == nil {
+				statuses[ptx.hash] = txFailed
+				continue
+			}
+			result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
+			if applyErr != nil {
+				statuses[ptx.hash] = txFailed
+				continue
+			}
+			engineResult := result.ApplyResult.Result
+			switch {
+			case engineResult.IsSuccess():
+				freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
+				if st != txSucceeded {
+					changes++
+				}
+				statuses[ptx.hash] = txSucceeded
+			case engineResult.IsTec():
+				if certainRetry {
+					statuses[ptx.hash] = txRetry
+					hasRetry = true
+				} else {
+					freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
+					statuses[ptx.hash] = txSucceeded
+				}
+			case engineResult.ShouldRetry():
+				statuses[ptx.hash] = txRetry
+				hasRetry = true
+			default:
+				statuses[ptx.hash] = txFailed
+			}
+		}
+
+		if pass > 0 {
+			for i, ptx := range pending {
+				if statuses[ptx.hash] != txRetry {
+					continue
+				}
+				transaction := parsed[i]
+				if transaction == nil {
+					statuses[ptx.hash] = txFailed
+					continue
+				}
+				result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
+				if applyErr != nil {
+					statuses[ptx.hash] = txFailed
+					continue
+				}
+				engineResult := result.ApplyResult.Result
+				switch {
+				case engineResult.IsSuccess():
+					freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
+					changes++
+					statuses[ptx.hash] = txSucceeded
+				case engineResult.IsTec():
+					if certainRetry {
+						hasRetry = true
+					} else {
+						freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
+						statuses[ptx.hash] = txSucceeded
+					}
+				case engineResult.ShouldRetry():
+					hasRetry = true
+				default:
+					statuses[ptx.hash] = txFailed
+				}
+			}
+		}
+
+		if !hasRetry {
+			break
+		}
+		if changes == 0 && !certainRetry {
+			break
+		}
+		if changes == 0 || pass >= retryPasses {
+			certainRetry = false
+		}
+	}
+
+	out := make([][]byte, 0, len(pending))
+	for _, ptx := range pending {
+		if statuses[ptx.hash] == txSucceeded {
+			out = append(out, ptx.txBlob)
+		}
+	}
+	return out
+}

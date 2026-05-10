@@ -1580,8 +1580,14 @@ func (e *Engine) phaseOpen() {
 // closeLedger transitions from open to establish phase.
 // Reference: rippled Consensus.h closeLedger() (~line 1434)
 func (e *Engine) closeLedger() {
-	// Build our transaction set from pending transactions
-	txs := e.adaptor.GetPendingTxs()
+	// Build our transaction set from pending transactions, filtered
+	// through the rippled-faithful open-ledger gate: only txs that
+	// would successfully apply against e.prevLedger's state make it
+	// into our position. Without this filter goxrpl proposes a
+	// SUPERSET of rippled's set (conflicts, tef/tem/tel, fee-escalated)
+	// and live-network rounds diverge even though standalone
+	// determinism passes. See tasks/match-rippled-exactly.md (H4).
+	txs := e.adaptor.GetProposableTxs(e.prevLedger)
 
 	// Inject flag-ledger / voting-ledger pseudo-txs BEFORE building
 	// the tx set, so the resulting tx-set hash matches what rippled

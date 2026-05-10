@@ -647,6 +647,30 @@ func (a *Adaptor) GetPendingTxs() [][]byte {
 	return blobs
 }
 
+// GetProposableTxs returns the subset of pending transactions that
+// would successfully apply against `parent` — the rippled-faithful
+// open-ledger filter (RCLConsensus.cpp:333-349). Used by the consensus
+// engine at proposal time so OurPosition matches what rippled's
+// validators would propose.
+func (a *Adaptor) GetProposableTxs(parent consensus.Ledger) [][]byte {
+	raw := a.GetPendingTxs()
+	if len(raw) == 0 {
+		return nil
+	}
+	if a.ledgerService == nil {
+		return raw
+	}
+	wrapper, ok := parent.(*LedgerWrapper)
+	if !ok || wrapper == nil {
+		return raw
+	}
+	parentLedger := wrapper.Unwrap()
+	if parentLedger == nil {
+		return raw
+	}
+	return a.ledgerService.FilterApplicableTxs(parentLedger, raw)
+}
+
 // GenerateFlagLedgerPseudoTxs runs the fee-vote and amendment-vote
 // producers and returns their concatenated pseudo-tx blobs to
 // inject into the proposal initial set. Mirrors rippled
