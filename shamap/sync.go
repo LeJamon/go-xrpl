@@ -273,16 +273,24 @@ func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 	return sm.insertKnownNode(nodeHash, node)
 }
 
-// AddKnownNodeWire adds a node from wire data, computing the hash itself.
-// Equivalent to AddKnownNode but skips the redundant external-hash check
-// when the caller does not already have an authoritative hash. The
-// computed hash is still trusted for tree placement.
+// AddKnownNodeUnchecked adds a node from wire data WITHOUT verifying
+// the deserialized node against an externally-supplied hash. The
+// computed hash is trusted for tree placement.
+//
+// Use when the caller has no authoritative hash to compare against
+// (e.g. inbound-ledger acquisition where the wire frame is the only
+// source of truth). When the caller DOES have an authoritative hash
+// — e.g. a peer-claimed `nodeHash` to verify the data against — use
+// AddKnownNode instead, which performs that check.
+//
+// Both methods take "wire data" — the name distinguishes the
+// hash-check behavior, not the input format.
 //
 // Per pprof on the catch-up hot path, callers that previously
 // deserialize+UpdateHash to extract the hash and then call AddKnownNode
 // (which repeats both) were paying ~10% of total CPU on duplicate work.
 // This entry point eliminates that duplication.
-func (sm *SHAMap) AddKnownNodeWire(data []byte) error {
+func (sm *SHAMap) AddKnownNodeUnchecked(data []byte) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 

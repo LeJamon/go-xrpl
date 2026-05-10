@@ -64,8 +64,8 @@ func TestAffectedNodeOmitsZeroPreviousTxnID(t *testing.T) {
 	}
 
 	// Sanity: a real PreviousTxnID DOES survive.
-	real := "1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF"
-	mod.PreviousTxnID = real
+	realTxnID := "1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF"
+	mod.PreviousTxnID = realTxnID
 	out, err = affectedNodeToRippledFormat(mod)
 	if err != nil {
 		t.Fatalf("affectedNodeToRippledFormat: %v", err)
@@ -74,7 +74,7 @@ func TestAffectedNodeOmitsZeroPreviousTxnID(t *testing.T) {
 	got, present := inner["PreviousTxnID"]
 	if !present {
 		t.Errorf("real PreviousTxnID was incorrectly omitted")
-	} else if got != real {
-		t.Errorf("PreviousTxnID round-trip failed: got %v want %v", got, real)
+	} else if got != realTxnID {
+		t.Errorf("PreviousTxnID round-trip failed: got %v want %v", got, realTxnID)
 	}
 }

@@ -166,14 +166,16 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 		if len(node.NodeData) == 0 {
 			continue
 		}
-		// AddKnownNodeWire deserializes + hashes ONCE. Previously we
-		// did the same work here just to extract the hash, then
+		// AddKnownNodeUnchecked deserializes + hashes ONCE. Previously
+		// we did the same work here just to extract the hash, then
 		// AddKnownNode redid both. That doubled CPU on the catch-up
 		// hot path — pprof showed ~10% of total CPU spent in
 		// duplicate Sha512Half/UpdateHash on every state node we
 		// ingested. Now the hash check happens exactly once.
-		if err := l.stateMap.AddKnownNodeWire(node.NodeData); err != nil {
-			l.logger.Debug("inbound ledger: AddKnownNodeWire", "error", err)
+		// "Unchecked" refers to skipping the external-hash check —
+		// the deserialization and computed-hash placement still apply.
+		if err := l.stateMap.AddKnownNodeUnchecked(node.NodeData); err != nil {
+			l.logger.Debug("inbound ledger: AddKnownNodeUnchecked", "error", err)
 			continue
 		}
 		added++
@@ -193,8 +195,14 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 	// goroutine could insert between them). The new flow: attempt
 	// FinishSync; if it succeeds, transition to Complete; if it
 	// reports "still missing", stay in WantState and wait for the
-	// next batch of nodes — exactly what rippled's
-	// InboundLedger::tryDB does.
+	// next batch of nodes.
+	//
+	// This is goxrpl's own design — it does NOT mirror rippled's
+	// InboundLedger::tryDB, which is a one-shot completeness probe
+	// against the local node store, not an always-called per-batch
+	// finalizer. The shared idea is "completeness is authoritative
+	// only at the moment of the under-Lock check"; the call cadence
+	// is different.
 	if err := l.stateMap.FinishSync(); err != nil {
 		// Expected when more nodes are pending — not a hard failure.
 		// We only fail the inbound on actual errors (corrupt root,
