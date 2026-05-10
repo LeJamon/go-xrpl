@@ -153,3 +153,37 @@ This is a substantial change (likely 1–2 weeks):
 
 This is now the leading candidate for the next code change. Defer until soak diagnostics confirm position divergence is the real failure mode (vs build-path determinism — already proved correct in standalone).
 
+### 2026-05-10 — H4 fix landed (commit f61199f)
+
+Implemented the close-time open-ledger filter. The fuller incremental
+OpenLedger abstraction can come later if needed; this version pays for
+the filter once per round at propose time, against a fresh open view
+of `parent`.
+
+Wiring:
+- `Service.FilterApplicableTxs(parent, txBlobs)` — side-effect-free
+  multi-pass apply (3 passes, 1 retry pass), returns the blob subset
+  that ended in `txSucceeded`.
+- `Adaptor.GetProposableTxs(parent Ledger)` — wraps the service call
+  via the LedgerWrapper unwrap.
+- `consensus.Adaptor.GetProposableTxs(parent Ledger)` — new interface
+  method. Mock returns raw GetPendingTxs.
+- `Engine.closeLedger` swapped from `GetPendingTxs()` to
+  `GetProposableTxs(e.prevLedger)`. The open-phase `anyTransactions`
+  raw-count check stays unchanged — empty filtered set just produces
+  an empty position, which is fine.
+
+Verification path:
+1. Rebuild goxrpl image, redeploy soak with all-5 UNL.
+2. Grep `t=consensus-build event=our-position` on goxrpl-0 vs
+   rippled-0 logs at the same `round_seq`. `tx_count` should now
+   match. If not, position divergence is somewhere else (H2/H5).
+3. Grep `event=round-summary` to confirm goxrpl's locally-built hash
+   matches rippled's at each seq.
+
+Cost: roughly one full apply (~3 passes through pending) per round at
+close time. With ~50 txs/round in the test setup this is microseconds;
+under heavy load this could become hot. The cleanup is a true
+incremental OpenLedger that applies on tx arrival and only rebuilds
+on LCL change — deferred until profiling shows it matters.
+
