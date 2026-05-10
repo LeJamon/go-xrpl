@@ -2164,37 +2164,26 @@ func (e *Engine) updatePosition() {
 }
 
 // acceptLedger finalizes consensus and accepts the new ledger.
+//
+// Runs unconditionally when the round reaches PhaseEstablish — including
+// when mode==WrongLedger. This mirrors rippled's doAccept (RCLConsensus.cpp:464-602),
+// which builds the LCL, notifies peers, and calls consensusBuilt regardless of
+// mode; only the validation-emission branch (lines 587-594) is mode-gated via
+// `validating_ = ledgerMaster_.isCompatible(built.ledger_, ...)`.
+//
+// A previous early-return suppressed wrongLedger+Success on the (incorrect)
+// reading that the resulting "Frankenstein" hash on top of our wrong prev
+// would poison peers. In rippled the same situation is handled differently:
+// the Frankenstein ledger IS built and registered locally (no validation
+// emitted, so peers don't act on it), and the next round's checkLedger
+// detects the mismatch and triggers handleWrongLedger normally — the
+// engine recovers instead of wedging in PhaseEstablish.
+//
+// The validated-precedence guard (commit 6d73ac3) already protects
+// ledgerHistory[seq] from being overwritten by a Frankenstein entry once
+// the real validated ledger arrives, so the build is a safe transient.
 func (e *Engine) acceptLedger(result consensus.Result) {
 	if e.phase != consensus.PhaseEstablish {
-		return
-	}
-
-	// Mirror rippled: when mode==wrongLedger AND the round reached
-	// ResultSuccess, suppress acceptance. The Success path would
-	// build a ledger from peer-popular tx-set + close-time on top
-	// of OUR prevLedger (which peers don't recognize) — a
-	// "Frankenstein" hash matching no node's view. Storing and
-	// auto-advancing on it cascades a side chain.
-	//
-	// For ResultTimeout / ResultAbandoned in wrongLedger we
-	// intentionally let acceptance proceed: the validation gate
-	// already suppresses emission via consensusFail, but the round
-	// MUST advance to break the wedge — otherwise phaseEstablish
-	// keeps retrying ResultAbandoned forever (every tick once the
-	// hard deadline is exceeded), the round never moves to
-	// PhaseAccepted, and handleWrongLedger never gets a chance to
-	// restart the engine on a freshly acquired LCL. The Frankenstein
-	// chain we build in this case carries no validation, so peers
-	// don't act on it; checkLedger detects the mismatch on the next
-	// inbound proposal and triggers handleWrongLedger normally.
-	if e.mode == consensus.ModeWrongLedger && result == consensus.ResultSuccess {
-		slog.Info("acceptLedger suppressed",
-			"t", "consensus",
-			"event", "accept-skip-wrong-lcl",
-			"seq", e.prevLedger.Seq()+1,
-			"result", result.String(),
-			"wrong_lcl", fmt.Sprintf("%x", e.wrongLedgerID[:8]),
-		)
 		return
 	}
 
@@ -2343,8 +2332,19 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	})
 
 	// Match rippled's emission gate at RCLConsensus.cpp:587-594:
-	//   validating_ && !consensusFail && canValidateSeq(seq)
+	//   if (validating_)
+	//     validating_ = ledgerMaster_.isCompatible(*built.ledger_, ...)
+	//   if (validating_ && !consensusFail && canValidateSeq(seq))
+	//     validate(...)
 	// where:
+	//   - validating_ goes false when the locally-built ledger isn't
+	//     on the validated chain. WrongLedger mode is exactly that
+	//     case for us: we built on a prev peers don't recognize, so
+	//     this validation cannot be on the validated chain. Suppress
+	//     emission — the Frankenstein hash would attest to a side
+	//     chain and rippled's Byzantine Behavior Detector would flag
+	//     it. Mode is the right proxy here because we don't have a
+	//     separate isCompatible check available at this point.
 	//   - !consensusFail means rippled's result.state != MovedOn. The
 	//     timeout/abandoned paths in phaseEstablish are rippled's
 	//     Expired path which calls leaveConsensus() and zeros
@@ -2357,15 +2357,16 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	//     Detector then flags us as "Conflicting validation for N",
 	//     permanently disqualifying us from quorum (#401).
 	//
-	// Mode is intentionally NOT a gate here. Rippled emits regardless
-	// of mode; the mode (proposing vs switchedLedger/observing) only
-	// controls the Full flag inside sendValidation. SwitchedLedger
+	// In NON-WrongLedger modes, rippled emits regardless of whether we
+	// led the round (proposing vs switchedLedger/observing); the mode
+	// only controls the Full flag inside sendValidation. SwitchedLedger
 	// rounds emit a PARTIAL validation (Full=false) — peers rely on
 	// these as early liveness signals before full quorum materializes.
 	consensusFail := result != consensus.ResultSuccess
+	wrongLCL := e.mode == consensus.ModeWrongLedger
 	isValidator := e.adaptor.IsValidator()
 	canValidate := newLedger.Seq() > e.ourLastValidatedSeq
-	willEmit := isValidator && !consensusFail && canValidate
+	willEmit := isValidator && !consensusFail && !wrongLCL && canValidate
 
 	// Greppable INFO log: validation gate decision. Lets us tell at a
 	// glance which arm of rippled's gate (RCLConsensus.cpp:587-594)
@@ -2383,10 +2384,11 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		"result", result.String(),
 		"is_validator", isValidator,
 		"consensus_fail", consensusFail,
+		"wrong_lcl", wrongLCL,
 		"can_validate_seq", canValidate,
 		"our_last_validated_seq", e.ourLastValidatedSeq,
 		"mode", e.mode.String(),
-		"decision", emitDecision(willEmit, isValidator, consensusFail, canValidate),
+		"decision", emitDecision(willEmit, isValidator, consensusFail, wrongLCL, canValidate),
 	)
 
 	if willEmit {
@@ -3017,7 +3019,7 @@ func roundCloseTime(closeTime time.Time, resolution time.Duration) time.Time {
 // && canValidateSeq) decided emit/no-emit. Used by the validate-gate
 // diagnostic log so a grep over goxrpl's logs surfaces the exact
 // suppression cause without needing to cross-reference the booleans.
-func emitDecision(emit, isValidator, consensusFail, canValidate bool) string {
+func emitDecision(emit, isValidator, consensusFail, wrongLCL, canValidate bool) string {
 	if emit {
 		return "emit"
 	}
@@ -3026,6 +3028,9 @@ func emitDecision(emit, isValidator, consensusFail, canValidate bool) string {
 	}
 	if consensusFail {
 		return "skip:consensus-fail"
+	}
+	if wrongLCL {
+		return "skip:wrong-lcl"
 	}
 	if !canValidate {
 		return "skip:already-validated-seq"

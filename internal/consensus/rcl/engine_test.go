@@ -2372,24 +2372,30 @@ func TestAcceptLedger_NoCloseTimeConsensus_DeterministicFallback(t *testing.T) {
 	}
 }
 
-// TestAcceptLedger_WrongLedger_NoOpAndNoEmit pins the issue #401
-// layer-4 fix: when our consensus mode is wrongLedger, acceptLedger
-// must NOT advance the round, NOT store a built ledger, and NOT
-// broadcast a validation.
+// TestAcceptLedger_WrongLedger_NoEmit pins the rippled-faithful
+// validation gate: when mode==WrongLedger and result==Success,
+// acceptLedger MUST run end-to-end (build, store, advance phase,
+// fire auto-advance hooks) but MUST NOT broadcast a validation.
 //
-// Mirrors rippled's protocol behavior: updateOurPositions returns
-// early in wrongLedger mode (Consensus.h), so accept_ never fires.
-// Building a ledger on top of our wrong prevLedger using peers'
-// tx-set + close-time would produce a Frankenstein hash matching no
-// node's view — a silent broadcast of a divergent attestation that
-// counts toward zero quorum and may be flagged Byzantine.
+// Mirrors rippled doAccept (RCLConsensus.cpp:464-602). Lines 478,
+// 532-545, 601 run unconditionally; only the validation-emission
+// branch (587-594) is gated via `validating_ = isCompatible(...)`.
+// In WrongLedger mode our locally-built ledger is on a side chain,
+// so isCompatible would return false → no validation. But the build
+// itself proceeds, the round transitions out of Establish, and
+// auto-advance starts the next round so checkLedger gets a chance
+// to detect the mismatch and trigger handleWrongLedger.
+//
+// A previous early-return suppressed the entire acceptLedger call
+// in this case, leaving phase==Establish forever and wedging the
+// engine — a regression of #401 in the opposite direction.
 //
 // Properties pinned:
-//  1. Phase stays at Establish (round NOT advanced).
-//  2. No validation broadcast (gate suppressed before sendValidation).
+//  1. No validation broadcast (Frankenstein-hash safety preserved).
+//  2. Phase advances out of Establish (round is NOT stuck).
 //  3. Re-running acceptLedger after mode is restored to Proposing
-//     proceeds normally (gate is mode-conditional, not permanent).
-func TestAcceptLedger_WrongLedger_NoOpAndNoEmit(t *testing.T) {
+//     emits a validation (gate is mode-conditional, not permanent).
+func TestAcceptLedger_WrongLedger_NoEmit(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.validator = true
 	adaptor.opMode = consensus.OpModeFull
@@ -2415,13 +2421,14 @@ func TestAcceptLedger_WrongLedger_NoOpAndNoEmit(t *testing.T) {
 	engine.setMode(consensus.ModeWrongLedger)
 	engine.setPhase(consensus.PhaseEstablish)
 	engine.acceptLedger(consensus.ResultSuccess)
-	phaseInWrong := engine.phase
+	phaseAfter := engine.phase
 	engine.mu.Unlock()
 
-	if phaseInWrong != consensus.PhaseEstablish {
-		t.Fatalf("wrongLedger acceptLedger must NOT advance phase; "+
-			"want Establish, got %v — round was force-accepted on "+
-			"a parent peers don't recognize", phaseInWrong)
+	if phaseAfter == consensus.PhaseEstablish {
+		t.Fatalf("wrongLedger acceptLedger must NOT leave the round " +
+			"stuck in Establish (rippled doAccept advances it " +
+			"unconditionally; only validation emission is gated). " +
+			"This regression wedges the engine forever.")
 	}
 
 	adaptor.mu.RLock()
@@ -2439,8 +2446,7 @@ func TestAcceptLedger_WrongLedger_NoOpAndNoEmit(t *testing.T) {
 	// the gate is mode-conditional, not a permanent kill switch.
 	engine.mu.Lock()
 	engine.setMode(consensus.ModeProposing)
-	// Phase stayed at Establish from the suppressed call above, so
-	// we don't need to re-set it.
+	engine.setPhase(consensus.PhaseEstablish)
 	engine.acceptLedger(consensus.ResultSuccess)
 	engine.mu.Unlock()
 
