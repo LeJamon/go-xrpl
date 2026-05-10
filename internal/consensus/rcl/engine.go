@@ -1825,16 +1825,45 @@ func (e *Engine) phaseEstablish() {
 	//
 	// Gated on roundTime > LedgerMinConsensus so we don't bail out
 	// before peers have had a chance to send proposals normally.
-	// prevProposers > 0 avoids divide-by-zero on the bootstrap round.
-	if e.prevLedger != nil && e.validationTracker != nil && e.prevProposers > 0 &&
+	// prevLedger != nil filters the bootstrap round.
+	//
+	// Denominator: current round's proposer count (len(e.proposals)),
+	// matching rippled's `currentProposers` argument to checkConsensus
+	// (Consensus.h:1740-1751: the caller passes `agree + disagree`,
+	// which is current-round position count) routed through to the
+	// MovedOn branch at Consensus.cpp:239-246.
+	//
+	// Using prevProposers here was wrong: when peers move on to the
+	// next round they stop proposing for OUR round, so currentProposers
+	// shrinks. The MovedOn threshold should shrink with it. With
+	// prevProposers (still pointing at the larger PRIOR-round count),
+	// the threshold stays artificially high and goxrpl wedges in
+	// establish until the hard timeout — exactly the long-stuck-
+	// establish symptom the rest of #402 fights.
+	if e.prevLedger != nil && e.validationTracker != nil &&
 		roundTime > e.timing.LedgerMinConsensus {
 		finished := e.validationTracker.ProposersFinished(e.prevLedger.Seq())
-		if finished*100 >= int(e.prevProposers)*e.thresholds.MinConsensusPct {
+		currentProposers := len(e.proposals)
+
+		var fired bool
+		if currentProposers == 0 {
+			// Mirror rippled checkConsensusReached(_, 0, ...) at
+			// Consensus.cpp:129-140: with zero current proposers, only
+			// fire MovedOn after the hard ledgerMAX_CONSENSUS timeout —
+			// otherwise we'd bail too eagerly on a slow-arrival round
+			// where peers just haven't sent their proposals yet.
+			fired = roundTime > e.timing.LedgerMaxConsensus
+		} else {
+			fired = finished*100 >= currentProposers*e.thresholds.MinConsensusPct
+		}
+
+		if fired {
 			slog.Info("consensus moved on, accepting",
 				"t", "consensus",
 				"event", "moved-on",
 				"seq", e.state.Round.Seq,
 				"finished", finished,
+				"current_proposers", currentProposers,
 				"prev_proposers", e.prevProposers,
 				"round_time_ms", roundTime.Milliseconds(),
 			)
