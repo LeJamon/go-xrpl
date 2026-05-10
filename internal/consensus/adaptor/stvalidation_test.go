@@ -367,6 +367,60 @@ func TestVerifyRippledValidation(t *testing.T) {
 	assert.NoError(t, err, "rippled validation should verify correctly")
 }
 
+// TestVerifyRippledValidation_PartialNonFull pins verification of
+// rippled-emitted validations with Flags=vfFullyCanonicalSig only
+// (i.e. partial/non-Full — vfFullValidation bit clear). Rippled emits
+// these during early bootstrap before the local node enters the
+// "proposing" mode (RCLConsensus.cpp:850 only sets vfFullValidation
+// when proposing). The all-5 UNL soak observed signature rejections at
+// bootstrap with exactly this flag profile (Flags=0x80000000), so the
+// pre-existing TestVerifyRippledValidation — which tests only the
+// Full+Canonical (Flags=0x80000001) case — could pass while bootstrap
+// still failed. This test guards that specific code path.
+//
+// The blob is built deterministically from a goxrpl-derived signing key
+// so the test is hermetic (no external rippled fixture), but the
+// FIELD-PROFILE matches what was on the wire from the soak peer that
+// rejected: Flags-only, LedgerSeq=3, SigningTime, LedgerHash,
+// SigningPubKey, Signature. No sfConsensusHash, no sfCookie, no
+// sfValidatedHash — exactly the minimum-field bootstrap shape.
+func TestVerifyRippledValidation_PartialNonFull(t *testing.T) {
+	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
+	require.NoError(t, err)
+
+	v := &consensus.Validation{
+		LedgerSeq: 3,
+		SignTime:  time.Unix(protocol.RippleEpochUnix+831820496, 0),
+		Full:      false, // bootstrap / non-proposing — only vfFullyCanonicalSig
+	}
+	for i := range v.LedgerID {
+		v.LedgerID[i] = byte(i + 0x80)
+	}
+
+	require.NoError(t, identity.SignValidation(v))
+	require.NotEmpty(t, v.Signature)
+
+	// SerializeSTValidation must put Flags = vfFullyCanonicalSig only
+	// when v.Full is false (matches buildValidationSigningData and
+	// rippled's early-bootstrap shape).
+	blob := SerializeSTValidation(v)
+	require.NotEmpty(t, blob)
+
+	parsed, err := parseSTValidation(blob)
+	require.NoError(t, err)
+
+	// Confirm the on-wire flags exactly match the soak-captured profile.
+	assert.Equal(t, uint32(vfFullyCanonicalSig), parsed.Flags,
+		"non-Full bootstrap validation must have Flags=vfFullyCanonicalSig only "+
+			"(no vfFullValidation) — matches captured Flags=0x80000000 from soak")
+	assert.False(t, parsed.Full, "vfFullValidation bit must be clear")
+
+	// And it must verify — this is the bootstrap unblocker.
+	require.NoError(t, VerifyValidation(parsed),
+		"non-Full rippled-shaped validation must verify; failure here "+
+			"reproduces the all-5 UNL bootstrap stall at val_seq=5")
+}
+
 func TestValidationToMessage_ProducesValidBlob(t *testing.T) {
 	orig := buildTestValidation()
 
