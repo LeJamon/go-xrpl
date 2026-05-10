@@ -839,6 +839,34 @@ func (s *Service) collectTransactionResults(l *ledger.Ledger, ledgerSeq uint32, 
 	return results
 }
 
+// installAdoptedLedgerLocked writes adopted into ledgerHistory[seq]
+// with the rippled validated-precedence rule: if the slot already
+// holds a different ledger that has IsValidated=true, leave it alone
+// — that entry came from a quorum-validated path and beats any
+// non-validated overwrite, including from another adoption that
+// happened to arrive after an unvalidated peer-replay-delta.
+//
+// Mirrors LedgerHistory::insert(ledger, validated) at
+// LedgerHistory.cpp:55-74 + the overall by-seq-index update rule:
+// only validated inserts update the authoritative seq->hash mapping.
+//
+// Caller must hold s.mu (write).
+func (s *Service) installAdoptedLedgerLocked(seq uint32, adopted *ledger.Ledger) {
+	if existing, ok := s.ledgerHistory[seq]; ok {
+		existingHash := existing.Hash()
+		newHash := adopted.Hash()
+		if existingHash != newHash && existing.IsValidated() && !adopted.IsValidated() {
+			s.logger.Warn("adopt skip: validated entry already present",
+				"seq", seq,
+				"existing_hash", fmt.Sprintf("%x", existingHash[:8]),
+				"adopt_hash", fmt.Sprintf("%x", newHash[:8]),
+			)
+			return
+		}
+	}
+	s.ledgerHistory[seq] = adopted
+}
+
 // fixMismatchLocked invalidates the tail of ledgerHistory when the
 // adopted ledger does not chain to whatever we already have at
 // `adopted.Sequence()-1`. Mirrors rippled's setFullLedger parent-hash
@@ -2037,7 +2065,7 @@ func (s *Service) AdoptLedgerHeader(h *header.LedgerHeader) error {
 	// (typically genesis for a first-time sync) until the
 	// ValidationTracker fires OnLedgerFullyValidated.
 	s.closedLedger = adopted
-	s.ledgerHistory[h.LedgerIndex] = adopted
+	s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
 
 	// Create new open ledger on top
 	openLedger, err := ledger.NewOpen(adopted, time.Now())
@@ -2100,7 +2128,7 @@ func (s *Service) ReAdoptLedgerHeader(h *header.LedgerHeader) error {
 	// set after trusted-validation quorum lands. Leaving validatedLedger
 	// alone lets the quorum gate in SetValidatedLedger do its job.
 	s.closedLedger = adopted
-	s.ledgerHistory[h.LedgerIndex] = adopted
+	s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
 
 	// Create new open ledger on top
 	openLedger, err := ledger.NewOpen(adopted, time.Now())
@@ -2179,7 +2207,7 @@ func (s *Service) adoptLedgerWithStateLocked(
 	// Same reasoning as ReAdoptLedgerHeader: peer-adopted ledgers advance
 	// closedLedger but not validatedLedger. The quorum gate owns that.
 	s.closedLedger = adopted
-	s.ledgerHistory[h.LedgerIndex] = adopted
+	s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
 	s.needsInitialSync = false
 
 	// If a trusted validation for this seq arrived before we got here
