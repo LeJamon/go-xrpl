@@ -1597,14 +1597,30 @@ func (e *Engine) phaseOpen() {
 // closeLedger transitions from open to establish phase.
 // Reference: rippled Consensus.h closeLedger() (~line 1434)
 func (e *Engine) closeLedger() {
-	// Build our transaction set from pending transactions, filtered
-	// through the rippled-faithful open-ledger gate: only txs that
-	// would successfully apply against e.prevLedger's state make it
-	// into our position. Without this filter goxrpl proposes a
-	// SUPERSET of rippled's set (conflicts, tef/tem/tel, fee-escalated)
-	// and live-network rounds diverge even though standalone
-	// determinism passes. See tasks/match-rippled-exactly.md (H4).
-	txs := e.adaptor.GetProposableTxs(e.prevLedger)
+	// Build our transaction set from pending transactions.
+	//
+	// When proposing (or standalone), filter through the open-ledger
+	// gate so OurPosition reflects only txs that would actually apply
+	// against e.prevLedger's state — rippled-faithful matching
+	// app_.openLedger().current()->txs (RCLConsensus.cpp:333-349).
+	// Without this filter goxrpl proposes a SUPERSET of rippled's set
+	// (conflicts, tef/tem/tel, fee-escalated) and live-network rounds
+	// diverge even though standalone determinism passes. See
+	// tasks/match-rippled-exactly.md (H4).
+	//
+	// In non-proposing modes (Observing / SwitchedLedger / WrongLedger)
+	// we don't broadcast a proposal, so the filter's only consumer is
+	// the local `e.ourTxSet` / `e.acquiredTxSets` cache — which has no
+	// observable network effect. Skip the filter to avoid the
+	// per-round multi-pass apply cost; rippled's equivalent path is a
+	// free pointer-deref on the already-applied open view, so this
+	// gate brings us back to comparable cost.
+	var txs [][]byte
+	if e.mode == consensus.ModeProposing || e.adaptor.IsStandalone() {
+		txs = e.adaptor.GetProposableTxs(e.prevLedger)
+	} else {
+		txs = e.adaptor.GetPendingTxs()
+	}
 
 	// Inject flag-ledger / voting-ledger pseudo-txs BEFORE building
 	// the tx set, so the resulting tx-set hash matches what rippled

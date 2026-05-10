@@ -1692,15 +1692,23 @@ func (o *Overlay) Broadcast(msg []byte) error {
 		if peer.State() != PeerStateConnected {
 			continue
 		}
-		if err := peer.Send(msg); err != nil && errors.Is(err, ErrSendBufferFull) {
-			// Surface buffer-full so we can correlate with consensus
-			// stalls; a silent drop here previously masked the
-			// TMTransaction relay loss that desynced rippled's open
-			// ledger pool at issue #401.
-			slog.Warn("broadcast: peer send buffer full, frame dropped",
+		if err := peer.Send(msg); err != nil {
+			// Surface buffer-full at Warn so we can correlate with
+			// consensus stalls; a silent drop here previously masked
+			// the TMTransaction relay loss that desynced rippled's
+			// open ledger pool at issue #401. Other send failures
+			// (transport closed, write timeout, etc.) at Info — they
+			// indicate a peer dropping but are routine enough that
+			// Warn would be noisy.
+			level := slog.LevelInfo
+			if errors.Is(err, ErrSendBufferFull) {
+				level = slog.LevelWarn
+			}
+			slog.Log(context.Background(), level, "broadcast send failed",
 				"t", "Overlay",
 				"peer", id,
 				"frame_size", len(msg),
+				"err", err.Error(),
 			)
 		}
 	}
@@ -1725,7 +1733,18 @@ func (o *Overlay) BroadcastExcept(exceptPeer PeerID, msg []byte) error {
 		if peer.State() != PeerStateConnected {
 			continue
 		}
-		peer.Send(msg)
+		if err := peer.Send(msg); err != nil {
+			level := slog.LevelInfo
+			if errors.Is(err, ErrSendBufferFull) {
+				level = slog.LevelWarn
+			}
+			slog.Log(context.Background(), level, "broadcast-except send failed",
+				"t", "Overlay",
+				"peer", id,
+				"frame_size", len(msg),
+				"err", err.Error(),
+			)
+		}
 	}
 	return nil
 }
