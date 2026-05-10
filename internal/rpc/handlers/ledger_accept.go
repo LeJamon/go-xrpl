@@ -24,17 +24,27 @@ func (m *LedgerAcceptMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 			"ledger_accept is only available in standalone mode")
 	}
 
-	// Optional close_time param (XRPL ripple-epoch seconds). Without it,
-	// AcceptLedger uses time.Now(), which makes deterministic differential
-	// testing against rippled standalone impossible because the two
-	// servers' clocks drift. Tests pass an explicit close_time to keep
-	// the ledger chain byte-identical across implementations.
+	// Optional close_time param (XRPL ripple-epoch seconds). NOT a
+	// rippled RPC field — goxrpl-specific extension for differential
+	// testing against rippled standalone (where the two servers'
+	// time.Now() clocks would otherwise drift and produce different
+	// ledger headers for the same input). Admin-only, opt-in. The
+	// differential-conformance harness uses it; production rippled
+	// callers should NOT depend on it being honored.
 	var req struct {
 		CloseTime *uint32 `json:"close_time,omitempty"`
 	}
 	closeTime := time.Time{}
 	if len(params) > 0 {
-		_ = json.Unmarshal(params, &req)
+		// Surface decode failures rather than silently falling through
+		// to time.Now() — a malformed close_time means the caller
+		// asked for determinism and didn't get it; producing a
+		// time.Now()-stamped ledger would silently break the
+		// differential test instead of telling them.
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, types.NewRpcError(types.RpcINVALID_PARAMS, "invalidParams", "invalidParams",
+				fmt.Sprintf("ledger_accept: malformed params: %v", err))
+		}
 		if req.CloseTime != nil {
 			closeTime = time.Unix(int64(*req.CloseTime)+protocol.RippleEpochUnix, 0).UTC()
 		}

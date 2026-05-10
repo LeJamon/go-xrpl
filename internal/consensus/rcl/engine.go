@@ -2427,7 +2427,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	consensusFail := result != consensus.ResultSuccess
 	wrongLCL := e.mode == consensus.ModeWrongLedger
 	isValidator := e.adaptor.IsValidator()
-	canValidate := e.canValidateSeqLocked(newLedger.Seq())
+	canValidate := e.peekCanValidateSeqLocked(newLedger.Seq())
 	willEmit := isValidator && !consensusFail && !wrongLCL && canValidate
 
 	// Greppable INFO log: validation gate decision. Lets us tell at a
@@ -2874,34 +2874,71 @@ func (e *Engine) determineCloseTime() time.Time {
 // validation). Partial validations are accepted by peers but don't
 // count toward quorum (LedgerMaster.cpp:886 filters Full=false out of
 // the trusted count).
-// canValidateSeqLocked reports whether `seq` is greater than the
-// SeqEnforcer floor, applying the rippled `validationSetExpires`
-// reset (Validations.h:118-128) before the comparison: if the
-// adaptor clock has advanced more than the expiry window past our
-// last bumped time, the floor resets to 0 so a long-restarted /
-// partitioned validator can come back online and validate at
-// sequences below its pre-outage floor.
+// peekCanValidateSeqLocked is a pure (non-mutating) predicate: would
+// `seq` pass the SeqEnforcer floor right now? Used by the
+// acceptLedger gate to compute a willEmit hint for the diagnostic
+// log line; the authoritative atomic check + bump happens inside
+// sendValidation via tryAdvanceValidatedSeqLocked.
 //
-// Caller must hold e.mu (write — this method may mutate
-// ourLastValidatedSeq via the expiry reset).
-func (e *Engine) canValidateSeqLocked(seq uint32) bool {
+// Mirrors the predicate half of rippled's SeqEnforcer.operator()
+// (Validations.h:118-128). The expiry-reset behavior is computed
+// here without committing to it — if the caller decides to emit,
+// tryAdvanceValidatedSeqLocked applies the same expiry check
+// atomically with the bump.
+//
+// Caller must hold e.mu (read).
+func (e *Engine) peekCanValidateSeqLocked(seq uint32) bool {
+	floor := e.ourLastValidatedSeq
 	if !e.ourLastValidatedTime.IsZero() &&
 		e.adaptor.Now().Sub(e.ourLastValidatedTime) > validationSetExpires {
+		floor = 0
+	}
+	return seq > floor
+}
+
+// tryAdvanceValidatedSeqLocked is the goxrpl equivalent of rippled's
+// SeqEnforcer::operator() at Validations.h:118-128. Three actions in
+// one atomic call:
+//
+//  1. If `now > when_ + validationSET_EXPIRES`, reset the floor to 0
+//     (the long-idle reset path; lets a restarted / partitioned
+//     validator validate at sequences below its pre-outage floor).
+//  2. If `seq <= seq_`, return false — the caller MUST NOT validate.
+//  3. Bump `seq_ = seq` and `when_ = now`, return true — the floor
+//     advanced and the caller is cleared to sign + broadcast.
+//
+// Mirrors rippled's atomicity: the floor is committed BEFORE signing,
+// so a sign failure still consumes the seq slot (preventing a retry
+// loop at the same seq). Goxrpl previously bumped only AFTER sign
+// success — under the e.mu serialization it produced the same
+// observable behavior, but conformance with rippled's semantics is
+// cleaner here.
+//
+// Caller must hold e.mu (write).
+func (e *Engine) tryAdvanceValidatedSeqLocked(seq uint32) bool {
+	now := e.adaptor.Now()
+	if !e.ourLastValidatedTime.IsZero() &&
+		now.Sub(e.ourLastValidatedTime) > validationSetExpires {
 		e.ourLastValidatedSeq = 0
 	}
-	return seq > e.ourLastValidatedSeq
+	if seq <= e.ourLastValidatedSeq {
+		return false
+	}
+	e.ourLastValidatedSeq = seq
+	e.ourLastValidatedTime = now
+	return true
 }
 
 func (e *Engine) sendValidation(ledger consensus.Ledger) {
-	// canValidateSeq guard. Mirrors rippled's per-node SeqEnforcer
-	// (Validations.h:118-128, canValidateSeq Validations.h:830): never
-	// emit a second validation for a seq we have already validated.
-	// Defensive in-function check so callers (production gate AND
-	// direct test invocation) cannot bypass.
-	if !e.canValidateSeqLocked(ledger.Seq()) {
+	// SeqEnforcer guard + bump in one atomic call. Mirrors rippled
+	// SeqEnforcer.operator() at Validations.h:118-128: the floor is
+	// committed BEFORE signing so that even a sign failure consumes
+	// the seq slot (preventing a Byzantine retry loop at the same
+	// seq). Defensive in-function check so callers (production gate
+	// AND direct test invocation) cannot bypass.
+	if !e.tryAdvanceValidatedSeqLocked(ledger.Seq()) {
 		return
 	}
-	now := e.adaptor.Now()
 
 	nodeID, err := e.adaptor.GetValidatorKey()
 	if err != nil {
@@ -3030,16 +3067,10 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 		return
 	}
 
-	// Bump the SeqEnforcer floor before sending. Once signed, the
-	// validation could leak to peers regardless of whether the
-	// adaptor's Broadcast call returns an error, so commit the
-	// "we've validated this seq" state at signing time rather than
-	// after broadcast. Mirrors rippled's handleNewValidation feeding
-	// the local Validations tracker before TMValidation goes out.
-	// Stamp the time too so the SeqEnforcer expiry can later reset
-	// the floor after a long silent period.
-	e.ourLastValidatedSeq = ledger.Seq()
-	e.ourLastValidatedTime = now
+	// SeqEnforcer floor was already advanced atomically at the top of
+	// this function via tryAdvanceValidatedSeqLocked — no second bump
+	// here. (Previously a defensive post-sign bump existed; now
+	// redundant under the rippled-faithful atomic semantics.)
 
 	// Greppable INFO log: actual validation broadcast. Pin the seq, the
 	// hash we attest, and whether it's Full so we can correlate against

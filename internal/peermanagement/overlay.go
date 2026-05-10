@@ -1786,7 +1786,25 @@ func (o *Overlay) RelayFromValidator(validator []byte, suppressionHash [32]byte,
 		if !peer.ExpireSquelch(validator) {
 			continue
 		}
-		peer.Send(msg)
+		if err := peer.Send(msg); err != nil {
+			level := slog.LevelInfo
+			if errors.Is(err, ErrSendBufferFull) {
+				level = slog.LevelWarn
+			}
+			slog.Log(context.Background(), level, "relay-from-validator send failed",
+				"t", "Overlay",
+				"peer", id,
+				"frame_size", len(msg),
+				"err", err.Error(),
+			)
+			// Still record this peer in the reverse index — the
+			// failure is visibility-only; treating the peer as
+			// "reached" matches Broadcast/BroadcastExcept which also
+			// don't roll back on Send error. The squelch reverse
+			// index is best-effort; mis-recording a non-recipient
+			// just costs one extra relay slot tick on the next
+			// duplicate arrival from this peer.
+		}
 		forwarded = append(forwarded, id)
 	}
 	o.peersMu.RUnlock()

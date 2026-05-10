@@ -17,18 +17,11 @@ func isZeroHash256(s string) bool {
 	return strings.Trim(s, "0") == ""
 }
 
-// isValidPublicKey checks if the bytes represent a valid XRPL public key.
-// Reference: rippled publicKeyType() — checks prefix byte and length.
+// isValidPublicKey delegates to the shared tx.IsValidPublicKey helper
+// so every site that compares a derived address against an account ID
+// uses the same publicKeyType() check (rippled PublicKey.cpp).
 func isValidPublicKey(key []byte) bool {
-	if len(key) == 33 {
-		// secp256k1 compressed (0x02 or 0x03) or ed25519 (0xED)
-		return key[0] == 0x02 || key[0] == 0x03 || key[0] == 0xED
-	}
-	if len(key) == 65 {
-		// secp256k1 uncompressed (0x04)
-		return key[0] == 0x04
-	}
-	return false
+	return tx.IsValidPublicKey(key)
 }
 
 // AccountSet modifies the properties of an account in the XRP Ledger.

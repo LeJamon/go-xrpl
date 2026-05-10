@@ -1316,6 +1316,17 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		)
 		statuses := make(map[[32]byte]txStatus, len(pending))
 
+		// Skip txs already in the parent ledger up-front. Mirrors
+		// rippled BuildLedger.cpp:125-129 where pass-0 erases tx
+		// from txns when `built->txExists(txid)`. Once flagged here
+		// they stay txFailed for the rest of the loop, identical to
+		// rippled erasing them.
+		for _, ptx := range pending {
+			if s.closedLedger.TxExists(ptx.hash) {
+				statuses[ptx.hash] = txFailed
+			}
+		}
+
 		certainRetry := true
 		for pass := 0; pass < totalPasses; pass++ {
 			freshLedger, err = ledger.NewOpen(s.closedLedger, closeTime)
@@ -1327,6 +1338,16 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 			// Mirrors rippled's tapRETRY: tx are re-applied against
 			// fresh state but signature checks are not redone.
 			engineConfig.SkipSignatureVerification = pass > 0
+			// Set tapRETRY on retriable passes so tec from preclaim
+			// stays in the retry queue instead of being committed
+			// (rippled BuildLedger.cpp:131-132 + apply.cpp tapRETRY
+			// gate). Cleared on the final pass so leftover tec
+			// results commit normally.
+			if certainRetry {
+				engineConfig.ApplyFlags |= tx.TapRETRY
+			} else {
+				engineConfig.ApplyFlags &^= tx.TapRETRY
+			}
 			engine := tx.NewEngine(freshLedger, engineConfig)
 			blockProcessor := tx.NewBlockProcessor(engine)
 
@@ -2489,6 +2510,13 @@ func (s *Service) FilterApplicableTxs(parent *ledger.Ledger, txBlobs [][]byte) [
 	)
 	statuses := make(map[[32]byte]txStatus, len(pending))
 
+	// Skip txs already in parent (rippled BuildLedger.cpp:125-129).
+	for _, ptx := range pending {
+		if parent.TxExists(ptx.hash) {
+			statuses[ptx.hash] = txFailed
+		}
+	}
+
 	const (
 		totalPasses = 3
 		retryPasses = 1
@@ -2502,6 +2530,16 @@ func (s *Service) FilterApplicableTxs(parent *ledger.Ledger, txBlobs [][]byte) [
 		}
 		engineConfig.LedgerSequence = freshLedger.Sequence()
 		engineConfig.SkipSignatureVerification = pass > 0
+		// tapRETRY on retriable passes — see AcceptConsensusResult
+		// for the rationale; same rippled BuildLedger.cpp:131-132
+		// gate applies. The propose-time filter must use the SAME
+		// flags as the build path or its tec/ter outcomes drift
+		// from what the build will actually commit.
+		if certainRetry {
+			engineConfig.ApplyFlags |= tx.TapRETRY
+		} else {
+			engineConfig.ApplyFlags &^= tx.TapRETRY
+		}
 		engine := tx.NewEngine(freshLedger, engineConfig)
 		blockProcessor := tx.NewBlockProcessor(engine)
 

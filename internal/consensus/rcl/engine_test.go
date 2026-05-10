@@ -145,6 +145,16 @@ type mockAdaptor struct {
 	// exercise rippled's `standalone() || (proposing && !wrongLCL)`
 	// OR-branch at RCLConsensus.cpp:352.
 	standalone bool
+
+	// proposableOverride lets a test pin a specific filtered set
+	// for GetProposableTxs to return, distinct from the raw
+	// pending pool, so closeLedger's wiring (proposing path uses
+	// the FILTERED set) can be asserted directly. nil → fall
+	// through to GetPendingTxs.
+	proposableOverride [][]byte
+	// proposableCalled counts GetProposableTxs invocations so the
+	// gate-on-proposing-or-standalone behavior is observable.
+	proposableCalled int
 }
 
 func newMockAdaptor() *mockAdaptor {
@@ -309,7 +319,24 @@ func (a *mockAdaptor) GetPendingTxs() [][]byte {
 	return a.pendingTxs
 }
 
+// GetProposableTxs returns the filtered subset when an explicit
+// override is wired (proposableOverride). Otherwise falls through to
+// the raw pending pool — matching what a real adaptor returns when
+// the LedgerService can't filter (no parent / no apply context). The
+// override lets tests assert that closeLedger uses the FILTERED set
+// (not the raw pool) when proposing — pinning the wiring of commit
+// f61199f.
 func (a *mockAdaptor) GetProposableTxs(_ consensus.Ledger) [][]byte {
+	a.mu.RLock()
+	override := a.proposableOverride
+	called := a.proposableCalled
+	a.mu.RUnlock()
+	a.mu.Lock()
+	a.proposableCalled = called + 1
+	a.mu.Unlock()
+	if override != nil {
+		return override
+	}
 	return a.GetPendingTxs()
 }
 
@@ -2703,4 +2730,92 @@ func TestAcceptLedger_ConsensusFailSuppressesValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCloseLedger_ProposingUsesFilteredTxSet pins commit f61199f's
+// wiring: when the engine is in ModeProposing (or standalone),
+// closeLedger MUST source its tx set from
+// adaptor.GetProposableTxs(prev) — the rippled-faithful
+// open-ledger-filtered set — and NOT from the raw GetPendingTxs()
+// pool. The filter is what keeps goxrpl from proposing a SUPERSET
+// of rippled's set (conflicts, tef/tem/tel, fee-escalated txs);
+// regressing back to GetPendingTxs would re-introduce the bootstrap
+// fork class fixed in #402.
+//
+// Two arms:
+//
+//  1. Proposing → GetProposableTxs invoked at least once.
+//  2. Non-proposing (e.g. ModeWrongLedger): commit 2416e42 gates
+//     the filter to skip the expensive multi-pass apply when the
+//     result has no observable network effect; raw GetPendingTxs is
+//     used instead. Pinned so a future widening doesn't silently
+//     reintroduce the per-round filter cost in observer modes.
+func TestCloseLedger_ProposingUsesFilteredTxSet(t *testing.T) {
+	t.Run("proposing-uses-filter", func(t *testing.T) {
+		adaptor := newMockAdaptor()
+		adaptor.validator = true
+		adaptor.opMode = consensus.OpModeFull
+		adaptor.proposableOverride = [][]byte{} // distinct from raw pool
+
+		engine := NewEngine(adaptor, DefaultConfig())
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if err := engine.Start(ctx); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		defer engine.Stop()
+
+		round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+		engine.StartRound(round, true)
+
+		engine.mu.Lock()
+		engine.setMode(consensus.ModeProposing)
+		engine.setPhase(consensus.PhaseOpen)
+		engine.closeLedger()
+		engine.mu.Unlock()
+
+		adaptor.mu.RLock()
+		got := adaptor.proposableCalled
+		adaptor.mu.RUnlock()
+		if got == 0 {
+			t.Fatalf("ModeProposing closeLedger must call GetProposableTxs " +
+				"(filter the open-ledger-applicable subset). Got 0 calls — " +
+				"would propose the raw pending pool, regressing #402's H4 fix.")
+		}
+	})
+
+	t.Run("wrongledger-uses-raw-pool", func(t *testing.T) {
+		adaptor := newMockAdaptor()
+		adaptor.validator = true
+		adaptor.opMode = consensus.OpModeFull
+		adaptor.proposableOverride = [][]byte{}
+
+		engine := NewEngine(adaptor, DefaultConfig())
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if err := engine.Start(ctx); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		defer engine.Stop()
+
+		round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+		engine.StartRound(round, true)
+
+		engine.mu.Lock()
+		engine.setMode(consensus.ModeWrongLedger)
+		engine.setPhase(consensus.PhaseOpen)
+		engine.closeLedger()
+		engine.mu.Unlock()
+
+		adaptor.mu.RLock()
+		got := adaptor.proposableCalled
+		adaptor.mu.RUnlock()
+		if got != 0 {
+			t.Fatalf("ModeWrongLedger closeLedger must NOT call "+
+				"GetProposableTxs (commit 2416e42 gates the filter "+
+				"to proposing/standalone). Got %d calls — would burn "+
+				"the per-round multi-pass apply cost on a position "+
+				"we won't broadcast.", got)
+		}
+	})
 }

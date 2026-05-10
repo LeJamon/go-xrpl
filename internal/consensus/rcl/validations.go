@@ -554,8 +554,14 @@ func (vt *ValidationTracker) IsFullyValidated(ledgerID consensus.LedgerID) bool 
 // Reads the persistent byNode map (not the round-scoped validations
 // map on the engine), so the signal is available from the moment a
 // new round begins — before any current-round validations have
-// arrived. negUNL'd validators are excluded, matching the quorum
-// semantics at Validations.h:849-899.
+// arrived.
+//
+// Mirrors rippled's `numTrustedForLedger` at Validations.h:1037-1050,
+// which filters on `v.trusted() && v.full()` — and intentionally does
+// NOT filter negUNL'd validators. negUNL adjusts the quorum threshold
+// downstream, not the count of validations itself; filtering negUNL
+// here would under-count vs rippled and could fail quorum where
+// rippled passes.
 func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
@@ -583,9 +589,6 @@ func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int
 	count := 0
 	for nodeID, v := range perLedger {
 		if !vt.trusted[nodeID] {
-			continue
-		}
-		if vt.negUNL[nodeID] {
 			continue
 		}
 		if !v.Full {

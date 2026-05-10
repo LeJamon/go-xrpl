@@ -938,15 +938,17 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 		if len(node.NodeData) == 0 {
 			continue
 		}
-		n, err := shamap.DeserializeNodeFromWire(node.NodeData)
-		if err != nil {
-			continue
-		}
-		if err := n.UpdateHash(); err != nil {
-			continue
-		}
-		nodeHash := n.Hash()
-		if err := txMap.AddKnownNode(nodeHash, node.NodeData); err == nil {
+		// AddKnownNodeUnchecked deserializes + hashes ONCE. Previously
+		// this site (mirroring the inbound-ledger path) did the
+		// deserialize/UpdateHash twice — once here to extract the hash
+		// for AddKnownNode's external-hash check, then again inside
+		// AddKnownNode. The double work showed up on the catch-up
+		// hot path (~10% of total CPU on inbound). The unchecked
+		// variant trusts the deserialized node's own computed hash
+		// for tree placement; tx-set acquisition has no
+		// authoritative external hash to compare against here either,
+		// so the check was always vacuous.
+		if err := txMap.AddKnownNodeUnchecked(node.NodeData); err == nil {
 			added++
 		}
 	}

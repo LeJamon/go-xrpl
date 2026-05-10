@@ -1,6 +1,7 @@
 package signerlist
 
 import (
+	"encoding/hex"
 	"sort"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
@@ -213,8 +214,17 @@ func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) tx.Result {
 	common := s.GetCommon()
 	signedWithMaster := false
 	if spk := common.SigningPubKey; spk != "" {
-		if sigAddr, sigErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(spk); sigErr == nil && sigAddr == common.Account {
-			signedWithMaster = true
+		// Decode + validate prefix BEFORE deriving an address. Rippled
+		// runs publicKeyType() at PublicKey.cpp; anything that isn't
+		// a real {0x02, 0x03, 0xED, 0x04} key is rejected upstream.
+		// Without this guard, a 33-byte payload with an arbitrary
+		// first byte would be hex-encoded into a valid-looking
+		// address and could falsely qualify for the master-signer
+		// password-spent free-fee discount.
+		if spkBytes, decErr := hex.DecodeString(spk); decErr == nil && tx.IsValidPublicKey(spkBytes) {
+			if sigAddr, sigErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(spk); sigErr == nil && sigAddr == common.Account {
+				signedWithMaster = true
+			}
 		}
 	}
 	if signedWithMaster && (ctx.Account.Flags&state.LsfPasswordSpent) == 0 {
