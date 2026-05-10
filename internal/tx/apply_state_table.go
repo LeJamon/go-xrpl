@@ -35,15 +35,38 @@ type TrackedEntry struct {
 	Current  []byte // Current state (nil for deletes after erase)
 }
 
+// ThreadedOwner records a thread-only modification to an SLE — one
+// where the only change to the SLE was the PreviousTxnID /
+// PreviousTxnLgrSeq pair being bumped to point at the current tx
+// (it owns / co-owns an SLE the tx mutated, but its own business
+// fields are unchanged).
+//
+// Mirrors rippled's `Mods` table at ApplyStateTable.cpp:584-633:
+// `getForMod` keeps thread-only owners OUT of items_ (which stays
+// Action::cache, skipped by the apply loop at :141-143) and into a
+// separate `mods` map. The metadata for these entries is exactly
+// {LedgerIndex, LedgerEntryType, PreviousTxnID, PreviousTxnLgrSeq}
+// — bare AffectedNode, no FinalFields, no PreviousFields.
+//
+// Persisting Updated re-applies the threaded SLE bytes to the base
+// view at Apply time so the next round sees the bumped prev fields.
+type ThreadedOwner struct {
+	EntryType            string
+	OldPreviousTxnID     [32]byte
+	OldPreviousTxnLgrSeq uint32
+	Updated              []byte // SLE bytes after threadItem write
+}
+
 // ApplyStateTable wraps a LedgerView and tracks all modifications
 // for automatic metadata generation, similar to rippled's ApplyStateTable
 type ApplyStateTable struct {
-	base   LedgerView
-	items  map[[32]byte]*TrackedEntry
-	drops  drops.XRPAmount
-	txHash [32]byte
-	txSeq  uint32
-	rules  *amendment.Rules
+	base             LedgerView
+	items            map[[32]byte]*TrackedEntry
+	threadOnlyOwners map[[32]byte]*ThreadedOwner
+	drops            drops.XRPAmount
+	txHash           [32]byte
+	txSeq            uint32
+	rules            *amendment.Rules
 }
 
 // NewApplyStateTable creates a new ApplyStateTable wrapping the given base view.
@@ -51,11 +74,12 @@ type ApplyStateTable struct {
 // If nil, defaults to all amendments enabled.
 func NewApplyStateTable(base LedgerView, txHash [32]byte, txSeq uint32, rules *amendment.Rules) *ApplyStateTable {
 	return &ApplyStateTable{
-		base:   base,
-		items:  make(map[[32]byte]*TrackedEntry),
-		txHash: txHash,
-		txSeq:  txSeq,
-		rules:  rules,
+		base:             base,
+		items:            make(map[[32]byte]*TrackedEntry),
+		threadOnlyOwners: make(map[[32]byte]*ThreadedOwner),
+		txHash:           txHash,
+		txSeq:            txSeq,
+		rules:            rules,
 	}
 }
 
@@ -384,6 +408,49 @@ func (t *ApplyStateTable) applyImpl(isDryRun bool) (*Metadata, error) {
 		}
 	}
 
+	// Phase 2b: emit bare AffectedNode entries for thread-only owners.
+	// Mirrors rippled's apply-loop tail (ApplyStateTable.cpp:269-274)
+	// where `newMod` (mods table) is rawReplace'd into the view; the
+	// matching meta entries were already populated by threadItem
+	// during the main loop. Goxrpl produces both halves here: the
+	// bare AffectedNode (no FinalFields / PreviousFields) and the
+	// base.Update of the threaded SLE bytes so the next round sees
+	// the bumped PreviousTxn fields.
+	for key, owner := range t.threadOnlyOwners {
+		// Skip if items already emitted a node for this key — the
+		// threadOwners path keeps these mutually exclusive (entries
+		// promoted to Modify go through items_; only Action::cache
+		// owners enter threadOnlyOwners), but the guard makes the
+		// invariant explicit and survives future refactors.
+		if _, alreadyEmitted := t.items[key]; alreadyEmitted {
+			if t.items[key].Action != ActionCache {
+				continue
+			}
+		}
+		node := AffectedNode{
+			NodeType:        "ModifiedNode",
+			LedgerEntryType: owner.EntryType,
+			LedgerIndex:     strings.ToUpper(hex.EncodeToString(key[:])),
+		}
+		// PreviousTxnID / PreviousTxnLgrSeq carry the OLD values
+		// (the previous tx that touched this SLE), matching
+		// threadItem's `prevTxID` / `prevLgrID` outputs at rippled
+		// ApplyStateTable.cpp:570-571. The OMITTED FinalFields and
+		// PreviousFields are the rippled-faithful signal that this
+		// owner was thread-only.
+		if owner.OldPreviousTxnID != ([32]byte{}) {
+			node.PreviousTxnID = strings.ToUpper(hex.EncodeToString(owner.OldPreviousTxnID[:]))
+			node.PreviousTxnLgrSeq = owner.OldPreviousTxnLgrSeq
+		}
+		metadata.AffectedNodes = append(metadata.AffectedNodes, node)
+
+		if !isDryRun {
+			if err := t.base.Update(keylet.Keylet{Key: key}, owner.Updated); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	// Apply destroyed drops only when not dry-run
 	if !isDryRun && t.drops.IsPositive() {
 		t.base.AdjustDropsDestroyed(t.drops)
@@ -461,6 +528,17 @@ func (t *ApplyStateTable) applyThreading() {
 
 // threadOwners updates PreviousTxnID/PreviousTxnLgrSeq on owner accounts
 // of a given ledger entry. fixCheckThreading gates Check→Destination threading.
+//
+// Owner SLEs that the tx didn't otherwise mutate get tracked in
+// threadOnlyOwners (NOT promoted to ActionModify in items_), mirroring
+// rippled's mods table at ApplyStateTable.cpp:584-633. Apply()'s main
+// loop emits a bare AffectedNode for those — only LedgerIndex,
+// LedgerEntryType, PreviousTxnID, PreviousTxnLgrSeq — matching
+// rippled's threadItem output for cached owners. Without this split,
+// thread-only owners would emit a full FinalFields block (Balance,
+// Sequence, OwnerCount, Flags, …) and diverge transaction_hash from
+// rippled the moment any TrustSet / Offer / non-XRP Payment exercises
+// issuer threading.
 func (t *ApplyStateTable) threadOwners(data []byte, entryType string, fixCheckThreading bool) {
 	if data == nil {
 		return
@@ -475,27 +553,54 @@ func (t *ApplyStateTable) threadOwners(data []byte, entryType string, fixCheckTh
 			if entry.Action == ActionErase {
 				continue // Don't thread deleted accounts
 			}
-			// Thread the existing tracked entry
-			_, _, newData, changed := threadItem(entry.Current, t.txHash, t.txSeq)
-			if changed {
-				entry.Current = newData
-				if entry.Action == ActionCache {
-					entry.Action = ActionModify
+			// If the entry is already going to be emitted as
+			// Insert / Modify / (Erase handled above), the threaded
+			// PreviousTxn fields go into its FinalFields/NewFields
+			// naturally — just update Current. This mirrors rippled's
+			// getForMod returning items_[].second when Action != cache
+			// (ApplyStateTable.cpp:614-615), so threadItem mutates the
+			// SLE in items_ directly.
+			if entry.Action != ActionCache {
+				_, _, newData, changed := threadItem(entry.Current, t.txHash, t.txSeq)
+				if changed {
+					entry.Current = newData
 				}
+				continue
+			}
+
+			// ActionCache: only-being-threaded owner. Don't promote
+			// to ActionModify (that would emit a full FinalFields
+			// block). Track in threadOnlyOwners so Apply() emits a
+			// bare AffectedNode with just PreviousTxnID /
+			// PreviousTxnLgrSeq, mirroring rippled's mods table.
+			oldPrev, oldPrevSeq, newData, changed := threadItem(entry.Current, t.txHash, t.txSeq)
+			if !changed {
+				continue
+			}
+			t.threadOnlyOwners[ownerKey.Key] = &ThreadedOwner{
+				EntryType:            getLedgerEntryType(entry.Current),
+				OldPreviousTxnID:     oldPrev,
+				OldPreviousTxnLgrSeq: oldPrevSeq,
+				Updated:              newData,
 			}
 		} else {
-			// Read from base and add to tracking
+			// Read from base. Owner not previously touched by this tx
+			// → goes straight into threadOnlyOwners as the bare-
+			// AffectedNode case (matches rippled's getForMod fall-
+			// through that adds to mods, ApplyStateTable.cpp:621-632).
 			ownerData, err := t.base.Read(ownerKey)
 			if err != nil || ownerData == nil {
 				continue // Owner doesn't exist, skip
 			}
-			_, _, newData, changed := threadItem(ownerData, t.txHash, t.txSeq)
-			if changed {
-				t.items[ownerKey.Key] = &TrackedEntry{
-					Action:   ActionModify,
-					Original: ownerData,
-					Current:  newData,
-				}
+			oldPrev, oldPrevSeq, newData, changed := threadItem(ownerData, t.txHash, t.txSeq)
+			if !changed {
+				continue
+			}
+			t.threadOnlyOwners[ownerKey.Key] = &ThreadedOwner{
+				EntryType:            getLedgerEntryType(ownerData),
+				OldPreviousTxnID:     oldPrev,
+				OldPreviousTxnLgrSeq: oldPrevSeq,
+				Updated:              newData,
 			}
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"time"
 )
 
 // mockAccountCurrenciesLedgerService implements LedgerService for account_currencies testing
@@ -51,6 +52,9 @@ func (m *mockAccountCurrenciesLedgerService) GetValidatedLedgerIndex() uint32 {
 	return m.validatedLedgerIndex
 }
 func (m *mockAccountCurrenciesLedgerService) AcceptLedger(context.Context) (uint32, error) {
+	return m.closedLedgerIndex + 1, nil
+}
+func (m *mockAccountCurrenciesLedgerService) AcceptLedgerAt(context.Context, time.Time) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }
 func (m *mockAccountCurrenciesLedgerService) IsStandalone() bool { return m.standalone }

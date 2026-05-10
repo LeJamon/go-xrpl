@@ -83,19 +83,21 @@ func MetadataToMap(meta *Metadata) map[string]any {
 			innerNode["LedgerEntryType"] = node.LedgerEntryType
 			innerNode["LedgerIndex"] = node.LedgerIndex
 
-			// Add PreviousTxnLgrSeq and PreviousTxnID for ModifiedNode only
-			// For DeletedNode, these fields appear inside FinalFields (via sMD_DeleteFinal)
-			// but NOT at the node level in the metadata structure
-			if node.NodeType == "ModifiedNode" && node.PreviousTxnLgrSeq != 0 {
-				innerNode["PreviousTxnLgrSeq"] = node.PreviousTxnLgrSeq
-			}
-			// Mirror rippled: PreviousTxnID is soeOPTIONAL Hash256 and
-			// omitted when zero. Genesis-touching txs leave it zero; if
-			// we emit the field, the SHAMap tx-tree leaf hash drifts
-			// 33 bytes off rippled's, which breaks #401 validation
-			// quorum the moment goxrpl's tx-tree-root hash differs.
+			// PreviousTxnID + PreviousTxnLgrSeq for ModifiedNode are
+			// emitted as a PAIR. Rippled writes them together inside
+			// one `if (!prevTxID.isZero())` guard
+			// (ApplyStateTable.cpp:560-572). Independent gates here
+			// would let one of the two leak when the other is
+			// correctly omitted — couple the predicates: emit both
+			// when PreviousTxnID is a real (non-zero) hash, omit both
+			// otherwise. Genesis-touching txs leave PreviousTxnID
+			// zero, so both fields stay off the wire (33+5 bytes
+			// saved per leaf). For DeletedNode these fields appear
+			// inside FinalFields (via sMD_DeleteFinal), not at the
+			// node level — hence the NodeType guard.
 			if node.NodeType == "ModifiedNode" && node.PreviousTxnID != "" && !isZeroHashHex(node.PreviousTxnID) {
 				innerNode["PreviousTxnID"] = node.PreviousTxnID
+				innerNode["PreviousTxnLgrSeq"] = node.PreviousTxnLgrSeq
 			}
 
 			if node.FinalFields != nil && len(node.FinalFields) > 0 {

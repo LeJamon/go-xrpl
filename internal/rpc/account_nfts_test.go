@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"time"
 )
 
 // mockAccountNFTsLedgerService implements LedgerService for account_nfts testing
@@ -47,6 +48,9 @@ func (m *mockAccountNFTsLedgerService) GetValidatedLedgerIndex() uint32 {
 	return m.validatedLedgerIndex
 }
 func (m *mockAccountNFTsLedgerService) AcceptLedger(context.Context) (uint32, error) {
+	return m.closedLedgerIndex + 1, nil
+}
+func (m *mockAccountNFTsLedgerService) AcceptLedgerAt(context.Context, time.Time) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }
 func (m *mockAccountNFTsLedgerService) IsStandalone() bool { return m.standalone }

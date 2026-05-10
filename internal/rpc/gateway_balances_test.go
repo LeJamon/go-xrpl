@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"time"
 )
 
 // mockGatewayBalancesLedgerService implements LedgerService for gateway_balances testing
@@ -49,6 +50,9 @@ func (m *mockGatewayBalancesLedgerService) GetValidatedLedgerIndex() uint32 {
 	return m.validatedLedgerIndex
 }
 func (m *mockGatewayBalancesLedgerService) AcceptLedger(context.Context) (uint32, error) {
+	return m.closedLedgerIndex + 1, nil
+}
+func (m *mockGatewayBalancesLedgerService) AcceptLedgerAt(context.Context, time.Time) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }
 func (m *mockGatewayBalancesLedgerService) IsStandalone() bool { return m.standalone }

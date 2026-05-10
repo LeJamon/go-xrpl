@@ -115,19 +115,18 @@ func affectedNodeToRippledFormat(n AffectedNode) (map[string]any, error) {
 		inner["PreviousFields"] = n.PreviousFields
 	}
 
-	// PreviousTxnID — omit if empty OR all-zero. Rippled
-	// (STObject::add) omits soeOPTIONAL Hash256 fields whose value is
-	// the default (uint256{0}). The genesis-account case hits this:
-	// the master account has no prior tx, so its PreviousTxnID stays
-	// at its default zero. Including the field added 33 bytes
-	// (1 field-code + 32 hash-bytes) to every meta blob touching
-	// genesis, breaking SHAMap tx-tree-root parity with rippled.
-	if n.PreviousTxnID != "" && !isZeroHashHex(n.PreviousTxnID) {
+	// PreviousTxnID + PreviousTxnLgrSeq — present-or-absent as a
+	// PAIR. Rippled writes them together inside one
+	// `if (!prevTxID.isZero())` guard at ApplyStateTable.cpp:560-572,
+	// so independent gates here would let one of the two leak when
+	// the other is correctly omitted. Couple the predicates: emit
+	// both when PreviousTxnID is a real (non-zero) hash, omit both
+	// otherwise. Genesis case: master has no prior tx → PreviousTxnID
+	// stays default zero → both fields stay off the wire (33+5 bytes
+	// saved per meta blob touching genesis).
+	prevTxnIDPresent := n.PreviousTxnID != "" && !isZeroHashHex(n.PreviousTxnID)
+	if prevTxnIDPresent {
 		inner["PreviousTxnID"] = n.PreviousTxnID
-	}
-
-	// PreviousTxnLgrSeq (omit if zero, which means not set)
-	if n.PreviousTxnLgrSeq != 0 {
 		inner["PreviousTxnLgrSeq"] = n.PreviousTxnLgrSeq
 	}
 
