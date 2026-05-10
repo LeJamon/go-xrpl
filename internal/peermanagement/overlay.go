@@ -1693,13 +1693,10 @@ func (o *Overlay) Broadcast(msg []byte) error {
 			continue
 		}
 		if err := peer.Send(msg); err != nil {
-			// Surface buffer-full at Warn so we can correlate with
-			// consensus stalls; a silent drop here previously masked
-			// the TMTransaction relay loss that desynced rippled's
-			// open ledger pool at issue #401. Other send failures
-			// (transport closed, write timeout, etc.) at Info — they
-			// indicate a peer dropping but are routine enough that
-			// Warn would be noisy.
+			// Buffer-full at Warn (correlates with consensus stalls;
+			// silent drops here masked TMTransaction relay loss at
+			// issue #401); other send failures at Info (peer dropping,
+			// routine).
 			level := slog.LevelInfo
 			if errors.Is(err, ErrSendBufferFull) {
 				level = slog.LevelWarn
@@ -1797,13 +1794,9 @@ func (o *Overlay) RelayFromValidator(validator []byte, suppressionHash [32]byte,
 				"frame_size", len(msg),
 				"err", err.Error(),
 			)
-			// Still record this peer in the reverse index — the
-			// failure is visibility-only; treating the peer as
-			// "reached" matches Broadcast/BroadcastExcept which also
-			// don't roll back on Send error. The squelch reverse
-			// index is best-effort; mis-recording a non-recipient
-			// just costs one extra relay slot tick on the next
-			// duplicate arrival from this peer.
+			// Fall through and still record this peer in the reverse
+			// index — Broadcast/BroadcastExcept don't roll back on
+			// Send error either, and the index is best-effort.
 		}
 		forwarded = append(forwarded, id)
 	}

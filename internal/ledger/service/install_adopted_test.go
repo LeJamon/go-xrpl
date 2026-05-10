@@ -8,16 +8,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 )
 
-// TestInstallAdoptedLedgerLocked_ReturnCanonical pins the
-// divergence-prevention contract: the helper returns the canonical
-// ledger for the seq AFTER the validated-precedence rule resolves —
-// `adopted` when the install proceeded, the existing validated entry
-// when the skip fired. Callers MUST source `s.closedLedger` from
-// this return; otherwise s.closedLedger and s.ledgerHistory[seq] can
-// drift to different hashes for the same seq, breaking GetLedger(seq)
-// and engine path-construction.
-//
-// Found by review of #402 (LeJamon/go-xrpl).
 func TestInstallAdoptedLedgerLocked_ReturnCanonical(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)
@@ -43,10 +33,9 @@ func TestInstallAdoptedLedgerLocked_ReturnCanonical(t *testing.T) {
 		if err != nil {
 			t.Fatalf("snapshot tx: %v", err)
 		}
-		// Vary an arbitrary header field so two distinct ledgers at the
-		// same seq hash differently. NewFromHeader → StateValidated;
-		// NewOpenWithHeader → StateOpen (IsValidated()==false), the
-		// synthetic shape needed to exercise the precedence skip.
+		// NewFromHeader yields StateValidated; NewOpenWithHeader yields
+		// StateOpen (IsValidated()==false) — the synthetic shape needed
+		// to exercise the precedence skip.
 		var parentHash, ledgerHash [32]byte
 		parentHash[0] = salt
 		ledgerHash[0] = salt
@@ -64,7 +53,6 @@ func TestInstallAdoptedLedgerLocked_ReturnCanonical(t *testing.T) {
 
 	seq := parentSeq + 5
 
-	// Case 1: empty slot. Install proceeds; return == adopted.
 	adopted1 := makeLedger(seq, 0xAA, false)
 	svc.mu.Lock()
 	got := svc.installAdoptedLedgerLocked(seq, adopted1)
@@ -76,7 +64,6 @@ func TestInstallAdoptedLedgerLocked_ReturnCanonical(t *testing.T) {
 		t.Fatalf("empty-slot install: history not written")
 	}
 
-	// Case 2: re-install same hash (still non-validated). No skip; return == new adopted.
 	adopted1Again := makeLedger(seq, 0xAA, false)
 	svc.mu.Lock()
 	got = svc.installAdoptedLedgerLocked(seq, adopted1Again)
@@ -85,10 +72,8 @@ func TestInstallAdoptedLedgerLocked_ReturnCanonical(t *testing.T) {
 		t.Fatalf("same-hash re-install: expected return == new adopted")
 	}
 
-	// Case 3: pre-populate slot with a VALIDATED entry, then try to
-	// install a DIFFERENT hash that is non-validated. Skip must fire,
-	// return == existing validated entry, history must keep pointing
-	// at the validated entry.
+	// Validated entry at slot; non-validated install must be skipped
+	// and the validated entry returned.
 	validatedSeq := parentSeq + 6
 	validated := makeLedger(validatedSeq, 0xBB, true)
 	svc.mu.Lock()
@@ -122,9 +107,8 @@ func TestInstallAdoptedLedgerLocked_ReturnCanonical(t *testing.T) {
 			"will follow", gotHash[:8], validatedHash[:8])
 	}
 
-	// Case 4: a NEW validated adopt at the same seq should override
-	// (rippled validated-vs-validated rule allows latest wins; our
-	// helper only blocks non-validated overwrites of validated entries).
+	// validated-over-validated: latest wins. The helper only blocks
+	// non-validated overwrites of validated entries.
 	newValidated := makeLedger(validatedSeq, 0xDD, true)
 	svc.mu.Lock()
 	got = svc.installAdoptedLedgerLocked(validatedSeq, newValidated)

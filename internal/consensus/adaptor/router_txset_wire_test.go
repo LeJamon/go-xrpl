@@ -78,13 +78,13 @@ func decodeFrame(t *testing.T, frame []byte) (message.MessageType, message.Messa
 	return msgType, msg
 }
 
-// TestRouter_GetLedger_TsCandidate_ServesCachedTxSet pins the issue
-// #401 layer-3 fix, serve side: when a peer asks us for the contents
-// of a tx set we have cached, we MUST reply with TMLedgerData carrying
-// type=liTS_CANDIDATE, ledger_hash=<txSetID>, and one node per tx
-// blob. Mirrors rippled's PeerImp::getTxSet
+// TestRouter_GetLedger_TsCandidate_ServesCachedTxSet pins the
+// serve-side wire shape for issue #401: when a peer asks for the
+// contents of a tx set we have cached, we MUST reply with
+// TMLedgerData carrying type=liTS_CANDIDATE, ledger_hash=<txSetID>,
+// and one node per tx blob. Mirrors rippled's PeerImp::getTxSet
 // (PeerImp.cpp:3255-3287). Without this branch goxrpl can't relay
-// peer-acquired tx sets, so #401's dispute-convergence fix is one-way.
+// peer-acquired tx sets, so dispute-convergence is one-way.
 func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 	engine := &mockEngine{}
 	adaptor, rs := newTxSetWireAdaptor(t)
@@ -178,16 +178,14 @@ func TestRouter_GetLedger_TsCandidate_UnknownTxSet_NoResponse(t *testing.T) {
 	assert.Empty(t, rs.sentTo(9), "router must not respond when tx set is unknown")
 }
 
-// TestRouter_LedgerData_TsCandidate_FeedsEngine pins the issue #401
-// layer-3 fix, response side: when we receive a TMLedgerData with
-// type=liTS_CANDIDATE in response to a tx-set request we made, we
-// MUST extract every node's blob and feed them to engine.OnTxSet so
-// the dispute tracker can build positions against peer tx sets.
-//
-// Without this branch the engine never sees the acquired blobs, never
-// creates disputes against peer-only txs, and stays at propose_seq=0
-// forever — the symptom that left rippled and goxrpl deadlocked at
-// seq=6 in the live harness.
+// TestRouter_LedgerData_TsCandidate_FeedsEngine pins the
+// response-side wiring for issue #401: when we receive a
+// TMLedgerData with type=liTS_CANDIDATE in response to a tx-set
+// request we made, we MUST extract every node's blob and feed them
+// to engine.OnTxSet so the dispute tracker can build positions
+// against peer tx sets. Without this branch the engine never sees
+// the acquired blobs, never creates disputes against peer-only txs,
+// and stays at propose_seq=0.
 func TestRouter_LedgerData_TsCandidate_FeedsEngine(t *testing.T) {
 	engine := &mockEngine{}
 	adaptor, _ := newTxSetWireAdaptor(t)
@@ -293,7 +291,7 @@ func TestRequestTxSet_WireFormat(t *testing.T) {
 	msgType, decoded := decodeFrame(t, frame)
 	require.Equal(t, message.TypeGetLedger, msgType,
 		"RequestTxSet must use TMGetLedger, NOT TMHaveTransactionSet "+
-			"(#401 layer 3 root cause)")
+			"(#401 root cause)")
 
 	req, ok := decoded.(*message.GetLedger)
 	require.True(t, ok)
@@ -308,7 +306,7 @@ func TestRequestTxSet_WireFormat(t *testing.T) {
 	require.Len(t, req.NodeIDs, 1,
 		"node_ids must contain at least the root SHAMap node ID — "+
 			"rippled rejects with 'Invalid ledger node IDs' otherwise "+
-			"(PeerImp.cpp:1435-1438, #401 layer 3 follow-up)")
+			"(PeerImp.cpp:1435-1438, #401)")
 	assert.Len(t, req.NodeIDs[0], 33,
 		"SHAMap node ID is 32 bytes path + 1 byte depth = 33 bytes "+
 			"(SHAMapNodeID::getRawString)")

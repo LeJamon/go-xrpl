@@ -431,11 +431,10 @@ func (s *Service) AcceptLedger(ctx context.Context) (uint32, error) {
 	return s.AcceptLedgerAt(ctx, time.Time{})
 }
 
-// AcceptLedgerAt is AcceptLedger with an explicit close_time. Pass a
-// zero time.Time to fall back to time.Now() (the standard behavior).
-// An explicit value lets differential / replay tests keep close_time
-// byte-identical between implementations so the LedgerHashes skip-list
-// SLE doesn't propagate clock skew into state.
+// AcceptLedgerAt is AcceptLedger with an explicit close_time. A zero
+// time.Time falls back to time.Now(). Differential / replay tests use
+// an explicit value to keep close_time byte-identical between
+// implementations.
 func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Time) (uint32, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -461,14 +460,9 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	// on a fresh ledger built from the LCL. This matches rippled's behavior
 	// where open ledger transactions are re-ordered via CanonicalTXSet.
 	if len(s.pendingTxs) > 0 {
-		// Sort pending transactions in canonical order. Salt is the
-		// SHAMap root of the tx set, matching rippled's consensus-build
-		// convention at RCLConsensus.cpp:512:
-		//     CanonicalTXSet retriableTxs{result.txns.map_->getHash()...}
-		// In standalone there is no remote-agreed tx set, but the local
-		// pending pool plays the same role and SHAMap-roots identically
-		// regardless of input order. See canonical_txset.go for the
-		// per-call-site salt rules.
+		// Salt = SHAMap root of the tx set, matching rippled's
+		// consensus-build convention at RCLConsensus.cpp:512. The
+		// local pending pool plays the same role in standalone.
 		canonicalSort(s.pendingTxs, computeSalt(s.pendingTxs))
 
 		// Create a fresh open ledger from the LCL
@@ -515,13 +509,8 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 		)
 		statuses := make(map[[32]byte]txStatus, len(s.pendingTxs))
 
-		// Pre-parse every tx blob ONCE so the multi-pass apply loop
-		// below can re-use the parsed Transaction objects across
-		// passes instead of re-parsing 3-6 times per tx. Matches
-		// AcceptConsensusResult / FilterApplicableTxs which both
-		// already pre-parse — keeps the three multi-pass paths
-		// behaviorally identical and removes a per-pass hot path
-		// that showed up in profile traces of slow ledger closes.
+		// Pre-parse every blob once; reused across passes. nil entries
+		// become txFailed at apply time.
 		parsed := make([]tx.Transaction, len(s.pendingTxs))
 		for i, ptx := range s.pendingTxs {
 			t, parseErr := tx.ParseFromBinary(ptx.txBlob)
@@ -529,15 +518,11 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 				t.SetRawBytes(ptx.txBlob)
 				parsed[i] = t
 			}
-			// nil entries become txFailed at apply time below.
 		}
 
-		// One persistent freshLedger across all passes (#6 from
-		// second-pass review). Mirrors rippled BuildLedger.cpp:107-170
-		// where the OpenView survives the pass loop and successful txs
-		// accumulate in it. Pass N+1 only attempts items still
-		// unresolved (txRetry); txSucceeded items are already applied
-		// to freshLedger and skipped.
+		// Persistent freshLedger across passes — mirrors rippled
+		// BuildLedger.cpp:107-170 where the OpenView survives the loop
+		// and successful txs accumulate in it.
 		freshLedger, err = ledger.NewOpen(s.closedLedger, closeTime)
 		if err != nil {
 			return 0, fmt.Errorf("failed to create fresh ledger: %w", err)
@@ -555,14 +540,12 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 			for i, ptx := range s.pendingTxs {
 				st := statuses[ptx.hash]
 
-				// Skip permanently failed or already-succeeded items.
-				// Succeeded txs' effects persist in freshLedger across
-				// passes, so re-applying would double-count and drift.
+				// Succeeded txs persist in freshLedger across passes;
+				// re-applying would double-count.
 				if st == txFailed || st == txSucceeded {
 					continue
 				}
 				if pass > 0 && st == txRetry {
-					// Don't apply yet — we'll retry after all succeeded txs
 					continue
 				}
 
@@ -865,24 +848,18 @@ func (s *Service) collectTransactionResults(l *ledger.Ledger, ledgerSeq uint32, 
 }
 
 // installAdoptedLedgerLocked writes adopted into ledgerHistory[seq]
-// with the rippled validated-precedence rule: if the slot already
-// holds a different ledger that has IsValidated=true, leave it alone
-// — that entry came from a quorum-validated path and beats any
-// non-validated overwrite, including from another adoption that
-// happened to arrive after an unvalidated peer-replay-delta.
+// under the validated-precedence rule: a slot already holding a
+// different IsValidated() entry is left alone (quorum-validated beats
+// any non-validated overwrite).
 //
-// Returns the canonical ledger for this seq AFTER the precedence
-// rule resolves (= the existing validated entry when the skip fires,
-// otherwise `adopted`). Callers MUST use the return as their
-// `s.closedLedger` so the by-seq history and the closed-reference
-// stay consistent — assigning `s.closedLedger = adopted` and then
-// letting this helper skip the install would silently leave the two
-// pointing at different hashes for the same seq, breaking
-// GetLedger(seq) and engine path-construction.
+// Returns the canonical ledger for this seq after the rule resolves
+// (existing validated entry on skip; `adopted` otherwise). Callers
+// MUST use the return as their `s.closedLedger` so the by-seq history
+// and the closed-reference stay consistent for the same seq.
 //
 // Mirrors LedgerHistory::insert(ledger, validated) at
-// LedgerHistory.cpp:55-74 + the overall by-seq-index update rule:
-// only validated inserts update the authoritative seq->hash mapping.
+// LedgerHistory.cpp:55-74 — only validated inserts update the
+// authoritative seq->hash mapping.
 //
 // Caller must hold s.mu (write).
 func (s *Service) installAdoptedLedgerLocked(seq uint32, adopted *ledger.Ledger) *ledger.Ledger {
@@ -1256,30 +1233,22 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		return 0, ErrNoOpenLedger
 	}
 
-	// Canonical tx-hash list captured here for the diagnostic
-	// round-summary log emitted further below. Built only when there are
-	// tx blobs in the round; empty otherwise.
 	var canonicalTxHashes []string
 	if len(txBlobs) > 0 {
-		// Convert raw blobs to pendingTx structs for canonical sorting
 		pending := make([]pendingTx, 0, len(txBlobs))
 		for _, blob := range txBlobs {
 			ptx, err := parsePendingTx(blob)
 			if err != nil {
-				continue // skip unparseable transactions
+				continue
 			}
 			pending = append(pending, ptx)
 		}
 
-		// Sort in canonical order. Salt is the SHAMap root of the
-		// agreed tx set — matches rippled's consensus-build convention
-		// at RCLConsensus.cpp:512:
-		//     CanonicalTXSet retriableTxs{result.txns.map_->getHash()...}
-		// (NOT the LCL hash — that variant is for held-tx replay,
-		// LedgerMaster.cpp:461.) Different salt → different tied-account
-		// XOR → different sfTransactionIndex → different metadata roots,
-		// which forks the network at any multi-tx ledger with same-account
-		// ties. See canonical_txset.go for the per-call-site salt rules.
+		// Salt = SHAMap root of the agreed tx set (rippled
+		// RCLConsensus.cpp:512). NOT the LCL hash — that variant is
+		// for held-tx replay (LedgerMaster.cpp:461). Wrong salt forks
+		// the network on same-account-tied multi-tx ledgers via
+		// sfTransactionIndex divergence.
 		canonicalSort(pending, computeSalt(pending))
 
 		canonicalTxHashes = make([]string, 0, len(pending))
@@ -1287,13 +1256,6 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 			canonicalTxHashes = append(canonicalTxHashes, fmt.Sprintf("%x", ptx.hash[:8]))
 		}
 
-		// Pre-parse every tx blob ONCE here so the multi-pass apply
-		// loop below can re-use the parsed Transaction objects across
-		// passes instead of re-parsing 3-6 times per tx (was visible
-		// in profile traces of slow ledger closes that fell behind
-		// rippled's pace and triggered checkLedger/wrongLedger
-		// thrash). Mirrors rippled's ApplyView keeping a single
-		// CanonicalTXSet entry across multi-pass apply.
 		parsed := make([]tx.Transaction, len(pending))
 		for i, ptx := range pending {
 			t, parseErr := tx.ParseFromBinary(ptx.txBlob)
@@ -1301,7 +1263,6 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 				t.SetRawBytes(ptx.txBlob)
 				parsed[i] = t
 			}
-			// nil entries become txFailed at apply time below.
 		}
 
 		// Multi-pass application (same as AcceptLedger)
@@ -1335,23 +1296,17 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		)
 		statuses := make(map[[32]byte]txStatus, len(pending))
 
-		// Skip txs already in the parent ledger up-front. Mirrors
-		// rippled BuildLedger.cpp:125-129 where pass-0 erases tx
-		// from txns when `built->txExists(txid)`. Once flagged here
-		// they stay txFailed for the rest of the loop, identical to
-		// rippled erasing them.
+		// Skip txs already in parent — mirrors rippled BuildLedger.cpp:125-129
+		// where pass-0 erases tx from txns when `built->txExists(txid)`.
 		for _, ptx := range pending {
 			if s.closedLedger.TxExists(ptx.hash) {
 				statuses[ptx.hash] = txFailed
 			}
 		}
 
-		// One persistent freshLedger across all passes (#6 from the
-		// second-pass review), mirroring rippled BuildLedger.cpp:107-170
-		// where the OpenView survives the pass loop and successful txs
-		// accumulate in it. Pass N+1 only handles items still
-		// unresolved (txRetry / txPending); txSucceeded items are
-		// already applied to freshLedger and skipped.
+		// Persistent freshLedger across passes — mirrors rippled
+		// BuildLedger.cpp:107-170 where the OpenView survives the loop
+		// and successful txs accumulate in it.
 		freshLedger, err = ledger.NewOpen(s.closedLedger, closeTime)
 		if err != nil {
 			return 0, fmt.Errorf("failed to create fresh ledger: %w", err)
@@ -1360,15 +1315,13 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 
 		certainRetry := true
 		for pass := 0; pass < totalPasses; pass++ {
-			// pass>0 has already verified every signature on pass 0.
-			// Mirrors rippled's tapRETRY: tx are re-applied against
-			// the persistent view but signature checks are not redone.
+			// pass>0 mirrors rippled's tapRETRY: signature checks were
+			// done on pass 0, not redone here.
 			engineConfig.SkipSignatureVerification = pass > 0
-			// Set tapRETRY on retriable passes so tec from preclaim
-			// stays in the retry queue instead of being committed
-			// (rippled BuildLedger.cpp:131-132 + apply.cpp tapRETRY
-			// gate). Cleared on the final pass so leftover tec
-			// results commit normally.
+			// tapRETRY on retriable passes — tec from preclaim stays
+			// in the retry queue rather than committing. Cleared on
+			// the final pass so leftover tec commits normally.
+			// rippled BuildLedger.cpp:131-132 + apply.cpp tapRETRY gate.
 			if certainRetry {
 				engineConfig.ApplyFlags |= tx.TapRETRY
 			} else {
@@ -1383,9 +1336,8 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 			for i, ptx := range pending {
 				st := statuses[ptx.hash]
 				if st == txFailed || st == txSucceeded {
-					// Already resolved — succeeded items are persisted
-					// in freshLedger; skipping avoids the
-					// duplicate-apply drift surface flagged as #6.
+					// Succeeded items are persisted in freshLedger;
+					// re-applying would double-count.
 					continue
 				}
 				if pass > 0 && st == txRetry {
@@ -1514,11 +1466,9 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 	closedSeq := s.openLedger.Sequence()
 	closedLedgerHash := s.openLedger.Hash()
 
-	// Diagnostic round-summary log. One line per locally-built ledger,
-	// capturing every input that feeds the closed-ledger hash. Used to
-	// diff against rippled's matching round and pinpoint the first input
-	// that diverges when goxrpl-built and rippled-built hashes don't
-	// match in a live UNL setup. See tasks/match-rippled-exactly.md (H1).
+	// Round-summary log: one line per locally-built ledger capturing
+	// every input that feeds the closed-ledger hash, for diffing
+	// against rippled's matching round.
 	{
 		stateRoot, _ := s.openLedger.StateMapHash()
 		txRoot, _ := s.openLedger.TxMapHash()
@@ -1541,32 +1491,14 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 	}
 
 	// Mirror rippled's LedgerHistory::insert(ledger, validated)
-	// precedence rule (LedgerHistory.cpp:55-74) AND its split between
-	// mClosedLedger (always = the local consensus close) and
-	// mValidLedger (always = the most-recently-validated entry):
-	//
-	//   - ledgerHistory[seq] is the by-seq authoritative answer; a
-	//     validated entry already there beats a locally-built one
-	//     (do NOT overwrite it with our local close).
-	//   - s.closedLedger is the LOCAL consensus close — what THIS
-	//     node just produced this round, regardless of whether it
-	//     matches the validated chain. Mirrors rippled's
-	//     mClosedLedger; ledger_closed RPC returns it.
-	//   - s.validatedLedger is updated separately by SetValidatedLedger
-	//     when trusted-validation quorum lands. Mirrors rippled's
-	//     mValidLedger; ledger_validated RPC returns it.
-	//
-	// The earlier behavior of this branch overwrote s.closedLedger with
-	// the validated entry on conflict. That kept GetClosedLedger() in
-	// sync with ledgerHistory but at the cost of HIDING the divergence
-	// between local-build and validated — masking the actual root cause
-	// when goxrpl produced a Frankenstein hash (the seq=6 wedge bug
-	// flagged in the second-pass review). Now we keep s.closedLedger
-	// = local-build always, so a divergence is observable from
-	// server_info / ledger_closed / log "Built ledger #N: <hash>" vs
-	// the validated path. The engine's GetLedger() lookups go through
-	// ledgerHistory[seq], which still returns the canonical (validated)
-	// entry — chain-selection is unaffected.
+	// precedence rule (LedgerHistory.cpp:55-74) and its split between
+	// mClosedLedger (local consensus close — what ledger_closed RPC
+	// returns) and mValidLedger (most-recently-validated entry — what
+	// ledger_validated RPC returns). ledgerHistory[seq] is the by-seq
+	// authoritative answer; a validated entry already there beats a
+	// locally-built one. s.closedLedger always reflects the LOCAL
+	// build so a divergence is observable from server_info /
+	// ledger_closed without masking by overwrite.
 	if existing, ok := s.ledgerHistory[closedSeq]; ok && existing.Hash() != closedLedgerHash && existing.IsValidated() {
 		existingHash := existing.Hash()
 		s.logger.Warn("local consensus close diverges from validated ledger; preserving validated in history, keeping local-build as closedLedger reference",
@@ -1574,8 +1506,6 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 			"local_hash", fmt.Sprintf("%x", closedLedgerHash[:8]),
 			"validated_hash", fmt.Sprintf("%x", existingHash[:8]),
 		)
-		// Local-build wins for s.closedLedger; ledgerHistory[seq] keeps
-		// the validated entry untouched.
 		s.closedLedger = s.openLedger
 	} else {
 		s.closedLedger = s.openLedger
@@ -1992,34 +1922,19 @@ func (s *Service) SubmitHeldAdoption(ctx context.Context, h *header.LedgerHeader
 				return res, nil
 			}
 			// Parent seq present but on a different fork. Stash the
-			// inbound submission and arm parent acquisition (the
-			// router picks up res.Stashed=true). When the awaited
-			// parent arrives, cascadeHeldAdoptionsLocked fires
-			// adoptLedgerWithStateLocked, whose fixMismatchLocked
-			// sweep performs the rippled-faithful invalidation:
-			// anchor the new ledger first, THEN walk the prior
-			// chain and clear tail seqs that don't match (mirrors
-			// LedgerMaster.cpp:749-801 / setFullLedger pattern).
-			//
-			// PRIOR behaviour: this site pre-emptively
-			// `delete`d ledgerHistory[parentSeq] (and the
-			// matching tx-index entries) BEFORE the inbound
-			// submission was verified. If the submission was
-			// transient or its parent never arrived (peer drop,
-			// fork race), we'd have destroyed our valid local
-			// seq=N entry without any anchor. Rippled never
-			// invalidates without a verified anchor; we now
-			// match — keep the (possibly stale) local entry until
-			// the parent acquisition lands, at which point
-			// fixMismatchLocked invalidates atomically with the
-			// successful adopt.
+			// inbound submission and let cascadeHeldAdoptionsLocked
+			// drive adoptLedgerWithStateLocked when the awaited
+			// parent arrives; fixMismatchLocked then anchors the new
+			// ledger first and clears mismatched tail seqs (mirrors
+			// LedgerMaster.cpp:749-801 setFullLedger pattern). Never
+			// pre-emptively delete the existing entry — rippled does
+			// not invalidate without a verified anchor.
 			s.logger.Info("SubmitHeldAdoption divergent-parent submission stashed",
 				"seq", h.LedgerIndex,
 				"parent_seq", parentSeq,
 				"parent_have", fmt.Sprintf("%x", parentHash[:8]),
 				"parent_want", fmt.Sprintf("%x", h.ParentHash[:8]),
 			)
-			// Fall through to the stash path below.
 		}
 	}
 
@@ -2167,12 +2082,9 @@ func (s *Service) AdoptLedgerHeader(h *header.LedgerHeader) error {
 	//
 	// validatedLedger stays at whatever it was before adoption
 	// (typically genesis for a first-time sync) until the
-	// ValidationTracker fires OnLedgerFullyValidated.
-	//
-	// Source closedLedger from the install helper's return so that
-	// when the validated-precedence rule causes a skip, our closed
-	// reference stays on the canonical (validated) entry rather than
-	// drifting to the rejected `adopted` hash.
+	// ValidationTracker fires OnLedgerFullyValidated. Source
+	// closedLedger from the install helper's return so the
+	// validated-precedence skip keeps closedLedger canonical.
 	s.closedLedger = s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
 
 	// Create new open ledger on top
@@ -2235,10 +2147,6 @@ func (s *Service) ReAdoptLedgerHeader(h *header.LedgerHeader) error {
 	// distinguishes the two, and server_info.validated_ledger is only
 	// set after trusted-validation quorum lands. Leaving validatedLedger
 	// alone lets the quorum gate in SetValidatedLedger do its job.
-	//
-	// Source closedLedger from the install helper's return so the
-	// validated-precedence skip path keeps our closed reference on
-	// the canonical entry. See installAdoptedLedgerLocked.
 	s.closedLedger = s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
 
 	// Create new open ledger on top
@@ -2317,21 +2225,15 @@ func (s *Service) adoptLedgerWithStateLocked(
 
 	// Same reasoning as ReAdoptLedgerHeader: peer-adopted ledgers advance
 	// closedLedger but not validatedLedger. The quorum gate owns that.
-	//
-	// Source closedLedger from the install helper's return so the
-	// validated-precedence skip path keeps closedLedger on the
-	// canonical entry (see installAdoptedLedgerLocked).
 	canonical := s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
 	s.closedLedger = canonical
 	s.needsInitialSync = false
 
-	// When the install was skipped because a validated entry already
-	// occupied this seq with a different hash, `adopted` is a rejected
-	// fork — do NOT run the persist / drain / collect / hooks pipeline
-	// for it. Those would write the wrong ledger to storage, fire hooks
-	// for txs that aren't in the canonical chain, and could double-fire
-	// callbacks (the canonical entry was processed when first installed).
-	// Just keep state consistent and return.
+	// Install-skipped (validated entry already at this seq with a
+	// different hash): `adopted` is a rejected fork — skip persist /
+	// drain / collect / hooks pipeline; those would write the wrong
+	// ledger and double-fire callbacks already run for the canonical
+	// entry.
 	if canonical != adopted {
 		openLedger, err := ledger.NewOpen(canonical, time.Now())
 		if err != nil {
@@ -2462,44 +2364,24 @@ func (s *Service) GetPendingTxBlobs() [][]byte {
 	return blobs
 }
 
-// FilterApplicableTxs runs goxrpl's multi-pass apply loop against a
-// fresh open view of `parent`, returning only the blobs that would
-// successfully apply (success or tec-after-retry) — i.e. the subset
-// that would end up in the closed ledger if these txs were accepted
-// via consensus.
+// FilterApplicableTxs runs the multi-pass apply loop against a fresh
+// open view of `parent`, returning only the blobs that would
+// successfully apply (success or tec-after-retry) — the subset that
+// would end up in the closed ledger if these txs were accepted via
+// consensus.
 //
-// Mirrors rippled's `OpenLedger.current()->txs` filter: when forming a
-// consensus position the validator proposes only txs that already
-// applied to its open view (RCLConsensus.cpp:333-349). Goxrpl's pending
-// pool is a raw relay map with no apply-time filter, so without this
-// step our initial position is a SUPERSET of rippled's (conflicts,
-// tef/tem/tel results, fee-escalated, etc. all included), causing
-// position divergence even before disputes run.
+// Mirrors rippled's `OpenLedger.current()->txs` filter
+// (RCLConsensus.cpp:333-349): a validator proposes only txs that
+// already applied to its open view. The pending pool is a raw relay
+// map with no apply-time filter, so without this step the initial
+// position is a superset of rippled's, causing position divergence.
 //
 // Side-effect-free: does not mutate s.openLedger, s.txIndex, or
 // s.pendingTxs. Safe to call concurrently — takes only a read lock.
 //
-// Closure timestamp is `time.Now()`; this is for tx-set SELECTION
-// only and does NOT affect tx outcomes (txs apply against parent
-// state, not the ephemeral header). Callers that need a specific
-// header timestamp use AcceptConsensusResult instead.
-//
-// PER-PASS state is now persistent within a single call (#6 from
-// the second-pass review): one freshLedger spans all passes,
-// successful txs accumulate in it, and pass N+1 only attempts the
-// remaining retry/pending items rather than re-applying every
-// success. Mirrors rippled BuildLedger.cpp:107-170 where `view`
-// (the OpenView) survives the pass loop.
-//
-// PER-PROPOSE rebuild remains: each propose call still runs a full
-// multi-pass apply rather than handing back a live, incrementally-
-// applied view. A true incremental fix is a substantial refactor
-// (introduce a persistent OpenView that incrementally applies on
-// AddPendingTx arrival and only rebuilds on LCL change) tracked in
-// tasks/match-rippled-exactly.md as "incremental OpenLedger" — #4
-// from the second-pass review. Functionally equivalent under
-// deterministic apply (the same subset survives); the only drift
-// surface is performance.
+// Closure timestamp is time.Now(); for tx-set selection only and does
+// not affect tx outcomes. Callers needing a specific header timestamp
+// use AcceptConsensusResult.
 func (s *Service) FilterApplicableTxs(parent *ledger.Ledger, txBlobs [][]byte) [][]byte {
 	if parent == nil || len(txBlobs) == 0 {
 		return nil
@@ -2518,11 +2400,9 @@ func (s *Service) FilterApplicableTxs(parent *ledger.Ledger, txBlobs [][]byte) [
 	if len(pending) == 0 {
 		return nil
 	}
-	// Salt = SHAMap root of the candidate tx set, matching rippled's
-	// consensus-build convention. The propose-time filter must use the
-	// same salt the build path will use, otherwise propose-time apply
-	// order ≠ build-time apply order → tec/ter outcomes drift between
-	// the position we share and the ledger we build.
+	// Salt must match the build path (consensus-build SHAMap root) so
+	// propose-time and build-time apply order agree; otherwise tec/ter
+	// outcomes drift between the position shared and the ledger built.
 	canonicalSort(pending, computeSalt(pending))
 
 	parsed := make([]tx.Transaction, len(pending))
@@ -2566,12 +2446,9 @@ func (s *Service) FilterApplicableTxs(parent *ledger.Ledger, txBlobs [][]byte) [
 		retryPasses = 1
 	)
 
-	// One persistent freshLedger across all passes — mirrors rippled's
-	// BuildLedger.cpp where `view` (the OpenView) survives the pass
-	// loop and successful txs accumulate in it. Each pass only handles
-	// items that aren't yet resolved (txSucceeded items skip the apply
-	// path because their effects are already in freshLedger). #6 in
-	// the second-pass review.
+	// Persistent freshLedger across passes — mirrors rippled
+	// BuildLedger.cpp where the OpenView survives the loop and
+	// successful txs accumulate in it.
 	freshLedger, err := ledger.NewOpen(parent, closeTime)
 	if err != nil {
 		return nil
@@ -2580,15 +2457,12 @@ func (s *Service) FilterApplicableTxs(parent *ledger.Ledger, txBlobs [][]byte) [
 
 	certainRetry := true
 	for pass := 0; pass < totalPasses; pass++ {
-		// pass>0 has verified every signature on pass 0. Mirrors
-		// rippled's tapRETRY: tx are re-applied against the persistent
-		// view but signature checks are not redone.
+		// pass>0 mirrors rippled tapRETRY: signature checks were done
+		// on pass 0, not redone here.
 		engineConfig.SkipSignatureVerification = pass > 0
-		// tapRETRY on retriable passes — see AcceptConsensusResult
-		// for the rationale; same rippled BuildLedger.cpp:131-132
-		// gate applies. The propose-time filter must use the SAME
-		// flags as the build path or its tec/ter outcomes drift
-		// from what the build will actually commit.
+		// tapRETRY on retriable passes (rippled BuildLedger.cpp:131-132);
+		// flags must match the build path so tec/ter outcomes don't
+		// drift between filter and commit.
 		if certainRetry {
 			engineConfig.ApplyFlags |= tx.TapRETRY
 		} else {
@@ -2603,9 +2477,8 @@ func (s *Service) FilterApplicableTxs(parent *ledger.Ledger, txBlobs [][]byte) [
 		for i, ptx := range pending {
 			st := statuses[ptx.hash]
 			if st == txFailed || st == txSucceeded {
-				// Already resolved — succeeded items are persisted in
-				// freshLedger; skipping avoids the duplicate-apply
-				// drift surface flagged as #6 in review.
+				// Succeeded items are persisted in freshLedger; re-applying
+				// would double-count.
 				continue
 			}
 			if pass > 0 && st == txRetry {

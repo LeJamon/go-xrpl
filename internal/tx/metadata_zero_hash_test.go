@@ -3,12 +3,7 @@ package tx
 import "testing"
 
 // TestIsZeroHashHex pins the predicate that drives the metadata
-// "omit defaulted optional Hash256" path. The function is the only
-// thing standing between goxrpl and an extra 33-byte field
-// (PreviousTxnID = uint256{0}) showing up in every meta blob touching
-// a never-before-modified account — most importantly the genesis
-// master account, which broke SHAMap tx-tree-root parity with rippled
-// in the issue #401 soak network.
+// "omit defaulted optional Hash256" path (issue #401 SHAMap parity).
 func TestIsZeroHashHex(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -37,11 +32,7 @@ func TestIsZeroHashHex(t *testing.T) {
 
 // TestAffectedNodeOmitsZeroPreviousTxnID guards
 // affectedNodeToRippledFormat against re-emitting PreviousTxnID when
-// it's all-zero. Without this gate the genesis master account picks
-// up a defaulted PreviousTxnID at every tx that touches it, the
-// SHAMap tx-tree leaf grows by 33 bytes, and the tree root drifts
-// away from rippled's at the first round with master-account
-// activity (issue #401).
+// it's all-zero (issue #401).
 func TestAffectedNodeOmitsZeroPreviousTxnID(t *testing.T) {
 	zero := "0000000000000000000000000000000000000000000000000000000000000000"
 

@@ -4,10 +4,6 @@ import (
 	"testing"
 )
 
-// TestFilterApplicableTxs_NilParent guards the contract that a nil
-// parent ledger short-circuits to nil rather than panicking. Engine
-// callers may hit this during the bootstrap window before prevLedger
-// is set.
 func TestFilterApplicableTxs_NilParent(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)
@@ -19,8 +15,6 @@ func TestFilterApplicableTxs_NilParent(t *testing.T) {
 	}
 }
 
-// TestFilterApplicableTxs_EmptyInput proves the no-tx path is a clean
-// no-op: no apply work, no error, returns nil.
 func TestFilterApplicableTxs_EmptyInput(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)
@@ -42,11 +36,6 @@ func TestFilterApplicableTxs_EmptyInput(t *testing.T) {
 	}
 }
 
-// TestFilterApplicableTxs_AllUnparseableDropped proves the filter
-// drops every blob that can't be parsed — matching rippled's
-// open-ledger behavior where a malformed tx never enters the open
-// view in the first place. Without this, goxrpl would propose
-// garbage that no peer can validate.
 func TestFilterApplicableTxs_AllUnparseableDropped(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)
@@ -71,27 +60,6 @@ func TestFilterApplicableTxs_AllUnparseableDropped(t *testing.T) {
 	}
 }
 
-// TestFilterApplicableTxs_NoSideEffects proves the filter is
-// side-effect-free: every piece of mutable Service state the multi-pass
-// apply COULD touch must be unchanged by a call. The engine's
-// closeLedger calls this every round; mutation here would corrupt the
-// build path that runs immediately after.
-//
-// Pinned invariants (each one a separate failure mode if violated):
-//   1. openLedger pointer identity unchanged (helper rebuilds a private
-//      freshLedger; assigning it to s.openLedger would silently swap
-//      out the engine's open view mid-round).
-//   2. openLedger StateMap root unchanged (a leaked AddTransactionWithMeta
-//      would mutate the in-memory state tree even if the pointer stayed).
-//   3. closedLedger pointer identity unchanged.
-//   4. ledgerHistory size unchanged (no spurious by-seq insert).
-//   5. txIndex size unchanged (no spurious tx → seq mapping).
-//   6. pendingTxs length unchanged.
-//
-// Junk blobs alone don't reach AddTransactionWithMeta (parsing rejects
-// them), but the test pins the surface so that a future change which
-// makes synthetic blobs parseable can't silently start mutating these
-// fields without tripping the assertion.
 func TestFilterApplicableTxs_NoSideEffects(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)

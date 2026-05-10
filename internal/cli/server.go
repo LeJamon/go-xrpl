@@ -87,11 +87,7 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	serverLog.Info("Starting goXRPLd", "version", version.Version)
 
-	// Optional pprof HTTP server (CPU / heap / goroutine / mutex / block).
-	// Set GOXRPL_PPROF=:6060 (or any addr:port) to enable. Off by default.
-	// Gives us go tool pprof flame graphs + go tool trace timelines without
-	// modifying release deployments. Keep registration scoped to its own
-	// mux so the default mux stays clean.
+	// Set GOXRPL_PPROF=:6060 (or any addr:port) to enable pprof. Off by default.
 	if addr := os.Getenv("GOXRPL_PPROF"); addr != "" {
 		go func() {
 			if err := startPProfServer(addr); err != nil {

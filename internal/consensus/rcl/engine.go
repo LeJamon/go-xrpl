@@ -626,13 +626,6 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 		e.adaptor.RelayProposal(proposal, originPeer)
 	}
 
-	// Greppable INFO log: every trusted peer proposal we ingest. Pin
-	// the seq, peer, position seq, the tx-set ID they're voting for
-	// and ours, and whether their tx-set was a cache hit. Lets a
-	// post-run grep tell whether tx-set divergence means "different
-	// IDs" (with cache miss → RequestTxSet) or "same ID, different
-	// content" (cache hit but hash math diverges). Use:
-	//   docker logs <goxrpl> | grep "t=consensus event=propose-recv"
 	if trusted {
 		var ourTxSet consensus.TxSetID
 		ourTxLen := -1
@@ -1030,12 +1023,10 @@ func (e *Engine) timerEntry() {
 	e.mu.Lock()
 	defer func() {
 		e.mu.Unlock()
-		// Greppable INFO: timerEntry tick wall-clock duration. If
-		// this is regularly >100ms, the consensus loop can't keep up
-		// with the 250ms heartbeat and rounds time out. Logged at
-		// every tick so we can correlate slow ticks with phase /
-		// mode and find the slow inner step. Cheap (one log line per
-		// tick, ~4/sec).
+		// Surface slow ticks: the consensus loop needs to keep up
+		// with the 250ms heartbeat or rounds time out. Threshold at
+		// 50ms so a chronically slow inner step is visible without
+		// drowning the log on healthy ticks.
 		dur := time.Since(tickStart)
 		if dur > 50*time.Millisecond {
 			slog.Info("timer tick slow",
@@ -1055,18 +1046,14 @@ func (e *Engine) timerEntry() {
 		return
 	}
 
-	// checkLedger runs in EVERY non-disconnected mode. This is the
-	// recovery path back to Full from Syncing/Tracking: when we're
+	// checkLedger must run in EVERY non-disconnected mode — it's the
+	// recovery path back to Full from Syncing/Tracking. When we're
 	// behind and acquire a peer's tip via inbound, the next checkLedger
-	// tick detects the LCL mismatch (or match) and either fires
-	// handleWrongLedger to switch our prev OR — if our prev now matches
-	// peers' — letting the consensus router transition us back to Full.
-	//
-	// Previously this whole function early-returned for any opMode !=
-	// OpModeFull. That wedged the engine permanently in Tracking after
-	// my Layer 5 ModeManager fix dropped us to Syncing on a wrongLedger
-	// detection: the heartbeat stopped firing checkLedger, no recovery
-	// attempts, no path back to Full. validated_seq frozen forever.
+	// tick detects the LCL mismatch and either fires handleWrongLedger
+	// to switch our prev OR — if our prev now matches peers' — lets
+	// the consensus router transition us back to Full. Gating this on
+	// OpModeFull would wedge the engine permanently in Tracking once
+	// the mode manager drops us to Syncing on a wrongLedger detection.
 	if e.phase != consensus.PhaseAccepted {
 		e.checkLedger()
 	}
@@ -1459,10 +1446,6 @@ func (e *Engine) setPhase(newPhase consensus.Phase) {
 	}
 
 	oldPhase := e.phase
-	// Greppable INFO: per-round phase durations. Used to profile
-	// where the 15s soft-timeout budget goes when goxrpl rounds run
-	// long. Compute the duration spent in oldPhase using
-	// state.PhaseStart, which is reset on every transition.
 	oldPhaseDuration := time.Duration(0)
 	if e.state != nil && !e.state.PhaseStart.IsZero() {
 		oldPhaseDuration = e.adaptor.Now().Sub(e.state.PhaseStart)
@@ -1597,24 +1580,19 @@ func (e *Engine) phaseOpen() {
 // closeLedger transitions from open to establish phase.
 // Reference: rippled Consensus.h closeLedger() (~line 1434)
 func (e *Engine) closeLedger() {
-	// Build our transaction set from pending transactions.
-	//
-	// When proposing (or standalone), filter through the open-ledger
-	// gate so OurPosition reflects only txs that would actually apply
-	// against e.prevLedger's state — rippled-faithful matching
+	// When proposing (or standalone), filter pending txs through the
+	// open-ledger gate so OurPosition reflects only txs that would
+	// actually apply against e.prevLedger's state — matching
 	// app_.openLedger().current()->txs (RCLConsensus.cpp:333-349).
 	// Without this filter goxrpl proposes a SUPERSET of rippled's set
 	// (conflicts, tef/tem/tel, fee-escalated) and live-network rounds
-	// diverge even though standalone determinism passes. See
-	// tasks/match-rippled-exactly.md (H4).
+	// diverge even though standalone determinism passes.
 	//
-	// In non-proposing modes (Observing / SwitchedLedger / WrongLedger)
-	// we don't broadcast a proposal, so the filter's only consumer is
-	// the local `e.ourTxSet` / `e.acquiredTxSets` cache — which has no
-	// observable network effect. Skip the filter to avoid the
-	// per-round multi-pass apply cost; rippled's equivalent path is a
-	// free pointer-deref on the already-applied open view, so this
-	// gate brings us back to comparable cost.
+	// In non-proposing modes we don't broadcast a proposal, so the
+	// filter's only consumer is the local cache — no observable
+	// network effect. Skip the filter to avoid the per-round
+	// multi-pass apply cost; rippled's equivalent path is a free
+	// pointer-deref on the already-applied open view.
 	var txs [][]byte
 	if e.mode == consensus.ModeProposing || e.adaptor.IsStandalone() {
 		txs = e.adaptor.GetProposableTxs(e.prevLedger)
@@ -1695,9 +1673,6 @@ func (e *Engine) closeLedger() {
 			if err := e.adaptor.SignProposal(proposal); err == nil {
 				e.state.OurPosition = proposal
 				e.adaptor.BroadcastProposal(proposal)
-				// Diagnostic: per-round our-position summary. Used to
-				// diff against rippled's matching round to verify
-				// initial-position parity (H2/H5 in match-rippled-exactly).
 				txSetID := txSet.ID()
 				prevID := e.prevLedger.ID()
 				slog.Info("our initial position",
@@ -1722,12 +1697,9 @@ func (e *Engine) closeLedger() {
 	//
 	// Without the request half, replayed (buffered) proposals from
 	// the previous round's tail end sit in e.proposals with no
-	// dispute creation possible — RequestTxSet has only ever been
-	// called from OnProposal, which doesn't re-fire for replayed
-	// proposals. The result is the seq=17 stall pattern observed in
-	// the live testnet: 12 seconds of "disputes=0 acquired_txsets=1
-	// peer_proposals=3" before fresh OnProposal calls finally
-	// triggered acquisition. By then the round had timed out.
+	// dispute creation possible — RequestTxSet is only called from
+	// OnProposal, which doesn't re-fire for replayed proposals. The
+	// round then times out before disputes can be created.
 	requested := make(map[consensus.TxSetID]struct{})
 	for _, p := range e.proposals {
 		if peerSet, ok := e.acquiredTxSets[p.TxSet]; ok {
@@ -1818,18 +1790,11 @@ func (e *Engine) phaseEstablish() {
 
 	// Run convergence checks BEFORE the MovedOn gate. Rippled's
 	// checkConsensus returns one of {Yes, No, MovedOn, Expired} in a
-	// single call where Yes wins over MovedOn — meaning a node that
-	// has reached consensus accepts normally even if peers have also
-	// finished. Goxrpl had MovedOn ahead of checkConvergence here, so
-	// every round where peers finished within ~50ms of us would
-	// short-circuit to MovedOn before our own checkConvergence got a
-	// chance to accept normally. Result: chronic 1-round lag, all
-	// rounds ending in MovedOn, never in Success.
-	//
-	// Order now: increment counters, update positions / close-time,
-	// run checkConvergence (which calls acceptLedger on success).
-	// checkConvergence returns the engine to phaseEstablish only when
-	// it didn't accept; THEN MovedOn evaluates.
+	// single call where Yes wins over MovedOn — a node that has
+	// reached consensus accepts normally even if peers have also
+	// finished. Putting MovedOn first would short-circuit any round
+	// where peers finished within a few ms of us, producing a
+	// chronic 1-round lag with no rounds ending in Success.
 	e.establishCounter++
 	e.peerUnchangedCounter++
 
@@ -1846,15 +1811,9 @@ func (e *Engine) phaseEstablish() {
 	// MovedOn detection. Rippled's checkConsensus returns
 	// ConsensusState::MovedOn when 80% of the previous round's
 	// proposers have already validated a ledger AFTER our prev —
-	// i.e., the network has finished the round we're trying to
-	// participate in and proceeded to the next one. Without this
-	// check goxrpl sits in establish until the 15s soft-timeout
-	// fires, even though peer proposals for our seq stopped arriving
-	// long ago because peers already moved on. Soak runs showed this
-	// pattern on every wrong-LCL recovery round: by the time we
-	// acquire the network LCL and start the establish phase, peers
-	// have validated the very ledger we're now trying to converge
-	// on, so no one is proposing for our round anymore.
+	// the network has finished the round we're trying to participate
+	// in and proceeded to the next one. Without this check goxrpl
+	// sits in establish until the soft-timeout fires.
 	//
 	// Gated on roundTime > LedgerMinConsensus so we don't bail out
 	// before peers have had a chance to send proposals normally.
@@ -1863,16 +1822,11 @@ func (e *Engine) phaseEstablish() {
 	// Denominator: current round's proposer count (len(e.proposals)),
 	// matching rippled's `currentProposers` argument to checkConsensus
 	// (Consensus.h:1740-1751: the caller passes `agree + disagree`,
-	// which is current-round position count) routed through to the
-	// MovedOn branch at Consensus.cpp:239-246.
-	//
-	// Using prevProposers here was wrong: when peers move on to the
-	// next round they stop proposing for OUR round, so currentProposers
-	// shrinks. The MovedOn threshold should shrink with it. With
-	// prevProposers (still pointing at the larger PRIOR-round count),
-	// the threshold stays artificially high and goxrpl wedges in
-	// establish until the hard timeout — exactly the long-stuck-
-	// establish symptom the rest of #402 fights.
+	// current-round position count) routed through to the MovedOn
+	// branch at Consensus.cpp:239-246. Using prevProposers here would
+	// be wrong: when peers move on to the next round they stop
+	// proposing for OUR round, so currentProposers shrinks and the
+	// MovedOn threshold must shrink with it.
 	if e.prevLedger != nil && e.validationTracker != nil &&
 		roundTime > e.timing.LedgerMinConsensus {
 		finished := e.validationTracker.ProposersFinished(e.prevLedger)
@@ -2090,13 +2044,6 @@ func (e *Engine) updatePosition() {
 	disputeCount := e.disputeTracker.Count()
 	changed := e.disputeTracker.UpdateOurVote(e.convergePercent(), proposing, e.parms)
 
-	// Greppable INFO log: per-tick dispute resolution decision.
-	// Dispute count == 0 is the smoking gun for "tx-set divergence
-	// without disputes" — which means createDisputesAgainst never
-	// ran for the peer's tx-set (cache miss + no acquisition + no
-	// re-attempt). len(changed) > 0 means we'll rebuild ourTxSet
-	// and broadcast a new position. Use:
-	//   docker logs <goxrpl> | grep "t=consensus event=update-position"
 	if disputeCount > 0 || proposing {
 		var ourSetID consensus.TxSetID
 		ourSetSize := -1
@@ -2228,22 +2175,16 @@ func (e *Engine) updatePosition() {
 // acceptLedger finalizes consensus and accepts the new ledger.
 //
 // Runs unconditionally when the round reaches PhaseEstablish — including
-// when mode==WrongLedger. This mirrors rippled's doAccept (RCLConsensus.cpp:464-602),
-// which builds the LCL, notifies peers, and calls consensusBuilt regardless of
-// mode; only the validation-emission branch (lines 587-594) is mode-gated via
-// `validating_ = ledgerMaster_.isCompatible(built.ledger_, ...)`.
-//
-// A previous early-return suppressed wrongLedger+Success on the (incorrect)
-// reading that the resulting "Frankenstein" hash on top of our wrong prev
-// would poison peers. In rippled the same situation is handled differently:
-// the Frankenstein ledger IS built and registered locally (no validation
-// emitted, so peers don't act on it), and the next round's checkLedger
-// detects the mismatch and triggers handleWrongLedger normally — the
-// engine recovers instead of wedging in PhaseEstablish.
-//
-// The validated-precedence guard (commit 6d73ac3) already protects
+// when mode==WrongLedger. Mirrors rippled's doAccept (RCLConsensus.cpp:464-602),
+// which builds the LCL, notifies peers, and calls consensusBuilt regardless
+// of mode; only the validation-emission branch (lines 587-594) is mode-gated
+// via `validating_ = ledgerMaster_.isCompatible(built.ledger_, ...)`. The
+// Frankenstein ledger is built and registered locally without emitting a
+// validation; the next round's checkLedger then detects the mismatch and
+// triggers handleWrongLedger normally, so the engine recovers instead of
+// wedging in PhaseEstablish. The validated-precedence guard protects
 // ledgerHistory[seq] from being overwritten by a Frankenstein entry once
-// the real validated ledger arrives, so the build is a safe transient.
+// the real validated ledger arrives.
 func (e *Engine) acceptLedger(result consensus.Result) {
 	if e.phase != consensus.PhaseEstablish {
 		return
@@ -2279,12 +2220,6 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		ctBranch = "fallback"
 	}
 
-	// Greppable INFO log: per-round close-time decision. Mirrors the
-	// inputs and outputs of rippled's RCLConsensus::doAccept close-time
-	// fork (RCLConsensus.cpp:481-496) so we can compare goxrpl's
-	// position.closeTime + closeTimeCorrect with rippled's per-round
-	// debug dump field-for-field. Use:
-	//   docker logs <goxrpl> | grep "t=consensus event=accept-ct"
 	var ourPosCT int64
 	var ourPosSeq uint32
 	if e.state != nil && e.state.OurPosition != nil {
@@ -2344,11 +2279,6 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		return
 	}
 
-	// Greppable INFO log: every BuildLedger result. Pins all the
-	// inputs that go into the ledger header hash so a post-run grep
-	// can identify exactly which input differs vs rippled's
-	// "Built ledger #N" hash for the same seq. Use:
-	//   docker logs <goxrpl> | grep "t=consensus event=ledger-built"
 	parentID := e.prevLedger.ID()
 	parentClose := e.prevLedger.CloseTime()
 	newID := newLedger.ID()
@@ -2430,12 +2360,6 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	canValidate := e.peekCanValidateSeqLocked(newLedger.Seq())
 	willEmit := isValidator && !consensusFail && !wrongLCL && canValidate
 
-	// Greppable INFO log: validation gate decision. Lets us tell at a
-	// glance which arm of rippled's gate (RCLConsensus.cpp:587-594)
-	// suppressed an emission — e.g. "consensus_fail=true" means we hit
-	// the soft timeout (ResultTimeout/Abandoned/MovedOn), which is
-	// rippled's Expired path zeroing validating_. Use:
-	//   docker logs <goxrpl> | grep "t=consensus event=validate-gate"
 	newLedgerID := newLedger.ID()
 	hashShort := fmt.Sprintf("%x", newLedgerID[:8])
 	slog.Info("validation gate",
@@ -2534,33 +2458,24 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// If not Full, the router will keep re-adopting until caught up,
 	// then transition to Full, at which point checkAndStartRound kicks in.
 	if e.adaptor.GetOperatingMode() == consensus.OpModeFull {
-		// Round-boundary preferred-LCL jump (cheap variant). Soak
-		// instrumentation showed every round entering establish in
-		// mode=wrongLedger because checkLedger flipped us within ~50ms
-		// of auto-advance — our locally-built newLedger.ID() doesn't
-		// match what the network agreed on, so the very first
-		// checkLedger tick after auto-advance routes through
-		// handleWrongLedger and we never get to propose. Result:
-		// `update-position` fires 0 times in 5 minutes, validators
-		// never converge.
-		//
-		// Fix: ask the validation tracker for the network's preferred
-		// LCL BEFORE starting the next round. If it's different from
-		// our locally-built ledger AND we already have it locally
-		// (the common case during steady-state where we've been
-		// inbound-acquiring peer ledgers anyway), set it as prev
-		// directly. The next round starts with the right prev → first
-		// checkLedger tick agrees → mode stays proposing → closeLedger
-		// fires → OurPosition is set → updatePosition / dispute
-		// avalanche actually run.
+		// Round-boundary preferred-LCL jump. Without this, every round
+		// entering establish where the network agreed on a different
+		// hash than our locally-built newLedger.ID() routes the very
+		// first checkLedger tick through handleWrongLedger and we
+		// never get to propose. Ask the validation tracker for the
+		// network's preferred LCL BEFORE starting the next round; if
+		// it's different from our locally-built ledger AND we already
+		// have it locally, set it as prev directly. The next round
+		// starts with the right prev — checkLedger agrees, mode stays
+		// proposing, closeLedger fires, the dispute avalanche runs.
 		//
 		// If we DON'T have the preferred ledger locally, fall through
 		// to handleWrongLedger which acquires it (matches rippled's
 		// NetworkOPsImp::checkLastClosedLedger calling
 		// app_.getInboundLedgers().acquire when GetLedgerByHash misses).
-		// This is the slow path b39fa18 tried to use unconditionally
-		// — it stalls because acquisition takes seconds. Conditional
-		// use only when truly needed avoids the stall.
+		// Conditional use avoids the multi-second acquire stall on the
+		// common steady-state path where we already cached the
+		// preferred ledger via inbound.
 		nextPrev := newLedger
 		if e.validationTracker != nil {
 			candidateID, candidateSeq, ok := e.validationTracker.GetPreferred(newLedger.Seq())
@@ -2660,12 +2575,6 @@ func (e *Engine) updateCloseTimePosition() {
 		}
 	}
 
-	// Greppable INFO log: close-time avalanche tally per timer tick.
-	// Surfaces the exact vote distribution and threshold math so we
-	// can compare to rippled's per-tick close-time decision and tell
-	// whether goxrpl is converging on the SAME close_time bucket as
-	// rippled. Use:
-	//   docker logs <goxrpl> | grep "t=consensus event=ct-avalanche"
 	votesSummary := summarizeCloseTimeVotes(closeTimeVotes)
 	var consensusCT int64
 	if !consensusCloseTime.IsZero() {
@@ -2706,11 +2615,6 @@ func (e *Engine) updateCloseTimePosition() {
 			if err := e.adaptor.SignProposal(e.state.OurPosition); err == nil {
 				e.adaptor.BroadcastProposal(e.state.OurPosition)
 			}
-			// Greppable INFO log: our position close-time bumped to the
-			// avalanche-winning bucket. Each bump emits a new proposal
-			// (Position++); rippled does the same in
-			// updateOurPositions (Consensus.h:1565-1610). Use:
-			//   docker logs <goxrpl> | grep "t=consensus event=ct-bump"
 			slog.Info("our close-time bumped",
 				"t", "consensus",
 				"event", "ct-bump",
@@ -2756,9 +2660,6 @@ func summarizeCloseTimeVotes(votes map[time.Time]int) string {
 	return b.String()
 }
 
-// closeTimeAvalancheStateName returns a short name for the avalanche
-// stage the close-time tally is currently in. Lets the diagnostic log
-// say "mid" / "late" / "stuck" instead of an integer.
 func closeTimeAvalancheStateName(s avalancheState) string {
 	switch s {
 	case avalancheInit:
@@ -2909,10 +2810,7 @@ func (e *Engine) peekCanValidateSeqLocked(seq uint32) bool {
 //
 // Mirrors rippled's atomicity: the floor is committed BEFORE signing,
 // so a sign failure still consumes the seq slot (preventing a retry
-// loop at the same seq). Goxrpl previously bumped only AFTER sign
-// success — under the e.mu serialization it produced the same
-// observable behavior, but conformance with rippled's semantics is
-// cleaner here.
+// loop at the same seq).
 //
 // Caller must hold e.mu (write).
 func (e *Engine) tryAdvanceValidatedSeqLocked(seq uint32) bool {
@@ -3067,15 +2965,6 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 		return
 	}
 
-	// SeqEnforcer floor was already advanced atomically at the top of
-	// this function via tryAdvanceValidatedSeqLocked — no second bump
-	// here. (Previously a defensive post-sign bump existed; now
-	// redundant under the rippled-faithful atomic semantics.)
-
-	// Greppable INFO log: actual validation broadcast. Pin the seq, the
-	// hash we attest, and whether it's Full so we can correlate against
-	// rippled's "Val for X by Y" logs. Use:
-	//   docker logs <goxrpl> | grep "t=consensus event=validate-emit"
 	ledgerID := ledger.ID()
 	slog.Info("validation emitted",
 		"t", "consensus",

@@ -120,12 +120,8 @@ type Router struct {
 // across multiple TMLedgerData responses. Reset whenever a fresh
 // RequestTxSet kicks off a new acquire for the same ID.
 type txSetAcquireState struct {
-	txMap *shamap.SHAMap
-	// startedAt is when the acquire began. Used by the TTL sweep
-	// to drop entries that never completed.
-	startedAt time.Time
-	// lastUpdate is the most recent time a node was added or a
-	// retry was fired. Used by the TTL sweep.
+	txMap      *shamap.SHAMap
+	startedAt  time.Time
 	lastUpdate time.Time
 }
 
@@ -492,6 +488,7 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	_ = lastSeen
 }
 
+
 func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	decoded, err := message.Decode(message.TypeValidation, msg.Payload)
 	if err != nil {
@@ -545,15 +542,10 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	// the equivalent at `addSuppressionPeer` — if we've already seen
 	// this exact validation blob (from any peer), the engine already
 	// processed it and re-running OnValidation just re-runs the
-	// secp256k1 ECDSA verify. pprof on a 5-validator soak showed 64%
-	// of total CPU spent re-verifying duplicate validations because
-	// every peer forwards the same blob (5 validators × ~4 peers each
-	// = each validation seen ~4 times). Falling through here multiplies
-	// signature verification cost by the duplicate count and makes
-	// catch-up rounds CPU-bound when they should be sig-cost-bound.
-	//
-	// We still update the relay slot below so squelch accounting stays
-	// in sync — that's the rippled IDLED-window pattern unchanged.
+	// secp256k1 ECDSA verify, which dominates CPU under fan-out
+	// because every peer forwards the same blob. We still update the
+	// relay slot below so squelch accounting stays in sync — that's
+	// the rippled IDLED-window pattern unchanged.
 	if !firstSeen {
 		if time.Since(lastSeen) < peermanagement.Idled {
 			seenPeers := r.adaptor.PeersThatHave(suppressionHash)
@@ -570,11 +562,6 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 			"peer", msg.PeerID)
 		return
 	}
-	// Greppable INFO: every successful inbound validation. Used by
-	// the soak network monitor to verify validation propagation
-	// rippled→goxrpl. Without this we couldn't tell if validations
-	// were dropped at decode, parse, bounds, suppression, or engine
-	// reject; now each step logs and the count is observable.
 	r.logger.Info("inbound validation accepted",
 		"t", "consensus",
 		"event", "validation-recv",
@@ -582,9 +569,6 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 		"seq", validation.LedgerSeq,
 		"hash_short", fmt.Sprintf("%x", validation.LedgerID[:8]))
 
-	// firstSeen=true here (duplicates were dropped above). lastSeen
-	// is referenced in the dup branch only, so silence the unused
-	// warning for first-seen locals.
 	_ = lastSeen
 }
 
@@ -690,9 +674,6 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 	}
 
 	r.adaptor.AddPendingTx(blob)
-	// Greppable INFO: every successful inbound TMTransaction. Count
-	// these vs the soak loadgen's tx_rate to spot peer-level drops.
-	// `kurtosis service logs xrpl-soak goxrpl-0 -a | grep "event=tx-inbound"`
 	r.logger.Info("inbound tx accepted into pending pool",
 		"t", "consensus",
 		"event", "tx-inbound",
@@ -938,16 +919,11 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 		if len(node.NodeData) == 0 {
 			continue
 		}
-		// AddKnownNodeUnchecked deserializes + hashes ONCE. Previously
-		// this site (mirroring the inbound-ledger path) did the
-		// deserialize/UpdateHash twice — once here to extract the hash
-		// for AddKnownNode's external-hash check, then again inside
-		// AddKnownNode. The double work showed up on the catch-up
-		// hot path (~10% of total CPU on inbound). The unchecked
-		// variant trusts the deserialized node's own computed hash
-		// for tree placement; tx-set acquisition has no
-		// authoritative external hash to compare against here either,
-		// so the check was always vacuous.
+		// Use the unchecked variant: tx-set acquisition has no
+		// authoritative external hash to compare against, so the
+		// hash check would be vacuous. AddKnownNodeUnchecked trusts
+		// the deserialized node's own computed hash for tree
+		// placement and avoids a redundant deserialize/UpdateHash.
 		if err := txMap.AddKnownNodeUnchecked(node.NodeData); err == nil {
 			added++
 		}
@@ -1029,8 +1005,6 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 	}
 }
 
-// deleteTxSetAcquire removes the partial acquire state for txSetID.
-// Used on completion, hard failure, and TTL sweep.
 func (r *Router) deleteTxSetAcquire(txSetID consensus.TxSetID) {
 	r.txSetAcquireMu.Lock()
 	delete(r.txSetAcquire, txSetID)
@@ -1694,7 +1668,7 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 	// InboundTransactions::gotData feeding the engine via gotTxSet
 	// (consensus-time only). Without this branch the engine never
 	// acquires peer tx sets, never builds disputes against them, and
-	// stays at propose_seq=0 — see #401 layer 3.
+	// stays at propose_seq=0 (#401).
 	if ld.InfoType == message.LedgerInfoTsCandidate {
 		r.handleTxSetData(ld)
 		return

@@ -202,25 +202,16 @@ func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Account.RegularKey = ""
 	}
 
-	// Mark password spent if this tx QUALIFIED for the free
-	// password-change discount (signed by master key on an account
-	// without lsfPasswordSpent set). Match rippled's
-	// SetRegularKey.cpp doApply: it sets lsfPasswordSpent based on
-	// "mFeeDue == 0" (the calculated minimum fee), NOT on the fee
-	// the user actually paid. Goxrpl was checking
-	// `s.GetCommon().Fee == "0"`, which mishandled the case where
-	// the user paid more than the minimum and broke account_hash
-	// parity at every SetRegularKey in the soak network.
+	// Set lsfPasswordSpent when the tx qualifies for the free
+	// password-change discount: signed by the master key. Rippled
+	// SetRegularKey.cpp doApply gates on mFeeDue == 0 (the calculated
+	// minimum fee), NOT the fee actually paid.
 	common := s.GetCommon()
 	signedWithMaster := false
 	if spk := common.SigningPubKey; spk != "" {
-		// Decode + validate prefix BEFORE deriving an address. Rippled
-		// runs publicKeyType() at PublicKey.cpp; anything that isn't
-		// a real {0x02, 0x03, 0xED, 0x04} key is rejected upstream.
-		// Without this guard, a 33-byte payload with an arbitrary
-		// first byte would be hex-encoded into a valid-looking
-		// address and could falsely qualify for the master-signer
-		// password-spent free-fee discount.
+		// publicKeyType() check (rippled PublicKey.cpp) before deriving
+		// an address — otherwise an arbitrary 33-byte payload could
+		// hex-encode into a valid-looking master address.
 		if spkBytes, decErr := hex.DecodeString(spk); decErr == nil && tx.IsValidPublicKey(spkBytes) {
 			if sigAddr, sigErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(spk); sigErr == nil && sigAddr == common.Account {
 				signedWithMaster = true

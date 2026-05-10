@@ -226,14 +226,9 @@ func signTransactionJSON(services *types.ServiceContainer, txJSON json.RawMessag
 		// Do NOT auto-fill LastLedgerSequence. Rippled's
 		// transactionPreProcessImpl (TransactionSign.cpp:409-491) only
 		// autofills Sequence / NetworkID / Fee / SigningPubKey /
-		// TxnSignature; LastLedgerSequence is left to the caller.
-		// Server-side auto-fill made the same client tx_json produce
-		// different signed bytes on goxrpl vs rippled (goxrpl added
-		// `201B<currentLedger+4>`, rippled didn't), which forked the
-		// network whenever a loadgen submitted the same intent to both
-		// implementations: each side computed a different tx hash for
-		// "the same" payment, the network saw two distinct txs, and
-		// consensus tx-sets diverged.
+		// TxnSignature; LastLedgerSequence is left to the caller, and
+		// adding it server-side produces different signed bytes for the
+		// same client tx_json.
 
 		// Auto-fill NetworkID if not present and network ID > 1024.
 		// Matches rippled's transactionPreProcessImpl() in TransactionSign.cpp:

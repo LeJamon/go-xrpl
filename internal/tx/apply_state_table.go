@@ -35,21 +35,12 @@ type TrackedEntry struct {
 	Current  []byte // Current state (nil for deletes after erase)
 }
 
-// ThreadedOwner records a thread-only modification to an SLE — one
-// where the only change to the SLE was the PreviousTxnID /
-// PreviousTxnLgrSeq pair being bumped to point at the current tx
-// (it owns / co-owns an SLE the tx mutated, but its own business
-// fields are unchanged).
-//
-// Mirrors rippled's `Mods` table at ApplyStateTable.cpp:584-633:
-// `getForMod` keeps thread-only owners OUT of items_ (which stays
-// Action::cache, skipped by the apply loop at :141-143) and into a
-// separate `mods` map. The metadata for these entries is exactly
-// {LedgerIndex, LedgerEntryType, PreviousTxnID, PreviousTxnLgrSeq}
-// — bare AffectedNode, no FinalFields, no PreviousFields.
-//
-// Persisting Updated re-applies the threaded SLE bytes to the base
-// view at Apply time so the next round sees the bumped prev fields.
+// ThreadedOwner: thread-only modification to an SLE (PreviousTxnID /
+// PreviousTxnLgrSeq bumped, business fields unchanged). Mirrors
+// rippled's `Mods` table at ApplyStateTable.cpp:584-633 — kept out of
+// items_ (Action::cache, skipped by apply loop :141-143) so the
+// emitted AffectedNode carries only {LedgerIndex, LedgerEntryType,
+// PreviousTxnID, PreviousTxnLgrSeq}, no FinalFields / PreviousFields.
 type ThreadedOwner struct {
 	EntryType            string
 	OldPreviousTxnID     [32]byte
@@ -408,20 +399,9 @@ func (t *ApplyStateTable) applyImpl(isDryRun bool) (*Metadata, error) {
 		}
 	}
 
-	// Phase 2b: emit bare AffectedNode entries for thread-only owners.
-	// Mirrors rippled's apply-loop tail (ApplyStateTable.cpp:269-274)
-	// where `newMod` (mods table) is rawReplace'd into the view; the
-	// matching meta entries were already populated by threadItem
-	// during the main loop. Goxrpl produces both halves here: the
-	// bare AffectedNode (no FinalFields / PreviousFields) and the
-	// base.Update of the threaded SLE bytes so the next round sees
-	// the bumped PreviousTxn fields.
+	// Thread-only owners: rippled ApplyStateTable.cpp:269-274 (mods
+	// table rawReplace'd into the view).
 	for key, owner := range t.threadOnlyOwners {
-		// Skip if items already emitted a node for this key — the
-		// threadOwners path keeps these mutually exclusive (entries
-		// promoted to Modify go through items_; only Action::cache
-		// owners enter threadOnlyOwners), but the guard makes the
-		// invariant explicit and survives future refactors.
 		if _, alreadyEmitted := t.items[key]; alreadyEmitted {
 			if t.items[key].Action != ActionCache {
 				continue
@@ -432,12 +412,7 @@ func (t *ApplyStateTable) applyImpl(isDryRun bool) (*Metadata, error) {
 			LedgerEntryType: owner.EntryType,
 			LedgerIndex:     strings.ToUpper(hex.EncodeToString(key[:])),
 		}
-		// PreviousTxnID / PreviousTxnLgrSeq carry the OLD values
-		// (the previous tx that touched this SLE), matching
-		// threadItem's `prevTxID` / `prevLgrID` outputs at rippled
-		// ApplyStateTable.cpp:570-571. The OMITTED FinalFields and
-		// PreviousFields are the rippled-faithful signal that this
-		// owner was thread-only.
+		// OLD prev fields, per rippled ApplyStateTable.cpp:570-571.
 		if owner.OldPreviousTxnID != ([32]byte{}) {
 			node.PreviousTxnID = strings.ToUpper(hex.EncodeToString(owner.OldPreviousTxnID[:]))
 			node.PreviousTxnLgrSeq = owner.OldPreviousTxnLgrSeq
@@ -526,19 +501,13 @@ func (t *ApplyStateTable) applyThreading() {
 	}
 }
 
-// threadOwners updates PreviousTxnID/PreviousTxnLgrSeq on owner accounts
-// of a given ledger entry. fixCheckThreading gates Check→Destination threading.
+// threadOwners updates PreviousTxnID/PreviousTxnLgrSeq on owner accounts.
+// fixCheckThreading gates Check→Destination threading.
 //
-// Owner SLEs that the tx didn't otherwise mutate get tracked in
-// threadOnlyOwners (NOT promoted to ActionModify in items_), mirroring
-// rippled's mods table at ApplyStateTable.cpp:584-633. Apply()'s main
-// loop emits a bare AffectedNode for those — only LedgerIndex,
-// LedgerEntryType, PreviousTxnID, PreviousTxnLgrSeq — matching
-// rippled's threadItem output for cached owners. Without this split,
-// thread-only owners would emit a full FinalFields block (Balance,
-// Sequence, OwnerCount, Flags, …) and diverge transaction_hash from
-// rippled the moment any TrustSet / Offer / non-XRP Payment exercises
-// issuer threading.
+// Owner SLEs the tx didn't otherwise mutate go into threadOnlyOwners
+// (NOT promoted to ActionModify), mirroring rippled's mods table at
+// ApplyStateTable.cpp:584-633 — the emitted AffectedNode is bare
+// (no FinalFields / PreviousFields).
 func (t *ApplyStateTable) threadOwners(data []byte, entryType string, fixCheckThreading bool) {
 	if data == nil {
 		return
@@ -553,13 +522,8 @@ func (t *ApplyStateTable) threadOwners(data []byte, entryType string, fixCheckTh
 			if entry.Action == ActionErase {
 				continue // Don't thread deleted accounts
 			}
-			// If the entry is already going to be emitted as
-			// Insert / Modify / (Erase handled above), the threaded
-			// PreviousTxn fields go into its FinalFields/NewFields
-			// naturally — just update Current. This mirrors rippled's
-			// getForMod returning items_[].second when Action != cache
-			// (ApplyStateTable.cpp:614-615), so threadItem mutates the
-			// SLE in items_ directly.
+			// Non-cache entry: thread fields flow into its own
+			// FinalFields/NewFields (rippled ApplyStateTable.cpp:614-615).
 			if entry.Action != ActionCache {
 				_, _, newData, changed := threadItem(entry.Current, t.txHash, t.txSeq)
 				if changed {
@@ -568,11 +532,8 @@ func (t *ApplyStateTable) threadOwners(data []byte, entryType string, fixCheckTh
 				continue
 			}
 
-			// ActionCache: only-being-threaded owner. Don't promote
-			// to ActionModify (that would emit a full FinalFields
-			// block). Track in threadOnlyOwners so Apply() emits a
-			// bare AffectedNode with just PreviousTxnID /
-			// PreviousTxnLgrSeq, mirroring rippled's mods table.
+			// ActionCache: route into threadOnlyOwners (bare AffectedNode)
+			// rather than promoting to ActionModify.
 			oldPrev, oldPrevSeq, newData, changed := threadItem(entry.Current, t.txHash, t.txSeq)
 			if !changed {
 				continue
@@ -584,10 +545,9 @@ func (t *ApplyStateTable) threadOwners(data []byte, entryType string, fixCheckTh
 				Updated:              newData,
 			}
 		} else {
-			// Read from base. Owner not previously touched by this tx
-			// → goes straight into threadOnlyOwners as the bare-
-			// AffectedNode case (matches rippled's getForMod fall-
-			// through that adds to mods, ApplyStateTable.cpp:621-632).
+			// Owner not previously touched by this tx → straight into
+			// threadOnlyOwners (rippled ApplyStateTable.cpp:621-632
+			// getForMod fall-through adds to mods).
 			ownerData, err := t.base.Read(ownerKey)
 			if err != nil || ownerData == nil {
 				continue // Owner doesn't exist, skip
@@ -757,35 +717,12 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 		}
 	}
 
-	// FinalFields: emit ALL sMD_Always|sMD_ChangeNew fields, independently
-	// of whether PreviousFields is empty. Mirrors rippled
-	// ApplyStateTable.cpp:222-229:
-	//
-	//     STObject finals(sfFinalFields);
-	//     for (auto const& obj : *curNode)
-	//         if (obj.getFName().shouldMeta(sMD_Always | sMD_ChangeNew))
-	//             finals.emplace_back(obj);
-	//     if (!finals.empty())
-	//         meta.getAffectedNode(item.first).emplace_back(std::move(finals));
-	//
-	// In rippled, prevs (lines 209-220) and finals (222-229) are built
-	// INDEPENDENTLY — each only suppresses its own emission when empty.
-	// There is no `if (!prevs.empty())` gate around finals.
-	//
-	// A prior gate `hasBusinessChange := len(node.PreviousFields) > 0`
-	// suppressed FinalFields whenever prevs was empty, on the mistaken
-	// reading that "no business change" means "no FinalFields needed".
-	// That misses the common thread-touch case: an AccountRoot owns a
-	// modified RippleState, none of its own business fields changed,
-	// but `threadItem` (rippled ApplyStateTable.cpp:557-572) writes
-	// sfPreviousTxnID/sfPreviousTxnLgrSeq directly onto the AffectedNode
-	// (peer to FinalFields/PreviousFields, NOT inside PreviousFields).
-	// Rippled emits a full FinalFields block — Balance, Sequence,
-	// OwnerCount, Flags, etc. via sMD_ChangeNew. Goxrpl was emitting
-	// only sMD_Always (basically just RootIndex). Different metadata
-	// shape → different per-tx meta blob → different transaction_hash
-	// and account_hash. This is the divergence class the bootstrap
-	// fork at seq=6 was the symptom of.
+	// FinalFields: emit ALL sMD_Always|sMD_ChangeNew fields independently
+	// of whether PreviousFields is empty. Rippled ApplyStateTable.cpp:222-229
+	// builds prevs (lines 209-220) and finals separately — no
+	// `if (!prevs.empty())` gate around finals. Thread-touched owners
+	// (e.g. AccountRoot owning a modified RippleState) leave prevs empty
+	// but still need the full FinalFields block.
 	for name, currValue := range currFields {
 		if shouldIncludeInFinalFields(name) {
 			node.FinalFields[name] = currValue

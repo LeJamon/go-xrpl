@@ -1508,18 +1508,11 @@ type WireNode struct {
 	Data   []byte
 }
 
-// WalkWireNodes performs a pre-order traversal of the tree and returns
-// every node serialized for the wire (root first, then descendants).
-// Each node carries a 33-byte NodeID matching rippled's
-// SHAMapNodeID::getRawString — root is 33 zero bytes, child NodeIDs
-// extend their parent's path by one nibble per level.
-//
-// Used by tests that need to drive a peer-side `handleTxSetData`
-// flow with the same wire format rippled emits. Order matters at the
-// receiver: the root must arrive before any descendant whose
-// placement depends on it. Pre-order satisfies that.
-//
-// Returns an empty slice when the tree is empty.
+// WalkWireNodes performs a pre-order traversal and returns every node
+// serialized for the wire. Each NodeID is 33 bytes matching rippled's
+// SHAMapNodeID::getRawString (root = 33 zero bytes; children extend
+// the parent path by one nibble per level). Pre-order ensures the
+// root arrives before any descendant whose placement depends on it.
 func (sm *SHAMap) WalkWireNodes() ([]WireNode, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -1535,10 +1528,6 @@ func (sm *SHAMap) WalkWireNodes() ([]WireNode, error) {
 	return out, nil
 }
 
-// walkWireNodesRec is the recursive helper for WalkWireNodes. path /
-// depth track the current position in the tree; the NodeID emitted is
-// (path, depth) as a 33-byte buffer (zero-padded path beyond depth
-// nibbles).
 func walkWireNodesRec(node Node, path [32]byte, depth int, out *[]WireNode) error {
 	if node == nil {
 		return nil
@@ -1563,8 +1552,8 @@ func walkWireNodesRec(node Node, path [32]byte, depth int, out *[]WireNode) erro
 		if child == nil {
 			continue
 		}
-		// Set the branch nibble at position (depth) — high nibble of
-		// path[depth/2] when depth even, low nibble when depth odd.
+		// Branch nibble at position depth: high nibble of path[depth/2]
+		// when depth even, low nibble when odd.
 		childPath := path
 		bytePos := depth / 2
 		if depth%2 == 0 {

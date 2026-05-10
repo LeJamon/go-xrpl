@@ -115,15 +115,11 @@ func affectedNodeToRippledFormat(n AffectedNode) (map[string]any, error) {
 		inner["PreviousFields"] = n.PreviousFields
 	}
 
-	// PreviousTxnID + PreviousTxnLgrSeq — present-or-absent as a
-	// PAIR. Rippled writes them together inside one
-	// `if (!prevTxID.isZero())` guard at ApplyStateTable.cpp:560-572,
-	// so independent gates here would let one of the two leak when
-	// the other is correctly omitted. Couple the predicates: emit
-	// both when PreviousTxnID is a real (non-zero) hash, omit both
-	// otherwise. Genesis case: master has no prior tx → PreviousTxnID
-	// stays default zero → both fields stay off the wire (33+5 bytes
-	// saved per meta blob touching genesis).
+	// PreviousTxnID + PreviousTxnLgrSeq: emit as a PAIR, both or
+	// neither. Rippled writes them together inside one
+	// `if (!prevTxID.isZero())` guard (ApplyStateTable.cpp:560-572);
+	// independent gates would leak one of the two on genesis-touching
+	// txs where the master has no prior tx.
 	prevTxnIDPresent := n.PreviousTxnID != "" && !isZeroHashHex(n.PreviousTxnID)
 	if prevTxnIDPresent {
 		inner["PreviousTxnID"] = n.PreviousTxnID
@@ -141,11 +137,6 @@ func affectedNodeToRippledFormat(n AffectedNode) (map[string]any, error) {
 	}, nil
 }
 
-// isZeroHashHex reports whether s is the canonical 64-character
-// hex string for the all-zero 256-bit hash. Accepts both upper and
-// lower case; tolerates the empty string. Used by metadata
-// serialization to mirror rippled's "omit defaulted optional fields"
-// behavior — see affectedNodeToRippledFormat.
 func isZeroHashHex(s string) bool {
 	if len(s) != 64 {
 		return false

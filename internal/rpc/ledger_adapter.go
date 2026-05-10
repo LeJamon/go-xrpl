@@ -57,8 +57,7 @@ func (a *LedgerServiceAdapter) AcceptLedger(ctx context.Context) (uint32, error)
 	return a.svc.AcceptLedger(ctx)
 }
 
-// AcceptLedgerAt is AcceptLedger with an explicit close_time. Used by
-// differential / replay tests.
+// AcceptLedgerAt is AcceptLedger with an explicit close_time.
 func (a *LedgerServiceAdapter) AcceptLedgerAt(ctx context.Context, closeTime time.Time) (uint32, error) {
 	return a.svc.AcceptLedgerAt(ctx, closeTime)
 }
@@ -222,27 +221,16 @@ func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte, txBlobHex ...str
 		}, nil
 	}
 
-	// Relay the transaction to P2P peers when rippled would.
-	// Mirrors NetworkOPs.cpp:1685-1689:
+	// Relay only what rippled relays. Mirrors NetworkOPs.cpp:1685-1689:
 	//
 	//     (e.applied || ((mMode != FULL) && !failType && e.local) ||
 	//      e.result == terQUEUED) && !enforceFailHard
 	//
 	// where `e.applied = isTesSuccess(ret.ter) || isTecClaim(ret.ter)`
-	// (apply.cpp:196,206). So the on-the-wire set is exactly:
-	//
-	//   tesSUCCESS, tec*, terQUEUED.
-	//
-	// Every OTHER ter* code (terPRE_SEQ, terNO_ACCOUNT, terPRE_TICKET,
-	// terRETRY, …) is HELD locally by rippled (addHeldTransaction)
-	// and explicitly NOT relayed — peers would just re-fail with the
-	// same retry code, polluting their pools.
-	//
-	// PRIOR bug: an earlier patch widened this to "everything except
-	// tem/tef/tel" on the (incorrect) premise that all ter* should
-	// flow on the wire so peers could include them. That over-relayed
-	// retry codes that rippled holds locally; this commit narrows
-	// back to the rippled rule.
+	// (apply.cpp:196,206). On-the-wire set: tesSUCCESS, tec*, terQUEUED.
+	// All other ter* codes are held locally (addHeldTransaction) and
+	// must NOT be relayed — peers would just re-fail with the same
+	// retry code.
 	broadcast := false
 	relayable := result.Applied || result.Result == tx.TerQUEUED
 	if relayable && rawBlob != nil && a.txBroadcaster != nil {

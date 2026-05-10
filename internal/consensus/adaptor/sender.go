@@ -117,7 +117,7 @@ func (s *OverlaySender) UpdateRelaySlot(validatorKey []byte, originPeer uint64, 
 // Without the root node ID + query_depth, rippled silently drops the
 // request and never sends back the tx-set, so goxrpl never acquires
 // peer tx-sets, never creates per-tx disputes, and the avalanche
-// resolution can't converge across goxrpl/rippled. Issue #401 layer 3.
+// resolution can't converge across goxrpl/rippled (#401).
 //
 // SHAMapNodeID root encoding (rippled SHAMapNodeID::getRawString):
 //   33 bytes total = 32 bytes path (zero for root) + 1 byte depth (0).

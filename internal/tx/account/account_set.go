@@ -17,9 +17,6 @@ func isZeroHash256(s string) bool {
 	return strings.Trim(s, "0") == ""
 }
 
-// isValidPublicKey delegates to the shared tx.IsValidPublicKey helper
-// so every site that compares a derived address against an account ID
-// uses the same publicKeyType() check (rippled PublicKey.cpp).
 func isValidPublicKey(key []byte) bool {
 	return tx.IsValidPublicKey(key)
 }

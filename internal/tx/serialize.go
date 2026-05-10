@@ -83,17 +83,10 @@ func MetadataToMap(meta *Metadata) map[string]any {
 			innerNode["LedgerEntryType"] = node.LedgerEntryType
 			innerNode["LedgerIndex"] = node.LedgerIndex
 
-			// PreviousTxnID + PreviousTxnLgrSeq for ModifiedNode are
-			// emitted as a PAIR. Rippled writes them together inside
-			// one `if (!prevTxID.isZero())` guard
-			// (ApplyStateTable.cpp:560-572). Independent gates here
-			// would let one of the two leak when the other is
-			// correctly omitted — couple the predicates: emit both
-			// when PreviousTxnID is a real (non-zero) hash, omit both
-			// otherwise. Genesis-touching txs leave PreviousTxnID
-			// zero, so both fields stay off the wire (33+5 bytes
-			// saved per leaf). For DeletedNode these fields appear
-			// inside FinalFields (via sMD_DeleteFinal), not at the
+			// PreviousTxnID + PreviousTxnLgrSeq for ModifiedNode: emit
+			// as a PAIR, both or neither (rippled ApplyStateTable.cpp:560-572
+			// single `if (!prevTxID.isZero())` guard). DeletedNode puts
+			// these inside FinalFields via sMD_DeleteFinal, not at the
 			// node level — hence the NodeType guard.
 			if node.NodeType == "ModifiedNode" && node.PreviousTxnID != "" && !isZeroHashHex(node.PreviousTxnID) {
 				innerNode["PreviousTxnID"] = node.PreviousTxnID

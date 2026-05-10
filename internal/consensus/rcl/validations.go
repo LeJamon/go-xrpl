@@ -570,18 +570,12 @@ func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int
 	// only the LATEST validation per node — once a validator advances
 	// past ledgerID and validates seq+1, the byNode entry overwrites
 	// and ProposersValidated(ledgerID) returns 0 even though every
-	// validator did validate it. Rippled's adaptor_.proposersValidated
-	// reads byLedger (RCLValidations / LedgerMaster.cpp), which keeps
-	// the per-ledger entry alive for the validation-archive horizon.
-	//
-	// The bug surfaced in shouldCloseLedger: the peer-pressure short
-	// circuit (proposersClosed + proposersValidated > prevProposers/2)
-	// uses this count to skip LedgerMinClose=1s when peers have
-	// already moved on. With the byNode read, the short-circuit never
-	// fired once peers ran one round ahead of us, so every open phase
-	// burned the full 1s minimum even though shouldCloseLedger should
-	// have closed immediately. That 1s is exactly the gap that keeps
-	// goxrpl one round behind rippled in soak.
+	// validator did validate it. shouldCloseLedger's peer-pressure
+	// short-circuit relies on this count to skip LedgerMinClose when
+	// peers have moved on; a byNode read would silently disable that
+	// path. Rippled's adaptor_.proposersValidated reads byLedger
+	// (RCLValidations / LedgerMaster.cpp), which keeps the per-ledger
+	// entry alive for the validation-archive horizon.
 	perLedger, ok := vt.validations[ledgerID]
 	if !ok {
 		return 0
@@ -730,7 +724,6 @@ func (vt *ValidationTracker) PreferredFromValidations(minSeq uint32) (consensus.
 	return bestID, best.seq, true
 }
 
-// lexLessLgrID is a deterministic tie-breaker for PreferredFromValidations.
 func lexLessLgrID(a, b consensus.LedgerID) bool {
 	for i := 0; i < len(a); i++ {
 		if a[i] != b[i] {

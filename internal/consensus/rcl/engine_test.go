@@ -147,14 +147,11 @@ type mockAdaptor struct {
 	standalone bool
 
 	// proposableOverride lets a test pin a specific filtered set
-	// for GetProposableTxs to return, distinct from the raw
-	// pending pool, so closeLedger's wiring (proposing path uses
-	// the FILTERED set) can be asserted directly. nil → fall
-	// through to GetPendingTxs.
+	// for GetProposableTxs to return, distinct from the raw pending
+	// pool, so closeLedger's wiring (proposing path uses the filtered
+	// set) can be asserted directly. nil falls through to GetPendingTxs.
 	proposableOverride [][]byte
-	// proposableCalled counts GetProposableTxs invocations so the
-	// gate-on-proposing-or-standalone behavior is observable.
-	proposableCalled int
+	proposableCalled   int
 }
 
 func newMockAdaptor() *mockAdaptor {
@@ -323,9 +320,8 @@ func (a *mockAdaptor) GetPendingTxs() [][]byte {
 // override is wired (proposableOverride). Otherwise falls through to
 // the raw pending pool — matching what a real adaptor returns when
 // the LedgerService can't filter (no parent / no apply context). The
-// override lets tests assert that closeLedger uses the FILTERED set
-// (not the raw pool) when proposing — pinning the wiring of commit
-// f61199f.
+// override lets tests assert that closeLedger uses the filtered set
+// (not the raw pool) when proposing.
 func (a *mockAdaptor) GetProposableTxs(_ consensus.Ledger) [][]byte {
 	a.mu.RLock()
 	override := a.proposableOverride
@@ -2321,18 +2317,15 @@ func TestEngine_IsProposing_LockFreeWhileWriterHoldsMu(t *testing.T) {
 
 // TestAcceptLedger_NoCloseTimeConsensus_DeterministicFallback pins
 // the issue #401 root-cause fix: when close-time consensus FAILS,
-// acceptLedger must use parentCloseTime + 1s — DETERMINISTICALLY —
+// acceptLedger must use parentCloseTime + 1s — deterministically —
 // for the new ledger's close time. Mirrors rippled
-// RCLConsensus.cpp:481-488.
+// RCLConsensus.cpp:481-488. Without the deterministic fallback, the
+// no-consensus path falls through to CloseTimes.Self (the local
+// clock), so each node hashes a different ledger header for the
+// same seq, every locally-emitted validation disagrees with the
+// network's accepted hash, and quorum becomes unreachable.
 //
-// Before the fix, the no-consensus path fell through to
-// determineCloseTime → CloseTimes.Self (the local clock), so each
-// node hashed a different ledger header for the same seq. That
-// drove every subsequent locally-emitted validation onto a hash
-// that disagreed with the network's accepted hash, peers' Byzantine
-// Behavior Detector flagged us, and quorum became unreachable.
-//
-// We pin two properties:
+// Pins two properties:
 //  1. With haveCloseTimeConsensus=false and a wildly skewed local
 //     clock, the produced ledger's close time is exactly
 //     parentCloseTime + 1s — independent of the local clock.
@@ -2411,11 +2404,9 @@ func TestAcceptLedger_NoCloseTimeConsensus_DeterministicFallback(t *testing.T) {
 // so isCompatible would return false → no validation. But the build
 // itself proceeds, the round transitions out of Establish, and
 // auto-advance starts the next round so checkLedger gets a chance
-// to detect the mismatch and trigger handleWrongLedger.
-//
-// A previous early-return suppressed the entire acceptLedger call
-// in this case, leaving phase==Establish forever and wedging the
-// engine — a regression of #401 in the opposite direction.
+// to detect the mismatch and trigger handleWrongLedger. Suppressing
+// the entire acceptLedger call here would wedge the engine in
+// phase==Establish (#401, opposite-direction regression).
 //
 // Properties pinned:
 //  1. No validation broadcast (Frankenstein-hash safety preserved).
@@ -2732,24 +2723,22 @@ func TestAcceptLedger_ConsensusFailSuppressesValidation(t *testing.T) {
 	}
 }
 
-// TestCloseLedger_ProposingUsesFilteredTxSet pins commit f61199f's
-// wiring: when the engine is in ModeProposing (or standalone),
+// TestCloseLedger_ProposingUsesFilteredTxSet pins the open-ledger
+// filter wiring: when the engine is in ModeProposing (or standalone),
 // closeLedger MUST source its tx set from
 // adaptor.GetProposableTxs(prev) — the rippled-faithful
-// open-ledger-filtered set — and NOT from the raw GetPendingTxs()
-// pool. The filter is what keeps goxrpl from proposing a SUPERSET
-// of rippled's set (conflicts, tef/tem/tel, fee-escalated txs);
-// regressing back to GetPendingTxs would re-introduce the bootstrap
-// fork class fixed in #402.
+// open-ledger-filtered set (RCLConsensus.cpp:333-349) — and NOT from
+// the raw GetPendingTxs() pool. Regressing back to GetPendingTxs
+// would re-introduce the bootstrap fork class fixed in #401.
 //
 // Two arms:
 //
 //  1. Proposing → GetProposableTxs invoked at least once.
-//  2. Non-proposing (e.g. ModeWrongLedger): commit 2416e42 gates
-//     the filter to skip the expensive multi-pass apply when the
-//     result has no observable network effect; raw GetPendingTxs is
-//     used instead. Pinned so a future widening doesn't silently
-//     reintroduce the per-round filter cost in observer modes.
+//  2. Non-proposing (e.g. ModeWrongLedger): the filter is gated to
+//     proposing/standalone, skipping the expensive multi-pass apply
+//     when the result has no observable network effect. Pinned so a
+//     future widening doesn't silently reintroduce the per-round
+//     filter cost in observer modes.
 func TestCloseLedger_ProposingUsesFilteredTxSet(t *testing.T) {
 	t.Run("proposing-uses-filter", func(t *testing.T) {
 		adaptor := newMockAdaptor()
@@ -2780,7 +2769,7 @@ func TestCloseLedger_ProposingUsesFilteredTxSet(t *testing.T) {
 		if got == 0 {
 			t.Fatalf("ModeProposing closeLedger must call GetProposableTxs " +
 				"(filter the open-ledger-applicable subset). Got 0 calls — " +
-				"would propose the raw pending pool, regressing #402's H4 fix.")
+				"would propose the raw pending pool, regressing the #401 fix.")
 		}
 	})
 
@@ -2812,10 +2801,10 @@ func TestCloseLedger_ProposingUsesFilteredTxSet(t *testing.T) {
 		adaptor.mu.RUnlock()
 		if got != 0 {
 			t.Fatalf("ModeWrongLedger closeLedger must NOT call "+
-				"GetProposableTxs (commit 2416e42 gates the filter "+
-				"to proposing/standalone). Got %d calls — would burn "+
-				"the per-round multi-pass apply cost on a position "+
-				"we won't broadcast.", got)
+				"GetProposableTxs (filter is gated to proposing or "+
+				"standalone). Got %d calls — would burn the per-round "+
+				"multi-pass apply cost on a position we won't "+
+				"broadcast.", got)
 		}
 	})
 }

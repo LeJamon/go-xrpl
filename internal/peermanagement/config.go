@@ -20,12 +20,7 @@ const (
 
 	DefaultEventBufferSize   = 256
 	DefaultMessageBufferSize = 256
-	// DefaultSendBufferSize bounds the outbound queue per peer.
-	// Drops past the cap are no longer silent — Peer.Send returns
-	// ErrSendBufferFull (a distinct sentinel) and Overlay.Broadcast
-	// surfaces the drop at WARN, so capacity issues are correlatable
-	// with consensus stalls.
-	DefaultSendBufferSize = 64
+	DefaultSendBufferSize    = 64
 
 	DefaultUserAgent = "goXRPL/0.1.0"
 )
