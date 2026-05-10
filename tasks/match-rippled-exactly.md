@@ -229,3 +229,51 @@ Conclusion: H4 fix is safe to keep. Next steps in priority order:
 3. If still wedging, drill into round-by-round our-position vs
    round-summary diffs to identify H2/H5 issues.
 
+### 2026-05-10 — ALL-5 UNL DEADLOCK BROKEN
+
+After H4 fix landed, re-enabled all-5 UNL in topology.star (with
+corrected `(N*8 + 9) // 10` quorum formula) and redeployed. Result:
+
+```
+goxrpl-0   validated_seq=78  state=proposing  peers=4
+goxrpl-1   validated_seq=78  state=proposing  peers=4
+rippled-0  validated_seq=78  state=proposing  peers=4
+rippled-1  validated_seq=78  state=proposing  peers=4
+rippled-2  validated_seq=78  state=proposing  peers=4
+```
+
+3-min log census on goxrpl-0:
+- `event=wrong-lcl`:           **0** (was ~18/min before — wedge gone)
+- `event=switch-lcl`:          **0**
+- `event=movedOn`:             **0** (was every round before)
+- `Consensus mode changed`:    **1** (just initial transition)
+- `event=our-position`:        58 (full pace, ~19/min)
+- `event=round-summary`:       58 (every proposal produces a build)
+- `event=validate-emit`:       60 (goxrpl is actively validating)
+
+The UNL-mode structural deadlock is RESOLVED. Goxrpl proposes,
+validates, contributes to rippled's quorum, and the chain advances at
+network pace — exactly what observer-validator did, but now goxrpl is
+in the trusted set (quorum=4 of 5 requires goxrpl's vote).
+
+Cause-and-effect: with all-5 UNL, rippled's quorum=4 needs goxrpl's
+validation. Pre-H4, goxrpl proposed a SUPERSET of rippled's tx-set
+(unfiltered relay pool), goxrpl's local hash diverged from peers'
+locally-computed hash, peer proposals referenced a parent goxrpl
+didn't have, checkLedger flipped goxrpl to wrongLedger,
+sendValidation gated off, no validation emitted, deadlock. Post-H4,
+goxrpl proposes the same filtered set rippled does, hashes converge,
+no parent mismatch, sendValidation fires every round.
+
+**Side findings (not blocking):**
+- Some `engine rejected validation: invalid validation signature` warnings
+  for stray peer-3 validations. Not blocking the chain. Possibly stale
+  validations from previous enclaves with different keys.
+- Fuzz-soak still crashes early — (a) feeMultMax raised from 1000→10000,
+  (b) FundFromGenesis now accepts terQUEUED. Sidecar rebuild needed
+  before sustained-traffic tests.
+
+**Status: the original UNL-mode goal from the user is met.** Goxrpl
+operates as a real UNL validator alongside rippled in a 5-validator
+network, with quorum=4 (rippled's enforced), and no wedging.
+
