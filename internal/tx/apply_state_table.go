@@ -652,28 +652,38 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 		}
 	}
 
-	// FinalFields: rippled emits all sMD_Always|sMD_ChangeNew fields
-	// when ANY business field actually changed. When a node is only
-	// thread-touched (PreviousTxnID/Seq bumped to point at this tx but
-	// no business field content changed) rippled emits the
-	// ModifiedNode with no FinalFields/PreviousFields at all.
-	// `node.PreviousFields` is already gated on actual changes above,
-	// so its emptiness signals the thread-touch-only case.
-	hasBusinessChange := len(node.PreviousFields) > 0
-	if hasBusinessChange {
-		for name, currValue := range currFields {
-			if shouldIncludeInFinalFields(name) {
-				node.FinalFields[name] = currValue
-			}
-		}
-	} else {
-		// No PreviousFields content means no sMD_ChangeOrig field
-		// changed — but a sMD_Always field (like RootIndex) still
-		// goes in FinalFields unconditionally if it exists.
-		for name, currValue := range currFields {
-			if getFieldMetadata(name)&sMD_Always != 0 {
-				node.FinalFields[name] = currValue
-			}
+	// FinalFields: emit ALL sMD_Always|sMD_ChangeNew fields, independently
+	// of whether PreviousFields is empty. Mirrors rippled
+	// ApplyStateTable.cpp:222-229:
+	//
+	//     STObject finals(sfFinalFields);
+	//     for (auto const& obj : *curNode)
+	//         if (obj.getFName().shouldMeta(sMD_Always | sMD_ChangeNew))
+	//             finals.emplace_back(obj);
+	//     if (!finals.empty())
+	//         meta.getAffectedNode(item.first).emplace_back(std::move(finals));
+	//
+	// In rippled, prevs (lines 209-220) and finals (222-229) are built
+	// INDEPENDENTLY — each only suppresses its own emission when empty.
+	// There is no `if (!prevs.empty())` gate around finals.
+	//
+	// A prior gate `hasBusinessChange := len(node.PreviousFields) > 0`
+	// suppressed FinalFields whenever prevs was empty, on the mistaken
+	// reading that "no business change" means "no FinalFields needed".
+	// That misses the common thread-touch case: an AccountRoot owns a
+	// modified RippleState, none of its own business fields changed,
+	// but `threadItem` (rippled ApplyStateTable.cpp:557-572) writes
+	// sfPreviousTxnID/sfPreviousTxnLgrSeq directly onto the AffectedNode
+	// (peer to FinalFields/PreviousFields, NOT inside PreviousFields).
+	// Rippled emits a full FinalFields block — Balance, Sequence,
+	// OwnerCount, Flags, etc. via sMD_ChangeNew. Goxrpl was emitting
+	// only sMD_Always (basically just RootIndex). Different metadata
+	// shape → different per-tx meta blob → different transaction_hash
+	// and account_hash. This is the divergence class the bootstrap
+	// fork at seq=6 was the symptom of.
+	for name, currValue := range currFields {
+		if shouldIncludeInFinalFields(name) {
+			node.FinalFields[name] = currValue
 		}
 	}
 
