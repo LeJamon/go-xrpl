@@ -1818,16 +1818,46 @@ func (s *Service) SubmitHeldAdoption(ctx context.Context, h *header.LedgerHeader
 				res.Adopted = true
 				return res, nil
 			}
-			// Parent seq present but on a different fork. Stashing would
-			// create a never-draining entry (the real fork's parent-seq
-			// adopt is not expected to arrive at this node). Drop
-			// quietly so we don't leak memory on divergent-fork gossip.
-			s.logger.Warn("SubmitHeldAdoption dropping divergent-parent submission",
+			// Parent seq present but on a different fork. Mirror
+			// rippled's setFullLedger / fixMismatch / clearLedger
+			// pattern (LedgerMaster.cpp:849-862, 749-801): the
+			// inbound submission is the network's chain, and our
+			// local seq=N entry is stale. Drop the stale local
+			// entry so the held-adoption stash key is "free", then
+			// stash the new submission. The router will pick up
+			// res.Stashed=true and arm a parent acquisition for
+			// h.ParentHash; when that parent arrives the held
+			// entry cascades through adoptLedgerWithStateLocked,
+			// whose own fixMismatchLocked sweep will then walk
+			// further back to find the seam.
+			//
+			// PRIOR behaviour: the "Drop quietly so we don't leak
+			// memory on divergent-fork gossip" branch dropped the
+			// submission outright. That left our local stale chain
+			// in place forever — observed in the 9 May 2026 soak as
+			// goxrpl getting stuck at seq=187 after diverging from
+			// rippled. Rippled doesn't drop; it invalidates and
+			// re-acquires. The stash + parent-acquisition flow
+			// achieves the same recovery here, and the existing
+			// heldAdoptionTTL bounds the memory pressure if a
+			// truly malicious peer feeds us forks.
+			s.logger.Warn("SubmitHeldAdoption invalidating divergent-parent local entry",
 				"seq", h.LedgerIndex,
+				"parent_seq", parentSeq,
 				"parent_have", fmt.Sprintf("%x", parentHash[:8]),
 				"parent_want", fmt.Sprintf("%x", h.ParentHash[:8]),
 			)
-			return res, nil
+			delete(s.ledgerHistory, parentSeq)
+			// Also drop tx-index entries that resolved to the
+			// invalidated seq — same fix-mismatch hygiene the
+			// downstream sweep does.
+			for txHash, txSeq := range s.txIndex {
+				if txSeq == parentSeq {
+					delete(s.txIndex, txHash)
+					delete(s.txPositionIndex, txHash)
+				}
+			}
+			// Fall through to the stash path below.
 		}
 	}
 
