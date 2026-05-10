@@ -187,3 +187,45 @@ under heavy load this could become hot. The cleanup is a true
 incremental OpenLedger that applies on tx arrival and only rebuilds
 on LCL change — deferred until profiling shows it matters.
 
+### 2026-05-10 — H4 fix verified to NOT regress baseline
+
+Rebuilt `goxrpl:latest` with H4 fix (`docker build -t goxrpl:latest .`)
+and redeployed soak (`make soak`, rippled-only UNL config). Result:
+
+- All 5 nodes lockstep at `validated_seq=33+` and counting (rippled-only
+  UNL, the working observer-validator config).
+- Goxrpl-0 + goxrpl-1 in `state=proposing`, `complete=1-N` (full chain).
+- Diagnostic logs firing: 20 `event=round-summary` per minute on goxrpl-0,
+  matching the network's ~3s/round cadence.
+- Cross-checked seq=6 ledger across all 5 nodes: `ledger_hash`,
+  `account_hash`, `parent_hash`, `close_time`, `total_coins` ALL match.
+  Goxrpl is producing the same network-agreed hash via consensus.
+
+**Sub-finding (separate bug, not blocking):** goxrpl's `ledger` RPC
+returns `transaction_hash=0x000…000` for empty tx-set ledgers; rippled
+returns the actual SHAMap-empty root. The underlying ledger_hash
+matches across all 5 nodes, so the consensus state IS identical — only
+the JSON RPC display differs. To investigate separately.
+
+**Sub-finding (interesting, not blocking):** at seq=6, goxrpl proposed
+`tx_count=42` and locally built `tx_count=41` (hash=869bc6a8); the
+network agreed on EMPTY for seq=6 (hash=441DF5C7). Goxrpl's local
+build was discarded via the rippled-faithful validated-precedence
+guard (commit `6d73ac3`). This means: (a) the avalanche dispute
+mechanism flipped goxrpl from 42 txs to empty in time, OR (b) goxrpl
+validated empty after adopting peer position. Either way, the chain
+advanced cleanly. Worth a deeper look at our-position vs final ledger
+divergences when traffic resumes — could indicate the H4 filter is
+running per-validator-state rather than on a fully-shared open view.
+
+**Fuzz-soak crashed early** with docker daemon ping issue; only seq=6
+and seq=7 had real traffic before it died. To run the full UNL test we
+need fuzz-soak to recover — separate from the H4 work.
+
+Conclusion: H4 fix is safe to keep. Next steps in priority order:
+1. Restart / fix fuzz-soak to get sustained traffic.
+2. Re-enable all-5 UNL in topology.star and observe whether goxrpl now
+   participates without wedging (the original UNL-mode goal).
+3. If still wedging, drill into round-by-round our-position vs
+   round-summary diffs to identify H2/H5 issues.
+
