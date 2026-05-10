@@ -155,6 +155,16 @@ type Engine struct {
 	// Protected by e.mu (same lock as sendValidation's other state).
 	ourLastValidatedSeq uint32
 
+	// ourLastValidatedTime stamps when ourLastValidatedSeq was last
+	// bumped. Mirrors rippled's SeqEnforcer (Validations.h:118-128):
+	// after `validationSetExpires` of silence, the floor resets to 0
+	// so a node coming back from a long restart / network partition
+	// can validate ledgers at sequences below the pre-outage floor.
+	// Without this, a long crash + chain advance past us would
+	// permanently silence the validator (we'd refuse to validate
+	// because every catch-up ledger has seq <= our stale floor).
+	ourLastValidatedTime time.Time
+
 	// Stats
 	roundCount     uint64
 	consensusCount uint64
@@ -211,6 +221,13 @@ const (
 	avalancheLate                        // 70% threshold
 	avalancheStuck                       // 95% threshold
 )
+
+// validationSetExpires is the SeqEnforcer reset window. Mirrors
+// rippled ValidationParms::validationSET_EXPIRES (Validations.h:79).
+// After this much idle time the local seq floor resets to 0, allowing
+// a restarted / partitioned validator to come back online and validate
+// at sequences below its pre-outage floor.
+const validationSetExpires = 10 * time.Minute
 
 // Config holds RCL engine configuration.
 type Config struct {
@@ -1842,7 +1859,7 @@ func (e *Engine) phaseEstablish() {
 	// establish symptom the rest of #402 fights.
 	if e.prevLedger != nil && e.validationTracker != nil &&
 		roundTime > e.timing.LedgerMinConsensus {
-		finished := e.validationTracker.ProposersFinished(e.prevLedger.Seq())
+		finished := e.validationTracker.ProposersFinished(e.prevLedger)
 		currentProposers := len(e.proposals)
 
 		var fired bool
@@ -2394,7 +2411,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	consensusFail := result != consensus.ResultSuccess
 	wrongLCL := e.mode == consensus.ModeWrongLedger
 	isValidator := e.adaptor.IsValidator()
-	canValidate := newLedger.Seq() > e.ourLastValidatedSeq
+	canValidate := e.canValidateSeqLocked(newLedger.Seq())
 	willEmit := isValidator && !consensusFail && !wrongLCL && canValidate
 
 	// Greppable INFO log: validation gate decision. Lets us tell at a
@@ -2841,16 +2858,34 @@ func (e *Engine) determineCloseTime() time.Time {
 // validation). Partial validations are accepted by peers but don't
 // count toward quorum (LedgerMaster.cpp:886 filters Full=false out of
 // the trusted count).
+// canValidateSeqLocked reports whether `seq` is greater than the
+// SeqEnforcer floor, applying the rippled `validationSetExpires`
+// reset (Validations.h:118-128) before the comparison: if the
+// adaptor clock has advanced more than the expiry window past our
+// last bumped time, the floor resets to 0 so a long-restarted /
+// partitioned validator can come back online and validate at
+// sequences below its pre-outage floor.
+//
+// Caller must hold e.mu (write — this method may mutate
+// ourLastValidatedSeq via the expiry reset).
+func (e *Engine) canValidateSeqLocked(seq uint32) bool {
+	if !e.ourLastValidatedTime.IsZero() &&
+		e.adaptor.Now().Sub(e.ourLastValidatedTime) > validationSetExpires {
+		e.ourLastValidatedSeq = 0
+	}
+	return seq > e.ourLastValidatedSeq
+}
+
 func (e *Engine) sendValidation(ledger consensus.Ledger) {
 	// canValidateSeq guard. Mirrors rippled's per-node SeqEnforcer
-	// (Validations.h:625-665, canValidateSeq Validations.h:830): never
-	// emit a second validation for a seq we have already validated. A
-	// monotonically-increasing seq is the only one accepted; equal or
-	// lower silently drops. Defensive in-function check so callers
-	// (production gate AND direct test invocation) cannot bypass.
-	if ledger.Seq() <= e.ourLastValidatedSeq {
+	// (Validations.h:118-128, canValidateSeq Validations.h:830): never
+	// emit a second validation for a seq we have already validated.
+	// Defensive in-function check so callers (production gate AND
+	// direct test invocation) cannot bypass.
+	if !e.canValidateSeqLocked(ledger.Seq()) {
 		return
 	}
+	now := e.adaptor.Now()
 
 	nodeID, err := e.adaptor.GetValidatorKey()
 	if err != nil {
@@ -2985,7 +3020,10 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 	// "we've validated this seq" state at signing time rather than
 	// after broadcast. Mirrors rippled's handleNewValidation feeding
 	// the local Validations tracker before TMValidation goes out.
+	// Stamp the time too so the SeqEnforcer expiry can later reset
+	// the floor after a long silent period.
 	e.ourLastValidatedSeq = ledger.Seq()
+	e.ourLastValidatedTime = now
 
 	// Greppable INFO log: actual validation broadcast. Pin the seq, the
 	// hash we attest, and whether it's Full so we can correlate against

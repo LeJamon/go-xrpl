@@ -607,10 +607,54 @@ func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int
 // that can no longer reach consensus (peers stopped proposing for
 // our seq because they validated and moved on) instead of sitting
 // idle until the soft timeout fires.
-func (vt *ValidationTracker) ProposersFinished(prevSeq uint32) int {
+func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
+	if prev == nil {
+		return 0
+	}
+
+	// Trie fast path. Mirrors rippled's getNodesAfter at
+	// Validations.h:973-993:
+	//     return trie.branchSupport(ledger) - trie.tipSupport(ledger);
+	// branchSupport counts every validation whose chain passes through
+	// `prev` (including AT prev); tipSupport counts validations exactly
+	// AT prev; the difference is validations on a strict descendant —
+	// i.e. peers that have moved past prev to a chain extending it.
+	// Fork validations whose chain branches off prev's parent are NOT
+	// in branchSupport and so don't count.
+	vt.mu.RLock()
+	trie := vt.trie
+	ancestry := vt.ancestry
+	vt.mu.RUnlock()
+	if trie != nil && ancestry != nil {
+		if lgr, ok := ancestry.LedgerByID(prev.ID()); ok {
+			vt.mu.RLock()
+			current := vt.trie == trie
+			var branch, tip uint32
+			if current {
+				branch = trie.BranchSupport(lgr)
+				tip = trie.TipSupport(lgr)
+			}
+			vt.mu.RUnlock()
+			if current {
+				if branch <= tip {
+					return 0
+				}
+				return int(branch - tip)
+			}
+		}
+	}
+
+	// Fallback when trie or ancestry isn't wired for prev (typically a
+	// transient during boot or right after a chain switch). Counts on
+	// seq alone, which can over-count fork validations — caller must
+	// be tolerant of the early-MovedOn risk this implies. The risk is
+	// bounded because: (a) the fallback only fires when the trie
+	// hasn't seen prev yet, which is a narrow window, and (b) the
+	// MovedOn caller already gates on roundTime > LedgerMinConsensus.
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 	count := 0
+	prevSeq := prev.Seq()
 	for nodeID, v := range vt.byNode {
 		if !vt.trusted[nodeID] {
 			continue

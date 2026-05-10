@@ -2544,6 +2544,99 @@ func TestSendValidation_CanValidateSeq_DedupsSameAndOlderSeq(t *testing.T) {
 	}
 }
 
+// TestSendValidation_SeqEnforcerExpiresAfterIdle pins rippled's
+// SeqEnforcer reset semantics (Validations.h:118-128): after
+// validationSetExpires (10 minutes) of silence, the floor resets to
+// 0 so a long-restarted / partitioned validator can come back online
+// and validate at sequences below its pre-outage floor. Without the
+// reset, a node that crashed at high seq and rejoined when the chain
+// was further ahead but its FIRST candidate ledger was at a lower seq
+// (e.g. it switched to a shorter side-chain it could acquire faster)
+// would be permanently silenced — every catch-up ledger has seq <=
+// the stale floor, so canValidateSeqLocked rejects forever.
+func TestSendValidation_SeqEnforcerExpiresAfterIdle(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	baseTime := time.Unix(1_700_000_000, 0).UTC()
+	adaptor.mu.Lock()
+	adaptor.now = baseTime
+	adaptor.mu.Unlock()
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	// Emit at seq=500. Floor → 500.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xA1}, seq: 500})
+	engine.mu.Unlock()
+
+	// Without expiry: re-emitting at seq=300 is rejected (300 <= 500).
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xB2}, seq: 300})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	pre := append([]*consensus.Validation(nil), adaptor.validationsBroadcast...)
+	adaptor.mu.RUnlock()
+	if len(pre) != 1 {
+		t.Fatalf("pre-expiry: want one emission (seq=500), got %d", len(pre))
+	}
+
+	// Advance the clock past validationSetExpires. The next call must
+	// see the floor reset to 0 and accept seq=300.
+	adaptor.mu.Lock()
+	adaptor.now = baseTime.Add(validationSetExpires + time.Second)
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xC3}, seq: 300})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	post := append([]*consensus.Validation(nil), adaptor.validationsBroadcast...)
+	adaptor.mu.RUnlock()
+	if len(post) != 2 {
+		t.Fatalf("post-expiry: SeqEnforcer floor should have reset to 0, "+
+			"allowing seq=300 to emit (was rejected by stale floor=500); "+
+			"want 2 total emissions, got %d", len(post))
+	}
+	if post[1].LedgerSeq != 300 {
+		t.Fatalf("post-expiry: kept emission seq mismatch — got %d, want 300",
+			post[1].LedgerSeq)
+	}
+
+	// The new floor is 300. Re-emitting at seq=200 should still be
+	// rejected (the reset happened once at the expiry boundary, not
+	// continuously).
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xD4}, seq: 200})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	final := len(adaptor.validationsBroadcast)
+	adaptor.mu.RUnlock()
+	if final != 2 {
+		t.Fatalf("post-reset floor not re-armed: a seq below the new "+
+			"floor (300) was wrongly accepted; want 2 emissions, got %d",
+			final)
+	}
+}
+
 // TestAcceptLedger_ConsensusFailSuppressesValidation pins the issue
 // #401 fix at the production gate: acceptLedger must NOT emit a
 // validation when the round failed to converge. Mirrors rippled's
