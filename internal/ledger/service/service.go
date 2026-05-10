@@ -1406,8 +1406,38 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 
 	closedSeq := s.openLedger.Sequence()
 	closedLedgerHash := s.openLedger.Hash()
-	s.closedLedger = s.openLedger
-	s.ledgerHistory[closedSeq] = s.openLedger
+
+	// Mirror rippled's LedgerHistory::insert(ledger, validated)
+	// precedence rule (LedgerHistory.cpp:55-74): a validated ledger
+	// already at this seq beats a locally-built one. If we previously
+	// adopted a fully-validated peer ledger for closedSeq via
+	// SubmitHeldAdoption / SetValidatedLedger and our local consensus
+	// just produced a different hash for the same seq, the validated
+	// entry is the chain's authoritative answer — preserve it. Without
+	// this guard, the local-build path would overwrite ledgerHistory[seq]
+	// with our (wrong) hash; the engine's subsequent GetLedger lookup
+	// for the validated hash would then miss and the engine would
+	// wedge in WrongLedger waiting for a ledger we just deleted.
+	// Observed in 10 May 2026 soak: validated cabfcd48 adopted at
+	// 11:10:45, our local 2f2ed699 close at 11:10:46 overwrote, engine
+	// stuck at validated_seq=31 thereafter.
+	if existing, ok := s.ledgerHistory[closedSeq]; ok && existing.Hash() != closedLedgerHash && existing.IsValidated() {
+		existingHash := existing.Hash()
+		s.logger.Warn("local consensus close conflicts with validated ledger; preserving validated",
+			"seq", closedSeq,
+			"local_hash", fmt.Sprintf("%x", closedLedgerHash[:8]),
+			"validated_hash", fmt.Sprintf("%x", existingHash[:8]),
+		)
+		// Adopt the validated as our closed reference; do NOT
+		// overwrite ledgerHistory[seq]. Mirror rippled's behaviour
+		// where the local-built hash is recorded in
+		// m_consensus_validated for diagnostics but the by-seq index
+		// keeps pointing at the validated entry.
+		s.closedLedger = existing
+	} else {
+		s.closedLedger = s.openLedger
+		s.ledgerHistory[closedSeq] = s.openLedger
+	}
 
 	// Drain any validation that arrived before this close (validation
 	// tracker leading the consensus close). Fail-safe on expired/mismatch.
