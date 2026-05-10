@@ -107,4 +107,49 @@ For whichever hypothesis the Phase 0 evidence points to:
 
 ## Working notes log
 
-Append findings here as the work progresses.
+### 2026-05-10 — Phase 0 instrumentation landed (commit 1d9f20f)
+
+Added two structured per-round log lines:
+- `event=our-position` in `engine.closeLedger`: prev / tx_set_id / tx_count / close_time / mode
+- `event=round-summary` in `service.AcceptConsensusResult`: seq / hash / parent_hash / close_time / close_time_correct / close_flags / state_root / tx_root / total_drops / canonical tx_hashes
+
+These give us the raw evidence needed to compare goxrpl-vs-rippled per-round inputs/outputs once the next soak runs.
+
+### 2026-05-10 — Strong H4 candidate found (open-ledger filter)
+
+Side-by-side reading of rippled's `RCLConsensus::Adaptor::onClose` (RCLConsensus.cpp:317-405) vs goxrpl's `Engine.closeLedger` (engine.go:1582):
+
+**Rippled** (in this order):
+1. `ledgerMaster_.applyHeldTransactions()` — re-applies ter/retry txs
+2. `setBuildingLedger(prev_seq + 1)` — prevents acquiring the ledger we're building
+3. `auto initialLedger = app_.openLedger().current()` — snapshot of OPEN LEDGER (txs successfully applied to a working copy of LCL)
+4. Iterate `initialLedger->txs` to build initial SHAMap — only txs in the **applied open ledger** are proposed
+5. Inject pseudo-txs (flag/voting)
+6. Snapshot, propose, censorship detector
+
+**Goxrpl** (in this order):
+1. `txs := e.adaptor.GetPendingTxs()` — raw relay pool, no open-ledger filter
+2. Inject pseudo-txs (flag/voting)
+3. `BuildTxSet(txs)`
+4. Propose
+
+**Why this matters:** rippled's `openLedger` is the result of *incrementally applying* valid txs to a working LCL copy. A tx that fails to apply (conflicts, fee escalation, tef/tem) is NOT in `openLedger->txs`. Goxrpl's `pendingTxs` is just `map[txID][]byte` — every tx the relay accepted, with no apply-time filtering.
+
+Concrete consequences when goxrpl is in a UNL alongside rippled:
+- Two txs from the same account at the same Sequence: rippled keeps the first one applied to open, drops the second; goxrpl proposes both.
+- Fee escalation under load: rippled excludes low-fee txs from open; goxrpl includes them.
+- ter/retry txs: rippled's `applyHeldTransactions` re-applies them in priority order before snapshot; goxrpl has no equivalent.
+
+Result: goxrpl's initial position is a SUPERSET of rippled's. The dispute mechanism *should* converge them via avalanche during establish, but only if there's enough establish time. Under 4-5s rounds with 5+ peer positions, even small position deltas can prevent timely convergence — and goxrpl ends up running BuildLedger with whatever set wins, which may be different than rippled's, producing a different `transaction_hash` / `account_hash`.
+
+**Action:** the proper fix is to introduce an "open ledger" abstraction in goxrpl's adaptor, parallel to rippled's `OpenLedger`. It maintains an applied-tx working copy of the LCL; pending txs are streamed through it via `apply` and only those that succeed (success or tec under retry) end up in `openLedger->txs`. `closeLedger` then iterates *that* set, not the raw relay pool.
+
+This is a substantial change (likely 1–2 weeks):
+- New type/file: `internal/consensus/adaptor/openledger.go`
+- Lifecycle: rebuild on every accepted ledger (LCL change), apply pending txs in arrival/canonical order
+- Wire `Engine.closeLedger` to source from open-ledger snapshot, not pending pool
+- `AddPendingTx` becomes "try to apply to open-ledger; on fail, hold or drop"
+- `applyHeldTransactions()` equivalent on round start
+
+This is now the leading candidate for the next code change. Defer until soak diagnostics confirm position divergence is the real failure mode (vs build-path determinism — already proved correct in standalone).
+
