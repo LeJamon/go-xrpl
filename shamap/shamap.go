@@ -1498,3 +1498,83 @@ func (sm *SHAMap) collectAllKeysExceptUnsafe(node Node, exceptKey Key) ([]Key, e
 
 	return filteredKeys, nil
 }
+
+// WireNode is a node ready for wire transmission via TMLedgerData.
+// NodeID is the SHAMap path-based identifier (33 bytes: 32 path + 1
+// depth) used by the receiver to place the node in the partial tree.
+// Data is the node's `SerializeForWire()` output.
+type WireNode struct {
+	NodeID []byte
+	Data   []byte
+}
+
+// WalkWireNodes performs a pre-order traversal of the tree and returns
+// every node serialized for the wire (root first, then descendants).
+// Each node carries a 33-byte NodeID matching rippled's
+// SHAMapNodeID::getRawString — root is 33 zero bytes, child NodeIDs
+// extend their parent's path by one nibble per level.
+//
+// Used by tests that need to drive a peer-side `handleTxSetData`
+// flow with the same wire format rippled emits. Order matters at the
+// receiver: the root must arrive before any descendant whose
+// placement depends on it. Pre-order satisfies that.
+//
+// Returns an empty slice when the tree is empty.
+func (sm *SHAMap) WalkWireNodes() ([]WireNode, error) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	if sm.root == nil {
+		return nil, nil
+	}
+
+	var out []WireNode
+	if err := walkWireNodesRec(sm.root, [32]byte{}, 0, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// walkWireNodesRec is the recursive helper for WalkWireNodes. path /
+// depth track the current position in the tree; the NodeID emitted is
+// (path, depth) as a 33-byte buffer (zero-padded path beyond depth
+// nibbles).
+func walkWireNodesRec(node Node, path [32]byte, depth int, out *[]WireNode) error {
+	if node == nil {
+		return nil
+	}
+	data, err := node.SerializeForWire()
+	if err != nil {
+		return err
+	}
+	nodeID := make([]byte, 33)
+	copy(nodeID[:32], path[:])
+	nodeID[32] = byte(depth)
+	*out = append(*out, WireNode{NodeID: nodeID, Data: data})
+
+	inner, ok := node.(*InnerNode)
+	if !ok {
+		return nil
+	}
+	inner.mu.RLock()
+	defer inner.mu.RUnlock()
+	for branch := 0; branch < BranchFactor; branch++ {
+		child := inner.children[branch]
+		if child == nil {
+			continue
+		}
+		// Set the branch nibble at position (depth) — high nibble of
+		// path[depth/2] when depth even, low nibble when depth odd.
+		childPath := path
+		bytePos := depth / 2
+		if depth%2 == 0 {
+			childPath[bytePos] = (childPath[bytePos] & 0x0F) | (byte(branch) << 4)
+		} else {
+			childPath[bytePos] = (childPath[bytePos] & 0xF0) | byte(branch)
+		}
+		if err := walkWireNodesRec(child, childPath, depth+1, out); err != nil {
+			return err
+		}
+	}
+	return nil
+}

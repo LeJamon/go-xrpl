@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/goXRPLd/shamap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -187,12 +189,6 @@ func TestRouter_GetLedger_TsCandidate_UnknownTxSet_NoResponse(t *testing.T) {
 // forever — the symptom that left rippled and goxrpl deadlocked at
 // seq=6 in the live harness.
 func TestRouter_LedgerData_TsCandidate_FeedsEngine(t *testing.T) {
-	t.Skip("rippled wire format requires SHAMap-serialized nodes, not " +
-		"raw tx blobs — test fixture needs to be rewritten to construct " +
-		"the SHAMap, walk it, and emit each node with its proper " +
-		"NodeID + serialized form. Live testnet is the real validation " +
-		"for now (#401 layer 3 follow-up).")
-
 	engine := &mockEngine{}
 	adaptor, _ := newTxSetWireAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
@@ -203,21 +199,44 @@ func TestRouter_LedgerData_TsCandidate_FeedsEngine(t *testing.T) {
 	defer cancel()
 	go router.Run(ctx)
 
+	// Build a real SHAMap of TypeTransaction containing two tx blobs.
+	// Real tx blobs are >= 12 bytes (SHAMap leaf min — see shamap
+	// leaf.go); use 16-byte synthetic blobs that satisfy the floor.
 	blobs := [][]byte{
-		{0x11, 0x22, 0x33, 0x44},
-		{0x55, 0x66, 0x77, 0x88},
+		bytes.Repeat([]byte{0x11}, 16),
+		bytes.Repeat([]byte{0x55}, 16),
 	}
-	ts := NewTxSet(blobs)
-	id := ts.ID()
+	txMap, err := shamap.New(shamap.TypeTransaction)
+	require.NoError(t, err, "shamap.New")
+	for i, blob := range blobs {
+		var key [32]byte
+		key[0] = byte(0x10 + i) // distinct keys to land in different branches
+		require.NoError(t,
+			txMap.PutWithNodeType(key, blob, shamap.NodeTypeTransactionNoMeta),
+			"PutWithNodeType")
+	}
+	id, err := txMap.Hash()
+	require.NoError(t, err, "Hash")
+	wireNodes, err := txMap.WalkWireNodes()
+	require.NoError(t, err, "WalkWireNodes")
+	require.NotEmpty(t, wireNodes, "expected at least the root + leaves")
+
+	// Convert WalkWireNodes output → LedgerData node entries. Pre-order
+	// guarantees the root arrives first, which handleTxSetData requires
+	// (AddRootNode before AddKnownNodeUnchecked).
+	ldNodes := make([]message.LedgerNode, 0, len(wireNodes))
+	for _, n := range wireNodes {
+		ldNodes = append(ldNodes, message.LedgerNode{
+			NodeID:   n.NodeID,
+			NodeData: n.Data,
+		})
+	}
 
 	resp := &message.LedgerData{
 		LedgerHash: id[:],
 		LedgerSeq:  0,
 		InfoType:   message.LedgerInfoTsCandidate,
-		Nodes: []message.LedgerNode{
-			{NodeData: blobs[0]},
-			{NodeData: blobs[1]},
-		},
+		Nodes:      ldNodes,
 	}
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  3,
@@ -226,13 +245,15 @@ func TestRouter_LedgerData_TsCandidate_FeedsEngine(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool {
+		engine.mu.Lock()
+		defer engine.mu.Unlock()
 		return len(engine.txSets) > 0
 	}, time.Second, 10*time.Millisecond, "engine did not see acquired tx-set")
 
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
-	require.Len(t, engine.txSets, 1)
-	assert.Equal(t, id, engine.txSets[0],
+	require.Len(t, engine.txSets, 1, "engine must receive exactly one tx-set notification")
+	assert.Equal(t, consensus.TxSetID(id), engine.txSets[0],
 		"engine must receive the tx-set ID we asked for, "+
 			"so the dispute tracker indexes against the right hash")
 }

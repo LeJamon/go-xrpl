@@ -17,6 +17,7 @@ var (
 	ErrConnectionClosed   = errors.New("connection closed")
 	ErrSendBufferFull     = errors.New("peer send buffer full")
 	ErrPingTimeout        = errors.New("peer ping timeout")
+	ErrLargeSendQueue     = errors.New("peer send queue saturated; closing")
 
 	// Handshake errors
 	ErrHandshakeFailed  = errors.New("handshake failed")

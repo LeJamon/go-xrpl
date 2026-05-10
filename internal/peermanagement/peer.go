@@ -99,6 +99,16 @@ type Peer struct {
 
 	tracking atomic.Int32
 
+	// largeSendQ counts consecutive Send() calls that returned
+	// ErrSendBufferFull. Reset to 0 on each successful send. When the
+	// counter exceeds sendqIntervals (checked from runPingTick) the
+	// peer is closed with reason "Large send queue", mirroring
+	// rippled's PeerImp::onTimer disconnect path
+	// (PeerImp.cpp:705-708): if the peer can't drain its receive
+	// buffer for that long, it's effectively dead and we shouldn't
+	// keep buffering for it.
+	largeSendQ atomic.Uint32
+
 	serverDomain      string
 	networkID         string
 	userAgent         string
@@ -736,6 +746,19 @@ func (p *Peer) runPingTick(now time.Time) error {
 		)
 		return ErrPingTimeout
 	}
+	// Large send queue check. Mirrors rippled PeerImp.cpp:705-708:
+	// once a peer has held the send buffer at saturation for
+	// sendqIntervals consecutive ticks, close it. The counter is
+	// incremented on every Send that returned ErrSendBufferFull
+	// since the last successful send (which resets it).
+	if p.largeSendQ.Load() >= sendqIntervals {
+		slog.Warn("peer large send queue",
+			"t", "Peer", "peer", p.id,
+			"endpoint", p.endpoint.String(),
+			"intervals", p.largeSendQ.Load(),
+		)
+		return ErrLargeSendQueue
+	}
 	seq := uint32(now.UnixMilli())
 	ping := &message.Ping{
 		PType: message.PingTypePing,
@@ -777,6 +800,14 @@ const (
 	// the disconnect window.
 	pingInFlightTTL  = pingTimeout
 	pingsInFlightCap = 16
+	// sendqIntervals: how many consecutive runPingTick observations
+	// of a saturated send buffer (Send returning ErrSendBufferFull
+	// since the previous tick) before we close the peer with
+	// ErrLargeSendQueue. Mirrors rippled Tuning::sendqIntervals
+	// (PeerImp.cpp:705 + Tuning.h) — if the peer's receive buffer
+	// stays unread for that many tick windows, the peer is
+	// effectively dead and we shouldn't keep buffering for it.
+	sendqIntervals = 4
 )
 
 func (p *Peer) staleInFlightPing(now time.Time, threshold time.Duration) (seq uint32, age time.Duration, ok bool) {
@@ -1003,14 +1034,19 @@ func (p *Peer) Send(data []byte) error {
 
 	select {
 	case p.send <- data:
+		// Healthy send — reset the large-sendq counter, mirroring
+		// rippled PeerImp.cpp:270-276 (`large_sendq_ = 0` whenever
+		// the queue is below targetSendQueue).
+		p.largeSendQ.Store(0)
 		return nil
 	default:
 		// Distinct from connection-closed: buffer is full because the
 		// writer can't drain fast enough. Returning ErrConnectionClosed
 		// here masked the real cause and gave callers no signal to
-		// react. With the larger buffer this should be rare; when it
-		// happens, the slot/metric path can promote it to a peer
-		// disconnect.
+		// react. The runPingTick large-sendq check below promotes
+		// sustained backpressure to a peer close, matching rippled's
+		// "Large send queue" disconnect at PeerImp.cpp:705-708.
+		p.largeSendQ.Add(1)
 		return ErrSendBufferFull
 	}
 }
