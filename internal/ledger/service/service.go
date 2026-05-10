@@ -852,12 +852,21 @@ func (s *Service) collectTransactionResults(l *ledger.Ledger, ledgerSeq uint32, 
 // non-validated overwrite, including from another adoption that
 // happened to arrive after an unvalidated peer-replay-delta.
 //
+// Returns the canonical ledger for this seq AFTER the precedence
+// rule resolves (= the existing validated entry when the skip fires,
+// otherwise `adopted`). Callers MUST use the return as their
+// `s.closedLedger` so the by-seq history and the closed-reference
+// stay consistent — assigning `s.closedLedger = adopted` and then
+// letting this helper skip the install would silently leave the two
+// pointing at different hashes for the same seq, breaking
+// GetLedger(seq) and engine path-construction.
+//
 // Mirrors LedgerHistory::insert(ledger, validated) at
 // LedgerHistory.cpp:55-74 + the overall by-seq-index update rule:
 // only validated inserts update the authoritative seq->hash mapping.
 //
 // Caller must hold s.mu (write).
-func (s *Service) installAdoptedLedgerLocked(seq uint32, adopted *ledger.Ledger) {
+func (s *Service) installAdoptedLedgerLocked(seq uint32, adopted *ledger.Ledger) *ledger.Ledger {
 	if existing, ok := s.ledgerHistory[seq]; ok {
 		existingHash := existing.Hash()
 		newHash := adopted.Hash()
@@ -867,10 +876,11 @@ func (s *Service) installAdoptedLedgerLocked(seq uint32, adopted *ledger.Ledger)
 				"existing_hash", fmt.Sprintf("%x", existingHash[:8]),
 				"adopt_hash", fmt.Sprintf("%x", newHash[:8]),
 			)
-			return
+			return existing
 		}
 	}
 	s.ledgerHistory[seq] = adopted
+	return adopted
 }
 
 // fixMismatchLocked invalidates the tail of ledgerHistory when the
@@ -2111,11 +2121,15 @@ func (s *Service) AdoptLedgerHeader(h *header.LedgerHeader) error {
 	// validatedLedger stays at whatever it was before adoption
 	// (typically genesis for a first-time sync) until the
 	// ValidationTracker fires OnLedgerFullyValidated.
-	s.closedLedger = adopted
-	s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
+	//
+	// Source closedLedger from the install helper's return so that
+	// when the validated-precedence rule causes a skip, our closed
+	// reference stays on the canonical (validated) entry rather than
+	// drifting to the rejected `adopted` hash.
+	s.closedLedger = s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
 
 	// Create new open ledger on top
-	openLedger, err := ledger.NewOpen(adopted, time.Now())
+	openLedger, err := ledger.NewOpen(s.closedLedger, time.Now())
 	if err != nil {
 		return fmt.Errorf("failed to create open ledger: %w", err)
 	}
@@ -2174,11 +2188,14 @@ func (s *Service) ReAdoptLedgerHeader(h *header.LedgerHeader) error {
 	// distinguishes the two, and server_info.validated_ledger is only
 	// set after trusted-validation quorum lands. Leaving validatedLedger
 	// alone lets the quorum gate in SetValidatedLedger do its job.
-	s.closedLedger = adopted
-	s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
+	//
+	// Source closedLedger from the install helper's return so the
+	// validated-precedence skip path keeps our closed reference on
+	// the canonical entry. See installAdoptedLedgerLocked.
+	s.closedLedger = s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
 
 	// Create new open ledger on top
-	openLedger, err := ledger.NewOpen(adopted, time.Now())
+	openLedger, err := ledger.NewOpen(s.closedLedger, time.Now())
 	if err != nil {
 		return fmt.Errorf("failed to create open ledger: %w", err)
 	}
@@ -2253,9 +2270,35 @@ func (s *Service) adoptLedgerWithStateLocked(
 
 	// Same reasoning as ReAdoptLedgerHeader: peer-adopted ledgers advance
 	// closedLedger but not validatedLedger. The quorum gate owns that.
-	s.closedLedger = adopted
-	s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
+	//
+	// Source closedLedger from the install helper's return so the
+	// validated-precedence skip path keeps closedLedger on the
+	// canonical entry (see installAdoptedLedgerLocked).
+	canonical := s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
+	s.closedLedger = canonical
 	s.needsInitialSync = false
+
+	// When the install was skipped because a validated entry already
+	// occupied this seq with a different hash, `adopted` is a rejected
+	// fork — do NOT run the persist / drain / collect / hooks pipeline
+	// for it. Those would write the wrong ledger to storage, fire hooks
+	// for txs that aren't in the canonical chain, and could double-fire
+	// callbacks (the canonical entry was processed when first installed).
+	// Just keep state consistent and return.
+	if canonical != adopted {
+		openLedger, err := ledger.NewOpen(canonical, time.Now())
+		if err != nil {
+			return fmt.Errorf("failed to create open ledger after adopt-skip: %w", err)
+		}
+		s.openLedger = openLedger
+		canonicalHash := canonical.Hash()
+		s.logger.Info("Adopted ledger from peer (skip: validated entry kept)",
+			"seq", h.LedgerIndex,
+			"adopt_hash", fmt.Sprintf("%x", h.Hash[:8]),
+			"canonical_hash", fmt.Sprintf("%x", canonicalHash[:8]),
+		)
+		return nil
+	}
 
 	// If a trusted validation for this seq arrived before we got here
 	// (validation tracker leading the adopt loop), drain the stash and
