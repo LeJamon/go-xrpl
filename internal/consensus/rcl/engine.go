@@ -1656,6 +1656,21 @@ func (e *Engine) closeLedger() {
 			if err := e.adaptor.SignProposal(proposal); err == nil {
 				e.state.OurPosition = proposal
 				e.adaptor.BroadcastProposal(proposal)
+				// Diagnostic: per-round our-position summary. Used to
+				// diff against rippled's matching round to verify
+				// initial-position parity (H2/H5 in match-rippled-exactly).
+				txSetID := txSet.ID()
+				prevID := e.prevLedger.ID()
+				slog.Info("our initial position",
+					"t", "consensus-build",
+					"event", "our-position",
+					"round_seq", e.state.Round.Seq,
+					"prev", fmt.Sprintf("%x", prevID[:8]),
+					"tx_set", fmt.Sprintf("%x", txSetID[:8]),
+					"tx_count", len(txs),
+					"close_time", closeTime.UTC().Format(time.RFC3339Nano),
+					"mode", e.mode.String(),
+				)
 			}
 		}
 	}

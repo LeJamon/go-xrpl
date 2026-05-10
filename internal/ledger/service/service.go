@@ -1221,6 +1221,10 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		return 0, ErrNoOpenLedger
 	}
 
+	// Canonical tx-hash list captured here for the diagnostic
+	// round-summary log emitted further below. Built only when there are
+	// tx blobs in the round; empty otherwise.
+	var canonicalTxHashes []string
 	if len(txBlobs) > 0 {
 		// Convert raw blobs to pendingTx structs for canonical sorting
 		pending := make([]pendingTx, 0, len(txBlobs))
@@ -1236,6 +1240,11 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		// the consensus round we just completed), matching rippled's
 		// CanonicalTXSet salt convention.
 		canonicalSort(pending, s.closedLedger.Hash())
+
+		canonicalTxHashes = make([]string, 0, len(pending))
+		for _, ptx := range pending {
+			canonicalTxHashes = append(canonicalTxHashes, fmt.Sprintf("%x", ptx.hash[:8]))
+		}
 
 		// Pre-parse every tx blob ONCE here so the multi-pass apply
 		// loop below can re-use the parsed Transaction objects across
@@ -1434,6 +1443,32 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 
 	closedSeq := s.openLedger.Sequence()
 	closedLedgerHash := s.openLedger.Hash()
+
+	// Diagnostic round-summary log. One line per locally-built ledger,
+	// capturing every input that feeds the closed-ledger hash. Used to
+	// diff against rippled's matching round and pinpoint the first input
+	// that diverges when goxrpl-built and rippled-built hashes don't
+	// match in a live UNL setup. See tasks/match-rippled-exactly.md (H1).
+	{
+		stateRoot, _ := s.openLedger.StateMapHash()
+		txRoot, _ := s.openLedger.TxMapHash()
+		parentHash := s.openLedger.ParentHash()
+		s.logger.Info("local-built ledger round-summary",
+			"t", "consensus-build",
+			"event", "round-summary",
+			"seq", closedSeq,
+			"hash", fmt.Sprintf("%x", closedLedgerHash[:8]),
+			"parent_hash", fmt.Sprintf("%x", parentHash[:8]),
+			"close_time", closeTime.UTC().Format(time.RFC3339Nano),
+			"close_time_correct", closeTimeCorrect,
+			"close_flags", closeFlags,
+			"state_root", fmt.Sprintf("%x", stateRoot[:8]),
+			"tx_root", fmt.Sprintf("%x", txRoot[:8]),
+			"total_drops", s.openLedger.TotalDrops(),
+			"tx_count", len(txBlobs),
+			"tx_hashes", canonicalTxHashes,
+		)
+	}
 
 	// Mirror rippled's LedgerHistory::insert(ledger, validated)
 	// precedence rule (LedgerHistory.cpp:55-74): a validated ledger
