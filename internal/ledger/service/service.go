@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
+	"github.com/LeJamon/goXRPLd/internal/ledger/localtxs"
 	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/txq"
@@ -216,6 +217,15 @@ type Service struct {
 	// txQueue.Accept to promote queued txs into the new open view.
 	// Reference: rippled NetworkOPs.cpp:1507, OpenLedger.cpp:113.
 	txQueue *txq.TxQ
+
+	// localTxs is the held pool of locally-submitted (RPC) transactions.
+	// SubmitOpenLedgerTx(blob, local=true) pushes each non-Failure result
+	// into the pool; acceptOpenLedgerViewLocked sweeps stale entries
+	// against the new closed ledger and passes localTxs.GetTxSet() as
+	// the `locals` argument to OpenLedger.Accept, replaying them on top
+	// of every newly rebuilt open view until they apply or age out.
+	// Reference: rippled LocalTxs.{h,cpp}, RCLConsensus.cpp:662-674.
+	localTxs *localtxs.LocalTxs
 }
 
 // New creates a new LedgerService
@@ -245,6 +255,7 @@ func New(cfg Config) (*Service, error) {
 		pendingLedgerValidations: make(map[uint32]pendingValidationEntry),
 		heldAdoptions:            make(map[uint32]*pendingAdopt),
 		txQueue:                  txq.New(txqCfg),
+		localTxs:                 localtxs.New(),
 	}
 
 	return s, nil
@@ -482,8 +493,17 @@ func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32) {
 		adapter := openledger.NewTxqAdapter(view, viewCfg)
 		_ = s.txQueue.Accept(adapter)
 	}
+	// Sweep dead local entries against the new closed ledger and pass
+	// the remainder as Accept's `locals` argument so they replay onto
+	// the new open view. Mirrors RCLConsensus.cpp:666 passing
+	// localTxs_.getTxSet() into openLedger().accept(...).
+	var locals []openledger.PendingTx
+	if s.localTxs != nil {
+		s.localTxs.Sweep(s.closedLedger)
+		locals = s.localTxs.GetTxSet()
+	}
 	var retries []openledger.PendingTx
-	if err := s.openLedgerView.Accept(s.closedLedger, nil, false, &retries, cfg, modifier); err != nil {
+	if err := s.openLedgerView.Accept(s.closedLedger, locals, false, &retries, cfg, modifier); err != nil {
 		s.logger.Error("openLedger.Accept failed", "err", err, "seq", closedSeq)
 	}
 	if len(retries) > 0 {
@@ -516,10 +536,22 @@ func (s *Service) applyConfigLocked() (openledger.ApplyConfig, error) {
 // (NetworkOPs.cpp:1507). Returns the per-tx classification. Returns
 // ResultFailure when called before Start (no view initialised) — the
 // nil guard is defensive; callers should not race Start with ingress.
-func (s *Service) SubmitOpenLedgerTx(blob []byte) (openledger.Result, error) {
+//
+// local=true marks the submission as RPC-originated and pushes any
+// non-Failure result into the LocalTxs held pool so it survives Submit
+// failure / LCL transitions until the sender's AccountRoot.Sequence
+// advances past it or it ages out (5 ledgers).
+//
+// local=false is for relay-originated submissions (from peers): the
+// peer manages its own resends, so we don't pin the blob in our held
+// pool. Mirrors rippled's NetworkOPsImp::processTrustedProposal vs
+// NetworkOPsImp::processTransaction distinction (NetworkOPs.cpp where
+// `local` flag flows into `LocalTxs::push_back`).
+func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result, error) {
 	s.mu.RLock()
 	ov := s.openLedgerView
 	queue := s.txQueue
+	pool := s.localTxs
 	cfg, cfgErr := s.applyConfigLocked()
 	s.mu.RUnlock()
 
@@ -534,6 +566,10 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte) (openledger.Result, error) {
 		return openledger.ResultFailure, err
 	}
 	_, res := ov.Submit(ptx, cfg, queue)
+
+	if local && pool != nil && res != openledger.ResultFailure {
+		pool.PushBack(ov.Current().Sequence(), ptx)
+	}
 	return res, nil
 }
 

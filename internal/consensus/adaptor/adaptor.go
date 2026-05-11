@@ -765,17 +765,22 @@ func (a *Adaptor) GetTx(id consensus.TxID) ([]byte, error) {
 	return blob, nil
 }
 
-// AddPendingTx submits a relayed or local tx blob through the persistent
-// open-ledger view. Mirrors rippled NetworkOPsImp::apply →
-// openLedger().modify (NetworkOPs.cpp:1507).
-func (a *Adaptor) AddPendingTx(blob []byte) {
+// AddPendingTx submits a tx blob through the persistent open-ledger view.
+// Mirrors rippled NetworkOPsImp::apply → openLedger().modify
+// (NetworkOPs.cpp:1507).
+//
+// local=true marks RPC-originated submissions, which get held in the
+// LocalTxs pool until they apply or age out. local=false is for
+// peer-relay submissions — the peer manages its own resends.
+func (a *Adaptor) AddPendingTx(blob []byte, local bool) {
 	if a.ledgerService == nil {
 		return
 	}
-	if _, err := a.ledgerService.SubmitOpenLedgerTx(blob); err != nil {
+	if _, err := a.ledgerService.SubmitOpenLedgerTx(blob, local); err != nil {
 		a.logger.Warn("openLedger submit failed",
 			"err", err,
 			"blob_size", len(blob),
+			"local", local,
 		)
 	}
 }

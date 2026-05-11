@@ -75,7 +75,7 @@ func TestService_OpenLedgerSubmit_Roundtrip(t *testing.T) {
 
 	blob, hash := buildSignedPaymentBlob(t, env, master, dest, 100_000_000, 1)
 
-	res, err := svc.SubmitOpenLedgerTx(blob)
+	res, err := svc.SubmitOpenLedgerTx(blob, true)
 	if err != nil {
 		t.Fatalf("SubmitOpenLedgerTx: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestService_AcceptConsensusResult_RebuildsOpenView(t *testing.T) {
 	blob2, hash2 := buildSignedPaymentBlob(t, env, master, bob, 60_000_000, 2)
 
 	for i, blob := range [][]byte{blob1, blob2} {
-		res, err := svc.SubmitOpenLedgerTx(blob)
+		res, err := svc.SubmitOpenLedgerTx(blob, true)
 		if err != nil {
 			t.Fatalf("SubmitOpenLedgerTx[%d]: %v", i, err)
 		}
@@ -163,7 +163,7 @@ func TestService_AcceptConsensusResult_IncludedTxsNotDuplicated(t *testing.T) {
 
 	blob1, hash1 := buildSignedPaymentBlob(t, env, master, alice, 50_000_000, 1)
 
-	res, err := svc.SubmitOpenLedgerTx(blob1)
+	res, err := svc.SubmitOpenLedgerTx(blob1, true)
 	if err != nil {
 		t.Fatalf("SubmitOpenLedgerTx: %v", err)
 	}

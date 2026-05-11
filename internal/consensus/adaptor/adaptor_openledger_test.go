@@ -96,7 +96,7 @@ func TestAdaptor_AddPendingTx_RoutesToOpenLedger(t *testing.T) {
 	alice := testenv.NewAccount("alice")
 	blob, hash := buildSignedPaymentBlob(t, env, master, alice, 100_000_000, 1)
 
-	a.AddPendingTx(blob)
+	a.AddPendingTx(blob, true)
 
 	if !svc.OpenLedgerHasTx(hash) {
 		t.Errorf("service.OpenLedgerHasTx(hash) = false; AddPendingTx did not land blob in open view")
@@ -122,8 +122,8 @@ func TestAdaptor_GetProposableTxs_FromOpenLedger(t *testing.T) {
 	blob1, _ := buildSignedPaymentBlob(t, env, master, alice, 50_000_000, 1)
 	blob2, _ := buildSignedPaymentBlob(t, env, master, bob, 60_000_000, 2)
 
-	a.AddPendingTx(blob1)
-	a.AddPendingTx(blob2)
+	a.AddPendingTx(blob1, true)
+	a.AddPendingTx(blob2, true)
 
 	closed := svc.GetClosedLedger()
 	if closed == nil {
@@ -178,7 +178,7 @@ func TestAdaptor_AddPendingTx_FailureNotInPool(t *testing.T) {
 
 	corruptedHash := computeTxIDForTest(corrupted)
 
-	a.AddPendingTx(corrupted)
+	a.AddPendingTx(corrupted, true)
 
 	if svc.OpenLedgerHasTx(corruptedHash) {
 		t.Errorf("service.OpenLedgerHasTx(corrupted) = true; failed tx leaked into open view")

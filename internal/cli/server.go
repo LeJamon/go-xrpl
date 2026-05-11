@@ -275,7 +275,9 @@ func runServer(cmd *cobra.Command, args []string) {
 				return
 			}
 			overlay.Broadcast(frame)
-			consensusAdaptor.AddPendingTx(txBlob)
+			// RPC-originated tx: hold in LocalTxs so it survives Submit
+			// failure / LCL transitions until it applies or ages out.
+			consensusAdaptor.AddPendingTx(txBlob, true)
 		})
 
 		// Expose node identity, peer count, and consensus stats to RPC handlers

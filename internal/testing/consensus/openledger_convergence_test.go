@@ -107,7 +107,7 @@ func fundAccountsAndClose(
 	fundingBlobs[nSenders] = signedPaymentBlob(t, env, master, existingDest, 1_000_000_000, uint32(nSenders+1))
 
 	for i, blob := range fundingBlobs {
-		res, err := svc.SubmitOpenLedgerTx(blob)
+		res, err := svc.SubmitOpenLedgerTx(blob, true)
 		if err != nil {
 			t.Fatalf("fund sender %d: SubmitOpenLedgerTx: %v", i, err)
 		}
@@ -268,10 +268,10 @@ func TestOpenLedger_ConvergenceUnderOrderShuffling(t *testing.T) {
 	}
 
 	for _, b := range orderA {
-		adA.AddPendingTx(b)
+		adA.AddPendingTx(b, false)
 	}
 	for _, b := range orderB {
-		adB.AddPendingTx(b)
+		adB.AddPendingTx(b, false)
 	}
 
 	gotA := svcA.OpenLedgerTxs()
