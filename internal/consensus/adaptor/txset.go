@@ -10,145 +10,152 @@ import (
 	"github.com/LeJamon/goXRPLd/shamap"
 )
 
-// TxSetImpl implements consensus.TxSet backed by raw transaction blobs.
+// TxSetImpl implements consensus.TxSet backed by a SHAMap of transaction
+// blobs keyed by txID. This mirrors rippled's InboundTransactions: the
+// SHAMap is the canonical storage, and Txs/TxIDs/Bytes derive from it.
+//
+// Complexity profile (N = set size):
+//   - Add/Remove/Contains: O(log N) via SHAMap descent + incremental
+//     hash propagation up the dirty path.
+//   - ID():                O(1) — the SHAMap caches the root hash and
+//     refreshes it on every mutation.
+//   - Txs/TxIDs:           O(N) walk of the leaves in canonical key order.
+//     The two methods walk identically, so callers can zip them.
+//   - Bytes:               O(N) walk.
 type TxSetImpl struct {
-	id  consensus.TxSetID
-	txs [][]byte
-	// Index of txID -> position in txs slice for fast lookup
-	index map[consensus.TxID]int
+	txMap *shamap.SHAMap
+	count int
 }
 
-// NewTxSet creates a TxSet from raw transaction blobs.
-// The ID is computed as the SHAMap root hash of the transaction set,
-// matching rippled's canonical tx set hashing.
+// NewTxSet creates a TxSet from raw transaction blobs. The ID is the
+// SHAMap root hash, matching rippled's canonical tx-set hashing.
 func NewTxSet(txBlobs [][]byte) *TxSetImpl {
-	ts := &TxSetImpl{
-		txs:   make([][]byte, len(txBlobs)),
-		index: make(map[consensus.TxID]int, len(txBlobs)),
+	ts := &TxSetImpl{}
+	txMap, err := shamap.New(shamap.TypeTransaction)
+	if err != nil {
+		return ts
 	}
-	copy(ts.txs, txBlobs)
-
-	// Build index and compute ID
-	for i, blob := range ts.txs {
-		txID := computeTxID(blob)
-		ts.index[txID] = i
+	ts.txMap = txMap
+	for _, blob := range txBlobs {
+		_ = ts.Add(blob)
 	}
-	ts.id = computeTxSetID(ts.txs)
 	return ts
 }
 
 func (ts *TxSetImpl) ID() consensus.TxSetID {
-	return ts.id
+	if ts.txMap == nil {
+		return consensus.TxSetID{}
+	}
+	h, err := ts.txMap.Hash()
+	if err != nil {
+		return consensus.TxSetID{}
+	}
+	return consensus.TxSetID(h)
 }
 
+// Txs returns every transaction blob in canonical key order. The
+// ordering matches TxIDs() so callers can zip the two slices.
 func (ts *TxSetImpl) Txs() [][]byte {
-	result := make([][]byte, len(ts.txs))
-	copy(result, ts.txs)
+	if ts.txMap == nil {
+		return nil
+	}
+	result := make([][]byte, 0, ts.count)
+	_ = ts.txMap.ForEach(func(it *shamap.Item) bool {
+		result = append(result, it.Data())
+		return true
+	})
 	return result
 }
 
+// TxIDs returns every txID in canonical key order, parallel to Txs().
 func (ts *TxSetImpl) TxIDs() []consensus.TxID {
-	// Return in the same order as Txs() so callers can zip the two
-	// slices. ts.index maps id→position into ts.txs, so the reverse
-	// walk writes each id at its canonical slot.
-	result := make([]consensus.TxID, len(ts.txs))
-	for id, idx := range ts.index {
-		result[idx] = id
+	if ts.txMap == nil {
+		return nil
 	}
+	result := make([]consensus.TxID, 0, ts.count)
+	_ = ts.txMap.ForEach(func(it *shamap.Item) bool {
+		key := it.Key()
+		result = append(result, consensus.TxID(key))
+		return true
+	})
 	return result
 }
 
 func (ts *TxSetImpl) Contains(id consensus.TxID) bool {
-	_, ok := ts.index[id]
-	return ok
+	if ts.txMap == nil {
+		return false
+	}
+	ok, err := ts.txMap.Has([32]byte(id))
+	return err == nil && ok
 }
 
 func (ts *TxSetImpl) Add(tx []byte) error {
-	txID := computeTxID(tx)
-	if _, exists := ts.index[txID]; exists {
-		return nil // already present
+	if ts.txMap == nil {
+		return nil
 	}
-	ts.index[txID] = len(ts.txs)
-	ts.txs = append(ts.txs, tx)
-	ts.id = computeTxSetID(ts.txs) // recompute
+	txID := computeTxID(tx)
+	key := [32]byte(txID)
+	if ok, _ := ts.txMap.Has(key); ok {
+		return nil
+	}
+	// Prefer the typed leaf path; fall back to the untyped Put for
+	// callers that work around CreateLeafNode failures on short
+	// fixture blobs.
+	if err := ts.txMap.PutWithNodeType(key, tx, shamap.NodeTypeTransactionNoMeta); err != nil {
+		if err2 := ts.txMap.Put(key, tx); err2 != nil {
+			return err2
+		}
+	}
+	ts.count++
 	return nil
 }
 
 func (ts *TxSetImpl) Remove(id consensus.TxID) error {
-	idx, ok := ts.index[id]
+	if ts.txMap == nil {
+		return nil
+	}
+	key := [32]byte(id)
+	ok, _ := ts.txMap.Has(key)
 	if !ok {
-		return nil // not present
+		return nil
 	}
-	// Swap with last element and shrink
-	last := len(ts.txs) - 1
-	if idx != last {
-		ts.txs[idx] = ts.txs[last]
-		lastID := computeTxID(ts.txs[idx])
-		ts.index[lastID] = idx
+	if err := ts.txMap.Delete(key); err != nil {
+		return err
 	}
-	ts.txs = ts.txs[:last]
-	delete(ts.index, id)
-	ts.id = computeTxSetID(ts.txs) // recompute
+	ts.count--
 	return nil
 }
 
 func (ts *TxSetImpl) Size() int {
-	return len(ts.txs)
+	return ts.count
 }
 
+// Bytes returns the tx blobs concatenated with a 4-byte length prefix
+// each, walked in canonical SHAMap key order.
 func (ts *TxSetImpl) Bytes() []byte {
-	// Concatenate all tx blobs with 4-byte length prefix each
-	var buf bytes.Buffer
-	for _, tx := range ts.txs {
-		l := uint32(len(tx))
-		buf.Write([]byte{byte(l >> 24), byte(l >> 16), byte(l >> 8), byte(l)})
-		buf.Write(tx)
+	if ts.txMap == nil {
+		return nil
 	}
+	var buf bytes.Buffer
+	_ = ts.txMap.ForEach(func(it *shamap.Item) bool {
+		blob := it.DataUnsafe()
+		l := uint32(len(blob))
+		buf.Write([]byte{byte(l >> 24), byte(l >> 16), byte(l >> 8), byte(l)})
+		buf.Write(blob)
+		return true
+	})
 	return buf.Bytes()
 }
 
-// computeTxSetID computes the ID of a transaction set using a SHAMap,
-// matching rippled's approach. The root hash of a SHAMap containing
-// all transactions keyed by their hash is the tx set ID.
-func computeTxSetID(txBlobs [][]byte) consensus.TxSetID {
-	txMap, err := buildTxSetSHAMap(txBlobs)
-	if err != nil || txMap == nil {
-		return consensus.TxSetID{}
-	}
-	hash, err := txMap.Hash()
-	if err != nil {
-		return consensus.TxSetID{}
-	}
-	return consensus.TxSetID(hash)
+// SHAMap returns the canonical tx-set SHAMap. Callers must treat it
+// as read-only — mutating it directly bypasses count tracking.
+func (ts *TxSetImpl) SHAMap() *shamap.SHAMap {
+	return ts.txMap
 }
 
-// buildTxSetSHAMap constructs the canonical tx-set SHAMap whose root hash
-// is the tx-set ID. Falls back to shamap.Put for short test fixture blobs.
-func buildTxSetSHAMap(txBlobs [][]byte) (*shamap.SHAMap, error) {
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		return nil, err
-	}
-	for _, blob := range txBlobs {
-		txID := computeTxID(blob)
-		if putErr := txMap.PutWithNodeType([32]byte(txID), blob, shamap.NodeTypeTransactionNoMeta); putErr != nil {
-			if err := txMap.Put([32]byte(txID), blob); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return txMap, nil
-}
-
-// BuildSHAMap reconstructs the tx-set's canonical SHAMap. Built fresh per
-// call — serveTxSet is not currently hot enough to warrant caching.
-func (ts *TxSetImpl) BuildSHAMap() (*shamap.SHAMap, error) {
-	return buildTxSetSHAMap(ts.txs)
-}
-
-// computeTxID computes the SHA-512Half of a transaction blob
-// with the HashPrefix for transactions (TXN\x00).
-// Matches rippled: sha512Half(HashPrefix::transactionID, txBlob)
+// computeTxID computes the SHA-512Half of a transaction blob with the
+// HashPrefix for transactions (TXN\x00). Matches rippled's
+// sha512Half(HashPrefix::transactionID, txBlob).
 func computeTxID(blob []byte) consensus.TxID {
 	return consensus.TxID(common.Sha512Half(protocol.HashPrefixTransactionID[:], blob))
 }

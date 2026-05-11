@@ -823,10 +823,10 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 		return
 	}
 
-	txMap, err := ts.BuildSHAMap()
-	if err != nil {
-		r.logger.Warn("failed to build tx-set SHAMap for serve",
-			"error", err, "peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]))
+	txMap := ts.SHAMap()
+	if txMap == nil {
+		r.logger.Warn("tx-set has no SHAMap to serve",
+			"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]))
 		return
 	}
 
