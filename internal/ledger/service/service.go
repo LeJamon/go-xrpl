@@ -16,6 +16,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/txq"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
 	"github.com/LeJamon/goXRPLd/shamap"
 	"github.com/LeJamon/goXRPLd/storage/nodestore"
@@ -206,6 +207,15 @@ type Service struct {
 	// open pool (#407). Built by Start / rebuilt by adopt paths /
 	// advanced incrementally by Accept on LCL transitions.
 	openLedgerView *openledger.OpenLedger
+
+	// txQueue is the transaction queue (mempool). Submit ingress routes
+	// each tx through txQueue.Apply — which either applies directly to
+	// the open view or holds the tx in the queue. On LCL transitions
+	// AcceptConsensusResult calls txQueue.ProcessClosedLedger to update
+	// fee metrics, and the modifier passed to OpenLedger.Accept calls
+	// txQueue.Accept to promote queued txs into the new open view.
+	// Reference: rippled NetworkOPs.cpp:1507, OpenLedger.cpp:113.
+	txQueue *txq.TxQ
 }
 
 // New creates a new LedgerService
@@ -214,6 +224,15 @@ func New(cfg Config) (*Service, error) {
 	if logger == nil {
 		logger = xrpllog.Discard()
 	}
+	// Construct the TxQ with rippled-default config (TxQ::Setup defaults).
+	// In standalone mode, raise MinimumTxnInLedger so fee escalation
+	// stays out of the way of integration tests — same trick rippled
+	// uses (TxQ::Setup standalone vs default).
+	txqCfg := txq.DefaultConfig()
+	if cfg.Standalone {
+		txqCfg = txq.StandaloneConfig()
+	}
+
 	s := &Service{
 		config:                   cfg,
 		logger:                   logger.Named(xrpllog.PartitionLedger),
@@ -225,6 +244,7 @@ func New(cfg Config) (*Service, error) {
 		pendingValidation:        make(map[[32]byte]*LedgerAcceptedEvent),
 		pendingLedgerValidations: make(map[uint32]pendingValidationEntry),
 		heldAdoptions:            make(map[uint32]*pendingAdopt),
+		txQueue:                  txq.New(txqCfg),
 	}
 
 	return s, nil
@@ -378,6 +398,63 @@ func (s *Service) rebuildOpenLedgerViewLocked() error {
 // retriesFirst is false (disputes-first replay is not tracked yet);
 // locals is nil (LocalTxs port is a future workitem — see Task 4 spec
 // Step 5). Caller must hold s.mu.
+// closedLedgerCtx implements txq.ClosedLedgerContext over a closed
+// *ledger.Ledger. baseFee is the closed ledger's reference base fee in
+// drops; we use it to convert per-tx fee values into fee levels for the
+// FeeMetrics update.
+type closedLedgerCtx struct {
+	ledger  *ledger.Ledger
+	baseFee uint64
+}
+
+func (c *closedLedgerCtx) GetLedgerSequence() uint32 {
+	if c.ledger == nil {
+		return 0
+	}
+	return c.ledger.Sequence()
+}
+
+func (c *closedLedgerCtx) GetTransactionFeeLevels() []txq.FeeLevel {
+	if c.ledger == nil {
+		return nil
+	}
+	var levels []txq.FeeLevel
+	_ = c.ledger.ForEachTransaction(func(_ [32]byte, data []byte) bool {
+		raw, _, err := tx.SplitTxWithMetaBlob(data)
+		if err != nil {
+			return true
+		}
+		parsed, err := tx.ParseFromBinary(raw)
+		if err != nil {
+			return true
+		}
+		common := parsed.GetCommon()
+		if common == nil {
+			return true
+		}
+		fee, err := strconv.ParseUint(common.Fee, 10, 64)
+		if err != nil {
+			return true
+		}
+		levels = append(levels, txq.ToFeeLevel(fee, c.baseFee))
+		return true
+	})
+	return levels
+}
+
+// processClosedLedgerLocked updates the TxQ's fee metrics from the
+// just-closed ledger. timeLeap mirrors rippled's slow-consensus flag —
+// always false here (we don't currently track consensus duration).
+// Caller must hold s.mu.
+func (s *Service) processClosedLedgerLocked() {
+	if s.txQueue == nil || s.closedLedger == nil {
+		return
+	}
+	baseFee, _, _ := readFeesFromLedger(s.closedLedger)
+	ctx := &closedLedgerCtx{ledger: s.closedLedger, baseFee: baseFee}
+	s.txQueue.ProcessClosedLedger(ctx, false)
+}
+
 func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32) {
 	if s.openLedgerView == nil {
 		return
@@ -393,8 +470,20 @@ func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32) {
 		NetworkID:        s.config.NetworkID,
 		Logger:           s.config.Logger,
 	}
+	// Modifier closure mirrors rippled OpenLedger.cpp:113 calling
+	// app_.getTxQ().accept(app_, view) after the replay phases — this is
+	// where queued candidates get promoted into the new open view.
+	modifier := func(view *ledger.Ledger) {
+		if s.txQueue == nil || view == nil {
+			return
+		}
+		viewCfg := cfg
+		viewCfg.LedgerSequence = view.Sequence()
+		adapter := openledger.NewTxqAdapter(view, viewCfg)
+		_ = s.txQueue.Accept(adapter)
+	}
 	var retries []openledger.PendingTx
-	if err := s.openLedgerView.Accept(s.closedLedger, nil, false, &retries, cfg); err != nil {
+	if err := s.openLedgerView.Accept(s.closedLedger, nil, false, &retries, cfg, modifier); err != nil {
 		s.logger.Error("openLedger.Accept failed", "err", err, "seq", closedSeq)
 	}
 	if len(retries) > 0 {
@@ -430,6 +519,7 @@ func (s *Service) applyConfigLocked() (openledger.ApplyConfig, error) {
 func (s *Service) SubmitOpenLedgerTx(blob []byte) (openledger.Result, error) {
 	s.mu.RLock()
 	ov := s.openLedgerView
+	queue := s.txQueue
 	cfg, cfgErr := s.applyConfigLocked()
 	s.mu.RUnlock()
 
@@ -443,7 +533,7 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte) (openledger.Result, error) {
 	if err != nil {
 		return openledger.ResultFailure, err
 	}
-	_, res := ov.Submit(ptx, cfg)
+	_, res := ov.Submit(ptx, cfg, queue)
 	return res, nil
 }
 
@@ -719,6 +809,12 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 		return 0, fmt.Errorf("failed to create new open ledger: %w", err)
 	}
 	s.openLedger = newOpen
+
+	// Update fee metrics from the just-closed ledger so the modifier in
+	// the next Accept sees the right open-ledger fee level. Mirrors
+	// rippled's NetworkOPs::processClosedLedger call before rebuilding
+	// the open view (NetworkOPs.cpp:1483-1530 surroundings).
+	s.processClosedLedgerLocked()
 
 	// LCL transition: rebuild the persistent open-ledger view via Accept
 	// so any tx submitted to the prior view that didn't land in the
@@ -1400,6 +1496,12 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		return 0, fmt.Errorf("failed to create new open ledger: %w", err)
 	}
 	s.openLedger = newOpen
+
+	// Update fee metrics from the consensus-closed ledger so the
+	// modifier in the next Accept sees the right open-ledger fee level.
+	// Mirrors rippled's NetworkOPs::processClosedLedger call before
+	// rebuilding the open view.
+	s.processClosedLedgerLocked()
 
 	// LCL transition: replay prior view's txs onto the new closed ledger
 	// via OpenLedger.Accept. Mirrors rippled's accept-time rebuild at

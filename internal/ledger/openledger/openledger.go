@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/txq"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
 )
 
@@ -111,12 +112,20 @@ func (o *OpenLedger) Modify(fn func(*ledger.Ledger) bool) bool {
 // fees from newLCL via readFeesFromLedger. LedgerSequence is overridden
 // to the working view's sequence, and Logger / NetworkID are filled in
 // from the OpenLedger if not already set.
+//
+// modifier (if non-nil) runs against the freshly built next view after
+// all replay phases (retries → prior current's txs → locals) and before
+// the atomic publish. This is the hook rippled uses at OpenLedger.cpp:113
+// to call `app_.getTxQ().accept(app_, view)` — promoting queued txs into
+// the new open ledger. Pass nil when no TxQ promotion is desired (tests,
+// adopt-from-peer paths).
 func (o *OpenLedger) Accept(
 	newLCL *ledger.Ledger,
 	locals []PendingTx,
 	retriesFirst bool,
 	retries *[]PendingTx,
 	cfg ApplyConfig,
+	modifier func(*ledger.Ledger),
 ) error {
 	if newLCL == nil {
 		return errors.New("openledger.Accept: newLCL is nil")
@@ -170,7 +179,14 @@ func (o *OpenLedger) Accept(
 		}
 	}
 
-	// 4. Atomic publish.
+	// 4. Modifier hook — rippled OpenLedger.cpp:113 calls
+	// app_.getTxQ().accept(app_, view) here to drain queued txs into
+	// the freshly rebuilt open view.
+	if modifier != nil {
+		modifier(next)
+	}
+
+	// 5. Atomic publish.
 	o.currentMu.Lock()
 	o.current = next
 	o.currentMu.Unlock()
@@ -206,8 +222,10 @@ func collectTxs(v *ledger.Ledger) []PendingTx {
 // the Modify return value and result is the per-tx classification.
 //
 // Mirrors NetworkOPsImp::apply calling openLedger().modify with a
-// single-tx body (NetworkOPs.cpp:1507).
-func (o *OpenLedger) Submit(ptx PendingTx, cfg ApplyConfig) (bool, Result) {
+// single-tx body (NetworkOPs.cpp:1507). When queue is non-nil the
+// per-tx body delegates to TxQ.Apply, which itself decides whether to
+// apply directly to the view or hold the tx in the queue.
+func (o *OpenLedger) Submit(ptx PendingTx, cfg ApplyConfig, queue *txq.TxQ) (bool, Result) {
 	// Submit is per-tx ingress — always OpenLedger semantics. Force the
 	// mode here so a caller's stray BuildLedgerMode does not cause tec
 	// to be silently dropped as ResultRetry.
@@ -225,6 +243,30 @@ func (o *OpenLedger) Submit(ptx PendingTx, cfg ApplyConfig) (bool, Result) {
 			return false
 		}
 		parsed.SetRawBytes(ptx.Blob)
+
+		if queue != nil {
+			adapter := NewTxqAdapter(view, cfg)
+			applyRes := queue.Apply(adapter, parsed, ptx.Hash, ptx.Account)
+			switch {
+			case applyRes.Applied:
+				result = ResultSuccess
+				return true
+			case applyRes.Result == tx.TerQUEUED:
+				// Held for a later ledger — view is unchanged but the
+				// tx is in flight, so classify as Success (matches
+				// OpenLedger.cpp:183 treating terQUEUED as applied).
+				result = ResultSuccess
+				return false
+			case applyRes.Result.IsTef() || applyRes.Result.IsTem() || applyRes.Result.IsTel():
+				result = ResultFailure
+				return false
+			default:
+				result = ResultRetry
+				return false
+			}
+		}
+
+		// No TxQ wired — fall back to direct apply (Task A semantics).
 		// retry=true matches OpenLedger::apply's call into apply_one for
 		// the per-tx initial attempt (OpenLedger.h:229).
 		result = applyOneSingle(view, parsed, ptx.Blob, true, cfg)

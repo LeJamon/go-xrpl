@@ -115,7 +115,7 @@ func TestOpenLedger_Submit_AppliesAndPublishes(t *testing.T) {
 		NetworkID:        0,
 	}
 
-	changed, result := ol.Submit(pt, cfg)
+	changed, result := ol.Submit(pt, cfg, nil)
 	if !changed {
 		t.Fatalf("Submit changed=false, want true; result=%v", result)
 	}
@@ -227,7 +227,7 @@ func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			changed, result := ol.Submit(prepped[idx].pt, prepped[idx].cfg)
+			changed, result := ol.Submit(prepped[idx].pt, prepped[idx].cfg, nil)
 			if changed && result == openledger.ResultSuccess {
 				successCount.Add(1)
 			}
@@ -372,7 +372,7 @@ func TestOpenLedger_Accept_ReplaysCurrentTxs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePendingTx pay1: %v", err)
 	}
-	if changed, result := ol.Submit(pt1, cfg); !changed || result != openledger.ResultSuccess {
+	if changed, result := ol.Submit(pt1, cfg, nil); !changed || result != openledger.ResultSuccess {
 		t.Fatalf("Submit pay1: changed=%v result=%v", changed, result)
 	}
 
@@ -382,7 +382,7 @@ func TestOpenLedger_Accept_ReplaysCurrentTxs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePendingTx pay2: %v", err)
 	}
-	if changed, result := ol.Submit(pt2, cfg); !changed || result != openledger.ResultSuccess {
+	if changed, result := ol.Submit(pt2, cfg, nil); !changed || result != openledger.ResultSuccess {
 		t.Fatalf("Submit pay2: changed=%v result=%v", changed, result)
 	}
 
@@ -390,7 +390,7 @@ func TestOpenLedger_Accept_ReplaysCurrentTxs(t *testing.T) {
 	newClosed := newClosedFrom(t, parent)
 	var retries []openledger.PendingTx
 
-	if err := ol.Accept(newClosed, nil, false, &retries, cfg); err != nil {
+	if err := ol.Accept(newClosed, nil, false, &retries, cfg, nil); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
 	if len(retries) != 0 {
@@ -447,7 +447,7 @@ func TestOpenLedger_Accept_NoDoubleApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePendingTx: %v", err)
 	}
-	if changed, result := ol.Submit(pt, cfg); !changed || result != openledger.ResultSuccess {
+	if changed, result := ol.Submit(pt, cfg, nil); !changed || result != openledger.ResultSuccess {
 		t.Fatalf("Submit: changed=%v result=%v", changed, result)
 	}
 
@@ -457,7 +457,7 @@ func TestOpenLedger_Accept_NoDoubleApply(t *testing.T) {
 	// Pass the same pt in `locals` — current replay will commit it to
 	// the working view, then the locals replay must see it via TxExists
 	// and skip (no double-apply).
-	if err := ol.Accept(newClosed, []openledger.PendingTx{pt}, false, &retries, cfg); err != nil {
+	if err := ol.Accept(newClosed, []openledger.PendingTx{pt}, false, &retries, cfg, nil); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
 	if len(retries) != 0 {
@@ -515,7 +515,7 @@ func TestOpenLedger_Accept_LocalsApplied(t *testing.T) {
 	newClosed := newClosedFrom(t, parent)
 	var retries []openledger.PendingTx
 
-	if err := ol.Accept(newClosed, []openledger.PendingTx{ptL}, false, &retries, cfg); err != nil {
+	if err := ol.Accept(newClosed, []openledger.PendingTx{ptL}, false, &retries, cfg, nil); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
 	if len(retries) != 0 {
@@ -562,7 +562,7 @@ func TestOpenLedger_Submit_TecCommits(t *testing.T) {
 		NetworkID:        0,
 	}
 
-	changed, result := ol.Submit(pt, cfg)
+	changed, result := ol.Submit(pt, cfg, nil)
 	if !changed {
 		t.Fatalf("Submit changed=false, want true; result=%v", result)
 	}
@@ -612,7 +612,7 @@ func TestOpenLedger_Accept_RetriesFirst_ReplaysHeldTx(t *testing.T) {
 	newClosed := newClosedFrom(t, parent)
 	retries := []openledger.PendingTx{held}
 
-	if err := ol.Accept(newClosed, nil, true, &retries, cfg); err != nil {
+	if err := ol.Accept(newClosed, nil, true, &retries, cfg, nil); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
 	if !ol.Current().TxExists(held.Hash) {
