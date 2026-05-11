@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2562,10 +2563,30 @@ func (e *Engine) updateCloseTimePosition() {
 	threshConsensus := participantsNeeded(participants, 75) // avCT_CONSENSUS_PCT
 	threshVoteInitial := threshVote
 
-	// Find winning close time
+	// Find winning close time. MUST iterate in sorted (ascending) order
+	// of time so tied vote counts resolve deterministically across all
+	// validators — rippled's closeTimeVotes is a std::map<NetClock,int>
+	// which iterates ascending; the for-loop's "raise bar to pick the
+	// MOST popular" pattern means that on a tie the LAST candidate
+	// visited wins, which under ascending iteration is the LARGER
+	// close-time. Go's `for range map` is intentionally randomized,
+	// so without explicit sort goxrpl validators pick different
+	// "consensus" times on tied votes and never converge — the
+	// 5-validator UNL stalls at the first 3-3 tie (e.g. seq=18 with
+	// {831802190:3, 831802200:3} → goxrpl-0 picks one, goxrpl-1 picks
+	// the other, neither matches rippled's deterministic pick).
+	sortedTimes := make([]time.Time, 0, len(closeTimeVotes))
+	for t := range closeTimeVotes {
+		sortedTimes = append(sortedTimes, t)
+	}
+	sort.Slice(sortedTimes, func(i, j int) bool {
+		return sortedTimes[i].Before(sortedTimes[j])
+	})
+
 	var consensusCloseTime time.Time
 	e.haveCloseTimeConsensus = false
-	for t, count := range closeTimeVotes {
+	for _, t := range sortedTimes {
+		count := closeTimeVotes[t]
 		if count >= threshVote {
 			consensusCloseTime = t
 			threshVote = count // raise bar to pick the MOST popular
