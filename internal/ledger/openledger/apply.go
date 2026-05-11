@@ -49,6 +49,60 @@ type ApplyConfig struct {
 // service.go blocks did not either), so terQUEUED — being a ter code —
 // falls through to ShouldRetry. If/when the open-ledger filter gains
 // TxQ integration this branch will need to mirror OpenLedger.cpp:183.
+
+// applyAndClassify runs a single tx through bp against view and classifies
+// the engine result per rippled OpenLedger::apply_one (OpenLedger.cpp:170-189).
+// On Success (and on tec when !certainRetry) it commits the tx+meta blob
+// into view's tx map. Returns the classified Result.
+//
+// Shared by ApplyTxs's per-pass inner loop and OpenLedger.Submit so the
+// success/tec/retry classification lives in exactly one place.
+func applyAndClassify(view *ledger.Ledger, bp *tx.BlockProcessor, transaction tx.Transaction, blob []byte, certainRetry bool) Result {
+	result, applyErr := bp.ApplyTransaction(transaction, blob)
+	if applyErr != nil {
+		return ResultFailure
+	}
+	engineResult := result.ApplyResult.Result
+	switch {
+	case engineResult.IsSuccess():
+		view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
+		return ResultSuccess
+	case engineResult.IsTec():
+		if certainRetry {
+			return ResultRetry
+		}
+		view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
+		return ResultSuccess
+	case engineResult.ShouldRetry():
+		return ResultRetry
+	default:
+		return ResultFailure
+	}
+}
+
+// applyOneSingle is the single-tx convenience that mirrors apply_one
+// (OpenLedger.cpp:170-189). It builds a one-shot engine + BlockProcessor
+// against view and classifies the outcome. retry=true mirrors apply_one's
+// retry parameter (sets tapRETRY so tec results land in retries instead of
+// committing).
+func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte, retry bool, cfg ApplyConfig) Result {
+	engineConfig := tx.EngineConfig{
+		BaseFee:                   cfg.BaseFee,
+		ReserveBase:               cfg.ReserveBase,
+		ReserveIncrement:          cfg.ReserveIncrement,
+		LedgerSequence:            cfg.LedgerSequence,
+		NetworkID:                 cfg.NetworkID,
+		Logger:                    cfg.Logger,
+		SkipSignatureVerification: cfg.SkipSignatureVerification,
+	}
+	if retry {
+		engineConfig.ApplyFlags |= tx.TapRETRY
+	}
+	engine := tx.NewEngine(view, engineConfig)
+	bp := tx.NewBlockProcessor(engine)
+	return applyAndClassify(view, bp, transaction, blob, retry)
+}
+
 func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg ApplyConfig) error {
 	if view == nil || len(txs) == 0 {
 		return nil
@@ -131,27 +185,11 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 				continue
 			}
 
-			result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.Blob)
-			if applyErr != nil {
-				statuses[ptx.Hash] = txFailed
-				continue
-			}
-
-			engineResult := result.ApplyResult.Result
-			switch {
-			case engineResult.IsSuccess():
-				view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
+			switch applyAndClassify(view, blockProcessor, transaction, ptx.Blob, certainRetry) {
+			case ResultSuccess:
 				changes++
 				statuses[ptx.Hash] = txSucceeded
-			case engineResult.IsTec():
-				if certainRetry {
-					statuses[ptx.Hash] = txRetry
-					hasRetry = true
-				} else {
-					view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-					statuses[ptx.Hash] = txSucceeded
-				}
-			case engineResult.ShouldRetry():
+			case ResultRetry:
 				statuses[ptx.Hash] = txRetry
 				hasRetry = true
 			default:
@@ -173,26 +211,11 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 					continue
 				}
 
-				result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.Blob)
-				if applyErr != nil {
-					statuses[ptx.Hash] = txFailed
-					continue
-				}
-
-				engineResult := result.ApplyResult.Result
-				switch {
-				case engineResult.IsSuccess():
-					view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
+				switch applyAndClassify(view, blockProcessor, transaction, ptx.Blob, certainRetry) {
+				case ResultSuccess:
 					changes++
 					statuses[ptx.Hash] = txSucceeded
-				case engineResult.IsTec():
-					if certainRetry {
-						hasRetry = true
-					} else {
-						view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-						statuses[ptx.Hash] = txSucceeded
-					}
-				case engineResult.ShouldRetry():
+				case ResultRetry:
 					hasRetry = true
 				default:
 					statuses[ptx.Hash] = txFailed

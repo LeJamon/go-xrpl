@@ -791,6 +791,32 @@ func (l *Ledger) Snapshot() (*Ledger, error) {
 	}, nil
 }
 
+// MutableSnapshot returns a mutable deep copy of this ledger. Unlike
+// Snapshot() which returns an immutable clone, MutableSnapshot() produces
+// a working copy suitable for further apply operations — the analogue of
+// rippled's `std::make_shared<OpenView>(*current_)` (OpenLedger.cpp:61).
+func (l *Ledger) MutableSnapshot() (*Ledger, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	stateMapCopy, err := l.stateMap.Snapshot(true)
+	if err != nil {
+		return nil, err
+	}
+	txMapCopy, err := l.txMap.Snapshot(true)
+	if err != nil {
+		return nil, err
+	}
+	return &Ledger{
+		stateMap:       stateMapCopy,
+		txMap:          txMapCopy,
+		header:         l.header,
+		fees:           l.fees,
+		state:          l.state,
+		dropsDestroyed: l.dropsDestroyed,
+	}, nil
+}
+
 // StateMapHash returns the state map hash
 func (l *Ledger) StateMapHash() ([32]byte, error) {
 	l.mu.RLock()
