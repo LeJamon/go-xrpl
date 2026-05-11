@@ -16,9 +16,8 @@ import (
 func newTestLedgerService(t *testing.T) *service.Service {
 	t.Helper()
 	cfg := service.Config{
-		Standalone:               true, // standalone for tests that expect seq 2
-		GenesisConfig:            genesis.DefaultConfig(),
-		UseIncrementalOpenLedger: true, // #407: test env defaults to the new path
+		Standalone:    true, // standalone for tests that expect seq 2
+		GenesisConfig: genesis.DefaultConfig(),
 	}
 	svc, err := service.New(cfg)
 	require.NoError(t, err)
@@ -154,38 +153,6 @@ func TestAdaptorGetLastClosedLedger(t *testing.T) {
 	// After Start(), the LCL should be sequence 2
 	assert.Equal(t, uint32(2), lcl.Seq())
 	assert.NotEqual(t, consensus.LedgerID{}, lcl.ID())
-}
-
-func TestAdaptorPendingTxs(t *testing.T) {
-	a := newTestAdaptor(t)
-
-	// Initially empty
-	pending := a.GetPendingTxs()
-	assert.Empty(t, pending)
-
-	// Add some tx blobs
-	blob1 := []byte{0x01, 0x02, 0x03}
-	blob2 := []byte{0x04, 0x05, 0x06}
-	a.AddPendingTx(blob1)
-	a.AddPendingTx(blob2)
-
-	pending = a.GetPendingTxs()
-	assert.Len(t, pending, 2)
-
-	// HasTx should work
-	txID1 := computeTxID(blob1)
-	assert.True(t, a.HasTx(txID1))
-
-	// GetTx should work
-	got, err := a.GetTx(txID1)
-	assert.NoError(t, err)
-	assert.Equal(t, blob1, got)
-
-	// Clear
-	a.ClearPendingTxs()
-	pending = a.GetPendingTxs()
-	assert.Empty(t, pending)
-	assert.False(t, a.HasTx(txID1))
 }
 
 func TestAdaptorQuorumCalculation(t *testing.T) {

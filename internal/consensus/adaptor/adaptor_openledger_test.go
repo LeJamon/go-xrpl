@@ -18,16 +18,13 @@ import (
 	"github.com/LeJamon/goXRPLd/protocol"
 )
 
-// newServiceWithFlag spins up a service with the incremental open-ledger
-// flag set to the given value. Mirrors the helper in
-// service_openledger_test.go so the adaptor tests stay consistent with
-// what Task 4 verified.
-func newServiceWithFlag(t *testing.T, flag bool) *service.Service {
+// newOpenLedgerTestService spins up a service for the open-ledger
+// adaptor tests. Mirrors the helper in service_openledger_test.go.
+func newOpenLedgerTestService(t *testing.T) *service.Service {
 	t.Helper()
 	cfg := service.Config{
-		Standalone:               true,
-		GenesisConfig:            genesis.DefaultConfig(),
-		UseIncrementalOpenLedger: flag,
+		Standalone:    true,
+		GenesisConfig: genesis.DefaultConfig(),
 	}
 	svc, err := service.New(cfg)
 	if err != nil {
@@ -40,8 +37,8 @@ func newServiceWithFlag(t *testing.T, flag bool) *service.Service {
 }
 
 // newAdaptorWithService wraps svc in an Adaptor with a known validator
-// identity. The exact identity does not matter for tx-ingress tests — we
-// only care about the pendingTxs / openLedger plumbing.
+// identity. The exact identity does not matter for tx-ingress tests —
+// we only care about the open-ledger plumbing.
 func newAdaptorWithService(t *testing.T, svc *service.Service) *adaptor.Adaptor {
 	t.Helper()
 	identity, err := adaptor.NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
@@ -85,13 +82,13 @@ func buildSignedPaymentBlob(t *testing.T, env *testenv.TestEnv, sender, receiver
 	return blob, hash
 }
 
-// TestAdaptor_AddPendingTx_RoutesToOpenLedger_FlagOn verifies that with
-// the flag on, AddPendingTx funnels the blob into the persistent
-// OpenLedger view AND keeps it in the legacy pendingTxs map so peer
-// HasTx replies still work until Task 10. Pins the wiring in
-// adaptor.AddPendingTx → service.SubmitOpenLedgerTx.
-func TestAdaptor_AddPendingTx_RoutesToOpenLedger_FlagOn(t *testing.T) {
-	svc := newServiceWithFlag(t, true)
+// TestAdaptor_AddPendingTx_RoutesToOpenLedger verifies that AddPendingTx
+// funnels the blob into the persistent OpenLedger view. HasTx then
+// resolves through that same view. Pins the wiring in
+// adaptor.AddPendingTx → service.SubmitOpenLedgerTx and
+// adaptor.HasTx → service.OpenLedgerHasTx.
+func TestAdaptor_AddPendingTx_RoutesToOpenLedger(t *testing.T) {
+	svc := newOpenLedgerTestService(t)
 	a := newAdaptorWithService(t, svc)
 
 	env := testenv.NewTestEnv(t)
@@ -105,17 +102,17 @@ func TestAdaptor_AddPendingTx_RoutesToOpenLedger_FlagOn(t *testing.T) {
 		t.Errorf("service.OpenLedgerHasTx(hash) = false; AddPendingTx did not land blob in open view")
 	}
 	if !a.HasTx(consensus.TxID(hash)) {
-		t.Errorf("adaptor.HasTx = false; legacy pendingTxs not populated (Task 10 needs this for peer replies)")
+		t.Errorf("adaptor.HasTx = false; HasTx must resolve through the persistent open view")
 	}
 }
 
-// TestAdaptor_GetProposableTxs_FromOpenLedger_FlagOn verifies that
-// propose-time reads with the flag on go through service.OpenLedgerTxs
-// (which reads openLedger.Current().Txs()) and surface every successfully
-// submitted tx. This is the core #407 fix: the propose-time read is now a
-// pointer-deref instead of a multi-pass per-call filter.
-func TestAdaptor_GetProposableTxs_FromOpenLedger_FlagOn(t *testing.T) {
-	svc := newServiceWithFlag(t, true)
+// TestAdaptor_GetProposableTxs_FromOpenLedger verifies that propose-time
+// reads go through service.OpenLedgerTxs (which reads
+// openLedger.Current().Txs()) and surface every successfully submitted
+// tx. This is the core #407 fix: the propose-time read is a pointer-
+// deref, not a per-call multi-pass filter.
+func TestAdaptor_GetProposableTxs_FromOpenLedger(t *testing.T) {
+	svc := newOpenLedgerTestService(t)
 	a := newAdaptorWithService(t, svc)
 
 	env := testenv.NewTestEnv(t)
@@ -154,13 +151,12 @@ func TestAdaptor_GetProposableTxs_FromOpenLedger_FlagOn(t *testing.T) {
 	}
 }
 
-// TestAdaptor_AddPendingTx_FailureNotInPool_FlagOn verifies that a
-// tef/tem-class failure on the open-view Submit drops the blob from both
-// the persistent view AND the legacy pendingTxs map. The legacy map must
-// not silently retain a failed tx, otherwise peer HasTx replies would
-// claim we still hold a known-bad blob.
-func TestAdaptor_AddPendingTx_FailureNotInPool_FlagOn(t *testing.T) {
-	svc := newServiceWithFlag(t, true)
+// TestAdaptor_AddPendingTx_FailureNotInPool verifies that a tef/tem-class
+// failure on the open-view Submit drops the blob — the persistent view
+// must not retain a failed tx, otherwise peer HasTx replies would claim
+// we still hold a known-bad blob.
+func TestAdaptor_AddPendingTx_FailureNotInPool(t *testing.T) {
+	svc := newOpenLedgerTestService(t)
 	a := newAdaptorWithService(t, svc)
 
 	env := testenv.NewTestEnv(t)
@@ -188,66 +184,14 @@ func TestAdaptor_AddPendingTx_FailureNotInPool_FlagOn(t *testing.T) {
 		t.Errorf("service.OpenLedgerHasTx(corrupted) = true; failed tx leaked into open view")
 	}
 	if a.HasTx(consensus.TxID(corruptedHash)) {
-		t.Errorf("adaptor.HasTx(corrupted) = true; failed tx leaked into legacy pendingTxs (spec says drop on ResultFailure)")
-	}
-}
-
-// TestAdaptor_GetProposableTxs_LegacyPath_FlagOff verifies that with the
-// flag off, AddPendingTx + GetProposableTxs still routes through the
-// pre-#407 multi-pass FilterApplicableTxs path. Sanity check that the
-// flag-off rollback path didn't regress.
-func TestAdaptor_GetProposableTxs_LegacyPath_FlagOff(t *testing.T) {
-	svc := newServiceWithFlag(t, false)
-	a := newAdaptorWithService(t, svc)
-
-	env := testenv.NewTestEnv(t)
-	master := testenv.MasterAccount()
-	alice := testenv.NewAccount("alice")
-	blob, _ := buildSignedPaymentBlob(t, env, master, alice, 50_000_000, 1)
-
-	a.AddPendingTx(blob)
-
-	closed := svc.GetClosedLedger()
-	if closed == nil {
-		t.Fatal("GetClosedLedger nil after Start")
-	}
-	got := a.GetProposableTxs(adaptor.WrapLedger(closed))
-	if len(got) != 1 {
-		t.Fatalf("legacy GetProposableTxs len = %d, want 1", len(got))
-	}
-	if !bytes.Equal(got[0], blob) {
-		t.Errorf("legacy GetProposableTxs returned mismatched blob")
-	}
-}
-
-// TestAdaptor_AddPendingTx_LegacyPath_FlagOff_NoOpenLedger verifies that
-// with the flag off, the new persistent view is never touched. This
-// catches accidentally routing through OpenLedger when the operator
-// hasn't opted in.
-func TestAdaptor_AddPendingTx_LegacyPath_FlagOff_NoOpenLedger(t *testing.T) {
-	svc := newServiceWithFlag(t, false)
-	a := newAdaptorWithService(t, svc)
-
-	env := testenv.NewTestEnv(t)
-	master := testenv.MasterAccount()
-	alice := testenv.NewAccount("alice")
-	blob, hash := buildSignedPaymentBlob(t, env, master, alice, 50_000_000, 1)
-
-	a.AddPendingTx(blob)
-
-	if svc.OpenLedgerHasTx(hash) {
-		t.Errorf("service.OpenLedgerHasTx = true with flag off; ingress accidentally routed through new path")
-	}
-	if !a.HasTx(consensus.TxID(hash)) {
-		t.Errorf("adaptor.HasTx = false with flag off; legacy path failed to populate pendingTxs")
+		t.Errorf("adaptor.HasTx(corrupted) = true; failed tx leaked into open view (spec says drop on ResultFailure)")
 	}
 }
 
 // computeTxIDForTest mirrors the unexported computeTxID inside the
 // adaptor package: sha512Half(HashPrefixTransactionID, blob). This is
-// the same key the legacy pendingTxs map uses, and also the canonical
-// XRPL tx hash. Re-implemented here so the test file can stay in the
-// _test package.
+// the canonical XRPL tx hash. Re-implemented here so the test file can
+// stay in the _test package.
 func computeTxIDForTest(blob []byte) [32]byte {
 	return common.Sha512Half(protocol.HashPrefixTransactionID[:], blob)
 }

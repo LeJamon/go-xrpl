@@ -197,12 +197,11 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Initialize ledger service
 	cfg := service.Config{
-		Standalone:               standalone,
-		NetworkID:                uint32(networkID),
-		NodeStore:                db,
-		RelationalDB:             repoManager,
-		Logger:                   rootLogger,
-		UseIncrementalOpenLedger: true,
+		Standalone:   standalone,
+		NetworkID:    uint32(networkID),
+		NodeStore:    db,
+		RelationalDB: repoManager,
+		Logger:       rootLogger,
 	}
 	cfg.GenesisConfig = genesisConfig
 

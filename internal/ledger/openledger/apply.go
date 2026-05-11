@@ -27,7 +27,7 @@ type ApplyConfig struct {
 	// pass (mirrors AcceptLedger's standalone path where
 	// SkipSignatureVerification = s.config.Standalone). When false,
 	// pass 0 verifies signatures and later passes skip — matching
-	// FilterApplicableTxs / AcceptConsensusResult.
+	// AcceptConsensusResult.
 	SkipSignatureVerification bool
 }
 

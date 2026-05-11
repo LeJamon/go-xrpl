@@ -52,13 +52,6 @@ type Config struct {
 	// Logger is the logger for the ledger service.
 	// If nil, xrpllog.Discard() is used.
 	Logger xrpllog.Logger
-
-	// UseIncrementalOpenLedger toggles the rippled-faithful open-ledger
-	// pipeline (#407). When true, tx ingress flows through
-	// OpenLedger.Modify and propose-time reads OpenLedger.Current().Txs().
-	// When false (default during rollout), the legacy raw pendingTxs map
-	// + per-propose FilterApplicableTxs is used.
-	UseIncrementalOpenLedger bool
 }
 
 // DefaultConfig returns the default service configuration
@@ -208,8 +201,10 @@ type Service struct {
 	// Set by the consensus adaptor after startup.
 	serverStateFunc func() string
 
-	// openLedgerView is the persistent open-ledger view used when
-	// UseIncrementalOpenLedger is true. Nil otherwise.
+	// openLedgerView is the persistent open-ledger view that mirrors
+	// rippled's openLedger().current() — the source of truth for the
+	// open pool (#407). Built by Start / rebuilt by adopt paths /
+	// advanced incrementally by Accept on LCL transitions.
 	openLedgerView *openledger.OpenLedger
 }
 
@@ -337,9 +332,9 @@ func (s *Service) Start() error {
 	// Reset pending transactions
 	s.pendingTxs = nil
 
-	// Initialise the persistent open-ledger view when the rippled-
-	// faithful pipeline is enabled (#407). Anchored on the freshly
-	// constructed closedLedger so Current()'s seq matches s.openLedger.
+	// Initialise the persistent open-ledger view (#407). Anchored on
+	// the freshly constructed closedLedger so Current()'s seq matches
+	// s.openLedger.
 	if err := s.rebuildOpenLedgerViewLocked(); err != nil {
 		return err
 	}
@@ -354,16 +349,12 @@ func (s *Service) Start() error {
 }
 
 // rebuildOpenLedgerViewLocked rebuilds s.openLedgerView from s.closedLedger.
-// No-op when UseIncrementalOpenLedger is off; clears the field when
-// closedLedger is nil. Caller must hold s.mu (write).
+// Clears the field when closedLedger is nil. Caller must hold s.mu (write).
 //
 // Called from Start and from adopt-from-peer paths where a *new*
 // closedLedger replaces the old one. The normal consensus close path
 // uses OpenLedger.Accept instead — see AcceptConsensusResult.
 func (s *Service) rebuildOpenLedgerViewLocked() error {
-	if !s.config.UseIncrementalOpenLedger {
-		return nil
-	}
 	if s.closedLedger == nil {
 		s.openLedgerView = nil
 		return nil
@@ -381,14 +372,14 @@ func (s *Service) rebuildOpenLedgerViewLocked() error {
 
 // acceptOpenLedgerViewLocked invokes OpenLedger.Accept on the LCL
 // transition from the prior closed ledger to s.closedLedger. No-op
-// when the flag is off or the view is uninitialised. closedSeq is
-// passed in for log context only.
+// when the view is uninitialised (pre-Start). closedSeq is passed in
+// for log context only.
 //
 // retriesFirst is false (disputes-first replay is not tracked yet);
 // locals is nil (LocalTxs port is a future workitem — see Task 4 spec
 // Step 5). Caller must hold s.mu.
 func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32) {
-	if !s.config.UseIncrementalOpenLedger || s.openLedgerView == nil {
+	if s.openLedgerView == nil {
 		return
 	}
 	if s.closedLedger == nil {
@@ -431,22 +422,11 @@ func (s *Service) applyConfigLocked() (openledger.ApplyConfig, error) {
 	}, nil
 }
 
-// UseIncrementalOpenLedger reports whether the incremental open-ledger
-// pipeline is active. Used by consensus/adaptor to branch ingress and
-// propose-time queries.
-func (s *Service) UseIncrementalOpenLedger() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.config.UseIncrementalOpenLedger
-}
-
 // SubmitOpenLedgerTx routes a tx blob through the persistent OpenLedger
 // view (#407). Mirrors NetworkOPsImp::apply → openLedger().modify
-// (NetworkOPs.cpp:1507). Returns the per-tx classification.
-//
-// When UseIncrementalOpenLedger is off, this returns ResultFailure with
-// a descriptive error — callers must check the flag or rely on the
-// adaptor's branching to avoid this path.
+// (NetworkOPs.cpp:1507). Returns the per-tx classification. Returns
+// ResultFailure when called before Start (no view initialised) — the
+// nil guard is defensive; callers should not race Start with ingress.
 func (s *Service) SubmitOpenLedgerTx(blob []byte) (openledger.Result, error) {
 	s.mu.RLock()
 	ov := s.openLedgerView
@@ -469,8 +449,8 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte) (openledger.Result, error) {
 
 // OpenLedgerTxs returns the raw tx blobs currently in the persistent
 // open view. Mirrors RCLConsensus.cpp:333-349 reading
-// openLedger().current()->txs. Returns nil when the flag is off or the
-// view is uninitialised.
+// openLedger().current()->txs. Returns nil when the view is
+// uninitialised (pre-Start).
 func (s *Service) OpenLedgerTxs() [][]byte {
 	s.mu.RLock()
 	ov := s.openLedgerView
@@ -2265,58 +2245,3 @@ func (s *Service) GetPendingTxBlobs() [][]byte {
 	return blobs
 }
 
-// FilterApplicableTxs runs the multi-pass apply loop against a fresh open
-// view of parent, returning only blobs that apply (success or tec-after-
-// retry). Mirrors rippled's open-ledger apply at OpenLedger.h:209-270;
-// RCLConsensus.cpp:333-349 is the consumer. Side-effect-free; uses RLock.
-// Closure timestamp is time.Now() — for selection only, doesn't affect
-// outcomes.
-func (s *Service) FilterApplicableTxs(parent *ledger.Ledger, txBlobs [][]byte) [][]byte {
-	if parent == nil || len(txBlobs) == 0 {
-		return nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	pending := make([]pendingTx, 0, len(txBlobs))
-	for _, blob := range txBlobs {
-		ptx, err := parsePendingTx(blob)
-		if err != nil {
-			continue
-		}
-		pending = append(pending, ptx)
-	}
-	if len(pending) == 0 {
-		return nil
-	}
-	// Salt must match the build path (RCLConsensus.cpp:512) so propose-
-	// and build-time apply orders agree.
-	canonicalSort(pending, computeSalt(pending))
-
-	closeTime := time.Now()
-	freshLedger, err := ledger.NewOpen(parent, closeTime)
-	if err != nil {
-		return nil
-	}
-
-	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(parent)
-	applyCfg := openledger.ApplyConfig{
-		BaseFee:          baseFee,
-		ReserveBase:      reserveBase,
-		ReserveIncrement: reserveIncrement,
-		LedgerSequence:   freshLedger.Sequence(),
-		NetworkID:        s.config.NetworkID,
-		Logger:           s.config.Logger,
-	}
-	if err := openledger.ApplyTxs(freshLedger, pending, nil, applyCfg); err != nil {
-		return nil
-	}
-
-	out := make([][]byte, 0, len(pending))
-	for _, ptx := range pending {
-		if freshLedger.TxExists(ptx.Hash) {
-			out = append(out, ptx.Blob)
-		}
-	}
-	return out
-}

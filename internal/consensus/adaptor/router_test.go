@@ -2,13 +2,18 @@ package adaptor
 
 import (
 	"context"
+	"encoding/hex"
 	"sync"
 	"testing"
 	"time"
 
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	testenv "github.com/LeJamon/goXRPLd/internal/testing"
+	"github.com/LeJamon/goXRPLd/internal/testing/payment"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -164,17 +169,35 @@ func TestRouterDispatchesValidation(t *testing.T) {
 
 func TestRouterDispatchesTransaction(t *testing.T) {
 	engine := &mockEngine{}
-	adaptor := newTestAdaptor(t)
+	a := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, a, nil, inbox)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go router.Run(ctx)
 
+	// Build a real signed payment blob; the open-ledger Submit path
+	// rejects un-parseable blobs, so the inbound tx must be a valid
+	// XRPL Payment for HasTx to be true after dispatch.
+	env := testenv.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+	master := testenv.MasterAccount()
+	alice := testenv.NewAccount("alice")
+	txn := payment.Pay(master, alice, 100_000_000).Sequence(1).Build()
+	env.SignWith(txn, master)
+	txMap, err := txn.Flatten()
+	require.NoError(t, err)
+	hexStr, err := binarycodec.Encode(txMap)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(hexStr)
+	require.NoError(t, err)
+	txHash, err := tx.ComputeTransactionHash(txn)
+	require.NoError(t, err)
+
 	txMsg := &message.Transaction{
-		RawTransaction:   []byte{0x10, 0x20, 0x30, 0x40},
+		RawTransaction:   blob,
 		Status:           message.TxStatusNew,
 		ReceiveTimestamp: uint64(time.Now().UnixNano()),
 	}
@@ -187,9 +210,10 @@ func TestRouterDispatchesTransaction(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// Transaction should be added to the adaptor's pending pool
-	txID := computeTxID([]byte{0x10, 0x20, 0x30, 0x40})
-	assert.True(t, adaptor.HasTx(txID))
+	// Transaction should be visible via HasTx now that AddPendingTx
+	// routed it through service.SubmitOpenLedgerTx into the persistent
+	// open view.
+	assert.True(t, a.HasTx(consensus.TxID(txHash)))
 }
 
 func TestRouterIgnoresUnknownMessages(t *testing.T) {

@@ -21,7 +21,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/consensus/amendmentvote"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
-	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -159,10 +158,6 @@ type Adaptor struct {
 
 	// Transaction set cache
 	txSetCache *TxSetCache
-
-	// Pending transactions (raw blobs) from RPC submissions and peer relay
-	pendingTxsMu sync.RWMutex
-	pendingTxs   map[consensus.TxID][]byte
 
 	// Peer-reported last-closed ledger hashes, keyed by overlay peer
 	// ID. Populated by the router on every inbound statusChange so
@@ -367,7 +362,6 @@ func New(cfg Config) *Adaptor {
 		quorum:            quorum,
 		operatingMode:     consensus.OpModeDisconnected,
 		txSetCache:        NewTxSetCache(),
-		pendingTxs:        make(map[consensus.TxID][]byte),
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
 		cookie:            cookie,
 		feeVote:           feeVote,
@@ -637,71 +631,27 @@ func (a *Adaptor) StoreLedger(ledger consensus.Ledger) error {
 
 // --- Transaction operations ---
 
+// GetPendingTxs returns the raw tx blobs currently in the persistent
+// open view. Used by the engine for the open-phase "anyTransactions"
+// gate; consensus position formation uses GetProposableTxs. Pointer-
+// deref of openLedger().current()->txs — no per-call filter.
 func (a *Adaptor) GetPendingTxs() [][]byte {
-	a.pendingTxsMu.RLock()
-	defer a.pendingTxsMu.RUnlock()
-
-	blobs := make([][]byte, 0, len(a.pendingTxs))
-	for _, blob := range a.pendingTxs {
-		blobs = append(blobs, blob)
-	}
-	return blobs
-}
-
-// GetProposableTxs returns the subset of pending transactions that the
-// node will propose this round.
-//
-// With UseIncrementalOpenLedger on, this is a pointer-deref to the
-// persistent open-ledger view's tx set (matches rippled
-// RCLConsensus.cpp:333-349 reading openLedger().current()->txs).
-//
-// With the flag off (legacy path), this rebuilds a fresh ledger from
-// parent and runs the multi-pass open-ledger filter on every call —
-// the source of the #407 stall under tx workload.
-func (a *Adaptor) GetProposableTxs(parent consensus.Ledger) [][]byte {
-	if a.ledgerService != nil && a.ledgerService.UseIncrementalOpenLedger() {
-		return a.ledgerService.OpenLedgerTxs()
-	}
-	return a.legacyGetProposableTxs(parent)
-}
-
-// legacyGetProposableTxs is the pre-#407 propose-time filter. Kept
-// behind the flag during rollout; removed in Task 10. Each fallthrough
-// below is a structural bug; we log WARN and return raw pendingTxs to
-// keep proposing rather than wedge the round.
-func (a *Adaptor) legacyGetProposableTxs(parent consensus.Ledger) [][]byte {
-	raw := a.GetPendingTxs()
-	if len(raw) == 0 {
+	if a.ledgerService == nil {
 		return nil
 	}
+	return a.ledgerService.OpenLedgerTxs()
+}
+
+// GetProposableTxs returns the tx set the node will propose this round.
+// Pointer-deref of the persistent open-ledger view's current snapshot —
+// matches rippled RCLConsensus.cpp:333-349 reading
+// openLedger().current()->txs. The parent parameter is reserved for
+// interface compatibility (the view tracks its own parent internally).
+func (a *Adaptor) GetProposableTxs(_ consensus.Ledger) [][]byte {
 	if a.ledgerService == nil {
-		a.logger.Warn(
-			"GetProposableTxs: ledgerService unavailable — proposing raw pendingTxs unfiltered; "+
-				"divergence vs rippled openLedger().current()->txs is possible",
-			"pending_count", len(raw),
-		)
-		return raw
+		return nil
 	}
-	wrapper, ok := parent.(*LedgerWrapper)
-	if !ok || wrapper == nil {
-		a.logger.Warn(
-			"GetProposableTxs: parent is not *LedgerWrapper — proposing raw pendingTxs unfiltered; "+
-				"this is a structural caller bug, divergence vs rippled openLedger filter expected",
-			"parent_type", fmt.Sprintf("%T", parent),
-			"pending_count", len(raw),
-		)
-		return raw
-	}
-	parentLedger := wrapper.Unwrap()
-	if parentLedger == nil {
-		a.logger.Warn(
-			"GetProposableTxs: LedgerWrapper.Unwrap() returned nil — proposing raw pendingTxs unfiltered; "+
-				"wrapper was torn down mid-flight, divergence vs rippled openLedger filter expected",
-			"pending_count", len(raw),
-		)
-		return raw
-	}
-	return a.ledgerService.FilterApplicableTxs(parentLedger, raw)
+	return a.ledgerService.OpenLedgerTxs()
 }
 
 // GenerateFlagLedgerPseudoTxs runs the fee-vote and amendment-vote producers
@@ -794,81 +744,39 @@ func (a *Adaptor) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
 	return ts, nil
 }
 
-// HasTx reports whether the legacy pending pool contains this tx ID.
-// Task 10 will repoint this at service.OpenLedgerHasTx when
-// UseIncrementalOpenLedger is on; for now we keep the legacy map
-// populated even when the flag is on (see AddPendingTx) so peer
-// txSet-acquire replies stay accurate.
+// HasTx reports whether the persistent open view contains this tx.
+// Used by the peer protocol for HaveSet / txSet-acquire negotiation.
 func (a *Adaptor) HasTx(id consensus.TxID) bool {
-	a.pendingTxsMu.RLock()
-	defer a.pendingTxsMu.RUnlock()
-	_, ok := a.pendingTxs[id]
-	return ok
+	if a.ledgerService == nil {
+		return false
+	}
+	return a.ledgerService.OpenLedgerHasTx([32]byte(id))
 }
 
-// GetTx returns the blob for id from the legacy pending pool. Task 10
-// will repoint this at service.OpenLedgerGetTx when
-// UseIncrementalOpenLedger is on; for now the legacy map is kept
-// populated even when the flag is on (see AddPendingTx) so peer
-// txSet-acquire replies stay accurate.
+// GetTx returns the raw tx blob if it is in the persistent open view.
 func (a *Adaptor) GetTx(id consensus.TxID) ([]byte, error) {
-	a.pendingTxsMu.RLock()
-	defer a.pendingTxsMu.RUnlock()
-	blob, ok := a.pendingTxs[id]
+	if a.ledgerService == nil {
+		return nil, errors.New("ledgerService unavailable")
+	}
+	blob, ok := a.ledgerService.OpenLedgerGetTx([32]byte(id))
 	if !ok {
 		return nil, errors.New("transaction not found")
 	}
 	return blob, nil
 }
 
-// AddPendingTx adds a transaction to the pending pool. When
-// UseIncrementalOpenLedger is on, the blob also flows through
-// service.SubmitOpenLedgerTx so it lands in the persistent open view
-// (#407, mirrors NetworkOPsImp::apply → openLedger().modify in
-// NetworkOPs.cpp:1507). The legacy pendingTxs map is kept populated
-// when the flag is on so peer HasTx/GetTx replies still work; Task 10
-// removes that redundancy.
+// AddPendingTx submits a relayed or local tx blob through the persistent
+// open-ledger view. Mirrors rippled NetworkOPsImp::apply →
+// openLedger().modify (NetworkOPs.cpp:1507).
 func (a *Adaptor) AddPendingTx(blob []byte) {
-	if a.ledgerService != nil && a.ledgerService.UseIncrementalOpenLedger() {
-		res, err := a.ledgerService.SubmitOpenLedgerTx(blob)
-		if err != nil {
-			a.logger.Warn("openLedger submit failed",
-				"err", err,
-				"blob_size", len(blob),
-			)
-			return
-		}
-		// Failure: tef/tem/tel — drop, do not keep in pending pool.
-		if res == openledger.ResultFailure {
-			return
-		}
-		// Success/Retry: stay in the legacy map so HasTx/GetTx peer
-		// replies can still find this blob until Task 10 repoints them
-		// at OpenLedgerHasTx/GetTx.
+	if a.ledgerService == nil {
+		return
 	}
-
-	txID := computeTxID(blob)
-	a.pendingTxsMu.Lock()
-	defer a.pendingTxsMu.Unlock()
-	a.pendingTxs[txID] = blob
-}
-
-// ClearPendingTxs removes all pending transactions.
-func (a *Adaptor) ClearPendingTxs() {
-	a.pendingTxsMu.Lock()
-	defer a.pendingTxsMu.Unlock()
-	a.pendingTxs = make(map[consensus.TxID][]byte)
-}
-
-// RemovePendingTxs removes specific transactions from the pending pool.
-// Used after consensus to remove only txs that were included in the ledger,
-// keeping any txs that arrived after the tx set was built.
-func (a *Adaptor) RemovePendingTxs(txBlobs [][]byte) {
-	a.pendingTxsMu.Lock()
-	defer a.pendingTxsMu.Unlock()
-	for _, blob := range txBlobs {
-		txID := computeTxID(blob)
-		delete(a.pendingTxs, txID)
+	if _, err := a.ledgerService.SubmitOpenLedgerTx(blob); err != nil {
+		a.logger.Warn("openLedger submit failed",
+			"err", err,
+			"blob_size", len(blob),
+		)
 	}
 }
 
@@ -1255,41 +1163,26 @@ func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
 	a.operatingMode = mode
 }
 
-// OnConsensusReached drains the legacy pending pool of included txs so
-// HasTx/GetTx peer replies don't surface them as still-pending. When
-// UseIncrementalOpenLedger is on, the persistent view has already been
-// rebuilt by Service.AcceptConsensusResult → OpenLedger.Accept; this
-// drain only maintains the legacy map. Task 10 collapses this once
-// HasTx/GetTx route through the persistent view.
+// OnConsensusReached logs the close and fires the consensus-phase hook.
+// The persistent open-ledger view has already been advanced by
+// Service.AcceptConsensusResult → OpenLedger.Accept (mirrors rippled
+// RCLConsensus.cpp:662-674), so there is nothing to do for the tx pool.
+//
+// NOTE: we intentionally do NOT mark the ledger validated here. The
+// validated_ledger pointer only advances once trusted-validation quorum
+// is reached — see OnLedgerFullyValidated, driven by the engine's
+// ValidationTracker. This matches rippled's checkAccept() semantics
+// where local consensus != network agreement.
 func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*consensus.Validation) {
-	// Remove only txs that were included in the closed ledger.
-	// Txs that arrived after the tx set was built stay in the pool
-	// for the next round — matching rippled's LocalTxs behavior.
-	wrapper, ok := ledger.(*LedgerWrapper)
-	if ok {
-		l := wrapper.Unwrap()
-		l.ForEachTransaction(func(txHash [32]byte, _ []byte) bool {
-			a.pendingTxsMu.Lock()
-			delete(a.pendingTxs, consensus.TxID(txHash))
-			a.pendingTxsMu.Unlock()
-			return true
-		})
-	}
-
-	// NOTE: we intentionally do NOT mark the ledger validated here.
-	// The validated_ledger pointer only advances once trusted-validation
-	// quorum is reached — see OnLedgerFullyValidated, driven by the
-	// engine's ValidationTracker. This matches rippled's checkAccept()
-	// semantics where local consensus != network agreement.
-
 	a.logger.Info("Consensus reached",
 		"ledger_seq", ledger.Seq(),
 		"validations", len(validations),
 	)
 
-	// Fire consensus phase hook if available
-	if hooks := a.ledgerService.GetEventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
-		go hooks.OnConsensusPhase("accepted")
+	if a.ledgerService != nil {
+		if hooks := a.ledgerService.GetEventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
+			go hooks.OnConsensusPhase("accepted")
+		}
 	}
 }
 

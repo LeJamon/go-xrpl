@@ -47,13 +47,12 @@ func buildSignedPaymentBlob(t *testing.T, env *testenv.TestEnv, sender, receiver
 	return blob, hash
 }
 
-// newServiceWithFlag spins up a service with the incremental open-ledger
-// flag set to the given value and runs Start. Mirrors the service_test.go
-// New/Start pattern used by the existing TestService_* cases.
-func newServiceWithFlag(t *testing.T, flag bool) *service.Service {
+// newServiceForOpenLedgerTest spins up a service and runs Start. Mirrors
+// the service_test.go New/Start pattern used by the existing
+// TestService_* cases.
+func newServiceForOpenLedgerTest(t *testing.T) *service.Service {
 	t.Helper()
 	cfg := service.DefaultConfig()
-	cfg.UseIncrementalOpenLedger = flag
 	svc, err := service.New(cfg)
 	if err != nil {
 		t.Fatalf("service.New: %v", err)
@@ -68,7 +67,7 @@ func newServiceWithFlag(t *testing.T, flag bool) *service.Service {
 // SubmitOpenLedgerTx lands in the persistent open view and is observable
 // through OpenLedgerTxs / OpenLedgerHasTx / OpenLedgerGetTx.
 func TestService_OpenLedgerSubmit_Roundtrip(t *testing.T) {
-	svc := newServiceWithFlag(t, true)
+	svc := newServiceForOpenLedgerTest(t)
 
 	env := testenv.NewTestEnv(t)
 	master := testenv.MasterAccount()
@@ -105,47 +104,13 @@ func TestService_OpenLedgerSubmit_Roundtrip(t *testing.T) {
 	}
 }
 
-// TestService_OpenLedgerSubmit_FlagOff_NoOp verifies that with the flag
-// disabled, the new API methods return safe zero values and submit errors.
-// This is the rollout-safety check: legacy callers must not break when the
-// flag is off.
-func TestService_OpenLedgerSubmit_FlagOff_NoOp(t *testing.T) {
-	svc := newServiceWithFlag(t, false)
-
-	env := testenv.NewTestEnv(t)
-	master := testenv.MasterAccount()
-	dest := testenv.NewAccount("alice")
-	blob, hash := buildSignedPaymentBlob(t, env, master, dest, 100_000_000, 1)
-
-	res, err := svc.SubmitOpenLedgerTx(blob)
-	if err == nil {
-		t.Errorf("SubmitOpenLedgerTx err = nil, want non-nil when flag off")
-	}
-	if res != openledger.ResultFailure {
-		t.Errorf("SubmitOpenLedgerTx result = %v, want ResultFailure when flag off", res)
-	}
-
-	if got := svc.OpenLedgerTxs(); got != nil {
-		t.Errorf("OpenLedgerTxs = %v, want nil when flag off", got)
-	}
-	if svc.OpenLedgerHasTx(hash) {
-		t.Errorf("OpenLedgerHasTx = true when flag off, want false")
-	}
-	if _, ok := svc.OpenLedgerGetTx(hash); ok {
-		t.Errorf("OpenLedgerGetTx ok = true when flag off, want false")
-	}
-	if svc.UseIncrementalOpenLedger() {
-		t.Errorf("UseIncrementalOpenLedger() = true, want false")
-	}
-}
-
 // TestService_AcceptConsensusResult_RebuildsOpenView verifies that on an
 // LCL transition with an empty agreed-set, the persistent open view
 // replays the prior current view's txs onto the new closed ledger.
 // This is the key invariant proving the OpenLedger.Accept wiring works:
 // txs that didn't land in the closed ledger get carried forward.
 func TestService_AcceptConsensusResult_RebuildsOpenView(t *testing.T) {
-	svc := newServiceWithFlag(t, true)
+	svc := newServiceForOpenLedgerTest(t)
 
 	env := testenv.NewTestEnv(t)
 	master := testenv.MasterAccount()
@@ -190,7 +155,7 @@ func TestService_AcceptConsensusResult_RebuildsOpenView(t *testing.T) {
 // The replay's per-tx TxExists guard against the new closed parent must
 // drop already-committed txs.
 func TestService_AcceptConsensusResult_IncludedTxsNotDuplicated(t *testing.T) {
-	svc := newServiceWithFlag(t, true)
+	svc := newServiceForOpenLedgerTest(t)
 
 	env := testenv.NewTestEnv(t)
 	master := testenv.MasterAccount()

@@ -21,14 +21,13 @@ import (
 )
 
 // newConvergenceServiceAndAdaptor spins up an independent Service+Adaptor
-// pair with UseIncrementalOpenLedger on. Each call builds a fresh genesis
-// ledger and an isolated open view, so two pairs share no mutable state.
+// pair. Each call builds a fresh genesis ledger and an isolated open
+// view, so two pairs share no mutable state.
 func newConvergenceServiceAndAdaptor(t *testing.T) (*service.Service, *adaptor.Adaptor) {
 	t.Helper()
 	cfg := service.Config{
-		Standalone:               true,
-		GenesisConfig:            genesis.DefaultConfig(),
-		UseIncrementalOpenLedger: true,
+		Standalone:    true,
+		GenesisConfig: genesis.DefaultConfig(),
 	}
 	svc, err := service.New(cfg)
 	if err != nil {
