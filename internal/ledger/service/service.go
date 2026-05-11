@@ -648,6 +648,10 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 			NetworkID:                 s.config.NetworkID,
 			Logger:                    s.config.Logger,
 			SkipSignatureVerification: s.config.Standalone,
+			// Standalone close mirrors the consensus-build path: tec under
+			// certainRetry holds for retry, commits on the final non-retry
+			// pass. See BuildLedger.cpp.
+			Mode: openledger.BuildLedgerMode,
 		}
 		if err := openledger.ApplyTxs(freshLedger, s.pendingTxs, nil, applyCfg); err != nil {
 			return 0, fmt.Errorf("openledger.ApplyTxs: %w", err)
@@ -1286,6 +1290,9 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 			LedgerSequence:   freshLedger.Sequence(),
 			NetworkID:        s.config.NetworkID,
 			Logger:           s.config.Logger,
+			// Consensus build uses BuildLedger semantics: tec holds for
+			// retry under certainRetry; commits on the final pass.
+			Mode: openledger.BuildLedgerMode,
 		}
 		if err := openledger.ApplyTxs(freshLedger, pending, nil, applyCfg); err != nil {
 			return 0, fmt.Errorf("openledger.ApplyTxs: %w", err)

@@ -181,3 +181,88 @@ func TestApplyTxs_TemMalformed_DroppedNotRetried(t *testing.T) {
 		t.Errorf("malformed tx leaked into view")
 	}
 }
+
+// buildTecPayment builds a Payment whose apply will return tec — the
+// classic shape is "fund a brand-new account with less than ReserveBase",
+// which yields tecNO_DST_INSUF_XRP. This is the same scenario the
+// convergence test had to pre-fund around before Mode existed.
+func buildTecPayment(t *testing.T, env *testenv.TestEnv) (openledger.PendingTx, *testenv.Account) {
+	t.Helper()
+	master := testenv.MasterAccount()
+	newAcct := testenv.NewAccount("tec-target")
+	// 100 XRP < 200 XRP reserve → tecNO_DST_INSUF_XRP.
+	pay := payment.Pay(master, newAcct, 100_000_000).
+		Sequence(env.Seq(master)).
+		Build()
+	blob := buildSignedBlob(t, env, pay, master)
+	pt, err := openledger.ParsePendingTx(blob)
+	if err != nil {
+		t.Fatalf("ParsePendingTx: %v", err)
+	}
+	return pt, newAcct
+}
+
+// TestApplyTxs_OpenLedgerMode_TecCommits verifies that under
+// OpenLedgerMode, a tec result classifies as Success+commit per
+// rippled OpenLedger::apply_one (OpenLedger.cpp:170-189). The tx must
+// end up in the view's tx map and must NOT appear in retries.
+func TestApplyTxs_OpenLedgerMode_TecCommits(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+
+	pt, _ := buildTecPayment(t, env)
+	view := freshView(t, env)
+
+	var retries []openledger.PendingTx
+	cfg := openledger.ApplyConfig{
+		BaseFee:          10,
+		ReserveBase:      200_000_000,
+		ReserveIncrement: 50_000_000,
+		LedgerSequence:   view.Sequence(),
+		NetworkID:        0,
+		Mode:             openledger.OpenLedgerMode,
+	}
+	if err := openledger.ApplyTxs(view, []openledger.PendingTx{pt}, &retries, cfg); err != nil {
+		t.Fatalf("ApplyTxs: %v", err)
+	}
+
+	if len(retries) != 0 {
+		t.Errorf("OpenLedgerMode: expected 0 retries (tec is Success), got %d", len(retries))
+	}
+	if !view.TxExists(pt.Hash) {
+		t.Errorf("OpenLedgerMode: tec tx missing from view — should have committed with metadata")
+	}
+}
+
+// TestApplyTxs_BuildLedgerMode_TecRetriesThenCommits verifies that under
+// BuildLedgerMode, a tec is held for retry on retriable passes and
+// commits on the final non-retry pass — matching BuildLedger.cpp's
+// apply loop. Net effect: the tx still ends up in the view and is not
+// reported as a leftover retry.
+func TestApplyTxs_BuildLedgerMode_TecRetriesThenCommits(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+
+	pt, _ := buildTecPayment(t, env)
+	view := freshView(t, env)
+
+	var retries []openledger.PendingTx
+	cfg := openledger.ApplyConfig{
+		BaseFee:          10,
+		ReserveBase:      200_000_000,
+		ReserveIncrement: 50_000_000,
+		LedgerSequence:   view.Sequence(),
+		NetworkID:        0,
+		Mode:             openledger.BuildLedgerMode,
+	}
+	if err := openledger.ApplyTxs(view, []openledger.PendingTx{pt}, &retries, cfg); err != nil {
+		t.Fatalf("ApplyTxs: %v", err)
+	}
+
+	if len(retries) != 0 {
+		t.Errorf("BuildLedgerMode: expected 0 leftover retries (tec commits on final pass), got %d", len(retries))
+	}
+	if !view.TxExists(pt.Hash) {
+		t.Errorf("BuildLedgerMode: tec tx missing from view — final non-retry pass should have committed")
+	}
+}

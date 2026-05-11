@@ -136,6 +136,9 @@ func (o *OpenLedger) Accept(
 	if applyCfg.Logger == nil {
 		applyCfg.Logger = o.logger
 	}
+	// Accept-replay is OpenLedger semantics, not BuildLedger. Force the
+	// mode here so we don't inherit a stray BuildLedgerMode from cfg.
+	applyCfg.Mode = OpenLedgerMode
 
 	// 1. retriesFirst — replay disputed/held txs first
 	// (OpenLedger.cpp:85-90). We drain the caller's slice up front and
@@ -205,6 +208,10 @@ func collectTxs(v *ledger.Ledger) []PendingTx {
 // Mirrors NetworkOPsImp::apply calling openLedger().modify with a
 // single-tx body (NetworkOPs.cpp:1507).
 func (o *OpenLedger) Submit(ptx PendingTx, cfg ApplyConfig) (bool, Result) {
+	// Submit is per-tx ingress — always OpenLedger semantics. Force the
+	// mode here so a caller's stray BuildLedgerMode does not cause tec
+	// to be silently dropped as ResultRetry.
+	cfg.Mode = OpenLedgerMode
 	result := ResultFailure
 	changed := o.Modify(func(view *ledger.Ledger) bool {
 		// Pre-filter: tx already in view → drop (BuildLedger.cpp:125-129).

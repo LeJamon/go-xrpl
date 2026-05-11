@@ -526,6 +526,54 @@ func TestOpenLedger_Accept_LocalsApplied(t *testing.T) {
 	}
 }
 
+// TestOpenLedger_Submit_TecCommits verifies that Submit treats a tec
+// engine result as Success+commit (rippled OpenLedger::apply_one,
+// OpenLedger.cpp:170-189). The classic scenario: send less than
+// ReserveBase to a brand-new account → tecNO_DST_INSUF_XRP. Pre-Mode
+// fix, this returned ResultRetry and was silently dropped.
+func TestOpenLedger_Submit_TecCommits(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+
+	master := testenv.MasterAccount()
+	newAcct := testenv.NewAccount("tec-target-submit")
+	parent := closedParent(t, env)
+
+	ol, err := openledger.New(parent, openledger.Config{})
+	if err != nil {
+		t.Fatalf("openledger.New: %v", err)
+	}
+
+	// 100 XRP < 200 XRP reserve → tecNO_DST_INSUF_XRP.
+	pay := payment.Pay(master, newAcct, 100_000_000).
+		Sequence(env.Seq(master)).
+		Build()
+	blob := buildSignedBlobOL(t, env, pay, master)
+	pt, err := openledger.ParsePendingTx(blob)
+	if err != nil {
+		t.Fatalf("ParsePendingTx: %v", err)
+	}
+
+	cfg := openledger.ApplyConfig{
+		BaseFee:          10,
+		ReserveBase:      200_000_000,
+		ReserveIncrement: 50_000_000,
+		LedgerSequence:   ol.Current().Sequence(),
+		NetworkID:        0,
+	}
+
+	changed, result := ol.Submit(pt, cfg)
+	if !changed {
+		t.Fatalf("Submit changed=false, want true; result=%v", result)
+	}
+	if result != openledger.ResultSuccess {
+		t.Fatalf("Submit result=%v, want ResultSuccess (tec is Success in OpenLedger semantics)", result)
+	}
+	if !ol.Current().TxExists(pt.Hash) {
+		t.Errorf("Current() missing tec-committed tx after Submit")
+	}
+}
+
 // TestOpenLedger_Accept_RetriesFirst_ReplaysHeldTx verifies that with
 // retriesFirst=true, a held tx in *retries is replayed against the new
 // working view. Mirrors OpenLedger.cpp:85-90.

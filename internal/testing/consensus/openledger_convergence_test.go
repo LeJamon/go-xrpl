@@ -72,30 +72,29 @@ func signedPaymentBlob(t *testing.T, env *testenv.TestEnv, sender, receiver *tes
 
 // fundAccountsAndClose funds nSenders accounts from the master account
 // via SubmitOpenLedgerTx, then drives one consensus close so the funded
-// accounts exist in the closed ledger of svc. Returns the senders and
-// the destination, plus the closed-ledger sequence at which the senders
-// were created (which becomes their initial AccountRoot.Sequence under
-// featureDeletableAccounts and is therefore the sequence each sender's
-// first payment must use).
+// accounts exist in the closed ledger of svc. Returns the senders, an
+// "existing" destination already on-ledger, plus the closed-ledger
+// sequence at which the senders were created (their initial
+// AccountRoot.Sequence under featureDeletableAccounts and therefore the
+// sequence each sender's first payment must use).
+//
+// Post-Mode fix (issue #407 Task A), the destination no longer needs to
+// be pre-funded just to dodge TecNO_DST_INSUF_XRP: under OpenLedger
+// semantics tec is now Success+commit, so payments to fresh destinations
+// land in the open view. We still keep one pre-funded "existing"
+// destination here so callers can mix tesSUCCESS and tec workloads.
 func fundAccountsAndClose(
 	t *testing.T,
 	svc *service.Service,
 	env *testenv.TestEnv,
 	nSenders int,
-) (senders []*testenv.Account, dest *testenv.Account, senderInitialSeq uint32) {
+) (senders []*testenv.Account, existingDest *testenv.Account, senderInitialSeq uint32) {
 	t.Helper()
 	env.SetVerifySignatures(true)
 	master := testenv.MasterAccount()
-	dest = testenv.NewAccount("convergence-dest")
+	existingDest = testenv.NewAccount("convergence-existing-dest")
 
 	senders = make([]*testenv.Account, nSenders)
-	// nSenders + 1 funding blobs: nSenders for the sender accounts plus
-	// one for the destination. The destination must be funded above the
-	// 200 XRP reserve up front; otherwise payments to it from the senders
-	// would classify as TecNO_DST_INSUF_XRP under retry=true (Submit's
-	// initial classification — see apply.applyAndClassify), which maps to
-	// ResultRetry and is therefore dropped from the open view rather than
-	// committed.
 	fundingBlobs := make([][]byte, nSenders+1)
 	for i := 0; i < nSenders; i++ {
 		senders[i] = testenv.NewAccount(fmt.Sprintf("convergence-sender-%03d", i))
@@ -103,9 +102,9 @@ func fundAccountsAndClose(
 		// plenty of headroom for the payment + fee.
 		fundingBlobs[i] = signedPaymentBlob(t, env, master, senders[i], 1_000_000_000, uint32(i+1))
 	}
-	// Fund the destination above the reserve so test-workload payments
-	// are simple account-to-account transfers, not account creations.
-	fundingBlobs[nSenders] = signedPaymentBlob(t, env, master, dest, 1_000_000_000, uint32(nSenders+1))
+	// One pre-funded existing destination so callers can mix existing
+	// vs fresh-destination payments in the test workload.
+	fundingBlobs[nSenders] = signedPaymentBlob(t, env, master, existingDest, 1_000_000_000, uint32(nSenders+1))
 
 	for i, blob := range fundingBlobs {
 		res, err := svc.SubmitOpenLedgerTx(blob)
@@ -134,7 +133,7 @@ func fundAccountsAndClose(
 	// time. The funding txs applied during the close that produced
 	// `closed`, so the senders' starting sequence equals closed.Sequence().
 	senderInitialSeq = closed.Sequence()
-	return senders, dest, senderInitialSeq
+	return senders, existingDest, senderInitialSeq
 }
 
 // TestOpenLedger_ConvergenceUnderOrderShuffling is the unit-level proof of
@@ -142,33 +141,43 @@ func fundAccountsAndClose(
 // 100 payment blobs — one in canonical order, the other in a deterministic
 // shuffle — and their resulting OpenLedgerTxs() sets must be identical.
 //
+// Workload mix (post-#407 Task A):
+//
+//   - 50 payments to a pre-funded "existing" destination → tesSUCCESS.
+//   - 50 payments to brand-new fresh destinations with 100 XRP each
+//     (below the 200 XRP reserve) → tecNO_DST_INSUF_XRP.
+//
+// Both classes must commit to the open view under OpenLedger semantics
+// (tec is Success+commit). Pre-Task-A this test had to pre-fund the
+// destination to avoid tecNO_DST_INSUF_XRP being silently dropped from
+// the open view as ResultRetry — that workaround is now gone.
+//
 // Design notes:
 //
-//   - The test uses 100 distinct sender accounts (one payment each) rather
-//     than the 10x10 shape sketched in the issue body. OpenLedger.Submit
-//     is single-shot: a tx that classifies as Retry (e.g. terPRE_SEQ from
-//     arriving out-of-sequence) is dropped, not held for a later pass.
-//     Within a single sender, chained sequences are therefore arrival-
-//     order-sensitive at ingress. The order-independence property #407
-//     fixes is about which set of INDEPENDENT txs ends up in the propose-
-//     time view — not about reordering dependency chains, which is
-//     handled separately by the consensus-close 3-pass ApplyTxs loop.
+//   - The test uses 100 distinct sender accounts (one payment each)
+//     rather than the 10x10 shape sketched in the issue body.
+//     OpenLedger.Submit is single-shot: a tx that classifies as Retry
+//     (e.g. terPRE_SEQ from arriving out-of-sequence) is dropped, not
+//     held for a later pass. Within a single sender, chained sequences
+//     are therefore arrival-order-sensitive at ingress. Task B
+//     (LocalTxs) will close that gap; for now the test stays scoped to
+//     independent senders.
 //
 //   - Both services start from identical genesis configs and submit the
-//     same byte-for-byte funding blobs in the same order before the test
-//     workload begins. That keeps the post-funding state byte-identical
-//     across A and B, which is the precondition for asking whether
-//     shuffled ingress of the test workload converges.
+//     same byte-for-byte funding blobs in the same order before the
+//     test workload begins. That keeps the post-funding state byte-
+//     identical across A and B, which is the precondition for asking
+//     whether shuffled ingress of the test workload converges.
 //
-//   - The 100 payments are independent: each comes from a distinct sender
-//     account at its starting sequence (post-funding-close), targets a
-//     single shared destination, and carries a unique drops amount so
-//     blobs are all distinct.
+//   - Each of the 100 payments has a unique sender, unique drops amount,
+//     and (for the fresh-dest half) a unique destination — so blobs
+//     are all distinct.
 //
 // Refs: #407.
 func TestOpenLedger_ConvergenceUnderOrderShuffling(t *testing.T) {
 	const (
 		nPayments = 100
+		nFresh    = 50 // first half targets brand-new destinations → tec
 		rngSeed   = int64(0xC07407)
 	)
 
@@ -178,8 +187,8 @@ func TestOpenLedger_ConvergenceUnderOrderShuffling(t *testing.T) {
 	svcA, adA := newConvergenceServiceAndAdaptor(t)
 	svcB, adB := newConvergenceServiceAndAdaptor(t)
 
-	sendersA, destA, seqStartA := fundAccountsAndClose(t, svcA, envA, nPayments)
-	sendersB, destB, seqStartB := fundAccountsAndClose(t, svcB, envB, nPayments)
+	sendersA, existingDestA, seqStartA := fundAccountsAndClose(t, svcA, envA, nPayments)
+	sendersB, existingDestB, seqStartB := fundAccountsAndClose(t, svcB, envB, nPayments)
 
 	if seqStartA != seqStartB {
 		t.Fatalf("post-funding starting sequence diverges: A=%d B=%d (state mismatch breaks the test premise)", seqStartA, seqStartB)
@@ -189,14 +198,39 @@ func TestOpenLedger_ConvergenceUnderOrderShuffling(t *testing.T) {
 			t.Fatalf("sender %d account ID diverges across envs (test premise broken)", i)
 		}
 	}
-	if destA.ID != destB.ID {
-		t.Fatal("destination account ID diverges across envs (test premise broken)")
+	if existingDestA.ID != existingDestB.ID {
+		t.Fatal("existing destination account ID diverges across envs (test premise broken)")
+	}
+
+	// Pre-build fresh destinations (deterministic across A and B by name).
+	freshDestsA := make([]*testenv.Account, nFresh)
+	freshDestsB := make([]*testenv.Account, nFresh)
+	for i := 0; i < nFresh; i++ {
+		name := fmt.Sprintf("convergence-fresh-dest-%03d", i)
+		freshDestsA[i] = testenv.NewAccount(name)
+		freshDestsB[i] = testenv.NewAccount(name)
+		if freshDestsA[i].ID != freshDestsB[i].ID {
+			t.Fatalf("fresh dest %d account ID diverges across envs (test premise broken)", i)
+		}
 	}
 
 	blobsA := make([][]byte, nPayments)
 	blobsB := make([][]byte, nPayments)
 	for i := 0; i < nPayments; i++ {
-		amount := uint64(2_000_000 + i*100)
+		var destA, destB *testenv.Account
+		var amount uint64
+		if i < nFresh {
+			// 100 XRP < 200 XRP reserve → tecNO_DST_INSUF_XRP. Post-fix
+			// these commit to the open view; pre-fix they were dropped.
+			destA = freshDestsA[i]
+			destB = freshDestsB[i]
+			amount = 100_000_000 + uint64(i)*100
+		} else {
+			// Pre-funded existing destination → tesSUCCESS.
+			destA = existingDestA
+			destB = existingDestB
+			amount = 2_000_000 + uint64(i-nFresh)*100
+		}
 		blobsA[i] = signedPaymentBlob(t, envA, sendersA[i], destA, amount, seqStartA)
 		blobsB[i] = signedPaymentBlob(t, envB, sendersB[i], destB, amount, seqStartB)
 		if !bytes.Equal(blobsA[i], blobsB[i]) {
