@@ -93,6 +93,110 @@ func (o *OpenLedger) Modify(fn func(*ledger.Ledger) bool) bool {
 	return true
 }
 
+// Accept rebuilds the working view from newLCL, optionally replaying
+// retries first, then prior current view's txs, then locals. Any
+// PendingTxs that ended in Retry on the final pass are appended to
+// *retries for the caller.
+//
+// Mirrors OpenLedger::accept (OpenLedger.cpp:71-155).
+//
+// Locking: holds modifyMu for the entire rebuild — concurrent Submits
+// are serialised behind this. currentMu is taken only for the final
+// pointer swap. This is slightly stricter than rippled (which releases
+// modify_mutex_ around the retries-first apply) but eliminates an
+// observable race that rippled's design tolerates because of its
+// implicit Application-locking discipline.
+//
+// cfg carries the per-call ApplyConfig — the caller has just computed
+// fees from newLCL via readFeesFromLedger. LedgerSequence is overridden
+// to the working view's sequence, and Logger / NetworkID are filled in
+// from the OpenLedger if not already set.
+func (o *OpenLedger) Accept(
+	newLCL *ledger.Ledger,
+	locals []PendingTx,
+	retriesFirst bool,
+	retries *[]PendingTx,
+	cfg ApplyConfig,
+) error {
+	if newLCL == nil {
+		return errors.New("openledger.Accept: newLCL is nil")
+	}
+
+	o.modifyMu.Lock()
+	defer o.modifyMu.Unlock()
+
+	next, err := ledger.NewOpen(newLCL, time.Now())
+	if err != nil {
+		return err
+	}
+
+	applyCfg := cfg
+	applyCfg.LedgerSequence = next.Sequence()
+	applyCfg.NetworkID = o.cfg.NetworkID
+	if applyCfg.Logger == nil {
+		applyCfg.Logger = o.logger
+	}
+
+	// 1. retriesFirst — replay disputed/held txs first
+	// (OpenLedger.cpp:85-90). We drain the caller's slice up front and
+	// let ApplyTxs re-fill it with any final-pass Retry classifications.
+	if retriesFirst && retries != nil && len(*retries) > 0 {
+		held := append([]PendingTx(nil), (*retries)...)
+		*retries = (*retries)[:0]
+		if err := ApplyTxs(next, held, retries, applyCfg); err != nil {
+			return err
+		}
+	}
+
+	// 2. Replay prior current's txs (OpenLedger.cpp:96-112). The
+	// parent-skip guard inside ApplyTxs drops anything already in
+	// newLCL.
+	o.currentMu.RLock()
+	curTxs := collectTxs(o.current)
+	o.currentMu.RUnlock()
+	if len(curTxs) > 0 {
+		if err := ApplyTxs(next, curTxs, retries, applyCfg); err != nil {
+			return err
+		}
+	}
+
+	// 3. Replay locals (OpenLedger.cpp:117-118).
+	if len(locals) > 0 {
+		if err := ApplyTxs(next, locals, retries, applyCfg); err != nil {
+			return err
+		}
+	}
+
+	// 4. Atomic publish.
+	o.currentMu.Lock()
+	o.current = next
+	o.currentMu.Unlock()
+	return nil
+}
+
+// collectTxs extracts the raw tx blobs from view's tx map and parses
+// each into a PendingTx. Malformed entries are silently skipped so a
+// single bad record does not poison the whole replay.
+func collectTxs(v *ledger.Ledger) []PendingTx {
+	if v == nil {
+		return nil
+	}
+	var out []PendingTx
+	_ = v.ForEachTransaction(func(_ [32]byte, data []byte) bool {
+		raw, _, err := tx.SplitTxWithMetaBlob(data)
+		if err != nil {
+			return true
+		}
+		ptx, err := ParsePendingTx(raw)
+		if err != nil {
+			return true
+		}
+		out = append(out, ptx)
+		return true
+	})
+	return out
+}
+
 // Submit is the convenience entry point for tx ingress. It wraps Modify
 // with a single-tx apply attempt mirroring apply_one
 // (OpenLedger.cpp:170-189). Returns (changed, result) where changed is

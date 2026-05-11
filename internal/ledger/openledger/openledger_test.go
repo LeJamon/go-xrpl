@@ -325,3 +325,252 @@ func itoa(i int) string {
 	}
 	return string(b[pos:])
 }
+
+// newClosedFrom returns a fresh closed-shaped Ledger derived from parent
+// via MutableSnapshot, used as the "newLCL" argument to Accept. The
+// state is identical to parent so any tx submitted to the prior open
+// view is still applicable against this new closed ledger.
+func newClosedFrom(t *testing.T, parent *ledger.Ledger) *ledger.Ledger {
+	t.Helper()
+	snap, err := parent.MutableSnapshot()
+	if err != nil {
+		t.Fatalf("MutableSnapshot: %v", err)
+	}
+	return snap
+}
+
+// TestOpenLedger_Accept_ReplaysCurrentTxs verifies that Accept replays
+// the prior current view's transactions onto the new working view.
+// Mirrors OpenLedger::accept (OpenLedger.cpp:96-112).
+func TestOpenLedger_Accept_ReplaysCurrentTxs(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+
+	alice := testenv.NewAccount("alice")
+	bob := testenv.NewAccount("bob")
+	carol := testenv.NewAccount("carol")
+	env.Fund(alice, bob, carol)
+	parent := closedParent(t, env)
+
+	ol, err := openledger.New(parent, openledger.Config{})
+	if err != nil {
+		t.Fatalf("openledger.New: %v", err)
+	}
+
+	cfg := openledger.ApplyConfig{
+		BaseFee:          10,
+		ReserveBase:      200_000_000,
+		ReserveIncrement: 50_000_000,
+		LedgerSequence:   ol.Current().Sequence(),
+		NetworkID:        0,
+	}
+
+	// Submit two independent txs to current.
+	pay1 := payment.Pay(alice, bob, 1_000_000).Sequence(env.Seq(alice)).Build()
+	blob1 := buildSignedBlobOL(t, env, pay1, alice)
+	pt1, err := openledger.ParsePendingTx(blob1)
+	if err != nil {
+		t.Fatalf("ParsePendingTx pay1: %v", err)
+	}
+	if changed, result := ol.Submit(pt1, cfg); !changed || result != openledger.ResultSuccess {
+		t.Fatalf("Submit pay1: changed=%v result=%v", changed, result)
+	}
+
+	pay2 := payment.Pay(bob, carol, 2_000_000).Sequence(env.Seq(bob)).Build()
+	blob2 := buildSignedBlobOL(t, env, pay2, bob)
+	pt2, err := openledger.ParsePendingTx(blob2)
+	if err != nil {
+		t.Fatalf("ParsePendingTx pay2: %v", err)
+	}
+	if changed, result := ol.Submit(pt2, cfg); !changed || result != openledger.ResultSuccess {
+		t.Fatalf("Submit pay2: changed=%v result=%v", changed, result)
+	}
+
+	// New closed ledger sharing state with parent (no tx in its tx map).
+	newClosed := newClosedFrom(t, parent)
+	var retries []openledger.PendingTx
+
+	if err := ol.Accept(newClosed, nil, false, &retries, cfg); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	if len(retries) != 0 {
+		t.Errorf("retries: got %d, want 0", len(retries))
+	}
+	cur := ol.Current()
+	if !cur.TxExists(pt1.Hash) {
+		t.Errorf("post-Accept Current() missing pay1")
+	}
+	if !cur.TxExists(pt2.Hash) {
+		t.Errorf("post-Accept Current() missing pay2")
+	}
+	if got, want := cur.Sequence(), newClosed.Sequence()+1; got != want {
+		t.Errorf("Current().Sequence() = %d, want %d", got, want)
+	}
+}
+
+// TestOpenLedger_Accept_NoDoubleApply verifies the Accept replay does
+// not double-apply a tx that appears in both the prior current view
+// AND the locals slice. The dedup happens via the working view's
+// per-tx TxExists check inside ApplyTxs (apply.go:138 — the same
+// mechanism that pre-filters parent-committed txs in rippled per
+// OpenLedger.h:226-228).
+//
+// This is the goxrpl-side equivalent of rippled's `check` parameter:
+// once txA is committed to the working view by the current-replay
+// pass, the locals pass sees it and skips.
+func TestOpenLedger_Accept_NoDoubleApply(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+
+	alice := testenv.NewAccount("alice")
+	bob := testenv.NewAccount("bob")
+	env.Fund(alice, bob)
+	parent := closedParent(t, env)
+
+	ol, err := openledger.New(parent, openledger.Config{})
+	if err != nil {
+		t.Fatalf("openledger.New: %v", err)
+	}
+
+	cfg := openledger.ApplyConfig{
+		BaseFee:          10,
+		ReserveBase:      200_000_000,
+		ReserveIncrement: 50_000_000,
+		LedgerSequence:   ol.Current().Sequence(),
+		NetworkID:        0,
+	}
+
+	// Submit txA to current open view.
+	pay := payment.Pay(alice, bob, 1_000_000).Sequence(env.Seq(alice)).Build()
+	blob := buildSignedBlobOL(t, env, pay, alice)
+	pt, err := openledger.ParsePendingTx(blob)
+	if err != nil {
+		t.Fatalf("ParsePendingTx: %v", err)
+	}
+	if changed, result := ol.Submit(pt, cfg); !changed || result != openledger.ResultSuccess {
+		t.Fatalf("Submit: changed=%v result=%v", changed, result)
+	}
+
+	newClosed := newClosedFrom(t, parent)
+	var retries []openledger.PendingTx
+
+	// Pass the same pt in `locals` — current replay will commit it to
+	// the working view, then the locals replay must see it via TxExists
+	// and skip (no double-apply).
+	if err := ol.Accept(newClosed, []openledger.PendingTx{pt}, false, &retries, cfg); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	if len(retries) != 0 {
+		t.Errorf("retries: got %d, want 0", len(retries))
+	}
+
+	// Working view should contain exactly one entry for txA (the one
+	// committed during current-replay) — locals replay must skip the
+	// duplicate.
+	cur := ol.Current()
+	if !cur.TxExists(pt.Hash) {
+		t.Errorf("working view missing txA after Accept")
+	}
+	count := 0
+	_ = cur.ForEachTransaction(func(_ [32]byte, _ []byte) bool {
+		count++
+		return true
+	})
+	if count != 1 {
+		t.Errorf("working view tx map: got %d entries, want 1 (no double-apply)", count)
+	}
+}
+
+// TestOpenLedger_Accept_LocalsApplied verifies that locals passed to
+// Accept are applied to the new working view (OpenLedger.cpp:117-118).
+func TestOpenLedger_Accept_LocalsApplied(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+
+	alice := testenv.NewAccount("alice")
+	bob := testenv.NewAccount("bob")
+	env.Fund(alice, bob)
+	parent := closedParent(t, env)
+
+	ol, err := openledger.New(parent, openledger.Config{})
+	if err != nil {
+		t.Fatalf("openledger.New: %v", err)
+	}
+
+	cfg := openledger.ApplyConfig{
+		BaseFee:          10,
+		ReserveBase:      200_000_000,
+		ReserveIncrement: 50_000_000,
+		LedgerSequence:   ol.Current().Sequence(),
+		NetworkID:        0,
+	}
+
+	pay := payment.Pay(alice, bob, 3_000_000).Sequence(env.Seq(alice)).Build()
+	blob := buildSignedBlobOL(t, env, pay, alice)
+	ptL, err := openledger.ParsePendingTx(blob)
+	if err != nil {
+		t.Fatalf("ParsePendingTx: %v", err)
+	}
+
+	newClosed := newClosedFrom(t, parent)
+	var retries []openledger.PendingTx
+
+	if err := ol.Accept(newClosed, []openledger.PendingTx{ptL}, false, &retries, cfg); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	if len(retries) != 0 {
+		t.Errorf("retries: got %d, want 0", len(retries))
+	}
+	if !ol.Current().TxExists(ptL.Hash) {
+		t.Errorf("local tx missing from new Current()")
+	}
+}
+
+// TestOpenLedger_Accept_RetriesFirst_ReplaysHeldTx verifies that with
+// retriesFirst=true, a held tx in *retries is replayed against the new
+// working view. Mirrors OpenLedger.cpp:85-90.
+func TestOpenLedger_Accept_RetriesFirst_ReplaysHeldTx(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+
+	alice := testenv.NewAccount("alice")
+	bob := testenv.NewAccount("bob")
+	env.Fund(alice, bob)
+	parent := closedParent(t, env)
+
+	ol, err := openledger.New(parent, openledger.Config{})
+	if err != nil {
+		t.Fatalf("openledger.New: %v", err)
+	}
+
+	cfg := openledger.ApplyConfig{
+		BaseFee:          10,
+		ReserveBase:      200_000_000,
+		ReserveIncrement: 50_000_000,
+		LedgerSequence:   ol.Current().Sequence(),
+		NetworkID:        0,
+	}
+
+	// Build a held-retry tx — a vanilla payment that applies cleanly
+	// against newLCL. Per the spec, the load-bearing assertion is "a tx
+	// in the input retries slice ends up in the new view".
+	pay := payment.Pay(alice, bob, 4_000_000).Sequence(env.Seq(alice)).Build()
+	blob := buildSignedBlobOL(t, env, pay, alice)
+	held, err := openledger.ParsePendingTx(blob)
+	if err != nil {
+		t.Fatalf("ParsePendingTx: %v", err)
+	}
+
+	newClosed := newClosedFrom(t, parent)
+	retries := []openledger.PendingTx{held}
+
+	if err := ol.Accept(newClosed, nil, true, &retries, cfg); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	if !ol.Current().TxExists(held.Hash) {
+		t.Errorf("held retry tx missing from new Current()")
+	}
+	if len(retries) != 0 {
+		t.Errorf("retries: got %d, want 0 (tx should have applied)", len(retries))
+	}
+}
