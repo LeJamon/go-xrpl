@@ -16,7 +16,7 @@ type pendingTx struct {
 	txBlob   []byte   // raw binary blob
 	hash     [32]byte // transaction hash (SHA-512Half of TXN prefix + blob)
 	account  [20]byte // sender account ID (raw 20 bytes)
-	sequence uint32   // effective sequence (SeqProxy: Sequence or TicketSequence)
+	seqProxy uint64   // SeqProxy key: bit 32 set for ticket-based txns, lower 32 bits hold the value
 }
 
 // canonicalSort sorts pending transactions using the CanonicalTXSet ordering from rippled.
@@ -58,8 +58,9 @@ func canonicalSort(txs []pendingTx, salt [32]byte) {
 		if cmp != 0 {
 			return cmp < 0
 		}
-		if entries[i].tx.sequence != entries[j].tx.sequence {
-			return entries[i].tx.sequence < entries[j].tx.sequence
+		// Compare seqProxy (sequence-typed sorts before ticket-typed regardless of value)
+		if entries[i].tx.seqProxy != entries[j].tx.seqProxy {
+			return entries[i].tx.seqProxy < entries[j].tx.seqProxy
 		}
 		return bytes.Compare(entries[i].tx.hash[:], entries[j].tx.hash[:]) < 0
 	})
@@ -97,7 +98,7 @@ func parsePendingTx(blob []byte) (pendingTx, error) {
 		txBlob:   blob,
 		hash:     txHash,
 		account:  accountID,
-		sequence: common.SeqProxy(),
+		seqProxy: common.SeqProxyKey(),
 	}, nil
 }
 
