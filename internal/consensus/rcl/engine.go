@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -142,6 +144,18 @@ type Engine struct {
 	// Protected by e.mu (same lock as sendValidation's other state).
 	lastSignTime time.Time
 
+	// Highest seq this node has broadcast a validation for. Mirrors
+	// rippled's SeqEnforcer (Validations.h:625-665) /
+	// Validations::canValidateSeq (Validations.h:830) — without this
+	// guard, BBD flags us for "Conflicting validation for N" (#401).
+	// Protected by e.mu.
+	ourLastValidatedSeq uint32
+
+	// Time the floor was last bumped. After validationSetExpires of
+	// silence, the floor resets to 0 (Validations.h:118-128) so a
+	// restarted/partitioned validator can resume below its old floor.
+	ourLastValidatedTime time.Time
+
 	// Stats
 	roundCount     uint64
 	consensusCount uint64
@@ -198,6 +212,10 @@ const (
 	avalancheLate                        // 70% threshold
 	avalancheStuck                       // 95% threshold
 )
+
+// SeqEnforcer reset window — ValidationParms::validationSET_EXPIRES
+// (Validations.h:79).
+const validationSetExpires = 10 * time.Minute
 
 // Config holds RCL engine configuration.
 type Config struct {
@@ -596,6 +614,34 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 		e.adaptor.RelayProposal(proposal, originPeer)
 	}
 
+	if trusted {
+		var ourTxSet consensus.TxSetID
+		ourTxLen := -1
+		if e.ourTxSet != nil {
+			ourTxSet = e.ourTxSet.ID()
+			ourTxLen = e.ourTxSet.Size()
+		}
+		_, peerCacheHit := e.acquiredTxSets[proposal.TxSet]
+		if !peerCacheHit {
+			if cached, _ := e.adaptor.GetTxSet(proposal.TxSet); cached != nil {
+				peerCacheHit = true
+			}
+		}
+		slog.Info("proposal received",
+			"t", "consensus",
+			"event", "propose-recv",
+			"seq", proposal.Round.Seq,
+			"peer", originPeer,
+			"node", fmt.Sprintf("%x", proposal.NodeID[:6]),
+			"pos_seq", proposal.Position,
+			"peer_txset", fmt.Sprintf("%x", proposal.TxSet[:8]),
+			"our_txset", fmt.Sprintf("%x", ourTxSet[:8]),
+			"our_tx_count", ourTxLen,
+			"peer_txset_cache_hit", peerCacheHit,
+			"diff", proposal.TxSet != ourTxSet,
+		)
+	}
+
 	// Check if we need the transaction set. If the adaptor already
 	// has it, cache it locally for dispute wiring — rippled's
 	// gotTxSet(Consensus.h:843-844) fires eagerly in the same
@@ -961,16 +1007,38 @@ func (e *Engine) run() {
 // Consensus::timerEntry() (Consensus.h:859-888). Called every
 // ledgerGRANULARITY (1s) and dispatches based on current phase.
 func (e *Engine) timerEntry() {
+	tickStart := time.Now()
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	defer func() {
+		e.mu.Unlock()
+		// 50ms threshold — the 250ms heartbeat needs headroom.
+		dur := time.Since(tickStart)
+		if dur > 50*time.Millisecond {
+			slog.Info("timer tick slow",
+				"t", "consensus",
+				"event", "tick-slow",
+				"dur_ms", dur.Milliseconds(),
+				"phase", e.phase.String(),
+				"mode", e.mode.String(),
+			)
+		}
+	}()
 
-	if e.adaptor.GetOperatingMode() != consensus.OpModeFull {
+	opMode := e.adaptor.GetOperatingMode()
+	if opMode == consensus.OpModeDisconnected {
 		return
 	}
 
-	// Check we're on the correct ledger (matches rippled's checkLedger).
+	// checkLedger must run in every non-disconnected mode — it's the
+	// Syncing/Tracking → Full recovery path; gating on Full would wedge
+	// us permanently once a wrongLedger demotion fires.
 	if e.phase != consensus.PhaseAccepted {
 		e.checkLedger()
+	}
+
+	// Round-producing work only runs in Full.
+	if opMode != consensus.OpModeFull {
+		return
 	}
 
 	switch e.phase {
@@ -1289,6 +1357,8 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID) {
 		// promoted back to ModeProposing normally — so we still get
 		// full participation, just not on the recovery round itself.
 		slog.Info("Switching to network ledger",
+			"t", "consensus",
+			"event", "switch-lcl",
 			"seq", newLedger.Seq(),
 			"hash", fmt.Sprintf("%x", netLedgerID[:8]),
 		)
@@ -1307,6 +1377,8 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID) {
 	} else {
 		// Not found — enter wrong ledger mode and request from peers
 		slog.Info("Cannot acquire network ledger, entering wrongLedger mode",
+			"t", "consensus",
+			"event", "wrong-lcl",
 			"hash", fmt.Sprintf("%x", netLedgerID[:8]),
 		)
 		if e.state != nil {
@@ -1349,6 +1421,19 @@ func (e *Engine) setPhase(newPhase consensus.Phase) {
 	}
 
 	oldPhase := e.phase
+	oldPhaseDuration := time.Duration(0)
+	if e.state != nil && !e.state.PhaseStart.IsZero() {
+		oldPhaseDuration = e.adaptor.Now().Sub(e.state.PhaseStart)
+	}
+	slog.Info("phase transition",
+		"t", "consensus",
+		"event", "phase-transition",
+		"from", oldPhase.String(),
+		"to", newPhase.String(),
+		"from_duration_ms", oldPhaseDuration.Milliseconds(),
+		"mode", e.mode.String(),
+	)
+
 	e.phase = newPhase
 	if e.state != nil {
 		e.state.Phase = newPhase
@@ -1404,8 +1489,29 @@ func (e *Engine) shouldCloseLedger() bool {
 
 	// Peer pressure: if more than half of previous round's proposers
 	// have already closed or validated, close immediately (matches rippled lines 67-73).
-	if (proposersClosed + proposersValidated) > e.prevProposers/2 {
+	closed := proposersClosed + proposersValidated
+	if closed > e.prevProposers/2 {
+		slog.Info("shouldClose peer-pressure",
+			"t", "consensus",
+			"event", "should-close-pressure",
+			"prev_proposers", e.prevProposers,
+			"closed", proposersClosed,
+			"validated", proposersValidated,
+			"open_ms", openTime.Milliseconds(),
+		)
 		return true
+	}
+	// Rate-limit miss trace: first tick + one re-emit at ~1s
+	// when the LedgerMinClose path takes over.
+	if openTime < 100*time.Millisecond || (openTime > 1000*time.Millisecond && openTime < 1100*time.Millisecond) {
+		slog.Info("shouldClose peer-pressure miss",
+			"t", "consensus",
+			"event", "should-close-miss",
+			"prev_proposers", e.prevProposers,
+			"closed", proposersClosed,
+			"validated", proposersValidated,
+			"open_ms", openTime.Milliseconds(),
+		)
 	}
 
 	// No transactions: only close at the idle interval.
@@ -1447,8 +1553,16 @@ func (e *Engine) phaseOpen() {
 // closeLedger transitions from open to establish phase.
 // Reference: rippled Consensus.h closeLedger() (~line 1434)
 func (e *Engine) closeLedger() {
-	// Build our transaction set from pending transactions
-	txs := e.adaptor.GetPendingTxs()
+	// Filter pending txs through the open-ledger gate when proposing,
+	// matching app_.openLedger().current()->txs at RCLConsensus.cpp:333-349.
+	// In non-proposing modes the position isn't broadcast, so skip the
+	// per-round apply cost.
+	var txs [][]byte
+	if e.mode == consensus.ModeProposing || e.adaptor.IsStandalone() {
+		txs = e.adaptor.GetProposableTxs(e.prevLedger)
+	} else {
+		txs = e.adaptor.GetPendingTxs()
+	}
 
 	// Inject flag-ledger / voting-ledger pseudo-txs BEFORE building
 	// the tx set, so the resulting tx-set hash matches what rippled
@@ -1523,17 +1637,47 @@ func (e *Engine) closeLedger() {
 			if err := e.adaptor.SignProposal(proposal); err == nil {
 				e.state.OurPosition = proposal
 				e.adaptor.BroadcastProposal(proposal)
+				txSetID := txSet.ID()
+				prevID := e.prevLedger.ID()
+				slog.Info("our initial position",
+					"t", "consensus-build",
+					"event", "our-position",
+					"round_seq", e.state.Round.Seq,
+					"prev", fmt.Sprintf("%x", prevID[:8]),
+					"tx_set", fmt.Sprintf("%x", txSetID[:8]),
+					"tx_count", len(txs),
+					"close_time", closeTime.UTC().Format(time.RFC3339Nano),
+					"mode", e.mode.String(),
+				)
 			}
 		}
 	}
 
-	// Seed disputes against every peer position whose tx set we
-	// already hold. Matches rippled's closeLedger loop at
-	// Consensus.h:1461-1467.
+	// Seed disputes against every peer position whose tx set we hold,
+	// and fire acquisition for the rest. Matches Consensus.h:1461-1467
+	// plus the implicit acquisition in rippled's playbackProposals via
+	// gotTxSet — required because OnProposal isn't re-fired for
+	// replayed (buffered) proposals.
+	requested := make(map[consensus.TxSetID]struct{})
 	for _, p := range e.proposals {
 		if peerSet, ok := e.acquiredTxSets[p.TxSet]; ok {
 			e.createDisputesAgainst(peerSet)
+			continue
 		}
+		if e.ourTxSet != nil && p.TxSet == e.ourTxSet.ID() {
+			continue
+		}
+		// Try adaptor cache; otherwise dedupe-by-id and request.
+		if peerSet, err := e.adaptor.GetTxSet(p.TxSet); err == nil && peerSet != nil {
+			e.acquiredTxSets[p.TxSet] = peerSet
+			e.createDisputesAgainst(peerSet)
+			continue
+		}
+		if _, already := requested[p.TxSet]; already {
+			continue
+		}
+		requested[p.TxSet] = struct{}{}
+		e.adaptor.RequestTxSet(p.TxSet)
 	}
 
 	// Move to establish phase
@@ -1600,18 +1744,54 @@ func (e *Engine) phaseEstablish() {
 		return
 	}
 
-	// Increment round counters used by dispute stall detection and
-	// avalanche minimum-rounds gating. Matches rippled's
-	// phaseEstablish at Consensus.h:1373-1374.
+	// Run convergence before MovedOn — rippled's checkConsensus picks
+	// Yes over MovedOn so a near-simultaneous-finish round still ends
+	// in Success rather than chronic 1-round lag.
 	e.establishCounter++
 	e.peerUnchangedCounter++
 
-	// Update positions and check convergence
 	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil {
 		e.updatePosition()
 	}
 	e.updateCloseTimePosition()
 	e.checkConvergence()
+	if e.phase != consensus.PhaseEstablish {
+		// checkConvergence accepted — round is over.
+		return
+	}
+
+	// MovedOn detection — checkConsensus at Consensus.cpp:239-246:
+	// 80% of prev proposers have validated a ledger past our prev.
+	// Denominator is current-round proposer count, not prevProposers
+	// (Consensus.h:1740-1751 passes agree+disagree); peers stop
+	// proposing for our round as they advance.
+	if e.prevLedger != nil && e.validationTracker != nil &&
+		roundTime > e.timing.LedgerMinConsensus {
+		finished := e.validationTracker.ProposersFinished(e.prevLedger)
+		currentProposers := len(e.proposals)
+
+		var fired bool
+		if currentProposers == 0 {
+			// checkConsensusReached(_, 0, ...) at Consensus.cpp:129-140.
+			fired = roundTime > e.timing.LedgerMaxConsensus
+		} else {
+			fired = finished*100 >= currentProposers*e.thresholds.MinConsensusPct
+		}
+
+		if fired {
+			slog.Info("consensus moved on, accepting",
+				"t", "consensus",
+				"event", "moved-on",
+				"seq", e.state.Round.Seq,
+				"finished", finished,
+				"current_proposers", currentProposers,
+				"prev_proposers", e.prevProposers,
+				"round_time_ms", roundTime.Milliseconds(),
+			)
+			e.acceptLedger(consensus.ResultMovedOn)
+			return
+		}
+	}
 }
 
 // abandonDeadlineExceeded reports whether the current round has run
@@ -1795,7 +1975,31 @@ func (e *Engine) updatePosition() {
 	// run the state-machine bookkeeping so avalanche levels are
 	// consistent across the round, but we gate flips on proposing.
 	proposing := e.mode == consensus.ModeProposing
+	disputeCount := e.disputeTracker.Count()
 	changed := e.disputeTracker.UpdateOurVote(e.convergePercent(), proposing, e.parms)
+
+	if disputeCount > 0 || proposing {
+		var ourSetID consensus.TxSetID
+		ourSetSize := -1
+		if e.ourTxSet != nil {
+			ourSetID = e.ourTxSet.ID()
+			ourSetSize = e.ourTxSet.Size()
+		}
+		slog.Info("update position",
+			"t", "consensus",
+			"event", "update-position",
+			"seq", e.state.Round.Seq,
+			"mode", e.mode.String(),
+			"converge_pct", e.convergePercent(),
+			"disputes", disputeCount,
+			"flipped", len(changed),
+			"our_txset", fmt.Sprintf("%x", ourSetID[:8]),
+			"our_tx_count", ourSetSize,
+			"acquired_txsets", len(e.acquiredTxSets),
+			"peer_proposals", len(e.proposals),
+		)
+	}
+
 	if !proposing || len(changed) == 0 {
 		return
 	}
@@ -1902,28 +2106,58 @@ func (e *Engine) updatePosition() {
 	}
 }
 
-// acceptLedger finalizes consensus and accepts the new ledger.
+// acceptLedger finalizes consensus and accepts the new ledger. Mirrors
+// rippled's doAccept at RCLConsensus.cpp:464-602: runs even in WrongLedger
+// mode, only the validation-emission branch (:587-594) is mode-gated via
+// `validating_ = ledgerMaster_.isCompatible(...)`. The validated-precedence
+// guard protects ledgerHistory[seq] from being overwritten by a
+// Frankenstein entry once the real validated ledger arrives.
 func (e *Engine) acceptLedger(result consensus.Result) {
 	if e.phase != consensus.PhaseEstablish {
 		return
 	}
 
-	// Determine winning close time and apply effCloseTime
-	rawCloseTime := e.determineCloseTime()
-	resolution := e.adaptor.CloseTimeResolution()
+	// Mirror RCLConsensus.cpp:481-496 fork: when close-time consensus
+	// is reached use determineCloseTime + effCloseTime; otherwise fall
+	// back deterministically to parentCloseTime + 1s. Without the
+	// deterministic fallback, determineCloseTime resolves to local
+	// clock and diverges across nodes — the root cause of issue #401.
 	priorClose := e.prevLedger.CloseTime()
-	closeTime := effCloseTime(rawCloseTime, resolution, priorClose)
+	resolution := e.adaptor.CloseTimeResolution()
+	var rawCloseTime, closeTime time.Time
+	var ctBranch string
+	if e.haveCloseTimeConsensus {
+		rawCloseTime = e.determineCloseTime()
+		closeTime = effCloseTime(rawCloseTime, resolution, priorClose)
+		ctBranch = "consensus"
+	} else {
+		closeTime = priorClose.Add(time.Second)
+		rawCloseTime = closeTime
+		ctBranch = "fallback"
+	}
 
-	slog.Debug("acceptLedger close time",
+	var ourPosCT int64
+	var ourPosSeq uint32
+	if e.state != nil && e.state.OurPosition != nil {
+		ourPosCT = e.state.OurPosition.CloseTime.Unix() - protocol.RippleEpochUnix
+		ourPosSeq = e.state.OurPosition.Position
+	}
+	slog.Info("close-time decision",
+		"t", "consensus",
+		"event", "accept-ct",
 		"seq", e.prevLedger.Seq()+1,
-		"mode", e.mode,
-		"raw_ct", rawCloseTime.Unix()-protocol.RippleEpochUnix,
-		"eff_ct", closeTime.Unix()-protocol.RippleEpochUnix,
-		"prior_ct", priorClose.Unix()-protocol.RippleEpochUnix,
-		"resolution", resolution,
-		"proposers", len(e.proposals),
-		"has_position", e.state.OurPosition != nil,
-		"ct_consensus", e.haveCloseTimeConsensus,
+		"mode", e.mode.String(),
+		"have_ct_consensus", e.haveCloseTimeConsensus,
+		"ct_branch", ctBranch,
+		"raw_ct_xrpl", rawCloseTime.Unix()-protocol.RippleEpochUnix,
+		"eff_ct_xrpl", closeTime.Unix()-protocol.RippleEpochUnix,
+		"prior_ct_xrpl", priorClose.Unix()-protocol.RippleEpochUnix,
+		"our_pos_ct_xrpl", ourPosCT,
+		"our_pos_seq", ourPosSeq,
+		"self_ct_xrpl", e.state.CloseTimes.Self.Unix()-protocol.RippleEpochUnix,
+		"resolution_s", int(resolution.Seconds()),
+		"peer_ct_count", len(e.state.CloseTimes.Peers),
+		"proposer_count", len(e.proposals),
 	)
 
 	// Get the agreed transaction set
@@ -1961,6 +2195,27 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		return
 	}
 
+	parentID := e.prevLedger.ID()
+	parentClose := e.prevLedger.CloseTime()
+	newID := newLedger.ID()
+	txSetID := txSet.ID()
+	slog.Info("ledger built",
+		"t", "consensus",
+		"event", "ledger-built",
+		"seq", newLedger.Seq(),
+		"hash", fmt.Sprintf("%x", newID[:8]),
+		"parent_seq", e.prevLedger.Seq(),
+		"parent_hash", fmt.Sprintf("%x", parentID[:8]),
+		"parent_ct_xrpl", parentClose.Unix()-protocol.RippleEpochUnix,
+		"close_time_xrpl", closeTime.Unix()-protocol.RippleEpochUnix,
+		"close_time_correct", e.haveCloseTimeConsensus,
+		"resolution_s", int(resolution.Seconds()),
+		"tx_set", fmt.Sprintf("%x", txSetID[:8]),
+		"tx_count", txSet.Size(),
+		"result", result.String(),
+		"mode", e.mode.String(),
+	)
+
 	// Validate and store
 	if err := e.adaptor.ValidateLedger(newLedger); err != nil {
 		return
@@ -1984,21 +2239,43 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		Timestamp: e.adaptor.Now(),
 	})
 
-	// Emit our validation whenever we're a validator AND we're not on
-	// a confirmed-wrong ledger. Rippled RCLConsensus.cpp:587-594 calls
-	// validate(built, result.txns, proposing) whenever validating_ is
-	// true AND !consensusFail AND canValidateSeq — regardless of mode.
-	// The `proposing` flag is passed INTO validate() and only controls
-	// whether vfFullValidation is set inside the validation, not
-	// whether the validation is sent at all.
+	// Mirror rippled's emission gate at RCLConsensus.cpp:587-594:
+	//   if (validating_ && !consensusFail && canValidateSeq(seq)) validate(...)
 	//
-	// So switchedLedger rounds emit a PARTIAL validation (Full=false):
-	// they attest "I saw this ledger close" without claiming "I drove
-	// the tx-set". Rippled peers rely on partial validations as an
-	// early liveness signal before full quorum materializes. My prior
-	// blanket suppression was stricter than rippled and left recovery
-	// rounds invisible to the network.
-	if e.adaptor.IsValidator() && e.mode != consensus.ModeWrongLedger {
+	// validating_ proxy: WrongLedger means our built ledger isn't on the
+	//   validated chain, so emitting would attest to a side chain (BBD).
+	// consensusFail: result != ResultSuccess (rippled's Expired path).
+	// canValidateSeq: prevents a second validation for a seq we already
+	//   validated; without it a divergent close + reacquire races two
+	//   validations and BBD flags us as Conflicting (#401).
+	//
+	// Mode only controls the Full flag inside sendValidation; switchedLedger
+	// still emits a partial (Full=false) — peers rely on these as early
+	// liveness signals before full quorum materializes.
+	consensusFail := result != consensus.ResultSuccess
+	wrongLCL := e.mode == consensus.ModeWrongLedger
+	isValidator := e.adaptor.IsValidator()
+	canValidate := e.peekCanValidateSeqLocked(newLedger.Seq())
+	willEmit := isValidator && !consensusFail && !wrongLCL && canValidate
+
+	newLedgerID := newLedger.ID()
+	hashShort := fmt.Sprintf("%x", newLedgerID[:8])
+	slog.Info("validation gate",
+		"t", "consensus",
+		"event", "validate-gate",
+		"seq", newLedger.Seq(),
+		"hash", hashShort,
+		"result", result.String(),
+		"is_validator", isValidator,
+		"consensus_fail", consensusFail,
+		"wrong_lcl", wrongLCL,
+		"can_validate_seq", canValidate,
+		"our_last_validated_seq", e.ourLastValidatedSeq,
+		"mode", e.mode.String(),
+		"decision", emitDecision(willEmit, isValidator, consensusFail, wrongLCL, canValidate),
+	)
+
+	if willEmit {
 		e.sendValidation(newLedger)
 	}
 
@@ -2079,15 +2356,53 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// If not Full, the router will keep re-adopting until caught up,
 	// then transition to Full, at which point checkAndStartRound kicks in.
 	if e.adaptor.GetOperatingMode() == consensus.OpModeFull {
-		// Auto-advance to the next round after a successful accept. Not
-		// a recovery — if the previous round WAS a switchedLedger round,
-		// this advancement is exactly where we promote back to
-		// ModeProposing (recovering=false means startRoundLocked picks
-		// Proposing for a trusted validator in OpModeFull).
+		// Round-boundary preferred-LCL jump: if the validation tracker
+		// reports a different preferred LCL and we have it locally,
+		// retarget prev so the next round avoids a handleWrongLedger
+		// detour. Falls through to handleWrongLedger (acquire) when
+		// we don't have it cached — matches NetworkOPsImp::checkLastClosedLedger.
+		nextPrev := newLedger
+		if e.validationTracker != nil {
+			candidateID, candidateSeq, ok := e.validationTracker.GetPreferred(newLedger.Seq())
+			if !ok {
+				candidateID, candidateSeq, ok = e.validationTracker.PreferredFromValidations(newLedger.Seq())
+			}
+			localID := newLedger.ID()
+			if ok && candidateID != localID && candidateSeq >= newLedger.Seq() {
+				if cached, err := e.adaptor.GetLedger(candidateID); err == nil && cached != nil {
+					localBytes := localID
+					slog.Info("preferred LCL differs; jumping prev to cached ledger",
+						"t", "consensus",
+						"event", "preferred-lcl-jump-cached",
+						"local_seq", newLedger.Seq(),
+						"local_hash", fmt.Sprintf("%x", localBytes[:8]),
+						"preferred_seq", candidateSeq,
+						"preferred_hash", fmt.Sprintf("%x", candidateID[:8]),
+					)
+					nextPrev = cached
+					e.prevLedger = cached
+				} else {
+					localBytes := localID
+					slog.Info("preferred LCL differs; routing through handleWrongLedger (acquire)",
+						"t", "consensus",
+						"event", "preferred-lcl-jump-acquire",
+						"local_seq", newLedger.Seq(),
+						"local_hash", fmt.Sprintf("%x", localBytes[:8]),
+						"preferred_seq", candidateSeq,
+						"preferred_hash", fmt.Sprintf("%x", candidateID[:8]),
+					)
+					e.handleWrongLedger(candidateID)
+					return
+				}
+			}
+		}
+
+		// Auto-advance — startRoundLocked picks ModeProposing for a
+		// trusted validator in OpModeFull.
 		proposing := e.adaptor.IsValidator()
 		nextRound := consensus.RoundID{
-			Seq:        newLedger.Seq() + 1,
-			ParentHash: newLedger.ID(),
+			Seq:        nextPrev.Seq() + 1,
+			ParentHash: nextPrev.ID(),
 		}
 		e.startRoundLocked(nextRound, proposing, false)
 	}
@@ -2128,11 +2443,24 @@ func (e *Engine) updateCloseTimePosition() {
 	neededWeight := e.getCloseTimeNeededWeight()
 	threshVote := participantsNeeded(participants, neededWeight)
 	threshConsensus := participantsNeeded(participants, 75) // avCT_CONSENSUS_PCT
+	threshVoteInitial := threshVote
 
-	// Find winning close time
+	// Iterate ascending so ties are resolved deterministically — rippled's
+	// std::map<NetClock,int> iterates ascending and the "raise bar" loop
+	// picks the LAST (largest) candidate on a tie. Go's map iteration is
+	// randomized, so without an explicit sort validators diverge on ties.
+	sortedTimes := make([]time.Time, 0, len(closeTimeVotes))
+	for t := range closeTimeVotes {
+		sortedTimes = append(sortedTimes, t)
+	}
+	sort.Slice(sortedTimes, func(i, j int) bool {
+		return sortedTimes[i].Before(sortedTimes[j])
+	})
+
 	var consensusCloseTime time.Time
 	e.haveCloseTimeConsensus = false
-	for t, count := range closeTimeVotes {
+	for _, t := range sortedTimes {
+		count := closeTimeVotes[t]
 		if count >= threshVote {
 			consensusCloseTime = t
 			threshVote = count // raise bar to pick the MOST popular
@@ -2142,18 +2470,101 @@ func (e *Engine) updateCloseTimePosition() {
 		}
 	}
 
+	votesSummary := summarizeCloseTimeVotes(closeTimeVotes)
+	var consensusCT int64
+	if !consensusCloseTime.IsZero() {
+		consensusCT = consensusCloseTime.Unix() - protocol.RippleEpochUnix
+	}
+	var ourPosCT int64
+	var ourPosSeq uint32
+	if e.state.OurPosition != nil {
+		ourPosCT = e.state.OurPosition.CloseTime.Unix() - protocol.RippleEpochUnix
+		ourPosSeq = e.state.OurPosition.Position
+	}
+	slog.Info("close-time avalanche",
+		"t", "consensus",
+		"event", "ct-avalanche",
+		"seq", e.state.Round.Seq,
+		"mode", e.mode.String(),
+		"converge_pct", e.convergePercent(),
+		"avalanche_state", closeTimeAvalancheStateName(e.closeTimeAvalancheState),
+		"needed_weight", neededWeight,
+		"thresh_vote", threshVoteInitial,
+		"thresh_consensus", threshConsensus,
+		"participants", participants,
+		"have_consensus", e.haveCloseTimeConsensus,
+		"consensus_ct_xrpl", consensusCT,
+		"our_pos_ct_xrpl", ourPosCT,
+		"our_pos_seq", ourPosSeq,
+		"votes", votesSummary,
+	)
+
 	// Update our proposal if close time changed
 	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil && !consensusCloseTime.IsZero() {
 		ourRounded := roundCloseTime(e.state.OurPosition.CloseTime, resolution)
 		if consensusCloseTime != ourRounded {
+			oldCT := e.state.OurPosition.CloseTime.Unix() - protocol.RippleEpochUnix
 			e.state.OurPosition.CloseTime = consensusCloseTime
 			e.state.OurPosition.Position++
 			e.state.OurPosition.Timestamp = e.adaptor.Now()
 			if err := e.adaptor.SignProposal(e.state.OurPosition); err == nil {
 				e.adaptor.BroadcastProposal(e.state.OurPosition)
 			}
+			slog.Info("our close-time bumped",
+				"t", "consensus",
+				"event", "ct-bump",
+				"seq", e.state.Round.Seq,
+				"old_ct_xrpl", oldCT,
+				"new_ct_xrpl", consensusCT,
+				"new_pos_seq", e.state.OurPosition.Position,
+			)
 		}
 	}
+}
+
+// summarizeCloseTimeVotes renders the vote distribution as "ct=count"
+// pairs (XRPL-epoch seconds), capped at 8 entries.
+func summarizeCloseTimeVotes(votes map[time.Time]int) string {
+	if len(votes) == 0 {
+		return "(empty)"
+	}
+	type kv struct {
+		ct    int64
+		count int
+	}
+	all := make([]kv, 0, len(votes))
+	for t, c := range votes {
+		all = append(all, kv{ct: t.Unix() - protocol.RippleEpochUnix, count: c})
+	}
+	limit := len(all)
+	if limit > 8 {
+		limit = 8
+	}
+	var b strings.Builder
+	for i := 0; i < limit; i++ {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "%d=%d", all[i].ct, all[i].count)
+	}
+	if len(all) > limit {
+		fmt.Fprintf(&b, " (+%d more)", len(all)-limit)
+	}
+	return b.String()
+}
+
+func closeTimeAvalancheStateName(s avalancheState) string {
+	switch s {
+	case avalancheInit:
+		return "init"
+	case avalancheMid:
+		return "mid"
+	case avalancheLate:
+		return "late"
+	case avalancheStuck:
+		return "stuck"
+	}
+	return "unknown"
 }
 
 // getCloseTimeNeededWeight returns the minimum vote percentage for close time
@@ -2257,7 +2668,42 @@ func (e *Engine) determineCloseTime() time.Time {
 // validation). Partial validations are accepted by peers but don't
 // count toward quorum (LedgerMaster.cpp:886 filters Full=false out of
 // the trusted count).
+// peekCanValidateSeqLocked is the non-mutating predicate half of
+// SeqEnforcer.operator() (Validations.h:118-128). Caller holds e.mu read.
+func (e *Engine) peekCanValidateSeqLocked(seq uint32) bool {
+	floor := e.ourLastValidatedSeq
+	if !e.ourLastValidatedTime.IsZero() &&
+		e.adaptor.Now().Sub(e.ourLastValidatedTime) > validationSetExpires {
+		floor = 0
+	}
+	return seq > floor
+}
+
+// tryAdvanceValidatedSeqLocked mirrors SeqEnforcer::operator() at
+// Validations.h:118-128: idle-reset, reject-or-bump in one atomic call.
+// The floor is committed before signing so a sign failure still consumes
+// the seq slot. Caller holds e.mu write.
+func (e *Engine) tryAdvanceValidatedSeqLocked(seq uint32) bool {
+	now := e.adaptor.Now()
+	if !e.ourLastValidatedTime.IsZero() &&
+		now.Sub(e.ourLastValidatedTime) > validationSetExpires {
+		e.ourLastValidatedSeq = 0
+	}
+	if seq <= e.ourLastValidatedSeq {
+		return false
+	}
+	e.ourLastValidatedSeq = seq
+	e.ourLastValidatedTime = now
+	return true
+}
+
 func (e *Engine) sendValidation(ledger consensus.Ledger) {
+	// SeqEnforcer guard + bump (Validations.h:118-128). Defensive
+	// in-function check so direct test callers cannot bypass.
+	if !e.tryAdvanceValidatedSeqLocked(ledger.Seq()) {
+		return
+	}
+
 	nodeID, err := e.adaptor.GetValidatorKey()
 	if err != nil {
 		return
@@ -2376,8 +2822,24 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 	}
 
 	if err := e.adaptor.SignValidation(validation); err != nil {
+		slog.Warn("validation sign failed",
+			"t", "consensus",
+			"event", "validate-sign-fail",
+			"seq", ledger.Seq(),
+			"error", err,
+		)
 		return
 	}
+
+	ledgerID := ledger.ID()
+	slog.Info("validation emitted",
+		"t", "consensus",
+		"event", "validate-emit",
+		"seq", ledger.Seq(),
+		"hash", fmt.Sprintf("%x", ledgerID[:8]),
+		"full", full,
+		"sign_time_xrpl", signTime.Unix()-protocol.RippleEpochUnix,
+	)
 
 	e.adaptor.BroadcastValidation(validation)
 
@@ -2419,6 +2881,26 @@ func roundCloseTime(closeTime time.Time, resolution time.Duration) time.Time {
 	xrplSec += resSec / 2
 	xrplSec -= xrplSec % resSec
 	return time.Unix(xrplSec+protocol.RippleEpochUnix, 0).UTC()
+}
+
+// emitDecision labels which arm of the validation gate fired.
+func emitDecision(emit, isValidator, consensusFail, wrongLCL, canValidate bool) string {
+	if emit {
+		return "emit"
+	}
+	if !isValidator {
+		return "skip:not-validator"
+	}
+	if consensusFail {
+		return "skip:consensus-fail"
+	}
+	if wrongLCL {
+		return "skip:wrong-lcl"
+	}
+	if !canValidate {
+		return "skip:already-validated-seq"
+	}
+	return "skip:unknown"
 }
 
 // effCloseTime calculates the effective ledger close time.

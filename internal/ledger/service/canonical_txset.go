@@ -21,23 +21,27 @@ type pendingTx struct {
 
 // canonicalSort sorts pending transactions using the CanonicalTXSet ordering from rippled.
 // The sort key is (accountKey, sequence, txID) where accountKey = account XOR salt[:20].
-// The salt is derived from the SHA-512Half of all transaction hashes concatenated in
-// sorted order, approximating rippled's SHAMap hash of the transaction set.
-// Reference: rippled CanonicalTXSet.cpp
-func canonicalSort(txs []pendingTx) {
+//
+// Salt source by call site (per-call-site convention; the C++ constructor
+// signature `CanonicalTXSet(LedgerHash const& salt)` names the parameter
+// type but does NOT constrain the semantic value):
+//
+//   - Consensus build path (rippled RCLConsensus.cpp:512):
+//     `CanonicalTXSet retriableTxs{result.txns.map_->getHash().as_uint256()}`
+//     Salt = SHAMap root of the AGREED tx set. Use `computeSalt(txs)`.
+//   - Held-tx replay (rippled LedgerMaster.cpp:461):
+//     `CanonicalTXSet set(...->info().parentHash)`
+//     Salt = open ledger's parent (= LCL) hash.
+//   - Local-tx pickup (rippled LocalTxs.cpp:126):
+//     `CanonicalTXSet tset(uint256{})`
+//     Zero salt.
+//
+// Reference: rippled CanonicalTXSet.cpp / CanonicalTXSet.h, RCLConsensus.cpp:508-514
+func canonicalSort(txs []pendingTx, salt [32]byte) {
 	if len(txs) <= 1 {
 		return
 	}
 
-	// Compute the salt: SHA-512Half of all tx hashes concatenated in sorted (hash) order.
-	// This approximates the SHAMap hash used as salt in rippled's CanonicalTXSet.
-	salt := computeSalt(txs)
-
-	// Pre-compute the account keys (account XOR salt[:20]) for sorting.
-	// In rippled, account is copied into a 32-byte uint256 (padded with zeros),
-	// then XORed with the full 32-byte salt. We only need the first 20 bytes
-	// for comparison since bytes 20-31 of the account uint256 are zero and thus
-	// equal to salt[20:31] XOR 0 = salt[20:31] for all entries.
 	type sortEntry struct {
 		accountKey [32]byte
 		tx         *pendingTx
@@ -50,7 +54,6 @@ func canonicalSort(txs []pendingTx) {
 	}
 
 	sort.SliceStable(entries, func(i, j int) bool {
-		// Compare accountKey (32 bytes)
 		cmp := bytes.Compare(entries[i].accountKey[:], entries[j].accountKey[:])
 		if cmp != 0 {
 			return cmp < 0
@@ -59,35 +62,14 @@ func canonicalSort(txs []pendingTx) {
 		if entries[i].tx.seqProxy != entries[j].tx.seqProxy {
 			return entries[i].tx.seqProxy < entries[j].tx.seqProxy
 		}
-		// Compare txID (hash)
 		return bytes.Compare(entries[i].tx.hash[:], entries[j].tx.hash[:]) < 0
 	})
 
-	// Write sorted results back to the slice
 	sorted := make([]pendingTx, len(txs))
 	for i, e := range entries {
 		sorted[i] = *e.tx
 	}
 	copy(txs, sorted)
-}
-
-// computeSalt returns a deterministic salt derived from the transaction set.
-// Matches rippled: builds a SHAMap of type TRANSACTION with each tx blob
-// keyed by its hash (node type tnTRANSACTION_NM), then returns the root hash.
-// Reference: rippled RCLConsensus.cpp onClose() lines 335-349
-func computeSalt(txs []pendingTx) [32]byte {
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		return [32]byte{}
-	}
-	for _, ptx := range txs {
-		_ = txMap.PutWithNodeType(ptx.hash, ptx.txBlob, shamap.NodeTypeTransactionNoMeta)
-	}
-	hash, err := txMap.Hash()
-	if err != nil {
-		return [32]byte{}
-	}
-	return hash
 }
 
 // parsePendingTx creates a pendingTx from a raw transaction blob.
@@ -132,4 +114,25 @@ func computeAccountKey(account [20]byte, salt [32]byte) [32]byte {
 		key[i] ^= salt[i]
 	}
 	return key
+}
+
+// computeSalt builds the RCLTxSet SHAMap (TypeTransaction, tnTRANSACTION_NM
+// keyed by tx hash) and returns its root — the value rippled passes as the
+// CanonicalTXSet salt on the consensus-build path. Insertion-order-independent.
+// Returns the zero hash on construction failure; canonicalSort remains
+// deterministic via (sequence, txID) tiebreakers.
+// Reference: rippled RCLConsensus.cpp:512, RCLCxTx.h:62-90.
+func computeSalt(txs []pendingTx) [32]byte {
+	txMap, err := shamap.New(shamap.TypeTransaction)
+	if err != nil {
+		return [32]byte{}
+	}
+	for _, ptx := range txs {
+		_ = txMap.PutWithNodeType(ptx.hash, ptx.txBlob, shamap.NodeTypeTransactionNoMeta)
+	}
+	hash, err := txMap.Hash()
+	if err != nil {
+		return [32]byte{}
+	}
+	return hash
 }

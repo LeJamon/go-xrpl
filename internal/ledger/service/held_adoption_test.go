@@ -78,7 +78,8 @@ func TestAdoptLedgerWithState_CascadesHeldOrphan(t *testing.T) {
 
 	// Submit 102 as a held adoption. 101 is not yet in history so it
 	// must stash, not adopt immediately.
-	require.NoError(t, svc.SubmitHeldAdoption(context.TODO(), fx102.hdr, fx102.stateMap, fx102.txMap))
+	_, err = svc.SubmitHeldAdoption(context.TODO(), fx102.hdr, fx102.stateMap, fx102.txMap)
+	require.NoError(t, err)
 
 	svc.mu.RLock()
 	_, held := svc.heldAdoptions[baseSeq] // keyed by awaited-parent seq
@@ -140,7 +141,8 @@ func TestAdoptLedgerWithState_OrphanMismatchDropped(t *testing.T) {
 	// 102 says its parent is X (a different fork), not Y.
 	fx102 := buildHeldAdoptionInputs(t, baseSeq+1, hash102, hashX)
 
-	require.NoError(t, svc.SubmitHeldAdoption(context.TODO(), fx102.hdr, fx102.stateMap, fx102.txMap))
+	_, err = svc.SubmitHeldAdoption(context.TODO(), fx102.hdr, fx102.stateMap, fx102.txMap)
+	require.NoError(t, err)
 
 	// Adopt 101 with hash Y. 102's ParentHash is X ≠ Y → drop 102.
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), fx101.hdr, fx101.stateMap, fx101.txMap))
@@ -183,7 +185,10 @@ func TestSubmitHeldAdoption_ParentAlreadyPresent(t *testing.T) {
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), fx101.hdr, fx101.stateMap, fx101.txMap))
 
 	fx102 := buildHeldAdoptionInputs(t, baseSeq+1, hash102, hash101)
-	require.NoError(t, svc.SubmitHeldAdoption(context.TODO(), fx102.hdr, fx102.stateMap, fx102.txMap))
+	res, err := svc.SubmitHeldAdoption(context.TODO(), fx102.hdr, fx102.stateMap, fx102.txMap)
+	require.NoError(t, err)
+	require.True(t, res.Adopted, "fast path must report Adopted=true when parent is present")
+	require.False(t, res.Stashed, "fast path must not report Stashed=true")
 
 	// 102 must be installed immediately (parent already present).
 	got102, err := svc.GetLedgerByHash(hash102)
@@ -229,7 +234,8 @@ func TestSubmitHeldAdoption_ParentPresentButHashMismatch(t *testing.T) {
 	// mismatched chain; it must be refused as a no-op from the ledger-
 	// history perspective.
 	fx102 := buildHeldAdoptionInputs(t, baseSeq+1, hash102, hash101Wanted)
-	require.NoError(t, svc.SubmitHeldAdoption(context.TODO(), fx102.hdr, fx102.stateMap, fx102.txMap))
+	_, err = svc.SubmitHeldAdoption(context.TODO(), fx102.hdr, fx102.stateMap, fx102.txMap)
+	require.NoError(t, err)
 
 	// 102 must NOT be in history — neither adopted nor cascaded.
 	_, err = svc.GetLedgerByHash(hash102)
@@ -308,8 +314,10 @@ func TestAdoptLedgerWithState_MultiLevelCascade(t *testing.T) {
 	fx103 := buildHeldAdoptionInputs(t, baseSeq+2, hash103, hash102)
 
 	// Submit 103 before 102 — both stash.
-	require.NoError(t, svc.SubmitHeldAdoption(context.TODO(), fx103.hdr, fx103.stateMap, fx103.txMap))
-	require.NoError(t, svc.SubmitHeldAdoption(context.TODO(), fx102.hdr, fx102.stateMap, fx102.txMap))
+	_, err = svc.SubmitHeldAdoption(context.TODO(), fx103.hdr, fx103.stateMap, fx103.txMap)
+	require.NoError(t, err)
+	_, err = svc.SubmitHeldAdoption(context.TODO(), fx102.hdr, fx102.stateMap, fx102.txMap)
+	require.NoError(t, err)
 
 	svc.mu.RLock()
 	_, has102Parent := svc.heldAdoptions[baseSeq]   // 102 waits on 101
@@ -346,10 +354,10 @@ func TestSubmitHeldAdoption_RejectsNil(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 
-	assert.Error(t, svc.SubmitHeldAdoption(context.TODO(), nil, nil, nil),
-		"nil header must be rejected")
+	_, err = svc.SubmitHeldAdoption(context.TODO(), nil, nil, nil)
+	assert.Error(t, err, "nil header must be rejected")
 
 	hdr := &header.LedgerHeader{LedgerIndex: 42}
-	assert.Error(t, svc.SubmitHeldAdoption(context.TODO(), hdr, nil, nil),
-		"nil state map must be rejected")
+	_, err = svc.SubmitHeldAdoption(context.TODO(), hdr, nil, nil)
+	assert.Error(t, err, "nil state map must be rejected")
 }

@@ -64,6 +64,14 @@ type NetworkSender interface {
 	// seenPeers to avoid double-counting.
 	UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPeers []uint64)
 	RequestTxSet(id consensus.TxSetID) error
+	// RequestTxSetMissingNodes requests specific SHAMap nodes for an
+	// in-progress tx-set acquisition. Mirrors rippled's
+	// TransactionAcquire::trigger second branch
+	// (TransactionAcquire.cpp:144-171): after the initial root
+	// request returns a partial tree, follow up with a request for
+	// each missing node by its SHAMap path-based NodeID. nodeIDs
+	// must each be exactly 33 bytes (32 path bytes + 1 depth byte).
+	RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte) error
 	RequestLedger(id consensus.LedgerID) error
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error
 	RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error
@@ -103,13 +111,16 @@ type NetworkSender interface {
 // noopSender is a no-op NetworkSender for standalone or test use.
 type noopSender struct{}
 
-func (n *noopSender) BroadcastProposal(*consensus.Proposal) error              { return nil }
-func (n *noopSender) BroadcastValidation(*consensus.Validation) error          { return nil }
-func (n *noopSender) BroadcastStatusChange(*message.StatusChange) error        { return nil }
-func (n *noopSender) RelayProposal(*consensus.Proposal, uint64) error          { return nil }
-func (n *noopSender) RelayValidation(*consensus.Validation, uint64) error      { return nil }
-func (n *noopSender) UpdateRelaySlot([]byte, uint64, []uint64)                 {}
-func (n *noopSender) RequestTxSet(consensus.TxSetID) error                     { return nil }
+func (n *noopSender) BroadcastProposal(*consensus.Proposal) error         { return nil }
+func (n *noopSender) BroadcastValidation(*consensus.Validation) error     { return nil }
+func (n *noopSender) BroadcastStatusChange(*message.StatusChange) error   { return nil }
+func (n *noopSender) RelayProposal(*consensus.Proposal, uint64) error     { return nil }
+func (n *noopSender) RelayValidation(*consensus.Validation, uint64) error { return nil }
+func (n *noopSender) UpdateRelaySlot([]byte, uint64, []uint64)            {}
+func (n *noopSender) RequestTxSet(consensus.TxSetID) error                { return nil }
+func (n *noopSender) RequestTxSetMissingNodes(consensus.TxSetID, [][]byte) error {
+	return nil
+}
 func (n *noopSender) RequestLedger(consensus.LedgerID) error                   { return nil }
 func (n *noopSender) RequestLedgerByHashAndSeq([32]byte, uint32) error         { return nil }
 func (n *noopSender) RequestLedgerBaseFromPeer(uint64, [32]byte, uint32) error { return nil }
@@ -447,6 +458,10 @@ func (a *Adaptor) RequestTxSet(id consensus.TxSetID) error {
 	return a.sender.RequestTxSet(id)
 }
 
+func (a *Adaptor) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte) error {
+	return a.sender.RequestTxSetMissingNodes(id, nodeIDs)
+}
+
 func (a *Adaptor) RequestLedger(id consensus.LedgerID) error {
 	return a.sender.RequestLedger(id)
 }
@@ -632,32 +647,52 @@ func (a *Adaptor) GetPendingTxs() [][]byte {
 	return blobs
 }
 
-// GenerateFlagLedgerPseudoTxs runs the fee-vote and amendment-vote
-// producers and returns their concatenated pseudo-tx blobs to
-// inject into the proposal initial set. Mirrors rippled
-// RCLConsensus.cpp:354-367, including the negative-UNL filter at
-// :358 and the quorum gate at :361 — both producers run only when
-// the negUNL-filtered validation set meets the current quorum.
-//
-// The producers live in internal/consensus/feevote and
-// internal/consensus/amendmentvote; this method resolves
-// prevLedger state, the local stance, and parentValidations into
-// the producers' input shape.
-//
-// Returns nil when the ledger service is missing, the parent
-// ledger isn't readable, or the negUNL-filtered validation set
-// falls below quorum. Per-producer parse / read failures are
-// logged at warn and that producer falls through to nil — a
-// malformed FeeSettings SLE doesn't suppress amendment-vote
-// emission and vice versa.
-//
-// Both producers need to know which feature amendments are
-// enabled on prevLedger (XRPFees gates the fee wire format;
-// fixAmendmentMajorityCalc switches the amendment threshold
-// strict-vs-lax). The base *ledger.Ledger doesn't carry an
-// amendment.Rules struct (Ledger.Rules returns nil), so we read
-// the Amendments SLE once at this boundary and pass the parsed
-// enabled-set down to both runners.
+// GetProposableTxs returns the subset of pending transactions that would
+// successfully apply against parent — the rippled-faithful open-ledger filter
+// (RCLConsensus.cpp:333-349 reads openLedger().current()->txs). Each
+// fallthrough below is a structural bug; we log WARN and return raw
+// pendingTxs to keep proposing rather than wedge the round.
+func (a *Adaptor) GetProposableTxs(parent consensus.Ledger) [][]byte {
+	raw := a.GetPendingTxs()
+	if len(raw) == 0 {
+		return nil
+	}
+	if a.ledgerService == nil {
+		a.logger.Warn(
+			"GetProposableTxs: ledgerService unavailable — proposing raw pendingTxs unfiltered; "+
+				"divergence vs rippled openLedger().current()->txs is possible",
+			"pending_count", len(raw),
+		)
+		return raw
+	}
+	wrapper, ok := parent.(*LedgerWrapper)
+	if !ok || wrapper == nil {
+		a.logger.Warn(
+			"GetProposableTxs: parent is not *LedgerWrapper — proposing raw pendingTxs unfiltered; "+
+				"this is a structural caller bug, divergence vs rippled openLedger filter expected",
+			"parent_type", fmt.Sprintf("%T", parent),
+			"pending_count", len(raw),
+		)
+		return raw
+	}
+	parentLedger := wrapper.Unwrap()
+	if parentLedger == nil {
+		a.logger.Warn(
+			"GetProposableTxs: LedgerWrapper.Unwrap() returned nil — proposing raw pendingTxs unfiltered; "+
+				"wrapper was torn down mid-flight, divergence vs rippled openLedger filter expected",
+			"pending_count", len(raw),
+		)
+		return raw
+	}
+	return a.ledgerService.FilterApplicableTxs(parentLedger, raw)
+}
+
+// GenerateFlagLedgerPseudoTxs runs the fee-vote and amendment-vote producers
+// and returns their concatenated pseudo-tx blobs for the proposal initial
+// set. Mirrors RCLConsensus.cpp:354-367, including the negative-UNL filter
+// (:358) and quorum gate (:361). XRPFees and fixAmendmentMajorityCalc
+// behavior is read from the parsed Amendments SLE since Ledger.Rules is nil
+// at this boundary.
 func (a *Adaptor) GenerateFlagLedgerPseudoTxs(prevLedger consensus.Ledger, parentValidations []*consensus.Validation) [][]byte {
 	if a.ledgerService == nil {
 		return nil
@@ -668,16 +703,10 @@ func (a *Adaptor) GenerateFlagLedgerPseudoTxs(prevLedger consensus.Ledger, paren
 	}
 	upcomingSeq := prev.Sequence() + 1
 
-	// Strip validations from validators currently on the negative
-	// UNL — they don't count toward quorum and their amendment /
-	// fee votes are not tallied. Mirrors RCLConsensus.cpp:358's
-	// negativeUNLFilter wrapping getTrustedForLedger.
+	// negativeUNLFilter wrapping getTrustedForLedger — RCLConsensus.cpp:358.
 	filtered := a.filterNegativeUNL(parentValidations)
 
-	// Quorum gate: with fewer than quorum validations of prev's
-	// parent (post-negUNL filter) we don't have enough signal to
-	// produce pseudo-txs. Standalone (zero trusted validators)
-	// reports quorum 0 and falls through. RCLConsensus.cpp:361.
+	// Quorum gate — RCLConsensus.cpp:361. Standalone reports quorum 0.
 	if len(filtered) < a.GetQuorum() {
 		return nil
 	}
@@ -726,22 +755,10 @@ func excludeNegativeUNL(vals []*consensus.Validation, negUNL []consensus.NodeID)
 	return out
 }
 
-// GenerateNegativeUNLPseudoTx is currently a stub. The vote-tally
-// algorithm itself lives in internal/consensus/negativeunlvote
-// (ported in #368) and is exercised by package-level tests against
-// synthetic score tables, but the production wiring still needs:
-//
-//   - per-seq validation history in ValidationTracker (today
-//     validations are only indexed by LedgerID; the algorithm needs
-//     to query "validations for ancestor at seq N by hash H" across
-//     the last FlagLedgerInterval ledgers);
-//   - state-map read access on consensus.Ledger so the producer can
-//     fetch the NegativeUNL SLE and the LedgerHashes skip-list of
-//     prevLedger.
-//
-// Returning nil keeps the engine's injection step a no-op until
-// those land — which preserves the pre-#367 behavior of never
-// injecting a NegUNL pseudo-tx.
+// GenerateNegativeUNLPseudoTx is a stub. The vote-tally algorithm in
+// internal/consensus/negativeunlvote still needs per-seq validation history
+// in ValidationTracker and state-map read access on consensus.Ledger before
+// production wiring. Returning nil keeps the injection step a no-op.
 func (a *Adaptor) GenerateNegativeUNLPseudoTx(_ consensus.Ledger) []byte {
 	return nil
 }

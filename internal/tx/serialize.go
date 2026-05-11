@@ -83,14 +83,14 @@ func MetadataToMap(meta *Metadata) map[string]any {
 			innerNode["LedgerEntryType"] = node.LedgerEntryType
 			innerNode["LedgerIndex"] = node.LedgerIndex
 
-			// Add PreviousTxnLgrSeq and PreviousTxnID for ModifiedNode only
-			// For DeletedNode, these fields appear inside FinalFields (via sMD_DeleteFinal)
-			// but NOT at the node level in the metadata structure
-			if node.NodeType == "ModifiedNode" && node.PreviousTxnLgrSeq != 0 {
-				innerNode["PreviousTxnLgrSeq"] = node.PreviousTxnLgrSeq
-			}
-			if node.NodeType == "ModifiedNode" && node.PreviousTxnID != "" {
+			// PreviousTxnID + PreviousTxnLgrSeq for ModifiedNode: emit
+			// as a PAIR, both or neither (rippled ApplyStateTable.cpp:560-572
+			// single `if (!prevTxID.isZero())` guard). DeletedNode puts
+			// these inside FinalFields via sMD_DeleteFinal, not at the
+			// node level — hence the NodeType guard.
+			if node.NodeType == "ModifiedNode" && node.PreviousTxnID != "" && !isZeroHashHex(node.PreviousTxnID) {
 				innerNode["PreviousTxnID"] = node.PreviousTxnID
+				innerNode["PreviousTxnLgrSeq"] = node.PreviousTxnLgrSeq
 			}
 
 			if node.FinalFields != nil && len(node.FinalFields) > 0 {

@@ -99,6 +99,10 @@ type Peer struct {
 
 	tracking atomic.Int32
 
+	// Consecutive ErrSendBufferFull count; close at sendqIntervals.
+	// PeerImp.cpp:705-708 "Large send queue".
+	largeSendQ atomic.Uint32
+
 	serverDomain      string
 	networkID         string
 	userAgent         string
@@ -736,6 +740,15 @@ func (p *Peer) runPingTick(now time.Time) error {
 		)
 		return ErrPingTimeout
 	}
+	// PeerImp.cpp:705-708 "Large send queue" disconnect.
+	if p.largeSendQ.Load() >= sendqIntervals {
+		slog.Warn("peer large send queue",
+			"t", "Peer", "peer", p.id,
+			"endpoint", p.endpoint.String(),
+			"intervals", p.largeSendQ.Load(),
+		)
+		return ErrLargeSendQueue
+	}
 	seq := uint32(now.UnixMilli())
 	ping := &message.Ping{
 		PType: message.PingTypePing,
@@ -777,6 +790,8 @@ const (
 	// the disconnect window.
 	pingInFlightTTL  = pingTimeout
 	pingsInFlightCap = 16
+	// Tuning::sendqIntervals (PeerImp.cpp:705 + Tuning.h).
+	sendqIntervals = 4
 )
 
 func (p *Peer) staleInFlightPing(now time.Time, threshold time.Duration) (seq uint32, age time.Duration, ok bool) {
@@ -1003,9 +1018,13 @@ func (p *Peer) Send(data []byte) error {
 
 	select {
 	case p.send <- data:
+		// PeerImp.cpp:270-276: reset below targetSendQueue.
+		p.largeSendQ.Store(0)
 		return nil
 	default:
-		return ErrConnectionClosed
+		// Sustained backpressure → close via runPingTick.
+		p.largeSendQ.Add(1)
+		return ErrSendBufferFull
 	}
 }
 

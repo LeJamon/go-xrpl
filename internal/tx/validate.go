@@ -34,3 +34,22 @@ func CheckDestRequired(destination string) error {
 	}
 	return nil
 }
+
+// IsValidPublicKey mirrors rippled's publicKeyType() (PublicKey.cpp):
+//
+//	33 bytes prefixed 0x02 / 0x03 (secp256k1 compressed)
+//	33 bytes prefixed 0xED        (ed25519)
+//	65 bytes prefixed 0x04        (secp256k1 uncompressed)
+//
+// Address-derivation paths that compare a derived address against an
+// account ID must gate on this — otherwise an arbitrary 33-byte
+// payload can hex-encode into a valid-looking address.
+func IsValidPublicKey(key []byte) bool {
+	if len(key) == 33 {
+		return key[0] == 0x02 || key[0] == 0x03 || key[0] == 0xED
+	}
+	if len(key) == 65 {
+		return key[0] == 0x04
+	}
+	return false
+}

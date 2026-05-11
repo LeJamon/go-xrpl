@@ -145,6 +145,13 @@ type mockAdaptor struct {
 	// exercise rippled's `standalone() || (proposing && !wrongLCL)`
 	// OR-branch at RCLConsensus.cpp:352.
 	standalone bool
+
+	// proposableOverride lets a test pin a specific filtered set
+	// for GetProposableTxs to return, distinct from the raw pending
+	// pool, so closeLedger's wiring (proposing path uses the filtered
+	// set) can be asserted directly. nil falls through to GetPendingTxs.
+	proposableOverride [][]byte
+	proposableCalled   int
 }
 
 func newMockAdaptor() *mockAdaptor {
@@ -307,6 +314,26 @@ func (a *mockAdaptor) GetPendingTxs() [][]byte {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.pendingTxs
+}
+
+// GetProposableTxs returns the filtered subset when an explicit
+// override is wired (proposableOverride). Otherwise falls through to
+// the raw pending pool — matching what a real adaptor returns when
+// the LedgerService can't filter (no parent / no apply context). The
+// override lets tests assert that closeLedger uses the filtered set
+// (not the raw pool) when proposing.
+func (a *mockAdaptor) GetProposableTxs(_ consensus.Ledger) [][]byte {
+	a.mu.RLock()
+	override := a.proposableOverride
+	called := a.proposableCalled
+	a.mu.RUnlock()
+	a.mu.Lock()
+	a.proposableCalled = called + 1
+	a.mu.Unlock()
+	if override != nil {
+		return override
+	}
+	return a.GetPendingTxs()
 }
 
 func (a *mockAdaptor) GenerateFlagLedgerPseudoTxs(_ consensus.Ledger, _ []*consensus.Validation) [][]byte {
@@ -2286,4 +2313,498 @@ func TestEngine_IsProposing_LockFreeWhileWriterHoldsMu(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("Mode blocked while a writer holds e.mu — atomic mode mirror regression")
 	}
+}
+
+// TestAcceptLedger_NoCloseTimeConsensus_DeterministicFallback pins
+// the issue #401 root-cause fix: when close-time consensus FAILS,
+// acceptLedger must use parentCloseTime + 1s — deterministically —
+// for the new ledger's close time. Mirrors rippled
+// RCLConsensus.cpp:481-488. Without the deterministic fallback, the
+// no-consensus path falls through to CloseTimes.Self (the local
+// clock), so each node hashes a different ledger header for the
+// same seq, every locally-emitted validation disagrees with the
+// network's accepted hash, and quorum becomes unreachable.
+//
+// Pins two properties:
+//  1. With haveCloseTimeConsensus=false and a wildly skewed local
+//     clock, the produced ledger's close time is exactly
+//     parentCloseTime + 1s — independent of the local clock.
+//  2. With haveCloseTimeConsensus=true, the engine still goes through
+//     determineCloseTime / effCloseTime (regression guard).
+func TestAcceptLedger_NoCloseTimeConsensus_DeterministicFallback(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	// Anchor parent ledger close time to a fixed, well-known value so
+	// the assertion does not depend on wall-clock at test time.
+	parentClose := time.Unix(1_700_000_000, 0).UTC()
+	parent := &mockLedger{
+		id:        consensus.LedgerID{0x01},
+		seq:       50,
+		closeTime: parentClose,
+	}
+	adaptor.lastLCL = parent
+	adaptor.ledgers[parent.ID()] = parent
+
+	// Pin the local clock far away from parentClose+1s so a regression
+	// to "Self fallback" is unambiguously observable.
+	adaptor.now = parentClose.Add(37 * time.Second)
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: parent.Seq() + 1, ParentHash: parent.ID()}
+	engine.StartRound(round, true)
+
+	// Drive acceptLedger directly with no close-time consensus.
+	engine.mu.Lock()
+	engine.prevLedger = parent
+	engine.haveCloseTimeConsensus = false
+	// Seed CloseTimes.Self to the same skewed clock so determineCloseTime
+	// (if it were still wired) would pick this value — making the
+	// regression visible. Real production inits Self from adaptor.Now().
+	engine.state.CloseTimes.Self = adaptor.now
+	engine.setPhase(consensus.PhaseEstablish)
+	engine.acceptLedger(consensus.ResultSuccess)
+	engine.mu.Unlock()
+
+	got := adaptor.lastLCL.CloseTime()
+	want := parentClose.Add(time.Second)
+	if !got.Equal(want) {
+		t.Fatalf("no-consensus close time: want %v (parentClose+1s, "+
+			"deterministic fallback), got %v — engine fell through "+
+			"to local-clock fallback, divergence regression of #401",
+			want, got)
+	}
+
+	// Sanity check: the local clock was skewed far enough that a
+	// regression would be unmistakable.
+	if got.Equal(adaptor.now) {
+		t.Fatalf("close time matches local clock — fallback path is " +
+			"using CloseTimes.Self (regression of #401 root-cause fix)")
+	}
+}
+
+// TestAcceptLedger_WrongLedger_NoEmit pins the rippled-faithful
+// validation gate: when mode==WrongLedger and result==Success,
+// acceptLedger MUST run end-to-end (build, store, advance phase,
+// fire auto-advance hooks) but MUST NOT broadcast a validation.
+//
+// Mirrors rippled doAccept (RCLConsensus.cpp:464-602). Lines 478,
+// 532-545, 601 run unconditionally; only the validation-emission
+// branch (587-594) is gated via `validating_ = isCompatible(...)`.
+// In WrongLedger mode our locally-built ledger is on a side chain,
+// so isCompatible would return false → no validation. But the build
+// itself proceeds, the round transitions out of Establish, and
+// auto-advance starts the next round so checkLedger gets a chance
+// to detect the mismatch and trigger handleWrongLedger. Suppressing
+// the entire acceptLedger call here would wedge the engine in
+// phase==Establish (#401, opposite-direction regression).
+//
+// Properties pinned:
+//  1. No validation broadcast (Frankenstein-hash safety preserved).
+//  2. Phase advances out of Establish (round is NOT stuck).
+//  3. Re-running acceptLedger after mode is restored to Proposing
+//     emits a validation (gate is mode-conditional, not permanent).
+func TestAcceptLedger_WrongLedger_NoEmit(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	// Force mode to wrongLedger, drive acceptLedger directly.
+	engine.mu.Lock()
+	engine.setMode(consensus.ModeWrongLedger)
+	engine.setPhase(consensus.PhaseEstablish)
+	engine.acceptLedger(consensus.ResultSuccess)
+	phaseAfter := engine.phase
+	engine.mu.Unlock()
+
+	if phaseAfter == consensus.PhaseEstablish {
+		t.Fatalf("wrongLedger acceptLedger must NOT leave the round " +
+			"stuck in Establish (rippled doAccept advances it " +
+			"unconditionally; only validation emission is gated). " +
+			"This regression wedges the engine forever.")
+	}
+
+	adaptor.mu.RLock()
+	emittedDuringWrong := len(adaptor.validationsBroadcast)
+	adaptor.mu.RUnlock()
+	if emittedDuringWrong != 0 {
+		t.Fatalf("wrongLedger acceptLedger must NOT broadcast a "+
+			"validation; got %d emissions — Frankenstein hash "+
+			"would be flagged Byzantine by peers (#401)",
+			emittedDuringWrong)
+	}
+
+	// Restoring mode and calling acceptLedger again must proceed
+	// normally (Success path emits one validation). This pins that
+	// the gate is mode-conditional, not a permanent kill switch.
+	engine.mu.Lock()
+	engine.setMode(consensus.ModeProposing)
+	engine.setPhase(consensus.PhaseEstablish)
+	engine.acceptLedger(consensus.ResultSuccess)
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	emittedAfterRestore := len(adaptor.validationsBroadcast)
+	adaptor.mu.RUnlock()
+	if emittedAfterRestore != 1 {
+		t.Fatalf("post-restore acceptLedger must emit exactly one "+
+			"validation; got %d — gate is leaking past the "+
+			"mode==wrongLedger condition", emittedAfterRestore)
+	}
+}
+
+// TestSendValidation_CanValidateSeq_DedupsSameAndOlderSeq pins the
+// issue #401 fix: sendValidation MUST silently drop a second emission
+// at the same — or any earlier — ledger sequence, no matter the hash.
+//
+// Without this guard, when our local close diverges from the network's
+// accepted hash, a subsequent re-accept (e.g. after acquiring the
+// foreign LCL) can race two distinct validations for the same seq onto
+// the wire. Rippled's Byzantine Behavior Detector flags us permanently
+// for "Conflicting validation for N" (RCLValidations.cpp:236-240,
+// Validations.h:625-665), and our validations stop counting toward
+// quorum forever. Mirrors rippled's per-node SeqEnforcer, the engine
+// of canValidateSeq (Validations.h:830).
+func TestSendValidation_CanValidateSeq_DedupsSameAndOlderSeq(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	// First emission at seq=101 hash=A — must broadcast.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xA1}, seq: 101})
+	engine.mu.Unlock()
+
+	// Second emission at the SAME seq with a DIFFERENT hash — must be
+	// silently dropped. This is the production scenario that triggers
+	// the Byzantine flag at peers (#401).
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xB2}, seq: 101})
+	engine.mu.Unlock()
+
+	// Third emission at an EARLIER seq — must also be silently dropped.
+	// SeqEnforcer requires strictly increasing seqs.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xC3}, seq: 100})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	emitted := append([]*consensus.Validation(nil), adaptor.validationsBroadcast...)
+	adaptor.mu.RUnlock()
+
+	if len(emitted) != 1 {
+		t.Fatalf("canValidateSeq guard: want exactly one emission for "+
+			"seq=101 (same-seq and earlier-seq calls dropped), got %d",
+			len(emitted))
+	}
+	if emitted[0].LedgerID != (consensus.LedgerID{0xA1}) {
+		t.Fatalf("the kept emission must be the FIRST (seq=101 hash=A1), "+
+			"got hash=%x — guard let a later same-seq emission overwrite",
+			emitted[0].LedgerID)
+	}
+
+	// Fourth emission at a LATER seq — must broadcast normally.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xD4}, seq: 102})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	emitted = append([]*consensus.Validation(nil), adaptor.validationsBroadcast...)
+	adaptor.mu.RUnlock()
+
+	if len(emitted) != 2 {
+		t.Fatalf("strictly-increasing seq must pass: want 2 emissions "+
+			"after seq=102, got %d", len(emitted))
+	}
+	if emitted[1].LedgerSeq != 102 {
+		t.Fatalf("second kept emission seq: want 102, got %d", emitted[1].LedgerSeq)
+	}
+}
+
+// TestSendValidation_SeqEnforcerExpiresAfterIdle pins rippled's
+// SeqEnforcer reset semantics (Validations.h:118-128): after
+// validationSetExpires (10 minutes) of silence, the floor resets to
+// 0 so a long-restarted / partitioned validator can come back online
+// and validate at sequences below its pre-outage floor. Without the
+// reset, a node that crashed at high seq and rejoined when the chain
+// was further ahead but its FIRST candidate ledger was at a lower seq
+// (e.g. it switched to a shorter side-chain it could acquire faster)
+// would be permanently silenced — every catch-up ledger has seq <=
+// the stale floor, so canValidateSeqLocked rejects forever.
+func TestSendValidation_SeqEnforcerExpiresAfterIdle(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	baseTime := time.Unix(1_700_000_000, 0).UTC()
+	adaptor.mu.Lock()
+	adaptor.now = baseTime
+	adaptor.mu.Unlock()
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	// Emit at seq=500. Floor → 500.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xA1}, seq: 500})
+	engine.mu.Unlock()
+
+	// Without expiry: re-emitting at seq=300 is rejected (300 <= 500).
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xB2}, seq: 300})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	pre := append([]*consensus.Validation(nil), adaptor.validationsBroadcast...)
+	adaptor.mu.RUnlock()
+	if len(pre) != 1 {
+		t.Fatalf("pre-expiry: want one emission (seq=500), got %d", len(pre))
+	}
+
+	// Advance the clock past validationSetExpires. The next call must
+	// see the floor reset to 0 and accept seq=300.
+	adaptor.mu.Lock()
+	adaptor.now = baseTime.Add(validationSetExpires + time.Second)
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xC3}, seq: 300})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	post := append([]*consensus.Validation(nil), adaptor.validationsBroadcast...)
+	adaptor.mu.RUnlock()
+	if len(post) != 2 {
+		t.Fatalf("post-expiry: SeqEnforcer floor should have reset to 0, "+
+			"allowing seq=300 to emit (was rejected by stale floor=500); "+
+			"want 2 total emissions, got %d", len(post))
+	}
+	if post[1].LedgerSeq != 300 {
+		t.Fatalf("post-expiry: kept emission seq mismatch — got %d, want 300",
+			post[1].LedgerSeq)
+	}
+
+	// The new floor is 300. Re-emitting at seq=200 should still be
+	// rejected (the reset happened once at the expiry boundary, not
+	// continuously).
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xD4}, seq: 200})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	final := len(adaptor.validationsBroadcast)
+	adaptor.mu.RUnlock()
+	if final != 2 {
+		t.Fatalf("post-reset floor not re-armed: a seq below the new "+
+			"floor (300) was wrongly accepted; want 2 emissions, got %d",
+			final)
+	}
+}
+
+// TestAcceptLedger_ConsensusFailSuppressesValidation pins the issue
+// #401 fix at the production gate: acceptLedger must NOT emit a
+// validation when the round failed to converge. Mirrors rippled's
+// gate at RCLConsensus.cpp:587-594 — `validating_ && !consensusFail`.
+//
+// In rippled, the timeout/Expired path zeros validating_ via
+// leaveConsensus(); we encode the same intent by passing a non-Success
+// Result enum into acceptLedger. Without this gate a divergent local
+// close still emits, peers see a hash that differs from their accepted
+// LCL, and our validator gets Byzantine-flagged.
+func TestAcceptLedger_ConsensusFailSuppressesValidation(t *testing.T) {
+	cases := []struct {
+		name   string
+		result consensus.Result
+		want   int // emissions expected
+	}{
+		{"Success_emits", consensus.ResultSuccess, 1},
+		{"Timeout_suppressed", consensus.ResultTimeout, 0},
+		{"Abandoned_suppressed", consensus.ResultAbandoned, 0},
+		{"MovedOn_suppressed", consensus.ResultMovedOn, 0},
+		{"Fail_suppressed", consensus.ResultFail, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			adaptor := newMockAdaptor()
+			adaptor.validator = true
+			adaptor.opMode = consensus.OpModeFull
+
+			engine := NewEngine(adaptor, DefaultConfig())
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if err := engine.Start(ctx); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			defer engine.Stop()
+
+			round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+			engine.StartRound(round, true)
+
+			// Seed the engine with a tx-set + position so acceptLedger
+			// has something to build with; use the inbound proposal path
+			// to drive it without reproducing the entire FSM here.
+			adaptor.mu.Lock()
+			adaptor.validationsBroadcast = nil
+			adaptor.mu.Unlock()
+
+			// Drive acceptLedger directly. The phase guard at the top
+			// requires PhaseEstablish — StartRound transitions Open →
+			// Establish on the first timer tick, so force it.
+			engine.mu.Lock()
+			engine.setPhase(consensus.PhaseEstablish)
+			engine.acceptLedger(tc.result)
+			engine.mu.Unlock()
+
+			adaptor.mu.RLock()
+			got := len(adaptor.validationsBroadcast)
+			adaptor.mu.RUnlock()
+
+			if got != tc.want {
+				t.Fatalf("result=%v: want %d emissions, got %d "+
+					"(consensusFail gate did not match rippled "+
+					"RCLConsensus.cpp:587-594)", tc.result, tc.want, got)
+			}
+		})
+	}
+}
+
+// TestCloseLedger_ProposingUsesFilteredTxSet pins the open-ledger
+// filter wiring: when the engine is in ModeProposing (or standalone),
+// closeLedger MUST source its tx set from
+// adaptor.GetProposableTxs(prev) — the rippled-faithful
+// open-ledger-filtered set (RCLConsensus.cpp:333-349) — and NOT from
+// the raw GetPendingTxs() pool. Regressing back to GetPendingTxs
+// would re-introduce the bootstrap fork class fixed in #401.
+//
+// Two arms:
+//
+//  1. Proposing → GetProposableTxs invoked at least once.
+//  2. Non-proposing (e.g. ModeWrongLedger): the filter is gated to
+//     proposing/standalone, skipping the expensive multi-pass apply
+//     when the result has no observable network effect. Pinned so a
+//     future widening doesn't silently reintroduce the per-round
+//     filter cost in observer modes.
+func TestCloseLedger_ProposingUsesFilteredTxSet(t *testing.T) {
+	t.Run("proposing-uses-filter", func(t *testing.T) {
+		adaptor := newMockAdaptor()
+		adaptor.validator = true
+		adaptor.opMode = consensus.OpModeFull
+		adaptor.proposableOverride = [][]byte{} // distinct from raw pool
+
+		engine := NewEngine(adaptor, DefaultConfig())
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if err := engine.Start(ctx); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		defer engine.Stop()
+
+		round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+		engine.StartRound(round, true)
+
+		engine.mu.Lock()
+		engine.setMode(consensus.ModeProposing)
+		engine.setPhase(consensus.PhaseOpen)
+		engine.closeLedger()
+		engine.mu.Unlock()
+
+		adaptor.mu.RLock()
+		got := adaptor.proposableCalled
+		adaptor.mu.RUnlock()
+		if got == 0 {
+			t.Fatalf("ModeProposing closeLedger must call GetProposableTxs " +
+				"(filter the open-ledger-applicable subset). Got 0 calls — " +
+				"would propose the raw pending pool, regressing the #401 fix.")
+		}
+	})
+
+	t.Run("wrongledger-uses-raw-pool", func(t *testing.T) {
+		adaptor := newMockAdaptor()
+		adaptor.validator = true
+		adaptor.opMode = consensus.OpModeFull
+		adaptor.proposableOverride = [][]byte{}
+
+		engine := NewEngine(adaptor, DefaultConfig())
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if err := engine.Start(ctx); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		defer engine.Stop()
+
+		round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+		engine.StartRound(round, true)
+
+		engine.mu.Lock()
+		engine.setMode(consensus.ModeWrongLedger)
+		engine.setPhase(consensus.PhaseOpen)
+		engine.closeLedger()
+		engine.mu.Unlock()
+
+		adaptor.mu.RLock()
+		got := adaptor.proposableCalled
+		adaptor.mu.RUnlock()
+		if got != 0 {
+			t.Fatalf("ModeWrongLedger closeLedger must NOT call "+
+				"GetProposableTxs (filter is gated to proposing or "+
+				"standalone). Got %d calls — would burn the per-round "+
+				"multi-pass apply cost on a position we won't "+
+				"broadcast.", got)
+		}
+	})
 }

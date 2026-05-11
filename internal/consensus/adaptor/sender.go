@@ -98,11 +98,44 @@ func (s *OverlaySender) UpdateRelaySlot(validatorKey []byte, originPeer uint64, 
 	}
 }
 
+// RequestTxSet asks peers for a known-hash tx-set we don't hold. Mirrors
+// TransactionAcquire::trigger initial request (TransactionAcquire.cpp:
+// 128-137): TMGetLedger{itype=liTS_CANDIDATE, ledger_hash=txSetID,
+// query_depth=3, node_ids=[SHAMapNodeID root]}. node_ids is required for
+// itype != liBASE — PeerImp.cpp:1435-1438 rejects without it. SHAMap root
+// encoding is 33 zero bytes (zero path + depth=0). Issue #401.
 func (s *OverlaySender) RequestTxSet(id consensus.TxSetID) error {
-	msg := HaveSetToMessage(id, message.TxSetStatusNeed)
-	frame, err := encodeFrame(message.TypeHaveSet, msg)
+	rootNodeID := make([]byte, 33) // 32 zeros + 1 depth byte (0)
+	msg := &message.GetLedger{
+		InfoType:   message.LedgerInfoTsCandidate,
+		LedgerHash: id[:],
+		QueryDepth: 3,
+		NodeIDs:    [][]byte{rootNodeID},
+	}
+	frame, err := encodeFrame(message.TypeGetLedger, msg)
 	if err != nil {
 		return fmt.Errorf("encode txset request: %w", err)
+	}
+	return s.overlay.Broadcast(frame)
+}
+
+// RequestTxSetMissingNodes requests specific SHAMap nodes after a partial
+// tree. Mirrors TransactionAcquire::trigger second branch
+// (TransactionAcquire.cpp:144-171). Each nodeID is 33 bytes (32 path +
+// 1 depth) per shamap.NodeID.Bytes.
+func (s *OverlaySender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte) error {
+	if len(nodeIDs) == 0 {
+		return fmt.Errorf("RequestTxSetMissingNodes: nodeIDs must be non-empty")
+	}
+	msg := &message.GetLedger{
+		InfoType:   message.LedgerInfoTsCandidate,
+		LedgerHash: id[:],
+		QueryDepth: 3,
+		NodeIDs:    nodeIDs,
+	}
+	frame, err := encodeFrame(message.TypeGetLedger, msg)
+	if err != nil {
+		return fmt.Errorf("encode txset missing-nodes request: %w", err)
 	}
 	return s.overlay.Broadcast(frame)
 }

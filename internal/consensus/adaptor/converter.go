@@ -77,10 +77,18 @@ func ValidationFromMessage(msg *message.Validation) (*consensus.Validation, erro
 // consumers (the validation archive, suppression-hash computation) can
 // reuse the canonical blob without a second serialize pass.
 func ValidationToMessage(v *consensus.Validation) *message.Validation {
-	blob := SerializeSTValidation(v)
-	if len(v.Raw) == 0 {
-		v.Raw = append([]byte(nil), blob...)
+	// Forward v.Raw verbatim — the signature only verifies against the
+	// original preimage, so any re-serialization (VL encoding drift,
+	// dropped optional fields, ordering) causes downstream peers to
+	// reject with "invalid validation signature". When Raw is empty we
+	// just signed locally; SerializeSTValidation is canonical.
+	if len(v.Raw) > 0 {
+		return &message.Validation{
+			Validation: append([]byte(nil), v.Raw...),
+		}
 	}
+	blob := SerializeSTValidation(v)
+	v.Raw = append([]byte(nil), blob...)
 	return &message.Validation{
 		Validation: blob,
 	}

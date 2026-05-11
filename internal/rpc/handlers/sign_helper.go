@@ -223,11 +223,12 @@ func signTransactionJSON(services *types.ServiceContainer, txJSON json.RawMessag
 			txMap["Sequence"] = info.Sequence
 		}
 
-		// Set LastLedgerSequence if not present (current + 4)
-		if _, ok := txMap["LastLedgerSequence"]; !ok {
-			currentLedger := services.Ledger.GetCurrentLedgerIndex()
-			txMap["LastLedgerSequence"] = currentLedger + 4
-		}
+		// Do NOT auto-fill LastLedgerSequence. Rippled's
+		// transactionPreProcessImpl (TransactionSign.cpp:409-491) only
+		// autofills Sequence / NetworkID / Fee / SigningPubKey /
+		// TxnSignature; LastLedgerSequence is left to the caller, and
+		// adding it server-side produces different signed bytes for the
+		// same client tx_json.
 
 		// Auto-fill NetworkID if not present and network ID > 1024.
 		// Matches rippled's transactionPreProcessImpl() in TransactionSign.cpp:

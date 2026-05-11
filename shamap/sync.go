@@ -84,6 +84,8 @@ type MissingNode struct {
 	ParentHash [32]byte
 	// Branch is the branch index in the parent node (0-15 for inner nodes)
 	Branch int
+	// Path-based ID; TMGetLedger locates by path, not hash.
+	NodeID NodeID
 }
 
 // String returns a string representation of the MissingNode.
@@ -131,6 +133,7 @@ func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode
 	type workItem struct {
 		node       Node
 		nodeHash   [32]byte
+		nodeID     NodeID
 		parentHash [32]byte
 		depth      int
 		branch     int
@@ -144,6 +147,7 @@ func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode
 		queue = append(queue, workItem{
 			node:     sm.root,
 			nodeHash: rootHash,
+			nodeID:   NewRootNodeID(),
 			depth:    0,
 			branch:   -1,
 		})
@@ -184,6 +188,11 @@ func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode
 				continue
 			}
 
+			childNodeID, err := item.nodeID.ChildNodeID(uint8(branch))
+			if err != nil {
+				continue
+			}
+
 			// Check if child is missing (hash present but no child node)
 			child, err := inner.Child(branch)
 			if err != nil {
@@ -198,6 +207,7 @@ func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode
 						Depth:      item.depth + 1,
 						ParentHash: item.nodeHash,
 						Branch:     branch,
+						NodeID:     childNodeID,
 					})
 
 					if maxNodes > 0 && len(missing) >= maxNodes {
@@ -209,6 +219,7 @@ func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode
 				queue = append(queue, workItem{
 					node:       child,
 					nodeHash:   childHash,
+					nodeID:     childNodeID,
 					parentHash: item.nodeHash,
 					depth:      item.depth + 1,
 					branch:     branch,
@@ -258,6 +269,29 @@ func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 
 	// Find the location in the tree where this node belongs
 	return sm.insertKnownNode(nodeHash, node)
+}
+
+// AddKnownNodeUnchecked adds a node from wire data trusting its computed
+// hash for tree placement. Use when no authoritative external hash is
+// available; AddKnownNode performs the comparison when one is supplied.
+func (sm *SHAMap) AddKnownNodeUnchecked(data []byte) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if sm.state != StateSyncing {
+		return ErrSyncNotInProgress
+	}
+	if len(data) == 0 {
+		return ErrInvalidNodeData
+	}
+	node, err := DeserializeNodeFromWire(data)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidNodeData, err)
+	}
+	if err := node.UpdateHash(); err != nil {
+		return fmt.Errorf("failed to compute node hash: %w", err)
+	}
+	return sm.insertKnownNode(node.Hash(), node)
 }
 
 // insertKnownNode inserts a node at the correct location in the tree.
@@ -421,6 +455,7 @@ func (sm *SHAMap) getMissingNodesUnsafe(maxNodes int, filter SyncFilter) []Missi
 	type workItem struct {
 		node       Node
 		nodeHash   [32]byte
+		nodeID     NodeID
 		parentHash [32]byte
 		depth      int
 		branch     int
@@ -433,6 +468,7 @@ func (sm *SHAMap) getMissingNodesUnsafe(maxNodes int, filter SyncFilter) []Missi
 		queue = append(queue, workItem{
 			node:     sm.root,
 			nodeHash: rootHash,
+			nodeID:   NewRootNodeID(),
 			depth:    0,
 			branch:   -1,
 		})
@@ -469,6 +505,11 @@ func (sm *SHAMap) getMissingNodesUnsafe(maxNodes int, filter SyncFilter) []Missi
 				continue
 			}
 
+			childNodeID, err := item.nodeID.ChildNodeID(uint8(branch))
+			if err != nil {
+				continue
+			}
+
 			child, err := inner.Child(branch)
 			if err != nil {
 				continue
@@ -481,6 +522,7 @@ func (sm *SHAMap) getMissingNodesUnsafe(maxNodes int, filter SyncFilter) []Missi
 						Depth:      item.depth + 1,
 						ParentHash: item.nodeHash,
 						Branch:     branch,
+						NodeID:     childNodeID,
 					})
 
 					if maxNodes > 0 && len(missing) >= maxNodes {
@@ -491,6 +533,7 @@ func (sm *SHAMap) getMissingNodesUnsafe(maxNodes int, filter SyncFilter) []Missi
 				queue = append(queue, workItem{
 					node:       child,
 					nodeHash:   childHash,
+					nodeID:     childNodeID,
 					parentHash: item.nodeHash,
 					depth:      item.depth + 1,
 					branch:     branch,

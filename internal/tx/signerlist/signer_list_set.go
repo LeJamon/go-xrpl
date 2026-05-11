@@ -1,9 +1,11 @@
 package signerlist
 
 import (
+	"encoding/hex"
 	"sort"
 
 	"github.com/LeJamon/goXRPLd/amendment"
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -200,14 +202,24 @@ func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Account.RegularKey = ""
 	}
 
-	// If this was a free password change (fee=0), mark the password as spent.
-	// Reference: rippled SetRegularKey.cpp doApply — sets lsfPasswordSpent
-	// when the open ledger fee was 0 (the one-time free password change).
-	if ctx.Config.BaseFee > 0 {
-		fee := s.GetCommon().Fee
-		if fee == "0" {
-			ctx.Account.Flags |= state.LsfPasswordSpent
+	// Set lsfPasswordSpent when the tx qualifies for the free
+	// password-change discount: signed by the master key. Rippled
+	// SetRegularKey.cpp doApply gates on mFeeDue == 0 (the calculated
+	// minimum fee), NOT the fee actually paid.
+	common := s.GetCommon()
+	signedWithMaster := false
+	if spk := common.SigningPubKey; spk != "" {
+		// publicKeyType() check (rippled PublicKey.cpp) before deriving
+		// an address — otherwise an arbitrary 33-byte payload could
+		// hex-encode into a valid-looking master address.
+		if spkBytes, decErr := hex.DecodeString(spk); decErr == nil && tx.IsValidPublicKey(spkBytes) {
+			if sigAddr, sigErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(spk); sigErr == nil && sigAddr == common.Account {
+				signedWithMaster = true
+			}
 		}
+	}
+	if signedWithMaster && (ctx.Account.Flags&state.LsfPasswordSpent) == 0 {
+		ctx.Account.Flags |= state.LsfPasswordSpent
 	}
 
 	return tx.TesSUCCESS

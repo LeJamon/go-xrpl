@@ -9,7 +9,7 @@ import (
 
 func TestCanonicalSortEmpty(t *testing.T) {
 	var txs []pendingTx
-	canonicalSort(txs)
+	canonicalSort(txs, [32]byte{})
 	if len(txs) != 0 {
 		t.Error("expected empty slice after sorting empty input")
 	}
@@ -19,7 +19,7 @@ func TestCanonicalSortSingle(t *testing.T) {
 	txs := []pendingTx{
 		{hash: [32]byte{0x01}, account: [20]byte{0xAA}, seqProxy: 1},
 	}
-	canonicalSort(txs)
+	canonicalSort(txs, [32]byte{})
 	if txs[0].hash[0] != 0x01 {
 		t.Error("single element should remain unchanged")
 	}
@@ -36,11 +36,9 @@ func TestCanonicalSortByAccountKey(t *testing.T) {
 		{txBlob: []byte{2}, hash: makeHash(2), account: account1, seqProxy: 1},
 	}
 
-	canonicalSort(txs)
+	canonicalSort(txs, [32]byte{})
 
-	// The salt is computed from the sorted hashes, so account keys depend on it.
-	// We just verify the sort is stable and deterministic.
-	salt := computeSalt(txs)
+	salt := [32]byte{}
 	key1 := computeAccountKey(account1, salt)
 	key2 := computeAccountKey(account2, salt)
 
@@ -68,7 +66,7 @@ func TestCanonicalSortBySequence(t *testing.T) {
 		{txBlob: []byte{3}, hash: makeHash(2), account: account, seqProxy: 8},
 	}
 
-	canonicalSort(txs)
+	canonicalSort(txs, [32]byte{})
 
 	// Same account => sorted by sequence
 	if txs[0].seqProxy != 5 {
@@ -95,7 +93,7 @@ func TestCanonicalSortSeqBeforeTicket(t *testing.T) {
 		{txBlob: []byte{2}, hash: makeHash(2), account: account, seqProxy: 16},             // sequence value 16
 	}
 
-	canonicalSort(txs)
+	canonicalSort(txs, [32]byte{})
 
 	if txs[0].seqProxy != 16 {
 		t.Errorf("expected sequence-based (16) first, got seqProxy=%#x", txs[0].seqProxy)
@@ -118,7 +116,7 @@ func TestCanonicalSortByTxID(t *testing.T) {
 		{txBlob: []byte{3}, hash: hash2, account: account, seqProxy: 1},
 	}
 
-	canonicalSort(txs)
+	canonicalSort(txs, [32]byte{})
 
 	// Same account, same sequence => sorted by txID (hash)
 	if txs[0].hash != hash1 {
@@ -146,8 +144,8 @@ func TestCanonicalSortDeterministic(t *testing.T) {
 	txs1 := makeTxs()
 	txs2 := makeTxs()
 
-	canonicalSort(txs1)
-	canonicalSort(txs2)
+	canonicalSort(txs1, [32]byte{})
+	canonicalSort(txs2, [32]byte{})
 
 	for i := range txs1 {
 		if txs1[i].hash != txs2[i].hash {
@@ -157,32 +155,42 @@ func TestCanonicalSortDeterministic(t *testing.T) {
 	}
 }
 
-func TestComputeSalt(t *testing.T) {
-	// SHAMap leaf nodes require >= 12 bytes of data
-	blob1 := make([]byte, 16)
-	blob1[0] = 0x01
-	blob2 := make([]byte, 16)
-	blob2[0] = 0x02
-
+func TestComputeSaltOrderIndependent(t *testing.T) {
+	// SHAMap leaves require data >= 12 bytes; use 16-byte synthetic
+	// blobs to exercise the real insert path.
+	mkBlob := func(seed byte) []byte {
+		b := make([]byte, 16)
+		for i := range b {
+			b[i] = seed + byte(i)
+		}
+		return b
+	}
 	txs := []pendingTx{
-		{hash: makeHash(2), txBlob: blob2},
-		{hash: makeHash(1), txBlob: blob1},
+		{txBlob: mkBlob(0x10), hash: makeHash(1), account: [20]byte{0xAA}, seqProxy: 1},
+		{txBlob: mkBlob(0x20), hash: makeHash(2), account: [20]byte{0xAA}, seqProxy: 2},
+		{txBlob: mkBlob(0x30), hash: makeHash(3), account: [20]byte{0xAA}, seqProxy: 3},
 	}
 
-	salt := computeSalt(txs)
-	var zero [32]byte
-	if salt == zero {
-		t.Error("salt should not be zero")
+	salt1 := computeSalt(txs)
+
+	permuted := []pendingTx{txs[2], txs[0], txs[1]}
+	salt2 := computeSalt(permuted)
+	if salt1 != salt2 {
+		t.Errorf("computeSalt is order-dependent: %x vs %x", salt1[:8], salt2[:8])
 	}
 
-	// Verify it's deterministic regardless of input order
-	txsReversed := []pendingTx{
-		{hash: makeHash(1), txBlob: blob1},
-		{hash: makeHash(2), txBlob: blob2},
+	emptySalt1 := computeSalt(nil)
+	emptySalt2 := computeSalt([]pendingTx{})
+	if emptySalt1 != emptySalt2 {
+		t.Errorf("computeSalt diverges on nil vs empty slice: %x vs %x",
+			emptySalt1[:8], emptySalt2[:8])
 	}
-	saltReversed := computeSalt(txsReversed)
-	if salt != saltReversed {
-		t.Error("salt should be the same regardless of input order")
+
+	other := []pendingTx{
+		{txBlob: mkBlob(0xFF), hash: makeHash(99), account: [20]byte{0xAA}, seqProxy: 1},
+	}
+	if computeSalt(other) == salt1 {
+		t.Error("computeSalt collapsed two different tx sets to the same salt")
 	}
 }
 

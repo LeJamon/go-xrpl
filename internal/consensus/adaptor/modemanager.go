@@ -128,6 +128,35 @@ func (m *ModeManager) SetMode(mode consensus.OperatingMode) {
 	m.transitionLocked(mode)
 }
 
+// OnEvent translates engine ModeChangedEvents into adaptor OperatingMode
+// transitions. Reads adaptor.GetOperatingMode() rather than m.mode because
+// production paths (router.go, AdoptLedgerFromHeader) bypass this state
+// machine via direct SetOperatingMode calls, so m.mode isn't authoritative.
+// Mirrors rippled's wrongLedger behavior — validating_ stays false until
+// handleWrongLedger succeeds.
+func (m *ModeManager) OnEvent(event consensus.Event) {
+	mc, ok := event.(*consensus.ModeChangedEvent)
+	if !ok {
+		return
+	}
+	current := m.adaptor.GetOperatingMode()
+	if mc.NewMode == consensus.ModeWrongLedger {
+		if current == consensus.OpModeFull || current == consensus.OpModeTracking {
+			m.mu.Lock()
+			m.transitionLocked(consensus.OpModeSyncing)
+			m.mu.Unlock()
+		}
+		return
+	}
+	if mc.OldMode == consensus.ModeWrongLedger {
+		if current == consensus.OpModeSyncing {
+			m.mu.Lock()
+			m.transitionLocked(consensus.OpModeTracking)
+			m.mu.Unlock()
+		}
+	}
+}
+
 // transitionLocked performs a mode transition while holding the lock.
 func (m *ModeManager) transitionLocked(newMode consensus.OperatingMode) {
 	if m.mode == newMode {

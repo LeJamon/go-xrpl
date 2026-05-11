@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"time"
+
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -45,6 +47,9 @@ func (m *mockNFTOffersLedgerService) GetCurrentLedgerIndex() uint32   { return m
 func (m *mockNFTOffersLedgerService) GetClosedLedgerIndex() uint32    { return m.closedLedgerIndex }
 func (m *mockNFTOffersLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
 func (m *mockNFTOffersLedgerService) AcceptLedger(context.Context) (uint32, error) {
+	return m.closedLedgerIndex + 1, nil
+}
+func (m *mockNFTOffersLedgerService) AcceptLedgerAt(context.Context, time.Time) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }
 func (m *mockNFTOffersLedgerService) IsStandalone() bool { return m.standalone }
