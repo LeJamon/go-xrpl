@@ -77,10 +77,30 @@ func ValidationFromMessage(msg *message.Validation) (*consensus.Validation, erro
 // consumers (the validation archive, suppression-hash computation) can
 // reuse the canonical blob without a second serialize pass.
 func ValidationToMessage(v *consensus.Validation) *message.Validation {
-	blob := SerializeSTValidation(v)
-	if len(v.Raw) == 0 {
-		v.Raw = append([]byte(nil), blob...)
+	// Prefer the original wire bytes when present. parseSTValidation
+	// stores them in v.Raw, and any peer-relayed validation MUST be
+	// forwarded verbatim — re-serializing from struct fields can
+	// produce a byte sequence that differs from what the validator
+	// signed (different VL encoding, dropped optional fields we
+	// don't model, sub-microsecond ordering tweaks). The signature
+	// only verifies against the original preimage, so a re-serialized
+	// relay is rejected by every downstream peer with "invalid
+	// validation signature" — surfaced as the ~60% rejection rate
+	// goxrpl-1 → goxrpl-0 in the 5-validator soak: peer-3 (the
+	// other goxrpl) was relaying rippled validations re-serialized,
+	// goxrpl-0 verified against the re-serialized preimage and
+	// rejected, while the SAME validations sent directly by the
+	// rippled peers (which forward raw bytes) verified fine.
+	//
+	// When v.Raw is empty we just signed locally; SerializeSTValidation
+	// is the canonical source of bytes and v.Raw stays in sync.
+	if len(v.Raw) > 0 {
+		return &message.Validation{
+			Validation: append([]byte(nil), v.Raw...),
+		}
 	}
+	blob := SerializeSTValidation(v)
+	v.Raw = append([]byte(nil), blob...)
 	return &message.Validation{
 		Validation: blob,
 	}

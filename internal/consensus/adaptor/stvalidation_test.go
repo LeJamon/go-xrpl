@@ -436,6 +436,69 @@ func TestValidationToMessage_ProducesValidBlob(t *testing.T) {
 	assert.Equal(t, orig.NodeID, parsed.NodeID)
 }
 
+// TestValidationToMessage_RelaysRawBytesVerbatim pins the relay
+// contract: a peer-originated validation (one whose Raw field was
+// populated by parseSTValidation from the wire) MUST be forwarded
+// byte-for-byte by ValidationToMessage. Re-serializing from struct
+// fields can produce a subtly different preimage (different VL
+// encoding, missing optional fields the parser didn't model, etc.)
+// that no longer matches the validator's signature — every
+// downstream peer then rejects the relay as "invalid validation
+// signature".
+//
+// In the 5-validator soak this manifested as goxrpl-1 relaying
+// rippled validations to goxrpl-0; ~60% rejection rate vs the
+// same validations forwarded raw by the rippled peers themselves
+// (which never round-trip through struct serialization). The bug
+// kept quorum unreachable for the validated chain even when all
+// peers had pairwise-consistent closed ledgers.
+//
+// The test installs a deliberately-bogus marker byte in Raw that
+// SerializeSTValidation would never emit, then asserts the relay
+// preserves it verbatim. If the implementation falls back to
+// serializing from struct fields, the marker disappears and the
+// test fails.
+func TestValidationToMessage_RelaysRawBytesVerbatim(t *testing.T) {
+	v := buildTestValidation()
+	// Force a Signature so the legacy serialize path would NOT
+	// short-circuit on len(Signature)==0; we want it to choose
+	// the "raw bytes available, use them" branch unconditionally.
+	v.Signature = []byte{0x30, 0x44, 0x02, 0x20, 0xDE, 0xAD, 0xBE, 0xEF}
+
+	// Marker bytes that SerializeSTValidation never emits — a
+	// trailing 0xFE 0xFE pair after a plausible inner blob. The
+	// canonical serializer emits exactly the modeled fields and
+	// nothing else, so any byte-by-byte match against Raw must
+	// have come from forwarding Raw verbatim.
+	raw := []byte{
+		0x22, 0x80, 0x00, 0x00, 0x01, // sfFlags = 0x80000001
+		0xFE, 0xFE, // marker — not a valid field header
+	}
+	v.Raw = raw
+
+	msg := ValidationToMessage(v)
+	require.NotNil(t, msg)
+	assert.Equal(t, raw, msg.Validation,
+		"ValidationToMessage must forward v.Raw verbatim for peer-relayed "+
+			"validations. Re-serializing from struct fields breaks the "+
+			"signature preimage on relay — the actual 5-validator-soak bug.")
+}
+
+// TestValidationToMessage_NewValidationStillSerializes confirms
+// the locally-signed path is unaffected: when v.Raw is empty, the
+// message MUST be produced via SerializeSTValidation (and v.Raw
+// caches the result for downstream consumers).
+func TestValidationToMessage_NewValidationStillSerializes(t *testing.T) {
+	v := buildTestValidation()
+	v.Raw = nil // simulate a freshly-built local validation
+
+	msg := ValidationToMessage(v)
+	require.NotEmpty(t, msg.Validation)
+	require.NotEmpty(t, v.Raw, "v.Raw must be cached after serialization")
+	assert.Equal(t, []byte(msg.Validation), v.Raw,
+		"cached Raw must match the bytes emitted on the wire")
+}
+
 // TestSerializeSTValidation_CanonicalOrder_Hash256BeforeAmount asserts
 // that Hash256 fields (type 5) precede Amount fields (type 6) in the
 // produced blob when both are present. Rippled's
