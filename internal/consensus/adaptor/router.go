@@ -1434,7 +1434,7 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 		}
 	}
 	if res.Stashed {
-		r.armParentAcquisition(svc, res.ParentSeq, res.ParentHash, peerID)
+		r.armParentAcquisition(svc, res.ParentSeq, res.ParentHash, peerID, res.DivergentParent)
 	}
 	return nil
 }
@@ -1517,22 +1517,27 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 // parent of a stashed held-adoption candidate (issue #397). Caller
 // invokes after SubmitHeldAdoption returns Stashed=true.
 //
-// Skips if the parent seq is at or below our closed ledger — in that
-// regime we already have something at this height locally, and either
-// (a) the SubmitHeldAdoption fast-path would have adopted, or (b) the
-// divergent-fork drop fired. Either way another acquisition won't
-// help.
-func (r *Router) armParentAcquisition(svc *service.Service, parentSeq uint32, parentHash [32]byte, preferredPeerID uint64) {
+// Skips if the parent seq is at or below our closed ledger — UNLESS
+// `divergentParent` is set, signalling that local history at parentSeq
+// is on a different fork than the candidate's ParentHash. In the
+// divergent case we MUST re-acquire the network's parent so that the
+// next adopt trips fixMismatchLocked and purges the wrong local entry;
+// without this override the chain wedges at the fork point (cascade
+// blocked because parent_have ≠ parent_want, no acquisition because
+// parentSeq <= closedLedger). Was the cause of goxrpl-1 stuck at
+// validated_seq=5 with closed=43 in the all-5 UNL soak.
+func (r *Router) armParentAcquisition(svc *service.Service, parentSeq uint32, parentHash [32]byte, preferredPeerID uint64, divergentParent bool) {
 	if parentSeq == 0 {
 		return
 	}
-	if parentSeq <= svc.GetClosedLedgerIndex() {
+	if !divergentParent && parentSeq <= svc.GetClosedLedgerIndex() {
 		return
 	}
 	r.logger.Info("arming backward-chain acquisition for stashed held-adoption parent",
 		"parent_seq", parentSeq,
 		"parent_hash", fmt.Sprintf("%x", parentHash[:8]),
 		"preferred_peer", preferredPeerID,
+		"divergent", divergentParent,
 	)
 	r.startLedgerAcquisition(parentSeq, parentHash, preferredPeerID)
 }
@@ -1844,6 +1849,6 @@ func (r *Router) completeInboundLedger() {
 		}
 	}
 	if res.Stashed {
-		r.armParentAcquisition(svc, res.ParentSeq, res.ParentHash, peerID)
+		r.armParentAcquisition(svc, res.ParentSeq, res.ParentHash, peerID, res.DivergentParent)
 	}
 }

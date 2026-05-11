@@ -1865,6 +1865,17 @@ type SubmitHeldAdoptionResult struct {
 	// pending cascade-promotion at the parent seq.
 	Stashed bool
 
+	// DivergentParent means the parent seq IS present locally but its
+	// hash does NOT match the candidate's ParentHash — i.e. our local
+	// chain at parent seq is on a different fork. The caller MUST re-
+	// acquire the parent (overriding any "we already have something at
+	// this height" guard) so fixMismatchLocked can trip on the next
+	// adopt and purge the divergent local entry. Without this signal
+	// the chain stays wedged at the fork point: the stashed candidate
+	// can never cascade because the parent we have is wrong, and no
+	// acquisition fires because parentSeq <= closedLedger.
+	DivergentParent bool
+
 	// ParentSeq, ParentHash describe the awaited parent. Set whenever
 	// h.LedgerIndex > 1, regardless of outcome.
 	ParentSeq  uint32
@@ -1935,6 +1946,7 @@ func (s *Service) SubmitHeldAdoption(ctx context.Context, h *header.LedgerHeader
 				"parent_have", fmt.Sprintf("%x", parentHash[:8]),
 				"parent_want", fmt.Sprintf("%x", h.ParentHash[:8]),
 			)
+			res.DivergentParent = true
 		}
 	}
 
