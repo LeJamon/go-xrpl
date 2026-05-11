@@ -90,7 +90,7 @@ func TestCanonicalSortSeqBeforeTicket(t *testing.T) {
 	const ticketBit = uint64(1) << 32
 	txs := []pendingTx{
 		{txBlob: []byte{1}, hash: makeHash(1), account: account, seqProxy: ticketBit | 6}, // ticket value 6
-		{txBlob: []byte{2}, hash: makeHash(2), account: account, seqProxy: 16},             // sequence value 16
+		{txBlob: []byte{2}, hash: makeHash(2), account: account, seqProxy: 16},            // sequence value 16
 	}
 
 	canonicalSort(txs, [32]byte{})
