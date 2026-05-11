@@ -14,7 +14,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
 	"github.com/LeJamon/goXRPLd/shamap"
 	"github.com/LeJamon/goXRPLd/storage/nodestore"
@@ -461,183 +461,31 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 		// local pending pool plays the same role in standalone.
 		canonicalSort(s.pendingTxs, computeSalt(s.pendingTxs))
 
-		// Create a fresh open ledger from the LCL
 		freshLedger, err := ledger.NewOpen(s.closedLedger, closeTime)
 		if err != nil {
 			return 0, fmt.Errorf("failed to create fresh ledger for canonical reapply: %w", err)
 		}
 
-		// Read fees from the LCL for the engine config
 		baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
-
-		engineConfig := tx.EngineConfig{
+		applyCfg := openledger.ApplyConfig{
 			BaseFee:                   baseFee,
 			ReserveBase:               reserveBase,
 			ReserveIncrement:          reserveIncrement,
 			LedgerSequence:            freshLedger.Sequence(),
-			SkipSignatureVerification: s.config.Standalone,
 			NetworkID:                 s.config.NetworkID,
 			Logger:                    s.config.Logger,
+			SkipSignatureVerification: s.config.Standalone,
+		}
+		if err := openledger.ApplyTxs(freshLedger, s.pendingTxs, nil, applyCfg); err != nil {
+			return 0, fmt.Errorf("openledger.ApplyTxs: %w", err)
 		}
 
-		// Multi-pass application matching rippled's BuildLedger.
-		//
-		// Rippled uses tapRETRY so that tec* results are NOT applied (no fee,
-		// no sequence consumed). This lets the same tx be retried on the next pass.
-		// Our engine doesn't support tapRETRY, so we rebuild the ledger each pass:
-		//
-		// Pass 0: Apply all txs. Record which got tesSUCCESS vs tec*/ter*.
-		// Pass 1+: Rebuild from LCL. Re-apply only tesSUCCESS txs first (restoring
-		//          state), then retry the tec*/ter* ones (which may now succeed).
-		//
-		// Reference: rippled BuildLedger.cpp, LEDGER_TOTAL_PASSES=3, LEDGER_RETRY_PASSES=1
-		const (
-			totalPasses = 3
-			retryPasses = 1
-		)
-
-		type txStatus int
-		const (
-			txPending   txStatus = iota
-			txSucceeded          // tesSUCCESS — will be re-applied on rebuilds
-			txRetry              // tec*/ter* during certainRetry — try again
-			txFailed             // permanently failed — skip
-		)
-		statuses := make(map[[32]byte]txStatus, len(s.pendingTxs))
-
-		// Pre-parse every blob once; reused across passes. nil entries
-		// become txFailed at apply time.
-		parsed := make([]tx.Transaction, len(s.pendingTxs))
-		for i, ptx := range s.pendingTxs {
-			t, parseErr := tx.ParseFromBinary(ptx.txBlob)
-			if parseErr == nil {
-				t.SetRawBytes(ptx.txBlob)
-				parsed[i] = t
-			}
-		}
-
-		// freshLedger persists across passes — BuildLedger.cpp:107-170.
-		freshLedger, err = ledger.NewOpen(s.closedLedger, closeTime)
-		if err != nil {
-			return 0, fmt.Errorf("failed to create fresh ledger: %w", err)
-		}
-		engineConfig.LedgerSequence = freshLedger.Sequence()
-
-		certainRetry := true
-		for pass := 0; pass < totalPasses; pass++ {
-			engine := tx.NewEngine(freshLedger, engineConfig)
-			blockProcessor := tx.NewBlockProcessor(engine)
-
-			changes := 0
-			hasRetry := false
-
-			for i, ptx := range s.pendingTxs {
-				st := statuses[ptx.hash]
-
-				// Succeeded txs persist in freshLedger across passes;
-				// re-applying would double-count.
-				if st == txFailed || st == txSucceeded {
-					continue
-				}
-				if pass > 0 && st == txRetry {
-					continue
-				}
-
-				transaction := parsed[i]
-				if transaction == nil {
-					statuses[ptx.hash] = txFailed
-					continue
-				}
-
-				result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
-				if applyErr != nil {
-					statuses[ptx.hash] = txFailed
-					continue
-				}
-
-				engineResult := result.ApplyResult.Result
-				switch {
-				case engineResult.IsSuccess():
-					freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-					s.txIndex[result.Hash] = freshLedger.Sequence()
-					changes++
-					statuses[ptx.hash] = txSucceeded
-
-				case engineResult.IsTec():
-					if certainRetry {
-						statuses[ptx.hash] = txRetry
-						hasRetry = true
-					} else {
-						// Final pass: apply tec* normally
-						freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-						s.txIndex[result.Hash] = freshLedger.Sequence()
-						statuses[ptx.hash] = txSucceeded
-					}
-
-				case engineResult.ShouldRetry():
-					statuses[ptx.hash] = txRetry
-					hasRetry = true
-
-				default:
-					statuses[ptx.hash] = txFailed
-				}
-			}
-
-			// Now retry the tec*/ter* transactions (state from succeeded txs is in place)
-			if pass > 0 {
-				for i, ptx := range s.pendingTxs {
-					if statuses[ptx.hash] != txRetry {
-						continue
-					}
-
-					transaction := parsed[i]
-					if transaction == nil {
-						statuses[ptx.hash] = txFailed
-						continue
-					}
-
-					result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
-					if applyErr != nil {
-						statuses[ptx.hash] = txFailed
-						continue
-					}
-
-					engineResult := result.ApplyResult.Result
-					switch {
-					case engineResult.IsSuccess():
-						freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-						s.txIndex[result.Hash] = freshLedger.Sequence()
-						changes++
-						statuses[ptx.hash] = txSucceeded
-
-					case engineResult.IsTec():
-						if certainRetry {
-							hasRetry = true
-						} else {
-							freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-							s.txIndex[result.Hash] = freshLedger.Sequence()
-							statuses[ptx.hash] = txSucceeded
-						}
-
-					case engineResult.ShouldRetry():
-						hasRetry = true
-
-					default:
-						statuses[ptx.hash] = txFailed
-					}
-				}
-			}
-
-			if !hasRetry {
-				break
-			}
-			if changes == 0 && !certainRetry {
-				break
-			}
-			if changes == 0 || pass >= retryPasses {
-				certainRetry = false
-			}
-		}
+		// Hoist the per-tx s.txIndex update out of the apply loop.
+		// AcceptLedger needs every committed tx tracked by ledger seq.
+		_ = freshLedger.ForEachTransaction(func(txHash [32]byte, _ []byte) bool {
+			s.txIndex[txHash] = freshLedger.Sequence()
+			return true
+		})
 
 		// Replace the open ledger with the canonically-built one
 		s.openLedger = freshLedger
@@ -1232,179 +1080,39 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		// LCL-hash variant is for held-tx replay only (LedgerMaster.cpp:461).
 		canonicalSort(pending, computeSalt(pending))
 
+		// The canonical-tx-hash list feeds into the round-summary log line
+		// below; it must reflect the canonical-sorted order, hence stays
+		// here rather than being derived inside openledger.ApplyTxs.
 		canonicalTxHashes = make([]string, 0, len(pending))
 		for _, ptx := range pending {
-			canonicalTxHashes = append(canonicalTxHashes, fmt.Sprintf("%x", ptx.hash[:8]))
+			canonicalTxHashes = append(canonicalTxHashes, fmt.Sprintf("%x", ptx.Hash[:8]))
 		}
 
-		parsed := make([]tx.Transaction, len(pending))
-		for i, ptx := range pending {
-			t, parseErr := tx.ParseFromBinary(ptx.txBlob)
-			if parseErr == nil {
-				t.SetRawBytes(ptx.txBlob)
-				parsed[i] = t
-			}
-		}
-
-		// Multi-pass application (same as AcceptLedger)
 		freshLedger, err := ledger.NewOpen(s.closedLedger, closeTime)
 		if err != nil {
 			return 0, fmt.Errorf("failed to create fresh ledger for consensus: %w", err)
 		}
 
 		baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
-		engineConfig := tx.EngineConfig{
-			BaseFee:                   baseFee,
-			ReserveBase:               reserveBase,
-			ReserveIncrement:          reserveIncrement,
-			LedgerSequence:            freshLedger.Sequence(),
-			SkipSignatureVerification: false,
-			NetworkID:                 s.config.NetworkID,
-			Logger:                    s.config.Logger,
+		applyCfg := openledger.ApplyConfig{
+			BaseFee:          baseFee,
+			ReserveBase:      reserveBase,
+			ReserveIncrement: reserveIncrement,
+			LedgerSequence:   freshLedger.Sequence(),
+			NetworkID:        s.config.NetworkID,
+			Logger:           s.config.Logger,
+		}
+		if err := openledger.ApplyTxs(freshLedger, pending, nil, applyCfg); err != nil {
+			return 0, fmt.Errorf("openledger.ApplyTxs: %w", err)
 		}
 
-		const (
-			totalPasses = 3
-			retryPasses = 1
-		)
-
-		type txStatus int
-		const (
-			txPending txStatus = iota
-			txSucceeded
-			txRetry
-			txFailed
-		)
-		statuses := make(map[[32]byte]txStatus, len(pending))
-
-		// Skip txs already in parent — BuildLedger.cpp:125-129.
-		for _, ptx := range pending {
-			if s.closedLedger.TxExists(ptx.hash) {
-				statuses[ptx.hash] = txFailed
-			}
-		}
-
-		// freshLedger persists across passes — BuildLedger.cpp:107-170.
-		freshLedger, err = ledger.NewOpen(s.closedLedger, closeTime)
-		if err != nil {
-			return 0, fmt.Errorf("failed to create fresh ledger: %w", err)
-		}
-		engineConfig.LedgerSequence = freshLedger.Sequence()
-
-		certainRetry := true
-		for pass := 0; pass < totalPasses; pass++ {
-			// pass>0 = tapRETRY (sigs verified on pass 0).
-			engineConfig.SkipSignatureVerification = pass > 0
-			// tapRETRY on retriable passes; cleared on the final pass so
-			// leftover tec commits. BuildLedger.cpp:131-132.
-			if certainRetry {
-				engineConfig.ApplyFlags |= tx.TapRETRY
-			} else {
-				engineConfig.ApplyFlags &^= tx.TapRETRY
-			}
-			engine := tx.NewEngine(freshLedger, engineConfig)
-			blockProcessor := tx.NewBlockProcessor(engine)
-
-			changes := 0
-			hasRetry := false
-
-			for i, ptx := range pending {
-				st := statuses[ptx.hash]
-				// Succeeded txs already in freshLedger.
-				if st == txFailed || st == txSucceeded {
-					continue
-				}
-				if pass > 0 && st == txRetry {
-					continue
-				}
-
-				transaction := parsed[i]
-				if transaction == nil {
-					statuses[ptx.hash] = txFailed
-					continue
-				}
-
-				result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
-				if applyErr != nil {
-					statuses[ptx.hash] = txFailed
-					continue
-				}
-
-				engineResult := result.ApplyResult.Result
-				switch {
-				case engineResult.IsSuccess():
-					freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-					s.txIndex[result.Hash] = freshLedger.Sequence()
-					changes++
-					statuses[ptx.hash] = txSucceeded
-				case engineResult.IsTec():
-					if certainRetry {
-						statuses[ptx.hash] = txRetry
-						hasRetry = true
-					} else {
-						freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-						s.txIndex[result.Hash] = freshLedger.Sequence()
-						statuses[ptx.hash] = txSucceeded
-					}
-				case engineResult.ShouldRetry():
-					statuses[ptx.hash] = txRetry
-					hasRetry = true
-				default:
-					statuses[ptx.hash] = txFailed
-				}
-			}
-
-			// Retry tec*/ter* transactions
-			if pass > 0 {
-				for i, ptx := range pending {
-					if statuses[ptx.hash] != txRetry {
-						continue
-					}
-					transaction := parsed[i]
-					if transaction == nil {
-						statuses[ptx.hash] = txFailed
-						continue
-					}
-
-					result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
-					if applyErr != nil {
-						statuses[ptx.hash] = txFailed
-						continue
-					}
-
-					engineResult := result.ApplyResult.Result
-					switch {
-					case engineResult.IsSuccess():
-						freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-						s.txIndex[result.Hash] = freshLedger.Sequence()
-						changes++
-						statuses[ptx.hash] = txSucceeded
-					case engineResult.IsTec():
-						if certainRetry {
-							hasRetry = true
-						} else {
-							freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-							s.txIndex[result.Hash] = freshLedger.Sequence()
-							statuses[ptx.hash] = txSucceeded
-						}
-					case engineResult.ShouldRetry():
-						hasRetry = true
-					default:
-						statuses[ptx.hash] = txFailed
-					}
-				}
-			}
-
-			if !hasRetry {
-				break
-			}
-			if changes == 0 && !certainRetry {
-				break
-			}
-			if changes == 0 || pass >= retryPasses {
-				certainRetry = false
-			}
-		}
+		// Hoist the per-tx s.txIndex update — this is the side-effect that
+		// lived inside the old inline 3-pass loop. Iterate every committed
+		// tx in the fresh ledger's tx tree (covers tesSUCCESS and tec).
+		_ = freshLedger.ForEachTransaction(func(txHash [32]byte, _ []byte) bool {
+			s.txIndex[txHash] = freshLedger.Sequence()
+			return true
+		})
 
 		s.openLedger = freshLedger
 	}
@@ -2320,7 +2028,7 @@ func (s *Service) GetPendingTxBlobs() [][]byte {
 
 	blobs := make([][]byte, len(s.pendingTxs))
 	for i, ptx := range s.pendingTxs {
-		blobs[i] = ptx.txBlob
+		blobs[i] = ptx.Blob
 	}
 	return blobs
 }
@@ -2353,162 +2061,29 @@ func (s *Service) FilterApplicableTxs(parent *ledger.Ledger, txBlobs [][]byte) [
 	// and build-time apply orders agree.
 	canonicalSort(pending, computeSalt(pending))
 
-	parsed := make([]tx.Transaction, len(pending))
-	for i, ptx := range pending {
-		t, err := tx.ParseFromBinary(ptx.txBlob)
-		if err == nil {
-			t.SetRawBytes(ptx.txBlob)
-			parsed[i] = t
-		}
-	}
-
 	closeTime := time.Now()
-	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(parent)
-	engineConfig := tx.EngineConfig{
-		BaseFee:                   baseFee,
-		ReserveBase:               reserveBase,
-		ReserveIncrement:          reserveIncrement,
-		SkipSignatureVerification: false,
-		NetworkID:                 s.config.NetworkID,
-		Logger:                    s.config.Logger,
-	}
-
-	type txStatus int
-	const (
-		txPending txStatus = iota
-		txSucceeded
-		txRetry
-		txFailed
-	)
-	statuses := make(map[[32]byte]txStatus, len(pending))
-
-	// Skip txs already in parent — BuildLedger.cpp:125-129.
-	for _, ptx := range pending {
-		if parent.TxExists(ptx.hash) {
-			statuses[ptx.hash] = txFailed
-		}
-	}
-
-	const (
-		totalPasses = 3
-		retryPasses = 1
-	)
-
-	// freshLedger persists across passes — BuildLedger.cpp.
 	freshLedger, err := ledger.NewOpen(parent, closeTime)
 	if err != nil {
 		return nil
 	}
-	engineConfig.LedgerSequence = freshLedger.Sequence()
 
-	certainRetry := true
-	for pass := 0; pass < totalPasses; pass++ {
-		// pass>0 = tapRETRY (sigs verified on pass 0).
-		engineConfig.SkipSignatureVerification = pass > 0
-		// BuildLedger.cpp:131-132 — flags must match the build path.
-		if certainRetry {
-			engineConfig.ApplyFlags |= tx.TapRETRY
-		} else {
-			engineConfig.ApplyFlags &^= tx.TapRETRY
-		}
-		engine := tx.NewEngine(freshLedger, engineConfig)
-		blockProcessor := tx.NewBlockProcessor(engine)
-
-		changes := 0
-		hasRetry := false
-
-		for i, ptx := range pending {
-			st := statuses[ptx.hash]
-			// Succeeded txs already in freshLedger.
-			if st == txFailed || st == txSucceeded {
-				continue
-			}
-			if pass > 0 && st == txRetry {
-				continue
-			}
-			transaction := parsed[i]
-			if transaction == nil {
-				statuses[ptx.hash] = txFailed
-				continue
-			}
-			result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
-			if applyErr != nil {
-				statuses[ptx.hash] = txFailed
-				continue
-			}
-			engineResult := result.ApplyResult.Result
-			switch {
-			case engineResult.IsSuccess():
-				freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-				changes++
-				statuses[ptx.hash] = txSucceeded
-			case engineResult.IsTec():
-				if certainRetry {
-					statuses[ptx.hash] = txRetry
-					hasRetry = true
-				} else {
-					freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-					statuses[ptx.hash] = txSucceeded
-				}
-			case engineResult.ShouldRetry():
-				statuses[ptx.hash] = txRetry
-				hasRetry = true
-			default:
-				statuses[ptx.hash] = txFailed
-			}
-		}
-
-		if pass > 0 {
-			for i, ptx := range pending {
-				if statuses[ptx.hash] != txRetry {
-					continue
-				}
-				transaction := parsed[i]
-				if transaction == nil {
-					statuses[ptx.hash] = txFailed
-					continue
-				}
-				result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
-				if applyErr != nil {
-					statuses[ptx.hash] = txFailed
-					continue
-				}
-				engineResult := result.ApplyResult.Result
-				switch {
-				case engineResult.IsSuccess():
-					freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-					changes++
-					statuses[ptx.hash] = txSucceeded
-				case engineResult.IsTec():
-					if certainRetry {
-						hasRetry = true
-					} else {
-						freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-						statuses[ptx.hash] = txSucceeded
-					}
-				case engineResult.ShouldRetry():
-					hasRetry = true
-				default:
-					statuses[ptx.hash] = txFailed
-				}
-			}
-		}
-
-		if !hasRetry {
-			break
-		}
-		if changes == 0 && !certainRetry {
-			break
-		}
-		if changes == 0 || pass >= retryPasses {
-			certainRetry = false
-		}
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(parent)
+	applyCfg := openledger.ApplyConfig{
+		BaseFee:          baseFee,
+		ReserveBase:      reserveBase,
+		ReserveIncrement: reserveIncrement,
+		LedgerSequence:   freshLedger.Sequence(),
+		NetworkID:        s.config.NetworkID,
+		Logger:           s.config.Logger,
+	}
+	if err := openledger.ApplyTxs(freshLedger, pending, nil, applyCfg); err != nil {
+		return nil
 	}
 
 	out := make([][]byte, 0, len(pending))
 	for _, ptx := range pending {
-		if statuses[ptx.hash] == txSucceeded {
-			out = append(out, ptx.txBlob)
+		if freshLedger.TxExists(ptx.Hash) {
+			out = append(out, ptx.Blob)
 		}
 	}
 	return out

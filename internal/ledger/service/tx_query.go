@@ -102,10 +102,10 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte) 
 		txHash, hashErr := tx.ComputeTransactionHash(transaction)
 		if hashErr == nil {
 			s.pendingTxs = append(s.pendingTxs, pendingTx{
-				txBlob:   rawBlob,
-				hash:     txHash,
-				account:  accountID,
-				sequence: common.SeqProxy(),
+				Blob:     rawBlob,
+				Hash:     txHash,
+				Account:  accountID,
+				Sequence: common.SeqProxy(),
 			})
 		}
 	}
