@@ -406,9 +406,10 @@ func (s *Service) rebuildOpenLedgerViewLocked() error {
 // when the view is uninitialised (pre-Start). closedSeq is passed in
 // for log context only.
 //
-// retriesFirst is false (disputes-first replay is not tracked yet);
-// locals is nil (LocalTxs port is a future workitem — see Task 4 spec
-// Step 5). Caller must hold s.mu.
+// retries (if non-nil) are the txs left in retry state by the consensus /
+// standalone build path — they replay first against the new open view.
+// anyDisputes is the retriesFirst flag per rippled RCLConsensus.cpp:667
+// (the anyDisputes signal). Caller must hold s.mu.
 // closedLedgerCtx implements txq.ClosedLedgerContext over a closed
 // *ledger.Ledger. baseFee is the closed ledger's reference base fee in
 // drops; we use it to convert per-tx fee values into fee levels for the
@@ -466,7 +467,7 @@ func (s *Service) processClosedLedgerLocked() {
 	s.txQueue.ProcessClosedLedger(ctx, false)
 }
 
-func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32) {
+func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, buildRetries []openledger.PendingTx, anyDisputes bool) {
 	if s.openLedgerView == nil {
 		return
 	}
@@ -502,8 +503,12 @@ func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32) {
 		s.localTxs.Sweep(s.closedLedger)
 		locals = s.localTxs.GetTxSet()
 	}
-	var retries []openledger.PendingTx
-	if err := s.openLedgerView.Accept(s.closedLedger, locals, false, &retries, cfg, modifier); err != nil {
+	// Seed retries with the build-pass leftover set. ApplyTxs (called via
+	// Accept's retriesFirst phase) will drain this slice up front, then
+	// re-fill it with any final-pass Retry classifications produced by
+	// the replay itself.
+	retries := append([]openledger.PendingTx(nil), buildRetries...)
+	if err := s.openLedgerView.Accept(s.closedLedger, locals, anyDisputes, &retries, cfg, modifier); err != nil {
 		s.logger.Error("openLedger.Accept failed", "err", err, "seq", closedSeq)
 	}
 	if len(retries) > 0 {
@@ -754,6 +759,7 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	// If there are pending transactions, re-apply them in canonical order
 	// on a fresh ledger built from the LCL. This matches rippled's behavior
 	// where open ledger transactions are re-ordered via CanonicalTXSet.
+	var retriableTxs []openledger.PendingTx
 	if len(s.pendingTxs) > 0 {
 		// Salt = SHAMap root of the tx set, matching rippled's
 		// consensus-build convention at RCLConsensus.cpp:512. The
@@ -779,7 +785,7 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 			// pass. See BuildLedger.cpp.
 			Mode: openledger.BuildLedgerMode,
 		}
-		if err := openledger.ApplyTxs(freshLedger, s.pendingTxs, nil, applyCfg); err != nil {
+		if err := openledger.ApplyTxs(freshLedger, s.pendingTxs, &retriableTxs, applyCfg); err != nil {
 			return 0, fmt.Errorf("openledger.ApplyTxs: %w", err)
 		}
 
@@ -857,7 +863,20 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	// canonical reapply gets replayed. Standalone uses the same LCL-
 	// transition semantics as consensus; the only difference is the
 	// trigger (ledger_accept RPC vs consensus close).
-	s.acceptOpenLedgerViewLocked(closedSeq)
+	//
+	// Disputes signal: rippled's anyDisputes flag (RCLConsensus.cpp:667)
+	// is driven by consensus::Result::disputes. goxrpl's consensus engine
+	// does not surface a disputes signal at the BuildLedger interface
+	// boundary yet (the DisputeTracker exists at internal/consensus/rcl
+	// but is not plumbed through consensus.Adaptor.BuildLedger). We
+	// approximate with len(retriableTxs)>0 — txs the build pass left in
+	// retry state are precisely the ones that need retriesFirst=true
+	// replay against the new open view. This is a superset of rippled's
+	// disputed set; the only divergence is txs that voted-disputed but
+	// applied cleanly during build, which then get redundantly replayed
+	// (harmless — Accept's parent-skip guard short-circuits). Standalone
+	// has no consensus disputes by construction.
+	s.acceptOpenLedgerViewLocked(closedSeq, retriableTxs, len(retriableTxs) > 0)
 
 	// Build ledger info for callbacks
 	ledgerInfo := &LedgerInfo{
@@ -1387,6 +1406,7 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 	}
 
 	var canonicalTxHashes []string
+	var retriableTxs []openledger.PendingTx
 	if len(txBlobs) > 0 {
 		pending := make([]pendingTx, 0, len(txBlobs))
 		for _, blob := range txBlobs {
@@ -1426,7 +1446,7 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 			// retry under certainRetry; commits on the final pass.
 			Mode: openledger.BuildLedgerMode,
 		}
-		if err := openledger.ApplyTxs(freshLedger, pending, nil, applyCfg); err != nil {
+		if err := openledger.ApplyTxs(freshLedger, pending, &retriableTxs, applyCfg); err != nil {
 			return 0, fmt.Errorf("openledger.ApplyTxs: %w", err)
 		}
 
@@ -1542,7 +1562,20 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 	// LCL transition: replay prior view's txs onto the new closed ledger
 	// via OpenLedger.Accept. Mirrors rippled's accept-time rebuild at
 	// OpenLedger.cpp:71-155.
-	s.acceptOpenLedgerViewLocked(closedSeq)
+	//
+	// Disputes signal: rippled's anyDisputes flag (RCLConsensus.cpp:667)
+	// is driven by consensus::Result::disputes. goxrpl's consensus engine
+	// does not surface a disputes signal at the BuildLedger interface
+	// boundary yet (the DisputeTracker exists at internal/consensus/rcl
+	// but is not plumbed through consensus.Adaptor.BuildLedger). We
+	// approximate with len(retriableTxs)>0 — txs the consensus build pass
+	// left in retry state are precisely the ones that need retriesFirst=
+	// true replay against the new open view. This is a superset of
+	// rippled's disputed set; the only divergence is txs that voted-
+	// disputed but applied cleanly during build, which then get
+	// redundantly replayed (harmless — Accept's parent-skip guard
+	// short-circuits).
+	s.acceptOpenLedgerViewLocked(closedSeq, retriableTxs, len(retriableTxs) > 0)
 
 	// Fire event hooks
 	ledgerInfo := &LedgerInfo{
