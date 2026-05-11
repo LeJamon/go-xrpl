@@ -103,34 +103,22 @@ type Router struct {
 	manifestFrameSeq   uint64
 	manifestFrameBuilt bool
 
-	// txSetAcquireMu guards txSetAcquire — the in-flight tx-set
-	// acquisition state, keyed by tx-set ID. Mirrors rippled's
-	// app_.getInboundTransactions() handle: each entry holds a
-	// partially-populated SHAMap that accumulates nodes across
-	// multiple TMLedgerData{liTS_CANDIDATE} responses until the tree
-	// is complete and the leaves can be handed to engine.OnTxSet.
-	// Without this, an initial root-only response (depth=3 doesn't
-	// always cover the whole tree) is wasted — the next response
-	// can't pick up where the previous left off.
+	// In-flight tx-set acquisition state keyed by tx-set ID.
+	// Each entry's SHAMap accumulates across multiple TMLedgerData
+	// responses (rippled's TransactionAcquire) until the tree is
+	// complete and leaves are handed to engine.OnTxSet.
 	txSetAcquireMu sync.Mutex
 	txSetAcquire   map[consensus.TxSetID]*txSetAcquireState
 }
 
-// txSetAcquireState tracks an in-progress tx-set acquisition
-// across multiple TMLedgerData responses. Reset whenever a fresh
-// RequestTxSet kicks off a new acquire for the same ID.
 type txSetAcquireState struct {
 	txMap      *shamap.SHAMap
 	startedAt  time.Time
 	lastUpdate time.Time
 }
 
-// txSetAcquireTTL bounds how long a partial tx-set acquisition
-// lingers after its last update before being garbage-collected.
-// Tx-sets are round-scoped (LedgerMaxConsensus = 15s by default),
-// so a 60s window covers retries plus the round itself with
-// margin. Drops beyond this never fire OnTxSet but also can't
-// leak memory under a permanently-stalled consumer.
+// 60s covers consensus round (LedgerMaxConsensus ~15s) plus retries with
+// margin while bounding memory under a stalled consumer.
 const txSetAcquireTTL = 60 * time.Second
 
 // messageDedupTTL is how long a proposal/validation hash is
@@ -160,9 +148,8 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManag
 		messageSeen:  newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
 		txSetAcquire: make(map[consensus.TxSetID]*txSetAcquireState),
 	}
-	// Without this hook, the validation-tracker quorum decision sits
-	// silently in pendingLedgerValidations and validated_ledger.seq
-	// stays frozen even as consensus reports "fully validated".
+	// Wire the stash → acquisition hook so quorum decisions on unknown
+	// ledgers don't sit silently in pendingLedgerValidations.
 	if adaptor != nil {
 		if svc := adaptor.LedgerService(); svc != nil {
 			svc.SetOnPendingValidationStashed(r.armValidationStashAcquisition)
@@ -467,35 +454,18 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	proposal.SuppressionHash = suppressionHash
 	firstSeen, lastSeen := r.messageSeen.observe(suppressionHash)
 
-	// Drop duplicates BEFORE the engine path. The engine already
-	// processed the first instance; re-running OnProposal just
-	// re-runs ECDSA verify. We still feed the IDLED-gated relay slot
+	// Drop duplicates before the engine path (re-running OnProposal
+	// just re-verifies ECDSA). Still feed the IDLED-gated relay slot
 	// on dupes for squelch accounting.
 	//
-	// DELIBERATE DEVIATION from rippled: rippled tracks suppression
-	// PER (hash, peer), not per hash alone. PeerImp.cpp:1730-1738
-	// calls addSuppressionPeerWithStatus(key, id_) which returns
-	// `added=true` for a NEW (hash, peer) pair — i.e. rippled
-	// RE-runs the message handler when the same proposal arrives
-	// from a peer it hadn't been seen from before, growing per-peer
-	// slot entries on each new sender. Goxrpl's messageSeen.observe
-	// is hash-only, so a second peer's copy of the same proposal
-	// gets dropped at the dedup gate even though rippled would let
-	// it through to update slot accounting.
-	//
-	// The deviation is conservative on the verify-CPU axis (we
-	// re-verify less than rippled) and doesn't break quorum or
-	// position tracking — the FIRST arrival wired through to
-	// engine.OnProposal already counts the validator. It does shift
-	// reduce-relay slot bookkeeping vs rippled: per-(hash, peer)
-	// would feed the slot more times before the IDLED window
-	// expires. We compensate for the most important case
-	// (squelch decisions need to know which peers have a message)
-	// via PeersThatHave + UpdateRelaySlot below, but the granularity
-	// isn't identical to rippled's. If reduce-relay accuracy ever
-	// regresses, switch messageSeen to a per-(hash, peer) tracker
-	// — matching rippled exactly is a few-line change to the
-	// dedup data structure.
+	// Deliberate deviation from rippled: rippled tracks suppression
+	// per (hash, peer) — PeerImp.cpp:1730-1738 addSuppressionPeerWithStatus
+	// returns added=true for a new (hash, peer) pair, re-running the
+	// handler so per-peer slot entries grow on each new sender. Our
+	// dedup is hash-only, so a second peer's copy is dropped at the
+	// gate. Quorum/position tracking unaffected (first arrival counts
+	// the validator); reduce-relay accuracy is partly compensated via
+	// PeersThatHave + UpdateRelaySlot below.
 	if !firstSeen {
 		if time.Since(lastSeen) < peermanagement.Idled {
 			seenPeers := r.adaptor.PeersThatHave(suppressionHash)
@@ -561,31 +531,14 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	validation.SuppressionHash = suppressionHash
 	firstSeen, lastSeen := r.messageSeen.observe(suppressionHash)
 
-	// Drop duplicates BEFORE the engine path. The engine already
-	// processed the first instance; re-running OnValidation just
-	// re-runs the secp256k1 ECDSA verify, which dominates CPU under
-	// fan-out because every peer forwards the same blob. We still
-	// update the relay slot below so squelch accounting stays in
-	// sync.
+	// Drop duplicates before the engine path (re-running OnValidation
+	// just re-verifies ECDSA, dominating CPU under gossip fan-out).
+	// Still update the relay slot for squelch accounting.
 	//
-	// DELIBERATE DEVIATION from rippled: rippled tracks suppression
-	// PER (hash, peer) via PeerImp.cpp:2374-2424's
-	// addSuppressionPeerWithStatus(key, id_), which returns
-	// `added=true` for a NEW (hash, peer) pair. Rippled re-processes
-	// the same validation when it arrives from a peer it hadn't been
-	// seen from before, growing per-peer slot entries. Goxrpl's
-	// messageSeen.observe is hash-only, so a second peer's copy of
-	// the same validation gets dropped at the dedup gate even though
-	// rippled would still feed it to the relay accounting layer.
-	//
-	// The deviation is conservative on the verify-CPU axis (we
-	// re-verify less than rippled) and doesn't break quorum
-	// tracking — the FIRST arrival wired through to
-	// engine.OnValidation already counts the validator's vote.
-	// It DOES shift reduce-relay slot bookkeeping vs rippled: see
-	// the matching note in handleProposal above. If reduce-relay
-	// accuracy ever regresses, switch messageSeen to a
-	// per-(hash, peer) tracker.
+	// Deliberate deviation from rippled: rippled's per-(hash, peer)
+	// suppression at PeerImp.cpp:2374-2424 re-processes new senders;
+	// our hash-only dedup drops them at the gate. See handleProposal
+	// for the full rationale.
 	if !firstSeen {
 		if time.Since(lastSeen) < peermanagement.Idled {
 			seenPeers := r.adaptor.PeersThatHave(suppressionHash)
@@ -770,11 +723,8 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		"hash_len", len(req.LedgerHash),
 	)
 
-	// liTS_CANDIDATE: peer wants the transactions in a candidate tx set
-	// we acquired during a consensus round. Mirrors rippled's
-	// PeerImp::getTxSet (PeerImp.cpp:3255-3287) — the ledger_hash field
-	// carries the tx-set ID, and the response is TMLedgerData with
-	// type=liTS_CANDIDATE and one node per transaction blob.
+	// PeerImp::getTxSet (PeerImp.cpp:3255-3287): ledger_hash carries the
+	// tx-set ID, response is TMLedgerData{type=liTS_CANDIDATE, ...}.
 	if req.InfoType == message.LedgerInfoTsCandidate {
 		r.serveTxSet(msg.PeerID, req)
 		return
@@ -827,76 +777,39 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	}
 }
 
-// liTS_CANDIDATE serve-path caps matching rippled's
-// Tuning.h::softMaxReplyNodes / hardMaxReplyNodes
-// (rippled/src/xrpld/overlay/detail/Tuning.h:39,42). The two caps
-// bound the size of a single TMLedgerData reply for DoS protection
-// and to stay under the wire-frame size limit:
-//   - softMax: when total nodes hits this, STOP starting new
-//     subtrees from the request's nodeids list (mid-request gate).
-//   - hardMax: when total nodes hits this, STOP appending mid-
-//     subtree (truncation gate). Inside getNodeFat's result loop.
-//
-// Declared as vars (not consts) so tests can dial them down to
-// trip the boundaries with small fixtures via
-// txSetReplyCapsForTest / setTxSetReplyCapsForTest. Production
-// callers MUST NOT mutate these.
+// liTS_CANDIDATE serve-path caps matching rippled's softMaxReplyNodes /
+// hardMaxReplyNodes (rippled/src/xrpld/overlay/detail/Tuning.h:39,42).
+// Soft cap stops starting new subtrees; hard cap truncates mid-subtree.
+// Declared as vars so tests can dial them down via txSetReplyCapsForTest /
+// setTxSetReplyCapsForTest. Production callers must not mutate.
 var (
 	txSetSoftMaxReplyNodes = 8192
 	txSetHardMaxReplyNodes = 12288
 )
 
-// txSetReplyCapsForTest returns the current cap values. Test-only.
 func txSetReplyCapsForTest() (soft, hard int) {
 	return txSetSoftMaxReplyNodes, txSetHardMaxReplyNodes
 }
 
-// setTxSetReplyCapsForTest overrides the caps. Test-only — pair
-// with deferred restore via the original values from
-// txSetReplyCapsForTest.
 func setTxSetReplyCapsForTest(soft, hard int) {
 	txSetSoftMaxReplyNodes = soft
 	txSetHardMaxReplyNodes = hard
 }
 
-// shamapRootNodeIDLen is the wire length of a SHAMapNodeID
-// (SHAMapNodeID::getRawString) — 32-byte path + 1-byte depth.
+// SHAMapNodeID wire length: 32-byte path + 1-byte depth.
 const shamapNodeIDLen = 33
 
-// defaultQueryDepth is the rippled default when the request lacks
-// a query_depth field. Rippled uses isHighLatency() ? 2 : 1
-// (PeerImp.cpp:3382). Without a latency signal we go with 2 — the
-// overspec direction; sending an extra level is harmless, sending
-// too few stalls the requestor on a follow-up round-trip.
+// PeerImp.cpp:3382 uses isHighLatency() ? 2 : 1. Without a latency signal
+// we overspec at 2 — extra level is harmless, too few stalls the requestor.
 const defaultQueryDepth = 2
 
-// serveTxSet replies to a peer's TMGetLedger{itype=liTS_CANDIDATE}
-// with the requested tx set, encoded as
-// TMLedgerData{type=liTS_CANDIDATE, ledger_hash=<txSetID>,
-// nodes=[<(SHAMapNodeID, wire-serialized SHAMap node)>...]}.
-//
-// Mirrors rippled's PeerImp::processLedgerRequest for liTS_CANDIDATE
-// (PeerImp.cpp:3304-3411):
-//
-//  1. For each requested NodeID (33-byte SHAMapNodeID), walk the
-//     subtree rooted at that node out to QueryDepth levels via
-//     SHAMap.GetNodeFatByPath (mirrors rippled's getNodeFat).
-//  2. Honour the softMax / hardMax reply-node caps as the result
-//     accumulates — soft cap aborts the outer for-loop over
-//     nodeids, hard cap aborts the inner subtree append.
-//  3. Each entry: set_nodeid(SHAMapNodeID raw bytes) +
-//     set_nodedata(serialize-for-wire).
-//
-// When the request has NO nodeids (legacy / out-of-spec callers)
-// fall back to a full pre-order walk via WalkWireNodes — the
-// previous behaviour of this function. Some goxrpl→goxrpl test
-// fixtures rely on this fallback shape; in real wire traffic a
-// rippled requestor always sends at least the root NodeID.
-//
-// The earlier version emitted one LedgerNode per raw transaction
-// blob with NodeID empty — wire-incompatible with rippled and with
-// goxrpl's own handleTxSetData consumer. See the per-line comments
-// in the previous commit (fd9d01d) for the full root-cause writeup.
+// serveTxSet replies to TMGetLedger{itype=liTS_CANDIDATE} with the tx set
+// encoded as TMLedgerData{type=liTS_CANDIDATE, ledger_hash=<txSetID>,
+// nodes=[<SHAMapNodeID, wire-serialized SHAMap node>...]}. Mirrors
+// PeerImp::processLedgerRequest at PeerImp.cpp:3304-3411: for each requested
+// NodeID, walk QueryDepth levels via GetNodeFatByPath, honouring soft/hard
+// caps. Empty nodeids falls back to a full pre-order walk for legacy
+// goxrpl→goxrpl fixtures; rippled requestors always send at least the root.
 func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger) {
 	if len(req.LedgerHash) != 32 {
 		return
@@ -922,9 +835,7 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 	if queryDepth == 0 {
 		queryDepth = defaultQueryDepth
 	}
-	// liTS_CANDIDATE always uses fatLeaves=false: rippled's PeerImp
-	// hardcodes it (PeerImp.cpp:3318) on the assumption that the
-	// requestor already has most txs in its open-ledger pool.
+	// PeerImp.cpp:3318 hardcodes fatLeaves=false for liTS_CANDIDATE.
 	const fatLeaves = false
 
 	nodes := buildTxSetReplyNodes(txMap, req.NodeIDs, queryDepth, fatLeaves, r.logger, peerID, txSetID)
@@ -956,12 +867,8 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 		"requested_nodes", len(req.NodeIDs))
 }
 
-// buildTxSetReplyNodes walks `txMap` to produce the LedgerNode
-// payload of a liTS_CANDIDATE reply, honouring the requested
-// NodeIDs/QueryDepth and the soft/hard reply-node caps.
-//
-// Split out from serveTxSet so the cap and partial-walk logic is
-// table-testable without spinning a router goroutine.
+// buildTxSetReplyNodes builds the LedgerNode payload of a liTS_CANDIDATE
+// reply, honouring requested NodeIDs/QueryDepth and soft/hard reply caps.
 func buildTxSetReplyNodes(
 	txMap *shamap.SHAMap,
 	requestedNodeIDs [][]byte,
@@ -971,8 +878,6 @@ func buildTxSetReplyNodes(
 	peerID peermanagement.PeerID,
 	txSetID consensus.TxSetID,
 ) []message.LedgerNode {
-	// Empty-nodeids fallback: full pre-order walk. Used by legacy
-	// goxrpl→goxrpl test fixtures that don't populate the field.
 	if len(requestedNodeIDs) == 0 {
 		wireNodes, err := txMap.WalkWireNodes()
 		if err != nil {
@@ -992,9 +897,7 @@ func buildTxSetReplyNodes(
 
 	nodes := make([]message.LedgerNode, 0)
 	for i, rawID := range requestedNodeIDs {
-		// Soft cap: don't START a new subtree if we're already at
-		// or above 8192 nodes. Mirrors rippled's outer for-loop
-		// guard (PeerImp.cpp:3387).
+		// Soft cap — PeerImp.cpp:3387.
 		if len(nodes) >= txSetSoftMaxReplyNodes {
 			logger.Debug("tx-set serve: soft-cap reached, stopping subtree iteration",
 				"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
@@ -1016,8 +919,7 @@ func buildTxSetReplyNodes(
 			continue
 		}
 		for _, n := range subtree {
-			// Hard cap: even mid-subtree, stop appending. Mirrors
-			// rippled's inner break (PeerImp.cpp:3406-3407).
+			// Hard cap — PeerImp.cpp:3406-3407.
 			if len(nodes) >= txSetHardMaxReplyNodes {
 				logger.Debug("tx-set serve: hard-cap reached, truncating subtree",
 					"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
@@ -1030,10 +932,8 @@ func buildTxSetReplyNodes(
 	return nodes
 }
 
-// parseSHAMapNodeID decodes the 33-byte wire representation of a
-// SHAMapNodeID into (path, depth). Returns ok=false on any length
-// mismatch — rippled's deserializeSHAMapNodeID (PeerImp.cpp:1442)
-// rejects malformed IDs and so do we.
+// parseSHAMapNodeID decodes the 33-byte wire representation into (path,
+// depth). Mirrors deserializeSHAMapNodeID at PeerImp.cpp:1442.
 func parseSHAMapNodeID(raw []byte) (path [32]byte, depth int, ok bool) {
 	if len(raw) != shamapNodeIDLen {
 		return path, 0, false
@@ -1046,28 +946,17 @@ func parseSHAMapNodeID(raw []byte) (path [32]byte, depth int, ok bool) {
 	return path, depth, true
 }
 
-// logger is the minimal logger surface buildTxSetReplyNodes uses.
-// Lets the helper be tested without spinning the full router.
 type logger interface {
 	Debug(msg string, args ...any)
 	Warn(msg string, args ...any)
 }
 
-// handleTxSetData consumes a TMLedgerData{type=liTS_CANDIDATE} response
-// from a peer. The ledger_hash field carries the tx-set ID we asked
-// for; each node carries one SHAMap node (root, inner, or leaf) —
-// NOT a raw transaction. Mirrors rippled's
-// TransactionAcquire::takeNodes (TransactionAcquire.cpp:175-235): add
-// nodes into a SHAMap that accumulates ACROSS multiple responses,
-// then either finish (extract leaves → engine.OnTxSet) or fire a
-// follow-up RequestTxSetMissingNodes for the still-missing nodes
-// (TransactionAcquire.cpp:144-171).
-//
-// State is keyed by tx-set ID in r.txSetAcquire so a second response
-// can pick up where the first left off. Without this, query_depth=3
-// from the root can return a partial tree (rippled's softMaxReplyNodes
-// cap, deeper trees, etc.) and the missing-nodes path never fires —
-// the sync stalls and dispute resolution never sees the peer's set.
+// handleTxSetData consumes a TMLedgerData{type=liTS_CANDIDATE} response.
+// Each node is a SHAMap node (root/inner/leaf), not a raw transaction.
+// Mirrors TransactionAcquire::takeNodes (TransactionAcquire.cpp:175-235):
+// accumulate nodes across responses, then either finish (→ engine.OnTxSet)
+// or request missing nodes (TransactionAcquire.cpp:144-171). State is keyed
+// by tx-set ID so partial responses can resume.
 func (r *Router) handleTxSetData(ld *message.LedgerData) {
 	if len(ld.LedgerHash) != 32 {
 		return
@@ -1103,10 +992,8 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 	txMap := state.txMap
 	r.txSetAcquireMu.Unlock()
 
-	// Root is identified by 33 zero bytes (SHAMapNodeID::getRawString
-	// for depth=0, all-zero path). AddRootNode is idempotent — calls
-	// after the root is set return ErrRootAlreadySet, which we treat
-	// as success.
+	// Root NodeID is 33 zero bytes. AddRootNode is idempotent
+	// (ErrRootAlreadySet treated as success).
 	for _, node := range ld.Nodes {
 		if !isShamapRootNodeID(node.NodeID) {
 			continue
@@ -1121,9 +1008,9 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 		break
 	}
 
-	// Add non-root nodes. AddKnownNode rejects nodes whose hash doesn't
-	// match a referenced-but-missing slot in the partial tree, so
-	// stray data is silently ignored without corrupting the sync.
+	// Tx-set acquisition has no authoritative external hash to compare;
+	// AddKnownNodeUnchecked trusts the node's own computed hash and skips
+	// the redundant deserialize/UpdateHash.
 	added := 0
 	for _, node := range ld.Nodes {
 		if isShamapRootNodeID(node.NodeID) {
@@ -1132,26 +1019,16 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 		if len(node.NodeData) == 0 {
 			continue
 		}
-		// Use the unchecked variant: tx-set acquisition has no
-		// authoritative external hash to compare against, so the
-		// hash check would be vacuous. AddKnownNodeUnchecked trusts
-		// the deserialized node's own computed hash for tree
-		// placement and avoids a redundant deserialize/UpdateHash.
 		if err := txMap.AddKnownNodeUnchecked(node.NodeData); err == nil {
 			added++
 		}
 	}
 
 	if err := txMap.FinishSync(); err != nil {
-		// Still incomplete. Mirror rippled's TransactionAcquire::trigger
-		// second branch (TransactionAcquire.cpp:144-171): pull the
-		// missing-node IDs from the partial tree and fire a follow-up
-		// request.
+		// Mirror TransactionAcquire::trigger (TransactionAcquire.cpp:144-171):
+		// request the missing nodes.
 		missing := txMap.GetMissingNodes(256, nil)
 		if len(missing) == 0 {
-			// Tree thinks it's complete but FinishSync still failed.
-			// Drop this acquire — the next OnProposal-triggered
-			// RequestTxSet will start fresh.
 			r.deleteTxSetAcquire(txSetID)
 			r.logger.Info("tx-set sync: stuck",
 				"t", "consensus", "event", "txset-reject",
@@ -1178,10 +1055,8 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 		return
 	}
 
-	// Complete. Walk leaves to recover the transaction blobs and feed
-	// the engine. Then drop the acquire so the next request for the
-	// same hash starts fresh (in case dispute resolution flips us back
-	// to the same tx-set).
+	// Walk leaves into blobs, feed the engine, drop the acquire so dispute
+	// resolution flipping back to the same set starts fresh.
 	blobs := make([][]byte, 0, added+1)
 	if err := txMap.ForEach(func(item *shamap.Item) bool {
 		blobs = append(blobs, item.Data())
@@ -1198,13 +1073,8 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 		"node_count", len(ld.Nodes),
 		"tx_count", len(blobs))
 
-	// Skip engine.OnTxSet on empty extractions. Happens when a
-	// duplicate response arrives for an already-completed acquire:
-	// the ID-keyed state was deleted on the prior success, the
-	// duplicate's nodes can't reconstruct a tree without the root
-	// (peers usually only resend non-root), and ForEach yields 0
-	// items. The engine would then fail with "tx set ID mismatch:
-	// expected X got 000…0" — not a real bug, just noise. Drop it.
+	// Duplicate response after a completed acquire — no root, ForEach
+	// yields 0 items, engine would fail with "tx set ID mismatch". Drop.
 	if len(blobs) == 0 {
 		return
 	}
@@ -1224,11 +1094,8 @@ func (r *Router) deleteTxSetAcquire(txSetID consensus.TxSetID) {
 	r.txSetAcquireMu.Unlock()
 }
 
-// sweepStaleTxSetAcquireLocked drops acquire entries that haven't
-// been updated within txSetAcquireTTL. Caller must hold
-// r.txSetAcquireMu. Bounded memory under a permanent stall: even
-// if every acquire stalls and never completes, entries time out
-// after 60s.
+// sweepStaleTxSetAcquireLocked drops entries older than txSetAcquireTTL.
+// Caller must hold r.txSetAcquireMu.
 func (r *Router) sweepStaleTxSetAcquireLocked() {
 	cutoff := time.Now().Add(-txSetAcquireTTL)
 	for id, state := range r.txSetAcquire {
@@ -1238,11 +1105,8 @@ func (r *Router) sweepStaleTxSetAcquireLocked() {
 	}
 }
 
-// isShamapRootNodeID returns true when the wire NodeID encodes the
-// SHAMap root: 33 bytes of zeros (32-byte zero path + 1 byte depth=0).
-// Rippled uses this exact encoding via SHAMapNodeID().getRawString
-// (SHAMapNodeID.cpp ~ line 30) when seeding TransactionAcquire's
-// initial request and on every response that includes the root.
+// isShamapRootNodeID matches the SHAMap root wire encoding (33 zero bytes
+// = zero path + depth=0). See SHAMapNodeID::getRawString in rippled.
 func isShamapRootNodeID(b []byte) bool {
 	if len(b) != shamap.NodeIDSize {
 		return false
@@ -1584,26 +1448,11 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 	}
 }
 
-// adoptVerifiedLedger commits a ledger reconstructed from a verified
-// replay delta. Mirrors completeInboundLedger's adoption logic: install
-// state and tx maps via the ledger service, advance to Tracking if
-// we're below it, and log the new tip. Mirrors rippled's
-// LedgerDeltaAcquire.cpp:209 which installs the peer-provided tx-blob
-// tree alongside the state map.
-//
-// F6: routed through SubmitHeldAdoption rather than AdoptLedgerWithState.
-// This gives us rippled's tryAdvance behavior for free: if the awaited
-// parent seq is already in history and its hash matches the verified
-// ledger's ParentHash, SubmitHeldAdoption fast-paths into the immediate
-// adopt (same call-shape as before). If the parent hasn't landed yet
-// — i.e. the replay-delta arrived out of order — the ledger is stashed
-// in the held-adoptions map keyed by its awaited parent seq.
-//
-// When SubmitHeldAdoption stashes, we arm a backward-chain acquisition
-// for the awaited parent (issue #397). Without this, a tip-only
-// acquisition policy (checkBehind) leaves stashed candidates waiting
-// for parents that are never requested, and they age out at
-// heldAdoptionTTL.
+// adoptVerifiedLedger commits a ledger reconstructed from a verified replay
+// delta. Mirrors LedgerDeltaAcquire.cpp:209 — installs the peer-provided
+// tx-blob tree alongside the state map. Routes through SubmitHeldAdoption
+// so out-of-order arrivals are stashed by awaited parent seq; on stash we
+// arm a backward-chain acquisition for the parent (issue #397).
 func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
@@ -1652,23 +1501,10 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 	return nil
 }
 
-// armValidationStashAcquisition arms an inbound acquisition for a
-// (seq, hash) pair that SetValidatedLedger stashed because we don't
-// have that exact ledger.
-//
-// Mirrors rippled's LedgerMaster::checkAccept(hash, seq), which calls
-// app_.getInboundLedgers().acquire(hash, seq, ...) on the same condition
-// (LedgerMaster.cpp:917-919). Without this kick, a deep gap (network
-// well ahead of our closed ledger) leaves the stashed validation idle:
-// the only acquisition driver is the tip-walking peer-status-change
-// handler, which acquires the peer's CURRENT tip — not the seq the
-// validation tracker just told us reached quorum.
-//
-// Prefers a peer whose advertised LCL is at or above seq so the request
-// goes to a peer that can actually serve the ledger; falls back to any
-// tracked peer if none qualify (the maintenance tick rotates on silent-
-// peer timeouts). If no peers are tracked yet, skip — peer-status-change
-// handlers will drive the acquisition once peers connect.
+// armValidationStashAcquisition arms inbound acquisition for a (seq, hash)
+// that SetValidatedLedger stashed. Mirrors LedgerMaster::checkAccept(hash,
+// seq) at LedgerMaster.cpp:917-919 (app_.getInboundLedgers().acquire). Prefers
+// a peer advertising LCL >= seq, falls back to any tracked peer.
 func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 	defer func() {
 		if rv := recover(); rv != nil {
@@ -1686,9 +1522,8 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 	if svc == nil {
 		return
 	}
-	// At or below closed: we either already have it locally or it was
-	// evicted; the divergent-fork status-change handler drives any
-	// reacquisition at active height.
+	// At-or-below closed is driven by the divergent-fork status-change
+	// handler, not here.
 	if seq <= svc.GetClosedLedgerIndex() {
 		return
 	}
@@ -1712,9 +1547,6 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 		preferredPeerID = fallbackPeerID
 	}
 	if preferredPeerID == 0 {
-		// No tracked peers yet — peer status changes will drive the
-		// acquisition once peers connect. Avoid sending to peerID=0
-		// (no recipient).
 		return
 	}
 
@@ -1726,15 +1558,9 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 	r.startLedgerAcquisition(seq, hash, preferredPeerID)
 }
 
-// armParentAcquisition fires a backward-chain acquisition for the
-// parent of a stashed held-adoption candidate (issue #397). Caller
-// invokes after SubmitHeldAdoption returns Stashed=true.
-//
-// Skips if the parent seq is at or below our closed ledger — in that
-// regime we already have something at this height locally, and either
-// (a) the SubmitHeldAdoption fast-path would have adopted, or (b) the
-// divergent-fork drop fired. Either way another acquisition won't
-// help.
+// armParentAcquisition fires a backward-chain acquisition for the parent of
+// a stashed held-adoption candidate (issue #397). Skips at-or-below closed
+// (already adopted or fork-dropped).
 func (r *Router) armParentAcquisition(svc *service.Service, parentSeq uint32, parentHash [32]byte, preferredPeerID uint64) {
 	if parentSeq == 0 {
 		return
@@ -1875,13 +1701,8 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 		"has_inbound", r.inboundLedger != nil,
 	)
 
-	// liTS_CANDIDATE: response to a tx-set request we made during a
-	// consensus round. The hash field is the tx-set ID; each node carries
-	// one transaction blob. Mirrors rippled's
-	// InboundTransactions::gotData feeding the engine via gotTxSet
-	// (consensus-time only). Without this branch the engine never
-	// acquires peer tx sets, never builds disputes against them, and
-	// stays at propose_seq=0 (#401).
+	// liTS_CANDIDATE response — InboundTransactions::gotData feeds the
+	// engine via gotTxSet (consensus-time only). Issue #401.
 	if ld.InfoType == message.LedgerInfoTsCandidate {
 		r.handleTxSetData(ld)
 		return

@@ -115,16 +115,11 @@ func computeAccountKey(account [20]byte, salt [32]byte) [32]byte {
 	return key
 }
 
-// computeSalt builds an RCLTxSet SHAMap (TypeTransaction,
-// tnTRANSACTION_NM items keyed by tx hash) and returns its root —
-// the value rippled passes as the CanonicalTXSet salt on the
-// consensus-build path. SHAMap keys by tx hash so the root is
-// insertion-order-independent, matching the property every validator
-// needs to compute the same salt without pre-sorting.
-//
-// Returns the zero hash on SHAMap construction failure; canonicalSort
-// remains deterministic via the (sequence, txID) tiebreakers.
-//
+// computeSalt builds the RCLTxSet SHAMap (TypeTransaction, tnTRANSACTION_NM
+// keyed by tx hash) and returns its root — the value rippled passes as the
+// CanonicalTXSet salt on the consensus-build path. Insertion-order-independent.
+// Returns the zero hash on construction failure; canonicalSort remains
+// deterministic via (sequence, txID) tiebreakers.
 // Reference: rippled RCLConsensus.cpp:512, RCLCxTx.h:62-90.
 func computeSalt(txs []pendingTx) [32]byte {
 	txMap, err := shamap.New(shamap.TypeTransaction)

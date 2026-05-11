@@ -99,9 +99,8 @@ type Peer struct {
 
 	tracking atomic.Int32
 
-	// largeSendQ: consecutive Send() ErrSendBufferFull count; reset on
-	// successful send. When >= sendqIntervals the peer is closed
-	// (rippled PeerImp.cpp:705-708, PeerImp::onTimer "Large send queue").
+	// Consecutive ErrSendBufferFull count; close at sendqIntervals.
+	// PeerImp.cpp:705-708 "Large send queue".
 	largeSendQ atomic.Uint32
 
 	serverDomain      string
@@ -741,7 +740,7 @@ func (p *Peer) runPingTick(now time.Time) error {
 		)
 		return ErrPingTimeout
 	}
-	// rippled PeerImp.cpp:705-708 "Large send queue" disconnect.
+	// PeerImp.cpp:705-708 "Large send queue" disconnect.
 	if p.largeSendQ.Load() >= sendqIntervals {
 		slog.Warn("peer large send queue",
 			"t", "Peer", "peer", p.id,
@@ -791,7 +790,7 @@ const (
 	// the disconnect window.
 	pingInFlightTTL  = pingTimeout
 	pingsInFlightCap = 16
-	// rippled Tuning::sendqIntervals (PeerImp.cpp:705 + Tuning.h).
+	// Tuning::sendqIntervals (PeerImp.cpp:705 + Tuning.h).
 	sendqIntervals = 4
 )
 
@@ -1019,12 +1018,11 @@ func (p *Peer) Send(data []byte) error {
 
 	select {
 	case p.send <- data:
-		// rippled PeerImp.cpp:270-276: reset large_sendq_ when below targetSendQueue.
+		// PeerImp.cpp:270-276: reset below targetSendQueue.
 		p.largeSendQ.Store(0)
 		return nil
 	default:
-		// Buffer full (distinct sentinel from connection-closed); runPingTick
-		// promotes sustained backpressure to a close — rippled PeerImp.cpp:705-708.
+		// Sustained backpressure → close via runPingTick.
 		p.largeSendQ.Add(1)
 		return ErrSendBufferFull
 	}

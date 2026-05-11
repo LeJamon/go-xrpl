@@ -1508,11 +1508,8 @@ type WireNode struct {
 	Data   []byte
 }
 
-// WalkWireNodes performs a pre-order traversal and returns every node
-// serialized for the wire. Each NodeID is 33 bytes matching rippled's
-// SHAMapNodeID::getRawString (root = 33 zero bytes; children extend
-// the parent path by one nibble per level). Pre-order ensures the
-// root arrives before any descendant whose placement depends on it.
+// WalkWireNodes performs a pre-order traversal returning every node as
+// wire data. Each NodeID is 33 bytes per SHAMapNodeID::getRawString.
 func (sm *SHAMap) WalkWireNodes() ([]WireNode, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -1560,45 +1557,14 @@ func walkWireNodesRec(node Node, path [32]byte, depth int, out *[]WireNode) erro
 	return nil
 }
 
-// GetNodeFatByPath returns the SHAMap node identified by
-// `wantedPath` / `wantedDepth` plus its descendants out to `depth`
-// levels deep, each entry serialized for the wire as a (33-byte
-// NodeID, blob) pair. Mirrors rippled's `SHAMap::getNodeFat`
-// (rippled/src/xrpld/shamap/detail/SHAMapSync.cpp:434-525) so a
-// goxrpl serve path can reply to a partial-subtree request the
-// same way rippled does.
+// GetNodeFatByPath returns the SHAMap node at (wantedPath, wantedDepth)
+// plus descendants out to `depth` levels, each as a (33-byte NodeID, wire
+// blob) pair. Mirrors SHAMap::getNodeFat at SHAMapSync.cpp:434-525.
 //
-// Distinct from the hash-keyed `GetNodeFat(nodeHash, depth)` in
-// wire.go, which is a different lookup primitive (BFS by node
-// hash, no chain-follow optimization, no fatLeaves toggle). The
-// wire path needs SHAMapNodeID-keyed lookup because that's what
-// peers send in TMGetLedger.nodeids.
-//
-// Algorithm (matches rippled exactly):
-//
-//  1. Descend from root, picking the branch that matches `wantedPath`
-//     at each level, until we reach `wantedDepth` or the path runs
-//     out (returns nil if the requested node isn't in the tree, or
-//     if the requested node is an empty inner — both are normal
-//     "we don't have it" responses, not errors).
-//  2. Push the wanted node onto a stack with the supplied depth budget.
-//  3. Pop nodes; for each, append its serialized form to the result.
-//     For inner nodes:
-//     - Single-child shortcut: if `bc == 1`, follow the chain WITHOUT
-//       decrementing the depth budget — avoids wasting budget on
-//       linear paths in sparsely-populated subtrees.
-//     - Multi-child: descend each non-empty branch with `depth-1`
-//       (or `depth` if single-child).
-//     - Leaves at the depth boundary are included only if `fatLeaves`
-//       is true. For liTS_CANDIDATE responses, `fatLeaves=false`
-//       because (per rippled comment) "We'll already have most
-//       transactions" — but in goxrpl's typical usage the requestor
-//       is acquiring an unknown tx-set, so callers may want
-//       `fatLeaves=true` for the first request. Pass through what
-//       the caller decides.
-//
-// `wantedPath` is the 32-byte path prefix; `wantedDepth` is the
-// nibble depth of the requested node (root = 0).
+// Distinct from wire.go's hash-keyed GetNodeFat: peers identify subtrees
+// by SHAMapNodeID in TMGetLedger.nodeids. Single-child chains follow
+// without spending budget. Leaves at the budget boundary are included
+// only when fatLeaves is true (liTS_CANDIDATE callers pass false).
 func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth int, fatLeaves bool) ([]WireNode, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -1688,15 +1654,12 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 				bc++
 			}
 		}
-		// Mirror rippled's gate: descend children only if budget>0
-		// or single-child (chain follow without spending budget).
+		// Descend if budget>0 or single-child chain.
 		if e.budget == 0 && bc != 1 {
 			inner.mu.RUnlock()
 			continue
 		}
-		// Iterate in reverse so popping yields ascending-branch order
-		// (matches WalkWireNodes' output ordering for the typical
-		// unit-test golden comparisons).
+		// Reverse iteration → ascending-branch pop order.
 		for i := BranchFactor - 1; i >= 0; i-- {
 			child := inner.children[i]
 			if child == nil {
@@ -1717,9 +1680,7 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 					budget: newBudget,
 				})
 			} else if isInner || fatLeaves {
-				// Include directly without further descent. Inner
-				// nodes at the budget boundary are still useful
-				// (the requestor can ask for their subtrees).
+				// Include directly without descent.
 				cdata, err := child.SerializeForWire()
 				if err != nil {
 					inner.mu.RUnlock()
@@ -1736,10 +1697,9 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 	return out, nil
 }
 
-// childPathForBranch returns the child path at depth+1 given the
-// parent path at `depth` and the branch nibble. The XRPL convention:
-// nibble at index `depth` lives in the high half of byte
-// `depth/2` when depth is even, low half when odd.
+// childPathForBranch returns the child path at depth+1. XRPL convention:
+// nibble at index `depth` is in the high half of byte depth/2 when even,
+// low half when odd.
 func childPathForBranch(parentPath [32]byte, depth, branch int) [32]byte {
 	out := parentPath
 	bytePos := depth / 2

@@ -207,30 +207,17 @@ func (vi *ValidatorIdentity) Sign(data []byte) ([]byte, error) {
 	return algo.SignDigest(digest, vi.signingPriv)
 }
 
-// Verify verifies a signature against a public key. Dispatches on the
-// pubkey-type prefix (0xED → ed25519, 0x02/0x03 → secp256k1) so
-// ed25519-signed validations from rippled peers verify correctly.
-//
-// The data parameter is a SHA-512Half digest (32 bytes). Mirrors
-// rippled's PublicKey.cpp `verify(uint256, ...)` which passes the
-// digest to BOTH algorithms — secp256k1 verifies the digest natively,
-// and rippled's ed25519 wrapper signs/verifies the digest as a 32-byte
-// message (NOT re-hashed by the algorithm).
-//
-// PRIOR bug: this function only ran secp256k1 — every ed25519-signed
-// validation silently failed verification, dropping those validators
-// out of quorum and stalling the network at val_seq=5 in all-5 UNL
-// bootstraps where any validator's ephemeral signing key was ed25519.
+// Verify dispatches on the pubkey-type prefix (0xED → ed25519, 0x02/0x03
+// → secp256k1). The data parameter is a SHA-512Half digest (32 bytes).
+// Mirrors rippled's PublicKey.cpp verify(uint256, ...): secp256k1 verifies
+// the digest natively, and rippled's ed25519 wrapper signs/verifies the
+// digest as a 32-byte message (no internal re-hash).
 func Verify(pubKey []byte, data []byte, signature []byte) bool {
 	if len(pubKey) != 33 {
 		return false
 	}
 	switch pubKey[0] {
 	case 0xED:
-		// ed25519: strip the 0xED prefix to get the raw 32-byte
-		// public key. ed25519.Verify treats `data` as the message
-		// (no internal re-hash needed because data is already the
-		// 32-byte digest, matching rippled's signing path).
 		if len(signature) != ed25519.SignatureSize {
 			return false
 		}

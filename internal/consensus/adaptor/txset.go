@@ -122,15 +122,8 @@ func computeTxSetID(txBlobs [][]byte) consensus.TxSetID {
 	return consensus.TxSetID(hash)
 }
 
-// buildTxSetSHAMap constructs the canonical tx-set SHAMap (the same
-// tree whose root hash is the tx-set ID) from the raw transaction
-// blobs. Exported via TxSetImpl.BuildSHAMap so the serve-tx-set
-// path can walk the tree to emit (NodeID, Data) pairs on the wire
-// — rippled's expected liTS_CANDIDATE response shape per
-// PeerImp::processLedgerRequest + TransactionAcquire::takeNodes.
-//
-// Falls back to shamap.Put for blobs too small for a proper tx leaf
-// so unit-test fixtures with synthetic short blobs still build.
+// buildTxSetSHAMap constructs the canonical tx-set SHAMap whose root hash
+// is the tx-set ID. Falls back to shamap.Put for short test fixture blobs.
 func buildTxSetSHAMap(txBlobs [][]byte) (*shamap.SHAMap, error) {
 	txMap, err := shamap.New(shamap.TypeTransaction)
 	if err != nil {
@@ -147,11 +140,8 @@ func buildTxSetSHAMap(txBlobs [][]byte) (*shamap.SHAMap, error) {
 	return txMap, nil
 }
 
-// BuildSHAMap reconstructs the tx-set's canonical SHAMap from the
-// cached blobs. The map is built fresh every call (no per-set
-// cache) since serveTxSet currently runs only on inbound requests
-// — if that becomes hot the result is straightforward to memoize
-// on TxSetImpl.
+// BuildSHAMap reconstructs the tx-set's canonical SHAMap. Built fresh per
+// call — serveTxSet is not currently hot enough to warrant caching.
 func (ts *TxSetImpl) BuildSHAMap() (*shamap.SHAMap, error) {
 	return buildTxSetSHAMap(ts.txs)
 }

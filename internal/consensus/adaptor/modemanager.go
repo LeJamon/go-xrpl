@@ -128,34 +128,12 @@ func (m *ModeManager) SetMode(mode consensus.OperatingMode) {
 	m.transitionLocked(mode)
 }
 
-// OnEvent implements consensus.EventSubscriber. The mode manager
-// subscribes to the engine's event bus so the operator-visible
-// OperatingMode (used by server_info and gating proposing in
-// startRoundLocked) reflects what the consensus engine actually
-// observes about our LCL.
-//
-// We translate the engine's internal Mode into the network-level
-// OperatingMode by consulting the ADAPTOR'S ACTUAL CURRENT opMode,
-// not the ModeManager's locally-tracked m.mode. The state-machine
-// path through {OnPeerConnected, OnLCLMismatch, OnLCLAcquired,
-// OnValidationsReceived} is bypassed in production by direct
-// SetOperatingMode calls (router.go, adaptor.AdoptLedgerFromHeader),
-// so m.mode is not a reliable view of reality. Reading the adaptor
-// directly keeps us protocol-correct regardless of which path
-// promoted us to Full earlier.
-//
-// Transitions:
-//   - new == ModeWrongLedger AND opMode is Full/Tracking
-//       → opMode := Syncing. Stops startRoundLocked from picking
-//         ModeProposing on the next round; we have no business
-//         proposing on a side chain peers don't recognize.
-//         Mirrors rippled's wrongLedger behavior which keeps
-//         validating_=false until handleWrongLedger succeeds.
-//   - old == ModeWrongLedger AND opMode is Syncing
-//       → opMode := Tracking. We have the right parent again;
-//         the Tracking → Full bump fires elsewhere when
-//         validations on the recovered chain confirm we're
-//         caught up.
+// OnEvent translates engine ModeChangedEvents into adaptor OperatingMode
+// transitions. Reads adaptor.GetOperatingMode() rather than m.mode because
+// production paths (router.go, AdoptLedgerFromHeader) bypass this state
+// machine via direct SetOperatingMode calls, so m.mode isn't authoritative.
+// Mirrors rippled's wrongLedger behavior — validating_ stays false until
+// handleWrongLedger succeeds.
 func (m *ModeManager) OnEvent(event consensus.Event) {
 	mc, ok := event.(*consensus.ModeChangedEvent)
 	if !ok {

@@ -98,29 +98,12 @@ func (s *OverlaySender) UpdateRelaySlot(validatorKey []byte, originPeer uint64, 
 	}
 }
 
-// RequestTxSet asks peers for the contents of a transaction set we know
-// the hash of but don't yet hold. Sends TMGetLedger with itype=
-// liTS_CANDIDATE, ledger_hash=txSetID, query_depth=3, and a single
-// node_ids entry pointing at the SHAMap root.
-//
-// Mirrors rippled's TransactionAcquire::trigger initial request
-// (TransactionAcquire.cpp:128-137):
-//
-//   tmGL.set_ledgerhash(hash);
-//   tmGL.set_itype(protocol::liTS_CANDIDATE);
-//   tmGL.set_querydepth(3);
-//   *(tmGL.add_nodeids()) = SHAMapNodeID().getRawString();
-//
-// The node_ids field is REQUIRED for any itype != liBASE — rippled's
-// PeerImp::onMessage(TMGetLedger) at PeerImp.cpp:1435-1438 rejects
-// the message with "Invalid ledger node IDs" if nodeids_size() <= 0.
-// Without the root node ID + query_depth, rippled silently drops the
-// request and never sends back the tx-set, so goxrpl never acquires
-// peer tx-sets, never creates per-tx disputes, and the avalanche
-// resolution can't converge across goxrpl/rippled (#401).
-//
-// SHAMapNodeID root encoding (rippled SHAMapNodeID::getRawString):
-//   33 bytes total = 32 bytes path (zero for root) + 1 byte depth (0).
+// RequestTxSet asks peers for a known-hash tx-set we don't hold. Mirrors
+// TransactionAcquire::trigger initial request (TransactionAcquire.cpp:
+// 128-137): TMGetLedger{itype=liTS_CANDIDATE, ledger_hash=txSetID,
+// query_depth=3, node_ids=[SHAMapNodeID root]}. node_ids is required for
+// itype != liBASE — PeerImp.cpp:1435-1438 rejects without it. SHAMap root
+// encoding is 33 zero bytes (zero path + depth=0). Issue #401.
 func (s *OverlaySender) RequestTxSet(id consensus.TxSetID) error {
 	rootNodeID := make([]byte, 33) // 32 zeros + 1 depth byte (0)
 	msg := &message.GetLedger{
@@ -136,18 +119,10 @@ func (s *OverlaySender) RequestTxSet(id consensus.TxSetID) error {
 	return s.overlay.Broadcast(frame)
 }
 
-// RequestTxSetMissingNodes sends a TMGetLedger{liTS_CANDIDATE} that
-// asks for SPECIFIC SHAMap nodes by their path-based NodeIDs. Used
-// after RequestTxSet returns a partial tree — mirrors rippled's
-// TransactionAcquire::trigger second branch
-// (TransactionAcquire.cpp:144-171), which iterates
-// mMap->getMissingNodes() and packs them into the nodeids field of
-// a follow-up request.
-//
-// nodeIDs are the 33-byte SHAMapNodeID wire encodings (32 path
-// bytes + 1 depth byte), as returned by goxrpl's
-// shamap.NodeID.Bytes(). Each peer responds with the requested
-// node + descendants up to query_depth=3.
+// RequestTxSetMissingNodes requests specific SHAMap nodes after a partial
+// tree. Mirrors TransactionAcquire::trigger second branch
+// (TransactionAcquire.cpp:144-171). Each nodeID is 33 bytes (32 path +
+// 1 depth) per shamap.NodeID.Bytes.
 func (s *OverlaySender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte) error {
 	if len(nodeIDs) == 0 {
 		return fmt.Errorf("RequestTxSetMissingNodes: nodeIDs must be non-empty")

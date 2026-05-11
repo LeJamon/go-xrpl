@@ -1693,10 +1693,8 @@ func (o *Overlay) Broadcast(msg []byte) error {
 			continue
 		}
 		if err := peer.Send(msg); err != nil {
-			// Buffer-full at Warn (correlates with consensus stalls;
-			// silent drops here masked TMTransaction relay loss at
-			// issue #401); other send failures at Info (peer dropping,
-			// routine).
+			// Buffer-full at Warn — silent drops masked TMTransaction
+			// relay loss in #401; other failures Info.
 			level := slog.LevelInfo
 			if errors.Is(err, ErrSendBufferFull) {
 				level = slog.LevelWarn
@@ -1794,9 +1792,7 @@ func (o *Overlay) RelayFromValidator(validator []byte, suppressionHash [32]byte,
 				"frame_size", len(msg),
 				"err", err.Error(),
 			)
-			// Fall through and still record this peer in the reverse
-			// index — Broadcast/BroadcastExcept don't roll back on
-			// Send error either, and the index is best-effort.
+			// Still record in reverse index — best-effort.
 		}
 		forwarded = append(forwarded, id)
 	}

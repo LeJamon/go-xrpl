@@ -84,9 +84,7 @@ type MissingNode struct {
 	ParentHash [32]byte
 	// Branch is the branch index in the parent node (0-15 for inner nodes)
 	Branch int
-	// NodeID is the path-based identifier of the missing node. Required
-	// for TMGetLedger requests because peers locate nodes by tree path,
-	// not by hash.
+	// Path-based ID; TMGetLedger locates by path, not hash.
 	NodeID NodeID
 }
 
@@ -273,13 +271,9 @@ func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 	return sm.insertKnownNode(nodeHash, node)
 }
 
-// AddKnownNodeUnchecked adds a node from wire data WITHOUT verifying
-// the deserialized node against an externally-supplied hash; the
-// computed hash is trusted for tree placement. Use when no
-// authoritative hash is available (e.g. inbound-ledger acquisition,
-// where the wire frame is the only source of truth). When a peer
-// supplies a claimed hash, use AddKnownNode instead — it performs
-// the comparison.
+// AddKnownNodeUnchecked adds a node from wire data trusting its computed
+// hash for tree placement. Use when no authoritative external hash is
+// available; AddKnownNode performs the comparison when one is supplied.
 func (sm *SHAMap) AddKnownNodeUnchecked(data []byte) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()

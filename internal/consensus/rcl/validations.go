@@ -551,31 +551,16 @@ func (vt *ValidationTracker) IsFullyValidated(ledgerID consensus.LedgerID) bool 
 // is the peer-pressure signal rippled uses in shouldCloseLedger via
 // adaptor_.proposersValidated(prevLedgerID_) at RCLConsensus.cpp:281.
 //
-// Reads the persistent byNode map (not the round-scoped validations
-// map on the engine), so the signal is available from the moment a
-// new round begins — before any current-round validations have
-// arrived.
-//
-// Mirrors rippled's `numTrustedForLedger` at Validations.h:1037-1050,
-// which filters on `v.trusted() && v.full()` — and intentionally does
-// NOT filter negUNL'd validators. negUNL adjusts the quorum threshold
-// downstream, not the count of validations itself; filtering negUNL
-// here would under-count vs rippled and could fail quorum where
-// rippled passes.
+// Mirrors numTrustedForLedger at Validations.h:1037-1050 — filters on
+// trusted && full and intentionally does NOT filter negUNL (negUNL
+// adjusts quorum, not the count).
 func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 
-	// Read the per-ledger validations map, NOT byNode. byNode keeps
-	// only the LATEST validation per node — once a validator advances
-	// past ledgerID and validates seq+1, the byNode entry overwrites
-	// and ProposersValidated(ledgerID) returns 0 even though every
-	// validator did validate it. shouldCloseLedger's peer-pressure
-	// short-circuit relies on this count to skip LedgerMinClose when
-	// peers have moved on; a byNode read would silently disable that
-	// path. Rippled's adaptor_.proposersValidated reads byLedger
-	// (RCLValidations / LedgerMaster.cpp), which keeps the per-ledger
-	// entry alive for the validation-archive horizon.
+	// Per-ledger map, not byNode — byNode overwrites once a validator
+	// advances, but shouldCloseLedger's peer-pressure short-circuit needs
+	// the historical count. Mirrors rippled's byLedger in RCLValidations.
 	perLedger, ok := vt.validations[ledgerID]
 	if !ok {
 		return 0
@@ -593,31 +578,16 @@ func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int
 	return count
 }
 
-// ProposersFinished counts trusted (non-negUNL) validators whose
-// most recent full validation is for a ledger sequence STRICTLY
-// AFTER prevSeq. Used by phaseEstablish to detect "the network has
-// moved past the round we're trying to participate in" — a pure-Go
-// equivalent of rippled's adaptor_.proposersFinished(prevSeq) used
-// by checkConsensus to return ConsensusState::MovedOn.
-//
-// Returning MovedOn lets the engine bail out of an establish phase
-// that can no longer reach consensus (peers stopped proposing for
-// our seq because they validated and moved on) instead of sitting
-// idle until the soft timeout fires.
+// ProposersFinished counts trusted (non-negUNL) validators whose latest
+// full validation is strictly past prev. Equivalent to rippled's
+// proposersFinished used by checkConsensus to return MovedOn.
 func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
 	if prev == nil {
 		return 0
 	}
 
-	// Trie fast path. Mirrors rippled's getNodesAfter at
-	// Validations.h:973-993:
-	//     return trie.branchSupport(ledger) - trie.tipSupport(ledger);
-	// branchSupport counts every validation whose chain passes through
-	// `prev` (including AT prev); tipSupport counts validations exactly
-	// AT prev; the difference is validations on a strict descendant —
-	// i.e. peers that have moved past prev to a chain extending it.
-	// Fork validations whose chain branches off prev's parent are NOT
-	// in branchSupport and so don't count.
+	// Trie fast path — getNodesAfter at Validations.h:973-993:
+	// branchSupport(ledger) - tipSupport(ledger).
 	vt.mu.RLock()
 	trie := vt.trie
 	ancestry := vt.ancestry
@@ -641,13 +611,9 @@ func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
 		}
 	}
 
-	// Fallback when trie or ancestry isn't wired for prev (typically a
-	// transient during boot or right after a chain switch). Counts on
-	// seq alone, which can over-count fork validations — caller must
-	// be tolerant of the early-MovedOn risk this implies. The risk is
-	// bounded because: (a) the fallback only fires when the trie
-	// hasn't seen prev yet, which is a narrow window, and (b) the
-	// MovedOn caller already gates on roundTime > LedgerMinConsensus.
+	// Seq-only fallback when trie/ancestry isn't wired for prev (boot or
+	// post-switch). Can over-count fork validations — caller already gates
+	// on roundTime > LedgerMinConsensus.
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 	count := 0
@@ -670,16 +636,9 @@ func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
 }
 
 // PreferredFromValidations returns the most-popular trusted-validator
-// tip whose seq is >= minSeq, ignoring whether we have local ancestry
-// for it. This is the no-trie fallback for GetPreferred during deep
-// catch-up: when the network's tip is exactly the ledger we don't have
-// locally yet, the trie's ancestry walk fails and GetPreferred returns
-// nothing. Each trusted (non-negUNL) validator's most-recent full
-// validation contributes one vote for its (LedgerID, LedgerSeq); ties
-// broken by higher seq then lexicographic ID for determinism.
-//
-// Returns (zero, 0, false) when no trusted validator has a validation
-// at minSeq or above.
+// tip at seq >= minSeq, ignoring local ancestry — the no-trie fallback
+// for GetPreferred during deep catch-up. Ties resolved by higher seq
+// then lexicographic ID.
 func (vt *ValidationTracker) PreferredFromValidations(minSeq uint32) (consensus.LedgerID, uint32, bool) {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
