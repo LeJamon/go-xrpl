@@ -551,16 +551,73 @@ func (vt *ValidationTracker) IsFullyValidated(ledgerID consensus.LedgerID) bool 
 // is the peer-pressure signal rippled uses in shouldCloseLedger via
 // adaptor_.proposersValidated(prevLedgerID_) at RCLConsensus.cpp:281.
 //
-// Reads the persistent byNode map (not the round-scoped validations
-// map on the engine), so the signal is available from the moment a
-// new round begins — before any current-round validations have
-// arrived. negUNL'd validators are excluded, matching the quorum
-// semantics at Validations.h:849-899.
+// Mirrors numTrustedForLedger at Validations.h:1037-1050 — filters on
+// trusted && full and intentionally does NOT filter negUNL (negUNL
+// adjusts quorum, not the count).
 func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 
+	// Per-ledger map, not byNode — byNode overwrites once a validator
+	// advances, but shouldCloseLedger's peer-pressure short-circuit needs
+	// the historical count. Mirrors rippled's byLedger in RCLValidations.
+	perLedger, ok := vt.validations[ledgerID]
+	if !ok {
+		return 0
+	}
 	count := 0
+	for nodeID, v := range perLedger {
+		if !vt.trusted[nodeID] {
+			continue
+		}
+		if !v.Full {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+// ProposersFinished counts trusted (non-negUNL) validators whose latest
+// full validation is strictly past prev. Equivalent to rippled's
+// proposersFinished used by checkConsensus to return MovedOn.
+func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
+	if prev == nil {
+		return 0
+	}
+
+	// Trie fast path — getNodesAfter at Validations.h:973-993:
+	// branchSupport(ledger) - tipSupport(ledger).
+	vt.mu.RLock()
+	trie := vt.trie
+	ancestry := vt.ancestry
+	vt.mu.RUnlock()
+	if trie != nil && ancestry != nil {
+		if lgr, ok := ancestry.LedgerByID(prev.ID()); ok {
+			vt.mu.RLock()
+			current := vt.trie == trie
+			var branch, tip uint32
+			if current {
+				branch = trie.BranchSupport(lgr)
+				tip = trie.TipSupport(lgr)
+			}
+			vt.mu.RUnlock()
+			if current {
+				if branch <= tip {
+					return 0
+				}
+				return int(branch - tip)
+			}
+		}
+	}
+
+	// Seq-only fallback when trie/ancestry isn't wired for prev (boot or
+	// post-switch). Can over-count fork validations — caller already gates
+	// on roundTime > LedgerMinConsensus.
+	vt.mu.RLock()
+	defer vt.mu.RUnlock()
+	count := 0
+	prevSeq := prev.Seq()
 	for nodeID, v := range vt.byNode {
 		if !vt.trusted[nodeID] {
 			continue
@@ -571,11 +628,68 @@ func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int
 		if !v.Full {
 			continue
 		}
-		if v.LedgerID == ledgerID {
+		if v.LedgerSeq > prevSeq {
 			count++
 		}
 	}
 	return count
+}
+
+// PreferredFromValidations returns the most-popular trusted-validator
+// tip at seq >= minSeq, ignoring local ancestry — the no-trie fallback
+// for GetPreferred during deep catch-up. Ties resolved by higher seq
+// then lexicographic ID.
+func (vt *ValidationTracker) PreferredFromValidations(minSeq uint32) (consensus.LedgerID, uint32, bool) {
+	vt.mu.RLock()
+	defer vt.mu.RUnlock()
+
+	type tally struct {
+		count int
+		seq   uint32
+	}
+	tips := make(map[consensus.LedgerID]tally)
+	for nodeID, v := range vt.byNode {
+		if !vt.trusted[nodeID] || vt.negUNL[nodeID] {
+			continue
+		}
+		if !v.Full {
+			continue
+		}
+		if v.LedgerSeq < minSeq {
+			continue
+		}
+		t := tips[v.LedgerID]
+		t.count++
+		t.seq = v.LedgerSeq
+		tips[v.LedgerID] = t
+	}
+	if len(tips) == 0 {
+		return consensus.LedgerID{}, 0, false
+	}
+	var bestID consensus.LedgerID
+	var best tally
+	first := true
+	for id, t := range tips {
+		better := first ||
+			t.count > best.count ||
+			(t.count == best.count && t.seq > best.seq) ||
+			(t.count == best.count && t.seq == best.seq && lexLessLgrID(id, bestID))
+		if better {
+			bestID = id
+			best = t
+			first = false
+		}
+	}
+	return bestID, best.seq, true
+}
+
+func lexLessLgrID(a, b consensus.LedgerID) bool {
+	for i := 0; i < len(a); i++ {
+		if a[i] != b[i] {
+			return a[i] < b[i]
+		}
+	}
+	return false
 }
 
 // GetLatestValidation returns the latest validation from a node.

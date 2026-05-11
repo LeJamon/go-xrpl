@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"time"
+
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -47,6 +49,9 @@ func (m *mockAccountLinesLedgerService) GetValidatedLedgerIndex() uint32 {
 	return m.validatedLedgerIndex
 }
 func (m *mockAccountLinesLedgerService) AcceptLedger(context.Context) (uint32, error) {
+	return m.closedLedgerIndex + 1, nil
+}
+func (m *mockAccountLinesLedgerService) AcceptLedgerAt(context.Context, time.Time) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }
 func (m *mockAccountLinesLedgerService) IsStandalone() bool                    { return m.standalone }

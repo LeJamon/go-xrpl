@@ -1688,9 +1688,23 @@ func (o *Overlay) Broadcast(msg []byte) error {
 	o.peersMu.RLock()
 	defer o.peersMu.RUnlock()
 
-	for _, peer := range o.peers {
-		if peer.State() == PeerStateConnected {
-			peer.Send(msg)
+	for id, peer := range o.peers {
+		if peer.State() != PeerStateConnected {
+			continue
+		}
+		if err := peer.Send(msg); err != nil {
+			// Buffer-full at Warn — silent drops masked TMTransaction
+			// relay loss in #401; other failures Info.
+			level := slog.LevelInfo
+			if errors.Is(err, ErrSendBufferFull) {
+				level = slog.LevelWarn
+			}
+			slog.Log(context.Background(), level, "broadcast send failed",
+				"t", "Overlay",
+				"peer", id,
+				"frame_size", len(msg),
+				"err", err.Error(),
+			)
 		}
 	}
 	return nil
@@ -1714,7 +1728,18 @@ func (o *Overlay) BroadcastExcept(exceptPeer PeerID, msg []byte) error {
 		if peer.State() != PeerStateConnected {
 			continue
 		}
-		peer.Send(msg)
+		if err := peer.Send(msg); err != nil {
+			level := slog.LevelInfo
+			if errors.Is(err, ErrSendBufferFull) {
+				level = slog.LevelWarn
+			}
+			slog.Log(context.Background(), level, "broadcast-except send failed",
+				"t", "Overlay",
+				"peer", id,
+				"frame_size", len(msg),
+				"err", err.Error(),
+			)
+		}
 	}
 	return nil
 }
@@ -1756,7 +1781,19 @@ func (o *Overlay) RelayFromValidator(validator []byte, suppressionHash [32]byte,
 		if !peer.ExpireSquelch(validator) {
 			continue
 		}
-		peer.Send(msg)
+		if err := peer.Send(msg); err != nil {
+			level := slog.LevelInfo
+			if errors.Is(err, ErrSendBufferFull) {
+				level = slog.LevelWarn
+			}
+			slog.Log(context.Background(), level, "relay-from-validator send failed",
+				"t", "Overlay",
+				"peer", id,
+				"frame_size", len(msg),
+				"err", err.Error(),
+			)
+			// Still record in reverse index — best-effort.
+		}
 		forwarded = append(forwarded, id)
 	}
 	o.peersMu.RUnlock()

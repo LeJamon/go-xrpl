@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
@@ -54,6 +55,11 @@ func (a *LedgerServiceAdapter) GetValidatedLedgerIndex() uint32 {
 // AcceptLedger closes the current open ledger (standalone mode only)
 func (a *LedgerServiceAdapter) AcceptLedger(ctx context.Context) (uint32, error) {
 	return a.svc.AcceptLedger(ctx)
+}
+
+// AcceptLedgerAt is AcceptLedger with an explicit close_time.
+func (a *LedgerServiceAdapter) AcceptLedgerAt(ctx context.Context, closeTime time.Time) (uint32, error) {
+	return a.svc.AcceptLedgerAt(ctx, closeTime)
 }
 
 // IsStandalone returns true if running in standalone mode
@@ -215,9 +221,19 @@ func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte, txBlobHex ...str
 		}, nil
 	}
 
-	// Relay the transaction to P2P peers if successfully applied
+	// Relay only what rippled relays. Mirrors NetworkOPs.cpp:1685-1689:
+	//
+	//     (e.applied || ((mMode != FULL) && !failType && e.local) ||
+	//      e.result == terQUEUED) && !enforceFailHard
+	//
+	// where `e.applied = isTesSuccess(ret.ter) || isTecClaim(ret.ter)`
+	// (apply.cpp:196,206). On-the-wire set: tesSUCCESS, tec*, terQUEUED.
+	// All other ter* codes are held locally (addHeldTransaction) and
+	// must NOT be relayed — peers would just re-fail with the same
+	// retry code.
 	broadcast := false
-	if result.Applied && rawBlob != nil && a.txBroadcaster != nil {
+	relayable := result.Applied || result.Result == tx.TerQUEUED
+	if relayable && rawBlob != nil && a.txBroadcaster != nil {
 		a.txBroadcaster(rawBlob)
 		broadcast = true
 	}

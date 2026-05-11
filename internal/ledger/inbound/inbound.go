@@ -163,50 +163,33 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 
 	added := 0
 	for _, node := range nodes {
-		if len(node.NodeID) == shamap.NodeIDSize {
-			// Response includes nodeID — extract the hash from the data itself
-			// The AddKnownNode method verifies the hash matches
-		}
-
 		if len(node.NodeData) == 0 {
 			continue
 		}
-
-		// Deserialize to get the hash, then add
-		n, err := shamap.DeserializeNodeFromWire(node.NodeData)
-		if err != nil {
-			l.logger.Debug("inbound ledger: skip invalid node", "error", err)
-			continue
-		}
-		if err := n.UpdateHash(); err != nil {
-			l.logger.Debug("inbound ledger: skip node with bad hash", "error", err)
-			continue
-		}
-
-		nodeHash := n.Hash()
-		if err := l.stateMap.AddKnownNode(nodeHash, node.NodeData); err != nil {
-			// May already have this node — not an error
-			l.logger.Debug("inbound ledger: AddKnownNode", "error", err, "hash", fmt.Sprintf("%x", nodeHash[:8]))
+		if err := l.stateMap.AddKnownNodeUnchecked(node.NodeData); err != nil {
+			l.logger.Debug("inbound ledger: AddKnownNodeUnchecked", "error", err)
 			continue
 		}
 		added++
 	}
 
+	complete := l.stateMap.IsComplete()
 	l.logger.Info("inbound ledger: added state nodes",
 		"added", added,
 		"total_received", len(nodes),
-		"complete", l.stateMap.IsComplete(),
+		"complete", complete,
 	)
 
-	if l.stateMap.IsComplete() {
-		if err := l.stateMap.FinishSync(); err != nil {
-			l.state = StateFailed
-			l.err = fmt.Errorf("finish sync: %w", err)
-			return l.err
-		}
-		l.state = StateComplete
-		l.logger.Info("inbound ledger: acquisition complete", "seq", l.header.LedgerIndex)
+	// Always attempt FinishSync — it is the only authoritative check
+	// (IsComplete reads under RLock and can race a concurrent insert
+	// before the FinishSync write lock). A failure here is treated as
+	// "still missing nodes", not fatal.
+	if err := l.stateMap.FinishSync(); err != nil {
+		l.logger.Debug("inbound ledger: still incomplete", "error", err)
+		return nil
 	}
+	l.state = StateComplete
+	l.logger.Info("inbound ledger: acquisition complete", "seq", l.header.LedgerIndex)
 
 	return nil
 }

@@ -87,6 +87,16 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	serverLog.Info("Starting goXRPLd", "version", version.Version)
 
+	// Set GOXRPL_PPROF=:6060 (or any addr:port) to enable pprof. Off by default.
+	if addr := os.Getenv("GOXRPL_PPROF"); addr != "" {
+		go func() {
+			if err := startPProfServer(addr); err != nil {
+				serverLog.Warn("pprof server failed", "addr", addr, "err", err)
+			}
+		}()
+		serverLog.Info("pprof enabled", "addr", addr)
+	}
+
 	// Initialize storage from config
 	var db nodestore.Database
 	nodestorePath := globalConfig.NodeDB.Path

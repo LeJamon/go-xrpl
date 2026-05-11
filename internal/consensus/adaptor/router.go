@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/manifest"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/goXRPLd/shamap"
 )
 
 // inboundReplayDeltaTickInterval drives the periodic check for
@@ -101,7 +102,24 @@ type Router struct {
 	manifestFrame      []byte
 	manifestFrameSeq   uint64
 	manifestFrameBuilt bool
+
+	// In-flight tx-set acquisition state keyed by tx-set ID.
+	// Each entry's SHAMap accumulates across multiple TMLedgerData
+	// responses (rippled's TransactionAcquire) until the tree is
+	// complete and leaves are handed to engine.OnTxSet.
+	txSetAcquireMu sync.Mutex
+	txSetAcquire   map[consensus.TxSetID]*txSetAcquireState
 }
+
+type txSetAcquireState struct {
+	txMap      *shamap.SHAMap
+	startedAt  time.Time
+	lastUpdate time.Time
+}
+
+// 60s covers consensus round (LedgerMaxConsensus ~15s) plus retries with
+// margin while bounding memory under a stalled consumer.
+const txSetAcquireTTL = 60 * time.Second
 
 // messageDedupTTL is how long a proposal/validation hash is
 // remembered for duplicate-detection purposes. Rippled uses a
@@ -120,18 +138,18 @@ const messageDedupMaxEntries = 4096
 func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManager, inbox <-chan *peermanagement.InboundMessage) *Router {
 	logger := slog.Default().With("component", "consensus-router")
 	r := &Router{
-		engine:      engine,
-		adaptor:     adaptor,
-		modeManager: modeManager,
-		inbox:       inbox,
-		logger:      logger,
-		peerStates:  make(map[peermanagement.PeerID]*peerLedgerState),
-		replayer:    inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
-		messageSeen: newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
+		engine:       engine,
+		adaptor:      adaptor,
+		modeManager:  modeManager,
+		inbox:        inbox,
+		logger:       logger,
+		peerStates:   make(map[peermanagement.PeerID]*peerLedgerState),
+		replayer:     inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
+		messageSeen:  newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
+		txSetAcquire: make(map[consensus.TxSetID]*txSetAcquireState),
 	}
-	// Without this hook, the validation-tracker quorum decision sits
-	// silently in pendingLedgerValidations and validated_ledger.seq
-	// stays frozen even as consensus reports "fully validated".
+	// Wire the stash → acquisition hook so quorum decisions on unknown
+	// ledgers don't sit silently in pendingLedgerValidations.
 	if adaptor != nil {
 		if svc := adaptor.LedgerService(); svc != nil {
 			svc.SetOnPendingValidationStashed(r.armValidationStashAcquisition)
@@ -436,30 +454,31 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	proposal.SuppressionHash = suppressionHash
 	firstSeen, lastSeen := r.messageSeen.observe(suppressionHash)
 
+	// Drop duplicates before the engine path (re-running OnProposal
+	// just re-verifies ECDSA). Still feed the IDLED-gated relay slot
+	// on dupes for squelch accounting.
+	//
+	// Deliberate deviation from rippled: rippled tracks suppression
+	// per (hash, peer) — PeerImp.cpp:1730-1738 addSuppressionPeerWithStatus
+	// returns added=true for a new (hash, peer) pair, re-running the
+	// handler so per-peer slot entries grow on each new sender. Our
+	// dedup is hash-only, so a second peer's copy is dropped at the
+	// gate. Quorum/position tracking unaffected (first arrival counts
+	// the validator); reduce-relay accuracy is partly compensated via
+	// PeersThatHave + UpdateRelaySlot below.
+	if !firstSeen {
+		if time.Since(lastSeen) < peermanagement.Idled {
+			seenPeers := r.adaptor.PeersThatHave(suppressionHash)
+			r.adaptor.UpdateRelaySlot(proposal.SigningPubKey[:], originPeer, seenPeers)
+		}
+		return
+	}
+
 	if err := r.engine.OnProposal(proposal, originPeer); err != nil {
 		r.logger.Debug("engine rejected proposal", "error", err, "peer", msg.PeerID)
 		return
 	}
-
-	// Feed the reduce-relay slot on duplicates that arrive within
-	// IDLED of the previous sighting. Matches rippled
-	// PeerImp.cpp:1730-1738 exactly: `!added && relayed &&
-	// (now - *relayed) < IDLED`. NOTE: no trust gate here — rippled
-	// feeds the slot for both trusted and untrusted duplicates
-	// (trust-specific branching happens later for relay decisions).
-	// Gating on trust pre-R5.7 under-squelched untrusted gossip
-	// vs. what the rest of the network does.
-	//
-	// B3: feed the slot with the FULL set of known-havers, not just
-	// originPeer. seenPeers is the overlay's reverse-index entry
-	// populated when we previously relayed this message outward —
-	// matching rippled's haveMessage set from overlay_.relay
-	// (PeerImp.cpp:3010-3017) which is then passed whole to
-	// updateSlotAndSquelch.
-	if !firstSeen && time.Since(lastSeen) < peermanagement.Idled {
-		seenPeers := r.adaptor.PeersThatHave(suppressionHash)
-		r.adaptor.UpdateRelaySlot(proposal.SigningPubKey[:], originPeer, seenPeers)
-	}
+	_ = lastSeen
 }
 
 func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
@@ -511,18 +530,38 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	validation.SuppressionHash = suppressionHash
 	firstSeen, lastSeen := r.messageSeen.observe(suppressionHash)
 
-	if err := r.engine.OnValidation(validation, originPeer); err != nil {
-		r.logger.Debug("engine rejected validation", "error", err, "peer", msg.PeerID)
+	// Drop duplicates before the engine path (re-running OnValidation
+	// just re-verifies ECDSA, dominating CPU under gossip fan-out).
+	// Still update the relay slot for squelch accounting.
+	//
+	// Deliberate deviation from rippled: rippled's per-(hash, peer)
+	// suppression at PeerImp.cpp:2374-2424 re-processes new senders;
+	// our hash-only dedup drops them at the gate. See handleProposal
+	// for the full rationale.
+	if !firstSeen {
+		if time.Since(lastSeen) < peermanagement.Idled {
+			seenPeers := r.adaptor.PeersThatHave(suppressionHash)
+			r.adaptor.UpdateRelaySlot(validation.SigningPubKey[:], originPeer, seenPeers)
+		}
 		return
 	}
 
-	// Same IDLED-gated, no-trust-gate feeding as handleProposal.
-	// Mirrors rippled's TMValidation path at PeerImp.cpp:2385 and the
-	// B3 haveMessage expansion at PeerImp.cpp:3049-3054.
-	if !firstSeen && time.Since(lastSeen) < peermanagement.Idled {
-		seenPeers := r.adaptor.PeersThatHave(suppressionHash)
-		r.adaptor.UpdateRelaySlot(validation.SigningPubKey[:], originPeer, seenPeers)
+	if err := r.engine.OnValidation(validation, originPeer); err != nil {
+		r.logger.Info("engine rejected validation",
+			"t", "consensus",
+			"event", "validation-rejected",
+			"error", err.Error(),
+			"peer", msg.PeerID)
+		return
 	}
+	r.logger.Info("inbound validation accepted",
+		"t", "consensus",
+		"event", "validation-recv",
+		"peer", msg.PeerID,
+		"seq", validation.LedgerSeq,
+		"hash_short", fmt.Sprintf("%x", validation.LedgerID[:8]))
+
+	_ = lastSeen
 }
 
 // resolveMasterNodeID looks the inbound signing pubkey up in the
@@ -612,15 +651,28 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 	}
 	txMsg, ok := decoded.(*message.Transaction)
 	if !ok {
+		r.logger.Warn("decoded transaction has unexpected type",
+			"peer", msg.PeerID,
+			"got", fmt.Sprintf("%T", decoded))
 		return
 	}
 
 	blob := TransactionFromMessage(txMsg)
 	if len(blob) == 0 {
+		r.logger.Warn("inbound transaction has empty blob",
+			"peer", msg.PeerID,
+			"status", txMsg.Status)
 		return
 	}
 
 	r.adaptor.AddPendingTx(blob)
+	r.logger.Info("inbound tx accepted into pending pool",
+		"t", "consensus",
+		"event", "tx-inbound",
+		"peer", msg.PeerID,
+		"blob_size", len(blob),
+		"status", txMsg.Status,
+	)
 }
 
 func (r *Router) handleHaveSet(msg *peermanagement.InboundMessage) {
@@ -670,7 +722,14 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		"hash_len", len(req.LedgerHash),
 	)
 
-	// Only handle base (header) requests for now
+	// PeerImp::getTxSet (PeerImp.cpp:3255-3287): ledger_hash carries the
+	// tx-set ID, response is TMLedgerData{type=liTS_CANDIDATE, ...}.
+	if req.InfoType == message.LedgerInfoTsCandidate {
+		r.serveTxSet(msg.PeerID, req)
+		return
+	}
+
+	// Only handle base (header) requests beyond this point.
 	if req.InfoType != message.LedgerInfoBase {
 		return
 	}
@@ -715,6 +774,348 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	if err := r.adaptor.SendToPeer(uint64(msg.PeerID), frame); err != nil {
 		r.logger.Debug("failed to send ledger_data to peer", "error", err, "peer", msg.PeerID)
 	}
+}
+
+// liTS_CANDIDATE serve-path caps matching rippled's softMaxReplyNodes /
+// hardMaxReplyNodes (rippled/src/xrpld/overlay/detail/Tuning.h:39,42).
+// Soft cap stops starting new subtrees; hard cap truncates mid-subtree.
+// Declared as vars so tests can dial them down via txSetReplyCapsForTest /
+// setTxSetReplyCapsForTest. Production callers must not mutate.
+var (
+	txSetSoftMaxReplyNodes = 8192
+	txSetHardMaxReplyNodes = 12288
+)
+
+func txSetReplyCapsForTest() (soft, hard int) {
+	return txSetSoftMaxReplyNodes, txSetHardMaxReplyNodes
+}
+
+func setTxSetReplyCapsForTest(soft, hard int) {
+	txSetSoftMaxReplyNodes = soft
+	txSetHardMaxReplyNodes = hard
+}
+
+// SHAMapNodeID wire length: 32-byte path + 1-byte depth.
+const shamapNodeIDLen = 33
+
+// PeerImp.cpp:3382 uses isHighLatency() ? 2 : 1. Without a latency signal
+// we overspec at 2 — extra level is harmless, too few stalls the requestor.
+const defaultQueryDepth = 2
+
+// serveTxSet replies to TMGetLedger{itype=liTS_CANDIDATE} with the tx set
+// encoded as TMLedgerData{type=liTS_CANDIDATE, ledger_hash=<txSetID>,
+// nodes=[<SHAMapNodeID, wire-serialized SHAMap node>...]}. Mirrors
+// PeerImp::processLedgerRequest at PeerImp.cpp:3304-3411: for each requested
+// NodeID, walk QueryDepth levels via GetNodeFatByPath, honouring soft/hard
+// caps. Empty nodeids falls back to a full pre-order walk for legacy
+// goxrpl→goxrpl fixtures; rippled requestors always send at least the root.
+func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger) {
+	if len(req.LedgerHash) != 32 {
+		return
+	}
+	var txSetID consensus.TxSetID
+	copy(txSetID[:], req.LedgerHash)
+
+	ts, ok := r.adaptor.txSetCache.Get(txSetID)
+	if !ok {
+		r.logger.Debug("peer requested tx-set we don't have",
+			"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]))
+		return
+	}
+
+	txMap, err := ts.BuildSHAMap()
+	if err != nil {
+		r.logger.Warn("failed to build tx-set SHAMap for serve",
+			"error", err, "peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]))
+		return
+	}
+
+	queryDepth := int(req.QueryDepth)
+	if queryDepth == 0 {
+		queryDepth = defaultQueryDepth
+	}
+	// PeerImp.cpp:3318 hardcodes fatLeaves=false for liTS_CANDIDATE.
+	const fatLeaves = false
+
+	nodes := buildTxSetReplyNodes(txMap, req.NodeIDs, queryDepth, fatLeaves, r.logger, peerID, txSetID)
+
+	resp := &message.LedgerData{
+		LedgerHash:    req.LedgerHash,
+		LedgerSeq:     0, // tx-set responses carry no ledger seq (rippled sets 0 too)
+		InfoType:      message.LedgerInfoTsCandidate,
+		Nodes:         nodes,
+		RequestCookie: uint32(req.RequestCookie),
+	}
+
+	frame, err := encodeFrame(message.TypeLedgerData, resp)
+	if err != nil {
+		r.logger.Warn("failed to encode tx-set response", "error", err)
+		return
+	}
+
+	if err := r.adaptor.SendToPeer(uint64(peerID), frame); err != nil {
+		r.logger.Debug("failed to send tx-set response", "error", err, "peer", peerID)
+		return
+	}
+	r.logger.Debug("served tx-set to peer",
+		"peer", peerID,
+		"txset", fmt.Sprintf("%x", txSetID[:8]),
+		"shamap_nodes", len(nodes),
+		"txs", len(ts.Txs()),
+		"query_depth", queryDepth,
+		"requested_nodes", len(req.NodeIDs))
+}
+
+// buildTxSetReplyNodes builds the LedgerNode payload of a liTS_CANDIDATE
+// reply, honouring requested NodeIDs/QueryDepth and soft/hard reply caps.
+func buildTxSetReplyNodes(
+	txMap *shamap.SHAMap,
+	requestedNodeIDs [][]byte,
+	queryDepth int,
+	fatLeaves bool,
+	logger logger,
+	peerID peermanagement.PeerID,
+	txSetID consensus.TxSetID,
+) []message.LedgerNode {
+	if len(requestedNodeIDs) == 0 {
+		wireNodes, err := txMap.WalkWireNodes()
+		if err != nil {
+			logger.Warn("failed to walk tx-set SHAMap for serve",
+				"error", err, "peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]))
+			return nil
+		}
+		nodes := make([]message.LedgerNode, 0, len(wireNodes))
+		for _, n := range wireNodes {
+			if len(nodes) >= txSetHardMaxReplyNodes {
+				break
+			}
+			nodes = append(nodes, message.LedgerNode{NodeID: n.NodeID, NodeData: n.Data})
+		}
+		return nodes
+	}
+
+	nodes := make([]message.LedgerNode, 0)
+	for i, rawID := range requestedNodeIDs {
+		// Soft cap — PeerImp.cpp:3387.
+		if len(nodes) >= txSetSoftMaxReplyNodes {
+			logger.Debug("tx-set serve: soft-cap reached, stopping subtree iteration",
+				"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
+				"nodes_so_far", len(nodes), "remaining_requested", len(requestedNodeIDs)-i)
+			break
+		}
+		path, depth, ok := parseSHAMapNodeID(rawID)
+		if !ok {
+			logger.Debug("tx-set serve: bad SHAMapNodeID in request, skipping",
+				"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
+				"node_idx", i, "len", len(rawID))
+			continue
+		}
+		subtree, err := txMap.GetNodeFatByPath(path, depth, queryDepth, fatLeaves)
+		if err != nil {
+			logger.Debug("tx-set serve: GetNodeFatByPath failed, skipping",
+				"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
+				"error", err.Error())
+			continue
+		}
+		for _, n := range subtree {
+			// Hard cap — PeerImp.cpp:3406-3407.
+			if len(nodes) >= txSetHardMaxReplyNodes {
+				logger.Debug("tx-set serve: hard-cap reached, truncating subtree",
+					"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
+					"nodes", len(nodes))
+				return nodes
+			}
+			nodes = append(nodes, message.LedgerNode{NodeID: n.NodeID, NodeData: n.Data})
+		}
+	}
+	return nodes
+}
+
+// parseSHAMapNodeID decodes the 33-byte wire representation into (path,
+// depth). Mirrors deserializeSHAMapNodeID at PeerImp.cpp:1442.
+func parseSHAMapNodeID(raw []byte) (path [32]byte, depth int, ok bool) {
+	if len(raw) != shamapNodeIDLen {
+		return path, 0, false
+	}
+	copy(path[:], raw[:32])
+	depth = int(raw[32])
+	if depth < 0 || depth > 64 {
+		return path, 0, false
+	}
+	return path, depth, true
+}
+
+type logger interface {
+	Debug(msg string, args ...any)
+	Warn(msg string, args ...any)
+}
+
+// handleTxSetData consumes a TMLedgerData{type=liTS_CANDIDATE} response.
+// Each node is a SHAMap node (root/inner/leaf), not a raw transaction.
+// Mirrors TransactionAcquire::takeNodes (TransactionAcquire.cpp:175-235):
+// accumulate nodes across responses, then either finish (→ engine.OnTxSet)
+// or request missing nodes (TransactionAcquire.cpp:144-171). State is keyed
+// by tx-set ID so partial responses can resume.
+func (r *Router) handleTxSetData(ld *message.LedgerData) {
+	if len(ld.LedgerHash) != 32 {
+		return
+	}
+	var txSetID consensus.TxSetID
+	copy(txSetID[:], ld.LedgerHash)
+
+	r.txSetAcquireMu.Lock()
+	state, exists := r.txSetAcquire[txSetID]
+	if !exists {
+		txMap, err := shamap.New(shamap.TypeTransaction)
+		if err != nil {
+			r.txSetAcquireMu.Unlock()
+			r.logger.Info("tx-set sync: shamap construction failed",
+				"t", "consensus", "event", "txset-reject",
+				"txset", fmt.Sprintf("%x", txSetID[:8]),
+				"error", err.Error())
+			return
+		}
+		if err := txMap.StartSync(); err != nil {
+			r.txSetAcquireMu.Unlock()
+			r.logger.Info("tx-set sync: StartSync failed",
+				"t", "consensus", "event", "txset-reject",
+				"txset", fmt.Sprintf("%x", txSetID[:8]),
+				"error", err.Error())
+			return
+		}
+		state = &txSetAcquireState{txMap: txMap, startedAt: time.Now()}
+		r.txSetAcquire[txSetID] = state
+	}
+	state.lastUpdate = time.Now()
+	r.sweepStaleTxSetAcquireLocked()
+	txMap := state.txMap
+	r.txSetAcquireMu.Unlock()
+
+	// Root NodeID is 33 zero bytes. AddRootNode is idempotent
+	// (ErrRootAlreadySet treated as success).
+	for _, node := range ld.Nodes {
+		if !isShamapRootNodeID(node.NodeID) {
+			continue
+		}
+		if err := txMap.AddRootNode([32]byte(txSetID), node.NodeData); err != nil &&
+			!errors.Is(err, shamap.ErrRootAlreadySet) {
+			r.logger.Info("tx-set sync: AddRootNode failed",
+				"t", "consensus", "event", "txset-reject",
+				"txset", fmt.Sprintf("%x", txSetID[:8]),
+				"error", err.Error())
+		}
+		break
+	}
+
+	// Tx-set acquisition has no authoritative external hash to compare;
+	// AddKnownNodeUnchecked trusts the node's own computed hash and skips
+	// the redundant deserialize/UpdateHash.
+	added := 0
+	for _, node := range ld.Nodes {
+		if isShamapRootNodeID(node.NodeID) {
+			continue
+		}
+		if len(node.NodeData) == 0 {
+			continue
+		}
+		if err := txMap.AddKnownNodeUnchecked(node.NodeData); err == nil {
+			added++
+		}
+	}
+
+	if err := txMap.FinishSync(); err != nil {
+		// Mirror TransactionAcquire::trigger (TransactionAcquire.cpp:144-171):
+		// request the missing nodes.
+		missing := txMap.GetMissingNodes(256, nil)
+		if len(missing) == 0 {
+			r.deleteTxSetAcquire(txSetID)
+			r.logger.Info("tx-set sync: stuck",
+				"t", "consensus", "event", "txset-reject",
+				"txset", fmt.Sprintf("%x", txSetID[:8]),
+				"err", err.Error())
+			return
+		}
+		nodeIDs := make([][]byte, len(missing))
+		for i, m := range missing {
+			nodeIDs[i] = m.NodeID.Bytes()
+		}
+		r.logger.Info("tx-set sync: requesting missing nodes",
+			"t", "consensus", "event", "txset-retry",
+			"txset", fmt.Sprintf("%x", txSetID[:8]),
+			"non_root_added", added,
+			"missing", len(missing),
+		)
+		if reqErr := r.adaptor.RequestTxSetMissingNodes(txSetID, nodeIDs); reqErr != nil {
+			r.logger.Info("tx-set sync: missing-nodes request failed",
+				"t", "consensus", "event", "txset-reject",
+				"txset", fmt.Sprintf("%x", txSetID[:8]),
+				"error", reqErr.Error())
+		}
+		return
+	}
+
+	// Walk leaves into blobs, feed the engine, drop the acquire so dispute
+	// resolution flipping back to the same set starts fresh.
+	blobs := make([][]byte, 0, added+1)
+	if err := txMap.ForEach(func(item *shamap.Item) bool {
+		blobs = append(blobs, item.Data())
+		return true
+	}); err != nil {
+		r.deleteTxSetAcquire(txSetID)
+		return
+	}
+	r.deleteTxSetAcquire(txSetID)
+
+	r.logger.Info("received tx-set from peer",
+		"t", "consensus", "event", "txset-recv",
+		"txset", fmt.Sprintf("%x", txSetID[:8]),
+		"node_count", len(ld.Nodes),
+		"tx_count", len(blobs))
+
+	// Duplicate response after a completed acquire — no root, ForEach
+	// yields 0 items, engine would fail with "tx set ID mismatch". Drop.
+	if len(blobs) == 0 {
+		return
+	}
+
+	if err := r.engine.OnTxSet(txSetID, blobs); err != nil {
+		r.logger.Info("engine rejected tx-set",
+			"t", "consensus", "event", "txset-reject",
+			"error", err.Error(),
+			"txset", fmt.Sprintf("%x", txSetID[:8]),
+			"tx_count", len(blobs))
+	}
+}
+
+func (r *Router) deleteTxSetAcquire(txSetID consensus.TxSetID) {
+	r.txSetAcquireMu.Lock()
+	delete(r.txSetAcquire, txSetID)
+	r.txSetAcquireMu.Unlock()
+}
+
+// sweepStaleTxSetAcquireLocked drops entries older than txSetAcquireTTL.
+// Caller must hold r.txSetAcquireMu.
+func (r *Router) sweepStaleTxSetAcquireLocked() {
+	cutoff := time.Now().Add(-txSetAcquireTTL)
+	for id, state := range r.txSetAcquire {
+		if state.lastUpdate.Before(cutoff) {
+			delete(r.txSetAcquire, id)
+		}
+	}
+}
+
+// isShamapRootNodeID matches the SHAMap root wire encoding (33 zero bytes
+// = zero path + depth=0). See SHAMapNodeID::getRawString in rippled.
+func isShamapRootNodeID(b []byte) bool {
+	if len(b) != shamap.NodeIDSize {
+		return false
+	}
+	for _, by := range b {
+		if by != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
@@ -1046,26 +1447,11 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 	}
 }
 
-// adoptVerifiedLedger commits a ledger reconstructed from a verified
-// replay delta. Mirrors completeInboundLedger's adoption logic: install
-// state and tx maps via the ledger service, advance to Tracking if
-// we're below it, and log the new tip. Mirrors rippled's
-// LedgerDeltaAcquire.cpp:209 which installs the peer-provided tx-blob
-// tree alongside the state map.
-//
-// F6: routed through SubmitHeldAdoption rather than AdoptLedgerWithState.
-// This gives us rippled's tryAdvance behavior for free: if the awaited
-// parent seq is already in history and its hash matches the verified
-// ledger's ParentHash, SubmitHeldAdoption fast-paths into the immediate
-// adopt (same call-shape as before). If the parent hasn't landed yet
-// — i.e. the replay-delta arrived out of order — the ledger is stashed
-// in the held-adoptions map keyed by its awaited parent seq.
-//
-// When SubmitHeldAdoption stashes, we arm a backward-chain acquisition
-// for the awaited parent (issue #397). Without this, a tip-only
-// acquisition policy (checkBehind) leaves stashed candidates waiting
-// for parents that are never requested, and they age out at
-// heldAdoptionTTL.
+// adoptVerifiedLedger commits a ledger reconstructed from a verified replay
+// delta. Mirrors LedgerDeltaAcquire.cpp:209 — installs the peer-provided
+// tx-blob tree alongside the state map. Routes through SubmitHeldAdoption
+// so out-of-order arrivals are stashed by awaited parent seq; on stash we
+// arm a backward-chain acquisition for the parent (issue #397).
 func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
@@ -1114,23 +1500,10 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 	return nil
 }
 
-// armValidationStashAcquisition arms an inbound acquisition for a
-// (seq, hash) pair that SetValidatedLedger stashed because we don't
-// have that exact ledger.
-//
-// Mirrors rippled's LedgerMaster::checkAccept(hash, seq), which calls
-// app_.getInboundLedgers().acquire(hash, seq, ...) on the same condition
-// (LedgerMaster.cpp:917-919). Without this kick, a deep gap (network
-// well ahead of our closed ledger) leaves the stashed validation idle:
-// the only acquisition driver is the tip-walking peer-status-change
-// handler, which acquires the peer's CURRENT tip — not the seq the
-// validation tracker just told us reached quorum.
-//
-// Prefers a peer whose advertised LCL is at or above seq so the request
-// goes to a peer that can actually serve the ledger; falls back to any
-// tracked peer if none qualify (the maintenance tick rotates on silent-
-// peer timeouts). If no peers are tracked yet, skip — peer-status-change
-// handlers will drive the acquisition once peers connect.
+// armValidationStashAcquisition arms inbound acquisition for a (seq, hash)
+// that SetValidatedLedger stashed. Mirrors LedgerMaster::checkAccept(hash,
+// seq) at LedgerMaster.cpp:917-919 (app_.getInboundLedgers().acquire). Prefers
+// a peer advertising LCL >= seq, falls back to any tracked peer.
 func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 	defer func() {
 		if rv := recover(); rv != nil {
@@ -1148,9 +1521,8 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 	if svc == nil {
 		return
 	}
-	// At or below closed: we either already have it locally or it was
-	// evicted; the divergent-fork status-change handler drives any
-	// reacquisition at active height.
+	// At-or-below closed is driven by the divergent-fork status-change
+	// handler, not here.
 	if seq <= svc.GetClosedLedgerIndex() {
 		return
 	}
@@ -1174,9 +1546,6 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 		preferredPeerID = fallbackPeerID
 	}
 	if preferredPeerID == 0 {
-		// No tracked peers yet — peer status changes will drive the
-		// acquisition once peers connect. Avoid sending to peerID=0
-		// (no recipient).
 		return
 	}
 
@@ -1188,15 +1557,9 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 	r.startLedgerAcquisition(seq, hash, preferredPeerID)
 }
 
-// armParentAcquisition fires a backward-chain acquisition for the
-// parent of a stashed held-adoption candidate (issue #397). Caller
-// invokes after SubmitHeldAdoption returns Stashed=true.
-//
-// Skips if the parent seq is at or below our closed ledger — in that
-// regime we already have something at this height locally, and either
-// (a) the SubmitHeldAdoption fast-path would have adopted, or (b) the
-// divergent-fork drop fired. Either way another acquisition won't
-// help.
+// armParentAcquisition fires a backward-chain acquisition for the parent of
+// a stashed held-adoption candidate (issue #397). Skips at-or-below closed
+// (already adopted or fork-dropped).
 func (r *Router) armParentAcquisition(svc *service.Service, parentSeq uint32, parentHash [32]byte, preferredPeerID uint64) {
 	if parentSeq == 0 {
 		return
@@ -1336,6 +1699,13 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 		"itype", ld.InfoType,
 		"has_inbound", r.inboundLedger != nil,
 	)
+
+	// liTS_CANDIDATE response — InboundTransactions::gotData feeds the
+	// engine via gotTxSet (consensus-time only). Issue #401.
+	if ld.InfoType == message.LedgerInfoTsCandidate {
+		r.handleTxSetData(ld)
+		return
+	}
 
 	// Feed data to active inbound ledger acquisition
 	if r.inboundLedger != nil {

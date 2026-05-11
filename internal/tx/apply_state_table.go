@@ -35,15 +35,29 @@ type TrackedEntry struct {
 	Current  []byte // Current state (nil for deletes after erase)
 }
 
+// ThreadedOwner: thread-only modification to an SLE (PreviousTxnID /
+// PreviousTxnLgrSeq bumped, business fields unchanged). Mirrors
+// rippled's `Mods` table at ApplyStateTable.cpp:584-633 — kept out of
+// items_ (Action::cache, skipped by apply loop :141-143) so the
+// emitted AffectedNode carries only {LedgerIndex, LedgerEntryType,
+// PreviousTxnID, PreviousTxnLgrSeq}, no FinalFields / PreviousFields.
+type ThreadedOwner struct {
+	EntryType            string
+	OldPreviousTxnID     [32]byte
+	OldPreviousTxnLgrSeq uint32
+	Updated              []byte // SLE bytes after threadItem write
+}
+
 // ApplyStateTable wraps a LedgerView and tracks all modifications
 // for automatic metadata generation, similar to rippled's ApplyStateTable
 type ApplyStateTable struct {
-	base   LedgerView
-	items  map[[32]byte]*TrackedEntry
-	drops  drops.XRPAmount
-	txHash [32]byte
-	txSeq  uint32
-	rules  *amendment.Rules
+	base             LedgerView
+	items            map[[32]byte]*TrackedEntry
+	threadOnlyOwners map[[32]byte]*ThreadedOwner
+	drops            drops.XRPAmount
+	txHash           [32]byte
+	txSeq            uint32
+	rules            *amendment.Rules
 }
 
 // NewApplyStateTable creates a new ApplyStateTable wrapping the given base view.
@@ -51,11 +65,12 @@ type ApplyStateTable struct {
 // If nil, defaults to all amendments enabled.
 func NewApplyStateTable(base LedgerView, txHash [32]byte, txSeq uint32, rules *amendment.Rules) *ApplyStateTable {
 	return &ApplyStateTable{
-		base:   base,
-		items:  make(map[[32]byte]*TrackedEntry),
-		txHash: txHash,
-		txSeq:  txSeq,
-		rules:  rules,
+		base:             base,
+		items:            make(map[[32]byte]*TrackedEntry),
+		threadOnlyOwners: make(map[[32]byte]*ThreadedOwner),
+		txHash:           txHash,
+		txSeq:            txSeq,
+		rules:            rules,
 	}
 }
 
@@ -384,6 +399,33 @@ func (t *ApplyStateTable) applyImpl(isDryRun bool) (*Metadata, error) {
 		}
 	}
 
+	// Thread-only owners: rippled ApplyStateTable.cpp:269-274 (mods
+	// table rawReplace'd into the view).
+	for key, owner := range t.threadOnlyOwners {
+		if _, alreadyEmitted := t.items[key]; alreadyEmitted {
+			if t.items[key].Action != ActionCache {
+				continue
+			}
+		}
+		node := AffectedNode{
+			NodeType:        "ModifiedNode",
+			LedgerEntryType: owner.EntryType,
+			LedgerIndex:     strings.ToUpper(hex.EncodeToString(key[:])),
+		}
+		// OLD prev fields, per rippled ApplyStateTable.cpp:570-571.
+		if owner.OldPreviousTxnID != ([32]byte{}) {
+			node.PreviousTxnID = strings.ToUpper(hex.EncodeToString(owner.OldPreviousTxnID[:]))
+			node.PreviousTxnLgrSeq = owner.OldPreviousTxnLgrSeq
+		}
+		metadata.AffectedNodes = append(metadata.AffectedNodes, node)
+
+		if !isDryRun {
+			if err := t.base.Update(keylet.Keylet{Key: key}, owner.Updated); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	// Apply destroyed drops only when not dry-run
 	if !isDryRun && t.drops.IsPositive() {
 		t.base.AdjustDropsDestroyed(t.drops)
@@ -459,8 +501,13 @@ func (t *ApplyStateTable) applyThreading() {
 	}
 }
 
-// threadOwners updates PreviousTxnID/PreviousTxnLgrSeq on owner accounts
-// of a given ledger entry. fixCheckThreading gates Check→Destination threading.
+// threadOwners updates PreviousTxnID/PreviousTxnLgrSeq on owner accounts.
+// fixCheckThreading gates Check→Destination threading.
+//
+// Owner SLEs the tx didn't otherwise mutate go into threadOnlyOwners
+// (NOT promoted to ActionModify), mirroring rippled's mods table at
+// ApplyStateTable.cpp:584-633 — the emitted AffectedNode is bare
+// (no FinalFields / PreviousFields).
 func (t *ApplyStateTable) threadOwners(data []byte, entryType string, fixCheckThreading bool) {
 	if data == nil {
 		return
@@ -475,27 +522,45 @@ func (t *ApplyStateTable) threadOwners(data []byte, entryType string, fixCheckTh
 			if entry.Action == ActionErase {
 				continue // Don't thread deleted accounts
 			}
-			// Thread the existing tracked entry
-			_, _, newData, changed := threadItem(entry.Current, t.txHash, t.txSeq)
-			if changed {
-				entry.Current = newData
-				if entry.Action == ActionCache {
-					entry.Action = ActionModify
+			// Non-cache entry: thread fields flow into its own
+			// FinalFields/NewFields (rippled ApplyStateTable.cpp:614-615).
+			if entry.Action != ActionCache {
+				_, _, newData, changed := threadItem(entry.Current, t.txHash, t.txSeq)
+				if changed {
+					entry.Current = newData
 				}
+				continue
+			}
+
+			// ActionCache: route into threadOnlyOwners (bare AffectedNode)
+			// rather than promoting to ActionModify.
+			oldPrev, oldPrevSeq, newData, changed := threadItem(entry.Current, t.txHash, t.txSeq)
+			if !changed {
+				continue
+			}
+			t.threadOnlyOwners[ownerKey.Key] = &ThreadedOwner{
+				EntryType:            getLedgerEntryType(entry.Current),
+				OldPreviousTxnID:     oldPrev,
+				OldPreviousTxnLgrSeq: oldPrevSeq,
+				Updated:              newData,
 			}
 		} else {
-			// Read from base and add to tracking
+			// Owner not previously touched by this tx → straight into
+			// threadOnlyOwners (rippled ApplyStateTable.cpp:621-632
+			// getForMod fall-through adds to mods).
 			ownerData, err := t.base.Read(ownerKey)
 			if err != nil || ownerData == nil {
 				continue // Owner doesn't exist, skip
 			}
-			_, _, newData, changed := threadItem(ownerData, t.txHash, t.txSeq)
-			if changed {
-				t.items[ownerKey.Key] = &TrackedEntry{
-					Action:   ActionModify,
-					Original: ownerData,
-					Current:  newData,
-				}
+			oldPrev, oldPrevSeq, newData, changed := threadItem(ownerData, t.txHash, t.txSeq)
+			if !changed {
+				continue
+			}
+			t.threadOnlyOwners[ownerKey.Key] = &ThreadedOwner{
+				EntryType:            getLedgerEntryType(ownerData),
+				OldPreviousTxnID:     oldPrev,
+				OldPreviousTxnLgrSeq: oldPrevSeq,
+				Updated:              newData,
 			}
 		}
 	}
@@ -652,7 +717,12 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 		}
 	}
 
-	// FinalFields: fields with sMD_Always | sMD_ChangeNew
+	// FinalFields: emit ALL sMD_Always|sMD_ChangeNew fields independently
+	// of whether PreviousFields is empty. Rippled ApplyStateTable.cpp:222-229
+	// builds prevs (lines 209-220) and finals separately — no
+	// `if (!prevs.empty())` gate around finals. Thread-touched owners
+	// (e.g. AccountRoot owning a modified RippleState) leave prevs empty
+	// but still need the full FinalFields block.
 	for name, currValue := range currFields {
 		if shouldIncludeInFinalFields(name) {
 			node.FinalFields[name] = currValue

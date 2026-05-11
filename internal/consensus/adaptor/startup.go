@@ -237,6 +237,10 @@ func NewFromConfig(
 
 	engine.SetLedgerAncestryProvider(rcl.NewLedgerProvider(ledgerSvc))
 
+	// Track engine ModeChangedEvent — Full gates startRoundLocked into
+	// proposing, so wrongLedger needs to demote opMode.
+	engine.Subscribe(modeManager)
+
 	// Create the router
 	router := NewRouter(engine, adaptor, modeManager, overlay.Messages())
 	router.SetManifestCache(manifestCache, overlay)

@@ -166,7 +166,7 @@ func TestPeer_SendBufferFull(t *testing.T) {
 
 	// Next send should fail with buffer full
 	err = peer.Send([]byte("overflow"))
-	assert.ErrorIs(t, err, ErrConnectionClosed)
+	assert.ErrorIs(t, err, ErrSendBufferFull)
 }
 
 // TestPeer_InboundOutbound tests inbound/outbound distinction

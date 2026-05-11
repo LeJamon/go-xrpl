@@ -115,13 +115,14 @@ func affectedNodeToRippledFormat(n AffectedNode) (map[string]any, error) {
 		inner["PreviousFields"] = n.PreviousFields
 	}
 
-	// PreviousTxnID (omit if empty)
-	if n.PreviousTxnID != "" {
+	// PreviousTxnID + PreviousTxnLgrSeq: emit as a PAIR, both or
+	// neither. Rippled writes them together inside one
+	// `if (!prevTxID.isZero())` guard (ApplyStateTable.cpp:560-572);
+	// independent gates would leak one of the two on genesis-touching
+	// txs where the master has no prior tx.
+	prevTxnIDPresent := n.PreviousTxnID != "" && !isZeroHashHex(n.PreviousTxnID)
+	if prevTxnIDPresent {
 		inner["PreviousTxnID"] = n.PreviousTxnID
-	}
-
-	// PreviousTxnLgrSeq (omit if zero, which means not set)
-	if n.PreviousTxnLgrSeq != 0 {
 		inner["PreviousTxnLgrSeq"] = n.PreviousTxnLgrSeq
 	}
 
@@ -134,4 +135,16 @@ func affectedNodeToRippledFormat(n AffectedNode) (map[string]any, error) {
 	return map[string]any{
 		n.NodeType: inner,
 	}, nil
+}
+
+func isZeroHashHex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < 64; i++ {
+		if s[i] != '0' {
+			return false
+		}
+	}
+	return true
 }
