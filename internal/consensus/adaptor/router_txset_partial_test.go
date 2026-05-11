@@ -32,7 +32,8 @@ func buildTxSetForTest(t *testing.T, n int) (*shamap.SHAMap, [32]byte, []shamap.
 	for i := range blobs {
 		blobs[i] = bytes.Repeat([]byte{byte(0x10 + i)}, 16)
 	}
-	ts := NewTxSet(blobs)
+	ts, err := NewTxSet(blobs)
+	require.NoError(t, err)
 	txMap := ts.SHAMap()
 	require.NotNil(t, txMap)
 	wireNodes, err := txMap.WalkWireNodes()

@@ -29,7 +29,8 @@ func TestTxSet_TxsTxIDsZipped(t *testing.T) {
 	for i := range blobs {
 		blobs[i] = makeBlob(uint32(i + 1))
 	}
-	ts := NewTxSet(blobs)
+	ts, err := NewTxSet(blobs)
+	require.NoError(t, err)
 
 	txs := ts.Txs()
 	ids := ts.TxIDs()
@@ -50,7 +51,8 @@ func TestTxSet_TxsCanonicalOrder(t *testing.T) {
 	for i := range blobs {
 		blobs[i] = makeBlob(uint32(i + 1))
 	}
-	ts := NewTxSet(blobs)
+	ts, err := NewTxSet(blobs)
+	require.NoError(t, err)
 
 	ids := ts.TxIDs()
 	for i := 1; i < len(ids); i++ {
@@ -74,12 +76,14 @@ func TestTxSet_IDStableAcrossInsertionOrder(t *testing.T) {
 		blobs[i] = makeBlob(uint32(i + 1))
 	}
 
-	forward := NewTxSet(blobs)
+	forward, err := NewTxSet(blobs)
+	require.NoError(t, err)
 	reversed := make([][]byte, len(blobs))
 	for i, b := range blobs {
 		reversed[len(blobs)-1-i] = b
 	}
-	backward := NewTxSet(reversed)
+	backward, err := NewTxSet(reversed)
+	require.NoError(t, err)
 
 	assert.Equal(t, forward.ID(), backward.ID(),
 		"tx-set ID must be insertion-order independent")
@@ -92,7 +96,8 @@ func TestTxSet_IDChangesOnMutation(t *testing.T) {
 	blob1 := makeBlob(1)
 	blob2 := makeBlob(2)
 
-	ts := NewTxSet([][]byte{blob1})
+	ts, err := NewTxSet([][]byte{blob1})
+	require.NoError(t, err)
 	id0 := ts.ID()
 	require.NotEqual(t, consensus.TxSetID{}, id0)
 
@@ -109,6 +114,20 @@ func TestTxSet_IDChangesOnMutation(t *testing.T) {
 		"Remove of a just-added tx must restore the prior ID")
 }
 
+// TestTxSet_RejectsInvalidBlobs pins that NewTxSet surfaces SHAMap
+// rejection (e.g. <12-byte transaction leaves) instead of silently
+// shrinking the set. Rippled never silently truncates a tx-set during
+// construction (RCLCxTx.h:87-91); a truncated set would compute the
+// wrong root hash and break consensus.
+func TestTxSet_RejectsInvalidBlobs(t *testing.T) {
+	good := makeBlob(1)
+	tooShort := []byte{0x01, 0x02, 0x03} // <12 bytes — rejected by NewTransactionLeafNode
+
+	ts, err := NewTxSet([][]byte{good, tooShort})
+	require.Error(t, err, "short blob must surface as a construction error")
+	assert.Nil(t, ts, "failed construction must not return a partial tx-set")
+}
+
 // TestTxSet_BytesIsCanonical pins that the Bytes() framing walks
 // leaves in canonical order so the serialized form is independent
 // of insertion order.
@@ -118,12 +137,16 @@ func TestTxSet_BytesIsCanonical(t *testing.T) {
 		blobs[i] = makeBlob(uint32(i + 1))
 	}
 
-	forward := NewTxSet(blobs).Bytes()
+	forwardTs, err := NewTxSet(blobs)
+	require.NoError(t, err)
+	forward := forwardTs.Bytes()
 	reversed := make([][]byte, len(blobs))
 	for i, b := range blobs {
 		reversed[len(blobs)-1-i] = b
 	}
-	backward := NewTxSet(reversed).Bytes()
+	backwardTs, err := NewTxSet(reversed)
+	require.NoError(t, err)
+	backward := backwardTs.Bytes()
 	assert.Equal(t, forward, backward,
 		"Bytes() output must be insertion-order independent")
 }
@@ -158,7 +181,10 @@ func BenchmarkTxSetAdd_Incremental(b *testing.B) {
 				// Add always lands on a set of size ~n. Otherwise the
 				// loop just grows N unbounded and the per-Add cost
 				// shifts as N doubles.
-				ts := NewTxSet(seed)
+				ts, err := NewTxSet(seed)
+				if err != nil {
+					b.Fatal(err)
+				}
 				b.StartTimer()
 				_ = ts.Add(adds[i])
 				b.StopTimer()

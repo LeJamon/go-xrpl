@@ -772,7 +772,10 @@ func (a *Adaptor) GetTxSet(id consensus.TxSetID) (consensus.TxSet, error) {
 }
 
 func (a *Adaptor) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
-	ts := NewTxSet(txs)
+	ts, err := NewTxSet(txs)
+	if err != nil {
+		return nil, err
+	}
 	a.txSetCache.Put(ts)
 	return ts, nil
 }
