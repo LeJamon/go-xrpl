@@ -58,23 +58,21 @@ type TxSetImpl struct {
 // NewTxSet creates a TxSet from raw transaction blobs. The ID is the
 // SHAMap root hash, matching rippled's canonical tx-set hashing.
 //
-// Returns an error if any blob is rejected by the backing SHAMap. The
-// only such gate today is the goxrpl-specific <12-byte rejection in
-// shamap/leaf_node.go's NewTransactionLeafNode (rippled's
-// SHAMap::addGiveItem has no size check — it validates blobs upstream
-// via STTx). Real transaction blobs are far larger than 12 bytes, so
-// this branch is unreachable in production; we surface it as an error
-// rather than silently dropping the blob because a truncated set
-// computes the wrong root hash and would break consensus.
-//
-// Panics if shamap.New itself fails. shamap.New(TypeTransaction) is
-// unconditional today (shamap/shamap.go:82-93), so the panic is
-// unreachable — it exists as a Go-idiomatic assertion against future
-// shamap changes that might grow an error return.
+// Returns an error if shamap.New fails or any blob is rejected by the
+// backing SHAMap. Neither path is reachable today —
+// shamap.New(TypeTransaction) is unconditional (shamap/shamap.go:82-93)
+// and the only blob gate is the goxrpl-specific <12-byte rejection in
+// shamap/leaf_node.go (rippled's SHAMap::addGiveItem has no size
+// check; it validates blobs upstream via STTx). Real transaction
+// blobs are far larger than 12 bytes. We propagate both as errors
+// rather than panicking or silently dropping the blob: a truncated
+// set computes the wrong root hash and would break consensus, and
+// keeping a single error-return contract (no mixed panic/error) means
+// callers who already check err do not have to also wrap recover().
 func NewTxSet(txBlobs [][]byte) (*TxSetImpl, error) {
 	txMap, err := shamap.New(shamap.TypeTransaction)
 	if err != nil {
-		panic(fmt.Errorf("NewTxSet: shamap.New(TypeTransaction): %w", err))
+		return nil, fmt.Errorf("NewTxSet: shamap.New(TypeTransaction): %w", err)
 	}
 	ts := &TxSetImpl{txMap: txMap}
 	for i, blob := range txBlobs {
