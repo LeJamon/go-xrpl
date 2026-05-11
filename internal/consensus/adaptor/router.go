@@ -788,14 +788,28 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 }
 
 // serveTxSet replies to a peer's TMGetLedger{itype=liTS_CANDIDATE}
-// with the transactions of the requested tx set, encoded as
+// with the requested tx set, encoded as
 // TMLedgerData{type=liTS_CANDIDATE, ledger_hash=<txSetID>,
-// nodes=[<tx blob>...]}.
+// nodes=[<(SHAMapNodeID, wire-serialized SHAMap node)>...]}.
 //
-// Mirrors rippled's PeerImp::getTxSet (PeerImp.cpp:3255-3287): the
-// ledger_hash field carries the tx-set's hash, and the response is
-// what the requester feeds into its dispute tracker so peer positions
-// stop being opaque hashes.
+// Mirrors rippled's PeerImp::processLedgerRequest for liTS_CANDIDATE
+// (PeerImp.cpp:3304-3411): rippled walks the tx-set SHAMap via
+// getNodeFat(*shaMapNodeId, data, fatLeaves=false, queryDepth)
+// and emits each entry as set_nodeid(rawString) + set_nodedata(blob).
+// The consumer (TransactionAcquire::takeNodes, TransactionAcquire.cpp:175-235)
+// requires that shape: it calls mMap->addKnownNode(d.first, d.second, &sf),
+// which needs a non-empty SHAMapNodeID — bare tx blobs with empty
+// NodeID are rejected.
+//
+// The earlier version of this function sent one LedgerNode per raw
+// transaction blob with NodeID empty. That worked against goxrpl's
+// own in-process unit tests but produced wire-format-incompatible
+// responses for rippled peers and even goxrpl-to-goxrpl deployments
+// (handleTxSetData below also expects SHAMap-node shape). The bug
+// was masked in the 3-rippled + 2-goxrpl soak because tx-set
+// acquisition fans out across peers — every requestor had a
+// rippled candidate source that served the right shape — but the
+// goxrpl serve path itself was wire-incompatible.
 func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger) {
 	if len(req.LedgerHash) != 32 {
 		return
@@ -810,10 +824,29 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 		return
 	}
 
-	blobs := ts.Txs()
-	nodes := make([]message.LedgerNode, 0, len(blobs))
-	for _, blob := range blobs {
-		nodes = append(nodes, message.LedgerNode{NodeData: blob})
+	txMap, err := ts.BuildSHAMap()
+	if err != nil {
+		r.logger.Warn("failed to build tx-set SHAMap for serve",
+			"error", err, "peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]))
+		return
+	}
+	// WalkWireNodes returns pre-order (root → leaves) — exactly the
+	// order TransactionAcquire::takeNodes expects: line 203's
+	// d.first.isRoot() branch must see the root first so AddRootNode
+	// fires before any AddKnownNodeUnchecked.
+	wireNodes, err := txMap.WalkWireNodes()
+	if err != nil {
+		r.logger.Warn("failed to walk tx-set SHAMap for serve",
+			"error", err, "peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]))
+		return
+	}
+
+	nodes := make([]message.LedgerNode, 0, len(wireNodes))
+	for _, n := range wireNodes {
+		nodes = append(nodes, message.LedgerNode{
+			NodeID:   n.NodeID,
+			NodeData: n.Data,
+		})
 	}
 
 	resp := &message.LedgerData{
@@ -837,7 +870,8 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 	r.logger.Debug("served tx-set to peer",
 		"peer", peerID,
 		"txset", fmt.Sprintf("%x", txSetID[:8]),
-		"txs", len(blobs))
+		"shamap_nodes", len(nodes),
+		"txs", len(ts.Txs()))
 }
 
 // handleTxSetData consumes a TMLedgerData{type=liTS_CANDIDATE} response

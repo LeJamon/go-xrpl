@@ -111,37 +111,49 @@ func (ts *TxSetImpl) Bytes() []byte {
 // matching rippled's approach. The root hash of a SHAMap containing
 // all transactions keyed by their hash is the tx set ID.
 func computeTxSetID(txBlobs [][]byte) consensus.TxSetID {
-	if len(txBlobs) == 0 {
-		// Empty tx set: return the empty SHAMap hash
-		txMap, err := shamap.New(shamap.TypeTransaction)
-		if err != nil {
-			return consensus.TxSetID{}
-		}
-		hash, err := txMap.Hash()
-		if err != nil {
-			return consensus.TxSetID{}
-		}
-		return consensus.TxSetID(hash)
-	}
-
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
+	txMap, err := buildTxSetSHAMap(txBlobs)
+	if err != nil || txMap == nil {
 		return consensus.TxSetID{}
-	}
-	for _, blob := range txBlobs {
-		txID := computeTxID(blob)
-		if putErr := txMap.PutWithNodeType([32]byte(txID), blob, shamap.NodeTypeTransactionNoMeta); putErr != nil {
-			// Fallback: use Put (generic key-value) if the blob is too small
-			// for a proper transaction leaf. This handles test scenarios with
-			// minimal blobs while real transactions always pass.
-			_ = txMap.Put([32]byte(txID), blob)
-		}
 	}
 	hash, err := txMap.Hash()
 	if err != nil {
 		return consensus.TxSetID{}
 	}
 	return consensus.TxSetID(hash)
+}
+
+// buildTxSetSHAMap constructs the canonical tx-set SHAMap (the same
+// tree whose root hash is the tx-set ID) from the raw transaction
+// blobs. Exported via TxSetImpl.BuildSHAMap so the serve-tx-set
+// path can walk the tree to emit (NodeID, Data) pairs on the wire
+// — rippled's expected liTS_CANDIDATE response shape per
+// PeerImp::processLedgerRequest + TransactionAcquire::takeNodes.
+//
+// Falls back to shamap.Put for blobs too small for a proper tx leaf
+// so unit-test fixtures with synthetic short blobs still build.
+func buildTxSetSHAMap(txBlobs [][]byte) (*shamap.SHAMap, error) {
+	txMap, err := shamap.New(shamap.TypeTransaction)
+	if err != nil {
+		return nil, err
+	}
+	for _, blob := range txBlobs {
+		txID := computeTxID(blob)
+		if putErr := txMap.PutWithNodeType([32]byte(txID), blob, shamap.NodeTypeTransactionNoMeta); putErr != nil {
+			if err := txMap.Put([32]byte(txID), blob); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return txMap, nil
+}
+
+// BuildSHAMap reconstructs the tx-set's canonical SHAMap from the
+// cached blobs. The map is built fresh every call (no per-set
+// cache) since serveTxSet currently runs only on inbound requests
+// — if that becomes hot the result is straightforward to memoize
+// on TxSetImpl.
+func (ts *TxSetImpl) BuildSHAMap() (*shamap.SHAMap, error) {
+	return buildTxSetSHAMap(ts.txs)
 }
 
 // computeTxID computes the SHA-512Half of a transaction blob

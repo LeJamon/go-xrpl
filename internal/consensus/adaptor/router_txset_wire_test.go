@@ -79,12 +79,37 @@ func decodeFrame(t *testing.T, frame []byte) (message.MessageType, message.Messa
 }
 
 // TestRouter_GetLedger_TsCandidate_ServesCachedTxSet pins the
-// serve-side wire shape for issue #401: when a peer asks for the
-// contents of a tx set we have cached, we MUST reply with
-// TMLedgerData carrying type=liTS_CANDIDATE, ledger_hash=<txSetID>,
-// and one node per tx blob. Mirrors rippled's PeerImp::getTxSet
-// (PeerImp.cpp:3255-3287). Without this branch goxrpl can't relay
-// peer-acquired tx sets, so dispute-convergence is one-way.
+// SHAMap-node wire shape for liTS_CANDIDATE responses. Rippled's
+// PeerImp::processLedgerRequest (PeerImp.cpp:3304-3411) walks the
+// tx-set SHAMap via getNodeFat(*shaMapNodeId, data, fatLeaves=false,
+// queryDepth) and emits each entry as
+//   node->set_nodeid(d.first.getRawString())
+//   node->set_nodedata(d.second)
+// — a stream of (SHAMapNodeID, wire-serialized SHAMap node) pairs,
+// NOT raw tx blobs. The consumer (TransactionAcquire::takeNodes,
+// TransactionAcquire.cpp:175-235) requires that shape: line 203
+// checks d.first.isRoot() before AddRootNode, line 217 calls
+// mMap->addKnownNode(d.first, ...) which rejects empty NodeIDs.
+//
+// Prior to the fix, serveTxSet emitted LedgerNode{NodeData: blob}
+// per raw transaction blob with NodeID empty — wire-incompatible
+// with rippled AND with goxrpl's own handleTxSetData consumer.
+// The bug was masked in the 3-rippled + 2-goxrpl soak because
+// requestors fan out across peers and rippled's serve produces
+// the correct shape; the goxrpl serve path was never the only
+// available source. A goxrpl-majority deployment, or any peer
+// whose only candidate source is a goxrpl node, hit the bug.
+//
+// Properties pinned by this test:
+//  1. resp.InfoType == liTS_CANDIDATE, resp.LedgerHash == txSetID
+//  2. Every Node carries a non-empty NodeID (33 bytes, matching
+//     SHAMapNodeID::getRawString).
+//  3. The first Node is the SHAMap root (33 zero bytes) — pre-order
+//     traversal so the consumer can AddRootNode before any
+//     AddKnownNodeUnchecked.
+//  4. Feeding the response back through a fresh SHAMap
+//     reconstructs the original blobs — i.e. the wire format
+//     round-trips through the canonical consumer path.
 func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 	engine := &mockEngine{}
 	adaptor, rs := newTxSetWireAdaptor(t)
@@ -96,11 +121,15 @@ func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 	defer cancel()
 	go router.Run(ctx)
 
-	// Seed three tx blobs into the adaptor's cache so the lookup hits.
+	// Use 16-byte blobs so they satisfy the SHAMap transaction-leaf
+	// minimum (real tx blobs are larger) and exercise the
+	// PutWithNodeType path, not the small-blob fallback. Distinct
+	// first byte gives the blobs distinct tx hashes so they land in
+	// different SHAMap branches.
 	blobs := [][]byte{
-		{0xAA, 0x01, 0x02, 0x03},
-		{0xBB, 0x10, 0x20, 0x30},
-		{0xCC, 0xFF, 0xEE, 0xDD},
+		bytes.Repeat([]byte{0x11}, 16),
+		bytes.Repeat([]byte{0x55}, 16),
+		bytes.Repeat([]byte{0x99}, 16),
 	}
 	ts, err := adaptor.BuildTxSet(blobs)
 	require.NoError(t, err)
@@ -117,7 +146,6 @@ func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 		Payload: encodePayload(t, req),
 	}
 
-	// Wait for the router to process the request.
 	require.Eventually(t, func() bool {
 		return len(rs.sentTo(7)) > 0
 	}, time.Second, 10*time.Millisecond, "router did not respond to liTS_CANDIDATE request")
@@ -132,16 +160,47 @@ func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 
 	assert.Equal(t, message.LedgerInfoTsCandidate, resp.InfoType)
 	assert.Equal(t, wantID[:], resp.LedgerHash)
-	require.Len(t, resp.Nodes, len(blobs), "one node per tx blob")
-	// Order is whatever ts.Txs() returns; verify the set matches by
-	// hashing into a small membership map keyed on the blob contents.
-	got := make(map[string]bool, len(resp.Nodes))
-	for _, n := range resp.Nodes {
-		got[string(n.NodeData)] = true
+
+	// Wire-shape: every node must carry a 33-byte SHAMapNodeID, and
+	// the first node must be the root (all zeros).
+	require.NotEmpty(t, resp.Nodes, "must include at least the root")
+	for i, n := range resp.Nodes {
+		require.Len(t, n.NodeID, 33,
+			"node[%d] NodeID must be 33 bytes (matches SHAMapNodeID::getRawString); "+
+				"empty NodeIDs are rejected by TransactionAcquire::takeNodes", i)
+		require.NotEmpty(t, n.NodeData, "node[%d] NodeData must be non-empty", i)
 	}
-	for _, b := range blobs {
-		assert.True(t, got[string(b)], "response missing blob %x", b)
+	rootID := resp.Nodes[0].NodeID
+	for _, b := range rootID {
+		require.Equal(t, byte(0), b,
+			"first node must be SHAMap root (NodeID = 33 zero bytes); "+
+				"pre-order is required so AddRootNode fires before AddKnownNodeUnchecked")
 	}
+
+	// Round-trip: feed the response back through SHAMap sync
+	// reconstruction (the same path handleTxSetData uses on inbound).
+	// If the wire bytes carry the canonical tx-set, FinishSync
+	// closes cleanly and the resulting root hash matches wantID.
+	reconstructed, err := shamap.New(shamap.TypeTransaction)
+	require.NoError(t, err)
+	require.NoError(t, reconstructed.StartSync())
+	require.NoError(t,
+		reconstructed.AddRootNode([32]byte(wantID), resp.Nodes[0].NodeData),
+		"AddRootNode must accept the served root payload")
+	for i := 1; i < len(resp.Nodes); i++ {
+		require.NoError(t,
+			reconstructed.AddKnownNodeUnchecked(resp.Nodes[i].NodeData),
+			"AddKnownNodeUnchecked must accept node[%d]", i)
+	}
+	require.NoError(t, reconstructed.FinishSync(),
+		"FinishSync must succeed — if this fails, the served wire bytes "+
+			"don't form a complete SHAMap and the consumer would stall on "+
+			"GetMissingNodes follow-ups")
+	gotHash, err := reconstructed.Hash()
+	require.NoError(t, err)
+	assert.Equal(t, wantID[:], gotHash[:],
+		"reconstructed tx-set hash must match the original — "+
+			"if this fails the wire bytes lost information across serve+consume")
 }
 
 // TestRouter_GetLedger_TsCandidate_UnknownTxSet_NoResponse pins that
