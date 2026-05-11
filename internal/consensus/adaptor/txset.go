@@ -24,13 +24,14 @@ import (
 //     The two methods walk identically, so callers can zip them.
 //   - Bytes:               O(N) walk.
 //
-// SHAMap errors. The shamap package only returns errors when the map is
-// in StateInvalid (a corrupted/poisoned state we never put it into
-// here) — Has/Hash/Delete are otherwise infallible. We treat any error
-// as "set is broken, fail open": Contains returns false, ID returns the
-// zero hash. The zero hash collides with the canonical hash of the
-// empty SHAMap, which is acceptable because reaching StateInvalid is a
-// programmer-error path that rippled covers with XRPL_ASSERT.
+// SHAMap errors. For an unbacked SHAMap that stays in StateModifying —
+// which is how we use it here — the only error source on Has/Hash is
+// StateInvalid, which TxSetImpl never enters. (Backed maps additionally
+// propagate I/O errors from descend(); mutators reject StateImmutable
+// and StateSyncing.) Contains treats any such error as "fail open"
+// (false); ID treats it as the zero hash, which collides with the
+// canonical hash of the empty SHAMap. Reaching that path is a
+// programmer-error condition that rippled covers with XRPL_ASSERT.
 //
 // Aliasing. SHAMap() exposes the live backing map. Add and Remove
 // mutate it in place — there is no copy-on-write. Callers that hold a
@@ -40,23 +41,36 @@ import (
 // avoids this by snapshotting on every MutableTxSet round-trip
 // (RCLCxTx.h:78,119); replicating that would require SHAMap COW which
 // we do not yet support.
+//
+// Concurrency. The backing *shamap.SHAMap is internally lock-protected,
+// but TxSetImpl maintains a shadow `count` field for O(1) Size(); the
+// mutex below brackets count mutations against Size() reads. Rippled
+// has no parallel counter (RCLTxSet exposes no size method at all —
+// RCLCxTx.h:62-189); the divergence exists because our consensus
+// engine logs and gates on tx counts from hot paths, so we pay the
+// extra field rather than walk the tree.
 type TxSetImpl struct {
 	txMap *shamap.SHAMap
+	mu    sync.Mutex
 	count int
 }
 
 // NewTxSet creates a TxSet from raw transaction blobs. The ID is the
 // SHAMap root hash, matching rippled's canonical tx-set hashing.
 //
-// Returns an error if any blob is rejected by the backing SHAMap
-// (e.g. < 12 bytes — see shamap/leaf_node.go). Rippled never silently
-// shrinks a tx-set during construction (RCLCxTx.h:87-91), and a
-// truncated set would compute the wrong root hash and break consensus.
+// Returns an error if any blob is rejected by the backing SHAMap. The
+// only such gate today is the goxrpl-specific <12-byte rejection in
+// shamap/leaf_node.go's NewTransactionLeafNode (rippled's
+// SHAMap::addGiveItem has no size check — it validates blobs upstream
+// via STTx). Real transaction blobs are far larger than 12 bytes, so
+// this branch is unreachable in production; we surface it as an error
+// rather than silently dropping the blob because a truncated set
+// computes the wrong root hash and would break consensus.
 //
-// Panics if the backing SHAMap cannot even be constructed — mirrors
-// rippled's XRPL_ASSERT(map_) in RCLTxSet (RCLCxTx.h:111). A nil
-// tx-set is unrecoverable; consensus would silently no-op on every
-// subsequent Add/Contains/ID call.
+// Panics if shamap.New itself fails. shamap.New(TypeTransaction) is
+// unconditional today (shamap/shamap.go:82-93), so the panic is
+// unreachable — it exists as a Go-idiomatic assertion against future
+// shamap changes that might grow an error return.
 func NewTxSet(txBlobs [][]byte) (*TxSetImpl, error) {
 	txMap, err := shamap.New(shamap.TypeTransaction)
 	if err != nil {
@@ -113,38 +127,57 @@ func (ts *TxSetImpl) Contains(id consensus.TxID) bool {
 // RCLTxSet::MutableTxSet::insert which uses tnTRANSACTION_NM only
 // (RCLCxTx.h:90) — there is no untyped fallback.
 //
+// Has errors are propagated (unlike Contains, which fails open) — the
+// mutation path is where SHAMap state transitions surface, and a
+// surprised Has on a corrupted root is more useful as a diagnostic
+// than as a silent fall-through into PutWithNodeType.
+//
 // Invalidates any pointer previously returned by SHAMap(): the
 // underlying tree is mutated in place. See the TxSetImpl doc comment
 // for the aliasing contract.
 func (ts *TxSetImpl) Add(tx []byte) error {
 	txID := computeTxID(tx)
 	key := [32]byte(txID)
-	if ok, _ := ts.txMap.Has(key); ok {
+	ok, err := ts.txMap.Has(key)
+	if err != nil {
+		return err
+	}
+	if ok {
 		return nil
 	}
 	if err := ts.txMap.PutWithNodeType(key, tx, shamap.NodeTypeTransactionNoMeta); err != nil {
 		return err
 	}
+	ts.mu.Lock()
 	ts.count++
+	ts.mu.Unlock()
 	return nil
 }
 
-// Remove deletes a transaction by ID. Invalidates any pointer
-// previously returned by SHAMap(); see the TxSetImpl doc comment.
+// Remove deletes a transaction by ID. Propagates Has errors for the
+// same reason Add does. Invalidates any pointer previously returned
+// by SHAMap(); see the TxSetImpl doc comment.
 func (ts *TxSetImpl) Remove(id consensus.TxID) error {
 	key := [32]byte(id)
-	ok, _ := ts.txMap.Has(key)
+	ok, err := ts.txMap.Has(key)
+	if err != nil {
+		return err
+	}
 	if !ok {
 		return nil
 	}
 	if err := ts.txMap.Delete(key); err != nil {
 		return err
 	}
+	ts.mu.Lock()
 	ts.count--
+	ts.mu.Unlock()
 	return nil
 }
 
 func (ts *TxSetImpl) Size() int {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
 	return ts.count
 }
 

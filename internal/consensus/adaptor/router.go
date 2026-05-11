@@ -823,12 +823,8 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 		return
 	}
 
+	// SHAMap is non-nil post-NewTxSet (NewTxSet panics otherwise).
 	txMap := ts.SHAMap()
-	if txMap == nil {
-		r.logger.Warn("tx-set has no SHAMap to serve",
-			"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]))
-		return
-	}
 
 	queryDepth := int(req.QueryDepth)
 	if queryDepth == 0 {

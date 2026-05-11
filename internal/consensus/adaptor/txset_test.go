@@ -128,6 +128,48 @@ func TestTxSet_RejectsInvalidBlobs(t *testing.T) {
 	assert.Nil(t, ts, "failed construction must not return a partial tx-set")
 }
 
+// TestTxSet_ConcurrentSizeReader pins that Size() is safe to call
+// while a single writer goroutine drives Add/Remove. The shadow
+// `count` field is shielded by an internal mutex; without it the
+// race detector would flag the increment vs. read. Run with
+// `go test -race`.
+func TestTxSet_ConcurrentSizeReader(t *testing.T) {
+	const ops = 200
+	blobs := make([][]byte, ops)
+	for i := range blobs {
+		blobs[i] = makeBlob(uint32(i + 1))
+	}
+
+	ts, err := NewTxSet(nil)
+	require.NoError(t, err)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = ts.Size()
+			}
+		}
+	}()
+
+	for _, blob := range blobs {
+		require.NoError(t, ts.Add(blob))
+	}
+	for i := 0; i < ops/2; i++ {
+		require.NoError(t, ts.Remove(computeTxID(blobs[i])))
+	}
+	close(stop)
+	<-done
+
+	assert.Equal(t, ops-ops/2, ts.Size())
+}
+
 // TestTxSet_BytesIsCanonical pins that the Bytes() framing walks
 // leaves in canonical order so the serialized form is independent
 // of insertion order.
