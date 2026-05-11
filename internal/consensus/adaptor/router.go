@@ -861,7 +861,7 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 		"peer", peerID,
 		"txset", fmt.Sprintf("%x", txSetID[:8]),
 		"shamap_nodes", len(nodes),
-		"txs", len(ts.Txs()),
+		"txs", ts.Size(),
 		"query_depth", queryDepth,
 		"requested_nodes", len(req.NodeIDs))
 }

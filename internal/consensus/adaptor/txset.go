@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"bytes"
+	"fmt"
 	"sync"
 
 	"github.com/LeJamon/goXRPLd/crypto/common"
@@ -29,13 +30,17 @@ type TxSetImpl struct {
 
 // NewTxSet creates a TxSet from raw transaction blobs. The ID is the
 // SHAMap root hash, matching rippled's canonical tx-set hashing.
+//
+// Panics if the backing SHAMap cannot be constructed — mirrors
+// rippled's XRPL_ASSERT(map_) in RCLTxSet (RCLCxTx.h:111). A nil
+// tx-set is unrecoverable: consensus would silently no-op on every
+// subsequent Add/Contains/ID call.
 func NewTxSet(txBlobs [][]byte) *TxSetImpl {
-	ts := &TxSetImpl{}
 	txMap, err := shamap.New(shamap.TypeTransaction)
 	if err != nil {
-		return ts
+		panic(fmt.Errorf("NewTxSet: shamap.New(TypeTransaction): %w", err))
 	}
-	ts.txMap = txMap
+	ts := &TxSetImpl{txMap: txMap}
 	for _, blob := range txBlobs {
 		_ = ts.Add(blob)
 	}
@@ -43,9 +48,6 @@ func NewTxSet(txBlobs [][]byte) *TxSetImpl {
 }
 
 func (ts *TxSetImpl) ID() consensus.TxSetID {
-	if ts.txMap == nil {
-		return consensus.TxSetID{}
-	}
 	h, err := ts.txMap.Hash()
 	if err != nil {
 		return consensus.TxSetID{}
@@ -56,9 +58,6 @@ func (ts *TxSetImpl) ID() consensus.TxSetID {
 // Txs returns every transaction blob in canonical key order. The
 // ordering matches TxIDs() so callers can zip the two slices.
 func (ts *TxSetImpl) Txs() [][]byte {
-	if ts.txMap == nil {
-		return nil
-	}
 	result := make([][]byte, 0, ts.count)
 	_ = ts.txMap.ForEach(func(it *shamap.Item) bool {
 		result = append(result, it.Data())
@@ -69,9 +68,6 @@ func (ts *TxSetImpl) Txs() [][]byte {
 
 // TxIDs returns every txID in canonical key order, parallel to Txs().
 func (ts *TxSetImpl) TxIDs() []consensus.TxID {
-	if ts.txMap == nil {
-		return nil
-	}
 	result := make([]consensus.TxID, 0, ts.count)
 	_ = ts.txMap.ForEach(func(it *shamap.Item) bool {
 		key := it.Key()
@@ -82,38 +78,27 @@ func (ts *TxSetImpl) TxIDs() []consensus.TxID {
 }
 
 func (ts *TxSetImpl) Contains(id consensus.TxID) bool {
-	if ts.txMap == nil {
-		return false
-	}
 	ok, err := ts.txMap.Has([32]byte(id))
 	return err == nil && ok
 }
 
+// Add inserts a transaction blob into the set. Mirrors rippled's
+// RCLTxSet::MutableTxSet::insert which uses tnTRANSACTION_NM only
+// (RCLCxTx.h:90) — there is no untyped fallback.
 func (ts *TxSetImpl) Add(tx []byte) error {
-	if ts.txMap == nil {
-		return nil
-	}
 	txID := computeTxID(tx)
 	key := [32]byte(txID)
 	if ok, _ := ts.txMap.Has(key); ok {
 		return nil
 	}
-	// Prefer the typed leaf path; fall back to the untyped Put for
-	// callers that work around CreateLeafNode failures on short
-	// fixture blobs.
 	if err := ts.txMap.PutWithNodeType(key, tx, shamap.NodeTypeTransactionNoMeta); err != nil {
-		if err2 := ts.txMap.Put(key, tx); err2 != nil {
-			return err2
-		}
+		return err
 	}
 	ts.count++
 	return nil
 }
 
 func (ts *TxSetImpl) Remove(id consensus.TxID) error {
-	if ts.txMap == nil {
-		return nil
-	}
 	key := [32]byte(id)
 	ok, _ := ts.txMap.Has(key)
 	if !ok {
@@ -133,9 +118,6 @@ func (ts *TxSetImpl) Size() int {
 // Bytes returns the tx blobs concatenated with a 4-byte length prefix
 // each, walked in canonical SHAMap key order.
 func (ts *TxSetImpl) Bytes() []byte {
-	if ts.txMap == nil {
-		return nil
-	}
 	var buf bytes.Buffer
 	_ = ts.txMap.ForEach(func(it *shamap.Item) bool {
 		blob := it.DataUnsafe()
