@@ -153,8 +153,9 @@ func (c *TestCluster) AllNodesAtLedger(seq uint32) bool {
 func createTestService(t *testing.T) *service.Service {
 	t.Helper()
 	cfg := service.Config{
-		Standalone:    false,
-		GenesisConfig: genesis.DefaultConfig(),
+		Standalone:               false,
+		GenesisConfig:            genesis.DefaultConfig(),
+		UseIncrementalOpenLedger: true, // #407: test env defaults to the new path
 	}
 	svc, err := service.New(cfg)
 	if err != nil {

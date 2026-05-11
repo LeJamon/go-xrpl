@@ -16,8 +16,9 @@ import (
 func newTestLedgerService(t *testing.T) *service.Service {
 	t.Helper()
 	cfg := service.Config{
-		Standalone:    true, // standalone for tests that expect seq 2
-		GenesisConfig: genesis.DefaultConfig(),
+		Standalone:               true, // standalone for tests that expect seq 2
+		GenesisConfig:            genesis.DefaultConfig(),
+		UseIncrementalOpenLedger: true, // #407: test env defaults to the new path
 	}
 	svc, err := service.New(cfg)
 	require.NoError(t, err)
