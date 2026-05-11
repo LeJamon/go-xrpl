@@ -21,6 +21,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/consensus/amendmentvote"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
+	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -647,12 +648,28 @@ func (a *Adaptor) GetPendingTxs() [][]byte {
 	return blobs
 }
 
-// GetProposableTxs returns the subset of pending transactions that would
-// successfully apply against parent — the rippled-faithful open-ledger filter
-// (RCLConsensus.cpp:333-349 reads openLedger().current()->txs). Each
-// fallthrough below is a structural bug; we log WARN and return raw
-// pendingTxs to keep proposing rather than wedge the round.
+// GetProposableTxs returns the subset of pending transactions that the
+// node will propose this round.
+//
+// With UseIncrementalOpenLedger on, this is a pointer-deref to the
+// persistent open-ledger view's tx set (matches rippled
+// RCLConsensus.cpp:333-349 reading openLedger().current()->txs).
+//
+// With the flag off (legacy path), this rebuilds a fresh ledger from
+// parent and runs the multi-pass open-ledger filter on every call —
+// the source of the #407 stall under tx workload.
 func (a *Adaptor) GetProposableTxs(parent consensus.Ledger) [][]byte {
+	if a.ledgerService != nil && a.ledgerService.UseIncrementalOpenLedger() {
+		return a.ledgerService.OpenLedgerTxs()
+	}
+	return a.legacyGetProposableTxs(parent)
+}
+
+// legacyGetProposableTxs is the pre-#407 propose-time filter. Kept
+// behind the flag during rollout; removed in Task 10. Each fallthrough
+// below is a structural bug; we log WARN and return raw pendingTxs to
+// keep proposing rather than wedge the round.
+func (a *Adaptor) legacyGetProposableTxs(parent consensus.Ledger) [][]byte {
 	raw := a.GetPendingTxs()
 	if len(raw) == 0 {
 		return nil
@@ -777,6 +794,11 @@ func (a *Adaptor) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
 	return ts, nil
 }
 
+// HasTx reports whether the legacy pending pool contains this tx ID.
+// Task 10 will repoint this at service.OpenLedgerHasTx when
+// UseIncrementalOpenLedger is on; for now we keep the legacy map
+// populated even when the flag is on (see AddPendingTx) so peer
+// txSet-acquire replies stay accurate.
 func (a *Adaptor) HasTx(id consensus.TxID) bool {
 	a.pendingTxsMu.RLock()
 	defer a.pendingTxsMu.RUnlock()
@@ -784,6 +806,11 @@ func (a *Adaptor) HasTx(id consensus.TxID) bool {
 	return ok
 }
 
+// GetTx returns the blob for id from the legacy pending pool. Task 10
+// will repoint this at service.OpenLedgerGetTx when
+// UseIncrementalOpenLedger is on; for now the legacy map is kept
+// populated even when the flag is on (see AddPendingTx) so peer
+// txSet-acquire replies stay accurate.
 func (a *Adaptor) GetTx(id consensus.TxID) ([]byte, error) {
 	a.pendingTxsMu.RLock()
 	defer a.pendingTxsMu.RUnlock()
@@ -794,8 +821,32 @@ func (a *Adaptor) GetTx(id consensus.TxID) ([]byte, error) {
 	return blob, nil
 }
 
-// AddPendingTx adds a transaction to the pending pool.
+// AddPendingTx adds a transaction to the pending pool. When
+// UseIncrementalOpenLedger is on, the blob also flows through
+// service.SubmitOpenLedgerTx so it lands in the persistent open view
+// (#407, mirrors NetworkOPsImp::apply → openLedger().modify in
+// NetworkOPs.cpp:1507). The legacy pendingTxs map is kept populated
+// when the flag is on so peer HasTx/GetTx replies still work; Task 10
+// removes that redundancy.
 func (a *Adaptor) AddPendingTx(blob []byte) {
+	if a.ledgerService != nil && a.ledgerService.UseIncrementalOpenLedger() {
+		res, err := a.ledgerService.SubmitOpenLedgerTx(blob)
+		if err != nil {
+			a.logger.Warn("openLedger submit failed",
+				"err", err,
+				"blob_size", len(blob),
+			)
+			return
+		}
+		// Failure: tef/tem/tel — drop, do not keep in pending pool.
+		if res == openledger.ResultFailure {
+			return
+		}
+		// Success/Retry: stay in the legacy map so HasTx/GetTx peer
+		// replies can still find this blob until Task 10 repoints them
+		// at OpenLedgerHasTx/GetTx.
+	}
+
 	txID := computeTxID(blob)
 	a.pendingTxsMu.Lock()
 	defer a.pendingTxsMu.Unlock()
@@ -1204,6 +1255,12 @@ func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
 	a.operatingMode = mode
 }
 
+// OnConsensusReached drains the legacy pending pool of included txs so
+// HasTx/GetTx peer replies don't surface them as still-pending. When
+// UseIncrementalOpenLedger is on, the persistent view has already been
+// rebuilt by Service.AcceptConsensusResult → OpenLedger.Accept; this
+// drain only maintains the legacy map. Task 10 collapses this once
+// HasTx/GetTx route through the persistent view.
 func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*consensus.Validation) {
 	// Remove only txs that were included in the closed ledger.
 	// Txs that arrived after the tx set was built stay in the pool
