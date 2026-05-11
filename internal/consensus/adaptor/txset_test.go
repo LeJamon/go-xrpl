@@ -22,8 +22,8 @@ func makeBlob(seed uint32) []byte {
 }
 
 // TestTxSet_TxsTxIDsZipped pins the contract that TxIDs[i]
-// corresponds to Txs[i] — the consensus dispute builder
-// (rcl/engine.go:813) zips the two slices.
+// corresponds to Txs[i] — the consensus dispute builder zips
+// the two slices.
 func TestTxSet_TxsTxIDsZipped(t *testing.T) {
 	blobs := make([][]byte, 32)
 	for i := range blobs {
@@ -194,11 +194,7 @@ func TestTxSet_BytesIsCanonical(t *testing.T) {
 }
 
 // BenchmarkTxSetAdd_Incremental measures the per-Add cost on
-// successively larger sets. With the SHAMap-canonical storage,
-// each Add does O(log N) work; the prior blob-slice
-// implementation rebuilt the SHAMap on every Add, giving O(N).
-//
-// Compare ns/op across the sub-benchmarks: with O(log N) Add the
+// successively larger sets. Each Add does O(log N) work, so
 // growth from N=128 → N=8192 should be ~6x (log2 of 64), not 64x.
 func BenchmarkTxSetAdd_Incremental(b *testing.B) {
 	for _, n := range []int{128, 512, 2048, 8192} {
