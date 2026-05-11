@@ -776,9 +776,9 @@ func sortCanonical(txns []tx.Transaction) {
 			return ci.Account < cj.Account
 		}
 
-		// Secondary: sequence proxy (sequence takes priority over tickets)
-		seqI := canonicalSeq(ci)
-		seqJ := canonicalSeq(cj)
+		// Secondary: sequence proxy (sequence-typed sorts before ticket-typed)
+		seqI := ci.SeqProxyKey()
+		seqJ := cj.SeqProxyKey()
 		if seqI != seqJ {
 			return seqI < seqJ
 		}
@@ -812,7 +812,7 @@ func buildCanonicalEntries(txns []tx.Transaction) []canonicalEntry {
 			txn:      txn,
 			hash:     h,
 			account:  accountID,
-			seqProxy: canonicalSeq(common),
+			seqProxy: common.SeqProxyKey(),
 		}
 	}
 	return entries
@@ -1003,46 +1003,13 @@ func getNibble(h [32]byte, pos int) int {
 	return int(h[byteIdx] & 0x0F)
 }
 
-// canonicalSeq returns the effective sequence number for canonical ordering,
-// encoding both the SeqProxy type and value into a single uint64. All
-// sequence-based txns sort before all ticket-based txns regardless of value,
-// matching rippled's SeqProxy::operator< (the type bit dominates the value).
-// This guarantees ticket-creating txns sort before ticket-consuming txns.
-// Reference: rippled SeqProxy.h operator< (Seq=0 < Ticket=1).
-func canonicalSeq(c *tx.Common) uint64 {
-	if c.Sequence != nil && *c.Sequence != 0 {
-		return uint64(*c.Sequence)
-	}
-	if c.TicketSequence != nil {
-		// Tickets sort after sequences. Use a high base to ensure this.
-		return uint64(*c.TicketSequence) + (1 << 32)
-	}
-	return 0
-}
-
-// sortHeldBySequence sorts transactions by sequence number (lowest first).
+// sortHeldBySequence sorts transactions by SeqProxy key (sequence-typed first,
+// then ticket-typed, each ordered by value), matching the canonical ordering
+// used at consensus close.
 func sortHeldBySequence(txns []tx.Transaction) {
-	for i := 0; i < len(txns)-1; i++ {
-		for j := i + 1; j < len(txns); j++ {
-			seqI := getSeqFromTx(txns[i])
-			seqJ := getSeqFromTx(txns[j])
-			if seqJ < seqI {
-				txns[i], txns[j] = txns[j], txns[i]
-			}
-		}
-	}
-}
-
-// getSeqFromTx extracts the sequence number from a transaction.
-func getSeqFromTx(txn tx.Transaction) uint32 {
-	common := txn.GetCommon()
-	if common.Sequence != nil {
-		return *common.Sequence
-	}
-	if common.TicketSequence != nil {
-		return *common.TicketSequence
-	}
-	return 0
+	sort.SliceStable(txns, func(i, j int) bool {
+		return txns[i].GetCommon().SeqProxyKey() < txns[j].GetCommon().SeqProxyKey()
+	})
 }
 
 // computeTxID generates a deterministic transaction ID for a transaction.

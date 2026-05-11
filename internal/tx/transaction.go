@@ -346,6 +346,22 @@ func (c *Common) SeqProxy() uint32 {
 	return 0
 }
 
+// SeqProxyKey encodes the SeqProxy type and value into a single uint64 suitable
+// for canonical ordering. Bits 0..31 hold the value; bit 32 is set for
+// ticket-based transactions. This guarantees all sequence-typed entries sort
+// strictly before all ticket-typed entries regardless of value, matching
+// rippled's SeqProxy::operator< (the type bit dominates the value).
+// Reference: rippled SeqProxy.h operator<, STTx::getSeqProxy().
+func (c *Common) SeqProxyKey() uint64 {
+	if c.Sequence != nil && *c.Sequence != 0 {
+		return uint64(*c.Sequence)
+	}
+	if c.TicketSequence != nil {
+		return uint64(*c.TicketSequence) | (1 << 32)
+	}
+	return 0
+}
+
 // BaseTx provides a base implementation for transactions
 type BaseTx struct {
 	Common
