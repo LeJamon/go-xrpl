@@ -27,13 +27,13 @@ type pendingTx struct {
 // type but does NOT constrain the semantic value):
 //
 //   - Consensus build path (rippled RCLConsensus.cpp:512):
-//       `CanonicalTXSet retriableTxs{result.txns.map_->getHash().as_uint256()}`
+//     `CanonicalTXSet retriableTxs{result.txns.map_->getHash().as_uint256()}`
 //     Salt = SHAMap root of the AGREED tx set. Use `computeSalt(txs)`.
 //   - Held-tx replay (rippled LedgerMaster.cpp:461):
-//       `CanonicalTXSet set(...->info().parentHash)`
+//     `CanonicalTXSet set(...->info().parentHash)`
 //     Salt = open ledger's parent (= LCL) hash.
 //   - Local-tx pickup (rippled LocalTxs.cpp:126):
-//       `CanonicalTXSet tset(uint256{})`
+//     `CanonicalTXSet tset(uint256{})`
 //     Zero salt.
 //
 // Reference: rippled CanonicalTXSet.cpp / CanonicalTXSet.h, RCLConsensus.cpp:508-514

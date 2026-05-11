@@ -111,17 +111,17 @@ type NetworkSender interface {
 // noopSender is a no-op NetworkSender for standalone or test use.
 type noopSender struct{}
 
-func (n *noopSender) BroadcastProposal(*consensus.Proposal) error              { return nil }
-func (n *noopSender) BroadcastValidation(*consensus.Validation) error          { return nil }
-func (n *noopSender) BroadcastStatusChange(*message.StatusChange) error        { return nil }
-func (n *noopSender) RelayProposal(*consensus.Proposal, uint64) error          { return nil }
-func (n *noopSender) RelayValidation(*consensus.Validation, uint64) error      { return nil }
-func (n *noopSender) UpdateRelaySlot([]byte, uint64, []uint64)                 {}
-func (n *noopSender) RequestTxSet(consensus.TxSetID) error                     { return nil }
+func (n *noopSender) BroadcastProposal(*consensus.Proposal) error         { return nil }
+func (n *noopSender) BroadcastValidation(*consensus.Validation) error     { return nil }
+func (n *noopSender) BroadcastStatusChange(*message.StatusChange) error   { return nil }
+func (n *noopSender) RelayProposal(*consensus.Proposal, uint64) error     { return nil }
+func (n *noopSender) RelayValidation(*consensus.Validation, uint64) error { return nil }
+func (n *noopSender) UpdateRelaySlot([]byte, uint64, []uint64)            {}
+func (n *noopSender) RequestTxSet(consensus.TxSetID) error                { return nil }
 func (n *noopSender) RequestTxSetMissingNodes(consensus.TxSetID, [][]byte) error {
 	return nil
 }
-func (n *noopSender) RequestLedger(consensus.LedgerID) error { return nil }
+func (n *noopSender) RequestLedger(consensus.LedgerID) error                   { return nil }
 func (n *noopSender) RequestLedgerByHashAndSeq([32]byte, uint32) error         { return nil }
 func (n *noopSender) RequestLedgerBaseFromPeer(uint64, [32]byte, uint32) error { return nil }
 func (n *noopSender) RequestReplayDelta(uint64, [32]byte) error                { return nil }

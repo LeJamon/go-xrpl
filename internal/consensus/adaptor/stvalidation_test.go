@@ -495,7 +495,7 @@ func TestValidationToMessage_NewValidationStillSerializes(t *testing.T) {
 	msg := ValidationToMessage(v)
 	require.NotEmpty(t, msg.Validation)
 	require.NotEmpty(t, v.Raw, "v.Raw must be cached after serialization")
-	assert.Equal(t, []byte(msg.Validation), v.Raw,
+	assert.Equal(t, msg.Validation, v.Raw,
 		"cached Raw must match the bytes emitted on the wire")
 }
 

@@ -176,8 +176,8 @@ func TestServeTxSet_BadNodeID_Skipped(t *testing.T) {
 	got := buildTxSetReplyNodes(
 		txMap,
 		[][]byte{
-			{0xAA, 0xBB},   // too short
-			rootNodeID(),   // valid
+			{0xAA, 0xBB},     // too short
+			rootNodeID(),     // valid
 			make([]byte, 50), // too long
 		},
 		1, false, silentLogger{}, 7, consensus.TxSetID(txSetID),

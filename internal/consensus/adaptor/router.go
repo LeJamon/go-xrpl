@@ -481,7 +481,6 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	_ = lastSeen
 }
 
-
 func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	decoded, err := message.Decode(message.TypeValidation, msg.Payload)
 	if err != nil {

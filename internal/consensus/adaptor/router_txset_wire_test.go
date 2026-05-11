@@ -83,8 +83,10 @@ func decodeFrame(t *testing.T, frame []byte) (message.MessageType, message.Messa
 // PeerImp::processLedgerRequest (PeerImp.cpp:3304-3411) walks the
 // tx-set SHAMap via getNodeFat(*shaMapNodeId, data, fatLeaves=false,
 // queryDepth) and emits each entry as
-//   node->set_nodeid(d.first.getRawString())
-//   node->set_nodedata(d.second)
+//
+//	node->set_nodeid(d.first.getRawString())
+//	node->set_nodedata(d.second)
+//
 // — a stream of (SHAMapNodeID, wire-serialized SHAMap node) pairs,
 // NOT raw tx blobs. The consumer (TransactionAcquire::takeNodes,
 // TransactionAcquire.cpp:175-235) requires that shape: line 203

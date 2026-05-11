@@ -2387,7 +2387,7 @@ func TestAcceptLedger_NoCloseTimeConsensus_DeterministicFallback(t *testing.T) {
 	// Sanity check: the local clock was skewed far enough that a
 	// regression would be unmistakable.
 	if got.Equal(adaptor.now) {
-		t.Fatalf("close time matches local clock — fallback path is "+
+		t.Fatalf("close time matches local clock — fallback path is " +
 			"using CloseTimes.Self (regression of #401 root-cause fix)")
 	}
 }
