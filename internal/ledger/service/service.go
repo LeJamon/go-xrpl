@@ -2422,4 +2422,3 @@ func (s *Service) GetPendingTxBlobs() [][]byte {
 	}
 	return blobs
 }
-
