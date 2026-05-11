@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
 	"github.com/LeJamon/goXRPLd/shamap"
 	"github.com/LeJamon/goXRPLd/storage/nodestore"
@@ -51,6 +52,13 @@ type Config struct {
 	// Logger is the logger for the ledger service.
 	// If nil, xrpllog.Discard() is used.
 	Logger xrpllog.Logger
+
+	// UseIncrementalOpenLedger toggles the rippled-faithful open-ledger
+	// pipeline (#407). When true, tx ingress flows through
+	// OpenLedger.Modify and propose-time reads OpenLedger.Current().Txs().
+	// When false (default during rollout), the legacy raw pendingTxs map
+	// + per-propose FilterApplicableTxs is used.
+	UseIncrementalOpenLedger bool
 }
 
 // DefaultConfig returns the default service configuration
@@ -199,6 +207,10 @@ type Service struct {
 	// serverStateFunc optionally provides the operating mode string for server_info.
 	// Set by the consensus adaptor after startup.
 	serverStateFunc func() string
+
+	// openLedgerView is the persistent open-ledger view used when
+	// UseIncrementalOpenLedger is true. Nil otherwise.
+	openLedgerView *openledger.OpenLedger
 }
 
 // New creates a new LedgerService
@@ -325,6 +337,13 @@ func (s *Service) Start() error {
 	// Reset pending transactions
 	s.pendingTxs = nil
 
+	// Initialise the persistent open-ledger view when the rippled-
+	// faithful pipeline is enabled (#407). Anchored on the freshly
+	// constructed closedLedger so Current()'s seq matches s.openLedger.
+	if err := s.rebuildOpenLedgerViewLocked(); err != nil {
+		return err
+	}
+
 	s.logger.Info("Ledger service started",
 		"standalone", s.config.Standalone,
 		"openLedger", s.openLedger.Sequence(),
@@ -332,6 +351,180 @@ func (s *Service) Start() error {
 	)
 
 	return nil
+}
+
+// rebuildOpenLedgerViewLocked rebuilds s.openLedgerView from s.closedLedger.
+// No-op when UseIncrementalOpenLedger is off; clears the field when
+// closedLedger is nil. Caller must hold s.mu (write).
+//
+// Called from Start and from adopt-from-peer paths where a *new*
+// closedLedger replaces the old one. The normal consensus close path
+// uses OpenLedger.Accept instead — see AcceptConsensusResult.
+func (s *Service) rebuildOpenLedgerViewLocked() error {
+	if !s.config.UseIncrementalOpenLedger {
+		return nil
+	}
+	if s.closedLedger == nil {
+		s.openLedgerView = nil
+		return nil
+	}
+	ov, err := openledger.New(s.closedLedger, openledger.Config{
+		NetworkID: s.config.NetworkID,
+		Logger:    s.logger,
+	})
+	if err != nil {
+		return fmt.Errorf("rebuild open-ledger view: %w", err)
+	}
+	s.openLedgerView = ov
+	return nil
+}
+
+// acceptOpenLedgerViewLocked invokes OpenLedger.Accept on the LCL
+// transition from the prior closed ledger to s.closedLedger. No-op
+// when the flag is off or the view is uninitialised. closedSeq is
+// passed in for log context only.
+//
+// retriesFirst is false (disputes-first replay is not tracked yet);
+// locals is nil (LocalTxs port is a future workitem — see Task 4 spec
+// Step 5). Caller must hold s.mu.
+func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32) {
+	if !s.config.UseIncrementalOpenLedger || s.openLedgerView == nil {
+		return
+	}
+	if s.closedLedger == nil {
+		return
+	}
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
+	cfg := openledger.ApplyConfig{
+		BaseFee:          baseFee,
+		ReserveBase:      reserveBase,
+		ReserveIncrement: reserveIncrement,
+		NetworkID:        s.config.NetworkID,
+		Logger:           s.config.Logger,
+	}
+	var retries []openledger.PendingTx
+	if err := s.openLedgerView.Accept(s.closedLedger, nil, false, &retries, cfg); err != nil {
+		s.logger.Error("openLedger.Accept failed", "err", err, "seq", closedSeq)
+	}
+	if len(retries) > 0 {
+		s.logger.Info("openLedger.Accept produced retries",
+			"count", len(retries),
+			"seq", closedSeq,
+		)
+	}
+}
+
+// applyConfigLocked builds an openledger.ApplyConfig from the current
+// closed ledger's fees. Caller must hold s.mu (read lock is sufficient).
+func (s *Service) applyConfigLocked() (openledger.ApplyConfig, error) {
+	if s.closedLedger == nil {
+		return openledger.ApplyConfig{}, ErrNoClosedLedger
+	}
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
+	return openledger.ApplyConfig{
+		BaseFee:          baseFee,
+		ReserveBase:      reserveBase,
+		ReserveIncrement: reserveIncrement,
+		LedgerSequence:   s.closedLedger.Sequence() + 1,
+		NetworkID:        s.config.NetworkID,
+		Logger:           s.config.Logger,
+	}, nil
+}
+
+// UseIncrementalOpenLedger reports whether the incremental open-ledger
+// pipeline is active. Used by consensus/adaptor to branch ingress and
+// propose-time queries.
+func (s *Service) UseIncrementalOpenLedger() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.UseIncrementalOpenLedger
+}
+
+// SubmitOpenLedgerTx routes a tx blob through the persistent OpenLedger
+// view (#407). Mirrors NetworkOPsImp::apply → openLedger().modify
+// (NetworkOPs.cpp:1507). Returns the per-tx classification.
+//
+// When UseIncrementalOpenLedger is off, this returns ResultFailure with
+// a descriptive error — callers must check the flag or rely on the
+// adaptor's branching to avoid this path.
+func (s *Service) SubmitOpenLedgerTx(blob []byte) (openledger.Result, error) {
+	s.mu.RLock()
+	ov := s.openLedgerView
+	cfg, cfgErr := s.applyConfigLocked()
+	s.mu.RUnlock()
+
+	if ov == nil {
+		return openledger.ResultFailure, errors.New("openLedgerView not initialised")
+	}
+	if cfgErr != nil {
+		return openledger.ResultFailure, cfgErr
+	}
+	ptx, err := openledger.ParsePendingTx(blob)
+	if err != nil {
+		return openledger.ResultFailure, err
+	}
+	_, res := ov.Submit(ptx, cfg)
+	return res, nil
+}
+
+// OpenLedgerTxs returns the raw tx blobs currently in the persistent
+// open view. Mirrors RCLConsensus.cpp:333-349 reading
+// openLedger().current()->txs. Returns nil when the flag is off or the
+// view is uninitialised.
+func (s *Service) OpenLedgerTxs() [][]byte {
+	s.mu.RLock()
+	ov := s.openLedgerView
+	s.mu.RUnlock()
+	if ov == nil {
+		return nil
+	}
+	view := ov.Current()
+	var out [][]byte
+	_ = view.ForEachTransaction(func(_ [32]byte, data []byte) bool {
+		raw, _, err := tx.SplitTxWithMetaBlob(data)
+		if err != nil {
+			return true
+		}
+		out = append(out, raw)
+		return true
+	})
+	return out
+}
+
+// OpenLedgerHasTx reports whether the persistent open view contains
+// the tx hash. Used by peer-protocol HasTx replies.
+func (s *Service) OpenLedgerHasTx(hash [32]byte) bool {
+	s.mu.RLock()
+	ov := s.openLedgerView
+	s.mu.RUnlock()
+	if ov == nil {
+		return false
+	}
+	return ov.Current().TxExists(hash)
+}
+
+// OpenLedgerGetTx returns the raw tx blob for hash if present in the
+// persistent open view.
+func (s *Service) OpenLedgerGetTx(hash [32]byte) ([]byte, bool) {
+	s.mu.RLock()
+	ov := s.openLedgerView
+	s.mu.RUnlock()
+	if ov == nil {
+		return nil, false
+	}
+	view := ov.Current()
+	var found []byte
+	_ = view.ForEachTransaction(func(h [32]byte, data []byte) bool {
+		if h == hash {
+			raw, _, err := tx.SplitTxWithMetaBlob(data)
+			if err == nil {
+				found = raw
+			}
+			return false
+		}
+		return true
+	})
+	return found, found != nil
 }
 
 // GetOpenLedger returns the current open ledger
@@ -542,6 +735,13 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 		return 0, fmt.Errorf("failed to create new open ledger: %w", err)
 	}
 	s.openLedger = newOpen
+
+	// LCL transition: rebuild the persistent open-ledger view via Accept
+	// so any tx submitted to the prior view that didn't land in the
+	// canonical reapply gets replayed. Standalone uses the same LCL-
+	// transition semantics as consensus; the only difference is the
+	// trigger (ledger_accept RPC vs consensus close).
+	s.acceptOpenLedgerViewLocked(closedSeq)
 
 	// Build ledger info for callbacks
 	ledgerInfo := &LedgerInfo{
@@ -1059,6 +1259,11 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 			return 0, fmt.Errorf("failed to create open ledger from parent: %w", err)
 		}
 		s.openLedger = newOpen
+		// Chain switch is a clean reset, not an LCL transition: rebuild
+		// the open-ledger view from scratch via New rather than Accept.
+		if err := s.rebuildOpenLedgerViewLocked(); err != nil {
+			return 0, err
+		}
 	}
 
 	if s.openLedger == nil {
@@ -1208,6 +1413,11 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		return 0, fmt.Errorf("failed to create new open ledger: %w", err)
 	}
 	s.openLedger = newOpen
+
+	// LCL transition: replay prior view's txs onto the new closed ledger
+	// via OpenLedger.Accept. Mirrors rippled's accept-time rebuild at
+	// OpenLedger.cpp:71-155.
+	s.acceptOpenLedgerViewLocked(closedSeq)
 
 	// Fire event hooks
 	ledgerInfo := &LedgerInfo{
@@ -1757,6 +1967,13 @@ func (s *Service) AdoptLedgerHeader(h *header.LedgerHeader) error {
 	s.openLedger = openLedger
 	s.needsInitialSync = false
 
+	// Adopt-from-peer is a fresh start, not an LCL transition — rebuild
+	// the open-ledger view via New rather than Accept (no prior
+	// node-local current view applies to the freshly adopted closed).
+	if err := s.rebuildOpenLedgerViewLocked(); err != nil {
+		return err
+	}
+
 	s.logger.Info("Adopted ledger from peer",
 		"seq", h.LedgerIndex,
 		"hash", fmt.Sprintf("%x", h.Hash[:8]),
@@ -1818,6 +2035,11 @@ func (s *Service) ReAdoptLedgerHeader(h *header.LedgerHeader) error {
 	}
 	s.openLedger = openLedger
 	s.pendingTxs = nil
+
+	// Re-adopt: fresh start on the peer's tip — rebuild via New.
+	if err := s.rebuildOpenLedgerViewLocked(); err != nil {
+		return err
+	}
 
 	s.logger.Info("Re-adopted ledger from peer",
 		"seq", h.LedgerIndex,
@@ -1905,6 +2127,11 @@ func (s *Service) adoptLedgerWithStateLocked(
 			return fmt.Errorf("failed to create open ledger after adopt-skip: %w", err)
 		}
 		s.openLedger = openLedger
+		if advanced {
+			if err := s.rebuildOpenLedgerViewLocked(); err != nil {
+				return err
+			}
+		}
 		canonicalHash := canonical.Hash()
 		s.logger.Info("Adopted ledger from peer (skip: validated entry kept)",
 			"seq", h.LedgerIndex,
@@ -1949,6 +2176,11 @@ func (s *Service) adoptLedgerWithStateLocked(
 			return fmt.Errorf("failed to create open ledger: %w", err)
 		}
 		s.openLedger = openLedger
+		// Forward-advance adopt = fresh start on the peer's tip.
+		// Rebuild via New so the persistent view re-anchors on adopted.
+		if err := s.rebuildOpenLedgerViewLocked(); err != nil {
+			return err
+		}
 	}
 
 	// Fire hooks.OnLedgerClosed + hooks.OnTransaction so WebSocket
