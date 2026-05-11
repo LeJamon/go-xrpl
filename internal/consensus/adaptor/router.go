@@ -467,12 +467,35 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	proposal.SuppressionHash = suppressionHash
 	firstSeen, lastSeen := r.messageSeen.observe(suppressionHash)
 
-	// Drop duplicates BEFORE the engine path — same rationale as
-	// handleValidation. Rippled's PeerImp.cpp:1730-1738 returns early
-	// on `!added` from addSuppressionPeer; we mirror that. The engine
-	// already processed the first instance; re-running OnProposal just
+	// Drop duplicates BEFORE the engine path. The engine already
+	// processed the first instance; re-running OnProposal just
 	// re-runs ECDSA verify. We still feed the IDLED-gated relay slot
 	// on dupes for squelch accounting.
+	//
+	// DELIBERATE DEVIATION from rippled: rippled tracks suppression
+	// PER (hash, peer), not per hash alone. PeerImp.cpp:1730-1738
+	// calls addSuppressionPeerWithStatus(key, id_) which returns
+	// `added=true` for a NEW (hash, peer) pair — i.e. rippled
+	// RE-runs the message handler when the same proposal arrives
+	// from a peer it hadn't been seen from before, growing per-peer
+	// slot entries on each new sender. Goxrpl's messageSeen.observe
+	// is hash-only, so a second peer's copy of the same proposal
+	// gets dropped at the dedup gate even though rippled would let
+	// it through to update slot accounting.
+	//
+	// The deviation is conservative on the verify-CPU axis (we
+	// re-verify less than rippled) and doesn't break quorum or
+	// position tracking — the FIRST arrival wired through to
+	// engine.OnProposal already counts the validator. It does shift
+	// reduce-relay slot bookkeeping vs rippled: per-(hash, peer)
+	// would feed the slot more times before the IDLED window
+	// expires. We compensate for the most important case
+	// (squelch decisions need to know which peers have a message)
+	// via PeersThatHave + UpdateRelaySlot below, but the granularity
+	// isn't identical to rippled's. If reduce-relay accuracy ever
+	// regresses, switch messageSeen to a per-(hash, peer) tracker
+	// — matching rippled exactly is a few-line change to the
+	// dedup data structure.
 	if !firstSeen {
 		if time.Since(lastSeen) < peermanagement.Idled {
 			seenPeers := r.adaptor.PeersThatHave(suppressionHash)
@@ -538,14 +561,31 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	validation.SuppressionHash = suppressionHash
 	firstSeen, lastSeen := r.messageSeen.observe(suppressionHash)
 
-	// Drop duplicates BEFORE the engine path. Rippled's PeerImp does
-	// the equivalent at `addSuppressionPeer` — if we've already seen
-	// this exact validation blob (from any peer), the engine already
-	// processed it and re-running OnValidation just re-runs the
-	// secp256k1 ECDSA verify, which dominates CPU under fan-out
-	// because every peer forwards the same blob. We still update the
-	// relay slot below so squelch accounting stays in sync — that's
-	// the rippled IDLED-window pattern unchanged.
+	// Drop duplicates BEFORE the engine path. The engine already
+	// processed the first instance; re-running OnValidation just
+	// re-runs the secp256k1 ECDSA verify, which dominates CPU under
+	// fan-out because every peer forwards the same blob. We still
+	// update the relay slot below so squelch accounting stays in
+	// sync.
+	//
+	// DELIBERATE DEVIATION from rippled: rippled tracks suppression
+	// PER (hash, peer) via PeerImp.cpp:2374-2424's
+	// addSuppressionPeerWithStatus(key, id_), which returns
+	// `added=true` for a NEW (hash, peer) pair. Rippled re-processes
+	// the same validation when it arrives from a peer it hadn't been
+	// seen from before, growing per-peer slot entries. Goxrpl's
+	// messageSeen.observe is hash-only, so a second peer's copy of
+	// the same validation gets dropped at the dedup gate even though
+	// rippled would still feed it to the relay accounting layer.
+	//
+	// The deviation is conservative on the verify-CPU axis (we
+	// re-verify less than rippled) and doesn't break quorum
+	// tracking — the FIRST arrival wired through to
+	// engine.OnValidation already counts the validator's vote.
+	// It DOES shift reduce-relay slot bookkeeping vs rippled: see
+	// the matching note in handleProposal above. If reduce-relay
+	// accuracy ever regresses, switch messageSeen to a
+	// per-(hash, peer) tracker.
 	if !firstSeen {
 		if time.Since(lastSeen) < peermanagement.Idled {
 			seenPeers := r.adaptor.PeersThatHave(suppressionHash)

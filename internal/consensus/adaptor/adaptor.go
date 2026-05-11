@@ -649,23 +649,60 @@ func (a *Adaptor) GetPendingTxs() [][]byte {
 
 // GetProposableTxs returns the subset of pending transactions that
 // would successfully apply against `parent` — the rippled-faithful
-// open-ledger filter (RCLConsensus.cpp:333-349). Used by the consensus
-// engine at proposal time so OurPosition matches what rippled's
-// validators would propose.
+// open-ledger filter. Used by the consensus engine at proposal time
+// so OurPosition matches what rippled's validators would propose.
+//
+// In rippled the equivalent boundary
+// (RCLConsensus.cpp:333-349, which reads app_.openLedger().current()->txs)
+// can't structurally fail: openLedger() asserts non-null, the txs
+// list is always materialized from the open-ledger working copy.
+// Goxrpl's plumbing has three points where the equivalent state
+// might not be available — no ledger service yet (early boot /
+// shutdown), parent not a *LedgerWrapper (programmer error in a
+// caller), or wrapper.Unwrap() returns nil (LedgerWrapper torn
+// down mid-flight). Each of those is a structural bug, not a
+// normal path. Logging a WARN on the way through makes the bug
+// visible in soak logs instead of silently surfacing as proposal
+// divergence (we'd propose raw pendingTxs, possibly containing
+// txs that don't apply, and disagree with rippled validators
+// that filtered them out).
+//
+// Returning `raw` rather than aborting the round is the
+// conservative liveness choice — a half-functional adaptor still
+// gets a proposal out, the divergence is bounded by the time it
+// takes operators to react to the log. If empirical data shows
+// the fallthroughs fire under normal operation we'll harden to
+// a hard error.
 func (a *Adaptor) GetProposableTxs(parent consensus.Ledger) [][]byte {
 	raw := a.GetPendingTxs()
 	if len(raw) == 0 {
 		return nil
 	}
 	if a.ledgerService == nil {
+		a.logger.Warn(
+			"GetProposableTxs: ledgerService unavailable — proposing raw pendingTxs unfiltered; "+
+				"divergence vs rippled openLedger().current()->txs is possible",
+			"pending_count", len(raw),
+		)
 		return raw
 	}
 	wrapper, ok := parent.(*LedgerWrapper)
 	if !ok || wrapper == nil {
+		a.logger.Warn(
+			"GetProposableTxs: parent is not *LedgerWrapper — proposing raw pendingTxs unfiltered; "+
+				"this is a structural caller bug, divergence vs rippled openLedger filter expected",
+			"parent_type", fmt.Sprintf("%T", parent),
+			"pending_count", len(raw),
+		)
 		return raw
 	}
 	parentLedger := wrapper.Unwrap()
 	if parentLedger == nil {
+		a.logger.Warn(
+			"GetProposableTxs: LedgerWrapper.Unwrap() returned nil — proposing raw pendingTxs unfiltered; "+
+				"wrapper was torn down mid-flight, divergence vs rippled openLedger filter expected",
+			"pending_count", len(raw),
+		)
 		return raw
 	}
 	return a.ledgerService.FilterApplicableTxs(parentLedger, raw)

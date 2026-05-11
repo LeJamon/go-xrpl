@@ -2391,11 +2391,18 @@ func (s *Service) GetPendingTxBlobs() [][]byte {
 // would end up in the closed ledger if these txs were accepted via
 // consensus.
 //
-// Mirrors rippled's `OpenLedger.current()->txs` filter
-// (RCLConsensus.cpp:333-349): a validator proposes only txs that
-// already applied to its open view. The pending pool is a raw relay
-// map with no apply-time filter, so without this step the initial
-// position is a superset of rippled's, causing position divergence.
+// Mirrors rippled's open-ledger multi-pass apply
+// (rippled/src/xrpld/app/ledger/OpenLedger.h:209-270, the
+// `apply` template that drives the iterative apply with held-tx
+// retry until no progress). Rippled's RCLConsensus.cpp:333-349
+// is the CONSUMER of that filter — it reads
+// `app_.openLedger().current()->txs` directly, taking the already-
+// filtered output. The filter itself lives in OpenLedger.h.
+//
+// A validator proposes only txs that already applied to its open
+// view. The pending pool is a raw relay map with no apply-time
+// filter, so without this step the initial position is a superset
+// of rippled's, causing position divergence.
 //
 // Side-effect-free: does not mutate s.openLedger, s.txIndex, or
 // s.pendingTxs. Safe to call concurrently — takes only a read lock.
