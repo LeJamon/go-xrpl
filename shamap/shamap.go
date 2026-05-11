@@ -1552,18 +1552,221 @@ func walkWireNodesRec(node Node, path [32]byte, depth int, out *[]WireNode) erro
 		if child == nil {
 			continue
 		}
-		// Branch nibble at position depth: high nibble of path[depth/2]
-		// when depth even, low nibble when odd.
-		childPath := path
-		bytePos := depth / 2
-		if depth%2 == 0 {
-			childPath[bytePos] = (childPath[bytePos] & 0x0F) | (byte(branch) << 4)
-		} else {
-			childPath[bytePos] = (childPath[bytePos] & 0xF0) | byte(branch)
-		}
+		childPath := childPathForBranch(path, depth, branch)
 		if err := walkWireNodesRec(child, childPath, depth+1, out); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// GetNodeFatByPath returns the SHAMap node identified by
+// `wantedPath` / `wantedDepth` plus its descendants out to `depth`
+// levels deep, each entry serialized for the wire as a (33-byte
+// NodeID, blob) pair. Mirrors rippled's `SHAMap::getNodeFat`
+// (rippled/src/xrpld/shamap/detail/SHAMapSync.cpp:434-525) so a
+// goxrpl serve path can reply to a partial-subtree request the
+// same way rippled does.
+//
+// Distinct from the hash-keyed `GetNodeFat(nodeHash, depth)` in
+// wire.go, which is a different lookup primitive (BFS by node
+// hash, no chain-follow optimization, no fatLeaves toggle). The
+// wire path needs SHAMapNodeID-keyed lookup because that's what
+// peers send in TMGetLedger.nodeids.
+//
+// Algorithm (matches rippled exactly):
+//
+//  1. Descend from root, picking the branch that matches `wantedPath`
+//     at each level, until we reach `wantedDepth` or the path runs
+//     out (returns nil if the requested node isn't in the tree, or
+//     if the requested node is an empty inner — both are normal
+//     "we don't have it" responses, not errors).
+//  2. Push the wanted node onto a stack with the supplied depth budget.
+//  3. Pop nodes; for each, append its serialized form to the result.
+//     For inner nodes:
+//     - Single-child shortcut: if `bc == 1`, follow the chain WITHOUT
+//       decrementing the depth budget — avoids wasting budget on
+//       linear paths in sparsely-populated subtrees.
+//     - Multi-child: descend each non-empty branch with `depth-1`
+//       (or `depth` if single-child).
+//     - Leaves at the depth boundary are included only if `fatLeaves`
+//       is true. For liTS_CANDIDATE responses, `fatLeaves=false`
+//       because (per rippled comment) "We'll already have most
+//       transactions" — but in goxrpl's typical usage the requestor
+//       is acquiring an unknown tx-set, so callers may want
+//       `fatLeaves=true` for the first request. Pass through what
+//       the caller decides.
+//
+// `wantedPath` is the 32-byte path prefix; `wantedDepth` is the
+// nibble depth of the requested node (root = 0).
+func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth int, fatLeaves bool) ([]WireNode, error) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	if sm.root == nil {
+		return nil, nil
+	}
+
+	// 1. Descend to the requested node.
+	node := Node(sm.root)
+	curDepth := 0
+	curPath := [32]byte{}
+	for node != nil && curDepth < wantedDepth {
+		inner, ok := node.(*InnerNode)
+		if !ok {
+			// Leaf reached before wantedDepth — not the requested node.
+			return nil, nil
+		}
+		branch := selectBranchForPath(wantedPath, curDepth)
+		inner.mu.RLock()
+		child := inner.children[branch]
+		inner.mu.RUnlock()
+		if child == nil {
+			return nil, nil
+		}
+		curPath = childPathForBranch(curPath, curDepth, branch)
+		node = child
+		curDepth++
+	}
+	if node == nil || curDepth != wantedDepth {
+		return nil, nil
+	}
+	// Verify path matches: the descent above only matched as far as
+	// curDepth; ensure the path nibbles agree with wantedPath.
+	if !pathPrefixEq(curPath, wantedPath, wantedDepth) {
+		return nil, nil
+	}
+	// Empty inner: rippled rejects with "peer requests empty node".
+	if inner, ok := node.(*InnerNode); ok {
+		inner.mu.RLock()
+		empty := true
+		for i := 0; i < BranchFactor; i++ {
+			if inner.children[i] != nil {
+				empty = false
+				break
+			}
+		}
+		inner.mu.RUnlock()
+		if empty {
+			return nil, nil
+		}
+	}
+
+	// 2-3. Stack walk with the depth budget.
+	type stackEntry struct {
+		node  Node
+		path  [32]byte
+		depth int
+		// budget is the remaining child-descent levels, mirroring
+		// rippled's `depth` local variable inside the while loop.
+		budget int
+	}
+	stack := []stackEntry{{node: node, path: curPath, depth: curDepth, budget: depth}}
+	var out []WireNode
+
+	for len(stack) > 0 {
+		e := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		data, err := e.node.SerializeForWire()
+		if err != nil {
+			return nil, err
+		}
+		nodeID := make([]byte, 33)
+		copy(nodeID[:32], e.path[:])
+		nodeID[32] = byte(e.depth)
+		out = append(out, WireNode{NodeID: nodeID, Data: data})
+
+		inner, ok := e.node.(*InnerNode)
+		if !ok {
+			continue
+		}
+		inner.mu.RLock()
+		bc := 0
+		for i := 0; i < BranchFactor; i++ {
+			if inner.children[i] != nil {
+				bc++
+			}
+		}
+		// Mirror rippled's gate: descend children only if budget>0
+		// or single-child (chain follow without spending budget).
+		if e.budget == 0 && bc != 1 {
+			inner.mu.RUnlock()
+			continue
+		}
+		// Iterate in reverse so popping yields ascending-branch order
+		// (matches WalkWireNodes' output ordering for the typical
+		// unit-test golden comparisons).
+		for i := BranchFactor - 1; i >= 0; i-- {
+			child := inner.children[i]
+			if child == nil {
+				continue
+			}
+			childPath := childPathForBranch(e.path, e.depth, i)
+			childInner, isInner := child.(*InnerNode)
+			if isInner && (e.budget > 1 || bc == 1) {
+				// Push: budget-1 for multi-child, unchanged for chain.
+				newBudget := e.budget - 1
+				if bc == 1 {
+					newBudget = e.budget
+				}
+				stack = append(stack, stackEntry{
+					node:   childInner,
+					path:   childPath,
+					depth:  e.depth + 1,
+					budget: newBudget,
+				})
+			} else if isInner || fatLeaves {
+				// Include directly without further descent. Inner
+				// nodes at the budget boundary are still useful
+				// (the requestor can ask for their subtrees).
+				cdata, err := child.SerializeForWire()
+				if err != nil {
+					inner.mu.RUnlock()
+					return nil, err
+				}
+				cNodeID := make([]byte, 33)
+				copy(cNodeID[:32], childPath[:])
+				cNodeID[32] = byte(e.depth + 1)
+				out = append(out, WireNode{NodeID: cNodeID, Data: cdata})
+			}
+		}
+		inner.mu.RUnlock()
+	}
+	return out, nil
+}
+
+// childPathForBranch returns the child path at depth+1 given the
+// parent path at `depth` and the branch nibble. The XRPL convention:
+// nibble at index `depth` lives in the high half of byte
+// `depth/2` when depth is even, low half when odd.
+func childPathForBranch(parentPath [32]byte, depth, branch int) [32]byte {
+	out := parentPath
+	bytePos := depth / 2
+	if depth%2 == 0 {
+		out[bytePos] = (out[bytePos] & 0x0F) | (byte(branch) << 4)
+	} else {
+		out[bytePos] = (out[bytePos] & 0xF0) | byte(branch)
+	}
+	return out
+}
+
+// selectBranchForPath returns the branch nibble at position `depth`
+// of `path`. Inverse of childPathForBranch.
+func selectBranchForPath(path [32]byte, depth int) int {
+	bytePos := depth / 2
+	if depth%2 == 0 {
+		return int(path[bytePos] >> 4)
+	}
+	return int(path[bytePos] & 0x0F)
+}
+
+// pathPrefixEq compares the first `depth` nibbles of a and b.
+func pathPrefixEq(a, b [32]byte, depth int) bool {
+	for d := 0; d < depth; d++ {
+		if selectBranchForPath(a, d) != selectBranchForPath(b, d) {
+			return false
+		}
+	}
+	return true
 }

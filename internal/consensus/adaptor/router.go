@@ -787,29 +787,76 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	}
 }
 
+// liTS_CANDIDATE serve-path caps matching rippled's
+// Tuning.h::softMaxReplyNodes / hardMaxReplyNodes
+// (rippled/src/xrpld/overlay/detail/Tuning.h:39,42). The two caps
+// bound the size of a single TMLedgerData reply for DoS protection
+// and to stay under the wire-frame size limit:
+//   - softMax: when total nodes hits this, STOP starting new
+//     subtrees from the request's nodeids list (mid-request gate).
+//   - hardMax: when total nodes hits this, STOP appending mid-
+//     subtree (truncation gate). Inside getNodeFat's result loop.
+//
+// Declared as vars (not consts) so tests can dial them down to
+// trip the boundaries with small fixtures via
+// txSetReplyCapsForTest / setTxSetReplyCapsForTest. Production
+// callers MUST NOT mutate these.
+var (
+	txSetSoftMaxReplyNodes = 8192
+	txSetHardMaxReplyNodes = 12288
+)
+
+// txSetReplyCapsForTest returns the current cap values. Test-only.
+func txSetReplyCapsForTest() (soft, hard int) {
+	return txSetSoftMaxReplyNodes, txSetHardMaxReplyNodes
+}
+
+// setTxSetReplyCapsForTest overrides the caps. Test-only — pair
+// with deferred restore via the original values from
+// txSetReplyCapsForTest.
+func setTxSetReplyCapsForTest(soft, hard int) {
+	txSetSoftMaxReplyNodes = soft
+	txSetHardMaxReplyNodes = hard
+}
+
+// shamapRootNodeIDLen is the wire length of a SHAMapNodeID
+// (SHAMapNodeID::getRawString) — 32-byte path + 1-byte depth.
+const shamapNodeIDLen = 33
+
+// defaultQueryDepth is the rippled default when the request lacks
+// a query_depth field. Rippled uses isHighLatency() ? 2 : 1
+// (PeerImp.cpp:3382). Without a latency signal we go with 2 — the
+// overspec direction; sending an extra level is harmless, sending
+// too few stalls the requestor on a follow-up round-trip.
+const defaultQueryDepth = 2
+
 // serveTxSet replies to a peer's TMGetLedger{itype=liTS_CANDIDATE}
 // with the requested tx set, encoded as
 // TMLedgerData{type=liTS_CANDIDATE, ledger_hash=<txSetID>,
 // nodes=[<(SHAMapNodeID, wire-serialized SHAMap node)>...]}.
 //
 // Mirrors rippled's PeerImp::processLedgerRequest for liTS_CANDIDATE
-// (PeerImp.cpp:3304-3411): rippled walks the tx-set SHAMap via
-// getNodeFat(*shaMapNodeId, data, fatLeaves=false, queryDepth)
-// and emits each entry as set_nodeid(rawString) + set_nodedata(blob).
-// The consumer (TransactionAcquire::takeNodes, TransactionAcquire.cpp:175-235)
-// requires that shape: it calls mMap->addKnownNode(d.first, d.second, &sf),
-// which needs a non-empty SHAMapNodeID — bare tx blobs with empty
-// NodeID are rejected.
+// (PeerImp.cpp:3304-3411):
 //
-// The earlier version of this function sent one LedgerNode per raw
-// transaction blob with NodeID empty. That worked against goxrpl's
-// own in-process unit tests but produced wire-format-incompatible
-// responses for rippled peers and even goxrpl-to-goxrpl deployments
-// (handleTxSetData below also expects SHAMap-node shape). The bug
-// was masked in the 3-rippled + 2-goxrpl soak because tx-set
-// acquisition fans out across peers — every requestor had a
-// rippled candidate source that served the right shape — but the
-// goxrpl serve path itself was wire-incompatible.
+//  1. For each requested NodeID (33-byte SHAMapNodeID), walk the
+//     subtree rooted at that node out to QueryDepth levels via
+//     SHAMap.GetNodeFatByPath (mirrors rippled's getNodeFat).
+//  2. Honour the softMax / hardMax reply-node caps as the result
+//     accumulates — soft cap aborts the outer for-loop over
+//     nodeids, hard cap aborts the inner subtree append.
+//  3. Each entry: set_nodeid(SHAMapNodeID raw bytes) +
+//     set_nodedata(serialize-for-wire).
+//
+// When the request has NO nodeids (legacy / out-of-spec callers)
+// fall back to a full pre-order walk via WalkWireNodes — the
+// previous behaviour of this function. Some goxrpl→goxrpl test
+// fixtures rely on this fallback shape; in real wire traffic a
+// rippled requestor always sends at least the root NodeID.
+//
+// The earlier version emitted one LedgerNode per raw transaction
+// blob with NodeID empty — wire-incompatible with rippled and with
+// goxrpl's own handleTxSetData consumer. See the per-line comments
+// in the previous commit (fd9d01d) for the full root-cause writeup.
 func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger) {
 	if len(req.LedgerHash) != 32 {
 		return
@@ -830,24 +877,17 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 			"error", err, "peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]))
 		return
 	}
-	// WalkWireNodes returns pre-order (root → leaves) — exactly the
-	// order TransactionAcquire::takeNodes expects: line 203's
-	// d.first.isRoot() branch must see the root first so AddRootNode
-	// fires before any AddKnownNodeUnchecked.
-	wireNodes, err := txMap.WalkWireNodes()
-	if err != nil {
-		r.logger.Warn("failed to walk tx-set SHAMap for serve",
-			"error", err, "peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]))
-		return
-	}
 
-	nodes := make([]message.LedgerNode, 0, len(wireNodes))
-	for _, n := range wireNodes {
-		nodes = append(nodes, message.LedgerNode{
-			NodeID:   n.NodeID,
-			NodeData: n.Data,
-		})
+	queryDepth := int(req.QueryDepth)
+	if queryDepth == 0 {
+		queryDepth = defaultQueryDepth
 	}
+	// liTS_CANDIDATE always uses fatLeaves=false: rippled's PeerImp
+	// hardcodes it (PeerImp.cpp:3318) on the assumption that the
+	// requestor already has most txs in its open-ledger pool.
+	const fatLeaves = false
+
+	nodes := buildTxSetReplyNodes(txMap, req.NodeIDs, queryDepth, fatLeaves, r.logger, peerID, txSetID)
 
 	resp := &message.LedgerData{
 		LedgerHash:    req.LedgerHash,
@@ -871,7 +911,106 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 		"peer", peerID,
 		"txset", fmt.Sprintf("%x", txSetID[:8]),
 		"shamap_nodes", len(nodes),
-		"txs", len(ts.Txs()))
+		"txs", len(ts.Txs()),
+		"query_depth", queryDepth,
+		"requested_nodes", len(req.NodeIDs))
+}
+
+// buildTxSetReplyNodes walks `txMap` to produce the LedgerNode
+// payload of a liTS_CANDIDATE reply, honouring the requested
+// NodeIDs/QueryDepth and the soft/hard reply-node caps.
+//
+// Split out from serveTxSet so the cap and partial-walk logic is
+// table-testable without spinning a router goroutine.
+func buildTxSetReplyNodes(
+	txMap *shamap.SHAMap,
+	requestedNodeIDs [][]byte,
+	queryDepth int,
+	fatLeaves bool,
+	logger logger,
+	peerID peermanagement.PeerID,
+	txSetID consensus.TxSetID,
+) []message.LedgerNode {
+	// Empty-nodeids fallback: full pre-order walk. Used by legacy
+	// goxrpl→goxrpl test fixtures that don't populate the field.
+	if len(requestedNodeIDs) == 0 {
+		wireNodes, err := txMap.WalkWireNodes()
+		if err != nil {
+			logger.Warn("failed to walk tx-set SHAMap for serve",
+				"error", err, "peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]))
+			return nil
+		}
+		nodes := make([]message.LedgerNode, 0, len(wireNodes))
+		for _, n := range wireNodes {
+			if len(nodes) >= txSetHardMaxReplyNodes {
+				break
+			}
+			nodes = append(nodes, message.LedgerNode{NodeID: n.NodeID, NodeData: n.Data})
+		}
+		return nodes
+	}
+
+	nodes := make([]message.LedgerNode, 0)
+	for i, rawID := range requestedNodeIDs {
+		// Soft cap: don't START a new subtree if we're already at
+		// or above 8192 nodes. Mirrors rippled's outer for-loop
+		// guard (PeerImp.cpp:3387).
+		if len(nodes) >= txSetSoftMaxReplyNodes {
+			logger.Debug("tx-set serve: soft-cap reached, stopping subtree iteration",
+				"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
+				"nodes_so_far", len(nodes), "remaining_requested", len(requestedNodeIDs)-i)
+			break
+		}
+		path, depth, ok := parseSHAMapNodeID(rawID)
+		if !ok {
+			logger.Debug("tx-set serve: bad SHAMapNodeID in request, skipping",
+				"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
+				"node_idx", i, "len", len(rawID))
+			continue
+		}
+		subtree, err := txMap.GetNodeFatByPath(path, depth, queryDepth, fatLeaves)
+		if err != nil {
+			logger.Debug("tx-set serve: GetNodeFatByPath failed, skipping",
+				"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
+				"error", err.Error())
+			continue
+		}
+		for _, n := range subtree {
+			// Hard cap: even mid-subtree, stop appending. Mirrors
+			// rippled's inner break (PeerImp.cpp:3406-3407).
+			if len(nodes) >= txSetHardMaxReplyNodes {
+				logger.Debug("tx-set serve: hard-cap reached, truncating subtree",
+					"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
+					"nodes", len(nodes))
+				return nodes
+			}
+			nodes = append(nodes, message.LedgerNode{NodeID: n.NodeID, NodeData: n.Data})
+		}
+	}
+	return nodes
+}
+
+// parseSHAMapNodeID decodes the 33-byte wire representation of a
+// SHAMapNodeID into (path, depth). Returns ok=false on any length
+// mismatch — rippled's deserializeSHAMapNodeID (PeerImp.cpp:1442)
+// rejects malformed IDs and so do we.
+func parseSHAMapNodeID(raw []byte) (path [32]byte, depth int, ok bool) {
+	if len(raw) != shamapNodeIDLen {
+		return path, 0, false
+	}
+	copy(path[:], raw[:32])
+	depth = int(raw[32])
+	if depth < 0 || depth > 64 {
+		return path, 0, false
+	}
+	return path, depth, true
+}
+
+// logger is the minimal logger surface buildTxSetReplyNodes uses.
+// Lets the helper be tested without spinning the full router.
+type logger interface {
+	Debug(msg string, args ...any)
+	Warn(msg string, args ...any)
 }
 
 // handleTxSetData consumes a TMLedgerData{type=liTS_CANDIDATE} response
