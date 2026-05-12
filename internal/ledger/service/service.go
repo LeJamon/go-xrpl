@@ -14,7 +14,10 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
+	"github.com/LeJamon/goXRPLd/internal/ledger/localtxs"
+	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/txq"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
 	"github.com/LeJamon/goXRPLd/shamap"
 	"github.com/LeJamon/goXRPLd/storage/nodestore"
@@ -199,6 +202,37 @@ type Service struct {
 	// serverStateFunc optionally provides the operating mode string for server_info.
 	// Set by the consensus adaptor after startup.
 	serverStateFunc func() string
+
+	// openLedgerView is the persistent open-ledger view that mirrors
+	// rippled's openLedger().current() — the source of truth for the
+	// open pool (#407). Built by Start / rebuilt by adopt paths /
+	// advanced incrementally by Accept on LCL transitions.
+	openLedgerView *openledger.OpenLedger
+
+	// txQueue is the transaction queue (mempool). Submit ingress routes
+	// each tx through txQueue.Apply — which either applies directly to
+	// the open view or holds the tx in the queue. On LCL transitions
+	// AcceptConsensusResult calls txQueue.ProcessClosedLedger to update
+	// fee metrics, and the modifier passed to OpenLedger.Accept calls
+	// txQueue.Accept to promote queued txs into the new open view.
+	// Reference: rippled NetworkOPs.cpp:1507, OpenLedger.cpp:113.
+	txQueue *txq.TxQ
+
+	// localTxs is the held pool of locally-submitted (RPC) transactions.
+	// SubmitOpenLedgerTx(blob, local=true) pushes each non-Failure result
+	// into the pool; acceptOpenLedgerViewLocked sweeps stale entries
+	// against the new closed ledger and passes localTxs.GetTxSet() as
+	// the `locals` argument to OpenLedger.Accept, replaying them on top
+	// of every newly rebuilt open view until they apply or age out.
+	// Reference: rippled LocalTxs.{h,cpp}, RCLConsensus.cpp:662-674.
+	localTxs *localtxs.LocalTxs
+
+	// txRelay re-broadcasts a recovered tx blob to peers. Threaded into
+	// OpenLedger.Accept's relay callback so post-LCL replayed txs get
+	// re-propagated (rippled OpenLedger.cpp:120-150 calls
+	// app.overlay().relay for each non-inner-batch tx surviving the
+	// rebuild). Nil when overlay broadcast is unwired (tests).
+	txRelay func(blob []byte)
 }
 
 // New creates a new LedgerService
@@ -207,6 +241,15 @@ func New(cfg Config) (*Service, error) {
 	if logger == nil {
 		logger = xrpllog.Discard()
 	}
+	// Construct the TxQ with rippled-default config (TxQ::Setup defaults).
+	// In standalone mode, raise MinimumTxnInLedger so fee escalation
+	// stays out of the way of integration tests — same trick rippled
+	// uses (TxQ::Setup standalone vs default).
+	txqCfg := txq.DefaultConfig()
+	if cfg.Standalone {
+		txqCfg = txq.StandaloneConfig()
+	}
+
 	s := &Service{
 		config:                   cfg,
 		logger:                   logger.Named(xrpllog.PartitionLedger),
@@ -218,6 +261,8 @@ func New(cfg Config) (*Service, error) {
 		pendingValidation:        make(map[[32]byte]*LedgerAcceptedEvent),
 		pendingLedgerValidations: make(map[uint32]pendingValidationEntry),
 		heldAdoptions:            make(map[uint32]*pendingAdopt),
+		txQueue:                  txq.New(txqCfg),
+		localTxs:                 localtxs.New(),
 	}
 
 	return s, nil
@@ -228,6 +273,15 @@ func (s *Service) SetEventCallback(callback EventCallback) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.eventCallback = callback
+}
+
+// SetTxRelay registers the per-tx broadcast handler invoked by
+// OpenLedger.Accept's relay callback (rippled OpenLedger.cpp:120-150).
+// Pass nil to unwire.
+func (s *Service) SetTxRelay(fn func(blob []byte)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.txRelay = fn
 }
 
 // SetOnPendingValidationStashed registers a handler invoked off-thread
@@ -325,6 +379,13 @@ func (s *Service) Start() error {
 	// Reset pending transactions
 	s.pendingTxs = nil
 
+	// Initialise the persistent open-ledger view (#407). Anchored on
+	// the freshly constructed closedLedger so Current()'s seq matches
+	// s.openLedger.
+	if err := s.rebuildOpenLedgerViewLocked(); err != nil {
+		return err
+	}
+
 	s.logger.Info("Ledger service started",
 		"standalone", s.config.Standalone,
 		"openLedger", s.openLedger.Sequence(),
@@ -332,6 +393,266 @@ func (s *Service) Start() error {
 	)
 
 	return nil
+}
+
+// rebuildOpenLedgerViewLocked rebuilds s.openLedgerView from s.closedLedger.
+// Clears the field when closedLedger is nil. Caller must hold s.mu (write).
+//
+// Called from Start and from adopt-from-peer paths where a *new*
+// closedLedger replaces the old one. The normal consensus close path
+// uses OpenLedger.Accept instead — see AcceptConsensusResult.
+func (s *Service) rebuildOpenLedgerViewLocked() error {
+	if s.closedLedger == nil {
+		s.openLedgerView = nil
+		return nil
+	}
+	ov, err := openledger.New(s.closedLedger, openledger.Config{
+		NetworkID: s.config.NetworkID,
+		Logger:    s.logger,
+	})
+	if err != nil {
+		return fmt.Errorf("rebuild open-ledger view: %w", err)
+	}
+	s.openLedgerView = ov
+	return nil
+}
+
+// closedLedgerCtx implements txq.ClosedLedgerContext over a closed
+// *ledger.Ledger. baseFee is the closed ledger's reference base fee in
+// drops; we use it to convert per-tx fee values into fee levels for the
+// FeeMetrics update.
+type closedLedgerCtx struct {
+	ledger  *ledger.Ledger
+	baseFee uint64
+}
+
+func (c *closedLedgerCtx) GetLedgerSequence() uint32 {
+	if c.ledger == nil {
+		return 0
+	}
+	return c.ledger.Sequence()
+}
+
+func (c *closedLedgerCtx) GetTransactionFeeLevels() []txq.FeeLevel {
+	if c.ledger == nil {
+		return nil
+	}
+	var levels []txq.FeeLevel
+	_ = c.ledger.ForEachTransaction(func(_ [32]byte, data []byte) bool {
+		raw, _, err := tx.SplitTxWithMetaBlob(data)
+		if err != nil {
+			return true
+		}
+		parsed, err := tx.ParseFromBinary(raw)
+		if err != nil {
+			return true
+		}
+		common := parsed.GetCommon()
+		if common == nil {
+			return true
+		}
+		fee, err := strconv.ParseUint(common.Fee, 10, 64)
+		if err != nil {
+			return true
+		}
+		levels = append(levels, txq.ToFeeLevel(fee, c.baseFee))
+		return true
+	})
+	return levels
+}
+
+// processClosedLedgerLocked updates the TxQ's fee metrics from the
+// just-closed ledger. timeLeap mirrors rippled's slow-consensus flag —
+// always false here (we don't currently track consensus duration).
+// Caller must hold s.mu.
+func (s *Service) processClosedLedgerLocked() {
+	if s.txQueue == nil || s.closedLedger == nil {
+		return
+	}
+	baseFee, _, _ := readFeesFromLedger(s.closedLedger)
+	ctx := &closedLedgerCtx{ledger: s.closedLedger, baseFee: baseFee}
+	s.txQueue.ProcessClosedLedger(ctx, false)
+}
+
+// acceptOpenLedgerViewLocked invokes OpenLedger.Accept on the LCL
+// transition from the prior closed ledger to s.closedLedger. No-op
+// when the view is uninitialised (pre-Start). closedSeq is passed in
+// for log context only.
+//
+// retries (if non-nil) are the txs left in retry state by the consensus /
+// standalone build path — they replay first against the new open view.
+// anyDisputes is the retriesFirst flag per rippled RCLConsensus.cpp:667
+// (the anyDisputes signal). Caller must hold s.mu.
+func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, buildRetries []openledger.PendingTx, anyDisputes bool) {
+	if s.openLedgerView == nil {
+		return
+	}
+	if s.closedLedger == nil {
+		return
+	}
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
+	cfg := openledger.ApplyConfig{
+		BaseFee:          baseFee,
+		ReserveBase:      reserveBase,
+		ReserveIncrement: reserveIncrement,
+		NetworkID:        s.config.NetworkID,
+		Logger:           s.config.Logger,
+	}
+	// Modifier closure mirrors rippled OpenLedger.cpp:113 calling
+	// app_.getTxQ().accept(app_, view) after the replay phases — this is
+	// where queued candidates get promoted into the new open view.
+	modifier := func(view *ledger.Ledger) {
+		if s.txQueue == nil || view == nil {
+			return
+		}
+		viewCfg := cfg
+		viewCfg.LedgerSequence = view.Sequence()
+		adapter := openledger.NewTxqAdapter(view, viewCfg)
+		_ = s.txQueue.Accept(adapter)
+	}
+	// Pass the held local pool as Accept's `locals` argument so entries
+	// replay onto the new open view. Mirrors RCLConsensus.cpp:666 passing
+	// localTxs_.getTxSet() into openLedger().accept(...). Sweeping happens
+	// on the validated path (SetValidatedLedger), matching rippled where
+	// LedgerMaster::setValidLedger calls updateLocalTx — not on every
+	// consensus close, which can be a fork that gets abandoned.
+	var locals []openledger.PendingTx
+	if s.localTxs != nil {
+		locals = s.localTxs.GetTxSet()
+	}
+	// Seed retries with the build-pass leftover set. ApplyTxs (called via
+	// Accept's retriesFirst phase) will drain this slice up front, then
+	// re-fill it with any final-pass Retry classifications produced by
+	// the replay itself.
+	retries := append([]openledger.PendingTx(nil), buildRetries...)
+	relay := s.txRelay
+	relayCB := func(_ [32]byte, blob []byte) {
+		if relay != nil {
+			relay(blob)
+		}
+	}
+	if relay == nil {
+		relayCB = nil
+	}
+	if err := s.openLedgerView.Accept(s.closedLedger, locals, anyDisputes, &retries, cfg, s.txQueue, modifier, relayCB); err != nil {
+		s.logger.Error("openLedger.Accept failed", "err", err, "seq", closedSeq)
+	}
+	if len(retries) > 0 {
+		s.logger.Info("openLedger.Accept produced retries",
+			"count", len(retries),
+			"seq", closedSeq,
+		)
+	}
+}
+
+// applyConfigLocked builds an openledger.ApplyConfig from the current
+// closed ledger's fees. Caller must hold s.mu (read lock is sufficient).
+func (s *Service) applyConfigLocked() (openledger.ApplyConfig, error) {
+	if s.closedLedger == nil {
+		return openledger.ApplyConfig{}, ErrNoClosedLedger
+	}
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
+	return openledger.ApplyConfig{
+		BaseFee:          baseFee,
+		ReserveBase:      reserveBase,
+		ReserveIncrement: reserveIncrement,
+		LedgerSequence:   s.closedLedger.Sequence() + 1,
+		NetworkID:        s.config.NetworkID,
+		Logger:           s.config.Logger,
+	}, nil
+}
+
+// SubmitOpenLedgerTx routes a tx blob through the persistent OpenLedger
+// view (#407). Mirrors NetworkOPsImp::apply → openLedger().modify
+// (NetworkOPs.cpp:1507). Returns the per-tx classification. Returns
+// ResultFailure when called before Start (no view initialised) — the
+// nil guard is defensive; callers should not race Start with ingress.
+//
+// local=true marks the submission as RPC-originated and pushes any
+// non-Failure result into the LocalTxs held pool so it survives Submit
+// failure / LCL transitions until the sender's AccountRoot.Sequence
+// advances past it or it ages out (5 ledgers).
+//
+// local=false is for relay-originated submissions (from peers): the
+// peer manages its own resends, so we don't pin the blob in our held
+// pool. Mirrors rippled's NetworkOPsImp::processTrustedProposal vs
+// NetworkOPsImp::processTransaction distinction (NetworkOPs.cpp where
+// `local` flag flows into `LocalTxs::push_back`).
+func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result, error) {
+	s.mu.RLock()
+	ov := s.openLedgerView
+	queue := s.txQueue
+	pool := s.localTxs
+	cfg, cfgErr := s.applyConfigLocked()
+	s.mu.RUnlock()
+
+	if ov == nil {
+		return openledger.ResultFailure, errors.New("openLedgerView not initialised")
+	}
+	if cfgErr != nil {
+		return openledger.ResultFailure, cfgErr
+	}
+	ptx, err := openledger.ParsePendingTx(blob)
+	if err != nil {
+		return openledger.ResultFailure, err
+	}
+	_, res := ov.Submit(ptx, cfg, queue)
+
+	if local && pool != nil && res != openledger.ResultFailure {
+		pool.PushBack(ov.Current().Sequence(), ptx)
+	}
+	return res, nil
+}
+
+// OpenLedgerTxs returns the raw tx blobs currently in the persistent
+// open view. Mirrors RCLConsensus.cpp:333-349 reading
+// openLedger().current()->txs (an immutable snapshot). Returns nil
+// when the view is uninitialised (pre-Start).
+//
+// The returned slice is memoised inside OpenLedger and shared with
+// concurrent callers — it MUST NOT be mutated. Callers (consensus
+// adaptor → engine) only read.
+func (s *Service) OpenLedgerTxs() [][]byte {
+	s.mu.RLock()
+	ov := s.openLedgerView
+	s.mu.RUnlock()
+	if ov == nil {
+		return nil
+	}
+	return ov.CurrentTxs()
+}
+
+// OpenLedgerHasTx reports whether the persistent open view contains
+// the tx hash. Used by peer-protocol HasTx replies.
+func (s *Service) OpenLedgerHasTx(hash [32]byte) bool {
+	s.mu.RLock()
+	ov := s.openLedgerView
+	s.mu.RUnlock()
+	if ov == nil {
+		return false
+	}
+	return ov.Current().TxExists(hash)
+}
+
+// OpenLedgerGetTx returns the raw tx blob for hash if present in the
+// persistent open view.
+func (s *Service) OpenLedgerGetTx(hash [32]byte) ([]byte, bool) {
+	s.mu.RLock()
+	ov := s.openLedgerView
+	s.mu.RUnlock()
+	if ov == nil {
+		return nil, false
+	}
+	view := ov.Current()
+	data, found, err := view.GetTransaction(hash)
+	if err != nil || !found {
+		return nil, false
+	}
+	raw, _, err := tx.SplitTxWithMetaBlob(data)
+	if err != nil {
+		return nil, false
+	}
+	return raw, true
 }
 
 // GetOpenLedger returns the current open ledger
@@ -455,189 +776,42 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	// If there are pending transactions, re-apply them in canonical order
 	// on a fresh ledger built from the LCL. This matches rippled's behavior
 	// where open ledger transactions are re-ordered via CanonicalTXSet.
+	var retriableTxs []openledger.PendingTx
 	if len(s.pendingTxs) > 0 {
 		// Salt = SHAMap root of the tx set, matching rippled's
 		// consensus-build convention at RCLConsensus.cpp:512. The
 		// local pending pool plays the same role in standalone.
 		canonicalSort(s.pendingTxs, computeSalt(s.pendingTxs))
 
-		// Create a fresh open ledger from the LCL
 		freshLedger, err := ledger.NewOpen(s.closedLedger, closeTime)
 		if err != nil {
 			return 0, fmt.Errorf("failed to create fresh ledger for canonical reapply: %w", err)
 		}
 
-		// Read fees from the LCL for the engine config
 		baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
-
-		engineConfig := tx.EngineConfig{
+		applyCfg := openledger.ApplyConfig{
 			BaseFee:                   baseFee,
 			ReserveBase:               reserveBase,
 			ReserveIncrement:          reserveIncrement,
 			LedgerSequence:            freshLedger.Sequence(),
-			SkipSignatureVerification: s.config.Standalone,
 			NetworkID:                 s.config.NetworkID,
 			Logger:                    s.config.Logger,
+			SkipSignatureVerification: s.config.Standalone,
+			// Standalone close mirrors the consensus-build path: tec under
+			// certainRetry holds for retry, commits on the final non-retry
+			// pass. See BuildLedger.cpp.
+			Mode: openledger.BuildLedgerMode,
+		}
+		if err := openledger.ApplyTxs(freshLedger, s.pendingTxs, &retriableTxs, applyCfg); err != nil {
+			return 0, fmt.Errorf("openledger.ApplyTxs: %w", err)
 		}
 
-		// Multi-pass application matching rippled's BuildLedger.
-		//
-		// Rippled uses tapRETRY so that tec* results are NOT applied (no fee,
-		// no sequence consumed). This lets the same tx be retried on the next pass.
-		// Our engine doesn't support tapRETRY, so we rebuild the ledger each pass:
-		//
-		// Pass 0: Apply all txs. Record which got tesSUCCESS vs tec*/ter*.
-		// Pass 1+: Rebuild from LCL. Re-apply only tesSUCCESS txs first (restoring
-		//          state), then retry the tec*/ter* ones (which may now succeed).
-		//
-		// Reference: rippled BuildLedger.cpp, LEDGER_TOTAL_PASSES=3, LEDGER_RETRY_PASSES=1
-		const (
-			totalPasses = 3
-			retryPasses = 1
-		)
-
-		type txStatus int
-		const (
-			txPending   txStatus = iota
-			txSucceeded          // tesSUCCESS — will be re-applied on rebuilds
-			txRetry              // tec*/ter* during certainRetry — try again
-			txFailed             // permanently failed — skip
-		)
-		statuses := make(map[[32]byte]txStatus, len(s.pendingTxs))
-
-		// Pre-parse every blob once; reused across passes. nil entries
-		// become txFailed at apply time.
-		parsed := make([]tx.Transaction, len(s.pendingTxs))
-		for i, ptx := range s.pendingTxs {
-			t, parseErr := tx.ParseFromBinary(ptx.txBlob)
-			if parseErr == nil {
-				t.SetRawBytes(ptx.txBlob)
-				parsed[i] = t
-			}
-		}
-
-		// freshLedger persists across passes — BuildLedger.cpp:107-170.
-		freshLedger, err = ledger.NewOpen(s.closedLedger, closeTime)
-		if err != nil {
-			return 0, fmt.Errorf("failed to create fresh ledger: %w", err)
-		}
-		engineConfig.LedgerSequence = freshLedger.Sequence()
-
-		certainRetry := true
-		for pass := 0; pass < totalPasses; pass++ {
-			engine := tx.NewEngine(freshLedger, engineConfig)
-			blockProcessor := tx.NewBlockProcessor(engine)
-
-			changes := 0
-			hasRetry := false
-
-			for i, ptx := range s.pendingTxs {
-				st := statuses[ptx.hash]
-
-				// Succeeded txs persist in freshLedger across passes;
-				// re-applying would double-count.
-				if st == txFailed || st == txSucceeded {
-					continue
-				}
-				if pass > 0 && st == txRetry {
-					continue
-				}
-
-				transaction := parsed[i]
-				if transaction == nil {
-					statuses[ptx.hash] = txFailed
-					continue
-				}
-
-				result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
-				if applyErr != nil {
-					statuses[ptx.hash] = txFailed
-					continue
-				}
-
-				engineResult := result.ApplyResult.Result
-				switch {
-				case engineResult.IsSuccess():
-					freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-					s.txIndex[result.Hash] = freshLedger.Sequence()
-					changes++
-					statuses[ptx.hash] = txSucceeded
-
-				case engineResult.IsTec():
-					if certainRetry {
-						statuses[ptx.hash] = txRetry
-						hasRetry = true
-					} else {
-						// Final pass: apply tec* normally
-						freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-						s.txIndex[result.Hash] = freshLedger.Sequence()
-						statuses[ptx.hash] = txSucceeded
-					}
-
-				case engineResult.ShouldRetry():
-					statuses[ptx.hash] = txRetry
-					hasRetry = true
-
-				default:
-					statuses[ptx.hash] = txFailed
-				}
-			}
-
-			// Now retry the tec*/ter* transactions (state from succeeded txs is in place)
-			if pass > 0 {
-				for i, ptx := range s.pendingTxs {
-					if statuses[ptx.hash] != txRetry {
-						continue
-					}
-
-					transaction := parsed[i]
-					if transaction == nil {
-						statuses[ptx.hash] = txFailed
-						continue
-					}
-
-					result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
-					if applyErr != nil {
-						statuses[ptx.hash] = txFailed
-						continue
-					}
-
-					engineResult := result.ApplyResult.Result
-					switch {
-					case engineResult.IsSuccess():
-						freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-						s.txIndex[result.Hash] = freshLedger.Sequence()
-						changes++
-						statuses[ptx.hash] = txSucceeded
-
-					case engineResult.IsTec():
-						if certainRetry {
-							hasRetry = true
-						} else {
-							freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-							s.txIndex[result.Hash] = freshLedger.Sequence()
-							statuses[ptx.hash] = txSucceeded
-						}
-
-					case engineResult.ShouldRetry():
-						hasRetry = true
-
-					default:
-						statuses[ptx.hash] = txFailed
-					}
-				}
-			}
-
-			if !hasRetry {
-				break
-			}
-			if changes == 0 && !certainRetry {
-				break
-			}
-			if changes == 0 || pass >= retryPasses {
-				certainRetry = false
-			}
-		}
+		// Hoist the per-tx s.txIndex update out of the apply loop.
+		// AcceptLedger needs every committed tx tracked by ledger seq.
+		_ = freshLedger.ForEachTransaction(func(txHash [32]byte, _ []byte) bool {
+			s.txIndex[txHash] = freshLedger.Sequence()
+			return true
+		})
 
 		// Replace the open ledger with the canonically-built one
 		s.openLedger = freshLedger
@@ -694,6 +868,32 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 		return 0, fmt.Errorf("failed to create new open ledger: %w", err)
 	}
 	s.openLedger = newOpen
+
+	// Update fee metrics from the just-closed ledger so the modifier in
+	// the next Accept sees the right open-ledger fee level. Mirrors
+	// rippled's NetworkOPs::processClosedLedger call before rebuilding
+	// the open view (NetworkOPs.cpp:1483-1530 surroundings).
+	s.processClosedLedgerLocked()
+
+	// LCL transition: rebuild the persistent open-ledger view via Accept
+	// so any tx submitted to the prior view that didn't land in the
+	// canonical reapply gets replayed. Standalone uses the same LCL-
+	// transition semantics as consensus; the only difference is the
+	// trigger (ledger_accept RPC vs consensus close).
+	//
+	// Disputes signal: rippled's anyDisputes flag (RCLConsensus.cpp:667)
+	// is driven by consensus::Result::disputes. goxrpl's consensus engine
+	// does not surface a disputes signal at the BuildLedger interface
+	// boundary yet (the DisputeTracker exists at internal/consensus/rcl
+	// but is not plumbed through consensus.Adaptor.BuildLedger). We
+	// approximate with len(retriableTxs)>0 — txs the build pass left in
+	// retry state are precisely the ones that need retriesFirst=true
+	// replay against the new open view. This is a superset of rippled's
+	// disputed set; the only divergence is txs that voted-disputed but
+	// applied cleanly during build, which then get redundantly replayed
+	// (harmless — Accept's parent-skip guard short-circuits). Standalone
+	// has no consensus disputes by construction.
+	s.acceptOpenLedgerViewLocked(closedSeq, retriableTxs, len(retriableTxs) > 0)
 
 	// Build ledger info for callbacks
 	ledgerInfo := &LedgerInfo{
@@ -1211,6 +1411,11 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 			return 0, fmt.Errorf("failed to create open ledger from parent: %w", err)
 		}
 		s.openLedger = newOpen
+		// Chain switch is a clean reset, not an LCL transition: rebuild
+		// the open-ledger view from scratch via New rather than Accept.
+		if err := s.rebuildOpenLedgerViewLocked(); err != nil {
+			return 0, err
+		}
 	}
 
 	if s.openLedger == nil {
@@ -1218,6 +1423,7 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 	}
 
 	var canonicalTxHashes []string
+	var retriableTxs []openledger.PendingTx
 	if len(txBlobs) > 0 {
 		pending := make([]pendingTx, 0, len(txBlobs))
 		for _, blob := range txBlobs {
@@ -1232,179 +1438,42 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		// LCL-hash variant is for held-tx replay only (LedgerMaster.cpp:461).
 		canonicalSort(pending, computeSalt(pending))
 
+		// The canonical-tx-hash list feeds into the round-summary log line
+		// below; it must reflect the canonical-sorted order, hence stays
+		// here rather than being derived inside openledger.ApplyTxs.
 		canonicalTxHashes = make([]string, 0, len(pending))
 		for _, ptx := range pending {
-			canonicalTxHashes = append(canonicalTxHashes, fmt.Sprintf("%x", ptx.hash[:8]))
+			canonicalTxHashes = append(canonicalTxHashes, fmt.Sprintf("%x", ptx.Hash[:8]))
 		}
 
-		parsed := make([]tx.Transaction, len(pending))
-		for i, ptx := range pending {
-			t, parseErr := tx.ParseFromBinary(ptx.txBlob)
-			if parseErr == nil {
-				t.SetRawBytes(ptx.txBlob)
-				parsed[i] = t
-			}
-		}
-
-		// Multi-pass application (same as AcceptLedger)
 		freshLedger, err := ledger.NewOpen(s.closedLedger, closeTime)
 		if err != nil {
 			return 0, fmt.Errorf("failed to create fresh ledger for consensus: %w", err)
 		}
 
 		baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
-		engineConfig := tx.EngineConfig{
-			BaseFee:                   baseFee,
-			ReserveBase:               reserveBase,
-			ReserveIncrement:          reserveIncrement,
-			LedgerSequence:            freshLedger.Sequence(),
-			SkipSignatureVerification: false,
-			NetworkID:                 s.config.NetworkID,
-			Logger:                    s.config.Logger,
+		applyCfg := openledger.ApplyConfig{
+			BaseFee:          baseFee,
+			ReserveBase:      reserveBase,
+			ReserveIncrement: reserveIncrement,
+			LedgerSequence:   freshLedger.Sequence(),
+			NetworkID:        s.config.NetworkID,
+			Logger:           s.config.Logger,
+			// Consensus build uses BuildLedger semantics: tec holds for
+			// retry under certainRetry; commits on the final pass.
+			Mode: openledger.BuildLedgerMode,
+		}
+		if err := openledger.ApplyTxs(freshLedger, pending, &retriableTxs, applyCfg); err != nil {
+			return 0, fmt.Errorf("openledger.ApplyTxs: %w", err)
 		}
 
-		const (
-			totalPasses = 3
-			retryPasses = 1
-		)
-
-		type txStatus int
-		const (
-			txPending txStatus = iota
-			txSucceeded
-			txRetry
-			txFailed
-		)
-		statuses := make(map[[32]byte]txStatus, len(pending))
-
-		// Skip txs already in parent — BuildLedger.cpp:125-129.
-		for _, ptx := range pending {
-			if s.closedLedger.TxExists(ptx.hash) {
-				statuses[ptx.hash] = txFailed
-			}
-		}
-
-		// freshLedger persists across passes — BuildLedger.cpp:107-170.
-		freshLedger, err = ledger.NewOpen(s.closedLedger, closeTime)
-		if err != nil {
-			return 0, fmt.Errorf("failed to create fresh ledger: %w", err)
-		}
-		engineConfig.LedgerSequence = freshLedger.Sequence()
-
-		certainRetry := true
-		for pass := 0; pass < totalPasses; pass++ {
-			// pass>0 = tapRETRY (sigs verified on pass 0).
-			engineConfig.SkipSignatureVerification = pass > 0
-			// tapRETRY on retriable passes; cleared on the final pass so
-			// leftover tec commits. BuildLedger.cpp:131-132.
-			if certainRetry {
-				engineConfig.ApplyFlags |= tx.TapRETRY
-			} else {
-				engineConfig.ApplyFlags &^= tx.TapRETRY
-			}
-			engine := tx.NewEngine(freshLedger, engineConfig)
-			blockProcessor := tx.NewBlockProcessor(engine)
-
-			changes := 0
-			hasRetry := false
-
-			for i, ptx := range pending {
-				st := statuses[ptx.hash]
-				// Succeeded txs already in freshLedger.
-				if st == txFailed || st == txSucceeded {
-					continue
-				}
-				if pass > 0 && st == txRetry {
-					continue
-				}
-
-				transaction := parsed[i]
-				if transaction == nil {
-					statuses[ptx.hash] = txFailed
-					continue
-				}
-
-				result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
-				if applyErr != nil {
-					statuses[ptx.hash] = txFailed
-					continue
-				}
-
-				engineResult := result.ApplyResult.Result
-				switch {
-				case engineResult.IsSuccess():
-					freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-					s.txIndex[result.Hash] = freshLedger.Sequence()
-					changes++
-					statuses[ptx.hash] = txSucceeded
-				case engineResult.IsTec():
-					if certainRetry {
-						statuses[ptx.hash] = txRetry
-						hasRetry = true
-					} else {
-						freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-						s.txIndex[result.Hash] = freshLedger.Sequence()
-						statuses[ptx.hash] = txSucceeded
-					}
-				case engineResult.ShouldRetry():
-					statuses[ptx.hash] = txRetry
-					hasRetry = true
-				default:
-					statuses[ptx.hash] = txFailed
-				}
-			}
-
-			// Retry tec*/ter* transactions
-			if pass > 0 {
-				for i, ptx := range pending {
-					if statuses[ptx.hash] != txRetry {
-						continue
-					}
-					transaction := parsed[i]
-					if transaction == nil {
-						statuses[ptx.hash] = txFailed
-						continue
-					}
-
-					result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
-					if applyErr != nil {
-						statuses[ptx.hash] = txFailed
-						continue
-					}
-
-					engineResult := result.ApplyResult.Result
-					switch {
-					case engineResult.IsSuccess():
-						freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-						s.txIndex[result.Hash] = freshLedger.Sequence()
-						changes++
-						statuses[ptx.hash] = txSucceeded
-					case engineResult.IsTec():
-						if certainRetry {
-							hasRetry = true
-						} else {
-							freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-							s.txIndex[result.Hash] = freshLedger.Sequence()
-							statuses[ptx.hash] = txSucceeded
-						}
-					case engineResult.ShouldRetry():
-						hasRetry = true
-					default:
-						statuses[ptx.hash] = txFailed
-					}
-				}
-			}
-
-			if !hasRetry {
-				break
-			}
-			if changes == 0 && !certainRetry {
-				break
-			}
-			if changes == 0 || pass >= retryPasses {
-				certainRetry = false
-			}
-		}
+		// Hoist the per-tx s.txIndex update — this is the side-effect that
+		// lived inside the old inline 3-pass loop. Iterate every committed
+		// tx in the fresh ledger's tx tree (covers tesSUCCESS and tec).
+		_ = freshLedger.ForEachTransaction(func(txHash [32]byte, _ []byte) bool {
+			s.txIndex[txHash] = freshLedger.Sequence()
+			return true
+		})
 
 		s.openLedger = freshLedger
 	}
@@ -1500,6 +1569,30 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		return 0, fmt.Errorf("failed to create new open ledger: %w", err)
 	}
 	s.openLedger = newOpen
+
+	// Update fee metrics from the consensus-closed ledger so the
+	// modifier in the next Accept sees the right open-ledger fee level.
+	// Mirrors rippled's NetworkOPs::processClosedLedger call before
+	// rebuilding the open view.
+	s.processClosedLedgerLocked()
+
+	// LCL transition: replay prior view's txs onto the new closed ledger
+	// via OpenLedger.Accept. Mirrors rippled's accept-time rebuild at
+	// OpenLedger.cpp:71-155.
+	//
+	// Disputes signal: rippled's anyDisputes flag (RCLConsensus.cpp:667)
+	// is driven by consensus::Result::disputes. goxrpl's consensus engine
+	// does not surface a disputes signal at the BuildLedger interface
+	// boundary yet (the DisputeTracker exists at internal/consensus/rcl
+	// but is not plumbed through consensus.Adaptor.BuildLedger). We
+	// approximate with len(retriableTxs)>0 — txs the consensus build pass
+	// left in retry state are precisely the ones that need retriesFirst=
+	// true replay against the new open view. This is a superset of
+	// rippled's disputed set; the only divergence is txs that voted-
+	// disputed but applied cleanly during build, which then get
+	// redundantly replayed (harmless — Accept's parent-skip guard
+	// short-circuits).
+	s.acceptOpenLedgerViewLocked(closedSeq, retriableTxs, len(retriableTxs) > 0)
 
 	// Fire event hooks
 	ledgerInfo := &LedgerInfo{
@@ -1623,12 +1716,18 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	_ = l.SetValidated()
 	s.validatedLedger = l
 
-	// Drain any stashed ledger-accepted event for this hash.
-	// Fire on a goroutine (after releasing the lock) so subscriber
-	// callbacks can't deadlock the service mutex.
+	// Sweep the held local pool against the just-validated ledger.
+	// Mirrors LedgerMaster::setValidLedger → app_.getOPs().updateLocalTx(*l)
+	// at LedgerMaster.cpp:283. Sweeping here (not on every consensus close)
+	// avoids dropping held txs against a ledger consensus later abandons.
+	pool := s.localTxs
 	event := s.drainPendingValidationLocked(expectedHash)
 	callback := s.eventCallback
 	s.mu.Unlock()
+
+	if pool != nil {
+		pool.Sweep(l)
+	}
 
 	if event != nil && callback != nil {
 		go callback(event)
@@ -2049,6 +2148,13 @@ func (s *Service) AdoptLedgerHeader(h *header.LedgerHeader) error {
 	s.openLedger = openLedger
 	s.needsInitialSync = false
 
+	// Adopt-from-peer is a fresh start, not an LCL transition — rebuild
+	// the open-ledger view via New rather than Accept (no prior
+	// node-local current view applies to the freshly adopted closed).
+	if err := s.rebuildOpenLedgerViewLocked(); err != nil {
+		return err
+	}
+
 	s.logger.Info("Adopted ledger from peer",
 		"seq", h.LedgerIndex,
 		"hash", fmt.Sprintf("%x", h.Hash[:8]),
@@ -2110,6 +2216,11 @@ func (s *Service) ReAdoptLedgerHeader(h *header.LedgerHeader) error {
 	}
 	s.openLedger = openLedger
 	s.pendingTxs = nil
+
+	// Re-adopt: fresh start on the peer's tip — rebuild via New.
+	if err := s.rebuildOpenLedgerViewLocked(); err != nil {
+		return err
+	}
 
 	s.logger.Info("Re-adopted ledger from peer",
 		"seq", h.LedgerIndex,
@@ -2197,6 +2308,11 @@ func (s *Service) adoptLedgerWithStateLocked(
 			return fmt.Errorf("failed to create open ledger after adopt-skip: %w", err)
 		}
 		s.openLedger = openLedger
+		if advanced {
+			if err := s.rebuildOpenLedgerViewLocked(); err != nil {
+				return err
+			}
+		}
 		canonicalHash := canonical.Hash()
 		s.logger.Info("Adopted ledger from peer (skip: validated entry kept)",
 			"seq", h.LedgerIndex,
@@ -2241,6 +2357,11 @@ func (s *Service) adoptLedgerWithStateLocked(
 			return fmt.Errorf("failed to create open ledger: %w", err)
 		}
 		s.openLedger = openLedger
+		// Forward-advance adopt = fresh start on the peer's tip.
+		// Rebuild via New so the persistent view re-anchors on adopted.
+		if err := s.rebuildOpenLedgerViewLocked(); err != nil {
+			return err
+		}
 	}
 
 	// Fire hooks.OnLedgerClosed + hooks.OnTransaction so WebSocket
@@ -2320,196 +2441,7 @@ func (s *Service) GetPendingTxBlobs() [][]byte {
 
 	blobs := make([][]byte, len(s.pendingTxs))
 	for i, ptx := range s.pendingTxs {
-		blobs[i] = ptx.txBlob
+		blobs[i] = ptx.Blob
 	}
 	return blobs
-}
-
-// FilterApplicableTxs runs the multi-pass apply loop against a fresh open
-// view of parent, returning only blobs that apply (success or tec-after-
-// retry). Mirrors rippled's open-ledger apply at OpenLedger.h:209-270;
-// RCLConsensus.cpp:333-349 is the consumer. Side-effect-free; uses RLock.
-// Closure timestamp is time.Now() — for selection only, doesn't affect
-// outcomes.
-func (s *Service) FilterApplicableTxs(parent *ledger.Ledger, txBlobs [][]byte) [][]byte {
-	if parent == nil || len(txBlobs) == 0 {
-		return nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	pending := make([]pendingTx, 0, len(txBlobs))
-	for _, blob := range txBlobs {
-		ptx, err := parsePendingTx(blob)
-		if err != nil {
-			continue
-		}
-		pending = append(pending, ptx)
-	}
-	if len(pending) == 0 {
-		return nil
-	}
-	// Salt must match the build path (RCLConsensus.cpp:512) so propose-
-	// and build-time apply orders agree.
-	canonicalSort(pending, computeSalt(pending))
-
-	parsed := make([]tx.Transaction, len(pending))
-	for i, ptx := range pending {
-		t, err := tx.ParseFromBinary(ptx.txBlob)
-		if err == nil {
-			t.SetRawBytes(ptx.txBlob)
-			parsed[i] = t
-		}
-	}
-
-	closeTime := time.Now()
-	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(parent)
-	engineConfig := tx.EngineConfig{
-		BaseFee:                   baseFee,
-		ReserveBase:               reserveBase,
-		ReserveIncrement:          reserveIncrement,
-		SkipSignatureVerification: false,
-		NetworkID:                 s.config.NetworkID,
-		Logger:                    s.config.Logger,
-	}
-
-	type txStatus int
-	const (
-		txPending txStatus = iota
-		txSucceeded
-		txRetry
-		txFailed
-	)
-	statuses := make(map[[32]byte]txStatus, len(pending))
-
-	// Skip txs already in parent — BuildLedger.cpp:125-129.
-	for _, ptx := range pending {
-		if parent.TxExists(ptx.hash) {
-			statuses[ptx.hash] = txFailed
-		}
-	}
-
-	const (
-		totalPasses = 3
-		retryPasses = 1
-	)
-
-	// freshLedger persists across passes — BuildLedger.cpp.
-	freshLedger, err := ledger.NewOpen(parent, closeTime)
-	if err != nil {
-		return nil
-	}
-	engineConfig.LedgerSequence = freshLedger.Sequence()
-
-	certainRetry := true
-	for pass := 0; pass < totalPasses; pass++ {
-		// pass>0 = tapRETRY (sigs verified on pass 0).
-		engineConfig.SkipSignatureVerification = pass > 0
-		// BuildLedger.cpp:131-132 — flags must match the build path.
-		if certainRetry {
-			engineConfig.ApplyFlags |= tx.TapRETRY
-		} else {
-			engineConfig.ApplyFlags &^= tx.TapRETRY
-		}
-		engine := tx.NewEngine(freshLedger, engineConfig)
-		blockProcessor := tx.NewBlockProcessor(engine)
-
-		changes := 0
-		hasRetry := false
-
-		for i, ptx := range pending {
-			st := statuses[ptx.hash]
-			// Succeeded txs already in freshLedger.
-			if st == txFailed || st == txSucceeded {
-				continue
-			}
-			if pass > 0 && st == txRetry {
-				continue
-			}
-			transaction := parsed[i]
-			if transaction == nil {
-				statuses[ptx.hash] = txFailed
-				continue
-			}
-			result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
-			if applyErr != nil {
-				statuses[ptx.hash] = txFailed
-				continue
-			}
-			engineResult := result.ApplyResult.Result
-			switch {
-			case engineResult.IsSuccess():
-				freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-				changes++
-				statuses[ptx.hash] = txSucceeded
-			case engineResult.IsTec():
-				if certainRetry {
-					statuses[ptx.hash] = txRetry
-					hasRetry = true
-				} else {
-					freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-					statuses[ptx.hash] = txSucceeded
-				}
-			case engineResult.ShouldRetry():
-				statuses[ptx.hash] = txRetry
-				hasRetry = true
-			default:
-				statuses[ptx.hash] = txFailed
-			}
-		}
-
-		if pass > 0 {
-			for i, ptx := range pending {
-				if statuses[ptx.hash] != txRetry {
-					continue
-				}
-				transaction := parsed[i]
-				if transaction == nil {
-					statuses[ptx.hash] = txFailed
-					continue
-				}
-				result, applyErr := blockProcessor.ApplyTransaction(transaction, ptx.txBlob)
-				if applyErr != nil {
-					statuses[ptx.hash] = txFailed
-					continue
-				}
-				engineResult := result.ApplyResult.Result
-				switch {
-				case engineResult.IsSuccess():
-					freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-					changes++
-					statuses[ptx.hash] = txSucceeded
-				case engineResult.IsTec():
-					if certainRetry {
-						hasRetry = true
-					} else {
-						freshLedger.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
-						statuses[ptx.hash] = txSucceeded
-					}
-				case engineResult.ShouldRetry():
-					hasRetry = true
-				default:
-					statuses[ptx.hash] = txFailed
-				}
-			}
-		}
-
-		if !hasRetry {
-			break
-		}
-		if changes == 0 && !certainRetry {
-			break
-		}
-		if changes == 0 || pass >= retryPasses {
-			certainRetry = false
-		}
-	}
-
-	out := make([][]byte, 0, len(pending))
-	for _, ptx := range pending {
-		if statuses[ptx.hash] == txSucceeded {
-			out = append(out, ptx.txBlob)
-		}
-	}
-	return out
 }

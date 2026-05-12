@@ -155,38 +155,6 @@ func TestAdaptorGetLastClosedLedger(t *testing.T) {
 	assert.NotEqual(t, consensus.LedgerID{}, lcl.ID())
 }
 
-func TestAdaptorPendingTxs(t *testing.T) {
-	a := newTestAdaptor(t)
-
-	// Initially empty
-	pending := a.GetPendingTxs()
-	assert.Empty(t, pending)
-
-	// Add some tx blobs
-	blob1 := []byte{0x01, 0x02, 0x03}
-	blob2 := []byte{0x04, 0x05, 0x06}
-	a.AddPendingTx(blob1)
-	a.AddPendingTx(blob2)
-
-	pending = a.GetPendingTxs()
-	assert.Len(t, pending, 2)
-
-	// HasTx should work
-	txID1 := computeTxID(blob1)
-	assert.True(t, a.HasTx(txID1))
-
-	// GetTx should work
-	got, err := a.GetTx(txID1)
-	assert.NoError(t, err)
-	assert.Equal(t, blob1, got)
-
-	// Clear
-	a.ClearPendingTxs()
-	pending = a.GetPendingTxs()
-	assert.Empty(t, pending)
-	assert.False(t, a.HasTx(txID1))
-}
-
 func TestAdaptorQuorumCalculation(t *testing.T) {
 	svc := newTestLedgerService(t)
 

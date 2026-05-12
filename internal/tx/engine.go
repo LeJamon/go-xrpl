@@ -212,6 +212,14 @@ func (e *Engine) TxCount() uint32 {
 	return e.txCount
 }
 
+// Preclaim runs the full preclaim pipeline against the engine's view
+// and returns the TER. Used by TxQ's multiTxn path (TxQ.cpp:1167-1170)
+// which runs preclaim against a cloned view with adjusted AccountRoot
+// fields to detect terINSUF_FEE_B / terPRE_SEQ before queueing.
+func (e *Engine) Preclaim(tx Transaction, txHash [32]byte) Result {
+	return e.preclaim(tx, txHash)
+}
+
 // SetBaseTxCount sets the base transaction count for batch inner transactions.
 // Inner transactions start numbering from this value.
 // Reference: rippled OpenView::baseTxCount_ initialized from parent view

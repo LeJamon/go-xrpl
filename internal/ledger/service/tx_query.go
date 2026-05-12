@@ -7,6 +7,7 @@ import (
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -37,77 +38,107 @@ type SubmitResult struct {
 	ValidatedLedger uint32
 }
 
-// SubmitTransaction submits a transaction to the open ledger.
-// The rawBlob parameter is the original binary transaction blob; it is stored
-// so that AcceptLedger can re-apply transactions in canonical order.
+// SubmitTransaction is the RPC entry point for tx ingress. It mirrors
+// rippled NetworkOPsImp::processTransaction → openLedger().modify
+// (NetworkOPs.cpp:1483-1530): every submission applies against the
+// persistent OpenLedger view, the held-pool absorbs the blob unless the
+// failure is permanent (tef*/tem*/tel*), and the legacy pendingTxs slice
+// is fed for standalone close.
 func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte) (*SubmitResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.openLedger == nil {
+	if s.openLedgerView == nil {
 		return nil, ErrNoOpenLedger
 	}
-
-	// Read fee settings from the FeeSettings SLE in the open ledger
-	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.openLedger)
-
-	// Create engine config from current state
-	engineConfig := tx.EngineConfig{
-		BaseFee:                   baseFee,
-		ReserveBase:               reserveBase,
-		ReserveIncrement:          reserveIncrement,
-		LedgerSequence:            s.openLedger.Sequence(),
-		SkipSignatureVerification: s.config.Standalone, // Skip signatures in standalone mode
-		OpenLedger:                true,                // Live submission: check fee adequacy
-		NetworkID:                 s.config.NetworkID,
-		Logger:                    s.config.Logger,
+	if rawBlob != nil {
+		transaction.SetRawBytes(rawBlob)
+	}
+	txHash, hashErr := tx.ComputeTransactionHash(transaction)
+	if hashErr != nil {
+		return nil, fmt.Errorf("compute tx hash: %w", hashErr)
 	}
 
-	// Create engine with the open ledger as the view
-	engine := tx.NewEngine(s.openLedger, engineConfig)
+	var applyResult tx.ApplyResult
+	applyResult.Result = tx.TefINTERNAL
 
-	// Apply the transaction
-	applyResult := engine.Apply(transaction)
+	s.openLedgerView.Modify(func(view *ledger.Ledger) bool {
+		if view.TxExists(txHash) {
+			applyResult = tx.ApplyResult{Result: tx.TefALREADY, Message: tx.TefALREADY.Message()}
+			return false
+		}
+		baseFee, reserveBase, reserveIncrement := readFeesFromLedger(view)
+		engineConfig := tx.EngineConfig{
+			BaseFee:                   baseFee,
+			ReserveBase:               reserveBase,
+			ReserveIncrement:          reserveIncrement,
+			LedgerSequence:            view.Sequence(),
+			SkipSignatureVerification: s.config.Standalone,
+			OpenLedger:                true,
+			NetworkID:                 s.config.NetworkID,
+			Logger:                    s.config.Logger,
+		}
+		engine := tx.NewEngine(view, engineConfig)
+		applyResult = engine.Apply(transaction)
+		return applyResult.Applied
+	})
 
+	currentSeq := s.openLedgerView.Current().Sequence()
 	result := &SubmitResult{
-		Result:          applyResult.Result,
-		Applied:         applyResult.Applied,
-		Fee:             applyResult.Fee,
-		Metadata:        applyResult.Metadata,
-		Message:         applyResult.Message,
-		CurrentLedger:   s.openLedger.Sequence(),
-		ValidatedLedger: 0,
+		Result:        applyResult.Result,
+		Applied:       applyResult.Applied,
+		Fee:           applyResult.Fee,
+		Metadata:      applyResult.Metadata,
+		Message:       applyResult.Message,
+		CurrentLedger: currentSeq,
 	}
-
 	if s.validatedLedger != nil {
 		result.ValidatedLedger = s.validatedLedger.Sequence()
 	}
 
-	// Track successfully applied transactions for canonical re-ordering at AcceptLedger.
-	// Reference: rippled accumulates applied txs for CanonicalTXSet reapply.
-	if applyResult.Applied && rawBlob != nil {
-		common := transaction.GetCommon()
-
-		// Decode account address to raw 20-byte AccountID
-		var accountID [20]byte
-		_, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(common.Account)
-		if err == nil && len(accountBytes) == 20 {
+	common := transaction.GetCommon()
+	var accountID [20]byte
+	if common != nil {
+		if _, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(common.Account); err == nil && len(accountBytes) == 20 {
 			copy(accountID[:], accountBytes)
 		}
+	}
 
-		// Compute transaction hash from the original signed blob.
-		// We set raw bytes so ComputeTransactionHash uses the exact signed bytes
-		// rather than re-serializing (which can produce a different blob/hash).
-		transaction.SetRawBytes(rawBlob)
-		txHash, hashErr := tx.ComputeTransactionHash(transaction)
-		if hashErr == nil {
-			s.pendingTxs = append(s.pendingTxs, pendingTx{
-				txBlob:   rawBlob,
-				hash:     txHash,
-				account:  accountID,
-				seqProxy: common.SeqProxyKey(),
-			})
+	// LocalTxs push: rippled NetworkOPs.cpp:1677 holds every locally-
+	// submitted tx that did not fail permanently. tef/tem/tel are
+	// permanent failures; everything else (ter*/tec*/applied/queued)
+	// belongs in the held pool so it survives Submit failure and LCL
+	// transitions until it lands or ages out (5 ledgers).
+	if rawBlob != nil && s.localTxs != nil {
+		ter := applyResult.Result
+		if !ter.IsTef() && !ter.IsTem() && !ter.IsTel() && ter != tx.TefALREADY {
+			ptx := openledger.PendingTx{
+				Blob:    rawBlob,
+				Hash:    txHash,
+				Account: accountID,
+			}
+			if common != nil {
+				ptx.Sequence = common.SeqProxy()
+				ptx.IsTicket = common.TicketSequence != nil
+			}
+			s.localTxs.PushBack(currentSeq, ptx)
 		}
+	}
+
+	// Standalone-mode close (AcceptLedgerAt) still drains pendingTxs
+	// for the canonical re-sort. Append on apply so the legacy path
+	// keeps working alongside the openLedgerView ingress.
+	if applyResult.Applied && rawBlob != nil {
+		ptx := pendingTx{
+			Blob:    rawBlob,
+			Hash:    txHash,
+			Account: accountID,
+		}
+		if common != nil {
+			ptx.Sequence = common.SeqProxy()
+			ptx.IsTicket = common.TicketSequence != nil
+		}
+		s.pendingTxs = append(s.pendingTxs, ptx)
 	}
 
 	return result, nil

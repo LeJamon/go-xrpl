@@ -665,7 +665,9 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	r.adaptor.AddPendingTx(blob)
+	// Peer-relay path — the originating peer manages its own resends,
+	// so we don't pin the blob in our LocalTxs held pool.
+	r.adaptor.AddPendingTx(blob, false)
 	r.logger.Info("inbound tx accepted into pending pool",
 		"t", "consensus",
 		"event", "tx-inbound",
