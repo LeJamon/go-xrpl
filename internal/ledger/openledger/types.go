@@ -133,6 +133,14 @@ func CanonicalSort(txs []PendingTx, salt [32]byte) {
 		if cmp != 0 {
 			return cmp < 0
 		}
+		// Sequence-based txns sort strictly before ticket-based txns for the
+		// same account regardless of numeric value — matches rippled's
+		// SeqProxy::operator< where the type bit dominates the value
+		// (SeqProxy.h). Without this, a ticket-creating tx (seq-based) can
+		// be reordered after a tx that consumes the ticket it issues.
+		if entries[i].tx.IsTicket != entries[j].tx.IsTicket {
+			return !entries[i].tx.IsTicket
+		}
 		if entries[i].tx.Sequence != entries[j].tx.Sequence {
 			return entries[i].tx.Sequence < entries[j].tx.Sequence
 		}

@@ -75,6 +75,28 @@ func TestCanonicalSortBySequence(t *testing.T) {
 	}
 }
 
+func TestCanonicalSortSeqBeforeTicket(t *testing.T) {
+	// Same account: a sequence-based txn must sort before a ticket-based txn
+	// regardless of numeric value, matching rippled's SeqProxy::operator<.
+	// This guarantees that ticket-creating txns (sequence-based) sort before
+	// ticket-consuming txns (ticket-based) and that an account-creating txn
+	// is applied before a batch that uses an earlier-issued ticket.
+	account := [20]byte{0x42}
+	txs := []PendingTx{
+		{Blob: []byte{1}, Hash: makeHash(1), Account: account, Sequence: 6, IsTicket: true},
+		{Blob: []byte{2}, Hash: makeHash(2), Account: account, Sequence: 16, IsTicket: false},
+	}
+
+	CanonicalSort(txs, [32]byte{})
+
+	if txs[0].IsTicket || txs[0].Sequence != 16 {
+		t.Errorf("expected sequence-based (16) first, got IsTicket=%v Sequence=%d", txs[0].IsTicket, txs[0].Sequence)
+	}
+	if !txs[1].IsTicket || txs[1].Sequence != 6 {
+		t.Errorf("expected ticket-based (6) second, got IsTicket=%v Sequence=%d", txs[1].IsTicket, txs[1].Sequence)
+	}
+}
+
 func TestCanonicalSortByTxID(t *testing.T) {
 	account := [20]byte{0x42}
 	hash1 := [32]byte{0x01}

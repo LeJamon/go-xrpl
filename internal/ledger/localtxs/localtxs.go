@@ -200,6 +200,11 @@ func (l *LocalTxs) GetTxSet() []openledger.PendingTx {
 		if c := bytes.Compare(snapshot[i].Account[:], snapshot[j].Account[:]); c != 0 {
 			return c < 0
 		}
+		// Sequence-based before ticket-based for the same account
+		// (rippled SeqProxy::operator<).
+		if snapshot[i].IsTicket != snapshot[j].IsTicket {
+			return !snapshot[i].IsTicket
+		}
 		if snapshot[i].Sequence != snapshot[j].Sequence {
 			return snapshot[i].Sequence < snapshot[j].Sequence
 		}

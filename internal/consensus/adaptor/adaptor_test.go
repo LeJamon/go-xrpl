@@ -215,7 +215,8 @@ func TestTxSetContains(t *testing.T) {
 	blob2 := []byte{0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C}
 	blob3 := []byte{0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C}
 
-	ts := NewTxSet([][]byte{blob1, blob2})
+	ts, err := NewTxSet([][]byte{blob1, blob2})
+	require.NoError(t, err)
 
 	id1 := computeTxID(blob1)
 	id2 := computeTxID(blob2)
@@ -230,13 +231,14 @@ func TestTxSetAddRemove(t *testing.T) {
 	blob1 := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C}
 	blob2 := []byte{0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C}
 
-	ts := NewTxSet([][]byte{blob1})
+	ts, err := NewTxSet([][]byte{blob1})
+	require.NoError(t, err)
 	assert.Equal(t, 1, ts.Size())
 
 	originalID := ts.ID()
 
 	// Add
-	err := ts.Add(blob2)
+	err = ts.Add(blob2)
 	require.NoError(t, err)
 	assert.Equal(t, 2, ts.Size())
 	assert.NotEqual(t, originalID, ts.ID()) // ID should change

@@ -119,6 +119,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte) 
 			}
 			if common != nil {
 				ptx.Sequence = common.SeqProxy()
+				ptx.IsTicket = common.TicketSequence != nil
 			}
 			s.localTxs.PushBack(currentSeq, ptx)
 		}
@@ -135,6 +136,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte) 
 		}
 		if common != nil {
 			ptx.Sequence = common.SeqProxy()
+			ptx.IsTicket = common.TicketSequence != nil
 		}
 		s.pendingTxs = append(s.pendingTxs, ptx)
 	}
