@@ -74,9 +74,14 @@ var (
 type subtask struct {
 	hash     [32]byte
 	seq      uint32
-	acquired bool       // RequestReplayDelta has been sent
-	verified bool       // framing-verified by the underlying ReplayDelta
+	acquired bool // RequestReplayDelta has been sent
+	verified bool // framing-verified by the underlying ReplayDelta
 	delta    *ReplayDelta
+	// tried records peers we've already asked for this hash. On
+	// verification failure we re-dispatch to a peer not in this set
+	// rather than aborting the whole task. Mirrors rippled's per-
+	// subtask peer rotation (LedgerReplayer.h:49-57).
+	tried map[uint64]bool
 }
 
 // LedgerReplayTask coordinates a multi-ledger backward catch-up:
@@ -283,11 +288,16 @@ func (t *LedgerReplayTask) OnSkipListResponse(resp *message.ProofPathResponse) e
 	chain := make([]subtask, 0, t.depth)
 	for k := needAncestors; k >= 1; k-- {
 		chain = append(chain, subtask{
-			hash: hashes[len(hashes)-k],
-			seq:  t.tipSeq - uint32(k),
+			hash:  hashes[len(hashes)-k],
+			seq:   t.tipSeq - uint32(k),
+			tried: make(map[uint64]bool),
 		})
 	}
-	chain = append(chain, subtask{hash: t.tipHash, seq: t.tipSeq})
+	chain = append(chain, subtask{
+		hash:  t.tipHash,
+		seq:   t.tipSeq,
+		tried: make(map[uint64]bool),
+	})
 	t.chain = chain
 	t.state = TaskStateRunningDeltas
 
@@ -321,7 +331,7 @@ func (t *LedgerReplayTask) OnDeltaResponse(resp *message.ReplayDeltaResponse) er
 		return fmt.Errorf("%w: OnDeltaResponse from state %d", ErrTaskWrongState, t.state)
 	}
 
-	respHash, ok := toHash32(resp.LedgerHash)
+	respHash, ok := ToHash32(resp.LedgerHash)
 	if !ok {
 		t.mu.Unlock()
 		return ErrNoMatchingAcquisition
@@ -341,11 +351,30 @@ func (t *LedgerReplayTask) OnDeltaResponse(resp *message.ReplayDeltaResponse) er
 
 	rd, err := t.replayer.HandleResponse(resp)
 	if err != nil {
+		// Verification failed against this peer. Drop the
+		// acquisition and mark the subtask as not-acquired so
+		// dispatchPending re-issues to a fresh peer. The whole task
+		// only fails if every peer has been tried for this hash.
 		t.replayer.Abandon(respHash)
-		t.state = TaskStateFailed
-		t.err = fmt.Errorf("verify delta seq=%d: %w", t.chain[idx].seq, err)
+		t.chain[idx].acquired = false
+		t.chain[idx].delta = nil
+		untried := 0
+		for _, p := range t.peers {
+			if !t.chain[idx].tried[p] {
+				untried++
+			}
+		}
+		if untried == 0 {
+			t.state = TaskStateFailed
+			t.err = fmt.Errorf("verify delta seq=%d (all peers exhausted): %w",
+				t.chain[idx].seq, err)
+			t.mu.Unlock()
+			return t.err
+		}
+		retryErr := fmt.Errorf("verify delta seq=%d: %w", t.chain[idx].seq, err)
 		t.mu.Unlock()
-		return t.err
+		t.dispatchPending()
+		return retryErr
 	}
 	t.chain[idx].delta = rd
 	t.chain[idx].verified = true
@@ -426,6 +455,11 @@ func (t *LedgerReplayTask) dispatchPending() {
 			t.cursor = (t.cursor + 1) % len(t.peers)
 			attempts++
 
+			// Skip peers that already returned bad data for this hash.
+			if entry.tried[peer] {
+				continue
+			}
+
 			_, err := t.replayer.Acquire(entry.hash, peer, nil)
 			if err == nil {
 				if wireErr := t.sender.RequestReplayDelta(peer, entry.hash); wireErr != nil {
@@ -433,6 +467,7 @@ func (t *LedgerReplayTask) dispatchPending() {
 					continue
 				}
 				t.chain[idx].acquired = true
+				t.chain[idx].tried[peer] = true
 				acquired = true
 				break
 			}
@@ -447,6 +482,7 @@ func (t *LedgerReplayTask) dispatchPending() {
 				// global inFlight map to route the response and mark
 				// acquired so we don't redundantly re-issue.
 				t.chain[idx].acquired = true
+				t.chain[idx].tried[peer] = true
 				acquired = true
 				break
 			}

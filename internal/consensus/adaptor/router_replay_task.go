@@ -10,16 +10,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 )
 
-// multiLedgerCatchupThreshold is the gap (peerSeq - ourSeq) above
-// which checkBehind switches from the single-ledger forward
-// acquisition path to a LedgerReplayTask backward walk. A gap of 4 is
-// the rough breakeven point: below that, sequential single-acquisition
-// rounds complete before a proof-path round-trip would amortize; above
-// it, the per-ledger gossip wait dominates. Tuned conservatively — a
-// higher threshold avoids spinning up the task machinery for
-// transient near-tip lag.
-const multiLedgerCatchupThreshold = uint32(4)
-
 // activeReplayTask bundles the in-flight LedgerReplayTask with the
 // router-side state used to route inbound responses and drive chain-
 // order adoption. Held under r.replayTaskMu.
@@ -215,7 +205,7 @@ func (r *Router) handleProofPathResponse(msg *peermanagement.InboundMessage) {
 // iff the task handled it; on true, the caller MUST skip the legacy
 // single-ledger Apply+adopt path.
 func (r *Router) routeDeltaToActiveTask(resp *message.ReplayDeltaResponse) (handled bool) {
-	hash, ok := toHash32Local(resp.LedgerHash)
+	hash, ok := inbound.ToHash32(resp.LedgerHash)
 	if !ok {
 		return false
 	}
@@ -365,14 +355,5 @@ func (s taskSenderAdapter) RequestProofPath(peerID uint64, ledgerHash, key [32]b
 
 func (s taskSenderAdapter) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 	return s.adaptor.RequestReplayDelta(peerID, hash)
-}
-
-func toHash32Local(h []byte) ([32]byte, bool) {
-	var out [32]byte
-	if len(h) != len(out) {
-		return out, false
-	}
-	copy(out[:], h)
-	return out, true
 }
 

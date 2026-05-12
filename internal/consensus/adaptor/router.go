@@ -290,6 +290,20 @@ func (r *Router) maintenanceTick() {
 		r.startLedgerAcquisitionLegacy(entry.Seq, entry.Hash, entry.PeerID)
 	}
 
+	// Reap an in-flight skip-list whose outer budget expired. The
+	// router holds exactly one active task at a time; aborting it
+	// frees the slot for the next StartReplayTask. Without this a
+	// silent peer wedges the activeTask gate indefinitely.
+	if timedOut := r.replayer.SkipListTimedOut(); len(timedOut) > 0 {
+		r.logger.Warn("skip-list acquisition timed out; aborting replay task",
+			"count", len(timedOut),
+		)
+		for _, h := range timedOut {
+			r.replayer.AbandonSkipList(h)
+		}
+		r.AbortActiveReplayTask(errors.New("skip-list timed out"))
+	}
+
 	// Reap a stuck legacy inbound ledger. Without this a single stalled
 	// acquisition blocks startLedgerAcquisitionLegacy from arming a new
 	// request for the SAME hash on the next statusChange — and blocks

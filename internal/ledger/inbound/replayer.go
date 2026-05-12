@@ -183,7 +183,7 @@ func (r *Replayer) HandleResponse(resp *message.ReplayDeltaResponse) (*ReplayDel
 	if resp == nil {
 		return nil, ErrNoMatchingAcquisition
 	}
-	hash, ok := toHash32(resp.LedgerHash)
+	hash, ok := ToHash32(resp.LedgerHash)
 	if !ok {
 		return nil, ErrNoMatchingAcquisition
 	}
@@ -369,7 +369,7 @@ func (r *Replayer) HandleSkipListResponse(resp *message.ProofPathResponse) (*Ski
 	if resp == nil {
 		return nil, ErrNoMatchingAcquisition
 	}
-	hash, ok := toHash32(resp.LedgerHash)
+	hash, ok := ToHash32(resp.LedgerHash)
 	if !ok {
 		return nil, ErrNoMatchingAcquisition
 	}
@@ -415,4 +415,19 @@ func (r *Replayer) SkipListCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.inFlightSkip)
+}
+
+// SkipListTimedOut returns target hashes of every in-flight skip-list
+// acquisition whose outer budget has expired. Counterpart to TimedOut.
+func (r *Replayer) SkipListTimedOut() [][32]byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var out [][32]byte
+	for h, sa := range r.inFlightSkip {
+		if sa.IsTimedOut() {
+			out = append(out, h)
+		}
+	}
+	return out
 }

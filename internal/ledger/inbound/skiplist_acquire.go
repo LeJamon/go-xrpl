@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
+	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/shamap"
 )
 
@@ -226,7 +228,7 @@ func (s *SkipListAcquire) verifyAndDecode(resp *message.ProofPathResponse) error
 			ErrSkipListResponseMismatch, resp.Error)
 	}
 
-	respHash, ok := toHash32(resp.LedgerHash)
+	respHash, ok := ToHash32(resp.LedgerHash)
 	if !ok || respHash != s.targetHash {
 		return fmt.Errorf("%w: ledger hash %x want %x",
 			ErrSkipListResponseMismatch,
@@ -240,7 +242,7 @@ func (s *SkipListAcquire) verifyAndDecode(resp *message.ProofPathResponse) error
 	}
 
 	skipKL := keylet.LedgerHashes()
-	respKey, ok := toHash32(resp.Key)
+	respKey, ok := ToHash32(resp.Key)
 	if !ok || respKey != skipKL.Key {
 		return fmt.Errorf("%w: key %x want skip-list %x",
 			ErrSkipListResponseMismatch,
@@ -249,6 +251,22 @@ func (s *SkipListAcquire) verifyAndDecode(resp *message.ProofPathResponse) error
 
 	if len(resp.Path) == 0 {
 		return fmt.Errorf("%w: empty proof path", ErrSkipListProofInvalid)
+	}
+
+	// If the peer included a ledger header, cross-check that
+	// calculateLedgerHash(header) == targetHash. Mirrors rippled's
+	// processProofPathResponse
+	// (rippled/src/xrpld/app/ledger/detail/LedgerReplayMsgHandler.cpp:127-135).
+	if len(resp.LedgerHeader) > 0 {
+		hdr, err := header.DeserializeHeader(resp.LedgerHeader, false)
+		if err != nil {
+			return fmt.Errorf("%w: header deserialize: %v",
+				ErrSkipListResponseMismatch, err)
+		}
+		if genesis.CalculateLedgerHash(*hdr) != s.targetHash {
+			return fmt.Errorf("%w: header hash mismatch for target %x",
+				ErrSkipListResponseMismatch, s.targetHash[:8])
+		}
 	}
 
 	payload := shamap.VerifyProofPathWithValue(s.stateHash, skipKL.Key, resp.Path)

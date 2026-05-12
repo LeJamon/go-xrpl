@@ -276,6 +276,7 @@ func TestLedgerReplayTask_50LedgerBackwardWalk(t *testing.T) {
 	for i, h := range chainHashes {
 		chainSeqByHash[h] = i
 	}
+	alreadyDelivered := map[[32]byte]bool{}
 
 	for !task.IsComplete() {
 		// Take a snapshot of the next-not-yet-responded request.
@@ -338,12 +339,6 @@ func TestLedgerReplayTask_50LedgerBackwardWalk(t *testing.T) {
 	assert.Equal(t, 0, replayer.Count(), "all replay-delta slots freed")
 	assert.Equal(t, 0, replayer.SkipListCount(), "skip-list slot freed")
 }
-
-// alreadyDelivered is shared between sub-tests in this file so the
-// 50-ledger driver and the parallelism driver can both track which
-// (peer,hash) pairs have been responded to without re-instantiating a
-// recorder.
-var alreadyDelivered = map[[32]byte]bool{}
 
 // TestLedgerReplayTask_ParallelismBoundedByExistingCaps drives the
 // same 50-ledger backward walk but asserts at every wire event that

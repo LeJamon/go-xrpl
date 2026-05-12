@@ -195,7 +195,7 @@ func (r *ReplayDelta) Parent() *ledger.Ledger { return r.parent }
 func (r *ReplayDelta) SetParent(parent *ledger.Ledger) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.parent != nil && r.parent != parent {
+	if r.parent != nil && r.parent.Hash() != parent.Hash() {
 		return fmt.Errorf("SetParent: parent already bound to %x, refusing to overwrite with %x",
 			r.parent.Hash(), parent.Hash())
 	}
@@ -389,7 +389,7 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 	// reverse arithmetic CalculateLedgerHash relies on. The byte-level
 	// hash is what rippled computes on the sender side and is the only
 	// invariant guaranteed to round-trip.
-	advertised, ok := toHash32(resp.LedgerHash)
+	advertised, ok := ToHash32(resp.LedgerHash)
 	if !ok {
 		return fmt.Errorf("bad hash length: %d", len(resp.LedgerHash))
 	}
@@ -772,9 +772,9 @@ func (r *ReplayDelta) parentStateSnapshot() (*shamap.SHAMap, error) {
 	return snap, nil
 }
 
-// toHash32 returns h as [32]byte iff len(h) == 32. The bool return
+// ToHash32 returns h as [32]byte iff len(h) == 32. The bool return
 // distinguishes a wrong-length input from an all-zero hash.
-func toHash32(h []byte) ([32]byte, bool) {
+func ToHash32(h []byte) ([32]byte, bool) {
 	var out [32]byte
 	if len(h) != len(out) {
 		return out, false

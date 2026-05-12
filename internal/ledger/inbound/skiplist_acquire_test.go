@@ -191,6 +191,16 @@ func TestSkipListAcquire_InvalidProof_Rejected(t *testing.T) {
 			},
 			wantErr: ErrSkipListResponseMismatch,
 		},
+		{
+			// Non-empty header bytes that don't hash back to
+			// targetHash must be rejected, matching rippled's
+			// processProofPathResponse hash-mismatch check.
+			name: "header_mismatch",
+			mutate: func(resp *message.ProofPathResponse, _ *[32]byte) {
+				resp.LedgerHeader = []byte{0xFF, 0xFE, 0xFD, 0xFC, 0xFB}
+			},
+			wantErr: ErrSkipListResponseMismatch,
+		},
 	}
 
 	for _, tc := range cases {
