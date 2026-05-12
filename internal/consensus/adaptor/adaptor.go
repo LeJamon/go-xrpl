@@ -536,10 +536,14 @@ func (a *Adaptor) IncPeerBadData(peerID uint64, reason string) {
 	a.sender.IncPeerBadData(peerID, reason)
 }
 
-// GetParentLedgerForReplay returns the validated ledger at seq-1, which is
+// GetParentLedgerForReplay returns the closed ledger at seq-1, which is
 // the prior ledger needed to replay a delta into seq. Returns nil if the
-// parent is unknown or the request is for a ledger we cannot anchor on
-// (seq <= 1, no service wired). Mirrors the rippled
+// parent is unknown, the request is for a ledger we cannot anchor on
+// (seq <= 1, no service wired), OR the parent is still open (its hash
+// is unset until Close, so it cannot serve as a chain anchor — a
+// goxrpl-1 enclave run reproduced a live-lock where the open ledger
+// was returned and the replay-delta verifier kept rejecting valid
+// responses against an all-zero parent hash). Mirrors the rippled
 // LedgerDeltaAcquire::trigger requirement that the parent ledger is
 // already locally available before issuing the delta request.
 func (a *Adaptor) GetParentLedgerForReplay(seq uint32) *ledger.Ledger {
@@ -548,6 +552,9 @@ func (a *Adaptor) GetParentLedgerForReplay(seq uint32) *ledger.Ledger {
 	}
 	parent, err := a.ledgerService.GetLedgerBySequence(seq - 1)
 	if err != nil || parent == nil {
+		return nil
+	}
+	if !parent.IsClosed() {
 		return nil
 	}
 	return parent

@@ -1794,12 +1794,14 @@ type pendingAdopt struct {
 }
 
 // heldAdoptionTTL bounds how long a held adoption is kept before
-// eviction. 60s comfortably spans the worst-case replay-delta round-
-// trip (typically <5s) while still ensuring a stale fork or a
-// disconnected-peer response can't linger indefinitely and re-fire
-// against an unrelated adopted ledger that happens to land at the
-// awaited parent seq much later.
-const heldAdoptionTTL = 60 * time.Second
+// eviction. 5 minutes accommodates a long backward-chain catch-up
+// from a divergent local fork — a goxrpl-1 enclave run reproduced
+// a wedged node where a 30-ledger fork couldn't recover because
+// intermediate held entries TTL-evicted at 60s while the cascade
+// was still walking back to a common ancestor. The window is bounded
+// to keep a stale fork / disconnected-peer response from lingering
+// indefinitely and re-firing against an unrelated adopted ledger.
+const heldAdoptionTTL = 5 * time.Minute
 
 // heldAdoptionCascadeMax caps the cascade recursion depth. Real-world
 // cascades are 1-2 hops deep (replay-delta is single-ledger-per-
