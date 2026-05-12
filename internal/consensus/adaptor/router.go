@@ -823,12 +823,9 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 		return
 	}
 
-	txMap, err := ts.BuildSHAMap()
-	if err != nil {
-		r.logger.Warn("failed to build tx-set SHAMap for serve",
-			"error", err, "peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]))
-		return
-	}
+	// SHAMap is non-nil for any TxSet that reached the cache —
+	// NewTxSet returns an error before stashing on shamap.New failure.
+	txMap := ts.shamap()
 
 	queryDepth := int(req.QueryDepth)
 	if queryDepth == 0 {
@@ -861,7 +858,7 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 		"peer", peerID,
 		"txset", fmt.Sprintf("%x", txSetID[:8]),
 		"shamap_nodes", len(nodes),
-		"txs", len(ts.Txs()),
+		"txs", ts.Size(),
 		"query_depth", queryDepth,
 		"requested_nodes", len(req.NodeIDs))
 }
