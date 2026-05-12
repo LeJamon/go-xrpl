@@ -75,6 +75,13 @@ func (o *OpenLedger) Modify(fn func(*ledger.Ledger) bool) bool {
 	parent := o.current
 	o.currentMu.RUnlock()
 
+	if !parent.IsOpen() {
+		if o.logger != nil {
+			o.logger.Error("openledger.Modify: current view is not open — refusing to apply")
+		}
+		return false
+	}
+
 	next, err := parent.MutableSnapshot()
 	if err != nil {
 		if o.logger != nil {
@@ -276,9 +283,8 @@ func collectTxs(v *ledger.Ledger) []PendingTx {
 // per-tx body delegates to TxQ.Apply, which itself decides whether to
 // apply directly to the view or hold the tx in the queue.
 func (o *OpenLedger) Submit(ptx PendingTx, cfg ApplyConfig, queue *txq.TxQ) (bool, Result) {
-	// Submit is per-tx ingress — always OpenLedger semantics. Force the
-	// mode here so a caller's stray BuildLedgerMode does not cause tec
-	// to be silently dropped as ResultRetry.
+	// Per-tx ingress is OpenLedger semantics by definition (BuildLedger
+	// only applies inside consensus close). cfg.Mode is ignored.
 	cfg.Mode = OpenLedgerMode
 	result := ResultFailure
 	changed := o.Modify(func(view *ledger.Ledger) bool {

@@ -417,15 +417,6 @@ func (s *Service) rebuildOpenLedgerViewLocked() error {
 	return nil
 }
 
-// acceptOpenLedgerViewLocked invokes OpenLedger.Accept on the LCL
-// transition from the prior closed ledger to s.closedLedger. No-op
-// when the view is uninitialised (pre-Start). closedSeq is passed in
-// for log context only.
-//
-// retries (if non-nil) are the txs left in retry state by the consensus /
-// standalone build path — they replay first against the new open view.
-// anyDisputes is the retriesFirst flag per rippled RCLConsensus.cpp:667
-// (the anyDisputes signal). Caller must hold s.mu.
 // closedLedgerCtx implements txq.ClosedLedgerContext over a closed
 // *ledger.Ledger. baseFee is the closed ledger's reference base fee in
 // drops; we use it to convert per-tx fee values into fee levels for the
@@ -483,6 +474,15 @@ func (s *Service) processClosedLedgerLocked() {
 	s.txQueue.ProcessClosedLedger(ctx, false)
 }
 
+// acceptOpenLedgerViewLocked invokes OpenLedger.Accept on the LCL
+// transition from the prior closed ledger to s.closedLedger. No-op
+// when the view is uninitialised (pre-Start). closedSeq is passed in
+// for log context only.
+//
+// retries (if non-nil) are the txs left in retry state by the consensus /
+// standalone build path — they replay first against the new open view.
+// anyDisputes is the retriesFirst flag per rippled RCLConsensus.cpp:667
+// (the anyDisputes signal). Caller must hold s.mu.
 func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, buildRetries []openledger.PendingTx, anyDisputes bool) {
 	if s.openLedgerView == nil {
 		return

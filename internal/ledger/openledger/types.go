@@ -28,6 +28,14 @@ type PendingTx struct {
 	// Sequence is the effective sequence (Sequence or TicketSequence
 	// via SeqProxy).
 	Sequence uint32
+	// LastLedgerSequence is the tx's sfLastLedgerSequence, or 0 when
+	// unset. LocalTxs uses it to clamp the held-pool expiration so a tx
+	// never lingers past its own validity window.
+	LastLedgerSequence uint32
+	// IsTicket is true when the tx consumes a Ticket rather than a raw
+	// Sequence. LocalTxs.Sweep uses this to switch between the seq-
+	// advance check and the ticket-burn check.
+	IsTicket bool
 }
 
 // Result classifies the outcome of applying a single transaction in the
@@ -66,11 +74,18 @@ func ParsePendingTx(blob []byte) (PendingTx, error) {
 		return PendingTx{}, hashErr
 	}
 
+	var lastLedger uint32
+	if common.LastLedgerSequence != nil {
+		lastLedger = *common.LastLedgerSequence
+	}
+
 	return PendingTx{
-		Blob:     blob,
-		Hash:     txHash,
-		Account:  accountID,
-		Sequence: common.SeqProxy(),
+		Blob:               blob,
+		Hash:               txHash,
+		Account:            accountID,
+		Sequence:           common.SeqProxy(),
+		LastLedgerSequence: lastLedger,
+		IsTicket:           common.TicketSequence != nil,
 	}, nil
 }
 

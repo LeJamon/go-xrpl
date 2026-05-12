@@ -631,9 +631,8 @@ func (a *Adaptor) StoreLedger(ledger consensus.Ledger) error {
 
 // --- Transaction operations ---
 
-// GetPendingTxs returns the raw tx blobs currently in the persistent
-// open view. Used by the engine for the open-phase "anyTransactions"
-// gate; consensus position formation uses GetProposableTxs. Pointer-
+// GetPendingTxs returns the raw tx blobs in the persistent open view.
+// Used by the engine for the open-phase "anyTransactions" gate. Pointer-
 // deref of openLedger().current()->txs — no per-call filter.
 func (a *Adaptor) GetPendingTxs() [][]byte {
 	if a.ledgerService == nil {
@@ -643,11 +642,13 @@ func (a *Adaptor) GetPendingTxs() [][]byte {
 }
 
 // GetProposableTxs returns the tx set the node will propose this round.
-// Pointer-deref of the persistent open-ledger view's current snapshot —
-// matches rippled RCLConsensus.cpp:333-349 reading
-// openLedger().current()->txs. The parent parameter is reserved for
-// interface compatibility (the view tracks its own parent internally).
-func (a *Adaptor) GetProposableTxs(_ consensus.Ledger) [][]byte {
+// Mirrors rippled RCLConsensus.cpp:333-349. parent is the prevLedger
+// rippled threads through for negative-UNL / amendment-vote filtering;
+// goXRPL does not filter today so the two methods return the same
+// snapshot, but the parameter is part of the rippled-faithful contract
+// and the implementations will diverge once filtering lands.
+func (a *Adaptor) GetProposableTxs(parent consensus.Ledger) [][]byte {
+	_ = parent
 	if a.ledgerService == nil {
 		return nil
 	}

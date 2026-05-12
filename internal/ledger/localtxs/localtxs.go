@@ -44,21 +44,31 @@ type LocalTxs struct {
 func New() *LocalTxs { return &LocalTxs{} }
 
 // PushBack records a locally-submitted tx with the current ledger
-// sequence as its anchor for the age check. Duplicates (same tx hash)
-// are no-ops — rippled's std::list::emplace_back would happily double-
-// insert, but we de-dupe here because every successful Submit publishes
-// a new Current() so a relay-then-RPC echo would otherwise push twice.
-// Mirrors LocalTxs.cpp:115-121.
+// sequence as its anchor for the age check. Expiration is the lesser
+// of currentLedgerSeq + HoldLedgers and (LastLedgerSequence + 1) when
+// the tx has sfLastLedgerSequence set — mirrors LocalTxs.cpp:58-65.
+//
+// On duplicate hash, refresh the expiration rather than no-op so a
+// relay-then-RPC echo extends the hold window instead of locking it to
+// whichever insertion arrived first.
 func (l *LocalTxs) PushBack(currentLedgerSeq uint32, ptx openledger.PendingTx) {
+	expire := currentLedgerSeq + HoldLedgers
+	if ptx.LastLedgerSequence > 0 {
+		if cap := ptx.LastLedgerSequence + 1; cap < expire {
+			expire = cap
+		}
+	}
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for i := range l.txs {
 		if l.txs[i].Ptx.Hash == ptx.Hash {
+			l.txs[i].ExpireLedgerSeq = expire
 			return
 		}
 	}
 	l.txs = append(l.txs, LocalTx{
-		ExpireLedgerSeq: currentLedgerSeq + HoldLedgers,
+		ExpireLedgerSeq: expire,
 		Ptx:             ptx,
 	})
 }
@@ -66,11 +76,10 @@ func (l *LocalTxs) PushBack(currentLedgerSeq uint32, ptx openledger.PendingTx) {
 // Sweep removes obsolete entries. Mirrors LocalTxs.cpp:142-176:
 //   - drop expired entries (view.seq > expire)
 //   - drop entries already in view (tx already validated)
-//   - drop entries whose sender's AccountRoot.Sequence has advanced past
-//     the tx's sequence (replacement / success / tefPAST_SEQ)
-//
-// Ticket-based txs survive the seq check until they age out (we don't
-// yet read Ticket SLEs from a view; the age cap bounds the held window).
+//   - for seq-based txs: drop when the sender's AccountRoot.Sequence has
+//     advanced past the tx's sequence (replacement / success / tefPAST_SEQ)
+//   - for ticket-based txs: drop when the sender's sequence has advanced
+//     past the ticket AND the Ticket SLE is gone (burned).
 func (l *LocalTxs) Sweep(view *ledger.Ledger) {
 	if view == nil {
 		return
@@ -87,7 +96,11 @@ func (l *LocalTxs) Sweep(view *ledger.Ledger) {
 		if view.TxExists(lt.Ptx.Hash) {
 			continue
 		}
-		if seqAdvancedPast(view, lt.Ptx) {
+		if lt.Ptx.IsTicket {
+			if ticketBurned(view, lt.Ptx) {
+				continue
+			}
+		} else if seqAdvancedPast(view, lt.Ptx) {
 			continue
 		}
 		kept = append(kept, lt)
@@ -120,18 +133,59 @@ func seqAdvancedPast(view *ledger.Ledger, ptx openledger.PendingTx) bool {
 	return ar.Sequence > ptx.Sequence
 }
 
+// ticketBurned reports whether the Ticket the tx targets is gone from
+// the view. Mirrors rippled LocalTxs.cpp:165-175: a ticket-based held tx
+// is dead if the AccountRoot.Sequence has moved past the ticket value
+// AND the Ticket SLE no longer exists (consumed). Both conditions
+// matter: a ticket can be created (sequence advanced) but not yet
+// consumed (SLE still present), in which case the held tx is still
+// applicable.
+func ticketBurned(view *ledger.Ledger, ptx openledger.PendingTx) bool {
+	ar, ok := readAccountRoot(view, ptx.Account)
+	if !ok {
+		return false
+	}
+	if ar.Sequence <= ptx.Sequence {
+		return false
+	}
+	exists, err := view.Exists(keylet.Ticket(ptx.Account, ptx.Sequence))
+	if err != nil {
+		return false
+	}
+	return !exists
+}
+
+func readAccountRoot(view *ledger.Ledger, accountID [20]byte) (*state.AccountRoot, bool) {
+	k := keylet.Account(accountID)
+	exists, err := view.Exists(k)
+	if err != nil || !exists {
+		return nil, false
+	}
+	data, err := view.Read(k)
+	if err != nil {
+		return nil, false
+	}
+	ar, err := state.ParseAccountRoot(data)
+	if err != nil || ar == nil {
+		return nil, false
+	}
+	return ar, true
+}
+
 // GetTxSet returns the current pool as a canonical-sorted slice ready
-// for OpenLedger.Accept's `locals` parameter.
+// for OpenLedger.Accept's `locals` parameter. Mirrors rippled
+// LocalTxs.cpp:126 — `CanonicalTXSet tset(uint256{})` (zero salt).
 //
-// Sort key matches rippled CanonicalTXSet with zero salt
-// (LocalTxs.cpp:126 `CanonicalTXSet tset(uint256{})`):
+// Sort key (zero-salt CanonicalTXSet):
 //  1. account bytes
 //  2. sequence
 //  3. tx hash
 //
-// With zero salt the accountKey XOR collapses to the raw 20-byte account
-// padded to 32 bytes — equivalent to lexicographic compare on the
-// account directly.
+// The zero-salt XOR collapses accountKey to the raw 20-byte account
+// padded to 32 bytes, so this is equivalent to lexicographic compare on
+// account directly. Any future caller that needs a salt-aware sort
+// (e.g. the consensus build path's SHAMap-root salt) must call
+// openledger.CanonicalSort on the returned slice instead.
 func (l *LocalTxs) GetTxSet() []openledger.PendingTx {
 	l.mu.Lock()
 	snapshot := make([]openledger.PendingTx, len(l.txs))

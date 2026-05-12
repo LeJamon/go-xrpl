@@ -69,11 +69,13 @@ type ApplyConfig struct {
 // (OpenLedger.cpp:170-189). The "skip txs already in parent" guard from
 // BuildLedger.cpp:125-129 is folded in here so every caller benefits.
 //
-// Note: rippled's apply_one classifies `applied || terQUEUED` as
-// Success. goXRPL does not invoke TxQ inline here (the original two
-// service.go blocks did not either), so terQUEUED — being a ter code —
-// falls through to ShouldRetry. If/when the open-ledger filter gains
-// TxQ integration this branch will need to mirror OpenLedger.cpp:183.
+// ApplyTxs is the bulk-replay path (consensus build + Accept retries-
+// first). The per-tx ingress path is OpenLedger.Submit, which routes
+// through TxQ.Apply so terQUEUED is treated as Success per
+// OpenLedger.cpp:183. ApplyTxs does not invoke TxQ inline: queued txs
+// belong to the Accept modifier hook (OpenLedger.cpp:113-115), and
+// inline-queueing during a replay would re-enter the queue path we are
+// supposed to be draining.
 
 // applyAndClassify runs a single tx through bp against view and classifies
 // the engine result per the selected Mode.
@@ -139,124 +141,88 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 		return nil
 	}
 
-	type txStatus int
-	const (
-		txPending txStatus = iota
-		txSucceeded
-		txRetry
-		txFailed
-	)
+	logger := cfg.Logger
+	if logger == nil {
+		logger = xrpllog.Discard()
+	}
 
-	statuses := make(map[[32]byte]txStatus, len(txs))
-
-	// Parse blobs up front so we don't pay the cost per pass. Anything
-	// that fails to parse is permanently dropped (mirrors apply_one's
-	// tem/tef/tel branch for genuinely malformed input).
 	parsed := make([]tx.Transaction, len(txs))
 	for i, ptx := range txs {
 		t, err := tx.ParseFromBinary(ptx.Blob)
-		if err == nil {
-			t.SetRawBytes(ptx.Blob)
-			parsed[i] = t
-		} else {
-			statuses[ptx.Hash] = txFailed
+		if err != nil {
+			logger.Debug("openledger: dropping malformed tx in replay",
+				"hash", ptx.Hash, "err", err)
+			continue
 		}
+		t.SetRawBytes(ptx.Blob)
+		parsed[i] = t
 	}
 
-	// Skip txs already in the view — rippled BuildLedger.cpp:125-129 and
-	// OpenLedger.h:226-228 both pre-filter against the parent.
-	for _, ptx := range txs {
-		if view.TxExists(ptx.Hash) {
-			statuses[ptx.Hash] = txFailed
+	// retrySet tracks the canonical retry queue (rippled's `OrderedTxs
+	// retries`). Each tx index either lives here (Retry classification on
+	// the previous pass) or has already been settled (Success/Failure).
+	retrySet := make([]int, 0, len(txs))
+
+	buildEngine := func(certainRetry, skipSig bool) *tx.BlockProcessor {
+		engineConfig := tx.EngineConfig{
+			BaseFee:                   cfg.BaseFee,
+			ReserveBase:               cfg.ReserveBase,
+			ReserveIncrement:          cfg.ReserveIncrement,
+			LedgerSequence:            cfg.LedgerSequence,
+			NetworkID:                 cfg.NetworkID,
+			Logger:                    cfg.Logger,
+			SkipSignatureVerification: skipSig,
 		}
-	}
-
-	engineConfig := tx.EngineConfig{
-		BaseFee:          cfg.BaseFee,
-		ReserveBase:      cfg.ReserveBase,
-		ReserveIncrement: cfg.ReserveIncrement,
-		LedgerSequence:   cfg.LedgerSequence,
-		NetworkID:        cfg.NetworkID,
-		Logger:           cfg.Logger,
-	}
-
-	certainRetry := true
-	for pass := 0; pass < totalPasses; pass++ {
-		// pass>0 = signatures already verified on pass 0. Callers that
-		// pre-skip sigs (standalone replay) keep it off on every pass.
-		engineConfig.SkipSignatureVerification = cfg.SkipSignatureVerification || pass > 0
-		// tapRETRY on retriable passes; cleared on the final pass so any
-		// leftover tec commits. BuildLedger.cpp:131-132.
 		if certainRetry {
 			engineConfig.ApplyFlags |= tx.TapRETRY
-		} else {
-			engineConfig.ApplyFlags &^= tx.TapRETRY
 		}
-		engine := tx.NewEngine(view, engineConfig)
-		blockProcessor := tx.NewBlockProcessor(engine)
+		return tx.NewBlockProcessor(tx.NewEngine(view, engineConfig))
+	}
+
+	// Initial single pass over txs (OpenLedger.h:220-238). retry=true on
+	// this pass so tec results stay retriable rather than committing.
+	bp := buildEngine(true, cfg.SkipSignatureVerification)
+	for i, ptx := range txs {
+		if parsed[i] == nil {
+			continue
+		}
+		if view.TxExists(ptx.Hash) {
+			continue
+		}
+		switch applyAndClassify(view, bp, parsed[i], ptx.Blob, true, cfg.Mode) {
+		case ResultRetry:
+			retrySet = append(retrySet, i)
+		}
+	}
+
+	// Retry passes (OpenLedger.h:240-264). retry stays true while
+	// `certainRetry` and the pass index is below LEDGER_RETRY_PASSES;
+	// thereafter the final pass commits any tec leftover.
+	certainRetry := true
+	for pass := 0; pass < totalPasses && len(retrySet) > 0; pass++ {
+		// Signatures were verified on the initial pass; retry passes
+		// always skip — matches the pass > 0 short-circuit in the
+		// pre-refactor loop.
+		bp = buildEngine(certainRetry, true)
 
 		changes := 0
-		hasRetry := false
-
-		for i, ptx := range txs {
-			st := statuses[ptx.Hash]
-			// Succeeded txs are already in the view; failed txs are out.
-			if st == txFailed || st == txSucceeded {
+		nextRetries := retrySet[:0]
+		for _, idx := range retrySet {
+			ptx := txs[idx]
+			if parsed[idx] == nil {
 				continue
 			}
-			// On retry passes, retry txs are handled by the dedicated
-			// sub-loop below to match the build-path behavior.
-			if pass > 0 && st == txRetry {
-				continue
-			}
-
-			transaction := parsed[i]
-			if transaction == nil {
-				statuses[ptx.Hash] = txFailed
-				continue
-			}
-
-			switch applyAndClassify(view, blockProcessor, transaction, ptx.Blob, certainRetry, cfg.Mode) {
+			switch applyAndClassify(view, bp, parsed[idx], ptx.Blob, certainRetry, cfg.Mode) {
 			case ResultSuccess:
 				changes++
-				statuses[ptx.Hash] = txSucceeded
 			case ResultRetry:
-				statuses[ptx.Hash] = txRetry
-				hasRetry = true
-			default:
-				statuses[ptx.Hash] = txFailed
+				nextRetries = append(nextRetries, idx)
 			}
 		}
+		retrySet = nextRetries
 
-		// Retry sub-loop: on retry passes, re-run anything classified as
-		// txRetry above. Matches the original service.go two-sub-loop
-		// shape (and rippled's per-pass retry behavior).
-		if pass > 0 {
-			for i, ptx := range txs {
-				if statuses[ptx.Hash] != txRetry {
-					continue
-				}
-				transaction := parsed[i]
-				if transaction == nil {
-					statuses[ptx.Hash] = txFailed
-					continue
-				}
-
-				switch applyAndClassify(view, blockProcessor, transaction, ptx.Blob, certainRetry, cfg.Mode) {
-				case ResultSuccess:
-					changes++
-					statuses[ptx.Hash] = txSucceeded
-				case ResultRetry:
-					hasRetry = true
-				default:
-					statuses[ptx.Hash] = txFailed
-				}
-			}
-		}
-
-		if !hasRetry {
-			break
-		}
+		// rippled OpenLedger.h:259-260: a non-retry pass that made no
+		// changes bails. retryPasses below caps the retry-enabled passes.
 		if changes == 0 && !certainRetry {
 			break
 		}
@@ -265,11 +231,21 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 		}
 	}
 
-	if retries != nil {
-		for _, ptx := range txs {
-			if statuses[ptx.Hash] == txRetry {
-				*retries = append(*retries, ptx)
+	if retries != nil && len(retrySet) > 0 {
+		// Dedup against entries already in *retries — Accept calls
+		// ApplyTxs over multiple phases (retries-first, prior-current,
+		// locals) with the same slice, so the same hash can land in
+		// retrySet across phases.
+		seen := make(map[[32]byte]struct{}, len(retrySet)+len(*retries))
+		for _, ptx := range *retries {
+			seen[ptx.Hash] = struct{}{}
+		}
+		for _, idx := range retrySet {
+			if _, ok := seen[txs[idx].Hash]; ok {
+				continue
 			}
+			seen[txs[idx].Hash] = struct{}{}
+			*retries = append(*retries, txs[idx])
 		}
 	}
 
