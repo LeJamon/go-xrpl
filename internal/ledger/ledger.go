@@ -906,14 +906,18 @@ func (l *Ledger) SetStateMapFamily(family shamap.Family) {
 	l.stateMap.SetFamily(family)
 }
 
-// SerializeHeader returns the serialized ledger header bytes
+// SerializeHeader returns the serialized ledger header bytes. The
+// underlying writer is a bytes.Buffer that cannot fail; any error
+// from header.AddRaw means we built a malformed header in-process,
+// which is a programming bug and unsafe to paper over with nil
+// (callers persist or broadcast the result).
 func (l *Ledger) SerializeHeader() []byte {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
 	data, err := header.AddRaw(l.header, true)
 	if err != nil {
-		return nil
+		panic(fmt.Sprintf("ledger: SerializeHeader: %v", err))
 	}
 	return data
 }

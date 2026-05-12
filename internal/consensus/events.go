@@ -1,6 +1,7 @@
 package consensus
 
 import (
+	"sync"
 	"time"
 )
 
@@ -190,6 +191,7 @@ type EventSubscriber interface {
 
 // EventBus manages event subscriptions and delivery.
 type EventBus struct {
+	mu          sync.RWMutex
 	subscribers []EventSubscriber
 	eventCh     chan Event
 	stopCh      chan struct{}
@@ -209,7 +211,9 @@ func NewEventBus(bufferSize int) *EventBus {
 
 // Subscribe adds a subscriber to receive events.
 func (eb *EventBus) Subscribe(sub EventSubscriber) {
+	eb.mu.Lock()
 	eb.subscribers = append(eb.subscribers, sub)
+	eb.mu.Unlock()
 }
 
 // Publish sends an event to all subscribers.
@@ -242,7 +246,10 @@ func (eb *EventBus) run() {
 		case <-eb.stopCh:
 			return
 		case event := <-eb.eventCh:
-			for _, sub := range eb.subscribers {
+			eb.mu.RLock()
+			subs := eb.subscribers
+			eb.mu.RUnlock()
+			for _, sub := range subs {
 				sub.OnEvent(event)
 			}
 		}

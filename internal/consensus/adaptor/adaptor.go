@@ -14,6 +14,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -161,8 +162,10 @@ type Adaptor struct {
 	operatingMode consensus.OperatingMode
 
 	// Close time offset — adjusted each round toward network average.
-	// Matches rippled's timeKeeper().closeTime() offset.
-	closeOffset time.Duration
+	// Matches rippled's timeKeeper().closeTime() offset. Stored as
+	// nanoseconds in an atomic so the consensus hot path (Now) avoids
+	// lock contention.
+	closeOffsetNs atomic.Int64
 
 	// Transaction set cache
 	txSetCache *TxSetCache
@@ -1129,10 +1132,7 @@ func (a *Adaptor) IsStandalone() bool {
 // --- Time operations ---
 
 func (a *Adaptor) Now() time.Time {
-	a.mu.RLock()
-	offset := a.closeOffset
-	a.mu.RUnlock()
-	return time.Now().Add(offset)
+	return time.Now().Add(time.Duration(a.closeOffsetNs.Load()))
 }
 
 func (a *Adaptor) CloseTimeResolution() time.Duration {
@@ -1164,10 +1164,7 @@ func (a *Adaptor) AdjustCloseTime(rawCloseTimes consensus.CloseTimes) {
 	avg := time.Unix(avgSecs, 0)
 
 	offset := avg.Sub(rawCloseTimes.Self)
-
-	a.mu.Lock()
-	a.closeOffset = offset
-	a.mu.Unlock()
+	a.closeOffsetNs.Store(int64(offset))
 
 	if offset != 0 {
 		a.logger.Debug("adjusted close time offset",
