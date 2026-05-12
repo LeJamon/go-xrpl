@@ -849,6 +849,7 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	s.closedLedger = s.openLedger
 	s.validatedLedger = s.openLedger
 	s.ledgerHistory[closedSeq] = s.openLedger
+	s.evictOldHistoryLocked(closedSeq)
 
 	// Standalone already promotes to validated above, so any stashed
 	// validation at this seq is redundant — but drain it so the entry
@@ -1228,6 +1229,42 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 		"purged_count", len(purgedDetails),
 		"purged", purgedDetails,
 	)
+}
+
+// historyWindow caps the in-memory ledgerHistory + tx-index caches to
+// a sliding window of recent validated ledgers. Matches the existing
+// pendingValidationMaxLen sizing and rippled's LedgerHistory window
+// (~256 ledgers ≈ 13 minutes at 3s closes). Range-style RPC lookups
+// for older sequences fall through to the relational DB when
+// configured (see ledger_query.go). Hash-based GetTransaction
+// lookups beyond the window currently return "not found" — a DB
+// fallback is tracked separately.
+const historyWindow = 256
+
+// evictOldHistoryLocked drops ledgerHistory entries (and their
+// associated tx-index entries) with seq <= latestValidatedSeq -
+// historyWindow. Bounds the in-memory caches so a long-running node
+// does not accumulate every ledger and tx hash ever seen.
+//
+// Caller must hold s.mu.Lock(). Safe to call with any
+// latestValidatedSeq; the helper is a no-op when the window has not
+// been exceeded.
+func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
+	if latestValidatedSeq <= historyWindow {
+		return
+	}
+	cutoff := latestValidatedSeq - historyWindow
+	for seq, l := range s.ledgerHistory {
+		if seq > cutoff {
+			continue
+		}
+		_ = l.ForEachTransaction(func(txHash [32]byte, _ []byte) bool {
+			delete(s.txIndex, txHash)
+			delete(s.txPositionIndex, txHash)
+			return true
+		})
+		delete(s.ledgerHistory, seq)
+	}
 }
 
 // extractAffectedAccounts extracts account addresses affected by a transaction.
@@ -1715,6 +1752,7 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	}
 	_ = l.SetValidated()
 	s.validatedLedger = l
+	s.evictOldHistoryLocked(seq)
 
 	// Sweep the held local pool against the just-validated ledger.
 	// Mirrors LedgerMaster::setValidLedger → app_.getOPs().updateLocalTx(*l)
