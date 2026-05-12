@@ -2,11 +2,7 @@
 // goXRPL. The open ledger is a node-local view that holds applied-but-
 // not-yet-validated transactions: it sits between the latest closed
 // ledger and the next-to-be-built closed ledger.
-//
-// Task 1 of issue #407 introduces only the shared 3-pass apply loop
-// (ApplyTxs) plus the pending-tx parse/sort/salt helpers. The
-// persistent OpenLedger view itself arrives in later tasks of the same
-// plan (rippled OpenLedger.h:209-270, BuildLedger.cpp:107-170).
+// Reference: rippled OpenLedger.h:209-270, BuildLedger.cpp:107-170.
 package openledger
 
 import (

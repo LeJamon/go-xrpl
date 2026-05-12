@@ -179,7 +179,6 @@ func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
 		senders[i] = testenv.NewAccount("sender" + itoa(i))
 	}
 	dest := testenv.NewAccount("dest")
-	// Fund each sender + dest. Fund accepts variadic.
 	all := append([]*testenv.Account{dest}, senders...)
 	env.Fund(all...)
 	parent := closedParent(t, env)
@@ -266,10 +265,6 @@ func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
 		close(writersDone)
 	}()
 
-	// Simple approach: wait for ALL goroutines but kick readers via stop.
-	// Drain writers first by joining a separate WG would require split; we
-	// instead spin briefly until successCount + parse-failures equals N's
-	// upper bound, then stop readers.
 	done := make(chan struct{})
 	go func() {
 		// Writers self-terminate; once successCount stops climbing we close.
@@ -277,7 +272,6 @@ func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
 		for {
 			cur := successCount.Load()
 			if cur == int32(N) || (cur == last && cur > 0) {
-				// Either all succeeded or we've stabilized.
 				close(done)
 				return
 			}

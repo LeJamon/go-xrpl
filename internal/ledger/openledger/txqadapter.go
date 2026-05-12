@@ -33,7 +33,6 @@ func NewTxqAdapter(view *ledger.Ledger, cfg ApplyConfig) *TxqAdapter {
 	return &TxqAdapter{view: view, cfg: cfg}
 }
 
-// GetLedgerSequence returns the view's current sequence (open-ledger seq).
 func (a *TxqAdapter) GetLedgerSequence() uint32 {
 	if a.view == nil {
 		return 0
@@ -77,7 +76,6 @@ func (a *TxqAdapter) GetAccountSequence(accountID [20]byte) uint32 {
 	return ar.Sequence
 }
 
-// AccountExists reports whether an AccountRoot SLE exists for accountID.
 func (a *TxqAdapter) AccountExists(accountID [20]byte) bool {
 	if a.view == nil {
 		return false
@@ -89,7 +87,6 @@ func (a *TxqAdapter) AccountExists(accountID [20]byte) bool {
 	return exists
 }
 
-// TicketExists reports whether a Ticket SLE exists for (accountID, ticketSeq).
 func (a *TxqAdapter) TicketExists(accountID [20]byte, ticketSeq uint32) bool {
 	if a.view == nil {
 		return false
@@ -223,7 +220,6 @@ func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte,
 	return engine.Preclaim(txn, txHash)
 }
 
-// readAccountRoot is the shared helper for the SLE reads above.
 func (a *TxqAdapter) readAccountRoot(accountID [20]byte) (*state.AccountRoot, bool) {
 	if a.view == nil {
 		return nil, false

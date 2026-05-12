@@ -41,7 +41,6 @@ type LocalTxs struct {
 	txs []LocalTx
 }
 
-// New returns an empty LocalTxs pool.
 func New() *LocalTxs { return &LocalTxs{} }
 
 // PushBack records a locally-submitted tx with the current ledger
@@ -153,7 +152,6 @@ func (l *LocalTxs) GetTxSet() []openledger.PendingTx {
 	return snapshot
 }
 
-// Size returns the number of held entries.
 func (l *LocalTxs) Size() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()

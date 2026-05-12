@@ -168,7 +168,6 @@ func TestLocalTxs_Sweep_DropsAlreadyValidatedTx(t *testing.T) {
 	futureSeq := env.Seq(alice) + 10
 	ptx, view := pendingFromPay(t, env, alice, bob, futureSeq)
 
-	// Inject the tx into the view's tx map directly.
 	if err := view.AddTransaction(ptx.Hash, ptx.Blob); err != nil {
 		t.Fatalf("AddTransaction: %v", err)
 	}
@@ -202,7 +201,6 @@ func TestLocalTxs_GetTxSet_CanonicalOrder(t *testing.T) {
 	carolTx := buildPendingTx(t, env, carol, alice, carolSeq+100)
 
 	pool := localtxs.New()
-	// Scramble insertion order.
 	pool.PushBack(1, carolTx)
 	pool.PushBack(1, aliceTx)
 	pool.PushBack(1, bobTx)
@@ -238,7 +236,6 @@ func TestLocalTxs_GetTxSet_SortsBySequenceWithinAccount(t *testing.T) {
 	tx3 := buildPendingTx(t, env, alice, bob, seq+12)
 
 	pool := localtxs.New()
-	// Insert in scrambled order.
 	pool.PushBack(1, tx3)
 	pool.PushBack(1, tx1)
 	pool.PushBack(1, tx2)
@@ -253,8 +250,6 @@ func TestLocalTxs_GetTxSet_SortsBySequenceWithinAccount(t *testing.T) {
 			seq+10, seq+11, seq+12)
 	}
 }
-
-// --- helpers --------------------------------------------------------------
 
 // buildPendingTx constructs a signed payment from `from` to `to` at the
 // given sequence and returns the parsed PendingTx.
