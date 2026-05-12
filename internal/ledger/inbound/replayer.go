@@ -74,12 +74,21 @@ type TimedOutEntry struct {
 // caller (the consensus router) issues the wire request via its own
 // NetworkSender. This keeps the Replayer easy to unit-test and mirrors
 // how inbound.Ledger is already layered against its transport.
+//
+// The Replayer also tracks in-flight *SkipListAcquire acquisitions,
+// keyed by the TARGET ledger hash (the tip whose 256-entry ancestor
+// vector we're fetching). Skip-list and replay-delta acquisitions
+// each have their own map so the per-hash dedup is precise — a node
+// might legitimately want both a skip-list for hash X and a
+// replay-delta for the same hash X if X is both a multi-ledger
+// catch-up tip and a single-ledger forward acquisition target.
 type Replayer struct {
-	mu          sync.Mutex
-	inFlight    map[[32]byte]*ReplayDelta
-	logger      *slog.Logger
-	clock       Clock
-	maxInFlight int
+	mu            sync.Mutex
+	inFlight      map[[32]byte]*ReplayDelta
+	inFlightSkip  map[[32]byte]*SkipListAcquire
+	logger        *slog.Logger
+	clock         Clock
+	maxInFlight   int
 }
 
 // NewReplayer returns a Replayer configured with the given concurrency
@@ -97,10 +106,11 @@ func NewReplayer(logger *slog.Logger, clock Clock, maxInFlight int) *Replayer {
 		maxInFlight = DefaultMaxInFlightReplays
 	}
 	return &Replayer{
-		inFlight:    make(map[[32]byte]*ReplayDelta),
-		logger:      logger,
-		clock:       clock,
-		maxInFlight: maxInFlight,
+		inFlight:     make(map[[32]byte]*ReplayDelta),
+		inFlightSkip: make(map[[32]byte]*SkipListAcquire),
+		logger:       logger,
+		clock:        clock,
+		maxInFlight:  maxInFlight,
 	}
 }
 
@@ -232,8 +242,9 @@ func (r *Replayer) Abandon(hash [32]byte) {
 func (r *Replayer) Stop() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	n := len(r.inFlight)
+	n := len(r.inFlight) + len(r.inFlightSkip)
 	r.inFlight = make(map[[32]byte]*ReplayDelta)
+	r.inFlightSkip = make(map[[32]byte]*SkipListAcquire)
 	return n
 }
 
@@ -322,4 +333,105 @@ func (r *Replayer) Has(hash [32]byte) bool {
 	defer r.mu.Unlock()
 	_, ok := r.inFlight[hash]
 	return ok
+}
+
+// AcquireSkipList arms a new *SkipListAcquire for the rolling-256
+// LedgerHashes entry of targetHash, anchored on stateHash (the
+// target's AccountHash). Slot accounting is SEPARATE from
+// replay-delta acquisitions: skip-list fetches are short-lived (one
+// proof request, one response, no per-tx engine apply) and would
+// otherwise be starved by a 16-deep delta backlog. The dedup,
+// per-peer, and global cap semantics mirror Acquire.
+//
+// Returns:
+//   - ErrAcquisitionExists: targetHash already has a skip-list in flight.
+//   - ErrCapacityFull: at the maxInFlight cap.
+//   - ErrPerPeerCapacityFull: peerID already has MaxPerPeerReplays
+//     skip-list acquisitions in flight (kept separate from replay-delta
+//     per-peer accounting; the wire requests are distinct).
+func (r *Replayer) AcquireSkipList(targetHash, stateHash [32]byte, peerID uint64) (*SkipListAcquire, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, exists := r.inFlightSkip[targetHash]; exists {
+		return nil, ErrAcquisitionExists
+	}
+	if len(r.inFlightSkip) >= r.maxInFlight {
+		return nil, ErrCapacityFull
+	}
+
+	perPeer := 0
+	for _, sa := range r.inFlightSkip {
+		if sa.PeerID() == peerID {
+			perPeer++
+		}
+	}
+	if perPeer >= MaxPerPeerReplays {
+		return nil, ErrPerPeerCapacityFull
+	}
+
+	sa := NewSkipListAcquireWithClock(targetHash, stateHash, peerID, r.logger, r.clock)
+	r.inFlightSkip[targetHash] = sa
+	return sa, nil
+}
+
+// HandleSkipListResponse routes resp to the matching in-flight
+// SkipListAcquire (keyed by resp.LedgerHash), runs its GotResponse
+// verifier, and returns the acquisition so the caller can consume
+// Hashes(). Returns ErrNoMatchingAcquisition for stale/unsolicited
+// responses. Mirrors HandleResponse's contract for replay-delta.
+func (r *Replayer) HandleSkipListResponse(resp *message.ProofPathResponse) (*SkipListAcquire, error) {
+	if resp == nil {
+		return nil, ErrNoMatchingAcquisition
+	}
+	hash, ok := toHash32(resp.LedgerHash)
+	if !ok {
+		return nil, ErrNoMatchingAcquisition
+	}
+
+	r.mu.Lock()
+	sa, exists := r.inFlightSkip[hash]
+	r.mu.Unlock()
+
+	if !exists {
+		return nil, ErrNoMatchingAcquisition
+	}
+
+	if err := sa.GotResponse(resp); err != nil {
+		return sa, err
+	}
+	return sa, nil
+}
+
+// CompleteSkipList removes the skip-list acquisition for targetHash
+// from in-flight. Counterpart to Complete for replay-delta.
+func (r *Replayer) CompleteSkipList(targetHash [32]byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.inFlightSkip, targetHash)
+}
+
+// AbandonSkipList is a synonym for CompleteSkipList at the caller
+// site — "we're giving up" vs "we finished" reads more clearly than
+// reusing a single name for both intents.
+func (r *Replayer) AbandonSkipList(targetHash [32]byte) {
+	r.CompleteSkipList(targetHash)
+}
+
+// HasSkipList reports whether the given target hash currently has a
+// skip-list acquisition in flight.
+func (r *Replayer) HasSkipList(targetHash [32]byte) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.inFlightSkip[targetHash]
+	return ok
+}
+
+// SkipListCount returns the number of in-flight skip-list
+// acquisitions. Separate from Count (replay-delta) so tests and
+// metrics can distinguish the two work streams.
+func (r *Replayer) SkipListCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.inFlightSkip)
 }

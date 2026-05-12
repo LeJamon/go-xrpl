@@ -109,6 +109,14 @@ type Router struct {
 	// complete and leaves are handed to engine.OnTxSet.
 	txSetAcquireMu sync.Mutex
 	txSetAcquire   map[consensus.TxSetID]*txSetAcquireState
+
+	// activeTask, when non-nil, is the LedgerReplayTask currently
+	// driving a multi-ledger backward catch-up. Single-task design:
+	// deep catch-up is a one-shot operation, and serializing the
+	// task entry point avoids the rippled-style MAX_TASKS bookkeeping
+	// for now. Guarded by replayTaskMu.
+	replayTaskMu sync.Mutex
+	activeTask   *activeReplayTask
 }
 
 type txSetAcquireState struct {
@@ -321,6 +329,8 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 		r.handleLedgerData(msg)
 	case message.TypeReplayDeltaResponse:
 		r.handleReplayDeltaResponse(msg)
+	case message.TypeProofPathResponse:
+		r.handleProofPathResponse(msg)
 	case message.TypeManifests:
 		r.handleManifests(msg)
 	default:
@@ -1378,6 +1388,16 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 	}
 	resp, ok := decoded.(*message.ReplayDeltaResponse)
 	if !ok || resp == nil {
+		return
+	}
+
+	// Phase 5: if a LedgerReplayTask owns this hash, the task drives
+	// verification + chain-ordered Apply + adopt via its own
+	// callbacks. The legacy single-ledger path below is bypassed.
+	// Mirrors rippled's LedgerReplayer routing: a delta acquired by a
+	// LedgerReplayTask is owned by that task and never re-enters the
+	// generic InboundLedger flow.
+	if r.routeDeltaToActiveTask(resp) {
 		return
 	}
 

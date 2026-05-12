@@ -272,6 +272,26 @@ func (s *OverlaySender) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
 }
 
+// RequestProofPath asks a specific peer for the SHAMap merkle proof of
+// (key, mapType) under ledgerHash. Mirrors rippled's
+// SkipListAcquire::trigger
+// (rippled/src/xrpld/app/ledger/detail/SkipListAcquire.cpp:84-92):
+// one round-trip returns the leaf-to-root proof path plus the
+// serialized leaf, which the inbound SkipListAcquire verifier checks
+// against the target's stateHash.
+func (s *OverlaySender) RequestProofPath(peerID uint64, ledgerHash, key [32]byte, mapType message.LedgerMapType) error {
+	msg := &message.ProofPathRequest{
+		LedgerHash: ledgerHash[:],
+		Key:        key[:],
+		MapType:    mapType,
+	}
+	frame, err := encodeFrame(message.TypeProofPathReq, msg)
+	if err != nil {
+		return fmt.Errorf("encode proof path request: %w", err)
+	}
+	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
+}
+
 // RequestStateNodes sends a GetLedger request for account state SHAMap nodes.
 func (s *OverlaySender) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
 	msg := &message.GetLedger{
