@@ -221,7 +221,6 @@ func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
 	var successCount atomic.Int32
 	var readerObservations atomic.Int32
 
-	// Writers
 	for i := 0; i < N; i++ {
 		wg.Add(1)
 		go func(idx int) {
@@ -233,7 +232,6 @@ func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
 		}(i)
 	}
 
-	// Readers
 	stop := make(chan struct{})
 	for r := 0; r < N; r++ {
 		wg.Add(1)
