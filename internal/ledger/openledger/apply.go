@@ -201,8 +201,7 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 	certainRetry := true
 	for pass := 0; pass < totalPasses && len(retrySet) > 0; pass++ {
 		// Signatures were verified on the initial pass; retry passes
-		// always skip — matches the pass > 0 short-circuit in the
-		// pre-refactor loop.
+		// always skip.
 		bp = buildEngine(certainRetry, true)
 
 		changes := 0
