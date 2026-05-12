@@ -1,6 +1,7 @@
 package shamap
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -287,6 +288,255 @@ func TestGetMissingNodes_PathNodeIDs(t *testing.T) {
 			t.Errorf("missing NodeID is malformed: %v", err)
 		}
 	}
+}
+
+// Regression for issue #413: tx-set sync used AddKnownNodeUnchecked, a
+// tree-wide hash-search that silently fails (returning ErrUnexpectedNode
+// without diagnostics) whenever the path it would need to follow goes
+// through a hash-only stub child. AddKnownNodeByID mirrors rippled's
+// SHAMap::addKnownNode: it uses the peer-supplied SHAMapNodeID to drive
+// descent, accepts the node when its computed hash matches the parent's
+// stored child hash, and returns sentinel errors that let the caller
+// distinguish "wrong data" from "need to fetch ancestors first."
+func TestAddKnownNodeByID_RippledStyleReconstruct(t *testing.T) {
+	source, err := New(TypeTransaction)
+	if err != nil {
+		t.Fatalf("New source: %v", err)
+	}
+	for branch := byte(0); branch < 4; branch++ {
+		for sub := byte(0); sub < 4; sub++ {
+			for i := byte(0); i < 4; i++ {
+				var key [32]byte
+				key[0] = (branch << 4) | sub
+				key[1] = i << 4
+				if err := source.Put(key, []byte{branch, sub, i, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}); err != nil {
+					t.Fatalf("Put: %v", err)
+				}
+			}
+		}
+	}
+
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+	wireNodes, err := source.WalkWireNodes()
+	if err != nil {
+		t.Fatalf("WalkWireNodes: %v", err)
+	}
+	if len(wireNodes) < 3 {
+		t.Fatalf("test setup gave only %d wire nodes; need a multi-level tree", len(wireNodes))
+	}
+
+	dest, err := New(TypeTransaction)
+	if err != nil {
+		t.Fatalf("New dest: %v", err)
+	}
+	if err := dest.StartSync(); err != nil {
+		t.Fatalf("StartSync: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+
+	for i, w := range wireNodes {
+		nid, err := UnmarshalBinary(w.NodeID)
+		if err != nil {
+			t.Fatalf("UnmarshalBinary[%d]: %v", i, err)
+		}
+		if nid.IsRoot() {
+			continue
+		}
+		if err := dest.AddKnownNodeByID(nid, w.Data); err != nil {
+			t.Fatalf("AddKnownNodeByID[%d] depth=%d: %v", i, nid.Depth(), err)
+		}
+	}
+
+	if err := dest.FinishSync(); err != nil {
+		t.Fatalf("FinishSync: %v", err)
+	}
+
+	destHash, err := dest.Hash()
+	if err != nil {
+		t.Fatalf("dest hash: %v", err)
+	}
+	if destHash != rootHash {
+		t.Errorf("reconstructed hash mismatch: want %x got %x", rootHash[:8], destHash[:8])
+	}
+}
+
+// Validates the sentinel-error contract so callers (router.handleTxSetData)
+// can react: re-request ancestors on ErrParentNotInTree, drop the peer on
+// ErrNodeHashMismatch, log-and-skip on ErrEmptyBranchOnPath.
+func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
+	source, err := New(TypeTransaction)
+	if err != nil {
+		t.Fatalf("New source: %v", err)
+	}
+	for branch := byte(0); branch < 3; branch++ {
+		for sub := byte(0); sub < 3; sub++ {
+			var key [32]byte
+			key[0] = (branch << 4) | sub
+			if err := source.Put(key, []byte{branch, sub, 0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}); err != nil {
+				t.Fatalf("Put: %v", err)
+			}
+		}
+	}
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+	wireNodes, err := source.WalkWireNodes()
+	if err != nil {
+		t.Fatalf("WalkWireNodes: %v", err)
+	}
+
+	// Find a depth>=2 wire node — its parent stub will not be loaded yet
+	// on the dest map after only AddRootNode.
+	var deep *WireNode
+	for i := range wireNodes {
+		nid, err := UnmarshalBinary(wireNodes[i].NodeID)
+		if err != nil || nid.Depth() < 2 {
+			continue
+		}
+		deep = &wireNodes[i]
+		break
+	}
+	if deep == nil {
+		t.Fatal("test setup did not produce a depth>=2 node")
+	}
+
+	t.Run("ParentNotInTree", func(t *testing.T) {
+		dest, err := New(TypeTransaction)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if err := dest.StartSync(); err != nil {
+			t.Fatalf("StartSync: %v", err)
+		}
+		if err := dest.AddRootNode(rootHash, rootData); err != nil {
+			t.Fatalf("AddRootNode: %v", err)
+		}
+		nid, _ := UnmarshalBinary(deep.NodeID)
+		err = dest.AddKnownNodeByID(nid, deep.Data)
+		if !errors.Is(err, ErrParentNotInTree) {
+			t.Fatalf("want ErrParentNotInTree, got %v", err)
+		}
+	})
+
+	t.Run("NodeHashMismatch", func(t *testing.T) {
+		dest, err := New(TypeTransaction)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if err := dest.StartSync(); err != nil {
+			t.Fatalf("StartSync: %v", err)
+		}
+		if err := dest.AddRootNode(rootHash, rootData); err != nil {
+			t.Fatalf("AddRootNode: %v", err)
+		}
+		// Use a depth-1 node's NodeID with another depth-1 node's data:
+		// hash will be the unrelated sibling's hash, not what the parent
+		// has stored for that branch.
+		var d1a, d1b *WireNode
+		for i := range wireNodes {
+			nid, _ := UnmarshalBinary(wireNodes[i].NodeID)
+			if nid.Depth() != 1 {
+				continue
+			}
+			if d1a == nil {
+				d1a = &wireNodes[i]
+			} else {
+				d1b = &wireNodes[i]
+				break
+			}
+		}
+		if d1a == nil || d1b == nil {
+			t.Skip("need at least two depth-1 wire nodes")
+		}
+		nid, _ := UnmarshalBinary(d1a.NodeID)
+		err = dest.AddKnownNodeByID(nid, d1b.Data)
+		if !errors.Is(err, ErrNodeHashMismatch) {
+			t.Fatalf("want ErrNodeHashMismatch, got %v", err)
+		}
+	})
+
+	t.Run("EmptyBranchOnPath", func(t *testing.T) {
+		dest, err := New(TypeTransaction)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if err := dest.StartSync(); err != nil {
+			t.Fatalf("StartSync: %v", err)
+		}
+		if err := dest.AddRootNode(rootHash, rootData); err != nil {
+			t.Fatalf("AddRootNode: %v", err)
+		}
+		// Build a NodeID at depth=1 whose first nibble points into an
+		// empty branch on root (we used only branches 0..2 above, so
+		// nibble 0xF is guaranteed empty).
+		var path [32]byte
+		path[0] = 0xF0
+		nid, err := NewNodeID(1, path)
+		if err != nil {
+			t.Fatalf("NewNodeID: %v", err)
+		}
+		// Borrow any non-root wire data; descent fails before the data
+		// is parsed.
+		var anyData []byte
+		for i := range wireNodes {
+			rid, _ := UnmarshalBinary(wireNodes[i].NodeID)
+			if !rid.IsRoot() {
+				anyData = wireNodes[i].Data
+				break
+			}
+		}
+		err = dest.AddKnownNodeByID(nid, anyData)
+		if !errors.Is(err, ErrEmptyBranchOnPath) {
+			t.Fatalf("want ErrEmptyBranchOnPath, got %v", err)
+		}
+	})
+
+	t.Run("DuplicateIsNoOp", func(t *testing.T) {
+		dest, err := New(TypeTransaction)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if err := dest.StartSync(); err != nil {
+			t.Fatalf("StartSync: %v", err)
+		}
+		if err := dest.AddRootNode(rootHash, rootData); err != nil {
+			t.Fatalf("AddRootNode: %v", err)
+		}
+		var d1 *WireNode
+		for i := range wireNodes {
+			nid, _ := UnmarshalBinary(wireNodes[i].NodeID)
+			if nid.Depth() == 1 {
+				d1 = &wireNodes[i]
+				break
+			}
+		}
+		if d1 == nil {
+			t.Skip("no depth-1 node available")
+		}
+		nid, _ := UnmarshalBinary(d1.NodeID)
+		if err := dest.AddKnownNodeByID(nid, d1.Data); err != nil {
+			t.Fatalf("first AddKnownNodeByID: %v", err)
+		}
+		// Second call must be a no-op success (rippled SHAMap::addKnownNode
+		// returns SHAMapAddNode::duplicate(); we surface that as nil).
+		if err := dest.AddKnownNodeByID(nid, d1.Data); err != nil {
+			t.Fatalf("duplicate AddKnownNodeByID: %v", err)
+		}
+	})
 }
 
 func TestAddKnownNodeErrors(t *testing.T) {

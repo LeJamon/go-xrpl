@@ -14,6 +14,8 @@ var (
 	ErrNodeHashMismatch  = errors.New("node hash does not match expected")
 	ErrRootAlreadySet    = errors.New("root node already set")
 	ErrUnexpectedNode    = errors.New("unexpected node received")
+	ErrEmptyBranchOnPath = errors.New("path descends into an empty branch")
+	ErrParentNotInTree   = errors.New("parent node not yet loaded for path")
 )
 
 // SyncFilter is an interface for filtering which nodes should be fetched during sync.
@@ -269,6 +271,98 @@ func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 
 	// Find the location in the tree where this node belongs
 	return sm.insertKnownNode(nodeHash, node)
+}
+
+// AddKnownNodeByID inserts a node from wire data at the position specified
+// by the peer-supplied SHAMap NodeID (path + depth). The node's computed
+// hash must match the parent's stored child hash at the target branch.
+//
+// Mirrors rippled's SHAMap::addKnownNode (SHAMapSync.cpp:578-673): descent
+// through the partial tree is driven by the NodeID, not by hash-searching.
+// This is what the tx-set acquire path needs when a peer responds with
+// nodes deeper than the layer of stubs we have locally — the hash-search
+// variant (AddKnownNodeUnchecked) can only attach nodes whose direct
+// parent is already loaded, and silently drops the rest, causing endless
+// missing-node retries (issue #413).
+//
+// Returns:
+//   - nil on successful attach, or when the slot is already populated
+//     (duplicate, matching rippled's SHAMapAddNode::duplicate())
+//   - ErrEmptyBranchOnPath when descent hits an empty branch — peer sent
+//     a node we never asked for
+//   - ErrParentNotInTree when an intermediate ancestor on the path is
+//     still a hash-only stub — caller must acquire ancestors first
+//   - ErrNodeHashMismatch when the computed hash doesn't match what the
+//     parent expects at the target branch
+//   - ErrSyncNotInProgress / ErrInvalidNodeData on misuse
+func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if sm.state != StateSyncing {
+		return ErrSyncNotInProgress
+	}
+	if nodeID.IsRoot() {
+		return ErrUnexpectedNode
+	}
+	if len(data) == 0 {
+		return ErrInvalidNodeData
+	}
+	if sm.root == nil {
+		return ErrParentNotInTree
+	}
+
+	targetDepth := int(nodeID.Depth())
+	targetPath := nodeID.ID()
+
+	parent := sm.root
+
+	for curDepth := 0; curDepth < targetDepth; curDepth++ {
+		branch := selectBranchForPath(targetPath, curDepth)
+
+		parent.mu.RLock()
+		empty := parent.isBranch&(1<<uint(branch)) == 0
+		var childHash [32]byte
+		var child Node
+		if !empty {
+			childHash = parent.hashes[branch]
+			child = parent.children[branch]
+		}
+		parent.mu.RUnlock()
+
+		if empty {
+			return ErrEmptyBranchOnPath
+		}
+
+		if curDepth+1 == targetDepth {
+			if child != nil {
+				return nil
+			}
+			newNode, err := DeserializeNodeFromWire(data)
+			if err != nil {
+				return fmt.Errorf("%w: %v", ErrInvalidNodeData, err)
+			}
+			if err := newNode.UpdateHash(); err != nil {
+				return fmt.Errorf("failed to compute node hash: %w", err)
+			}
+			if newNode.Hash() != childHash {
+				return ErrNodeHashMismatch
+			}
+			parent.SetChildDirect(branch, newNode)
+			return nil
+		}
+
+		if child == nil {
+			return ErrParentNotInTree
+		}
+		nextInner, ok := child.(*InnerNode)
+		if !ok {
+			return ErrUnexpectedNode
+		}
+		parent = nextInner
+	}
+
+	return ErrUnexpectedNode
 }
 
 // AddKnownNodeUnchecked adds a node from wire data trusting its computed

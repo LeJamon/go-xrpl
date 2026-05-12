@@ -1030,9 +1030,12 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 		break
 	}
 
-	// Tx-set acquisition has no authoritative external hash to compare;
-	// AddKnownNodeUnchecked trusts the node's own computed hash and skips
-	// the redundant deserialize/UpdateHash.
+	// Use NodeID-based placement (mirrors rippled SHAMap::addKnownNode):
+	// path-based descent works when the peer's response contains nodes
+	// deeper than our currently-loaded layer of stubs. The previous
+	// hash-search approach (AddKnownNodeUnchecked) silently rejected
+	// every node it couldn't place beneath a loaded parent, producing
+	// the missing-nodes retry storm of issue #413.
 	added := 0
 	for _, node := range ld.Nodes {
 		if isShamapRootNodeID(node.NodeID) {
@@ -1041,9 +1044,25 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 		if len(node.NodeData) == 0 {
 			continue
 		}
-		if err := txMap.AddKnownNodeUnchecked(node.NodeData); err == nil {
-			added++
+		parsedID, err := shamap.UnmarshalBinary(node.NodeID)
+		if err != nil {
+			r.logger.Debug("tx-set sync: malformed node ID",
+				"t", "consensus", "event", "txset-node-reject",
+				"txset", fmt.Sprintf("%x", txSetID[:8]),
+				"node_id_len", len(node.NodeID),
+				"error", err.Error())
+			continue
 		}
+		if err := txMap.AddKnownNodeByID(parsedID, node.NodeData); err != nil {
+			r.logger.Debug("tx-set sync: node rejected",
+				"t", "consensus", "event", "txset-node-reject",
+				"txset", fmt.Sprintf("%x", txSetID[:8]),
+				"node_id", fmt.Sprintf("%x", node.NodeID),
+				"node_data_len", len(node.NodeData),
+				"error", err.Error())
+			continue
+		}
+		added++
 	}
 
 	if err := txMap.FinishSync(); err != nil {
