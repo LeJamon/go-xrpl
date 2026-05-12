@@ -76,14 +76,10 @@ type NetworkSender interface {
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error
 	RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error
 	RequestReplayDelta(peerID uint64, hash [32]byte) error
-	// RequestProofPath sends a TMProofPathRequest to peerID asking for
-	// the merkle proof of (key, mapType) in the SHAMap of ledgerHash.
-	// Mirrors rippled's SkipListAcquire::trigger
-	// (rippled/src/xrpld/app/ledger/detail/SkipListAcquire.cpp:84-92):
-	// the client-side analog of the handler already wired at
-	// LedgerProvider.GetProofPath. Used by the multi-ledger catchup
-	// path to fetch the rolling-256 LedgerHashes entry of a known tip
-	// in a single round-trip.
+	// RequestProofPath sends a TMProofPathRequest for the merkle proof
+	// of (key, mapType) in the SHAMap of ledgerHash. Mirrors rippled's
+	// SkipListAcquire::trigger
+	// (rippled/src/xrpld/app/ledger/detail/SkipListAcquire.cpp:84-92).
 	RequestProofPath(peerID uint64, ledgerHash, key [32]byte, mapType message.LedgerMapType) error
 	RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error
 	SendToPeer(peerID uint64, frame []byte) error
@@ -493,10 +489,6 @@ func (a *Adaptor) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 	return a.sender.RequestReplayDelta(peerID, hash)
 }
 
-// RequestProofPath delegates to the network sender. Used by the
-// multi-ledger catch-up path to fetch a tip's rolling-256
-// LedgerHashes entry via merkle proof — one round-trip yields up to
-// 256 ancestor hashes.
 func (a *Adaptor) RequestProofPath(peerID uint64, ledgerHash, key [32]byte, mapType message.LedgerMapType) error {
 	return a.sender.RequestProofPath(peerID, ledgerHash, key, mapType)
 }

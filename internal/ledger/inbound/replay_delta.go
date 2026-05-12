@@ -189,18 +189,9 @@ func (r *ReplayDelta) PeerID() uint64 { return r.peerID }
 // amendment rules) before invoking Apply().
 func (r *ReplayDelta) Parent() *ledger.Ledger { return r.parent }
 
-// SetParent rebinds the parent ledger AFTER acquisition. Used by
-// LedgerReplayTask: subtasks for intermediate ledgers are acquired
-// with parent=nil so their framing can be verified in parallel, then
-// the task walks the chain in order and supplies each delta's actual
-// parent (the previously-adopted predecessor) just before Apply.
-//
-// Only overwrites a nil parent — once set, subsequent calls with a
-// different parent return an error so a misuse can't silently corrupt
-// the apply-with-wrong-parent path.
-//
-// Caller must NOT hold any external lock on this ReplayDelta; this
-// method acquires r.mu internally.
+// SetParent rebinds the parent ledger AFTER acquisition. Refuses to
+// overwrite an already-bound parent, so a misuse can't silently
+// corrupt the apply-with-wrong-parent path.
 func (r *ReplayDelta) SetParent(parent *ledger.Ledger) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

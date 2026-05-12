@@ -1391,12 +1391,9 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	// Phase 5: if a LedgerReplayTask owns this hash, the task drives
-	// verification + chain-ordered Apply + adopt via its own
-	// callbacks. The legacy single-ledger path below is bypassed.
-	// Mirrors rippled's LedgerReplayer routing: a delta acquired by a
-	// LedgerReplayTask is owned by that task and never re-enters the
-	// generic InboundLedger flow.
+	// A delta acquired by an active LedgerReplayTask is owned by that
+	// task and never re-enters the generic InboundLedger flow. Mirrors
+	// rippled's LedgerReplayer routing.
 	if r.routeDeltaToActiveTask(resp) {
 		return
 	}

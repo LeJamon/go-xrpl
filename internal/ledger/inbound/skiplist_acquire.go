@@ -68,11 +68,9 @@ type SkipListAcquire struct {
 	triedPeers   []uint64
 }
 
-// NewSkipListAcquire creates an acquisition keyed by the target ledger
-// hash. stateHash MUST be the target's AccountHash — without it the
-// peer-supplied proof cannot be verified. The initial state is
-// StateWantBase to share the State enum with the other inbound
-// acquisition types in this package.
+// NewSkipListAcquire creates an acquisition for targetHash's
+// skip-list. stateHash MUST be the target's AccountHash — without it
+// the peer-supplied proof cannot be verified.
 func NewSkipListAcquire(
 	targetHash, stateHash [32]byte,
 	peerID uint64,
@@ -81,9 +79,8 @@ func NewSkipListAcquire(
 	return NewSkipListAcquireWithClock(targetHash, stateHash, peerID, logger, SystemClock)
 }
 
-// NewSkipListAcquireWithClock is the dependency-injection sibling of
-// NewSkipListAcquire — tests pass a fake clock to drive sub-task and
-// outer timeouts deterministically.
+// NewSkipListAcquireWithClock is NewSkipListAcquire with an injected
+// clock for deterministic timeout tests.
 func NewSkipListAcquireWithClock(
 	targetHash, stateHash [32]byte,
 	peerID uint64,
@@ -110,38 +107,30 @@ func NewSkipListAcquireWithClock(
 	}
 }
 
-// TargetHash returns the ledger whose skip-list we're fetching.
 func (s *SkipListAcquire) TargetHash() [32]byte { return s.targetHash }
+func (s *SkipListAcquire) StateHash() [32]byte  { return s.stateHash }
+func (s *SkipListAcquire) PeerID() uint64       { return s.peerID }
 
-// StateHash returns the AccountHash used to verify the proof.
-func (s *SkipListAcquire) StateHash() [32]byte { return s.stateHash }
-
-// PeerID returns the peer we asked for the proof.
-func (s *SkipListAcquire) PeerID() uint64 { return s.peerID }
-
-// State returns the current acquisition state.
 func (s *SkipListAcquire) State() State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.state
 }
 
-// IsComplete reports whether the acquisition has been verified.
 func (s *SkipListAcquire) IsComplete() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.state == StateComplete
 }
 
-// Err returns the verification error (nil unless state is StateFailed).
 func (s *SkipListAcquire) Err() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.err
 }
 
-// Hashes returns the verified rolling-256 ancestor list. Empty unless
-// state is StateComplete. The returned slice is a defensive copy.
+// Hashes returns a defensive copy of the verified ancestor list, or
+// nil if not yet complete.
 func (s *SkipListAcquire) Hashes() [][32]byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -153,10 +142,8 @@ func (s *SkipListAcquire) Hashes() [][32]byte {
 	return out
 }
 
-// IsTimedOut reports whether the acquisition has outlived its OUTER
-// budget. Reuses replayDeltaTimeout so a deep catch-up that issues a
-// skip-list request and several replay-deltas shares a single
-// per-task-shape budget.
+// IsTimedOut reports whether the acquisition has outlived the outer
+// budget (shared with replay-delta so a deep catch-up has one shape).
 func (s *SkipListAcquire) IsTimedOut() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -179,22 +166,18 @@ func (s *SkipListAcquire) IsSubTaskTimedOut() bool {
 	return s.clock.Now().Sub(s.subTaskStart) > subTaskRetryInterval
 }
 
-// RetriesExhausted reports whether we've rotated through
-// subTaskRetryMax peers without success.
 func (s *SkipListAcquire) RetriesExhausted() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.retryCount >= subTaskRetryMax
 }
 
-// RetryCount returns the number of peer rotations performed so far.
 func (s *SkipListAcquire) RetryCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.retryCount
 }
 
-// TriedPeers returns a snapshot of peer IDs already asked.
 func (s *SkipListAcquire) TriedPeers() []uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -203,9 +186,8 @@ func (s *SkipListAcquire) TriedPeers() []uint64 {
 	return out
 }
 
-// NoteSubTaskRetry advances to a new peer: updates peerID, resets the
-// sub-task timer, and records the new peer in triedPeers. The caller
-// is responsible for re-issuing the wire request to newPeerID.
+// NoteSubTaskRetry rotates to newPeerID, resets the sub-task timer,
+// and records the new peer. Caller re-issues the wire request.
 func (s *SkipListAcquire) NoteSubTaskRetry(newPeerID uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -215,11 +197,9 @@ func (s *SkipListAcquire) NoteSubTaskRetry(newPeerID uint64) {
 	s.triedPeers = append(s.triedPeers, newPeerID)
 }
 
-// GotResponse verifies an inbound mtPROOF_PATH_RESPONSE against the
-// stored target/stateHash and decodes the LedgerHashes SLE. On
-// success the state transitions to StateComplete and Hashes() returns
-// the verified ancestor list. Subsequent calls after a terminal state
-// are no-ops.
+// GotResponse verifies a mtPROOF_PATH_RESPONSE against the stored
+// target/stateHash and decodes the LedgerHashes SLE. No-op after a
+// terminal state.
 func (s *SkipListAcquire) GotResponse(resp *message.ProofPathResponse) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

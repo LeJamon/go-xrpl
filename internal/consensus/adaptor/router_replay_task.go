@@ -21,60 +21,47 @@ import (
 const multiLedgerCatchupThreshold = uint32(4)
 
 // activeReplayTask bundles the in-flight LedgerReplayTask with the
-// state the router needs to route inbound responses and drive chain-
-// order adoption as each subtask verifies. Held under r.replayTaskMu.
+// router-side state used to route inbound responses and drive chain-
+// order adoption. Held under r.replayTaskMu.
 type activeReplayTask struct {
 	task *inbound.LedgerReplayTask
 
-	// chainHashes is the set of hashes the task owns. handleReplayDelta
-	// Response consults this to decide between the task's
-	// OnDeltaResponse path and the single-ledger Apply+adopt path.
-	// Includes the tip hash so the tip's own delta routes to the task.
+	// chainHashes is the set of hashes the task owns, including the
+	// tip. Used by handleReplayDeltaResponse to decide between the
+	// task's OnDeltaResponse path and the single-ledger Apply+adopt
+	// path.
 	chainHashes map[[32]byte]bool
 
-	// anchorParent is the local ledger at seq tipSeq-depth (the bottom
-	// of the chain). Used as the parent of the OLDEST chain entry's
-	// Apply call. Subsequent entries use the previously-adopted ledger
-	// as parent.
+	// anchorParent is the local ledger at seq tipSeq-depth (parent of
+	// the oldest chain entry's Apply call).
 	anchorParent *ledger.Ledger
 
-	// pendingByHash holds verified-but-not-yet-applied ReplayDeltas
-	// keyed by ledger hash. Drained in chain order by drainPending
-	// once each predecessor adopts.
+	// pendingByHash holds verified-but-not-yet-applied ReplayDeltas.
+	// Drained in chain order once each predecessor adopts.
 	pendingByHash map[[32]byte]*inbound.ReplayDelta
 
-	// adopted tracks ledger hashes whose Apply+adopt completed. Used
-	// to find the parent for the next pending entry quickly without
-	// re-querying the service.
+	// adopted tracks ledger hashes whose Apply+adopt completed, so the
+	// parent for the next pending entry is a map lookup rather than a
+	// service round-trip.
 	adopted map[[32]byte]*ledger.Ledger
 
-	// nextSeqToAdopt is the sequence of the next chain entry that
-	// drainPending should attempt. Equals tipSeq-depth+1 initially
-	// (oldest), increments by 1 on each successful adoption.
+	// nextSeqToAdopt is the sequence of the next chain entry to
+	// attempt. Initialized to tipSeq-depth+1; monotonically increases.
 	nextSeqToAdopt uint32
 
-	// chainSeqByHash / chainHashBySeq are inverse lookups built once
-	// when the task transitions out of WantSkipList. Pre-built so
-	// drainPending can pluck the next-by-seq without scanning.
-	chainSeqByHash  map[[32]byte]uint32
-	chainHashBySeq  map[uint32][32]byte
+	// Inverse lookups built once when the task transitions out of
+	// WantSkipList, so drainPending can pluck the next-by-seq without
+	// scanning.
+	chainSeqByHash map[[32]byte]uint32
+	chainHashBySeq map[uint32][32]byte
 }
 
 // StartReplayTask arms a LedgerReplayTask for a multi-ledger backward
-// walk from `tipHash` (at `tipSeq`, with the tip's `stateHash` =
-// AccountHash) back `depth` ledgers, anchored on the local ledger
-// `anchorParent` at seq tipSeq-depth. Returns an error if a task is
-// already in flight or the underlying replayer rejects acquisition.
-//
-// peers is the rotation set the task will round-robin through when
-// the per-peer Replayer cap is reached.
-//
-// Exposed as a callable entry point (not driven by checkBehind today)
-// so the router-level integration can be exercised end-to-end before
-// the auto-trigger path is wired. Production auto-trigger requires
-// either a pre-acquired tip header (so stateHash is known) or an
-// extension to TMStatusChange so peers gossip AccountHash; both are
-// follow-up work.
+// walk from `tipHash` (at `tipSeq`, with `stateHash` =
+// tip.AccountHash) back `depth` ledgers, anchored on the local
+// `anchorParent` at seq tipSeq-depth. `peers` is the rotation set the
+// task round-robins through when the per-peer Replayer cap is
+// reached.
 func (r *Router) StartReplayTask(
 	tipHash, stateHash [32]byte,
 	tipSeq, depth uint32,
@@ -151,8 +138,7 @@ func (r *Router) StartReplayTask(
 }
 
 // HasActiveReplayTask reports whether a LedgerReplayTask is currently
-// in flight. Exposed for tests and for checkBehind's dedup so the
-// auto-trigger path (once wired) doesn't double-arm.
+// in flight.
 func (r *Router) HasActiveReplayTask() bool {
 	r.replayTaskMu.Lock()
 	defer r.replayTaskMu.Unlock()
@@ -171,10 +157,10 @@ func (r *Router) AbortActiveReplayTask(reason error) {
 	}
 }
 
-// handleProofPathResponse is the router-side dispatch for inbound
-// mtPROOF_PATH_RESPONSE frames. Decodes, routes to the active task's
-// OnSkipListResponse, then populates the chain-hash lookup tables so
-// subsequent replay-delta responses are routed correctly.
+// handleProofPathResponse decodes a mtPROOF_PATH_RESPONSE, routes it
+// to the active task's OnSkipListResponse, then populates the chain-
+// hash lookup tables so subsequent replay-delta responses are routed
+// correctly.
 func (r *Router) handleProofPathResponse(msg *peermanagement.InboundMessage) {
 	decoded, err := message.Decode(message.TypeProofPathResponse, msg.Payload)
 	if err != nil {
@@ -209,10 +195,9 @@ func (r *Router) handleProofPathResponse(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	// Populate chain-hash lookup so handleReplayDeltaResponse can
-	// route subsequent inbound replay-deltas to the task. The task
-	// just built its chain inside OnSkipListResponse, so ChainEntries
-	// is now authoritative.
+	// The task just built its chain inside OnSkipListResponse, so
+	// ChainEntries is authoritative now. Populate the lookup so
+	// handleReplayDeltaResponse can route subsequent inbound deltas.
 	r.replayTaskMu.Lock()
 	if r.activeTask == at {
 		seqs, hashes := at.task.ChainEntries()
@@ -225,15 +210,10 @@ func (r *Router) handleProofPathResponse(msg *peermanagement.InboundMessage) {
 	r.replayTaskMu.Unlock()
 }
 
-// routeDeltaToActiveTask attempts to route a TMReplayDeltaResponse to
-// the in-flight LedgerReplayTask. Returns true if the response was
-// handled by the task (caller MUST skip the legacy single-ledger
-// Apply+adopt path), false if the response is not task-owned.
-//
-// The chain-hash set is populated authoritatively in
-// handleProofPathResponse right after the skip-list verifies, so the
-// lookup here is exact: hash present ⇒ task-owned, hash absent ⇒
-// route via the legacy path.
+// routeDeltaToActiveTask routes a TMReplayDeltaResponse to the
+// in-flight LedgerReplayTask if the hash is task-owned. Returns true
+// iff the task handled it; on true, the caller MUST skip the legacy
+// single-ledger Apply+adopt path.
 func (r *Router) routeDeltaToActiveTask(resp *message.ReplayDeltaResponse) (handled bool) {
 	hash, ok := toHash32Local(resp.LedgerHash)
 	if !ok {
@@ -273,7 +253,6 @@ func (r *Router) onTaskDeltaVerified(seq uint32, h [32]byte, rd *inbound.ReplayD
 		return
 	}
 	at.pendingByHash[h] = rd
-	// Register chain mappings now that we know hash ↔ seq.
 	at.chainSeqByHash[h] = seq
 	at.chainHashBySeq[seq] = h
 	at.chainHashes[h] = true
@@ -306,11 +285,6 @@ func (r *Router) drainTaskChain() {
 			r.replayTaskMu.Unlock()
 			return
 		}
-		// Resolve the parent ledger from the adopted map. For the
-		// oldest entry the parent is the anchor (pre-seeded). For
-		// subsequent entries it's the predecessor we just adopted.
-		// Result() returns the verified *ledger.Ledger; its header
-		// carries the canonical ParentHash we link against.
 		verifiedLedger, resErr := rd.Result()
 		if resErr != nil || verifiedLedger == nil {
 			r.replayTaskMu.Unlock()
@@ -379,9 +353,8 @@ func (r *Router) onTaskComplete() {
 	}
 }
 
-// taskSenderAdapter bridges Adaptor's NetworkSender methods to the
-// inbound.TaskSender interface the LedgerReplayTask needs. Two
-// methods, both already implemented on the adaptor.
+// taskSenderAdapter satisfies inbound.TaskSender by delegating to the
+// Adaptor's NetworkSender methods.
 type taskSenderAdapter struct {
 	adaptor *Adaptor
 }
@@ -394,9 +367,6 @@ func (s taskSenderAdapter) RequestReplayDelta(peerID uint64, hash [32]byte) erro
 	return s.adaptor.RequestReplayDelta(peerID, hash)
 }
 
-// toHash32Local mirrors inbound.toHash32 — duplicated here so this
-// file doesn't need to reach into the inbound package's unexported
-// helpers. Tiny and the contract is stable.
 func toHash32Local(h []byte) ([32]byte, bool) {
 	var out [32]byte
 	if len(h) != len(out) {
