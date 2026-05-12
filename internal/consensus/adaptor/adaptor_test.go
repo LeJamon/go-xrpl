@@ -428,3 +428,35 @@ func TestAdaptor_OnLedgerFullyValidated_HashMismatchIsNoop(t *testing.T) {
 	assert.Equal(t, priorValidated.Hash(), after.Hash(),
 		"validated_ledger must not flip to a hash we don't hold")
 }
+
+// TestGetParentLedgerForReplay_RejectsOpenLedger guards against the
+// replay-delta live-lock that bit goxrpl-1 in the consensus enclave.
+// When LCL is at seq N-1 and openLedger is at seq N, asking for the
+// parent of seq N+1 must NOT return openLedger — openLedger has
+// header.Hash == [32]byte{} until Close(), so callers using the
+// returned ledger's hash as a chain anchor (the replay-delta
+// verifier in particular) would receive 0x000...
+func TestGetParentLedgerForReplay_RejectsOpenLedger(t *testing.T) {
+	a := newTestAdaptor(t)
+	svc := a.LedgerService()
+
+	// LCL is at the genesis seq after Start. Accept once so closedLedger
+	// is at seq 2 and openLedger advances to seq 3.
+	_, err := svc.AcceptLedger(context.TODO())
+	require.NoError(t, err)
+	closedSeq := svc.GetClosedLedgerIndex()
+	openSeq := svc.GetCurrentLedgerIndex()
+	require.Equal(t, closedSeq+1, openSeq,
+		"openLedger should be one above LCL")
+
+	// Asking for parent of openSeq+1 → parent should be at openSeq,
+	// which is the OPEN ledger. The fix returns nil instead of an
+	// unclosed ledger whose Hash() is zero.
+	parent := a.GetParentLedgerForReplay(openSeq + 1)
+	if parent != nil {
+		assert.NotEqual(t, [32]byte{}, parent.Hash(),
+			"parent returned for replay must have a non-zero hash; "+
+				"openLedger has zero Hash until Close() and is unsafe "+
+				"to use as a chain anchor")
+	}
+}

@@ -189,6 +189,20 @@ func (r *ReplayDelta) PeerID() uint64 { return r.peerID }
 // amendment rules) before invoking Apply().
 func (r *ReplayDelta) Parent() *ledger.Ledger { return r.parent }
 
+// SetParent rebinds the parent ledger AFTER acquisition. Refuses to
+// overwrite an already-bound parent, so a misuse can't silently
+// corrupt the apply-with-wrong-parent path.
+func (r *ReplayDelta) SetParent(parent *ledger.Ledger) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.parent != nil && r.parent.Hash() != parent.Hash() {
+		return fmt.Errorf("SetParent: parent already bound to %x, refusing to overwrite with %x",
+			r.parent.Hash(), parent.Hash())
+	}
+	r.parent = parent
+	return nil
+}
+
 // Seq returns the ledger sequence under acquisition. Derived from the
 // parent ledger because the request itself only carries the hash.
 func (r *ReplayDelta) Seq() uint32 {
@@ -375,7 +389,7 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 	// reverse arithmetic CalculateLedgerHash relies on. The byte-level
 	// hash is what rippled computes on the sender side and is the only
 	// invariant guaranteed to round-trip.
-	advertised, ok := toHash32(resp.LedgerHash)
+	advertised, ok := ToHash32(resp.LedgerHash)
 	if !ok {
 		return fmt.Errorf("bad hash length: %d", len(resp.LedgerHash))
 	}
@@ -758,9 +772,9 @@ func (r *ReplayDelta) parentStateSnapshot() (*shamap.SHAMap, error) {
 	return snap, nil
 }
 
-// toHash32 returns h as [32]byte iff len(h) == 32. The bool return
+// ToHash32 returns h as [32]byte iff len(h) == 32. The bool return
 // distinguishes a wrong-length input from an all-zero hash.
-func toHash32(h []byte) ([32]byte, bool) {
+func ToHash32(h []byte) ([32]byte, bool) {
 	var out [32]byte
 	if len(h) != len(out) {
 		return out, false

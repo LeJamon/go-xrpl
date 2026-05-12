@@ -76,6 +76,11 @@ type NetworkSender interface {
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error
 	RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error
 	RequestReplayDelta(peerID uint64, hash [32]byte) error
+	// RequestProofPath sends a TMProofPathRequest for the merkle proof
+	// of (key, mapType) in the SHAMap of ledgerHash. Mirrors rippled's
+	// SkipListAcquire::trigger
+	// (rippled/src/xrpld/app/ledger/detail/SkipListAcquire.cpp:84-92).
+	RequestProofPath(peerID uint64, ledgerHash, key [32]byte, mapType message.LedgerMapType) error
 	RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error
 	SendToPeer(peerID uint64, frame []byte) error
 	// PeerSupportsReplay reports whether the peer identified by peerID
@@ -125,7 +130,10 @@ func (n *noopSender) RequestLedger(consensus.LedgerID) error                   {
 func (n *noopSender) RequestLedgerByHashAndSeq([32]byte, uint32) error         { return nil }
 func (n *noopSender) RequestLedgerBaseFromPeer(uint64, [32]byte, uint32) error { return nil }
 func (n *noopSender) RequestReplayDelta(uint64, [32]byte) error                { return nil }
-func (n *noopSender) RequestStateNodes(uint64, [32]byte, [][]byte) error       { return nil }
+func (n *noopSender) RequestProofPath(uint64, [32]byte, [32]byte, message.LedgerMapType) error {
+	return nil
+}
+func (n *noopSender) RequestStateNodes(uint64, [32]byte, [][]byte) error { return nil }
 func (n *noopSender) SendToPeer(uint64, []byte) error                          { return nil }
 func (n *noopSender) PeerSupportsReplay(uint64) bool                           { return false }
 func (n *noopSender) ReplayCapablePeersExcluding([]uint64, int) []uint64       { return nil }
@@ -476,6 +484,10 @@ func (a *Adaptor) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 	return a.sender.RequestReplayDelta(peerID, hash)
 }
 
+func (a *Adaptor) RequestProofPath(peerID uint64, ledgerHash, key [32]byte, mapType message.LedgerMapType) error {
+	return a.sender.RequestProofPath(peerID, ledgerHash, key, mapType)
+}
+
 func (a *Adaptor) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
 	return a.sender.RequestStateNodes(peerID, ledgerHash, nodeIDs)
 }
@@ -519,10 +531,14 @@ func (a *Adaptor) IncPeerBadData(peerID uint64, reason string) {
 	a.sender.IncPeerBadData(peerID, reason)
 }
 
-// GetParentLedgerForReplay returns the validated ledger at seq-1, which is
+// GetParentLedgerForReplay returns the closed ledger at seq-1, which is
 // the prior ledger needed to replay a delta into seq. Returns nil if the
-// parent is unknown or the request is for a ledger we cannot anchor on
-// (seq <= 1, no service wired). Mirrors the rippled
+// parent is unknown, the request is for a ledger we cannot anchor on
+// (seq <= 1, no service wired), OR the parent is still open (its hash
+// is unset until Close, so it cannot serve as a chain anchor — a
+// goxrpl-1 enclave run reproduced a live-lock where the open ledger
+// was returned and the replay-delta verifier kept rejecting valid
+// responses against an all-zero parent hash). Mirrors the rippled
 // LedgerDeltaAcquire::trigger requirement that the parent ledger is
 // already locally available before issuing the delta request.
 func (a *Adaptor) GetParentLedgerForReplay(seq uint32) *ledger.Ledger {
@@ -531,6 +547,9 @@ func (a *Adaptor) GetParentLedgerForReplay(seq uint32) *ledger.Ledger {
 	}
 	parent, err := a.ledgerService.GetLedgerBySequence(seq - 1)
 	if err != nil || parent == nil {
+		return nil
+	}
+	if !parent.IsClosed() {
 		return nil
 	}
 	return parent
