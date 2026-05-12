@@ -34,7 +34,7 @@ func buildTxSetForTest(t *testing.T, n int) (*shamap.SHAMap, [32]byte, []shamap.
 	}
 	ts, err := NewTxSet(blobs)
 	require.NoError(t, err)
-	txMap := ts.SHAMap()
+	txMap := ts.shamap()
 	require.NotNil(t, txMap)
 	wireNodes, err := txMap.WalkWireNodes()
 	require.NoError(t, err)

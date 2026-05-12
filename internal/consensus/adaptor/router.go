@@ -825,7 +825,7 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 
 	// SHAMap is non-nil for any TxSet that reached the cache —
 	// NewTxSet returns an error before stashing on shamap.New failure.
-	txMap := ts.SHAMap()
+	txMap := ts.shamap()
 
 	queryDepth := int(req.QueryDepth)
 	if queryDepth == 0 {

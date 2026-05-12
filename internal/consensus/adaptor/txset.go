@@ -33,22 +33,23 @@ import (
 // canonical hash of the empty SHAMap. Reaching that path is a
 // programmer-error condition that rippled covers with XRPL_ASSERT.
 //
-// Aliasing. SHAMap() exposes the live backing map. Add and Remove
-// mutate it in place — there is no copy-on-write. Callers that hold a
-// pointer returned by SHAMap() across an Add/Remove see the mutation;
-// the only production caller (router.go serveTxSet) takes the pointer
-// and walks it synchronously, so the aliasing is dormant. Rippled
-// avoids this by snapshotting on every MutableTxSet round-trip
-// (RCLCxTx.h:78,119); replicating that would require SHAMap COW which
-// we do not yet support.
+// Aliasing. shamap() (package-internal) exposes the live backing map.
+// Add and Remove mutate it in place — there is no copy-on-write. The
+// only production caller (router.go serveTxSet) takes the pointer and
+// walks it synchronously, so the aliasing is dormant. Rippled avoids
+// this by snapshotting on every MutableTxSet round-trip
+// (RCLCxTx.h:78,119); replicating that would require O(1) SHAMap COW,
+// which the unbacked path here does not yet have (Snapshot does a
+// deep clone). The accessor stays unexported so the aliasing concern
+// cannot leak out of this package.
 //
 // Concurrency. The backing *shamap.SHAMap is internally lock-protected,
 // but TxSetImpl maintains a shadow `count` field for O(1) Size(); the
-// mutex below brackets count mutations against Size() reads. Rippled
-// has no parallel counter (RCLTxSet exposes no size method at all —
-// RCLCxTx.h:62-189); the divergence exists because our consensus
-// engine logs and gates on tx counts from hot paths, so we pay the
-// extra field rather than walk the tree.
+// mutex below brackets every count read (Size, Txs, TxIDs) against
+// Add/Remove writers. Rippled has no parallel counter (RCLTxSet
+// exposes no size method at all — RCLCxTx.h:62-189); the divergence
+// exists because our consensus engine logs and gates on tx counts
+// from hot paths, so we pay the extra field rather than walk the tree.
 type TxSetImpl struct {
 	txMap *shamap.SHAMap
 	mu    sync.Mutex
@@ -97,7 +98,7 @@ func (ts *TxSetImpl) ID() consensus.TxSetID {
 // or mutate the returned slices safely; see Bytes() for the zero-copy
 // counterpart used internally.
 func (ts *TxSetImpl) Txs() [][]byte {
-	result := make([][]byte, 0, ts.count)
+	result := make([][]byte, 0, ts.Size())
 	_ = ts.txMap.ForEach(func(it *shamap.Item) bool {
 		result = append(result, it.Data())
 		return true
@@ -107,7 +108,7 @@ func (ts *TxSetImpl) Txs() [][]byte {
 
 // TxIDs returns every txID in canonical key order, parallel to Txs().
 func (ts *TxSetImpl) TxIDs() []consensus.TxID {
-	result := make([]consensus.TxID, 0, ts.count)
+	result := make([]consensus.TxID, 0, ts.Size())
 	_ = ts.txMap.ForEach(func(it *shamap.Item) bool {
 		key := it.Key()
 		result = append(result, consensus.TxID(key))
@@ -130,7 +131,7 @@ func (ts *TxSetImpl) Contains(id consensus.TxID) bool {
 // surprised Has on a corrupted root is more useful as a diagnostic
 // than as a silent fall-through into PutWithNodeType.
 //
-// Invalidates any pointer previously returned by SHAMap(): the
+// Invalidates any pointer previously returned by shamap(): the
 // underlying tree is mutated in place. See the TxSetImpl doc comment
 // for the aliasing contract.
 func (ts *TxSetImpl) Add(tx []byte) error {
@@ -154,7 +155,7 @@ func (ts *TxSetImpl) Add(tx []byte) error {
 
 // Remove deletes a transaction by ID. Propagates Has errors for the
 // same reason Add does. Invalidates any pointer previously returned
-// by SHAMap(); see the TxSetImpl doc comment.
+// by shamap(); see the TxSetImpl doc comment.
 func (ts *TxSetImpl) Remove(id consensus.TxID) error {
 	key := [32]byte(id)
 	ok, err := ts.txMap.Has(key)
@@ -205,12 +206,13 @@ func (ts *TxSetImpl) Bytes() []byte {
 	return buf.Bytes()
 }
 
-// SHAMap returns the canonical tx-set SHAMap. The pointer aliases the
-// live backing store: subsequent Add/Remove calls on this TxSetImpl
-// mutate the returned map in place. Callers must treat it as
-// read-only and finish any walk before mutating the parent TxSetImpl.
-// See the TxSetImpl doc comment for the broader aliasing contract.
-func (ts *TxSetImpl) SHAMap() *shamap.SHAMap {
+// shamap returns the canonical tx-set SHAMap. Package-internal: the
+// pointer aliases the live backing store, so subsequent Add/Remove
+// calls on this TxSetImpl mutate the returned map in place. Callers
+// must treat it as read-only and finish any walk before mutating the
+// parent TxSetImpl. See the TxSetImpl doc comment for the broader
+// aliasing contract.
+func (ts *TxSetImpl) shamap() *shamap.SHAMap {
 	return ts.txMap
 }
 
