@@ -164,6 +164,12 @@ type Adaptor struct {
 	// Matches rippled's timeKeeper().closeTime() offset.
 	closeOffset time.Duration
 
+	// negativeUNLStubOnce gates the one-shot operator warning emitted
+	// the first time GenerateNegativeUNLPseudoTx is actually invoked
+	// (i.e. we're proposing AND the amendment is enabled). Tracked
+	// in #415.
+	negativeUNLStubOnce sync.Once
+
 	// Transaction set cache
 	txSetCache *TxSetCache
 
@@ -742,11 +748,26 @@ func excludeNegativeUNL(vals []*consensus.Validation, negUNL []consensus.NodeID)
 	return out
 }
 
-// GenerateNegativeUNLPseudoTx is a stub. The vote-tally algorithm in
-// internal/consensus/negativeunlvote still needs per-seq validation history
-// in ValidationTracker and state-map read access on consensus.Ledger before
-// production wiring. Returning nil keeps the injection step a no-op.
+// GenerateNegativeUNLPseudoTx is intentionally a no-op pending #415.
+// The algorithm itself (internal/consensus/negativeunlvote.Voter) is
+// production-ready, but wiring it requires (a) plumbing the
+// ValidationTracker history into the adaptor, (b) an exported
+// skip-list accessor on *ledger.Ledger so we can enumerate the last
+// 256 ledger hashes, and (c) a NegativeUNL SLE deserializer. The
+// call site (rcl/engine.go) handles a nil return as "no vote this
+// round" — graceful degradation for a validator on a NegativeUNL-
+// enabled network.
+//
+// A one-shot warn fires the first time this path actually executes
+// (i.e. we are proposing AND the amendment is enabled), so an
+// operator running a Go validator sees the gap exactly once rather
+// than discovering it via missing votes on the network side.
 func (a *Adaptor) GenerateNegativeUNLPseudoTx(_ consensus.Ledger) []byte {
+	a.negativeUNLStubOnce.Do(func() {
+		a.logger.Warn("NegativeUNL pseudo-tx generation is not yet implemented; this validator will not contribute UNLModify votes",
+			"tracking_issue", "#415",
+		)
+	})
 	return nil
 }
 
