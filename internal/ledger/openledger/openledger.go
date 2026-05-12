@@ -29,6 +29,10 @@ type OpenLedger struct {
 	modifyMu  sync.Mutex   // OpenLedger.cpp:56 modify_mutex_
 	currentMu sync.RWMutex // OpenLedger.cpp:57 current_mutex_
 	current   *ledger.Ledger
+	// cachedTxs memoises the result of CurrentTxs against the currently
+	// published view. Invalidated (set to nil) at every publish point.
+	// Guarded by currentMu.
+	cachedTxs [][]byte
 }
 
 // New creates a fresh OpenLedger anchored on closed. The initial Current()
@@ -97,6 +101,7 @@ func (o *OpenLedger) Modify(fn func(*ledger.Ledger) bool) bool {
 
 	o.currentMu.Lock()
 	o.current = next
+	o.cachedTxs = nil
 	o.currentMu.Unlock()
 	return true
 }
@@ -109,12 +114,11 @@ func (o *OpenLedger) Modify(fn func(*ledger.Ledger) bool) bool {
 //
 // Mirrors OpenLedger::accept (OpenLedger.cpp:71-155).
 //
-// Locking: holds modifyMu for the entire rebuild — concurrent Submits
-// are serialised behind this. currentMu is taken only for the final
-// pointer swap. This is slightly stricter than rippled (which releases
-// modify_mutex_ around the retries-first apply) but eliminates an
-// observable race that rippled's design tolerates because of its
-// implicit Application-locking discipline.
+// Locking matches rippled (OpenLedger.cpp:85-94): the retries-first
+// apply runs OUTSIDE modifyMu so concurrent Submits aren't blocked by
+// disputed-tx replay against the freshly-closed ledger; modifyMu is
+// acquired only for prior-current replay + modifier + locals + relay
+// + publish. currentMu is taken for the final pointer swap.
 //
 // cfg carries the per-call ApplyConfig — the caller has just computed
 // fees from newLCL via readFeesFromLedger. LedgerSequence is overridden
@@ -152,9 +156,6 @@ func (o *OpenLedger) Accept(
 		return errors.New("openledger.Accept: newLCL is nil")
 	}
 
-	o.modifyMu.Lock()
-	defer o.modifyMu.Unlock()
-
 	next, err := ledger.NewOpen(newLCL, time.Now())
 	if err != nil {
 		return err
@@ -170,8 +171,8 @@ func (o *OpenLedger) Accept(
 	// mode here so we don't inherit a stray BuildLedgerMode from cfg.
 	applyCfg.Mode = OpenLedgerMode
 
-	// 1. retriesFirst — replay disputed/held txs first
-	// (OpenLedger.cpp:85-90).
+	// 1. retriesFirst — replay disputed/held txs first, OUTSIDE modifyMu
+	// so concurrent Submits aren't blocked (OpenLedger.cpp:85-90).
 	if retriesFirst && retries != nil && len(*retries) > 0 {
 		held := append([]PendingTx(nil), (*retries)...)
 		*retries = (*retries)[:0]
@@ -179,6 +180,11 @@ func (o *OpenLedger) Accept(
 			return err
 		}
 	}
+
+	// Block concurrent Submits while we read prior-current, run the
+	// modifier, replay locals, relay, and publish (OpenLedger.cpp:94).
+	o.modifyMu.Lock()
+	defer o.modifyMu.Unlock()
 
 	// 2. Replay prior current's txs (OpenLedger.cpp:96-112).
 	o.currentMu.RLock()
@@ -211,6 +217,9 @@ func (o *OpenLedger) Accept(
 				}
 				parsed, perr := tx.ParseFromBinary(lt.Blob)
 				if perr != nil {
+					if o.logger != nil {
+						o.logger.Debug("openledger.Accept: dropping malformed local tx", "hash", lt.Hash, "err", perr)
+					}
 					continue
 				}
 				parsed.SetRawBytes(lt.Blob)
@@ -246,8 +255,46 @@ func (o *OpenLedger) Accept(
 	// 6. Atomic publish.
 	o.currentMu.Lock()
 	o.current = next
+	o.cachedTxs = nil
 	o.currentMu.Unlock()
 	return nil
+}
+
+// CurrentTxs returns a snapshot of the raw tx blobs in the currently
+// published view. The result is memoised until the next publish; the
+// returned slice MUST NOT be mutated by callers (it is shared across
+// concurrent readers and forwarded directly to consensus, which only
+// reads). Mirrors RCLConsensus.cpp:333-349 reading
+// openLedger().current()->txs.
+func (o *OpenLedger) CurrentTxs() [][]byte {
+	o.currentMu.RLock()
+	if o.cachedTxs != nil {
+		out := o.cachedTxs
+		o.currentMu.RUnlock()
+		return out
+	}
+	view := o.current
+	o.currentMu.RUnlock()
+	if view == nil {
+		return nil
+	}
+
+	var built [][]byte
+	_ = view.ForEachTransaction(func(_ [32]byte, data []byte) bool {
+		raw, _, err := tx.SplitTxWithMetaBlob(data)
+		if err != nil {
+			return true
+		}
+		built = append(built, raw)
+		return true
+	})
+
+	o.currentMu.Lock()
+	if o.current == view && o.cachedTxs == nil {
+		o.cachedTxs = built
+	}
+	o.currentMu.Unlock()
+	return built
 }
 
 // collectTxs extracts the raw tx blobs from view's tx map and parses
@@ -275,13 +322,21 @@ func collectTxs(v *ledger.Ledger) []PendingTx {
 
 // Submit is the convenience entry point for tx ingress. It wraps Modify
 // with a single-tx apply attempt mirroring apply_one
-// (OpenLedger.cpp:170-189). Returns (changed, result) where changed is
-// the Modify return value and result is the per-tx classification.
+// (OpenLedger.cpp:170-189). Returns (changed, result) where changed
+// reflects whether the open-view pointer was advanced; result is the
+// per-tx classification.
 //
 // Mirrors NetworkOPsImp::apply calling openLedger().modify with a
-// single-tx body (NetworkOPs.cpp:1507). When queue is non-nil the
-// per-tx body delegates to TxQ.Apply, which itself decides whether to
-// apply directly to the view or hold the tx in the queue.
+// single-tx body (NetworkOPs.cpp:1507). When queue is non-nil (the
+// production wiring) all classification is delegated to TxQ.Apply,
+// which itself decides whether to apply directly to the view or hold
+// the tx in the queue. Note: when TxQ holds a tx (terQUEUED) the
+// result is Success but changed is false — the tx is in flight in the
+// queue, not in the open view.
+//
+// The nil-queue branch exists only for unit tests / standalone-mode
+// callers where TxQ is not wired; production wiring always passes a
+// non-nil queue via service.go.
 func (o *OpenLedger) Submit(ptx PendingTx, cfg ApplyConfig, queue *txq.TxQ) (bool, Result) {
 	// Per-tx ingress is OpenLedger semantics by definition (BuildLedger
 	// only applies inside consensus close). cfg.Mode is ignored.

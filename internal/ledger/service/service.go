@@ -510,13 +510,14 @@ func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, buildRetries []op
 		adapter := openledger.NewTxqAdapter(view, viewCfg)
 		_ = s.txQueue.Accept(adapter)
 	}
-	// Sweep dead local entries against the new closed ledger and pass
-	// the remainder as Accept's `locals` argument so they replay onto
-	// the new open view. Mirrors RCLConsensus.cpp:666 passing
-	// localTxs_.getTxSet() into openLedger().accept(...).
+	// Pass the held local pool as Accept's `locals` argument so entries
+	// replay onto the new open view. Mirrors RCLConsensus.cpp:666 passing
+	// localTxs_.getTxSet() into openLedger().accept(...). Sweeping happens
+	// on the validated path (SetValidatedLedger), matching rippled where
+	// LedgerMaster::setValidLedger calls updateLocalTx — not on every
+	// consensus close, which can be a fork that gets abandoned.
 	var locals []openledger.PendingTx
 	if s.localTxs != nil {
-		s.localTxs.Sweep(s.closedLedger)
 		locals = s.localTxs.GetTxSet()
 	}
 	// Seed retries with the build-pass leftover set. ApplyTxs (called via
@@ -605,8 +606,12 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 
 // OpenLedgerTxs returns the raw tx blobs currently in the persistent
 // open view. Mirrors RCLConsensus.cpp:333-349 reading
-// openLedger().current()->txs. Returns nil when the view is
-// uninitialised (pre-Start).
+// openLedger().current()->txs (an immutable snapshot). Returns nil
+// when the view is uninitialised (pre-Start).
+//
+// The returned slice is memoised inside OpenLedger and shared with
+// concurrent callers — it MUST NOT be mutated. Callers (consensus
+// adaptor → engine) only read.
 func (s *Service) OpenLedgerTxs() [][]byte {
 	s.mu.RLock()
 	ov := s.openLedgerView
@@ -614,17 +619,7 @@ func (s *Service) OpenLedgerTxs() [][]byte {
 	if ov == nil {
 		return nil
 	}
-	view := ov.Current()
-	var out [][]byte
-	_ = view.ForEachTransaction(func(_ [32]byte, data []byte) bool {
-		raw, _, err := tx.SplitTxWithMetaBlob(data)
-		if err != nil {
-			return true
-		}
-		out = append(out, raw)
-		return true
-	})
-	return out
+	return ov.CurrentTxs()
 }
 
 // OpenLedgerHasTx reports whether the persistent open view contains
@@ -649,18 +644,15 @@ func (s *Service) OpenLedgerGetTx(hash [32]byte) ([]byte, bool) {
 		return nil, false
 	}
 	view := ov.Current()
-	var found []byte
-	_ = view.ForEachTransaction(func(h [32]byte, data []byte) bool {
-		if h == hash {
-			raw, _, err := tx.SplitTxWithMetaBlob(data)
-			if err == nil {
-				found = raw
-			}
-			return false
-		}
-		return true
-	})
-	return found, found != nil
+	data, found, err := view.GetTransaction(hash)
+	if err != nil || !found {
+		return nil, false
+	}
+	raw, _, err := tx.SplitTxWithMetaBlob(data)
+	if err != nil {
+		return nil, false
+	}
+	return raw, true
 }
 
 // GetOpenLedger returns the current open ledger
@@ -1724,12 +1716,18 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	_ = l.SetValidated()
 	s.validatedLedger = l
 
-	// Drain any stashed ledger-accepted event for this hash.
-	// Fire on a goroutine (after releasing the lock) so subscriber
-	// callbacks can't deadlock the service mutex.
+	// Sweep the held local pool against the just-validated ledger.
+	// Mirrors LedgerMaster::setValidLedger → app_.getOPs().updateLocalTx(*l)
+	// at LedgerMaster.cpp:283. Sweeping here (not on every consensus close)
+	// avoids dropping held txs against a ledger consensus later abandons.
+	pool := s.localTxs
 	event := s.drainPendingValidationLocked(expectedHash)
 	callback := s.eventCallback
 	s.mu.Unlock()
+
+	if pool != nil {
+		pool.Sweep(l)
+	}
 
 	if event != nil && callback != nil {
 		go callback(event)

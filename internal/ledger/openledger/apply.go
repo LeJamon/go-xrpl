@@ -205,6 +205,8 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 		bp = buildEngine(certainRetry, true)
 
 		changes := 0
+		// Reuse retrySet's backing array; the inner loop reads each idx
+		// before appending, so aliasing is safe.
 		nextRetries := retrySet[:0]
 		for _, idx := range retrySet {
 			ptx := txs[idx]

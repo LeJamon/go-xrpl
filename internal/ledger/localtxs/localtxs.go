@@ -47,14 +47,16 @@ func New() *LocalTxs { return &LocalTxs{} }
 // sequence as its anchor for the age check. Expiration is the lesser
 // of currentLedgerSeq + HoldLedgers and (LastLedgerSequence + 1) when
 // the tx has sfLastLedgerSequence set — mirrors LocalTxs.cpp:58-65.
+// Presence is what triggers the clamp (rippled uses isFieldPresent at
+// :63), so a non-nil pointer with value 0 still clamps expire to 1.
 //
 // On duplicate hash, refresh the expiration rather than no-op so a
 // relay-then-RPC echo extends the hold window instead of locking it to
 // whichever insertion arrived first.
 func (l *LocalTxs) PushBack(currentLedgerSeq uint32, ptx openledger.PendingTx) {
 	expire := currentLedgerSeq + HoldLedgers
-	if ptx.LastLedgerSequence > 0 {
-		if cap := ptx.LastLedgerSequence + 1; cap < expire {
+	if ptx.LastLedgerSequence != nil {
+		if cap := *ptx.LastLedgerSequence + 1; cap < expire {
 			expire = cap
 		}
 	}

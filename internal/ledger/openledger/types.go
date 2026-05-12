@@ -28,10 +28,13 @@ type PendingTx struct {
 	// Sequence is the effective sequence (Sequence or TicketSequence
 	// via SeqProxy).
 	Sequence uint32
-	// LastLedgerSequence is the tx's sfLastLedgerSequence, or 0 when
-	// unset. LocalTxs uses it to clamp the held-pool expiration so a tx
-	// never lingers past its own validity window.
-	LastLedgerSequence uint32
+	// LastLedgerSequence is a pointer to the tx's sfLastLedgerSequence,
+	// or nil when the field is absent. LocalTxs uses it to clamp the
+	// held-pool expiration so a tx never lingers past its own validity
+	// window. Mirrors rippled's `isFieldPresent(sfLastLedgerSequence)`
+	// check (LocalTxs.cpp:63) — presence (even with value 0) triggers
+	// the clamp.
+	LastLedgerSequence *uint32
 	// IsTicket is true when the tx consumes a Ticket rather than a raw
 	// Sequence. LocalTxs.Sweep uses this to switch between the seq-
 	// advance check and the ticket-burn check.
@@ -74,9 +77,10 @@ func ParsePendingTx(blob []byte) (PendingTx, error) {
 		return PendingTx{}, hashErr
 	}
 
-	var lastLedger uint32
+	var lastLedger *uint32
 	if common.LastLedgerSequence != nil {
-		lastLedger = *common.LastLedgerSequence
+		v := *common.LastLedgerSequence
+		lastLedger = &v
 	}
 
 	return PendingTx{
