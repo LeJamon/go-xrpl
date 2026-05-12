@@ -226,6 +226,13 @@ type Service struct {
 	// of every newly rebuilt open view until they apply or age out.
 	// Reference: rippled LocalTxs.{h,cpp}, RCLConsensus.cpp:662-674.
 	localTxs *localtxs.LocalTxs
+
+	// txRelay re-broadcasts a recovered tx blob to peers. Threaded into
+	// OpenLedger.Accept's relay callback so post-LCL replayed txs get
+	// re-propagated (rippled OpenLedger.cpp:120-150 calls
+	// app.overlay().relay for each non-inner-batch tx surviving the
+	// rebuild). Nil when overlay broadcast is unwired (tests).
+	txRelay func(blob []byte)
 }
 
 // New creates a new LedgerService
@@ -266,6 +273,15 @@ func (s *Service) SetEventCallback(callback EventCallback) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.eventCallback = callback
+}
+
+// SetTxRelay registers the per-tx broadcast handler invoked by
+// OpenLedger.Accept's relay callback (rippled OpenLedger.cpp:120-150).
+// Pass nil to unwire.
+func (s *Service) SetTxRelay(fn func(blob []byte)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.txRelay = fn
 }
 
 // SetOnPendingValidationStashed registers a handler invoked off-thread
@@ -508,7 +524,16 @@ func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, buildRetries []op
 	// re-fill it with any final-pass Retry classifications produced by
 	// the replay itself.
 	retries := append([]openledger.PendingTx(nil), buildRetries...)
-	if err := s.openLedgerView.Accept(s.closedLedger, locals, anyDisputes, &retries, cfg, modifier); err != nil {
+	relay := s.txRelay
+	relayCB := func(_ [32]byte, blob []byte) {
+		if relay != nil {
+			relay(blob)
+		}
+	}
+	if relay == nil {
+		relayCB = nil
+	}
+	if err := s.openLedgerView.Accept(s.closedLedger, locals, anyDisputes, &retries, cfg, s.txQueue, modifier, relayCB); err != nil {
 		s.logger.Error("openLedger.Accept failed", "err", err, "seq", closedSeq)
 	}
 	if len(retries) > 0 {

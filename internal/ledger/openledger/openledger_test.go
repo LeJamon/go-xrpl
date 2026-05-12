@@ -390,7 +390,7 @@ func TestOpenLedger_Accept_ReplaysCurrentTxs(t *testing.T) {
 	newClosed := newClosedFrom(t, parent)
 	var retries []openledger.PendingTx
 
-	if err := ol.Accept(newClosed, nil, false, &retries, cfg, nil); err != nil {
+	if err := ol.Accept(newClosed, nil, false, &retries, cfg, nil, nil, nil); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
 	if len(retries) != 0 {
@@ -457,7 +457,7 @@ func TestOpenLedger_Accept_NoDoubleApply(t *testing.T) {
 	// Pass the same pt in `locals` — current replay will commit it to
 	// the working view, then the locals replay must see it via TxExists
 	// and skip (no double-apply).
-	if err := ol.Accept(newClosed, []openledger.PendingTx{pt}, false, &retries, cfg, nil); err != nil {
+	if err := ol.Accept(newClosed, []openledger.PendingTx{pt}, false, &retries, cfg, nil, nil, nil); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
 	if len(retries) != 0 {
@@ -515,7 +515,7 @@ func TestOpenLedger_Accept_LocalsApplied(t *testing.T) {
 	newClosed := newClosedFrom(t, parent)
 	var retries []openledger.PendingTx
 
-	if err := ol.Accept(newClosed, []openledger.PendingTx{ptL}, false, &retries, cfg, nil); err != nil {
+	if err := ol.Accept(newClosed, []openledger.PendingTx{ptL}, false, &retries, cfg, nil, nil, nil); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
 	if len(retries) != 0 {
@@ -612,7 +612,7 @@ func TestOpenLedger_Accept_RetriesFirst_ReplaysHeldTx(t *testing.T) {
 	newClosed := newClosedFrom(t, parent)
 	retries := []openledger.PendingTx{held}
 
-	if err := ol.Accept(newClosed, nil, true, &retries, cfg, nil); err != nil {
+	if err := ol.Accept(newClosed, nil, true, &retries, cfg, nil, nil, nil); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
 	if !ol.Current().TxExists(held.Hash) {

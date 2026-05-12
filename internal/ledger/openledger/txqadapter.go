@@ -167,20 +167,60 @@ func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
 }
 
 // PreclaimTransaction runs a preclaim-style check for the multiTxn path
-// in TxQ.Apply. Rippled (TxQ.cpp:1127-1170) clones the open view,
-// adjusts the account's Sequence and Balance to reflect the in-flight
-// queued txs, then runs preclaim. If preclaim succeeds, returns
-// tesSUCCESS (likely to claim fee).
-//
-// Faithful implementation here is non-trivial: it requires a fully
-// isolated mutable snapshot of the view with the AccountRoot fields
-// overwritten before the engine runs. Until that lands we return
-// tesSUCCESS — same effect as rippled's "fee level is enough so
-// preclaim probably passes" common case, at the cost of allowing some
-// queued txs that would otherwise be rejected with terINSUF_FEE_B.
-// Tracked as a follow-up; see TxQ.cpp:1167-1170.
-func (a *TxqAdapter) PreclaimTransaction(_ tx.Transaction, _ [20]byte, _ uint64, _ uint32) tx.Result {
-	return tx.TesSUCCESS
+// in TxQ.Apply (TxQ.cpp:1127-1170). Rippled clones the open view,
+// overrides the account's Sequence and Balance to reflect the in-flight
+// queued txs, then runs preclaim. terINSUF_FEE_B / terPRE_SEQ / similar
+// codes here indicate the tx would fail once the queued chain lands —
+// surfaced to the caller so the tx is rejected rather than queued.
+func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte, adjustedBalance uint64, adjustedSeq uint32) tx.Result {
+	if a.view == nil || txn == nil {
+		return tx.TefINTERNAL
+	}
+	blob := txn.GetRawBytes()
+	if len(blob) == 0 {
+		return tx.TefINTERNAL
+	}
+	txHash, hashErr := tx.ComputeTransactionHash(txn)
+	if hashErr != nil {
+		return tx.TefINTERNAL
+	}
+
+	clone, err := a.view.MutableSnapshot()
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	key := keylet.Account(accountID)
+	data, err := clone.Read(key)
+	if err != nil || data == nil {
+		return tx.TerNO_ACCOUNT
+	}
+	ar, err := state.ParseAccountRoot(data)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	ar.Sequence = adjustedSeq
+	ar.Balance = adjustedBalance
+	updated, err := state.SerializeAccountRoot(ar)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := clone.Update(key, updated); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	engineCfg := tx.EngineConfig{
+		BaseFee:                   a.cfg.BaseFee,
+		ReserveBase:               a.cfg.ReserveBase,
+		ReserveIncrement:          a.cfg.ReserveIncrement,
+		LedgerSequence:            clone.Sequence(),
+		NetworkID:                 a.cfg.NetworkID,
+		Logger:                    a.cfg.Logger,
+		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
+		OpenLedger:                true,
+	}
+	engine := tx.NewEngine(clone, engineCfg)
+	return engine.Preclaim(txn, txHash)
 }
 
 // readAccountRoot is the shared helper for the SLE reads above.

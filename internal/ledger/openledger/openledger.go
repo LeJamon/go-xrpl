@@ -95,7 +95,8 @@ func (o *OpenLedger) Modify(fn func(*ledger.Ledger) bool) bool {
 }
 
 // Accept rebuilds the working view from newLCL, optionally replaying
-// retries first, then prior current view's txs, then locals. Any
+// retries first, then prior current view's txs, then running the
+// modifier (TxQ promotion), then replaying locals via TxQ.apply. Any
 // PendingTxs that ended in Retry on the final pass are appended to
 // *retries for the caller.
 //
@@ -113,19 +114,32 @@ func (o *OpenLedger) Modify(fn func(*ledger.Ledger) bool) bool {
 // to the working view's sequence, and Logger / NetworkID are filled in
 // from the OpenLedger if not already set.
 //
+// queue (if non-nil) routes locals through TxQ.Apply so each local
+// re-enters the queue path (rippled OpenLedger.cpp:117-118 calls
+// `app.getTxQ().apply(app, *next, item.second, flags, j_)` per local).
+// Without queue, locals fall back to direct ApplyTxs (used only by
+// tests / standalone-mode replay).
+//
 // modifier (if non-nil) runs against the freshly built next view after
-// all replay phases (retries → prior current's txs → locals) and before
-// the atomic publish. This is the hook rippled uses at OpenLedger.cpp:113
-// to call `app_.getTxQ().accept(app_, view)` — promoting queued txs into
-// the new open ledger. Pass nil when no TxQ promotion is desired (tests,
-// adopt-from-peer paths).
+// retries-and-prior-current replay and BEFORE locals. This is the hook
+// rippled uses at OpenLedger.cpp:113 to call
+// `app_.getTxQ().accept(app_, view)` — promoting queued txs into the
+// new open view so the post-promotion fee level shapes which locals can
+// land. Pass nil when no TxQ promotion is desired.
+//
+// relay (if non-nil) is invoked once per tx in the final post-replay
+// view (skipping inner-batch txs, mirroring OpenLedger.cpp:120-150).
+// Callers thread their overlay handle through this callback. Pass nil
+// in unit tests / paths that should not re-broadcast.
 func (o *OpenLedger) Accept(
 	newLCL *ledger.Ledger,
 	locals []PendingTx,
 	retriesFirst bool,
 	retries *[]PendingTx,
 	cfg ApplyConfig,
+	queue *txq.TxQ,
 	modifier func(*ledger.Ledger),
+	relay func(hash [32]byte, blob []byte),
 ) error {
 	if newLCL == nil {
 		return errors.New("openledger.Accept: newLCL is nil")
@@ -150,8 +164,7 @@ func (o *OpenLedger) Accept(
 	applyCfg.Mode = OpenLedgerMode
 
 	// 1. retriesFirst — replay disputed/held txs first
-	// (OpenLedger.cpp:85-90). We drain the caller's slice up front and
-	// let ApplyTxs re-fill it with any final-pass Retry classifications.
+	// (OpenLedger.cpp:85-90).
 	if retriesFirst && retries != nil && len(*retries) > 0 {
 		held := append([]PendingTx(nil), (*retries)...)
 		*retries = (*retries)[:0]
@@ -160,9 +173,7 @@ func (o *OpenLedger) Accept(
 		}
 	}
 
-	// 2. Replay prior current's txs (OpenLedger.cpp:96-112). The
-	// parent-skip guard inside ApplyTxs drops anything already in
-	// newLCL.
+	// 2. Replay prior current's txs (OpenLedger.cpp:96-112).
 	o.currentMu.RLock()
 	curTxs := collectTxs(o.current)
 	o.currentMu.RUnlock()
@@ -172,21 +183,60 @@ func (o *OpenLedger) Accept(
 		}
 	}
 
-	// 3. Replay locals (OpenLedger.cpp:117-118).
-	if len(locals) > 0 {
-		if err := ApplyTxs(next, locals, retries, applyCfg); err != nil {
-			return err
-		}
-	}
-
-	// 4. Modifier hook — rippled OpenLedger.cpp:113 calls
+	// 3. Modifier hook — rippled OpenLedger.cpp:113-115 calls
 	// app_.getTxQ().accept(app_, view) here to drain queued txs into
-	// the freshly rebuilt open view.
+	// the freshly rebuilt open view BEFORE locals replay, so locals
+	// see the post-promotion fee level.
 	if modifier != nil {
 		modifier(next)
 	}
 
-	// 5. Atomic publish.
+	// 4. Replay locals via TxQ.Apply (OpenLedger.cpp:117-118). Each
+	// local re-enters the queue path so a local that does not meet the
+	// current fee level lands in the queue rather than being dropped.
+	if len(locals) > 0 {
+		if queue != nil {
+			viewCfg := applyCfg
+			adapter := NewTxqAdapter(next, viewCfg)
+			for _, lt := range locals {
+				if next.TxExists(lt.Hash) {
+					continue
+				}
+				parsed, perr := tx.ParseFromBinary(lt.Blob)
+				if perr != nil {
+					continue
+				}
+				parsed.SetRawBytes(lt.Blob)
+				_ = queue.Apply(adapter, parsed, lt.Hash, lt.Account)
+			}
+		} else if err := ApplyTxs(next, locals, retries, applyCfg); err != nil {
+			return err
+		}
+	}
+
+	// 5. Relay recovered txs — rippled OpenLedger.cpp:120-150 iterates
+	// the rebuilt view and re-broadcasts any non-inner-batch tx whose
+	// HashRouter::shouldRelay() permits it. Caller's relay callback
+	// owns the HashRouter + overlay; we just iterate.
+	if relay != nil {
+		_ = next.ForEachTransaction(func(hash [32]byte, data []byte) bool {
+			rawBlob, _, splitErr := tx.SplitTxWithMetaBlob(data)
+			if splitErr != nil {
+				return true
+			}
+			if parsed, perr := tx.ParseFromBinary(rawBlob); perr == nil {
+				if common := parsed.GetCommon(); common != nil && common.Flags != nil {
+					if *common.Flags&tx.TfInnerBatchTxn != 0 {
+						return true
+					}
+				}
+			}
+			relay(hash, rawBlob)
+			return true
+		})
+	}
+
+	// 6. Atomic publish.
 	o.currentMu.Lock()
 	o.current = next
 	o.currentMu.Unlock()
@@ -266,10 +316,13 @@ func (o *OpenLedger) Submit(ptx PendingTx, cfg ApplyConfig, queue *txq.TxQ) (boo
 			}
 		}
 
-		// No TxQ wired — fall back to direct apply (Task A semantics).
-		// retry=true matches OpenLedger::apply's call into apply_one for
-		// the per-tx initial attempt (OpenLedger.h:229).
-		result = applyOneSingle(view, parsed, ptx.Blob, true, cfg)
+		// No TxQ wired — fall back to direct apply with tapNONE. Rippled's
+		// per-tx ingress path is NetworkOPs::processTransaction →
+		// TxQ.apply (NetworkOPs.cpp:1483-1530), which uses tapNONE — not
+		// OpenLedger::apply_one(retry=true). Setting tapRETRY here would
+		// suppress tapFAIL_HARD interactions (Transactor.cpp:1114-1124)
+		// and shift open-ledger fee throttling.
+		result = applyOneSingle(view, parsed, ptx.Blob, false, cfg)
 		return result == ResultSuccess
 	})
 	return changed, result

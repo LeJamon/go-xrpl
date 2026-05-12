@@ -240,9 +240,9 @@ func runServer(cmd *cobra.Command, args []string) {
 		}
 
 		// Wire transaction relay: when a tx is submitted via RPC,
-		// broadcast it to peers and add to the consensus pending pool.
+		// broadcast it to peers. LocalTxs holding is handled inside
+		// service.SubmitTransaction so the broadcaster only relays.
 		overlay := consensusComponents.Overlay
-		consensusAdaptor := consensusComponents.Adaptor
 
 		// Closed-Ledger / Previous-Ledger hints (Handshake.cpp:219-223).
 		overlay.SetLedgerHintProvider(func() (peermanagement.LedgerHints, bool) {
@@ -275,9 +275,23 @@ func runServer(cmd *cobra.Command, args []string) {
 				return
 			}
 			overlay.Broadcast(frame)
-			// RPC-originated tx: hold in LocalTxs so it survives Submit
-			// failure / LCL transitions until it applies or ages out.
-			consensusAdaptor.AddPendingTx(txBlob, true)
+		})
+		// Wire OpenLedger.Accept's relay callback so recovered txs are
+		// re-broadcast post-LCL (rippled OpenLedger.cpp:120-150).
+		ledgerService.SetTxRelay(func(txBlob []byte) {
+			txMsg := &message.Transaction{
+				RawTransaction: txBlob,
+				Status:         message.TxStatusCurrent,
+			}
+			encoded, err := message.Encode(txMsg)
+			if err != nil {
+				return
+			}
+			frame, err := message.BuildWireMessage(message.TypeTransaction, encoded)
+			if err != nil {
+				return
+			}
+			overlay.Broadcast(frame)
 		})
 
 		// Expose node identity, peer count, and consensus stats to RPC handlers
