@@ -1,6 +1,7 @@
 package openledger
 
 import (
+	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
@@ -54,6 +55,16 @@ type ApplyConfig struct {
 	// Zero value = OpenLedgerMode. The consensus-build call site must
 	// set BuildLedgerMode explicitly.
 	Mode Mode
+	// Rules is the amendment rule-set in effect for the parent ledger.
+	// Plumbed into tx.EngineConfig.Rules so threading and other
+	// amendment-gated transactor behaviour respects the on-ledger
+	// Amendments SLE. Nil falls back to tx.Engine.rules() default
+	// (all-amendments-on), which silently desyncs the engine from
+	// the validated ledger state — production callers must set this.
+	// Reference: rippled Application::buildLedger reads
+	// previousLedger->rules() and threads it through; no equivalent
+	// "all-on" fallback exists there.
+	Rules *amendment.Rules
 }
 
 // ApplyTxs runs rippled's open-ledger 3-pass apply against view, which
@@ -127,6 +138,7 @@ func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte
 		NetworkID:                 cfg.NetworkID,
 		Logger:                    cfg.Logger,
 		SkipSignatureVerification: cfg.SkipSignatureVerification,
+		Rules:                     cfg.Rules,
 	}
 	if retry {
 		engineConfig.ApplyFlags |= tx.TapRETRY
@@ -172,6 +184,7 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 			NetworkID:                 cfg.NetworkID,
 			Logger:                    cfg.Logger,
 			SkipSignatureVerification: skipSig,
+			Rules:                     cfg.Rules,
 		}
 		if certainRetry {
 			engineConfig.ApplyFlags |= tx.TapRETRY
