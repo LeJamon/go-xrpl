@@ -954,13 +954,62 @@ type lastCloseInfo struct {
 }
 
 // GetLastCloseInfo returns the proposer count and convergence time
-// from the last consensus round. Lock-free read of the atomic mirror
-// — see lastCloseAtomic on Engine for the rationale.
+// for server_info.last_close. The convergence time comes from the
+// atomic mirror written on acceptLedger. The proposer count is the
+// MAX of (last-accepted-round count, count of distinct trusted nodes
+// from which we received a proposal during the freshness window).
+//
+// Deviation note from rippled: rippled's `last_close.proposers`
+// reports strictly the previous accepted round's currPeerPositions_
+// size. goXRPL trackers can ride out long stretches where the round
+// auto-advance is driven by wrongLedger fast-forwards rather than
+// in-band consensus accepts, leaving prevProposers stuck at 0 even
+// though peer proposals are flowing. The dashboard/fuzzer use of
+// this field is "is the network producing proposals?" — falling
+// back to a freshness-bounded recent-trusted count satisfies that
+// without changing the meaning when the engine IS accepting rounds
+// with positions. Issue #421.
 func (e *Engine) GetLastCloseInfo() (proposers int, convergeTime time.Duration) {
 	if info := e.lastCloseAtomic.Load(); info != nil {
-		return info.Proposers, info.RoundTime
+		proposers = info.Proposers
+		convergeTime = info.RoundTime
 	}
-	return 0, 0
+	if recent := e.recentTrustedProposerCount(); recent > proposers {
+		proposers = recent
+	}
+	return proposers, convergeTime
+}
+
+// recentTrustedProposerCount returns the number of distinct trusted
+// validators that have sent at least one proposal within the
+// ProposeFreshness window. Matches the intent of rippled's
+// currPeerPositions_ but sourced from the long-lived
+// recentPeerPositions_ buffer so the count survives across
+// wrongLedger-driven round restarts — the production scenario where
+// the per-round e.proposals map ends up empty even on a healthy
+// network. See GetLastCloseInfo. Issue #421.
+func (e *Engine) recentTrustedProposerCount() int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if len(e.recentProposals) == 0 {
+		return 0
+	}
+	freshness := e.timing.ProposeFreshness
+	cutoff := e.adaptor.Now().Add(-freshness)
+	count := 0
+	for nodeID, positions := range e.recentProposals {
+		if !e.adaptor.IsTrusted(nodeID) {
+			continue
+		}
+		for _, p := range positions {
+			if freshness > 0 && !p.Timestamp.IsZero() && p.Timestamp.Before(cutoff) {
+				continue
+			}
+			count++
+			break
+		}
+	}
+	return count
 }
 
 // storeLastCloseLocked publishes the round-completion stats to the
