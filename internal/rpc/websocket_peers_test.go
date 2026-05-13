@@ -69,4 +69,3 @@ func TestWebSocket_SetPeerSource_NilDetaches(t *testing.T) {
 	ws.SetPeerSource(nil)
 	require.Nil(t, ws.loadPeerSource())
 }
-
