@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // TaskState tracks LedgerReplayTask progress. Distinct from the
@@ -104,8 +104,8 @@ type LedgerReplayTask struct {
 	stateHash [32]byte // tip.AccountHash, used by SkipListAcquire
 	depth     uint32
 
-	peers   []uint64 // rotated through when per-peer cap is hit
-	cursor  int      // next peer index to try
+	peers  []uint64 // rotated through when per-peer cap is hit
+	cursor int      // next peer index to try
 
 	replayer *Replayer
 	sender   TaskSender

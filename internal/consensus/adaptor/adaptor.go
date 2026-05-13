@@ -134,11 +134,11 @@ func (n *noopSender) RequestProofPath(uint64, [32]byte, [32]byte, message.Ledger
 	return nil
 }
 func (n *noopSender) RequestStateNodes(uint64, [32]byte, [][]byte) error { return nil }
-func (n *noopSender) SendToPeer(uint64, []byte) error                          { return nil }
-func (n *noopSender) PeerSupportsReplay(uint64) bool                           { return false }
-func (n *noopSender) ReplayCapablePeersExcluding([]uint64, int) []uint64       { return nil }
-func (n *noopSender) IncPeerBadData(uint64, string)                            {}
-func (n *noopSender) PeersThatHave([32]byte) []uint64                          { return nil }
+func (n *noopSender) SendToPeer(uint64, []byte) error                    { return nil }
+func (n *noopSender) PeerSupportsReplay(uint64) bool                     { return false }
+func (n *noopSender) ReplayCapablePeersExcluding([]uint64, int) []uint64 { return nil }
+func (n *noopSender) IncPeerBadData(uint64, string)                      {}
+func (n *noopSender) PeersThatHave([32]byte) []uint64                    { return nil }
 
 // Compile-time interface check.
 var _ consensus.Adaptor = (*Adaptor)(nil)

@@ -116,8 +116,8 @@ type recordingTaskSender struct {
 
 	// peakInFlight* track the maximum observed so test assertions can
 	// confirm the caps were respected.
-	peakGlobal   int
-	peakPerPeer  map[uint64]int
+	peakGlobal  int
+	peakPerPeer map[uint64]int
 
 	// failProof / failDelta optionally cause the next wire call to
 	// fail synchronously, simulating transport errors.

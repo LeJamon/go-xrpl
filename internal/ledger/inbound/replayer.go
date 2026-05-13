@@ -77,12 +77,12 @@ type TimedOutEntry struct {
 // both a skip-list target (its 256-entry ancestor vector) and a
 // replay-delta target (its tx-set).
 type Replayer struct {
-	mu            sync.Mutex
-	inFlight      map[[32]byte]*ReplayDelta
-	inFlightSkip  map[[32]byte]*SkipListAcquire
-	logger        *slog.Logger
-	clock         Clock
-	maxInFlight   int
+	mu           sync.Mutex
+	inFlight     map[[32]byte]*ReplayDelta
+	inFlightSkip map[[32]byte]*SkipListAcquire
+	logger       *slog.Logger
+	clock        Clock
+	maxInFlight  int
 }
 
 // NewReplayer returns a Replayer configured with the given concurrency
