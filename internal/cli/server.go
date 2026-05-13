@@ -294,9 +294,8 @@ func runServer(cmd *cobra.Command, args []string) {
 			overlay.Broadcast(frame)
 		})
 
-		// Expose node identity, peer count, and consensus stats to RPC handlers
+		// Expose node identity and consensus stats to RPC handlers.
 		services.NodePublicKey = consensusComponents.Overlay.Identity().EncodedPublicKey()
-		services.PeerCount = consensusComponents.Overlay.PeerCount
 		engine := consensusComponents.Engine
 		services.LastCloseInfo = func() (int, int) {
 			proposers, convergeTime := engine.GetLastCloseInfo()
@@ -343,6 +342,9 @@ func runServer(cmd *cobra.Command, args []string) {
 	// Create WebSocket server for real-time subscriptions
 	wsServer := rpc.NewWebSocketServer(30*time.Second, services)
 	wsServer.RegisterAllMethods()
+	if consensusComponents != nil && consensusComponents.Overlay != nil {
+		wsServer.SetPeerSource(consensusComponents.Overlay)
+	}
 
 	// Create a ledger info provider adapter for WebSocket subscribe responses
 	wsServer.SetLedgerInfoProvider(&ledgerInfoAdapter{ledgerService: ledgerService})

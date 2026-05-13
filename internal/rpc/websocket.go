@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/subscription"
@@ -34,9 +35,28 @@ type WebSocketServer struct {
 	ledgerInfoProvider  types.LedgerInfoProvider
 	connLimiter         *ConnLimiter
 	services            *types.ServiceContainer
+	peerSource          atomic.Pointer[types.PeerSource]
 	// wg tracks per-connection goroutines (read loop, send pump, ping loop)
 	// so Close can join them on shutdown.
 	wg sync.WaitGroup
+}
+
+// SetPeerSource registers the source of per-peer entries served by the
+// `peers` RPC handler. Passing nil detaches the source so the handler
+// returns an empty list. Safe to call concurrently with reads.
+func (ws *WebSocketServer) SetPeerSource(src types.PeerSource) {
+	if src == nil {
+		ws.peerSource.Store(nil)
+		return
+	}
+	ws.peerSource.Store(&src)
+}
+
+func (ws *WebSocketServer) loadPeerSource() types.PeerSource {
+	if p := ws.peerSource.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 // WebSocketConnection represents a single WebSocket connection
@@ -283,6 +303,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 		ApiVersion: apiVersion,
 		IsAdmin:    role == types.RoleAdmin,
 		ClientIP:   clientIP,
+		PeerSource: ws.loadPeerSource(),
 		Services:   ws.services,
 	}
 

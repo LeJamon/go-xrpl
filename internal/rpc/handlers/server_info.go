@@ -37,7 +37,7 @@ func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, err
 	}
 
-	info := buildServerInfo(ctx.Services, true)
+	info := buildServerInfo(ctx, true)
 
 	response := map[string]interface{}{
 		"info": info,
@@ -49,7 +49,8 @@ func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 // buildServerInfo constructs the info/state object.
 // When human is true it produces the server_info format (XRP decimals, converge_time_s, hostid).
 // When human is false it produces the server_state format (drops integers, converge_time, load_base, etc.).
-func buildServerInfo(services *types.ServiceContainer, human bool) map[string]interface{} {
+func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
+	services := ctx.Services
 	serverInfo := services.Ledger.GetServerInfo()
 	baseFee, reserveBase, reserveIncrement := services.Ledger.GetCurrentFees()
 
@@ -87,7 +88,7 @@ func buildServerInfo(services *types.ServiceContainer, human bool) map[string]in
 		"server_state":      serverState,
 		"uptime":            uptime,
 		"validation_quorum": 1, // TODO: get from consensus/validators
-		"peers":             getPeerCount(services),
+		"peers":             getPeerCount(ctx),
 
 		// Overflow/disconnect counters (string in rippled)
 		"jq_trans_overflow":          "0", // TODO: track real overflow count
@@ -231,9 +232,9 @@ func buildServerInfo(services *types.ServiceContainer, human bool) map[string]in
 	return info
 }
 
-func getPeerCount(services *types.ServiceContainer) int {
-	if services.PeerCount != nil {
-		return services.PeerCount()
+func getPeerCount(ctx *types.RpcContext) int {
+	if ctx == nil || ctx.PeerSource == nil {
+		return 0
 	}
-	return 0
+	return ctx.PeerSource.PeerCount()
 }

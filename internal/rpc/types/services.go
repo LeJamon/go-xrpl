@@ -50,9 +50,6 @@ type ServiceContainer struct {
 	// NodePublicKey is the base58-encoded node identity public key (e.g. "n9...")
 	NodePublicKey string
 
-	// PeerCount returns the number of connected peers (nil when not in consensus mode)
-	PeerCount func() int
-
 	// LastCloseInfo returns proposer count and convergence time (ms) from the last consensus round
 	LastCloseInfo func() (proposers int, convergeTimeMs int)
 

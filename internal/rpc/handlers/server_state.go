@@ -15,7 +15,7 @@ func (m *ServerStateMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, err
 	}
 
-	state := buildServerInfo(ctx.Services, false)
+	state := buildServerInfo(ctx, false)
 
 	response := map[string]interface{}{
 		"state": state,

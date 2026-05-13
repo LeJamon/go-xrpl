@@ -18,6 +18,7 @@ type fakePeerSource struct {
 
 func (f *fakePeerSource) PeersJSON() []map[string]any { return f.peers }
 func (f *fakePeerSource) ClusterJSON() map[string]any { return f.cluster }
+func (f *fakePeerSource) PeerCount() int              { return len(f.peers) }
 
 func TestPeersMethod_NilSourceReturnsEmptyList(t *testing.T) {
 	m := &handlers.PeersMethod{}
