@@ -1556,6 +1556,28 @@ func (e *Engine) phaseOpen() {
 // closeLedger transitions from open to establish phase.
 // Reference: rippled Consensus.h closeLedger() (~line 1434)
 func (e *Engine) closeLedger() {
+	// #422: if peer proposers from the prior round + self can't
+	// meet quorum, this round almost certainly won't reach consensus.
+	// Skipped before the first completed round, where prevProposers
+	// carries no signal.
+	if e.consensusCount > 0 {
+		quorum := e.adaptor.GetQuorum()
+		if e.prevProposers+1 < quorum {
+			seq := uint32(0)
+			if e.prevLedger != nil {
+				seq = e.prevLedger.Seq() + 1
+			}
+			slog.Info("consensus close — peer proposers below quorum (likely stall)",
+				"t", "consensus",
+				"event", "close-below-quorum",
+				"peer_proposers", e.prevProposers,
+				"quorum", quorum,
+				"unl_size", len(e.adaptor.GetTrustedValidators()),
+				"seq", seq,
+			)
+		}
+	}
+
 	// Filter pending txs through the open-ledger gate when proposing,
 	// matching app_.openLedger().current()->txs at RCLConsensus.cpp:333-349.
 	// In non-proposing modes the position isn't broadcast, so skip the
