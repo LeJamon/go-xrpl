@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
@@ -100,6 +101,7 @@ func TestReplayDelta_Apply_Integration(t *testing.T) {
 		ReserveBase:               200_000_000,
 		ReserveIncrement:          50_000_000,
 		SkipSignatureVerification: false,
+		Rules:                     amendment.AllSupportedRules(),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, derived)
@@ -196,6 +198,7 @@ func TestReplay_TefTxDoesNotInstallPeerLeaf(t *testing.T) {
 		ReserveBase:               200_000_000,
 		ReserveIncrement:          50_000_000,
 		SkipSignatureVerification: false,
+		Rules:                     amendment.AllSupportedRules(),
 	})
 	require.Error(t, err, "tef during replay must fail the replay loudly (D5 — only applied==true installs peer leaf)")
 	assert.ErrorIs(t, err, inbound.ErrReplayTxDiverged,
@@ -244,6 +247,7 @@ func buildClosedSuccessor(
 		ParentHash:                parent.Hash(),
 		OpenLedger:                false,
 		ApplyFlags:                tx.TapNONE,
+		Rules:                     amendment.AllSupportedRules(),
 	})
 	res := engine.Apply(txn)
 	require.True(t, res.Result.IsApplied(),
