@@ -529,6 +529,69 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 	})
 }
 
+// Mirrors rippled SHAMapSync.cpp:597,671-672: a leaf encountered mid-path
+// is the canonical content at that slot — return duplicate (nil), not error.
+func TestAddKnownNodeByID_LeafMidPathReturnsDuplicate(t *testing.T) {
+	source, err := New(TypeTransaction)
+	if err != nil {
+		t.Fatalf("New source: %v", err)
+	}
+	// Single key → root has a single leaf child at the path's first
+	// nibble, consolidated at depth 1.
+	var k [32]byte
+	k[0] = 0x12
+	k[1] = 0x34
+	if err := source.Put(k, []byte{0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+	wireNodes, err := source.WalkWireNodes()
+	if err != nil {
+		t.Fatalf("WalkWireNodes: %v", err)
+	}
+
+	dest, err := New(TypeTransaction)
+	if err != nil {
+		t.Fatalf("New dest: %v", err)
+	}
+	if err := dest.StartSync(); err != nil {
+		t.Fatalf("StartSync: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+	for _, w := range wireNodes {
+		nid, err := UnmarshalBinary(w.NodeID)
+		if err != nil {
+			t.Fatalf("UnmarshalBinary: %v", err)
+		}
+		if nid.IsRoot() {
+			continue
+		}
+		if err := dest.AddKnownNodeByID(nid, w.Data); err != nil {
+			t.Fatalf("seed AddKnownNodeByID: %v", err)
+		}
+	}
+
+	// Synthesize a depth-2 NodeID on the same path as the consolidated
+	// leaf. The peer's data here is irrelevant — descent must short-
+	// circuit on the leaf and return nil.
+	deepNID, err := NewNodeID(2, k)
+	if err != nil {
+		t.Fatalf("NewNodeID: %v", err)
+	}
+	if err := dest.AddKnownNodeByID(deepNID, []byte{0xFF}); err != nil {
+		t.Fatalf("leaf-mid-path: want nil (duplicate), got %v", err)
+	}
+}
+
 func TestAddKnownNodeErrors(t *testing.T) {
 	sMap, err := New(TypeState)
 	if err != nil {

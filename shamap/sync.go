@@ -337,6 +337,12 @@ func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) error {
 			if err != nil {
 				return fmt.Errorf("%w: %v", ErrInvalidNodeData, err)
 			}
+			// Mirrors rippled SHAMapSync.cpp:632-638: at leaf depth, an
+			// inner node is provably invalid — mark the map and bail.
+			if !newNode.IsLeaf() && targetDepth == MaxDepth {
+				sm.state = StateInvalid
+				return ErrUnexpectedNode
+			}
 			if err := newNode.UpdateHash(); err != nil {
 				return fmt.Errorf("failed to compute node hash: %w", err)
 			}
@@ -349,6 +355,13 @@ func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) error {
 
 		if child == nil {
 			return ErrParentNotInTree
+		}
+		// A leaf encountered mid-path is the canonical content at this
+		// slot (SHAMap consolidates lone leaves above leafDepth). Rippled
+		// exits the !isInner() loop and returns duplicate (SHAMapSync.cpp:597,
+		// 671-672).
+		if child.IsLeaf() {
+			return nil
 		}
 		nextInner, ok := child.(*InnerNode)
 		if !ok {
