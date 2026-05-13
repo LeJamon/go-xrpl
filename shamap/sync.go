@@ -279,11 +279,6 @@ func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 //
 // Mirrors rippled's SHAMap::addKnownNode (SHAMapSync.cpp:578-673): descent
 // through the partial tree is driven by the NodeID, not by hash-searching.
-// This is what the tx-set acquire path needs when a peer responds with
-// nodes deeper than the layer of stubs we have locally — the hash-search
-// variant (AddKnownNodeUnchecked) can only attach nodes whose direct
-// parent is already loaded, and silently drops the rest, causing endless
-// missing-node retries (issue #413).
 //
 // Returns:
 //   - nil on successful attach, or when the slot is already populated

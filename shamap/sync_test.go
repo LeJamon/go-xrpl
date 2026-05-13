@@ -290,14 +290,7 @@ func TestGetMissingNodes_PathNodeIDs(t *testing.T) {
 	}
 }
 
-// Regression for issue #413: tx-set sync used AddKnownNodeUnchecked, a
-// tree-wide hash-search that silently fails (returning ErrUnexpectedNode
-// without diagnostics) whenever the path it would need to follow goes
-// through a hash-only stub child. AddKnownNodeByID mirrors rippled's
-// SHAMap::addKnownNode: it uses the peer-supplied SHAMapNodeID to drive
-// descent, accepts the node when its computed hash matches the parent's
-// stored child hash, and returns sentinel errors that let the caller
-// distinguish "wrong data" from "need to fetch ancestors first."
+// Regression for issue #413: full SHAMap reconstruct via AddKnownNodeByID.
 func TestAddKnownNodeByID_RippledStyleReconstruct(t *testing.T) {
 	source, err := New(TypeTransaction)
 	if err != nil {
@@ -369,9 +362,6 @@ func TestAddKnownNodeByID_RippledStyleReconstruct(t *testing.T) {
 	}
 }
 
-// Validates the sentinel-error contract so callers (router.handleTxSetData)
-// can react: re-request ancestors on ErrParentNotInTree, drop the peer on
-// ErrNodeHashMismatch, log-and-skip on ErrEmptyBranchOnPath.
 func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 	source, err := New(TypeTransaction)
 	if err != nil {
