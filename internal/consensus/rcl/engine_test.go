@@ -2812,12 +2812,10 @@ func TestCloseLedger_ProposingUsesFilteredTxSet(t *testing.T) {
 	})
 }
 
-// TestCloseLedger_BelowQuorumStallLog pins the issue #422 observability
-// signal: when peer_proposers + self can't meet the validation quorum at
-// close-attempt time, closeLedger MUST emit one INFO log line per close
-// so operators see the stall in goxrpl's own logs (today they have to
-// query rippled). Skipped before the first completed round, where
-// prevProposers carries no real signal yet.
+// TestCloseLedger_BelowQuorumStallLog pins the #422 stall signal:
+// closeLedger emits one INFO log when peer_proposers+self can't meet
+// quorum, and stays silent at-quorum and before the first completed
+// round (where prevProposers carries no signal).
 func TestCloseLedger_BelowQuorumStallLog(t *testing.T) {
 	const stallTag = "close-below-quorum"
 
@@ -2837,10 +2835,8 @@ func TestCloseLedger_BelowQuorumStallLog(t *testing.T) {
 		adaptor.validator = true
 		adaptor.opMode = consensus.OpModeFull
 		adaptor.quorum = quorum
-		// Populate a trusted set so the log's unl_size field is
-		// representative and so adaptor.GetTrustedValidators() returns
-		// the expected count even though IsTrusted isn't consulted in
-		// this path.
+		// Trusted set sized to make unl_size representative; IsTrusted
+		// isn't consulted on this path.
 		for i := 1; i <= 5; i++ {
 			adaptor.trusted[consensus.NodeID{byte(i)}] = true
 		}
@@ -2894,8 +2890,8 @@ func TestCloseLedger_BelowQuorumStallLog(t *testing.T) {
 	})
 
 	t.Run("genesis-round-silent", func(t *testing.T) {
-		// consensusCount==0: no completed prior round, so prevProposers
-		// is meaningless. Suppressing avoids spurious noise at startup.
+		// consensusCount==0: prevProposers is meaningless before any
+		// round has completed.
 		engine, _ := newEngineWithUNL(t, 4, 0, 0)
 		out := withCapturedLogs(t, func() {
 			engine.mu.Lock()

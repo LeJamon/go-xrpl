@@ -1556,13 +1556,10 @@ func (e *Engine) phaseOpen() {
 // closeLedger transitions from open to establish phase.
 // Reference: rippled Consensus.h closeLedger() (~line 1434)
 func (e *Engine) closeLedger() {
-	// Stall observability (issue #422): if the trusted-peer proposer
-	// count from the prior round + self can't meet the validation
-	// quorum, this round almost certainly won't reach consensus either.
-	// Emit one INFO line per close attempt so operators see the stall
-	// signal in goxrpl's own logs instead of having to query rippled.
+	// #422: if peer proposers from the prior round + self can't
+	// meet quorum, this round almost certainly won't reach consensus.
 	// Skipped before the first completed round, where prevProposers
-	// carries no real signal.
+	// carries no signal.
 	if e.consensusCount > 0 {
 		quorum := e.adaptor.GetQuorum()
 		if e.prevProposers+1 < quorum {
