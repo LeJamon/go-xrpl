@@ -1232,25 +1232,17 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 }
 
 // historyWindow caps the in-memory ledgerHistory + tx-index caches to
-// a sliding window of recent validated ledgers. Matches the existing
-// pendingValidationMaxLen sizing and rippled's default ledger-cache
-// capacity (SizedItem::ledgerSize "large" tier = 256 entries — see
-// rippled/src/xrpld/core/detail/Config.cpp). At 3s closes that's
-// roughly 13 minutes of history. Range-style RPC lookups for older
-// sequences fall through to the relational DB when configured (see
-// ledger_query.go). Hash-based GetTransaction lookups beyond the
-// window currently return "not found" — a DB fallback is tracked
-// separately.
+// a sliding window of recent validated ledgers. Mirrors rippled's
+// default ledger-cache capacity (SizedItem::ledgerSize "large" tier =
+// 256, see rippled/src/xrpld/core/detail/Config.cpp). Range-style RPC
+// lookups for older sequences fall through to the relational DB; hash-
+// based GetTransaction lookups beyond the window currently return
+// "not found" until a DB fallback lands.
 const historyWindow = 256
 
 // evictOldHistoryLocked drops ledgerHistory entries (and their
 // associated tx-index entries) with seq <= latestValidatedSeq -
-// historyWindow. Bounds the in-memory caches so a long-running node
-// does not accumulate every ledger and tx hash ever seen.
-//
-// Caller must hold s.mu.Lock(). Safe to call with any
-// latestValidatedSeq; the helper is a no-op when the window has not
-// been exceeded.
+// historyWindow. Caller must hold s.mu.
 func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
 	if latestValidatedSeq <= historyWindow {
 		return

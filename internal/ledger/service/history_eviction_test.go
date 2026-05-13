@@ -10,9 +10,6 @@ import (
 	"github.com/LeJamon/goXRPLd/shamap"
 )
 
-// TestEvictOldHistoryLocked verifies that ledgerHistory and the tx
-// indexes are pruned at the historyWindow boundary, with entries
-// above the cutoff preserved intact.
 func TestEvictOldHistoryLocked(t *testing.T) {
 	svc, err := New(DefaultConfig())
 	if err != nil {
@@ -53,7 +50,6 @@ func TestEvictOldHistoryLocked(t *testing.T) {
 		return l
 	}
 
-	// Populate 3 * historyWindow entries so eviction has plenty to chew on.
 	const totalLedgers = historyWindow * 3
 	var latestSeq uint32 = 1
 	for i := 0; i < totalLedgers; i++ {
@@ -78,8 +74,6 @@ func TestEvictOldHistoryLocked(t *testing.T) {
 		_ = l
 	}
 
-	// Tx-index entries for evicted ledgers must be gone; entries for
-	// surviving ledgers must remain.
 	for txHash, txSeq := range svc.txIndex {
 		if txSeq <= cutoff {
 			t.Errorf("txIndex[%x]=%d survived eviction; cutoff=%d", txHash[:4], txSeq, cutoff)
@@ -93,9 +87,6 @@ func TestEvictOldHistoryLocked(t *testing.T) {
 	}
 }
 
-// TestEvictOldHistoryLocked_BelowWindow verifies that no eviction
-// occurs while the validated sequence is still within the first
-// historyWindow ledgers (a node fresh out of genesis).
 func TestEvictOldHistoryLocked_BelowWindow(t *testing.T) {
 	svc, err := New(DefaultConfig())
 	if err != nil {
@@ -129,9 +120,6 @@ func TestEvictOldHistoryLocked_BelowWindow(t *testing.T) {
 	}
 }
 
-// TestAcceptLedgerLoop_BoundsHistory drives the operational path:
-// AcceptLedgerAt is called repeatedly past the historyWindow boundary,
-// and ledgerHistory must remain bounded.
 func TestAcceptLedgerLoop_BoundsHistory(t *testing.T) {
 	svc, err := New(DefaultConfig())
 	if err != nil {
@@ -157,12 +145,9 @@ func TestAcceptLedgerLoop_BoundsHistory(t *testing.T) {
 	}
 }
 
-// TestDrainPendingValidation_EvictsHistory verifies that the inline
-// validation-drain promotion path triggers cache eviction. This is the
-// race where SetValidatedLedger arrives before the close, gets
-// stashed, and the close drains + promotes inline — without this
-// eviction call, the AcceptConsensusResult and adoptLedgerWithState
-// callers would leak entries past the window.
+// Covers the race where SetValidatedLedger arrives before the close
+// and is drained + promoted inline — eviction must run on that path
+// because no second SetValidatedLedger arrives for the same seq.
 func TestDrainPendingValidation_EvictsHistory(t *testing.T) {
 	svc, err := New(DefaultConfig())
 	if err != nil {
@@ -184,8 +169,6 @@ func TestDrainPendingValidation_EvictsHistory(t *testing.T) {
 		return stateMap, txMap
 	}
 
-	// Build a synthetic adopted ledger at a seq well past the window
-	// so eviction has work to do.
 	const adoptedSeq uint32 = historyWindow + 50
 	adoptedState, adoptedTx := freshMaps()
 	var adoptedHeader header.LedgerHeader
@@ -193,8 +176,8 @@ func TestDrainPendingValidation_EvictsHistory(t *testing.T) {
 	adoptedHeader.Hash[0] = 0x77
 	adopted := ledger.NewOpenWithHeader(adoptedHeader, adoptedState, adoptedTx, drops.Fees{})
 
-	// Stash old entries below the post-eviction cutoff that the drain
-	// must clean up.
+	// Seed entries below the post-eviction cutoff so the drain path has
+	// observable work to do.
 	cutoff := adoptedSeq - historyWindow
 	for seq := uint32(1); seq <= cutoff; seq++ {
 		st, tx := freshMaps()
@@ -203,8 +186,6 @@ func TestDrainPendingValidation_EvictsHistory(t *testing.T) {
 		svc.ledgerHistory[seq] = ledger.NewOpenWithHeader(h, st, tx, drops.Fees{})
 	}
 
-	// Stash a pending validation so drainPendingLedgerValidationLocked
-	// will promote the adopted ledger inline.
 	svc.mu.Lock()
 	svc.stashPendingLedgerValidationLocked(adoptedSeq, adopted.Hash())
 	promoted := svc.drainPendingLedgerValidationLocked(adoptedSeq, adopted)
