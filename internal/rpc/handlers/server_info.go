@@ -232,9 +232,6 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 	return info
 }
 
-// getPeerCount reads the live peer count from the same PeerSource that
-// the peers RPC iterates, so server_info.peers and len(peers RPC result)
-// cannot disagree. Returns 0 in standalone mode where no source is wired.
 func getPeerCount(ctx *types.RpcContext) int {
 	if ctx == nil || ctx.PeerSource == nil {
 		return 0

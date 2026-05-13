@@ -42,10 +42,8 @@ type WebSocketServer struct {
 }
 
 // SetPeerSource registers the source of per-peer entries served by the
-// `peers` RPC and the peer count returned by `server_info` over this
-// WebSocket server. Passing nil detaches the source. Mirrors
-// (*Server).SetPeerSource so HTTP and WebSocket dispatchers share a
-// single overlay reference and cannot disagree.
+// `peers` RPC handler. Passing nil detaches the source so the handler
+// returns an empty list. Safe to call concurrently with reads.
 func (ws *WebSocketServer) SetPeerSource(src types.PeerSource) {
 	if src == nil {
 		ws.peerSource.Store(nil)

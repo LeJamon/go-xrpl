@@ -294,10 +294,7 @@ func runServer(cmd *cobra.Command, args []string) {
 			overlay.Broadcast(frame)
 		})
 
-		// Expose node identity and consensus stats to RPC handlers. The
-		// peer count is read through ctx.PeerSource (wired below for
-		// both the HTTP and WebSocket dispatchers) so server_info.peers
-		// and `peers` RPC share a single underlying overlay reference.
+		// Expose node identity and consensus stats to RPC handlers.
 		services.NodePublicKey = consensusComponents.Overlay.Identity().EncodedPublicKey()
 		engine := consensusComponents.Engine
 		services.LastCloseInfo = func() (int, int) {

@@ -13,12 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestWebSocket_PeersRPC_UsesPeerSource exercises the WebSocket path
-// end-to-end: a client sends `peers` and `server_info` over WS, and
-// both must reflect the overlay state. Pre-fix, the WebSocket dispatcher
-// built RpcContext without PeerSource — `peers` returned [] while
-// `server_info.peers` still worked via the (now removed) services.PeerCount.
-// This test pins both at the same source so they can't drift.
 func TestWebSocket_PeersRPC_UsesPeerSource(t *testing.T) {
 	src := &stubPeerSource{
 		peers: []map[string]any{
@@ -67,9 +61,6 @@ func wsCall(t *testing.T, conn *websocket.Conn, req map[string]any) map[string]a
 	return resp
 }
 
-// TestWebSocket_SetPeerSource_AdminRole verifies the AdminHandler check
-// on PeersMethod is reached over WS: a guest port gets `commandUntrusted`
-// rather than seeing an empty list because PeerSource is nil.
 func TestWebSocket_SetPeerSource_NilDetaches(t *testing.T) {
 	src := &stubPeerSource{peers: []map[string]any{{"address": "192.0.2.1:51235"}}}
 	ws := NewWebSocketServer(30*time.Second, nil)

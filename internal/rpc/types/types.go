@@ -47,8 +47,7 @@ const (
 // emits one entry per connected peer; ClusterJSON populates the
 // top-level cluster object (rippled doPeers Peers.cpp:59-80) with
 // each [cluster_nodes] member except the local node. PeerCount feeds
-// server_info.peers, sharing a single underlying source with peers
-// RPC so the two cannot disagree.
+// server_info.peers from the same underlying source.
 type PeerSource interface {
 	PeersJSON() []map[string]any
 	ClusterJSON() map[string]any

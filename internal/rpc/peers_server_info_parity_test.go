@@ -11,9 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// stubPeerSource is a minimal PeerSource that tests can pin to a known
-// number of peers. PeerCount() must always equal len(PeersJSON()) so
-// the parity invariant the production overlay enforces also holds here.
 type stubPeerSource struct {
 	peers   []map[string]any
 	cluster map[string]any
@@ -23,11 +20,6 @@ func (s *stubPeerSource) PeersJSON() []map[string]any { return s.peers }
 func (s *stubPeerSource) ClusterJSON() map[string]any { return s.cluster }
 func (s *stubPeerSource) PeerCount() int              { return len(s.peers) }
 
-// TestPeersAndServerInfoShareSource pins the invariant from issue #419:
-// `peers` RPC and `server_info.peers` MUST be wired to the same source,
-// so len(peers result) always equals server_info.peers. Pre-fix, the
-// two read independent fields (services.PeerCount and ctx.PeerSource);
-// a wiring mistake on either side could — and did — desync them.
 func TestPeersAndServerInfoShareSource(t *testing.T) {
 	src := &stubPeerSource{
 		peers: []map[string]any{
@@ -62,8 +54,6 @@ func TestPeersAndServerInfoShareSource(t *testing.T) {
 		"len(peers RPC result) must equal server_info.peers — single source of truth (issue #419)")
 }
 
-// TestPeersAndServerInfoBothEmptyWithoutSource confirms the degenerate
-// case still agrees: with no PeerSource wired, both methods report 0.
 func TestPeersAndServerInfoBothEmptyWithoutSource(t *testing.T) {
 	ledger := &mockLedgerService{}
 	services := &types.ServiceContainer{Ledger: ledger}
