@@ -17,7 +17,6 @@ import (
 // arrive within that round.
 func TestEngine_TrackerReportsProposers(t *testing.T) {
 	adaptor := newMockAdaptor()
-	// Tracker: not a validator, but fully synced.
 	adaptor.validator = false
 	adaptor.opMode = consensus.OpModeFull
 
@@ -43,16 +42,13 @@ func TestEngine_TrackerReportsProposers(t *testing.T) {
 	}
 	defer engine.Stop()
 
-	// Drive a normal first round. Mode will be Observing because the
-	// adaptor reports validator=false, matching a tracker setup.
+	// Mode will be Observing because validator=false (tracker setup).
 	parent, _ := adaptor.GetLastClosedLedger()
 	round := consensus.RoundID{Seq: parent.Seq() + 1, ParentHash: parent.ID()}
 	if err := engine.StartRound(round, false); err != nil {
 		t.Fatalf("StartRound: %v", err)
 	}
 
-	// Send a proposal from each trusted validator with PreviousLedger
-	// matching the current round.
 	now := adaptor.Now()
 	for _, nodeID := range trusted {
 		p := &consensus.Proposal{
