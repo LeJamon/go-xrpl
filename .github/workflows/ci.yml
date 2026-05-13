@@ -61,3 +61,26 @@ jobs:
           go-version: "1.24"
           cache: true
       - run: go test -race -count=1 -timeout 15m ${{ matrix.packages }}
+
+  consensus-smoke:
+    name: Consensus smoke (2 rippled + 1 goxrpl)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build goxrpl docker image
+        run: docker build -t goxrpl:latest .
+
+      - name: Run consensus smoke
+        run: bash scripts/consensus-smoke/smoke.sh
+        env:
+          GOXRPL_IMAGE: goxrpl:latest
+          RIPPLED_IMAGE: rippleci/rippled:2.6.2
+          PAYMENT_COUNT: "3"
+          MIN_SEQ_EMPTY: "5"
+          BOOT_TIMEOUT: "240"
+          TX_TIMEOUT: "180"
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker compose -f scripts/consensus-smoke/docker-compose.yml logs --no-color --tail=200 || true
