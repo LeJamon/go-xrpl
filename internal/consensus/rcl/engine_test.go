@@ -1,7 +1,10 @@
 package rcl
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -2805,6 +2808,102 @@ func TestCloseLedger_ProposingUsesFilteredTxSet(t *testing.T) {
 				"standalone). Got %d calls — would burn the per-round "+
 				"multi-pass apply cost on a position we won't "+
 				"broadcast.", got)
+		}
+	})
+}
+
+// TestCloseLedger_BelowQuorumStallLog pins the issue #422 observability
+// signal: when peer_proposers + self can't meet the validation quorum at
+// close-attempt time, closeLedger MUST emit one INFO log line per close
+// so operators see the stall in goxrpl's own logs (today they have to
+// query rippled). Skipped before the first completed round, where
+// prevProposers carries no real signal yet.
+func TestCloseLedger_BelowQuorumStallLog(t *testing.T) {
+	const stallTag = "close-below-quorum"
+
+	withCapturedLogs := func(t *testing.T, fn func()) string {
+		t.Helper()
+		var buf bytes.Buffer
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		t.Cleanup(func() { slog.SetDefault(prev) })
+		fn()
+		return buf.String()
+	}
+
+	newEngineWithUNL := func(t *testing.T, quorum, prevProposers, consensusCount int) (*Engine, *mockAdaptor) {
+		t.Helper()
+		adaptor := newMockAdaptor()
+		adaptor.validator = true
+		adaptor.opMode = consensus.OpModeFull
+		adaptor.quorum = quorum
+		// Populate a trusted set so the log's unl_size field is
+		// representative and so adaptor.GetTrustedValidators() returns
+		// the expected count even though IsTrusted isn't consulted in
+		// this path.
+		for i := 1; i <= 5; i++ {
+			adaptor.trusted[consensus.NodeID{byte(i)}] = true
+		}
+		engine := NewEngine(adaptor, DefaultConfig())
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		if err := engine.Start(ctx); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		t.Cleanup(func() { _ = engine.Stop() })
+		round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+		engine.StartRound(round, true)
+		engine.mu.Lock()
+		engine.setMode(consensus.ModeProposing)
+		engine.setPhase(consensus.PhaseOpen)
+		engine.prevProposers = prevProposers
+		engine.consensusCount = uint64(consensusCount)
+		engine.mu.Unlock()
+		return engine, adaptor
+	}
+
+	t.Run("below-quorum-fires-once", func(t *testing.T) {
+		engine, _ := newEngineWithUNL(t, 4, 2, 1)
+		out := withCapturedLogs(t, func() {
+			engine.mu.Lock()
+			engine.closeLedger()
+			engine.mu.Unlock()
+		})
+		if !strings.Contains(out, stallTag) {
+			t.Fatalf("expected close-below-quorum log when peer_proposers(2)+1 < quorum(4); got:\n%s", out)
+		}
+		if !strings.Contains(out, "peer_proposers=2") || !strings.Contains(out, "quorum=4") {
+			t.Fatalf("log missing structured fields; got:\n%s", out)
+		}
+		if got := strings.Count(out, stallTag); got != 1 {
+			t.Fatalf("close-below-quorum must fire exactly once per close, got %d:\n%s", got, out)
+		}
+	})
+
+	t.Run("at-quorum-silent", func(t *testing.T) {
+		// peer_proposers(3) + self(1) == quorum(4): stall log MUST NOT fire.
+		engine, _ := newEngineWithUNL(t, 4, 3, 1)
+		out := withCapturedLogs(t, func() {
+			engine.mu.Lock()
+			engine.closeLedger()
+			engine.mu.Unlock()
+		})
+		if strings.Contains(out, stallTag) {
+			t.Fatalf("close-below-quorum must NOT fire when peer_proposers+1 >= quorum; got:\n%s", out)
+		}
+	})
+
+	t.Run("genesis-round-silent", func(t *testing.T) {
+		// consensusCount==0: no completed prior round, so prevProposers
+		// is meaningless. Suppressing avoids spurious noise at startup.
+		engine, _ := newEngineWithUNL(t, 4, 0, 0)
+		out := withCapturedLogs(t, func() {
+			engine.mu.Lock()
+			engine.closeLedger()
+			engine.mu.Unlock()
+		})
+		if strings.Contains(out, stallTag) {
+			t.Fatalf("close-below-quorum must NOT fire before the first completed round; got:\n%s", out)
 		}
 	})
 }
