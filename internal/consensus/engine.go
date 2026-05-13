@@ -58,6 +58,25 @@ type Engine interface {
 	GetLastCloseInfo() (proposers int, convergeTime time.Duration)
 }
 
+// ValidationHistorian provides historical, per-ledger trusted
+// validation lookups for NegativeUNL score-table building. Implemented
+// by rcl.ValidationTracker; an adaptor that wants to participate in
+// NegativeUNL voting receives one via the WireableAdaptor extension.
+// Mirrors rippled's `validations.getTrustedForLedger(hash, seq)` at
+// NegativeUNLVote.cpp:208 — goXRPL's tracker keys validations by
+// LedgerID, so the (hash, seq) tuple collapses to a single lookup.
+type ValidationHistorian interface {
+	GetTrustedValidations(ledgerID LedgerID) []*Validation
+}
+
+// WireableAdaptor is an optional extension that engine wires up after
+// constructing its ValidationTracker. Adaptors that implement it can
+// emit NegativeUNL pseudo-txs; those that don't (e.g. test mocks)
+// continue to work and simply skip NegativeUNL voting.
+type WireableAdaptor interface {
+	SetValidationHistorian(h ValidationHistorian)
+}
+
 // Adaptor provides the interface between the consensus engine and
 // the rest of the node (network, ledger, transaction queue).
 // This follows rippled's adaptor pattern for clean separation.
@@ -183,13 +202,15 @@ type Adaptor interface {
 	GenerateFlagLedgerPseudoTxs(prevLedger Ledger, parentValidations []*Validation) [][]byte
 
 	// GenerateNegativeUNLPseudoTx returns the NegativeUNL pseudo-tx
-	// to inject when prevLedger is a voting ledger AND the
+	// blobs to inject when prevLedger is a voting ledger AND the
 	// featureNegativeUNL amendment is enabled. Mirrors rippled
-	// RCLConsensus.cpp:368-380.
+	// RCLConsensus.cpp:368-380 + NegativeUNLVote.cpp:84-107 which
+	// emits at most one ToDisable AND at most one ToReEnable per
+	// flag-ledger vote — hence the [][]byte return.
 	//
 	// Returns nil when no NegUNL changes are required. Adaptors
 	// without NegativeUNLVote support return nil.
-	GenerateNegativeUNLPseudoTx(prevLedger Ledger) []byte
+	GenerateNegativeUNLPseudoTx(prevLedger Ledger) [][]byte
 
 	// GetTxSet returns a transaction set by ID.
 	GetTxSet(id TxSetID) (TxSet, error)

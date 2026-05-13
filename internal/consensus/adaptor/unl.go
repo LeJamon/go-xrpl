@@ -76,7 +76,17 @@ func (u *UNL) Size() int {
 // applies calcNodeID (RIPEMD-160(SHA-256(masterPubKey))) so the trust
 // set is keyed identically to the inbound NodeID values populated by
 // the consensus router.
-func DecodeValidatorKey(key string) (nodeID consensus.NodeID, err error) {
+func DecodeValidatorKey(key string) (consensus.NodeID, error) {
+	nodeID, _, err := DecodeValidatorKeyWithMaster(key)
+	return nodeID, err
+}
+
+// DecodeValidatorKeyWithMaster decodes a base58-encoded validator
+// public key into both its 20-byte NodeID and the underlying 33-byte
+// master pubkey. NegativeUNL voting needs the raw master because the
+// UNLModify pseudo-tx carries the master pubkey on the wire — see
+// NegativeUNLVote.cpp:118-120 (sfUNLModifyValidator is the master).
+func DecodeValidatorKeyWithMaster(key string) (nodeID consensus.NodeID, master [33]byte, err error) {
 	// Guard against panics in the base58 decoder for malformed input
 	defer func() {
 		if r := recover(); r != nil {
@@ -84,16 +94,15 @@ func DecodeValidatorKey(key string) (nodeID consensus.NodeID, err error) {
 		}
 	}()
 
-	decoded, err := addresscodec.DecodeNodePublicKey(key)
-	if err != nil {
-		return consensus.NodeID{}, fmt.Errorf("decode node public key: %w", err)
+	decoded, decErr := addresscodec.DecodeNodePublicKey(key)
+	if decErr != nil {
+		return consensus.NodeID{}, [33]byte{}, fmt.Errorf("decode node public key: %w", decErr)
 	}
 	if len(decoded) != 33 {
-		return consensus.NodeID{}, fmt.Errorf("unexpected key length: got %d, want 33", len(decoded))
+		return consensus.NodeID{}, [33]byte{}, fmt.Errorf("unexpected key length: got %d, want 33", len(decoded))
 	}
-	var master [33]byte
 	copy(master[:], decoded)
-	return consensus.CalcNodeID(master), nil
+	return consensus.CalcNodeID(master), master, nil
 }
 
 // CalcQuorum computes the quorum for n validators matching rippled.

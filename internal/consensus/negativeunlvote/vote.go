@@ -156,6 +156,16 @@ func NewVoter(myID consensus.NodeID) *Voter {
 	}
 }
 
+// MyID returns the local node's NodeID used by DoVoting for the
+// local-participation gate. Exposed for callers that need to look
+// up the local validator's score in their own score table before
+// invoking DoVoting (e.g. the adaptor's buildScoreTable wrapper,
+// which short-circuits on insufficient local participation to
+// avoid building an unused candidate list).
+func (v *Voter) MyID() consensus.NodeID {
+	return v.myID
+}
+
 // NewValidators registers a set of newly-trusted validators at the
 // given ledger sequence so they are exempt from ToDisable voting for
 // the next NewValidatorDisableSkip ledgers. Mirrors

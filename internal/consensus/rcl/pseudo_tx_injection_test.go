@@ -106,7 +106,7 @@ func TestCloseLedger_NegUNLGatedOnFeature(t *testing.T) {
 	a.disabledFeatures = map[string]bool{"NegativeUNL": true}
 
 	negUNLBlob := []byte{0xDE, 0xAD, 0xBE, 0xEF}
-	a.negativeUNLPseudoTx = negUNLBlob
+	a.negativeUNLPseudoTx = [][]byte{negUNLBlob}
 
 	engine := NewEngine(a, DefaultConfig())
 	round := consensus.RoundID{Seq: prev.Seq() + 1, ParentHash: prev.ID()}
@@ -137,7 +137,9 @@ func closeAtModeWith(t *testing.T, mode consensus.Mode, prevSeq uint32, flagBlob
 	a.lastLCL = prev
 	a.ledgers[prev.ID()] = prev
 	a.flagLedgerPseudoTxs = flagBlobs
-	a.negativeUNLPseudoTx = negUNLBlob
+	if negUNLBlob != nil {
+		a.negativeUNLPseudoTx = [][]byte{negUNLBlob}
+	}
 
 	engine := NewEngine(a, DefaultConfig())
 	round := consensus.RoundID{Seq: prev.Seq() + 1, ParentHash: prev.ID()}
