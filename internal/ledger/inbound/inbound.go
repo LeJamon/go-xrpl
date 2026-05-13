@@ -161,13 +161,30 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 		return fmt.Errorf("unexpected state %d for GotStateNodes", l.state)
 	}
 
+	// Mirrors the tx-set sync fix in router.handleTxSetData (issue #413):
+	// drive placement by the peer-supplied NodeID via AddKnownNodeByID
+	// rather than the hash-search AddKnownNodeUnchecked, which silently
+	// drops nodes whose direct parent isn't loaded yet.
 	added := 0
 	for _, node := range nodes {
 		if len(node.NodeData) == 0 {
 			continue
 		}
-		if err := l.stateMap.AddKnownNodeUnchecked(node.NodeData); err != nil {
-			l.logger.Debug("inbound ledger: AddKnownNodeUnchecked", "error", err)
+		parsedID, err := shamap.UnmarshalBinary(node.NodeID)
+		if err != nil {
+			l.logger.Debug("inbound ledger: malformed state node ID",
+				"node_id_len", len(node.NodeID),
+				"error", err.Error())
+			continue
+		}
+		if parsedID.IsRoot() {
+			continue
+		}
+		if err := l.stateMap.AddKnownNodeByID(parsedID, node.NodeData); err != nil {
+			l.logger.Debug("inbound ledger: state node rejected",
+				"node_id", fmt.Sprintf("%x", node.NodeID),
+				"node_data_len", len(node.NodeData),
+				"error", err.Error())
 			continue
 		}
 		added++
