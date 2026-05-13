@@ -209,8 +209,10 @@ func TestSetValidatedLedger_StashHashMismatch(t *testing.T) {
 // (LedgerMaster.cpp:904-918). Our seq-keyed map mirrors by stashing
 // the (seq, expectedHash) pair on hash mismatch so a later
 // acquisition-then-adopt at the validated hash drains the stash and
-// promotes validated. The handler-fire side is guarded by
-// seq > closedLedger; this test pins both halves.
+// promotes validated. The handler-fire side fires whenever
+// `seq > validatedLedger` so a node that ran ahead on a private
+// chain (closedSeq >> validatedSeq) can still recover when quorum
+// converges on a divergent canonical seq below its closed-tip.
 func TestSetValidatedLedger_StashesOnForkDivergence(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)
@@ -271,13 +273,21 @@ func TestSetValidatedLedger_StashesOnForkDivergence(t *testing.T) {
 	assert.Equal(t, startValidated, svc.GetValidatedLedgerIndex(),
 		"hash mismatch must NOT promote validated")
 
-	// Handler must NOT fire — seq <= closed guard.
-	time.Sleep(50 * time.Millisecond)
+	// Handler MUST fire — adoptedSeq > validatedSeq (which is 0/genesis
+	// here). The corrected gate uses validatedSeq, not closedSeq, so a
+	// node that has run ahead on a private chain still receives the
+	// acquisition signal when quorum forms on a divergent canonical hash.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(fires) > 0
+	}, 200*time.Millisecond, 10*time.Millisecond,
+		"onPendingValidationStashed must fire when seq > validatedLedger, regardless of how far closedLedger has run ahead")
 	mu.Lock()
 	gotFires := append([]uint32(nil), fires...)
 	mu.Unlock()
-	assert.Empty(t, gotFires,
-		"onPendingValidationStashed must not fire for seq <= closedLedger; the divergent-fork status-change path drives reacquisition at active height")
+	assert.Equal(t, []uint32{adoptedSeq}, gotFires,
+		"handler must fire exactly once with the stashed seq")
 }
 
 // TestAdoptLedgerWithState_EventCallbackFiresAfterValidationFirstRace pins

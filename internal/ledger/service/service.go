@@ -1759,18 +1759,23 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	// Both stash and arm acquisition.
 	if !ok || l.Hash() != expectedHash {
 		s.stashPendingLedgerValidationLocked(seq, expectedHash)
-		// Capture handler under lock; fire only when seq > closed
-		// (at-or-below is the divergent-fork status-change path).
+		// Capture handler under lock; fire when seq > the last
+		// VALIDATED seq (mirrors rippled LedgerMaster::checkAccept's
+		// `if (seq < mValidLedgerSeq) return` gate at
+		// LedgerMaster.cpp:883). Gating on closedSeq instead silently
+		// blocked recovery when a node ran ahead on a private chain:
+		// quorum on a divergent canonical seq=N would stash but the
+		// arming handler refused to fire because closedSeq >> N.
 		var (
 			handler func(uint32, [32]byte)
 			fire    bool
 		)
 		if s.onPendingValidationStashed != nil {
-			closedSeq := uint32(0)
-			if s.closedLedger != nil {
-				closedSeq = s.closedLedger.Sequence()
+			validatedSeq := uint32(0)
+			if s.validatedLedger != nil {
+				validatedSeq = s.validatedLedger.Sequence()
 			}
-			if seq > closedSeq {
+			if seq > validatedSeq {
 				handler = s.onPendingValidationStashed
 				fire = true
 			}

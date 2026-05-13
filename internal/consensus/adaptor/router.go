@@ -1623,9 +1623,15 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 	if svc == nil {
 		return
 	}
-	// At-or-below closed is driven by the divergent-fork status-change
-	// handler, not here.
-	if seq <= svc.GetClosedLedgerIndex() {
+	// Skip only when seq is at or below the last *validated* ledger
+	// (mirrors rippled's LedgerMaster::checkAccept gate at
+	// LedgerMaster.cpp:883 — `if (seq < mValidLedgerSeq) return`). Gating
+	// on the closed-ledger index instead silently swallowed recovery for
+	// a node that had run ahead on a private chain: when the validation
+	// tracker observed quorum on canonical seq=N with a different hash
+	// than our local seq=N, the acquire was skipped because closedSeq
+	// >> validatedSeq, leaving us stuck on the private chain forever.
+	if seq <= svc.GetValidatedLedgerIndex() {
 		return
 	}
 
