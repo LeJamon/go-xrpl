@@ -1146,29 +1146,53 @@ func (a *Adaptor) CloseTimeResolution() time.Duration {
 	return 30 * time.Second // rippled default
 }
 
-// AdjustCloseTime computes the weighted average of all raw close times
-// and adjusts our clock offset toward the network. Matches rippled's
-// adjustCloseTime() in RCLConsensus.cpp:694-732.
+// AdjustCloseTime computes the weighted average of raw close times
+// and applies the quarter-step damping rippled uses to converge on
+// the network's view of time. The caller-side averaging matches
+// RCLConsensus.cpp:694-732; the damping branches match
+// TimeKeeper::adjustCloseTime at TimeKeeper.h:88-116. All arithmetic
+// is in whole seconds — rippled's NetClock is second-granular, and a
+// straight nanosecond replace would never decay toward zero on small
+// |by|.
 func (a *Adaptor) AdjustCloseTime(rawCloseTimes consensus.CloseTimes) {
 	if rawCloseTimes.Self.IsZero() {
 		return
 	}
 
-	totalSecs := rawCloseTimes.Self.Unix()
+	selfSecs := rawCloseTimes.Self.Unix()
+	totalSecs := selfSecs
 	count := int64(1)
 	for t, v := range rawCloseTimes.Peers {
 		count += int64(v)
 		totalSecs += t.Unix() * int64(v)
 	}
 	avgSecs := (totalSecs + count/2) / count
-	avg := time.Unix(avgSecs, 0)
+	bySecs := avgSecs - selfSecs
 
-	offset := avg.Sub(rawCloseTimes.Self)
-	a.closeOffsetNs.Store(int64(offset))
+	currentSecs := int64(time.Duration(a.closeOffsetNs.Load()) / time.Second)
+	if bySecs == 0 && currentSecs == 0 {
+		return
+	}
 
-	if offset != 0 {
+	// Mirrors TimeKeeper.h:103-113. Integer division truncates toward
+	// zero in both C++ (since C++11) and Go, so the branches translate
+	// directly.
+	var newSecs int64
+	switch {
+	case bySecs > 1:
+		newSecs = currentSecs + (bySecs+3)/4
+	case bySecs < -1:
+		newSecs = currentSecs + (bySecs-3)/4
+	default:
+		newSecs = (currentSecs * 3) / 4
+	}
+
+	a.closeOffsetNs.Store(int64(time.Duration(newSecs) * time.Second))
+
+	if newSecs != currentSecs {
 		a.logger.Debug("adjusted close time offset",
-			"offset_ms", offset.Milliseconds(),
+			"offset_s", newSecs,
+			"by_s", bySecs,
 			"peers", len(rawCloseTimes.Peers),
 		)
 	}
