@@ -73,13 +73,13 @@ func (r *Router) StartReplayTask(
 	}
 
 	state := &activeReplayTask{
-		chainHashes:     make(map[[32]byte]bool),
-		anchorParent:    anchorParent,
-		pendingByHash:   make(map[[32]byte]*inbound.ReplayDelta),
-		adopted:         make(map[[32]byte]*ledger.Ledger),
-		nextSeqToAdopt:  tipSeq - depth + 1,
-		chainSeqByHash:  make(map[[32]byte]uint32),
-		chainHashBySeq:  make(map[uint32][32]byte),
+		chainHashes:    make(map[[32]byte]bool),
+		anchorParent:   anchorParent,
+		pendingByHash:  make(map[[32]byte]*inbound.ReplayDelta),
+		adopted:        make(map[[32]byte]*ledger.Ledger),
+		nextSeqToAdopt: tipSeq - depth + 1,
+		chainSeqByHash: make(map[[32]byte]uint32),
+		chainHashBySeq: make(map[uint32][32]byte),
 	}
 	// Seed the anchor into adopted so the oldest chain entry can find
 	// its parent via the same map lookup as later entries.
@@ -356,4 +356,3 @@ func (s taskSenderAdapter) RequestProofPath(peerID uint64, ledgerHash, key [32]b
 func (s taskSenderAdapter) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 	return s.adaptor.RequestReplayDelta(peerID, hash)
 }
-

@@ -219,13 +219,11 @@ func skipField(parser *serdes.BinaryParser, field *definitions.FieldInstance) er
 	case "STArray":
 		return skipSTArray(parser)
 	default:
-		// For unknown types, try to read as variable length
-		length, err := parser.ReadVariableLength()
-		if err != nil {
-			return err
-		}
-		_, err = parser.ReadBytes(length)
-		return err
+		// Refuse to guess: blindly reading an unknown type as VL can
+		// consume a data byte as a length prefix and silently desync
+		// the parser. Fail closed so the caller surfaces a parse error
+		// rather than a wrong amendment set.
+		return fmt.Errorf("unsupported field type %q", field.Type)
 	}
 }
 

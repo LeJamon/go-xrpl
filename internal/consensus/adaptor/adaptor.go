@@ -14,6 +14,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -134,11 +135,11 @@ func (n *noopSender) RequestProofPath(uint64, [32]byte, [32]byte, message.Ledger
 	return nil
 }
 func (n *noopSender) RequestStateNodes(uint64, [32]byte, [][]byte) error { return nil }
-func (n *noopSender) SendToPeer(uint64, []byte) error                          { return nil }
-func (n *noopSender) PeerSupportsReplay(uint64) bool                           { return false }
-func (n *noopSender) ReplayCapablePeersExcluding([]uint64, int) []uint64       { return nil }
-func (n *noopSender) IncPeerBadData(uint64, string)                            {}
-func (n *noopSender) PeersThatHave([32]byte) []uint64                          { return nil }
+func (n *noopSender) SendToPeer(uint64, []byte) error                    { return nil }
+func (n *noopSender) PeerSupportsReplay(uint64) bool                     { return false }
+func (n *noopSender) ReplayCapablePeersExcluding([]uint64, int) []uint64 { return nil }
+func (n *noopSender) IncPeerBadData(uint64, string)                      {}
+func (n *noopSender) PeersThatHave([32]byte) []uint64                    { return nil }
 
 // Compile-time interface check.
 var _ consensus.Adaptor = (*Adaptor)(nil)
@@ -161,8 +162,10 @@ type Adaptor struct {
 	operatingMode consensus.OperatingMode
 
 	// Close time offset — adjusted each round toward network average.
-	// Matches rippled's timeKeeper().closeTime() offset.
-	closeOffset time.Duration
+	// Matches rippled's timeKeeper().closeTime() offset. Stored as
+	// nanoseconds in an atomic so the consensus hot path (Now) avoids
+	// lock contention.
+	closeOffsetNs atomic.Int64
 
 	// Transaction set cache
 	txSetCache *TxSetCache
@@ -1129,10 +1132,7 @@ func (a *Adaptor) IsStandalone() bool {
 // --- Time operations ---
 
 func (a *Adaptor) Now() time.Time {
-	a.mu.RLock()
-	offset := a.closeOffset
-	a.mu.RUnlock()
-	return time.Now().Add(offset)
+	return time.Now().Add(time.Duration(a.closeOffsetNs.Load()))
 }
 
 func (a *Adaptor) CloseTimeResolution() time.Duration {
@@ -1146,32 +1146,53 @@ func (a *Adaptor) CloseTimeResolution() time.Duration {
 	return 30 * time.Second // rippled default
 }
 
-// AdjustCloseTime computes the weighted average of all raw close times
-// and adjusts our clock offset toward the network. Matches rippled's
-// adjustCloseTime() in RCLConsensus.cpp:694-732.
+// AdjustCloseTime computes the weighted average of raw close times
+// and applies the quarter-step damping rippled uses to converge on
+// the network's view of time. The caller-side averaging matches
+// RCLConsensus.cpp:694-732; the damping branches match
+// TimeKeeper::adjustCloseTime at TimeKeeper.h:88-116. All arithmetic
+// is in whole seconds — rippled's NetClock is second-granular, and a
+// straight nanosecond replace would never decay toward zero on small
+// |by|.
 func (a *Adaptor) AdjustCloseTime(rawCloseTimes consensus.CloseTimes) {
 	if rawCloseTimes.Self.IsZero() {
 		return
 	}
 
-	totalSecs := rawCloseTimes.Self.Unix()
+	selfSecs := rawCloseTimes.Self.Unix()
+	totalSecs := selfSecs
 	count := int64(1)
 	for t, v := range rawCloseTimes.Peers {
 		count += int64(v)
 		totalSecs += t.Unix() * int64(v)
 	}
 	avgSecs := (totalSecs + count/2) / count
-	avg := time.Unix(avgSecs, 0)
+	bySecs := avgSecs - selfSecs
 
-	offset := avg.Sub(rawCloseTimes.Self)
+	currentSecs := int64(time.Duration(a.closeOffsetNs.Load()) / time.Second)
+	if bySecs == 0 && currentSecs == 0 {
+		return
+	}
 
-	a.mu.Lock()
-	a.closeOffset = offset
-	a.mu.Unlock()
+	// Mirrors TimeKeeper.h:103-113. Integer division truncates toward
+	// zero in both C++ (since C++11) and Go, so the branches translate
+	// directly.
+	var newSecs int64
+	switch {
+	case bySecs > 1:
+		newSecs = currentSecs + (bySecs+3)/4
+	case bySecs < -1:
+		newSecs = currentSecs + (bySecs-3)/4
+	default:
+		newSecs = (currentSecs * 3) / 4
+	}
 
-	if offset != 0 {
+	a.closeOffsetNs.Store(int64(time.Duration(newSecs) * time.Second))
+
+	if newSecs != currentSecs {
 		a.logger.Debug("adjusted close time offset",
-			"offset_ms", offset.Milliseconds(),
+			"offset_s", newSecs,
+			"by_s", bySecs,
 			"peers", len(rawCloseTimes.Peers),
 		)
 	}

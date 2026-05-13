@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/shamap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -239,9 +239,9 @@ func TestSkipListAcquire_DecodeLedgerHashesSLE_NonHashesLeaf(t *testing.T) {
 	// under the same key. The proof is valid; only the leaf's
 	// LedgerEntryType is wrong.
 	hx, err := binarycodec.Encode(map[string]any{
-		"LedgerEntryType": "FeeSettings",
-		"Flags":           uint32(0),
-		"BaseFee":         "A",
+		"LedgerEntryType":   "FeeSettings",
+		"Flags":             uint32(0),
+		"BaseFee":           "A",
 		"ReferenceFeeUnits": uint32(10),
 		"ReserveBase":       uint32(200000000),
 		"ReserveIncrement":  uint32(50000000),
