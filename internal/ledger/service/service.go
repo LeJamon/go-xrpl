@@ -1233,12 +1233,14 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 
 // historyWindow caps the in-memory ledgerHistory + tx-index caches to
 // a sliding window of recent validated ledgers. Matches the existing
-// pendingValidationMaxLen sizing and rippled's LedgerHistory window
-// (~256 ledgers ≈ 13 minutes at 3s closes). Range-style RPC lookups
-// for older sequences fall through to the relational DB when
-// configured (see ledger_query.go). Hash-based GetTransaction
-// lookups beyond the window currently return "not found" — a DB
-// fallback is tracked separately.
+// pendingValidationMaxLen sizing and rippled's default ledger-cache
+// capacity (SizedItem::ledgerSize "large" tier = 256 entries — see
+// rippled/src/xrpld/core/detail/Config.cpp). At 3s closes that's
+// roughly 13 minutes of history. Range-style RPC lookups for older
+// sequences fall through to the relational DB when configured (see
+// ledger_query.go). Hash-based GetTransaction lookups beyond the
+// window currently return "not found" — a DB fallback is tracked
+// separately.
 const historyWindow = 256
 
 // evictOldHistoryLocked drops ledgerHistory entries (and their
@@ -1916,6 +1918,7 @@ func (s *Service) drainPendingLedgerValidationLocked(seq uint32, adopted *ledger
 
 	_ = adopted.SetValidated()
 	s.validatedLedger = adopted
+	s.evictOldHistoryLocked(seq)
 	return true
 }
 

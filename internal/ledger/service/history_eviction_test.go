@@ -1,11 +1,13 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
+	"github.com/LeJamon/goXRPLd/shamap"
 )
 
 // TestEvictOldHistoryLocked verifies that ledgerHistory and the tx
@@ -124,5 +126,95 @@ func TestEvictOldHistoryLocked_BelowWindow(t *testing.T) {
 
 	if got := len(svc.ledgerHistory); got != before {
 		t.Errorf("ledgerHistory size changed despite being below window: before=%d after=%d", before, got)
+	}
+}
+
+// TestAcceptLedgerLoop_BoundsHistory drives the operational path:
+// AcceptLedgerAt is called repeatedly past the historyWindow boundary,
+// and ledgerHistory must remain bounded.
+func TestAcceptLedgerLoop_BoundsHistory(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	ctx := context.Background()
+	for i := 0; i < historyWindow*2; i++ {
+		if _, err := svc.AcceptLedger(ctx); err != nil {
+			t.Fatalf("AcceptLedger #%d: %v", i, err)
+		}
+	}
+
+	svc.mu.Lock()
+	size := len(svc.ledgerHistory)
+	svc.mu.Unlock()
+
+	if size > historyWindow+1 {
+		t.Errorf("ledgerHistory unbounded under AcceptLedger loop: got %d, want <= %d", size, historyWindow+1)
+	}
+}
+
+// TestDrainPendingValidation_EvictsHistory verifies that the inline
+// validation-drain promotion path triggers cache eviction. This is the
+// race where SetValidatedLedger arrives before the close, gets
+// stashed, and the close drains + promotes inline — without this
+// eviction call, the AcceptConsensusResult and adoptLedgerWithState
+// callers would leak entries past the window.
+func TestDrainPendingValidation_EvictsHistory(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	freshMaps := func() (*shamap.SHAMap, *shamap.SHAMap) {
+		stateMap, err := svc.genesisLedger.StateMapSnapshot()
+		if err != nil {
+			t.Fatalf("StateMapSnapshot: %v", err)
+		}
+		txMap, err := svc.genesisLedger.TxMapSnapshot()
+		if err != nil {
+			t.Fatalf("TxMapSnapshot: %v", err)
+		}
+		return stateMap, txMap
+	}
+
+	// Build a synthetic adopted ledger at a seq well past the window
+	// so eviction has work to do.
+	const adoptedSeq uint32 = historyWindow + 50
+	adoptedState, adoptedTx := freshMaps()
+	var adoptedHeader header.LedgerHeader
+	adoptedHeader.LedgerIndex = adoptedSeq
+	adoptedHeader.Hash[0] = 0x77
+	adopted := ledger.NewOpenWithHeader(adoptedHeader, adoptedState, adoptedTx, drops.Fees{})
+
+	// Stash old entries below the post-eviction cutoff that the drain
+	// must clean up.
+	cutoff := adoptedSeq - historyWindow
+	for seq := uint32(1); seq <= cutoff; seq++ {
+		st, tx := freshMaps()
+		var h header.LedgerHeader
+		h.LedgerIndex = seq
+		svc.ledgerHistory[seq] = ledger.NewOpenWithHeader(h, st, tx, drops.Fees{})
+	}
+
+	// Stash a pending validation so drainPendingLedgerValidationLocked
+	// will promote the adopted ledger inline.
+	svc.mu.Lock()
+	svc.stashPendingLedgerValidationLocked(adoptedSeq, adopted.Hash())
+	promoted := svc.drainPendingLedgerValidationLocked(adoptedSeq, adopted)
+	size := len(svc.ledgerHistory)
+	svc.mu.Unlock()
+
+	if !promoted {
+		t.Fatalf("drainPendingLedgerValidationLocked did not promote — stash setup is wrong")
+	}
+	if size > historyWindow+1 {
+		t.Errorf("inline drain-promote left ledgerHistory unbounded: got %d, want <= %d", size, historyWindow+1)
 	}
 }
