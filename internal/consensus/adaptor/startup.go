@@ -174,8 +174,10 @@ func NewFromConfig(
 	// reach the ledger without breaking that layering boundary.
 	overlay.LedgerSync().SetProvider(NewLedgerProvider(ledgerSvc))
 
-	// Load UNL from config
-	validators, err := ParseValidatorKeys(appCfg)
+	// Load UNL from config — retain both NodeID (for trust/quorum
+	// maps) and master pubkey (for NegativeUNL voting; sfUNLModifyValidator
+	// is the master pubkey, see NegativeUNLVote.cpp:118-120).
+	validators, masterKeys, err := ParseValidatorKeysWithMaster(appCfg)
 	if err != nil {
 		return nil, fmt.Errorf("parse validators: %w", err)
 	}
@@ -183,10 +185,11 @@ func NewFromConfig(
 	sender := NewOverlaySender(overlay)
 
 	adaptor := New(Config{
-		LedgerService: ledgerSvc,
-		Sender:        sender,
-		Identity:      identity,
-		Validators:    validators,
+		LedgerService:       ledgerSvc,
+		Sender:              sender,
+		Identity:            identity,
+		Validators:          validators,
+		ValidatorMasterKeys: masterKeys,
 	})
 
 	modeManager := NewModeManager(adaptor)
@@ -337,19 +340,30 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 
 // ParseValidatorKeys parses validator public keys from the config into NodeIDs.
 func ParseValidatorKeys(appCfg *config.Config) ([]consensus.NodeID, error) {
+	validators, _, err := ParseValidatorKeysWithMaster(appCfg)
+	return validators, err
+}
+
+// ParseValidatorKeysWithMaster parses validator public keys into both
+// the NodeID set (for trust/quorum maps) and the 33-byte master pubkey
+// list (index-aligned, for NegativeUNL voting). Returns (nil, nil, nil)
+// when the [validators] stanza is empty.
+func ParseValidatorKeysWithMaster(appCfg *config.Config) ([]consensus.NodeID, [][33]byte, error) {
 	if len(appCfg.Validators.Validators) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
-	var validators []consensus.NodeID
+	validators := make([]consensus.NodeID, 0, len(appCfg.Validators.Validators))
+	masters := make([][33]byte, 0, len(appCfg.Validators.Validators))
 	for _, key := range appCfg.Validators.Validators {
-		nodeID, err := DecodeValidatorKey(key)
+		nodeID, master, err := DecodeValidatorKeyWithMaster(key)
 		if err != nil {
-			return nil, fmt.Errorf("invalid validator key %q: %w", key, err)
+			return nil, nil, fmt.Errorf("invalid validator key %q: %w", key, err)
 		}
 		validators = append(validators, nodeID)
+		masters = append(masters, master)
 	}
-	return validators, nil
+	return validators, masters, nil
 }
 
 // normalizeAddresses converts rippled-style "host port" addresses to "host:port".

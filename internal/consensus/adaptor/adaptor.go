@@ -20,6 +20,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/consensus/amendmentvote"
+	"github.com/LeJamon/goXRPLd/internal/consensus/negativeunlvote"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
@@ -156,6 +157,14 @@ type Adaptor struct {
 	// UNL: trusted validator public keys
 	trustedValidators []consensus.NodeID
 	trustedSet        map[consensus.NodeID]struct{}
+	// trustedMasterKeys are the 33-byte master pubkeys for each entry
+	// in trustedValidators, index-aligned. Populated when the operator
+	// configures validators via base58 keys (the master pubkey is
+	// available pre-hash); empty when the UNL was supplied as raw
+	// NodeIDs (e.g. some tests). Required for NegativeUNL voting —
+	// mirrors rippled's `app_.validators().getTrustedMasterKeys()` at
+	// RCLConsensus.cpp:377.
+	trustedMasterKeys [][33]byte
 	quorum            int
 
 	// Operating mode
@@ -166,6 +175,19 @@ type Adaptor struct {
 	// nanoseconds in an atomic so the consensus hot path (Now) avoids
 	// lock contention.
 	closeOffsetNs atomic.Int64
+
+	// negUNLVoter produces the UNLModify pseudo-tx every voting ledger
+	// (one ToDisable + one ToReEnable at most). Holds the local
+	// NodeID and the new-validator skip table. Constructed in New()
+	// from identity.NodeID; nil for non-validating adaptors.
+	negUNLVoter *negativeunlvote.Voter
+
+	// validationHistorian provides per-ledger trusted validation
+	// lookups for buildScoreTable. Wired by the engine after the
+	// ValidationTracker is constructed (see rcl.Engine.Run). Nil
+	// before wiring — GenerateNegativeUNLPseudoTx degrades gracefully
+	// (no vote) until then.
+	validationHistorian consensus.ValidationHistorian
 
 	// Transaction set cache
 	txSetCache *TxSetCache
@@ -253,6 +275,15 @@ type Config struct {
 	Sender        NetworkSender
 	Identity      *ValidatorIdentity
 	Validators    []consensus.NodeID // UNL
+	// ValidatorMasterKeys are the 33-byte compressed master public
+	// keys for each entry in Validators, index-aligned. Optional —
+	// when supplied, the adaptor can participate in NegativeUNL
+	// voting (which requires emitting raw master pubkeys in the
+	// UNLModify tx). NewFromConfig populates this from the operator's
+	// base58-encoded [validators] stanza; bare-NodeID test fixtures
+	// can leave it nil and the adaptor will gracefully skip
+	// NegativeUNL votes.
+	ValidatorMasterKeys [][33]byte
 	// FeeVote is the validator's fee-vote stance. Zero values mean no
 	// vote. Production callers wire this from the [voting] stanza of
 	// the toml config (same semantics as rippled's FeeVoteSetup).
@@ -364,14 +395,31 @@ func New(cfg Config) *Adaptor {
 		feeVote.ReserveIncrement = defaults.ReserveIncrement
 	}
 
+	// NegativeUNL voter: owned per-adaptor, matches rippled's
+	// nUnlVote_ member on RCLConsensus. Constructed only when we have
+	// a local validator identity AND master keys for the UNL — the
+	// algorithm needs both to vote (myID for the local-participation
+	// check, master keys for the emitted UNLModify tx). For
+	// non-validator nodes or bare-NodeID test fixtures, leave it nil
+	// and GenerateNegativeUNLPseudoTx returns no votes.
+	var negUNLVoter *negativeunlvote.Voter
+	var trustedMasterKeys [][33]byte
+	if cfg.Identity != nil && len(cfg.ValidatorMasterKeys) == len(cfg.Validators) && len(cfg.ValidatorMasterKeys) > 0 {
+		trustedMasterKeys = make([][33]byte, len(cfg.ValidatorMasterKeys))
+		copy(trustedMasterKeys, cfg.ValidatorMasterKeys)
+		negUNLVoter = negativeunlvote.NewVoter(cfg.Identity.NodeID)
+	}
+
 	return &Adaptor{
 		ledgerService:     cfg.LedgerService,
 		sender:            sender,
 		identity:          cfg.Identity,
 		trustedValidators: cfg.Validators,
 		trustedSet:        trustedSet,
+		trustedMasterKeys: trustedMasterKeys,
 		quorum:            quorum,
 		operatingMode:     consensus.OpModeDisconnected,
+		negUNLVoter:       negUNLVoter,
 		txSetCache:        NewTxSetCache(),
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
 		cookie:            cookie,
@@ -380,6 +428,17 @@ func New(cfg Config) *Adaptor {
 		trustedVotes:      trustedVotes,
 		logger:            logger,
 	}
+}
+
+// SetValidationHistorian wires per-ledger trusted-validation lookups
+// into the adaptor. The engine calls this once after constructing its
+// ValidationTracker (see rcl.Engine.Run). Required for NegativeUNL
+// voting; until set, GenerateNegativeUNLPseudoTx emits no votes
+// (graceful degradation). Satisfies consensus.WireableAdaptor.
+func (a *Adaptor) SetValidationHistorian(h consensus.ValidationHistorian) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.validationHistorian = h
 }
 
 // UpdatePeerLCL records the last-closed-ledger hash a peer reported
@@ -743,14 +802,6 @@ func excludeNegativeUNL(vals []*consensus.Validation, negUNL []consensus.NodeID)
 		out = append(out, v)
 	}
 	return out
-}
-
-// GenerateNegativeUNLPseudoTx is a stub. The vote-tally algorithm in
-// internal/consensus/negativeunlvote still needs per-seq validation history
-// in ValidationTracker and state-map read access on consensus.Ledger before
-// production wiring. Returning nil keeps the injection step a no-op.
-func (a *Adaptor) GenerateNegativeUNLPseudoTx(_ consensus.Ledger) []byte {
-	return nil
 }
 
 func (a *Adaptor) GetTxSet(id consensus.TxSetID) (consensus.TxSet, error) {

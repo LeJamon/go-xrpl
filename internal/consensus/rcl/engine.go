@@ -316,6 +316,9 @@ func (e *Engine) Start(ctx context.Context) error {
 	// flips the ledger service's validated_ledger pointer.
 	e.validationTracker = NewValidationTracker(e.adaptor.GetQuorum(), 5*time.Minute)
 	e.validationTracker.SetTrusted(e.adaptor.GetTrustedValidators())
+	if wired, ok := e.adaptor.(consensus.WireableAdaptor); ok {
+		wired.SetValidationHistorian(e.validationTracker)
+	}
 	if e.ledgerAncestry != nil {
 		e.validationTracker.SetLedgerAncestryProvider(e.ledgerAncestry)
 	}
@@ -1582,7 +1585,7 @@ func (e *Engine) closeLedger() {
 			}
 		case consensus.IsVotingLedger(prev.Seq()) && e.adaptor.IsFeatureEnabledOnLedger(prev, "NegativeUNL"):
 			if extra := e.adaptor.GenerateNegativeUNLPseudoTx(prev); len(extra) > 0 {
-				txs = append(txs, extra)
+				txs = append(txs, extra...)
 			}
 		}
 	}

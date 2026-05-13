@@ -346,6 +346,16 @@ func (l *Ledger) Read(k keylet.Keylet) ([]byte, error) {
 	return item.Data(), nil
 }
 
+// SkipListHashes returns the decoded rolling 256-entry LedgerHashes skip-list
+// from this ledger's state map. Mirrors rippled's `ledger->read(keylet::skip())`
+// at NegativeUNLVote.cpp:179. Returns (nil, nil) when the entry is absent
+// (e.g. early ledgers before the skip-list has been populated).
+func (l *Ledger) SkipListHashes() ([][32]byte, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return readSkipListHashes(l.stateMap, keylet.LedgerHashes().Key)
+}
+
 // Exists checks if a ledger entry exists
 func (l *Ledger) Exists(k keylet.Keylet) (bool, error) {
 	l.mu.RLock()

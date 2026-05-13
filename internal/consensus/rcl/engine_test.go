@@ -139,7 +139,7 @@ type mockAdaptor struct {
 	// stub returns nil (no injection), matching the production
 	// adaptor's pre-vote-tally behavior.
 	flagLedgerPseudoTxs [][]byte
-	negativeUNLPseudoTx []byte
+	negativeUNLPseudoTx [][]byte
 
 	// standalone toggles the IsStandalone() return for tests that
 	// exercise rippled's `standalone() || (proposing && !wrongLCL)`
@@ -342,7 +342,7 @@ func (a *mockAdaptor) GenerateFlagLedgerPseudoTxs(_ consensus.Ledger, _ []*conse
 	return a.flagLedgerPseudoTxs
 }
 
-func (a *mockAdaptor) GenerateNegativeUNLPseudoTx(_ consensus.Ledger) []byte {
+func (a *mockAdaptor) GenerateNegativeUNLPseudoTx(_ consensus.Ledger) [][]byte {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.negativeUNLPseudoTx
