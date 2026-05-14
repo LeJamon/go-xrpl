@@ -91,11 +91,7 @@ func (s *Server) GetLedger(ctx context.Context, req *GetLedgerRequest) (*GetLedg
 
 	// Serialize header if binary format requested
 	if req.Binary {
-		headerBlob, err := serializeLedgerHeader(ledger.Header())
-		if err != nil {
-			return nil, status.Error(codes.Internal, "failed to serialize ledger header")
-		}
-		resp.HeaderBlob = headerBlob
+		resp.HeaderBlob = serializeLedgerHeader(ledger.Header())
 	}
 
 	// Include state data if requested

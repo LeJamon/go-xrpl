@@ -11,9 +11,12 @@ import (
 // LedgerCache provides fast access to recently used ledgers and tracks
 // which ledgers are complete locally.
 //
-// The underlying lru.Cache is already thread-safe, so the embedded RWMutex
-// only guards the completeness tracker. Hit/miss counters are kept under
-// atomic.Uint64 so they remain race-free from concurrent readers.
+// The underlying lru.Cache is already thread-safe, so Get / GetByHash run
+// lock-free. Put and Remove touch both the seq cache and the hash cache,
+// and writeMu makes that pair atomic so a concurrent Put(L_new) interleaved
+// with Remove(seq) can't leave the two caches out of sync. completenessMu
+// guards the completeness tracker, which is not internally synchronised.
+// Hit/miss counters are kept under atomic.Uint64.
 type LedgerCache struct {
 	// In-memory cache of recently accessed ledgers
 	// Key: ledger sequence number
@@ -22,6 +25,11 @@ type LedgerCache struct {
 	// Cache by hash for faster hash-based lookups
 	// Key: ledger hash as string (hex)
 	recentByHash *lru.Cache[[32]byte, *ledger.Ledger]
+
+	// writeMu serialises the seq+hash double-cache writes performed by
+	// Put and Remove. Reads (Get / GetByHash) do not take it; they rely
+	// on lru.Cache's internal synchronisation.
+	writeMu sync.Mutex
 
 	// Track which ledgers we have complete locally. Guarded by completenessMu
 	// because CompleteLedgerSet is not internally synchronised.
@@ -91,12 +99,16 @@ func (c *LedgerCache) Put(ledger *ledger.Ledger) {
 	seq := ledger.Sequence()
 	hash := ledger.Hash()
 
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	c.recentBySeq.Add(seq, ledger)
 	c.recentByHash.Add(hash, ledger)
 }
 
 // Remove removes a ledger from cache
 func (c *LedgerCache) Remove(seq uint32) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	// Get the ledger first to remove from hash cache too
 	if ledgerValue, found := c.recentBySeq.Peek(seq); found {
 		hash := ledgerValue.Hash()

@@ -122,8 +122,8 @@ func serializeLedgerObject(data []byte) ([]byte, error) {
 }
 
 // serializeLedgerHeader serializes a ledger header to its binary representation.
-func serializeLedgerHeader(hdr header.LedgerHeader) ([]byte, error) {
-	return header.AddRaw(hdr, true), nil
+func serializeLedgerHeader(hdr header.LedgerHeader) []byte {
+	return header.AddRaw(hdr, true)
 }
 
 // parseMarker parses a pagination marker from a hex string.

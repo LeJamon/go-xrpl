@@ -23,10 +23,10 @@ package state
 //     already passed those parsers or were produced by a previous
 //     arithmetic op that was within range.
 //
-// Code paths that may handle un-validated values (e.g. exploratory
-// path discovery, RPC simulation against caller-supplied amounts) should
-// wrap their arithmetic in RecoverArithmeticPanic so the node converts a
-// would-be crash into a tec-style refusal of the offending request.
+// Callers handling un-validated values (e.g. exploratory path discovery
+// or RPC simulation against caller-supplied amounts) must validate before
+// invoking these methods; if a recover-style wrapper is later needed, add
+// it alongside its first caller.
 
 import (
 	"math/big"

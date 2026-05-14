@@ -274,8 +274,9 @@ func IsLowAccount(account1, account2 [20]byte) bool {
 
 // currencyToBytes converts a currency code to its 20-byte representation.
 // Standard 3-character codes are zero-padded (e.g., "USD" -> 0x0000000000000000005553440000000000000000).
-// Hex strings are decoded via encoding/hex; malformed hex falls back to a zero
-// currency (the caller is responsible for validating input upstream).
+// Hex strings are decoded via encoding/hex; malformed hex returns an all-zero
+// currency, mirroring rippled's noCurrency() fallback in to_currency
+// (UintTypes.cpp:106). Callers are still expected to validate input upstream.
 func currencyToBytes(currency string) [20]byte {
 	var result [20]byte
 
@@ -286,9 +287,9 @@ func currencyToBytes(currency string) [20]byte {
 		result[13] = currency[1]
 		result[14] = currency[2]
 	case 40:
-		// Hex-encoded currency (non-standard); ignore error and leave zero
-		// on bad input rather than crashing — same behaviour as before.
-		_, _ = hex.Decode(result[:], []byte(currency))
+		if _, err := hex.Decode(result[:], []byte(currency)); err != nil {
+			return [20]byte{}
+		}
 	}
 
 	return result
