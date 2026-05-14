@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -111,7 +112,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 				Message: "Transaction history not available. Database not configured.",
 			}
 		}
-		if err.Error() == "account not found" {
+		if errors.Is(err, types.ErrAccountNotFound) {
 			return nil, &types.RpcError{
 				Code:    19,
 				Message: "Account not found.",

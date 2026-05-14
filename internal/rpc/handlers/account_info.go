@@ -3,11 +3,13 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	xrpllog "github.com/LeJamon/goXRPLd/log"
 )
 
 // AccountRoot flag constants matching rippled's lsfXxx values
@@ -101,7 +103,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 	info, err := ctx.Services.Ledger.GetAccountInfo(request.Account, ledgerIndex)
 	if err != nil {
-		if err.Error() == "account not found" {
+		if errors.Is(err, types.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account info: %v", err))
@@ -182,7 +184,10 @@ func (m *AccountInfoMethod) buildAccountData(info *types.AccountInfo) map[string
 		if err == nil {
 			return decoded
 		}
-		// Fall through to manual construction on decode error
+		// Fall through to manual construction on decode error, but log
+		// at debug — a silent fallback hid genuine codec bugs in the past.
+		xrpllog.Named(xrpllog.PartitionRPC).Debug("account_info: SLE decode failed, falling back to struct",
+			"account", info.Account, "err", err)
 	}
 
 	// Fallback: manually construct from AccountInfo struct fields

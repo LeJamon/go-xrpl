@@ -243,7 +243,7 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 			expectedError: "Account not found.",
 			expectedCode:  types.RpcACT_NOT_FOUND,
 			setupMock: func() {
-				mock.accountChannelsErr = errors.New("account not found")
+				mock.accountChannelsErr = types.ErrAccountNotFound
 			},
 		},
 	}

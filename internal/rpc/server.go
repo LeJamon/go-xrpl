@@ -10,6 +10,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -34,6 +35,20 @@ type Server struct {
 	timeout    time.Duration
 	peerSource atomic.Pointer[types.PeerSource]
 	services   *types.ServiceContainer
+
+	// corsAllowedOrigins, if non-empty, restricts Access-Control-Allow-Origin
+	// to the listed origins (set via SetCORSAllowedOrigins). Empty means
+	// `*` — the historical wide-open default kept for backwards compat.
+	corsMu             sync.RWMutex
+	corsAllowedOrigins []string
+
+	// trustedProxies is the set of TCP peer networks whose
+	// X-Forwarded-For / X-Real-IP headers are believed for the purpose of
+	// logging / client-IP attribution. Empty means "no proxy is trusted"
+	// — we always log the socket peer. Role/admin decisions never consult
+	// these headers regardless of this setting (see roleForRequest).
+	trustedProxiesMu sync.RWMutex
+	trustedProxies   []net.IPNet
 }
 
 var _ types.MethodDispatcher = (*Server)(nil)
@@ -54,6 +69,43 @@ func (s *Server) loadPeerSource() types.PeerSource {
 		return *p
 	}
 	return nil
+}
+
+// SetCORSAllowedOrigins replaces the list of origins accepted for CORS.
+// Pass nil/empty to fall back to `*` (the historical default; matches
+// rippled's wide-open setting). Origins are matched exactly against the
+// request's Origin header; a leading wildcard `*` in the list keeps the
+// permissive behaviour. Safe to call after the server has started.
+func (s *Server) SetCORSAllowedOrigins(origins []string) {
+	s.corsMu.Lock()
+	defer s.corsMu.Unlock()
+	if len(origins) == 0 {
+		s.corsAllowedOrigins = nil
+		return
+	}
+	s.corsAllowedOrigins = append(s.corsAllowedOrigins[:0:0], origins...)
+}
+
+// resolveCORSOrigin returns the value to echo in
+// Access-Control-Allow-Origin. When no allowlist is configured the legacy
+// `*` is returned; otherwise the request's Origin is echoed only when it
+// matches an entry (or `*` is in the list), so misconfigured browsers
+// don't get a cross-origin pass.
+func (s *Server) resolveCORSOrigin(requestOrigin string) string {
+	s.corsMu.RLock()
+	defer s.corsMu.RUnlock()
+	if len(s.corsAllowedOrigins) == 0 {
+		return "*"
+	}
+	for _, o := range s.corsAllowedOrigins {
+		if o == "*" {
+			return "*"
+		}
+		if o == requestOrigin {
+			return requestOrigin
+		}
+	}
+	return ""
 }
 
 // NewServer creates a new RPC server with the given timeout and the
@@ -101,8 +153,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Set CORS headers to match rippled
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// Set CORS headers. Default is `*` to match rippled; an explicit
+	// allowlist may be configured via SetCORSAllowedOrigins, in which case
+	// we only echo back the request's Origin when it is on the list.
+	if allow := s.resolveCORSOrigin(r.Header.Get("Origin")); allow != "" {
+		w.Header().Set("Access-Control-Allow-Origin", allow)
+		if allow != "*" {
+			w.Header().Set("Vary", "Origin")
+		}
+	}
 	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	w.Header().Set("Content-Type", "application/json")
@@ -140,7 +199,7 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	peerIP := remoteAddrIP(r.RemoteAddr)
-	clientIP := getClientIP(r)
+	clientIP := s.getClientIP(r)
 	portCtx := GetPortContext(r.Context())
 	role := roleForRequest(peerIP, portCtx)
 	dispatchCtx, cancel := s.withTimeout(r.Context())
@@ -193,7 +252,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	peerIP := remoteAddrIP(r.RemoteAddr)
-	clientIP := getClientIP(r)
+	clientIP := s.getClientIP(r)
 	portCtx := GetPortContext(r.Context())
 	// Role is derived from the socket-level peer, not header-supplied IPs,
 	// so an X-Real-IP / X-Forwarded-For header from an untrusted client
@@ -374,15 +433,16 @@ func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, method stri
 		}
 	}
 
-	responseData, err := json.Marshal(response)
-	if err != nil {
-		rpcLog().Error("Failed to marshal response", "err", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
+	// Stream-encode straight to the response writer. Large payloads
+	// (book_offers, ledger_data, ripple_path_find) used to be fully
+	// buffered into a []byte via json.Marshal before w.Write, doubling
+	// peak memory under load. NewEncoder pipes directly into the socket
+	// buffer; on encode error we've already sent headers, so a 200 with
+	// a truncated body is the only honest outcome — we log the failure.
 	w.WriteHeader(http.StatusOK)
-	w.Write(responseData)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		rpcLog().Error("Failed to encode response", "err", err)
+	}
 }
 
 // writeXrplError writes an XRPL format error response
@@ -452,21 +512,56 @@ func roleForRequest(clientIP string, portCtx *PortContext) types.Role {
 	return types.RoleGuest
 }
 
+// SetTrustedProxies installs the set of TCP peer networks whose
+// X-Forwarded-For / X-Real-IP headers are honoured for client-IP
+// attribution. Passing nil/empty disables proxy-header trust entirely
+// (logs always show the socket peer). Auth decisions ignore these
+// headers regardless — see roleForRequest.
+func (s *Server) SetTrustedProxies(nets []net.IPNet) {
+	s.trustedProxiesMu.Lock()
+	defer s.trustedProxiesMu.Unlock()
+	if len(nets) == 0 {
+		s.trustedProxies = nil
+		return
+	}
+	s.trustedProxies = append(s.trustedProxies[:0:0], nets...)
+}
+
+func (s *Server) loadTrustedProxies() []net.IPNet {
+	s.trustedProxiesMu.RLock()
+	defer s.trustedProxiesMu.RUnlock()
+	if len(s.trustedProxies) == 0 {
+		return nil
+	}
+	out := make([]net.IPNet, len(s.trustedProxies))
+	copy(out, s.trustedProxies)
+	return out
+}
+
 // getClientIP extracts the client IP for logging and identification.
-// May reflect upstream proxy headers and so MUST NOT be used for role
-// or admin gating — callers that need a security decision should use
-// remoteAddrIP, which always returns the socket-level peer.
-func getClientIP(r *http.Request) string {
+// X-Forwarded-For / X-Real-IP are honoured only when the actual TCP peer
+// is in the server's trustedProxies set; otherwise the socket peer is
+// returned. This MUST NOT be used for role or admin gating — callers
+// that need a security decision should use remoteAddrIP, which always
+// returns the socket-level peer.
+func (s *Server) getClientIP(r *http.Request) string {
+	peer := remoteAddrIP(r.RemoteAddr)
+	trusted := s.loadTrustedProxies()
+	if len(trusted) == 0 {
+		return peer
+	}
+	peerIP := net.ParseIP(peer)
+	if peerIP == nil || !config.IPInNets(peerIP, trusted) {
+		return peer
+	}
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		ips := strings.Split(xff, ",")
 		return strings.TrimSpace(ips[0])
 	}
-
 	if xri := r.Header.Get("X-Real-IP"); xri != "" {
 		return xri
 	}
-
-	return remoteAddrIP(r.RemoteAddr)
+	return peer
 }
 
 // remoteAddrIP returns the host portion of an http.Request.RemoteAddr

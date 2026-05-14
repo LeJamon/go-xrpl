@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -47,7 +48,7 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	limit := ClampLimit(request.Limit, LimitAccountLines, ctx.IsAdmin)
 	result, err := ctx.Services.Ledger.GetAccountLines(request.Account, ledgerIndex, request.Peer, limit)
 	if err != nil {
-		if err.Error() == "account not found" {
+		if errors.Is(err, types.ErrAccountNotFound) {
 			return nil, &types.RpcError{
 				Code:    19, // actNotFound
 				Message: "Account not found.",

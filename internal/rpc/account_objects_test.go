@@ -141,7 +141,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			expectedCode:  types.RpcACT_NOT_FOUND,
 			setupMock: func() {
 				mock.getAccountObjectsFn = func(string, string, string, uint32) (*types.AccountObjectsResult, error) {
-					return nil, errors.New("account not found")
+					return nil, types.ErrAccountNotFound
 				}
 			},
 		},
@@ -949,7 +949,7 @@ func TestAccountObjectsServiceErrors(t *testing.T) {
 
 	t.Run("account not found error", func(t *testing.T) {
 		mock.getAccountObjectsFn = func(string, string, string, uint32) (*types.AccountObjectsResult, error) {
-			return nil, errors.New("account not found")
+			return nil, types.ErrAccountNotFound
 		}
 
 		params := map[string]interface{}{

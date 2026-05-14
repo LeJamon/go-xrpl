@@ -263,7 +263,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 			expectedError: "Account not found.",
 			expectedCode:  19, // actNotFound
 			setupMock: func() {
-				mock.accountInfoErr = errors.New("account not found")
+				mock.accountInfoErr = types.ErrAccountNotFound
 			},
 		},
 	}

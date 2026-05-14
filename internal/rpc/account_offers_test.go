@@ -149,7 +149,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 			expectedCode:  19, // actNotFound
 			setupMock: func() {
 				mock.getAccountOffersFn = func(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
-					return nil, errors.New("account not found")
+					return nil, types.ErrAccountNotFound
 				}
 			},
 		},
@@ -1121,7 +1121,7 @@ func TestAccountOffersMalformedAddresses(t *testing.T) {
 
 	// Set up mock to return "account not found" for all address lookups
 	mock.getAccountOffersFn = func(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
-		return nil, errors.New("account not found")
+		return nil, types.ErrAccountNotFound
 	}
 
 	malformedAddresses := []struct {

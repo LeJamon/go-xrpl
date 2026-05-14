@@ -262,7 +262,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 			expectedError: "Account not found.",
 			expectedCode:  types.RpcACT_NOT_FOUND,
 			setupMock: func() {
-				mock.accountCurrenciesErr = errors.New("account not found")
+				mock.accountCurrenciesErr = types.ErrAccountNotFound
 			},
 		},
 	}

@@ -274,7 +274,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 			expectedError: "Account not found.",
 			expectedCode:  types.RpcACT_NOT_FOUND,
 			setupMock: func() {
-				mock.accountLinesErr = errors.New("account not found")
+				mock.accountLinesErr = types.ErrAccountNotFound
 			},
 		},
 	}

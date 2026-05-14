@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -52,7 +53,7 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		limit,
 	)
 	if err != nil {
-		if err.Error() == "account not found" {
+		if errors.Is(err, types.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 		// Handle malformed destination_account address

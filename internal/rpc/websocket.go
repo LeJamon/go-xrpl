@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -770,9 +771,23 @@ func (ws *WebSocketServer) BroadcastToSubscribers(msgType types.SubscriptionType
 
 // Helper functions
 
+// connectionIDSeq is a process-wide monotonic counter used to make
+// connection IDs unique even under sub-nanosecond bursts of accepts.
+var connectionIDSeq atomic.Uint64
+
+// generateConnectionID returns a per-connection identifier of the form
+// `conn_<seq>_<random>`. The atomic seq prevents collisions when many
+// connections are accepted in the same nanosecond; the random suffix
+// makes IDs unguessable so they can't be used as cross-connection
+// references in subscriptions / replies. Falls back to time-based bits
+// if crypto/rand fails (it doesn't, on supported platforms).
 func generateConnectionID() string {
-	// TODO: Generate a proper unique connection ID
-	return fmt.Sprintf("conn_%d", time.Now().UnixNano())
+	seq := connectionIDSeq.Add(1)
+	var rnd [6]byte
+	if _, err := cryptorand.Read(rnd[:]); err != nil {
+		return fmt.Sprintf("conn_%d_%x", seq, time.Now().UnixNano())
+	}
+	return fmt.Sprintf("conn_%d_%x", seq, rnd)
 }
 
 func getWebSocketClientIP(conn *websocket.Conn) string {

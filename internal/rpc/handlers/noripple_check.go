@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
@@ -72,7 +73,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		request.Transactions,
 	)
 	if err != nil {
-		if err.Error() == "account not found" {
+		if errors.Is(err, types.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 		if len(err.Error()) > 24 && err.Error()[:24] == "invalid account address:" {

@@ -20,6 +20,12 @@ var (
 	// globalConfig holds the loaded configuration, available to all subcommands.
 	// It is nil until initConfig() runs (which happens before any command's Run function).
 	globalConfig *config.Config
+
+	// globalConfigErr captures any error from initConfig so individual
+	// commands can decide how to react. Previously initConfig called
+	// os.Exit(1) directly, which prevented `help` from running when the
+	// config file was malformed and bypassed any deferred cleanup.
+	globalConfigErr error
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -60,17 +66,36 @@ func init() {
 // initConfig loads and validates the configuration file.
 // The --conf flag is required for commands that need config (server).
 // Commands like generate-config and help work without it.
+//
+// Errors are captured in globalConfigErr rather than calling os.Exit so
+// that commands which do not need config (help, generate-config, ...) can
+// still run, and commands that do need config can surface the failure
+// through their RunE return — which lets cobra print usage and lets any
+// deferred cleanup actually fire.
 func initConfig() {
-	// Skip config loading for commands that don't need it
+	globalConfig = nil
+	globalConfigErr = nil
 	if configFile == "" {
 		return
 	}
-
 	cfg, err := config.LoadConfig(config.ConfigPaths{Main: configFile})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Configuration error:\n%v\n", err)
-		os.Exit(1)
+		globalConfigErr = fmt.Errorf("configuration error: %w", err)
+		return
 	}
-
 	globalConfig = cfg
+}
+
+// requireConfig returns the loaded config or an error suitable for
+// returning from a cobra RunE. Commands that depend on config should
+// call this rather than reaching into globalConfig directly so that the
+// load failure mode is uniform across the CLI.
+func requireConfig() (*config.Config, error) {
+	if globalConfigErr != nil {
+		return nil, globalConfigErr
+	}
+	if globalConfig == nil {
+		return nil, fmt.Errorf("missing --conf flag: this command requires a configuration file")
+	}
+	return globalConfig, nil
 }

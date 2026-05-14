@@ -219,7 +219,7 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 			expectedError: "Account not found.",
 			expectedCode:  types.RpcACT_NOT_FOUND,
 			setupMock: func() {
-				mock.gatewayBalancesErr = errors.New("account not found")
+				mock.gatewayBalancesErr = types.ErrAccountNotFound
 			},
 		},
 		{

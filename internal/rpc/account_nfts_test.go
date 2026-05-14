@@ -242,7 +242,7 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 			expectedError: "Account not found.",
 			expectedCode:  types.RpcACT_NOT_FOUND,
 			setupMock: func() {
-				mock.accountNFTsErr = errors.New("account not found")
+				mock.accountNFTsErr = types.ErrAccountNotFound
 			},
 		},
 	}

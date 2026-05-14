@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -41,7 +42,7 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 		ledgerIndex,
 	)
 	if err != nil {
-		if err.Error() == "account not found" {
+		if errors.Is(err, types.ErrAccountNotFound) {
 			return nil, &types.RpcError{
 				Code:    types.RpcACT_NOT_FOUND,
 				Message: "Account not found.",

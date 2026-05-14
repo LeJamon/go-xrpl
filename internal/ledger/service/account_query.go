@@ -12,6 +12,7 @@ import (
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	rpctypes "github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/credential"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -93,7 +94,7 @@ func (s *Service) GetAccountInfo(account string, ledgerIndex string) (*AccountIn
 		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
-		return nil, errors.New("account not found")
+		return nil, rpctypes.ErrAccountNotFound
 	}
 
 	// Read the account data
@@ -457,6 +458,18 @@ func (s *Service) GetAccountObjects(account string, ledgerIndex string, objType 
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
 
+	// Match rippled: account_objects returns actNotFound for missing accounts
+	// rather than an empty result. Previously this method silently returned
+	// zero objects whether the account existed or not.
+	accountKey := keylet.Account(accountID)
+	exists, err := targetLedger.Exists(accountKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check account existence: %w", err)
+	}
+	if !exists {
+		return nil, rpctypes.ErrAccountNotFound
+	}
+
 	// Normalize type filter from rippled's snake_case to PascalCase
 	objType = normalizeObjectType(objType)
 
@@ -562,7 +575,7 @@ func (s *Service) GetAccountChannels(account string, destinationAccount string, 
 		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
-		return nil, errors.New("account not found")
+		return nil, rpctypes.ErrAccountNotFound
 	}
 
 	// Parse destination account if provided
@@ -710,7 +723,7 @@ func (s *Service) GetAccountCurrencies(account string, ledgerIndex string) (*Acc
 		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
-		return nil, errors.New("account not found")
+		return nil, rpctypes.ErrAccountNotFound
 	}
 
 	// Use maps to collect unique currencies
@@ -893,7 +906,7 @@ func (s *Service) GetAccountNFTs(account string, ledgerIndex string, limit uint3
 		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
-		return nil, errors.New("account not found")
+		return nil, rpctypes.ErrAccountNotFound
 	}
 
 	// Set default limit
@@ -1005,7 +1018,7 @@ func (s *Service) GetGatewayBalances(account string, hotWallets []string, ledger
 		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
-		return nil, errors.New("account not found")
+		return nil, rpctypes.ErrAccountNotFound
 	}
 
 	// Parse hot wallet addresses
@@ -1222,7 +1235,7 @@ func (s *Service) GetNoRippleCheck(account string, role string, ledgerIndex stri
 		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
-		return nil, errors.New("account not found")
+		return nil, rpctypes.ErrAccountNotFound
 	}
 
 	// Read the account data to get flags and sequence

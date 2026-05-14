@@ -228,7 +228,7 @@ func TestNoRippleCheckErrorValidation(t *testing.T) {
 				"role":    "user",
 			},
 			setupMock: func() {
-				mock.noRippleCheckErr = errors.New("account not found")
+				mock.noRippleCheckErr = types.ErrAccountNotFound
 			},
 			expectError:   true,
 			expectedError: "Account not found.",

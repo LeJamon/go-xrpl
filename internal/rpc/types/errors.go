@@ -1,5 +1,16 @@
 package types
 
+import "errors"
+
+// Typed sentinels for service-layer errors. Handlers compare via
+// errors.Is rather than string-matching err.Error(). The message text
+// is preserved for log compatibility.
+var (
+	// ErrAccountNotFound is returned by LedgerService and friends when a
+	// queried account does not exist in the current ledger.
+	ErrAccountNotFound = errors.New("account not found")
+)
+
 // XRPL RPC Error Codes - matching rippled implementation
 // These error codes must match exactly with rippled for protocol compatibility
 
