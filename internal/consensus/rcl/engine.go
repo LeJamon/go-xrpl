@@ -1027,18 +1027,6 @@ func (e *Engine) timerEntry() {
 		}
 	}()
 
-	opMode := e.adaptor.GetOperatingMode()
-	if opMode == consensus.OpModeDisconnected {
-		return
-	}
-
-	// checkLedger must run in every non-disconnected mode — it's the
-	// Syncing/Tracking → Full recovery path; gating on Full would wedge
-	// us permanently once a wrongLedger demotion fires.
-	if e.phase != consensus.PhaseAccepted {
-		e.checkLedger()
-	}
-
 	// Phase work runs in every non-disconnected mode, mirroring rippled
 	// NetworkOPs::setHeartbeatTimer which calls mConsensus.timerEntry(...)
 	// once numPeers >= minPeerCount (NetworkOPs.cpp:1103) — regardless of
@@ -1048,7 +1036,16 @@ func (e *Engine) timerEntry() {
 	// emission on e.mode == ModeProposing. Without observer-mode advancement
 	// a fresh genesis bootstrap deadlocks at OpModeConnected — no round
 	// closes, so OnConsensusReached's auto-promote never fires.
-	_ = opMode
+	if e.adaptor.GetOperatingMode() == consensus.OpModeDisconnected {
+		return
+	}
+
+	// checkLedger must run in every non-disconnected mode — it's the
+	// Syncing/Tracking → Full recovery path; gating on Full would wedge
+	// us permanently once a wrongLedger demotion fires.
+	if e.phase != consensus.PhaseAccepted {
+		e.checkLedger()
+	}
 
 	switch e.phase {
 	case consensus.PhaseOpen:

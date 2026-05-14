@@ -461,15 +461,16 @@ func TestGetParentLedgerForReplay_RejectsOpenLedger(t *testing.T) {
 	}
 }
 
-// stubLedger is a minimal consensus.Ledger whose CloseTime is fully
-// controllable by tests — needed because auto-promote to OpModeFull
-// depends on CloseTime being recent vs. adaptor.Now().
+// stubLedger is a minimal consensus.Ledger whose CloseTime and ID
+// are fully controllable by tests. CloseTime drives the FULL-promote
+// recency window; ID lets us exercise the peer-LCL-disagrees gate.
 type stubLedger struct {
+	id        consensus.LedgerID
 	seq       uint32
 	closeTime time.Time
 }
 
-func (s stubLedger) ID() consensus.LedgerID       { return consensus.LedgerID{} }
+func (s stubLedger) ID() consensus.LedgerID       { return s.id }
 func (s stubLedger) Seq() uint32                  { return s.seq }
 func (s stubLedger) ParentID() consensus.LedgerID { return consensus.LedgerID{} }
 func (s stubLedger) CloseTime() time.Time         { return s.closeTime }
@@ -530,5 +531,50 @@ func TestOnConsensusReached_AutoPromote(t *testing.T) {
 		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode(),
 			"once Full, OnConsensusReached must not demote — demotions are "+
 				"driven by wrongLedger/peer-disconnect paths, not by close-time freshness")
+	})
+
+	// peer_lcl_disagreement pins the rippled `!ledgerChange` gate
+	// (NetworkOPs.cpp:2192, 2203): when peer-reported LCLs majority-
+	// disagree with the just-built ledger, promotion is deferred so we
+	// don't advertise FULL while seated on a contested chain.
+	t.Run("peer_lcl_disagreement_defers_promote", func(t *testing.T) {
+		a := newTestAdaptor(t)
+		a.SetOperatingMode(consensus.OpModeConnected)
+		ourLCL := consensus.LedgerID{0xAA}
+		theirLCL := consensus.LedgerID{0xBB}
+		a.UpdatePeerLCL(1, theirLCL)
+		a.UpdatePeerLCL(2, theirLCL)
+		a.UpdatePeerLCL(3, ourLCL)
+		l := stubLedger{id: ourLCL, seq: 3, closeTime: a.Now()}
+		a.OnConsensusReached(l, nil)
+		assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode(),
+			"majority-disagreeing peer LCLs must defer promotion (proxy for rippled !ledgerChange)")
+	})
+
+	// no_peer_lcl_data falls through and promotes — the conservative
+	// fall-through ensures fresh-bootstrap (no TMStatusChange messages
+	// yet seen) still escapes OpModeConnected.
+	t.Run("no_peer_lcl_data_still_promotes", func(t *testing.T) {
+		a := newTestAdaptor(t)
+		a.SetOperatingMode(consensus.OpModeConnected)
+		l := stubLedger{id: consensus.LedgerID{0xAA}, seq: 3, closeTime: a.Now()}
+		a.OnConsensusReached(l, nil)
+		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode(),
+			"with no peer LCL evidence, promotion proceeds — the genesis-bootstrap path")
+	})
+
+	// peer_lcl_majority_agrees promotes normally.
+	t.Run("peer_lcl_majority_agrees_promotes", func(t *testing.T) {
+		a := newTestAdaptor(t)
+		a.SetOperatingMode(consensus.OpModeConnected)
+		ourLCL := consensus.LedgerID{0xAA}
+		theirLCL := consensus.LedgerID{0xBB}
+		a.UpdatePeerLCL(1, ourLCL)
+		a.UpdatePeerLCL(2, ourLCL)
+		a.UpdatePeerLCL(3, theirLCL)
+		l := stubLedger{id: ourLCL, seq: 3, closeTime: a.Now()}
+		a.OnConsensusReached(l, nil)
+		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode(),
+			"peer LCL majority agreement permits promotion")
 	})
 }
