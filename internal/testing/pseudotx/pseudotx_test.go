@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
@@ -74,6 +75,7 @@ func TestPseudoTx_Prevented(t *testing.T) {
 		LedgerSequence:            env.LedgerSeq(),
 		SkipSignatureVerification: true,
 		OpenLedger:                true,
+		Rules:                     amendment.AllSupportedRules(),
 	}
 	engine := tx.NewEngine(env.Ledger(), engineConfig)
 

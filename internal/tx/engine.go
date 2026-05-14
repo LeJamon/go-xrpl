@@ -196,14 +196,29 @@ func NewEngine(view LedgerView, config EngineConfig) *Engine {
 	}
 }
 
-// rules returns the amendment rules, defaulting to all amendments enabled if nil.
-// This provides backwards compatibility for code that doesn't set Rules.
+// rules returns the amendment rules for this engine. EngineConfig.Rules
+// MUST be set by the caller — typically from the parent ledger's
+// Amendments SLE via ledger.LoadAmendmentsFromLedger (production) or
+// amendment.AllSupportedRules / EmptyRules (tests / genesis).
+//
+// Mirrors rippled's `Rules() = delete` (include/xrpl/protocol/Rules.h:57)
+// where there is no default constructor — every Rules instance is
+// explicitly built from a ledger via makeRulesGivenLedger. A silent
+// fallback (whether AllSupportedRules or EmptyRules) desyncs the engine
+// from on-chain state: AllSupportedRules treats every amendment as
+// enabled even when not on the ledger (the #401/#418 wedge); EmptyRules
+// treats everything as disabled even when amendments ARE on the ledger
+// (which broke the soak in the opposite direction). Panicking forces
+// every call site to plumb the real rules.
 func (e *Engine) rules() *amendment.Rules {
-	if e.config.Rules != nil {
-		return e.config.Rules
+	if e.config.Rules == nil {
+		panic("tx.Engine: EngineConfig.Rules is nil — every apply path must " +
+			"plumb amendment.Rules from the parent ledger's Amendments SLE " +
+			"(see ledger.LoadAmendmentsFromLedger / service.rulesFromLedger). " +
+			"Tests should set Rules: amendment.AllSupportedRules() or EmptyRules() " +
+			"explicitly.")
 	}
-	// Default to all supported amendments enabled for backwards compatibility
-	return amendment.AllSupportedRules()
+	return e.config.Rules
 }
 
 // TxCount returns the current transaction count (for batch baseTxCount).

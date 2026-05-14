@@ -434,12 +434,18 @@ func (t *ApplyStateTable) applyImpl(isDryRun bool) (*Metadata, error) {
 	return metadata, nil
 }
 
-// effectiveRules returns the amendment rules, defaulting to all supported if nil.
+// effectiveRules returns the amendment rules for this apply table.
+// Rules MUST be set by the caller. See Engine.rules in engine.go for
+// the rationale — mirroring rippled's `Rules() = delete`, there is no
+// silent fallback. Callers (engine.Apply, batch tx paths) thread
+// rules through from the parent ledger's Amendments SLE; tests pass
+// AllSupportedRules() or EmptyRules() explicitly.
 func (t *ApplyStateTable) effectiveRules() *amendment.Rules {
-	if t.rules != nil {
-		return t.rules
+	if t.rules == nil {
+		panic("tx.ApplyStateTable: rules is nil — caller must pass " +
+			"amendment.Rules at construction (NewApplyStateTable).")
 	}
-	return amendment.AllSupportedRules()
+	return t.rules
 }
 
 // applyThreading updates PreviousTxnID/PreviousTxnLgrSeq on affected entries

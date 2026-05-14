@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/manifest"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/shamap"
 )
 
@@ -1067,7 +1068,16 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 
 	if err := txMap.FinishSync(); err != nil {
 		// Mirror TransactionAcquire::trigger (TransactionAcquire.cpp:144-171):
-		// request the missing nodes.
+		// request the missing nodes. Before going to peers, fill any
+		// missing TX-leaf nodes from our own pending pool — rippled's
+		// peer reply omits leaf blobs (fatLeaves=false at
+		// PeerImp.cpp:3318) and expects the local node to source them
+		// from its TransactionMaster via ConsensusTransSetSF::getNode
+		// (ConsensusTransSetSF.cpp:82-101). For tnTRANSACTION_NM the
+		// leaf-node hash equals the tx ID, so a single tx-ID lookup
+		// resolves the missing leaf. Without this step, the missing-
+		// node request loops forever because peers will never send the
+		// leaves back, livelocking tx-set acquisition under fuzz.
 		missing := txMap.GetMissingNodes(256, nil)
 		if len(missing) == 0 {
 			r.deleteTxSetAcquire(txSetID)
@@ -1077,23 +1087,66 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 				"err", err.Error())
 			return
 		}
-		nodeIDs := make([][]byte, len(missing))
-		for i, m := range missing {
-			nodeIDs[i] = m.NodeID.Bytes()
+
+		filledFromPool := 0
+		remaining := missing[:0]
+		for _, m := range missing {
+			blob, getErr := r.adaptor.GetTx(consensus.TxID(m.Hash))
+			if getErr != nil || len(blob) == 0 {
+				remaining = append(remaining, m)
+				continue
+			}
+			// SHAMap wire format for a tx leaf is `tx_blob || WireTypeTransaction`.
+			// See shamap/leaf_node.go:NewTransactionLeafFromWire and the
+			// matching DeserializeNodeFromWire dispatch at node.go:111.
+			wire := make([]byte, len(blob)+1)
+			copy(wire, blob)
+			wire[len(blob)] = byte(protocol.WireTypeTransaction)
+			if addErr := txMap.AddKnownNode(m.Hash, wire); addErr != nil {
+				remaining = append(remaining, m)
+				continue
+			}
+			filledFromPool++
 		}
-		r.logger.Info("tx-set sync: requesting missing nodes",
-			"t", "consensus", "event", "txset-retry",
-			"txset", fmt.Sprintf("%x", txSetID[:8]),
-			"non_root_added", added,
-			"missing", len(missing),
-		)
-		if reqErr := r.adaptor.RequestTxSetMissingNodes(txSetID, nodeIDs); reqErr != nil {
-			r.logger.Info("tx-set sync: missing-nodes request failed",
-				"t", "consensus", "event", "txset-reject",
+
+		if filledFromPool > 0 {
+			if syncErr := txMap.FinishSync(); syncErr == nil {
+				// Tree complete after local fill — fall through to the
+				// leaf-walk + engine feed below.
+				r.logger.Info("tx-set sync: completed via local pool",
+					"t", "consensus", "event", "txset-local-fill",
+					"txset", fmt.Sprintf("%x", txSetID[:8]),
+					"filled", filledFromPool,
+					"non_root_added", added,
+				)
+			} else {
+				// Still incomplete — recompute remaining via the SHAMap
+				// since AddKnownNode may have revealed deeper holes.
+				remaining = txMap.GetMissingNodes(256, nil)
+			}
+		}
+
+		if len(remaining) > 0 {
+			nodeIDs := make([][]byte, len(remaining))
+			for i, m := range remaining {
+				nodeIDs[i] = m.NodeID.Bytes()
+			}
+			r.logger.Info("tx-set sync: requesting missing nodes",
+				"t", "consensus", "event", "txset-retry",
 				"txset", fmt.Sprintf("%x", txSetID[:8]),
-				"error", reqErr.Error())
+				"non_root_added", added,
+				"filled_local", filledFromPool,
+				"missing", len(remaining),
+			)
+			if reqErr := r.adaptor.RequestTxSetMissingNodes(txSetID, nodeIDs); reqErr != nil {
+				r.logger.Info("tx-set sync: missing-nodes request failed",
+					"t", "consensus", "event", "txset-reject",
+					"txset", fmt.Sprintf("%x", txSetID[:8]),
+					"error", reqErr.Error())
+			}
+			return
 		}
-		return
+		// fall through: tree complete via local fill
 	}
 
 	// Walk leaves into blobs, feed the engine, drop the acquire so dispute
@@ -1570,9 +1623,15 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 	if svc == nil {
 		return
 	}
-	// At-or-below closed is driven by the divergent-fork status-change
-	// handler, not here.
-	if seq <= svc.GetClosedLedgerIndex() {
+	// Skip only when seq is at or below the last *validated* ledger
+	// (mirrors rippled's LedgerMaster::checkAccept gate at
+	// LedgerMaster.cpp:883 — `if (seq < mValidLedgerSeq) return`). Gating
+	// on the closed-ledger index instead silently swallowed recovery for
+	// a node that had run ahead on a private chain: when the validation
+	// tracker observed quorum on canonical seq=N with a different hash
+	// than our local seq=N, the acquire was skipped because closedSeq
+	// >> validatedSeq, leaving us stuck on the private chain forever.
+	if seq <= svc.GetValidatedLedgerIndex() {
 		return
 	}
 

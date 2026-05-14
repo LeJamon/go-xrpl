@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
@@ -113,6 +114,7 @@ func TestOpenLedger_Submit_AppliesAndPublishes(t *testing.T) {
 		ReserveIncrement: 50_000_000,
 		LedgerSequence:   pre.Sequence(),
 		NetworkID:        0,
+		Rules:            amendment.AllSupportedRules(),
 	}
 
 	changed, result := ol.Submit(pt, cfg, nil)
@@ -213,6 +215,7 @@ func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
 				ReserveIncrement: 50_000_000,
 				LedgerSequence:   ol.Current().Sequence(),
 				NetworkID:        0,
+				Rules:            amendment.AllSupportedRules(),
 			},
 		}
 	}
@@ -355,6 +358,7 @@ func TestOpenLedger_Accept_ReplaysCurrentTxs(t *testing.T) {
 		ReserveIncrement: 50_000_000,
 		LedgerSequence:   ol.Current().Sequence(),
 		NetworkID:        0,
+		Rules:            amendment.AllSupportedRules(),
 	}
 
 	// Submit two independent txs to current.
@@ -430,6 +434,7 @@ func TestOpenLedger_Accept_NoDoubleApply(t *testing.T) {
 		ReserveIncrement: 50_000_000,
 		LedgerSequence:   ol.Current().Sequence(),
 		NetworkID:        0,
+		Rules:            amendment.AllSupportedRules(),
 	}
 
 	// Submit txA to current open view.
@@ -495,6 +500,7 @@ func TestOpenLedger_Accept_LocalsApplied(t *testing.T) {
 		ReserveIncrement: 50_000_000,
 		LedgerSequence:   ol.Current().Sequence(),
 		NetworkID:        0,
+		Rules:            amendment.AllSupportedRules(),
 	}
 
 	pay := payment.Pay(alice, bob, 3_000_000).Sequence(env.Seq(alice)).Build()
@@ -552,6 +558,7 @@ func TestOpenLedger_Submit_TecCommits(t *testing.T) {
 		ReserveIncrement: 50_000_000,
 		LedgerSequence:   ol.Current().Sequence(),
 		NetworkID:        0,
+		Rules:            amendment.AllSupportedRules(),
 	}
 
 	changed, result := ol.Submit(pt, cfg, nil)
@@ -589,6 +596,7 @@ func TestOpenLedger_Accept_RetriesFirst_ReplaysHeldTx(t *testing.T) {
 		ReserveIncrement: 50_000_000,
 		LedgerSequence:   ol.Current().Sequence(),
 		NetworkID:        0,
+		Rules:            amendment.AllSupportedRules(),
 	}
 
 	// Build a held-retry tx — a vanilla payment that applies cleanly

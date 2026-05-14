@@ -1284,6 +1284,103 @@ func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*con
 			go hooks.OnConsensusPhase("accepted")
 		}
 	}
+
+	a.maybePromoteAfterConsensus(ledger)
+}
+
+// maybePromoteAfterConsensus mirrors rippled's endConsensus auto-promote
+// (NetworkOPs.cpp:2190-2214): a successful consensus close is itself
+// evidence that we are aligned with the network, so we advance the
+// operating mode without waiting for a peer-acquired ledger.
+//
+//	CONNECTED | SYNCING  → TRACKING
+//	CONNECTED | TRACKING → FULL when the just-closed ledger is recent
+//	                           (now < ledger.CloseTime() + 2 * resolution;
+//	                            equivalent to rippled's
+//	                            `parentCloseTime + 2 * closeTimeResolution`
+//	                            evaluated on the new open child, since the
+//	                            argument here IS rippled's `current->parent`)
+//
+// Both branches are gated on !peerLCLDisagrees(ledger.ID()) — a
+// goXRPL proxy for rippled's `!ledgerChange` (NetworkOPs.cpp:2192,
+// 2203). rippled's `ledgerChange` is computed by
+// checkLastClosedLedger collating trusted validations + peer LCL
+// hashes; we approximate using PeerReportedLedgers because the full
+// validation-trie + inbound-ledger pathway is not yet ported. The
+// proxy is conservative: when peer LCL data is absent (typical
+// fresh-bootstrap), we fall through and promote as before.
+//
+// rippled additionally gates the TRACKING promotion on
+// `!needNetworkLedger_` (NetworkOPs.cpp:2197); goXRPL has no
+// equivalent flag because OnConsensusReached only fires after a
+// completed round, which subsumes "we have a network ledger".
+//
+// Without this, a fresh genesis bootstrap deadlocks at OpModeConnected
+// because none of the existing OpModeTracking transitions fire (they
+// all require a peer ahead of us to acquire from). With it, the first
+// successful observer round graduates us to FULL and the next round
+// proposes normally — matching rippled's bootstrap sequence exactly.
+func (a *Adaptor) maybePromoteAfterConsensus(ledger consensus.Ledger) {
+	if ledger == nil {
+		return
+	}
+	current := a.GetOperatingMode()
+	if current == consensus.OpModeDisconnected || current == consensus.OpModeFull {
+		return
+	}
+
+	if a.peerLCLDisagrees(ledger.ID()) {
+		a.logger.Info("operating mode promotion deferred — peer LCL disagrees",
+			"mode", current.String(),
+			"ledger_seq", ledger.Seq(),
+		)
+		return
+	}
+
+	target := current
+	if current == consensus.OpModeConnected || current == consensus.OpModeSyncing {
+		target = consensus.OpModeTracking
+	}
+	if target == consensus.OpModeConnected || target == consensus.OpModeTracking {
+		resolution := a.CloseTimeResolution()
+		if a.Now().Before(ledger.CloseTime().Add(2 * resolution)) {
+			target = consensus.OpModeFull
+		}
+	}
+	if target == current {
+		return
+	}
+	a.SetOperatingMode(target)
+	a.logger.Info("operating mode auto-promoted after consensus",
+		"from", current.String(),
+		"to", target.String(),
+		"ledger_seq", ledger.Seq(),
+	)
+}
+
+// peerLCLDisagrees reports whether more known peers have a
+// last-closed-ledger hash different from `ourLCL` than agree with
+// it. Returns false when no peer LCL data is available — without
+// evidence to the contrary we trust the local consensus result.
+//
+// Approximates rippled's checkLastClosedLedger
+// (NetworkOPs.cpp:1881-1946) peer-LCL collation; a faithful port
+// would also weight trusted validations via the validation trie's
+// getPreferredLCL, which is not yet exposed here.
+func (a *Adaptor) peerLCLDisagrees(ourLCL consensus.LedgerID) bool {
+	peers := a.PeerReportedLedgers()
+	if len(peers) == 0 {
+		return false
+	}
+	var agree, disagree int
+	for _, p := range peers {
+		if p == ourLCL {
+			agree++
+		} else {
+			disagree++
+		}
+	}
+	return disagree > agree
 }
 
 // OnLedgerFullyValidated fires when the engine's ValidationTracker sees

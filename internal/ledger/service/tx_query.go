@@ -77,6 +77,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte) 
 			OpenLedger:                true,
 			NetworkID:                 s.config.NetworkID,
 			Logger:                    s.config.Logger,
+			Rules:                     rulesFromLedger(s.closedLedger, s.logger),
 		}
 		engine := tx.NewEngine(view, engineConfig)
 		applyResult = engine.Apply(transaction)
@@ -206,6 +207,7 @@ func (s *Service) EngineConfigForReplay(parent *ledger.Ledger) tx.EngineConfig {
 		NetworkID:                 s.config.NetworkID,
 		SkipSignatureVerification: false, // replay re-checks signatures
 		Logger:                    s.config.Logger,
+		Rules:                     rulesFromLedger(parent, s.logger),
 	}
 }
 
@@ -305,6 +307,7 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 		OpenLedger:                true, // Check fee adequacy for simulation
 		NetworkID:                 s.config.NetworkID,
 		Logger:                    s.config.Logger,
+		Rules:                     rulesFromLedger(s.closedLedger, s.logger),
 	}
 
 	// Create engine with the snapshot view

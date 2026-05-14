@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
@@ -108,6 +109,7 @@ func TestApplyTxs_RetrySettles(t *testing.T) {
 		ReserveIncrement: 50_000_000,
 		LedgerSequence:   view.Sequence(),
 		NetworkID:        0,
+		Rules:            amendment.AllSupportedRules(),
 	}
 	if err := openledger.ApplyTxs(view, pending, &retries, cfg); err != nil {
 		t.Fatalf("ApplyTxs: %v", err)
@@ -169,6 +171,7 @@ func TestApplyTxs_TemMalformed_DroppedNotRetried(t *testing.T) {
 		ReserveIncrement: 50_000_000,
 		LedgerSequence:   view.Sequence(),
 		NetworkID:        0,
+		Rules:            amendment.AllSupportedRules(),
 	}
 	if err := openledger.ApplyTxs(view, []openledger.PendingTx{pt}, &retries, cfg); err != nil {
 		t.Fatalf("ApplyTxs: %v", err)
@@ -220,6 +223,7 @@ func TestApplyTxs_OpenLedgerMode_TecCommits(t *testing.T) {
 		ReserveIncrement: 50_000_000,
 		LedgerSequence:   view.Sequence(),
 		NetworkID:        0,
+		Rules:            amendment.AllSupportedRules(),
 		Mode:             openledger.OpenLedgerMode,
 	}
 	if err := openledger.ApplyTxs(view, []openledger.PendingTx{pt}, &retries, cfg); err != nil {
@@ -253,6 +257,7 @@ func TestApplyTxs_BuildLedgerMode_TecRetriesThenCommits(t *testing.T) {
 		ReserveIncrement: 50_000_000,
 		LedgerSequence:   view.Sequence(),
 		NetworkID:        0,
+		Rules:            amendment.AllSupportedRules(),
 		Mode:             openledger.BuildLedgerMode,
 	}
 	if err := openledger.ApplyTxs(view, []openledger.PendingTx{pt}, &retries, cfg); err != nil {

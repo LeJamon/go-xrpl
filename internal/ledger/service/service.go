@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
@@ -497,6 +498,7 @@ func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, buildRetries []op
 		ReserveIncrement: reserveIncrement,
 		NetworkID:        s.config.NetworkID,
 		Logger:           s.config.Logger,
+		Rules:            rulesFromLedger(s.closedLedger, s.logger),
 	}
 	// Modifier closure mirrors rippled OpenLedger.cpp:113 calling
 	// app_.getTxQ().accept(app_, view) after the replay phases — this is
@@ -559,7 +561,34 @@ func (s *Service) applyConfigLocked() (openledger.ApplyConfig, error) {
 		LedgerSequence:   s.closedLedger.Sequence() + 1,
 		NetworkID:        s.config.NetworkID,
 		Logger:           s.config.Logger,
+		Rules:            rulesFromLedger(s.closedLedger, s.logger),
 	}, nil
+}
+
+// rulesFromLedger derives the amendment.Rules in effect for `parent`'s
+// successor ledger by reading parent's on-ledger Amendments SLE. Returns
+// EmptyRules when parent is nil or the SLE cannot be read — the caller
+// should treat a nil parent as a misconfiguration. Logging the read
+// failure rather than propagating keeps the apply path tolerant of
+// transient store errors; downstream tx behaviour will simply behave as
+// if no amendments are enabled, which is the safe direction (rather
+// than the AllSupportedRules() default that masks plumbing bugs).
+// Reference: rippled Application::buildLedger threads
+// `previousLedger->rules()` through; the rules are loaded from the
+// parent's Amendments SLE in Ledger::Rules() at Ledger.cpp.
+func rulesFromLedger(parent *ledger.Ledger, logger xrpllog.Logger) *amendment.Rules {
+	if parent == nil {
+		return amendment.EmptyRules()
+	}
+	rules, err := ledger.LoadAmendmentsFromLedger(parent)
+	if err != nil {
+		if logger != nil {
+			logger.Warn("failed to load amendments from parent ledger; defaulting to empty rules",
+				"parent_seq", parent.Sequence(), "err", err)
+		}
+		return amendment.EmptyRules()
+	}
+	return rules
 }
 
 // SubmitOpenLedgerTx routes a tx blob through the persistent OpenLedger
@@ -800,7 +829,8 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 			// Standalone close mirrors the consensus-build path: tec under
 			// certainRetry holds for retry, commits on the final non-retry
 			// pass. See BuildLedger.cpp.
-			Mode: openledger.BuildLedgerMode,
+			Mode:  openledger.BuildLedgerMode,
+			Rules: rulesFromLedger(s.closedLedger, s.logger),
 		}
 		if err := openledger.ApplyTxs(freshLedger, s.pendingTxs, &retriableTxs, applyCfg); err != nil {
 			return 0, fmt.Errorf("openledger.ApplyTxs: %w", err)
@@ -1493,6 +1523,13 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 			// Consensus build uses BuildLedger semantics: tec holds for
 			// retry under certainRetry; commits on the final pass.
 			Mode: openledger.BuildLedgerMode,
+			// Pull amendments from the parent ledger so threading and
+			// other amendment-gated behaviour match rippled byte-for-
+			// byte. Without this, EngineConfig.Rules falls through to
+			// the all-amendments-on default and goxrpl threads
+			// DirectoryNode SLEs (and others) when fixPreviousTxnID is
+			// actually disabled on-chain — root cause of #401/#418.
+			Rules: rulesFromLedger(s.closedLedger, s.logger),
 		}
 		if err := openledger.ApplyTxs(freshLedger, pending, &retriableTxs, applyCfg); err != nil {
 			return 0, fmt.Errorf("openledger.ApplyTxs: %w", err)
@@ -1722,18 +1759,23 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	// Both stash and arm acquisition.
 	if !ok || l.Hash() != expectedHash {
 		s.stashPendingLedgerValidationLocked(seq, expectedHash)
-		// Capture handler under lock; fire only when seq > closed
-		// (at-or-below is the divergent-fork status-change path).
+		// Capture handler under lock; fire when seq > the last
+		// VALIDATED seq (mirrors rippled LedgerMaster::checkAccept's
+		// `if (seq < mValidLedgerSeq) return` gate at
+		// LedgerMaster.cpp:883). Gating on closedSeq instead silently
+		// blocked recovery when a node ran ahead on a private chain:
+		// quorum on a divergent canonical seq=N would stash but the
+		// arming handler refused to fire because closedSeq >> N.
 		var (
 			handler func(uint32, [32]byte)
 			fire    bool
 		)
 		if s.onPendingValidationStashed != nil {
-			closedSeq := uint32(0)
-			if s.closedLedger != nil {
-				closedSeq = s.closedLedger.Sequence()
+			validatedSeq := uint32(0)
+			if s.validatedLedger != nil {
+				validatedSeq = s.validatedLedger.Sequence()
 			}
-			if seq > closedSeq {
+			if seq > validatedSeq {
 				handler = s.onPendingValidationStashed
 				fire = true
 			}
