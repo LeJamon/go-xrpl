@@ -1,0 +1,116 @@
+compression = false
+peer_private = 1
+peers_max = 50
+max_transactions = 250
+ips = []
+ips_fixed = [
+    "rippled-0 51235",
+    "rippled-1 51235",
+]
+
+relay_proposals = "trusted"
+relay_validations = "all"
+ledger_history = 256
+fetch_depth = "full"
+
+path_search = 2
+path_search_fast = 2
+path_search_max = 3
+path_search_old = 2
+
+workers = 0
+io_workers = 0
+prefetch_workers = 0
+
+network_id = 10000
+ledger_replay = 1
+ssl_verify = 0
+genesis_amendments_disabled = true
+
+database_path = "/tmp/goxrpl/db"
+debug_logfile = "/tmp/goxrpl/db/debug.log"
+
+node_size = "tiny"
+signing_support = true
+beta_rpc_api = 0
+
+# goxrpl is a full validator whose pubkey is in the shared UNL alongside
+# the two rippled pubkeys. Quorum = ceil(0.8 * 3) = 3, so every node must
+# validate the same ledger for the network to advance. Any consensus
+# divergence between goxrpl and rippled wedges validation, which is the
+# regression signal we want from this per-PR smoke.
+#
+# Until #418 (cold-bootstrap fork at seq=6/7) lands, this smoke is expected
+# to fail — that's the entire point: it becomes the gate that closes when
+# the consensus work is complete.
+validation_seed = "sn8KuG4fs84rowCsqTuz6AtqEkmJ7"
+validators_file = "/etc/goxrpl/validators.toml"
+
+rpc_startup = [
+    { command = "log_level", severity = "warning" }
+]
+
+[logging]
+level = "info"
+format = "text"
+output = "stdout"
+
+[server]
+ports = ["port_rpc_admin_local", "port_ws_admin_local", "port_peer"]
+
+[port_rpc_admin_local]
+port = 5005
+ip = "0.0.0.0"
+admin = ["0.0.0.0"]
+protocol = "http"
+
+[port_ws_admin_local]
+port = 6006
+ip = "0.0.0.0"
+admin = ["0.0.0.0"]
+protocol = "ws"
+
+[port_peer]
+port = 51235
+ip = "0.0.0.0"
+protocol = "peer"
+
+[node_db]
+type = "pebble"
+path = "/tmp/goxrpl/db/pebble"
+online_delete = 256
+advisory_delete = 0
+cache_size = 16384
+cache_age = 5
+fast_load = false
+earliest_seq = 0
+delete_batch = 100
+back_off_milliseconds = 100
+age_threshold_seconds = 60
+recovery_wait_seconds = 5
+
+[sqlite]
+journal_mode = "wal"
+synchronous = "normal"
+temp_store = "file"
+page_size = 4096
+journal_size_limit = 1582080
+
+[overlay]
+max_unknown_time = 600
+max_diverged_time = 300
+
+[transaction_queue]
+ledgers_in_queue = 20
+minimum_queue_size = 2000
+retry_sequence_percent = 25
+minimum_escalation_multiplier = 500
+minimum_txn_in_ledger = 5
+minimum_txn_in_ledger_standalone = 1000
+target_txn_in_ledger = 50
+maximum_txn_in_ledger = 0
+normal_consensus_increase_percent = 20
+slow_consensus_decrease_percent = 50
+maximum_txn_per_account = 10
+minimum_last_ledger_buffer = 2
+zero_basefee_transaction_feelevel = 256000

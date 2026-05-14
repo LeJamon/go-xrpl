@@ -1,0 +1,63 @@
+name: goxrpl-consensus-smoke
+
+# 2 rippled + 1 goxrpl, all three validators in the shared UNL. Quorum = 3
+# (ceil(0.8 * 3)), so every node must validate the same ledger for the
+# network to advance. This is the regression gate for cross-implementation
+# consensus and tx-execution determinism.
+#
+# Until #418 (cold-bootstrap fork at seq=6/7) is fixed, this smoke is
+# expected to fail at phase 1 because the network wedges at seq=5. That's
+# the point: the smoke closes when the consensus work is complete.
+
+services:
+  rippled-0:
+    image: ${RIPPLED_IMAGE:-rippleci/rippled:2.6.2}
+    hostname: rippled-0
+    ports:
+      - "5005"
+      - "6006"
+    volumes:
+      - ./configs:/etc/rippled:ro
+    command: ["--conf", "/etc/rippled/rippled-0.cfg"]
+    networks: [smoke]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --post-data='{\"method\":\"server_info\"}' http://localhost:5005 || exit 1"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+
+  rippled-1:
+    image: ${RIPPLED_IMAGE:-rippleci/rippled:2.6.2}
+    hostname: rippled-1
+    ports:
+      - "5005"
+      - "6006"
+    volumes:
+      - ./configs:/etc/rippled:ro
+    command: ["--conf", "/etc/rippled/rippled-1.cfg"]
+    networks: [smoke]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --post-data='{\"method\":\"server_info\"}' http://localhost:5005 || exit 1"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+
+  goxrpl-0:
+    image: ${GOXRPL_IMAGE:-goxrpl:latest}
+    hostname: goxrpl-0
+    ports:
+      - "5005"
+      - "6006"
+    volumes:
+      - ./configs:/etc/goxrpl:ro
+    command: ["server", "--conf", "/etc/goxrpl/goxrpl-0.toml"]
+    networks: [smoke]
+    depends_on:
+      - rippled-0
+      - rippled-1
+
+networks:
+  smoke:
+    driver: bridge
