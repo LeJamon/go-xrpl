@@ -31,9 +31,6 @@ type applyState struct {
 // For tec results, only fee/sequence changes are applied; transaction effects are discarded.
 // Reference: rippled Transactor.cpp - tec results claim fee but don't apply effects
 func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Result {
-	// Store txHash for use by apply functions
-	e.currentTxHash = txHash
-
 	common := tx.GetCommon()
 	accountID, _ := state.DecodeAccountID(common.Account)
 	accountKey := keylet.Account(accountID)
