@@ -178,6 +178,25 @@ type Engine struct {
 	// ledgerAncestry is staged by startup wiring and applied to the
 	// tracker in Start. Nil keeps flat-count semantics.
 	ledgerAncestry LedgerAncestryProvider
+
+	// pendingBroadcasts queues proposal/validation broadcasts produced
+	// while e.mu is held so they can be flushed after the lock is
+	// released. The overlay write path takes its own per-peer locks
+	// and bounded send queues; holding e.mu across BroadcastProposal /
+	// BroadcastValidation blocks OnProposal/OnValidation ingress on
+	// e.mu.RLock and can stall consensus across the trusted set when
+	// a single peer's send queue is slow. Mutated only while e.mu is
+	// held; drained by takePendingBroadcastsLocked after Unlock.
+	pendingBroadcasts []func()
+
+	// deferBroadcasts is incremented on entry to timerEntry / StartRound
+	// (the entry points that drive proposal/validation emission under
+	// e.mu) and decremented on exit. When zero, the enqueue helpers fall
+	// back to a synchronous send so direct callers — primarily unit
+	// tests that drive sendValidation / closeLedger without going
+	// through timerEntry — still observe the broadcast immediately.
+	// Mutated only while e.mu is held.
+	deferBroadcasts int
 }
 
 // ValidationArchive is the subset of the archive API the consensus engine
@@ -200,6 +219,60 @@ func (e *Engine) loadArchive() ValidationArchive {
 		return box.a
 	}
 	return nil
+}
+
+// enqueueProposalBroadcastLocked stages a proposal to be broadcast after
+// e.mu is released. See pendingBroadcasts on Engine for rationale.
+// Caller must hold e.mu. When no deferred-broadcast scope is active
+// (deferBroadcasts == 0, e.g. tests driving sendValidation directly),
+// the send is performed synchronously so observers don't have to flush
+// manually.
+func (e *Engine) enqueueProposalBroadcastLocked(p *consensus.Proposal) {
+	if p == nil {
+		return
+	}
+	if e.deferBroadcasts == 0 {
+		_ = e.adaptor.BroadcastProposal(p)
+		return
+	}
+	e.pendingBroadcasts = append(e.pendingBroadcasts, func() {
+		_ = e.adaptor.BroadcastProposal(p)
+	})
+}
+
+// enqueueValidationBroadcastLocked stages a validation to be broadcast
+// after e.mu is released. Caller must hold e.mu.
+func (e *Engine) enqueueValidationBroadcastLocked(v *consensus.Validation) {
+	if v == nil {
+		return
+	}
+	if e.deferBroadcasts == 0 {
+		_ = e.adaptor.BroadcastValidation(v)
+		return
+	}
+	e.pendingBroadcasts = append(e.pendingBroadcasts, func() {
+		_ = e.adaptor.BroadcastValidation(v)
+	})
+}
+
+// takePendingBroadcastsLocked drains the queued broadcast closures.
+// Caller must hold e.mu. The returned slice should be passed to
+// flushBroadcasts after the lock is released.
+func (e *Engine) takePendingBroadcastsLocked() []func() {
+	if len(e.pendingBroadcasts) == 0 {
+		return nil
+	}
+	out := e.pendingBroadcasts
+	e.pendingBroadcasts = nil
+	return out
+}
+
+// flushBroadcasts runs each queued broadcast. MUST be called with e.mu
+// released.
+func flushBroadcasts(pending []func()) {
+	for _, fn := range pending {
+		fn()
+	}
 }
 
 // avalancheState tracks the close time voting threshold escalation.
@@ -390,8 +463,13 @@ func (e *Engine) Stop() error {
 // StartRound begins a new consensus round.
 func (e *Engine) StartRound(round consensus.RoundID, proposing bool) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.startRoundLocked(round, proposing, false)
+	e.deferBroadcasts++
+	err := e.startRoundLocked(round, proposing, false)
+	e.deferBroadcasts--
+	pending := e.takePendingBroadcastsLocked()
+	e.mu.Unlock()
+	flushBroadcasts(pending)
+	return err
 }
 
 // startRoundLocked is the lock-free inner implementation of StartRound.
@@ -1055,8 +1133,13 @@ func (e *Engine) run() {
 func (e *Engine) timerEntry() {
 	tickStart := time.Now()
 	e.mu.Lock()
+	e.deferBroadcasts++
+	var pending []func()
 	defer func() {
+		e.deferBroadcasts--
+		pending = e.takePendingBroadcastsLocked()
 		e.mu.Unlock()
+		flushBroadcasts(pending)
 		// 50ms threshold — the 250ms heartbeat needs headroom.
 		dur := time.Since(tickStart)
 		if dur > 50*time.Millisecond {
@@ -1703,7 +1786,7 @@ func (e *Engine) closeLedger() {
 
 			if err := e.adaptor.SignProposal(proposal); err == nil {
 				e.state.OurPosition = proposal
-				e.adaptor.BroadcastProposal(proposal)
+				e.enqueueProposalBroadcastLocked(proposal)
 				txSetID := txSet.ID()
 				prevID := e.prevLedger.ID()
 				slog.Info("our initial position",
@@ -2156,7 +2239,7 @@ func (e *Engine) updatePosition() {
 		}
 		if err := e.adaptor.SignProposal(proposal); err == nil {
 			e.state.OurPosition = proposal
-			e.adaptor.BroadcastProposal(proposal)
+			e.enqueueProposalBroadcastLocked(proposal)
 		}
 	}
 
@@ -2575,7 +2658,7 @@ func (e *Engine) updateCloseTimePosition() {
 			e.state.OurPosition.Position++
 			e.state.OurPosition.Timestamp = e.adaptor.Now()
 			if err := e.adaptor.SignProposal(e.state.OurPosition); err == nil {
-				e.adaptor.BroadcastProposal(e.state.OurPosition)
+				e.enqueueProposalBroadcastLocked(e.state.OurPosition)
 			}
 			slog.Info("our close-time bumped",
 				"t", "consensus",
@@ -2908,7 +2991,7 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 		"sign_time_xrpl", signTime.Unix()-protocol.RippleEpochUnix,
 	)
 
-	e.adaptor.BroadcastValidation(validation)
+	e.enqueueValidationBroadcastLocked(validation)
 
 	// Feed our own validation into the tracker. Only Full validations
 	// are accepted by the tracker's Full-gate, so a partial
