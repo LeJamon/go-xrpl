@@ -726,12 +726,11 @@ func (pf *Pathfinder) isNoRipple(fromAccount, toAccount [20]byte, currency strin
 // This matches rippled's STPathElement serialization where typeAccount
 // elements do not include currency/issuer fields.
 //
-// Dedup is O(1) via the completePathKeys fingerprint set — previously a
-// linear scan + element-wise pathsEqual, which was O(N²) over the DFS run.
+// Dedup is O(1) via the completePathKeys fingerprint set.
 func (pf *Pathfinder) addUniquePath(path []payment.PathStep) {
 	pathCopy := make([]payment.PathStep, len(path))
 	for i, step := range path {
-		if step.Type == 0x01 { // typeAccount: strip Currency and Issuer
+		if step.Type == 0x01 {
 			pathCopy[i] = payment.PathStep{
 				Account: step.Account,
 				Type:    step.Type,
