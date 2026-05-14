@@ -1,6 +1,7 @@
 package csf
 
 import (
+	"sort"
 	"sync"
 )
 
@@ -112,6 +113,13 @@ func (n *BasicNetwork) GetDelay(from, to PeerID) (SimDuration, bool) {
 }
 
 // Peers returns all peers that the given peer is connected to.
+//
+// The result is sorted by PeerID so Broadcast schedules per-peer Send
+// calls in a stable order. The scheduler relies on the order in which
+// events are pushed to break ties between events scheduled at the same
+// simulated time — without a sort, two runs with the same seed could
+// assign different sequence numbers to the same logical broadcasts and
+// silently reorder same-time deliveries.
 func (n *BasicNetwork) Peers(id PeerID) []PeerID {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -125,6 +133,7 @@ func (n *BasicNetwork) Peers(id PeerID) []PeerID {
 	for peer := range peerLinks {
 		result = append(result, peer)
 	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
 	return result
 }
 
