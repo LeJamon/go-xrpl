@@ -980,17 +980,11 @@ func (e *Engine) GetLastCloseInfo() (proposers int, convergeTime time.Duration) 
 	return proposers, convergeTime
 }
 
-// recentTrustedProposerCount returns the number of distinct trusted
-// validators that have sent at least one proposal within the
-// ProposeFreshness window. Matches the intent of rippled's
-// currPeerPositions_ but sourced from the long-lived
-// recentPeerPositions_ buffer so the count survives across
-// wrongLedger-driven round restarts — the production scenario where
-// the per-round e.proposals map ends up empty even on a healthy
-// network. See GetLastCloseInfo. Issue #421.
-//
-// Acquires e.mu.RLock(); cost is bounded by recentProposals (capped
-// at 10 positions per node).
+// recentTrustedProposerCount counts distinct trusted nodes whose most
+// recent buffered proposal is inside the freshness window. Sourced from
+// recentProposals (Consensus.h:626 recentPeerPositions_) so the count
+// survives wrongLedger-driven round restarts that empty e.proposals.
+// Acquires e.mu.RLock(); cost bounded by the per-node cap of 10.
 func (e *Engine) recentTrustedProposerCount() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()

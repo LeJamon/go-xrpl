@@ -8,13 +8,8 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 )
 
-// TestEngine_TrackerReportsProposers_ExplicitStartRound reproduces
-// issue #421: a non-validating tracker must surface a non-zero
-// last_close.proposers via GetLastCloseInfo once a round completes
-// with trusted peer proposals on hand.
-//
-// Scenario A: caller explicitly drives StartRound, then proposals
-// arrive within that round.
+// Issue #421: a tracker must surface non-zero last_close.proposers once
+// a round completes with trusted peer proposals on hand.
 func TestEngine_TrackerReportsProposers_ExplicitStartRound(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.validator = false
@@ -25,7 +20,6 @@ func TestEngine_TrackerReportsProposers_ExplicitStartRound(t *testing.T) {
 	adaptor.quorum = 2
 
 	config := DefaultConfig()
-	// Compress the timing so a round completes within the test.
 	config.Timing.LedgerMinClose = 5 * time.Millisecond
 	config.Timing.LedgerMaxClose = 200 * time.Millisecond
 	config.Timing.LedgerMinConsensus = 5 * time.Millisecond
@@ -88,11 +82,8 @@ func TestEngine_TrackerReportsProposers_ExplicitStartRound(t *testing.T) {
 	}
 }
 
-// TestEngine_TrackerReportsProposers_TimerDriven reproduces issue #421
-// more faithfully: proposals arrive BEFORE the engine starts its round
-// (the production scenario where peer proposals are buffered while the
-// engine sits in PhaseAccepted between rounds). The engine must then
-// auto-start a round via checkAndStartRoundInner, replay the buffered
+// Proposals arrive BEFORE StartRound (peer positions buffered between
+// rounds). The heartbeat must auto-start the round, replay the buffered
 // positions, and surface a non-zero proposer count on accept.
 func TestEngine_TrackerReportsProposers_TimerDriven(t *testing.T) {
 	adaptor := newMockAdaptor()
@@ -164,14 +155,9 @@ func TestEngine_TrackerReportsProposers_TimerDriven(t *testing.T) {
 	}
 }
 
-// TestEngine_TrackerReportsProposers_AfterWrongLedger reproduces the
-// production scenario for a freshly-caught-up tracker: the adaptor's
-// LCL has jumped ahead via inbound ledger acquisition (validation-
-// driven), the engine still points at an older parent, and a round
-// must be force-restarted via handleWrongLedger / OnLedger. The
-// proposer count after that recovery round still has to be reported
-// non-zero, otherwise server_info.last_close.proposers stays stuck at
-// 0 even on a healthy network.
+// Adaptor LCL jumps ahead via inbound acquisition; engine restarts the
+// round via handleWrongLedger. The recovery round must still report a
+// non-zero proposer count.
 func TestEngine_TrackerReportsProposers_AfterWrongLedger(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.validator = false
@@ -258,12 +244,9 @@ func TestEngine_TrackerReportsProposers_AfterWrongLedger(t *testing.T) {
 	}
 }
 
-// TestEngine_TrackerReportsProposers_NoAcceptFallback reproduces the
-// production behavior reported in issue #421: a tracker stuck in
-// PhaseAccepted (no consensus round has completed) must still report
-// a non-zero proposer count via GetLastCloseInfo when fresh trusted
-// proposals are in the buffer. This is the dashboard signal the
-// fuzzer's stall oracle relies on.
+// Tracker never reaches acceptLedger (stays in Tracking mode); the
+// fallback must still produce a non-zero count from buffered trusted
+// proposals. Untrusted proposals must not inflate the count.
 func TestEngine_TrackerReportsProposers_NoAcceptFallback(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.validator = false
@@ -335,9 +318,7 @@ func TestEngine_TrackerReportsProposers_NoAcceptFallback(t *testing.T) {
 	}
 }
 
-// TestEngine_RecentTrustedProposerCount_StaleProposalsExcluded
-// verifies the freshness window in the fallback: proposals with
-// timestamps older than ProposeFreshness must drop out of the count.
+// Proposals older than ProposeFreshness must drop out of the count.
 func TestEngine_RecentTrustedProposerCount_StaleProposalsExcluded(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.validator = false
