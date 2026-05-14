@@ -215,7 +215,7 @@ func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
 				ReserveIncrement: 50_000_000,
 				LedgerSequence:   ol.Current().Sequence(),
 				NetworkID:        0,
-		Rules:            amendment.AllSupportedRules(),
+				Rules:            amendment.AllSupportedRules(),
 			},
 		}
 	}
