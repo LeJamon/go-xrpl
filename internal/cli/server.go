@@ -85,6 +85,8 @@ func runServer(cmd *cobra.Command, args []string) {
 	xrpllog.SetRootConfig(&logCfg)
 	serverLog := rootLogger.Named(xrpllog.PartitionServer)
 
+	globalConfig.LogDeprecations(serverLog)
+
 	serverLog.Info("Starting goXRPLd", "version", version.Version)
 
 	// Set GOXRPL_PPROF=:6060 (or any addr:port) to enable pprof. Off by default.
@@ -339,8 +341,7 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	services.SetDispatcher(httpServer)
 
-	// Create WebSocket server for real-time subscriptions
-	wsServer := rpc.NewWebSocketServer(30*time.Second, services)
+	wsServer := rpc.NewWebSocketServer(services, globalConfig.WebSocket)
 	wsServer.RegisterAllMethods()
 	if consensusComponents != nil && consensusComponents.Overlay != nil {
 		wsServer.SetPeerSource(consensusComponents.Overlay)

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/config"
 	"github.com/gorilla/websocket"
 )
 
@@ -17,7 +18,7 @@ import (
 // all per-connection goroutines (read loop, send pump, ping loop) have exited.
 // Regression test for issue #186.
 func TestWebSocketServer_Close_JoinsHandlers(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
+	ws := NewWebSocketServer(nil, config.WebSocketConfig{})
 	ws.RegisterAllMethods()
 
 	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
@@ -87,7 +88,7 @@ func TestWebSocketServer_Close_JoinsHandlers(t *testing.T) {
 // TestWebSocketServer_Close_RespectsContext verifies Close returns promptly
 // when the context expires, even if handlers might otherwise linger.
 func TestWebSocketServer_Close_RespectsContext(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
+	ws := NewWebSocketServer(nil, config.WebSocketConfig{})
 
 	// Inflate the WaitGroup so it never reaches zero on its own.
 	ws.wg.Add(1)
@@ -111,7 +112,7 @@ func TestWebSocketServer_Close_RespectsContext(t *testing.T) {
 // TestWebSocketServer_Close_NoConnections verifies Close is safe with no
 // active connections and returns immediately.
 func TestWebSocketServer_Close_NoConnections(t *testing.T) {
-	ws := NewWebSocketServer(30*time.Second, nil)
+	ws := NewWebSocketServer(nil, config.WebSocketConfig{})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := ws.Close(ctx); err != nil {
@@ -126,7 +127,7 @@ func TestWebSocketServer_New_Concurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = NewWebSocketServer(time.Second, nil)
+			_ = NewWebSocketServer(nil, config.WebSocketConfig{})
 		}()
 	}
 	wg.Wait()
