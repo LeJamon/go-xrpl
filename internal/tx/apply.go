@@ -138,8 +138,7 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 	// Record fee as destroyed and assign TransactionIndex
 	if applied {
 		e.view.AdjustDropsDestroyed(drops.XRPAmount(fee))
-		metadata.TransactionIndex = e.txCount
-		e.txCount++
+		metadata.TransactionIndex = e.txCount.Add(1) - 1
 	}
 
 	e.logger.Debug("apply result",
@@ -230,8 +229,7 @@ func (e *Engine) applyPseudoTransaction(tx Transaction) ApplyResult {
 
 	// Assign TransactionIndex for applied pseudo-transactions
 	if result.IsApplied() {
-		metadata.TransactionIndex = e.txCount
-		e.txCount++
+		metadata.TransactionIndex = e.txCount.Add(1) - 1
 	}
 
 	return ApplyResult{
