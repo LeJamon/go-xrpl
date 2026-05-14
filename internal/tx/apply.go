@@ -1,6 +1,7 @@
 package tx
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 
@@ -13,7 +14,18 @@ import (
 // Pseudo-transactions (Amendment, SetFee, UNLModify) are rejected here;
 // use ApplyPseudo() for pseudo-transaction application (e.g., during block processing).
 // Reference: rippled passesLocalChecks() rejects pseudo-transactions submitted by users.
+//
+// Equivalent to ApplyWithContext(context.Background(), tx). Use the
+// context-bearing variant from RPC/submit paths where the request may be
+// cancelled (Pathfinder DFS, full-ledger ForEach scans).
 func (e *Engine) Apply(tx Transaction) ApplyResult {
+	return e.ApplyWithContext(context.Background(), tx)
+}
+
+// ApplyWithContext is the context-bearing variant of Apply. The supplied
+// ctx flows through doApply into ApplyContext.Ctx, where per-tx-type code
+// can read it for cancellation/tracing.
+func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResult {
 	// Reject pseudo-transactions — they cannot be submitted by users.
 	// Reference: rippled passesLocalChecks() in NetworkOPs.cpp
 	txType := tx.TxType()
@@ -96,7 +108,7 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 	}
 
 	if result.IsSuccess() {
-		result = e.doApply(tx, metadata, txHash)
+		result = e.doApply(ctx, tx, metadata, txHash)
 	} else if result.IsTec() {
 		// Tec from preclaim: fee must still be deducted and sequence consumed,
 		// but doApply() is NOT called — the transaction has no side effects.
@@ -296,8 +308,15 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 // This is the public entry point for pseudo-transaction application, used by the block
 // processor and test environment. Unlike Apply(), this does not reject pseudo-transactions.
 // Reference: rippled Change.cpp — pseudo-txs are applied during consensus, not user submission.
+//
+// Equivalent to ApplyPseudoWithContext(context.Background(), tx).
 func (e *Engine) ApplyPseudo(tx Transaction) ApplyResult {
-	return e.applyPseudoTransaction(tx)
+	return e.applyPseudoTransaction(context.Background(), tx)
+}
+
+// ApplyPseudoWithContext is the context-bearing variant of ApplyPseudo.
+func (e *Engine) ApplyPseudoWithContext(ctx context.Context, tx Transaction) ApplyResult {
+	return e.applyPseudoTransaction(ctx, tx)
 }
 
 // applyPseudoTransaction handles pseudo-transactions (Amendment, SetFee, UNLModify).
@@ -307,7 +326,7 @@ func (e *Engine) ApplyPseudo(tx Transaction) ApplyResult {
 // - No signature
 // - No sequence number checks
 // Reference: rippled Change.cpp
-func (e *Engine) applyPseudoTransaction(tx Transaction) ApplyResult {
+func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) ApplyResult {
 	// Compute transaction hash
 	txHash, err := computeTransactionHash(tx)
 	if err != nil {
@@ -336,6 +355,7 @@ func (e *Engine) applyPseudoTransaction(tx Transaction) ApplyResult {
 		Metadata: metadata,
 		Engine:   e,
 		Log:      e.logger,
+		Ctx:      reqCtx,
 	}
 
 	// Apply the transaction

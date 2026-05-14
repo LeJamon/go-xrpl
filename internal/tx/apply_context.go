@@ -1,6 +1,7 @@
 package tx
 
 import (
+	"context"
 	"strconv"
 
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -41,6 +42,23 @@ type ApplyContext struct {
 	// Transaction handlers (Apply methods) use this for Trace/Debug logging.
 	// Always non-nil — falls back to xrpllog.Discard() when not set by the engine.
 	Log xrpllog.Logger
+
+	// Ctx is the request-scoped context for this transaction. Long-running
+	// per-tx operations (Pathfinder DFS, full-ledger ForEach scans,
+	// AMMCreate pseudo-account search) should respect its Done channel.
+	// Callers that don't supply a context get context.Background() via
+	// Apply(); use Context() for safe access.
+	Ctx context.Context
+}
+
+// Context returns ctx.Ctx, falling back to context.Background() when unset.
+// Transaction handlers should call this instead of reading ctx.Ctx directly
+// to keep nil-safety contained.
+func (ctx *ApplyContext) Context() context.Context {
+	if ctx.Ctx == nil {
+		return context.Background()
+	}
+	return ctx.Ctx
 }
 
 // AccountReserve calculates the total reserve required for an account with the given owner count.
