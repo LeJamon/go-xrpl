@@ -2,6 +2,7 @@ package pathfinder
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	tx "github.com/LeJamon/goXRPLd/internal/tx"
@@ -32,6 +33,12 @@ type Pathfinder struct {
 
 	// completePaths holds all discovered complete paths.
 	completePaths [][]payment.PathStep
+
+	// completePathKeys is a set of fingerprints (built by pathKey) for paths
+	// already in completePaths. Used to O(1)-dedup new candidates instead of
+	// an O(N) scan + element-wise compare. Kept in sync with completePaths
+	// by addUniquePath.
+	completePathKeys map[string]struct{}
 
 	// pathRanks holds ranked paths after computePathRanks.
 	pathRanks []PathRank
@@ -80,20 +87,21 @@ func NewPathfinder(
 	}
 
 	return &Pathfinder{
-		srcAccount:    srcAccount,
-		dstAccount:    dstAccount,
-		effectiveDst:  effectiveDst,
-		srcCurrency:   srcCurrency,
-		srcIssuer:     srcIssuer,
-		dstAmount:     dstAmount,
-		srcAmount:     srcAmount,
-		convertAll:    convertAll,
-		ledger:        ledger,
-		cache:         cache,
-		books:         NewBookIndex(ledger),
-		source:        source,
-		paths:         make(map[string][][]payment.PathStep),
-		pathsOutCount: make(map[payment.Issue]int),
+		srcAccount:       srcAccount,
+		dstAccount:       dstAccount,
+		effectiveDst:     effectiveDst,
+		srcCurrency:      srcCurrency,
+		srcIssuer:        srcIssuer,
+		dstAmount:        dstAmount,
+		srcAmount:        srcAmount,
+		convertAll:       convertAll,
+		ledger:           ledger,
+		cache:            cache,
+		books:            NewBookIndex(ledger),
+		source:           source,
+		paths:            make(map[string][][]payment.PathStep),
+		pathsOutCount:    make(map[payment.Issue]int),
+		completePathKeys: make(map[string]struct{}),
 	}
 }
 
@@ -717,12 +725,12 @@ func (pf *Pathfinder) isNoRipple(fromAccount, toAccount [20]byte, currency strin
 // currency/issuer-type steps keep only Currency and Issuer.
 // This matches rippled's STPathElement serialization where typeAccount
 // elements do not include currency/issuer fields.
+//
+// Dedup is O(1) via the completePathKeys fingerprint set.
 func (pf *Pathfinder) addUniquePath(path []payment.PathStep) {
-	// Sanitize first so duplicate checking works correctly
 	pathCopy := make([]payment.PathStep, len(path))
 	for i, step := range path {
-		if step.Type == 0x01 { // typeAccount
-			// Account-only step: strip Currency and Issuer
+		if step.Type == 0x01 {
 			pathCopy[i] = payment.PathStep{
 				Account: step.Account,
 				Type:    step.Type,
@@ -731,12 +739,37 @@ func (pf *Pathfinder) addUniquePath(path []payment.PathStep) {
 			pathCopy[i] = step
 		}
 	}
-	for _, existing := range pf.completePaths {
-		if pathsEqual(existing, pathCopy) {
-			return
-		}
+
+	if pf.completePathKeys == nil {
+		pf.completePathKeys = make(map[string]struct{})
 	}
+	key := pathKey(pathCopy)
+	if _, exists := pf.completePathKeys[key]; exists {
+		return
+	}
+	pf.completePathKeys[key] = struct{}{}
 	pf.completePaths = append(pf.completePaths, pathCopy)
+}
+
+// pathKey builds a deterministic string fingerprint over the path steps. Each
+// step contributes its four fields plus a separator that cannot appear in any
+// of them (a NUL byte), so concatenated keys cannot alias. Used as the map
+// key for completePathKeys.
+func pathKey(path []payment.PathStep) string {
+	var b strings.Builder
+	// Avoid grow-resize: every step contributes ~50 bytes at the high end.
+	b.Grow(len(path) * 48)
+	for _, step := range path {
+		b.WriteByte(byte(step.Type))
+		b.WriteByte(0)
+		b.WriteString(step.Account)
+		b.WriteByte(0)
+		b.WriteString(step.Currency)
+		b.WriteByte(0)
+		b.WriteString(step.Issuer)
+		b.WriteByte(0)
+	}
+	return b.String()
 }
 
 // issueMatchesOrigin returns true if the given issue matches the source currency/issuer.
