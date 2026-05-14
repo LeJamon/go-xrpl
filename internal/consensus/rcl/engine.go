@@ -953,31 +953,25 @@ type lastCloseInfo struct {
 	RoundTime time.Duration
 }
 
-// GetLastCloseInfo returns the proposer count and convergence time
-// for server_info.last_close. The convergence time comes from the
-// atomic mirror written on acceptLedger. The proposer count is the
-// MAX of (last-accepted-round count, count of distinct trusted nodes
-// from which we received a proposal during the freshness window).
+// GetLastCloseInfo returns the proposer count and convergence time for
+// server_info.last_close. Mirrors rippled's NetworkOPs.cpp:2819 — once
+// any consensus round has been accepted, we return the strict
+// prevProposers_ snapshot from that round (matching rippled exactly).
 //
-// Deviation note from rippled: rippled's `last_close.proposers`
-// reports strictly the previous accepted round's currPeerPositions_
-// size. goXRPL trackers can ride out long stretches where the round
-// auto-advance is driven by wrongLedger fast-forwards rather than
-// in-band consensus accepts, leaving prevProposers stuck at 0 even
-// though peer proposals are flowing. The dashboard/fuzzer use of
-// this field is "is the network producing proposals?" — falling
-// back to a freshness-bounded recent-trusted count satisfies that
-// without changing the meaning when the engine IS accepting rounds
-// with positions. Issue #421.
+// Bootstrap fallback: a tracker that has never reached acceptLedger
+// (e.g. cold start, never promoted to OpModeFull) would otherwise be
+// stuck reporting 0 even when trusted peers are actively proposing.
+// In that case only, fall back to a freshness-bounded count of recent
+// trusted proposers. Issue #421.
 func (e *Engine) GetLastCloseInfo() (proposers int, convergeTime time.Duration) {
 	if info := e.lastCloseAtomic.Load(); info != nil {
 		proposers = info.Proposers
 		convergeTime = info.RoundTime
 	}
-	if recent := e.recentTrustedProposerCount(); recent > proposers {
-		proposers = recent
+	if proposers > 0 {
+		return proposers, convergeTime
 	}
-	return proposers, convergeTime
+	return e.recentTrustedProposerCount(), convergeTime
 }
 
 // recentTrustedProposerCount counts distinct trusted nodes whose most
@@ -998,8 +992,11 @@ func (e *Engine) recentTrustedProposerCount() int {
 		if !e.adaptor.IsTrusted(nodeID) {
 			continue
 		}
-		for _, p := range positions {
-			if now.Sub(p.Timestamp) > freshness {
+		// OnProposal appends under e.mu so slice order is arrival
+		// order; iterate newest-first to short-circuit on the first
+		// fresh entry.
+		for i := len(positions) - 1; i >= 0; i-- {
+			if now.Sub(positions[i].Timestamp) > freshness {
 				continue
 			}
 			count++
@@ -1249,18 +1246,14 @@ func (e *Engine) getNetworkLedger() consensus.LedgerID {
 		if !e.adaptor.IsTrusted(nodeID) {
 			continue
 		}
-		// Find the most recent fresh proposal from this node
-		var best *consensus.Proposal
-		for _, p := range positions {
-			if now.Sub(p.Timestamp) > freshness {
-				continue // stale
+		// Slice order is arrival order (OnProposal appends under e.mu);
+		// iterate newest-first and take the first fresh entry.
+		for i := len(positions) - 1; i >= 0; i-- {
+			if now.Sub(positions[i].Timestamp) > freshness {
+				continue
 			}
-			if best == nil || p.Timestamp.After(best.Timestamp) {
-				best = p
-			}
-		}
-		if best != nil {
-			votes[nodeID] = vote{prevLedger: best.PreviousLedger}
+			votes[nodeID] = vote{prevLedger: positions[i].PreviousLedger}
+			break
 		}
 	}
 
