@@ -29,9 +29,6 @@ func (a *AccountRoot) Validate() error {
 	if a.Account == [20]byte{} {
 		return errors.New("account ID is required")
 	}
-	if a.Balance < 0 {
-		return errors.New("balance cannot be negative")
-	}
 	if a.TransferRate != nil && *a.TransferRate > 0 && *a.TransferRate < 1000000000 {
 		return errors.New("transfer rate must be 0 or >= 1000000000")
 	}

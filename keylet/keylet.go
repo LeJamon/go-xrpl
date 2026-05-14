@@ -1,7 +1,9 @@
 package keylet
 
 import (
+	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 
 	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
@@ -53,13 +55,14 @@ type Keylet struct {
 }
 
 // indexHash computes a keylet key by hashing the space and provided data.
+// The 2-byte space prefix is kept on the stack to avoid an allocation per
+// call; this is on the hot path of every state read.
 func indexHash(space uint16, data ...[]byte) [32]byte {
-	// Prepend the space identifier as a 2-byte big-endian value
-	spaceBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(spaceBytes, space)
+	var spaceBytes [2]byte
+	binary.BigEndian.PutUint16(spaceBytes[:], space)
 
 	inputs := make([][]byte, 0, len(data)+1)
-	inputs = append(inputs, spaceBytes)
+	inputs = append(inputs, spaceBytes[:])
 	inputs = append(inputs, data...)
 
 	return common.Sha512Half(inputs...)
@@ -114,22 +117,21 @@ func LedgerHashes() Keylet {
 // The key is computed using (ledgerSeq >> 16) to group ledgers into chunks of 65536.
 // Reference: rippled Indexes.cpp skip(LedgerIndex ledger)
 func LedgerHashesForSeq(ledgerSeq uint32) Keylet {
-	// Include ledgerSeq >> 16 in the hash
-	seqBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(seqBytes, ledgerSeq>>16)
+	var seqBytes [4]byte
+	binary.BigEndian.PutUint32(seqBytes[:], ledgerSeq>>16)
 	return Keylet{
 		Type: entry.TypeLedgerHashes,
-		Key:  indexHash(spaceSkip, seqBytes),
+		Key:  indexHash(spaceSkip, seqBytes[:]),
 	}
 }
 
 // Offer returns the keylet for an offer entry.
 func Offer(accountID [20]byte, sequence uint32) Keylet {
-	seqBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(seqBytes, sequence)
+	var seqBytes [4]byte
+	binary.BigEndian.PutUint32(seqBytes[:], sequence)
 	return Keylet{
 		Type: entry.TypeOffer,
-		Key:  indexHash(spaceOffer, accountID[:], seqBytes),
+		Key:  indexHash(spaceOffer, accountID[:], seqBytes[:]),
 	}
 }
 
@@ -150,52 +152,51 @@ func OwnerDirPage(accountID [20]byte, page uint64) Keylet {
 			Key:  rootKey,
 		}
 	}
-	pageBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(pageBytes, page)
+	var pageBytes [8]byte
+	binary.BigEndian.PutUint64(pageBytes[:], page)
 	return Keylet{
 		Type: entry.TypeDirectoryNode,
-		Key:  indexHash(spaceDirNode, rootKey[:], pageBytes),
+		Key:  indexHash(spaceDirNode, rootKey[:], pageBytes[:]),
 	}
 }
 
 // Escrow returns the keylet for an escrow entry.
 func Escrow(accountID [20]byte, sequence uint32) Keylet {
-	seqBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(seqBytes, sequence)
+	var seqBytes [4]byte
+	binary.BigEndian.PutUint32(seqBytes[:], sequence)
 	return Keylet{
 		Type: entry.TypeEscrow,
-		Key:  indexHash(spaceEscrow, accountID[:], seqBytes),
+		Key:  indexHash(spaceEscrow, accountID[:], seqBytes[:]),
 	}
 }
 
 // Check returns the keylet for a check entry.
 func Check(accountID [20]byte, sequence uint32) Keylet {
-	seqBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(seqBytes, sequence)
+	var seqBytes [4]byte
+	binary.BigEndian.PutUint32(seqBytes[:], sequence)
 	return Keylet{
 		Type: entry.TypeCheck,
-		Key:  indexHash(spaceCheck, accountID[:], seqBytes),
+		Key:  indexHash(spaceCheck, accountID[:], seqBytes[:]),
 	}
 }
 
 // SignerList returns the keylet for a signer list entry.
 func SignerList(accountID [20]byte) Keylet {
 	// Signer list uses owner page 0 as identifier
-	ownerPageBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(ownerPageBytes, 0)
+	var ownerPageBytes [4]byte // zero-initialized
 	return Keylet{
 		Type: entry.TypeSignerList,
-		Key:  indexHash(spaceSignerList, accountID[:], ownerPageBytes),
+		Key:  indexHash(spaceSignerList, accountID[:], ownerPageBytes[:]),
 	}
 }
 
 // Ticket returns the keylet for a ticket entry.
 func Ticket(accountID [20]byte, ticketSeq uint32) Keylet {
-	seqBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(seqBytes, ticketSeq)
+	var seqBytes [4]byte
+	binary.BigEndian.PutUint32(seqBytes[:], ticketSeq)
 	return Keylet{
 		Type: entry.TypeTicket,
-		Key:  indexHash(spaceTicket, accountID[:], seqBytes),
+		Key:  indexHash(spaceTicket, accountID[:], seqBytes[:]),
 	}
 }
 
@@ -218,14 +219,17 @@ type CredentialPair struct {
 // preauthorization entry. The credentials must already be sorted.
 // Reference: rippled Indexes.cpp depositPreauth(owner, authCreds)
 func DepositPreauthCredentials(owner [20]byte, sortedCreds []CredentialPair) Keylet {
-	// For each credential pair, compute sha512Half(issuer, credType)
+	// For each credential pair, compute sha512Half(issuer, credType).
+	// Hashes are kept in a contiguous slice so we don't allocate a fresh
+	// []byte per credential.
+	hashes := make([][32]byte, len(sortedCreds))
+	for i, c := range sortedCreds {
+		hashes[i] = common.Sha512Half(c.Issuer[:], c.CredentialType)
+	}
 	data := make([][]byte, 0, 1+len(sortedCreds))
 	data = append(data, owner[:])
-	for _, c := range sortedCreds {
-		h := common.Sha512Half(c.Issuer[:], c.CredentialType)
-		hashBytes := make([]byte, 32)
-		copy(hashBytes, h[:])
-		data = append(data, hashBytes)
+	for i := range hashes {
+		data = append(data, hashes[i][:])
 	}
 
 	return Keylet{
@@ -247,7 +251,7 @@ func DepositPreauthByID(key [32]byte) Keylet {
 func Line(account1, account2 [20]byte, currency string) Keylet {
 	// Accounts must be sorted consistently - lower account first
 	var low, high [20]byte
-	if compareAccountIDs(account1, account2) < 0 {
+	if bytes.Compare(account1[:], account2[:]) < 0 {
 		low, high = account1, account2
 	} else {
 		low, high = account2, account1
@@ -262,64 +266,32 @@ func Line(account1, account2 [20]byte, currency string) Keylet {
 	}
 }
 
-// compareAccountIDs compares two account IDs lexicographically.
-// Returns -1 if a < b, 0 if a == b, 1 if a > b.
-func compareAccountIDs(a, b [20]byte) int {
-	for i := 0; i < 20; i++ {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
-	}
-	return 0
-}
-
 // IsLowAccount returns true if account1 is the "low" account in a trust line.
 // Trust lines store accounts in sorted order (low < high lexicographically).
 func IsLowAccount(account1, account2 [20]byte) bool {
-	return compareAccountIDs(account1, account2) < 0
+	return bytes.Compare(account1[:], account2[:]) < 0
 }
 
 // currencyToBytes converts a currency code to its 20-byte representation.
-// Standard 3-character codes are zero-padded (e.g., "USD" -> 0x0000000000000000005553440000000000000000)
-// Hex strings are decoded directly.
+// Standard 3-character codes are zero-padded (e.g., "USD" -> 0x0000000000000000005553440000000000000000).
+// Hex strings are decoded via encoding/hex; malformed hex falls back to a zero
+// currency (the caller is responsible for validating input upstream).
 func currencyToBytes(currency string) [20]byte {
 	var result [20]byte
 
-	if len(currency) == 3 {
+	switch len(currency) {
+	case 3:
 		// Standard currency code - ASCII in bytes 12-14
 		result[12] = currency[0]
 		result[13] = currency[1]
 		result[14] = currency[2]
-	} else if len(currency) == 40 {
-		// Hex-encoded currency (non-standard)
-		for i := 0; i < 20; i++ {
-			result[i] = hexToByte(currency[i*2], currency[i*2+1])
-		}
+	case 40:
+		// Hex-encoded currency (non-standard); ignore error and leave zero
+		// on bad input rather than crashing — same behaviour as before.
+		_, _ = hex.Decode(result[:], []byte(currency))
 	}
 
 	return result
-}
-
-// hexToByte converts two hex characters to a byte.
-func hexToByte(high, low byte) byte {
-	return hexNibble(high)<<4 | hexNibble(low)
-}
-
-// hexNibble converts a single hex character to its value.
-func hexNibble(c byte) byte {
-	switch {
-	case c >= '0' && c <= '9':
-		return c - '0'
-	case c >= 'a' && c <= 'f':
-		return c - 'a' + 10
-	case c >= 'A' && c <= 'F':
-		return c - 'A' + 10
-	default:
-		return 0
-	}
 }
 
 // BookDir returns the keylet for an order book directory (base, without quality).
@@ -410,11 +382,11 @@ func NFTokenPageForToken(base Keylet, tokenID [32]byte) Keylet {
 
 // NFTokenOffer returns the keylet for an NFToken offer.
 func NFTokenOffer(accountID [20]byte, sequence uint32) Keylet {
-	seqBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(seqBytes, sequence)
+	var seqBytes [4]byte
+	binary.BigEndian.PutUint32(seqBytes[:], sequence)
 	return Keylet{
 		Type: entry.TypeNFTokenOffer,
-		Key:  indexHash(spaceNFTokenOff, accountID[:], seqBytes),
+		Key:  indexHash(spaceNFTokenOff, accountID[:], seqBytes[:]),
 	}
 }
 
@@ -436,11 +408,11 @@ func NFTSells(nftokenID [32]byte) Keylet {
 
 // PayChannel returns the keylet for a payment channel.
 func PayChannel(srcAccountID, dstAccountID [20]byte, sequence uint32) Keylet {
-	seqBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(seqBytes, sequence)
+	var seqBytes [4]byte
+	binary.BigEndian.PutUint32(seqBytes[:], sequence)
 	return Keylet{
 		Type: entry.TypePayChannel,
-		Key:  indexHash(spacePayChan, srcAccountID[:], dstAccountID[:], seqBytes),
+		Key:  indexHash(spacePayChan, srcAccountID[:], dstAccountID[:], seqBytes[:]),
 	}
 }
 
@@ -451,8 +423,8 @@ func AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency [20]byte) Ke
 	// Sort the issues (compare issuer first, then currency)
 	var minIssuer, minCurrency, maxIssuer, maxCurrency [20]byte
 
-	cmp := compareAccountIDs(issue1Issuer, issue2Issuer)
-	if cmp < 0 || (cmp == 0 && compareCurrencies(issue1Currency, issue2Currency) < 0) {
+	cmp := bytes.Compare(issue1Issuer[:], issue2Issuer[:])
+	if cmp < 0 || (cmp == 0 && bytes.Compare(issue1Currency[:], issue2Currency[:]) < 0) {
 		minIssuer, minCurrency = issue1Issuer, issue1Currency
 		maxIssuer, maxCurrency = issue2Issuer, issue2Currency
 	} else {
@@ -474,38 +446,25 @@ func AMMByID(ammID [32]byte) Keylet {
 	}
 }
 
-// compareCurrencies compares two currency codes lexicographically.
-func compareCurrencies(a, b [20]byte) int {
-	for i := 0; i < 20; i++ {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
-	}
-	return 0
-}
-
 // Oracle returns the keylet for an Oracle entry.
 // Reference: rippled Indexes.cpp oracle(AccountID const& account, std::uint32_t const& documentID)
 func Oracle(accountID [20]byte, documentID uint32) Keylet {
-	docIDBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(docIDBytes, documentID)
+	var docIDBytes [4]byte
+	binary.BigEndian.PutUint32(docIDBytes[:], documentID)
 	return Keylet{
 		Type: entry.TypeOracle,
-		Key:  indexHash(spaceOracle, accountID[:], docIDBytes),
+		Key:  indexHash(spaceOracle, accountID[:], docIDBytes[:]),
 	}
 }
 
 // Vault returns the keylet for a Vault entry.
 // Reference: rippled Indexes.cpp vault(AccountID const& owner, std::uint32_t seq)
 func Vault(ownerID [20]byte, sequence uint32) Keylet {
-	seqBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(seqBytes, sequence)
+	var seqBytes [4]byte
+	binary.BigEndian.PutUint32(seqBytes[:], sequence)
 	return Keylet{
 		Type: entry.TypeVault,
-		Key:  indexHash(spaceVault, ownerID[:], seqBytes),
+		Key:  indexHash(spaceVault, ownerID[:], seqBytes[:]),
 	}
 }
 
@@ -528,11 +487,11 @@ func DirPage(rootKey [32]byte, page uint64) Keylet {
 			Key:  rootKey,
 		}
 	}
-	pageBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(pageBytes, page)
+	var pageBytes [8]byte
+	binary.BigEndian.PutUint64(pageBytes[:], page)
 	return Keylet{
 		Type: entry.TypeDirectoryNode,
-		Key:  indexHash(spaceDirNode, rootKey[:], pageBytes),
+		Key:  indexHash(spaceDirNode, rootKey[:], pageBytes[:]),
 	}
 }
 
@@ -541,10 +500,7 @@ func DirPage(rootKey [32]byte, page uint64) Keylet {
 // Reference: rippled Indexes.cpp makeMptID
 func MakeMPTID(sequence uint32, account [20]byte) [24]byte {
 	var mptID [24]byte
-	// Sequence in big-endian
-	seqBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(seqBytes, sequence)
-	copy(mptID[:4], seqBytes)
+	binary.BigEndian.PutUint32(mptID[:4], sequence)
 	copy(mptID[4:], account[:])
 	return mptID
 }
@@ -611,11 +567,11 @@ func CredentialByID(credentialID [32]byte) Keylet {
 // PermissionedDomain returns the keylet for a Permissioned Domain entry.
 // Reference: rippled Indexes.cpp permissionedDomain(AccountID const& account, std::uint32_t seq)
 func PermissionedDomain(accountID [20]byte, sequence uint32) Keylet {
-	seqBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(seqBytes, sequence)
+	var seqBytes [4]byte
+	binary.BigEndian.PutUint32(seqBytes[:], sequence)
 	return Keylet{
 		Type: entry.TypePermissionedDomain,
-		Key:  indexHash(spacePermDomain, accountID[:], seqBytes),
+		Key:  indexHash(spacePermDomain, accountID[:], seqBytes[:]),
 	}
 }
 

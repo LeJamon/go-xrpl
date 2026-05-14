@@ -28,6 +28,13 @@ const (
 
 // Ledger manages the acquisition of a single ledger from a peer.
 // It progresses through: WantBase → WantState → Complete.
+//
+// Field lock guarantees:
+//   - hash, seq, peerID, created, logger are set at construction and never
+//     mutated thereafter; the accessors below (Hash, Seq, PeerID) read them
+//     without taking mu and are safe under concurrent State() callers.
+//   - header, stateMap, state, err are written under mu and must be read
+//     through accessors that take mu (State, IsTimedOut, GotBase, etc.).
 type Ledger struct {
 	hash     [32]byte
 	seq      uint32
@@ -67,17 +74,20 @@ func (l *Ledger) State() State {
 	return l.state
 }
 
-// PeerID returns the peer we're fetching from.
+// PeerID returns the peer we're fetching from. Lock-free: peerID is immutable
+// after New().
 func (l *Ledger) PeerID() uint64 {
 	return l.peerID
 }
 
-// Seq returns the ledger sequence being acquired.
+// Seq returns the ledger sequence being acquired. Lock-free: seq is immutable
+// after New().
 func (l *Ledger) Seq() uint32 {
 	return l.seq
 }
 
-// Hash returns the ledger hash being acquired.
+// Hash returns the ledger hash being acquired. Lock-free: hash is immutable
+// after New().
 func (l *Ledger) Hash() [32]byte {
 	return l.hash
 }

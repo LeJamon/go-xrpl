@@ -63,8 +63,7 @@ func makeSyntheticLedgerHeader(t *testing.T, seq uint32, parentHash, accountHash
 		TxHash:              emptyTxMapRoot(t),
 		AccountHash:         accountHash,
 	}
-	bytes, err := header.AddRaw(hdr, false)
-	require.NoError(t, err)
+	bytes := header.AddRaw(hdr, false)
 
 	parsed, err := header.DeserializeHeader(bytes, false)
 	require.NoError(t, err)

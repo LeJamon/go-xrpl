@@ -9,28 +9,6 @@ import (
 	"testing"
 )
 
-func TestSHA512Half(t *testing.T) {
-	// Test vector: SHA512Half of "Flow" should match rippled
-	result := SHA512Half([]byte("Flow"))
-
-	// The ID should be 32 bytes
-	if len(result) != 32 {
-		t.Errorf("Expected 32 bytes, got %d", len(result))
-	}
-
-	// Verify it's not all zeros
-	allZero := true
-	for _, b := range result {
-		if b != 0 {
-			allZero = false
-			break
-		}
-	}
-	if allZero {
-		t.Error("SHA512Half returned all zeros")
-	}
-}
-
 func TestFeatureID(t *testing.T) {
 	// FeatureID should return consistent results
 	id1 := FeatureID("Flow")

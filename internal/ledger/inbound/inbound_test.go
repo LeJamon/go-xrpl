@@ -41,10 +41,7 @@ func TestNeedsMissingNodeIDs_RequestsActualMissingNodes(t *testing.T) {
 		LedgerIndex: 100,
 		AccountHash: rootHash,
 	}
-	hdrBytes, err := header.AddRaw(hdr, false)
-	if err != nil {
-		t.Fatalf("addraw header: %v", err)
-	}
+	hdrBytes := header.AddRaw(hdr, false)
 
 	var ledgerHash [32]byte
 	ledgerHash[0] = 0xAA
@@ -122,10 +119,7 @@ func TestGotStateNodes_DeepNodesUnderStubs(t *testing.T) {
 	}
 
 	hdr := header.LedgerHeader{LedgerIndex: 200, AccountHash: rootHash}
-	hdrBytes, err := header.AddRaw(hdr, false)
-	if err != nil {
-		t.Fatalf("addraw header: %v", err)
-	}
+	hdrBytes := header.AddRaw(hdr, false)
 
 	var ledgerHash [32]byte
 	ledgerHash[0] = 0xBB

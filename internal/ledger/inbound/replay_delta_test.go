@@ -115,8 +115,7 @@ func buildDeltaResponse(
 		TxHash:              txRoot,
 		AccountHash:         parent.Header().AccountHash, // unchanged for the test
 	}
-	headerBytes, err := header.AddRaw(hdr, false)
-	require.NoError(t, err)
+	headerBytes := header.AddRaw(hdr, false)
 	// Compute the canonical hash via the same parse-then-hash path the
 	// inbound verifier will run, so the test's expectation matches what
 	// production code will reach.

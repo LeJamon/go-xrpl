@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/hex"
+	"strconv"
 	"strings"
 )
 
@@ -372,19 +373,9 @@ func (s *SLEDirectoryNode) UpdateIndexes(indexes [][32]byte) {
 	s.SetField("Indexes", strIndexes)
 }
 
-// formatUint64 formats a uint64 as a decimal string (for XRP drops)
+// formatUint64 formats a uint64 as a decimal string (for XRP drops).
 func formatUint64(v uint64) string {
-	if v == 0 {
-		return "0"
-	}
-	result := make([]byte, 20)
-	i := len(result)
-	for v > 0 {
-		i--
-		result[i] = byte(v%10) + '0'
-		v /= 10
-	}
-	return string(result[i:])
+	return strconv.FormatUint(v, 10)
 }
 
 // Note: formatUint64Hex is defined in directory.go

@@ -27,8 +27,7 @@ func buildEmptyClosedSuccessorResponse(t *testing.T, parent *ledger.Ledger) (*me
 	require.NoError(t, open.Close(closeTime, 0))
 	hdr := open.Header()
 
-	hdrBytes, err := header.AddRaw(hdr, false)
-	require.NoError(t, err)
+	hdrBytes := header.AddRaw(hdr, false)
 
 	resp := &message.ReplayDeltaResponse{
 		LedgerHash:   hdr.Hash[:],
@@ -141,8 +140,7 @@ func TestReplayDelta_Apply_StateRootMismatch(t *testing.T) {
 	// map root both match the response). Apply must then catch the
 	// state-map divergence.
 	hdr.AccountHash[0] ^= 0xFF
-	hdrBytes, err := header.AddRaw(hdr, false)
-	require.NoError(t, err)
+	hdrBytes := header.AddRaw(hdr, false)
 	hdr.Hash = computeWireHeaderHash(hdrBytes)
 
 	resp := &message.ReplayDeltaResponse{

@@ -8,6 +8,25 @@ package state
 // enabling banker's rounding (round-half-to-even) for correct precision.
 //
 // When fixUniversalNumber is enabled, IOUAmount arithmetic delegates to this type.
+//
+// PANIC CONTRACT
+//
+// Add / Mul / Div / normalize / root2 / ToIOUAmountValue panic on overflow,
+// divide-by-zero, and NaN inputs — matching rippled's
+// `Throw<std::overflow_error>` and the C++ unreachable invariants in
+// Number.cpp. The convention is that **callers are responsible for
+// validating peer-supplied inputs before calling these methods**:
+//   - Binary parsing in ParseIOUAmountBinary / ParseMPTAmountBinary
+//     validates mantissa/exponent ranges and returns an error rather
+//     than constructing an out-of-range value.
+//   - Path / AMM / payment arithmetic operates only on values that
+//     already passed those parsers or were produced by a previous
+//     arithmetic op that was within range.
+//
+// Code paths that may handle un-validated values (e.g. exploratory
+// path discovery, RPC simulation against caller-supplied amounts) should
+// wrap their arithmetic in RecoverArithmeticPanic so the node converts a
+// would-be crash into a tec-style refusal of the offending request.
 
 import (
 	"math/big"

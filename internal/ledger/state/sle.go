@@ -1,15 +1,116 @@
 package state
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"reflect"
+	"fmt"
 	"strconv"
 	"strings"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 )
+
+// fieldsEqual is a type-switched equality check over the set of types that
+// can appear in the SLE field maps (set in sle_types.go and friends). It
+// replaces reflect.DeepEqual on the metadata-generation hot path, where
+// every Payment/Offer/etc. tx invokes it multiple times per affected SLE.
+//
+// Any pair not handled by the type switch falls through to a slow path
+// that uses byte-for-byte comparison via fmt — that branch should be
+// unreachable in practice but exists so a new field type doesn't silently
+// regress to "always changed".
+func fieldsEqual(a, b any) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	switch av := a.(type) {
+	case string:
+		bv, ok := b.(string)
+		return ok && av == bv
+	case uint32:
+		bv, ok := b.(uint32)
+		return ok && av == bv
+	case uint64:
+		bv, ok := b.(uint64)
+		return ok && av == bv
+	case uint16:
+		bv, ok := b.(uint16)
+		return ok && av == bv
+	case uint8:
+		bv, ok := b.(uint8)
+		return ok && av == bv
+	case int:
+		bv, ok := b.(int)
+		return ok && av == bv
+	case int64:
+		bv, ok := b.(int64)
+		return ok && av == bv
+	case float64:
+		bv, ok := b.(float64)
+		return ok && av == bv
+	case bool:
+		bv, ok := b.(bool)
+		return ok && av == bv
+	case []byte:
+		bv, ok := b.([]byte)
+		return ok && bytes.Equal(av, bv)
+	case [32]byte:
+		bv, ok := b.([32]byte)
+		return ok && av == bv
+	case [20]byte:
+		bv, ok := b.([20]byte)
+		return ok && av == bv
+	case []any:
+		bv, ok := b.([]any)
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for i := range av {
+			if !fieldsEqual(av[i], bv[i]) {
+				return false
+			}
+		}
+		return true
+	case []string:
+		bv, ok := b.([]string)
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for i := range av {
+			if av[i] != bv[i] {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		bv, ok := b.(map[string]any)
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for k, va := range av {
+			vb, exists := bv[k]
+			if !exists || !fieldsEqual(va, vb) {
+				return false
+			}
+		}
+		return true
+	}
+	// Fallback: rare composite types we haven't enumerated. Compare via
+	// a string rendering rather than re-introducing reflect — both
+	// branches happen on cold paths.
+	return fallbackEqual(a, b)
+}
+
+func fallbackEqual(a, b any) bool {
+	// Cheap structural fallback for types not in the SLE field type set:
+	// compare their formatted representation. Slower than the type switch
+	// above but the SLE serializers don't emit anything that lands here
+	// today, so this branch should only fire if a new field type is
+	// introduced without updating fieldsEqual.
+	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
+}
 
 // FieldMeta defines how a field should be included in metadata
 type FieldMeta int
@@ -51,7 +152,22 @@ type FieldInfo struct {
 	Meta FieldMeta
 }
 
-// SLEBase provides common functionality for all SLE types
+// SLEBase provides common functionality for all SLE types.
+//
+// Field storage uses map[string]any so the SLE struct surface can stay
+// uniform across all 40+ entry types without per-type codegen. The
+// trade-off, called out by the 2026-05-14 audit, is two map allocations
+// (original + current) plus a fieldMeta map per loaded SLE; on a
+// payment-heavy ledger that's dozens of `any`-boxing operations per tx.
+//
+// Resolving that is tracked as a separate refactor — either:
+//   - Generate per-entry-type structs with typed change tracking, or
+//   - Replace the maps with a slice-backed store indexed by sField code.
+//
+// Both are large enough to warrant their own PR and a careful interop
+// pass with the binarycodec field names; the type-switched fieldsEqual
+// (see this file) is the first step that removes the reflect.DeepEqual
+// dependency that would otherwise block typed change tracking.
 type SLEBase struct {
 	LedgerIndex     [32]byte
 	LedgerEntryType string
@@ -117,7 +233,7 @@ func (s *SLEBase) HasFieldChanged(name string) bool {
 	if hasOrig != hasCur {
 		return true
 	}
-	return !reflect.DeepEqual(origVal, curVal)
+	return !fieldsEqual(origVal, curVal)
 }
 
 // MarkAsCreated marks this SLE as newly created
@@ -189,7 +305,7 @@ func (s *SLEBase) generateModifiedNode() *AffectedNode {
 		changed := false
 		if hasOrig != hasCur {
 			changed = true
-		} else if hasOrig && hasCur && !reflect.DeepEqual(origVal, curVal) {
+		} else if hasOrig && hasCur && !fieldsEqual(origVal, curVal) {
 			changed = true
 		}
 
@@ -274,7 +390,7 @@ func (s *SLEBase) generateDeletedNode() *AffectedNode {
 	for name, origVal := range s.original {
 		meta := s.GetFieldMeta(name)
 		curVal, hasCur := s.current[name]
-		if hasCur && meta&FieldMetaChangeOrig != 0 && !reflect.DeepEqual(origVal, curVal) {
+		if hasCur && meta&FieldMetaChangeOrig != 0 && !fieldsEqual(origVal, curVal) {
 			previousFields[name] = origVal
 		}
 	}

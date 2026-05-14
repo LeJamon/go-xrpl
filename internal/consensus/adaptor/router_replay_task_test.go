@@ -67,8 +67,7 @@ func closeEmpty(t *testing.T, parent *ledger.Ledger, closeTime time.Time) (*ledg
 	require.NoError(t, err)
 	require.NoError(t, open.Close(closeTime, 0))
 	hdr := open.Header()
-	hdrBytes, err := header.AddRaw(hdr, false)
-	require.NoError(t, err)
+	hdrBytes := header.AddRaw(hdr, false)
 	return open, hdrBytes
 }
 

@@ -188,7 +188,7 @@ func (o *OpenLedger) Accept(
 
 	// 2. Replay prior current's txs (OpenLedger.cpp:96-112).
 	o.currentMu.RLock()
-	curTxs := collectTxs(o.current)
+	curTxs := collectTxs(o.current, o.logger)
 	o.currentMu.RUnlock()
 	if len(curTxs) > 0 {
 		if err := ApplyTxs(next, curTxs, retries, applyCfg); err != nil {
@@ -261,15 +261,20 @@ func (o *OpenLedger) Accept(
 }
 
 // CurrentTxs returns a snapshot of the raw tx blobs in the currently
-// published view. The result is memoised until the next publish; the
-// returned slice MUST NOT be mutated by callers (it is shared across
-// concurrent readers and forwarded directly to consensus, which only
-// reads). Mirrors RCLConsensus.cpp:333-349 reading
+// published view. Callers receive a fresh top-level slice that is safe
+// to retain and re-order; the underlying tx-blob byte slices, however,
+// are shared with the open-ledger view and MUST NOT be mutated.
+//
+// Under the hood we memoise the per-view []byte slice (one walk per
+// publish, not per call) and copy the outer slice header on each call
+// so an accidental append by a caller cannot bleed into another
+// reader. Mirrors RCLConsensus.cpp:333-349 reading
 // openLedger().current()->txs.
 func (o *OpenLedger) CurrentTxs() [][]byte {
 	o.currentMu.RLock()
 	if o.cachedTxs != nil {
-		out := o.cachedTxs
+		out := make([][]byte, len(o.cachedTxs))
+		copy(out, o.cachedTxs)
 		o.currentMu.RUnlock()
 		return out
 	}
@@ -294,24 +299,34 @@ func (o *OpenLedger) CurrentTxs() [][]byte {
 		o.cachedTxs = built
 	}
 	o.currentMu.Unlock()
-	return built
+	out := make([][]byte, len(built))
+	copy(out, built)
+	return out
 }
 
 // collectTxs extracts the raw tx blobs from view's tx map and parses
-// each into a PendingTx. Malformed entries are silently skipped so a
-// single bad record does not poison the whole replay.
-func collectTxs(v *ledger.Ledger) []PendingTx {
+// each into a PendingTx. Malformed entries are skipped so a single bad
+// record does not poison the whole replay, but each is logged at Warn
+// so an operator can see that a peer fed unparseable data.
+func collectTxs(v *ledger.Ledger, logger xrpllog.Logger) []PendingTx {
 	if v == nil {
 		return nil
 	}
+	if logger == nil {
+		logger = xrpllog.Discard()
+	}
 	var out []PendingTx
-	_ = v.ForEachTransaction(func(_ [32]byte, data []byte) bool {
+	_ = v.ForEachTransaction(func(itemKey [32]byte, data []byte) bool {
 		raw, _, err := tx.SplitTxWithMetaBlob(data)
 		if err != nil {
+			logger.Warn("openledger: skipping unsplittable tx item in replay",
+				"item", itemKey, "err", err)
 			return true
 		}
 		ptx, err := ParsePendingTx(raw)
 		if err != nil {
+			logger.Warn("openledger: skipping unparseable tx in replay",
+				"item", itemKey, "err", err)
 			return true
 		}
 		out = append(out, ptx)

@@ -5,6 +5,9 @@
 package amendment
 
 import (
+	"bytes"
+	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -12,6 +15,11 @@ var (
 	registryMu     sync.RWMutex
 	features       = make(map[[32]byte]*Feature)
 	featuresByName = make(map[string]*Feature)
+	// orderedFeatures is features sorted by ID, frozen after init() completes
+	// so iteration order (used by voting and amendment-set hashing) is
+	// deterministic across runs. The registry is init-only and never
+	// changes thereafter, so we can build this once at the end of init.
+	orderedFeatures []*Feature
 )
 
 var (
@@ -226,9 +234,24 @@ func init() {
 	registerRetired("fix1523", &FeatureFix1523)
 	registerRetired("fix1528", &FeatureFix1528)
 	registerRetired("FlowCross", &FeatureFlowCross)
+
+	// Freeze a sorted snapshot of the registry. The registry is init-only,
+	// so this iteration order is stable for the lifetime of the process and
+	// matches across builds.
+	orderedFeatures = make([]*Feature, 0, len(features))
+	for _, f := range features {
+		orderedFeatures = append(orderedFeatures, f)
+	}
+	sort.Slice(orderedFeatures, func(i, j int) bool {
+		return bytes.Compare(orderedFeatures[i].ID[:], orderedFeatures[j].ID[:]) < 0
+	})
 }
 
 // registerFeature registers a feature with the given parameters.
+//
+// Called only from init(). Panics on duplicate registration so that a
+// copy-paste mistake in features.macro is caught at process start rather
+// than silently overwriting an existing entry.
 func registerFeature(name string, supported Supported, vote VoteBehavior, idPtr *[32]byte) {
 	id := FeatureID(name)
 	*idPtr = id
@@ -242,9 +265,12 @@ func registerFeature(name string, supported Supported, vote VoteBehavior, idPtr 
 	}
 
 	registryMu.Lock()
+	defer registryMu.Unlock()
+	if existing, dup := features[id]; dup {
+		panic(fmt.Sprintf("amendment: duplicate feature registration: %q collides with %q (id %x)", name, existing.Name, id))
+	}
 	features[id] = f
 	featuresByName[name] = f
-	registryMu.Unlock()
 }
 
 // registerFix registers a fix (amendment that fixes a bug) with the given parameters.
@@ -254,7 +280,8 @@ func registerFix(name string, supported Supported, vote VoteBehavior, idPtr *[32
 	registerFeature(name, supported, vote, idPtr)
 }
 
-// registerRetired registers a retired feature.
+// registerRetired registers a retired feature. Same duplicate-guard as
+// registerFeature.
 func registerRetired(name string, idPtr *[32]byte) {
 	id := FeatureID(name)
 	*idPtr = id
@@ -268,9 +295,12 @@ func registerRetired(name string, idPtr *[32]byte) {
 	}
 
 	registryMu.Lock()
+	defer registryMu.Unlock()
+	if existing, dup := features[id]; dup {
+		panic(fmt.Sprintf("amendment: duplicate feature registration: %q collides with %q (id %x)", name, existing.Name, id))
+	}
 	features[id] = f
 	featuresByName[name] = f
-	registryMu.Unlock()
 }
 
 // GetFeature returns the feature with the given ID, or nil if not found.
@@ -287,25 +317,19 @@ func GetFeatureByName(name string) *Feature {
 	return featuresByName[name]
 }
 
-// AllFeatures returns a slice of all registered features.
+// AllFeatures returns a slice of all registered features in deterministic
+// (ID-sorted) order. Returns a fresh slice; safe for callers to mutate.
 func AllFeatures() []*Feature {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
-	result := make([]*Feature, 0, len(features))
-	for _, f := range features {
-		result = append(result, f)
-	}
-	return result
+	out := make([]*Feature, len(orderedFeatures))
+	copy(out, orderedFeatures)
+	return out
 }
 
-// SupportedFeatures returns a slice of all supported features.
+// SupportedFeatures returns a slice of all supported features in deterministic
+// (ID-sorted) order.
 func SupportedFeatures() []*Feature {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
-	result := make([]*Feature, 0)
-	for _, f := range features {
+	result := make([]*Feature, 0, len(orderedFeatures))
+	for _, f := range orderedFeatures {
 		if f.Supported == SupportedYes {
 			result = append(result, f)
 		}
@@ -313,13 +337,11 @@ func SupportedFeatures() []*Feature {
 	return result
 }
 
-// DefaultYesFeatures returns a slice of all features that should be voted yes by default.
+// DefaultYesFeatures returns a slice of all features that should be voted yes
+// by default, in deterministic (ID-sorted) order.
 func DefaultYesFeatures() []*Feature {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
-	result := make([]*Feature, 0)
-	for _, f := range features {
+	result := make([]*Feature, 0, len(orderedFeatures))
+	for _, f := range orderedFeatures {
 		if f.Vote == VoteDefaultYes && !f.Retired {
 			result = append(result, f)
 		}
