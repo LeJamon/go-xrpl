@@ -953,14 +953,57 @@ type lastCloseInfo struct {
 	RoundTime time.Duration
 }
 
-// GetLastCloseInfo returns the proposer count and convergence time
-// from the last consensus round. Lock-free read of the atomic mirror
-// — see lastCloseAtomic on Engine for the rationale.
+// GetLastCloseInfo returns the proposer count and convergence time for
+// server_info.last_close. Mirrors rippled's NetworkOPs.cpp:2819 — once
+// any consensus round has been accepted, we return the strict
+// prevProposers_ snapshot from that round (matching rippled exactly).
+//
+// Bootstrap fallback: a tracker that has never reached acceptLedger
+// (e.g. cold start, never promoted to OpModeFull) would otherwise be
+// stuck reporting 0 even when trusted peers are actively proposing.
+// In that case only, fall back to a freshness-bounded count of recent
+// trusted proposers. Issue #421.
 func (e *Engine) GetLastCloseInfo() (proposers int, convergeTime time.Duration) {
 	if info := e.lastCloseAtomic.Load(); info != nil {
-		return info.Proposers, info.RoundTime
+		proposers = info.Proposers
+		convergeTime = info.RoundTime
 	}
-	return 0, 0
+	if proposers > 0 {
+		return proposers, convergeTime
+	}
+	return e.recentTrustedProposerCount(), convergeTime
+}
+
+// recentTrustedProposerCount counts distinct trusted nodes whose most
+// recent buffered proposal is inside the freshness window. Sourced from
+// recentProposals (Consensus.h:626 recentPeerPositions_) so the count
+// survives wrongLedger-driven round restarts that empty e.proposals.
+// Acquires e.mu.RLock(); cost bounded by the per-node cap of 10.
+func (e *Engine) recentTrustedProposerCount() int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if len(e.recentProposals) == 0 {
+		return 0
+	}
+	freshness := e.timing.ProposeFreshness
+	now := e.adaptor.Now()
+	count := 0
+	for nodeID, positions := range e.recentProposals {
+		if !e.adaptor.IsTrusted(nodeID) {
+			continue
+		}
+		// OnProposal appends under e.mu so slice order is arrival
+		// order; iterate newest-first to short-circuit on the first
+		// fresh entry.
+		for i := len(positions) - 1; i >= 0; i-- {
+			if now.Sub(positions[i].Timestamp) > freshness {
+				continue
+			}
+			count++
+			break
+		}
+	}
+	return count
 }
 
 // storeLastCloseLocked publishes the round-completion stats to the
@@ -1203,18 +1246,14 @@ func (e *Engine) getNetworkLedger() consensus.LedgerID {
 		if !e.adaptor.IsTrusted(nodeID) {
 			continue
 		}
-		// Find the most recent fresh proposal from this node
-		var best *consensus.Proposal
-		for _, p := range positions {
-			if now.Sub(p.Timestamp) > freshness {
-				continue // stale
+		// Slice order is arrival order (OnProposal appends under e.mu);
+		// iterate newest-first and take the first fresh entry.
+		for i := len(positions) - 1; i >= 0; i-- {
+			if now.Sub(positions[i].Timestamp) > freshness {
+				continue
 			}
-			if best == nil || p.Timestamp.After(best.Timestamp) {
-				best = p
-			}
-		}
-		if best != nil {
-			votes[nodeID] = vote{prevLedger: best.PreviousLedger}
+			votes[nodeID] = vote{prevLedger: positions[i].PreviousLedger}
+			break
 		}
 	}
 
