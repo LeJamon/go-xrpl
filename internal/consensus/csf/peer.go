@@ -375,9 +375,17 @@ type Peer struct {
 
 	// Transaction injections for byzantine failure testing
 	txInjections map[uint32]Tx
+
+	// registry is the per-Sim peer index used by findPeer for inbound
+	// message delivery. Nil if the peer was constructed outside of
+	// Sim.CreateGroup (a few unit tests do this); callers tolerate a
+	// nil-registry lookup by treating the target as unknown.
+	registry *PeerRegistry
 }
 
-// NewPeer creates a new simulated peer.
+// NewPeer creates a new simulated peer. registry may be nil for tests
+// that construct peers outside Sim.CreateGroup — inter-peer message
+// delivery (findPeer) is then a no-op.
 func NewPeer(
 	id PeerID,
 	scheduler *Scheduler,
@@ -385,6 +393,7 @@ func NewPeer(
 	net *BasicNetwork,
 	trustGraph *TrustGraph,
 	collectors *Collectors,
+	registry *PeerRegistry,
 ) *Peer {
 	genesis := MakeGenesis()
 
@@ -414,6 +423,7 @@ func NewPeer(
 		mode:                 consensus.ModeObserving,
 		receivedProposals:    make(map[PeerID]*Proposal),
 		txInjections:         make(map[uint32]Tx),
+		registry:             registry,
 	}
 
 	// All peers start from genesis
@@ -888,35 +898,55 @@ func (p *Peer) broadcastProposal(prop *Proposal) {
 	}
 }
 
-// findPeer finds a peer by ID (simplified - in real impl would use registry)
-var peerRegistry = make(map[PeerID]*Peer)
-var peerRegistryMu sync.Mutex
+// PeerRegistry is a per-Sim id→peer index used for message delivery. It
+// replaces the prior package-global registry which forced every test run
+// to share state and made `go test -parallel` race on the map.
+type PeerRegistry struct {
+	mu sync.Mutex
+	m  map[PeerID]*Peer
+}
 
+// NewPeerRegistry returns an empty registry.
+func NewPeerRegistry() *PeerRegistry {
+	return &PeerRegistry{m: make(map[PeerID]*Peer)}
+}
+
+// Register adds peer to the registry.
+func (r *PeerRegistry) Register(peer *Peer) {
+	r.mu.Lock()
+	r.m[peer.ID] = peer
+	r.mu.Unlock()
+}
+
+// Unregister removes a peer by ID.
+func (r *PeerRegistry) Unregister(id PeerID) {
+	r.mu.Lock()
+	delete(r.m, id)
+	r.mu.Unlock()
+}
+
+// Get returns the peer with the given ID, or nil.
+func (r *PeerRegistry) Get(id PeerID) *Peer {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.m[id]
+}
+
+// Len returns the number of registered peers.
+func (r *PeerRegistry) Len() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.m)
+}
+
+// findPeer looks up a peer by ID via the per-Sim registry attached to
+// this peer. Returns nil if the peer is unknown or the registry is
+// unset (e.g. a Peer constructed outside Sim.CreateGroup in a test).
 func (p *Peer) findPeer(id PeerID) *Peer {
-	peerRegistryMu.Lock()
-	defer peerRegistryMu.Unlock()
-	return peerRegistry[id]
-}
-
-// RegisterPeer registers a peer in the global registry for message delivery.
-func RegisterPeer(peer *Peer) {
-	peerRegistryMu.Lock()
-	defer peerRegistryMu.Unlock()
-	peerRegistry[peer.ID] = peer
-}
-
-// UnregisterPeer removes a peer from the global registry.
-func UnregisterPeer(peer *Peer) {
-	peerRegistryMu.Lock()
-	defer peerRegistryMu.Unlock()
-	delete(peerRegistry, peer.ID)
-}
-
-// ClearPeerRegistry clears all peers from the registry.
-func ClearPeerRegistry() {
-	peerRegistryMu.Lock()
-	defer peerRegistryMu.Unlock()
-	peerRegistry = make(map[PeerID]*Peer)
+	if p.registry == nil {
+		return nil
+	}
+	return p.registry.Get(id)
 }
 
 // handleProposalFromPeer handles a proposal received from network.

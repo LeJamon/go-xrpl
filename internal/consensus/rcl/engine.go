@@ -189,6 +189,13 @@ type Engine struct {
 	// held; drained by takePendingBroadcastsLocked after Unlock.
 	pendingBroadcasts []func()
 
+	// missedHeartbeats counts the number of heartbeat ticks the run
+	// loop observed as dropped (gap between consecutive ticks > 2× the
+	// configured interval). time.Ticker silently coalesces ticks when
+	// the consumer can't keep up; this counter surfaces that pressure
+	// so stalls don't hide. Read via MissedHeartbeats().
+	missedHeartbeats atomic.Uint64
+
 	// deferBroadcasts is incremented on entry to timerEntry / StartRound
 	// (the entry points that drive proposal/validation emission under
 	// e.mu) and decremented on exit. When zero, the enqueue helpers fall
@@ -1107,6 +1114,14 @@ func (e *Engine) Events() <-chan consensus.Event {
 
 // run is the main consensus loop driven by a single global heartbeat,
 // matching rippled's processHeartbeatTimer → timerEntry pattern.
+//
+// time.Ticker silently coalesces ticks when the consumer can't keep up
+// — under a stalled timerEntry (e.g. the bootstrap-deadlock class) the
+// channel buffer drops ticks without surfacing the back-pressure. We
+// observe missed ticks by comparing elapsed wall time between
+// invocations against the configured interval and logging when the gap
+// exceeds 2× expected. This is a strictly observational signal — the
+// next tick still runs unconditionally so a transient stall recovers.
 func (e *Engine) run() {
 	defer e.wg.Done()
 
@@ -1117,14 +1132,38 @@ func (e *Engine) run() {
 	e.heartbeat = time.NewTicker(interval)
 	defer e.heartbeat.Stop()
 
+	last := time.Now()
 	for {
 		select {
 		case <-e.ctx.Done():
 			return
 		case <-e.heartbeat.C:
+			now := time.Now()
+			if gap := now.Sub(last); gap > 2*interval {
+				missed := int64(gap/interval) - 1
+				if missed > 0 {
+					e.missedHeartbeats.Add(uint64(missed))
+					slog.Warn("heartbeat ticks missed",
+						"t", "consensus",
+						"event", "tick-missed",
+						"missed", missed,
+						"gap_ms", gap.Milliseconds(),
+						"interval_ms", interval.Milliseconds(),
+						"total_missed", e.missedHeartbeats.Load(),
+					)
+				}
+			}
+			last = now
 			e.timerEntry()
 		}
 	}
+}
+
+// MissedHeartbeats returns the total number of heartbeat ticks the
+// consensus loop has detected as dropped since process start. Exposed
+// for tests and operator tooling that need to assert progress.
+func (e *Engine) MissedHeartbeats() uint64 {
+	return e.missedHeartbeats.Load()
 }
 
 // timerEntry is the single heartbeat dispatch, matching rippled's

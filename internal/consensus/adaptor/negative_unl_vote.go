@@ -32,11 +32,11 @@ import (
 // a NegativeUNL-enabled network sees neither errors nor warnings when
 // the round simply has nothing to do.
 func (a *Adaptor) GenerateNegativeUNLPseudoTx(prev consensus.Ledger) [][]byte {
-	a.mu.RLock()
+	a.mu.Lock()
 	voter := a.negUNLVoter
 	historian := a.validationHistorian
 	masterKeys := a.trustedMasterKeys
-	a.mu.RUnlock()
+	a.mu.Unlock()
 
 	if voter == nil || historian == nil || len(masterKeys) == 0 {
 		return nil

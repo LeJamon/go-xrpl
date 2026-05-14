@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -266,16 +267,25 @@ func (r *Router) maintenanceTick() {
 		}
 		newPeer := candidates[0]
 		rd.NoteSubTaskRetry(newPeer)
-		if err := r.adaptor.RequestReplayDelta(newPeer, rd.Hash()); err != nil {
-			r.logger.Debug("replay-delta retry request failed",
-				"seq", rd.Seq(),
-				"hash", fmt.Sprintf("%x", rd.Hash()),
-				"peer", newPeer,
-				"err", err,
-			)
-			// Next tick will try yet another peer. Continue rather
-			// than return so we process other in-flight retries.
-		}
+		// Dispatch the actual network send in a goroutine so a slow or
+		// back-pressured overlay write doesn't block r.inbox ingest.
+		// Replayer-state mutation (NoteSubTaskRetry above) already
+		// happened on the loop goroutine, preserving the single-writer
+		// invariant against handleMessage; on send failure the next
+		// tick will rotate to another peer (the per-hash timeout
+		// continues to run).
+		seq := rd.Seq()
+		hash := rd.Hash()
+		go func() {
+			if err := r.adaptor.RequestReplayDelta(newPeer, hash); err != nil {
+				r.logger.Debug("replay-delta retry request failed",
+					"seq", seq,
+					"hash", fmt.Sprintf("%x", hash),
+					"peer", newPeer,
+					"err", err,
+				)
+			}
+		}()
 	}
 
 	// Reap acquisitions that exceeded the OUTER budget. At this point
@@ -1635,12 +1645,23 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 		return
 	}
 
+	// Walk peers in ID order rather than Go map iteration order. The
+	// chosen peer doesn't affect ledger state (any peer that has the
+	// hash can serve it), but a deterministic pick makes the log
+	// emitted below reproducible across runs — useful when bisecting
+	// soak-test divergence.
 	r.peersMu.RLock()
+	peerIDs := make([]peermanagement.PeerID, 0, len(r.peerStates))
+	for pid := range r.peerStates {
+		peerIDs = append(peerIDs, pid)
+	}
+	sort.Slice(peerIDs, func(i, j int) bool { return peerIDs[i] < peerIDs[j] })
 	var (
 		preferredPeerID uint64
 		fallbackPeerID  uint64
 	)
-	for pid, st := range r.peerStates {
+	for _, pid := range peerIDs {
+		st := r.peerStates[pid]
 		if fallbackPeerID == 0 {
 			fallbackPeerID = uint64(pid)
 		}
