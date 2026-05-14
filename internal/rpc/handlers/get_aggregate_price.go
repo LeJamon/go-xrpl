@@ -165,7 +165,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		}
 
 		oracleKeylet := keylet.Oracle(accountID, documentID)
-		oracleEntry, lookupErr := ctx.Services.Ledger.GetLedgerEntry(oracleKeylet.Key, ledgerIndex)
+		oracleEntry, lookupErr := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, oracleKeylet.Key, ledgerIndex)
 		if lookupErr != nil {
 			continue
 		}

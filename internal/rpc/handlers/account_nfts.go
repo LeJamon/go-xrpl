@@ -38,6 +38,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 	limit := ClampLimit(request.Limit, LimitAccountNFTokens, ctx.IsAdmin)
 	result, err := ctx.Services.Ledger.GetAccountNFTs(
+		ctx.Context,
 		request.Account,
 		ledgerIndex,
 		limit,

@@ -165,7 +165,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		}
 	}
 
-	result, err := ctx.Services.Ledger.GetAccountObjects(request.Account, ledgerIndex, effectiveType, limit)
+	result, err := ctx.Services.Ledger.GetAccountObjects(ctx.Context, request.Account, ledgerIndex, effectiveType, limit)
 	if err != nil {
 		if errors.Is(err, types.ErrAccountNotFound) {
 			return nil, &types.RpcError{

@@ -39,7 +39,7 @@ func newMockLedgerEntryService() *mockLedgerEntryService {
 	}
 }
 
-func (m *mockLedgerEntryService) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
+func (m *mockLedgerEntryService) GetLedgerEntry(_ context.Context, entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
 	if m.ledgerEntryErr != nil {
 		return nil, m.ledgerEntryErr
 	}

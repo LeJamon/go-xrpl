@@ -66,6 +66,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	limit := ClampLimit(request.Limit, LimitNoRippleCheck, ctx.IsAdmin)
 
 	result, err := ctx.Services.Ledger.GetNoRippleCheck(
+		ctx.Context,
 		request.Account,
 		request.Role,
 		ledgerIndex,

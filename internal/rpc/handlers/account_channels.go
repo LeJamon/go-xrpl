@@ -47,6 +47,7 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	// Get account channels from the ledger service
 	limit := ClampLimit(request.Limit, LimitAccountChannels, ctx.IsAdmin)
 	result, err := ctx.Services.Ledger.GetAccountChannels(
+		ctx.Context,
 		request.Account,
 		request.DestinationAccount,
 		ledgerIndex,

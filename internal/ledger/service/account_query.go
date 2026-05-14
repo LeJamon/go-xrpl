@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -40,7 +41,10 @@ type AccountInfoResult struct {
 }
 
 // GetAccountInfo retrieves account information from the ledger
-func (s *Service) GetAccountInfo(account string, ledgerIndex string) (*AccountInfoResult, error) {
+func (s *Service) GetAccountInfo(ctx context.Context, account string, ledgerIndex string) (*AccountInfoResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -158,7 +162,10 @@ type AccountLinesResult struct {
 }
 
 // GetAccountLines retrieves trust lines for an account
-func (s *Service) GetAccountLines(account string, ledgerIndex string, peer string, limit uint32) (*AccountLinesResult, error) {
+func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerIndex string, peer string, limit uint32) (*AccountLinesResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -197,6 +204,9 @@ func (s *Service) GetAccountLines(account string, ledgerIndex string, peer strin
 	var lines []TrustLine
 
 	targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		// Check if we've reached the limit
 		if uint32(len(lines)) >= limit {
 			return false
@@ -318,7 +328,10 @@ type AccountOffersResult struct {
 }
 
 // GetAccountOffers retrieves offers for an account
-func (s *Service) GetAccountOffers(account string, ledgerIndex string, limit uint32) (*AccountOffersResult, error) {
+func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIndex string, limit uint32) (*AccountOffersResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -345,6 +358,9 @@ func (s *Service) GetAccountOffers(account string, ledgerIndex string, limit uin
 	var offers []AccountOffer
 
 	targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		// Check if we've reached the limit
 		if uint32(len(offers)) >= limit {
 			return false
@@ -442,7 +458,10 @@ type AccountObjectItem struct {
 }
 
 // GetAccountObjects retrieves all objects owned by an account
-func (s *Service) GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*AccountObjectsResult, error) {
+func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32) (*AccountObjectsResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -488,6 +507,9 @@ func (s *Service) GetAccountObjects(account string, ledgerIndex string, objType 
 	// Iterate through ledger and find objects for this account
 	count := uint32(0)
 	targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		if count >= limit {
 			return false
 		}
@@ -550,7 +572,10 @@ type AccountChannelsResult struct {
 }
 
 // GetAccountChannels retrieves payment channels for an account
-func (s *Service) GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*AccountChannelsResult, error) {
+func (s *Service) GetAccountChannels(ctx context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32) (*AccountChannelsResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -599,6 +624,9 @@ func (s *Service) GetAccountChannels(account string, destinationAccount string, 
 	var channels []AccountChannel
 
 	targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		// Check if we've reached the limit
 		if uint32(len(channels)) >= limit {
 			return false
@@ -698,7 +726,10 @@ type AccountCurrenciesResult struct {
 }
 
 // GetAccountCurrencies retrieves currencies an account can send and receive
-func (s *Service) GetAccountCurrencies(account string, ledgerIndex string) (*AccountCurrenciesResult, error) {
+func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledgerIndex string) (*AccountCurrenciesResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -731,6 +762,9 @@ func (s *Service) GetAccountCurrencies(account string, ledgerIndex string) (*Acc
 	sendCurrencies := make(map[string]bool)
 
 	targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		// Check if this is a RippleState entry (trust line)
 		if len(data) < 3 {
 			return true
@@ -881,7 +915,10 @@ type AccountNFTsResult struct {
 }
 
 // GetAccountNFTs retrieves NFTs owned by an account
-func (s *Service) GetAccountNFTs(account string, ledgerIndex string, limit uint32) (*AccountNFTsResult, error) {
+func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32) (*AccountNFTsResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -918,6 +955,9 @@ func (s *Service) GetAccountNFTs(account string, ledgerIndex string, limit uint3
 	var nfts []NFTInfo
 
 	targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		// Check if we've reached the limit
 		if uint32(len(nfts)) >= limit {
 			return false
@@ -993,7 +1033,10 @@ type GatewayBalancesResult struct {
 }
 
 // GetGatewayBalances retrieves obligations and balances for a gateway account
-func (s *Service) GetGatewayBalances(account string, hotWallets []string, ledgerIndex string) (*GatewayBalancesResult, error) {
+func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWallets []string, ledgerIndex string) (*GatewayBalancesResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -1041,6 +1084,9 @@ func (s *Service) GetGatewayBalances(account string, hotWallets []string, ledger
 
 	// Iterate through all trust lines
 	targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		// Check if this is a RippleState entry
 		if len(data) < 3 {
 			return true
@@ -1210,7 +1256,10 @@ const (
 )
 
 // GetNoRippleCheck checks trust lines for proper NoRipple flag settings
-func (s *Service) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*NoRippleCheckResult, error) {
+func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role string, ledgerIndex string, limit uint32, transactions bool) (*NoRippleCheckResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -1291,6 +1340,9 @@ func (s *Service) GetNoRippleCheck(account string, role string, ledgerIndex stri
 	// Iterate through trust lines and check NoRipple settings
 	problemCount := uint32(0)
 	targetLedger.ForEach(func(key [32]byte, entryData []byte) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		// Check if we've reached the limit
 		if problemCount >= limit {
 			return false
@@ -1450,7 +1502,10 @@ type DepositAuthorizedResult struct {
 // acceptance, expiry, ownership, duplicates) before checking credential-based
 // deposit preauthorization.
 // Reference: rippled DepositAuthorized.cpp doDepositAuthorized()
-func (s *Service) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*DepositAuthorizedResult, error) {
+func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*DepositAuthorizedResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

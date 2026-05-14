@@ -73,7 +73,7 @@ func (m *NftSellOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 	}
 
-	result, err := ctx.Services.Ledger.GetNFTSellOffers(nftID, ledgerIndex, limit, marker)
+	result, err := ctx.Services.Ledger.GetNFTSellOffers(ctx.Context, nftID, ledgerIndex, limit, marker)
 	if err != nil {
 		if err.Error() == "ledger not found" {
 			return nil, types.RpcErrorLgrNotFound("Ledger not found.")

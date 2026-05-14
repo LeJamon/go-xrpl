@@ -73,7 +73,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	} else if hasSigningCreds {
 		// Sign-and-submit path: sign the transaction first, then submit the blob.
 		// This matches rippled's behavior in doSubmit() when tx_blob is absent.
-		signed, rpcErr := signTransactionJSON(ctx.Services, request.TxJson, signCredentials{
+		signed, rpcErr := signTransactionJSON(ctx.Context, ctx.Services, request.TxJson, signCredentials{
 			Secret:     request.Secret,
 			Seed:       request.Seed,
 			SeedHex:    request.SeedHex,
@@ -182,7 +182,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 
 	// Add account_sequence_next and account_sequence_available
 	if account, ok := txJsonMap["Account"].(string); ok {
-		if acctInfo, err := ctx.Services.Ledger.GetAccountInfo(account, "current"); err == nil {
+		if acctInfo, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, account, "current"); err == nil {
 			response["account_sequence_next"] = acctInfo.Sequence
 			response["account_sequence_available"] = acctInfo.Sequence
 		}

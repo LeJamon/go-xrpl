@@ -20,11 +20,11 @@ type accountObjectsMock struct {
 	getAccountObjectsFn func(account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error)
 }
 
-func (m *accountObjectsMock) GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
+func (m *accountObjectsMock) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
 	if m.getAccountObjectsFn != nil {
 		return m.getAccountObjectsFn(account, ledgerIndex, objType, limit)
 	}
-	return m.mockLedgerService.GetAccountObjects(account, ledgerIndex, objType, limit)
+	return m.mockLedgerService.GetAccountObjects(ctx, account, ledgerIndex, objType, limit)
 }
 
 // newAccountObjectsMock creates a ready-to-use accountObjectsMock with sensible

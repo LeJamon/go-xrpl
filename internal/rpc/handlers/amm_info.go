@@ -62,7 +62,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		copy(accountIDArray[:], accountID)
 		accountKey := keylet.Account(accountIDArray)
 
-		accountEntry, lookupErr := ctx.Services.Ledger.GetLedgerEntry(accountKey.Key, ledgerIndex)
+		accountEntry, lookupErr := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, accountKey.Key, ledgerIndex)
 		if lookupErr != nil {
 			return nil, &types.RpcError{
 				Code:    19,
@@ -105,7 +105,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		ammKey = ammKeylet.Key
 	}
 
-	ammEntry, err := ctx.Services.Ledger.GetLedgerEntry(ammKey, ledgerIndex)
+	ammEntry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, ammKey, ledgerIndex)
 	if err != nil {
 		return nil, types.RpcErrorActNotFound("AMM not found")
 	}

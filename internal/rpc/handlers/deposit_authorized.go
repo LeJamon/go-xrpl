@@ -72,6 +72,7 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	//   4. Credential ownership — sleCred[sfSubject] == srcAcct → rpcBAD_CREDENTIALS "credentials doesn't belong to the root account"
 	//   5. Credential duplicates by (issuer, credentialType) — rpcBAD_CREDENTIALS "duplicates in credentials"
 	result, err := ctx.Services.Ledger.GetDepositAuthorized(
+		ctx.Context,
 		request.SourceAccount,
 		request.DestinationAccount,
 		ledgerIndex,

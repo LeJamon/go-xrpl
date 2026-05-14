@@ -20,11 +20,11 @@ type ledgerDataMock struct {
 	getLedgerDataFn func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error)
 }
 
-func (m *ledgerDataMock) GetLedgerData(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
+func (m *ledgerDataMock) GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 	if m.getLedgerDataFn != nil {
 		return m.getLedgerDataFn(ledgerIndex, limit, marker)
 	}
-	return m.mockLedgerService.GetLedgerData(ledgerIndex, limit, marker)
+	return m.mockLedgerService.GetLedgerData(ctx, ledgerIndex, limit, marker)
 }
 
 // newDefaultLedgerDataResult creates a default LedgerDataResult for testing

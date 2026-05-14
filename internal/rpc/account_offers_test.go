@@ -24,7 +24,7 @@ func newAccountOffersMock() *accountOffersMock {
 	}
 }
 
-func (m *accountOffersMock) GetAccountOffers(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
+func (m *accountOffersMock) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
 	if m.getAccountOffersFn != nil {
 		return m.getAccountOffersFn(account, ledgerIndex, limit)
 	}

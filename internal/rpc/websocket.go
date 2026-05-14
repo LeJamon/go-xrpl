@@ -743,30 +743,21 @@ func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 	wsLog().Debug("WebSocket connection closed", "connID", wsConn.ID)
 }
 
-// BroadcastToSubscribers sends a message to all connections subscribed to a specific stream
+// BroadcastToSubscribers sends a message to all connections subscribed to
+// a specific stream. The iteration is delegated to the subscription
+// Manager so the per-connection subscription map is read under the same
+// mutex that HandleSubscribe / HandleUnsubscribe write under. Previously
+// this method iterated ws.connections and read conn.subscriptions while
+// the manager mutated the same map under a different lock — a data race
+// flagged by the #428 audit and reachable under any concurrent
+// subscribe + broadcast.
 func (ws *WebSocketServer) BroadcastToSubscribers(msgType types.SubscriptionType, message interface{}) {
 	data, err := json.Marshal(message)
 	if err != nil {
 		wsLog().Error("Failed to marshal broadcast message", "err", err)
 		return
 	}
-
-	ws.connectionsMutex.RLock()
-	defer ws.connectionsMutex.RUnlock()
-
-	for _, conn := range ws.connections {
-		conn.mutex.RLock()
-		if _, subscribed := conn.subscriptions[msgType]; subscribed {
-			select {
-			case conn.sendChannel <- data:
-				// Message sent
-			default:
-				// Channel full, skip this connection
-				wsLog().Debug("Skipping slow WebSocket connection", "connID", conn.ID)
-			}
-		}
-		conn.mutex.RUnlock()
-	}
+	ws.subscriptionManager.BroadcastToStream(msgType, data, nil)
 }
 
 // Helper functions

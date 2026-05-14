@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"strconv"
@@ -32,19 +33,22 @@ type NFTOffersResult struct {
 
 // GetNFTBuyOffers retrieves buy offers for an NFToken
 // Reference: rippled NFTOffers.cpp enumerateNFTOffers with nft_buys keylet
-func (s *Service) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error) {
-	return s.getNFTOffers(nftID, ledgerIndex, limit, marker, false)
+func (s *Service) GetNFTBuyOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error) {
+	return s.getNFTOffers(ctx, nftID, ledgerIndex, limit, marker, false)
 }
 
 // GetNFTSellOffers retrieves sell offers for an NFToken
 // Reference: rippled NFTOffers.cpp enumerateNFTOffers with nft_sells keylet
-func (s *Service) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error) {
-	return s.getNFTOffers(nftID, ledgerIndex, limit, marker, true)
+func (s *Service) GetNFTSellOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error) {
+	return s.getNFTOffers(ctx, nftID, ledgerIndex, limit, marker, true)
 }
 
 // getNFTOffers is the common implementation for both buy and sell offers
 // Reference: rippled NFTOffers.cpp enumerateNFTOffers
-func (s *Service) getNFTOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string, isSellOffers bool) (*NFTOffersResult, error) {
+func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string, isSellOffers bool) (*NFTOffersResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -151,6 +155,9 @@ func (s *Service) getNFTOffers(nftID [32]byte, ledgerIndex string, limit uint32,
 	// Collect offers from the directory
 	offersCollected := make([]NFTOfferInfo, 0, reserve)
 	for i := startIdx; i < len(offerIndexes) && uint32(len(offersCollected)) < reserve; i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		offerKey := offerIndexes[i]
 		offerKeylet := keylet.Keylet{Key: offerKey}
 

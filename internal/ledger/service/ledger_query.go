@@ -66,7 +66,10 @@ type LedgerEntryResult struct {
 }
 
 // GetLedgerEntry retrieves a specific ledger entry by its index/key
-func (s *Service) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*LedgerEntryResult, error) {
+func (s *Service) GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerIndex string) (*LedgerEntryResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -148,7 +151,10 @@ func formatCloseTimeISO(t time.Time) string {
 }
 
 // GetLedgerData retrieves all ledger state entries with optional pagination
-func (s *Service) GetLedgerData(ledgerIndex string, limit uint32, marker string) (*LedgerDataResult, error) {
+func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*LedgerDataResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -206,6 +212,9 @@ func (s *Service) GetLedgerData(ledgerIndex string, limit uint32, marker string)
 	passedMarker := !hasMarker
 
 	err = targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		// Skip until we pass the marker
 		if !passedMarker {
 			if key == startKey {
@@ -229,6 +238,9 @@ func (s *Service) GetLedgerData(ledgerIndex string, limit uint32, marker string)
 	})
 
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 

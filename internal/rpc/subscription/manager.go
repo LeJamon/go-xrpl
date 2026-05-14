@@ -266,93 +266,126 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 	return nil
 }
 
-// BroadcastToStream sends a message to all connections subscribed to a stream
+// broadcastTarget captures the bits of a connection needed for a
+// non-blocking broadcast send. Snapshotting these under sm.mu and
+// iterating after the lock release means HandleSubscribe /
+// HandleUnsubscribe / RemoveConnection don't block behind a slow
+// consumer — and we never read conn.Subscriptions outside sm.mu, which
+// was the data race flagged by the #428 audit.
+type broadcastTarget struct {
+	id       string
+	sendChan chan []byte
+	cfg      types.SubscriptionConfig
+}
+
+// BroadcastToStream sends a message to every connection subscribed to a
+// stream. Connection state is read under sm.mu.RLock, then released
+// before the per-conn channel sends so a full send buffer can't stall
+// subscribe / unsubscribe or other broadcasts.
 func (sm *Manager) BroadcastToStream(streamType types.SubscriptionType, data []byte, _ interface{}) {
+	targets := sm.collectStreamTargets(streamType)
+	deliver(targets, data)
+}
+
+func (sm *Manager) collectStreamTargets(streamType types.SubscriptionType) []broadcastTarget {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-
+	if len(sm.Connections) == 0 {
+		return nil
+	}
+	targets := make([]broadcastTarget, 0, len(sm.Connections))
 	for _, conn := range sm.Connections {
-		if _, ok := conn.Subscriptions[streamType]; ok {
-			select {
-			case conn.SendChannel <- data:
-			default:
-				// Channel full, skip
-			}
+		if cfg, ok := conn.Subscriptions[streamType]; ok {
+			targets = append(targets, broadcastTarget{conn.ID, conn.SendChannel, cfg})
+		}
+	}
+	return targets
+}
+
+func deliver(targets []broadcastTarget, data []byte) {
+	for _, t := range targets {
+		select {
+		case t.sendChan <- data:
+		default:
+			// Channel full — drop. Closing the connection on repeated
+			// drops is a follow-up policy decision.
 		}
 	}
 }
 
-// BroadcastToAccounts sends a message to all connections subscribed to any of the accounts
+// BroadcastToAccounts sends a message to every connection subscribed to
+// any of the named accounts on the SubAccounts stream. The match-and-
+// snapshot phase runs under sm.mu; channel sends happen after release.
 func (sm *Manager) BroadcastToAccounts(data []byte, accounts []string) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	accountSet := make(map[string]bool)
-	for _, acc := range accounts {
-		accountSet[acc] = true
-	}
-
-	for _, conn := range sm.Connections {
-		if config, ok := conn.Subscriptions[types.SubAccounts]; ok {
-			for _, subAcc := range config.Accounts {
-				if accountSet[subAcc] {
-					select {
-					case conn.SendChannel <- data:
-					default:
-						// Channel full, skip
-					}
-					break
-				}
-			}
-		}
-	}
+	targets := sm.collectAccountTargets(types.SubAccounts, accounts)
+	deliver(targets, data)
 }
 
-// BroadcastToAccountsProposed sends a message to accounts_proposed subscribers
+// BroadcastToAccountsProposed sends a message to accounts_proposed
+// subscribers using the same snapshot-then-send discipline as
+// BroadcastToAccounts.
 func (sm *Manager) BroadcastToAccountsProposed(data []byte, accounts []string) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	targets := sm.collectAccountTargets("accounts_proposed", accounts)
+	deliver(targets, data)
+}
 
-	accountSet := make(map[string]bool)
+func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts []string) []broadcastTarget {
+	if len(accounts) == 0 {
+		return nil
+	}
+	accountSet := make(map[string]bool, len(accounts))
 	for _, acc := range accounts {
 		accountSet[acc] = true
 	}
-	for _, conn := range sm.Connections {
-		if config, ok := conn.Subscriptions["accounts_proposed"]; ok {
-			for _, subAcc := range config.Accounts {
-				if accountSet[subAcc] {
-					select {
-					case conn.SendChannel <- data:
-					default:
-					}
-					break
-				}
-			}
-		}
-	}
-}
-
-// BroadcastToOrderBook sends a message to order book subscribers
-func (sm *Manager) BroadcastToOrderBook(data []byte, takerGets, takerPays types.CurrencySpec) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-
+	if len(sm.Connections) == 0 {
+		return nil
+	}
+	var targets []broadcastTarget
 	for _, conn := range sm.Connections {
-		if config, ok := conn.Subscriptions[types.SubOrderBooks]; ok {
-			if config.TakerGets != nil && config.TakerPays != nil {
-				if config.TakerGets.Currency == takerGets.Currency &&
-					config.TakerGets.Issuer == takerGets.Issuer &&
-					config.TakerPays.Currency == takerPays.Currency &&
-					config.TakerPays.Issuer == takerPays.Issuer {
-					select {
-					case conn.SendChannel <- data:
-					default:
-						// Channel full, skip
-					}
-				}
+		cfg, ok := conn.Subscriptions[stream]
+		if !ok {
+			continue
+		}
+		for _, subAcc := range cfg.Accounts {
+			if accountSet[subAcc] {
+				targets = append(targets, broadcastTarget{conn.ID, conn.SendChannel, cfg})
+				break
 			}
 		}
 	}
+	return targets
+}
+
+// BroadcastToOrderBook sends a message to order book subscribers whose
+// configured TakerGets/TakerPays match the broadcast's currency pair.
+// Targets are collected under sm.mu and delivered after release.
+func (sm *Manager) BroadcastToOrderBook(data []byte, takerGets, takerPays types.CurrencySpec) {
+	targets := sm.collectOrderBookTargets(takerGets, takerPays)
+	deliver(targets, data)
+}
+
+func (sm *Manager) collectOrderBookTargets(takerGets, takerPays types.CurrencySpec) []broadcastTarget {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if len(sm.Connections) == 0 {
+		return nil
+	}
+	var targets []broadcastTarget
+	for _, conn := range sm.Connections {
+		cfg, ok := conn.Subscriptions[types.SubOrderBooks]
+		if !ok || cfg.TakerGets == nil || cfg.TakerPays == nil {
+			continue
+		}
+		if cfg.TakerGets.Currency == takerGets.Currency &&
+			cfg.TakerGets.Issuer == takerGets.Issuer &&
+			cfg.TakerPays.Currency == takerPays.Currency &&
+			cfg.TakerPays.Issuer == takerPays.Issuer {
+			targets = append(targets, broadcastTarget{conn.ID, conn.SendChannel, cfg})
+		}
+	}
+	return targets
 }
 
 // GetSubscriberCount returns the number of subscribers for a stream type

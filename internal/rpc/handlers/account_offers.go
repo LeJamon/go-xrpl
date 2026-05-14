@@ -38,7 +38,7 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	}
 
 	limit := ClampLimit(request.Limit, LimitAccountOffers, ctx.IsAdmin)
-	result, err := ctx.Services.Ledger.GetAccountOffers(request.Account, ledgerIndex, limit)
+	result, err := ctx.Services.Ledger.GetAccountOffers(ctx.Context, request.Account, ledgerIndex, limit)
 	if err != nil {
 		if errors.Is(err, types.ErrAccountNotFound) {
 			return nil, &types.RpcError{

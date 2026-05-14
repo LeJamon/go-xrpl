@@ -367,7 +367,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, types.RpcErrorUnknownOption("")
 	}
 
-	result, err := ctx.Services.Ledger.GetLedgerEntry(entryKey, ledgerIndex)
+	result, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, entryKey, ledgerIndex)
 	if err != nil {
 		if err.Error() == "entry not found" {
 			return nil, types.RpcErrorEntryNotFound("Requested ledger entry not found.")
