@@ -12,15 +12,9 @@ import (
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 )
 
-// fieldsEqual is a type-switched equality check over the set of types that
-// can appear in the SLE field maps (set in sle_types.go and friends). It
-// replaces reflect.DeepEqual on the metadata-generation hot path, where
-// every Payment/Offer/etc. tx invokes it multiple times per affected SLE.
-//
-// Any pair not handled by the type switch falls through to a slow path
-// that uses byte-for-byte comparison via fmt — that branch should be
-// unreachable in practice but exists so a new field type doesn't silently
-// regress to "always changed".
+// fieldsEqual replaces reflect.DeepEqual on the metadata-generation hot path.
+// Any pair not enumerated below falls through to fallbackEqual; a new SLE
+// field type that lands there should be added to the switch.
 func fieldsEqual(a, b any) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
@@ -97,18 +91,10 @@ func fieldsEqual(a, b any) bool {
 		}
 		return true
 	}
-	// Fallback: rare composite types we haven't enumerated. Compare via
-	// a string rendering rather than re-introducing reflect — both
-	// branches happen on cold paths.
 	return fallbackEqual(a, b)
 }
 
 func fallbackEqual(a, b any) bool {
-	// Cheap structural fallback for types not in the SLE field type set:
-	// compare their formatted representation. Slower than the type switch
-	// above but the SLE serializers don't emit anything that lands here
-	// today, so this branch should only fire if a new field type is
-	// introduced without updating fieldsEqual.
 	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
 }
 
@@ -152,22 +138,10 @@ type FieldInfo struct {
 	Meta FieldMeta
 }
 
-// SLEBase provides common functionality for all SLE types.
-//
-// Field storage uses map[string]any so the SLE struct surface can stay
-// uniform across all 40+ entry types without per-type codegen. The
-// trade-off, called out by the 2026-05-14 audit, is two map allocations
-// (original + current) plus a fieldMeta map per loaded SLE; on a
-// payment-heavy ledger that's dozens of `any`-boxing operations per tx.
-//
-// Resolving that is tracked as a separate refactor — either:
-//   - Generate per-entry-type structs with typed change tracking, or
-//   - Replace the maps with a slice-backed store indexed by sField code.
-//
-// Both are large enough to warrant their own PR and a careful interop
-// pass with the binarycodec field names; the type-switched fieldsEqual
-// (see this file) is the first step that removes the reflect.DeepEqual
-// dependency that would otherwise block typed change tracking.
+// SLEBase provides common functionality for all SLE types. Field storage
+// uses map[string]any so a single struct surface can back all entry types
+// without per-type codegen, at the cost of two map allocations plus boxing
+// per loaded SLE.
 type SLEBase struct {
 	LedgerIndex     [32]byte
 	LedgerEntryType string

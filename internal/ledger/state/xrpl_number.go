@@ -3,30 +3,16 @@ package state
 // XRPLNumber implements rippled's Number class with Guard-based precision.
 // Reference: rippled/src/libxrpl/basics/Number.cpp
 //
-// The Number class uses wider exponent range [-32768, 32768] than IOUAmount [-96, 80]
-// and employs a Guard mechanism that preserves digits discarded during scale-down,
-// enabling banker's rounding (round-half-to-even) for correct precision.
+// The Number class uses wider exponent range [-32768, 32768] than IOUAmount
+// [-96, 80] and employs a Guard mechanism that preserves digits discarded
+// during scale-down, enabling banker's rounding (round-half-to-even).
+// When fixUniversalNumber is enabled, IOUAmount arithmetic delegates here.
 //
-// When fixUniversalNumber is enabled, IOUAmount arithmetic delegates to this type.
-//
-// PANIC CONTRACT
-//
-// Add / Mul / Div / normalize / root2 / ToIOUAmountValue panic on overflow,
-// divide-by-zero, and NaN inputs — matching rippled's
-// `Throw<std::overflow_error>` and the C++ unreachable invariants in
-// Number.cpp. The convention is that **callers are responsible for
-// validating peer-supplied inputs before calling these methods**:
-//   - Binary parsing in ParseIOUAmountBinary / ParseMPTAmountBinary
-//     validates mantissa/exponent ranges and returns an error rather
-//     than constructing an out-of-range value.
-//   - Path / AMM / payment arithmetic operates only on values that
-//     already passed those parsers or were produced by a previous
-//     arithmetic op that was within range.
-//
-// Callers handling un-validated values (e.g. exploratory path discovery
-// or RPC simulation against caller-supplied amounts) must validate before
-// invoking these methods; if a recover-style wrapper is later needed, add
-// it alongside its first caller.
+// Panic contract: Add / Mul / Div / normalize / root2 / ToIOUAmountValue
+// panic on overflow, divide-by-zero, and NaN inputs — matching rippled's
+// `Throw<std::overflow_error>`. Callers must validate peer-supplied inputs
+// before calling; ParseIOUAmountBinary / ParseMPTAmountBinary enforce this
+// at the codec boundary.
 
 import (
 	"math/big"

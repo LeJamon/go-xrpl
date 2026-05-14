@@ -36,11 +36,8 @@ const (
 	batchPrefix               = "42434800"
 )
 
-// EncodeBytes converts a JSON transaction object directly to canonical binary
-// bytes, without the hex round-trip Encode performs. Hot serialization paths
-// (SLE serialize, ledger skip-list write, etc.) prefer this to avoid the
-// "Encode → hex → DecodeString → bytes" round-trip — a measurable
-// allocation win on every state mutation.
+// EncodeBytes encodes a JSON transaction object directly to canonical binary
+// bytes. Prefer this over Encode on hot paths that immediately re-decode.
 func EncodeBytes(json map[string]any) ([]byte, error) {
 	st := types.NewSTObject(serdes.NewBinarySerializer(serdes.NewFieldIDCodec(definitions.Get())))
 
@@ -56,9 +53,7 @@ func EncodeBytes(json map[string]any) ([]byte, error) {
 }
 
 // Encode converts a JSON transaction object to a hex string in the canonical
-// binary format. The binary format is defined in XRPL's core codebase. Use
-// EncodeBytes for hot paths that immediately re-decode the hex back to
-// bytes.
+// binary format.
 func Encode(json map[string]any) (string, error) {
 	b, err := EncodeBytes(json)
 	if err != nil {
@@ -211,9 +206,8 @@ func removeNonSigningFields(json map[string]any) map[string]any {
 	return json
 }
 
-// DecodeBytes decodes canonical binary bytes into a JSON transaction object,
-// avoiding the hex round-trip Decode performs. Hot paths that already hold
-// the bytes (skip-list read, SLE parse) should prefer this.
+// DecodeBytes decodes canonical binary bytes into a JSON transaction object.
+// Prefer this over Decode on hot paths that already hold the raw bytes.
 func DecodeBytes(b []byte) (map[string]any, error) {
 	p := serdes.NewBinaryParser(b, definitions.Get())
 	st := types.NewSTObject(serdes.NewBinarySerializer(serdes.NewFieldIDCodec(definitions.Get())))
@@ -225,8 +219,7 @@ func DecodeBytes(b []byte) (map[string]any, error) {
 }
 
 // Decode decodes a hex string in the canonical binary format into a JSON
-// transaction object. Use DecodeBytes for hot paths that already hold the
-// raw bytes.
+// transaction object.
 func Decode(hexEncoded string) (map[string]any, error) {
 	b, err := hex.DecodeString(hexEncoded)
 	if err != nil {

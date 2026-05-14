@@ -55,8 +55,6 @@ type Keylet struct {
 }
 
 // indexHash computes a keylet key by hashing the space and provided data.
-// The 2-byte space prefix is kept on the stack to avoid an allocation per
-// call; this is on the hot path of every state read.
 func indexHash(space uint16, data ...[]byte) [32]byte {
 	var spaceBytes [2]byte
 	binary.BigEndian.PutUint16(spaceBytes[:], space)
@@ -183,7 +181,7 @@ func Check(accountID [20]byte, sequence uint32) Keylet {
 // SignerList returns the keylet for a signer list entry.
 func SignerList(accountID [20]byte) Keylet {
 	// Signer list uses owner page 0 as identifier
-	var ownerPageBytes [4]byte // zero-initialized
+	var ownerPageBytes [4]byte
 	return Keylet{
 		Type: entry.TypeSignerList,
 		Key:  indexHash(spaceSignerList, accountID[:], ownerPageBytes[:]),
@@ -219,9 +217,6 @@ type CredentialPair struct {
 // preauthorization entry. The credentials must already be sorted.
 // Reference: rippled Indexes.cpp depositPreauth(owner, authCreds)
 func DepositPreauthCredentials(owner [20]byte, sortedCreds []CredentialPair) Keylet {
-	// For each credential pair, compute sha512Half(issuer, credType).
-	// Hashes are kept in a contiguous slice so we don't allocate a fresh
-	// []byte per credential.
 	hashes := make([][32]byte, len(sortedCreds))
 	for i, c := range sortedCreds {
 		hashes[i] = common.Sha512Half(c.Issuer[:], c.CredentialType)

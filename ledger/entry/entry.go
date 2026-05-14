@@ -131,11 +131,9 @@ func (t Type) String() string {
 	}
 }
 
-// Entry defines the interface for all ledger entries.
-//
-// The canonical XRPL object hash (sha512Half over a type-prefixed serialized
-// SLE) is produced by the keylet/state pipeline, not by methods on Entry —
-// keeping a Hash() method here would invite silent miscomputation.
+// Entry is the interface for ledger entries. Object hashes are produced by
+// the keylet/state pipeline (sha512Half over a type-prefixed serialized SLE);
+// do not add a Hash() method here.
 type Entry interface {
 	Type() Type
 	Validate() error

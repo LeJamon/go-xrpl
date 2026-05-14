@@ -884,10 +884,7 @@ func (l *Ledger) ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool
 	})
 }
 
-// TxCount returns the number of transactions currently in the ledger's tx
-// map. Used on the hot path by TxQ.FeeMetrics::ScaleFeeLevel, which runs
-// once per Submit. Today this walks the tree; the shape of the call lets us
-// swap in a cached counter later without changing call sites.
+// TxCount returns the number of transactions in the tx map.
 func (l *Ledger) TxCount() uint32 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -926,8 +923,7 @@ func (l *Ledger) SetStateMapFamily(family shamap.Family) {
 	l.stateMap.SetFamily(family)
 }
 
-// SerializeHeader returns the serialized ledger header bytes. The serializer
-// writes to a slice of known capacity and is infallible by construction.
+// SerializeHeader returns the serialized ledger header bytes.
 func (l *Ledger) SerializeHeader() []byte {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

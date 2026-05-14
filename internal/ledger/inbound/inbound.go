@@ -74,20 +74,17 @@ func (l *Ledger) State() State {
 	return l.state
 }
 
-// PeerID returns the peer we're fetching from. Lock-free: peerID is immutable
-// after New().
+// PeerID returns the peer we're fetching from.
 func (l *Ledger) PeerID() uint64 {
 	return l.peerID
 }
 
-// Seq returns the ledger sequence being acquired. Lock-free: seq is immutable
-// after New().
+// Seq returns the ledger sequence being acquired.
 func (l *Ledger) Seq() uint32 {
 	return l.seq
 }
 
-// Hash returns the ledger hash being acquired. Lock-free: hash is immutable
-// after New().
+// Hash returns the ledger hash being acquired.
 func (l *Ledger) Hash() [32]byte {
 	return l.hash
 }

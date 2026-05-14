@@ -59,14 +59,9 @@ type LedgerHeader struct {
 	CloseTime time.Time
 }
 
-// AddRaw serializes a ledger header to bytes matching rippled's format exactly.
-// Reference: rippled LedgerHeader.cpp addRaw() — all times are uint32 XRPL epoch,
-// closeTimeResolution is uint8.
-//
-// The serialization is fixed-width and writes to a stack-allocated slice, so
-// it cannot fail; callers used to handle a returned error that was always
-// nil. The signature is now infallible and the broadcast path no longer
-// crashes on a synthetic error.
+// AddRaw serializes a ledger header to bytes matching rippled's format.
+// Reference: rippled LedgerHeader.cpp addRaw() — all times are uint32 XRPL
+// epoch, closeTimeResolution is uint8.
 func AddRaw(header LedgerHeader, includeHash bool) []byte {
 	size := SizeBase
 	if includeHash {

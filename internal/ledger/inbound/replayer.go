@@ -109,14 +109,9 @@ func NewReplayer(logger *slog.Logger, clock Clock, maxInFlight int) *Replayer {
 }
 
 // SetClock swaps the clock driving timeout decisions for subsequent
-// Acquire calls. Does NOT retroactively change the clock used by
-// already-in-flight acquisitions: each *ReplayDelta captures its clock
-// at creation, matching inbound.Ledger's semantics.
-//
-// Best practice: call SetClock once during test setup, before any
-// Acquire. Swapping mid-flow yields a stretch where the in-flight
-// acquisitions still see the old clock and the new ones see the new
-// one. Intended for tests and DI; production callers never need this.
+// Acquire calls. In-flight *ReplayDelta acquisitions keep the clock they
+// captured at creation, so call SetClock once before any Acquire to avoid
+// a mid-flow split. Intended for tests and DI.
 func (r *Replayer) SetClock(c Clock) {
 	if c == nil {
 		c = SystemClock

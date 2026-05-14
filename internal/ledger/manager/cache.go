@@ -8,49 +8,35 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2"
 )
 
-// LedgerCache provides fast access to recently used ledgers and tracks
+// LedgerCache caches recently used ledgers (by seq and by hash) and tracks
 // which ledgers are complete locally.
 //
-// The underlying lru.Cache is already thread-safe, so Get / GetByHash run
-// lock-free. Put and Remove touch both the seq cache and the hash cache,
-// and writeMu makes that pair atomic so a concurrent Put(L_new) interleaved
-// with Remove(seq) can't leave the two caches out of sync. completenessMu
-// guards the completeness tracker, which is not internally synchronised.
-// Hit/miss counters are kept under atomic.Uint64.
+// Locking:
+//   - Get / GetByHash run lock-free on lru.Cache's internal synchronisation.
+//   - writeMu serialises Put / Remove so the seq+hash double-write stays
+//     atomic across the two underlying caches.
+//   - completenessMu guards CompleteLedgerSet, which has no internal lock.
+//   - hits / misses are atomic.
 type LedgerCache struct {
-	// In-memory cache of recently accessed ledgers
-	// Key: ledger sequence number
-	recentBySeq *lru.Cache[uint32, *ledger.Ledger]
-
-	// Cache by hash for faster hash-based lookups
-	// Key: ledger hash as string (hex)
+	recentBySeq  *lru.Cache[uint32, *ledger.Ledger]
 	recentByHash *lru.Cache[[32]byte, *ledger.Ledger]
 
-	// writeMu serialises the seq+hash double-cache writes performed by
-	// Put and Remove. Reads (Get / GetByHash) do not take it; they rely
-	// on lru.Cache's internal synchronisation.
 	writeMu sync.Mutex
 
-	// Track which ledgers we have complete locally. Guarded by completenessMu
-	// because CompleteLedgerSet is not internally synchronised.
 	completenessMu sync.RWMutex
 	completeness   *CompleteLedgerSet
 
-	// Hit/miss counters. Atomic so cache readers don't need an outer lock.
 	hits   atomic.Uint64
 	misses atomic.Uint64
 }
 
-// LedgerCacheConfig holds configuration for the cache
 type LedgerCacheConfig struct {
-	// MaxRecentLedgers is the number of ledgers to keep in memory
 	MaxRecentLedgers int
 }
 
-// NewLedgerCache creates a new ledger cache
 func NewLedgerCache(config LedgerCacheConfig) (*LedgerCache, error) {
 	if config.MaxRecentLedgers <= 0 {
-		config.MaxRecentLedgers = 256 // Default cache size
+		config.MaxRecentLedgers = 256
 	}
 
 	seqCache, err := lru.New[uint32, *ledger.Ledger](config.MaxRecentLedgers)

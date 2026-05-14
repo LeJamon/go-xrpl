@@ -261,15 +261,9 @@ func (o *OpenLedger) Accept(
 }
 
 // CurrentTxs returns a snapshot of the raw tx blobs in the currently
-// published view. Callers receive a fresh top-level slice that is safe
-// to retain and re-order; the underlying tx-blob byte slices, however,
-// are shared with the open-ledger view and MUST NOT be mutated.
-//
-// Under the hood we memoise the per-view []byte slice (one walk per
-// publish, not per call) and copy the outer slice header on each call
-// so an accidental append by a caller cannot bleed into another
-// reader. Mirrors RCLConsensus.cpp:333-349 reading
-// openLedger().current()->txs.
+// published view. The outer slice is fresh per call (safe to re-order);
+// the inner tx-blob byte slices are shared with the view and must not be
+// mutated. Mirrors RCLConsensus.cpp:333-349 reading openLedger().current()->txs.
 func (o *OpenLedger) CurrentTxs() [][]byte {
 	o.currentMu.RLock()
 	if o.cachedTxs != nil {
@@ -304,10 +298,9 @@ func (o *OpenLedger) CurrentTxs() [][]byte {
 	return out
 }
 
-// collectTxs extracts the raw tx blobs from view's tx map and parses
-// each into a PendingTx. Malformed entries are skipped so a single bad
-// record does not poison the whole replay, but each is logged at Warn
-// so an operator can see that a peer fed unparseable data.
+// collectTxs parses each tx blob in view into a PendingTx. Malformed
+// entries are skipped (and logged) so one bad record doesn't poison
+// the replay.
 func collectTxs(v *ledger.Ledger, logger xrpllog.Logger) []PendingTx {
 	if v == nil {
 		return nil

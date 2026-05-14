@@ -15,10 +15,8 @@ var (
 	registryMu     sync.RWMutex
 	features       = make(map[[32]byte]*Feature)
 	featuresByName = make(map[string]*Feature)
-	// orderedFeatures is features sorted by ID, frozen after init() completes
-	// so iteration order (used by voting and amendment-set hashing) is
-	// deterministic across runs. The registry is init-only and never
-	// changes thereafter, so we can build this once at the end of init.
+	// orderedFeatures is sorted by ID and frozen after init so voting and
+	// amendment-set hashing are deterministic across runs.
 	orderedFeatures []*Feature
 )
 
@@ -235,9 +233,6 @@ func init() {
 	registerRetired("fix1528", &FeatureFix1528)
 	registerRetired("FlowCross", &FeatureFlowCross)
 
-	// Freeze a sorted snapshot of the registry. The registry is init-only,
-	// so this iteration order is stable for the lifetime of the process and
-	// matches across builds.
 	orderedFeatures = make([]*Feature, 0, len(features))
 	for _, f := range features {
 		orderedFeatures = append(orderedFeatures, f)
@@ -247,11 +242,8 @@ func init() {
 	})
 }
 
-// registerFeature registers a feature with the given parameters.
-//
-// Called only from init(). Panics on duplicate registration so that a
-// copy-paste mistake in features.macro is caught at process start rather
-// than silently overwriting an existing entry.
+// registerFeature registers a feature. Panics on duplicate id so a
+// copy-paste in features.macro fails at process start.
 func registerFeature(name string, supported Supported, vote VoteBehavior, idPtr *[32]byte) {
 	id := FeatureID(name)
 	*idPtr = id
@@ -280,8 +272,7 @@ func registerFix(name string, supported Supported, vote VoteBehavior, idPtr *[32
 	registerFeature(name, supported, vote, idPtr)
 }
 
-// registerRetired registers a retired feature. Same duplicate-guard as
-// registerFeature.
+// registerRetired registers a retired feature.
 func registerRetired(name string, idPtr *[32]byte) {
 	id := FeatureID(name)
 	*idPtr = id
@@ -317,16 +308,15 @@ func GetFeatureByName(name string) *Feature {
 	return featuresByName[name]
 }
 
-// AllFeatures returns a slice of all registered features in deterministic
-// (ID-sorted) order. Returns a fresh slice; safe for callers to mutate.
+// AllFeatures returns all registered features in ID-sorted order. The
+// returned slice is fresh; callers may mutate it.
 func AllFeatures() []*Feature {
 	out := make([]*Feature, len(orderedFeatures))
 	copy(out, orderedFeatures)
 	return out
 }
 
-// SupportedFeatures returns a slice of all supported features in deterministic
-// (ID-sorted) order.
+// SupportedFeatures returns supported features in ID-sorted order.
 func SupportedFeatures() []*Feature {
 	result := make([]*Feature, 0, len(orderedFeatures))
 	for _, f := range orderedFeatures {
@@ -337,8 +327,8 @@ func SupportedFeatures() []*Feature {
 	return result
 }
 
-// DefaultYesFeatures returns a slice of all features that should be voted yes
-// by default, in deterministic (ID-sorted) order.
+// DefaultYesFeatures returns features that default to a yes vote, in
+// ID-sorted order.
 func DefaultYesFeatures() []*Feature {
 	result := make([]*Feature, 0, len(orderedFeatures))
 	for _, f := range orderedFeatures {

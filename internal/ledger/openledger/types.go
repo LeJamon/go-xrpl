@@ -28,12 +28,9 @@ type PendingTx struct {
 	// Sequence is the effective sequence (Sequence or TicketSequence
 	// via SeqProxy).
 	Sequence uint32
-	// LastLedgerSequence is the tx's sfLastLedgerSequence value, valid
-	// only when HasLastLedgerSequence is true. LocalTxs uses it to clamp
-	// the held-pool expiration so a tx never lingers past its own
-	// validity window. Mirrors rippled's
-	// `isFieldPresent(sfLastLedgerSequence)` check (LocalTxs.cpp:63) —
-	// presence (even with value 0) triggers the clamp.
+	// LastLedgerSequence holds sfLastLedgerSequence when HasLastLedgerSequence
+	// is true. Presence (even value 0) clamps the held-pool expiration —
+	// mirrors rippled's isFieldPresent check (LocalTxs.cpp:63).
 	LastLedgerSequence    uint32
 	HasLastLedgerSequence bool
 	// IsTicket is true when the tx consumes a Ticket rather than a raw
