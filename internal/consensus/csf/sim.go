@@ -24,9 +24,7 @@ type Sim struct {
 	allPeers *PeerGroup
 	nextID   PeerID
 
-	// registry is the per-simulation id→peer index. Hosting it on the
-	// Sim rather than as a package-global lets two simulations run in
-	// parallel (`go test -parallel`) without racing on shared state.
+	// registry is the per-simulation id→peer index.
 	registry *PeerRegistry
 }
 
@@ -95,8 +93,7 @@ func (s *Sim) AllPeers() *PeerGroup {
 	return s.allPeers
 }
 
-// GetPeer returns the peer with the given ID, or nil. O(1) via the
-// per-Sim registry.
+// GetPeer returns the peer with the given ID, or nil.
 func (s *Sim) GetPeer(id PeerID) *Peer {
 	if s.registry == nil {
 		return nil
@@ -305,8 +302,6 @@ func (s *Sim) WaitForConsensus(targetSeq uint32) bool {
 }
 
 // AssertSynchronized fails the test if peers are not synchronized.
-// Accepts testing.TB rather than panicking so the failure carries the
-// test's frame instead of crashing the harness.
 func (s *Sim) AssertSynchronized(tb testing.TB) {
 	tb.Helper()
 	if !s.SynchronizedAll() {

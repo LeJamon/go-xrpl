@@ -1645,11 +1645,8 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 		return
 	}
 
-	// Walk peers in ID order rather than Go map iteration order. The
-	// chosen peer doesn't affect ledger state (any peer that has the
-	// hash can serve it), but a deterministic pick makes the log
-	// emitted below reproducible across runs — useful when bisecting
-	// soak-test divergence.
+	// Walk peers in ID order so the chosen peer (and the emitted log)
+	// is reproducible across runs. Any peer with the hash can serve it.
 	r.peersMu.RLock()
 	peerIDs := make([]peermanagement.PeerID, 0, len(r.peerStates))
 	for pid := range r.peerStates {

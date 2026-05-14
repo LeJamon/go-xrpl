@@ -207,11 +207,8 @@ func (q *TxQ) erase(c *Candidate) {
 // Called after changing parentHash to reorder same-fee transactions.
 // Caller must hold the lock.
 //
-// Iterates accounts in sorted order and candidates via GetSortedCandidates
-// so the rebuilt byFee slice is bit-identical across validators given the
-// same input set. insertByFee's tiebreak (candidateLess on txID XOR
-// parentHash) already produces a deterministic order from a fixed insert
-// sequence, but pinning the walk order keeps the invariant local.
+// Walks accounts in sorted order and candidates via GetSortedCandidates
+// so the rebuilt byFee slice is bit-identical across validators.
 func (q *TxQ) rebuildByFee() {
 	q.byFee = make([]*Candidate, 0, len(q.byFee))
 

@@ -377,15 +377,12 @@ type Peer struct {
 	txInjections map[uint32]Tx
 
 	// registry is the per-Sim peer index used by findPeer for inbound
-	// message delivery. Nil if the peer was constructed outside of
-	// Sim.CreateGroup (a few unit tests do this); callers tolerate a
-	// nil-registry lookup by treating the target as unknown.
+	// message delivery. Nil-tolerant: a peer constructed outside
+	// Sim.CreateGroup gets a no-op findPeer.
 	registry *PeerRegistry
 }
 
-// NewPeer creates a new simulated peer. registry may be nil for tests
-// that construct peers outside Sim.CreateGroup — inter-peer message
-// delivery (findPeer) is then a no-op.
+// NewPeer creates a new simulated peer. registry may be nil.
 func NewPeer(
 	id PeerID,
 	scheduler *Scheduler,
@@ -898,9 +895,7 @@ func (p *Peer) broadcastProposal(prop *Proposal) {
 	}
 }
 
-// PeerRegistry is a per-Sim id→peer index used for message delivery. It
-// replaces the prior package-global registry which forced every test run
-// to share state and made `go test -parallel` race on the map.
+// PeerRegistry is a per-Sim id→peer index used for message delivery.
 type PeerRegistry struct {
 	mu sync.Mutex
 	m  map[PeerID]*Peer

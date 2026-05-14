@@ -288,11 +288,8 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		if requiresMultiTxn {
 			var totalFee uint64
 			var potentialSpend uint64
-			// Iterate in SeqProxy order rather than over the map directly.
-			// The fee/spend sums are commutative so determinism holds either
-			// way, but a sorted walk makes the invariant local and avoids
-			// drift if a future refactor adds an order-sensitive side
-			// effect inside this loop.
+			// Iterate in SeqProxy order to match rippled's
+			// std::map<SeqProxy, MaybeTx> walk at TxQ.cpp:1048.
 			sortedTxns := aq.GetSortedCandidates()
 			for _, c := range sortedTxns {
 				sp := c.SeqProxy
@@ -450,11 +447,6 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		if feeLevel > endEffectiveFeeLevel {
 			// Drop the last (highest-sequence) transaction from the target account.
 			// Reference: rippled TxQ.cpp:1297-1306
-			//
-			// Iterating sorted candidates avoids relying on Go map order
-			// to pick the tiebreak when two SeqProxy values compare equal
-			// (cannot happen today since SeqProxy is the map key, but the
-			// sorted walk pins the contract).
 			sorted := endAccount.GetSortedCandidates()
 			var dropCandidate *Candidate
 			if n := len(sorted); n > 0 {
@@ -509,10 +501,8 @@ func (q *TxQ) tryClearAccountQueue(
 	txInLedger uint32,
 	account [20]byte,
 ) *ApplyResult {
-	// Collect queued sequence-based transactions that come BEFORE the new tx.
-	// These need to be applied first in order. GetSortedCandidates already
-	// returns SeqProxy-ascending order, so a forward walk gives the
-	// deterministic apply order without a second sort.
+	// Collect queued sequence-based transactions that come BEFORE the new tx,
+	// in SeqProxy-ascending order.
 	var preceding []*Candidate
 	for _, c := range aq.GetSortedCandidates() {
 		if !c.SeqProxy.Less(seqProxy) {

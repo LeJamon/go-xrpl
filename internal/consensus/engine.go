@@ -77,17 +77,10 @@ type WireableAdaptor interface {
 	SetValidationHistorian(h ValidationHistorian)
 }
 
-// The Adaptor interface previously held ~60 methods on a single type.
-// To keep test mocks tractable and make the seams between consensus and
-// the rest of the node explicit, it is now composed of smaller
-// interfaces — each named after the subsystem it represents. The
-// composite `Adaptor` keeps the same surface so existing concrete
-// implementations and consumers do not change.
-//
-// New code SHOULD depend on the narrowest interface that satisfies its
-// needs (e.g. `TimeSource` instead of `Adaptor` for code that only
-// reads the clock). Test doubles that historically had to satisfy all
-// 60 methods can now embed only the seams they exercise.
+// The Adaptor interface is composed of smaller per-subsystem interfaces.
+// New code should depend on the narrowest interface that satisfies its
+// needs (e.g. TimeSource instead of Adaptor for code that only reads
+// the clock).
 
 // NetworkBroadcaster handles self-originated outbound traffic and the
 // per-peer squelch / reverse-index bookkeeping that goes with it.
@@ -310,11 +303,8 @@ type StatusEvents interface {
 }
 
 // Adaptor provides the interface between the consensus engine and the
-// rest of the node. It is the composition of the per-subsystem seams
-// declared above. Existing implementations and tests reference this
-// type unchanged; new code should prefer one of the narrower seams.
-//
-// This follows rippled's adaptor pattern for clean separation.
+// rest of the node. Follows rippled's adaptor pattern for clean
+// separation. New code should prefer one of the narrower seams above.
 type Adaptor interface {
 	NetworkBroadcaster
 	LedgerProvider
