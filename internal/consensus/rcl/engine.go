@@ -1039,10 +1039,16 @@ func (e *Engine) timerEntry() {
 		e.checkLedger()
 	}
 
-	// Round-producing work only runs in Full.
-	if opMode != consensus.OpModeFull {
-		return
-	}
+	// Phase work runs in every non-disconnected mode, mirroring rippled
+	// NetworkOPs::setHeartbeatTimer which calls mConsensus.timerEntry(...)
+	// once numPeers >= minPeerCount (NetworkOPs.cpp:1103) — regardless of
+	// CONNECTED / SYNCING / TRACKING / FULL. The proposing/validating gate
+	// is per-round: startRoundLocked degrades non-Full rounds to
+	// ModeObserving (engine.go:419), and closeLedger / sendValidation gate
+	// emission on e.mode == ModeProposing. Without observer-mode advancement
+	// a fresh genesis bootstrap deadlocks at OpModeConnected — no round
+	// closes, so OnConsensusReached's auto-promote never fires.
+	_ = opMode
 
 	switch e.phase {
 	case consensus.PhaseOpen:

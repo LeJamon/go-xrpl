@@ -1284,6 +1284,52 @@ func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*con
 			go hooks.OnConsensusPhase("accepted")
 		}
 	}
+
+	a.maybePromoteAfterConsensus(ledger)
+}
+
+// maybePromoteAfterConsensus mirrors rippled's endConsensus auto-promote
+// (NetworkOPs.cpp:2197-2213): a successful consensus close is itself
+// evidence that we are aligned with the network, so we advance the
+// operating mode without waiting for a peer-acquired ledger.
+//
+//	CONNECTED | SYNCING  → TRACKING
+//	CONNECTED | TRACKING → FULL when ledger.CloseTime() is recent
+//	                           (now < closeTime + 2 * closeTimeResolution)
+//
+// Without this, a fresh genesis bootstrap deadlocks at OpModeConnected
+// because none of the existing OpModeTracking transitions fire (they
+// all require a peer ahead of us to acquire from). With it, the first
+// successful observer round graduates us to FULL and the next round
+// proposes normally — matching rippled's bootstrap sequence exactly.
+func (a *Adaptor) maybePromoteAfterConsensus(ledger consensus.Ledger) {
+	if ledger == nil {
+		return
+	}
+	current := a.GetOperatingMode()
+	if current == consensus.OpModeDisconnected || current == consensus.OpModeFull {
+		return
+	}
+
+	target := current
+	if current == consensus.OpModeConnected || current == consensus.OpModeSyncing {
+		target = consensus.OpModeTracking
+	}
+	if target == consensus.OpModeConnected || target == consensus.OpModeTracking {
+		resolution := a.CloseTimeResolution()
+		if a.Now().Before(ledger.CloseTime().Add(2 * resolution)) {
+			target = consensus.OpModeFull
+		}
+	}
+	if target == current {
+		return
+	}
+	a.SetOperatingMode(target)
+	a.logger.Info("operating mode auto-promoted after consensus",
+		"from", current.String(),
+		"to", target.String(),
+		"ledger_seq", ledger.Seq(),
+	)
 }
 
 // OnLedgerFullyValidated fires when the engine's ValidationTracker sees

@@ -1,52 +1,43 @@
-# Issue #268 — Full LedgerTrie `getPreferred`
+# Issue #418 — bootstrap OpMode auto-promote
 
-Replace the flat trusted-count approximation in `internal/consensus/rcl/validations.go`'s `GetTrustedSupport` with a faithful Go port of rippled's `LedgerTrie<Ledger>` (rippled/src/xrpld/consensus/LedgerTrie.h).
+## The bug
 
-Design lives in [`pr-ledgertrie.md`](./pr-ledgertrie.md). This file tracks execution.
+Fresh genesis bootstrap deadlock: a goxrpl node cannot reach `OpModeFull` from a clean network start. The engine gates ALL phase work on Full (engine.go:1042-1045), and `Adaptor.OnConsensusReached` has no auto-promote — rippled's `endConsensus` (NetworkOPs.cpp:2197-2213) does. Networks "leak" forward only via a fragile acquire-from-peer race; under fuzz timing variance this wedges nodes at low seq numbers.
 
-## Plan
+## Two-part fix
 
-### Phase 1 — Branch hygiene
-- [x] Save WIP modifications as patch
-- [x] Reset `feature/ledgertrie-268` to `origin/main` (cb373ac)
-- [x] Reapply patch with 3-way merge
-- [x] Resolve conflicts in `startup.go`, `engine.go`, `validations.go`
-- [x] Build clean from worktree
+### Part A — engine.go: allow observer-mode round advancement
 
-### Phase 2 — Audit implementation vs rippled
-- [x] `Mismatch` (binary search) — matches rippled's `mismatch` (csf/impl/ledgers.cpp:57-83)
-- [x] `Insert` three-suffix case analysis — matches LedgerTrie.h:452-531
-- [x] `Remove` compaction loop — matches LedgerTrie.h:540-589
-- [x] `GetPreferred` within-span advancement + best-child + tie-break +1 margin — matches LedgerTrie.h:684-778
-- [x] `Span` helpers, `node` struct — matches `ledger_trie_detail` (LedgerTrie.h:75-269)
+- [x] Removed `engine.go:1042-1045` early-return on non-Full; replaced with rippled-mirror comment
+  - Mode-degradation already handled by `startRoundLocked` (line 419) — non-Full rounds enter `ModeObserving`
+  - Proposal broadcast already gated on `e.mode == ModeProposing` in `closeLedger` (line 1627)
+  - Validation `Full` flag already gated on `e.mode == ModeProposing` in `sendValidation` (line 2715)
 
-### Phase 3 — Test coverage
-- [x] Consolidate Insert/Remove/Support discrete tests into `TestLedgerTrie_ParityTable` with `t.Run` subtests
-- [x] `TestGetPreferred_PrefersDeepestSharedAncestor` (issue-required) — passes
-- [x] `TestGetPreferred_MinSeqRespected` (issue-required) — passes
-- [x] `TestLedgerTrie_Empty` (rippled testEmpty) — kept as top-level
-- [x] `TestLedgerTrie_RootRelated` (rippled testRootRelated) — kept as top-level
-- [x] `TestLedgerTrie_Stress_InvariantsHold` (rippled testStress) — kept as top-level
-- [x] `TestLedgerTrie_GetPreferred_*` (rippled testGetPreferred subscenarios) — kept as discrete tests
+### Part B — adaptor.go: auto-promote in `OnConsensusReached`
 
-### Phase 4 — Integration + regression check
-- [x] `go build ./...` clean
-- [x] `go test ./internal/consensus/ledgertrie/... -count=1 -race` passes
-- [x] `go test ./internal/consensus/rcl/... -count=1 -race` passes
-- [ ] `go test ./... -count=1` — no new regressions vs baseline (in progress)
+- [x] Added `maybePromoteAfterConsensus(ledger)` helper mirroring NetworkOPs.cpp:2197-2213
+- [x] Wired from `OnConsensusReached` after the existing log + hook
+- [x] Test `TestOnConsensusReached_AutoPromote` pins all 5 transition cases
 
-### Phase 5 — Commit + PR
-- [ ] `feat(consensus/ledgertrie): port rippled LedgerTrie<Ledger>`
-- [ ] `feat(consensus/rcl): wire LedgerTrie into ValidationTracker`
-- [ ] `feat(consensus/rcl): expose LedgerTrie via Engine.SetLedgerAncestryProvider`
-- [ ] Push branch and open PR referencing #268
+## Verification
 
-## Out of scope
+- [x] Build clean (`go build ./cmd/xrpld`)
+- [x] `./internal/consensus/...` all green
+- [x] `./internal/testing/consensus/...` green (openledger_convergence_test included)
+- [x] `./internal/ledger/...` + `./internal/txq/...` green
+- [ ] Clean-soak 3r+2g via xrpl-confluence (no fuzz) → 50+ ledgers byte-identical across all 5 nodes
+- [ ] Soak with fuzz on → 50+ ledgers; divergence only from tx-engine bugs
 
-- Threading `largestIssued` through `Engine.checkLedger` — flat-pair compare still works.
-- WebSocket `path_find` subscription — separate issue.
-- Production-path coverage of the ancestry provider beyond `adaptor/startup.go` — wired to `ledgerSvc` already.
+## Why this is the right fix (rippled mirror)
 
-## Review (filled in after Phase 5)
+Rippled bootstrap sequence:
+1. DISCONNECTED → CONNECTED (heartbeat sees `numPeers >= minPeerCount`)
+2. `timerEntry` advances consensus as **observer** (no proposal/validation emission)
+3. First round closes (timeout / empty positions) → `acceptLedger` → `endConsensus` auto-promote → TRACKING/FULL
+4. Next round: validators propose normally
 
-_TBD_
+goxrpl now mirrors this exactly.
+
+## Review section
+
+TBD — filled after implementation + verification.

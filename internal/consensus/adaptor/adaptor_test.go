@@ -460,3 +460,75 @@ func TestGetParentLedgerForReplay_RejectsOpenLedger(t *testing.T) {
 				"to use as a chain anchor")
 	}
 }
+
+// stubLedger is a minimal consensus.Ledger whose CloseTime is fully
+// controllable by tests — needed because auto-promote to OpModeFull
+// depends on CloseTime being recent vs. adaptor.Now().
+type stubLedger struct {
+	seq       uint32
+	closeTime time.Time
+}
+
+func (s stubLedger) ID() consensus.LedgerID       { return consensus.LedgerID{} }
+func (s stubLedger) Seq() uint32                  { return s.seq }
+func (s stubLedger) ParentID() consensus.LedgerID { return consensus.LedgerID{} }
+func (s stubLedger) CloseTime() time.Time         { return s.closeTime }
+func (s stubLedger) TxSetID() consensus.TxSetID   { return consensus.TxSetID{} }
+func (s stubLedger) Bytes() []byte                { return nil }
+
+// TestOnConsensusReached_AutoPromote pins the rippled-faithful
+// endConsensus auto-promote (NetworkOPs.cpp:2197-2213) that lets a
+// fresh genesis bootstrap escape OpModeConnected. Without this, the
+// only paths to OpModeTracking require a peer ahead of us — which is
+// impossible on a clean network start where everyone is at genesis.
+//
+// Mirrors:
+//
+//	CONNECTED | SYNCING  → TRACKING
+//	CONNECTED | TRACKING → FULL  (if now < closeTime + 2 * resolution)
+func TestOnConsensusReached_AutoPromote(t *testing.T) {
+	t.Run("connected_with_recent_close_promotes_to_full", func(t *testing.T) {
+		a := newTestAdaptor(t)
+		a.SetOperatingMode(consensus.OpModeConnected)
+		l := stubLedger{seq: 3, closeTime: a.Now()}
+		a.OnConsensusReached(l, nil)
+		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode())
+	})
+
+	t.Run("syncing_with_stale_close_promotes_only_to_tracking", func(t *testing.T) {
+		a := newTestAdaptor(t)
+		a.SetOperatingMode(consensus.OpModeSyncing)
+		// CloseTime far in the past — outside the 2*resolution window.
+		l := stubLedger{seq: 3, closeTime: a.Now().Add(-10 * time.Minute)}
+		a.OnConsensusReached(l, nil)
+		assert.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
+	})
+
+	t.Run("tracking_with_recent_close_promotes_to_full", func(t *testing.T) {
+		a := newTestAdaptor(t)
+		a.SetOperatingMode(consensus.OpModeTracking)
+		l := stubLedger{seq: 3, closeTime: a.Now()}
+		a.OnConsensusReached(l, nil)
+		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode())
+	})
+
+	t.Run("disconnected_does_not_promote", func(t *testing.T) {
+		a := newTestAdaptor(t)
+		a.SetOperatingMode(consensus.OpModeDisconnected)
+		l := stubLedger{seq: 3, closeTime: a.Now()}
+		a.OnConsensusReached(l, nil)
+		assert.Equal(t, consensus.OpModeDisconnected, a.GetOperatingMode(),
+			"Disconnected must stay Disconnected — no peers means no consensus, "+
+				"and a stale lingering callback must not bypass the peer-count gate")
+	})
+
+	t.Run("full_stays_full", func(t *testing.T) {
+		a := newTestAdaptor(t)
+		a.SetOperatingMode(consensus.OpModeFull)
+		l := stubLedger{seq: 3, closeTime: a.Now().Add(-10 * time.Minute)}
+		a.OnConsensusReached(l, nil)
+		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode(),
+			"once Full, OnConsensusReached must not demote — demotions are "+
+				"driven by wrongLedger/peer-disconnect paths, not by close-time freshness")
+	})
+}
