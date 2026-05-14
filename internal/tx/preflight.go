@@ -268,7 +268,6 @@ func parseValidationError(err error) Result {
 	msg := err.Error()
 	for code, result := range validationErrorPrefixes {
 		if len(msg) >= len(code) && msg[:len(code)] == code {
-			// Code must be followed by ':', ' ', or end-of-string
 			if len(msg) == len(code) || msg[len(code)] == ':' || msg[len(code)] == ' ' {
 				return result
 			}
