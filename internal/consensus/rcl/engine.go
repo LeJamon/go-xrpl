@@ -2976,6 +2976,12 @@ func effCloseTime(closeTime time.Time, resolution time.Duration, priorCloseTime 
 		return closeTime
 	}
 	rounded := roundCloseTime(closeTime, resolution)
+	// CI-BREAK-TEST: deliberate cross-impl divergence — adds a 1-second
+	// offset to every effective close time so this goxrpl build closes
+	// every ledger with a different close_time than rippled, producing
+	// distinct ledger_hash values. This commit exists only to confirm
+	// scripts/consensus-smoke/ CI catches consensus regressions. REVERT.
+	rounded = rounded.Add(time.Second)
 	minTime := priorCloseTime.Add(time.Second)
 	if rounded.Before(minTime) {
 		return minTime
