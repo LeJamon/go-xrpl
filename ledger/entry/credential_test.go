@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestCredential_Type verifies Credential returns correct type
@@ -115,25 +114,3 @@ func TestCredential_Validate(t *testing.T) {
 	})
 }
 
-// TestCredential_Hash tests Credential hash computation
-func TestCredential_Hash(t *testing.T) {
-	cred := &Credential{
-		Subject:        [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
-		Issuer:         [20]byte{20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
-		CredentialType: []byte("kyc"),
-	}
-
-	hash1, err := cred.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, [32]byte{}, hash1)
-
-	// Different subject should produce different hash
-	cred2 := &Credential{
-		Subject:        [20]byte{10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 1, 2, 3, 4, 5, 6, 7, 8, 9},
-		Issuer:         [20]byte{20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
-		CredentialType: []byte("kyc"),
-	}
-	hash2, err := cred2.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, hash1, hash2)
-}

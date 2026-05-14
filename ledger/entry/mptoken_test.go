@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestMPTokenIssuance_Type verifies MPTokenIssuance returns correct type
@@ -72,18 +71,6 @@ func TestMPTokenIssuance_Validate(t *testing.T) {
 	})
 }
 
-// TestMPTokenIssuance_Hash tests hash computation
-func TestMPTokenIssuance_Hash(t *testing.T) {
-	mpt := &MPTokenIssuance{
-		Issuer:   [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
-		Sequence: 1,
-	}
-
-	hash1, err := mpt.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, [32]byte{}, hash1)
-}
-
 // TestMPToken_Type verifies MPToken returns correct type
 func TestMPToken_Type(t *testing.T) {
 	mpt := &MPToken{}
@@ -149,23 +136,3 @@ func TestMPToken_Validate(t *testing.T) {
 	})
 }
 
-// TestMPToken_Hash tests MPToken hash computation
-func TestMPToken_Hash(t *testing.T) {
-	mpt := &MPToken{
-		Account:           [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
-		MPTokenIssuanceID: [32]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32},
-	}
-
-	hash1, err := mpt.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, [32]byte{}, hash1)
-
-	// Different account should produce different hash
-	mpt2 := &MPToken{
-		Account:           [20]byte{20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
-		MPTokenIssuanceID: [32]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32},
-	}
-	hash2, err := mpt2.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, hash1, hash2)
-}

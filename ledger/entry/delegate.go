@@ -50,15 +50,6 @@ func (d *Delegate) Validate() error {
 	return nil
 }
 
-func (d *Delegate) Hash() ([32]byte, error) {
-	hash := d.BaseEntry.Hash()
-	for i := 0; i < 20; i++ {
-		hash[i] ^= d.Account[i]
-		hash[i] ^= d.Authorize[i]
-	}
-	return hash, nil
-}
-
 // HasTxPermission checks if this delegate SLE grants permission for the given
 // transaction type. The permission value for a tx type is txType + 1.
 // Reference: rippled DelegateUtils.cpp checkTxPermission()

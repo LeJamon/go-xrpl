@@ -42,14 +42,6 @@ func (x *XChainOwnedClaimID) Validate() error {
 	return nil
 }
 
-func (x *XChainOwnedClaimID) Hash() ([32]byte, error) {
-	hash := x.BaseEntry.Hash()
-	for i := 0; i < 20; i++ {
-		hash[i] ^= x.Account[i]
-	}
-	return hash, nil
-}
-
 // XChainCreateAccountAttestation represents a single attestation for cross-chain account creation
 type XChainCreateAccountAttestation struct {
 	AttestationSignerAccount [20]byte // Account of the attestation signer
@@ -84,10 +76,3 @@ func (x *XChainOwnedCreateAccountClaimID) Validate() error {
 	return nil
 }
 
-func (x *XChainOwnedCreateAccountClaimID) Hash() ([32]byte, error) {
-	hash := x.BaseEntry.Hash()
-	for i := 0; i < 20; i++ {
-		hash[i] ^= x.Account[i]
-	}
-	return hash, nil
-}

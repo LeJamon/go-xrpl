@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestPermissionedDomain_Type verifies PermissionedDomain returns correct type
@@ -130,33 +129,6 @@ func TestPermissionedDomain_Validate(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "credential type")
 	})
-}
-
-// TestPermissionedDomain_Hash tests hash computation
-func TestPermissionedDomain_Hash(t *testing.T) {
-	pd := &PermissionedDomain{
-		Owner:    [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
-		Sequence: 1,
-		AcceptedCredentials: []AcceptedCredential{
-			{Issuer: [20]byte{1}, CredentialType: []byte("kyc")},
-		},
-	}
-
-	hash1, err := pd.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, [32]byte{}, hash1)
-
-	// Different owner should produce different hash
-	pd2 := &PermissionedDomain{
-		Owner:    [20]byte{20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
-		Sequence: 1,
-		AcceptedCredentials: []AcceptedCredential{
-			{Issuer: [20]byte{1}, CredentialType: []byte("kyc")},
-		},
-	}
-	hash2, err := pd2.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, hash1, hash2)
 }
 
 // TestAcceptedCredential tests the AcceptedCredential struct

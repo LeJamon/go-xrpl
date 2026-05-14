@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestNegativeUNL_Type verifies NegativeUNL returns correct type
@@ -68,25 +67,6 @@ func TestNegativeUNL_Validate(t *testing.T) {
 		err := nunl.Validate()
 		assert.NoError(t, err)
 	})
-}
-
-// TestNegativeUNL_Hash tests NegativeUNL hash computation
-func TestNegativeUNL_Hash(t *testing.T) {
-	nunl := &NegativeUNL{
-		BaseEntry: BaseEntry{
-			PreviousTxnLgrSeq: 100,
-			Flags:             0,
-		},
-	}
-
-	hash1, err := nunl.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, [32]byte{}, hash1)
-
-	// Same entry should produce same hash
-	hash2, err := nunl.Hash()
-	require.NoError(t, err)
-	assert.Equal(t, hash1, hash2)
 }
 
 // TestDisabledValidator tests the DisabledValidator struct

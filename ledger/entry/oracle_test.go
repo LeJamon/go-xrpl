@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestOracle_Type verifies Oracle returns correct type
@@ -148,35 +147,6 @@ func TestOracle_Validate(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "asset class")
 	})
-}
-
-// TestOracle_Hash tests Oracle hash computation
-func TestOracle_Hash(t *testing.T) {
-	oracle := &Oracle{
-		Owner:      [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
-		Provider:   []byte("provider"),
-		AssetClass: []byte("currency"),
-		PriceDataSeries: []PriceData{
-			{BaseAsset: "XRP", QuoteAsset: "USD", AssetPrice: 74000},
-		},
-	}
-
-	hash1, err := oracle.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, [32]byte{}, hash1)
-
-	// Different owner should produce different hash
-	oracle2 := &Oracle{
-		Owner:      [20]byte{20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
-		Provider:   []byte("provider"),
-		AssetClass: []byte("currency"),
-		PriceDataSeries: []PriceData{
-			{BaseAsset: "XRP", QuoteAsset: "USD", AssetPrice: 74000},
-		},
-	}
-	hash2, err := oracle2.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, hash1, hash2)
 }
 
 // TestPriceData tests the PriceData struct

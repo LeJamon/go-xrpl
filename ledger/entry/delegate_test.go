@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestDelegate_Type verifies Delegate returns correct type
@@ -96,33 +95,6 @@ func TestDelegate_Validate(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "at least one permission")
 	})
-}
-
-// TestDelegate_Hash tests Delegate hash computation
-func TestDelegate_Hash(t *testing.T) {
-	delegate := &Delegate{
-		Account:   [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
-		Authorize: [20]byte{20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
-		Permissions: []Permission{
-			{PermissionType: "Payment"},
-		},
-	}
-
-	hash1, err := delegate.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, [32]byte{}, hash1)
-
-	// Different account should produce different hash
-	delegate2 := &Delegate{
-		Account:   [20]byte{10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 1, 2, 3, 4, 5, 6, 7, 8, 9},
-		Authorize: [20]byte{20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
-		Permissions: []Permission{
-			{PermissionType: "Payment"},
-		},
-	}
-	hash2, err := delegate2.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, hash1, hash2)
 }
 
 // TestPermission tests the Permission struct

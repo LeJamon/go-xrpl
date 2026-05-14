@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestVault_Type verifies Vault returns correct type
@@ -175,35 +174,6 @@ func TestVault_Validate(t *testing.T) {
 		err := vault.Validate()
 		assert.NoError(t, err)
 	})
-}
-
-// TestVault_Hash tests Vault hash computation
-func TestVault_Hash(t *testing.T) {
-	vault := &Vault{
-		Owner:            [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
-		Account:          [20]byte{20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
-		ShareMPTID:       [32]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32},
-		AssetsTotal:      1000000,
-		AssetsAvailable:  1000000,
-		WithdrawalPolicy: WithdrawalPolicyStrict,
-	}
-
-	hash1, err := vault.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, [32]byte{}, hash1)
-
-	// Different owner should produce different hash
-	vault2 := &Vault{
-		Owner:            [20]byte{10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 1, 2, 3, 4, 5, 6, 7, 8, 9},
-		Account:          [20]byte{20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
-		ShareMPTID:       [32]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32},
-		AssetsTotal:      1000000,
-		AssetsAvailable:  1000000,
-		WithdrawalPolicy: WithdrawalPolicyStrict,
-	}
-	hash2, err := vault2.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, hash1, hash2)
 }
 
 // TestWithdrawalPolicy tests the WithdrawalPolicy constants

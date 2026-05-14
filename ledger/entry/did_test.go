@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestDID_Type verifies DID returns correct type
@@ -108,29 +107,3 @@ func TestDID_Validate(t *testing.T) {
 	})
 }
 
-// TestDID_Hash tests DID hash computation
-func TestDID_Hash(t *testing.T) {
-	uri := "test"
-	did := &DID{
-		Account: [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
-		URI:     &uri,
-	}
-
-	hash1, err := did.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, [32]byte{}, hash1)
-
-	// Same DID should produce same hash
-	hash2, err := did.Hash()
-	require.NoError(t, err)
-	assert.Equal(t, hash1, hash2)
-
-	// Different account should produce different hash
-	did2 := &DID{
-		Account: [20]byte{20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
-		URI:     &uri,
-	}
-	hash3, err := did2.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, hash1, hash3)
-}

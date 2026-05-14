@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestXChainOwnedClaimID_Type verifies XChainOwnedClaimID returns correct type
@@ -70,18 +69,6 @@ func TestXChainOwnedClaimID_Validate(t *testing.T) {
 	})
 }
 
-// TestXChainOwnedClaimID_Hash tests hash computation
-func TestXChainOwnedClaimID_Hash(t *testing.T) {
-	claim := &XChainOwnedClaimID{
-		Account:          [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
-		OtherChainSource: [20]byte{20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
-	}
-
-	hash1, err := claim.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, [32]byte{}, hash1)
-}
-
 // TestXChainOwnedCreateAccountClaimID_Type verifies type
 func TestXChainOwnedCreateAccountClaimID_Type(t *testing.T) {
 	claim := &XChainOwnedCreateAccountClaimID{}
@@ -126,17 +113,6 @@ func TestXChainOwnedCreateAccountClaimID_Validate(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "account")
 	})
-}
-
-// TestXChainOwnedCreateAccountClaimID_Hash tests hash computation
-func TestXChainOwnedCreateAccountClaimID_Hash(t *testing.T) {
-	claim := &XChainOwnedCreateAccountClaimID{
-		Account: [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
-	}
-
-	hash1, err := claim.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, [32]byte{}, hash1)
 }
 
 // TestXChainClaimAttestation tests the attestation struct

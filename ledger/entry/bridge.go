@@ -50,10 +50,3 @@ func (b *Bridge) Validate() error {
 	return nil
 }
 
-func (b *Bridge) Hash() ([32]byte, error) {
-	hash := b.BaseEntry.Hash()
-	for i := 0; i < 20; i++ {
-		hash[i] ^= b.Account[i]
-	}
-	return hash, nil
-}

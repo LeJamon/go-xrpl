@@ -47,10 +47,3 @@ func (p *PermissionedDomain) Validate() error {
 	return nil
 }
 
-func (p *PermissionedDomain) Hash() ([32]byte, error) {
-	hash := p.BaseEntry.Hash()
-	for i := 0; i < 20; i++ {
-		hash[i] ^= p.Owner[i]
-	}
-	return hash, nil
-}

@@ -34,10 +34,3 @@ func (d *DID) Validate() error {
 	return nil
 }
 
-func (d *DID) Hash() ([32]byte, error) {
-	hash := d.BaseEntry.Hash()
-	for i := 0; i < 20; i++ {
-		hash[i] ^= d.Account[i]
-	}
-	return hash, nil
-}

@@ -1,7 +1,6 @@
 package entry
 
 import (
-	"encoding/binary"
 	"errors"
 )
 
@@ -45,27 +44,6 @@ func (lh *LedgerHashes) Validate() error {
 		return ErrTooManyHashes
 	}
 	return nil
-}
-
-// Hash computes the hash for this LedgerHashes entry.
-func (lh *LedgerHashes) Hash() ([32]byte, error) {
-	hash := lh.BaseEntry.Hash()
-
-	// Include hashes in the computation
-	for i, h := range lh.Hashes {
-		for j := 0; j < 32 && i*32+j < 32; j++ {
-			hash[i*32%32+j] ^= h[j]
-		}
-	}
-
-	// Include LastLedgerSequence
-	var buf [4]byte
-	binary.BigEndian.PutUint32(buf[:], lh.LastLedgerSequence)
-	for i := 0; i < 4; i++ {
-		hash[i] ^= buf[i]
-	}
-
-	return hash, nil
 }
 
 // UpdateSkipList updates the skip list with a new parent hash.

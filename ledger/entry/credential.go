@@ -41,11 +41,3 @@ func (c *Credential) Validate() error {
 	return nil
 }
 
-func (c *Credential) Hash() ([32]byte, error) {
-	hash := c.BaseEntry.Hash()
-	for i := 0; i < 20; i++ {
-		hash[i] ^= c.Subject[i]
-		hash[i] ^= c.Issuer[i]
-	}
-	return hash, nil
-}

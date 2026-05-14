@@ -1,7 +1,6 @@
 package entry
 
 import (
-	"encoding/binary"
 	"errors"
 )
 
@@ -39,24 +38,3 @@ func (a *AccountRoot) Validate() error {
 	return nil
 }
 
-func (a *AccountRoot) Hash() ([32]byte, error) {
-	// Start with base hash
-	hash := a.BaseEntry.Hash()
-
-	// Add account-specific fields
-	var buf [8]byte
-	binary.BigEndian.PutUint32(buf[:4], a.Sequence)
-	binary.BigEndian.PutUint32(buf[4:], a.OwnerCount)
-
-	// XOR the account specific data into the hash
-	for i := 0; i < 8; i++ {
-		hash[i] ^= buf[i]
-	}
-
-	// XOR in the account ID
-	for i := 0; i < 20; i++ {
-		hash[i+8] ^= a.Account[i]
-	}
-
-	return hash, nil
-}

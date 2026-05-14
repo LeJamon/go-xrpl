@@ -40,14 +40,6 @@ func (m *MPTokenIssuance) Validate() error {
 	return nil
 }
 
-func (m *MPTokenIssuance) Hash() ([32]byte, error) {
-	hash := m.BaseEntry.Hash()
-	for i := 0; i < 20; i++ {
-		hash[i] ^= m.Issuer[i]
-	}
-	return hash, nil
-}
-
 // MPToken represents a Multi-Purpose Token holding ledger entry
 // Reference: rippled/include/xrpl/protocol/detail/ledger_entries.macro ltMPTOKEN
 type MPToken struct {
@@ -79,10 +71,3 @@ func (m *MPToken) Validate() error {
 	return nil
 }
 
-func (m *MPToken) Hash() ([32]byte, error) {
-	hash := m.BaseEntry.Hash()
-	for i := 0; i < 20; i++ {
-		hash[i] ^= m.Account[i]
-	}
-	return hash, nil
-}

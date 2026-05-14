@@ -27,6 +27,3 @@ func (n *NegativeUNL) Validate() error {
 	return nil
 }
 
-func (n *NegativeUNL) Hash() ([32]byte, error) {
-	return n.BaseEntry.Hash(), nil
-}

@@ -63,10 +63,3 @@ func (a *AMM) Validate() error {
 	return nil
 }
 
-func (a *AMM) Hash() ([32]byte, error) {
-	hash := a.BaseEntry.Hash()
-	for i := 0; i < 20; i++ {
-		hash[i] ^= a.Account[i]
-	}
-	return hash, nil
-}

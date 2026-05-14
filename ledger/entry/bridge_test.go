@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestBridge_Type verifies Bridge returns correct type
@@ -66,27 +65,6 @@ func TestBridge_Validate(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "signature reward")
 	})
-}
-
-// TestBridge_Hash tests Bridge hash computation
-func TestBridge_Hash(t *testing.T) {
-	bridge := &Bridge{
-		Account:         [20]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
-		SignatureReward: 100,
-	}
-
-	hash1, err := bridge.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, [32]byte{}, hash1)
-
-	// Different account should produce different hash
-	bridge2 := &Bridge{
-		Account:         [20]byte{20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
-		SignatureReward: 100,
-	}
-	hash2, err := bridge2.Hash()
-	require.NoError(t, err)
-	assert.NotEqual(t, hash1, hash2)
 }
 
 // TestXChainBridge tests the XChainBridge struct

@@ -61,11 +61,3 @@ func (v *Vault) Validate() error {
 	return nil
 }
 
-func (v *Vault) Hash() ([32]byte, error) {
-	hash := v.BaseEntry.Hash()
-	for i := 0; i < 20; i++ {
-		hash[i] ^= v.Owner[i]
-		hash[i] ^= v.Account[i]
-	}
-	return hash, nil
-}

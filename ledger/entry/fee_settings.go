@@ -1,8 +1,6 @@
 package entry
 
 import (
-	"encoding/binary"
-
 	"github.com/LeJamon/goXRPLd/drops"
 )
 
@@ -60,23 +58,6 @@ func (f *FeeSettings) Validate() error {
 		return nil
 	}
 	return nil // Empty fee settings is technically valid (uses defaults)
-}
-
-// Hash computes the hash for this FeeSettings entry.
-func (f *FeeSettings) Hash() ([32]byte, error) {
-	hash := f.BaseEntry.Hash()
-
-	// Include fee values in hash
-	var buf [24]byte
-	binary.BigEndian.PutUint64(buf[0:8], uint64(f.BaseFeeDrops))
-	binary.BigEndian.PutUint64(buf[8:16], uint64(f.ReserveBaseDrops))
-	binary.BigEndian.PutUint64(buf[16:24], uint64(f.ReserveIncrementDrops))
-
-	for i := 0; i < 24 && i < 32; i++ {
-		hash[i] ^= buf[i]
-	}
-
-	return hash, nil
 }
 
 // GetBaseFee returns the base transaction fee.

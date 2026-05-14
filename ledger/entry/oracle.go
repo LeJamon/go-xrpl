@@ -55,10 +55,3 @@ func (o *Oracle) Validate() error {
 	return nil
 }
 
-func (o *Oracle) Hash() ([32]byte, error) {
-	hash := o.BaseEntry.Hash()
-	for i := 0; i < 20; i++ {
-		hash[i] ^= o.Owner[i]
-	}
-	return hash, nil
-}
