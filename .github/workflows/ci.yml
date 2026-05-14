@@ -77,7 +77,7 @@ jobs:
           GOXRPL_IMAGE: goxrpl:latest
           RIPPLED_IMAGE: rippleci/rippled:2.6.2
           PAYMENT_COUNT: "3"
-          MIN_SEQ_EMPTY: "5"
+          MIN_SEQ_EMPTY: "15"
           BOOT_TIMEOUT: "240"
           TX_TIMEOUT: "180"
 

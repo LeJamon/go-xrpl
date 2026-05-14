@@ -8,7 +8,7 @@
 #
 # Pass criteria:
 #   - empty phase: all three nodes report the same validated ledger_hash and
-#     account_hash for the same seq >= MIN_SEQ_EMPTY (default 5)
+#     account_hash for the same seq >= MIN_SEQ_EMPTY (default 15)
 #   - tx phase: PAYMENT_COUNT genesis-funded payments all reach tesSUCCESS,
 #     and all three nodes still agree on the validated hashes for the
 #     ledger that includes the last payment
@@ -19,7 +19,7 @@
 # Knobs (env vars):
 #   GOXRPL_IMAGE        image to use for goxrpl-0 (default: goxrpl:latest)
 #   RIPPLED_IMAGE       image to use for rippled-0,1 (default: rippleci/rippled:2.6.2)
-#   MIN_SEQ_EMPTY       minimum validated seq for the empty-ledger phase (default 5)
+#   MIN_SEQ_EMPTY       minimum validated seq for the empty-ledger phase (default 15)
 #   (phase 2 no longer takes a MIN_SEQ_TX — it waits for one submitted
 #    payment to land in a validated ledger, then asserts hash agreement at
 #    exactly that seq, which catches "nodes diverged on a ledger that
@@ -36,7 +36,7 @@ COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 
 GOXRPL_IMAGE="${GOXRPL_IMAGE:-goxrpl:latest}"
 RIPPLED_IMAGE="${RIPPLED_IMAGE:-rippleci/rippled:2.6.2}"
-MIN_SEQ_EMPTY="${MIN_SEQ_EMPTY:-5}"
+MIN_SEQ_EMPTY="${MIN_SEQ_EMPTY:-15}"
 MIN_SEQ_TX="${MIN_SEQ_TX:-12}"
 PAYMENT_COUNT="${PAYMENT_COUNT:-5}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-180}"
