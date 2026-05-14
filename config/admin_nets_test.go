@@ -106,6 +106,35 @@ func TestIPInNets_EmptyNets(t *testing.T) {
 	}
 }
 
+func TestParseSecureGatewayNets_MixedFamiliesAndBlanks(t *testing.T) {
+	p := PortConfig{SecureGateway: []string{"127.0.0.1", "10.0.0.0/8", "", "  ", "::1", "fe80::/10"}}
+	nets, err := p.ParseSecureGatewayNets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nets) != 4 {
+		t.Fatalf("expected 4 nets, got %d", len(nets))
+	}
+}
+
+func TestParseSecureGatewayNets_Invalid(t *testing.T) {
+	p := PortConfig{SecureGateway: []string{"not-an-ip"}}
+	if _, err := p.ParseSecureGatewayNets(); err == nil {
+		t.Fatal("expected error for invalid IP in secure_gateway")
+	}
+}
+
+func TestParseSecureGatewayNets_Empty(t *testing.T) {
+	p := PortConfig{}
+	nets, err := p.ParseSecureGatewayNets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nets) != 0 {
+		t.Fatalf("expected 0 nets, got %d", len(nets))
+	}
+}
+
 func TestIPInNets_IPv6(t *testing.T) {
 	_, cidr, _ := net.ParseCIDR("fe80::/10")
 	if !IPInNets(net.ParseIP("fe80::1"), []net.IPNet{*cidr}) {

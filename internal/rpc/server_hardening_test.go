@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -101,6 +102,42 @@ func TestRoleNotElevatableByHeader(t *testing.T) {
 	}
 	if observedRole == types.RoleAdmin {
 		t.Fatalf("non-local peer elevated to admin via XFF; role=%v", observedRole)
+	}
+}
+
+// TestTrustedProxyAttributesClientIPButNotAdmin confirms that when a
+// peer is in the configured secure_gateway / trusted-proxy set, its
+// X-Forwarded-For is honoured for ClientIP attribution — but the role
+// is still derived from the socket peer, so a proxy with XFF: 127.0.0.1
+// cannot elevate to admin.
+func TestTrustedProxyAttributesClientIPButNotAdmin(t *testing.T) {
+	var observedRole types.Role
+	var observedClientIP string
+	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{
+		handle: func(ctx *types.RpcContext, _ json.RawMessage) (interface{}, *types.RpcError) {
+			observedRole = ctx.Role
+			observedClientIP = ctx.ClientIP
+			return map[string]interface{}{"ok": true}, nil
+		},
+	})
+	_, gateway, _ := net.ParseCIDR("203.0.113.0/24")
+	srv.SetTrustedProxies([]net.IPNet{*gateway})
+
+	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"ping","params":[{}]}`))
+	req.RemoteAddr = "203.0.113.5:1234" // peer is the trusted proxy
+	req.Header.Set("X-Forwarded-For", "198.51.100.7, 203.0.113.5")
+
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if observedClientIP != "198.51.100.7" {
+		t.Fatalf("expected ClientIP from XFF=198.51.100.7, got %q", observedClientIP)
+	}
+	if observedRole == types.RoleAdmin {
+		t.Fatalf("trusted proxy must not promote to admin; role=%v", observedRole)
 	}
 }
 

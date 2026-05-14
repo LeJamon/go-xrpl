@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -507,12 +508,18 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		pc   *rpc.PortContext
 		addr string
 	}, 0, len(httpPorts))
+	var trustedProxies []net.IPNet
 	for name, p := range httpPorts {
 		portCfg := p
 		adminNets, err := portCfg.ParseAdminNets()
 		if err != nil {
 			return fmt.Errorf("parse admin nets for http port %q: %w", name, err)
 		}
+		secureGW, err := portCfg.ParseSecureGatewayNets()
+		if err != nil {
+			return fmt.Errorf("parse secure_gateway nets for http port %q: %w", name, err)
+		}
+		trustedProxies = append(trustedProxies, secureGW...)
 		pc := &rpc.PortContext{
 			PortName:  name,
 			AdminNets: adminNets,
@@ -529,6 +536,12 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	if len(httpPortList) == 0 {
 		return fmt.Errorf("no HTTP ports configured — at least one HTTP port is required")
 	}
+
+	// secure_gateway CIDRs from every HTTP port form the union of peers
+	// whose X-Forwarded-For / X-Real-IP we'll trust for client-IP
+	// attribution (logs, rate accounting). Admin role still requires the
+	// peer be in the per-port AdminNets list.
+	httpServer.SetTrustedProxies(trustedProxies)
 
 	for _, entry := range httpPortList {
 		wrappedMux := http.NewServeMux()

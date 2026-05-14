@@ -212,17 +212,30 @@ func (p *PortConfig) validateProtocols() error {
 // Bare IPs (without CIDR suffix) get /32 for IPv4 or /128 for IPv6.
 // This matches rippled's parse_Port() in Port.cpp.
 func (p *PortConfig) ParseAdminNets() ([]net.IPNet, error) {
+	return parseCIDRList(p.Admin, "admin")
+}
+
+// ParseSecureGatewayNets parses the SecureGateway field into net.IPNet
+// values. Mirrors rippled's secure_gateway parsing in
+// ServerHandler.cpp:1139-1140 and Role.cpp:110-111: connections whose
+// TCP peer falls in one of these networks have their X-Forwarded-For
+// honoured for client-IP attribution. Admin promotion still requires
+// the peer be in the admin list — secure_gateway never elevates role.
+func (p *PortConfig) ParseSecureGatewayNets() ([]net.IPNet, error) {
+	return parseCIDRList(p.SecureGateway, "secure_gateway")
+}
+
+func parseCIDRList(entries []string, label string) ([]net.IPNet, error) {
 	var nets []net.IPNet
-	for _, entry := range p.Admin {
+	for _, entry := range entries {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue
 		}
-		// Append CIDR suffix if not present
 		if !strings.Contains(entry, "/") {
 			ip := net.ParseIP(entry)
 			if ip == nil {
-				return nil, fmt.Errorf("invalid admin IP: %s", entry)
+				return nil, fmt.Errorf("invalid %s IP: %s", label, entry)
 			}
 			if ip.To4() != nil {
 				entry += "/32"
@@ -232,7 +245,7 @@ func (p *PortConfig) ParseAdminNets() ([]net.IPNet, error) {
 		}
 		_, ipNet, err := net.ParseCIDR(entry)
 		if err != nil {
-			return nil, fmt.Errorf("invalid admin CIDR %q: %w", entry, err)
+			return nil, fmt.Errorf("invalid %s CIDR %q: %w", label, entry, err)
 		}
 		nets = append(nets, *ipNet)
 	}
