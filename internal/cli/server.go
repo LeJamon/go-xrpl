@@ -85,6 +85,8 @@ func runServer(cmd *cobra.Command, args []string) {
 	xrpllog.SetRootConfig(&logCfg)
 	serverLog := rootLogger.Named(xrpllog.PartitionServer)
 
+	globalConfig.LogDeprecations(serverLog)
+
 	serverLog.Info("Starting goXRPLd", "version", version.Version)
 
 	// Initialize storage from config
