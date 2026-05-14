@@ -2,8 +2,8 @@ package csf
 
 import (
 	"fmt"
-	"testing"
 	"math/rand"
+	"testing"
 )
 
 // Sim orchestrates a consensus simulation.
