@@ -42,7 +42,6 @@ func TestEngine_TrackerReportsProposers_ExplicitStartRound(t *testing.T) {
 	}
 	defer engine.Stop()
 
-	// Mode will be Observing because validator=false (tracker setup).
 	parent, _ := adaptor.GetLastClosedLedger()
 	round := consensus.RoundID{Seq: parent.Seq() + 1, ParentHash: parent.ID()}
 	if err := engine.StartRound(round, false); err != nil {
@@ -362,8 +361,6 @@ func TestEngine_RecentTrustedProposerCount_StaleProposalsExcluded(t *testing.T) 
 	parent, _ := adaptor.GetLastClosedLedger()
 	round := consensus.RoundID{Seq: parent.Seq() + 1, ParentHash: parent.ID()}
 
-	// Send proposals with timestamps already older than the
-	// freshness window.
 	staleTime := adaptor.Now().Add(-1 * time.Second)
 	for _, nodeID := range trusted {
 		p := &consensus.Proposal{
