@@ -6,8 +6,9 @@ import (
 	"testing"
 )
 
+// TestXRPLNumberAddDebug mutates the package-level numberSwitchoverEnabled —
+// must not run in parallel with other state tests that read or write it.
 func TestXRPLNumberAddDebug(t *testing.T) {
-	t.Parallel()
 	// Test: -1.0 + 0.03350000000000001
 	// Expected with switchover: -0.9665000000333333 = {-9665000000333333, -16}
 	// Expected without switchover: -0.966500000033334 = {-9665000000333340, -16}

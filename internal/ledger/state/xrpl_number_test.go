@@ -240,8 +240,8 @@ func TestXRPLNumber_ToIOUAmountValue_Underflow(t *testing.T) {
 
 // TestAddIOUValues_WithSwitchover tests that addIOUValues produces different
 // results with the switchover enabled vs disabled.
+// Mutates the package-level numberSwitchoverEnabled — must not run in parallel.
 func TestAddIOUValues_WithSwitchover(t *testing.T) {
-	t.Parallel()
 	a := IOUAmountValue{mantissa: -1000000000000000, exponent: -15} // -1.0
 	b := IOUAmountValue{mantissa: 3350000000000000, exponent: -17}  // 0.0335
 

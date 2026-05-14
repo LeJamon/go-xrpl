@@ -34,4 +34,3 @@ func (a *AccountRoot) Validate() error {
 	}
 	return nil
 }
-
