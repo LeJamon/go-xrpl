@@ -3,8 +3,6 @@ package pathfinder
 import (
 	"sync"
 
-	"golang.org/x/sync/singleflight"
-
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	tx "github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -80,10 +78,12 @@ type RippleLineCache struct {
 	mu     sync.RWMutex
 	lines  map[accountKey][]PathFindTrustLine
 
-	// loadGroup coalesces concurrent buildTrustLines calls for the same
-	// account key. Without it, N goroutines all missing the cache would
-	// each walk the owner directory independently and then race to write.
-	loadGroup singleflight.Group
+	// builders serializes trust-line builds per account so concurrent
+	// callers for the same account — regardless of direction — coalesce
+	// into a single owner-directory walk. Mirrors rippled's coarse mLock
+	// in RippleLineCache.cpp without blocking different-account callers.
+	// Entries are *sync.Mutex keyed by the 20-byte account.
+	builders sync.Map
 }
 
 // NewRippleLineCache creates a new cache backed by the given ledger view.
@@ -102,68 +102,67 @@ func (c *RippleLineCache) GetLedger() tx.LedgerView {
 // GetRippleLines returns trust lines for the given account and direction.
 // Results are cached.
 //
-// When an incoming-direction request finds outgoing already cached, the
-// outgoing slice is returned and stored under the incoming key. This
-// matches rippled (RippleLineCache.cpp:87-95) — the pathfinding consumer
-// disregards non-rippling lines downstream (see Pathfinder.addAccountLinks'
-// `bIsNoRippleOut && line.NoRipple` filter), so the superset is safe to
-// share and avoids duplicating trust-line slices in cache.
+// Cache state machine mirrors rippled RippleLineCache::getRippleLines
+// (RippleLineCache.cpp:40-131):
+//   - Outgoing requested with Outgoing cached → return cached.
+//   - Incoming requested with Incoming cached → return cached.
+//   - Incoming requested with only Outgoing cached → return the outgoing
+//     superset (RippleLineCache.cpp:87-96). The pathfinder downstream
+//     filters non-rippling lines via Pathfinder.addAccountLinks'
+//     `bIsNoRippleOut && line.NoRipple` check, so sharing the superset is
+//     safe and avoids storing the same lines twice.
+//   - Outgoing requested with only Incoming cached → erase the incoming
+//     subset and build the outgoing superset (RippleLineCache.cpp:74-86),
+//     keeping a single slice per account in the cache.
 //
-// Concurrent misses for the same account are coalesced via singleflight so
-// only one goroutine walks the owner directory.
-//
-// Reference: rippled RippleLineCache::getRippleLines
+// Concurrent callers for the same account serialize on a per-account
+// mutex so only one goroutine walks the owner directory at a time,
+// regardless of which direction each caller requested. Callers for
+// different accounts proceed in parallel.
 func (c *RippleLineCache) GetRippleLines(account [20]byte, direction LineDirection) []PathFindTrustLine {
 	key := accountKey{Account: account, Direction: direction}
 
-	c.mu.RLock()
-	if cached, ok := c.lines[key]; ok {
-		c.mu.RUnlock()
+	if cached, ok := c.lookup(account, direction, key); ok {
 		return cached
 	}
-	// Outgoing-as-incoming reuse: outgoing is the superset; pathfinder
-	// filters out NoRipple lines at use time.
-	if direction == LineDirectionIncoming {
-		if cached, ok := c.lines[accountKey{Account: account, Direction: LineDirectionOutgoing}]; ok {
-			c.mu.RUnlock()
-			c.mu.Lock()
-			c.lines[key] = cached
-			c.mu.Unlock()
-			return cached
-		}
+
+	builderAny, _ := c.builders.LoadOrStore(account, &sync.Mutex{})
+	builder := builderAny.(*sync.Mutex)
+	builder.Lock()
+	defer builder.Unlock()
+
+	// Re-check under the per-account build lock — another caller may
+	// have populated the cache while we waited.
+	if cached, ok := c.lookup(account, direction, key); ok {
+		return cached
 	}
-	c.mu.RUnlock()
 
-	// Coalesce concurrent misses for the same key.
-	loadKey := cacheLoadKey(account, direction)
-	result, _, _ := c.loadGroup.Do(loadKey, func() (any, error) {
-		// Re-check under write lock — another caller may have just populated it.
-		c.mu.Lock()
-		if cached, ok := c.lines[key]; ok {
-			c.mu.Unlock()
-			return cached, nil
-		}
-		c.mu.Unlock()
+	lines := c.buildTrustLines(account, direction)
 
-		lines := c.buildTrustLines(account, direction)
-
-		c.mu.Lock()
-		c.lines[key] = lines
-		c.mu.Unlock()
-		return lines, nil
-	})
-	return result.([]PathFindTrustLine)
+	c.mu.Lock()
+	c.lines[key] = lines
+	if direction == LineDirectionOutgoing {
+		// Outgoing supersedes any previously cached incoming subset.
+		delete(c.lines, accountKey{Account: account, Direction: LineDirectionIncoming})
+	}
+	c.mu.Unlock()
+	return lines
 }
 
-// cacheLoadKey builds a singleflight key for an (account, direction) pair.
-// 20 raw account bytes + 1 byte for direction; cannot collide.
-func cacheLoadKey(account [20]byte, direction LineDirection) string {
-	var buf [21]byte
-	copy(buf[:20], account[:])
-	if direction == LineDirectionOutgoing {
-		buf[20] = 1
+// lookup returns a cached slice for the requested (account, direction)
+// if one is available, applying the outgoing-as-incoming reuse rule.
+func (c *RippleLineCache) lookup(account [20]byte, direction LineDirection, key accountKey) ([]PathFindTrustLine, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if cached, ok := c.lines[key]; ok {
+		return cached, true
 	}
-	return string(buf[:])
+	if direction == LineDirectionIncoming {
+		if cached, ok := c.lines[accountKey{Account: account, Direction: LineDirectionOutgoing}]; ok {
+			return cached, true
+		}
+	}
+	return nil, false
 }
 
 // buildTrustLines walks an account's owner directory and extracts all

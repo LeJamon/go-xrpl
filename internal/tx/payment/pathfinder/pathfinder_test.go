@@ -494,6 +494,54 @@ func TestRippleLineCache_IncomingReuseOutgoing(t *testing.T) {
 	require.Equal(t, len(outLines), len(inLines))
 }
 
+func TestRippleLineCache_OutgoingErasesIncomingSubset(t *testing.T) {
+	// Rippled RippleLineCache.cpp:74-86: when Outgoing is requested and an
+	// Incoming subset is already cached, the subset is erased and the
+	// outgoing superset is built and stored under the outgoing key.
+	ledger := newMockLedger()
+	alice := testAccountID(1)
+	bob := testAccountID(2)
+	addAccount(t, ledger, alice, 10000000000, 0)
+	addAccount(t, ledger, bob, 10000000000, 0)
+
+	low, high := alice, bob
+	if compareAccountIDs(alice, bob) > 0 {
+		low, high = bob, alice
+	}
+	// Two trust lines: one with NoRipple on alice's side (excluded from
+	// incoming), one without.
+	cheri := testAccountID(3)
+	addAccount(t, ledger, cheri, 10000000000, 0)
+	var flagsAB uint32
+	if low == alice {
+		flagsAB = state.LsfLowNoRipple
+	} else {
+		flagsAB = state.LsfHighNoRipple
+	}
+	addRippleState(t, ledger, low, high, "USD", 100, 1000, 1000, flagsAB)
+	lowAC, highAC := alice, cheri
+	if compareAccountIDs(alice, cheri) > 0 {
+		lowAC, highAC = cheri, alice
+	}
+	addRippleState(t, ledger, lowAC, highAC, "EUR", 100, 1000, 1000, 0)
+
+	cache := NewRippleLineCache(ledger)
+
+	// Cache the incoming subset first (one line filtered out).
+	inFirst := cache.GetRippleLines(alice, LineDirectionIncoming)
+	require.Len(t, inFirst, 1, "incoming filters NoRipple line")
+
+	// Now request outgoing — should build the superset and erase the subset.
+	outAfter := cache.GetRippleLines(alice, LineDirectionOutgoing)
+	require.Len(t, outAfter, 2, "outgoing must include all trust lines")
+
+	// The incoming key must no longer hold the stale subset; a subsequent
+	// incoming request reuses the cached outgoing superset.
+	inAfter := cache.GetRippleLines(alice, LineDirectionIncoming)
+	require.Len(t, inAfter, 2,
+		"incoming after outgoing must reuse outgoing superset, not the erased subset")
+}
+
 func TestRippleLineCache_TrustLineParsing(t *testing.T) {
 	ledger := newMockLedger()
 	alice := testAccountID(1)
