@@ -18,8 +18,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// recoverPanic logs a panic from a websocket goroutine without crashing
-// the process. Returns true if a panic was recovered.
 func recoverPanic(where string, connID string) {
 	if rec := recover(); rec != nil {
 		wsLog().Error("ws goroutine panic", "where", where, "conn", connID, "err", rec, "stack", string(debug.Stack()))
@@ -260,10 +258,9 @@ func (ws *WebSocketServer) handleSend(wsConn *WebSocketConnection) {
 	}
 }
 
-// handleMessage processes a single message from WebSocket
 func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []byte) {
-	// Isolate per-message panics so a single bad command can't tear down
-	// the read loop / drop the connection's pending subscriptions.
+	// Per-message recover so one bad command can't tear down the read
+	// loop and drop the connection's pending subscriptions.
 	defer func() {
 		if rec := recover(); rec != nil {
 			wsLog().Error("ws message panic", "conn", wsConn.ID, "err", rec, "stack", string(debug.Stack()))
@@ -743,13 +740,9 @@ func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 }
 
 // BroadcastToSubscribers sends a message to all connections subscribed to
-// a specific stream. The iteration is delegated to the subscription
-// Manager so the per-connection subscription map is read under the same
-// mutex that HandleSubscribe / HandleUnsubscribe write under. Previously
-// this method iterated ws.connections and read conn.subscriptions while
-// the manager mutated the same map under a different lock — a data race
-// flagged by the #428 audit and reachable under any concurrent
-// subscribe + broadcast.
+// a specific stream. Iteration runs through the subscription Manager so
+// the per-connection subscription map is read under the same mutex
+// HandleSubscribe / HandleUnsubscribe write under (#428 race fix).
 func (ws *WebSocketServer) BroadcastToSubscribers(msgType types.SubscriptionType, message interface{}) {
 	data, err := json.Marshal(message)
 	if err != nil {
@@ -759,18 +752,12 @@ func (ws *WebSocketServer) BroadcastToSubscribers(msgType types.SubscriptionType
 	ws.subscriptionManager.BroadcastToStream(msgType, data, nil)
 }
 
-// Helper functions
-
-// connectionIDSeq is a process-wide monotonic counter used to make
-// connection IDs unique even under sub-nanosecond bursts of accepts.
 var connectionIDSeq atomic.Uint64
 
-// generateConnectionID returns a per-connection identifier of the form
-// `conn_<seq>_<random>`. The atomic seq prevents collisions when many
-// connections are accepted in the same nanosecond; the random suffix
-// makes IDs unguessable so they can't be used as cross-connection
-// references in subscriptions / replies. Falls back to time-based bits
-// if crypto/rand fails (it doesn't, on supported platforms).
+// generateConnectionID returns `conn_<seq>_<random>`. The atomic seq
+// avoids collisions under same-nanosecond accept bursts; the random
+// suffix keeps IDs unguessable so they can't be used as cross-connection
+// references.
 func generateConnectionID() string {
 	seq := connectionIDSeq.Add(1)
 	var rnd [6]byte

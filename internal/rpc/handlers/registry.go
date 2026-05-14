@@ -4,15 +4,10 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
-// RegisterAll wires every RPC method handler into the given registry.
-// This is the single source of truth shared by the HTTP server, the
-// WebSocket server, and the local `xrpld rpc` CLI — previously each
-// constructor maintained its own list, which had already drifted
-// (ledger_range / version / download_shard / crawl_shards differed
-// between paths). Adding a new method here exposes it on every entry
-// point at once.
+// RegisterAll is the single source of truth for RPC method wiring, shared
+// by the HTTP server, the WebSocket server, and the local `xrpld rpc`
+// CLI. Adding a new method here exposes it on every entry point at once.
 func RegisterAll(registry *types.MethodRegistry) {
-	// Server-information methods
 	registry.Register("server_info", &ServerInfoMethod{})
 	registry.Register("server_state", &ServerStateMethod{})
 	registry.Register("ping", &PingMethod{})
@@ -22,7 +17,6 @@ func RegisterAll(registry *types.MethodRegistry) {
 	registry.Register("fee", &FeeMethod{})
 	registry.Register("version", &VersionMethod{})
 
-	// Ledger
 	registry.Register("ledger", &LedgerMethod{})
 	registry.Register("ledger_closed", &LedgerClosedMethod{})
 	registry.Register("ledger_current", &LedgerCurrentMethod{})
@@ -34,7 +28,6 @@ func RegisterAll(registry *types.MethodRegistry) {
 	registry.Register("ledger_cleaner", &LedgerCleanerMethod{})
 	registry.Register("ledger_accept", &LedgerAcceptMethod{})
 
-	// Account
 	registry.Register("account_info", &AccountInfoMethod{})
 	registry.Register("account_channels", &AccountChannelsMethod{})
 	registry.Register("account_currencies", &AccountCurrenciesMethod{})
@@ -47,7 +40,6 @@ func RegisterAll(registry *types.MethodRegistry) {
 	registry.Register("noripple_check", &NoRippleCheckMethod{})
 	registry.Register("owner_info", &OwnerInfoMethod{})
 
-	// Transaction
 	registry.Register("tx", &TxMethod{})
 	registry.Register("tx_history", &TxHistoryMethod{})
 	registry.Register("submit", &SubmitMethod{})
@@ -58,31 +50,25 @@ func RegisterAll(registry *types.MethodRegistry) {
 	registry.Register("simulate", &SimulateMethod{})
 	registry.Register("tx_reduce_relay", &TxReduceRelayMethod{})
 
-	// Order book / pathfinding
 	registry.Register("book_changes", &BookChangesMethod{})
 	registry.Register("book_offers", &BookOffersMethod{})
 	registry.Register("path_find", &PathFindMethod{})
 	registry.Register("ripple_path_find", &RipplePathFindMethod{})
 
-	// Channels
 	registry.Register("channel_authorize", &ChannelAuthorizeMethod{})
 	registry.Register("channel_verify", &ChannelVerifyMethod{})
 
-	// Subscriptions (HTTP returns notSupported; WebSocket short-circuits
-	// before dispatch).
+	// HTTP returns notSupported; WebSocket short-circuits before dispatch.
 	registry.Register("subscribe", &SubscribeMethod{})
 	registry.Register("unsubscribe", &UnsubscribeMethod{})
 
-	// JSON method proxy
 	registry.Register("json", &JsonMethod{})
 
-	// Utility
 	registry.Register("wallet_propose", &WalletProposeMethod{})
 	registry.Register("deposit_authorized", &DepositAuthorizedMethod{})
 	registry.Register("nft_buy_offers", &NftBuyOffersMethod{})
 	registry.Register("nft_sell_offers", &NftSellOffersMethod{})
 
-	// Admin
 	registry.Register("stop", &StopMethod{})
 	registry.Register("validation_create", &ValidationCreateMethod{})
 	registry.Register("manifest", &ManifestMethod{})
@@ -106,7 +92,6 @@ func RegisterAll(registry *types.MethodRegistry) {
 	registry.Register("connect", &ConnectMethod{})
 	registry.Register("print", &PrintMethod{})
 
-	// Feature-specific
 	registry.Register("amm_info", &AMMInfoMethod{})
 	registry.Register("vault_info", &VaultInfoMethod{})
 	registry.Register("get_aggregate_price", &GetAggregatePriceMethod{})

@@ -307,8 +307,6 @@ func deliver(targets []broadcastTarget, data []byte) {
 		select {
 		case t.sendChan <- data:
 		default:
-			// Channel full — drop. Closing the connection on repeated
-			// drops is a follow-up policy decision.
 		}
 	}
 }

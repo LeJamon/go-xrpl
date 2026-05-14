@@ -285,13 +285,12 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 
 	result, rpcErr := s.executeMethod(request.Method, params, ctx)
 
-	// Build request object for error responses. Credential-bearing fields
-	// (secret, seed, passphrase, key, seed_hex) are stripped so they don't
-	// leak back to the client when a request fails.
+	// Build the request echo for error responses; credentials are masked
+	// before the echo leaves the process (see redactCredentials).
 	var requestObj interface{}
 	if params != nil {
 		var reqMap map[string]interface{}
-		// Check both for unmarshal error AND nil map (params could be JSON null)
+		// params may unmarshal to JSON null, which yields a nil map.
 		if err := json.Unmarshal(params, &reqMap); err == nil && reqMap != nil {
 			redactCredentials(reqMap)
 			reqMap["command"] = request.Method
@@ -306,10 +305,6 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	s.writeXrplResponse(w, request.Method, requestObj, result, rpcErr)
 }
 
-// withTimeout wraps the request context with s.timeout if a positive
-// timeout is configured. Returns the (possibly new) context plus a cancel
-// func the caller must call. A zero/negative timeout returns the context
-// unchanged with a no-op cancel.
 func (s *Server) withTimeout(parent context.Context) (context.Context, context.CancelFunc) {
 	if s.timeout <= 0 {
 		return parent, func() {}
@@ -317,24 +312,19 @@ func (s *Server) withTimeout(parent context.Context) (context.Context, context.C
 	return context.WithTimeout(parent, s.timeout)
 }
 
-// credentialKeys are request fields whose values must be masked in error
-// envelopes. Matches rippled's strip list in ServerHandler.cpp:535-542
-// (passphrase, secret, seed, seed_hex). Both lower-case and PascalCase
-// shapes are covered so clients using either casing don't leak.
+// credentialKeys are request fields masked in error envelopes. Mirrors
+// rippled's strip list in ServerHandler.cpp:535-542; PascalCase variants
+// are included to cover clients that use either casing.
 var credentialKeys = []string{
 	"secret", "seed", "passphrase", "seed_hex",
 	"Secret", "Seed", "Passphrase", "SeedHex",
 }
 
 // maskedValue is the literal rippled writes in place of credential
-// values — see ServerHandler.cpp:536. Masking (rather than deleting) lets
-// a debugging client see that a credential field was supplied without
-// learning its value.
+// values (ServerHandler.cpp:536). Masking preserves the key so a
+// debugging client can see a credential was supplied.
 const maskedValue = "<masked>"
 
-// redactCredentials replaces credential-bearing values with maskedValue
-// in place, recursing into tx_json/transaction objects so signing fields
-// nested under those keys are also scrubbed.
 func redactCredentials(m map[string]interface{}) {
 	for _, k := range credentialKeys {
 		if _, ok := m[k]; ok {

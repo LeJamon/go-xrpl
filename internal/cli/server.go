@@ -64,11 +64,6 @@ func init() {
 }
 
 func runServer(cmd *cobra.Command, args []string) (retErr error) {
-	// Require config file. We honour both the explicit --conf flag and any
-	// load error captured in initConfig so failures arrive here as a
-	// regular RunE return — cobra prints the error and any deferred
-	// cleanup actually fires (the old code called serverLog.Fatal, which
-	// invokes os.Exit and skips every defer).
 	if _, err := requireConfig(); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "%v\n", err)
 		fmt.Fprintf(cmd.ErrOrStderr(), "  Use 'xrpld generate-config' to create an initial configuration file.\n")
@@ -101,11 +96,9 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		serverLog.Info("pprof enabled", "addr", addr)
 	}
 
-	// Pre-declare every resource the deferred shutdown needs to clean up.
-	// They start nil and get populated as init succeeds; doShutdown is
-	// already tolerant of nil components, so an early error path produces
-	// the right partial cleanup. Previously serverLog.Fatal short-circuited
-	// every deferred close (Pebble, Postgres, ledger service, …).
+	// Pre-declared so the deferred shutdown can clean up whatever the
+	// init path managed to populate before any error return. doShutdown
+	// tolerates nil components for the partial-init case.
 	var (
 		db                   nodestore.Database
 		repoManager          relationaldb.RepositoryManager
@@ -475,9 +468,8 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		serverLog.Info("Port configured", "protocol", "peer", "addr", peerPort.GetBindAddress())
 	}
 
-	// Listener-goroutine failures send into listenerErrCh so the main
-	// routine can trigger an orderly shutdown instead of os.Exit'ing from
-	// inside the goroutine (which skipped every deferred cleanup).
+	// listenerErrCh routes ListenAndServe failures back to the main
+	// goroutine so shutdown runs the deferred cleanup chain.
 	listenerErrCh := make(chan error, 1+len(wsPorts)+len(httpPorts))
 
 	// Start WebSocket listeners — each port gets its own mux with PortMiddleware
@@ -582,8 +574,6 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		serverLog.Error("Listener failed — initiating shutdown", "err", err)
 		retErr = err
 	}
-	// The deferred shutdown closure runs after this returns and tears down
-	// every component populated during init.
 	return retErr
 }
 
