@@ -230,7 +230,11 @@ func runServer(cmd *cobra.Command, args []string) {
 	var consensusComponents *adaptor.Components
 	if !standalone {
 		var compErr error
-		consensusComponents, compErr = adaptor.NewFromConfig(globalConfig, ledgerService, repoManager.Validation())
+		var validationRepo relationaldb.ValidationRepository
+		if repoManager != nil {
+			validationRepo = repoManager.Validation()
+		}
+		consensusComponents, compErr = adaptor.NewFromConfig(globalConfig, ledgerService, validationRepo)
 		if compErr != nil {
 			serverLog.Fatal("Failed to create consensus components", "err", compErr)
 		}

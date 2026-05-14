@@ -3,9 +3,11 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -15,6 +17,12 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
 )
+
+// MaxRequestBytes caps the size of a single JSON-RPC request body. XRPL
+// requests are small (a few KB at most for tx_blob); 1 MiB is generous
+// without leaving the server vulnerable to memory-buffering DoS via
+// io.ReadAll on an unbounded body.
+const MaxRequestBytes = 1 << 20
 
 // rpcLog returns the logger for the HTTP JSON-RPC server.
 // Resolved lazily so it picks up the root logger set during CLI bootstrap.
@@ -86,6 +94,13 @@ type JsonRpcResponseOptions struct {
 
 // ServeHTTP implements http.Handler interface
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			rpcLog().Error("rpc handler panic", "err", rec, "stack", string(debug.Stack()), "method", r.Method, "remote", r.RemoteAddr)
+			s.writeXrplError(w, "", nil, "internal", "Internal server error")
+		}
+	}()
+
 	// Set CORS headers to match rippled
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
@@ -124,11 +139,14 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		method = "server_info"
 	}
 
+	peerIP := remoteAddrIP(r.RemoteAddr)
 	clientIP := getClientIP(r)
 	portCtx := GetPortContext(r.Context())
-	role := roleForRequest(clientIP, portCtx)
+	role := roleForRequest(peerIP, portCtx)
+	dispatchCtx, cancel := s.withTimeout(r.Context())
+	defer cancel()
 	ctx := &types.RpcContext{
-		Context:    r.Context(),
+		Context:    dispatchCtx,
 		Role:       role,
 		ApiVersion: types.DefaultApiVersion,
 		IsAdmin:    role == types.RoleAdmin,
@@ -143,12 +161,19 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 
 // handlePostRequest processes POST requests with XRPL JSON-RPC payload
 func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	r.Body = http.MaxBytesReader(w, r.Body, MaxRequestBytes)
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			s.writeXrplError(w, "", nil, "invalidParams", "Request body exceeds limit")
+			return
+		}
 		s.writeXrplError(w, "", nil, "internal", "Failed to read request body")
 		return
 	}
-	defer r.Body.Close()
 
 	var request XrplRequest
 	if err := json.Unmarshal(body, &request); err != nil {
@@ -167,11 +192,18 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		params = request.Params[0]
 	}
 
+	peerIP := remoteAddrIP(r.RemoteAddr)
 	clientIP := getClientIP(r)
 	portCtx := GetPortContext(r.Context())
-	role := roleForRequest(clientIP, portCtx)
+	// Role is derived from the socket-level peer, not header-supplied IPs,
+	// so an X-Real-IP / X-Forwarded-For header from an untrusted client
+	// can't elevate to admin via the localhost fallback. Matches rippled's
+	// requestRole, which uses the connection's remote endpoint.
+	role := roleForRequest(peerIP, portCtx)
+	dispatchCtx, cancel := s.withTimeout(r.Context())
+	defer cancel()
 	ctx := &types.RpcContext{
-		Context:    r.Context(),
+		Context:    dispatchCtx,
 		Role:       role,
 		ApiVersion: types.DefaultApiVersion,
 		IsAdmin:    role == types.RoleAdmin,
@@ -194,12 +226,15 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 
 	result, rpcErr := s.executeMethod(request.Method, params, ctx)
 
-	// Build request object for error responses
+	// Build request object for error responses. Credential-bearing fields
+	// (secret, seed, passphrase, key, seed_hex) are stripped so they don't
+	// leak back to the client when a request fails.
 	var requestObj interface{}
 	if params != nil {
 		var reqMap map[string]interface{}
 		// Check both for unmarshal error AND nil map (params could be JSON null)
 		if err := json.Unmarshal(params, &reqMap); err == nil && reqMap != nil {
+			redactCredentials(reqMap)
 			reqMap["command"] = request.Method
 			requestObj = reqMap
 		} else {
@@ -210,6 +245,39 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeXrplResponse(w, request.Method, requestObj, result, rpcErr)
+}
+
+// withTimeout wraps the request context with s.timeout if a positive
+// timeout is configured. Returns the (possibly new) context plus a cancel
+// func the caller must call. A zero/negative timeout returns the context
+// unchanged with a no-op cancel.
+func (s *Server) withTimeout(parent context.Context) (context.Context, context.CancelFunc) {
+	if s.timeout <= 0 {
+		return parent, func() {}
+	}
+	return context.WithTimeout(parent, s.timeout)
+}
+
+// credentialKeys are request fields that must never appear in error
+// envelopes. Matches rippled's RPCParser stripped-secret list (Secret,
+// Seed, Passphrase, SeedHex) plus the lower-case shapes some clients use.
+var credentialKeys = []string{
+	"secret", "seed", "passphrase", "key",
+	"seed_hex", "Secret", "Seed", "Passphrase", "Key", "SeedHex",
+}
+
+// redactCredentials removes credential-bearing keys from a request map
+// in place, recursing into tx_json/transaction objects so signing fields
+// nested under those keys are also scrubbed.
+func redactCredentials(m map[string]interface{}) {
+	for _, k := range credentialKeys {
+		delete(m, k)
+	}
+	for _, nested := range []string{"tx_json", "transaction"} {
+		if sub, ok := m[nested].(map[string]interface{}); ok {
+			redactCredentials(sub)
+		}
+	}
 }
 
 // executeMethod executes an RPC method with the given parameters
@@ -384,7 +452,10 @@ func roleForRequest(clientIP string, portCtx *PortContext) types.Role {
 	return types.RoleGuest
 }
 
-// getClientIP extracts the client IP from the request
+// getClientIP extracts the client IP for logging and identification.
+// May reflect upstream proxy headers and so MUST NOT be used for role
+// or admin gating — callers that need a security decision should use
+// remoteAddrIP, which always returns the socket-level peer.
 func getClientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		ips := strings.Split(xff, ",")
@@ -395,10 +466,15 @@ func getClientIP(r *http.Request) string {
 		return xri
 	}
 
-	ip := r.RemoteAddr
-	if idx := strings.LastIndex(ip, ":"); idx != -1 {
-		ip = ip[:idx]
-	}
+	return remoteAddrIP(r.RemoteAddr)
+}
 
-	return ip
+// remoteAddrIP returns the host portion of an http.Request.RemoteAddr
+// (or any "host:port" string). Used wherever the IP must be the actual
+// TCP peer — never spoofable via headers.
+func remoteAddrIP(addr string) string {
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
 }

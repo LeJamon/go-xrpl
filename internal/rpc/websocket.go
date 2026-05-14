@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +16,14 @@ import (
 	xrpllog "github.com/LeJamon/goXRPLd/log"
 	"github.com/gorilla/websocket"
 )
+
+// recoverPanic logs a panic from a websocket goroutine without crashing
+// the process. Returns true if a panic was recovered.
+func recoverPanic(where string, connID string) {
+	if rec := recover(); rec != nil {
+		wsLog().Error("ws goroutine panic", "where", where, "conn", connID, "err", rec, "stack", string(debug.Stack()))
+	}
+}
 
 // wsLog returns the logger for the WebSocket server.
 // Resolved lazily so it picks up the root logger set during CLI bootstrap.
@@ -170,6 +179,7 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // handleConnection processes messages from a WebSocket connection
 func (ws *WebSocketServer) handleConnection(wsConn *WebSocketConnection) {
 	defer ws.closeConnection(wsConn)
+	defer recoverPanic("handleConnection", wsConn.ID)
 
 	wsConn.conn.SetReadLimit(512 * 1024) // 512KB max message size
 
@@ -212,6 +222,7 @@ func (ws *WebSocketServer) handleConnection(wsConn *WebSocketConnection) {
 
 // pingLoop sends periodic pings to keep the connection alive
 func (ws *WebSocketServer) pingLoop(wsConn *WebSocketConnection) {
+	defer recoverPanic("pingLoop", wsConn.ID)
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -231,6 +242,7 @@ func (ws *WebSocketServer) pingLoop(wsConn *WebSocketConnection) {
 
 // handleSend processes outgoing messages for a WebSocket connection
 func (ws *WebSocketServer) handleSend(wsConn *WebSocketConnection) {
+	defer recoverPanic("handleSend", wsConn.ID)
 	for {
 		select {
 		case <-wsConn.ctx.Done():
@@ -249,6 +261,15 @@ func (ws *WebSocketServer) handleSend(wsConn *WebSocketConnection) {
 
 // handleMessage processes a single message from WebSocket
 func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []byte) {
+	// Isolate per-message panics so a single bad command can't tear down
+	// the read loop / drop the connection's pending subscriptions.
+	defer func() {
+		if rec := recover(); rec != nil {
+			wsLog().Error("ws message panic", "conn", wsConn.ID, "err", rec, "stack", string(debug.Stack()))
+			ws.sendError(wsConn, types.NewRpcError(types.RpcINTERNAL, "internal", "internal", "Internal server error"), nil)
+		}
+	}()
+
 	// Parse WebSocket command - XRPL format has command and params at top level
 	var cmdMap map[string]interface{}
 	if err := json.Unmarshal(message, &cmdMap); err != nil {
@@ -297,8 +318,14 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	clientIP := getWebSocketClientIP(wsConn.conn)
 	role := roleForRequest(clientIP, wsConn.portCtx)
 	wsLog().Debug("ws request", "cmd", cmd.Command, "remoteAddr", wsConn.conn.RemoteAddr().String(), "clientIP", clientIP, "role", role, "isAdmin", role == types.RoleAdmin)
+	dispatchCtx := wsConn.ctx
+	var cancel context.CancelFunc
+	if ws.timeout > 0 {
+		dispatchCtx, cancel = context.WithTimeout(wsConn.ctx, ws.timeout)
+		defer cancel()
+	}
 	rpcCtx := &types.RpcContext{
-		Context:    wsConn.ctx,
+		Context:    dispatchCtx,
 		Role:       role,
 		ApiVersion: apiVersion,
 		IsAdmin:    role == types.RoleAdmin,
@@ -582,7 +609,11 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *typ
 		return
 	}
 
-	if ctx.Role < handler.RequiredRole() {
+	// Mirror the HTTP server's admin gate (server.go executeMethod): rippled
+	// only checks for the admin role, not an ordered hierarchy — ordering
+	// the role enum (RoleIdentified > RoleAdmin) would otherwise let an
+	// Identified caller satisfy an Admin requirement.
+	if handler.RequiredRole() == types.RoleAdmin && ctx.Role != types.RoleAdmin {
 		ws.sendError(wsConn, types.NewRpcError(types.RpcCOMMAND_UNTRUSTED, "commandUntrusted", "commandUntrusted",
 			fmt.Sprintf("Command '%s' requires higher privileges", cmd.Command)), cmd.ID)
 		return
