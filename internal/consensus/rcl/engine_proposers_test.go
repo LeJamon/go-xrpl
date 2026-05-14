@@ -8,14 +8,14 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 )
 
-// TestEngine_TrackerReportsProposers reproduces issue #421:
-// a non-validating tracker must surface a non-zero
+// TestEngine_TrackerReportsProposers_ExplicitStartRound reproduces
+// issue #421: a non-validating tracker must surface a non-zero
 // last_close.proposers via GetLastCloseInfo once a round completes
 // with trusted peer proposals on hand.
 //
 // Scenario A: caller explicitly drives StartRound, then proposals
 // arrive within that round.
-func TestEngine_TrackerReportsProposers(t *testing.T) {
+func TestEngine_TrackerReportsProposers_ExplicitStartRound(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.validator = false
 	adaptor.opMode = consensus.OpModeFull

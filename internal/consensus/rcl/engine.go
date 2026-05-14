@@ -988,6 +988,9 @@ func (e *Engine) GetLastCloseInfo() (proposers int, convergeTime time.Duration) 
 // wrongLedger-driven round restarts — the production scenario where
 // the per-round e.proposals map ends up empty even on a healthy
 // network. See GetLastCloseInfo. Issue #421.
+//
+// Acquires e.mu.RLock(); cost is bounded by recentProposals (capped
+// at 10 positions per node).
 func (e *Engine) recentTrustedProposerCount() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -995,14 +998,14 @@ func (e *Engine) recentTrustedProposerCount() int {
 		return 0
 	}
 	freshness := e.timing.ProposeFreshness
-	cutoff := e.adaptor.Now().Add(-freshness)
+	now := e.adaptor.Now()
 	count := 0
 	for nodeID, positions := range e.recentProposals {
 		if !e.adaptor.IsTrusted(nodeID) {
 			continue
 		}
 		for _, p := range positions {
-			if freshness > 0 && !p.Timestamp.IsZero() && p.Timestamp.Before(cutoff) {
+			if now.Sub(p.Timestamp) > freshness {
 				continue
 			}
 			count++
