@@ -100,153 +100,19 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 	} else if result.IsTec() {
 		// Tec from preclaim: fee must still be deducted and sequence consumed,
 		// but doApply() is NOT called — the transaction has no side effects.
-		// This mirrors the tec recovery path inside doApply() (lines 1785-2000)
-		// but without needing to discard any doApply changes (since doApply never ran).
+		// We share the same recovery helpers used by doApply's own tec path
+		// (consumeTicketForRecovery, writeRecoveryAccount, payDelegatedFeeOnTable);
+		// the only difference is that the sandbox here is empty, so we skip
+		// the "discard sandbox + replay deletions" steps.
 		// Reference: rippled applySteps.cpp — preclaim tec with likelyToClaimFee=true
 		// still enters Transactor::operator() which always applies fee/sequence.
-		tecCommon := tx.GetCommon()
-		tecAccountID, _ := state.DecodeAccountID(tecCommon.Account)
-		tecAccountKey := keylet.Account(tecAccountID)
-
-		tecAccountData, tecReadErr := e.view.Read(tecAccountKey)
-		if tecReadErr != nil || tecAccountData == nil {
+		if r := e.commitPreclaimTec(tx, txHash, fee, metadata); r != TesSUCCESS {
 			return ApplyResult{
-				Result:  TefINTERNAL,
+				Result:  r,
 				Applied: false,
-				Message: "tec-from-preclaim: failed to read account",
+				Message: r.Message(),
 			}
 		}
-
-		tecAccount, tecParseErr := state.ParseAccountRoot(tecAccountData)
-		if tecParseErr != nil {
-			return ApplyResult{
-				Result:  TefINTERNAL,
-				Applied: false,
-				Message: "tec-from-preclaim: failed to parse account",
-			}
-		}
-
-		tecIsDelegated := tecCommon.Delegate != ""
-		tecIsTicket := tecCommon.TicketSequence != nil
-
-		// Deduct fee (unless delegated — delegate pays)
-		if !tecIsDelegated {
-			tecAccount.Balance -= fee
-		}
-
-		// Increment sequence (unless ticket-based)
-		if !tecIsTicket && tecCommon.Sequence != nil {
-			tecAccount.Sequence = *tecCommon.Sequence + 1
-		}
-
-		// Ticket consumption: decrement OwnerCount and TicketCount
-		if tecIsTicket && tecAccount.OwnerCount > 0 {
-			tecAccount.OwnerCount--
-		}
-		if tecIsTicket && tecAccount.TicketCount > 0 {
-			tecAccount.TicketCount--
-		}
-
-		// Thread PreviousTxnID/PreviousTxnLgrSeq
-		tecAccount.PreviousTxnID = txHash
-		tecAccount.PreviousTxnLgrSeq = e.config.LedgerSequence
-
-		// Update AccountTxnID if tracking is enabled
-		{
-			var zeroHash [32]byte
-			if tecAccount.AccountTxnID != zeroHash {
-				tecAccount.AccountTxnID = txHash
-			}
-		}
-
-		// Create fresh ApplyStateTable for fee-only changes
-		tecTable := NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, e.rules())
-
-		// Consume ticket through tecTable for proper metadata (DeletedNode + directory changes)
-		if tecIsTicket {
-			ticketKey := keylet.Ticket(tecAccountID, *tecCommon.TicketSequence)
-			ownerDirKey := keylet.OwnerDir(tecAccountID)
-			var ticketOwnerNode uint64
-			if ticketData, ticketErr := tecTable.Read(ticketKey); ticketErr == nil && ticketData != nil {
-				ticketOwnerNode = state.GetOwnerNode(ticketData)
-			}
-			state.DirRemove(tecTable, ownerDirKey, ticketOwnerNode, ticketKey.Key, true)
-			if err := tecTable.Erase(ticketKey); err != nil {
-				return ApplyResult{
-					Result:  TefINTERNAL,
-					Applied: false,
-					Message: "tec-from-preclaim: failed to erase ticket",
-				}
-			}
-		}
-
-		// Serialize and write updated account to tecTable
-		tecUpdatedData, tecSerErr := state.SerializeAccountRoot(tecAccount)
-		if tecSerErr != nil {
-			return ApplyResult{
-				Result:  TefINTERNAL,
-				Applied: false,
-				Message: "tec-from-preclaim: failed to serialize account",
-			}
-		}
-		if err := tecTable.Update(tecAccountKey, tecUpdatedData); err != nil {
-			return ApplyResult{
-				Result:  TefINTERNAL,
-				Applied: false,
-				Message: "tec-from-preclaim: failed to update account",
-			}
-		}
-
-		// For delegated transactions, deduct fee from delegate's account
-		if tecIsDelegated {
-			delegateID, _ := state.DecodeAccountID(tecCommon.Delegate)
-			delegateAccountKey := keylet.Account(delegateID)
-			delegateAccountData, delegateReadErr := e.view.Read(delegateAccountKey)
-			if delegateReadErr != nil || delegateAccountData == nil {
-				return ApplyResult{
-					Result:  TefINTERNAL,
-					Applied: false,
-					Message: "tec-from-preclaim: failed to read delegate account",
-				}
-			}
-			delegateAccount, delegateParseErr := state.ParseAccountRoot(delegateAccountData)
-			if delegateParseErr != nil {
-				return ApplyResult{
-					Result:  TefINTERNAL,
-					Applied: false,
-					Message: "tec-from-preclaim: failed to parse delegate account",
-				}
-			}
-			delegateAccount.Balance -= fee
-			delegateAccount.PreviousTxnID = txHash
-			delegateAccount.PreviousTxnLgrSeq = e.config.LedgerSequence
-			delegateData, delegateSerErr := state.SerializeAccountRoot(delegateAccount)
-			if delegateSerErr != nil {
-				return ApplyResult{
-					Result:  TefINTERNAL,
-					Applied: false,
-					Message: "tec-from-preclaim: failed to serialize delegate account",
-				}
-			}
-			if err := tecTable.Update(delegateAccountKey, delegateData); err != nil {
-				return ApplyResult{
-					Result:  TefINTERNAL,
-					Applied: false,
-					Message: "tec-from-preclaim: failed to update delegate account",
-				}
-			}
-		}
-
-		// Apply all tracked changes and generate metadata
-		generatedMeta, applyErr := tecTable.Apply()
-		if applyErr != nil {
-			return ApplyResult{
-				Result:  TefINTERNAL,
-				Applied: false,
-				Message: "tec-from-preclaim: failed to apply tecTable",
-			}
-		}
-		metadata.AffectedNodes = generatedMeta.AffectedNodes
 	}
 
 	metadata.TransactionResult = result
@@ -375,4 +241,59 @@ func (e *Engine) applyPseudoTransaction(tx Transaction) ApplyResult {
 		Metadata: metadata,
 		Message:  result.Message(),
 	}
+}
+
+// commitPreclaimTec handles the tec-from-preclaim path: the transaction was
+// rejected by preclaim with a tec code, doApply() never ran, but the fee and
+// sequence still need to be charged. Reuses the same recovery helpers that
+// doApply's own tec path uses (consumeTicketForRecovery, writeRecoveryAccount,
+// payDelegatedFeeOnTable) so the fee/seq commit semantics stay in lockstep.
+// Reference: rippled applySteps.cpp — likelyToClaimFee tec still enters
+// Transactor::operator() which calls reset(fee) before returning.
+func (e *Engine) commitPreclaimTec(tx Transaction, txHash [32]byte, fee uint64, metadata *Metadata) Result {
+	common := tx.GetCommon()
+	accountID, _ := state.DecodeAccountID(common.Account)
+	accountKey := keylet.Account(accountID)
+
+	accountData, readErr := e.view.Read(accountKey)
+	if readErr != nil || accountData == nil {
+		return TefINTERNAL
+	}
+	recoveredAccount, parseErr := state.ParseAccountRoot(accountData)
+	if parseErr != nil {
+		return TefINTERNAL
+	}
+
+	st := &applyState{
+		tx:          tx,
+		common:      common,
+		accountID:   accountID,
+		accountKey:  accountKey,
+		fee:         fee,
+		isDelegated: common.Delegate != "",
+		isTicket:    common.TicketSequence != nil,
+		txHash:      txHash,
+		metadata:    metadata,
+	}
+
+	tecTable := NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, e.rules())
+
+	if st.isTicket {
+		if r := e.consumeTicketForRecovery(st, tecTable); r != TesSUCCESS {
+			return r
+		}
+	}
+	if r := e.writeRecoveryAccount(st, tecTable, recoveredAccount); r != TesSUCCESS {
+		return r
+	}
+	if r := e.payDelegatedFeeOnTable(st, tecTable); r != TesSUCCESS {
+		return r
+	}
+
+	generatedMeta, applyErr := tecTable.Apply()
+	if applyErr != nil {
+		return TefINTERNAL
+	}
+	metadata.AffectedNodes = generatedMeta.AffectedNodes
+	return TesSUCCESS
 }
