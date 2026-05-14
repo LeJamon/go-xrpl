@@ -104,9 +104,11 @@ func TestRoleNotElevatableByHeader(t *testing.T) {
 	}
 }
 
-// TestCredentialsStrippedFromErrorEnvelope ensures secret/seed/passphrase
-// values supplied in params don't leak back in the error response request echo.
-func TestCredentialsStrippedFromErrorEnvelope(t *testing.T) {
+// TestCredentialsMaskedInErrorEnvelope ensures secret/seed/passphrase values
+// supplied in params are replaced with the literal "<masked>" in the error
+// response echo (matching rippled ServerHandler.cpp:535-542) and that the
+// original values never appear on the wire.
+func TestCredentialsMaskedInErrorEnvelope(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "submit", &stubHandler{
 		handle: func(*types.RpcContext, json.RawMessage) (interface{}, *types.RpcError) {
 			return nil, types.RpcErrorInvalidParams("bad")
@@ -117,7 +119,7 @@ func TestCredentialsStrippedFromErrorEnvelope(t *testing.T) {
 		"secret":"snoPBrXtMeMyMHUVTgbuqAfg1SUTb",
 		"seed":"shz",
 		"passphrase":"hunter2",
-		"key":"ED1234",
+		"seed_hex":"DEADBEEF",
 		"tx_json":{"Secret":"NESTED","Seed":"x","Account":"rPubliclyOK"}
 	}]}`
 
@@ -127,14 +129,37 @@ func TestCredentialsStrippedFromErrorEnvelope(t *testing.T) {
 	srv.ServeHTTP(rr, req)
 
 	raw := rr.Body.Bytes()
-	for _, bad := range []string{"snoPBrXtMeMyMHUVTgbuqAfg1SUTb", "hunter2", "NESTED", "\"secret\"", "\"seed\"", "\"passphrase\""} {
+	for _, bad := range []string{"snoPBrXtMeMyMHUVTgbuqAfg1SUTb", "hunter2", "DEADBEEF", "NESTED"} {
 		if bytes.Contains(raw, []byte(bad)) {
-			t.Fatalf("credential %q leaked into error envelope: %s", bad, string(raw))
+			t.Fatalf("credential value %q leaked into error envelope: %s", bad, string(raw))
 		}
 	}
-	// Sanity: non-credential field still echoed.
-	if !bytes.Contains(raw, []byte("rPubliclyOK")) {
-		t.Fatalf("expected non-credential field to survive in echo: %s", string(raw))
+	// Decode the envelope and confirm each credential key is present and
+	// holds the literal "<masked>" placeholder (rippled ServerHandler.cpp).
+	var env map[string]interface{}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("invalid response JSON: %v\nbody: %s", err, string(raw))
+	}
+	result, _ := env["result"].(map[string]interface{})
+	request, _ := result["request"].(map[string]interface{})
+	if request == nil {
+		t.Fatalf("response missing request echo: %s", string(raw))
+	}
+	for _, key := range []string{"secret", "seed", "passphrase", "seed_hex"} {
+		v, ok := request[key]
+		if !ok {
+			t.Fatalf("credential key %q missing from echo (expected masked value): %s", key, string(raw))
+		}
+		if v != "<masked>" {
+			t.Fatalf("credential key %q has value %v; want <masked>: %s", key, v, string(raw))
+		}
+	}
+	txJson, _ := request["tx_json"].(map[string]interface{})
+	if txJson["Secret"] != "<masked>" || txJson["Seed"] != "<masked>" {
+		t.Fatalf("nested tx_json credentials not masked: %v", txJson)
+	}
+	if txJson["Account"] != "rPubliclyOK" {
+		t.Fatalf("non-credential field in tx_json was altered: %v", txJson)
 	}
 }
 

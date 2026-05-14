@@ -317,20 +317,29 @@ func (s *Server) withTimeout(parent context.Context) (context.Context, context.C
 	return context.WithTimeout(parent, s.timeout)
 }
 
-// credentialKeys are request fields that must never appear in error
-// envelopes. Matches rippled's RPCParser stripped-secret list (Secret,
-// Seed, Passphrase, SeedHex) plus the lower-case shapes some clients use.
+// credentialKeys are request fields whose values must be masked in error
+// envelopes. Matches rippled's strip list in ServerHandler.cpp:535-542
+// (passphrase, secret, seed, seed_hex). Both lower-case and PascalCase
+// shapes are covered so clients using either casing don't leak.
 var credentialKeys = []string{
-	"secret", "seed", "passphrase", "key",
-	"seed_hex", "Secret", "Seed", "Passphrase", "Key", "SeedHex",
+	"secret", "seed", "passphrase", "seed_hex",
+	"Secret", "Seed", "Passphrase", "SeedHex",
 }
 
-// redactCredentials removes credential-bearing keys from a request map
+// maskedValue is the literal rippled writes in place of credential
+// values — see ServerHandler.cpp:536. Masking (rather than deleting) lets
+// a debugging client see that a credential field was supplied without
+// learning its value.
+const maskedValue = "<masked>"
+
+// redactCredentials replaces credential-bearing values with maskedValue
 // in place, recursing into tx_json/transaction objects so signing fields
 // nested under those keys are also scrubbed.
 func redactCredentials(m map[string]interface{}) {
 	for _, k := range credentialKeys {
-		delete(m, k)
+		if _, ok := m[k]; ok {
+			m[k] = maskedValue
+		}
 	}
 	for _, nested := range []string{"tx_json", "transaction"} {
 		if sub, ok := m[nested].(map[string]interface{}); ok {

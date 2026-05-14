@@ -610,13 +610,12 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *typ
 		return
 	}
 
-	// Mirror the HTTP server's admin gate (server.go executeMethod): rippled
-	// only checks for the admin role, not an ordered hierarchy — ordering
-	// the role enum (RoleIdentified > RoleAdmin) would otherwise let an
-	// Identified caller satisfy an Admin requirement.
+	// Mirror the HTTP server's admin gate (server.go executeMethod) and
+	// rippled RPCHandler.cpp:166-167: only the admin role check is applied
+	// here, and the wire error is rpcNO_PERMISSION so HTTP and WS surface
+	// the same code for the same condition.
 	if handler.RequiredRole() == types.RoleAdmin && ctx.Role != types.RoleAdmin {
-		ws.sendError(wsConn, types.NewRpcError(types.RpcCOMMAND_UNTRUSTED, "commandUntrusted", "commandUntrusted",
-			fmt.Sprintf("Command '%s' requires higher privileges", cmd.Command)), cmd.ID)
+		ws.sendError(wsConn, types.RpcErrorNoPermission(cmd.Command), cmd.ID)
 		return
 	}
 

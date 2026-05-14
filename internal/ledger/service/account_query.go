@@ -297,6 +297,9 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 		lines = append(lines, line)
 		return true
 	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	return &AccountLinesResult{
 		Account:     account,
@@ -430,6 +433,9 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 		offers = append(offers, accountOffer)
 		return true
 	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	return &AccountOffersResult{
 		Account:     account,
@@ -538,6 +544,9 @@ func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerI
 		count++
 		return true
 	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	return result, nil
 }
@@ -706,6 +715,9 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 		channels = append(channels, channel)
 		return true
 	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	return &AccountChannelsResult{
 		Account:     account,
@@ -858,6 +870,9 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 
 		return true
 	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	// Convert maps to sorted slices
 	receiveList := make([]string, 0, len(receiveCurrencies))
@@ -1003,6 +1018,9 @@ func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerInde
 
 		return true
 	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	return &AccountNFTsResult{
 		Account:     account,
@@ -1199,6 +1217,9 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 
 		return true
 	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	// Convert obligations map to string values
 	obligationsStr := make(map[string]string)
@@ -1444,6 +1465,9 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 
 		return true
 	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	return &NoRippleCheckResult{
 		Problems:     problems,
