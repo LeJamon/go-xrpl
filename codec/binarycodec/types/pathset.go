@@ -34,15 +34,19 @@ var ErrInvalidPathSet = errors.New("invalid path set: expected [][]any")
 // FromJSON attempts to serialize a path set from a JSON representation of a slice of paths to a byte array.
 // It returns the byte array representation of the path set, or an error if the provided json does not represent a valid path set.
 func (p PathSet) FromJSON(json any) ([]byte, error) {
-	if _, ok := json.([]any)[0].([]any); !ok {
+	outer, ok := json.([]any)
+	if !ok || len(outer) == 0 {
+		return nil, ErrInvalidPathSet
+	}
+	if _, ok := outer[0].([]any); !ok {
 		return nil, ErrInvalidPathSet
 	}
 
-	if !isPathSet(json.([]any)) {
+	if !isPathSet(outer) {
 		return nil, ErrInvalidPathSet
 	}
 
-	return newPathSet(json.([]any)), nil
+	return newPathSet(outer)
 }
 
 // ToJSON decodes a path set from a binary representation using a provided binary parser, then translates it to a JSON representation.
@@ -109,55 +113,96 @@ func isPathStep(v map[string]any) bool {
 	return v["account"] != nil || v["currency"] != nil || v["issuer"] != nil
 }
 
+// pathStepMaxLen is the upper bound for a single serialized path step:
+// 1 type byte + 20 bytes account + 20 bytes currency + 20 bytes issuer.
+const pathStepMaxLen = 1 + 20 + 20 + 20
+
 // newPathStep creates a path step from a map representation.
 // It generates a byte array representation of the path step, encoding account, currency, and issuer information as appropriate.
-func newPathStep(v map[string]any) []byte {
+func newPathStep(v map[string]any) ([]byte, error) {
+	out := make([]byte, 1, pathStepMaxLen)
 	dataType := 0x00
-	b := make([]byte, 0)
 
 	if v["account"] != nil {
-		_, account, _ := addresscodec.DecodeClassicAddressToAccountID(v["account"].(string))
-		b = append(b, account...)
+		addr, ok := v["account"].(string)
+		if !ok {
+			return nil, errors.New("path step: account is not a string")
+		}
+		_, account, err := addresscodec.DecodeClassicAddressToAccountID(addr)
+		if err != nil {
+			return nil, fmt.Errorf("path step: account %q: %w", addr, err)
+		}
+		out = append(out, account...)
 		dataType |= typeAccount
 	}
 	if v["currency"] != nil {
-		currency, _ := serializePathCurrency(v["currency"].(string))
-		b = append(b, currency...)
+		curr, ok := v["currency"].(string)
+		if !ok {
+			return nil, errors.New("path step: currency is not a string")
+		}
+		currency, err := serializePathCurrency(curr)
+		if err != nil {
+			return nil, fmt.Errorf("path step: currency %q: %w", curr, err)
+		}
+		out = append(out, currency...)
 		dataType |= typeCurrency
 	}
 	if v["issuer"] != nil {
-		_, issuer, _ := addresscodec.DecodeClassicAddressToAccountID(v["issuer"].(string))
-		b = append(b, issuer...)
+		addr, ok := v["issuer"].(string)
+		if !ok {
+			return nil, errors.New("path step: issuer is not a string")
+		}
+		_, issuer, err := addresscodec.DecodeClassicAddressToAccountID(addr)
+		if err != nil {
+			return nil, fmt.Errorf("path step: issuer %q: %w", addr, err)
+		}
+		out = append(out, issuer...)
 		dataType |= typeIssuer
 	}
 
-	return append([]byte{byte(dataType)}, b...)
+	out[0] = byte(dataType)
+	return out, nil
 }
 
 // newPath constructs a path from a slice of path steps.
 // It generates a byte array representation of the path, encoding each path step in turn.
-func newPath(v []any) []byte {
-	b := make([]byte, 0)
-
-	for _, step := range v { // for each step in the path (slice of path steps)
-		b = append(b, newPathStep(step.(map[string]any))...) // append the path step to the byte array
+func newPath(v []any) ([]byte, error) {
+	b := make([]byte, 0, len(v)*pathStepMaxLen)
+	for _, step := range v {
+		stepMap, ok := step.(map[string]any)
+		if !ok {
+			return nil, errors.New("path: step is not a map[string]any")
+		}
+		encoded, err := newPathStep(stepMap)
+		if err != nil {
+			return nil, err
+		}
+		b = append(b, encoded...)
 	}
-	return b
+	return b, nil
 }
 
 // newPathSet constructs a path set from a slice of paths.
 // It generates a byte array representation of the path set, encoding each path and adding path separators as appropriate.
-func newPathSet(v []any) []byte {
-	b := make([]byte, 0)
-
-	for _, path := range v { // for each path in the path set (slice of paths)
-		b = append(b, newPath(path.([]any))...) // append the path to the byte array
-		b = append(b, pathSeparatorByte)        // between each path, append a path separator byte
+func newPathSet(v []any) ([]byte, error) {
+	if len(v) == 0 {
+		return []byte{pathsetEndByte}, nil
 	}
-
-	b[len(b)-1] = pathsetEndByte // replace last path separator with path set end byte
-
-	return b
+	b := make([]byte, 0, len(v)*pathStepMaxLen)
+	for _, path := range v {
+		inner, ok := path.([]any)
+		if !ok {
+			return nil, errors.New("path set: path is not a []any")
+		}
+		encoded, err := newPath(inner)
+		if err != nil {
+			return nil, err
+		}
+		b = append(b, encoded...)
+		b = append(b, pathSeparatorByte)
+	}
+	b[len(b)-1] = pathsetEndByte
+	return b, nil
 }
 
 // parsePathStep decodes a path step from a binary representation using a provided binary parser.

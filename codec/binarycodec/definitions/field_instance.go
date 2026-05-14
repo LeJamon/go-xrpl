@@ -1,6 +1,9 @@
 package definitions
 
-import "github.com/ugorji/go/codec"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // FieldInstance is a struct that represents a field instance.
 type FieldInstance struct {
@@ -12,11 +15,11 @@ type FieldInstance struct {
 
 // FieldInfo is a struct that represents the field info.
 type FieldInfo struct {
-	Nth            int32
-	IsVLEncoded    bool
-	IsSerialized   bool
-	IsSigningField bool
-	Type           string
+	Nth            int32 `json:"nth"`
+	IsVLEncoded    bool  `json:"isVLEncoded"`
+	IsSerialized   bool  `json:"isSerialized"`
+	IsSigningField bool  `json:"isSigningField"`
+	Type           string `json:"type"`
 }
 
 // FieldHeader is a struct that represents the field header.
@@ -35,13 +38,33 @@ func (d *Definitions) CreateFieldHeader(tc, fc int32) FieldHeader {
 
 type fieldInstanceMap map[string]*FieldInstance
 
-// CodecEncodeSelf implements the codec.SelfEncoder interface.
-func (fi *fieldInstanceMap) CodecEncodeSelf(_ *codec.Encoder) {}
-
-// CodecDecodeSelf implements the codec.SelfDecoder interface.
-func (fi *fieldInstanceMap) CodecDecodeSelf(d *codec.Decoder) {
-	var x [][]interface{}
-	d.MustDecode(&x)
-	y := convertToFieldInstanceMap(x)
-	*fi = y
+// UnmarshalJSON decodes the FIELDS array of `[name, fieldInfo]` pairs from
+// definitions.json into a flat name -> FieldInstance map.
+func (fi *fieldInstanceMap) UnmarshalJSON(data []byte) error {
+	var pairs []json.RawMessage
+	if err := json.Unmarshal(data, &pairs); err != nil {
+		return fmt.Errorf("FIELDS: %w", err)
+	}
+	m := make(fieldInstanceMap, len(pairs))
+	for i, raw := range pairs {
+		var pair [2]json.RawMessage
+		if err := json.Unmarshal(raw, &pair); err != nil {
+			return fmt.Errorf("FIELDS[%d]: %w", i, err)
+		}
+		var name string
+		if err := json.Unmarshal(pair[0], &name); err != nil {
+			return fmt.Errorf("FIELDS[%d].name: %w", i, err)
+		}
+		info := &FieldInfo{}
+		if err := json.Unmarshal(pair[1], info); err != nil {
+			return fmt.Errorf("FIELDS[%d].info (%q): %w", i, name, err)
+		}
+		m[name] = &FieldInstance{
+			FieldName: name,
+			FieldInfo: info,
+			Ordinal:   info.Nth,
+		}
+	}
+	*fi = m
+	return nil
 }

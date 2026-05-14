@@ -3,6 +3,7 @@ package binarycodec
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -27,6 +28,10 @@ var (
 	ErrBatchFlagsNotUInt32 = errors.New("flags field must be a uint32")
 	// ErrBatchTxIDsLengthTooLong is returned when the txIDs field is too long.
 	ErrBatchTxIDsLengthTooLong = errors.New("txIDs length exceeds maximum uint32 value")
+	// ErrUnknownField is returned when Encode receives a JSON key with no
+	// matching field definition. Silently dropping unknown keys masks typos
+	// (e.g. "Acount" vs "Account") that produce different binary transactions.
+	ErrUnknownField = errors.New("unknown field")
 )
 
 const (
@@ -37,18 +42,18 @@ const (
 )
 
 // Encode converts a JSON transaction object to a hex string in the canonical binary format.
-// The binary format is defined in XRPL's core codebase.
+// The binary format is defined in XRPL's core codebase. Encode does not mutate
+// the caller-supplied map. An unknown field name is treated as an error rather
+// than silently dropped — see [ErrUnknownField].
 func Encode(json map[string]any) (string, error) {
-	st := types.NewSTObject(serdes.NewBinarySerializer(serdes.NewFieldIDCodec(definitions.Get())))
-
+	defs := definitions.Get()
 	for k := range json {
-		fh := definitions.Get().Fields[k]
-		if fh == nil {
-			delete(json, k)
-			continue
+		if _, ok := defs.Fields[k]; !ok {
+			return "", fmt.Errorf("%w: %q", ErrUnknownField, k)
 		}
 	}
 
+	st := types.NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
 	b, err := st.FromJSON(json)
 	if err != nil {
 		return "", err
@@ -58,22 +63,21 @@ func Encode(json map[string]any) (string, error) {
 }
 
 // EncodeForMultisigning encodes a transaction into binary format in preparation for providing one
-// signature towards a multi-signed transaction.
-// Only encodes fields that are intended to be signed.
+// signature towards a multi-signed transaction. Only signing fields are
+// encoded. The caller's map is never mutated.
 func EncodeForMultisigning(json map[string]any, xrpAccountID string) (string, error) {
 	st := &types.AccountID{}
-
-	// SigningPubKey is required for multi-signing but should be set to empty string.
-
-	json["SigningPubKey"] = ""
 
 	suffix, err := st.FromJSON(xrpAccountID)
 	if err != nil {
 		return "", err
 	}
 
-	encoded, err := Encode(removeNonSigningFields(json))
+	// Build the signing-field projection with SigningPubKey overridden to "".
+	signing := removeNonSigningFields(json)
+	signing["SigningPubKey"] = ""
 
+	encoded, err := Encode(signing)
 	if err != nil {
 		return "", err
 	}
@@ -188,17 +192,19 @@ func EncodeForSigningBatch(json map[string]any) (string, error) {
 	return strings.ToUpper(sb.String()), nil
 }
 
-// removeNonSigningFields removes the fields from a JSON transaction object that should not be signed.
+// removeNonSigningFields returns a copy of the JSON transaction object with
+// all non-signing fields stripped. The caller's map is never mutated.
 func removeNonSigningFields(json map[string]any) map[string]any {
-	for k := range json {
-		fi, _ := definitions.Get().GetFieldInstanceByFieldName(k)
-
+	defs := definitions.Get()
+	out := make(map[string]any, len(json))
+	for k, v := range json {
+		fi, _ := defs.GetFieldInstanceByFieldName(k)
 		if fi != nil && !fi.IsSigningField {
-			delete(json, k)
+			continue
 		}
+		out[k] = v
 	}
-
-	return json
+	return out
 }
 
 // Decode decodes a hex string in the canonical binary format into a JSON transaction object.
@@ -208,7 +214,7 @@ func Decode(hexEncoded string) (map[string]any, error) {
 		return nil, err
 	}
 	p := serdes.NewBinaryParser(b, definitions.Get())
-	st := types.NewSTObject(serdes.NewBinarySerializer(serdes.NewFieldIDCodec(definitions.Get())))
+	st := types.NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
 	m, err := st.ToJSON(p)
 	if err != nil {
 		return nil, err

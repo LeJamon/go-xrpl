@@ -29,7 +29,7 @@ func TestUint64_FromJson(t *testing.T) {
 			name:        "fail - invalid hex string",
 			input:       "invalid",
 			expected:    nil,
-			expectedErr: errors.New("encoding/hex: invalid byte: U+0069 'i'"),
+			expectedErr: errors.New("strconv.ParseUint: parsing \"invalid\": invalid syntax"),
 		},
 		{
 			name:        "pass - valid uint64 numeric string",

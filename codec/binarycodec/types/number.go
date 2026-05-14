@@ -163,12 +163,10 @@ func normalize(mantissa *big.Int, exponent int32) (*big.Int, int32, error) {
 }
 
 // formatScientific formats mantissa and exponent as scientific notation string.
+// Both signs of the exponent collapse to the same shape because itoa already
+// prepends a leading "-" for negatives.
 func formatScientific(mantissa int64, exponent int32) string {
-	m := big.NewInt(mantissa)
-	if exponent >= 0 {
-		return m.String() + "e" + itoa(int(exponent))
-	}
-	return m.String() + "e" + itoa(int(exponent))
+	return big.NewInt(mantissa).String() + "e" + itoa(int(exponent))
 }
 
 // formatDecimal formats mantissa and exponent as a decimal string.

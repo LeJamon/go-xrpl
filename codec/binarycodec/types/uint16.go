@@ -2,7 +2,6 @@
 package types
 
 import (
-	"bytes"
 	"encoding/binary"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
@@ -16,10 +15,10 @@ type UInt16 struct{}
 // If the input value is a string, it's assumed to be a transaction type or ledger entry type name, and the
 // method will attempt to convert it into a corresponding type code. If the conversion fails, an error is returned.
 func (u *UInt16) FromJSON(value any) ([]byte, error) {
-	if _, ok := value.(string); ok {
-		tc, err := definitions.Get().GetTransactionTypeCodeByTransactionTypeName(value.(string))
+	if s, ok := value.(string); ok {
+		tc, err := definitions.Get().GetTransactionTypeCodeByTransactionTypeName(s)
 		if err != nil {
-			tc, err = definitions.Get().GetLedgerEntryTypeCodeByLedgerEntryTypeName(value.(string))
+			tc, err = definitions.Get().GetLedgerEntryTypeCodeByLedgerEntryTypeName(s)
 			if err != nil {
 				return nil, err
 			}
@@ -43,14 +42,9 @@ func (u *UInt16) FromJSON(value any) ([]byte, error) {
 		val = uint16(value.(int)) // will panic with meaningful error
 	}
 
-	buf := new(bytes.Buffer)
-	//nolint:gosec // G115: Potential hardcoded credentials (gosec)
-	err := binary.Write(buf, binary.BigEndian, val)
-
-	if err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	var out [2]byte
+	binary.BigEndian.PutUint16(out[:], val)
+	return out[:], nil
 }
 
 // ToJSON takes a BinaryParser and optional parameters, and converts the serialized byte data

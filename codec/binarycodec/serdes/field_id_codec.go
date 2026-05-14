@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 
+	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes/interfaces"
 )
 
@@ -18,8 +19,20 @@ type FieldIDCodec struct {
 }
 
 // NewFieldIDCodec creates a new FieldIDCodec.
-func NewFieldIDCodec(definitions interfaces.Definitions) *FieldIDCodec {
-	return &FieldIDCodec{definitions: definitions}
+func NewFieldIDCodec(defs interfaces.Definitions) *FieldIDCodec {
+	return &FieldIDCodec{definitions: defs}
+}
+
+// defaultFieldIDCodec is the canonical, stateless codec bound to the global
+// definitions singleton. The codec only reads from its definitions field, so
+// sharing one instance across goroutines is safe and avoids per-call allocs
+// on the hot serialization path.
+var defaultFieldIDCodec = &FieldIDCodec{definitions: definitions.Get()}
+
+// DefaultFieldIDCodec returns a shared FieldIDCodec bound to definitions.Get().
+// Call this instead of NewFieldIDCodec(definitions.Get()) on hot paths.
+func DefaultFieldIDCodec() *FieldIDCodec {
+	return defaultFieldIDCodec
 }
 
 // Encode returns the unique field ID for a given field name.

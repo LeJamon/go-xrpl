@@ -113,33 +113,49 @@ func (t *STObject) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
 //
 //lint:ignore U1000 // ignore this for now
 func createFieldInstanceMapFromJson(json map[string]any) (map[definitions.FieldInstance]any, error) {
-	// First pass: handle X-addresses and extract tags
+	// Fast path: no key holds an X-address — populate the field-instance map
+	// directly from the caller's map without a defensive copy.
+	hasX := false
+	for _, v := range json {
+		if s, ok := v.(string); ok && addresscodec.IsValidXAddress(s) {
+			hasX = true
+			break
+		}
+	}
+
+	defs := definitions.Get()
+	if !hasX {
+		m := make(map[definitions.FieldInstance]any, len(json))
+		for k, v := range json {
+			fi, err := defs.GetFieldInstanceByFieldName(k)
+			if err != nil {
+				return nil, err
+			}
+			v, err = parseSpecialFields(k, v)
+			if err != nil {
+				return nil, err
+			}
+			m[*fi] = v
+		}
+		return m, nil
+}
+
+	// Slow path: at least one X-address present. Copy, then resolve X-addresses
+	// into classic addresses + tag siblings before building the field map.
 	processedJSON := make(map[string]any, len(json))
 	for k, v := range json {
 		processedJSON[k] = v
 	}
-
-	// Process X-addresses
 	for k, v := range json {
 		strVal, ok := v.(string)
-		if !ok {
+		if !ok || !addresscodec.IsValidXAddress(strVal) {
 			continue
 		}
-
-		if !addresscodec.IsValidXAddress(strVal) {
-			continue
-		}
-
-		// Decode X-address
 		classicAddr, tag, _, err := addresscodec.XAddressToClassicAddress(strVal)
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode X-address for field %s: %w", k, err)
 		}
-
-		// Replace X-address with classic address
 		processedJSON[k] = classicAddr
-
-		// If there's an embedded tag, add it as SourceTag or DestinationTag
 		if tag != 0 {
 			var tagFieldName string
 			switch k {
@@ -150,8 +166,6 @@ func createFieldInstanceMapFromJson(json map[string]any) (map[definitions.FieldI
 			default:
 				return nil, fmt.Errorf("%s cannot have an associated tag", k)
 			}
-
-			// Check for duplicate tags
 			if existingTag, exists := processedJSON[tagFieldName]; exists {
 				if existingTag != tag {
 					return nil, fmt.Errorf("duplicate %s: X-address tag (%d) does not match existing tag (%v)", tagFieldName, tag, existingTag)
@@ -161,21 +175,16 @@ func createFieldInstanceMapFromJson(json map[string]any) (map[definitions.FieldI
 		}
 	}
 
-	// Second pass: create field instance map
 	m := make(map[definitions.FieldInstance]any, len(processedJSON))
-
 	for k, v := range processedJSON {
-		fi, err := definitions.Get().GetFieldInstanceByFieldName(k)
-
+		fi, err := defs.GetFieldInstanceByFieldName(k)
 		if err != nil {
 			return nil, err
 		}
-
 		v, err = parseSpecialFields(k, v)
 		if err != nil {
 			return nil, err
 		}
-
 		m[*fi] = v
 	}
 	return m, nil

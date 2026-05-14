@@ -44,26 +44,23 @@ func (c *Currency) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) {
 		return "XRP", nil
 	}
 
-	// Check if bytes has exactly 3 non-zero bytes at positions 12-14
-	nonZeroCount := 0
-	var currencyStr string
-	for i := 0; i < len(currencyBytes); i++ {
-		if currencyBytes[i] != 0 {
-			if i >= 12 && i <= 14 {
-				nonZeroCount++
-				currencyStr += string(currencyBytes[i])
-			} else {
-				nonZeroCount = 0
-				break
-			}
+	// Standard 3-char ISO code: bytes 0-11 and 15-19 must be zero,
+	// bytes 12-14 must each be non-zero printable.
+	if len(currencyBytes) == 20 &&
+		isAllZero(currencyBytes[:12]) && isAllZero(currencyBytes[15:]) &&
+		currencyBytes[12] != 0 && currencyBytes[13] != 0 && currencyBytes[14] != 0 {
+		return string(currencyBytes[12:15]), nil
+	}
+	return hex.EncodeToString(currencyBytes), nil
+}
+
+func isAllZero(b []byte) bool {
+	for _, x := range b {
+		if x != 0 {
+			return false
 		}
 	}
-
-	if nonZeroCount == 3 {
-		return currencyStr, nil
-	}
-
-	return hex.EncodeToString(currencyBytes), nil
+	return true
 }
 
 func (c *Currency) fromString(str string) ([]byte, error) {

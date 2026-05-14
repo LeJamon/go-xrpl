@@ -88,6 +88,12 @@ var (
 	errFailedConvertStringToBigFloat = errors.New("failed to convert string to big.Float")
 )
 
+// Compiled once at package init: avoiding MustCompile on hot paths.
+var (
+	xrpDigitsRegex = regexp.MustCompile(`\d+`)
+	iouCodeRegex   = regexp.MustCompile(IOUCodeRegex)
+)
+
 // InvalidAmountError is a custom error type for invalid amounts.
 type InvalidAmountError struct {
 	Amount string
@@ -276,8 +282,7 @@ func deserializeCurrencyCode(data []byte) (string, error) {
 	// must be returned as the full hex string, not as a 3-char code.
 	if bytes.Equal(data[0:12], make([]byte, 12)) && bytes.Equal(data[15:20], make([]byte, 5)) {
 		iso := strings.ToUpper(string(data[12:15]))
-		ok, _ := regexp.MatchString(IOUCodeRegex, iso)
-		if ok {
+		if iouCodeRegex.MatchString(iso) {
 			return iso, nil
 		}
 	}
@@ -357,8 +362,7 @@ func verifyXrpValue(value string) error {
 		checkValue = checkValue[1:]
 	}
 
-	r := regexp.MustCompile(`\d+`) // regex to match only digits
-	m := r.FindAllString(checkValue, -1)
+	m := xrpDigitsRegex.FindAllString(checkValue, -1)
 
 	if len(m) != 1 {
 		return errInvalidXRPValue
@@ -593,10 +597,7 @@ func serializeIssuedCurrencyCodeHex(currency string) ([]byte, error) {
 }
 
 func serializeIssuedCurrencyCodeChars(currency string) ([]byte, error) {
-	r := regexp.MustCompile(IOUCodeRegex) // regex to check if the currency code is valid
-	m := r.FindAllString(currency, -1)
-
-	if len(m) != 1 {
+	if len(iouCodeRegex.FindAllString(currency, -1)) != 1 {
 		return nil, errInvalidCurrencyCode
 	}
 
@@ -635,7 +636,12 @@ func serializeIssuedCurrencyAmount(value, currency, issuer string) ([]byte, erro
 	// AccountIDs that appear as children of special fields (Amount issuer and PathSet account) are not length-prefixed.
 	// So in Amount and PathSet fields, don't use the length indicator 0x14. This is in contrast to the AccountID fields where the length indicator prefix 0x14 is added.
 
-	return append(append(valBytes, currencyBytes...), issuerBytes...), nil
+	// Pre-sized output: 8-byte value + 20-byte currency + 20-byte issuer.
+	out := make([]byte, 0, len(valBytes)+len(currencyBytes)+len(issuerBytes))
+	out = append(out, valBytes...)
+	out = append(out, currencyBytes...)
+	out = append(out, issuerBytes...)
+	return out, nil
 }
 
 // serializeMPTCurrencyValue serializes an MPT currency value to its binary representation.
@@ -716,10 +722,7 @@ func isPositive(value byte) bool {
 }
 
 func containsInvalidIOUCodeCharactersHex(currency []byte) bool {
-	r := regexp.MustCompile(IOUCodeRegex) // regex to check if the currency code is valid
-	m := r.FindAll(currency, -1)
-
-	return len(m) != 1
+	return len(iouCodeRegex.FindAll(currency, -1)) != 1
 }
 
 // valueToString converts various JSON‐style value types into their string form.

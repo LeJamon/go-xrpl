@@ -7,14 +7,17 @@ import (
 )
 
 func TestED25519_Prefix(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, ed25519Prefix, ED25519().Prefix())
 }
 
 func TestED25519_FamilySeedPrefix(t *testing.T) {
-	require.Zero(t, ED25519().FamilySeedPrefix())
+	t.Parallel()
+	require.Equal(t, []byte{0x01, 0xE1, 0x4B}, ED25519().FamilySeedPrefix())
 }
 
 func TestED25519DeriveKeypair(t *testing.T) {
+	t.Parallel()
 	tt := []struct {
 		name       string
 		seedBytes  []byte
@@ -43,6 +46,7 @@ func TestED25519DeriveKeypair(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			priv, pub, err := ED25519().DeriveKeypair(tc.seedBytes, tc.validator)
 			if tc.expErr != nil {
 				require.Zero(t, pub)
@@ -57,6 +61,7 @@ func TestED25519DeriveKeypair(t *testing.T) {
 }
 
 func TestED25519Sign(t *testing.T) {
+	t.Parallel()
 	tt := []struct {
 		name         string
 		inputMsg     string
@@ -96,6 +101,7 @@ func TestED25519Sign(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			actual, err := ED25519().Sign(tc.inputMsg, tc.inputPrivKey)
 
 			if tc.expectedErr != nil {
@@ -110,6 +116,7 @@ func TestED25519Sign(t *testing.T) {
 }
 
 func TestED25519Validate(t *testing.T) {
+	t.Parallel()
 	tt := []struct {
 		name        string
 		inputMsg    string
@@ -149,6 +156,7 @@ func TestED25519Validate(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			actual := ED25519().Validate(tc.inputMsg, tc.inputPubKey, tc.inputSig)
 			require.Equal(t, tc.expected, actual)
 		})

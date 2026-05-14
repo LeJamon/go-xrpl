@@ -2,46 +2,22 @@ package crypto
 
 import (
 	"runtime"
-	"sync/atomic"
-	"unsafe"
 )
 
-// secureEraseNoop is a variable that prevents the compiler from optimizing away
-// the memory clearing operation. By using it in a way that appears to have
-// side effects, the compiler must keep the clearing code.
-var secureEraseNoop atomic.Uint64
-
 // SecureErase overwrites the contents of a byte slice with zeros.
-// It takes pains to prevent the compiler from optimizing away the clearing.
 //
-// Note: Despite these measures, remnants of the data may remain in memory,
-// caches, registers, or swap space. For highly sensitive data, consider
-// using hardware security modules or other specialized solutions.
+// Note: Despite this, remnants of the data may remain in memory, caches,
+// registers, or swap space. For highly sensitive data, consider using
+// hardware security modules or other specialized solutions.
 //
 // See: http://www.daemonology.net/blog/2014-09-04-how-to-zero-a-buffer.html
 func SecureErase(b []byte) {
-	if len(b) == 0 {
-		return
+	for i := range b {
+		b[i] = 0
 	}
-
-	// Use a volatile-like approach: write zeros through a pointer
-	// that the compiler cannot prove is not aliased elsewhere.
-	p := (*byte)(unsafe.Pointer(&b[0]))
-	for i := 0; i < len(b); i++ {
-		*(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(p)) + uintptr(i))) = 0
-	}
-
-	// Memory barrier to ensure writes are visible
+	// Keep the backing array alive across the zero-loop to prevent the
+	// compiler from coalescing the stores with later out-of-scope drops.
 	runtime.KeepAlive(b)
-
-	// Touch the data in a way that prevents optimization
-	// This adds a value from the cleared buffer to the atomic counter,
-	// forcing the compiler to believe the buffer contents matter.
-	var sum uint64
-	for i := 0; i < len(b); i++ {
-		sum += uint64(b[i])
-	}
-	secureEraseNoop.Add(sum)
 }
 
 // SecretKey wraps a secret key byte slice and provides secure erasure on close.

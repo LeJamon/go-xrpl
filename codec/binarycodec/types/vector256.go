@@ -59,14 +59,12 @@ func (v *Vector256) FromJSON(json any) ([]byte, error) {
 // vector256FromValue takes a slice of strings representing Hash256 values,
 // serializes them, and returns the combined byte slice. If an error occurs during serialization, it is returned.
 func vector256FromValue(value []string) ([]byte, error) {
-	b := make([]byte, 0)
+	b := make([]byte, 0, len(value)*HashLengthBytes)
 	for _, s := range value {
 		hash256, err := NewHash256().FromJSON(s)
-
 		if err != nil {
 			return nil, err
 		}
-
 		b = append(b, hash256...)
 	}
 	return b, nil
@@ -80,8 +78,7 @@ func (v *Vector256) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) 
 	if err != nil {
 		return nil, err
 	}
-	var value []string
-
+	value := make([]string, 0, len(b)/HashLengthBytes)
 	for i := 0; i < len(b); i += HashLengthBytes {
 		value = append(value, strings.ToUpper(hex.EncodeToString(b[i:i+HashLengthBytes])))
 	}

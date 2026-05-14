@@ -8,6 +8,7 @@ import (
 )
 
 func TestEncode(t *testing.T) {
+	t.Parallel()
 	tt := []struct {
 		description string
 		input       map[string]any
@@ -326,6 +327,7 @@ func TestEncode(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.description, func(t *testing.T) {
+			t.Parallel()
 			got, err := Encode(tc.input)
 
 			if tc.expectedErr != nil {
@@ -340,6 +342,7 @@ func TestEncode(t *testing.T) {
 }
 
 func TestDecode(t *testing.T) {
+	t.Parallel()
 	tt := []struct {
 		description string
 		input       string
@@ -432,6 +435,7 @@ func TestDecode(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.description, func(t *testing.T) {
+			t.Parallel()
 			act, err := Decode(tc.input)
 			if tc.expectedErr != nil {
 				require.Error(t, err, tc.expectedErr.Error())
@@ -445,6 +449,7 @@ func TestDecode(t *testing.T) {
 }
 
 func TestEncodeForMultisigning(t *testing.T) {
+	t.Parallel()
 	tt := []struct {
 		description string
 		json        map[string]any
@@ -527,6 +532,7 @@ func TestEncodeForMultisigning(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.description, func(t *testing.T) {
+			t.Parallel()
 			got, err := EncodeForMultisigning(tc.json, tc.accountID)
 
 			if tc.expectedErr != nil {
@@ -541,6 +547,7 @@ func TestEncodeForMultisigning(t *testing.T) {
 }
 
 func TestEncodeForSigningClaim(t *testing.T) {
+	t.Parallel()
 	tt := []struct {
 		description string
 		input       map[string]any
@@ -576,6 +583,7 @@ func TestEncodeForSigningClaim(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.description, func(t *testing.T) {
+			t.Parallel()
 			got, err := EncodeForSigningClaim(tc.input)
 
 			if tc.expectedErr != nil {
@@ -590,6 +598,7 @@ func TestEncodeForSigningClaim(t *testing.T) {
 }
 
 func TestEncodeForSigning(t *testing.T) {
+	t.Parallel()
 	tt := []struct {
 		description string
 		input       map[string]any
@@ -633,6 +642,7 @@ func TestEncodeForSigning(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.description, func(t *testing.T) {
+			t.Parallel()
 			got, err := EncodeForSigning(tc.input)
 
 			if tc.expectedErr != nil {
@@ -647,6 +657,7 @@ func TestEncodeForSigning(t *testing.T) {
 }
 
 func TestEncodeForSigningBatch(t *testing.T) {
+	t.Parallel()
 	tt := []struct {
 		description string
 		input       map[string]any
@@ -740,6 +751,7 @@ func TestEncodeForSigningBatch(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.description, func(t *testing.T) {
+			t.Parallel()
 			got, err := EncodeForSigningBatch(tc.input)
 
 			if tc.expectedErr != nil {
