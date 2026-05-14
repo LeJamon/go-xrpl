@@ -86,14 +86,16 @@ var (
 	LimitLedgerDataBinary = LimitRange{16, 2048, 2048}
 )
 
-// ClampLimit applies rippled's readLimitField logic: if the user provides a limit,
-// clamp it to [range.Min, range.Max] for non-admin; admin gets unlimited.
+// ClampLimit applies rippled's readLimitField logic: if the user provides
+// a limit, clamp it to [range.Min, range.Max] when unlimited is false;
+// otherwise return the user value unchanged. unlimited is true for both
+// admin and identified roles (matches rippled isUnlimited in Role.cpp).
 // If the user does not provide a limit (0), use the default.
-func ClampLimit(userLimit uint32, r LimitRange, isAdmin bool) uint32 {
+func ClampLimit(userLimit uint32, r LimitRange, unlimited bool) uint32 {
 	if userLimit == 0 {
 		return r.Default
 	}
-	if isAdmin {
+	if unlimited {
 		return userLimit
 	}
 	if userLimit < r.Min {

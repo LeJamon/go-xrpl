@@ -19,11 +19,10 @@ import (
 	xrpllog "github.com/LeJamon/goXRPLd/log"
 )
 
-// MaxRequestBytes caps the size of a single JSON-RPC request body. XRPL
-// requests are small (a few KB at most for tx_blob); 1 MiB is generous
-// without leaving the server vulnerable to memory-buffering DoS via
-// io.ReadAll on an unbounded body.
-const MaxRequestBytes = 1 << 20
+// MaxRequestBytes caps the size of a single JSON-RPC request body.
+// Matches rippled's RPC::Tuning::maxRequestSize (Tuning.h) exactly so
+// goxrpl and rippled reject the same oversized payloads on the wire.
+const MaxRequestBytes = 1_000_000
 
 // rpcLog returns the logger for the HTTP JSON-RPC server.
 // Resolved lazily so it picks up the root logger set during CLI bootstrap.
@@ -200,8 +199,9 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 
 	peerIP := remoteAddrIP(r.RemoteAddr)
 	clientIP := s.getClientIP(r)
+	user := userHeader(r)
 	portCtx := GetPortContext(r.Context())
-	role := roleForRequest(peerIP, portCtx)
+	role := roleForRequest(peerIP, user, portCtx)
 	dispatchCtx, cancel := s.withTimeout(r.Context())
 	defer cancel()
 	ctx := &types.RpcContext{
@@ -209,6 +209,7 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		Role:       role,
 		ApiVersion: types.DefaultApiVersion,
 		IsAdmin:    role == types.RoleAdmin,
+		Unlimited:  role.IsUnlimited(),
 		ClientIP:   clientIP,
 		PeerSource: s.loadPeerSource(),
 		Services:   s.services,
@@ -227,7 +228,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
-			s.writeXrplError(w, "", nil, "invalidParams", "Request body exceeds limit")
+			http.Error(w, "Request body exceeds limit", http.StatusBadRequest)
 			return
 		}
 		s.writeXrplError(w, "", nil, "internal", "Failed to read request body")
@@ -253,12 +254,13 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 
 	peerIP := remoteAddrIP(r.RemoteAddr)
 	clientIP := s.getClientIP(r)
+	user := userHeader(r)
 	portCtx := GetPortContext(r.Context())
 	// Role is derived from the socket-level peer, not header-supplied IPs,
 	// so an X-Real-IP / X-Forwarded-For header from an untrusted client
 	// can't elevate to admin via the localhost fallback. Matches rippled's
 	// requestRole, which uses the connection's remote endpoint.
-	role := roleForRequest(peerIP, portCtx)
+	role := roleForRequest(peerIP, user, portCtx)
 	dispatchCtx, cancel := s.withTimeout(r.Context())
 	defer cancel()
 	ctx := &types.RpcContext{
@@ -266,6 +268,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		Role:       role,
 		ApiVersion: types.DefaultApiVersion,
 		IsAdmin:    role == types.RoleAdmin,
+		Unlimited:  role.IsUnlimited(),
 		ClientIP:   clientIP,
 		PeerSource: s.loadPeerSource(),
 		Services:   s.services,
@@ -491,22 +494,37 @@ func isLocalhost(ip string) bool {
 	return ip == "127.0.0.1" || ip == "::1"
 }
 
-// roleForRequest determines the Role for an incoming request based on the
-// client IP and the port's admin network list. When a PortContext with
-// AdminNets is available, it checks the client IP against those networks
-// (matching rippled's requestRole in Role.cpp). Otherwise it falls back to
-// the legacy localhost-only check for backward compatibility.
-func roleForRequest(clientIP string, portCtx *PortContext) types.Role {
-	if portCtx != nil && len(portCtx.AdminNets) > 0 {
-		ip := net.ParseIP(clientIP)
-		if ip != nil && config.IPInNets(ip, portCtx.AdminNets) {
+// roleForRequest mirrors rippled's requestRole (Role.cpp:94-119):
+//   - peer ∈ AdminNets → RoleAdmin
+//   - peer ∈ SecureGatewayNets + non-empty user → RoleIdentified
+//   - peer ∈ SecureGatewayNets + empty user      → RoleProxy
+//   - else                                       → RoleGuest
+//
+// peerIP must be the actual TCP peer (from RemoteAddr), never a header-
+// supplied IP. user is the X-User header value if present.
+//
+// Fallback: when no AdminNets are configured (typically in unit tests or
+// standalone mode), localhost is treated as Admin so the legacy
+// single-process flows keep working.
+func roleForRequest(peerIP string, user string, portCtx *PortContext) types.Role {
+	if portCtx == nil || (len(portCtx.AdminNets) == 0 && len(portCtx.SecureGatewayNets) == 0) {
+		if isLocalhost(peerIP) {
 			return types.RoleAdmin
 		}
 		return types.RoleGuest
 	}
-	// Fallback: no port context or no admin nets configured — use localhost check
-	if isLocalhost(clientIP) {
+	ip := net.ParseIP(peerIP)
+	if ip == nil {
+		return types.RoleGuest
+	}
+	if len(portCtx.AdminNets) > 0 && config.IPInNets(ip, portCtx.AdminNets) {
 		return types.RoleAdmin
+	}
+	if len(portCtx.SecureGatewayNets) > 0 && config.IPInNets(ip, portCtx.SecureGatewayNets) {
+		if strings.TrimSpace(user) != "" {
+			return types.RoleIdentified
+		}
+		return types.RoleProxy
 	}
 	return types.RoleGuest
 }
@@ -553,14 +571,83 @@ func (s *Server) getClientIP(r *http.Request) string {
 	if peerIP == nil || !config.IPInNets(peerIP, trusted) {
 		return peer
 	}
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		ips := strings.Split(xff, ",")
-		return strings.TrimSpace(ips[0])
+	if fwd := forwardedForHeader(r); fwd != "" {
+		return fwd
 	}
 	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
+		return strings.TrimSpace(xri)
 	}
 	return peer
+}
+
+// forwardedForHeader returns the originating client IP carried by the
+// RFC 7239 Forwarded header (preferred) or the legacy X-Forwarded-For,
+// mirroring rippled's forwardedFor in Role.cpp:261-312. Returns "" when
+// neither header is present or parseable.
+func forwardedForHeader(r *http.Request) string {
+	if fwd := r.Header.Get("Forwarded"); fwd != "" {
+		if ip := extractForwardedFor(fwd); ip != "" {
+			return ip
+		}
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		first := xff
+		if i := strings.IndexByte(xff, ','); i >= 0 {
+			first = xff[:i]
+		}
+		return extractIPAddrFromField(first)
+	}
+	return ""
+}
+
+// extractForwardedFor returns the IP from the first `for=` token in an
+// RFC 7239 Forwarded header value. Case-insensitive token search; the
+// value is terminated by `,` or `;` per the RFC.
+func extractForwardedFor(value string) string {
+	lower := strings.ToLower(value)
+	idx := strings.Index(lower, "for=")
+	if idx < 0 {
+		return ""
+	}
+	rest := value[idx+len("for="):]
+	if i := strings.IndexAny(rest, ",;"); i >= 0 {
+		rest = rest[:i]
+	}
+	return extractIPAddrFromField(rest)
+}
+
+// extractIPAddrFromField strips whitespace, surrounding double quotes,
+// IPv6 square brackets, and a trailing ":port" from a single Forwarded /
+// X-Forwarded-For element. Mirrors rippled's extractIpAddrFromField
+// (Role.cpp:156-259).
+func extractIPAddrFromField(field string) string {
+	s := strings.TrimSpace(field)
+	if s == "" {
+		return ""
+	}
+	if strings.HasPrefix(s, `"`) {
+		if !strings.HasSuffix(s, `"`) || len(s) < 2 {
+			return ""
+		}
+		s = strings.TrimSpace(s[1 : len(s)-1])
+		if s == "" {
+			return ""
+		}
+	}
+	if strings.HasPrefix(s, "[") {
+		end := strings.IndexByte(s, ']')
+		if end < 0 {
+			return ""
+		}
+		// Bracketed form is IPv6; everything after `]` (e.g. `:port`) is dropped.
+		return strings.TrimSpace(s[1:end])
+	}
+	// Unbracketed: a colon means either an IPv6 address (multiple colons)
+	// or a host:port pair (single colon). Strip port only for the latter.
+	if strings.Count(s, ":") == 1 {
+		s = s[:strings.IndexByte(s, ':')]
+	}
+	return s
 }
 
 // remoteAddrIP returns the host portion of an http.Request.RemoteAddr
@@ -571,4 +658,12 @@ func remoteAddrIP(addr string) string {
 		return host
 	}
 	return addr
+}
+
+// userHeader returns the X-User header value (matches rippled
+// ServerHandler.cpp:582-585). Only consulted by roleForRequest when the
+// peer is already in the secure_gateway set, so an untrusted client
+// cannot use X-User to upgrade their role.
+func userHeader(r *http.Request) string {
+	return strings.TrimSpace(r.Header.Get("X-User"))
 }

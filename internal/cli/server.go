@@ -480,11 +480,16 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		if err != nil {
 			return fmt.Errorf("parse admin nets for ws port %q: %w", name, err)
 		}
+		secureGW, err := portCfg.ParseSecureGatewayNets()
+		if err != nil {
+			return fmt.Errorf("parse secure_gateway nets for ws port %q: %w", name, err)
+		}
 		pc := &rpc.PortContext{
-			PortName:  name,
-			AdminNets: adminNets,
-			Limit:     portCfg.Limit,
-			SendQueue: portCfg.SendQueueLimit,
+			PortName:          name,
+			AdminNets:         adminNets,
+			SecureGatewayNets: secureGW,
+			Limit:             portCfg.Limit,
+			SendQueue:         portCfg.SendQueueLimit,
 		}
 		mux := http.NewServeMux()
 		mux.Handle("/", rpc.PortMiddleware(pc, connLimiter, wsServer))
@@ -521,10 +526,11 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		}
 		trustedProxies = append(trustedProxies, secureGW...)
 		pc := &rpc.PortContext{
-			PortName:  name,
-			AdminNets: adminNets,
-			Limit:     portCfg.Limit,
-			SendQueue: portCfg.SendQueueLimit,
+			PortName:          name,
+			AdminNets:         adminNets,
+			SecureGatewayNets: secureGW,
+			Limit:             portCfg.Limit,
+			SendQueue:         portCfg.SendQueueLimit,
 		}
 		httpPortList = append(httpPortList, struct {
 			name string

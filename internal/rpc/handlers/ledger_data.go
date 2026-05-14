@@ -38,7 +38,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	if request.Binary {
 		limitRange = LimitLedgerDataBinary
 	}
-	limit := ClampLimit(request.Limit, limitRange, ctx.IsAdmin)
+	limit := ClampLimit(request.Limit, limitRange, ctx.Unlimited)
 
 	// Determine ledger index to use
 	ledgerIndex := "current"

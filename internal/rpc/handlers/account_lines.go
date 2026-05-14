@@ -45,7 +45,7 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		ledgerIndex = request.LedgerIndex.String()
 	}
 
-	limit := ClampLimit(request.Limit, LimitAccountLines, ctx.IsAdmin)
+	limit := ClampLimit(request.Limit, LimitAccountLines, ctx.Unlimited)
 	result, err := ctx.Services.Ledger.GetAccountLines(ctx.Context, request.Account, ledgerIndex, request.Peer, limit)
 	if err != nil {
 		if errors.Is(err, types.ErrAccountNotFound) {

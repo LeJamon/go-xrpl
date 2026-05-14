@@ -266,68 +266,55 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 	return nil
 }
 
-// broadcastTarget captures the bits of a connection needed for a
-// non-blocking broadcast send. Snapshotting these under sm.mu and
-// iterating after the lock release means HandleSubscribe /
-// HandleUnsubscribe / RemoveConnection don't block behind a slow
-// consumer — and we never read conn.Subscriptions outside sm.mu, which
-// was the data race flagged by the #428 audit.
-type broadcastTarget struct {
-	id       string
-	sendChan chan []byte
-	cfg      types.SubscriptionConfig
-}
+// Broadcasts snapshot the set of subscriber send channels under sm.mu and
+// then send after the lock has been released, so a slow consumer never
+// stalls HandleSubscribe / HandleUnsubscribe / RemoveConnection or other
+// broadcasts (#428 race fix). We never read conn.Subscriptions outside
+// sm.mu.
 
 // BroadcastToStream sends a message to every connection subscribed to a
-// stream. Connection state is read under sm.mu.RLock, then released
-// before the per-conn channel sends so a full send buffer can't stall
-// subscribe / unsubscribe or other broadcasts.
+// stream.
 func (sm *Manager) BroadcastToStream(streamType types.SubscriptionType, data []byte, _ interface{}) {
-	targets := sm.collectStreamTargets(streamType)
-	deliver(targets, data)
+	deliver(sm.collectStreamTargets(streamType), data)
 }
 
-func (sm *Manager) collectStreamTargets(streamType types.SubscriptionType) []broadcastTarget {
+func (sm *Manager) collectStreamTargets(streamType types.SubscriptionType) []chan []byte {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	if len(sm.Connections) == 0 {
 		return nil
 	}
-	targets := make([]broadcastTarget, 0, len(sm.Connections))
+	targets := make([]chan []byte, 0, len(sm.Connections))
 	for _, conn := range sm.Connections {
-		if cfg, ok := conn.Subscriptions[streamType]; ok {
-			targets = append(targets, broadcastTarget{conn.ID, conn.SendChannel, cfg})
+		if _, ok := conn.Subscriptions[streamType]; ok {
+			targets = append(targets, conn.SendChannel)
 		}
 	}
 	return targets
 }
 
-func deliver(targets []broadcastTarget, data []byte) {
-	for _, t := range targets {
+func deliver(targets []chan []byte, data []byte) {
+	for _, ch := range targets {
 		select {
-		case t.sendChan <- data:
+		case ch <- data:
 		default:
 		}
 	}
 }
 
 // BroadcastToAccounts sends a message to every connection subscribed to
-// any of the named accounts on the SubAccounts stream. The match-and-
-// snapshot phase runs under sm.mu; channel sends happen after release.
+// any of the named accounts on the SubAccounts stream.
 func (sm *Manager) BroadcastToAccounts(data []byte, accounts []string) {
-	targets := sm.collectAccountTargets(types.SubAccounts, accounts)
-	deliver(targets, data)
+	deliver(sm.collectAccountTargets(types.SubAccounts, accounts), data)
 }
 
 // BroadcastToAccountsProposed sends a message to accounts_proposed
-// subscribers using the same snapshot-then-send discipline as
-// BroadcastToAccounts.
+// subscribers.
 func (sm *Manager) BroadcastToAccountsProposed(data []byte, accounts []string) {
-	targets := sm.collectAccountTargets("accounts_proposed", accounts)
-	deliver(targets, data)
+	deliver(sm.collectAccountTargets("accounts_proposed", accounts), data)
 }
 
-func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts []string) []broadcastTarget {
+func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts []string) []chan []byte {
 	if len(accounts) == 0 {
 		return nil
 	}
@@ -340,7 +327,7 @@ func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts
 	if len(sm.Connections) == 0 {
 		return nil
 	}
-	var targets []broadcastTarget
+	var targets []chan []byte
 	for _, conn := range sm.Connections {
 		cfg, ok := conn.Subscriptions[stream]
 		if !ok {
@@ -348,7 +335,7 @@ func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts
 		}
 		for _, subAcc := range cfg.Accounts {
 			if accountSet[subAcc] {
-				targets = append(targets, broadcastTarget{conn.ID, conn.SendChannel, cfg})
+				targets = append(targets, conn.SendChannel)
 				break
 			}
 		}
@@ -358,19 +345,17 @@ func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts
 
 // BroadcastToOrderBook sends a message to order book subscribers whose
 // configured TakerGets/TakerPays match the broadcast's currency pair.
-// Targets are collected under sm.mu and delivered after release.
 func (sm *Manager) BroadcastToOrderBook(data []byte, takerGets, takerPays types.CurrencySpec) {
-	targets := sm.collectOrderBookTargets(takerGets, takerPays)
-	deliver(targets, data)
+	deliver(sm.collectOrderBookTargets(takerGets, takerPays), data)
 }
 
-func (sm *Manager) collectOrderBookTargets(takerGets, takerPays types.CurrencySpec) []broadcastTarget {
+func (sm *Manager) collectOrderBookTargets(takerGets, takerPays types.CurrencySpec) []chan []byte {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	if len(sm.Connections) == 0 {
 		return nil
 	}
-	var targets []broadcastTarget
+	var targets []chan []byte
 	for _, conn := range sm.Connections {
 		cfg, ok := conn.Subscriptions[types.SubOrderBooks]
 		if !ok || cfg.TakerGets == nil || cfg.TakerPays == nil {
@@ -380,7 +365,7 @@ func (sm *Manager) collectOrderBookTargets(takerGets, takerPays types.CurrencySp
 			cfg.TakerGets.Issuer == takerGets.Issuer &&
 			cfg.TakerPays.Currency == takerPays.Currency &&
 			cfg.TakerPays.Issuer == takerPays.Issuer {
-			targets = append(targets, broadcastTarget{conn.ID, conn.SendChannel, cfg})
+			targets = append(targets, conn.SendChannel)
 		}
 	}
 	return targets

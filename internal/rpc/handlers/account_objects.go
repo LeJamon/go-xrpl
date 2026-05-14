@@ -122,7 +122,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		ledgerIndex = request.LedgerIndex.String()
 	}
 
-	limit := ClampLimit(request.Limit, LimitAccountObjects, ctx.IsAdmin)
+	limit := ClampLimit(request.Limit, LimitAccountObjects, ctx.Unlimited)
 
 	// Determine effective type filter based on deletion_blockers_only and type params.
 	// Matches rippled's doAccountObjects logic in AccountObjects.cpp.

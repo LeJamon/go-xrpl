@@ -55,11 +55,11 @@ func decodeEnvelope(t *testing.T, body []byte) map[string]interface{} {
 }
 
 // TestPostBodyLimit ensures POSTs larger than MaxRequestBytes are rejected
-// with an error envelope rather than being buffered into memory.
+// with HTTP 400, matching rippled's ServerHandler.cpp:625-633 behaviour for
+// oversized requests rather than being buffered into memory.
 func TestPostBodyLimit(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{})
 
-	// Build a body that exceeds MaxRequestBytes.
 	pad := strings.Repeat("a", MaxRequestBytes+1)
 	body := `{"method":"ping","params":[{"x":"` + pad + `"}]}`
 
@@ -69,12 +69,8 @@ func TestPostBodyLimit(t *testing.T) {
 
 	srv.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200 envelope, got %d", rr.Code)
-	}
-	result := decodeEnvelope(t, rr.Body.Bytes())
-	if result["error"] != "invalidParams" {
-		t.Fatalf("expected error=invalidParams, got %v\nbody: %s", result["error"], rr.Body.String())
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d\nbody: %s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -245,5 +241,76 @@ func TestDispatchHasDeadline(t *testing.T) {
 	}
 	if _, ok := observed.Deadline(); !ok {
 		t.Fatal("expected dispatch context to have a deadline")
+	}
+}
+
+// TestSecureGatewayPromotesToIdentifiedWithUser confirms rippled-parity
+// for requestRole (Role.cpp:108-116): a peer in secure_gateway_nets that
+// presents an X-User header is RoleIdentified (unlimited resources) but
+// is NOT admin. Without X-User the same peer is RoleProxy.
+func TestSecureGatewayPromotesToIdentifiedWithUser(t *testing.T) {
+	var observed *types.RpcContext
+	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{
+		handle: func(ctx *types.RpcContext, _ json.RawMessage) (interface{}, *types.RpcError) {
+			observed = ctx
+			return map[string]interface{}{"ok": true}, nil
+		},
+	})
+
+	_, gateway, _ := net.ParseCIDR("203.0.113.0/24")
+	pc := &PortContext{SecureGatewayNets: []net.IPNet{*gateway}}
+
+	// With X-User → Identified, Unlimited=true, IsAdmin=false.
+	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"ping","params":[{}]}`))
+	req.RemoteAddr = "203.0.113.5:1234"
+	req.Header.Set("X-User", "alice")
+	req = req.WithContext(WithPortContext(req.Context(), pc))
+	srv.ServeHTTP(httptest.NewRecorder(), req)
+
+	if observed.Role != types.RoleIdentified {
+		t.Fatalf("with X-User: expected RoleIdentified, got %v", observed.Role)
+	}
+	if observed.IsAdmin || !observed.Unlimited {
+		t.Fatalf("with X-User: expected IsAdmin=false, Unlimited=true; got IsAdmin=%v Unlimited=%v",
+			observed.IsAdmin, observed.Unlimited)
+	}
+
+	// Without X-User → Proxy, Unlimited=false.
+	req = httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"ping","params":[{}]}`))
+	req.RemoteAddr = "203.0.113.5:1234"
+	req = req.WithContext(WithPortContext(req.Context(), pc))
+	srv.ServeHTTP(httptest.NewRecorder(), req)
+
+	if observed.Role != types.RoleProxy {
+		t.Fatalf("without X-User: expected RoleProxy, got %v", observed.Role)
+	}
+	if observed.Unlimited {
+		t.Fatalf("RoleProxy must not be Unlimited")
+	}
+}
+
+func TestForwardedForParser(t *testing.T) {
+	cases := []struct {
+		name, header, value, want string
+	}{
+		{"xff plain", "X-Forwarded-For", "198.51.100.7", "198.51.100.7"},
+		{"xff multi", "X-Forwarded-For", "198.51.100.7, 10.0.0.1", "198.51.100.7"},
+		{"xff with port", "X-Forwarded-For", "198.51.100.7:9000", "198.51.100.7"},
+		{"xff ipv6 bracketed", "X-Forwarded-For", `[2001:db8::1]:9000`, "2001:db8::1"},
+		{"xff ipv6 bracketed quoted", "X-Forwarded-For", `"[2001:db8::1]:9000"`, "2001:db8::1"},
+		{"forwarded for token", "Forwarded", `for=198.51.100.7`, "198.51.100.7"},
+		{"forwarded for token semicolon", "Forwarded", `for=198.51.100.7;proto=https`, "198.51.100.7"},
+		{"forwarded for ipv6 quoted bracketed", "Forwarded", `for="[2001:db8::1]:9000"`, "2001:db8::1"},
+		{"forwarded prefers Forwarded over xff", "Forwarded", `for=198.51.100.7`, "198.51.100.7"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _ := http.NewRequest("GET", "/", nil)
+			r.Header.Set(tc.header, tc.value)
+			got := forwardedForHeader(r)
+			if got != tc.want {
+				t.Fatalf("got %q, want %q (input %s: %q)", got, tc.want, tc.header, tc.value)
+			}
+		})
 	}
 }

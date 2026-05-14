@@ -79,6 +79,10 @@ type WebSocketConnection struct {
 	cancel          context.CancelFunc
 	pathFindSession *PathFindSession // At most one active path_find session per connection
 	portCtx         *PortContext     // per-port config for role determination
+	// user is the X-User header captured at upgrade time. Used by
+	// roleForRequest for RoleIdentified promotion when the connection
+	// came in through a secure_gateway peer.
+	user string
 }
 
 // NewWebSocketServer creates a new WebSocket server. The provided
@@ -148,6 +152,7 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ctx:           ctx,
 		cancel:        cancel,
 		portCtx:       portCtx,
+		user:          userHeader(r),
 	}
 
 	// Register connection
@@ -314,7 +319,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	}
 
 	clientIP := getWebSocketClientIP(wsConn.conn)
-	role := roleForRequest(clientIP, wsConn.portCtx)
+	role := roleForRequest(clientIP, wsConn.user, wsConn.portCtx)
 	wsLog().Debug("ws request", "cmd", cmd.Command, "remoteAddr", wsConn.conn.RemoteAddr().String(), "clientIP", clientIP, "role", role, "isAdmin", role == types.RoleAdmin)
 	dispatchCtx := wsConn.ctx
 	var cancel context.CancelFunc
@@ -327,6 +332,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 		Role:       role,
 		ApiVersion: apiVersion,
 		IsAdmin:    role == types.RoleAdmin,
+		Unlimited:  role.IsUnlimited(),
 		ClientIP:   clientIP,
 		PeerSource: ws.loadPeerSource(),
 		Services:   ws.services,

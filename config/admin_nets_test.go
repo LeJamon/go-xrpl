@@ -135,6 +135,36 @@ func TestParseSecureGatewayNets_Empty(t *testing.T) {
 	}
 }
 
+func TestParseSecureGatewayNets_NonCanonicalRejected(t *testing.T) {
+	p := PortConfig{SecureGateway: []string{"10.1.2.3/24"}}
+	if _, err := p.ParseSecureGatewayNets(); err == nil {
+		t.Fatal("expected error for non-canonical CIDR (host bits set)")
+	}
+}
+
+func TestParseSecureGatewayNets_WildcardExpandsToBothFamilies(t *testing.T) {
+	p := PortConfig{SecureGateway: []string{"0.0.0.0"}}
+	nets, err := p.ParseSecureGatewayNets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nets) != 2 {
+		t.Fatalf("expected 0.0.0.0 to expand to v4+v6 wildcards, got %d nets", len(nets))
+	}
+	if !IPInNets(net.ParseIP("198.51.100.7"), nets) || !IPInNets(net.ParseIP("2001:db8::1"), nets) {
+		t.Fatal("wildcard nets must match every address")
+	}
+
+	p = PortConfig{SecureGateway: []string{"::"}}
+	nets, err = p.ParseSecureGatewayNets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nets) != 2 {
+		t.Fatalf("expected :: to expand to v4+v6 wildcards, got %d nets", len(nets))
+	}
+}
+
 func TestIPInNets_IPv6(t *testing.T) {
 	_, cidr, _ := net.ParseCIDR("fe80::/10")
 	if !IPInNets(net.ParseIP("fe80::1"), []net.IPNet{*cidr}) {

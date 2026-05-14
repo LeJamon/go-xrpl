@@ -16,15 +16,31 @@ const (
 	DefaultApiVersion = ApiVersion2
 )
 
-// Role-based access control matching rippled
+// Role-based access control matching rippled's Role enum (Role.h).
+// Numeric ordering is not meaningful — callers must compare roles by
+// name (e.g. `role == RoleAdmin`) rather than `<` / `>`.
 type Role int
 
 const (
 	RoleGuest Role = iota
 	RoleUser
 	RoleAdmin
+	// RoleIdentified is granted to requests arriving from a configured
+	// secure_gateway peer carrying an X-User header. Identified callers
+	// have unlimited resources (matches rippled isUnlimited / Role.cpp).
 	RoleIdentified
+	// RoleProxy is granted to requests arriving from a secure_gateway
+	// peer with no X-User header. Used for client-IP attribution; not
+	// resource-unlimited.
+	RoleProxy
 )
+
+// IsUnlimited reports whether the role exempts the request from
+// resource limits. Mirrors rippled isUnlimited() in Role.cpp:124-128:
+// only ADMIN and IDENTIFIED qualify.
+func (r Role) IsUnlimited() bool {
+	return r == RoleAdmin || r == RoleIdentified
+}
 
 // Condition represents the preconditions required by an RPC method.
 // Matches rippled's Condition enum in Handler.h.
@@ -59,7 +75,12 @@ type RpcContext struct {
 	Context    context.Context
 	Role       Role
 	ApiVersion int
-	IsAdmin    bool
+	// IsAdmin gates admin-only commands. True iff Role == RoleAdmin.
+	IsAdmin bool
+	// Unlimited skips per-request resource limits (page sizes, etc.).
+	// True for RoleAdmin and RoleIdentified, matching rippled
+	// isUnlimited() in Role.cpp.
+	Unlimited  bool
 	ClientIP   string
 	PeerSource PeerSource
 	// Services is the per-request service container handlers read to

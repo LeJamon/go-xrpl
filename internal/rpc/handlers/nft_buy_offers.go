@@ -60,7 +60,7 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	if request.Limit != nil {
 		userLimit = *request.Limit
 	}
-	limit := ClampLimit(userLimit, LimitNFTOffers, ctx.IsAdmin)
+	limit := ClampLimit(userLimit, LimitNFTOffers, ctx.Unlimited)
 
 	// Validate marker if provided - must be a valid hex string
 	marker := request.Marker
