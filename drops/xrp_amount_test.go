@@ -17,7 +17,6 @@ func TestXRPAmount_AddOverflow(t *testing.T) {
 	max := XRPAmount(math.MaxInt64)
 	_, err := max.AddChecked(1)
 	require.ErrorIs(t, err, ErrXRPAmountOverflow)
-	// Unchecked Add mirrors rippled's plain int64 +: silent two's-complement wrap.
 	require.Equal(t, XRPAmount(math.MinInt64), max.Add(1))
 
 	min := XRPAmount(math.MinInt64)
@@ -30,7 +29,6 @@ func TestXRPAmount_SubOverflow(t *testing.T) {
 	min := XRPAmount(math.MinInt64)
 	_, err := min.SubChecked(1)
 	require.ErrorIs(t, err, ErrXRPAmountOverflow)
-	// Unchecked Sub mirrors rippled's plain int64 -: silent two's-complement wrap.
 	require.Equal(t, XRPAmount(math.MaxInt64), min.Sub(1))
 
 	max := XRPAmount(math.MaxInt64)
@@ -43,7 +41,6 @@ func TestXRPAmount_MulOverflow(t *testing.T) {
 	// 1e10 * 1e10 = 1e20 overflows int64 (~9.2e18).
 	_, err := XRPAmount(1e10).MulChecked(1e10)
 	require.ErrorIs(t, err, ErrXRPAmountOverflow)
-	// Unchecked Mul mirrors rippled's plain int64 *: silent two's-complement wrap.
 	a, b := int64(1e10), int64(1e10)
 	require.Equal(t, XRPAmount(a*b), XRPAmount(a).Mul(b))
 
