@@ -114,7 +114,10 @@ func (t *STObject) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
 //lint:ignore U1000 // ignore this for now
 func createFieldInstanceMapFromJson(json map[string]any) (map[definitions.FieldInstance]any, error) {
 	// Fast path: no key holds an X-address — populate the field-instance map
-	// directly from the caller's map without a defensive copy.
+	// directly from the caller's map without a defensive copy. Writes go only
+	// to the fresh m; the caller's json is not mutated. Inner objects/arrays
+	// are aliased into m by reference, but downstream callers (STObject /
+	// STArray nested serialisation) do not mutate them either.
 	hasX := false
 	for _, v := range json {
 		if s, ok := v.(string); ok && addresscodec.IsValidXAddress(s) {
@@ -138,7 +141,7 @@ func createFieldInstanceMapFromJson(json map[string]any) (map[definitions.FieldI
 			m[*fi] = v
 		}
 		return m, nil
-}
+	}
 
 	// Slow path: at least one X-address present. Copy, then resolve X-addresses
 	// into classic addresses + tag siblings before building the field map.

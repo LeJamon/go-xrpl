@@ -15,10 +15,10 @@ type FieldInstance struct {
 
 // FieldInfo is a struct that represents the field info.
 type FieldInfo struct {
-	Nth            int32 `json:"nth"`
-	IsVLEncoded    bool  `json:"isVLEncoded"`
-	IsSerialized   bool  `json:"isSerialized"`
-	IsSigningField bool  `json:"isSigningField"`
+	Nth            int32  `json:"nth"`
+	IsVLEncoded    bool   `json:"isVLEncoded"`
+	IsSerialized   bool   `json:"isSerialized"`
+	IsSigningField bool   `json:"isSigningField"`
 	Type           string `json:"type"`
 }
 

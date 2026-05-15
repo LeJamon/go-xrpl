@@ -76,26 +76,28 @@ func (c ED25519CryptoAlgorithm) DeriveKeypair(decodedSeed []byte, validator bool
 	return private, public, nil
 }
 
-// SignBytes signs msg with the 32-byte seed extracted from privKey. privKey
-// may include the leading 0xED prefix byte (33 bytes) — the prefix is
-// stripped before generating the ed25519 key.
+// SignBytes signs msg with a 32-byte ed25519 seed. privKey must be exactly
+// 32 bytes; the leading 0xED prefix accepted by the hex Sign wrapper is
+// stripped there, not here. This mirrors secp256k1.SignBytes's 32-only
+// contract so callers reasoning about raw key buffers see a symmetric API.
 func (c ED25519CryptoAlgorithm) SignBytes(msg, privKey []byte) ([]byte, error) {
-	seed := privKey
-	if len(seed) == ed25519.SeedSize+1 && seed[0] == c.prefix {
-		seed = seed[1:]
-	}
-	if len(seed) != ed25519.SeedSize {
+	if len(privKey) != ed25519.SeedSize {
 		return nil, ErrInvalidPrivateKey
 	}
-	return ed25519.Sign(ed25519.NewKeyFromSeed(seed), msg), nil
+	return ed25519.Sign(ed25519.NewKeyFromSeed(privKey), msg), nil
 }
 
-// Sign signs msg with the hex-encoded ed25519 private seed (prefixed with
-// 0xED — i.e. 33 bytes = 66 hex chars). Output is uppercase hex.
+// Sign signs msg with the hex-encoded ed25519 private seed. Accepts either
+// the raw 32-byte seed (64 hex chars) or the 33-byte 0xED-prefixed form
+// (66 hex chars); the prefix is stripped before delegating to SignBytes.
+// Output is uppercase hex.
 func (c ED25519CryptoAlgorithm) Sign(msg, privKey string) (string, error) {
 	b, err := hex.DecodeString(privKey)
 	if err != nil {
 		return "", ErrInvalidPrivateKey
+	}
+	if len(b) == ed25519.SeedSize+1 && b[0] == c.prefix {
+		b = b[1:]
 	}
 	sig, err := c.SignBytes([]byte(msg), b)
 	if err != nil {

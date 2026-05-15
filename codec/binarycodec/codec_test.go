@@ -656,6 +656,80 @@ func TestEncodeForSigning(t *testing.T) {
 	}
 }
 
+// TestEncode_DoesNotMutateInput guards the non-mutation contract of the public
+// Encode entry points. The fast path in createFieldInstanceMapFromJson aliases
+// inner objects/arrays into the field-instance map by reference; this test
+// ensures neither the outer map nor any nested map/slice is mutated during
+// encoding.
+func TestEncode_DoesNotMutateInput(t *testing.T) {
+	t.Parallel()
+
+	innerMemo := map[string]any{
+		"MemoData": "04C4D46544659A2D58525043686174",
+	}
+	memoWrapper := map[string]any{"Memo": innerMemo}
+	memos := []any{memoWrapper}
+	pathStep := map[string]any{
+		"account":  "rPDXxSZcuVL3ZWoyU82bcde3zwvmShkRyF",
+		"type":     1,
+		"type_hex": "0000000000000001",
+	}
+	paths := []any{[]any{pathStep}}
+
+	input := map[string]any{
+		"TransactionType": "Payment",
+		"Account":         "rweYz56rfmQ98cAdRaeTxQS9wVMGnrdsFp",
+		"Destination":     "rweYz56rfmQ98cAdRaeTxQS9wVMGnrdsFp",
+		"Amount":          "1000000",
+		"Fee":             "10",
+		"Sequence":        uint32(1),
+		"SigningPubKey":   "0379F17CFA0FFD7518181594BE69FE9A10471D6DE1F4055C6D2746AFD6CF89889E",
+		"Memos":           memos,
+		"Paths":           paths,
+	}
+
+	outerKeysBefore := make([]string, 0, len(input))
+	for k := range input {
+		outerKeysBefore = append(outerKeysBefore, k)
+	}
+	memoBefore := map[string]any{"MemoData": innerMemo["MemoData"]}
+	pathStepBefore := map[string]any{
+		"account":  pathStep["account"],
+		"type":     pathStep["type"],
+		"type_hex": pathStep["type_hex"],
+	}
+	memosLenBefore := len(memos)
+	pathsLenBefore := len(paths)
+
+	_, err := Encode(input)
+	require.NoError(t, err)
+
+	require.Len(t, input, len(outerKeysBefore), "Encode must not add/remove caller-map keys")
+	for _, k := range outerKeysBefore {
+		_, ok := input[k]
+		require.True(t, ok, "Encode removed caller key %q", k)
+	}
+	require.Equal(t, memoBefore, innerMemo, "Encode mutated nested Memo map")
+	require.Equal(t, pathStepBefore, pathStep, "Encode mutated nested PathStep map")
+	require.Len(t, memos, memosLenBefore, "Encode mutated Memos slice length")
+	require.Len(t, paths, pathsLenBefore, "Encode mutated Paths slice length")
+
+	signingPubKey := "0379F17CFA0FFD7518181594BE69FE9A10471D6DE1F4055C6D2746AFD6CF89889E"
+	multisigInput := map[string]any{
+		"TransactionType": "Payment",
+		"Account":         "rweYz56rfmQ98cAdRaeTxQS9wVMGnrdsFp",
+		"Destination":     "rweYz56rfmQ98cAdRaeTxQS9wVMGnrdsFp",
+		"Amount":          "1000000",
+		"Fee":             "10",
+		"Sequence":        uint32(1),
+		"SigningPubKey":   signingPubKey,
+	}
+	_, err = EncodeForMultisigning(multisigInput, "rweYz56rfmQ98cAdRaeTxQS9wVMGnrdsFp")
+	require.NoError(t, err)
+	require.Equal(t, signingPubKey, multisigInput["SigningPubKey"],
+		"EncodeForMultisigning must not clear caller's SigningPubKey")
+}
+
 func TestEncodeForSigningBatch(t *testing.T) {
 	t.Parallel()
 	tt := []struct {
