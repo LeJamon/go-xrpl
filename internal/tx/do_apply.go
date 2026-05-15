@@ -1,6 +1,8 @@
 package tx
 
 import (
+	"fmt"
+
 	"github.com/LeJamon/goXRPLd/amendment"
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
@@ -287,9 +289,30 @@ func (e *Engine) consumeTicket(st *applyState, table *ApplyStateTable) Result {
 	return TesSUCCESS
 }
 
-// invokeApply dispatches to the per-tx-type Apply() implementation, building
-// the ApplyContext and computing sigWithMaster.
-func (e *Engine) invokeApply(st *applyState) Result {
+// invokeApply dispatches to the per-tx-type Apply() implementation. Any panic
+// raised inside the per-tx Apply() — most commonly an arithmetic overflow from
+// IOUAmount / XRPLNumber operating on adversarial peer-supplied ledger data —
+// is recovered and turned into tecINTERNAL. The outer doApply() flow then runs
+// the standard tec-recovery path (charging the fee, consuming the sequence,
+// discarding sandbox changes).
+//
+// This mirrors rippled's `try { ... } catch (std::exception &) { ... }` in
+// Transactor::operator(), which converts std::overflow_error from Number /
+// IOUAmount arithmetic into tecINTERNAL rather than crashing the node.
+func (e *Engine) invokeApply(st *applyState) (result Result) {
+	defer func() {
+		if r := recover(); r != nil {
+			e.logger.Error("transaction Apply() panic recovered, returning tecINTERNAL",
+				"txHash", fmt.Sprintf("%x", st.txHash), "panic", r)
+			result = TecINTERNAL
+		}
+	}()
+	return e.invokeApplyInner(st)
+}
+
+// invokeApplyInner is the body of invokeApply, separated so the panic-recovery
+// defer in invokeApply does not have to walk back through the dispatch.
+func (e *Engine) invokeApplyInner(st *applyState) Result {
 	// Determine if the transaction was signed with the master key.
 	// Reference: rippled SetAccount.cpp sigWithMaster — compares
 	// calcAccountID(SigningPubKey) against the account ID.
@@ -625,7 +648,22 @@ func (e *Engine) payDelegatedFeeOnTable(st *applyState, table *ApplyStateTable) 
 // transaction passes invariants and may continue to the normal commit.
 // Reference: rippled Transactor::apply() — invariant check runs before
 // ctx_->apply(); on violation calls reset(fee).
-func (e *Engine) runInvariants(st *applyState, result Result) (Result, bool) {
+//
+// AMM invariants in particular drive XRPLNumber arithmetic, which panics on
+// overflow / NaN. A panic here is treated as an invariant violation: discard
+// the sandbox and charge fee via applyInvariantViolation. This matches
+// rippled, where a std::exception thrown out of an invariant check is caught
+// in Transactor::operator() and converted to tecINVARIANT_FAILED.
+func (e *Engine) runInvariants(st *applyState, result Result) (r Result, handled bool) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			e.logger.Error("invariant check panic recovered, returning tecINVARIANT_FAILED",
+				"txHash", fmt.Sprintf("%x", st.txHash), "panic", rec)
+			txDeclaredFee := parseTxDeclaredFee(st.tx, st.fee)
+			r = e.applyInvariantViolation(st, txDeclaredFee)
+			handled = true
+		}
+	}()
 	invEntries := st.table.CollectEntries()
 	txDeclaredFee := parseTxDeclaredFee(st.tx, st.fee)
 	violation := invariants.CheckInvariants(wrapTxForInvariants(st.tx), invariants.Result(result), st.fee, txDeclaredFee, invEntries, st.table, e.rules())

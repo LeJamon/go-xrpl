@@ -140,8 +140,16 @@ type FieldInfo struct {
 
 // SLEBase provides common functionality for all SLE types. Field storage
 // uses map[string]any so a single struct surface can back all entry types
-// without per-type codegen, at the cost of two map allocations plus boxing
-// per loaded SLE.
+// without per-type codegen.
+//
+// Allocation strategy: only `current` is allocated on construction (sized
+// for the typical SLE field count). `original` and `fieldMeta` are
+// lazy-allocated:
+//   - `fieldMeta` is allocated on the first SetFieldMeta call.
+//   - `original` is snapshotted from `current` on the first mutation
+//     (SetField, MarkAsDeleted), so read-only SLE loads — the dominant
+//     hot path — never allocate it. Once snapshotted, `original`
+//     represents the field set at the point of first mutation.
 type SLEBase struct {
 	LedgerIndex     [32]byte
 	LedgerEntryType string
@@ -151,20 +159,26 @@ type SLEBase struct {
 	fieldMeta       map[string]FieldMeta
 }
 
+// sleFieldCountHint is the pre-allocation hint for the `current` map. Most
+// SLEs (AccountRoot, Offer, RippleState, NFTokenPage) have 8–20 fields, so
+// 16 keeps growth small without overshooting tiny entries.
+const sleFieldCountHint = 16
+
 // NewSLEBase creates a new SLE base
 func NewSLEBase(ledgerIndex [32]byte, entryType string) *SLEBase {
 	return &SLEBase{
 		LedgerIndex:     ledgerIndex,
 		LedgerEntryType: entryType,
 		Action:          SLEActionCache,
-		original:        make(map[string]any),
-		current:         make(map[string]any),
-		fieldMeta:       make(map[string]FieldMeta),
+		current:         make(map[string]any, sleFieldCountHint),
 	}
 }
 
 // SetFieldMeta sets the metadata behavior for a field
 func (s *SLEBase) SetFieldMeta(name string, meta FieldMeta) {
+	if s.fieldMeta == nil {
+		s.fieldMeta = make(map[string]FieldMeta, sleFieldCountHint)
+	}
 	s.fieldMeta[name] = meta
 }
 
@@ -176,10 +190,26 @@ func (s *SLEBase) GetFieldMeta(name string) FieldMeta {
 	return FieldMetaDefault
 }
 
-// SetOriginal sets the original value of a field (called when loading from ledger)
+// SetOriginal sets the original value of a field (called when loading from
+// ledger). Writes only `current` — `original` is snapshotted lazily on the
+// first mutation. For SLEs that are loaded and never modified (the
+// overwhelming majority of cache reads), this halves per-SLE map writes
+// and avoids the `original` allocation entirely.
 func (s *SLEBase) SetOriginal(name string, value any) {
-	s.original[name] = value
 	s.current[name] = value
+}
+
+// snapshotOriginal copies current → original once, so subsequent SetField
+// calls track changes against the field set captured at first mutation.
+// Safe to call repeatedly: a non-nil `original` is left untouched.
+func (s *SLEBase) snapshotOriginal() {
+	if s.original != nil {
+		return
+	}
+	s.original = make(map[string]any, len(s.current))
+	for k, v := range s.current {
+		s.original[k] = v
+	}
 }
 
 // SetField sets a field value (tracks changes from original)
@@ -187,6 +217,7 @@ func (s *SLEBase) SetField(name string, value any) {
 	if s.Action == SLEActionCache {
 		s.Action = SLEActionModify
 	}
+	s.snapshotOriginal()
 	s.current[name] = value
 }
 
@@ -196,8 +227,14 @@ func (s *SLEBase) GetField(name string) (any, bool) {
 	return val, ok
 }
 
-// HasFieldChanged returns true if the field has changed from its original value
+// HasFieldChanged returns true if the field has changed from its original
+// value. SLEs that have never been mutated (original is nil) report no
+// changes: the per-field SetOriginal load path writes only `current`, so
+// the lazy-snapshot has not been triggered.
 func (s *SLEBase) HasFieldChanged(name string) bool {
+	if s.original == nil {
+		return false
+	}
 	origVal, hasOrig := s.original[name]
 	curVal, hasCur := s.current[name]
 
@@ -215,8 +252,12 @@ func (s *SLEBase) MarkAsCreated() {
 	s.Action = SLEActionInsert
 }
 
-// MarkAsDeleted marks this SLE as deleted
+// MarkAsDeleted marks this SLE as deleted. Snapshots the original field
+// values so generateDeletedNode can emit PreviousFields for the metadata
+// pipeline; without this, MarkAsDeleted on a read-only-loaded SLE would
+// observe nil `original` and emit empty PreviousFields.
 func (s *SLEBase) MarkAsDeleted() {
+	s.snapshotOriginal()
 	s.Action = SLEActionDelete
 }
 
