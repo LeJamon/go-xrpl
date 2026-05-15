@@ -44,16 +44,12 @@ type ApplyContext struct {
 	Log xrpllog.Logger
 
 	// Ctx is the request-scoped context for this transaction. Long-running
-	// per-tx operations (Pathfinder DFS, full-ledger ForEach scans,
-	// AMMCreate pseudo-account search) should respect its Done channel.
-	// Callers that don't supply a context get context.Background() via
-	// Apply(); use Context() for safe access.
+	// operations should respect its Done channel. Use Context() for nil-safe
+	// access.
 	Ctx context.Context
 }
 
 // Context returns ctx.Ctx, falling back to context.Background() when unset.
-// Transaction handlers should call this instead of reading ctx.Ctx directly
-// to keep nil-safety contained.
 func (ctx *ApplyContext) Context() context.Context {
 	if ctx.Ctx == nil {
 		return context.Background()

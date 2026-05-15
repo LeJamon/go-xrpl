@@ -15,16 +15,12 @@ import (
 // use ApplyPseudo() for pseudo-transaction application (e.g., during block processing).
 // Reference: rippled passesLocalChecks() rejects pseudo-transactions submitted by users.
 //
-// Equivalent to ApplyWithContext(context.Background(), tx). Use the
-// context-bearing variant from RPC/submit paths where the request may be
-// cancelled (Pathfinder DFS, full-ledger ForEach scans).
+// Equivalent to ApplyWithContext(context.Background(), tx).
 func (e *Engine) Apply(tx Transaction) ApplyResult {
 	return e.ApplyWithContext(context.Background(), tx)
 }
 
-// ApplyWithContext is the context-bearing variant of Apply. The supplied
-// ctx flows through doApply into ApplyContext.Ctx, where per-tx-type code
-// can read it for cancellation/tracing.
+// ApplyWithContext is the context-bearing variant of Apply.
 func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResult {
 	// Reject pseudo-transactions — they cannot be submitted by users.
 	// Reference: rippled passesLocalChecks() in NetworkOPs.cpp
