@@ -17,10 +17,11 @@ const DropsPerXRP XRPAmount = 1_000_000
 // Mirrors rippled's `SYSTEM_CURRENCY_PARTS * 100_000_000_000`.
 const MaxDrops XRPAmount = 100_000_000_000_000_000
 
-// ErrXRPAmountOverflow is returned when a checked operation would push the
-// result outside int64 range. The unchecked operators (Add/Sub/Mul) mirror
-// rippled's plain int64 arithmetic and silently wrap on overflow; callers that
-// need overflow signalled should use AddChecked/SubChecked/MulChecked.
+// ErrXRPAmountOverflow is returned when an XRPAmount conversion or checked
+// operation would produce a value outside int64 range — by AddChecked,
+// SubChecked, MulChecked, and by FromDecimalXRP for inputs whose scaled value
+// falls outside [MinInt64, MaxInt64]. The unchecked operators (Add/Sub/Mul)
+// mirror rippled's plain int64 arithmetic and silently wrap on overflow.
 var ErrXRPAmountOverflow = errors.New("XRPAmount overflow")
 
 // ErrInvalidDecimalXRP is returned by FromDecimalXRP for NaN/Inf inputs.
