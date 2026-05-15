@@ -9,6 +9,19 @@ var (
 	// ErrAccountNotFound is returned by LedgerService and friends when a
 	// queried account does not exist in the current ledger.
 	ErrAccountNotFound = errors.New("account not found")
+
+	// ErrSrcAccountNotFound is returned when the deposit_authorized
+	// source account is absent from the queried ledger.
+	ErrSrcAccountNotFound = errors.New("source account not found")
+
+	// ErrDstAccountNotFound is returned when the deposit_authorized
+	// destination account is absent from the queried ledger.
+	ErrDstAccountNotFound = errors.New("destination account not found")
+
+	// ErrBadCredentials is a sentinel wrapper used by the deposit_authorized
+	// service layer to flag credential-validation failures. The wrapping
+	// error's message carries the human-readable detail.
+	ErrBadCredentials = errors.New("bad credentials")
 )
 
 // XRPL RPC Error Codes - matching rippled implementation
@@ -40,8 +53,11 @@ const (
 	RpcPARSE_ERROR      = -32700
 
 	// General purpose errors
-	RpcGENERAL           = 1
-	RpcMISSING_COMMAND   = 2
+	RpcGENERAL         = 1
+	RpcMISSING_COMMAND = 2
+	// RpcFORBIDDEN matches rippled rpcFORBIDDEN = 3. The legacy alias
+	// RpcCOMMAND_UNTRUSTED kept the older goxrpl name for the same slot.
+	RpcFORBIDDEN         = 3
 	RpcCOMMAND_UNTRUSTED = 3
 	RpcNO_CURRENT        = 4
 	RpcNO_NETWORK        = 5
@@ -185,6 +201,15 @@ func RpcErrorInternal(message string) *RpcError {
 
 func RpcErrorNoPermission(method string) *RpcError {
 	return NewRpcError(RpcNO_PERMISSION, "noPermission", "noPermission",
+		"You don't have permission for this command.")
+}
+
+// RpcErrorForbidden matches rippled rpcFORBIDDEN (code 3, token "forbidden").
+// Used by the WebSocket pre-dispatch admin gate, mirroring rippled
+// ServerHandler.cpp:482-486 which writes rpcError(rpcFORBIDDEN) when
+// requestRole returns Role::FORBID for an admin-required command.
+func RpcErrorForbidden(method string) *RpcError {
+	return NewRpcError(RpcFORBIDDEN, "forbidden", "forbidden",
 		"You don't have permission for this command.")
 }
 

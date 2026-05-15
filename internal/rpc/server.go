@@ -46,17 +46,13 @@ type Server struct {
 
 	// corsAllowedOrigins, if non-empty, restricts Access-Control-Allow-Origin
 	// to the listed origins (set via SetCORSAllowedOrigins). Empty means
-	// `*` — the historical wide-open default kept for backwards compat.
+	// `*` — a deliberate goxrpl divergence from rippled, which emits no
+	// CORS header at all (JSONRPCUtil.cpp:143-145 leaves the
+	// Access-Control-Allow-Origin line commented out). Browser clients
+	// won't work cross-origin against a vanilla rippled; emitting `*` by
+	// default keeps the goxrpl HTTP endpoint usable from web tools.
 	corsMu             sync.RWMutex
 	corsAllowedOrigins []string
-
-	// trustedProxies is the set of TCP peer networks whose
-	// X-Forwarded-For / X-Real-IP headers are believed for the purpose of
-	// logging / client-IP attribution. Empty means "no proxy is trusted"
-	// — we always log the socket peer. Role/admin decisions never consult
-	// these headers regardless of this setting (see roleForRequest).
-	trustedProxiesMu sync.RWMutex
-	trustedProxies   []net.IPNet
 }
 
 var _ types.MethodDispatcher = (*Server)(nil)
@@ -80,8 +76,8 @@ func (s *Server) loadPeerSource() types.PeerSource {
 }
 
 // SetCORSAllowedOrigins replaces the list of origins accepted for CORS.
-// Pass nil/empty to fall back to `*` (the historical default; matches
-// rippled's wide-open setting). Origins are matched exactly against the
+// Pass nil/empty to fall back to `*` (the goxrpl default — rippled emits
+// no CORS header at all). Origins are matched exactly against the
 // request's Origin header; a leading wildcard `*` in the list keeps the
 // permissive behaviour. Safe to call after the server has started.
 func (s *Server) SetCORSAllowedOrigins(origins []string) {
@@ -162,9 +158,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Set CORS headers. Default is `*` to match rippled; an explicit
-	// allowlist may be configured via SetCORSAllowedOrigins, in which case
-	// we only echo back the request's Origin when it is on the list.
+	// Set CORS headers. Default is `*` (goxrpl divergence from rippled,
+	// which emits no CORS header — see Server.corsAllowedOrigins comment).
+	// An explicit allowlist may be configured via SetCORSAllowedOrigins,
+	// in which case we echo back the request's Origin only when it is on
+	// the list.
 	if allow := s.resolveCORSOrigin(r.Header.Get("Origin")); allow != "" {
 		w.Header().Set("Access-Control-Allow-Origin", allow)
 		if allow != "*" {
@@ -207,10 +205,10 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		method = "server_info"
 	}
 
-	peerIP := remoteAddrIP(r.RemoteAddr)
-	clientIP := s.getClientIP(r)
-	user := userHeader(r)
 	portCtx := GetPortContext(r.Context())
+	peerIP := remoteAddrIP(r.RemoteAddr)
+	clientIP := resolveClientIP(r, portCtx)
+	user := userHeader(r)
 	role := roleForRequest(peerIP, user, portCtx)
 	dispatchCtx, cancel := s.withTimeout(r.Context())
 	defer cancel()
@@ -262,10 +260,10 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		params = request.Params[0]
 	}
 
-	peerIP := remoteAddrIP(r.RemoteAddr)
-	clientIP := s.getClientIP(r)
-	user := userHeader(r)
 	portCtx := GetPortContext(r.Context())
+	peerIP := remoteAddrIP(r.RemoteAddr)
+	clientIP := resolveClientIP(r, portCtx)
+	user := userHeader(r)
 	// Role is derived from the socket-level peer, not header-supplied IPs,
 	// so an X-Real-IP / X-Forwarded-For header from an untrusted client
 	// can't elevate to admin via the localhost fallback. Matches rippled's
@@ -325,9 +323,13 @@ func (s *Server) withTimeout(parent context.Context) (context.Context, context.C
 	return context.WithTimeout(parent, s.timeout)
 }
 
-// credentialKeys are request fields masked in error envelopes. Mirrors
-// rippled's strip list in ServerHandler.cpp:535-542; PascalCase variants
-// are included to cover clients that use either casing.
+// credentialKeys are request fields masked in error envelopes.
+// rippled (ServerHandler.cpp:535-542) masks only the lowercase
+// top-level keys "passphrase", "secret", "seed", "seed_hex"; goxrpl
+// extends that list with the PascalCase variants used by some clients
+// and traverses into the nested "tx_json" / "transaction" objects
+// (see redactCredentials). This is a strict superset of rippled —
+// masking more, never less.
 var credentialKeys = []string{
 	"secret", "seed", "passphrase", "seed_hex",
 	"Secret", "Seed", "Passphrase", "SeedHex",
@@ -394,34 +396,70 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types
 		}
 	}
 
-	if err := chargeLoad(s.loadTracker, ctx, method, handler, rpcLog()); err != nil {
+	if err := gateLoad(s.loadTracker, ctx, method, rpcLog()); err != nil {
 		return nil, err
 	}
-	return handler.Handle(ctx, params)
+	result, rpcErr := handler.Handle(ctx, params)
+	finalizeLoad(s.loadTracker, ctx, method, handler, rpcErr, rpcLog())
+	return result, rpcErr
 }
 
-// chargeLoad applies the per-IP load charge for one RPC dispatch.
-// Returns rpcSLOW_DOWN when the client crosses loadtrack.DropThreshold;
-// returns nil (and logs at Info on warn) otherwise. Admin / identified
-// callers bypass tracking entirely, matching rippled isUnlimited().
-func chargeLoad(tracker *loadtrack.Tracker, ctx *types.RpcContext, method string, handler types.MethodHandler, log xrpllog.Logger) *types.RpcError {
+// gateLoad is the pre-dispatch admission check. It does NOT charge the
+// caller; it only rejects when the (decayed) balance is already at or
+// above DropThreshold. Mirrors rippled ServerHandler.cpp:735 where
+// usage.disconnect() is consulted *before* doCommand runs.
+//
+// Admin / identified callers bypass tracking entirely, matching rippled
+// isUnlimited() (Role.cpp:124-128).
+func gateLoad(tracker *loadtrack.Tracker, ctx *types.RpcContext, method string, log xrpllog.Logger) *types.RpcError {
 	if tracker == nil || ctx.Unlimited {
 		return nil
 	}
-	kind := loadtrack.LoadReference
-	if c, ok := handler.(LoadCharger); ok {
-		kind = c.LoadKind()
-	}
-	switch tracker.Charge(ctx.ClientIP, kind) {
-	case loadtrack.OutcomeDrop:
+	if tracker.OverDropThreshold(ctx.ClientIP) {
 		log.Warn("rpc dropped: client over load threshold",
 			"client", ctx.ClientIP, "method", method, "balance", tracker.Balance(ctx.ClientIP))
 		return types.RpcErrorSlowDown("Slow down. Server is too busy for this client.")
+	}
+	return nil
+}
+
+// finalizeLoad is the post-dispatch charge step. The charge applied is
+// LoadMalformed when the handler returned an invalidParams / methodNotFound
+// error (rippled bumps loadType to feeMalformedRPC for the same condition
+// in RPCHandler.cpp:211-215 and ServerHandler.cpp:766-808). Otherwise
+// the handler's declared LoadKind (or LoadReference) is used.
+//
+// Admin / identified callers bypass tracking entirely.
+func finalizeLoad(tracker *loadtrack.Tracker, ctx *types.RpcContext, method string, handler types.MethodHandler, rpcErr *types.RpcError, log xrpllog.Logger) {
+	if tracker == nil || ctx.Unlimited {
+		return
+	}
+	kind := loadKindFor(handler, rpcErr)
+	switch tracker.Charge(ctx.ClientIP, kind) {
+	case loadtrack.OutcomeDrop:
+		log.Warn("rpc client crossed drop threshold (post-charge)",
+			"client", ctx.ClientIP, "method", method, "balance", tracker.Balance(ctx.ClientIP))
 	case loadtrack.OutcomeWarn:
 		log.Info("rpc client over warn threshold",
 			"client", ctx.ClientIP, "method", method, "balance", tracker.Balance(ctx.ClientIP))
 	}
-	return nil
+}
+
+// loadKindFor returns the charge bucket to apply for one dispatch. A
+// malformed / unknown-method response is charged LoadMalformed so a
+// client cannot use bad input as a cheap probe (matches rippled's
+// feeMalformedRPC bump in RPCHandler.cpp / ServerHandler.cpp).
+func loadKindFor(handler types.MethodHandler, rpcErr *types.RpcError) loadtrack.LoadKind {
+	if rpcErr != nil {
+		switch rpcErr.Code {
+		case types.RpcINVALID_PARAMS, types.RpcMETHOD_NOT_FOUND, types.RpcINTERNAL:
+			return loadtrack.LoadMalformed
+		}
+	}
+	if c, ok := handler.(LoadCharger); ok {
+		return c.LoadKind()
+	}
+	return loadtrack.LoadReference
 }
 
 // writeXrplResponse writes an XRPL format JSON-RPC response
@@ -472,16 +510,50 @@ func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, method stri
 		}
 	}
 
-	// Stream-encode straight to the response writer. Large payloads
-	// (book_offers, ledger_data, ripple_path_find) used to be fully
-	// buffered into a []byte via json.Marshal before w.Write, doubling
-	// peak memory under load. NewEncoder pipes directly into the socket
-	// buffer; on encode error we've already sent headers, so a 200 with
-	// a truncated body is the only honest outcome — we log the failure.
+	// Stream-encode straight to the response writer through trimNewlineWriter.
+	// json.Encoder.Encode would otherwise emit a trailing '\n' that rippled's
+	// equivalent path does not produce, changing the byte-exact wire shape
+	// for parity-sensitive clients. Streaming avoids buffering large
+	// payloads (book_offers, ledger_data, ripple_path_find) into a []byte
+	// before w.Write; on encode error headers are already sent, so logging
+	// is the only honest signal.
 	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(response); err != nil {
+	enc := json.NewEncoder(&trimNewlineWriter{w: w})
+	if err := enc.Encode(response); err != nil {
 		rpcLog().Error("Failed to encode response", "err", err)
 	}
+}
+
+// trimNewlineWriter wraps an io.Writer and discards a single trailing
+// newline byte across Write calls. json.Encoder.Encode always appends
+// '\n' after the JSON value; rippled's serialiser does not.
+type trimNewlineWriter struct {
+	w       io.Writer
+	pending bool // a '\n' was buffered from the previous Write
+}
+
+func (t *trimNewlineWriter) Write(p []byte) (int, error) {
+	written := 0
+	if t.pending && len(p) > 0 {
+		if _, err := t.w.Write([]byte{'\n'}); err != nil {
+			return 0, err
+		}
+		t.pending = false
+	}
+	if len(p) > 0 && p[len(p)-1] == '\n' {
+		t.pending = true
+		body := p[:len(p)-1]
+		if len(body) > 0 {
+			n, err := t.w.Write(body)
+			written = n
+			if err != nil {
+				return written, err
+			}
+		}
+		return written + 1, nil
+	}
+	n, err := t.w.Write(p)
+	return n, err
 }
 
 // writeXrplError writes an XRPL format error response
@@ -566,46 +638,23 @@ func roleForRequest(peerIP string, user string, portCtx *PortContext) types.Role
 	return types.RoleGuest
 }
 
-// SetTrustedProxies installs the set of TCP peer networks whose
-// X-Forwarded-For / X-Real-IP headers are honoured for client-IP
-// attribution. Passing nil/empty disables proxy-header trust entirely
-// (logs always show the socket peer). Auth decisions ignore these
-// headers regardless — see roleForRequest.
-func (s *Server) SetTrustedProxies(nets []net.IPNet) {
-	s.trustedProxiesMu.Lock()
-	defer s.trustedProxiesMu.Unlock()
-	if len(nets) == 0 {
-		s.trustedProxies = nil
-		return
-	}
-	s.trustedProxies = append(s.trustedProxies[:0:0], nets...)
-}
-
-func (s *Server) loadTrustedProxies() []net.IPNet {
-	s.trustedProxiesMu.RLock()
-	defer s.trustedProxiesMu.RUnlock()
-	if len(s.trustedProxies) == 0 {
-		return nil
-	}
-	out := make([]net.IPNet, len(s.trustedProxies))
-	copy(out, s.trustedProxies)
-	return out
-}
-
-// getClientIP extracts the client IP for logging and identification.
+// resolveClientIP extracts the client IP for logging and identification.
 // X-Forwarded-For / X-Real-IP are honoured only when the actual TCP peer
-// is in the server's trustedProxies set; otherwise the socket peer is
-// returned. This MUST NOT be used for role or admin gating — callers
-// that need a security decision should use remoteAddrIP, which always
-// returns the socket-level peer.
-func (s *Server) getClientIP(r *http.Request) string {
+// is in the per-port SecureGatewayNets set (PortContext); otherwise the
+// socket peer is returned. This MUST NOT be used for role or admin
+// gating — callers that need a security decision should use
+// remoteAddrIP, which always returns the socket-level peer.
+//
+// Per-port scoping matches rippled, which passes a single Port& into
+// requestRole and forwardedFor — XFF trust does not bleed across ports
+// (ServerHandler.cpp:709-734).
+func resolveClientIP(r *http.Request, portCtx *PortContext) string {
 	peer := remoteAddrIP(r.RemoteAddr)
-	trusted := s.loadTrustedProxies()
-	if len(trusted) == 0 {
+	if portCtx == nil || len(portCtx.SecureGatewayNets) == 0 {
 		return peer
 	}
 	peerIP := net.ParseIP(peer)
-	if peerIP == nil || !config.IPInNets(peerIP, trusted) {
+	if peerIP == nil || !config.IPInNets(peerIP, portCtx.SecureGatewayNets) {
 		return peer
 	}
 	if fwd := forwardedForHeader(r); fwd != "" {
@@ -672,12 +721,24 @@ func extractIPAddrFromField(field string) string {
 		}
 	}
 	if strings.HasPrefix(s, "[") {
-		end := strings.IndexByte(s, ']')
-		if end < 0 {
+		// Bracketed form is IPv6 (or IPv4-mapped). Scan until the first
+		// character that is not hex / ':' / '.' / space, matching
+		// rippled Role.cpp:214-234. If that scan-terminator isn't ']',
+		// the bracketed value is malformed → empty result.
+		inner := s[1:]
+		end := -1
+		for i := 0; i < len(inner); i++ {
+			c := inner[i]
+			if isHexDigit(c) || c == ':' || c == '.' || c == ' ' {
+				continue
+			}
+			end = i
+			break
+		}
+		if end < 0 || inner[end] != ']' {
 			return ""
 		}
-		// Bracketed form is IPv6; everything after `]` (e.g. `:port`) is dropped.
-		return strings.TrimSpace(s[1:end])
+		return strings.TrimSpace(inner[:end])
 	}
 	// Unbracketed: a colon means either an IPv6 address (multiple colons)
 	// or a host:port pair (single colon). Strip port only for the latter.
@@ -703,4 +764,11 @@ func remoteAddrIP(addr string) string {
 // cannot use X-User to upgrade their role.
 func userHeader(r *http.Request) string {
 	return strings.TrimSpace(r.Header.Get("X-User"))
+}
+
+// isHexDigit reports whether c is an ASCII hex digit. Used by
+// extractIPAddrFromField's bracket validator (matches rippled
+// std::isxdigit in Role.cpp:222).
+func isHexDigit(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }

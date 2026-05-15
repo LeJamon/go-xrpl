@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -79,31 +80,28 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		request.Credentials,
 	)
 	if err != nil {
-		// Handle specific errors
-		errMsg := err.Error()
-
-		// Source account not found
-		if errMsg == "source account not found" {
+		switch {
+		case errors.Is(err, types.ErrSrcAccountNotFound):
 			return nil, &types.RpcError{
 				Code:    types.RpcSRC_ACT_NOT_FOUND,
 				Message: "Source account not found.",
 			}
-		}
-
-		// Destination account not found
-		if errMsg == "destination account not found" {
+		case errors.Is(err, types.ErrDstAccountNotFound):
 			return nil, &types.RpcError{
 				Code:    types.RpcDST_ACT_NOT_FOUND,
 				Message: "Destination account not found.",
 			}
+		case errors.Is(err, types.ErrBadCredentials):
+			// Detail follows the sentinel as "bad credentials: <detail>";
+			// strip the prefix so the wire message matches rippled's
+			// DepositAuthorized.cpp emit ("credentials don't exist", etc.).
+			detail := err.Error()
+			if idx := strings.Index(detail, ": "); idx >= 0 {
+				detail = detail[idx+2:]
+			}
+			return nil, types.RpcErrorBadCredentials(detail)
 		}
-
-		// Credential validation errors from the service layer
-		if len(errMsg) > 16 && errMsg[:16] == "bad_credentials:" {
-			return nil, types.RpcErrorBadCredentials(errMsg[17:])
-		}
-
-		return nil, types.RpcErrorInternal(errMsg)
+		return nil, types.RpcErrorInternal(err.Error())
 	}
 
 	// Build response

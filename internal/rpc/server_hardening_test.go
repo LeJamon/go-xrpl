@@ -27,8 +27,8 @@ func (s *stubHandler) Handle(ctx *types.RpcContext, params json.RawMessage) (int
 	}
 	return map[string]interface{}{"ok": true}, nil
 }
-func (s *stubHandler) RequiredRole() types.Role         { return s.role }
-func (s *stubHandler) SupportedApiVersions() []int      { return s.apiVers }
+func (s *stubHandler) RequiredRole() types.Role           { return s.role }
+func (s *stubHandler) SupportedApiVersions() []int        { return s.apiVers }
 func (s *stubHandler) RequiredCondition() types.Condition { return types.NoCondition }
 
 func newHardeningServer(t *testing.T, timeout time.Duration, method string, h types.MethodHandler) *Server {
@@ -103,10 +103,10 @@ func TestRoleNotElevatableByHeader(t *testing.T) {
 }
 
 // TestTrustedProxyAttributesClientIPButNotAdmin confirms that when a
-// peer is in the configured secure_gateway / trusted-proxy set, its
-// X-Forwarded-For is honoured for ClientIP attribution — but the role
-// is still derived from the socket peer, so a proxy with XFF: 127.0.0.1
-// cannot elevate to admin.
+// peer is in the per-port secure_gateway allowlist, its X-Forwarded-For
+// is honoured for ClientIP attribution — but the role is still derived
+// from the socket peer, so a proxy with XFF: 127.0.0.1 cannot elevate
+// to admin.
 func TestTrustedProxyAttributesClientIPButNotAdmin(t *testing.T) {
 	var observedRole types.Role
 	var observedClientIP string
@@ -118,11 +118,12 @@ func TestTrustedProxyAttributesClientIPButNotAdmin(t *testing.T) {
 		},
 	})
 	_, gateway, _ := net.ParseCIDR("203.0.113.0/24")
-	srv.SetTrustedProxies([]net.IPNet{*gateway})
+	pc := &PortContext{SecureGatewayNets: []net.IPNet{*gateway}}
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"ping","params":[{}]}`))
 	req.RemoteAddr = "203.0.113.5:1234" // peer is the trusted proxy
 	req.Header.Set("X-Forwarded-For", "198.51.100.7, 203.0.113.5")
+	req = req.WithContext(WithPortContext(req.Context(), pc))
 
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)

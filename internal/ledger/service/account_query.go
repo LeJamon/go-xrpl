@@ -1562,7 +1562,7 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 		return nil, fmt.Errorf("failed to check source account existence: %w", err)
 	}
 	if !exists {
-		return nil, errors.New("source account not found")
+		return nil, rpctypes.ErrSrcAccountNotFound
 	}
 
 	// Check if destination account exists and get its flags
@@ -1572,7 +1572,7 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 		return nil, fmt.Errorf("failed to check destination account existence: %w", err)
 	}
 	if !exists {
-		return nil, errors.New("destination account not found")
+		return nil, rpctypes.ErrDstAccountNotFound
 	}
 
 	// Read the destination account data to get flags
@@ -1640,7 +1640,8 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 // It checks: existence, acceptance, expiry, ownership (subject == srcAcct), and
 // detects duplicates (same issuer+credentialType pair).
 // Returns the sorted credential pairs for use in credential-based preauth lookup.
-// Errors are prefixed with "bad_credentials: " for the handler to map to rpcBAD_CREDENTIALS.
+// Errors wrap rpctypes.ErrBadCredentials so the handler can map them to
+// rpcBAD_CREDENTIALS via errors.Is, with the wrapper's message carrying the detail.
 // Reference: rippled DepositAuthorized.cpp credential validation loop
 func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []string, srcAcct [20]byte) ([]keylet.CredentialPair, error) {
 	type credKey struct {
@@ -1667,7 +1668,7 @@ func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []stri
 		// Decode the credential hash
 		credHashBytes, err := hex.DecodeString(credHex)
 		if err != nil {
-			return nil, errors.New("bad_credentials: credentials don't exist")
+			return nil, fmt.Errorf("%w: credentials don't exist", rpctypes.ErrBadCredentials)
 		}
 		var credHash [32]byte
 		copy(credHash[:], credHashBytes)
@@ -1676,31 +1677,31 @@ func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []stri
 		credKeylet := keylet.CredentialByID(credHash)
 		credData, err := targetLedger.Read(credKeylet)
 		if err != nil || credData == nil {
-			return nil, errors.New("bad_credentials: credentials don't exist")
+			return nil, fmt.Errorf("%w: credentials don't exist", rpctypes.ErrBadCredentials)
 		}
 
 		// Parse the credential entry
 		credEntry, err := credential.ParseCredentialEntry(credData)
 		if err != nil {
-			return nil, errors.New("bad_credentials: credentials don't exist")
+			return nil, fmt.Errorf("%w: credentials don't exist", rpctypes.ErrBadCredentials)
 		}
 
 		// Check accepted flag
 		// Reference: rippled DepositAuthorized.cpp: if (!(sleCred->getFlags() & lsfAccepted))
 		if !credEntry.IsAccepted() {
-			return nil, errors.New("bad_credentials: credentials aren't accepted")
+			return nil, fmt.Errorf("%w: credentials aren't accepted", rpctypes.ErrBadCredentials)
 		}
 
 		// Check expiry
 		// Reference: rippled DepositAuthorized.cpp: if (credentials::checkExpired(sleCred, ...))
 		if credEntry.Expiration != nil && parentCloseTimeSecs > *credEntry.Expiration {
-			return nil, errors.New("bad_credentials: credentials are expired")
+			return nil, fmt.Errorf("%w: credentials are expired", rpctypes.ErrBadCredentials)
 		}
 
 		// Check ownership: subject must match source account
 		// Reference: rippled DepositAuthorized.cpp: if ((*sleCred)[sfSubject] != srcAcct)
 		if credEntry.Subject != srcAcct {
-			return nil, errors.New("bad_credentials: credentials doesn't belong to the root account")
+			return nil, fmt.Errorf("%w: credentials doesn't belong to the root account", rpctypes.ErrBadCredentials)
 		}
 
 		// Check for duplicates (same issuer + credentialType)
@@ -1710,7 +1711,7 @@ func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []stri
 			credentialType: string(credEntry.CredentialType),
 		}
 		if _, exists := seen[key]; exists {
-			return nil, errors.New("bad_credentials: duplicates in credentials")
+			return nil, fmt.Errorf("%w: duplicates in credentials", rpctypes.ErrBadCredentials)
 		}
 		seen[key] = struct{}{}
 

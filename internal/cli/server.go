@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -101,13 +100,13 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	// init path managed to populate before any error return. doShutdown
 	// tolerates nil components for the partial-init case.
 	var (
-		db                   nodestore.Database
-		repoManager          relationaldb.RepositoryManager
-		ledgerService        *service.Service
-		consensusComponents  *adaptor.Components
-		httpSrvs             []*http.Server
-		wsSrvs               []*http.Server
-		wsServer             *rpc.WebSocketServer
+		db                  nodestore.Database
+		repoManager         relationaldb.RepositoryManager
+		ledgerService       *service.Service
+		consensusComponents *adaptor.Components
+		httpSrvs            []*http.Server
+		wsSrvs              []*http.Server
+		wsServer            *rpc.WebSocketServer
 	)
 	defer func() {
 		doShutdown(httpSrvs, wsSrvs, wsServer, ledgerService, consensusComponents, db, repoManager, serverLog)
@@ -507,13 +506,16 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		}(name, srv)
 	}
 
-	// Start HTTP listeners — each port gets its own mux with PortMiddleware
+	// Start HTTP listeners — each port gets its own mux with PortMiddleware.
+	// SecureGatewayNets are scoped per-port via PortContext so XFF trust
+	// for one port never bleeds across to another (matches rippled, which
+	// passes a single Port& into requestRole / forwardedFor —
+	// ServerHandler.cpp:709-734).
 	httpPortList := make([]struct {
 		name string
 		pc   *rpc.PortContext
 		addr string
 	}, 0, len(httpPorts))
-	var trustedProxies []net.IPNet
 	for name, p := range httpPorts {
 		portCfg := p
 		adminNets, err := portCfg.ParseAdminNets()
@@ -524,7 +526,6 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		if err != nil {
 			return fmt.Errorf("parse secure_gateway nets for http port %q: %w", name, err)
 		}
-		trustedProxies = append(trustedProxies, secureGW...)
 		pc := &rpc.PortContext{
 			PortName:          name,
 			AdminNets:         adminNets,
@@ -542,12 +543,6 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	if len(httpPortList) == 0 {
 		return fmt.Errorf("no HTTP ports configured — at least one HTTP port is required")
 	}
-
-	// secure_gateway CIDRs from every HTTP port form the union of peers
-	// whose X-Forwarded-For / X-Real-IP we'll trust for client-IP
-	// attribution (logs, rate accounting). Admin role still requires the
-	// peer be in the per-port AdminNets list.
-	httpServer.SetTrustedProxies(trustedProxies)
 
 	for _, entry := range httpPortList {
 		wrappedMux := http.NewServeMux()

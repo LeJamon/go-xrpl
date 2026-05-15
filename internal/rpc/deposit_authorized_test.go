@@ -248,7 +248,7 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			setupMock: func() {
-				mock.depositAuthorizedErr = errors.New("source account not found")
+				mock.depositAuthorizedErr = types.ErrSrcAccountNotFound
 			},
 			expectError:   true,
 			expectedError: "Source account not found.",
@@ -261,7 +261,7 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			setupMock: func() {
-				mock.depositAuthorizedErr = errors.New("destination account not found")
+				mock.depositAuthorizedErr = types.ErrDstAccountNotFound
 			},
 			expectError:   true,
 			expectedError: "Destination account not found.",

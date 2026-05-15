@@ -152,6 +152,25 @@ func (t *Tracker) Balance(key string) float64 {
 	return e.balance
 }
 
+// OverDropThreshold reports whether the (decayed) balance for key is
+// already at or above DropThreshold. Used by the pre-dispatch gate to
+// reject before the handler runs — mirrors rippled's
+// Resource::Consumer::disconnect() check at ServerHandler.cpp:735.
+// An empty key is treated as anonymous and is never over-threshold.
+func (t *Tracker) OverDropThreshold(key string) bool {
+	if key == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	e, ok := t.entries[key]
+	if !ok {
+		return false
+	}
+	t.decayLocked(e, t.now())
+	return e.balance >= DropThreshold
+}
+
 // Reset removes a key from the tracker; used by tests.
 func (t *Tracker) Reset(key string) {
 	t.mu.Lock()

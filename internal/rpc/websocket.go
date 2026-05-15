@@ -8,10 +8,12 @@ import (
 	"net"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/config"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/loadtrack"
 	"github.com/LeJamon/goXRPLd/internal/rpc/subscription"
@@ -86,6 +88,12 @@ type WebSocketConnection struct {
 	// roleForRequest for RoleIdentified promotion when the connection
 	// came in through a secure_gateway peer.
 	user string
+	// forwardedFor is the originating client IP carried in the upgrade
+	// request's Forwarded / X-Forwarded-For / X-Real-IP header. Used by
+	// resolveWSClientIP when the upgrade socket peer is in the per-port
+	// SecureGatewayNets allowlist. Mirrors rippled's
+	// WSInfoSub::forwarded_for (ServerHandler.cpp:497-501, :580).
+	forwardedFor string
 	// legacy is the same logical connection viewed through the
 	// subscription-manager data model. Created at AddConnection and
 	// torn down at closeConnection — kept on the WS struct so the
@@ -155,6 +163,16 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// because the WebSocket connection lives beyond the HTTP request lifecycle
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Capture proxy-attribution headers at upgrade time. They are only
+	// consulted when the upgrade socket peer is in the per-port
+	// SecureGatewayNets set — see resolveWSClientIP.
+	var fwd string
+	if f := forwardedForHeader(r); f != "" {
+		fwd = f
+	} else if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		fwd = strings.TrimSpace(xri)
+	}
+
 	wsConn := &WebSocketConnection{
 		ID:            generateConnectionID(),
 		conn:          conn,
@@ -165,6 +183,7 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		cancel:        cancel,
 		portCtx:       portCtx,
 		user:          userHeader(r),
+		forwardedFor:  fwd,
 	}
 
 	ws.attachConnection(wsConn)
@@ -186,7 +205,10 @@ func (ws *WebSocketServer) handleConnection(wsConn *WebSocketConnection) {
 	defer ws.closeConnection(wsConn)
 	defer recoverPanic("handleConnection", wsConn.ID)
 
-	wsConn.conn.SetReadLimit(512 * 1024) // 512KB max message size
+	// Match the HTTP body cap. rippled enforces RPC::Tuning::maxRequestSize
+	// (1 MB) on both onWSMessage and processRequest (ServerHandler.cpp:343
+	// and :625), so the WS path uses the same byte ceiling as POST.
+	wsConn.conn.SetReadLimit(int64(MaxRequestBytes))
 
 	// Set up pong handler to reset read deadline on pong received
 	wsConn.conn.SetPongHandler(func(string) error {
@@ -319,8 +341,14 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 		cmd.Params = paramsBytes
 	}
 
-	clientIP := getWebSocketClientIP(wsConn.conn)
-	role := roleForRequest(clientIP, wsConn.user, wsConn.portCtx)
+	// Role is always derived from the socket-level peer, never from
+	// header-supplied IPs. ClientIP is the peer too, unless the peer is
+	// in this port's secure_gateway set — then we substitute the value
+	// captured at upgrade time (matches rippled WSInfoSub::forwarded_for,
+	// ServerHandler.cpp:497-501).
+	peerIP := getWebSocketClientIP(wsConn.conn)
+	clientIP := resolveWSClientIP(peerIP, wsConn.forwardedFor, wsConn.portCtx)
+	role := roleForRequest(peerIP, wsConn.user, wsConn.portCtx)
 	wsLog().Debug("ws request", "cmd", cmd.Command, "remoteAddr", wsConn.conn.RemoteAddr().String(), "clientIP", clientIP, "role", role, "isAdmin", role == types.RoleAdmin)
 	dispatchCtx := wsConn.ctx
 	var cancel context.CancelFunc
@@ -614,21 +642,23 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *typ
 		return
 	}
 
-	// Mirror the HTTP server's admin gate (server.go executeMethod) and
-	// rippled RPCHandler.cpp:166-167: only the admin role check is applied
-	// here, and the wire error is rpcNO_PERMISSION so HTTP and WS surface
-	// the same code for the same condition.
+	// Admin gate. Mirrors rippled ServerHandler.cpp:482-486 (WS path):
+	// when requestRole returns Role::FORBID for an admin-required command,
+	// rippled writes rpcError(rpcFORBIDDEN) before doCommand ever runs.
+	// The fallback rpcNO_PERMISSION at RPCHandler.cpp:166-167 is only
+	// reached when the outer requestRole gate let the request through.
 	if handler.RequiredRole() == types.RoleAdmin && ctx.Role != types.RoleAdmin {
-		ws.sendError(wsConn, types.RpcErrorNoPermission(cmd.Command), cmd.ID)
+		ws.sendError(wsConn, types.RpcErrorForbidden(cmd.Command), cmd.ID)
 		return
 	}
 
-	if rpcErr := chargeLoad(ws.loadTracker, ctx, cmd.Command, handler, wsLog()); rpcErr != nil {
+	if rpcErr := gateLoad(ws.loadTracker, ctx, cmd.Command, wsLog()); rpcErr != nil {
 		ws.sendError(wsConn, rpcErr, cmd.ID)
 		return
 	}
 
 	result, rpcErr := handler.Handle(ctx, cmd.Params)
+	finalizeLoad(ws.loadTracker, ctx, cmd.Command, handler, rpcErr, wsLog())
 	if rpcErr != nil {
 		ws.sendError(wsConn, rpcErr, cmd.ID)
 	} else {
@@ -819,6 +849,22 @@ func getWebSocketClientIP(conn *websocket.Conn) string {
 		return conn.RemoteAddr().String()
 	}
 	return host
+}
+
+// resolveWSClientIP returns the attributed client IP for a WebSocket
+// dispatch. If the peer is in this port's SecureGatewayNets allowlist
+// and the upgrade captured a Forwarded / X-Forwarded-For / X-Real-IP
+// value, that value is returned; otherwise the socket peer is returned.
+// Role decisions never consult this — see roleForRequest.
+func resolveWSClientIP(peerIP, upgradeForwardedFor string, portCtx *PortContext) string {
+	if upgradeForwardedFor == "" || portCtx == nil || len(portCtx.SecureGatewayNets) == 0 {
+		return peerIP
+	}
+	parsed := net.ParseIP(peerIP)
+	if parsed == nil || !config.IPInNets(parsed, portCtx.SecureGatewayNets) {
+		return peerIP
+	}
+	return upgradeForwardedFor
 }
 
 // RegisterAllMethods registers every RPC method available on the WebSocket

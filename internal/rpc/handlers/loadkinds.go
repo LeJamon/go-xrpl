@@ -15,12 +15,12 @@ import "github.com/LeJamon/goXRPLd/internal/rpc/loadtrack"
 // work proportional to account size; not as costly as pathfinding but
 // noticeably more than a ping.
 
-func (PathFindMethod) LoadKind() loadtrack.LoadKind        { return loadtrack.LoadHeavy }
-func (RipplePathFindMethod) LoadKind() loadtrack.LoadKind  { return loadtrack.LoadHeavy }
-func (LedgerDataMethod) LoadKind() loadtrack.LoadKind      { return loadtrack.LoadHeavy }
-func (BookOffersMethod) LoadKind() loadtrack.LoadKind      { return loadtrack.LoadHeavy }
-func (NoRippleCheckMethod) LoadKind() loadtrack.LoadKind   { return loadtrack.LoadHeavy }
-func (AccountTxMethod) LoadKind() loadtrack.LoadKind       { return loadtrack.LoadHeavy }
+func (PathFindMethod) LoadKind() loadtrack.LoadKind       { return loadtrack.LoadHeavy }
+func (RipplePathFindMethod) LoadKind() loadtrack.LoadKind { return loadtrack.LoadHeavy }
+func (LedgerDataMethod) LoadKind() loadtrack.LoadKind     { return loadtrack.LoadHeavy }
+func (BookOffersMethod) LoadKind() loadtrack.LoadKind     { return loadtrack.LoadHeavy }
+func (NoRippleCheckMethod) LoadKind() loadtrack.LoadKind  { return loadtrack.LoadHeavy }
+func (AccountTxMethod) LoadKind() loadtrack.LoadKind      { return loadtrack.LoadHeavy }
 
 func (AccountLinesMethod) LoadKind() loadtrack.LoadKind    { return loadtrack.LoadMedium }
 func (AccountObjectsMethod) LoadKind() loadtrack.LoadKind  { return loadtrack.LoadMedium }
