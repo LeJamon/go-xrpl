@@ -22,13 +22,13 @@ func (BookOffersMethod) LoadKind() loadtrack.LoadKind     { return loadtrack.Loa
 func (NoRippleCheckMethod) LoadKind() loadtrack.LoadKind  { return loadtrack.LoadHeavy }
 func (AccountTxMethod) LoadKind() loadtrack.LoadKind      { return loadtrack.LoadHeavy }
 
-func (AccountLinesMethod) LoadKind() loadtrack.LoadKind    { return loadtrack.LoadMedium }
-func (AccountObjectsMethod) LoadKind() loadtrack.LoadKind  { return loadtrack.LoadMedium }
-func (AccountOffersMethod) LoadKind() loadtrack.LoadKind   { return loadtrack.LoadMedium }
-func (AccountChannelsMethod) LoadKind() loadtrack.LoadKind { return loadtrack.LoadMedium }
-func (AccountNftsMethod) LoadKind() loadtrack.LoadKind     { return loadtrack.LoadMedium }
-func (GatewayBalancesMethod) LoadKind() loadtrack.LoadKind { return loadtrack.LoadMedium }
-func (SubmitMethod) LoadKind() loadtrack.LoadKind             { return loadtrack.LoadMedium }
-func (SubmitMultisignedMethod) LoadKind() loadtrack.LoadKind  { return loadtrack.LoadMedium }
-func (SignMethod) LoadKind() loadtrack.LoadKind               { return loadtrack.LoadMedium }
-func (SignForMethod) LoadKind() loadtrack.LoadKind            { return loadtrack.LoadMedium }
+func (AccountLinesMethod) LoadKind() loadtrack.LoadKind      { return loadtrack.LoadMedium }
+func (AccountObjectsMethod) LoadKind() loadtrack.LoadKind    { return loadtrack.LoadMedium }
+func (AccountOffersMethod) LoadKind() loadtrack.LoadKind     { return loadtrack.LoadMedium }
+func (AccountChannelsMethod) LoadKind() loadtrack.LoadKind   { return loadtrack.LoadMedium }
+func (AccountNftsMethod) LoadKind() loadtrack.LoadKind       { return loadtrack.LoadMedium }
+func (GatewayBalancesMethod) LoadKind() loadtrack.LoadKind   { return loadtrack.LoadMedium }
+func (SubmitMethod) LoadKind() loadtrack.LoadKind            { return loadtrack.LoadMedium }
+func (SubmitMultisignedMethod) LoadKind() loadtrack.LoadKind { return loadtrack.LoadMedium }
+func (SignMethod) LoadKind() loadtrack.LoadKind              { return loadtrack.LoadMedium }
+func (SignForMethod) LoadKind() loadtrack.LoadKind           { return loadtrack.LoadMedium }
