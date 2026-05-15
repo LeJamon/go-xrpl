@@ -7,11 +7,8 @@ import (
 	"sync"
 )
 
-// uint64ToUpperHex formats v as an uppercase hexadecimal string with no
-// padding (matching fmt.Sprintf("%X", v) for uint64). Roughly 5–10× faster
-// than the fmt route on the Flatten/sign hot path because it skips the
-// reflective format machinery and writes nibbles directly. Only one
-// allocation, for the final string conversion.
+// uint64ToUpperHex matches fmt.Sprintf("%X", v) but avoids the fmt
+// allocation/reflect overhead on the Flatten hot path.
 func uint64ToUpperHex(v uint64) string {
 	if v == 0 {
 		return "0"
