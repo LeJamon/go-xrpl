@@ -9,6 +9,7 @@ import (
 	"time"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -112,7 +113,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 				Message: "Transaction history not available. Database not configured.",
 			}
 		}
-		if errors.Is(err, types.ErrAccountNotFound) {
+		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, &types.RpcError{
 				Code:    19,
 				Message: "Account not found.",

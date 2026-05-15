@@ -452,8 +452,10 @@ func finalizeLoad(tracker *loadtrack.Tracker, ctx *types.RpcContext, method stri
 func loadKindFor(handler types.MethodHandler, rpcErr *types.RpcError) loadtrack.LoadKind {
 	if rpcErr != nil {
 		switch rpcErr.Code {
-		case types.RpcINVALID_PARAMS, types.RpcMETHOD_NOT_FOUND, types.RpcINTERNAL:
+		case types.RpcINVALID_PARAMS, types.RpcMETHOD_NOT_FOUND:
 			return loadtrack.LoadMalformed
+		case types.RpcINTERNAL:
+			return loadtrack.LoadException
 		}
 	}
 	if c, ok := handler.(LoadCharger); ok {

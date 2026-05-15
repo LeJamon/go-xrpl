@@ -8,6 +8,7 @@ import (
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -232,7 +233,7 @@ func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
 	// Get the ledger
 	l, ok := s.ledgerHistory[ledgerSeq]
 	if !ok {
-		return nil, errors.New("ledger not found")
+		return nil, svcerr.ErrLedgerNotFound
 	}
 
 	// Get the transaction data
@@ -364,7 +365,7 @@ func (s *Service) GetAccountTransactions(ctx context.Context, account string, le
 	// Decode account address
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, fmt.Errorf("invalid account address: %w", err)
+		return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
 	}
 	var accountID relationaldb.AccountID
 	copy(accountID[:], accountIDBytes)

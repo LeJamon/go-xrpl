@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -149,7 +150,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 			expectedCode:  19, // actNotFound
 			setupMock: func() {
 				mock.getAccountOffersFn = func(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
-					return nil, types.ErrAccountNotFound
+					return nil, svcerr.ErrAccountNotFound
 				}
 			},
 		},
@@ -1121,7 +1122,7 @@ func TestAccountOffersMalformedAddresses(t *testing.T) {
 
 	// Set up mock to return "account not found" for all address lookups
 	mock.getAccountOffersFn = func(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
-		return nil, types.ErrAccountNotFound
+		return nil, svcerr.ErrAccountNotFound
 	}
 
 	malformedAddresses := []struct {

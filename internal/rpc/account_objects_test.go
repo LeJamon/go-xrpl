@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -141,7 +142,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			expectedCode:  types.RpcACT_NOT_FOUND,
 			setupMock: func() {
 				mock.getAccountObjectsFn = func(string, string, string, uint32) (*types.AccountObjectsResult, error) {
-					return nil, types.ErrAccountNotFound
+					return nil, svcerr.ErrAccountNotFound
 				}
 			},
 		},
@@ -949,7 +950,7 @@ func TestAccountObjectsServiceErrors(t *testing.T) {
 
 	t.Run("account not found error", func(t *testing.T) {
 		mock.getAccountObjectsFn = func(string, string, string, uint32) (*types.AccountObjectsResult, error) {
-			return nil, types.ErrAccountNotFound
+			return nil, svcerr.ErrAccountNotFound
 		}
 
 		params := map[string]interface{}{

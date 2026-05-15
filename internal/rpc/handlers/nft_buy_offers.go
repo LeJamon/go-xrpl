@@ -3,9 +3,11 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -75,13 +77,12 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 
 	result, err := ctx.Services.Ledger.GetNFTBuyOffers(ctx.Context, nftID, ledgerIndex, limit, marker)
 	if err != nil {
-		if err.Error() == "ledger not found" {
+		switch {
+		case errors.Is(err, svcerr.ErrLedgerNotFound):
 			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
-		}
-		if err.Error() == "object not found" || err.Error() == "directory not found" {
+		case errors.Is(err, svcerr.ErrObjectNotFound):
 			return nil, types.RpcErrorObjectNotFound("The requested object was not found.")
-		}
-		if err.Error() == "invalid marker" {
+		case errors.Is(err, svcerr.ErrInvalidMarker):
 			return nil, types.RpcErrorInvalidParams("Invalid marker")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get NFT buy offers: %v", err))

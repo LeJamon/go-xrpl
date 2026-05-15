@@ -8,6 +8,7 @@ import (
 
 	"time"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -228,7 +229,7 @@ func TestNoRippleCheckErrorValidation(t *testing.T) {
 				"role":    "user",
 			},
 			setupMock: func() {
-				mock.noRippleCheckErr = types.ErrAccountNotFound
+				mock.noRippleCheckErr = svcerr.ErrAccountNotFound
 			},
 			expectError:   true,
 			expectedError: "Account not found.",

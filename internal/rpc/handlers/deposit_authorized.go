@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -81,17 +82,17 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	)
 	if err != nil {
 		switch {
-		case errors.Is(err, types.ErrSrcAccountNotFound):
+		case errors.Is(err, svcerr.ErrSrcAccountNotFound):
 			return nil, &types.RpcError{
 				Code:    types.RpcSRC_ACT_NOT_FOUND,
 				Message: "Source account not found.",
 			}
-		case errors.Is(err, types.ErrDstAccountNotFound):
+		case errors.Is(err, svcerr.ErrDstAccountNotFound):
 			return nil, &types.RpcError{
 				Code:    types.RpcDST_ACT_NOT_FOUND,
 				Message: "Destination account not found.",
 			}
-		case errors.Is(err, types.ErrBadCredentials):
+		case errors.Is(err, svcerr.ErrBadCredentials):
 			// Detail follows the sentinel as "bad credentials: <detail>";
 			// strip the prefix so the wire message matches rippled's
 			// DepositAuthorized.cpp emit ("credentials don't exist", etc.).

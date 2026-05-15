@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -263,7 +264,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 			expectedError: "Account not found.",
 			expectedCode:  19, // actNotFound
 			setupMock: func() {
-				mock.accountInfoErr = types.ErrAccountNotFound
+				mock.accountInfoErr = svcerr.ErrAccountNotFound
 			},
 		},
 	}

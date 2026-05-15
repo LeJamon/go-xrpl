@@ -88,11 +88,6 @@ func (p *PortConfig) HasPeer() bool {
 	return containsProtocol(p.Protocol, "peer")
 }
 
-// HasGRPC returns true if the port supports gRPC protocol
-func (p *PortConfig) HasGRPC() bool {
-	return containsProtocol(p.Protocol, "grpc")
-}
-
 // IsAdminPort returns true if the port has administrative access configured
 func (p *PortConfig) IsAdminPort() bool {
 	return len(p.Admin) > 0 || p.AdminUser != ""
@@ -190,8 +185,6 @@ func (p *PortConfig) validateProtocols() error {
 			hasNonWebSocket = true
 		case "peer":
 			peerCount++
-		case "grpc":
-			hasNonWebSocket = true
 		default:
 			return fmt.Errorf("unknown protocol: %s", protocol)
 		}
@@ -234,6 +227,15 @@ func (p *PortConfig) ParseSecureGatewayNets() ([]net.IPNet, error) {
 //     must already be the network address (rippled Port.cpp:180-201).
 func parseCIDRList(entries []string, label string) ([]net.IPNet, error) {
 	var nets []net.IPNet
+	seen := make(map[string]struct{})
+	add := func(n net.IPNet) {
+		k := n.String()
+		if _, dup := seen[k]; dup {
+			return
+		}
+		seen[k] = struct{}{}
+		nets = append(nets, n)
+	}
 	for _, entry := range entries {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
@@ -247,7 +249,8 @@ func parseCIDRList(entries []string, label string) ([]net.IPNet, error) {
 			if ip.IsUnspecified() {
 				_, v4Wild, _ := net.ParseCIDR("0.0.0.0/0")
 				_, v6Wild, _ := net.ParseCIDR("::/0")
-				nets = append(nets, *v4Wild, *v6Wild)
+				add(*v4Wild)
+				add(*v6Wild)
 				continue
 			}
 			if ip.To4() != nil {
@@ -264,7 +267,7 @@ func parseCIDRList(entries []string, label string) ([]net.IPNet, error) {
 			return nil, fmt.Errorf("invalid %s CIDR %q: host bits set; expected network address %s",
 				label, entry, ipNet.String())
 		}
-		nets = append(nets, *ipNet)
+		add(*ipNet)
 	}
 	return nets, nil
 }

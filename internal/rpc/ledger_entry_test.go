@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -163,7 +163,7 @@ func TestLedgerEntryDirectIndexLookup(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			setupMock: func() {
-				mock.ledgerEntryErr = errors.New("entry not found")
+				mock.ledgerEntryErr = svcerr.ErrLedgerEntryNotFound
 			},
 			expectError:   true,
 			expectedError: "not found",
@@ -270,7 +270,7 @@ func TestLedgerEntryCheck(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			setupMock: func() {
-				mock.ledgerEntryErr = errors.New("entry not found")
+				mock.ledgerEntryErr = svcerr.ErrLedgerEntryNotFound
 			},
 			expectError:   true,
 			expectedError: "not found",
@@ -376,7 +376,7 @@ func TestLedgerEntryPaymentChannel(t *testing.T) {
 				"ledger_index":    "validated",
 			},
 			setupMock: func() {
-				mock.ledgerEntryErr = errors.New("entry not found")
+				mock.ledgerEntryErr = svcerr.ErrLedgerEntryNotFound
 			},
 			expectError:   true,
 			expectedError: "not found",
@@ -483,7 +483,7 @@ func TestLedgerEntryDirectory(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			setupMock: func() {
-				mock.ledgerEntryErr = errors.New("entry not found")
+				mock.ledgerEntryErr = svcerr.ErrLedgerEntryNotFound
 			},
 			expectError:   true,
 			expectedError: "not found",
@@ -588,7 +588,7 @@ func TestLedgerEntryNFTPage(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			setupMock: func() {
-				mock.ledgerEntryErr = errors.New("entry not found")
+				mock.ledgerEntryErr = svcerr.ErrLedgerEntryNotFound
 			},
 			expectError:   true,
 			expectedError: "not found",
@@ -1264,7 +1264,7 @@ func TestLedgerEntryNotFoundErrorCode(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.ledgerEntryErr = errors.New("entry not found")
+	mock.ledgerEntryErr = svcerr.ErrLedgerEntryNotFound
 
 	params := map[string]interface{}{
 		"index":        "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
@@ -1361,7 +1361,7 @@ func TestLedgerEntryAccountRoot(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			setupMock: func() {
-				mock.ledgerEntryErr = errors.New("entry not found")
+				mock.ledgerEntryErr = svcerr.ErrLedgerEntryNotFound
 			},
 			expectError:   true,
 			expectedError: "not found",
@@ -1459,7 +1459,7 @@ func TestLedgerEntryEscrow(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			setupMock: func() {
-				mock.ledgerEntryErr = errors.New("entry not found")
+				mock.ledgerEntryErr = svcerr.ErrLedgerEntryNotFound
 			},
 			expectError:   true,
 			expectedError: "not found",
@@ -1557,7 +1557,7 @@ func TestLedgerEntryOffer(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			setupMock: func() {
-				mock.ledgerEntryErr = errors.New("entry not found")
+				mock.ledgerEntryErr = svcerr.ErrLedgerEntryNotFound
 			},
 			expectError:   true,
 			expectedError: "not found",
@@ -1655,7 +1655,7 @@ func TestLedgerEntryRippleState(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			setupMock: func() {
-				mock.ledgerEntryErr = errors.New("entry not found")
+				mock.ledgerEntryErr = svcerr.ErrLedgerEntryNotFound
 			},
 			expectError:   true,
 			expectedError: "not found",
@@ -1753,7 +1753,7 @@ func TestLedgerEntryTicket(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			setupMock: func() {
-				mock.ledgerEntryErr = errors.New("entry not found")
+				mock.ledgerEntryErr = svcerr.ErrLedgerEntryNotFound
 			},
 			expectError:   true,
 			expectedError: "not found",
@@ -1851,7 +1851,7 @@ func TestLedgerEntryDepositPreauth(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			setupMock: func() {
-				mock.ledgerEntryErr = errors.New("entry not found")
+				mock.ledgerEntryErr = svcerr.ErrLedgerEntryNotFound
 			},
 			expectError:   true,
 			expectedError: "not found",
@@ -1949,7 +1949,7 @@ func TestLedgerEntryAMM(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			setupMock: func() {
-				mock.ledgerEntryErr = errors.New("entry not found")
+				mock.ledgerEntryErr = svcerr.ErrLedgerEntryNotFound
 			},
 			expectError:   true,
 			expectedError: "not found",
@@ -2023,7 +2023,7 @@ func TestLedgerEntryInvalidLedgerSpecification(t *testing.T) {
 				"ledger_hash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 			},
 			setupMock: func() {
-				mock.ledgerEntryErr = errors.New("ledger not found")
+				mock.ledgerEntryErr = svcerr.ErrLedgerNotFound
 			},
 			expectError:   true,
 			expectedError: "not found",
@@ -2035,7 +2035,7 @@ func TestLedgerEntryInvalidLedgerSpecification(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			setupMock: func() {
-				mock.ledgerEntryErr = errors.New("entry not found")
+				mock.ledgerEntryErr = svcerr.ErrLedgerEntryNotFound
 			},
 			expectError:   true,
 			expectedError: "not found",

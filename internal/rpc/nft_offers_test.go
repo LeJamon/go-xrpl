@@ -8,6 +8,7 @@ import (
 
 	"time"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -134,7 +135,7 @@ func (m *mockNFTOffersLedgerService) GetNFTBuyOffers(_ context.Context, nftID [3
 	if m.nftBuyOffersResult != nil {
 		return m.nftBuyOffersResult, nil
 	}
-	return nil, errors.New("object not found")
+	return nil, svcerr.ErrObjectNotFound
 }
 
 func (m *mockNFTOffersLedgerService) GetNFTSellOffers(_ context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
@@ -144,7 +145,7 @@ func (m *mockNFTOffersLedgerService) GetNFTSellOffers(_ context.Context, nftID [
 	if m.nftSellOffersResult != nil {
 		return m.nftSellOffersResult, nil
 	}
-	return nil, errors.New("object not found")
+	return nil, svcerr.ErrObjectNotFound
 }
 func (m *mockNFTOffersLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
@@ -219,7 +220,7 @@ func TestNftBuyOffersErrorValidation(t *testing.T) {
 				"nft_id": "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
 			},
 			setupMock: func() {
-				mock.nftBuyOffersErr = errors.New("object not found")
+				mock.nftBuyOffersErr = svcerr.ErrObjectNotFound
 			},
 			expectError:   true,
 			expectedError: "The requested object was not found.",
@@ -495,7 +496,7 @@ func TestNftSellOffersErrorValidation(t *testing.T) {
 				"nft_id": "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
 			},
 			setupMock: func() {
-				mock.nftSellOffersErr = errors.New("object not found")
+				mock.nftSellOffersErr = svcerr.ErrObjectNotFound
 			},
 			expectError:   true,
 			expectedError: "The requested object was not found.",

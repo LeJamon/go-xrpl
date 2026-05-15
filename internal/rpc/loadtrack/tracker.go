@@ -27,6 +27,7 @@ const (
 	ChargeMedium    uint32 = 400
 	ChargeHeavy     uint32 = 3000
 	ChargeMalformed uint32 = 100
+	ChargeException uint32 = 100
 )
 
 // LoadKind names the cost bucket a handler falls into. The numeric
@@ -42,9 +43,14 @@ const (
 	// LoadHeavy is a very expensive RPC: pathfinding, account_tx scans,
 	// large ledger_data dumps.
 	LoadHeavy LoadKind = LoadKind(ChargeHeavy)
-	// LoadMalformed is charged when the request itself was malformed so a
-	// client cannot use bad input as a cheap probe.
+	// LoadMalformed is charged for invalidParams / methodNotFound — bad
+	// input that should not be a cheap probe (rippled feeMalformedRPC).
 	LoadMalformed LoadKind = LoadKind(ChargeMalformed)
+	// LoadException is charged when a handler returns rpcINTERNAL.
+	// Numerically equal to LoadMalformed but reported as a distinct
+	// label, mirroring rippled's separate feeExceptionRPC charge
+	// (Fees.cpp).
+	LoadException LoadKind = LoadKind(ChargeException)
 )
 
 // Thresholds — copied from rippled Tuning.h.

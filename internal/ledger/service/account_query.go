@@ -12,8 +12,8 @@ import (
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	rpctypes "github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/credential"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -83,7 +83,7 @@ func (s *Service) GetAccountInfo(ctx context.Context, account string, ledgerInde
 	// Decode the account address to get the account ID
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, fmt.Errorf("invalid account address: %w", err)
+		return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
 	}
 
 	var accountID [20]byte
@@ -98,7 +98,7 @@ func (s *Service) GetAccountInfo(ctx context.Context, account string, ledgerInde
 		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
-		return nil, rpctypes.ErrAccountNotFound
+		return nil, svcerr.ErrAccountNotFound
 	}
 
 	// Read the account data
@@ -178,7 +178,7 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 	// Decode the account address
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, fmt.Errorf("invalid account address: %w", err)
+		return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
@@ -347,7 +347,7 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 	// Decode the account address
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, fmt.Errorf("invalid account address: %w", err)
+		return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
@@ -478,7 +478,7 @@ func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerI
 
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, fmt.Errorf("invalid account address: %w", err)
+		return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
@@ -492,7 +492,7 @@ func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerI
 		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
-		return nil, rpctypes.ErrAccountNotFound
+		return nil, svcerr.ErrAccountNotFound
 	}
 
 	// Normalize type filter from rippled's snake_case to PascalCase
@@ -597,7 +597,7 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 	// Decode the account address
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, fmt.Errorf("invalid account address: %w", err)
+		return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
@@ -609,7 +609,7 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
-		return nil, rpctypes.ErrAccountNotFound
+		return nil, svcerr.ErrAccountNotFound
 	}
 
 	// Parse destination account if provided
@@ -754,7 +754,7 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 	// Decode the account address
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, fmt.Errorf("invalid account address: %w", err)
+		return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
@@ -766,7 +766,7 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
-		return nil, rpctypes.ErrAccountNotFound
+		return nil, svcerr.ErrAccountNotFound
 	}
 
 	// Use maps to collect unique currencies
@@ -946,7 +946,7 @@ func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerInde
 	// Decode the account address
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, fmt.Errorf("invalid account address: %w", err)
+		return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
@@ -958,7 +958,7 @@ func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerInde
 		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
-		return nil, rpctypes.ErrAccountNotFound
+		return nil, svcerr.ErrAccountNotFound
 	}
 
 	// Set default limit
@@ -1067,7 +1067,7 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 	// Decode the account address
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, fmt.Errorf("invalid account address: %w", err)
+		return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
@@ -1079,7 +1079,7 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
-		return nil, rpctypes.ErrAccountNotFound
+		return nil, svcerr.ErrAccountNotFound
 	}
 
 	// Parse hot wallet addresses
@@ -1293,7 +1293,7 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 	// Decode the account address
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
-		return nil, fmt.Errorf("invalid account address: %w", err)
+		return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
@@ -1305,7 +1305,7 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 		return nil, fmt.Errorf("failed to check account existence: %w", err)
 	}
 	if !exists {
-		return nil, rpctypes.ErrAccountNotFound
+		return nil, svcerr.ErrAccountNotFound
 	}
 
 	// Read the account data to get flags and sequence
@@ -1562,7 +1562,7 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 		return nil, fmt.Errorf("failed to check source account existence: %w", err)
 	}
 	if !exists {
-		return nil, rpctypes.ErrSrcAccountNotFound
+		return nil, svcerr.ErrSrcAccountNotFound
 	}
 
 	// Check if destination account exists and get its flags
@@ -1572,7 +1572,7 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 		return nil, fmt.Errorf("failed to check destination account existence: %w", err)
 	}
 	if !exists {
-		return nil, rpctypes.ErrDstAccountNotFound
+		return nil, svcerr.ErrDstAccountNotFound
 	}
 
 	// Read the destination account data to get flags
@@ -1640,7 +1640,7 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 // It checks: existence, acceptance, expiry, ownership (subject == srcAcct), and
 // detects duplicates (same issuer+credentialType pair).
 // Returns the sorted credential pairs for use in credential-based preauth lookup.
-// Errors wrap rpctypes.ErrBadCredentials so the handler can map them to
+// Errors wrap svcerr.ErrBadCredentials so the handler can map them to
 // rpcBAD_CREDENTIALS via errors.Is, with the wrapper's message carrying the detail.
 // Reference: rippled DepositAuthorized.cpp credential validation loop
 func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []string, srcAcct [20]byte) ([]keylet.CredentialPair, error) {
@@ -1668,7 +1668,7 @@ func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []stri
 		// Decode the credential hash
 		credHashBytes, err := hex.DecodeString(credHex)
 		if err != nil {
-			return nil, fmt.Errorf("%w: credentials don't exist", rpctypes.ErrBadCredentials)
+			return nil, fmt.Errorf("%w: credentials don't exist", svcerr.ErrBadCredentials)
 		}
 		var credHash [32]byte
 		copy(credHash[:], credHashBytes)
@@ -1677,31 +1677,31 @@ func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []stri
 		credKeylet := keylet.CredentialByID(credHash)
 		credData, err := targetLedger.Read(credKeylet)
 		if err != nil || credData == nil {
-			return nil, fmt.Errorf("%w: credentials don't exist", rpctypes.ErrBadCredentials)
+			return nil, fmt.Errorf("%w: credentials don't exist", svcerr.ErrBadCredentials)
 		}
 
 		// Parse the credential entry
 		credEntry, err := credential.ParseCredentialEntry(credData)
 		if err != nil {
-			return nil, fmt.Errorf("%w: credentials don't exist", rpctypes.ErrBadCredentials)
+			return nil, fmt.Errorf("%w: credentials don't exist", svcerr.ErrBadCredentials)
 		}
 
 		// Check accepted flag
 		// Reference: rippled DepositAuthorized.cpp: if (!(sleCred->getFlags() & lsfAccepted))
 		if !credEntry.IsAccepted() {
-			return nil, fmt.Errorf("%w: credentials aren't accepted", rpctypes.ErrBadCredentials)
+			return nil, fmt.Errorf("%w: credentials aren't accepted", svcerr.ErrBadCredentials)
 		}
 
 		// Check expiry
 		// Reference: rippled DepositAuthorized.cpp: if (credentials::checkExpired(sleCred, ...))
 		if credEntry.Expiration != nil && parentCloseTimeSecs > *credEntry.Expiration {
-			return nil, fmt.Errorf("%w: credentials are expired", rpctypes.ErrBadCredentials)
+			return nil, fmt.Errorf("%w: credentials are expired", svcerr.ErrBadCredentials)
 		}
 
 		// Check ownership: subject must match source account
 		// Reference: rippled DepositAuthorized.cpp: if ((*sleCred)[sfSubject] != srcAcct)
 		if credEntry.Subject != srcAcct {
-			return nil, fmt.Errorf("%w: credentials doesn't belong to the root account", rpctypes.ErrBadCredentials)
+			return nil, fmt.Errorf("%w: credentials doesn't belong to the root account", svcerr.ErrBadCredentials)
 		}
 
 		// Check for duplicates (same issuer + credentialType)
@@ -1711,7 +1711,7 @@ func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []stri
 			credentialType: string(credEntry.CredentialType),
 		}
 		if _, exists := seen[key]; exists {
-			return nil, fmt.Errorf("%w: duplicates in credentials", rpctypes.ErrBadCredentials)
+			return nil, fmt.Errorf("%w: duplicates in credentials", svcerr.ErrBadCredentials)
 		}
 		seen[key] = struct{}{}
 

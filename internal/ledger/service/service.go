@@ -16,6 +16,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/ledger/localtxs"
 	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/txq"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
@@ -24,12 +25,14 @@ import (
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 
-// Common errors
+// Aliases to the canonical sentinels in svcerr — kept so existing
+// callers within the service package read naturally; callers from
+// outside MUST compare against svcerr.* directly.
 var (
-	ErrNotStandalone  = errors.New("operation only valid in standalone mode")
-	ErrNoOpenLedger   = errors.New("no open ledger")
-	ErrNoClosedLedger = errors.New("no closed ledger")
-	ErrLedgerNotFound = errors.New("ledger not found")
+	ErrNotStandalone  = svcerr.ErrNotStandalone
+	ErrNoOpenLedger   = svcerr.ErrNoOpenLedger
+	ErrNoClosedLedger = svcerr.ErrNoClosedLedger
+	ErrLedgerNotFound = svcerr.ErrLedgerNotFound
 )
 
 // Config holds configuration for the LedgerService

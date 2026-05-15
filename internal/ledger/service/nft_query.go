@@ -3,10 +3,10 @@ package service
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"strconv"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
@@ -56,7 +56,7 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
 	if err != nil {
 		if err == ErrLedgerNotFound {
-			return nil, errors.New("ledger not found")
+			return nil, svcerr.ErrLedgerNotFound
 		}
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 		return nil, err
 	}
 	if !exists {
-		return nil, errors.New("object not found")
+		return nil, svcerr.ErrObjectNotFound
 	}
 
 	result := &NFTOffersResult{
@@ -109,7 +109,7 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 		// Find the marker in the offer list and validate it
 		markerBytes, err := hexDecode(marker)
 		if err != nil || len(markerBytes) != 32 {
-			return nil, errors.New("invalid marker")
+			return nil, svcerr.ErrInvalidMarker
 		}
 		var markerKey [32]byte
 		copy(markerKey[:], markerBytes)
@@ -118,13 +118,13 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 		markerKeylet := keylet.Keylet{Key: markerKey}
 		offerData, err := targetLedger.Read(markerKeylet)
 		if err != nil {
-			return nil, errors.New("invalid marker")
+			return nil, svcerr.ErrInvalidMarker
 		}
 
 		// Parse the offer to verify NFTokenID matches
 		offer, err := parseNFTokenOfferForQuery(offerData)
 		if err != nil || offer.NFTokenID != nftID {
-			return nil, errors.New("invalid marker")
+			return nil, svcerr.ErrInvalidMarker
 		}
 
 		// Add marker offer first
@@ -145,7 +145,7 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 		if !found {
 			// Marker not in directory - could be a different page
 			// For simplicity, treat as invalid
-			return nil, errors.New("invalid marker")
+			return nil, svcerr.ErrInvalidMarker
 		}
 	} else {
 		// No marker, we'll fetch limit+1 to check for more results

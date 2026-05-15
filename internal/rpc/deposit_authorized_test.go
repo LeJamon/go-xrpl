@@ -8,6 +8,7 @@ import (
 
 	"time"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -248,7 +249,7 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			setupMock: func() {
-				mock.depositAuthorizedErr = types.ErrSrcAccountNotFound
+				mock.depositAuthorizedErr = svcerr.ErrSrcAccountNotFound
 			},
 			expectError:   true,
 			expectedError: "Source account not found.",
@@ -261,7 +262,7 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			setupMock: func() {
-				mock.depositAuthorizedErr = types.ErrDstAccountNotFound
+				mock.depositAuthorizedErr = svcerr.ErrDstAccountNotFound
 			},
 			expectError:   true,
 			expectedError: "Destination account not found.",

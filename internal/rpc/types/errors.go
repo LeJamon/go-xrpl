@@ -1,29 +1,5 @@
 package types
 
-import "errors"
-
-// Typed sentinels for service-layer errors. Handlers compare via
-// errors.Is rather than string-matching err.Error(). The message text
-// is preserved for log compatibility.
-var (
-	// ErrAccountNotFound is returned by LedgerService and friends when a
-	// queried account does not exist in the current ledger.
-	ErrAccountNotFound = errors.New("account not found")
-
-	// ErrSrcAccountNotFound is returned when the deposit_authorized
-	// source account is absent from the queried ledger.
-	ErrSrcAccountNotFound = errors.New("source account not found")
-
-	// ErrDstAccountNotFound is returned when the deposit_authorized
-	// destination account is absent from the queried ledger.
-	ErrDstAccountNotFound = errors.New("destination account not found")
-
-	// ErrBadCredentials is a sentinel wrapper used by the deposit_authorized
-	// service layer to flag credential-validation failures. The wrapping
-	// error's message carries the human-readable detail.
-	ErrBadCredentials = errors.New("bad credentials")
-)
-
 // XRPL RPC Error Codes - matching rippled implementation
 // These error codes must match exactly with rippled for protocol compatibility
 
@@ -102,8 +78,7 @@ const (
 	RpcNOT_SUPPORTED = 32
 
 	// WebSocket specific
-	RpcCOMMAND_MISSING         = 34
-	RpcCOMMAND_IS_NOT_A_STRING = 35
+	RpcCOMMAND_MISSING = 34
 
 	// Rate limiting
 	RpcSLOW_DOWN_INVALID_IP = 36
@@ -122,8 +97,7 @@ const (
 	// Additional transaction errors
 	RpcTXN_TYPE_NOT_SUPPORTED = 42
 	RpcINVALID_FIELD          = 43
-	RpcINVALID_HASH           = 44
-	RpcINVALID_LGR_RANGE      = 45
+	RpcINVALID_LGR_RANGE      = 79 // rippled rpcINVALID_LGR_RANGE
 
 	// Path finding errors
 	RpcNO_PATH       = 46

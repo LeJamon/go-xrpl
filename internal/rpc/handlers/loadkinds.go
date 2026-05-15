@@ -28,6 +28,7 @@ func (AccountOffersMethod) LoadKind() loadtrack.LoadKind   { return loadtrack.Lo
 func (AccountChannelsMethod) LoadKind() loadtrack.LoadKind { return loadtrack.LoadMedium }
 func (AccountNftsMethod) LoadKind() loadtrack.LoadKind     { return loadtrack.LoadMedium }
 func (GatewayBalancesMethod) LoadKind() loadtrack.LoadKind { return loadtrack.LoadMedium }
-func (SubmitMethod) LoadKind() loadtrack.LoadKind          { return loadtrack.LoadMedium }
-func (SignMethod) LoadKind() loadtrack.LoadKind            { return loadtrack.LoadMedium }
-func (SignForMethod) LoadKind() loadtrack.LoadKind         { return loadtrack.LoadMedium }
+func (SubmitMethod) LoadKind() loadtrack.LoadKind             { return loadtrack.LoadMedium }
+func (SubmitMultisignedMethod) LoadKind() loadtrack.LoadKind  { return loadtrack.LoadMedium }
+func (SignMethod) LoadKind() loadtrack.LoadKind               { return loadtrack.LoadMedium }
+func (SignForMethod) LoadKind() loadtrack.LoadKind            { return loadtrack.LoadMedium }

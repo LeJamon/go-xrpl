@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
@@ -84,7 +85,7 @@ func (s *Service) GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerI
 		return nil, err
 	}
 	if !exists {
-		return nil, errors.New("entry not found")
+		return nil, svcerr.ErrLedgerEntryNotFound
 	}
 
 	data, err := targetLedger.Read(k)
