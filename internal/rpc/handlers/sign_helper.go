@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -149,7 +150,7 @@ type signResult struct {
 // The feeOpts parameter controls auto-fee behavior: if Fee is not present in
 // tx_json and auto-fill is active, the network fee is computed and checked
 // against the limit baseFee * feeOpts.Mult / feeOpts.Div.
-func signTransactionJSON(services *types.ServiceContainer, txJSON json.RawMessage, creds signCredentials, offline bool, apiVersion int, feeOpts feeOptions) (*signResult, *types.RpcError) {
+func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, txJSON json.RawMessage, creds signCredentials, offline bool, apiVersion int, feeOpts feeOptions) (*signResult, *types.RpcError) {
 	// Check if ledger service is available (needed for auto-filling fields)
 	if !offline && (services == nil || services.Ledger == nil) {
 		return nil, types.RpcErrorInternal("Ledger service not available")
@@ -216,7 +217,7 @@ func signTransactionJSON(services *types.ServiceContainer, txJSON json.RawMessag
 		if _, ok := txMap["Sequence"]; !ok {
 			// TODO: When ledger lookup is available, auto-fill from account state.
 			// For now, attempt to get account info.
-			info, err := services.Ledger.GetAccountInfo(address, "current")
+			info, err := services.Ledger.GetAccountInfo(ctx, address, "current")
 			if err != nil {
 				return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account sequence: %v", err))
 			}

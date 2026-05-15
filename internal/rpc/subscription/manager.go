@@ -266,93 +266,106 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 	return nil
 }
 
-// BroadcastToStream sends a message to all connections subscribed to a stream
+// BroadcastToStream sends a message to every connection subscribed to a
+// stream. Broadcasts snapshot subscriber connections under sm.mu, then
+// send after the lock is released — a slow consumer never stalls
+// HandleSubscribe / HandleUnsubscribe / RemoveConnection or other
+// broadcasts (#428 race fix). Delivery uses types.Connection.TrySend so
+// the per-connection consecutive-drop counter is updated and the
+// connection is disconnected after MaxConsecutiveDrops back-to-back
+// failures — unifies the slow-consumer policy across all outbound paths.
 func (sm *Manager) BroadcastToStream(streamType types.SubscriptionType, data []byte, _ interface{}) {
+	deliver(sm.collectStreamTargets(streamType), data)
+}
+
+func (sm *Manager) collectStreamTargets(streamType types.SubscriptionType) []*types.Connection {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-
+	if len(sm.Connections) == 0 {
+		return nil
+	}
+	targets := make([]*types.Connection, 0, len(sm.Connections))
 	for _, conn := range sm.Connections {
 		if _, ok := conn.Subscriptions[streamType]; ok {
-			select {
-			case conn.SendChannel <- data:
-			default:
-				// Channel full, skip
-			}
+			targets = append(targets, conn)
 		}
+	}
+	return targets
+}
+
+func deliver(targets []*types.Connection, data []byte) {
+	for _, c := range targets {
+		c.TrySend(data)
 	}
 }
 
-// BroadcastToAccounts sends a message to all connections subscribed to any of the accounts
+// BroadcastToAccounts sends a message to every connection subscribed to
+// any of the named accounts on the SubAccounts stream.
 func (sm *Manager) BroadcastToAccounts(data []byte, accounts []string) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	accountSet := make(map[string]bool)
-	for _, acc := range accounts {
-		accountSet[acc] = true
-	}
-
-	for _, conn := range sm.Connections {
-		if config, ok := conn.Subscriptions[types.SubAccounts]; ok {
-			for _, subAcc := range config.Accounts {
-				if accountSet[subAcc] {
-					select {
-					case conn.SendChannel <- data:
-					default:
-						// Channel full, skip
-					}
-					break
-				}
-			}
-		}
-	}
+	deliver(sm.collectAccountTargets(types.SubAccounts, accounts), data)
 }
 
-// BroadcastToAccountsProposed sends a message to accounts_proposed subscribers
+// BroadcastToAccountsProposed sends a message to accounts_proposed
+// subscribers.
 func (sm *Manager) BroadcastToAccountsProposed(data []byte, accounts []string) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	deliver(sm.collectAccountTargets("accounts_proposed", accounts), data)
+}
 
-	accountSet := make(map[string]bool)
+func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts []string) []*types.Connection {
+	if len(accounts) == 0 {
+		return nil
+	}
+	accountSet := make(map[string]bool, len(accounts))
 	for _, acc := range accounts {
 		accountSet[acc] = true
 	}
-	for _, conn := range sm.Connections {
-		if config, ok := conn.Subscriptions["accounts_proposed"]; ok {
-			for _, subAcc := range config.Accounts {
-				if accountSet[subAcc] {
-					select {
-					case conn.SendChannel <- data:
-					default:
-					}
-					break
-				}
-			}
-		}
-	}
-}
-
-// BroadcastToOrderBook sends a message to order book subscribers
-func (sm *Manager) BroadcastToOrderBook(data []byte, takerGets, takerPays types.CurrencySpec) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-
+	if len(sm.Connections) == 0 {
+		return nil
+	}
+	var targets []*types.Connection
 	for _, conn := range sm.Connections {
-		if config, ok := conn.Subscriptions[types.SubOrderBooks]; ok {
-			if config.TakerGets != nil && config.TakerPays != nil {
-				if config.TakerGets.Currency == takerGets.Currency &&
-					config.TakerGets.Issuer == takerGets.Issuer &&
-					config.TakerPays.Currency == takerPays.Currency &&
-					config.TakerPays.Issuer == takerPays.Issuer {
-					select {
-					case conn.SendChannel <- data:
-					default:
-						// Channel full, skip
-					}
-				}
+		cfg, ok := conn.Subscriptions[stream]
+		if !ok {
+			continue
+		}
+		for _, subAcc := range cfg.Accounts {
+			if accountSet[subAcc] {
+				targets = append(targets, conn)
+				break
 			}
 		}
 	}
+	return targets
+}
+
+// BroadcastToOrderBook sends a message to order book subscribers whose
+// configured TakerGets/TakerPays match the broadcast's currency pair.
+func (sm *Manager) BroadcastToOrderBook(data []byte, takerGets, takerPays types.CurrencySpec) {
+	deliver(sm.collectOrderBookTargets(takerGets, takerPays), data)
+}
+
+func (sm *Manager) collectOrderBookTargets(takerGets, takerPays types.CurrencySpec) []*types.Connection {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if len(sm.Connections) == 0 {
+		return nil
+	}
+	var targets []*types.Connection
+	for _, conn := range sm.Connections {
+		cfg, ok := conn.Subscriptions[types.SubOrderBooks]
+		if !ok || cfg.TakerGets == nil || cfg.TakerPays == nil {
+			continue
+		}
+		if cfg.TakerGets.Currency == takerGets.Currency &&
+			cfg.TakerGets.Issuer == takerGets.Issuer &&
+			cfg.TakerPays.Currency == takerPays.Currency &&
+			cfg.TakerPays.Issuer == takerPays.Issuer {
+			targets = append(targets, conn)
+		}
+	}
+	return targets
 }
 
 // GetSubscriberCount returns the number of subscribers for a stream type

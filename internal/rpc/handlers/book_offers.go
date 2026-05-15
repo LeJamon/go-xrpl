@@ -60,8 +60,8 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 
 	// Clamp the limit using rippled's bookOffers range {0, 60, 100}.
 	// When the user omits "limit" (zero value), ClampLimit returns the default (60).
-	limit := ClampLimit(request.Limit, LimitBookOffers, ctx.IsAdmin)
-	result, err := ctx.Services.Ledger.GetBookOffers(takerGets, takerPays, ledgerIndex, limit)
+	limit := ClampLimit(request.Limit, LimitBookOffers, ctx.Unlimited)
+	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, ledgerIndex, limit)
 	if err != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
 	}

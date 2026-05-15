@@ -2,6 +2,7 @@ package shamap
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -969,19 +970,31 @@ func (sm *SHAMap) snapshotBacked(mutable bool) (*SHAMap, error) {
 	return newMap, nil
 }
 
-// ForEach calls fn for every item in the tree
-// If fn returns false, iteration stops early
+// ForEach calls fn for every item in the tree.
+// If fn returns false, iteration stops early.
+// Equivalent to ForEachCtx(context.Background(), fn).
 func (sm *SHAMap) ForEach(fn func(*Item) bool) error {
+	return sm.ForEachCtx(context.Background(), fn)
+}
+
+// ForEachCtx is the context-aware variant of ForEach: iteration aborts
+// with ctx.Err() whenever the context is cancelled. The check fires
+// before each child descend so a long-running scan can be interrupted
+// even when leaf callbacks return true.
+func (sm *SHAMap) ForEachCtx(ctx context.Context, fn func(*Item) bool) error {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	return sm.forEachUnsafe(sm.root, fn)
+	return sm.forEachUnsafe(ctx, sm.root, fn)
 }
 
 // forEachUnsafe recursively visits all items (caller must hold lock)
-func (sm *SHAMap) forEachUnsafe(node Node, fn func(*Item) bool) error {
+func (sm *SHAMap) forEachUnsafe(ctx context.Context, node Node, fn func(*Item) bool) error {
 	if node == nil {
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	if node.IsLeaf() {
@@ -1002,12 +1015,15 @@ func (sm *SHAMap) forEachUnsafe(node Node, fn func(*Item) bool) error {
 	}
 
 	for i := 0; i < BranchFactor; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		child, err := sm.descend(inner, i)
 		if err != nil {
 			return fmt.Errorf("failed to get child %d: %w", i, err)
 		}
 		if child != nil {
-			if err := sm.forEachUnsafe(child, fn); err != nil {
+			if err := sm.forEachUnsafe(ctx, child, fn); err != nil {
 				return err
 			}
 		}

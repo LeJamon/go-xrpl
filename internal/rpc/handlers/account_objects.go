@@ -3,10 +3,12 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -121,33 +123,33 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		ledgerIndex = request.LedgerIndex.String()
 	}
 
-	limit := ClampLimit(request.Limit, LimitAccountObjects, ctx.IsAdmin)
+	limit := ClampLimit(request.Limit, LimitAccountObjects, ctx.Unlimited)
 
 	// Determine effective type filter based on deletion_blockers_only and type params.
 	// Matches rippled's doAccountObjects logic in AccountObjects.cpp.
 	effectiveType := request.Type
+	// forceEmptyResults short-circuits an impossible filter (a non-blocker
+	// type combined with deletion_blockers_only) without using a magic
+	// service-level sentinel. The service is still called so ledger
+	// metadata + the account-existence check fire.
+	forceEmptyResults := false
 
 	if request.DeletionBlockersOnly {
 		if request.Type != "" {
-			// Both deletion_blockers_only and type set: intersect.
-			// If the requested type is a deletion blocker, use it; otherwise
-			// return empty results (no type matches).
 			typeLower := strings.ToLower(request.Type)
 			if !deletionBlockerTypes[typeLower] {
-				// The type is not a deletion blocker, so no objects will match.
-				// We still need to validate it's a known type though.
 				if !validLedgerEntryTypeNames[typeLower] {
 					return nil, types.RpcErrorInvalidField("type")
 				}
 				if !validAccountObjectTypes[typeLower] {
 					return nil, types.RpcErrorInvalidField("type")
 				}
-				// Valid type but not a blocker: return empty result.
-				// We need ledger info, so still query with an impossible filter.
-				// Use a type that will match nothing.
-				effectiveType = "__none__"
+				// Valid type but not a blocker. Drop the filter so the
+				// service still returns ledger info / account-existence,
+				// and clear the returned objects below.
+				effectiveType = ""
+				forceEmptyResults = true
 			}
-			// else: type IS a blocker, pass it through normally
 		}
 		// If only deletion_blockers_only is set (no type), we need to filter
 		// results to only blocker types after retrieval.
@@ -164,9 +166,9 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		}
 	}
 
-	result, err := ctx.Services.Ledger.GetAccountObjects(request.Account, ledgerIndex, effectiveType, limit)
+	result, err := ctx.Services.Ledger.GetAccountObjects(ctx.Context, request.Account, ledgerIndex, effectiveType, limit)
 	if err != nil {
-		if err.Error() == "account not found" {
+		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, &types.RpcError{
 				Code:    19,
 				Message: "Account not found.",
@@ -175,8 +177,14 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account objects: %v", err))
 	}
 
-	// Build account_objects array with deserialized fields
+	// Build account_objects array with deserialized fields. When
+	// forceEmptyResults is set (deletion_blockers_only intersected with a
+	// non-blocker type), skip enumeration entirely and keep the ledger
+	// metadata from the service response.
 	objects := make([]map[string]interface{}, 0, len(result.AccountObjects))
+	if forceEmptyResults {
+		result.AccountObjects = nil
+	}
 	for _, obj := range result.AccountObjects {
 		// If deletion_blockers_only is set without a specific type, filter here.
 		if request.DeletionBlockersOnly && request.Type == "" {

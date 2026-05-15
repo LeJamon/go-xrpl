@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
@@ -77,12 +78,20 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	}
 
 	// Parse destination amount
-	dstAmount := parsePathFindAmount(request.DestinationAmount)
+	dstAmount, dErr := parsePathFindAmount(request.DestinationAmount)
+	if dErr != nil {
+		return nil, types.NewRpcError(types.RpcINVALID_PARAMS, "invalidParams", "invalidParams",
+			fmt.Sprintf("Invalid destination_amount: %v", dErr))
+	}
 
 	// Parse optional send_max
 	var sendMax *state.Amount
 	if request.SendMax != nil {
-		amt := parsePathFindAmount(request.SendMax)
+		amt, smErr := parsePathFindAmount(request.SendMax)
+		if smErr != nil {
+			return nil, types.NewRpcError(types.RpcINVALID_PARAMS, "invalidParams", "invalidParams",
+				fmt.Sprintf("Invalid send_max: %v", smErr))
+		}
 		sendMax = &amt
 	}
 
@@ -180,13 +189,18 @@ func formatAmountJSON(amt state.Amount) interface{} {
 	}
 }
 
-// parsePathFindAmount parses a JSON amount for path finding.
-func parsePathFindAmount(raw json.RawMessage) state.Amount {
+// parsePathFindAmount parses a JSON amount for path finding. A bad numeric
+// string returns an error so the caller can surface invalidParams instead of
+// silently treating malformed input as zero drops.
+func parsePathFindAmount(raw json.RawMessage) (state.Amount, error) {
 	// Try as string first (XRP drops)
 	var strVal string
 	if err := json.Unmarshal(raw, &strVal); err == nil {
-		drops, _ := strconv.ParseInt(strVal, 10, 64)
-		return state.NewXRPAmountFromInt(drops)
+		drops, err := strconv.ParseInt(strVal, 10, 64)
+		if err != nil {
+			return state.Amount{}, fmt.Errorf("invalid XRP amount %q: %w", strVal, err)
+		}
+		return state.NewXRPAmountFromInt(drops), nil
 	}
 
 	// Try as IOU object
@@ -196,13 +210,16 @@ func parsePathFindAmount(raw json.RawMessage) state.Amount {
 		Value    string `json:"value"`
 	}
 	if err := json.Unmarshal(raw, &iou); err != nil {
-		return state.NewXRPAmountFromInt(0)
+		return state.Amount{}, fmt.Errorf("amount must be string or {currency,issuer,value} object")
 	}
 
 	if iou.Currency == "XRP" || iou.Currency == "" {
-		drops, _ := strconv.ParseInt(iou.Value, 10, 64)
-		return state.NewXRPAmountFromInt(drops)
+		drops, err := strconv.ParseInt(iou.Value, 10, 64)
+		if err != nil {
+			return state.Amount{}, fmt.Errorf("invalid XRP amount value %q: %w", iou.Value, err)
+		}
+		return state.NewXRPAmountFromInt(drops), nil
 	}
 
-	return state.NewIssuedAmountFromDecimalString(iou.Value, iou.Currency, iou.Issuer)
+	return state.NewIssuedAmountFromDecimalString(iou.Value, iou.Currency, iou.Issuer), nil
 }

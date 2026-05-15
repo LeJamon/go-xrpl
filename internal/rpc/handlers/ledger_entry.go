@@ -3,11 +3,13 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/LeJamon/goXRPLd/keylet"
 )
@@ -367,9 +369,9 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, types.RpcErrorUnknownOption("")
 	}
 
-	result, err := ctx.Services.Ledger.GetLedgerEntry(entryKey, ledgerIndex)
+	result, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, entryKey, ledgerIndex)
 	if err != nil {
-		if err.Error() == "entry not found" {
+		if errors.Is(err, svcerr.ErrLedgerEntryNotFound) {
 			return nil, types.RpcErrorEntryNotFound("Requested ledger entry not found.")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get ledger entry: %v", err))

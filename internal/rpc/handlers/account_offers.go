@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -36,10 +38,10 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		ledgerIndex = request.LedgerIndex.String()
 	}
 
-	limit := ClampLimit(request.Limit, LimitAccountOffers, ctx.IsAdmin)
-	result, err := ctx.Services.Ledger.GetAccountOffers(request.Account, ledgerIndex, limit)
+	limit := ClampLimit(request.Limit, LimitAccountOffers, ctx.Unlimited)
+	result, err := ctx.Services.Ledger.GetAccountOffers(ctx.Context, request.Account, ledgerIndex, limit)
 	if err != nil {
-		if err.Error() == "account not found" {
+		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, &types.RpcError{
 				Code:    19, // actNotFound
 				Message: "Account not found.",

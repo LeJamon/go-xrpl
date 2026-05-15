@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 )
@@ -32,7 +34,10 @@ type BookOffersResult struct {
 }
 
 // GetBookOffers retrieves offers from an order book
-func (s *Service) GetBookOffers(takerGets, takerPays tx.Amount, ledgerIndex string, limit uint32) (*BookOffersResult, error) {
+func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amount, ledgerIndex string, limit uint32) (*BookOffersResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -50,7 +55,10 @@ func (s *Service) GetBookOffers(takerGets, takerPays tx.Amount, ledgerIndex stri
 	// Collect matching offers by iterating through ledger entries
 	var offers []BookOffer
 
-	targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		// Check if we've reached the limit
 		if uint32(len(offers)) >= limit {
 			return false

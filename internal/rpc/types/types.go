@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 )
@@ -16,15 +17,31 @@ const (
 	DefaultApiVersion = ApiVersion2
 )
 
-// Role-based access control matching rippled
+// Role-based access control matching rippled's Role enum (Role.h).
+// Numeric ordering is not meaningful — callers must compare roles by
+// name (e.g. `role == RoleAdmin`) rather than `<` / `>`.
 type Role int
 
 const (
 	RoleGuest Role = iota
 	RoleUser
 	RoleAdmin
+	// RoleIdentified is granted to requests arriving from a configured
+	// secure_gateway peer carrying an X-User header. Identified callers
+	// have unlimited resources (matches rippled isUnlimited / Role.cpp).
 	RoleIdentified
+	// RoleProxy is granted to requests arriving from a secure_gateway
+	// peer with no X-User header. Used for client-IP attribution; not
+	// resource-unlimited.
+	RoleProxy
 )
+
+// IsUnlimited reports whether the role exempts the request from
+// resource limits. Mirrors rippled isUnlimited() in Role.cpp:124-128:
+// only ADMIN and IDENTIFIED qualify.
+func (r Role) IsUnlimited() bool {
+	return r == RoleAdmin || r == RoleIdentified
+}
 
 // Condition represents the preconditions required by an RPC method.
 // Matches rippled's Condition enum in Handler.h.
@@ -59,7 +76,12 @@ type RpcContext struct {
 	Context    context.Context
 	Role       Role
 	ApiVersion int
-	IsAdmin    bool
+	// IsAdmin gates admin-only commands. True iff Role == RoleAdmin.
+	IsAdmin bool
+	// Unlimited skips per-request resource limits (page sizes, etc.).
+	// True for RoleAdmin and RoleIdentified, matching rippled
+	// isUnlimited() in Role.cpp.
+	Unlimited  bool
 	ClientIP   string
 	PeerSource PeerSource
 	// Services is the per-request service container handlers read to
@@ -343,13 +365,56 @@ type SubscriptionConfig struct {
 	Password string `json:"url_password,omitempty"`
 }
 
-// Connection represents a WebSocket connection for subscription management
+// MaxConsecutiveDrops is the number of back-to-back send failures
+// after which a subscriber is considered terminally slow and is
+// disconnected via Connection.Disconnect. Mirrors rippled's
+// approach in Resource::Manager: warn-then-drop, but applied per
+// outbound queue rather than per inbound charge balance.
+const MaxConsecutiveDrops = 8
+
+// Connection represents a WebSocket connection for subscription
+// management. The struct is shared between subscription.Manager and
+// the WebSocket server so both observe the same drop counter and
+// disconnect callback — eliminates the double-bookkeeping pattern
+// flagged in the #428 audit.
 type Connection struct {
-	ID              string
-	Subscriptions   map[SubscriptionType]SubscriptionConfig
-	SendChannel     chan []byte
-	CloseChannel    chan struct{}
+	ID            string
+	Subscriptions map[SubscriptionType]SubscriptionConfig
+	SendChannel   chan []byte
+	CloseChannel  chan struct{}
+	// Disconnect is invoked when MaxConsecutiveDrops is reached. The
+	// WS layer populates this with its per-conn cancel func so a
+	// persistently slow client gets torn down once, in one place.
+	Disconnect      func()
 	URLSubscription string // URL for server-to-server subscriptions
+
+	// consecutiveDrops counts back-to-back send failures. Reset to 0
+	// on every successful TrySend.
+	consecutiveDrops atomic.Int32
+}
+
+// TrySend pushes data onto SendChannel without blocking. Returns true
+// when delivered; on failure increments the consecutive-drop counter
+// and, if the counter reaches MaxConsecutiveDrops, invokes Disconnect
+// exactly once. Same policy is used by every outbound path (broadcasts,
+// per-request responses) so HTTP and WebSocket no longer have
+// inconsistent slow-consumer handling.
+func (c *Connection) TrySend(data []byte) bool {
+	if c == nil || c.SendChannel == nil {
+		return false
+	}
+	select {
+	case c.SendChannel <- data:
+		c.consecutiveDrops.Store(0)
+		return true
+	default:
+		if c.consecutiveDrops.Add(1) >= MaxConsecutiveDrops {
+			if c.Disconnect != nil {
+				c.Disconnect()
+			}
+		}
+		return false
+	}
 }
 
 // WebSocketResponseOptions contains optional fields for WebSocket responses

@@ -38,7 +38,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	if request.Binary {
 		limitRange = LimitLedgerDataBinary
 	}
-	limit := ClampLimit(request.Limit, limitRange, ctx.IsAdmin)
+	limit := ClampLimit(request.Limit, limitRange, ctx.Unlimited)
 
 	// Determine ledger index to use
 	ledgerIndex := "current"
@@ -54,7 +54,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		}
 	}
 
-	result, err := ctx.Services.Ledger.GetLedgerData(ledgerIndex, limit, markerStr)
+	result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, limit, markerStr)
 	if err != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get ledger data: %v", err))
 	}

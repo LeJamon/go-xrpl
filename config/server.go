@@ -88,11 +88,6 @@ func (p *PortConfig) HasPeer() bool {
 	return containsProtocol(p.Protocol, "peer")
 }
 
-// HasGRPC returns true if the port supports gRPC protocol
-func (p *PortConfig) HasGRPC() bool {
-	return containsProtocol(p.Protocol, "grpc")
-}
-
 // IsAdminPort returns true if the port has administrative access configured
 func (p *PortConfig) IsAdminPort() bool {
 	return len(p.Admin) > 0 || p.AdminUser != ""
@@ -190,8 +185,6 @@ func (p *PortConfig) validateProtocols() error {
 			hasNonWebSocket = true
 		case "peer":
 			peerCount++
-		case "grpc":
-			hasNonWebSocket = true
 		default:
 			return fmt.Errorf("unknown protocol: %s", protocol)
 		}
@@ -212,17 +205,53 @@ func (p *PortConfig) validateProtocols() error {
 // Bare IPs (without CIDR suffix) get /32 for IPv4 or /128 for IPv6.
 // This matches rippled's parse_Port() in Port.cpp.
 func (p *PortConfig) ParseAdminNets() ([]net.IPNet, error) {
+	return parseCIDRList(p.Admin, "admin")
+}
+
+// ParseSecureGatewayNets parses the SecureGateway field into net.IPNet
+// values. Mirrors rippled's secure_gateway parsing in
+// ServerHandler.cpp:1139-1140 and Role.cpp:110-111: connections whose
+// TCP peer falls in one of these networks have their X-Forwarded-For
+// honoured for client-IP attribution and (when X-User is present) are
+// promoted to RoleIdentified for resource-limit purposes. Admin
+// promotion still requires the peer be in the admin list.
+func (p *PortConfig) ParseSecureGatewayNets() ([]net.IPNet, error) {
+	return parseCIDRList(p.SecureGateway, "secure_gateway")
+}
+
+// parseCIDRList parses a list of CIDR / bare-IP entries the way rippled's
+// populate() in Port.cpp does:
+//   - "0.0.0.0" and "::" are treated as match-all wildcards.
+//   - Bare IPs are upgraded to /32 (IPv4) or /128 (IPv6).
+//   - Non-canonical subnets like "10.1.2.3/24" are rejected; the entry
+//     must already be the network address (rippled Port.cpp:180-201).
+func parseCIDRList(entries []string, label string) ([]net.IPNet, error) {
 	var nets []net.IPNet
-	for _, entry := range p.Admin {
+	seen := make(map[string]struct{})
+	add := func(n net.IPNet) {
+		k := n.String()
+		if _, dup := seen[k]; dup {
+			return
+		}
+		seen[k] = struct{}{}
+		nets = append(nets, n)
+	}
+	for _, entry := range entries {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue
 		}
-		// Append CIDR suffix if not present
 		if !strings.Contains(entry, "/") {
 			ip := net.ParseIP(entry)
 			if ip == nil {
-				return nil, fmt.Errorf("invalid admin IP: %s", entry)
+				return nil, fmt.Errorf("invalid %s IP: %s", label, entry)
+			}
+			if ip.IsUnspecified() {
+				_, v4Wild, _ := net.ParseCIDR("0.0.0.0/0")
+				_, v6Wild, _ := net.ParseCIDR("::/0")
+				add(*v4Wild)
+				add(*v6Wild)
+				continue
 			}
 			if ip.To4() != nil {
 				entry += "/32"
@@ -230,11 +259,15 @@ func (p *PortConfig) ParseAdminNets() ([]net.IPNet, error) {
 				entry += "/128"
 			}
 		}
-		_, ipNet, err := net.ParseCIDR(entry)
+		ip, ipNet, err := net.ParseCIDR(entry)
 		if err != nil {
-			return nil, fmt.Errorf("invalid admin CIDR %q: %w", entry, err)
+			return nil, fmt.Errorf("invalid %s CIDR %q: %w", label, entry, err)
 		}
-		nets = append(nets, *ipNet)
+		if !ip.Equal(ipNet.IP) {
+			return nil, fmt.Errorf("invalid %s CIDR %q: host bits set; expected network address %s",
+				label, entry, ipNet.String())
+		}
+		add(*ipNet)
 	}
 	return nets, nil
 }

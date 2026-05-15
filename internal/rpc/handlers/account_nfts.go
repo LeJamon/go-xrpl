@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -35,14 +37,15 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		ledgerIndex = request.LedgerIndex.String()
 	}
 
-	limit := ClampLimit(request.Limit, LimitAccountNFTokens, ctx.IsAdmin)
+	limit := ClampLimit(request.Limit, LimitAccountNFTokens, ctx.Unlimited)
 	result, err := ctx.Services.Ledger.GetAccountNFTs(
+		ctx.Context,
 		request.Account,
 		ledgerIndex,
 		limit,
 	)
 	if err != nil {
-		if err.Error() == "account not found" {
+		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, &types.RpcError{
 				Code:    types.RpcACT_NOT_FOUND,
 				Message: "Account not found.",

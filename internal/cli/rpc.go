@@ -26,83 +26,15 @@ func init() {
 // methodRegistry holds all available RPC methods
 var methodRegistry *types.MethodRegistry
 
-// initMethodRegistry initializes the method registry with all available methods
+// initMethodRegistry initializes the method registry with all available
+// methods. The canonical wiring lives in handlers.RegisterAll so the CLI
+// and the HTTP/WebSocket servers cannot drift apart.
 func initMethodRegistry() *types.MethodRegistry {
 	if methodRegistry != nil {
 		return methodRegistry
 	}
-
 	registry := types.NewMethodRegistry()
-
-	// Server methods
-	registry.Register("ping", &handlers.PingMethod{})
-	registry.Register("server_info", &handlers.ServerInfoMethod{})
-	registry.Register("server_state", &handlers.ServerStateMethod{})
-	registry.Register("random", &handlers.RandomMethod{})
-	registry.Register("server_definitions", &handlers.ServerDefinitionsMethod{})
-	registry.Register("feature", &handlers.FeatureMethod{})
-	registry.Register("fee", &handlers.FeeMethod{})
-
-	// Account methods
-	registry.Register("account_info", &handlers.AccountInfoMethod{})
-	registry.Register("account_channels", &handlers.AccountChannelsMethod{})
-	registry.Register("account_currencies", &handlers.AccountCurrenciesMethod{})
-	registry.Register("account_lines", &handlers.AccountLinesMethod{})
-	registry.Register("account_nfts", &handlers.AccountNftsMethod{})
-	registry.Register("account_objects", &handlers.AccountObjectsMethod{})
-	registry.Register("account_offers", &handlers.AccountOffersMethod{})
-	registry.Register("account_tx", &handlers.AccountTxMethod{})
-	registry.Register("gateway_balances", &handlers.GatewayBalancesMethod{})
-	registry.Register("noripple_check", &handlers.NoRippleCheckMethod{})
-
-	// Ledger methods
-	registry.Register("ledger", &handlers.LedgerMethod{})
-	registry.Register("ledger_closed", &handlers.LedgerClosedMethod{})
-	registry.Register("ledger_current", &handlers.LedgerCurrentMethod{})
-	registry.Register("ledger_data", &handlers.LedgerDataMethod{})
-	registry.Register("ledger_entry", &handlers.LedgerEntryMethod{})
-	registry.Register("ledger_range", &handlers.LedgerRangeMethod{})
-
-	// Transaction methods
-	registry.Register("tx", &handlers.TxMethod{})
-	registry.Register("tx_history", &handlers.TxHistoryMethod{})
-	registry.Register("submit", &handlers.SubmitMethod{})
-	registry.Register("submit_multisigned", &handlers.SubmitMultisignedMethod{})
-	registry.Register("sign", &handlers.SignMethod{})
-	registry.Register("sign_for", &handlers.SignForMethod{})
-	registry.Register("transaction_entry", &handlers.TransactionEntryMethod{})
-
-	// Utility methods
-	registry.Register("book_offers", &handlers.BookOffersMethod{})
-	registry.Register("path_find", &handlers.PathFindMethod{})
-	registry.Register("ripple_path_find", &handlers.RipplePathFindMethod{})
-	registry.Register("wallet_propose", &handlers.WalletProposeMethod{})
-	registry.Register("deposit_authorized", &handlers.DepositAuthorizedMethod{})
-	registry.Register("channel_authorize", &handlers.ChannelAuthorizeMethod{})
-	registry.Register("channel_verify", &handlers.ChannelVerifyMethod{})
-	registry.Register("json", &handlers.JsonMethod{})
-
-	// NFT methods
-	registry.Register("nft_buy_offers", &handlers.NftBuyOffersMethod{})
-	registry.Register("nft_sell_offers", &handlers.NftSellOffersMethod{})
-
-	// Admin methods (require admin role)
-	registry.Register("stop", &handlers.StopMethod{})
-	registry.Register("validation_create", &handlers.ValidationCreateMethod{})
-	registry.Register("manifest", &handlers.ManifestMethod{})
-	registry.Register("peer_reservations_add", &handlers.PeerReservationsAddMethod{})
-	registry.Register("peer_reservations_del", &handlers.PeerReservationsDelMethod{})
-	registry.Register("peer_reservations_list", &handlers.PeerReservationsListMethod{})
-	registry.Register("peers", &handlers.PeersMethod{})
-	registry.Register("consensus_info", &handlers.ConsensusInfoMethod{})
-	registry.Register("validators", &handlers.ValidatorsMethod{})
-	registry.Register("validator_list_sites", &handlers.ValidatorListSitesMethod{})
-	registry.Register("download_shard", &handlers.DownloadShardMethod{})
-	registry.Register("crawl_shards", &handlers.CrawlShardsMethod{})
-	// Subscription methods (for WebSocket)
-	registry.Register("subscribe", &handlers.SubscribeMethod{})
-	registry.Register("unsubscribe", &handlers.UnsubscribeMethod{})
-
+	handlers.RegisterAll(registry)
 	methodRegistry = registry
 	return registry
 }
@@ -487,17 +419,38 @@ var ledgerDataCmd = &cobra.Command{
 }
 
 var ledgerEntryCmd = &cobra.Command{
-	Use:   "ledger_entry <type> [additional_args...]",
+	Use:   "ledger_entry <key=value>...",
 	Short: "Get a specific ledger entry",
-	Args:  cobra.MinimumNArgs(1),
+	Long: `Get a specific ledger entry by index hash or by a typed selector.
+
+Arguments are key=value pairs forwarded directly to the ledger_entry RPC
+parameters object. Common shapes:
+
+  ledger_entry index=<32-byte-hex>
+  ledger_entry account_root=<address>
+  ledger_entry index=<hex> ledger_index=validated
+  ledger_entry directory=<hex> binary=true
+
+See rippled's LedgerEntry.cpp for the full list of selectors.`,
+	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
-			"type": args[0],
-		}
-		// Additional args depend on the entry type
-		if len(args) > 1 {
-			for i, arg := range args[1:] {
-				params[fmt.Sprintf("arg%d", i)] = arg
+		params := map[string]interface{}{}
+		for _, arg := range args {
+			k, v, ok := strings.Cut(arg, "=")
+			if !ok || k == "" {
+				return fmt.Errorf("invalid argument %q: expected key=value", arg)
+			}
+			switch v {
+			case "true":
+				params[k] = true
+			case "false":
+				params[k] = false
+			default:
+				if n, err := strconv.Atoi(v); err == nil {
+					params[k] = n
+				} else {
+					params[k] = v
+				}
 			}
 		}
 		return executeMethod("ledger_entry", params)

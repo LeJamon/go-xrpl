@@ -261,7 +261,7 @@ func TestOpenLedger_ConvergenceUnderOrderShuffling(t *testing.T) {
 	// close didn't land the accounts where we think it did, which would
 	// make every test-workload submit fail and obscure the convergence
 	// question.
-	if info, err := svcA.GetAccountInfo(sendersA[0].Address, "current"); err != nil {
+	if info, err := svcA.GetAccountInfo(context.Background(), sendersA[0].Address, "current"); err != nil {
 		t.Fatalf("pre-flight GetAccountInfo(sender[0]) err = %v (account missing post-funding-close)", err)
 	} else if info.Sequence != seqStartA {
 		t.Fatalf("pre-flight sender[0].Sequence = %d, want %d (DeletableAccounts assumption wrong; test must use info.Sequence as the payment seq)", info.Sequence, seqStartA)

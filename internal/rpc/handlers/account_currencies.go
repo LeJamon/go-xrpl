@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -37,11 +39,12 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 
 	// Get account currencies from the ledger service
 	result, err := ctx.Services.Ledger.GetAccountCurrencies(
+		ctx.Context,
 		request.Account,
 		ledgerIndex,
 	)
 	if err != nil {
-		if err.Error() == "account not found" {
+		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, &types.RpcError{
 				Code:    types.RpcACT_NOT_FOUND,
 				Message: "Account not found.",
