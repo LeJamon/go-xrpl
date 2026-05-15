@@ -636,7 +636,6 @@ func serializeIssuedCurrencyAmount(value, currency, issuer string) ([]byte, erro
 	// AccountIDs that appear as children of special fields (Amount issuer and PathSet account) are not length-prefixed.
 	// So in Amount and PathSet fields, don't use the length indicator 0x14. This is in contrast to the AccountID fields where the length indicator prefix 0x14 is added.
 
-	// Pre-sized output: 8-byte value + 20-byte currency + 20-byte issuer.
 	out := make([]byte, 0, len(valBytes)+len(currencyBytes)+len(issuerBytes))
 	out = append(out, valBytes...)
 	out = append(out, currencyBytes...)

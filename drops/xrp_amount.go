@@ -11,7 +11,6 @@ import (
 // protocol caps a single XRPAmount at 10^17 drops, well within int64 range.
 type XRPAmount int64
 
-// DropsPerXRP is the number of drops in one XRP (10^6).
 const DropsPerXRP XRPAmount = 1_000_000
 
 // MaxDrops is the protocol-level maximum positive value of an XRPAmount.
@@ -26,7 +25,6 @@ var ErrXRPAmountOverflow = errors.New("XRPAmount overflow")
 // ErrInvalidDecimalXRP is returned by FromDecimalXRP for NaN/Inf inputs.
 var ErrInvalidDecimalXRP = errors.New("invalid decimal XRP value (NaN or Inf)")
 
-// NewXRPAmount returns an XRPAmount from raw drops.
 func NewXRPAmount(drops int64) XRPAmount {
 	return XRPAmount(drops)
 }
@@ -141,7 +139,6 @@ func (x XRPAmount) IsZero() bool {
 	return x == 0
 }
 
-// String returns the decimal-drops representation of x.
 func (x XRPAmount) String() string {
 	return strconv.FormatInt(int64(x), 10)
 }
