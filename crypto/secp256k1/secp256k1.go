@@ -22,6 +22,10 @@ const (
 	secp256K1FamilySeedPrefix byte = 0x21
 )
 
+// secp256K1FamilySeedPrefixBytes is the byte-slice form returned by
+// FamilySeedPrefix. Callers must not mutate the returned slice.
+var secp256K1FamilySeedPrefixBytes = []byte{secp256K1FamilySeedPrefix}
+
 var (
 	_ rootcrypto.Algorithm = SECP256K1CryptoAlgorithm{}
 
@@ -38,14 +42,14 @@ var (
 // SECP256K1CryptoAlgorithm is the implementation of the SECP256K1 algorithm.
 type SECP256K1CryptoAlgorithm struct {
 	prefix           byte
-	familySeedPrefix byte
+	familySeedPrefix []byte
 }
 
 // SECP256K1 returns a new SECP256K1CryptoAlgorithm instance.
 func SECP256K1() SECP256K1CryptoAlgorithm {
 	return SECP256K1CryptoAlgorithm{
 		prefix:           secp256K1Prefix,
-		familySeedPrefix: secp256K1FamilySeedPrefix,
+		familySeedPrefix: secp256K1FamilySeedPrefixBytes,
 	}
 }
 
@@ -55,45 +59,64 @@ func (c SECP256K1CryptoAlgorithm) Prefix() byte {
 }
 
 // FamilySeedPrefix returns the family seed prefix for the SECP256K1 algorithm.
-func (c SECP256K1CryptoAlgorithm) FamilySeedPrefix() byte {
+// The returned slice aliases shared package state; callers must not mutate it.
+func (c SECP256K1CryptoAlgorithm) FamilySeedPrefix() []byte {
 	return c.familySeedPrefix
 }
 
-// deriveScalar derives a scalar from a seed.
-func (c SECP256K1CryptoAlgorithm) deriveScalar(bytes []byte, discrim *big.Int) *big.Int {
+// deriveScalar derives a scalar from a seed using the rippled "XRP Family
+// Generator" construction: SHA512(seed | optional discrim | i++) truncated to
+// 32 bytes, retrying until the result is in (0, n). The loop almost always
+// exits on the first iteration.
+func (c SECP256K1CryptoAlgorithm) deriveScalar(seed []byte, discrim *big.Int) *big.Int {
 	order := btcec.S256().N
-	for i := 0; i <= 0xffffffff; i++ {
-		hash := sha512.New()
+	hasher := sha512.New()
+	sum := make([]byte, 0, sha512.Size)
 
-		hash.Write(bytes)
+	var discrimWord uint32
+	var hasDiscrim bool
+	if discrim != nil {
+		discrimWord = uint32(discrim.Uint64())
+		hasDiscrim = true
+	}
 
-		if discrim != nil {
-			discrimBytes := make([]byte, 4)
-			discrimBytes[0] = byte(discrim.Uint64() >> 24)
-			discrimBytes[1] = byte(discrim.Uint64() >> 16)
-			discrimBytes[2] = byte(discrim.Uint64() >> 8)
-			discrimBytes[3] = byte(discrim.Uint64())
+	var tailBuf [8]byte
+	tail := tailBuf[:0]
+	if hasDiscrim {
+		tail = append(tail,
+			byte(discrimWord>>24),
+			byte(discrimWord>>16),
+			byte(discrimWord>>8),
+			byte(discrimWord),
+		)
+	}
+	tailLen := len(tail)
+	// Reserve four bytes for the loop counter.
+	tail = tail[:tailLen+4]
 
-			hash.Write(discrimBytes)
-		}
+	zero := big.NewInt(0)
+	key := new(big.Int)
 
-		shiftBytes := make([]byte, 4)
-		shiftBytes[0] = byte(i >> 24)
-		shiftBytes[1] = byte(i >> 16)
-		shiftBytes[2] = byte(i >> 8)
-		shiftBytes[3] = byte(i)
+	for i := uint32(0); i <= 0xffffffff; i++ {
+		tail[tailLen] = byte(i >> 24)
+		tail[tailLen+1] = byte(i >> 16)
+		tail[tailLen+2] = byte(i >> 8)
+		tail[tailLen+3] = byte(i)
 
-		hash.Write(shiftBytes)
+		hasher.Reset()
+		hasher.Write(seed)
+		hasher.Write(tail)
+		sum = hasher.Sum(sum[:0])
 
-		key := new(big.Int).SetBytes(hash.Sum(nil)[:32])
-
-		if key.Cmp(big.NewInt(0)) > 0 && key.Cmp(order) < 0 {
-			return key
+		key.SetBytes(sum[:32])
+		if key.Cmp(zero) > 0 && key.Cmp(order) < 0 {
+			// Return a fresh allocation so callers can mutate the result freely.
+			return new(big.Int).Set(key)
 		}
 	}
 	// This error is practically impossible to reach.
 	// The order of the curve describes the (finite) amount of points on the curve.
-	panic("impossible unicorn ;)")
+	panic("secp256k1.deriveScalar: exhausted all 2^32 candidates")
 }
 
 // DeriveKeypair derives a keypair from a seed.
@@ -131,15 +154,28 @@ func (c SECP256K1CryptoAlgorithm) DeriveKeypair(seed []byte, validator bool) (st
 	return "00" + private, strings.ToUpper(hex.EncodeToString(pubKeyBytes)), nil
 }
 
-// Sign signs a message with a private key.
+// SignBytes signs msg with a 32-byte raw secp256k1 private key and returns
+// the DER-encoded signature in bytes.
+func (c SECP256K1CryptoAlgorithm) SignBytes(msg, privKey []byte) ([]byte, error) {
+	if len(privKey) != 32 {
+		return nil, ErrInvalidPrivateKey
+	}
+	if len(msg) == 0 {
+		return nil, ErrInvalidMessage
+	}
+	secpPrivKey := secp256k1.PrivKeyFromBytes(privKey)
+	hash := common.Sha512Half(msg)
+	sig := ecdsa.Sign(secpPrivKey, hash[:])
+	return derFromRS(sig.R(), sig.S()), nil
+}
+
+// Sign signs a message with a private key (hex-encoded, optionally
+// 0x00-prefixed). The returned signature is the uppercase hex form of the
+// DER-encoded signature.
 func (c SECP256K1CryptoAlgorithm) Sign(msg, privKey string) (string, error) {
 	if len(privKey) != 64 && len(privKey) != 66 {
 		return "", ErrInvalidPrivateKey
 	}
-	if len(msg) == 0 {
-		return "", ErrInvalidMessage
-	}
-
 	if len(privKey) == 66 {
 		privKey = privKey[2:]
 	}
@@ -147,16 +183,11 @@ func (c SECP256K1CryptoAlgorithm) Sign(msg, privKey string) (string, error) {
 	if err != nil {
 		return "", ErrInvalidPrivateKey
 	}
-
-	secpPrivKey := secp256k1.PrivKeyFromBytes(key)
-	hash := common.Sha512Half([]byte(msg))
-	sig := ecdsa.Sign(secpPrivKey, hash[:])
-
-	parsedSig, err := rootcrypto.DERHexFromSig(sig.R().String(), sig.S().String())
+	sig, err := c.SignBytes([]byte(msg), key)
 	if err != nil {
 		return "", err
 	}
-	return strings.ToUpper(parsedSig), nil
+	return strings.ToUpper(hex.EncodeToString(sig)), nil
 }
 
 // SignDigest signs a pre-computed digest (hash) directly without re-hashing.
@@ -170,19 +201,9 @@ func (c SECP256K1CryptoAlgorithm) SignDigest(digest [32]byte, privKeyHex string)
 	if err != nil {
 		return nil, ErrInvalidPrivateKey
 	}
-
 	secpPrivKey := secp256k1.PrivKeyFromBytes(key)
 	sig := ecdsa.Sign(secpPrivKey, digest[:])
-
-	parsedSig, err := rootcrypto.DERHexFromSig(sig.R().String(), sig.S().String())
-	if err != nil {
-		return nil, err
-	}
-	sigBytes, err := hex.DecodeString(parsedSig)
-	if err != nil {
-		return nil, err
-	}
-	return sigBytes, nil
+	return derFromRS(sig.R(), sig.S()), nil
 }
 
 // Validate validates a signature for a message with a public key.
@@ -195,55 +216,62 @@ func (c SECP256K1CryptoAlgorithm) Validate(msg, pubkey, sig string) bool {
 // ValidateWithCanonicality validates a signature with optional canonicality checking.
 // If mustBeFullyCanonical is true, the signature must have S <= curve_order/2.
 func (c SECP256K1CryptoAlgorithm) ValidateWithCanonicality(msg, pubkey, sig string, mustBeFullyCanonical bool) bool {
-	// Decode the signature from hex
 	sigBytes, err := hex.DecodeString(sig)
 	if err != nil {
 		return false
 	}
+	pubkeyBytes, err := hex.DecodeString(pubkey)
+	if err != nil {
+		return false
+	}
+	return c.validateBytes([]byte(msg), pubkeyBytes, sigBytes, mustBeFullyCanonical, true)
+}
 
-	// Check signature canonicality
-	canonicality := rootcrypto.ECDSACanonicality(sigBytes)
+// ValidateBytes verifies a fully-canonical DER signature with a SHA-512Half-of-msg digest.
+func (c SECP256K1CryptoAlgorithm) ValidateBytes(msg, pubkey, sig []byte) bool {
+	return c.validateBytes(msg, pubkey, sig, true, true)
+}
+
+// validateBytes is the byte-level core used by Validate/ValidateBytes/ValidateDigest.
+// When hashMsg is true the message is SHA-512Half-hashed before verification;
+// otherwise msg is treated as a pre-computed 32-byte digest.
+func (c SECP256K1CryptoAlgorithm) validateBytes(msg, pubkey, sig []byte, mustBeFullyCanonical, hashMsg bool) bool {
+	canonicality := rootcrypto.ECDSACanonicality(sig)
 	if canonicality == rootcrypto.CanonicityNone {
 		return false
 	}
 	if mustBeFullyCanonical && canonicality != rootcrypto.CanonicityFullyCanonical {
 		return false
 	}
-
-	// Decode the signature from DERHex to r and s
-	r, s, err := rootcrypto.DERHexToSig(sig)
+	r, s, err := rootcrypto.DERSigToRS(sig)
 	if err != nil {
 		return false
 	}
-
-	// Convert r and s slices to [32]byte arrays
 	var rBytes, sBytes [32]byte
-
+	if len(r) > 32 || len(s) > 32 {
+		return false
+	}
 	copy(rBytes[32-len(r):], r)
 	copy(sBytes[32-len(s):], s)
-
 	ecdsaR := &secp256k1.ModNScalar{}
 	ecdsaS := &secp256k1.ModNScalar{}
-
 	ecdsaR.SetBytes(&rBytes)
 	ecdsaS.SetBytes(&sBytes)
-
 	parsedSig := ecdsa.NewSignature(ecdsaR, ecdsaS)
-	// Hash the message
-	hash := common.Sha512Half([]byte(msg))
-
-	// Decode the pubkey from hex to a byte slice
-	pubkeyBytes, err := hex.DecodeString(pubkey)
+	pubKey, err := secp256k1.ParsePubKey(pubkey)
 	if err != nil {
 		return false
 	}
-
-	// Verify the signature
-	pubKey, err := secp256k1.ParsePubKey(pubkeyBytes)
-	if err != nil {
-		return false
+	var digest [32]byte
+	if hashMsg {
+		digest = common.Sha512Half(msg)
+	} else {
+		if len(msg) != 32 {
+			return false
+		}
+		copy(digest[:], msg)
 	}
-	return parsedSig.Verify(hash[:], pubKey)
+	return parsedSig.Verify(digest[:], pubKey)
 }
 
 // ValidateDigest verifies a signature against a pre-computed digest (hash).
@@ -251,35 +279,7 @@ func (c SECP256K1CryptoAlgorithm) ValidateWithCanonicality(msg, pubkey, sig stri
 // Matches rippled's verifyDigest() which passes the SHA-512Half hash directly
 // to secp256k1_ecdsa_verify.
 func (c SECP256K1CryptoAlgorithm) ValidateDigest(digest [32]byte, pubkeyBytes []byte, sigBytes []byte) bool {
-	// Check signature canonicality
-	canonicality := rootcrypto.ECDSACanonicality(sigBytes)
-	if canonicality == rootcrypto.CanonicityNone {
-		return false
-	}
-
-	// Decode the signature from DER to r and s
-	sigHex := hex.EncodeToString(sigBytes)
-	r, s, err := rootcrypto.DERHexToSig(sigHex)
-	if err != nil {
-		return false
-	}
-
-	var rBytes, sBytes [32]byte
-	copy(rBytes[32-len(r):], r)
-	copy(sBytes[32-len(s):], s)
-
-	ecdsaR := &secp256k1.ModNScalar{}
-	ecdsaS := &secp256k1.ModNScalar{}
-	ecdsaR.SetBytes(&rBytes)
-	ecdsaS.SetBytes(&sBytes)
-
-	parsedSig := ecdsa.NewSignature(ecdsaR, ecdsaS)
-
-	pubKey, err := secp256k1.ParsePubKey(pubkeyBytes)
-	if err != nil {
-		return false
-	}
-	return parsedSig.Verify(digest[:], pubKey)
+	return c.validateBytes(digest[:], pubkeyBytes, sigBytes, false, false)
 }
 
 // DerivePublicKeyFromPublicGenerator derives a public key from a public generator.
@@ -323,32 +323,31 @@ func (c SECP256K1CryptoAlgorithm) DerivePublicKeyFromPublicGenerator(pubKey []by
 // SignCanonical signs a message and ensures the signature is fully canonical.
 // It automatically normalizes the S value if needed to produce a low-S signature.
 func (c SECP256K1CryptoAlgorithm) SignCanonical(msg, privKey string) (string, error) {
-	sig, err := c.Sign(msg, privKey)
+	if len(privKey) != 64 && len(privKey) != 66 {
+		return "", ErrInvalidPrivateKey
+	}
+	if len(privKey) == 66 {
+		privKey = privKey[2:]
+	}
+	key, err := hex.DecodeString(privKey)
+	if err != nil {
+		return "", ErrInvalidPrivateKey
+	}
+	sigBytes, err := c.SignBytes([]byte(msg), key)
 	if err != nil {
 		return "", err
 	}
-
-	// Check if signature is already fully canonical
-	sigBytes, err := hex.DecodeString(sig)
-	if err != nil {
-		return "", ErrInvalidSignature
-	}
-
 	canonicality := rootcrypto.ECDSACanonicality(sigBytes)
 	if canonicality == rootcrypto.CanonicityNone {
 		return "", ErrInvalidSignature
 	}
-	if canonicality == rootcrypto.CanonicityFullyCanonical {
-		return sig, nil
+	if canonicality != rootcrypto.CanonicityFullyCanonical {
+		sigBytes = rootcrypto.MakeSignatureCanonical(sigBytes)
+		if sigBytes == nil {
+			return "", ErrInvalidSignature
+		}
 	}
-
-	// Make the signature canonical
-	canonicalSig := rootcrypto.MakeSignatureCanonical(sigBytes)
-	if canonicalSig == nil {
-		return "", ErrInvalidSignature
-	}
-
-	return strings.ToUpper(hex.EncodeToString(canonicalSig)), nil
+	return strings.ToUpper(hex.EncodeToString(sigBytes)), nil
 }
 
 // DeriveValidatorKeypair derives a validator keypair from a seed.
@@ -374,4 +373,15 @@ func (c SECP256K1CryptoAlgorithm) DerivePublicKeyFromSecret(secret []byte) ([]by
 // This is a convenience function that calls DeriveKeypair with validator=false.
 func (c SECP256K1CryptoAlgorithm) DeriveAccountKeypair(seed []byte) (string, string, error) {
 	return c.DeriveKeypair(seed, false)
+}
+
+// derFromRS builds a DER-encoded signature directly from a decred ModNScalar
+// r/s pair. It avoids the string→hex→bytes round-trip done by DERHexFromSig.
+func derFromRS(r, s secp256k1.ModNScalar) []byte {
+	rBytes := r.Bytes()
+	sBytes := s.Bytes()
+	return rootcrypto.EncodeDERSignature(
+		new(big.Int).SetBytes(rBytes[:]),
+		new(big.Int).SetBytes(sBytes[:]),
+	)
 }

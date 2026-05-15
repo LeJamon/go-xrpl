@@ -52,12 +52,43 @@ const (
 	HashPrefixBatch HashPrefix = 0x42434800
 )
 
-// MultiSignPrefix is the raw bytes for the multi-sign hash prefix ("SMT\0").
-// This is the same value as HashPrefixTxMultiSign but as bytes.
-var MultiSignPrefix = []byte{0x53, 0x4D, 0x54, 0x00}
+// hashPrefixBytes caches the immutable 4-byte form of every known
+// HashPrefix so that Bytes() is allocation-free on the hot signing/hashing
+// path. The slices alias shared package state and must not be mutated.
+//
+// Note: the protocol package exposes the same XRPL hash-prefix constants
+// in [4]byte form (see protocol.HashPrefix*). They live in two packages
+// because protocol is the public, structural source of truth for the
+// protocol layer while crypto.HashPrefix is the internal uint32-encoded
+// form used by signing helpers in this package.
+var hashPrefixBytes = func() map[HashPrefix][]byte {
+	all := []HashPrefix{
+		HashPrefixTransactionID, HashPrefixTxNode, HashPrefixLeafNode,
+		HashPrefixInnerNode, HashPrefixLedgerMaster, HashPrefixTxSign,
+		HashPrefixTxMultiSign, HashPrefixValidation, HashPrefixProposal,
+		HashPrefixManifest, HashPrefixPaymentChannelClaim,
+		HashPrefixCredential, HashPrefixBatch,
+	}
+	m := make(map[HashPrefix][]byte, len(all))
+	for _, hp := range all {
+		b := make([]byte, 4)
+		binary.BigEndian.PutUint32(b, uint32(hp))
+		m[hp] = b
+	}
+	return m
+}()
 
-// Bytes returns the hash prefix as a 4-byte big-endian slice.
+// MultiSignPrefix is the raw bytes for the multi-sign hash prefix ("SMT\0").
+// This is the same value as HashPrefixTxMultiSign but as bytes. It aliases
+// shared package state and must not be mutated.
+var MultiSignPrefix = hashPrefixBytes[HashPrefixTxMultiSign]
+
+// Bytes returns the hash prefix as a 4-byte big-endian slice. The returned
+// slice aliases shared package state and must not be mutated.
 func (hp HashPrefix) Bytes() []byte {
+	if b, ok := hashPrefixBytes[hp]; ok {
+		return b
+	}
 	b := make([]byte, 4)
 	binary.BigEndian.PutUint32(b, uint32(hp))
 	return b

@@ -2,7 +2,6 @@
 package types
 
 import (
-	"bytes"
 	"encoding/binary"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
@@ -30,13 +29,9 @@ func (u *UInt32) FromJSON(value any) ([]byte, error) {
 		val = value.(uint32) // will panic with meaningful error
 	}
 
-	buf := new(bytes.Buffer)
-	err := binary.Write(buf, binary.BigEndian, val)
-
-	if err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	var out [4]byte
+	binary.BigEndian.PutUint32(out[:], val)
+	return out[:], nil
 }
 
 // ToJSON takes a BinaryParser and optional parameters, and converts the serialized byte data
