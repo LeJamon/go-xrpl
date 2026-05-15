@@ -2,6 +2,7 @@ package tx
 
 import (
 	"encoding/hex"
+	"sync/atomic"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
@@ -36,7 +37,14 @@ const (
 	QualityOne = protocol.QualityOne
 )
 
-// Engine processes transactions against a ledger
+// Engine processes transactions against a ledger.
+//
+// Engine instances are NOT safe for concurrent Apply/ApplyPseudo calls. A
+// single Engine is meant to drive a single open ledger's transaction stream
+// in order (matching rippled's OpenView, which is also single-writer). The
+// only field that may be touched off-thread is txCount (read via TxCount,
+// reset via SetBaseTxCount), which is atomic to make those accessors safe
+// for observers — it is not a license to call Apply concurrently.
 type Engine struct {
 	// View provides access to ledger state
 	view LedgerView
@@ -48,15 +56,11 @@ type Engine struct {
 	// Always non-nil; falls back to xrpllog.Discard() when not configured.
 	logger xrpllog.Logger
 
-	// currentTxHash is the hash of the transaction currently being applied
-	// Used to set PreviousTxnID on modified ledger entries
-	currentTxHash [32]byte
-
 	// txCount tracks the number of applied transactions for TransactionIndex.
 	// Each applied transaction (tesSUCCESS or tec) gets the current count as
 	// its TransactionIndex, then the counter increments.
 	// Reference: rippled OpenView::txCount() = baseTxCount_ + txs_.size()
-	txCount uint32
+	txCount atomic.Uint32
 }
 
 // ApplyFlags controls transaction application behavior during consensus.
@@ -224,7 +228,7 @@ func (e *Engine) rules() *amendment.Rules {
 // TxCount returns the current transaction count (for batch baseTxCount).
 // Reference: rippled OpenView::txCount()
 func (e *Engine) TxCount() uint32 {
-	return e.txCount
+	return e.txCount.Load()
 }
 
 // Preclaim runs the full preclaim pipeline against the engine's view
@@ -239,7 +243,7 @@ func (e *Engine) Preclaim(tx Transaction, txHash [32]byte) Result {
 // Inner transactions start numbering from this value.
 // Reference: rippled OpenView::baseTxCount_ initialized from parent view
 func (e *Engine) SetBaseTxCount(count uint32) {
-	e.txCount = count
+	e.txCount.Store(count)
 }
 
 // ComputeTransactionHash computes the hash of a transaction.

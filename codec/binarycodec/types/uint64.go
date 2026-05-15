@@ -2,10 +2,10 @@
 package types
 
 import (
-	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
@@ -23,35 +23,31 @@ var ErrInvalidUInt64String = errors.New("invalid UInt64 value")
 // (e.g. AssetPrice in OracleSet transactions).
 // If the serialization fails, an error is returned.
 func (u *UInt64) FromJSON(value any) ([]byte, error) {
-	var buf = new(bytes.Buffer)
-
-	var strVal string
+	var n uint64
 	switch v := value.(type) {
 	case string:
-		strVal = v
+		parsed, err := strconv.ParseUint(v, 16, 64)
+		if err != nil {
+			return nil, err
+		}
+		n = parsed
 	case float64:
-		strVal = fmt.Sprintf("%X", uint64(v))
+		n = uint64(v)
 	case int:
-		strVal = fmt.Sprintf("%X", uint64(v))
+		n = uint64(v)
 	case int64:
-		strVal = fmt.Sprintf("%X", uint64(v))
+		n = uint64(v)
 	case uint64:
-		strVal = fmt.Sprintf("%X", v)
+		n = v
 	case uint32:
-		strVal = fmt.Sprintf("%X", uint64(v))
+		n = uint64(v)
 	default:
 		return nil, ErrInvalidUInt64String
 	}
 
-	// Pad the hex string to 16 characters (8 bytes)
-	strVal = strings.Repeat("0", 16-len(strVal)) + strVal
-	decoded, err := hex.DecodeString(strVal)
-	if err != nil {
-		return nil, err
-	}
-	buf.Write(decoded)
-
-	return buf.Bytes(), nil
+	var out [8]byte
+	binary.BigEndian.PutUint64(out[:], n)
+	return out[:], nil
 }
 
 // ToJSON takes a BinaryParser and optional parameters, and converts the serialized byte data
@@ -63,7 +59,5 @@ func (u *UInt64) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Convert to uppercase hex with zero padding to 16 characters
-	hexStr := strings.ToUpper(hex.EncodeToString(b))
-	return hexStr, nil
+	return strings.ToUpper(hex.EncodeToString(b)), nil
 }

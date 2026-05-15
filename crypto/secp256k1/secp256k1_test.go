@@ -8,14 +8,17 @@ import (
 )
 
 func TestSecp256k1_Prefix(t *testing.T) {
+	t.Parallel()
 	require.Equal(t, secp256K1Prefix, SECP256K1().Prefix())
 }
 
 func TestSecp256k1_FamilySeedPrefix(t *testing.T) {
-	require.Equal(t, secp256K1FamilySeedPrefix, SECP256K1().FamilySeedPrefix())
+	t.Parallel()
+	require.Equal(t, []byte{secp256K1FamilySeedPrefix}, SECP256K1().FamilySeedPrefix())
 }
 
 func TestSecp256k1_deriveKeypair(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name            string
 		seedBytes       []byte
@@ -44,6 +47,7 @@ func TestSecp256k1_deriveKeypair(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			privKey, pubKey, err := SECP256K1().DeriveKeypair(tc.seedBytes, tc.validator)
 			if tc.expectedErr != nil {
 				require.Error(t, err, tc.expectedErr.Error())
@@ -57,6 +61,7 @@ func TestSecp256k1_deriveKeypair(t *testing.T) {
 }
 
 func TestSecp256k1_Sign(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name              string
 		message           string
@@ -152,6 +157,7 @@ func TestSecp256k1_Sign(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			signature, err := SECP256K1().Sign(tc.message, tc.privKey)
 			if tc.wantErr {
 				require.Error(t, err)
@@ -164,6 +170,7 @@ func TestSecp256k1_Sign(t *testing.T) {
 }
 
 func TestSecp256k1_Validate(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name      string
 		message   string
@@ -217,6 +224,7 @@ func TestSecp256k1_Validate(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			isValid := SECP256K1().Validate(tc.message, tc.pubKey, tc.signature)
 			require.Equal(t, tc.wantValid, isValid)
 		})
@@ -224,6 +232,7 @@ func TestSecp256k1_Validate(t *testing.T) {
 }
 
 func TestSecp256k1_DerivePublicKeyFromPublicGenerator(t *testing.T) {
+	t.Parallel()
 	testcases := []struct {
 		name        string
 		inputPubKey []byte
@@ -246,6 +255,7 @@ func TestSecp256k1_DerivePublicKeyFromPublicGenerator(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			actual, err := SECP256K1().DerivePublicKeyFromPublicGenerator(tc.inputPubKey)
 			if tc.expectedErr != nil {
 				require.Error(t, err, tc.expectedErr.Error())

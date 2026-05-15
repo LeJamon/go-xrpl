@@ -148,7 +148,14 @@ var _ consensus.Adaptor = (*Adaptor)(nil)
 // Adaptor implements consensus.Adaptor, bridging the consensus engine
 // to the ledger service, transaction queue, and P2P network.
 type Adaptor struct {
-	mu sync.RWMutex
+	// mu protects trustedValidators / trustedSet / trustedMasterKeys /
+	// quorum / operatingMode. Plain Mutex rather than RWMutex: the
+	// fields are mutated rarely (UNL changes, SetOperatingMode) and
+	// read from a handful of getters per round, so contention is low
+	// and the RWMutex overhead is not justified. The two hot RPC
+	// paths (operatingMode, peerLCLs) already escape this lock — one
+	// via the modeAtomic mirror, the other via peerLCLsMu.
+	mu sync.Mutex
 
 	ledgerService *service.Service
 	sender        NetworkSender
@@ -900,15 +907,15 @@ func (a *Adaptor) VerifyValidation(validation *consensus.Validation) error {
 // --- Trust operations ---
 
 func (a *Adaptor) IsTrusted(node consensus.NodeID) bool {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	_, ok := a.trustedSet[node]
 	return ok
 }
 
 func (a *Adaptor) GetTrustedValidators() []consensus.NodeID {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	result := make([]consensus.NodeID, len(a.trustedValidators))
 	copy(result, a.trustedValidators)
 	return result
@@ -921,7 +928,15 @@ func (a *Adaptor) GetTrustedValidators() []consensus.NodeID {
 // goXRPL froze quorum at Adaptor construction, so partial-UNL
 // outages slowed finality relative to rippled.
 func (a *Adaptor) GetQuorum() int {
+	// Take a.mu around the trustedValidators read — the slice header is
+	// only mutated in New() today but the TrustChanged event will be
+	// driven from the validator-manager wiring noted at line 376, after
+	// which an unlocked read becomes a data race against the writer.
+	// GetNegativeUNL has its own lock, so call it after release to
+	// avoid nesting locks.
+	a.mu.Lock()
 	trusted := len(a.trustedValidators)
+	a.mu.Unlock()
 	disabled := len(a.GetNegativeUNL())
 	return computeQuorum(trusted, disabled)
 }
@@ -1252,8 +1267,8 @@ func (a *Adaptor) AdjustCloseTime(rawCloseTimes consensus.CloseTimes) {
 // --- Status operations ---
 
 func (a *Adaptor) GetOperatingMode() consensus.OperatingMode {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return a.operatingMode
 }
 

@@ -186,7 +186,9 @@ func TestNewPathStep(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.description, func(t *testing.T) {
-			require.Equal(t, tc.expected, newPathStep(tc.input))
+			actual, err := newPathStep(tc.input)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, actual)
 		})
 	}
 }
@@ -217,9 +219,17 @@ func TestNewPath(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.description, func(t *testing.T) {
-			require.Equal(t, tc.expected, newPath(tc.input))
+			actual, err := newPath(tc.input)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, actual)
 		})
 	}
+}
+
+func TestNewPath_Empty(t *testing.T) {
+	// rippled's STPathSet parser rejects empty inner paths; match that.
+	_, err := newPath([]any{})
+	require.ErrorIs(t, err, ErrInvalidPathSet)
 }
 
 func TestNewPathSet(t *testing.T) {
@@ -275,7 +285,9 @@ func TestNewPathSet(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.description, func(t *testing.T) {
-			require.Equal(t, tc.expected, newPathSet(tc.input))
+			actual, err := newPathSet(tc.input)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, actual)
 		})
 	}
 }

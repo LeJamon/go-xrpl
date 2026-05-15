@@ -121,10 +121,8 @@ func (d *Definitions) GetTransactionTypeCodeByTransactionTypeName(n string) (int
 
 // GetTransactionTypeNameByTransactionTypeCode returns the transaction type name associated with the transaction type code.
 func (d *Definitions) GetTransactionTypeNameByTransactionTypeCode(c int32) (string, error) {
-	for txTypeName, code := range d.TransactionTypes {
-		if code == c {
-			return txTypeName, nil
-		}
+	if name, ok := d.transactionTypeNames[c]; ok {
+		return name, nil
 	}
 	return "", &NotFoundErrorInt{
 		Instance: "TransactionTypeCode",
@@ -134,12 +132,9 @@ func (d *Definitions) GetTransactionTypeNameByTransactionTypeCode(c int32) (stri
 
 // GetTransactionResultNameByTransactionResultTypeCode returns the transaction result name associated with the transaction result type code.
 func (d *Definitions) GetTransactionResultNameByTransactionResultTypeCode(c int32) (string, error) {
-	for txResultName, code := range d.TransactionResults {
-		if code == c {
-			return txResultName, nil
-		}
+	if name, ok := d.transactionResultNames[c]; ok {
+		return name, nil
 	}
-
 	return "", &NotFoundErrorInt{
 		Instance: "TransactionResultTypeCode",
 		Input:    c,
@@ -174,12 +169,9 @@ func (d *Definitions) GetLedgerEntryTypeCodeByLedgerEntryTypeName(n string) (int
 
 // GetLedgerEntryTypeNameByLedgerEntryTypeCode returns the ledger entry type name associated with the ledger entry type code.
 func (d *Definitions) GetLedgerEntryTypeNameByLedgerEntryTypeCode(c int32) (string, error) {
-	for ledgerEntryTypeName, code := range d.LedgerEntryTypes {
-		if code == c {
-			return ledgerEntryTypeName, nil
-		}
+	if name, ok := d.ledgerEntryTypeNames[c]; ok {
+		return name, nil
 	}
-
 	return "", &NotFoundErrorInt{
 		Instance: "LedgerEntryTypeCode",
 		Input:    c,
@@ -201,12 +193,9 @@ func (d *Definitions) GetDelegatablePermissionValueByName(n string) (int32, erro
 
 // GetDelegatablePermissionNameByValue returns the delegatable permission name associated with the permission value.
 func (d *Definitions) GetDelegatablePermissionNameByValue(v int32) (string, error) {
-	for permissionName, value := range d.DelegatablePermissions {
-		if value == v {
-			return permissionName, nil
-		}
+	if name, ok := d.delegatablePermissionNames[v]; ok {
+		return name, nil
 	}
-
 	return "", &NotFoundErrorInt{
 		Instance: "DelegatablePermissionValue",
 		Input:    v,

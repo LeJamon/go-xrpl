@@ -3,8 +3,8 @@ package definitions
 
 import (
 	_ "embed"
-
-	"github.com/ugorji/go/codec"
+	"encoding/json"
+	"fmt"
 )
 
 var (
@@ -15,7 +15,11 @@ var (
 	definitions *Definitions
 )
 
-// Definitions holds the binary serialization definitions for the XRP Ledger, loaded from the RFC JSON document.
+// Definitions holds the binary serialization definitions for the XRP Ledger,
+// loaded once at package init from the embedded RFC JSON document.
+//
+// All forward maps (name -> code) and reverse maps (code -> name) are built
+// eagerly so every lookup is O(1).
 type Definitions struct {
 	Types                  map[string]int32
 	LedgerEntryTypes       map[string]int32
@@ -25,6 +29,12 @@ type Definitions struct {
 	FieldIDNameMap         map[FieldHeader]string
 	GranularPermissions    map[string]int32
 	DelegatablePermissions map[string]int32
+
+	// Reverse lookup maps used by enumToStr-style decoders.
+	transactionTypeNames       map[int32]string
+	transactionResultNames     map[int32]string
+	ledgerEntryTypeNames       map[int32]string
+	delegatablePermissionNames map[int32]string
 }
 
 // Get returns the singleton instance of Definitions.
@@ -40,19 +50,14 @@ type definitionsDoc struct {
 	TransactionTypes   map[string]int32 `json:"TRANSACTION_TYPES"`
 }
 
-// Loads JSON from the definitions file and converts it to a preferred format.
-// The definitions file contains information required for the XRP Ledger's
-// canonical binary serialization format:
-// `Serialization <https://xrpl.org/serialization.html>`_
+// loadDefinitions decodes the embedded JSON definitions document and
+// populates the singleton. It panics if the embedded document is malformed
+// — that condition is a build-time bug, not a runtime input failure.
 func loadDefinitions() {
-	var jh codec.JsonHandle
-
-	jh.MapKeyAsString = true
-	jh.SignedInteger = true
-
-	dec := codec.NewDecoderBytes(docBytes, &jh)
 	var data definitionsDoc
-	dec.MustDecode(&data)
+	if err := json.Unmarshal(docBytes, &data); err != nil {
+		panic(fmt.Errorf("definitions: decode embedded JSON: %w", err))
+	}
 
 	definitions = &Definitions{
 		Types:              data.Types,
@@ -65,36 +70,7 @@ func loadDefinitions() {
 	addFieldHeadersAndOrdinals()
 	createFieldIDNameMap()
 	initializePermissions()
-}
-
-func convertToFieldInstanceMap(m [][]interface{}) map[string]*FieldInstance {
-	nm := make(map[string]*FieldInstance, len(m))
-
-	for _, j := range m {
-		k := j[0].(string)
-		fi, _ := castFieldInfo(j[1])
-		nm[k] = &FieldInstance{
-			FieldName: k,
-			FieldInfo: &fi,
-			Ordinal:   fi.Nth,
-		}
-	}
-	return nm
-}
-
-func castFieldInfo(v interface{}) (FieldInfo, error) {
-	if fi, ok := v.(map[string]interface{}); ok {
-		return FieldInfo{
-			// TODO: Check if this is still needed
-			//nolint:gosec // G115: Potential hardcoded credentials (gosec)
-			Nth:            int32(fi["nth"].(int64)),
-			IsVLEncoded:    fi["isVLEncoded"].(bool),
-			IsSerialized:   fi["isSerialized"].(bool),
-			IsSigningField: fi["isSigningField"].(bool),
-			Type:           fi["type"].(string),
-		}, nil
-	}
-	return FieldInfo{}, ErrUnableToCastFieldInfo
+	buildReverseMaps()
 }
 
 func addFieldHeadersAndOrdinals() {
@@ -137,7 +113,7 @@ func initializePermissions() {
 		"MPTokenIssuanceUnlock":  65548,
 	}
 
-	definitions.DelegatablePermissions = make(map[string]int32)
+	definitions.DelegatablePermissions = make(map[string]int32, len(definitions.GranularPermissions)+len(definitions.TransactionTypes))
 
 	for name, value := range definitions.GranularPermissions {
 		definitions.DelegatablePermissions[name] = value
@@ -145,5 +121,26 @@ func initializePermissions() {
 
 	for txType, value := range definitions.TransactionTypes {
 		definitions.DelegatablePermissions[txType] = value + 1
+	}
+}
+
+// buildReverseMaps populates code->name lookup tables once so that the
+// public Get*Name helpers are O(1) instead of scanning the forward maps.
+func buildReverseMaps() {
+	definitions.transactionTypeNames = make(map[int32]string, len(definitions.TransactionTypes))
+	for name, code := range definitions.TransactionTypes {
+		definitions.transactionTypeNames[code] = name
+	}
+	definitions.transactionResultNames = make(map[int32]string, len(definitions.TransactionResults))
+	for name, code := range definitions.TransactionResults {
+		definitions.transactionResultNames[code] = name
+	}
+	definitions.ledgerEntryTypeNames = make(map[int32]string, len(definitions.LedgerEntryTypes))
+	for name, code := range definitions.LedgerEntryTypes {
+		definitions.ledgerEntryTypeNames[code] = name
+	}
+	definitions.delegatablePermissionNames = make(map[int32]string, len(definitions.DelegatablePermissions))
+	for name, value := range definitions.DelegatablePermissions {
+		definitions.delegatablePermissionNames[value] = name
 	}
 }

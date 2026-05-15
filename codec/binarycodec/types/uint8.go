@@ -2,9 +2,6 @@
 package types
 
 import (
-	"bytes"
-	"encoding/binary"
-
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
 )
@@ -25,7 +22,6 @@ func (u *UInt8) FromJSON(value any) ([]byte, error) {
 	}
 
 	var intValue int
-
 	switch v := value.(type) {
 	case int:
 		intValue = v
@@ -39,13 +35,7 @@ func (u *UInt8) FromJSON(value any) ([]byte, error) {
 		intValue = int(v)
 	}
 
-	buf := new(bytes.Buffer)
-	// TODO: Check if this is still needed
-	err := binary.Write(buf, binary.BigEndian, byte(intValue))
-	if err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return []byte{byte(intValue)}, nil
 }
 
 // ToJSON takes a BinaryParser and optional parameters, and converts the serialized byte data

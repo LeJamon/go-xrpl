@@ -50,7 +50,7 @@ func (vt *ValidationTracker) rebuildTrieLocked() {
 		if !ok {
 			continue
 		}
-		vt.trie.Insert(lgr, 1)
+		safeTrieCall("Insert", func() { vt.trie.Insert(lgr, 1) })
 		vt.trieTips[nodeID] = lgr
 	}
 }
@@ -78,9 +78,9 @@ func (vt *ValidationTracker) updateTrieLocked(nodeID consensus.NodeID, newLedger
 	}
 
 	if prev, existed := vt.trieTips[nodeID]; existed {
-		vt.trie.Remove(prev, 1)
+		safeTrieCall("Remove", func() { vt.trie.Remove(prev, 1) })
 	}
-	vt.trie.Insert(lgr, 1)
+	safeTrieCall("Insert", func() { vt.trie.Insert(lgr, 1) })
 	vt.trieTips[nodeID] = lgr
 }
 

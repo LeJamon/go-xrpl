@@ -53,79 +53,97 @@ func (m *ModeManager) Mode() consensus.OperatingMode {
 	return m.mode
 }
 
+// pendingTransition captures the side effects of a mode transition that
+// must run *outside* m.mu to avoid lock inversion against the Adaptor's
+// own mutex and against any onModeChange subscriber that might call back
+// into ModeManager (issue #418 bootstrap deadlock class).
+type pendingTransition struct {
+	oldMode   consensus.OperatingMode
+	newMode   consensus.OperatingMode
+	peerCount int
+	cb        func(old, new consensus.OperatingMode)
+}
+
 // OnPeerConnected should be called when a new peer connects.
 func (m *ModeManager) OnPeerConnected() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	m.peerCount++
+	var p *pendingTransition
 	if m.mode == consensus.OpModeDisconnected && m.peerCount > 0 {
-		m.transitionLocked(consensus.OpModeConnected)
+		p = m.stageTransitionLocked(consensus.OpModeConnected)
 	}
+	m.mu.Unlock()
+	m.applyTransition(p)
 }
 
 // OnPeerDisconnected should be called when a peer disconnects.
 func (m *ModeManager) OnPeerDisconnected() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if m.peerCount > 0 {
 		m.peerCount--
 	}
+	var p *pendingTransition
 	if m.peerCount == 0 {
-		m.transitionLocked(consensus.OpModeDisconnected)
+		p = m.stageTransitionLocked(consensus.OpModeDisconnected)
 	}
+	m.mu.Unlock()
+	m.applyTransition(p)
 }
 
 // OnLCLMismatch should be called when a peer reports a different LCL.
 // Transitions Connected → Syncing.
 func (m *ModeManager) OnLCLMismatch() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	var p *pendingTransition
 	if m.mode == consensus.OpModeConnected {
-		m.transitionLocked(consensus.OpModeSyncing)
+		p = m.stageTransitionLocked(consensus.OpModeSyncing)
 	}
+	m.mu.Unlock()
+	m.applyTransition(p)
 }
 
 // OnLCLAcquired should be called when we have the correct LCL.
 // Transitions Syncing → Tracking.
 func (m *ModeManager) OnLCLAcquired() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	var p *pendingTransition
 	if m.mode == consensus.OpModeSyncing {
-		m.transitionLocked(consensus.OpModeTracking)
+		p = m.stageTransitionLocked(consensus.OpModeTracking)
 	}
+	m.mu.Unlock()
+	m.applyTransition(p)
 }
 
 // OnValidationsReceived should be called when we receive validations
 // confirming our chain. Transitions Tracking → Full.
 func (m *ModeManager) OnValidationsReceived() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	var p *pendingTransition
 	if m.mode == consensus.OpModeTracking {
-		m.transitionLocked(consensus.OpModeFull)
+		p = m.stageTransitionLocked(consensus.OpModeFull)
 	}
+	m.mu.Unlock()
+	m.applyTransition(p)
 }
 
 // OnWrongLedger should be called when consensus detects we're on the
 // wrong ledger. Transitions Full → Syncing.
 func (m *ModeManager) OnWrongLedger() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	var p *pendingTransition
 	if m.mode == consensus.OpModeFull || m.mode == consensus.OpModeTracking {
-		m.transitionLocked(consensus.OpModeSyncing)
+		p = m.stageTransitionLocked(consensus.OpModeSyncing)
 	}
+	m.mu.Unlock()
+	m.applyTransition(p)
 }
 
 // SetMode forces a mode transition (for testing or manual override).
 func (m *ModeManager) SetMode(mode consensus.OperatingMode) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.transitionLocked(mode)
+	p := m.stageTransitionLocked(mode)
+	m.mu.Unlock()
+	m.applyTransition(p)
 }
 
 // OnEvent translates engine ModeChangedEvents into adaptor OperatingMode
@@ -140,41 +158,58 @@ func (m *ModeManager) OnEvent(event consensus.Event) {
 		return
 	}
 	current := m.adaptor.GetOperatingMode()
+	var p *pendingTransition
 	if mc.NewMode == consensus.ModeWrongLedger {
 		if current == consensus.OpModeFull || current == consensus.OpModeTracking {
 			m.mu.Lock()
-			m.transitionLocked(consensus.OpModeSyncing)
+			p = m.stageTransitionLocked(consensus.OpModeSyncing)
 			m.mu.Unlock()
 		}
-		return
-	}
-	if mc.OldMode == consensus.ModeWrongLedger {
+	} else if mc.OldMode == consensus.ModeWrongLedger {
 		if current == consensus.OpModeSyncing {
 			m.mu.Lock()
-			m.transitionLocked(consensus.OpModeTracking)
+			p = m.stageTransitionLocked(consensus.OpModeTracking)
 			m.mu.Unlock()
 		}
 	}
+	m.applyTransition(p)
 }
 
-// transitionLocked performs a mode transition while holding the lock.
-func (m *ModeManager) transitionLocked(newMode consensus.OperatingMode) {
+// stageTransitionLocked records a pending mode transition under m.mu and
+// returns the captured side-effect arguments. It does NOT call into the
+// Adaptor or invoke onModeChange — both happen in applyTransition after
+// the lock is released, which breaks the ModeManager↔Adaptor lock cycle
+// that previously deadlocked at bootstrap (issue #418).
+//
+// Returns nil when newMode == m.mode so callers can pass the result
+// through applyTransition unconditionally.
+func (m *ModeManager) stageTransitionLocked(newMode consensus.OperatingMode) *pendingTransition {
 	if m.mode == newMode {
+		return nil
+	}
+	p := &pendingTransition{
+		oldMode:   m.mode,
+		newMode:   newMode,
+		peerCount: m.peerCount,
+		cb:        m.onModeChange,
+	}
+	m.mode = newMode
+	return p
+}
+
+// applyTransition runs the side effects staged by stageTransitionLocked.
+// MUST be called with m.mu released.
+func (m *ModeManager) applyTransition(p *pendingTransition) {
+	if p == nil {
 		return
 	}
-	oldMode := m.mode
-	m.mode = newMode
-
-	// Update the adaptor's operating mode
-	m.adaptor.SetOperatingMode(newMode)
-
+	m.adaptor.SetOperatingMode(p.newMode)
 	m.logger.Info("Operating mode changed",
-		"from", oldMode.String(),
-		"to", newMode.String(),
-		"peers", m.peerCount,
+		"from", p.oldMode.String(),
+		"to", p.newMode.String(),
+		"peers", p.peerCount,
 	)
-
-	if m.onModeChange != nil {
-		m.onModeChange(oldMode, newMode)
+	if p.cb != nil {
+		p.cb(p.oldMode, p.newMode)
 	}
 }

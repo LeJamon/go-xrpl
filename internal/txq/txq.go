@@ -1,6 +1,8 @@
 package txq
 
 import (
+	"bytes"
+	"sort"
 	"sync"
 
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -204,11 +206,22 @@ func (q *TxQ) erase(c *Candidate) {
 // rebuildByFee rebuilds the byFee index from byAccount.
 // Called after changing parentHash to reorder same-fee transactions.
 // Caller must hold the lock.
+//
+// Walks accounts in sorted order and candidates via GetSortedCandidates
+// so the rebuilt byFee slice is bit-identical across validators.
 func (q *TxQ) rebuildByFee() {
 	q.byFee = make([]*Candidate, 0, len(q.byFee))
 
-	for _, aq := range q.byAccount {
-		for _, c := range aq.Transactions {
+	accounts := make([][20]byte, 0, len(q.byAccount))
+	for a := range q.byAccount {
+		accounts = append(accounts, a)
+	}
+	sort.Slice(accounts, func(i, j int) bool {
+		return bytes.Compare(accounts[i][:], accounts[j][:]) < 0
+	})
+
+	for _, a := range accounts {
+		for _, c := range q.byAccount[a].GetSortedCandidates() {
 			q.insertByFee(c)
 		}
 	}
