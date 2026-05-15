@@ -167,6 +167,9 @@ func newPathStep(v map[string]any) ([]byte, error) {
 // newPath constructs a path from a slice of path steps.
 // It generates a byte array representation of the path, encoding each path step in turn.
 func newPath(v []any) ([]byte, error) {
+	if len(v) == 0 {
+		return nil, ErrInvalidPathSet
+	}
 	b := make([]byte, 0, len(v)*pathStepMaxLen)
 	for _, step := range v {
 		stepMap, ok := step.(map[string]any)

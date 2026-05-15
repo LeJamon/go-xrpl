@@ -18,8 +18,9 @@ const DropsPerXRP XRPAmount = 1_000_000
 const MaxDrops XRPAmount = 100_000_000_000_000_000
 
 // ErrXRPAmountOverflow is returned when a checked operation would push the
-// result outside [-MaxDrops, MaxDrops]. Unchecked arithmetic (Add/Sub/Mul)
-// panics with this error wrapped in a string.
+// result outside int64 range. The unchecked operators (Add/Sub/Mul) mirror
+// rippled's plain int64 arithmetic and silently wrap on overflow; callers that
+// need overflow signalled should use AddChecked/SubChecked/MulChecked.
 var ErrXRPAmountOverflow = errors.New("XRPAmount overflow")
 
 // ErrInvalidDecimalXRP is returned by FromDecimalXRP for NaN/Inf inputs.
@@ -50,13 +51,10 @@ func (x XRPAmount) DecimalXRP() float64 {
 	return float64(x) / float64(DropsPerXRP)
 }
 
-// Add returns x+other. It panics on int64 overflow.
+// Add returns x+other with plain int64 arithmetic, mirroring rippled's
+// XRPAmount::operator+. Overflow wraps silently; use AddChecked to detect it.
 func (x XRPAmount) Add(other XRPAmount) XRPAmount {
-	out, err := x.AddChecked(other)
-	if err != nil {
-		panic("drops: " + err.Error())
-	}
-	return out
+	return XRPAmount(int64(x) + int64(other))
 }
 
 // AddChecked returns x+other and an error on int64 overflow.
@@ -68,13 +66,10 @@ func (x XRPAmount) AddChecked(other XRPAmount) (XRPAmount, error) {
 	return XRPAmount(r), nil
 }
 
-// Sub returns x-other. It panics on int64 overflow.
+// Sub returns x-other with plain int64 arithmetic, mirroring rippled's
+// XRPAmount::operator-. Overflow wraps silently; use SubChecked to detect it.
 func (x XRPAmount) Sub(other XRPAmount) XRPAmount {
-	out, err := x.SubChecked(other)
-	if err != nil {
-		panic("drops: " + err.Error())
-	}
-	return out
+	return XRPAmount(int64(x) - int64(other))
 }
 
 // SubChecked returns x-other and an error on int64 overflow.
@@ -86,15 +81,10 @@ func (x XRPAmount) SubChecked(other XRPAmount) (XRPAmount, error) {
 	return XRPAmount(r), nil
 }
 
-// Mul returns x*factor. It panics on int64 overflow rather than silently
-// wrapping. Callers that can tolerate the overflow as an error should use
-// MulChecked.
+// Mul returns x*factor with plain int64 arithmetic, mirroring rippled's
+// XRPAmount::operator*. Overflow wraps silently; use MulChecked to detect it.
 func (x XRPAmount) Mul(factor int64) XRPAmount {
-	out, err := x.MulChecked(factor)
-	if err != nil {
-		panic("drops: " + err.Error())
-	}
-	return out
+	return XRPAmount(int64(x) * factor)
 }
 
 // MulChecked returns x*factor and an error on int64 overflow.
