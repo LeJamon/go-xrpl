@@ -92,7 +92,7 @@ func TestCheckCreateValidation(t *testing.T) {
 				SendMax:     tx.NewXRPAmount(10000000000),
 			},
 			expectError: true,
-			errorMsg:    "Account is required",
+			errorMsg:    "temBAD_SRC_ACCOUNT: Account is required",
 		},
 	}
 
@@ -196,7 +196,7 @@ func TestCheckCashValidation(t *testing.T) {
 				Amount:  ptrAmount(tx.NewXRPAmount(10000000000)),
 			},
 			expectError: true,
-			errorMsg:    "Account is required",
+			errorMsg:    "temBAD_SRC_ACCOUNT: Account is required",
 		},
 	}
 
@@ -258,7 +258,7 @@ func TestCheckCancelValidation(t *testing.T) {
 				CheckID: "49647F0D748DC3FE26BDACBC57F251AADEFFF391403EC9BF87C97F67E9977FB0",
 			},
 			expectError: true,
-			errorMsg:    "Account is required",
+			errorMsg:    "temBAD_SRC_ACCOUNT: Account is required",
 		},
 	}
 

@@ -94,10 +94,6 @@ func TestPaymentValidation(t *testing.T) {
 			errorMsg:    "temBAD_AMOUNT: Amount is required",
 		},
 		{
-			// internal/tx/transaction.go:191 — common BaseTx validation
-			// returns a bare "Account is required" without the temXXX
-			// prefix. This pre-empts payment-specific preflight, so we
-			// match the upstream error verbatim.
 			name: "missing account",
 			payment: &Payment{
 				BaseTx:      tx.BaseTx{Common: tx.Common{TransactionType: "Payment"}},
@@ -105,7 +101,7 @@ func TestPaymentValidation(t *testing.T) {
 				Destination: "rBob",
 			},
 			expectError: true,
-			errorMsg:    "Account is required",
+			errorMsg:    "temBAD_SRC_ACCOUNT: Account is required",
 		},
 
 		// Payment to self validation — rippled Payment.cpp:159-166:

@@ -205,7 +205,7 @@ func TestEscrowCreateValidation(t *testing.T) {
 				FinishAfter: ptrUint32(700000000),
 			},
 			expectError: true,
-			errorMsg:    "Account is required",
+			errorMsg:    "temBAD_SRC_ACCOUNT: Account is required",
 		},
 	}
 
@@ -298,7 +298,7 @@ func TestEscrowFinishValidation(t *testing.T) {
 				OfferSequence: 12345,
 			},
 			expectError: true,
-			errorMsg:    "Account is required",
+			errorMsg:    "temBAD_SRC_ACCOUNT: Account is required",
 		},
 		{
 			name: "self-finish allowed (unconditional)",
@@ -373,7 +373,7 @@ func TestEscrowCancelValidation(t *testing.T) {
 				OfferSequence: 12345,
 			},
 			expectError: true,
-			errorMsg:    "Account is required",
+			errorMsg:    "temBAD_SRC_ACCOUNT: Account is required",
 		},
 		{
 			name: "sequence zero is valid",

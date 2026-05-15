@@ -41,7 +41,7 @@ func TestSetRegularKeyValidation(t *testing.T) {
 				RegularKey: "rBob",
 			},
 			expectError: true,
-			errorMsg:    "Account is required",
+			errorMsg:    "temBAD_SRC_ACCOUNT: Account is required",
 		},
 		{
 			name: "valid with ed25519 key format",
