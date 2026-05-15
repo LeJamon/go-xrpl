@@ -17,28 +17,32 @@ func TestXRPAmount_AddOverflow(t *testing.T) {
 	max := XRPAmount(math.MaxInt64)
 	_, err := max.AddChecked(1)
 	require.ErrorIs(t, err, ErrXRPAmountOverflow)
-	require.Panics(t, func() { max.Add(1) })
+	require.Equal(t, XRPAmount(math.MinInt64), max.Add(1))
 
 	min := XRPAmount(math.MinInt64)
 	_, err = min.AddChecked(-1)
 	require.ErrorIs(t, err, ErrXRPAmountOverflow)
+	require.Equal(t, XRPAmount(math.MaxInt64), min.Add(-1))
 }
 
 func TestXRPAmount_SubOverflow(t *testing.T) {
 	min := XRPAmount(math.MinInt64)
 	_, err := min.SubChecked(1)
 	require.ErrorIs(t, err, ErrXRPAmountOverflow)
+	require.Equal(t, XRPAmount(math.MaxInt64), min.Sub(1))
 
 	max := XRPAmount(math.MaxInt64)
 	_, err = max.SubChecked(-1)
 	require.ErrorIs(t, err, ErrXRPAmountOverflow)
+	require.Equal(t, XRPAmount(math.MinInt64), max.Sub(-1))
 }
 
 func TestXRPAmount_MulOverflow(t *testing.T) {
 	// 1e10 * 1e10 = 1e20 overflows int64 (~9.2e18).
 	_, err := XRPAmount(1e10).MulChecked(1e10)
 	require.ErrorIs(t, err, ErrXRPAmountOverflow)
-	require.Panics(t, func() { _ = XRPAmount(1e10).Mul(1e10) })
+	a, b := int64(1e10), int64(1e10)
+	require.Equal(t, XRPAmount(a*b), XRPAmount(a).Mul(b))
 
 	// Sign handling: MinInt64 * 1 must work.
 	got, err := XRPAmount(math.MinInt64).MulChecked(1)

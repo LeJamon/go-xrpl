@@ -226,6 +226,12 @@ func TestNewPath(t *testing.T) {
 	}
 }
 
+func TestNewPath_Empty(t *testing.T) {
+	// rippled's STPathSet parser rejects empty inner paths; match that.
+	_, err := newPath([]any{})
+	require.ErrorIs(t, err, ErrInvalidPathSet)
+}
+
 func TestNewPathSet(t *testing.T) {
 	tt := []struct {
 		description string
