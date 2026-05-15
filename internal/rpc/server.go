@@ -29,7 +29,6 @@ const MaxRequestBytes = 1_000_000
 // Resolved lazily so it picks up the root logger set during CLI bootstrap.
 func rpcLog() xrpllog.Logger { return xrpllog.Named(xrpllog.PartitionRPC) }
 
-// Server handles HTTP JSON-RPC requests using XRPL format
 // LoadCharger is the optional interface a MethodHandler may implement
 // to declare its load bucket. Handlers that don't implement it pay
 // loadtrack.LoadReference (rippled feeReferenceRPC parity).
@@ -123,7 +122,6 @@ func NewServer(timeout time.Duration, services *types.ServiceContainer) *Server 
 		loadTracker: loadtrack.New(),
 	}
 
-	// Register all RPC methods
 	server.registerAllMethods()
 
 	return server
@@ -149,7 +147,6 @@ type JsonRpcResponseOptions struct {
 	Forwarded bool                  // True if forwarded from Clio to P2P server
 }
 
-// ServeHTTP implements http.Handler interface
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -173,35 +170,29 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	w.Header().Set("Content-Type", "application/json")
 
-	// Handle preflight requests
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	// Only accept POST and GET methods
 	if r.Method != "POST" && r.Method != "GET" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Handle GET request (for simple queries like server_info)
 	if r.Method == "GET" {
 		s.handleGetRequest(w, r)
 		return
 	}
 
-	// Handle POST request (standard XRPL JSON-RPC)
 	s.handlePostRequest(w, r)
 }
 
-// handleGetRequest processes GET requests with query parameters
 func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	method := query.Get("command")
 
 	if method == "" {
-		// Default to server_info for GET requests without command
 		method = "server_info"
 	}
 
@@ -227,7 +218,6 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	s.writeXrplResponse(w, method, nil, result, rpcErr)
 }
 
-// handlePostRequest processes POST requests with XRPL JSON-RPC payload
 func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	r.Body = http.MaxBytesReader(w, r.Body, MaxRequestBytes)
@@ -254,7 +244,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract params - XRPL uses params as an array with one object
+	// XRPL JSON-RPC uses params as an array with a single object.
 	var params json.RawMessage
 	if len(request.Params) > 0 {
 		params = request.Params[0]
@@ -282,7 +272,6 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		Services:   s.services,
 	}
 
-	// Parse API version from params if present
 	if params != nil {
 		var paramsMap map[string]interface{}
 		if err := json.Unmarshal(params, &paramsMap); err == nil {
@@ -353,7 +342,6 @@ func redactCredentials(m map[string]interface{}) {
 	}
 }
 
-// executeMethod executes an RPC method with the given parameters
 func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types.RpcContext) (interface{}, *types.RpcError) {
 	rpcLog().Debug("rpc", "method", method, "client", ctx.ClientIP)
 
@@ -464,15 +452,13 @@ func loadKindFor(handler types.MethodHandler, rpcErr *types.RpcError) loadtrack.
 	return loadtrack.LoadReference
 }
 
-// writeXrplResponse writes an XRPL format JSON-RPC response
-// Per XRPL spec:
-// - result.status = "success" or "error"
-// - warning, warnings, forwarded are at top level (outside result)
+// writeXrplResponse writes an XRPL format JSON-RPC response. Per XRPL spec
+// result.status is "success" or "error" and warning/warnings/forwarded
+// live at the top level, not inside result.
 func (s *Server) writeXrplResponse(w http.ResponseWriter, method string, request interface{}, result interface{}, rpcErr *types.RpcError) {
 	s.writeXrplResponseWithOptions(w, method, request, result, rpcErr, nil)
 }
 
-// writeXrplResponseWithOptions writes an XRPL format JSON-RPC response with optional fields
 func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, method string, request interface{}, result interface{}, rpcErr *types.RpcError, opts *JsonRpcResponseOptions) {
 	response := make(map[string]interface{})
 
@@ -499,7 +485,6 @@ func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, method stri
 		}
 	}
 
-	// Add optional fields at top level (per XRPL JSON-RPC spec)
 	if opts != nil {
 		if opts.Warning != "" {
 			response["warning"] = opts.Warning
@@ -558,7 +543,6 @@ func (t *trimNewlineWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// writeXrplError writes an XRPL format error response
 func (s *Server) writeXrplError(w http.ResponseWriter, method string, request interface{}, errorCode string, message string) {
 	resultObj := map[string]interface{}{
 		"status":        "error",
