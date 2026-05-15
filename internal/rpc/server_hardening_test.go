@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/internal/rpc/loadtrack"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -286,6 +287,48 @@ func TestSecureGatewayPromotesToIdentifiedWithUser(t *testing.T) {
 	}
 	if observed.Unlimited {
 		t.Fatalf("RoleProxy must not be Unlimited")
+	}
+}
+
+// heavyStub is a stub MethodHandler that declares LoadHeavy via the
+// optional LoadCharger interface — used to exercise the per-IP load
+// budget rejection path.
+type heavyStub struct{ stubHandler }
+
+func (heavyStub) LoadKind() loadtrack.LoadKind { return loadtrack.LoadHeavy }
+
+func TestLoadTracker_RejectsAfterDropThreshold(t *testing.T) {
+	srv := newHardeningServer(t, time.Second, "path_find", &heavyStub{stubHandler{}})
+	srv.loadTracker = loadtrack.New()
+
+	var lastResult map[string]interface{}
+	for i := 0; i < 12; i++ {
+		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"path_find","params":[{}]}`))
+		req.RemoteAddr = "198.51.100.7:5555"
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		lastResult = decodeEnvelope(t, rr.Body.Bytes())
+		if lastResult["error"] == "slowDown" {
+			return
+		}
+	}
+	t.Fatalf("never received slowDown after 12 heavy invocations; last result %v", lastResult)
+}
+
+func TestLoadTracker_AdminBypassesCharge(t *testing.T) {
+	srv := newHardeningServer(t, time.Second, "path_find", &heavyStub{stubHandler{}})
+	srv.loadTracker = loadtrack.New()
+
+	for i := 0; i < 50; i++ {
+		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"path_find","params":[{}]}`))
+		// 127.0.0.1 with no AdminNets → roleForRequest fallback → RoleAdmin → Unlimited.
+		req.RemoteAddr = "127.0.0.1:5555"
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		result := decodeEnvelope(t, rr.Body.Bytes())
+		if result["error"] == "slowDown" {
+			t.Fatalf("admin caller hit slowDown at iter %d (should be unlimited)", i)
+		}
 	}
 }
 

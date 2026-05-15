@@ -55,7 +55,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	// Collect matching offers by iterating through ledger entries
 	var offers []BookOffer
 
-	targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 		if ctx.Err() != nil {
 			return false
 		}

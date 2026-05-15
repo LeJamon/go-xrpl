@@ -203,7 +203,7 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 	// Collect trust lines by iterating through ledger entries
 	var lines []TrustLine
 
-	targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 		if ctx.Err() != nil {
 			return false
 		}
@@ -360,7 +360,7 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 	// Collect offers by iterating through ledger entries
 	var offers []AccountOffer
 
-	targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 		if ctx.Err() != nil {
 			return false
 		}
@@ -512,7 +512,7 @@ func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerI
 
 	// Iterate through ledger and find objects for this account
 	count := uint32(0)
-	targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 		if ctx.Err() != nil {
 			return false
 		}
@@ -632,7 +632,7 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 	// Collect payment channels by iterating through ledger entries
 	var channels []AccountChannel
 
-	targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 		if ctx.Err() != nil {
 			return false
 		}
@@ -773,7 +773,7 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 	receiveCurrencies := make(map[string]bool)
 	sendCurrencies := make(map[string]bool)
 
-	targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 		if ctx.Err() != nil {
 			return false
 		}
@@ -969,7 +969,7 @@ func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerInde
 	// Collect NFTs by iterating through ledger entries looking for NFTokenPage objects
 	var nfts []NFTInfo
 
-	targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 		if ctx.Err() != nil {
 			return false
 		}
@@ -1101,7 +1101,7 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 	assets := make(map[string][]CurrencyBalance)
 
 	// Iterate through all trust lines
-	targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 		if ctx.Err() != nil {
 			return false
 		}
@@ -1360,7 +1360,7 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 
 	// Iterate through trust lines and check NoRipple settings
 	problemCount := uint32(0)
-	targetLedger.ForEach(func(key [32]byte, entryData []byte) bool {
+	targetLedger.ForEachCtx(ctx, func(key [32]byte, entryData []byte) bool {
 		if ctx.Err() != nil {
 			return false
 		}

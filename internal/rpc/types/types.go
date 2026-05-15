@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 )
@@ -364,13 +365,56 @@ type SubscriptionConfig struct {
 	Password string `json:"url_password,omitempty"`
 }
 
-// Connection represents a WebSocket connection for subscription management
+// MaxConsecutiveDrops is the number of back-to-back send failures
+// after which a subscriber is considered terminally slow and is
+// disconnected via Connection.Disconnect. Mirrors rippled's
+// approach in Resource::Manager: warn-then-drop, but applied per
+// outbound queue rather than per inbound charge balance.
+const MaxConsecutiveDrops = 8
+
+// Connection represents a WebSocket connection for subscription
+// management. The struct is shared between subscription.Manager and
+// the WebSocket server so both observe the same drop counter and
+// disconnect callback — eliminates the double-bookkeeping pattern
+// flagged in the #428 audit.
 type Connection struct {
-	ID              string
-	Subscriptions   map[SubscriptionType]SubscriptionConfig
-	SendChannel     chan []byte
-	CloseChannel    chan struct{}
+	ID            string
+	Subscriptions map[SubscriptionType]SubscriptionConfig
+	SendChannel   chan []byte
+	CloseChannel  chan struct{}
+	// Disconnect is invoked when MaxConsecutiveDrops is reached. The
+	// WS layer populates this with its per-conn cancel func so a
+	// persistently slow client gets torn down once, in one place.
+	Disconnect      func()
 	URLSubscription string // URL for server-to-server subscriptions
+
+	// consecutiveDrops counts back-to-back send failures. Reset to 0
+	// on every successful TrySend.
+	consecutiveDrops atomic.Int32
+}
+
+// TrySend pushes data onto SendChannel without blocking. Returns true
+// when delivered; on failure increments the consecutive-drop counter
+// and, if the counter reaches MaxConsecutiveDrops, invokes Disconnect
+// exactly once. Same policy is used by every outbound path (broadcasts,
+// per-request responses) so HTTP and WebSocket no longer have
+// inconsistent slow-consumer handling.
+func (c *Connection) TrySend(data []byte) bool {
+	if c == nil || c.SendChannel == nil {
+		return false
+	}
+	select {
+	case c.SendChannel <- data:
+		c.consecutiveDrops.Store(0)
+		return true
+	default:
+		if c.consecutiveDrops.Add(1) >= MaxConsecutiveDrops {
+			if c.Disconnect != nil {
+				c.Disconnect()
+			}
+		}
+		return false
+	}
 }
 
 // WebSocketResponseOptions contains optional fields for WebSocket responses

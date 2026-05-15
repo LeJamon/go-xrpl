@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
+	"github.com/LeJamon/goXRPLd/internal/rpc/loadtrack"
 	"github.com/LeJamon/goXRPLd/internal/rpc/subscription"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
@@ -44,6 +46,7 @@ type WebSocketServer struct {
 	connLimiter         *ConnLimiter
 	services            *types.ServiceContainer
 	peerSource          atomic.Pointer[types.PeerSource]
+	loadTracker         *loadtrack.Tracker
 	// wg tracks per-connection goroutines (read loop, send pump, ping loop)
 	// so Close can join them on shutdown.
 	wg sync.WaitGroup
@@ -83,6 +86,14 @@ type WebSocketConnection struct {
 	// roleForRequest for RoleIdentified promotion when the connection
 	// came in through a secure_gateway peer.
 	user string
+	// legacy is the same logical connection viewed through the
+	// subscription-manager data model. Created at AddConnection and
+	// torn down at closeConnection — kept on the WS struct so the
+	// two-map invariant (subscription.Manager.Connections and
+	// WebSocketServer.connections always identify the same set) is
+	// enforced by a single attach/detach helper rather than
+	// independent map operations.
+	legacy *types.Connection
 }
 
 // NewWebSocketServer creates a new WebSocket server. The provided
@@ -106,6 +117,7 @@ func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer)
 		connections:    make(map[string]*WebSocketConnection),
 		timeout:        timeout,
 		services:       services,
+		loadTracker:    loadtrack.New(),
 	}
 }
 
@@ -155,18 +167,7 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		user:          userHeader(r),
 	}
 
-	// Register connection
-	ws.connectionsMutex.Lock()
-	ws.connections[wsConn.ID] = wsConn
-	ws.connectionsMutex.Unlock()
-
-	legacyConn := &types.Connection{
-		ID:            wsConn.ID,
-		Subscriptions: wsConn.subscriptions,
-		SendChannel:   wsConn.sendChannel,
-		CloseChannel:  wsConn.closeChannel,
-	}
-	ws.subscriptionManager.AddConnection(legacyConn)
+	ws.attachConnection(wsConn)
 
 	// Start connection handlers
 	ws.wg.Add(2)
@@ -622,6 +623,11 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *typ
 		return
 	}
 
+	if rpcErr := chargeLoad(ws.loadTracker, ctx, cmd.Command, handler, wsLog()); rpcErr != nil {
+		ws.sendError(wsConn, rpcErr, cmd.ID)
+		return
+	}
+
 	result, rpcErr := handler.Handle(ctx, cmd.Params)
 	if rpcErr != nil {
 		ws.sendError(wsConn, rpcErr, cmd.ID)
@@ -664,15 +670,22 @@ func (ws *WebSocketServer) sendResponseWithOptions(wsConn *WebSocketConnection, 
 		return
 	}
 
+	// Route through the shared TrySend so per-request response delivery
+	// and broadcast delivery use the same consecutive-drop counter and
+	// the same disconnect-on-N-drops threshold.
+	if wsConn.legacy != nil {
+		if !wsConn.legacy.TrySend(data) {
+			wsLog().Debug("WebSocket send dropped (slow consumer)", "connID", wsConn.ID)
+		}
+		return
+	}
+	// Test fixtures may build a wsConn without a legacy peer. Fall back
+	// to a non-blocking send so unit tests stay self-contained.
 	select {
 	case wsConn.sendChannel <- data:
-		// Response sent
 	case <-wsConn.ctx.Done():
-		// Connection closed
 	default:
-		// Channel full, close connection
 		wsLog().Warn("WebSocket send channel full", "connID", wsConn.ID)
-		ws.closeConnection(wsConn)
 	}
 }
 
@@ -706,16 +719,47 @@ func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpc
 		return
 	}
 
+	if wsConn.legacy != nil {
+		wsConn.legacy.TrySend(data)
+		return
+	}
 	select {
 	case wsConn.sendChannel <- data:
-		// Response sent
 	case <-wsConn.ctx.Done():
-		// Connection closed
 	default:
-		// Channel full, close connection
 		wsLog().Warn("WebSocket send channel full", "connID", wsConn.ID)
-		ws.closeConnection(wsConn)
 	}
+}
+
+// attachConnection is the single point at which a new WS connection
+// becomes visible to both the per-server connection map and the
+// subscription manager. Pairing this with detachConnection makes it
+// impossible for the two maps to drift on Add/Remove ordering — the
+// "duplicated connection state" concern flagged in the #428 audit.
+func (ws *WebSocketServer) attachConnection(wsConn *WebSocketConnection) {
+	legacy := &types.Connection{
+		ID:            wsConn.ID,
+		Subscriptions: wsConn.subscriptions,
+		SendChannel:   wsConn.sendChannel,
+		CloseChannel:  wsConn.closeChannel,
+		// Subscription-manager-driven disconnect routes back through
+		// the WS cancel func so a persistently slow subscriber is torn
+		// down via the same code path as a normal close.
+		Disconnect: wsConn.cancel,
+	}
+	wsConn.legacy = legacy
+	ws.connectionsMutex.Lock()
+	ws.connections[wsConn.ID] = wsConn
+	ws.connectionsMutex.Unlock()
+	ws.subscriptionManager.AddConnection(legacy)
+}
+
+// detachConnection is the inverse of attachConnection.
+func (ws *WebSocketServer) detachConnection(wsConn *WebSocketConnection) {
+	ws.connectionsMutex.Lock()
+	delete(ws.connections, wsConn.ID)
+	ws.connectionsMutex.Unlock()
+	ws.subscriptionManager.RemoveConnection(wsConn.ID)
 }
 
 // closeConnection closes a WebSocket connection
@@ -728,11 +772,7 @@ func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 	wsConn.pathFindSession = nil
 	wsConn.mutex.Unlock()
 
-	ws.connectionsMutex.Lock()
-	delete(ws.connections, wsConn.ID)
-	ws.connectionsMutex.Unlock()
-
-	ws.subscriptionManager.RemoveConnection(wsConn.ID)
+	ws.detachConnection(wsConn)
 
 	// Release per-port connection limiter slot
 	if ws.connLimiter != nil && wsConn.portCtx != nil {
@@ -781,11 +821,15 @@ func getWebSocketClientIP(conn *websocket.Conn) string {
 	return host
 }
 
-// RegisterAllMethods registers all RPC methods for WebSocket use
+// RegisterAllMethods registers every RPC method available on the WebSocket
+// endpoint: the universal HTTP/WS set plus the WebSocket-only commands
+// (subscribe / unsubscribe). The HTTP server intentionally omits the
+// WebSocket-only set so clients hitting those over HTTP get
+// methodNotFound rather than "method exists, returns notSupported"
+// (#428 audit, P2).
 func (ws *WebSocketServer) RegisterAllMethods() {
-	// Use the same method registration as HTTP server
-	server := &Server{registry: ws.methodRegistry}
-	server.registerAllMethods()
+	handlers.RegisterAll(ws.methodRegistry)
+	handlers.RegisterWebSocketOnly(ws.methodRegistry)
 }
 
 // GetSubscriptionManager returns the subscription manager for event publishing

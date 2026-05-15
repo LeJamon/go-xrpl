@@ -211,7 +211,7 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 	var lastKey [32]byte
 	passedMarker := !hasMarker
 
-	err = targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+	err = targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 		if ctx.Err() != nil {
 			return false
 		}

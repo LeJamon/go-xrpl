@@ -58,10 +58,6 @@ func RegisterAll(registry *types.MethodRegistry) {
 	registry.Register("channel_authorize", &ChannelAuthorizeMethod{})
 	registry.Register("channel_verify", &ChannelVerifyMethod{})
 
-	// HTTP returns notSupported; WebSocket short-circuits before dispatch.
-	registry.Register("subscribe", &SubscribeMethod{})
-	registry.Register("unsubscribe", &UnsubscribeMethod{})
-
 	registry.Register("json", &JsonMethod{})
 
 	registry.Register("wallet_propose", &WalletProposeMethod{})
@@ -95,4 +91,14 @@ func RegisterAll(registry *types.MethodRegistry) {
 	registry.Register("amm_info", &AMMInfoMethod{})
 	registry.Register("vault_info", &VaultInfoMethod{})
 	registry.Register("get_aggregate_price", &GetAggregatePriceMethod{})
+}
+
+// RegisterWebSocketOnly registers commands that only make sense on a
+// persistent WebSocket session. The HTTP server intentionally does NOT
+// call this — clients hitting subscribe / unsubscribe over HTTP get
+// methodNotFound (matching rippled), which is a clearer discovery
+// signal than "method exists, returns notSupported".
+func RegisterWebSocketOnly(registry *types.MethodRegistry) {
+	registry.Register("subscribe", &SubscribeMethod{})
+	registry.Register("unsubscribe", &UnsubscribeMethod{})
 }

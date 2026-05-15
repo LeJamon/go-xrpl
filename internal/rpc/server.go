@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/goXRPLd/config"
+	"github.com/LeJamon/goXRPLd/internal/rpc/loadtrack"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
 )
@@ -29,11 +30,19 @@ const MaxRequestBytes = 1_000_000
 func rpcLog() xrpllog.Logger { return xrpllog.Named(xrpllog.PartitionRPC) }
 
 // Server handles HTTP JSON-RPC requests using XRPL format
+// LoadCharger is the optional interface a MethodHandler may implement
+// to declare its load bucket. Handlers that don't implement it pay
+// loadtrack.LoadReference (rippled feeReferenceRPC parity).
+type LoadCharger interface {
+	LoadKind() loadtrack.LoadKind
+}
+
 type Server struct {
-	registry   *types.MethodRegistry
-	timeout    time.Duration
-	peerSource atomic.Pointer[types.PeerSource]
-	services   *types.ServiceContainer
+	registry    *types.MethodRegistry
+	timeout     time.Duration
+	peerSource  atomic.Pointer[types.PeerSource]
+	services    *types.ServiceContainer
+	loadTracker *loadtrack.Tracker
 
 	// corsAllowedOrigins, if non-empty, restricts Access-Control-Allow-Origin
 	// to the listed origins (set via SetCORSAllowedOrigins). Empty means
@@ -112,9 +121,10 @@ func (s *Server) resolveCORSOrigin(requestOrigin string) string {
 // container may be nil for test contexts that exercise routing only.
 func NewServer(timeout time.Duration, services *types.ServiceContainer) *Server {
 	server := &Server{
-		registry: types.NewMethodRegistry(),
-		timeout:  timeout,
-		services: services,
+		registry:    types.NewMethodRegistry(),
+		timeout:     timeout,
+		services:    services,
+		loadTracker: loadtrack.New(),
 	}
 
 	// Register all RPC methods
@@ -384,7 +394,34 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types
 		}
 	}
 
+	if err := chargeLoad(s.loadTracker, ctx, method, handler, rpcLog()); err != nil {
+		return nil, err
+	}
 	return handler.Handle(ctx, params)
+}
+
+// chargeLoad applies the per-IP load charge for one RPC dispatch.
+// Returns rpcSLOW_DOWN when the client crosses loadtrack.DropThreshold;
+// returns nil (and logs at Info on warn) otherwise. Admin / identified
+// callers bypass tracking entirely, matching rippled isUnlimited().
+func chargeLoad(tracker *loadtrack.Tracker, ctx *types.RpcContext, method string, handler types.MethodHandler, log xrpllog.Logger) *types.RpcError {
+	if tracker == nil || ctx.Unlimited {
+		return nil
+	}
+	kind := loadtrack.LoadReference
+	if c, ok := handler.(LoadCharger); ok {
+		kind = c.LoadKind()
+	}
+	switch tracker.Charge(ctx.ClientIP, kind) {
+	case loadtrack.OutcomeDrop:
+		log.Warn("rpc dropped: client over load threshold",
+			"client", ctx.ClientIP, "method", method, "balance", tracker.Balance(ctx.ClientIP))
+		return types.RpcErrorSlowDown("Slow down. Server is too busy for this client.")
+	case loadtrack.OutcomeWarn:
+		log.Info("rpc client over warn threshold",
+			"client", ctx.ClientIP, "method", method, "balance", tracker.Balance(ctx.ClientIP))
+	}
+	return nil
 }
 
 // writeXrplResponse writes an XRPL format JSON-RPC response

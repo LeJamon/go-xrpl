@@ -266,11 +266,14 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 	return nil
 }
 
-// Broadcasts snapshot the set of subscriber send channels under sm.mu and
-// then send after the lock has been released, so a slow consumer never
-// stalls HandleSubscribe / HandleUnsubscribe / RemoveConnection or other
-// broadcasts (#428 race fix). We never read conn.Subscriptions outside
-// sm.mu.
+// Broadcasts snapshot subscriber connections under sm.mu, then send
+// after the lock is released — a slow consumer never stalls
+// HandleSubscribe / HandleUnsubscribe / RemoveConnection or other
+// broadcasts (#428 race fix). Delivery uses types.Connection.TrySend
+// so the per-connection consecutive-drop counter is updated and the
+// connection is disconnected after MaxConsecutiveDrops back-to-back
+// failures — unifies the slow-consumer policy across all outbound
+// paths.
 
 // BroadcastToStream sends a message to every connection subscribed to a
 // stream.
@@ -278,27 +281,24 @@ func (sm *Manager) BroadcastToStream(streamType types.SubscriptionType, data []b
 	deliver(sm.collectStreamTargets(streamType), data)
 }
 
-func (sm *Manager) collectStreamTargets(streamType types.SubscriptionType) []chan []byte {
+func (sm *Manager) collectStreamTargets(streamType types.SubscriptionType) []*types.Connection {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	if len(sm.Connections) == 0 {
 		return nil
 	}
-	targets := make([]chan []byte, 0, len(sm.Connections))
+	targets := make([]*types.Connection, 0, len(sm.Connections))
 	for _, conn := range sm.Connections {
 		if _, ok := conn.Subscriptions[streamType]; ok {
-			targets = append(targets, conn.SendChannel)
+			targets = append(targets, conn)
 		}
 	}
 	return targets
 }
 
-func deliver(targets []chan []byte, data []byte) {
-	for _, ch := range targets {
-		select {
-		case ch <- data:
-		default:
-		}
+func deliver(targets []*types.Connection, data []byte) {
+	for _, c := range targets {
+		c.TrySend(data)
 	}
 }
 
@@ -314,7 +314,7 @@ func (sm *Manager) BroadcastToAccountsProposed(data []byte, accounts []string) {
 	deliver(sm.collectAccountTargets("accounts_proposed", accounts), data)
 }
 
-func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts []string) []chan []byte {
+func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts []string) []*types.Connection {
 	if len(accounts) == 0 {
 		return nil
 	}
@@ -327,7 +327,7 @@ func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts
 	if len(sm.Connections) == 0 {
 		return nil
 	}
-	var targets []chan []byte
+	var targets []*types.Connection
 	for _, conn := range sm.Connections {
 		cfg, ok := conn.Subscriptions[stream]
 		if !ok {
@@ -335,7 +335,7 @@ func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts
 		}
 		for _, subAcc := range cfg.Accounts {
 			if accountSet[subAcc] {
-				targets = append(targets, conn.SendChannel)
+				targets = append(targets, conn)
 				break
 			}
 		}
@@ -349,13 +349,13 @@ func (sm *Manager) BroadcastToOrderBook(data []byte, takerGets, takerPays types.
 	deliver(sm.collectOrderBookTargets(takerGets, takerPays), data)
 }
 
-func (sm *Manager) collectOrderBookTargets(takerGets, takerPays types.CurrencySpec) []chan []byte {
+func (sm *Manager) collectOrderBookTargets(takerGets, takerPays types.CurrencySpec) []*types.Connection {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	if len(sm.Connections) == 0 {
 		return nil
 	}
-	var targets []chan []byte
+	var targets []*types.Connection
 	for _, conn := range sm.Connections {
 		cfg, ok := conn.Subscriptions[types.SubOrderBooks]
 		if !ok || cfg.TakerGets == nil || cfg.TakerPays == nil {
@@ -365,7 +365,7 @@ func (sm *Manager) collectOrderBookTargets(takerGets, takerPays types.CurrencySp
 			cfg.TakerGets.Issuer == takerGets.Issuer &&
 			cfg.TakerPays.Currency == takerPays.Currency &&
 			cfg.TakerPays.Issuer == takerPays.Issuer {
-			targets = append(targets, conn.SendChannel)
+			targets = append(targets, conn)
 		}
 	}
 	return targets
