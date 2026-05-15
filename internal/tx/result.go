@@ -247,9 +247,6 @@ const (
 )
 
 // resultNames maps every Result code to its canonical rippled string.
-// String() does a single map lookup against this table; the previous
-// 377-line switch had bitrot risk (one entry would silently get out of
-// sync with the rest). New Result constants must add an entry here.
 //
 // Note on temCANNOT_PREAUTH_SELF: the Go constant is TemCAN_NOT_PREAUTH_SELF
 // (with the extra underscore) but the canonical rippled identifier is
