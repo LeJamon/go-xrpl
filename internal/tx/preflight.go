@@ -41,8 +41,6 @@ func (e *Engine) preflight(tx Transaction) Result {
 
 	// preflight2 — tx-type-specific validation
 	if err := tx.Validate(); err != nil {
-		// Try to extract a specific TER code from the error message
-		// Many Validate() implementations include the TER code as a prefix (e.g., "temREDUNDANT: message")
 		return parseValidationError(err)
 	}
 
@@ -196,12 +194,9 @@ func (e *Engine) verifySignatures(tx Transaction) Result {
 	return TesSUCCESS
 }
 
-// parseValidationError extracts a TER result code from a validation error.
-// Validators that want a specific TER return *ResultError via tx.Errorf; the
-// legacy "code: message" string-prefix fallback was deleted with the
-// finishing pass on the ResultError migration. Any unstructured error
-// reaching here is mapped to TemINVALID as a conservative default — callers
-// that need a specific TER must use tx.Errorf.
+// parseValidationError maps a Validate() error to a TER result code.
+// Validators that need a specific code return *ResultError via tx.Errorf;
+// anything unstructured falls through to TemINVALID.
 func parseValidationError(err error) Result {
 	var re *ResultError
 	if errors.As(err, &re) {

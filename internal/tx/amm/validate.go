@@ -4,7 +4,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
-// validateAMMAmount validates an AMM amount.
 // Reference: rippled invalidAMMAmount() in AMMCore.cpp:102-103 — temBAD_AMOUNT
 // when amount is zero (with validZero=false) or negative.
 func validateAMMAmount(amt tx.Amount) error {

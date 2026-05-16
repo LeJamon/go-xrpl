@@ -185,11 +185,9 @@ type Common struct {
 	PresentFields map[string]bool `json:"-"`
 }
 
-// Validate validates the common fields. The engine's preflightCommonFields
-// already catches these before tx.Validate() runs, but every BaseTx.Validate
-// override chains here, so keep the codes typed so direct callers
-// (e.g. unit tests, parse.go) get the right TER without relying on
-// string-prefix matching.
+// Validate validates the common fields. preflightCommonFields catches these
+// before tx.Validate() runs, but unit tests and parse.go call Common.Validate
+// directly, so the codes need to be typed for those paths.
 func (c *Common) Validate() error {
 	if c.Account == "" {
 		return Errorf(TemBAD_SRC_ACCOUNT, "Account is required")
