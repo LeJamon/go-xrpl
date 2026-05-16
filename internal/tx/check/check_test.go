@@ -249,7 +249,7 @@ func TestCheckCancelValidation(t *testing.T) {
 				CheckID: "",
 			},
 			expectError: true,
-			errorMsg:    "CheckID is required",
+			errorMsg:    "temMALFORMED: CheckID is required",
 		},
 		{
 			name: "missing account",

@@ -197,11 +197,11 @@ func (e *Engine) verifySignatures(tx Transaction) Result {
 }
 
 // parseValidationError extracts a TER result code from a validation error.
-// Every Validate() in internal/tx/ now returns *ResultError via tx.Errorf;
-// the legacy "code: message" string-prefix fallback was deleted with the
-// finishing pass on the ResultError migration. Any unstructured error here
-// is a bug, so we conservatively map it to TemINVALID and let the engine
-// reject the tx.
+// Validators that want a specific TER return *ResultError via tx.Errorf; the
+// legacy "code: message" string-prefix fallback was deleted with the
+// finishing pass on the ResultError migration. Any unstructured error
+// reaching here is mapped to TemINVALID as a conservative default — callers
+// that need a specific TER must use tx.Errorf.
 func parseValidationError(err error) Result {
 	var re *ResultError
 	if errors.As(err, &re) {
