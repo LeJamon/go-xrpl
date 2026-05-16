@@ -123,7 +123,7 @@ func TestTrustSetValidation(t *testing.T) {
 				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "USD", "rGateway"),
 			},
 			expectError: true,
-			errorMsg:    "Account is required",
+			errorMsg:    "temBAD_SRC_ACCOUNT: Account is required",
 		},
 
 		{

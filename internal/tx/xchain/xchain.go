@@ -1,8 +1,6 @@
 package xchain
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -50,7 +48,7 @@ func (x *XChainCreateBridge) Validate() error {
 	}
 
 	if x.SignatureReward.IsZero() {
-		return errors.New("SignatureReward is required")
+		return tx.Errorf(tx.TemMALFORMED, "SignatureReward is required")
 	}
 
 	return nil
@@ -142,7 +140,7 @@ func (x *XChainCreateClaimID) Validate() error {
 	}
 
 	if x.OtherChainSource == "" {
-		return errors.New("OtherChainSource is required")
+		return tx.Errorf(tx.TemMALFORMED, "OtherChainSource is required")
 	}
 
 	return nil
@@ -193,7 +191,7 @@ func (x *XChainCommit) Validate() error {
 	}
 
 	if x.Amount.IsZero() {
-		return errors.New("Amount is required")
+		return tx.Errorf(tx.TemBAD_AMOUNT, "Amount is required")
 	}
 
 	return nil
@@ -248,11 +246,11 @@ func (x *XChainClaim) Validate() error {
 	}
 
 	if x.Destination == "" {
-		return errors.New("Destination is required")
+		return tx.Errorf(tx.TemMALFORMED, "Destination is required")
 	}
 
 	if x.Amount.IsZero() {
-		return errors.New("Amount is required")
+		return tx.Errorf(tx.TemBAD_AMOUNT, "Amount is required")
 	}
 
 	return nil
@@ -304,11 +302,11 @@ func (x *XChainAccountCreateCommit) Validate() error {
 	}
 
 	if x.Destination == "" {
-		return errors.New("Destination is required")
+		return tx.Errorf(tx.TemMALFORMED, "Destination is required")
 	}
 
 	if x.Amount.IsZero() {
-		return errors.New("Amount is required")
+		return tx.Errorf(tx.TemBAD_AMOUNT, "Amount is required")
 	}
 
 	return nil
@@ -376,23 +374,23 @@ func (x *XChainAddClaimAttestation) Validate() error {
 	}
 
 	if x.OtherChainSource == "" {
-		return errors.New("OtherChainSource is required")
+		return tx.Errorf(tx.TemMALFORMED, "OtherChainSource is required")
 	}
 
 	if x.AttestationRewardAccount == "" {
-		return errors.New("AttestationRewardAccount is required")
+		return tx.Errorf(tx.TemMALFORMED, "AttestationRewardAccount is required")
 	}
 
 	if x.AttestationSignerAccount == "" {
-		return errors.New("AttestationSignerAccount is required")
+		return tx.Errorf(tx.TemMALFORMED, "AttestationSignerAccount is required")
 	}
 
 	if x.PublicKey == "" {
-		return errors.New("PublicKey is required")
+		return tx.Errorf(tx.TemMALFORMED, "PublicKey is required")
 	}
 
 	if x.Signature == "" {
-		return errors.New("Signature is required")
+		return tx.Errorf(tx.TemMALFORMED, "Signature is required")
 	}
 
 	return nil
@@ -462,11 +460,11 @@ func (x *XChainAddAccountCreateAttestation) Validate() error {
 	}
 
 	if x.OtherChainSource == "" {
-		return errors.New("OtherChainSource is required")
+		return tx.Errorf(tx.TemMALFORMED, "OtherChainSource is required")
 	}
 
 	if x.Destination == "" {
-		return errors.New("Destination is required")
+		return tx.Errorf(tx.TemMALFORMED, "Destination is required")
 	}
 
 	return nil

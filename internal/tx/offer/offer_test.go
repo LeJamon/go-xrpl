@@ -88,7 +88,7 @@ func TestOfferCreateValidation(t *testing.T) {
 				TakerPays: iouAmount(100, "USD", "rGateway"),
 			},
 			expectError: true,
-			errorMsg:    "Account is required",
+			errorMsg:    "temBAD_SRC_ACCOUNT: Account is required",
 		},
 		// Note: XRP-to-XRP validation is done in Preflight(), not Validate()
 		// This test is commented out because Validate() only checks required fields
@@ -322,7 +322,7 @@ func TestOfferCancelValidation(t *testing.T) {
 				OfferSequence: 12345,
 			},
 			expectError: true,
-			errorMsg:    "Account is required",
+			errorMsg:    "temBAD_SRC_ACCOUNT: Account is required",
 		},
 	}
 
