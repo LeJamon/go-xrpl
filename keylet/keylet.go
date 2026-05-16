@@ -295,10 +295,8 @@ func currencyToBytes(currency string) [20]byte {
 	return result
 }
 
-// noCurrency mirrors rippled's noCurrency() sentinel — base_uint<160>{1},
-// stored big-endian so only the last byte is 0x01. Used as the parse-failure
-// fallback for currencyToBytes, distinct from xrpCurrency() = all-zeros.
-// Reference: rippled UintTypes.cpp:126-130.
+// noCurrency mirrors rippled's noCurrency() sentinel (UintTypes.cpp:126-130) —
+// base_uint<160>{1} stored big-endian, distinct from xrpCurrency() = all-zeros.
 var noCurrency = [20]byte{19: 0x01}
 
 // BookDir returns the keylet for an order book directory (base, without quality).
