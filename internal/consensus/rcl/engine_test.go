@@ -2395,28 +2395,33 @@ func TestAcceptLedger_NoCloseTimeConsensus_DeterministicFallback(t *testing.T) {
 	}
 }
 
-// TestAcceptLedger_WrongLedger_NoEmit pins the rippled-faithful
+// TestAcceptLedger_WrongLedger_EmitsPartial pins the rippled-faithful
 // validation gate: when mode==WrongLedger and result==Success,
-// acceptLedger MUST run end-to-end (build, store, advance phase,
-// fire auto-advance hooks) but MUST NOT broadcast a validation.
+// acceptLedger MUST run end-to-end (build, store, advance phase) AND
+// broadcast a PARTIAL (Full=false) validation.
 //
-// Mirrors rippled doAccept (RCLConsensus.cpp:464-602). Lines 478,
-// 532-545, 601 run unconditionally; only the validation-emission
-// branch (587-594) is gated via `validating_ = isCompatible(...)`.
-// In WrongLedger mode our locally-built ledger is on a side chain,
-// so isCompatible would return false → no validation. But the build
-// itself proceeds, the round transitions out of Establish, and
-// auto-advance starts the next round so checkLedger gets a chance
-// to detect the mismatch and trigger handleWrongLedger. Suppressing
-// the entire acceptLedger call here would wedge the engine in
-// phase==Establish (#401, opposite-direction regression).
+// Mirrors rippled doAccept (RCLConsensus.cpp:464-602). The emission
+// branch at 591-594 has no mode gate; only validating_ (config), the
+// isCompatible check on the BUILT ledger, !consensusFail, and
+// canValidateSeq. The mode==proposing test at 477 controls the Full
+// flag passed to validate() (851), not whether emission happens.
+//
+// areCompatible (View.cpp:797-857) only flags a build incompatible if
+// it conflicts with the validated chain at the SAME or PRECEDING seq —
+// not when it sits at a higher seq with a different sibling-hash on
+// the side chain. So a wrongLedger close that builds the NEXT seq
+// from our local LCL still passes isCompatible and emits a partial.
+//
+// Without the partial emission, peers' validator-presence detectors
+// mark our key `offline` (RCLValidations) and quorum becomes
+// mathematically unreachable in any mixed UNL — #451.
 //
 // Properties pinned:
-//  1. No validation broadcast (Frankenstein-hash safety preserved).
-//  2. Phase advances out of Establish (round is NOT stuck).
-//  3. Re-running acceptLedger after mode is restored to Proposing
-//     emits a validation (gate is mode-conditional, not permanent).
-func TestAcceptLedger_WrongLedger_NoEmit(t *testing.T) {
+//  1. Exactly one validation is broadcast.
+//  2. The validation has Full=false (partial — does not count toward
+//     peer quorum, but keeps the validator visible to peers).
+//  3. Phase advances out of Establish (round is NOT stuck).
+func TestAcceptLedger_WrongLedger_EmitsPartial(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.validator = true
 	adaptor.opMode = consensus.OpModeFull
@@ -2448,36 +2453,27 @@ func TestAcceptLedger_WrongLedger_NoEmit(t *testing.T) {
 	if phaseAfter == consensus.PhaseEstablish {
 		t.Fatalf("wrongLedger acceptLedger must NOT leave the round " +
 			"stuck in Establish (rippled doAccept advances it " +
-			"unconditionally; only validation emission is gated). " +
-			"This regression wedges the engine forever.")
+			"unconditionally). This regression wedges the engine.")
 	}
 
 	adaptor.mu.RLock()
-	emittedDuringWrong := len(adaptor.validationsBroadcast)
-	adaptor.mu.RUnlock()
-	if emittedDuringWrong != 0 {
-		t.Fatalf("wrongLedger acceptLedger must NOT broadcast a "+
-			"validation; got %d emissions — Frankenstein hash "+
-			"would be flagged Byzantine by peers (#401)",
-			emittedDuringWrong)
+	emitted := len(adaptor.validationsBroadcast)
+	var emittedFull bool
+	if emitted > 0 {
+		emittedFull = adaptor.validationsBroadcast[0].Full
 	}
-
-	// Restoring mode and calling acceptLedger again must proceed
-	// normally (Success path emits one validation). This pins that
-	// the gate is mode-conditional, not a permanent kill switch.
-	engine.mu.Lock()
-	engine.setMode(consensus.ModeProposing)
-	engine.setPhase(consensus.PhaseEstablish)
-	engine.acceptLedger(consensus.ResultSuccess)
-	engine.mu.Unlock()
-
-	adaptor.mu.RLock()
-	emittedAfterRestore := len(adaptor.validationsBroadcast)
 	adaptor.mu.RUnlock()
-	if emittedAfterRestore != 1 {
-		t.Fatalf("post-restore acceptLedger must emit exactly one "+
-			"validation; got %d — gate is leaking past the "+
-			"mode==wrongLedger condition", emittedAfterRestore)
+
+	if emitted != 1 {
+		t.Fatalf("wrongLedger acceptLedger must broadcast exactly one "+
+			"partial validation; got %d emissions — peers mark us "+
+			"`offline` without this signal and quorum stalls (#451)",
+			emitted)
+	}
+	if emittedFull {
+		t.Fatalf("wrongLedger emission must be PARTIAL (Full=false); " +
+			"a Full validation in wrongLedger would count toward " +
+			"peer quorum for a possibly-divergent ledger")
 	}
 }
 

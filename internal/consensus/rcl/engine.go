@@ -2428,24 +2428,33 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		Timestamp: e.adaptor.Now(),
 	})
 
-	// Mirror rippled's emission gate at RCLConsensus.cpp:587-594:
+	// Mirror rippled's emission gate at RCLConsensus.cpp:591-594:
 	//   if (validating_ && !consensusFail && canValidateSeq(seq)) validate(...)
 	//
-	// validating_ proxy: WrongLedger means our built ledger isn't on the
-	//   validated chain, so emitting would attest to a side chain (BBD).
+	// validating_: we are configured as a validator.
 	// consensusFail: result != ResultSuccess (rippled's Expired path).
 	// canValidateSeq: prevents a second validation for a seq we already
 	//   validated; without it a divergent close + reacquire races two
 	//   validations and BBD flags us as Conflicting (#401).
 	//
-	// Mode only controls the Full flag inside sendValidation; switchedLedger
-	// still emits a partial (Full=false) — peers rely on these as early
-	// liveness signals before full quorum materializes.
+	// Mode is intentionally NOT part of this gate. Rippled emits a
+	// validation here regardless of ConsensusMode — wrongLedger,
+	// switchedLedger, observing and proposing all reach this branch
+	// (RCLConsensus.cpp:478 only uses mode to derive haveCorrectLCL for
+	// notify/censorship paths, not the emission predicate). The Full
+	// flag inside sendValidation (set from `mode == ModeProposing`) is
+	// what controls whether peers count the validation toward quorum:
+	// partials emitted in non-proposing modes act as a liveness signal
+	// so rippled's validator-presence detector doesn't mark us
+	// `offline` while we recover, but they don't influence quorum until
+	// we're back in ModeProposing. Suppressing emission entirely while
+	// in wrongLedger (the prior behavior) made the node invisible to
+	// peers under mode thrash and caused permanent quorum stalls — #451.
 	consensusFail := result != consensus.ResultSuccess
 	wrongLCL := e.mode == consensus.ModeWrongLedger
 	isValidator := e.adaptor.IsValidator()
 	canValidate := e.peekCanValidateSeqLocked(newLedger.Seq())
-	willEmit := isValidator && !consensusFail && !wrongLCL && canValidate
+	willEmit := isValidator && !consensusFail && canValidate
 
 	newLedgerID := newLedger.ID()
 	hashShort := fmt.Sprintf("%x", newLedgerID[:8])
@@ -2461,7 +2470,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		"can_validate_seq", canValidate,
 		"our_last_validated_seq", e.ourLastValidatedSeq,
 		"mode", e.mode.String(),
-		"decision", emitDecision(willEmit, isValidator, consensusFail, wrongLCL, canValidate),
+		"decision", emitDecision(willEmit, isValidator, consensusFail, canValidate),
 	)
 
 	if willEmit {
@@ -3073,7 +3082,10 @@ func roundCloseTime(closeTime time.Time, resolution time.Duration) time.Time {
 }
 
 // emitDecision labels which arm of the validation gate fired.
-func emitDecision(emit, isValidator, consensusFail, wrongLCL, canValidate bool) string {
+// wrongLedger mode is intentionally NOT a skip reason: rippled emits
+// a partial validation in that mode (#451). The wrong_lcl field is
+// still logged separately so operators can see the recovery context.
+func emitDecision(emit, isValidator, consensusFail, canValidate bool) string {
 	if emit {
 		return "emit"
 	}
@@ -3082,9 +3094,6 @@ func emitDecision(emit, isValidator, consensusFail, wrongLCL, canValidate bool) 
 	}
 	if consensusFail {
 		return "skip:consensus-fail"
-	}
-	if wrongLCL {
-		return "skip:wrong-lcl"
 	}
 	if !canValidate {
 		return "skip:already-validated-seq"
