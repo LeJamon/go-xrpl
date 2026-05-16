@@ -113,7 +113,7 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 		// the "discard sandbox + replay deletions" steps.
 		// Reference: rippled applySteps.cpp — preclaim tec with likelyToClaimFee=true
 		// still enters Transactor::operator() which always applies fee/sequence.
-		if r := e.commitPreclaimTec(tx, txHash, fee, metadata); r != TesSUCCESS {
+		if r := e.commitPreclaimTec(ctx, tx, txHash, fee, metadata); r != TesSUCCESS {
 			return ApplyResult{
 				Result:  r,
 				Applied: false,
@@ -262,7 +262,7 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) 
 // payDelegatedFeeOnTable) so the fee/seq commit semantics stay in lockstep.
 // Reference: rippled applySteps.cpp — likelyToClaimFee tec still enters
 // Transactor::operator() which calls reset(fee) before returning.
-func (e *Engine) commitPreclaimTec(tx Transaction, txHash [32]byte, fee uint64, metadata *Metadata) Result {
+func (e *Engine) commitPreclaimTec(ctx context.Context, tx Transaction, txHash [32]byte, fee uint64, metadata *Metadata) Result {
 	common := tx.GetCommon()
 	accountID, _ := state.DecodeAccountID(common.Account)
 	accountKey := keylet.Account(accountID)
@@ -286,6 +286,7 @@ func (e *Engine) commitPreclaimTec(tx Transaction, txHash [32]byte, fee uint64, 
 		isTicket:    common.TicketSequence != nil,
 		txHash:      txHash,
 		metadata:    metadata,
+		ctx:         ctx,
 	}
 
 	tecTable := NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, e.rules())

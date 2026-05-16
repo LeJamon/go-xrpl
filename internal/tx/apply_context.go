@@ -44,17 +44,10 @@ type ApplyContext struct {
 	Log xrpllog.Logger
 
 	// Ctx is the request-scoped context for this transaction. Long-running
-	// operations should respect its Done channel. Use Context() for nil-safe
-	// access.
+	// operations should respect its Done channel. Set by the engine at every
+	// construction site; callers that build an ApplyContext directly must
+	// pass a non-nil context.
 	Ctx context.Context
-}
-
-// Context returns ctx.Ctx, falling back to context.Background() when unset.
-func (ctx *ApplyContext) Context() context.Context {
-	if ctx.Ctx == nil {
-		return context.Background()
-	}
-	return ctx.Ctx
 }
 
 // AccountReserve calculates the total reserve required for an account with the given owner count.
