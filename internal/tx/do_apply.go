@@ -1,6 +1,8 @@
 package tx
 
 import (
+	"context"
+
 	"github.com/LeJamon/goXRPLd/amendment"
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
@@ -25,12 +27,13 @@ type applyState struct {
 	txHash              [32]byte
 	metadata            *Metadata
 	table               *ApplyStateTable
+	ctx                 context.Context
 }
 
 // doApply applies the transaction to the ledger
 // For tec results, only fee/sequence changes are applied; transaction effects are discarded.
 // Reference: rippled Transactor.cpp - tec results claim fee but don't apply effects
-func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Result {
+func (e *Engine) doApply(ctx context.Context, tx Transaction, metadata *Metadata, txHash [32]byte) Result {
 	common := tx.GetCommon()
 	accountID, _ := state.DecodeAccountID(common.Account)
 	accountKey := keylet.Account(accountID)
@@ -71,6 +74,7 @@ func (e *Engine) doApply(tx Transaction, metadata *Metadata, txHash [32]byte) Re
 		txHash:              txHash,
 		metadata:            metadata,
 		table:               table,
+		ctx:                 ctx,
 	}
 
 	// payFee + consumeSeqProxy + AccountTxnID threading: apply pre-doApply()
@@ -310,6 +314,7 @@ func (e *Engine) invokeApply(st *applyState) Result {
 		Engine:           e,
 		SignedWithMaster: sigWithMaster,
 		Log:              e.logger,
+		Ctx:              st.ctx,
 	}
 
 	if appliable, ok := st.tx.(Appliable); ok {
@@ -400,6 +405,7 @@ func (e *Engine) applyTecRecovery(st *applyState, result Result) Result {
 				Metadata:  st.metadata,
 				Engine:    e,
 				Log:       e.logger,
+				Ctx:       st.ctx,
 			}
 			tecApplier.ApplyOnTec(tecCtx)
 		}

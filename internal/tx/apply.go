@@ -1,6 +1,7 @@
 package tx
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 
@@ -13,7 +14,13 @@ import (
 // Pseudo-transactions (Amendment, SetFee, UNLModify) are rejected here;
 // use ApplyPseudo() for pseudo-transaction application (e.g., during block processing).
 // Reference: rippled passesLocalChecks() rejects pseudo-transactions submitted by users.
+//
+// Equivalent to ApplyWithContext(context.Background(), tx).
 func (e *Engine) Apply(tx Transaction) ApplyResult {
+	return e.ApplyWithContext(context.Background(), tx)
+}
+
+func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResult {
 	// Reject pseudo-transactions — they cannot be submitted by users.
 	// Reference: rippled passesLocalChecks() in NetworkOPs.cpp
 	txType := tx.TxType()
@@ -96,7 +103,7 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 	}
 
 	if result.IsSuccess() {
-		result = e.doApply(tx, metadata, txHash)
+		result = e.doApply(ctx, tx, metadata, txHash)
 	} else if result.IsTec() {
 		// Tec from preclaim: fee must still be deducted and sequence consumed,
 		// but doApply() is NOT called — the transaction has no side effects.
@@ -106,7 +113,7 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 		// the "discard sandbox + replay deletions" steps.
 		// Reference: rippled applySteps.cpp — preclaim tec with likelyToClaimFee=true
 		// still enters Transactor::operator() which always applies fee/sequence.
-		if r := e.commitPreclaimTec(tx, txHash, fee, metadata); r != TesSUCCESS {
+		if r := e.commitPreclaimTec(ctx, tx, txHash, fee, metadata); r != TesSUCCESS {
 			return ApplyResult{
 				Result:  r,
 				Applied: false,
@@ -161,8 +168,14 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 // This is the public entry point for pseudo-transaction application, used by the block
 // processor and test environment. Unlike Apply(), this does not reject pseudo-transactions.
 // Reference: rippled Change.cpp — pseudo-txs are applied during consensus, not user submission.
+//
+// Equivalent to ApplyPseudoWithContext(context.Background(), tx).
 func (e *Engine) ApplyPseudo(tx Transaction) ApplyResult {
-	return e.applyPseudoTransaction(tx)
+	return e.applyPseudoTransaction(context.Background(), tx)
+}
+
+func (e *Engine) ApplyPseudoWithContext(ctx context.Context, tx Transaction) ApplyResult {
+	return e.applyPseudoTransaction(ctx, tx)
 }
 
 // applyPseudoTransaction handles pseudo-transactions (Amendment, SetFee, UNLModify).
@@ -172,7 +185,7 @@ func (e *Engine) ApplyPseudo(tx Transaction) ApplyResult {
 // - No signature
 // - No sequence number checks
 // Reference: rippled Change.cpp
-func (e *Engine) applyPseudoTransaction(tx Transaction) ApplyResult {
+func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) ApplyResult {
 	// Compute transaction hash
 	txHash, err := computeTransactionHash(tx)
 	if err != nil {
@@ -201,6 +214,7 @@ func (e *Engine) applyPseudoTransaction(tx Transaction) ApplyResult {
 		Metadata: metadata,
 		Engine:   e,
 		Log:      e.logger,
+		Ctx:      reqCtx,
 	}
 
 	// Apply the transaction
@@ -248,7 +262,7 @@ func (e *Engine) applyPseudoTransaction(tx Transaction) ApplyResult {
 // payDelegatedFeeOnTable) so the fee/seq commit semantics stay in lockstep.
 // Reference: rippled applySteps.cpp — likelyToClaimFee tec still enters
 // Transactor::operator() which calls reset(fee) before returning.
-func (e *Engine) commitPreclaimTec(tx Transaction, txHash [32]byte, fee uint64, metadata *Metadata) Result {
+func (e *Engine) commitPreclaimTec(ctx context.Context, tx Transaction, txHash [32]byte, fee uint64, metadata *Metadata) Result {
 	common := tx.GetCommon()
 	accountID, _ := state.DecodeAccountID(common.Account)
 	accountKey := keylet.Account(accountID)
@@ -272,6 +286,7 @@ func (e *Engine) commitPreclaimTec(tx Transaction, txHash [32]byte, fee uint64, 
 		isTicket:    common.TicketSequence != nil,
 		txHash:      txHash,
 		metadata:    metadata,
+		ctx:         ctx,
 	}
 
 	tecTable := NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, e.rules())
