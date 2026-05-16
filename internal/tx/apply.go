@@ -20,7 +20,6 @@ func (e *Engine) Apply(tx Transaction) ApplyResult {
 	return e.ApplyWithContext(context.Background(), tx)
 }
 
-// ApplyWithContext is the context-bearing variant of Apply.
 func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResult {
 	// Reject pseudo-transactions — they cannot be submitted by users.
 	// Reference: rippled passesLocalChecks() in NetworkOPs.cpp
@@ -175,7 +174,6 @@ func (e *Engine) ApplyPseudo(tx Transaction) ApplyResult {
 	return e.applyPseudoTransaction(context.Background(), tx)
 }
 
-// ApplyPseudoWithContext is the context-bearing variant of ApplyPseudo.
 func (e *Engine) ApplyPseudoWithContext(ctx context.Context, tx Transaction) ApplyResult {
 	return e.applyPseudoTransaction(ctx, tx)
 }
