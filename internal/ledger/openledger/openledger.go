@@ -2,7 +2,6 @@ package openledger
 
 import (
 	"errors"
-	"iter"
 	"sync"
 	"time"
 
@@ -264,8 +263,7 @@ func (o *OpenLedger) Accept(
 // snapshotCurrentTxs returns the cached tx-blob slice for the currently
 // published view, building (and memoising) it on first access. The returned
 // slice is the internal cache pointer and MUST NOT be exposed to callers
-// directly; CurrentTxs / CurrentTxsSeq wrap it with the appropriate
-// mutation-safety story.
+// directly; CurrentTxs wraps it with a fresh outer slice.
 func (o *OpenLedger) snapshotCurrentTxs() [][]byte {
 	o.currentMu.RLock()
 	if o.cachedTxs != nil {
@@ -297,30 +295,10 @@ func (o *OpenLedger) snapshotCurrentTxs() [][]byte {
 	return built
 }
 
-// CurrentTxsSeq is the recommended API for iterating the tx blobs in the
-// currently published view. The yielded []byte points at the canonical blob
-// inside the view and MUST be treated as read-only — copy with append/copy()
-// if you need to retain it past the iteration. Using a Seq instead of the
-// raw slice makes accidental `for i := range slice { slice[i] = ... }`
-// patterns syntactically impossible. Mirrors RCLConsensus.cpp:333-349.
-func (o *OpenLedger) CurrentTxsSeq() iter.Seq[[]byte] {
-	return func(yield func([]byte) bool) {
-		for _, blob := range o.snapshotCurrentTxs() {
-			if !yield(blob) {
-				return
-			}
-		}
-	}
-}
-
 // CurrentTxs returns a snapshot of the raw tx blobs in the currently
 // published view. The outer slice is fresh per call (safe to re-order);
 // the inner tx-blob byte slices are shared with the view and must not be
 // mutated. Mirrors RCLConsensus.cpp:333-349 reading openLedger().current()->txs.
-//
-// Deprecated: prefer CurrentTxsSeq, which exposes the same view through an
-// iter.Seq and makes accidental mutation of the shared tx-blob slice
-// syntactically harder.
 func (o *OpenLedger) CurrentTxs() [][]byte {
 	cached := o.snapshotCurrentTxs()
 	out := make([][]byte, len(cached))
