@@ -11,13 +11,9 @@ package state
 // Panic contract: Add / Mul / Div / normalize / root2 / ToIOUAmountValue
 // panic on overflow, divide-by-zero, and NaN inputs — matching rippled's
 // `Throw<std::overflow_error>`. ParseIOUAmountBinary / ParseMPTAmountBinary
-// enforce the codec-boundary bounds for peer-supplied raw bytes; arithmetic
-// that overflows during downstream evaluation is converted to tecINTERNAL
-// (or tecINVARIANT_FAILED for invariant checks) by the recover() points in
-// internal/tx/do_apply.go: invokeApply / runInvariants. The node never
-// crashes from a peer-fed amount overflow — see also the dedicated recover
-// points in internal/tx/payment/{strand_flow,amm_liquidity}.go and
-// internal/tx/payment/pathfinder/book_index.go.
+// enforce codec-boundary bounds; arithmetic overflow during evaluation is
+// caught by recover() points in the tx engine and surfaced as a TER (the
+// node never crashes from a peer-fed amount overflow).
 
 import (
 	"math/big"
