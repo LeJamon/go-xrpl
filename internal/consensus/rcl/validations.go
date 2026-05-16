@@ -1,12 +1,36 @@
 package rcl
 
 import (
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/consensus/ledgertrie"
 )
+
+// safeTrieCall runs fn under a deferred recover so a ledgertrie
+// invariant panic (LedgerTrie.h:553-style XRPL_ASSERT or our equivalent
+// at trie.go:143/173/306) does not fail-stop the consensus goroutine.
+// rippled responds to these with a process abort; in Go we'd rather
+// log + continue and let the next operation rebuild the trie on its
+// own. Returns true if the call panicked. Caller must already hold the
+// lock that protects the trie state.
+func safeTrieCall(fn string, op func()) (panicked bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = true
+			slog.Error("ledgertrie panic recovered",
+				"t", "consensus",
+				"event", "trie-panic",
+				"fn", fn,
+				"err", r,
+			)
+		}
+	}()
+	op()
+	return false
+}
 
 // ValidationTracker tracks validations and determines ledger finality.
 type ValidationTracker struct {
@@ -531,7 +555,15 @@ func (vt *ValidationTracker) GetPreferred(largestIssued uint32) (consensus.Ledge
 	if vt.trie == nil {
 		return consensus.LedgerID{}, 0, false
 	}
-	tip, ok := vt.trie.GetPreferred(largestIssued)
+	var (
+		tip ledgertrie.SpanTip
+		ok  bool
+	)
+	if safeTrieCall("GetPreferred", func() {
+		tip, ok = vt.trie.GetPreferred(largestIssued)
+	}) {
+		return consensus.LedgerID{}, 0, false
+	}
 	if !ok {
 		return consensus.LedgerID{}, 0, false
 	}
@@ -742,7 +774,9 @@ func (vt *ValidationTracker) ExpireOld(minSeq uint32) {
 				delete(vt.byNode, nodeID)
 				if vt.trie != nil {
 					if prev, ok := vt.trieTips[nodeID]; ok {
-						vt.trie.Remove(prev, 1)
+						safeTrieCall("Remove", func() {
+							vt.trie.Remove(prev, 1)
+						})
 						delete(vt.trieTips, nodeID)
 					}
 				}

@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -844,10 +845,17 @@ func (l *Ledger) TxMapHash() ([32]byte, error) {
 // If fn returns false, iteration stops early.
 // The callback receives the entry key and data.
 func (l *Ledger) ForEach(fn func(key [32]byte, data []byte) bool) error {
+	return l.ForEachCtx(context.Background(), fn)
+}
+
+// ForEachCtx is the context-aware variant of ForEach. Iteration aborts
+// with ctx.Err() whenever the context is cancelled, even between leaf
+// callbacks (the SHAMap descent itself observes ctx).
+func (l *Ledger) ForEachCtx(ctx context.Context, fn func(key [32]byte, data []byte) bool) error {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.stateMap.ForEach(func(item *shamap.Item) bool {
+	return l.stateMap.ForEachCtx(ctx, func(item *shamap.Item) bool {
 		return fn(item.Key(), item.Data())
 	})
 }

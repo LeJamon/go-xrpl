@@ -70,7 +70,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		vaultKey = vaultKeylet.Key
 	}
 
-	vaultEntry, err := ctx.Services.Ledger.GetLedgerEntry(vaultKey, ledgerIndex)
+	vaultEntry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, vaultKey, ledgerIndex)
 	if err != nil {
 		return nil, &types.RpcError{
 			Code:    21,
@@ -91,7 +91,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 			var mptIssuanceKey [32]byte
 			copy(mptIssuanceKey[:], shareMPTIDBytes)
 
-			mptIssuanceEntry, mptErr := ctx.Services.Ledger.GetLedgerEntry(mptIssuanceKey, ledgerIndex)
+			mptIssuanceEntry, mptErr := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, mptIssuanceKey, ledgerIndex)
 			if mptErr == nil {
 				mptIssuanceDecoded, mptDecodeErr := binarycodec.Decode(hex.EncodeToString(mptIssuanceEntry.Node))
 				if mptDecodeErr == nil {

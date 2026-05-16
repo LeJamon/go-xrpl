@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -98,7 +99,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 			expectedCode:  19, // actNotFound
 			setupMock: func() {
 				mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
-					return nil, errors.New("account not found")
+					return nil, svcerr.ErrAccountNotFound
 				}
 			},
 		},
@@ -1225,7 +1226,7 @@ func TestAccountTxServiceErrors(t *testing.T) {
 
 	t.Run("Account not found error", func(t *testing.T) {
 		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
-			return nil, errors.New("account not found")
+			return nil, svcerr.ErrAccountNotFound
 		}
 
 		params := map[string]interface{}{

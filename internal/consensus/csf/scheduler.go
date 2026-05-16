@@ -41,14 +41,14 @@ func (h eventHeap) Swap(i, j int) {
 	h[j].index = j
 }
 
-func (h *eventHeap) Push(x interface{}) {
+func (h *eventHeap) Push(x any) {
 	n := len(*h)
 	e := x.(*event)
 	e.index = n
 	*h = append(*h, e)
 }
 
-func (h *eventHeap) Pop() interface{} {
+func (h *eventHeap) Pop() any {
 	old := *h
 	n := len(old)
 	e := old[n-1]

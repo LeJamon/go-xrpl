@@ -112,16 +112,18 @@ func (p *BinaryParser) Peek() (byte, error) {
 
 // ReadBytes reads the next n bytes in the data.
 // It returns an error if fewer than n bytes are available.
+// The returned slice is a copy; the parser's backing buffer is never aliased.
 func (p *BinaryParser) ReadBytes(n int) ([]byte, error) {
-	var bytes []byte
-	for i := 0; i < n; i++ {
-		b, err := p.ReadByte()
-		if err != nil {
-			return nil, err
-		}
-		bytes = append(bytes, b)
+	if n < 0 {
+		return nil, ErrParserOutOfBound
 	}
-	return bytes, nil
+	if len(p.data) < n {
+		return nil, ErrParserOutOfBound
+	}
+	out := make([]byte, n)
+	copy(out, p.data[:n])
+	p.data = p.data[n:]
+	return out, nil
 }
 
 // HasMore returns true if there is more data to read, and false otherwise.

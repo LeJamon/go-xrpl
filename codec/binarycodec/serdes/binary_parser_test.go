@@ -150,6 +150,41 @@ func TestBinaryParser_ReadBytes(t *testing.T) {
 	}
 }
 
+func TestBinaryParser_ReadBytes_Negative(t *testing.T) {
+	p := NewBinaryParser([]byte{1, 2, 3}, definitions.Get())
+	_, err := p.ReadBytes(-1)
+	require.ErrorIs(t, err, ErrParserOutOfBound)
+}
+
+func TestBinaryParser_ReadBytes_Zero(t *testing.T) {
+	p := NewBinaryParser([]byte{1, 2, 3}, definitions.Get())
+	out, err := p.ReadBytes(0)
+	require.NoError(t, err)
+	require.Empty(t, out)
+	// Cursor must not have advanced.
+	require.True(t, p.HasMore())
+	next, err := p.ReadByte()
+	require.NoError(t, err)
+	require.Equal(t, byte(1), next)
+}
+
+func TestBinaryParser_ReadBytes_NoAliasing(t *testing.T) {
+	input := []byte{1, 2, 3, 4, 5}
+	p := NewBinaryParser(input, definitions.Get())
+	out, err := p.ReadBytes(3)
+	require.NoError(t, err)
+	require.Equal(t, []byte{1, 2, 3}, out)
+	// Mutating the returned slice must not affect the parser's remaining data
+	// or the caller-supplied input slice.
+	for i := range out {
+		out[i] = 0xFF
+	}
+	require.Equal(t, []byte{1, 2, 3, 4, 5}, input)
+	rest, err := p.ReadBytes(2)
+	require.NoError(t, err)
+	require.Equal(t, []byte{4, 5}, rest)
+}
+
 func TestBinaryParser_HasMore(t *testing.T) {
 	testcases := []struct {
 		name     string

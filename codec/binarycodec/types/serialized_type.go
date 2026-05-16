@@ -2,7 +2,6 @@
 package types
 
 import (
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes"
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
 )
@@ -49,7 +48,7 @@ func GetSerializedType(t string) SerializedType {
 	case "Blob":
 		return &Blob{}
 	case "STObject":
-		return NewSTObject(serdes.NewBinarySerializer(serdes.NewFieldIDCodec(definitions.Get())))
+		return NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
 	case "STArray":
 		return &STArray{}
 	case "PathSet":

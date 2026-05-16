@@ -1,8 +1,6 @@
 package delegate
 
 import (
-	"fmt"
-
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -79,13 +77,13 @@ func (d *DelegateSet) Validate() error {
 	// Check permissions array size.
 	// Reference: rippled DelegateSet.cpp preflight() — permissions.size() > permissionMaxSize
 	if len(d.Permissions) > permissionMaxSize {
-		return fmt.Errorf("temARRAY_TOO_LARGE: permissions array exceeds maximum size of %d", permissionMaxSize)
+		return tx.Errorf(tx.TemARRAY_TOO_LARGE, "permissions array exceeds maximum size of %d", permissionMaxSize)
 	}
 
 	// Cannot authorize self.
 	// Reference: rippled DelegateSet.cpp preflight() — ctx.tx[sfAccount] == ctx.tx[sfAuthorize]
 	if d.Authorize != "" && d.GetCommon().Account == d.Authorize {
-		return fmt.Errorf("temMALFORMED: cannot delegate to self")
+		return tx.Errorf(tx.TemMALFORMED, "cannot delegate to self")
 	}
 
 	// Check for duplicate permission values.
@@ -97,7 +95,7 @@ func (d *DelegateSet) Validate() error {
 			continue
 		}
 		if seen[pv] {
-			return fmt.Errorf("temMALFORMED: duplicate permission value %q", pv)
+			return tx.Errorf(tx.TemMALFORMED, "duplicate permission value %q", pv)
 		}
 		seen[pv] = true
 	}

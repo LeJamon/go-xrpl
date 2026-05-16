@@ -9,6 +9,7 @@ import (
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	xrpllog "github.com/LeJamon/goXRPLd/log"
 )
 
 // SubmitMethod handles the submit RPC method.
@@ -72,7 +73,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	} else if hasSigningCreds {
 		// Sign-and-submit path: sign the transaction first, then submit the blob.
 		// This matches rippled's behavior in doSubmit() when tx_blob is absent.
-		signed, rpcErr := signTransactionJSON(ctx.Services, request.TxJson, signCredentials{
+		signed, rpcErr := signTransactionJSON(ctx.Context, ctx.Services, request.TxJson, signCredentials{
 			Secret:     request.Secret,
 			Seed:       request.Seed,
 			SeedHex:    request.SeedHex,
@@ -116,7 +117,10 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	}
 	txHashStr := CalculateTxHash(txBlobHex)
 
-	// Store transaction for later lookup if applied
+	// Store transaction for later lookup if applied. The submit response is
+	// still successful even when persistence fails — the tx is already in the
+	// open ledger and will be re-applied on close — but we log so silent
+	// storage failures don't go unnoticed.
 	if result.Applied && txHashStr != "" {
 		if txHashBytes, err := hex.DecodeString(txHashStr); err == nil && len(txHashBytes) == 32 {
 			var txHash [32]byte
@@ -128,8 +132,12 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 					"TransactionIndex":  0,
 				},
 			}
-			storedData, _ := json.Marshal(storedTx)
-			_ = ctx.Services.Ledger.StoreTransaction(txHash, storedData)
+			storedData, mErr := json.Marshal(storedTx)
+			if mErr != nil {
+				xrpllog.Named(xrpllog.PartitionRPC).Warn("submit: marshal stored tx failed", "hash", txHashStr, "err", mErr)
+			} else if sErr := ctx.Services.Ledger.StoreTransaction(txHash, storedData); sErr != nil {
+				xrpllog.Named(xrpllog.PartitionRPC).Warn("submit: StoreTransaction failed", "hash", txHashStr, "err", sErr)
+			}
 		}
 	}
 
@@ -174,7 +182,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 
 	// Add account_sequence_next and account_sequence_available
 	if account, ok := txJsonMap["Account"].(string); ok {
-		if acctInfo, err := ctx.Services.Ledger.GetAccountInfo(account, "current"); err == nil {
+		if acctInfo, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, account, "current"); err == nil {
 			response["account_sequence_next"] = acctInfo.Sequence
 			response["account_sequence_available"] = acctInfo.Sequence
 		}

@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -65,12 +67,13 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 
 	// Get gateway balances from the ledger service
 	result, err := ctx.Services.Ledger.GetGatewayBalances(
+		ctx.Context,
 		request.Account,
 		hotWallets,
 		ledgerIndex,
 	)
 	if err != nil {
-		if err.Error() == "account not found" {
+		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, &types.RpcError{
 				Code:    types.RpcACT_NOT_FOUND,
 				Message: "Account not found.",

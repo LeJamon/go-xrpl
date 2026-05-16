@@ -3,6 +3,7 @@ package csf
 import (
 	"fmt"
 	"math/rand"
+	"testing"
 )
 
 // Sim orchestrates a consensus simulation.
@@ -22,14 +23,14 @@ type Sim struct {
 	peers    []*Peer
 	allPeers *PeerGroup
 	nextID   PeerID
+
+	// registry is the per-simulation id→peer index.
+	registry *PeerRegistry
 }
 
 // NewSim creates a new simulation.
 // The simulation has no peers, no trust links, and no network connections initially.
 func NewSim() *Sim {
-	// Clear peer registry for fresh simulation
-	ClearPeerRegistry()
-
 	scheduler := NewScheduler()
 	return &Sim{
 		Scheduler:  scheduler,
@@ -41,6 +42,7 @@ func NewSim() *Sim {
 		peers:      make([]*Peer, 0),
 		allPeers:   NewPeerGroup(),
 		nextID:     0,
+		registry:   NewPeerRegistry(),
 	}
 }
 
@@ -63,11 +65,11 @@ func (s *Sim) CreateGroup(numPeers int) *PeerGroup {
 			s.Net,
 			s.TrustGraph,
 			s.Collectors,
+			s.registry,
 		)
 		s.peers = append(s.peers, peer)
 		newPeers[i] = peer
-		// Register peer for message delivery
-		RegisterPeer(peer)
+		s.registry.Register(peer)
 		s.nextID++
 	}
 
@@ -91,14 +93,12 @@ func (s *Sim) AllPeers() *PeerGroup {
 	return s.allPeers
 }
 
-// GetPeer returns the peer with the given ID.
+// GetPeer returns the peer with the given ID, or nil.
 func (s *Sim) GetPeer(id PeerID) *Peer {
-	for _, peer := range s.peers {
-		if peer.ID == id {
-			return peer
-		}
+	if s.registry == nil {
+		return nil
 	}
-	return nil
+	return s.registry.Get(id)
 }
 
 // Run runs consensus protocol to generate the specified number of ledgers.
@@ -301,17 +301,19 @@ func (s *Sim) WaitForConsensus(targetSeq uint32) bool {
 	return false
 }
 
-// AssertSynchronized panics if peers are not synchronized.
-func (s *Sim) AssertSynchronized() {
+// AssertSynchronized fails the test if peers are not synchronized.
+func (s *Sim) AssertSynchronized(tb testing.TB) {
+	tb.Helper()
 	if !s.SynchronizedAll() {
-		panic("Simulation: peers are not synchronized")
+		tb.Fatalf("Simulation: peers are not synchronized")
 	}
 }
 
-// AssertNoBranches panics if there are multiple branches.
-func (s *Sim) AssertNoBranches() {
-	if s.BranchesAll() > 1 {
-		panic(fmt.Sprintf("Simulation: found %d branches", s.BranchesAll()))
+// AssertNoBranches fails the test if there are multiple branches.
+func (s *Sim) AssertNoBranches(tb testing.TB) {
+	tb.Helper()
+	if n := s.BranchesAll(); n > 1 {
+		tb.Fatalf("Simulation: found %d branches", n)
 	}
 }
 

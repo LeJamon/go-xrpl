@@ -1,18 +1,14 @@
 package amm
 
 import (
-	"errors"
-
 	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
-// validateAMMAmount validates an AMM amount
+// Reference: rippled invalidAMMAmount() in AMMCore.cpp:102-103 — temBAD_AMOUNT
+// when amount is zero (with validZero=false) or negative.
 func validateAMMAmount(amt tx.Amount) error {
-	if amt.IsZero() {
-		return errors.New("amount must be positive")
-	}
-	if amt.IsNegative() {
-		return errors.New("amount must be positive")
+	if amt.IsZero() || amt.IsNegative() {
+		return tx.Errorf(tx.TemBAD_AMOUNT, "amount must be positive")
 	}
 	return nil
 }

@@ -258,8 +258,8 @@ func (a *LedgerServiceAdapter) GetCurrentFees() (baseFee, reserveBase, reserveIn
 }
 
 // GetAccountInfo retrieves account information from the ledger
-func (a *LedgerServiceAdapter) GetAccountInfo(account string, ledgerIndex string) (*types.AccountInfo, error) {
-	result, err := a.svc.GetAccountInfo(account, ledgerIndex)
+func (a *LedgerServiceAdapter) GetAccountInfo(ctx context.Context, account string, ledgerIndex string) (*types.AccountInfo, error) {
+	result, err := a.svc.GetAccountInfo(ctx, account, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -313,8 +313,8 @@ func (a *LedgerServiceAdapter) StoreTransaction(txHash [32]byte, txData []byte) 
 }
 
 // GetAccountLines retrieves trust lines for an account
-func (a *LedgerServiceAdapter) GetAccountLines(account string, ledgerIndex string, peer string, limit uint32) (*types.AccountLinesResult, error) {
-	result, err := a.svc.GetAccountLines(account, ledgerIndex, peer, limit)
+func (a *LedgerServiceAdapter) GetAccountLines(ctx context.Context, account string, ledgerIndex string, peer string, limit uint32) (*types.AccountLinesResult, error) {
+	result, err := a.svc.GetAccountLines(ctx, account, ledgerIndex, peer, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -350,8 +350,8 @@ func (a *LedgerServiceAdapter) GetAccountLines(account string, ledgerIndex strin
 }
 
 // GetAccountOffers retrieves offers for an account
-func (a *LedgerServiceAdapter) GetAccountOffers(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
-	result, err := a.svc.GetAccountOffers(account, ledgerIndex, limit)
+func (a *LedgerServiceAdapter) GetAccountOffers(ctx context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
+	result, err := a.svc.GetAccountOffers(ctx, account, ledgerIndex, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -380,7 +380,7 @@ func (a *LedgerServiceAdapter) GetAccountOffers(account string, ledgerIndex stri
 }
 
 // GetBookOffers retrieves offers from an order book
-func (a *LedgerServiceAdapter) GetBookOffers(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 	// Convert RPC types.Amount to tx.Amount
 	var txTakerGets, txTakerPays tx.Amount
 	if takerGets.Currency == "" || takerGets.Currency == "XRP" {
@@ -394,7 +394,7 @@ func (a *LedgerServiceAdapter) GetBookOffers(takerGets, takerPays types.Amount, 
 		txTakerPays = tx.NewIssuedAmountFromFloat64(0, takerPays.Currency, takerPays.Issuer)
 	}
 
-	result, err := a.svc.GetBookOffers(txTakerGets, txTakerPays, ledgerIndex, limit)
+	result, err := a.svc.GetBookOffers(ctx, txTakerGets, txTakerPays, ledgerIndex, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -514,8 +514,8 @@ func (a *LedgerServiceAdapter) GetLedgerRange(ctx context.Context, minSeq, maxSe
 }
 
 // GetLedgerEntry retrieves a specific ledger entry by its index/key
-func (a *LedgerServiceAdapter) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
-	result, err := a.svc.GetLedgerEntry(entryKey, ledgerIndex)
+func (a *LedgerServiceAdapter) GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
+	result, err := a.svc.GetLedgerEntry(ctx, entryKey, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -531,8 +531,8 @@ func (a *LedgerServiceAdapter) GetLedgerEntry(entryKey [32]byte, ledgerIndex str
 }
 
 // GetLedgerData retrieves all ledger state entries with pagination
-func (a *LedgerServiceAdapter) GetLedgerData(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
-	result, err := a.svc.GetLedgerData(ledgerIndex, limit, marker)
+func (a *LedgerServiceAdapter) GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
+	result, err := a.svc.GetLedgerData(ctx, ledgerIndex, limit, marker)
 	if err != nil {
 		return nil, err
 	}
@@ -577,8 +577,8 @@ func (a *LedgerServiceAdapter) GetLedgerData(ledgerIndex string, limit uint32, m
 }
 
 // GetAccountObjects retrieves all objects owned by an account
-func (a *LedgerServiceAdapter) GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
-	result, err := a.svc.GetAccountObjects(account, ledgerIndex, objType, limit)
+func (a *LedgerServiceAdapter) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
+	result, err := a.svc.GetAccountObjects(ctx, account, ledgerIndex, objType, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -604,8 +604,8 @@ func (a *LedgerServiceAdapter) GetAccountObjects(account string, ledgerIndex str
 }
 
 // GetAccountChannels retrieves payment channels for an account
-func (a *LedgerServiceAdapter) GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*types.AccountChannelsResult, error) {
-	result, err := a.svc.GetAccountChannels(account, destinationAccount, ledgerIndex, limit)
+func (a *LedgerServiceAdapter) GetAccountChannels(ctx context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32) (*types.AccountChannelsResult, error) {
+	result, err := a.svc.GetAccountChannels(ctx, account, destinationAccount, ledgerIndex, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -642,8 +642,8 @@ func (a *LedgerServiceAdapter) GetAccountChannels(account string, destinationAcc
 }
 
 // GetAccountCurrencies retrieves currencies an account can send and receive
-func (a *LedgerServiceAdapter) GetAccountCurrencies(account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
-	result, err := a.svc.GetAccountCurrencies(account, ledgerIndex)
+func (a *LedgerServiceAdapter) GetAccountCurrencies(ctx context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
+	result, err := a.svc.GetAccountCurrencies(ctx, account, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -658,8 +658,8 @@ func (a *LedgerServiceAdapter) GetAccountCurrencies(account string, ledgerIndex 
 }
 
 // GetAccountNFTs retrieves NFTs owned by an account
-func (a *LedgerServiceAdapter) GetAccountNFTs(account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
-	result, err := a.svc.GetAccountNFTs(account, ledgerIndex, limit)
+func (a *LedgerServiceAdapter) GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
+	result, err := a.svc.GetAccountNFTs(ctx, account, ledgerIndex, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -689,8 +689,8 @@ func (a *LedgerServiceAdapter) GetAccountNFTs(account string, ledgerIndex string
 }
 
 // GetNoRippleCheck checks trust lines for proper NoRipple flag settings
-func (a *LedgerServiceAdapter) GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
-	result, err := a.svc.GetNoRippleCheck(account, role, ledgerIndex, limit, transactions)
+func (a *LedgerServiceAdapter) GetNoRippleCheck(ctx context.Context, account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
+	result, err := a.svc.GetNoRippleCheck(ctx, account, role, ledgerIndex, limit, transactions)
 	if err != nil {
 		return nil, err
 	}
@@ -722,8 +722,8 @@ func (a *LedgerServiceAdapter) GetNoRippleCheck(account string, role string, led
 }
 
 // GetGatewayBalances retrieves obligations and balances for a gateway account
-func (a *LedgerServiceAdapter) GetGatewayBalances(account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
-	result, err := a.svc.GetGatewayBalances(account, hotWallets, ledgerIndex)
+func (a *LedgerServiceAdapter) GetGatewayBalances(ctx context.Context, account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
+	result, err := a.svc.GetGatewayBalances(ctx, account, hotWallets, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -788,8 +788,8 @@ func (a *LedgerServiceAdapter) GetGatewayBalances(account string, hotWallets []s
 }
 
 // GetDepositAuthorized checks if a source account is authorized to deposit to a destination account
-func (a *LedgerServiceAdapter) GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*types.DepositAuthorizedResult, error) {
-	result, err := a.svc.GetDepositAuthorized(sourceAccount, destinationAccount, ledgerIndex, credentials)
+func (a *LedgerServiceAdapter) GetDepositAuthorized(ctx context.Context, sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*types.DepositAuthorizedResult, error) {
+	result, err := a.svc.GetDepositAuthorized(ctx, sourceAccount, destinationAccount, ledgerIndex, credentials)
 	if err != nil {
 		return nil, err
 	}
@@ -805,8 +805,8 @@ func (a *LedgerServiceAdapter) GetDepositAuthorized(sourceAccount string, destin
 }
 
 // GetNFTBuyOffers retrieves buy offers for an NFToken
-func (a *LedgerServiceAdapter) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
-	result, err := a.svc.GetNFTBuyOffers(nftID, ledgerIndex, limit, marker)
+func (a *LedgerServiceAdapter) GetNFTBuyOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
+	result, err := a.svc.GetNFTBuyOffers(ctx, nftID, ledgerIndex, limit, marker)
 	if err != nil {
 		return nil, err
 	}
@@ -874,8 +874,8 @@ func (a *LedgerServiceAdapter) IsAmendmentBlocked() bool {
 }
 
 // GetNFTSellOffers retrieves sell offers for an NFToken
-func (a *LedgerServiceAdapter) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
-	result, err := a.svc.GetNFTSellOffers(nftID, ledgerIndex, limit, marker)
+func (a *LedgerServiceAdapter) GetNFTSellOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
+	result, err := a.svc.GetNFTSellOffers(ctx, nftID, ledgerIndex, limit, marker)
 	if err != nil {
 		return nil, err
 	}

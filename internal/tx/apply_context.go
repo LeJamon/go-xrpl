@@ -1,6 +1,7 @@
 package tx
 
 import (
+	"context"
 	"strconv"
 
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -41,6 +42,12 @@ type ApplyContext struct {
 	// Transaction handlers (Apply methods) use this for Trace/Debug logging.
 	// Always non-nil — falls back to xrpllog.Discard() when not set by the engine.
 	Log xrpllog.Logger
+
+	// Ctx is the request-scoped context for this transaction. Long-running
+	// operations should respect its Done channel. Set by the engine at every
+	// construction site; callers that build an ApplyContext directly must
+	// pass a non-nil context.
+	Ctx context.Context
 }
 
 // AccountReserve calculates the total reserve required for an account with the given owner count.

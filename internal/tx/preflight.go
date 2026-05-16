@@ -41,8 +41,6 @@ func (e *Engine) preflight(tx Transaction) Result {
 
 	// preflight2 — tx-type-specific validation
 	if err := tx.Validate(); err != nil {
-		// Try to extract a specific TER code from the error message
-		// Many Validate() implementations include the TER code as a prefix (e.g., "temREDUNDANT: message")
 		return parseValidationError(err)
 	}
 
@@ -196,84 +194,14 @@ func (e *Engine) verifySignatures(tx Transaction) Result {
 	return TesSUCCESS
 }
 
-// parseValidationError extracts a TER result code from a validation error message.
-// If the error message starts with a valid TER code prefix (e.g., "temREDUNDANT:"),
-// it returns the corresponding Result. Otherwise, it returns TemINVALID.
+// parseValidationError maps a Validate() error to a TER result code.
+// Validators that need a specific code return *ResultError via tx.Errorf;
+// anything unstructured falls through to TemINVALID.
 func parseValidationError(err error) Result {
-	// Fast path: structured ResultError carries the code directly
 	var re *ResultError
 	if errors.As(err, &re) {
 		return re.Code
 	}
-
-	// Legacy fallback: string-prefix matching for unmigrated callers
-	msg := err.Error()
-
-	// Check for known TER code prefixes
-	// Common tem (malformed) codes
-	terCodes := map[string]Result{
-		"temMALFORMED":                TemMALFORMED,
-		"temBAD_AMOUNT":               TemBAD_AMOUNT,
-		"temBAD_CURRENCY":             TemBAD_CURRENCY,
-		"temBAD_EXPIRATION":           TemBAD_EXPIRATION,
-		"temBAD_FEE":                  TemBAD_FEE,
-		"temBAD_ISSUER":               TemBAD_ISSUER,
-		"temBAD_LIMIT":                TemBAD_LIMIT,
-		"temBAD_OFFER":                TemBAD_OFFER,
-		"temBAD_PATH":                 TemBAD_PATH,
-		"temBAD_PATH_LOOP":            TemBAD_PATH_LOOP,
-		"temBAD_REGKEY":               TemBAD_REGKEY,
-		"temBAD_SEQUENCE":             TemBAD_SEQUENCE,
-		"temBAD_SIGNATURE":            TemBAD_SIGNATURE,
-		"temBAD_SRC_ACCOUNT":          TemBAD_SRC_ACCOUNT,
-		"temBAD_TRANSFER_RATE":        TemBAD_TRANSFER_RATE,
-		"temDST_IS_SRC":               TemDST_IS_SRC,
-		"temDST_NEEDED":               TemDST_NEEDED,
-		"temINVALID":                  TemINVALID,
-		"temINVALID_FLAG":             TemINVALID_FLAG,
-		"temREDUNDANT":                TemREDUNDANT,
-		"temRIPPLE_EMPTY":             TemRIPPLE_EMPTY,
-		"temDISABLED":                 TemDISABLED,
-		"temBAD_SIGNER":               TemBAD_SIGNER,
-		"temBAD_QUORUM":               TemBAD_QUORUM,
-		"temBAD_WEIGHT":               TemBAD_WEIGHT,
-		"temBAD_TICK_SIZE":            TemBAD_TICK_SIZE,
-		"temINVALID_ACCOUNT_ID":       TemINVALID_ACCOUNT_ID,
-		"temUNCERTAIN":                TemUNCERTAIN,
-		"temUNKNOWN":                  TemUNKNOWN,
-		"temSEQ_AND_TICKET":           TemSEQ_AND_TICKET,
-		"temBAD_SEND_XRP_MAX":         TemBAD_SEND_XRP_MAX,
-		"temBAD_SEND_XRP_PARTIAL":     TemBAD_SEND_XRP_PARTIAL,
-		"temBAD_SEND_XRP_PATHS":       TemBAD_SEND_XRP_PATHS,
-		"temBAD_SEND_XRP_LIMIT":       TemBAD_SEND_XRP_LIMIT,
-		"temBAD_SEND_XRP_NO_DIRECT":   TemBAD_SEND_XRP_NO_DIRECT,
-		"temCANNOT_PREAUTH_SELF":      TemCAN_NOT_PREAUTH_SELF,
-		"temCAN_NOT_PREAUTH_SELF":     TemCAN_NOT_PREAUTH_SELF,
-		"temEMPTY_DID":                TemEMPTY_DID,
-		"temARRAY_EMPTY":              TemARRAY_EMPTY,
-		"temARRAY_TOO_LARGE":          TemARRAY_TOO_LARGE,
-		"temBAD_AMM_TOKENS":           TemBAD_AMM_TOKENS,
-		"temBAD_TRANSFER_FEE":         TemBAD_TRANSFER_FEE,
-		"temBAD_NFTOKEN_TRANSFER_FEE": TemBAD_NFTOKEN_TRANSFER_FEE,
-		"temINVALID_COUNT":            TemINVALID_COUNT,
-		// tef (failure) codes
-		"tefINVALID_LEDGER_FIX_TYPE": TefINVALID_LEDGER_FIX_TYPE,
-		// tel (local) codes
-		"telBAD_DOMAIN":     TelBAD_DOMAIN,
-		"telBAD_PUBLIC_KEY": TelBAD_PUBLIC_KEY,
-	}
-
-	// Check if the message starts with any known TER code
-	for code, result := range terCodes {
-		if len(msg) >= len(code) && msg[:len(code)] == code {
-			// Check that it's followed by a colon, space, or is the entire message
-			if len(msg) == len(code) || msg[len(code)] == ':' || msg[len(code)] == ' ' {
-				return result
-			}
-		}
-	}
-
-	// Default to temINVALID
 	return TemINVALID
 }
 

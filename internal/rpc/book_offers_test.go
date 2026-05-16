@@ -18,7 +18,7 @@ type bookOffersMock struct {
 	getBookOffersFn func(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error)
 }
 
-func (m *bookOffersMock) GetBookOffers(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+func (m *bookOffersMock) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 	if m.getBookOffersFn != nil {
 		return m.getBookOffersFn(takerGets, takerPays, ledgerIndex, limit)
 	}

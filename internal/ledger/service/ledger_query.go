@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
@@ -66,7 +67,10 @@ type LedgerEntryResult struct {
 }
 
 // GetLedgerEntry retrieves a specific ledger entry by its index/key
-func (s *Service) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*LedgerEntryResult, error) {
+func (s *Service) GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerIndex string) (*LedgerEntryResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -81,7 +85,7 @@ func (s *Service) GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*Ledger
 		return nil, err
 	}
 	if !exists {
-		return nil, errors.New("entry not found")
+		return nil, svcerr.ErrLedgerEntryNotFound
 	}
 
 	data, err := targetLedger.Read(k)
@@ -148,7 +152,10 @@ func formatCloseTimeISO(t time.Time) string {
 }
 
 // GetLedgerData retrieves all ledger state entries with optional pagination
-func (s *Service) GetLedgerData(ledgerIndex string, limit uint32, marker string) (*LedgerDataResult, error) {
+func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*LedgerDataResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -205,7 +212,10 @@ func (s *Service) GetLedgerData(ledgerIndex string, limit uint32, marker string)
 	var lastKey [32]byte
 	passedMarker := !hasMarker
 
-	err = targetLedger.ForEach(func(key [32]byte, data []byte) bool {
+	err = targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		// Skip until we pass the marker
 		if !passedMarker {
 			if key == startKey {
@@ -229,6 +239,9 @@ func (s *Service) GetLedgerData(ledgerIndex string, limit uint32, marker string)
 	})
 
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 

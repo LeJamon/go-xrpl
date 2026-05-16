@@ -29,8 +29,11 @@ const (
 	RpcPARSE_ERROR      = -32700
 
 	// General purpose errors
-	RpcGENERAL           = 1
-	RpcMISSING_COMMAND   = 2
+	RpcGENERAL         = 1
+	RpcMISSING_COMMAND = 2
+	// RpcFORBIDDEN matches rippled rpcFORBIDDEN = 3. The legacy alias
+	// RpcCOMMAND_UNTRUSTED kept the older goxrpl name for the same slot.
+	RpcFORBIDDEN         = 3
 	RpcCOMMAND_UNTRUSTED = 3
 	RpcNO_CURRENT        = 4
 	RpcNO_NETWORK        = 5
@@ -75,8 +78,7 @@ const (
 	RpcNOT_SUPPORTED = 32
 
 	// WebSocket specific
-	RpcCOMMAND_MISSING         = 34
-	RpcCOMMAND_IS_NOT_A_STRING = 35
+	RpcCOMMAND_MISSING = 34
 
 	// Rate limiting
 	RpcSLOW_DOWN_INVALID_IP = 36
@@ -95,8 +97,7 @@ const (
 	// Additional transaction errors
 	RpcTXN_TYPE_NOT_SUPPORTED = 42
 	RpcINVALID_FIELD          = 43
-	RpcINVALID_HASH           = 44
-	RpcINVALID_LGR_RANGE      = 45
+	RpcINVALID_LGR_RANGE      = 79 // rippled rpcINVALID_LGR_RANGE
 
 	// Path finding errors
 	RpcNO_PATH       = 46
@@ -174,6 +175,15 @@ func RpcErrorInternal(message string) *RpcError {
 
 func RpcErrorNoPermission(method string) *RpcError {
 	return NewRpcError(RpcNO_PERMISSION, "noPermission", "noPermission",
+		"You don't have permission for this command.")
+}
+
+// RpcErrorForbidden matches rippled rpcFORBIDDEN (code 3, token "forbidden").
+// Used by the WebSocket pre-dispatch admin gate, mirroring rippled
+// ServerHandler.cpp:482-486 which writes rpcError(rpcFORBIDDEN) when
+// requestRole returns Role::FORBID for an admin-required command.
+func RpcErrorForbidden(method string) *RpcError {
+	return NewRpcError(RpcFORBIDDEN, "forbidden", "forbidden",
 		"You don't have permission for this command.")
 }
 

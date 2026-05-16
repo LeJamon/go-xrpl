@@ -13,8 +13,14 @@ type portContextKey struct{}
 type PortContext struct {
 	PortName  string
 	AdminNets []net.IPNet
-	Limit     int // max concurrent connections; 0 = unlimited
-	SendQueue int // WS send channel buffer size; 0 = use default (100)
+	// SecureGatewayNets is the per-port secure_gateway allowlist. A
+	// peer in this set may carry X-Forwarded-For / X-User for
+	// downstream client-IP attribution and (with X-User) is promoted
+	// to RoleIdentified for resource-limit purposes. Admin promotion
+	// always requires AdminNets membership.
+	SecureGatewayNets []net.IPNet
+	Limit             int // max concurrent connections; 0 = unlimited
+	SendQueue         int // WS send channel buffer size; 0 = use default (100)
 }
 
 // WithPortContext returns a new context carrying the given PortContext.

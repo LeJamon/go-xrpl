@@ -1,7 +1,6 @@
 package txq
 
 import (
-	"sort"
 	"strconv"
 
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -289,7 +288,11 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		if requiresMultiTxn {
 			var totalFee uint64
 			var potentialSpend uint64
-			for sp, c := range aq.Transactions {
+			// Iterate in SeqProxy order to match rippled's
+			// std::map<SeqProxy, MaybeTx> walk at TxQ.cpp:1048.
+			sortedTxns := aq.GetSortedCandidates()
+			for _, c := range sortedTxns {
+				sp := c.SeqProxy
 				if sp.Less(acctSeqProx) {
 					continue // Skip stale transactions
 				}
@@ -302,7 +305,8 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 					// Reference: TxQ.cpp:1059-1066
 					// Check if there's a transaction after this one in the queue.
 					hasNext := false
-					for sp2 := range aq.Transactions {
+					for _, c2 := range sortedTxns {
+						sp2 := c2.SeqProxy
 						if sp2.Less(acctSeqProx) {
 							continue
 						}
@@ -443,11 +447,10 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		if feeLevel > endEffectiveFeeLevel {
 			// Drop the last (highest-sequence) transaction from the target account.
 			// Reference: rippled TxQ.cpp:1297-1306
+			sorted := endAccount.GetSortedCandidates()
 			var dropCandidate *Candidate
-			for _, c := range endAccount.Transactions {
-				if dropCandidate == nil || !c.SeqProxy.Less(dropCandidate.SeqProxy) {
-					dropCandidate = c
-				}
+			if n := len(sorted); n > 0 {
+				dropCandidate = sorted[n-1]
 			}
 			if dropCandidate != nil {
 				q.erase(dropCandidate)
@@ -498,23 +501,19 @@ func (q *TxQ) tryClearAccountQueue(
 	txInLedger uint32,
 	account [20]byte,
 ) *ApplyResult {
-	// Collect queued sequence-based transactions that come BEFORE the new tx.
-	// These need to be applied first in order.
+	// Collect queued sequence-based transactions that come BEFORE the new tx,
+	// in SeqProxy-ascending order.
 	var preceding []*Candidate
-	for sp, c := range aq.Transactions {
-		if sp.Less(seqProxy) {
-			preceding = append(preceding, c)
+	for _, c := range aq.GetSortedCandidates() {
+		if !c.SeqProxy.Less(seqProxy) {
+			break
 		}
+		preceding = append(preceding, c)
 	}
 
 	if len(preceding) == 0 {
 		return nil
 	}
-
-	// Sort preceding by SeqProxy (ascending order for application)
-	sort.Slice(preceding, func(i, j int) bool {
-		return preceding[i].SeqProxy.Less(preceding[j].SeqProxy)
-	})
 
 	dist := uint32(len(preceding))
 

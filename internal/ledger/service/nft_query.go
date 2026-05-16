@@ -1,11 +1,12 @@
 package service
 
 import (
+	"context"
 	"encoding/binary"
-	"errors"
 	"strconv"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
@@ -32,19 +33,22 @@ type NFTOffersResult struct {
 
 // GetNFTBuyOffers retrieves buy offers for an NFToken
 // Reference: rippled NFTOffers.cpp enumerateNFTOffers with nft_buys keylet
-func (s *Service) GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error) {
-	return s.getNFTOffers(nftID, ledgerIndex, limit, marker, false)
+func (s *Service) GetNFTBuyOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error) {
+	return s.getNFTOffers(ctx, nftID, ledgerIndex, limit, marker, false)
 }
 
 // GetNFTSellOffers retrieves sell offers for an NFToken
 // Reference: rippled NFTOffers.cpp enumerateNFTOffers with nft_sells keylet
-func (s *Service) GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error) {
-	return s.getNFTOffers(nftID, ledgerIndex, limit, marker, true)
+func (s *Service) GetNFTSellOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error) {
+	return s.getNFTOffers(ctx, nftID, ledgerIndex, limit, marker, true)
 }
 
 // getNFTOffers is the common implementation for both buy and sell offers
 // Reference: rippled NFTOffers.cpp enumerateNFTOffers
-func (s *Service) getNFTOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string, isSellOffers bool) (*NFTOffersResult, error) {
+func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string, isSellOffers bool) (*NFTOffersResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -52,7 +56,7 @@ func (s *Service) getNFTOffers(nftID [32]byte, ledgerIndex string, limit uint32,
 	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
 	if err != nil {
 		if err == ErrLedgerNotFound {
-			return nil, errors.New("ledger not found")
+			return nil, svcerr.ErrLedgerNotFound
 		}
 		return nil, err
 	}
@@ -71,7 +75,7 @@ func (s *Service) getNFTOffers(nftID [32]byte, ledgerIndex string, limit uint32,
 		return nil, err
 	}
 	if !exists {
-		return nil, errors.New("object not found")
+		return nil, svcerr.ErrObjectNotFound
 	}
 
 	result := &NFTOffersResult{
@@ -105,7 +109,7 @@ func (s *Service) getNFTOffers(nftID [32]byte, ledgerIndex string, limit uint32,
 		// Find the marker in the offer list and validate it
 		markerBytes, err := hexDecode(marker)
 		if err != nil || len(markerBytes) != 32 {
-			return nil, errors.New("invalid marker")
+			return nil, svcerr.ErrInvalidMarker
 		}
 		var markerKey [32]byte
 		copy(markerKey[:], markerBytes)
@@ -114,13 +118,13 @@ func (s *Service) getNFTOffers(nftID [32]byte, ledgerIndex string, limit uint32,
 		markerKeylet := keylet.Keylet{Key: markerKey}
 		offerData, err := targetLedger.Read(markerKeylet)
 		if err != nil {
-			return nil, errors.New("invalid marker")
+			return nil, svcerr.ErrInvalidMarker
 		}
 
 		// Parse the offer to verify NFTokenID matches
 		offer, err := parseNFTokenOfferForQuery(offerData)
 		if err != nil || offer.NFTokenID != nftID {
-			return nil, errors.New("invalid marker")
+			return nil, svcerr.ErrInvalidMarker
 		}
 
 		// Add marker offer first
@@ -141,7 +145,7 @@ func (s *Service) getNFTOffers(nftID [32]byte, ledgerIndex string, limit uint32,
 		if !found {
 			// Marker not in directory - could be a different page
 			// For simplicity, treat as invalid
-			return nil, errors.New("invalid marker")
+			return nil, svcerr.ErrInvalidMarker
 		}
 	} else {
 		// No marker, we'll fetch limit+1 to check for more results
@@ -151,6 +155,9 @@ func (s *Service) getNFTOffers(nftID [32]byte, ledgerIndex string, limit uint32,
 	// Collect offers from the directory
 	offersCollected := make([]NFTOfferInfo, 0, reserve)
 	for i := startIdx; i < len(offerIndexes) && uint32(len(offersCollected)) < reserve; i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		offerKey := offerIndexes[i]
 		offerKeylet := keylet.Keylet{Key: offerKey}
 

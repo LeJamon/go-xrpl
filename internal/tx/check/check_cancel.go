@@ -2,7 +2,6 @@ package check
 
 import (
 	"encoding/hex"
-	"errors"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
@@ -43,7 +42,7 @@ func (c *CheckCancel) Validate() error {
 	}
 
 	if c.CheckID == "" {
-		return errors.New("CheckID is required")
+		return tx.Errorf(tx.TemMALFORMED, "CheckID is required")
 	}
 
 	return nil

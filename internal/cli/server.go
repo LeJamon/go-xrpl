@@ -50,26 +50,25 @@ var serverCmd = &cobra.Command{
 
 Requires --conf flag to specify the configuration file.
 Use 'xrpld generate-config' to create an initial configuration file.`,
-	Run: runServer,
+	RunE: runServer,
 }
 
 func init() {
 	rootCmd.AddCommand(serverCmd)
 
 	// Set server as the default command
-	rootCmd.Run = runServer
+	rootCmd.RunE = runServer
 
 	// Server-specific flags — operational concerns only
 	serverCmd.Flags().BoolVarP(&standalone, "standalone", "a", false, "run in standalone mode (no peers)")
 }
 
-func runServer(cmd *cobra.Command, args []string) {
-	// Require config file
-	if globalConfig == nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Error: --conf flag is required to start the server.\n")
+func runServer(cmd *cobra.Command, args []string) (retErr error) {
+	if _, err := requireConfig(); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "%v\n", err)
 		fmt.Fprintf(cmd.ErrOrStderr(), "  Use 'xrpld generate-config' to create an initial configuration file.\n")
 		fmt.Fprintf(cmd.ErrOrStderr(), "  Example: xrpld server --conf /path/to/xrpld.toml\n")
-		return
+		return err
 	}
 
 	// Initialize structured logger from config + CLI flag overrides.
@@ -97,13 +96,28 @@ func runServer(cmd *cobra.Command, args []string) {
 		serverLog.Info("pprof enabled", "addr", addr)
 	}
 
+	// Pre-declared so the deferred shutdown can clean up whatever the
+	// init path managed to populate before any error return. doShutdown
+	// tolerates nil components for the partial-init case.
+	var (
+		db                  nodestore.Database
+		repoManager         relationaldb.RepositoryManager
+		ledgerService       *service.Service
+		consensusComponents *adaptor.Components
+		httpSrvs            []*http.Server
+		wsSrvs              []*http.Server
+		wsServer            *rpc.WebSocketServer
+	)
+	defer func() {
+		doShutdown(httpSrvs, wsSrvs, wsServer, ledgerService, consensusComponents, db, repoManager, serverLog)
+	}()
+
 	// Initialize storage from config
-	var db nodestore.Database
 	nodestorePath := globalConfig.NodeDB.Path
 	if nodestorePath != "" {
 		store, err := kvpebble.New(nodestorePath, 256<<20, 500, false)
 		if err != nil {
-			serverLog.Fatal("Failed to create storage backend", "err", err)
+			return fmt.Errorf("storage backend: %w", err)
 		}
 
 		db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", 10000, 10*time.Minute)
@@ -113,7 +127,6 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 
 	// Initialize RelationalDB if configured
-	var repoManager relationaldb.RepositoryManager
 	dbPath := globalConfig.DatabasePath
 	if strings.HasPrefix(dbPath, "postgres://") || strings.HasPrefix(dbPath, "postgresql://") {
 		pgConfig := relationaldb.NewConfig()
@@ -153,14 +166,14 @@ func runServer(cmd *cobra.Command, args []string) {
 	if genesisFile != "" {
 		genesisJSON, err := config.LoadGenesisJSON(genesisFile)
 		if err != nil {
-			serverLog.Fatal("Failed to load genesis file", "path", genesisFile, "err", err)
+			return fmt.Errorf("load genesis file %q: %w", genesisFile, err)
 		}
 		if err := genesisJSON.Validate(); err != nil {
-			serverLog.Fatal("Invalid genesis file", "path", genesisFile, "err", err)
+			return fmt.Errorf("invalid genesis file %q: %w", genesisFile, err)
 		}
 		genesisCfg, err := genesisJSON.ToGenesisConfig()
 		if err != nil {
-			serverLog.Fatal("Failed to parse genesis configuration", "path", genesisFile, "err", err)
+			return fmt.Errorf("parse genesis configuration %q: %w", genesisFile, err)
 		}
 		genesisConfig = genesis.Config{
 			TotalXRP:            genesisCfg.TotalXRP,
@@ -192,7 +205,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	// Get network ID from config
 	networkID, err := globalConfig.GetNetworkID()
 	if err != nil {
-		serverLog.Fatal("Failed to get network ID", "err", err)
+		return fmt.Errorf("get network ID: %w", err)
 	}
 
 	// Initialize ledger service
@@ -205,13 +218,13 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 	cfg.GenesisConfig = genesisConfig
 
-	ledgerService, err := service.New(cfg)
+	ledgerService, err = service.New(cfg)
 	if err != nil {
-		serverLog.Fatal("Failed to create ledger service", "err", err)
+		return fmt.Errorf("create ledger service: %w", err)
 	}
 
 	if err := ledgerService.Start(); err != nil {
-		serverLog.Fatal("Failed to start ledger service", "err", err)
+		return fmt.Errorf("start ledger service: %w", err)
 	}
 
 	// Start the goroutine-scheduling-latency sampler. Runs in both
@@ -227,16 +240,19 @@ func runServer(cmd *cobra.Command, args []string) {
 	services := types.NewServiceContainer(ledgerAdapter)
 
 	// Start consensus/networking if not in standalone mode
-	var consensusComponents *adaptor.Components
 	if !standalone {
 		var compErr error
-		consensusComponents, compErr = adaptor.NewFromConfig(globalConfig, ledgerService, repoManager.Validation())
+		var validationRepo relationaldb.ValidationRepository
+		if repoManager != nil {
+			validationRepo = repoManager.Validation()
+		}
+		consensusComponents, compErr = adaptor.NewFromConfig(globalConfig, ledgerService, validationRepo)
 		if compErr != nil {
-			serverLog.Fatal("Failed to create consensus components", "err", compErr)
+			return fmt.Errorf("create consensus components: %w", compErr)
 		}
 
 		if err := consensusComponents.Start(); err != nil {
-			serverLog.Fatal("Failed to start consensus components", "err", err)
+			return fmt.Errorf("start consensus components: %w", err)
 		}
 
 		// Wire transaction relay: when a tx is submitted via RPC,
@@ -340,7 +356,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	services.SetDispatcher(httpServer)
 
 	// Create WebSocket server for real-time subscriptions
-	wsServer := rpc.NewWebSocketServer(30*time.Second, services)
+	wsServer = rpc.NewWebSocketServer(30*time.Second, services)
 	wsServer.RegisterAllMethods()
 	if consensusComponents != nil && consensusComponents.Overlay != nil {
 		wsServer.SetPeerSource(consensusComponents.Overlay)
@@ -452,19 +468,27 @@ func runServer(cmd *cobra.Command, args []string) {
 		serverLog.Info("Port configured", "protocol", "peer", "addr", peerPort.GetBindAddress())
 	}
 
+	// listenerErrCh routes ListenAndServe failures back to the main
+	// goroutine so shutdown runs the deferred cleanup chain.
+	listenerErrCh := make(chan error, 1+len(wsPorts)+len(httpPorts))
+
 	// Start WebSocket listeners — each port gets its own mux with PortMiddleware
-	var wsSrvs []*http.Server
 	for name, p := range wsPorts {
 		portCfg := p
 		adminNets, err := portCfg.ParseAdminNets()
 		if err != nil {
-			serverLog.Fatal("Failed to parse admin nets for port", "name", name, "err", err)
+			return fmt.Errorf("parse admin nets for ws port %q: %w", name, err)
+		}
+		secureGW, err := portCfg.ParseSecureGatewayNets()
+		if err != nil {
+			return fmt.Errorf("parse secure_gateway nets for ws port %q: %w", name, err)
 		}
 		pc := &rpc.PortContext{
-			PortName:  name,
-			AdminNets: adminNets,
-			Limit:     portCfg.Limit,
-			SendQueue: portCfg.SendQueueLimit,
+			PortName:          name,
+			AdminNets:         adminNets,
+			SecureGatewayNets: secureGW,
+			Limit:             portCfg.Limit,
+			SendQueue:         portCfg.SendQueueLimit,
 		}
 		mux := http.NewServeMux()
 		mux.Handle("/", rpc.PortMiddleware(pc, connLimiter, wsServer))
@@ -473,12 +497,20 @@ func runServer(cmd *cobra.Command, args []string) {
 		go func(n string, s *http.Server) {
 			serverLog.Info("Listening", "protocol", "ws", "name", n, "addr", s.Addr)
 			if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				serverLog.Fatal("WebSocket server failed", "name", n, "addr", s.Addr, "err", err)
+				serverLog.Error("WebSocket server failed", "name", n, "addr", s.Addr, "err", err)
+				select {
+				case listenerErrCh <- fmt.Errorf("ws %s (%s): %w", n, s.Addr, err):
+				default:
+				}
 			}
 		}(name, srv)
 	}
 
-	// Start HTTP listeners — each port gets its own mux with PortMiddleware
+	// Start HTTP listeners — each port gets its own mux with PortMiddleware.
+	// SecureGatewayNets are scoped per-port via PortContext so XFF trust
+	// for one port never bleeds across to another (matches rippled, which
+	// passes a single Port& into requestRole / forwardedFor —
+	// ServerHandler.cpp:709-734).
 	httpPortList := make([]struct {
 		name string
 		pc   *rpc.PortContext
@@ -488,13 +520,18 @@ func runServer(cmd *cobra.Command, args []string) {
 		portCfg := p
 		adminNets, err := portCfg.ParseAdminNets()
 		if err != nil {
-			serverLog.Fatal("Failed to parse admin nets for port", "name", name, "err", err)
+			return fmt.Errorf("parse admin nets for http port %q: %w", name, err)
+		}
+		secureGW, err := portCfg.ParseSecureGatewayNets()
+		if err != nil {
+			return fmt.Errorf("parse secure_gateway nets for http port %q: %w", name, err)
 		}
 		pc := &rpc.PortContext{
-			PortName:  name,
-			AdminNets: adminNets,
-			Limit:     portCfg.Limit,
-			SendQueue: portCfg.SendQueueLimit,
+			PortName:          name,
+			AdminNets:         adminNets,
+			SecureGatewayNets: secureGW,
+			Limit:             portCfg.Limit,
+			SendQueue:         portCfg.SendQueueLimit,
 		}
 		httpPortList = append(httpPortList, struct {
 			name string
@@ -504,11 +541,8 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 
 	if len(httpPortList) == 0 {
-		serverLog.Fatal("No HTTP ports configured — at least one HTTP port is required")
+		return fmt.Errorf("no HTTP ports configured — at least one HTTP port is required")
 	}
-
-	// Collect HTTP servers into a slice
-	var httpSrvs []*http.Server
 
 	for _, entry := range httpPortList {
 		wrappedMux := http.NewServeMux()
@@ -524,7 +558,11 @@ func runServer(cmd *cobra.Command, args []string) {
 		go func(n, addr string, s *http.Server) {
 			serverLog.Info("Listening", "protocol", "http", "name", n, "addr", addr)
 			if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				serverLog.Fatal("HTTP server failed", "name", n, "addr", addr, "err", err)
+				serverLog.Error("HTTP server failed", "name", n, "addr", addr, "err", err)
+				select {
+				case listenerErrCh <- fmt.Errorf("http %s (%s): %w", n, addr, err):
+				default:
+				}
 			}
 		}(entry.name, entry.addr, srv)
 	}
@@ -541,14 +579,16 @@ func runServer(cmd *cobra.Command, args []string) {
 		shutdownCh <- struct{}{}
 	})
 
-	// Block until signal or RPC stop
+	// Block until signal, RPC stop, or a listener goroutine fails.
 	select {
 	case sig := <-sigCh:
 		serverLog.Info("Received signal, shutting down", "signal", sig)
 	case <-shutdownCh:
+	case err := <-listenerErrCh:
+		serverLog.Error("Listener failed — initiating shutdown", "err", err)
+		retErr = err
 	}
-
-	doShutdown(httpSrvs, wsSrvs, wsServer, ledgerService, consensusComponents, db, repoManager, serverLog)
+	return retErr
 }
 
 // doShutdown performs graceful shutdown of all server components

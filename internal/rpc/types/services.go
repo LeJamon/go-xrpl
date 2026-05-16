@@ -84,8 +84,8 @@ type LedgerAccessor interface {
 	GetGenesisAccount() (string, error)
 	GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64)
 	GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*LedgerRangeResult, error)
-	GetLedgerEntry(entryKey [32]byte, ledgerIndex string) (*LedgerEntryResult, error)
-	GetLedgerData(ledgerIndex string, limit uint32, marker string) (*LedgerDataResult, error)
+	GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerIndex string) (*LedgerEntryResult, error)
+	GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*LedgerDataResult, error)
 	GetClosedLedgerView() (LedgerStateView, error)
 	IsAmendmentBlocked() bool
 }
@@ -101,14 +101,14 @@ type TransactionSubmitter interface {
 
 // AccountQuerier provides account-related read operations.
 type AccountQuerier interface {
-	GetAccountInfo(account string, ledgerIndex string) (*AccountInfo, error)
-	GetAccountLines(account string, ledgerIndex string, peer string, limit uint32) (*AccountLinesResult, error)
-	GetAccountOffers(account string, ledgerIndex string, limit uint32) (*AccountOffersResult, error)
+	GetAccountInfo(ctx context.Context, account string, ledgerIndex string) (*AccountInfo, error)
+	GetAccountLines(ctx context.Context, account string, ledgerIndex string, peer string, limit uint32) (*AccountLinesResult, error)
+	GetAccountOffers(ctx context.Context, account string, ledgerIndex string, limit uint32) (*AccountOffersResult, error)
 	GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *AccountTxMarker, forward bool) (*AccountTxResult, error)
-	GetAccountChannels(account string, destinationAccount string, ledgerIndex string, limit uint32) (*AccountChannelsResult, error)
-	GetAccountCurrencies(account string, ledgerIndex string) (*AccountCurrenciesResult, error)
-	GetAccountObjects(account string, ledgerIndex string, objType string, limit uint32) (*AccountObjectsResult, error)
-	GetAccountNFTs(account string, ledgerIndex string, limit uint32) (*AccountNFTsResult, error)
+	GetAccountChannels(ctx context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32) (*AccountChannelsResult, error)
+	GetAccountCurrencies(ctx context.Context, account string, ledgerIndex string) (*AccountCurrenciesResult, error)
+	GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32) (*AccountObjectsResult, error)
+	GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32) (*AccountNFTsResult, error)
 }
 
 // LedgerService is the full interface for ledger operations.
@@ -120,16 +120,16 @@ type LedgerService interface {
 	AccountQuerier
 
 	// Book and market data
-	GetBookOffers(takerGets, takerPays Amount, ledgerIndex string, limit uint32) (*BookOffersResult, error)
+	GetBookOffers(ctx context.Context, takerGets, takerPays Amount, ledgerIndex string, limit uint32) (*BookOffersResult, error)
 
 	// Gateway operations
-	GetGatewayBalances(account string, hotWallets []string, ledgerIndex string) (*GatewayBalancesResult, error)
-	GetNoRippleCheck(account string, role string, ledgerIndex string, limit uint32, transactions bool) (*NoRippleCheckResult, error)
-	GetDepositAuthorized(sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*DepositAuthorizedResult, error)
+	GetGatewayBalances(ctx context.Context, account string, hotWallets []string, ledgerIndex string) (*GatewayBalancesResult, error)
+	GetNoRippleCheck(ctx context.Context, account string, role string, ledgerIndex string, limit uint32, transactions bool) (*NoRippleCheckResult, error)
+	GetDepositAuthorized(ctx context.Context, sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*DepositAuthorizedResult, error)
 
 	// NFT operations
-	GetNFTBuyOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error)
-	GetNFTSellOffers(nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error)
+	GetNFTBuyOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error)
+	GetNFTSellOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error)
 }
 
 // LedgerStateView provides low-level read access to ledger state.

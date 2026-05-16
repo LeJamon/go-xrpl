@@ -1,6 +1,7 @@
 package txq
 
 import (
+	"math/bits"
 	"sort"
 )
 
@@ -42,58 +43,16 @@ func mulDiv(a, b, c uint64) uint64 {
 		return ^uint64(0)
 	}
 
-	// Use 128-bit arithmetic via two 64-bit values
-	// high, low = a * b
-	hi, lo := mul64(a, b)
+	// 128-bit a*b. math/bits.Mul64 compiles to a single MUL on amd64/arm64.
+	hi, lo := bits.Mul64(a, b)
 
-	// If high bits are significant relative to c, we'll overflow
+	// Avoid bits.Div64's panic on overflow / divide-by-zero.
 	if hi >= c {
 		return ^uint64(0)
 	}
 
-	// Divide 128-bit value by c
-	return div128(hi, lo, c)
-}
-
-// mul64 multiplies two uint64 values and returns a 128-bit result as (high, low).
-func mul64(a, b uint64) (hi, lo uint64) {
-	const mask32 = (1 << 32) - 1
-	a0 := a & mask32
-	a1 := a >> 32
-	b0 := b & mask32
-	b1 := b >> 32
-
-	p0 := a0 * b0
-	p1 := a0 * b1
-	p2 := a1 * b0
-	p3 := a1 * b1
-
-	mid := p1 + (p0 >> 32) + (p2 & mask32)
-	hi = p3 + (p1 >> 32) + (p2 >> 32) + (mid >> 32)
-	lo = (p0 & mask32) | (mid << 32)
-	return
-}
-
-// div128 divides a 128-bit value (hi, lo) by a 64-bit divisor.
-func div128(hi, lo, divisor uint64) uint64 {
-	if hi == 0 {
-		return lo / divisor
-	}
-
-	// Simple long division for the case where hi < divisor
-	// This works because we already checked hi < divisor in mulDiv
-	quotient := uint64(0)
-	remainder := hi
-
-	for i := 63; i >= 0; i-- {
-		remainder = (remainder << 1) | ((lo >> i) & 1)
-		if remainder >= divisor {
-			remainder -= divisor
-			quotient |= 1 << i
-		}
-	}
-
-	return quotient
+	quo, _ := bits.Div64(hi, lo, c)
+	return quo
 }
 
 // FeeMetrics tracks and computes fee escalation metrics for the transaction queue.

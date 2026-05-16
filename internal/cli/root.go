@@ -20,6 +20,11 @@ var (
 	// globalConfig holds the loaded configuration, available to all subcommands.
 	// It is nil until initConfig() runs (which happens before any command's Run function).
 	globalConfig *config.Config
+
+	// globalConfigErr captures any error from initConfig so commands that
+	// don't need config (help, generate-config) can still run and commands
+	// that do need it can surface the failure via their RunE return.
+	globalConfigErr error
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -57,20 +62,31 @@ func init() {
 	rootCmd.PersistentFlags().Bool("silent", false, "no output to console after startup")
 }
 
-// initConfig loads and validates the configuration file.
-// The --conf flag is required for commands that need config (server).
-// Commands like generate-config and help work without it.
+// initConfig loads the configuration file when --conf is set; load
+// errors land in globalConfigErr so commands that don't need config
+// (help, generate-config) still run.
 func initConfig() {
-	// Skip config loading for commands that don't need it
+	globalConfig = nil
+	globalConfigErr = nil
 	if configFile == "" {
 		return
 	}
-
 	cfg, err := config.LoadConfig(config.ConfigPaths{Main: configFile})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Configuration error:\n%v\n", err)
-		os.Exit(1)
+		globalConfigErr = fmt.Errorf("configuration error: %w", err)
+		return
 	}
-
 	globalConfig = cfg
+}
+
+// requireConfig returns the loaded config or an error suitable for
+// returning from a cobra RunE.
+func requireConfig() (*config.Config, error) {
+	if globalConfigErr != nil {
+		return nil, globalConfigErr
+	}
+	if globalConfig == nil {
+		return nil, fmt.Errorf("missing --conf flag: this command requires a configuration file")
+	}
+	return globalConfig, nil
 }
