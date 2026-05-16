@@ -525,8 +525,11 @@ func (t *SLETracker) GenerateAffectedNodes() []AffectedNode {
 // Returns 0 if the field is not present (which is a valid default for page 0)
 // or if the SLE fails to decode.
 // Reference: rippled sfOwnerNode — needed for DirRemove to find the right page.
+//
+// Uses binarycodec.DecodeBytes directly to avoid the hex.EncodeToString round-trip
+// that an intermediate Decode(hex(data)) call would force on this DirRemove hot path.
 func GetOwnerNode(data []byte) uint64 {
-	decoded, err := binarycodec.Decode(hex.EncodeToString(data))
+	decoded, err := binarycodec.DecodeBytes(data)
 	if err != nil {
 		return 0
 	}

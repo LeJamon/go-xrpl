@@ -269,9 +269,12 @@ func IsLowAccount(account1, account2 [20]byte) bool {
 
 // currencyToBytes converts a currency code to its 20-byte representation.
 // Standard 3-character codes are zero-padded (e.g., "USD" -> 0x0000000000000000005553440000000000000000).
-// Hex strings are decoded via encoding/hex; malformed hex returns an all-zero
-// currency, mirroring rippled's noCurrency() fallback in to_currency
-// (UintTypes.cpp:106). Callers are still expected to validate input upstream.
+// Hex strings are decoded via encoding/hex; malformed hex returns noCurrency
+// — Currency(1) in rippled's base_uint<160> representation, i.e. a 20-byte
+// value with only the trailing byte set to 0x01. This matches rippled's
+// to_currency() fallback (UintTypes.cpp:114 -> noCurrency() at
+// UintTypes.cpp:126-130), and crucially avoids collapsing onto xrpCurrency()
+// (all-zeros) on bad input. Callers are still expected to validate upstream.
 func currencyToBytes(currency string) [20]byte {
 	var result [20]byte
 
@@ -283,12 +286,20 @@ func currencyToBytes(currency string) [20]byte {
 		result[14] = currency[2]
 	case 40:
 		if _, err := hex.Decode(result[:], []byte(currency)); err != nil {
-			return [20]byte{}
+			return noCurrency
 		}
+	default:
+		return noCurrency
 	}
 
 	return result
 }
+
+// noCurrency mirrors rippled's noCurrency() sentinel — base_uint<160>{1},
+// stored big-endian so only the last byte is 0x01. Used as the parse-failure
+// fallback for currencyToBytes, distinct from xrpCurrency() = all-zeros.
+// Reference: rippled UintTypes.cpp:126-130.
+var noCurrency = [20]byte{19: 0x01}
 
 // BookDir returns the keylet for an order book directory (base, without quality).
 // The hash order follows rippled: paysCurrency, getsCurrency, paysIssuer, getsIssuer

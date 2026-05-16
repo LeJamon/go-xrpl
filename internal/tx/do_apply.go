@@ -690,8 +690,24 @@ func (e *Engine) runInvariants(st *applyState, result Result) (r Result, handled
 // applyInvariantViolation handles the tecINVARIANT_FAILED reset path: discard
 // the sandbox, charge fee/seq/ticket, then run a second invariant check on the
 // fee-only state. If that also violates, escalate to tefINVARIANT_FAILED.
+//
+// The second-pass invariant check is wrapped in its own panic-recover so that
+// a panic from CheckInvariants (or invTecTable.Apply) on a fee-only state
+// cannot escape this function — mirroring rippled's checkInvariantsHelper
+// (ApplyContext.cpp:97-148), which wraps both the initial and recovery passes
+// in the same try/catch and escalates via failInvariantCheck. Without this,
+// a defense-in-depth panic on the recovery state would propagate out of
+// runInvariants (whose own defer has already fired) and crash the engine.
+//
 // Reference: rippled Transactor.cpp lines 1224-1238.
-func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) Result {
+func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (result Result) {
+	defer func() {
+		if r := recover(); r != nil {
+			e.logger.Error("invariant recovery panic — escalating to tefINVARIANT_FAILED",
+				"txHash", fmt.Sprintf("%x", st.txHash), "panic", r)
+			result = TefINVARIANT_FAILED
+		}
+	}()
 	// Don't call table.Apply() — discard all transaction effects.
 	// Create a fresh tecTable for fee-only changes.
 	invTecTable := NewApplyStateTable(e.view, st.txHash, e.config.LedgerSequence, e.rules())
