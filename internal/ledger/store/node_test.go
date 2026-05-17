@@ -6,6 +6,7 @@ import (
 )
 
 func TestCreateObject(t *testing.T) {
+	t.Parallel()
 	nodeType := TypeLedger
 	data := []byte("test data")
 	hash := [32]byte{1, 2, 3}
@@ -30,6 +31,7 @@ func TestCreateObject(t *testing.T) {
 }
 
 func TestNodeObjectTypes(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		nodeType ObjectType
@@ -52,6 +54,7 @@ func TestNodeObjectTypes(t *testing.T) {
 }
 
 func TestGetters(t *testing.T) {
+	t.Parallel()
 	nodeType := TypeAccount
 	data := []byte("test data for getters")
 	hash := [32]byte{1, 2, 3, 4}

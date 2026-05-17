@@ -22,6 +22,7 @@ func setupTestDB(t *testing.T) (*NodeStore, string) {
 }
 
 func TestNodeStore(t *testing.T) {
+	t.Parallel()
 	t.Log("Starting TestNodeStore")
 	store, tempDir := setupTestDB(t)
 	defer os.RemoveAll(tempDir)
@@ -98,6 +99,7 @@ func TestNodeStore(t *testing.T) {
 }
 
 func TestBatchOperations(t *testing.T) {
+	t.Parallel()
 	t.Log("Starting TestBatchOperations")
 	store, tempDir := setupTestDB(t)
 	defer os.RemoveAll(tempDir)

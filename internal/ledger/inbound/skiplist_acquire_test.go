@@ -76,6 +76,7 @@ func fixedHashes(n int) [][32]byte {
 // against the target's stateHash, and we recover the ancestor list
 // byte-for-byte.
 func TestSkipListAcquire_ValidProof_Accepted(t *testing.T) {
+	t.Parallel()
 	want := fixedHashes(256)
 	leaf := buildSkipListLeafSLE(t, want, 999)
 	stateHash, path := buildSkipListProof(t, leaf)
@@ -107,6 +108,7 @@ func TestSkipListAcquire_ValidProof_Accepted(t *testing.T) {
 // can fail to produce a valid proof. Each sub-case must terminate in
 // StateFailed with no Hashes() leak.
 func TestSkipListAcquire_InvalidProof_Rejected(t *testing.T) {
+	t.Parallel()
 	want := fixedHashes(8)
 	leaf := buildSkipListLeafSLE(t, want, 100)
 	goodStateHash, goodPath := buildSkipListProof(t, leaf)
@@ -235,9 +237,12 @@ func TestSkipListAcquire_InvalidProof_Rejected(t *testing.T) {
 // keylet::skip() key has produced a cryptographically valid but
 // semantically nonsense proof — must reject as proof-invalid.
 func TestSkipListAcquire_DecodeLedgerHashesSLE_NonHashesLeaf(t *testing.T) {
+	t.Parallel(
 	// Encode a FeeSettings SLE — not a LedgerHashes — and prove it
 	// under the same key. The proof is valid; only the leaf's
 	// LedgerEntryType is wrong.
+	)
+
 	hx, err := binarycodec.Encode(map[string]any{
 		"LedgerEntryType":   "FeeSettings",
 		"Flags":             uint32(0),

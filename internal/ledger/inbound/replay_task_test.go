@@ -192,6 +192,7 @@ func (s *recordingTaskSender) deltaReqsCopy() []deltaReq {
 // chain order. Verifies the OnDeltaVerified callback fires for every
 // chain entry and the task transitions to TaskStateComplete.
 func TestLedgerReplayTask_50LedgerBackwardWalk(t *testing.T) {
+	t.Parallel()
 	const (
 		depth     uint32 = 50
 		anchorSeq uint32 = 1000
@@ -350,6 +351,7 @@ func TestLedgerReplayTask_50LedgerBackwardWalk(t *testing.T) {
 // concurrent in-flight at 16 (3 peers × 2 each = 6 is the per-peer
 // ceiling, so the per-peer cap is the binding constraint here).
 func TestLedgerReplayTask_ParallelismBoundedByExistingCaps(t *testing.T) {
+	t.Parallel()
 	const (
 		depth     uint32 = 50
 		anchorSeq uint32 = 5000
@@ -462,6 +464,7 @@ func assertCaps(t *testing.T, s *recordingTaskSender, peers []uint64) {
 
 // TestLedgerReplayTask_DepthValidation rejects out-of-range depth.
 func TestLedgerReplayTask_DepthValidation(t *testing.T) {
+	t.Parallel()
 	r := NewReplayer(nil, nil, 0)
 	s := newRecordingTaskSender()
 
@@ -478,6 +481,7 @@ func TestLedgerReplayTask_DepthValidation(t *testing.T) {
 // TestLedgerReplayTask_SkipListTooShort aborts when the verified
 // skip-list has fewer hashes than the requested depth needs.
 func TestLedgerReplayTask_SkipListTooShort(t *testing.T) {
+	t.Parallel()
 	const depth uint32 = 50
 	tipHash := [32]byte{0xEE}
 	// Only 10 hashes — depth=50 needs 49 ancestors.
