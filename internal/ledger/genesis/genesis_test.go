@@ -112,9 +112,7 @@ func TestCreateGenesisLedgerWithAmendments(t *testing.T) {
 }
 
 func TestCreateGenesisLedgerLegacyFees(t *testing.T) {
-	t.Parallel(
-	// No amendments → legacy fee format (XRPFees not present)
-	)
+	t.Parallel()
 
 	cfg := Config{
 		Fees:       StandardFees(),
@@ -135,9 +133,7 @@ func TestCreateGenesisLedgerLegacyFees(t *testing.T) {
 }
 
 func TestCreateGenesisLedgerModernFees(t *testing.T) {
-	t.Parallel(
-	// Include XRPFees amendment → modern fee format
-	)
+	t.Parallel()
 
 	cfg := Config{
 		Fees:       StandardFees(),
@@ -272,9 +268,7 @@ func TestCalculateLedgerHash(t *testing.T) {
 }
 
 func TestHasXRPFeesAmendment(t *testing.T) {
-	t.Parallel(
-	// No amendments → false
-	)
+	t.Parallel()
 
 	if hasXRPFeesAmendment(nil) {
 		t.Error("Expected false for nil amendments")
