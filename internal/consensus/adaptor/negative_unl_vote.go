@@ -91,6 +91,33 @@ func (a *Adaptor) GenerateNegativeUNLPseudoTx(prev consensus.Ledger) [][]byte {
 	return blobs
 }
 
+// OnUNLChange notifies the NegativeUNL voter that the operator-trusted
+// validator set has changed at ledger sequence `seq`. `nowTrusted` is
+// the set of validators *added* in this reload — not the full new UNL —
+// matching rippled's `nUnlVote_.newValidators(seq, nowTrusted)` call
+// at RCLConsensus.cpp:1040-1041.
+//
+// Forwards to Voter.NewValidators (records added validators for the
+// NewValidatorDisableSkip grace period) and Voter.PurgeNewValidators
+// (drops entries older than the grace window). Mirrors rippled's
+// pairing at NegativeUNLVote.cpp:322-355.
+//
+// No-op when the adaptor was constructed without a Voter (no identity
+// or master keys plumbed in). Safe to call with an empty nowTrusted
+// slice to drive purge-only cycles.
+func (a *Adaptor) OnUNLChange(seq uint32, nowTrusted []consensus.NodeID) {
+	a.mu.Lock()
+	voter := a.negUNLVoter
+	a.mu.Unlock()
+	if voter == nil {
+		return
+	}
+	if len(nowTrusted) > 0 {
+		voter.NewValidators(seq, nowTrusted)
+	}
+	voter.PurgeNewValidators(seq)
+}
+
 // negativeUNLState reads and parses the NegativeUNL SLE from the
 // given ledger into the negativeunlvote.State shape. An empty/absent
 // SLE returns the zero-value State (no disabled, no pending changes).
