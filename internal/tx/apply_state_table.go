@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx/invariants"
+	"github.com/LeJamon/goXRPLd/internal/tx/ledgerfields"
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
@@ -660,6 +661,17 @@ func (t *ApplyStateTable) buildCreatedNode(key [32]byte, data []byte) (AffectedN
 		NewFields:       make(map[string]any),
 	}
 
+	// Typed fast path: skip the generic decode-into-map and emit only the
+	// fields that qualify for CreatedNode.NewFields straight into the output
+	// map. Falls back to the generic path for entry types we haven't typed.
+	if entry := ledgerfields.New(entryType); entry != nil {
+		if err := entry.Decode(data); err != nil {
+			return node, err
+		}
+		entry.EmitNewFields(node.NewFields)
+		return node, nil
+	}
+
 	// Extract fields for NewFields based on entry type
 	fields, err := extractLedgerFields(data, entryType)
 	if err != nil {
@@ -686,6 +698,27 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 		LedgerIndex:     strings.ToUpper(hex.EncodeToString(key[:])),
 		FinalFields:     make(map[string]any),
 		PreviousFields:  make(map[string]any),
+	}
+
+	// Typed fast path.
+	if origEntry := ledgerfields.New(entryType); origEntry != nil {
+		currEntry := ledgerfields.New(entryType)
+		if err := origEntry.Decode(original); err != nil {
+			return node, err
+		}
+		if err := currEntry.Decode(current); err != nil {
+			return node, err
+		}
+		node.PreviousTxnID, node.PreviousTxnLgrSeq = origEntry.PreviousTxn()
+		currEntry.EmitPreviousFields(origEntry, node.PreviousFields)
+		currEntry.EmitFinalFields(node.FinalFields)
+		if len(node.PreviousFields) == 0 {
+			node.PreviousFields = nil
+		}
+		if len(node.FinalFields) == 0 {
+			node.FinalFields = nil
+		}
+		return node, nil
 	}
 
 	// Extract fields from original and current
@@ -758,6 +791,27 @@ func (t *ApplyStateTable) buildDeletedNode(key [32]byte, original, current []byt
 		LedgerIndex:     strings.ToUpper(hex.EncodeToString(key[:])),
 		FinalFields:     make(map[string]any),
 		PreviousFields:  make(map[string]any),
+	}
+
+	// Typed fast path.
+	if origEntry := ledgerfields.New(entryType); origEntry != nil {
+		currEntry := ledgerfields.New(entryType)
+		if err := origEntry.Decode(original); err != nil {
+			return node, err
+		}
+		if err := currEntry.Decode(current); err != nil {
+			return node, err
+		}
+		node.PreviousTxnID, node.PreviousTxnLgrSeq = origEntry.PreviousTxn()
+		currEntry.EmitDeletePreviousFields(origEntry, node.PreviousFields)
+		currEntry.EmitDeleteFinalFields(node.FinalFields)
+		if len(node.PreviousFields) == 0 {
+			node.PreviousFields = nil
+		}
+		if len(node.FinalFields) == 0 {
+			node.FinalFields = nil
+		}
+		return node, nil
 	}
 
 	// Extract fields from both original and current
