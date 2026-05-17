@@ -622,4 +622,3 @@ func TestOpenLedger_Accept_RetriesFirst_ReplaysHeldTx(t *testing.T) {
 		t.Errorf("retries: got %d, want 0 (tx should have applied)", len(retries))
 	}
 }
-

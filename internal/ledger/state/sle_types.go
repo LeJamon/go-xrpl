@@ -41,7 +41,7 @@ func NewSLEAccountRoot(ledgerIndex [32]byte) *SLEAccountRoot {
 // LoadFromAccountRoot loads original values from an AccountRoot struct
 func (s *SLEAccountRoot) LoadFromAccountRoot(account *AccountRoot) {
 	s.SetOriginal("Account", account.Account)
-	s.SetOriginal("Balance", formatUint64(account.Balance))
+	s.SetOriginal("Balance", strconv.FormatUint(account.Balance, 10))
 	s.SetOriginal("Flags", account.Flags)
 	s.SetOriginal("OwnerCount", account.OwnerCount)
 	s.SetOriginal("Sequence", account.Sequence)
@@ -80,7 +80,7 @@ func (s *SLEAccountRoot) LoadFromAccountRoot(account *AccountRoot) {
 
 // UpdateBalance updates the balance and tracks the change
 func (s *SLEAccountRoot) UpdateBalance(newBalance uint64) {
-	s.SetField("Balance", formatUint64(newBalance))
+	s.SetField("Balance", strconv.FormatUint(newBalance, 10))
 }
 
 // UpdateOwnerCount updates the owner count and tracks the change
@@ -372,10 +372,3 @@ func (s *SLEDirectoryNode) UpdateIndexes(indexes [][32]byte) {
 	}
 	s.SetField("Indexes", strIndexes)
 }
-
-// formatUint64 formats a uint64 as a decimal string (for XRP drops).
-func formatUint64(v uint64) string {
-	return strconv.FormatUint(v, 10)
-}
-
-// Note: formatUint64Hex is defined in directory.go

@@ -237,11 +237,10 @@ func TestSkipListAcquire_InvalidProof_Rejected(t *testing.T) {
 // keylet::skip() key has produced a cryptographically valid but
 // semantically nonsense proof — must reject as proof-invalid.
 func TestSkipListAcquire_DecodeLedgerHashesSLE_NonHashesLeaf(t *testing.T) {
-	t.Parallel(
+	t.Parallel()
 	// Encode a FeeSettings SLE — not a LedgerHashes — and prove it
 	// under the same key. The proof is valid; only the leaf's
 	// LedgerEntryType is wrong.
-	)
 
 	hx, err := binarycodec.Encode(map[string]any{
 		"LedgerEntryType":   "FeeSettings",
