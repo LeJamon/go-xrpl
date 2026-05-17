@@ -125,11 +125,52 @@ type txSetAcquireState struct {
 	txMap      *shamap.SHAMap
 	startedAt  time.Time
 	lastUpdate time.Time
+
+	// Retry bookkeeping for issue #420. lastRequest is when we most
+	// recently broadcast a RequestTxSetMissingNodes; attempts counts
+	// those broadcasts so we can surface failure after a cap rather
+	// than spinning forever. peerNonProgress tracks consecutive
+	// TMLedgerData responses from a peer that failed to extend the
+	// SHAMap; peers over txSetPeerNonProgressThreshold are skipped
+	// during the next broadcast.
+	lastRequest     time.Time
+	attempts        int
+	failed          bool
+	peerNonProgress map[uint64]int
 }
 
 // 60s covers consensus round (LedgerMaxConsensus ~15s) plus retries with
 // margin while bounding memory under a stalled consumer.
 const txSetAcquireTTL = 60 * time.Second
+
+// Retry-loop knobs for tx-set acquisition (issue #420). Declared as
+// vars so tests can dial them down via txSetRetryKnobsForTest /
+// setTxSetRetryKnobsForTest. Production callers must not mutate.
+//
+//   - txSetRetryMinInterval: minimum spacing between
+//     RequestTxSetMissingNodes broadcasts for the same acquisition.
+//     Mirrors rippled's TX_ACQUIRE_TIMEOUT (TransactionAcquire.cpp:34).
+//   - txSetMaxAttempts: maximum number of broadcasts per acquisition
+//     before we mark it failed and stop. Mirrors rippled's
+//     MAX_TIMEOUTS = 20 (TransactionAcquire.cpp:38).
+//   - txSetPeerNonProgressThreshold: consecutive non-progressing
+//     TMLedgerData replies from one peer before that peer is skipped
+//     during the next broadcast. Scale of rippled's NORM_TIMEOUTS = 4.
+var (
+	txSetRetryMinInterval         = 250 * time.Millisecond
+	txSetMaxAttempts              = 20
+	txSetPeerNonProgressThreshold = 3
+)
+
+func txSetRetryKnobsForTest() (minInterval time.Duration, maxAttempts, peerThreshold int) {
+	return txSetRetryMinInterval, txSetMaxAttempts, txSetPeerNonProgressThreshold
+}
+
+func setTxSetRetryKnobsForTest(minInterval time.Duration, maxAttempts, peerThreshold int) {
+	txSetRetryMinInterval = minInterval
+	txSetMaxAttempts = maxAttempts
+	txSetPeerNonProgressThreshold = peerThreshold
+}
 
 // messageDedupTTL is how long a proposal/validation hash is
 // remembered for duplicate-detection purposes. Rippled uses a
@@ -990,7 +1031,10 @@ type logger interface {
 // accumulate nodes across responses, then either finish (→ engine.OnTxSet)
 // or request missing nodes (TransactionAcquire.cpp:144-171). State is keyed
 // by tx-set ID so partial responses can resume.
-func (r *Router) handleTxSetData(ld *message.LedgerData) {
+//
+// originPeer is the peer ID of the sender, used to attribute non-progress
+// for issue #420's per-peer de-prioritization.
+func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 	if len(ld.LedgerHash) != 32 {
 		return
 	}
@@ -999,6 +1043,13 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 
 	r.txSetAcquireMu.Lock()
 	state, exists := r.txSetAcquire[txSetID]
+	if exists && state.failed {
+		// Already gave up on this acquire; ignore stragglers until the
+		// TTL sweep clears the entry. Without this guard a slow peer's
+		// reply would re-arm the retry loop after we surfaced failure.
+		r.txSetAcquireMu.Unlock()
+		return
+	}
 	if !exists {
 		txMap, err := shamap.New(shamap.TypeTransaction)
 		if err != nil {
@@ -1017,7 +1068,11 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 				"error", err.Error())
 			return
 		}
-		state = &txSetAcquireState{txMap: txMap, startedAt: time.Now()}
+		state = &txSetAcquireState{
+			txMap:           txMap,
+			startedAt:       time.Now(),
+			peerNonProgress: make(map[uint64]int),
+		}
 		r.txSetAcquire[txSetID] = state
 	}
 	state.lastUpdate = time.Now()
@@ -1137,6 +1192,53 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 		}
 
 		if len(remaining) > 0 {
+			// Issue #420: throttle retries, cap total attempts, and
+			// route around peers that have repeatedly failed to extend
+			// the SHAMap. Without these guards a non-progressing peer
+			// triggers 100+ retries/sec until the 60s TTL sweep fires.
+			r.txSetAcquireMu.Lock()
+			if originPeer != 0 {
+				if added > 0 {
+					state.peerNonProgress[originPeer] = 0
+				} else {
+					state.peerNonProgress[originPeer]++
+				}
+			}
+			if !state.lastRequest.IsZero() && time.Since(state.lastRequest) < txSetRetryMinInterval {
+				r.txSetAcquireMu.Unlock()
+				r.logger.Debug("tx-set sync: retry throttled",
+					"t", "consensus", "event", "txset-retry-throttle",
+					"txset", fmt.Sprintf("%x", txSetID[:8]),
+					"missing", len(remaining),
+				)
+				return
+			}
+			if state.attempts >= txSetMaxAttempts {
+				state.failed = true
+				attempts := state.attempts
+				r.txSetAcquireMu.Unlock()
+				r.logger.Info("tx-set sync: max attempts exceeded",
+					"t", "consensus", "event", "txset-reject",
+					"txset", fmt.Sprintf("%x", txSetID[:8]),
+					"attempts", attempts,
+					"missing", len(remaining),
+				)
+				return
+			}
+			state.attempts++
+			state.lastRequest = time.Now()
+			var excluded map[uint64]bool
+			for pid, count := range state.peerNonProgress {
+				if count >= txSetPeerNonProgressThreshold {
+					if excluded == nil {
+						excluded = make(map[uint64]bool)
+					}
+					excluded[pid] = true
+				}
+			}
+			attempts := state.attempts
+			r.txSetAcquireMu.Unlock()
+
 			nodeIDs := make([][]byte, len(remaining))
 			for i, m := range remaining {
 				nodeIDs[i] = m.NodeID.Bytes()
@@ -1147,8 +1249,10 @@ func (r *Router) handleTxSetData(ld *message.LedgerData) {
 				"non_root_added", added,
 				"filled_local", filledFromPool,
 				"missing", len(remaining),
+				"attempts", attempts,
+				"excluded_peers", len(excluded),
 			)
-			if reqErr := r.adaptor.RequestTxSetMissingNodes(txSetID, nodeIDs); reqErr != nil {
+			if reqErr := r.adaptor.RequestTxSetMissingNodesExcept(txSetID, nodeIDs, excluded); reqErr != nil {
 				r.logger.Info("tx-set sync: missing-nodes request failed",
 					"t", "consensus", "event", "txset-reject",
 					"txset", fmt.Sprintf("%x", txSetID[:8]),
@@ -1829,7 +1933,7 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 	// liTS_CANDIDATE response — InboundTransactions::gotData feeds the
 	// engine via gotTxSet (consensus-time only). Issue #401.
 	if ld.InfoType == message.LedgerInfoTsCandidate {
-		r.handleTxSetData(ld)
+		r.handleTxSetData(ld, uint64(msg.PeerID))
 		return
 	}
 

@@ -124,6 +124,15 @@ func (s *OverlaySender) RequestTxSet(id consensus.TxSetID) error {
 // (TransactionAcquire.cpp:144-171). Each nodeID is 33 bytes (32 path +
 // 1 depth) per shamap.NodeID.Bytes.
 func (s *OverlaySender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte) error {
+	return s.RequestTxSetMissingNodesExcept(id, nodeIDs, nil)
+}
+
+// RequestTxSetMissingNodesExcept is RequestTxSetMissingNodes with a set
+// of peer IDs to skip. The exclusion set is populated by the router with
+// peers that have repeatedly returned non-progressing TMLedgerData
+// replies for this acquisition. A nil/empty excluded map falls through
+// to a plain broadcast. Issue #420.
+func (s *OverlaySender) RequestTxSetMissingNodesExcept(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool) error {
 	if len(nodeIDs) == 0 {
 		return fmt.Errorf("RequestTxSetMissingNodes: nodeIDs must be non-empty")
 	}
@@ -137,7 +146,14 @@ func (s *OverlaySender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [
 	if err != nil {
 		return fmt.Errorf("encode txset missing-nodes request: %w", err)
 	}
-	return s.overlay.Broadcast(frame)
+	if len(excluded) == 0 {
+		return s.overlay.Broadcast(frame)
+	}
+	skip := make(map[peermanagement.PeerID]bool, len(excluded))
+	for id := range excluded {
+		skip[peermanagement.PeerID(id)] = true
+	}
+	return s.overlay.BroadcastExceptSet(skip, frame)
 }
 
 func (s *OverlaySender) BroadcastStatusChange(sc *message.StatusChange) error {
