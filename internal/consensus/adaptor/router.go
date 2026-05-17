@@ -112,6 +112,13 @@ type Router struct {
 	txSetAcquireMu sync.Mutex
 	txSetAcquire   map[consensus.TxSetID]*txSetAcquireState
 
+	// Retry-loop knobs for tx-set acquisition (issue #420). Set to
+	// production defaults by NewRouter; tests inject smaller values via
+	// SetTxSetRetryKnobsForTest so they don't sleep for the production
+	// 250ms throttle window. See txSetRetryKnobs for the meaning of
+	// each field.
+	txSetRetryKnobs txSetRetryKnobs
+
 	// activeTask, when non-nil, is the LedgerReplayTask currently
 	// driving a multi-ledger backward catch-up. Single-task design:
 	// deep catch-up is a one-shot operation, and serializing the
@@ -131,11 +138,10 @@ type txSetAcquireState struct {
 	// those broadcasts so we can surface failure after a cap rather
 	// than spinning forever. peerNonProgress tracks consecutive
 	// TMLedgerData responses from a peer that failed to extend the
-	// SHAMap; peers over txSetPeerNonProgressThreshold are skipped
+	// SHAMap; peers at or over the per-peer threshold are skipped
 	// during the next broadcast.
 	lastRequest     time.Time
 	attempts        int
-	failed          bool
 	peerNonProgress map[uint64]int
 }
 
@@ -143,33 +149,45 @@ type txSetAcquireState struct {
 // margin while bounding memory under a stalled consumer.
 const txSetAcquireTTL = 60 * time.Second
 
-// Retry-loop knobs for tx-set acquisition (issue #420). Declared as
-// vars so tests can dial them down via txSetRetryKnobsForTest /
-// setTxSetRetryKnobsForTest. Production callers must not mutate.
+// txSetRetryKnobs collects the tunable parameters of the tx-set acquire
+// retry loop (issue #420). goXRPL's retry is event-driven (one tick
+// per inbound TMLedgerData), so these adapt — rather than directly
+// mirror — rippled's timer-driven cadence in TransactionAcquire.cpp.
 //
-//   - txSetRetryMinInterval: minimum spacing between
-//     RequestTxSetMissingNodes broadcasts for the same acquisition.
-//     Mirrors rippled's TX_ACQUIRE_TIMEOUT (TransactionAcquire.cpp:34).
-//   - txSetMaxAttempts: maximum number of broadcasts per acquisition
-//     before we mark it failed and stop. Mirrors rippled's
-//     MAX_TIMEOUTS = 20 (TransactionAcquire.cpp:38).
-//   - txSetPeerNonProgressThreshold: consecutive non-progressing
-//     TMLedgerData replies from one peer before that peer is skipped
-//     during the next broadcast. Scale of rippled's NORM_TIMEOUTS = 4.
-var (
-	txSetRetryMinInterval         = 250 * time.Millisecond
-	txSetMaxAttempts              = 20
-	txSetPeerNonProgressThreshold = 3
-)
-
-func txSetRetryKnobsForTest() (minInterval time.Duration, maxAttempts, peerThreshold int) {
-	return txSetRetryMinInterval, txSetMaxAttempts, txSetPeerNonProgressThreshold
+//   - MinInterval: minimum spacing between successive broadcasts for
+//     the same acquisition. We reuse rippled's TX_ACQUIRE_TIMEOUT
+//     period (TransactionAcquire.cpp:34, 250ms) as the cadence ceiling
+//     so a chatty peer can't drive us faster than rippled's own timer
+//     would have.
+//   - MaxAttempts: hard cap on broadcasts per acquisition. Matches
+//     rippled's MAX_TIMEOUTS = 20 (TransactionAcquire.cpp:38) — the
+//     point at which rippled's onTimer flips failed_ and gives up.
+//   - PeerNonProgressThreshold: consecutive non-progressing
+//     TMLedgerData replies from one peer before it is skipped on the
+//     next broadcast. goXRPL-specific: rippled selects peers via the
+//     hasTxSet predicate and does not score them per-acquire. 3 is
+//     small enough to react quickly to a truly stuck peer and large
+//     enough to ride out a transient empty reply.
+type txSetRetryKnobs struct {
+	MinInterval              time.Duration
+	MaxAttempts              int
+	PeerNonProgressThreshold int
 }
 
-func setTxSetRetryKnobsForTest(minInterval time.Duration, maxAttempts, peerThreshold int) {
-	txSetRetryMinInterval = minInterval
-	txSetMaxAttempts = maxAttempts
-	txSetPeerNonProgressThreshold = peerThreshold
+func defaultTxSetRetryKnobs() txSetRetryKnobs {
+	return txSetRetryKnobs{
+		MinInterval:              250 * time.Millisecond,
+		MaxAttempts:              20,
+		PeerNonProgressThreshold: 3,
+	}
+}
+
+// SetTxSetRetryKnobsForTest overrides the issue-#420 retry knobs on
+// this Router. Tests use it to dial timings down so they don't sleep
+// for the production throttle window. Not safe to call concurrently
+// with handleTxSetData and not intended for production use.
+func (r *Router) SetTxSetRetryKnobsForTest(knobs txSetRetryKnobs) {
+	r.txSetRetryKnobs = knobs
 }
 
 // messageDedupTTL is how long a proposal/validation hash is
@@ -196,8 +214,9 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManag
 		logger:       logger,
 		peerStates:   make(map[peermanagement.PeerID]*peerLedgerState),
 		replayer:     inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
-		messageSeen:  newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
-		txSetAcquire: make(map[consensus.TxSetID]*txSetAcquireState),
+		messageSeen:     newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
+		txSetAcquire:    make(map[consensus.TxSetID]*txSetAcquireState),
+		txSetRetryKnobs: defaultTxSetRetryKnobs(),
 	}
 	// Wire the stash → acquisition hook so quorum decisions on unknown
 	// ledgers don't sit silently in pendingLedgerValidations.
@@ -1043,13 +1062,6 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 
 	r.txSetAcquireMu.Lock()
 	state, exists := r.txSetAcquire[txSetID]
-	if exists && state.failed {
-		// Already gave up on this acquire; ignore stragglers until the
-		// TTL sweep clears the entry. Without this guard a slow peer's
-		// reply would re-arm the retry loop after we surfaced failure.
-		r.txSetAcquireMu.Unlock()
-		return
-	}
 	if !exists {
 		txMap, err := shamap.New(shamap.TypeTransaction)
 		if err != nil {
@@ -1081,13 +1093,21 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 	r.txSetAcquireMu.Unlock()
 
 	// Root NodeID is 33 zero bytes. AddRootNode is idempotent
-	// (ErrRootAlreadySet treated as success).
+	// (ErrRootAlreadySet treated as success). rootAccepted feeds
+	// per-peer progress accounting so a peer whose reply contains
+	// only the root still counts as making progress — matches
+	// TransactionAcquire::takeNodes (TransactionAcquire.cpp:194-226)
+	// where any successful add (root or non-root) returns useful().
+	rootAccepted := false
 	for _, node := range ld.Nodes {
 		if !isShamapRootNodeID(node.NodeID) {
 			continue
 		}
-		if err := txMap.AddRootNode([32]byte(txSetID), node.NodeData); err != nil &&
-			!errors.Is(err, shamap.ErrRootAlreadySet) {
+		err := txMap.AddRootNode([32]byte(txSetID), node.NodeData)
+		switch {
+		case err == nil, errors.Is(err, shamap.ErrRootAlreadySet):
+			rootAccepted = true
+		default:
 			r.logger.Info("tx-set sync: AddRootNode failed",
 				"t", "consensus", "event", "txset-reject",
 				"txset", fmt.Sprintf("%x", txSetID[:8]),
@@ -1196,15 +1216,17 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			// route around peers that have repeatedly failed to extend
 			// the SHAMap. Without these guards a non-progressing peer
 			// triggers 100+ retries/sec until the 60s TTL sweep fires.
+			knobs := r.txSetRetryKnobs
+			madeProgress := added > 0 || rootAccepted
 			r.txSetAcquireMu.Lock()
 			if originPeer != 0 {
-				if added > 0 {
+				if madeProgress {
 					state.peerNonProgress[originPeer] = 0
 				} else {
 					state.peerNonProgress[originPeer]++
 				}
 			}
-			if !state.lastRequest.IsZero() && time.Since(state.lastRequest) < txSetRetryMinInterval {
+			if !state.lastRequest.IsZero() && time.Since(state.lastRequest) < knobs.MinInterval {
 				r.txSetAcquireMu.Unlock()
 				r.logger.Debug("tx-set sync: retry throttled",
 					"t", "consensus", "event", "txset-retry-throttle",
@@ -1213,10 +1235,16 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 				)
 				return
 			}
-			if state.attempts >= txSetMaxAttempts {
-				state.failed = true
+			if state.attempts >= knobs.MaxAttempts {
 				attempts := state.attempts
+				delete(r.txSetAcquire, txSetID)
 				r.txSetAcquireMu.Unlock()
+				// Drop the entry rather than mark it permanently
+				// failed: if consensus is still proposing this set
+				// (rippled handles the equivalent via stillNeed —
+				// TransactionAcquire.cpp:256-264), the next inbound
+				// TMLedgerData should start a fresh acquire rather
+				// than be silently dropped for the TTL window.
 				r.logger.Info("tx-set sync: max attempts exceeded",
 					"t", "consensus", "event", "txset-reject",
 					"txset", fmt.Sprintf("%x", txSetID[:8]),
@@ -1229,7 +1257,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			state.lastRequest = time.Now()
 			var excluded map[uint64]bool
 			for pid, count := range state.peerNonProgress {
-				if count >= txSetPeerNonProgressThreshold {
+				if count >= knobs.PeerNonProgressThreshold {
 					if excluded == nil {
 						excluded = make(map[uint64]bool)
 					}
@@ -1252,7 +1280,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 				"attempts", attempts,
 				"excluded_peers", len(excluded),
 			)
-			if reqErr := r.adaptor.RequestTxSetMissingNodesExcept(txSetID, nodeIDs, excluded); reqErr != nil {
+			if reqErr := r.adaptor.RequestTxSetMissingNodes(txSetID, nodeIDs, excluded); reqErr != nil {
 				r.logger.Info("tx-set sync: missing-nodes request failed",
 					"t", "consensus", "event", "txset-reject",
 					"txset", fmt.Sprintf("%x", txSetID[:8]),

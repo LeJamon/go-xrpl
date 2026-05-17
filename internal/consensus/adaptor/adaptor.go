@@ -73,12 +73,12 @@ type NetworkSender interface {
 	// request returns a partial tree, follow up with a request for
 	// each missing node by its SHAMap path-based NodeID. nodeIDs
 	// must each be exactly 33 bytes (32 path bytes + 1 depth byte).
-	RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte) error
-	// RequestTxSetMissingNodesExcept is RequestTxSetMissingNodes with a
-	// set of peer IDs to skip during broadcast. Used by the router to
-	// route around peers that have repeatedly returned non-progressing
-	// TMLedgerData replies for an in-flight acquisition. Issue #420.
-	RequestTxSetMissingNodesExcept(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool) error
+	// excluded carries peer IDs that should be skipped during this
+	// broadcast — populated by the router with peers that have
+	// repeatedly returned non-progressing TMLedgerData replies for
+	// this acquisition. A nil or empty map is the unrestricted case.
+	// Issue #420.
+	RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool) error
 	RequestLedger(id consensus.LedgerID) error
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error
 	RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error
@@ -130,10 +130,7 @@ func (n *noopSender) RelayProposal(*consensus.Proposal, uint64) error     { retu
 func (n *noopSender) RelayValidation(*consensus.Validation, uint64) error { return nil }
 func (n *noopSender) UpdateRelaySlot([]byte, uint64, []uint64)            {}
 func (n *noopSender) RequestTxSet(consensus.TxSetID) error                { return nil }
-func (n *noopSender) RequestTxSetMissingNodes(consensus.TxSetID, [][]byte) error {
-	return nil
-}
-func (n *noopSender) RequestTxSetMissingNodesExcept(consensus.TxSetID, [][]byte, map[uint64]bool) error {
+func (n *noopSender) RequestTxSetMissingNodes(consensus.TxSetID, [][]byte, map[uint64]bool) error {
 	return nil
 }
 func (n *noopSender) RequestLedger(consensus.LedgerID) error                   { return nil }
@@ -538,12 +535,8 @@ func (a *Adaptor) RequestTxSet(id consensus.TxSetID) error {
 	return a.sender.RequestTxSet(id)
 }
 
-func (a *Adaptor) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte) error {
-	return a.sender.RequestTxSetMissingNodes(id, nodeIDs)
-}
-
-func (a *Adaptor) RequestTxSetMissingNodesExcept(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool) error {
-	return a.sender.RequestTxSetMissingNodesExcept(id, nodeIDs, excluded)
+func (a *Adaptor) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool) error {
+	return a.sender.RequestTxSetMissingNodes(id, nodeIDs, excluded)
 }
 
 func (a *Adaptor) RequestLedger(id consensus.LedgerID) error {
