@@ -2899,3 +2899,153 @@ func TestCloseLedger_BelowQuorumStallLog(t *testing.T) {
 		}
 	})
 }
+
+// TestShouldPause_AheadAndLaggards mirrors rippled's
+// Consensus<T>::shouldPause (Consensus.h:1241-1362). Three-validator UNL,
+// quorum=3, validated tip at seq=9, our prev at seq=12 (ahead=3). The
+// two peer validators have only validated up to seq=9 (laggards). Under
+// these conditions shouldPause MUST return true so phaseEstablish
+// suspends instead of advancing the LCL further.
+//
+// Without this gate the engine close-then-rollback-cycles every
+// heartbeat against an unreachable quorum and the local closed_ledger
+// drifts arbitrarily far past the validated tip — #451.
+func TestShouldPause_AheadAndLaggards(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.nodeID = consensus.NodeID{0x01}
+
+	peerA := consensus.NodeID{0x02}
+	peerB := consensus.NodeID{0x03}
+	adaptor.trusted[adaptor.nodeID] = true
+	adaptor.trusted[peerA] = true
+	adaptor.trusted[peerB] = true
+	adaptor.quorum = 3
+
+	validatedID := consensus.LedgerID{0x09}
+	validatedLedger := &mockLedger{id: validatedID, seq: 9, closeTime: time.Now()}
+	adaptor.ledgers[validatedID] = validatedLedger
+	adaptor.validatedLedgerHashOverride = validatedID
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 13, ParentHash: consensus.LedgerID{0x0c}}
+	engine.StartRound(round, true)
+
+	engine.mu.Lock()
+	// Mark this node as having previously emitted a validation so the
+	// bootstrap early-out in shouldPause doesn't fire.
+	engine.ourLastValidatedSeq = 9
+	// Anchor our prev at seq=12 (ahead of validated tip by 3) and put
+	// the engine in establish to mirror the phaseEstablish entry state.
+	engine.prevLedger = &mockLedger{id: consensus.LedgerID{0x0c}, seq: 12, closeTime: time.Now()}
+	engine.setPhase(consensus.PhaseEstablish)
+	// Inject peer validations at seq=9 — both peers are laggards: their
+	// latest validation has not advanced past our prev.
+	if engine.validationTracker != nil {
+		engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
+		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: validatedID, LedgerSeq: 9, Full: true, SignTime: time.Now(), SeenTime: time.Now()})
+		engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: validatedID, LedgerSeq: 9, Full: true, SignTime: time.Now(), SeenTime: time.Now()})
+	}
+	paused := engine.shouldPause(2 * time.Second)
+	engine.mu.Unlock()
+
+	if !paused {
+		t.Fatalf("shouldPause must return true when ahead=3 with 2 laggards in a 3-validator UNL (quorum=3)")
+	}
+}
+
+// TestShouldPause_BootstrapEarlyOut pins the early-out at
+// Consensus.h:1269-1276: shouldPause MUST return false before the node
+// has ever fully validated a ledger. Without this guard a fresh
+// validator could pause itself out of the very first round and never
+// emit anything — the network would never reach consensus.
+func TestShouldPause_BootstrapEarlyOut(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.trusted[adaptor.nodeID] = true
+	adaptor.quorum = 1
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 2, ParentHash: consensus.LedgerID{0x01}}
+	engine.StartRound(round, true)
+
+	engine.mu.Lock()
+	// ourLastValidatedSeq stays at zero (no prior validation) — the
+	// bootstrap gate must short-circuit shouldPause to false even when
+	// the trivial ahead/validator conditions would otherwise match.
+	engine.ourLastValidatedSeq = 0
+	engine.prevLedger = &mockLedger{id: consensus.LedgerID{0x05}, seq: 5, closeTime: time.Now()}
+	paused := engine.shouldPause(0)
+	engine.mu.Unlock()
+
+	if paused {
+		t.Fatalf("shouldPause must return false before any prior validation (bootstrap); a fresh node never pauses out of round 1")
+	}
+}
+
+// TestShouldPause_HardTimeoutOverride pins the hard-timeout escape at
+// Consensus.h:1271: once the round has exceeded LedgerMaxConsensus we
+// stop pausing so the abandon path can drive the round to a terminal
+// state instead of pausing forever.
+func TestShouldPause_HardTimeoutOverride(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.nodeID = consensus.NodeID{0x01}
+	peerA := consensus.NodeID{0x02}
+	peerB := consensus.NodeID{0x03}
+	adaptor.trusted[adaptor.nodeID] = true
+	adaptor.trusted[peerA] = true
+	adaptor.trusted[peerB] = true
+	adaptor.quorum = 3
+
+	validatedID := consensus.LedgerID{0x09}
+	validatedLedger := &mockLedger{id: validatedID, seq: 9, closeTime: time.Now()}
+	adaptor.ledgers[validatedID] = validatedLedger
+	adaptor.validatedLedgerHashOverride = validatedID
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 13, ParentHash: consensus.LedgerID{0x0c}}
+	engine.StartRound(round, true)
+
+	engine.mu.Lock()
+	engine.ourLastValidatedSeq = 9
+	engine.prevLedger = &mockLedger{id: consensus.LedgerID{0x0c}, seq: 12, closeTime: time.Now()}
+	engine.setPhase(consensus.PhaseEstablish)
+	if engine.validationTracker != nil {
+		engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
+		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: validatedID, LedgerSeq: 9, Full: true, SignTime: time.Now(), SeenTime: time.Now()})
+		engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: validatedID, LedgerSeq: 9, Full: true, SignTime: time.Now(), SeenTime: time.Now()})
+	}
+	// Same setup as the laggards test, but past the hard timeout —
+	// the gate must release so phaseEstablish proceeds to abandon.
+	paused := engine.shouldPause(engine.timing.LedgerMaxConsensus + time.Second)
+	engine.mu.Unlock()
+
+	if paused {
+		t.Fatalf("shouldPause must release after LedgerMaxConsensus elapses so the abandon path can fire")
+	}
+}

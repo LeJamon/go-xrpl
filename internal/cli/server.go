@@ -317,6 +317,11 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			proposers, convergeTime := engine.GetLastCloseInfo()
 			return proposers, int(convergeTime.Milliseconds())
 		}
+		// Expose the live consensus quorum to the `server_info` RPC so
+		// operators see the actual quorum (recomputed by the adaptor
+		// from UNL ∖ negative-UNL) instead of the hardcoded "1" that
+		// the bootstrap-time field used to return — #451.
+		services.ValidationQuorum = consensusComponents.Adaptor.GetQuorum
 		// Expose the validator-manifest cache to the `manifest` RPC.
 		// The cache is shared — the router writes inbound manifests,
 		// the engine reads for ephemeral→master translation, and this
