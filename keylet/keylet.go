@@ -267,20 +267,33 @@ func IsLowAccount(account1, account2 [20]byte) bool {
 	return bytes.Compare(account1[:], account2[:]) < 0
 }
 
-// currencyToBytes converts a currency code to its 20-byte representation.
-// Standard 3-character codes are zero-padded (e.g., "USD" -> 0x0000000000000000005553440000000000000000).
-// Hex strings are decoded via encoding/hex; malformed hex returns noCurrency
-// — Currency(1) in rippled's base_uint<160> representation, i.e. a 20-byte
-// value with only the trailing byte set to 0x01. This matches rippled's
-// to_currency() fallback (UintTypes.cpp:114 -> noCurrency() at
-// UintTypes.cpp:126-130), and crucially avoids collapsing onto xrpCurrency()
-// (all-zeros) on bad input. Callers are still expected to validate upstream.
+// currencyToBytes converts a currency code to its 20-byte representation,
+// matching rippled's to_currency (UintTypes.cpp:84-107):
+//   - "" or "XRP" → xrpCurrency() (all-zeros).
+//   - 3-char ISO code whose chars all lie in isoCharSet → zero-padded ASCII
+//     at offset 12-14.
+//   - 3-char code with any char outside isoCharSet → noCurrency().
+//   - 40-char hex → decoded bytes; malformed hex → noCurrency().
+//   - Any other length → noCurrency().
+//
+// noCurrency is Currency(1) in rippled's base_uint<160> big-endian, i.e. a
+// 20-byte value with only the trailing byte 0x01 (UintTypes.cpp:126-130).
+// Distinct from xrpCurrency() so malformed input never collides with XRP.
+// Callers are still expected to validate upstream.
 func currencyToBytes(currency string) [20]byte {
 	var result [20]byte
 
+	if currency == "" || currency == "XRP" {
+		return result
+	}
+
 	switch len(currency) {
 	case 3:
-		// Standard currency code - ASCII in bytes 12-14
+		for i := 0; i < 3; i++ {
+			if !isISOCurrencyChar(currency[i]) {
+				return noCurrency
+			}
+		}
 		result[12] = currency[0]
 		result[13] = currency[1]
 		result[14] = currency[2]
@@ -293,6 +306,24 @@ func currencyToBytes(currency string) [20]byte {
 	}
 
 	return result
+}
+
+// isISOCurrencyChar reports whether c is in rippled's isoCharSet
+// (UintTypes.cpp:39-43): ASCII letters, digits, and "<>(){}[]|?!@#$%^&*".
+func isISOCurrencyChar(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z':
+		return true
+	case c >= 'A' && c <= 'Z':
+		return true
+	case c >= '0' && c <= '9':
+		return true
+	}
+	switch c {
+	case '<', '>', '(', ')', '{', '}', '[', ']', '|', '?', '!', '@', '#', '$', '%', '^', '&', '*':
+		return true
+	}
+	return false
 }
 
 // noCurrency mirrors rippled's noCurrency() sentinel (UintTypes.cpp:126-130) —

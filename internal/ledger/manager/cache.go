@@ -144,8 +144,12 @@ func (c *LedgerCache) FindMissingInRange(start, end uint32) []uint32 {
 	return c.completeness.FindMissing(start, end)
 }
 
-// Clear removes all cached ledgers (but keeps completeness tracking)
+// Clear removes all cached ledgers (but keeps completeness tracking).
+// Holds writeMu so a concurrent Put cannot leave one cache populated while
+// the other is empty — the seq/hash double-write invariant Put/Remove rely on.
 func (c *LedgerCache) Clear() {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	c.recentBySeq.Purge()
 	c.recentByHash.Purge()
 }
