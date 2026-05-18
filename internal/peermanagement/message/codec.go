@@ -21,9 +21,9 @@ import (
 // at compile time (an unknown MessageType maps to defaultPerTypeMax,
 // not to "missing key").
 const (
-	smallMsgMax      = 64 * 1024         // 64 KiB
-	mediumMsgMax     = 1 * 1024 * 1024   // 1 MiB
-	largeMsgMax      = 16 * 1024 * 1024  // 16 MiB
+	smallMsgMax       = 64 * 1024        // 64 KiB
+	mediumMsgMax      = 1 * 1024 * 1024  // 1 MiB
+	largeMsgMax       = 16 * 1024 * 1024 // 16 MiB
 	defaultPerTypeMax = mediumMsgMax
 )
 
