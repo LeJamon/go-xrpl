@@ -107,6 +107,21 @@ type PublisherState struct {
 	// list. Mirrors rippled's PublisherListCollection.rawVersion at
 	// ValidatorList.h:74. Zero before the first accepted list.
 	Version uint32
+
+	// RawManifest / RawBlob / RawSignature are the wire-form bytes of
+	// the most recently accepted list, retained so the aggregator can
+	// rebroadcast the canonical accepted form to peers (mirrors
+	// rippled's PublisherList.rawManifest / rawBlob / rawSignature at
+	// ValidatorList.h:184-191). Cleared on revocation. Nil before the
+	// first accepted list.
+	//
+	// `RawManifest` and `RawBlob` are base64-encoded ASCII as received;
+	// `RawSignature` is hex-encoded ASCII. The aggregator stores them
+	// verbatim — no re-encoding — so what we relay is byte-identical
+	// to what an honest peer would have sent us.
+	RawManifest  []byte
+	RawBlob      []byte
+	RawSignature []byte
 }
 
 // SiteState is the per-URL polling state surfaced via the
@@ -201,6 +216,26 @@ type Aggregator struct {
 	clock func() time.Time
 
 	logger *slog.Logger
+
+	// bcaster is the overlay/encoder surface BroadcastLatest delivers
+	// frames through. Optional — nil disables outgoing relay (suits
+	// tests and standalone deployments with no peers).
+	bcaster PeerBroadcaster
+
+	// peerSeqMu guards peerSeq. Held briefly during ingress
+	// (RecordPeerSequence), disconnect (ForgetPeer), and broadcast
+	// (snapshot + post-send update). Distinct from `mu` so a
+	// long-running broadcast never blocks publisher-list ingest.
+	peerSeqMu sync.Mutex
+
+	// peerSeq[peerID][publisherKey] is the highest list sequence we
+	// know the peer has for that publisher. Updated on every accepted
+	// ingress (peer told us) and after every send (we told peer).
+	// Mirrors rippled's per-PeerImp publisherListSequences_ map
+	// (PeerImp.h:183, PeerImp.cpp:2102-2110); kept centrally here so
+	// BroadcastLatest can consult it without reaching into peer
+	// internals.
+	peerSeq map[uint64]map[PublisherKey]uint32
 }
 
 // Config carries Aggregator construction parameters. All fields are
@@ -282,7 +317,18 @@ func New(cfg Config) (*Aggregator, error) {
 		threshold:  threshold,
 		clock:      clock,
 		logger:     logger,
+		peerSeq:    make(map[uint64]map[PublisherKey]uint32),
 	}, nil
+}
+
+// SetBroadcaster wires the overlay/encoder surface BroadcastLatest
+// uses to deliver frames. Pass nil to disable relay (the default).
+// Safe to call multiple times; not safe to race with BroadcastLatest
+// — wire once at startup.
+func (a *Aggregator) SetBroadcaster(b PeerBroadcaster) {
+	a.mu.Lock()
+	a.bcaster = b
+	a.mu.Unlock()
 }
 
 // OnChange registers (or replaces) the callback fired when the
@@ -331,6 +377,15 @@ func (a *Aggregator) PublisherSnapshot() []PublisherState {
 		if len(s.Validators) > 0 {
 			cp.Validators = make([][33]byte, len(s.Validators))
 			copy(cp.Validators, s.Validators)
+		}
+		if len(s.RawManifest) > 0 {
+			cp.RawManifest = append([]byte(nil), s.RawManifest...)
+		}
+		if len(s.RawBlob) > 0 {
+			cp.RawBlob = append([]byte(nil), s.RawBlob...)
+		}
+		if len(s.RawSignature) > 0 {
+			cp.RawSignature = append([]byte(nil), s.RawSignature...)
 		}
 		out = append(out, cp)
 	}
@@ -408,11 +463,11 @@ func (a *Aggregator) UpdateSiteState(uri string, lastFetched, lastSuccess time.T
 
 // ApplyList ingests a single (manifest, blob, signature) triple and
 // returns the resulting disposition along with the publisher master
-// key (when extractable). Wraps the rippled-faithful applyList
-// algorithm: verify the publisher manifest, look up its current
-// ephemeral signing key, verify the blob signature, JSON-parse the
-// blob, then update per-publisher state and trigger an OnChange if the
-// trusted union changed.
+// key (when extractable) and the blob's sequence (when extractable).
+// Wraps the rippled-faithful applyList algorithm: verify the publisher
+// manifest, look up its current ephemeral signing key, verify the blob
+// signature, JSON-parse the blob, then update per-publisher state and
+// trigger an OnChange if the trusted union changed.
 //
 // `manifestBytes` and `blob` carry the WIRE-FORM ascii strings as
 // received in TMValidatorList / TMValidatorListCollection (base64-
@@ -427,10 +482,12 @@ func (a *Aggregator) UpdateSiteState(uri string, lastFetched, lastSuccess time.T
 // extractable (i.e. the manifest decoded), so the caller can attribute
 // metrics / bad-data charges with publisher-level granularity even on
 // failure paths. Returns the zero PublisherKey when the manifest
-// itself could not be parsed.
-func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version uint32, siteURI string) (Disposition, PublisherKey) {
+// itself could not be parsed. The sequence return is non-zero only
+// when the blob was decoded; the router uses it to record per-peer
+// publisher sequences regardless of accept/expired/pending outcome.
+func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version uint32, siteURI string) (Disposition, PublisherKey, uint32) {
 	if !isSupportedVersion(version) {
-		return UnsupportedVersion, PublisherKey{}
+		return UnsupportedVersion, PublisherKey{}, 0
 	}
 
 	// Decode the publisher manifest. The manifest is base64-encoded on
@@ -438,12 +495,12 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 	manifestRaw, err := decodeBase64Tolerant(manifestBytes)
 	if err != nil {
 		a.logger.Debug("validator list: manifest base64 decode failed", "error", err, "site", siteURI)
-		return Malformed, PublisherKey{}
+		return Malformed, PublisherKey{}, 0
 	}
 	parsed, err := manifest.Deserialize(manifestRaw)
 	if err != nil {
 		a.logger.Debug("validator list: manifest deserialize failed", "error", err, "site", siteURI)
-		return Malformed, PublisherKey{}
+		return Malformed, PublisherKey{}, 0
 	}
 	pubKey := PublisherKey(parsed.MasterKey)
 
@@ -455,7 +512,7 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 	_, trusted := a.publishers[pubKey]
 	a.mu.Unlock()
 	if !trusted {
-		return Untrusted, pubKey
+		return Untrusted, pubKey, 0
 	}
 
 	// Apply the publisher manifest to the manifest cache. This both
@@ -486,7 +543,7 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 			// (light), Invalid would map to feeInvalidSignature (heavy)
 			// — using Untrusted avoids overcharging honest peers that
 			// forward a list whose manifest the cache cannot accept.
-			return Untrusted, pubKey
+			return Untrusted, pubKey, 0
 		}
 	} else {
 		// Fall back to direct verification when no cache is wired
@@ -494,7 +551,7 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 		// pulled from the cache. Mirrors rippled's invalid-manifest →
 		// untrusted mapping at ValidatorList.cpp:1382-1383.
 		if err := parsed.Verify(); err != nil {
-			return Untrusted, pubKey
+			return Untrusted, pubKey, 0
 		}
 		// No cache means every fresh verify is "accepted" for the
 		// purpose of the revocation gate.
@@ -512,7 +569,7 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 		if manifestAccepted {
 			a.handleRevocation(pubKey)
 		}
-		return Untrusted, pubKey
+		return Untrusted, pubKey, 0
 	}
 
 	// Pull the current ephemeral signing key. With a cache: this is
@@ -531,19 +588,19 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 			// treat as untrusted (no usable signing key from a trusted
 			// publisher means we cannot verify the blob; rippled's
 			// equivalent at ValidatorList.cpp:1382 is also untrusted).
-			return Untrusted, pubKey
+			return Untrusted, pubKey, 0
 		}
 	}
 
 	if err := verifyBlobSignature(signingKey, blob, signature); err != nil {
 		a.logger.Debug("validator list: blob signature invalid", "error", err, "publisher", hex.EncodeToString(pubKey[:]))
-		return Invalid, pubKey
+		return Invalid, pubKey, 0
 	}
 
 	parsedBlob, disp, err := parseBlob(blob)
 	if err != nil {
 		a.logger.Debug("validator list: blob parse failed", "error", err, "publisher", hex.EncodeToString(pubKey[:]))
-		return disp, pubKey
+		return disp, pubKey, 0
 	}
 
 	now := a.clock()
@@ -564,20 +621,20 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 	// rippled returns same_sequence for every repeat of the current
 	// sequence regardless of `pubCollection.status`.
 	if parsedBlob.Sequence < current.Sequence {
-		return Stale, pubKey
+		return Stale, pubKey, parsedBlob.Sequence
 	}
 	if parsedBlob.Sequence == current.Sequence {
-		return SameSequence, pubKey
+		return SameSequence, pubKey, parsedBlob.Sequence
 	}
 	if validUntil.Before(now) || validUntil.Equal(now) {
 		// Even an expired list still updates the publisher entry so
 		// the RPC can surface "expired" — but the validators do NOT
 		// flow into the trusted union (status is StatusExpired).
-		applied := a.applyAcceptedLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now, version)
+		applied := a.applyAcceptedLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now, version, manifestBytes, blob, signature)
 		_ = applied // applyAcceptedLocked sets Status; trusted set recompute below skips expired.
 		current.Status = StatusExpired
 		a.recomputeAndEmitLocked()
-		return Expired, pubKey
+		return Expired, pubKey, parsedBlob.Sequence
 	}
 	if validFrom.After(now) {
 		// Future-dated. Rippled stores this in `remaining` so it can
@@ -586,19 +643,24 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 		// republish at effective time, and the 5-min poller cadence
 		// limits the lag). Tracked for future work but not blocking
 		// for the issue.
-		return Pending, pubKey
+		return Pending, pubKey, parsedBlob.Sequence
 	}
 
-	a.applyAcceptedLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now, version)
+	a.applyAcceptedLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now, version, manifestBytes, blob, signature)
 	a.recomputeAndEmitLocked()
-	return Accepted, pubKey
+	return Accepted, pubKey, parsedBlob.Sequence
 }
 
 // applyAcceptedLocked materializes the parsed blob into the
 // publisher's state. Caller must hold a.mu. Does NOT emit OnChange —
 // that's done by recomputeAndEmitLocked once the caller has decided
 // the disposition warrants a trusted-set recompute.
-func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, signingKey [33]byte, validFrom, validUntil time.Time, siteURI string, now time.Time, version uint32) bool {
+//
+// rawManifest / rawBlob / rawSignature are the wire-form bytes from
+// the original TMValidatorList / envelope; they are copied (not
+// referenced) so the caller may reuse its slices safely. Used later
+// by BroadcastLatest to re-emit the canonical accepted form to peers.
+func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, signingKey [33]byte, validFrom, validUntil time.Time, siteURI string, now time.Time, version uint32, rawManifest, rawBlob, rawSignature []byte) bool {
 	prevCount := len(s.Validators)
 	s.Sequence = blob.Sequence
 	s.Effective = validFrom
@@ -610,6 +672,9 @@ func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, sign
 	if version > s.Version {
 		s.Version = version
 	}
+	s.RawManifest = append(s.RawManifest[:0], rawManifest...)
+	s.RawBlob = append(s.RawBlob[:0], rawBlob...)
+	s.RawSignature = append(s.RawSignature[:0], rawSignature...)
 
 	keys := make([][33]byte, 0, len(blob.Validators))
 	for i, v := range blob.Validators {
@@ -658,7 +723,8 @@ func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, sign
 
 // handleRevocation removes a publisher's contribution when its master
 // key is revoked by a fresh manifest. Mirrors rippled's
-// removePublisherList(StatusRevoked) branch in verify().
+// removePublisherList(StatusRevoked) branch in verify(). Also clears
+// the retained wire bytes so a revoked publisher is never rebroadcast.
 func (a *Aggregator) handleRevocation(pubKey PublisherKey) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -668,6 +734,9 @@ func (a *Aggregator) handleRevocation(pubKey PublisherKey) {
 	}
 	s.Status = StatusRevoked
 	s.Validators = nil
+	s.RawManifest = nil
+	s.RawBlob = nil
+	s.RawSignature = nil
 	a.recomputeAndEmitLocked()
 }
 
@@ -793,23 +862,26 @@ func (a *Aggregator) TrustedValidators() ([]consensus.NodeID, [][33]byte) {
 // applying each blob individually with the collection's shared
 // publisher manifest. Returns the per-blob dispositions in the same
 // order as the collection's blob array, plus the publisher key once
-// the manifest decoded. The router uses the dispositions to decide
-// whether to charge the sender (any Invalid / Malformed) and whether
-// to relay (at least one Accepted).
+// the manifest decoded and the highest sequence observed across the
+// collection. The router uses the dispositions to decide whether to
+// charge the sender (any Invalid / Malformed) and whether to relay
+// (at least one Accepted), and uses the max-sequence value to update
+// the per-peer publisherListSequences entry.
 //
 // Mirrors rippled's applyLists at ValidatorList.cpp:998-1070.
-func (a *Aggregator) ApplyCollection(coll *message.ValidatorListCollection, siteURI string) ([]Disposition, PublisherKey) {
+func (a *Aggregator) ApplyCollection(coll *message.ValidatorListCollection, siteURI string) ([]Disposition, PublisherKey, uint32) {
 	if coll == nil {
-		return []Disposition{Malformed}, PublisherKey{}
+		return []Disposition{Malformed}, PublisherKey{}, 0
 	}
 	if !isSupportedVersion(coll.Version) {
-		return []Disposition{UnsupportedVersion}, PublisherKey{}
+		return []Disposition{UnsupportedVersion}, PublisherKey{}, 0
 	}
 	if len(coll.Blobs) == 0 {
-		return []Disposition{Malformed}, PublisherKey{}
+		return []Disposition{Malformed}, PublisherKey{}, 0
 	}
 	out := make([]Disposition, len(coll.Blobs))
 	var pubKey PublisherKey
+	var maxSeq uint32
 	for i, blob := range coll.Blobs {
 		// Per blob: prefer the embedded local manifest when present,
 		// else fall back to the collection's shared manifest. Matches
@@ -819,13 +891,16 @@ func (a *Aggregator) ApplyCollection(coll *message.ValidatorListCollection, site
 		if len(mf) == 0 {
 			mf = coll.Manifest
 		}
-		disp, pk := a.ApplyList(mf, blob.Blob, blob.Signature, coll.Version, siteURI)
+		disp, pk, seq := a.ApplyList(mf, blob.Blob, blob.Signature, coll.Version, siteURI)
 		out[i] = disp
 		if pk != (PublisherKey{}) {
 			pubKey = pk
 		}
+		if seq > maxSeq {
+			maxSeq = seq
+		}
 	}
-	return out, pubKey
+	return out, pubKey, maxSeq
 }
 
 // isSupportedVersion reports whether version is in SupportedVersions.
@@ -836,6 +911,130 @@ func isSupportedVersion(v uint32) bool {
 		}
 	}
 	return false
+}
+
+// RecordPeerSequence remembers that `peerID` has at least sequence
+// `seq` for `pubKey`. Called by the router after a successful ingress
+// of a TMValidatorList / TMValidatorListCollection — the peer has
+// proved possession of that sequence, so subsequent BroadcastLatest
+// passes for the same or older sequence can skip them.
+//
+// Monotonic: lower sequences are ignored. Zero `seq` is a no-op (we
+// only ever record a confirmed sequence). Mirrors rippled
+// PeerImp.cpp:2102-2110.
+func (a *Aggregator) RecordPeerSequence(peerID uint64, pubKey PublisherKey, seq uint32) {
+	if seq == 0 {
+		return
+	}
+	a.peerSeqMu.Lock()
+	defer a.peerSeqMu.Unlock()
+	m, ok := a.peerSeq[peerID]
+	if !ok {
+		m = make(map[PublisherKey]uint32)
+		a.peerSeq[peerID] = m
+	}
+	if seq > m[pubKey] {
+		m[pubKey] = seq
+	}
+}
+
+// ForgetPeer drops every per-publisher sequence record for `peerID`.
+// Called by the router from the peer-disconnect callback so the
+// per-peer map doesn't grow unbounded across the lifetime of the
+// process. Idempotent for unknown peers.
+func (a *Aggregator) ForgetPeer(peerID uint64) {
+	a.peerSeqMu.Lock()
+	defer a.peerSeqMu.Unlock()
+	delete(a.peerSeq, peerID)
+}
+
+// PeerSequence returns the highest sequence we believe `peerID` has
+// for `pubKey`, or 0 if unknown. Read-only accessor for tests and
+// observability; production code consults peerSeq via BroadcastLatest.
+func (a *Aggregator) PeerSequence(peerID uint64, pubKey PublisherKey) uint32 {
+	a.peerSeqMu.Lock()
+	defer a.peerSeqMu.Unlock()
+	if m, ok := a.peerSeq[peerID]; ok {
+		return m[pubKey]
+	}
+	return 0
+}
+
+// BroadcastLatest pushes the most recently accepted list for `pubKey`
+// to every connected peer that (a) negotiated ValidatorListPropagation
+// and (b) is known to be at a lower sequence than ours. `exceptPeer`
+// is the peer ID we just received the list from (or 0 for site-polled
+// lists) and is always skipped to avoid echoing back to the sender.
+//
+// No-op when no broadcaster is wired, when the publisher has no
+// accepted list to retain, or when the stored raw bytes are empty.
+// Mirrors rippled's ValidatorList::broadcastBlobs at
+// ValidatorList.cpp:872-937 — the per-peer publisherListSequence gate
+// + the "send the latest stored blob, not the inbound frame"
+// invariant. Per-peer state is updated after each successful send so
+// subsequent calls naturally skip the just-served peer.
+//
+// MUST NOT be called with a.mu held — the call snapshots state under
+// a.mu briefly then releases it, and may hold peerSeqMu and call into
+// the broadcaster (which writes to peer sockets) without either lock.
+func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
+	a.mu.Lock()
+	bcaster := a.bcaster
+	if bcaster == nil {
+		a.mu.Unlock()
+		return
+	}
+	s, ok := a.state[pubKey]
+	if !ok || s.Sequence == 0 || s.Status == StatusRevoked ||
+		len(s.RawManifest) == 0 || len(s.RawBlob) == 0 || len(s.RawSignature) == 0 {
+		a.mu.Unlock()
+		return
+	}
+	sequence := s.Sequence
+	blobVersion := s.Version
+	if blobVersion == 0 {
+		blobVersion = 1
+	}
+	rawManifest := append([]byte(nil), s.RawManifest...)
+	rawBlob := append([]byte(nil), s.RawBlob...)
+	rawSignature := append([]byte(nil), s.RawSignature...)
+	logger := a.logger
+	a.mu.Unlock()
+
+	active := bcaster.ActivePeers()
+	sent := 0
+	for _, peerID := range active {
+		if peerID == exceptPeer {
+			continue
+		}
+		if !bcaster.PeerSupportsVL(peerID) {
+			continue
+		}
+		if a.PeerSequence(peerID, pubKey) >= sequence {
+			continue
+		}
+		if err := bcaster.SendList(peerID, rawManifest, rawBlob, rawSignature, blobVersion); err != nil {
+			logger.Debug("validator list broadcast: send failed",
+				"peer", peerID,
+				"publisher", hex.EncodeToString(pubKey[:]),
+				"sequence", sequence,
+				"error", err)
+			continue
+		}
+		// Even if the wire bytes happened to coincide with a frame the
+		// peer just sent us, the in-flight RecordPeerSequence call
+		// will reach the same target sequence — so updating here is
+		// idempotent.
+		a.RecordPeerSequence(peerID, pubKey, sequence)
+		sent++
+	}
+
+	if sent > 0 {
+		logger.Debug("validator list broadcast",
+			"publisher", hex.EncodeToString(pubKey[:]),
+			"sequence", sequence,
+			"peers_sent", sent)
+	}
 }
 
 // mastersEqual reports whether two sorted master-key slices contain

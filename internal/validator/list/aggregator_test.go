@@ -126,7 +126,7 @@ func TestAggregator_ApplyList_Accepted_SinglePublisher_SingleValidator(t *testin
 
 	now := fixedClock()()
 	blob, sig := pub.signList(t, 1, 0, now.Add(24*time.Hour).Unix(), [][33]byte{val1})
-	disp, key := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://")
+	disp, key, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://")
 	if disp != list.Accepted {
 		t.Fatalf("disposition: got %s want Accepted", disp)
 	}
@@ -144,7 +144,7 @@ func TestAggregator_ApplyList_Accepted_SinglePublisher_SingleValidator(t *testin
 	changeMu.Unlock()
 
 	// Reapplying the same list is SameSequence and triggers no OnChange.
-	disp, _ = agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://")
+	disp, _, _ = agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://")
 	if disp != list.SameSequence {
 		t.Fatalf("re-apply disposition: got %s want SameSequence", disp)
 	}
@@ -182,7 +182,7 @@ func TestAggregator_ApplyList_Threshold_TwoOfThree(t *testing.T) {
 
 	// Publisher 1 lists {v1, v2}. Threshold not yet met.
 	blob, sig := pub1.signList(t, 1, 0, exp, [][33]byte{v1, v2})
-	if d, _ := agg.ApplyList(pub1.manifestB64, blob, sig, 1, "p1://"); d != list.Accepted {
+	if d, _, _ := agg.ApplyList(pub1.manifestB64, blob, sig, 1, "p1://"); d != list.Accepted {
 		t.Fatalf("pub1 disposition: %s", d)
 	}
 	if _, m := agg.TrustedValidators(); len(m) != 0 {
@@ -191,7 +191,7 @@ func TestAggregator_ApplyList_Threshold_TwoOfThree(t *testing.T) {
 
 	// Publisher 2 lists {v2, v3}. v2 now has 2 publisher votes ≥ threshold.
 	blob, sig = pub2.signList(t, 1, 0, exp, [][33]byte{v2, v3})
-	if d, _ := agg.ApplyList(pub2.manifestB64, blob, sig, 1, "p2://"); d != list.Accepted {
+	if d, _, _ := agg.ApplyList(pub2.manifestB64, blob, sig, 1, "p2://"); d != list.Accepted {
 		t.Fatalf("pub2 disposition: %s", d)
 	}
 	_, masters := agg.TrustedValidators()
@@ -201,7 +201,7 @@ func TestAggregator_ApplyList_Threshold_TwoOfThree(t *testing.T) {
 
 	// Publisher 3 lists {v1, v3}. Now v1, v2, v3 all have 2+ votes.
 	blob, sig = pub3.signList(t, 1, 0, exp, [][33]byte{v1, v3})
-	if d, _ := agg.ApplyList(pub3.manifestB64, blob, sig, 1, "p3://"); d != list.Accepted {
+	if d, _, _ := agg.ApplyList(pub3.manifestB64, blob, sig, 1, "p3://"); d != list.Accepted {
 		t.Fatalf("pub3 disposition: %s", d)
 	}
 	_, masters = agg.TrustedValidators()
@@ -237,12 +237,12 @@ func TestAggregator_ApplyList_Stale(t *testing.T) {
 
 	// Apply sequence 5.
 	blob, sig := pub.signList(t, 5, 0, exp, [][33]byte{v1})
-	if d, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://"); d != list.Accepted {
+	if d, _, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://"); d != list.Accepted {
 		t.Fatalf("seq=5 disposition: %s", d)
 	}
 	// Then sequence 3 should be Stale.
 	blob3, sig3 := pub.signList(t, 3, 0, exp, [][33]byte{v1})
-	if d, _ := agg.ApplyList(pub.manifestB64, blob3, sig3, 1, "test://"); d != list.Stale {
+	if d, _, _ := agg.ApplyList(pub.manifestB64, blob3, sig3, 1, "test://"); d != list.Stale {
 		t.Fatalf("seq=3 disposition: got %s want Stale", d)
 	}
 }
@@ -264,7 +264,7 @@ func TestAggregator_ApplyList_UntrustedPublisher(t *testing.T) {
 
 	now := fixedClock()()
 	blob, sig := pubOther.signList(t, 1, 0, now.Add(24*time.Hour).Unix(), [][33]byte{v1})
-	d, _ := agg.ApplyList(pubOther.manifestB64, blob, sig, 1, "test://")
+	d, _, _ := agg.ApplyList(pubOther.manifestB64, blob, sig, 1, "test://")
 	if d != list.Untrusted {
 		t.Fatalf("disposition: got %s want Untrusted", d)
 	}
@@ -291,7 +291,7 @@ func TestAggregator_ApplyList_BadSignature(t *testing.T) {
 	blob, sig := pub.signList(t, 1, 0, now.Add(24*time.Hour).Unix(), [][33]byte{v1})
 	// Corrupt the signature.
 	sig[5] ^= 0xff
-	d, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://")
+	d, _, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://")
 	if d != list.Invalid {
 		t.Fatalf("disposition: got %s want Invalid", d)
 	}
@@ -315,7 +315,7 @@ func TestAggregator_ApplyList_Expired(t *testing.T) {
 	// Expiration in the past relative to fixedClock.
 	exp := now.Add(-1 * time.Hour).Unix()
 	blob, sig := pub.signList(t, 1, 0, exp, [][33]byte{v1})
-	d, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://")
+	d, _, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://")
 	if d != list.Expired {
 		t.Fatalf("disposition: got %s want Expired", d)
 	}
@@ -332,7 +332,7 @@ func TestAggregator_ApplyList_UnsupportedVersion(t *testing.T) {
 		Manifests:     manifest.NewCache(),
 		Clock:         fixedClock(),
 	})
-	d, _ := agg.ApplyList(pub.manifestB64, []byte("garbage"), []byte("00"), 99, "test://")
+	d, _, _ := agg.ApplyList(pub.manifestB64, []byte("garbage"), []byte("00"), 99, "test://")
 	if d != list.UnsupportedVersion {
 		t.Fatalf("disposition: got %s want UnsupportedVersion", d)
 	}
@@ -344,7 +344,7 @@ func TestAggregator_ApplyList_MalformedManifest(t *testing.T) {
 		Threshold:     1,
 		Clock:         fixedClock(),
 	})
-	d, _ := agg.ApplyList([]byte("!@not_base64"), []byte("blob"), []byte("00"), 1, "test://")
+	d, _, _ := agg.ApplyList([]byte("!@not_base64"), []byte("blob"), []byte("00"), 1, "test://")
 	if d != list.Malformed {
 		t.Fatalf("disposition: got %s want Malformed", d)
 	}
@@ -372,7 +372,7 @@ func TestAggregator_ApplyCollection_AcceptedAndStale(t *testing.T) {
 			{Blob: blob1, Signature: sig1},
 		},
 	}
-	dispList, key := agg.ApplyCollection(coll, "test://")
+	dispList, key, _ := agg.ApplyCollection(coll, "test://")
 	if key != list.PublisherKey(pub.masterPub) {
 		t.Fatalf("publisher key mismatch")
 	}

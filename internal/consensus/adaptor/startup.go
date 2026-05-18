@@ -316,6 +316,13 @@ func NewFromConfig(
 			return nil, fmt.Errorf("validator-list aggregator: %w", err)
 		}
 		router.SetValidatorListAggregator(vlAgg)
+		// Wire the broadcaster so both ingress paths (peer router +
+		// HTTP poller) can push accepted lists out through the single
+		// aggregator-owned BroadcastLatest entry point. Mirrors
+		// rippled's applyListsAndBroadcast which uniformly fans out
+		// from inside ValidatorList for both peer-gossip and
+		// site-poll origins (ValidatorList.cpp:872-937, 939-994).
+		vlAgg.SetBroadcaster(NewRouterBroadcaster(overlay, sender))
 		if len(appCfg.Validators.ValidatorListSites) > 0 {
 			vlPoller = validatorlist.NewSitePoller(
 				append([]string(nil), appCfg.Validators.ValidatorListSites...),

@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"encoding/binary"
+	"fmt"
 	"strconv"
 
 	"github.com/LeJamon/goXRPLd/crypto/common"
@@ -60,22 +61,31 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 		}
 	}
 
-	disp, _ := r.validatorList.ApplyList(vl.Manifest, vl.Blob, vl.Signature, vl.Version, peerSite(msg.PeerID))
+	disp, pubKey, seq := r.validatorList.ApplyList(vl.Manifest, vl.Blob, vl.Signature, vl.Version, peerSite(msg.PeerID))
 
 	r.logger.Debug("validator list applied",
 		"peer", msg.PeerID,
 		"disposition", disp.String(),
-		"version", vl.Version)
+		"version", vl.Version,
+		"sequence", seq)
 
 	chargePeerForDisposition(r, msg.PeerID, "vl", disp)
 
-	if disp.ShouldRelay() && r.overlay != nil {
-		frame, encErr := encodeFrame(message.TypeValidatorList, vl)
-		if encErr != nil {
-			r.logger.Warn("failed to encode TMValidatorList relay frame", "error", encErr)
-			return
-		}
-		_ = r.overlay.BroadcastExcept(msg.PeerID, frame)
+	// Record what the peer demonstrably has so subsequent broadcasts
+	// from any source skip them. Mirrors rippled PeerImp.cpp:2102-2110
+	// which updates publisherListSequences_[pubKey] for accepted /
+	// expired / pending / same_sequence / known_sequence dispositions.
+	if pubKey != (validatorlist.PublisherKey{}) && seq > 0 && disp.ShouldRelay() {
+		r.validatorList.RecordPeerSequence(uint64(msg.PeerID), pubKey, seq)
+	}
+
+	// Relay the latest STORED accepted blob (not necessarily the
+	// inbound frame) via the aggregator-owned broadcast path. The
+	// aggregator skips peers already at this sequence and the
+	// originating peer. Mirrors rippled applyListsAndBroadcast →
+	// broadcastBlobs at ValidatorList.cpp:872-937.
+	if disp.ShouldRelay() && pubKey != (validatorlist.PublisherKey{}) {
+		r.validatorList.BroadcastLatest(pubKey, uint64(msg.PeerID))
 	}
 }
 
@@ -137,7 +147,7 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 		}
 	}
 
-	dispList, _ := r.validatorList.ApplyCollection(coll, peerSite(msg.PeerID))
+	dispList, pubKey, maxSeq := r.validatorList.ApplyCollection(coll, peerSite(msg.PeerID))
 
 	worst := validatorlist.Accepted
 	anyRelay := false
@@ -153,7 +163,8 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 	r.logger.Debug("validator list collection applied",
 		"peer", msg.PeerID,
 		"blobs", len(dispList),
-		"worst", worst.String())
+		"worst", worst.String(),
+		"max_sequence", maxSeq)
 
 	chargePeerForDisposition(r, msg.PeerID, "vl-coll", worst)
 
@@ -162,13 +173,15 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 		return
 	}
 
-	if anyRelay && r.overlay != nil {
-		frame, encErr := encodeFrame(message.TypeValidatorListCollection, coll)
-		if encErr != nil {
-			r.logger.Warn("failed to encode TMValidatorListCollection relay frame", "error", encErr)
-			return
-		}
-		_ = r.overlay.BroadcastExcept(msg.PeerID, frame)
+	// Record per-peer sequence using the highest blob sequence observed
+	// across the collection (mirrors rippled PeerImp.cpp:2110 which
+	// uses applyResult.sequence == bestDisposition's max sequence).
+	if pubKey != (validatorlist.PublisherKey{}) && maxSeq > 0 && anyRelay {
+		r.validatorList.RecordPeerSequence(uint64(msg.PeerID), pubKey, maxSeq)
+	}
+
+	if anyRelay && pubKey != (validatorlist.PublisherKey{}) {
+		r.validatorList.BroadcastLatest(pubKey, uint64(msg.PeerID))
 	}
 }
 
@@ -258,4 +271,68 @@ func chargePeerForDisposition(r *Router, peer peermanagement.PeerID, prefix stri
 // from.
 func peerSite(peerID peermanagement.PeerID) string {
 	return "peer:" + strconv.FormatUint(uint64(peerID), 10)
+}
+
+// RouterBroadcaster is the concrete validatorlist.PeerBroadcaster
+// adapter that bridges the aggregator to the overlay + frame codec.
+// One instance lives for the lifetime of the router; the aggregator
+// holds a reference (set via SetBroadcaster in Components bootstrap).
+//
+// All three methods are safe for concurrent use: ActivePeers and
+// PeerSupportsVL take the overlay's read-side locks; SendList encodes
+// fresh bytes per call. Returns are non-fatal — the aggregator logs
+// and continues with the next peer.
+type RouterBroadcaster struct {
+	overlay *peermanagement.Overlay
+	sender  NetworkSender
+}
+
+// NewRouterBroadcaster wires the overlay (for peer enumeration +
+// feature lookup) and the sender (for per-peer SendToPeer). Passing
+// nil for either degrades the broadcaster to a silent no-op so tests
+// without an overlay don't crash.
+func NewRouterBroadcaster(overlay *peermanagement.Overlay, sender NetworkSender) *RouterBroadcaster {
+	return &RouterBroadcaster{overlay: overlay, sender: sender}
+}
+
+// ActivePeers implements validatorlist.PeerBroadcaster.
+func (b *RouterBroadcaster) ActivePeers() []uint64 {
+	if b == nil || b.overlay == nil {
+		return nil
+	}
+	infos := b.overlay.Peers()
+	out := make([]uint64, 0, len(infos))
+	for _, p := range infos {
+		out = append(out, uint64(p.ID))
+	}
+	return out
+}
+
+// PeerSupportsVL implements validatorlist.PeerBroadcaster.
+func (b *RouterBroadcaster) PeerSupportsVL(peerID uint64) bool {
+	if b == nil || b.overlay == nil {
+		return false
+	}
+	return b.overlay.PeerSupports(peermanagement.PeerID(peerID), peermanagement.FeatureValidatorListPropagation)
+}
+
+// SendList implements validatorlist.PeerBroadcaster. Encodes a
+// TMValidatorList carrying the supplied wire bytes verbatim and
+// delivers it to peerID via the adaptor sender. blobVersion goes on
+// the frame's `version` field.
+func (b *RouterBroadcaster) SendList(peerID uint64, manifestBytes, blob, signature []byte, blobVersion uint32) error {
+	if b == nil || b.sender == nil {
+		return fmt.Errorf("router broadcaster: nil sender")
+	}
+	vl := &message.ValidatorList{
+		Manifest:  manifestBytes,
+		Blob:      blob,
+		Signature: signature,
+		Version:   blobVersion,
+	}
+	frame, err := encodeFrame(message.TypeValidatorList, vl)
+	if err != nil {
+		return fmt.Errorf("encode TMValidatorList: %w", err)
+	}
+	return b.sender.SendToPeer(peerID, frame)
 }

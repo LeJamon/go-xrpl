@@ -241,6 +241,7 @@ func (p *SitePoller) fetchAndApply(ctx context.Context, uri string) time.Duratio
 
 	var disp Disposition
 	var dispList []Disposition
+	var pubKey PublisherKey
 	if len(env.BlobsV2) > 0 {
 		// v2 envelope: collection of forward-dated blobs.
 		coll := &message.ValidatorListCollection{
@@ -254,11 +255,11 @@ func (p *SitePoller) fetchAndApply(ctx context.Context, uri string) time.Duratio
 				Signature: []byte(b.Signature),
 			})
 		}
-		dispList, _ = p.aggregator.ApplyCollection(coll, uri)
+		dispList, pubKey, _ = p.aggregator.ApplyCollection(coll, uri)
 		disp = bestDisposition(dispList)
 	} else if env.Blob != "" && env.Signature != "" && env.Manifest != "" {
 		// v1 envelope.
-		disp, _ = p.aggregator.ApplyList(
+		disp, pubKey, _ = p.aggregator.ApplyList(
 			[]byte(env.Manifest),
 			[]byte(env.Blob),
 			[]byte(env.Signature),
@@ -268,6 +269,15 @@ func (p *SitePoller) fetchAndApply(ctx context.Context, uri string) time.Duratio
 	} else {
 		disp = Malformed
 		p.logger.Warn("validator list envelope missing required fields", "uri", uri)
+	}
+
+	// Push the canonical accepted form out to peers. Mirrors rippled
+	// ValidatorSite::parseJsonResponse calling applyListsAndBroadcast
+	// at ValidatorSite.cpp:418-427 — the broadcaster owned by the
+	// aggregator skips peers that already have this sequence (no
+	// originating peer for HTTP-polled lists, so exceptPeer == 0).
+	if disp.ShouldRelay() && pubKey != (PublisherKey{}) {
+		p.aggregator.BroadcastLatest(pubKey, 0)
 	}
 
 	refreshSec := 0

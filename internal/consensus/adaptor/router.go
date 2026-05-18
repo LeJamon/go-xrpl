@@ -296,6 +296,15 @@ func (r *Router) HandlePeerDisconnect(peerID peermanagement.PeerID) {
 	// Clear the peer's LCL vote so getNetworkLedger stops counting its
 	// stale hash. The adaptor uses the zero LedgerID as a delete key.
 	r.adaptor.UpdatePeerLCL(uint64(peerID), consensus.LedgerID{})
+
+	// Drop the peer's per-publisher sequence record so the publisher-
+	// trust aggregator's peerSeq map doesn't grow unbounded across the
+	// lifetime of the process. Mirrors the implicit cleanup rippled
+	// gets from publisherListSequences_ living on the PeerImp itself
+	// (PeerImp.h:183) — when the peer object dies the map dies with it.
+	if r.validatorList != nil {
+		r.validatorList.ForgetPeer(uint64(peerID))
+	}
 }
 
 // Run reads messages from the overlay and dispatches them.
