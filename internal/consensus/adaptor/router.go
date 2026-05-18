@@ -210,13 +210,13 @@ const messageDedupMaxEntries = 4096
 func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManager, inbox <-chan *peermanagement.InboundMessage) *Router {
 	logger := slog.Default().With("component", "consensus-router")
 	r := &Router{
-		engine:       engine,
-		adaptor:      adaptor,
-		modeManager:  modeManager,
-		inbox:        inbox,
-		logger:       logger,
-		peerStates:   make(map[peermanagement.PeerID]*peerLedgerState),
-		replayer:     inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
+		engine:          engine,
+		adaptor:         adaptor,
+		modeManager:     modeManager,
+		inbox:           inbox,
+		logger:          logger,
+		peerStates:      make(map[peermanagement.PeerID]*peerLedgerState),
+		replayer:        inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
 		messageSeen:     newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
 		txSetAcquire:    make(map[consensus.TxSetID]*txSetAcquireState),
 		txSetRetryKnobs: defaultTxSetRetryKnobs(),
