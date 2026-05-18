@@ -324,7 +324,7 @@ func init() {
 // the decoded blob so the emit methods only write entries that actually exist.
 type {{ .StructName }} struct {
 	present uint64
-{{ range .Fields }}{{ if ne .Meta 3 }}	{{ .GoField }} {{ .GoType }}{{ if eq .XRPLType "AccountID" }} // AccountID (base58){{ else if eq .XRPLType "Amount" }} // Amount (XRP string | IOU map){{ else if eq .XRPLType "Hash256" }} // Hash256 (uppercase hex){{ else if eq .XRPLType "Hash160" }} // Hash160 (uppercase hex){{ else if eq .XRPLType "Hash128" }} // Hash128 (uppercase hex){{ else if eq .XRPLType "Blob" }} // Blob (uppercase hex){{ else if eq .XRPLType "UInt64" }} // UInt64 (uppercase hex){{ end }}
+{{ range .Fields }}{{ if ne .Meta 3 }}	{{ .GoField }} {{ .GoType }}{{ if eq .XRPLType "AccountID" }} // AccountID (base58){{ else if eq .XRPLType "Amount" }} // Amount (XRP string | IOU map){{ else if eq .XRPLType "Hash256" }} // Hash256 (uppercase hex){{ else if eq .XRPLType "Hash160" }} // Hash160 (uppercase hex){{ else if eq .XRPLType "Hash128" }} // Hash128 (uppercase hex){{ else if eq .XRPLType "Blob" }} // Blob (uppercase hex){{ else if eq .XRPLType "UInt64" }} // UInt64 (lowercase hex, no leading zeros){{ end }}
 {{ end }}{{ end }}}
 
 const (

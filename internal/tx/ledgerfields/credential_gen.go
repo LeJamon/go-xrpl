@@ -19,8 +19,8 @@ type Credential struct {
 	CredentialType    string // Blob (uppercase hex)
 	Expiration        uint32
 	URI               string // Blob (uppercase hex)
-	IssuerNode        string // UInt64 (uppercase hex)
-	SubjectNode       string // UInt64 (uppercase hex)
+	IssuerNode        string // UInt64 (lowercase hex, no leading zeros)
+	SubjectNode       string // UInt64 (lowercase hex, no leading zeros)
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32

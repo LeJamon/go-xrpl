@@ -16,9 +16,9 @@ type XChainOwnedCreateAccountClaimID struct {
 	present                         uint64
 	Account                         string // AccountID (base58)
 	XChainBridge                    any
-	XChainAccountCreateCount        string // UInt64 (uppercase hex)
+	XChainAccountCreateCount        string // UInt64 (lowercase hex, no leading zeros)
 	XChainCreateAccountAttestations []any
-	OwnerNode                       string // UInt64 (uppercase hex)
+	OwnerNode                       string // UInt64 (lowercase hex, no leading zeros)
 	PreviousTxnID                   string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq               uint32
 }

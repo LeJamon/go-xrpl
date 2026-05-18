@@ -83,15 +83,17 @@ func (r *streamReader) readUint8() (byte, error) {
 	return v, nil
 }
 
-// readUint64Hex reads 8 bytes and returns the uppercase hex string — the
-// canonical decoded form used by binarycodec.Decode for UInt64 fields.
+// readUint64Hex reads 8 bytes and returns the lowercase hex string with no
+// leading zeros — the canonical decoded form used by binarycodec.Decode for
+// UInt64 fields, matching rippled's STUInt64::getJson (std::to_chars base 16,
+// see rippled src/libxrpl/protocol/STInteger.cpp).
 func (r *streamReader) readUint64Hex() (string, error) {
 	if r.pos+8 > len(r.data) {
 		return "", errors.New("ledgerfields: out of bounds reading UInt64")
 	}
-	s := upperHex(r.data[r.pos : r.pos+8])
+	v := binary.BigEndian.Uint64(r.data[r.pos : r.pos+8])
 	r.pos += 8
-	return s, nil
+	return strconv.FormatUint(v, 16), nil
 }
 
 func (r *streamReader) readHash(n int) (string, error) {

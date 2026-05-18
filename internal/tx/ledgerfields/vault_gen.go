@@ -15,7 +15,7 @@ func init() {
 type Vault struct {
 	present           uint64
 	Sequence          uint32
-	OwnerNode         string // UInt64 (uppercase hex)
+	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
 	Owner             string // AccountID (base58)
 	Account           string // AccountID (base58)
 	Data              string // Blob (uppercase hex)

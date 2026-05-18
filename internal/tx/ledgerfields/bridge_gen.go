@@ -18,10 +18,10 @@ type Bridge struct {
 	SignatureReward          any    // Amount (XRP string | IOU map)
 	MinAccountCreateAmount   any    // Amount (XRP string | IOU map)
 	XChainBridge             any
-	XChainClaimID            string // UInt64 (uppercase hex)
-	XChainAccountCreateCount string // UInt64 (uppercase hex)
-	XChainAccountClaimCount  string // UInt64 (uppercase hex)
-	OwnerNode                string // UInt64 (uppercase hex)
+	XChainClaimID            string // UInt64 (lowercase hex, no leading zeros)
+	XChainAccountCreateCount string // UInt64 (lowercase hex, no leading zeros)
+	XChainAccountClaimCount  string // UInt64 (lowercase hex, no leading zeros)
+	OwnerNode                string // UInt64 (lowercase hex, no leading zeros)
 	PreviousTxnID            string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq        uint32
 }

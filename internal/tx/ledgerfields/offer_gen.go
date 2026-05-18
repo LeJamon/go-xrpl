@@ -19,8 +19,8 @@ type Offer struct {
 	TakerPays         any    // Amount (XRP string | IOU map)
 	TakerGets         any    // Amount (XRP string | IOU map)
 	BookDirectory     string // Hash256 (uppercase hex)
-	BookNode          string // UInt64 (uppercase hex)
-	OwnerNode         string // UInt64 (uppercase hex)
+	BookNode          string // UInt64 (lowercase hex, no leading zeros)
+	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
 	Expiration        uint32
 	Flags             uint32
 	DomainID          string // Hash256 (uppercase hex)

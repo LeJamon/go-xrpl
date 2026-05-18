@@ -24,8 +24,8 @@ type PayChannel struct {
 	CancelAfter       uint32
 	SourceTag         uint32
 	DestinationTag    uint32
-	OwnerNode         string // UInt64 (uppercase hex)
-	DestinationNode   string // UInt64 (uppercase hex)
+	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
+	DestinationNode   string // UInt64 (lowercase hex, no leading zeros)
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32

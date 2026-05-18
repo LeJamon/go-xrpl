@@ -386,7 +386,7 @@ func TestDecode(t *testing.T) {
 		{
 			description: "deserialize Uint64 correctly",
 			input:       "34000000044B82FA09",
-			output:      map[string]any{"OwnerNode": "000000044B82FA09"},
+			output:      map[string]any{"OwnerNode": "44b82fa09"},
 			expectedErr: nil,
 		},
 		{

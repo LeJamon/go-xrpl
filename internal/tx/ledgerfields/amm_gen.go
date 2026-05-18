@@ -21,7 +21,7 @@ type AMM struct {
 	LPTokenBalance    any // Amount (XRP string | IOU map)
 	Asset             any
 	Asset2            any
-	OwnerNode         string // UInt64 (uppercase hex)
+	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
 }

@@ -18,9 +18,9 @@ type MPToken struct {
 	Issuer            string // AccountID (base58)
 	Sequence          uint32
 	MPTokenIssuanceID string
-	MPTAmount         string // UInt64 (uppercase hex)
-	LockedAmount      string // UInt64 (uppercase hex)
-	OwnerNode         string // UInt64 (uppercase hex)
+	MPTAmount         string // UInt64 (lowercase hex, no leading zeros)
+	LockedAmount      string // UInt64 (lowercase hex, no leading zeros)
+	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32

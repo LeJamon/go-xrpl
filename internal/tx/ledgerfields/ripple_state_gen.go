@@ -18,8 +18,8 @@ type RippleState struct {
 	Balance           any    // Amount (XRP string | IOU map)
 	LowLimit          any    // Amount (XRP string | IOU map)
 	HighLimit         any    // Amount (XRP string | IOU map)
-	LowNode           string // UInt64 (uppercase hex)
-	HighNode          string // UInt64 (uppercase hex)
+	LowNode           string // UInt64 (lowercase hex, no leading zeros)
+	HighNode          string // UInt64 (lowercase hex, no leading zeros)
 	LowQualityIn      uint32
 	LowQualityOut     uint32
 	HighQualityIn     uint32

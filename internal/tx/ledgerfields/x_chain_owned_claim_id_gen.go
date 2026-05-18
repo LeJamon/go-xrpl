@@ -16,11 +16,11 @@ type XChainOwnedClaimID struct {
 	present                 uint64
 	Account                 string // AccountID (base58)
 	XChainBridge            any
-	XChainClaimID           string // UInt64 (uppercase hex)
+	XChainClaimID           string // UInt64 (lowercase hex, no leading zeros)
 	OtherChainSource        string // AccountID (base58)
 	XChainClaimAttestations []any
 	SignatureReward         any    // Amount (XRP string | IOU map)
-	OwnerNode               string // UInt64 (uppercase hex)
+	OwnerNode               string // UInt64 (lowercase hex, no leading zeros)
 	PreviousTxnID           string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq       uint32
 }

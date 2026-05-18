@@ -18,8 +18,8 @@ type NFTokenOffer struct {
 	Owner             string // AccountID (base58)
 	NFTokenID         string // Hash256 (uppercase hex)
 	Amount            any    // Amount (XRP string | IOU map)
-	OwnerNode         string // UInt64 (uppercase hex)
-	NFTokenOfferNode  string // UInt64 (uppercase hex)
+	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
+	NFTokenOfferNode  string // UInt64 (lowercase hex, no leading zeros)
 	Destination       string // AccountID (base58)
 	Expiration        uint32
 	Flags             uint32

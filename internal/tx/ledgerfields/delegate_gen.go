@@ -17,7 +17,7 @@ type Delegate struct {
 	Account           string // AccountID (base58)
 	Authorize         string // AccountID (base58)
 	Permissions       []any
-	OwnerNode         string // UInt64 (uppercase hex)
+	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32

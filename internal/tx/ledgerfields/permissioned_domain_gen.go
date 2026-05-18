@@ -17,7 +17,7 @@ type PermissionedDomain struct {
 	Owner               string // AccountID (base58)
 	Sequence            uint32
 	AcceptedCredentials []any
-	OwnerNode           string // UInt64 (uppercase hex)
+	OwnerNode           string // UInt64 (lowercase hex, no leading zeros)
 	Flags               uint32
 	PreviousTxnID       string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq   uint32

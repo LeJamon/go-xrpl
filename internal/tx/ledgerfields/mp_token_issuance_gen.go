@@ -17,11 +17,11 @@ type MPTokenIssuance struct {
 	Issuer            string // AccountID (base58)
 	Sequence          uint32
 	TransferFee       int
-	OwnerNode         string // UInt64 (uppercase hex)
+	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
 	AssetScale        int
-	MaximumAmount     string // UInt64 (uppercase hex)
-	OutstandingAmount string // UInt64 (uppercase hex)
-	LockedAmount      string // UInt64 (uppercase hex)
+	MaximumAmount     string // UInt64 (lowercase hex, no leading zeros)
+	OutstandingAmount string // UInt64 (lowercase hex, no leading zeros)
+	LockedAmount      string // UInt64 (lowercase hex, no leading zeros)
 	MPTokenMetadata   string // Blob (uppercase hex)
 	DomainID          string // Hash256 (uppercase hex)
 	Flags             uint32

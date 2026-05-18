@@ -18,8 +18,8 @@ type Check struct {
 	Destination       string // AccountID (base58)
 	SendMax           any    // Amount (XRP string | IOU map)
 	Sequence          uint32
-	OwnerNode         string // UInt64 (uppercase hex)
-	DestinationNode   string // UInt64 (uppercase hex)
+	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
+	DestinationNode   string // UInt64 (lowercase hex, no leading zeros)
 	Expiration        uint32
 	InvoiceID         string // Hash256 (uppercase hex)
 	SourceTag         uint32

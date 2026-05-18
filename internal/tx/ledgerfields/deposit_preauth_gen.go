@@ -16,7 +16,7 @@ type DepositPreauth struct {
 	present              uint64
 	Account              string // AccountID (base58)
 	Authorize            string // AccountID (base58)
-	OwnerNode            string // UInt64 (uppercase hex)
+	OwnerNode            string // UInt64 (lowercase hex, no leading zeros)
 	AuthorizeCredentials []any
 	Flags                uint32
 	PreviousTxnID        string // Hash256 (uppercase hex)
