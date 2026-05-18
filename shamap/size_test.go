@@ -133,7 +133,7 @@ func TestSize_SnapshotInheritsImmutableCache(t *testing.T) {
 // failingFamily forces Fetch to fail after the first N successful calls,
 // simulating a NodeStore blip mid-traversal.
 type failingFamily struct {
-	inner    Family
+	inner     Family
 	failAfter int32
 	calls     atomic.Int32
 }
