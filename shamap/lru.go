@@ -67,7 +67,7 @@ func (l *lruList[K, V]) front() *lruElem[K, V] {
 }
 
 func (l *lruList[K, V]) next(e *lruElem[K, V]) *lruElem[K, V] {
-	if e == nil || e.next == &l.tail {
+	if e == nil || e.next == nil || e.next == &l.tail {
 		return nil
 	}
 	return e.next

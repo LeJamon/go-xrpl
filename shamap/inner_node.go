@@ -133,6 +133,10 @@ func (n *InnerNode) SetChildDirect(index int, child Node) {
 // LoadChild returns the child pointer, stored hash, and isBranch bit for
 // the given branch under a single read-lock acquisition.
 // Index must be in [0, BranchFactor); out-of-range panics on slice deref.
+// The returned [32]byte is the parent's stored hash for the branch, which
+// may lag child.Hash() during a mutation cycle because dirtyUp clears
+// parent hashes before they are recomputed. Callers that need the child's
+// own current hash should call child.Hash() on the returned pointer.
 func (n *InnerNode) LoadChild(index int) (Node, [32]byte, bool) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -143,6 +147,11 @@ func (n *InnerNode) LoadChild(index int) (Node, [32]byte, bool) {
 // returns the resulting child. Concurrent readers racing to lazy-load the
 // same backed child observe a single winning installation.
 // Same index contract as LoadChild; out-of-range panics on slice deref.
+//
+// Preconditions (mirroring rippled canonicalizeChild,
+// SHAMapInnerNode.cpp:397-412, enforced by construction at callers, not at
+// runtime): branch must be a non-empty branch in isBranch, child must be
+// non-nil, and child.Hash() must equal n.hashes[index].
 func (n *InnerNode) SetChildIfNil(index int, child Node) Node {
 	n.mu.Lock()
 	defer n.mu.Unlock()

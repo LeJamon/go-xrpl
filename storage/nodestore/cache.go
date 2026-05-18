@@ -45,6 +45,9 @@ type cacheShard struct {
 // The *Node returned by Get aliases the shard's entry and is shared with
 // every other reader. Per the Node contract it MUST NOT be mutated;
 // callers that need to mutate must Clone() first.
+//
+// The global maxSize cap is not enforced directly; see SetMaxSize for the
+// worst-case shard-rounded overshoot.
 type Cache struct {
 	shards [cacheShardCount]*cacheShard
 
@@ -255,6 +258,11 @@ func (c *Cache) SetTTL(ttl time.Duration) {
 
 // SetMaxSize updates the maximum size of the cache.
 // If the new size is smaller than the current size, oldest entries are evicted.
+//
+// Per-shard rounding means the effective cap is
+// (ceil(maxSize / cacheShardCount)) * cacheShardCount, i.e. up to
+// maxSize + cacheShardCount - 1 entries in the worst case
+// (cacheShardCount is 16).
 func (c *Cache) SetMaxSize(maxSize int) {
 	c.configMu.Lock()
 	c.maxSize = maxSize

@@ -374,7 +374,8 @@ func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) error {
 			if newNode.Hash() != childHash {
 				return ErrNodeHashMismatch
 			}
-			parent.SetChildDirect(branch, newNode)
+			// rippled SHAMapSync.cpp:653 canonicalizeChild
+			parent.SetChildIfNil(branch, newNode)
 			return nil
 		}
 
