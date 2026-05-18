@@ -236,6 +236,15 @@ type Adaptor struct {
 	// AmendmentTable.cpp:75-286.
 	trustedVotes *TrustedVotes
 
+	// onTxSetRequested fires before every RequestTxSet broadcast so
+	// the router can re-arm its in-flight tx-set acquisition state
+	// (clear attempts and lastRequest), mirroring rippled's
+	// TransactionAcquire::stillNeed reset path invoked from
+	// InboundTransactionsImp::getSet at InboundTransactions.cpp:107-114.
+	// Nil before SetOnTxSetRequested is called; nil callers are a no-op.
+	// Issue #420.
+	onTxSetRequested func(consensus.TxSetID)
+
 	logger *slog.Logger
 }
 
@@ -531,7 +540,20 @@ func (a *Adaptor) UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPe
 	a.sender.UpdateRelaySlot(validatorKey, originPeer, seenPeers)
 }
 
+// SetOnTxSetRequested registers a callback invoked at the start of
+// every RequestTxSet. Used by the router to mirror rippled's
+// stillNeed re-arm: every active re-ask from consensus resets the
+// throttle/attempt bookkeeping on the in-flight acquisition so the
+// next inbound TMLedgerData broadcasts immediately. Set once at
+// startup; not safe for concurrent re-registration.
+func (a *Adaptor) SetOnTxSetRequested(cb func(consensus.TxSetID)) {
+	a.onTxSetRequested = cb
+}
+
 func (a *Adaptor) RequestTxSet(id consensus.TxSetID) error {
+	if a.onTxSetRequested != nil {
+		a.onTxSetRequested(id)
+	}
 	return a.sender.RequestTxSet(id)
 }
 

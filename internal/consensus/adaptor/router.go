@@ -184,9 +184,12 @@ func defaultTxSetRetryKnobs() txSetRetryKnobs {
 
 // SetTxSetRetryKnobsForTest overrides the issue-#420 retry knobs on
 // this Router. Tests use it to dial timings down so they don't sleep
-// for the production throttle window. Not safe to call concurrently
-// with handleTxSetData and not intended for production use.
+// for the production throttle window. The lock matches the read in
+// handleTxSetData so racing this against an active inbox goroutine
+// is safe under -race; production is not expected to call this.
 func (r *Router) SetTxSetRetryKnobsForTest(knobs txSetRetryKnobs) {
+	r.txSetAcquireMu.Lock()
+	defer r.txSetAcquireMu.Unlock()
 	r.txSetRetryKnobs = knobs
 }
 
@@ -224,6 +227,13 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManag
 		if svc := adaptor.LedgerService(); svc != nil {
 			svc.SetOnPendingValidationStashed(r.armValidationStashAcquisition)
 		}
+		// Wire stillNeed re-arm so every consensus re-ask of an
+		// in-flight tx-set clears the per-acquisition throttle and
+		// attempt-cap state. Mirrors rippled's
+		// TransactionAcquire::stillNeed (TransactionAcquire.cpp:256-264)
+		// triggered from InboundTransactionsImp::getSet
+		// (InboundTransactions.cpp:107-114). Issue #420.
+		adaptor.SetOnTxSetRequested(r.MarkTxSetStillNeeded)
 	}
 	return r
 }
@@ -1122,7 +1132,18 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 	// hash-search approach (AddKnownNodeUnchecked) silently rejected
 	// every node it couldn't place beneath a loaded parent, producing
 	// the missing-nodes retry storm of issue #413.
+	//
+	// replyValid stays true unless any non-root node fails parse or
+	// AddKnownNodeByID — matches rippled's takeNodes
+	// (TransactionAcquire.cpp:217-220) where a single bad non-root
+	// poisons the WHOLE reply (`return SHAMapAddNode::invalid()`),
+	// which the caller (InboundTransactions.cpp:177-178) then charges
+	// as feeUselessData. We can't charge resource fees, but we MUST
+	// reflect the same all-or-nothing reply outcome in per-peer
+	// non-progress accounting so a peer trickling junk alongside one
+	// good node can't keep its counter pinned at zero.
 	added := 0
+	replyValid := true
 	for _, node := range ld.Nodes {
 		if isShamapRootNodeID(node.NodeID) {
 			continue
@@ -1132,6 +1153,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 		}
 		parsedID, err := shamap.UnmarshalBinary(node.NodeID)
 		if err != nil {
+			replyValid = false
 			r.logger.Debug("tx-set sync: malformed node ID",
 				"t", "consensus", "event", "txset-node-reject",
 				"txset", fmt.Sprintf("%x", txSetID[:8]),
@@ -1140,6 +1162,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			continue
 		}
 		if err := txMap.AddKnownNodeByID(parsedID, node.NodeData); err != nil {
+			replyValid = false
 			r.logger.Debug("tx-set sync: node rejected",
 				"t", "consensus", "event", "txset-node-reject",
 				"txset", fmt.Sprintf("%x", txSetID[:8]),
@@ -1216,9 +1239,17 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			// route around peers that have repeatedly failed to extend
 			// the SHAMap. Without these guards a non-progressing peer
 			// triggers 100+ retries/sec until the 60s TTL sweep fires.
-			knobs := r.txSetRetryKnobs
-			madeProgress := added > 0 || rootAccepted
+			// madeProgress folds rippled's takeNodes useful() semantics
+			// (TransactionAcquire.cpp:194-226): a reply is useful only
+			// when it was non-empty AND every non-root node parsed and
+			// added cleanly. Any single bad non-root → invalid reply →
+			// not progress for the originating peer.
+			madeProgress := replyValid && (added > 0 || rootAccepted)
 			r.txSetAcquireMu.Lock()
+			// Knobs are read under txSetAcquireMu so a concurrent
+			// SetTxSetRetryKnobsForTest (test-only API) can't tear a
+			// half-updated struct into the hot path.
+			knobs := r.txSetRetryKnobs
 			if originPeer != 0 {
 				if madeProgress {
 					state.peerNonProgress[originPeer] = 0
@@ -1328,6 +1359,28 @@ func (r *Router) deleteTxSetAcquire(txSetID consensus.TxSetID) {
 	r.txSetAcquireMu.Lock()
 	delete(r.txSetAcquire, txSetID)
 	r.txSetAcquireMu.Unlock()
+}
+
+// MarkTxSetStillNeeded is the active re-arm hook fired every time
+// consensus re-asks for a tx-set via Adaptor.RequestTxSet. If an
+// in-flight acquisition for this set still exists, attempts and
+// lastRequest are cleared so the next inbound TMLedgerData broadcasts
+// immediately instead of being throttled or silently dropped past the
+// max-attempts cap. Mirrors rippled's TransactionAcquire::stillNeed
+// (TransactionAcquire.cpp:256-264), invoked from
+// InboundTransactionsImp::getSet when consensus re-acquires a known
+// in-flight set (InboundTransactions.cpp:107-114). A no-op if the
+// router has no entry for txSetID (e.g. first request, or already
+// completed and swept). Issue #420.
+func (r *Router) MarkTxSetStillNeeded(txSetID consensus.TxSetID) {
+	r.txSetAcquireMu.Lock()
+	defer r.txSetAcquireMu.Unlock()
+	state, ok := r.txSetAcquire[txSetID]
+	if !ok {
+		return
+	}
+	state.attempts = 0
+	state.lastRequest = time.Time{}
 }
 
 // sweepStaleTxSetAcquireLocked drops entries older than txSetAcquireTTL.

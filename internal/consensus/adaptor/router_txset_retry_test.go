@@ -258,3 +258,112 @@ func TestTxSetRetry_ProgressResetsNonProgressCounter(t *testing.T) {
 				"should not be enough to exclude the peer")
 	})
 }
+
+// TestTxSetRetry_BadNonRootInvalidatesWholeReply pins the
+// rippled-faithful takeNodes useful() semantics (M1 from PR #454
+// review). A reply that adds a valid root but ALSO carries any
+// non-root node that fails to parse / be added must NOT count as
+// progress for the peer that sent it — mirrors rippled's
+// TransactionAcquire.cpp:217-220 where one bad non-root short-circuits
+// the whole reply to invalid() and the caller charges feeUselessData
+// (InboundTransactions.cpp:177-178). Without this, a peer trickling
+// one valid node alongside junk pins its non-progress counter at zero
+// forever and is never de-prioritized by the per-peer threshold.
+func TestTxSetRetry_BadNonRootInvalidatesWholeReply(t *testing.T) {
+	router, rs := newRetryRouter(t)
+	const threshold = 2
+	withRetryKnobs(router, 0, 1_000_000, threshold, func() {
+		_, txSetID, wireNodes := buildTxSetForTest(t, 4)
+		rootNode := wireNodes[0]
+		require.Greater(t, len(wireNodes), 1)
+
+		// rootPlusJunkLD: valid root + a non-root NodeID with garbage
+		// data so AddKnownNodeByID fails. The non-root NodeID itself is
+		// well-formed (33 bytes, non-zero depth) so it survives the
+		// UnmarshalBinary check; the failure is on the data side.
+		nonRootID := wireNodes[1].NodeID
+		rootPlusJunkLD := &message.LedgerData{
+			InfoType:   message.LedgerInfoTsCandidate,
+			LedgerHash: txSetID[:],
+			Nodes: []message.LedgerNode{
+				{NodeID: rootNode.NodeID, NodeData: rootNode.Data},
+				{NodeID: nonRootID, NodeData: []byte{0xde, 0xad, 0xbe, 0xef}},
+			},
+		}
+		const badPeer = uint64(42)
+
+		// Reply 1: root accepted but junk non-root → replyValid=false →
+		// counter[badPeer] = 1 (< threshold).
+		router.handleTxSetData(rootPlusJunkLD, badPeer)
+		require.Equal(t, 1, rs.calledN())
+		assert.Empty(t, rs.lastCall().excluded,
+			"first such reply must broadcast without exclusions yet")
+
+		// Reply 2: same shape → counter[badPeer] = 2 (== threshold) →
+		// the next broadcast must exclude badPeer. Pre-M1 the rootAccepted
+		// branch alone would have reset the counter to 0 on each reply,
+		// so this peer would never have been excluded.
+		router.handleTxSetData(rootPlusJunkLD, badPeer)
+		require.Equal(t, 2, rs.calledN())
+		require.NotNil(t, rs.lastCall().excluded,
+			"second bad-non-root reply must trigger per-peer exclusion")
+		assert.Truef(t, rs.lastCall().excluded[badPeer],
+			"peer %d should be excluded — junk non-root must invalidate the whole reply "+
+				"per rippled's takeNodes useful() (TransactionAcquire.cpp:217-220), "+
+				"NOT count as progress just because the root was accepted",
+			badPeer)
+	})
+}
+
+// TestTxSetRetry_StillNeededReArmsAtCap pins the stillNeed re-arm
+// path (M3 from PR #454 review). Once an in-flight acquisition hits
+// MaxAttempts, the next inbound reply would normally drop into the
+// delete-on-cap branch. If consensus actively re-asks via
+// Adaptor.RequestTxSet (rippled's stillNeed trigger,
+// InboundTransactions.cpp:107-114 → TransactionAcquire.cpp:256-264)
+// BEFORE that drop happens, attempts must be reset so the acquisition
+// keeps broadcasting instead of waiting on the 60s TTL sweep.
+func TestTxSetRetry_StillNeededReArmsAtCap(t *testing.T) {
+	router, rs := newRetryRouter(t)
+	const maxAttempts = 2
+	withRetryKnobs(router, 0, maxAttempts, 1_000_000, func() {
+		ld, txSetID := rootOnlyTxSetLedgerData(t, 4)
+
+		// Drive attempts up to the cap.
+		for i := 0; i < maxAttempts; i++ {
+			router.handleTxSetData(ld, uint64(i+1))
+		}
+		require.Equal(t, maxAttempts, rs.calledN(),
+			"each of the first maxAttempts replies must broadcast")
+
+		// stillNeed: consensus re-asks for the same set. With the wiring
+		// in place, this resets attempts and lastRequest on the entry.
+		require.NoError(t, router.adaptor.RequestTxSet(txSetID))
+
+		// Next reply: pre-M3 this would have hit the cap and deleted the
+		// entry (no broadcast). With M3, attempts is back at 0 so the
+		// broadcast fires.
+		router.handleTxSetData(ld, 99)
+		assert.Equal(t, maxAttempts+1, rs.calledN(),
+			"after stillNeed re-arm, the next reply must broadcast instead "+
+				"of being silenced by the max-attempts cap")
+	})
+}
+
+// TestTxSetRetry_StillNeededNoOpOnUnknownTxSet pins that the
+// stillNeed hook is a safe no-op when no acquisition is in flight —
+// matching rippled's getSet path where the stillNeed call is gated on
+// `it->second.mAcquire` being live (InboundTransactions.cpp:110-113).
+func TestTxSetRetry_StillNeededNoOpOnUnknownTxSet(t *testing.T) {
+	router, _ := newRetryRouter(t)
+	var unknownID consensus.TxSetID
+	unknownID[0] = 0xab
+
+	// Must not panic, must not allocate state, must not broadcast.
+	router.MarkTxSetStillNeeded(unknownID)
+
+	router.txSetAcquireMu.Lock()
+	_, exists := router.txSetAcquire[unknownID]
+	router.txSetAcquireMu.Unlock()
+	assert.False(t, exists, "MarkTxSetStillNeeded must not allocate state for unknown tx-sets")
+}
