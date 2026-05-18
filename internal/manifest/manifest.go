@@ -174,29 +174,36 @@ func Deserialize(data []byte) (*Manifest, error) {
 // manifests) the ephemeral-key signature against the canonical signing
 // preimage: HashPrefix("MAN\0") || STObject(manifest without Signature
 // and MasterSignature). Mirrors Manifest::verify at Manifest.cpp:195-214.
+//
+// The serialized payload is decoded exactly once, then the signature
+// fields are read off the decoded map and the same map is reused to
+// build the signing preimage. Previously this path decoded twice per
+// Verify — once for the preimage and once for the signatures — under
+// the manifest cache write lock at #434.
 func (m *Manifest) Verify() error {
-	preimage, err := signingPreimage(m.Serialized)
-	if err != nil {
-		return fmt.Errorf("manifest: build signing preimage: %w", err)
-	}
-	// Re-decode to extract signature fields — small cost, keeps the
-	// Manifest struct free of intermediate parser state.
 	decoded, err := binarycodec.Decode(hex.EncodeToString(m.Serialized))
 	if err != nil {
-		return fmt.Errorf("manifest: re-decode for verify: %w", err)
+		return fmt.Errorf("manifest: decode for verify: %w", err)
 	}
 	masterSigHex, _ := decoded["MasterSignature"].(string)
 	if masterSigHex == "" {
 		return errors.New("manifest: MasterSignature missing on verify")
 	}
+	var sigHex string
+	if !m.Revoked() {
+		sigHex, _ = decoded["Signature"].(string)
+		if sigHex == "" {
+			return errors.New("manifest: Signature missing on verify")
+		}
+	}
+	preimage, err := signingPreimageFromDecoded(decoded)
+	if err != nil {
+		return fmt.Errorf("manifest: build signing preimage: %w", err)
+	}
 	if !verifySignature(m.MasterKey, preimage, masterSigHex) {
 		return errors.New("manifest: master signature invalid")
 	}
 	if !m.Revoked() {
-		sigHex, _ := decoded["Signature"].(string)
-		if sigHex == "" {
-			return errors.New("manifest: Signature missing on verify")
-		}
 		if !verifySignature(m.SigningKey, preimage, sigHex) {
 			return errors.New("manifest: ephemeral signature invalid")
 		}
@@ -204,15 +211,13 @@ func (m *Manifest) Verify() error {
 	return nil
 }
 
-// signingPreimage returns HashPrefix("MAN\0") || STObject(manifest
-// without signing fields). Mirrors rippled's ripple::verify pattern
-// (Sign.cpp:47-62) where ss.add32(prefix) precedes
-// st.addWithoutSigningFields(ss).
-func signingPreimage(serialized []byte) ([]byte, error) {
-	decoded, err := binarycodec.Decode(hex.EncodeToString(serialized))
-	if err != nil {
-		return nil, err
-	}
+// signingPreimageFromDecoded returns HashPrefix("MAN\0") || STObject
+// (manifest without signing fields). The caller owns `decoded`; this
+// function mutates it (deletes non-signing fields), so callers that
+// still need the original map must pass a clone. Mirrors rippled's
+// ripple::verify pattern (Sign.cpp:47-62) where ss.add32(prefix)
+// precedes st.addWithoutSigningFields(ss).
+func signingPreimageFromDecoded(decoded map[string]any) ([]byte, error) {
 	for k := range decoded {
 		fi, _ := definitions.Get().GetFieldInstanceByFieldName(k)
 		if fi != nil && !fi.IsSigningField {

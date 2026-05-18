@@ -8,6 +8,61 @@ import (
 	"io"
 )
 
+// Per-MessageType payload-size caps applied by ReadMessage BEFORE
+// allocating the payload slice. Without these, a peer can claim a
+// full MaxPayloadSize (64MB-1) header for any message type and force
+// a 64MB allocation per claim — a small fleet of malicious peers can
+// OOM the process before any decode runs. The values below are
+// generous (10x the typical observed size per type) so honest peers
+// never see ErrMessageTooLarge while obvious abuse is rejected at the
+// header. Anything not listed falls back to defaultPerTypeMax.
+//
+// Use a function rather than a `var` map so the table is fail-loud
+// at compile time (an unknown MessageType maps to defaultPerTypeMax,
+// not to "missing key").
+const (
+	smallMsgMax      = 64 * 1024         // 64 KiB
+	mediumMsgMax     = 1 * 1024 * 1024   // 1 MiB
+	largeMsgMax      = 16 * 1024 * 1024  // 16 MiB
+	defaultPerTypeMax = mediumMsgMax
+)
+
+// MaxPayloadSizeForType returns the largest payload (post-decompress
+// size for compressed messages) a peer may claim for the given
+// message type. Returns defaultPerTypeMax for unknown types so the
+// loop closes on the peer rather than silently accepting a 64MB
+// allocation claim.
+func MaxPayloadSizeForType(t MessageType) uint32 {
+	switch t {
+	case TypePing, TypeSquelch:
+		return 2048
+	case TypeEndpoints,
+		TypeStatusChange,
+		TypeProposeLedger,
+		TypeValidation,
+		TypeHaveSet,
+		TypeHaveTransactions,
+		TypeCluster:
+		return smallMsgMax
+	case TypeManifests,
+		TypeValidatorList,
+		TypeValidatorListCollection,
+		TypeGetLedger,
+		TypeGetObjects,
+		TypeProofPathReq,
+		TypeReplayDeltaReq,
+		TypeTransaction:
+		return mediumMsgMax
+	case TypeLedgerData,
+		TypeTransactions,
+		TypeProofPathResponse,
+		TypeReplayDeltaResponse:
+		return largeMsgMax
+	default:
+		return defaultPerTypeMax
+	}
+}
+
 const (
 	// HeaderSizeUncompressed is the size of an uncompressed message header.
 	// Format: 4 bytes (6 bits flags + 26 bits size) + 2 bytes (type)
@@ -200,6 +255,20 @@ func ReadMessage(r io.Reader) (*Header, []byte, error) {
 	header, err := DecodeHeader(headerBuf)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	// Per-type sanity cap on the on-wire payload claim BEFORE
+	// allocating. For compressed frames we also cap the
+	// uncompressed-size claim so a tiny LZ4 frame cannot decompress
+	// into a gigabyte-scale allocation.
+	maxSize := MaxPayloadSizeForType(header.MessageType)
+	if header.PayloadSize > maxSize {
+		return nil, nil, fmt.Errorf("%w: %d > %d for %s",
+			ErrMessageTooLarge, header.PayloadSize, maxSize, header.MessageType)
+	}
+	if header.Compressed && header.UncompressedSize > maxSize {
+		return nil, nil, fmt.Errorf("%w: uncompressed %d > %d for %s",
+			ErrMessageTooLarge, header.UncompressedSize, maxSize, header.MessageType)
 	}
 
 	// Read payload

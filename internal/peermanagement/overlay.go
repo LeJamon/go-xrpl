@@ -52,6 +52,17 @@ const EvictBadDataThreshold = 25000
 // asymptotes at 800 and never crosses the threshold.
 const badDataDecayInterval = 10 * time.Second
 
+// inboundBacklogSlack lets the accept loop hold a small queue of
+// not-yet-handled inbound TCP accepts past MaxInbound — the handler
+// itself enforces canAcceptInbound, but bounding the goroutine count
+// above MaxInbound at all is the point.
+const inboundBacklogSlack = 8
+
+// acceptBackoff bounds the retry rate when listener.Accept returns a
+// non-fatal error (typically EMFILE-class). Without it the loop spins
+// at CPU speed for as long as the FD pressure persists.
+const acceptBackoff = 100 * time.Millisecond
+
 // Bad-data weights mirror rippled's Resource::Fees.cpp:26-30. They
 // scale the per-reason severity of an IncBadData call:
 //   - feeInvalidSignature (2000) — bad signature / wrong pubkey format
@@ -98,7 +109,9 @@ func BadDataWeight(reason string) int {
 		"ledger-data-state",
 		"squelch-duration",
 		"squelch-map-full",
-		"squelch-malformed-pubkey":
+		"squelch-malformed-pubkey",
+		"decompress-lz4-failed",
+		"message-too-large":
 		return weightInvalidData
 	// Malformed requests: decode failures, bad hashes, wrong-field
 	// requests. Rippled: feeMalformedRequest at PeerImp.cpp:1693 for
@@ -201,6 +214,23 @@ type Overlay struct {
 	peersMu sync.RWMutex
 	nextID  atomic.Uint64
 
+	// peerWG joins every peer.Run goroutine launched by handleInbound
+	// or Connect. Stop() blocks on it so shutdown is deterministic
+	// instead of leaking goroutines past Overlay teardown.
+	peerWG sync.WaitGroup
+
+	// inboundSem caps concurrent handleInbound goroutines so a burst
+	// of TCP accepts past MaxInbound cannot blow up goroutine fan-out
+	// while each waits its turn for peersMu in canAcceptInbound.
+	// Length = MaxInbound + inboundBacklogSlack.
+	inboundSem chan struct{}
+
+	// outboundSem caps concurrent autoconnect Connect goroutines. The
+	// MaxOutbound check inside Connect re-validates under peersMu, but
+	// without an upstream bound a slow discovery tick stacks one
+	// goroutine per candidate.
+	outboundSem chan struct{}
+
 	// relayedIndex maps suppression-hash → set of peers known to have
 	// that message. Populated as we forward a validator message (each
 	// recipient joins the set) and queried by the consensus router on
@@ -244,6 +274,14 @@ type Overlay struct {
 	// response send path (EventLedgerResponse). Separate from
 	// droppedMessages so the two traffic classes can be distinguished.
 	droppedLedgerResponses atomic.Uint64
+
+	// droppedEvents counts non-blocking sends to the internal events
+	// channel that fell through because the event loop was wedged.
+	// Surfaces back-pressure on the events fan-in (peer lifecycle +
+	// EventMessageReceived) so operators can spot a stalled handler
+	// rather than deadlocking the peer read hot path against
+	// peersMu-taking event handlers.
+	droppedEvents atomic.Uint64
 
 	// pingTimeoutDisconnects counts peers torn down because the oldest
 	// in-flight ping aged past pingTimeout. Mirrors rippled's
@@ -533,6 +571,15 @@ func New(opts ...Option) (*Overlay, error) {
 
 	events := make(chan Event, 256)
 
+	inboundCap := cfg.MaxInbound + inboundBacklogSlack
+	if inboundCap <= 0 {
+		inboundCap = inboundBacklogSlack
+	}
+	outboundCap := cfg.MaxOutbound
+	if outboundCap <= 0 {
+		outboundCap = 1
+	}
+
 	o := &Overlay{
 		cfg:            cfg,
 		identity:       identity,
@@ -545,6 +592,8 @@ func New(opts ...Option) (*Overlay, error) {
 		messages:       make(chan *InboundMessage, 256),
 		relayedIndex:   make(map[[32]byte]*relayedEntry),
 		clockForIndex:  time.Now,
+		inboundSem:     make(chan struct{}, inboundCap),
+		outboundSem:    make(chan struct{}, outboundCap),
 	}
 
 	// Wire reduce-relay callbacks. The squelch callback constructs and
@@ -636,7 +685,10 @@ func (o *Overlay) Run(ctx context.Context) error {
 	return g.Wait()
 }
 
-// Stop gracefully shuts down the overlay.
+// Stop gracefully shuts down the overlay. Blocks on peerWG so callers
+// (and the test harness) observe a fully-quiesced overlay rather than
+// racing against peer.Run goroutines still draining their read/write
+// loops after Close.
 func (o *Overlay) Stop() error {
 	if o.cancel != nil {
 		o.cancel()
@@ -656,6 +708,8 @@ func (o *Overlay) Stop() error {
 		p.Close()
 	}
 	o.peersMu.Unlock()
+
+	o.peerWG.Wait()
 
 	return nil
 }
@@ -680,7 +734,10 @@ func (o *Overlay) startListener() error {
 	return nil
 }
 
-// acceptLoop accepts incoming connections.
+// acceptLoop accepts incoming connections. A 100ms backoff on errors
+// avoids a tight retry loop under EMFILE-class storms, and inboundSem
+// caps concurrent handlers so a burst of accepts past MaxInbound
+// cannot fan goroutines out unbounded.
 func (o *Overlay) acceptLoop(ctx context.Context) error {
 	for {
 		select {
@@ -694,10 +751,35 @@ func (o *Overlay) acceptLoop(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			// A closed listener is terminal — exit instead of
+			// spinning the backoff. This is also the stub path under
+			// !cgo, where peertls.NewListener closes the inner
+			// listener immediately so the overlay shuts down cleanly
+			// rather than churning ErrSessionSigUnsupported.
+			if errors.Is(err, net.ErrClosed) {
+				return err
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(acceptBackoff):
+			}
 			continue
 		}
 
-		go o.handleInbound(ctx, conn)
+		select {
+		case o.inboundSem <- struct{}{}:
+		case <-ctx.Done():
+			conn.Close()
+			return ctx.Err()
+		}
+
+		o.peerWG.Add(1)
+		go func(c net.Conn) {
+			defer o.peerWG.Done()
+			defer func() { <-o.inboundSem }()
+			o.handleInbound(ctx, c)
+		}(conn)
 	}
 }
 
@@ -720,6 +802,7 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 
 	peerID := PeerID(o.nextID.Add(1))
 	peer := NewPeer(peerID, endpoint, true, o.identity, o.events)
+	peer.SetDroppedEventsCounter(&o.droppedEvents)
 	if err := peer.AcceptConnection(conn); err != nil {
 		slog.Warn("Inbound rejected: peer not in disconnected state",
 			"t", "Overlay", "remote", remoteAddr, "err", err)
@@ -737,13 +820,13 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 	if err := o.performInboundHandshake(ctx, peer, tlsConn); err != nil {
 		slog.Info("Inbound handshake failed", "t", "Overlay", "remote", remoteAddr, "err", err)
 		conn.Close()
-		o.events <- Event{
+		o.dispatchEvent(Event{
 			Type:     EventPeerFailed,
 			PeerID:   peerID,
 			Endpoint: endpoint,
 			Inbound:  true,
 			Error:    err,
-		}
+		})
 		return
 	}
 
@@ -757,7 +840,9 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 
 	o.addPeer(peer)
 
+	o.peerWG.Add(1)
 	go func() {
+		defer o.peerWG.Done()
 		err := peer.Run(ctx)
 		if err != nil {
 			slog.Info("Inbound peer run ended", "t", "Overlay", "remote", remoteAddr, "err", err)
@@ -1135,6 +1220,30 @@ func (o *Overlay) PingTimeoutDisconnects() uint64 {
 	return o.pingTimeoutDisconnects.Load()
 }
 
+// DroppedEvents returns the cumulative count of internal events
+// (peer lifecycle + EventMessageReceived) dropped because the event
+// loop fell behind. Non-zero growth means handlers attached to the
+// event loop are slow enough that the read hot path would have
+// deadlocked if events sends were blocking — investigate handler
+// latency before raising the events buffer.
+func (o *Overlay) DroppedEvents() uint64 {
+	return o.droppedEvents.Load()
+}
+
+// dispatchEvent attempts a non-blocking send to the internal events
+// channel. Both peer-originated and overlay-originated event sends
+// route through here so back-pressure shows up as a single counter
+// rather than as a deadlock between the read hot path and the event
+// loop (handlers take peersMu, which peer-side goroutines also
+// contend for).
+func (o *Overlay) dispatchEvent(evt Event) {
+	select {
+	case o.events <- evt:
+	default:
+		o.droppedEvents.Add(1)
+	}
+}
+
 func (o *Overlay) notePeerRunEnded(err error) {
 	if errors.Is(err, ErrPingTimeout) {
 		o.pingTimeoutDisconnects.Add(1)
@@ -1448,15 +1557,16 @@ func (o *Overlay) autoconnect(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		default:
-			go func(a string) {
-				if err := o.Connect(a); err != nil {
-					slog.Info("Peer connection failed", "t", "Overlay", "addr", a, "err", err)
-				} else {
-					slog.Info("Peer connected", "t", "Overlay", "addr", a)
-				}
-			}(addr)
+		case o.outboundSem <- struct{}{}:
 		}
+		go func(a string) {
+			defer func() { <-o.outboundSem }()
+			if err := o.Connect(a); err != nil {
+				slog.Info("Peer connection failed", "t", "Overlay", "addr", a, "err", err)
+			} else {
+				slog.Info("Peer connected", "t", "Overlay", "addr", a)
+			}
+		}(addr)
 	}
 }
 
@@ -1618,14 +1728,15 @@ func (o *Overlay) Connect(addr string) error {
 
 	peerID := PeerID(o.nextID.Add(1))
 	peer := NewPeer(peerID, endpoint, false, o.identity, o.events)
+	peer.SetDroppedEventsCounter(&o.droppedEvents)
 	peer.handshakeCfg = o.handshakeConfigFor()
 
-	o.events <- Event{
+	o.dispatchEvent(Event{
 		Type:     EventPeerConnecting,
 		PeerID:   peerID,
 		Endpoint: endpoint,
 		Inbound:  false,
-	}
+	})
 
 	ctx, cancel := context.WithTimeout(o.ctx, o.cfg.ConnectTimeout)
 	defer cancel()
@@ -1643,13 +1754,13 @@ func (o *Overlay) Connect(addr string) error {
 	}
 
 	if err := peer.Connect(ctx, cfg); err != nil {
-		o.events <- Event{
+		o.dispatchEvent(Event{
 			Type:     EventPeerFailed,
 			PeerID:   peerID,
 			Endpoint: endpoint,
 			Inbound:  false,
 			Error:    err,
-		}
+		})
 		return err
 	}
 
@@ -1662,7 +1773,9 @@ func (o *Overlay) Connect(addr string) error {
 
 	o.addPeer(peer)
 
+	o.peerWG.Add(1)
 	go func() {
+		defer o.peerWG.Done()
 		err := peer.Run(o.ctx)
 		if err != nil {
 			slog.Info("Peer run ended", "t", "Overlay", "addr", addr, "err", err)
@@ -2183,12 +2296,12 @@ func (o *Overlay) addPeer(peer *Peer) {
 	o.peers[peer.ID()] = peer
 	o.peersMu.Unlock()
 
-	o.events <- Event{
+	o.dispatchEvent(Event{
 		Type:     EventPeerConnected,
 		PeerID:   peer.ID(),
 		Endpoint: peer.Endpoint(),
 		Inbound:  peer.Inbound(),
-	}
+	})
 }
 
 // removePeer removes a peer from the overlay.
@@ -2199,12 +2312,12 @@ func (o *Overlay) removePeer(peerID PeerID) {
 	o.peersMu.Unlock()
 
 	if exists {
-		o.events <- Event{
+		o.dispatchEvent(Event{
 			Type:     EventPeerDisconnected,
 			PeerID:   peerID,
 			Endpoint: peer.Endpoint(),
 			Inbound:  peer.Inbound(),
-		}
+		})
 	}
 }
 

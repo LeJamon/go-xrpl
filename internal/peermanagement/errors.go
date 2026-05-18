@@ -18,6 +18,8 @@ var (
 	ErrSendBufferFull     = errors.New("peer send buffer full")
 	ErrPingTimeout        = errors.New("peer ping timeout")
 	ErrLargeSendQueue     = errors.New("peer send queue saturated; closing")
+	ErrReadIdle           = errors.New("peer read idle deadline exceeded")
+	ErrWriteIdle          = errors.New("peer write idle deadline exceeded")
 
 	// Handshake errors
 	ErrHandshakeFailed  = errors.New("handshake failed")

@@ -20,6 +20,32 @@ const (
 	pumpBufSize     = 16 * 1024 // max TLS record size
 )
 
+// pumpBufPool recycles 16 KiB pump buffers used by pumpInboundLocked
+// and drainBIOLocked. Both sites previously made([]byte, pumpBufSize)
+// on every call; under sustained traffic that's 16 KiB of GC pressure
+// per record pumped in either direction.
+var pumpBufPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, pumpBufSize)
+		return &buf
+	},
+}
+
+func getPumpBuf() []byte {
+	return *(pumpBufPool.Get().(*[]byte))
+}
+
+func putPumpBuf(buf []byte) {
+	// Defensive: only return the originally-sized buffer to the pool.
+	// A caller that grew the slice would otherwise grow the pool's
+	// memory footprint silently.
+	if cap(buf) != pumpBufSize {
+		return
+	}
+	buf = buf[:pumpBufSize]
+	pumpBufPool.Put(&buf)
+}
+
 func Client(inner net.Conn, cfg *Config) (PeerConn, error) {
 	return newConn(inner, cfg, false)
 }
@@ -180,7 +206,8 @@ func (c *conn) pumpInboundLocked() error {
 		return c.bioWriteAllLocked()
 	}
 
-	buf := make([]byte, pumpBufSize)
+	buf := getPumpBuf()
+	defer putPumpBuf(buf)
 	n, err := c.inner.Read(buf)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
@@ -203,6 +230,9 @@ func (c *conn) pumpInboundLocked() error {
 		return werr
 	}
 	if w < n {
+		// pendingIn must NOT alias the pooled buffer — the buffer
+		// returns to the pool the moment this function exits, and a
+		// later pump call would race against the prior pendingIn read.
 		c.pendingIn = append(c.pendingIn[:0], buf[w:n]...)
 	}
 	return nil
@@ -222,10 +252,14 @@ func (c *conn) bioWriteAllLocked() error {
 	return nil
 }
 
-// drainBIOLocked drains pending BIO output. Caller holds sslMu.
+// drainBIOLocked drains pending BIO output. Caller holds sslMu. The
+// returned slice is freshly allocated (callers persist or write it
+// to the wire) but the per-read scratch buffer comes from pumpBufPool
+// to avoid a 16 KiB allocation per BIO read.
 func (c *conn) drainBIOLocked() []byte {
 	out := make([]byte, 0, pumpBufSize)
-	buf := make([]byte, pumpBufSize)
+	buf := getPumpBuf()
+	defer putPumpBuf(buf)
 	for {
 		n, err := c.ssl.BIORead(buf)
 		if err != nil || n == 0 {

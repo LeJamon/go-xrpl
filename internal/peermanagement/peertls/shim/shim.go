@@ -87,8 +87,13 @@ func NewCtx(isServer bool) (*Ctx, error) {
 	if isServer {
 		flag = 1
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	p := C.peertls_ctx_new(flag)
 	if p == nil {
+		if detail := lastErrorLocked(); detail != "" {
+			return nil, fmt.Errorf("peertls/shim: peertls_ctx_new failed: %s", detail)
+		}
 		return nil, errors.New("peertls/shim: peertls_ctx_new failed")
 	}
 	return &Ctx{p: p}, nil
@@ -98,6 +103,8 @@ func (c *Ctx) Free() {
 	if c == nil || c.p == nil {
 		return
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	C.peertls_ctx_free(c.p)
 	c.p = nil
 }
@@ -122,8 +129,13 @@ func (c *Ctx) UseCertPEM(cert, key []byte) error {
 // NewSSL creates an SSL bound to a fresh BIO_pair under the context.
 // Free with SSL.Free; that releases the BIO too.
 func (c *Ctx) NewSSL() (*SSL, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	p := C.peertls_new(c.p)
 	if p == nil {
+		if detail := lastErrorLocked(); detail != "" {
+			return nil, fmt.Errorf("peertls/shim: peertls_new failed: %s", detail)
+		}
 		return nil, errors.New("peertls/shim: peertls_new failed")
 	}
 	return &SSL{p: p}, nil
@@ -133,6 +145,8 @@ func (s *SSL) Free() {
 	if s == nil || s.p == nil {
 		return
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	C.peertls_free(s.p)
 	s.p = nil
 }
