@@ -167,8 +167,7 @@ func (c *Client) GetStateEntries(ctx context.Context, ledgerIndex uint32) ([]Sta
 	defer rows.Close()
 
 	// Pre-size from the row count so large ledgers don't trigger repeated
-	// realloc/copy cycles. A negative count from COUNT failure falls back to
-	// the default zero-cap slice.
+	// realloc/copy cycles.
 	var entries []StateEntry
 	if n, err := c.GetStateEntryCount(ctx, ledgerIndex); err == nil && n > 0 {
 		entries = make([]StateEntry, 0, n)
