@@ -921,6 +921,55 @@ func (a *Adaptor) GetTrustedValidators() []consensus.NodeID {
 	return result
 }
 
+// SetTrustedValidators replaces the operator-trusted validator set
+// atomically. Visible to subsequent GetTrustedValidators / IsTrusted /
+// GetQuorum / GetNegativeUNL reads, and to the consensus engine's
+// per-round delta scan in driveNegativeUNLNewValidatorsLocked — the
+// added entries flow into OnUNLChange so the NegativeUNL voter's
+// grace period (NewValidatorDisableSkip ledgers) covers them.
+//
+// validators and masterKeys may be different lengths; only the prefix
+// of validators where index < len(masterKeys) participates in
+// NegativeUNL voting (sfUNLModifyValidator carries the master pubkey).
+// Pass empty slices to clear the trusted set (standalone mode).
+//
+// Mirrors the writable surface of rippled's ValidatorList:
+// applyLists → updateTrusted publishes the new trusted set; the next
+// preStartRound observes the delta and forwards `added` to
+// nUnlVote_.newValidators (RCLConsensus.cpp:1041-1043). goXRPL has no
+// publisher-trust subsystem yet, so this is the single entry point
+// every trigger (SIGHUP-driven config reload, future RPC admin
+// method, future TMValidatorList ingress) plugs into.
+//
+// Safe for concurrent callers; copies inputs so callers may mutate
+// their slices after return.
+func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys [][33]byte) {
+	vCopy := make([]consensus.NodeID, len(validators))
+	copy(vCopy, validators)
+	newSet := make(map[consensus.NodeID]struct{}, len(validators))
+	for _, v := range validators {
+		newSet[v] = struct{}{}
+	}
+	var mkCopy [][33]byte
+	if len(masterKeys) > 0 {
+		mkCopy = make([][33]byte, len(masterKeys))
+		copy(mkCopy, masterKeys)
+	}
+
+	a.mu.Lock()
+	a.trustedValidators = vCopy
+	a.trustedSet = newSet
+	a.trustedMasterKeys = mkCopy
+	a.mu.Unlock()
+
+	// trustedVotes owns its own mutex; call after releasing a.mu to
+	// avoid lock nesting. Safe to call with an empty slice — it just
+	// drops stale per-validator vote caches.
+	if a.trustedVotes != nil {
+		a.trustedVotes.TrustChanged(vCopy)
+	}
+}
+
 // GetQuorum returns the current quorum requirement, recomputed on
 // every call to account for negative-UNL changes. Matches rippled's
 // ValidatorList.cpp:2061-2087 which recomputes quorum on every

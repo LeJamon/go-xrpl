@@ -206,16 +206,16 @@ type Engine struct {
 	deferBroadcasts int
 
 	// previousTrustedSet is the trusted-validator set as of the previous
-	// startRoundLocked invocation. Used to compute the per-round delta
-	// passed to adaptor.OnUNLChange so the NegativeUNL voter's grace
-	// period covers validators newly added to the UNL. Mirrors the role
-	// of rippled's TrustChanges.added (NetworkOPs.cpp:2081) — there
-	// `validators().updateTrusted()` returns the delta directly; here
-	// the engine derives it from snapshots since goXRPL does not yet
-	// expose a per-round updateTrusted hook on the validator manager.
-	// Nil before the first round; the first round therefore registers
-	// the entire current UNL (matching rippled's empty-prior-set first
-	// round). Mutated only while e.mu is held.
+	// startRoundLocked invocation. The engine diffs it against the
+	// adaptor's current trusted set each round to derive the `added`
+	// delta passed to OnUNLChange — equivalent to rippled's
+	// TrustChanges.added (NetworkOPs.cpp:2081) but computed from
+	// snapshots since goXRPL's writable surface is the explicit
+	// adaptor.SetTrustedValidators call rather than a per-round
+	// updateTrusted return value. Nil before the first round; the
+	// first round therefore registers the entire current UNL (matching
+	// rippled's empty-prior-set first round). Mutated only while e.mu
+	// is held.
 	previousTrustedSet map[consensus.NodeID]struct{}
 }
 
@@ -633,9 +633,11 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 // Mirrors rippled's NetworkOPs.cpp:2081-2102 → RCLConsensus.cpp:1041-1043
 // pairing: NetworkOPs computes TrustChanges.added per round via
 // updateTrusted, then passes it through startRound → preStartRound →
-// nUnlVote_.newValidators. goXRPL has no per-round updateTrusted hook on
-// the validator manager yet, so the engine derives the delta from
-// snapshots taken at startRoundLocked time. Caller must hold e.mu.
+// nUnlVote_.newValidators. goXRPL inverts the seam — the engine polls
+// the adaptor each round — but the observable behavior is the same:
+// any mutation that lands through adaptor.SetTrustedValidators is
+// picked up on the next round and its `added` set drives OnUNLChange.
+// Caller must hold e.mu.
 func (e *Engine) driveNegativeUNLNewValidatorsLocked(upcomingSeq uint32) {
 	if e.prevLedger == nil {
 		return
