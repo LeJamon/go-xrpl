@@ -39,6 +39,12 @@ func (l *logger) Error(msg string, args ...any) {
 	l.inner.Error(msg, args...)
 }
 
+// Fatal emits an Error record then exits. The default handlers in this
+// package (slog.NewTextHandler / slog.NewJSONHandler over os.Stdout) are
+// unbuffered, so the final record is flushed before exit. Callers that wire
+// up a buffered or async handler (e.g. file rotation behind a bufio.Writer)
+// must ensure that handler flushes on its own; defaultExit goes straight to
+// os.Exit and will not run deferred Sync hooks.
 func (l *logger) Fatal(msg string, args ...any) {
 	l.inner.Error(msg, args...)
 	defaultExit()

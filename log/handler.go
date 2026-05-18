@@ -2,6 +2,7 @@ package log
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -195,16 +196,18 @@ func (m *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	return false
 }
 
-// Handle passes the record to all child handlers.
+// Handle passes the record to all child handlers, aggregating any errors so
+// a failure in an early handler does not skip later ones.
 func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
+	var errs []error
 	for _, h := range m.handlers {
 		if h.Enabled(ctx, r.Level) {
 			if err := h.Handle(ctx, r); err != nil {
-				return err
+				errs = append(errs, err)
 			}
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // WithAttrs returns a new multiHandler with each child's WithAttrs applied.
