@@ -96,15 +96,19 @@ func (c *Check) Decode(data []byte) error {
 				return newErrUnknownField("Check", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				c.OwnerNode = val
 				c.present |= checkBitOwnerNode
 			case 9:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				c.DestinationNode = val
 				c.present |= checkBitDestinationNode
 			default:

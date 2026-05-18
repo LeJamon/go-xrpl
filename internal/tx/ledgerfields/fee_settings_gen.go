@@ -82,12 +82,12 @@ func (f *FeeSettings) Decode(data []byte) error {
 				return newErrUnknownField("FeeSettings", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 5:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				f.BaseFee = val
 				f.present |= feesettingsBitBaseFee
 			default:

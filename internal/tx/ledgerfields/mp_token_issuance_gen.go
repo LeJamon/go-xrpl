@@ -19,9 +19,9 @@ type MPTokenIssuance struct {
 	TransferFee       int
 	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
 	AssetScale        int
-	MaximumAmount     string // UInt64 (lowercase hex, no leading zeros)
-	OutstandingAmount string // UInt64 (lowercase hex, no leading zeros)
-	LockedAmount      string // UInt64 (lowercase hex, no leading zeros)
+	MaximumAmount     string // UInt64 (decimal string, sMD_BaseTen)
+	OutstandingAmount string // UInt64 (decimal string, sMD_BaseTen)
+	LockedAmount      string // UInt64 (decimal string, sMD_BaseTen)
 	MPTokenMetadata   string // Blob (uppercase hex)
 	DomainID          string // Hash256 (uppercase hex)
 	Flags             uint32
@@ -90,21 +90,33 @@ func (m *MPTokenIssuance) Decode(data []byte) error {
 				return newErrUnknownField("MPTokenIssuance", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				m.OwnerNode = val
 				m.present |= mptokenissuanceBitOwnerNode
 			case 24:
+				val, err := sr.readUint64Decimal()
+				if err != nil {
+					return err
+				}
 				m.MaximumAmount = val
 				m.present |= mptokenissuanceBitMaximumAmount
 			case 25:
+				val, err := sr.readUint64Decimal()
+				if err != nil {
+					return err
+				}
 				m.OutstandingAmount = val
 				m.present |= mptokenissuanceBitOutstandingAmount
 			case 29:
+				val, err := sr.readUint64Decimal()
+				if err != nil {
+					return err
+				}
 				m.LockedAmount = val
 				m.present |= mptokenissuanceBitLockedAmount
 			default:

@@ -72,12 +72,12 @@ func (d *Delegate) Decode(data []byte) error {
 				return newErrUnknownField("Delegate", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				d.OwnerNode = val
 				d.present |= delegateBitOwnerNode
 			default:

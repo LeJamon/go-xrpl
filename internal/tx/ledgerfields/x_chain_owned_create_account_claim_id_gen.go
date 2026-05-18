@@ -69,15 +69,19 @@ func (x *XChainOwnedCreateAccountClaimID) Decode(data []byte) error {
 				return newErrUnknownField("XChainOwnedCreateAccountClaimID", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				x.OwnerNode = val
 				x.present |= xchainownedcreateaccountclaimidBitOwnerNode
 			case 21:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				x.XChainAccountCreateCount = val
 				x.present |= xchainownedcreateaccountclaimidBitXChainAccountCreateCount
 			default:

@@ -73,12 +73,12 @@ func (t *Ticket) Decode(data []byte) error {
 				return newErrUnknownField("Ticket", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				t.OwnerNode = val
 				t.present |= ticketBitOwnerNode
 			default:

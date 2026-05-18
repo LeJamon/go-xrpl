@@ -74,12 +74,12 @@ func (d *DID) Decode(data []byte) error {
 				return newErrUnknownField("DID", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				d.OwnerNode = val
 				d.present |= didBitOwnerNode
 			default:

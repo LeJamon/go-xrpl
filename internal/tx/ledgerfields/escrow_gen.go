@@ -103,18 +103,26 @@ func (e *Escrow) Decode(data []byte) error {
 				return newErrUnknownField("Escrow", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				e.OwnerNode = val
 				e.present |= escrowBitOwnerNode
 			case 9:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				e.DestinationNode = val
 				e.present |= escrowBitDestinationNode
 			case 27:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				e.IssuerNode = val
 				e.present |= escrowBitIssuerNode
 			default:

@@ -75,21 +75,33 @@ func (b *Bridge) Decode(data []byte) error {
 				return newErrUnknownField("Bridge", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				b.OwnerNode = val
 				b.present |= bridgeBitOwnerNode
 			case 20:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				b.XChainClaimID = val
 				b.present |= bridgeBitXChainClaimID
 			case 21:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				b.XChainAccountCreateCount = val
 				b.present |= bridgeBitXChainAccountCreateCount
 			case 22:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				b.XChainAccountClaimCount = val
 				b.present |= bridgeBitXChainAccountClaimCount
 			default:

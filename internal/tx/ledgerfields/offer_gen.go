@@ -90,15 +90,19 @@ func (o *Offer) Decode(data []byte) error {
 				return newErrUnknownField("Offer", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 3:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				o.BookNode = val
 				o.present |= offerBitBookNode
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				o.OwnerNode = val
 				o.present |= offerBitOwnerNode
 			default:

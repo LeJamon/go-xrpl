@@ -87,18 +87,26 @@ func (d *DirectoryNode) Decode(data []byte) error {
 				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 1:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				d.IndexNext = val
 				d.present |= directorynodeBitIndexNext
 			case 2:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				d.IndexPrevious = val
 				d.present |= directorynodeBitIndexPrevious
 			case 6:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				d.ExchangeRate = val
 				d.present |= directorynodeBitExchangeRate
 			default:
