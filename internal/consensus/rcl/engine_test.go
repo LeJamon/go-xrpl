@@ -1975,22 +1975,25 @@ func TestSendValidation_ClockMonotonic_NormalCase(t *testing.T) {
 	}
 }
 
-// TestConsensus_MaxConsensusSoftTimeoutTransitions pins the behavior
-// of the E3 soft deadline: once a round exceeds LedgerMaxConsensus
-// (rippled's ledgerMAX_CONSENSUS = 15s, ConsensusParms.h:95), the
-// engine force-accepts the round with ResultTimeout and transitions
-// from Establish → Accepted. This is the rename-migrated action
-// that, pre-E3, fired at the goXRPL-only LedgerMaxClose=10s. It must
-// NOT trigger a bow-out (that is reserved for the hard abandon
-// branch at 120s, covered by TestConsensus_AbandonHardTimeout).
-func TestConsensus_MaxConsensusSoftTimeoutTransitions(t *testing.T) {
+// TestConsensus_NoSoftTimeoutAcceptAtLedgerMaxConsensus pins the
+// rippled-faithful phaseEstablish flow: the engine MUST NOT force-
+// accept the round just because roundTime crossed LedgerMaxConsensus.
+// Rippled's checkConsensus (Consensus.cpp:176-263) has three terminal
+// states — Yes, MovedOn, Expired — and Expired only fires at
+// std::clamp(prevRoundTime × ABANDON_CONSENSUS_FACTOR,
+// ledgerMAX_CONSENSUS, ledgerABANDON_CONSENSUS), which is the
+// hard-abandon path. There is no soft-timeout-to-accept.
+//
+// The previous goxrpl-only soft path force-accepted at MAX_CONSENSUS,
+// turned ResultTimeout into a side-chain LCL advance, and (combined
+// with the broad consensusFail rule that suppressed emission on
+// Timeout) drifted closed_seq arbitrarily far past validated in
+// mixed-UNL soaks (#451).
+func TestConsensus_NoSoftTimeoutAcceptAtLedgerMaxConsensus(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.validator = true
 	adaptor.opMode = consensus.OpModeFull
 
-	// Default 15s soft / 120s hard. Override LedgerMaxClose to match
-	// LedgerMaxConsensus exactly so the legacy alias doesn't preempt
-	// the soft-deadline check.
 	config := DefaultConfig()
 	config.Timing.LedgerMaxConsensus = 15 * time.Second
 	config.Timing.LedgerMaxClose = 15 * time.Second
@@ -1998,7 +2001,6 @@ func TestConsensus_MaxConsensusSoftTimeoutTransitions(t *testing.T) {
 	config.Timing.LedgerAbandonConsensusFactor = 10
 
 	engine := NewEngine(adaptor, config)
-
 	subscriber := &testSubscriber{events: make(chan consensus.Event, 32)}
 	engine.Subscribe(subscriber)
 
@@ -2012,67 +2014,41 @@ func TestConsensus_MaxConsensusSoftTimeoutTransitions(t *testing.T) {
 	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
 	engine.StartRound(round, true)
 
-	// Force the engine into Establish with a known roundStartTime
-	// 16s in the past — just past the 15s soft deadline but before
-	// the factor-scaled hard abandon ceiling (see prevRoundTime
-	// below). This mirrors rippled's window between ledgerMAX_
-	// CONSENSUS and the std::clamp'd ledgerABANDON_CONSENSUS:
-	// currentAgreeTime > ledgerMAX_CONSENSUS (relaxes threshold)
-	// but currentAgreeTime <= clamp(prevRoundTime * factor,
-	// ledgerMAX_CONSENSUS, ledgerABANDON_CONSENSUS) (no abandon).
+	// Position the engine 16s into a round — past LedgerMaxConsensus
+	// (15s) but well short of the clamped hard-abandon deadline
+	// (prevRoundTime × factor = 2s × 10 = 20s, clamped to [15s, 120s]
+	// → 20s). Pre-fix this fell into the soft-timeout-to-accept block
+	// and called acceptLedger(ResultTimeout); post-fix that exact code
+	// path is gone, so the round either stays in Establish or exits via
+	// a different terminal state (MovedOn / Success) — never with
+	// Result=Timeout.
 	engine.mu.Lock()
 	engine.setPhase(consensus.PhaseEstablish)
 	engine.roundStartTime = time.Now().Add(-16 * time.Second)
-	// prevRoundTime × factor = 2s × 10 = 20s. std::clamp pins the
-	// hard deadline to 20s (between the 15s low and the 120s high).
-	// At 16s we are past the soft (15s) but short of the hard (20s),
-	// so the hard branch must NOT fire.
 	engine.prevRoundTime = 2 * time.Second
 	engine.phaseEstablish()
-	phaseAfter := engine.phase
-	modeAfter := engine.mode
 	engine.mu.Unlock()
 
-	// Soft timeout force-accepts → phase must have transitioned out
-	// of Establish (to Accepted). The exact target depends on the
-	// auto-advance in acceptLedger; either Accepted or Open (next
-	// round) is acceptable, as long as we left Establish.
-	if phaseAfter == consensus.PhaseEstablish {
-		t.Errorf("soft timeout: phase should have transitioned out of Establish, got %v", phaseAfter)
-	}
-
-	// Soft timeout MUST NOT bow out a proposing validator — that's
-	// the hard-abandon semantic, not the soft one.
-	if modeAfter == consensus.ModeObserving {
-		t.Errorf("soft timeout must NOT bow out (mode=Observing); got mode=%v — that is the hard-abandon behavior", modeAfter)
-	}
-
-	// Drain events and assert we saw a ConsensusReachedEvent with
-	// ResultTimeout, not ResultAbandoned.
 	sawTimeout := false
-	sawAbandoned := false
-	deadline := time.After(500 * time.Millisecond)
+	deadline := time.After(200 * time.Millisecond)
 drain:
 	for {
 		select {
 		case ev := <-subscriber.events:
 			if cre, ok := ev.(*consensus.ConsensusReachedEvent); ok {
-				switch cre.Result {
-				case consensus.ResultTimeout:
+				if cre.Result == consensus.ResultTimeout {
 					sawTimeout = true
-				case consensus.ResultAbandoned:
-					sawAbandoned = true
 				}
 			}
 		case <-deadline:
 			break drain
 		}
 	}
-	if !sawTimeout {
-		t.Errorf("expected ConsensusReachedEvent with ResultTimeout from soft deadline")
-	}
-	if sawAbandoned {
-		t.Errorf("soft timeout must not emit ResultAbandoned")
+	if sawTimeout {
+		t.Errorf("no-soft-timeout: phaseEstablish must never produce a "+
+			"ConsensusReachedEvent with Result=Timeout — the goxrpl-only "+
+			"force-accept at LedgerMaxConsensus regressed back into the "+
+			"establish path (#451 drift cause)")
 	}
 }
 
@@ -2654,16 +2630,21 @@ func TestSendValidation_SeqEnforcerExpiresAfterIdle(t *testing.T) {
 	}
 }
 
-// TestAcceptLedger_ConsensusFailSuppressesValidation pins the issue
-// #401 fix at the production gate: acceptLedger must NOT emit a
-// validation when the round failed to converge. Mirrors rippled's
-// gate at RCLConsensus.cpp:587-594 — `validating_ && !consensusFail`.
+// TestAcceptLedger_ConsensusFailSuppressesValidation pins the
+// rippled-faithful emission gate at RCLConsensus.cpp:479,591-594:
 //
-// In rippled, the timeout/Expired path zeros validating_ via
-// leaveConsensus(); we encode the same intent by passing a non-Success
-// Result enum into acceptLedger. Without this gate a divergent local
-// close still emits, peers see a hash that differs from their accepted
-// LCL, and our validator gets Byzantine-flagged.
+//	bool const consensusFail = result.state == ConsensusState::MovedOn;
+//	if (validating_ && !consensusFail && canValidateSeq(...)) validate(...)
+//
+// Only ConsensusState::MovedOn suppresses emission. The Expired (hard
+// timeout) path explicitly does NOT — every validator times out around
+// the same wall-clock instant and the network forms quorum on the
+// timeout-built ledger. goxrpl's ResultTimeout / ResultAbandoned both
+// map to rippled's Expired (no consensus reached, but we built a
+// ledger) and so must emit; ResultMovedOn / ResultFail are the only
+// suppress-paths. The previous over-broad rule `result != Success`
+// silently bowed goxrpl out of every timed-out round and turned a
+// recoverable stall into permanent quorum starvation (#451).
 func TestAcceptLedger_ConsensusFailSuppressesValidation(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -2671,8 +2652,8 @@ func TestAcceptLedger_ConsensusFailSuppressesValidation(t *testing.T) {
 		want   int // emissions expected
 	}{
 		{"Success_emits", consensus.ResultSuccess, 1},
-		{"Timeout_suppressed", consensus.ResultTimeout, 0},
-		{"Abandoned_suppressed", consensus.ResultAbandoned, 0},
+		{"Timeout_emits", consensus.ResultTimeout, 1},
+		{"Abandoned_emits", consensus.ResultAbandoned, 1},
 		{"MovedOn_suppressed", consensus.ResultMovedOn, 0},
 		{"Fail_suppressed", consensus.ResultFail, 0},
 	}

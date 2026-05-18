@@ -1926,27 +1926,19 @@ func (e *Engine) phaseEstablish() {
 		return
 	}
 
-	// Soft timeout: force accept after LedgerMaxConsensus.
-	// Pre-E3 this gated on the goXRPL-only LedgerMaxClose=10s; it is
-	// now rippled's ledgerMAX_CONSENSUS=15s, keeping the same force-
-	// accept action but pushed out to match rippled's deadline. The
-	// legacy LedgerMaxClose field is still honored for source-compat
-	// when set smaller than LedgerMaxConsensus — it takes precedence
-	// so tests can dial the trigger down without also having to reset
-	// LedgerMaxConsensus.
-	softDeadline := e.timing.LedgerMaxConsensus
-	if e.timing.LedgerMaxClose > 0 && e.timing.LedgerMaxClose < softDeadline {
-		softDeadline = e.timing.LedgerMaxClose
-	}
-	if softDeadline > 0 && roundTime >= softDeadline {
-		e.eventBus.Publish(&consensus.TimerFiredEvent{
-			Timer:     consensus.TimerRoundTimeout,
-			Round:     e.state.Round,
-			Timestamp: e.adaptor.Now(),
-		})
-		e.acceptLedger(consensus.ResultTimeout)
-		return
-	}
+	// (No soft-timeout-to-accept here on purpose.) Rippled's
+	// phaseEstablish has exactly three terminal states — Yes / MovedOn
+	// / Expired (Consensus.cpp:176-263) — and Expired only fires at the
+	// clamp(prevRoundTime * factor, ledgerMAX_CONSENSUS, ledger
+	// ABANDON_CONSENSUS) deadline, which is the hard-abandon path
+	// above. There is no equivalent "soft" force-accept at
+	// ledgerMAX_CONSENSUS; rippled stays in establish as long as
+	// neither convergence nor the MovedOn-by-peer-finished threshold
+	// has fired. The earlier goxrpl soft-timeout at LedgerMaxConsensus
+	// was a goxrpl-only behavior that, combined with the old broad
+	// consensusFail rule, advanced the LCL on a never-emitted ledger
+	// every 15s and drifted closed_seq arbitrarily far past the
+	// validated tip in mixed UNL soaks (#451).
 
 	// Run convergence before MovedOn — rippled's checkConsensus picks
 	// Yes over MovedOn so a near-simultaneous-finish round still ends
@@ -2615,7 +2607,16 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	//   if (validating_ && !consensusFail && canValidateSeq(seq)) validate(...)
 	//
 	// validating_: we are configured as a validator.
-	// consensusFail: result != ResultSuccess (rippled's Expired path).
+	// consensusFail: ConsensusState::MovedOn ONLY (RCLConsensus.cpp:479).
+	//   Rippled's Expired state (the hard timeout) does NOT set
+	//   consensusFail — it still emits, and peers form quorum on the
+	//   timeout-built ledger because every validator times out around
+	//   the same wall-clock instant. The earlier goxrpl rule
+	//   `result != ResultSuccess` lumped Timeout and Abandoned in with
+	//   MovedOn, which silently bowed us out of every timed-out round.
+	//   In a 3-rippled + 2-goxrpl soak that flips quorum from "reachable
+	//   after timeout" to "permanently unreachable" — the failure mode
+	//   in #451.
 	// canValidateSeq: prevents a second validation for a seq we already
 	//   validated; without it a divergent close + reacquire races two
 	//   validations and BBD flags us as Conflicting (#401).
@@ -2633,7 +2634,10 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// we're back in ModeProposing. Suppressing emission entirely while
 	// in wrongLedger (the prior behavior) made the node invisible to
 	// peers under mode thrash and caused permanent quorum stalls — #451.
-	consensusFail := result != consensus.ResultSuccess
+	// ResultFail is a goxrpl-local "we know we failed" sentinel with no
+	// rippled analogue; it semantically maps to the same suppress class
+	// as MovedOn (don't validate a round we explicitly failed).
+	consensusFail := result == consensus.ResultMovedOn || result == consensus.ResultFail
 	wrongLCL := e.mode == consensus.ModeWrongLedger
 	isValidator := e.adaptor.IsValidator()
 	canValidate := e.peekCanValidateSeqLocked(newLedger.Seq())
