@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -94,14 +94,14 @@ func fieldsEqual(a, b any) bool {
 	return fallbackEqual(a, b)
 }
 
-// fallbackEqual compares any two values by their %v rendering. Reached only
-// for types not enumerated in fieldsEqual's switch — today the fast path
-// covers every concrete type set via SetOriginal/SetField in this codebase,
-// so the fallback is a defensive last resort, not a hot path. Two values of
-// different types whose %v happens to collide WILL compare equal here; add
-// a typed branch to fieldsEqual rather than relying on this for new types.
+// fallbackEqual compares any two values using reflect.DeepEqual. Reached
+// only for types not enumerated in fieldsEqual's switch — today the fast
+// path covers every concrete type set via SetOriginal/SetField in this
+// codebase, so the fallback is a defensive last resort, not a hot path.
+// Prefer adding a typed branch to fieldsEqual over relying on this when
+// introducing a new SLE field type.
 func fallbackEqual(a, b any) bool {
-	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
+	return reflect.DeepEqual(a, b)
 }
 
 // FieldMeta defines how a field should be included in metadata

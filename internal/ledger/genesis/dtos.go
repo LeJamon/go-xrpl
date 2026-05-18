@@ -2,7 +2,7 @@ package genesis
 
 import "github.com/LeJamon/goXRPLd/drops"
 
-// AccountRoot is the in-memory DTO for an AccountRoot ledger entry written
+// accountRoot is the in-memory DTO for an AccountRoot ledger entry written
 // during genesis construction. Production reads/writes of AccountRoot use
 // internal/ledger/state.AccountRoot; this minimal struct exists only so
 // genesis can build the initial state map without depending on the live
@@ -15,7 +15,7 @@ type accountRoot struct {
 	OwnerCount uint32
 }
 
-// FeeSettings is the in-memory DTO for the FeeSettings ledger entry written
+// feeSettings is the in-memory DTO for the FeeSettings ledger entry written
 // during genesis construction. Modern fields (XRPFees amendment) take
 // precedence; legacy fields apply only when XRPFees is not enabled.
 type feeSettings struct {
