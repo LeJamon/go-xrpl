@@ -400,25 +400,34 @@ func (t *ApplyStateTable) applyImpl(isDryRun bool) (*Metadata, error) {
 		}
 	}
 
-	// Thread-only owners: rippled ApplyStateTable.cpp:269-274 (mods
-	// table rawReplace'd into the view).
+	// Thread-only owners: rippled ApplyStateTable.cpp:552-582 (threadItem).
+	// rippled's threadItem creates an AffectedNode entry for the threaded
+	// SLE ONLY when the previous PreviousTxnID is non-zero (line 560:
+	// `if (!prevTxID.isZero())`). Brand-new owner accounts whose
+	// PreviousTxnID has never been set get their SLE rewritten in the
+	// Mods table (rawReplace into view) but DON'T appear in metadata.
+	//
+	// Issue #470: goxrpl was unconditionally emitting a bare ModifiedNode
+	// for every threaded owner, including those whose PreviousTxnID was
+	// zero. Those extra leaves inflated every tx's meta blob → tx+meta
+	// SHAMap root diverged from rippled → fork at the first ledger
+	// carrying transactions that touched fresh owner accounts.
 	for key, owner := range t.threadOnlyOwners {
-		if _, alreadyEmitted := t.items[key]; alreadyEmitted {
-			if t.items[key].Action != ActionCache {
+		if entry, alreadyEmitted := t.items[key]; alreadyEmitted {
+			if entry.Action != ActionCache {
 				continue
 			}
 		}
-		node := AffectedNode{
-			NodeType:        "ModifiedNode",
-			LedgerEntryType: owner.EntryType,
-			LedgerIndex:     strings.ToUpper(hex.EncodeToString(key[:])),
-		}
-		// OLD prev fields, per rippled ApplyStateTable.cpp:570-571.
 		if owner.OldPreviousTxnID != ([32]byte{}) {
-			node.PreviousTxnID = strings.ToUpper(hex.EncodeToString(owner.OldPreviousTxnID[:]))
-			node.PreviousTxnLgrSeq = owner.OldPreviousTxnLgrSeq
+			node := AffectedNode{
+				NodeType:         "ModifiedNode",
+				LedgerEntryType:  owner.EntryType,
+				LedgerIndex:      strings.ToUpper(hex.EncodeToString(key[:])),
+				PreviousTxnID:    strings.ToUpper(hex.EncodeToString(owner.OldPreviousTxnID[:])),
+				PreviousTxnLgrSeq: owner.OldPreviousTxnLgrSeq,
+			}
+			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
 		}
-		metadata.AffectedNodes = append(metadata.AffectedNodes, node)
 
 		if !isDryRun {
 			if err := t.base.Update(keylet.Keylet{Key: key}, owner.Updated); err != nil {
