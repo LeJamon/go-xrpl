@@ -338,15 +338,51 @@ func TestAggregator_ApplyList_UnsupportedVersion(t *testing.T) {
 	}
 }
 
-func TestAggregator_ApplyList_MalformedManifest(t *testing.T) {
+// TestAggregator_ApplyList_BadManifest pins the rippled-faithful mapping
+// for malformed publisher manifests: rippled ValidatorList.cpp:1363-1366
+// folds both `!m` (manifest deserialize failure) and unknown-publisher
+// into ListDisposition::untrusted (charged at feeUselessData), never at
+// the heavier feeInvalidSignature. Without this test a future change
+// could regress to charging honest peers feeInvalidSignature for
+// forwarding lists from broken publishers.
+func TestAggregator_ApplyList_BadManifest(t *testing.T) {
 	agg, _ := list.New(list.Config{
 		PublisherKeys: []list.PublisherKey{list.PublisherKey{0xED, 1, 2, 3}},
 		Threshold:     1,
 		Clock:         fixedClock(),
 	})
 	d, _, _ := agg.ApplyList([]byte("!@not_base64"), []byte("blob"), []byte("00"), 1, "test://")
-	if d != list.Malformed {
-		t.Fatalf("disposition: got %s want Malformed", d)
+	if d != list.Untrusted {
+		t.Fatalf("disposition: got %s want Untrusted", d)
+	}
+}
+
+// TestAggregator_ApplyList_MissingRequiredField pins the rippled-faithful
+// blob-validation requirement that `sequence`, `expiration`, and
+// `validators` are JSON-present (rippled ValidatorList.cpp:1394-1397
+// returns Invalid otherwise). Without this guard, a publisher feed
+// omitting `validators` would be silently accepted with an empty
+// validator set.
+func TestAggregator_ApplyList_MissingRequiredField(t *testing.T) {
+	pub := newPublisher(t, 0x01, 0x02)
+	agg, _ := list.New(list.Config{
+		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:     1,
+		Manifests:     manifest.NewCache(),
+		Clock:         fixedClock(),
+	})
+	// Blob with only `sequence` and `expiration`, no `validators` array.
+	now := fixedClock()()
+	body := map[string]any{
+		"sequence":   uint32(1),
+		"expiration": uint32(now.Add(24*time.Hour).Unix() - rippleEpochOffset),
+	}
+	jsonBytes, _ := json.Marshal(body)
+	blob := []byte(base64.StdEncoding.EncodeToString(jsonBytes))
+	sig := ed25519.Sign(pub.ephPriv, jsonBytes)
+	d, _, _ := agg.ApplyList(pub.manifestB64, blob, []byte(hex.EncodeToString(sig)), 1, "test://")
+	if d != list.Invalid {
+		t.Fatalf("disposition: got %s want Invalid (missing validators field)", d)
 	}
 }
 

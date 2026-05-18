@@ -120,14 +120,26 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (int
 		"count":                    listCount,
 		"validator_list_threshold": threshold,
 	}
-	// "unknown" gating mirrors rippled's expires() (ValidatorList.cpp:1560-1591):
-	// if any publisher's current.validUntil is unset the whole summary
-	// reports unknown. Tracked via anyMissingExpiration so a partial fetch
-	// can't paint over an unfetched publisher.
-	if publisherCount == 0 || anyMissingExpiration || earliestExpirationUnix == 0 {
+	// Status / expiration gating mirrors rippled's expires() +
+	// getJson (ValidatorList.cpp:1560-1651). Three cases:
+	//
+	//  1. No publishers configured but the local [validators] stanza
+	//     is populated — rippled's expires() returns the local
+	//     validUntil which is TimeKeeper::time_point::max(); getJson
+	//     emits status="active" expiration="never".
+	//  2. Any publisher's current.validUntil is unset (unfetched) — or
+	//     no source of trust at all — emit status="unknown".
+	//  3. Otherwise emit the earliest publisher validUntil; status is
+	//     "expired" when any publisher is expired/unavailable, else
+	//     "active".
+	switch {
+	case publisherCount == 0 && len(localStatic) > 0:
+		validatorListSummary["status"] = "active"
+		validatorListSummary["expiration"] = "never"
+	case publisherCount == 0 || anyMissingExpiration || earliestExpirationUnix == 0:
 		validatorListSummary["status"] = "unknown"
 		validatorListSummary["expiration"] = "unknown"
-	} else {
+	default:
 		validatorListSummary["expiration"] = formatRippledTime(time.Unix(earliestExpirationUnix, 0))
 		if anyExpired || !allAvailable {
 			validatorListSummary["status"] = "expired"

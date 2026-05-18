@@ -52,7 +52,10 @@ const ErrorRetryInterval = 30 * time.Second
 //
 // RefreshMinutes mirrors rippled's `refresh_interval` field which is
 // parsed as `std::chrono::minutes{body[jss::refresh_interval].asUInt()}`
-// (ValidatorSite.cpp:484-489). Keep the wire-side unit explicit in the
+// (ValidatorSite.cpp:484-489). Stored as float64 to match rippled's
+// isNumeric() tolerance: integer or fractional JSON values are accepted
+// and truncated to whole minutes via asUInt() in rippled, via
+// int(RefreshMinutes) here. Keep the wire-side unit explicit in the
 // field name so future readers do not redo this conformance check.
 type envelopeJSON struct {
 	Manifest       string             `json:"manifest"`
@@ -61,7 +64,7 @@ type envelopeJSON struct {
 	Version        uint32             `json:"version"`
 	PublicKey      string             `json:"public_key,omitempty"`
 	BlobsV2        []envelopeBlobJSON `json:"blobs_v2,omitempty"`
-	RefreshMinutes int                `json:"refresh_interval,omitempty"`
+	RefreshMinutes float64            `json:"refresh_interval,omitempty"`
 }
 
 // envelopeBlobJSON is a v2 collection entry inside the JSON envelope.
@@ -227,13 +230,22 @@ func (p *SitePoller) fetchAndApply(ctx context.Context, uri string) time.Duratio
 		return ErrorRetryInterval
 	}
 
-	// Rippled ValidatorSite.cpp:391-393 requires `version` to be a
-	// present integer; a missing field fails validation and is logged
-	// as "missing fields". Treat a zero/absent version as Malformed so
-	// the RPC reports a real disposition rather than silently coercing
-	// the envelope into v1.
+	// Rippled ValidatorSite.cpp:391-393 requires `manifest` (string)
+	// and `version` (int) to be present at the envelope level — for
+	// BOTH v1 and v2 envelopes (parseBlobs may then read per-blob
+	// manifest overrides on top, but the top-level field is still
+	// required). Treat a zero/absent version or empty manifest as
+	// Malformed so the RPC reports a real disposition rather than
+	// silently coercing the envelope into v1 or accepting a v2
+	// envelope that has no global publisher manifest.
 	if env.Version == 0 {
 		msg := "envelope missing required `version` field"
+		p.logger.Warn(msg, "uri", uri)
+		p.aggregator.UpdateSiteState(uri, now, time.Time{}, msg, Malformed, 0, now.Add(ErrorRetryInterval))
+		return ErrorRetryInterval
+	}
+	if env.Manifest == "" {
+		msg := "envelope missing required `manifest` field"
 		p.logger.Warn(msg, "uri", uri)
 		p.aggregator.UpdateSiteState(uri, now, time.Time{}, msg, Malformed, 0, now.Add(ErrorRetryInterval))
 		return ErrorRetryInterval
@@ -282,8 +294,14 @@ func (p *SitePoller) fetchAndApply(ctx context.Context, uri string) time.Duratio
 
 	refreshSec := 0
 	nextInterval := time.Duration(0)
-	if env.RefreshMinutes > 0 {
-		d := time.Duration(env.RefreshMinutes) * time.Minute
+	// Truncate to whole minutes, mirroring rippled's
+	// `std::chrono::minutes{body[jss::refresh_interval].asUInt()}`
+	// (ValidatorSite.cpp:484-489) which accepts any numeric JSON value
+	// and reads it as an unsigned integer (fractional component
+	// discarded). Negative or zero values fall through to the default
+	// refresh interval.
+	if refreshMin := int(env.RefreshMinutes); refreshMin > 0 {
+		d := time.Duration(refreshMin) * time.Minute
 		if d < DefaultMinRefresh {
 			d = DefaultMinRefresh
 		} else if d > DefaultMaxRefresh {

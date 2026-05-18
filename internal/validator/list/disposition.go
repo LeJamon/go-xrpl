@@ -15,10 +15,17 @@ package list
 // Disposition reports the outcome of applying a single validator list
 // blob. The numeric ordering mirrors rippled's ListDisposition
 // (rippled/src/xrpld/app/misc/ValidatorList.h:55-82): smaller values
-// are "more desirable" outcomes. Malformed is goXRPL-only — rippled
-// folds parse / decode failures into invalid; goXRPL keeps the split
-// so the router can distinguish wire-level rejects from cryptographic
-// rejects in its bad-data attribution.
+// are "more desirable" outcomes.
+//
+// Malformed is a goXRPL-only summary disposition emitted exclusively
+// by the HTTP site poller for wire-level envelope failures (HTTP
+// transport error, JSON body undecodable, required envelope fields
+// absent). The aggregator itself never returns Malformed: a corrupt
+// publisher manifest folds into Untrusted (rippled
+// ValidatorList.cpp:1363-1366) and a corrupt blob envelope folds into
+// Invalid (rippled ValidatorList.cpp:1386-1392). Malformed is folded
+// back to "invalid" by the RPC adapter so external consumers see only
+// rippled-emitted labels.
 type Disposition uint8
 
 const (
@@ -117,6 +124,10 @@ func (d Disposition) Severity() int { return int(d) }
 // Mirrors the worst-case charge tiers in PeerImp::onValidatorListMessage
 // (PeerImp.cpp:2141-2183). Untrusted / SameSequence / KnownSequence /
 // Stale are charged but at lower tiers — see ChargeCategory.
+//
+// Malformed is poller-only and never reaches a peer-attribution path;
+// it is retained here as a defensive "true" so any accidental router
+// use surfaces as bad data rather than silently passing.
 func (d Disposition) IsBadData() bool {
 	switch d {
 	case Invalid, UnsupportedVersion, Malformed:
@@ -147,16 +158,18 @@ const (
 )
 
 // Charge returns the rippled fee tier this disposition maps to in
-// PeerImp::onValidatorListMessage (PeerImp.cpp:2141-2183).
+// PeerImp::onValidatorListMessage (PeerImp.cpp:2141-2183). Malformed
+// is poller-only (the aggregator never emits it) so it maps to
+// ChargeNone — the poller has no peer to charge.
 func (d Disposition) Charge() ChargeCategory {
 	switch d {
-	case Accepted, Expired, Pending:
+	case Accepted, Expired, Pending, Malformed:
 		return ChargeNone
 	case SameSequence, KnownSequence, Untrusted:
 		return ChargeUselessData
 	case Stale, UnsupportedVersion:
 		return ChargeInvalidData
-	case Invalid, Malformed:
+	case Invalid:
 		return ChargeInvalidSignature
 	default:
 		return ChargeNone

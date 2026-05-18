@@ -60,10 +60,17 @@ type blobEntryJS struct {
 }
 
 // parseBlob decodes the base64-encoded blob, JSON-unmarshals the inner
-// payload, and returns the parsed structure. Returns Malformed when the
-// outer encoding is broken (not base64 / not JSON), Invalid when the
-// validity-window invariant fails (expiration <= effective — mirrors
-// rippled ValidatorList.cpp:1406-1407).
+// payload, and returns the parsed structure. Every parse / structure
+// failure returns Invalid — matching rippled ValidatorList.cpp:1390-1437
+// which folds bad-base64, bad-JSON, missing-required-field, wrong-type,
+// and validity-window violations all into ListDisposition::invalid.
+//
+// Required fields (rippled lines 1394-1397): `sequence` (int),
+// `expiration` (int), `validators` (array). `effective` is optional but
+// must be an integer when present. Absence is a hard reject — the
+// silent-zero-coercion json.Unmarshal default would let a malformed
+// publisher feed produce an empty trusted set without ever surfacing
+// the error.
 //
 // Per-entry validator pubkey validation is intentionally deferred to
 // applyAcceptedLocked: rippled at ValidatorList.cpp:1250-1273 logs and
@@ -73,11 +80,32 @@ type blobEntryJS struct {
 func parseBlob(rawBlob []byte) (*blobJSON, Disposition, error) {
 	decoded, err := decodeBase64Tolerant(rawBlob)
 	if err != nil {
-		return nil, Malformed, fmt.Errorf("blob base64 decode: %w", err)
+		return nil, Invalid, fmt.Errorf("blob base64 decode: %w", err)
 	}
-	var b blobJSON
-	if err := json.Unmarshal(decoded, &b); err != nil {
-		return nil, Malformed, fmt.Errorf("blob JSON unmarshal: %w", err)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(decoded, &raw); err != nil {
+		return nil, Invalid, fmt.Errorf("blob JSON unmarshal: %w", err)
+	}
+	seqRaw, hasSeq := raw["sequence"]
+	expRaw, hasExp := raw["expiration"]
+	valsRaw, hasVals := raw["validators"]
+	if !hasSeq || !hasExp || !hasVals {
+		return nil, Invalid, fmt.Errorf("blob missing required field(s); have sequence=%t expiration=%t validators=%t", hasSeq, hasExp, hasVals)
+	}
+	b := blobJSON{}
+	if err := json.Unmarshal(seqRaw, &b.Sequence); err != nil {
+		return nil, Invalid, fmt.Errorf("blob sequence not uint32: %w", err)
+	}
+	if err := json.Unmarshal(expRaw, &b.Expiration); err != nil {
+		return nil, Invalid, fmt.Errorf("blob expiration not uint32: %w", err)
+	}
+	if effRaw, ok := raw["effective"]; ok {
+		if err := json.Unmarshal(effRaw, &b.Effective); err != nil {
+			return nil, Invalid, fmt.Errorf("blob effective not uint32: %w", err)
+		}
+	}
+	if err := json.Unmarshal(valsRaw, &b.Validators); err != nil {
+		return nil, Invalid, fmt.Errorf("blob validators not array: %w", err)
 	}
 	if b.Expiration <= b.Effective {
 		return nil, Invalid, fmt.Errorf("blob expiration %d <= effective %d", b.Expiration, b.Effective)

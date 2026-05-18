@@ -492,15 +492,20 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 
 	// Decode the publisher manifest. The manifest is base64-encoded on
 	// the wire; the inner STObject is what manifest.Deserialize wants.
+	// Both failure modes mirror rippled ValidatorList.cpp:1363-1366
+	// which folds bad-manifest into Untrusted (no extractable master
+	// key, no usable trust decision) charged at feeUselessData — never
+	// at the heavier feeInvalidSignature reserved for bad cryptography
+	// over a structurally-sound list.
 	manifestRaw, err := decodeBase64Tolerant(manifestBytes)
 	if err != nil {
 		a.logger.Debug("validator list: manifest base64 decode failed", "error", err, "site", siteURI)
-		return Malformed, PublisherKey{}, 0
+		return Untrusted, PublisherKey{}, 0
 	}
 	parsed, err := manifest.Deserialize(manifestRaw)
 	if err != nil {
 		a.logger.Debug("validator list: manifest deserialize failed", "error", err, "site", siteURI)
-		return Malformed, PublisherKey{}, 0
+		return Untrusted, PublisherKey{}, 0
 	}
 	pubKey := PublisherKey(parsed.MasterKey)
 
@@ -700,8 +705,26 @@ func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, sign
 	// Also seed any embedded validator manifests into the manifest
 	// cache so consensus can resolve ephemeral signing keys
 	// immediately, without waiting for the validator to gossip its
-	// own manifest. Mirrors rippled ValidatorList.cpp:1242-1273.
+	// own manifest. Mirrors rippled ValidatorList.cpp:1117-1133 which
+	// gates the apply on `keyListings_.count(m->masterKey)` — the
+	// embedded manifest's master key must be listed by some publisher
+	// (or by this publisher's new list, which is already incorporated
+	// above via `keys`). Manifests for unlisted validators are dropped:
+	// a malicious publisher must not be able to pollute the cache with
+	// manifests for validators they don't actually attest to.
 	if a.manifests != nil {
+		listed := make(map[[33]byte]struct{}, len(keys)+8)
+		for _, k := range keys {
+			listed[k] = struct{}{}
+		}
+		for pubMaster, ps := range a.state {
+			if pubMaster == s.MasterKey {
+				continue
+			}
+			for _, k := range ps.Validators {
+				listed[k] = struct{}{}
+			}
+		}
 		for _, v := range blob.Validators {
 			if v.Manifest == "" {
 				continue
@@ -712,6 +735,11 @@ func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, sign
 			}
 			parsed, err := manifest.Deserialize(raw)
 			if err != nil {
+				continue
+			}
+			if _, ok := listed[parsed.MasterKey]; !ok {
+				a.logger.Debug("validator list: dropping embedded manifest for unlisted master",
+					"master", hex.EncodeToString(parsed.MasterKey[:]))
 				continue
 			}
 			_ = a.manifests.ApplyManifest(parsed)
