@@ -78,11 +78,9 @@ type SHAMap struct {
 	full      bool
 	backed    bool
 	family    Family // nil for unbacked maps
-	// cachedSize memoises Size() once the map is immutable. -1 means
-	// uncached; any non-negative value is the authoritative leaf count.
-	// Only written for immutable maps, where the tree is frozen and a
-	// race between concurrent first-readers is benign (they all compute
-	// the same count).
+	// cachedSize memoises Size(); -1 = uncached. Only written once the
+	// map is immutable, so concurrent first-readers race benignly on a
+	// frozen tree.
 	cachedSize atomic.Int64
 }
 
@@ -944,9 +942,8 @@ func (sm *SHAMap) Snapshot(mutable bool) (*SHAMap, error) {
 		full:      sm.full,
 	}
 	out.cachedSize.Store(-1)
-	// Immutable→immutable snapshot owns the same leaf set as its source; if
-	// the source already cached its size, carry it over so the snapshot is
-	// also O(1) on first Size().
+	// Immutable→immutable snapshot owns the same leaf set; carry the
+	// cached count across so the snapshot is O(1) on first Size() too.
 	if !mutable && sm.state == StateImmutable {
 		if n := sm.cachedSize.Load(); n >= 0 {
 			out.cachedSize.Store(n)
@@ -990,9 +987,8 @@ func (sm *SHAMap) snapshotBacked(mutable bool) (*SHAMap, error) {
 	newMap.state = newState
 	newMap.ledgerSeq = sm.ledgerSeq
 
-	// Immutable→immutable backed snapshot owns the same leaf set as its
-	// source; carry the cached count across so the snapshot is O(1) on
-	// first Size() too. Mirrors the unbacked branch in Snapshot().
+	// Immutable→immutable snapshot owns the same leaf set; carry the
+	// cached count across so the snapshot is O(1) on first Size() too.
 	if !mutable && sm.state == StateImmutable {
 		if n := sm.cachedSize.Load(); n >= 0 {
 			newMap.cachedSize.Store(n)
@@ -1003,12 +999,7 @@ func (sm *SHAMap) snapshotBacked(mutable bool) (*SHAMap, error) {
 }
 
 // Size returns the number of leaf items in the SHAMap.
-//
-// For immutable maps (the typical consumer — closed/historical ledgers
-// queried by TxQ fee math, RPC handlers, etc.) the result is computed on
-// the first call and cached, so subsequent calls are O(1). For mutable
-// maps the tree is walked each call, matching what callers had to do
-// inline before this method existed.
+// O(1) on immutable maps (memoised after the first call), O(n) on mutable.
 func (sm *SHAMap) Size() int {
 	if n := sm.cachedSize.Load(); n >= 0 {
 		return int(n)
@@ -1023,13 +1014,9 @@ func (sm *SHAMap) Size() int {
 	isImmutable := sm.state == StateImmutable
 	sm.mu.RUnlock()
 
-	// Only cache when the walk completed without error. A backed map's
-	// descend() can fail mid-traversal (NodeStore fetch / deserialize);
-	// caching a partial count would lock the wrong value in for the
-	// lifetime of the map, so let the next call retry instead.
+	// Never cache a partial count: descend() can fail mid-walk on a backed
+	// map, and a poisoned cache would persist for the map's lifetime.
 	if isImmutable && err == nil {
-		// Race between concurrent first-readers is benign: every walker
-		// sees the same frozen tree and so computes the same count.
 		sm.cachedSize.Store(int64(count))
 	}
 	return count
