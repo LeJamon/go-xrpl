@@ -140,9 +140,10 @@ func TestDoVoting_PreXRPFeesWireFormat(t *testing.T) {
 	require.NotNil(t, blob)
 
 	stx := decodeTx(t, blob)
-	// sfBaseFee is uint64 — the codec returns it as a 16-character
-	// big-endian hex string. 16 decimal = 0x10 = "0000000000000010".
-	assert.Equal(t, "0000000000000010", baseFeeHex(t, stx["BaseFee"]),
+	// sfBaseFee is uint64 — the codec returns it as a lowercase hex
+	// string without leading zeros (matching rippled's
+	// STUInt64::getJson, std::to_chars base 16). 16 decimal = 0x10.
+	assert.Equal(t, "10", baseFeeHex(t, stx["BaseFee"]),
 		"sfBaseFee must encode the uint64 value 16 (=0x10) in legacy hex form")
 	assert.EqualValues(t, 12_000_000, asUint(stx["ReserveBase"]))
 	assert.EqualValues(t, 3_000_000, asUint(stx["ReserveIncrement"]))

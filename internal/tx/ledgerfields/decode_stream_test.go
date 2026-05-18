@@ -104,3 +104,40 @@ func TestReadAmountAny_MatchesCodec(t *testing.T) {
 		})
 	}
 }
+
+// TestReadUint64_HexVsDecimal pins the two streamReader UInt64 emit modes
+// against rippled's STUInt64::getJson branches:
+//   - hex (default)            — rippled STInteger.cpp:251
+//   - decimal (sMD_BaseTen)    — rippled STInteger.cpp:248
+func TestReadUint64_HexVsDecimal(t *testing.T) {
+	cases := []struct {
+		name    string
+		blob    []byte
+		hex     string
+		decimal string
+	}{
+		{name: "zero", blob: []byte{0, 0, 0, 0, 0, 0, 0, 0}, hex: "0", decimal: "0"},
+		{name: "small", blob: []byte{0, 0, 0, 0, 0, 0, 0, 100}, hex: "64", decimal: "100"},
+		{name: "mpt_amount_9990", blob: []byte{0, 0, 0, 0, 0, 0, 0x27, 0x06}, hex: "2706", decimal: "9990"},
+		{name: "max_int64", blob: []byte{0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, hex: "7fffffffffffffff", decimal: "9223372036854775807"},
+		{name: "max_uint64", blob: []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, hex: "ffffffffffffffff", decimal: "18446744073709551615"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotHex, err := newStreamReader(tc.blob).readUint64Hex()
+			if err != nil {
+				t.Fatalf("readUint64Hex: %v", err)
+			}
+			if gotHex != tc.hex {
+				t.Errorf("hex mismatch: want %q got %q", tc.hex, gotHex)
+			}
+			gotDec, err := newStreamReader(tc.blob).readUint64Decimal()
+			if err != nil {
+				t.Fatalf("readUint64Decimal: %v", err)
+			}
+			if gotDec != tc.decimal {
+				t.Errorf("decimal mismatch: want %q got %q", tc.decimal, gotDec)
+			}
+		})
+	}
+}

@@ -122,7 +122,7 @@ func TestSTArrayToJson(t *testing.T) {
 				map[string]any{
 					"DeletedNode": map[string]any{
 						"FinalFields": map[string]any{
-							"ExchangeRate":      "4A0745621D069432",
+							"ExchangeRate":      "4a0745621d069432",
 							"Flags":             uint32(0),
 							"RootIndex":         "036D7E923EF22B65E19D95A6365C3373E1E96586E27015074A0745621D069432",
 							"TakerGetsCurrency": "0000000000000000000000000000000000000000",

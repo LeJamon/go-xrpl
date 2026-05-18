@@ -124,7 +124,7 @@ func TestUint64_ToJson(t *testing.T) {
 		{
 			name:     "pass - valid uint64",
 			input:    []byte{0, 0, 0, 0, 0, 0, 0, 1},
-			expected: "0000000000000001",
+			expected: "1",
 			malleate: func(t *testing.T) interfaces.BinaryParser {
 				return serdes.NewBinaryParser([]byte{0, 0, 0, 0, 0, 0, 0, 1}, defs)
 			},
@@ -133,7 +133,7 @@ func TestUint64_ToJson(t *testing.T) {
 		{
 			name:        "pass - valid uint64 (2)",
 			input:       []byte{0, 0, 0, 0, 0, 0, 0, 100},
-			expected:    "0000000000000064",
+			expected:    "64",
 			expectedErr: nil,
 			malleate: func(t *testing.T) interfaces.BinaryParser {
 				return serdes.NewBinaryParser([]byte{0, 0, 0, 0, 0, 0, 0, 100}, defs)
@@ -142,16 +142,25 @@ func TestUint64_ToJson(t *testing.T) {
 		{
 			name:        "pass - valid uint64 (3)",
 			input:       []byte{0, 0, 0, 0, 0, 0, 0, 255},
-			expected:    "00000000000000FF",
+			expected:    "ff",
 			expectedErr: nil,
 			malleate: func(t *testing.T) interfaces.BinaryParser {
 				return serdes.NewBinaryParser([]byte{0, 0, 0, 0, 0, 0, 0, 255}, defs)
 			},
 		},
 		{
+			name:        "pass - zero value emits \"0\" (rippled to_chars)",
+			input:       []byte{0, 0, 0, 0, 0, 0, 0, 0},
+			expected:    "0",
+			expectedErr: nil,
+			malleate: func(t *testing.T) interfaces.BinaryParser {
+				return serdes.NewBinaryParser([]byte{0, 0, 0, 0, 0, 0, 0, 0}, defs)
+			},
+		},
+		{
 			name:        "pass - valid uint64 (large number)",
 			input:       []byte{255, 255, 255, 255, 255, 255, 255, 255},
-			expected:    "FFFFFFFFFFFFFFFF", // Max uint64 value
+			expected:    "ffffffffffffffff", // Max uint64 value
 			expectedErr: nil,
 			malleate: func(t *testing.T) interfaces.BinaryParser {
 				return serdes.NewBinaryParser([]byte{255, 255, 255, 255, 255, 255, 255, 255}, defs)

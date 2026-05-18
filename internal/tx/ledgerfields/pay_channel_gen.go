@@ -24,8 +24,8 @@ type PayChannel struct {
 	CancelAfter       uint32
 	SourceTag         uint32
 	DestinationTag    uint32
-	OwnerNode         string // UInt64 (uppercase hex)
-	DestinationNode   string // UInt64 (uppercase hex)
+	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
+	DestinationNode   string // UInt64 (lowercase hex, no leading zeros)
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
@@ -103,15 +103,19 @@ func (p *PayChannel) Decode(data []byte) error {
 				return newErrUnknownField("PayChannel", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				p.OwnerNode = val
 				p.present |= paychannelBitOwnerNode
 			case 9:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				p.DestinationNode = val
 				p.present |= paychannelBitDestinationNode
 			default:

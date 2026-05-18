@@ -16,11 +16,11 @@ type XChainOwnedClaimID struct {
 	present                 uint64
 	Account                 string // AccountID (base58)
 	XChainBridge            any
-	XChainClaimID           string // UInt64 (uppercase hex)
+	XChainClaimID           string // UInt64 (lowercase hex, no leading zeros)
 	OtherChainSource        string // AccountID (base58)
 	XChainClaimAttestations []any
 	SignatureReward         any    // Amount (XRP string | IOU map)
-	OwnerNode               string // UInt64 (uppercase hex)
+	OwnerNode               string // UInt64 (lowercase hex, no leading zeros)
 	PreviousTxnID           string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq       uint32
 }
@@ -73,15 +73,19 @@ func (x *XChainOwnedClaimID) Decode(data []byte) error {
 				return newErrUnknownField("XChainOwnedClaimID", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				x.OwnerNode = val
 				x.present |= xchainownedclaimidBitOwnerNode
 			case 20:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				x.XChainClaimID = val
 				x.present |= xchainownedclaimidBitXChainClaimID
 			default:

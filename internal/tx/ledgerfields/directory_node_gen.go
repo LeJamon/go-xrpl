@@ -16,14 +16,14 @@ type DirectoryNode struct {
 	present           uint64
 	Flags             uint32
 	RootIndex         string // Hash256 (uppercase hex)
-	IndexNext         string // UInt64 (uppercase hex)
-	IndexPrevious     string // UInt64 (uppercase hex)
+	IndexNext         string // UInt64 (lowercase hex, no leading zeros)
+	IndexPrevious     string // UInt64 (lowercase hex, no leading zeros)
 	Owner             string // AccountID (base58)
 	TakerPaysCurrency string // Hash160 (uppercase hex)
 	TakerPaysIssuer   string // Hash160 (uppercase hex)
 	TakerGetsCurrency string // Hash160 (uppercase hex)
 	TakerGetsIssuer   string // Hash160 (uppercase hex)
-	ExchangeRate      string // UInt64 (uppercase hex)
+	ExchangeRate      string // UInt64 (lowercase hex, no leading zeros)
 	NFTokenID         string // Hash256 (uppercase hex)
 	DomainID          string // Hash256 (uppercase hex)
 	PreviousTxnID     string // Hash256 (uppercase hex)
@@ -87,18 +87,26 @@ func (d *DirectoryNode) Decode(data []byte) error {
 				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 1:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				d.IndexNext = val
 				d.present |= directorynodeBitIndexNext
 			case 2:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				d.IndexPrevious = val
 				d.present |= directorynodeBitIndexPrevious
 			case 6:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				d.ExchangeRate = val
 				d.present |= directorynodeBitExchangeRate
 			default:

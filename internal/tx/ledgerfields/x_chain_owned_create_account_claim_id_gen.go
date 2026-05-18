@@ -16,9 +16,9 @@ type XChainOwnedCreateAccountClaimID struct {
 	present                         uint64
 	Account                         string // AccountID (base58)
 	XChainBridge                    any
-	XChainAccountCreateCount        string // UInt64 (uppercase hex)
+	XChainAccountCreateCount        string // UInt64 (lowercase hex, no leading zeros)
 	XChainCreateAccountAttestations []any
-	OwnerNode                       string // UInt64 (uppercase hex)
+	OwnerNode                       string // UInt64 (lowercase hex, no leading zeros)
 	PreviousTxnID                   string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq               uint32
 }
@@ -69,15 +69,19 @@ func (x *XChainOwnedCreateAccountClaimID) Decode(data []byte) error {
 				return newErrUnknownField("XChainOwnedCreateAccountClaimID", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				x.OwnerNode = val
 				x.present |= xchainownedcreateaccountclaimidBitOwnerNode
 			case 21:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				x.XChainAccountCreateCount = val
 				x.present |= xchainownedcreateaccountclaimidBitXChainAccountCreateCount
 			default:

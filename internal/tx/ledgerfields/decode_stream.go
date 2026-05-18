@@ -83,15 +83,37 @@ func (r *streamReader) readUint8() (byte, error) {
 	return v, nil
 }
 
-// readUint64Hex reads 8 bytes and returns the uppercase hex string — the
-// canonical decoded form used by binarycodec.Decode for UInt64 fields.
+// readUint64Hex reads 8 bytes and returns the lowercase hex string with no
+// leading zeros — see rippled STUInt64::getJson hex branch
+// (src/libxrpl/protocol/STInteger.cpp:251).
 func (r *streamReader) readUint64Hex() (string, error) {
-	if r.pos+8 > len(r.data) {
-		return "", errors.New("ledgerfields: out of bounds reading UInt64")
+	v, err := r.readUint64Raw()
+	if err != nil {
+		return "", err
 	}
-	s := upperHex(r.data[r.pos : r.pos+8])
+	return strconv.FormatUint(v, 16), nil
+}
+
+// readUint64Decimal reads 8 bytes and returns the decimal string — see
+// rippled STUInt64::getJson base-10 branch
+// (src/libxrpl/protocol/STInteger.cpp:248), used for SFields flagged
+// sMD_BaseTen (sfMaximumAmount, sfOutstandingAmount, sfMPTAmount,
+// sfLockedAmount).
+func (r *streamReader) readUint64Decimal() (string, error) {
+	v, err := r.readUint64Raw()
+	if err != nil {
+		return "", err
+	}
+	return strconv.FormatUint(v, 10), nil
+}
+
+func (r *streamReader) readUint64Raw() (uint64, error) {
+	if r.pos+8 > len(r.data) {
+		return 0, errors.New("ledgerfields: out of bounds reading UInt64")
+	}
+	v := binary.BigEndian.Uint64(r.data[r.pos : r.pos+8])
 	r.pos += 8
-	return s, nil
+	return v, nil
 }
 
 func (r *streamReader) readHash(n int) (string, error) {

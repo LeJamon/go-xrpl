@@ -17,7 +17,7 @@ type PermissionedDomain struct {
 	Owner               string // AccountID (base58)
 	Sequence            uint32
 	AcceptedCredentials []any
-	OwnerNode           string // UInt64 (uppercase hex)
+	OwnerNode           string // UInt64 (lowercase hex, no leading zeros)
 	Flags               uint32
 	PreviousTxnID       string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq   uint32
@@ -75,12 +75,12 @@ func (p *PermissionedDomain) Decode(data []byte) error {
 				return newErrUnknownField("PermissionedDomain", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				p.OwnerNode = val
 				p.present |= permissioneddomainBitOwnerNode
 			default:

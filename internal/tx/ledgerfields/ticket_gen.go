@@ -15,7 +15,7 @@ func init() {
 type Ticket struct {
 	present           uint64
 	Account           string // AccountID (base58)
-	OwnerNode         string // UInt64 (uppercase hex)
+	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
 	TicketSequence    uint32
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
@@ -73,12 +73,12 @@ func (t *Ticket) Decode(data []byte) error {
 				return newErrUnknownField("Ticket", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				t.OwnerNode = val
 				t.present |= ticketBitOwnerNode
 			default:

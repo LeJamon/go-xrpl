@@ -18,8 +18,8 @@ type RippleState struct {
 	Balance           any    // Amount (XRP string | IOU map)
 	LowLimit          any    // Amount (XRP string | IOU map)
 	HighLimit         any    // Amount (XRP string | IOU map)
-	LowNode           string // UInt64 (uppercase hex)
-	HighNode          string // UInt64 (uppercase hex)
+	LowNode           string // UInt64 (lowercase hex, no leading zeros)
+	HighNode          string // UInt64 (lowercase hex, no leading zeros)
 	LowQualityIn      uint32
 	LowQualityOut     uint32
 	HighQualityIn     uint32
@@ -94,15 +94,19 @@ func (r *RippleState) Decode(data []byte) error {
 				return newErrUnknownField("RippleState", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 7:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				r.LowNode = val
 				r.present |= ripplestateBitLowNode
 			case 8:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				r.HighNode = val
 				r.present |= ripplestateBitHighNode
 			default:

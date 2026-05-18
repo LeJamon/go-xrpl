@@ -14,7 +14,7 @@ func init() {
 // the decoded blob so the emit methods only write entries that actually exist.
 type FeeSettings struct {
 	present               uint64
-	BaseFee               string // UInt64 (uppercase hex)
+	BaseFee               string // UInt64 (lowercase hex, no leading zeros)
 	ReferenceFeeUnits     uint32
 	ReserveBase           uint32
 	ReserveIncrement      uint32
@@ -82,12 +82,12 @@ func (f *FeeSettings) Decode(data []byte) error {
 				return newErrUnknownField("FeeSettings", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 5:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				f.BaseFee = val
 				f.present |= feesettingsBitBaseFee
 			default:

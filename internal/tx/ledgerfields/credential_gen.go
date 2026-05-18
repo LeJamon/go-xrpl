@@ -19,8 +19,8 @@ type Credential struct {
 	CredentialType    string // Blob (uppercase hex)
 	Expiration        uint32
 	URI               string // Blob (uppercase hex)
-	IssuerNode        string // UInt64 (uppercase hex)
-	SubjectNode       string // UInt64 (uppercase hex)
+	IssuerNode        string // UInt64 (lowercase hex, no leading zeros)
+	SubjectNode       string // UInt64 (lowercase hex, no leading zeros)
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
@@ -81,15 +81,19 @@ func (c *Credential) Decode(data []byte) error {
 				return newErrUnknownField("Credential", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 27:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				c.IssuerNode = val
 				c.present |= credentialBitIssuerNode
 			case 28:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				c.SubjectNode = val
 				c.present |= credentialBitSubjectNode
 			default:
