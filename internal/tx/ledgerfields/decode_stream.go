@@ -322,6 +322,20 @@ func decodeIOUValue(data []byte) (string, error) {
 		return "", errIOUExponent
 	}
 
+	// Mirror rippled STAmount::getText (STAmount.cpp:706-732): emit scientific
+	// notation whenever the raw offset is non-zero and outside [-25, -5].
+	if rawExp != 0 && (rawExp < -25 || rawExp > -5) {
+		expStr := strconv.Itoa(rawExp)
+		buf := make([]byte, 0, boolToInt(!positive)+origLen+1+len(expStr))
+		if !positive {
+			buf = append(buf, '-')
+		}
+		buf = append(buf, mantStr...)
+		buf = append(buf, 'e')
+		buf = append(buf, expStr...)
+		return string(buf), nil
+	}
+
 	scale := rawExp + (origLen - trimLen)
 
 	if scale >= 0 {

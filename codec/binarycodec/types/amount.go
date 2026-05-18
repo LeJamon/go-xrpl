@@ -255,16 +255,20 @@ func deserializeValue(data []byte) (string, error) {
 	exponent := e1 + e2 - 97
 	sigFigs := append([]byte{0, (b2 & 0x3F)}, valueBytes[2:]...)
 	sigFigsInt := binary.BigEndian.Uint64(sigFigs)
-	d, err := bigdecimal.NewBigDecimal(sign + strconv.FormatUint(sigFigsInt, 10) + "e" + strconv.Itoa(exponent))
+	mantissaStr := strconv.FormatUint(sigFigsInt, 10)
+	d, err := bigdecimal.NewBigDecimal(sign + mantissaStr + "e" + strconv.Itoa(exponent))
 	if err != nil {
 		return "", err
 	}
-	val := d.GetScaledValue()
-	err = verifyIOUValue(val)
-	if err != nil {
+	if err := verifyIOUValue(d.GetScaledValue()); err != nil {
 		return "", err
 	}
-	return val, nil
+	// Mirror rippled STAmount::getText (STAmount.cpp:706-732): emit scientific
+	// notation whenever the offset is non-zero and outside [-25, -5].
+	if exponent != 0 && (exponent < -25 || exponent > -5) {
+		return sign + mantissaStr + "e" + strconv.Itoa(exponent), nil
+	}
+	return d.GetScaledValue(), nil
 }
 
 func deserializeCurrencyCode(data []byte) (string, error) {

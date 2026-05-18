@@ -44,6 +44,22 @@ func TestReadAmountAny_MatchesCodec(t *testing.T) {
 			jsonValue: map[string]any{"value": "1", "currency": "0158415500000000C1F76FF6ECB0BAC600000000", "issuer": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"},
 		},
 		{
+			name:      "IOU_scientific_negative_exp",
+			jsonValue: map[string]any{"value": "1234567890123456e-50", "currency": "USD", "issuer": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"},
+		},
+		{
+			name:      "IOU_scientific_positive_exp",
+			jsonValue: map[string]any{"value": "5000000000000000e30", "currency": "USD", "issuer": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"},
+		},
+		{
+			name:      "IOU_boundary_scientific_neg26",
+			jsonValue: map[string]any{"value": "1000000000000000e-26", "currency": "USD", "issuer": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"},
+		},
+		{
+			name:      "IOU_boundary_fixed_neg25",
+			jsonValue: map[string]any{"value": "0.0000000001", "currency": "USD", "issuer": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"},
+		},
+		{
 			name:      "MPT_positive",
 			jsonValue: map[string]any{"value": "1234567890", "mpt_issuance_id": "00000000ABCDEF0123456789FEDCBA9876543210FEDCBA98"},
 		},
