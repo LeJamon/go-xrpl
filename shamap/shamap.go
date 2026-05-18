@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // Common errors
@@ -77,20 +78,28 @@ type SHAMap struct {
 	full      bool
 	backed    bool
 	family    Family // nil for unbacked maps
+	// cachedSize memoises Size() once the map is immutable. -1 means
+	// uncached; any non-negative value is the authoritative leaf count.
+	// Only written for immutable maps, where the tree is frozen and a
+	// race between concurrent first-readers is benign (they all compute
+	// the same count).
+	cachedSize atomic.Int64
 }
 
 // New creates a new empty SHAMap with the specified type
 func New(mapType Type) (*SHAMap, error) {
 	root := NewInnerNode()
 
-	return &SHAMap{
+	sm := &SHAMap{
 		root:      root,
 		mapType:   mapType,
 		state:     StateModifying,
 		ledgerSeq: 0,
 		full:      true,
 		backed:    false,
-	}, nil
+	}
+	sm.cachedSize.Store(-1)
+	return sm, nil
 }
 
 // NewBacked creates a new empty backed SHAMap with the specified type and Family.
@@ -100,14 +109,16 @@ func NewBacked(mapType Type, family Family) (*SHAMap, error) {
 		return nil, errors.New("family is required for backed SHAMap")
 	}
 	root := NewInnerNode()
-	return &SHAMap{
+	sm := &SHAMap{
 		root:    root,
 		mapType: mapType,
 		state:   StateModifying,
 		full:    true,
 		backed:  true,
 		family:  family,
-	}, nil
+	}
+	sm.cachedSize.Store(-1)
+	return sm, nil
 }
 
 // SetFamily sets the Family on an existing SHAMap, enabling backed mode.
@@ -147,14 +158,16 @@ func NewFromRootHash(mapType Type, rootHash [32]byte, family Family) (*SHAMap, e
 		return nil, fmt.Errorf("root node is not an InnerNode, got %T", node)
 	}
 
-	return &SHAMap{
+	sm := &SHAMap{
 		root:    root,
 		mapType: mapType,
 		state:   StateModifying,
 		full:    true,
 		backed:  true,
 		family:  family,
-	}, nil
+	}
+	sm.cachedSize.Store(-1)
+	return sm, nil
 }
 
 // descend returns the child node at the given branch of an inner node.
@@ -923,13 +936,23 @@ func (sm *SHAMap) Snapshot(mutable bool) (*SHAMap, error) {
 		return nil, fmt.Errorf("failed to clone tree: %w", err)
 	}
 
-	return &SHAMap{
+	out := &SHAMap{
 		root:      newRoot,
 		mapType:   sm.mapType,
 		state:     newState,
 		ledgerSeq: sm.ledgerSeq,
 		full:      sm.full,
-	}, nil
+	}
+	out.cachedSize.Store(-1)
+	// Immutable→immutable snapshot owns the same leaf set as its source; if
+	// the source already cached its size, carry it over so the snapshot is
+	// also O(1) on first Size().
+	if !mutable && sm.state == StateImmutable {
+		if n := sm.cachedSize.Load(); n >= 0 {
+			out.cachedSize.Store(n)
+		}
+	}
+	return out, nil
 }
 
 // snapshotBacked creates a snapshot of a backed map by flushing dirty nodes
@@ -968,6 +991,35 @@ func (sm *SHAMap) snapshotBacked(mutable bool) (*SHAMap, error) {
 	newMap.ledgerSeq = sm.ledgerSeq
 
 	return newMap, nil
+}
+
+// Size returns the number of leaf items in the SHAMap.
+//
+// For immutable maps (the typical consumer — closed/historical ledgers
+// queried by TxQ fee math, RPC handlers, etc.) the result is computed on
+// the first call and cached, so subsequent calls are O(1). For mutable
+// maps the tree is walked each call, matching what callers had to do
+// inline before this method existed.
+func (sm *SHAMap) Size() int {
+	if n := sm.cachedSize.Load(); n >= 0 {
+		return int(n)
+	}
+
+	sm.mu.RLock()
+	count := 0
+	_ = sm.forEachUnsafe(context.Background(), sm.root, func(*Item) bool {
+		count++
+		return true
+	})
+	isImmutable := sm.state == StateImmutable
+	sm.mu.RUnlock()
+
+	if isImmutable {
+		// Race between concurrent first-readers is benign: every walker
+		// sees the same frozen tree and so computes the same count.
+		sm.cachedSize.Store(int64(count))
+	}
+	return count
 }
 
 // ForEach calls fn for every item in the tree.

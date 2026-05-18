@@ -892,17 +892,13 @@ func (l *Ledger) ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool
 	})
 }
 
-// TxCount returns the number of transactions in the tx map.
+// TxCount returns the number of transactions in the tx map. Delegates to
+// SHAMap.Size, which is O(1) on the closed/immutable ledger views that
+// TxQ fee math and RPC handlers query.
 func (l *Ledger) TxCount() uint32 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-
-	var count uint32
-	_ = l.txMap.ForEach(func(_ *shamap.Item) bool {
-		count++
-		return true
-	})
-	return count
+	return uint32(l.txMap.Size())
 }
 
 // StateMapSnapshot returns a mutable snapshot of the state map.
