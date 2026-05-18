@@ -52,30 +52,30 @@ func main() {
 
 // fieldRender carries the resolved per-field data the template needs.
 type fieldRender struct {
-	Name        string // canonical XRPL field name
-	GoField     string // Go struct field name (mirrors XRPL name)
-	BitConst    string // const name of the presence bit
-	GoType      string // Go type of the slot
-	XRPLType    string // XRPL type name (UInt32, Hash256, ...)
-	TypeCode    int    // XRPL type code
-	FieldCode   int    // XRPL field code
-	Meta        spec.Meta
-	Comparer    string // "String" | "Uint32" | "Int" | "Amount" — selects emitIfChanged*
-	IsAmount    bool
-	IsHash      bool   // hex-string default-value check
-	XRPOnly     bool   // Balance on AccountRoot uses readAmount (XRP-only)
-	ReadCall    string // expression that reads from streamReader
-	DecodeKind  string // "uint32" | "int" | "string" | "amount" — drives the switch arm
+	Name       string // canonical XRPL field name
+	GoField    string // Go struct field name (mirrors XRPL name)
+	BitConst   string // const name of the presence bit
+	GoType     string // Go type of the slot
+	XRPLType   string // XRPL type name (UInt32, Hash256, ...)
+	TypeCode   int    // XRPL type code
+	FieldCode  int    // XRPL field code
+	Meta       spec.Meta
+	Comparer   string // "String" | "Uint32" | "Int" | "Amount" — selects emitIfChanged*
+	IsAmount   bool
+	IsHash     bool   // hex-string default-value check
+	XRPOnly    bool   // Balance on AccountRoot uses readAmount (XRP-only)
+	ReadCall   string // expression that reads from streamReader
+	DecodeKind string // "uint32" | "int" | "string" | "amount" — drives the switch arm
 }
 
 type entryRender struct {
-	Name           string                  // ledger-entry-type name
-	StructName     string                  // Go struct name (= entry name)
-	Receiver       string                  // single-letter receiver
-	BitPrefix      string                  // prefix for presence-bit constants
-	Fields         []fieldRender           // emit-ordered (creator order)
-	DecodeArms     map[int][]decodeArm     // typeCode -> list of dispatch arms
-	HasUnsupported bool                    // any Amount field that may be IOU
+	Name           string              // ledger-entry-type name
+	StructName     string              // Go struct name (= entry name)
+	Receiver       string              // single-letter receiver
+	BitPrefix      string              // prefix for presence-bit constants
+	Fields         []fieldRender       // emit-ordered (creator order)
+	DecodeArms     map[int][]decodeArm // typeCode -> list of dispatch arms
+	HasUnsupported bool                // any Amount field that may be IOU
 }
 
 type decodeArm struct {

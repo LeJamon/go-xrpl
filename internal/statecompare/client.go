@@ -6,6 +6,7 @@ package statecompare
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 
@@ -51,6 +52,10 @@ type Config struct {
 	Database string
 	User     string
 	Password string
+	// SSLMode controls libpq sslmode. Defaults to "disable" via ConfigFromEnv
+	// to match local-dev setups; production deployments should set this to
+	// "require" or higher via POSTGRES_SSLMODE.
+	SSLMode string
 }
 
 // ConfigFromEnv creates a Config from environment variables.
@@ -62,6 +67,7 @@ func ConfigFromEnv() Config {
 		Database: getEnvOrDefault("POSTGRES_DB", "xrpl_state"),
 		User:     getEnvOrDefault("POSTGRES_USER", "postgres"),
 		Password: getEnvOrDefault("POSTGRES_PASSWORD", "postgres"),
+		SSLMode:  getEnvOrDefault("POSTGRES_SSLMODE", "disable"),
 	}
 }
 
@@ -74,9 +80,13 @@ func getEnvOrDefault(key, defaultValue string) string {
 
 // NewClient creates a new database client from config.
 func NewClient(cfg Config) (*Client, error) {
+	sslMode := cfg.SSLMode
+	if sslMode == "" {
+		sslMode = "disable"
+	}
 	connStr := fmt.Sprintf(
-		"host=%s port=%s dbname=%s user=%s password=%s sslmode=disable",
-		cfg.Host, cfg.Port, cfg.Database, cfg.User, cfg.Password,
+		"host=%s port=%s dbname=%s user=%s password=%s sslmode=%s",
+		cfg.Host, cfg.Port, cfg.Database, cfg.User, cfg.Password, sslMode,
 	)
 
 	db, err := sql.Open("postgres", connStr)
@@ -126,7 +136,7 @@ func (c *Client) GetSnapshot(ctx context.Context, ledgerIndex uint32) (*LedgerSn
 		&snapshot.CloseTimeResolution,
 		&snapshot.CloseFlags,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("ledger %d not found", ledgerIndex)
 	}
 	if err != nil {
@@ -156,7 +166,12 @@ func (c *Client) GetStateEntries(ctx context.Context, ledgerIndex uint32) ([]Sta
 	}
 	defer rows.Close()
 
+	// Pre-size from the row count so large ledgers don't trigger repeated
+	// realloc/copy cycles.
 	var entries []StateEntry
+	if n, err := c.GetStateEntryCount(ctx, ledgerIndex); err == nil && n > 0 {
+		entries = make([]StateEntry, 0, n)
+	}
 	for rows.Next() {
 		var indexBytes []byte
 		var data []byte
@@ -194,6 +209,9 @@ func (c *Client) GetTransactions(ctx context.Context, ledgerIndex uint32) ([]Tra
 	defer rows.Close()
 
 	var txs []Transaction
+	if n, err := c.GetTransactionCount(ctx, ledgerIndex); err == nil && n > 0 {
+		txs = make([]Transaction, 0, n)
+	}
 	for rows.Next() {
 		var hashBytes []byte
 		var tx Transaction
@@ -254,15 +272,40 @@ func (c *Client) GetTransactionCount(ctx context.Context, ledgerIndex uint32) (i
 
 // ValidateRange checks that all ledgers in the given range exist in the database.
 // Returns the first missing ledger index if any are missing.
+//
+// Implemented as a single range query rather than N round-trips so validating
+// a multi-thousand-ledger range stays cheap.
 func (c *Client) ValidateRange(ctx context.Context, from, to uint32) (bool, uint32, error) {
-	for i := from; i <= to; i++ {
-		exists, err := c.HasLedger(ctx, i)
-		if err != nil {
-			return false, i, err
+	if from > to {
+		return true, 0, nil
+	}
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT ledger_index FROM ledger_snapshots
+		 WHERE ledger_index BETWEEN $1 AND $2
+		 ORDER BY ledger_index`,
+		from, to,
+	)
+	if err != nil {
+		return false, from, fmt.Errorf("querying ledger range: %w", err)
+	}
+	defer rows.Close()
+
+	expected := from
+	for rows.Next() {
+		var idx uint32
+		if err := rows.Scan(&idx); err != nil {
+			return false, expected, fmt.Errorf("scanning ledger index: %w", err)
 		}
-		if !exists {
-			return false, i, nil
+		if idx != expected {
+			return false, expected, nil
 		}
+		expected++
+	}
+	if err := rows.Err(); err != nil {
+		return false, expected, fmt.Errorf("iterating ledger range: %w", err)
+	}
+	if expected <= to {
+		return false, expected, nil
 	}
 	return true, 0, nil
 }

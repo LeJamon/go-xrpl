@@ -17,6 +17,10 @@ import (
 // It provides a simplified interface for creating accounts, funding them,
 // submitting transactions, and verifying results.
 type TestEnv struct {
+	// t is the active testing.TB used for Helper / Fatalf / Cleanup.
+	// Captured at construction; use WithT to retarget at a subtest's *testing.T
+	// so that failures attribute to the running subtest rather than the parent.
+	// testing.TB is an interface so both *testing.T and *testing.B work.
 	t        testing.TB
 	ledger   *ledger.Ledger
 	clock    *ManualClock
@@ -351,4 +355,13 @@ func (e *TestEnv) SetReserves(reserveBase, reserveIncrement uint64) {
 // the transaction set. Cleared after use.
 func (e *TestEnv) SetNextCloseSalt(salt [32]byte) {
 	e.nextCloseSalt = &salt
+}
+
+// WithT retargets the env at the given testing.TB. Use this from a subtest
+// so that env-driven Helper / Fatalf calls attribute failures to the subtest
+// rather than the parent test captured at construction.
+func (e *TestEnv) WithT(t testing.TB) *TestEnv {
+	t.Helper()
+	e.t = t
+	return e
 }

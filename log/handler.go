@@ -2,10 +2,12 @@ package log
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 )
 
 // configDynamic holds the hot-reloadable parts of Config.
@@ -17,6 +19,15 @@ type configDynamic struct {
 }
 
 // Config holds all configuration needed to build a Logger.
+//
+// Once NewHandler (or any SetLevel / SetPartitionLevel call) has initialised
+// the dynamic state, Level and Partitions must only be read or mutated through
+// the SetLevel / SetPartitionLevel / GetCurrentLevels API — direct writes to
+// the static fields are not race-safe against concurrent logging.
+//
+// Copying a Config after NewHandler / SetLevel has been called shares the
+// dynamic state via the dyn pointer; copy-then-mutate-the-copy is not
+// supported. Build a fresh Config instead.
 type Config struct {
 	// Level is the global minimum level. Records below this are dropped
 	// unless a partition override specifies a lower (more verbose) level.
@@ -32,16 +43,17 @@ type Config struct {
 	// Omitted partitions use the global Level.
 	Partitions map[string]Level
 
-	// dyn holds live LevelVars initialised by NewHandler.
-	// Nil until NewHandler is called; safe for Config to be copied before that.
-	dyn *configDynamic
+	// dyn holds live LevelVars initialised by initDyn. Stored as
+	// atomic.Pointer so concurrent first-touches don't race on the
+	// pointer, and so Config itself remains copy-safe (no embedded mutex).
+	dyn atomic.Pointer[configDynamic]
 }
 
 // initDyn lazily initialises the dynamic state from the static Level fields.
-// Idempotent — safe to call multiple times.
-func (c *Config) initDyn() {
-	if c.dyn != nil {
-		return
+// Safe for concurrent first-use: losing writers drop their allocation.
+func (c *Config) initDyn() *configDynamic {
+	if d := c.dyn.Load(); d != nil {
+		return d
 	}
 	d := &configDynamic{
 		globalVar:  &slog.LevelVar{},
@@ -53,33 +65,39 @@ func (c *Config) initDyn() {
 		v.Set(lvl)
 		d.partitions[name] = v
 	}
-	c.dyn = d
+	if !c.dyn.CompareAndSwap(nil, d) {
+		// Lost the race; another goroutine published first. Discard ours.
+		return c.dyn.Load()
+	}
+	return d
 }
 
 // SetLevel changes the global log level at runtime.
 // All loggers built from this Config reflect the change immediately.
 func (c *Config) SetLevel(l Level) {
-	c.initDyn()
+	d := c.initDyn()
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	c.Level = l
-	c.dyn.globalVar.Set(l)
+	d.globalVar.Set(l)
 }
 
 // SetPartitionLevel changes the level for one partition at runtime.
 // Creates an override entry if the partition did not previously have one.
 func (c *Config) SetPartitionLevel(partition string, l Level) {
-	c.initDyn()
+	d := c.initDyn()
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if c.Partitions == nil {
 		c.Partitions = make(map[string]Level)
 	}
 	c.Partitions[partition] = l
-	c.dyn.mu.Lock()
-	defer c.dyn.mu.Unlock()
-	if v, ok := c.dyn.partitions[partition]; ok {
+	if v, ok := d.partitions[partition]; ok {
 		v.Set(l)
 	} else {
 		v := &slog.LevelVar{}
 		v.Set(l)
-		c.dyn.partitions[partition] = v
+		d.partitions[partition] = v
 	}
 }
 
@@ -90,20 +108,23 @@ func (c *Config) getPartitionLeveler(partition string) slog.Leveler {
 	if c == nil {
 		return LevelInfo
 	}
-	c.initDyn()
-	c.dyn.mu.RLock()
-	v, ok := c.dyn.partitions[partition]
-	c.dyn.mu.RUnlock()
+	d := c.initDyn()
+	d.mu.RLock()
+	v, ok := d.partitions[partition]
+	d.mu.RUnlock()
 	if ok {
 		return v
 	}
-	return c.dyn.globalVar
+	return d.globalVar
 }
 
 // DefaultConfig returns a Config suitable for development:
 // Info level, text format, stdout output.
-func DefaultConfig() Config {
-	return Config{
+//
+// Returns a pointer because Config embeds an atomic.Pointer that must not be
+// copied by value once the Config is in use.
+func DefaultConfig() *Config {
+	return &Config{
 		Level:      LevelInfo,
 		Format:     "text",
 		Output:     os.Stdout,
@@ -117,6 +138,9 @@ func (c *Config) partitionLevel(partition string) Level {
 	if c == nil {
 		return LevelInfo
 	}
+	d := c.initDyn()
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	if override, ok := c.Partitions[partition]; ok {
 		return override
 	}
@@ -136,10 +160,10 @@ func NewHandler(cfg *Config) slog.Handler {
 		out = os.Stdout
 	}
 
-	cfg.initDyn() // ensure globalVar is live
+	d := cfg.initDyn() // ensure globalVar is live
 
 	opts := &slog.HandlerOptions{
-		Level:       cfg.dyn.globalVar, // *slog.LevelVar — hot-reloadable
+		Level:       d.globalVar, // *slog.LevelVar — hot-reloadable
 		ReplaceAttr: replaceLevel,
 	}
 
@@ -172,16 +196,18 @@ func (m *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	return false
 }
 
-// Handle passes the record to all child handlers.
+// Handle passes the record to all child handlers, aggregating any errors so
+// a failure in an early handler does not skip later ones.
 func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
+	var errs []error
 	for _, h := range m.handlers {
 		if h.Enabled(ctx, r.Level) {
 			if err := h.Handle(ctx, r); err != nil {
-				return err
+				errs = append(errs, err)
 			}
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // WithAttrs returns a new multiHandler with each child's WithAttrs applied.

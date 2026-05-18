@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 )
 
 // Config represents the complete xrpld configuration
@@ -184,7 +185,7 @@ func (c *Config) GetAdminPorts() map[string]PortConfig {
 // GetPeerPort returns the port configured for peer protocol
 func (c *Config) GetPeerPort() (string, PortConfig, bool) {
 	for name, port := range c.Ports {
-		if containsProtocol(port.Protocol, "peer") {
+		if strings.Contains(port.Protocol, "peer") {
 			return name, port, true
 		}
 	}
@@ -195,7 +196,7 @@ func (c *Config) GetPeerPort() (string, PortConfig, bool) {
 func (c *Config) GetHTTPPorts() map[string]PortConfig {
 	httpPorts := make(map[string]PortConfig)
 	for name, port := range c.Ports {
-		if containsProtocol(port.Protocol, "http") || containsProtocol(port.Protocol, "https") {
+		if strings.Contains(port.Protocol, "http") || strings.Contains(port.Protocol, "https") {
 			httpPorts[name] = port
 		}
 	}
@@ -206,24 +207,9 @@ func (c *Config) GetHTTPPorts() map[string]PortConfig {
 func (c *Config) GetWebSocketPorts() map[string]PortConfig {
 	wsPorts := make(map[string]PortConfig)
 	for name, port := range c.Ports {
-		if containsProtocol(port.Protocol, "ws") || containsProtocol(port.Protocol, "wss") {
+		if strings.Contains(port.Protocol, "ws") || strings.Contains(port.Protocol, "wss") {
 			wsPorts[name] = port
 		}
 	}
 	return wsPorts
-}
-
-// containsProtocol checks if a protocol string contains a specific protocol
-func containsProtocol(protocols, target string) bool {
-	return contains(protocols, target)
-}
-
-// contains checks if a string contains a substring (case-insensitive)
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

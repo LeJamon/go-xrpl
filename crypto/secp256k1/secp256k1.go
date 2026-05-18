@@ -243,25 +243,6 @@ func (c SECP256K1CryptoAlgorithm) validateBytes(msg, pubkey, sig []byte, mustBeF
 	if mustBeFullyCanonical && canonicality != rootcrypto.CanonicityFullyCanonical {
 		return false
 	}
-	r, s, err := rootcrypto.DERSigToRS(sig)
-	if err != nil {
-		return false
-	}
-	var rBytes, sBytes [32]byte
-	if len(r) > 32 || len(s) > 32 {
-		return false
-	}
-	copy(rBytes[32-len(r):], r)
-	copy(sBytes[32-len(s):], s)
-	ecdsaR := &secp256k1.ModNScalar{}
-	ecdsaS := &secp256k1.ModNScalar{}
-	ecdsaR.SetBytes(&rBytes)
-	ecdsaS.SetBytes(&sBytes)
-	parsedSig := ecdsa.NewSignature(ecdsaR, ecdsaS)
-	pubKey, err := secp256k1.ParsePubKey(pubkey)
-	if err != nil {
-		return false
-	}
 	var digest [32]byte
 	if hashMsg {
 		digest = common.Sha512Half(msg)
@@ -271,7 +252,7 @@ func (c SECP256K1CryptoAlgorithm) validateBytes(msg, pubkey, sig []byte, mustBeF
 		}
 		copy(digest[:], msg)
 	}
-	return parsedSig.Verify(digest[:], pubKey)
+	return verifyDigestRaw(digest[:], pubkey, sig)
 }
 
 // ValidateDigest verifies a signature against a pre-computed digest (hash).
