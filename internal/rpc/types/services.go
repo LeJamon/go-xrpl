@@ -15,6 +15,73 @@ type MethodDispatcher interface {
 	ExecuteMethod(method string, params []byte) (interface{}, *RpcError)
 }
 
+// ValidatorListPublisherInfo is the per-publisher snapshot the
+// `validators` RPC surfaces. Expressed as a value type (not the
+// internal/validator/list.PublisherState struct) so internal/rpc/types
+// doesn't import internal/validator/list — same anti-cycle pattern as
+// ManifestLookup below.
+type ValidatorListPublisherInfo struct {
+	// PublicKey is the 33-byte master pubkey as hex (uppercase). Empty
+	// when the publisher has not yet produced a list and only the
+	// configured key is known.
+	PublicKey string
+	// Status is one of "unavailable" / "available" / "expired" / "revoked".
+	Status string
+	// Sequence is the version of the currently-effective list. Zero
+	// before the first accepted list.
+	Sequence uint32
+	// EffectiveUnix is the Unix-epoch second at which the current list
+	// became effective. Zero when unset.
+	EffectiveUnix int64
+	// ExpirationUnix is the Unix-epoch second after which the current
+	// list is treated as expired. Zero when unset.
+	ExpirationUnix int64
+	// ValidatorCount is the number of validators in the publisher's
+	// currently-effective list.
+	ValidatorCount int
+	// SiteURI is the source URL (or "peer:<id>") of the most recent
+	// list.
+	SiteURI string
+}
+
+// ValidatorListSiteInfo is the per-URL snapshot the
+// `validator_list_sites` RPC surfaces.
+type ValidatorListSiteInfo struct {
+	URI                string
+	LastRefreshUnix    int64
+	LastSuccessUnix    int64
+	LastError          string
+	LastDisposition    string
+	RefreshIntervalSec int
+}
+
+// ValidatorListReader is the read-only facet of the publisher-trust
+// aggregator that the validators / validator_list_sites RPCs need.
+// Expressed as an interface so internal/rpc/types doesn't import
+// internal/validator/list.
+type ValidatorListReader interface {
+	// HasConfiguredPublishers reports whether any validator_list_keys
+	// are configured. False means the publisher-trust subsystem is
+	// inert and the RPC should report an empty publisher list.
+	HasConfiguredPublishers() bool
+	// PublisherCount returns the number of configured publishers in the
+	// trust set.
+	PublisherCount() int
+	// Threshold returns the configured publisher threshold (minimum
+	// number of publishers whose lists must agree on a validator
+	// before it enters the effective UNL).
+	Threshold() int
+	// Publishers returns a snapshot of per-publisher state for the
+	// `validators` RPC.
+	Publishers() []ValidatorListPublisherInfo
+	// Sites returns a snapshot of per-URL polling state for the
+	// `validator_list_sites` RPC.
+	Sites() []ValidatorListSiteInfo
+	// TrustedMasterKeys returns the master pubkeys currently in the
+	// effective trusted UNL contributed by publishers.
+	TrustedMasterKeys() [][33]byte
+}
+
 // ManifestLookup is the read-only facet of the validator-manifest cache
 // that the `manifest` RPC needs. Expressed as an interface (not a
 // concrete type) so internal/rpc/types doesn't import
@@ -70,6 +137,11 @@ type ServiceContainer struct {
 	// Computed by the adaptor from the current UNL minus the negative-UNL.
 	// Nil in standalone mode (server_info falls back to 1).
 	ValidationQuorum func() int
+
+	// ValidatorList is the publisher-trust subsystem's read facet for
+	// the `validators` and `validator_list_sites` RPC methods. Nil when
+	// no validator_list_keys are configured — handlers must nil-check.
+	ValidatorList ValidatorListReader
 }
 
 // LedgerNavigator provides ledger index navigation and mode queries.

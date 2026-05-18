@@ -31,6 +31,7 @@ import (
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb/postgres"
 	sqlitedb "github.com/LeJamon/goXRPLd/storage/relationaldb/sqlite"
+	validatorlist "github.com/LeJamon/goXRPLd/internal/validator/list"
 	"github.com/LeJamon/goXRPLd/version"
 	"github.com/spf13/cobra"
 )
@@ -328,6 +329,13 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		// the engine reads for ephemeral→master translation, and this
 		// RPC reads for external queries.
 		services.Manifests = consensusComponents.Manifests
+
+		// Expose the publisher-list aggregator (when configured) to
+		// the `validators` and `validator_list_sites` RPC methods.
+		// nil-safe: NewRPCReader returns an inert reader when the
+		// aggregator is nil, so the handlers return empty arrays in
+		// that case rather than panicking.
+		services.ValidatorList = validatorlist.NewRPCReader(consensusComponents.ValidatorList)
 
 		// Expose the local validator's signing key to validator_info.
 		// Mirrors rippled's getValidationPublicKey gate: empty means

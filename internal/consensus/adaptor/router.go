@@ -16,6 +16,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/manifest"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	validatorlist "github.com/LeJamon/goXRPLd/internal/validator/list"
 	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/shamap"
 )
@@ -80,6 +81,13 @@ type Router struct {
 	// directly via Overlay.BroadcastExcept. Nil in tests that
 	// construct a router without manifest support.
 	overlay *peermanagement.Overlay
+
+	// validatorList is the publisher-trust subsystem. Wired by the
+	// Components bootstrap when validator_list_keys is configured. Nil
+	// in standalone-mode or when no publisher trust is configured —
+	// the dispatch switch silently drops TMValidatorList /
+	// TMValidatorListCollection frames in that case.
+	validatorList *validatorlist.Aggregator
 
 	// overrideManifestSender, when non-nil, replaces r.overlay for the
 	// local-manifest emission paths (SendLocalManifestTo /
@@ -245,6 +253,14 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManag
 func (r *Router) SetManifestCache(cache *manifest.Cache, overlay *peermanagement.Overlay) {
 	r.manifests = cache
 	r.overlay = overlay
+}
+
+// SetValidatorListAggregator installs the publisher-trust subsystem.
+// Calling with a nil aggregator disables the TMValidatorList /
+// TMValidatorListCollection paths — the dispatch switch silently
+// drops inbound frames in that case. Safe to call before Run.
+func (r *Router) SetValidatorListAggregator(agg *validatorlist.Aggregator) {
+	r.validatorList = agg
 }
 
 // SetInboundClock overrides the clock used by new inbound replay-delta
@@ -428,6 +444,10 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 		r.handleProofPathResponse(msg)
 	case message.TypeManifests:
 		r.handleManifests(msg)
+	case message.TypeValidatorList:
+		r.handleValidatorList(msg)
+	case message.TypeValidatorListCollection:
+		r.handleValidatorListCollection(msg)
 	default:
 		// Not a consensus message — ignore
 	}

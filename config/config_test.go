@@ -187,7 +187,7 @@ journal_size_limit = 1582080
 
 	validatorsContent := `
 validator_list_sites = ["https://test.example.com"]
-validator_list_keys = ["ED264807102805220DA0F312E71FC2C69E1552C9C5790F6C25E3729DEB573D58"]
+validator_list_keys = ["ED264807102805220DA0F312E71FC2C69E1552C9C5790F6C25E3729DEB573D5860"]
 validator_list_threshold = 1
 `
 	validatorsPath := filepath.Join(tempDir, "test_validators.toml")
@@ -204,7 +204,7 @@ validator_list_threshold = 1
 	require.NotNil(t, config)
 
 	assert.Equal(t, []string{"https://test.example.com"}, config.Validators.ValidatorListSites)
-	assert.Equal(t, []string{"ED264807102805220DA0F312E71FC2C69E1552C9C5790F6C25E3729DEB573D58"}, config.Validators.ValidatorListKeys)
+	assert.Equal(t, []string{"ED264807102805220DA0F312E71FC2C69E1552C9C5790F6C25E3729DEB573D5860"}, config.Validators.ValidatorListKeys)
 	assert.Equal(t, 1, config.Validators.ValidatorListThreshold)
 }
 

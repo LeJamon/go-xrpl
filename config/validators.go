@@ -133,20 +133,28 @@ func validateValidatorListSite(site string) error {
 	return nil
 }
 
-// validateValidatorListKey validates a validator list publisher key
+// validateValidatorListKey validates a validator list publisher key.
+// Publisher keys are 33-byte compressed public keys hex-encoded
+// (66 chars) with a key-type prefix byte: 0xED for ed25519 — the
+// common case in practice; vl.ripple.com / vl.xrplf.org both publish
+// ed25519 — or 0x02/0x03 for secp256k1.
 func validateValidatorListKey(key string) error {
 	if key == "" {
 		return fmt.Errorf("validator list key cannot be empty")
 	}
 
-	// Should be hex-encoded and 64 characters long (32 bytes * 2)
-	if len(key) != 64 {
-		return fmt.Errorf("validator list key has invalid length %d, expected 64", len(key))
+	if len(key) != 66 {
+		return fmt.Errorf("validator list key has invalid length %d, expected 66 (33-byte hex)", len(key))
 	}
 
-	// Hex character validation
 	if !isValidHex(key) {
 		return fmt.Errorf("validator list key contains invalid hex characters")
+	}
+
+	// Sanity-check the key-type prefix byte.
+	prefix := strings.ToUpper(key[:2])
+	if prefix != "ED" && prefix != "02" && prefix != "03" {
+		return fmt.Errorf("validator list key has unrecognized key-type prefix %q (want ED, 02, or 03)", prefix)
 	}
 
 	return nil
