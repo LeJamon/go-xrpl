@@ -9,8 +9,8 @@
 // Usage:
 //
 //	// In main / CLI init:
-//	cfg := log.Config{Level: log.LevelInfo, Format: "text", Output: os.Stdout}
-//	log.SetRoot(log.New(log.NewHandler(cfg), &cfg))
+//	cfg := &log.Config{Level: log.LevelInfo, Format: "text", Output: os.Stdout}
+//	log.SetRoot(log.New(log.NewHandler(cfg), cfg))
 //
 //	// In a subsystem:
 //	logger := log.Root().Named(log.PartitionTx)
@@ -24,6 +24,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"sync/atomic"
 )
 
 // Level is an alias for slog.Level, extended with Trace and Fatal values.
@@ -66,30 +67,36 @@ type Logger interface {
 	Named(partition string) Logger
 }
 
-// root is the global logger. Defaults to Discard so packages that call
-// log.Info() before SetRoot() don't panic.
-var root Logger = Discard()
+// root holds the global logger. Defaults to Discard so packages that call
+// log.Info() before SetRoot() don't panic. Stored as an atomic.Pointer so
+// concurrent SetRoot / log calls don't race on the interface value.
+var root atomic.Pointer[Logger]
+
+func init() {
+	d := Discard()
+	root.Store(&d)
+}
 
 // SetRoot sets the global root logger.
-func SetRoot(l Logger) { root = l }
+func SetRoot(l Logger) { root.Store(&l) }
 
 // Root returns the global root logger.
-func Root() Logger { return root }
+func Root() Logger { return *root.Load() }
 
 // Package-level convenience functions delegate to root.
 
-func Trace(msg string, args ...any) { root.Trace(msg, args...) }
-func Debug(msg string, args ...any) { root.Debug(msg, args...) }
-func Info(msg string, args ...any)  { root.Info(msg, args...) }
-func Warn(msg string, args ...any)  { root.Warn(msg, args...) }
-func Error(msg string, args ...any) { root.Error(msg, args...) }
-func Fatal(msg string, args ...any) { root.Fatal(msg, args...) }
+func Trace(msg string, args ...any) { Root().Trace(msg, args...) }
+func Debug(msg string, args ...any) { Root().Debug(msg, args...) }
+func Info(msg string, args ...any)  { Root().Info(msg, args...) }
+func Warn(msg string, args ...any)  { Root().Warn(msg, args...) }
+func Error(msg string, args ...any) { Root().Error(msg, args...) }
+func Fatal(msg string, args ...any) { Root().Fatal(msg, args...) }
 
 // With returns a new Logger derived from root with the given fields.
-func With(args ...any) Logger { return root.With(args...) }
+func With(args ...any) Logger { return Root().With(args...) }
 
 // Named returns a new Logger derived from root scoped to the given partition.
-func Named(partition string) Logger { return root.Named(partition) }
+func Named(partition string) Logger { return Root().Named(partition) }
 
 // parseLevel converts a level string to a Level constant.
 // Returns LevelInfo and false if the name is unrecognised.
@@ -136,41 +143,44 @@ func LevelName(l Level) string {
 
 // rootCfg is the *Config that backs the global root logger.
 // Set by SetRootConfig after SetRoot is called in the CLI bootstrap.
-var rootCfg *Config
+// Stored as an atomic.Pointer so concurrent SetRootConfig / SetLevel calls
+// don't race on the pointer value.
+var rootCfg atomic.Pointer[Config]
 
 // SetRootConfig registers cfg as the live config for the root logger.
 // Call this once after SetRoot so that SetLevel / SetPartitionLevel work.
-func SetRootConfig(cfg *Config) { rootCfg = cfg }
+func SetRootConfig(cfg *Config) { rootCfg.Store(cfg) }
 
 // SetLevel changes the global log level at runtime.
 // No-op if SetRootConfig has not been called.
 func SetLevel(l Level) {
-	if rootCfg != nil {
-		rootCfg.SetLevel(l)
+	if cfg := rootCfg.Load(); cfg != nil {
+		cfg.SetLevel(l)
 	}
 }
 
 // SetPartitionLevel changes the level for one partition at runtime.
 // No-op if SetRootConfig has not been called.
 func SetPartitionLevel(partition string, l Level) {
-	if rootCfg != nil {
-		rootCfg.SetPartitionLevel(partition, l)
+	if cfg := rootCfg.Load(); cfg != nil {
+		cfg.SetPartitionLevel(partition, l)
 	}
 }
 
 // GetCurrentLevels returns a point-in-time snapshot of the global level and
 // all per-partition overrides. Returns (LevelInfo, nil) if rootCfg is unset.
 func GetCurrentLevels() (global Level, partitions map[string]Level) {
-	if rootCfg == nil {
+	cfg := rootCfg.Load()
+	if cfg == nil {
 		return LevelInfo, nil
 	}
-	rootCfg.initDyn()
-	rootCfg.dyn.mu.RLock()
-	defer rootCfg.dyn.mu.RUnlock()
-	global = rootCfg.Level
-	if len(rootCfg.Partitions) > 0 {
-		partitions = make(map[string]Level, len(rootCfg.Partitions))
-		for k, v := range rootCfg.Partitions {
+	d := cfg.initDyn()
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	global = cfg.Level
+	if len(cfg.Partitions) > 0 {
+		partitions = make(map[string]Level, len(cfg.Partitions))
+		for k, v := range cfg.Partitions {
 			partitions[k] = v
 		}
 	}

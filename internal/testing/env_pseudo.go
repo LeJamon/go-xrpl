@@ -7,14 +7,20 @@ import (
 )
 
 // EnableFeature enables an amendment by name for subsequent transactions.
-// Reference: rippled's Env::enableFeature() in test/jtx/impl/Env.cpp
+// Matches rippled's Env::enableFeature() in test/jtx/impl/Env.cpp: the
+// amendment is staged into the rules builder and only takes effect after the
+// next Close() — call e.Close() before submitting transactions that depend on
+// the new amendment.
 func (e *TestEnv) EnableFeature(name string) {
+	e.t.Helper()
 	e.rulesBuilder.EnableByName(name)
 }
 
 // DisableFeature disables an amendment by name for subsequent transactions.
-// Reference: rippled's Env::disableFeature() in test/jtx/impl/Env.cpp
+// See EnableFeature for the Close()-required semantic.
+// Reference: rippled's Env::disableFeature() in test/jtx/impl/Env.cpp.
 func (e *TestEnv) DisableFeature(name string) {
+	e.t.Helper()
 	e.rulesBuilder.DisableByName(name)
 }
 

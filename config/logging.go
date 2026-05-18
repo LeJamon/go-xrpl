@@ -72,7 +72,7 @@ func (c *LoggingConfig) Validate() error {
 // ToLogConfig converts a LoggingConfig to a xrpllog.Config.
 // debugLogfile is the legacy debug_logfile path from the top-level config;
 // if set and no Output is configured, it is used as the log destination.
-func (c *LoggingConfig) ToLogConfig(debugLogfile string) xrpllog.Config {
+func (c *LoggingConfig) ToLogConfig(debugLogfile string) *xrpllog.Config {
 	cfg := xrpllog.DefaultConfig()
 
 	// Level

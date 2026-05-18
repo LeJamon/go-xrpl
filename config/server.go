@@ -60,32 +60,32 @@ type PortConfig struct {
 
 // IsSecure returns true if the port is configured for SSL/TLS
 func (p *PortConfig) IsSecure() bool {
-	return containsProtocol(p.Protocol, "https") || containsProtocol(p.Protocol, "wss")
+	return strings.Contains(p.Protocol, "https") || strings.Contains(p.Protocol, "wss")
 }
 
 // HasHTTP returns true if the port supports HTTP protocol
 func (p *PortConfig) HasHTTP() bool {
-	return containsProtocol(p.Protocol, "http")
+	return strings.Contains(p.Protocol, "http")
 }
 
 // HasHTTPS returns true if the port supports HTTPS protocol
 func (p *PortConfig) HasHTTPS() bool {
-	return containsProtocol(p.Protocol, "https")
+	return strings.Contains(p.Protocol, "https")
 }
 
 // HasWebSocket returns true if the port supports WebSocket protocol
 func (p *PortConfig) HasWebSocket() bool {
-	return containsProtocol(p.Protocol, "ws")
+	return strings.Contains(p.Protocol, "ws")
 }
 
 // HasSecureWebSocket returns true if the port supports secure WebSocket protocol
 func (p *PortConfig) HasSecureWebSocket() bool {
-	return containsProtocol(p.Protocol, "wss")
+	return strings.Contains(p.Protocol, "wss")
 }
 
 // HasPeer returns true if the port supports peer protocol
 func (p *PortConfig) HasPeer() bool {
-	return containsProtocol(p.Protocol, "peer")
+	return strings.Contains(p.Protocol, "peer")
 }
 
 // IsAdminPort returns true if the port has administrative access configured
