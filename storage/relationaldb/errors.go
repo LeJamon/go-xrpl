@@ -102,13 +102,13 @@ const (
 
 // DatabaseError provides detailed information about database errors
 type DatabaseError struct {
-	Type      ErrorType              `json:"type"`
-	Operation string                 `json:"operation"`
-	Message   string                 `json:"message"`
-	Cause     error                  `json:"cause,omitempty"`
-	Code      string                 `json:"code,omitempty"`
+	Type      ErrorType      `json:"type"`
+	Operation string         `json:"operation"`
+	Message   string         `json:"message"`
+	Cause     error          `json:"cause,omitempty"`
+	Code      string         `json:"code,omitempty"`
 	Details   map[string]any `json:"details,omitempty"`
-	Retryable bool                   `json:"retryable"`
+	Retryable bool           `json:"retryable"`
 }
 
 // Error implements the error interface

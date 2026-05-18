@@ -140,10 +140,10 @@ func (n *InnerNode) SetChildDirect(index int, child Node) {
 // the given branch under a single read-lock acquisition.
 // Used by SHAMap.descend to avoid two separate locked reads on the hot
 // traversal path while keeping access correctly synchronised.
+// Index must be in [0, BranchFactor); callers derive it from a 4-bit
+// key nibble, so an out-of-range index is a programming error and
+// will panic on the slice deref — matching rippled's XRPL_ASSERT.
 func (n *InnerNode) LoadChild(index int) (Node, [32]byte, bool) {
-	if index < 0 || index >= BranchFactor {
-		return nil, [32]byte{}, false
-	}
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	return n.children[index], n.hashes[index], n.isBranch&(1<<index) != 0
@@ -158,10 +158,9 @@ func (n *InnerNode) LoadChild(index int) (Node, [32]byte, bool) {
 // primitive a plain SetChildDirect under inner.mu still races with
 // unlocked ChildUnsafe readers because the InnerNode mutex provides no
 // guarantee to readers that bypass it.
+// Same index contract as LoadChild — out-of-range is a programming
+// error and will panic on the slice deref.
 func (n *InnerNode) SetChildIfNil(index int, child Node) Node {
-	if index < 0 || index >= BranchFactor {
-		return nil
-	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if existing := n.children[index]; existing != nil {

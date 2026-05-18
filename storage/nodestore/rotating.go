@@ -171,21 +171,20 @@ func (rd *RotatingDatabase) IsOpen() bool {
 // Fetch retrieves a node by its hash.
 // It tries the primary backend first, then the rotating backends from newest to oldest.
 //
-// The RLock is only held long enough to snapshot the backend slice;
-// the actual Fetch calls run outside the lock so a slow-IO miss does
-// not block a concurrent Rotate() (which needs the write lock).
+// The RLock is held for the entire fetch path so a concurrent Rotate
+// cannot Close() a rotating backend out from under us. sync.RWMutex
+// gives a pending writer priority over new readers, so Rotate is not
+// starved — it simply waits for the in-flight fetches to drain.
 func (rd *RotatingDatabase) Fetch(key Hash256) (*Node, Status) {
 	if !rd.IsOpen() {
 		return nil, BackendError
 	}
 
 	rd.mu.RLock()
-	primary := rd.primary
-	rotating := append([]*rotatingBackend(nil), rd.rotating...)
-	rd.mu.RUnlock()
+	defer rd.mu.RUnlock()
 
-	if primary != nil {
-		node, status := primary.Fetch(key)
+	if rd.primary != nil {
+		node, status := rd.primary.Fetch(key)
 		if status == OK {
 			atomic.AddInt64(&rd.stats.primaryReads, 1)
 			atomic.AddInt64(&rd.stats.bytesRead, int64(len(node.Data)))
@@ -196,8 +195,8 @@ func (rd *RotatingDatabase) Fetch(key Hash256) (*Node, Status) {
 		}
 	}
 
-	for i := len(rotating) - 1; i >= 0; i-- {
-		rb := rotating[i]
+	for i := len(rd.rotating) - 1; i >= 0; i-- {
+		rb := rd.rotating[i]
 		if rb.backend == nil {
 			continue
 		}
@@ -217,8 +216,8 @@ func (rd *RotatingDatabase) Fetch(key Hash256) (*Node, Status) {
 
 // FetchBatch retrieves multiple nodes efficiently.
 //
-// As with Fetch, only the slice-snapshot phase holds rd.mu — the
-// backend Fetches run unlocked so Rotate() is not starved.
+// As with Fetch, rd.mu is held for the entire batch so Rotate cannot
+// Close() a backend mid-loop.
 func (rd *RotatingDatabase) FetchBatch(keys []Hash256) ([]*Node, Status) {
 	if !rd.IsOpen() {
 		return nil, BackendError
@@ -231,13 +230,11 @@ func (rd *RotatingDatabase) FetchBatch(keys []Hash256) ([]*Node, Status) {
 	}
 
 	rd.mu.RLock()
-	primary := rd.primary
-	rotating := append([]*rotatingBackend(nil), rd.rotating...)
-	rd.mu.RUnlock()
+	defer rd.mu.RUnlock()
 
-	if primary != nil && len(remaining) > 0 {
+	if rd.primary != nil && len(remaining) > 0 {
 		for idx, key := range remaining {
-			node, status := primary.Fetch(key)
+			node, status := rd.primary.Fetch(key)
 			if status == OK {
 				results[idx] = node
 				delete(remaining, idx)
@@ -247,8 +244,8 @@ func (rd *RotatingDatabase) FetchBatch(keys []Hash256) ([]*Node, Status) {
 		}
 	}
 
-	for i := len(rotating) - 1; i >= 0 && len(remaining) > 0; i-- {
-		rb := rotating[i]
+	for i := len(rd.rotating) - 1; i >= 0 && len(remaining) > 0; i-- {
+		rb := rd.rotating[i]
 		if rb.backend == nil {
 			continue
 		}

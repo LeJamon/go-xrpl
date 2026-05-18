@@ -11,11 +11,6 @@ import (
 	"github.com/cockroachdb/pebble/bloom"
 )
 
-// nodeHeaderSize is kept as a re-export of the shared encoding header
-// size — callers within the package reference nodeEncodingHeaderSize
-// directly, but external test code may still refer to this name.
-const nodeHeaderSize = nodeEncodingHeaderSize
-
 // PebbleBackend implements a high-performance PebbleDB storage backend.
 type PebbleBackend struct {
 	// Core components
