@@ -523,6 +523,52 @@ func (o *Overlay) PeerSupports(peerID PeerID, f Feature) bool {
 	return caps.HasFeature(f)
 }
 
+// PeerRemoteAddr returns the peer's remote endpoint as "host:port", or
+// "" if the peer is unknown. Mirrors rippled's `remote_address_.to_string()`
+// at PeerImp.cpp:2072 used to populate the `uri` field on per-publisher
+// state for peer-sourced lists.
+func (o *Overlay) PeerRemoteAddr(peerID PeerID) string {
+	o.peersMu.RLock()
+	peer, ok := o.peers[peerID]
+	o.peersMu.RUnlock()
+	if !ok {
+		return ""
+	}
+	return peer.Endpoint().String()
+}
+
+// PeerProtocolAtLeast reports whether the peer's negotiated peer-protocol
+// version is at least the given (major, minor). Mirrors rippled's
+// `protocol_ >= make_protocol(major, minor)` test at
+// rippled/src/xrpld/overlay/detail/PeerImp.cpp:511-514, used to gate
+// version-implicit features such as ValidatorList2Propagation.
+//
+// Returns false when the peer is unknown or has not completed the
+// handshake.
+func (o *Overlay) PeerProtocolAtLeast(peerID PeerID, major, minor uint16) bool {
+	o.peersMu.RLock()
+	peer, ok := o.peers[peerID]
+	o.peersMu.RUnlock()
+	if !ok {
+		return false
+	}
+	got := peer.ProtocolVersion()
+	if got == "" {
+		return false
+	}
+	pvs := parseProtocolVersions(got)
+	if len(pvs) == 0 {
+		return false
+	}
+	want := protocolVersion{major: major, minor: minor}
+	for _, v := range pvs {
+		if !v.less(want) {
+			return true
+		}
+	}
+	return false
+}
+
 // ListenAddr returns the resolved address the overlay is accepting
 // connections on, or the empty string if no listener is bound. Useful
 // when the overlay was configured with port 0 (ephemeral) and the

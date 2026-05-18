@@ -105,7 +105,11 @@ func (r *RPCReader) Sites() []rpctypes.ValidatorListSiteInfo {
 			LastError:          s.LastError,
 			LastDispositionSet: s.LastDispositionSet,
 			RefreshIntervalSec: s.RefreshSeconds,
-			RefreshIntervalMin: (s.RefreshSeconds + 59) / 60,
+			// Truncate (not ceiling) to match rippled which stores
+			// `std::chrono::minutes` directly — no sub-minute precision
+			// exists upstream so the rounding mode matters only for the
+			// never-clamped initial value (0 → 0).
+			RefreshIntervalMin: s.RefreshSeconds / 60,
 		}
 		if s.LastDispositionSet {
 			info.LastDisposition = dispositionRPCLabel(s.LastDisposition)

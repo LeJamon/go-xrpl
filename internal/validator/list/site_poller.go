@@ -19,9 +19,7 @@ import (
 
 // DefaultRefreshInterval matches rippled's
 // ValidatorSite::default_refresh_interval — 5 minutes between polls of
-// a configured publisher URL. Operators rarely override; the publisher
-// JSON envelope may carry a per-site refresh override which the poller
-// honors within [DefaultMinRefresh, DefaultMaxRefresh].
+// a configured publisher URL.
 const DefaultRefreshInterval = 5 * time.Minute
 
 // DefaultMinRefresh is the floor applied to a publisher-supplied
@@ -33,30 +31,27 @@ const DefaultMinRefresh = 1 * time.Minute
 // refresh interval. 24 hours matches rippled.
 const DefaultMaxRefresh = 24 * time.Hour
 
-// DefaultRequestTimeout caps a single HTTP fetch attempt. Rippled uses
-// 30s in ValidatorSite::activeFetcher; we mirror.
-const DefaultRequestTimeout = 30 * time.Second
+// DefaultRequestTimeout caps a single HTTP fetch attempt. Mirrors
+// rippled's ValidatorSite constructor default at
+// rippled/src/xrpld/app/misc/ValidatorSite.h:142-145
+// (`std::chrono::seconds timeout = std::chrono::seconds{20}`).
+const DefaultRequestTimeout = 20 * time.Second
 
 // MaxRedirects caps the number of HTTP redirects followed during a
 // single fetch. Matches rippled ValidatorSite.cpp:36 `max_redirects = 3`.
 const MaxRedirects = 3
 
-// ErrorRetryInterval is the cadence used to retry a failed fetch
-// (network error, non-2xx status, JSON decode failure). Mirrors
-// rippled's error_retry_interval at ValidatorSite.cpp:35 and the
-// onError(...,retry=true) branch at ValidatorSite.cpp:555-561.
+// ErrorRetryInterval is the cadence used to retry a failed fetch.
+// Mirrors rippled's error_retry_interval at ValidatorSite.cpp:35.
 const ErrorRetryInterval = 30 * time.Second
 
+// missingFieldsMessage mirrors rippled's exception text from
+// ValidatorSite.cpp::parseJsonResponse ("Missing fields in JSON
+// response") so external monitors keyed on the literal string match.
+const missingFieldsMessage = "Missing fields in JSON response"
+
 // envelopeJSON is the JSON shape published at vl.* URLs (and the
-// equivalent file:// payloads). Decoded from the HTTP response body.
-//
-// RefreshMinutes mirrors rippled's `refresh_interval` field which is
-// parsed as `std::chrono::minutes{body[jss::refresh_interval].asUInt()}`
-// (ValidatorSite.cpp:484-489). Stored as float64 to match rippled's
-// isNumeric() tolerance: integer or fractional JSON values are accepted
-// and truncated to whole minutes via asUInt() in rippled, via
-// int(RefreshMinutes) here. Keep the wire-side unit explicit in the
-// field name so future readers do not redo this conformance check.
+// equivalent file:// payloads).
 type envelopeJSON struct {
 	Manifest       string             `json:"manifest"`
 	Blob           string             `json:"blob,omitempty"`
@@ -74,94 +69,169 @@ type envelopeBlobJSON struct {
 	Signature string `json:"signature"`
 }
 
+// siteState tracks the per-URL scheduling cursor inside the poller.
+// Mirrors the fields rippled's `setTimer` consults to pick the next
+// site to fetch (ValidatorSite.cpp:213-228).
+type siteState struct {
+	uri         string
+	interval    time.Duration
+	nextRefresh time.Time
+}
+
 // SitePoller fetches publisher list URLs on a periodic cadence and
 // feeds the parsed envelopes into an Aggregator. Mirrors rippled's
-// ValidatorSite at rippled/src/xrpld/app/misc/ValidatorSite.cpp.
-//
-// One goroutine per configured URL; per-URL state (next refresh time,
-// last error) lives on the Aggregator so the validator_list_sites RPC
-// can read it without traversing the poller's internals.
+// ValidatorSite. Fetches are serialized through a single timer-driven
+// goroutine: rippled's `fetching_` flag guarantees at most one
+// in-flight request across all sites (ValidatorSite.cpp:236, 625-629),
+// and the BroadcastLatest hand-off on the success path is correct only
+// under that same exclusion.
 type SitePoller struct {
-	uris       []string
 	aggregator *Aggregator
 	client     *http.Client
 	logger     *slog.Logger
 	interval   time.Duration
 
-	wg   sync.WaitGroup
-	stop chan struct{}
+	mu    sync.Mutex
+	sites []*siteState
+	wg    sync.WaitGroup
+	stop  chan struct{}
 }
 
-// NewSitePoller constructs a poller for the given URLs. Passing zero
-// URLs yields an inert poller — Run / Stop are still safe to call.
-// Passing a nil aggregator panics: the poller has nowhere to deliver
-// what it fetches.
-func NewSitePoller(uris []string, agg *Aggregator, logger *slog.Logger) *SitePoller {
+// NewSitePoller constructs a poller for the given URLs. Each URL is
+// validated up front, mirroring rippled's `ValidatorSite::load()` which
+// rejects unparseable / invalid URIs at startup
+// (ValidatorSite.cpp:147-159 + Resource constructor at
+// ValidatorSite.cpp:38-75). Returns an error on the first invalid URI
+// so misconfiguration surfaces immediately rather than only after the
+// first periodic fetch fails. Passing a nil aggregator panics: the
+// poller has nowhere to deliver what it fetches.
+func NewSitePoller(uris []string, agg *Aggregator, logger *slog.Logger) (*SitePoller, error) {
 	if agg == nil {
 		panic("validator/list: SitePoller requires non-nil Aggregator")
 	}
 	if logger == nil {
 		logger = slog.Default().With("component", "validator-list-site-poller")
 	}
-	return &SitePoller{
-		uris:       uris,
-		aggregator: agg,
-		client: &http.Client{
-			Timeout: DefaultRequestTimeout,
-			CheckRedirect: func(_ *http.Request, via []*http.Request) error {
-				if len(via) >= MaxRedirects {
-					return fmt.Errorf("stopped after %d redirects", MaxRedirects)
-				}
-				return nil
-			},
-		},
-		logger:   logger,
-		interval: DefaultRefreshInterval,
-		stop:     make(chan struct{}),
+	sites := make([]*siteState, 0, len(uris))
+	for _, u := range uris {
+		if err := validateSiteURI(u); err != nil {
+			return nil, fmt.Errorf("invalid validator site uri %q: %w", u, err)
+		}
+		sites = append(sites, &siteState{uri: u, interval: DefaultRefreshInterval})
 	}
+	p := &SitePoller{
+		aggregator: agg,
+		logger:     logger,
+		interval:   DefaultRefreshInterval,
+		sites:      sites,
+		stop:       make(chan struct{}),
+	}
+	p.client = &http.Client{
+		Timeout:       DefaultRequestTimeout,
+		CheckRedirect: checkRedirect,
+	}
+	return p, nil
 }
 
-// SetInterval overrides the default poll interval. Useful for tests that
-// don't want to wait 5 minutes between fetches; production callers
-// rarely override.
-//
-// MUST be called before Start — there is no synchronization between
-// runOne goroutines and these setters.
+// validateSiteURI mirrors rippled's
+// `ValidatorSite::Site::Resource::Resource(std::string uri)` at
+// rippled/src/xrpld/app/misc/detail/ValidatorSite.cpp:38-75. Rejects:
+//   - unparseable URIs
+//   - file:// with a non-empty host (`file://ripple.com/...`)
+//   - file:// with an empty path
+//   - http:// / https:// without a hostname
+//   - any scheme other than file, http, https
+func validateSiteURI(uri string) error {
+	parsed, err := url.Parse(uri)
+	if err != nil {
+		return fmt.Errorf("cannot be parsed: %w", err)
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "file":
+		if parsed.Host != "" {
+			return errors.New("file URI cannot contain a hostname")
+		}
+		if parsed.Path == "" {
+			return errors.New("file URI must contain a path")
+		}
+	case "http", "https":
+		if parsed.Host == "" {
+			return fmt.Errorf("%s URI must contain a hostname", parsed.Scheme)
+		}
+	case "":
+		return errors.New("missing scheme")
+	default:
+		return fmt.Errorf("unsupported scheme: %q", parsed.Scheme)
+	}
+	return nil
+}
+
+// checkRedirect is the redirect policy applied to every HTTP fetch.
+// Caps the chain at MaxRedirects and rejects any redirect target whose
+// scheme is not http/https — mirrors rippled's processRedirect at
+// rippled/src/xrpld/app/misc/detail/ValidatorSite.cpp:511-531. Without
+// the scheme gate an attacker controlling the publisher hostname (or
+// any intermediate redirect target) could send the fetcher at a
+// `file:///etc/passwd` URL and read arbitrary local files.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= MaxRedirects {
+		return fmt.Errorf("max redirects (%d) exceeded", MaxRedirects)
+	}
+	scheme := strings.ToLower(req.URL.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("invalid scheme in redirect %q", scheme)
+	}
+	return nil
+}
+
+// SetInterval overrides the default poll interval. Useful for tests
+// that don't want to wait 5 minutes between fetches; production
+// callers rarely override. MUST be called before Start.
 func (p *SitePoller) SetInterval(d time.Duration) {
 	if d <= 0 {
 		return
 	}
 	p.interval = d
-}
-
-// SetHTTPClient overrides the HTTP client. Useful for tests that wire
-// a custom Transport (e.g. recording requests in-memory).
-//
-// MUST be called before Start — there is no synchronization between
-// runOne goroutines and these setters.
-func (p *SitePoller) SetHTTPClient(c *http.Client) {
-	if c != nil {
-		p.client = c
+	for _, s := range p.sites {
+		s.interval = d
 	}
 }
 
-// Start launches one goroutine per configured URL. Each goroutine
-// performs an immediate fetch (so the initial trust set is populated
-// without waiting one refresh period) then loops on the configured
-// interval. Safe to call once; subsequent calls are no-ops while the
-// poller is running.
-func (p *SitePoller) Start(ctx context.Context) {
-	if len(p.uris) == 0 {
+// SetHTTPClient overrides the HTTP client. The CheckRedirect / Timeout
+// fields are forced to the poller defaults so caller-supplied clients
+// cannot inadvertently widen the redirect/scheme attack surface.
+// MUST be called before Start.
+func (p *SitePoller) SetHTTPClient(c *http.Client) {
+	if c == nil {
 		return
 	}
-	for _, u := range p.uris {
-		p.wg.Add(1)
-		go p.runOne(ctx, u)
+	c.CheckRedirect = checkRedirect
+	if c.Timeout == 0 {
+		c.Timeout = DefaultRequestTimeout
 	}
+	p.client = c
 }
 
-// Stop signals all polling goroutines to exit and blocks until they
-// have. Safe to call multiple times; idempotent.
+// Start launches the polling goroutine. The goroutine drives all
+// configured sites serially through a single timer, mirroring rippled's
+// `setTimer` / `fetching_` exclusion at
+// rippled/src/xrpld/app/misc/detail/ValidatorSite.cpp:208-228. The
+// first iteration fires immediately (nextRefresh defaults to the zero
+// time) so a fresh boot has up-to-date publisher state without waiting
+// one full interval — matches rippled's constructor at
+// ValidatorSite.cpp:82 (`nextRefresh{clock_type::now()}`).
+//
+// Safe to call once; subsequent calls are no-ops.
+func (p *SitePoller) Start(ctx context.Context) {
+	if len(p.sites) == 0 {
+		return
+	}
+	p.wg.Add(1)
+	go p.runLoop(ctx)
+}
+
+// Stop signals the polling goroutine to exit and blocks until it has.
+// Safe to call multiple times; idempotent.
 func (p *SitePoller) Stop() {
 	select {
 	case <-p.stop:
@@ -172,90 +242,106 @@ func (p *SitePoller) Stop() {
 	p.wg.Wait()
 }
 
-func (p *SitePoller) runOne(ctx context.Context, uri string) {
+// runLoop drives the timer pattern: pick the site with the smallest
+// nextRefresh, sleep until then, fetch it, update its nextRefresh,
+// repeat. The single-goroutine design matches rippled's setTimer and
+// avoids parallel BroadcastLatest races when two sites simultaneously
+// deliver the same publisher's list.
+func (p *SitePoller) runLoop(ctx context.Context) {
 	defer p.wg.Done()
 
-	interval := p.interval
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+
 	for {
-		// Immediate fetch on entry, then sleep — so a fresh boot has
-		// up-to-date publisher state without waiting one full
-		// interval.
-		nextInterval := p.fetchAndApply(ctx, uri)
-		if nextInterval > 0 {
-			interval = nextInterval
+		next := p.pickNext()
+		now := time.Now().UTC()
+		wait := time.Duration(0)
+		if next != nil && next.nextRefresh.After(now) {
+			wait = next.nextRefresh.Sub(now)
 		}
+
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(wait)
 
 		select {
 		case <-ctx.Done():
 			return
 		case <-p.stop:
 			return
-		case <-time.After(interval):
+		case <-timer.C:
 		}
+
+		if next == nil {
+			continue
+		}
+		p.fetchSite(ctx, next)
 	}
 }
 
-// fetchAndApply runs a single fetch attempt, parses the envelope, and
-// feeds it into the aggregator. Updates the per-site state on the
-// aggregator (last-fetched / last-error / disposition) regardless of
-// outcome so the validator_list_sites RPC reflects every attempt.
-//
-// Returns the next refresh interval to use:
-//   - On fetch / decode failure: ErrorRetryInterval (30s), mirroring
-//     rippled's error_retry_interval.
-//   - On success with an envelope refresh_interval: the clamped value.
-//   - Otherwise: zero, meaning "keep using the caller's interval".
-func (p *SitePoller) fetchAndApply(ctx context.Context, uri string) time.Duration {
-	now := time.Now().UTC()
-	// Schedule the next refresh time BEFORE the fetch begins, mirroring
-	// rippled's onTimer ordering (ValidatorSite.cpp:354-355) so the RPC
-	// reports the upcoming wakeup even while this fetch is outstanding.
-	// Errors and per-publisher overrides reset NextRefresh in the
-	// UpdateSiteState call below.
-	p.aggregator.SetNextRefresh(uri, now.Add(p.interval))
+// pickNext returns the site with the smallest nextRefresh time. nil
+// when no sites are configured.
+func (p *SitePoller) pickNext() *siteState {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.sites) == 0 {
+		return nil
+	}
+	best := p.sites[0]
+	for _, s := range p.sites[1:] {
+		if s.nextRefresh.Before(best.nextRefresh) {
+			best = s
+		}
+	}
+	return best
+}
 
+// fetchSite performs one fetch+apply cycle for a single site. Updates
+// the site's internal interval/nextRefresh cursor and pushes the
+// outcome through to the aggregator for RPC visibility.
+func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
+	uri := s.uri
 	body, err := p.fetch(ctx, uri)
 	if err != nil {
-		p.logger.Warn("validator list site fetch failed",
-			"uri", uri, "error", err)
-		p.aggregator.UpdateSiteState(uri, now, time.Time{}, err.Error(), Malformed, 0, now.Add(ErrorRetryInterval))
-		return ErrorRetryInterval
+		p.recordFailure(s, err.Error(), "validator list site fetch failed", "error", err)
+		return
 	}
 
 	var env envelopeJSON
-	if err := json.Unmarshal(body, &env); err != nil {
-		msg := fmt.Sprintf("envelope JSON decode: %v", err)
-		p.logger.Warn(msg, "uri", uri)
-		p.aggregator.UpdateSiteState(uri, now, time.Time{}, msg, Malformed, 0, now.Add(ErrorRetryInterval))
-		return ErrorRetryInterval
+	if jsonErr := json.Unmarshal(body, &env); jsonErr != nil {
+		msg := fmt.Sprintf("envelope JSON decode: %v", jsonErr)
+		p.recordFailure(s, msg, msg, "uri", uri)
+		return
 	}
 
-	// Rippled ValidatorSite.cpp:391-393 requires `manifest` (string)
-	// and `version` (int) to be present at the envelope level — for
-	// BOTH v1 and v2 envelopes (parseBlobs may then read per-blob
-	// manifest overrides on top, but the top-level field is still
-	// required). Treat a zero/absent version or empty manifest as
-	// Malformed so the RPC reports a real disposition rather than
-	// silently coercing the envelope into v1 or accepting a v2
-	// envelope that has no global publisher manifest.
-	if env.Version == 0 {
-		msg := "envelope missing required `version` field"
-		p.logger.Warn(msg, "uri", uri)
-		p.aggregator.UpdateSiteState(uri, now, time.Time{}, msg, Malformed, 0, now.Add(ErrorRetryInterval))
-		return ErrorRetryInterval
-	}
-	if env.Manifest == "" {
-		msg := "envelope missing required `manifest` field"
-		p.logger.Warn(msg, "uri", uri)
-		p.aggregator.UpdateSiteState(uri, now, time.Time{}, msg, Malformed, 0, now.Add(ErrorRetryInterval))
-		return ErrorRetryInterval
+	// Rippled requires `manifest` (string) and `version` (int) at the
+	// envelope level for both v1 and v2 — see ValidatorList::parseBlobs
+	// and ValidatorSite.cpp:391-410. The literal "Missing fields in
+	// JSON response" message is the rippled-faithful error text.
+	if env.Version == 0 || env.Manifest == "" {
+		p.recordFailure(s, missingFieldsMessage, missingFieldsMessage, "uri", uri)
+		return
 	}
 
+	// Dispatch strictly on the envelope's declared version — rippled's
+	// parseBlobs switches on `version`, NOT on which fields happen to
+	// be populated. A v2 envelope that only carries top-level
+	// blob/signature is invalid (no blobs_v2), regardless of whether
+	// v1 fields are present.
 	var disp Disposition
 	var dispList []Disposition
 	var pubKey PublisherKey
-	if len(env.BlobsV2) > 0 {
-		// v2 envelope: collection of forward-dated blobs.
+	switch {
+	case env.Version >= 2:
+		if len(env.BlobsV2) == 0 {
+			p.recordFailure(s, missingFieldsMessage, missingFieldsMessage, "uri", uri, "version", env.Version)
+			return
+		}
 		coll := &message.ValidatorListCollection{
 			Version:  env.Version,
 			Manifest: []byte(env.Manifest),
@@ -269,8 +355,11 @@ func (p *SitePoller) fetchAndApply(ctx context.Context, uri string) time.Duratio
 		}
 		dispList, pubKey, _ = p.aggregator.ApplyCollection(coll, uri)
 		disp = bestDisposition(dispList)
-	} else if env.Blob != "" && env.Signature != "" && env.Manifest != "" {
-		// v1 envelope.
+	case env.Version == 1:
+		if env.Blob == "" || env.Signature == "" {
+			p.recordFailure(s, missingFieldsMessage, missingFieldsMessage, "uri", uri)
+			return
+		}
 		disp, pubKey, _ = p.aggregator.ApplyList(
 			[]byte(env.Manifest),
 			[]byte(env.Blob),
@@ -278,28 +367,28 @@ func (p *SitePoller) fetchAndApply(ctx context.Context, uri string) time.Duratio
 			env.Version,
 			uri,
 		)
-	} else {
-		disp = Malformed
-		p.logger.Warn("validator list envelope missing required fields", "uri", uri)
+	default:
+		p.recordFailure(s, missingFieldsMessage, missingFieldsMessage, "uri", uri, "version", env.Version)
+		return
 	}
 
+	// Capture time AFTER apply completes — mirrors rippled
+	// ValidatorSite.cpp:430 which writes `Site::Status{clock_type::now(), ...}`
+	// at the apply boundary, not pre-fetch. The RPC `last_refresh_time`
+	// reflects when the list was applied, not when the fetch began.
+	applyTime := time.Now().UTC()
+
 	// Push the canonical accepted form out to peers. Mirrors rippled
-	// ValidatorSite::parseJsonResponse calling applyListsAndBroadcast
-	// at ValidatorSite.cpp:418-427 — the broadcaster owned by the
-	// aggregator skips peers that already have this sequence (no
-	// originating peer for HTTP-polled lists, so exceptPeer == 0).
+	// applyListsAndBroadcast at ValidatorSite.cpp:418-427.
 	if disp.ShouldRelay() && pubKey != (PublisherKey{}) {
 		p.aggregator.BroadcastLatest(pubKey, 0)
 	}
 
+	// Per-publisher refresh override (clamped). Rippled parses with
+	// `asUInt()` so fractional minutes are truncated
+	// (ValidatorSite.cpp:484-489).
+	chosenInterval := p.interval
 	refreshSec := 0
-	nextInterval := time.Duration(0)
-	// Truncate to whole minutes, mirroring rippled's
-	// `std::chrono::minutes{body[jss::refresh_interval].asUInt()}`
-	// (ValidatorSite.cpp:484-489) which accepts any numeric JSON value
-	// and reads it as an unsigned integer (fractional component
-	// discarded). Negative or zero values fall through to the default
-	// refresh interval.
 	if refreshMin := int(env.RefreshMinutes); refreshMin > 0 {
 		d := time.Duration(refreshMin) * time.Minute
 		if d < DefaultMinRefresh {
@@ -307,35 +396,49 @@ func (p *SitePoller) fetchAndApply(ctx context.Context, uri string) time.Duratio
 		} else if d > DefaultMaxRefresh {
 			d = DefaultMaxRefresh
 		}
-		nextInterval = d
+		chosenInterval = d
 		refreshSec = int(d / time.Second)
 	}
 
+	// rippled emits an empty `last_refresh_message` whenever the parse
+	// succeeded — the disposition itself carries the outcome
+	// (ValidatorSite.cpp:430). Stash the disposition string in the
+	// message only for dispositions that indicate the apply rejected
+	// the list (anything not ShouldRelay-eligible).
 	lastSuccess := time.Time{}
 	lastErr := ""
-	if disp == Accepted || disp == SameSequence || disp == Pending || disp == Expired {
-		lastSuccess = now
+	if disp.ShouldRelay() {
+		lastSuccess = applyTime
 	} else {
 		lastErr = "disposition=" + disp.String()
 	}
-	// nextInterval is 0 here when no per-publisher refresh override was
-	// present in the envelope; in that case the caller will reuse its
-	// configured interval. Compute the wall-clock next refresh for the
-	// validator_list_sites RPC accordingly.
-	scheduled := nextInterval
-	if scheduled == 0 {
-		scheduled = p.interval
-	}
-	p.aggregator.UpdateSiteState(uri, now, lastSuccess, lastErr, disp, refreshSec, now.Add(scheduled))
+	nextAt := applyTime.Add(chosenInterval)
+	p.aggregator.UpdateSiteState(uri, applyTime, lastSuccess, lastErr, disp, refreshSec, nextAt)
 
-	return nextInterval
+	p.mu.Lock()
+	s.interval = chosenInterval
+	s.nextRefresh = nextAt
+	p.mu.Unlock()
 }
 
-// fetch retrieves the raw envelope body from the given URI. Supports
-// http://, https:// (via the package HTTP client) and file:// for
-// operators wanting to point at a locally-mirrored list. Other
-// schemes return an explicit error so misconfiguration surfaces
-// immediately.
+// recordFailure pushes a fetch / parse failure through to the
+// aggregator and the per-site scheduling cursor. The error message
+// becomes both the log line and the `last_refresh_message` surfaced
+// via RPC. NextRefresh is set to now+ErrorRetryInterval to mirror
+// rippled's error_retry_interval at ValidatorSite.cpp:555-561.
+func (p *SitePoller) recordFailure(s *siteState, lastErr, logMsg string, logFields ...any) {
+	now := time.Now().UTC()
+	nextAt := now.Add(ErrorRetryInterval)
+	p.logger.Warn(logMsg, logFields...)
+	p.aggregator.UpdateSiteState(s.uri, now, time.Time{}, lastErr, Malformed, 0, nextAt)
+	p.mu.Lock()
+	s.nextRefresh = nextAt
+	p.mu.Unlock()
+}
+
+// fetch retrieves the raw envelope body from the given URI. Scheme
+// validation has already happened at construction time, so the switch
+// here is structural rather than defensive.
 func (p *SitePoller) fetch(ctx context.Context, uri string) ([]byte, error) {
 	parsed, err := url.Parse(uri)
 	if err != nil {
@@ -347,8 +450,6 @@ func (p *SitePoller) fetch(ctx context.Context, uri string) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("build request: %w", err)
 		}
-		req.Header.Set("User-Agent", "goXRPLd/validator-list-fetcher")
-		req.Header.Set("Accept", "application/json")
 		resp, err := p.client.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("HTTP GET: %w", err)
@@ -357,15 +458,12 @@ func (p *SitePoller) fetch(ctx context.Context, uri string) ([]byte, error) {
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return nil, fmt.Errorf("HTTP %d %s", resp.StatusCode, resp.Status)
 		}
-		// Cap body size at 8 MiB — vl.ripple.com responses are ~30 KiB.
 		const maxBody = 8 << 20
 		return io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	case "file":
-		path := parsed.Path
-		if path == "" {
-			return nil, errors.New("file URI missing path")
-		}
-		return os.ReadFile(path)
+		// Host already rejected at construction (see validateSiteURI);
+		// Path already guaranteed non-empty.
+		return os.ReadFile(parsed.Path)
 	default:
 		return nil, fmt.Errorf("unsupported URI scheme %q", parsed.Scheme)
 	}

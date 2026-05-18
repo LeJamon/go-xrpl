@@ -324,11 +324,14 @@ func NewFromConfig(
 		// site-poll origins (ValidatorList.cpp:872-937, 939-994).
 		vlAgg.SetBroadcaster(NewRouterBroadcaster(overlay, sender))
 		if len(appCfg.Validators.ValidatorListSites) > 0 {
-			vlPoller = validatorlist.NewSitePoller(
+			vlPoller, err = validatorlist.NewSitePoller(
 				append([]string(nil), appCfg.Validators.ValidatorListSites...),
 				vlAgg,
 				slog.Default().With("component", "validator-list-site-poller"),
 			)
+			if err != nil {
+				return nil, fmt.Errorf("validator-list site poller: %w", err)
+			}
 		}
 	}
 

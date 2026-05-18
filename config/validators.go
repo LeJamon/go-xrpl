@@ -38,6 +38,15 @@ func (v *ValidatorsConfig) Validate() error {
 		return fmt.Errorf("validator_list_threshold must be non-negative, got %d", v.ValidatorListThreshold)
 	}
 
+	// A positive threshold with zero publisher keys would trip rippled's
+	// XRPL_ASSERT(listThreshold_ > 0 && listThreshold_ <= publisherLists_.size())
+	// at ValidatorList.cpp:201-203 — catch it here so the operator gets
+	// a clean message at startup instead of a runtime divergence.
+	if v.ValidatorListThreshold > 0 && len(v.ValidatorListKeys) == 0 {
+		return fmt.Errorf("validator_list_threshold (%d) requires at least one validator_list_keys entry",
+			v.ValidatorListThreshold)
+	}
+
 	if len(v.ValidatorListKeys) > 0 && v.ValidatorListThreshold > len(v.ValidatorListKeys) {
 		return fmt.Errorf("validator_list_threshold (%d) cannot be greater than number of validator_list_keys (%d)",
 			v.ValidatorListThreshold, len(v.ValidatorListKeys))

@@ -36,8 +36,6 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (int
 	negativeUNL := []string{}
 
 	var earliestExpirationUnix int64
-	anyExpired := false
-	allAvailable := true
 	anyMissingExpiration := false
 	publisherCount := 0
 	threshold := 0
@@ -53,13 +51,14 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (int
 					"uri":              p.SiteURI,
 					"list":             nonNilStrings(p.ValidatorsBase58),
 				}
-				if p.Sequence > 0 {
+				// Mirrors rippled ValidatorList.cpp:1676-1696: `seq` and
+				// `version` are both gated on the publisher having an
+				// accepted list (i.e. current.validUntil set), not on
+				// whether the value itself is non-zero. The signal is
+				// "has the publisher delivered yet", consistent across
+				// the two fields.
+				if p.ExpirationUnix > 0 {
 					entry["seq"] = p.Sequence
-				}
-				// Mirrors rippled ValidatorList.cpp:1693-1696: `version`
-				// is only emitted when the publisher's current.validUntil
-				// is set (i.e. an accepted/expired list has been ingested).
-				if p.ExpirationUnix > 0 && p.Version > 0 {
 					entry["version"] = p.Version
 				}
 				if p.EffectiveISO != "" {
@@ -74,12 +73,6 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (int
 					}
 				} else {
 					anyMissingExpiration = true
-				}
-				if !p.Available {
-					allAvailable = false
-				}
-				if p.Status == "expired" {
-					anyExpired = true
 				}
 				publisherLists = append(publisherLists, entry)
 			}
@@ -140,8 +133,15 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (int
 		validatorListSummary["status"] = "unknown"
 		validatorListSummary["expiration"] = "unknown"
 	default:
-		validatorListSummary["expiration"] = formatRippledTime(time.Unix(earliestExpirationUnix, 0))
-		if anyExpired || !allAvailable {
+		expiry := time.Unix(earliestExpirationUnix, 0)
+		validatorListSummary["expiration"] = formatRippledTime(expiry)
+		// Mirrors rippled ValidatorList.cpp:1641-1644 — status is a pure
+		// timestamp comparison of the earliest validUntil against
+		// wall-clock now, NOT a join over publisher Status/Available
+		// signals. Those latter signals already feed `available` /
+		// `expiration` per publisher; mixing them in here would break
+		// monitors that key on `validator_list.status`.
+		if time.Now().After(expiry) {
 			validatorListSummary["status"] = "expired"
 		} else {
 			validatorListSummary["status"] = "active"
@@ -177,20 +177,23 @@ func (m *ValidatorListSitesMethod) Handle(ctx *types.RpcContext, _ json.RawMessa
 				"refresh_interval_min": s.RefreshIntervalMin,
 			}
 			// Mirrors rippled's `if (site.lastRefreshStatus)` gate at
-			// ValidatorSite.cpp:690 — the field is absent from the
-			// response until the first fetch attempt completes.
+			// ValidatorSite.cpp:690-697 — last_refresh_time,
+			// last_refresh_status, and last_refresh_message share a
+			// single condition: they appear together once the first
+			// fetch attempt completes, or are all absent.
 			if s.LastDispositionSet {
-				entry["last_refresh_status"] = s.LastDisposition
-			}
-			if s.LastRefreshISO != "" {
 				entry["last_refresh_time"] = s.LastRefreshISO
+				entry["last_refresh_status"] = s.LastDisposition
+				if s.LastError != "" {
+					entry["last_refresh_message"] = s.LastError
+				}
 			}
-			if s.NextRefreshISO != "" {
-				entry["next_refresh_time"] = s.NextRefreshISO
-			}
-			if s.LastError != "" {
-				entry["last_refresh_message"] = s.LastError
-			}
+			// next_refresh_time is emitted unconditionally to match
+			// rippled ValidatorSite.cpp:689 (`to_string(site.nextRefresh)`,
+			// no opt gate). Sites are constructed with nextRefresh set to
+			// the construction clock so the field is never empty after
+			// startup.
+			entry["next_refresh_time"] = s.NextRefreshISO
 			sites = append(sites, entry)
 		}
 	}

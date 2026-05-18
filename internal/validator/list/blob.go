@@ -36,6 +36,13 @@ const rippleEpochOffset int64 = 946684800
 // is treated as UnsupportedVersion.
 var SupportedVersions = []uint32{1, 2}
 
+// MaxSupportedBlobs caps how many per-blob entries a v2 collection may
+// carry. Matches rippled ValidatorList.h:272
+// `static constexpr std::size_t maxSupportedBlobs = 5;`. A peer that
+// sends more than this is treated as Malformed before any signature
+// verification work.
+const MaxSupportedBlobs = 5
+
 // blobJSON is the schema published in vl.ripple.com-style envelopes and
 // embedded in TMValidatorList / TMValidatorListCollection messages.
 // Decoded from the base64-encoded blob bytes.
@@ -145,11 +152,13 @@ func verifyBlobSignature(signingKey [33]byte, blob, signatureHex []byte) error {
 	}
 }
 
-// decodeBase64Tolerant decodes a base64-encoded payload that may be in
-// either the standard or URL-safe variant, and may or may not include
-// padding. Real publisher JSON envelopes consistently use standard
-// padded base64, but rippled accepts unpadded too via boost::beast's
-// detail::base64::decode (lenient). Match the same tolerance.
+// decodeBase64Tolerant decodes a standard base64-encoded payload,
+// padded or unpadded. Rippled's `base64_decode` uses the standard
+// alphabet only (`base64.cpp:191-234`); URL-safe characters `-` and `_`
+// are rejected. Accepting them in goXRPL would let a malicious peer
+// craft a payload that this implementation accepts and rippled rejects
+// (or vice versa), diverging hash-routing and relay decisions across
+// implementations.
 func decodeBase64Tolerant(payload []byte) ([]byte, error) {
 	s := string(payload)
 	if out, err := base64.StdEncoding.DecodeString(s); err == nil {
@@ -158,13 +167,7 @@ func decodeBase64Tolerant(payload []byte) ([]byte, error) {
 	if out, err := base64.RawStdEncoding.DecodeString(s); err == nil {
 		return out, nil
 	}
-	if out, err := base64.URLEncoding.DecodeString(s); err == nil {
-		return out, nil
-	}
-	if out, err := base64.RawURLEncoding.DecodeString(s); err == nil {
-		return out, nil
-	}
-	return nil, errors.New("payload is not valid base64 in any variant")
+	return nil, errors.New("payload is not valid standard base64")
 }
 
 // rippleSecondsToUnix converts a ripple-epoch second count (the form

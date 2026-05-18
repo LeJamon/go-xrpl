@@ -540,15 +540,24 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 			// Already had this or a newer one — cache state is
 			// unchanged; don't let an old revocation manifest flip
 			// the publisher's status.
-		case manifest.Invalid, manifest.BadMasterKey, manifest.BadEphemeralKey:
+		case manifest.Invalid:
 			// Rippled ValidatorList.cpp:1382-1383 returns
-			// `untrusted` for `result == ManifestDisposition::invalid`
-			// (and implicitly for badMasterKey/badEphemeralKey via the
-			// `!signingKey` fallback). Untrusted maps to feeUselessData
-			// (light), Invalid would map to feeInvalidSignature (heavy)
-			// — using Untrusted avoids overcharging honest peers that
-			// forward a list whose manifest the cache cannot accept.
+			// `untrusted` strictly for `result == ManifestDisposition::invalid`.
+			// Untrusted maps to feeUselessData (light), Invalid would map
+			// to feeInvalidSignature (heavy) — using Untrusted avoids
+			// overcharging honest peers that forward a list whose manifest
+			// the cache cannot accept.
 			return Untrusted, pubKey, 0
+		case manifest.BadMasterKey, manifest.BadEphemeralKey:
+			// Cache state is unchanged for these (Manifest.cpp:436-477
+			// returns before any mutation), so `getSigningKey(masterPubKey)`
+			// below will still return the previously-cached signing key if
+			// any. Rippled's check at ValidatorList.cpp:1380-1383 gates only
+			// on `result == invalid`, NOT on badMasterKey/badEphemeralKey,
+			// so we fall through to the signing-key lookup. If the cache
+			// has no key for this master, the lookup branch a few lines
+			// below returns Untrusted; if it has one, blob verification
+			// proceeds against that cached key — matching rippled.
 		}
 	} else {
 		// Fall back to direct verification when no cache is wired
@@ -905,6 +914,15 @@ func (a *Aggregator) ApplyCollection(coll *message.ValidatorListCollection, site
 		return []Disposition{UnsupportedVersion}, PublisherKey{}, 0
 	}
 	if len(coll.Blobs) == 0 {
+		return []Disposition{Malformed}, PublisherKey{}, 0
+	}
+	// Anti-abuse cap. Matches rippled ValidatorList.h:272
+	// `static constexpr std::size_t maxSupportedBlobs = 5;` enforced
+	// at ValidatorList.cpp:428 (v2 JSON path) and 472-473 (parseBlobs).
+	// A peer that sends a collection larger than this would force the
+	// aggregator to run N signature verifications; reject before any
+	// crypto work.
+	if len(coll.Blobs) > MaxSupportedBlobs {
 		return []Disposition{Malformed}, PublisherKey{}, 0
 	}
 	out := make([]Disposition, len(coll.Blobs))

@@ -61,7 +61,7 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 		}
 	}
 
-	disp, pubKey, seq := r.validatorList.ApplyList(vl.Manifest, vl.Blob, vl.Signature, vl.Version, peerSite(msg.PeerID))
+	disp, pubKey, seq := r.validatorList.ApplyList(vl.Manifest, vl.Blob, vl.Signature, vl.Version, r.peerSite(msg.PeerID))
 
 	r.logger.Debug("validator list applied",
 		"peer", msg.PeerID,
@@ -103,8 +103,13 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 		return
 	}
 
-	// Peer-feature gate. Mirrors PeerImp.cpp:2282-2290.
-	if !r.peerSupportsValidatorListFeature(msg.PeerID) {
+	// Peer-protocol gate. Mirrors rippled PeerImp.cpp:2282-2290 which
+	// gates TMValidatorListCollection on
+	// `supportsFeature(ValidatorList2Propagation)`. That feature is
+	// implicit at protocol >= 2.2 (PeerImp.cpp:511-514). A peer that
+	// only negotiated v2.1 may send TMValidatorList (v1) but MUST NOT
+	// send the collection frame.
+	if !r.peerSupportsValidatorList2(msg.PeerID) {
 		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-unsupported-peer")
 		return
 	}
@@ -147,7 +152,7 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 		}
 	}
 
-	dispList, pubKey, maxSeq := r.validatorList.ApplyCollection(coll, peerSite(msg.PeerID))
+	dispList, pubKey, maxSeq := r.validatorList.ApplyCollection(coll, r.peerSite(msg.PeerID))
 
 	worst := validatorlist.Accepted
 	anyRelay := false
@@ -194,6 +199,22 @@ func (r *Router) peerSupportsValidatorListFeature(peer peermanagement.PeerID) bo
 		return true
 	}
 	return r.overlay.PeerSupports(peer, peermanagement.FeatureValidatorListPropagation)
+}
+
+// peerSupportsValidatorList2 mirrors rippled's
+// supportsFeature(ProtocolFeature::ValidatorList2Propagation) at
+// PeerImp.cpp:511-514: returns true iff the peer's negotiated
+// peer-protocol version is at least 2.2. Used to gate
+// TMValidatorListCollection ingress; v2.1 peers that send a collection
+// are charged feeUselessData "unsupported peer".
+//
+// When the overlay is unavailable (tests) we err on the side of
+// accepting the frame.
+func (r *Router) peerSupportsValidatorList2(peer peermanagement.PeerID) bool {
+	if r.overlay == nil {
+		return true
+	}
+	return r.overlay.PeerProtocolAtLeast(peer, 2, 2)
 }
 
 // validatorListSemanticHash builds the canonical byte stream that
@@ -266,10 +287,16 @@ func chargePeerForDisposition(r *Router, peer peermanagement.PeerID, prefix stri
 }
 
 // peerSite formats a peer-sourced site URI for the aggregator's
-// per-publisher SiteURI field. Distinct from HTTP-polled URIs so the
-// RPC can tell at a glance where a publisher's most recent list came
-// from.
-func peerSite(peerID peermanagement.PeerID) string {
+// per-publisher SiteURI field. Mirrors rippled's
+// `remote_address_.to_string()` used at PeerImp.cpp:2072 — emits a
+// "host:port" string when the overlay is available, falling back to
+// "peer:<id>" for tests or transient peer lookups.
+func (r *Router) peerSite(peerID peermanagement.PeerID) string {
+	if r.overlay != nil {
+		if addr := r.overlay.PeerRemoteAddr(peerID); addr != "" {
+			return addr
+		}
+	}
 	return "peer:" + strconv.FormatUint(uint64(peerID), 10)
 }
 

@@ -85,12 +85,9 @@ type ValidatorListSiteInfo struct {
 // Expressed as an interface so internal/rpc/types doesn't import
 // internal/validator/list.
 type ValidatorListReader interface {
-	// HasConfiguredPublishers reports whether any validator_list_keys
-	// are configured. False means the publisher-trust subsystem is
-	// inert and the RPC should report an empty publisher list.
-	HasConfiguredPublishers() bool
 	// PublisherCount returns the number of configured publishers in the
-	// trust set.
+	// trust set. Zero means the publisher-trust subsystem is inert and
+	// the RPC will report an empty publisher list.
 	PublisherCount() int
 	// Threshold returns the configured publisher threshold (minimum
 	// number of publishers whose lists must agree on a validator
