@@ -185,7 +185,7 @@ func (c *Config) GetAdminPorts() map[string]PortConfig {
 // GetPeerPort returns the port configured for peer protocol
 func (c *Config) GetPeerPort() (string, PortConfig, bool) {
 	for name, port := range c.Ports {
-		if containsProtocol(port.Protocol, "peer") {
+		if strings.Contains(port.Protocol, "peer") {
 			return name, port, true
 		}
 	}
@@ -196,7 +196,7 @@ func (c *Config) GetPeerPort() (string, PortConfig, bool) {
 func (c *Config) GetHTTPPorts() map[string]PortConfig {
 	httpPorts := make(map[string]PortConfig)
 	for name, port := range c.Ports {
-		if containsProtocol(port.Protocol, "http") || containsProtocol(port.Protocol, "https") {
+		if strings.Contains(port.Protocol, "http") || strings.Contains(port.Protocol, "https") {
 			httpPorts[name] = port
 		}
 	}
@@ -207,14 +207,9 @@ func (c *Config) GetHTTPPorts() map[string]PortConfig {
 func (c *Config) GetWebSocketPorts() map[string]PortConfig {
 	wsPorts := make(map[string]PortConfig)
 	for name, port := range c.Ports {
-		if containsProtocol(port.Protocol, "ws") || containsProtocol(port.Protocol, "wss") {
+		if strings.Contains(port.Protocol, "ws") || strings.Contains(port.Protocol, "wss") {
 			wsPorts[name] = port
 		}
 	}
 	return wsPorts
-}
-
-// containsProtocol checks if a protocol string contains a specific protocol.
-func containsProtocol(protocols, target string) bool {
-	return strings.Contains(protocols, target)
 }

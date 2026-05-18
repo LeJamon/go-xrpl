@@ -77,8 +77,8 @@ func (c *Config) initDyn() *configDynamic {
 func (c *Config) SetLevel(l Level) {
 	d := c.initDyn()
 	d.mu.Lock()
+	defer d.mu.Unlock()
 	c.Level = l
-	d.mu.Unlock()
 	d.globalVar.Set(l)
 }
 
