@@ -125,6 +125,41 @@ func (n *InnerNode) SetChildDirect(index int, child Node) {
 	n.children[index] = child
 }
 
+// LoadChild returns the child pointer, stored hash, and isBranch bit for
+// the given branch under a single read-lock acquisition.
+// Used by SHAMap.descend to avoid two separate locked reads on the hot
+// traversal path while keeping access correctly synchronised.
+func (n *InnerNode) LoadChild(index int) (Node, [32]byte, bool) {
+	if index < 0 || index >= BranchFactor {
+		return nil, [32]byte{}, false
+	}
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.children[index], n.hashes[index], n.isBranch&(1<<index) != 0
+}
+
+// SetChildIfNil atomically attaches child at the given branch iff that
+// slot is currently nil, and returns the resulting (possibly racing)
+// child. This is the lock-correct primitive for descend()'s lazy-load
+// path: concurrent readers under the SHAMap RLock can race to load the
+// same backed child without losing work — the winner's deserialised
+// node is installed, the loser observes it and returns it. Without this
+// primitive a plain SetChildDirect under inner.mu still races with
+// unlocked ChildUnsafe readers because the InnerNode mutex provides no
+// guarantee to readers that bypass it.
+func (n *InnerNode) SetChildIfNil(index int, child Node) Node {
+	if index < 0 || index >= BranchFactor {
+		return nil
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if existing := n.children[index]; existing != nil {
+		return existing
+	}
+	n.children[index] = child
+	return child
+}
+
 // ChildHash returns the hash at a given branch index
 func (n *InnerNode) ChildHash(index int) ([32]byte, error) {
 	if index < 0 || index >= BranchFactor {

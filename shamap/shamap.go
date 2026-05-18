@@ -171,26 +171,32 @@ func NewFromRootHash(mapType Type, rootHash [32]byte, family Family) (*SHAMap, e
 // descend returns the child node at the given branch of an inner node.
 // For backed maps, if the child pointer is nil but the hash is set,
 // the node is fetched from the Family and deserialized.
-// Each SHAMap gets its own deserialized copy — no shared mutable state.
+//
+// descend is safe to call from callers holding only the SHAMap RLock:
+// every children/hashes access goes through InnerNode.LoadChild (read-
+// locked) and the lazy attach uses SetChildIfNil so concurrent readers
+// racing on the same branch all return the same installed child rather
+// than overwriting one another. Each SHAMap still gets its own
+// deserialised subtree — there is no sharing with other SHAMap
+// instances.
 func (sm *SHAMap) descend(inner *InnerNode, branch int) (Node, error) {
-	// Fast path: child already loaded in memory
-	child := inner.ChildUnsafe(branch)
+	// Fast path: child already loaded in memory.
+	child, hash, hasBranch := inner.LoadChild(branch)
 	if child != nil {
 		return child, nil
 	}
 
-	// Not backed: nothing to lazy-load
+	// Not backed: nothing to lazy-load.
 	if !sm.backed || sm.family == nil {
 		return nil, nil
 	}
 
-	// Check if branch has a hash (i.e., non-empty but not yet loaded)
-	hash := inner.ChildHashUnsafe(branch)
-	if isZeroHash(hash) {
+	// Empty branch — nothing to load.
+	if !hasBranch || isZeroHash(hash) {
 		return nil, nil
 	}
 
-	// Fetch from store
+	// Fetch from store.
 	data, err := sm.family.Fetch(hash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch child node %x: %w", hash[:8], err)
@@ -199,17 +205,16 @@ func (sm *SHAMap) descend(inner *InnerNode, branch int) (Node, error) {
 		return nil, fmt.Errorf("child node %x not found in store", hash[:8])
 	}
 
-	// Deserialize (fresh copy — not shared with other SHAMaps)
+	// Deserialize (fresh copy — not shared with other SHAMaps).
 	node, err := DeserializeFromPrefix(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to deserialize child node: %w", err)
 	}
 
-	// Attach to parent for future access within this SHAMap instance.
-	// SetChildDirect doesn't update hash or dirty flag.
-	inner.SetChildDirect(branch, node)
-
-	return node, nil
+	// Race-safe attach: if another reader installed a child for this
+	// branch while we were fetching, return their copy and let ours be
+	// garbage-collected.
+	return inner.SetChildIfNil(branch, node), nil
 }
 
 // Type returns the map type

@@ -51,6 +51,10 @@ func NewCache(maxSize int, ttl time.Duration) *Cache {
 
 // Get retrieves a node from the cache.
 // Returns the node and true if found, nil and false otherwise.
+//
+// The returned *Node aliases the cache entry and is shared with every
+// other reader. Per the Node contract it MUST NOT be mutated; callers
+// that need to modify the data must Clone() first.
 func (c *Cache) Get(hash Hash256) (*Node, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -78,33 +82,40 @@ func (c *Cache) Get(hash Hash256) (*Node, bool) {
 }
 
 // Put stores a node in the cache.
+//
+// The cache takes a defensive deep copy so that subsequent mutations of
+// the caller's *Node — or of the buffer the backend decoder allocated —
+// cannot bleed into the entry returned to other readers. From this
+// point on the entry is owned by the cache and treated as immutable.
 func (c *Cache) Put(node *Node) {
 	if node == nil {
 		return
 	}
 
+	owned := node.Clone()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if element, found := c.items[node.Hash]; found {
+	if element, found := c.items[owned.Hash]; found {
 		entry := element.Value.(*cacheEntry)
-		c.currentBytes = c.currentBytes - entry.size + node.Size()
-		entry.node = node
+		c.currentBytes = c.currentBytes - entry.size + owned.Size()
+		entry.node = owned
 		entry.expiresAt = time.Now().Add(c.ttl)
-		entry.size = node.Size()
+		entry.size = owned.Size()
 		c.lru.MoveToFront(element)
 		return
 	}
 
 	entry := &cacheEntry{
-		key:       node.Hash,
-		node:      node,
+		key:       owned.Hash,
+		node:      owned,
 		expiresAt: time.Now().Add(c.ttl),
-		size:      node.Size(),
+		size:      owned.Size(),
 	}
 
 	element := c.lru.PushFront(entry)
-	c.items[node.Hash] = element
+	c.items[owned.Hash] = element
 	c.currentSize++
 	c.currentBytes += entry.size
 

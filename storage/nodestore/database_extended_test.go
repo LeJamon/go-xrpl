@@ -488,3 +488,72 @@ func TestDatabaseConfig(t *testing.T) {
 		}
 	})
 }
+
+// TestCacheIsolation pins the Node immutability contract at the cache
+// boundary. Before the fix, Cache.Put stored the caller's *Node by
+// reference, so a later mutation of the original Data slice silently
+// corrupted every reader the cache subsequently handed the same
+// pointer to. The fix takes a defensive deep copy on Put so subsequent
+// caller-side mutations are invisible to other readers.
+func TestCacheIsolation(t *testing.T) {
+	cache := nodestore.NewCache(8, time.Minute)
+
+	original := &nodestore.Node{
+		Type: nodestore.NodeAccount,
+		Hash: nodestore.Hash256{0x01},
+		Data: nodestore.Blob{0xAA, 0xBB, 0xCC, 0xDD},
+	}
+	cache.Put(original)
+
+	// Mutate the caller's buffer after Put. The cache must not observe
+	// the mutation.
+	original.Data[0] = 0xFF
+	original.Data[1] = 0xFF
+
+	got, ok := cache.Get(original.Hash)
+	if !ok {
+		t.Fatal("expected cache hit after Put")
+	}
+	expected := nodestore.Blob{0xAA, 0xBB, 0xCC, 0xDD}
+	for i, b := range expected {
+		if got.Data[i] != b {
+			t.Fatalf("cache entry was corrupted by post-Put mutation: byte %d got %#x want %#x", i, got.Data[i], b)
+		}
+	}
+}
+
+// TestCacheConcurrentReadersImmutable verifies that two readers
+// cache-hitting on the same hash see a stable Data buffer for the
+// duration of their reads. Combined with the documented immutability
+// contract this is the property NodeStore consumers depend on.
+func TestCacheConcurrentReadersImmutable(t *testing.T) {
+	cache := nodestore.NewCache(8, time.Minute)
+	node := &nodestore.Node{
+		Type: nodestore.NodeAccount,
+		Hash: nodestore.Hash256{0x42},
+		Data: nodestore.Blob{1, 2, 3, 4, 5, 6, 7, 8},
+	}
+	cache.Put(node)
+
+	a, ok := cache.Get(node.Hash)
+	if !ok {
+		t.Fatal("expected cache hit (a)")
+	}
+	b, ok := cache.Get(node.Hash)
+	if !ok {
+		t.Fatal("expected cache hit (b)")
+	}
+
+	// The two readers can legitimately alias the same entry — the
+	// contract says they must not mutate it. Verify both see identical
+	// data and that the underlying buffer is not the caller's original
+	// slice (Cache.Put took ownership via Clone).
+	for i := range node.Data {
+		if a.Data[i] != b.Data[i] || a.Data[i] != node.Data[i] {
+			t.Fatalf("readers disagree at byte %d: a=%#x b=%#x orig=%#x", i, a.Data[i], b.Data[i], node.Data[i])
+		}
+	}
+	if &a.Data[0] == &node.Data[0] {
+		t.Fatal("Cache.Put must not retain caller's Data slice by reference")
+	}
+}

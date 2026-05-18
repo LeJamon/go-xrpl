@@ -1167,3 +1167,76 @@ func TestBacked_Iterator(t *testing.T) {
 		t.Errorf("Iterator found %d items, expected %d", count, len(keys))
 	}
 }
+
+// TestBacked_ConcurrentLazyLoad exercises the descend() lazy-load path
+// from many goroutines simultaneously. Before the fix, descend used
+// ChildUnsafe (unsynchronised interface read) and SetChildDirect
+// (unconditional overwrite) under the SHAMap RLock — racy under -race
+// and capable of dropping a freshly deserialised child on the floor.
+// The fix routes reads through InnerNode.LoadChild and the attach
+// through SetChildIfNil so racing readers all observe the same
+// installed node.
+func TestBacked_ConcurrentLazyLoad(t *testing.T) {
+	family := newMemoryFamily()
+
+	sMap, err := New(TypeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Use enough keys to populate several branches at depth 0 so
+	// descend has to lazy-load multiple subtrees from cold.
+	keys := make([][32]byte, 0, 32)
+	for i := 0; i < 32; i++ {
+		var k [32]byte
+		for j := range k {
+			k[j] = byte((i*7 + j*11) | 1) // never all-zero
+		}
+		k[0] = byte((i * 16) & 0xF0) // spread across branches 0..15 at depth 0
+		keys = append(keys, k)
+		if err := sMap.Put(k, intToBytes(i+1)); err != nil {
+			t.Fatalf("Put %d: %v", i, err)
+		}
+	}
+
+	rootHash, err := sMap.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := flushToFamily(sMap, family); err != nil {
+		t.Fatal(err)
+	}
+
+	backed, err := NewFromRootHash(TypeState, rootHash, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const readers = 16
+	var wg sync.WaitGroup
+	wg.Add(readers)
+	start := make(chan struct{})
+	for r := 0; r < readers; r++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			for i, k := range keys {
+				item, found, err := backed.Get(k)
+				if err != nil {
+					t.Errorf("Get key %d: %v", i, err)
+					return
+				}
+				if !found || item == nil {
+					t.Errorf("key %d not found via concurrent Get", i)
+					return
+				}
+				if !bytes.Equal(item.Data(), intToBytes(i+1)) {
+					t.Errorf("key %d data mismatch", i)
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+}
