@@ -189,7 +189,18 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 		if certainRetry {
 			engineConfig.ApplyFlags |= tx.TapRETRY
 		}
-		return tx.NewBlockProcessor(tx.NewEngine(view, engineConfig))
+		engine := tx.NewEngine(view, engineConfig)
+		// Issue #470: the per-pass engine's txCount starts at 0. Without
+		// re-seeding from the view's current tx count, txs committed on a
+		// retry pass would re-use TxIndex values already assigned to txs
+		// from the initial pass, producing duplicate TransactionIndex
+		// values in metadata — observable as identical TxIndex on
+		// different txs in the same ledger, which forks the SHAMap
+		// tx+meta root from rippled. Mirrors rippled OpenView::txCount()
+		// = baseTxCount_ + txs_.size() where baseTxCount_ accumulates
+		// across the build's apply passes.
+		engine.SetBaseTxCount(view.TxCount())
+		return tx.NewBlockProcessor(engine)
 	}
 
 	// Initial single pass over txs (OpenLedger.h:220-238). retry=true on
