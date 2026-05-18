@@ -144,6 +144,8 @@ type mockAdaptor struct {
 	flagLedgerPseudoTxs [][]byte
 	negativeUNLPseudoTx [][]byte
 
+	onUNLChangeCalls []onUNLChangeCall
+
 	// standalone toggles the IsStandalone() return for tests that
 	// exercise rippled's `standalone() || (proposing && !wrongLCL)`
 	// OR-branch at RCLConsensus.cpp:352.
@@ -349,6 +351,22 @@ func (a *mockAdaptor) GenerateNegativeUNLPseudoTx(_ consensus.Ledger) [][]byte {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.negativeUNLPseudoTx
+}
+
+type onUNLChangeCall struct {
+	upcomingSeq uint32
+	nowTrusted  []consensus.NodeID
+}
+
+func (a *mockAdaptor) OnUNLChange(upcomingSeq uint32, nowTrusted []consensus.NodeID) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	added := make([]consensus.NodeID, len(nowTrusted))
+	copy(added, nowTrusted)
+	a.onUNLChangeCalls = append(a.onUNLChangeCalls, onUNLChangeCall{
+		upcomingSeq: upcomingSeq,
+		nowTrusted:  added,
+	})
 }
 
 func (a *mockAdaptor) HasTx(id consensus.TxID) bool {
@@ -628,6 +646,170 @@ func TestEngine_StartRound_Observing(t *testing.T) {
 	if engine.Mode() != consensus.ModeObserving {
 		t.Errorf("Expected Observing mode, got %v", engine.Mode())
 	}
+}
+
+// TestEngine_StartRound_DrivesOnUNLChange pins the wiring that
+// mirrors rippled's NetworkOPs.cpp:2081-2102 → RCLConsensus.cpp:1041-1043
+// pairing: at the head of every consensus round, the engine computes the
+// trusted-set delta since the previous round and forwards the
+// newly-added validators to adaptor.OnUNLChange so the NegativeUNL
+// voter exempts them from ToDisable for NewValidatorDisableSkip ledgers.
+//
+// Without this wiring (issue #423), OnUNLChange was an exposed-but-dead
+// API: any fresh validator could be voted ToDisable before accumulating
+// any validations, defeating rippled's grace-period protection.
+func TestEngine_StartRound_DrivesOnUNLChange(t *testing.T) {
+	prev := &mockLedger{id: consensus.LedgerID{0xAB, 0xCD}, seq: 256}
+	adaptor := newMockAdaptor()
+	adaptor.lastLCL = prev
+	adaptor.ledgers[prev.ID()] = prev
+
+	n1 := consensus.NodeID{0x01}
+	n2 := consensus.NodeID{0x02}
+	n3 := consensus.NodeID{0x03}
+	adaptor.setTrusted([]consensus.NodeID{n1, n2})
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	// Round 1: prevLedger nil → no OnUNLChange call (matches production
+	// where the first round can't gate on a parent ledger it hasn't seen
+	// yet; rippled's preStartRound is only invoked after closingInfo has
+	// resolved a parent — NetworkOPs.cpp:2070).
+	round1 := consensus.RoundID{Seq: prev.Seq() + 1, ParentHash: prev.ID()}
+	if err := engine.StartRound(round1, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if got := len(adaptor.onUNLChangeCalls); got != 0 {
+		t.Fatalf("no parent ledger → expected 0 OnUNLChange calls, got %d", got)
+	}
+
+	// Round 2: install prevLedger; the first call with a parent ledger
+	// SEEDS previousTrustedSet from the startup UNL and skips OnUNLChange.
+	// This mirrors rippled where ValidatorList::trustedMasterKeys_ is
+	// already populated by applyLists() before the first updateTrusted
+	// call, so the startup UNL is NOT reported in TrustChanges.added —
+	// otherwise every restart would hand every already-mature validator
+	// a fresh NewValidatorDisableSkip-ledger grace period.
+	engine.mu.Lock()
+	engine.prevLedger = prev
+	engine.mu.Unlock()
+	round2 := consensus.RoundID{Seq: prev.Seq() + 1, ParentHash: prev.ID()}
+	if err := engine.StartRound(round2, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if got := len(adaptor.onUNLChangeCalls); got != 0 {
+		t.Fatalf("seeding round must not invoke OnUNLChange (startup UNL is not `added`); got %d", got)
+	}
+
+	// Round 3: same UNL → no OnUNLChange call (rippled's
+	// !nowTrusted.empty() gate at RCLConsensus.cpp:1042).
+	if err := engine.StartRound(round2, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if got := len(adaptor.onUNLChangeCalls); got != 0 {
+		t.Fatalf("unchanged UNL must not trigger a call; got %d total", got)
+	}
+
+	// Round 4: add n3 → only n3 is forwarded, matching rippled's
+	// TrustChanges.added delta semantics. upcomingSeq is derived from
+	// prevLedger.Seq()+1 inside the engine, NOT from round.Seq.
+	adaptor.setTrusted([]consensus.NodeID{n1, n2, n3})
+	if err := engine.StartRound(round2, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if got := len(adaptor.onUNLChangeCalls); got != 1 {
+		t.Fatalf("added validator: expected 1 call total, got %d", got)
+	}
+	first := adaptor.onUNLChangeCalls[0]
+	if first.upcomingSeq != prev.Seq()+1 {
+		t.Errorf("upcomingSeq: want prevLedger.Seq()+1 = %d, got %d", prev.Seq()+1, first.upcomingSeq)
+	}
+	if !sameNodeIDSet(first.nowTrusted, []consensus.NodeID{n3}) {
+		t.Errorf("delta must be {n3}, got %v", first.nowTrusted)
+	}
+
+	// Round 5: remove n2 → no call (rippled only forwards `added`, never
+	// `removed` — see RCLConsensus.cpp:1093-1103 where `nowUntrusted` is
+	// passed to consensus.startRound but explicitly NOT to preStartRound).
+	adaptor.setTrusted([]consensus.NodeID{n1, n3})
+	if err := engine.StartRound(round2, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if got := len(adaptor.onUNLChangeCalls); got != 1 {
+		t.Fatalf("removals must not trigger OnUNLChange; got %d total", got)
+	}
+}
+
+// TestEngine_StartRound_SeedingHonorsRestart pins the M2 fix more
+// pointedly: a node that restarts with a steady-state UNL must NOT
+// see any of its already-trusted validators forwarded to OnUNLChange.
+// Pre-M2, the first round with prevLedger registered every trusted
+// validator in the grace-period table, silently exempting them from
+// ToDisable voting for ~256 ledgers after every restart.
+func TestEngine_StartRound_SeedingHonorsRestart(t *testing.T) {
+	prev := &mockLedger{id: consensus.LedgerID{0xCA, 0xFE}, seq: 1000}
+	adaptor := newMockAdaptor()
+	adaptor.lastLCL = prev
+	adaptor.ledgers[prev.ID()] = prev
+	// Steady-state UNL loaded by startup — no validator should be
+	// treated as "new" by the very next round.
+	adaptor.setTrusted([]consensus.NodeID{{0x10}, {0x20}, {0x30}, {0x40}, {0x50}})
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	engine.mu.Lock()
+	engine.prevLedger = prev
+	engine.mu.Unlock()
+
+	round := consensus.RoundID{Seq: prev.Seq() + 1, ParentHash: prev.ID()}
+	if err := engine.StartRound(round, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if got := len(adaptor.onUNLChangeCalls); got != 0 {
+		t.Fatalf("steady-state restart must not forward any validator as `added`; got %d call(s): %+v",
+			got, adaptor.onUNLChangeCalls)
+	}
+}
+
+// TestEngine_StartRound_OnUNLChangeGatedOnFeature pins the
+// featureNegativeUNL gate at RCLConsensus.cpp:1041. When the amendment
+// is disabled on prevLedger, the engine must not drive OnUNLChange
+// regardless of UNL deltas.
+func TestEngine_StartRound_OnUNLChangeGatedOnFeature(t *testing.T) {
+	prev := &mockLedger{id: consensus.LedgerID{0x77, 0x88}, seq: 100}
+	adaptor := newMockAdaptor()
+	adaptor.lastLCL = prev
+	adaptor.ledgers[prev.ID()] = prev
+	adaptor.disabledFeatures = map[string]bool{"NegativeUNL": true}
+	adaptor.setTrusted([]consensus.NodeID{{0x11}, {0x22}})
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	engine.mu.Lock()
+	engine.prevLedger = prev
+	engine.mu.Unlock()
+
+	round := consensus.RoundID{Seq: prev.Seq() + 1, ParentHash: prev.ID()}
+	if err := engine.StartRound(round, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if got := len(adaptor.onUNLChangeCalls); got != 0 {
+		t.Fatalf("featureNegativeUNL disabled: expected 0 calls, got %d", got)
+	}
+}
+
+func sameNodeIDSet(a, b []consensus.NodeID) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := make(map[consensus.NodeID]struct{}, len(a))
+	for _, n := range a {
+		set[n] = struct{}{}
+	}
+	for _, n := range b {
+		if _, ok := set[n]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func TestEngine_OnProposal(t *testing.T) {
