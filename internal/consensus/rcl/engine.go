@@ -1973,6 +1973,21 @@ func (e *Engine) closeLedger() {
 func (e *Engine) phaseEstablish() {
 	roundTime := time.Since(e.roundStartTime)
 
+	// Pause the round if our prev LCL has run past the validated chain
+	// and a quorum-blocking share of trusted validators is lagging or
+	// offline. Mirrors rippled's Consensus<T>::shouldPause check at
+	// Consensus.h:1403 — placed BEFORE the abandon/timeout/MovedOn/
+	// convergence accept paths so a pause prevents LCL advance, but the
+	// pause is bounded by ledgerMAX_CONSENSUS inside shouldPause itself
+	// (Consensus.h:1271) so a stuck round still eventually abandons via
+	// the hard ceiling below. Without this gate the engine close-then-
+	// rollback-cycles every heartbeat against an unreachable quorum and
+	// drifts the local closed_ledger arbitrarily far past the network's
+	// validated tip (#451).
+	if e.shouldPause(roundTime) {
+		return
+	}
+
 	// Absolute hard ceiling: abandon the round once we exceed the
 	// ledgerABANDON_CONSENSUS clamp. Rippled treats this state as
 	// ConsensusState::Expired (Consensus.cpp:253-263) and responds by
@@ -2004,27 +2019,19 @@ func (e *Engine) phaseEstablish() {
 		return
 	}
 
-	// Soft timeout: force accept after LedgerMaxConsensus.
-	// Pre-E3 this gated on the goXRPL-only LedgerMaxClose=10s; it is
-	// now rippled's ledgerMAX_CONSENSUS=15s, keeping the same force-
-	// accept action but pushed out to match rippled's deadline. The
-	// legacy LedgerMaxClose field is still honored for source-compat
-	// when set smaller than LedgerMaxConsensus — it takes precedence
-	// so tests can dial the trigger down without also having to reset
-	// LedgerMaxConsensus.
-	softDeadline := e.timing.LedgerMaxConsensus
-	if e.timing.LedgerMaxClose > 0 && e.timing.LedgerMaxClose < softDeadline {
-		softDeadline = e.timing.LedgerMaxClose
-	}
-	if softDeadline > 0 && roundTime >= softDeadline {
-		e.eventBus.Publish(&consensus.TimerFiredEvent{
-			Timer:     consensus.TimerRoundTimeout,
-			Round:     e.state.Round,
-			Timestamp: e.adaptor.Now(),
-		})
-		e.acceptLedger(consensus.ResultTimeout)
-		return
-	}
+	// (No soft-timeout-to-accept here on purpose.) Rippled's
+	// phaseEstablish has exactly three terminal states — Yes / MovedOn
+	// / Expired (Consensus.cpp:176-263) — and Expired only fires at the
+	// clamp(prevRoundTime * factor, ledgerMAX_CONSENSUS, ledger
+	// ABANDON_CONSENSUS) deadline, which is the hard-abandon path
+	// above. There is no equivalent "soft" force-accept at
+	// ledgerMAX_CONSENSUS; rippled stays in establish as long as
+	// neither convergence nor the MovedOn-by-peer-finished threshold
+	// has fired. The earlier goxrpl soft-timeout at LedgerMaxConsensus
+	// was a goxrpl-only behavior that, combined with the old broad
+	// consensusFail rule, advanced the LCL on a never-emitted ledger
+	// every 15s and drifted closed_seq arbitrarily far past the
+	// validated tip in mixed UNL soaks (#451).
 
 	// Run convergence before MovedOn — rippled's checkConsensus picks
 	// Yes over MovedOn so a near-simultaneous-finish round still ends
@@ -2074,6 +2081,270 @@ func (e *Engine) phaseEstablish() {
 			return
 		}
 	}
+}
+
+// shouldPause mirrors rippled's Consensus<T>::shouldPause at
+// Consensus.h:1241-1362. It returns true when the establish phase
+// should suspend progress for one heartbeat — because our previous
+// LCL has run past the fully-validated tip and a quorum-blocking
+// share of trusted validators is lagging or offline. A paused round
+// returns from phaseEstablish without calling acceptLedger, so the
+// local closed_ledger does NOT advance further away from validated
+// state on this tick. The pause naturally clears once the round
+// exceeds LedgerMaxConsensus (the abandon path below then takes over)
+// or peers catch up, whichever comes first.
+//
+// Without this gate the engine close-then-rollback-cycles every
+// heartbeat when peers can't form quorum, drifting the local LCL
+// arbitrarily far past the validated tip and presenting a
+// permanently-diverging view to the network (#451).
+//
+// Caller must hold e.mu.
+func (e *Engine) shouldPause(roundTime time.Duration) bool {
+	if e.prevLedger == nil {
+		return false
+	}
+	// Rippled's early-out: not a validator, no validation history,
+	// nothing ahead, or the round already passed the hard timeout
+	// (Consensus.h:1269-1276). Skipping when we have no prior
+	// validation lets bootstrap rounds run normally — pause is only a
+	// guard against ONGOING drift, not a startup gate.
+	if !e.adaptor.IsValidator() {
+		return false
+	}
+	if e.ourLastValidatedSeq == 0 {
+		return false
+	}
+	if e.timing.LedgerMaxConsensus > 0 && roundTime > e.timing.LedgerMaxConsensus {
+		return false
+	}
+
+	prevSeq := e.prevLedger.Seq()
+	validatedSeq := e.validatedSeqLocked()
+	if validatedSeq >= prevSeq {
+		return false
+	}
+	ahead := prevSeq - validatedSeq
+	if ahead == 0 {
+		return false
+	}
+
+	trusted := e.adaptor.GetTrustedValidators()
+	totalValidators := len(trusted)
+	if totalValidators == 0 {
+		return false
+	}
+	quorum := e.adaptor.GetQuorum()
+	if quorum == 0 {
+		return false
+	}
+
+	laggards, offline := e.countLaggardsAndOfflineLocked(prevSeq, trusted)
+	if laggards == 0 {
+		return false
+	}
+
+	// Phase-progressive threshold (Consensus.h:1314-1349). Each
+	// additional ledger we are ahead cycles us through 5 phases of
+	// increasing strictness; at phase 0 even a single laggard pauses
+	// us, at maxPausePhase we pause unconditionally.
+	const maxPausePhase = 4
+	phase := int(ahead-1) % (maxPausePhase + 1)
+
+	switch phase {
+	case 0:
+		// Pause when laggards+offline can't be tolerated by quorum slack
+		// (Consensus.h:1321-1325).
+		if laggards+offline > totalValidators-quorum {
+			return logPauseLocked(e, ahead, laggards, offline, totalValidators, quorum, phase)
+		}
+	case maxPausePhase:
+		// No tolerance — strictest phase (Consensus.h:1326-1329).
+		return logPauseLocked(e, ahead, laggards, offline, totalValidators, quorum, phase)
+	default:
+		// Intermediate phases (Consensus.h:1330-1349): require the
+		// non-laggard ratio to clear quorum + linear share of slack.
+		nonLaggards := float64(totalValidators - laggards - offline)
+		quorumRatio := float64(quorum) / float64(totalValidators)
+		allowedDissent := 1.0 - quorumRatio
+		phaseFactor := float64(phase) / float64(maxPausePhase)
+		if nonLaggards/float64(totalValidators) < quorumRatio+(allowedDissent*phaseFactor) {
+			return logPauseLocked(e, ahead, laggards, offline, totalValidators, quorum, phase)
+		}
+	}
+	return false
+}
+
+// validatedSeqLocked returns the seq of the most recently fully-validated
+// ledger (zero if none). Reads the adaptor's validated-hash + ledger
+// pair so we don't have to take a separate snapshot of validated state
+// inside the engine. Caller must hold e.mu (the adaptor lookups are
+// independent of engine state but stay under the lock for consistency
+// with the rest of shouldPause).
+func (e *Engine) validatedSeqLocked() uint32 {
+	vh := e.adaptor.GetValidatedLedgerHash()
+	if vh == (consensus.LedgerID{}) {
+		return 0
+	}
+	vl, err := e.adaptor.GetLedger(vh)
+	if err != nil || vl == nil {
+		return 0
+	}
+	return vl.Seq()
+}
+
+// isBuildCompatibleWithValidatedLocked mirrors rippled's
+// LedgerMaster::isCompatible (LedgerMaster.cpp:135-160) which calls
+// areCompatible(validatedLedger, built, ...) at View.cpp:797-857.
+// Returns true when the locally built ledger has the validated tip on
+// its ancestry chain, or when we lack enough state to disprove
+// compatibility (rippled treats hashOfSeq returning nullopt as no
+// incompatibility detected — same semantic here).
+//
+// The three branches mirror areCompatible's three-way fork:
+//  1. validatedSeq <  builtSeq: walk built back to validatedSeq via
+//     ParentID and compare to the validated hash.
+//  2. validatedSeq == builtSeq: hash equality at the same seq.
+//  3. validatedSeq >  builtSeq: walk validatedLedger back to builtSeq
+//     and compare to the built hash.
+//
+// Missing intermediate ancestors → return true (compatible). This
+// matches rippled's "hashOfSeq returned nullopt → no rejection" rule
+// at View.cpp:812 / 828.
+//
+// Caller must hold e.mu.
+func (e *Engine) isBuildCompatibleWithValidatedLocked(built consensus.Ledger) bool {
+	if built == nil {
+		return true
+	}
+	vh := e.adaptor.GetValidatedLedgerHash()
+	if vh == (consensus.LedgerID{}) {
+		return true
+	}
+	vl, err := e.adaptor.GetLedger(vh)
+	if err != nil || vl == nil {
+		return true
+	}
+	validatedSeq := vl.Seq()
+	builtSeq := built.Seq()
+
+	if validatedSeq == builtSeq {
+		return built.ID() == vh
+	}
+
+	if validatedSeq < builtSeq {
+		current := built
+		// Walk back to validatedSeq via parent pointers. The first hop
+		// drops to the parent of `built` — which is our prevLedger and
+		// is always known — so the walk is well-defined for the common
+		// case where validatedSeq == builtSeq-1 (the #451 fact pattern).
+		// Deeper walks rely on the adaptor having those ancestors;
+		// missing ancestors fall through to compatible per rippled.
+		for current != nil && current.Seq() > validatedSeq {
+			parent, err := e.adaptor.GetLedger(current.ParentID())
+			if err != nil || parent == nil {
+				return true
+			}
+			current = parent
+		}
+		if current == nil || current.Seq() != validatedSeq {
+			return true
+		}
+		return current.ID() == vh
+	}
+
+	// validatedSeq > builtSeq: walk validated back to builtSeq.
+	current := vl
+	for current != nil && current.Seq() > builtSeq {
+		parent, err := e.adaptor.GetLedger(current.ParentID())
+		if err != nil || parent == nil {
+			return true
+		}
+		current = parent
+	}
+	if current == nil || current.Seq() != builtSeq {
+		return true
+	}
+	return current.ID() == built.ID()
+}
+
+// validationLaggardFreshness mirrors rippled's
+// parms_.validationFRESHNESS = 20s (Validations.h:89). A peer whose
+// latest tracked validation is older than this window is considered
+// offline for laggard accounting, not a laggard — even if its seq
+// would otherwise place it behind us. The shorter window (vs the
+// 3m/5m isCurrent windows used elsewhere) reflects laggards' tighter
+// "did this peer send a validation in the most recent ledger interval"
+// semantic at Validations.h:1136-1140.
+const validationLaggardFreshness = 20 * time.Second
+
+// countLaggardsAndOfflineLocked partitions trusted validators (other
+// than ourselves) by their latest fresh tracked validation:
+//   - laggards: validator whose latest fresh validation is at
+//     seq < prevSeq — they have NOT advanced past our prev, so a
+//     quorum that includes them can't form on our seq.
+//   - offline: validator with no tracked validation, or with only a
+//     stale one (outside the laggard-freshness window).
+//
+// A validator whose latest fresh validation is at seq >= prevSeq is
+// current and contributes to neither count. Mirrors rippled's
+// RCLValidations::laggards (Validations.h:1128-1147): only fresh
+// validations are iterated; a fresh entry at seq < prev increments
+// the laggards counter, all other keys (no entry, stale entry) stay
+// in trustedKeys and are counted as offline at Consensus.h:1255.
+//
+// Caller must hold e.mu.
+func (e *Engine) countLaggardsAndOfflineLocked(prevSeq uint32, trusted []consensus.NodeID) (laggards, offline int) {
+	if e.validationTracker == nil {
+		return 0, 0
+	}
+	self, _ := e.adaptor.GetValidatorKey()
+	now := e.adaptor.Now()
+	for _, k := range trusted {
+		if k == self {
+			continue
+		}
+		v := e.validationTracker.GetLatestValidation(k)
+		if v == nil {
+			offline++
+			continue
+		}
+		seen := v.SeenTime
+		if seen.IsZero() {
+			seen = v.SignTime
+		}
+		if !seen.IsZero() && now.Sub(seen) > validationLaggardFreshness {
+			offline++
+			continue
+		}
+		if v.LedgerSeq < prevSeq {
+			laggards++
+		}
+	}
+	return laggards, offline
+}
+
+// logPauseLocked emits the consensus-pause telemetry line and returns
+// true so the caller can `return logPauseLocked(...)` to combine the
+// trace with the return value. Matches rippled's pausing log at
+// Consensus.h:1353 in payload shape (validators/laggards/offline/quorum).
+func logPauseLocked(e *Engine, ahead uint32, laggards, offline, totalValidators, quorum int, phase int) bool {
+	seq := uint32(0)
+	if e.prevLedger != nil {
+		seq = e.prevLedger.Seq()
+	}
+	slog.Info("consensus pause — ahead of validated, peers lagging",
+		"t", "consensus",
+		"event", "consensus-pause",
+		"working_seq", seq,
+		"ahead", ahead,
+		"validators", totalValidators,
+		"laggards", laggards,
+		"offline", offline,
+		"quorum", quorum,
+		"phase", phase,
+	)
+	return true
 }
 
 // abandonDeadlineExceeded reports whether the current round has run
@@ -2521,24 +2792,54 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		Timestamp: e.adaptor.Now(),
 	})
 
-	// Mirror rippled's emission gate at RCLConsensus.cpp:587-594:
+	// Mirror rippled's emission gate at RCLConsensus.cpp:591-594:
 	//   if (validating_ && !consensusFail && canValidateSeq(seq)) validate(...)
 	//
-	// validating_ proxy: WrongLedger means our built ledger isn't on the
-	//   validated chain, so emitting would attest to a side chain (BBD).
-	// consensusFail: result != ResultSuccess (rippled's Expired path).
+	// validating_: we are configured as a validator.
+	// consensusFail: ConsensusState::MovedOn ONLY (RCLConsensus.cpp:479).
+	//   Rippled's Expired state (the hard timeout) does NOT set
+	//   consensusFail — it still emits, and peers form quorum on the
+	//   timeout-built ledger because every validator times out around
+	//   the same wall-clock instant. The earlier goxrpl rule
+	//   `result != ResultSuccess` lumped Timeout and Abandoned in with
+	//   MovedOn, which silently bowed us out of every timed-out round.
+	//   In a 3-rippled + 2-goxrpl soak that flips quorum from "reachable
+	//   after timeout" to "permanently unreachable" — the failure mode
+	//   in #451.
 	// canValidateSeq: prevents a second validation for a seq we already
 	//   validated; without it a divergent close + reacquire races two
 	//   validations and BBD flags us as Conflicting (#401).
 	//
-	// Mode only controls the Full flag inside sendValidation; switchedLedger
-	// still emits a partial (Full=false) — peers rely on these as early
-	// liveness signals before full quorum materializes.
-	consensusFail := result != consensus.ResultSuccess
-	wrongLCL := e.mode == consensus.ModeWrongLedger
+	// Mode is intentionally NOT part of this gate. Rippled emits a
+	// validation here regardless of ConsensusMode — wrongLedger,
+	// switchedLedger, observing and proposing all reach this branch
+	// (RCLConsensus.cpp:478 only uses mode to derive haveCorrectLCL for
+	// notify/censorship paths, not the emission predicate). The Full
+	// flag inside sendValidation (set from `mode == ModeProposing`) is
+	// what controls whether peers count the validation toward quorum:
+	// partials emitted in non-proposing modes act as a liveness signal
+	// so rippled's validator-presence detector doesn't mark us
+	// `offline` while we recover, but they don't influence quorum until
+	// we're back in ModeProposing. Suppressing emission entirely while
+	// in wrongLedger (the prior behavior) made the node invisible to
+	// peers under mode thrash and caused permanent quorum stalls — #451.
+	// ResultFail is a goxrpl-local "we know we failed" sentinel with no
+	// rippled analogue; it semantically maps to the same suppress class
+	// as MovedOn (don't validate a round we explicitly failed).
+	consensusFail := result == consensus.ResultMovedOn || result == consensus.ResultFail
 	isValidator := e.adaptor.IsValidator()
 	canValidate := e.peekCanValidateSeqLocked(newLedger.Seq())
-	willEmit := isValidator && !consensusFail && !wrongLCL && canValidate
+	// isCompatible mirrors rippled's `validating_ = ledgerMaster_.isCompatible(*built, ...)`
+	// at RCLConsensus.cpp:587-589, which calls areCompatible(validatedLedger, built)
+	// at View.cpp:797-857. Suppresses emission when the locally built ledger does
+	// not have the validated tip on its ancestry — i.e. when our build is genuinely
+	// on a side chain rather than just ahead of validated on the same chain. The
+	// earlier wrongLedger-mode gate was a coarse proxy that also blocked the
+	// just-ahead-but-compatible case (#451); dropping it without this compatibility
+	// check would let side-chain builds emit and re-introduce the #401 Frankenstein-
+	// hash class.
+	compatible := e.isBuildCompatibleWithValidatedLocked(newLedger)
+	willEmit := isValidator && !consensusFail && canValidate && compatible
 
 	newLedgerID := newLedger.ID()
 	hashShort := fmt.Sprintf("%x", newLedgerID[:8])
@@ -2550,11 +2851,12 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		"result", result.String(),
 		"is_validator", isValidator,
 		"consensus_fail", consensusFail,
-		"wrong_lcl", wrongLCL,
+		"wrong_lcl", e.mode == consensus.ModeWrongLedger,
+		"compatible", compatible,
 		"can_validate_seq", canValidate,
 		"our_last_validated_seq", e.ourLastValidatedSeq,
 		"mode", e.mode.String(),
-		"decision", emitDecision(willEmit, isValidator, consensusFail, wrongLCL, canValidate),
+		"decision", emitDecision(willEmit, isValidator, consensusFail, canValidate, compatible),
 	)
 
 	if willEmit {
@@ -3166,7 +3468,10 @@ func roundCloseTime(closeTime time.Time, resolution time.Duration) time.Time {
 }
 
 // emitDecision labels which arm of the validation gate fired.
-func emitDecision(emit, isValidator, consensusFail, wrongLCL, canValidate bool) string {
+// wrongLedger mode is intentionally NOT a skip reason: rippled emits
+// a partial validation in that mode (#451). The wrong_lcl field is
+// still logged separately so operators can see the recovery context.
+func emitDecision(emit, isValidator, consensusFail, canValidate, compatible bool) string {
 	if emit {
 		return "emit"
 	}
@@ -3176,11 +3481,11 @@ func emitDecision(emit, isValidator, consensusFail, wrongLCL, canValidate bool) 
 	if consensusFail {
 		return "skip:consensus-fail"
 	}
-	if wrongLCL {
-		return "skip:wrong-lcl"
-	}
 	if !canValidate {
 		return "skip:already-validated-seq"
+	}
+	if !compatible {
+		return "skip:incompatible-with-validated"
 	}
 	return "skip:unknown"
 }

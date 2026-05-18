@@ -64,6 +64,12 @@ type ServiceContainer struct {
 	// as a validator. Mirrors rippled's Application::getValidationPublicKey
 	// — validator_info uses emptiness to gate the notValidator response.
 	ValidatorPublicKey []byte
+
+	// ValidationQuorum returns the live consensus quorum (number of
+	// trusted-validator signatures required to fully validate a ledger).
+	// Computed by the adaptor from the current UNL minus the negative-UNL.
+	// Nil in standalone mode (server_info falls back to 1).
+	ValidationQuorum func() int
 }
 
 // LedgerNavigator provides ledger index navigation and mode queries.

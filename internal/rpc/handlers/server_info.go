@@ -87,7 +87,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 		"pubkey_node":       services.NodePublicKey,
 		"server_state":      serverState,
 		"uptime":            uptime,
-		"validation_quorum": 1, // TODO: get from consensus/validators
+		"validation_quorum": resolveValidationQuorum(services),
 		"peers":             getPeerCount(ctx),
 
 		// Overflow/disconnect counters (string in rippled)
@@ -237,4 +237,18 @@ func getPeerCount(ctx *types.RpcContext) int {
 		return 0
 	}
 	return ctx.PeerSource.PeerCount()
+}
+
+// resolveValidationQuorum returns the live consensus quorum from the
+// adaptor via the services container, falling back to 1 when the
+// consensus subsystem hasn't been wired (standalone or pre-startup).
+// Rippled exposes the runtime quorum here; previously goxrpl hardcoded
+// 1, which made network-mode soaks misleading (#451).
+func resolveValidationQuorum(services *types.ServiceContainer) int {
+	if services != nil && services.ValidationQuorum != nil {
+		if q := services.ValidationQuorum(); q > 0 {
+			return q
+		}
+	}
+	return 1
 }
