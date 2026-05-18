@@ -162,7 +162,10 @@ func (m *ValidatorListSitesMethod) Handle(ctx *types.RpcContext, _ json.RawMessa
 				"uri":                  s.URI,
 				"refresh_interval_min": s.RefreshIntervalMin,
 			}
-			if s.LastDisposition != "" {
+			// Mirrors rippled's `if (site.lastRefreshStatus)` gate at
+			// ValidatorSite.cpp:690 — the field is absent from the
+			// response until the first fetch attempt completes.
+			if s.LastDispositionSet {
 				entry["last_refresh_status"] = s.LastDisposition
 			}
 			if s.LastRefreshISO != "" {

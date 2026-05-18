@@ -61,14 +61,21 @@ type ValidatorListPublisherInfo struct {
 // `validator_list_sites` RPC surfaces. Field names track rippled's
 // ValidatorSite::getJson at ValidatorSite.cpp:683-702.
 type ValidatorListSiteInfo struct {
-	URI                string
-	LastRefreshUnix    int64
-	LastSuccessUnix    int64
-	NextRefreshUnix    int64
-	LastRefreshISO     string
-	NextRefreshISO     string
-	LastError          string
-	LastDisposition    string
+	URI             string
+	LastRefreshUnix int64
+	LastSuccessUnix int64
+	NextRefreshUnix int64
+	LastRefreshISO  string
+	NextRefreshISO  string
+	LastError       string
+	LastDisposition string
+	// LastDispositionSet mirrors rippled's
+	// std::optional<Site::Status>::has_value() at
+	// ValidatorSite.cpp:690: the handler must omit
+	// `last_refresh_status` from the RPC response until the first
+	// poll attempt completes. Without this flag the zero-value
+	// disposition string would surface as a false "accepted" status.
+	LastDispositionSet bool
 	RefreshIntervalSec int
 	RefreshIntervalMin int
 }

@@ -356,13 +356,38 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			return out
 		}
 		if mc := consensusComponents.Manifests; mc != nil {
+			// Mirrors rippled getJson at ValidatorList.cpp:1726-1734 —
+			// `signing_keys` only surfaces master→signing pairs for
+			// masters present in keyListings_, i.e. validators listed
+			// by at least one publisher or pinned in the local
+			// [validators] stanza. Without this filter we would leak
+			// every gossiped manifest, including ones unrelated to any
+			// trusted publisher.
+			vlAgg := consensusComponents.ValidatorList
 			services.SigningKeysBase58 = func() map[string]string {
 				snap := mc.MasterToSigning()
 				if len(snap) == 0 {
 					return nil
 				}
-				out := make(map[string]string, len(snap))
+				listed := make(map[[33]byte]struct{})
+				for _, mk := range componentsRef.StaticTrustedMasterKeys() {
+					listed[mk] = struct{}{}
+				}
+				if vlAgg != nil {
+					for _, p := range vlAgg.PublisherSnapshot() {
+						for _, mk := range p.Validators {
+							listed[mk] = struct{}{}
+						}
+					}
+				}
+				if len(listed) == 0 {
+					return nil
+				}
+				out := make(map[string]string, len(listed))
 				for master, signing := range snap {
+					if _, ok := listed[master]; !ok {
+						continue
+					}
 					mEnc, mErr := addresscodec.EncodeNodePublicKey(master[:])
 					sEnc, sErr := addresscodec.EncodeNodePublicKey(signing[:])
 					if mErr == nil && sErr == nil {

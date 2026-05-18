@@ -103,9 +103,12 @@ func (r *RPCReader) Sites() []rpctypes.ValidatorListSiteInfo {
 		info := rpctypes.ValidatorListSiteInfo{
 			URI:                s.URI,
 			LastError:          s.LastError,
-			LastDisposition:    s.LastDisposition.String(),
+			LastDispositionSet: s.LastDispositionSet,
 			RefreshIntervalSec: s.RefreshSeconds,
 			RefreshIntervalMin: (s.RefreshSeconds + 59) / 60,
+		}
+		if s.LastDispositionSet {
+			info.LastDisposition = s.LastDisposition.String()
 		}
 		if !s.LastFetched.IsZero() {
 			info.LastRefreshUnix = s.LastFetched.Unix()

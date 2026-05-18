@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"encoding/binary"
 	"strconv"
 
 	"github.com/LeJamon/goXRPLd/crypto/common"
@@ -15,8 +16,8 @@ import (
 //
 // Mirrors rippled's PeerImp::onMessage(TMValidatorList) at
 // PeerImp.cpp:2248-2274 plus the shared onValidatorListMessage helper
-// at PeerImp.cpp:2033-2245 (hash-suppression dedup, charge-by-
-// disposition, broadcast-on-fresh).
+// at PeerImp.cpp:2033-2245 (feature gate, hash-suppression dedup,
+// charge-by-disposition, broadcast-on-fresh).
 //
 // When no aggregator is wired (standalone / no publisher trust
 // configured) the frame is silently dropped — gossip carries lists for
@@ -27,16 +28,12 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	// Hash-suppression dedup (PeerImp.cpp:2051-2066). Rippled keys this
-	// by `sha512Half(manifest, blobs, version)`; the goXRPL message_seen
-	// tracker hashes the full wire payload, which yields the same
-	// equivalence class for any byte-identical frame replay.
-	if r.messageSeen != nil {
-		hash := common.Sha512Half(msg.Payload)
-		if firstSeen, _ := r.messageSeen.observe(hash); !firstSeen {
-			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-duplicate")
-			return
-		}
+	// Peer-feature gate. Mirrors PeerImp.cpp:2252-2260: peers that did
+	// not negotiate ValidatorListPropagation should not be pushing
+	// these frames; rippled charges feeUselessData and returns.
+	if !r.peerSupportsValidatorListFeature(msg.PeerID) {
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-unsupported-peer")
+		return
 	}
 
 	decoded, err := message.Decode(message.TypeValidatorList, msg.Payload)
@@ -49,6 +46,18 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 	if !ok || vl == nil {
 		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-decode")
 		return
+	}
+
+	// Semantic dedup. Rippled keys this by `sha512Half(manifest, blobs,
+	// version)` (PeerImp.cpp:2051) — semantic content, not wire bytes,
+	// so two peers gossiping the same blob via different protobuf
+	// encodings both suppress on the second arrival.
+	if r.messageSeen != nil {
+		hash := common.Sha512Half(validatorListSemanticHash(vl))
+		if firstSeen, _ := r.messageSeen.observe(hash); !firstSeen {
+			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-duplicate")
+			return
+		}
 	}
 
 	disp, _ := r.validatorList.ApplyList(vl.Manifest, vl.Blob, vl.Signature, vl.Version, peerSite(msg.PeerID))
@@ -84,20 +93,10 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 		return
 	}
 
-	// Reject v1 collections upfront, matching rippled PeerImp.cpp:2291-2299.
-	if peeked, err := message.Decode(message.TypeValidatorListCollection, msg.Payload); err == nil {
-		if coll, ok := peeked.(*message.ValidatorListCollection); ok && coll != nil && coll.Version < 2 {
-			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-wrong-version")
-			return
-		}
-	}
-
-	if r.messageSeen != nil {
-		hash := common.Sha512Half(msg.Payload)
-		if firstSeen, _ := r.messageSeen.observe(hash); !firstSeen {
-			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-duplicate")
-			return
-		}
+	// Peer-feature gate. Mirrors PeerImp.cpp:2282-2290.
+	if !r.peerSupportsValidatorListFeature(msg.PeerID) {
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-unsupported-peer")
+		return
 	}
 
 	decoded, err := message.Decode(message.TypeValidatorListCollection, msg.Payload)
@@ -110,6 +109,32 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 	if !ok || coll == nil {
 		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-decode")
 		return
+	}
+
+	// Reject v1 collections upfront, matching rippled PeerImp.cpp:2291-2299
+	// (feeInvalidData "wrong version"). Decoding once and inspecting the
+	// version on the decoded message avoids the original code's
+	// double-decode.
+	if coll.Version < 2 {
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-wrong-version")
+		return
+	}
+
+	// Empty-blobs guard. Rippled charges feeHeavyBurdenPeer "no blobs"
+	// at PeerImp.cpp:2042-2049 — the heaviest tier, reserved for severe
+	// protocol violations. Surface it as a distinct label so operators
+	// can see this is not a generic bad-signature case.
+	if len(coll.Blobs) == 0 {
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-no-blobs")
+		return
+	}
+
+	if r.messageSeen != nil {
+		hash := common.Sha512Half(validatorListCollectionSemanticHash(coll))
+		if firstSeen, _ := r.messageSeen.observe(hash); !firstSeen {
+			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-duplicate")
+			return
+		}
 	}
 
 	dispList, _ := r.validatorList.ApplyCollection(coll, peerSite(msg.PeerID))
@@ -145,6 +170,60 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 		}
 		_ = r.overlay.BroadcastExcept(msg.PeerID, frame)
 	}
+}
+
+// peerSupportsValidatorListFeature mirrors rippled's
+// supportsFeature(ProtocolFeature::ValidatorListPropagation) check at
+// PeerImp.cpp:2252. When the overlay is unavailable (tests) we err on
+// the side of accepting the frame — matching the pre-fix behaviour.
+func (r *Router) peerSupportsValidatorListFeature(peer peermanagement.PeerID) bool {
+	if r.overlay == nil {
+		return true
+	}
+	return r.overlay.PeerSupports(peer, peermanagement.FeatureValidatorListPropagation)
+}
+
+// validatorListSemanticHash builds the canonical byte stream that
+// stands in for rippled's `sha512Half(manifest, blobs, version)` at
+// PeerImp.cpp:2051. The shape is fixed across protobuf re-encodings so
+// dedup catches semantically-identical replays even when the wire bytes
+// differ.
+func validatorListSemanticHash(vl *message.ValidatorList) []byte {
+	out := make([]byte, 0, 4+len(vl.Manifest)+len(vl.Blob)+len(vl.Signature))
+	out = appendUint32BE(out, vl.Version)
+	out = appendLengthPrefixed(out, vl.Manifest)
+	out = appendLengthPrefixed(out, vl.Blob)
+	out = appendLengthPrefixed(out, vl.Signature)
+	return out
+}
+
+// validatorListCollectionSemanticHash is the collection counterpart of
+// validatorListSemanticHash. Per-blob fields are concatenated in the
+// order the collection presents them — that order is also what
+// ApplyCollection iterates, so semantically-identical collections hash
+// the same.
+func validatorListCollectionSemanticHash(coll *message.ValidatorListCollection) []byte {
+	out := make([]byte, 0, 4+len(coll.Manifest)+64*len(coll.Blobs))
+	out = appendUint32BE(out, coll.Version)
+	out = appendLengthPrefixed(out, coll.Manifest)
+	for _, b := range coll.Blobs {
+		out = appendLengthPrefixed(out, b.Manifest)
+		out = appendLengthPrefixed(out, b.Blob)
+		out = appendLengthPrefixed(out, b.Signature)
+	}
+	return out
+}
+
+func appendUint32BE(out []byte, v uint32) []byte {
+	var buf [4]byte
+	binary.BigEndian.PutUint32(buf[:], v)
+	return append(out, buf[:]...)
+}
+
+func appendLengthPrefixed(out, data []byte) []byte {
+	out = appendUint32BE(out, uint32(len(data)))
+	out = append(out, data...)
+	return out
 }
 
 // chargePeerForDisposition maps a Disposition's rippled fee tier

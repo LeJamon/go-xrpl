@@ -117,7 +117,14 @@ type SiteState struct {
 	LastSuccess     time.Time
 	LastError       string
 	LastDisposition Disposition
-	RefreshSeconds  int
+	// LastDispositionSet is the sentinel rippled mirrors via
+	// `std::optional<Site::Status>::has_value()` at
+	// ValidatorSite.cpp:690 — `last_refresh_status` is omitted from the
+	// RPC until the first fetch attempt completes. Without the sentinel
+	// the zero-value `Disposition` (== Accepted) would emit a false
+	// "accepted" status before any poll runs.
+	LastDispositionSet bool
+	RefreshSeconds     int
 	// NextRefresh is the wall-clock time at which the next poll attempt
 	// is scheduled. Mirrors rippled's ValidatorSite::Site::nextRefresh
 	// surfaced via `next_refresh_time` in the validator_list_sites RPC.
@@ -171,9 +178,16 @@ type Aggregator struct {
 
 	// onChange is invoked whenever the recomputed trusted set differs
 	// from the previously emitted one. Wired by Components.NewFromConfig
-	// to push into Adaptor.SetTrustedValidators. The callback runs
-	// under the aggregator mutex so implementations MUST NOT call back
-	// into the aggregator from the callback (would deadlock).
+	// to push into Adaptor.SetTrustedValidators.
+	//
+	// LOCK INVARIANT: the callback runs *under* a.mu. Implementations
+	// must not, directly or transitively, call back into the aggregator
+	// (any exported method here re-locks a.mu and would deadlock). The
+	// production wiring satisfies this by routing the call to
+	// Adaptor.SetTrustedValidators, which takes its own lock and does
+	// not reach back into the aggregator. Any future caller that
+	// reschedules work or fans out to other subscribers must hop off
+	// this goroutine before re-entering the aggregator.
 	onChange func(validators []consensus.NodeID, masterKeys [][33]byte)
 
 	// lastEmitted is the most recently published trusted set (master
@@ -228,11 +242,19 @@ func New(cfg Config) (*Aggregator, error) {
 	// rippled ValidatorSite.cpp:83 (`nextRefresh = clock_type::now() +
 	// refreshInterval`).
 	initialNextRefresh := clock().Add(DefaultRefreshInterval)
+	// Seed RefreshSeconds with the default refresh interval so the
+	// `refresh_interval_min` RPC field reports the configured cadence
+	// from boot, before any envelope-supplied override is observed.
+	// Mirrors rippled ValidatorSite.cpp:81 where Site::refreshInterval
+	// is initialised to default_refresh_interval (5 minutes) at
+	// construction and emitted unconditionally in getJson.
+	defaultRefreshSec := int(DefaultRefreshInterval / time.Second)
 	sites := make([]*SiteState, 0, len(cfg.SiteURIs))
 	for _, u := range cfg.SiteURIs {
 		sites = append(sites, &SiteState{
-			URI:         u,
-			NextRefresh: initialNextRefresh,
+			URI:            u,
+			NextRefresh:    initialNextRefresh,
+			RefreshSeconds: defaultRefreshSec,
 		})
 	}
 	logger := cfg.Logger
@@ -351,6 +373,7 @@ func (a *Aggregator) UpdateSiteState(uri string, lastFetched, lastSuccess time.T
 		}
 		s.LastError = lastErr
 		s.LastDisposition = lastDisp
+		s.LastDispositionSet = true
 		if refreshSec > 0 {
 			s.RefreshSeconds = refreshSec
 		}
@@ -417,12 +440,22 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 	// caches the manifest for later use and gives us the current
 	// ephemeral signing key. A revoked manifest invalidates the
 	// publisher entirely.
+	//
+	// Track the cache disposition so revocation only flips publisher
+	// state when the manifest cache actually accepted the revocation.
+	// Mirrors rippled ValidatorList.cpp:1373-1378 — `removePublisherList`
+	// runs only under `revoked && result == ManifestDisposition::accepted`;
+	// a stale revocation (cache already holds a higher-sequence
+	// non-revoked manifest) returns untrusted without clearing state.
+	manifestAccepted := false
 	if a.manifests != nil {
 		switch d := a.manifests.ApplyManifest(parsed); d {
-		case manifest.Accepted, manifest.Stale:
-			// Accepted: fresh manifest installed. Stale: we already
-			// had this or a newer one — either way the cache now has
-			// a current ephemeral key for the publisher.
+		case manifest.Accepted:
+			manifestAccepted = true
+		case manifest.Stale:
+			// Already had this or a newer one — cache state is
+			// unchanged; don't let an old revocation manifest flip
+			// the publisher's status.
 		case manifest.Invalid:
 			return Invalid, pubKey
 		case manifest.BadMasterKey, manifest.BadEphemeralKey:
@@ -435,15 +468,22 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 		if err := parsed.Verify(); err != nil {
 			return Invalid, pubKey
 		}
+		// No cache means every fresh verify is "accepted" for the
+		// purpose of the revocation gate.
+		manifestAccepted = true
 	}
 
 	if parsed.Revoked() {
 		// Rippled returns ListDisposition::untrusted on revocation
 		// (ValidatorList.cpp:1382-1383). Revocations are legitimate
 		// gossip; punishing the forwarding peer would cascade across
-		// every honest hop in the mesh. The side-effect (clearing
-		// publisher contribution + status flip) still runs.
-		a.handleRevocation(pubKey)
+		// every honest hop in the mesh. The state-clearing side effect
+		// only runs when the manifest cache actually accepted the
+		// revocation — mirrors rippled's `revoked && result == accepted`
+		// gate at ValidatorList.cpp:1373.
+		if manifestAccepted {
+			a.handleRevocation(pubKey)
+		}
 		return Untrusted, pubKey
 	}
 
