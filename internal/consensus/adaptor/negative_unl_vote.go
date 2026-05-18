@@ -91,31 +91,39 @@ func (a *Adaptor) GenerateNegativeUNLPseudoTx(prev consensus.Ledger) [][]byte {
 	return blobs
 }
 
-// OnUNLChange notifies the NegativeUNL voter that the operator-trusted
-// validator set has changed at ledger sequence `seq`. `nowTrusted` is
-// the set of validators *added* in this reload — not the full new UNL —
-// matching rippled's `nUnlVote_.newValidators(seq, nowTrusted)` call
-// at RCLConsensus.cpp:1040-1041.
+// OnUNLChange registers validators newly added to the operator-trusted
+// set with the NegativeUNL voter's grace-period table. `upcomingSeq` is
+// the sequence of the round being started (i.e. `prevLedger.Seq() + 1`);
+// `nowTrusted` is the *delta* — validators added since the previous
+// round, NOT the full UNL. Mirrors rippled's preStartRound branch:
 //
-// Forwards to Voter.NewValidators (records added validators for the
-// NewValidatorDisableSkip grace period) and Voter.PurgeNewValidators
-// (drops entries older than the grace window). Mirrors rippled's
-// pairing at NegativeUNLVote.cpp:322-355.
+//	if (prevLgr.ledger_->rules().enabled(featureNegativeUNL) &&
+//	    !nowTrusted.empty())
+//	    nUnlVote_.newValidators(prevLgr.seq() + 1, nowTrusted);
 //
-// No-op when the adaptor was constructed without a Voter (no identity
-// or master keys plumbed in). Safe to call with an empty nowTrusted
-// slice to drive purge-only cycles.
-func (a *Adaptor) OnUNLChange(seq uint32, nowTrusted []consensus.NodeID) {
+// at RCLConsensus.cpp:1041-1043. The caller (engine.startRoundLocked)
+// owns the feature-gate and delta computation, matching rippled where
+// the gate and the `nowTrusted` set both originate outside the voter.
+//
+// Does NOT purge — purge is owned by the voting path inside
+// GenerateNegativeUNLPseudoTx (see NegativeUNLVote.cpp:339-355, called
+// from doVoting only). Calling it here would diverge from rippled and
+// double-run the purge once the engine drives this per round.
+//
+// No-op when `nowTrusted` is empty, or when the adaptor was constructed
+// without a Voter (no identity or master keys plumbed in — fixtures,
+// observer nodes).
+func (a *Adaptor) OnUNLChange(upcomingSeq uint32, nowTrusted []consensus.NodeID) {
+	if len(nowTrusted) == 0 {
+		return
+	}
 	a.mu.Lock()
 	voter := a.negUNLVoter
 	a.mu.Unlock()
 	if voter == nil {
 		return
 	}
-	if len(nowTrusted) > 0 {
-		voter.NewValidators(seq, nowTrusted)
-	}
-	voter.PurgeNewValidators(seq)
+	voter.NewValidators(upcomingSeq, nowTrusted)
 }
 
 // negativeUNLState reads and parses the NegativeUNL SLE from the

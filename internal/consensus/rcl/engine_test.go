@@ -144,6 +144,10 @@ type mockAdaptor struct {
 	flagLedgerPseudoTxs [][]byte
 	negativeUNLPseudoTx [][]byte
 
+	// OnUNLChange calls captured for assertions in the engine wiring
+	// test (TestEngine_StartRound_DrivesOnUNLChange).
+	onUNLChangeCalls []onUNLChangeCall
+
 	// standalone toggles the IsStandalone() return for tests that
 	// exercise rippled's `standalone() || (proposing && !wrongLCL)`
 	// OR-branch at RCLConsensus.cpp:352.
@@ -349,6 +353,22 @@ func (a *mockAdaptor) GenerateNegativeUNLPseudoTx(_ consensus.Ledger) [][]byte {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.negativeUNLPseudoTx
+}
+
+type onUNLChangeCall struct {
+	upcomingSeq uint32
+	nowTrusted  []consensus.NodeID
+}
+
+func (a *mockAdaptor) OnUNLChange(upcomingSeq uint32, nowTrusted []consensus.NodeID) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	added := make([]consensus.NodeID, len(nowTrusted))
+	copy(added, nowTrusted)
+	a.onUNLChangeCalls = append(a.onUNLChangeCalls, onUNLChangeCall{
+		upcomingSeq: upcomingSeq,
+		nowTrusted:  added,
+	})
 }
 
 func (a *mockAdaptor) HasTx(id consensus.TxID) bool {
@@ -628,6 +648,139 @@ func TestEngine_StartRound_Observing(t *testing.T) {
 	if engine.Mode() != consensus.ModeObserving {
 		t.Errorf("Expected Observing mode, got %v", engine.Mode())
 	}
+}
+
+// TestEngine_StartRound_DrivesOnUNLChange pins the wiring that
+// mirrors rippled's NetworkOPs.cpp:2081-2102 → RCLConsensus.cpp:1041-1043
+// pairing: at the head of every consensus round, the engine computes the
+// trusted-set delta since the previous round and forwards the
+// newly-added validators to adaptor.OnUNLChange so the NegativeUNL
+// voter exempts them from ToDisable for NewValidatorDisableSkip ledgers.
+//
+// Without this wiring (issue #423), OnUNLChange was an exposed-but-dead
+// API: any fresh validator could be voted ToDisable before accumulating
+// any validations, defeating rippled's grace-period protection.
+func TestEngine_StartRound_DrivesOnUNLChange(t *testing.T) {
+	prev := &mockLedger{id: consensus.LedgerID{0xAB, 0xCD}, seq: 256}
+	adaptor := newMockAdaptor()
+	adaptor.lastLCL = prev
+	adaptor.ledgers[prev.ID()] = prev
+
+	n1 := consensus.NodeID{0x01}
+	n2 := consensus.NodeID{0x02}
+	n3 := consensus.NodeID{0x03}
+	adaptor.setTrusted([]consensus.NodeID{n1, n2})
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	// First round: prevLedger nil → no OnUNLChange call (matches
+	// production where the first round can't gate on a parent ledger
+	// it hasn't seen yet; rippled's preStartRound is only invoked after
+	// closingInfo has resolved a parent — NetworkOPs.cpp:2070).
+	round1 := consensus.RoundID{Seq: prev.Seq() + 1, ParentHash: prev.ID()}
+	if err := engine.StartRound(round1, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if got := len(adaptor.onUNLChangeCalls); got != 0 {
+		t.Fatalf("no parent ledger → expected 0 OnUNLChange calls, got %d", got)
+	}
+
+	// Second round: install prevLedger, keep the same UNL → the entire
+	// UNL is treated as "added" relative to the nil previousTrustedSet,
+	// matching rippled's first-call behavior where TrustChanges.added
+	// equals the full new UNL (NetworkOPs.cpp:2081 with an empty prior).
+	engine.mu.Lock()
+	engine.prevLedger = prev
+	engine.mu.Unlock()
+	round2 := consensus.RoundID{Seq: prev.Seq() + 1, ParentHash: prev.ID()}
+	if err := engine.StartRound(round2, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if got := len(adaptor.onUNLChangeCalls); got != 1 {
+		t.Fatalf("first round with prevLedger: expected 1 OnUNLChange call, got %d", got)
+	}
+	first := adaptor.onUNLChangeCalls[0]
+	if first.upcomingSeq != round2.Seq {
+		t.Errorf("upcomingSeq: want %d, got %d", round2.Seq, first.upcomingSeq)
+	}
+	if !sameNodeIDSet(first.nowTrusted, []consensus.NodeID{n1, n2}) {
+		t.Errorf("nowTrusted: want {n1,n2}, got %v", first.nowTrusted)
+	}
+
+	// Third round: no UNL change → no OnUNLChange call (rippled's
+	// !nowTrusted.empty() gate at RCLConsensus.cpp:1042).
+	if err := engine.StartRound(round2, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if got := len(adaptor.onUNLChangeCalls); got != 1 {
+		t.Fatalf("unchanged UNL must not trigger a call; got %d total", got)
+	}
+
+	// Fourth round: add n3 → only n3 is forwarded, matching rippled's
+	// TrustChanges.added delta semantics.
+	adaptor.setTrusted([]consensus.NodeID{n1, n2, n3})
+	if err := engine.StartRound(round2, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if got := len(adaptor.onUNLChangeCalls); got != 2 {
+		t.Fatalf("added validator: expected 2 calls total, got %d", got)
+	}
+	second := adaptor.onUNLChangeCalls[1]
+	if !sameNodeIDSet(second.nowTrusted, []consensus.NodeID{n3}) {
+		t.Errorf("delta must be {n3}, got %v", second.nowTrusted)
+	}
+
+	// Fifth round: remove n2 → still no call (rippled only forwards
+	// `added`, never `removed`).
+	adaptor.setTrusted([]consensus.NodeID{n1, n3})
+	if err := engine.StartRound(round2, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if got := len(adaptor.onUNLChangeCalls); got != 2 {
+		t.Fatalf("removals must not trigger OnUNLChange; got %d total", got)
+	}
+}
+
+// TestEngine_StartRound_OnUNLChangeGatedOnFeature pins the
+// featureNegativeUNL gate at RCLConsensus.cpp:1041. When the amendment
+// is disabled on prevLedger, the engine must not drive OnUNLChange
+// regardless of UNL deltas.
+func TestEngine_StartRound_OnUNLChangeGatedOnFeature(t *testing.T) {
+	prev := &mockLedger{id: consensus.LedgerID{0x77, 0x88}, seq: 100}
+	adaptor := newMockAdaptor()
+	adaptor.lastLCL = prev
+	adaptor.ledgers[prev.ID()] = prev
+	adaptor.disabledFeatures = map[string]bool{"NegativeUNL": true}
+	adaptor.setTrusted([]consensus.NodeID{{0x11}, {0x22}})
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	engine.mu.Lock()
+	engine.prevLedger = prev
+	engine.mu.Unlock()
+
+	round := consensus.RoundID{Seq: prev.Seq() + 1, ParentHash: prev.ID()}
+	if err := engine.StartRound(round, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if got := len(adaptor.onUNLChangeCalls); got != 0 {
+		t.Fatalf("featureNegativeUNL disabled: expected 0 calls, got %d", got)
+	}
+}
+
+func sameNodeIDSet(a, b []consensus.NodeID) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := make(map[consensus.NodeID]struct{}, len(a))
+	for _, n := range a {
+		set[n] = struct{}{}
+	}
+	for _, n := range b {
+		if _, ok := set[n]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func TestEngine_OnProposal(t *testing.T) {

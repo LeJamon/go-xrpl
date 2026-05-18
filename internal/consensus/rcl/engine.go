@@ -204,6 +204,19 @@ type Engine struct {
 	// through timerEntry — still observe the broadcast immediately.
 	// Mutated only while e.mu is held.
 	deferBroadcasts int
+
+	// previousTrustedSet is the trusted-validator set as of the previous
+	// startRoundLocked invocation. Used to compute the per-round delta
+	// passed to adaptor.OnUNLChange so the NegativeUNL voter's grace
+	// period covers validators newly added to the UNL. Mirrors the role
+	// of rippled's TrustChanges.added (NetworkOPs.cpp:2081) — there
+	// `validators().updateTrusted()` returns the delta directly; here
+	// the engine derives it from snapshots since goXRPL does not yet
+	// expose a per-round updateTrusted hook on the validator manager.
+	// Nil before the first round; the first round therefore registers
+	// the entire current UNL (matching rippled's empty-prior-set first
+	// round). Mutated only while e.mu is held.
+	previousTrustedSet map[consensus.NodeID]struct{}
 }
 
 // ValidationArchive is the subset of the archive API the consensus engine
@@ -494,6 +507,16 @@ func (e *Engine) StartRound(round consensus.RoundID, proposing bool) error {
 // of the new round's tx-set, and emitting a stale proposal/validation
 // would poison the network's convergence.
 func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering bool) error {
+	// Drive NegativeUNL grace-period bookkeeping. Mirrors rippled's
+	// preStartRound branch at RCLConsensus.cpp:1041-1043: when the
+	// NegativeUNL amendment is enabled on the parent ledger and the
+	// trusted set gained members since the previous round, register the
+	// additions so they are exempt from ToDisable for the next
+	// NewValidatorDisableSkip ledgers. Done up-front so it runs in every
+	// mode (proposing / observing / switchedLedger) — rippled does the
+	// same regardless of validator state.
+	e.driveNegativeUNLNewValidatorsLocked(round.Seq)
+
 	// Determine mode. After a wrongLedger recovery we enter switchedLedger
 	// for exactly one round — not proposing, not validating — even though
 	// we'd otherwise be ModeProposing. The NEXT startRoundLocked call
@@ -604,6 +627,42 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 
 	e.roundCount++
 	return nil
+}
+
+// driveNegativeUNLNewValidatorsLocked snapshots the current trusted set,
+// computes the additions relative to the previous round's snapshot, and
+// invokes adaptor.OnUNLChange when the NegativeUNL amendment is enabled
+// on the parent ledger and the delta is non-empty. Updates the snapshot
+// in-place so the next round sees the new baseline.
+//
+// Mirrors rippled's NetworkOPs.cpp:2081-2102 → RCLConsensus.cpp:1041-1043
+// pairing: NetworkOPs computes TrustChanges.added per round via
+// updateTrusted, then passes it through startRound → preStartRound →
+// nUnlVote_.newValidators. goXRPL has no per-round updateTrusted hook on
+// the validator manager yet, so the engine derives the delta from
+// snapshots taken at startRoundLocked time. Caller must hold e.mu.
+func (e *Engine) driveNegativeUNLNewValidatorsLocked(upcomingSeq uint32) {
+	if e.prevLedger == nil {
+		return
+	}
+	if !e.adaptor.IsFeatureEnabledOnLedger(e.prevLedger, "NegativeUNL") {
+		return
+	}
+	current := e.adaptor.GetTrustedValidators()
+	var added []consensus.NodeID
+	for _, n := range current {
+		if _, seen := e.previousTrustedSet[n]; !seen {
+			added = append(added, n)
+		}
+	}
+	if len(added) > 0 {
+		e.adaptor.OnUNLChange(upcomingSeq, added)
+	}
+	next := make(map[consensus.NodeID]struct{}, len(current))
+	for _, n := range current {
+		next[n] = struct{}{}
+	}
+	e.previousTrustedSet = next
 }
 
 // OnProposal handles an incoming proposal from a peer. originPeer is

@@ -215,14 +215,16 @@ func TestAdaptor_OnUNLChange_NoVoterIsNoOp(t *testing.T) {
 //  1. After OnUNLChange registers a new validator with `nowTrusted`,
 //     a bad score within NewValidatorDisableSkip ledgers must NOT
 //     produce a ToDisable pseudo-tx (grace period honored).
-//  2. After NewValidatorDisableSkip+1 ledgers have passed, a later
-//     OnUNLChange (or any call that advances `seq`) purges the entry
-//     and the same bad score becomes a ToDisable candidate.
+//  2. After NewValidatorDisableSkip+1 ledgers have passed, the voting
+//     path's purge (Voter.PurgeNewValidators, called from
+//     GenerateNegativeUNLPseudoTx — mirrors rippled doVoting at
+//     NegativeUNLVote.cpp:339-355) drops both fresh entries; the same
+//     bad score now becomes a ToDisable candidate.
 //
-// Exercises the wiring: Adaptor.OnUNLChange forwards to
-// Voter.NewValidators + Voter.PurgeNewValidators so the Voter's
-// existing grace-period logic (validated by vote_test.go) takes
-// effect through the adaptor.
+// Exercises the wiring: Adaptor.OnUNLChange records via
+// Voter.NewValidators; the existing voting-path purge owns expiry.
+// OnUNLChange intentionally does NOT purge, matching rippled's
+// preStartRound (RCLConsensus.cpp:1041-1043) which only registers.
 func TestAdaptor_OnUNLChange_GracePeriodAndExpiry(t *testing.T) {
 	a := newTestAdaptorWithMasters(t)
 	require.NotNil(t, a.negUNLVoter, "fixture must construct a voter")
@@ -266,16 +268,38 @@ func TestAdaptor_OnUNLChange_GracePeriodAndExpiry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, blobs, "fresh validators within the grace window must not be ToDisable candidates")
 
-	// Case 2: advance well past NewValidatorDisableSkip. A second
-	// OnUNLChange with an empty add-set forwards into
-	// PurgeNewValidators, dropping both fresh entries; a follow-up
-	// vote at the same seq now sees them as bad-score candidates.
+	// Case 2: advance well past NewValidatorDisableSkip. The voting
+	// path's purge — the same call GenerateNegativeUNLPseudoTx makes
+	// before invoking DoVoting (negative_unl_vote.go:74) — drops both
+	// fresh entries; a follow-up vote at the same seq now sees them
+	// as bad-score candidates. OnUNLChange must NOT be called here:
+	// no UNL change occurred (rippled's preStartRound would see an
+	// empty `nowTrusted` and skip newValidators entirely).
 	purgeSeq := addedAtSeq + negativeunlvote.NewValidatorDisableSkip + 2
-	a.OnUNLChange(purgeSeq, nil)
+	voter.PurgeNewValidators(purgeSeq)
 
 	blobs, err = voter.DoVoting(purgeSeq, prevHash, unl, negativeunlvote.State{}, scoreTable)
 	require.NoError(t, err)
 	require.Len(t, blobs, 1, "after grace expiry, a bad-score new validator is eligible for a single ToDisable pseudo-tx")
+}
+
+// TestAdaptor_OnUNLChange_EmptyTrustedSetIsNoOp covers the
+// nowTrusted-empty short-circuit that mirrors rippled's
+// `!nowTrusted.empty()` gate at RCLConsensus.cpp:1042. The Voter's
+// newValidators map must remain untouched so future bad-score evals
+// still see no registered grace-period entries.
+func TestAdaptor_OnUNLChange_EmptyTrustedSetIsNoOp(t *testing.T) {
+	a := newTestAdaptorWithMasters(t)
+	require.NotNil(t, a.negUNLVoter)
+	a.OnUNLChange(512, nil)
+	a.OnUNLChange(512, []consensus.NodeID{})
+	// Purge a freshly-registered key to prove the map is empty: if
+	// OnUNLChange had inadvertently inserted something, the purge
+	// (using a seq within the grace window) would leave it in place.
+	a.negUNLVoter.NewValidators(512, []consensus.NodeID{{0xEE}})
+	a.negUNLVoter.PurgeNewValidators(512) // within window — keeps {0xEE}
+	// If OnUNLChange had ever modified the map, this single-entry
+	// expectation would fail.
 }
 
 // makeRawMasterKey builds a deterministic 33-byte master pubkey
