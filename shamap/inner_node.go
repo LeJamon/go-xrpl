@@ -14,14 +14,8 @@ import (
 
 const BranchFactor = 16
 
-// zeroHash is the package-wide zero [32]byte used to fill empty
-// branches in the hash and serialise paths. Hoisted out of the hot
-// path so updateHashUnsafe / SerializeWithPrefix don't reallocate
-// `make([]byte, 32)` on every call.
 var zeroHash [32]byte
 
-// fullInnerSerializedSize is the wire/serialise size of a full inner
-// node payload: HashPrefix(4) + 16 * 32 child hashes.
 const fullInnerSerializedSize = 4 + BranchFactor*32
 
 var (
@@ -138,28 +132,17 @@ func (n *InnerNode) SetChildDirect(index int, child Node) {
 
 // LoadChild returns the child pointer, stored hash, and isBranch bit for
 // the given branch under a single read-lock acquisition.
-// Used by SHAMap.descend to avoid two separate locked reads on the hot
-// traversal path while keeping access correctly synchronised.
-// Index must be in [0, BranchFactor); callers derive it from a 4-bit
-// key nibble, so an out-of-range index is a programming error and
-// will panic on the slice deref — matching rippled's XRPL_ASSERT.
+// Index must be in [0, BranchFactor); out-of-range panics on slice deref.
 func (n *InnerNode) LoadChild(index int) (Node, [32]byte, bool) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	return n.children[index], n.hashes[index], n.isBranch&(1<<index) != 0
 }
 
-// SetChildIfNil atomically attaches child at the given branch iff that
-// slot is currently nil, and returns the resulting (possibly racing)
-// child. This is the lock-correct primitive for descend()'s lazy-load
-// path: concurrent readers under the SHAMap RLock can race to load the
-// same backed child without losing work — the winner's deserialised
-// node is installed, the loser observes it and returns it. Without this
-// primitive a plain SetChildDirect under inner.mu still races with
-// unlocked ChildUnsafe readers because the InnerNode mutex provides no
-// guarantee to readers that bypass it.
-// Same index contract as LoadChild — out-of-range is a programming
-// error and will panic on the slice deref.
+// SetChildIfNil attaches child at index iff that slot is currently nil and
+// returns the resulting child. Concurrent readers racing to lazy-load the
+// same backed child observe a single winning installation.
+// Same index contract as LoadChild; out-of-range panics on slice deref.
 func (n *InnerNode) SetChildIfNil(index int, child Node) Node {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -194,12 +177,8 @@ func (n *InnerNode) UpdateHash() error {
 }
 
 // updateHashUnsafe updates hash without locking (caller must hold lock).
-// Streams directly into the SHA-512 hasher rather than accumulating a
-// `[][]byte` slice — this is called on every Put/Delete for every
-// inner on the path so the slice churn used to dominate the profile.
 func (n *InnerNode) updateHashUnsafe() error {
 	if n.isBranch == 0 {
-		// Empty node - hash is zero.
 		n.hash = [32]byte{}
 		return nil
 	}
@@ -212,7 +191,7 @@ func (n *InnerNode) updateHashUnsafe() error {
 				childHash := child.Hash()
 				h.Write(childHash[:])
 			} else {
-				// Hash-only branch (lazy/backed) — use stored hash.
+				// Hash-only (lazy/backed) branch.
 				h.Write(n.hashes[i][:])
 			}
 		} else {
@@ -228,15 +207,14 @@ func (n *InnerNode) SerializeForWire() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 
-	// BranchCount takes the read-lock again — call the unlocked variant.
+	// Avoid BranchCount(): it would re-acquire the read lock.
 	branchCount := bits.OnesCount16(n.isBranch)
 	if branchCount == 0 {
 		return nil, ErrEmptyNonRoot
 	}
 
 	if branchCount < 12 {
-		// Compressed format: only serialize non-empty branches.
-		// Format: [Hash32][Position1] × N + [WireType].
+		// Compressed: [Hash32][Position1] × N + [WireType].
 		result := make([]byte, 0, branchCount*33+1)
 		for i := 0; i < BranchFactor; i++ {
 			if n.isBranch&(1<<i) != 0 {
@@ -248,21 +226,19 @@ func (n *InnerNode) SerializeForWire() ([]byte, error) {
 		return result, nil
 	}
 
-	// Full format: 16 × 32-byte hashes + WireType.
+	// Full: 16 × 32-byte hashes + WireType.
 	result := make([]byte, BranchFactor*32+1)
 	for i := 0; i < BranchFactor; i++ {
 		off := i * 32
 		if n.isBranch&(1<<i) != 0 {
 			copy(result[off:off+32], n.hashes[i][:])
 		}
-		// Empty branch: leave the zero bytes in place.
 	}
 	result[BranchFactor*32] = protocol.WireTypeInner
 	return result, nil
 }
 
 // SerializeWithPrefix serializes with type prefix for hashing and storage.
-// Result is exactly fullInnerSerializedSize bytes (4 prefix + 16 × 32 hashes).
 func (n *InnerNode) SerializeWithPrefix() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -278,7 +254,6 @@ func (n *InnerNode) SerializeWithPrefix() ([]byte, error) {
 			off := 4 + i*32
 			copy(result[off:off+32], n.hashes[i][:])
 		}
-		// Empty branch: leave zero bytes in place.
 	}
 	return result, nil
 }
@@ -500,12 +475,9 @@ func (n *InnerNode) HasChildren() bool {
 	return !n.IsEmpty()
 }
 
-// ReleaseChildren drops the in-memory child pointers, retaining only
-// the per-branch hashes so the children can be lazy-reloaded from a
-// NodeStore on next access. Used after FlushDirty to allow GC to
-// reclaim the freshly-flushed subtree. This is intentionally a method
-// rather than direct field access so callers cannot bypass the inner
-// mutex or accidentally clear hashes alongside children.
+// ReleaseChildren drops in-memory child pointers while retaining per-branch
+// hashes, allowing GC to reclaim a freshly-flushed subtree that will be
+// lazy-reloaded from the NodeStore on next access.
 func (n *InnerNode) ReleaseChildren() {
 	n.mu.Lock()
 	for i := 0; i < BranchFactor; i++ {

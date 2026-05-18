@@ -386,12 +386,8 @@ func TestDatabaseConfig(t *testing.T) {
 	})
 }
 
-// TestCacheIsolation pins the Node immutability contract at the cache
-// boundary. Before the fix, Cache.Put stored the caller's *Node by
-// reference, so a later mutation of the original Data slice silently
-// corrupted every reader the cache subsequently handed the same
-// pointer to. The fix takes a defensive deep copy on Put so subsequent
-// caller-side mutations are invisible to other readers.
+// TestCacheIsolation verifies Cache.Put deep-copies on insert so
+// caller-side mutations of Data cannot bleed into the cached entry.
 func TestCacheIsolation(t *testing.T) {
 	cache := nodestore.NewCache(8, time.Minute)
 
@@ -402,8 +398,6 @@ func TestCacheIsolation(t *testing.T) {
 	}
 	cache.Put(original)
 
-	// Mutate the caller's buffer after Put. The cache must not observe
-	// the mutation.
 	original.Data[0] = 0xFF
 	original.Data[1] = 0xFF
 
@@ -419,10 +413,9 @@ func TestCacheIsolation(t *testing.T) {
 	}
 }
 
-// TestCacheConcurrentReadersImmutable verifies that two readers
-// cache-hitting on the same hash see a stable Data buffer for the
-// duration of their reads. Combined with the documented immutability
-// contract this is the property NodeStore consumers depend on.
+// TestCacheConcurrentReadersImmutable verifies two readers hitting the
+// same hash see identical Data and that Cache.Put did not retain the
+// caller's slice by reference.
 func TestCacheConcurrentReadersImmutable(t *testing.T) {
 	cache := nodestore.NewCache(8, time.Minute)
 	node := &nodestore.Node{
@@ -441,10 +434,6 @@ func TestCacheConcurrentReadersImmutable(t *testing.T) {
 		t.Fatal("expected cache hit (b)")
 	}
 
-	// The two readers can legitimately alias the same entry — the
-	// contract says they must not mutate it. Verify both see identical
-	// data and that the underlying buffer is not the caller's original
-	// slice (Cache.Put took ownership via Clone).
 	for i := range node.Data {
 		if a.Data[i] != b.Data[i] || a.Data[i] != node.Data[i] {
 			t.Fatalf("readers disagree at byte %d: a=%#x b=%#x orig=%#x", i, a.Data[i], b.Data[i], node.Data[i])

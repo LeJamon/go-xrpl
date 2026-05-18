@@ -10,10 +10,9 @@ import (
 // Format: [nodeType:1][ledgerSeq:4] = 5 bytes
 const nodeEncodingHeaderSize = 5
 
-// encodeBufPool amortises the per-Store / per-StoreBatch allocation of
-// the encoded payload buffer. Each backend Set copies the slice
-// internally, so callers may return the buffer immediately via
-// releaseEncodeBuf.
+// encodeBufPool amortises the per-Store encoded-payload allocation.
+// Backends are required to copy the value into their batch before Put
+// returns, so callers may release the buffer immediately.
 var encodeBufPool = sync.Pool{
 	New: func() any {
 		buf := make([]byte, 0, 1024)
@@ -21,19 +20,14 @@ var encodeBufPool = sync.Pool{
 	},
 }
 
-// encodeBufMaxRetainBytes caps the size of buffers held in the pool so
-// a single pathological large payload does not pin oversized buffers
-// for the rest of the process lifetime.
+// encodeBufMaxRetainBytes bounds the buffer size retained in the pool so
+// one pathological payload cannot pin oversized buffers indefinitely.
 const encodeBufMaxRetainBytes = 64 << 10
 
-// acquireEncodeBuf returns a buffer sized to exactly size bytes, drawn
-// from the pool when possible.
 func acquireEncodeBuf(size int) []byte {
 	p := encodeBufPool.Get().(*[]byte)
 	buf := *p
 	if cap(buf) < size {
-		// Discard the under-sized pooled buffer; the pool will get a
-		// fresh one when the caller releases.
 		encodeBufPool.Put(p)
 		return make([]byte, size)
 	}
@@ -42,8 +36,6 @@ func acquireEncodeBuf(size int) []byte {
 	return buf[:size]
 }
 
-// releaseEncodeBuf returns a buffer to the pool for reuse. Safe to
-// call with a buffer that came from acquireEncodeBuf or a fresh make.
 func releaseEncodeBuf(buf []byte) {
 	if buf == nil || cap(buf) == 0 || cap(buf) > encodeBufMaxRetainBytes {
 		return
@@ -53,10 +45,9 @@ func releaseEncodeBuf(buf []byte) {
 }
 
 // encodeNodeData serializes a node for storage.
-// Format: [nodeType:1][ledgerSeq:4][data:N]
-// The returned buffer may come from a sync.Pool — callers MUST treat
-// it as borrowed and call releaseEncodeBuf once the backend Set/Put
-// returns (Set copies the value into the batch immediately).
+// Format: [nodeType:1][ledgerSeq:4][data:N].
+// The returned buffer is borrowed from a sync.Pool; callers MUST call
+// releaseEncodeBuf after the backend Set/Put returns.
 func encodeNodeData(n *Node) []byte {
 	buf := acquireEncodeBuf(nodeEncodingHeaderSize + len(n.Data))
 	buf[0] = byte(n.Type)

@@ -168,46 +168,32 @@ func NewFromRootHash(mapType Type, rootHash [32]byte, family Family) (*SHAMap, e
 	return sm, nil
 }
 
-// descend is a context.Background() wrapper around descendCtx. Used by
-// the many internal call sites that pre-date Family ctx threading and
-// don't carry a ctx of their own; mutator paths and compare/iterate
-// helpers use this form.
 func (sm *SHAMap) descend(inner *InnerNode, branch int) (Node, error) {
 	return sm.descendCtx(context.Background(), inner, branch)
 }
 
-// descendCtx returns the child node at the given branch of an inner
-// node. For backed maps, if the child pointer is nil but the hash is
-// set, the node is fetched from the Family and deserialized.
+// descendCtx returns the child node at the given branch of an inner node.
+// For backed maps, if the child pointer is nil but the hash is set, the
+// node is fetched from the Family and deserialized.
 //
-// descendCtx is safe to call from callers holding only the SHAMap
-// RLock: every children/hashes access goes through InnerNode.LoadChild
-// (read-locked) and the lazy attach uses SetChildIfNil so concurrent
-// readers racing on the same branch all return the same installed
-// child rather than overwriting one another. Each SHAMap still gets
-// its own deserialised subtree — there is no sharing with other
-// SHAMap instances.
-//
-// ctx is forwarded to Family.Fetch so a slow Pebble probe is
-// cancellable from the calling RPC/peer/sync goroutine.
+// Safe to call while holding only the SHAMap RLock: all child/hash access
+// goes through InnerNode.LoadChild and the lazy attach uses SetChildIfNil,
+// so concurrent readers racing on the same branch all return the same
+// installed child. Each SHAMap retains its own deserialised subtree.
 func (sm *SHAMap) descendCtx(ctx context.Context, inner *InnerNode, branch int) (Node, error) {
-	// Fast path: child already loaded in memory.
 	child, hash, hasBranch := inner.LoadChild(branch)
 	if child != nil {
 		return child, nil
 	}
 
-	// Not backed: nothing to lazy-load.
 	if !sm.backed || sm.family == nil {
 		return nil, nil
 	}
 
-	// Empty branch — nothing to load.
 	if !hasBranch || isZeroHash(hash) {
 		return nil, nil
 	}
 
-	// Fetch from store.
 	data, err := sm.family.Fetch(ctx, hash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch child node %x: %w", hash[:8], err)
@@ -216,15 +202,14 @@ func (sm *SHAMap) descendCtx(ctx context.Context, inner *InnerNode, branch int) 
 		return nil, fmt.Errorf("child node %x not found in store", hash[:8])
 	}
 
-	// Deserialize (fresh copy — not shared with other SHAMaps).
+	// Fresh deserialised copy — not shared across SHAMap instances.
 	node, err := DeserializeFromPrefix(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to deserialize child node: %w", err)
 	}
 
-	// Race-safe attach: if another reader installed a child for this
-	// branch while we were fetching, return their copy and let ours be
-	// garbage-collected.
+	// If another reader installed a child while we were fetching, return
+	// theirs and let ours be GC'd.
 	return inner.SetChildIfNil(branch, node), nil
 }
 
@@ -343,7 +328,6 @@ func (s *NodeStack) Len() int {
 }
 
 // walkToKey traverses the tree toward a specific key.
-// ctx is forwarded to descend() so backed-map traversals are cancellable.
 func (sm *SHAMap) walkToKey(ctx context.Context, key [32]byte, stack *NodeStack) (Node, error) {
 	if stack != nil && !stack.IsEmpty() {
 		stack.Clear()
@@ -391,9 +375,6 @@ func (sm *SHAMap) walkToKey(ctx context.Context, key [32]byte, stack *NodeStack)
 }
 
 // findItem returns the item with the specified key, or nil if not found.
-// Uses context.Background() — the public Get/Has APIs do not (yet)
-// expose a context-aware variant, so cancellation only kicks in for
-// callers that traverse via ForEachCtx and friends.
 func (sm *SHAMap) findItem(key [32]byte) (*Item, error) {
 	node, err := sm.walkToKey(context.Background(), key, nil)
 	if err != nil {
@@ -655,8 +636,7 @@ func (sm *SHAMap) putItemUnsafe(item *Item) error {
 }
 
 // walkToKeyForDirty walks toward a key but doesn't include the final
-// leaf in the stack. Mutator (Put/Delete) entry points don't expose a
-// ctx today, so descend uses context.Background() here.
+// leaf in the stack.
 func (sm *SHAMap) walkToKeyForDirty(key [32]byte, stack *NodeStack) (Node, error) {
 	if stack != nil && !stack.IsEmpty() {
 		stack.Clear()

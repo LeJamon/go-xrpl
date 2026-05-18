@@ -7,15 +7,11 @@ import (
 	"time"
 )
 
-// asyncWorkerLimit caps the number of goroutines spawned by
-// FetchAsync / StoreAsync per Database. Without this cap a hostile or
-// buggy caller could fan out goroutines unboundedly by dropping the
-// result channel before reading. We use a chan-of-tokens as a counting
-// semaphore; the async call blocks (briefly) until a token is
-// available.
+// asyncWorkerLimit caps goroutines spawned by FetchAsync/StoreAsync per
+// Database so a caller dropping the result channel cannot fan-out
+// unboundedly.
 const asyncWorkerLimit = 64
 
-// newAsyncSem builds a token-bucket of capacity asyncWorkerLimit.
 func newAsyncSem() chan struct{} {
 	return make(chan struct{}, asyncWorkerLimit)
 }
@@ -25,7 +21,7 @@ type DatabaseImpl struct {
 	backend       Backend
 	cache         *Cache
 	negativeCache *NegativeCache
-	asyncSem      chan struct{} // bounded goroutine pool for Async APIs
+	asyncSem      chan struct{}
 	stats         struct {
 		reads             uint64
 		cacheHits         uint64
@@ -177,14 +173,9 @@ func (d *DatabaseImpl) Fetch(ctx context.Context, hash Hash256) (*Node, error) {
 	return node, nil
 }
 
-// FetchBatch retrieves multiple nodes efficiently.
-//
-// Cache + negative-cache lookups are batched into the first pass; only
-// the remaining hashes are forwarded to the backend in a single
-// FetchBatch call (which on Pebble probes under a consistent snapshot).
-// The previous implementation forwarded every hash to the backend and
-// missed cache entirely — a 30%+ wasted-IO regression on warm sync
-// paths.
+// FetchBatch retrieves multiple nodes, satisfying as many as possible
+// from the positive/negative caches before forwarding misses to the
+// backend in a single FetchBatch call.
 func (d *DatabaseImpl) FetchBatch(ctx context.Context, hashes []Hash256) ([]*Node, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -248,10 +239,8 @@ func (d *DatabaseImpl) FetchBatch(ctx context.Context, hashes []Hash256) ([]*Nod
 	return results, nil
 }
 
-// FetchAsync retrieves a node asynchronously. The number of in-flight
-// async workers is bounded by asyncWorkerLimit; if the limit is
-// reached the call blocks until a slot is available or ctx is
-// cancelled.
+// FetchAsync retrieves a node asynchronously. Blocks (or returns ctx.Err)
+// if asyncWorkerLimit in-flight workers are already running.
 func (d *DatabaseImpl) FetchAsync(ctx context.Context, hash Hash256) <-chan Result {
 	resultCh := make(chan Result, 1)
 	select {
@@ -373,7 +362,7 @@ func (d *DatabaseImpl) Close() error {
 	return lastErr
 }
 
-// StoreAsync stores a node asynchronously. Bounded by asyncWorkerLimit.
+// StoreAsync stores a node asynchronously, bounded by asyncWorkerLimit.
 func (d *DatabaseImpl) StoreAsync(ctx context.Context, node *Node) <-chan error {
 	result := make(chan error, 1)
 	select {

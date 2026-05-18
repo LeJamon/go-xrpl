@@ -35,14 +35,8 @@ func (f *DefaultSyncFilter) ShouldFetch(nodeHash [32]byte) bool {
 	return true
 }
 
-// CachingSyncFilter wraps another filter and caches results to avoid
-// repeated lookups against a slow inner filter.
-//
-// The previous implementation populated until full and then refused
-// new entries forever — cold hashes encountered after warm-up never
-// got cached, defeating the whole point of the cache on long-running
-// syncs. This is now a proper bounded LRU: when full, the least-
-// recently-used entry is evicted to make room for the new one.
+// CachingSyncFilter wraps another filter with a bounded LRU cache so a slow
+// inner filter is not consulted repeatedly for the same node.
 type CachingSyncFilter struct {
 	mu      sync.Mutex
 	inner   SyncFilter

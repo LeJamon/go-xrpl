@@ -168,13 +168,9 @@ func (rd *RotatingDatabase) IsOpen() bool {
 	return atomic.LoadInt64(&rd.open) != 0
 }
 
-// Fetch retrieves a node by its hash.
-// It tries the primary backend first, then the rotating backends from newest to oldest.
-//
-// The RLock is held for the entire fetch path so a concurrent Rotate
-// cannot Close() a rotating backend out from under us. sync.RWMutex
-// gives a pending writer priority over new readers, so Rotate is not
-// starved — it simply waits for the in-flight fetches to drain.
+// Fetch tries the primary backend first, then the rotating backends from
+// newest to oldest. rd.mu is held for the entire fetch path so a
+// concurrent Rotate cannot Close() a backend out from under us.
 func (rd *RotatingDatabase) Fetch(key Hash256) (*Node, Status) {
 	if !rd.IsOpen() {
 		return nil, BackendError
@@ -214,10 +210,8 @@ func (rd *RotatingDatabase) Fetch(key Hash256) (*Node, Status) {
 	return nil, NotFound
 }
 
-// FetchBatch retrieves multiple nodes efficiently.
-//
-// As with Fetch, rd.mu is held for the entire batch so Rotate cannot
-// Close() a backend mid-loop.
+// FetchBatch retrieves multiple nodes. rd.mu is held for the entire
+// batch so Rotate cannot Close() a backend mid-loop.
 func (rd *RotatingDatabase) FetchBatch(keys []Hash256) ([]*Node, Status) {
 	if !rd.IsOpen() {
 		return nil, BackendError

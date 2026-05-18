@@ -8,9 +8,7 @@ import (
 	"time"
 )
 
-// cacheShardCount is the number of independent shards.  Power of two so
-// the per-key shard selector is a cheap mask.  Hash256 keys are
-// well-distributed by construction so any one byte makes a good index.
+// cacheShardCount must be a power of two so shardFor can mask cheaply.
 const cacheShardCount = 16
 
 // cacheEntry represents an entry in the LRU cache.
@@ -26,49 +24,40 @@ func (e *cacheEntry) isExpired() bool {
 	return time.Now().After(e.expiresAt)
 }
 
-// cacheShard is one stripe of the sharded cache. Each shard owns its
-// own LRU and mutex so Get/Put on disjoint hashes do not contend.
+// cacheShard is one stripe of the sharded cache. Each shard owns its own
+// LRU and mutex so Get/Put on disjoint hashes do not contend.
 type cacheShard struct {
 	mu sync.Mutex
 
 	items map[Hash256]*list.Element
 	lru   *list.List
 
-	// Per-shard maxItems is the *whole* cache's maxSize divided by
-	// cacheShardCount, rounded up. We do not enforce a global cap.
+	// maxItems is the whole cache's maxSize divided by cacheShardCount
+	// (rounded up); no global cap is enforced.
 	maxItems int
 
 	currentSize  int
 	currentBytes int
 }
 
-// Cache implements a sharded LRU cache with TTL support for NodeStore.
+// Cache is a sharded LRU cache with TTL support for NodeStore.
 //
-// Before the sharding refactor every Get took a single write-lock to
-// bump the LRU position, which serialised every cache read across the
-// entire NodeStore. With cacheShardCount stripes a Get only contends
-// with concurrent Get/Put on the same shard, reducing the critical
-// section by roughly cacheShardCount in steady state.
-//
-// Read contract: the *Node returned by Get aliases the shard's entry
-// and is shared with every other reader; per the Node contract it
-// MUST NOT be mutated.
+// The *Node returned by Get aliases the shard's entry and is shared with
+// every other reader. Per the Node contract it MUST NOT be mutated;
+// callers that need to mutate must Clone() first.
 type Cache struct {
 	shards [cacheShardCount]*cacheShard
 
-	// maxSize / ttl are read-many, write-rare; protected by configMu.
 	configMu sync.RWMutex
 	maxSize  int
 	ttl      time.Duration
 
-	// Aggregate counters tracked lock-free.
 	hits        atomic.Uint64
 	misses      atomic.Uint64
 	evictions   atomic.Uint64
 	expirations atomic.Uint64
 }
 
-// NewCache creates a new sharded LRU cache.
 func NewCache(maxSize int, ttl time.Duration) *Cache {
 	c := &Cache{
 		maxSize: maxSize,
@@ -88,17 +77,13 @@ func NewCache(maxSize int, ttl time.Duration) *Cache {
 	return c
 }
 
-// shardFor returns the shard responsible for the given hash.
 func (c *Cache) shardFor(h Hash256) *cacheShard {
 	return c.shards[int(h[0])&(cacheShardCount-1)]
 }
 
-// Get retrieves a node from the cache.
-// Returns the node and true if found, nil and false otherwise.
-//
-// The returned *Node aliases the cache entry and is shared with every
-// other reader. Per the Node contract it MUST NOT be mutated; callers
-// that need to modify the data must Clone() first.
+// Get returns the cached *Node and true on hit, (nil, false) otherwise.
+// The returned *Node aliases the cache entry; see the Cache doc for the
+// no-mutation contract.
 func (c *Cache) Get(hash Hash256) (*Node, bool) {
 	s := c.shardFor(hash)
 	s.mu.Lock()
@@ -125,12 +110,8 @@ func (c *Cache) Get(hash Hash256) (*Node, bool) {
 	return node, true
 }
 
-// Put stores a node in the cache.
-//
-// The cache takes a defensive deep copy so that subsequent mutations of
-// the caller's *Node — or of the buffer the backend decoder allocated —
-// cannot bleed into the entry returned to other readers. From this
-// point on the entry is owned by the cache and treated as immutable.
+// Put stores a defensive deep copy of node. The cached entry is
+// thereafter treated as immutable and shared with all readers.
 func (c *Cache) Put(node *Node) {
 	if node == nil {
 		return
@@ -212,8 +193,7 @@ func (c *Cache) Sweep() int {
 				removed++
 				element = next
 			} else {
-				// Entries are ordered by insertion time; once we hit a
-				// fresh entry the rest are fresher still.
+				// LRU is insertion-ordered: a fresh tail implies a fresher head.
 				break
 			}
 		}
@@ -242,7 +222,6 @@ func (c *Cache) Stats() CacheStats {
 	}
 }
 
-// sumSizes aggregates per-shard size counters under each shard's lock.
 func (c *Cache) sumSizes() (int, int) {
 	size, bytes := 0, 0
 	for _, s := range c.shards {
@@ -298,8 +277,7 @@ func (c *Cache) SetMaxSize(maxSize int) {
 	}
 }
 
-// removeElementLocked removes an element from this shard.
-// Caller must hold s.mu.
+// removeElementLocked removes element. Caller must hold s.mu.
 func (s *cacheShard) removeElementLocked(element *list.Element) {
 	entry := element.Value.(*cacheEntry)
 	delete(s.items, entry.key)
@@ -308,9 +286,8 @@ func (s *cacheShard) removeElementLocked(element *list.Element) {
 	s.currentBytes -= entry.size
 }
 
-// evictOldestLocked removes the oldest (least recently used) entry
-// from this shard. Caller must hold s.mu. Returns true iff an entry
-// was evicted.
+// evictOldestLocked evicts the LRU entry; returns false on empty shard.
+// Caller must hold s.mu.
 func (s *cacheShard) evictOldestLocked() bool {
 	element := s.lru.Back()
 	if element == nil {

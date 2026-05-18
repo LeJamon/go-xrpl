@@ -6,15 +6,6 @@ import (
 )
 
 // TreeNodeCache provides an LRU cache for frequently accessed SHAMap nodes.
-// This improves performance by avoiding repeated deserialization and hash computation
-// for nodes that are accessed multiple times during tree operations.
-//
-// Implementation note: the previous version used container/list under
-// a sync.RWMutex with the lock held in write mode on every Get to
-// bump the LRU position. That serialised every read across the whole
-// cache. The new implementation uses a typed intrusive linked list
-// (no per-Element heap alloc, no any-typed Value assertion) and
-// atomic hit/miss counters so Stats does not contend with Get/Put.
 type TreeNodeCache struct {
 	mu      sync.Mutex
 	maxSize int
@@ -25,16 +16,11 @@ type TreeNodeCache struct {
 	misses atomic.Uint64
 }
 
-// NewTreeNodeCache creates a new TreeNodeCache with the specified maximum size.
-// The cache uses an LRU eviction policy.
-//
-// Parameters:
-//   - maxSize: maximum number of nodes to cache (must be > 0)
-//
-// Returns a new TreeNodeCache instance.
+// NewTreeNodeCache returns an LRU cache with the given capacity.
+// A non-positive maxSize is replaced by a default.
 func NewTreeNodeCache(maxSize int) *TreeNodeCache {
 	if maxSize <= 0 {
-		maxSize = 1024 // Default size
+		maxSize = 1024
 	}
 	return &TreeNodeCache{
 		maxSize: maxSize,
@@ -43,9 +29,8 @@ func NewTreeNodeCache(maxSize int) *TreeNodeCache {
 	}
 }
 
-// Get retrieves a node from the cache by its hash.
-// Returns the node if found, nil otherwise.
-// This operation moves the accessed node to the front of the LRU list.
+// Get returns the cached node for hash, or nil if absent. On a hit the
+// entry is moved to the front of the LRU list.
 func (c *TreeNodeCache) Get(hash [32]byte) Node {
 	c.mu.Lock()
 	elem, found := c.items[hash]
@@ -61,9 +46,8 @@ func (c *TreeNodeCache) Get(hash [32]byte) Node {
 	return node
 }
 
-// Put adds a node to the cache.
-// If the cache is full, the least recently used node is evicted.
-// If a node with the same hash already exists, it is updated and moved to front.
+// Put inserts node under hash, evicting the LRU entry when at capacity.
+// A nil node is a no-op.
 func (c *TreeNodeCache) Put(hash [32]byte, node Node) {
 	if node == nil {
 		return
@@ -92,7 +76,6 @@ func (c *TreeNodeCache) Put(hash [32]byte, node Node) {
 	}
 }
 
-// Evict removes a specific node from the cache.
 func (c *TreeNodeCache) Evict(hash [32]byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -103,7 +86,6 @@ func (c *TreeNodeCache) Evict(hash [32]byte) {
 	}
 }
 
-// Clear removes all entries from the cache.
 func (c *TreeNodeCache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -111,19 +93,16 @@ func (c *TreeNodeCache) Clear() {
 	c.lru = newLRUList[[32]byte, Node]()
 }
 
-// Size returns the current number of entries in the cache.
 func (c *TreeNodeCache) Size() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.lru.len
 }
 
-// MaxSize returns the maximum capacity of the cache.
 func (c *TreeNodeCache) MaxSize() int {
 	return c.maxSize
 }
 
-// Stats returns cache statistics.
 func (c *TreeNodeCache) Stats() (hits, misses uint64, size int) {
 	c.mu.Lock()
 	size = c.lru.len
@@ -131,7 +110,7 @@ func (c *TreeNodeCache) Stats() (hits, misses uint64, size int) {
 	return c.hits.Load(), c.misses.Load(), size
 }
 
-// HitRate returns the cache hit rate as a fraction between 0 and 1.
+// HitRate returns hits/(hits+misses), or 0 if neither has occurred.
 func (c *TreeNodeCache) HitRate() float64 {
 	hits := c.hits.Load()
 	misses := c.misses.Load()
@@ -142,7 +121,7 @@ func (c *TreeNodeCache) HitRate() float64 {
 	return float64(hits) / float64(total)
 }
 
-// Contains checks if a hash is in the cache without affecting LRU order.
+// Contains reports membership without touching LRU recency.
 func (c *TreeNodeCache) Contains(hash [32]byte) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -165,15 +144,11 @@ type FullBelowCache struct {
 	lru     *lruList[[32]byte, struct{}]
 }
 
-// NewFullBelowCache creates a new FullBelowCache.
-//
-// Parameters:
-//   - maxSize: maximum number of hashes to track (0 = use default size)
-//
-// Returns a new FullBelowCache instance.
+// NewFullBelowCache returns an LRU cache with the given capacity.
+// A non-positive maxSize is replaced by a default.
 func NewFullBelowCache(maxSize int) *FullBelowCache {
 	if maxSize <= 0 {
-		maxSize = 65536 // Default size
+		maxSize = 65536
 	}
 	return &FullBelowCache{
 		maxSize: maxSize,
@@ -196,9 +171,8 @@ func (c *FullBelowCache) IsFull(hash [32]byte) bool {
 	return true
 }
 
-// MarkFull marks the subtree rooted at the given hash as fully synced.
-// If the cache is at capacity, the least recently used entry is evicted.
-// If the hash is already present, it is moved to the front of the LRU list.
+// MarkFull marks the subtree rooted at hash as fully synced, evicting the
+// LRU entry when at capacity.
 func (c *FullBelowCache) MarkFull(hash [32]byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -228,8 +202,7 @@ func (c *FullBelowCache) markFullLocked(hash [32]byte) {
 	c.items[hash] = elem
 }
 
-// Unmark removes the full marking for a hash.
-// This should be called when a subtree becomes incomplete (e.g., after modification).
+// Unmark removes the full marking; call when a subtree becomes incomplete.
 func (c *FullBelowCache) Unmark(hash [32]byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -240,7 +213,6 @@ func (c *FullBelowCache) Unmark(hash [32]byte) {
 	}
 }
 
-// Clear removes all entries from the cache.
 func (c *FullBelowCache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -248,19 +220,17 @@ func (c *FullBelowCache) Clear() {
 	c.lru = newLRUList[[32]byte, struct{}]()
 }
 
-// Size returns the current number of entries in the cache.
 func (c *FullBelowCache) Size() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.lru.len
 }
 
-// MaxSize returns the maximum capacity of the cache.
 func (c *FullBelowCache) MaxSize() int {
 	return c.maxSize
 }
 
-// Reset resets the cache to empty state with a new maximum size.
+// Reset empties the cache and replaces its capacity.
 func (c *FullBelowCache) Reset(maxSize int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -273,9 +243,8 @@ func (c *FullBelowCache) Reset(maxSize int) {
 	c.maxSize = maxSize
 }
 
-// GetAllFull returns a copy of all hashes currently marked as full.
-// This is useful for debugging or persisting cache state.
-// Order is not guaranteed and this method does not affect LRU recency.
+// GetAllFull returns a snapshot of every hash currently marked full.
+// Order is not guaranteed; recency is not touched.
 func (c *FullBelowCache) GetAllFull() [][32]byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -287,15 +256,9 @@ func (c *FullBelowCache) GetAllFull() [][32]byte {
 	return result
 }
 
-// Touch marks a hash as full if and only if all its children are also full.
-// This is used to propagate "fullness" up the tree during sync.
-// Looking up children also refreshes their LRU recency.
-//
-// Parameters:
-//   - hash: the hash to potentially mark
-//   - childHashes: hashes of all children that must be full
-//
-// Returns true if the hash was marked as full.
+// Touch marks hash as full iff every childHash is already full, propagating
+// fullness up the tree during sync. Looked-up children have their LRU recency
+// refreshed.
 func (c *FullBelowCache) Touch(hash [32]byte, childHashes [][32]byte) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()

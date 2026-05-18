@@ -74,13 +74,10 @@ func (p *PebbleBackend) Open(createIfMissing bool) error {
 	return nil
 }
 
-// buildOptimizedOptions creates optimized PebbleDB options for XRPL workload.
-//
-// The cache size is a fixed 256MB default — the previous heuristic
-// derived a budget from runtime.MemStats which reports Go heap, not
-// host RAM, so it produced effectively constant values regardless of
-// machine. If/when an OS-memory probe is needed it should be wired in
-// at the config layer rather than guessed at here.
+// buildOptimizedOptions creates optimized PebbleDB options for XRPL
+// workload. The cache size is fixed at 256MB; configurable sizing
+// should be wired through DatabaseConfig rather than guessed from
+// runtime.MemStats (which reports Go heap, not host RAM).
 func (p *PebbleBackend) buildOptimizedOptions() *pebble.Options {
 	const memBudget int64 = 256 << 20 // 256MB
 
@@ -199,11 +196,8 @@ func (p *PebbleBackend) Fetch(key Hash256) (*Node, Status) {
 	return node, OK
 }
 
-// FetchBatch retrieves multiple objects in a single consistent
-// snapshot. Pebble has no native multi-Get that beats N tight Gets,
-// but a snapshot pins the LSM view so the per-key memtable + L0
-// search isn't re-done from a moving target — and it removes the
-// per-key open() cost on the iterator stack.
+// FetchBatch retrieves multiple objects under a single Pebble snapshot
+// so every Get sees a consistent LSM view.
 func (p *PebbleBackend) FetchBatch(keys []Hash256) ([]*Node, Status) {
 	if !p.IsOpen() {
 		return nil, BackendError
@@ -292,10 +286,8 @@ func (p *PebbleBackend) StoreBatch(nodes []*Node) Status {
 			releaseEncodeBuf(value)
 			return BackendError
 		}
-		// pebble.Batch.Set copies the value into the batch's internal
-		// buffer immediately, so the encode buffer is safe to recycle
-		// before Commit.
 		totalBytes += int64(len(value))
+		// pebble.Batch.Set copies into the batch immediately.
 		releaseEncodeBuf(value)
 	}
 
@@ -428,8 +420,6 @@ func (p *PebbleBackend) EstimateSize(start, end Hash256) (uint64, error) {
 	return size, err
 }
 
-// decodeNode deserializes a node from storage. Thin wrapper around the
-// shared decodeNodeData helper.
 func (p *PebbleBackend) decodeNode(hash Hash256, data []byte) (*Node, error) {
 	return decodeNodeData(hash, data)
 }

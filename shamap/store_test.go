@@ -1175,14 +1175,9 @@ func TestBacked_Iterator(t *testing.T) {
 	}
 }
 
-// TestBacked_ConcurrentLazyLoad exercises the descend() lazy-load path
-// from many goroutines simultaneously. Before the fix, descend used
-// ChildUnsafe (unsynchronised interface read) and SetChildDirect
-// (unconditional overwrite) under the SHAMap RLock — racy under -race
-// and capable of dropping a freshly deserialised child on the floor.
-// The fix routes reads through InnerNode.LoadChild and the attach
-// through SetChildIfNil so racing readers all observe the same
-// installed node.
+// TestBacked_ConcurrentLazyLoad exercises descend()'s lazy-load path from
+// many goroutines under -race to catch regressions in the LoadChild /
+// SetChildIfNil race-safety contract.
 func TestBacked_ConcurrentLazyLoad(t *testing.T) {
 	family := newMemoryFamily()
 
@@ -1191,15 +1186,15 @@ func TestBacked_ConcurrentLazyLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Use enough keys to populate several branches at depth 0 so
-	// descend has to lazy-load multiple subtrees from cold.
+	// Populate several branches at depth 0 so descend has to lazy-load
+	// multiple subtrees from cold.
 	keys := make([][32]byte, 0, 32)
 	for i := 0; i < 32; i++ {
 		var k [32]byte
 		for j := range k {
-			k[j] = byte((i*7 + j*11) | 1) // never all-zero
+			k[j] = byte((i*7 + j*11) | 1)
 		}
-		k[0] = byte((i * 16) & 0xF0) // spread across branches 0..15 at depth 0
+		k[0] = byte((i * 16) & 0xF0)
 		keys = append(keys, k)
 		if err := sMap.Put(k, intToBytes(i+1)); err != nil {
 			t.Fatalf("Put %d: %v", i, err)
