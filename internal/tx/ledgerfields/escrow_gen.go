@@ -70,7 +70,6 @@ func (e *Escrow) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("Escrow", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -101,7 +100,6 @@ func (e *Escrow) Decode(data []byte) error {
 				e.FinishAfter = val
 				e.present |= escrowBitFinishAfter
 			default:
-				_ = val
 				return newErrUnknownField("Escrow", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -120,7 +118,6 @@ func (e *Escrow) Decode(data []byte) error {
 				e.IssuerNode = val
 				e.present |= escrowBitIssuerNode
 			default:
-				_ = val
 				return newErrUnknownField("Escrow", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -133,7 +130,6 @@ func (e *Escrow) Decode(data []byte) error {
 				e.PreviousTxnID = val
 				e.present |= escrowBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("Escrow", typeCode, fieldCode)
 			}
 		case 6: // Amount
@@ -146,7 +142,6 @@ func (e *Escrow) Decode(data []byte) error {
 				e.Amount = val
 				e.present |= escrowBitAmount
 			default:
-				_ = val
 				return newErrUnknownField("Escrow", typeCode, fieldCode)
 			}
 		case 7: // Blob
@@ -159,7 +154,6 @@ func (e *Escrow) Decode(data []byte) error {
 				e.Condition = val
 				e.present |= escrowBitCondition
 			default:
-				_ = val
 				return newErrUnknownField("Escrow", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -175,7 +169,6 @@ func (e *Escrow) Decode(data []byte) error {
 				e.Destination = val
 				e.present |= escrowBitDestination
 			default:
-				_ = val
 				return newErrUnknownField("Escrow", typeCode, fieldCode)
 			}
 		default:

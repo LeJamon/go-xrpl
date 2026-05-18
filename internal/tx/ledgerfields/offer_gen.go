@@ -24,6 +24,7 @@ type Offer struct {
 	Expiration        uint32
 	Flags             uint32
 	DomainID          string // Hash256 (uppercase hex)
+	AdditionalBooks   []any
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
 }
@@ -39,6 +40,7 @@ const (
 	offerBitExpiration
 	offerBitFlags
 	offerBitDomainID
+	offerBitAdditionalBooks
 	offerBitPreviousTxnID
 	offerBitPreviousTxnLgrSeq
 )
@@ -64,7 +66,6 @@ func (o *Offer) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("Offer", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -86,7 +87,6 @@ func (o *Offer) Decode(data []byte) error {
 				o.Expiration = val
 				o.present |= offerBitExpiration
 			default:
-				_ = val
 				return newErrUnknownField("Offer", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -102,7 +102,6 @@ func (o *Offer) Decode(data []byte) error {
 				o.OwnerNode = val
 				o.present |= offerBitOwnerNode
 			default:
-				_ = val
 				return newErrUnknownField("Offer", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -121,7 +120,6 @@ func (o *Offer) Decode(data []byte) error {
 				o.DomainID = val
 				o.present |= offerBitDomainID
 			default:
-				_ = val
 				return newErrUnknownField("Offer", typeCode, fieldCode)
 			}
 		case 6: // Amount
@@ -137,7 +135,6 @@ func (o *Offer) Decode(data []byte) error {
 				o.TakerGets = val
 				o.present |= offerBitTakerGets
 			default:
-				_ = val
 				return newErrUnknownField("Offer", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -150,7 +147,18 @@ func (o *Offer) Decode(data []byte) error {
 				o.Account = val
 				o.present |= offerBitAccount
 			default:
-				_ = val
+				return newErrUnknownField("Offer", typeCode, fieldCode)
+			}
+		case 15: // STArray
+			val, err := sr.readSTArray()
+			if err != nil {
+				return err
+			}
+			switch fieldCode {
+			case 13:
+				o.AdditionalBooks = val
+				o.present |= offerBitAdditionalBooks
+			default:
 				return newErrUnknownField("Offer", typeCode, fieldCode)
 			}
 		default:
@@ -194,6 +202,9 @@ func (o *Offer) emitAll(out map[string]any, skipDefault bool) {
 	if o.present&offerBitDomainID != 0 && !(skipDefault && isZeroHexString(o.DomainID)) {
 		out["DomainID"] = o.DomainID
 	}
+	if o.present&offerBitAdditionalBooks != 0 {
+		out["AdditionalBooks"] = o.AdditionalBooks
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -225,6 +236,7 @@ func (o *Offer) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "Expiration", p.Expiration, o.Expiration, p.present&offerBitExpiration, o.present&offerBitExpiration)
 	emitIfChangedUint32(out, "Flags", p.Flags, o.Flags, p.present&offerBitFlags, o.present&offerBitFlags)
 	emitIfChangedString(out, "DomainID", p.DomainID, o.DomainID, p.present&offerBitDomainID, o.present&offerBitDomainID)
+	emitIfChangedDeep(out, "AdditionalBooks", p.AdditionalBooks, o.AdditionalBooks, p.present&offerBitAdditionalBooks, o.present&offerBitAdditionalBooks)
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

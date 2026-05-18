@@ -33,6 +33,8 @@ type AccountRoot struct {
 	WalletLocator        string // Hash256 (uppercase hex)
 	TicketCount          uint32
 	AMMID                string // Hash256 (uppercase hex)
+	VaultID              string // Hash256 (uppercase hex)
+	WalletSize           uint32
 	PreviousTxnID        string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq    uint32
 }
@@ -57,6 +59,8 @@ const (
 	accountrootBitWalletLocator
 	accountrootBitTicketCount
 	accountrootBitAMMID
+	accountrootBitVaultID
+	accountrootBitWalletSize
 	accountrootBitPreviousTxnID
 	accountrootBitPreviousTxnLgrSeq
 )
@@ -82,7 +86,6 @@ func (a *AccountRoot) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -103,6 +106,9 @@ func (a *AccountRoot) Decode(data []byte) error {
 			case 11:
 				a.TransferRate = val
 				a.present |= accountrootBitTransferRate
+			case 12:
+				a.WalletSize = val
+				a.present |= accountrootBitWalletSize
 			case 13:
 				a.OwnerCount = val
 				a.present |= accountrootBitOwnerCount
@@ -119,7 +125,6 @@ func (a *AccountRoot) Decode(data []byte) error {
 				a.FirstNFTokenSequence = val
 				a.present |= accountrootBitFirstNFTokenSequence
 			default:
-				_ = val
 				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		case 4: // Hash128
@@ -132,7 +137,6 @@ func (a *AccountRoot) Decode(data []byte) error {
 				a.EmailHash = val
 				a.present |= accountrootBitEmailHash
 			default:
-				_ = val
 				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -153,8 +157,10 @@ func (a *AccountRoot) Decode(data []byte) error {
 			case 14:
 				a.AMMID = val
 				a.present |= accountrootBitAMMID
+			case 35:
+				a.VaultID = val
+				a.present |= accountrootBitVaultID
 			default:
-				_ = val
 				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		case 6: // Amount
@@ -169,7 +175,6 @@ func (a *AccountRoot) Decode(data []byte) error {
 					a.present |= accountrootBitBalance
 				}
 			default:
-				_ = val
 				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		case 7: // Blob
@@ -185,7 +190,6 @@ func (a *AccountRoot) Decode(data []byte) error {
 				a.Domain = val
 				a.present |= accountrootBitDomain
 			default:
-				_ = val
 				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -204,7 +208,6 @@ func (a *AccountRoot) Decode(data []byte) error {
 				a.NFTokenMinter = val
 				a.present |= accountrootBitNFTokenMinter
 			default:
-				_ = val
 				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		case 16: // UInt8
@@ -218,7 +221,6 @@ func (a *AccountRoot) Decode(data []byte) error {
 				a.TickSize = val
 				a.present |= accountrootBitTickSize
 			default:
-				_ = val
 				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		default:
@@ -289,6 +291,12 @@ func (a *AccountRoot) emitAll(out map[string]any, skipDefault bool) {
 	if a.present&accountrootBitAMMID != 0 && !(skipDefault && isZeroHexString(a.AMMID)) {
 		out["AMMID"] = a.AMMID
 	}
+	if a.present&accountrootBitVaultID != 0 && !(skipDefault && isZeroHexString(a.VaultID)) {
+		out["VaultID"] = a.VaultID
+	}
+	if a.present&accountrootBitWalletSize != 0 && !(skipDefault && a.WalletSize == 0) {
+		out["WalletSize"] = a.WalletSize
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -329,6 +337,8 @@ func (a *AccountRoot) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "WalletLocator", p.WalletLocator, a.WalletLocator, p.present&accountrootBitWalletLocator, a.present&accountrootBitWalletLocator)
 	emitIfChangedUint32(out, "TicketCount", p.TicketCount, a.TicketCount, p.present&accountrootBitTicketCount, a.present&accountrootBitTicketCount)
 	emitIfChangedString(out, "AMMID", p.AMMID, a.AMMID, p.present&accountrootBitAMMID, a.present&accountrootBitAMMID)
+	emitIfChangedString(out, "VaultID", p.VaultID, a.VaultID, p.present&accountrootBitVaultID, a.present&accountrootBitVaultID)
+	emitIfChangedUint32(out, "WalletSize", p.WalletSize, a.WalletSize, p.present&accountrootBitWalletSize, a.present&accountrootBitWalletSize)
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

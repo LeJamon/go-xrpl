@@ -58,7 +58,6 @@ func (x *XChainOwnedClaimID) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("XChainOwnedClaimID", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -71,7 +70,6 @@ func (x *XChainOwnedClaimID) Decode(data []byte) error {
 				x.PreviousTxnLgrSeq = val
 				x.present |= xchainownedclaimidBitPreviousTxnLgrSeq
 			default:
-				_ = val
 				return newErrUnknownField("XChainOwnedClaimID", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -87,7 +85,6 @@ func (x *XChainOwnedClaimID) Decode(data []byte) error {
 				x.XChainClaimID = val
 				x.present |= xchainownedclaimidBitXChainClaimID
 			default:
-				_ = val
 				return newErrUnknownField("XChainOwnedClaimID", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -100,7 +97,6 @@ func (x *XChainOwnedClaimID) Decode(data []byte) error {
 				x.PreviousTxnID = val
 				x.present |= xchainownedclaimidBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("XChainOwnedClaimID", typeCode, fieldCode)
 			}
 		case 6: // Amount
@@ -113,7 +109,6 @@ func (x *XChainOwnedClaimID) Decode(data []byte) error {
 				x.SignatureReward = val
 				x.present |= xchainownedclaimidBitSignatureReward
 			default:
-				_ = val
 				return newErrUnknownField("XChainOwnedClaimID", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -129,7 +124,6 @@ func (x *XChainOwnedClaimID) Decode(data []byte) error {
 				x.OtherChainSource = val
 				x.present |= xchainownedclaimidBitOtherChainSource
 			default:
-				_ = val
 				return newErrUnknownField("XChainOwnedClaimID", typeCode, fieldCode)
 			}
 		case 15: // STArray
@@ -142,7 +136,6 @@ func (x *XChainOwnedClaimID) Decode(data []byte) error {
 				x.XChainClaimAttestations = val
 				x.present |= xchainownedclaimidBitXChainClaimAttestations
 			default:
-				_ = val
 				return newErrUnknownField("XChainOwnedClaimID", typeCode, fieldCode)
 			}
 		case 25: // XChainBridge
@@ -155,7 +148,6 @@ func (x *XChainOwnedClaimID) Decode(data []byte) error {
 				x.XChainBridge = val
 				x.present |= xchainownedclaimidBitXChainBridge
 			default:
-				_ = val
 				return newErrUnknownField("XChainOwnedClaimID", typeCode, fieldCode)
 			}
 		default:

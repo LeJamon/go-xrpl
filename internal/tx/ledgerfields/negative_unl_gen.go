@@ -52,7 +52,6 @@ func (n *NegativeUNL) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("NegativeUNL", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -68,7 +67,6 @@ func (n *NegativeUNL) Decode(data []byte) error {
 				n.PreviousTxnLgrSeq = val
 				n.present |= negativeunlBitPreviousTxnLgrSeq
 			default:
-				_ = val
 				return newErrUnknownField("NegativeUNL", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -81,7 +79,6 @@ func (n *NegativeUNL) Decode(data []byte) error {
 				n.PreviousTxnID = val
 				n.present |= negativeunlBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("NegativeUNL", typeCode, fieldCode)
 			}
 		case 7: // Blob
@@ -97,7 +94,6 @@ func (n *NegativeUNL) Decode(data []byte) error {
 				n.ValidatorToReEnable = val
 				n.present |= negativeunlBitValidatorToReEnable
 			default:
-				_ = val
 				return newErrUnknownField("NegativeUNL", typeCode, fieldCode)
 			}
 		case 15: // STArray
@@ -110,7 +106,6 @@ func (n *NegativeUNL) Decode(data []byte) error {
 				n.DisabledValidators = val
 				n.present |= negativeunlBitDisabledValidators
 			default:
-				_ = val
 				return newErrUnknownField("NegativeUNL", typeCode, fieldCode)
 			}
 		default:

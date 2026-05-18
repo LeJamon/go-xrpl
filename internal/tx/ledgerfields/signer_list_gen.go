@@ -56,7 +56,6 @@ func (s *SignerList) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("SignerList", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -78,7 +77,6 @@ func (s *SignerList) Decode(data []byte) error {
 				s.SignerListID = val
 				s.present |= signerlistBitSignerListID
 			default:
-				_ = val
 				return newErrUnknownField("SignerList", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -91,7 +89,6 @@ func (s *SignerList) Decode(data []byte) error {
 				s.OwnerNode = val
 				s.present |= signerlistBitOwnerNode
 			default:
-				_ = val
 				return newErrUnknownField("SignerList", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -104,7 +101,6 @@ func (s *SignerList) Decode(data []byte) error {
 				s.PreviousTxnID = val
 				s.present |= signerlistBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("SignerList", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -117,7 +113,6 @@ func (s *SignerList) Decode(data []byte) error {
 				s.Account = val
 				s.present |= signerlistBitAccount
 			default:
-				_ = val
 				return newErrUnknownField("SignerList", typeCode, fieldCode)
 			}
 		case 15: // STArray
@@ -130,7 +125,6 @@ func (s *SignerList) Decode(data []byte) error {
 				s.SignerEntries = val
 				s.present |= signerlistBitSignerEntries
 			default:
-				_ = val
 				return newErrUnknownField("SignerList", typeCode, fieldCode)
 			}
 		default:

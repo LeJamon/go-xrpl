@@ -64,7 +64,6 @@ func (r *RippleState) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("RippleState", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -92,7 +91,6 @@ func (r *RippleState) Decode(data []byte) error {
 				r.LowQualityOut = val
 				r.present |= ripplestateBitLowQualityOut
 			default:
-				_ = val
 				return newErrUnknownField("RippleState", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -108,7 +106,6 @@ func (r *RippleState) Decode(data []byte) error {
 				r.HighNode = val
 				r.present |= ripplestateBitHighNode
 			default:
-				_ = val
 				return newErrUnknownField("RippleState", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -121,7 +118,6 @@ func (r *RippleState) Decode(data []byte) error {
 				r.PreviousTxnID = val
 				r.present |= ripplestateBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("RippleState", typeCode, fieldCode)
 			}
 		case 6: // Amount
@@ -140,7 +136,6 @@ func (r *RippleState) Decode(data []byte) error {
 				r.HighLimit = val
 				r.present |= ripplestateBitHighLimit
 			default:
-				_ = val
 				return newErrUnknownField("RippleState", typeCode, fieldCode)
 			}
 		default:

@@ -460,7 +460,6 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 {{- end }}
 {{- end }}
 			default:
-				_ = val
 				return newErrUnknownField({{ printf "%q" $.Name }}, typeCode, fieldCode)
 			}
 {{- end }}

@@ -60,7 +60,6 @@ func (b *Bridge) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("Bridge", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -73,7 +72,6 @@ func (b *Bridge) Decode(data []byte) error {
 				b.PreviousTxnLgrSeq = val
 				b.present |= bridgeBitPreviousTxnLgrSeq
 			default:
-				_ = val
 				return newErrUnknownField("Bridge", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -95,7 +93,6 @@ func (b *Bridge) Decode(data []byte) error {
 				b.XChainAccountClaimCount = val
 				b.present |= bridgeBitXChainAccountClaimCount
 			default:
-				_ = val
 				return newErrUnknownField("Bridge", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -108,7 +105,6 @@ func (b *Bridge) Decode(data []byte) error {
 				b.PreviousTxnID = val
 				b.present |= bridgeBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("Bridge", typeCode, fieldCode)
 			}
 		case 6: // Amount
@@ -124,7 +120,6 @@ func (b *Bridge) Decode(data []byte) error {
 				b.MinAccountCreateAmount = val
 				b.present |= bridgeBitMinAccountCreateAmount
 			default:
-				_ = val
 				return newErrUnknownField("Bridge", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -137,7 +132,6 @@ func (b *Bridge) Decode(data []byte) error {
 				b.Account = val
 				b.present |= bridgeBitAccount
 			default:
-				_ = val
 				return newErrUnknownField("Bridge", typeCode, fieldCode)
 			}
 		case 25: // XChainBridge
@@ -150,7 +144,6 @@ func (b *Bridge) Decode(data []byte) error {
 				b.XChainBridge = val
 				b.present |= bridgeBitXChainBridge
 			default:
-				_ = val
 				return newErrUnknownField("Bridge", typeCode, fieldCode)
 			}
 		default:

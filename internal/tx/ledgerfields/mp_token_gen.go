@@ -60,7 +60,6 @@ func (m *MPToken) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("MPToken", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -79,7 +78,6 @@ func (m *MPToken) Decode(data []byte) error {
 				m.PreviousTxnLgrSeq = val
 				m.present |= mptokenBitPreviousTxnLgrSeq
 			default:
-				_ = val
 				return newErrUnknownField("MPToken", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -98,7 +96,6 @@ func (m *MPToken) Decode(data []byte) error {
 				m.LockedAmount = val
 				m.present |= mptokenBitLockedAmount
 			default:
-				_ = val
 				return newErrUnknownField("MPToken", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -111,7 +108,6 @@ func (m *MPToken) Decode(data []byte) error {
 				m.PreviousTxnID = val
 				m.present |= mptokenBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("MPToken", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -127,7 +123,6 @@ func (m *MPToken) Decode(data []byte) error {
 				m.Issuer = val
 				m.present |= mptokenBitIssuer
 			default:
-				_ = val
 				return newErrUnknownField("MPToken", typeCode, fieldCode)
 			}
 		case 21: // Hash192
@@ -140,7 +135,6 @@ func (m *MPToken) Decode(data []byte) error {
 				m.MPTokenIssuanceID = val
 				m.present |= mptokenBitMPTokenIssuanceID
 			default:
-				_ = val
 				return newErrUnknownField("MPToken", typeCode, fieldCode)
 			}
 		default:

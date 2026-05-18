@@ -52,7 +52,6 @@ func (t *Ticket) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("Ticket", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -71,7 +70,6 @@ func (t *Ticket) Decode(data []byte) error {
 				t.TicketSequence = val
 				t.present |= ticketBitTicketSequence
 			default:
-				_ = val
 				return newErrUnknownField("Ticket", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -84,7 +82,6 @@ func (t *Ticket) Decode(data []byte) error {
 				t.OwnerNode = val
 				t.present |= ticketBitOwnerNode
 			default:
-				_ = val
 				return newErrUnknownField("Ticket", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -97,7 +94,6 @@ func (t *Ticket) Decode(data []byte) error {
 				t.PreviousTxnID = val
 				t.present |= ticketBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("Ticket", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -110,7 +106,6 @@ func (t *Ticket) Decode(data []byte) error {
 				t.Account = val
 				t.present |= ticketBitAccount
 			default:
-				_ = val
 				return newErrUnknownField("Ticket", typeCode, fieldCode)
 			}
 		default:

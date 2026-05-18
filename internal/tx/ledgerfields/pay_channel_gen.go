@@ -70,7 +70,6 @@ func (p *PayChannel) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("PayChannel", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -101,7 +100,6 @@ func (p *PayChannel) Decode(data []byte) error {
 				p.SettleDelay = val
 				p.present |= paychannelBitSettleDelay
 			default:
-				_ = val
 				return newErrUnknownField("PayChannel", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -117,7 +115,6 @@ func (p *PayChannel) Decode(data []byte) error {
 				p.DestinationNode = val
 				p.present |= paychannelBitDestinationNode
 			default:
-				_ = val
 				return newErrUnknownField("PayChannel", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -130,7 +127,6 @@ func (p *PayChannel) Decode(data []byte) error {
 				p.PreviousTxnID = val
 				p.present |= paychannelBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("PayChannel", typeCode, fieldCode)
 			}
 		case 6: // Amount
@@ -146,7 +142,6 @@ func (p *PayChannel) Decode(data []byte) error {
 				p.Balance = val
 				p.present |= paychannelBitBalance
 			default:
-				_ = val
 				return newErrUnknownField("PayChannel", typeCode, fieldCode)
 			}
 		case 7: // Blob
@@ -159,7 +154,6 @@ func (p *PayChannel) Decode(data []byte) error {
 				p.PublicKey = val
 				p.present |= paychannelBitPublicKey
 			default:
-				_ = val
 				return newErrUnknownField("PayChannel", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -175,7 +169,6 @@ func (p *PayChannel) Decode(data []byte) error {
 				p.Destination = val
 				p.present |= paychannelBitDestination
 			default:
-				_ = val
 				return newErrUnknownField("PayChannel", typeCode, fieldCode)
 			}
 		default:

@@ -54,7 +54,6 @@ func (d *DepositPreauth) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("DepositPreauth", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -70,7 +69,6 @@ func (d *DepositPreauth) Decode(data []byte) error {
 				d.PreviousTxnLgrSeq = val
 				d.present |= depositpreauthBitPreviousTxnLgrSeq
 			default:
-				_ = val
 				return newErrUnknownField("DepositPreauth", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -83,7 +81,6 @@ func (d *DepositPreauth) Decode(data []byte) error {
 				d.OwnerNode = val
 				d.present |= depositpreauthBitOwnerNode
 			default:
-				_ = val
 				return newErrUnknownField("DepositPreauth", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -96,7 +93,6 @@ func (d *DepositPreauth) Decode(data []byte) error {
 				d.PreviousTxnID = val
 				d.present |= depositpreauthBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("DepositPreauth", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -112,7 +108,6 @@ func (d *DepositPreauth) Decode(data []byte) error {
 				d.Authorize = val
 				d.present |= depositpreauthBitAuthorize
 			default:
-				_ = val
 				return newErrUnknownField("DepositPreauth", typeCode, fieldCode)
 			}
 		case 15: // STArray
@@ -125,7 +120,6 @@ func (d *DepositPreauth) Decode(data []byte) error {
 				d.AuthorizeCredentials = val
 				d.present |= depositpreauthBitAuthorizeCredentials
 			default:
-				_ = val
 				return newErrUnknownField("DepositPreauth", typeCode, fieldCode)
 			}
 		default:

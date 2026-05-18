@@ -60,7 +60,6 @@ func (o *Oracle) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("Oracle", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -79,7 +78,6 @@ func (o *Oracle) Decode(data []byte) error {
 				o.LastUpdateTime = val
 				o.present |= oracleBitLastUpdateTime
 			default:
-				_ = val
 				return newErrUnknownField("Oracle", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -92,7 +90,6 @@ func (o *Oracle) Decode(data []byte) error {
 				o.OwnerNode = val
 				o.present |= oracleBitOwnerNode
 			default:
-				_ = val
 				return newErrUnknownField("Oracle", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -105,7 +102,6 @@ func (o *Oracle) Decode(data []byte) error {
 				o.PreviousTxnID = val
 				o.present |= oracleBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("Oracle", typeCode, fieldCode)
 			}
 		case 7: // Blob
@@ -124,7 +120,6 @@ func (o *Oracle) Decode(data []byte) error {
 				o.Provider = val
 				o.present |= oracleBitProvider
 			default:
-				_ = val
 				return newErrUnknownField("Oracle", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -137,7 +132,6 @@ func (o *Oracle) Decode(data []byte) error {
 				o.Owner = val
 				o.present |= oracleBitOwner
 			default:
-				_ = val
 				return newErrUnknownField("Oracle", typeCode, fieldCode)
 			}
 		case 15: // STArray
@@ -150,7 +144,6 @@ func (o *Oracle) Decode(data []byte) error {
 				o.PriceDataSeries = val
 				o.present |= oracleBitPriceDataSeries
 			default:
-				_ = val
 				return newErrUnknownField("Oracle", typeCode, fieldCode)
 			}
 		default:

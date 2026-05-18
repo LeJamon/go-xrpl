@@ -56,7 +56,6 @@ func (d *DID) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("DID", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -72,7 +71,6 @@ func (d *DID) Decode(data []byte) error {
 				d.PreviousTxnLgrSeq = val
 				d.present |= didBitPreviousTxnLgrSeq
 			default:
-				_ = val
 				return newErrUnknownField("DID", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -85,7 +83,6 @@ func (d *DID) Decode(data []byte) error {
 				d.OwnerNode = val
 				d.present |= didBitOwnerNode
 			default:
-				_ = val
 				return newErrUnknownField("DID", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -98,7 +95,6 @@ func (d *DID) Decode(data []byte) error {
 				d.PreviousTxnID = val
 				d.present |= didBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("DID", typeCode, fieldCode)
 			}
 		case 7: // Blob
@@ -117,7 +113,6 @@ func (d *DID) Decode(data []byte) error {
 				d.Data = val
 				d.present |= didBitData
 			default:
-				_ = val
 				return newErrUnknownField("DID", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -130,7 +125,6 @@ func (d *DID) Decode(data []byte) error {
 				d.Account = val
 				d.present |= didBitAccount
 			default:
-				_ = val
 				return newErrUnknownField("DID", typeCode, fieldCode)
 			}
 		default:

@@ -63,7 +63,6 @@ func (a *AMM) Decode(data []byte) error {
 				a.TradingFee = val
 				a.present |= ammBitTradingFee
 			default:
-				_ = val
 				return newErrUnknownField("AMM", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -76,7 +75,6 @@ func (a *AMM) Decode(data []byte) error {
 				a.PreviousTxnLgrSeq = val
 				a.present |= ammBitPreviousTxnLgrSeq
 			default:
-				_ = val
 				return newErrUnknownField("AMM", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -89,7 +87,6 @@ func (a *AMM) Decode(data []byte) error {
 				a.OwnerNode = val
 				a.present |= ammBitOwnerNode
 			default:
-				_ = val
 				return newErrUnknownField("AMM", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -102,7 +99,6 @@ func (a *AMM) Decode(data []byte) error {
 				a.PreviousTxnID = val
 				a.present |= ammBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("AMM", typeCode, fieldCode)
 			}
 		case 6: // Amount
@@ -115,7 +111,6 @@ func (a *AMM) Decode(data []byte) error {
 				a.LPTokenBalance = val
 				a.present |= ammBitLPTokenBalance
 			default:
-				_ = val
 				return newErrUnknownField("AMM", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -128,7 +123,6 @@ func (a *AMM) Decode(data []byte) error {
 				a.Account = val
 				a.present |= ammBitAccount
 			default:
-				_ = val
 				return newErrUnknownField("AMM", typeCode, fieldCode)
 			}
 		case 14: // STObject
@@ -141,7 +135,6 @@ func (a *AMM) Decode(data []byte) error {
 				a.AuctionSlot = val
 				a.present |= ammBitAuctionSlot
 			default:
-				_ = val
 				return newErrUnknownField("AMM", typeCode, fieldCode)
 			}
 		case 15: // STArray
@@ -154,7 +147,6 @@ func (a *AMM) Decode(data []byte) error {
 				a.VoteSlots = val
 				a.present |= ammBitVoteSlots
 			default:
-				_ = val
 				return newErrUnknownField("AMM", typeCode, fieldCode)
 			}
 		case 24: // Issue
@@ -170,7 +162,6 @@ func (a *AMM) Decode(data []byte) error {
 				a.Asset2 = val
 				a.present |= ammBitAsset2
 			default:
-				_ = val
 				return newErrUnknownField("AMM", typeCode, fieldCode)
 			}
 		default:

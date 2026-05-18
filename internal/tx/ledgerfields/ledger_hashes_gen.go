@@ -46,7 +46,6 @@ func (l *LedgerHashes) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("LedgerHashes", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -62,7 +61,6 @@ func (l *LedgerHashes) Decode(data []byte) error {
 				l.LastLedgerSequence = val
 				l.present |= ledgerhashesBitLastLedgerSequence
 			default:
-				_ = val
 				return newErrUnknownField("LedgerHashes", typeCode, fieldCode)
 			}
 		case 19: // Vector256
@@ -75,7 +73,6 @@ func (l *LedgerHashes) Decode(data []byte) error {
 				l.Hashes = val
 				l.present |= ledgerhashesBitHashes
 			default:
-				_ = val
 				return newErrUnknownField("LedgerHashes", typeCode, fieldCode)
 			}
 		default:

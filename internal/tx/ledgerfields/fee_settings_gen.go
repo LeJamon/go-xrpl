@@ -58,7 +58,6 @@ func (f *FeeSettings) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("FeeSettings", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -80,7 +79,6 @@ func (f *FeeSettings) Decode(data []byte) error {
 				f.ReserveIncrement = val
 				f.present |= feesettingsBitReserveIncrement
 			default:
-				_ = val
 				return newErrUnknownField("FeeSettings", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -93,7 +91,6 @@ func (f *FeeSettings) Decode(data []byte) error {
 				f.BaseFee = val
 				f.present |= feesettingsBitBaseFee
 			default:
-				_ = val
 				return newErrUnknownField("FeeSettings", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -106,7 +103,6 @@ func (f *FeeSettings) Decode(data []byte) error {
 				f.PreviousTxnID = val
 				f.present |= feesettingsBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("FeeSettings", typeCode, fieldCode)
 			}
 		case 6: // Amount
@@ -125,7 +121,6 @@ func (f *FeeSettings) Decode(data []byte) error {
 				f.ReserveIncrementDrops = val
 				f.present |= feesettingsBitReserveIncrementDrops
 			default:
-				_ = val
 				return newErrUnknownField("FeeSettings", typeCode, fieldCode)
 			}
 		default:

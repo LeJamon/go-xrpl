@@ -62,7 +62,6 @@ func (n *NFTokenOffer) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("NFTokenOffer", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -81,7 +80,6 @@ func (n *NFTokenOffer) Decode(data []byte) error {
 				n.Expiration = val
 				n.present |= nftokenofferBitExpiration
 			default:
-				_ = val
 				return newErrUnknownField("NFTokenOffer", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -97,7 +95,6 @@ func (n *NFTokenOffer) Decode(data []byte) error {
 				n.NFTokenOfferNode = val
 				n.present |= nftokenofferBitNFTokenOfferNode
 			default:
-				_ = val
 				return newErrUnknownField("NFTokenOffer", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -113,7 +110,6 @@ func (n *NFTokenOffer) Decode(data []byte) error {
 				n.NFTokenID = val
 				n.present |= nftokenofferBitNFTokenID
 			default:
-				_ = val
 				return newErrUnknownField("NFTokenOffer", typeCode, fieldCode)
 			}
 		case 6: // Amount
@@ -126,7 +122,6 @@ func (n *NFTokenOffer) Decode(data []byte) error {
 				n.Amount = val
 				n.present |= nftokenofferBitAmount
 			default:
-				_ = val
 				return newErrUnknownField("NFTokenOffer", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -145,7 +140,6 @@ func (n *NFTokenOffer) Decode(data []byte) error {
 				n.Destination = val
 				n.present |= nftokenofferBitDestination
 			default:
-				_ = val
 				return newErrUnknownField("NFTokenOffer", typeCode, fieldCode)
 			}
 		default:

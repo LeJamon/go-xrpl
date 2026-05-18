@@ -69,7 +69,6 @@ func (m *MPTokenIssuance) Decode(data []byte) error {
 				m.TransferFee = val
 				m.present |= mptokenissuanceBitTransferFee
 			default:
-				_ = val
 				return newErrUnknownField("MPTokenIssuance", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -88,7 +87,6 @@ func (m *MPTokenIssuance) Decode(data []byte) error {
 				m.PreviousTxnLgrSeq = val
 				m.present |= mptokenissuanceBitPreviousTxnLgrSeq
 			default:
-				_ = val
 				return newErrUnknownField("MPTokenIssuance", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -110,7 +108,6 @@ func (m *MPTokenIssuance) Decode(data []byte) error {
 				m.LockedAmount = val
 				m.present |= mptokenissuanceBitLockedAmount
 			default:
-				_ = val
 				return newErrUnknownField("MPTokenIssuance", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -126,7 +123,6 @@ func (m *MPTokenIssuance) Decode(data []byte) error {
 				m.DomainID = val
 				m.present |= mptokenissuanceBitDomainID
 			default:
-				_ = val
 				return newErrUnknownField("MPTokenIssuance", typeCode, fieldCode)
 			}
 		case 7: // Blob
@@ -139,7 +135,6 @@ func (m *MPTokenIssuance) Decode(data []byte) error {
 				m.MPTokenMetadata = val
 				m.present |= mptokenissuanceBitMPTokenMetadata
 			default:
-				_ = val
 				return newErrUnknownField("MPTokenIssuance", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -152,7 +147,6 @@ func (m *MPTokenIssuance) Decode(data []byte) error {
 				m.Issuer = val
 				m.present |= mptokenissuanceBitIssuer
 			default:
-				_ = val
 				return newErrUnknownField("MPTokenIssuance", typeCode, fieldCode)
 			}
 		case 16: // UInt8
@@ -166,7 +160,6 @@ func (m *MPTokenIssuance) Decode(data []byte) error {
 				m.AssetScale = val
 				m.present |= mptokenissuanceBitAssetScale
 			default:
-				_ = val
 				return newErrUnknownField("MPTokenIssuance", typeCode, fieldCode)
 			}
 		default:

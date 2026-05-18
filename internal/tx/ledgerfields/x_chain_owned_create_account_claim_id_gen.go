@@ -54,7 +54,6 @@ func (x *XChainOwnedCreateAccountClaimID) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("XChainOwnedCreateAccountClaimID", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -67,7 +66,6 @@ func (x *XChainOwnedCreateAccountClaimID) Decode(data []byte) error {
 				x.PreviousTxnLgrSeq = val
 				x.present |= xchainownedcreateaccountclaimidBitPreviousTxnLgrSeq
 			default:
-				_ = val
 				return newErrUnknownField("XChainOwnedCreateAccountClaimID", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -83,7 +81,6 @@ func (x *XChainOwnedCreateAccountClaimID) Decode(data []byte) error {
 				x.XChainAccountCreateCount = val
 				x.present |= xchainownedcreateaccountclaimidBitXChainAccountCreateCount
 			default:
-				_ = val
 				return newErrUnknownField("XChainOwnedCreateAccountClaimID", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -96,7 +93,6 @@ func (x *XChainOwnedCreateAccountClaimID) Decode(data []byte) error {
 				x.PreviousTxnID = val
 				x.present |= xchainownedcreateaccountclaimidBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("XChainOwnedCreateAccountClaimID", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -109,7 +105,6 @@ func (x *XChainOwnedCreateAccountClaimID) Decode(data []byte) error {
 				x.Account = val
 				x.present |= xchainownedcreateaccountclaimidBitAccount
 			default:
-				_ = val
 				return newErrUnknownField("XChainOwnedCreateAccountClaimID", typeCode, fieldCode)
 			}
 		case 15: // STArray
@@ -122,7 +117,6 @@ func (x *XChainOwnedCreateAccountClaimID) Decode(data []byte) error {
 				x.XChainCreateAccountAttestations = val
 				x.present |= xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations
 			default:
-				_ = val
 				return newErrUnknownField("XChainOwnedCreateAccountClaimID", typeCode, fieldCode)
 			}
 		case 25: // XChainBridge
@@ -135,7 +129,6 @@ func (x *XChainOwnedCreateAccountClaimID) Decode(data []byte) error {
 				x.XChainBridge = val
 				x.present |= xchainownedcreateaccountclaimidBitXChainBridge
 			default:
-				_ = val
 				return newErrUnknownField("XChainOwnedCreateAccountClaimID", typeCode, fieldCode)
 			}
 		default:

@@ -52,7 +52,6 @@ func (n *NFTokenPage) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("NFTokenPage", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -68,7 +67,6 @@ func (n *NFTokenPage) Decode(data []byte) error {
 				n.PreviousTxnLgrSeq = val
 				n.present |= nftokenpageBitPreviousTxnLgrSeq
 			default:
-				_ = val
 				return newErrUnknownField("NFTokenPage", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -87,7 +85,6 @@ func (n *NFTokenPage) Decode(data []byte) error {
 				n.NextPageMin = val
 				n.present |= nftokenpageBitNextPageMin
 			default:
-				_ = val
 				return newErrUnknownField("NFTokenPage", typeCode, fieldCode)
 			}
 		case 15: // STArray
@@ -100,7 +97,6 @@ func (n *NFTokenPage) Decode(data []byte) error {
 				n.NFTokens = val
 				n.present |= nftokenpageBitNFTokens
 			default:
-				_ = val
 				return newErrUnknownField("NFTokenPage", typeCode, fieldCode)
 			}
 		default:

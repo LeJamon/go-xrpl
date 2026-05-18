@@ -66,7 +66,6 @@ func (c *Check) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("Check", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -94,7 +93,6 @@ func (c *Check) Decode(data []byte) error {
 				c.DestinationTag = val
 				c.present |= checkBitDestinationTag
 			default:
-				_ = val
 				return newErrUnknownField("Check", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -110,7 +108,6 @@ func (c *Check) Decode(data []byte) error {
 				c.DestinationNode = val
 				c.present |= checkBitDestinationNode
 			default:
-				_ = val
 				return newErrUnknownField("Check", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -126,7 +123,6 @@ func (c *Check) Decode(data []byte) error {
 				c.InvoiceID = val
 				c.present |= checkBitInvoiceID
 			default:
-				_ = val
 				return newErrUnknownField("Check", typeCode, fieldCode)
 			}
 		case 6: // Amount
@@ -139,7 +135,6 @@ func (c *Check) Decode(data []byte) error {
 				c.SendMax = val
 				c.present |= checkBitSendMax
 			default:
-				_ = val
 				return newErrUnknownField("Check", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -155,7 +150,6 @@ func (c *Check) Decode(data []byte) error {
 				c.Destination = val
 				c.present |= checkBitDestination
 			default:
-				_ = val
 				return newErrUnknownField("Check", typeCode, fieldCode)
 			}
 		default:

@@ -68,7 +68,6 @@ func (v *Vault) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -84,7 +83,6 @@ func (v *Vault) Decode(data []byte) error {
 				v.PreviousTxnLgrSeq = val
 				v.present |= vaultBitPreviousTxnLgrSeq
 			default:
-				_ = val
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -97,7 +95,6 @@ func (v *Vault) Decode(data []byte) error {
 				v.OwnerNode = val
 				v.present |= vaultBitOwnerNode
 			default:
-				_ = val
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -110,7 +107,6 @@ func (v *Vault) Decode(data []byte) error {
 				v.PreviousTxnID = val
 				v.present |= vaultBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
 		case 7: // Blob
@@ -123,7 +119,6 @@ func (v *Vault) Decode(data []byte) error {
 				v.Data = val
 				v.present |= vaultBitData
 			default:
-				_ = val
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -139,7 +134,6 @@ func (v *Vault) Decode(data []byte) error {
 				v.Owner = val
 				v.present |= vaultBitOwner
 			default:
-				_ = val
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
 		case 9: // Number
@@ -161,7 +155,6 @@ func (v *Vault) Decode(data []byte) error {
 				v.LossUnrealized = val
 				v.present |= vaultBitLossUnrealized
 			default:
-				_ = val
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
 		case 16: // UInt8
@@ -175,7 +168,6 @@ func (v *Vault) Decode(data []byte) error {
 				v.WithdrawalPolicy = val
 				v.present |= vaultBitWithdrawalPolicy
 			default:
-				_ = val
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
 		case 21: // Hash192
@@ -188,7 +180,6 @@ func (v *Vault) Decode(data []byte) error {
 				v.ShareMPTID = val
 				v.present |= vaultBitShareMPTID
 			default:
-				_ = val
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
 		case 24: // Issue
@@ -201,7 +192,6 @@ func (v *Vault) Decode(data []byte) error {
 				v.Asset = val
 				v.present |= vaultBitAsset
 			default:
-				_ = val
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
 		default:

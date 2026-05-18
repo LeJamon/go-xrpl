@@ -60,7 +60,6 @@ func (c *Credential) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("Credential", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -79,7 +78,6 @@ func (c *Credential) Decode(data []byte) error {
 				c.Expiration = val
 				c.present |= credentialBitExpiration
 			default:
-				_ = val
 				return newErrUnknownField("Credential", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -95,7 +93,6 @@ func (c *Credential) Decode(data []byte) error {
 				c.SubjectNode = val
 				c.present |= credentialBitSubjectNode
 			default:
-				_ = val
 				return newErrUnknownField("Credential", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -108,7 +105,6 @@ func (c *Credential) Decode(data []byte) error {
 				c.PreviousTxnID = val
 				c.present |= credentialBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("Credential", typeCode, fieldCode)
 			}
 		case 7: // Blob
@@ -124,7 +120,6 @@ func (c *Credential) Decode(data []byte) error {
 				c.CredentialType = val
 				c.present |= credentialBitCredentialType
 			default:
-				_ = val
 				return newErrUnknownField("Credential", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -140,7 +135,6 @@ func (c *Credential) Decode(data []byte) error {
 				c.Subject = val
 				c.present |= credentialBitSubject
 			default:
-				_ = val
 				return newErrUnknownField("Credential", typeCode, fieldCode)
 			}
 		default:

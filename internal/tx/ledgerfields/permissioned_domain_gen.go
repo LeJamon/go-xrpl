@@ -54,7 +54,6 @@ func (p *PermissionedDomain) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("PermissionedDomain", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -73,7 +72,6 @@ func (p *PermissionedDomain) Decode(data []byte) error {
 				p.PreviousTxnLgrSeq = val
 				p.present |= permissioneddomainBitPreviousTxnLgrSeq
 			default:
-				_ = val
 				return newErrUnknownField("PermissionedDomain", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -86,7 +84,6 @@ func (p *PermissionedDomain) Decode(data []byte) error {
 				p.OwnerNode = val
 				p.present |= permissioneddomainBitOwnerNode
 			default:
-				_ = val
 				return newErrUnknownField("PermissionedDomain", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -99,7 +96,6 @@ func (p *PermissionedDomain) Decode(data []byte) error {
 				p.PreviousTxnID = val
 				p.present |= permissioneddomainBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("PermissionedDomain", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -112,7 +108,6 @@ func (p *PermissionedDomain) Decode(data []byte) error {
 				p.Owner = val
 				p.present |= permissioneddomainBitOwner
 			default:
-				_ = val
 				return newErrUnknownField("PermissionedDomain", typeCode, fieldCode)
 			}
 		case 15: // STArray
@@ -125,7 +120,6 @@ func (p *PermissionedDomain) Decode(data []byte) error {
 				p.AcceptedCredentials = val
 				p.present |= permissioneddomainBitAcceptedCredentials
 			default:
-				_ = val
 				return newErrUnknownField("PermissionedDomain", typeCode, fieldCode)
 			}
 		default:

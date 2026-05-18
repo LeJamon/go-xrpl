@@ -69,7 +69,6 @@ func (d *DirectoryNode) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -85,7 +84,6 @@ func (d *DirectoryNode) Decode(data []byte) error {
 				d.PreviousTxnLgrSeq = val
 				d.present |= directorynodeBitPreviousTxnLgrSeq
 			default:
-				_ = val
 				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
 		case 3: // UInt64
@@ -104,7 +102,6 @@ func (d *DirectoryNode) Decode(data []byte) error {
 				d.ExchangeRate = val
 				d.present |= directorynodeBitExchangeRate
 			default:
-				_ = val
 				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -126,7 +123,6 @@ func (d *DirectoryNode) Decode(data []byte) error {
 				d.DomainID = val
 				d.present |= directorynodeBitDomainID
 			default:
-				_ = val
 				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
 		case 8: // AccountID
@@ -139,7 +135,6 @@ func (d *DirectoryNode) Decode(data []byte) error {
 				d.Owner = val
 				d.present |= directorynodeBitOwner
 			default:
-				_ = val
 				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
 		case 17: // Hash160
@@ -161,7 +156,6 @@ func (d *DirectoryNode) Decode(data []byte) error {
 				d.TakerGetsIssuer = val
 				d.present |= directorynodeBitTakerGetsIssuer
 			default:
-				_ = val
 				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
 		case 19: // Vector256
@@ -173,7 +167,6 @@ func (d *DirectoryNode) Decode(data []byte) error {
 			case 1:
 				_ = val // Indexes is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
 		default:

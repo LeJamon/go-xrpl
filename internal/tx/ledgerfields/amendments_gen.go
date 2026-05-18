@@ -50,7 +50,6 @@ func (a *Amendments) Decode(data []byte) error {
 			case 1:
 				_ = val // LedgerEntryType is sMD_Never; discard
 			default:
-				_ = val
 				return newErrUnknownField("Amendments", typeCode, fieldCode)
 			}
 		case 2: // UInt32
@@ -66,7 +65,6 @@ func (a *Amendments) Decode(data []byte) error {
 				a.PreviousTxnLgrSeq = val
 				a.present |= amendmentsBitPreviousTxnLgrSeq
 			default:
-				_ = val
 				return newErrUnknownField("Amendments", typeCode, fieldCode)
 			}
 		case 5: // Hash256
@@ -79,7 +77,6 @@ func (a *Amendments) Decode(data []byte) error {
 				a.PreviousTxnID = val
 				a.present |= amendmentsBitPreviousTxnID
 			default:
-				_ = val
 				return newErrUnknownField("Amendments", typeCode, fieldCode)
 			}
 		case 15: // STArray
@@ -92,7 +89,6 @@ func (a *Amendments) Decode(data []byte) error {
 				a.Majorities = val
 				a.present |= amendmentsBitMajorities
 			default:
-				_ = val
 				return newErrUnknownField("Amendments", typeCode, fieldCode)
 			}
 		case 19: // Vector256
@@ -105,7 +101,6 @@ func (a *Amendments) Decode(data []byte) error {
 				a.Amendments = val
 				a.present |= amendmentsBitAmendments
 			default:
-				_ = val
 				return newErrUnknownField("Amendments", typeCode, fieldCode)
 			}
 		default:
