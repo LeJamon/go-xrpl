@@ -1,7 +1,9 @@
 package ledgerfields
 
 import (
+	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"strconv"
 
@@ -193,11 +195,10 @@ func (r *streamReader) readAmount() (any, error) {
 	return nil, errUnsupportedAmount
 }
 
-// readAmountAny decodes any Amount variant (XRP, IOU, MPT). XRP stays inline;
-// IOU/MPT delegate to the binarycodec types.Amount decoder. Order matches
-// types/amount.go ToJSON: IOU first (bit 0x80), then MPT (bit 0x20), else XRP.
-// Used by entry types whose Amount fields can legitimately be non-XRP (e.g.
-// Offer.TakerPays).
+// readAmountAny decodes any Amount variant (XRP, IOU, MPT) inline. Order
+// matches types/amount.go ToJSON: IOU first (bit 0x80), then MPT (bit 0x20),
+// else XRP. Used by entry types whose Amount fields can legitimately be
+// non-XRP (e.g. Offer.TakerPays, RippleState.Balance/LowLimit/HighLimit).
 func (r *streamReader) readAmountAny() (any, error) {
 	if r.pos >= len(r.data) {
 		return nil, errors.New("ledgerfields: out of bounds reading Amount")
@@ -205,26 +206,271 @@ func (r *streamReader) readAmountAny() (any, error) {
 	first := r.data[r.pos]
 	switch {
 	case first&0x80 != 0:
-		return r.readAmountViaCodec(48) // IOU
+		return r.readIOUAmount()
 	case first&0x20 != 0:
-		return r.readAmountViaCodec(33) // MPT
+		return r.readMPTAmount()
 	default:
-		return r.readAmount() // XRP
+		return r.readAmount()
 	}
-}
-
-func (r *streamReader) readAmountViaCodec(n int) (any, error) {
-	if r.pos+n > len(r.data) {
-		return nil, errors.New("ledgerfields: out of bounds reading IOU/MPT Amount")
-	}
-	p := serdes.NewBinaryParser(r.data[r.pos:r.pos+n], definitions.Get())
-	amt := &types.Amount{}
-	v, err := amt.ToJSON(p)
-	r.pos += n
-	return v, err
 }
 
 var errUnsupportedAmount = errors.New("ledgerfields: non-XRP amount in streaming decode")
+
+// iouZeroBytes is the canonical 8-byte representation of an IOU value of 0
+// (matches types/amount.go ZeroCurrencyAmountHex = 0x8000000000000000).
+var iouZeroBytes = []byte{0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+
+// readIOUAmount decodes a 48-byte issued-currency Amount inline. It avoids
+// the allocations that types.Amount.ToJSON incurs through bigdecimal,
+// strings.ToUpper and hex.EncodeToString. The returned map matches the shape
+// the codec produces: {value, currency, issuer}.
+func (r *streamReader) readIOUAmount() (map[string]any, error) {
+	if r.pos+48 > len(r.data) {
+		return nil, errors.New("ledgerfields: out of bounds reading IOU Amount")
+	}
+	data := r.data[r.pos : r.pos+48]
+	r.pos += 48
+
+	var value string
+	if bytes.Equal(data[0:8], iouZeroBytes) {
+		value = "0"
+	} else {
+		v, err := decodeIOUValue(data[0:8])
+		if err != nil {
+			return nil, err
+		}
+		value = v
+	}
+
+	currency, err := decodeCurrencyCode(data[8:28])
+	if err != nil {
+		return nil, err
+	}
+
+	issuer, err := addresscodec.Encode(
+		data[28:48],
+		[]byte{addresscodec.AccountAddressPrefix},
+		addresscodec.AccountAddressLength,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"value":    value,
+		"currency": currency,
+		"issuer":   issuer,
+	}, nil
+}
+
+// IOU bounds — copied from codec/binarycodec/types/amount.go so the inline
+// decoder can validate without importing the codec types package.
+const (
+	maxIOUPrecisionInline = 16
+	minIOUExponentInline  = -96
+	maxIOUExponentInline  = 80
+)
+
+var (
+	errIOUInvalidZero = errors.New("ledgerfields: invalid zero IOU value")
+	errIOUPrecision   = errors.New("ledgerfields: IOU precision out of range")
+	errIOUExponent    = errors.New("ledgerfields: IOU exponent out of range")
+)
+
+// decodeIOUValue produces the decimal string that
+// codec/binarycodec/types/amount.go's deserializeValue → bigdecimal
+// GetScaledValue path would return, but without constructing a big.Float or
+// invoking the bigdecimal package. It also performs the equivalent of
+// verifyIOUValue inline by validating precision and adjusted exponent against
+// the encoded mantissa/exponent.
+func decodeIOUValue(data []byte) (string, error) {
+	b1 := data[0]
+	b2 := data[1]
+	positive := b1&0x40 != 0
+	rawExp := int(b1&0x3F)<<2 | int(b2>>6)
+	rawExp -= 97
+
+	mantissa := uint64(b2&0x3F)<<48 |
+		uint64(data[2])<<40 |
+		uint64(data[3])<<32 |
+		uint64(data[4])<<24 |
+		uint64(data[5])<<16 |
+		uint64(data[6])<<8 |
+		uint64(data[7])
+	if mantissa == 0 {
+		return "", errIOUInvalidZero
+	}
+
+	mantStr := strconv.FormatUint(mantissa, 10)
+	origLen := len(mantStr)
+	trimLen := origLen
+	for trimLen > 0 && mantStr[trimLen-1] == '0' {
+		trimLen--
+	}
+	mTrimmed := mantStr[:trimLen]
+
+	// verifyIOUValue: bigdecimal sees Scale = rawExp + (origLen - trimLen),
+	// Precision = trimLen. adjustedExp = Scale + Precision - 16 collapses to
+	// rawExp + origLen - 16, independent of how many trailing zeros the
+	// mantissa carried.
+	precision := trimLen
+	if precision > maxIOUPrecisionInline {
+		return "", errIOUPrecision
+	}
+	adjustedExp := rawExp + origLen - 16
+	if adjustedExp < minIOUExponentInline || adjustedExp > maxIOUExponentInline {
+		return "", errIOUExponent
+	}
+
+	scale := rawExp + (origLen - trimLen)
+
+	if scale >= 0 {
+		buf := make([]byte, 0, boolToInt(!positive)+trimLen+scale)
+		if !positive {
+			buf = append(buf, '-')
+		}
+		buf = append(buf, mTrimmed...)
+		for i := 0; i < scale; i++ {
+			buf = append(buf, '0')
+		}
+		return string(buf), nil
+	}
+
+	s := -scale
+	if s >= trimLen {
+		// "0." + (s-trimLen) zeros + mTrimmed
+		buf := make([]byte, 0, boolToInt(!positive)+2+(s-trimLen)+trimLen)
+		if !positive {
+			buf = append(buf, '-')
+		}
+		buf = append(buf, '0', '.')
+		for i := 0; i < s-trimLen; i++ {
+			buf = append(buf, '0')
+		}
+		buf = append(buf, mTrimmed...)
+		return string(buf), nil
+	}
+	// mTrimmed[:trimLen-s] + "." + mTrimmed[trimLen-s:]
+	buf := make([]byte, 0, boolToInt(!positive)+trimLen+1)
+	if !positive {
+		buf = append(buf, '-')
+	}
+	buf = append(buf, mTrimmed[:trimLen-s]...)
+	buf = append(buf, '.')
+	buf = append(buf, mTrimmed[trimLen-s:]...)
+	return string(buf), nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// decodeCurrencyCode mirrors codec/binarycodec/types/amount.go's
+// deserializeCurrencyCode without the strings.ToUpper(hex.EncodeToString(...))
+// double allocation. Returns "XRP" for the all-zero sentinel, the uppercased
+// 3-char ISO code when the 12/3/5-byte standard layout matches the IOU
+// charset, and the upper-hex 40-char form for any non-standard 20-byte code.
+func decodeCurrencyCode(data []byte) (string, error) {
+	if len(data) != 20 {
+		return "", errors.New("ledgerfields: currency code must be 20 bytes")
+	}
+
+	allZero := true
+	for _, b := range data {
+		if b != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		return "XRP", nil
+	}
+
+	standardLayout := true
+	for i := 0; i < 12; i++ {
+		if data[i] != 0 {
+			standardLayout = false
+			break
+		}
+	}
+	if standardLayout {
+		for i := 15; i < 20; i++ {
+			if data[i] != 0 {
+				standardLayout = false
+				break
+			}
+		}
+	}
+
+	if standardLayout {
+		// 12 zero bytes + "XRP" + 5 zero bytes is reserved.
+		if data[12] == 'X' && data[13] == 'R' && data[14] == 'P' {
+			return "", errors.New("ledgerfields: invalid currency code")
+		}
+		var iso [3]byte
+		ok := true
+		for i := 0; i < 3; i++ {
+			b := data[12+i]
+			if b >= 'a' && b <= 'z' {
+				b -= 'a' - 'A'
+			}
+			iso[i] = b
+			if !isValidIOUCodeByte(b) {
+				ok = false
+			}
+		}
+		if ok {
+			return string(iso[:]), nil
+		}
+	}
+
+	return upperHex(data), nil
+}
+
+func isValidIOUCodeByte(b byte) bool {
+	switch {
+	case b >= '0' && b <= '9':
+		return true
+	case b >= 'A' && b <= 'Z':
+		return true
+	}
+	switch b {
+	case '?', '!', '@', '#', '$', '%', '^', '&', '*',
+		'<', '>', '(', ')', '{', '}', '[', ']', '|':
+		return true
+	}
+	return false
+}
+
+// readMPTAmount decodes a 33-byte MPToken Amount inline. verifyMPTValue
+// constrains |value| ≤ 2^63-1, so the 8-byte mantissa fits in a uint64 and
+// no big.Int math is required. The returned map shape matches the codec's
+// deserializeMPTAmount: {value, mpt_issuance_id}.
+func (r *streamReader) readMPTAmount() (map[string]any, error) {
+	if r.pos+33 > len(r.data) {
+		return nil, errors.New("ledgerfields: out of bounds reading MPT Amount")
+	}
+	data := r.data[r.pos : r.pos+33]
+	r.pos += 33
+
+	positive := data[0]&0x40 != 0
+	mant := binary.BigEndian.Uint64(data[1:9])
+
+	var value string
+	if positive {
+		value = strconv.FormatUint(mant, 10)
+	} else {
+		value = "-" + strconv.FormatUint(mant, 10)
+	}
+
+	return map[string]any{
+		"value":           value,
+		"mpt_issuance_id": hex.EncodeToString(data[9:33]),
+	}, nil
+}
 
 // readVector256 reads a VL-prefixed array of 32-byte hashes and returns
 // the canonical decoded form ([]string of uppercase hex hashes) that
@@ -383,4 +629,3 @@ func (r *streamReader) skipField(typeCode int) error {
 	}
 	return nil
 }
-
