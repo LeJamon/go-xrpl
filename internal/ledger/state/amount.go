@@ -487,8 +487,6 @@ func (a Amount) Signum() int {
 // Value returns the value as a string (for JSON serialization). MPT amounts
 // emit the raw int64 because rippled asserts mOffset == 0 for MPTIssue-held
 // assets (STAmount.cpp:343), so its getText never enters the scientific branch.
-// Gated on mptRaw rather than IsMPT() so amounts constructed via
-// NewMPTAmountDirect (no issuance ID) still emit the raw integer.
 func (a Amount) Value() string {
 	if a.IsNative() {
 		return a.xrp.String()

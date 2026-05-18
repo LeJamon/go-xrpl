@@ -96,8 +96,7 @@ var (
 
 // IsScientificOffset reports whether an IOU mantissa/exponent combination
 // renders in scientific notation, per rippled STAmount::getText
-// (STAmount.cpp:706-732). Single source of truth shared by the state
-// and ledgerfields packages.
+// (STAmount.cpp:706-732).
 func IsScientificOffset(exponent int) bool {
 	return exponent != 0 && (exponent < -25 || exponent > -5)
 }
