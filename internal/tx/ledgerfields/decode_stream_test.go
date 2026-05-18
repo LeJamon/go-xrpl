@@ -48,6 +48,10 @@ func TestReadAmountAny_MatchesCodec(t *testing.T) {
 			jsonValue: map[string]any{"value": "1234567890", "mpt_issuance_id": "00000000ABCDEF0123456789FEDCBA9876543210FEDCBA98"},
 		},
 		{
+			name:      "MPT_negative",
+			jsonValue: map[string]any{"value": "-1234567890", "mpt_issuance_id": "00000000ABCDEF0123456789FEDCBA9876543210FEDCBA98"},
+		},
+		{
 			name:      "XRP_drops",
 			jsonValue: "1000000",
 		},

@@ -632,22 +632,4 @@ func parseIOUValueFromString(value string) IOUAmountValue {
 	return NewIOUAmountValue(mantissa, exponent)
 }
 
-// flattenAmount converts an Amount to its JSON-compatible representation
-func flattenAmount(a Amount) any {
-	if a.IsNative() {
-		return a.xrp.String()
-	}
-	if a.IsMPT() {
-		return map[string]string{
-			"value":           a.iou.String(),
-			"mpt_issuance_id": a.mptIssuanceID,
-		}
-	}
-	return map[string]string{
-		"value":    a.iou.String(),
-		"currency": a.Currency,
-		"issuer":   a.Issuer,
-	}
-}
-
 // Add adds two amounts (must be same type)

@@ -543,12 +543,6 @@ func (r *streamReader) readNumber() (any, error) {
 	return r.decodeViaCodec(&types.Number{}, -1)
 }
 
-// readPathSet reads a PathSet. Currently no ledger entry type carries one;
-// this exists so the generator's type dispatch is complete.
-func (r *streamReader) readPathSet() (any, error) {
-	return r.decodeViaCodec(&types.PathSet{}, -1)
-}
-
 // decodeViaCodec builds a sub-parser positioned at r.pos, hands it to the
 // supplied SerializedType to decode, then advances r.pos by the number of
 // bytes the sub-parser consumed. vlen < 0 means "no explicit length"; the
@@ -582,50 +576,4 @@ func upperHex(b []byte) string {
 		buf[i*2+1] = hextable[v&0x0F]
 	}
 	return string(buf)
-}
-
-// skipField advances past the value of a field of the given type/code without
-// decoding it — used for unknown or sMD_Never fields. Falls back via err if
-// the type is one we don't know how to size.
-func (r *streamReader) skipField(typeCode int) error {
-	switch typeCode {
-	case 1: // UInt16
-		r.pos += 2
-	case 2: // UInt32
-		r.pos += 4
-	case 3: // UInt64
-		r.pos += 8
-	case 4: // Hash128
-		r.pos += 16
-	case 5: // Hash256
-		r.pos += 32
-	case 6: // Amount — same order as types/amount.go ToJSON.
-		if r.pos >= len(r.data) {
-			return errors.New("ledgerfields: out of bounds skipping Amount")
-		}
-		switch {
-		case r.data[r.pos]&0x80 != 0:
-			r.pos += 48 // IOU
-		case r.data[r.pos]&0x20 != 0:
-			r.pos += 33 // MPT
-		default:
-			r.pos += 8 // XRP
-		}
-	case 7, 8, 19: // Blob, AccountID, Vector256 (VL-prefixed)
-		n, err := r.readVariableLength()
-		if err != nil {
-			return err
-		}
-		r.pos += n
-	case 16: // UInt8
-		r.pos++
-	case 17: // Hash160
-		r.pos += 20
-	default:
-		return errors.New("ledgerfields: cannot skip unknown type code")
-	}
-	if r.pos > len(r.data) {
-		return errors.New("ledgerfields: skip overran buffer")
-	}
-	return nil
 }
