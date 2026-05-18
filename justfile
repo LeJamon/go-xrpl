@@ -2,11 +2,10 @@
 #
 # Install just: `brew install just` or `cargo install just`.
 
-# Honor an existing PKG_CONFIG_PATH; otherwise try Homebrew openssl@3 on
-# macOS so the OpenSSL CGO shim builds out of the box. On Linux,
-# libssl-dev / openssl-devel already register libssl + libcrypto in the
-# default pkg-config path.
-export PKG_CONFIG_PATH := env_var_or_default("PKG_CONFIG_PATH", `command -v brew >/dev/null 2>&1 && p=$(brew --prefix openssl@3 2>/dev/null) && [ -d "$p/lib/pkgconfig" ] && echo "$p/lib/pkgconfig" || echo ""`)
+# Honor an existing PKG_CONFIG_PATH; otherwise resolve Homebrew openssl@3
+# + secp256k1 on macOS so the CGO shims build out of the box. Linux's
+# distro -dev packages already register on the default pkg-config path.
+export PKG_CONFIG_PATH := env_var_or_default("PKG_CONFIG_PATH", `command -v brew >/dev/null 2>&1 && { paths=""; for pkg in openssl@3 secp256k1; do p=$(brew --prefix $pkg 2>/dev/null); [ -d "$p/lib/pkgconfig" ] && paths="${paths:+$paths:}$p/lib/pkgconfig"; done; echo "$paths"; } || echo ""`)
 export CGO_ENABLED := env_var_or_default("CGO_ENABLED", "1")
 
 golangci_version := "v2.11.3"
