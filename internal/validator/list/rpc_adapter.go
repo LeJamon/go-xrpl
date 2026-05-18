@@ -3,11 +3,16 @@ package list
 import (
 	"encoding/hex"
 	"strings"
-	"time"
 
 	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	rpctypes "github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
+
+// rippledTimeLayout mirrors rippled's to_string(NetClock::time_point)
+// format `%Y-%b-%d %T %Z` (chrono.h:75-88) — e.g.
+// "2026-May-18 10:30:00 UTC". Used for every timestamp field exposed
+// via the validators / validator_list_sites RPCs.
+const rippledTimeLayout = "2006-Jan-02 15:04:05 UTC"
 
 // RPCReader wraps an *Aggregator so it satisfies the
 // rpctypes.ValidatorListReader interface used by the validators and
@@ -75,11 +80,11 @@ func (r *RPCReader) Publishers() []rpctypes.ValidatorListPublisherInfo {
 		}
 		if !s.Effective.IsZero() {
 			info.EffectiveUnix = s.Effective.Unix()
-			info.EffectiveISO = s.Effective.UTC().Format(time.RFC3339)
+			info.EffectiveISO = s.Effective.UTC().Format(rippledTimeLayout)
 		}
 		if !s.Expiration.IsZero() {
 			info.ExpirationUnix = s.Expiration.Unix()
-			info.ExpirationISO = s.Expiration.UTC().Format(time.RFC3339)
+			info.ExpirationISO = s.Expiration.UTC().Format(rippledTimeLayout)
 		}
 		out = append(out, info)
 	}
@@ -104,14 +109,14 @@ func (r *RPCReader) Sites() []rpctypes.ValidatorListSiteInfo {
 		}
 		if !s.LastFetched.IsZero() {
 			info.LastRefreshUnix = s.LastFetched.Unix()
-			info.LastRefreshISO = s.LastFetched.UTC().Format(time.RFC3339)
+			info.LastRefreshISO = s.LastFetched.UTC().Format(rippledTimeLayout)
 		}
 		if !s.LastSuccess.IsZero() {
 			info.LastSuccessUnix = s.LastSuccess.Unix()
 		}
 		if !s.NextRefresh.IsZero() {
 			info.NextRefreshUnix = s.NextRefresh.Unix()
-			info.NextRefreshISO = s.NextRefresh.UTC().Format(time.RFC3339)
+			info.NextRefreshISO = s.NextRefresh.UTC().Format(rippledTimeLayout)
 		}
 		out = append(out, info)
 	}

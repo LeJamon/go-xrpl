@@ -38,6 +38,7 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (int
 	var earliestExpirationUnix int64
 	anyExpired := false
 	allAvailable := true
+	anyMissingExpiration := false
 	publisherCount := 0
 	threshold := 0
 
@@ -69,6 +70,8 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (int
 					if earliestExpirationUnix == 0 || p.ExpirationUnix < earliestExpirationUnix {
 						earliestExpirationUnix = p.ExpirationUnix
 					}
+				} else {
+					anyMissingExpiration = true
 				}
 				if !p.Available {
 					allAvailable = false
@@ -102,15 +105,28 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (int
 		quorum = ctx.Services.ValidationQuorum()
 	}
 
+	// Match rippled ValidatorList::count (ValidatorList.cpp:1547-1551):
+	// publisherLists_.size() + (localPublisherList non-empty ? 1 : 0).
+	// The non-empty local static stanza counts as a single source on top
+	// of the publisher set.
+	listCount := publisherCount
+	if len(localStatic) > 0 {
+		listCount++
+	}
+
 	validatorListSummary := map[string]interface{}{
-		"count":                    publisherCount,
+		"count":                    listCount,
 		"validator_list_threshold": threshold,
 	}
-	if publisherCount == 0 || earliestExpirationUnix == 0 {
+	// "unknown" gating mirrors rippled's expires() (ValidatorList.cpp:1560-1591):
+	// if any publisher's current.validUntil is unset the whole summary
+	// reports unknown. Tracked via anyMissingExpiration so a partial fetch
+	// can't paint over an unfetched publisher.
+	if publisherCount == 0 || anyMissingExpiration || earliestExpirationUnix == 0 {
 		validatorListSummary["status"] = "unknown"
 		validatorListSummary["expiration"] = "unknown"
 	} else {
-		validatorListSummary["expiration"] = time.Unix(earliestExpirationUnix, 0).UTC().Format(time.RFC3339)
+		validatorListSummary["expiration"] = formatRippledTime(time.Unix(earliestExpirationUnix, 0))
 		if anyExpired || !allAvailable {
 			validatorListSummary["status"] = "expired"
 		} else {
@@ -172,4 +188,16 @@ func nonNilStrings(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+// rippledTimeLayout matches rippled's to_string(NetClock::time_point)
+// at rippled/include/xrpl/basics/chrono.h:75-88 — `date::format("%Y-%b-%d %T %Z", tp)`
+// which produces strings like `"2026-May-18 10:30:00 UTC"`. Use for
+// the `expiration` / `effective` / `last_refresh_time` / `next_refresh_time`
+// fields exposed by the validators and validator_list_sites RPCs.
+const rippledTimeLayout = "2006-Jan-02 15:04:05 UTC"
+
+// formatRippledTime renders t in rippled's boost-style timestamp format.
+func formatRippledTime(t time.Time) string {
+	return t.UTC().Format(rippledTimeLayout)
 }

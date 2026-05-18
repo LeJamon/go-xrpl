@@ -45,14 +45,19 @@ const ErrorRetryInterval = 30 * time.Second
 
 // envelopeJSON is the JSON shape published at vl.* URLs (and the
 // equivalent file:// payloads). Decoded from the HTTP response body.
+//
+// RefreshMinutes mirrors rippled's `refresh_interval` field which is
+// parsed as `std::chrono::minutes{body[jss::refresh_interval].asUInt()}`
+// (ValidatorSite.cpp:484-489). Keep the wire-side unit explicit in the
+// field name so future readers do not redo this conformance check.
 type envelopeJSON struct {
-	Manifest    string             `json:"manifest"`
-	Blob        string             `json:"blob,omitempty"`
-	Signature   string             `json:"signature,omitempty"`
-	Version     uint32             `json:"version"`
-	PublicKey   string             `json:"public_key,omitempty"`
-	BlobsV2     []envelopeBlobJSON `json:"blobs_v2,omitempty"`
-	RefreshSecs int                `json:"refresh_interval,omitempty"`
+	Manifest       string             `json:"manifest"`
+	Blob           string             `json:"blob,omitempty"`
+	Signature      string             `json:"signature,omitempty"`
+	Version        uint32             `json:"version"`
+	PublicKey      string             `json:"public_key,omitempty"`
+	BlobsV2        []envelopeBlobJSON `json:"blobs_v2,omitempty"`
+	RefreshMinutes int                `json:"refresh_interval,omitempty"`
 }
 
 // envelopeBlobJSON is a v2 collection entry inside the JSON envelope.
@@ -106,6 +111,9 @@ func NewSitePoller(uris []string, agg *Aggregator, logger *slog.Logger) *SitePol
 // SetInterval overrides the default poll interval. Useful for tests that
 // don't want to wait 5 minutes between fetches; production callers
 // rarely override.
+//
+// MUST be called before Start — there is no synchronization between
+// runOne goroutines and these setters.
 func (p *SitePoller) SetInterval(d time.Duration) {
 	if d <= 0 {
 		return
@@ -115,6 +123,9 @@ func (p *SitePoller) SetInterval(d time.Duration) {
 
 // SetHTTPClient overrides the HTTP client. Useful for tests that wire
 // a custom Transport (e.g. recording requests in-memory).
+//
+// MUST be called before Start — there is no synchronization between
+// runOne goroutines and these setters.
 func (p *SitePoller) SetHTTPClient(c *http.Client) {
 	if c != nil {
 		p.client = c
@@ -236,8 +247,8 @@ func (p *SitePoller) fetchAndApply(ctx context.Context, uri string) time.Duratio
 
 	refreshSec := 0
 	nextInterval := time.Duration(0)
-	if env.RefreshSecs > 0 {
-		d := time.Duration(env.RefreshSecs) * time.Second
+	if env.RefreshMinutes > 0 {
+		d := time.Duration(env.RefreshMinutes) * time.Minute
 		if d < DefaultMinRefresh {
 			d = DefaultMinRefresh
 		} else if d > DefaultMaxRefresh {

@@ -219,13 +219,21 @@ func New(cfg Config) (*Aggregator, error) {
 			Status:    StatusUnavailable,
 		}
 	}
-	sites := make([]*SiteState, 0, len(cfg.SiteURIs))
-	for _, u := range cfg.SiteURIs {
-		sites = append(sites, &SiteState{URI: u})
-	}
 	clock := cfg.Clock
 	if clock == nil {
 		clock = time.Now
+	}
+	// Seed NextRefresh at construction so the validator_list_sites RPC
+	// surfaces a real value before the first poll fires. Mirrors
+	// rippled ValidatorSite.cpp:83 (`nextRefresh = clock_type::now() +
+	// refreshInterval`).
+	initialNextRefresh := clock().Add(DefaultRefreshInterval)
+	sites := make([]*SiteState, 0, len(cfg.SiteURIs))
+	for _, u := range cfg.SiteURIs {
+		sites = append(sites, &SiteState{
+			URI:         u,
+			NextRefresh: initialNextRefresh,
+		})
 	}
 	logger := cfg.Logger
 	if logger == nil {
@@ -477,20 +485,20 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	current, ok := a.state[pubKey]
-	if !ok {
-		// Defensive — every publisher in `publishers` had an entry
-		// preallocated in New().
-		current = &PublisherState{MasterKey: pubKey, Status: StatusUnavailable}
-		a.state[pubKey] = current
-	}
+	// New() pre-populates state[pubKey] for every trusted publisher and
+	// the entry is never deleted, so a missing key would be an internal
+	// invariant break — surface it loudly rather than silently re-create.
+	current := a.state[pubKey]
 
 	// Determine disposition by sequence + time ordering. Mirrors the
-	// rippled state machine at ValidatorList.cpp:1394-1437.
+	// rippled state machine at ValidatorList.cpp:1394-1437. The
+	// SameSequence branch is intentionally unguarded by status —
+	// rippled returns same_sequence for every repeat of the current
+	// sequence regardless of `pubCollection.status`.
 	if parsedBlob.Sequence < current.Sequence {
 		return Stale, pubKey
 	}
-	if parsedBlob.Sequence == current.Sequence && current.Status != StatusUnavailable {
+	if parsedBlob.Sequence == current.Sequence {
 		return SameSequence, pubKey
 	}
 	if validUntil.Before(now) || validUntil.Equal(now) {

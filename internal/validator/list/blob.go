@@ -71,9 +71,10 @@ func parseBlob(rawBlob []byte) (*blobJSON, Disposition, error) {
 	if b.Expiration <= b.Effective {
 		return nil, Invalid, fmt.Errorf("blob expiration %d <= effective %d", b.Expiration, b.Effective)
 	}
-	if len(b.Validators) == 0 {
-		return nil, Invalid, errors.New("blob carries no validators")
-	}
+	// Empty `validators` arrays are structurally legal: rippled's
+	// verify() (ValidatorList.cpp:1394-1397) only asserts the field is
+	// an array, and applyList iterates zero entries when it's empty.
+	// Rejecting here would charge a peer for a frame rippled accepts.
 	for i, v := range b.Validators {
 		raw, err := hex.DecodeString(v.ValidationPublicKey)
 		if err != nil {

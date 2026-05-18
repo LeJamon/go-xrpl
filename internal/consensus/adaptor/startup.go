@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/config"
@@ -45,12 +46,15 @@ type Components struct {
 	// Nil iff ValidatorList is nil or no sites are configured.
 	ValidatorListPoller *validatorlist.SitePoller
 
-	// StaticTrustedMasterKeys carries the master pubkeys parsed out of
-	// the operator's `[validators]` config stanza. Captured here so the
-	// `validators` RPC can surface them as `local_static_keys` without
-	// having to re-parse config or query a mutable adaptor field that
-	// also includes publisher-derived entries.
-	StaticTrustedMasterKeys [][33]byte
+	// staticMu guards staticValidators / staticMasterKeys. Both slices
+	// hold the operator's most recent [validators] stanza — initially
+	// from boot, refreshed on every SIGHUP via ReloadStaticValidators.
+	// The publisher-trust OnChange callback reads under staticMu so a
+	// SIGHUP removal can never be silently undone by the next publisher
+	// event re-merging a boot-time snapshot.
+	staticMu         sync.RWMutex
+	staticValidators []consensus.NodeID
+	staticMasterKeys [][33]byte
 
 	// Archive is the on-disk validation archive, when enabled.
 	// Nil if disabled in config or if no relational DB is configured.
@@ -311,17 +315,6 @@ func NewFromConfig(
 		if err != nil {
 			return nil, fmt.Errorf("validator-list aggregator: %w", err)
 		}
-		// On every publisher-trust recompute, merge the publisher's
-		// validators with the operator's static [validators] stanza and
-		// push the union into the adaptor. The static list never
-		// disappears — operators may want to pin a few validators in
-		// addition to whatever a publisher publishes.
-		staticValidators := append([]consensus.NodeID(nil), validators...)
-		staticMasterKeys := append([][33]byte(nil), masterKeys...)
-		vlAgg.OnChange(func(publisherNodes []consensus.NodeID, publisherMasters [][33]byte) {
-			merged, mergedMasters := mergeValidators(staticValidators, staticMasterKeys, publisherNodes, publisherMasters)
-			adaptor.SetTrustedValidators(merged, mergedMasters)
-		})
 		router.SetValidatorListAggregator(vlAgg)
 		if len(appCfg.Validators.ValidatorListSites) > 0 {
 			vlPoller = validatorlist.NewSitePoller(
@@ -360,19 +353,82 @@ func NewFromConfig(
 		return opMode.String()
 	})
 
-	staticMastersCopy := append([][33]byte(nil), masterKeys...)
-	return &Components{
-		Overlay:                 overlay,
-		Engine:                  engine,
-		Adaptor:                 adaptor,
-		Router:                  router,
-		ModeManager:             modeManager,
-		Manifests:               manifestCache,
-		ValidatorList:           vlAgg,
-		ValidatorListPoller:     vlPoller,
-		StaticTrustedMasterKeys: staticMastersCopy,
-		Archive:                 validationArchive,
-	}, nil
+	c := &Components{
+		Overlay:             overlay,
+		Engine:              engine,
+		Adaptor:             adaptor,
+		Router:              router,
+		ModeManager:         modeManager,
+		Manifests:           manifestCache,
+		ValidatorList:       vlAgg,
+		ValidatorListPoller: vlPoller,
+		staticValidators:    append([]consensus.NodeID(nil), validators...),
+		staticMasterKeys:    append([][33]byte(nil), masterKeys...),
+		Archive:             validationArchive,
+	}
+
+	// Wire the publisher OnChange to merge against the live static set
+	// (held under c.staticMu, refreshed by SIGHUP). Capturing the boot
+	// values directly here would let a SIGHUP removal be silently undone
+	// by the next publisher event.
+	if vlAgg != nil {
+		vlAgg.OnChange(func(publisherNodes []consensus.NodeID, publisherMasters [][33]byte) {
+			staticV, staticM := c.snapshotStatic()
+			merged, mergedMasters := mergeValidators(staticV, staticM, publisherNodes, publisherMasters)
+			adaptor.SetTrustedValidators(merged, mergedMasters)
+		})
+	}
+
+	return c, nil
+}
+
+// snapshotStatic returns deep copies of the current static validator
+// set under staticMu. Both slices are safe for the caller to retain.
+func (c *Components) snapshotStatic() ([]consensus.NodeID, [][33]byte) {
+	c.staticMu.RLock()
+	defer c.staticMu.RUnlock()
+	v := append([]consensus.NodeID(nil), c.staticValidators...)
+	m := append([][33]byte(nil), c.staticMasterKeys...)
+	return v, m
+}
+
+// StaticTrustedMasterKeys returns a snapshot of the operator's static
+// [validators] master keys. Reflects the latest ReloadStaticValidators
+// call — i.e. SIGHUP-updated state, not just the boot-time stanza.
+func (c *Components) StaticTrustedMasterKeys() [][33]byte {
+	_, m := c.snapshotStatic()
+	return m
+}
+
+// ReloadStaticValidators replaces the operator's static [validators]
+// stanza atomically and re-pushes the resulting trusted set into the
+// adaptor.
+//
+// When a publisher-trust aggregator is wired, the push is the union of
+// the new static set and the aggregator's current trusted set —
+// mirrors rippled's updateTrusted which always recomputes from both
+// localPublisherList and publisherLists_. When no aggregator is wired
+// the static set is pushed verbatim (single source of truth).
+//
+// SIGHUP-driven config reload calls this; publisher events do NOT —
+// they go through the aggregator's OnChange callback wired in
+// NewFromConfig.
+func (c *Components) ReloadStaticValidators(validators []consensus.NodeID, masterKeys [][33]byte) {
+	c.staticMu.Lock()
+	c.staticValidators = append([]consensus.NodeID(nil), validators...)
+	c.staticMasterKeys = append([][33]byte(nil), masterKeys...)
+	c.staticMu.Unlock()
+
+	if c.Adaptor == nil {
+		return
+	}
+	if c.ValidatorList == nil {
+		c.Adaptor.SetTrustedValidators(validators, masterKeys)
+		return
+	}
+	pubNodes, pubMasters := c.ValidatorList.TrustedValidators()
+	merged, mergedMasters := mergeValidators(validators, masterKeys, pubNodes, pubMasters)
+	c.Adaptor.SetTrustedValidators(merged, mergedMasters)
 }
 
 // mergeValidators returns the deduplicated union of two
