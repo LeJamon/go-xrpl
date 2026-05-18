@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // NodeDBConfig represents the [node_db] and [import_db] sections
 // Configures the primary persistent datastore for ledger data
@@ -42,7 +45,7 @@ func (n *NodeDBConfig) Validate() error {
 		return fmt.Errorf("node_db type is required")
 	}
 	validTypes := []string{"pebble", "Pebble"}
-	if !contains_slice(validTypes, n.Type) {
+	if !slices.Contains(validTypes, n.Type) {
 		return fmt.Errorf("invalid node_db type: %s (valid options: pebble)", n.Type)
 	}
 
@@ -98,7 +101,7 @@ func (s *SQLiteConfig) Validate() error {
 	// Validate safety_level
 	if s.SafetyLevel != "" {
 		validSafetyLevels := []string{"high", "low"}
-		if !contains_slice(validSafetyLevels, s.SafetyLevel) {
+		if !slices.Contains(validSafetyLevels, s.SafetyLevel) {
 			return fmt.Errorf("invalid safety_level: %s (valid options: high, low)", s.SafetyLevel)
 		}
 
@@ -111,7 +114,7 @@ func (s *SQLiteConfig) Validate() error {
 	// Validate journal_mode
 	if s.JournalMode != "" {
 		validJournalModes := []string{"delete", "truncate", "persist", "memory", "wal", "off"}
-		if !contains_slice(validJournalModes, s.JournalMode) {
+		if !slices.Contains(validJournalModes, s.JournalMode) {
 			return fmt.Errorf("invalid journal_mode: %s (valid options: delete, truncate, persist, memory, wal, off)", s.JournalMode)
 		}
 	}
@@ -119,7 +122,7 @@ func (s *SQLiteConfig) Validate() error {
 	// Validate synchronous
 	if s.Synchronous != "" {
 		validSyncModes := []string{"off", "normal", "full", "extra"}
-		if !contains_slice(validSyncModes, s.Synchronous) {
+		if !slices.Contains(validSyncModes, s.Synchronous) {
 			return fmt.Errorf("invalid synchronous: %s (valid options: off, normal, full, extra)", s.Synchronous)
 		}
 	}
@@ -127,7 +130,7 @@ func (s *SQLiteConfig) Validate() error {
 	// Validate temp_store
 	if s.TempStore != "" {
 		validTempStores := []string{"default", "file", "memory"}
-		if !contains_slice(validTempStores, s.TempStore) {
+		if !slices.Contains(validTempStores, s.TempStore) {
 			return fmt.Errorf("invalid temp_store: %s (valid options: default, file, memory)", s.TempStore)
 		}
 	}
@@ -217,16 +220,6 @@ func (s *SQLiteConfig) GetPageSize() int {
 
 func (s *SQLiteConfig) GetJournalSizeLimit() int {
 	return s.JournalSizeLimit
-}
-
-// contains_slice checks if a slice contains a string
-func contains_slice(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
 }
 
 // isPowerOfTwo checks if a number is a power of 2

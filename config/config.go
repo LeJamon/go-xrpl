@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 )
 
 // Config represents the complete xrpld configuration
@@ -213,17 +214,7 @@ func (c *Config) GetWebSocketPorts() map[string]PortConfig {
 	return wsPorts
 }
 
-// containsProtocol checks if a protocol string contains a specific protocol
+// containsProtocol checks if a protocol string contains a specific protocol.
 func containsProtocol(protocols, target string) bool {
-	return contains(protocols, target)
-}
-
-// contains checks if a string contains a substring (case-insensitive)
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(protocols, target)
 }

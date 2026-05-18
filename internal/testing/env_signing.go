@@ -31,25 +31,9 @@ func WithSeq(transaction tx.Transaction, seq uint32) tx.Transaction {
 	return transaction
 }
 
-// formatUint64 formats a uint64 as a string (for XRP amounts).
+// formatUint64 formats a uint64 as a base-10 string (for XRP amounts).
 func formatUint64(n uint64) string {
-	// Simple conversion without importing strconv
-	if n == 0 {
-		return "0"
-	}
-
-	digits := make([]byte, 0, 20)
-	for n > 0 {
-		digits = append(digits, byte('0'+n%10))
-		n /= 10
-	}
-
-	// Reverse
-	for i, j := 0, len(digits)-1; i < j; i, j = i+1, j-1 {
-		digits[i], digits[j] = digits[j], digits[i]
-	}
-
-	return string(digits)
+	return strconv.FormatUint(n, 10)
 }
 
 // privateKeyHex returns the prefixed hex private key for use with tx.SignTransaction.

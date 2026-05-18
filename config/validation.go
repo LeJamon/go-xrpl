@@ -1,98 +1,103 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
 
 // ValidateConfig performs comprehensive validation on the complete configuration.
 // It collects ALL errors and returns them at once so operators can fix everything in one pass.
+// Individual errors are preserved via errors.Join so callers may inspect them
+// with errors.Is / errors.As.
 func ValidateConfig(config *Config) error {
-	var errors []string
+	var errs []error
 
 	// 1. Check all required fields are present
-	errors = append(errors, validateRequiredFields(config)...)
+	for _, msg := range validateRequiredFields(config) {
+		errs = append(errs, errors.New(msg))
+	}
 
 	// 2. Validate port configurations (if ports exist)
 	if len(config.Ports) > 0 {
-		if portErrors := validatePorts(config.Ports); portErrors != nil {
-			errors = append(errors, portErrors.Error())
+		if err := validatePorts(config.Ports); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
 	// 3. Validate peer protocol settings
 	if err := validatePeerProtocol(config); err != nil {
-		errors = append(errors, err.Error())
+		errs = append(errs, err)
 	}
 
 	// 4. Validate ripple protocol settings
 	if err := validateRippleProtocol(config); err != nil {
-		errors = append(errors, err.Error())
+		errs = append(errs, err)
 	}
 
 	// 5. Validate database configuration
 	if err := config.NodeDB.Validate(); err != nil {
-		errors = append(errors, fmt.Sprintf("node_db: %s", err.Error()))
+		errs = append(errs, fmt.Errorf("node_db: %w", err))
 	}
 	if err := config.ImportDB.Validate(); err != nil {
-		errors = append(errors, fmt.Sprintf("import_db: %s", err.Error()))
+		errs = append(errs, fmt.Errorf("import_db: %w", err))
 	}
 	if err := config.SQLite.Validate(); err != nil {
-		errors = append(errors, fmt.Sprintf("sqlite: %s", err.Error()))
+		errs = append(errs, fmt.Errorf("sqlite: %w", err))
 	}
 	if err := config.ValidationArchive.Validate(); err != nil {
-		errors = append(errors, fmt.Sprintf("validation_archive: %s", err.Error()))
+		errs = append(errs, fmt.Errorf("validation_archive: %w", err))
 	}
 
 	// 6. Validate diagnostics configuration
 	if err := config.Logging.Validate(); err != nil {
-		errors = append(errors, fmt.Sprintf("logging: %s", err.Error()))
+		errs = append(errs, fmt.Errorf("logging: %w", err))
 	}
 	if err := config.Insight.Validate(); err != nil {
-		errors = append(errors, fmt.Sprintf("insight: %s", err.Error()))
+		errs = append(errs, fmt.Errorf("insight: %w", err))
 	}
 	if err := config.Perf.Validate(); err != nil {
-		errors = append(errors, fmt.Sprintf("perf: %s", err.Error()))
+		errs = append(errs, fmt.Errorf("perf: %w", err))
 	}
 
 	// 7. Validate voting configuration
 	if err := config.Voting.Validate(); err != nil {
-		errors = append(errors, fmt.Sprintf("voting: %s", err.Error()))
+		errs = append(errs, fmt.Errorf("voting: %w", err))
 	}
 
 	// 8. Validate misc settings
 	if err := validateMiscSettings(config); err != nil {
-		errors = append(errors, err.Error())
+		errs = append(errs, err)
 	}
 
 	// 9. Validate crawl and VL configuration
 	if err := config.Crawl.Validate(); err != nil {
-		errors = append(errors, fmt.Sprintf("crawl: %s", err.Error()))
+		errs = append(errs, fmt.Errorf("crawl: %w", err))
 	}
 	if err := config.VL.Validate(); err != nil {
-		errors = append(errors, fmt.Sprintf("vl: %s", err.Error()))
+		errs = append(errs, fmt.Errorf("vl: %w", err))
 	}
 
 	// 10. Validate validators configuration
 	if err := config.Validators.Validate(); err != nil {
-		errors = append(errors, fmt.Sprintf("validators: %s", err.Error()))
+		errs = append(errs, fmt.Errorf("validators: %w", err))
 	}
 
 	// 11. Validate overlay and transaction queue
 	if err := config.Overlay.Validate(); err != nil {
-		errors = append(errors, fmt.Sprintf("overlay: %s", err.Error()))
+		errs = append(errs, fmt.Errorf("overlay: %w", err))
 	}
 	if err := config.TransactionQueue.Validate(); err != nil {
-		errors = append(errors, fmt.Sprintf("transaction_queue: %s", err.Error()))
+		errs = append(errs, fmt.Errorf("transaction_queue: %w", err))
 	}
 
 	// 12. Cross-validation checks
-	if crossErrors := validateCrossReferences(config); crossErrors != nil {
-		errors = append(errors, crossErrors.Error())
+	if err := validateCrossReferences(config); err != nil {
+		errs = append(errs, err)
 	}
 
-	if len(errors) > 0 {
-		return fmt.Errorf("configuration errors:\n  - %s", strings.Join(errors, "\n  - "))
+	if len(errs) > 0 {
+		return fmt.Errorf("configuration errors:\n%w", errors.Join(errs...))
 	}
 
 	return nil

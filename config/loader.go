@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/go-viper/mapstructure/v2"
@@ -83,15 +82,12 @@ func loadMainConfig(v *viper.Viper, configPath string) error {
 // If not specified, returns empty config (validation will catch this for non-standalone mode).
 func loadValidatorsConfig(validatorsPath, validatorsFile string) (*ValidatorsConfig, error) {
 	var filePath string
-	if validatorsPath != "" {
+	switch {
+	case validatorsPath != "":
 		filePath = validatorsPath
-	} else if validatorsFile != "" {
-		if !filepath.IsAbs(validatorsFile) {
-			filePath = validatorsFile
-		} else {
-			filePath = validatorsFile
-		}
-	} else {
+	case validatorsFile != "":
+		filePath = validatorsFile
+	default:
 		// No validators file specified — return empty config
 		return &ValidatorsConfig{}, nil
 	}
