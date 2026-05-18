@@ -2047,9 +2047,9 @@ drain:
 		}
 	}
 	if sawTimeout {
-		t.Errorf("no-soft-timeout: phaseEstablish must never produce a "+
-			"ConsensusReachedEvent with Result=Timeout — the goxrpl-only "+
-			"force-accept at LedgerMaxConsensus regressed back into the "+
+		t.Errorf("no-soft-timeout: phaseEstablish must never produce a " +
+			"ConsensusReachedEvent with Result=Timeout — the goxrpl-only " +
+			"force-accept at LedgerMaxConsensus regressed back into the " +
 			"establish path (#451 drift cause)")
 	}
 }
