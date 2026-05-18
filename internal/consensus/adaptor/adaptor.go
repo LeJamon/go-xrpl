@@ -73,7 +73,12 @@ type NetworkSender interface {
 	// request returns a partial tree, follow up with a request for
 	// each missing node by its SHAMap path-based NodeID. nodeIDs
 	// must each be exactly 33 bytes (32 path bytes + 1 depth byte).
-	RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte) error
+	// excluded carries peer IDs that should be skipped during this
+	// broadcast — populated by the router with peers that have
+	// repeatedly returned non-progressing TMLedgerData replies for
+	// this acquisition. A nil or empty map is the unrestricted case.
+	// Issue #420.
+	RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool) error
 	RequestLedger(id consensus.LedgerID) error
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error
 	RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error
@@ -125,7 +130,7 @@ func (n *noopSender) RelayProposal(*consensus.Proposal, uint64) error     { retu
 func (n *noopSender) RelayValidation(*consensus.Validation, uint64) error { return nil }
 func (n *noopSender) UpdateRelaySlot([]byte, uint64, []uint64)            {}
 func (n *noopSender) RequestTxSet(consensus.TxSetID) error                { return nil }
-func (n *noopSender) RequestTxSetMissingNodes(consensus.TxSetID, [][]byte) error {
+func (n *noopSender) RequestTxSetMissingNodes(consensus.TxSetID, [][]byte, map[uint64]bool) error {
 	return nil
 }
 func (n *noopSender) RequestLedger(consensus.LedgerID) error                   { return nil }
@@ -230,6 +235,15 @@ type Adaptor struct {
 	// briefly. See trusted_votes.go and rippled's TrustedVotes at
 	// AmendmentTable.cpp:75-286.
 	trustedVotes *TrustedVotes
+
+	// onTxSetRequested fires before every RequestTxSet broadcast so
+	// the router can re-arm its in-flight tx-set acquisition state
+	// (clear attempts and lastRequest), mirroring rippled's
+	// TransactionAcquire::stillNeed reset path invoked from
+	// InboundTransactionsImp::getSet at InboundTransactions.cpp:107-114.
+	// Nil before SetOnTxSetRequested is called; nil callers are a no-op.
+	// Issue #420.
+	onTxSetRequested func(consensus.TxSetID)
 
 	logger *slog.Logger
 }
@@ -526,12 +540,25 @@ func (a *Adaptor) UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPe
 	a.sender.UpdateRelaySlot(validatorKey, originPeer, seenPeers)
 }
 
+// SetOnTxSetRequested registers a callback invoked at the start of
+// every RequestTxSet. Used by the router to mirror rippled's
+// stillNeed re-arm: every active re-ask from consensus resets the
+// throttle/attempt bookkeeping on the in-flight acquisition so the
+// next inbound TMLedgerData broadcasts immediately. Set once at
+// startup; not safe for concurrent re-registration.
+func (a *Adaptor) SetOnTxSetRequested(cb func(consensus.TxSetID)) {
+	a.onTxSetRequested = cb
+}
+
 func (a *Adaptor) RequestTxSet(id consensus.TxSetID) error {
+	if a.onTxSetRequested != nil {
+		a.onTxSetRequested(id)
+	}
 	return a.sender.RequestTxSet(id)
 }
 
-func (a *Adaptor) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte) error {
-	return a.sender.RequestTxSetMissingNodes(id, nodeIDs)
+func (a *Adaptor) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool) error {
+	return a.sender.RequestTxSetMissingNodes(id, nodeIDs, excluded)
 }
 
 func (a *Adaptor) RequestLedger(id consensus.LedgerID) error {

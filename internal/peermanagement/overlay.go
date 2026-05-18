@@ -1744,6 +1744,46 @@ func (o *Overlay) BroadcastExcept(exceptPeer PeerID, msg []byte) error {
 	return nil
 }
 
+// BroadcastExceptSet sends a message to every connected peer whose
+// ID is not present in excluded. Used by tx-set acquire to skip peers
+// that have repeatedly returned non-progressing TMLedgerData responses.
+// This is a goXRPL-specific outbound filter; rippled does NOT remove
+// such peers from its peer set — it charges Resource::feeUselessData
+// (InboundTransactions.cpp:177-178) and lets the global resource
+// manager throttle them, so the peer stays eligible for the next
+// broadcast. goXRPL has no equivalent per-message resource accounting
+// today, hence the explicit per-acquire exclusion. A nil or empty
+// excluded map falls through to a plain Broadcast. Issue #420.
+func (o *Overlay) BroadcastExceptSet(excluded map[PeerID]bool, msg []byte) error {
+	if len(excluded) == 0 {
+		return o.Broadcast(msg)
+	}
+	o.peersMu.RLock()
+	defer o.peersMu.RUnlock()
+
+	for id, peer := range o.peers {
+		if excluded[id] {
+			continue
+		}
+		if peer.State() != PeerStateConnected {
+			continue
+		}
+		if err := peer.Send(msg); err != nil {
+			level := slog.LevelInfo
+			if errors.Is(err, ErrSendBufferFull) {
+				level = slog.LevelWarn
+			}
+			slog.Log(context.Background(), level, "broadcast-except-set send failed",
+				"t", "Overlay",
+				"peer", id,
+				"frame_size", len(msg),
+				"err", err.Error(),
+			)
+		}
+	}
+	return nil
+}
+
 // RelayFromValidator forwards a peer-originated validator message
 // (proposal or validation) to other connected peers, applying the
 // per-peer squelch filter on the ORIGINATING validator's pubkey AND
