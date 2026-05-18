@@ -928,10 +928,14 @@ func (a *Adaptor) GetTrustedValidators() []consensus.NodeID {
 // added entries flow into OnUNLChange so the NegativeUNL voter's
 // grace period (NewValidatorDisableSkip ledgers) covers them.
 //
-// validators and masterKeys may be different lengths; only the prefix
-// of validators where index < len(masterKeys) participates in
-// NegativeUNL voting (sfUNLModifyValidator carries the master pubkey).
-// Pass empty slices to clear the trusted set (standalone mode).
+// validators and masterKeys are index-aligned and MUST be the same
+// length (NodeIDs are derived from master keys via calcNodeID; every
+// trusted validator therefore has exactly one master pubkey). A
+// mismatch is logged at WARN and the trailing entries of whichever
+// slice is longer are dropped — defensive only, since the canonical
+// producer ParseValidatorKeysWithMaster always returns equal-length
+// slices. Pass two empty slices (nil, nil) to clear the trusted set
+// (standalone-mode transition).
 //
 // Mirrors the writable surface of rippled's ValidatorList:
 // applyLists → updateTrusted publishes the new trusted set; the next
@@ -944,6 +948,19 @@ func (a *Adaptor) GetTrustedValidators() []consensus.NodeID {
 // Safe for concurrent callers; copies inputs so callers may mutate
 // their slices after return.
 func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys [][33]byte) {
+	if len(validators) != len(masterKeys) && (len(validators) > 0 || len(masterKeys) > 0) {
+		a.logger.Warn("SetTrustedValidators: validators / masterKeys length mismatch; truncating to shorter",
+			"validators_count", len(validators),
+			"master_keys_count", len(masterKeys),
+		)
+		n := len(validators)
+		if len(masterKeys) < n {
+			n = len(masterKeys)
+		}
+		validators = validators[:n]
+		masterKeys = masterKeys[:n]
+	}
+
 	vCopy := make([]consensus.NodeID, len(validators))
 	copy(vCopy, validators)
 	newSet := make(map[consensus.NodeID]struct{}, len(validators))
@@ -962,9 +979,12 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 	a.trustedMasterKeys = mkCopy
 	a.mu.Unlock()
 
-	// trustedVotes owns its own mutex; call after releasing a.mu to
-	// avoid lock nesting. Safe to call with an empty slice — it just
-	// drops stale per-validator vote caches.
+	// trustedVotes is assigned once in New (adaptor.go:384) and never
+	// reassigned thereafter, so the unlocked read is safe — TrustedVotes
+	// owns its own internal mutex for the call itself. Calling after
+	// releasing a.mu avoids lock nesting (TrustedVotes.TrustChanged
+	// takes its mutex on the way in). Safe to call with an empty slice;
+	// it just drops stale per-validator vote caches.
 	if a.trustedVotes != nil {
 		a.trustedVotes.TrustChanged(vCopy)
 	}

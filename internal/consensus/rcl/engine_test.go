@@ -671,10 +671,10 @@ func TestEngine_StartRound_DrivesOnUNLChange(t *testing.T) {
 
 	engine := NewEngine(adaptor, DefaultConfig())
 
-	// First round: prevLedger nil → no OnUNLChange call (matches
-	// production where the first round can't gate on a parent ledger
-	// it hasn't seen yet; rippled's preStartRound is only invoked after
-	// closingInfo has resolved a parent — NetworkOPs.cpp:2070).
+	// Round 1: prevLedger nil → no OnUNLChange call (matches production
+	// where the first round can't gate on a parent ledger it hasn't seen
+	// yet; rippled's preStartRound is only invoked after closingInfo has
+	// resolved a parent — NetworkOPs.cpp:2070).
 	round1 := consensus.RoundID{Seq: prev.Seq() + 1, ParentHash: prev.ID()}
 	if err := engine.StartRound(round1, false); err != nil {
 		t.Fatalf("StartRound: %v", err)
@@ -683,10 +683,13 @@ func TestEngine_StartRound_DrivesOnUNLChange(t *testing.T) {
 		t.Fatalf("no parent ledger → expected 0 OnUNLChange calls, got %d", got)
 	}
 
-	// Second round: install prevLedger, keep the same UNL → the entire
-	// UNL is treated as "added" relative to the nil previousTrustedSet,
-	// matching rippled's first-call behavior where TrustChanges.added
-	// equals the full new UNL (NetworkOPs.cpp:2081 with an empty prior).
+	// Round 2: install prevLedger; the first call with a parent ledger
+	// SEEDS previousTrustedSet from the startup UNL and skips OnUNLChange.
+	// This mirrors rippled where ValidatorList::trustedMasterKeys_ is
+	// already populated by applyLists() before the first updateTrusted
+	// call, so the startup UNL is NOT reported in TrustChanges.added —
+	// otherwise every restart would hand every already-mature validator
+	// a fresh NewValidatorDisableSkip-ledger grace period.
 	engine.mu.Lock()
 	engine.prevLedger = prev
 	engine.mu.Unlock()
@@ -694,48 +697,76 @@ func TestEngine_StartRound_DrivesOnUNLChange(t *testing.T) {
 	if err := engine.StartRound(round2, false); err != nil {
 		t.Fatalf("StartRound: %v", err)
 	}
-	if got := len(adaptor.onUNLChangeCalls); got != 1 {
-		t.Fatalf("first round with prevLedger: expected 1 OnUNLChange call, got %d", got)
-	}
-	first := adaptor.onUNLChangeCalls[0]
-	if first.upcomingSeq != round2.Seq {
-		t.Errorf("upcomingSeq: want %d, got %d", round2.Seq, first.upcomingSeq)
-	}
-	if !sameNodeIDSet(first.nowTrusted, []consensus.NodeID{n1, n2}) {
-		t.Errorf("nowTrusted: want {n1,n2}, got %v", first.nowTrusted)
+	if got := len(adaptor.onUNLChangeCalls); got != 0 {
+		t.Fatalf("seeding round must not invoke OnUNLChange (startup UNL is not `added`); got %d", got)
 	}
 
-	// Third round: no UNL change → no OnUNLChange call (rippled's
+	// Round 3: same UNL → no OnUNLChange call (rippled's
 	// !nowTrusted.empty() gate at RCLConsensus.cpp:1042).
 	if err := engine.StartRound(round2, false); err != nil {
 		t.Fatalf("StartRound: %v", err)
 	}
-	if got := len(adaptor.onUNLChangeCalls); got != 1 {
+	if got := len(adaptor.onUNLChangeCalls); got != 0 {
 		t.Fatalf("unchanged UNL must not trigger a call; got %d total", got)
 	}
 
-	// Fourth round: add n3 → only n3 is forwarded, matching rippled's
-	// TrustChanges.added delta semantics.
+	// Round 4: add n3 → only n3 is forwarded, matching rippled's
+	// TrustChanges.added delta semantics. upcomingSeq is derived from
+	// prevLedger.Seq()+1 inside the engine, NOT from round.Seq.
 	adaptor.setTrusted([]consensus.NodeID{n1, n2, n3})
 	if err := engine.StartRound(round2, false); err != nil {
 		t.Fatalf("StartRound: %v", err)
 	}
-	if got := len(adaptor.onUNLChangeCalls); got != 2 {
-		t.Fatalf("added validator: expected 2 calls total, got %d", got)
+	if got := len(adaptor.onUNLChangeCalls); got != 1 {
+		t.Fatalf("added validator: expected 1 call total, got %d", got)
 	}
-	second := adaptor.onUNLChangeCalls[1]
-	if !sameNodeIDSet(second.nowTrusted, []consensus.NodeID{n3}) {
-		t.Errorf("delta must be {n3}, got %v", second.nowTrusted)
+	first := adaptor.onUNLChangeCalls[0]
+	if first.upcomingSeq != prev.Seq()+1 {
+		t.Errorf("upcomingSeq: want prevLedger.Seq()+1 = %d, got %d", prev.Seq()+1, first.upcomingSeq)
+	}
+	if !sameNodeIDSet(first.nowTrusted, []consensus.NodeID{n3}) {
+		t.Errorf("delta must be {n3}, got %v", first.nowTrusted)
 	}
 
-	// Fifth round: remove n2 → still no call (rippled only forwards
-	// `added`, never `removed`).
+	// Round 5: remove n2 → no call (rippled only forwards `added`, never
+	// `removed` — see RCLConsensus.cpp:1093-1103 where `nowUntrusted` is
+	// passed to consensus.startRound but explicitly NOT to preStartRound).
 	adaptor.setTrusted([]consensus.NodeID{n1, n3})
 	if err := engine.StartRound(round2, false); err != nil {
 		t.Fatalf("StartRound: %v", err)
 	}
-	if got := len(adaptor.onUNLChangeCalls); got != 2 {
+	if got := len(adaptor.onUNLChangeCalls); got != 1 {
 		t.Fatalf("removals must not trigger OnUNLChange; got %d total", got)
+	}
+}
+
+// TestEngine_StartRound_SeedingHonorsRestart pins the M2 fix more
+// pointedly: a node that restarts with a steady-state UNL must NOT
+// see any of its already-trusted validators forwarded to OnUNLChange.
+// Pre-M2, the first round with prevLedger registered every trusted
+// validator in the grace-period table, silently exempting them from
+// ToDisable voting for ~256 ledgers after every restart.
+func TestEngine_StartRound_SeedingHonorsRestart(t *testing.T) {
+	prev := &mockLedger{id: consensus.LedgerID{0xCA, 0xFE}, seq: 1000}
+	adaptor := newMockAdaptor()
+	adaptor.lastLCL = prev
+	adaptor.ledgers[prev.ID()] = prev
+	// Steady-state UNL loaded by startup — no validator should be
+	// treated as "new" by the very next round.
+	adaptor.setTrusted([]consensus.NodeID{{0x10}, {0x20}, {0x30}, {0x40}, {0x50}})
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	engine.mu.Lock()
+	engine.prevLedger = prev
+	engine.mu.Unlock()
+
+	round := consensus.RoundID{Seq: prev.Seq() + 1, ParentHash: prev.ID()}
+	if err := engine.StartRound(round, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if got := len(adaptor.onUNLChangeCalls); got != 0 {
+		t.Fatalf("steady-state restart must not forward any validator as `added`; got %d call(s): %+v",
+			got, adaptor.onUNLChangeCalls)
 	}
 }
 

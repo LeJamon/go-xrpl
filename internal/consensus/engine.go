@@ -174,8 +174,11 @@ type TxPool interface {
 
 	// OnUNLChange registers validators newly added to the operator-trusted
 	// set with the NegativeUNL voter's grace-period table. Called by the
-	// engine at the head of every consensus round; `upcomingSeq` is the
-	// seq of the round being started (`prevLedger.Seq() + 1`); `nowTrusted`
+	// engine at the head of every consensus round; `upcomingSeq` is
+	// `prevLedger.Seq() + 1` (the upcoming round's ledger sequence,
+	// derived directly from the parent ledger to keep the grace-period
+	// bookkeeping consistent with the voting-path purge — see
+	// GenerateNegativeUNLPseudoTx which keys off `prevSeq + 1`). `nowTrusted`
 	// is the delta — validators added since the previous round, NOT the
 	// full UNL. Mirrors rippled's preStartRound at RCLConsensus.cpp:1041-1043.
 	// The engine owns the feature-gate (featureNegativeUNL enabled on
