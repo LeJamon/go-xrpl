@@ -484,10 +484,16 @@ func (a Amount) Signum() int {
 	return a.iou.Signum()
 }
 
-// Value returns the value as a string (for JSON serialization)
+// Value returns the value as a string (for JSON serialization).
+// MPT amounts are emitted as the raw int64 — matching rippled's STAmount::getText
+// for assets holding MPTIssue, where mOffset is asserted to be 0
+// (STAmount.cpp:336-348) so scientific notation never applies.
 func (a Amount) Value() string {
 	if a.IsNative() {
 		return a.xrp.String()
+	}
+	if a.IsMPT() && a.mptRaw != nil {
+		return strconv.FormatInt(*a.mptRaw, 10)
 	}
 	return a.iou.String()
 }
@@ -523,7 +529,7 @@ func (a Amount) MarshalJSON() ([]byte, error) {
 	}
 	if a.IsMPT() {
 		return json.Marshal(map[string]string{
-			"value":           a.iou.String(),
+			"value":           a.Value(),
 			"mpt_issuance_id": a.mptIssuanceID,
 		})
 	}
