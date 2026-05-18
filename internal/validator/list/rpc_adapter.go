@@ -108,7 +108,7 @@ func (r *RPCReader) Sites() []rpctypes.ValidatorListSiteInfo {
 			RefreshIntervalMin: (s.RefreshSeconds + 59) / 60,
 		}
 		if s.LastDispositionSet {
-			info.LastDisposition = s.LastDisposition.String()
+			info.LastDisposition = dispositionRPCLabel(s.LastDisposition)
 		}
 		if !s.LastFetched.IsZero() {
 			info.LastRefreshUnix = s.LastFetched.Unix()
@@ -134,6 +134,17 @@ func (r *RPCReader) TrustedMasterKeys() [][33]byte {
 	}
 	_, masters := r.agg.TrustedValidators()
 	return masters
+}
+
+// dispositionRPCLabel returns the wire string for a Disposition as it
+// appears in the validator_list_sites RPC. Folds the goXRPL-only
+// Malformed back into rippled's "invalid" so external consumers parsing
+// rippled's ListDisposition enum see only labels rippled would emit.
+func dispositionRPCLabel(d Disposition) string {
+	if d == Malformed {
+		return Invalid.String()
+	}
+	return d.String()
 }
 
 // encodeNodeKeysBase58 returns base58-encoded NodePublic strings for a

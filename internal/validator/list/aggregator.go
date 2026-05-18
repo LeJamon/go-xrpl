@@ -352,6 +352,28 @@ func (a *Aggregator) SiteSnapshot() []SiteState {
 	return out
 }
 
+// SetNextRefresh schedules the next poll time for the given URL without
+// touching other site-state fields. Called by the poller at the start
+// of each fetch attempt so the validator_list_sites RPC reports the
+// upcoming refresh time even while the in-flight fetch is outstanding.
+// Mirrors rippled's onTimer ordering at ValidatorSite.cpp:354-355 where
+// `nextRefresh` is updated before `makeRequest` is invoked.
+//
+// Idempotent for unknown URIs.
+func (a *Aggregator) SetNextRefresh(uri string, nextRefresh time.Time) {
+	if nextRefresh.IsZero() {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, s := range a.sites {
+		if s.URI == uri {
+			s.NextRefresh = nextRefresh
+			return
+		}
+	}
+}
+
 // UpdateSiteState records the outcome of an HTTP poll attempt against a
 // configured publisher URL. The poller goroutine calls this after each
 // fetch attempt; the data flows through to the validator_list_sites
@@ -456,17 +478,23 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 			// Already had this or a newer one — cache state is
 			// unchanged; don't let an old revocation manifest flip
 			// the publisher's status.
-		case manifest.Invalid:
-			return Invalid, pubKey
-		case manifest.BadMasterKey, manifest.BadEphemeralKey:
-			return Invalid, pubKey
+		case manifest.Invalid, manifest.BadMasterKey, manifest.BadEphemeralKey:
+			// Rippled ValidatorList.cpp:1382-1383 returns
+			// `untrusted` for `result == ManifestDisposition::invalid`
+			// (and implicitly for badMasterKey/badEphemeralKey via the
+			// `!signingKey` fallback). Untrusted maps to feeUselessData
+			// (light), Invalid would map to feeInvalidSignature (heavy)
+			// — using Untrusted avoids overcharging honest peers that
+			// forward a list whose manifest the cache cannot accept.
+			return Untrusted, pubKey
 		}
 	} else {
 		// Fall back to direct verification when no cache is wired
 		// (tests). The signing key in the manifest is what we'd have
-		// pulled from the cache.
+		// pulled from the cache. Mirrors rippled's invalid-manifest →
+		// untrusted mapping at ValidatorList.cpp:1382-1383.
 		if err := parsed.Verify(); err != nil {
-			return Invalid, pubKey
+			return Untrusted, pubKey
 		}
 		// No cache means every fresh verify is "accepted" for the
 		// purpose of the revocation gate.
@@ -584,9 +612,15 @@ func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, sign
 	}
 
 	keys := make([][33]byte, 0, len(blob.Validators))
-	for _, v := range blob.Validators {
+	for i, v := range blob.Validators {
 		raw, err := hex.DecodeString(v.ValidationPublicKey)
-		if err != nil || len(raw) != 33 {
+		if err != nil || !validatorKeyValid(raw) {
+			// Mirrors rippled ValidatorList.cpp:1250-1273 which logs
+			// `Invalid node identity` and silently skips the entry
+			// rather than rejecting the surrounding blob.
+			a.logger.Debug("validator list: skipping invalid validator entry",
+				"index", i,
+				"pubkey", v.ValidationPublicKey)
 			continue
 		}
 		var k [33]byte

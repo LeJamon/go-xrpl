@@ -50,14 +50,16 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (int
 				entry := map[string]interface{}{
 					"pubkey_publisher": p.PublicKeyHex,
 					"available":        p.Available,
-					"status":           p.Status,
 					"uri":              p.SiteURI,
 					"list":             nonNilStrings(p.ValidatorsBase58),
 				}
 				if p.Sequence > 0 {
 					entry["seq"] = p.Sequence
 				}
-				if p.Version > 0 {
+				// Mirrors rippled ValidatorList.cpp:1693-1696: `version`
+				// is only emitted when the publisher's current.validUntil
+				// is set (i.e. an accepted/expired list has been ingested).
+				if p.ExpirationUnix > 0 && p.Version > 0 {
 					entry["version"] = p.Version
 				}
 				if p.EffectiveISO != "" {

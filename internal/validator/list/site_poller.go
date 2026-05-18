@@ -37,6 +37,10 @@ const DefaultMaxRefresh = 24 * time.Hour
 // 30s in ValidatorSite::activeFetcher; we mirror.
 const DefaultRequestTimeout = 30 * time.Second
 
+// MaxRedirects caps the number of HTTP redirects followed during a
+// single fetch. Matches rippled ValidatorSite.cpp:36 `max_redirects = 3`.
+const MaxRedirects = 3
+
 // ErrorRetryInterval is the cadence used to retry a failed fetch
 // (network error, non-2xx status, JSON decode failure). Mirrors
 // rippled's error_retry_interval at ValidatorSite.cpp:35 and the
@@ -101,6 +105,12 @@ func NewSitePoller(uris []string, agg *Aggregator, logger *slog.Logger) *SitePol
 		aggregator: agg,
 		client: &http.Client{
 			Timeout: DefaultRequestTimeout,
+			CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+				if len(via) >= MaxRedirects {
+					return fmt.Errorf("stopped after %d redirects", MaxRedirects)
+				}
+				return nil
+			},
 		},
 		logger:   logger,
 		interval: DefaultRefreshInterval,
@@ -194,6 +204,13 @@ func (p *SitePoller) runOne(ctx context.Context, uri string) {
 //   - Otherwise: zero, meaning "keep using the caller's interval".
 func (p *SitePoller) fetchAndApply(ctx context.Context, uri string) time.Duration {
 	now := time.Now().UTC()
+	// Schedule the next refresh time BEFORE the fetch begins, mirroring
+	// rippled's onTimer ordering (ValidatorSite.cpp:354-355) so the RPC
+	// reports the upcoming wakeup even while this fetch is outstanding.
+	// Errors and per-publisher overrides reset NextRefresh in the
+	// UpdateSiteState call below.
+	p.aggregator.SetNextRefresh(uri, now.Add(p.interval))
+
 	body, err := p.fetch(ctx, uri)
 	if err != nil {
 		p.logger.Warn("validator list site fetch failed",
@@ -210,8 +227,16 @@ func (p *SitePoller) fetchAndApply(ctx context.Context, uri string) time.Duratio
 		return ErrorRetryInterval
 	}
 
+	// Rippled ValidatorSite.cpp:391-393 requires `version` to be a
+	// present integer; a missing field fails validation and is logged
+	// as "missing fields". Treat a zero/absent version as Malformed so
+	// the RPC reports a real disposition rather than silently coercing
+	// the envelope into v1.
 	if env.Version == 0 {
-		env.Version = 1
+		msg := "envelope missing required `version` field"
+		p.logger.Warn(msg, "uri", uri)
+		p.aggregator.UpdateSiteState(uri, now, time.Time{}, msg, Malformed, 0, now.Add(ErrorRetryInterval))
+		return ErrorRetryInterval
 	}
 
 	var disp Disposition

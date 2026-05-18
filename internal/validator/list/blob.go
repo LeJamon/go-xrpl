@@ -12,6 +12,18 @@ import (
 	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
 )
 
+// validatorKeyValid reports whether raw is a 33-byte master pubkey with
+// a recognized key-type prefix. Used by applyAcceptedLocked to silently
+// skip malformed validator entries — mirrors rippled
+// ValidatorList.cpp:1250-1273 which logs and skips bad entries without
+// rejecting the surrounding list.
+func validatorKeyValid(raw []byte) bool {
+	if len(raw) != 33 {
+		return false
+	}
+	return crypto.PublicKeyType(raw) != crypto.KeyTypeUnknown
+}
+
 // rippleEpochOffset is the gap between Unix epoch (1970) and the XRPL
 // ripple epoch (2000-01-01 UTC). Validator-list expiration / effective
 // fields are encoded as seconds-since-ripple-epoch. Mirrors rippled's
@@ -50,9 +62,14 @@ type blobEntryJS struct {
 // parseBlob decodes the base64-encoded blob, JSON-unmarshals the inner
 // payload, and returns the parsed structure. Returns Malformed when the
 // outer encoding is broken (not base64 / not JSON), Invalid when the
-// structural invariants of the inner JSON fail (missing fields,
-// expiration <= effective, validator pubkey isn't 33 bytes of a known
-// key type).
+// validity-window invariant fails (expiration <= effective — mirrors
+// rippled ValidatorList.cpp:1406-1407).
+//
+// Per-entry validator pubkey validation is intentionally deferred to
+// applyAcceptedLocked: rippled at ValidatorList.cpp:1250-1273 logs and
+// silently skips malformed entries rather than rejecting the surrounding
+// blob, so a publisher mistake on one entry does not poison the whole
+// list.
 func parseBlob(rawBlob []byte) (*blobJSON, Disposition, error) {
 	decoded, err := decodeBase64Tolerant(rawBlob)
 	if err != nil {
@@ -62,30 +79,8 @@ func parseBlob(rawBlob []byte) (*blobJSON, Disposition, error) {
 	if err := json.Unmarshal(decoded, &b); err != nil {
 		return nil, Malformed, fmt.Errorf("blob JSON unmarshal: %w", err)
 	}
-	if b.Sequence == 0 {
-		return nil, Invalid, errors.New("blob missing or zero sequence")
-	}
-	if b.Expiration == 0 {
-		return nil, Invalid, errors.New("blob missing or zero expiration")
-	}
 	if b.Expiration <= b.Effective {
 		return nil, Invalid, fmt.Errorf("blob expiration %d <= effective %d", b.Expiration, b.Effective)
-	}
-	// Empty `validators` arrays are structurally legal: rippled's
-	// verify() (ValidatorList.cpp:1394-1397) only asserts the field is
-	// an array, and applyList iterates zero entries when it's empty.
-	// Rejecting here would charge a peer for a frame rippled accepts.
-	for i, v := range b.Validators {
-		raw, err := hex.DecodeString(v.ValidationPublicKey)
-		if err != nil {
-			return nil, Invalid, fmt.Errorf("validator[%d] pubkey not hex: %w", i, err)
-		}
-		if len(raw) != 33 {
-			return nil, Invalid, fmt.Errorf("validator[%d] pubkey is %d bytes, want 33", i, len(raw))
-		}
-		if crypto.PublicKeyType(raw) == crypto.KeyTypeUnknown {
-			return nil, Invalid, fmt.Errorf("validator[%d] pubkey has unknown key-type prefix", i)
-		}
 	}
 	return &b, Accepted, nil
 }
