@@ -1,7 +1,24 @@
 # Stage 1: Build
 FROM golang:1.24-alpine AS builder
 
-RUN apk add --no-cache git gcc musl-dev pkgconf openssl-dev openssl-libs-static
+# Alpine ships libsecp256k1 only as a shared .so; the static-linked
+# goxrpl binary needs a .a. Build it from a pinned upstream release in
+# the builder stage. v0.5.0 matches Alpine community's packaging and
+# exposes the same parse_der + normalize + verify ABI we use.
+ARG LIBSECP256K1_VERSION=v0.5.0
+
+RUN apk add --no-cache \
+    git gcc make musl-dev pkgconf autoconf automake libtool \
+    openssl-dev openssl-libs-static \
+ && git clone --depth 1 --branch ${LIBSECP256K1_VERSION} \
+    https://github.com/bitcoin-core/secp256k1.git /tmp/secp256k1 \
+ && cd /tmp/secp256k1 \
+ && ./autogen.sh \
+ && ./configure --disable-shared --enable-static \
+    --disable-tests --disable-benchmark --disable-exhaustive-tests \
+    --enable-module-recovery=no \
+ && make -j"$(nproc)" install \
+ && rm -rf /tmp/secp256k1
 
 WORKDIR /src
 
