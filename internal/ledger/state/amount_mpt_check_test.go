@@ -2,7 +2,6 @@ package state
 
 import (
 	"encoding/json"
-	"fmt"
 	"testing"
 )
 
@@ -11,22 +10,72 @@ func TestMPTAmountParse(t *testing.T) {
 	data := []byte(`{"value": "9223372036854775807", "mpt_issuance_id": "00000004ae123a8556f3cf91154711376afb0f894f832b3d"}`)
 
 	var amt Amount
-	err := json.Unmarshal(data, &amt)
-	if err != nil {
-		t.Fatalf("ERROR: %v", err)
+	if err := json.Unmarshal(data, &amt); err != nil {
+		t.Fatalf("unmarshal: %v", err)
 	}
 
-	fmt.Printf("IsMPT: %v\n", amt.IsMPT())
-	fmt.Printf("IsNative: %v\n", amt.IsNative())
-	fmt.Printf("MPTIssuanceID: %s\n", amt.MPTIssuanceID())
-	fmt.Printf("Value: %s\n", amt.Value())
-	fmt.Printf("IsZero: %v\n", amt.IsZero())
-	fmt.Printf("IsNegative: %v\n", amt.IsNegative())
-
+	if !amt.IsMPT() {
+		t.Fatalf("IsMPT = false, want true")
+	}
+	if amt.IsNative() {
+		t.Fatalf("IsNative = true, want false")
+	}
+	if got := amt.Value(); got != "9223372036854775807" {
+		t.Fatalf("Value = %q, want %q", got, "9223372036854775807")
+	}
 	raw, ok := amt.MPTRaw()
-	fmt.Printf("MPTRaw: %d, ok: %v\n", raw, ok)
+	if !ok || raw != 9223372036854775807 {
+		t.Fatalf("MPTRaw = (%d, %v), want (9223372036854775807, true)", raw, ok)
+	}
+}
 
-	// Test marshaling
-	b, _ := json.Marshal(amt)
-	fmt.Printf("JSON: %s\n", string(b))
+// TestAmount_MarshalJSON_MPTRawInteger pins MPT JSON output to the raw int64.
+// Rippled asserts mOffset == 0 for MPTIssue (STAmount.cpp:343), so getText
+// never emits scientific notation; IOU canonicalization would for values
+// >= 10^16.
+func TestAmount_MarshalJSON_MPTRawInteger(t *testing.T) {
+	t.Parallel()
+
+	issuanceID := "00000004AE123A8556F3CF91154711376AFB0F894F832B3D"
+	issuer := "rweYz56rfmQ98cAdRaeTxQS9wVMGnrdsFp"
+
+	tests := []struct {
+		name     string
+		value    int64
+		expected string
+	}{
+		{"small mpt", 100, "100"},
+		{"max canonical IOU mantissa", 9_999_999_999_999_999, "9999999999999999"},
+		{"10^16", 10_000_000_000_000_000, "10000000000000000"},
+		{"10^17", 100_000_000_000_000_000, "100000000000000000"},
+		{"max int64", 9_223_372_036_854_775_807, "9223372036854775807"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a := NewMPTAmountWithIssuanceID(tc.value, issuer, issuanceID)
+
+			if got := a.Value(); got != tc.expected {
+				t.Fatalf("Value() = %q, want %q", got, tc.expected)
+			}
+
+			raw, err := json.Marshal(a)
+			if err != nil {
+				t.Fatalf("json.Marshal: %v", err)
+			}
+			var decoded map[string]string
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				t.Fatalf("json.Unmarshal: %v (raw=%s)", err, string(raw))
+			}
+			if decoded["value"] != tc.expected {
+				t.Fatalf("MarshalJSON value = %q, want %q (raw=%s)",
+					decoded["value"], tc.expected, string(raw))
+			}
+			if decoded["mpt_issuance_id"] != issuanceID {
+				t.Fatalf("MarshalJSON mpt_issuance_id = %q, want %q",
+					decoded["mpt_issuance_id"], issuanceID)
+			}
+		})
+	}
 }

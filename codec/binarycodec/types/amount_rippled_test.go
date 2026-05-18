@@ -660,3 +660,58 @@ func TestIsPositiveFunction(t *testing.T) {
 		})
 	}
 }
+
+// encodeIOUValueWire builds the 8-byte IOU value field.
+// Layout: bit 63 = not-XRP, bit 62 = sign, bits 61-54 = (offset+97), bits 53-0 = mantissa.
+func encodeIOUValueWire(mantissa uint64, rawExp int, positive bool) []byte {
+	encExp := uint(rawExp + 97)
+	var flags byte = 0x80
+	if positive {
+		flags |= 0x40
+	}
+	b := make([]byte, 8)
+	b[0] = flags | byte(encExp>>2)
+	b[1] = byte((encExp&0x3)<<6) | byte((mantissa>>48)&0x3F)
+	b[2] = byte((mantissa >> 40) & 0xFF)
+	b[3] = byte((mantissa >> 32) & 0xFF)
+	b[4] = byte((mantissa >> 24) & 0xFF)
+	b[5] = byte((mantissa >> 16) & 0xFF)
+	b[6] = byte((mantissa >> 8) & 0xFF)
+	b[7] = byte(mantissa & 0xFF)
+	return b
+}
+
+// TestIOUValueScientificNotation pins deserializeValue to rippled's
+// STAmount::getText (STAmount.cpp:706-732).
+func TestIOUValueScientificNotation(t *testing.T) {
+	const canonical uint64 = 1_000_000_000_000_000 // 10^15
+
+	tests := []struct {
+		name     string
+		mantissa uint64
+		rawExp   int
+		positive bool
+		expected string
+	}{
+		{"exp=-4 boundary (scientific)", canonical, -4, true, "1000000000000000e-4"},
+		{"exp=-5 boundary (fixed-point)", canonical, -5, true, "10000000000"},
+		{"exp=-25 boundary (fixed-point)", canonical, -25, true, "0.0000000001"},
+		{"exp=-26 boundary (scientific)", canonical, -26, true, "1000000000000000e-26"},
+		{"exp=-96 min (scientific)", canonical, -96, true, "1000000000000000e-96"},
+		{"exp=-50 negative-deep (scientific)", canonical, -50, true, "1000000000000000e-50"},
+		{"exp=0 zero offset stays fixed-point", canonical, 0, true, "1000000000000000"},
+		{"exp=50 positive-deep (scientific)", canonical, 50, true, "1000000000000000e50"},
+		{"exp=80 max (scientific)", canonical, 80, true, "1000000000000000e80"},
+		{"negative scientific", canonical, -50, false, "-1000000000000000e-50"},
+		{"non-canonical-power mantissa, scientific", 1234567890123456, -30, true, "1234567890123456e-30"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := encodeIOUValueWire(tc.mantissa, tc.rawExp, tc.positive)
+			got, err := deserializeValue(wire)
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, got)
+		})
+	}
+}

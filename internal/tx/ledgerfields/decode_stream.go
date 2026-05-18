@@ -322,6 +322,18 @@ func decodeIOUValue(data []byte) (string, error) {
 		return "", errIOUExponent
 	}
 
+	if types.IsScientificOffset(rawExp) {
+		expStr := strconv.Itoa(rawExp)
+		buf := make([]byte, 0, boolToInt(!positive)+origLen+1+len(expStr))
+		if !positive {
+			buf = append(buf, '-')
+		}
+		buf = append(buf, mantStr...)
+		buf = append(buf, 'e')
+		buf = append(buf, expStr...)
+		return string(buf), nil
+	}
+
 	scale := rawExp + (origLen - trimLen)
 
 	if scale >= 0 {

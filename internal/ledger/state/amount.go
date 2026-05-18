@@ -6,6 +6,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/LeJamon/goXRPLd/codec/binarycodec/types"
 )
 
 // Constants matching rippled's STAmount.h
@@ -227,7 +229,8 @@ func (v IOUAmountValue) Float64() float64 {
 	return float64(v.mantissa) * math.Pow10(v.exponent)
 }
 
-// String returns a decimal string representation
+// String returns a decimal string matching rippled's STAmount::getText
+// (STAmount.cpp:706-732).
 func (v IOUAmountValue) String() string {
 	if v.mantissa == 0 {
 		return "0"
@@ -239,31 +242,31 @@ func (v IOUAmountValue) String() string {
 		mantissa = -mantissa
 	}
 
-	// Convert mantissa to string
 	mantissaStr := strconv.FormatInt(mantissa, 10)
-	mantissaLen := len(mantissaStr)
 
-	// Calculate where the decimal point should be
-	// The value is mantissa * 10^exponent
+	if types.IsScientificOffset(v.exponent) {
+		if negative {
+			return "-" + mantissaStr + "e" + strconv.Itoa(v.exponent)
+		}
+		return mantissaStr + "e" + strconv.Itoa(v.exponent)
+	}
+
+	mantissaLen := len(mantissaStr)
 	decimalPos := mantissaLen + v.exponent
 
 	var result string
 	if decimalPos <= 0 {
-		// Need leading zeros: 0.000...digits
 		result = "0." + strings.Repeat("0", -decimalPos) + mantissaStr
 	} else if decimalPos >= mantissaLen {
-		// No decimal point needed, or trailing zeros
 		if v.exponent >= 0 {
 			result = mantissaStr + strings.Repeat("0", v.exponent)
 		} else {
 			result = mantissaStr
 		}
 	} else {
-		// Decimal point in the middle
 		result = mantissaStr[:decimalPos] + "." + mantissaStr[decimalPos:]
 	}
 
-	// Remove trailing zeros after decimal point
 	if strings.Contains(result, ".") {
 		result = strings.TrimRight(result, "0")
 		result = strings.TrimRight(result, ".")
@@ -481,10 +484,15 @@ func (a Amount) Signum() int {
 	return a.iou.Signum()
 }
 
-// Value returns the value as a string (for JSON serialization)
+// Value returns the value as a string (for JSON serialization). MPT amounts
+// emit the raw int64 because rippled asserts mOffset == 0 for MPTIssue-held
+// assets (STAmount.cpp:343), so its getText never enters the scientific branch.
 func (a Amount) Value() string {
 	if a.IsNative() {
 		return a.xrp.String()
+	}
+	if a.mptRaw != nil {
+		return strconv.FormatInt(*a.mptRaw, 10)
 	}
 	return a.iou.String()
 }
@@ -520,7 +528,7 @@ func (a Amount) MarshalJSON() ([]byte, error) {
 	}
 	if a.IsMPT() {
 		return json.Marshal(map[string]string{
-			"value":           a.iou.String(),
+			"value":           a.Value(),
 			"mpt_issuance_id": a.mptIssuanceID,
 		})
 	}
