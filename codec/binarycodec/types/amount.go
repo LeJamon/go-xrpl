@@ -94,6 +94,14 @@ var (
 	iouCodeRegex   = regexp.MustCompile(IOUCodeRegex)
 )
 
+// IsScientificOffset reports whether an IOU mantissa/exponent combination
+// renders in scientific notation, per rippled STAmount::getText
+// (STAmount.cpp:706-732). Single source of truth shared by the state
+// and ledgerfields packages.
+func IsScientificOffset(exponent int) bool {
+	return exponent != 0 && (exponent < -25 || exponent > -5)
+}
+
 // InvalidAmountError is a custom error type for invalid amounts.
 type InvalidAmountError struct {
 	Amount string
@@ -263,8 +271,7 @@ func deserializeValue(data []byte) (string, error) {
 	if err := verifyIOUValue(d.GetScaledValue()); err != nil {
 		return "", err
 	}
-	// Match rippled STAmount::getText (STAmount.cpp:706-732).
-	if exponent != 0 && (exponent < -25 || exponent > -5) {
+	if IsScientificOffset(exponent) {
 		return sign + mantissaStr + "e" + strconv.Itoa(exponent), nil
 	}
 	return d.GetScaledValue(), nil

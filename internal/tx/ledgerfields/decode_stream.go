@@ -322,8 +322,7 @@ func decodeIOUValue(data []byte) (string, error) {
 		return "", errIOUExponent
 	}
 
-	// Match rippled STAmount::getText (STAmount.cpp:706-732).
-	if rawExp != 0 && (rawExp < -25 || rawExp > -5) {
+	if types.IsScientificOffset(rawExp) {
 		expStr := strconv.Itoa(rawExp)
 		buf := make([]byte, 0, boolToInt(!positive)+origLen+1+len(expStr))
 		if !positive {

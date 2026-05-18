@@ -6,6 +6,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/LeJamon/goXRPLd/codec/binarycodec/types"
 )
 
 // Constants matching rippled's STAmount.h
@@ -242,7 +244,7 @@ func (v IOUAmountValue) String() string {
 
 	mantissaStr := strconv.FormatInt(mantissa, 10)
 
-	if v.exponent != 0 && (v.exponent < -25 || v.exponent > -5) {
+	if types.IsScientificOffset(v.exponent) {
 		if negative {
 			return "-" + mantissaStr + "e" + strconv.Itoa(v.exponent)
 		}
@@ -485,11 +487,13 @@ func (a Amount) Signum() int {
 // Value returns the value as a string (for JSON serialization). MPT amounts
 // emit the raw int64 because rippled asserts mOffset == 0 for MPTIssue-held
 // assets (STAmount.cpp:343), so its getText never enters the scientific branch.
+// Gated on mptRaw rather than IsMPT() so amounts constructed via
+// NewMPTAmountDirect (no issuance ID) still emit the raw integer.
 func (a Amount) Value() string {
 	if a.IsNative() {
 		return a.xrp.String()
 	}
-	if a.IsMPT() && a.mptRaw != nil {
+	if a.mptRaw != nil {
 		return strconv.FormatInt(*a.mptRaw, 10)
 	}
 	return a.iou.String()
