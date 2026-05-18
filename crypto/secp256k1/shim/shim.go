@@ -10,17 +10,10 @@ package shim
 // #include "shim.h"
 import "C"
 
-import (
-	"sync"
-	"unsafe"
-)
+import "unsafe"
 
-var initOnce sync.Once
-
-func ensureInit() {
-	initOnce.Do(func() {
-		C.goxrpl_secp256k1_init()
-	})
+func init() {
+	C.goxrpl_secp256k1_init()
 }
 
 // VerifyDigest accepts a DER-encoded ECDSA signature with either low-S
@@ -31,7 +24,6 @@ func VerifyDigest(hash32 []byte, pub []byte, sigDER []byte) bool {
 	if len(hash32) != 32 || len(pub) == 0 || len(sigDER) == 0 {
 		return false
 	}
-	ensureInit()
 	rc := C.goxrpl_secp256k1_verify_digest(
 		(*C.uchar)(unsafe.Pointer(&pub[0])), C.size_t(len(pub)),
 		(*C.uchar)(unsafe.Pointer(&sigDER[0])), C.size_t(len(sigDER)),

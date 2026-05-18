@@ -6,12 +6,13 @@
  * thread-safe per libsecp256k1. */
 static secp256k1_context* g_ctx = NULL;
 
-/* SECP256K1_CONTEXT_VERIFY is deprecated since libsecp256k1 0.3.0 but
- * still functional; it is the only flag pre-0.3.0 accepts for verify
- * ops, so use it for back-compat with older system packages. */
+/* Requires libsecp256k1 >= 0.3.0 (Ubuntu 24.04, Debian 12+, Alpine
+ * 3.18+, Homebrew). SECP256K1_CONTEXT_NONE is the unified flag; the
+ * older SECP256K1_CONTEXT_VERIFY is deprecated and emits
+ * -Wdeprecated-declarations on >= 0.3.0. */
 void goxrpl_secp256k1_init(void) {
     if (g_ctx == NULL) {
-        g_ctx = secp256k1_context_create(SECP256K1_CONTEXT_VERIFY);
+        g_ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
     }
 }
 
