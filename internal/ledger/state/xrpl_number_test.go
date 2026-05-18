@@ -8,6 +8,7 @@ import (
 
 // TestXRPLGuard_PushPop verifies that guard digits are preserved through push/pop.
 func TestXRPLGuard_PushPop(t *testing.T) {
+	t.Parallel()
 	var g xrplGuard
 
 	// Push digits 1, 2, 3 (most recent pushed = most significant)
@@ -23,6 +24,7 @@ func TestXRPLGuard_PushPop(t *testing.T) {
 
 // TestXRPLGuard_Round verifies banker's rounding (round-half-to-even).
 func TestXRPLGuard_Round(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		setup func(*xrplGuard)
@@ -82,6 +84,7 @@ func TestXRPLGuard_Round(t *testing.T) {
 
 // TestXRPLNumber_Normalize verifies Guard-based normalization.
 func TestXRPLNumber_Normalize(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		mant     int64
@@ -137,6 +140,7 @@ func TestXRPLNumber_Normalize(t *testing.T) {
 
 // TestXRPLNumber_Add_SameSign verifies addition of same-sign numbers.
 func TestXRPLNumber_Add_SameSign(t *testing.T) {
+	t.Parallel()
 	// 1.5 + 1.5 = 3.0
 	a := NewXRPLNumber(1500000000000000, -15) // 1.5
 	b := NewXRPLNumber(1500000000000000, -15) // 1.5
@@ -148,6 +152,7 @@ func TestXRPLNumber_Add_SameSign(t *testing.T) {
 // TestXRPLNumber_Add_DifferentSign_GuardRecovery tests the critical Guard digit
 // recovery during subtraction — the key feature missing from our old addIOUValues.
 func TestXRPLNumber_Add_DifferentSign_GuardRecovery(t *testing.T) {
+	t.Parallel()
 	// 1.0 - 0.9999999999999999 should NOT be zero
 	a := NewXRPLNumber(1000000000000000, -15)  // 1.0
 	b := NewXRPLNumber(-9999999999999999, -16) // -0.9999999999999999
@@ -161,6 +166,7 @@ func TestXRPLNumber_Add_DifferentSign_GuardRecovery(t *testing.T) {
 // TestXRPLNumber_Add_CriticalCase tests the specific case that causes
 // TestOffer_CreateThenCross to fail: -1.0 + 0.0335
 func TestXRPLNumber_Add_CriticalCase(t *testing.T) {
+	t.Parallel()
 	// -1.0 + 0.0335 = -0.9665
 	a := NewXRPLNumber(-1000000000000000, -15)
 	b := NewXRPLNumber(3350000000000000, -17)
@@ -174,6 +180,7 @@ func TestXRPLNumber_Add_CriticalCase(t *testing.T) {
 
 // TestXRPLNumber_Mul verifies multiplication with Guard rounding.
 func TestXRPLNumber_Mul(t *testing.T) {
+	t.Parallel()
 	// 2.0 * 3.0 = 6.0
 	a := NewXRPLNumber(2000000000000000, -15) // 2.0
 	b := NewXRPLNumber(3000000000000000, -15) // 3.0
@@ -184,6 +191,7 @@ func TestXRPLNumber_Mul(t *testing.T) {
 
 // TestXRPLNumber_Div verifies division with 10^17 scaling.
 func TestXRPLNumber_Div(t *testing.T) {
+	t.Parallel()
 	// 6.0 / 2.0 = 3.0
 	a := NewXRPLNumber(6000000000000000, -15) // 6.0
 	b := NewXRPLNumber(2000000000000000, -15) // 2.0
@@ -194,6 +202,7 @@ func TestXRPLNumber_Div(t *testing.T) {
 
 // TestXRPLNumber_Div_ThirdPrecision tests 1/3 precision.
 func TestXRPLNumber_Div_ThirdPrecision(t *testing.T) {
+	t.Parallel()
 	one := NewXRPLNumber(1000000000000000, -15)
 	three := NewXRPLNumber(3000000000000000, -15)
 	result := one.Div(three)
@@ -204,6 +213,7 @@ func TestXRPLNumber_Div_ThirdPrecision(t *testing.T) {
 
 // TestXRPLNumber_ExactCancellation verifies a + (-a) = 0.
 func TestXRPLNumber_ExactCancellation(t *testing.T) {
+	t.Parallel()
 	a := NewXRPLNumber(1234567890123456, -16)
 	result := a.Add(a.Negate())
 	require.True(t, result.IsZero())
@@ -211,6 +221,7 @@ func TestXRPLNumber_ExactCancellation(t *testing.T) {
 
 // TestXRPLNumber_ToIOUAmountValue verifies conversion back to IOUAmount.
 func TestXRPLNumber_ToIOUAmountValue(t *testing.T) {
+	t.Parallel()
 	n := NewXRPLNumber(1234567890123456, -16)
 	iou := n.ToIOUAmountValue()
 	require.Equal(t, int64(1234567890123456), iou.mantissa)
@@ -219,6 +230,7 @@ func TestXRPLNumber_ToIOUAmountValue(t *testing.T) {
 
 // TestXRPLNumber_ToIOUAmountValue_Underflow verifies exponent underflow → zero.
 func TestXRPLNumber_ToIOUAmountValue_Underflow(t *testing.T) {
+	t.Parallel()
 	// Create a number with exponent below IOUAmount min (-96)
 	// We can't use NewXRPLNumber as it would normalize, so test the conversion
 	n := XRPLNumber{mantissa: 1000000000000000, exponent: -100}
@@ -228,6 +240,7 @@ func TestXRPLNumber_ToIOUAmountValue_Underflow(t *testing.T) {
 
 // TestAddIOUValues_WithSwitchover tests that addIOUValues produces different
 // results with the switchover enabled vs disabled.
+// Mutates the package-level numberSwitchoverEnabled — must not run in parallel.
 func TestAddIOUValues_WithSwitchover(t *testing.T) {
 	a := IOUAmountValue{mantissa: -1000000000000000, exponent: -15} // -1.0
 	b := IOUAmountValue{mantissa: 3350000000000000, exponent: -17}  // 0.0335
@@ -254,6 +267,7 @@ func TestAddIOUValues_WithSwitchover(t *testing.T) {
 
 // TestMulRatio_RoomToGrow tests that roomToGrow captures fractional precision.
 func TestMulRatio_RoomToGrow(t *testing.T) {
+	t.Parallel()
 	// A transfer rate calculation that requires roomToGrow for precision:
 	// amount * 1005000000 / 1000000000 (1.005 transfer rate)
 	amt := NewIssuedAmountFromValue(3350000000000000, -17, "USD", "rTest") // 0.0335

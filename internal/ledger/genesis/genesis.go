@@ -17,7 +17,6 @@ import (
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/keylet"
-	ledgerentries "github.com/LeJamon/goXRPLd/ledger/entry"
 	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/shamap"
 )
@@ -310,7 +309,7 @@ func Create(cfg Config) (*GenesisLedger, error) {
 // createGenesisAccountWithBalance creates the genesis account entry with a specific balance.
 func createGenesisAccountWithBalance(stateMap *shamap.SHAMap, accountID [20]byte, balance uint64) error {
 	// Create account root entry
-	account := &ledgerentries.AccountRoot{
+	account := &accountRoot{
 		Account:    accountID,
 		Sequence:   1,
 		Balance:    balance,
@@ -338,10 +337,8 @@ func createInitialAccount(stateMap *shamap.SHAMap, accountID [20]byte, balance u
 	}
 
 	// Create account root entry
-	account := &ledgerentries.AccountRoot{
-		BaseEntry: ledgerentries.BaseEntry{
-			Flags: flags,
-		},
+	account := &accountRoot{
+		Flags:      flags,
 		Account:    accountID,
 		Sequence:   sequence,
 		Balance:    balance,
@@ -366,16 +363,16 @@ func createInitialAccount(stateMap *shamap.SHAMap, accountID [20]byte, balance u
 // if XRPFees is present, legacy (UInt32/UInt64) otherwise.
 // Reference: rippled Ledger.cpp checks featureXRPFees in the amendments vector.
 func createFeeSettings(stateMap *shamap.SHAMap, cfg Config) error {
-	var feeSettings *ledgerentries.FeeSettings
+	var feeSettings *feeSettings
 
 	if hasXRPFeesAmendment(cfg.Amendments) {
-		feeSettings = ledgerentries.NewFeeSettings(
+		feeSettings = newFeeSettings(
 			cfg.Fees.BaseFee,
 			cfg.Fees.ReserveBase,
 			cfg.Fees.ReserveIncrement,
 		)
 	} else {
-		feeSettings = ledgerentries.NewLegacyFeeSettings(
+		feeSettings = newLegacyFeeSettings(
 			uint64(cfg.Fees.BaseFee.Drops()),
 			10, // ReferenceFeeUnits (deprecated)
 			uint32(cfg.Fees.ReserveBase.Drops()),
@@ -462,7 +459,7 @@ func CalculateLedgerHash(h header.LedgerHeader) [32]byte {
 }
 
 // serializeAccountRoot serializes an AccountRoot entry to bytes using the XRPL binary codec.
-func SerializeAccountRoot(a *ledgerentries.AccountRoot) ([]byte, error) {
+func SerializeAccountRoot(a *accountRoot) ([]byte, error) {
 	// Convert account ID to classic address
 	address, err := addresscodec.EncodeAccountIDToClassicAddress(a.Account[:])
 	if err != nil {
@@ -496,7 +493,7 @@ func SerializeAccountRoot(a *ledgerentries.AccountRoot) ([]byte, error) {
 }
 
 // serializeFeeSettings serializes a FeeSettings entry to bytes using the XRPL binary codec.
-func serializeFeeSettings(f *ledgerentries.FeeSettings) ([]byte, error) {
+func serializeFeeSettings(f *feeSettings) ([]byte, error) {
 	// Build the JSON representation for the binary codec.
 	// Rippled auto-initializes Flags=0 as a required field.
 	jsonObj := map[string]any{

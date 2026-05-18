@@ -55,8 +55,8 @@ func New() *LocalTxs { return &LocalTxs{} }
 // whichever insertion arrived first.
 func (l *LocalTxs) PushBack(currentLedgerSeq uint32, ptx openledger.PendingTx) {
 	expire := currentLedgerSeq + HoldLedgers
-	if ptx.LastLedgerSequence != nil {
-		if cap := *ptx.LastLedgerSequence + 1; cap < expire {
+	if ptx.HasLastLedgerSequence {
+		if cap := ptx.LastLedgerSequence + 1; cap < expire {
 			expire = cap
 		}
 	}

@@ -162,7 +162,7 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 	for i, ptx := range txs {
 		t, err := tx.ParseFromBinary(ptx.Blob)
 		if err != nil {
-			logger.Debug("openledger: dropping malformed tx in replay",
+			logger.Warn("openledger: dropping malformed tx in replay",
 				"hash", ptx.Hash, "err", err)
 			continue
 		}

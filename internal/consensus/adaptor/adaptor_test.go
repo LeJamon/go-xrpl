@@ -186,6 +186,47 @@ func TestAdaptorQuorumCalculation(t *testing.T) {
 	}
 }
 
+// TestSetTrustedValidators_AtomicSwap pins the runtime UNL-reload
+// primitive: every reader (GetTrustedValidators, IsTrusted, GetQuorum,
+// and the master-key snapshot consumed by NegativeUNL voting) must
+// observe the new set as a unit. Mirrors the writable surface of
+// rippled's ValidatorList::updateTrusted (ValidatorList.cpp:2061-2087).
+func TestSetTrustedValidators_AtomicSwap(t *testing.T) {
+	svc := newTestLedgerService(t)
+	initial := []consensus.NodeID{{0x01}, {0x02}, {0x03}}
+	a := New(Config{
+		LedgerService: svc,
+		Validators:    initial,
+	})
+	require.Equal(t, 3, a.GetQuorum(), "initial quorum: ceil(0.8*3) = 3")
+	require.True(t, a.IsTrusted(consensus.NodeID{0x01}))
+	require.False(t, a.IsTrusted(consensus.NodeID{0x04}))
+
+	next := []consensus.NodeID{{0x01}, {0x04}, {0x05}, {0x06}, {0x07}}
+	masterKeys := [][33]byte{
+		{0x02, 0xAA}, {0x02, 0xBB}, {0x02, 0xCC}, {0x02, 0xDD}, {0x02, 0xEE},
+	}
+	a.SetTrustedValidators(next, masterKeys)
+
+	got := a.GetTrustedValidators()
+	assert.ElementsMatch(t, next, got, "GetTrustedValidators reflects new set")
+	assert.True(t, a.IsTrusted(consensus.NodeID{0x04}), "newly added is trusted")
+	assert.False(t, a.IsTrusted(consensus.NodeID{0x02}), "removed is no longer trusted")
+	assert.Equal(t, 4, a.GetQuorum(), "quorum recomputes: ceil(0.8*5) = 4")
+
+	// Master keys must be visible to the NegativeUNL voting path. Read
+	// under the lock the same way GenerateNegativeUNLPseudoTx does.
+	a.mu.Lock()
+	mkLen := len(a.trustedMasterKeys)
+	a.mu.Unlock()
+	assert.Equal(t, len(masterKeys), mkLen, "trustedMasterKeys swapped atomically")
+
+	// Empty swap clears the set (standalone-mode transition).
+	a.SetTrustedValidators(nil, nil)
+	assert.Empty(t, a.GetTrustedValidators())
+	assert.Equal(t, 0, a.GetQuorum(), "empty trusted set → quorum 0 (no gate)")
+}
+
 func TestTxSetCreateAndLookup(t *testing.T) {
 	a := newTestAdaptor(t)
 

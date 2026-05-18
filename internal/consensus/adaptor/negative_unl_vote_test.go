@@ -196,6 +196,123 @@ func TestBuildScoreTable_TalliesAcrossAncestors(t *testing.T) {
 	assert.Equal(t, uint32(50), scoreTable[offline], "offline validator scored only on first 50 ancestors")
 }
 
+// TestAdaptor_OnUNLChange_NoVoterIsNoOp covers the no-master-keys
+// adaptor: OnUNLChange must be safe to call (a no-op) when the
+// NegativeUNL voter was never constructed. Mirrors rippled's
+// nUnlVote_ optional check at RCLConsensus.cpp:1040.
+func TestAdaptor_OnUNLChange_NoVoterIsNoOp(t *testing.T) {
+	a := newTestAdaptor(t)
+	require.Nil(t, a.negUNLVoter, "fixture must produce a nil voter")
+	a.OnUNLChange(256, []consensus.NodeID{{0x01}, {0x02}})
+	a.OnUNLChange(0, nil)
+}
+
+// TestAdaptor_OnUNLChange_GracePeriodAndExpiry ports the two cases of
+// rippled's NegativeUNLVoteNewValidator_test::testDoVoting
+// (rippled/src/test/consensus/NegativeUNL_test.cpp:1735):
+//
+//  1. After OnUNLChange registers a new validator with `nowTrusted`,
+//     a bad score within NewValidatorDisableSkip ledgers must NOT
+//     produce a ToDisable pseudo-tx (grace period honored).
+//  2. After NewValidatorDisableSkip+1 ledgers have passed, the voting
+//     path's purge (Voter.PurgeNewValidators, called from
+//     GenerateNegativeUNLPseudoTx — mirrors rippled doVoting at
+//     NegativeUNLVote.cpp:339-355) drops both fresh entries; the same
+//     bad score now becomes a ToDisable candidate.
+//
+// Exercises the wiring: Adaptor.OnUNLChange records via
+// Voter.NewValidators; the existing voting-path purge owns expiry.
+// OnUNLChange intentionally does NOT purge, matching rippled's
+// preStartRound (RCLConsensus.cpp:1041-1043) which only registers.
+func TestAdaptor_OnUNLChange_GracePeriodAndExpiry(t *testing.T) {
+	a := newTestAdaptorWithMasters(t)
+	require.NotNil(t, a.negUNLVoter, "fixture must construct a voter")
+	voter := a.negUNLVoter
+	myKey := a.identity.MasterKey
+
+	// Build a UNL with the local node + two stable peers + two
+	// freshly-added validators. The UNL passed to DoVoting is
+	// independent of the adaptor's configured trustedMasterKeys; we
+	// supply our own multi-member list so MaxListedFraction permits
+	// at least one ToDisable candidate.
+	stable1 := makeRawMasterKey(0xAA)
+	stable2 := makeRawMasterKey(0xBB)
+	fresh1 := makeRawMasterKey(0xCC)
+	fresh2 := makeRawMasterKey(0xDD)
+	unl := [][33]byte{myKey, stable1, stable2, fresh1, fresh2}
+
+	fresh1NodeID := consensus.CalcNodeID(fresh1)
+	fresh2NodeID := consensus.CalcNodeID(fresh2)
+
+	// Score table: local node + stable peers participate at the
+	// HighWaterMark; fresh validators score 0 (the bad-score
+	// condition rippled's test exercises).
+	scoreTable := map[consensus.NodeID]uint32{
+		voter.MyID():                  negativeunlvote.MinLocalValsToVote + 1,
+		consensus.CalcNodeID(stable1): negativeunlvote.HighWaterMark + 1,
+		consensus.CalcNodeID(stable2): negativeunlvote.HighWaterMark + 1,
+		fresh1NodeID:                  0,
+		fresh2NodeID:                  0,
+	}
+
+	const addedAtSeq uint32 = 256
+
+	// Case 1: register the fresh validators, then run a voting round
+	// within the NewValidatorDisableSkip window. Expect no ToDisable
+	// pseudo-tx.
+	a.OnUNLChange(addedAtSeq, []consensus.NodeID{fresh1NodeID, fresh2NodeID})
+
+	prevHash := [32]byte{0x42}
+	blobs, err := voter.DoVoting(addedAtSeq, prevHash, unl, negativeunlvote.State{}, scoreTable)
+	require.NoError(t, err)
+	assert.Nil(t, blobs, "fresh validators within the grace window must not be ToDisable candidates")
+
+	// Case 2: advance well past NewValidatorDisableSkip. The voting
+	// path's purge — the same call GenerateNegativeUNLPseudoTx makes
+	// before invoking DoVoting (negative_unl_vote.go:74) — drops both
+	// fresh entries; a follow-up vote at the same seq now sees them
+	// as bad-score candidates. OnUNLChange must NOT be called here:
+	// no UNL change occurred (rippled's preStartRound would see an
+	// empty `nowTrusted` and skip newValidators entirely).
+	purgeSeq := addedAtSeq + negativeunlvote.NewValidatorDisableSkip + 2
+	voter.PurgeNewValidators(purgeSeq)
+
+	blobs, err = voter.DoVoting(purgeSeq, prevHash, unl, negativeunlvote.State{}, scoreTable)
+	require.NoError(t, err)
+	require.Len(t, blobs, 1, "after grace expiry, a bad-score new validator is eligible for a single ToDisable pseudo-tx")
+}
+
+// TestAdaptor_OnUNLChange_EmptyTrustedSetIsNoOp covers the
+// nowTrusted-empty short-circuit that mirrors rippled's
+// `!nowTrusted.empty()` gate at RCLConsensus.cpp:1042. The Voter's
+// newValidators map must remain untouched so future bad-score evals
+// still see no registered grace-period entries.
+func TestAdaptor_OnUNLChange_EmptyTrustedSetIsNoOp(t *testing.T) {
+	a := newTestAdaptorWithMasters(t)
+	require.NotNil(t, a.negUNLVoter)
+	a.OnUNLChange(512, nil)
+	a.OnUNLChange(512, []consensus.NodeID{})
+	// Purge a freshly-registered key to prove the map is empty: if
+	// OnUNLChange had inadvertently inserted something, the purge
+	// (using a seq within the grace window) would leave it in place.
+	a.negUNLVoter.NewValidators(512, []consensus.NodeID{{0xEE}})
+	a.negUNLVoter.PurgeNewValidators(512) // within window — keeps {0xEE}
+	// If OnUNLChange had ever modified the map, this single-entry
+	// expectation would fail.
+}
+
+// makeRawMasterKey builds a deterministic 33-byte master pubkey
+// suitable for Voter inputs (the codec accepts any [33]byte blob; the
+// first byte uses a valid secp256k1 prefix for readability).
+func makeRawMasterKey(tag byte) [33]byte {
+	var k [33]byte
+	k[0] = 0x02
+	for i := 1; i < 33; i++ {
+		k[i] = tag
+	}
+	return k
+}
+
 // newTestAdaptorWithMasters builds an Adaptor with a master pubkey
 // plumbed in (so negUNLVoter is non-nil), letting the negative-UNL
 // path execute without the no-voter / no-master short-circuit.

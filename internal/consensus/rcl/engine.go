@@ -204,6 +204,27 @@ type Engine struct {
 	// through timerEntry — still observe the broadcast immediately.
 	// Mutated only while e.mu is held.
 	deferBroadcasts int
+
+	// previousTrustedSet is the trusted-validator set as of the previous
+	// startRoundLocked invocation. The engine diffs it against the
+	// adaptor's current trusted set each round to derive the `added`
+	// delta passed to OnUNLChange — equivalent to rippled's
+	// TrustChanges.added (NetworkOPs.cpp:2081) but computed from
+	// snapshots since goXRPL's writable surface is the explicit
+	// adaptor.SetTrustedValidators call rather than a per-round
+	// updateTrusted return value. Seeded from the adaptor's current
+	// UNL on the first invocation with a parent ledger (see
+	// previousTrustedSeeded). Mutated only while e.mu is held.
+	previousTrustedSet map[consensus.NodeID]struct{}
+
+	// previousTrustedSeeded latches true after the first call that
+	// observes a non-nil prevLedger. While false, the next call seeds
+	// previousTrustedSet from the adaptor's startup UNL and skips
+	// OnUNLChange — mirroring rippled where ValidatorList::updateTrusted
+	// diffs against the publisher-list-loaded trustedMasterKeys_ on its
+	// very first call, so the startup UNL is NOT reported as `added`.
+	// Mutated only while e.mu is held.
+	previousTrustedSeeded bool
 }
 
 // ValidationArchive is the subset of the archive API the consensus engine
@@ -494,6 +515,11 @@ func (e *Engine) StartRound(round consensus.RoundID, proposing bool) error {
 // of the new round's tx-set, and emitting a stale proposal/validation
 // would poison the network's convergence.
 func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering bool) error {
+	// Placed before the mode switch so it runs in every mode (proposing /
+	// observing / switchedLedger), matching rippled's preStartRound at
+	// RCLConsensus.cpp:1041-1043 which fires regardless of validator state.
+	e.driveNegativeUNLNewValidatorsLocked()
+
 	// Determine mode. After a wrongLedger recovery we enter switchedLedger
 	// for exactly one round — not proposing, not validating — even though
 	// we'd otherwise be ModeProposing. The NEXT startRoundLocked call
@@ -604,6 +630,73 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 
 	e.roundCount++
 	return nil
+}
+
+// driveNegativeUNLNewValidatorsLocked snapshots the current trusted set,
+// computes the additions relative to the previous round's snapshot, and
+// invokes adaptor.OnUNLChange when the NegativeUNL amendment is enabled
+// on the parent ledger and the delta is non-empty. Updates the snapshot
+// in-place so the next round sees the new baseline.
+//
+// The seq passed to OnUNLChange is derived directly from the parent
+// ledger (`prevLedger.Seq() + 1`), matching rippled at
+// RCLConsensus.cpp:1043 (`nUnlVote_.newValidators(prevLgr.seq() + 1, ...)`).
+// Critically, the voting-path purge in GenerateNegativeUNLPseudoTx also
+// keys off `prevSeq + 1` (negative_unl_vote.go:74); reading the seq
+// from the same source on both sides keeps the grace-period window
+// internally consistent even if a caller ever drives StartRound with a
+// round.Seq that drifts from prevLedger.Seq()+1 (recovery / wrong-LCL
+// paths).
+//
+// Mirrors rippled's NetworkOPs.cpp:2081-2102 → RCLConsensus.cpp:1041-1043
+// pairing: NetworkOPs computes TrustChanges.added per round via
+// updateTrusted, then passes it through startRound → preStartRound →
+// nUnlVote_.newValidators. goXRPL inverts the seam — the engine polls
+// the adaptor each round — but the observable behavior is the same:
+// any mutation that lands through adaptor.SetTrustedValidators is
+// picked up on the next round and its `added` set drives OnUNLChange.
+// previousTrustedSet is seeded once on the first call (from the
+// adaptor's current UNL) so the first round does NOT misreport the
+// entire startup-loaded UNL as `added`; this matches rippled where
+// ValidatorList::trustedMasterKeys_ is already populated by applyLists
+// before the first updateTrusted call. Caller must hold e.mu.
+func (e *Engine) driveNegativeUNLNewValidatorsLocked() {
+	if e.prevLedger == nil {
+		return
+	}
+	if !e.adaptor.IsFeatureEnabledOnLedger(e.prevLedger, "NegativeUNL") {
+		return
+	}
+	current := e.adaptor.GetTrustedValidators()
+
+	// Seed once: on the very first invocation with a parent ledger the
+	// prior set is the startup-loaded UNL, not the empty set. Treating
+	// the startup UNL as `added` would hand every already-mature
+	// validator a fresh NewValidatorDisableSkip-ledger grace period
+	// after a restart — silent but observable divergence from rippled.
+	if !e.previousTrustedSeeded {
+		e.previousTrustedSet = make(map[consensus.NodeID]struct{}, len(current))
+		for _, n := range current {
+			e.previousTrustedSet[n] = struct{}{}
+		}
+		e.previousTrustedSeeded = true
+		return
+	}
+
+	var added []consensus.NodeID
+	for _, n := range current {
+		if _, seen := e.previousTrustedSet[n]; !seen {
+			added = append(added, n)
+		}
+	}
+	if len(added) > 0 {
+		e.adaptor.OnUNLChange(e.prevLedger.Seq()+1, added)
+	}
+	next := make(map[consensus.NodeID]struct{}, len(current))
+	for _, n := range current {
+		next[n] = struct{}{}
+	}
+	e.previousTrustedSet = next
 }
 
 // OnProposal handles an incoming proposal from a peer. originPeer is

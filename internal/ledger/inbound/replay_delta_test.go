@@ -115,8 +115,7 @@ func buildDeltaResponse(
 		TxHash:              txRoot,
 		AccountHash:         parent.Header().AccountHash, // unchanged for the test
 	}
-	headerBytes, err := header.AddRaw(hdr, false)
-	require.NoError(t, err)
+	headerBytes := header.AddRaw(hdr, false)
 	// Compute the canonical hash via the same parse-then-hash path the
 	// inbound verifier will run, so the test's expectation matches what
 	// production code will reach.
@@ -137,6 +136,7 @@ func buildDeltaResponse(
 // header's TxHash, and OrderedTxs returns the txs in TransactionIndex
 // order.
 func TestInboundReplayDelta_GotResponse_Success(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 
 	// Build three txs with non-monotonic TransactionIndex values so the
@@ -178,6 +178,7 @@ func TestInboundReplayDelta_GotResponse_Success(t *testing.T) {
 // TestInboundReplayDelta_HeaderHashMismatch verifies that tampered
 // header bytes are rejected with a hash-mismatch error.
 func TestInboundReplayDelta_HeaderHashMismatch(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	blob, id := makeTxWithMetaBlob(t, []byte("tx-data-padding-padding-padding"), 0)
 	resp, expectedHash := buildDeltaResponse(t, parent, [][]byte{blob}, [][32]byte{id})
@@ -199,6 +200,7 @@ func TestInboundReplayDelta_HeaderHashMismatch(t *testing.T) {
 // blob whose recomputed root no longer matches the header's TxHash is
 // rejected with a tx-map-root mismatch error.
 func TestInboundReplayDelta_TxMapHashMismatch(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	blob1, id1 := makeTxWithMetaBlob(t, []byte("tx-A-padding-padding-padding"), 0)
 	blob2, id2 := makeTxWithMetaBlob(t, []byte("tx-B-padding-padding-padding"), 1)
@@ -224,6 +226,7 @@ func TestInboundReplayDelta_TxMapHashMismatch(t *testing.T) {
 // TestInboundReplayDelta_MalformedTxBlob verifies that a blob whose VL
 // header doesn't decode (truncated) is rejected with a parse error.
 func TestInboundReplayDelta_MalformedTxBlob(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	blob, id := makeTxWithMetaBlob(t, []byte("tx-data-padding-padding-padding"), 0)
 	resp, expectedHash := buildDeltaResponse(t, parent, [][]byte{blob}, [][32]byte{id})
@@ -242,6 +245,7 @@ func TestInboundReplayDelta_MalformedTxBlob(t *testing.T) {
 // TestInboundReplayDelta_ResponseError verifies that a peer-signaled
 // error response is rejected without further parsing.
 func TestInboundReplayDelta_ResponseError(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	resp := &message.ReplayDeltaResponse{
 		LedgerHash: make([]byte, 32),
@@ -258,6 +262,7 @@ func TestInboundReplayDelta_ResponseError(t *testing.T) {
 // TestInboundReplayDelta_EmptyHeader verifies that a response missing
 // the serialized header is rejected with an empty-header error.
 func TestInboundReplayDelta_EmptyHeader(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	resp := &message.ReplayDeltaResponse{
 		LedgerHash: make([]byte, 32),
@@ -275,6 +280,7 @@ func TestInboundReplayDelta_EmptyHeader(t *testing.T) {
 // rewind its `created` timestamp to simulate the 30s having passed
 // without sleeping in the test.
 func TestInboundReplayDelta_Timeout(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	rd := NewReplayDelta([32]byte{}, 42, parent, nil)
 	assert.False(t, rd.IsTimedOut(), "fresh acquisition cannot be timed out")
@@ -304,6 +310,7 @@ func TestInboundReplayDelta_Timeout(t *testing.T) {
 // subTaskRetryMax rotations so the router knows to stop rotating and
 // let the outer budget escalate to the legacy fallback.
 func TestInboundReplayDelta_SubTaskRetryLoop(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	rd := NewReplayDelta([32]byte{0xAA}, 100, parent, nil)
 
@@ -354,6 +361,7 @@ func TestInboundReplayDelta_SubTaskRetryLoop(t *testing.T) {
 // acquisition reaches a terminal state the sub-task retry machinery
 // goes quiet, matching the same guard on IsTimedOut.
 func TestInboundReplayDelta_SubTaskTimeoutDoesNotFireInTerminalState(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	rd := NewReplayDelta([32]byte{0xBB}, 42, parent, nil)
 
@@ -370,6 +378,7 @@ func TestInboundReplayDelta_SubTaskTimeoutDoesNotFireInTerminalState(t *testing.
 // invariant: a peer that returns a header whose ParentHash differs from
 // our parent's hash is rejected (defends against fork-serving peers).
 func TestInboundReplayDelta_ParentHashMismatch(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	blob, id := makeTxWithMetaBlob(t, []byte("tx-data-padding-padding-padding"), 0)
 	resp, expectedHash := buildDeltaResponse(t, parent, [][]byte{blob}, [][32]byte{id})

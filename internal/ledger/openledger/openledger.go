@@ -188,7 +188,7 @@ func (o *OpenLedger) Accept(
 
 	// 2. Replay prior current's txs (OpenLedger.cpp:96-112).
 	o.currentMu.RLock()
-	curTxs := collectTxs(o.current)
+	curTxs := collectTxs(o.current, o.logger)
 	o.currentMu.RUnlock()
 	if len(curTxs) > 0 {
 		if err := ApplyTxs(next, curTxs, retries, applyCfg); err != nil {
@@ -260,18 +260,16 @@ func (o *OpenLedger) Accept(
 	return nil
 }
 
-// CurrentTxs returns a snapshot of the raw tx blobs in the currently
-// published view. The result is memoised until the next publish; the
-// returned slice MUST NOT be mutated by callers (it is shared across
-// concurrent readers and forwarded directly to consensus, which only
-// reads). Mirrors RCLConsensus.cpp:333-349 reading
-// openLedger().current()->txs.
-func (o *OpenLedger) CurrentTxs() [][]byte {
+// snapshotCurrentTxs returns the cached tx-blob slice for the currently
+// published view, building (and memoising) it on first access. The returned
+// slice is the internal cache pointer and MUST NOT be exposed to callers
+// directly; CurrentTxs wraps it with a fresh outer slice.
+func (o *OpenLedger) snapshotCurrentTxs() [][]byte {
 	o.currentMu.RLock()
 	if o.cachedTxs != nil {
-		out := o.cachedTxs
+		cached := o.cachedTxs
 		o.currentMu.RUnlock()
-		return out
+		return cached
 	}
 	view := o.current
 	o.currentMu.RUnlock()
@@ -297,21 +295,39 @@ func (o *OpenLedger) CurrentTxs() [][]byte {
 	return built
 }
 
-// collectTxs extracts the raw tx blobs from view's tx map and parses
-// each into a PendingTx. Malformed entries are silently skipped so a
-// single bad record does not poison the whole replay.
-func collectTxs(v *ledger.Ledger) []PendingTx {
+// CurrentTxs returns a snapshot of the raw tx blobs in the currently
+// published view. The outer slice is fresh per call (safe to re-order);
+// the inner tx-blob byte slices are shared with the view and must not be
+// mutated. Mirrors RCLConsensus.cpp:333-349 reading openLedger().current()->txs.
+func (o *OpenLedger) CurrentTxs() [][]byte {
+	cached := o.snapshotCurrentTxs()
+	out := make([][]byte, len(cached))
+	copy(out, cached)
+	return out
+}
+
+// collectTxs parses each tx blob in view into a PendingTx. Malformed
+// entries are skipped (and logged) so one bad record doesn't poison
+// the replay.
+func collectTxs(v *ledger.Ledger, logger xrpllog.Logger) []PendingTx {
 	if v == nil {
 		return nil
 	}
+	if logger == nil {
+		logger = xrpllog.Discard()
+	}
 	var out []PendingTx
-	_ = v.ForEachTransaction(func(_ [32]byte, data []byte) bool {
+	_ = v.ForEachTransaction(func(itemKey [32]byte, data []byte) bool {
 		raw, _, err := tx.SplitTxWithMetaBlob(data)
 		if err != nil {
+			logger.Warn("openledger: skipping unsplittable tx item in replay",
+				"item", itemKey, "err", err)
 			return true
 		}
 		ptx, err := ParsePendingTx(raw)
 		if err != nil {
+			logger.Warn("openledger: skipping unparseable tx in replay",
+				"item", itemKey, "err", err)
 			return true
 		}
 		out = append(out, ptx)

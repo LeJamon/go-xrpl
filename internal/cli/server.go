@@ -15,6 +15,7 @@ import (
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/config"
+	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/consensus/adaptor"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
@@ -571,6 +572,16 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 
+	// SIGHUP triggers a UNL reload: re-read the config from --conf and
+	// replace the adaptor's trusted validator set. Per-round delta
+	// detection in the consensus engine then drives OnUNLChange so
+	// newly-added validators get the NegativeUNL grace period.
+	// Mirrors the operator-trigger surface of rippled's ValidatorList
+	// (applyLists → updateTrusted) without (yet) the publisher-trust
+	// subsystem. Buffered so a flurry of HUPs coalesces.
+	reloadCh := make(chan os.Signal, 1)
+	signal.Notify(reloadCh, syscall.SIGHUP)
+
 	// shutdownCh lets the RPC stop command trigger the same path
 	shutdownCh := make(chan struct{}, 1)
 
@@ -580,15 +591,69 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	})
 
 	// Block until signal, RPC stop, or a listener goroutine fails.
-	select {
-	case sig := <-sigCh:
-		serverLog.Info("Received signal, shutting down", "signal", sig)
-	case <-shutdownCh:
-	case err := <-listenerErrCh:
-		serverLog.Error("Listener failed — initiating shutdown", "err", err)
-		retErr = err
+	// SIGHUP is non-terminating — handle it in-place and keep waiting.
+	for {
+		select {
+		case sig := <-sigCh:
+			serverLog.Info("Received signal, shutting down", "signal", sig)
+			return retErr
+		case <-shutdownCh:
+			return retErr
+		case err := <-listenerErrCh:
+			serverLog.Error("Listener failed — initiating shutdown", "err", err)
+			retErr = err
+			return retErr
+		case <-reloadCh:
+			reloadTrustedValidators(serverLog, consensusComponents)
+		}
 	}
-	return retErr
+}
+
+// trustedValidatorSink is the writable surface reloadTrustedValidators
+// drives on a successful config reload. Satisfied by *adaptor.Adaptor;
+// extracted as a tiny interface so applyValidatorReload can be tested
+// without constructing a full *adaptor.Components.
+type trustedValidatorSink interface {
+	SetTrustedValidators(validators []consensus.NodeID, masterKeys [][33]byte)
+}
+
+// reloadTrustedValidators is the SIGHUP entry point: bridge from the
+// production *adaptor.Components down to the pure applyValidatorReload
+// helper. Skipped silently when components is nil (standalone mode).
+func reloadTrustedValidators(serverLog xrpllog.Logger, components *adaptor.Components) {
+	if components == nil || components.Adaptor == nil {
+		return
+	}
+	applyValidatorReload(serverLog, components.Adaptor, configFile)
+}
+
+// applyValidatorReload re-reads configPath, re-parses the [validators]
+// stanza, and pushes the result into sink. Errors are logged and the
+// previous trusted set is retained — a bad reload must not wedge the
+// node.
+//
+// Skipped silently when configPath is empty (validator config can't
+// be re-read from nothing).
+func applyValidatorReload(serverLog xrpllog.Logger, sink trustedValidatorSink, configPath string) {
+	if configPath == "" {
+		serverLog.Warn("SIGHUP received but no --conf path set; skipping UNL reload")
+		return
+	}
+	cfg, err := config.LoadConfig(config.ConfigPaths{Main: configPath})
+	if err != nil {
+		serverLog.Error("SIGHUP UNL reload: re-load config failed", "err", err)
+		return
+	}
+	validators, masterKeys, err := adaptor.ParseValidatorKeysWithMaster(cfg)
+	if err != nil {
+		serverLog.Error("SIGHUP UNL reload: parse validators failed", "err", err)
+		return
+	}
+	sink.SetTrustedValidators(validators, masterKeys)
+	serverLog.Info("SIGHUP UNL reload applied",
+		"validators_count", len(validators),
+		"master_keys_count", len(masterKeys),
+	)
 }
 
 // doShutdown performs graceful shutdown of all server components

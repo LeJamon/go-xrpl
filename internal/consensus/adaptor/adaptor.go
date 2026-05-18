@@ -73,7 +73,12 @@ type NetworkSender interface {
 	// request returns a partial tree, follow up with a request for
 	// each missing node by its SHAMap path-based NodeID. nodeIDs
 	// must each be exactly 33 bytes (32 path bytes + 1 depth byte).
-	RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte) error
+	// excluded carries peer IDs that should be skipped during this
+	// broadcast — populated by the router with peers that have
+	// repeatedly returned non-progressing TMLedgerData replies for
+	// this acquisition. A nil or empty map is the unrestricted case.
+	// Issue #420.
+	RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool) error
 	RequestLedger(id consensus.LedgerID) error
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error
 	RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error
@@ -125,7 +130,7 @@ func (n *noopSender) RelayProposal(*consensus.Proposal, uint64) error     { retu
 func (n *noopSender) RelayValidation(*consensus.Validation, uint64) error { return nil }
 func (n *noopSender) UpdateRelaySlot([]byte, uint64, []uint64)            {}
 func (n *noopSender) RequestTxSet(consensus.TxSetID) error                { return nil }
-func (n *noopSender) RequestTxSetMissingNodes(consensus.TxSetID, [][]byte) error {
+func (n *noopSender) RequestTxSetMissingNodes(consensus.TxSetID, [][]byte, map[uint64]bool) error {
 	return nil
 }
 func (n *noopSender) RequestLedger(consensus.LedgerID) error                   { return nil }
@@ -230,6 +235,15 @@ type Adaptor struct {
 	// briefly. See trusted_votes.go and rippled's TrustedVotes at
 	// AmendmentTable.cpp:75-286.
 	trustedVotes *TrustedVotes
+
+	// onTxSetRequested fires before every RequestTxSet broadcast so
+	// the router can re-arm its in-flight tx-set acquisition state
+	// (clear attempts and lastRequest), mirroring rippled's
+	// TransactionAcquire::stillNeed reset path invoked from
+	// InboundTransactionsImp::getSet at InboundTransactions.cpp:107-114.
+	// Nil before SetOnTxSetRequested is called; nil callers are a no-op.
+	// Issue #420.
+	onTxSetRequested func(consensus.TxSetID)
 
 	logger *slog.Logger
 }
@@ -526,12 +540,25 @@ func (a *Adaptor) UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPe
 	a.sender.UpdateRelaySlot(validatorKey, originPeer, seenPeers)
 }
 
+// SetOnTxSetRequested registers a callback invoked at the start of
+// every RequestTxSet. Used by the router to mirror rippled's
+// stillNeed re-arm: every active re-ask from consensus resets the
+// throttle/attempt bookkeeping on the in-flight acquisition so the
+// next inbound TMLedgerData broadcasts immediately. Set once at
+// startup; not safe for concurrent re-registration.
+func (a *Adaptor) SetOnTxSetRequested(cb func(consensus.TxSetID)) {
+	a.onTxSetRequested = cb
+}
+
 func (a *Adaptor) RequestTxSet(id consensus.TxSetID) error {
+	if a.onTxSetRequested != nil {
+		a.onTxSetRequested(id)
+	}
 	return a.sender.RequestTxSet(id)
 }
 
-func (a *Adaptor) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte) error {
-	return a.sender.RequestTxSetMissingNodes(id, nodeIDs)
+func (a *Adaptor) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool) error {
+	return a.sender.RequestTxSetMissingNodes(id, nodeIDs, excluded)
 }
 
 func (a *Adaptor) RequestLedger(id consensus.LedgerID) error {
@@ -919,6 +946,75 @@ func (a *Adaptor) GetTrustedValidators() []consensus.NodeID {
 	result := make([]consensus.NodeID, len(a.trustedValidators))
 	copy(result, a.trustedValidators)
 	return result
+}
+
+// SetTrustedValidators replaces the operator-trusted validator set
+// atomically. Visible to subsequent GetTrustedValidators / IsTrusted /
+// GetQuorum / GetNegativeUNL reads, and to the consensus engine's
+// per-round delta scan in driveNegativeUNLNewValidatorsLocked — the
+// added entries flow into OnUNLChange so the NegativeUNL voter's
+// grace period (NewValidatorDisableSkip ledgers) covers them.
+//
+// validators and masterKeys are index-aligned and MUST be the same
+// length (NodeIDs are derived from master keys via calcNodeID; every
+// trusted validator therefore has exactly one master pubkey). A
+// mismatch is logged at WARN and the trailing entries of whichever
+// slice is longer are dropped — defensive only, since the canonical
+// producer ParseValidatorKeysWithMaster always returns equal-length
+// slices. Pass two empty slices (nil, nil) to clear the trusted set
+// (standalone-mode transition).
+//
+// Mirrors the writable surface of rippled's ValidatorList:
+// applyLists → updateTrusted publishes the new trusted set; the next
+// preStartRound observes the delta and forwards `added` to
+// nUnlVote_.newValidators (RCLConsensus.cpp:1041-1043). goXRPL has no
+// publisher-trust subsystem yet, so this is the single entry point
+// every trigger (SIGHUP-driven config reload, future RPC admin
+// method, future TMValidatorList ingress) plugs into.
+//
+// Safe for concurrent callers; copies inputs so callers may mutate
+// their slices after return.
+func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys [][33]byte) {
+	if len(validators) != len(masterKeys) && (len(validators) > 0 || len(masterKeys) > 0) {
+		a.logger.Warn("SetTrustedValidators: validators / masterKeys length mismatch; truncating to shorter",
+			"validators_count", len(validators),
+			"master_keys_count", len(masterKeys),
+		)
+		n := len(validators)
+		if len(masterKeys) < n {
+			n = len(masterKeys)
+		}
+		validators = validators[:n]
+		masterKeys = masterKeys[:n]
+	}
+
+	vCopy := make([]consensus.NodeID, len(validators))
+	copy(vCopy, validators)
+	newSet := make(map[consensus.NodeID]struct{}, len(validators))
+	for _, v := range validators {
+		newSet[v] = struct{}{}
+	}
+	var mkCopy [][33]byte
+	if len(masterKeys) > 0 {
+		mkCopy = make([][33]byte, len(masterKeys))
+		copy(mkCopy, masterKeys)
+	}
+
+	a.mu.Lock()
+	a.trustedValidators = vCopy
+	a.trustedSet = newSet
+	a.trustedMasterKeys = mkCopy
+	a.mu.Unlock()
+
+	// trustedVotes is assigned once in New (adaptor.go:384) and never
+	// reassigned thereafter, so the unlocked read is safe — TrustedVotes
+	// owns its own internal mutex for the call itself. Calling after
+	// releasing a.mu avoids lock nesting (TrustedVotes.TrustChanged
+	// takes its mutex on the way in). Safe to call with an empty slice;
+	// it just drops stale per-validator vote caches.
+	if a.trustedVotes != nil {
+		a.trustedVotes.TrustChanged(vCopy)
+	}
 }
 
 // GetQuorum returns the current quorum requirement, recomputed on

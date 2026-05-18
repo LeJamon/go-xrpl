@@ -59,50 +59,29 @@ type LedgerHeader struct {
 	CloseTime time.Time
 }
 
-// AddRaw serializes a ledger header to bytes matching rippled's format exactly.
-// Reference: rippled LedgerHeader.cpp addRaw() — all times are uint32 XRPL epoch,
-// closeTimeResolution is uint8.
-func AddRaw(header LedgerHeader, includeHash bool) ([]byte, error) {
+// AddRaw serializes a ledger header to bytes matching rippled's format.
+// Reference: rippled LedgerHeader.cpp addRaw() — all times are uint32 XRPL
+// epoch, closeTimeResolution is uint8.
+func AddRaw(header LedgerHeader, includeHash bool) []byte {
 	size := SizeBase
 	if includeHash {
 		size = SizeWithHash
 	}
-	buf := bytes.NewBuffer(make([]byte, 0, size))
+	out := make([]byte, 0, size)
 
-	if err := binary.Write(buf, binary.BigEndian, header.LedgerIndex); err != nil {
-		return nil, err
-	}
-	if err := binary.Write(buf, binary.BigEndian, header.Drops); err != nil {
-		return nil, err
-	}
-
-	buf.Write(header.ParentHash[:])
-	buf.Write(header.TxHash[:])
-	buf.Write(header.AccountHash[:])
-
-	// Times as uint32 XRPL epoch seconds (matching rippled's s.add32())
-	parentCloseTime := timeToXRPLEpoch(header.ParentCloseTime)
-	if err := binary.Write(buf, binary.BigEndian, parentCloseTime); err != nil {
-		return nil, err
-	}
-	closeTime := timeToXRPLEpoch(header.CloseTime)
-	if err := binary.Write(buf, binary.BigEndian, closeTime); err != nil {
-		return nil, err
-	}
-
-	// CloseTimeResolution as uint8 (matching rippled's s.add8())
-	if err := binary.Write(buf, binary.BigEndian, uint8(header.CloseTimeResolution)); err != nil {
-		return nil, err
-	}
-	if err := binary.Write(buf, binary.BigEndian, header.CloseFlags); err != nil {
-		return nil, err
-	}
-
+	out = binary.BigEndian.AppendUint32(out, header.LedgerIndex)
+	out = binary.BigEndian.AppendUint64(out, header.Drops)
+	out = append(out, header.ParentHash[:]...)
+	out = append(out, header.TxHash[:]...)
+	out = append(out, header.AccountHash[:]...)
+	out = binary.BigEndian.AppendUint32(out, timeToXRPLEpoch(header.ParentCloseTime))
+	out = binary.BigEndian.AppendUint32(out, timeToXRPLEpoch(header.CloseTime))
+	out = append(out, uint8(header.CloseTimeResolution))
+	out = append(out, header.CloseFlags)
 	if includeHash {
-		buf.Write(header.Hash[:])
+		out = append(out, header.Hash[:]...)
 	}
-
-	return buf.Bytes(), nil
+	return out
 }
 
 // GetCloseAgree returns true if there was consensus on the close time

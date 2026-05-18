@@ -2,6 +2,7 @@ package tx
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
@@ -288,9 +289,35 @@ func (e *Engine) consumeTicket(st *applyState, table *ApplyStateTable) Result {
 	return TesSUCCESS
 }
 
-// invokeApply dispatches to the per-tx-type Apply() implementation, building
-// the ApplyContext and computing sigWithMaster.
-func (e *Engine) invokeApply(st *applyState) Result {
+// invokeApply dispatches to the per-tx-type Apply() implementation. Any panic
+// raised inside the per-tx Apply() — most commonly an arithmetic overflow from
+// IOUAmount / XRPLNumber operating on adversarial peer-supplied ledger data —
+// is recovered and turned into tefEXCEPTION.
+//
+// Reference: rippled applySteps.cpp:447-466 doApply() wraps invoke_apply(ctx)
+// in `try { ... } catch (std::exception const&) { return {tefEXCEPTION, false}; }`.
+// tefEXCEPTION is a tef* code, so the transaction is NOT applied to the ledger:
+// no fee is charged, no sequence is consumed, and no metadata is emitted. The
+// caller at doApply() returns immediately on tef* via the `!IsSuccess() &&
+// !IsTec()` branch.
+//
+// Returning tecINTERNAL here would diverge from rippled because tec* commits
+// fee+seq+meta to the ledger, producing a different account_hash on the same
+// adversarial input → consensus fork.
+func (e *Engine) invokeApply(st *applyState) (result Result) {
+	defer func() {
+		if r := recover(); r != nil {
+			e.logger.Error("transaction Apply() panic recovered, returning tefEXCEPTION",
+				"txHash", fmt.Sprintf("%x", st.txHash), "panic", r)
+			result = TefEXCEPTION
+		}
+	}()
+	return e.invokeApplyInner(st)
+}
+
+// invokeApplyInner is the body of invokeApply, separated so the panic-recovery
+// defer in invokeApply does not have to walk back through the dispatch.
+func (e *Engine) invokeApplyInner(st *applyState) Result {
 	// Determine if the transaction was signed with the master key.
 	// Reference: rippled SetAccount.cpp sigWithMaster — compares
 	// calcAccountID(SigningPubKey) against the account ID.
@@ -626,9 +653,28 @@ func (e *Engine) payDelegatedFeeOnTable(st *applyState, table *ApplyStateTable) 
 // (result, true) when an invariant violation has been handled (recovery path
 // taken or escalation to tefINVARIANT_FAILED), and (zero, false) when the
 // transaction passes invariants and may continue to the normal commit.
-// Reference: rippled Transactor::apply() — invariant check runs before
-// ctx_->apply(); on violation calls reset(fee).
-func (e *Engine) runInvariants(st *applyState, result Result) (Result, bool) {
+// Reference: rippled Transactor.cpp:1218-1238 — invariant check runs after
+// per-tx apply; on violation calls reset(fee) and re-checks invariants on the
+// fee-only state.
+//
+// AMM invariants in particular drive XRPLNumber arithmetic, which panics on
+// overflow / NaN. A panic here is treated as an invariant violation: discard
+// the sandbox and charge fee via applyInvariantViolation. This matches
+// rippled ApplyContext.cpp:97-148 checkInvariantsHelper, which wraps the
+// invariant visit/finalize in `try { ... } catch (std::exception const&) {
+// return failInvariantCheck(result); }` — failInvariantCheck returns
+// tecINVARIANT_FAILED on the first pass (charges fee, retries on fee-only
+// state) and tefINVARIANT_FAILED on the second pass (no-op, no fee).
+func (e *Engine) runInvariants(st *applyState, result Result) (r Result, handled bool) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			e.logger.Error("invariant check panic recovered, returning tecINVARIANT_FAILED",
+				"txHash", fmt.Sprintf("%x", st.txHash), "panic", rec)
+			txDeclaredFee := parseTxDeclaredFee(st.tx, st.fee)
+			r = e.applyInvariantViolation(st, txDeclaredFee)
+			handled = true
+		}
+	}()
 	invEntries := st.table.CollectEntries()
 	txDeclaredFee := parseTxDeclaredFee(st.tx, st.fee)
 	violation := invariants.CheckInvariants(wrapTxForInvariants(st.tx), invariants.Result(result), st.fee, txDeclaredFee, invEntries, st.table, e.rules())
@@ -646,8 +692,24 @@ func (e *Engine) runInvariants(st *applyState, result Result) (Result, bool) {
 // applyInvariantViolation handles the tecINVARIANT_FAILED reset path: discard
 // the sandbox, charge fee/seq/ticket, then run a second invariant check on the
 // fee-only state. If that also violates, escalate to tefINVARIANT_FAILED.
+//
+// The second-pass invariant check is wrapped in its own panic-recover so that
+// a panic from CheckInvariants (or invTecTable.Apply) on a fee-only state
+// cannot escape this function — mirroring rippled's checkInvariantsHelper
+// (ApplyContext.cpp:97-148), which wraps both the initial and recovery passes
+// in the same try/catch and escalates via failInvariantCheck. Without this,
+// a defense-in-depth panic on the recovery state would propagate out of
+// runInvariants (whose own defer has already fired) and crash the engine.
+//
 // Reference: rippled Transactor.cpp lines 1224-1238.
-func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) Result {
+func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (result Result) {
+	defer func() {
+		if r := recover(); r != nil {
+			e.logger.Error("invariant recovery panic — escalating to tefINVARIANT_FAILED",
+				"txHash", fmt.Sprintf("%x", st.txHash), "panic", r)
+			result = TefINVARIANT_FAILED
+		}
+	}()
 	// Don't call table.Apply() — discard all transaction effects.
 	// Create a fresh tecTable for fee-only changes.
 	invTecTable := NewApplyStateTable(e.view, st.txHash, e.config.LedgerSequence, e.rules())

@@ -31,6 +31,7 @@ func hashN(n int) [32]byte {
 // TestReplayer_Acquire_Unique exercises the base happy path: two
 // distinct hashes both register and show up in InFlight.
 func TestReplayer_Acquire_Unique(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	rep := NewReplayer(nil, nil, 0)
 
@@ -59,6 +60,7 @@ func TestReplayer_Acquire_Unique(t *testing.T) {
 // Acquire for an already-in-flight hash returns ErrAcquisitionExists
 // rather than silently double-registering.
 func TestReplayer_Acquire_Duplicate_Rejected(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	rep := NewReplayer(nil, nil, 0)
 
@@ -75,6 +77,7 @@ func TestReplayer_Acquire_Duplicate_Rejected(t *testing.T) {
 // TestReplayer_Acquire_CapacityFull verifies that the configured cap
 // is enforced: the (cap+1)-th Acquire returns ErrCapacityFull.
 func TestReplayer_Acquire_CapacityFull(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	rep := NewReplayer(nil, nil, 2)
 
@@ -94,6 +97,7 @@ func TestReplayer_Acquire_CapacityFull(t *testing.T) {
 // map entries across a shutdown→restart cycle and gives operators a
 // single "pending at shutdown" number for diagnostics.
 func TestReplayer_Stop_Drains(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	rep := NewReplayer(nil, nil, 10)
 
@@ -121,6 +125,7 @@ func TestReplayer_Stop_Drains(t *testing.T) {
 // Without this cap, all DefaultMaxInFlightReplays=16 slots could end
 // up targeting one silent peer and burning the whole catchup budget.
 func TestReplayer_Acquire_PerPeerCap(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	// Global cap well above per-peer cap so we can exercise the latter.
 	rep := NewReplayer(nil, nil, 10)
@@ -150,6 +155,7 @@ func TestReplayer_Acquire_PerPeerCap(t *testing.T) {
 // the other remains in StateWantBase. This is the core guarantee of
 // the coordinator: N responses never cross-pollinate.
 func TestReplayer_HandleResponse_RoutesByHash(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	rep := NewReplayer(nil, nil, 0)
 
@@ -185,6 +191,7 @@ func TestReplayer_HandleResponse_RoutesByHash(t *testing.T) {
 // hash no one is waiting on yields ErrNoMatchingAcquisition and
 // doesn't perturb state.
 func TestReplayer_HandleResponse_NoMatch(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	rep := NewReplayer(nil, nil, 0)
 	_, err := rep.Acquire(hashN(1), 7, parent)
@@ -202,6 +209,7 @@ func TestReplayer_HandleResponse_NoMatch(t *testing.T) {
 // cases: nil response and wrong-length hash both bounce with
 // ErrNoMatchingAcquisition rather than panicking.
 func TestReplayer_HandleResponse_NilAndBadHash(t *testing.T) {
+	t.Parallel()
 	rep := NewReplayer(nil, nil, 0)
 
 	rd, err := rep.HandleResponse(nil)
@@ -216,6 +224,7 @@ func TestReplayer_HandleResponse_NilAndBadHash(t *testing.T) {
 // TestReplayer_Complete_Removes verifies that Complete frees the slot
 // so a subsequent Acquire of the same hash succeeds.
 func TestReplayer_Complete_Removes(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	rep := NewReplayer(nil, nil, 0)
 	h := hashN(1)
@@ -240,6 +249,7 @@ func TestReplayer_Complete_Removes(t *testing.T) {
 // TestReplayer_Abandon_IsCompleteSynonym pins the documented
 // equivalence so a future refactor doesn't silently decouple the two.
 func TestReplayer_Abandon_IsCompleteSynonym(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	rep := NewReplayer(nil, nil, 0)
 	h := hashN(1)
@@ -254,6 +264,7 @@ func TestReplayer_Abandon_IsCompleteSynonym(t *testing.T) {
 // acquisition past the timeout, and confirms TimedOut() reports it
 // with its full summary (hash/seq/peerID) so the router can re-issue.
 func TestReplayer_TimedOut_Surfaces(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	clock := inboundtest.NewFakeClock(time.Now())
 	rep := NewReplayer(nil, clock, 0)
@@ -282,6 +293,7 @@ func TestReplayer_TimedOut_Surfaces(t *testing.T) {
 // pairwise distinct). Regression guard for lock-ordering bugs in
 // Acquire.
 func TestReplayer_Concurrent_Acquires(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	rep := NewReplayer(nil, nil, 50)
 
@@ -323,6 +335,7 @@ func TestReplayer_Concurrent_Acquires(t *testing.T) {
 // TestReplayer_Has pins the Has accessor so callers can cheap-skip a
 // duplicate Acquire.
 func TestReplayer_Has(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	rep := NewReplayer(nil, nil, 0)
 	h := hashN(1)

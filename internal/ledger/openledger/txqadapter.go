@@ -57,12 +57,7 @@ func (a *TxqAdapter) GetTxInLedger() uint32 {
 	if a.view == nil {
 		return 0
 	}
-	var count uint32
-	_ = a.view.ForEachTransaction(func(_ [32]byte, _ []byte) bool {
-		count++
-		return true
-	})
-	return count
+	return a.view.TxCount()
 }
 
 // GetAccountSequence reads the AccountRoot.Sequence for accountID. Returns

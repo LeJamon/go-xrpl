@@ -41,24 +41,29 @@ const (
 	batchPrefix               = "42434800"
 )
 
-// Encode converts a JSON transaction object to a hex string in the canonical binary format.
-// The binary format is defined in XRPL's core codebase. Encode does not mutate
-// the caller-supplied map. An unknown field name is treated as an error rather
-// than silently dropped — see [ErrUnknownField].
-func Encode(json map[string]any) (string, error) {
+// EncodeBytes encodes a JSON transaction object directly to canonical binary
+// bytes. Prefer this over Encode on hot paths that immediately re-decode.
+// EncodeBytes does not mutate the caller-supplied map. An unknown field name
+// is treated as an error rather than silently dropped — see [ErrUnknownField].
+func EncodeBytes(json map[string]any) ([]byte, error) {
 	defs := definitions.Get()
 	for k := range json {
 		if _, ok := defs.Fields[k]; !ok {
-			return "", fmt.Errorf("%w: %q", ErrUnknownField, k)
+			return nil, fmt.Errorf("%w: %q", ErrUnknownField, k)
 		}
 	}
 
 	st := types.NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
-	b, err := st.FromJSON(json)
+	return st.FromJSON(json)
+}
+
+// Encode converts a JSON transaction object to a hex string in the canonical
+// binary format. The binary format is defined in XRPL's core codebase.
+func Encode(json map[string]any) (string, error) {
+	b, err := EncodeBytes(json)
 	if err != nil {
 		return "", err
 	}
-
 	return strings.ToUpper(hex.EncodeToString(b)), nil
 }
 
@@ -207,18 +212,24 @@ func removeNonSigningFields(json map[string]any) map[string]any {
 	return out
 }
 
-// Decode decodes a hex string in the canonical binary format into a JSON transaction object.
-func Decode(hexEncoded string) (map[string]any, error) {
-	b, err := hex.DecodeString(hexEncoded)
-	if err != nil {
-		return nil, err
-	}
+// DecodeBytes decodes canonical binary bytes into a JSON transaction object.
+// Prefer this over Decode on hot paths that already hold the raw bytes.
+func DecodeBytes(b []byte) (map[string]any, error) {
 	p := serdes.NewBinaryParser(b, definitions.Get())
 	st := types.NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
 	m, err := st.ToJSON(p)
 	if err != nil {
 		return nil, err
 	}
-
 	return m.(map[string]any), nil
+}
+
+// Decode decodes a hex string in the canonical binary format into a JSON
+// transaction object.
+func Decode(hexEncoded string) (map[string]any, error) {
+	b, err := hex.DecodeString(hexEncoded)
+	if err != nil {
+		return nil, err
+	}
+	return DecodeBytes(b)
 }

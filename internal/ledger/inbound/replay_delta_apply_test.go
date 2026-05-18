@@ -27,8 +27,7 @@ func buildEmptyClosedSuccessorResponse(t *testing.T, parent *ledger.Ledger) (*me
 	require.NoError(t, open.Close(closeTime, 0))
 	hdr := open.Header()
 
-	hdrBytes, err := header.AddRaw(hdr, false)
-	require.NoError(t, err)
+	hdrBytes := header.AddRaw(hdr, false)
 
 	resp := &message.ReplayDeltaResponse{
 		LedgerHash:   hdr.Hash[:],
@@ -55,6 +54,7 @@ func armReplayDeltaWith(t *testing.T, parent *ledger.Ledger, resp *message.Repla
 // fixture that proves Apply runs Close() on the child and produces a
 // hash that matches the verified header byte-for-byte.
 func TestReplayDelta_Apply_EmptyTxSet(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	resp, hdr := buildEmptyClosedSuccessorResponse(t, parent)
 	rd := armReplayDeltaWith(t, parent, resp, hdr)
@@ -82,6 +82,7 @@ func TestReplayDelta_Apply_EmptyTxSet(t *testing.T) {
 // Apply attempts the lowest-index tx first (it's the first parse
 // failure we observe).
 func TestReplayDelta_Apply_OrderedByIndex(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 
 	// Build three DecodedTx entries already sorted by GotResponse —
@@ -128,6 +129,7 @@ func TestReplayDelta_Apply_OrderedByIndex(t *testing.T) {
 // (header hash + tx-map root match), and Apply must reject the
 // mismatched state-map root.
 func TestReplayDelta_Apply_StateRootMismatch(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 
 	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -141,8 +143,7 @@ func TestReplayDelta_Apply_StateRootMismatch(t *testing.T) {
 	// map root both match the response). Apply must then catch the
 	// state-map divergence.
 	hdr.AccountHash[0] ^= 0xFF
-	hdrBytes, err := header.AddRaw(hdr, false)
-	require.NoError(t, err)
+	hdrBytes := header.AddRaw(hdr, false)
 	hdr.Hash = computeWireHeaderHash(hdrBytes)
 
 	resp := &message.ReplayDeltaResponse{
@@ -162,6 +163,7 @@ func TestReplayDelta_Apply_StateRootMismatch(t *testing.T) {
 // calling Apply before GotResponse has succeeded (state != Complete)
 // returns a clear error and does not mutate any state.
 func TestReplayDelta_Apply_BeforeComplete(t *testing.T) {
+	t.Parallel()
 	parent := makeGenesisLedger(t)
 	rd := NewReplayDelta([32]byte{}, 7, parent, nil)
 

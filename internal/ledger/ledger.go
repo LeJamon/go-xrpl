@@ -693,8 +693,7 @@ func readSkipListHashes(stateMap *shamap.SHAMap, key [32]byte) ([][32]byte, erro
 		return nil, nil
 	}
 
-	hexStr := hex.EncodeToString(item.Data())
-	jsonObj, err := binarycodec.Decode(hexStr)
+	jsonObj, err := binarycodec.DecodeBytes(item.Data())
 	if err != nil {
 		return nil, fmt.Errorf("decode LedgerHashes: %w", err)
 	}
@@ -750,14 +749,9 @@ func writeSkipList(stateMap *shamap.SHAMap, key [32]byte, hashes [][32]byte, las
 		"LastLedgerSequence": lastSeq,
 	}
 
-	hexStr, err := binarycodec.Encode(jsonObj)
+	data, err := binarycodec.EncodeBytes(jsonObj)
 	if err != nil {
 		return fmt.Errorf("encode LedgerHashes: %w", err)
-	}
-
-	data, err := hex.DecodeString(hexStr)
-	if err != nil {
-		return fmt.Errorf("decode hex: %w", err)
 	}
 
 	return stateMap.Put(key, data)
@@ -898,6 +892,13 @@ func (l *Ledger) ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool
 	})
 }
 
+// TxCount returns the number of transactions in the tx map.
+func (l *Ledger) TxCount() uint32 {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return uint32(l.txMap.Size())
+}
+
 // StateMapSnapshot returns a mutable snapshot of the state map.
 // This is useful for continuous replay where the state from one block
 // becomes the input for the next block.
@@ -924,20 +925,11 @@ func (l *Ledger) SetStateMapFamily(family shamap.Family) {
 	l.stateMap.SetFamily(family)
 }
 
-// SerializeHeader returns the serialized ledger header bytes. The
-// underlying writer is a bytes.Buffer that cannot fail; any error
-// from header.AddRaw means we built a malformed header in-process,
-// which is a programming bug and unsafe to paper over with nil
-// (callers persist or broadcast the result).
+// SerializeHeader returns the serialized ledger header bytes.
 func (l *Ledger) SerializeHeader() []byte {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-
-	data, err := header.AddRaw(l.header, true)
-	if err != nil {
-		panic(fmt.Sprintf("ledger: SerializeHeader: %v", err))
-	}
-	return data
+	return header.AddRaw(l.header, true)
 }
 
 // calculateLedgerHash computes the hash of a ledger header

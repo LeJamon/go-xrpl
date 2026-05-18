@@ -5,7 +5,7 @@
 package amendment
 
 import (
-	"crypto/sha512"
+	"github.com/LeJamon/goXRPLd/crypto/common"
 )
 
 // VoteBehavior defines how a node votes on an amendment by default.
@@ -45,18 +45,9 @@ type Feature struct {
 	Retired bool
 }
 
-// SHA512Half computes the SHA-512 hash and returns the first 32 bytes (256 bits).
-// This is the standard hash function used for XRP Ledger identifiers.
-func SHA512Half(data []byte) [32]byte {
-	hash := sha512.Sum512(data)
-	var result [32]byte
-	copy(result[:], hash[:32])
-	return result
-}
-
 // FeatureID computes the feature ID from a feature name.
 func FeatureID(name string) [32]byte {
-	return SHA512Half([]byte(name))
+	return common.Sha512Half([]byte(name))
 }
 
 // IsSupported returns true if the feature is supported by this code.

@@ -220,8 +220,7 @@ func buildResponseAgainstParent(t *testing.T, svc *service.Service, txCount int)
 		TxHash:              txRoot,
 		AccountHash:         parent.Header().AccountHash,
 	}
-	bytesHdr, err := header.AddRaw(hdr, false)
-	require.NoError(t, err)
+	bytesHdr := header.AddRaw(hdr, false)
 	parsed, err := header.DeserializeHeader(bytesHdr, false)
 	require.NoError(t, err)
 	expected := genesis.CalculateLedgerHash(*parsed)
@@ -252,8 +251,7 @@ func buildEmptyClosedSuccessorResponse(t *testing.T, svc *service.Service) (*mes
 	require.NoError(t, open.Close(closeTime, 0))
 	hdr := open.Header()
 
-	hdrBytes, err := header.AddRaw(hdr, false)
-	require.NoError(t, err)
+	hdrBytes := header.AddRaw(hdr, false)
 
 	resp := &message.ReplayDeltaResponse{
 		LedgerHash:   hdr.Hash[:],
@@ -503,8 +501,7 @@ func TestRouter_ReplayDeltaApply_StateMismatchFallsBack(t *testing.T) {
 	parsed, err := header.DeserializeHeader(resp.LedgerHeader, false)
 	require.NoError(t, err)
 	parsed.AccountHash[0] ^= 0xFF
-	hdrBytes, err := header.AddRaw(*parsed, false)
-	require.NoError(t, err)
+	hdrBytes := header.AddRaw(*parsed, false)
 	tampered := common.Sha512Half(protocol.HashPrefixLedgerMaster.Bytes(), hdrBytes)
 	resp.LedgerHash = tampered[:]
 	resp.LedgerHeader = hdrBytes
@@ -615,8 +612,7 @@ func buildSuccessorAgainstParent(t *testing.T, parent *ledger.Ledger) (*message.
 	require.NoError(t, open.Close(closeTime, 0))
 	hdr := open.Header()
 
-	hdrBytes, err := header.AddRaw(hdr, false)
-	require.NoError(t, err)
+	hdrBytes := header.AddRaw(hdr, false)
 
 	resp := &message.ReplayDeltaResponse{
 		LedgerHash:   hdr.Hash[:],
