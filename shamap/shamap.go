@@ -990,6 +990,15 @@ func (sm *SHAMap) snapshotBacked(mutable bool) (*SHAMap, error) {
 	newMap.state = newState
 	newMap.ledgerSeq = sm.ledgerSeq
 
+	// Immutable→immutable backed snapshot owns the same leaf set as its
+	// source; carry the cached count across so the snapshot is O(1) on
+	// first Size() too. Mirrors the unbacked branch in Snapshot().
+	if !mutable && sm.state == StateImmutable {
+		if n := sm.cachedSize.Load(); n >= 0 {
+			newMap.cachedSize.Store(n)
+		}
+	}
+
 	return newMap, nil
 }
 
@@ -1007,14 +1016,18 @@ func (sm *SHAMap) Size() int {
 
 	sm.mu.RLock()
 	count := 0
-	_ = sm.forEachUnsafe(context.Background(), sm.root, func(*Item) bool {
+	err := sm.forEachUnsafe(context.Background(), sm.root, func(*Item) bool {
 		count++
 		return true
 	})
 	isImmutable := sm.state == StateImmutable
 	sm.mu.RUnlock()
 
-	if isImmutable {
+	// Only cache when the walk completed without error. A backed map's
+	// descend() can fail mid-traversal (NodeStore fetch / deserialize);
+	// caching a partial count would lock the wrong value in for the
+	// lifetime of the map, so let the next call retry instead.
+	if isImmutable && err == nil {
 		// Race between concurrent first-readers is benign: every walker
 		// sees the same frozen tree and so computes the same count.
 		sm.cachedSize.Store(int64(count))

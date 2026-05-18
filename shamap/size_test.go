@@ -1,6 +1,8 @@
 package shamap
 
 import (
+	"errors"
+	"sync/atomic"
 	"testing"
 )
 
@@ -85,12 +87,12 @@ func TestSize_CachedWhenImmutable(t *testing.T) {
 		t.Errorf("after immutable Size cachedSize = %d, want 5", v)
 	}
 
-	// Subsequent calls read the cache (we can't directly observe that the
-	// walk is skipped from the test surface, but corrupting the root and
-	// confirming Size still reports 5 proves the cache is consulted).
-	sm.root = nil
-	if got := sm.Size(); got != 5 {
-		t.Errorf("cached Size = %d, want 5 (cache not consulted)", got)
+	// Subsequent calls must consult the cache rather than re-walking.
+	// Overwrite the cached value to a sentinel and assert Size returns
+	// the sentinel — only possible if the walk is skipped.
+	sm.cachedSize.Store(999)
+	if got := sm.Size(); got != 999 {
+		t.Errorf("cached Size = %d, want 999 (cache not consulted)", got)
 	}
 }
 
@@ -130,5 +132,119 @@ func TestSize_SnapshotInheritsImmutableCache(t *testing.T) {
 	}
 	if v := mut.cachedSize.Load(); v != -1 {
 		t.Errorf("mutable snapshot cachedSize = %d, want -1", v)
+	}
+}
+
+// failingFamily wraps a Family and forces Fetch to fail after the first N
+// successful calls, simulating a NodeStore I/O blip mid-traversal.
+type failingFamily struct {
+	inner    Family
+	failAfter int32
+	calls     atomic.Int32
+}
+
+func (f *failingFamily) Fetch(hash [32]byte) ([]byte, error) {
+	if f.calls.Add(1) > f.failAfter {
+		return nil, errors.New("simulated fetch failure")
+	}
+	return f.inner.Fetch(hash)
+}
+
+func (f *failingFamily) StoreBatch(entries []FlushEntry) error {
+	return f.inner.StoreBatch(entries)
+}
+
+func TestSize_DoesNotCacheOnWalkError(t *testing.T) {
+	t.Parallel()
+	mem := NewMemoryFamily()
+	sm, err := NewBacked(TypeState, mem)
+	if err != nil {
+		t.Fatalf("new backed: %v", err)
+	}
+	// Use diverse keys so the tree has internal branching and Size's walk
+	// must descend through multiple inner nodes (each a potential fetch).
+	keys := [][32]byte{
+		{0x00, 0x11}, {0x10, 0x22}, {0x20, 0x33}, {0x30, 0x44},
+		{0x40, 0x55}, {0x50, 0x66}, {0x60, 0x77}, {0x70, 0x88},
+	}
+	for i, k := range keys {
+		if err := sm.PutItem(makeItem(k, intToBytes(i+1))); err != nil {
+			t.Fatalf("put %d: %v", i, err)
+		}
+	}
+
+	// Flush dirty nodes to the family and drop in-memory children, so any
+	// subsequent descend() goes through Family.Fetch.
+	batch, err := sm.FlushDirty(true)
+	if err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if err := mem.StoreBatch(batch.Entries); err != nil {
+		t.Fatalf("storebatch: %v", err)
+	}
+
+	if err := sm.SetImmutable(); err != nil {
+		t.Fatalf("SetImmutable: %v", err)
+	}
+
+	// Swap in a family that fails after the first fetch.
+	sm.SetFamily(&failingFamily{inner: mem, failAfter: 1})
+
+	// Walk will abort partway; the partial count must NOT be cached.
+	_ = sm.Size()
+	if v := sm.cachedSize.Load(); v != -1 {
+		t.Errorf("after errored walk cachedSize = %d, want -1 (partial counts must not be cached)", v)
+	}
+
+	// Restore a working family — the next Size() must re-walk and now cache
+	// the true count, proving the prior error didn't poison the map.
+	sm.SetFamily(mem)
+	if got := sm.Size(); got != len(keys) {
+		t.Errorf("post-recovery Size = %d, want %d", got, len(keys))
+	}
+	if v := sm.cachedSize.Load(); v != int64(len(keys)) {
+		t.Errorf("post-recovery cachedSize = %d, want %d", v, len(keys))
+	}
+}
+
+func TestSize_BackedSnapshotInheritsImmutableCache(t *testing.T) {
+	t.Parallel()
+	mem := NewMemoryFamily()
+	sm, err := NewBacked(TypeState, mem)
+	if err != nil {
+		t.Fatalf("new backed: %v", err)
+	}
+	for i := 0; i < 4; i++ {
+		k := [32]byte{byte(i * 0x11)}
+		if err := sm.PutItem(makeItem(k, intToBytes(i+1))); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+	}
+	if err := sm.SetImmutable(); err != nil {
+		t.Fatalf("SetImmutable: %v", err)
+	}
+	if got := sm.Size(); got != 4 {
+		t.Fatalf("source Size = %d, want 4", got)
+	}
+	if v := sm.cachedSize.Load(); v != 4 {
+		t.Fatalf("source cachedSize = %d, want 4", v)
+	}
+
+	// Immutable→immutable backed snapshot must inherit the cache.
+	snap, err := sm.Snapshot(false)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if v := snap.cachedSize.Load(); v != 4 {
+		t.Errorf("backed immutable snapshot cachedSize = %d, want 4 (inheritance)", v)
+	}
+
+	// Mutable backed snapshot must NOT inherit (callers may mutate).
+	mut, err := sm.Snapshot(true)
+	if err != nil {
+		t.Fatalf("snapshot mutable: %v", err)
+	}
+	if v := mut.cachedSize.Load(); v != -1 {
+		t.Errorf("backed mutable snapshot cachedSize = %d, want -1", v)
 	}
 }
