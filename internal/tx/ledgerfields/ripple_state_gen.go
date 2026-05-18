@@ -29,18 +29,18 @@ type RippleState struct {
 }
 
 const (
-	rsBitFlags uint64 = 1 << iota
-	rsBitBalance
-	rsBitLowLimit
-	rsBitHighLimit
-	rsBitLowNode
-	rsBitHighNode
-	rsBitLowQualityIn
-	rsBitLowQualityOut
-	rsBitHighQualityIn
-	rsBitHighQualityOut
-	rsBitPreviousTxnID
-	rsBitPreviousTxnLgrSeq
+	ripplestateBitFlags uint64 = 1 << iota
+	ripplestateBitBalance
+	ripplestateBitLowLimit
+	ripplestateBitHighLimit
+	ripplestateBitLowNode
+	ripplestateBitHighNode
+	ripplestateBitLowQualityIn
+	ripplestateBitLowQualityOut
+	ripplestateBitHighQualityIn
+	ripplestateBitHighQualityOut
+	ripplestateBitPreviousTxnID
+	ripplestateBitPreviousTxnLgrSeq
 )
 
 // Decode populates the struct from binary ledger-entry data via a streaming
@@ -54,86 +54,97 @@ func (r *RippleState) Decode(data []byte) error {
 			return err
 		}
 		switch typeCode {
-		case 1: // UInt16 — LedgerEntryType is the only AccountRoot/Offer/etc. UInt16 and is sMD_Never; discard.
-			if _, err := sr.readUint16(); err != nil {
+		case 1: // UInt16
+			u16Val, err := sr.readUint16()
+			if err != nil {
 				return err
+			}
+			val := int(u16Val)
+			switch fieldCode {
+			case 1:
+				_ = val // LedgerEntryType is sMD_Never; discard
+			default:
+				_ = val
+				return newErrUnknownField("RippleState", typeCode, fieldCode)
 			}
 		case 2: // UInt32
-			v, err := sr.readUint32()
+			val, err := sr.readUint32()
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 2:
-				r.Flags = v
-				r.present |= rsBitFlags
+				r.Flags = val
+				r.present |= ripplestateBitFlags
 			case 5:
-				r.PreviousTxnLgrSeq = v
-				r.present |= rsBitPreviousTxnLgrSeq
+				r.PreviousTxnLgrSeq = val
+				r.present |= ripplestateBitPreviousTxnLgrSeq
 			case 16:
-				r.HighQualityIn = v
-				r.present |= rsBitHighQualityIn
+				r.HighQualityIn = val
+				r.present |= ripplestateBitHighQualityIn
 			case 17:
-				r.HighQualityOut = v
-				r.present |= rsBitHighQualityOut
+				r.HighQualityOut = val
+				r.present |= ripplestateBitHighQualityOut
 			case 18:
-				r.LowQualityIn = v
-				r.present |= rsBitLowQualityIn
+				r.LowQualityIn = val
+				r.present |= ripplestateBitLowQualityIn
 			case 19:
-				r.LowQualityOut = v
-				r.present |= rsBitLowQualityOut
+				r.LowQualityOut = val
+				r.present |= ripplestateBitLowQualityOut
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("RippleState", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			v, err := sr.readUint64Hex()
+			val, err := sr.readUint64Hex()
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 7:
-				r.LowNode = v
-				r.present |= rsBitLowNode
+				r.LowNode = val
+				r.present |= ripplestateBitLowNode
 			case 8:
-				r.HighNode = v
-				r.present |= rsBitHighNode
+				r.HighNode = val
+				r.present |= ripplestateBitHighNode
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("RippleState", typeCode, fieldCode)
 			}
 		case 5: // Hash256
-			v, err := sr.readHash(32)
+			val, err := sr.readHash(32)
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 5:
-				r.PreviousTxnID = v
-				r.present |= rsBitPreviousTxnID
+				r.PreviousTxnID = val
+				r.present |= ripplestateBitPreviousTxnID
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("RippleState", typeCode, fieldCode)
 			}
 		case 6: // Amount
-			v, err := sr.readAmountAny()
+			val, err := sr.readAmountAny()
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 2:
-				r.Balance = v
-				r.present |= rsBitBalance
+				r.Balance = val
+				r.present |= ripplestateBitBalance
 			case 6:
-				r.LowLimit = v
-				r.present |= rsBitLowLimit
+				r.LowLimit = val
+				r.present |= ripplestateBitLowLimit
 			case 7:
-				r.HighLimit = v
-				r.present |= rsBitHighLimit
+				r.HighLimit = val
+				r.present |= ripplestateBitHighLimit
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("RippleState", typeCode, fieldCode)
 			}
 		default:
-			if err := sr.skipField(typeCode); err != nil {
-				return err
-			}
+			return newErrUnknownField("RippleState", typeCode, fieldCode)
 		}
 	}
 	return nil
@@ -143,34 +154,34 @@ func (r *RippleState) Decode(data []byte) error {
 // "zero" value for CreatedNode.NewFields to match rippled, which omits
 // defaulted fields from NewFields.
 func (r *RippleState) emitAll(out map[string]any, skipDefault bool) {
-	if r.present&rsBitFlags != 0 && !(skipDefault && r.Flags == 0) {
+	if r.present&ripplestateBitFlags != 0 && !(skipDefault && r.Flags == 0) {
 		out["Flags"] = r.Flags
 	}
-	if r.present&rsBitBalance != 0 {
+	if r.present&ripplestateBitBalance != 0 {
 		out["Balance"] = r.Balance
 	}
-	if r.present&rsBitLowLimit != 0 {
+	if r.present&ripplestateBitLowLimit != 0 {
 		out["LowLimit"] = r.LowLimit
 	}
-	if r.present&rsBitHighLimit != 0 {
+	if r.present&ripplestateBitHighLimit != 0 {
 		out["HighLimit"] = r.HighLimit
 	}
-	if r.present&rsBitLowNode != 0 && !(skipDefault && isZeroHexString(r.LowNode)) {
+	if r.present&ripplestateBitLowNode != 0 && !(skipDefault && isZeroHexString(r.LowNode)) {
 		out["LowNode"] = r.LowNode
 	}
-	if r.present&rsBitHighNode != 0 && !(skipDefault && isZeroHexString(r.HighNode)) {
+	if r.present&ripplestateBitHighNode != 0 && !(skipDefault && isZeroHexString(r.HighNode)) {
 		out["HighNode"] = r.HighNode
 	}
-	if r.present&rsBitLowQualityIn != 0 && !(skipDefault && r.LowQualityIn == 0) {
+	if r.present&ripplestateBitLowQualityIn != 0 && !(skipDefault && r.LowQualityIn == 0) {
 		out["LowQualityIn"] = r.LowQualityIn
 	}
-	if r.present&rsBitLowQualityOut != 0 && !(skipDefault && r.LowQualityOut == 0) {
+	if r.present&ripplestateBitLowQualityOut != 0 && !(skipDefault && r.LowQualityOut == 0) {
 		out["LowQualityOut"] = r.LowQualityOut
 	}
-	if r.present&rsBitHighQualityIn != 0 && !(skipDefault && r.HighQualityIn == 0) {
+	if r.present&ripplestateBitHighQualityIn != 0 && !(skipDefault && r.HighQualityIn == 0) {
 		out["HighQualityIn"] = r.HighQualityIn
 	}
-	if r.present&rsBitHighQualityOut != 0 && !(skipDefault && r.HighQualityOut == 0) {
+	if r.present&ripplestateBitHighQualityOut != 0 && !(skipDefault && r.HighQualityOut == 0) {
 		out["HighQualityOut"] = r.HighQualityOut
 	}
 }
@@ -194,16 +205,16 @@ func (r *RippleState) EmitPreviousFields(prev Entry, out map[string]any) {
 	if !ok || p == nil {
 		return
 	}
-	emitIfChangedUint32(out, "Flags", p.Flags, r.Flags, p.present&rsBitFlags, r.present&rsBitFlags)
-	emitIfChangedAmount(out, "Balance", p.Balance, r.Balance, p.present&rsBitBalance, r.present&rsBitBalance)
-	emitIfChangedAmount(out, "LowLimit", p.LowLimit, r.LowLimit, p.present&rsBitLowLimit, r.present&rsBitLowLimit)
-	emitIfChangedAmount(out, "HighLimit", p.HighLimit, r.HighLimit, p.present&rsBitHighLimit, r.present&rsBitHighLimit)
-	emitIfChangedString(out, "LowNode", p.LowNode, r.LowNode, p.present&rsBitLowNode, r.present&rsBitLowNode)
-	emitIfChangedString(out, "HighNode", p.HighNode, r.HighNode, p.present&rsBitHighNode, r.present&rsBitHighNode)
-	emitIfChangedUint32(out, "LowQualityIn", p.LowQualityIn, r.LowQualityIn, p.present&rsBitLowQualityIn, r.present&rsBitLowQualityIn)
-	emitIfChangedUint32(out, "LowQualityOut", p.LowQualityOut, r.LowQualityOut, p.present&rsBitLowQualityOut, r.present&rsBitLowQualityOut)
-	emitIfChangedUint32(out, "HighQualityIn", p.HighQualityIn, r.HighQualityIn, p.present&rsBitHighQualityIn, r.present&rsBitHighQualityIn)
-	emitIfChangedUint32(out, "HighQualityOut", p.HighQualityOut, r.HighQualityOut, p.present&rsBitHighQualityOut, r.present&rsBitHighQualityOut)
+	emitIfChangedUint32(out, "Flags", p.Flags, r.Flags, p.present&ripplestateBitFlags, r.present&ripplestateBitFlags)
+	emitIfChangedAmount(out, "Balance", p.Balance, r.Balance, p.present&ripplestateBitBalance, r.present&ripplestateBitBalance)
+	emitIfChangedAmount(out, "LowLimit", p.LowLimit, r.LowLimit, p.present&ripplestateBitLowLimit, r.present&ripplestateBitLowLimit)
+	emitIfChangedAmount(out, "HighLimit", p.HighLimit, r.HighLimit, p.present&ripplestateBitHighLimit, r.present&ripplestateBitHighLimit)
+	emitIfChangedString(out, "LowNode", p.LowNode, r.LowNode, p.present&ripplestateBitLowNode, r.present&ripplestateBitLowNode)
+	emitIfChangedString(out, "HighNode", p.HighNode, r.HighNode, p.present&ripplestateBitHighNode, r.present&ripplestateBitHighNode)
+	emitIfChangedUint32(out, "LowQualityIn", p.LowQualityIn, r.LowQualityIn, p.present&ripplestateBitLowQualityIn, r.present&ripplestateBitLowQualityIn)
+	emitIfChangedUint32(out, "LowQualityOut", p.LowQualityOut, r.LowQualityOut, p.present&ripplestateBitLowQualityOut, r.present&ripplestateBitLowQualityOut)
+	emitIfChangedUint32(out, "HighQualityIn", p.HighQualityIn, r.HighQualityIn, p.present&ripplestateBitHighQualityIn, r.present&ripplestateBitHighQualityIn)
+	emitIfChangedUint32(out, "HighQualityOut", p.HighQualityOut, r.HighQualityOut, p.present&ripplestateBitHighQualityOut, r.present&ripplestateBitHighQualityOut)
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields
@@ -211,10 +222,10 @@ func (r *RippleState) EmitPreviousFields(prev Entry, out map[string]any) {
 // otherwise hidden.
 func (r *RippleState) EmitDeleteFinalFields(out map[string]any) {
 	r.emitAll(out, false)
-	if r.present&rsBitPreviousTxnID != 0 {
+	if r.present&ripplestateBitPreviousTxnID != 0 {
 		out["PreviousTxnID"] = r.PreviousTxnID
 	}
-	if r.present&rsBitPreviousTxnLgrSeq != 0 {
+	if r.present&ripplestateBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = r.PreviousTxnLgrSeq
 	}
 }
@@ -229,10 +240,10 @@ func (r *RippleState) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 func (r *RippleState) PreviousTxn() (string, uint32) {
 	var id string
 	var seq uint32
-	if r.present&rsBitPreviousTxnID != 0 {
+	if r.present&ripplestateBitPreviousTxnID != 0 {
 		id = r.PreviousTxnID
 	}
-	if r.present&rsBitPreviousTxnLgrSeq != 0 {
+	if r.present&ripplestateBitPreviousTxnLgrSeq != 0 {
 		seq = r.PreviousTxnLgrSeq
 	}
 	return id, seq

@@ -24,6 +24,29 @@ jobs:
         with:
           version: v2.11.3
 
+  generate:
+    name: Generate (ledgerfields drift check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24"
+          cache: true
+      # Re-run the ledgerfields generator and fail if any *_gen.go file
+      # changes — a spec edit without `go generate` would otherwise silently
+      # ship a stale typed decoder.
+      - name: Re-run go generate
+        run: go generate ./internal/tx/ledgerfields/...
+      - name: Fail on tree diff
+        run: |
+          if ! git diff --exit-code -- internal/tx/ledgerfields; then
+            echo "::error::ledgerfields generated files are out of date."
+            echo "Run: go generate ./internal/tx/ledgerfields/..."
+            echo "Then commit the regenerated *_gen.go files."
+            exit 1
+          fi
+
   build:
     name: Build
     runs-on: ubuntu-latest

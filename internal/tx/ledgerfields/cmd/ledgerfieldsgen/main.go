@@ -85,7 +85,8 @@ type decodeArm struct {
 	GoField   string
 	BitConst  string
 	GoType    string
-	XRPOnly   bool // for Amount fields
+	XRPOnly   bool      // for Amount fields
+	Meta      spec.Meta // controls assign-vs-discard in the inner switch
 }
 
 // generate returns (path, source).
@@ -98,6 +99,21 @@ func generate(defs *definitions.Definitions, entry spec.Entry, outDir string) (s
 		DecodeArms: map[int][]decodeArm{},
 	}
 
+	// Every ledger entry carries LedgerEntryType (UInt16 fieldCode 1) as its
+	// first serialized field; it's sMD_Never (never in metadata) but the
+	// streaming decoder must still consume those two bytes. Inject a
+	// synthetic discard-only arm so it lives in the same typeCode-1 switch
+	// as any spec'd UInt16 fields (e.g. AMM.TradingFee).
+	er.DecodeArms[1] = []decodeArm{{
+		TypeCode:  1,
+		FieldCode: 1,
+		XRPLType:  "UInt16",
+		GoField:   "LedgerEntryType",
+		BitConst:  "",
+		GoType:    "int",
+		Meta:      spec.MetaNever,
+	}}
+
 	for _, f := range entry.Fields {
 		fi, err := defs.GetFieldInstanceByFieldName(f.Name)
 		if err != nil {
@@ -109,9 +125,10 @@ func generate(defs *definitions.Definitions, entry spec.Entry, outDir string) (s
 		}
 		er.Fields = append(er.Fields, fr)
 
-		if f.Meta == spec.MetaNever {
-			continue // decoded only to advance the parser; no slot
-		}
+		// Include even MetaNever fields in DecodeArms: the parser still has
+		// to consume their bytes, and the generator emits a discard-only arm
+		// for them so the fail-fast outer default doesn't trip on a field
+		// the spec already declared.
 		arm := decodeArm{
 			TypeCode:  int(fi.FieldHeader.TypeCode),
 			FieldCode: int(fi.Nth),
@@ -120,6 +137,7 @@ func generate(defs *definitions.Definitions, entry spec.Entry, outDir string) (s
 			BitConst:  fr.BitConst,
 			GoType:    fr.GoType,
 			XRPOnly:   fr.XRPOnly,
+			Meta:      f.Meta,
 		}
 		if arm.XRPLType == "Amount" && !arm.XRPOnly {
 			er.HasUnsupported = true
@@ -210,6 +228,37 @@ func makeFieldRender(f spec.Field, fi *definitions.FieldInstance, entryName, bit
 		fr.GoType = "[]string"
 		fr.Comparer = "StringSlice"
 		fr.DecodeKind = "vector256"
+	case "Hash192":
+		fr.GoType = "string"
+		fr.Comparer = "String"
+		fr.DecodeKind = "hash24"
+		fr.IsHash = true
+	case "STObject":
+		fr.GoType = "map[string]any"
+		fr.Comparer = "Deep"
+		fr.DecodeKind = "stobject"
+	case "STArray":
+		fr.GoType = "[]any"
+		fr.Comparer = "Deep"
+		fr.DecodeKind = "starray"
+	case "Issue":
+		fr.GoType = "any"
+		fr.Comparer = "Deep"
+		fr.DecodeKind = "issue"
+	case "XChainBridge":
+		fr.GoType = "any"
+		fr.Comparer = "Deep"
+		fr.DecodeKind = "xchainbridge"
+	case "Number":
+		fr.GoType = "any"
+		fr.Comparer = "Deep"
+		fr.DecodeKind = "number"
+	case "Currency":
+		// Used by sfAsset / similar — same shape as Hash160.
+		fr.GoType = "string"
+		fr.Comparer = "String"
+		fr.DecodeKind = "hash20"
+		fr.IsHash = true
 	default:
 		return fr, fmt.Errorf("unsupported XRPL type %q for field %s", fi.Type, f.Name)
 	}
@@ -217,40 +266,44 @@ func makeFieldRender(f spec.Field, fi *definitions.FieldInstance, entryName, bit
 }
 
 func bitPrefixFor(entryName string) string {
-	// Keep the short forms used by the hand-written files so diffs stay
-	// small when migrating those over: AccountRoot→ar, Offer→off,
-	// DirectoryNode→dn, RippleState→rs.
-	switch entryName {
-	case "AccountRoot":
-		return "ar"
-	case "Offer":
-		return "off"
-	case "DirectoryNode":
-		return "dn"
-	case "RippleState":
-		return "rs"
-	}
-	lower := strings.ToLower(entryName)
-	if len(lower) > 3 {
-		return lower[:3]
-	}
-	return lower
+	// Use the full lowercased entry name as prefix to guarantee uniqueness
+	// across the ~28 entry types (MPToken vs MPTokenIssuance, NFTokenOffer
+	// vs NFTokenPage, XChainOwnedClaimID vs XChainOwnedCreateAccountClaimID
+	// would collide on any abbreviated scheme).
+	return strings.ToLower(entryName)
 }
 
+// snake converts a CamelCase identifier to snake_case, treating runs of
+// consecutive uppercase letters as one acronym. So "AccountRoot" →
+// "account_root", "NFTokenOffer" → "nf_token_offer", "DID" → "did",
+// "XChainOwnedClaimID" → "x_chain_owned_claim_id".
 func snake(s string) string {
+	bytes := []byte(s)
 	var b strings.Builder
-	for i, r := range s {
-		if i > 0 && r >= 'A' && r <= 'Z' {
-			b.WriteByte('_')
+	for i, c := range bytes {
+		if i > 0 && isUpperByte(c) {
+			prev := bytes[i-1]
+			var next byte
+			if i+1 < len(bytes) {
+				next = bytes[i+1]
+			}
+			// Split on lower→upper or on upper→upper-followed-by-lower
+			// (acronym boundary into a new word).
+			if isLowerByte(prev) || (isUpperByte(prev) && isLowerByte(next)) {
+				b.WriteByte('_')
+			}
 		}
-		if r >= 'A' && r <= 'Z' {
-			b.WriteRune(r + ('a' - 'A'))
+		if isUpperByte(c) {
+			b.WriteByte(c + ('a' - 'A'))
 		} else {
-			b.WriteRune(r)
+			b.WriteByte(c)
 		}
 	}
 	return b.String()
 }
+
+func isUpperByte(b byte) bool { return b >= 'A' && b <= 'Z' }
+func isLowerByte(b byte) bool { return b >= 'a' && b <= 'z' }
 
 const headerComment = `// Code generated by ledgerfieldsgen; DO NOT EDIT.
 //
@@ -291,66 +344,102 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 			return err
 		}
 		switch typeCode {
-		case 1: // UInt16 — LedgerEntryType is the only AccountRoot/Offer/etc. UInt16 and is sMD_Never; discard.
-			if _, err := sr.readUint16(); err != nil {
-				return err
-			}
 {{- range $tc, $arms := .DecodeArms }}
-{{- if ne $tc 1 }}
 		case {{ $tc }}: // {{ (index $arms 0).XRPLType }}
 {{- $first := index $arms 0 }}
 {{- if eq $first.XRPLType "Amount" }}
 {{- if $first.XRPOnly }}
-			v, err := sr.readAmount()
+			val, err := sr.readAmount()
 {{- else }}
-			v, err := sr.readAmountAny()
+			val, err := sr.readAmountAny()
 {{- end }}
 			if err != nil {
 				return err
 			}
 {{- else if eq $first.XRPLType "UInt8" }}
-			b, err := sr.readUint8()
+			byteVal, err := sr.readUint8()
 			if err != nil {
 				return err
 			}
-			v := int(b)
+			val := int(byteVal)
+{{- else if eq $first.XRPLType "UInt16" }}
+			u16Val, err := sr.readUint16()
+			if err != nil {
+				return err
+			}
+			val := int(u16Val)
 {{- else if eq $first.XRPLType "UInt32" }}
-			v, err := sr.readUint32()
+			val, err := sr.readUint32()
 			if err != nil {
 				return err
 			}
 {{- else if eq $first.XRPLType "UInt64" }}
-			v, err := sr.readUint64Hex()
+			val, err := sr.readUint64Hex()
 			if err != nil {
 				return err
 			}
 {{- else if eq $first.XRPLType "Hash128" }}
-			v, err := sr.readHash(16)
+			val, err := sr.readHash(16)
 			if err != nil {
 				return err
 			}
 {{- else if eq $first.XRPLType "Hash160" }}
-			v, err := sr.readHash(20)
+			val, err := sr.readHash(20)
+			if err != nil {
+				return err
+			}
+{{- else if eq $first.XRPLType "Hash192" }}
+			val, err := sr.readHash(24)
 			if err != nil {
 				return err
 			}
 {{- else if eq $first.XRPLType "Hash256" }}
-			v, err := sr.readHash(32)
+			val, err := sr.readHash(32)
 			if err != nil {
 				return err
 			}
 {{- else if eq $first.XRPLType "AccountID" }}
-			v, err := sr.readAccountID()
+			val, err := sr.readAccountID()
 			if err != nil {
 				return err
 			}
 {{- else if eq $first.XRPLType "Blob" }}
-			v, err := sr.readBlobHex()
+			val, err := sr.readBlobHex()
 			if err != nil {
 				return err
 			}
 {{- else if eq $first.XRPLType "Vector256" }}
-			v, err := sr.readVector256()
+			val, err := sr.readVector256()
+			if err != nil {
+				return err
+			}
+{{- else if eq $first.XRPLType "STObject" }}
+			val, err := sr.readSTObject()
+			if err != nil {
+				return err
+			}
+{{- else if eq $first.XRPLType "STArray" }}
+			val, err := sr.readSTArray()
+			if err != nil {
+				return err
+			}
+{{- else if eq $first.XRPLType "Issue" }}
+			val, err := sr.readIssue()
+			if err != nil {
+				return err
+			}
+{{- else if eq $first.XRPLType "XChainBridge" }}
+			val, err := sr.readXChainBridge()
+			if err != nil {
+				return err
+			}
+{{- else if eq $first.XRPLType "Number" }}
+			val, err := sr.readNumber()
+			if err != nil {
+				return err
+			}
+{{- else if eq $first.XRPLType "Currency" }}
+			val, err := sr.readHash(20)
 			if err != nil {
 				return err
 			}
@@ -358,25 +447,25 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 			switch fieldCode {
 {{- range $arm := $arms }}
 			case {{ $arm.FieldCode }}:
-{{- if and (eq $arm.XRPLType "Amount") $arm.XRPOnly }}
-				if s, ok := v.(string); ok {
+{{- if eq $arm.Meta 3 }}
+				_ = val // {{ $arm.GoField }} is sMD_Never; discard
+{{- else if and (eq $arm.XRPLType "Amount") $arm.XRPOnly }}
+				if s, ok := val.(string); ok {
 					{{ $.Receiver }}.{{ $arm.GoField }} = s
 					{{ $.Receiver }}.present |= {{ $arm.BitConst }}
 				}
 {{- else }}
-				{{ $.Receiver }}.{{ $arm.GoField }} = v
+				{{ $.Receiver }}.{{ $arm.GoField }} = val
 				{{ $.Receiver }}.present |= {{ $arm.BitConst }}
 {{- end }}
 {{- end }}
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField({{ printf "%q" $.Name }}, typeCode, fieldCode)
 			}
-{{- end }}
 {{- end }}
 		default:
-			if err := sr.skipField(typeCode); err != nil {
-				return err
-			}
+			return newErrUnknownField({{ printf "%q" $.Name }}, typeCode, fieldCode)
 		}
 	}
 	return nil

@@ -131,6 +131,13 @@ func (p *BinaryParser) HasMore() bool {
 	return len(p.data) != 0
 }
 
+// Remaining reports the number of unread bytes still in the parser. Used by
+// callers that drive a sub-parser over a slice and need to know how much was
+// consumed so they can advance their own cursor.
+func (p *BinaryParser) Remaining() int {
+	return len(p.data)
+}
+
 // ReadVariableLength reads a variable-length field from the binary data
 // and returns the length as an integer. The length is determined by
 // 1 to 3 bytes length prefix according to XRPL documentation.

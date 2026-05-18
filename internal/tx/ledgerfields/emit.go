@@ -1,5 +1,7 @@
 package ledgerfields
 
+import "reflect"
+
 // Helpers shared by all generated entry implementations. They keep the
 // presence-aware change-detection logic in one place so the per-entry-type
 // code can stay mechanical.
@@ -53,6 +55,21 @@ func emitIfChangedAmount(out map[string]any, name string, prevVal, currVal any, 
 		return
 	}
 	if pPresent != 0 && cPresent != 0 && equalAmount(prevVal, currVal) {
+		return
+	}
+	if pPresent != 0 {
+		out[name] = prevVal
+	}
+}
+
+// emitIfChangedDeep handles compound values (STObject map[string]any,
+// STArray []any, Issue/Number/XChainBridge map[string]any). reflect.DeepEqual
+// is used because nested maps/arrays don't permit a typed shortcut.
+func emitIfChangedDeep(out map[string]any, name string, prevVal, currVal any, pPresent, cPresent uint64) {
+	if pPresent == 0 && cPresent == 0 {
+		return
+	}
+	if pPresent != 0 && cPresent != 0 && reflect.DeepEqual(prevVal, currVal) {
 		return
 	}
 	if pPresent != 0 {

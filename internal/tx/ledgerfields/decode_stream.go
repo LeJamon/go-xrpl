@@ -196,20 +196,22 @@ func (r *streamReader) readAmount() (any, error) {
 }
 
 // readAmountAny decodes any Amount variant (XRP, IOU, MPT). XRP stays inline;
-// IOU/MPT delegate to the binarycodec types.Amount decoder. Used by entry
-// types whose Amount fields can legitimately be non-XRP (e.g. Offer.TakerPays).
+// IOU/MPT delegate to the binarycodec types.Amount decoder. Order matches
+// types/amount.go ToJSON: IOU first (bit 0x80), then MPT (bit 0x20), else XRP.
+// Used by entry types whose Amount fields can legitimately be non-XRP (e.g.
+// Offer.TakerPays).
 func (r *streamReader) readAmountAny() (any, error) {
 	if r.pos >= len(r.data) {
 		return nil, errors.New("ledgerfields: out of bounds reading Amount")
 	}
 	first := r.data[r.pos]
 	switch {
-	case first&0x80 == 0:
-		return r.readAmount()
+	case first&0x80 != 0:
+		return r.readAmountViaCodec(48) // IOU
 	case first&0x20 != 0:
 		return r.readAmountViaCodec(33) // MPT
 	default:
-		return r.readAmountViaCodec(48) // IOU
+		return r.readAmount() // XRP
 	}
 }
 
@@ -225,6 +227,106 @@ func (r *streamReader) readAmountViaCodec(n int) (any, error) {
 }
 
 var errUnsupportedAmount = errors.New("ledgerfields: non-XRP amount in streaming decode")
+
+// readVector256 reads a VL-prefixed array of 32-byte hashes and returns
+// the canonical decoded form ([]string of uppercase hex hashes) that
+// binarycodec.Decode would produce. Used by ledger entries that carry
+// Vector256 with sMD_default (LedgerHashes.Hashes, Amendments.Amendments).
+func (r *streamReader) readVector256() ([]string, error) {
+	n, err := r.readVariableLength()
+	if err != nil {
+		return nil, err
+	}
+	if n%32 != 0 {
+		return nil, errors.New("ledgerfields: Vector256 length not a multiple of 32")
+	}
+	if r.pos+n > len(r.data) {
+		return nil, errors.New("ledgerfields: out of bounds reading Vector256")
+	}
+	out := make([]string, 0, n/32)
+	end := r.pos + n
+	for r.pos < end {
+		out = append(out, upperHex(r.data[r.pos:r.pos+32]))
+		r.pos += 32
+	}
+	return out, nil
+}
+
+// readSTObject and readSTArray drive a sub-parser over the underlying byte
+// slice via binarycodec.types and resync r.pos by how many bytes the
+// sub-parser consumed. The compound types' decoders contain rippled-faithful
+// recursive logic (nested STObjects, ObjectEndMarker handling, enum string
+// substitution) that is not worth re-implementing inline; the cost is one
+// BinaryParser allocation per compound field, paid only on ledger entries
+// that carry one (AMM, SignerList, NFTokenPage, Vault, …).
+func (r *streamReader) readSTObject() (map[string]any, error) {
+	v, err := r.decodeViaCodec(&types.STObject{}, -1)
+	if err != nil {
+		return nil, err
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil, errors.New("ledgerfields: STObject decode returned wrong type")
+	}
+	return m, nil
+}
+
+func (r *streamReader) readSTArray() ([]any, error) {
+	v, err := r.decodeViaCodec(&types.STArray{}, -1)
+	if err != nil {
+		return nil, err
+	}
+	a, ok := v.([]any)
+	if !ok {
+		return nil, errors.New("ledgerfields: STArray decode returned wrong type")
+	}
+	return a, nil
+}
+
+// readIssue reads an Issue (XRP / IOU / MPT shape, 20 / 40 / 44 bytes).
+func (r *streamReader) readIssue() (any, error) {
+	return r.decodeViaCodec(&types.Issue{}, -1)
+}
+
+// readXChainBridge reads a fixed-size 80-byte XChainBridge.
+func (r *streamReader) readXChainBridge() (any, error) {
+	const xChainBridgeLength = 80
+	return r.decodeViaCodec(&types.XChainBridge{}, xChainBridgeLength)
+}
+
+// readNumber reads a 12-byte Number.
+func (r *streamReader) readNumber() (any, error) {
+	return r.decodeViaCodec(&types.Number{}, -1)
+}
+
+// readPathSet reads a PathSet. Currently no ledger entry type carries one;
+// this exists so the generator's type dispatch is complete.
+func (r *streamReader) readPathSet() (any, error) {
+	return r.decodeViaCodec(&types.PathSet{}, -1)
+}
+
+// decodeViaCodec builds a sub-parser positioned at r.pos, hands it to the
+// supplied SerializedType to decode, then advances r.pos by the number of
+// bytes the sub-parser consumed. vlen < 0 means "no explicit length"; the
+// decoder figures out where the value ends from its own grammar (Issue uses
+// internal markers, STObject/STArray scan for end markers).
+func (r *streamReader) decodeViaCodec(st types.SerializedType, vlen int) (any, error) {
+	sub := serdes.NewBinaryParser(r.data[r.pos:], definitions.Get())
+	startRem := sub.Remaining()
+	var v any
+	var err error
+	if vlen < 0 {
+		v, err = st.ToJSON(sub)
+	} else {
+		v, err = st.ToJSON(sub, vlen)
+	}
+	if err != nil {
+		return nil, err
+	}
+	consumed := startRem - sub.Remaining()
+	r.pos += consumed
+	return v, nil
+}
 
 // upperHex is hex.EncodeToString uppercased without the intermediate
 // allocation produced by strings.ToUpper.
@@ -253,16 +355,17 @@ func (r *streamReader) skipField(typeCode int) error {
 		r.pos += 16
 	case 5: // Hash256
 		r.pos += 32
-	case 6: // Amount
+	case 6: // Amount — same order as types/amount.go ToJSON.
 		if r.pos >= len(r.data) {
 			return errors.New("ledgerfields: out of bounds skipping Amount")
 		}
-		if r.data[r.pos]&0x80 == 0 {
-			r.pos += 8 // XRP
-		} else if r.data[r.pos]&0x20 != 0 {
-			r.pos += 33 // MPT
-		} else {
+		switch {
+		case r.data[r.pos]&0x80 != 0:
 			r.pos += 48 // IOU
+		case r.data[r.pos]&0x20 != 0:
+			r.pos += 33 // MPT
+		default:
+			r.pos += 8 // XRP
 		}
 	case 7, 8, 19: // Blob, AccountID, Vector256 (VL-prefixed)
 		n, err := r.readVariableLength()

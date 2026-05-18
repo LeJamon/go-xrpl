@@ -29,18 +29,18 @@ type Offer struct {
 }
 
 const (
-	offBitAccount uint64 = 1 << iota
-	offBitSequence
-	offBitTakerPays
-	offBitTakerGets
-	offBitBookDirectory
-	offBitBookNode
-	offBitOwnerNode
-	offBitExpiration
-	offBitFlags
-	offBitDomainID
-	offBitPreviousTxnID
-	offBitPreviousTxnLgrSeq
+	offerBitAccount uint64 = 1 << iota
+	offerBitSequence
+	offerBitTakerPays
+	offerBitTakerGets
+	offerBitBookDirectory
+	offerBitBookNode
+	offerBitOwnerNode
+	offerBitExpiration
+	offerBitFlags
+	offerBitDomainID
+	offerBitPreviousTxnID
+	offerBitPreviousTxnLgrSeq
 )
 
 // Decode populates the struct from binary ledger-entry data via a streaming
@@ -54,95 +54,107 @@ func (o *Offer) Decode(data []byte) error {
 			return err
 		}
 		switch typeCode {
-		case 1: // UInt16 — LedgerEntryType is the only AccountRoot/Offer/etc. UInt16 and is sMD_Never; discard.
-			if _, err := sr.readUint16(); err != nil {
+		case 1: // UInt16
+			u16Val, err := sr.readUint16()
+			if err != nil {
 				return err
 			}
+			val := int(u16Val)
+			switch fieldCode {
+			case 1:
+				_ = val // LedgerEntryType is sMD_Never; discard
+			default:
+				_ = val
+				return newErrUnknownField("Offer", typeCode, fieldCode)
+			}
 		case 2: // UInt32
-			v, err := sr.readUint32()
+			val, err := sr.readUint32()
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 2:
-				o.Flags = v
-				o.present |= offBitFlags
+				o.Flags = val
+				o.present |= offerBitFlags
 			case 4:
-				o.Sequence = v
-				o.present |= offBitSequence
+				o.Sequence = val
+				o.present |= offerBitSequence
 			case 5:
-				o.PreviousTxnLgrSeq = v
-				o.present |= offBitPreviousTxnLgrSeq
+				o.PreviousTxnLgrSeq = val
+				o.present |= offerBitPreviousTxnLgrSeq
 			case 10:
-				o.Expiration = v
-				o.present |= offBitExpiration
+				o.Expiration = val
+				o.present |= offerBitExpiration
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("Offer", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			v, err := sr.readUint64Hex()
+			val, err := sr.readUint64Hex()
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 3:
-				o.BookNode = v
-				o.present |= offBitBookNode
+				o.BookNode = val
+				o.present |= offerBitBookNode
 			case 4:
-				o.OwnerNode = v
-				o.present |= offBitOwnerNode
+				o.OwnerNode = val
+				o.present |= offerBitOwnerNode
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("Offer", typeCode, fieldCode)
 			}
 		case 5: // Hash256
-			v, err := sr.readHash(32)
+			val, err := sr.readHash(32)
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 5:
-				o.PreviousTxnID = v
-				o.present |= offBitPreviousTxnID
+				o.PreviousTxnID = val
+				o.present |= offerBitPreviousTxnID
 			case 16:
-				o.BookDirectory = v
-				o.present |= offBitBookDirectory
+				o.BookDirectory = val
+				o.present |= offerBitBookDirectory
 			case 34:
-				o.DomainID = v
-				o.present |= offBitDomainID
+				o.DomainID = val
+				o.present |= offerBitDomainID
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("Offer", typeCode, fieldCode)
 			}
 		case 6: // Amount
-			v, err := sr.readAmountAny()
+			val, err := sr.readAmountAny()
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 4:
-				o.TakerPays = v
-				o.present |= offBitTakerPays
+				o.TakerPays = val
+				o.present |= offerBitTakerPays
 			case 5:
-				o.TakerGets = v
-				o.present |= offBitTakerGets
+				o.TakerGets = val
+				o.present |= offerBitTakerGets
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("Offer", typeCode, fieldCode)
 			}
 		case 8: // AccountID
-			v, err := sr.readAccountID()
+			val, err := sr.readAccountID()
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 1:
-				o.Account = v
-				o.present |= offBitAccount
+				o.Account = val
+				o.present |= offerBitAccount
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("Offer", typeCode, fieldCode)
 			}
 		default:
-			if err := sr.skipField(typeCode); err != nil {
-				return err
-			}
+			return newErrUnknownField("Offer", typeCode, fieldCode)
 		}
 	}
 	return nil
@@ -152,34 +164,34 @@ func (o *Offer) Decode(data []byte) error {
 // "zero" value for CreatedNode.NewFields to match rippled, which omits
 // defaulted fields from NewFields.
 func (o *Offer) emitAll(out map[string]any, skipDefault bool) {
-	if o.present&offBitAccount != 0 && !(skipDefault && o.Account == "") {
+	if o.present&offerBitAccount != 0 && !(skipDefault && o.Account == "") {
 		out["Account"] = o.Account
 	}
-	if o.present&offBitSequence != 0 && !(skipDefault && o.Sequence == 0) {
+	if o.present&offerBitSequence != 0 && !(skipDefault && o.Sequence == 0) {
 		out["Sequence"] = o.Sequence
 	}
-	if o.present&offBitTakerPays != 0 {
+	if o.present&offerBitTakerPays != 0 {
 		out["TakerPays"] = o.TakerPays
 	}
-	if o.present&offBitTakerGets != 0 {
+	if o.present&offerBitTakerGets != 0 {
 		out["TakerGets"] = o.TakerGets
 	}
-	if o.present&offBitBookDirectory != 0 && !(skipDefault && isZeroHexString(o.BookDirectory)) {
+	if o.present&offerBitBookDirectory != 0 && !(skipDefault && isZeroHexString(o.BookDirectory)) {
 		out["BookDirectory"] = o.BookDirectory
 	}
-	if o.present&offBitBookNode != 0 && !(skipDefault && isZeroHexString(o.BookNode)) {
+	if o.present&offerBitBookNode != 0 && !(skipDefault && isZeroHexString(o.BookNode)) {
 		out["BookNode"] = o.BookNode
 	}
-	if o.present&offBitOwnerNode != 0 && !(skipDefault && isZeroHexString(o.OwnerNode)) {
+	if o.present&offerBitOwnerNode != 0 && !(skipDefault && isZeroHexString(o.OwnerNode)) {
 		out["OwnerNode"] = o.OwnerNode
 	}
-	if o.present&offBitExpiration != 0 && !(skipDefault && o.Expiration == 0) {
+	if o.present&offerBitExpiration != 0 && !(skipDefault && o.Expiration == 0) {
 		out["Expiration"] = o.Expiration
 	}
-	if o.present&offBitFlags != 0 && !(skipDefault && o.Flags == 0) {
+	if o.present&offerBitFlags != 0 && !(skipDefault && o.Flags == 0) {
 		out["Flags"] = o.Flags
 	}
-	if o.present&offBitDomainID != 0 && !(skipDefault && isZeroHexString(o.DomainID)) {
+	if o.present&offerBitDomainID != 0 && !(skipDefault && isZeroHexString(o.DomainID)) {
 		out["DomainID"] = o.DomainID
 	}
 }
@@ -203,16 +215,16 @@ func (o *Offer) EmitPreviousFields(prev Entry, out map[string]any) {
 	if !ok || p == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, o.Account, p.present&offBitAccount, o.present&offBitAccount)
-	emitIfChangedUint32(out, "Sequence", p.Sequence, o.Sequence, p.present&offBitSequence, o.present&offBitSequence)
-	emitIfChangedAmount(out, "TakerPays", p.TakerPays, o.TakerPays, p.present&offBitTakerPays, o.present&offBitTakerPays)
-	emitIfChangedAmount(out, "TakerGets", p.TakerGets, o.TakerGets, p.present&offBitTakerGets, o.present&offBitTakerGets)
-	emitIfChangedString(out, "BookDirectory", p.BookDirectory, o.BookDirectory, p.present&offBitBookDirectory, o.present&offBitBookDirectory)
-	emitIfChangedString(out, "BookNode", p.BookNode, o.BookNode, p.present&offBitBookNode, o.present&offBitBookNode)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, o.OwnerNode, p.present&offBitOwnerNode, o.present&offBitOwnerNode)
-	emitIfChangedUint32(out, "Expiration", p.Expiration, o.Expiration, p.present&offBitExpiration, o.present&offBitExpiration)
-	emitIfChangedUint32(out, "Flags", p.Flags, o.Flags, p.present&offBitFlags, o.present&offBitFlags)
-	emitIfChangedString(out, "DomainID", p.DomainID, o.DomainID, p.present&offBitDomainID, o.present&offBitDomainID)
+	emitIfChangedString(out, "Account", p.Account, o.Account, p.present&offerBitAccount, o.present&offerBitAccount)
+	emitIfChangedUint32(out, "Sequence", p.Sequence, o.Sequence, p.present&offerBitSequence, o.present&offerBitSequence)
+	emitIfChangedAmount(out, "TakerPays", p.TakerPays, o.TakerPays, p.present&offerBitTakerPays, o.present&offerBitTakerPays)
+	emitIfChangedAmount(out, "TakerGets", p.TakerGets, o.TakerGets, p.present&offerBitTakerGets, o.present&offerBitTakerGets)
+	emitIfChangedString(out, "BookDirectory", p.BookDirectory, o.BookDirectory, p.present&offerBitBookDirectory, o.present&offerBitBookDirectory)
+	emitIfChangedString(out, "BookNode", p.BookNode, o.BookNode, p.present&offerBitBookNode, o.present&offerBitBookNode)
+	emitIfChangedString(out, "OwnerNode", p.OwnerNode, o.OwnerNode, p.present&offerBitOwnerNode, o.present&offerBitOwnerNode)
+	emitIfChangedUint32(out, "Expiration", p.Expiration, o.Expiration, p.present&offerBitExpiration, o.present&offerBitExpiration)
+	emitIfChangedUint32(out, "Flags", p.Flags, o.Flags, p.present&offerBitFlags, o.present&offerBitFlags)
+	emitIfChangedString(out, "DomainID", p.DomainID, o.DomainID, p.present&offerBitDomainID, o.present&offerBitDomainID)
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields
@@ -220,10 +232,10 @@ func (o *Offer) EmitPreviousFields(prev Entry, out map[string]any) {
 // otherwise hidden.
 func (o *Offer) EmitDeleteFinalFields(out map[string]any) {
 	o.emitAll(out, false)
-	if o.present&offBitPreviousTxnID != 0 {
+	if o.present&offerBitPreviousTxnID != 0 {
 		out["PreviousTxnID"] = o.PreviousTxnID
 	}
-	if o.present&offBitPreviousTxnLgrSeq != 0 {
+	if o.present&offerBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = o.PreviousTxnLgrSeq
 	}
 }
@@ -238,10 +250,10 @@ func (o *Offer) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 func (o *Offer) PreviousTxn() (string, uint32) {
 	var id string
 	var seq uint32
-	if o.present&offBitPreviousTxnID != 0 {
+	if o.present&offerBitPreviousTxnID != 0 {
 		id = o.PreviousTxnID
 	}
-	if o.present&offBitPreviousTxnLgrSeq != 0 {
+	if o.present&offerBitPreviousTxnLgrSeq != 0 {
 		seq = o.PreviousTxnLgrSeq
 	}
 	return id, seq

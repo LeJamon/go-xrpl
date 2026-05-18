@@ -1,5 +1,7 @@
 //go:generate go run ./cmd/ledgerfieldsgen .
 
+// fail-fast on unknown fields lives below — see newErrUnknownField.
+
 // Package ledgerfields provides typed, per-entry-type representations of XRPL
 // ledger entries used on the metadata-construction hot path.
 //
@@ -101,4 +103,49 @@ func SetDisabledForBenchmarks(d bool) bool {
 func HasTyped(entryType string) bool {
 	_, ok := registry[entryType]
 	return ok
+}
+
+// ErrUnknownField is returned by a generated Decode method when the binary
+// blob carries a field whose (typeCode, fieldCode) pair isn't declared in
+// the entry's spec. Per the issue's correctness contract — if the wire
+// format diverges from what we expect, refuse to produce metadata rather
+// than silently dropping the field. apply_state_table propagates the
+// error; the surrounding transaction apply will fail loudly.
+type ErrUnknownField struct {
+	EntryType string
+	TypeCode  int
+	FieldCode int
+}
+
+func (e *ErrUnknownField) Error() string {
+	return "ledgerfields: " + e.EntryType + ": unknown field (typeCode=" + itoa(e.TypeCode) + ", fieldCode=" + itoa(e.FieldCode) + ")"
+}
+
+func newErrUnknownField(entryType string, typeCode, fieldCode int) error {
+	return &ErrUnknownField{EntryType: entryType, TypeCode: typeCode, FieldCode: fieldCode}
+}
+
+// itoa is a tiny zero-import int→string converter used only by the
+// ErrUnknownField message. Avoids dragging strconv into a package that
+// otherwise has no use for it.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
 }

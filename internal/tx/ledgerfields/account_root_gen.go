@@ -38,27 +38,27 @@ type AccountRoot struct {
 }
 
 const (
-	arBitAccount uint64 = 1 << iota
-	arBitBalance
-	arBitSequence
-	arBitOwnerCount
-	arBitFlags
-	arBitRegularKey
-	arBitDomain
-	arBitEmailHash
-	arBitMessageKey
-	arBitTransferRate
-	arBitTickSize
-	arBitNFTokenMinter
-	arBitMintedNFTokens
-	arBitBurnedNFTokens
-	arBitFirstNFTokenSequence
-	arBitAccountTxnID
-	arBitWalletLocator
-	arBitTicketCount
-	arBitAMMID
-	arBitPreviousTxnID
-	arBitPreviousTxnLgrSeq
+	accountrootBitAccount uint64 = 1 << iota
+	accountrootBitBalance
+	accountrootBitSequence
+	accountrootBitOwnerCount
+	accountrootBitFlags
+	accountrootBitRegularKey
+	accountrootBitDomain
+	accountrootBitEmailHash
+	accountrootBitMessageKey
+	accountrootBitTransferRate
+	accountrootBitTickSize
+	accountrootBitNFTokenMinter
+	accountrootBitMintedNFTokens
+	accountrootBitBurnedNFTokens
+	accountrootBitFirstNFTokenSequence
+	accountrootBitAccountTxnID
+	accountrootBitWalletLocator
+	accountrootBitTicketCount
+	accountrootBitAMMID
+	accountrootBitPreviousTxnID
+	accountrootBitPreviousTxnLgrSeq
 )
 
 // Decode populates the struct from binary ledger-entry data via a streaming
@@ -72,143 +72,157 @@ func (a *AccountRoot) Decode(data []byte) error {
 			return err
 		}
 		switch typeCode {
-		case 1: // UInt16 — LedgerEntryType is the only AccountRoot/Offer/etc. UInt16 and is sMD_Never; discard.
-			if _, err := sr.readUint16(); err != nil {
+		case 1: // UInt16
+			u16Val, err := sr.readUint16()
+			if err != nil {
 				return err
+			}
+			val := int(u16Val)
+			switch fieldCode {
+			case 1:
+				_ = val // LedgerEntryType is sMD_Never; discard
+			default:
+				_ = val
+				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		case 2: // UInt32
-			v, err := sr.readUint32()
+			val, err := sr.readUint32()
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 2:
-				a.Flags = v
-				a.present |= arBitFlags
+				a.Flags = val
+				a.present |= accountrootBitFlags
 			case 4:
-				a.Sequence = v
-				a.present |= arBitSequence
+				a.Sequence = val
+				a.present |= accountrootBitSequence
 			case 5:
-				a.PreviousTxnLgrSeq = v
-				a.present |= arBitPreviousTxnLgrSeq
+				a.PreviousTxnLgrSeq = val
+				a.present |= accountrootBitPreviousTxnLgrSeq
 			case 11:
-				a.TransferRate = v
-				a.present |= arBitTransferRate
+				a.TransferRate = val
+				a.present |= accountrootBitTransferRate
 			case 13:
-				a.OwnerCount = v
-				a.present |= arBitOwnerCount
+				a.OwnerCount = val
+				a.present |= accountrootBitOwnerCount
 			case 40:
-				a.TicketCount = v
-				a.present |= arBitTicketCount
+				a.TicketCount = val
+				a.present |= accountrootBitTicketCount
 			case 43:
-				a.MintedNFTokens = v
-				a.present |= arBitMintedNFTokens
+				a.MintedNFTokens = val
+				a.present |= accountrootBitMintedNFTokens
 			case 44:
-				a.BurnedNFTokens = v
-				a.present |= arBitBurnedNFTokens
+				a.BurnedNFTokens = val
+				a.present |= accountrootBitBurnedNFTokens
 			case 50:
-				a.FirstNFTokenSequence = v
-				a.present |= arBitFirstNFTokenSequence
+				a.FirstNFTokenSequence = val
+				a.present |= accountrootBitFirstNFTokenSequence
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		case 4: // Hash128
-			v, err := sr.readHash(16)
+			val, err := sr.readHash(16)
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 1:
-				a.EmailHash = v
-				a.present |= arBitEmailHash
+				a.EmailHash = val
+				a.present |= accountrootBitEmailHash
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		case 5: // Hash256
-			v, err := sr.readHash(32)
+			val, err := sr.readHash(32)
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 5:
-				a.PreviousTxnID = v
-				a.present |= arBitPreviousTxnID
+				a.PreviousTxnID = val
+				a.present |= accountrootBitPreviousTxnID
 			case 7:
-				a.WalletLocator = v
-				a.present |= arBitWalletLocator
+				a.WalletLocator = val
+				a.present |= accountrootBitWalletLocator
 			case 9:
-				a.AccountTxnID = v
-				a.present |= arBitAccountTxnID
+				a.AccountTxnID = val
+				a.present |= accountrootBitAccountTxnID
 			case 14:
-				a.AMMID = v
-				a.present |= arBitAMMID
+				a.AMMID = val
+				a.present |= accountrootBitAMMID
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		case 6: // Amount
-			v, err := sr.readAmount()
+			val, err := sr.readAmount()
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 2:
-				if s, ok := v.(string); ok {
+				if s, ok := val.(string); ok {
 					a.Balance = s
-					a.present |= arBitBalance
+					a.present |= accountrootBitBalance
 				}
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		case 7: // Blob
-			v, err := sr.readBlobHex()
+			val, err := sr.readBlobHex()
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 2:
-				a.MessageKey = v
-				a.present |= arBitMessageKey
+				a.MessageKey = val
+				a.present |= accountrootBitMessageKey
 			case 7:
-				a.Domain = v
-				a.present |= arBitDomain
+				a.Domain = val
+				a.present |= accountrootBitDomain
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		case 8: // AccountID
-			v, err := sr.readAccountID()
+			val, err := sr.readAccountID()
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 1:
-				a.Account = v
-				a.present |= arBitAccount
+				a.Account = val
+				a.present |= accountrootBitAccount
 			case 8:
-				a.RegularKey = v
-				a.present |= arBitRegularKey
+				a.RegularKey = val
+				a.present |= accountrootBitRegularKey
 			case 9:
-				a.NFTokenMinter = v
-				a.present |= arBitNFTokenMinter
+				a.NFTokenMinter = val
+				a.present |= accountrootBitNFTokenMinter
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		case 16: // UInt8
-			b, err := sr.readUint8()
+			byteVal, err := sr.readUint8()
 			if err != nil {
 				return err
 			}
-			v := int(b)
+			val := int(byteVal)
 			switch fieldCode {
 			case 16:
-				a.TickSize = v
-				a.present |= arBitTickSize
+				a.TickSize = val
+				a.present |= accountrootBitTickSize
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		default:
-			if err := sr.skipField(typeCode); err != nil {
-				return err
-			}
+			return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 		}
 	}
 	return nil
@@ -218,61 +232,61 @@ func (a *AccountRoot) Decode(data []byte) error {
 // "zero" value for CreatedNode.NewFields to match rippled, which omits
 // defaulted fields from NewFields.
 func (a *AccountRoot) emitAll(out map[string]any, skipDefault bool) {
-	if a.present&arBitAccount != 0 && !(skipDefault && a.Account == "") {
+	if a.present&accountrootBitAccount != 0 && !(skipDefault && a.Account == "") {
 		out["Account"] = a.Account
 	}
-	if a.present&arBitBalance != 0 {
+	if a.present&accountrootBitBalance != 0 {
 		out["Balance"] = a.Balance
 	}
-	if a.present&arBitSequence != 0 && !(skipDefault && a.Sequence == 0) {
+	if a.present&accountrootBitSequence != 0 && !(skipDefault && a.Sequence == 0) {
 		out["Sequence"] = a.Sequence
 	}
-	if a.present&arBitOwnerCount != 0 && !(skipDefault && a.OwnerCount == 0) {
+	if a.present&accountrootBitOwnerCount != 0 && !(skipDefault && a.OwnerCount == 0) {
 		out["OwnerCount"] = a.OwnerCount
 	}
-	if a.present&arBitFlags != 0 && !(skipDefault && a.Flags == 0) {
+	if a.present&accountrootBitFlags != 0 && !(skipDefault && a.Flags == 0) {
 		out["Flags"] = a.Flags
 	}
-	if a.present&arBitRegularKey != 0 && !(skipDefault && a.RegularKey == "") {
+	if a.present&accountrootBitRegularKey != 0 && !(skipDefault && a.RegularKey == "") {
 		out["RegularKey"] = a.RegularKey
 	}
-	if a.present&arBitDomain != 0 && !(skipDefault && a.Domain == "") {
+	if a.present&accountrootBitDomain != 0 && !(skipDefault && a.Domain == "") {
 		out["Domain"] = a.Domain
 	}
-	if a.present&arBitEmailHash != 0 && !(skipDefault && isZeroHexString(a.EmailHash)) {
+	if a.present&accountrootBitEmailHash != 0 && !(skipDefault && isZeroHexString(a.EmailHash)) {
 		out["EmailHash"] = a.EmailHash
 	}
-	if a.present&arBitMessageKey != 0 && !(skipDefault && a.MessageKey == "") {
+	if a.present&accountrootBitMessageKey != 0 && !(skipDefault && a.MessageKey == "") {
 		out["MessageKey"] = a.MessageKey
 	}
-	if a.present&arBitTransferRate != 0 && !(skipDefault && a.TransferRate == 0) {
+	if a.present&accountrootBitTransferRate != 0 && !(skipDefault && a.TransferRate == 0) {
 		out["TransferRate"] = a.TransferRate
 	}
-	if a.present&arBitTickSize != 0 && !(skipDefault && a.TickSize == 0) {
+	if a.present&accountrootBitTickSize != 0 && !(skipDefault && a.TickSize == 0) {
 		out["TickSize"] = a.TickSize
 	}
-	if a.present&arBitNFTokenMinter != 0 && !(skipDefault && a.NFTokenMinter == "") {
+	if a.present&accountrootBitNFTokenMinter != 0 && !(skipDefault && a.NFTokenMinter == "") {
 		out["NFTokenMinter"] = a.NFTokenMinter
 	}
-	if a.present&arBitMintedNFTokens != 0 && !(skipDefault && a.MintedNFTokens == 0) {
+	if a.present&accountrootBitMintedNFTokens != 0 && !(skipDefault && a.MintedNFTokens == 0) {
 		out["MintedNFTokens"] = a.MintedNFTokens
 	}
-	if a.present&arBitBurnedNFTokens != 0 && !(skipDefault && a.BurnedNFTokens == 0) {
+	if a.present&accountrootBitBurnedNFTokens != 0 && !(skipDefault && a.BurnedNFTokens == 0) {
 		out["BurnedNFTokens"] = a.BurnedNFTokens
 	}
-	if a.present&arBitFirstNFTokenSequence != 0 && !(skipDefault && a.FirstNFTokenSequence == 0) {
+	if a.present&accountrootBitFirstNFTokenSequence != 0 && !(skipDefault && a.FirstNFTokenSequence == 0) {
 		out["FirstNFTokenSequence"] = a.FirstNFTokenSequence
 	}
-	if a.present&arBitAccountTxnID != 0 && !(skipDefault && isZeroHexString(a.AccountTxnID)) {
+	if a.present&accountrootBitAccountTxnID != 0 && !(skipDefault && isZeroHexString(a.AccountTxnID)) {
 		out["AccountTxnID"] = a.AccountTxnID
 	}
-	if a.present&arBitWalletLocator != 0 && !(skipDefault && isZeroHexString(a.WalletLocator)) {
+	if a.present&accountrootBitWalletLocator != 0 && !(skipDefault && isZeroHexString(a.WalletLocator)) {
 		out["WalletLocator"] = a.WalletLocator
 	}
-	if a.present&arBitTicketCount != 0 && !(skipDefault && a.TicketCount == 0) {
+	if a.present&accountrootBitTicketCount != 0 && !(skipDefault && a.TicketCount == 0) {
 		out["TicketCount"] = a.TicketCount
 	}
-	if a.present&arBitAMMID != 0 && !(skipDefault && isZeroHexString(a.AMMID)) {
+	if a.present&accountrootBitAMMID != 0 && !(skipDefault && isZeroHexString(a.AMMID)) {
 		out["AMMID"] = a.AMMID
 	}
 }
@@ -296,25 +310,25 @@ func (a *AccountRoot) EmitPreviousFields(prev Entry, out map[string]any) {
 	if !ok || p == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, a.Account, p.present&arBitAccount, a.present&arBitAccount)
-	emitIfChangedAmount(out, "Balance", p.Balance, a.Balance, p.present&arBitBalance, a.present&arBitBalance)
-	emitIfChangedUint32(out, "Sequence", p.Sequence, a.Sequence, p.present&arBitSequence, a.present&arBitSequence)
-	emitIfChangedUint32(out, "OwnerCount", p.OwnerCount, a.OwnerCount, p.present&arBitOwnerCount, a.present&arBitOwnerCount)
-	emitIfChangedUint32(out, "Flags", p.Flags, a.Flags, p.present&arBitFlags, a.present&arBitFlags)
-	emitIfChangedString(out, "RegularKey", p.RegularKey, a.RegularKey, p.present&arBitRegularKey, a.present&arBitRegularKey)
-	emitIfChangedString(out, "Domain", p.Domain, a.Domain, p.present&arBitDomain, a.present&arBitDomain)
-	emitIfChangedString(out, "EmailHash", p.EmailHash, a.EmailHash, p.present&arBitEmailHash, a.present&arBitEmailHash)
-	emitIfChangedString(out, "MessageKey", p.MessageKey, a.MessageKey, p.present&arBitMessageKey, a.present&arBitMessageKey)
-	emitIfChangedUint32(out, "TransferRate", p.TransferRate, a.TransferRate, p.present&arBitTransferRate, a.present&arBitTransferRate)
-	emitIfChangedInt(out, "TickSize", p.TickSize, a.TickSize, p.present&arBitTickSize, a.present&arBitTickSize)
-	emitIfChangedString(out, "NFTokenMinter", p.NFTokenMinter, a.NFTokenMinter, p.present&arBitNFTokenMinter, a.present&arBitNFTokenMinter)
-	emitIfChangedUint32(out, "MintedNFTokens", p.MintedNFTokens, a.MintedNFTokens, p.present&arBitMintedNFTokens, a.present&arBitMintedNFTokens)
-	emitIfChangedUint32(out, "BurnedNFTokens", p.BurnedNFTokens, a.BurnedNFTokens, p.present&arBitBurnedNFTokens, a.present&arBitBurnedNFTokens)
-	emitIfChangedUint32(out, "FirstNFTokenSequence", p.FirstNFTokenSequence, a.FirstNFTokenSequence, p.present&arBitFirstNFTokenSequence, a.present&arBitFirstNFTokenSequence)
-	emitIfChangedString(out, "AccountTxnID", p.AccountTxnID, a.AccountTxnID, p.present&arBitAccountTxnID, a.present&arBitAccountTxnID)
-	emitIfChangedString(out, "WalletLocator", p.WalletLocator, a.WalletLocator, p.present&arBitWalletLocator, a.present&arBitWalletLocator)
-	emitIfChangedUint32(out, "TicketCount", p.TicketCount, a.TicketCount, p.present&arBitTicketCount, a.present&arBitTicketCount)
-	emitIfChangedString(out, "AMMID", p.AMMID, a.AMMID, p.present&arBitAMMID, a.present&arBitAMMID)
+	emitIfChangedString(out, "Account", p.Account, a.Account, p.present&accountrootBitAccount, a.present&accountrootBitAccount)
+	emitIfChangedAmount(out, "Balance", p.Balance, a.Balance, p.present&accountrootBitBalance, a.present&accountrootBitBalance)
+	emitIfChangedUint32(out, "Sequence", p.Sequence, a.Sequence, p.present&accountrootBitSequence, a.present&accountrootBitSequence)
+	emitIfChangedUint32(out, "OwnerCount", p.OwnerCount, a.OwnerCount, p.present&accountrootBitOwnerCount, a.present&accountrootBitOwnerCount)
+	emitIfChangedUint32(out, "Flags", p.Flags, a.Flags, p.present&accountrootBitFlags, a.present&accountrootBitFlags)
+	emitIfChangedString(out, "RegularKey", p.RegularKey, a.RegularKey, p.present&accountrootBitRegularKey, a.present&accountrootBitRegularKey)
+	emitIfChangedString(out, "Domain", p.Domain, a.Domain, p.present&accountrootBitDomain, a.present&accountrootBitDomain)
+	emitIfChangedString(out, "EmailHash", p.EmailHash, a.EmailHash, p.present&accountrootBitEmailHash, a.present&accountrootBitEmailHash)
+	emitIfChangedString(out, "MessageKey", p.MessageKey, a.MessageKey, p.present&accountrootBitMessageKey, a.present&accountrootBitMessageKey)
+	emitIfChangedUint32(out, "TransferRate", p.TransferRate, a.TransferRate, p.present&accountrootBitTransferRate, a.present&accountrootBitTransferRate)
+	emitIfChangedInt(out, "TickSize", p.TickSize, a.TickSize, p.present&accountrootBitTickSize, a.present&accountrootBitTickSize)
+	emitIfChangedString(out, "NFTokenMinter", p.NFTokenMinter, a.NFTokenMinter, p.present&accountrootBitNFTokenMinter, a.present&accountrootBitNFTokenMinter)
+	emitIfChangedUint32(out, "MintedNFTokens", p.MintedNFTokens, a.MintedNFTokens, p.present&accountrootBitMintedNFTokens, a.present&accountrootBitMintedNFTokens)
+	emitIfChangedUint32(out, "BurnedNFTokens", p.BurnedNFTokens, a.BurnedNFTokens, p.present&accountrootBitBurnedNFTokens, a.present&accountrootBitBurnedNFTokens)
+	emitIfChangedUint32(out, "FirstNFTokenSequence", p.FirstNFTokenSequence, a.FirstNFTokenSequence, p.present&accountrootBitFirstNFTokenSequence, a.present&accountrootBitFirstNFTokenSequence)
+	emitIfChangedString(out, "AccountTxnID", p.AccountTxnID, a.AccountTxnID, p.present&accountrootBitAccountTxnID, a.present&accountrootBitAccountTxnID)
+	emitIfChangedString(out, "WalletLocator", p.WalletLocator, a.WalletLocator, p.present&accountrootBitWalletLocator, a.present&accountrootBitWalletLocator)
+	emitIfChangedUint32(out, "TicketCount", p.TicketCount, a.TicketCount, p.present&accountrootBitTicketCount, a.present&accountrootBitTicketCount)
+	emitIfChangedString(out, "AMMID", p.AMMID, a.AMMID, p.present&accountrootBitAMMID, a.present&accountrootBitAMMID)
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields
@@ -322,10 +336,10 @@ func (a *AccountRoot) EmitPreviousFields(prev Entry, out map[string]any) {
 // otherwise hidden.
 func (a *AccountRoot) EmitDeleteFinalFields(out map[string]any) {
 	a.emitAll(out, false)
-	if a.present&arBitPreviousTxnID != 0 {
+	if a.present&accountrootBitPreviousTxnID != 0 {
 		out["PreviousTxnID"] = a.PreviousTxnID
 	}
-	if a.present&arBitPreviousTxnLgrSeq != 0 {
+	if a.present&accountrootBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = a.PreviousTxnLgrSeq
 	}
 }
@@ -340,10 +354,10 @@ func (a *AccountRoot) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 func (a *AccountRoot) PreviousTxn() (string, uint32) {
 	var id string
 	var seq uint32
-	if a.present&arBitPreviousTxnID != 0 {
+	if a.present&accountrootBitPreviousTxnID != 0 {
 		id = a.PreviousTxnID
 	}
-	if a.present&arBitPreviousTxnLgrSeq != 0 {
+	if a.present&accountrootBitPreviousTxnLgrSeq != 0 {
 		seq = a.PreviousTxnLgrSeq
 	}
 	return id, seq

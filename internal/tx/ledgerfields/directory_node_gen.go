@@ -31,21 +31,21 @@ type DirectoryNode struct {
 }
 
 const (
-	dnBitFlags uint64 = 1 << iota
-	dnBitRootIndex
-	dnBitIndexes
-	dnBitIndexNext
-	dnBitIndexPrevious
-	dnBitOwner
-	dnBitTakerPaysCurrency
-	dnBitTakerPaysIssuer
-	dnBitTakerGetsCurrency
-	dnBitTakerGetsIssuer
-	dnBitExchangeRate
-	dnBitNFTokenID
-	dnBitDomainID
-	dnBitPreviousTxnID
-	dnBitPreviousTxnLgrSeq
+	directorynodeBitFlags uint64 = 1 << iota
+	directorynodeBitRootIndex
+	directorynodeBitIndexes
+	directorynodeBitIndexNext
+	directorynodeBitIndexPrevious
+	directorynodeBitOwner
+	directorynodeBitTakerPaysCurrency
+	directorynodeBitTakerPaysIssuer
+	directorynodeBitTakerGetsCurrency
+	directorynodeBitTakerGetsIssuer
+	directorynodeBitExchangeRate
+	directorynodeBitNFTokenID
+	directorynodeBitDomainID
+	directorynodeBitPreviousTxnID
+	directorynodeBitPreviousTxnLgrSeq
 )
 
 // Decode populates the struct from binary ledger-entry data via a streaming
@@ -59,101 +59,125 @@ func (d *DirectoryNode) Decode(data []byte) error {
 			return err
 		}
 		switch typeCode {
-		case 1: // UInt16 — LedgerEntryType is the only AccountRoot/Offer/etc. UInt16 and is sMD_Never; discard.
-			if _, err := sr.readUint16(); err != nil {
+		case 1: // UInt16
+			u16Val, err := sr.readUint16()
+			if err != nil {
 				return err
+			}
+			val := int(u16Val)
+			switch fieldCode {
+			case 1:
+				_ = val // LedgerEntryType is sMD_Never; discard
+			default:
+				_ = val
+				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
 		case 2: // UInt32
-			v, err := sr.readUint32()
+			val, err := sr.readUint32()
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 2:
-				d.Flags = v
-				d.present |= dnBitFlags
+				d.Flags = val
+				d.present |= directorynodeBitFlags
 			case 5:
-				d.PreviousTxnLgrSeq = v
-				d.present |= dnBitPreviousTxnLgrSeq
+				d.PreviousTxnLgrSeq = val
+				d.present |= directorynodeBitPreviousTxnLgrSeq
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			v, err := sr.readUint64Hex()
+			val, err := sr.readUint64Hex()
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 1:
-				d.IndexNext = v
-				d.present |= dnBitIndexNext
+				d.IndexNext = val
+				d.present |= directorynodeBitIndexNext
 			case 2:
-				d.IndexPrevious = v
-				d.present |= dnBitIndexPrevious
+				d.IndexPrevious = val
+				d.present |= directorynodeBitIndexPrevious
 			case 6:
-				d.ExchangeRate = v
-				d.present |= dnBitExchangeRate
+				d.ExchangeRate = val
+				d.present |= directorynodeBitExchangeRate
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
 		case 5: // Hash256
-			v, err := sr.readHash(32)
+			val, err := sr.readHash(32)
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 5:
-				d.PreviousTxnID = v
-				d.present |= dnBitPreviousTxnID
+				d.PreviousTxnID = val
+				d.present |= directorynodeBitPreviousTxnID
 			case 8:
-				d.RootIndex = v
-				d.present |= dnBitRootIndex
+				d.RootIndex = val
+				d.present |= directorynodeBitRootIndex
 			case 10:
-				d.NFTokenID = v
-				d.present |= dnBitNFTokenID
+				d.NFTokenID = val
+				d.present |= directorynodeBitNFTokenID
 			case 34:
-				d.DomainID = v
-				d.present |= dnBitDomainID
+				d.DomainID = val
+				d.present |= directorynodeBitDomainID
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
 		case 8: // AccountID
-			v, err := sr.readAccountID()
+			val, err := sr.readAccountID()
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 2:
-				d.Owner = v
-				d.present |= dnBitOwner
+				d.Owner = val
+				d.present |= directorynodeBitOwner
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
 		case 17: // Hash160
-			v, err := sr.readHash(20)
+			val, err := sr.readHash(20)
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 1:
-				d.TakerPaysCurrency = v
-				d.present |= dnBitTakerPaysCurrency
+				d.TakerPaysCurrency = val
+				d.present |= directorynodeBitTakerPaysCurrency
 			case 2:
-				d.TakerPaysIssuer = v
-				d.present |= dnBitTakerPaysIssuer
+				d.TakerPaysIssuer = val
+				d.present |= directorynodeBitTakerPaysIssuer
 			case 3:
-				d.TakerGetsCurrency = v
-				d.present |= dnBitTakerGetsCurrency
+				d.TakerGetsCurrency = val
+				d.present |= directorynodeBitTakerGetsCurrency
 			case 4:
-				d.TakerGetsIssuer = v
-				d.present |= dnBitTakerGetsIssuer
+				d.TakerGetsIssuer = val
+				d.present |= directorynodeBitTakerGetsIssuer
 			default:
-				_ = v
+				_ = val
+				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
-		default:
-			if err := sr.skipField(typeCode); err != nil {
+		case 19: // Vector256
+			val, err := sr.readVector256()
+			if err != nil {
 				return err
 			}
+			switch fieldCode {
+			case 1:
+				_ = val // Indexes is sMD_Never; discard
+			default:
+				_ = val
+				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
+			}
+		default:
+			return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 		}
 	}
 	return nil
@@ -163,40 +187,40 @@ func (d *DirectoryNode) Decode(data []byte) error {
 // "zero" value for CreatedNode.NewFields to match rippled, which omits
 // defaulted fields from NewFields.
 func (d *DirectoryNode) emitAll(out map[string]any, skipDefault bool) {
-	if d.present&dnBitFlags != 0 && !(skipDefault && d.Flags == 0) {
+	if d.present&directorynodeBitFlags != 0 && !(skipDefault && d.Flags == 0) {
 		out["Flags"] = d.Flags
 	}
-	if d.present&dnBitIndexNext != 0 && !(skipDefault && isZeroHexString(d.IndexNext)) {
+	if d.present&directorynodeBitIndexNext != 0 && !(skipDefault && isZeroHexString(d.IndexNext)) {
 		out["IndexNext"] = d.IndexNext
 	}
-	if d.present&dnBitIndexPrevious != 0 && !(skipDefault && isZeroHexString(d.IndexPrevious)) {
+	if d.present&directorynodeBitIndexPrevious != 0 && !(skipDefault && isZeroHexString(d.IndexPrevious)) {
 		out["IndexPrevious"] = d.IndexPrevious
 	}
-	if d.present&dnBitOwner != 0 && !(skipDefault && d.Owner == "") {
+	if d.present&directorynodeBitOwner != 0 && !(skipDefault && d.Owner == "") {
 		out["Owner"] = d.Owner
 	}
-	if d.present&dnBitTakerPaysCurrency != 0 && !(skipDefault && isZeroHexString(d.TakerPaysCurrency)) {
+	if d.present&directorynodeBitTakerPaysCurrency != 0 && !(skipDefault && isZeroHexString(d.TakerPaysCurrency)) {
 		out["TakerPaysCurrency"] = d.TakerPaysCurrency
 	}
-	if d.present&dnBitTakerPaysIssuer != 0 && !(skipDefault && isZeroHexString(d.TakerPaysIssuer)) {
+	if d.present&directorynodeBitTakerPaysIssuer != 0 && !(skipDefault && isZeroHexString(d.TakerPaysIssuer)) {
 		out["TakerPaysIssuer"] = d.TakerPaysIssuer
 	}
-	if d.present&dnBitTakerGetsCurrency != 0 && !(skipDefault && isZeroHexString(d.TakerGetsCurrency)) {
+	if d.present&directorynodeBitTakerGetsCurrency != 0 && !(skipDefault && isZeroHexString(d.TakerGetsCurrency)) {
 		out["TakerGetsCurrency"] = d.TakerGetsCurrency
 	}
-	if d.present&dnBitTakerGetsIssuer != 0 && !(skipDefault && isZeroHexString(d.TakerGetsIssuer)) {
+	if d.present&directorynodeBitTakerGetsIssuer != 0 && !(skipDefault && isZeroHexString(d.TakerGetsIssuer)) {
 		out["TakerGetsIssuer"] = d.TakerGetsIssuer
 	}
-	if d.present&dnBitExchangeRate != 0 && !(skipDefault && isZeroHexString(d.ExchangeRate)) {
+	if d.present&directorynodeBitExchangeRate != 0 && !(skipDefault && isZeroHexString(d.ExchangeRate)) {
 		out["ExchangeRate"] = d.ExchangeRate
 	}
-	if d.present&dnBitNFTokenID != 0 && !(skipDefault && isZeroHexString(d.NFTokenID)) {
+	if d.present&directorynodeBitNFTokenID != 0 && !(skipDefault && isZeroHexString(d.NFTokenID)) {
 		out["NFTokenID"] = d.NFTokenID
 	}
-	if d.present&dnBitDomainID != 0 && !(skipDefault && isZeroHexString(d.DomainID)) {
+	if d.present&directorynodeBitDomainID != 0 && !(skipDefault && isZeroHexString(d.DomainID)) {
 		out["DomainID"] = d.DomainID
 	}
-	if d.present&dnBitRootIndex != 0 {
+	if d.present&directorynodeBitRootIndex != 0 {
 		out["RootIndex"] = d.RootIndex
 	}
 }
@@ -220,18 +244,18 @@ func (d *DirectoryNode) EmitPreviousFields(prev Entry, out map[string]any) {
 	if !ok || p == nil {
 		return
 	}
-	emitIfChangedUint32(out, "Flags", p.Flags, d.Flags, p.present&dnBitFlags, d.present&dnBitFlags)
-	emitIfChangedString(out, "RootIndex", p.RootIndex, d.RootIndex, p.present&dnBitRootIndex, d.present&dnBitRootIndex)
-	emitIfChangedString(out, "IndexNext", p.IndexNext, d.IndexNext, p.present&dnBitIndexNext, d.present&dnBitIndexNext)
-	emitIfChangedString(out, "IndexPrevious", p.IndexPrevious, d.IndexPrevious, p.present&dnBitIndexPrevious, d.present&dnBitIndexPrevious)
-	emitIfChangedString(out, "Owner", p.Owner, d.Owner, p.present&dnBitOwner, d.present&dnBitOwner)
-	emitIfChangedString(out, "TakerPaysCurrency", p.TakerPaysCurrency, d.TakerPaysCurrency, p.present&dnBitTakerPaysCurrency, d.present&dnBitTakerPaysCurrency)
-	emitIfChangedString(out, "TakerPaysIssuer", p.TakerPaysIssuer, d.TakerPaysIssuer, p.present&dnBitTakerPaysIssuer, d.present&dnBitTakerPaysIssuer)
-	emitIfChangedString(out, "TakerGetsCurrency", p.TakerGetsCurrency, d.TakerGetsCurrency, p.present&dnBitTakerGetsCurrency, d.present&dnBitTakerGetsCurrency)
-	emitIfChangedString(out, "TakerGetsIssuer", p.TakerGetsIssuer, d.TakerGetsIssuer, p.present&dnBitTakerGetsIssuer, d.present&dnBitTakerGetsIssuer)
-	emitIfChangedString(out, "ExchangeRate", p.ExchangeRate, d.ExchangeRate, p.present&dnBitExchangeRate, d.present&dnBitExchangeRate)
-	emitIfChangedString(out, "NFTokenID", p.NFTokenID, d.NFTokenID, p.present&dnBitNFTokenID, d.present&dnBitNFTokenID)
-	emitIfChangedString(out, "DomainID", p.DomainID, d.DomainID, p.present&dnBitDomainID, d.present&dnBitDomainID)
+	emitIfChangedUint32(out, "Flags", p.Flags, d.Flags, p.present&directorynodeBitFlags, d.present&directorynodeBitFlags)
+	emitIfChangedString(out, "RootIndex", p.RootIndex, d.RootIndex, p.present&directorynodeBitRootIndex, d.present&directorynodeBitRootIndex)
+	emitIfChangedString(out, "IndexNext", p.IndexNext, d.IndexNext, p.present&directorynodeBitIndexNext, d.present&directorynodeBitIndexNext)
+	emitIfChangedString(out, "IndexPrevious", p.IndexPrevious, d.IndexPrevious, p.present&directorynodeBitIndexPrevious, d.present&directorynodeBitIndexPrevious)
+	emitIfChangedString(out, "Owner", p.Owner, d.Owner, p.present&directorynodeBitOwner, d.present&directorynodeBitOwner)
+	emitIfChangedString(out, "TakerPaysCurrency", p.TakerPaysCurrency, d.TakerPaysCurrency, p.present&directorynodeBitTakerPaysCurrency, d.present&directorynodeBitTakerPaysCurrency)
+	emitIfChangedString(out, "TakerPaysIssuer", p.TakerPaysIssuer, d.TakerPaysIssuer, p.present&directorynodeBitTakerPaysIssuer, d.present&directorynodeBitTakerPaysIssuer)
+	emitIfChangedString(out, "TakerGetsCurrency", p.TakerGetsCurrency, d.TakerGetsCurrency, p.present&directorynodeBitTakerGetsCurrency, d.present&directorynodeBitTakerGetsCurrency)
+	emitIfChangedString(out, "TakerGetsIssuer", p.TakerGetsIssuer, d.TakerGetsIssuer, p.present&directorynodeBitTakerGetsIssuer, d.present&directorynodeBitTakerGetsIssuer)
+	emitIfChangedString(out, "ExchangeRate", p.ExchangeRate, d.ExchangeRate, p.present&directorynodeBitExchangeRate, d.present&directorynodeBitExchangeRate)
+	emitIfChangedString(out, "NFTokenID", p.NFTokenID, d.NFTokenID, p.present&directorynodeBitNFTokenID, d.present&directorynodeBitNFTokenID)
+	emitIfChangedString(out, "DomainID", p.DomainID, d.DomainID, p.present&directorynodeBitDomainID, d.present&directorynodeBitDomainID)
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields
@@ -239,10 +263,10 @@ func (d *DirectoryNode) EmitPreviousFields(prev Entry, out map[string]any) {
 // otherwise hidden.
 func (d *DirectoryNode) EmitDeleteFinalFields(out map[string]any) {
 	d.emitAll(out, false)
-	if d.present&dnBitPreviousTxnID != 0 {
+	if d.present&directorynodeBitPreviousTxnID != 0 {
 		out["PreviousTxnID"] = d.PreviousTxnID
 	}
-	if d.present&dnBitPreviousTxnLgrSeq != 0 {
+	if d.present&directorynodeBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = d.PreviousTxnLgrSeq
 	}
 }
@@ -257,10 +281,10 @@ func (d *DirectoryNode) EmitDeletePreviousFields(prev Entry, out map[string]any)
 func (d *DirectoryNode) PreviousTxn() (string, uint32) {
 	var id string
 	var seq uint32
-	if d.present&dnBitPreviousTxnID != 0 {
+	if d.present&directorynodeBitPreviousTxnID != 0 {
 		id = d.PreviousTxnID
 	}
-	if d.present&dnBitPreviousTxnLgrSeq != 0 {
+	if d.present&directorynodeBitPreviousTxnLgrSeq != 0 {
 		seq = d.PreviousTxnLgrSeq
 	}
 	return id, seq
