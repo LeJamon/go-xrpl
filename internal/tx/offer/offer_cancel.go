@@ -86,10 +86,6 @@ func (o *OfferCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	sleOffer := state.NewSLEOffer(offerKey.Key)
-	sleOffer.LoadFromLedgerOffer(ledgerOffer)
-	sleOffer.MarkAsDeleted()
-
 	// Remove from owner directory (keepRoot = false since owner dir should persist)
 	ownerDirKey := keylet.OwnerDir(accountID)
 	ownerDirResult, err := state.DirRemove(ctx.View, ownerDirKey, ledgerOffer.OwnerNode, offerKey.Key, false)

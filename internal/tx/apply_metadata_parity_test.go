@@ -21,6 +21,14 @@ func TestBuildModifiedNode_TypedMatchesGeneric(t *testing.T) {
 		origBytes, curBytes, key := buildOfferPairT(t)
 		assertParityModified(t, key, origBytes, curBytes)
 	})
+	t.Run("DirectoryNode", func(t *testing.T) {
+		origBytes, curBytes, key := buildDirectoryNodePairT(t)
+		assertParityModified(t, key, origBytes, curBytes)
+	})
+	t.Run("RippleState", func(t *testing.T) {
+		origBytes, curBytes, key := buildRippleStatePairT(t)
+		assertParityModified(t, key, origBytes, curBytes)
+	})
 }
 
 // TestBuildCreatedNode_TypedMatchesGeneric covers the CreatedNode path.
@@ -33,6 +41,14 @@ func TestBuildCreatedNode_TypedMatchesGeneric(t *testing.T) {
 		_, curBytes, key := buildOfferPairT(t)
 		assertParityCreated(t, key, curBytes)
 	})
+	t.Run("DirectoryNode", func(t *testing.T) {
+		_, curBytes, key := buildDirectoryNodePairT(t)
+		assertParityCreated(t, key, curBytes)
+	})
+	t.Run("RippleState", func(t *testing.T) {
+		_, curBytes, key := buildRippleStatePairT(t)
+		assertParityCreated(t, key, curBytes)
+	})
 }
 
 // TestBuildDeletedNode_TypedMatchesGeneric covers the DeletedNode path.
@@ -43,6 +59,14 @@ func TestBuildDeletedNode_TypedMatchesGeneric(t *testing.T) {
 	})
 	t.Run("Offer", func(t *testing.T) {
 		origBytes, curBytes, key := buildOfferPairT(t)
+		assertParityDeleted(t, key, origBytes, curBytes)
+	})
+	t.Run("DirectoryNode", func(t *testing.T) {
+		origBytes, curBytes, key := buildDirectoryNodePairT(t)
+		assertParityDeleted(t, key, origBytes, curBytes)
+	})
+	t.Run("RippleState", func(t *testing.T) {
+		origBytes, curBytes, key := buildRippleStatePairT(t)
 		assertParityDeleted(t, key, origBytes, curBytes)
 	})
 }
@@ -190,6 +214,14 @@ func buildAccountRootPairT(t *testing.T) ([]byte, []byte, [32]byte) {
 
 func buildOfferPairT(t *testing.T) ([]byte, []byte, [32]byte) {
 	return runWithBenchBuilder(t, buildOfferPair)
+}
+
+func buildDirectoryNodePairT(t *testing.T) ([]byte, []byte, [32]byte) {
+	return runWithBenchBuilder(t, buildDirectoryNodePair)
+}
+
+func buildRippleStatePairT(t *testing.T) ([]byte, []byte, [32]byte) {
+	return runWithBenchBuilder(t, buildRippleStatePair)
 }
 
 // runWithBenchBuilder bridges the *testing.B-shaped fixture builders to a

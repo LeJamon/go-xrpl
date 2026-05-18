@@ -1,3 +1,5 @@
+//go:generate go run ./cmd/ledgerfieldsgen .
+
 // Package ledgerfields provides typed, per-entry-type representations of XRPL
 // ledger entries used on the metadata-construction hot path.
 //

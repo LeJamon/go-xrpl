@@ -134,3 +134,102 @@ func buildOfferPair(b *testing.B) (original, current []byte, key [32]byte) {
 	}
 	return origBytes, curBytes, key
 }
+
+// BenchmarkBuildModifiedNode_DirectoryNode and …_RippleState mirror the
+// AccountRoot / Offer benches for the remaining hot-path entry types.
+// DirectoryNode is touched by every OfferCreate (book + owner directory
+// updates); RippleState by every IOU-leg Payment.
+
+func BenchmarkBuildModifiedNode_DirectoryNode(b *testing.B) {
+	original, current, key := buildDirectoryNodePair(b)
+	b.Run("typed", func(b *testing.B) {
+		prev := ledgerfields.SetDisabledForBenchmarks(false)
+		defer ledgerfields.SetDisabledForBenchmarks(prev)
+		runBuildModifiedBench(b, key, original, current)
+	})
+	b.Run("generic", func(b *testing.B) {
+		prev := ledgerfields.SetDisabledForBenchmarks(true)
+		defer ledgerfields.SetDisabledForBenchmarks(prev)
+		runBuildModifiedBench(b, key, original, current)
+	})
+}
+
+func BenchmarkBuildModifiedNode_RippleState(b *testing.B) {
+	original, current, key := buildRippleStatePair(b)
+	b.Run("typed", func(b *testing.B) {
+		prev := ledgerfields.SetDisabledForBenchmarks(false)
+		defer ledgerfields.SetDisabledForBenchmarks(prev)
+		runBuildModifiedBench(b, key, original, current)
+	})
+	b.Run("generic", func(b *testing.B) {
+		prev := ledgerfields.SetDisabledForBenchmarks(true)
+		defer ledgerfields.SetDisabledForBenchmarks(prev)
+		runBuildModifiedBench(b, key, original, current)
+	})
+}
+
+func buildDirectoryNodePair(b *testing.B) (original, current []byte, key [32]byte) {
+	b.Helper()
+	orig := &state.DirectoryNode{
+		Flags:     0,
+		IndexNext: 0,
+	}
+	for i := range orig.RootIndex {
+		orig.RootIndex[i] = byte(i)
+	}
+	for i := range orig.Owner {
+		orig.Owner[i] = byte(i + 1)
+	}
+	// Add a few index entries so Indexes (sMD_Never) exercises the skip path.
+	orig.Indexes = make([][32]byte, 2)
+	for i := range orig.Indexes[0] {
+		orig.Indexes[0][i] = byte(i + 0x10)
+		orig.Indexes[1][i] = byte(i + 0x20)
+	}
+	origBytes, err := state.SerializeDirectoryNode(orig, false)
+	if err != nil {
+		b.Fatalf("SerializeDirectoryNode original: %v", err)
+	}
+
+	cur := *orig
+	cur.IndexNext = 7
+	curBytes, err := state.SerializeDirectoryNode(&cur, false)
+	if err != nil {
+		b.Fatalf("SerializeDirectoryNode current: %v", err)
+	}
+	for i := range key {
+		key[i] = 0xCC
+	}
+	return origBytes, curBytes, key
+}
+
+func buildRippleStatePair(b *testing.B) (original, current []byte, key [32]byte) {
+	b.Helper()
+	orig := &state.RippleState{
+		Balance:           state.NewIssuedAmountFromDecimalString("100", "USD", "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"),
+		LowLimit:          state.NewIssuedAmountFromDecimalString("0", "USD", "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"),
+		HighLimit:         state.NewIssuedAmountFromDecimalString("1000", "USD", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"),
+		LowNode:           0,
+		HighNode:          0,
+		Flags:             0,
+		PreviousTxnLgrSeq: 10,
+	}
+	for i := range orig.PreviousTxnID {
+		orig.PreviousTxnID[i] = byte(i + 3)
+	}
+	origBytes, err := state.SerializeRippleState(orig)
+	if err != nil {
+		b.Fatalf("SerializeRippleState original: %v", err)
+	}
+
+	cur := *orig
+	cur.Balance = state.NewIssuedAmountFromDecimalString("99.5", "USD", "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK") // partial payment
+	curBytes, err := state.SerializeRippleState(&cur)
+	if err != nil {
+		b.Fatalf("SerializeRippleState current: %v", err)
+	}
+	for i := range key {
+		key[i] = 0xDD
+	}
+	return origBytes, curBytes, key
+}

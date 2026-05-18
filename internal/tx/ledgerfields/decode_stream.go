@@ -264,7 +264,7 @@ func (r *streamReader) skipField(typeCode int) error {
 		} else {
 			r.pos += 48 // IOU
 		}
-	case 7, 8: // Blob, AccountID (VL-prefixed)
+	case 7, 8, 19: // Blob, AccountID, Vector256 (VL-prefixed)
 		n, err := r.readVariableLength()
 		if err != nil {
 			return err
