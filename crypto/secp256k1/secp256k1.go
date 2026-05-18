@@ -235,31 +235,16 @@ func (c SECP256K1CryptoAlgorithm) ValidateBytes(msg, pubkey, sig []byte) bool {
 // validateBytes is the byte-level core used by Validate/ValidateBytes/ValidateDigest.
 // When hashMsg is true the message is SHA-512Half-hashed before verification;
 // otherwise msg is treated as a pre-computed 32-byte digest.
+//
+// The actual signature verify is delegated to verifyDigestRaw, which has
+// two backends selected at build time: libsecp256k1 via cgo (default)
+// or the pure-Go decred library (build tag !cgo).
 func (c SECP256K1CryptoAlgorithm) validateBytes(msg, pubkey, sig []byte, mustBeFullyCanonical, hashMsg bool) bool {
 	canonicality := rootcrypto.ECDSACanonicality(sig)
 	if canonicality == rootcrypto.CanonicityNone {
 		return false
 	}
 	if mustBeFullyCanonical && canonicality != rootcrypto.CanonicityFullyCanonical {
-		return false
-	}
-	r, s, err := rootcrypto.DERSigToRS(sig)
-	if err != nil {
-		return false
-	}
-	var rBytes, sBytes [32]byte
-	if len(r) > 32 || len(s) > 32 {
-		return false
-	}
-	copy(rBytes[32-len(r):], r)
-	copy(sBytes[32-len(s):], s)
-	ecdsaR := &secp256k1.ModNScalar{}
-	ecdsaS := &secp256k1.ModNScalar{}
-	ecdsaR.SetBytes(&rBytes)
-	ecdsaS.SetBytes(&sBytes)
-	parsedSig := ecdsa.NewSignature(ecdsaR, ecdsaS)
-	pubKey, err := secp256k1.ParsePubKey(pubkey)
-	if err != nil {
 		return false
 	}
 	var digest [32]byte
@@ -271,7 +256,7 @@ func (c SECP256K1CryptoAlgorithm) validateBytes(msg, pubkey, sig []byte, mustBeF
 		}
 		copy(digest[:], msg)
 	}
-	return parsedSig.Verify(digest[:], pubKey)
+	return verifyDigestRaw(digest[:], pubkey, sig)
 }
 
 // ValidateDigest verifies a signature against a pre-computed digest (hash).

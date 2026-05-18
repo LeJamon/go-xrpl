@@ -58,38 +58,45 @@ go test ./internal/testing/offer/... -run TestOfferCreateValidation
 
 ## Building
 
-`goxrpl` uses CGO to call OpenSSL for the peer-to-peer TLS handshake — required to compute the
-session-signature shared value matching rippled's `SSL_get_finished` / `SSL_get_peer_finished`
-flow. You need OpenSSL development headers installed on the build host.
+`goxrpl` uses CGO for two subsystems:
+
+- **OpenSSL** — peer-to-peer TLS handshake, computing the session-signature shared
+  value matching rippled's `SSL_get_finished` / `SSL_get_peer_finished` flow.
+- **libsecp256k1** — ECDSA signature verification on the hot path (transaction
+  signatures, validator manifests, consensus). Falls back to a pure-Go
+  implementation under `CGO_ENABLED=0`.
+
+You need the development headers for both on the build host.
 
 ### macOS
 
 ```bash
-brew install openssl@3 pkg-config
-export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig"
+brew install openssl@3 secp256k1 pkg-config
+export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix secp256k1)/lib/pkgconfig"
 go build ./cmd/xrpld
 ```
 
 ### Ubuntu / Debian
 
 ```bash
-sudo apt install -y libssl-dev pkg-config
+sudo apt install -y libssl-dev libsecp256k1-dev pkg-config
 go build ./cmd/xrpld
 ```
 
 ### Alpine (or static-linked Linux build)
 
 ```bash
-apk add --no-cache gcc musl-dev pkgconf openssl-dev openssl-libs-static
+apk add --no-cache gcc musl-dev pkgconf openssl-dev openssl-libs-static libsecp256k1-dev libsecp256k1-static
 CGO_ENABLED=1 go build -ldflags="-linkmode external -extldflags '-static'" ./cmd/xrpld
 ```
 
 ### CGO-disabled builds
 
 `CGO_ENABLED=0 go build ./cmd/xrpld` is supported. The resulting binary cannot
-connect to or accept peers (peertls returns `ErrSessionSigUnsupported`), but RPC,
-WebSocket, tx, codec, and all other subsystems work unchanged. Useful for contributors
-without an OpenSSL toolchain.
+connect to or accept peers (peertls returns `ErrSessionSigUnsupported`) and falls
+back to the pure-Go secp256k1 verify (~6x slower per signature), but RPC,
+WebSocket, tx, codec, and all other subsystems work unchanged. Useful for
+contributors without a CGO toolchain.
 
 ### Running interop tests
 
