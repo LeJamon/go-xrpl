@@ -227,10 +227,8 @@ func (v IOUAmountValue) Float64() float64 {
 	return float64(v.mantissa) * math.Pow10(v.exponent)
 }
 
-// String returns a decimal string representation matching rippled's
-// STAmount::getText (STAmount.cpp:706-732): scientific notation
-// ("<mantissa>e<exponent>") is emitted whenever the exponent is non-zero and
-// outside [-25, -5]; otherwise the value is rendered in fixed-point form.
+// String returns a decimal string matching rippled's STAmount::getText
+// (STAmount.cpp:706-732).
 func (v IOUAmountValue) String() string {
 	if v.mantissa == 0 {
 		return "0"
@@ -484,10 +482,9 @@ func (a Amount) Signum() int {
 	return a.iou.Signum()
 }
 
-// Value returns the value as a string (for JSON serialization).
-// MPT amounts are emitted as the raw int64 — matching rippled's STAmount::getText
-// for assets holding MPTIssue, where mOffset is asserted to be 0
-// (STAmount.cpp:336-348) so scientific notation never applies.
+// Value returns the value as a string (for JSON serialization). MPT amounts
+// emit the raw int64 because rippled asserts mOffset == 0 for MPTIssue-held
+// assets (STAmount.cpp:343), so its getText never enters the scientific branch.
 func (a Amount) Value() string {
 	if a.IsNative() {
 		return a.xrp.String()

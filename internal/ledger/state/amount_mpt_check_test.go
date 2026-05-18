@@ -29,11 +29,10 @@ func TestMPTAmountParse(t *testing.T) {
 	}
 }
 
-// TestAmount_MarshalJSON_MPTRawInteger pins MPT JSON output to the raw int64,
-// matching rippled's STAmount::getText for MPTIssue-held amounts where mOffset
-// is asserted to be 0 (STAmount.cpp:336-348). Going through IOUAmountValue.String
-// would otherwise emit scientific notation for any raw value >= 10^16 after IOU
-// canonicalization.
+// TestAmount_MarshalJSON_MPTRawInteger pins MPT JSON output to the raw int64.
+// Rippled asserts mOffset == 0 for MPTIssue (STAmount.cpp:343), so getText
+// never emits scientific notation; IOU canonicalization would for values
+// >= 10^16.
 func TestAmount_MarshalJSON_MPTRawInteger(t *testing.T) {
 	t.Parallel()
 
@@ -47,8 +46,8 @@ func TestAmount_MarshalJSON_MPTRawInteger(t *testing.T) {
 	}{
 		{"small mpt", 100, "100"},
 		{"max canonical IOU mantissa", 9_999_999_999_999_999, "9999999999999999"},
-		{"10^16 first that triggered IOU scientific", 10_000_000_000_000_000, "10000000000000000"},
-		{"10^17 native-XRP-scale", 100_000_000_000_000_000, "100000000000000000"},
+		{"10^16", 10_000_000_000_000_000, "10000000000000000"},
+		{"10^17", 100_000_000_000_000_000, "100000000000000000"},
 		{"max int64", 9_223_372_036_854_775_807, "9223372036854775807"},
 	}
 

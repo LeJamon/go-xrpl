@@ -5,11 +5,8 @@ import (
 	"testing"
 )
 
-// TestIOUAmountValue_String_ScientificNotation mirrors rippled's
-// STAmount::getText (STAmount.cpp:706-732): IOU value strings must be emitted
-// in scientific notation ("<mantissa>e<exponent>") whenever the exponent is
-// non-zero and outside [-25, -5]; otherwise they are emitted in fixed-point
-// form. The canonical mantissa for an integer power of ten is 10^15.
+// TestIOUAmountValue_String_ScientificNotation pins IOUAmountValue.String
+// to rippled's STAmount::getText (STAmount.cpp:706-732).
 func TestIOUAmountValue_String_ScientificNotation(t *testing.T) {
 	t.Parallel()
 
@@ -21,26 +18,18 @@ func TestIOUAmountValue_String_ScientificNotation(t *testing.T) {
 		exponent int
 		expected string
 	}{
-		// Boundaries of the [-25, -5] fixed-point window: fixed-point at the
-		// edges, scientific just past them.
 		{"exp=-4 boundary scientific", canonical, -4, "1000000000000000e-4"},
 		{"exp=-5 boundary fixed", canonical, -5, "10000000000"},
 		{"exp=-25 boundary fixed", canonical, -25, "0.0000000001"},
 		{"exp=-26 boundary scientific", canonical, -26, "1000000000000000e-26"},
-
-		// Deep on either side.
 		{"exp=-96 min scientific", canonical, -96, "1000000000000000e-96"},
 		{"exp=-50 negative-deep scientific", canonical, -50, "1000000000000000e-50"},
 		{"exp=0 zero offset stays fixed", canonical, 0, "1000000000000000"},
 		{"exp=1 positive scientific", canonical, 1, "1000000000000000e1"},
 		{"exp=50 positive-deep scientific", canonical, 50, "1000000000000000e50"},
 		{"exp=80 max scientific", canonical, 80, "1000000000000000e80"},
-
-		// Negative sign with scientific output.
 		{"negative scientific", -canonical, -50, "-1000000000000000e-50"},
 		{"negative scientific exp1", -canonical, 1, "-1000000000000000e1"},
-
-		// Non-canonical-power mantissa exercises non-trivial digits.
 		{"non-trailing-zero mantissa scientific", 1234567890123456, -30, "1234567890123456e-30"},
 	}
 
@@ -56,9 +45,8 @@ func TestIOUAmountValue_String_ScientificNotation(t *testing.T) {
 	}
 }
 
-// TestAmount_MarshalJSON_IOUScientific verifies the same rule reaches the
-// user-facing JSON encoding path used by RPC handlers
-// (e.g. ripple_path_find.formatAmountJSON → Amount.Value → IOUAmountValue.String).
+// TestAmount_MarshalJSON_IOUScientific verifies the rule reaches the
+// JSON-encoding path.
 func TestAmount_MarshalJSON_IOUScientific(t *testing.T) {
 	t.Parallel()
 

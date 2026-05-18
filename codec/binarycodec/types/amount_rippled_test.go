@@ -661,9 +661,8 @@ func TestIsPositiveFunction(t *testing.T) {
 	}
 }
 
-// encodeIOUValueWire builds the 8-byte IOU value field from a canonical
-// (mantissa, offset, sign) triple, mirroring rippled's STAmount wire layout:
-// bit 63 = not-XRP, bit 62 = sign, bits 61-54 = (offset+97), bits 53-0 = mantissa.
+// encodeIOUValueWire builds the 8-byte IOU value field.
+// Layout: bit 63 = not-XRP, bit 62 = sign, bits 61-54 = (offset+97), bits 53-0 = mantissa.
 func encodeIOUValueWire(mantissa uint64, rawExp int, positive bool) []byte {
 	encExp := uint(rawExp + 97)
 	var flags byte = 0x80
@@ -682,12 +681,10 @@ func encodeIOUValueWire(mantissa uint64, rawExp int, positive bool) []byte {
 	return b
 }
 
-// TestIOUValueScientificNotation mirrors rippled's STAmount::getText
-// (STAmount.cpp:706-732): IOU value strings must be emitted in scientific
-// notation ("<mantissa>e<offset>") whenever the offset is non-zero and
-// outside [-25, -5]; otherwise they are emitted in fixed-point form.
+// TestIOUValueScientificNotation pins deserializeValue to rippled's
+// STAmount::getText (STAmount.cpp:706-732).
 func TestIOUValueScientificNotation(t *testing.T) {
-	const canonical uint64 = 1_000_000_000_000_000 // 10^15, the canonical IOU mantissa for integer powers of ten
+	const canonical uint64 = 1_000_000_000_000_000 // 10^15
 
 	tests := []struct {
 		name     string
@@ -696,25 +693,17 @@ func TestIOUValueScientificNotation(t *testing.T) {
 		positive bool
 		expected string
 	}{
-		// Boundaries of the [-25, -5] fixed-point window — fixed-point on the
-		// inside, scientific just past the edge.
 		{"exp=-4 boundary (scientific)", canonical, -4, true, "1000000000000000e-4"},
 		{"exp=-5 boundary (fixed-point)", canonical, -5, true, "10000000000"},
 		{"exp=-25 boundary (fixed-point)", canonical, -25, true, "0.0000000001"},
 		{"exp=-26 boundary (scientific)", canonical, -26, true, "1000000000000000e-26"},
-
-		// Deep on either side.
 		{"exp=-96 min (scientific)", canonical, -96, true, "1000000000000000e-96"},
 		{"exp=-50 negative-deep (scientific)", canonical, -50, true, "1000000000000000e-50"},
 		{"exp=0 zero offset stays fixed-point", canonical, 0, true, "1000000000000000"},
 		{"exp=50 positive-deep (scientific)", canonical, 50, true, "1000000000000000e50"},
 		{"exp=80 max (scientific)", canonical, 80, true, "1000000000000000e80"},
-
-		// Negative sign with scientific output.
 		{"negative scientific", canonical, -50, false, "-1000000000000000e-50"},
-
-		// A 16-digit non-canonical-power mantissa to exercise non-trivial digits.
-		{"mantissa with non-trailing zeros, scientific", 1234567890123456, -30, true, "1234567890123456e-30"},
+		{"non-canonical-power mantissa, scientific", 1234567890123456, -30, true, "1234567890123456e-30"},
 	}
 
 	for _, tc := range tests {

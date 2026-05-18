@@ -263,8 +263,7 @@ func deserializeValue(data []byte) (string, error) {
 	if err := verifyIOUValue(d.GetScaledValue()); err != nil {
 		return "", err
 	}
-	// Mirror rippled STAmount::getText (STAmount.cpp:706-732): emit scientific
-	// notation whenever the offset is non-zero and outside [-25, -5].
+	// Match rippled STAmount::getText (STAmount.cpp:706-732).
 	if exponent != 0 && (exponent < -25 || exponent > -5) {
 		return sign + mantissaStr + "e" + strconv.Itoa(exponent), nil
 	}
