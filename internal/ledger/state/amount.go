@@ -227,7 +227,10 @@ func (v IOUAmountValue) Float64() float64 {
 	return float64(v.mantissa) * math.Pow10(v.exponent)
 }
 
-// String returns a decimal string representation
+// String returns a decimal string representation matching rippled's
+// STAmount::getText (STAmount.cpp:706-732): scientific notation
+// ("<mantissa>e<exponent>") is emitted whenever the exponent is non-zero and
+// outside [-25, -5]; otherwise the value is rendered in fixed-point form.
 func (v IOUAmountValue) String() string {
 	if v.mantissa == 0 {
 		return "0"
@@ -239,31 +242,31 @@ func (v IOUAmountValue) String() string {
 		mantissa = -mantissa
 	}
 
-	// Convert mantissa to string
 	mantissaStr := strconv.FormatInt(mantissa, 10)
-	mantissaLen := len(mantissaStr)
 
-	// Calculate where the decimal point should be
-	// The value is mantissa * 10^exponent
+	if v.exponent != 0 && (v.exponent < -25 || v.exponent > -5) {
+		if negative {
+			return "-" + mantissaStr + "e" + strconv.Itoa(v.exponent)
+		}
+		return mantissaStr + "e" + strconv.Itoa(v.exponent)
+	}
+
+	mantissaLen := len(mantissaStr)
 	decimalPos := mantissaLen + v.exponent
 
 	var result string
 	if decimalPos <= 0 {
-		// Need leading zeros: 0.000...digits
 		result = "0." + strings.Repeat("0", -decimalPos) + mantissaStr
 	} else if decimalPos >= mantissaLen {
-		// No decimal point needed, or trailing zeros
 		if v.exponent >= 0 {
 			result = mantissaStr + strings.Repeat("0", v.exponent)
 		} else {
 			result = mantissaStr
 		}
 	} else {
-		// Decimal point in the middle
 		result = mantissaStr[:decimalPos] + "." + mantissaStr[decimalPos:]
 	}
 
-	// Remove trailing zeros after decimal point
 	if strings.Contains(result, ".") {
 		result = strings.TrimRight(result, "0")
 		result = strings.TrimRight(result, ".")
