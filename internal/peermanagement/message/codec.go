@@ -9,17 +9,10 @@ import (
 )
 
 // Per-MessageType payload-size caps applied by ReadMessage BEFORE
-// allocating the payload slice. Without these, a peer can claim a
-// full MaxPayloadSize (64MB-1) header for any message type and force
-// a 64MB allocation per claim — a small fleet of malicious peers can
-// OOM the process before any decode runs. The values below are
-// generous (10x the typical observed size per type) so honest peers
-// never see ErrMessageTooLarge while obvious abuse is rejected at the
-// header. Anything not listed falls back to defaultPerTypeMax.
-//
-// Use a function rather than a `var` map so the table is fail-loud
-// at compile time (an unknown MessageType maps to defaultPerTypeMax,
-// not to "missing key").
+// allocating. Without these, a peer can claim MaxPayloadSize for any
+// type and force a 64MB allocation per claim — trivial OOM vector.
+// Values are ~10× typical observed traffic per type; unknown types
+// fall back to defaultPerTypeMax.
 const (
 	smallMsgMax       = 64 * 1024        // 64 KiB
 	mediumMsgMax      = 1 * 1024 * 1024  // 1 MiB
@@ -27,11 +20,9 @@ const (
 	defaultPerTypeMax = mediumMsgMax
 )
 
-// MaxPayloadSizeForType returns the largest payload (post-decompress
-// size for compressed messages) a peer may claim for the given
-// message type. Returns defaultPerTypeMax for unknown types so the
-// loop closes on the peer rather than silently accepting a 64MB
-// allocation claim.
+// MaxPayloadSizeForType returns the largest payload a peer may claim
+// for the given message type (post-decompress for compressed frames).
+// Unknown types fall back to defaultPerTypeMax.
 func MaxPayloadSizeForType(t MessageType) uint32 {
 	switch t {
 	case TypePing, TypeSquelch:
@@ -257,10 +248,8 @@ func ReadMessage(r io.Reader) (*Header, []byte, error) {
 		return nil, nil, err
 	}
 
-	// Per-type sanity cap on the on-wire payload claim BEFORE
-	// allocating. For compressed frames we also cap the
-	// uncompressed-size claim so a tiny LZ4 frame cannot decompress
-	// into a gigabyte-scale allocation.
+	// Cap both the on-wire and uncompressed claims BEFORE allocating
+	// so a tiny LZ4 frame cannot decompress into a giant slice.
 	maxSize := MaxPayloadSizeForType(header.MessageType)
 	if header.PayloadSize > maxSize {
 		return nil, nil, fmt.Errorf("%w: %d > %d for %s",

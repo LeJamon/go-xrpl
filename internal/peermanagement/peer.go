@@ -79,18 +79,15 @@ type Peer struct {
 	send   chan []byte
 	events chan<- Event
 
-	// droppedEvents counts non-blocking event sends that hit the
-	// default branch because the overlay event loop fell behind. Set
-	// by Overlay.addPeer; nil in tests that don't wire it. Mirrors the
-	// shape of Overlay.droppedMessages so back-pressure on the events
-	// channel is observable instead of silently deadlocking the read
-	// hot path.
+	// droppedEvents counts non-blocking event sends that fell through
+	// because the overlay event loop was wedged. nil until wired by
+	// Overlay; back-pressure must surface as a counter rather than
+	// deadlocking the read hot path.
 	droppedEvents *atomic.Uint64
 
-	// runWG joins read/write/ping goroutines so callers of Run (and
-	// through them, Overlay.removePeer bookkeeping) observe a
-	// fully-quiesced peer rather than racing against goroutines parked
-	// on a slow OS-level close.
+	// runWG joins read/write/ping goroutines so callers of Run observe
+	// a fully-quiesced peer rather than racing against goroutines
+	// parked on a slow OS-level close.
 	runWG sync.WaitGroup
 
 	score   *PeerScore
@@ -117,10 +114,8 @@ type Peer struct {
 	// PeerImp.cpp:705-708 "Large send queue".
 	largeSendQ atomic.Uint32
 
-	// consecutiveDecompressFailures tracks back-to-back LZ4 decompress
-	// errors so a peer that's spraying garbage compressed frames gets
-	// closed at maxConsecutiveDecompressFailures rather than wasting
-	// the read loop on a frame-by-frame bad-data charge.
+	// consecutiveDecompressFailures: back-to-back LZ4 errors; closed
+	// at maxConsecutiveDecompressFailures.
 	consecutiveDecompressFailures atomic.Uint32
 
 	serverDomain      string
@@ -186,18 +181,15 @@ func NewPeer(id PeerID, endpoint Endpoint, inbound bool, identity *Identity, eve
 	}
 }
 
-// SetDroppedEventsCounter wires a counter that dispatchEvent bumps on
-// each non-blocking events send that falls through. Called by
-// Overlay.addPeer; safe to call once before the peer's Run goroutines
-// start.
+// SetDroppedEventsCounter wires the counter dispatchEvent bumps on
+// non-blocking sends that fall through. Safe to call once before Run.
 func (p *Peer) SetDroppedEventsCounter(c *atomic.Uint64) {
 	p.droppedEvents = c
 }
 
-// dispatchEvent attempts a non-blocking send to the events channel. A
-// full channel (overlay event loop wedged) bumps droppedEvents instead
-// of pinning the caller — the read hot path and Close path must never
-// block on the event loop, which itself takes overlay-level locks.
+// dispatchEvent attempts a non-blocking send to the events channel.
+// The read hot path and Close path must never block on the event
+// loop, which itself takes overlay-level locks.
 func (p *Peer) dispatchEvent(evt Event) {
 	if p.events == nil {
 		return
@@ -626,12 +618,11 @@ func tcpRemoteIP(conn net.Conn) net.IP {
 }
 
 // Run starts read/write/ping loops and blocks until all three have
-// returned. The first loop to error (or context cancellation) triggers
-// Close, which fans the shutdown signal out to the other two via the
-// closed conn and closeCh. runWG.Wait then ensures callers observe a
-// fully-quiesced peer before they proceed to removePeer bookkeeping —
-// otherwise a slow OS-level close can leave the read or write
-// goroutine alive past the overlay-level cleanup.
+// returned. The first loop to error (or ctx cancellation) triggers
+// Close, which fans the shutdown out to the others via the closed
+// conn and closeCh; runWG.Wait ensures a fully-quiesced peer before
+// return so a slow OS-level close cannot leak goroutines past the
+// caller's cleanup.
 func (p *Peer) Run(ctx context.Context) error {
 	p.mu.RLock()
 	if p.state != PeerStateConnected {
@@ -703,12 +694,9 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
 				return ErrReadIdle
 			}
-			// An over-budget per-type size claim is a protocol-level
-			// abuse signal — charge bad-data so a peer spraying
-			// 16MB-claimed Ping headers actually evicts via the
-			// reputation system. Other ReadMessage errors (truncated
-			// frames, unknown compression) tear the peer down
-			// immediately because the framing is unrecoverable.
+			// Over-budget size claim is protocol abuse — charge so the
+			// reputation system evicts. Other framing errors are
+			// unrecoverable and tear the peer down directly.
 			if errors.Is(err, message.ErrMessageTooLarge) {
 				p.IncBadData("message-too-large")
 			}
@@ -766,10 +754,8 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 				return ErrConnectionClosed
 			}
 
-			// Cap each Write so a peer with a never-draining kernel
-			// send buffer (half-open TCP) cannot block the writer
-			// indefinitely. The write goroutine is single-threaded, so
-			// a short deadline is safe.
+			// Cap each Write so a half-open TCP peer with a
+			// never-draining kernel send buffer cannot pin the writer.
 			_ = conn.SetWriteDeadline(time.Now().Add(writeIdleDeadline))
 			n, err := conn.Write(data)
 			if err != nil {
@@ -880,25 +866,17 @@ const (
 	pingsInFlightCap = 16
 	// Tuning::sendqIntervals (PeerImp.cpp:705 + Tuning.h).
 	sendqIntervals = 4
-	// maxConsecutiveDecompressFailures bounds how many bad LZ4 frames
-	// the read loop will tolerate from one peer before tearing the
-	// connection down. Each failure also charges bad-data via the
-	// reputation system, so a peer that mixes a single garbage frame
-	// into otherwise-honest traffic decays the counter via the next
-	// successful decompress rather than being evicted.
+	// maxConsecutiveDecompressFailures: close after this many
+	// back-to-back LZ4 errors. A single bad frame still charges
+	// bad-data but resets on the next successful decompress.
 	maxConsecutiveDecompressFailures = 4
-	// readIdleDeadline bounds an idle TLS read so a peer that completes
-	// the handshake and then goes silent cannot pin a slot indefinitely
-	// (e.g. on a host where the OS-level conn.Close hasn't unblocked
-	// io.ReadFull yet). Set slightly above pingTimeout so the existing
-	// ErrPingTimeout disconnect path stays the primary signal; the
-	// deadline is the belt-and-braces fallback.
+	// readIdleDeadline: belt-and-braces backstop to ErrPingTimeout for
+	// a peer that completes the handshake then goes silent. Set above
+	// pingTimeout so the existing disconnect path stays primary.
 	readIdleDeadline = pingTimeout + 5*time.Second
-	// writeIdleDeadline bounds a single conn.Write. A peer whose kernel
-	// send buffer never drains (half-open TCP) would otherwise block
-	// writeLoop forever — ErrLargeSendQueue only fires when Send()
-	// returns ErrSendBufferFull, which requires the write goroutine to
-	// have already returned to the select.
+	// writeIdleDeadline bounds a single conn.Write so a half-open TCP
+	// peer with a never-draining kernel send buffer cannot pin
+	// writeLoop forever.
 	writeIdleDeadline = 10 * time.Second
 )
 

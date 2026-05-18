@@ -56,20 +56,16 @@ func (d Disposition) String() string {
 // the inverse ephemeral→master lookup so consensus can translate a
 // validation's signing key back to a UNL master key.
 //
-// Safe for concurrent use. Two locks split the hot read path from
-// the slow Apply signature-verification path: `mu` guards the maps
-// (RLock for lookups, Lock only for the brief mutation window),
-// `applyMu` serializes ApplyManifest writers so two concurrent
-// Apply calls cannot both pass the Stale gate and race a write —
-// without blocking any RLock-only lookup while the writer runs its
-// ed25519/secp256k1 verify.
+// Safe for concurrent use. Two locks separate the hot read path from
+// the slow Apply signature-verification path: `mu` guards the maps,
+// `applyMu` serializes ApplyManifest writers around the verify step
+// so concurrent Applies cannot both pass the Stale gate and race a
+// write while leaving RLock-only lookups unblocked.
 type Cache struct {
 	mu sync.RWMutex
 
-	// applyMu serializes ApplyManifest so signature verification
-	// (the expensive step) does not block GetMasterKey / GetSigningKey
-	// lookups via `mu` — those readers are on the hot path for every
-	// inbound validation.
+	// applyMu serializes ApplyManifest's verify-then-mutate sequence
+	// without holding c.mu across the secp256k1/ed25519 verify.
 	applyMu sync.Mutex
 
 	// byMaster maps master public key → the latest accepted manifest.
@@ -110,20 +106,13 @@ func NewCache() *Cache {
 // (Invalid / BadMasterKey / BadEphemeralKey). Stale is a no-op.
 //
 // Mirrors ManifestCache::applyManifest at rippled Manifest.cpp:382-580,
-// collapsed to a single write-lock path — the two-phase read/write
-// optimization there exists because signature verification is
-// expensive; in our deployments the expected rate of inbound manifests
-// is too low to matter.
+// including the two-phase shared→unique pattern that keeps lookups
+// unblocked across the expensive signature verify.
 func (c *Cache) ApplyManifest(m *Manifest) Disposition {
 	if m == nil {
 		return Invalid
 	}
 
-	// applyMu serializes the verify-then-mutate sequence so two
-	// concurrent ApplyManifest calls for the same master cannot both
-	// pass the Stale gate. Readers only ever take c.mu (RLock or
-	// briefly Lock during mutation), so they are not blocked by the
-	// signature verification step.
 	c.applyMu.Lock()
 	defer c.applyMu.Unlock()
 
@@ -144,10 +133,8 @@ func (c *Cache) ApplyManifest(m *Manifest) Disposition {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Re-check Stale under the write lock in case another writer
-	// raced past while we were verifying. applyMu rules that out for
-	// well-behaved callers, but a future caller that bypasses Apply
-	// (none today) could still insert directly.
+	// Re-check Stale under the write lock against any direct map
+	// writer that bypassed applyMu.
 	if existing, ok := c.byMaster[m.MasterKey]; ok && m.Sequence <= existing.Sequence {
 		return Stale
 	}

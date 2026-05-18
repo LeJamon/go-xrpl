@@ -52,15 +52,14 @@ const EvictBadDataThreshold = 25000
 // asymptotes at 800 and never crosses the threshold.
 const badDataDecayInterval = 10 * time.Second
 
-// inboundBacklogSlack lets the accept loop hold a small queue of
-// not-yet-handled inbound TCP accepts past MaxInbound — the handler
-// itself enforces canAcceptInbound, but bounding the goroutine count
-// above MaxInbound at all is the point.
+// inboundBacklogSlack caps the accept-side goroutine count to
+// MaxInbound + slack so a burst of accepts cannot fan out unbounded;
+// canAcceptInbound is the authoritative slot gate.
 const inboundBacklogSlack = 8
 
-// acceptBackoff bounds the retry rate when listener.Accept returns a
-// non-fatal error (typically EMFILE-class). Without it the loop spins
-// at CPU speed for as long as the FD pressure persists.
+// acceptBackoff throttles the retry rate when listener.Accept returns
+// a non-fatal error (typically EMFILE-class) so the loop does not
+// spin at CPU speed under FD pressure.
 const acceptBackoff = 100 * time.Millisecond
 
 // Bad-data weights mirror rippled's Resource::Fees.cpp:26-30. They
@@ -215,20 +214,15 @@ type Overlay struct {
 	nextID  atomic.Uint64
 
 	// peerWG joins every peer.Run goroutine launched by handleInbound
-	// or Connect. Stop() blocks on it so shutdown is deterministic
-	// instead of leaking goroutines past Overlay teardown.
+	// or Connect. Stop blocks on it for deterministic shutdown.
 	peerWG sync.WaitGroup
 
-	// inboundSem caps concurrent handleInbound goroutines so a burst
-	// of TCP accepts past MaxInbound cannot blow up goroutine fan-out
-	// while each waits its turn for peersMu in canAcceptInbound.
+	// inboundSem caps concurrent handleInbound goroutines.
 	// Length = MaxInbound + inboundBacklogSlack.
 	inboundSem chan struct{}
 
-	// outboundSem caps concurrent autoconnect Connect goroutines. The
-	// MaxOutbound check inside Connect re-validates under peersMu, but
-	// without an upstream bound a slow discovery tick stacks one
-	// goroutine per candidate.
+	// outboundSem caps concurrent autoconnect Connect goroutines so
+	// a slow discovery tick cannot stack one goroutine per candidate.
 	outboundSem chan struct{}
 
 	// relayedIndex maps suppression-hash → set of peers known to have
@@ -275,12 +269,11 @@ type Overlay struct {
 	// droppedMessages so the two traffic classes can be distinguished.
 	droppedLedgerResponses atomic.Uint64
 
-	// droppedEvents counts non-blocking sends to the internal events
-	// channel that fell through because the event loop was wedged.
-	// Surfaces back-pressure on the events fan-in (peer lifecycle +
-	// EventMessageReceived) so operators can spot a stalled handler
-	// rather than deadlocking the peer read hot path against
-	// peersMu-taking event handlers.
+	// droppedEvents counts non-blocking sends to the events channel
+	// that fell through. Surfaces back-pressure on the events fan-in
+	// (peer lifecycle + EventMessageReceived) so a stalled handler
+	// shows up as a counter rather than a deadlock against peer-side
+	// goroutines that contend for peersMu.
 	droppedEvents atomic.Uint64
 
 	// pingTimeoutDisconnects counts peers torn down because the oldest
@@ -686,9 +679,8 @@ func (o *Overlay) Run(ctx context.Context) error {
 }
 
 // Stop gracefully shuts down the overlay. Blocks on peerWG so callers
-// (and the test harness) observe a fully-quiesced overlay rather than
-// racing against peer.Run goroutines still draining their read/write
-// loops after Close.
+// observe a fully-quiesced overlay rather than racing against
+// peer.Run goroutines still draining after Close.
 func (o *Overlay) Stop() error {
 	if o.cancel != nil {
 		o.cancel()
@@ -734,10 +726,9 @@ func (o *Overlay) startListener() error {
 	return nil
 }
 
-// acceptLoop accepts incoming connections. A 100ms backoff on errors
-// avoids a tight retry loop under EMFILE-class storms, and inboundSem
-// caps concurrent handlers so a burst of accepts past MaxInbound
-// cannot fan goroutines out unbounded.
+// acceptLoop accepts incoming connections. acceptBackoff throttles
+// retries under EMFILE-class errors; inboundSem caps the handler
+// goroutine fan-out.
 func (o *Overlay) acceptLoop(ctx context.Context) error {
 	for {
 		select {
@@ -752,10 +743,8 @@ func (o *Overlay) acceptLoop(ctx context.Context) error {
 				return ctx.Err()
 			}
 			// A closed listener is terminal — exit instead of
-			// spinning the backoff. This is also the stub path under
-			// !cgo, where peertls.NewListener closes the inner
-			// listener immediately so the overlay shuts down cleanly
-			// rather than churning ErrSessionSigUnsupported.
+			// spinning the backoff. Also the !cgo peertls stub path,
+			// which closes the inner listener at NewListener.
 			if errors.Is(err, net.ErrClosed) {
 				return err
 			}
@@ -1220,22 +1209,18 @@ func (o *Overlay) PingTimeoutDisconnects() uint64 {
 	return o.pingTimeoutDisconnects.Load()
 }
 
-// DroppedEvents returns the cumulative count of internal events
-// (peer lifecycle + EventMessageReceived) dropped because the event
-// loop fell behind. Non-zero growth means handlers attached to the
-// event loop are slow enough that the read hot path would have
-// deadlocked if events sends were blocking — investigate handler
-// latency before raising the events buffer.
+// DroppedEvents returns the cumulative count of events dropped
+// because the event loop fell behind. Non-zero growth means handlers
+// are slow enough that blocking sends would have deadlocked the read
+// hot path — investigate handler latency before raising the buffer.
 func (o *Overlay) DroppedEvents() uint64 {
 	return o.droppedEvents.Load()
 }
 
-// dispatchEvent attempts a non-blocking send to the internal events
-// channel. Both peer-originated and overlay-originated event sends
-// route through here so back-pressure shows up as a single counter
-// rather than as a deadlock between the read hot path and the event
-// loop (handlers take peersMu, which peer-side goroutines also
-// contend for).
+// dispatchEvent attempts a non-blocking send to the events channel.
+// Peer- and overlay-originated sends route through here so
+// back-pressure surfaces as a counter rather than a deadlock against
+// peersMu-taking handlers.
 func (o *Overlay) dispatchEvent(evt Event) {
 	select {
 	case o.events <- evt:

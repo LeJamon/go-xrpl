@@ -7,14 +7,9 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
-// msgCodec bundles the three operations every message type needs into
-// a single record. Previously these lived in three parallel
-// type-switches (newProtoMessage / toProto / fromProto); adding a new
-// type meant touching all three sites and forgetting one was an easy
-// way to ship a half-wired message. With the registry, one missing
-// table entry surfaces as a single "unknown message type" at both
-// encode and decode, and the three pieces of logic for one type sit
-// next to each other.
+// msgCodec bundles the three operations every message type needs:
+// proto constructor, encoder, decoder. A missing table entry surfaces
+// as a single "unknown message type" at both encode and decode.
 type msgCodec struct {
 	newProto func() pb.Message
 	encode   func(Message) (pb.Message, error)

@@ -174,12 +174,6 @@ func Deserialize(data []byte) (*Manifest, error) {
 // manifests) the ephemeral-key signature against the canonical signing
 // preimage: HashPrefix("MAN\0") || STObject(manifest without Signature
 // and MasterSignature). Mirrors Manifest::verify at Manifest.cpp:195-214.
-//
-// The serialized payload is decoded exactly once, then the signature
-// fields are read off the decoded map and the same map is reused to
-// build the signing preimage. Previously this path decoded twice per
-// Verify — once for the preimage and once for the signatures — under
-// the manifest cache write lock at #434.
 func (m *Manifest) Verify() error {
 	decoded, err := binarycodec.Decode(hex.EncodeToString(m.Serialized))
 	if err != nil {

@@ -20,10 +20,9 @@ const (
 	pumpBufSize     = 16 * 1024 // max TLS record size
 )
 
-// pumpBufPool recycles 16 KiB pump buffers used by pumpInboundLocked
-// and drainBIOLocked. Both sites previously made([]byte, pumpBufSize)
-// on every call; under sustained traffic that's 16 KiB of GC pressure
-// per record pumped in either direction.
+// pumpBufPool recycles 16 KiB scratch buffers for pumpInboundLocked
+// and drainBIOLocked — avoids a 16 KiB allocation per record pumped
+// under sustained traffic.
 var pumpBufPool = sync.Pool{
 	New: func() any {
 		buf := make([]byte, pumpBufSize)
@@ -252,10 +251,9 @@ func (c *conn) bioWriteAllLocked() error {
 	return nil
 }
 
-// drainBIOLocked drains pending BIO output. Caller holds sslMu. The
-// returned slice is freshly allocated (callers persist or write it
-// to the wire) but the per-read scratch buffer comes from pumpBufPool
-// to avoid a 16 KiB allocation per BIO read.
+// drainBIOLocked drains pending BIO output. Caller holds sslMu.
+// The returned slice is freshly allocated; the per-read scratch
+// buffer comes from pumpBufPool.
 func (c *conn) drainBIOLocked() []byte {
 	out := make([]byte, 0, pumpBufSize)
 	buf := getPumpBuf()
