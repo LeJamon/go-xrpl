@@ -1,12 +1,108 @@
 package state
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"reflect"
+	"strconv"
 	"strings"
+
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 )
+
+// fieldsEqual replaces reflect.DeepEqual on the metadata-generation hot path.
+// Any pair not enumerated below falls through to fallbackEqual; a new SLE
+// field type that lands there should be added to the switch.
+func fieldsEqual(a, b any) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	switch av := a.(type) {
+	case string:
+		bv, ok := b.(string)
+		return ok && av == bv
+	case uint32:
+		bv, ok := b.(uint32)
+		return ok && av == bv
+	case uint64:
+		bv, ok := b.(uint64)
+		return ok && av == bv
+	case uint16:
+		bv, ok := b.(uint16)
+		return ok && av == bv
+	case uint8:
+		bv, ok := b.(uint8)
+		return ok && av == bv
+	case int:
+		bv, ok := b.(int)
+		return ok && av == bv
+	case int64:
+		bv, ok := b.(int64)
+		return ok && av == bv
+	case float64:
+		bv, ok := b.(float64)
+		return ok && av == bv
+	case bool:
+		bv, ok := b.(bool)
+		return ok && av == bv
+	case []byte:
+		bv, ok := b.([]byte)
+		return ok && bytes.Equal(av, bv)
+	case [32]byte:
+		bv, ok := b.([32]byte)
+		return ok && av == bv
+	case [20]byte:
+		bv, ok := b.([20]byte)
+		return ok && av == bv
+	case []any:
+		bv, ok := b.([]any)
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for i := range av {
+			if !fieldsEqual(av[i], bv[i]) {
+				return false
+			}
+		}
+		return true
+	case []string:
+		bv, ok := b.([]string)
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for i := range av {
+			if av[i] != bv[i] {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		bv, ok := b.(map[string]any)
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for k, va := range av {
+			vb, exists := bv[k]
+			if !exists || !fieldsEqual(va, vb) {
+				return false
+			}
+		}
+		return true
+	}
+	return fallbackEqual(a, b)
+}
+
+// fallbackEqual compares any two values using reflect.DeepEqual. Reached
+// only for types not enumerated in fieldsEqual's switch — today the fast
+// path covers every concrete type set via SetOriginal/SetField in this
+// codebase, so the fallback is a defensive last resort, not a hot path.
+// Prefer adding a typed branch to fieldsEqual over relying on this when
+// introducing a new SLE field type.
+func fallbackEqual(a, b any) bool {
+	return reflect.DeepEqual(a, b)
+}
 
 // FieldMeta defines how a field should be included in metadata
 type FieldMeta int
@@ -48,7 +144,18 @@ type FieldInfo struct {
 	Meta FieldMeta
 }
 
-// SLEBase provides common functionality for all SLE types
+// SLEBase provides common functionality for all SLE types. Field storage
+// uses map[string]any so a single struct surface can back all entry types
+// without per-type codegen.
+//
+// Allocation strategy: only `current` is allocated on construction (sized
+// for the typical SLE field count). `original` and `fieldMeta` are
+// lazy-allocated:
+//   - `fieldMeta` is allocated on the first SetFieldMeta call.
+//   - `original` is snapshotted from `current` on the first mutation
+//     (SetField, MarkAsDeleted), so read-only SLE loads — the dominant
+//     hot path — never allocate it. Once snapshotted, `original`
+//     represents the field set at the point of first mutation.
 type SLEBase struct {
 	LedgerIndex     [32]byte
 	LedgerEntryType string
@@ -58,20 +165,26 @@ type SLEBase struct {
 	fieldMeta       map[string]FieldMeta
 }
 
+// sleFieldCountHint is the pre-allocation hint for the `current` map. Most
+// SLEs (AccountRoot, Offer, RippleState, NFTokenPage) have 8–20 fields, so
+// 16 keeps growth small without overshooting tiny entries.
+const sleFieldCountHint = 16
+
 // NewSLEBase creates a new SLE base
 func NewSLEBase(ledgerIndex [32]byte, entryType string) *SLEBase {
 	return &SLEBase{
 		LedgerIndex:     ledgerIndex,
 		LedgerEntryType: entryType,
 		Action:          SLEActionCache,
-		original:        make(map[string]any),
-		current:         make(map[string]any),
-		fieldMeta:       make(map[string]FieldMeta),
+		current:         make(map[string]any, sleFieldCountHint),
 	}
 }
 
 // SetFieldMeta sets the metadata behavior for a field
 func (s *SLEBase) SetFieldMeta(name string, meta FieldMeta) {
+	if s.fieldMeta == nil {
+		s.fieldMeta = make(map[string]FieldMeta, sleFieldCountHint)
+	}
 	s.fieldMeta[name] = meta
 }
 
@@ -83,10 +196,26 @@ func (s *SLEBase) GetFieldMeta(name string) FieldMeta {
 	return FieldMetaDefault
 }
 
-// SetOriginal sets the original value of a field (called when loading from ledger)
+// SetOriginal sets the original value of a field (called when loading from
+// ledger). Writes only `current` — `original` is snapshotted lazily on the
+// first mutation. For SLEs that are loaded and never modified (the
+// overwhelming majority of cache reads), this halves per-SLE map writes
+// and avoids the `original` allocation entirely.
 func (s *SLEBase) SetOriginal(name string, value any) {
-	s.original[name] = value
 	s.current[name] = value
+}
+
+// snapshotOriginal copies current → original once, so subsequent SetField
+// calls track changes against the field set captured at first mutation.
+// Safe to call repeatedly: a non-nil `original` is left untouched.
+func (s *SLEBase) snapshotOriginal() {
+	if s.original != nil {
+		return
+	}
+	s.original = make(map[string]any, len(s.current))
+	for k, v := range s.current {
+		s.original[k] = v
+	}
 }
 
 // SetField sets a field value (tracks changes from original)
@@ -94,6 +223,7 @@ func (s *SLEBase) SetField(name string, value any) {
 	if s.Action == SLEActionCache {
 		s.Action = SLEActionModify
 	}
+	s.snapshotOriginal()
 	s.current[name] = value
 }
 
@@ -103,8 +233,14 @@ func (s *SLEBase) GetField(name string) (any, bool) {
 	return val, ok
 }
 
-// HasFieldChanged returns true if the field has changed from its original value
+// HasFieldChanged returns true if the field has changed from its original
+// value. SLEs that have never been mutated (original is nil) report no
+// changes: the per-field SetOriginal load path writes only `current`, so
+// the lazy-snapshot has not been triggered.
 func (s *SLEBase) HasFieldChanged(name string) bool {
+	if s.original == nil {
+		return false
+	}
 	origVal, hasOrig := s.original[name]
 	curVal, hasCur := s.current[name]
 
@@ -114,7 +250,7 @@ func (s *SLEBase) HasFieldChanged(name string) bool {
 	if hasOrig != hasCur {
 		return true
 	}
-	return !reflect.DeepEqual(origVal, curVal)
+	return !fieldsEqual(origVal, curVal)
 }
 
 // MarkAsCreated marks this SLE as newly created
@@ -122,8 +258,12 @@ func (s *SLEBase) MarkAsCreated() {
 	s.Action = SLEActionInsert
 }
 
-// MarkAsDeleted marks this SLE as deleted
+// MarkAsDeleted marks this SLE as deleted. Snapshots the original field
+// values so generateDeletedNode can emit PreviousFields for the metadata
+// pipeline; without this, MarkAsDeleted on a read-only-loaded SLE would
+// observe nil `original` and emit empty PreviousFields.
 func (s *SLEBase) MarkAsDeleted() {
+	s.snapshotOriginal()
 	s.Action = SLEActionDelete
 }
 
@@ -186,7 +326,7 @@ func (s *SLEBase) generateModifiedNode() *AffectedNode {
 		changed := false
 		if hasOrig != hasCur {
 			changed = true
-		} else if hasOrig && hasCur && !reflect.DeepEqual(origVal, curVal) {
+		} else if hasOrig && hasCur && !fieldsEqual(origVal, curVal) {
 			changed = true
 		}
 
@@ -271,7 +411,7 @@ func (s *SLEBase) generateDeletedNode() *AffectedNode {
 	for name, origVal := range s.original {
 		meta := s.GetFieldMeta(name)
 		curVal, hasCur := s.current[name]
-		if hasCur && meta&FieldMetaChangeOrig != 0 && !reflect.DeepEqual(origVal, curVal) {
+		if hasCur && meta&FieldMetaChangeOrig != 0 && !fieldsEqual(origVal, curVal) {
 			previousFields[name] = origVal
 		}
 	}
@@ -387,19 +527,24 @@ func (t *SLETracker) GenerateAffectedNodes() []AffectedNode {
 	return nodes
 }
 
-// GetOwnerNode extracts the OwnerNode (UInt64 type=3, field=4) from raw binary
-// SLE data by scanning for the header byte 0x34 followed by 8 bytes of value.
-// Returns 0 if the field is not found (which is a valid default for page 0).
+// GetOwnerNode extracts the OwnerNode (UInt64, sfOwnerNode) from a serialized SLE.
+// Returns 0 if the field is not present (which is a valid default for page 0)
+// or if the SLE fails to decode.
 // Reference: rippled sfOwnerNode — needed for DirRemove to find the right page.
 func GetOwnerNode(data []byte) uint64 {
-	// OwnerNode header byte: type code 3 (UInt64) << 4 | field code 4 = 0x34
-	const ownerNodeHeader byte = 0x34
-	for i := 0; i < len(data)-8; i++ {
-		if data[i] == ownerNodeHeader {
-			return binary.BigEndian.Uint64(data[i+1 : i+9])
-		}
+	decoded, err := binarycodec.DecodeBytes(data)
+	if err != nil {
+		return 0
 	}
-	return 0
+	raw, ok := decoded["OwnerNode"].(string)
+	if !ok {
+		return 0
+	}
+	v, err := strconv.ParseUint(raw, 16, 64)
+	if err != nil {
+		return 0
+	}
+	return v
 }
 
 // GetLedgerEntryType extracts the LedgerEntryType (UInt16, field code 1) from raw

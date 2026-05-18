@@ -11,6 +11,7 @@ import (
 )
 
 func TestGenerateGenesisAccountID(t *testing.T) {
+	t.Parallel()
 	accountID, address, err := GenerateGenesisAccountID()
 	if err != nil {
 		t.Fatalf("GenerateGenesisAccountID failed: %v", err)
@@ -33,6 +34,7 @@ func TestGenerateGenesisAccountID(t *testing.T) {
 }
 
 func TestCreateGenesisLedger(t *testing.T) {
+	t.Parallel()
 	cfg := DefaultConfig()
 	genesis, err := Create(cfg)
 	if err != nil {
@@ -88,6 +90,7 @@ func TestCreateGenesisLedger(t *testing.T) {
 }
 
 func TestCreateGenesisLedgerWithAmendments(t *testing.T) {
+	t.Parallel()
 	cfg := DefaultConfig()
 
 	// Add a fake amendment hash
@@ -109,7 +112,8 @@ func TestCreateGenesisLedgerWithAmendments(t *testing.T) {
 }
 
 func TestCreateGenesisLedgerLegacyFees(t *testing.T) {
-	// No amendments → legacy fee format (XRPFees not present)
+	t.Parallel()
+
 	cfg := Config{
 		Fees:       StandardFees(),
 		Amendments: nil,
@@ -129,7 +133,8 @@ func TestCreateGenesisLedgerLegacyFees(t *testing.T) {
 }
 
 func TestCreateGenesisLedgerModernFees(t *testing.T) {
-	// Include XRPFees amendment → modern fee format
+	t.Parallel()
+
 	cfg := Config{
 		Fees:       StandardFees(),
 		Amendments: [][32]byte{amendment.FeatureXRPFees},
@@ -163,6 +168,7 @@ func TestCreateGenesisLedgerModernFees(t *testing.T) {
 }
 
 func TestStandardFees(t *testing.T) {
+	t.Parallel()
 	fees := StandardFees()
 
 	expectedBaseFee := drops.NewXRPAmount(10)
@@ -188,6 +194,7 @@ func TestStandardFees(t *testing.T) {
 // This test is critical for understanding the AccountDelete conformance fixture
 // behavior where CalculateBaseFee reads fees from the ledger SLE.
 func TestFeeSettingsRoundTrip(t *testing.T) {
+	t.Parallel()
 	cfg := DefaultConfig()
 	cfg.Fees.ReserveBase = drops.DropsPerXRP * 200
 	cfg.Fees.ReserveIncrement = drops.DropsPerXRP * 50 // 50 XRP = 50_000_000 drops
@@ -244,6 +251,7 @@ func TestFeeSettingsRoundTrip(t *testing.T) {
 }
 
 func TestCalculateLedgerHash(t *testing.T) {
+	t.Parallel()
 	cfg := DefaultConfig()
 	genesis, err := Create(cfg)
 	if err != nil {
@@ -260,7 +268,8 @@ func TestCalculateLedgerHash(t *testing.T) {
 }
 
 func TestHasXRPFeesAmendment(t *testing.T) {
-	// No amendments → false
+	t.Parallel()
+
 	if hasXRPFeesAmendment(nil) {
 		t.Error("Expected false for nil amendments")
 	}
@@ -295,6 +304,7 @@ func TestHasXRPFeesAmendment(t *testing.T) {
 // genesis behavior of enabling non-vetoed amendments via getDesired().
 // Reference: rippled Application.cpp:1707-1712, Ledger.cpp:168-229.
 func TestGenesisHashConformance(t *testing.T) {
+	t.Parallel()
 	t.Run("StandardDefaults_WithAmendments", func(t *testing.T) {
 		// Standard genesis: default amendments, standard fees (10 drops, 10 XRP reserve, 2 XRP increment)
 		cfg := DefaultConfig()

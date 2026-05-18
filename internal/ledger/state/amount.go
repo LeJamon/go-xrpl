@@ -97,6 +97,9 @@ func (x XRPAmount) DecimalXRP() float64 {
 	return float64(x.drops) / float64(DropsPerXRP)
 }
 
+// IOU/MPT arithmetic here shares the panic contract documented in
+// xrpl_number.go: callers validate ranges at parse-time.
+
 // IOUAmountValue represents an issued currency amount using mantissa/exponent
 // Matches rippled's IOUAmount representation
 type IOUAmountValue struct {

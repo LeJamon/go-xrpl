@@ -2,42 +2,41 @@ package manager
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	lru "github.com/hashicorp/golang-lru/v2"
 )
 
-// LedgerCache provides fast access to recently used ledgers and tracks
-// which ledgers are complete locally
+// LedgerCache caches recently used ledgers (by seq and by hash) and tracks
+// which ledgers are complete locally.
+//
+// Locking:
+//   - Get / GetByHash run lock-free on lru.Cache's internal synchronisation.
+//   - writeMu serialises Put / Remove so the seq+hash double-write stays
+//     atomic across the two underlying caches.
+//   - completenessMu guards CompleteLedgerSet, which has no internal lock.
+//   - hits / misses are atomic.
 type LedgerCache struct {
-	mu sync.RWMutex
-
-	// In-memory cache of recently accessed ledgers
-	// Key: ledger sequence number
-	recentBySeq *lru.Cache[uint32, *ledger.Ledger]
-
-	// Cache by hash for faster hash-based lookups
-	// Key: ledger hash as string (hex)
+	recentBySeq  *lru.Cache[uint32, *ledger.Ledger]
 	recentByHash *lru.Cache[[32]byte, *ledger.Ledger]
 
-	// Track which ledgers we have complete locally
-	completeness *CompleteLedgerSet
+	writeMu sync.Mutex
 
-	// Metrics
-	hits   uint64
-	misses uint64
+	completenessMu sync.RWMutex
+	completeness   *CompleteLedgerSet
+
+	hits   atomic.Uint64
+	misses atomic.Uint64
 }
 
-// LedgerCacheConfig holds configuration for the cache
 type LedgerCacheConfig struct {
-	// MaxRecentLedgers is the number of ledgers to keep in memory
 	MaxRecentLedgers int
 }
 
-// NewLedgerCache creates a new ledger cache
 func NewLedgerCache(config LedgerCacheConfig) (*LedgerCache, error) {
 	if config.MaxRecentLedgers <= 0 {
-		config.MaxRecentLedgers = 256 // Default cache size
+		config.MaxRecentLedgers = 256
 	}
 
 	seqCache, err := lru.New[uint32, *ledger.Ledger](config.MaxRecentLedgers)
@@ -59,51 +58,43 @@ func NewLedgerCache(config LedgerCacheConfig) (*LedgerCache, error) {
 
 // Get retrieves a ledger by sequence number from cache
 func (c *LedgerCache) Get(seq uint32) (*ledger.Ledger, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	ledgerValue, found := c.recentBySeq.Get(seq)
 	if found {
-		c.hits++
+		c.hits.Add(1)
 		return ledgerValue, true
 	}
 
-	c.misses++
+	c.misses.Add(1)
 	return nil, false
 }
 
 // GetByHash retrieves a ledger by hash from cache
 func (c *LedgerCache) GetByHash(hash [32]byte) (*ledger.Ledger, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	ledgerValue, found := c.recentByHash.Get(hash)
 	if found {
-		c.hits++
+		c.hits.Add(1)
 		return ledgerValue, true
 	}
 
-	c.misses++
+	c.misses.Add(1)
 	return nil, false
 }
 
 // Put stores a ledger in cache
 func (c *LedgerCache) Put(ledger *ledger.Ledger) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	seq := ledger.Sequence()
 	hash := ledger.Hash()
 
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	c.recentBySeq.Add(seq, ledger)
 	c.recentByHash.Add(hash, ledger)
 }
 
 // Remove removes a ledger from cache
 func (c *LedgerCache) Remove(seq uint32) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	// Get the ledger first to remove from hash cache too
 	if ledgerValue, found := c.recentBySeq.Peek(seq); found {
 		hash := ledgerValue.Hash()
@@ -115,75 +106,76 @@ func (c *LedgerCache) Remove(seq uint32) {
 
 // MarkComplete marks a ledger sequence as complete locally
 func (c *LedgerCache) MarkComplete(seq uint32) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.completenessMu.Lock()
+	defer c.completenessMu.Unlock()
 
 	c.completeness.Add(seq)
 }
 
 // MarkCompleteRange marks a range of ledger sequences as complete
 func (c *LedgerCache) MarkCompleteRange(start, end uint32) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.completenessMu.Lock()
+	defer c.completenessMu.Unlock()
 
 	c.completeness.AddRange(start, end)
 }
 
 // IsComplete checks if we have a ledger sequence complete locally
 func (c *LedgerCache) IsComplete(seq uint32) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.completenessMu.RLock()
+	defer c.completenessMu.RUnlock()
 
 	return c.completeness.Contains(seq)
 }
 
 // GetCompleteRange returns the range of complete ledgers
 func (c *LedgerCache) GetCompleteRange() (min, max uint32, hasAny bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.completenessMu.RLock()
+	defer c.completenessMu.RUnlock()
 
 	return c.completeness.Range()
 }
 
 // FindMissingInRange finds missing ledger sequences in a range
 func (c *LedgerCache) FindMissingInRange(start, end uint32) []uint32 {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.completenessMu.RLock()
+	defer c.completenessMu.RUnlock()
 
 	return c.completeness.FindMissing(start, end)
 }
 
-// Clear removes all cached ledgers (but keeps completeness tracking)
+// Clear removes all cached ledgers (but keeps completeness tracking).
+// Holds writeMu so a concurrent Put cannot leave one cache populated while
+// the other is empty — the seq/hash double-write invariant Put/Remove rely on.
 func (c *LedgerCache) Clear() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	c.recentBySeq.Purge()
 	c.recentByHash.Purge()
 }
 
 // ClearCompleteness clears the completeness tracking
 func (c *LedgerCache) ClearCompleteness() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.completenessMu.Lock()
+	defer c.completenessMu.Unlock()
 
 	c.completeness.Clear()
 }
 
 // Stats returns cache statistics
 func (c *LedgerCache) Stats() CacheStats {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	hits := c.hits.Load()
+	misses := c.misses.Load()
 
-	total := c.hits + c.misses
+	total := hits + misses
 	hitRate := float64(0)
 	if total > 0 {
-		hitRate = float64(c.hits) / float64(total)
+		hitRate = float64(hits) / float64(total)
 	}
 
 	return CacheStats{
-		Hits:         c.hits,
-		Misses:       c.misses,
+		Hits:         hits,
+		Misses:       misses,
 		HitRate:      hitRate,
 		SeqCacheLen:  c.recentBySeq.Len(),
 		HashCacheLen: c.recentByHash.Len(),

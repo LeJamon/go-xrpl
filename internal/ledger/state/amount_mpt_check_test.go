@@ -7,6 +7,7 @@ import (
 )
 
 func TestMPTAmountParse(t *testing.T) {
+	t.Parallel()
 	data := []byte(`{"value": "9223372036854775807", "mpt_issuance_id": "00000004ae123a8556f3cf91154711376afb0f894f832b3d"}`)
 
 	var amt Amount

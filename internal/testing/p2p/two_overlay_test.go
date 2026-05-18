@@ -130,10 +130,7 @@ func (p *lookupProvider) GetReplayDelta(hash []byte) ([]byte, [][]byte, error) {
 		return nil, nil, nil
 	}
 	hdr := l.Header()
-	headerBytes, err := header.AddRaw(hdr, false)
-	if err != nil {
-		return nil, nil, err
-	}
+	headerBytes := header.AddRaw(hdr, false)
 	txMap, err := l.TxMapSnapshot()
 	if err != nil {
 		return nil, nil, err
@@ -515,10 +512,7 @@ func TestTwoOverlay_ProofPath_RoundTrip(t *testing.T) {
 			if proof == nil || !proof.Found {
 				return nil, nil, peermanagement.ErrKeyNotFound
 			}
-			hdr, err := header.AddRaw(l.Header(), false)
-			if err != nil {
-				return nil, nil, err
-			}
+			hdr := header.AddRaw(l.Header(), false)
 			return hdr, proof.Path, nil
 		},
 	}

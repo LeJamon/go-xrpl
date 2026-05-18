@@ -8,6 +8,7 @@ import (
 )
 
 func TestCanonicalSortEmpty(t *testing.T) {
+	t.Parallel()
 	var txs []PendingTx
 	CanonicalSort(txs, [32]byte{})
 	if len(txs) != 0 {
@@ -16,6 +17,7 @@ func TestCanonicalSortEmpty(t *testing.T) {
 }
 
 func TestCanonicalSortSingle(t *testing.T) {
+	t.Parallel()
 	txs := []PendingTx{
 		{Hash: [32]byte{0x01}, Account: [20]byte{0xAA}, Sequence: 1},
 	}
@@ -26,6 +28,7 @@ func TestCanonicalSortSingle(t *testing.T) {
 }
 
 func TestCanonicalSortByAccountKey(t *testing.T) {
+	t.Parallel()
 	// Two transactions from different accounts, same sequence.
 	// After XOR with salt, the ordering should be deterministic.
 	account1 := [20]byte{0x01}
@@ -55,6 +58,7 @@ func TestCanonicalSortByAccountKey(t *testing.T) {
 }
 
 func TestCanonicalSortBySequence(t *testing.T) {
+	t.Parallel()
 	account := [20]byte{0x42}
 	txs := []PendingTx{
 		{Blob: []byte{1}, Hash: makeHash(3), Account: account, Sequence: 10},
@@ -76,6 +80,7 @@ func TestCanonicalSortBySequence(t *testing.T) {
 }
 
 func TestCanonicalSortSeqBeforeTicket(t *testing.T) {
+	t.Parallel()
 	// Same account: a sequence-based txn must sort before a ticket-based txn
 	// regardless of numeric value, matching rippled's SeqProxy::operator<.
 	// This guarantees that ticket-creating txns (sequence-based) sort before
@@ -98,6 +103,7 @@ func TestCanonicalSortSeqBeforeTicket(t *testing.T) {
 }
 
 func TestCanonicalSortByTxID(t *testing.T) {
+	t.Parallel()
 	account := [20]byte{0x42}
 	hash1 := [32]byte{0x01}
 	hash2 := [32]byte{0x02}
@@ -123,6 +129,7 @@ func TestCanonicalSortByTxID(t *testing.T) {
 }
 
 func TestCanonicalSortDeterministic(t *testing.T) {
+	t.Parallel()
 	makeTxs := func() []PendingTx {
 		return []PendingTx{
 			{Blob: []byte{1}, Hash: makeHash(5), Account: [20]byte{0xAA}, Sequence: 3},
@@ -147,6 +154,7 @@ func TestCanonicalSortDeterministic(t *testing.T) {
 }
 
 func TestComputeSaltOrderIndependent(t *testing.T) {
+	t.Parallel()
 	mkBlob := func(seed byte) []byte {
 		b := make([]byte, 16)
 		for i := range b {
@@ -184,6 +192,7 @@ func TestComputeSaltOrderIndependent(t *testing.T) {
 }
 
 func TestComputeAccountKey(t *testing.T) {
+	t.Parallel()
 	account := [20]byte{0xFF, 0x00, 0xAA}
 	salt := [32]byte{0x11, 0x22, 0x33}
 

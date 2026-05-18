@@ -132,10 +132,7 @@ func (p *LedgerProvider) GetReplayDelta(ledgerHash []byte) ([]byte, [][]byte, er
 	// ledger_hash field of the response — including the hash here would
 	// shift every subsequent byte and break that recompute.
 	hdr := l.Header()
-	headerBytes, hdrErr := header.AddRaw(hdr, false)
-	if hdrErr != nil {
-		return nil, nil, fmt.Errorf("serialize header: %w", hdrErr)
-	}
+	headerBytes := header.AddRaw(hdr, false)
 
 	txMap, err := l.TxMapSnapshot()
 	if err != nil {

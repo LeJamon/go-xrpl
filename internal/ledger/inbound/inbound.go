@@ -28,6 +28,13 @@ const (
 
 // Ledger manages the acquisition of a single ledger from a peer.
 // It progresses through: WantBase → WantState → Complete.
+//
+// Field lock guarantees:
+//   - hash, seq, peerID, created, logger are set at construction and never
+//     mutated thereafter; the accessors below (Hash, Seq, PeerID) read them
+//     without taking mu and are safe under concurrent State() callers.
+//   - header, stateMap, state, err are written under mu and must be read
+//     through accessors that take mu (State, IsTimedOut, GotBase, etc.).
 type Ledger struct {
 	hash     [32]byte
 	seq      uint32

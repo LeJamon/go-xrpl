@@ -1,10 +1,8 @@
 package entry
 
-import (
-	"fmt"
-)
+import "fmt"
 
-// Type represents a ledger entry type
+// Type represents a ledger entry type.
 type Type uint16
 
 // All known ledger entry types
@@ -67,7 +65,7 @@ const (
 	TypeVault Type = 0x0084 // Asset vaults
 )
 
-// String returns the string representation of the Type
+// String returns the string representation of the Type.
 func (t Type) String() string {
 	switch t {
 	case TypeNFTokenOffer:
@@ -129,11 +127,4 @@ func (t Type) String() string {
 	default:
 		return fmt.Sprintf("Unknown(%#x)", uint16(t))
 	}
-}
-
-// Entry defines the interface for all ledger entries
-type Entry interface {
-	Type() Type
-	Validate() error
-	Hash() ([32]byte, error)
 }

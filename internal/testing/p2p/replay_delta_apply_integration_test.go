@@ -82,8 +82,7 @@ func TestReplayDelta_Apply_Integration(t *testing.T) {
 
 	// Cook a wire response that descends from `parent` and carries
 	// the successor's verified header + the single tx leaf.
-	hdrBytes, err := header.AddRaw(successor.Header(), false)
-	require.NoError(t, err)
+	hdrBytes := header.AddRaw(successor.Header(), false)
 	successorHash := successor.Hash()
 	resp := &message.ReplayDeltaResponse{
 		LedgerHash:   successorHash[:],
@@ -173,8 +172,7 @@ func TestReplay_TefTxDoesNotInstallPeerLeaf(t *testing.T) {
 	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	successor, txMetaBlob := buildClosedSuccessor(t, parent, pay, txBlob, txHash, closeTime)
 
-	hdrBytes, err := header.AddRaw(successor.Header(), false)
-	require.NoError(t, err)
+	hdrBytes := header.AddRaw(successor.Header(), false)
 	successorHash := successor.Hash()
 
 	// Wire response carries ONE legitimate tx; GotResponse builds r.txs

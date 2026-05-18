@@ -15,6 +15,7 @@ import (
 // surface path-based NodeIDs of the actual missing inner nodes, not
 // just the root NodeID.
 func TestNeedsMissingNodeIDs_RequestsActualMissingNodes(t *testing.T) {
+	t.Parallel()
 	source, err := shamap.New(shamap.TypeState)
 	if err != nil {
 		t.Fatalf("new source map: %v", err)
@@ -41,10 +42,7 @@ func TestNeedsMissingNodeIDs_RequestsActualMissingNodes(t *testing.T) {
 		LedgerIndex: 100,
 		AccountHash: rootHash,
 	}
-	hdrBytes, err := header.AddRaw(hdr, false)
-	if err != nil {
-		t.Fatalf("addraw header: %v", err)
-	}
+	hdrBytes := header.AddRaw(hdr, false)
 
 	var ledgerHash [32]byte
 	ledgerHash[0] = 0xAA
@@ -86,6 +84,7 @@ func TestNeedsMissingNodeIDs_RequestsActualMissingNodes(t *testing.T) {
 // hash-search silently dropped them; AddKnownNodeByID descends by
 // NodeID and succeeds.
 func TestGotStateNodes_DeepNodesUnderStubs(t *testing.T) {
+	t.Parallel()
 	source, err := shamap.New(shamap.TypeState)
 	if err != nil {
 		t.Fatalf("new source map: %v", err)
@@ -122,10 +121,7 @@ func TestGotStateNodes_DeepNodesUnderStubs(t *testing.T) {
 	}
 
 	hdr := header.LedgerHeader{LedgerIndex: 200, AccountHash: rootHash}
-	hdrBytes, err := header.AddRaw(hdr, false)
-	if err != nil {
-		t.Fatalf("addraw header: %v", err)
-	}
+	hdrBytes := header.AddRaw(hdr, false)
 
 	var ledgerHash [32]byte
 	ledgerHash[0] = 0xBB
