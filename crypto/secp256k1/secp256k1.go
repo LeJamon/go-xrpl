@@ -235,10 +235,6 @@ func (c SECP256K1CryptoAlgorithm) ValidateBytes(msg, pubkey, sig []byte) bool {
 // validateBytes is the byte-level core used by Validate/ValidateBytes/ValidateDigest.
 // When hashMsg is true the message is SHA-512Half-hashed before verification;
 // otherwise msg is treated as a pre-computed 32-byte digest.
-//
-// The actual signature verify is delegated to verifyDigestRaw, which has
-// two backends selected at build time: libsecp256k1 via cgo (default)
-// or the pure-Go decred library (build tag !cgo).
 func (c SECP256K1CryptoAlgorithm) validateBytes(msg, pubkey, sig []byte, mustBeFullyCanonical, hashMsg bool) bool {
 	canonicality := rootcrypto.ECDSACanonicality(sig)
 	if canonicality == rootcrypto.CanonicityNone {

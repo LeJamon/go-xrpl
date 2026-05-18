@@ -7,13 +7,8 @@ import (
 	"github.com/LeJamon/goXRPLd/crypto/common"
 )
 
-// BenchmarkValidateDigest measures end-to-end signature verification
-// against a pre-computed SHA-512Half digest — the hot path used by
-// transaction signature checks and validator manifest verification.
-//
-// The active backend (libsecp256k1 via cgo, or decred pure-Go under
-// !cgo) is selected by build tags. Run with -tags ” to bench purego,
-// default build tags to bench cgo.
+// BenchmarkValidateDigest exercises the active backend (libsecp256k1
+// via cgo by default; decred pure-Go when built with CGO_ENABLED=0).
 func BenchmarkValidateDigest(b *testing.B) {
 	algo := SECP256K1()
 	pub, err := hex.DecodeString("02950F4710101A25073BF37086D73FBBD00C7A6B0F91097D8F0BC6D268C400D56E")

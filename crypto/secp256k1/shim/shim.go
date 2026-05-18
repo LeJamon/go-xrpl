@@ -1,10 +1,9 @@
 //go:build cgo
 
-// Package shim is the cgo binding for libsecp256k1's verify path. Only
-// signature verification is wired through C; signing and key derivation
-// stay in pure Go. The verify context is process-lifetime and
-// libsecp256k1's verify operations are thread-safe, so no OS-thread
-// locking is needed on the call path.
+// Package shim is the cgo verify binding for libsecp256k1. Signing and
+// key derivation stay in pure Go. The verify context is process-lifetime
+// and libsecp256k1's verify ops are thread-safe, so the call path needs
+// no OS-thread locking.
 package shim
 
 // #cgo pkg-config: libsecp256k1
@@ -24,10 +23,10 @@ func ensureInit() {
 	})
 }
 
-// VerifyDigest verifies a DER-encoded ECDSA signature against a 32-byte
-// message hash and a SEC1 public key (33-byte compressed or 65-byte
-// uncompressed). Returns true iff the signature is valid AND low-S;
-// libsecp256k1 rejects high-S signatures internally.
+// VerifyDigest accepts a DER-encoded ECDSA signature with either low-S
+// or high-S — the shim normalizes to low-S before calling
+// secp256k1_ecdsa_verify, which itself rejects high-S. Canonicality
+// gating (if any) is the caller's responsibility.
 func VerifyDigest(hash32 []byte, pub []byte, sigDER []byte) bool {
 	if len(hash32) != 32 || len(pub) == 0 || len(sigDER) == 0 {
 		return false

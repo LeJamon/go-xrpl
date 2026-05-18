@@ -9,9 +9,6 @@ import (
 	ecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 )
 
-// verifyDigestRaw verifies a DER-encoded ECDSA signature against a
-// 32-byte hash and a SEC1-encoded public key using the pure-Go decred
-// implementation. Used when CGO is disabled.
 func verifyDigestRaw(hash32, pubkey, sigDER []byte) bool {
 	r, s, err := rootcrypto.DERSigToRS(sigDER)
 	if err != nil {

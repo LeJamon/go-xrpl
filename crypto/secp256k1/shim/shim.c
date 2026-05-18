@@ -2,16 +2,13 @@
 
 #include <secp256k1.h>
 
-/* Process-wide verify context. libsecp256k1 documents the verify
- * context as thread-safe; we create it once and never free it. The
- * lifetime is the process. */
+/* Process-lifetime, never freed. Verify ops on this context are
+ * thread-safe per libsecp256k1. */
 static secp256k1_context* g_ctx = NULL;
 
-/* SECP256K1_CONTEXT_VERIFY is the historically correct flag and is
- * still accepted by every released version of libsecp256k1. Newer
- * versions (>=0.3.0) unified the context flags and emit a deprecation
- * notice, but the runtime behavior is unchanged. Using it preserves
- * compatibility with older system installs. */
+/* SECP256K1_CONTEXT_VERIFY is deprecated since libsecp256k1 0.3.0 but
+ * still functional; it is the only flag pre-0.3.0 accepts for verify
+ * ops, so use it for back-compat with older system packages. */
 void goxrpl_secp256k1_init(void) {
     if (g_ctx == NULL) {
         g_ctx = secp256k1_context_create(SECP256K1_CONTEXT_VERIFY);
@@ -38,12 +35,9 @@ int goxrpl_secp256k1_verify_digest(const unsigned char* pub, size_t pub_len,
         return 0;
     }
 
-    /* Normalize S to low-S before verifying. The pure-Go decred verify
-     * does not enforce low-S, so callers that pass mustBeFullyCanonical=
-     * false (e.g. manifest verification) currently accept high-S
-     * signatures. Normalizing here preserves that behavior — the C and
-     * Go paths must agree on accept/reject. Mathematically (r,S) and
-     * (r,N-S) verify the same (msg, pubkey), so normalizing is lossless. */
+    /* Always normalize to low-S so this path matches the pure-Go decred
+     * verify, which accepts high-S (manifest verification relies on it).
+     * (r,S) and (r,N-S) verify the same (msg, pubkey), so lossless. */
     secp256k1_ecdsa_signature_normalize(g_ctx, &sig, &sig);
 
     return secp256k1_ecdsa_verify(g_ctx, &sig, hash32, &pubkey);

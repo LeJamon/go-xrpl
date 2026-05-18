@@ -7,12 +7,7 @@ import (
 	"testing"
 )
 
-// Vector lifted from the package-level Validate tests so we exercise
-// the libsecp256k1 verify path against a known-good Sign() output.
-//
-//	msg:    "Hello World" → SHA-512Half digest
-//	pubKey: 02950F47...0D56E (compressed)
-//	sigDER: 30450221...516E64 (fully canonical)
+// Vector lifted from the package-level Validate tests.
 const (
 	testMsg       = "Hello World"
 	testPubHex    = "02950F4710101A25073BF37086D73FBBD00C7A6B0F91097D8F0BC6D268C400D56E"
@@ -20,8 +15,6 @@ const (
 )
 
 func sha512HalfStr(s string) [32]byte {
-	// Local copy to avoid importing crypto/common (test-only package).
-	// Mirrors common.Sha512Half: SHA-512 of bytes, first 32 bytes.
 	return sha512HalfBytes([]byte(s))
 }
 

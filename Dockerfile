@@ -1,10 +1,8 @@
 # Stage 1: Build
 FROM golang:1.24-alpine AS builder
 
-# Alpine ships libsecp256k1 only as a shared .so; the static-linked
-# goxrpl binary needs a .a. Build it from a pinned upstream release in
-# the builder stage. v0.5.0 matches Alpine community's packaging and
-# exposes the same parse_der + normalize + verify ABI we use.
+# Alpine ships libsecp256k1 only as a shared .so, so build the static .a
+# from upstream for the distroless static-linked binary.
 ARG LIBSECP256K1_VERSION=v0.5.0
 
 RUN apk add --no-cache \
