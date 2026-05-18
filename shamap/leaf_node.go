@@ -105,13 +105,12 @@ func (n *AccountStateLeafNode) SerializeForWire() ([]byte, error) {
 	if n.item == nil {
 		return nil, ErrNilItem
 	}
-	var result []byte
-	// Add transaction + metadata data (no prefix for wire format)
-	result = append(result, n.item.Data()...)
+	data := n.item.Data()
 	key := n.item.Key()
+	result := make([]byte, 0, len(data)+33)
+	result = append(result, data...)
 	result = append(result, key[:]...)
 	result = append(result, protocol.WireTypeAccountState)
-
 	return result, nil
 }
 
@@ -122,13 +121,12 @@ func (n *AccountStateLeafNode) SerializeWithPrefix() ([]byte, error) {
 	if n.item == nil {
 		return nil, ErrNilItem
 	}
-
-	var result []byte
-	result = append(result, protocol.HashPrefixLeafNode[:]...)
-	result = append(result, n.item.Data()...)
+	data := n.item.Data()
 	key := n.item.Key()
+	result := make([]byte, 0, 4+len(data)+32)
+	result = append(result, protocol.HashPrefixLeafNode[:]...)
+	result = append(result, data...)
 	result = append(result, key[:]...)
-
 	return result, nil
 }
 
@@ -303,13 +301,12 @@ func (n *TransactionLeafNode) SerializeForWire() ([]byte, error) {
 	if n.item == nil {
 		return nil, ErrNilItem
 	}
-	var result []byte
-	// Add transaction data (no prefix for wire format)
-	// Note: key is NOT included — it is derived by hashing the data (sha512Half(txID prefix, data))
-	// Reference: rippled SHAMapTxLeafNode.h serializeForWire()
-	result = append(result, n.item.Data()...)
+	// Key is NOT included on the wire — it is derived from the data
+	// (sha512Half(txID prefix, data)). Reference: rippled SHAMapTxLeafNode.h.
+	data := n.item.Data()
+	result := make([]byte, 0, len(data)+1)
+	result = append(result, data...)
 	result = append(result, protocol.WireTypeTransaction)
-
 	return result, nil
 }
 
@@ -320,10 +317,10 @@ func (n *TransactionLeafNode) SerializeWithPrefix() ([]byte, error) {
 	if n.item == nil {
 		return nil, ErrNilItem
 	}
-
-	var result []byte
+	data := n.item.Data()
+	result := make([]byte, 0, 4+len(data))
 	result = append(result, protocol.HashPrefixTransactionID[:]...)
-	result = append(result, n.item.Data()...)
+	result = append(result, data...)
 	return result, nil
 }
 
@@ -487,15 +484,15 @@ func (n *TransactionWithMetaLeafNode) SerializeForWire() ([]byte, error) {
 	if n.item == nil {
 		return nil, ErrNilItem
 	}
-	var result []byte
-	// Add transaction + metadata data (no prefix for wire format)
-	result = append(result, n.item.Data()...)
+	data := n.item.Data()
 	key := n.item.Key()
+	result := make([]byte, 0, len(data)+33)
+	result = append(result, data...)
 	result = append(result, key[:]...)
 	result = append(result, protocol.WireTypeTransactionWithMeta)
-
 	return result, nil
 }
+
 func (n *TransactionWithMetaLeafNode) SerializeWithPrefix() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -503,14 +500,12 @@ func (n *TransactionWithMetaLeafNode) SerializeWithPrefix() ([]byte, error) {
 	if n.item == nil {
 		return nil, ErrNilItem
 	}
-
-	var result []byte
-
-	result = append(result, protocol.HashPrefixTxNode[:]...)
-	result = append(result, n.item.Data()...)
+	data := n.item.Data()
 	key := n.item.Key()
+	result := make([]byte, 0, 4+len(data)+32)
+	result = append(result, protocol.HashPrefixTxNode[:]...)
+	result = append(result, data...)
 	result = append(result, key[:]...)
-
 	return result, nil
 }
 

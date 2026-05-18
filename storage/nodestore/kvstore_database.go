@@ -17,6 +17,7 @@ type KVDatabaseImpl struct {
 	cache         *Cache
 	negativeCache *NegativeCache
 	name          string
+	asyncSem      chan struct{}
 	stats         struct {
 		reads             uint64
 		cacheHits         uint64
@@ -35,9 +36,10 @@ func NewKVDatabase(store kvstore.KeyValueStore, name string, cacheSize int, cach
 		cache = NewCache(cacheSize, cacheTTL)
 	}
 	return &KVDatabaseImpl{
-		store: store,
-		cache: cache,
-		name:  name,
+		store:    store,
+		cache:    cache,
+		name:     name,
+		asyncSem: newAsyncSem(),
 	}
 }
 
@@ -48,8 +50,9 @@ func NewKVDatabaseWithConfig(store kvstore.KeyValueStore, name string, config *D
 	}
 
 	db := &KVDatabaseImpl{
-		store: store,
-		name:  name,
+		store:    store,
+		name:     name,
+		asyncSem: newAsyncSem(),
 	}
 
 	if config.CacheSize > 0 {
@@ -76,8 +79,10 @@ func (d *KVDatabaseImpl) Store(ctx context.Context, node *Node) error {
 
 	encoded := encodeNodeData(node)
 	if err := d.store.Put(node.Hash[:], encoded); err != nil {
+		releaseEncodeBuf(encoded)
 		return fmt.Errorf("store failed: %w", err)
 	}
+	releaseEncodeBuf(encoded)
 
 	atomic.AddUint64(&d.stats.writes, 1)
 	atomic.AddUint64(&d.stats.writeBytes, uint64(len(node.Data)))
@@ -144,29 +149,94 @@ func (d *KVDatabaseImpl) Fetch(ctx context.Context, hash Hash256) (*Node, error)
 	return node, nil
 }
 
-// FetchBatch retrieves multiple nodes, going through the cache for each.
+// FetchBatch retrieves multiple nodes.
+//
+// Cache lookups are batched into the first pass so the call only pays
+// for cache contention once per shard rather than re-entering d.Fetch
+// per key (which used to dominate batch latency on warm caches). The
+// kvstore.KeyValueStore interface has no multi-get primitive, so the
+// miss pass is a sequential loop — but it skips the per-call cache
+// reentry, the negative-cache reentry, and the stats counter shuffling
+// of the old N × d.Fetch path.
 func (d *KVDatabaseImpl) FetchBatch(ctx context.Context, hashes []Hash256) ([]*Node, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(hashes) == 0 {
+		return nil, nil
 	}
 
 	results := make([]*Node, len(hashes))
-	for i, hash := range hashes {
-		node, err := d.Fetch(ctx, hash)
+	misses := make([]int, 0, len(hashes))
+
+	if d.cache != nil {
+		for i, h := range hashes {
+			if node, ok := d.cache.Get(h); ok {
+				atomic.AddUint64(&d.stats.cacheHits, 1)
+				results[i] = node
+			} else {
+				atomic.AddUint64(&d.stats.cacheMisses, 1)
+				misses = append(misses, i)
+			}
+		}
+	} else {
+		for i := range hashes {
+			misses = append(misses, i)
+		}
+	}
+
+	if len(misses) == 0 {
+		atomic.AddUint64(&d.stats.reads, uint64(len(hashes)))
+		return results, nil
+	}
+
+	for _, idx := range misses {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		h := hashes[idx]
+		atomic.AddUint64(&d.stats.reads, 1)
+
+		if d.negativeCache != nil && d.negativeCache.IsMissing(h) {
+			atomic.AddUint64(&d.stats.negativeCacheHits, 1)
+			continue
+		}
+		data, err := d.store.Get(h[:])
+		if err != nil {
+			if errors.Is(err, kvstore.ErrNotFound) {
+				if d.negativeCache != nil {
+					d.negativeCache.MarkMissing(h)
+				}
+				continue
+			}
+			return nil, fmt.Errorf("fetch batch failed: %w", err)
+		}
+		node, err := decodeNodeData(h, data)
 		if err != nil {
 			return nil, err
 		}
-		results[i] = node
+		atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
+		if d.cache != nil {
+			d.cache.Put(node)
+		}
+		results[idx] = node
 	}
 	return results, nil
 }
 
-// FetchAsync retrieves a node asynchronously.
+// FetchAsync retrieves a node asynchronously. Worker count is bounded
+// by asyncWorkerLimit per database.
 func (d *KVDatabaseImpl) FetchAsync(ctx context.Context, hash Hash256) <-chan Result {
 	resultCh := make(chan Result, 1)
+	select {
+	case d.asyncSem <- struct{}{}:
+	case <-ctx.Done():
+		resultCh <- Result{Err: ctx.Err()}
+		close(resultCh)
+		return resultCh
+	}
 	go func() {
+		defer func() { <-d.asyncSem }()
 		node, err := d.Fetch(ctx, hash)
 		resultCh <- Result{Node: node, Err: err}
 		close(resultCh)
@@ -183,12 +253,17 @@ func (d *KVDatabaseImpl) StoreBatch(ctx context.Context, nodes []*Node) error {
 	}
 
 	batch := d.store.NewBatch()
+	// Reuse encode buffers across the batch. KVStore.Batch.Put is
+	// required to copy the value into the batch's internal buffer
+	// before returning, so we can recycle immediately.
 	for _, node := range nodes {
 		if node == nil {
 			continue
 		}
 		encoded := encodeNodeData(node)
-		if err := batch.Put(node.Hash[:], encoded); err != nil {
+		err := batch.Put(node.Hash[:], encoded)
+		releaseEncodeBuf(encoded)
+		if err != nil {
 			return fmt.Errorf("store batch failed: %w", err)
 		}
 	}

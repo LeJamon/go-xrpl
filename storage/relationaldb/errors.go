@@ -107,7 +107,7 @@ type DatabaseError struct {
 	Message   string                 `json:"message"`
 	Cause     error                  `json:"cause,omitempty"`
 	Code      string                 `json:"code,omitempty"`
-	Details   map[string]interface{} `json:"details,omitempty"`
+	Details   map[string]any `json:"details,omitempty"`
 	Retryable bool                   `json:"retryable"`
 }
 
@@ -154,9 +154,9 @@ func (e *DatabaseError) Is(target error) bool {
 }
 
 // WithDetail adds a detail to the error
-func (e *DatabaseError) WithDetail(key string, value interface{}) *DatabaseError {
+func (e *DatabaseError) WithDetail(key string, value any) *DatabaseError {
 	if e.Details == nil {
-		e.Details = make(map[string]interface{})
+		e.Details = make(map[string]any)
 	}
 	e.Details[key] = value
 	return e

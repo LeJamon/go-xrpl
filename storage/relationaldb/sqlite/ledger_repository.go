@@ -56,7 +56,7 @@ func (r *LedgerRepository) GetMaxLedgerSeq(ctx context.Context) (*relationaldb.L
 }
 
 func (r *LedgerRepository) scanLedgerInfo(row interface {
-	Scan(dest ...interface{}) error
+	Scan(dest ...any) error
 }) (*relationaldb.LedgerInfo, error) {
 	var info relationaldb.LedgerInfo
 	var hashBytes, parentHashBytes, accountHashBytes, txHashBytes []byte

@@ -2,6 +2,7 @@
 package pebble
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -81,7 +82,7 @@ func (s *Store) Has(key []byte) (bool, error) {
 	}
 	_, closer, err := s.db.Get(key)
 	if err != nil {
-		if err == pebble.ErrNotFound {
+		if errors.Is(err, pebble.ErrNotFound) {
 			return false, nil
 		}
 		return false, err
@@ -98,7 +99,7 @@ func (s *Store) Get(key []byte) ([]byte, error) {
 	}
 	val, closer, err := s.db.Get(key)
 	if err != nil {
-		if err == pebble.ErrNotFound {
+		if errors.Is(err, pebble.ErrNotFound) {
 			return nil, kvstore.ErrNotFound
 		}
 		return nil, err

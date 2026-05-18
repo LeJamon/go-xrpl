@@ -2,6 +2,7 @@ package shamap
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -19,7 +20,10 @@ func newMemoryFamily() *memoryFamily {
 	}
 }
 
-func (f *memoryFamily) Fetch(hash [32]byte) ([]byte, error) {
+func (f *memoryFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	data, ok := f.store[hash]
@@ -32,7 +36,10 @@ func (f *memoryFamily) Fetch(hash [32]byte) ([]byte, error) {
 	return cp, nil
 }
 
-func (f *memoryFamily) StoreBatch(entries []FlushEntry) error {
+func (f *memoryFamily) StoreBatch(ctx context.Context, entries []FlushEntry) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, e := range entries {
@@ -56,7 +63,7 @@ func flushToFamily(sm *SHAMap, family *memoryFamily) error {
 		return fmt.Errorf("FlushDirty: %w", err)
 	}
 	if len(batch.Entries) > 0 {
-		return family.StoreBatch(batch.Entries)
+		return family.StoreBatch(context.Background(), batch.Entries)
 	}
 	return nil
 }

@@ -110,7 +110,7 @@ func (r *ValidationRepository) SaveBatch(ctx context.Context, vs []*relationaldb
 }
 
 func (r *ValidationRepository) scanRow(row interface {
-	Scan(dest ...interface{}) error
+	Scan(dest ...any) error
 }) (*relationaldb.ValidationRecord, error) {
 	var rec relationaldb.ValidationRecord
 	var ledgerSeq, initialSeq, signTime, seenTime int64
@@ -157,7 +157,7 @@ func (r *ValidationRepository) GetValidationsForLedger(ctx context.Context, seq 
 
 func (r *ValidationRepository) GetValidationsByValidator(ctx context.Context, nodeKey []byte, limit int) ([]*relationaldb.ValidationRecord, error) {
 	q := `SELECT ` + validationSelectCols + ` FROM validations WHERE node_pubkey = ? ORDER BY ledger_seq DESC`
-	args := []interface{}{nodeKey}
+	args := []any{nodeKey}
 	if limit > 0 {
 		q += ` LIMIT ?`
 		args = append(args, limit)
@@ -198,7 +198,7 @@ func (r *ValidationRepository) GetValidationCount(ctx context.Context) (int64, e
 func (r *ValidationRepository) DeleteOlderThanSeq(ctx context.Context, maxSeq relationaldb.LedgerIndex, batchSize int) (int64, error) {
 	q := `DELETE FROM validations WHERE rowid IN (
 		SELECT rowid FROM validations WHERE ledger_seq < ?`
-	args := []interface{}{int64(maxSeq)}
+	args := []any{int64(maxSeq)}
 	if batchSize > 0 {
 		q += ` LIMIT ?`
 		args = append(args, batchSize)

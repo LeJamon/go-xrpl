@@ -1,6 +1,7 @@
 package shamap
 
 import (
+	"context"
 	"errors"
 	"sync/atomic"
 	"testing"
@@ -138,15 +139,15 @@ type failingFamily struct {
 	calls     atomic.Int32
 }
 
-func (f *failingFamily) Fetch(hash [32]byte) ([]byte, error) {
+func (f *failingFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
 	if f.calls.Add(1) > f.failAfter {
 		return nil, errors.New("simulated fetch failure")
 	}
-	return f.inner.Fetch(hash)
+	return f.inner.Fetch(ctx, hash)
 }
 
-func (f *failingFamily) StoreBatch(entries []FlushEntry) error {
-	return f.inner.StoreBatch(entries)
+func (f *failingFamily) StoreBatch(ctx context.Context, entries []FlushEntry) error {
+	return f.inner.StoreBatch(ctx, entries)
 }
 
 func TestSize_DoesNotCacheOnWalkError(t *testing.T) {
@@ -174,7 +175,7 @@ func TestSize_DoesNotCacheOnWalkError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	if err := mem.StoreBatch(batch.Entries); err != nil {
+	if err := mem.StoreBatch(context.Background(), batch.Entries); err != nil {
 		t.Fatalf("storebatch: %v", err)
 	}
 

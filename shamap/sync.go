@@ -2,6 +2,7 @@ package shamap
 
 import (
 	"bytes"
+	"container/list"
 	"errors"
 	"fmt"
 	"sync"
@@ -34,12 +35,25 @@ func (f *DefaultSyncFilter) ShouldFetch(nodeHash [32]byte) bool {
 	return true
 }
 
-// CachingSyncFilter wraps another filter and caches results to avoid repeated lookups.
+// CachingSyncFilter wraps another filter and caches results to avoid
+// repeated lookups against a slow inner filter.
+//
+// The previous implementation populated until full and then refused
+// new entries forever — cold hashes encountered after warm-up never
+// got cached, defeating the whole point of the cache on long-running
+// syncs. This is now a proper bounded LRU: when full, the least-
+// recently-used entry is evicted to make room for the new one.
 type CachingSyncFilter struct {
-	mu      sync.RWMutex
+	mu      sync.Mutex
 	inner   SyncFilter
-	cache   map[[32]byte]bool
+	items   map[[32]byte]*list.Element
+	lru     *list.List
 	maxSize int
+}
+
+type cachingSyncFilterEntry struct {
+	key    [32]byte
+	result bool
 }
 
 // NewCachingSyncFilter creates a new CachingSyncFilter with the given inner filter.
@@ -49,29 +63,46 @@ func NewCachingSyncFilter(inner SyncFilter, maxSize int) *CachingSyncFilter {
 	}
 	return &CachingSyncFilter{
 		inner:   inner,
-		cache:   make(map[[32]byte]bool),
+		items:   make(map[[32]byte]*list.Element, maxSize),
+		lru:     list.New(),
 		maxSize: maxSize,
 	}
 }
 
 // ShouldFetch implements SyncFilter with caching.
 func (f *CachingSyncFilter) ShouldFetch(nodeHash [32]byte) bool {
-	f.mu.RLock()
-	result, found := f.cache[nodeHash]
-	f.mu.RUnlock()
-
-	if found {
-		return result
-	}
-
-	result = f.inner.ShouldFetch(nodeHash)
-
 	f.mu.Lock()
-	if len(f.cache) < f.maxSize {
-		f.cache[nodeHash] = result
+	if element, found := f.items[nodeHash]; found {
+		f.lru.MoveToFront(element)
+		result := element.Value.(*cachingSyncFilterEntry).result
+		f.mu.Unlock()
+		return result
 	}
 	f.mu.Unlock()
 
+	// Call the inner filter outside the lock — it may be slow.
+	result := f.inner.ShouldFetch(nodeHash)
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// Re-check in case another goroutine raced us.
+	if element, found := f.items[nodeHash]; found {
+		f.lru.MoveToFront(element)
+		return element.Value.(*cachingSyncFilterEntry).result
+	}
+
+	entry := &cachingSyncFilterEntry{key: nodeHash, result: result}
+	element := f.lru.PushFront(entry)
+	f.items[nodeHash] = element
+
+	if f.lru.Len() > f.maxSize {
+		oldest := f.lru.Back()
+		if oldest != nil {
+			f.lru.Remove(oldest)
+			delete(f.items, oldest.Value.(*cachingSyncFilterEntry).key)
+		}
+	}
 	return result
 }
 

@@ -1,6 +1,7 @@
 package shamap
 
 import (
+	"context"
 	"errors"
 	"fmt"
 )
@@ -23,7 +24,7 @@ func (sm *SHAMap) GetProofPath(key [32]byte) (*ProofPath, error) {
 	defer sm.mu.RUnlock()
 
 	stack := NewNodeStack()
-	leaf, err := sm.walkToKey(key, stack)
+	leaf, err := sm.walkToKey(context.Background(), key, stack)
 	if err != nil {
 		return nil, err
 	}

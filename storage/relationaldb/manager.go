@@ -11,10 +11,10 @@ import (
 
 // Logger interface for dependency injection
 type Logger interface {
-	Debug(msg string, fields ...interface{})
-	Info(msg string, fields ...interface{})
-	Warn(msg string, fields ...interface{})
-	Error(msg string, fields ...interface{})
+	Debug(msg string, fields ...any)
+	Info(msg string, fields ...any)
+	Warn(msg string, fields ...any)
+	Error(msg string, fields ...any)
 }
 
 // DefaultLogger provides a basic logger implementation backed by the global xrpllog root.
@@ -22,19 +22,19 @@ type DefaultLogger struct{}
 
 func NewDefaultLogger() *DefaultLogger { return &DefaultLogger{} }
 
-func (l *DefaultLogger) Debug(msg string, fields ...interface{}) {
+func (l *DefaultLogger) Debug(msg string, fields ...any) {
 	xrpllog.Named(xrpllog.PartitionNodeStore).Debug(msg, fields...)
 }
 
-func (l *DefaultLogger) Info(msg string, fields ...interface{}) {
+func (l *DefaultLogger) Info(msg string, fields ...any) {
 	xrpllog.Named(xrpllog.PartitionNodeStore).Info(msg, fields...)
 }
 
-func (l *DefaultLogger) Warn(msg string, fields ...interface{}) {
+func (l *DefaultLogger) Warn(msg string, fields ...any) {
 	xrpllog.Named(xrpllog.PartitionNodeStore).Warn(msg, fields...)
 }
 
-func (l *DefaultLogger) Error(msg string, fields ...interface{}) {
+func (l *DefaultLogger) Error(msg string, fields ...any) {
 	xrpllog.Named(xrpllog.PartitionNodeStore).Error(msg, fields...)
 }
 

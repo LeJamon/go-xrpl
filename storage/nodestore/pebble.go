@@ -1,21 +1,20 @@
 package nodestore
 
 import (
-	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/bloom"
 )
 
-const (
-	// nodeHeaderSize is type(1) + ledgerSeq(4) = 5 bytes
-	nodeHeaderSize = 5
-)
+// nodeHeaderSize is kept as a re-export of the shared encoding header
+// size — callers within the package reference nodeEncodingHeaderSize
+// directly, but external test code may still refer to this name.
+const nodeHeaderSize = nodeEncodingHeaderSize
 
 // PebbleBackend implements a high-performance PebbleDB storage backend.
 type PebbleBackend struct {
@@ -80,22 +79,15 @@ func (p *PebbleBackend) Open(createIfMissing bool) error {
 	return nil
 }
 
-// buildOptimizedOptions creates optimized PebbleDB options for XRPL workload
+// buildOptimizedOptions creates optimized PebbleDB options for XRPL workload.
+//
+// The cache size is a fixed 256MB default — the previous heuristic
+// derived a budget from runtime.MemStats which reports Go heap, not
+// host RAM, so it produced effectively constant values regardless of
+// machine. If/when an OS-memory probe is needed it should be wired in
+// at the config layer rather than guessed at here.
 func (p *PebbleBackend) buildOptimizedOptions() *pebble.Options {
-	// Calculate memory budget based on available system memory
-	var memBudget int64 = 256 << 20 // Default 256MB
-
-	// Use up to 25% of system memory for cache, with reasonable bounds
-	if mem := getSystemMemory(); mem > 0 {
-		budget := mem / 4
-		if budget > 1<<30 { // Max 1GB
-			budget = 1 << 30
-		}
-		if budget < 128<<20 { // Min 128MB
-			budget = 128 << 20
-		}
-		memBudget = budget
-	}
+	const memBudget int64 = 256 << 20 // 256MB
 
 	cache := pebble.NewCache(memBudget)
 
@@ -145,13 +137,6 @@ func (p *PebbleBackend) buildOptimizedOptions() *pebble.Options {
 	return opts
 }
 
-// getSystemMemory returns available system memory in bytes
-func getSystemMemory() int64 {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	return int64(m.Sys)
-}
-
 // Close closes the backend and releases resources.
 func (p *PebbleBackend) Close() error {
 	if !atomic.CompareAndSwapInt64(&p.open, 1, 0) {
@@ -197,11 +182,11 @@ func (p *PebbleBackend) Fetch(key Hash256) (*Node, Status) {
 	}
 
 	// Use Hash256 directly as key - no allocation needed
-	keySlice := (*[32]byte)(unsafe.Pointer(&key[0]))[:]
+	keySlice := key[:]
 
 	value, closer, err := p.db.Get(keySlice)
 	if err != nil {
-		if err == pebble.ErrNotFound {
+		if errors.Is(err, pebble.ErrNotFound) {
 			return nil, NotFound
 		}
 		return nil, BackendError
@@ -219,23 +204,46 @@ func (p *PebbleBackend) Fetch(key Hash256) (*Node, Status) {
 	return node, OK
 }
 
-// FetchBatch retrieves multiple objects efficiently using individual gets.
+// FetchBatch retrieves multiple objects in a single consistent
+// snapshot. Pebble has no native multi-Get that beats N tight Gets,
+// but a snapshot pins the LSM view so the per-key memtable + L0
+// search isn't re-done from a moving target — and it removes the
+// per-key open() cost on the iterator stack.
 func (p *PebbleBackend) FetchBatch(keys []Hash256) ([]*Node, Status) {
 	if !p.IsOpen() {
 		return nil, BackendError
 	}
+	if len(keys) == 0 {
+		return nil, OK
+	}
 
 	results := make([]*Node, len(keys))
 
+	snap := p.db.NewSnapshot()
+	defer snap.Close()
+
+	var totalBytes int64
 	for i, key := range keys {
-		node, status := p.Fetch(key)
-		if status == OK {
-			results[i] = node
-		} else if status != NotFound {
-			return nil, status
+		k := key
+		value, closer, err := snap.Get(k[:])
+		if err != nil {
+			if errors.Is(err, pebble.ErrNotFound) {
+				continue // NotFound is OK — results[i] stays nil
+			}
+			return nil, BackendError
 		}
-		// NotFound is OK - results[i] stays nil
+		node, decodeErr := decodeNodeData(k, value)
+		closer.Close()
+		if decodeErr != nil {
+			return nil, DataCorrupt
+		}
+		results[i] = node
+		totalBytes += int64(len(value))
 	}
+
+	atomic.AddInt64(&p.stats.reads, int64(len(keys)))
+	atomic.AddInt64(&p.stats.bytesRead, totalBytes)
+
 	return results, OK
 }
 
@@ -249,12 +257,11 @@ func (p *PebbleBackend) Store(node *Node) Status {
 		return BackendError
 	}
 
-	value := encodeNode(node)
+	value := encodeNodeData(node)
+	defer releaseEncodeBuf(value)
 
-	keySlice := (*[32]byte)(unsafe.Pointer(&node.Hash[0]))[:]
-
-	// Use NoSync for better performance, rely on WAL for durability
-	if err := p.db.Set(keySlice, value, pebble.NoSync); err != nil {
+	// Use NoSync for better performance, rely on WAL for durability.
+	if err := p.db.Set(node.Hash[:], value, pebble.NoSync); err != nil {
 		return BackendError
 	}
 
@@ -285,14 +292,16 @@ func (p *PebbleBackend) StoreBatch(nodes []*Node) Status {
 			continue
 		}
 
-		value := encodeNode(node)
-
-		keySlice := (*[32]byte)(unsafe.Pointer(&node.Hash[0]))[:]
-		if err := batch.Set(keySlice, value, nil); err != nil {
+		value := encodeNodeData(node)
+		if err := batch.Set(node.Hash[:], value, nil); err != nil {
+			releaseEncodeBuf(value)
 			return BackendError
 		}
-
+		// pebble.Batch.Set copies the value into the batch's internal
+		// buffer immediately, so the encode buffer is safe to recycle
+		// before Commit.
 		totalBytes += int64(len(value))
+		releaseEncodeBuf(value)
 	}
 
 	// Commit the batch with controlled sync
@@ -387,8 +396,8 @@ func (p *PebbleBackend) BackendInfo() BackendInfo {
 }
 
 // Stats returns performance statistics.
-func (p *PebbleBackend) Stats() map[string]interface{} {
-	stats := make(map[string]interface{})
+func (p *PebbleBackend) Stats() map[string]any {
+	stats := make(map[string]any)
 	stats["reads"] = atomic.LoadInt64(&p.stats.reads)
 	stats["writes"] = atomic.LoadInt64(&p.stats.writes)
 	stats["bytes_read"] = atomic.LoadInt64(&p.stats.bytesRead)
@@ -417,36 +426,15 @@ func (p *PebbleBackend) EstimateSize(start, end Hash256) (uint64, error) {
 		return 0, ErrBackendClosed
 	}
 
-	startSlice := (*[32]byte)(unsafe.Pointer(&start[0]))[:]
-	endSlice := (*[32]byte)(unsafe.Pointer(&end[0]))[:]
+	startSlice := start[:]
+	endSlice := end[:]
 
 	size, err := p.db.EstimateDiskUsage(startSlice, endSlice)
 	return size, err
 }
 
-// encodeNode serializes a node for storage.
-// Format: [nodeType:1][ledgerSeq:4][data:N] = 5 bytes header + data
-func encodeNode(n *Node) []byte {
-	buf := make([]byte, nodeHeaderSize+len(n.Data))
-	buf[0] = byte(n.Type)
-	binary.BigEndian.PutUint32(buf[1:5], n.LedgerSeq)
-	copy(buf[nodeHeaderSize:], n.Data)
-	return buf
-}
-
-// decodeNode deserializes a node from storage.
+// decodeNode deserializes a node from storage. Thin wrapper around the
+// shared decodeNodeData helper.
 func (p *PebbleBackend) decodeNode(hash Hash256, data []byte) (*Node, error) {
-	if len(data) < nodeHeaderSize {
-		return nil, fmt.Errorf("%w: data too short (%d bytes)", ErrDataCorrupt, len(data))
-	}
-	nodeType := NodeType(data[0])
-	ledgerSeq := binary.BigEndian.Uint32(data[1:5])
-	nodeData := make(Blob, len(data)-nodeHeaderSize)
-	copy(nodeData, data[nodeHeaderSize:])
-	return &Node{
-		Type:      nodeType,
-		Hash:      hash,
-		Data:      nodeData,
-		LedgerSeq: ledgerSeq,
-	}, nil
+	return decodeNodeData(hash, data)
 }

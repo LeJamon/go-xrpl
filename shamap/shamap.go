@@ -137,7 +137,7 @@ func NewFromRootHash(mapType Type, rootHash [32]byte, family Family) (*SHAMap, e
 	}
 
 	// Fetch root node from store
-	data, err := family.Fetch(rootHash)
+	data, err := family.Fetch(context.Background(), rootHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch root node: %w", err)
 	}
@@ -168,18 +168,29 @@ func NewFromRootHash(mapType Type, rootHash [32]byte, family Family) (*SHAMap, e
 	return sm, nil
 }
 
-// descend returns the child node at the given branch of an inner node.
-// For backed maps, if the child pointer is nil but the hash is set,
-// the node is fetched from the Family and deserialized.
-//
-// descend is safe to call from callers holding only the SHAMap RLock:
-// every children/hashes access goes through InnerNode.LoadChild (read-
-// locked) and the lazy attach uses SetChildIfNil so concurrent readers
-// racing on the same branch all return the same installed child rather
-// than overwriting one another. Each SHAMap still gets its own
-// deserialised subtree — there is no sharing with other SHAMap
-// instances.
+// descend is a context.Background() wrapper around descendCtx. Used by
+// the many internal call sites that pre-date Family ctx threading and
+// don't carry a ctx of their own; mutator paths and compare/iterate
+// helpers use this form.
 func (sm *SHAMap) descend(inner *InnerNode, branch int) (Node, error) {
+	return sm.descendCtx(context.Background(), inner, branch)
+}
+
+// descendCtx returns the child node at the given branch of an inner
+// node. For backed maps, if the child pointer is nil but the hash is
+// set, the node is fetched from the Family and deserialized.
+//
+// descendCtx is safe to call from callers holding only the SHAMap
+// RLock: every children/hashes access goes through InnerNode.LoadChild
+// (read-locked) and the lazy attach uses SetChildIfNil so concurrent
+// readers racing on the same branch all return the same installed
+// child rather than overwriting one another. Each SHAMap still gets
+// its own deserialised subtree — there is no sharing with other
+// SHAMap instances.
+//
+// ctx is forwarded to Family.Fetch so a slow Pebble probe is
+// cancellable from the calling RPC/peer/sync goroutine.
+func (sm *SHAMap) descendCtx(ctx context.Context, inner *InnerNode, branch int) (Node, error) {
 	// Fast path: child already loaded in memory.
 	child, hash, hasBranch := inner.LoadChild(branch)
 	if child != nil {
@@ -197,7 +208,7 @@ func (sm *SHAMap) descend(inner *InnerNode, branch int) (Node, error) {
 	}
 
 	// Fetch from store.
-	data, err := sm.family.Fetch(hash)
+	data, err := sm.family.Fetch(ctx, hash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch child node %x: %w", hash[:8], err)
 	}
@@ -331,8 +342,9 @@ func (s *NodeStack) Len() int {
 	return len(s.entries)
 }
 
-// walkToKey traverses the tree toward a specific key
-func (sm *SHAMap) walkToKey(key [32]byte, stack *NodeStack) (Node, error) {
+// walkToKey traverses the tree toward a specific key.
+// ctx is forwarded to descend() so backed-map traversals are cancellable.
+func (sm *SHAMap) walkToKey(ctx context.Context, key [32]byte, stack *NodeStack) (Node, error) {
 	if stack != nil && !stack.IsEmpty() {
 		stack.Clear()
 	}
@@ -355,7 +367,7 @@ func (sm *SHAMap) walkToKey(key [32]byte, stack *NodeStack) (Node, error) {
 			return nil, nil // Empty slot
 		}
 
-		child, err := sm.descend(inner, int(branch))
+		child, err := sm.descendCtx(ctx, inner, int(branch))
 		if err != nil {
 			return nil, fmt.Errorf("failed to get child: %w", err)
 		}
@@ -378,9 +390,12 @@ func (sm *SHAMap) walkToKey(key [32]byte, stack *NodeStack) (Node, error) {
 	return node, nil
 }
 
-// findItem returns the item with the specified key, or nil if not found
+// findItem returns the item with the specified key, or nil if not found.
+// Uses context.Background() — the public Get/Has APIs do not (yet)
+// expose a context-aware variant, so cancellation only kicks in for
+// callers that traverse via ForEachCtx and friends.
 func (sm *SHAMap) findItem(key [32]byte) (*Item, error) {
-	node, err := sm.walkToKey(key, nil)
+	node, err := sm.walkToKey(context.Background(), key, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -639,7 +654,9 @@ func (sm *SHAMap) putItemUnsafe(item *Item) error {
 	return sm.assignRoot(newRoot, key)
 }
 
-// walkToKeyForDirty walks toward a key but doesn't include the final leaf in the stack
+// walkToKeyForDirty walks toward a key but doesn't include the final
+// leaf in the stack. Mutator (Put/Delete) entry points don't expose a
+// ctx today, so descend uses context.Background() here.
 func (sm *SHAMap) walkToKeyForDirty(key [32]byte, stack *NodeStack) (Node, error) {
 	if stack != nil && !stack.IsEmpty() {
 		stack.Clear()
@@ -769,7 +786,7 @@ func (sm *SHAMap) Delete(key [32]byte) error {
 // the remaining stack for further processing.
 func (sm *SHAMap) findAndRemoveLeaf(key [32]byte) (*NodeStack, LeafNode, error) {
 	stack := NewNodeStack()
-	_, err := sm.walkToKey(key, stack)
+	_, err := sm.walkToKey(context.Background(), key, stack)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to walk to key: %w", err)
 	}
@@ -967,7 +984,7 @@ func (sm *SHAMap) snapshotBacked(mutable bool) (*SHAMap, error) {
 	}
 
 	if len(batch.Entries) > 0 {
-		if err := sm.family.StoreBatch(batch.Entries); err != nil {
+		if err := sm.family.StoreBatch(context.Background(), batch.Entries); err != nil {
 			return nil, fmt.Errorf("failed to store flushed nodes: %w", err)
 		}
 	}
@@ -1075,7 +1092,7 @@ func (sm *SHAMap) forEachUnsafe(ctx context.Context, node Node, fn func(*Item) b
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		child, err := sm.descend(inner, i)
+		child, err := sm.descendCtx(ctx, inner, i)
 		if err != nil {
 			return fmt.Errorf("failed to get child %d: %w", i, err)
 		}
@@ -1251,14 +1268,10 @@ func (sm *SHAMap) flushNode(node Node, releaseChildren bool, batch *NodeBatch) e
 	// Mark clean
 	node.SetDirty(false)
 
-	// Release children pointers for inner nodes (retain hashes for lazy reload)
+	// Release children pointers for inner nodes (retain hashes for lazy reload).
 	if releaseChildren {
 		if inner, ok := node.(*InnerNode); ok {
-			inner.mu.Lock()
-			for i := 0; i < BranchFactor; i++ {
-				inner.children[i] = nil
-			}
-			inner.mu.Unlock()
+			inner.ReleaseChildren()
 		}
 	}
 

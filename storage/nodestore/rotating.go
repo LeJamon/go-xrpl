@@ -170,17 +170,22 @@ func (rd *RotatingDatabase) IsOpen() bool {
 
 // Fetch retrieves a node by its hash.
 // It tries the primary backend first, then the rotating backends from newest to oldest.
+//
+// The RLock is only held long enough to snapshot the backend slice;
+// the actual Fetch calls run outside the lock so a slow-IO miss does
+// not block a concurrent Rotate() (which needs the write lock).
 func (rd *RotatingDatabase) Fetch(key Hash256) (*Node, Status) {
 	if !rd.IsOpen() {
 		return nil, BackendError
 	}
 
 	rd.mu.RLock()
-	defer rd.mu.RUnlock()
+	primary := rd.primary
+	rotating := append([]*rotatingBackend(nil), rd.rotating...)
+	rd.mu.RUnlock()
 
-	// Try primary backend first
-	if rd.primary != nil {
-		node, status := rd.primary.Fetch(key)
+	if primary != nil {
+		node, status := primary.Fetch(key)
 		if status == OK {
 			atomic.AddInt64(&rd.stats.primaryReads, 1)
 			atomic.AddInt64(&rd.stats.bytesRead, int64(len(node.Data)))
@@ -191,19 +196,19 @@ func (rd *RotatingDatabase) Fetch(key Hash256) (*Node, Status) {
 		}
 	}
 
-	// Try rotating backends (newest to oldest)
-	for i := len(rd.rotating) - 1; i >= 0; i-- {
-		rb := rd.rotating[i]
-		if rb.backend != nil {
-			node, status := rb.backend.Fetch(key)
-			if status == OK {
-				atomic.AddInt64(&rd.stats.rotatingReads, 1)
-				atomic.AddInt64(&rd.stats.bytesRead, int64(len(node.Data)))
-				return node, OK
-			}
-			if status != NotFound {
-				return nil, status
-			}
+	for i := len(rotating) - 1; i >= 0; i-- {
+		rb := rotating[i]
+		if rb.backend == nil {
+			continue
+		}
+		node, status := rb.backend.Fetch(key)
+		if status == OK {
+			atomic.AddInt64(&rd.stats.rotatingReads, 1)
+			atomic.AddInt64(&rd.stats.bytesRead, int64(len(node.Data)))
+			return node, OK
+		}
+		if status != NotFound {
+			return nil, status
 		}
 	}
 
@@ -211,25 +216,28 @@ func (rd *RotatingDatabase) Fetch(key Hash256) (*Node, Status) {
 }
 
 // FetchBatch retrieves multiple nodes efficiently.
+//
+// As with Fetch, only the slice-snapshot phase holds rd.mu — the
+// backend Fetches run unlocked so Rotate() is not starved.
 func (rd *RotatingDatabase) FetchBatch(keys []Hash256) ([]*Node, Status) {
 	if !rd.IsOpen() {
 		return nil, BackendError
 	}
 
 	results := make([]*Node, len(keys))
-	remaining := make(map[int]Hash256) // Index to hash mapping for unfound keys
-
+	remaining := make(map[int]Hash256, len(keys))
 	for i, key := range keys {
 		remaining[i] = key
 	}
 
 	rd.mu.RLock()
-	defer rd.mu.RUnlock()
+	primary := rd.primary
+	rotating := append([]*rotatingBackend(nil), rd.rotating...)
+	rd.mu.RUnlock()
 
-	// Try primary backend first
-	if rd.primary != nil && len(remaining) > 0 {
+	if primary != nil && len(remaining) > 0 {
 		for idx, key := range remaining {
-			node, status := rd.primary.Fetch(key)
+			node, status := primary.Fetch(key)
 			if status == OK {
 				results[idx] = node
 				delete(remaining, idx)
@@ -239,18 +247,18 @@ func (rd *RotatingDatabase) FetchBatch(keys []Hash256) ([]*Node, Status) {
 		}
 	}
 
-	// Try rotating backends for remaining keys
-	for i := len(rd.rotating) - 1; i >= 0 && len(remaining) > 0; i-- {
-		rb := rd.rotating[i]
-		if rb.backend != nil {
-			for idx, key := range remaining {
-				node, status := rb.backend.Fetch(key)
-				if status == OK {
-					results[idx] = node
-					delete(remaining, idx)
-					atomic.AddInt64(&rd.stats.rotatingReads, 1)
-					atomic.AddInt64(&rd.stats.bytesRead, int64(len(node.Data)))
-				}
+	for i := len(rotating) - 1; i >= 0 && len(remaining) > 0; i-- {
+		rb := rotating[i]
+		if rb.backend == nil {
+			continue
+		}
+		for idx, key := range remaining {
+			node, status := rb.backend.Fetch(key)
+			if status == OK {
+				results[idx] = node
+				delete(remaining, idx)
+				atomic.AddInt64(&rd.stats.rotatingReads, 1)
+				atomic.AddInt64(&rd.stats.bytesRead, int64(len(node.Data)))
 			}
 		}
 	}

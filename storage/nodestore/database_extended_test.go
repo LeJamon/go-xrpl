@@ -26,11 +26,6 @@ func TestDatabaseWithConfig(t *testing.T) {
 		if db.NegativeCache() == nil {
 			t.Error("expected negative cache to be initialized")
 		}
-
-		// Should not have batch writer by default
-		if db.BatchWriter() != nil {
-			t.Error("expected batch writer to be nil by default")
-		}
 	})
 
 	t.Run("WithNegativeCache", func(t *testing.T) {
@@ -189,34 +184,6 @@ func TestDatabaseWithConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("WithBatchWriter", func(t *testing.T) {
-		backend := nodestore.NewMemoryBackend()
-		if err := backend.Open(true); err != nil {
-			t.Fatalf("failed to open backend: %v", err)
-		}
-		defer backend.Close()
-
-		config := &nodestore.DatabaseConfig{
-			CacheSize: 100,
-			CacheTTL:  time.Minute,
-			BatchWriteConfig: &nodestore.BatchWriteConfig{
-				PreallocationSize: 10,
-				LimitSize:         100,
-				FlushInterval:     10 * time.Millisecond,
-			},
-		}
-
-		db, err := nodestore.NewDatabaseWithConfig(backend, config)
-		if err != nil {
-			t.Fatalf("failed to create database: %v", err)
-		}
-		defer db.Close()
-
-		if db.BatchWriter() == nil {
-			t.Error("expected batch writer to be initialized")
-		}
-	})
-
 	t.Run("StoreAsync", func(t *testing.T) {
 		backend := nodestore.NewMemoryBackend()
 		if err := backend.Open(true); err != nil {
@@ -227,11 +194,6 @@ func TestDatabaseWithConfig(t *testing.T) {
 		config := &nodestore.DatabaseConfig{
 			CacheSize: 100,
 			CacheTTL:  time.Minute,
-			BatchWriteConfig: &nodestore.BatchWriteConfig{
-				PreallocationSize: 10,
-				LimitSize:         100,
-				FlushInterval:     10 * time.Millisecond,
-			},
 		}
 
 		db, err := nodestore.NewDatabaseWithConfig(backend, config)
@@ -242,64 +204,14 @@ func TestDatabaseWithConfig(t *testing.T) {
 
 		ctx := context.Background()
 
-		// Store async
 		data := nodestore.Blob("async store test")
 		node := nodestore.NewNode(nodestore.NodeTransaction, data)
 
 		resultCh := db.StoreAsync(ctx, node)
-
-		// Wait for result
-		err = <-resultCh
-		if err != nil {
+		if err := <-resultCh; err != nil {
 			t.Errorf("StoreAsync returned error: %v", err)
 		}
 
-		// Give time for flush
-		time.Sleep(50 * time.Millisecond)
-
-		// Should be fetchable
-		fetched, err := db.Fetch(ctx, node.Hash)
-		if err != nil {
-			t.Errorf("Fetch returned error: %v", err)
-		}
-		if fetched == nil {
-			t.Error("expected non-nil node")
-		}
-	})
-
-	t.Run("StoreAsyncWithoutBatchWriter", func(t *testing.T) {
-		backend := nodestore.NewMemoryBackend()
-		if err := backend.Open(true); err != nil {
-			t.Fatalf("failed to open backend: %v", err)
-		}
-		defer backend.Close()
-
-		// No batch writer
-		config := &nodestore.DatabaseConfig{
-			CacheSize: 100,
-			CacheTTL:  time.Minute,
-		}
-
-		db, err := nodestore.NewDatabaseWithConfig(backend, config)
-		if err != nil {
-			t.Fatalf("failed to create database: %v", err)
-		}
-		defer db.Close()
-
-		ctx := context.Background()
-
-		// StoreAsync should fall back to sync store
-		data := nodestore.Blob("async fallback test")
-		node := nodestore.NewNode(nodestore.NodeTransaction, data)
-
-		resultCh := db.StoreAsync(ctx, node)
-
-		err = <-resultCh
-		if err != nil {
-			t.Errorf("StoreAsync returned error: %v", err)
-		}
-
-		// Should be fetchable
 		fetched, err := db.Fetch(ctx, node.Hash)
 		if err != nil {
 			t.Errorf("Fetch returned error: %v", err)
@@ -321,11 +233,6 @@ func TestDatabaseWithConfig(t *testing.T) {
 			CacheTTL:             time.Minute,
 			NegativeCacheTTL:     5 * time.Minute,
 			NegativeCacheMaxSize: 1000,
-			BatchWriteConfig: &nodestore.BatchWriteConfig{
-				PreallocationSize: 10,
-				LimitSize:         100,
-				FlushInterval:     10 * time.Millisecond,
-			},
 		}
 
 		db, err := nodestore.NewDatabaseWithConfig(backend, config)
@@ -411,11 +318,6 @@ func TestDatabaseWithConfig(t *testing.T) {
 			CacheTTL:             time.Minute,
 			NegativeCacheTTL:     5 * time.Minute,
 			NegativeCacheMaxSize: 1000,
-			BatchWriteConfig: &nodestore.BatchWriteConfig{
-				PreallocationSize: 10,
-				LimitSize:         100,
-				FlushInterval:     10 * time.Millisecond,
-			},
 		}
 
 		db, err := nodestore.NewDatabaseWithConfig(backend, config)
@@ -480,11 +382,6 @@ func TestDatabaseConfig(t *testing.T) {
 
 		if config.NegativeCacheMaxSize <= 0 {
 			t.Error("NegativeCacheMaxSize should be positive")
-		}
-
-		// BatchWriteConfig should be nil by default
-		if config.BatchWriteConfig != nil {
-			t.Error("BatchWriteConfig should be nil by default")
 		}
 	})
 }
