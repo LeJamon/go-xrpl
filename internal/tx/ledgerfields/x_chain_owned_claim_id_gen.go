@@ -9,9 +9,9 @@ func init() {
 	Register("XChainOwnedClaimID", func() Entry { return new(XChainOwnedClaimID) })
 }
 
-// XChainOwnedClaimID is the typed representation of a XChainOwnedClaimID ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// XChainOwnedClaimID is the typed metadata-hot-path representation of a
+// XChainOwnedClaimID ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type XChainOwnedClaimID struct {
 	present                 uint64
 	Account                 string // AccountID (base58)
@@ -225,7 +225,6 @@ func (x *XChainOwnedClaimID) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (x *XChainOwnedClaimID) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	x.EmitPreviousFields(prev, out)
 }

@@ -9,9 +9,9 @@ func init() {
 	Register("Delegate", func() Entry { return new(Delegate) })
 }
 
-// Delegate is the typed representation of a Delegate ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// Delegate is the typed metadata-hot-path representation of a
+// Delegate ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type Delegate struct {
 	present           uint64
 	Account           string // AccountID (base58)
@@ -189,7 +189,6 @@ func (d *Delegate) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (d *Delegate) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	d.EmitPreviousFields(prev, out)
 }

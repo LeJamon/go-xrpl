@@ -9,9 +9,9 @@ func init() {
 	Register("Amendments", func() Entry { return new(Amendments) })
 }
 
-// Amendments is the typed representation of a Amendments ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// Amendments is the typed metadata-hot-path representation of a
+// Amendments ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type Amendments struct {
 	present           uint64
 	Flags             uint32
@@ -162,7 +162,6 @@ func (a *Amendments) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (a *Amendments) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	a.EmitPreviousFields(prev, out)
 }

@@ -9,9 +9,9 @@ func init() {
 	Register("RippleState", func() Entry { return new(RippleState) })
 }
 
-// RippleState is the typed representation of a RippleState ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// RippleState is the typed metadata-hot-path representation of a
+// RippleState ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type RippleState struct {
 	present           uint64
 	Flags             uint32
@@ -225,7 +225,6 @@ func (r *RippleState) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (r *RippleState) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	r.EmitPreviousFields(prev, out)
 }

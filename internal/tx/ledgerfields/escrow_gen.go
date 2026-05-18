@@ -9,9 +9,9 @@ func init() {
 	Register("Escrow", func() Entry { return new(Escrow) })
 }
 
-// Escrow is the typed representation of a Escrow ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// Escrow is the typed metadata-hot-path representation of a
+// Escrow ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type Escrow struct {
 	present           uint64
 	Account           string // AccountID (base58)
@@ -270,7 +270,6 @@ func (e *Escrow) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (e *Escrow) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	e.EmitPreviousFields(prev, out)
 }

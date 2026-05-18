@@ -9,9 +9,9 @@ func init() {
 	Register("MPToken", func() Entry { return new(MPToken) })
 }
 
-// MPToken is the typed representation of a MPToken ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// MPToken is the typed metadata-hot-path representation of a
+// MPToken ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type MPToken struct {
 	present           uint64
 	Account           string // AccountID (base58)
@@ -216,7 +216,6 @@ func (m *MPToken) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (m *MPToken) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	m.EmitPreviousFields(prev, out)
 }

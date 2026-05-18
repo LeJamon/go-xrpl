@@ -9,9 +9,9 @@ func init() {
 	Register("NFTokenPage", func() Entry { return new(NFTokenPage) })
 }
 
-// NFTokenPage is the typed representation of a NFTokenPage ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// NFTokenPage is the typed metadata-hot-path representation of a
+// NFTokenPage ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type NFTokenPage struct {
 	present           uint64
 	PreviousPageMin   string // Hash256 (uppercase hex)
@@ -162,7 +162,6 @@ func (n *NFTokenPage) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (n *NFTokenPage) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	n.EmitPreviousFields(prev, out)
 }

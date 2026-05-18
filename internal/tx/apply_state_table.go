@@ -661,9 +661,6 @@ func (t *ApplyStateTable) buildCreatedNode(key [32]byte, data []byte) (AffectedN
 		NewFields:       make(map[string]any),
 	}
 
-	// Typed fast path: skip the generic decode-into-map and emit only the
-	// fields that qualify for CreatedNode.NewFields straight into the output
-	// map. Falls back to the generic path for entry types we haven't typed.
 	if entry := ledgerfields.New(entryType); entry != nil {
 		if err := entry.Decode(data); err != nil {
 			return node, err
@@ -700,7 +697,6 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 		PreviousFields:  make(map[string]any),
 	}
 
-	// Typed fast path.
 	if origEntry := ledgerfields.New(entryType); origEntry != nil {
 		currEntry := ledgerfields.New(entryType)
 		if err := origEntry.Decode(original); err != nil {
@@ -793,7 +789,6 @@ func (t *ApplyStateTable) buildDeletedNode(key [32]byte, original, current []byt
 		PreviousFields:  make(map[string]any),
 	}
 
-	// Typed fast path.
 	if origEntry := ledgerfields.New(entryType); origEntry != nil {
 		currEntry := ledgerfields.New(entryType)
 		if err := origEntry.Decode(original); err != nil {

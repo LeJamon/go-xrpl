@@ -1,7 +1,5 @@
 //go:generate go run ./cmd/ledgerfieldsgen .
 
-// fail-fast on unknown fields lives below — see newErrUnknownField.
-
 // Package ledgerfields provides typed, per-entry-type representations of XRPL
 // ledger entries used on the metadata-construction hot path.
 //
@@ -62,7 +60,6 @@ type Entry interface {
 	PreviousTxn() (id string, seq uint32)
 }
 
-// constructor is the per-entry-type factory registered at init time.
 type constructor func() Entry
 
 var registry = map[string]constructor{}
@@ -98,8 +95,7 @@ func SetDisabledForBenchmarks(d bool) bool {
 	return prev
 }
 
-// HasTyped reports whether a typed implementation exists for entryType. Used
-// to gate the typed branch in apply_state_table without allocating an Entry.
+// HasTyped reports whether a typed implementation exists for entryType.
 func HasTyped(entryType string) bool {
 	_, ok := registry[entryType]
 	return ok

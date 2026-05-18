@@ -9,9 +9,9 @@ func init() {
 	Register("Ticket", func() Entry { return new(Ticket) })
 }
 
-// Ticket is the typed representation of a Ticket ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// Ticket is the typed metadata-hot-path representation of a
+// Ticket ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type Ticket struct {
 	present           uint64
 	Account           string // AccountID (base58)
@@ -171,7 +171,6 @@ func (t *Ticket) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (t *Ticket) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	t.EmitPreviousFields(prev, out)
 }

@@ -9,9 +9,9 @@ func init() {
 	Register("Vault", func() Entry { return new(Vault) })
 }
 
-// Vault is the typed representation of a Vault ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// Vault is the typed metadata-hot-path representation of a
+// Vault ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type Vault struct {
 	present           uint64
 	Sequence          uint32
@@ -289,7 +289,6 @@ func (v *Vault) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (v *Vault) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	v.EmitPreviousFields(prev, out)
 }

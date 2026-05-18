@@ -9,9 +9,9 @@ func init() {
 	Register("AMM", func() Entry { return new(AMM) })
 }
 
-// AMM is the typed representation of a AMM ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// AMM is the typed metadata-hot-path representation of a
+// AMM ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type AMM struct {
 	present           uint64
 	Account           string // AccountID (base58)
@@ -243,7 +243,6 @@ func (a *AMM) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (a *AMM) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	a.EmitPreviousFields(prev, out)
 }

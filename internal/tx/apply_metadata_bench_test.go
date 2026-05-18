@@ -9,16 +9,8 @@ import (
 
 // BenchmarkBuildModifiedNode_AccountRoot isolates the metadata-build path
 // without the rest of the apply pipeline (signing, hashing, SHAMap, ledger
-// writes). It feeds buildModifiedNode the original + current binary blobs
-// for an AccountRoot whose Balance and Sequence have changed — the exact
-// shape produced by every Payment apply for both the sender and the
-// destination.
-//
-// The typed AccountRoot fast path skips the generic
-// `binarycodec.Decode → map[string]any` step on both sides of the diff and
-// emits only the fields that should appear in PreviousFields / FinalFields
-// directly into the output maps. fieldsEqual's fmt.Sprintf("%v", …) is
-// replaced by typed comparison.
+// writes). The original + current blobs model the Balance/Sequence delta
+// every Payment produces on both sender and destination.
 func BenchmarkBuildModifiedNode_AccountRoot(b *testing.B) {
 	original, current, key := buildAccountRootPair(b)
 

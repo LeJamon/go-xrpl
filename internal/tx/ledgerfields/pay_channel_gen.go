@@ -9,9 +9,9 @@ func init() {
 	Register("PayChannel", func() Entry { return new(PayChannel) })
 }
 
-// PayChannel is the typed representation of a PayChannel ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// PayChannel is the typed metadata-hot-path representation of a
+// PayChannel ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type PayChannel struct {
 	present           uint64
 	Account           string // AccountID (base58)
@@ -270,7 +270,6 @@ func (p *PayChannel) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (p *PayChannel) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	p.EmitPreviousFields(prev, out)
 }

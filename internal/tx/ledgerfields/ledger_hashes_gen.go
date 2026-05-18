@@ -9,9 +9,9 @@ func init() {
 	Register("LedgerHashes", func() Entry { return new(LedgerHashes) })
 }
 
-// LedgerHashes is the typed representation of a LedgerHashes ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// LedgerHashes is the typed metadata-hot-path representation of a
+// LedgerHashes ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type LedgerHashes struct {
 	present             uint64
 	FirstLedgerSequence uint32
@@ -128,7 +128,6 @@ func (l *LedgerHashes) EmitDeleteFinalFields(out map[string]any) {
 	l.emitAll(out, false)
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (l *LedgerHashes) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	l.EmitPreviousFields(prev, out)
 }

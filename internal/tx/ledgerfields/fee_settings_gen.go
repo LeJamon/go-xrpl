@@ -9,9 +9,9 @@ func init() {
 	Register("FeeSettings", func() Entry { return new(FeeSettings) })
 }
 
-// FeeSettings is the typed representation of a FeeSettings ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// FeeSettings is the typed metadata-hot-path representation of a
+// FeeSettings ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type FeeSettings struct {
 	present               uint64
 	BaseFee               string // UInt64 (uppercase hex)
@@ -198,7 +198,6 @@ func (f *FeeSettings) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (f *FeeSettings) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	f.EmitPreviousFields(prev, out)
 }

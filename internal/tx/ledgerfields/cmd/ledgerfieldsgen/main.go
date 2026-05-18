@@ -89,7 +89,6 @@ type decodeArm struct {
 	Meta      spec.Meta // controls assign-vs-discard in the inner switch
 }
 
-// generate returns (path, source).
 func generate(defs *definitions.Definitions, entry spec.Entry, outDir string) (string, []byte, error) {
 	er := entryRender{
 		Name:       entry.Name,
@@ -320,9 +319,9 @@ func init() {
 	Register({{ printf "%q" .Name }}, func() Entry { return new({{ .StructName }}) })
 }
 
-// {{ .StructName }} is the typed representation of a {{ .Name }} ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// {{ .StructName }} is the typed metadata-hot-path representation of a
+// {{ .Name }} ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type {{ .StructName }} struct {
 	present uint64
 {{ range .Fields }}{{ if ne .Meta 3 }}	{{ .GoField }} {{ .GoType }}{{ if eq .XRPLType "AccountID" }} // AccountID (base58){{ else if eq .XRPLType "Amount" }} // Amount (XRP string | IOU map){{ else if eq .XRPLType "Hash256" }} // Hash256 (uppercase hex){{ else if eq .XRPLType "Hash160" }} // Hash160 (uppercase hex){{ else if eq .XRPLType "Hash128" }} // Hash128 (uppercase hex){{ else if eq .XRPLType "Blob" }} // Blob (uppercase hex){{ else if eq .XRPLType "UInt64" }} // UInt64 (uppercase hex){{ end }}
@@ -522,7 +521,6 @@ func ({{ .Receiver }} *{{ .StructName }}) EmitDeleteFinalFields(out map[string]a
 {{- end }}{{ end }}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func ({{ .Receiver }} *{{ .StructName }}) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	{{ .Receiver }}.EmitPreviousFields(prev, out)
 }

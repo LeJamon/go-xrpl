@@ -9,9 +9,9 @@ func init() {
 	Register("DID", func() Entry { return new(DID) })
 }
 
-// DID is the typed representation of a DID ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// DID is the typed metadata-hot-path representation of a
+// DID ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type DID struct {
 	present           uint64
 	Account           string // AccountID (base58)
@@ -198,7 +198,6 @@ func (d *DID) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (d *DID) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	d.EmitPreviousFields(prev, out)
 }

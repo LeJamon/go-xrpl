@@ -9,9 +9,9 @@ func init() {
 	Register("PermissionedDomain", func() Entry { return new(PermissionedDomain) })
 }
 
-// PermissionedDomain is the typed representation of a PermissionedDomain ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// PermissionedDomain is the typed metadata-hot-path representation of a
+// PermissionedDomain ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type PermissionedDomain struct {
 	present             uint64
 	Owner               string // AccountID (base58)
@@ -189,7 +189,6 @@ func (p *PermissionedDomain) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (p *PermissionedDomain) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	p.EmitPreviousFields(prev, out)
 }

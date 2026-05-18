@@ -22,7 +22,6 @@ func emitIfChangedString(out map[string]any, name, prevVal, currVal string, pPre
 	}
 }
 
-// emitIfChangedUint32 is the uint32 counterpart of emitIfChangedString.
 func emitIfChangedUint32(out map[string]any, name string, prevVal, currVal uint32, pPresent, cPresent uint64) {
 	if pPresent == 0 && cPresent == 0 {
 		return

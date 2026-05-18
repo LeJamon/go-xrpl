@@ -9,9 +9,9 @@ func init() {
 	Register("Credential", func() Entry { return new(Credential) })
 }
 
-// Credential is the typed representation of a Credential ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// Credential is the typed metadata-hot-path representation of a
+// Credential ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type Credential struct {
 	present           uint64
 	Subject           string // AccountID (base58)
@@ -216,7 +216,6 @@ func (c *Credential) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (c *Credential) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	c.EmitPreviousFields(prev, out)
 }

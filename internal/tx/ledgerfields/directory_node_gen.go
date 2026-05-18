@@ -9,9 +9,9 @@ func init() {
 	Register("DirectoryNode", func() Entry { return new(DirectoryNode) })
 }
 
-// DirectoryNode is the typed representation of a DirectoryNode ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// DirectoryNode is the typed metadata-hot-path representation of a
+// DirectoryNode ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type DirectoryNode struct {
 	present           uint64
 	Flags             uint32
@@ -264,7 +264,6 @@ func (d *DirectoryNode) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (d *DirectoryNode) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	d.EmitPreviousFields(prev, out)
 }

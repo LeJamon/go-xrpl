@@ -9,9 +9,9 @@ func init() {
 	Register("AccountRoot", func() Entry { return new(AccountRoot) })
 }
 
-// AccountRoot is the typed representation of a AccountRoot ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// AccountRoot is the typed metadata-hot-path representation of a
+// AccountRoot ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type AccountRoot struct {
 	present              uint64
 	Account              string // AccountID (base58)
@@ -354,7 +354,6 @@ func (a *AccountRoot) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (a *AccountRoot) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	a.EmitPreviousFields(prev, out)
 }

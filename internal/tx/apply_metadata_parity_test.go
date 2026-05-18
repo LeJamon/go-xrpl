@@ -31,7 +31,6 @@ func TestBuildModifiedNode_TypedMatchesGeneric(t *testing.T) {
 	})
 }
 
-// TestBuildCreatedNode_TypedMatchesGeneric covers the CreatedNode path.
 func TestBuildCreatedNode_TypedMatchesGeneric(t *testing.T) {
 	t.Run("AccountRoot", func(t *testing.T) {
 		_, curBytes, key := buildAccountRootPairT(t)
@@ -51,7 +50,6 @@ func TestBuildCreatedNode_TypedMatchesGeneric(t *testing.T) {
 	})
 }
 
-// TestBuildDeletedNode_TypedMatchesGeneric covers the DeletedNode path.
 func TestBuildDeletedNode_TypedMatchesGeneric(t *testing.T) {
 	t.Run("AccountRoot", func(t *testing.T) {
 		origBytes, curBytes, key := buildAccountRootPairT(t)
@@ -206,8 +204,6 @@ func valuesEqual(a, b any) bool {
 	return reflect.DeepEqual(a, b)
 }
 
-// Reuse the bench fixtures with a testing.T receiver. Keeps the fixture
-// builders DRY across the bench and parity-test files.
 func buildAccountRootPairT(t *testing.T) ([]byte, []byte, [32]byte) {
 	return runWithBenchBuilder(t, buildAccountRootPair)
 }
@@ -224,15 +220,11 @@ func buildRippleStatePairT(t *testing.T) ([]byte, []byte, [32]byte) {
 	return runWithBenchBuilder(t, buildRippleStatePair)
 }
 
-// runWithBenchBuilder bridges the *testing.B-shaped fixture builders to a
-// *testing.T context. It adapts the few helper methods our builders use
-// (Helper, Fatalf, Fatal) into a tiny shim so the test path can reuse the
-// bench fixtures without duplicating them.
+// runWithBenchBuilder reuses a *testing.B-shaped fixture builder from a
+// *testing.T context by running it inside a one-shot testing.Benchmark and
+// capturing the fixture via closure.
 func runWithBenchBuilder(t *testing.T, fn func(*testing.B) ([]byte, []byte, [32]byte)) ([]byte, []byte, [32]byte) {
 	t.Helper()
-	// testing.Benchmark gives us a *testing.B, but we don't actually want to
-	// run a benchmark — we just want the fixture. So we run a no-op bench
-	// that captures the fixture in closure outputs.
 	var (
 		o, c []byte
 		k    [32]byte

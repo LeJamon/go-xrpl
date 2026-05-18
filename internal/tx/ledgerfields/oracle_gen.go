@@ -9,9 +9,9 @@ func init() {
 	Register("Oracle", func() Entry { return new(Oracle) })
 }
 
-// Oracle is the typed representation of a Oracle ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// Oracle is the typed metadata-hot-path representation of a
+// Oracle ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type Oracle struct {
 	present           uint64
 	Owner             string // AccountID (base58)
@@ -225,7 +225,6 @@ func (o *Oracle) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (o *Oracle) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	o.EmitPreviousFields(prev, out)
 }

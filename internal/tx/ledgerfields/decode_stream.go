@@ -2,7 +2,6 @@ package ledgerfields
 
 import (
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"strconv"
 
@@ -93,7 +92,6 @@ func (r *streamReader) readUint64Hex() (string, error) {
 	return s, nil
 }
 
-// readHash returns an uppercase hex string of n bytes.
 func (r *streamReader) readHash(n int) (string, error) {
 	if r.pos+n > len(r.data) {
 		return "", errors.New("ledgerfields: out of bounds reading Hash")
@@ -386,6 +384,3 @@ func (r *streamReader) skipField(typeCode int) error {
 	return nil
 }
 
-// Compile-time check that hex.EncodeToString remains the reference impl —
-// drop with -B usage if upperHex ever diverges.
-var _ = hex.EncodeToString

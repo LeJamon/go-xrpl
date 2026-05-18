@@ -35,7 +35,6 @@ func equalAmount(a, b any) bool {
 	return false
 }
 
-// equalStringSlice compares two []string values element-wise.
 func equalStringSlice(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

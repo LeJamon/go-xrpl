@@ -9,13 +9,9 @@ import (
 
 // BenchmarkApply_PaymentXRP measures allocs/op for an XRP-to-XRP payment
 // flowing through the engine and its metadata builder. Two AccountRoots are
-// modified per call; each one used to be decoded twice via
-// `binarycodec.Decode -> map[string]any` to compute PreviousFields /
-// FinalFields. The typed AccountRoot fast path skips both intermediate maps
-// and emits only the fields that actually appear in metadata.
-//
-// Run with `-benchtime=2s -count=3` to smooth out the noisy submit/close
-// machinery; allocs/op is the load-bearing number for the issue acceptance.
+// modified per call; the typed fast path skips the per-side
+// `binarycodec.Decode -> map[string]any` step the generic path uses to
+// compute PreviousFields / FinalFields.
 func BenchmarkApply_PaymentXRP(b *testing.B) {
 	b.Run("typed", func(b *testing.B) {
 		prev := ledgerfields.SetDisabledForBenchmarks(false)

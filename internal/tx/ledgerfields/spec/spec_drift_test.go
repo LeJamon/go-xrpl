@@ -14,12 +14,9 @@ import (
 // field that rippled's ledger_entries.macro lists for the same type. Catches
 // the class of bug where a new optional field is added in rippled (or to an
 // existing amendment) and ships on the wire without a matching arm on the
-// typed Decode path — which would surface as runtime ErrUnknownField rather
-// than a build-time failure.
+// typed Decode path — which would surface as runtime ErrUnknownField.
 //
-// The macro is in the rippled repo sitting next to the goXRPL checkout. If it
-// can't be located the test skips: this protects local devs without rippled
-// checked out, while CI (where rippled is present) still enforces.
+// Skips when the rippled tree can't be found locally; CI has it checked out.
 func TestSpecCoversRippledMacro(t *testing.T) {
 	macroPath, ok := findRippledMacro()
 	if !ok {

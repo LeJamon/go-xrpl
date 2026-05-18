@@ -9,9 +9,9 @@ func init() {
 	Register("Bridge", func() Entry { return new(Bridge) })
 }
 
-// Bridge is the typed representation of a Bridge ledger entry
-// on the metadata hot path. present tracks which fields appear on the
-// decoded blob so the emit methods only write entries that actually exist.
+// Bridge is the typed metadata-hot-path representation of a
+// Bridge ledger entry. The present bitset tracks which fields appear on
+// the decoded blob so the emit methods only write entries that actually exist.
 type Bridge struct {
 	present                  uint64
 	Account                  string // AccountID (base58)
@@ -225,7 +225,6 @@ func (b *Bridge) EmitDeleteFinalFields(out map[string]any) {
 	}
 }
 
-// EmitDeletePreviousFields mirrors EmitPreviousFields for DeletedNode.
 func (b *Bridge) EmitDeletePreviousFields(prev Entry, out map[string]any) {
 	b.EmitPreviousFields(prev, out)
 }
