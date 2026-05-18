@@ -1467,7 +1467,14 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 
 	// If the parent differs from our closed ledger (chain switch via wrong
 	// ledger detection), reset internal state to build on the correct chain.
-	if parent != nil && parent.Sequence() != s.closedLedger.Sequence() {
+	//
+	// Sibling-fork case (issue #470): a same-seq parent with a different
+	// hash is ALSO a chain switch. Skipping it leaves s.openLedger pinned
+	// to the local alt's state map — subsequent close()s read the alt's
+	// hashes from that map's LedgerHashes SLE and stamp them into the
+	// next ledger, propagating the divergent chain in memory even after
+	// the canonical sibling was adopted into ledgerHistory.
+	if parent != nil && (parent.Sequence() != s.closedLedger.Sequence() || parent.Hash() != s.closedLedger.Hash()) {
 		s.closedLedger = parent
 		s.ledgerHistory[parent.Sequence()] = parent
 		newOpen, err := ledger.NewOpen(parent, closeTime)
@@ -2374,6 +2381,15 @@ func (s *Service) adoptLedgerWithStateLocked(
 	canonical := s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
 	advanced := false
 	if s.closedLedger == nil || canonical.Sequence() > s.closedLedger.Sequence() {
+		s.closedLedger = canonical
+		advanced = true
+	} else if canonical.Sequence() == s.closedLedger.Sequence() && canonical.Hash() != s.closedLedger.Hash() {
+		// Sibling-fork resolution (issue #470): a same-seq adoption with a
+		// different hash means the peer's chain replaces our locally-built
+		// alt at this tip. closedLedger must point at the adopted entry,
+		// otherwise subsequent local builds keep snapshotting the alt's
+		// state map (whose LedgerHashes SLE encodes the alt-chain's hashes
+		// for ancestors) and emit divergent ledgers forever.
 		s.closedLedger = canonical
 		advanced = true
 	}
