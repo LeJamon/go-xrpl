@@ -203,7 +203,6 @@ func TestBuildScoreTable_TalliesAcrossAncestors(t *testing.T) {
 func TestAdaptor_OnUNLChange_NoVoterIsNoOp(t *testing.T) {
 	a := newTestAdaptor(t)
 	require.Nil(t, a.negUNLVoter, "fixture must produce a nil voter")
-	// Must not panic regardless of input shape.
 	a.OnUNLChange(256, []consensus.NodeID{{0x01}, {0x02}})
 	a.OnUNLChange(0, nil)
 }

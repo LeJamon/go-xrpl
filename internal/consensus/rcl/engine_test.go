@@ -144,8 +144,6 @@ type mockAdaptor struct {
 	flagLedgerPseudoTxs [][]byte
 	negativeUNLPseudoTx [][]byte
 
-	// OnUNLChange calls captured for assertions in the engine wiring
-	// test (TestEngine_StartRound_DrivesOnUNLChange).
 	onUNLChangeCalls []onUNLChangeCall
 
 	// standalone toggles the IsStandalone() return for tests that

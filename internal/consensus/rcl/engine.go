@@ -507,14 +507,9 @@ func (e *Engine) StartRound(round consensus.RoundID, proposing bool) error {
 // of the new round's tx-set, and emitting a stale proposal/validation
 // would poison the network's convergence.
 func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering bool) error {
-	// Drive NegativeUNL grace-period bookkeeping. Mirrors rippled's
-	// preStartRound branch at RCLConsensus.cpp:1041-1043: when the
-	// NegativeUNL amendment is enabled on the parent ledger and the
-	// trusted set gained members since the previous round, register the
-	// additions so they are exempt from ToDisable for the next
-	// NewValidatorDisableSkip ledgers. Done up-front so it runs in every
-	// mode (proposing / observing / switchedLedger) — rippled does the
-	// same regardless of validator state.
+	// Placed before the mode switch so it runs in every mode (proposing /
+	// observing / switchedLedger), matching rippled's preStartRound at
+	// RCLConsensus.cpp:1041-1043 which fires regardless of validator state.
 	e.driveNegativeUNLNewValidatorsLocked(round.Seq)
 
 	// Determine mode. After a wrongLedger recovery we enter switchedLedger
