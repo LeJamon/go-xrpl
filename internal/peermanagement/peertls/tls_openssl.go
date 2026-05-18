@@ -20,6 +20,31 @@ const (
 	pumpBufSize     = 16 * 1024 // max TLS record size
 )
 
+// pumpBufPool recycles 16 KiB scratch buffers for pumpInboundLocked
+// and drainBIOLocked — avoids a 16 KiB allocation per record pumped
+// under sustained traffic.
+var pumpBufPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, pumpBufSize)
+		return &buf
+	},
+}
+
+func getPumpBuf() []byte {
+	return *(pumpBufPool.Get().(*[]byte))
+}
+
+func putPumpBuf(buf []byte) {
+	// Defensive: only return the originally-sized buffer to the pool.
+	// A caller that grew the slice would otherwise grow the pool's
+	// memory footprint silently.
+	if cap(buf) != pumpBufSize {
+		return
+	}
+	buf = buf[:pumpBufSize]
+	pumpBufPool.Put(&buf)
+}
+
 func Client(inner net.Conn, cfg *Config) (PeerConn, error) {
 	return newConn(inner, cfg, false)
 }
@@ -180,7 +205,8 @@ func (c *conn) pumpInboundLocked() error {
 		return c.bioWriteAllLocked()
 	}
 
-	buf := make([]byte, pumpBufSize)
+	buf := getPumpBuf()
+	defer putPumpBuf(buf)
 	n, err := c.inner.Read(buf)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
@@ -203,6 +229,9 @@ func (c *conn) pumpInboundLocked() error {
 		return werr
 	}
 	if w < n {
+		// pendingIn must NOT alias the pooled buffer — the buffer
+		// returns to the pool the moment this function exits, and a
+		// later pump call would race against the prior pendingIn read.
 		c.pendingIn = append(c.pendingIn[:0], buf[w:n]...)
 	}
 	return nil
@@ -223,9 +252,12 @@ func (c *conn) bioWriteAllLocked() error {
 }
 
 // drainBIOLocked drains pending BIO output. Caller holds sslMu.
+// The returned slice is freshly allocated; the per-read scratch
+// buffer comes from pumpBufPool.
 func (c *conn) drainBIOLocked() []byte {
 	out := make([]byte, 0, pumpBufSize)
-	buf := make([]byte, pumpBufSize)
+	buf := getPumpBuf()
+	defer putPumpBuf(buf)
 	for {
 		n, err := c.ssl.BIORead(buf)
 		if err != nil || n == 0 {

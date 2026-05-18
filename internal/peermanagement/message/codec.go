@@ -8,6 +8,52 @@ import (
 	"io"
 )
 
+// Per-MessageType payload-size caps applied by ReadMessage BEFORE
+// allocating. Without these, a peer can claim MaxPayloadSize for any
+// type and force a 64MB allocation per claim — trivial OOM vector.
+// Values are ~10× typical observed traffic per type; unknown types
+// fall back to defaultPerTypeMax.
+const (
+	smallMsgMax       = 64 * 1024        // 64 KiB
+	mediumMsgMax      = 1 * 1024 * 1024  // 1 MiB
+	largeMsgMax       = 16 * 1024 * 1024 // 16 MiB
+	defaultPerTypeMax = mediumMsgMax
+)
+
+// MaxPayloadSizeForType returns the largest payload a peer may claim
+// for the given message type (post-decompress for compressed frames).
+// Unknown types fall back to defaultPerTypeMax.
+func MaxPayloadSizeForType(t MessageType) uint32 {
+	switch t {
+	case TypePing, TypeSquelch:
+		return 2048
+	case TypeEndpoints,
+		TypeStatusChange,
+		TypeProposeLedger,
+		TypeValidation,
+		TypeHaveSet,
+		TypeHaveTransactions,
+		TypeCluster:
+		return smallMsgMax
+	case TypeManifests,
+		TypeValidatorList,
+		TypeValidatorListCollection,
+		TypeGetLedger,
+		TypeGetObjects,
+		TypeProofPathReq,
+		TypeReplayDeltaReq,
+		TypeTransaction:
+		return mediumMsgMax
+	case TypeLedgerData,
+		TypeTransactions,
+		TypeProofPathResponse,
+		TypeReplayDeltaResponse:
+		return largeMsgMax
+	default:
+		return defaultPerTypeMax
+	}
+}
+
 const (
 	// HeaderSizeUncompressed is the size of an uncompressed message header.
 	// Format: 4 bytes (6 bits flags + 26 bits size) + 2 bytes (type)
@@ -200,6 +246,18 @@ func ReadMessage(r io.Reader) (*Header, []byte, error) {
 	header, err := DecodeHeader(headerBuf)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	// Cap both the on-wire and uncompressed claims BEFORE allocating
+	// so a tiny LZ4 frame cannot decompress into a giant slice.
+	maxSize := MaxPayloadSizeForType(header.MessageType)
+	if header.PayloadSize > maxSize {
+		return nil, nil, fmt.Errorf("%w: %d > %d for %s",
+			ErrMessageTooLarge, header.PayloadSize, maxSize, header.MessageType)
+	}
+	if header.Compressed && header.UncompressedSize > maxSize {
+		return nil, nil, fmt.Errorf("%w: uncompressed %d > %d for %s",
+			ErrMessageTooLarge, header.UncompressedSize, maxSize, header.MessageType)
 	}
 
 	// Read payload

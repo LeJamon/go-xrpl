@@ -56,9 +56,17 @@ func (d Disposition) String() string {
 // the inverse ephemeral→master lookup so consensus can translate a
 // validation's signing key back to a UNL master key.
 //
-// Safe for concurrent use.
+// Safe for concurrent use. Two locks separate the hot read path from
+// the slow Apply signature-verification path: `mu` guards the maps,
+// `applyMu` serializes ApplyManifest writers around the verify step
+// so concurrent Applies cannot both pass the Stale gate and race a
+// write while leaving RLock-only lookups unblocked.
 type Cache struct {
 	mu sync.RWMutex
+
+	// applyMu serializes ApplyManifest's verify-then-mutate sequence
+	// without holding c.mu across the secp256k1/ed25519 verify.
+	applyMu sync.Mutex
 
 	// byMaster maps master public key → the latest accepted manifest.
 	// Entries persist across revocations: a revoked manifest is kept so
@@ -98,30 +106,37 @@ func NewCache() *Cache {
 // (Invalid / BadMasterKey / BadEphemeralKey). Stale is a no-op.
 //
 // Mirrors ManifestCache::applyManifest at rippled Manifest.cpp:382-580,
-// collapsed to a single write-lock path — the two-phase read/write
-// optimization there exists because signature verification is
-// expensive; in our deployments the expected rate of inbound manifests
-// is too low to matter.
+// including the two-phase shared→unique pattern that keeps lookups
+// unblocked across the expensive signature verify.
 func (c *Cache) ApplyManifest(m *Manifest) Disposition {
 	if m == nil {
+		return Invalid
+	}
+
+	c.applyMu.Lock()
+	defer c.applyMu.Unlock()
+
+	c.mu.RLock()
+	if existing, ok := c.byMaster[m.MasterKey]; ok && m.Sequence <= existing.Sequence {
+		c.mu.RUnlock()
+		return Stale
+	}
+	c.mu.RUnlock()
+
+	// Verify outside any map lock — GetMasterKey / GetSigningKey
+	// lookups proceed unblocked through the (potentially) expensive
+	// secp256k1 verify.
+	if err := m.Verify(); err != nil {
 		return Invalid
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if existing, ok := c.byMaster[m.MasterKey]; ok {
-		if m.Sequence <= existing.Sequence {
-			return Stale
-		}
-	}
-
-	// Signature verification happens under the lock so concurrent
-	// callers can't race in two manifests for the same master at the
-	// same sequence. Cost is bounded: O(manifests-per-second) × O(one
-	// ed25519/secp256k1 verify).
-	if err := m.Verify(); err != nil {
-		return Invalid
+	// Re-check Stale under the write lock against any direct map
+	// writer that bypassed applyMu.
+	if existing, ok := c.byMaster[m.MasterKey]; ok && m.Sequence <= existing.Sequence {
+		return Stale
 	}
 
 	// The manifest's master key must not already be recorded as
@@ -157,10 +172,6 @@ func (c *Cache) ApplyManifest(m *Manifest) Disposition {
 		c.signingToMaster[m.SigningKey] = m.MasterKey
 	}
 	if isUpdate {
-		// Match rippled Manifest.cpp:538: bump only when an existing
-		// entry is replaced. The first insert is rare ("should only
-		// ever happen once per validator run" per the rippled comment)
-		// and is handled by the consumer's never-built sentinel.
 		c.seq++
 	}
 	return Accepted
