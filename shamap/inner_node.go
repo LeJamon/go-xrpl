@@ -1,6 +1,7 @@
 package shamap
 
 import (
+	"crypto/sha512"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -12,6 +13,10 @@ import (
 )
 
 const BranchFactor = 16
+
+var zeroHash [32]byte
+
+const fullInnerSerializedSize = 4 + BranchFactor*32
 
 var (
 	ErrInvalidBranch = errors.New("invalid branch index")
@@ -125,6 +130,38 @@ func (n *InnerNode) SetChildDirect(index int, child Node) {
 	n.children[index] = child
 }
 
+// LoadChild returns the child pointer, stored hash, and isBranch bit for
+// the given branch under a single read-lock acquisition.
+// Index must be in [0, BranchFactor); out-of-range panics on slice deref.
+// The returned [32]byte is the parent's stored hash for the branch, which
+// may lag child.Hash() during a mutation cycle because dirtyUp clears
+// parent hashes before they are recomputed. Callers that need the child's
+// own current hash should call child.Hash() on the returned pointer.
+func (n *InnerNode) LoadChild(index int) (Node, [32]byte, bool) {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.children[index], n.hashes[index], n.isBranch&(1<<index) != 0
+}
+
+// SetChildIfNil attaches child at index iff that slot is currently nil and
+// returns the resulting child. Concurrent readers racing to lazy-load the
+// same backed child observe a single winning installation.
+// Same index contract as LoadChild; out-of-range panics on slice deref.
+//
+// Preconditions (mirroring rippled canonicalizeChild,
+// SHAMapInnerNode.cpp:397-412, enforced by construction at callers, not at
+// runtime): branch must be a non-empty branch in isBranch, child must be
+// non-nil, and child.Hash() must equal n.hashes[index].
+func (n *InnerNode) SetChildIfNil(index int, child Node) Node {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if existing := n.children[index]; existing != nil {
+		return existing
+	}
+	n.children[index] = child
+	return child
+}
+
 // ChildHash returns the hash at a given branch index
 func (n *InnerNode) ChildHash(index int) ([32]byte, error) {
 	if index < 0 || index >= BranchFactor {
@@ -148,44 +185,30 @@ func (n *InnerNode) UpdateHash() error {
 	return n.updateHashUnsafe()
 }
 
-// updateHashUnsafe updates hash without locking (caller must hold lock)
+// updateHashUnsafe updates hash without locking (caller must hold lock).
 func (n *InnerNode) updateHashUnsafe() error {
 	if n.isBranch == 0 {
-		// Empty node - hash is zero
 		n.hash = [32]byte{}
 		return nil
 	}
 
-	var data [][]byte
-
-	// Add inner node prefix
-	data = append(data, protocol.HashPrefixInnerNode[:])
-
-	// Include ALL 16 child hashes in order
-	// Empty branches contribute zero hash (32 zero bytes)
-	zeroHash := make([]byte, 32)
+	h := sha512.New()
+	h.Write(protocol.HashPrefixInnerNode[:])
 	for i := 0; i < BranchFactor; i++ {
 		if n.isBranch&(1<<i) != 0 {
-			child := n.children[i]
-			if child != nil {
-				// Get hash from actual child node
+			if child := n.children[i]; child != nil {
 				childHash := child.Hash()
-				data = append(data, childHash[:])
+				h.Write(childHash[:])
 			} else {
-				// Child is nil but branch is set - use stored hash
-				// This happens when node is deserialized from wire format
-				data = append(data, n.hashes[i][:])
+				// Hash-only (lazy/backed) branch.
+				h.Write(n.hashes[i][:])
 			}
 		} else {
-			// Empty branch: contribute 32 zero bytes
-			data = append(data, zeroHash)
+			h.Write(zeroHash[:])
 		}
 	}
-
-	err := n.setHash(data...)
-	if err != nil {
-		return err
-	}
+	sum := h.Sum(nil)
+	copy(n.hash[:], sum[:32])
 	return nil
 }
 
@@ -193,47 +216,38 @@ func (n *InnerNode) SerializeForWire() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 
-	if n.isBranch == 0 {
+	// Avoid BranchCount(): it would re-acquire the read lock.
+	branchCount := bits.OnesCount16(n.isBranch)
+	if branchCount == 0 {
 		return nil, ErrEmptyNonRoot
 	}
 
-	var result []byte
-	branchCount := n.BranchCount()
-
 	if branchCount < 12 {
-		// Compressed format: only serialize non-empty branches
-		// Format: [Hash32][Position1][Hash32][Position1]...[WireType]
+		// Compressed: [Hash32][Position1] × N + [WireType].
+		result := make([]byte, 0, branchCount*33+1)
 		for i := 0; i < BranchFactor; i++ {
 			if n.isBranch&(1<<i) != 0 {
-				// Add the 32-byte hash
 				result = append(result, n.hashes[i][:]...)
-				// Add the 1-byte position
 				result = append(result, byte(i))
 			}
 		}
-		// Add compressed inner wire type
 		result = append(result, protocol.WireTypeCompressedInner)
-	} else {
-		// Full format: serialize all 16 hashes (including zero hashes)
-		// Format: [Hash0][Hash1]...[Hash15][WireType]
-		zeroHash := make([]byte, 32)
-		for i := 0; i < BranchFactor; i++ {
-			if n.isBranch&(1<<i) != 0 {
-				// Non-empty branch: use the stored hash
-				result = append(result, n.hashes[i][:]...)
-			} else {
-				// Empty branch: use zero hash
-				result = append(result, zeroHash...)
-			}
-		}
-		// Add full inner wire type
-		result = append(result, protocol.WireTypeInner)
+		return result, nil
 	}
 
+	// Full: 16 × 32-byte hashes + WireType.
+	result := make([]byte, BranchFactor*32+1)
+	for i := 0; i < BranchFactor; i++ {
+		off := i * 32
+		if n.isBranch&(1<<i) != 0 {
+			copy(result[off:off+32], n.hashes[i][:])
+		}
+	}
+	result[BranchFactor*32] = protocol.WireTypeInner
 	return result, nil
 }
 
-// SerializeWithPrefix serializes with type prefix for hashing and storage
+// SerializeWithPrefix serializes with type prefix for hashing and storage.
 func (n *InnerNode) SerializeWithPrefix() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -242,23 +256,14 @@ func (n *InnerNode) SerializeWithPrefix() ([]byte, error) {
 		return nil, ErrEmptyNonRoot
 	}
 
-	var result []byte
-
-	// Add the inner node prefix (4 bytes)
-	result = append(result, protocol.HashPrefixInnerNode[:]...)
-
-	// Add ALL 16 child hashes in order (even empty ones as zero hashes)
-	zeroHash := make([]byte, 32)
+	result := make([]byte, fullInnerSerializedSize)
+	copy(result[:4], protocol.HashPrefixInnerNode[:])
 	for i := 0; i < BranchFactor; i++ {
 		if n.isBranch&(1<<i) != 0 {
-			// Non-empty branch: use the stored hash
-			result = append(result, n.hashes[i][:]...)
-		} else {
-			// Empty branch: use zero hash
-			result = append(result, zeroHash...)
+			off := 4 + i*32
+			copy(result[off:off+32], n.hashes[i][:])
 		}
 	}
-
 	return result, nil
 }
 
@@ -477,6 +482,17 @@ func (n *InnerNode) ForEachChild(fn func(index int, child Node) bool) {
 // HasChildren returns true if the node has any children
 func (n *InnerNode) HasChildren() bool {
 	return !n.IsEmpty()
+}
+
+// ReleaseChildren drops in-memory child pointers while retaining per-branch
+// hashes, allowing GC to reclaim a freshly-flushed subtree that will be
+// lazy-reloaded from the NodeStore on next access.
+func (n *InnerNode) ReleaseChildren() {
+	n.mu.Lock()
+	for i := 0; i < BranchFactor; i++ {
+		n.children[i] = nil
+	}
+	n.mu.Unlock()
 }
 
 func isZeroHash(hash [32]byte) bool {

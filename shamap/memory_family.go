@@ -1,6 +1,9 @@
 package shamap
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
 // MemoryFamily is an in-memory implementation of the Family interface.
 // It stores serialized nodes in a map keyed by their SHAMap hash.
@@ -19,7 +22,10 @@ func NewMemoryFamily() *MemoryFamily {
 
 // Fetch retrieves a node's serialized data by its hash.
 // Returns nil, nil if the node is not found.
-func (f *MemoryFamily) Fetch(hash [32]byte) ([]byte, error) {
+func (f *MemoryFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	data, ok := f.store[hash]
@@ -33,7 +39,10 @@ func (f *MemoryFamily) Fetch(hash [32]byte) ([]byte, error) {
 }
 
 // StoreBatch persists a batch of serialized nodes.
-func (f *MemoryFamily) StoreBatch(entries []FlushEntry) error {
+func (f *MemoryFamily) StoreBatch(ctx context.Context, entries []FlushEntry) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, e := range entries {

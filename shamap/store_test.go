@@ -2,6 +2,7 @@ package shamap
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -19,7 +20,10 @@ func newMemoryFamily() *memoryFamily {
 	}
 }
 
-func (f *memoryFamily) Fetch(hash [32]byte) ([]byte, error) {
+func (f *memoryFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	data, ok := f.store[hash]
@@ -32,7 +36,10 @@ func (f *memoryFamily) Fetch(hash [32]byte) ([]byte, error) {
 	return cp, nil
 }
 
-func (f *memoryFamily) StoreBatch(entries []FlushEntry) error {
+func (f *memoryFamily) StoreBatch(ctx context.Context, entries []FlushEntry) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, e := range entries {
@@ -56,7 +63,7 @@ func flushToFamily(sm *SHAMap, family *memoryFamily) error {
 		return fmt.Errorf("FlushDirty: %w", err)
 	}
 	if len(batch.Entries) > 0 {
-		return family.StoreBatch(batch.Entries)
+		return family.StoreBatch(context.Background(), batch.Entries)
 	}
 	return nil
 }
@@ -1166,4 +1173,72 @@ func TestBacked_Iterator(t *testing.T) {
 	if count != len(keys) {
 		t.Errorf("Iterator found %d items, expected %d", count, len(keys))
 	}
+}
+
+// TestBacked_ConcurrentLazyLoad exercises descend()'s lazy-load path from
+// many goroutines under -race to catch regressions in the LoadChild /
+// SetChildIfNil race-safety contract.
+func TestBacked_ConcurrentLazyLoad(t *testing.T) {
+	family := newMemoryFamily()
+
+	sMap, err := New(TypeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Populate several branches at depth 0 so descend has to lazy-load
+	// multiple subtrees from cold.
+	keys := make([][32]byte, 0, 32)
+	for i := 0; i < 32; i++ {
+		var k [32]byte
+		for j := range k {
+			k[j] = byte((i*7 + j*11) | 1)
+		}
+		k[0] = byte((i * 16) & 0xF0)
+		keys = append(keys, k)
+		if err := sMap.Put(k, intToBytes(i+1)); err != nil {
+			t.Fatalf("Put %d: %v", i, err)
+		}
+	}
+
+	rootHash, err := sMap.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := flushToFamily(sMap, family); err != nil {
+		t.Fatal(err)
+	}
+
+	backed, err := NewFromRootHash(TypeState, rootHash, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const readers = 16
+	var wg sync.WaitGroup
+	wg.Add(readers)
+	start := make(chan struct{})
+	for r := 0; r < readers; r++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			for i, k := range keys {
+				item, found, err := backed.Get(k)
+				if err != nil {
+					t.Errorf("Get key %d: %v", i, err)
+					return
+				}
+				if !found || item == nil {
+					t.Errorf("key %d not found via concurrent Get", i)
+					return
+				}
+				if !bytes.Equal(item.Data(), intToBytes(i+1)) {
+					t.Errorf("key %d data mismatch", i)
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
 }

@@ -104,7 +104,7 @@ func (r *ValidationRepository) SaveBatch(ctx context.Context, vs []*relationaldb
 }
 
 func (r *ValidationRepository) scanRow(row interface {
-	Scan(dest ...interface{}) error
+	Scan(dest ...any) error
 }) (*relationaldb.ValidationRecord, error) {
 	var rec relationaldb.ValidationRecord
 	var ledgerSeq, initialSeq, signTime, seenTime int64
@@ -151,7 +151,7 @@ func (r *ValidationRepository) GetValidationsForLedger(ctx context.Context, seq 
 
 func (r *ValidationRepository) GetValidationsByValidator(ctx context.Context, nodeKey []byte, limit int) ([]*relationaldb.ValidationRecord, error) {
 	q := `SELECT ` + validationSelectCols + ` FROM validations WHERE node_pubkey = $1 ORDER BY ledger_seq DESC`
-	args := []interface{}{nodeKey}
+	args := []any{nodeKey}
 	if limit > 0 {
 		q += ` LIMIT $2`
 		args = append(args, limit)

@@ -7,12 +7,21 @@ import (
 	"time"
 )
 
+// asyncWorkerLimit caps goroutines spawned by FetchAsync/StoreAsync per
+// Database so a caller dropping the result channel cannot fan-out
+// unboundedly.
+const asyncWorkerLimit = 64
+
+func newAsyncSem() chan struct{} {
+	return make(chan struct{}, asyncWorkerLimit)
+}
+
 // DatabaseImpl wraps a Backend to implement the Database interface.
 type DatabaseImpl struct {
 	backend       Backend
 	cache         *Cache
 	negativeCache *NegativeCache
-	batchWriter   *BatchWriter
+	asyncSem      chan struct{}
 	stats         struct {
 		reads             uint64
 		cacheHits         uint64
@@ -38,9 +47,6 @@ type DatabaseConfig struct {
 
 	// NegativeCacheMaxSize is the maximum number of entries in the negative cache.
 	NegativeCacheMaxSize int
-
-	// BatchWriteConfig is kept for backwards compatibility but is ignored.
-	BatchWriteConfig *BatchWriteConfig
 }
 
 // DefaultDatabaseConfig returns a DatabaseConfig with sensible defaults.
@@ -50,7 +56,6 @@ func DefaultDatabaseConfig() *DatabaseConfig {
 		CacheTTL:             time.Hour,
 		NegativeCacheTTL:     5 * time.Minute,
 		NegativeCacheMaxSize: 100000,
-		BatchWriteConfig:     nil,
 	}
 }
 
@@ -61,8 +66,9 @@ func NewDatabase(backend Backend, cacheSize int, cacheTTL time.Duration) *Databa
 		cache = NewCache(cacheSize, cacheTTL)
 	}
 	return &DatabaseImpl{
-		backend: backend,
-		cache:   cache,
+		backend:  backend,
+		cache:    cache,
+		asyncSem: newAsyncSem(),
 	}
 }
 
@@ -73,7 +79,8 @@ func NewDatabaseWithConfig(backend Backend, config *DatabaseConfig) (*DatabaseIm
 	}
 
 	db := &DatabaseImpl{
-		backend: backend,
+		backend:  backend,
+		asyncSem: newAsyncSem(),
 	}
 
 	if config.CacheSize > 0 {
@@ -85,14 +92,6 @@ func NewDatabaseWithConfig(backend Backend, config *DatabaseConfig) (*DatabaseIm
 			TTL:     config.NegativeCacheTTL,
 			MaxSize: config.NegativeCacheMaxSize,
 		})
-	}
-
-	if config.BatchWriteConfig != nil {
-		bw, err := NewBatchWriter(backend, config.BatchWriteConfig)
-		if err != nil {
-			return nil, err
-		}
-		db.batchWriter = bw
 	}
 
 	return db, nil
@@ -174,32 +173,89 @@ func (d *DatabaseImpl) Fetch(ctx context.Context, hash Hash256) (*Node, error) {
 	return node, nil
 }
 
-// FetchBatch retrieves multiple nodes efficiently.
+// FetchBatch retrieves multiple nodes, satisfying as many as possible
+// from the positive/negative caches before forwarding misses to the
+// backend in a single FetchBatch call.
 func (d *DatabaseImpl) FetchBatch(ctx context.Context, hashes []Hash256) ([]*Node, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(hashes) == 0 {
+		return nil, nil
 	}
 
-	nodes, status := d.backend.FetchBatch(hashes)
+	results := make([]*Node, len(hashes))
+	misses := make([]Hash256, 0, len(hashes))
+	missIdx := make([]int, 0, len(hashes))
+
+	if d.cache != nil {
+		for i, h := range hashes {
+			if node, ok := d.cache.Get(h); ok {
+				atomic.AddUint64(&d.stats.cacheHits, 1)
+				results[i] = node
+				continue
+			}
+			atomic.AddUint64(&d.stats.cacheMisses, 1)
+			if d.negativeCache != nil && d.negativeCache.IsMissing(h) {
+				atomic.AddUint64(&d.stats.negativeCacheHits, 1)
+				continue
+			}
+			misses = append(misses, h)
+			missIdx = append(missIdx, i)
+		}
+	} else {
+		for i, h := range hashes {
+			misses = append(misses, h)
+			missIdx = append(missIdx, i)
+		}
+	}
+
+	atomic.AddUint64(&d.stats.reads, uint64(len(hashes)))
+
+	if len(misses) == 0 {
+		return results, nil
+	}
+
+	fetched, status := d.backend.FetchBatch(misses)
 	if status != OK && status != NotFound {
 		return nil, errors.New("fetch batch failed: " + status.String())
 	}
 
-	return nodes, nil
+	for j, idx := range missIdx {
+		node := fetched[j]
+		if node == nil {
+			if d.negativeCache != nil {
+				d.negativeCache.MarkMissing(misses[j])
+			}
+			continue
+		}
+		atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
+		if d.cache != nil {
+			d.cache.Put(node)
+		}
+		results[idx] = node
+	}
+
+	return results, nil
 }
 
-// FetchAsync retrieves a node asynchronously.
+// FetchAsync retrieves a node asynchronously. Blocks (or returns ctx.Err)
+// if asyncWorkerLimit in-flight workers are already running.
 func (d *DatabaseImpl) FetchAsync(ctx context.Context, hash Hash256) <-chan Result {
 	resultCh := make(chan Result, 1)
-
+	select {
+	case d.asyncSem <- struct{}{}:
+	case <-ctx.Done():
+		resultCh <- Result{Err: ctx.Err()}
+		close(resultCh)
+		return resultCh
+	}
 	go func() {
+		defer func() { <-d.asyncSem }()
 		node, err := d.Fetch(ctx, hash)
 		resultCh <- Result{Node: node, Err: err}
 		close(resultCh)
 	}()
-
 	return resultCh
 }
 
@@ -271,10 +327,6 @@ type ExtendedStatistics struct {
 	NegativeCacheHits    uint64 // Number of negative cache hits
 	NegativeCacheSize    uint64 // Current size of negative cache
 	NegativeCacheMaxSize uint64 // Maximum size of negative cache
-
-	// Batch writer metrics (kept for backwards compatibility)
-	BatchWriterPending int    // Number of pending batch writes
-	BatchWriterFlushes uint64 // Number of batch flushes
 }
 
 // ExtendedStats returns extended statistics including negative cache stats.
@@ -290,12 +342,6 @@ func (d *DatabaseImpl) ExtendedStats() ExtendedStatistics {
 		stats.NegativeCacheMaxSize = uint64(ncStats.MaxSize)
 	}
 
-	if d.batchWriter != nil {
-		bwStats := d.batchWriter.Stats()
-		stats.BatchWriterPending = bwStats.PendingCount
-		stats.BatchWriterFlushes = uint64(bwStats.Flushes)
-	}
-
 	return stats
 }
 
@@ -303,21 +349,12 @@ func (d *DatabaseImpl) ExtendedStats() ExtendedStatistics {
 func (d *DatabaseImpl) Close() error {
 	var lastErr error
 
-	// Close batch writer first
-	if d.batchWriter != nil {
-		if err := d.batchWriter.Close(); err != nil {
-			lastErr = err
-		}
-	}
-
-	// Close negative cache
 	if d.negativeCache != nil {
 		if err := d.negativeCache.Close(); err != nil {
 			lastErr = err
 		}
 	}
 
-	// Close backend last
 	if err := d.backend.Close(); err != nil {
 		lastErr = err
 	}
@@ -325,37 +362,27 @@ func (d *DatabaseImpl) Close() error {
 	return lastErr
 }
 
-// StoreAsync stores a node asynchronously.
-// Falls back to synchronous storage.
+// StoreAsync stores a node asynchronously, bounded by asyncWorkerLimit.
 func (d *DatabaseImpl) StoreAsync(ctx context.Context, node *Node) <-chan error {
 	result := make(chan error, 1)
-
 	select {
+	case d.asyncSem <- struct{}{}:
 	case <-ctx.Done():
 		result <- ctx.Err()
 		close(result)
 		return result
-	default:
 	}
-
-	// Fall back to synchronous storage
 	go func() {
-		err := d.Store(ctx, node)
-		result <- err
+		defer func() { <-d.asyncSem }()
+		result <- d.Store(ctx, node)
 		close(result)
 	}()
-
 	return result
 }
 
 // NegativeCache returns the negative cache (for advanced operations).
 func (d *DatabaseImpl) NegativeCache() *NegativeCache {
 	return d.negativeCache
-}
-
-// BatchWriter returns the batch writer (may be nil if not configured).
-func (d *DatabaseImpl) BatchWriter() *BatchWriter {
-	return d.batchWriter
 }
 
 // Sync forces pending writes to disk. The flush itself is

@@ -62,8 +62,8 @@ func NewPebbleNodeStoreFamily(path string, cacheSize int) (*NodeStoreFamily, err
 
 // Fetch retrieves a node's serialized data (prefix format) by its SHAMap hash.
 // Returns nil, nil if the node is not found (matching the Family contract).
-func (f *NodeStoreFamily) Fetch(hash [32]byte) ([]byte, error) {
-	node, err := f.db.Fetch(context.Background(), nodestore.Hash256(hash))
+func (f *NodeStoreFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	node, err := f.db.Fetch(ctx, nodestore.Hash256(hash))
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +77,7 @@ func (f *NodeStoreFamily) Fetch(hash [32]byte) ([]byte, error) {
 // Each FlushEntry's Data contains prefix-format bytes which are stored directly
 // as Node.Data (opaque to the nodestore). The Hash is set from FlushEntry.Hash
 // (SHA-512Half, NOT recomputed as SHA-256).
-func (f *NodeStoreFamily) StoreBatch(entries []FlushEntry) error {
+func (f *NodeStoreFamily) StoreBatch(ctx context.Context, entries []FlushEntry) error {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -90,7 +90,7 @@ func (f *NodeStoreFamily) StoreBatch(entries []FlushEntry) error {
 			Type: nodestore.NodeAccount, // NodeStore treats data as opaque; type is for categorization only
 		}
 	}
-	return f.db.StoreBatch(context.Background(), nodes)
+	return f.db.StoreBatch(ctx, nodes)
 }
 
 // Sweep removes expired entries from the nodestore's caches.

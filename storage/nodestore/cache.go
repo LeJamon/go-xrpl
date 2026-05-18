@@ -4,8 +4,12 @@ import (
 	"container/list"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+// cacheShardCount must be a power of two so shardFor can mask cheaply.
+const cacheShardCount = 16
 
 // cacheEntry represents an entry in the LRU cache.
 type cacheEntry struct {
@@ -20,217 +24,285 @@ func (e *cacheEntry) isExpired() bool {
 	return time.Now().After(e.expiresAt)
 }
 
-// Cache implements an LRU cache with TTL support for NodeStore.
-type Cache struct {
-	mu sync.RWMutex
+// cacheShard is one stripe of the sharded cache. Each shard owns its own
+// LRU and mutex so Get/Put on disjoint hashes do not contend.
+type cacheShard struct {
+	mu sync.Mutex
 
-	maxSize int           // Maximum number of items
-	ttl     time.Duration // Time to live for entries
+	items map[Hash256]*list.Element
+	lru   *list.List
 
-	// LRU implementation
-	items map[Hash256]*list.Element // Hash to list element mapping
-	lru   *list.List                // LRU list (most recent at front)
+	// maxItems is the whole cache's maxSize divided by cacheShardCount
+	// (rounded up); no global cap is enforced.
+	maxItems int
 
-	hits         uint64 // Number of cache hits
-	misses       uint64 // Number of cache misses
-	evictions    uint64 // Number of evictions due to size limit
-	expirations  uint64 // Number of expirations due to TTL
-	currentSize  int    // Current number of items
-	currentBytes int    // Current total bytes stored
+	currentSize  int
+	currentBytes int
 }
 
-// NewCache creates a new LRU cache with the specified configuration.
+// Cache is a sharded LRU cache with TTL support for NodeStore.
+//
+// The *Node returned by Get aliases the shard's entry and is shared with
+// every other reader. Per the Node contract it MUST NOT be mutated;
+// callers that need to mutate must Clone() first.
+//
+// The global maxSize cap is not enforced directly; see SetMaxSize for the
+// worst-case shard-rounded overshoot.
+type Cache struct {
+	shards [cacheShardCount]*cacheShard
+
+	configMu sync.RWMutex
+	maxSize  int
+	ttl      time.Duration
+
+	hits        atomic.Uint64
+	misses      atomic.Uint64
+	evictions   atomic.Uint64
+	expirations atomic.Uint64
+}
+
 func NewCache(maxSize int, ttl time.Duration) *Cache {
-	return &Cache{
+	c := &Cache{
 		maxSize: maxSize,
 		ttl:     ttl,
-		items:   make(map[Hash256]*list.Element),
-		lru:     list.New(),
 	}
+	perShard := maxSize / cacheShardCount
+	if perShard*cacheShardCount < maxSize {
+		perShard++
+	}
+	for i := range c.shards {
+		c.shards[i] = &cacheShard{
+			items:    make(map[Hash256]*list.Element),
+			lru:      list.New(),
+			maxItems: perShard,
+		}
+	}
+	return c
 }
 
-// Get retrieves a node from the cache.
-// Returns the node and true if found, nil and false otherwise.
-func (c *Cache) Get(hash Hash256) (*Node, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (c *Cache) shardFor(h Hash256) *cacheShard {
+	return c.shards[int(h[0])&(cacheShardCount-1)]
+}
 
-	element, found := c.items[hash]
+// Get returns the cached *Node and true on hit, (nil, false) otherwise.
+// The returned *Node aliases the cache entry; see the Cache doc for the
+// no-mutation contract.
+func (c *Cache) Get(hash Hash256) (*Node, bool) {
+	s := c.shardFor(hash)
+	s.mu.Lock()
+	element, found := s.items[hash]
 	if !found {
-		c.misses++
+		s.mu.Unlock()
+		c.misses.Add(1)
 		return nil, false
 	}
 
 	entry := element.Value.(*cacheEntry)
-
 	if entry.isExpired() {
-		c.removeElementLocked(element)
-		c.expirations++
-		c.misses++
+		s.removeElementLocked(element)
+		s.mu.Unlock()
+		c.expirations.Add(1)
+		c.misses.Add(1)
 		return nil, false
 	}
 
-	// Move to front (most recently used)
-	c.lru.MoveToFront(element)
-	c.hits++
-
-	return entry.node, true
+	s.lru.MoveToFront(element)
+	node := entry.node
+	s.mu.Unlock()
+	c.hits.Add(1)
+	return node, true
 }
 
-// Put stores a node in the cache.
+// Put stores a defensive deep copy of node. The cached entry is
+// thereafter treated as immutable and shared with all readers.
 func (c *Cache) Put(node *Node) {
 	if node == nil {
 		return
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	owned := node.Clone()
+	c.configMu.RLock()
+	ttl := c.ttl
+	c.configMu.RUnlock()
 
-	if element, found := c.items[node.Hash]; found {
+	s := c.shardFor(owned.Hash)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if element, found := s.items[owned.Hash]; found {
 		entry := element.Value.(*cacheEntry)
-		c.currentBytes = c.currentBytes - entry.size + node.Size()
-		entry.node = node
-		entry.expiresAt = time.Now().Add(c.ttl)
-		entry.size = node.Size()
-		c.lru.MoveToFront(element)
+		s.currentBytes = s.currentBytes - entry.size + owned.Size()
+		entry.node = owned
+		entry.expiresAt = time.Now().Add(ttl)
+		entry.size = owned.Size()
+		s.lru.MoveToFront(element)
 		return
 	}
 
 	entry := &cacheEntry{
-		key:       node.Hash,
-		node:      node,
-		expiresAt: time.Now().Add(c.ttl),
-		size:      node.Size(),
+		key:       owned.Hash,
+		node:      owned,
+		expiresAt: time.Now().Add(ttl),
+		size:      owned.Size(),
 	}
+	element := s.lru.PushFront(entry)
+	s.items[owned.Hash] = element
+	s.currentSize++
+	s.currentBytes += entry.size
 
-	element := c.lru.PushFront(entry)
-	c.items[node.Hash] = element
-	c.currentSize++
-	c.currentBytes += entry.size
-
-	// Evict oldest items if cache is full
-	for c.currentSize > c.maxSize {
-		c.evictOldestLocked()
+	for s.currentSize > s.maxItems {
+		if !s.evictOldestLocked() {
+			break
+		}
+		c.evictions.Add(1)
 	}
 }
 
 // Remove removes a node from the cache.
 func (c *Cache) Remove(hash Hash256) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	s := c.shardFor(hash)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	if element, found := c.items[hash]; found {
-		c.removeElementLocked(element)
+	if element, found := s.items[hash]; found {
+		s.removeElementLocked(element)
 	}
 }
 
 // Clear removes all entries from the cache.
 func (c *Cache) Clear() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.items = make(map[Hash256]*list.Element)
-	c.lru.Init()
-	c.currentSize = 0
-	c.currentBytes = 0
+	for _, s := range c.shards {
+		s.mu.Lock()
+		s.items = make(map[Hash256]*list.Element)
+		s.lru.Init()
+		s.currentSize = 0
+		s.currentBytes = 0
+		s.mu.Unlock()
+	}
 }
 
-// Sweep removes expired entries from the cache.
+// Sweep removes expired entries across every shard.
 func (c *Cache) Sweep() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	removed := 0
 	now := time.Now()
-
-	for element := c.lru.Back(); element != nil; {
-		entry := element.Value.(*cacheEntry)
-		if now.After(entry.expiresAt) {
-			next := element.Prev()
-			c.removeElementLocked(element)
-			c.expirations++
-			removed++
-			element = next
-		} else {
-			// Since entries are ordered by insertion time and we're going
-			// from oldest to newest, we can stop here
-			break
+	for _, s := range c.shards {
+		s.mu.Lock()
+		for element := s.lru.Back(); element != nil; {
+			entry := element.Value.(*cacheEntry)
+			if now.After(entry.expiresAt) {
+				next := element.Prev()
+				s.removeElementLocked(element)
+				c.expirations.Add(1)
+				removed++
+				element = next
+			} else {
+				// LRU is insertion-ordered: a fresh tail implies a fresher head.
+				break
+			}
 		}
+		s.mu.Unlock()
 	}
-
 	return removed
 }
 
 // Stats returns cache statistics.
 func (c *Cache) Stats() CacheStats {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	curSize, curBytes := c.sumSizes()
+
+	c.configMu.RLock()
+	maxSize, ttl := c.maxSize, c.ttl
+	c.configMu.RUnlock()
 
 	return CacheStats{
-		Hits:         c.hits,
-		Misses:       c.misses,
-		Evictions:    c.evictions,
-		Expirations:  c.expirations,
-		CurrentSize:  c.currentSize,
-		CurrentBytes: c.currentBytes,
-		MaxSize:      c.maxSize,
-		TTL:          c.ttl,
+		Hits:         c.hits.Load(),
+		Misses:       c.misses.Load(),
+		Evictions:    c.evictions.Load(),
+		Expirations:  c.expirations.Load(),
+		CurrentSize:  curSize,
+		CurrentBytes: curBytes,
+		MaxSize:      maxSize,
+		TTL:          ttl,
 	}
+}
+
+func (c *Cache) sumSizes() (int, int) {
+	size, bytes := 0, 0
+	for _, s := range c.shards {
+		s.mu.Lock()
+		size += s.currentSize
+		bytes += s.currentBytes
+		s.mu.Unlock()
+	}
+	return size, bytes
 }
 
 // Size returns the current number of items in the cache.
 func (c *Cache) Size() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.currentSize
+	size, _ := c.sumSizes()
+	return size
 }
 
 // ByteSize returns the current total bytes stored in the cache.
 func (c *Cache) ByteSize() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.currentBytes
+	_, bytes := c.sumSizes()
+	return bytes
 }
 
 // SetTTL updates the TTL for the cache.
 // This only affects new entries; existing entries keep their original expiration.
 func (c *Cache) SetTTL(ttl time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.configMu.Lock()
 	c.ttl = ttl
+	c.configMu.Unlock()
 }
 
 // SetMaxSize updates the maximum size of the cache.
 // If the new size is smaller than the current size, oldest entries are evicted.
+//
+// Per-shard rounding means the effective cap is
+// (ceil(maxSize / cacheShardCount)) * cacheShardCount, i.e. up to
+// maxSize + cacheShardCount - 1 entries in the worst case
+// (cacheShardCount is 16).
 func (c *Cache) SetMaxSize(maxSize int) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	c.configMu.Lock()
 	c.maxSize = maxSize
+	perShard := maxSize / cacheShardCount
+	if perShard*cacheShardCount < maxSize {
+		perShard++
+	}
+	c.configMu.Unlock()
 
-	// Evict entries if necessary
-	for c.currentSize > c.maxSize {
-		c.evictOldestLocked()
+	for _, s := range c.shards {
+		s.mu.Lock()
+		s.maxItems = perShard
+		for s.currentSize > s.maxItems {
+			if !s.evictOldestLocked() {
+				break
+			}
+			c.evictions.Add(1)
+		}
+		s.mu.Unlock()
 	}
 }
 
-// removeElementLocked removes an element from the cache.
-// This method must be called with the mutex held.
-func (c *Cache) removeElementLocked(element *list.Element) {
+// removeElementLocked removes element. Caller must hold s.mu.
+func (s *cacheShard) removeElementLocked(element *list.Element) {
 	entry := element.Value.(*cacheEntry)
-	delete(c.items, entry.key)
-	c.lru.Remove(element)
-	c.currentSize--
-	c.currentBytes -= entry.size
+	delete(s.items, entry.key)
+	s.lru.Remove(element)
+	s.currentSize--
+	s.currentBytes -= entry.size
 }
 
-// evictOldestLocked removes the oldest (least recently used) entry.
-// This method must be called with the mutex held.
-func (c *Cache) evictOldestLocked() {
-	if element := c.lru.Back(); element != nil {
-		c.removeElementLocked(element)
-		c.evictions++
+// evictOldestLocked evicts the LRU entry; returns false on empty shard.
+// Caller must hold s.mu.
+func (s *cacheShard) evictOldestLocked() bool {
+	element := s.lru.Back()
+	if element == nil {
+		return false
 	}
+	s.removeElementLocked(element)
+	return true
 }
 
 // CacheStats holds statistics about cache performance.

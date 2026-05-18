@@ -66,6 +66,12 @@ func (nt NodeType) String() string {
 }
 
 // Node represents a stored ledger object with its metadata.
+//
+// Nodes are immutable once stored, cached, or returned from
+// Database.Fetch — mutating Data after that point corrupts every other
+// holder of the same pointer. Cache.Put deep-copies on insert so a
+// caller may construct, Store, and continue using its local pointer;
+// downstream readers see an isolated copy.
 type Node struct {
 	Type      NodeType  // Type of the ledger object
 	Hash      Hash256   // SHA-256 content hash (serves as the key)
@@ -92,6 +98,23 @@ func (n *Node) Size() int {
 		return 0
 	}
 	return len(n.Data)
+}
+
+// Clone returns a deep copy of the node with its own Data buffer,
+// enforcing the immutability contract at cache and Fetch boundaries.
+func (n *Node) Clone() *Node {
+	if n == nil {
+		return nil
+	}
+	data := make(Blob, len(n.Data))
+	copy(data, n.Data)
+	return &Node{
+		Type:      n.Type,
+		Hash:      n.Hash,
+		Data:      data,
+		LedgerSeq: n.LedgerSeq,
+		CreatedAt: n.CreatedAt,
+	}
 }
 
 // IsValid returns true if the node has valid data and hash.

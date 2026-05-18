@@ -55,7 +55,7 @@ func (r *AccountTransactionRepository) queryAccountTxs(ctx context.Context, opNa
 			  INNER JOIN transactions t ON t.trans_id = at.trans_id
 			  WHERE at.account = ?`
 
-	args := []interface{}{options.Account.String()}
+	args := []any{options.Account.String()}
 
 	if options.MinLedger > 0 {
 		query += " AND at.ledger_seq >= ?"
@@ -116,7 +116,7 @@ func (r *AccountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 			  INNER JOIN transactions t ON t.trans_id = at.trans_id
 			  WHERE at.account = ?`
 
-	args := []interface{}{options.Account.String()}
+	args := []any{options.Account.String()}
 
 	if options.MinLedger > 0 {
 		query += " AND at.ledger_seq >= ?"

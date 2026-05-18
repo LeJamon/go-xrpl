@@ -168,8 +168,9 @@ func (rd *RotatingDatabase) IsOpen() bool {
 	return atomic.LoadInt64(&rd.open) != 0
 }
 
-// Fetch retrieves a node by its hash.
-// It tries the primary backend first, then the rotating backends from newest to oldest.
+// Fetch tries the primary backend first, then the rotating backends from
+// newest to oldest. rd.mu is held for the entire fetch path so a
+// concurrent Rotate cannot Close() a backend out from under us.
 func (rd *RotatingDatabase) Fetch(key Hash256) (*Node, Status) {
 	if !rd.IsOpen() {
 		return nil, BackendError
@@ -178,7 +179,6 @@ func (rd *RotatingDatabase) Fetch(key Hash256) (*Node, Status) {
 	rd.mu.RLock()
 	defer rd.mu.RUnlock()
 
-	// Try primary backend first
 	if rd.primary != nil {
 		node, status := rd.primary.Fetch(key)
 		if status == OK {
@@ -191,34 +191,34 @@ func (rd *RotatingDatabase) Fetch(key Hash256) (*Node, Status) {
 		}
 	}
 
-	// Try rotating backends (newest to oldest)
 	for i := len(rd.rotating) - 1; i >= 0; i-- {
 		rb := rd.rotating[i]
-		if rb.backend != nil {
-			node, status := rb.backend.Fetch(key)
-			if status == OK {
-				atomic.AddInt64(&rd.stats.rotatingReads, 1)
-				atomic.AddInt64(&rd.stats.bytesRead, int64(len(node.Data)))
-				return node, OK
-			}
-			if status != NotFound {
-				return nil, status
-			}
+		if rb.backend == nil {
+			continue
+		}
+		node, status := rb.backend.Fetch(key)
+		if status == OK {
+			atomic.AddInt64(&rd.stats.rotatingReads, 1)
+			atomic.AddInt64(&rd.stats.bytesRead, int64(len(node.Data)))
+			return node, OK
+		}
+		if status != NotFound {
+			return nil, status
 		}
 	}
 
 	return nil, NotFound
 }
 
-// FetchBatch retrieves multiple nodes efficiently.
+// FetchBatch retrieves multiple nodes. rd.mu is held for the entire
+// batch so Rotate cannot Close() a backend mid-loop.
 func (rd *RotatingDatabase) FetchBatch(keys []Hash256) ([]*Node, Status) {
 	if !rd.IsOpen() {
 		return nil, BackendError
 	}
 
 	results := make([]*Node, len(keys))
-	remaining := make(map[int]Hash256) // Index to hash mapping for unfound keys
-
+	remaining := make(map[int]Hash256, len(keys))
 	for i, key := range keys {
 		remaining[i] = key
 	}
@@ -226,7 +226,6 @@ func (rd *RotatingDatabase) FetchBatch(keys []Hash256) ([]*Node, Status) {
 	rd.mu.RLock()
 	defer rd.mu.RUnlock()
 
-	// Try primary backend first
 	if rd.primary != nil && len(remaining) > 0 {
 		for idx, key := range remaining {
 			node, status := rd.primary.Fetch(key)
@@ -239,18 +238,18 @@ func (rd *RotatingDatabase) FetchBatch(keys []Hash256) ([]*Node, Status) {
 		}
 	}
 
-	// Try rotating backends for remaining keys
 	for i := len(rd.rotating) - 1; i >= 0 && len(remaining) > 0; i-- {
 		rb := rd.rotating[i]
-		if rb.backend != nil {
-			for idx, key := range remaining {
-				node, status := rb.backend.Fetch(key)
-				if status == OK {
-					results[idx] = node
-					delete(remaining, idx)
-					atomic.AddInt64(&rd.stats.rotatingReads, 1)
-					atomic.AddInt64(&rd.stats.bytesRead, int64(len(node.Data)))
-				}
+		if rb.backend == nil {
+			continue
+		}
+		for idx, key := range remaining {
+			node, status := rb.backend.Fetch(key)
+			if status == OK {
+				results[idx] = node
+				delete(remaining, idx)
+				atomic.AddInt64(&rd.stats.rotatingReads, 1)
+				atomic.AddInt64(&rd.stats.bytesRead, int64(len(node.Data)))
 			}
 		}
 	}

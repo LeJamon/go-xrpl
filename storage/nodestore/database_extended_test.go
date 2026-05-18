@@ -26,11 +26,6 @@ func TestDatabaseWithConfig(t *testing.T) {
 		if db.NegativeCache() == nil {
 			t.Error("expected negative cache to be initialized")
 		}
-
-		// Should not have batch writer by default
-		if db.BatchWriter() != nil {
-			t.Error("expected batch writer to be nil by default")
-		}
 	})
 
 	t.Run("WithNegativeCache", func(t *testing.T) {
@@ -189,34 +184,6 @@ func TestDatabaseWithConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("WithBatchWriter", func(t *testing.T) {
-		backend := nodestore.NewMemoryBackend()
-		if err := backend.Open(true); err != nil {
-			t.Fatalf("failed to open backend: %v", err)
-		}
-		defer backend.Close()
-
-		config := &nodestore.DatabaseConfig{
-			CacheSize: 100,
-			CacheTTL:  time.Minute,
-			BatchWriteConfig: &nodestore.BatchWriteConfig{
-				PreallocationSize: 10,
-				LimitSize:         100,
-				FlushInterval:     10 * time.Millisecond,
-			},
-		}
-
-		db, err := nodestore.NewDatabaseWithConfig(backend, config)
-		if err != nil {
-			t.Fatalf("failed to create database: %v", err)
-		}
-		defer db.Close()
-
-		if db.BatchWriter() == nil {
-			t.Error("expected batch writer to be initialized")
-		}
-	})
-
 	t.Run("StoreAsync", func(t *testing.T) {
 		backend := nodestore.NewMemoryBackend()
 		if err := backend.Open(true); err != nil {
@@ -227,11 +194,6 @@ func TestDatabaseWithConfig(t *testing.T) {
 		config := &nodestore.DatabaseConfig{
 			CacheSize: 100,
 			CacheTTL:  time.Minute,
-			BatchWriteConfig: &nodestore.BatchWriteConfig{
-				PreallocationSize: 10,
-				LimitSize:         100,
-				FlushInterval:     10 * time.Millisecond,
-			},
 		}
 
 		db, err := nodestore.NewDatabaseWithConfig(backend, config)
@@ -242,64 +204,14 @@ func TestDatabaseWithConfig(t *testing.T) {
 
 		ctx := context.Background()
 
-		// Store async
 		data := nodestore.Blob("async store test")
 		node := nodestore.NewNode(nodestore.NodeTransaction, data)
 
 		resultCh := db.StoreAsync(ctx, node)
-
-		// Wait for result
-		err = <-resultCh
-		if err != nil {
+		if err := <-resultCh; err != nil {
 			t.Errorf("StoreAsync returned error: %v", err)
 		}
 
-		// Give time for flush
-		time.Sleep(50 * time.Millisecond)
-
-		// Should be fetchable
-		fetched, err := db.Fetch(ctx, node.Hash)
-		if err != nil {
-			t.Errorf("Fetch returned error: %v", err)
-		}
-		if fetched == nil {
-			t.Error("expected non-nil node")
-		}
-	})
-
-	t.Run("StoreAsyncWithoutBatchWriter", func(t *testing.T) {
-		backend := nodestore.NewMemoryBackend()
-		if err := backend.Open(true); err != nil {
-			t.Fatalf("failed to open backend: %v", err)
-		}
-		defer backend.Close()
-
-		// No batch writer
-		config := &nodestore.DatabaseConfig{
-			CacheSize: 100,
-			CacheTTL:  time.Minute,
-		}
-
-		db, err := nodestore.NewDatabaseWithConfig(backend, config)
-		if err != nil {
-			t.Fatalf("failed to create database: %v", err)
-		}
-		defer db.Close()
-
-		ctx := context.Background()
-
-		// StoreAsync should fall back to sync store
-		data := nodestore.Blob("async fallback test")
-		node := nodestore.NewNode(nodestore.NodeTransaction, data)
-
-		resultCh := db.StoreAsync(ctx, node)
-
-		err = <-resultCh
-		if err != nil {
-			t.Errorf("StoreAsync returned error: %v", err)
-		}
-
-		// Should be fetchable
 		fetched, err := db.Fetch(ctx, node.Hash)
 		if err != nil {
 			t.Errorf("Fetch returned error: %v", err)
@@ -321,11 +233,6 @@ func TestDatabaseWithConfig(t *testing.T) {
 			CacheTTL:             time.Minute,
 			NegativeCacheTTL:     5 * time.Minute,
 			NegativeCacheMaxSize: 1000,
-			BatchWriteConfig: &nodestore.BatchWriteConfig{
-				PreallocationSize: 10,
-				LimitSize:         100,
-				FlushInterval:     10 * time.Millisecond,
-			},
 		}
 
 		db, err := nodestore.NewDatabaseWithConfig(backend, config)
@@ -411,11 +318,6 @@ func TestDatabaseWithConfig(t *testing.T) {
 			CacheTTL:             time.Minute,
 			NegativeCacheTTL:     5 * time.Minute,
 			NegativeCacheMaxSize: 1000,
-			BatchWriteConfig: &nodestore.BatchWriteConfig{
-				PreallocationSize: 10,
-				LimitSize:         100,
-				FlushInterval:     10 * time.Millisecond,
-			},
 		}
 
 		db, err := nodestore.NewDatabaseWithConfig(backend, config)
@@ -481,10 +383,63 @@ func TestDatabaseConfig(t *testing.T) {
 		if config.NegativeCacheMaxSize <= 0 {
 			t.Error("NegativeCacheMaxSize should be positive")
 		}
-
-		// BatchWriteConfig should be nil by default
-		if config.BatchWriteConfig != nil {
-			t.Error("BatchWriteConfig should be nil by default")
-		}
 	})
+}
+
+// TestCacheIsolation verifies Cache.Put deep-copies on insert so
+// caller-side mutations of Data cannot bleed into the cached entry.
+func TestCacheIsolation(t *testing.T) {
+	cache := nodestore.NewCache(8, time.Minute)
+
+	original := &nodestore.Node{
+		Type: nodestore.NodeAccount,
+		Hash: nodestore.Hash256{0x01},
+		Data: nodestore.Blob{0xAA, 0xBB, 0xCC, 0xDD},
+	}
+	cache.Put(original)
+
+	original.Data[0] = 0xFF
+	original.Data[1] = 0xFF
+
+	got, ok := cache.Get(original.Hash)
+	if !ok {
+		t.Fatal("expected cache hit after Put")
+	}
+	expected := nodestore.Blob{0xAA, 0xBB, 0xCC, 0xDD}
+	for i, b := range expected {
+		if got.Data[i] != b {
+			t.Fatalf("cache entry was corrupted by post-Put mutation: byte %d got %#x want %#x", i, got.Data[i], b)
+		}
+	}
+}
+
+// TestCacheConcurrentReadersImmutable verifies two readers hitting the
+// same hash see identical Data and that Cache.Put did not retain the
+// caller's slice by reference.
+func TestCacheConcurrentReadersImmutable(t *testing.T) {
+	cache := nodestore.NewCache(8, time.Minute)
+	node := &nodestore.Node{
+		Type: nodestore.NodeAccount,
+		Hash: nodestore.Hash256{0x42},
+		Data: nodestore.Blob{1, 2, 3, 4, 5, 6, 7, 8},
+	}
+	cache.Put(node)
+
+	a, ok := cache.Get(node.Hash)
+	if !ok {
+		t.Fatal("expected cache hit (a)")
+	}
+	b, ok := cache.Get(node.Hash)
+	if !ok {
+		t.Fatal("expected cache hit (b)")
+	}
+
+	for i := range node.Data {
+		if a.Data[i] != b.Data[i] || a.Data[i] != node.Data[i] {
+			t.Fatalf("readers disagree at byte %d: a=%#x b=%#x orig=%#x", i, a.Data[i], b.Data[i], node.Data[i])
+		}
+	}
+	if &a.Data[0] == &node.Data[0] {
+		t.Fatal("Cache.Put must not retain caller's Data slice by reference")
+	}
 }

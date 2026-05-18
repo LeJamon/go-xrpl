@@ -202,8 +202,10 @@ func (b *memBatch) Write() error {
 }
 
 func (b *memBatch) Reset() {
-	b.writes = b.writes[:0]
-	b.deletes = b.deletes[:0]
+	// Drop the backing arrays so a one-shot large batch does not pin
+	// memory indefinitely. Subsequent Puts will reallocate as needed.
+	b.writes = nil
+	b.deletes = nil
 	b.size = 0
 }
 

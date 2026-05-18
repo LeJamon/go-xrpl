@@ -137,7 +137,7 @@ func NewFromRootHash(mapType Type, rootHash [32]byte, family Family) (*SHAMap, e
 	}
 
 	// Fetch root node from store
-	data, err := family.Fetch(rootHash)
+	data, err := family.Fetch(context.Background(), rootHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch root node: %w", err)
 	}
@@ -168,30 +168,33 @@ func NewFromRootHash(mapType Type, rootHash [32]byte, family Family) (*SHAMap, e
 	return sm, nil
 }
 
-// descend returns the child node at the given branch of an inner node.
-// For backed maps, if the child pointer is nil but the hash is set,
-// the node is fetched from the Family and deserialized.
-// Each SHAMap gets its own deserialized copy — no shared mutable state.
 func (sm *SHAMap) descend(inner *InnerNode, branch int) (Node, error) {
-	// Fast path: child already loaded in memory
-	child := inner.ChildUnsafe(branch)
+	return sm.descendCtx(context.Background(), inner, branch)
+}
+
+// descendCtx returns the child node at the given branch of an inner node.
+// For backed maps, if the child pointer is nil but the hash is set, the
+// node is fetched from the Family and deserialized.
+//
+// Safe to call while holding only the SHAMap RLock: all child/hash access
+// goes through InnerNode.LoadChild and the lazy attach uses SetChildIfNil,
+// so concurrent readers racing on the same branch all return the same
+// installed child. Each SHAMap retains its own deserialised subtree.
+func (sm *SHAMap) descendCtx(ctx context.Context, inner *InnerNode, branch int) (Node, error) {
+	child, hash, hasBranch := inner.LoadChild(branch)
 	if child != nil {
 		return child, nil
 	}
 
-	// Not backed: nothing to lazy-load
 	if !sm.backed || sm.family == nil {
 		return nil, nil
 	}
 
-	// Check if branch has a hash (i.e., non-empty but not yet loaded)
-	hash := inner.ChildHashUnsafe(branch)
-	if isZeroHash(hash) {
+	if !hasBranch || isZeroHash(hash) {
 		return nil, nil
 	}
 
-	// Fetch from store
-	data, err := sm.family.Fetch(hash)
+	data, err := sm.family.Fetch(ctx, hash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch child node %x: %w", hash[:8], err)
 	}
@@ -199,17 +202,15 @@ func (sm *SHAMap) descend(inner *InnerNode, branch int) (Node, error) {
 		return nil, fmt.Errorf("child node %x not found in store", hash[:8])
 	}
 
-	// Deserialize (fresh copy — not shared with other SHAMaps)
+	// Fresh deserialised copy — not shared across SHAMap instances.
 	node, err := DeserializeFromPrefix(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to deserialize child node: %w", err)
 	}
 
-	// Attach to parent for future access within this SHAMap instance.
-	// SetChildDirect doesn't update hash or dirty flag.
-	inner.SetChildDirect(branch, node)
-
-	return node, nil
+	// If another reader installed a child while we were fetching, return
+	// theirs and let ours be GC'd.
+	return inner.SetChildIfNil(branch, node), nil
 }
 
 // Type returns the map type
@@ -326,8 +327,8 @@ func (s *NodeStack) Len() int {
 	return len(s.entries)
 }
 
-// walkToKey traverses the tree toward a specific key
-func (sm *SHAMap) walkToKey(key [32]byte, stack *NodeStack) (Node, error) {
+// walkToKey traverses the tree toward a specific key.
+func (sm *SHAMap) walkToKey(ctx context.Context, key [32]byte, stack *NodeStack) (Node, error) {
 	if stack != nil && !stack.IsEmpty() {
 		stack.Clear()
 	}
@@ -350,7 +351,7 @@ func (sm *SHAMap) walkToKey(key [32]byte, stack *NodeStack) (Node, error) {
 			return nil, nil // Empty slot
 		}
 
-		child, err := sm.descend(inner, int(branch))
+		child, err := sm.descendCtx(ctx, inner, int(branch))
 		if err != nil {
 			return nil, fmt.Errorf("failed to get child: %w", err)
 		}
@@ -373,9 +374,9 @@ func (sm *SHAMap) walkToKey(key [32]byte, stack *NodeStack) (Node, error) {
 	return node, nil
 }
 
-// findItem returns the item with the specified key, or nil if not found
+// findItem returns the item with the specified key, or nil if not found.
 func (sm *SHAMap) findItem(key [32]byte) (*Item, error) {
-	node, err := sm.walkToKey(key, nil)
+	node, err := sm.walkToKey(context.Background(), key, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -634,7 +635,8 @@ func (sm *SHAMap) putItemUnsafe(item *Item) error {
 	return sm.assignRoot(newRoot, key)
 }
 
-// walkToKeyForDirty walks toward a key but doesn't include the final leaf in the stack
+// walkToKeyForDirty walks toward a key but doesn't include the final
+// leaf in the stack.
 func (sm *SHAMap) walkToKeyForDirty(key [32]byte, stack *NodeStack) (Node, error) {
 	if stack != nil && !stack.IsEmpty() {
 		stack.Clear()
@@ -764,7 +766,7 @@ func (sm *SHAMap) Delete(key [32]byte) error {
 // the remaining stack for further processing.
 func (sm *SHAMap) findAndRemoveLeaf(key [32]byte) (*NodeStack, LeafNode, error) {
 	stack := NewNodeStack()
-	_, err := sm.walkToKey(key, stack)
+	_, err := sm.walkToKey(context.Background(), key, stack)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to walk to key: %w", err)
 	}
@@ -962,7 +964,7 @@ func (sm *SHAMap) snapshotBacked(mutable bool) (*SHAMap, error) {
 	}
 
 	if len(batch.Entries) > 0 {
-		if err := sm.family.StoreBatch(batch.Entries); err != nil {
+		if err := sm.family.StoreBatch(context.Background(), batch.Entries); err != nil {
 			return nil, fmt.Errorf("failed to store flushed nodes: %w", err)
 		}
 	}
@@ -1070,7 +1072,7 @@ func (sm *SHAMap) forEachUnsafe(ctx context.Context, node Node, fn func(*Item) b
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		child, err := sm.descend(inner, i)
+		child, err := sm.descendCtx(ctx, inner, i)
 		if err != nil {
 			return fmt.Errorf("failed to get child %d: %w", i, err)
 		}
@@ -1246,14 +1248,10 @@ func (sm *SHAMap) flushNode(node Node, releaseChildren bool, batch *NodeBatch) e
 	// Mark clean
 	node.SetDirty(false)
 
-	// Release children pointers for inner nodes (retain hashes for lazy reload)
+	// Release children pointers for inner nodes (retain hashes for lazy reload).
 	if releaseChildren {
 		if inner, ok := node.(*InnerNode); ok {
-			inner.mu.Lock()
-			for i := 0; i < BranchFactor; i++ {
-				inner.children[i] = nil
-			}
-			inner.mu.Unlock()
+			inner.ReleaseChildren()
 		}
 	}
 

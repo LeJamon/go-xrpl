@@ -64,7 +64,7 @@ func (r *AccountTransactionRepository) GetOldestAccountTxs(ctx context.Context, 
 			  INNER JOIN transactions t ON t.trans_id = at.trans_id
 			  WHERE at.account = $1`
 
-	args := []interface{}{options.Account.String()}
+	args := []any{options.Account.String()}
 	argCount := 1
 
 	if options.MinLedger > 0 {
@@ -132,7 +132,7 @@ func (r *AccountTransactionRepository) GetNewestAccountTxs(ctx context.Context, 
 			  INNER JOIN transactions t ON t.trans_id = at.trans_id
 			  WHERE at.account = $1`
 
-	args := []interface{}{options.Account.String()}
+	args := []any{options.Account.String()}
 	argCount := 1
 
 	if options.MinLedger > 0 {
@@ -200,7 +200,7 @@ func (r *AccountTransactionRepository) GetOldestAccountTxsPage(ctx context.Conte
 			  INNER JOIN transactions t ON t.trans_id = at.trans_id
 			  WHERE at.account = $1`
 
-	args := []interface{}{options.Account.String()}
+	args := []any{options.Account.String()}
 	argCount := 1
 
 	if options.MinLedger > 0 {
@@ -291,7 +291,7 @@ func (r *AccountTransactionRepository) GetNewestAccountTxsPage(ctx context.Conte
 			  INNER JOIN transactions t ON t.trans_id = at.trans_id
 			  WHERE at.account = $1`
 
-	args := []interface{}{options.Account.String()}
+	args := []any{options.Account.String()}
 	argCount := 1
 
 	if options.MinLedger > 0 {
