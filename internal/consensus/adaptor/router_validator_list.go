@@ -3,31 +3,42 @@ package adaptor
 import (
 	"strconv"
 
+	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	validatorlist "github.com/LeJamon/goXRPLd/internal/validator/list"
 )
 
 // handleValidatorList ingests an inbound TMValidatorList frame, feeds
-// it into the publisher-trust aggregator, and — on Accepted —
-// rebroadcasts the original frame to other peers. Mirrors rippled's
-// PeerImp::onMessage(TMValidatorList) at PeerImp.cpp:2248-2274 +
-// ValidatorList::applyListsAndBroadcast at ValidatorList.cpp:940-995.
+// it into the publisher-trust aggregator, and — when the disposition
+// permits — rebroadcasts the original frame to other peers.
+//
+// Mirrors rippled's PeerImp::onMessage(TMValidatorList) at
+// PeerImp.cpp:2248-2274 plus the shared onValidatorListMessage helper
+// at PeerImp.cpp:2033-2245 (hash-suppression dedup, charge-by-
+// disposition, broadcast-on-fresh).
 //
 // When no aggregator is wired (standalone / no publisher trust
 // configured) the frame is silently dropped — gossip carries lists for
 // publishers we may not have opted into trusting, and that's not
 // malicious.
-//
-// Decode failures and verification failures attribute "vl-decode" /
-// "vl-invalid" bad-data to the sender, matching the manifest handler's
-// pattern of charging only on structural / cryptographic failures
-// (Untrusted publishers and Stale / SameSequence dispositions are
-// silent).
 func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 	if r.validatorList == nil {
 		return
 	}
+
+	// Hash-suppression dedup (PeerImp.cpp:2051-2066). Rippled keys this
+	// by `sha512Half(manifest, blobs, version)`; the goXRPL message_seen
+	// tracker hashes the full wire payload, which yields the same
+	// equivalence class for any byte-identical frame replay.
+	if r.messageSeen != nil {
+		hash := common.Sha512Half(msg.Payload)
+		if firstSeen, _ := r.messageSeen.observe(hash); !firstSeen {
+			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-duplicate")
+			return
+		}
+	}
+
 	decoded, err := message.Decode(message.TypeValidatorList, msg.Payload)
 	if err != nil {
 		r.logger.Warn("failed to decode TMValidatorList", "error", err, "peer", msg.PeerID)
@@ -47,15 +58,12 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 		"disposition", disp.String(),
 		"version", vl.Version)
 
-	if disp.IsBadData() {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-"+disp.String())
-		return
-	}
+	chargePeerForDisposition(r, msg.PeerID, "vl", disp)
 
 	if disp.ShouldRelay() && r.overlay != nil {
-		frame, err := encodeFrame(message.TypeValidatorList, vl)
-		if err != nil {
-			r.logger.Warn("failed to encode TMValidatorList relay frame", "error", err)
+		frame, encErr := encodeFrame(message.TypeValidatorList, vl)
+		if encErr != nil {
+			r.logger.Warn("failed to encode TMValidatorList relay frame", "error", encErr)
 			return
 		}
 		_ = r.overlay.BroadcastExcept(msg.PeerID, frame)
@@ -64,17 +72,34 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 
 // handleValidatorListCollection ingests a TMValidatorListCollection
 // (v2) frame, applying each blob individually with the collection's
-// shared publisher manifest. On any Accepted blob the frame is
-// rebroadcast (matching rippled's per-collection broadcast policy).
+// shared publisher manifest. When at least one blob relays the frame
+// is rebroadcast to other peers.
 //
-// Bad-data attribution is summarized to the worst disposition across
-// blobs — a collection with one Invalid and several Accepted gets the
-// peer charged once for vl-collection-invalid rather than several
-// times.
+// Bad-data attribution uses the worst per-blob disposition — a
+// collection with one Invalid blob and several Accepted blobs gets the
+// peer charged once for vl-coll-invalid rather than several times.
+// Mirrors rippled's PeerImp.cpp:2141-2183 worstDisposition logic.
 func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessage) {
 	if r.validatorList == nil {
 		return
 	}
+
+	// Reject v1 collections upfront, matching rippled PeerImp.cpp:2291-2299.
+	if peeked, err := message.Decode(message.TypeValidatorListCollection, msg.Payload); err == nil {
+		if coll, ok := peeked.(*message.ValidatorListCollection); ok && coll != nil && coll.Version < 2 {
+			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-wrong-version")
+			return
+		}
+	}
+
+	if r.messageSeen != nil {
+		hash := common.Sha512Half(msg.Payload)
+		if firstSeen, _ := r.messageSeen.observe(hash); !firstSeen {
+			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-duplicate")
+			return
+		}
+	}
+
 	decoded, err := message.Decode(message.TypeValidatorListCollection, msg.Payload)
 	if err != nil {
 		r.logger.Warn("failed to decode TMValidatorListCollection", "error", err, "peer", msg.PeerID)
@@ -90,12 +115,12 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 	dispList, _ := r.validatorList.ApplyCollection(coll, peerSite(msg.PeerID))
 
 	worst := validatorlist.Accepted
-	anyAccepted := false
+	anyRelay := false
 	for _, d := range dispList {
-		if d == validatorlist.Accepted {
-			anyAccepted = true
+		if d.ShouldRelay() {
+			anyRelay = true
 		}
-		if dispositionRank(d) > dispositionRank(worst) {
+		if d.Severity() > worst.Severity() {
 			worst = d
 		}
 	}
@@ -105,52 +130,47 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 		"blobs", len(dispList),
 		"worst", worst.String())
 
+	chargePeerForDisposition(r, msg.PeerID, "vl-coll", worst)
+
 	if worst.IsBadData() {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-"+worst.String())
 		// Don't relay a frame containing a poison blob.
 		return
 	}
 
-	if anyAccepted && r.overlay != nil {
-		frame, err := encodeFrame(message.TypeValidatorListCollection, coll)
-		if err != nil {
-			r.logger.Warn("failed to encode TMValidatorListCollection relay frame", "error", err)
+	if anyRelay && r.overlay != nil {
+		frame, encErr := encodeFrame(message.TypeValidatorListCollection, coll)
+		if encErr != nil {
+			r.logger.Warn("failed to encode TMValidatorListCollection relay frame", "error", encErr)
 			return
 		}
 		_ = r.overlay.BroadcastExcept(msg.PeerID, frame)
 	}
 }
 
-// dispositionRank returns a "worse-is-larger" ordering used to pick the
-// summary disposition for a v2 collection. Keep in sync with the table
-// in validatorlist.bestDisposition — they describe the same ordering
-// but here we go "worst wins" because the router uses it to attribute
-// bad-data to the sender, whereas the poller uses "best wins" for RPC.
-func dispositionRank(d validatorlist.Disposition) int {
-	switch d {
-	case validatorlist.Accepted:
-		return 0
-	case validatorlist.Expired:
-		return 1
-	case validatorlist.Pending:
-		return 2
-	case validatorlist.SameSequence:
-		return 3
-	case validatorlist.KnownSequence:
-		return 4
-	case validatorlist.Stale:
-		return 5
-	case validatorlist.Untrusted:
-		return 6
-	case validatorlist.Invalid:
-		return 7
-	case validatorlist.UnsupportedVersion:
-		return 8
-	case validatorlist.Malformed:
-		return 9
+// chargePeerForDisposition maps a Disposition's rippled fee tier
+// (Disposition.Charge) into a distinct IncPeerBadData label. Mirrors
+// PeerImp.cpp:2141-2183:
+//
+//	feeUselessData     -> "<prefix>-useless-<disposition>"
+//	feeInvalidData     -> "<prefix>-baddata-<disposition>"
+//	feeInvalidSignature -> "<prefix>-badsig-<disposition>"
+//
+// Operators get per-tier metrics matching rippled's accounting.
+func chargePeerForDisposition(r *Router, peer peermanagement.PeerID, prefix string, d validatorlist.Disposition) {
+	var tag string
+	switch d.Charge() {
+	case validatorlist.ChargeNone:
+		return
+	case validatorlist.ChargeUselessData:
+		tag = "useless"
+	case validatorlist.ChargeInvalidData:
+		tag = "baddata"
+	case validatorlist.ChargeInvalidSignature:
+		tag = "badsig"
 	default:
-		return -1
+		return
 	}
+	r.adaptor.IncPeerBadData(uint64(peer), prefix+"-"+tag+"-"+d.String())
 }
 
 // peerSite formats a peer-sourced site URI for the aggregator's

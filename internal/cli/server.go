@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/config"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
@@ -24,6 +25,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	"github.com/LeJamon/goXRPLd/internal/rpc"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	validatorlist "github.com/LeJamon/goXRPLd/internal/validator/list"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
 	"github.com/LeJamon/goXRPLd/protocol"
 	kvpebble "github.com/LeJamon/goXRPLd/storage/kvstore/pebble"
@@ -31,7 +33,6 @@ import (
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb/postgres"
 	sqlitedb "github.com/LeJamon/goXRPLd/storage/relationaldb/sqlite"
-	validatorlist "github.com/LeJamon/goXRPLd/internal/validator/list"
 	"github.com/LeJamon/goXRPLd/version"
 	"github.com/spf13/cobra"
 )
@@ -336,6 +337,51 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		// aggregator is nil, so the handlers return empty arrays in
 		// that case rather than panicking.
 		services.ValidatorList = validatorlist.NewRPCReader(consensusComponents.ValidatorList)
+
+		// Expose static config validators, cached signing keys, and the
+		// negative-UNL set to the `validators` RPC so it returns the
+		// same shape rippled's ValidatorList::getJson does.
+		staticMasters := append([][33]byte(nil), consensusComponents.StaticTrustedMasterKeys...)
+		services.LocalStaticTrustedKeysBase58 = func() []string {
+			out := make([]string, 0, len(staticMasters))
+			for _, mk := range staticMasters {
+				if enc, err := addresscodec.EncodeNodePublicKey(mk[:]); err == nil {
+					out = append(out, enc)
+				}
+			}
+			return out
+		}
+		if mc := consensusComponents.Manifests; mc != nil {
+			services.SigningKeysBase58 = func() map[string]string {
+				snap := mc.MasterToSigning()
+				if len(snap) == 0 {
+					return nil
+				}
+				out := make(map[string]string, len(snap))
+				for master, signing := range snap {
+					mEnc, mErr := addresscodec.EncodeNodePublicKey(master[:])
+					sEnc, sErr := addresscodec.EncodeNodePublicKey(signing[:])
+					if mErr == nil && sErr == nil {
+						out[mEnc] = sEnc
+					}
+				}
+				return out
+			}
+		}
+		adaptorRef := consensusComponents.Adaptor
+		services.NegativeUNLBase58 = func() []string {
+			masters := adaptorRef.GetNegativeUNLMasters()
+			if len(masters) == 0 {
+				return nil
+			}
+			out := make([]string, 0, len(masters))
+			for _, mk := range masters {
+				if enc, err := addresscodec.EncodeNodePublicKey(mk[:]); err == nil {
+					out = append(out, enc)
+				}
+			}
+			return out
+		}
 
 		// Expose the local validator's signing key to validator_info.
 		// Mirrors rippled's getValidationPublicKey gate: empty means

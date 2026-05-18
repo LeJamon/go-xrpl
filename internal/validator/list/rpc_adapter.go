@@ -3,7 +3,9 @@ package list
 import (
 	"encoding/hex"
 	"strings"
+	"time"
 
+	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	rpctypes "github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -63,17 +65,21 @@ func (r *RPCReader) Publishers() []rpctypes.ValidatorListPublisherInfo {
 	out := make([]rpctypes.ValidatorListPublisherInfo, 0, len(snap))
 	for _, s := range snap {
 		info := rpctypes.ValidatorListPublisherInfo{
-			PublicKey:      strings.ToUpper(hex.EncodeToString(s.MasterKey[:])),
-			Status:         s.Status.String(),
-			Sequence:       s.Sequence,
-			ValidatorCount: len(s.Validators),
-			SiteURI:        s.SiteURI,
+			PublicKeyHex:     strings.ToUpper(hex.EncodeToString(s.MasterKey[:])),
+			Available:        s.Status == StatusAvailable,
+			Status:           s.Status.String(),
+			Sequence:         s.Sequence,
+			Version:          s.Version,
+			SiteURI:          s.SiteURI,
+			ValidatorsBase58: encodeNodeKeysBase58(s.Validators),
 		}
 		if !s.Effective.IsZero() {
 			info.EffectiveUnix = s.Effective.Unix()
+			info.EffectiveISO = s.Effective.UTC().Format(time.RFC3339)
 		}
 		if !s.Expiration.IsZero() {
 			info.ExpirationUnix = s.Expiration.Unix()
+			info.ExpirationISO = s.Expiration.UTC().Format(time.RFC3339)
 		}
 		out = append(out, info)
 	}
@@ -94,12 +100,18 @@ func (r *RPCReader) Sites() []rpctypes.ValidatorListSiteInfo {
 			LastError:          s.LastError,
 			LastDisposition:    s.LastDisposition.String(),
 			RefreshIntervalSec: s.RefreshSeconds,
+			RefreshIntervalMin: (s.RefreshSeconds + 59) / 60,
 		}
 		if !s.LastFetched.IsZero() {
 			info.LastRefreshUnix = s.LastFetched.Unix()
+			info.LastRefreshISO = s.LastFetched.UTC().Format(time.RFC3339)
 		}
 		if !s.LastSuccess.IsZero() {
 			info.LastSuccessUnix = s.LastSuccess.Unix()
+		}
+		if !s.NextRefresh.IsZero() {
+			info.NextRefreshUnix = s.NextRefresh.Unix()
+			info.NextRefreshISO = s.NextRefresh.UTC().Format(time.RFC3339)
 		}
 		out = append(out, info)
 	}
@@ -114,4 +126,24 @@ func (r *RPCReader) TrustedMasterKeys() [][33]byte {
 	}
 	_, masters := r.agg.TrustedValidators()
 	return masters
+}
+
+// encodeNodeKeysBase58 returns base58-encoded NodePublic strings for a
+// slice of 33-byte master keys. Entries that fail to encode (wrong
+// length, etc.) are skipped silently — the alternative would be to
+// return an error from a read-only RPC adapter, which doesn't match
+// the rest of the interface.
+func encodeNodeKeysBase58(keys [][33]byte) []string {
+	if len(keys) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		enc, err := addresscodec.EncodeNodePublicKey(k[:])
+		if err != nil {
+			continue
+		}
+		out = append(out, enc)
+	}
+	return out
 }

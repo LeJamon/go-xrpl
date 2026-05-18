@@ -90,19 +90,9 @@ func parseBlob(rawBlob []byte) (*blobJSON, Disposition, error) {
 }
 
 // verifyBlobSignature checks that `signature` (hex-encoded) is a valid
-// signature by `signingKey` over the raw blob bytes (the base64-encoded
-// payload AS-RECEIVED, NOT its decoded form). Mirrors rippled
-// ValidatorList.cpp:1385-1388:
-//
-//	auto const sig = strUnHex(signature);
-//	auto const data = base64_decode(blob);
-//	if (!ripple::verify(*signingKey, makeSlice(data), makeSlice(*sig)))
-//
-// Wait — rippled actually signs the BASE64-DECODED data, not the raw
-// blob bytes. The decoded JSON text is the signing input. Reading the
-// rippled snippet carefully: `data = base64_decode(blob)` then
-// `verify(signingKey, data, sig)`. So the signature is over the
-// decoded JSON text. We match that here.
+// signature by `signingKey` over the base64-decoded blob (the inner
+// JSON payload). Mirrors rippled ValidatorList.cpp:1385-1388, which
+// signs `base64_decode(blob)` — not the on-wire base64 bytes.
 func verifyBlobSignature(signingKey [33]byte, blob, signatureHex []byte) error {
 	decoded, err := decodeBase64Tolerant(blob)
 	if err != nil {

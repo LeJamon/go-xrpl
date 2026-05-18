@@ -37,16 +37,22 @@ const DefaultMaxRefresh = 24 * time.Hour
 // 30s in ValidatorSite::activeFetcher; we mirror.
 const DefaultRequestTimeout = 30 * time.Second
 
+// ErrorRetryInterval is the cadence used to retry a failed fetch
+// (network error, non-2xx status, JSON decode failure). Mirrors
+// rippled's error_retry_interval at ValidatorSite.cpp:35 and the
+// onError(...,retry=true) branch at ValidatorSite.cpp:555-561.
+const ErrorRetryInterval = 30 * time.Second
+
 // envelopeJSON is the JSON shape published at vl.* URLs (and the
 // equivalent file:// payloads). Decoded from the HTTP response body.
 type envelopeJSON struct {
-	Manifest      string             `json:"manifest"`
-	Blob          string             `json:"blob,omitempty"`
-	Signature     string             `json:"signature,omitempty"`
-	Version       uint32             `json:"version"`
-	PublicKey     string             `json:"public_key,omitempty"`
-	BlobsV2       []envelopeBlobJSON `json:"blobs_v2,omitempty"`
-	RefreshSecs   int                `json:"refresh_interval,omitempty"`
+	Manifest    string             `json:"manifest"`
+	Blob        string             `json:"blob,omitempty"`
+	Signature   string             `json:"signature,omitempty"`
+	Version     uint32             `json:"version"`
+	PublicKey   string             `json:"public_key,omitempty"`
+	BlobsV2     []envelopeBlobJSON `json:"blobs_v2,omitempty"`
+	RefreshSecs int                `json:"refresh_interval,omitempty"`
 }
 
 // envelopeBlobJSON is a v2 collection entry inside the JSON envelope.
@@ -170,26 +176,27 @@ func (p *SitePoller) runOne(ctx context.Context, uri string) {
 // aggregator (last-fetched / last-error / disposition) regardless of
 // outcome so the validator_list_sites RPC reflects every attempt.
 //
-// Returns the next refresh interval to use — derived from the
-// envelope's refresh_interval field when present (clamped to
-// [DefaultMinRefresh, DefaultMaxRefresh]), else zero to keep the
-// caller-supplied interval.
+// Returns the next refresh interval to use:
+//   - On fetch / decode failure: ErrorRetryInterval (30s), mirroring
+//     rippled's error_retry_interval.
+//   - On success with an envelope refresh_interval: the clamped value.
+//   - Otherwise: zero, meaning "keep using the caller's interval".
 func (p *SitePoller) fetchAndApply(ctx context.Context, uri string) time.Duration {
 	now := time.Now().UTC()
 	body, err := p.fetch(ctx, uri)
 	if err != nil {
 		p.logger.Warn("validator list site fetch failed",
 			"uri", uri, "error", err)
-		p.aggregator.UpdateSiteState(uri, now, time.Time{}, err.Error(), Malformed, 0)
-		return 0
+		p.aggregator.UpdateSiteState(uri, now, time.Time{}, err.Error(), Malformed, 0, now.Add(ErrorRetryInterval))
+		return ErrorRetryInterval
 	}
 
 	var env envelopeJSON
 	if err := json.Unmarshal(body, &env); err != nil {
 		msg := fmt.Sprintf("envelope JSON decode: %v", err)
 		p.logger.Warn(msg, "uri", uri)
-		p.aggregator.UpdateSiteState(uri, now, time.Time{}, msg, Malformed, 0)
-		return 0
+		p.aggregator.UpdateSiteState(uri, now, time.Time{}, msg, Malformed, 0, now.Add(ErrorRetryInterval))
+		return ErrorRetryInterval
 	}
 
 	if env.Version == 0 {
@@ -247,7 +254,15 @@ func (p *SitePoller) fetchAndApply(ctx context.Context, uri string) time.Duratio
 	} else {
 		lastErr = "disposition=" + disp.String()
 	}
-	p.aggregator.UpdateSiteState(uri, now, lastSuccess, lastErr, disp, refreshSec)
+	// nextInterval is 0 here when no per-publisher refresh override was
+	// present in the envelope; in that case the caller will reuse its
+	// configured interval. Compute the wall-clock next refresh for the
+	// validator_list_sites RPC accordingly.
+	scheduled := nextInterval
+	if scheduled == 0 {
+		scheduled = p.interval
+	}
+	p.aggregator.UpdateSiteState(uri, now, lastSuccess, lastErr, disp, refreshSec, now.Add(scheduled))
 
 	return nextInterval
 }
@@ -293,32 +308,17 @@ func (p *SitePoller) fetch(ctx context.Context, uri string) ([]byte, error) {
 }
 
 // bestDisposition reduces a collection of dispositions to the single
-// summary the caller (RPC, logs) sees. Order of preference:
-// Accepted > Expired > Pending > SameSequence > KnownSequence > Stale
-// > Untrusted > Invalid > UnsupportedVersion > Malformed. Mirrors
-// rippled's PublisherListStats best-of-many reduction.
+// summary the caller (RPC, logs) sees, using Disposition.Severity as
+// the canonical "lower-is-better" ordering. Mirrors rippled's
+// PublisherListStats best-of-many reduction.
 func bestDisposition(dispList []Disposition) Disposition {
 	if len(dispList) == 0 {
 		return Malformed
 	}
-	rank := map[Disposition]int{
-		Accepted:           0,
-		Expired:            1,
-		Pending:            2,
-		SameSequence:       3,
-		KnownSequence:      4,
-		Stale:              5,
-		Untrusted:          6,
-		Invalid:            7,
-		UnsupportedVersion: 8,
-		Malformed:          9,
-	}
 	best := dispList[0]
-	bestRank := rank[best]
 	for _, d := range dispList[1:] {
-		if r, ok := rank[d]; ok && r < bestRank {
+		if d.Severity() < best.Severity() {
 			best = d
-			bestRank = r
 		}
 	}
 	return best

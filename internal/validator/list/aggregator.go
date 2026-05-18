@@ -19,8 +19,12 @@ import (
 // secp256k1). Used as the map key for per-publisher state.
 type PublisherKey [33]byte
 
-// PublisherStatus mirrors rippled's PublisherStatus enum
-// (rippled/src/xrpld/app/misc/ValidatorList.h:103-114).
+// PublisherStatus tracks per-publisher availability. The label set
+// (unavailable / available / expired / revoked) matches rippled's
+// PublisherStatus enum at rippled/src/xrpld/app/misc/ValidatorList.h:87-100,
+// but the underlying iota values are not aligned with rippled — goXRPL
+// never compares PublisherStatus by ordinal so the numeric mapping is
+// not load-bearing.
 type PublisherStatus uint8
 
 const (
@@ -98,17 +102,26 @@ type PublisherState struct {
 
 	// LastUpdate is when we accepted this publisher's most recent list.
 	LastUpdate time.Time
+
+	// Version is the protocol version of the most recently applied
+	// list. Mirrors rippled's PublisherListCollection.rawVersion at
+	// ValidatorList.h:74. Zero before the first accepted list.
+	Version uint32
 }
 
 // SiteState is the per-URL polling state surfaced via the
 // validator_list_sites RPC.
 type SiteState struct {
-	URI            string
-	LastFetched    time.Time
-	LastSuccess    time.Time
-	LastError      string
+	URI             string
+	LastFetched     time.Time
+	LastSuccess     time.Time
+	LastError       string
 	LastDisposition Disposition
-	RefreshSeconds int
+	RefreshSeconds  int
+	// NextRefresh is the wall-clock time at which the next poll attempt
+	// is scheduled. Mirrors rippled's ValidatorSite::Site::nextRefresh
+	// surfaced via `next_refresh_time` in the validator_list_sites RPC.
+	NextRefresh time.Time
 }
 
 // Aggregator is the central publisher-trust subsystem. It owns the
@@ -317,7 +330,7 @@ func (a *Aggregator) SiteSnapshot() []SiteState {
 // Idempotent for unknown URIs — the call is silently dropped rather
 // than erroring, so a poller cannot panic the server by being out of
 // sync with the configured site set.
-func (a *Aggregator) UpdateSiteState(uri string, lastFetched, lastSuccess time.Time, lastErr string, lastDisp Disposition, refreshSec int) {
+func (a *Aggregator) UpdateSiteState(uri string, lastFetched, lastSuccess time.Time, lastErr string, lastDisp Disposition, refreshSec int, nextRefresh time.Time) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, s := range a.sites {
@@ -332,6 +345,9 @@ func (a *Aggregator) UpdateSiteState(uri string, lastFetched, lastSuccess time.T
 		s.LastDisposition = lastDisp
 		if refreshSec > 0 {
 			s.RefreshSeconds = refreshSec
+		}
+		if !nextRefresh.IsZero() {
+			s.NextRefresh = nextRefresh
 		}
 		return
 	}
@@ -414,16 +430,21 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 	}
 
 	if parsed.Revoked() {
+		// Rippled returns ListDisposition::untrusted on revocation
+		// (ValidatorList.cpp:1382-1383). Revocations are legitimate
+		// gossip; punishing the forwarding peer would cascade across
+		// every honest hop in the mesh. The side-effect (clearing
+		// publisher contribution + status flip) still runs.
 		a.handleRevocation(pubKey)
-		return Invalid, pubKey
+		return Untrusted, pubKey
 	}
 
 	// Pull the current ephemeral signing key. With a cache: this is
 	// the freshest signing key we've ever seen for the publisher,
 	// which might be NEWER than the one in this very manifest if a
-	// later manifest arrived first via gossip. That's intentional —
-	// rippled also uses publisherManifests_.getSigningKey here, which
-	// is the latest cached key, not the one in `manifestBytes`.
+	// later manifest arrived first via gossip. Rippled also uses
+	// publisherManifests_.getSigningKey here, which is the latest
+	// cached key, not the one in `manifestBytes`.
 	signingKey := parsed.SigningKey
 	if a.manifests != nil {
 		if k, ok := a.manifests.GetSigningKey(parsed.MasterKey); ok {
@@ -431,8 +452,10 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 		} else {
 			// Cache says the master is unknown or revoked. If revoked
 			// we already handled above; if unknown despite the apply,
-			// treat as invalid.
-			return Invalid, pubKey
+			// treat as untrusted (no usable signing key from a trusted
+			// publisher means we cannot verify the blob; rippled's
+			// equivalent at ValidatorList.cpp:1382 is also untrusted).
+			return Untrusted, pubKey
 		}
 	}
 
@@ -474,7 +497,7 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 		// Even an expired list still updates the publisher entry so
 		// the RPC can surface "expired" — but the validators do NOT
 		// flow into the trusted union (status is StatusExpired).
-		applied := a.applyAcceptedLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now)
+		applied := a.applyAcceptedLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now, version)
 		_ = applied // applyAcceptedLocked sets Status; trusted set recompute below skips expired.
 		current.Status = StatusExpired
 		a.recomputeAndEmitLocked()
@@ -490,7 +513,7 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 		return Pending, pubKey
 	}
 
-	a.applyAcceptedLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now)
+	a.applyAcceptedLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now, version)
 	a.recomputeAndEmitLocked()
 	return Accepted, pubKey
 }
@@ -499,7 +522,7 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 // publisher's state. Caller must hold a.mu. Does NOT emit OnChange —
 // that's done by recomputeAndEmitLocked once the caller has decided
 // the disposition warrants a trusted-set recompute.
-func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, signingKey [33]byte, validFrom, validUntil time.Time, siteURI string, now time.Time) bool {
+func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, signingKey [33]byte, validFrom, validUntil time.Time, siteURI string, now time.Time, version uint32) bool {
 	prevCount := len(s.Validators)
 	s.Sequence = blob.Sequence
 	s.Effective = validFrom
@@ -508,6 +531,9 @@ func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, sign
 	s.SiteURI = siteURI
 	s.LastUpdate = now
 	s.Status = StatusAvailable
+	if version > s.Version {
+		s.Version = version
+	}
 
 	keys := make([][33]byte, 0, len(blob.Validators))
 	for _, v := range blob.Validators {

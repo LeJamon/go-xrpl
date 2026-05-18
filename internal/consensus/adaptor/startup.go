@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -43,6 +44,13 @@ type Components struct {
 	// validator_list_sites and pipes the results into ValidatorList.
 	// Nil iff ValidatorList is nil or no sites are configured.
 	ValidatorListPoller *validatorlist.SitePoller
+
+	// StaticTrustedMasterKeys carries the master pubkeys parsed out of
+	// the operator's `[validators]` config stanza. Captured here so the
+	// `validators` RPC can surface them as `local_static_keys` without
+	// having to re-parse config or query a mutable adaptor field that
+	// also includes publisher-derived entries.
+	StaticTrustedMasterKeys [][33]byte
 
 	// Archive is the on-disk validation archive, when enabled.
 	// Nil if disabled in config or if no relational DB is configured.
@@ -352,16 +360,18 @@ func NewFromConfig(
 		return opMode.String()
 	})
 
+	staticMastersCopy := append([][33]byte(nil), masterKeys...)
 	return &Components{
-		Overlay:             overlay,
-		Engine:              engine,
-		Adaptor:             adaptor,
-		Router:              router,
-		ModeManager:         modeManager,
-		Manifests:           manifestCache,
-		ValidatorList:       vlAgg,
-		ValidatorListPoller: vlPoller,
-		Archive:             validationArchive,
+		Overlay:                 overlay,
+		Engine:                  engine,
+		Adaptor:                 adaptor,
+		Router:                  router,
+		ModeManager:             modeManager,
+		Manifests:               manifestCache,
+		ValidatorList:           vlAgg,
+		ValidatorListPoller:     vlPoller,
+		StaticTrustedMasterKeys: staticMastersCopy,
+		Archive:                 validationArchive,
 	}, nil
 }
 
@@ -400,13 +410,9 @@ func mergeValidators(aIDs []consensus.NodeID, aMKs [][33]byte, bIDs []consensus.
 	for mk := range seen {
 		masters = append(masters, mk)
 	}
-	// Sort by master key for stable order (helps tests + deterministic
-	// downstream logging).
-	for i := 1; i < len(masters); i++ {
-		for j := i; j > 0 && string(masters[j][:]) < string(masters[j-1][:]); j-- {
-			masters[j], masters[j-1] = masters[j-1], masters[j]
-		}
-	}
+	sort.Slice(masters, func(i, j int) bool {
+		return string(masters[i][:]) < string(masters[j][:])
+	})
 	ids := make([]consensus.NodeID, len(masters))
 	for i, mk := range masters {
 		ids[i] = seen[mk]

@@ -13,14 +13,12 @@
 package list
 
 // Disposition reports the outcome of applying a single validator list
-// blob. Mirrors rippled's ListDisposition enum
-// (rippled/src/xrpld/app/misc/ValidatorList.h:62-90).
-//
-// The ordering matters: dispositions strictly greater than Pending mean
-// "no state change" (the caller should NOT update publisherLists_),
-// while Accepted / Expired / Pending are all "store-and-act" outcomes
-// (see ValidatorList.cpp:1169 — `if (result > ListDisposition::pending)
-// return early`).
+// blob. The numeric ordering mirrors rippled's ListDisposition
+// (rippled/src/xrpld/app/misc/ValidatorList.h:55-82): smaller values
+// are "more desirable" outcomes. Malformed is goXRPL-only — rippled
+// folds parse / decode failures into invalid; goXRPL keeps the split
+// so the router can distinguish wire-level rejects from cryptographic
+// rejects in its bad-data attribution.
 type Disposition uint8
 
 const (
@@ -49,33 +47,35 @@ const (
 	KnownSequence
 
 	// Stale: the blob's sequence is below our current accepted sequence
-	// from this publisher. Drop silently (the peer hasn't seen our
-	// latest yet, which is fine).
+	// from this publisher.
 	Stale
 
 	// Untrusted: the publisher master key extracted from the manifest is
-	// not in our configured trust set. Per rippled this drops without
-	// charging the peer — a peer may gossip lists from publishers we
-	// don't trust, and that's not malicious.
+	// not in our configured trust set, OR the publisher's manifest is
+	// revoked. Rippled returns untrusted in both cases
+	// (ValidatorList.cpp:1366,1382-1383) — revocation is legitimate
+	// gossip and must not punish the forwarding peer.
 	Untrusted
 
-	// Invalid: the manifest's master/ephemeral signature failed
-	// verification, or the blob's signature failed against the
-	// publisher's current ephemeral key, or the inner JSON is
-	// structurally invalid. Charge the sender for bad data.
-	Invalid
-
 	// UnsupportedVersion: the protocol version field is outside the
-	// supported range (1 or 2). Charge the sender — newer rippled may
-	// emit versions we don't grok, but per rippled we still treat this
-	// as malformed because the wire format itself was rejected.
+	// supported range. Charge the sender.
 	UnsupportedVersion
 
-	// Malformed: the wire message itself could not be parsed (proto
-	// decode failed, blob isn't base64, manifest isn't base64, etc.).
-	// Charge the sender.
+	// Invalid: the blob's signature failed verification, or the inner
+	// JSON is structurally invalid. Charge the sender for bad data.
+	Invalid
+
+	// Malformed: goXRPL-only. The wire envelope itself could not be
+	// parsed (manifest not base64, blob not base64, message decode
+	// failure). Charge the sender.
 	Malformed
 )
+
+// MaxValidRelaySeverity is the upper severity bound (inclusive) for
+// dispositions that warrant rebroadcasting the originating frame.
+// Mirrors rippled's `disposition <= ListDisposition::known_sequence`
+// gate at ValidatorList.cpp:973.
+const MaxValidRelaySeverity = KnownSequence
 
 // String returns a short, lowercase label suitable for logs and metrics.
 func (d Disposition) String() string {
@@ -94,10 +94,10 @@ func (d Disposition) String() string {
 		return "stale"
 	case Untrusted:
 		return "untrusted"
-	case Invalid:
-		return "invalid"
 	case UnsupportedVersion:
 		return "unsupported_version"
+	case Invalid:
+		return "invalid"
 	case Malformed:
 		return "malformed"
 	default:
@@ -105,9 +105,18 @@ func (d Disposition) String() string {
 	}
 }
 
+// Severity returns the numeric "worse-is-larger" rank used to pick
+// summary dispositions (worst-wins for peer bad-data attribution,
+// best-wins for site-poller RPC). The underlying iota ordering is the
+// canonical source; this method exists so callers don't open-code
+// rank tables that drift from the enum.
+func (d Disposition) Severity() int { return int(d) }
+
 // IsBadData reports whether the disposition warrants charging the
 // originating peer for malformed / cryptographically-invalid data.
-// Used by the router to decide whether to call IncPeerBadData.
+// Mirrors the worst-case charge tiers in PeerImp::onValidatorListMessage
+// (PeerImp.cpp:2141-2183). Untrusted / SameSequence / KnownSequence /
+// Stale are charged but at lower tiers — see ChargeCategory.
 func (d Disposition) IsBadData() bool {
 	switch d {
 	case Invalid, UnsupportedVersion, Malformed:
@@ -117,10 +126,49 @@ func (d Disposition) IsBadData() bool {
 	}
 }
 
-// ShouldRelay reports whether an accepted disposition warrants
-// rebroadcasting the originating wire frame to other peers. Mirrors
-// rippled's broadcastBlobs branch in applyListsAndBroadcast — only
-// strictly-accepted lists propagate; expired/pending/same do not.
+// ChargeCategory is the rippled fee tier a disposition maps to in
+// PeerImp::onValidatorListMessage. The router translates this into a
+// distinct label passed to IncPeerBadData so operators can distinguish
+// the misbehavior types in metrics.
+type ChargeCategory uint8
+
+const (
+	// ChargeNone means the disposition is "good data" — no peer charge.
+	ChargeNone ChargeCategory = iota
+	// ChargeUselessData mirrors rippled feeUselessData (light): duplicate
+	// list, untrusted publisher, same/known sequence.
+	ChargeUselessData
+	// ChargeInvalidData mirrors rippled feeInvalidData (medium): stale
+	// list, unsupported version.
+	ChargeInvalidData
+	// ChargeInvalidSignature mirrors rippled feeInvalidSignature
+	// (heaviest): malformed wire / invalid cryptography.
+	ChargeInvalidSignature
+)
+
+// Charge returns the rippled fee tier this disposition maps to in
+// PeerImp::onValidatorListMessage (PeerImp.cpp:2141-2183).
+func (d Disposition) Charge() ChargeCategory {
+	switch d {
+	case Accepted, Expired, Pending:
+		return ChargeNone
+	case SameSequence, KnownSequence, Untrusted:
+		return ChargeUselessData
+	case Stale, UnsupportedVersion:
+		return ChargeInvalidData
+	case Invalid, Malformed:
+		return ChargeInvalidSignature
+	default:
+		return ChargeNone
+	}
+}
+
+// ShouldRelay reports whether the disposition warrants rebroadcasting
+// the originating frame. Mirrors rippled's
+// `broadcast = disposition <= ListDisposition::known_sequence` gate
+// at ValidatorList.cpp:973 — Accepted, Expired, Pending, SameSequence
+// and KnownSequence all relay. Per-peer filtering (skip peers already
+// at the same sequence) is done at broadcast time, not here.
 func (d Disposition) ShouldRelay() bool {
-	return d == Accepted
+	return d.Severity() <= MaxValidRelaySeverity.Severity()
 }

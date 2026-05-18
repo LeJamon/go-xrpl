@@ -1063,6 +1063,46 @@ func computeQuorum(trusted, disabled int) int {
 	return q
 }
 
+// GetNegativeUNLMasters reads the ltNEGATIVE_UNL SLE and returns the
+// raw 33-byte master pubkeys of disabled validators (not the derived
+// NodeIDs that GetNegativeUNL returns). Used by the `validators` RPC,
+// which surfaces these as base58 NodePublic strings under the
+// `NegativeUNL` key — matching rippled's getJson at
+// ValidatorList.cpp:1737-1744.
+//
+// Returns nil under the same conditions GetNegativeUNL does: no ledger
+// service, no validated ledger, no SLE, or parse failure.
+func (a *Adaptor) GetNegativeUNLMasters() [][33]byte {
+	if a.ledgerService == nil {
+		return nil
+	}
+	l := a.ledgerService.GetValidatedLedger()
+	if l == nil {
+		return nil
+	}
+	data, err := l.Read(keylet.NegativeUNL())
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	sle, err := pseudo.ParseNegativeUNLSLE(data)
+	if err != nil {
+		return nil
+	}
+	if len(sle.DisabledValidators) == 0 {
+		return nil
+	}
+	out := make([][33]byte, 0, len(sle.DisabledValidators))
+	for _, pubKey := range sle.DisabledValidators {
+		if len(pubKey) != 33 {
+			continue
+		}
+		var master [33]byte
+		copy(master[:], pubKey)
+		out = append(out, master)
+	}
+	return out
+}
+
 // GetNegativeUNL reads the ltNEGATIVE_UNL SLE from the current validated
 // ledger and returns the NodeIDs of disabled validators. Mirrors
 // rippled's per-ledger NegativeUNL scan; without this the
