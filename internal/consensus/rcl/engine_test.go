@@ -16,6 +16,7 @@ import (
 type mockLedger struct {
 	id        consensus.LedgerID
 	seq       uint32
+	parentID  consensus.LedgerID
 	closeTime time.Time
 	txSetID   consensus.TxSetID
 	txs       [][]byte
@@ -23,7 +24,7 @@ type mockLedger struct {
 
 func (l *mockLedger) ID() consensus.LedgerID       { return l.id }
 func (l *mockLedger) Seq() uint32                  { return l.seq }
-func (l *mockLedger) ParentID() consensus.LedgerID { return consensus.LedgerID{} }
+func (l *mockLedger) ParentID() consensus.LedgerID { return l.parentID }
 func (l *mockLedger) CloseTime() time.Time         { return l.closeTime }
 func (l *mockLedger) TxSetID() consensus.TxSetID   { return l.txSetID }
 func (l *mockLedger) Bytes() []byte                { return nil }
@@ -253,6 +254,7 @@ func (a *mockAdaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet
 	newLedger := &mockLedger{
 		id:        consensus.LedgerID{byte(parent.Seq() + 1)},
 		seq:       parent.Seq() + 1,
+		parentID:  parent.ID(),
 		closeTime: closeTime,
 		txSetID:   txSet.ID(),
 		txs:       txSet.Txs(),
@@ -3029,4 +3031,296 @@ func TestShouldPause_HardTimeoutOverride(t *testing.T) {
 	if paused {
 		t.Fatalf("shouldPause must release after LedgerMaxConsensus elapses so the abandon path can fire")
 	}
+}
+
+// TestAcceptLedger_WrongLedger_IncompatibleBuild_Suppresses pins the
+// isCompatible half of the rippled emission gate (RCLConsensus.cpp:587-589
+// → LedgerMaster::isCompatible → areCompatible at View.cpp:797-857).
+// Setup: validated tip at seq=50, our built ledger at seq=52 with a
+// parent that does NOT descend from validated. Mirrors a genuine
+// wrongLedger side-chain build. Even though wrongLedger mode no
+// longer gates emission, the build is not on the validated chain so
+// areCompatible(validated, built) returns false at View.cpp:805-820
+// and rippled suppresses validation. goxrpl must match.
+func TestAcceptLedger_WrongLedger_IncompatibleBuild_Suppresses(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	// Validated chain: seq 50 with a specific id; that id is what the
+	// gate compares against the built ledger's ancestor.
+	validatedID := consensus.LedgerID{0xAA}
+	validatedLedger := &mockLedger{id: validatedID, seq: 50, closeTime: time.Now()}
+	adaptor.ledgers[validatedID] = validatedLedger
+	adaptor.validatedLedgerHashOverride = validatedID
+
+	// Our prev (a side-chain ledger at seq=51 with a parent that is
+	// NOT the validated id). The BuildLedger mock will produce a
+	// child at seq=52 with parentID = prev.ID(); the walk from built
+	// will land on prev at seq=51, then on its parent at seq=50 —
+	// which is in the ledgers map and has id != validatedID. That
+	// triggers the incompatibility path.
+	sideAncestorID := consensus.LedgerID{0xBB}
+	sideAncestor := &mockLedger{id: sideAncestorID, seq: 50, closeTime: time.Now()}
+	sidePrevID := consensus.LedgerID{0xBC}
+	sidePrev := &mockLedger{id: sidePrevID, seq: 51, parentID: sideAncestorID, closeTime: time.Now()}
+	adaptor.ledgers[sideAncestorID] = sideAncestor
+	adaptor.ledgers[sidePrevID] = sidePrev
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 52, ParentHash: sidePrevID}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.prevLedger = sidePrev
+	engine.setMode(consensus.ModeWrongLedger)
+	engine.setPhase(consensus.PhaseEstablish)
+	engine.acceptLedger(consensus.ResultSuccess)
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	emitted := len(adaptor.validationsBroadcast)
+	adaptor.mu.RUnlock()
+
+	if emitted != 0 {
+		t.Fatalf("incompatible side-chain build must suppress emission "+
+			"(rippled LedgerMaster::isCompatible → areCompatible "+
+			"rejects at View.cpp:805-820); got %d emissions — "+
+			"Frankenstein-hash regression of class #401", emitted)
+	}
+}
+
+// TestAcceptLedger_WrongLedger_CompatibleAhead_EmitsPartial pins the
+// #451 fact pattern: mode==wrongLedger but our built ledger is just
+// one seq ahead of validated on the SAME chain. areCompatible
+// (View.cpp:805-820) walks built back, finds the validated id as the
+// grandparent, returns true → rippled emits a partial. goxrpl must
+// match.
+func TestAcceptLedger_WrongLedger_CompatibleAhead_EmitsPartial(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	// Validated tip at seq=50; our prev at seq=51 with parentID =
+	// validatedID. BuildLedger produces seq=52 whose parent is prev.
+	// Walk from built (52) → prev (51) → validated (50); ids match
+	// → compatible.
+	validatedID := consensus.LedgerID{0xAA}
+	validatedLedger := &mockLedger{id: validatedID, seq: 50, closeTime: time.Now()}
+	prevID := consensus.LedgerID{0xAB}
+	prev := &mockLedger{id: prevID, seq: 51, parentID: validatedID, closeTime: time.Now()}
+	adaptor.ledgers[validatedID] = validatedLedger
+	adaptor.ledgers[prevID] = prev
+	adaptor.validatedLedgerHashOverride = validatedID
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 52, ParentHash: prevID}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.prevLedger = prev
+	engine.setMode(consensus.ModeWrongLedger)
+	engine.setPhase(consensus.PhaseEstablish)
+	engine.acceptLedger(consensus.ResultSuccess)
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	emitted := len(adaptor.validationsBroadcast)
+	var emittedFull bool
+	if emitted > 0 {
+		emittedFull = adaptor.validationsBroadcast[0].Full
+	}
+	adaptor.mu.RUnlock()
+
+	if emitted != 1 {
+		t.Fatalf("compatible-ahead wrongLedger build must emit one partial "+
+			"(rippled areCompatible returns true at View.cpp:805-820 when "+
+			"the validated id is on the build's ancestry); got %d", emitted)
+	}
+	if emittedFull {
+		t.Fatalf("wrongLedger emission must be Full=false (partial)")
+	}
+}
+
+// TestShouldPause_StaleValidationCountsAsOffline pins the freshness
+// classification in countLaggardsAndOfflineLocked: a peer whose only
+// tracked validation is older than validationLaggardFreshness (20s,
+// matching rippled's parms_.validationFRESHNESS at Validations.h:89)
+// is counted as offline, not as a laggard.
+//
+// Mirrors Validations.h:1136-1140 — rippled's `current()` iterator
+// only invokes the lambda for fresh validations, so a stale peer's
+// key stays in trustedKeys and is tallied as offline at
+// Consensus.h:1255 rather than incrementing the laggards counter.
+//
+// Difference from a current-but-behind peer (TestShouldPause_AheadAndLaggards):
+// here we set quorum=2 in a 3-validator UNL so that with one stale
+// peer treated as OFFLINE and one current peer at our seq (non-laggard),
+// the phase-0 predicate `laggards+offline > total-quorum`
+// (0+1 > 3-2 = 1) is FALSE and we do NOT pause. The earlier
+// (`<=` + no-freshness) implementation would have classified the
+// stale peer as a laggard, flipping laggards+offline from 0+1 to 1+0
+// and still not pausing — but more importantly the intermediate-phase
+// predicate would diverge by counting stale-as-laggard. We
+// independently verify the count via shouldPause's debug categorisation.
+func TestShouldPause_StaleValidationCountsAsOffline(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.nodeID = consensus.NodeID{0x01}
+	peerA := consensus.NodeID{0x02}
+	peerB := consensus.NodeID{0x03}
+	adaptor.trusted[adaptor.nodeID] = true
+	adaptor.trusted[peerA] = true
+	adaptor.trusted[peerB] = true
+	adaptor.quorum = 2
+
+	validatedID := consensus.LedgerID{0x09}
+	validatedLedger := &mockLedger{id: validatedID, seq: 9, closeTime: time.Now()}
+	adaptor.ledgers[validatedID] = validatedLedger
+	adaptor.validatedLedgerHashOverride = validatedID
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 11, ParentHash: consensus.LedgerID{0x0a}}
+	engine.StartRound(round, true)
+
+	engine.mu.Lock()
+	engine.ourLastValidatedSeq = 9
+	engine.prevLedger = &mockLedger{id: consensus.LedgerID{0x0a}, seq: 10, closeTime: time.Now()}
+	engine.setPhase(consensus.PhaseEstablish)
+	now := adaptor.Now()
+	if engine.validationTracker != nil {
+		engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
+		// Peer A: fresh validation at our prev (seq=10) → current,
+		// not a laggard with strict-less-than.
+		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: consensus.LedgerID{0x0a}, LedgerSeq: 10, Full: true, SignTime: now, SeenTime: now})
+		// Peer B: STALE validation (seenTime well past the 20s
+		// freshness window) at seq=8. Must count as offline, not
+		// as a laggard.
+		stale := now.Add(-2 * time.Minute)
+		engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: consensus.LedgerID{0x08}, LedgerSeq: 8, Full: true, SignTime: stale, SeenTime: stale})
+	}
+
+	laggards, offline := engine.countLaggardsAndOfflineLocked(10, []consensus.NodeID{adaptor.nodeID, peerA, peerB})
+	engine.mu.Unlock()
+
+	if laggards != 0 {
+		t.Fatalf("strict-less-than: peer at seq==prev must be current, not a laggard; got laggards=%d", laggards)
+	}
+	if offline != 1 {
+		t.Fatalf("stale validation must classify peer as offline, not laggard; got offline=%d", offline)
+	}
+}
+
+// TestPhaseEstablish_PauseAndRecover is the end-to-end pause-recovery
+// integration test mirroring rippled's testPauseForLaggards
+// (Consensus_test.cpp:1030-1119). Two-phase scenario:
+//
+//  1. Ahead engine in phaseEstablish with 2 laggard peers — multiple
+//     consecutive shouldPause checks must return TRUE so the phase
+//     does NOT terminate via acceptLedger.
+//  2. Peers catch up to our prev seq — the next shouldPause must
+//     return FALSE so the round can progress to a terminal state
+//     instead of pausing forever.
+//
+// This is the contract the gate exists to provide: without it the
+// engine close-then-rollback-cycles every heartbeat against an
+// unreachable quorum, drifting the local closed_ledger arbitrarily
+// far past the validated tip — the failure mode in #451.
+func TestPhaseEstablish_PauseAndRecover(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.nodeID = consensus.NodeID{0x01}
+	peerA := consensus.NodeID{0x02}
+	peerB := consensus.NodeID{0x03}
+	adaptor.trusted[adaptor.nodeID] = true
+	adaptor.trusted[peerA] = true
+	adaptor.trusted[peerB] = true
+	adaptor.quorum = 3
+
+	validatedID := consensus.LedgerID{0x09}
+	validatedLedger := &mockLedger{id: validatedID, seq: 9, closeTime: time.Now()}
+	adaptor.ledgers[validatedID] = validatedLedger
+	adaptor.validatedLedgerHashOverride = validatedID
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 13, ParentHash: consensus.LedgerID{0x0c}}
+	engine.StartRound(round, true)
+
+	engine.mu.Lock()
+	engine.ourLastValidatedSeq = 9
+	engine.prevLedger = &mockLedger{id: consensus.LedgerID{0x0c}, seq: 12, closeTime: time.Now()}
+	engine.setPhase(consensus.PhaseEstablish)
+	now := adaptor.Now()
+	if engine.validationTracker != nil {
+		engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
+		// Phase 1: both peers stuck at validated (seq=9), well
+		// behind our prev (seq=12). ahead=3 puts us in phase=2.
+		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: validatedID, LedgerSeq: 9, Full: true, SignTime: now, SeenTime: now})
+		engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: validatedID, LedgerSeq: 9, Full: true, SignTime: now, SeenTime: now})
+	}
+
+	// Three consecutive ticks: gate stays high, engine refuses to
+	// advance via acceptLedger. We check shouldPause directly because
+	// invoking phaseEstablish would also exercise the abandon/close
+	// branches; the contract we are pinning is the pause gate
+	// itself.
+	for i, dt := range []time.Duration{1 * time.Second, 3 * time.Second, 7 * time.Second} {
+		if !engine.shouldPause(dt) {
+			engine.mu.Unlock()
+			t.Fatalf("tick %d at roundTime=%v: must pause (ahead=3, both peers behind)", i, dt)
+		}
+	}
+
+	// Phase 2: peers catch up to our prev seq (12). Refresh their
+	// validations via Add with the higher seq — strict-less-than
+	// rule (seq < prev) means seq==12 makes them non-laggards.
+	if engine.validationTracker != nil {
+		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: consensus.LedgerID{0x0c}, LedgerSeq: 12, Full: true, SignTime: now, SeenTime: now})
+		engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: consensus.LedgerID{0x0c}, LedgerSeq: 12, Full: true, SignTime: now, SeenTime: now})
+	}
+
+	// shouldPause now returns false — the round is free to progress.
+	if engine.shouldPause(1 * time.Second) {
+		engine.mu.Unlock()
+		t.Fatalf("after peers caught up to our prev seq: must NOT pause (rippled testPauseForLaggards convergence path)")
+	}
+	engine.mu.Unlock()
 }

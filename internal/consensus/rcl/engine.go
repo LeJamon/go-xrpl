@@ -2100,18 +2100,105 @@ func (e *Engine) validatedSeqLocked() uint32 {
 	return vl.Seq()
 }
 
-// countLaggardsAndOfflineLocked partitions trusted validators (other
-// than ourselves) by their latest tracked validation:
-//   - laggards: validator whose latest validation is at seq <= prevSeq;
-//     they have NOT advanced past our prev, so a quorum that includes
-//     them can't form on our seq.
-//   - offline: validator with no tracked validation at all.
+// isBuildCompatibleWithValidatedLocked mirrors rippled's
+// LedgerMaster::isCompatible (LedgerMaster.cpp:135-160) which calls
+// areCompatible(validatedLedger, built, ...) at View.cpp:797-857.
+// Returns true when the locally built ledger has the validated tip on
+// its ancestry chain, or when we lack enough state to disprove
+// compatibility (rippled treats hashOfSeq returning nullopt as no
+// incompatibility detected — same semantic here).
 //
-// The two are disjoint; current (non-laggard, non-offline) validators
-// are the remainder. Mirrors rippled's RCLValidations::laggards
-// post-condition where the trustedKeys hash_set is mutated to leave
-// only the offline keys (RCLConsensus.cpp:1068-1072) — we just return
-// the counts directly instead of mutating an input set.
+// The three branches mirror areCompatible's three-way fork:
+//  1. validatedSeq <  builtSeq: walk built back to validatedSeq via
+//     ParentID and compare to the validated hash.
+//  2. validatedSeq == builtSeq: hash equality at the same seq.
+//  3. validatedSeq >  builtSeq: walk validatedLedger back to builtSeq
+//     and compare to the built hash.
+//
+// Missing intermediate ancestors → return true (compatible). This
+// matches rippled's "hashOfSeq returned nullopt → no rejection" rule
+// at View.cpp:812 / 828.
+//
+// Caller must hold e.mu.
+func (e *Engine) isBuildCompatibleWithValidatedLocked(built consensus.Ledger) bool {
+	if built == nil {
+		return true
+	}
+	vh := e.adaptor.GetValidatedLedgerHash()
+	if vh == (consensus.LedgerID{}) {
+		return true
+	}
+	vl, err := e.adaptor.GetLedger(vh)
+	if err != nil || vl == nil {
+		return true
+	}
+	validatedSeq := vl.Seq()
+	builtSeq := built.Seq()
+
+	if validatedSeq == builtSeq {
+		return built.ID() == vh
+	}
+
+	if validatedSeq < builtSeq {
+		current := built
+		// Walk back to validatedSeq via parent pointers. The first hop
+		// drops to the parent of `built` — which is our prevLedger and
+		// is always known — so the walk is well-defined for the common
+		// case where validatedSeq == builtSeq-1 (the #451 fact pattern).
+		// Deeper walks rely on the adaptor having those ancestors;
+		// missing ancestors fall through to compatible per rippled.
+		for current != nil && current.Seq() > validatedSeq {
+			parent, err := e.adaptor.GetLedger(current.ParentID())
+			if err != nil || parent == nil {
+				return true
+			}
+			current = parent
+		}
+		if current == nil || current.Seq() != validatedSeq {
+			return true
+		}
+		return current.ID() == vh
+	}
+
+	// validatedSeq > builtSeq: walk validated back to builtSeq.
+	current := vl
+	for current != nil && current.Seq() > builtSeq {
+		parent, err := e.adaptor.GetLedger(current.ParentID())
+		if err != nil || parent == nil {
+			return true
+		}
+		current = parent
+	}
+	if current == nil || current.Seq() != builtSeq {
+		return true
+	}
+	return current.ID() == built.ID()
+}
+
+// validationLaggardFreshness mirrors rippled's
+// parms_.validationFRESHNESS = 20s (Validations.h:89). A peer whose
+// latest tracked validation is older than this window is considered
+// offline for laggard accounting, not a laggard — even if its seq
+// would otherwise place it behind us. The shorter window (vs the
+// 3m/5m isCurrent windows used elsewhere) reflects laggards' tighter
+// "did this peer send a validation in the most recent ledger interval"
+// semantic at Validations.h:1136-1140.
+const validationLaggardFreshness = 20 * time.Second
+
+// countLaggardsAndOfflineLocked partitions trusted validators (other
+// than ourselves) by their latest fresh tracked validation:
+//   - laggards: validator whose latest fresh validation is at
+//     seq < prevSeq — they have NOT advanced past our prev, so a
+//     quorum that includes them can't form on our seq.
+//   - offline: validator with no tracked validation, or with only a
+//     stale one (outside the laggard-freshness window).
+//
+// A validator whose latest fresh validation is at seq >= prevSeq is
+// current and contributes to neither count. Mirrors rippled's
+// RCLValidations::laggards (Validations.h:1128-1147): only fresh
+// validations are iterated; a fresh entry at seq < prev increments
+// the laggards counter, all other keys (no entry, stale entry) stay
+// in trustedKeys and are counted as offline at Consensus.h:1255.
 //
 // Caller must hold e.mu.
 func (e *Engine) countLaggardsAndOfflineLocked(prevSeq uint32, trusted []consensus.NodeID) (laggards, offline int) {
@@ -2119,6 +2206,7 @@ func (e *Engine) countLaggardsAndOfflineLocked(prevSeq uint32, trusted []consens
 		return 0, 0
 	}
 	self, _ := e.adaptor.GetValidatorKey()
+	now := e.adaptor.Now()
 	for _, k := range trusted {
 		if k == self {
 			continue
@@ -2128,7 +2216,15 @@ func (e *Engine) countLaggardsAndOfflineLocked(prevSeq uint32, trusted []consens
 			offline++
 			continue
 		}
-		if v.LedgerSeq <= prevSeq {
+		seen := v.SeenTime
+		if seen.IsZero() {
+			seen = v.SignTime
+		}
+		if !seen.IsZero() && now.Sub(seen) > validationLaggardFreshness {
+			offline++
+			continue
+		}
+		if v.LedgerSeq < prevSeq {
 			laggards++
 		}
 	}
@@ -2638,10 +2734,19 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// rippled analogue; it semantically maps to the same suppress class
 	// as MovedOn (don't validate a round we explicitly failed).
 	consensusFail := result == consensus.ResultMovedOn || result == consensus.ResultFail
-	wrongLCL := e.mode == consensus.ModeWrongLedger
 	isValidator := e.adaptor.IsValidator()
 	canValidate := e.peekCanValidateSeqLocked(newLedger.Seq())
-	willEmit := isValidator && !consensusFail && canValidate
+	// isCompatible mirrors rippled's `validating_ = ledgerMaster_.isCompatible(*built, ...)`
+	// at RCLConsensus.cpp:587-589, which calls areCompatible(validatedLedger, built)
+	// at View.cpp:797-857. Suppresses emission when the locally built ledger does
+	// not have the validated tip on its ancestry — i.e. when our build is genuinely
+	// on a side chain rather than just ahead of validated on the same chain. The
+	// earlier wrongLedger-mode gate was a coarse proxy that also blocked the
+	// just-ahead-but-compatible case (#451); dropping it without this compatibility
+	// check would let side-chain builds emit and re-introduce the #401 Frankenstein-
+	// hash class.
+	compatible := e.isBuildCompatibleWithValidatedLocked(newLedger)
+	willEmit := isValidator && !consensusFail && canValidate && compatible
 
 	newLedgerID := newLedger.ID()
 	hashShort := fmt.Sprintf("%x", newLedgerID[:8])
@@ -2653,11 +2758,12 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		"result", result.String(),
 		"is_validator", isValidator,
 		"consensus_fail", consensusFail,
-		"wrong_lcl", wrongLCL,
+		"wrong_lcl", e.mode == consensus.ModeWrongLedger,
+		"compatible", compatible,
 		"can_validate_seq", canValidate,
 		"our_last_validated_seq", e.ourLastValidatedSeq,
 		"mode", e.mode.String(),
-		"decision", emitDecision(willEmit, isValidator, consensusFail, canValidate),
+		"decision", emitDecision(willEmit, isValidator, consensusFail, canValidate, compatible),
 	)
 
 	if willEmit {
@@ -3272,7 +3378,7 @@ func roundCloseTime(closeTime time.Time, resolution time.Duration) time.Time {
 // wrongLedger mode is intentionally NOT a skip reason: rippled emits
 // a partial validation in that mode (#451). The wrong_lcl field is
 // still logged separately so operators can see the recovery context.
-func emitDecision(emit, isValidator, consensusFail, canValidate bool) string {
+func emitDecision(emit, isValidator, consensusFail, canValidate, compatible bool) string {
 	if emit {
 		return "emit"
 	}
@@ -3284,6 +3390,9 @@ func emitDecision(emit, isValidator, consensusFail, canValidate bool) string {
 	}
 	if !canValidate {
 		return "skip:already-validated-seq"
+	}
+	if !compatible {
+		return "skip:incompatible-with-validated"
 	}
 	return "skip:unknown"
 }
