@@ -152,7 +152,7 @@ type TestEnv struct {
 }
 
 // NewTestEnv creates a new test environment with a genesis ledger.
-func NewTestEnv(t *testing.T) *TestEnv {
+func NewTestEnv(t testing.TB) *TestEnv {
 	t.Helper()
 
 	// Ensure every transaction type is registered before tests run.
@@ -211,7 +211,7 @@ func NewTestEnv(t *testing.T) *TestEnv {
 // Submit() will route transactions through the TxQ for fee escalation and
 // sequence-gap queuing, matching rippled's behavior when using Env with TxQ.
 // Reference: rippled's test Env routes through NetworkOPs -> TxQ.
-func NewTestEnvWithTxQ(t *testing.T, cfg txq.Config) *TestEnv {
+func NewTestEnvWithTxQ(t testing.TB, cfg txq.Config) *TestEnv {
 	t.Helper()
 	env := NewTestEnv(t)
 	env.txQueue = txq.New(cfg)
@@ -220,7 +220,7 @@ func NewTestEnvWithTxQ(t *testing.T, cfg txq.Config) *TestEnv {
 
 // NewTestEnvWithTxQAndConfig creates a test environment with a transaction queue
 // and custom genesis configuration.
-func NewTestEnvWithTxQAndConfig(t *testing.T, txqCfg txq.Config, genesisCfg genesis.Config) *TestEnv {
+func NewTestEnvWithTxQAndConfig(t testing.TB, txqCfg txq.Config, genesisCfg genesis.Config) *TestEnv {
 	t.Helper()
 	env := NewTestEnvWithConfig(t, genesisCfg)
 	env.txQueue = txq.New(txqCfg)
@@ -230,7 +230,7 @@ func NewTestEnvWithTxQAndConfig(t *testing.T, txqCfg txq.Config, genesisCfg gene
 // NewTestEnvBacked creates a test environment with PebbleDB-backed SHAMaps.
 // Use this for heavy tests (e.g., crossing_limits with 2000+ offers) that would
 // OOM with unbacked mode. Data goes to disk; only the LRU cache lives in RAM.
-func NewTestEnvBacked(t *testing.T) *TestEnv {
+func NewTestEnvBacked(t testing.TB) *TestEnv {
 	t.Helper()
 	env := NewTestEnv(t)
 	env.enablePebbleBacking(t)
@@ -238,7 +238,7 @@ func NewTestEnvBacked(t *testing.T) *TestEnv {
 }
 
 // NewTestEnvWithConfigBacked creates a test environment with custom config and PebbleDB backing.
-func NewTestEnvWithConfigBacked(t *testing.T, cfg genesis.Config) *TestEnv {
+func NewTestEnvWithConfigBacked(t testing.TB, cfg genesis.Config) *TestEnv {
 	t.Helper()
 	env := NewTestEnvWithConfig(t, cfg)
 	env.enablePebbleBacking(t)
@@ -247,7 +247,7 @@ func NewTestEnvWithConfigBacked(t *testing.T, cfg genesis.Config) *TestEnv {
 
 // enablePebbleBacking enables PebbleDB-backed SHAMaps on the environment.
 // Must be called before any transactions are submitted.
-func (e *TestEnv) enablePebbleBacking(t *testing.T) {
+func (e *TestEnv) enablePebbleBacking(t testing.TB) {
 	t.Helper()
 	stateFamily, err := shamap.NewPebbleNodeStoreFamily(t.TempDir(), 200000)
 	if err != nil {
@@ -266,7 +266,7 @@ func (e *TestEnv) enablePebbleBacking(t *testing.T) {
 }
 
 // NewTestEnvWithConfig creates a new test environment with custom genesis configuration.
-func NewTestEnvWithConfig(t *testing.T, cfg genesis.Config) *TestEnv {
+func NewTestEnvWithConfig(t testing.TB, cfg genesis.Config) *TestEnv {
 	t.Helper()
 
 	// Ensure every transaction type is registered before tests run.

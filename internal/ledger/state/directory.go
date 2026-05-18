@@ -630,12 +630,6 @@ func formatUint64Hex(v uint64) string {
 	return strings.ToLower(h)
 }
 
-// formatUint64HexPadded formats a uint64 as 16-char uppercase hex with leading zeros
-// Used for fields like OwnerNode and BookNode that require zero-padding in metadata
-func formatUint64HexPadded(v uint64) string {
-	return strings.ToUpper(hex.EncodeToString(uint64ToBytes(v)))
-}
-
 // DirRemoveResult contains the result of a directory remove operation
 type DirRemoveResult struct {
 	Success       bool                    // True if the item was found and removed
