@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes"
@@ -41,6 +40,24 @@ const (
 	batchPrefix               = "42434800"
 )
 
+// hexUpperTable mirrors encoding/hex.encodeStd but in uppercase so we can
+// write hex into a strings.Builder without an extra ToUpper pass over the
+// concatenated result. The signing helpers below run on every outbound tx,
+// so avoiding the redundant copy/uppercase saves measurable allocs.
+const hexUpperTable = "0123456789ABCDEF"
+
+func appendHexUpper(dst []byte, src []byte) []byte {
+	for _, b := range src {
+		dst = append(dst, hexUpperTable[b>>4], hexUpperTable[b&0x0f])
+	}
+	return dst
+}
+
+func hexUpper(src []byte) string {
+	buf := make([]byte, 0, len(src)*2)
+	return string(appendHexUpper(buf, src))
+}
+
 // EncodeBytes encodes a JSON transaction object directly to canonical binary
 // bytes. Prefer this over Encode on hot paths that immediately re-decode.
 // EncodeBytes does not mutate the caller-supplied map. An unknown field name
@@ -64,7 +81,7 @@ func Encode(json map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.ToUpper(hex.EncodeToString(b)), nil
+	return hexUpper(b), nil
 }
 
 // EncodeForMultisigning encodes a transaction into binary format in preparation for providing one
@@ -87,7 +104,7 @@ func EncodeForMultisigning(json map[string]any, xrpAccountID string) (string, er
 		return "", err
 	}
 
-	return strings.ToUpper(txMultiSigPrefix + encoded + hex.EncodeToString(suffix)), nil
+	return txMultiSigPrefix + encoded + hexUpper(suffix), nil
 }
 
 // EncodeForSigning encodes a transaction into binary format in preparation for signing.
@@ -98,7 +115,7 @@ func EncodeForSigning(json map[string]any) (string, error) {
 		return "", err
 	}
 
-	return strings.ToUpper(txSigPrefix + encoded), nil
+	return txSigPrefix + encoded, nil
 }
 
 // EncodeForSigningClaim encodes a payment channel claim into binary format in preparation for signing.
@@ -141,7 +158,7 @@ func EncodeForSigningClaim(json map[string]any) (string, error) {
 	amount[6] = byte(drops >> 8)
 	amount[7] = byte(drops)
 
-	return strings.ToUpper(paymentChannelClaimPrefix + hex.EncodeToString(channel) + hex.EncodeToString(amount)), nil
+	return paymentChannelClaimPrefix + hexUpper(channel) + hexUpper(amount), nil
 }
 
 // EncodeForSigningBatch encodes a batch transaction into binary format in preparation for signing.
@@ -179,11 +196,11 @@ func EncodeForSigningBatch(json map[string]any) (string, error) {
 		return "", err
 	}
 
-	var sb strings.Builder
-	sb.Grow(len(batchPrefix) + 2*len(flagsBytes) + 2*len(txIDsLengthBytes) + txIDsLength*2*types.HashLengthBytes)
-	sb.WriteString(batchPrefix)
-	sb.WriteString(hex.EncodeToString(flagsBytes))
-	sb.WriteString(hex.EncodeToString(txIDsLengthBytes))
+	totalSize := len(batchPrefix) + 2*len(flagsBytes) + 2*len(txIDsLengthBytes) + txIDsLength*2*types.HashLengthBytes
+	buf := make([]byte, 0, totalSize)
+	buf = append(buf, batchPrefix...)
+	buf = appendHexUpper(buf, flagsBytes)
+	buf = appendHexUpper(buf, txIDsLengthBytes)
 
 	for _, txID := range txIDsInterface {
 		hash256 := types.NewHash256()
@@ -191,10 +208,10 @@ func EncodeForSigningBatch(json map[string]any) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		sb.WriteString(hex.EncodeToString(txIDBytes))
+		buf = appendHexUpper(buf, txIDBytes)
 	}
 
-	return strings.ToUpper(sb.String()), nil
+	return string(buf), nil
 }
 
 // removeNonSigningFields returns a copy of the JSON transaction object with

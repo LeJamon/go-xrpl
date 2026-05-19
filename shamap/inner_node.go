@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/protocol"
 )
 
@@ -192,7 +193,7 @@ func (n *InnerNode) updateHashUnsafe() error {
 		return nil
 	}
 
-	h := sha512.New()
+	h := common.AcquireSHA512()
 	h.Write(protocol.HashPrefixInnerNode[:])
 	for i := 0; i < BranchFactor; i++ {
 		if n.isBranch&(1<<i) != 0 {
@@ -207,8 +208,10 @@ func (n *InnerNode) updateHashUnsafe() error {
 			h.Write(zeroHash[:])
 		}
 	}
-	sum := h.Sum(nil)
+	var buf [sha512.Size]byte
+	sum := h.Sum(buf[:0])
 	copy(n.hash[:], sum[:32])
+	common.ReleaseSHA512(h)
 	return nil
 }
 
