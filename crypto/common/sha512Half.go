@@ -31,12 +31,12 @@ func ReleaseSHA512(h hash.Hash) {
 // Sha512Half Returns the first 32 bytes of a sha512 hash of a byte[]
 func Sha512Half(args ...[]byte) [32]byte {
 	hasher := AcquireSHA512()
+	defer ReleaseSHA512(hasher)
 	for _, arg := range args {
 		hasher.Write(arg)
 	}
 	var buf [sha512.Size]byte
 	sum := hasher.Sum(buf[:0])
-	ReleaseSHA512(hasher)
 	var out [32]byte
 	copy(out[:], sum[:32])
 	return out

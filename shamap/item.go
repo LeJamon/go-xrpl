@@ -29,17 +29,6 @@ func NewItem(key [32]byte, data []byte) *Item {
 	}
 }
 
-// NewItemUnsafe creates an Item that takes ownership of the supplied data
-// slice without copying. The caller MUST NOT mutate data after this call.
-// Intended for trusted producers (deserialization, internal clone paths)
-// where the defensive copy in NewItem is pure overhead.
-func NewItemUnsafe(key [32]byte, data []byte) *Item {
-	return &Item{
-		key:  key,
-		data: data,
-	}
-}
-
 // Key returns the key of the item
 func (item *Item) Key() [32]byte {
 	return item.key
@@ -71,7 +60,7 @@ func (item *Item) Clone() (*Item, error) {
 
 	dataCopy := make([]byte, len(item.data))
 	copy(dataCopy, item.data)
-	return NewItemUnsafe(item.key, dataCopy), nil
+	return &Item{key: item.key, data: dataCopy}, nil
 }
 
 // String returns a string representation of the item (useful for debugging)

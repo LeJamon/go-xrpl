@@ -41,12 +41,12 @@ const (
 )
 
 // hexUpperTable mirrors encoding/hex.encodeStd but in uppercase so we can
-// write hex into a strings.Builder without an extra ToUpper pass over the
+// write hex directly into a []byte without an extra ToUpper pass over the
 // concatenated result. The signing helpers below run on every outbound tx,
 // so avoiding the redundant copy/uppercase saves measurable allocs.
 const hexUpperTable = "0123456789ABCDEF"
 
-func appendHexUpper(dst []byte, src []byte) []byte {
+func appendHexUpper(dst, src []byte) []byte {
 	for _, b := range src {
 		dst = append(dst, hexUpperTable[b>>4], hexUpperTable[b&0x0f])
 	}
