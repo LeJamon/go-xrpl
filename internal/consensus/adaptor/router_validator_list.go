@@ -64,7 +64,6 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-duplicate")
 			return
 		}
-		// First-seen: register the sender as a peer that has this hash.
 		r.messageSeen.recordPeer(hash, uint64(msg.PeerID))
 	}
 
@@ -418,7 +417,6 @@ func (b *RouterBroadcaster) SendList(peerID uint64, manifestBytes, blob, signatu
 	}
 	hash := common.Sha512Half(validatorListSemanticHash(vl))
 	if b.suppression != nil && b.suppression.peerHasHash(hash, peerID) {
-		// Peer already has this content. Skip the redundant send.
 		// Mirrors rippled's "skip peers already in the hash's
 		// suppression peer-set" optimisation at
 		// ValidatorList.cpp:909 (`if (toSkip->count(peer->id()) == 0)`).
