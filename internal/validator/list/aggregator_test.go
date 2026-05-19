@@ -607,3 +607,66 @@ func TestAggregator_ApplyList_Expired_ClearsValidators(t *testing.T) {
 		t.Fatalf("expired publisher must surface empty validator list; got %d", len(snap[0].Validators))
 	}
 }
+
+// TestAggregator_ApplyList_Expired_SkipsEmbeddedManifests pins the
+// rippled behaviour that embedded validator manifests carried by an
+// expired blob are NOT applied to validatorManifests_. In rippled the
+// embedded-manifest loop sits in updatePublisherList which runs only
+// on the accepted branch of applyList; the expired branch goes through
+// removePublisherList(StatusExpired) instead, which never touches the
+// manifest cache.
+func TestAggregator_ApplyList_Expired_SkipsEmbeddedManifests(t *testing.T) {
+	pub := newPublisher(t, 0x01, 0x02)
+
+	// Build a real validator master/ephemeral pair plus a signed
+	// manifest so the manifest cache would accept it if asked.
+	valMaster32, valMasterPriv := deterministicKey(0x20)
+	valEph32, valEphPriv := deterministicKey(0x21)
+	var valMaster, valEph [33]byte
+	copy(valMaster[:], append([]byte{0xED}, valMaster32...))
+	copy(valEph[:], append([]byte{0xED}, valEph32...))
+	valManifestRaw := buildManifest(t, valMaster, valMasterPriv, valEph, valEphPriv, 1)
+	valManifestB64 := base64.StdEncoding.EncodeToString(valManifestRaw)
+
+	type entry struct {
+		ValidationPublicKey string `json:"validation_public_key"`
+		Manifest            string `json:"manifest,omitempty"`
+	}
+	type body struct {
+		Sequence   uint32  `json:"sequence"`
+		Expiration uint32  `json:"expiration"`
+		Effective  uint32  `json:"effective,omitempty"`
+		Validators []entry `json:"validators"`
+	}
+	now := fixedClock()()
+	exp := now.Add(-1 * time.Hour).Unix() // expired
+	b := body{
+		Sequence:   1,
+		Expiration: uint32(exp - rippleEpochOffset),
+		Validators: []entry{{
+			ValidationPublicKey: hex.EncodeToString(valMaster[:]),
+			Manifest:            valManifestB64,
+		}},
+	}
+	jsonBytes, err := json.Marshal(b)
+	if err != nil {
+		t.Fatalf("blob marshal: %v", err)
+	}
+	blob := []byte(base64.StdEncoding.EncodeToString(jsonBytes))
+	sigBytes := ed25519.Sign(pub.ephPriv, jsonBytes)
+	sig := []byte(hex.EncodeToString(sigBytes))
+
+	cache := manifest.NewCache()
+	agg, _ := list.New(list.Config{
+		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:     1,
+		Manifests:     cache,
+		Clock:         fixedClock(),
+	})
+	if d, _, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://"); d != list.Expired {
+		t.Fatalf("disposition: %s", d)
+	}
+	if _, ok := cache.GetSigningKey(valMaster); ok {
+		t.Fatalf("expired ingest must not seed embedded validator manifests into the cache")
+	}
+}
