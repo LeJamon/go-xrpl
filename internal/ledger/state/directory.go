@@ -1,11 +1,13 @@
 package state
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 	"strings"
 
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -425,7 +427,30 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, setupFun
 	if len(node.Indexes) < dirNodeMaxEntries {
 		// Has space - add item to current page
 		prevNode := *node
-		node.Indexes = append(node.Indexes, itemKey)
+		nodeIsBookDir := node.TakerPaysCurrency != [20]byte{} || node.TakerGetsCurrency != [20]byte{}
+
+		// Reference: rippled ApplyView.cpp dirAdd() lines 68-91.
+		// Book directories (ltDIR_NODE with taker fields) preserve insertion
+		// order — offer matching consumes oldest-first within a quality level.
+		// All other directories (owner dirs, NFT offer dirs, permissioned
+		// domain dirs) keep their sfIndexes vector sorted within a page:
+		// sort the existing entries (in case a legacy page is unsorted),
+		// then std::lower_bound + insert the new key.
+		// Without this, goxrpl's directory page bytes diverge from rippled's
+		// after multiple inserts into the same page, producing different
+		// SLE serializations and consensus forks.
+		if nodeIsBookDir {
+			node.Indexes = append(node.Indexes, itemKey)
+		} else {
+			sortIndexes(node.Indexes)
+			pos := sortedSearch(node.Indexes, itemKey)
+			if pos < len(node.Indexes) && node.Indexes[pos] == itemKey {
+				return nil, fmt.Errorf("dirInsert: double insertion")
+			}
+			node.Indexes = append(node.Indexes, [32]byte{})
+			copy(node.Indexes[pos+1:], node.Indexes[pos:])
+			node.Indexes[pos] = itemKey
+		}
 
 		result.Modified = true
 		result.Page = page
@@ -434,7 +459,6 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, setupFun
 		result.NewState = node
 
 		// Serialize and update
-		nodeIsBookDir := node.TakerPaysCurrency != [20]byte{} || node.TakerGetsCurrency != [20]byte{}
 		data, err := SerializeDirectoryNode(node, nodeIsBookDir)
 		if err != nil {
 			return nil, err
@@ -1046,4 +1070,22 @@ func DirForEach(view LedgerView, dirKey keylet.Keylet, fn func(itemKey [32]byte)
 	}
 
 	return nil
+}
+
+// sortIndexes sorts a slice of directory index keys in ascending byte order.
+// Mirrors rippled's std::sort over STVector256 used inside dirAdd's
+// preserveOrder=false path. The dirNodeMaxEntries=32 cap keeps the
+// sort cost negligible.
+func sortIndexes(indexes [][32]byte) {
+	sort.Slice(indexes, func(i, j int) bool {
+		return bytes.Compare(indexes[i][:], indexes[j][:]) < 0
+	})
+}
+
+// sortedSearch returns the first position i in indexes where indexes[i] >= key.
+// Mirrors std::lower_bound over a sorted vector.
+func sortedSearch(indexes [][32]byte, key [32]byte) int {
+	return sort.Search(len(indexes), func(i int) bool {
+		return bytes.Compare(indexes[i][:], key[:]) >= 0
+	})
 }
