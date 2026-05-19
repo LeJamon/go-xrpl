@@ -35,8 +35,6 @@ func NewRPCReader(agg *Aggregator) *RPCReader {
 	return &RPCReader{agg: agg}
 }
 
-// HasConfiguredPublishers reports whether the underlying aggregator was
-// initialized with at least one publisher key.
 func (r *RPCReader) HasConfiguredPublishers() bool {
 	if r == nil || r.agg == nil {
 		return false
@@ -44,8 +42,6 @@ func (r *RPCReader) HasConfiguredPublishers() bool {
 	return r.agg.HasConfiguredPublishers()
 }
 
-// PublisherCount returns the number of configured publishers in the
-// aggregator's trust set.
 func (r *RPCReader) PublisherCount() int {
 	if r == nil || r.agg == nil {
 		return 0
@@ -53,7 +49,6 @@ func (r *RPCReader) PublisherCount() int {
 	return r.agg.PublisherCount()
 }
 
-// Threshold returns the configured publisher threshold.
 func (r *RPCReader) Threshold() int {
 	if r == nil || r.agg == nil {
 		return 0
@@ -61,8 +56,6 @@ func (r *RPCReader) Threshold() int {
 	return r.agg.Threshold()
 }
 
-// Publishers translates the aggregator's PublisherSnapshot into the
-// RPC-facing ValidatorListPublisherInfo shape.
 func (r *RPCReader) Publishers() []rpctypes.ValidatorListPublisherInfo {
 	if r == nil || r.agg == nil {
 		return nil
@@ -129,8 +122,6 @@ func (r *RPCReader) Publishers() []rpctypes.ValidatorListPublisherInfo {
 	return out
 }
 
-// Sites translates the aggregator's SiteSnapshot into the RPC-facing
-// ValidatorListSiteInfo shape.
 func (r *RPCReader) Sites() []rpctypes.ValidatorListSiteInfo {
 	if r == nil || r.agg == nil {
 		return nil

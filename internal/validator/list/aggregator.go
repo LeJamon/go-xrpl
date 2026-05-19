@@ -49,7 +49,6 @@ const (
 	StatusRevoked
 )
 
-// String returns a short lowercase label for logs and RPC output.
 func (s PublisherStatus) String() string {
 	switch s {
 	case StatusUnavailable:
@@ -402,7 +401,6 @@ func (a *Aggregator) PublisherCount() int {
 	return len(a.publishers)
 }
 
-// Threshold returns the configured publisher threshold.
 func (a *Aggregator) Threshold() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -478,8 +476,6 @@ func (a *Aggregator) PublisherSnapshot() []PublisherState {
 	return out
 }
 
-// SiteSnapshot returns a deep copy of the per-URL polling state for the
-// validator_list_sites RPC.
 func (a *Aggregator) SiteSnapshot() []SiteState {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1230,7 +1226,6 @@ func (a *Aggregator) ApplyCollection(coll *message.ValidatorListCollection, site
 	return out, pubKey, maxSeq
 }
 
-// isSupportedVersion reports whether version is in SupportedVersions.
 func isSupportedVersion(v uint32) bool {
 	for _, sv := range SupportedVersions {
 		if sv == v {

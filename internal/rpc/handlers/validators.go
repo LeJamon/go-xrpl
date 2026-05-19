@@ -269,7 +269,6 @@ func nonNilStrings(s []string) []string {
 // fields exposed by the validators and validator_list_sites RPCs.
 const rippledTimeLayout = "2006-Jan-02 15:04:05 UTC"
 
-// formatRippledTime renders t in rippled's boost-style timestamp format.
 func formatRippledTime(t time.Time) string {
 	return t.UTC().Format(rippledTimeLayout)
 }

@@ -64,7 +64,6 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-duplicate")
 			return
 		}
-		// First-seen: register the sender as a peer that has this hash.
 		r.messageSeen.recordPeer(hash, uint64(msg.PeerID))
 	}
 
