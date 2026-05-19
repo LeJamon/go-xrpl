@@ -55,6 +55,33 @@ type ValidatorListPublisherInfo struct {
 	// keys (base58, NodePublicKey prefix), sorted lexicographically.
 	// Matches rippled's `list` array at ValidatorList.cpp:1684-1688.
 	ValidatorsBase58 []string
+	// EffectiveSet records whether the accepted blob carried an
+	// `effective` field. Rippled gates the JSON `effective` emit on
+	// `validFrom != TimeKeeper::time_point{}` at
+	// ValidatorList.cpp:1682-1683; without this sentinel a missing
+	// blob field would be flattened to a synthetic 2000-Jan-01 stamp
+	// by the ripple-epoch offset.
+	EffectiveSet bool
+	// Remaining holds the per-publisher future-dated rotation queue.
+	// Mirrors rippled's `remaining` JSON array emitted under each
+	// publisher entry at ValidatorList.cpp:1699-1713.
+	Remaining []ValidatorListRemainingInfo
+}
+
+// ValidatorListRemainingInfo is one entry in a publisher's
+// `remaining` array — a future-dated list that has not yet been
+// promoted into the current slot. Mirrors rippled's PublisherList
+// shape inside `pubCollection.remaining`.
+type ValidatorListRemainingInfo struct {
+	Sequence         uint32
+	Version          uint32
+	SiteURI          string
+	EffectiveUnix    int64
+	ExpirationUnix   int64
+	EffectiveISO     string
+	ExpirationISO    string
+	EffectiveSet     bool
+	ValidatorsBase58 []string
 }
 
 // ValidatorListSiteInfo is the per-URL snapshot the

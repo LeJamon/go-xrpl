@@ -83,9 +83,16 @@ type PublisherState struct {
 	Sequence uint32
 
 	// Effective is the Unix timestamp at which the current list became
-	// effective. Zero when the publisher hasn't specified one (rippled
-	// treats absent `effective` as "immediately").
+	// effective. Treated as a sentinel ("not set") when EffectiveSet is
+	// false; rippled gates `validFrom != TimeKeeper::time_point{}` at
+	// ValidatorList.cpp:1682 and a Go-side zero-value time.Time cannot
+	// stand in for the C++ zero sentinel because rippleSecondsToUnix(0)
+	// resolves to 2000-01-01 UTC, not Go's epoch.
 	Effective time.Time
+	// EffectiveSet records whether the accepted blob carried an
+	// `effective` field. False means rippled would omit it from the
+	// `validators` RPC `effective` key.
+	EffectiveSet bool
 
 	// Expiration is the Unix timestamp after which the current list is
 	// considered expired and contributes nothing further.
@@ -119,6 +126,43 @@ type PublisherState struct {
 	// `RawSignature` is hex-encoded ASCII. The aggregator stores them
 	// verbatim — no re-encoding — so what we relay is byte-identical
 	// to what an honest peer would have sent us.
+	RawManifest  []byte
+	RawBlob      []byte
+	RawSignature []byte
+
+	// Remaining is the queue of future-dated lists for this publisher,
+	// keyed by sequence and ordered by validFrom. Mirrors rippled's
+	// PublisherListCollection.remaining at ValidatorList.h:75-83. A
+	// rotation announced ahead of `effective` time lands here and is
+	// promoted into the current slot once its validFrom passes — see
+	// promoteRemainingLocked. Empty when no rotation is pending.
+	Remaining map[uint32]*PendingList
+
+	// MaxSequence is the largest sequence ever stored in `Remaining`.
+	// Mirrors rippled's PublisherListCollection.maxSequence; combined
+	// with `Remaining` it drives the pending-vs-known_sequence decision
+	// at applyList (ValidatorList.cpp:1414-1432).
+	MaxSequence uint32
+	// MaxSequenceSet records whether MaxSequence has ever been
+	// populated (a future-dated blob has been observed). Distinct from
+	// `MaxSequence == 0` because sequence 0 is not a valid published
+	// list — but we keep the sentinel explicit to mirror rippled's
+	// std::optional<size_t>.
+	MaxSequenceSet bool
+}
+
+// PendingList is one entry in PublisherState.Remaining — a fully-verified
+// future-dated list that will become current at validFrom. Wire bytes are
+// retained so the post-promotion broadcast can re-emit the canonical form.
+type PendingList struct {
+	Sequence     uint32
+	Effective    time.Time
+	EffectiveSet bool
+	Expiration   time.Time
+	Validators   [][33]byte
+	SiteURI      string
+	Version      uint32
+	SigningKey   [33]byte
 	RawManifest  []byte
 	RawBlob      []byte
 	RawSignature []byte
@@ -368,9 +412,19 @@ func (a *Aggregator) HasConfiguredPublishers() bool {
 // PublisherSnapshot returns a deep copy of the per-publisher state for
 // RPC and observability. Order is sorted by publisher master key for
 // stable output. Safe to call concurrently with ingest.
+//
+// Lazily runs the Remaining → current promotion so the RPC sees a
+// timely view even when no new lists have been ingested in this
+// process tick. The promotion is purely a state shift inside the
+// publisher entry; it does not emit OnChange (Tick is the explicit
+// emit-on-time entry point).
 func (a *Aggregator) PublisherSnapshot() []PublisherState {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	now := a.clock()
+	for _, s := range a.state {
+		a.promoteRemainingLocked(s, now)
+	}
 	out := make([]PublisherState, 0, len(a.state))
 	for _, s := range a.state {
 		cp := *s
@@ -386,6 +440,25 @@ func (a *Aggregator) PublisherSnapshot() []PublisherState {
 		}
 		if len(s.RawSignature) > 0 {
 			cp.RawSignature = append([]byte(nil), s.RawSignature...)
+		}
+		if len(s.Remaining) > 0 {
+			cp.Remaining = make(map[uint32]*PendingList, len(s.Remaining))
+			for seq, p := range s.Remaining {
+				pcopy := *p
+				if len(p.Validators) > 0 {
+					pcopy.Validators = append([][33]byte(nil), p.Validators...)
+				}
+				if len(p.RawManifest) > 0 {
+					pcopy.RawManifest = append([]byte(nil), p.RawManifest...)
+				}
+				if len(p.RawBlob) > 0 {
+					pcopy.RawBlob = append([]byte(nil), p.RawBlob...)
+				}
+				if len(p.RawSignature) > 0 {
+					pcopy.RawSignature = append([]byte(nil), p.RawSignature...)
+				}
+				cp.Remaining[seq] = &pcopy
+			}
 		}
 		out = append(out, cp)
 	}
@@ -629,6 +702,15 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 	// invariant break — surface it loudly rather than silently re-create.
 	current := a.state[pubKey]
 
+	// Promote any pending Remaining entries that have reached their
+	// validFrom before the disposition check — mirrors rippled's lazy
+	// rotation in updateTrusted at ValidatorList.cpp:1929-1991, except
+	// driven by ingest rather than ledger close. Without this a fresh
+	// blob arriving after a queued rotation's effective time would see
+	// a stale `current.sequence` and decide pending/known_sequence on
+	// the wrong baseline.
+	a.promoteRemainingLocked(current, now)
+
 	// Determine disposition by sequence + time ordering. Mirrors the
 	// rippled state machine at ValidatorList.cpp:1394-1437. The
 	// SameSequence branch is intentionally unguarded by status —
@@ -647,17 +729,22 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 		applied := a.applyAcceptedLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now, version, manifestBytes, blob, signature)
 		_ = applied // applyAcceptedLocked sets Status; trusted set recompute below skips expired.
 		current.Status = StatusExpired
+		// Mirrors rippled removePublisherList(StatusExpired) at
+		// ValidatorList.cpp:1529-1542 — on expiry the publisher's
+		// validator list is cleared. Without this the `validators`
+		// RPC would show stale keys under `available=false`.
+		current.Validators = nil
 		a.recomputeAndEmitLocked()
 		return Expired, pubKey, parsedBlob.Sequence
 	}
 	if validFrom.After(now) {
-		// Future-dated. Rippled stores this in `remaining` so it can
-		// be promoted later. goXRPL's first-cut subsystem keeps a
-		// simpler model: drop pending lists (the publisher will
-		// republish at effective time, and the 5-min poller cadence
-		// limits the lag). Tracked for future work but not blocking
-		// for the issue.
-		return Pending, pubKey, parsedBlob.Sequence
+		// Future-dated. Mirrors rippled ValidatorList.cpp:1414-1432
+		// pending-vs-known_sequence: a list is "pending" the first
+		// time it lands or whenever its sequence is the largest seen,
+		// and "known_sequence" only for re-arrivals at an already-
+		// queued sequence. The queued blob is retained so the next
+		// promoteRemainingLocked pass can rotate it into `current`.
+		return a.applyPendingLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, version, manifestBytes, blob, signature), pubKey, parsedBlob.Sequence
 	}
 
 	a.applyAcceptedLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now, version, manifestBytes, blob, signature)
@@ -678,6 +765,7 @@ func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, sign
 	prevCount := len(s.Validators)
 	s.Sequence = blob.Sequence
 	s.Effective = validFrom
+	s.EffectiveSet = blob.EffectiveSet
 	s.Expiration = validUntil
 	s.SigningKey = signingKey
 	s.SiteURI = siteURI
@@ -758,6 +846,167 @@ func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, sign
 	return prevCount != len(keys)
 }
 
+// applyPendingLocked stores a future-dated blob in the publisher's
+// Remaining queue and returns Pending vs KnownSequence per rippled
+// ValidatorList.cpp:1414-1432:
+//
+//   - Pending: no MaxSequence yet, or sequence > MaxSequence, or
+//     sequence is unknown AND validFrom precedes the current
+//     MaxSequence entry's validFrom (out-of-order delivery).
+//   - KnownSequence: re-arrival at a sequence already queued.
+//
+// The blob is only stored on the Pending branch; KnownSequence is a
+// no-op since we already have the same sequence queued. Caller must
+// hold a.mu. Does NOT emit OnChange — promotion drives the trusted-set
+// update.
+func (a *Aggregator) applyPendingLocked(s *PublisherState, blob *blobJSON, signingKey [33]byte, validFrom, validUntil time.Time, siteURI string, version uint32, rawManifest, rawBlob, rawSignature []byte) Disposition {
+	known := false
+	if s.MaxSequenceSet {
+		if _, hit := s.Remaining[blob.Sequence]; hit {
+			known = true
+		} else if blob.Sequence <= s.MaxSequence {
+			// New sequence below max — pending only if it lands ahead
+			// of the current max-stored validFrom (out-of-order).
+			if maxEntry, ok := s.Remaining[s.MaxSequence]; !ok || !validFrom.Before(maxEntry.Effective) {
+				known = true
+			}
+		}
+	}
+	if known {
+		return KnownSequence
+	}
+
+	keys := make([][33]byte, 0, len(blob.Validators))
+	for i, v := range blob.Validators {
+		raw, err := hex.DecodeString(v.ValidationPublicKey)
+		if err != nil || !validatorKeyValid(raw) {
+			a.logger.Debug("validator list: skipping invalid validator entry in pending blob",
+				"index", i,
+				"pubkey", v.ValidationPublicKey)
+			continue
+		}
+		var k [33]byte
+		copy(k[:], raw)
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return string(keys[i][:]) < string(keys[j][:])
+	})
+
+	if s.Remaining == nil {
+		s.Remaining = make(map[uint32]*PendingList, 2)
+	}
+	s.Remaining[blob.Sequence] = &PendingList{
+		Sequence:     blob.Sequence,
+		Effective:    validFrom,
+		EffectiveSet: blob.EffectiveSet,
+		Expiration:   validUntil,
+		Validators:   keys,
+		SiteURI:      siteURI,
+		Version:      version,
+		SigningKey:   signingKey,
+		RawManifest:  append([]byte(nil), rawManifest...),
+		RawBlob:      append([]byte(nil), rawBlob...),
+		RawSignature: append([]byte(nil), rawSignature...),
+	}
+	if !s.MaxSequenceSet || blob.Sequence > s.MaxSequence {
+		s.MaxSequence = blob.Sequence
+		s.MaxSequenceSet = true
+	}
+	return Pending
+}
+
+// promoteRemainingLocked rotates ready Remaining entries (those whose
+// validFrom <= now) into the publisher's current slot, mirroring
+// rippled's updateTrusted loop at ValidatorList.cpp:1929-1991.
+// Operates on a single publisher; caller drives publisher iteration if
+// promoting for the whole set.
+//
+// Walks Remaining in ascending sequence order so a chain of stacked
+// rotations resolves to the LAST ready entry (rippled's iter/next
+// scan). Earlier entries are skipped and discarded — rippled
+// likewise erases [firstIter, std::next(iter)] after the rotation.
+//
+// Caller must hold a.mu. Does not emit OnChange — caller decides when
+// to recompute (typically immediately after the call when invoked at
+// ingest, or via Tick → recomputeAndEmitLocked on the time-driven
+// path).
+func (a *Aggregator) promoteRemainingLocked(s *PublisherState, now time.Time) (promoted bool) {
+	if len(s.Remaining) == 0 {
+		return false
+	}
+	seqs := make([]uint32, 0, len(s.Remaining))
+	for seq := range s.Remaining {
+		seqs = append(seqs, seq)
+	}
+	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+
+	// Find the LAST entry that is ready to promote.
+	pickIdx := -1
+	for i, seq := range seqs {
+		p := s.Remaining[seq]
+		if !p.Effective.After(now) {
+			pickIdx = i
+			continue
+		}
+		break
+	}
+	if pickIdx < 0 {
+		return false
+	}
+
+	chosen := s.Remaining[seqs[pickIdx]]
+	s.Sequence = chosen.Sequence
+	s.Effective = chosen.Effective
+	s.EffectiveSet = chosen.EffectiveSet
+	s.Expiration = chosen.Expiration
+	s.SigningKey = chosen.SigningKey
+	s.SiteURI = chosen.SiteURI
+	if chosen.Version > s.Version {
+		s.Version = chosen.Version
+	}
+	s.RawManifest = append(s.RawManifest[:0], chosen.RawManifest...)
+	s.RawBlob = append(s.RawBlob[:0], chosen.RawBlob...)
+	s.RawSignature = append(s.RawSignature[:0], chosen.RawSignature...)
+	s.Validators = append([][33]byte(nil), chosen.Validators...)
+	s.Status = StatusAvailable
+	// Mirrors rippled ValidatorList.cpp:1970 — if the promoted list is
+	// itself already expired, clear the validators so the next
+	// expiration sweep can downgrade the publisher cleanly.
+	if !s.Expiration.IsZero() && !s.Expiration.After(now) {
+		s.Status = StatusExpired
+		s.Validators = nil
+	}
+
+	// Erase all entries up to and including the chosen one — rippled
+	// remaining.erase(firstIter, std::next(iter)).
+	for i := 0; i <= pickIdx; i++ {
+		delete(s.Remaining, seqs[i])
+	}
+	if len(s.Remaining) == 0 {
+		s.Remaining = nil
+	}
+	return true
+}
+
+// Tick performs a time-driven promotion sweep across every publisher
+// and emits OnChange if the resulting trusted union changed. Callers
+// should invoke this periodically (rippled drives it from updateTrusted
+// at every ledger close, ValidatorList.cpp:1910-1928); without an
+// external tick a pending rotation announced during a quiet period
+// would only promote on the next ApplyList / TrustedValidators call.
+//
+// Safe to call from any goroutine. Briefly takes the aggregator lock.
+func (a *Aggregator) Tick() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := a.clock()
+	for _, s := range a.state {
+		a.promoteRemainingLocked(s, now)
+	}
+	a.recomputeAndEmitLocked()
+}
+
 // handleRevocation removes a publisher's contribution when its master
 // key is revoked by a fresh manifest. Mirrors rippled's
 // removePublisherList(StatusRevoked) branch in verify(). Also clears
@@ -774,6 +1023,9 @@ func (a *Aggregator) handleRevocation(pubKey PublisherKey) {
 	s.RawManifest = nil
 	s.RawBlob = nil
 	s.RawSignature = nil
+	s.Remaining = nil
+	s.MaxSequence = 0
+	s.MaxSequenceSet = false
 	a.recomputeAndEmitLocked()
 }
 
@@ -792,6 +1044,14 @@ func (a *Aggregator) recomputeAndEmitLocked() {
 	}
 
 	now := a.clock()
+	// Promote any Remaining entries whose validFrom has passed before
+	// counting — without this a rotation queued at applyPendingLocked
+	// would only feed the trusted set on the next ApplyList /
+	// TrustedValidators call, even if the caller (Tick or ingest path)
+	// invoked us specifically to refresh.
+	for _, s := range a.state {
+		a.promoteRemainingLocked(s, now)
+	}
 	counts := make(map[[33]byte]int, 64)
 	for _, s := range a.state {
 		if s.Status != StatusAvailable {
@@ -858,6 +1118,13 @@ func (a *Aggregator) TrustedValidators() ([]consensus.NodeID, [][33]byte) {
 	}
 
 	now := a.clock()
+	// Lazy-promote ready Remaining entries so the trusted set reflects
+	// rotations that became effective since the last ingest. Tick()
+	// handles the OnChange emission on the time-driven path; here we
+	// just need a fresh snapshot.
+	for _, s := range a.state {
+		a.promoteRemainingLocked(s, now)
+	}
 	counts := make(map[[33]byte]int, 64)
 	for _, s := range a.state {
 		if s.Status != StatusAvailable {

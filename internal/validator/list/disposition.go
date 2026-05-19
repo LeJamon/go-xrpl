@@ -17,6 +17,18 @@ package list
 // (rippled/src/xrpld/app/misc/ValidatorList.h:55-82): smaller values
 // are "more desirable" outcomes.
 //
+// ORDERING INVARIANT (load-bearing — do not reorder without auditing
+// every consumer of Severity() / ShouldRelay() / Charge()):
+//
+//	Accepted < Expired < Pending < SameSequence < KnownSequence
+//	         < Stale < Untrusted < UnsupportedVersion < Invalid
+//	         < Malformed  (goXRPL-only)
+//
+// `ShouldRelay()` is `Severity() <= KnownSequence.Severity()`, mirroring
+// rippled's `disposition <= ListDisposition::known_sequence` gate at
+// ValidatorList.cpp:973. Re-arranging this iota would silently flip the
+// relay set.
+//
 // Malformed is a goXRPL-only summary disposition emitted exclusively
 // by the HTTP site poller for wire-level envelope failures (HTTP
 // transport error, JSON body undecodable, required envelope fields

@@ -54,6 +54,12 @@ type blobJSON struct {
 	Expiration uint32        `json:"expiration"`
 	Effective  uint32        `json:"effective,omitempty"`
 	Validators []blobEntryJS `json:"validators"`
+	// EffectiveSet records whether `effective` was JSON-present in the
+	// blob (distinct from the JSON-default zero). Rippled gates the RPC
+	// `effective` emit on `validFrom != TimeKeeper::time_point{}` at
+	// ValidatorList.cpp:1682; without this sentinel the ripple-epoch
+	// offset turns an absent field into a synthetic 2000-Jan-01 stamp.
+	EffectiveSet bool `json:"-"`
 }
 
 // blobEntryJS is a single validator entry inside a publisher blob. The
@@ -110,6 +116,7 @@ func parseBlob(rawBlob []byte) (*blobJSON, Disposition, error) {
 		if err := json.Unmarshal(effRaw, &b.Effective); err != nil {
 			return nil, Invalid, fmt.Errorf("blob effective not uint32: %w", err)
 		}
+		b.EffectiveSet = true
 	}
 	if err := json.Unmarshal(valsRaw, &b.Validators); err != nil {
 		return nil, Invalid, fmt.Errorf("blob validators not array: %w", err)

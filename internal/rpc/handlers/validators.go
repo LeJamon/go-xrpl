@@ -61,15 +61,62 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (int
 					entry["seq"] = p.Sequence
 					entry["version"] = p.Version
 				}
-				if p.EffectiveISO != "" {
+				// `effective` only emitted when the blob carried the field
+				// (rippled gates on `validFrom != TimeKeeper::time_point{}`
+				// at ValidatorList.cpp:1682; the EffectiveSet sentinel is
+				// the Go-side equivalent — see ValidatorListPublisherInfo).
+				if p.EffectiveSet && p.EffectiveISO != "" {
 					entry["effective"] = p.EffectiveISO
 				}
 				if p.ExpirationISO != "" {
 					entry["expiration"] = p.ExpirationISO
 				}
-				if p.ExpirationUnix > 0 {
-					if earliestExpirationUnix == 0 || p.ExpirationUnix < earliestExpirationUnix {
-						earliestExpirationUnix = p.ExpirationUnix
+				// Mirrors rippled ValidatorList.cpp:1699-1713 — emit a
+				// `remaining` array of future-dated rotations, omitted
+				// when empty.
+				if len(p.Remaining) > 0 {
+					rem := make([]map[string]interface{}, 0, len(p.Remaining))
+					for _, r := range p.Remaining {
+						re := map[string]interface{}{
+							"uri":     r.SiteURI,
+							"list":    nonNilStrings(r.ValidatorsBase58),
+							"seq":     r.Sequence,
+							"version": r.Version,
+						}
+						if r.EffectiveSet && r.EffectiveISO != "" {
+							re["effective"] = r.EffectiveISO
+						}
+						if r.ExpirationISO != "" {
+							re["expiration"] = r.ExpirationISO
+						}
+						rem = append(rem, re)
+					}
+					entry["remaining"] = rem
+				}
+				// Chained-extension walk for `expires()` (rippled
+				// ValidatorList.cpp:1560-1607): if a `remaining` entry's
+				// validFrom <= the chained validUntil, extend the chain
+				// to that entry's validUntil. The `validator_list`
+				// summary at the end uses earliestExpirationUnix.
+				chainedExp := p.ExpirationUnix
+				if chainedExp > 0 && len(p.Remaining) > 0 {
+					// p.Remaining is already sorted by sequence by the
+					// adapter; effective times within a single publisher's
+					// queue are monotonic by construction (validFrom <
+					// next validFrom for a rotation chain).
+					for _, r := range p.Remaining {
+						if r.EffectiveUnix == 0 || r.ExpirationUnix == 0 {
+							break
+						}
+						if r.EffectiveUnix > chainedExp {
+							break
+						}
+						chainedExp = r.ExpirationUnix
+					}
+				}
+				if chainedExp > 0 {
+					if earliestExpirationUnix == 0 || chainedExp < earliestExpirationUnix {
+						earliestExpirationUnix = chainedExp
 					}
 				} else {
 					anyMissingExpiration = true

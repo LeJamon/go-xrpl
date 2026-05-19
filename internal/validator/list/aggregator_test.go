@@ -497,3 +497,115 @@ func sortMasters(m [][33]byte) {
 		return string(m[i][:]) < string(m[j][:])
 	})
 }
+
+// TestAggregator_ApplyList_PendingThenKnownSequence pins the rippled
+// state-machine at ValidatorList.cpp:1414-1432: a future-dated blob
+// stores into Remaining and returns Pending; a repeat at the same
+// sequence returns KnownSequence (no-op). Without the Remaining queue
+// the second arrival would also return Pending and the publisher
+// would never promote.
+func TestAggregator_ApplyList_PendingThenKnownSequence(t *testing.T) {
+	pub := newPublisher(t, 0x01, 0x02)
+	v1 := derivedValidatorKey(0x10)
+
+	now := fixedClock()()
+	mutableNow := now
+	clk := func() time.Time { return mutableNow }
+
+	agg, err := list.New(list.Config{
+		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:     1,
+		Manifests:     manifest.NewCache(),
+		Clock:         clk,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	futureEff := mutableNow.Add(2 * time.Hour).Unix()
+	exp := mutableNow.Add(48 * time.Hour).Unix()
+
+	blob, sig := pub.signList(t, 7, futureEff, exp, [][33]byte{v1})
+	d, _, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://")
+	if d != list.Pending {
+		t.Fatalf("first apply: got %s want Pending", d)
+	}
+	// No promotion yet → trusted set empty.
+	if _, m := agg.TrustedValidators(); len(m) != 0 {
+		t.Fatalf("trusted before promotion: want 0, got %d", len(m))
+	}
+
+	// Same sequence again — KnownSequence (re-arrival at a queued seq).
+	d, _, _ = agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://")
+	if d != list.KnownSequence {
+		t.Fatalf("re-apply at queued sequence: got %s want KnownSequence", d)
+	}
+
+	// Advance the clock past validFrom and Tick — rotation promotes
+	// and the validator enters the trusted set.
+	mutableNow = now.Add(3 * time.Hour)
+	agg.Tick()
+	_, masters := agg.TrustedValidators()
+	if len(masters) != 1 || masters[0] != v1 {
+		t.Fatalf("post-Tick trusted: want [v1] got %d entries", len(masters))
+	}
+}
+
+// TestAggregator_ApplyList_EffectiveSet_Sentinel pins the rippled
+// gating at ValidatorList.cpp:1682 — `effective` is only emitted in
+// the RPC when the publisher blob actually carried the field. Without
+// EffectiveSet, a missing `effective` flattens through the
+// ripple-epoch offset into a synthetic 2000-Jan-01 timestamp.
+func TestAggregator_ApplyList_EffectiveSet_Sentinel(t *testing.T) {
+	pub := newPublisher(t, 0x01, 0x02)
+	v1 := derivedValidatorKey(0x10)
+
+	agg, _ := list.New(list.Config{
+		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:     1,
+		Manifests:     manifest.NewCache(),
+		Clock:         fixedClock(),
+	})
+	now := fixedClock()()
+	// signList passes validFromUnix=0 which means we OMIT `effective`.
+	blob, sig := pub.signList(t, 1, 0, now.Add(24*time.Hour).Unix(), [][33]byte{v1})
+	if d, _, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://"); d != list.Accepted {
+		t.Fatalf("disposition: %s", d)
+	}
+	snap := agg.PublisherSnapshot()
+	if len(snap) != 1 {
+		t.Fatalf("snapshot len: %d", len(snap))
+	}
+	if snap[0].EffectiveSet {
+		t.Fatalf("EffectiveSet must be false when blob omits the field")
+	}
+}
+
+// TestAggregator_ApplyList_Expired_ClearsValidators pins rippled
+// removePublisherList(StatusExpired) at ValidatorList.cpp:1529-1542 —
+// expiry clears the publisher's `list` so the RPC does not surface
+// stale validator keys under `available=false`.
+func TestAggregator_ApplyList_Expired_ClearsValidators(t *testing.T) {
+	pub := newPublisher(t, 0x01, 0x02)
+	v1 := derivedValidatorKey(0x10)
+
+	agg, _ := list.New(list.Config{
+		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:     1,
+		Manifests:     manifest.NewCache(),
+		Clock:         fixedClock(),
+	})
+	now := fixedClock()()
+	exp := now.Add(-1 * time.Hour).Unix() // expired
+	blob, sig := pub.signList(t, 1, 0, exp, [][33]byte{v1})
+	if d, _, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://"); d != list.Expired {
+		t.Fatalf("disposition: %s", d)
+	}
+	snap := agg.PublisherSnapshot()
+	if len(snap) != 1 {
+		t.Fatalf("snapshot len: %d", len(snap))
+	}
+	if len(snap[0].Validators) != 0 {
+		t.Fatalf("expired publisher must surface empty validator list; got %d", len(snap[0].Validators))
+	}
+}

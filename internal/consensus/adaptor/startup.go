@@ -68,7 +68,17 @@ type Components struct {
 	routerCancel           context.CancelFunc
 	manifestPeriodicCancel context.CancelFunc
 	sitePollerCancel       context.CancelFunc
+	vlTickCancel           context.CancelFunc
 }
+
+// validatorListTickInterval is how often Components.Start fires
+// ValidatorList.Tick to promote future-dated rotations and re-emit
+// OnChange. Rippled drives the equivalent path from updateTrusted on
+// every ledger close (ValidatorList.cpp:1910-1928, roughly every 4s on
+// mainnet); 30s here keeps the wake-up cost low while still bounding
+// the lag between a rotation's effective time and trusted-set update
+// to half a minute in the worst case.
+const validatorListTickInterval = 30 * time.Second
 
 // periodicManifestBroadcastInterval is how often Components.Start
 // re-emits the cached aggregate TMManifests frame. Rippled has no
@@ -115,7 +125,34 @@ func (c *Components) Start() error {
 		c.ValidatorListPoller.Start(pollerCtx)
 	}
 
+	// Periodic ValidatorList.Tick promotes future-dated remaining
+	// rotations and emits OnChange when the trusted union changes.
+	// Without this, a rotation announced during a quiet period (no
+	// peer gossip, no site polls) would only land when the next
+	// ingest happens.
+	if c.ValidatorList != nil {
+		tickCtx, tickCancel := context.WithCancel(context.Background())
+		c.vlTickCancel = tickCancel
+		go c.runValidatorListTick(tickCtx, validatorListTickInterval)
+	}
+
 	return nil
+}
+
+func (c *Components) runValidatorListTick(ctx context.Context, interval time.Duration) {
+	if c.ValidatorList == nil || interval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.ValidatorList.Tick()
+		}
+	}
 }
 
 func (c *Components) runPeriodicManifestBroadcast(ctx context.Context, interval time.Duration) {
@@ -139,6 +176,9 @@ func (c *Components) runPeriodicManifestBroadcast(ctx context.Context, interval 
 
 // Stop gracefully shuts down all components.
 func (c *Components) Stop() {
+	if c.vlTickCancel != nil {
+		c.vlTickCancel()
+	}
 	if c.sitePollerCancel != nil {
 		c.sitePollerCancel()
 	}

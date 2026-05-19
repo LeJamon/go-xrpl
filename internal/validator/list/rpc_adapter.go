@@ -2,6 +2,7 @@ package list
 
 import (
 	"encoding/hex"
+	"sort"
 	"strings"
 
 	"github.com/LeJamon/goXRPLd/codec/addresscodec"
@@ -77,14 +78,51 @@ func (r *RPCReader) Publishers() []rpctypes.ValidatorListPublisherInfo {
 			Version:          s.Version,
 			SiteURI:          s.SiteURI,
 			ValidatorsBase58: encodeNodeKeysBase58(s.Validators),
+			EffectiveSet:     s.EffectiveSet,
 		}
-		if !s.Effective.IsZero() {
+		// Mirrors rippled ValidatorList.cpp:1682-1683 which gates the
+		// JSON emit on `validFrom != TimeKeeper::time_point{}`. The Go
+		// zero-value time.Time is not a usable sentinel here because
+		// rippleSecondsToUnix(0) resolves to year 2000.
+		if s.EffectiveSet && !s.Effective.IsZero() {
 			info.EffectiveUnix = s.Effective.Unix()
 			info.EffectiveISO = s.Effective.UTC().Format(rippledTimeLayout)
 		}
 		if !s.Expiration.IsZero() {
 			info.ExpirationUnix = s.Expiration.Unix()
 			info.ExpirationISO = s.Expiration.UTC().Format(rippledTimeLayout)
+		}
+		// Mirror rippled's `remaining` array per publisher
+		// (ValidatorList.cpp:1699-1713). Each entry is the future-dated
+		// list waiting to be promoted into the current slot. Sorted by
+		// sequence for stable RPC output.
+		if len(s.Remaining) > 0 {
+			seqs := make([]uint32, 0, len(s.Remaining))
+			for seq := range s.Remaining {
+				seqs = append(seqs, seq)
+			}
+			sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+			rem := make([]rpctypes.ValidatorListRemainingInfo, 0, len(seqs))
+			for _, seq := range seqs {
+				p := s.Remaining[seq]
+				e := rpctypes.ValidatorListRemainingInfo{
+					Sequence:         p.Sequence,
+					Version:          p.Version,
+					SiteURI:          p.SiteURI,
+					EffectiveSet:     p.EffectiveSet,
+					ValidatorsBase58: encodeNodeKeysBase58(p.Validators),
+				}
+				if p.EffectiveSet && !p.Effective.IsZero() {
+					e.EffectiveUnix = p.Effective.Unix()
+					e.EffectiveISO = p.Effective.UTC().Format(rippledTimeLayout)
+				}
+				if !p.Expiration.IsZero() {
+					e.ExpirationUnix = p.Expiration.Unix()
+					e.ExpirationISO = p.Expiration.UTC().Format(rippledTimeLayout)
+				}
+				rem = append(rem, e)
+			}
+			info.Remaining = rem
 		}
 		out = append(out, info)
 	}

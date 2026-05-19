@@ -137,9 +137,18 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 
 	// Empty-blobs guard. Rippled charges feeHeavyBurdenPeer "no blobs"
 	// at PeerImp.cpp:2042-2049 — the heaviest tier, reserved for severe
-	// protocol violations. Surface it as a distinct label so operators
-	// can see this is not a generic bad-signature case.
+	// protocol violations.
+	//
+	// goXRPL's IncPeerBadData does not yet expose tiered fee weights:
+	// every label increments the same counter. Two labels are used to
+	// make the rippled tier difference visible in metrics so operators
+	// can wire alerting on heavy-tier abuse separately, even before the
+	// underlying weight machinery exists:
+	//   - "vl-coll-heavy-no-blobs"   → rippled feeHeavyBurdenPeer
+	//   - "vl-coll-no-blobs"          → general counter retained for
+	//                                   backwards-compatible dashboards
 	if len(coll.Blobs) == 0 {
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-heavy-no-blobs")
 		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-no-blobs")
 		return
 	}
@@ -217,11 +226,16 @@ func (r *Router) peerSupportsValidatorList2(peer peermanagement.PeerID) bool {
 	return r.overlay.PeerProtocolAtLeast(peer, 2, 2)
 }
 
-// validatorListSemanticHash builds the canonical byte stream that
-// stands in for rippled's `sha512Half(manifest, blobs, version)` at
-// PeerImp.cpp:2051. The shape is fixed across protobuf re-encodings so
-// dedup catches semantically-identical replays even when the wire bytes
-// differ.
+// validatorListSemanticHash builds a canonical byte stream the local
+// message-seen cache uses to dedup TMValidatorList frames whose wire
+// bytes happened to differ across protobuf re-encodings. The shape is
+// deliberately simple (length-prefixed big-endian) and is NOT
+// byte-equivalent to rippled's `sha512Half(manifest, blobs, version)`
+// at PeerImp.cpp:2051 — rippled's hash flows through C++ `hash_append`
+// overloads. Cross-node equivalence is not required because each node
+// runs an independent seen-hash cache; the only invariant is that two
+// semantically-identical inputs hash to the same value within THIS
+// process.
 func validatorListSemanticHash(vl *message.ValidatorList) []byte {
 	out := make([]byte, 0, 4+len(vl.Manifest)+len(vl.Blob)+len(vl.Signature))
 	out = appendUint32BE(out, vl.Version)
@@ -232,10 +246,11 @@ func validatorListSemanticHash(vl *message.ValidatorList) []byte {
 }
 
 // validatorListCollectionSemanticHash is the collection counterpart of
-// validatorListSemanticHash. Per-blob fields are concatenated in the
-// order the collection presents them — that order is also what
+// validatorListSemanticHash — same local-only dedup contract, not
+// byte-equivalent to rippled's hash. Per-blob fields are concatenated
+// in the order the collection presents them — that order is also what
 // ApplyCollection iterates, so semantically-identical collections hash
-// the same.
+// the same within this process.
 func validatorListCollectionSemanticHash(coll *message.ValidatorListCollection) []byte {
 	out := make([]byte, 0, 4+len(coll.Manifest)+64*len(coll.Blobs))
 	out = appendUint32BE(out, coll.Version)
