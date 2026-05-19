@@ -23,7 +23,6 @@ func AcquireSHA512() hash.Hash {
 	return h
 }
 
-// ReleaseSHA512 returns a sha512.Hash to the pool.
 func ReleaseSHA512(h hash.Hash) {
 	sha512Pool.Put(h)
 }

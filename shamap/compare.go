@@ -45,8 +45,6 @@ func (sm *SHAMap) handleLeafComparison(ourNode, otherNode Node, result *Differen
 	otherKey := otherItem.Key()
 
 	if bytes.Equal(ourKey[:], otherKey[:]) {
-		// Same key, check if content differs. DataUnsafe avoids defensive
-		// copies on a strictly read-only equality check.
 		if !bytes.Equal(ourItem.DataUnsafe(), otherItem.DataUnsafe()) {
 			result.AddDifference(ourKey, DiffModified, ourItem, otherItem)
 
@@ -301,8 +299,6 @@ func (sm *SHAMap) walkBranch(node Node, otherMapItem *Item, isFirstMap bool, dif
 					return false, nil
 				}
 			} else if otherMapItem != nil {
-				// Same key, check if data differs. DataUnsafe is fine here:
-				// we only do a byte-equality check.
 				if !bytes.Equal(item.DataUnsafe(), otherMapItem.DataUnsafe()) {
 					// Non-matching items with same key
 					var firstItem, secondItem *Item
@@ -556,7 +552,6 @@ func (sm *SHAMap) handleLeafComparisonWithChannel(ourNode, otherNode Node, ch ch
 	otherKey := otherItem.Key()
 
 	if bytes.Equal(ourKey[:], otherKey[:]) {
-		// Same key, check if content differs (read-only byte compare).
 		if !bytes.Equal(ourItem.DataUnsafe(), otherItem.DataUnsafe()) {
 			diff := DifferenceItem{
 				Key:        ourKey,
@@ -727,7 +722,6 @@ func (sm *SHAMap) walkBranchWithChannel(node Node, otherMapItem *Item, isFirstMa
 					return fmt.Errorf("channel blocked while sending difference")
 				}
 			} else if otherMapItem != nil {
-				// Same key, check if data differs (read-only byte compare).
 				if !bytes.Equal(item.DataUnsafe(), otherMapItem.DataUnsafe()) {
 					// Non-matching items with same key
 					var firstItem, secondItem *Item
