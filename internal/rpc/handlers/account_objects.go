@@ -199,13 +199,13 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		if err != nil {
 			// Fallback to raw data if decode fails
 			objects = append(objects, map[string]interface{}{
-				"index":           obj.Index,
+				"index":           strings.ToUpper(obj.Index),
 				"LedgerEntryType": obj.LedgerEntryType,
-				"data":            hexData,
+				"data":            strings.ToUpper(hexData),
 			})
 			continue
 		}
-		decoded["index"] = obj.Index
+		decoded["index"] = strings.ToUpper(obj.Index)
 		objects = append(objects, decoded)
 	}
 

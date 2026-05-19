@@ -117,7 +117,7 @@ func buildNFTOffersResponse(nftIDHex string, result *types.NFTOffersResult, limi
 	response := map[string]interface{}{
 		"nft_id":       nftIDHex,
 		"offers":       offers,
-		"ledger_hash":  strings.ToUpper(FormatLedgerHash(result.LedgerHash)),
+		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
 		"validated":    result.Validated,
 	}

@@ -247,7 +247,7 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 	validated := ledger.IsValidated()
 	closeTimeSec := ledger.CloseTime()
 	ledgerHash := ledger.Hash()
-	ledgerHashStr := strings.ToUpper(fmt.Sprintf("%x", ledgerHash))
+	ledgerHashStr := fmt.Sprintf("%X", ledgerHash)
 
 	// Decode the VL-encoded blob into tx + meta
 	storedTx, decodeErr := decodeTxBlob(foundData)

@@ -284,7 +284,7 @@ func (a *LedgerServiceAdapter) GetAccountInfo(ctx context.Context, account strin
 		PreviousTxnID:     prevTxnID,
 		PreviousTxnLgrSeq: result.PreviousTxnLgrSeq,
 		LedgerIndex:       result.LedgerIndex,
-		LedgerHash:        hex.EncodeToString(result.LedgerHash[:]),
+		LedgerHash:        strings.ToUpper(hex.EncodeToString(result.LedgerHash[:])),
 		Validated:         result.Validated,
 		RawData:           result.RawData,
 		Index:             strings.ToUpper(hex.EncodeToString(result.Index[:])),
@@ -301,7 +301,7 @@ func (a *LedgerServiceAdapter) GetTransaction(txHash [32]byte) (*types.Transacti
 	return &types.TransactionInfo{
 		TxData:      result.TxData,
 		LedgerIndex: result.LedgerIndex,
-		LedgerHash:  hex.EncodeToString(result.LedgerHash[:]),
+		LedgerHash:  strings.ToUpper(hex.EncodeToString(result.LedgerHash[:])),
 		Validated:   result.Validated,
 		TxIndex:     result.TxIndex,
 	}, nil
@@ -525,7 +525,7 @@ func (a *LedgerServiceAdapter) GetLedgerEntry(ctx context.Context, entryKey [32]
 		LedgerIndex: result.LedgerIndex,
 		LedgerHash:  result.LedgerHash,
 		Node:        result.Node,
-		NodeBinary:  hex.EncodeToString(result.Node),
+		NodeBinary:  strings.ToUpper(hex.EncodeToString(result.Node)),
 		Validated:   result.Validated,
 	}, nil
 }
