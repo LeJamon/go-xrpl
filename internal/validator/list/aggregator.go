@@ -280,6 +280,16 @@ type Aggregator struct {
 	// BroadcastLatest can consult it without reaching into peer
 	// internals.
 	peerSeq map[uint64]map[PublisherKey]uint32
+
+	// cacheDir is the on-disk path where accepted publisher lists are
+	// persisted. Set via SetCacheDir; empty disables the cache.
+	// Mirrors rippled's ValidatorList::dataPath_ at
+	// rippled/src/xrpld/app/misc/ValidatorList.h:155 + the
+	// cacheValidatorFile / loadLists pair at
+	// rippled/src/xrpld/app/misc/detail/ValidatorList.cpp:368-396 and
+	// 1300-1351. Read under a.mu so a SetCacheDir call doesn't race
+	// with an in-flight writeCacheLocked.
+	cacheDir string
 }
 
 // Config carries Aggregator construction parameters. All fields are
@@ -843,6 +853,7 @@ func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, sign
 		}
 	}
 
+	a.writeCacheLocked(s)
 	return prevCount != len(keys)
 }
 
@@ -909,6 +920,7 @@ func (a *Aggregator) applyPendingLocked(s *PublisherState, blob *blobJSON, signi
 		RawBlob:      append([]byte(nil), rawBlob...),
 		RawSignature: append([]byte(nil), rawSignature...),
 	}
+	a.writeCacheLocked(s)
 	if !s.MaxSequenceSet || blob.Sequence > s.MaxSequence {
 		s.MaxSequence = blob.Sequence
 		s.MaxSequenceSet = true
@@ -986,6 +998,7 @@ func (a *Aggregator) promoteRemainingLocked(s *PublisherState, now time.Time) (p
 	if len(s.Remaining) == 0 {
 		s.Remaining = nil
 	}
+	a.writeCacheLocked(s)
 	return true
 }
 
@@ -1019,6 +1032,7 @@ func (a *Aggregator) handleRevocation(pubKey PublisherKey) {
 		return
 	}
 	s.Status = StatusRevoked
+	a.removeCacheLocked(s.MasterKey)
 	s.Validators = nil
 	s.RawManifest = nil
 	s.RawBlob = nil
@@ -1311,6 +1325,38 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 	rawManifest := append([]byte(nil), s.RawManifest...)
 	rawBlob := append([]byte(nil), s.RawBlob...)
 	rawSignature := append([]byte(nil), s.RawSignature...)
+	// Snapshot any Remaining blobs into an ordered BroadcastBlob list
+	// so v2-capable peers can pre-pin the rotation. Mirrors rippled
+	// buildBlobInfos at ValidatorList.cpp:852-857 which serialises
+	// current + remaining into a single map<sequence,…>.
+	var collBlobs []BroadcastBlob
+	maxSeq := sequence
+	if len(s.Remaining) > 0 {
+		collBlobs = make([]BroadcastBlob, 0, len(s.Remaining)+1)
+		collBlobs = append(collBlobs, BroadcastBlob{
+			Blob:      append([]byte(nil), s.RawBlob...),
+			Signature: append([]byte(nil), s.RawSignature...),
+		})
+		seqs := make([]uint32, 0, len(s.Remaining))
+		for seq := range s.Remaining {
+			seqs = append(seqs, seq)
+		}
+		sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+		for _, seq := range seqs {
+			rb := s.Remaining[seq]
+			collBlobs = append(collBlobs, BroadcastBlob{
+				Blob:      append([]byte(nil), rb.RawBlob...),
+				Signature: append([]byte(nil), rb.RawSignature...),
+			})
+			if seq > maxSeq {
+				maxSeq = seq
+			}
+		}
+	}
+	collVersion := blobVersion
+	if len(collBlobs) > 0 && collVersion < 2 {
+		collVersion = 2
+	}
 	logger := a.logger
 	a.mu.Unlock()
 
@@ -1321,6 +1367,27 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 			continue
 		}
 		if !bcaster.PeerSupportsVL(peerID) {
+			continue
+		}
+		// v2-capable peer with Remaining blobs available: send the full
+		// collection so the peer can pre-pin the rotation. Mirrors
+		// rippled broadcastBlobs at ValidatorList.cpp:872-937 which
+		// picks the wire shape per-peer based on the
+		// ValidatorList2Propagation feature.
+		if len(collBlobs) > 0 && bcaster.PeerSupportsV2(peerID) {
+			if a.PeerSequence(peerID, pubKey) >= maxSeq {
+				continue
+			}
+			if err := bcaster.SendCollection(peerID, rawManifest, collBlobs, collVersion); err != nil {
+				logger.Debug("validator list collection broadcast: send failed",
+					"peer", peerID,
+					"publisher", hex.EncodeToString(pubKey[:]),
+					"max_sequence", maxSeq,
+					"error", err)
+				continue
+			}
+			a.RecordPeerSequence(peerID, pubKey, maxSeq)
+			sent++
 			continue
 		}
 		if a.PeerSequence(peerID, pubKey) >= sequence {
@@ -1346,6 +1413,7 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 		logger.Debug("validator list broadcast",
 			"publisher", hex.EncodeToString(pubKey[:]),
 			"sequence", sequence,
+			"remaining", len(collBlobs),
 			"peers_sent", sent)
 	}
 }

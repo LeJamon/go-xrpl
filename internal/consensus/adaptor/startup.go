@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -356,13 +357,33 @@ func NewFromConfig(
 			return nil, fmt.Errorf("validator-list aggregator: %w", err)
 		}
 		router.SetValidatorListAggregator(vlAgg)
+		// On-disk publisher-list cache. Mirrors rippled's
+		// ValidatorList::cacheValidatorFile + loadLists pair
+		// (rippled/src/xrpld/app/misc/detail/ValidatorList.cpp:368-396
+		// and 1300-1351): accepted lists are persisted under
+		// <database_path>/validator-list/cache.<pubHex> after every
+		// successful apply, and hydrated on cold start so the trusted
+		// UNL is non-empty before the first poll cycle. Failed cache
+		// I/O is logged but never blocks startup.
+		if appCfg.DatabasePath != "" {
+			cacheDir := filepath.Join(appCfg.DatabasePath, "validator-list")
+			if err := vlAgg.SetCacheDir(cacheDir); err != nil {
+				slog.Default().Warn("validator-list cache disabled",
+					"dir", cacheDir, "error", err)
+			} else if loaded := vlAgg.LoadCache(); loaded > 0 {
+				slog.Default().Info("validator-list cache hydrated",
+					"publishers", loaded)
+			}
+		}
 		// Wire the broadcaster so both ingress paths (peer router +
 		// HTTP poller) can push accepted lists out through the single
-		// aggregator-owned BroadcastLatest entry point. Mirrors
-		// rippled's applyListsAndBroadcast which uniformly fans out
-		// from inside ValidatorList for both peer-gossip and
-		// site-poll origins (ValidatorList.cpp:872-937, 939-994).
-		vlAgg.SetBroadcaster(NewRouterBroadcaster(overlay, sender))
+		// aggregator-owned BroadcastLatest entry point. The
+		// router-bound constructor plumbs the shared message
+		// suppression registry so SendList / SendCollection stamp the
+		// (hash, peer) pair that mirrors rippled's
+		// `hashRouter.addSuppressionPeer(hash, peer->id())` at
+		// ValidatorList.cpp:781 + 932.
+		vlAgg.SetBroadcaster(router.NewValidatorListBroadcaster(overlay, sender))
 		if len(appCfg.Validators.ValidatorListSites) > 0 {
 			vlPoller, err = validatorlist.NewSitePoller(
 				append([]string(nil), appCfg.Validators.ValidatorListSites...),

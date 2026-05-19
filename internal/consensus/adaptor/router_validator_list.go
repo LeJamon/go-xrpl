@@ -56,9 +56,16 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 	if r.messageSeen != nil {
 		hash := common.Sha512Half(validatorListSemanticHash(vl))
 		if firstSeen, _ := r.messageSeen.observe(hash); !firstSeen {
+			// Stamp the sender on the existing hash entry so downstream
+			// rebroadcast paths skip them. Mirrors rippled
+			// HashRouter::addSuppressionPeer's peer-set extension on a
+			// duplicate (HashRouter.cpp:115-134).
+			r.messageSeen.recordPeer(hash, uint64(msg.PeerID))
 			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-duplicate")
 			return
 		}
+		// First-seen: register the sender as a peer that has this hash.
+		r.messageSeen.recordPeer(hash, uint64(msg.PeerID))
 	}
 
 	disp, pubKey, seq := r.validatorList.ApplyList(vl.Manifest, vl.Blob, vl.Signature, vl.Version, r.peerSite(msg.PeerID))
@@ -156,9 +163,11 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 	if r.messageSeen != nil {
 		hash := common.Sha512Half(validatorListCollectionSemanticHash(coll))
 		if firstSeen, _ := r.messageSeen.observe(hash); !firstSeen {
+			r.messageSeen.recordPeer(hash, uint64(msg.PeerID))
 			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-duplicate")
 			return
 		}
+		r.messageSeen.recordPeer(hash, uint64(msg.PeerID))
 	}
 
 	dispList, pubKey, maxSeq := r.validatorList.ApplyCollection(coll, r.peerSite(msg.PeerID))
@@ -327,14 +336,33 @@ func (r *Router) peerSite(peerID peermanagement.PeerID) string {
 type RouterBroadcaster struct {
 	overlay *peermanagement.Overlay
 	sender  NetworkSender
+	// suppression is the optional shared hash registry. When wired,
+	// SendList / SendCollection record each (hash, peer) pair after a
+	// successful send so future inbound from that peer with the same
+	// hash maps to a "known sender" path and the broadcast loop can
+	// skip peers already known to have the content. Mirrors rippled's
+	// `hashRouter.addSuppressionPeer(hash, peer->id())` at
+	// rippled/src/xrpld/app/misc/detail/ValidatorList.cpp:781 + 932.
+	suppression *messageSuppression
 }
 
 // NewRouterBroadcaster wires the overlay (for peer enumeration +
 // feature lookup) and the sender (for per-peer SendToPeer). Passing
 // nil for either degrades the broadcaster to a silent no-op so tests
-// without an overlay don't crash.
+// without an overlay don't crash. Direct callers that pass through
+// this constructor get a broadcaster without hash-suppression
+// tracking; route through Router.NewValidatorListBroadcaster to
+// plumb the shared suppression registry.
 func NewRouterBroadcaster(overlay *peermanagement.Overlay, sender NetworkSender) *RouterBroadcaster {
 	return &RouterBroadcaster{overlay: overlay, sender: sender}
+}
+
+// NewValidatorListBroadcaster constructs a RouterBroadcaster bound to
+// the Router's suppression registry so SendList / SendCollection
+// stamp the hash→peer association expected by rippled's HashRouter
+// model.
+func (r *Router) NewValidatorListBroadcaster(overlay *peermanagement.Overlay, sender NetworkSender) *RouterBroadcaster {
+	return &RouterBroadcaster{overlay: overlay, sender: sender, suppression: r.messageSeen}
 }
 
 // ActivePeers implements validatorlist.PeerBroadcaster.
@@ -358,10 +386,22 @@ func (b *RouterBroadcaster) PeerSupportsVL(peerID uint64) bool {
 	return b.overlay.PeerSupports(peermanagement.PeerID(peerID), peermanagement.FeatureValidatorListPropagation)
 }
 
+// PeerSupportsV2 implements validatorlist.PeerBroadcaster. Mirrors
+// rippled's `supportsFeature(ProtocolFeature::ValidatorList2Propagation)`
+// at PeerImp.cpp:511-514 which gates on negotiated protocol >= 2.2.
+func (b *RouterBroadcaster) PeerSupportsV2(peerID uint64) bool {
+	if b == nil || b.overlay == nil {
+		return false
+	}
+	return b.overlay.PeerProtocolAtLeast(peermanagement.PeerID(peerID), 2, 2)
+}
+
 // SendList implements validatorlist.PeerBroadcaster. Encodes a
 // TMValidatorList carrying the supplied wire bytes verbatim and
 // delivers it to peerID via the adaptor sender. blobVersion goes on
-// the frame's `version` field.
+// the frame's `version` field. When wired with a suppression
+// registry: short-circuits peers already known to have the content,
+// and stamps the (hash, peer) pair after a successful send.
 func (b *RouterBroadcaster) SendList(peerID uint64, manifestBytes, blob, signature []byte, blobVersion uint32) error {
 	if b == nil || b.sender == nil {
 		return fmt.Errorf("router broadcaster: nil sender")
@@ -376,5 +416,56 @@ func (b *RouterBroadcaster) SendList(peerID uint64, manifestBytes, blob, signatu
 	if err != nil {
 		return fmt.Errorf("encode TMValidatorList: %w", err)
 	}
-	return b.sender.SendToPeer(peerID, frame)
+	hash := common.Sha512Half(validatorListSemanticHash(vl))
+	if b.suppression != nil && b.suppression.peerHasHash(hash, peerID) {
+		// Peer already has this content. Skip the redundant send.
+		// Mirrors rippled's "skip peers already in the hash's
+		// suppression peer-set" optimisation at
+		// ValidatorList.cpp:923-925.
+		return nil
+	}
+	if err := b.sender.SendToPeer(peerID, frame); err != nil {
+		return err
+	}
+	if b.suppression != nil {
+		b.suppression.recordPeer(hash, peerID)
+	}
+	return nil
+}
+
+// SendCollection implements validatorlist.PeerBroadcaster. Encodes a
+// TMValidatorListCollection carrying the publisher manifest plus the
+// supplied (per-blob manifest, blob, signature) tuples and delivers
+// it to peerID. Used by BroadcastLatest when the publisher has
+// pending Remaining blobs AND the recipient negotiated v2.
+func (b *RouterBroadcaster) SendCollection(peerID uint64, manifestBytes []byte, blobs []validatorlist.BroadcastBlob, version uint32) error {
+	if b == nil || b.sender == nil {
+		return fmt.Errorf("router broadcaster: nil sender")
+	}
+	coll := &message.ValidatorListCollection{
+		Version:  version,
+		Manifest: manifestBytes,
+	}
+	for _, blob := range blobs {
+		coll.Blobs = append(coll.Blobs, message.ValidatorBlobInfo{
+			Manifest:  blob.Manifest,
+			Blob:      blob.Blob,
+			Signature: blob.Signature,
+		})
+	}
+	frame, err := encodeFrame(message.TypeValidatorListCollection, coll)
+	if err != nil {
+		return fmt.Errorf("encode TMValidatorListCollection: %w", err)
+	}
+	hash := common.Sha512Half(validatorListCollectionSemanticHash(coll))
+	if b.suppression != nil && b.suppression.peerHasHash(hash, peerID) {
+		return nil
+	}
+	if err := b.sender.SendToPeer(peerID, frame); err != nil {
+		return err
+	}
+	if b.suppression != nil {
+		b.suppression.recordPeer(hash, peerID)
+	}
+	return nil
 }
