@@ -96,4 +96,24 @@ func TestRPCHexCaseRegression(t *testing.T) {
 		require.NotEmpty(t, idx)
 		assert.Equal(t, strings.ToUpper(idx), idx, "account_objects[*].index must be uppercase")
 	})
+
+	// FormatLedgerHash / FormatHash are the single chokepoint that
+	// LedgerServiceAdapter.GetAccountInfo, GetTransaction, and GetLedgerEntry
+	// all funnel through for hash-like response fields (LedgerHash, Index,
+	// PreviousTxnID, NodeBinary). Pinning the chokepoint covers every adapter
+	// field that previously regressed in issue #475.
+	t.Run("FormatLedgerHash uppercase invariant", func(t *testing.T) {
+		var h [32]byte
+		h[0] = 0xab
+		h[15] = 0xcd
+		h[31] = 0xef
+		got := handlers.FormatLedgerHash(h)
+		require.Len(t, got, 64)
+		assert.Equal(t, strings.ToUpper(got), got, "FormatLedgerHash must return uppercase hex")
+	})
+
+	t.Run("FormatHash uppercase invariant", func(t *testing.T) {
+		got := handlers.FormatHash([]byte{0xab, 0xcd, 0xef})
+		assert.Equal(t, "ABCDEF", got, "FormatHash must return uppercase hex")
+	})
 }
