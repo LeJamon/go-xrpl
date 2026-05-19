@@ -424,8 +424,6 @@ func TestAggregator_ApplyCollection_AcceptedAndStale(t *testing.T) {
 	}
 }
 
-// --- helpers ---
-
 func deterministicKey(seed byte) (pub32 []byte, priv ed25519.PrivateKey) {
 	s := bytes.Repeat([]byte{seed}, ed25519.SeedSize)
 	priv = ed25519.NewKeyFromSeed(s)
