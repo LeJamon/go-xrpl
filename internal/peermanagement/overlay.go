@@ -76,10 +76,23 @@ const acceptBackoff = 100 * time.Millisecond
 // events should approach the eviction threshold.
 const (
 	weightInvalidSignature = 2000
-	weightInvalidData      = 400
-	weightMalformedReq     = 200
-	weightRequestNoReply   = 10
-	weightDefaultBadData   = 100 // fallback for unrecognized reasons
+	// weightHeavyBurden mirrors rippled's Charge::feeHeavyBurdenPeer
+	// which is set to the same value as feeInvalidSignature
+	// (Resource::Fees.h). Reserved for protocol violations that would
+	// force the receiver into expensive computation (e.g. a
+	// TMValidatorListCollection with zero blobs forces an N-pass over
+	// an empty set — heavier in intent, identical in numeric impact).
+	weightHeavyBurden  = 2000
+	weightInvalidData  = 400
+	weightMalformedReq = 200
+	// weightUselessData mirrors rippled's Charge::feeUselessData — a
+	// light charge for messages that are semantically wasteful (peer
+	// re-relayed a list at the same sequence we already have, sent a
+	// frame they should know we don't accept, etc.). A small number of
+	// such events MUST NOT approach eviction; only sustained spamming.
+	weightUselessData    = 40
+	weightRequestNoReply = 10
+	weightDefaultBadData = 100 // fallback for unrecognized reasons
 )
 
 // BadDataWeight returns the weight to charge IncBadData for `reason`.
@@ -151,6 +164,32 @@ func BadDataWeight(reason string) int {
 	case "no-reply":
 		return weightRequestNoReply
 	default:
+		// Validator-list ingest labels embed the rippled fee tier in
+		// the label prefix; classify by prefix so a new disposition
+		// added to the router doesn't accidentally fall through to
+		// weightDefaultBadData. Charge tiers from
+		// rippled/src/xrpld/overlay/detail/PeerImp.cpp:2141-2183:
+		//   "vl-coll-heavy-no-blobs", "vl-coll-no-blobs" -> feeHeavyBurdenPeer
+		//   "vl-...-badsig-*"                            -> feeInvalidSignature
+		//   "vl-...-baddata-*", "*-wrong-version",
+		//   "*-decode"                                   -> feeInvalidData
+		//   "vl-...-useless-*", "*-duplicate",
+		//   "*-unsupported-peer"                         -> feeUselessData
+		switch {
+		case reason == "vl-coll-no-blobs",
+			strings.HasSuffix(reason, "-heavy-no-blobs"):
+			return weightHeavyBurden
+		case strings.Contains(reason, "-badsig-"):
+			return weightInvalidSignature
+		case strings.Contains(reason, "-baddata-"),
+			strings.HasSuffix(reason, "-wrong-version"),
+			strings.HasSuffix(reason, "-decode"):
+			return weightInvalidData
+		case strings.Contains(reason, "-useless-"),
+			strings.HasSuffix(reason, "-duplicate"),
+			strings.HasSuffix(reason, "-unsupported-peer"):
+			return weightUselessData
+		}
 		return weightDefaultBadData
 	}
 }
@@ -521,6 +560,52 @@ func (o *Overlay) PeerSupports(peerID PeerID, f Feature) bool {
 		return false
 	}
 	return caps.HasFeature(f)
+}
+
+// PeerRemoteAddr returns the peer's remote endpoint as "host:port", or
+// "" if the peer is unknown. Mirrors rippled's `remote_address_.to_string()`
+// at PeerImp.cpp:2072 used to populate the `uri` field on per-publisher
+// state for peer-sourced lists.
+func (o *Overlay) PeerRemoteAddr(peerID PeerID) string {
+	o.peersMu.RLock()
+	peer, ok := o.peers[peerID]
+	o.peersMu.RUnlock()
+	if !ok {
+		return ""
+	}
+	return peer.Endpoint().String()
+}
+
+// PeerProtocolAtLeast reports whether the peer's negotiated peer-protocol
+// version is at least the given (major, minor). Mirrors rippled's
+// `protocol_ >= make_protocol(major, minor)` test at
+// rippled/src/xrpld/overlay/detail/PeerImp.cpp:511-514, used to gate
+// version-implicit features such as ValidatorList2Propagation.
+//
+// Returns false when the peer is unknown or has not completed the
+// handshake.
+func (o *Overlay) PeerProtocolAtLeast(peerID PeerID, major, minor uint16) bool {
+	o.peersMu.RLock()
+	peer, ok := o.peers[peerID]
+	o.peersMu.RUnlock()
+	if !ok {
+		return false
+	}
+	got := peer.ProtocolVersion()
+	if got == "" {
+		return false
+	}
+	pvs := parseProtocolVersions(got)
+	if len(pvs) == 0 {
+		return false
+	}
+	want := protocolVersion{major: major, minor: minor}
+	for _, v := range pvs {
+		if !v.less(want) {
+			return true
+		}
+	}
+	return false
 }
 
 // ListenAddr returns the resolved address the overlay is accepting

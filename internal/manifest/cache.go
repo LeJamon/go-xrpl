@@ -269,6 +269,27 @@ func (c *Cache) Revoked(masterKey [33]byte) bool {
 	return m.Revoked()
 }
 
+// MasterToSigning returns a snapshot of the master→signing key map for
+// every cached (non-revoked) manifest. Used by the `validators` RPC to
+// emit the `signing_keys` object, mirroring rippled's
+// ValidatorManifests::for_each_manifest walk in getJson at
+// ValidatorList.cpp:1725-1734.
+func (c *Cache) MasterToSigning() map[[33]byte][33]byte {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if len(c.byMaster) == 0 {
+		return nil
+	}
+	out := make(map[[33]byte][33]byte, len(c.byMaster))
+	for master, m := range c.byMaster {
+		if m == nil || m.Revoked() {
+			continue
+		}
+		out[master] = m.SigningKey
+	}
+	return out
+}
+
 // SerializedAll returns the wire bytes of every cached manifest in
 // arbitrary order, with each entry defensively copied. Used by the
 // post-handshake TMManifests emission to gossip the entire aggregated

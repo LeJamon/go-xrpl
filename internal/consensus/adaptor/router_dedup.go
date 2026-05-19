@@ -139,8 +139,19 @@ func appendVLPrefix(buf []byte, n int) []byte {
 // N-fold and produces squelches earlier and more aggressively than
 // the rest of the network would expect.
 type messageSuppression struct {
-	mu      sync.Mutex
-	seen    map[[32]byte]time.Time
+	mu sync.Mutex
+	// seen maps a suppression hash to the most recent observation time.
+	// TTL-evicted on observe when at maxSize.
+	seen map[[32]byte]time.Time
+	// peers maps a suppression hash to the set of peer IDs known to
+	// already have the message. Populated both on inbound observe (the
+	// sender now has it because they sent it to us) and on outbound
+	// broadcast (the recipient now has it because we sent it to them).
+	// Mirrors rippled's HashRouter::addSuppressionPeer at
+	// rippled/src/xrpld/app/misc/HashRouter.cpp:51-79, used by
+	// validator-list broadcast to skip peers known to already have the
+	// same content.
+	peers   map[[32]byte]map[uint64]struct{}
 	ttl     time.Duration
 	maxSize int
 	now     func() time.Time
@@ -152,6 +163,7 @@ type messageSuppression struct {
 func newMessageSuppression(ttl time.Duration, maxSize int) *messageSuppression {
 	return &messageSuppression{
 		seen:    make(map[[32]byte]time.Time),
+		peers:   make(map[[32]byte]map[uint64]struct{}),
 		ttl:     ttl,
 		maxSize: maxSize,
 		now:     time.Now,
@@ -181,10 +193,9 @@ func (s *messageSuppression) observe(hash [32]byte) (firstSeen bool, lastSeenAt 
 		for h, seenAt := range s.seen {
 			if seenAt.Before(cutoff) {
 				delete(s.seen, h)
+				delete(s.peers, h)
 			}
 		}
-		// If that didn't free enough space (adversarial churn), drop
-		// half the map — bounded worst case.
 		if len(s.seen) >= s.maxSize {
 			i := 0
 			for h := range s.seen {
@@ -192,6 +203,7 @@ func (s *messageSuppression) observe(hash [32]byte) (firstSeen bool, lastSeenAt 
 					break
 				}
 				delete(s.seen, h)
+				delete(s.peers, h)
 				i++
 			}
 		}
@@ -203,4 +215,51 @@ func (s *messageSuppression) observe(hash [32]byte) (firstSeen bool, lastSeenAt 
 	}
 	s.seen[hash] = now
 	return true, time.Time{}
+}
+
+// recordPeer marks peerID as a peer known to already have the message
+// identified by hash. Returns true if the peer was newly added to the
+// per-hash set (note: this differs from rippled's addSuppressionPeer
+// which returns whether the *key* was newly inserted — the two ride
+// on the same emplace+addPeer pair but expose different bits of it).
+// Always refreshes the hash's last-seen time so a steady stream of
+// activity keeps the entry live.
+//
+// Caller-side semantics:
+//   - On inbound observe (peer just delivered the hash) — record the
+//     sender so we know they have it.
+//   - On outbound broadcast (we just sent the hash to the peer) —
+//     record the recipient so we don't re-send and so a back-relay
+//     is attributable.
+func (s *messageSuppression) recordPeer(hash [32]byte, peerID uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := s.now()
+	s.seen[hash] = now
+
+	peers, ok := s.peers[hash]
+	if !ok {
+		peers = make(map[uint64]struct{})
+		s.peers[hash] = peers
+	}
+	if _, present := peers[peerID]; present {
+		return false
+	}
+	peers[peerID] = struct{}{}
+	return true
+}
+
+// peerHasHash reports whether peerID is known to already have the
+// message identified by hash. Used by broadcast paths to skip peers
+// that would receive a redundant frame.
+func (s *messageSuppression) peerHasHash(hash [32]byte, peerID uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	peers, ok := s.peers[hash]
+	if !ok {
+		return false
+	}
+	_, present := peers[peerID]
+	return present
 }
