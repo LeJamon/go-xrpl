@@ -77,11 +77,16 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (int
 				if len(p.Remaining) > 0 {
 					rem := make([]map[string]interface{}, 0, len(p.Remaining))
 					for _, r := range p.Remaining {
+						// Mirrors rippled appendList at
+						// ValidatorList.cpp:1673-1689 which emits
+						// uri/seq/expiration/effective/list for every
+						// entry. `version` lives on the top-level publisher
+						// object (line 1695) and is NOT repeated per
+						// remaining entry — keep parity by omitting it here.
 						re := map[string]interface{}{
-							"uri":     r.SiteURI,
-							"list":    nonNilStrings(r.ValidatorsBase58),
-							"seq":     r.Sequence,
-							"version": r.Version,
+							"uri":  r.SiteURI,
+							"list": nonNilStrings(r.ValidatorsBase58),
+							"seq":  r.Sequence,
 						}
 						if r.EffectiveSet && r.EffectiveISO != "" {
 							re["effective"] = r.EffectiveISO
