@@ -10,13 +10,14 @@ package list
 //   - SendList: TMValidatorList (v1) carrying a single accepted blob.
 //     Used for peers that did not negotiate ValidatorList2Propagation.
 //   - SendCollection: TMValidatorListCollection (v2) carrying current
-//   - remaining blobs. Used for peers that did negotiate v2 and
-//     when the publisher has pending Remaining blobs to pre-announce.
+//     plus any Remaining blobs. Used for any peer that negotiated v2,
+//     even when the publisher has no Remaining blobs (in which case
+//     the collection has a single entry — current).
 //
-// The aggregator picks the entry point per peer via PeerSupportsV2 —
-// v1-only peers always receive SendList carrying the current accepted
-// blob, matching rippled's degraded-mode behaviour in broadcastBlobs
-// at rippled/src/xrpld/app/misc/detail/ValidatorList.cpp:872-937.
+// The aggregator picks the entry point per peer via PeerSupportsV2,
+// matching rippled's sendValidatorList at
+// rippled/src/xrpld/app/misc/detail/ValidatorList.cpp:752-757 which
+// selects messageVersion based on the peer feature alone.
 type PeerBroadcaster interface {
 	// ActivePeers returns the IDs of every connected, handshake-
 	// complete peer. The aggregator iterates this set on each
@@ -42,9 +43,10 @@ type PeerBroadcaster interface {
 
 	// SendCollection delivers a TMValidatorListCollection (v2) frame
 	// carrying the publisher manifest plus an ordered slice of
-	// (per-blob optional manifest, blob, signature) tuples. Used when
-	// the recipient supports v2 and the publisher has Remaining blobs
-	// to pre-announce. Returns any send error.
+	// (per-blob optional manifest, blob, signature) tuples. Used for
+	// every v2-capable recipient (the slice has a single current entry
+	// when the publisher has no Remaining blobs). Returns any send
+	// error.
 	SendCollection(peerID uint64, manifest []byte, blobs []BroadcastBlob, version uint32) error
 }
 

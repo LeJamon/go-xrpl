@@ -6,8 +6,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
+
+// cacheRefreshIntervalMinutes mirrors rippled's
+// `value[jss::refresh_interval] = 24 * 60` at
+// rippled/src/xrpld/app/misc/detail/ValidatorList.cpp:386 — rippled is
+// the only writer of these files in its model, so reads can be safely
+// delayed up to 24 hours. goXRPL does not consume the value on the
+// load path (LoadCache hydrates unconditionally before site polling
+// begins) but emits it so the on-disk format stays byte-compatible.
+const cacheRefreshIntervalMinutes = 24 * 60
 
 // cacheFilePrefix mirrors rippled's ValidatorList::filePrefix_ at
 // rippled/src/xrpld/app/misc/detail/ValidatorList.cpp:118
@@ -17,14 +27,22 @@ const cacheFilePrefix = "cache."
 
 // cachedEnvelope is the on-disk shape produced by writeCacheLocked
 // and consumed by LoadCache. Mirrors rippled's buildFileData layout
-// at ValidatorList.cpp:312-366 — top-level manifest / version for v1,
-// plus a blobs_v2 array for collections.
+// at ValidatorList.cpp:304-366 — top-level manifest / version /
+// public_key for v1, plus a blobs_v2 array for collections, and a
+// refresh_interval added by cacheValidatorFile.
+//
+// PublicKey and RefreshInterval are written for byte-compatibility
+// with rippled's format (line 321 + line 386) but are not consumed
+// by LoadCache: the publisher is identified by the file name, and
+// refresh cadence is driven by the site poller, not the cache.
 type cachedEnvelope struct {
-	Manifest  string            `json:"manifest"`
-	Blob      string            `json:"blob,omitempty"`
-	Signature string            `json:"signature,omitempty"`
-	Version   uint32            `json:"version"`
-	BlobsV2   []cachedBlobEntry `json:"blobs_v2,omitempty"`
+	Manifest        string            `json:"manifest"`
+	PublicKey       string            `json:"public_key,omitempty"`
+	Blob            string            `json:"blob,omitempty"`
+	Signature       string            `json:"signature,omitempty"`
+	Version         uint32            `json:"version"`
+	BlobsV2         []cachedBlobEntry `json:"blobs_v2,omitempty"`
+	RefreshInterval uint32            `json:"refresh_interval,omitempty"`
 }
 
 type cachedBlobEntry struct {
@@ -74,8 +92,10 @@ func (a *Aggregator) writeCacheLocked(s *PublisherState) {
 		return
 	}
 	env := cachedEnvelope{
-		Manifest: string(s.RawManifest),
-		Version:  s.Version,
+		Manifest:        string(s.RawManifest),
+		PublicKey:       hex.EncodeToString(s.MasterKey[:]),
+		Version:         s.Version,
+		RefreshInterval: cacheRefreshIntervalMinutes,
 	}
 	if env.Version == 0 {
 		env.Version = 1
@@ -91,11 +111,7 @@ func (a *Aggregator) writeCacheLocked(s *PublisherState) {
 		for seq := range s.Remaining {
 			seqs = append(seqs, seq)
 		}
-		for i := 1; i < len(seqs); i++ {
-			for j := i; j > 0 && seqs[j-1] > seqs[j]; j-- {
-				seqs[j-1], seqs[j] = seqs[j], seqs[j-1]
-			}
-		}
+		sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
 		for _, seq := range seqs {
 			rb := s.Remaining[seq]
 			env.BlobsV2 = append(env.BlobsV2, cachedBlobEntry{
@@ -164,8 +180,15 @@ func (a *Aggregator) removeCacheLocked(pk PublisherKey) {
 func (a *Aggregator) LoadCache() int {
 	a.mu.Lock()
 	dir := a.cacheDir
+	// Snapshot the publisher set and skip any that have already been
+	// hydrated by another source (e.g. a site-poll racing the cache
+	// load). Mirrors rippled's loadLists() at ValidatorList.cpp:1315-1316
+	// which skips publishers whose PublisherStatus is `available`.
 	pubs := make([]PublisherKey, 0, len(a.publishers))
 	for k := range a.publishers {
+		if st, ok := a.state[k]; ok && st != nil && st.Status == StatusAvailable {
+			continue
+		}
 		pubs = append(pubs, k)
 	}
 	a.mu.Unlock()

@@ -172,7 +172,7 @@ func BadDataWeight(reason string) int {
 		//   "vl-coll-heavy-no-blobs", "vl-coll-no-blobs" -> feeHeavyBurdenPeer
 		//   "vl-...-badsig-*"                            -> feeInvalidSignature
 		//   "vl-...-baddata-*", "*-wrong-version",
-		//   "*-decode", "*-manifest-decode"              -> feeInvalidData
+		//   "*-decode"                                   -> feeInvalidData
 		//   "vl-...-useless-*", "*-duplicate",
 		//   "*-unsupported-peer"                         -> feeUselessData
 		switch {
@@ -183,8 +183,7 @@ func BadDataWeight(reason string) int {
 			return weightInvalidSignature
 		case strings.Contains(reason, "-baddata-"),
 			strings.HasSuffix(reason, "-wrong-version"),
-			strings.HasSuffix(reason, "-decode"),
-			strings.HasSuffix(reason, "-manifest-decode"):
+			strings.HasSuffix(reason, "-decode"):
 			return weightInvalidData
 		case strings.Contains(reason, "-useless-"),
 			strings.HasSuffix(reason, "-duplicate"),

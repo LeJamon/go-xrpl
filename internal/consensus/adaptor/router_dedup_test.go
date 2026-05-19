@@ -50,3 +50,46 @@ func TestMessageSuppression_ObserveReturnsLastSeen(t *testing.T) {
 	assert.True(t, lastSeen.IsZero(),
 		"TTL-expired re-observation must return zero lastSeenAt")
 }
+
+// TestMessageSuppression_RecordPeerAndHasHash pins the per-hash peer
+// set semantics that drive validator-list broadcast suppression:
+// recordPeer adds the peer to the set, peerHasHash reflects it, and a
+// repeated recordPeer for the same (hash, peer) is reported as not
+// newly-added. Mirrors rippled HashRouter::addSuppressionPeer's
+// peer-set extension behaviour at HashRouter.cpp:51-79.
+func TestMessageSuppression_RecordPeerAndHasHash(t *testing.T) {
+	s := newMessageSuppression(30*time.Second, 64)
+
+	hash := [32]byte{0xBB}
+
+	// Unknown hash → peerHasHash must be false for any peer.
+	assert.False(t, s.peerHasHash(hash, 42),
+		"peerHasHash for unknown hash must be false")
+
+	// Recording peer 42 first-time: returns true (newly added), and
+	// peerHasHash flips to true for that peer.
+	added := s.recordPeer(hash, 42)
+	assert.True(t, added, "first recordPeer must return true (newly added)")
+	assert.True(t, s.peerHasHash(hash, 42),
+		"peerHasHash must be true after recordPeer")
+
+	// Re-recording the same peer: returns false (already in set),
+	// peerHasHash still true.
+	added = s.recordPeer(hash, 42)
+	assert.False(t, added, "duplicate recordPeer must return false")
+	assert.True(t, s.peerHasHash(hash, 42),
+		"peerHasHash must remain true on duplicate recordPeer")
+
+	// A second peer on the same hash is independent.
+	added = s.recordPeer(hash, 43)
+	assert.True(t, added, "different peer on same hash must be newly added")
+	assert.True(t, s.peerHasHash(hash, 42))
+	assert.True(t, s.peerHasHash(hash, 43))
+	assert.False(t, s.peerHasHash(hash, 44),
+		"unrelated peer must not be reported as having the hash")
+
+	// A different hash is isolated from peer 42's prior entry.
+	other := [32]byte{0xCC}
+	assert.False(t, s.peerHasHash(other, 42),
+		"peer-set must be scoped per hash")
+}

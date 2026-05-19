@@ -1325,18 +1325,22 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 	rawManifest := append([]byte(nil), s.RawManifest...)
 	rawBlob := append([]byte(nil), s.RawBlob...)
 	rawSignature := append([]byte(nil), s.RawSignature...)
-	// Snapshot any Remaining blobs into an ordered BroadcastBlob list
-	// so v2-capable peers can pre-pin the rotation. Mirrors rippled
-	// buildBlobInfos at ValidatorList.cpp:852-857 which serialises
-	// current + remaining into a single map<sequence,…>.
-	var collBlobs []BroadcastBlob
+	// Snapshot the publisher's current blob plus any Remaining blobs
+	// into an ordered BroadcastBlob list so v2-capable peers always
+	// receive a TMValidatorListCollection (single-entry when no
+	// Remaining). Mirrors rippled's sendValidatorList at
+	// ValidatorList.cpp:752-757 which selects messageVersion=2 purely
+	// on the peer's ValidatorList2Propagation feature, regardless of
+	// whether the publisher has Remaining blobs, and buildBlobInfos
+	// at ValidatorList.cpp:852-857 which serialises current + remaining
+	// into a single map<sequence,…>.
+	collBlobs := make([]BroadcastBlob, 0, len(s.Remaining)+1)
+	collBlobs = append(collBlobs, BroadcastBlob{
+		Blob:      append([]byte(nil), s.RawBlob...),
+		Signature: append([]byte(nil), s.RawSignature...),
+	})
 	maxSeq := sequence
 	if len(s.Remaining) > 0 {
-		collBlobs = make([]BroadcastBlob, 0, len(s.Remaining)+1)
-		collBlobs = append(collBlobs, BroadcastBlob{
-			Blob:      append([]byte(nil), s.RawBlob...),
-			Signature: append([]byte(nil), s.RawSignature...),
-		})
 		seqs := make([]uint32, 0, len(s.Remaining))
 		for seq := range s.Remaining {
 			seqs = append(seqs, seq)
@@ -1354,7 +1358,7 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 		}
 	}
 	collVersion := blobVersion
-	if len(collBlobs) > 0 && collVersion < 2 {
+	if collVersion < 2 {
 		collVersion = 2
 	}
 	logger := a.logger
@@ -1369,12 +1373,12 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 		if !bcaster.PeerSupportsVL(peerID) {
 			continue
 		}
-		// v2-capable peer with Remaining blobs available: send the full
-		// collection so the peer can pre-pin the rotation. Mirrors
-		// rippled broadcastBlobs at ValidatorList.cpp:872-937 which
-		// picks the wire shape per-peer based on the
-		// ValidatorList2Propagation feature.
-		if len(collBlobs) > 0 && bcaster.PeerSupportsV2(peerID) {
+		// v2-capable peer: always send the collection (single-entry
+		// when there are no Remaining blobs, multi-entry otherwise)
+		// so the wire shape matches rippled's broadcastBlobs at
+		// ValidatorList.cpp:872-937 which picks the message type
+		// purely on the peer's ValidatorList2Propagation feature.
+		if bcaster.PeerSupportsV2(peerID) {
 			if a.PeerSequence(peerID, pubKey) >= maxSeq {
 				continue
 			}
@@ -1413,7 +1417,7 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 		logger.Debug("validator list broadcast",
 			"publisher", hex.EncodeToString(pubKey[:]),
 			"sequence", sequence,
-			"remaining", len(collBlobs),
+			"remaining", len(collBlobs)-1,
 			"peers_sent", sent)
 	}
 }

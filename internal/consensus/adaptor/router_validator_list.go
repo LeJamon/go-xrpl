@@ -59,7 +59,7 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 			// Stamp the sender on the existing hash entry so downstream
 			// rebroadcast paths skip them. Mirrors rippled
 			// HashRouter::addSuppressionPeer's peer-set extension on a
-			// duplicate (HashRouter.cpp:115-134).
+			// duplicate (HashRouter.cpp:51-79).
 			r.messageSeen.recordPeer(hash, uint64(msg.PeerID))
 			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-duplicate")
 			return
@@ -421,7 +421,7 @@ func (b *RouterBroadcaster) SendList(peerID uint64, manifestBytes, blob, signatu
 		// Peer already has this content. Skip the redundant send.
 		// Mirrors rippled's "skip peers already in the hash's
 		// suppression peer-set" optimisation at
-		// ValidatorList.cpp:923-925.
+		// ValidatorList.cpp:909 (`if (toSkip->count(peer->id()) == 0)`).
 		return nil
 	}
 	if err := b.sender.SendToPeer(peerID, frame); err != nil {
@@ -436,8 +436,9 @@ func (b *RouterBroadcaster) SendList(peerID uint64, manifestBytes, blob, signatu
 // SendCollection implements validatorlist.PeerBroadcaster. Encodes a
 // TMValidatorListCollection carrying the publisher manifest plus the
 // supplied (per-blob manifest, blob, signature) tuples and delivers
-// it to peerID. Used by BroadcastLatest when the publisher has
-// pending Remaining blobs AND the recipient negotiated v2.
+// it to peerID. Used by BroadcastLatest for every v2-capable peer
+// (single-entry collection when the publisher has no Remaining
+// blobs, multi-entry when it does).
 func (b *RouterBroadcaster) SendCollection(peerID uint64, manifestBytes []byte, blobs []validatorlist.BroadcastBlob, version uint32) error {
 	if b == nil || b.sender == nil {
 		return fmt.Errorf("router broadcaster: nil sender")

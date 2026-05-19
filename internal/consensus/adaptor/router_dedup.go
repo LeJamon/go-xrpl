@@ -148,9 +148,9 @@ type messageSuppression struct {
 	// sender now has it because they sent it to us) and on outbound
 	// broadcast (the recipient now has it because we sent it to them).
 	// Mirrors rippled's HashRouter::addSuppressionPeer at
-	// rippled/src/xrpld/app/misc/detail/HashRouter.cpp:115-134, used
-	// by validator-list broadcast to skip peers known to already have
-	// the same content.
+	// rippled/src/xrpld/app/misc/HashRouter.cpp:51-79, used by
+	// validator-list broadcast to skip peers known to already have the
+	// same content.
 	peers   map[[32]byte]map[uint64]struct{}
 	ttl     time.Duration
 	maxSize int
@@ -218,10 +218,12 @@ func (s *messageSuppression) observe(hash [32]byte) (firstSeen bool, lastSeenAt 
 }
 
 // recordPeer marks peerID as a peer known to already have the message
-// identified by hash. Returns true if the peer was newly added,
-// matching rippled's HashRouter::addSuppressionPeer "added" return
-// semantics. Always refreshes the hash's last-seen time so a steady
-// stream of activity keeps the entry live.
+// identified by hash. Returns true if the peer was newly added to the
+// per-hash set (note: this differs from rippled's addSuppressionPeer
+// which returns whether the *key* was newly inserted — the two ride
+// on the same emplace+addPeer pair but expose different bits of it).
+// Always refreshes the hash's last-seen time so a steady stream of
+// activity keeps the entry live.
 //
 // Caller-side semantics:
 //   - On inbound observe (peer just delivered the hash) — record the
