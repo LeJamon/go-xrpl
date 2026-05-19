@@ -97,11 +97,8 @@ func TestRPCHexCaseRegression(t *testing.T) {
 		assert.Equal(t, strings.ToUpper(idx), idx, "account_objects[*].index must be uppercase")
 	})
 
-	// FormatLedgerHash / FormatHash are the single chokepoint that
-	// LedgerServiceAdapter.GetAccountInfo, GetTransaction, and GetLedgerEntry
-	// all funnel through for hash-like response fields (LedgerHash, Index,
-	// PreviousTxnID, NodeBinary). Pinning the chokepoint covers every adapter
-	// field that previously regressed in issue #475.
+	// LedgerServiceAdapter routes every hash-like field through these helpers,
+	// so pinning them locks the adapter-fed sites that regressed in issue #475.
 	t.Run("FormatLedgerHash uppercase invariant", func(t *testing.T) {
 		var h [32]byte
 		h[0] = 0xab

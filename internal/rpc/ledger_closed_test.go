@@ -82,7 +82,6 @@ func TestLedgerClosedBasicSuccess(t *testing.T) {
 		t.Errorf("unexpected ledger_index type: %T", v)
 	}
 
-	// ledger_hash should match the expected hash (uppercase, matching rippled)
 	expectedHashStr := strings.ToUpper(hex.EncodeToString(closedHash[:]))
 	assert.Equal(t, expectedHashStr, resp["ledger_hash"])
 }
@@ -144,7 +143,6 @@ func TestLedgerClosedHashFormat(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 32, len(decoded), "Decoded hash should be 32 bytes")
 
-	// Verify the hash is uppercase hex, matching rippled.
 	assert.Equal(t, strings.ToUpper(hashStr), hashStr,
 		"ledger_hash should be uppercase hex, matching rippled")
 }
