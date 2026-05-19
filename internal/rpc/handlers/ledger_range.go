@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
@@ -50,7 +49,7 @@ func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	for seq, hash := range result.Hashes {
 		ledgers = append(ledgers, map[string]interface{}{
 			"ledger_index": seq,
-			"ledger_hash":  hex.EncodeToString(hash[:]),
+			"ledger_hash":  FormatLedgerHash(hash),
 		})
 	}
 

@@ -193,7 +193,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	}
 
 	if ammEntry.LedgerHash != [32]byte{} {
-		response["ledger_hash"] = hex.EncodeToString(ammEntry.LedgerHash[:])
+		response["ledger_hash"] = FormatLedgerHash(ammEntry.LedgerHash)
 	}
 
 	return response, nil

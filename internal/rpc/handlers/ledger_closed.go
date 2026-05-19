@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/hex"
 	"encoding/json"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -27,7 +26,7 @@ func (m *LedgerClosedMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 
 	hash := ledger.Hash()
 	response := map[string]interface{}{
-		"ledger_hash":  hex.EncodeToString(hash[:]),
+		"ledger_hash":  FormatLedgerHash(hash),
 		"ledger_index": seq,
 	}
 

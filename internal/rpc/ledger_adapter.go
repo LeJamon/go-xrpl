@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
+	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/protocol"
@@ -267,7 +267,7 @@ func (a *LedgerServiceAdapter) GetAccountInfo(ctx context.Context, account strin
 	var prevTxnID string
 	zeroHash := [32]byte{}
 	if result.PreviousTxnID != zeroHash {
-		prevTxnID = strings.ToUpper(hex.EncodeToString(result.PreviousTxnID[:]))
+		prevTxnID = handlers.FormatLedgerHash(result.PreviousTxnID)
 	}
 
 	return &types.AccountInfo{
@@ -284,10 +284,10 @@ func (a *LedgerServiceAdapter) GetAccountInfo(ctx context.Context, account strin
 		PreviousTxnID:     prevTxnID,
 		PreviousTxnLgrSeq: result.PreviousTxnLgrSeq,
 		LedgerIndex:       result.LedgerIndex,
-		LedgerHash:        hex.EncodeToString(result.LedgerHash[:]),
+		LedgerHash:        handlers.FormatLedgerHash(result.LedgerHash),
 		Validated:         result.Validated,
 		RawData:           result.RawData,
-		Index:             strings.ToUpper(hex.EncodeToString(result.Index[:])),
+		Index:             handlers.FormatLedgerHash(result.Index),
 	}, nil
 }
 
@@ -301,7 +301,7 @@ func (a *LedgerServiceAdapter) GetTransaction(txHash [32]byte) (*types.Transacti
 	return &types.TransactionInfo{
 		TxData:      result.TxData,
 		LedgerIndex: result.LedgerIndex,
-		LedgerHash:  hex.EncodeToString(result.LedgerHash[:]),
+		LedgerHash:  handlers.FormatLedgerHash(result.LedgerHash),
 		Validated:   result.Validated,
 		TxIndex:     result.TxIndex,
 	}, nil
@@ -525,7 +525,7 @@ func (a *LedgerServiceAdapter) GetLedgerEntry(ctx context.Context, entryKey [32]
 		LedgerIndex: result.LedgerIndex,
 		LedgerHash:  result.LedgerHash,
 		Node:        result.Node,
-		NodeBinary:  hex.EncodeToString(result.Node),
+		NodeBinary:  handlers.FormatHash(result.Node),
 		Validated:   result.Validated,
 	}, nil
 }
