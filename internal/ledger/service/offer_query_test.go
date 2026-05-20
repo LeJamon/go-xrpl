@@ -232,3 +232,38 @@ func TestGetBookOffers_IssuerOwnIOUFullyFunded(t *testing.T) {
 		t.Errorf("issuer's own owner_funds should equal taker_gets value (50), got %q", o.OwnerFunds)
 	}
 }
+
+// TestGetBookOffers_IssuerOwnIOU_AllOffersEmitOwnerFunds pins rippled's
+// per-iteration firstOwnerOffer semantics: when the offer owner is the issuer
+// of taker_gets, every offer surfaced for that owner reports owner_funds equal
+// to the offer's own taker_gets value (rippled NetworkOPs.cpp:4514,4607-4608).
+func TestGetBookOffers_IssuerOwnIOU_AllOffersEmitOwnerFunds(t *testing.T) {
+	svc := newOfferTestService(t)
+	issuerAddr, _ := addressFromBytes(t, 0x70)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+
+	// Two own-IOU offers from the same issuer at different qualities.
+	insertOffer(t, svc, issuerAddr, 1,
+		tx.NewXRPAmount(10_000_000),
+		state.NewIssuedAmountFromFloat64(50, "USD", issuerAddr),
+	)
+	insertOffer(t, svc, issuerAddr, 2,
+		tx.NewXRPAmount(40_000_000),
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
+	)
+
+	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
+	xrpModel := tx.NewXRPAmount(0)
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "current", 10)
+	if err != nil {
+		t.Fatalf("GetBookOffers: %v", err)
+	}
+	if len(result.Offers) != 2 {
+		t.Fatalf("expected 2 offers, got %d", len(result.Offers))
+	}
+	for i, o := range result.Offers {
+		if o.OwnerFunds == "" {
+			t.Errorf("offer %d: own-IOU branch must emit owner_funds on every iteration", i)
+		}
+	}
+}
