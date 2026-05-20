@@ -3,7 +3,13 @@ package handlers
 import (
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/amendment"
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/drops"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // rippleEpochToISO8601 Tests
@@ -224,4 +230,160 @@ func TestBuildAuctionSlot_TimeIntervalExpired(t *testing.T) {
 	result := buildAuctionSlot(slot, 300000)
 	assert.NotNil(t, result)
 	assert.Equal(t, uint32(20), result["time_interval"], "Expired auction should return 20")
+}
+
+// parseSLEIssue Tests
+
+func TestParseSLEIssue_XRP(t *testing.T) {
+	issue, ok := parseSLEIssue(map[string]interface{}{"currency": "XRP"})
+	require.True(t, ok)
+	assert.True(t, issue.IsXRP)
+	assert.Equal(t, "XRP", issue.Currency)
+	assert.Equal(t, [20]byte{}, issue.IssuerID)
+}
+
+func TestParseSLEIssue_IOU(t *testing.T) {
+	issuer := "rrrrrrrrrrrrrrrrrrrrBZbvji" // ACCOUNT_ONE
+	issue, ok := parseSLEIssue(map[string]interface{}{"currency": "USD", "issuer": issuer})
+	require.True(t, ok)
+	assert.False(t, issue.IsXRP)
+	assert.Equal(t, "USD", issue.Currency)
+	assert.Equal(t, issuer, issue.IssuerStr)
+}
+
+func TestParseSLEIssue_Invalid(t *testing.T) {
+	_, ok := parseSLEIssue(nil)
+	assert.False(t, ok)
+	_, ok = parseSLEIssue(map[string]interface{}{"currency": "USD"}) // missing issuer
+	assert.False(t, ok)
+	_, ok = parseSLEIssue(map[string]interface{}{"currency": "USD", "issuer": "not-an-address"})
+	assert.False(t, ok)
+}
+
+// readAMMHolds / isAssetFrozen integration via an in-memory LedgerStateView.
+
+// memView is a minimal LedgerStateView keyed by Keylet.Key, used only to drive
+// the AMM info helpers under test.
+type memView struct {
+	store map[[32]byte][]byte
+}
+
+func newMemView() *memView { return &memView{store: make(map[[32]byte][]byte)} }
+
+func (v *memView) Read(k keylet.Keylet) ([]byte, error) {
+	if data, ok := v.store[k.Key]; ok {
+		return data, nil
+	}
+	return nil, nil
+}
+func (v *memView) Exists(k keylet.Keylet) (bool, error) {
+	_, ok := v.store[k.Key]
+	return ok, nil
+}
+func (v *memView) Insert(k keylet.Keylet, data []byte) error { v.store[k.Key] = data; return nil }
+func (v *memView) Update(k keylet.Keylet, data []byte) error { v.store[k.Key] = data; return nil }
+func (v *memView) Erase(k keylet.Keylet) error               { delete(v.store, k.Key); return nil }
+func (v *memView) ForEach(fn func(key [32]byte, data []byte) bool) error {
+	for k, d := range v.store {
+		if !fn(k, d) {
+			return nil
+		}
+	}
+	return nil
+}
+func (v *memView) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
+	return [32]byte{}, nil, false, nil
+}
+func (v *memView) AdjustDropsDestroyed(d drops.XRPAmount) {}
+func (v *memView) TxExists(txID [32]byte) bool            { return false }
+func (v *memView) Rules() *amendment.Rules                { return amendment.EmptyRules() }
+
+func decodeAcct(t *testing.T, addr string) [20]byte {
+	t.Helper()
+	_, b, err := addresscodec.DecodeClassicAddressToAccountID(addr)
+	require.NoError(t, err)
+	var id [20]byte
+	copy(id[:], b)
+	return id
+}
+
+func TestReadAMMHolds_XRP(t *testing.T) {
+	view := newMemView()
+	ammAddr := "rrrrrrrrrrrrrrrrrrrrBZbvji"
+	ammID := decodeAcct(t, ammAddr)
+
+	root := &state.AccountRoot{Balance: 12_345_000_000}
+	data, err := state.SerializeAccountRoot(root)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Account(ammID), data))
+
+	amount := readAMMHolds(view, ammID, ammIssue{Currency: "XRP", IsXRP: true})
+	assert.True(t, amount.IsNative())
+	assert.Equal(t, int64(12_345_000_000), amount.Drops())
+}
+
+func TestReadAMMHolds_XRP_MissingAccount(t *testing.T) {
+	view := newMemView()
+	ammID := decodeAcct(t, "rrrrrrrrrrrrrrrrrrrrBZbvji")
+	amount := readAMMHolds(view, ammID, ammIssue{Currency: "XRP", IsXRP: true})
+	assert.Equal(t, int64(0), amount.Drops())
+}
+
+func TestReadAMMHolds_IOU_MissingTrustLine(t *testing.T) {
+	view := newMemView()
+	ammID := decodeAcct(t, "rrrrrrrrrrrrrrrrrrrrBZbvji")
+	issuer := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh" // genesis-like
+	issuerID := decodeAcct(t, issuer)
+	amount := readAMMHolds(view, ammID, ammIssue{
+		Currency:  "USD",
+		IssuerStr: issuer,
+		IssuerID:  issuerID,
+	})
+	assert.False(t, amount.IsNative())
+	assert.True(t, amount.IsZero())
+	assert.Equal(t, "USD", amount.Currency)
+	assert.Equal(t, issuer, amount.Issuer)
+}
+
+func TestIsAssetFrozen_XRP(t *testing.T) {
+	view := newMemView()
+	ammID := decodeAcct(t, "rrrrrrrrrrrrrrrrrrrrBZbvji")
+	assert.False(t, isAssetFrozen(view, ammID, ammIssue{Currency: "XRP", IsXRP: true}))
+}
+
+func TestIsAssetFrozen_GlobalFreeze(t *testing.T) {
+	view := newMemView()
+	ammID := decodeAcct(t, "rrrrrrrrrrrrrrrrrrrrBZbvji")
+	issuer := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	issuerID := decodeAcct(t, issuer)
+
+	issuerRoot := &state.AccountRoot{Balance: 0, Flags: state.LsfGlobalFreeze}
+	data, err := state.SerializeAccountRoot(issuerRoot)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Account(issuerID), data))
+
+	frozen := isAssetFrozen(view, ammID, ammIssue{
+		Currency:  "USD",
+		IssuerStr: issuer,
+		IssuerID:  issuerID,
+	})
+	assert.True(t, frozen)
+}
+
+func TestIsAssetFrozen_NoTrustLine(t *testing.T) {
+	view := newMemView()
+	ammID := decodeAcct(t, "rrrrrrrrrrrrrrrrrrrrBZbvji")
+	issuer := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	issuerID := decodeAcct(t, issuer)
+	// Issuer account exists, no global freeze.
+	data, err := state.SerializeAccountRoot(&state.AccountRoot{})
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Account(issuerID), data))
+
+	frozen := isAssetFrozen(view, ammID, ammIssue{
+		Currency:  "USD",
+		IssuerStr: issuer,
+		IssuerID:  issuerID,
+	})
+	assert.False(t, frozen)
 }
