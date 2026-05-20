@@ -93,21 +93,11 @@ func MetadataToMap(meta *Metadata) map[string]any {
 				innerNode["PreviousTxnLgrSeq"] = node.PreviousTxnLgrSeq
 			}
 
-			hasFinal := node.FinalFields != nil && len(node.FinalFields) > 0
-			if hasFinal {
+			if node.FinalFields != nil && len(node.FinalFields) > 0 {
 				innerNode["FinalFields"] = node.FinalFields
 			}
-			// Rippled ApplyStateTable.cpp Action::modify always emplaces
-			// sfPreviousFields alongside sfFinalFields, even when no fields
-			// changed (e.g., owner-dir page whose only delta was Indexes,
-			// which is sMD_Never). Emit an empty PreviousFields whenever
-			// FinalFields is present so the meta_blob byte length matches.
-			// Thread-only ModifiedNode emissions (no FinalFields) keep their
-			// existing PreviousFields-absent shape.
 			if node.PreviousFields != nil && len(node.PreviousFields) > 0 {
 				innerNode["PreviousFields"] = node.PreviousFields
-			} else if hasFinal && node.NodeType == "ModifiedNode" {
-				innerNode["PreviousFields"] = map[string]any{}
 			}
 			if node.NewFields != nil && len(node.NewFields) > 0 {
 				innerNode["NewFields"] = node.NewFields
