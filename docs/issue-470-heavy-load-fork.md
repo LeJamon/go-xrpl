@@ -1,0 +1,93 @@
+# Issue #470 — heavy-load avalanche fork (post-2026-05-20)
+
+After the empty-PreviousFields fix (`4644faa`), iter13 reached vseq=40
+(up from vseq=7 on every prior iteration in this session). The
+remaining fork mode is a heavy-load avalanche divergence.
+
+## Repro pattern
+
+Soak network: 3 rippled v2.6.2 + 2 goxrpl. Fuzz harness submits ~5
+tx/s with rotation. After ~30s of soak load, a "heavy" ledger lands
+with 80–160+ disputed txs. Avalanche flips the disputes both sides
+agree on the tx_set hash. Then:
+
+- goxrpl-built L41: ledger_hash `5F540D5E8327CA72…`  with state_root
+  prefix `E6198EC3…`, parent `3540858F…`, tx_set `541B5457…`, 98 txs.
+- rippled-built L41: ledger_hash `01921FFEDCC6D1A6…` with the same
+  parent `3540858F…` and the same tx_set `541B5457…` (98 txs per
+  rippled's "Position change" log).
+
+Same parent, same tx_set, **different ledger hashes** → apply
+divergence on the same input.
+
+Worth noting: the L41 stored in goxrpl-1's RPC after acquisition has
+`transaction_hash=0000…0000` and `tx_count=0` even though
+`account_hash` differs from L40. That's not "no txs" — rippled built
+its winning L41 with the same 98-tx set; the displayed all-zero
+tx_root either reflects only what goxrpl persisted after the chain
+switch, or a separate logging-time issue (goxrpl's round-summary log
+also prints `tx_root=0000` with `tx_count=98`, which is structurally
+impossible).
+
+## Why this doesn't recover
+
+Validations are emitted before the chain switch:
+- 2 goxrpls validate their `5F540D5E…` build.
+- 3 rippleds validate `01921FFE…`.
+- Quorum needs 4/5 same-hash validations → 3 vs 2 split → stalls.
+
+Once stalled, goxrpls switch to `wrongLedger` mode and keep building
+empty ledgers (mode=wrongLedger, tx_set=0000…, tx_count=0), but those
+locally-built ledgers don't propagate validations on the canonical
+chain.
+
+## Likely bug locations
+
+1. **Per-tx apply ordering or canonical sort.** Both sides agree on
+   the tx_set's SHAMap root (`541B5457`), but the canonical-sort step
+   that determines apply order might differ when there are
+   sequence-chained txs from the same account.
+2. **Retry-pass txCount seeding (Issue #470 historical fix referenced
+   in `internal/ledger/openledger/apply.go:193-199`).** The fix
+   addressed duplicate TransactionIndex on retry passes. If the same
+   pattern leaks into a 3-pass `BuildLedgerMode` with high tx volume,
+   per-tx metadata may diverge.
+3. **`tef`/`ter` classification.** If goxrpl maps a result to "drop
+   tx, do not add to tx tree" while rippled maps it to "include with
+   tec result", the SHAMap tx tree diverges. The fuzz harness FATAL
+   on `tefPAST_SEQ` at the exact L41-divergence timestamp suggests
+   sequence-driven failures are in scope.
+
+## How to find the divergent tx
+
+The 98-tx tx_set `541B5457287B8C5BA441BF6E28C9177B37498F866059CC850A3D9B1F99DC5B5B`
+is the AGREED set. Both sides should have all 98 tx_blobs in their
+mempool. To reproduce:
+
+1. Restart soak; capture the agreed tx_set's tx_blobs from goxrpl's
+   tx-acquire log or via a peer-level capture as soon as the heavy
+   ledger lands.
+2. Submit those tx_blobs in canonical order to a fresh
+   diff-smoke-rippled standalone (v2.6.2) and to a fresh goxrpl
+   standalone, against the SAME L40 parent state.
+3. Compare per-tx `meta_blob` and post-tx `state_root` to find the
+   first divergent tx.
+
+The previous "byte-diff" infrastructure in
+`internal/testing/trustset/repro_byte_diff_test.go` is the template.
+Extend it to a multi-tx scenario and feed the tx_blobs captured from
+the soak.
+
+## Confirmed fixes from this session (do not revert)
+
+- `8fc4a19` — gate PreviousTxnID emission on isThreadedType
+  (prevented spurious DirectoryNode threading without
+  fixPreviousTxnID amendment).
+- `4644faa` — emit empty `sfPreviousFields` only when a
+  sMD_ChangeOrig-eligible field went absent→present in this modify
+  (mirrors rippled v2.6.2 prevs.empty() behavior — `prevs`
+  contains STI_NOTPRESENT template entries that serialize to zero
+  bytes but make the `if (!prevs.empty())` gate fire).
+
+Both fixes verified byte-for-byte against rippled v2.6.2 standalone
+(`diff-smoke-rippled` container, 743-byte pagination meta match).
