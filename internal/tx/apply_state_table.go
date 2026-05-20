@@ -498,6 +498,16 @@ func (t *ApplyStateTable) applyThreading() {
 			t.threadOwners(w.entry.Current, entryType, fixCheckThreading)
 
 		case ActionModify:
+			// Skip threading when the apply code wrote back the same bytes
+			// (no-op Update). Mirrors rippled ApplyStateTable.cpp:156-157,
+			// which skips ModifiedNode emission entirely when
+			// *curNode == *origNode. Without this gate, threading mutates
+			// entry.Current with PreviousTxnID/PreviousTxnLgrSeq and the
+			// bytes.Equal(Original, Current) skip in the meta loop fails,
+			// producing a ghost ModifiedNode.
+			if bytes.Equal(w.entry.Original, w.entry.Current) {
+				continue
+			}
 			// Thread the modified entry itself
 			if isThreadedType(entryType, fixPreviousTxnID) {
 				_, _, newData, changed := threadItem(w.entry.Current, t.txHash, t.txSeq)
