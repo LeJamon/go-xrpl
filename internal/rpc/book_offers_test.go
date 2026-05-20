@@ -15,12 +15,12 @@ import (
 // bookOffersMock wraps mockLedgerService to provide custom GetBookOffers behavior
 type bookOffersMock struct {
 	*mockLedgerService
-	getBookOffersFn func(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error)
+	getBookOffersFn func(takerGets, takerPays types.Amount, taker, ledgerIndex string, limit uint32) (*types.BookOffersResult, error)
 }
 
-func (m *bookOffersMock) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+func (m *bookOffersMock) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, taker, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 	if m.getBookOffersFn != nil {
-		return m.getBookOffersFn(takerGets, takerPays, ledgerIndex, limit)
+		return m.getBookOffersFn(takerGets, takerPays, taker, ledgerIndex, limit)
 	}
 	return nil, errors.New("not implemented")
 }
@@ -186,7 +186,7 @@ func TestBookOffersXRPAmountHandling(t *testing.T) {
 
 	// Track what arguments are passed to GetBookOffers
 	var capturedGets, capturedPays types.Amount
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 		capturedGets = takerGets
 		capturedPays = takerPays
 		return &types.BookOffersResult{
@@ -317,7 +317,7 @@ func TestBookOffersValidRequestWithOffers(t *testing.T) {
 		},
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B, 0x0D, 0x85, 0x15, 0xD3, 0xEA, 0xAE, 0x1E, 0x74, 0xB2, 0x9A, 0x95, 0x80, 0x43, 0x46, 0xC4, 0x91, 0xEE, 0x1A, 0x95, 0xBF, 0x25, 0xE4, 0xAA, 0xB8, 0x54, 0xA6, 0xA6, 0x52},
@@ -396,7 +396,7 @@ func TestBookOffersEmptyOrderBook(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
@@ -451,7 +451,7 @@ func TestBookOffersLimitParameter(t *testing.T) {
 
 	// Track the limit passed to GetBookOffers
 	var capturedLimit uint32
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 		capturedLimit = limit
 		// Return as many offers as requested (up to our mock max)
 		offers := []types.BookOffer{}
@@ -557,7 +557,7 @@ func TestBookOffersResponseStructure(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B, 0x0D, 0x85, 0x15, 0xD3, 0xEA, 0xAE, 0x1E, 0x74, 0xB2, 0x9A, 0x95, 0x80, 0x43, 0x46, 0xC4, 0x91, 0xEE, 0x1A, 0x95, 0xBF, 0x25, 0xE4, 0xAA, 0xB8, 0x54, 0xA6, 0xA6, 0x52},
@@ -646,7 +646,7 @@ func TestBookOffersOfferFields(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x01, 0x02},
@@ -816,7 +816,7 @@ func TestBookOffersServiceError(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 		return nil, errors.New("ledger not found")
 	}
 
@@ -871,7 +871,7 @@ func TestBookOffersLedgerIndexPassthrough(t *testing.T) {
 	}
 
 	var capturedLedgerIndex string
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 		capturedLedgerIndex = ledgerIndex
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
@@ -948,7 +948,7 @@ func TestBookOffersNilOffersArray(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
 			Offers:      nil, // nil slice
