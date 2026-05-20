@@ -4,6 +4,45 @@ After the empty-PreviousFields fix (`4644faa`), iter13 reached vseq=40
 (up from vseq=7 on every prior iteration in this session). The
 remaining fork mode is a heavy-load avalanche divergence.
 
+## Resolution (2026-05-20, commits 7dacabc + 0d5a5d6)
+
+**Root cause identified and fixed** for the iter14 L10 fork mode (3-vs-2
+validator split, same parent + same tx_set → different ledger_hash).
+
+The divergent ledger had exactly one tx (`EF7A1C7D…`) whose meta diverged:
+goxrpl emitted a 399B meta with a *ghost* `ModifiedNode` for a
+`RippleState` (TrustLine) that was previously touched by an earlier tx
+in the same ledger but otherwise unchanged. Rippled v2.6.2 standalone
+emits 151B for the same tx — only the sender's `AccountRoot` (fee +
+Sequence), no `RippleState` modification.
+
+The bug was in `internal/tx/apply_state_table.go:applyThreading()` for
+the `ActionModify` case. When apply code (e.g. `TrustSet`) called
+`View.Update(key, bytes)` with bytes identical to the cached SLE, the
+Action was promoted Cache→Modify and `applyThreading` then mutated
+`entry.Current` with `PreviousTxnID`/`PreviousTxnLgrSeq`. The
+`bytes.Equal(Original, Current)` skip in the metadata emit loop then
+no longer fired because `Current` had been threaded. Result: a bare
+`ModifiedNode` with only `PreviousTxnID`/`PreviousTxnLgrSeq` + bare
+`FinalFields`, no `PreviousFields`.
+
+Rippled handles this at the meta emit loop
+(`ApplyStateTable.cpp:156-157`):
+```cpp
+if ((type == &sfModifiedNode) && (*curNode == *origNode))
+    continue;
+```
+The no-op check happens *before* `threadItem` is called. goxrpl runs
+`applyThreading` as a separate pre-pass, so the skip must move there
+too — commit `7dacabc` adds `if bytes.Equal(Original, Current)
+{ continue }` at the top of the `ActionModify` branch.
+
+Regression test: `internal/testing/trustset/repro_noop_modify_test.go`
+(commit `0d5a5d6`) reproduces the 399B-vs-151B byte counts directly.
+
+**Status**: Awaiting iter15 soak run with rebuilt `goxrpl:latest`
+image to confirm vseq advances past L10.
+
 ## Repro pattern
 
 Soak network: 3 rippled v2.6.2 + 2 goxrpl. Fuzz harness submits ~5
