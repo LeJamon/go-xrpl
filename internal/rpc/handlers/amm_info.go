@@ -130,10 +130,9 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		ammResult["trading_fee"] = tradingFee
 	}
 
-	// Resolve actual pool balances by reading the AMM account's trust lines /
-	// XRP balance, matching rippled's ammPoolHolds() in AMMUtils.cpp. The Asset
-	// and Asset2 fields on the AMM SLE only carry the issue definitions
-	// (currency + issuer), not the pool reserves.
+	// Asset and Asset2 on the AMM SLE carry only the issue definitions; pool
+	// balances must be read from the AMM account's trust lines / XRP balance.
+	// Matches rippled ammPoolHolds() in AMMUtils.cpp.
 	asset1, asset1OK := parseSLEIssue(decoded["Asset"])
 	asset2, asset2OK := parseSLEIssue(decoded["Asset2"])
 	accountStr, _ := decoded["Account"].(string)
@@ -164,8 +163,6 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 			ammResult["asset2_frozen"] = isAssetFrozen(view, ammAccountID, asset2)
 		}
 	} else {
-		// Fallback: surface the raw issue definitions if we cannot resolve the
-		// AMM account or its assets (corrupt SLE, decode mismatch, etc.).
 		if asset, ok := decoded["Asset"]; ok {
 			ammResult["amount"] = asset
 		}
@@ -406,8 +403,6 @@ func currencyToBytes(currency string) [20]byte {
 	return result
 }
 
-// ammIssue is a parsed AMM asset reference, carrying both the original strings
-// (for response formatting) and the 20-byte issuer id (for state lookups).
 type ammIssue struct {
 	Currency  string
 	IssuerStr string
@@ -415,9 +410,8 @@ type ammIssue struct {
 	IsXRP     bool
 }
 
-// parseSLEIssue extracts an ammIssue from a decoded AMM SLE Asset/Asset2 field.
-// The binary codec emits {"currency":"XRP"} for XRP and {"currency":..,"issuer":..}
-// for IOUs (see codec/binarycodec/types/issue.go).
+// The binary codec emits {"currency":"XRP"} for XRP and
+// {"currency":..,"issuer":..} for IOUs (see codec/binarycodec/types/issue.go).
 func parseSLEIssue(raw interface{}) (ammIssue, bool) {
 	m, ok := raw.(map[string]interface{})
 	if !ok {
@@ -443,10 +437,7 @@ func parseSLEIssue(raw interface{}) (ammIssue, bool) {
 	return out, true
 }
 
-// readAMMHolds returns the AMM account's balance for the given asset, ignoring
-// freeze status. Matches rippled accountHolds() with FreezeHandling::fhIGNORE_FREEZE:
-// XRP comes from the AccountRoot, IOU from the trust line between the AMM
-// account and the issuer.
+// Matches rippled accountHolds() with FreezeHandling::fhIGNORE_FREEZE.
 func readAMMHolds(view types.LedgerStateView, ammAccountID [20]byte, issue ammIssue) state.Amount {
 	if issue.IsXRP {
 		data, err := view.Read(keylet.Account(ammAccountID))
@@ -490,9 +481,8 @@ func readAMMHolds(view types.LedgerStateView, ammAccountID [20]byte, issue ammIs
 	return state.NewIssuedAmountFromValue(iou.Mantissa(), iou.Exponent(), issue.Currency, issue.IssuerStr)
 }
 
-// isAssetFrozen reports whether the AMM account cannot spend the given asset,
-// matching rippled isFrozen(view, account, currency, issuer) in View.cpp:
-// global freeze on the issuer, or the issuer's freeze flag on the trust line.
+// Frozen if the issuer has global freeze set, or has frozen its side of the
+// trust line. Matches rippled isFrozen() in View.cpp.
 func isAssetFrozen(view types.LedgerStateView, ammAccountID [20]byte, issue ammIssue) bool {
 	if issue.IsXRP {
 		return false

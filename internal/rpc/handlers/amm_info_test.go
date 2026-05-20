@@ -254,16 +254,12 @@ func TestParseSLEIssue_IOU(t *testing.T) {
 func TestParseSLEIssue_Invalid(t *testing.T) {
 	_, ok := parseSLEIssue(nil)
 	assert.False(t, ok)
-	_, ok = parseSLEIssue(map[string]interface{}{"currency": "USD"}) // missing issuer
+	_, ok = parseSLEIssue(map[string]interface{}{"currency": "USD"})
 	assert.False(t, ok)
 	_, ok = parseSLEIssue(map[string]interface{}{"currency": "USD", "issuer": "not-an-address"})
 	assert.False(t, ok)
 }
 
-// readAMMHolds / isAssetFrozen integration via an in-memory LedgerStateView.
-
-// memView is a minimal LedgerStateView keyed by Keylet.Key, used only to drive
-// the AMM info helpers under test.
 type memView struct {
 	store map[[32]byte][]byte
 }
@@ -332,7 +328,7 @@ func TestReadAMMHolds_XRP_MissingAccount(t *testing.T) {
 func TestReadAMMHolds_IOU_MissingTrustLine(t *testing.T) {
 	view := newMemView()
 	ammID := decodeAcct(t, "rrrrrrrrrrrrrrrrrrrrBZbvji")
-	issuer := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh" // genesis-like
+	issuer := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	issuerID := decodeAcct(t, issuer)
 	amount := readAMMHolds(view, ammID, ammIssue{
 		Currency:  "USD",
@@ -375,7 +371,6 @@ func TestIsAssetFrozen_NoTrustLine(t *testing.T) {
 	ammID := decodeAcct(t, "rrrrrrrrrrrrrrrrrrrrBZbvji")
 	issuer := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	issuerID := decodeAcct(t, issuer)
-	// Issuer account exists, no global freeze.
 	data, err := state.SerializeAccountRoot(&state.AccountRoot{})
 	require.NoError(t, err)
 	require.NoError(t, view.Insert(keylet.Account(issuerID), data))
