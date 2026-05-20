@@ -4,6 +4,7 @@ package types
 import (
 	"fmt"
 	"sort"
+	"strconv"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
@@ -99,9 +100,34 @@ func (t *STObject) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
 			return nil, err
 		}
 
+		res = coerceUInt64BaseTen(fi.Type, fi.FieldName, res)
+
 		m[fi.FieldName] = res
 	}
 	return m, nil
+}
+
+// coerceUInt64BaseTen converts the lowercase-hex string produced by
+// UInt64.ToJSON into the decimal string rippled emits for SFields flagged
+// sMD_BaseTen — see rippled src/libxrpl/protocol/STInteger.cpp:246 and the
+// rippled SField definitions in include/xrpl/protocol/detail/sfields.macro.
+// A no-op for any other field/type combination.
+func coerceUInt64BaseTen(fieldType, fieldName string, value any) any {
+	if fieldType != "UInt64" {
+		return value
+	}
+	if !definitions.IsBaseTenUInt64FieldName(fieldName) {
+		return value
+	}
+	s, ok := value.(string)
+	if !ok {
+		return value
+	}
+	n, err := strconv.ParseUint(s, 16, 64)
+	if err != nil {
+		return value
+	}
+	return strconv.FormatUint(n, 10)
 }
 
 // nolint
@@ -217,6 +243,20 @@ func parseSpecialFields(k string, v any) (any, error) {
 				return nil, err
 			}
 			return int(code), nil
+		}
+	}
+
+	// For UInt64 SFields rippled emits as decimal (sMD_BaseTen — sfMPTAmount,
+	// sfMaximumAmount, sfOutstandingAmount, sfLockedAmount), accept the decimal
+	// string and hand UInt64.FromJSON a numeric value so it skips its default
+	// base-16 string parse. See rippled STParsedJSON.cpp:441-449.
+	if definitions.IsBaseTenUInt64FieldName(k) {
+		if strValue, ok := v.(string); ok {
+			n, err := strconv.ParseUint(strValue, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", k, err)
+			}
+			return n, nil
 		}
 	}
 

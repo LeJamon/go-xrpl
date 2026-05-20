@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/config"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
@@ -24,6 +25,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	"github.com/LeJamon/goXRPLd/internal/rpc"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	validatorlist "github.com/LeJamon/goXRPLd/internal/validator/list"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
 	"github.com/LeJamon/goXRPLd/protocol"
 	kvpebble "github.com/LeJamon/goXRPLd/storage/kvstore/pebble"
@@ -329,6 +331,87 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		// RPC reads for external queries.
 		services.Manifests = consensusComponents.Manifests
 
+		// Expose the publisher-list aggregator (when configured) to
+		// the `validators` and `validator_list_sites` RPC methods.
+		// nil-safe: NewRPCReader returns an inert reader when the
+		// aggregator is nil, so the handlers return empty arrays in
+		// that case rather than panicking.
+		services.ValidatorList = validatorlist.NewRPCReader(consensusComponents.ValidatorList)
+
+		// Expose static config validators, cached signing keys, and the
+		// negative-UNL set to the `validators` RPC so it returns the
+		// same shape rippled's ValidatorList::getJson does.
+		//
+		// Bind to the live accessor (not a boot-time copy) so a SIGHUP
+		// reload of the [validators] stanza is visible to the RPC.
+		componentsRef := consensusComponents
+		services.LocalStaticTrustedKeysBase58 = func() []string {
+			masters := componentsRef.StaticTrustedMasterKeys()
+			out := make([]string, 0, len(masters))
+			for _, mk := range masters {
+				if enc, err := addresscodec.EncodeNodePublicKey(mk[:]); err == nil {
+					out = append(out, enc)
+				}
+			}
+			return out
+		}
+		if mc := consensusComponents.Manifests; mc != nil {
+			// Mirrors rippled getJson at ValidatorList.cpp:1726-1734 —
+			// `signing_keys` only surfaces master→signing pairs for
+			// masters present in keyListings_, i.e. validators listed
+			// by at least one publisher or pinned in the local
+			// [validators] stanza. Without this filter we would leak
+			// every gossiped manifest, including ones unrelated to any
+			// trusted publisher.
+			vlAgg := consensusComponents.ValidatorList
+			services.SigningKeysBase58 = func() map[string]string {
+				snap := mc.MasterToSigning()
+				if len(snap) == 0 {
+					return nil
+				}
+				listed := make(map[[33]byte]struct{})
+				for _, mk := range componentsRef.StaticTrustedMasterKeys() {
+					listed[mk] = struct{}{}
+				}
+				if vlAgg != nil {
+					for _, p := range vlAgg.PublisherSnapshot() {
+						for _, mk := range p.Validators {
+							listed[mk] = struct{}{}
+						}
+					}
+				}
+				if len(listed) == 0 {
+					return nil
+				}
+				out := make(map[string]string, len(listed))
+				for master, signing := range snap {
+					if _, ok := listed[master]; !ok {
+						continue
+					}
+					mEnc, mErr := addresscodec.EncodeNodePublicKey(master[:])
+					sEnc, sErr := addresscodec.EncodeNodePublicKey(signing[:])
+					if mErr == nil && sErr == nil {
+						out[mEnc] = sEnc
+					}
+				}
+				return out
+			}
+		}
+		adaptorRef := consensusComponents.Adaptor
+		services.NegativeUNLBase58 = func() []string {
+			masters := adaptorRef.GetNegativeUNLMasters()
+			if len(masters) == 0 {
+				return nil
+			}
+			out := make([]string, 0, len(masters))
+			for _, mk := range masters {
+				if enc, err := addresscodec.EncodeNodePublicKey(mk[:]); err == nil {
+					out = append(out, enc)
+				}
+			}
+			return out
+		}
+
 		// Expose the local validator's signing key to validator_info.
 		// Mirrors rippled's getValidationPublicKey gate: empty means
 		// the server is not configured as a validator and the handler
@@ -614,32 +697,33 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	}
 }
 
-// trustedValidatorSink is the writable surface reloadTrustedValidators
-// drives on a successful config reload. Satisfied by *adaptor.Adaptor;
-// extracted as a tiny interface so applyValidatorReload can be tested
-// without constructing a full *adaptor.Components.
-type trustedValidatorSink interface {
-	SetTrustedValidators(validators []consensus.NodeID, masterKeys [][33]byte)
+// staticValidatorReloader is the writable surface
+// reloadTrustedValidators drives on a successful config reload.
+// Satisfied by *adaptor.Components, which routes the new static set
+// through staticMu + a merge with the live publisher-trust aggregator
+// so a SIGHUP removal is not silently undone by the next OnChange.
+type staticValidatorReloader interface {
+	ReloadStaticValidators(validators []consensus.NodeID, masterKeys [][33]byte)
 }
 
 // reloadTrustedValidators is the SIGHUP entry point: bridge from the
 // production *adaptor.Components down to the pure applyValidatorReload
 // helper. Skipped silently when components is nil (standalone mode).
 func reloadTrustedValidators(serverLog xrpllog.Logger, components *adaptor.Components) {
-	if components == nil || components.Adaptor == nil {
+	if components == nil {
 		return
 	}
-	applyValidatorReload(serverLog, components.Adaptor, configFile)
+	applyValidatorReload(serverLog, components, configFile)
 }
 
 // applyValidatorReload re-reads configPath, re-parses the [validators]
-// stanza, and pushes the result into sink. Errors are logged and the
-// previous trusted set is retained — a bad reload must not wedge the
-// node.
+// stanza, and pushes the result into reloader. Errors are logged and
+// the previous trusted set is retained — a bad reload must not wedge
+// the node.
 //
 // Skipped silently when configPath is empty (validator config can't
 // be re-read from nothing).
-func applyValidatorReload(serverLog xrpllog.Logger, sink trustedValidatorSink, configPath string) {
+func applyValidatorReload(serverLog xrpllog.Logger, reloader staticValidatorReloader, configPath string) {
 	if configPath == "" {
 		serverLog.Warn("SIGHUP received but no --conf path set; skipping UNL reload")
 		return
@@ -654,7 +738,7 @@ func applyValidatorReload(serverLog xrpllog.Logger, sink trustedValidatorSink, c
 		serverLog.Error("SIGHUP UNL reload: parse validators failed", "err", err)
 		return
 	}
-	sink.SetTrustedValidators(validators, masterKeys)
+	reloader.ReloadStaticValidators(validators, masterKeys)
 	serverLog.Info("SIGHUP UNL reload applied",
 		"validators_count", len(validators),
 		"master_keys_count", len(masterKeys),

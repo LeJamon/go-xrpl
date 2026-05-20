@@ -76,10 +76,23 @@ const acceptBackoff = 100 * time.Millisecond
 // events should approach the eviction threshold.
 const (
 	weightInvalidSignature = 2000
-	weightInvalidData      = 400
-	weightMalformedReq     = 200
-	weightRequestNoReply   = 10
-	weightDefaultBadData   = 100 // fallback for unrecognized reasons
+	// weightHeavyBurden mirrors rippled's Charge::feeHeavyBurdenPeer
+	// which is set to the same value as feeInvalidSignature
+	// (Resource::Fees.h). Reserved for protocol violations that would
+	// force the receiver into expensive computation (e.g. a
+	// TMValidatorListCollection with zero blobs forces an N-pass over
+	// an empty set — heavier in intent, identical in numeric impact).
+	weightHeavyBurden  = 2000
+	weightInvalidData  = 400
+	weightMalformedReq = 200
+	// weightUselessData mirrors rippled's Charge::feeUselessData — a
+	// light charge for messages that are semantically wasteful (peer
+	// re-relayed a list at the same sequence we already have, sent a
+	// frame they should know we don't accept, etc.). A small number of
+	// such events MUST NOT approach eviction; only sustained spamming.
+	weightUselessData    = 40
+	weightRequestNoReply = 10
+	weightDefaultBadData = 100 // fallback for unrecognized reasons
 )
 
 // BadDataWeight returns the weight to charge IncBadData for `reason`.
@@ -151,6 +164,32 @@ func BadDataWeight(reason string) int {
 	case "no-reply":
 		return weightRequestNoReply
 	default:
+		// Validator-list ingest labels embed the rippled fee tier in
+		// the label prefix; classify by prefix so a new disposition
+		// added to the router doesn't accidentally fall through to
+		// weightDefaultBadData. Charge tiers from
+		// rippled/src/xrpld/overlay/detail/PeerImp.cpp:2141-2183:
+		//   "vl-coll-heavy-no-blobs", "vl-coll-no-blobs" -> feeHeavyBurdenPeer
+		//   "vl-...-badsig-*"                            -> feeInvalidSignature
+		//   "vl-...-baddata-*", "*-wrong-version",
+		//   "*-decode"                                   -> feeInvalidData
+		//   "vl-...-useless-*", "*-duplicate",
+		//   "*-unsupported-peer"                         -> feeUselessData
+		switch {
+		case reason == "vl-coll-no-blobs",
+			strings.HasSuffix(reason, "-heavy-no-blobs"):
+			return weightHeavyBurden
+		case strings.Contains(reason, "-badsig-"):
+			return weightInvalidSignature
+		case strings.Contains(reason, "-baddata-"),
+			strings.HasSuffix(reason, "-wrong-version"),
+			strings.HasSuffix(reason, "-decode"):
+			return weightInvalidData
+		case strings.Contains(reason, "-useless-"),
+			strings.HasSuffix(reason, "-duplicate"),
+			strings.HasSuffix(reason, "-unsupported-peer"):
+			return weightUselessData
+		}
 		return weightDefaultBadData
 	}
 }
@@ -282,7 +321,14 @@ type Overlay struct {
 	pingTimeoutDisconnects atomic.Uint64
 
 	// Network
-	listener net.Listener
+	// listenerMu guards listener: written once by startListener (called
+	// from Run before any concurrent reader exists). Read under RLock
+	// from ListenAddr and Stop (other goroutines). The reads in Run and
+	// acceptLoop are unlocked: Run's read at "if o.listener != nil" is
+	// in the same goroutine as the write, and acceptLoop is spawned via
+	// g.Go after the write returns, so happens-before applies.
+	listenerMu sync.RWMutex
+	listener   net.Listener
 
 	// Lifecycle
 	ctx    context.Context
@@ -523,16 +569,65 @@ func (o *Overlay) PeerSupports(peerID PeerID, f Feature) bool {
 	return caps.HasFeature(f)
 }
 
+// PeerRemoteAddr returns the peer's remote endpoint as "host:port", or
+// "" if the peer is unknown. Mirrors rippled's `remote_address_.to_string()`
+// at PeerImp.cpp:2072 used to populate the `uri` field on per-publisher
+// state for peer-sourced lists.
+func (o *Overlay) PeerRemoteAddr(peerID PeerID) string {
+	o.peersMu.RLock()
+	peer, ok := o.peers[peerID]
+	o.peersMu.RUnlock()
+	if !ok {
+		return ""
+	}
+	return peer.Endpoint().String()
+}
+
+// PeerProtocolAtLeast reports whether the peer's negotiated peer-protocol
+// version is at least the given (major, minor). Mirrors rippled's
+// `protocol_ >= make_protocol(major, minor)` test at
+// rippled/src/xrpld/overlay/detail/PeerImp.cpp:511-514, used to gate
+// version-implicit features such as ValidatorList2Propagation.
+//
+// Returns false when the peer is unknown or has not completed the
+// handshake.
+func (o *Overlay) PeerProtocolAtLeast(peerID PeerID, major, minor uint16) bool {
+	o.peersMu.RLock()
+	peer, ok := o.peers[peerID]
+	o.peersMu.RUnlock()
+	if !ok {
+		return false
+	}
+	got := peer.ProtocolVersion()
+	if got == "" {
+		return false
+	}
+	pvs := parseProtocolVersions(got)
+	if len(pvs) == 0 {
+		return false
+	}
+	want := protocolVersion{major: major, minor: minor}
+	for _, v := range pvs {
+		if !v.less(want) {
+			return true
+		}
+	}
+	return false
+}
+
 // ListenAddr returns the resolved address the overlay is accepting
 // connections on, or the empty string if no listener is bound. Useful
 // when the overlay was configured with port 0 (ephemeral) and the
 // caller needs the actual port to drive a peer connection — e.g.,
 // integration tests that wire two overlays together on localhost.
 func (o *Overlay) ListenAddr() string {
-	if o.listener == nil {
+	o.listenerMu.RLock()
+	l := o.listener
+	o.listenerMu.RUnlock()
+	if l == nil {
 		return ""
 	}
-	return o.listener.Addr().String()
+	return l.Addr().String()
 }
 
 // New creates a new Overlay with the provided options.
@@ -687,8 +782,11 @@ func (o *Overlay) Stop() error {
 	}
 
 	// Close listener
-	if o.listener != nil {
-		o.listener.Close()
+	o.listenerMu.RLock()
+	l := o.listener
+	o.listenerMu.RUnlock()
+	if l != nil {
+		l.Close()
 	}
 
 	// Stop discovery
@@ -719,10 +817,13 @@ func (o *Overlay) startListener() error {
 		return fmt.Errorf("overlay: build TLS cert: %w", err)
 	}
 
-	o.listener = peertls.NewListener(tcpListener, &peertls.Config{
+	l := peertls.NewListener(tcpListener, &peertls.Config{
 		CertPEM: certPEM,
 		KeyPEM:  keyPEM,
 	})
+	o.listenerMu.Lock()
+	o.listener = l
+	o.listenerMu.Unlock()
 	return nil
 }
 

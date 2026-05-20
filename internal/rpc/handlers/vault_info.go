@@ -109,7 +109,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 
 	if vaultEntry.LedgerHash != [32]byte{} {
-		response["ledger_hash"] = hex.EncodeToString(vaultEntry.LedgerHash[:])
+		response["ledger_hash"] = FormatLedgerHash(vaultEntry.LedgerHash)
 	}
 
 	return response, nil

@@ -52,20 +52,21 @@ func main() {
 
 // fieldRender carries the resolved per-field data the template needs.
 type fieldRender struct {
-	Name       string // canonical XRPL field name
-	GoField    string // Go struct field name (mirrors XRPL name)
-	BitConst   string // const name of the presence bit
-	GoType     string // Go type of the slot
-	XRPLType   string // XRPL type name (UInt32, Hash256, ...)
-	TypeCode   int    // XRPL type code
-	FieldCode  int    // XRPL field code
-	Meta       spec.Meta
-	Comparer   string // "String" | "Uint32" | "Int" | "Amount" — selects emitIfChanged*
-	IsAmount   bool
-	IsHash     bool   // hex-string default-value check
-	XRPOnly    bool   // Balance on AccountRoot uses readAmount (XRP-only)
-	ReadCall   string // expression that reads from streamReader
-	DecodeKind string // "uint32" | "int" | "string" | "amount" — drives the switch arm
+	Name            string // canonical XRPL field name
+	GoField         string // Go struct field name (mirrors XRPL name)
+	BitConst        string // const name of the presence bit
+	GoType          string // Go type of the slot
+	XRPLType        string // XRPL type name (UInt32, Hash256, ...)
+	TypeCode        int    // XRPL type code
+	FieldCode       int    // XRPL field code
+	Meta            spec.Meta
+	Comparer        string // "String" | "Uint32" | "Int" | "Amount" — selects emitIfChanged*
+	IsAmount        bool
+	IsHash          bool // hex-string default-value check
+	XRPOnly         bool // Balance on AccountRoot uses readAmount (XRP-only)
+	IsBaseTenUInt64 bool // UInt64 field rippled emits as decimal (sMD_BaseTen)
+	ReadCall        string
+	DecodeKind      string
 }
 
 type entryRender struct {
@@ -79,14 +80,15 @@ type entryRender struct {
 }
 
 type decodeArm struct {
-	TypeCode  int
-	FieldCode int
-	XRPLType  string
-	GoField   string
-	BitConst  string
-	GoType    string
-	XRPOnly   bool      // for Amount fields
-	Meta      spec.Meta // controls assign-vs-discard in the inner switch
+	TypeCode        int
+	FieldCode       int
+	XRPLType        string
+	GoField         string
+	BitConst        string
+	GoType          string
+	XRPOnly         bool // for Amount fields
+	IsBaseTenUInt64 bool // UInt64 sMD_BaseTen field — decode as decimal not hex
+	Meta            spec.Meta
 }
 
 func generate(defs *definitions.Definitions, entry spec.Entry, outDir string) (string, []byte, error) {
@@ -129,14 +131,15 @@ func generate(defs *definitions.Definitions, entry spec.Entry, outDir string) (s
 		// for them so the fail-fast outer default doesn't trip on a field
 		// the spec already declared.
 		arm := decodeArm{
-			TypeCode:  int(fi.FieldHeader.TypeCode),
-			FieldCode: int(fi.Nth),
-			XRPLType:  fi.Type,
-			GoField:   fr.GoField,
-			BitConst:  fr.BitConst,
-			GoType:    fr.GoType,
-			XRPOnly:   fr.XRPOnly,
-			Meta:      f.Meta,
+			TypeCode:        int(fi.FieldHeader.TypeCode),
+			FieldCode:       int(fi.Nth),
+			XRPLType:        fi.Type,
+			GoField:         fr.GoField,
+			BitConst:        fr.BitConst,
+			GoType:          fr.GoType,
+			XRPOnly:         fr.XRPOnly,
+			IsBaseTenUInt64: fr.IsBaseTenUInt64,
+			Meta:            f.Meta,
 		}
 		if arm.XRPLType == "Amount" && !arm.XRPOnly {
 			er.HasUnsupported = true
@@ -190,6 +193,7 @@ func makeFieldRender(f spec.Field, fi *definitions.FieldInstance, entryName, bit
 		fr.Comparer = "String"
 		fr.DecodeKind = "uint64hex"
 		fr.IsHash = true
+		fr.IsBaseTenUInt64 = definitions.IsBaseTenUInt64FieldName(f.Name)
 	case "Hash128":
 		fr.GoType = "string"
 		fr.Comparer = "String"
@@ -324,7 +328,7 @@ func init() {
 // the decoded blob so the emit methods only write entries that actually exist.
 type {{ .StructName }} struct {
 	present uint64
-{{ range .Fields }}{{ if ne .Meta 3 }}	{{ .GoField }} {{ .GoType }}{{ if eq .XRPLType "AccountID" }} // AccountID (base58){{ else if eq .XRPLType "Amount" }} // Amount (XRP string | IOU map){{ else if eq .XRPLType "Hash256" }} // Hash256 (uppercase hex){{ else if eq .XRPLType "Hash160" }} // Hash160 (uppercase hex){{ else if eq .XRPLType "Hash128" }} // Hash128 (uppercase hex){{ else if eq .XRPLType "Blob" }} // Blob (uppercase hex){{ else if eq .XRPLType "UInt64" }} // UInt64 (uppercase hex){{ end }}
+{{ range .Fields }}{{ if ne .Meta 3 }}	{{ .GoField }} {{ .GoType }}{{ if eq .XRPLType "AccountID" }} // AccountID (base58){{ else if eq .XRPLType "Amount" }} // Amount (XRP string | IOU map){{ else if eq .XRPLType "Hash256" }} // Hash256 (uppercase hex){{ else if eq .XRPLType "Hash160" }} // Hash160 (uppercase hex){{ else if eq .XRPLType "Hash128" }} // Hash128 (uppercase hex){{ else if eq .XRPLType "Blob" }} // Blob (uppercase hex){{ else if eq .XRPLType "UInt64" }}{{ if .IsBaseTenUInt64 }} // UInt64 (decimal string, sMD_BaseTen){{ else }} // UInt64 (lowercase hex, no leading zeros){{ end }}{{ end }}
 {{ end }}{{ end }}}
 
 const (
@@ -346,6 +350,35 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 {{- range $tc, $arms := .DecodeArms }}
 		case {{ $tc }}: // {{ (index $arms 0).XRPLType }}
 {{- $first := index $arms 0 }}
+{{- if eq $first.XRPLType "UInt64" }}
+			switch fieldCode {
+{{- range $arm := $arms }}
+			case {{ $arm.FieldCode }}:
+{{- if eq $arm.Meta 3 }}
+				if _, err := sr.readUint64Raw(); err != nil {
+					return err
+				}
+				// {{ $arm.GoField }} is sMD_Never; discard
+{{- else if $arm.IsBaseTenUInt64 }}
+				val, err := sr.readUint64Decimal()
+				if err != nil {
+					return err
+				}
+				{{ $.Receiver }}.{{ $arm.GoField }} = val
+				{{ $.Receiver }}.present |= {{ $arm.BitConst }}
+{{- else }}
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
+				{{ $.Receiver }}.{{ $arm.GoField }} = val
+				{{ $.Receiver }}.present |= {{ $arm.BitConst }}
+{{- end }}
+{{- end }}
+			default:
+				return newErrUnknownField({{ printf "%q" $.Name }}, typeCode, fieldCode)
+			}
+{{- else }}
 {{- if eq $first.XRPLType "Amount" }}
 {{- if $first.XRPOnly }}
 			val, err := sr.readAmount()
@@ -369,11 +402,6 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 			val := int(u16Val)
 {{- else if eq $first.XRPLType "UInt32" }}
 			val, err := sr.readUint32()
-			if err != nil {
-				return err
-			}
-{{- else if eq $first.XRPLType "UInt64" }}
-			val, err := sr.readUint64Hex()
 			if err != nil {
 				return err
 			}
@@ -461,6 +489,7 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 			default:
 				return newErrUnknownField({{ printf "%q" $.Name }}, typeCode, fieldCode)
 			}
+{{- end }}
 {{- end }}
 		default:
 			return newErrUnknownField({{ printf "%q" $.Name }}, typeCode, fieldCode)

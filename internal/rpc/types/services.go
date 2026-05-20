@@ -15,6 +15,122 @@ type MethodDispatcher interface {
 	ExecuteMethod(method string, params []byte) (interface{}, *RpcError)
 }
 
+// ValidatorListPublisherInfo is the per-publisher snapshot the
+// `validators` RPC surfaces. Expressed as a value type (not the
+// internal/validator/list.PublisherState struct) so internal/rpc/types
+// doesn't import internal/validator/list — same anti-cycle pattern as
+// ManifestLookup below.
+type ValidatorListPublisherInfo struct {
+	// PublicKeyHex is the 33-byte master pubkey, hex-encoded uppercase.
+	// Emitted as `pubkey_publisher` in the validators RPC to match
+	// rippled's getJson at ValidatorList.cpp:1669 (`strHex(publicKey)`).
+	PublicKeyHex string
+	// Available is true when the publisher's current list is fresh
+	// (matches rippled's `pubCollection.status == available`).
+	Available bool
+	// Status is one of "unavailable" / "available" / "expired" / "revoked".
+	Status string
+	// Sequence is the version of the currently-effective list. Zero
+	// before the first accepted list.
+	Sequence uint32
+	// Version is the protocol version of the most recently applied
+	// list (rippled `pubCollection.rawVersion`).
+	Version uint32
+	// EffectiveUnix is the Unix-epoch second at which the current list
+	// became effective. Zero when unset.
+	EffectiveUnix int64
+	// ExpirationUnix is the Unix-epoch second after which the current
+	// list is treated as expired. Zero when unset.
+	ExpirationUnix int64
+	// EffectiveISO is the same time formatted RFC3339-UTC. Empty when
+	// EffectiveUnix is zero.
+	EffectiveISO string
+	// ExpirationISO is the same time formatted RFC3339-UTC. Empty when
+	// ExpirationUnix is zero.
+	ExpirationISO string
+	// SiteURI is the source URL (or "peer:<id>") of the most recent
+	// list. Emitted as `uri` to match rippled.
+	SiteURI string
+	// ValidatorsBase58 is the per-publisher list of validator NodePublic
+	// keys (base58, NodePublicKey prefix), sorted lexicographically.
+	// Matches rippled's `list` array at ValidatorList.cpp:1684-1688.
+	ValidatorsBase58 []string
+	// EffectiveSet records whether the accepted blob carried an
+	// `effective` field. Rippled gates the JSON `effective` emit on
+	// `validFrom != TimeKeeper::time_point{}` at
+	// ValidatorList.cpp:1682-1683; without this sentinel a missing
+	// blob field would be flattened to a synthetic 2000-Jan-01 stamp
+	// by the ripple-epoch offset.
+	EffectiveSet bool
+	// Remaining holds the per-publisher future-dated rotation queue.
+	// Mirrors rippled's `remaining` JSON array emitted under each
+	// publisher entry at ValidatorList.cpp:1699-1713.
+	Remaining []ValidatorListRemainingInfo
+}
+
+// ValidatorListRemainingInfo is one entry in a publisher's
+// `remaining` array — a future-dated list that has not yet been
+// promoted into the current slot. Mirrors rippled's PublisherList
+// shape inside `pubCollection.remaining`.
+type ValidatorListRemainingInfo struct {
+	Sequence         uint32
+	Version          uint32
+	SiteURI          string
+	EffectiveUnix    int64
+	ExpirationUnix   int64
+	EffectiveISO     string
+	ExpirationISO    string
+	EffectiveSet     bool
+	ValidatorsBase58 []string
+}
+
+// ValidatorListSiteInfo is the per-URL snapshot the
+// `validator_list_sites` RPC surfaces. Field names track rippled's
+// ValidatorSite::getJson at ValidatorSite.cpp:683-702.
+type ValidatorListSiteInfo struct {
+	URI             string
+	LastRefreshUnix int64
+	LastSuccessUnix int64
+	NextRefreshUnix int64
+	LastRefreshISO  string
+	NextRefreshISO  string
+	LastError       string
+	LastDisposition string
+	// LastDispositionSet mirrors rippled's
+	// std::optional<Site::Status>::has_value() at
+	// ValidatorSite.cpp:690: the handler must omit
+	// `last_refresh_status` from the RPC response until the first
+	// poll attempt completes. Without this flag the zero-value
+	// disposition string would surface as a false "accepted" status.
+	LastDispositionSet bool
+	RefreshIntervalSec int
+	RefreshIntervalMin int
+}
+
+// ValidatorListReader is the read-only facet of the publisher-trust
+// aggregator that the validators / validator_list_sites RPCs need.
+// Expressed as an interface so internal/rpc/types doesn't import
+// internal/validator/list.
+type ValidatorListReader interface {
+	// PublisherCount returns the number of configured publishers in the
+	// trust set. Zero means the publisher-trust subsystem is inert and
+	// the RPC will report an empty publisher list.
+	PublisherCount() int
+	// Threshold returns the configured publisher threshold (minimum
+	// number of publishers whose lists must agree on a validator
+	// before it enters the effective UNL).
+	Threshold() int
+	// Publishers returns a snapshot of per-publisher state for the
+	// `validators` RPC.
+	Publishers() []ValidatorListPublisherInfo
+	// Sites returns a snapshot of per-URL polling state for the
+	// `validator_list_sites` RPC.
+	Sites() []ValidatorListSiteInfo
+	// TrustedMasterKeys returns the master pubkeys currently in the
+	// effective trusted UNL contributed by publishers.
+	TrustedMasterKeys() [][33]byte
+}
+
 // ManifestLookup is the read-only facet of the validator-manifest cache
 // that the `manifest` RPC needs. Expressed as an interface (not a
 // concrete type) so internal/rpc/types doesn't import
@@ -70,6 +186,28 @@ type ServiceContainer struct {
 	// Computed by the adaptor from the current UNL minus the negative-UNL.
 	// Nil in standalone mode (server_info falls back to 1).
 	ValidationQuorum func() int
+
+	// ValidatorList is the publisher-trust subsystem's read facet for
+	// the `validators` and `validator_list_sites` RPC methods. Nil when
+	// no validator_list_keys are configured — handlers must nil-check.
+	ValidatorList ValidatorListReader
+
+	// LocalStaticTrustedKeysBase58 returns the operator's static
+	// `[validators]` config entries, base58-encoded with the NodePublic
+	// prefix. Surfaced by the `validators` RPC as `local_static_keys`
+	// (rippled getJson at ValidatorList.cpp:1657-1661). Nil-safe — a nil
+	// func means "no static keys".
+	LocalStaticTrustedKeysBase58 func() []string
+
+	// SigningKeysBase58 returns the master→signing key map projected as
+	// base58 strings. Surfaced by the `validators` RPC as `signing_keys`
+	// (rippled getJson at ValidatorList.cpp:1725-1734). Nil-safe.
+	SigningKeysBase58 func() map[string]string
+
+	// NegativeUNLBase58 returns the current negative-UNL set, base58-
+	// encoded. Surfaced by the `validators` RPC as `NegativeUNL`
+	// (rippled getJson at ValidatorList.cpp:1737-1744). Nil-safe.
+	NegativeUNLBase58 func() []string
 }
 
 // LedgerNavigator provides ledger index navigation and mode queries.

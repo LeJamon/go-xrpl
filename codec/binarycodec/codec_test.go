@@ -230,6 +230,32 @@ func TestEncode(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
+			// sMD_BaseTen field: input arrives as decimal string (rippled wire
+			// shape) — see rippled MPToken_test.cpp:189.
+			description: "serialize MaximumAmount example - UInt64 sMD_BaseTen (max int64)",
+			input:       map[string]any{"MaximumAmount": "9223372036854775807"},
+			output:      "30187FFFFFFFFFFFFFFF",
+			expectedErr: nil,
+		},
+		{
+			description: "serialize OutstandingAmount example - UInt64 sMD_BaseTen",
+			input:       map[string]any{"OutstandingAmount": "100"},
+			output:      "30190000000000000064",
+			expectedErr: nil,
+		},
+		{
+			description: "serialize MPTAmount example - UInt64 sMD_BaseTen",
+			input:       map[string]any{"MPTAmount": "9990"},
+			output:      "301A0000000000002706",
+			expectedErr: nil,
+		},
+		{
+			description: "serialize LockedAmount example - UInt64 sMD_BaseTen (zero)",
+			input:       map[string]any{"LockedAmount": "0"},
+			output:      "301D0000000000000000",
+			expectedErr: nil,
+		},
+		{
 			description: "serialize LedgerEntryType example - UInt8",
 			input:       map[string]any{"LedgerEntryType": "RippleState"},
 			output:      "110072",
@@ -386,7 +412,35 @@ func TestDecode(t *testing.T) {
 		{
 			description: "deserialize Uint64 correctly",
 			input:       "34000000044B82FA09",
-			output:      map[string]any{"OwnerNode": "000000044B82FA09"},
+			output:      map[string]any{"OwnerNode": "44b82fa09"},
+			expectedErr: nil,
+		},
+		{
+			// sMD_BaseTen field: rippled emits decimal, not hex. Mirrors
+			// rippled MPToken_test.cpp:189 (sfMaximumAmount == "9223372036854775807").
+			description: "deserialize Uint64 MaximumAmount (sMD_BaseTen, max int64)",
+			input:       "30187FFFFFFFFFFFFFFF",
+			output:      map[string]any{"MaximumAmount": "9223372036854775807"},
+			expectedErr: nil,
+		},
+		{
+			// Mirrors rippled Vault_test.cpp:1288 (sfOutstandingAmount == "100").
+			description: "deserialize Uint64 OutstandingAmount (sMD_BaseTen, small)",
+			input:       "30190000000000000064",
+			output:      map[string]any{"OutstandingAmount": "100"},
+			expectedErr: nil,
+		},
+		{
+			// Mirrors rippled MPToken_test.cpp:1654 (sfMPTAmount == "9990").
+			description: "deserialize Uint64 MPTAmount (sMD_BaseTen)",
+			input:       "301A0000000000002706",
+			output:      map[string]any{"MPTAmount": "9990"},
+			expectedErr: nil,
+		},
+		{
+			description: "deserialize Uint64 LockedAmount (sMD_BaseTen, zero)",
+			input:       "301D0000000000000000",
+			output:      map[string]any{"LockedAmount": "0"},
 			expectedErr: nil,
 		},
 		{

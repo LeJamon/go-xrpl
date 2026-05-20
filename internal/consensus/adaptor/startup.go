@@ -2,9 +2,13 @@ package adaptor
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/config"
@@ -14,6 +18,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/manifest"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
+	validatorlist "github.com/LeJamon/goXRPLd/internal/validator/list"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 
@@ -31,6 +36,27 @@ type Components struct {
 	// non-nil — starts empty and fills as peers gossip manifests.
 	Manifests *manifest.Cache
 
+	// ValidatorList is the publisher-trust subsystem. Nil when no
+	// validator_list_keys are configured. When non-nil, peer-gossiped
+	// TMValidatorList frames feed it via the router and the configured
+	// validator_list_sites URLs are polled by ValidatorListPoller.
+	ValidatorList *validatorlist.Aggregator
+
+	// ValidatorListPoller drives periodic HTTP fetches of configured
+	// validator_list_sites and pipes the results into ValidatorList.
+	// Nil iff ValidatorList is nil or no sites are configured.
+	ValidatorListPoller *validatorlist.SitePoller
+
+	// staticMu guards staticValidators / staticMasterKeys. Both slices
+	// hold the operator's most recent [validators] stanza — initially
+	// from boot, refreshed on every SIGHUP via ReloadStaticValidators.
+	// The publisher-trust OnChange callback reads under staticMu so a
+	// SIGHUP removal can never be silently undone by the next publisher
+	// event re-merging a boot-time snapshot.
+	staticMu         sync.RWMutex
+	staticValidators []consensus.NodeID
+	staticMasterKeys [][33]byte
+
 	// Archive is the on-disk validation archive, when enabled.
 	// Nil if disabled in config or if no relational DB is configured.
 	// The engine owns the lifecycle (drain + Close on Stop), but it's
@@ -42,7 +68,18 @@ type Components struct {
 	overlayCancel          context.CancelFunc
 	routerCancel           context.CancelFunc
 	manifestPeriodicCancel context.CancelFunc
+	sitePollerCancel       context.CancelFunc
+	vlTickCancel           context.CancelFunc
 }
+
+// validatorListTickInterval is how often Components.Start fires
+// ValidatorList.Tick to promote future-dated rotations and re-emit
+// OnChange. Rippled drives the equivalent path from updateTrusted on
+// every ledger close (ValidatorList.cpp:1910-1928, roughly every 4s on
+// mainnet); 30s here keeps the wake-up cost low while still bounding
+// the lag between a rotation's effective time and trusted-set update
+// to half a minute in the worst case.
+const validatorListTickInterval = 30 * time.Second
 
 // periodicManifestBroadcastInterval is how often Components.Start
 // re-emits the cached aggregate TMManifests frame. Rippled has no
@@ -81,7 +118,42 @@ func (c *Components) Start() error {
 	c.manifestPeriodicCancel = periodicCancel
 	go c.runPeriodicManifestBroadcast(periodicCtx, periodicManifestBroadcastInterval)
 
+	// Start the publisher-list HTTP poller. Cancellation propagates to
+	// per-URL goroutines via the poller's own stop channel.
+	if c.ValidatorListPoller != nil {
+		pollerCtx, pollerCancel := context.WithCancel(context.Background())
+		c.sitePollerCancel = pollerCancel
+		c.ValidatorListPoller.Start(pollerCtx)
+	}
+
+	// Periodic ValidatorList.Tick promotes future-dated remaining
+	// rotations and emits OnChange when the trusted union changes.
+	// Without this, a rotation announced during a quiet period (no
+	// peer gossip, no site polls) would only land when the next
+	// ingest happens.
+	if c.ValidatorList != nil {
+		tickCtx, tickCancel := context.WithCancel(context.Background())
+		c.vlTickCancel = tickCancel
+		go c.runValidatorListTick(tickCtx, validatorListTickInterval)
+	}
+
 	return nil
+}
+
+func (c *Components) runValidatorListTick(ctx context.Context, interval time.Duration) {
+	if c.ValidatorList == nil || interval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.ValidatorList.Tick()
+		}
+	}
 }
 
 func (c *Components) runPeriodicManifestBroadcast(ctx context.Context, interval time.Duration) {
@@ -105,6 +177,15 @@ func (c *Components) runPeriodicManifestBroadcast(ctx context.Context, interval 
 
 // Stop gracefully shuts down all components.
 func (c *Components) Stop() {
+	if c.vlTickCancel != nil {
+		c.vlTickCancel()
+	}
+	if c.sitePollerCancel != nil {
+		c.sitePollerCancel()
+	}
+	if c.ValidatorListPoller != nil {
+		c.ValidatorListPoller.Stop()
+	}
 	if c.manifestPeriodicCancel != nil {
 		c.manifestPeriodicCancel()
 	}
@@ -248,6 +329,73 @@ func NewFromConfig(
 	router := NewRouter(engine, adaptor, modeManager, overlay.Messages())
 	router.SetManifestCache(manifestCache, overlay)
 
+	// Build the publisher-list aggregator when validator_list_keys are
+	// configured. Lists are then ingested both via peer gossip
+	// (TMValidatorList through the router) and via HTTP polling of
+	// validator_list_sites. The aggregator pushes its recomputed
+	// trusted UNL into adaptor.SetTrustedValidators on every change —
+	// the same write path SIGHUP reload uses.
+	publisherKeys, err := ParseValidatorListPublisherKeys(appCfg)
+	if err != nil {
+		return nil, fmt.Errorf("parse validator_list_keys: %w", err)
+	}
+	var vlAgg *validatorlist.Aggregator
+	var vlPoller *validatorlist.SitePoller
+	if len(publisherKeys) > 0 {
+		pkSlice := make([]validatorlist.PublisherKey, len(publisherKeys))
+		for i, k := range publisherKeys {
+			pkSlice[i] = validatorlist.PublisherKey(k)
+		}
+		vlAgg, err = validatorlist.New(validatorlist.Config{
+			PublisherKeys: pkSlice,
+			SiteURIs:      append([]string(nil), appCfg.Validators.ValidatorListSites...),
+			Threshold:     appCfg.Validators.GetValidatorListThreshold(),
+			Manifests:     manifestCache,
+			Logger:        slog.Default().With("component", "validator-list-aggregator"),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("validator-list aggregator: %w", err)
+		}
+		router.SetValidatorListAggregator(vlAgg)
+		// On-disk publisher-list cache. Mirrors rippled's
+		// ValidatorList::cacheValidatorFile + loadLists pair
+		// (rippled/src/xrpld/app/misc/detail/ValidatorList.cpp:368-396
+		// and 1300-1351): accepted lists are persisted under
+		// <database_path>/validator-list/cache.<pubHex> after every
+		// successful apply, and hydrated on cold start so the trusted
+		// UNL is non-empty before the first poll cycle. Failed cache
+		// I/O is logged but never blocks startup.
+		if appCfg.DatabasePath != "" {
+			cacheDir := filepath.Join(appCfg.DatabasePath, "validator-list")
+			if err := vlAgg.SetCacheDir(cacheDir); err != nil {
+				slog.Default().Warn("validator-list cache disabled",
+					"dir", cacheDir, "error", err)
+			} else if loaded := vlAgg.LoadCache(); loaded > 0 {
+				slog.Default().Info("validator-list cache hydrated",
+					"publishers", loaded)
+			}
+		}
+		// Wire the broadcaster so both ingress paths (peer router +
+		// HTTP poller) can push accepted lists out through the single
+		// aggregator-owned BroadcastLatest entry point. The
+		// router-bound constructor plumbs the shared message
+		// suppression registry so SendList / SendCollection stamp the
+		// (hash, peer) pair that mirrors rippled's
+		// `hashRouter.addSuppressionPeer(hash, peer->id())` at
+		// ValidatorList.cpp:781 + 932.
+		vlAgg.SetBroadcaster(router.NewValidatorListBroadcaster(overlay, sender))
+		if len(appCfg.Validators.ValidatorListSites) > 0 {
+			vlPoller, err = validatorlist.NewSitePoller(
+				append([]string(nil), appCfg.Validators.ValidatorListSites...),
+				vlAgg,
+				slog.Default().With("component", "validator-list-site-poller"),
+			)
+			if err != nil {
+				return nil, fmt.Errorf("validator-list site poller: %w", err)
+			}
+		}
+	}
+
 	// Plumb peer disconnect notifications back through the router so
 	// per-peer state (peerStates for catch-up, peerLCLs for the
 	// getNetworkLedger vote) is cleaned the instant a peer goes away.
@@ -276,15 +424,127 @@ func NewFromConfig(
 		return opMode.String()
 	})
 
-	return &Components{
-		Overlay:     overlay,
-		Engine:      engine,
-		Adaptor:     adaptor,
-		Router:      router,
-		ModeManager: modeManager,
-		Manifests:   manifestCache,
-		Archive:     validationArchive,
-	}, nil
+	c := &Components{
+		Overlay:             overlay,
+		Engine:              engine,
+		Adaptor:             adaptor,
+		Router:              router,
+		ModeManager:         modeManager,
+		Manifests:           manifestCache,
+		ValidatorList:       vlAgg,
+		ValidatorListPoller: vlPoller,
+		staticValidators:    append([]consensus.NodeID(nil), validators...),
+		staticMasterKeys:    append([][33]byte(nil), masterKeys...),
+		Archive:             validationArchive,
+	}
+
+	// Wire the publisher OnChange to merge against the live static set
+	// (held under c.staticMu, refreshed by SIGHUP). Capturing the boot
+	// values directly here would let a SIGHUP removal be silently undone
+	// by the next publisher event.
+	if vlAgg != nil {
+		vlAgg.OnChange(func(publisherNodes []consensus.NodeID, publisherMasters [][33]byte) {
+			staticV, staticM := c.snapshotStatic()
+			merged, mergedMasters := mergeValidators(staticV, staticM, publisherNodes, publisherMasters)
+			adaptor.SetTrustedValidators(merged, mergedMasters)
+		})
+	}
+
+	return c, nil
+}
+
+// snapshotStatic returns deep copies of the current static validator
+// set under staticMu. Both slices are safe for the caller to retain.
+func (c *Components) snapshotStatic() ([]consensus.NodeID, [][33]byte) {
+	c.staticMu.RLock()
+	defer c.staticMu.RUnlock()
+	v := append([]consensus.NodeID(nil), c.staticValidators...)
+	m := append([][33]byte(nil), c.staticMasterKeys...)
+	return v, m
+}
+
+// StaticTrustedMasterKeys returns a snapshot of the operator's static
+// [validators] master keys. Reflects the latest ReloadStaticValidators
+// call — i.e. SIGHUP-updated state, not just the boot-time stanza.
+func (c *Components) StaticTrustedMasterKeys() [][33]byte {
+	_, m := c.snapshotStatic()
+	return m
+}
+
+// ReloadStaticValidators replaces the operator's static [validators]
+// stanza atomically and re-pushes the resulting trusted set into the
+// adaptor.
+//
+// When a publisher-trust aggregator is wired, the push is the union of
+// the new static set and the aggregator's current trusted set —
+// mirrors rippled's updateTrusted which always recomputes from both
+// localPublisherList and publisherLists_. When no aggregator is wired
+// the static set is pushed verbatim (single source of truth).
+//
+// SIGHUP-driven config reload calls this; publisher events do NOT —
+// they go through the aggregator's OnChange callback wired in
+// NewFromConfig.
+func (c *Components) ReloadStaticValidators(validators []consensus.NodeID, masterKeys [][33]byte) {
+	c.staticMu.Lock()
+	c.staticValidators = append([]consensus.NodeID(nil), validators...)
+	c.staticMasterKeys = append([][33]byte(nil), masterKeys...)
+	c.staticMu.Unlock()
+
+	if c.Adaptor == nil {
+		return
+	}
+	if c.ValidatorList == nil {
+		c.Adaptor.SetTrustedValidators(validators, masterKeys)
+		return
+	}
+	pubNodes, pubMasters := c.ValidatorList.TrustedValidators()
+	merged, mergedMasters := mergeValidators(validators, masterKeys, pubNodes, pubMasters)
+	c.Adaptor.SetTrustedValidators(merged, mergedMasters)
+}
+
+// mergeValidators returns the deduplicated union of two
+// (validators, masterKeys) pairs, sorted by master key for
+// determinism. Used to combine the static [validators] config (held
+// constant across publisher-list churn) with the publisher-derived
+// trusted set on every aggregator OnChange callback.
+//
+// The two inputs are assumed already index-aligned (validators[i]
+// derives from masterKeys[i] via consensus.CalcNodeID); the merged
+// outputs preserve that invariant.
+func mergeValidators(aIDs []consensus.NodeID, aMKs [][33]byte, bIDs []consensus.NodeID, bMKs [][33]byte) ([]consensus.NodeID, [][33]byte) {
+	seen := make(map[[33]byte]consensus.NodeID, len(aIDs)+len(bIDs))
+	for i, mk := range aMKs {
+		if _, ok := seen[mk]; ok {
+			continue
+		}
+		if i < len(aIDs) {
+			seen[mk] = aIDs[i]
+		} else {
+			seen[mk] = consensus.CalcNodeID(mk)
+		}
+	}
+	for i, mk := range bMKs {
+		if _, ok := seen[mk]; ok {
+			continue
+		}
+		if i < len(bIDs) {
+			seen[mk] = bIDs[i]
+		} else {
+			seen[mk] = consensus.CalcNodeID(mk)
+		}
+	}
+	masters := make([][33]byte, 0, len(seen))
+	for mk := range seen {
+		masters = append(masters, mk)
+	}
+	sort.Slice(masters, func(i, j int) bool {
+		return string(masters[i][:]) < string(masters[j][:])
+	})
+	ids := make([]consensus.NodeID, len(masters))
+	for i, mk := range masters {
+		ids[i] = seen[mk]
+	}
+	return ids, masters
 }
 
 // OverlayOptionsFromConfig maps app config fields to overlay options.
@@ -342,6 +602,38 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 func ParseValidatorKeys(appCfg *config.Config) ([]consensus.NodeID, error) {
 	validators, _, err := ParseValidatorKeysWithMaster(appCfg)
 	return validators, err
+}
+
+// ParseValidatorListPublisherKeys decodes the `validator_list_keys`
+// config field into 33-byte master public keys suitable for the
+// publisher-trust aggregator. Each key is a hex-encoded 33-byte
+// compressed pubkey (the form rippled and public list publishers like
+// vl.ripple.com use). The leading byte is the key-type prefix —
+// 0xED for ed25519 (the common case), 0x02/0x03 for secp256k1.
+//
+// Returns (nil, nil) when no publisher keys are configured. Returns an
+// error if any key is malformed: this is a hard configuration failure
+// rather than a silently-disabled publisher, since the operator
+// explicitly opted in.
+func ParseValidatorListPublisherKeys(appCfg *config.Config) ([][33]byte, error) {
+	keys := appCfg.Validators.ValidatorListKeys
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	out := make([][33]byte, 0, len(keys))
+	for _, k := range keys {
+		raw, err := hex.DecodeString(k)
+		if err != nil {
+			return nil, fmt.Errorf("validator_list_key %q: hex decode: %w", k, err)
+		}
+		if len(raw) != 33 {
+			return nil, fmt.Errorf("validator_list_key %q: expected 33 bytes (66 hex chars), got %d", k, len(raw))
+		}
+		var pk [33]byte
+		copy(pk[:], raw)
+		out = append(out, pk)
+	}
+	return out, nil
 }
 
 // ParseValidatorKeysWithMaster parses validator public keys into both

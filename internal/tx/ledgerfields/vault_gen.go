@@ -15,7 +15,7 @@ func init() {
 type Vault struct {
 	present           uint64
 	Sequence          uint32
-	OwnerNode         string // UInt64 (uppercase hex)
+	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
 	Owner             string // AccountID (base58)
 	Account           string // AccountID (base58)
 	Data              string // Blob (uppercase hex)
@@ -86,12 +86,12 @@ func (v *Vault) Decode(data []byte) error {
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				v.OwnerNode = val
 				v.present |= vaultBitOwnerNode
 			default:

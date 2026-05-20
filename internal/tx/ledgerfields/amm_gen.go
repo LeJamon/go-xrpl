@@ -21,7 +21,7 @@ type AMM struct {
 	LPTokenBalance    any // Amount (XRP string | IOU map)
 	Asset             any
 	Asset2            any
-	OwnerNode         string // UInt64 (uppercase hex)
+	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
 }
@@ -78,12 +78,12 @@ func (a *AMM) Decode(data []byte) error {
 				return newErrUnknownField("AMM", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				a.OwnerNode = val
 				a.present |= ammBitOwnerNode
 			default:

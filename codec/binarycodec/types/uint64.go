@@ -3,10 +3,8 @@ package types
 
 import (
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"strconv"
-	"strings"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
 )
@@ -53,11 +51,13 @@ func (u *UInt64) FromJSON(value any) ([]byte, error) {
 // ToJSON takes a BinaryParser and optional parameters, and converts the serialized byte data
 // back into a JSON string value. This method assumes the parser contains data representing
 // a 64-bit unsigned integer. If the parsing fails, an error is returned.
-// The output is an uppercase hex string zero-padded to 16 characters (matching rippled behavior).
+// The output is a lowercase hex string without leading zeros, matching rippled's
+// STUInt64::getJson (std::to_chars with base 16) — see rippled
+// src/libxrpl/protocol/STInteger.cpp.
 func (u *UInt64) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
 	b, err := p.ReadBytes(8)
 	if err != nil {
 		return nil, err
 	}
-	return strings.ToUpper(hex.EncodeToString(b)), nil
+	return strconv.FormatUint(binary.BigEndian.Uint64(b), 16), nil
 }

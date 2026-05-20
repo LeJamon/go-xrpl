@@ -82,8 +82,7 @@ func TestLedgerClosedBasicSuccess(t *testing.T) {
 		t.Errorf("unexpected ledger_index type: %T", v)
 	}
 
-	// ledger_hash should match the expected hash
-	expectedHashStr := hex.EncodeToString(closedHash[:])
+	expectedHashStr := strings.ToUpper(hex.EncodeToString(closedHash[:]))
 	assert.Equal(t, expectedHashStr, resp["ledger_hash"])
 }
 
@@ -144,9 +143,8 @@ func TestLedgerClosedHashFormat(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 32, len(decoded), "Decoded hash should be 32 bytes")
 
-	// Verify the hash is lowercase hex (the handler uses hex.EncodeToString which produces lowercase)
-	assert.Equal(t, strings.ToLower(hashStr), hashStr,
-		"ledger_hash should be lowercase hex from hex.EncodeToString")
+	assert.Equal(t, strings.ToUpper(hashStr), hashStr,
+		"ledger_hash should be uppercase hex, matching rippled")
 }
 
 // TestLedgerClosedServiceUnavailable tests behavior when ledger service is not available

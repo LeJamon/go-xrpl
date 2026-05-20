@@ -20,7 +20,7 @@ type Oracle struct {
 	AssetClass        string // Blob (uppercase hex)
 	LastUpdateTime    uint32
 	URI               string // Blob (uppercase hex)
-	OwnerNode         string // UInt64 (uppercase hex)
+	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
@@ -81,12 +81,12 @@ func (o *Oracle) Decode(data []byte) error {
 				return newErrUnknownField("Oracle", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				o.OwnerNode = val
 				o.present |= oracleBitOwnerNode
 			default:

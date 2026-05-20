@@ -11,9 +11,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// recordingSink captures every SetTrustedValidators invocation so the
-// SIGHUP-reload error paths can assert the sink is NOT touched on bad
-// inputs (the previous trusted set must be retained on any failure).
+// recordingSink captures every ReloadStaticValidators invocation so the
+// SIGHUP-reload error paths can assert the reloader is NOT touched on
+// bad inputs (the previous trusted set must be retained on any failure).
 type recordingSink struct {
 	mu    sync.Mutex
 	calls []recordingSinkCall
@@ -24,7 +24,7 @@ type recordingSinkCall struct {
 	masterKeys [][33]byte
 }
 
-func (s *recordingSink) SetTrustedValidators(validators []consensus.NodeID, masterKeys [][33]byte) {
+func (s *recordingSink) ReloadStaticValidators(validators []consensus.NodeID, masterKeys [][33]byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v := make([]consensus.NodeID, len(validators))
@@ -46,7 +46,7 @@ func (s *recordingSink) SetTrustedValidators(validators []consensus.NodeID, mast
 func TestApplyValidatorReload_EmptyConfigPathIsNoOp(t *testing.T) {
 	sink := &recordingSink{}
 	applyValidatorReload(xrpllog.Discard(), sink, "")
-	assert.Empty(t, sink.calls, "empty configPath must not invoke SetTrustedValidators")
+	assert.Empty(t, sink.calls, "empty configPath must not invoke ReloadStaticValidators")
 }
 
 // TestApplyValidatorReload_MissingFileIsNoOp pins the LoadConfig
@@ -58,7 +58,7 @@ func TestApplyValidatorReload_MissingFileIsNoOp(t *testing.T) {
 	sink := &recordingSink{}
 	missing := filepath.Join(t.TempDir(), "does-not-exist.toml")
 	applyValidatorReload(xrpllog.Discard(), sink, missing)
-	assert.Empty(t, sink.calls, "nonexistent configPath must not invoke SetTrustedValidators")
+	assert.Empty(t, sink.calls, "nonexistent configPath must not invoke ReloadStaticValidators")
 }
 
 // TestApplyValidatorReload_MalformedFileIsNoOp pins the parse-failure
@@ -75,7 +75,7 @@ func TestApplyValidatorReload_MalformedFileIsNoOp(t *testing.T) {
 
 	sink := &recordingSink{}
 	applyValidatorReload(xrpllog.Discard(), sink, path)
-	assert.Empty(t, sink.calls, "malformed config must not invoke SetTrustedValidators")
+	assert.Empty(t, sink.calls, "malformed config must not invoke ReloadStaticValidators")
 }
 
 // TestReloadTrustedValidators_NilComponentsIsNoOp pins the standalone-mode

@@ -18,8 +18,8 @@ type NFTokenOffer struct {
 	Owner             string // AccountID (base58)
 	NFTokenID         string // Hash256 (uppercase hex)
 	Amount            any    // Amount (XRP string | IOU map)
-	OwnerNode         string // UInt64 (uppercase hex)
-	NFTokenOfferNode  string // UInt64 (uppercase hex)
+	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
+	NFTokenOfferNode  string // UInt64 (lowercase hex, no leading zeros)
 	Destination       string // AccountID (base58)
 	Expiration        uint32
 	Flags             uint32
@@ -83,15 +83,19 @@ func (n *NFTokenOffer) Decode(data []byte) error {
 				return newErrUnknownField("NFTokenOffer", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				n.OwnerNode = val
 				n.present |= nftokenofferBitOwnerNode
 			case 12:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				n.NFTokenOfferNode = val
 				n.present |= nftokenofferBitNFTokenOfferNode
 			default:

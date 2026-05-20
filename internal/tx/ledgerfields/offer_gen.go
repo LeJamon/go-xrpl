@@ -19,8 +19,8 @@ type Offer struct {
 	TakerPays         any    // Amount (XRP string | IOU map)
 	TakerGets         any    // Amount (XRP string | IOU map)
 	BookDirectory     string // Hash256 (uppercase hex)
-	BookNode          string // UInt64 (uppercase hex)
-	OwnerNode         string // UInt64 (uppercase hex)
+	BookNode          string // UInt64 (lowercase hex, no leading zeros)
+	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
 	Expiration        uint32
 	Flags             uint32
 	DomainID          string // Hash256 (uppercase hex)
@@ -90,15 +90,19 @@ func (o *Offer) Decode(data []byte) error {
 				return newErrUnknownField("Offer", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 3:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				o.BookNode = val
 				o.present |= offerBitBookNode
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				o.OwnerNode = val
 				o.present |= offerBitOwnerNode
 			default:

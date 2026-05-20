@@ -1,6 +1,7 @@
 package shamap
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 )
@@ -16,9 +17,9 @@ type Item struct {
 	data []byte
 }
 
-// NewItem creates a new SHAMapItem with the given key and data
+// NewItem creates a new SHAMapItem with the given key and data. The data
+// slice is copied so subsequent caller mutations cannot affect the item.
 func NewItem(key [32]byte, data []byte) *Item {
-	// Defensive copy to prevent external modifications
 	dataCopy := make([]byte, len(data))
 	copy(dataCopy, data)
 
@@ -57,7 +58,9 @@ func (item *Item) Clone() (*Item, error) {
 		return nil, errors.New("cannot clone nil item")
 	}
 
-	return NewItem(item.key, item.data), nil
+	dataCopy := make([]byte, len(item.data))
+	copy(dataCopy, item.data)
+	return &Item{key: item.key, data: dataCopy}, nil
 }
 
 // String returns a string representation of the item (useful for debugging)
@@ -78,17 +81,7 @@ func (item *Item) Equal(other *Item) bool {
 		return false
 	}
 
-	if len(item.data) != len(other.data) {
-		return false
-	}
-
-	for i, b := range item.data {
-		if b != other.data[i] {
-			return false
-		}
-	}
-
-	return true
+	return bytes.Equal(item.data, other.data)
 }
 
 // IsEmpty returns true if the item has no data

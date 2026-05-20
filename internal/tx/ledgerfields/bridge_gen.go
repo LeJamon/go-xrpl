@@ -18,10 +18,10 @@ type Bridge struct {
 	SignatureReward          any    // Amount (XRP string | IOU map)
 	MinAccountCreateAmount   any    // Amount (XRP string | IOU map)
 	XChainBridge             any
-	XChainClaimID            string // UInt64 (uppercase hex)
-	XChainAccountCreateCount string // UInt64 (uppercase hex)
-	XChainAccountClaimCount  string // UInt64 (uppercase hex)
-	OwnerNode                string // UInt64 (uppercase hex)
+	XChainClaimID            string // UInt64 (lowercase hex, no leading zeros)
+	XChainAccountCreateCount string // UInt64 (lowercase hex, no leading zeros)
+	XChainAccountClaimCount  string // UInt64 (lowercase hex, no leading zeros)
+	OwnerNode                string // UInt64 (lowercase hex, no leading zeros)
 	PreviousTxnID            string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq        uint32
 }
@@ -75,21 +75,33 @@ func (b *Bridge) Decode(data []byte) error {
 				return newErrUnknownField("Bridge", typeCode, fieldCode)
 			}
 		case 3: // UInt64
-			val, err := sr.readUint64Hex()
-			if err != nil {
-				return err
-			}
 			switch fieldCode {
 			case 4:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				b.OwnerNode = val
 				b.present |= bridgeBitOwnerNode
 			case 20:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				b.XChainClaimID = val
 				b.present |= bridgeBitXChainClaimID
 			case 21:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				b.XChainAccountCreateCount = val
 				b.present |= bridgeBitXChainAccountCreateCount
 			case 22:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
 				b.XChainAccountClaimCount = val
 				b.present |= bridgeBitXChainAccountClaimCount
 			default:
