@@ -1,11 +1,15 @@
 package handlers
 
 import (
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -159,8 +163,28 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		}
 	}
 
-	// TODO: Autofill Sequence from ledger (service-level) — getAutofillSequence
-	// TODO: Autofill Fee from ledger (service-level) — getCurrentNetworkFee
+	// Autofill Sequence from the open ledger.
+	// rippled: getAutofillSequence (Simulate.cpp). When TicketSequence is
+	// present, Sequence is implied by the ticket and stays absent.
+	if _, hasSeq := txJsonMap["Sequence"]; !hasSeq {
+		_, hasTicket := txJsonMap["TicketSequence"]
+		seq, seqErr := ctx.Services.Ledger.GetAutofillSequence(accountStr, hasTicket)
+		if seqErr != nil {
+			if errors.Is(seqErr, svcerr.ErrAccountNotFound) {
+				return nil, types.RpcErrorSrcActMissing("Source account not found.")
+			}
+			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill Sequence: %v", seqErr))
+		}
+		if !hasTicket {
+			txJsonMap["Sequence"] = seq
+		}
+	}
+
+	// Autofill Fee from the open ledger / TxQ.
+	// rippled: getCurrentNetworkFee (TransactionSign.cpp).
+	if _, hasFee := txJsonMap["Fee"]; !hasFee {
+		txJsonMap["Fee"] = strconv.FormatUint(ctx.Services.Ledger.GetCurrentNetworkFee(), 10)
+	}
 
 	// Autofill NetworkID if not present and network ID > 1024.
 	// Matches rippled's autofillTx() in Simulate.cpp.
@@ -189,16 +213,31 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Simulation failed: %v", err))
 	}
 
+	// rippled overrides the tesSUCCESS message for simulate (Simulate.cpp:258-262).
+	engineMessage := result.EngineResultMessage
+	if result.EngineResult == "tesSUCCESS" {
+		engineMessage = "The simulated transaction would have been applied."
+	}
+
 	response := map[string]interface{}{
 		"engine_result":         result.EngineResult,
 		"engine_result_code":    result.EngineResultCode,
-		"engine_result_message": result.EngineResultMessage,
+		"engine_result_message": engineMessage,
 		"applied":               result.Applied,
 		"ledger_index":          result.CurrentLedger,
 	}
 
-	// TODO: Include metadata when SubmitResult is extended with a Metadata field.
-	// rippled returns "meta" (JSON) or "meta_blob" (binary) from the simulation result.
+	// rippled emits "meta" (JSON) when binary=false and "meta_blob" (hex)
+	// when binary=true. Simulate.cpp:264-276.
+	if result.Metadata != nil {
+		if binaryOutput {
+			if len(result.Metadata.Blob) > 0 {
+				response["meta_blob"] = strings.ToUpper(hex.EncodeToString(result.Metadata.Blob))
+			}
+		} else if result.Metadata.JSON != nil {
+			response["meta"] = result.Metadata.JSON
+		}
+	}
 
 	if binaryOutput {
 		if encoded, err := binarycodec.Encode(txJsonMap); err == nil {

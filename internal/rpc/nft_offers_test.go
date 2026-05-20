@@ -150,7 +150,11 @@ func (m *mockNFTOffersLedgerService) GetNFTSellOffers(_ context.Context, nftID [
 func (m *mockNFTOffersLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) IsAmendmentBlocked() bool { return false }
+func (m *mockNFTOffersLedgerService) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
+	return 0, errors.New("not implemented")
+}
+func (m *mockNFTOffersLedgerService) GetCurrentNetworkFee() uint64 { return 10 }
+func (m *mockNFTOffersLedgerService) IsAmendmentBlocked() bool     { return false }
 func (m *mockNFTOffersLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {
 	return nil, errors.New("not implemented in mock")
 }

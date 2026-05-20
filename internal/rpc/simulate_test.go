@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -14,8 +15,11 @@ import (
 // mockLedgerServiceSimulate extends mockLedgerService with simulate-specific behavior.
 type mockLedgerServiceSimulate struct {
 	*mockLedgerService
-	simulateResult *types.SubmitResult
-	simulateError  error
+	simulateResult    *types.SubmitResult
+	simulateError     error
+	autofillSeq       uint32
+	autofillSeqErr    error
+	currentNetworkFee uint64
 }
 
 func newMockLedgerServiceSimulate() *mockLedgerServiceSimulate {
@@ -28,6 +32,8 @@ func newMockLedgerServiceSimulate() *mockLedgerServiceSimulate {
 			Applied:             false,
 			CurrentLedger:       3,
 		},
+		autofillSeq:       1,
+		currentNetworkFee: 10,
 	}
 }
 
@@ -36,6 +42,20 @@ func (m *mockLedgerServiceSimulate) SimulateTransaction(txJSON []byte) (*types.S
 		return nil, m.simulateError
 	}
 	return m.simulateResult, nil
+}
+
+func (m *mockLedgerServiceSimulate) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
+	if m.autofillSeqErr != nil {
+		return 0, m.autofillSeqErr
+	}
+	if hasTicketSequence {
+		return 0, nil
+	}
+	return m.autofillSeq, nil
+}
+
+func (m *mockLedgerServiceSimulate) GetCurrentNetworkFee() uint64 {
+	return m.currentNetworkFee
 }
 
 func newSimulateTestServices(mock *mockLedgerServiceSimulate) *types.ServiceContainer {
@@ -474,6 +494,187 @@ func TestSimulateMethod_SrcActMalformed(t *testing.T) {
 	assert.Equal(t, types.RpcSRC_ACT_MALFORMED, rpcErr.Code)
 	assert.Equal(t, "srcActMalformed", rpcErr.ErrorString)
 	assert.Equal(t, "Invalid field 'tx.Account'.", rpcErr.Message)
+}
+
+func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
+	method := &handlers.SimulateMethod{}
+
+	makeCtx := func(mock *mockLedgerServiceSimulate) *types.RpcContext {
+		return &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleUser,
+			ApiVersion: types.ApiVersion2,
+			Services:   newSimulateTestServices(mock),
+		}
+	}
+
+	t.Run("Sequence and Fee autofilled from ledger service", func(t *testing.T) {
+		mock := newMockLedgerServiceSimulate()
+		mock.autofillSeq = 42
+		mock.currentNetworkFee = 15
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.Nil(t, rpcErr)
+		resp := result.(map[string]interface{})
+		txJSON := resp["tx_json"].(map[string]interface{})
+
+		assert.Equal(t, uint32(42), txJSON["Sequence"])
+		assert.Equal(t, "15", txJSON["Fee"])
+	})
+
+	t.Run("Pre-set Sequence and Fee are preserved", func(t *testing.T) {
+		mock := newMockLedgerServiceSimulate()
+		mock.autofillSeq = 99
+		mock.currentNetworkFee = 99
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+				"Sequence":        7,
+				"Fee":             "12",
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.Nil(t, rpcErr)
+		resp := result.(map[string]interface{})
+		txJSON := resp["tx_json"].(map[string]interface{})
+
+		assert.EqualValues(t, 7, txJSON["Sequence"])
+		assert.Equal(t, "12", txJSON["Fee"])
+	})
+
+	t.Run("TicketSequence skips Sequence autofill", func(t *testing.T) {
+		mock := newMockLedgerServiceSimulate()
+		mock.autofillSeq = 99
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+				"TicketSequence":  5,
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.Nil(t, rpcErr)
+		resp := result.(map[string]interface{})
+		txJSON := resp["tx_json"].(map[string]interface{})
+
+		_, hasSeq := txJSON["Sequence"]
+		assert.False(t, hasSeq, "Sequence must stay absent when TicketSequence is present")
+	})
+
+	t.Run("Source account not found maps to srcActMissing", func(t *testing.T) {
+		mock := newMockLedgerServiceSimulate()
+		mock.autofillSeqErr = svcerr.ErrAccountNotFound
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcSRC_ACT_NOT_FOUND, rpcErr.Code)
+	})
+}
+
+func TestSimulateMethod_MetaInResponse(t *testing.T) {
+	method := &handlers.SimulateMethod{}
+
+	t.Run("meta field present when binary=false", func(t *testing.T) {
+		mock := newMockLedgerServiceSimulate()
+		metaJSON := map[string]interface{}{
+			"AffectedNodes":     []interface{}{},
+			"TransactionIndex":  uint32(0),
+			"TransactionResult": "tesSUCCESS",
+		}
+		mock.simulateResult = &types.SubmitResult{
+			EngineResult:        "tesSUCCESS",
+			EngineResultCode:    0,
+			EngineResultMessage: "ignored",
+			Applied:             false,
+			CurrentLedger:       3,
+			Metadata:            &types.SubmitMetadata{JSON: metaJSON, Blob: []byte{0xAB, 0xCD}},
+		}
+
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleUser,
+			ApiVersion: types.ApiVersion2,
+			Services:   newSimulateTestServices(mock),
+		}
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+			},
+		}
+		paramsJSON, _ := json.Marshal(params)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		resp := result.(map[string]interface{})
+
+		assert.Equal(t, metaJSON, resp["meta"])
+		_, hasBlob := resp["meta_blob"]
+		assert.False(t, hasBlob, "meta_blob must not appear when binary=false")
+		assert.Equal(t, "The simulated transaction would have been applied.", resp["engine_result_message"])
+	})
+
+	t.Run("meta_blob field present when binary=true", func(t *testing.T) {
+		mock := newMockLedgerServiceSimulate()
+		mock.simulateResult = &types.SubmitResult{
+			EngineResult:        "tesSUCCESS",
+			EngineResultCode:    0,
+			EngineResultMessage: "ignored",
+			Applied:             false,
+			CurrentLedger:       3,
+			Metadata:            &types.SubmitMetadata{Blob: []byte{0xDE, 0xAD, 0xBE, 0xEF}},
+		}
+
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleUser,
+			ApiVersion: types.ApiVersion2,
+			Services:   newSimulateTestServices(mock),
+		}
+		params := map[string]interface{}{
+			"binary": true,
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+			},
+		}
+		paramsJSON, _ := json.Marshal(params)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		resp := result.(map[string]interface{})
+
+		assert.Equal(t, "DEADBEEF", resp["meta_blob"])
+		_, hasMeta := resp["meta"]
+		assert.False(t, hasMeta, "meta must not appear when binary=true")
+	})
 }
 
 func TestSimulateMethod_RequiredRole(t *testing.T) {
