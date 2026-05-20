@@ -321,8 +321,12 @@ type Overlay struct {
 	pingTimeoutDisconnects atomic.Uint64
 
 	// Network
-	// listenerMu guards listener: written once by startListener (in the
-	// Run goroutine) and read concurrently by ListenAddr and Stop.
+	// listenerMu guards listener: written once by startListener (called
+	// from Run before any concurrent reader exists). Read under RLock
+	// from ListenAddr and Stop (other goroutines). The reads in Run and
+	// acceptLoop are unlocked: Run's read at "if o.listener != nil" is
+	// in the same goroutine as the write, and acceptLoop is spawned via
+	// g.Go after the write returns, so happens-before applies.
 	listenerMu sync.RWMutex
 	listener   net.Listener
 
