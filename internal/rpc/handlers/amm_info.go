@@ -9,6 +9,7 @@ import (
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/protocol"
@@ -129,15 +130,45 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		ammResult["trading_fee"] = tradingFee
 	}
 
-	// TODO: amount/amount2 currently return the asset issue definitions from the AMM SLE
-	// (sfAsset/sfAsset2), not the actual pool balances. Rippled calls ammPoolHolds() to
-	// get real balances from trust lines, which requires service-layer trust line lookups.
-	// Similarly, asset_frozen/asset2_frozen require isFrozen() calls on trust lines.
-	if asset, ok := decoded["Asset"]; ok {
-		ammResult["amount"] = asset
+	// Asset and Asset2 on the AMM SLE carry only the issue definitions; pool
+	// balances must be read from the AMM account's trust lines / XRP balance.
+	// Matches rippled ammPoolHolds() in AMMUtils.cpp.
+	asset1, asset1OK := parseSLEIssue(decoded["Asset"])
+	asset2, asset2OK := parseSLEIssue(decoded["Asset2"])
+	accountStr, _ := decoded["Account"].(string)
+	var ammAccountID [20]byte
+	if accountStr != "" {
+		if _, accBytes, decErr := addresscodec.DecodeClassicAddressToAccountID(accountStr); decErr == nil {
+			copy(ammAccountID[:], accBytes)
+		}
 	}
-	if asset2, ok := decoded["Asset2"]; ok {
-		ammResult["amount2"] = asset2
+
+	if asset1OK && asset2OK && accountStr != "" {
+		view, viewErr := ctx.Services.Ledger.GetClosedLedgerView()
+		if viewErr != nil {
+			return nil, types.RpcErrorInternal("ledger view unavailable: " + viewErr.Error())
+		}
+
+		// rippled passes FreezeHandling::fhIGNORE_FREEZE here: balances reflect
+		// raw pool holdings; the freeze status is reported separately.
+		bal1 := readAMMHolds(view, ammAccountID, asset1)
+		bal2 := readAMMHolds(view, ammAccountID, asset2)
+		ammResult["amount"] = formatAmountJSON(bal1)
+		ammResult["amount2"] = formatAmountJSON(bal2)
+
+		if !asset1.IsXRP {
+			ammResult["asset_frozen"] = isAssetFrozen(view, ammAccountID, asset1)
+		}
+		if !asset2.IsXRP {
+			ammResult["asset2_frozen"] = isAssetFrozen(view, ammAccountID, asset2)
+		}
+	} else {
+		if asset, ok := decoded["Asset"]; ok {
+			ammResult["amount"] = asset
+		}
+		if asset2Raw, ok := decoded["Asset2"]; ok {
+			ammResult["amount2"] = asset2Raw
+		}
 	}
 
 	// Handle vote slots
@@ -370,4 +401,114 @@ func currencyToBytes(currency string) [20]byte {
 	}
 
 	return result
+}
+
+type ammIssue struct {
+	Currency  string
+	IssuerStr string
+	IssuerID  [20]byte
+	IsXRP     bool
+}
+
+// The binary codec emits {"currency":"XRP"} for XRP and
+// {"currency":..,"issuer":..} for IOUs (see codec/binarycodec/types/issue.go).
+func parseSLEIssue(raw interface{}) (ammIssue, bool) {
+	m, ok := raw.(map[string]interface{})
+	if !ok {
+		return ammIssue{}, false
+	}
+	currency, ok := m["currency"].(string)
+	if !ok {
+		return ammIssue{}, false
+	}
+	if currency == "XRP" {
+		return ammIssue{Currency: "XRP", IsXRP: true}, true
+	}
+	issuerStr, ok := m["issuer"].(string)
+	if !ok {
+		return ammIssue{}, false
+	}
+	_, issuerBytes, err := addresscodec.DecodeClassicAddressToAccountID(issuerStr)
+	if err != nil {
+		return ammIssue{}, false
+	}
+	out := ammIssue{Currency: currency, IssuerStr: issuerStr}
+	copy(out.IssuerID[:], issuerBytes)
+	return out, true
+}
+
+// Matches rippled accountHolds() with FreezeHandling::fhIGNORE_FREEZE.
+func readAMMHolds(view types.LedgerStateView, ammAccountID [20]byte, issue ammIssue) state.Amount {
+	if issue.IsXRP {
+		data, err := view.Read(keylet.Account(ammAccountID))
+		if err != nil || data == nil {
+			return state.NewXRPAmountFromInt(0)
+		}
+		account, err := state.ParseAccountRoot(data)
+		if err != nil {
+			return state.NewXRPAmountFromInt(0)
+		}
+		return state.NewXRPAmountFromInt(int64(account.Balance))
+	}
+
+	zero := state.NewIssuedAmountFromValue(0, 0, issue.Currency, issue.IssuerStr)
+
+	// AMM-account-as-issuer is not a meaningful balance; rippled never gets
+	// here because AMM asset issuers cannot be the AMM account itself.
+	if ammAccountID == issue.IssuerID {
+		return zero
+	}
+
+	data, err := view.Read(keylet.Line(ammAccountID, issue.IssuerID, issue.Currency))
+	if err != nil || data == nil {
+		return zero
+	}
+	rs, err := state.ParseRippleState(data)
+	if err != nil {
+		return zero
+	}
+
+	// Trust-line balance is stored from the low account's perspective; flip
+	// the sign if the AMM is the high account.
+	balance := rs.Balance
+	if state.CompareAccountIDsForLine(ammAccountID, issue.IssuerID) >= 0 {
+		balance = balance.Negate()
+	}
+	if balance.Signum() <= 0 {
+		return zero
+	}
+	iou := balance.IOU()
+	return state.NewIssuedAmountFromValue(iou.Mantissa(), iou.Exponent(), issue.Currency, issue.IssuerStr)
+}
+
+// Frozen if the issuer has global freeze set, or has frozen its side of the
+// trust line. Matches rippled isFrozen() in View.cpp.
+func isAssetFrozen(view types.LedgerStateView, ammAccountID [20]byte, issue ammIssue) bool {
+	if issue.IsXRP {
+		return false
+	}
+	if data, err := view.Read(keylet.Account(issue.IssuerID)); err == nil && data != nil {
+		if issuerRoot, perr := state.ParseAccountRoot(data); perr == nil {
+			if issuerRoot.Flags&state.LsfGlobalFreeze != 0 {
+				return true
+			}
+		}
+	}
+	if ammAccountID == issue.IssuerID {
+		return false
+	}
+	data, err := view.Read(keylet.Line(ammAccountID, issue.IssuerID, issue.Currency))
+	if err != nil || data == nil {
+		return false
+	}
+	rs, err := state.ParseRippleState(data)
+	if err != nil {
+		return false
+	}
+	// The freeze flag lives on the issuer's side of the line.
+	issuerIsHigh := state.CompareAccountIDsForLine(issue.IssuerID, ammAccountID) > 0
+	if issuerIsHigh {
+		return rs.Flags&state.LsfHighFreeze != 0
+	}
+	return rs.Flags&state.LsfLowFreeze != 0
 }
