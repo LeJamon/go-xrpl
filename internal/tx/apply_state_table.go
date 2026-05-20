@@ -714,7 +714,29 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 		if err := currEntry.Decode(current); err != nil {
 			return node, err
 		}
-		node.PreviousTxnID, node.PreviousTxnLgrSeq = origEntry.PreviousTxn()
+		// PreviousTxnID/PreviousTxnLgrSeq are only emitted on ModifiedNode
+		// when the entry is a threaded type. Rippled gates this at
+		// STLedgerEntry::isThreadedType (libxrpl/protocol/STLedgerEntry.cpp:
+		// 90-105) — DirectoryNode/Amendments/FeeSettings/NegativeUNL/AMM are
+		// EXCLUDED from threading unless the fixPreviousTxnID amendment is
+		// enabled. Without this gate, goxrpl emits an extra ~36 bytes per
+		// dir-pagination modify (PreviousTxnID 32B + sfPreviousTxnLgrSeq 4B +
+		// the two field markers); the tx-tree leaf bytes for that tx then
+		// diverge from rippled byte-for-byte, transaction_hash diverges,
+		// ledger_hash diverges, account_hash matches — exactly the iter7/8
+		// stall pattern at vseq=7.
+		// Default fixPreviousTxnID to false when rules is nil — this matches
+		// rippled's pre-amendment behaviour (DirectoryNode is NOT threaded,
+		// so its ModifiedNode meta gets no PreviousTxnID/PreviousTxnLgrSeq).
+		// Production callers always set rules at NewApplyStateTable; tests
+		// that build a bare table get the safe rippled-default classification.
+		fixPreviousTxnID := false
+		if t.rules != nil {
+			fixPreviousTxnID = t.rules.Enabled(amendment.FeatureFixPreviousTxnID)
+		}
+		if isThreadedType(entryType, fixPreviousTxnID) {
+			node.PreviousTxnID, node.PreviousTxnLgrSeq = origEntry.PreviousTxn()
+		}
 		currEntry.EmitPreviousFields(origEntry, node.PreviousFields)
 		currEntry.EmitFinalFields(node.FinalFields)
 		if len(node.PreviousFields) == 0 {
