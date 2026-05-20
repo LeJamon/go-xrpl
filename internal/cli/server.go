@@ -344,19 +344,23 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			return overlayRef.PeerDisconnects(), overlayRef.PeerDisconnectsResources()
 		}
 		acctRef := consensusComponents.Adaptor
-		services.StateAccounting = func() map[string]types.StateAccountingEntry {
+		services.StateAccounting = func() types.StateAccountingSnapshot {
 			snap := acctRef.StateAccounting()
-			if len(snap) == 0 {
-				return nil
+			if len(snap.Modes) == 0 {
+				return types.StateAccountingSnapshot{}
 			}
-			out := make(map[string]types.StateAccountingEntry, len(snap))
-			for mode, entry := range snap {
-				out[mode] = types.StateAccountingEntry{
+			modes := make(map[string]types.StateAccountingEntry, len(snap.Modes))
+			for mode, entry := range snap.Modes {
+				modes[mode] = types.StateAccountingEntry{
 					Transitions: entry.Transitions,
 					DurationUs:  entry.DurationUs,
 				}
 			}
-			return out
+			return types.StateAccountingSnapshot{
+				Modes:             modes,
+				CurrentDurationUs: snap.CurrentDurationUs,
+				InitialSyncUs:     snap.InitialSyncUs,
+			}
 		}
 		// Expose the validator-manifest cache to the `manifest` RPC.
 		// The cache is shared — the router writes inbound manifests,

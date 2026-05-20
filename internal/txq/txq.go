@@ -35,10 +35,14 @@ type TxQ struct {
 	// This ensures different validators build similar queues.
 	parentHash [32]byte
 
-	// jqTransOverflow counts transactions rejected because the queue
-	// was full at submission time (telCAN_NOT_QUEUE_FULL). Mirrors
-	// rippled's NetworkOPsImp::getJqTransOverflow surfaced by
-	// server_info as jq_trans_overflow.
+	// jqTransOverflow counts transactions rejected because the TxQ
+	// was full at submission time (telCAN_NOT_QUEUE_FULL). Surfaced
+	// via server_info as jq_trans_overflow. Note rippled's same-named
+	// counter (OverlayImpl::getJqTransOverflow, bumped at
+	// PeerImp.cpp:1353) tracks JobQueue jtTRANSACTION overflow on
+	// inbound TMTransaction processing, not TxQ saturation — goxrpl
+	// has no JobQueue subsystem, so the TxQ-full count is the closest
+	// available analog until that lands.
 	jqTransOverflow atomic.Uint64
 }
 
@@ -68,8 +72,9 @@ type Metrics struct {
 }
 
 // JqTransOverflow returns the cumulative count of transactions rejected
-// because the queue was full (telCAN_NOT_QUEUE_FULL). Mirrors rippled's
-// OverlayImpl::getJqTransOverflow surfaced by server_info.
+// because the TxQ was full (telCAN_NOT_QUEUE_FULL). Surfaced via
+// server_info as jq_trans_overflow; see the jqTransOverflow field doc
+// for the rippled-vs-goxrpl semantic difference.
 func (q *TxQ) JqTransOverflow() uint64 {
 	return q.jqTransOverflow.Load()
 }

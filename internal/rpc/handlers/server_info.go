@@ -19,21 +19,24 @@ import (
 const loadBase uint64 = 256
 
 // validatedLedgerAgeThreshold matches rippled's
-// NetworkOPsImp::getServerInfo (NetworkOPs.cpp:2952): once the
+// NetworkOPsImp::getServerInfo (NetworkOPs.cpp:2951): once the
 // validated ledger is older than this the age is clamped to 0 in the
-// JSON so monitoring dashboards don't render misleading values from a
-// stalled node. 600s is rippled's published threshold.
-const validatedLedgerAgeThreshold = 600 * time.Second
+// JSON. Rippled uses 1,000,000 seconds (~11.57 days), so ordinary
+// stall durations (minutes / hours / days) are still reported.
+const validatedLedgerAgeThreshold = 1_000_000 * time.Second
 
 // stateAccountingModes is the fixed set of operating-mode keys
-// rippled emits. Emitting them all (zero-filled when needed) keeps the
-// shape stable for downstream consumers.
+// rippled emits, in OperatingMode index order to mirror
+// NetworkOPs.cpp:871-872 + 4837-4845. JSON object keys are unordered
+// on the wire but matching the iteration order keeps review noise
+// down. Emitting all keys (zero-filled when needed) keeps the shape
+// stable for downstream consumers.
 var stateAccountingModes = []string{
-	"connected",
 	"disconnected",
-	"full",
+	"connected",
 	"syncing",
 	"tracking",
+	"full",
 }
 
 // serverStartTime tracks when the server started for uptime calculation
@@ -101,10 +104,12 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 		serverState = "standalone"
 	}
 
-	// Duration in microseconds for state accounting
+	// Duration in microseconds for the legacy state-accounting fallback
+	// (used only when consensus hasn't wired a tracker).
 	uptimeUs := uptimeDuration.Microseconds()
 
 	overflow, peerDisc, peerDiscRes := resolveDisconnectCounters(services)
+	accounting := resolveStateAccounting(services, serverState, uptimeUs)
 
 	info := map[string]interface{}{
 		"build_version":     BuildVersion,
@@ -121,8 +126,17 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 		"peer_disconnects":           fmt.Sprintf("%d", peerDisc),
 		"peer_disconnects_resources": fmt.Sprintf("%d", peerDiscRes),
 
-		"server_state_duration_us": fmt.Sprintf("%d", uptimeUs),
-		"state_accounting":         resolveStateAccounting(services, serverState, uptimeUs),
+		// Time spent in the current operating mode (NOT total uptime),
+		// matching rippled NetworkOPs.cpp:4846 which emits
+		// `current.count()` = now - last-transition-time.
+		"server_state_duration_us": fmt.Sprintf("%d", accounting.currentDurationUs),
+		"state_accounting":         accounting.modes,
+	}
+
+	// Rippled emits initial_sync_duration_us only when the node has
+	// completed its first sync to Full (NetworkOPs.cpp:4847-4848).
+	if accounting.initialSyncUs > 0 {
+		info["initial_sync_duration_us"] = fmt.Sprintf("%d", accounting.initialSyncUs)
 	}
 
 	// hostid: only in human mode (server_info), matching rippled
@@ -169,6 +183,19 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 	}
 	if human {
 		info["load_factor"] = float64(loadFactor) / float64(loadBase)
+		// Mirror rippled NetworkOPs.cpp:2902-2912: in human mode the
+		// escalation and queue fields are emitted only when they
+		// actually diverge from the reference level (i.e., load is
+		// active). With no LoadFeeTrack yet we can't honour the
+		// `admin || feeEscalation != loadFactor` extra gate exactly,
+		// so we emit whenever escalation/queue are above reference —
+		// the conservative subset of rippled's predicate.
+		if feeEscalation != feeReference {
+			info["load_factor_fee_escalation"] = float64(feeEscalation) / float64(feeReference)
+		}
+		if feeQueue != feeReference {
+			info["load_factor_fee_queue"] = float64(feeQueue) / float64(feeReference)
+		}
 	} else {
 		info["load_base"] = loadBase
 		info["load_factor"] = loadFactor
@@ -179,14 +206,17 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 	}
 
 	now := time.Now()
-	validatedAge := ledgerAge(serverInfo.ValidatedLedgerCloseTime, now)
-	closedAge := ledgerAge(serverInfo.ClosedLedgerCloseTime, now)
+	validatedAge, _ := ledgerAge(serverInfo.ValidatedLedgerCloseTime, now)
+	closedAge, closedAgeOK := ledgerAge(serverInfo.ClosedLedgerCloseTime, now)
 
 	if human {
 		baseFeeXRP := float64(baseFee) / 1_000_000.0
 		reserveBaseXRP := float64(reserveBase) / 1_000_000.0
 		reserveIncXRP := float64(reserveIncrement) / 1_000_000.0
 
+		// validated_ledger always carries an `age` in rippled (the
+		// `haveValidated() == true` branch at NetworkOPs.cpp:2952-2956
+		// unconditionally writes it, possibly as 0).
 		info["validated_ledger"] = map[string]interface{}{
 			"age":              validatedAge,
 			"base_fee_xrp":     baseFeeXRP,
@@ -196,15 +226,20 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 			"seq":              serverInfo.ValidatedLedgerSeq,
 		}
 
-		// closed_ledger in human mode
-		info["closed_ledger"] = map[string]interface{}{
-			"age":              closedAge,
+		// closed_ledger in human mode. Rippled omits `age` when the
+		// close-time is in the future (clock skew, no valid answer)
+		// — NetworkOPs.cpp:2962-2969.
+		closedLedger := map[string]interface{}{
 			"base_fee_xrp":     baseFeeXRP,
 			"hash":             closedLedgerHash,
 			"reserve_base_xrp": reserveBaseXRP,
 			"reserve_inc_xrp":  reserveIncXRP,
 			"seq":              serverInfo.ClosedLedgerSeq,
 		}
+		if closedAgeOK {
+			closedLedger["age"] = closedAge
+		}
+		info["closed_ledger"] = closedLedger
 	} else {
 		info["validated_ledger"] = map[string]interface{}{
 			"base_fee":     baseFee,
@@ -306,11 +341,20 @@ func resolveLoadFactorFees(services *types.ServiceContainer) (escalation, queue,
 	return
 }
 
-// resolveStateAccounting builds the state_accounting JSON value.
-// Prefers the adaptor's per-mode tracker when wired, otherwise falls
-// back to attributing the whole uptime to the current server state
-// (matching the pre-#480 stub shape).
-func resolveStateAccounting(services *types.ServiceContainer, serverState string, uptimeUs int64) map[string]interface{} {
+// stateAccountingResolved is the rendered shape consumed by
+// buildServerInfo — the state_accounting map plus the two top-level
+// companion fields (server_state_duration_us, initial_sync_duration_us).
+type stateAccountingResolved struct {
+	modes             map[string]interface{}
+	currentDurationUs uint64
+	initialSyncUs     uint64
+}
+
+// resolveStateAccounting builds the state_accounting JSON value and the
+// top-level companion durations. Prefers the adaptor's tracker when
+// wired; falls back to attributing the whole uptime to the current
+// server state (matching the pre-#480 stub shape).
+func resolveStateAccounting(services *types.ServiceContainer, serverState string, uptimeUs int64) stateAccountingResolved {
 	out := make(map[string]interface{}, len(stateAccountingModes))
 	for _, m := range stateAccountingModes {
 		out[m] = map[string]interface{}{
@@ -320,38 +364,59 @@ func resolveStateAccounting(services *types.ServiceContainer, serverState string
 	}
 
 	if services != nil && services.StateAccounting != nil {
-		for mode, entry := range services.StateAccounting() {
+		snap := services.StateAccounting()
+		for mode, entry := range snap.Modes {
 			out[mode] = map[string]interface{}{
 				"duration_us": fmt.Sprintf("%d", entry.DurationUs),
 				"transitions": fmt.Sprintf("%d", entry.Transitions),
 			}
 		}
-		return out
+		return stateAccountingResolved{
+			modes:             out,
+			currentDurationUs: snap.CurrentDurationUs,
+			initialSyncUs:     snap.InitialSyncUs,
+		}
 	}
 
+	// Legacy fallback: attribute total uptime to the current state.
+	// server_state_duration_us in this branch necessarily equals
+	// uptime — there's no transition history to derive a tighter
+	// value from.
 	if _, ok := out[serverState]; ok {
 		out[serverState] = map[string]interface{}{
 			"duration_us": fmt.Sprintf("%d", uptimeUs),
 			"transitions": "1",
 		}
 	}
-	return out
+	currentDur := uint64(0)
+	if uptimeUs > 0 {
+		currentDur = uint64(uptimeUs)
+	}
+	return stateAccountingResolved{
+		modes:             out,
+		currentDurationUs: currentDur,
+	}
 }
 
-// ledgerAge returns the age of a ledger in seconds. Clamps to 0 when
-// the close time is unknown, in the future (clock skew), or past
-// rippled's high-age threshold — see NetworkOPs.cpp:2952.
-func ledgerAge(closeTimeRippleEpoch int64, now time.Time) int64 {
+// ledgerAge returns the age of a ledger in seconds, along with an
+// `ok` flag indicating whether the field should be emitted at all.
+// Clamps to 0 when the close time is past rippled's high-age
+// threshold (NetworkOPs.cpp:2956). Returns ok=false when the close
+// time is unknown or in the future — rippled omits the `age` field
+// in that case (NetworkOPs.cpp:2962-2969); callers may still emit a
+// 0 when their branch is the "validated_ledger" path, which rippled
+// always emits.
+func ledgerAge(closeTimeRippleEpoch int64, now time.Time) (int64, bool) {
 	if closeTimeRippleEpoch <= 0 {
-		return 0
+		return 0, false
 	}
 	closeUnix := closeTimeRippleEpoch + protocol.RippleEpochUnix
 	age := now.Unix() - closeUnix
-	if age <= 0 {
-		return 0
+	if age < 0 {
+		return 0, false
 	}
 	if time.Duration(age)*time.Second >= validatedLedgerAgeThreshold {
-		return 0
+		return 0, true
 	}
-	return age
+	return age, true
 }

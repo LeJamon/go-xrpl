@@ -221,9 +221,10 @@ type ServiceContainer struct {
 	PeerDisconnects func() (total, resources uint64)
 
 	// StateAccounting returns the operating-mode state-machine
-	// snapshot surfaced by server_info.state_accounting. Keys are the
-	// rippled lowercase mode names. Nil until consensus is wired.
-	StateAccounting func() map[string]StateAccountingEntry
+	// snapshot surfaced by server_info: per-mode counts/durations
+	// plus the current-state and initial-sync durations. The Modes
+	// map is empty until consensus is wired.
+	StateAccounting func() StateAccountingSnapshot
 }
 
 // LedgerNavigator provides ledger index navigation and mode queries.
@@ -387,6 +388,23 @@ type TxQServerMetrics struct {
 type StateAccountingEntry struct {
 	Transitions uint64
 	DurationUs  uint64
+}
+
+// StateAccountingSnapshot bundles everything server_info needs from
+// the state-accounting tracker. Mirrors the data emitted by rippled's
+// NetworkOPsImp::StateAccounting::json (NetworkOPs.cpp:4828-4849):
+// per-mode rows plus the two top-level companion fields.
+type StateAccountingSnapshot struct {
+	// Modes is the per-mode counts/durations table.
+	Modes map[string]StateAccountingEntry
+	// CurrentDurationUs is the time spent in the current operating
+	// mode since the last transition. Surfaced as the top-level
+	// server_state_duration_us field.
+	CurrentDurationUs uint64
+	// InitialSyncUs is the duration from process start to the first
+	// transition into Full. Zero before that transition. Surfaced as
+	// initial_sync_duration_us; rippled emits it only when non-zero.
+	InitialSyncUs uint64
 }
 
 // SubmitResult contains the result of submitting a transaction.

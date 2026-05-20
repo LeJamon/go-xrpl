@@ -1415,24 +1415,28 @@ func (a *Adaptor) GetOperatingMode() consensus.OperatingMode {
 
 func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.operatingMode = mode
-	sa := a.stateAcct
-	a.mu.Unlock()
-	if sa != nil {
-		sa.transition(mode)
+	if a.stateAcct != nil {
+		// Held under a.mu so the operatingMode field and the
+		// accounting transition observe the same serialization
+		// order. The tracker has its own mutex; this nested take
+		// is short and never re-enters a.mu.
+		a.stateAcct.transition(mode)
 	}
 }
 
-// StateAccounting returns a snapshot of per-operating-mode transition
-// counts and cumulative microsecond durations for server_info. Returns
-// nil when the adaptor was constructed without a tracker (legacy
-// tests). Mirrors rippled's NetworkOPsImp::StateAccounting::json.
-func (a *Adaptor) StateAccounting() map[string]StateAccountingEntry {
+// StateAccounting returns the snapshot used by server_info to populate
+// state_accounting + the top-level server_state_duration_us /
+// initial_sync_duration_us fields. Returns the zero value when the
+// adaptor was constructed without a tracker (legacy tests). Mirrors
+// rippled's NetworkOPsImp::StateAccounting::json.
+func (a *Adaptor) StateAccounting() StateAccountingSnapshot {
 	a.mu.Lock()
 	sa := a.stateAcct
 	a.mu.Unlock()
 	if sa == nil {
-		return nil
+		return StateAccountingSnapshot{}
 	}
 	return sa.snapshot()
 }

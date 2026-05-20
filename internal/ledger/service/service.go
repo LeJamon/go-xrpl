@@ -1361,7 +1361,7 @@ func (s *Service) GetTxQMetrics() txq.Metrics {
 	}
 	var txInLedger uint32
 	if s.openLedger != nil {
-		txInLedger = uint32(s.openLedger.TxCount())
+		txInLedger = s.openLedger.TxCount()
 	}
 	return s.txQueue.GetMetrics(txInLedger)
 }

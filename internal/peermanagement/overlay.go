@@ -318,8 +318,14 @@ type Overlay struct {
 	// pingTimeoutDisconnects counts peers torn down because the oldest
 	// in-flight ping aged past pingTimeout. Mirrors rippled's
 	// fail("Ping Timeout") at PeerImp.cpp:731-736. Surfaced via
-	// server_info as peer_disconnects_resources — ping-timeout is the
-	// goxrpl analogue of rippled's resource-charge-driven drops.
+	// server_info as peer_disconnects_resources as a stand-in: in
+	// rippled that field comes from peerDisconnectsCharges_, bumped
+	// only by PeerImp::charge() when a Resource::Charge exceeds budget
+	// (PeerImp.cpp:358); ping timeouts there go through PeerImp::close
+	// and increment the plain peerDisconnects_. goxrpl has no
+	// ResourceManager yet, so ping-timeout is the closest available
+	// "involuntary drop" signal — replace with a real charge counter
+	// once that subsystem lands.
 	pingTimeoutDisconnects atomic.Uint64
 
 	// peerDisconnects counts every peer torn down for any reason.
@@ -1325,10 +1331,12 @@ func (o *Overlay) PeerDisconnects() uint64 {
 	return o.peerDisconnects.Load()
 }
 
-// PeerDisconnectsResources returns the cumulative count of peers torn
-// down for resource-related reasons (ping timeout in goxrpl, which is
-// the analogue of rippled's resource-charge threshold drop). Surfaced
-// via server_info.peer_disconnects_resources.
+// PeerDisconnectsResources returns the count of peers torn down for
+// involuntary, infrastructure-driven reasons. Surfaced via
+// server_info.peer_disconnects_resources. Until goxrpl grows a
+// ResourceManager analog of rippled's Resource::Charge, this
+// returns the ping-timeout drop count as a stand-in — see the
+// pingTimeoutDisconnects field doc for the semantic gap.
 func (o *Overlay) PeerDisconnectsResources() uint64 {
 	return o.pingTimeoutDisconnects.Load()
 }
