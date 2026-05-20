@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -62,12 +64,14 @@ func (m *mockLedgerServiceServerInfo) GetCurrentFees() (baseFee, reserveBase, re
 
 func (m *mockLedgerServiceServerInfo) GetServerInfo() types.LedgerServerInfo {
 	return types.LedgerServerInfo{
-		Standalone:          m.standalone,
-		OpenLedgerSeq:       m.currentLedgerIndex,
-		ClosedLedgerSeq:     m.closedLedgerIndex,
-		ValidatedLedgerSeq:  m.validatedLedgerIndex,
-		CompleteLedgers:     m.serverInfo.CompleteLedgers,
-		ValidatedLedgerHash: m.serverInfo.ValidatedLedgerHash,
+		Standalone:               m.standalone,
+		OpenLedgerSeq:            m.currentLedgerIndex,
+		ClosedLedgerSeq:          m.closedLedgerIndex,
+		ClosedLedgerCloseTime:    m.serverInfo.ClosedLedgerCloseTime,
+		ValidatedLedgerSeq:       m.validatedLedgerIndex,
+		ValidatedLedgerHash:      m.serverInfo.ValidatedLedgerHash,
+		ValidatedLedgerCloseTime: m.serverInfo.ValidatedLedgerCloseTime,
+		CompleteLedgers:          m.serverInfo.CompleteLedgers,
 	}
 }
 
@@ -1032,4 +1036,185 @@ func TestServerInfoWithParams(t *testing.T) {
 			assert.Contains(t, resp, "info")
 		})
 	}
+}
+
+// TestServerInfo_DynamicMetrics_FromHooks confirms #480: server_info
+// surfaces live values from the TxQ, peer, and state-accounting hooks
+// instead of the previous hardcoded zeros / placeholders.
+func TestServerInfo_DynamicMetrics_FromHooks(t *testing.T) {
+	mock := newMockLedgerServiceServerInfo()
+	// Use a recent ripple-epoch close time so the age computation is
+	// non-zero but well under the high-age threshold.
+	nowUnix := time.Now().Unix()
+	closeRippleEpoch := nowUnix - protocol.RippleEpochUnix - 5
+	mock.serverInfo.ValidatedLedgerSeq = 100
+	mock.serverInfo.ClosedLedgerSeq = 101
+	mock.serverInfo.ValidatedLedgerCloseTime = closeRippleEpoch
+	mock.serverInfo.ClosedLedgerCloseTime = closeRippleEpoch + 1
+
+	services := servicesForServerInfo(mock)
+	services.TxQMetrics = func() types.TxQServerMetrics {
+		return types.TxQServerMetrics{
+			JqTransOverflow:       7,
+			ReferenceFeeLevel:     256,
+			MinProcessingFeeLevel: 512,
+			OpenLedgerFeeLevel:    1024,
+		}
+	}
+	services.PeerDisconnects = func() (uint64, uint64) { return 42, 9 }
+	services.StateAccounting = func() types.StateAccountingSnapshot {
+		return types.StateAccountingSnapshot{
+			Modes: map[string]types.StateAccountingEntry{
+				"disconnected": {Transitions: 1, DurationUs: 1500},
+				"connected":    {Transitions: 2, DurationUs: 2500},
+				"syncing":      {Transitions: 1, DurationUs: 750},
+				"tracking":     {Transitions: 1, DurationUs: 500},
+				"full":         {Transitions: 1, DurationUs: 9000},
+			},
+			CurrentDurationUs: 4321,
+			InitialSyncUs:     1234,
+		}
+	}
+
+	method := &handlers.ServerInfoMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	result, rpcErr := method.Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+	require.NotNil(t, result)
+
+	raw, err := json.Marshal(result)
+	require.NoError(t, err)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(raw, &resp))
+	info := resp["info"].(map[string]interface{})
+
+	assert.Equal(t, "7", info["jq_trans_overflow"])
+	assert.Equal(t, "42", info["peer_disconnects"])
+	assert.Equal(t, "9", info["peer_disconnects_resources"])
+
+	// Top-level companions of state_accounting reflect the tracker's
+	// current-state and initial-sync values, not process uptime.
+	assert.Equal(t, "4321", info["server_state_duration_us"])
+	assert.Equal(t, "1234", info["initial_sync_duration_us"])
+
+	// human-mode load_factor is the float ratio openLedgerFeeLevel/loadBase.
+	assert.InDelta(t, 4.0, info["load_factor"].(float64), 0.0001)
+	// load_factor_fee_escalation / _queue are emitted in human mode
+	// only when they diverge from the reference level (M4).
+	assert.InDelta(t, 4.0, info["load_factor_fee_escalation"].(float64), 0.0001)
+	assert.InDelta(t, 2.0, info["load_factor_fee_queue"].(float64), 0.0001)
+
+	sa := info["state_accounting"].(map[string]interface{})
+	full := sa["full"].(map[string]interface{})
+	assert.Equal(t, "9000", full["duration_us"])
+	assert.Equal(t, "1", full["transitions"])
+	disconnected := sa["disconnected"].(map[string]interface{})
+	assert.Equal(t, "1500", disconnected["duration_us"])
+}
+
+// TestServerInfo_MachineMode_LoadFactorFees verifies the server_state
+// (machine) variant surfaces the load_factor_fee_* triple from TxQ
+// metrics, not the pre-#480 hardcoded 256s.
+func TestServerInfo_MachineMode_LoadFactorFees(t *testing.T) {
+	mock := newMockLedgerServiceServerInfo()
+	services := servicesForServerInfo(mock)
+	services.TxQMetrics = func() types.TxQServerMetrics {
+		return types.TxQServerMetrics{
+			JqTransOverflow:       0,
+			ReferenceFeeLevel:     256,
+			MinProcessingFeeLevel: 768,
+			OpenLedgerFeeLevel:    2048,
+		}
+	}
+
+	method := &handlers.ServerStateMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	result, rpcErr := method.Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+
+	raw, _ := json.Marshal(result)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(raw, &resp))
+	state := resp["state"].(map[string]interface{})
+
+	// Machine mode emits these as JSON numbers — unmarshal as float64.
+	assert.EqualValues(t, 2048, state["load_factor_fee_escalation"])
+	assert.EqualValues(t, 768, state["load_factor_fee_queue"])
+	assert.EqualValues(t, 256, state["load_factor_fee_reference"])
+	assert.EqualValues(t, 2048, state["load_factor"])
+	assert.EqualValues(t, 256, state["load_base"])
+}
+
+// TestServerInfo_ValidatedLedgerAge_HighAgeThreshold guards against
+// regressing the threshold below rippled's 1,000,000-second limit
+// (NetworkOPs.cpp:2951). A 1-hour-old ledger must report an actual
+// age, not the threshold-clamped 0.
+func TestServerInfo_ValidatedLedgerAge_HighAgeThreshold(t *testing.T) {
+	mock := newMockLedgerServiceServerInfo()
+	nowUnix := time.Now().Unix()
+	mock.serverInfo.ValidatedLedgerSeq = 5
+	mock.serverInfo.ValidatedLedgerCloseTime = nowUnix - protocol.RippleEpochUnix - 3600
+
+	services := servicesForServerInfo(mock)
+	method := &handlers.ServerInfoMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	result, rpcErr := method.Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+	raw, _ := json.Marshal(result)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(raw, &resp))
+	info := resp["info"].(map[string]interface{})
+	validated := info["validated_ledger"].(map[string]interface{})
+
+	age, ok := validated["age"].(float64)
+	require.True(t, ok)
+	assert.InDelta(t, 3600, age, 5, "1-hour-old ledger must surface its real age; rippled clamps only above 1,000,000s")
+}
+
+// TestServerInfo_ClosedLedgerAge_OmittedOnFutureCloseTime mirrors
+// rippled NetworkOPs.cpp:2962-2969: when the closed ledger's close
+// time is in the future (clock skew), `age` is omitted from the
+// closed_ledger object rather than emitted as 0.
+func TestServerInfo_ClosedLedgerAge_OmittedOnFutureCloseTime(t *testing.T) {
+	mock := newMockLedgerServiceServerInfo()
+	mock.serverInfo.ClosedLedgerSeq = 7
+	// 1 hour in the future
+	mock.serverInfo.ClosedLedgerCloseTime = time.Now().Unix() - protocol.RippleEpochUnix + 3600
+
+	services := servicesForServerInfo(mock)
+	method := &handlers.ServerInfoMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	result, rpcErr := method.Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+	raw, _ := json.Marshal(result)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(raw, &resp))
+	info := resp["info"].(map[string]interface{})
+	closed := info["closed_ledger"].(map[string]interface{})
+	_, hasAge := closed["age"]
+	assert.False(t, hasAge, "closed_ledger.age must be omitted when close_time is in the future")
 }
