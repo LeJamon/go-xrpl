@@ -1,6 +1,8 @@
 package rcl
 
 import (
+	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -441,11 +443,20 @@ func (dt *DisputeTracker) UpdateOurVote(percentTime int, proposing bool, parms c
 	defer dt.mu.Unlock()
 
 	var changed []consensus.TxID
+	// Debug instrumentation for #470 iter5 dispute-resolution diagnosis.
+	skipNoNays := 0
+	skipNoYays := 0
+	totalProcessed := 0
+	keepCount := 0
+	flipCount := 0
+	var samples []string
 	for txID, dispute := range dt.disputes {
 		if dispute.OurVote && dispute.Nays == 0 {
+			skipNoNays++
 			continue
 		}
 		if !dispute.OurVote && dispute.Yays == 0 {
+			skipNoYays++
 			continue
 		}
 
@@ -462,27 +473,47 @@ func (dt *DisputeTracker) UpdateOurVote(percentTime int, proposing bool, parms c
 		}
 
 		var newVote bool
+		var weight int
+		ownContribution := 0
 		if proposing {
-			ownContribution := 0
 			if dispute.OurVote {
 				ownContribution = 100
 			}
-			weight := (dispute.Yays*100 + ownContribution) /
+			weight = (dispute.Yays*100 + ownContribution) /
 				(dispute.Yays + dispute.Nays + 1)
 			newVote = weight > requiredPct
 		} else {
-			// Observer: just recognize the majority, don't try to
-			// add our own weight.
 			newVote = dispute.Yays > dispute.Nays
 		}
 
+		totalProcessed++
+		if len(samples) < 5 {
+			samples = append(samples, fmt.Sprintf("tx=%x our=%v yays=%d nays=%d weight=%d req=%d new=%v state=%d",
+				txID[:4], dispute.OurVote, dispute.Yays, dispute.Nays, weight, requiredPct, newVote, dispute.AvalancheState))
+		}
+
 		if newVote == dispute.OurVote {
+			keepCount++
 			dispute.CurrentVoteCounter++
 			continue
 		}
+		flipCount++
 		dispute.CurrentVoteCounter = 0
 		dispute.OurVote = newVote
 		changed = append(changed, txID)
+	}
+	if len(dt.disputes) > 0 || totalProcessed > 0 {
+		slog.Info("dispute tracker UpdateOurVote",
+			"t", "consensus", "event", "dispute-vote",
+			"total_disputes", len(dt.disputes),
+			"skip_no_nays", skipNoNays,
+			"skip_no_yays", skipNoYays,
+			"processed", totalProcessed,
+			"kept", keepCount,
+			"flipped", flipCount,
+			"proposing", proposing,
+			"percent_time", percentTime,
+			"samples", samples)
 	}
 	return changed
 }

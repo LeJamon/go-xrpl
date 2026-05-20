@@ -400,25 +400,34 @@ func (t *ApplyStateTable) applyImpl(isDryRun bool) (*Metadata, error) {
 		}
 	}
 
-	// Thread-only owners: rippled ApplyStateTable.cpp:269-274 (mods
-	// table rawReplace'd into the view).
+	// Thread-only owners: rippled ApplyStateTable.cpp:552-582 (threadItem).
+	// rippled's threadItem creates an AffectedNode entry for the threaded
+	// SLE ONLY when the previous PreviousTxnID is non-zero (line 560:
+	// `if (!prevTxID.isZero())`). Brand-new owner accounts whose
+	// PreviousTxnID has never been set get their SLE rewritten in the
+	// Mods table (rawReplace into view) but DON'T appear in metadata.
+	//
+	// Issue #470: goxrpl was unconditionally emitting a bare ModifiedNode
+	// for every threaded owner, including those whose PreviousTxnID was
+	// zero. Those extra leaves inflated every tx's meta blob → tx+meta
+	// SHAMap root diverged from rippled → fork at the first ledger
+	// carrying transactions that touched fresh owner accounts.
 	for key, owner := range t.threadOnlyOwners {
-		if _, alreadyEmitted := t.items[key]; alreadyEmitted {
-			if t.items[key].Action != ActionCache {
+		if entry, alreadyEmitted := t.items[key]; alreadyEmitted {
+			if entry.Action != ActionCache {
 				continue
 			}
 		}
-		node := AffectedNode{
-			NodeType:        "ModifiedNode",
-			LedgerEntryType: owner.EntryType,
-			LedgerIndex:     strings.ToUpper(hex.EncodeToString(key[:])),
-		}
-		// OLD prev fields, per rippled ApplyStateTable.cpp:570-571.
 		if owner.OldPreviousTxnID != ([32]byte{}) {
-			node.PreviousTxnID = strings.ToUpper(hex.EncodeToString(owner.OldPreviousTxnID[:]))
-			node.PreviousTxnLgrSeq = owner.OldPreviousTxnLgrSeq
+			node := AffectedNode{
+				NodeType:         "ModifiedNode",
+				LedgerEntryType:  owner.EntryType,
+				LedgerIndex:      strings.ToUpper(hex.EncodeToString(key[:])),
+				PreviousTxnID:    strings.ToUpper(hex.EncodeToString(owner.OldPreviousTxnID[:])),
+				PreviousTxnLgrSeq: owner.OldPreviousTxnLgrSeq,
+			}
+			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
 		}
-		metadata.AffectedNodes = append(metadata.AffectedNodes, node)
 
 		if !isDryRun {
 			if err := t.base.Update(keylet.Keylet{Key: key}, owner.Updated); err != nil {
@@ -489,6 +498,16 @@ func (t *ApplyStateTable) applyThreading() {
 			t.threadOwners(w.entry.Current, entryType, fixCheckThreading)
 
 		case ActionModify:
+			// Skip threading when the apply code wrote back the same bytes
+			// (no-op Update). Mirrors rippled ApplyStateTable.cpp:156-157,
+			// which skips ModifiedNode emission entirely when
+			// *curNode == *origNode. Without this gate, threading mutates
+			// entry.Current with PreviousTxnID/PreviousTxnLgrSeq and the
+			// bytes.Equal(Original, Current) skip in the meta loop fails,
+			// producing a ghost ModifiedNode.
+			if bytes.Equal(w.entry.Original, w.entry.Current) {
+				continue
+			}
 			// Thread the modified entry itself
 			if isThreadedType(entryType, fixPreviousTxnID) {
 				_, _, newData, changed := threadItem(w.entry.Current, t.txHash, t.txSeq)
@@ -705,9 +724,46 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 		if err := currEntry.Decode(current); err != nil {
 			return node, err
 		}
-		node.PreviousTxnID, node.PreviousTxnLgrSeq = origEntry.PreviousTxn()
+		// PreviousTxnID/PreviousTxnLgrSeq are only emitted on ModifiedNode
+		// when the entry is a threaded type. Rippled gates this at
+		// STLedgerEntry::isThreadedType (libxrpl/protocol/STLedgerEntry.cpp:
+		// 90-105) — DirectoryNode/Amendments/FeeSettings/NegativeUNL/AMM are
+		// EXCLUDED from threading unless the fixPreviousTxnID amendment is
+		// enabled. Without this gate, goxrpl emits an extra ~36 bytes per
+		// dir-pagination modify (PreviousTxnID 32B + sfPreviousTxnLgrSeq 4B +
+		// the two field markers); the tx-tree leaf bytes for that tx then
+		// diverge from rippled byte-for-byte, transaction_hash diverges,
+		// ledger_hash diverges, account_hash matches — exactly the iter7/8
+		// stall pattern at vseq=7.
+		// Default fixPreviousTxnID to false when rules is nil — this matches
+		// rippled's pre-amendment behaviour (DirectoryNode is NOT threaded,
+		// so its ModifiedNode meta gets no PreviousTxnID/PreviousTxnLgrSeq).
+		// Production callers always set rules at NewApplyStateTable; tests
+		// that build a bare table get the safe rippled-default classification.
+		fixPreviousTxnID := false
+		if t.rules != nil {
+			fixPreviousTxnID = t.rules.Enabled(amendment.FeatureFixPreviousTxnID)
+		}
+		if isThreadedType(entryType, fixPreviousTxnID) {
+			node.PreviousTxnID, node.PreviousTxnLgrSeq = origEntry.PreviousTxn()
+		}
 		currEntry.EmitPreviousFields(origEntry, node.PreviousFields)
 		currEntry.EmitFinalFields(node.FinalFields)
+		// Detect rippled's "prevs holds an STI_NOTPRESENT entry" case:
+		// any sMD_ChangeOrig-eligible field that is present in cur but
+		// absent in orig. EmitFinalFields populates with all present
+		// non-default-meta-filtered cur fields; the same call on orig
+		// gives us orig's present-field set. The set-difference identifies
+		// absent→present fields. When non-empty, rippled emits an empty
+		// PreviousFields object (`E6 E1`) and goxrpl must match.
+		origFinalProbe := make(map[string]any)
+		origEntry.EmitFinalFields(origFinalProbe)
+		for name := range node.FinalFields {
+			if _, hadInOrig := origFinalProbe[name]; !hadInOrig {
+				node.EmitEmptyPreviousFields = true
+				break
+			}
+		}
 		if len(node.PreviousFields) == 0 {
 			node.PreviousFields = nil
 		}

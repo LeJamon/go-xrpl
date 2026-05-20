@@ -1,6 +1,8 @@
 package openledger
 
 import (
+	"fmt"
+
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -44,6 +46,14 @@ type ApplyConfig struct {
 	ReserveIncrement uint64
 	LedgerSequence   uint32
 	NetworkID        uint32
+	// ParentCloseTime is the close time of the parent ledger in
+	// Ripple-epoch seconds. Pseudo-transactions like EnableAmendment
+	// stamp this onto sfMajorities entries (Change.cpp:309-310), so
+	// leaving it at 0 forks the AmendmentsSLE at the first flag
+	// ledger that records a majority. inbound/replay_delta.go:584 sets
+	// the equivalent EngineConfig field; this struct lets the
+	// consensus-build path do the same.
+	ParentCloseTime  uint32
 	Logger           xrpllog.Logger
 	// SkipSignatureVerification forces signature checks off on every
 	// pass (mirrors AcceptLedger's standalone path where
@@ -101,7 +111,7 @@ type ApplyConfig struct {
 //
 // Shared by ApplyTxs's per-pass inner loop and OpenLedger.Submit so the
 // success/tec/retry classification lives in exactly one place.
-func applyAndClassify(view *ledger.Ledger, bp *tx.BlockProcessor, transaction tx.Transaction, blob []byte, certainRetry bool, mode Mode) Result {
+func applyAndClassify(view *ledger.Ledger, bp *tx.BlockProcessor, transaction tx.Transaction, blob []byte, certainRetry bool, mode Mode, logger xrpllog.Logger) Result {
 	result, applyErr := bp.ApplyTransaction(transaction, blob)
 	if applyErr != nil {
 		return ResultFailure
@@ -109,13 +119,23 @@ func applyAndClassify(view *ledger.Ledger, bp *tx.BlockProcessor, transaction tx
 	engineResult := result.ApplyResult.Result
 	switch {
 	case engineResult.IsSuccess():
-		view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
+		if err := view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob); err != nil {
+			logger.Warn("AddTransactionWithMeta failed for committed tx (tree out of sync with state)",
+				"hash", fmt.Sprintf("%x", result.Hash[:8]),
+				"ter", engineResult.String(),
+				"err", err)
+		}
 		return ResultSuccess
 	case engineResult.IsTec():
 		if mode == BuildLedgerMode && certainRetry {
 			return ResultRetry
 		}
-		view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
+		if err := view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob); err != nil {
+			logger.Warn("AddTransactionWithMeta failed for committed tec tx (tree out of sync with state)",
+				"hash", fmt.Sprintf("%x", result.Hash[:8]),
+				"ter", engineResult.String(),
+				"err", err)
+		}
 		return ResultSuccess
 	case engineResult.ShouldRetry():
 		return ResultRetry
@@ -136,6 +156,7 @@ func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte
 		ReserveIncrement:          cfg.ReserveIncrement,
 		LedgerSequence:            cfg.LedgerSequence,
 		NetworkID:                 cfg.NetworkID,
+		ParentCloseTime:           cfg.ParentCloseTime,
 		Logger:                    cfg.Logger,
 		SkipSignatureVerification: cfg.SkipSignatureVerification,
 		Rules:                     cfg.Rules,
@@ -145,7 +166,11 @@ func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte
 	}
 	engine := tx.NewEngine(view, engineConfig)
 	bp := tx.NewBlockProcessor(engine)
-	return applyAndClassify(view, bp, transaction, blob, retry, cfg.Mode)
+	logger := cfg.Logger
+	if logger == nil {
+		logger = xrpllog.Discard()
+	}
+	return applyAndClassify(view, bp, transaction, blob, retry, cfg.Mode, logger)
 }
 
 func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg ApplyConfig) error {
@@ -182,6 +207,7 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 			ReserveIncrement:          cfg.ReserveIncrement,
 			LedgerSequence:            cfg.LedgerSequence,
 			NetworkID:                 cfg.NetworkID,
+			ParentCloseTime:           cfg.ParentCloseTime,
 			Logger:                    cfg.Logger,
 			SkipSignatureVerification: skipSig,
 			Rules:                     cfg.Rules,
@@ -189,7 +215,18 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 		if certainRetry {
 			engineConfig.ApplyFlags |= tx.TapRETRY
 		}
-		return tx.NewBlockProcessor(tx.NewEngine(view, engineConfig))
+		engine := tx.NewEngine(view, engineConfig)
+		// Issue #470: the per-pass engine's txCount starts at 0. Without
+		// re-seeding from the view's current tx count, txs committed on a
+		// retry pass would re-use TxIndex values already assigned to txs
+		// from the initial pass, producing duplicate TransactionIndex
+		// values in metadata — observable as identical TxIndex on
+		// different txs in the same ledger, which forks the SHAMap
+		// tx+meta root from rippled. Mirrors rippled OpenView::txCount()
+		// = baseTxCount_ + txs_.size() where baseTxCount_ accumulates
+		// across the build's apply passes.
+		engine.SetBaseTxCount(view.TxCount())
+		return tx.NewBlockProcessor(engine)
 	}
 
 	// Initial single pass over txs (OpenLedger.h:220-238). retry=true on
@@ -202,7 +239,7 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 		if view.TxExists(ptx.Hash) {
 			continue
 		}
-		switch applyAndClassify(view, bp, parsed[i], ptx.Blob, true, cfg.Mode) {
+		switch applyAndClassify(view, bp, parsed[i], ptx.Blob, true, cfg.Mode, logger) {
 		case ResultRetry:
 			retrySet = append(retrySet, i)
 		}
@@ -226,7 +263,7 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 			if parsed[idx] == nil {
 				continue
 			}
-			switch applyAndClassify(view, bp, parsed[idx], ptx.Blob, certainRetry, cfg.Mode) {
+			switch applyAndClassify(view, bp, parsed[idx], ptx.Blob, certainRetry, cfg.Mode, logger) {
 			case ResultSuccess:
 				changes++
 			case ResultRetry:
