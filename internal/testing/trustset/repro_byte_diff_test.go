@@ -97,11 +97,14 @@ func TestReproByteDiff_DirPagination(t *testing.T) {
 // run is in $CLAUDE_JOB_DIR/rippled_repro_output.json. The first byte
 // where they differ identifies the metadata-serialization bug.
 func TestReproByteDiff_ModifyExistingTrustLine(t *testing.T) {
-	// Same seeds as rippled standalone produced.
-	const REBSeed = "ssT3VWw382SXrJQ5N2ebAoucnTRSU"
-	const R4Seed = "snku3scoC3i3DZWnZDwbMm7mMRLQP"
+	// Same seeds as the rippled v2.6.2 standalone produced — see
+	// $CLAUDE_JOB_DIR/rippled_modify_meta.json. Pre-vote (no amendments)
+	// to mirror the soak network's state.
+	const REBSeed = "shutW9X6jm9Uo3eTPkhweAcv8cYeP"
+	const R4Seed = "sa38ZRR4x9dX64iQQh7mcfVn66Ba5"
 
 	env := jtx.NewTestEnv(t)
+	disableAllAmendmentsBD(env)
 
 	reb := jtx.NewAccountFromSeed("reb", REBSeed)
 	r4 := jtx.NewAccountFromSeed("r4", R4Seed)
@@ -177,4 +180,47 @@ func TestReproByteDiff_ModifyExistingTrustLine(t *testing.T) {
 	if err != nil {
 		t.Logf("ForEachTransaction err: %v", err)
 	}
+}
+
+// TestReproByteDiff_MultiTrustSetThreading reproduces 3 sequential TrustSets
+// from the same source in the same ledger. Mirrors
+// $CLAUDE_JOB_DIR/rippled_multi_ts.json (rippled v2.6.2 standalone).
+// Verifies per-tx PreviousTxnID threading on the source AccountRoot.
+func TestReproByteDiff_MultiTrustSetThreading(t *testing.T) {
+	const srcSeed = "shihoZLAj68B7wLvXcnQehHGEuFpH"
+	issuerSeeds := []string{
+		"spuUhpWSH9PQwY52W4m7Gn3YKwVcv",
+		"snFN35cU8EKc6oy6Vc6B7KkfvkmSd",
+		"snSYRBE4UTbmYqXCVgk7YS7PrhvsM",
+	}
+
+	env := jtx.NewTestEnv(t)
+	disableAllAmendmentsBD(env)
+
+	src := jtx.NewAccountFromSeed("src", srcSeed)
+	issuers := make([]*jtx.Account, 3)
+	for i := 0; i < 3; i++ {
+		issuers[i] = jtx.NewAccountFromSeed(fmt.Sprintf("iss%d", i), issuerSeeds[i])
+	}
+
+	// Fund all with 50 XRP (matches rippled standalone setup).
+	for _, acc := range append([]*jtx.Account{src}, issuers...) {
+		env.FundAmountNoRipple(acc, 50_000_000_000)
+	}
+	env.Close()
+
+	// 3 sequential TrustSets from src in the same ledger (no env.Close between)
+	for i := 0; i < 3; i++ {
+		limit := tx.NewIssuedAmountFromFloat64(1000, "USD", issuers[i].Address)
+		r := env.Submit(TrustSet(src, limit).Build())
+		jtx.RequireTxSuccess(t, r)
+		if r.Metadata != nil {
+			mb, err := tx.SerializeMetadata(r.Metadata)
+			if err != nil {
+				t.Fatalf("SerializeMetadata TS%d: %v", i, err)
+			}
+			fmt.Printf("\nGOXRPL_MULTI_TS_%d_META_HEX (%d bytes): %s\n", i, len(mb), strings.ToUpper(hex.EncodeToString(mb)))
+		}
+	}
+	env.Close()
 }
