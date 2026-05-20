@@ -739,6 +739,21 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 		}
 		currEntry.EmitPreviousFields(origEntry, node.PreviousFields)
 		currEntry.EmitFinalFields(node.FinalFields)
+		// Detect rippled's "prevs holds an STI_NOTPRESENT entry" case:
+		// any sMD_ChangeOrig-eligible field that is present in cur but
+		// absent in orig. EmitFinalFields populates with all present
+		// non-default-meta-filtered cur fields; the same call on orig
+		// gives us orig's present-field set. The set-difference identifies
+		// absent→present fields. When non-empty, rippled emits an empty
+		// PreviousFields object (`E6 E1`) and goxrpl must match.
+		origFinalProbe := make(map[string]any)
+		origEntry.EmitFinalFields(origFinalProbe)
+		for name := range node.FinalFields {
+			if _, hadInOrig := origFinalProbe[name]; !hadInOrig {
+				node.EmitEmptyPreviousFields = true
+				break
+			}
+		}
 		if len(node.PreviousFields) == 0 {
 			node.PreviousFields = nil
 		}

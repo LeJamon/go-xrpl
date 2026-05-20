@@ -93,22 +93,21 @@ func MetadataToMap(meta *Metadata) map[string]any {
 				innerNode["PreviousTxnLgrSeq"] = node.PreviousTxnLgrSeq
 			}
 
-			hasFinal := node.FinalFields != nil && len(node.FinalFields) > 0
-			if hasFinal {
+			if node.FinalFields != nil && len(node.FinalFields) > 0 {
 				innerNode["FinalFields"] = node.FinalFields
 			}
-			// Rippled 2.6.2 ApplyStateTable.cpp Action::modify ALWAYS emits
-			// sfPreviousFields alongside sfFinalFields, even when no field
-			// changed (verified via diff-smoke-rippled v2.6.2 standalone:
-			// the 33-TS pagination meta hex contains E6 E1 — an empty
-			// PreviousFields object — at offset 139 of the ModifiedNode
-			// DirectoryNode whose only delta was sfIndexes (sMD_Never).
-			// goxrpl was omitting that 2-byte marker per occurrence; the
-			// tx-tree leaf hash then diverged → fork. Thread-only emissions
-			// (no FinalFields) keep their PreviousFields-absent shape.
+			// Mirror rippled's ApplyStateTable Action::modify behavior:
+			// when any sMD_ChangeOrig-eligible field went absent→present in
+			// the modify (e.g., dir-page IndexNext/IndexPrevious set on
+			// pagination), rippled's `prevs` STObject gains an
+			// STI_NOTPRESENT entry that makes `prevs.empty()` false. The
+			// gate `if (!prevs.empty()) emplace_back(prevs)` then fires and
+			// the binary contains an `E6 E1` empty-PreviousFields marker
+			// even though no orig value is recorded. buildModifiedNode
+			// detects that case and sets EmitEmptyPreviousFields=true.
 			if node.PreviousFields != nil && len(node.PreviousFields) > 0 {
 				innerNode["PreviousFields"] = node.PreviousFields
-			} else if hasFinal && node.NodeType == "ModifiedNode" {
+			} else if node.EmitEmptyPreviousFields {
 				innerNode["PreviousFields"] = map[string]any{}
 			}
 			if node.NewFields != nil && len(node.NewFields) > 0 {
