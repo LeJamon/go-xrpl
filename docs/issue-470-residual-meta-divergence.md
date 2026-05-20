@@ -97,3 +97,46 @@ There is no current tooling for this — the closest is
   split.
 - `953e56f` — instrument `DisputeTracker.UpdateOurVote`.
 - `0572dc3` — capture iter7 seq 8 ledger snapshot for diff investigation.
+
+## Investigated and ruled out (do NOT re-try without rippled byte-diff)
+
+- **Thread-only ModifiedNode FinalFields** (commit `57dfd55`, reverted in
+  `ef5cf75`). The hypothesis was that goxrpl's bare thread-only emission
+  (just `LedgerEntryType` / `LedgerIndex` / `PreviousTxnID` /
+  `PreviousTxnLgrSeq`) was a structural subset of rippled's full
+  emission. Wrong: rippled's `threadItem` (ApplyStateTable.cpp:552-582)
+  creates the meta entry via `meta.getAffectedNode(sle, sfModifiedNode)`
+  and ONLY sets `sfPreviousTxnID` + `sfPreviousTxnLgrSeq`. If the SLE is
+  Action::cache in the main `items_` table, the apply loop at line 142
+  hits `continue` and never adds FinalFields or PreviousFields. So
+  goxrpl's pre-fix bare emission was already rippled-faithful.
+
+  Iter8 with `57dfd55` added ~48 bytes per typical TrustSet meta_blob
+  (visible in meta-size histogram: pre-fix `{460:1, 614:1, 619:31,
+  624:6, 628:16, 741:1}` → post-fix `{460:1, 662:1, 667:31, 672:25,
+  676:9, 789:1}`), confirming the fix DID emit additional bytes — but
+  hash still differed because the additional bytes were spurious vs
+  rippled. The reverted commit is in branch history; do not re-apply.
+
+## Updated next-step hypothesis
+
+Both the thread-only path and the main ModifiedNode path are now
+ruled out at the structural level. The remaining meta-bytes divergence
+is likely:
+
+1. **Binary-encoding order or framing** of a specific field type
+   (e.g., a Vector256 with non-canonical inner ordering).
+2. **A field present in goxrpl's serialized SLE but absent in
+   rippled's**, or vice versa — likely a default-value-handling
+   asymmetry on serialization (NOT meta emission).
+3. **CreatedNode's NewFields** — we never inspected if these are
+   byte-faithful. CreatedNode meta is structurally `LedgerEntryType +
+   LedgerIndex + NewFields(SLE serialization)`. If the SLE's own
+   serializer omits/includes a default-value field differently from
+   rippled, the CreatedNode bytes diverge even though the in-memory
+   state matches.
+
+Suggestion: byte-diff the `meta_blob` for one specific tx (e.g., the
+2-AffectedNode "modify existing trust line" tx in iter7 — fewest
+moving parts) against rippled. The fewer nodes, the easier to bisect
+the offending field.
