@@ -729,16 +729,29 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 		return SameSequence, pubKey, parsedBlob.Sequence
 	}
 	if validUntil.Before(now) || validUntil.Equal(now) {
-		// Even an expired list still updates the publisher entry so
-		// the RPC can surface "expired" — but the validators do NOT
-		// flow into the trusted union (status is StatusExpired).
-		applied := a.applyAcceptedLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now, version, manifestBytes, blob, signature)
-		_ = applied // applyAcceptedLocked sets Status; trusted set recompute below skips expired.
+		// Expired ingest runs the SAME populate path as accepted in
+		// rippled: ValidatorList.cpp:1193-1295 — the local `accepted`
+		// boolean is true for both ListDisposition::accepted AND
+		// ListDisposition::expired, so the populate block writes
+		// publisher.list and publisher.manifests, and the call to
+		// updatePublisherList at line 1294 seeds embedded validator
+		// manifests into validatorManifests_ (line 1117-1133). The only
+		// runtime differences vs accepted are the final PublisherStatus
+		// (expired vs available) and that the trusted-set recompute
+		// skips non-available publishers (see recomputeAndEmitLocked:
+		// `s.Status != StatusAvailable` filter).
+		//
+		// We clear current.Validators after the populate so the RPC
+		// `validators` view does not surface stale keys under
+		// `available=false`. rippled keeps publisher.list populated for
+		// expired and relies on status filtering instead, but the
+		// effective trusted-set outcome is the same.
+		//
+		// removePublisherList(StatusExpired) at ValidatorList.cpp:1529-1542
+		// is invoked from updateTrusted (line 1999) when a previously-
+		// available list times out at ledger close — NOT from applyList.
+		a.applyAcceptedLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now, version, manifestBytes, blob, signature)
 		current.Status = StatusExpired
-		// Mirrors rippled removePublisherList(StatusExpired) at
-		// ValidatorList.cpp:1529-1542 — on expiry the publisher's
-		// validator list is cleared. Without this the `validators`
-		// RPC would show stale keys under `available=false`.
 		current.Validators = nil
 		a.recomputeAndEmitLocked()
 		return Expired, pubKey, parsedBlob.Sequence
