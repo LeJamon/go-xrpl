@@ -426,24 +426,6 @@ func (t *ApplyStateTable) applyImpl(isDryRun bool) (*Metadata, error) {
 				PreviousTxnID:    strings.ToUpper(hex.EncodeToString(owner.OldPreviousTxnID[:])),
 				PreviousTxnLgrSeq: owner.OldPreviousTxnLgrSeq,
 			}
-			// rippled ApplyStateTable.cpp:222-233 — the apply loop's
-			// ModifiedNode branch unconditionally builds an sfFinalFields
-			// STObject from the curNode using sMD_Always | sMD_ChangeNew
-			// after threadItem fires. Without FinalFields here, goxrpl's
-			// bare thread-only emission is a STRUCTURAL subset of what
-			// rippled writes — every leaf hash for that tx diverges,
-			// transaction_hash diverges, ledger_hash diverges, no quorum.
-			// Populate FinalFields from the post-thread SLE bytes so the
-			// tx-tree leaf bytes match rippled's.
-			if currEntry := ledgerfields.New(owner.EntryType); currEntry != nil {
-				if err := currEntry.Decode(owner.Updated); err == nil {
-					ff := make(map[string]any)
-					currEntry.EmitFinalFields(ff)
-					if len(ff) > 0 {
-						node.FinalFields = ff
-					}
-				}
-			}
 			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
 		}
 
