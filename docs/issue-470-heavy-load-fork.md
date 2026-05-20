@@ -41,6 +41,48 @@ empty ledgers (mode=wrongLedger, tx_set=0000…, tx_count=0), but those
 locally-built ledgers don't propagate validations on the canonical
 chain.
 
+## Concrete smoking gun in goxrpl's round-summary
+
+For iter13 L41, goxrpl-1's round-summary log shows
+`tx_count=98 tx_root=0000000000000000` *together*. Verified by
+running `shamap.New(TypeTransaction).Hash()` — the empty tx tree's
+root really is all-zeros for the TypeTransaction map. So `tx_root=0`
+means the tx tree is empty.
+
+Yet `state_root` differs from L40's `account_hash` (44B0CEBA… →
+E6198EC3…) and `total_coins` dropped by 171821 drops (≈ 1750 drops ×
+98 fees). So:
+
+- State WAS modified (98 fees burned).
+- Tx tree was NOT updated (zero leaves).
+
+That's a structural bug: somewhere in the apply path, fee/sequence
+commit and `AddTransactionWithMeta` are decoupled. The most likely
+suspects:
+
+1. `applyAndClassify` (`internal/ledger/openledger/apply.go:104-125`)
+   silently discards the return value of
+   `view.AddTransactionWithMeta(...)`. If that call returns
+   `ErrLedgerImmutable` or any other error during build, the tx is
+   dropped from the tree even though `engine.Apply` already committed
+   fee/state via the apply-state table.
+2. `commitPreclaimTec` path (`internal/tx/apply.go:265`): for
+   preclaim-tec on the final pass (TapRETRY=false), the recovery
+   apply-state table commits fee/sequence directly to `e.view`
+   *before* `AddTransactionWithMeta` is called by the caller. If
+   anything between the two calls flips the view's state, the tree
+   misses the entry. Worth confirming by logging the return of
+   `AddTransactionWithMeta` for one stall ledger.
+3. `TxMapHash()` is called after `Close()` — if `Close()` is the
+   thing that returns from the apply-loop-aware state but doesn't
+   surface the tree from a sandbox, the tree could legitimately be
+   empty in the closed ledger even though apply seemed to run.
+
+The fastest concrete next step is to instrument
+`applyAndClassify` to log every `AddTransactionWithMeta` return
+(error or not) and rerun the soak. The first non-nil error in a
+stall ledger is the bug.
+
 ## Likely bug locations
 
 1. **Per-tx apply ordering or canonical sort.** Both sides agree on

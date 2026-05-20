@@ -1,6 +1,8 @@
 package openledger
 
 import (
+	"fmt"
+
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -101,7 +103,7 @@ type ApplyConfig struct {
 //
 // Shared by ApplyTxs's per-pass inner loop and OpenLedger.Submit so the
 // success/tec/retry classification lives in exactly one place.
-func applyAndClassify(view *ledger.Ledger, bp *tx.BlockProcessor, transaction tx.Transaction, blob []byte, certainRetry bool, mode Mode) Result {
+func applyAndClassify(view *ledger.Ledger, bp *tx.BlockProcessor, transaction tx.Transaction, blob []byte, certainRetry bool, mode Mode, logger xrpllog.Logger) Result {
 	result, applyErr := bp.ApplyTransaction(transaction, blob)
 	if applyErr != nil {
 		return ResultFailure
@@ -109,13 +111,23 @@ func applyAndClassify(view *ledger.Ledger, bp *tx.BlockProcessor, transaction tx
 	engineResult := result.ApplyResult.Result
 	switch {
 	case engineResult.IsSuccess():
-		view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
+		if err := view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob); err != nil {
+			logger.Warn("AddTransactionWithMeta failed for committed tx (tree out of sync with state)",
+				"hash", fmt.Sprintf("%x", result.Hash[:8]),
+				"ter", engineResult.String(),
+				"err", err)
+		}
 		return ResultSuccess
 	case engineResult.IsTec():
 		if mode == BuildLedgerMode && certainRetry {
 			return ResultRetry
 		}
-		view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
+		if err := view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob); err != nil {
+			logger.Warn("AddTransactionWithMeta failed for committed tec tx (tree out of sync with state)",
+				"hash", fmt.Sprintf("%x", result.Hash[:8]),
+				"ter", engineResult.String(),
+				"err", err)
+		}
 		return ResultSuccess
 	case engineResult.ShouldRetry():
 		return ResultRetry
@@ -145,7 +157,11 @@ func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte
 	}
 	engine := tx.NewEngine(view, engineConfig)
 	bp := tx.NewBlockProcessor(engine)
-	return applyAndClassify(view, bp, transaction, blob, retry, cfg.Mode)
+	logger := cfg.Logger
+	if logger == nil {
+		logger = xrpllog.Discard()
+	}
+	return applyAndClassify(view, bp, transaction, blob, retry, cfg.Mode, logger)
 }
 
 func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg ApplyConfig) error {
@@ -213,7 +229,7 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 		if view.TxExists(ptx.Hash) {
 			continue
 		}
-		switch applyAndClassify(view, bp, parsed[i], ptx.Blob, true, cfg.Mode) {
+		switch applyAndClassify(view, bp, parsed[i], ptx.Blob, true, cfg.Mode, logger) {
 		case ResultRetry:
 			retrySet = append(retrySet, i)
 		}
@@ -237,7 +253,7 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 			if parsed[idx] == nil {
 				continue
 			}
-			switch applyAndClassify(view, bp, parsed[idx], ptx.Blob, certainRetry, cfg.Mode) {
+			switch applyAndClassify(view, bp, parsed[idx], ptx.Blob, certainRetry, cfg.Mode, logger) {
 			case ResultSuccess:
 				changes++
 			case ResultRetry:
