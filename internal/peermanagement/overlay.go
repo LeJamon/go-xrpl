@@ -321,7 +321,14 @@ type Overlay struct {
 	pingTimeoutDisconnects atomic.Uint64
 
 	// Network
-	listener net.Listener
+	// listenerMu guards listener: written once by startListener (called
+	// from Run before any concurrent reader exists). Read under RLock
+	// from ListenAddr and Stop (other goroutines). The reads in Run and
+	// acceptLoop are unlocked: Run's read at "if o.listener != nil" is
+	// in the same goroutine as the write, and acceptLoop is spawned via
+	// g.Go after the write returns, so happens-before applies.
+	listenerMu sync.RWMutex
+	listener   net.Listener
 
 	// Lifecycle
 	ctx    context.Context
@@ -614,10 +621,13 @@ func (o *Overlay) PeerProtocolAtLeast(peerID PeerID, major, minor uint16) bool {
 // caller needs the actual port to drive a peer connection — e.g.,
 // integration tests that wire two overlays together on localhost.
 func (o *Overlay) ListenAddr() string {
-	if o.listener == nil {
+	o.listenerMu.RLock()
+	l := o.listener
+	o.listenerMu.RUnlock()
+	if l == nil {
 		return ""
 	}
-	return o.listener.Addr().String()
+	return l.Addr().String()
 }
 
 // New creates a new Overlay with the provided options.
@@ -772,8 +782,11 @@ func (o *Overlay) Stop() error {
 	}
 
 	// Close listener
-	if o.listener != nil {
-		o.listener.Close()
+	o.listenerMu.RLock()
+	l := o.listener
+	o.listenerMu.RUnlock()
+	if l != nil {
+		l.Close()
 	}
 
 	// Stop discovery
@@ -804,10 +817,13 @@ func (o *Overlay) startListener() error {
 		return fmt.Errorf("overlay: build TLS cert: %w", err)
 	}
 
-	o.listener = peertls.NewListener(tcpListener, &peertls.Config{
+	l := peertls.NewListener(tcpListener, &peertls.Config{
 		CertPEM: certPEM,
 		KeyPEM:  keyPEM,
 	})
+	o.listenerMu.Lock()
+	o.listener = l
+	o.listenerMu.Unlock()
 	return nil
 }
 
