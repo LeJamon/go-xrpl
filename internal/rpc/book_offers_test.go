@@ -147,6 +147,21 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			expectedError: "Invalid taker_pays",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
+		{
+			// Mirrors rippled BookOffers.cpp:164-173 — taker must parse as
+			// base58 AccountID or invalid_field_error is returned.
+			name: "Invalid taker - not a base58 address",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{"currency": "XRP"},
+				"taker_gets": map[string]interface{}{
+					"currency": "USD",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"taker": "not-a-valid-address",
+			},
+			expectedError: "Invalid field 'taker'",
+			expectedCode:  types.RpcINVALID_PARAMS,
+		},
 	}
 
 	for _, tc := range tests {

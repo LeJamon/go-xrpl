@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -50,6 +51,13 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	}
 	if rpcErr := validateCurrency(takerGets.Currency); rpcErr != nil {
 		return nil, rpcErr
+	}
+
+	// Validate taker (base58 classic address). Matches rippled BookOffers.cpp:164-173.
+	if request.Taker != "" {
+		if _, _, err := addresscodec.DecodeClassicAddressToAccountID(request.Taker); err != nil {
+			return nil, types.RpcErrorInvalidField("taker")
+		}
 	}
 
 	// Determine ledger index to use
