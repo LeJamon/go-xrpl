@@ -608,14 +608,16 @@ func TestAggregator_ApplyList_Expired_ClearsValidators(t *testing.T) {
 	}
 }
 
-// TestAggregator_ApplyList_Expired_SkipsEmbeddedManifests pins the
+// TestAggregator_ApplyList_Expired_SeedsEmbeddedManifests pins the
 // rippled behaviour that embedded validator manifests carried by an
-// expired blob are NOT applied to validatorManifests_. In rippled the
-// embedded-manifest loop sits in updatePublisherList which runs only
-// on the accepted branch of applyList; the expired branch goes through
-// removePublisherList(StatusExpired) instead, which never touches the
-// manifest cache.
-func TestAggregator_ApplyList_Expired_SkipsEmbeddedManifests(t *testing.T) {
+// expired blob ARE applied to validatorManifests_. In rippled the
+// expired disposition runs the same populate path as accepted (see
+// ValidatorList.cpp:1193-1295: the local `accepted` boolean is true
+// for both accepted and expired) and updatePublisherList is called
+// (line 1294), which seeds embedded manifests into validatorManifests_
+// (line 1117-1133). removePublisherList(StatusExpired) is invoked from
+// updateTrusted on ledger close, NOT from applyList.
+func TestAggregator_ApplyList_Expired_SeedsEmbeddedManifests(t *testing.T) {
 	pub := newPublisher(t, 0x01, 0x02)
 
 	// Build a real validator master/ephemeral pair plus a signed
@@ -666,7 +668,7 @@ func TestAggregator_ApplyList_Expired_SkipsEmbeddedManifests(t *testing.T) {
 	if d, _, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://"); d != list.Expired {
 		t.Fatalf("disposition: %s", d)
 	}
-	if _, ok := cache.GetSigningKey(valMaster); ok {
-		t.Fatalf("expired ingest must not seed embedded validator manifests into the cache")
+	if _, ok := cache.GetSigningKey(valMaster); !ok {
+		t.Fatalf("expired ingest must seed embedded validator manifests into the cache (rippled ValidatorList.cpp:1117-1133, reached via updatePublisherList at line 1294)")
 	}
 }

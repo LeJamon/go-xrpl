@@ -729,15 +729,30 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 		return SameSequence, pubKey, parsedBlob.Sequence
 	}
 	if validUntil.Before(now) || validUntil.Equal(now) {
-		// Even an expired list still updates the publisher entry so
-		// the RPC can surface "expired" — but the validators do NOT
-		// flow into the trusted union (status is StatusExpired) and the
-		// embedded validator manifests are NOT seeded into the cache.
-		// Mirrors rippled removePublisherList(StatusExpired) at
-		// ValidatorList.cpp:1529-1542 which clears current.list without
-		// touching validatorManifests_; the embedded-manifest loop in
-		// updatePublisherList runs only on the accepted code path.
-		a.applyExpiredLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now, version, manifestBytes, blob, signature)
+		// Expired ingest runs the SAME populate path as accepted in
+		// rippled: ValidatorList.cpp:1193-1295 — the local `accepted`
+		// boolean is true for both ListDisposition::accepted AND
+		// ListDisposition::expired, so the populate block writes
+		// publisher.list and publisher.manifests, and the call to
+		// updatePublisherList at line 1294 seeds embedded validator
+		// manifests into validatorManifests_ (line 1117-1133). The only
+		// runtime differences vs accepted are the final PublisherStatus
+		// (expired vs available) and that the trusted-set recompute
+		// skips non-available publishers (see recomputeAndEmitLocked:
+		// `s.Status != StatusAvailable` filter).
+		//
+		// We clear current.Validators after the populate so the RPC
+		// `validators` view does not surface stale keys under
+		// `available=false`. rippled keeps publisher.list populated for
+		// expired and relies on status filtering instead, but the
+		// effective trusted-set outcome is the same.
+		//
+		// removePublisherList(StatusExpired) at ValidatorList.cpp:1529-1542
+		// is invoked from updateTrusted (line 1999) when a previously-
+		// available list times out at ledger close — NOT from applyList.
+		a.applyAcceptedLocked(current, parsedBlob, signingKey, validFrom, validUntil, siteURI, now, version, manifestBytes, blob, signature)
+		current.Status = StatusExpired
+		current.Validators = nil
 		a.recomputeAndEmitLocked()
 		return Expired, pubKey, parsedBlob.Sequence
 	}
@@ -849,36 +864,6 @@ func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, sign
 
 	a.writeCacheLocked(s)
 	return prevCount != len(keys)
-}
-
-// applyExpiredLocked records the bookkeeping fields rippled keeps when
-// an expired blob is ingested: sequence, validFrom/Until, signing key,
-// site URI, wire bytes, version. It does NOT seed embedded validator
-// manifests into the cache and does NOT populate Validators — both of
-// those are accepted-only behaviours in rippled (the embedded manifest
-// loop lives in updatePublisherList which only runs on the accepted
-// branch of applyList; the validator list is cleared on expiry per
-// removePublisherList(StatusExpired) at ValidatorList.cpp:1529-1542).
-//
-// Caller must hold a.mu. Does NOT emit OnChange — recomputeAndEmitLocked
-// runs from the caller once the disposition has been recorded.
-func (a *Aggregator) applyExpiredLocked(s *PublisherState, blob *blobJSON, signingKey [33]byte, validFrom, validUntil time.Time, siteURI string, now time.Time, version uint32, rawManifest, rawBlob, rawSignature []byte) {
-	s.Sequence = blob.Sequence
-	s.Effective = validFrom
-	s.EffectiveSet = blob.EffectiveSet
-	s.Expiration = validUntil
-	s.SigningKey = signingKey
-	s.SiteURI = siteURI
-	s.LastUpdate = now
-	s.Status = StatusExpired
-	if version > s.Version {
-		s.Version = version
-	}
-	s.RawManifest = append(s.RawManifest[:0], rawManifest...)
-	s.RawBlob = append(s.RawBlob[:0], rawBlob...)
-	s.RawSignature = append(s.RawSignature[:0], rawSignature...)
-	s.Validators = nil
-	a.writeCacheLocked(s)
 }
 
 // applyPendingLocked stores a future-dated blob in the publisher's
