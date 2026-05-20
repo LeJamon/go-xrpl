@@ -7,9 +7,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 )
+
+func disableAllAmendments(env *jtx.TestEnv) {
+	for _, f := range amendment.AllFeatures() {
+		env.DisableFeature(f.Name)
+	}
+}
 
 // TestReproByteDiff_DirPagination triggers the 33rd TrustSet from one source
 // — when the owner directory's first page fills (32 entries) and a new page
@@ -18,12 +25,39 @@ import (
 // rippled's, this is where to look.
 func TestReproByteDiff_DirPagination(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	disableAllAmendments(env)
 
-	src := jtx.NewAccount("src")
+	// Seeds match rippled standalone $CLAUDE_JOB_DIR/rippled_pagination_output.json
+	// to enable byte-by-byte meta_blob comparison.
+	const srcSeed = "shSf2euXnYF8omhjcUR5UqBNBYvrN"
+	issuerSeeds := []string{
+		"shrUDYFNEUhBv2VUja7vAqcMHsn1L", "ssm6LttMh3KwwVH1cnhF8VBMPCfru",
+		"ss42dxEMhUspfug5qJDnhFtQhzwq6", "sn92HpBQqjwtJtZDfkKyfBTWu4rDQ",
+		"sspt9XnQYksLyrjAigzmf4eBqLKrB", "saaG3N4SuFdqgmNZhfgRfBa2Tu4qm",
+		"snrFVFURexGSP9LbEdDQPuGt9yjGj", "shW6B2PJKGV5L4XaPur2zEwqQTf9y",
+		"shhRKHRRXR3Dj8BhZbSKqnvmRa6cq", "shgmANCy2gBagP8LnzuDvZ5M3g9hA",
+		"snWhzB7bbUPDVR1xZFQBid46iXavp", "snwJQZJsCprNt4PUB77E8cZqt6DL4",
+		"ss1rGR2UDGAMDad4kLEZU3vA6bnoW", "snrK6Q3AL8wAqao5jMKTMDmU22fdk",
+		"sniTzxfwQQtxfgprxSLpQGKz5yyM2", "sn3a6PJjnhi4wc7h89MsZQhmKTJ9U",
+		"ssvH4piFAnV3ido2kearXC9M6gsoX", "ssXPhwXp8rXVC8AVd33VmRDgESGst",
+		"snvjh4wsCHKACn7gbHjUzLFxyQj4j", "ssjCSxc4vRsge9pTSUTMkWXR9rsLG",
+		"sa3dQUNBxNWAqeE5d5T8UmBzUvNez", "ss4ewQhybG3Nwor4fe1x5q8WgtwFP",
+		"snrewJ34RqFnyYLvsLnuqpXRNF8UK", "sskrmdEhDSSALwiZk1ArahwXbpLay",
+		"snnZdPcoazdaz9ChNNR3R8oH7aQEj", "sh1wqz6zqhume6ghotvjQgKZkYTgN",
+		"snjXa5ZJR1TTK9yCXGNRQAA8cGgn9", "shp4fknAn7mHKwRuFMkjtehZZowVy",
+		"ssvd8zvey57EuziZjWJVmikgFokRS", "ssYRpwJp2quGtAtZnCJZEEtH6yr5w",
+		"sspgHz32gh6Atow1ztzYuS5DpKcSw", "spvpHuXjvtfQrqrtFoCYSpY5pncJM",
+		"shVEEkq5RAcdZGH3Crm4rR7Gp58z6",
+	}
+	if len(issuerSeeds) != 33 {
+		t.Fatalf("need exactly 33 seeds, got %d", len(issuerSeeds))
+	}
+
+	src := jtx.NewAccountFromSeed("src", srcSeed)
 	issuers := make([]*jtx.Account, 33)
 	all := []*jtx.Account{src}
 	for i := 0; i < 33; i++ {
-		issuers[i] = jtx.NewAccount(fmt.Sprintf("iss%02d", i))
+		issuers[i] = jtx.NewAccountFromSeed(fmt.Sprintf("iss%02d", i), issuerSeeds[i])
 		all = append(all, issuers[i])
 	}
 	// Fund with 100 XRP to cover 33 trust line reserves (10 base + 33*2 = 76 XRP).
@@ -46,6 +80,11 @@ func TestReproByteDiff_DirPagination(t *testing.T) {
 	pag := env.Submit(TrustSet(src, limit).Build())
 	jtx.RequireTxSuccess(t, pag)
 	t.Logf("33rd TrustSet (pagination) code=%s, meta nodes=%d", pag.Code, len(pag.Metadata.AffectedNodes))
+	pb, err := tx.SerializeMetadata(pag.Metadata)
+	if err != nil {
+		t.Fatalf("SerializeMetadata pagination: %v", err)
+	}
+	fmt.Printf("\nGOXRPL_PAGINATION_META_HEX (%d bytes): %s\n", len(pb), strings.ToUpper(hex.EncodeToString(pb)))
 	metaMap := tx.MetadataToMap(pag.Metadata)
 	jsonBytes, _ := json.MarshalIndent(metaMap, "", "  ")
 	fmt.Printf("\n=== GOXRPL META JSON (33rd TS — pagination) ===\n%s\n", string(jsonBytes))
