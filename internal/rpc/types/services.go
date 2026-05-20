@@ -270,6 +270,16 @@ type TransactionSubmitter interface {
 	GetTransaction(txHash [32]byte) (*TransactionInfo, error)
 	StoreTransaction(txHash [32]byte, txData []byte) error
 	GetTransactionHistory(ctx context.Context, startIndex uint32) (*TxHistoryResult, error)
+
+	// GetAutofillSequence returns the next sequence to use for an account.
+	// When hasTicketSequence is true the account may be missing and 0 is returned.
+	// Mirrors rippled Simulate.cpp getAutofillSequence().
+	GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error)
+
+	// GetCurrentNetworkFee returns the fee in drops needed to bypass the
+	// TxQ and enter the current open ledger. Mirrors rippled
+	// TransactionSign.cpp getCurrentNetworkFee().
+	GetCurrentNetworkFee() uint64
 }
 
 // AccountQuerier provides account-related read operations.
@@ -465,6 +475,23 @@ type SubmitResult struct {
 
 	// ValidatedLedger is the highest validated ledger sequence
 	ValidatedLedger uint32
+
+	// Metadata holds simulation metadata when available, so the simulate
+	// handler can render it as either `meta` (JSON) or `meta_blob` (hex).
+	// Nil when the transaction produced no metadata.
+	Metadata *SubmitMetadata
+}
+
+// SubmitMetadata carries simulation metadata in both JSON-ready and
+// binary-serialized forms so the simulate handler can choose between
+// `meta` and `meta_blob` based on the caller's `binary` flag.
+type SubmitMetadata struct {
+	// JSON is a json.Marshal-able representation of the metadata
+	// (typically a map[string]any or json.RawMessage).
+	JSON any
+	// Blob is the binary-serialized metadata. The simulate handler
+	// hex-encodes it for the `meta_blob` field.
+	Blob []byte
 }
 
 // Accepted returns true if any submission state is true, matching

@@ -860,7 +860,7 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 		}, nil
 	}
 
-	return &types.SubmitResult{
+	out := &types.SubmitResult{
 		EngineResult:        result.Result.String(),
 		EngineResultCode:    int(result.Result),
 		EngineResultMessage: result.Message,
@@ -868,7 +868,27 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 		Fee:                 result.Fee,
 		CurrentLedger:       result.CurrentLedger,
 		ValidatedLedger:     result.ValidatedLedger,
-	}, nil
+	}
+	if result.Metadata != nil {
+		blob, _ := tx.SerializeMetadata(result.Metadata)
+		out.Metadata = &types.SubmitMetadata{
+			JSON: result.Metadata,
+			Blob: blob,
+		}
+	}
+	return out, nil
+}
+
+// GetAutofillSequence returns the next sequence for the account from the
+// current open ledger, consulting the TxQ when the account has queued txs.
+func (a *LedgerServiceAdapter) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
+	return a.svc.GetAutofillSequence(account, hasTicketSequence)
+}
+
+// GetCurrentNetworkFee returns the fee (in drops) needed to enter the
+// current open ledger, escalated by TxQ load.
+func (a *LedgerServiceAdapter) GetCurrentNetworkFee() uint64 {
+	return a.svc.GetCurrentNetworkFee()
 }
 
 // IsAmendmentBlocked returns true if the server is blocked by unsupported amendments

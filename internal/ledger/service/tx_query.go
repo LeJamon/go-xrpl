@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/txq"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
@@ -184,6 +185,77 @@ func (s *Service) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint6
 	defer s.mu.RUnlock()
 
 	return readFeesFromLedger(s.openLedger)
+}
+
+// GetAutofillSequence returns the next sequence to use for an account when
+// constructing a transaction. When hasTicketSequence is true the account's
+// sequence is irrelevant (the ticket carries it) and 0 is returned; the
+// account is still allowed to be missing in that case.
+//
+// Reference: rippled Simulate.cpp getAutofillSequence — reads the account SLE
+// from the current open ledger and asks the TxQ for the next-queueable seq.
+func (s *Service) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.openLedger == nil {
+		return 0, ErrNoOpenLedger
+	}
+
+	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
+	}
+	var accountID [20]byte
+	copy(accountID[:], accountIDBytes)
+
+	data, readErr := s.openLedger.Read(keylet.Account(accountID))
+	if readErr != nil || data == nil {
+		if hasTicketSequence {
+			return 0, nil
+		}
+		return 0, svcerr.ErrAccountNotFound
+	}
+
+	if hasTicketSequence {
+		return 0, nil
+	}
+
+	acct, parseErr := state.ParseAccountRoot(data)
+	if parseErr != nil {
+		return 0, fmt.Errorf("parse account root: %w", parseErr)
+	}
+
+	if s.txQueue != nil {
+		return s.txQueue.NextQueuableSeq(accountID, acct.Sequence), nil
+	}
+	return acct.Sequence, nil
+}
+
+// GetCurrentNetworkFee returns the fee (in drops) a transaction should pay
+// to bypass the TxQ and enter the current open ledger. Falls back to the
+// base fee when the network is uncongested or no TxQ is configured.
+//
+// Reference: rippled getCurrentNetworkFee() in TransactionSign.cpp:
+//
+//	escalatedFee = toDrops(openLedgerFeeLevel - 1, baseFee) + 1
+//
+// Per-transaction-type adjustments (multisign, AccountDelete) are not applied;
+// callers that need exact rippled parity should set Fee explicitly.
+func (s *Service) GetCurrentNetworkFee() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	baseFee, _, _ := readFeesFromLedger(s.openLedger)
+	if s.txQueue == nil || s.openLedger == nil {
+		return baseFee
+	}
+	txInLedger := s.openLedger.TxCount()
+	feeLevel := s.txQueue.GetRequiredFeeLevel(txInLedger)
+	if uint64(feeLevel) <= txq.BaseLevel {
+		return baseFee
+	}
+	return txq.FeeLevel(uint64(feeLevel)-1).ToDrops(baseFee) + 1
 }
 
 // EngineConfigForReplay returns the shared (non-per-ledger) engine
