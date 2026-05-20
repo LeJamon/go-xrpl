@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -52,6 +53,13 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, rpcErr
 	}
 
+	// Validate taker (base58 classic address). Matches rippled BookOffers.cpp:164-173.
+	if request.Taker != "" {
+		if _, _, err := addresscodec.DecodeClassicAddressToAccountID(request.Taker); err != nil {
+			return nil, types.RpcErrorInvalidField("taker")
+		}
+	}
+
 	// Determine ledger index to use
 	ledgerIndex := "current"
 	if request.LedgerIndex != "" {
@@ -61,19 +69,15 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	// Clamp the limit using rippled's bookOffers range {0, 60, 100}.
 	// When the user omits "limit" (zero value), ClampLimit returns the default (60).
 	limit := ClampLimit(request.Limit, LimitBookOffers, ctx.Unlimited)
-	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, ledgerIndex, limit)
+	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, request.Taker, ledgerIndex, limit)
 	if err != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
 	}
 
-	// Build response matching rippled's book_offers structure.
-	//
-	// TODO(#107): owner_funds, taker_gets_funded, taker_pays_funded
-	// These fields require computing the offer owner's available balance and
-	// adjusting for transfer fees. This is a service-layer concern implemented
-	// in rippled's NetworkOPsImp::getBookPage (see NetworkOPs.cpp).
-	// Currently the service layer returns these fields if it computes them;
-	// otherwise they are omitted from the BookOffer struct (omitempty).
+	// Build response matching rippled's book_offers structure. owner_funds,
+	// taker_gets_funded and taker_pays_funded are populated by the service layer
+	// (mirroring rippled NetworkOPsImp::getBookPage) and omitted when they do not
+	// apply (fully-funded offers / no transfer fee).
 	response := map[string]interface{}{
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
