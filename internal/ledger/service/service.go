@@ -500,6 +500,7 @@ func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, buildRetries []op
 		ReserveBase:      reserveBase,
 		ReserveIncrement: reserveIncrement,
 		NetworkID:        s.config.NetworkID,
+		ParentCloseTime:  parentCloseTimeRippleEpoch(s.closedLedger),
 		Logger:           s.config.Logger,
 		Rules:            rulesFromLedger(s.closedLedger, s.logger),
 	}
@@ -563,6 +564,7 @@ func (s *Service) applyConfigLocked() (openledger.ApplyConfig, error) {
 		ReserveIncrement: reserveIncrement,
 		LedgerSequence:   s.closedLedger.Sequence() + 1,
 		NetworkID:        s.config.NetworkID,
+		ParentCloseTime:  parentCloseTimeRippleEpoch(s.closedLedger),
 		Logger:           s.config.Logger,
 		Rules:            rulesFromLedger(s.closedLedger, s.logger),
 	}, nil
@@ -827,6 +829,7 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 			ReserveIncrement:          reserveIncrement,
 			LedgerSequence:            freshLedger.Sequence(),
 			NetworkID:                 s.config.NetworkID,
+			ParentCloseTime:           parentCloseTimeRippleEpoch(s.closedLedger),
 			Logger:                    s.config.Logger,
 			SkipSignatureVerification: s.config.Standalone,
 			// Standalone close mirrors the consensus-build path: tec under
@@ -1529,6 +1532,7 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 			ReserveIncrement: reserveIncrement,
 			LedgerSequence:   freshLedger.Sequence(),
 			NetworkID:        s.config.NetworkID,
+			ParentCloseTime:  parentCloseTimeRippleEpoch(s.closedLedger),
 			Logger:           s.config.Logger,
 			// Consensus build uses BuildLedger semantics: tec holds for
 			// retry under certainRetry; commits on the final pass.

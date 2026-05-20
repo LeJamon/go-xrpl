@@ -46,6 +46,14 @@ type ApplyConfig struct {
 	ReserveIncrement uint64
 	LedgerSequence   uint32
 	NetworkID        uint32
+	// ParentCloseTime is the close time of the parent ledger in
+	// Ripple-epoch seconds. Pseudo-transactions like EnableAmendment
+	// stamp this onto sfMajorities entries (Change.cpp:309-310), so
+	// leaving it at 0 forks the AmendmentsSLE at the first flag
+	// ledger that records a majority. inbound/replay_delta.go:584 sets
+	// the equivalent EngineConfig field; this struct lets the
+	// consensus-build path do the same.
+	ParentCloseTime  uint32
 	Logger           xrpllog.Logger
 	// SkipSignatureVerification forces signature checks off on every
 	// pass (mirrors AcceptLedger's standalone path where
@@ -148,6 +156,7 @@ func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte
 		ReserveIncrement:          cfg.ReserveIncrement,
 		LedgerSequence:            cfg.LedgerSequence,
 		NetworkID:                 cfg.NetworkID,
+		ParentCloseTime:           cfg.ParentCloseTime,
 		Logger:                    cfg.Logger,
 		SkipSignatureVerification: cfg.SkipSignatureVerification,
 		Rules:                     cfg.Rules,
@@ -198,6 +207,7 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 			ReserveIncrement:          cfg.ReserveIncrement,
 			LedgerSequence:            cfg.LedgerSequence,
 			NetworkID:                 cfg.NetworkID,
+			ParentCloseTime:           cfg.ParentCloseTime,
 			Logger:                    cfg.Logger,
 			SkipSignatureVerification: skipSig,
 			Rules:                     cfg.Rules,
