@@ -182,6 +182,10 @@ type Adaptor struct {
 	// Operating mode
 	operatingMode consensus.OperatingMode
 
+	// stateAcct tracks transition counts and cumulative durations per
+	// operating mode for server_info.state_accounting (#480).
+	stateAcct *stateAccounting
+
 	// Close time offset — adjusted each round toward network average.
 	// Matches rippled's timeKeeper().closeTime() offset. Stored as
 	// nanoseconds in an atomic so the consensus hot path (Now) avoids
@@ -440,6 +444,7 @@ func New(cfg Config) *Adaptor {
 		trustedMasterKeys: trustedMasterKeys,
 		quorum:            quorum,
 		operatingMode:     consensus.OpModeDisconnected,
+		stateAcct:         newStateAccounting(consensus.OpModeDisconnected, time.Now),
 		negUNLVoter:       negUNLVoter,
 		txSetCache:        NewTxSetCache(),
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
@@ -1410,8 +1415,26 @@ func (a *Adaptor) GetOperatingMode() consensus.OperatingMode {
 
 func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.operatingMode = mode
+	sa := a.stateAcct
+	a.mu.Unlock()
+	if sa != nil {
+		sa.transition(mode)
+	}
+}
+
+// StateAccounting returns a snapshot of per-operating-mode transition
+// counts and cumulative microsecond durations for server_info. Returns
+// nil when the adaptor was constructed without a tracker (legacy
+// tests). Mirrors rippled's NetworkOPsImp::StateAccounting::json.
+func (a *Adaptor) StateAccounting() map[string]StateAccountingEntry {
+	a.mu.Lock()
+	sa := a.stateAcct
+	a.mu.Unlock()
+	if sa == nil {
+		return nil
+	}
+	return sa.snapshot()
 }
 
 // OnConsensusReached logs the close and fires the consensus-phase hook.

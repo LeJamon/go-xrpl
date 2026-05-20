@@ -21,6 +21,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/txq"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/shamap"
 	"github.com/LeJamon/goXRPLd/storage/nodestore"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
@@ -1349,6 +1350,22 @@ func (s *Service) GetGenesisAccount() (string, error) {
 	return address, err
 }
 
+// GetTxQMetrics returns the current TxQ metrics — used by server_info
+// for jq_trans_overflow and the load_factor_fee_* fields. Returns the
+// zero value when the queue isn't initialised.
+func (s *Service) GetTxQMetrics() txq.Metrics {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.txQueue == nil {
+		return txq.Metrics{}
+	}
+	var txInLedger uint32
+	if s.openLedger != nil {
+		txInLedger = uint32(s.openLedger.TxCount())
+	}
+	return s.txQueue.GetMetrics(txInLedger)
+}
+
 // GetServerInfo returns basic server information
 func (s *Service) GetServerInfo() ServerInfo {
 	s.mu.RLock()
@@ -1373,11 +1390,13 @@ func (s *Service) GetServerInfo() ServerInfo {
 	if s.closedLedger != nil {
 		info.ClosedLedgerSeq = s.closedLedger.Sequence()
 		info.ClosedLedgerHash = s.closedLedger.Hash()
+		info.ClosedLedgerCloseTime = rippleEpochSeconds(s.closedLedger.CloseTime())
 	}
 
 	if s.validatedLedger != nil {
 		info.ValidatedLedgerSeq = s.validatedLedger.Sequence()
 		info.ValidatedLedgerHash = s.validatedLedger.Hash()
+		info.ValidatedLedgerCloseTime = rippleEpochSeconds(s.validatedLedger.CloseTime())
 	}
 
 	// Calculate complete ledgers range
@@ -1404,15 +1423,31 @@ func (s *Service) GetServerInfo() ServerInfo {
 
 // ServerInfo contains basic server status information
 type ServerInfo struct {
-	Standalone          bool
-	ServerState         string // "disconnected", "connected", "syncing", "tracking", "full"
-	OpenLedgerSeq       uint32
-	ClosedLedgerSeq     uint32
-	ClosedLedgerHash    [32]byte
-	ValidatedLedgerSeq  uint32
-	ValidatedLedgerHash [32]byte
-	CompleteLedgers     string
-	NetworkID           uint32
+	Standalone               bool
+	ServerState              string // "disconnected", "connected", "syncing", "tracking", "full"
+	OpenLedgerSeq            uint32
+	ClosedLedgerSeq          uint32
+	ClosedLedgerHash         [32]byte
+	ClosedLedgerCloseTime    int64 // Ripple-epoch seconds
+	ValidatedLedgerSeq       uint32
+	ValidatedLedgerHash      [32]byte
+	ValidatedLedgerCloseTime int64 // Ripple-epoch seconds
+	CompleteLedgers          string
+	NetworkID                uint32
+}
+
+// rippleEpochSeconds converts a wall-clock close time to seconds since
+// the XRPL epoch (2000-01-01 UTC). Returns 0 for the zero time so a
+// genesis-only node reports close_time=0 instead of a negative value.
+func rippleEpochSeconds(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	s := t.Unix() - protocol.RippleEpochUnix
+	if s < 0 {
+		return 0
+	}
+	return s
 }
 
 // GetLedgerInfo returns information about a specific ledger

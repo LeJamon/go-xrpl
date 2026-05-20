@@ -9,8 +9,32 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/observability"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/version"
 )
+
+// loadBase is the fee-tracker reference level. Mirrors rippled's
+// LoadFeeTrack default at LoadFeeTrack.h — every load_factor_* field
+// is expressed as a multiple of this base.
+const loadBase uint64 = 256
+
+// validatedLedgerAgeThreshold matches rippled's
+// NetworkOPsImp::getServerInfo (NetworkOPs.cpp:2952): once the
+// validated ledger is older than this the age is clamped to 0 in the
+// JSON so monitoring dashboards don't render misleading values from a
+// stalled node. 600s is rippled's published threshold.
+const validatedLedgerAgeThreshold = 600 * time.Second
+
+// stateAccountingModes is the fixed set of operating-mode keys
+// rippled emits. Emitting them all (zero-filled when needed) keeps the
+// shape stable for downstream consumers.
+var stateAccountingModes = []string{
+	"connected",
+	"disconnected",
+	"full",
+	"syncing",
+	"tracking",
+}
 
 // serverStartTime tracks when the server started for uptime calculation
 var serverStartTime = time.Now()
@@ -80,6 +104,8 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 	// Duration in microseconds for state accounting
 	uptimeUs := uptimeDuration.Microseconds()
 
+	overflow, peerDisc, peerDiscRes := resolveDisconnectCounters(services)
+
 	info := map[string]interface{}{
 		"build_version":     BuildVersion,
 		"complete_ledgers":  completeLedgers,
@@ -90,35 +116,13 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 		"validation_quorum": resolveValidationQuorum(services),
 		"peers":             getPeerCount(ctx),
 
-		// Overflow/disconnect counters (string in rippled)
-		"jq_trans_overflow":          "0", // TODO: track real overflow count
-		"peer_disconnects":           "0", // TODO: track real disconnect count
-		"peer_disconnects_resources": "0", // TODO: track real disconnect-resources count
+		// Overflow/disconnect counters (string in rippled).
+		"jq_trans_overflow":          fmt.Sprintf("%d", overflow),
+		"peer_disconnects":           fmt.Sprintf("%d", peerDisc),
+		"peer_disconnects_resources": fmt.Sprintf("%d", peerDiscRes),
 
-		// State accounting
 		"server_state_duration_us": fmt.Sprintf("%d", uptimeUs),
-		"state_accounting": map[string]interface{}{
-			"connected": map[string]interface{}{
-				"duration_us": "0",
-				"transitions": "0",
-			},
-			"disconnected": map[string]interface{}{
-				"duration_us": "0",
-				"transitions": "0",
-			},
-			"full": map[string]interface{}{
-				"duration_us": fmt.Sprintf("%d", uptimeUs),
-				"transitions": "1",
-			},
-			"syncing": map[string]interface{}{
-				"duration_us": "0",
-				"transitions": "0",
-			},
-			"tracking": map[string]interface{}{
-				"duration_us": "0",
-				"transitions": "0",
-			},
-		},
+		"state_accounting":         resolveStateAccounting(services, serverState, uptimeUs),
 	}
 
 	// hostid: only in human mode (server_info), matching rippled
@@ -153,26 +157,38 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 		}
 	}
 
-	// load_factor: human mode is float (loadFactor/loadBase), machine mode has integers
+	// load_factor: human mode is float (loadFactor/loadBase), machine mode has integers.
+	// Until a full LoadFeeTrack lands, the server-wide load factor mirrors the
+	// fee-escalation level — the only load signal we currently track. Matches
+	// rippled's NetworkOPs.cpp:2863-2875 fallback when no other load source
+	// (cluster, admin) is active.
+	feeEscalation, feeQueue, feeReference := resolveLoadFactorFees(services)
+	loadFactor := feeEscalation
+	if loadFactor < loadBase {
+		loadFactor = loadBase
+	}
 	if human {
-		info["load_factor"] = 1.0 // TODO: compute from fee tracker
+		info["load_factor"] = float64(loadFactor) / float64(loadBase)
 	} else {
-		info["load_base"] = 256                  // TODO: get from fee tracker (rippled default is 256)
-		info["load_factor"] = 256                // TODO: get from fee tracker
-		info["load_factor_server"] = 256         // TODO: get from fee tracker
-		info["load_factor_fee_escalation"] = 256 // TODO: get from TxQ metrics
-		info["load_factor_fee_queue"] = 256      // TODO: get from TxQ metrics
-		info["load_factor_fee_reference"] = 256  // TODO: get from TxQ metrics
+		info["load_base"] = loadBase
+		info["load_factor"] = loadFactor
+		info["load_factor_server"] = loadBase
+		info["load_factor_fee_escalation"] = feeEscalation
+		info["load_factor_fee_queue"] = feeQueue
+		info["load_factor_fee_reference"] = feeReference
 	}
 
-	// Validated ledger info
+	now := time.Now()
+	validatedAge := ledgerAge(serverInfo.ValidatedLedgerCloseTime, now)
+	closedAge := ledgerAge(serverInfo.ClosedLedgerCloseTime, now)
+
 	if human {
 		baseFeeXRP := float64(baseFee) / 1_000_000.0
 		reserveBaseXRP := float64(reserveBase) / 1_000_000.0
 		reserveIncXRP := float64(reserveIncrement) / 1_000_000.0
 
 		info["validated_ledger"] = map[string]interface{}{
-			"age":              0, // TODO: compute from ledger close time vs now
+			"age":              validatedAge,
 			"base_fee_xrp":     baseFeeXRP,
 			"hash":             validatedLedgerHash,
 			"reserve_base_xrp": reserveBaseXRP,
@@ -182,7 +198,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 
 		// closed_ledger in human mode
 		info["closed_ledger"] = map[string]interface{}{
-			"age":              0,
+			"age":              closedAge,
 			"base_fee_xrp":     baseFeeXRP,
 			"hash":             closedLedgerHash,
 			"reserve_base_xrp": reserveBaseXRP,
@@ -192,7 +208,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 	} else {
 		info["validated_ledger"] = map[string]interface{}{
 			"base_fee":     baseFee,
-			"close_time":   0, // TODO: get from ledger close time (ripple epoch seconds)
+			"close_time":   serverInfo.ValidatedLedgerCloseTime,
 			"hash":         validatedLedgerHash,
 			"reserve_base": reserveBase,
 			"reserve_inc":  reserveIncrement,
@@ -202,7 +218,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 		// closed_ledger in machine mode
 		info["closed_ledger"] = map[string]interface{}{
 			"base_fee":     baseFee,
-			"close_time":   0,
+			"close_time":   serverInfo.ClosedLedgerCloseTime,
 			"hash":         closedLedgerHash,
 			"reserve_base": reserveBase,
 			"reserve_inc":  reserveIncrement,
@@ -251,4 +267,91 @@ func resolveValidationQuorum(services *types.ServiceContainer) int {
 		}
 	}
 	return 1
+}
+
+// resolveDisconnectCounters reads the overlay/TxQ disconnect &
+// overflow counters via service hooks. Returns zeros when hooks aren't
+// wired so server_info still produces a complete shape.
+func resolveDisconnectCounters(services *types.ServiceContainer) (overflow, peerDisc, peerDiscRes uint64) {
+	if services == nil {
+		return 0, 0, 0
+	}
+	if services.TxQMetrics != nil {
+		overflow = services.TxQMetrics().JqTransOverflow
+	}
+	if services.PeerDisconnects != nil {
+		peerDisc, peerDiscRes = services.PeerDisconnects()
+	}
+	return overflow, peerDisc, peerDiscRes
+}
+
+// resolveLoadFactorFees returns (escalation, queue, reference) levels
+// for the server_info load_factor_fee_* fields. Falls back to the
+// reference level (loadBase) when the TxQ isn't wired.
+func resolveLoadFactorFees(services *types.ServiceContainer) (escalation, queue, reference uint64) {
+	escalation, queue, reference = loadBase, loadBase, loadBase
+	if services == nil || services.TxQMetrics == nil {
+		return
+	}
+	m := services.TxQMetrics()
+	if m.ReferenceFeeLevel > 0 {
+		reference = m.ReferenceFeeLevel
+	}
+	if m.OpenLedgerFeeLevel > 0 {
+		escalation = m.OpenLedgerFeeLevel
+	}
+	if m.MinProcessingFeeLevel > 0 {
+		queue = m.MinProcessingFeeLevel
+	}
+	return
+}
+
+// resolveStateAccounting builds the state_accounting JSON value.
+// Prefers the adaptor's per-mode tracker when wired, otherwise falls
+// back to attributing the whole uptime to the current server state
+// (matching the pre-#480 stub shape).
+func resolveStateAccounting(services *types.ServiceContainer, serverState string, uptimeUs int64) map[string]interface{} {
+	out := make(map[string]interface{}, len(stateAccountingModes))
+	for _, m := range stateAccountingModes {
+		out[m] = map[string]interface{}{
+			"duration_us": "0",
+			"transitions": "0",
+		}
+	}
+
+	if services != nil && services.StateAccounting != nil {
+		for mode, entry := range services.StateAccounting() {
+			out[mode] = map[string]interface{}{
+				"duration_us": fmt.Sprintf("%d", entry.DurationUs),
+				"transitions": fmt.Sprintf("%d", entry.Transitions),
+			}
+		}
+		return out
+	}
+
+	if _, ok := out[serverState]; ok {
+		out[serverState] = map[string]interface{}{
+			"duration_us": fmt.Sprintf("%d", uptimeUs),
+			"transitions": "1",
+		}
+	}
+	return out
+}
+
+// ledgerAge returns the age of a ledger in seconds. Clamps to 0 when
+// the close time is unknown, in the future (clock skew), or past
+// rippled's high-age threshold — see NetworkOPs.cpp:2952.
+func ledgerAge(closeTimeRippleEpoch int64, now time.Time) int64 {
+	if closeTimeRippleEpoch <= 0 {
+		return 0
+	}
+	closeUnix := closeTimeRippleEpoch + protocol.RippleEpochUnix
+	age := now.Unix() - closeUnix
+	if age <= 0 {
+		return 0
+	}
+	if time.Duration(age)*time.Second >= validatedLedgerAgeThreshold {
+		return 0
+	}
+	return age
 }

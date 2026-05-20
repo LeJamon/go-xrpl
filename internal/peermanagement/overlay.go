@@ -317,8 +317,15 @@ type Overlay struct {
 
 	// pingTimeoutDisconnects counts peers torn down because the oldest
 	// in-flight ping aged past pingTimeout. Mirrors rippled's
-	// fail("Ping Timeout") at PeerImp.cpp:731-736.
+	// fail("Ping Timeout") at PeerImp.cpp:731-736. Surfaced via
+	// server_info as peer_disconnects_resources — ping-timeout is the
+	// goxrpl analogue of rippled's resource-charge-driven drops.
 	pingTimeoutDisconnects atomic.Uint64
+
+	// peerDisconnects counts every peer torn down for any reason.
+	// Mirrors rippled OverlayImpl::peerDisconnects_ surfaced via
+	// server_info as peer_disconnects (PeerImp::~PeerImp increments).
+	peerDisconnects atomic.Uint64
 
 	// Network
 	// listenerMu guards listener: written once by startListener (called
@@ -1116,6 +1123,7 @@ func (o *Overlay) onPeerHandshakeComplete(evt Event) {
 }
 
 func (o *Overlay) onPeerDisconnected(evt Event) {
+	o.peerDisconnects.Add(1)
 	o.discovery.MarkDisconnected(evt.PeerID)
 	o.relay.RemovePeer(evt.PeerID)
 	// Fire the higher-layer disconnect callback so per-peer state in
@@ -1307,6 +1315,21 @@ func (o *Overlay) DroppedMessages() uint64 {
 // nonzero, growing value flags either a flaky network or peers that
 // have stopped servicing the overlay protocol.
 func (o *Overlay) PingTimeoutDisconnects() uint64 {
+	return o.pingTimeoutDisconnects.Load()
+}
+
+// PeerDisconnects returns the cumulative count of peers torn down for
+// any reason. Mirrors rippled's getPeerDisconnect surfaced by
+// server_info.peer_disconnects.
+func (o *Overlay) PeerDisconnects() uint64 {
+	return o.peerDisconnects.Load()
+}
+
+// PeerDisconnectsResources returns the cumulative count of peers torn
+// down for resource-related reasons (ping timeout in goxrpl, which is
+// the analogue of rippled's resource-charge threshold drop). Surfaced
+// via server_info.peer_disconnects_resources.
+func (o *Overlay) PeerDisconnectsResources() uint64 {
 	return o.pingTimeoutDisconnects.Load()
 }
 

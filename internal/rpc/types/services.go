@@ -208,6 +208,22 @@ type ServiceContainer struct {
 	// encoded. Surfaced by the `validators` RPC as `NegativeUNL`
 	// (rippled getJson at ValidatorList.cpp:1737-1744). Nil-safe.
 	NegativeUNLBase58 func() []string
+
+	// TxQMetrics returns the current transaction-queue metrics used by
+	// server_info for jq_trans_overflow and the load_factor_fee_*
+	// triple. Nil until the ledger service is wired (standalone tests,
+	// pre-startup) — server_info falls back to baseline values.
+	TxQMetrics func() TxQServerMetrics
+
+	// PeerDisconnects returns cumulative peer-disconnect counters
+	// surfaced by server_info: (total, resources-driven). Nil when
+	// the overlay isn't wired (standalone, RPC-only tests).
+	PeerDisconnects func() (total, resources uint64)
+
+	// StateAccounting returns the operating-mode state-machine
+	// snapshot surfaced by server_info.state_accounting. Keys are the
+	// rippled lowercase mode names. Nil until consensus is wired.
+	StateAccounting func() map[string]StateAccountingEntry
 }
 
 // LedgerNavigator provides ledger index navigation and mode queries.
@@ -342,15 +358,35 @@ type LedgerReader interface {
 
 // LedgerServerInfo contains server status information from the ledger service
 type LedgerServerInfo struct {
-	Standalone          bool
-	ServerState         string
-	OpenLedgerSeq       uint32
-	ClosedLedgerSeq     uint32
-	ClosedLedgerHash    [32]byte
-	ValidatedLedgerSeq  uint32
-	ValidatedLedgerHash [32]byte
-	CompleteLedgers     string
-	NetworkID           uint32
+	Standalone               bool
+	ServerState              string
+	OpenLedgerSeq            uint32
+	ClosedLedgerSeq          uint32
+	ClosedLedgerHash         [32]byte
+	ClosedLedgerCloseTime    int64 // Ripple-epoch seconds; 0 when unknown.
+	ValidatedLedgerSeq       uint32
+	ValidatedLedgerHash      [32]byte
+	ValidatedLedgerCloseTime int64 // Ripple-epoch seconds; 0 when unknown.
+	CompleteLedgers          string
+	NetworkID                uint32
+}
+
+// TxQServerMetrics is the subset of TxQ metrics surfaced by
+// server_info. Kept in rpc/types so handlers don't reach across into
+// internal/txq.
+type TxQServerMetrics struct {
+	JqTransOverflow       uint64
+	ReferenceFeeLevel     uint64
+	MinProcessingFeeLevel uint64
+	OpenLedgerFeeLevel    uint64
+}
+
+// StateAccountingEntry is one row of server_info.state_accounting:
+// the cumulative time spent in an operating mode and the number of
+// times the node entered it.
+type StateAccountingEntry struct {
+	Transitions uint64
+	DurationUs  uint64
 }
 
 // SubmitResult contains the result of submitting a transaction.
