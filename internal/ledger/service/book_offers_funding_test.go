@@ -30,11 +30,11 @@ func TestApplyBookOfferFundingInfo_IssuerOwnedFullyFunded(t *testing.T) {
 	rawOffers := []*state.LedgerOffer{
 		makeOffer(t, l, issuerAddr, 1,
 			state.NewIssuedAmountFromValue(1_000_000_000_000_000, -13, "USD", issuerAddr), // takerGets: 100 USD
-			tx.NewXRPAmount(1_000_000_000),                                                 // takerPays: 1000 XRP
+			tx.NewXRPAmount(1_000_000_000), // takerPays: 1000 XRP
 		),
 		makeOffer(t, l, issuerAddr, 2,
 			state.NewIssuedAmountFromValue(5_000_000_000_000_000, -14, "USD", issuerAddr), // takerGets: 50 USD
-			tx.NewXRPAmount(600_000_000),                                                   // takerPays: 600 XRP
+			tx.NewXRPAmount(600_000_000), // takerPays: 600 XRP
 		),
 	}
 	offers := []BookOffer{

@@ -198,7 +198,7 @@ func applyBookOfferFundingInfo(
 
 	// Resolve the takerGets issuer's transfer rate. XRP is implicitly
 	// parity (no transfer fee).
-	rate := uint32(protocol.QualityOne)
+	rate := protocol.QualityOne
 	var issuerID [20]byte
 	haveIssuer := false
 	if !takerGets.IsNative() {
@@ -254,7 +254,7 @@ func applyBookOfferFundingInfo(
 			}
 		}
 
-		offerRate := uint32(protocol.QualityOne)
+		offerRate := protocol.QualityOne
 		saOwnerFundsLimit := saOwnerFunds
 		takerIsIssuer := haveTaker && haveIssuer && takerID == issuerID
 		ownerIsIssuer := haveIssuer && ownerID == issuerID
@@ -271,11 +271,11 @@ func applyBookOfferFundingInfo(
 			offers[i].TakerGetsFunded = formatAmount(saTakerGetsFunded)
 
 			// taker_pays_funded = min(saTakerPays, saTakerGetsFunded * quality)
-			payed := multiplyByQuality(saTakerGetsFunded, offer.BookDirectory, saTakerPays)
-			if payed.Compare(saTakerPays) > 0 {
-				payed = saTakerPays
+			paid := multiplyByQuality(saTakerGetsFunded, offer.BookDirectory, saTakerPays)
+			if paid.Compare(saTakerPays) > 0 {
+				paid = saTakerPays
 			}
-			offers[i].TakerPaysFunded = formatAmount(payed)
+			offers[i].TakerPaysFunded = formatAmount(paid)
 		}
 
 		// Running balance: saOwnerPays = (parity) ? saTakerGetsFunded :

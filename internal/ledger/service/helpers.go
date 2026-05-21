@@ -96,11 +96,6 @@ func formatHash(hash [32]byte) string {
 	return string(hash[:])
 }
 
-// sortBookOffersByQuality sorts book offers by quality (best first)
-func sortBookOffersByQuality(offers []BookOffer) {
-	sortBookOffersByQualityWithRaw(offers, nil)
-}
-
 // sortBookOffersByQualityWithRaw sorts offers by quality (best first) while
 // keeping the parallel raw slice (if non-nil) in lockstep so callers can
 // post-process per-offer source data in the same order. Passing a raw
