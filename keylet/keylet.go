@@ -453,14 +453,16 @@ func PayChannel(srcAccountID, dstAccountID [20]byte, sequence uint32) Keylet {
 }
 
 // AMM returns the keylet for an AMM entry.
-// The keylet is computed from the sorted asset pair (issuer + currency).
-// Reference: rippled Indexes.cpp amm(Asset const& issue1, Asset const& issue2)
+// The keylet is computed from the sorted asset pair using rippled's Issue
+// comparator: currency primary, then issuer (account) secondary. See
+// rippled/include/xrpl/protocol/Issue.h Issue::operator<=> and
+// rippled/src/libxrpl/protocol/Indexes.cpp amm() which feeds std::minmax
+// the (account, currency) tuple into indexHash in that order.
 func AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency [20]byte) Keylet {
-	// Sort the issues (compare issuer first, then currency)
 	var minIssuer, minCurrency, maxIssuer, maxCurrency [20]byte
 
-	cmp := bytes.Compare(issue1Issuer[:], issue2Issuer[:])
-	if cmp < 0 || (cmp == 0 && bytes.Compare(issue1Currency[:], issue2Currency[:]) < 0) {
+	cmp := bytes.Compare(issue1Currency[:], issue2Currency[:])
+	if cmp < 0 || (cmp == 0 && bytes.Compare(issue1Issuer[:], issue2Issuer[:]) < 0) {
 		minIssuer, minCurrency = issue1Issuer, issue1Currency
 		maxIssuer, maxCurrency = issue2Issuer, issue2Currency
 	} else {

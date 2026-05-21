@@ -67,20 +67,24 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		return nil, types.RpcErrorLgrNotFound("ledger not found: " + viewErr.Error())
 	}
 
-	var (
-		issue1Issuer, issue1Currency [20]byte
-		issue2Issuer, issue2Currency [20]byte
-	)
+	// Parse user-supplied asset/asset2 into ammIssue structs. Preserving
+	// these as the canonical issue1/issue2 (rather than re-reading them from
+	// the AMM SLE) keeps the response order matched to rippled's doAMMInfo,
+	// which propagates the user's order through ammPoolHolds and the
+	// asset_frozen / asset2_frozen emit (AMMInfo.cpp:112-126, :188-194,
+	// :257-262). The SLE-fallback branch below only fires when amm_account
+	// was the locator (mirrors AMMInfo.cpp:166-170).
+	var issue1, issue2 ammIssue
 	if hasAsset {
 		var err error
-		issue1Issuer, issue1Currency, err = parseIssue(request.Asset)
+		issue1, err = parseSLEIssue(request.Asset)
 		if err != nil {
 			return nil, types.RpcErrorIssueMalformed("Invalid asset: " + err.Error())
 		}
 	}
 	if hasAsset2 {
 		var err error
-		issue2Issuer, issue2Currency, err = parseIssue(request.Asset2)
+		issue2, err = parseSLEIssue(request.Asset2)
 		if err != nil {
 			return nil, types.RpcErrorIssueMalformed("Invalid asset2: " + err.Error())
 		}
@@ -118,6 +122,11 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 			return nil, types.RpcErrorInternal("Invalid AMMID in account")
 		}
 		copy(ammKey[:], ammIDBytes)
+		// rippled treats sfAMMID present-but-zero identically to "not an AMM
+		// account" (AMMInfo.cpp:137-138: `if (ammID->isZero()) return ...`).
+		if ammKey == ([32]byte{}) {
+			return nil, types.RpcErrorActNotFound("Account is not an AMM account")
+		}
 		ammKeyResolved = true
 	}
 
@@ -145,7 +154,10 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	}
 
 	if !ammKeyResolved {
-		ammKeylet := keylet.AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency)
+		ammKeylet := keylet.AMM(
+			issue1.IssuerID, currencyToBytes(issue1.Currency),
+			issue2.IssuerID, currencyToBytes(issue2.Currency),
+		)
 		ammKey = ammKeylet.Key
 	}
 
@@ -168,13 +180,22 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		ammResult["trading_fee"] = tradingFee
 	}
 
-	asset1, asset1Err := parseSLEIssue(decoded["Asset"])
-	if asset1Err != nil {
-		return nil, types.RpcErrorInternal("AMM SLE Asset: " + asset1Err.Error())
-	}
-	asset2, asset2Err := parseSLEIssue(decoded["Asset2"])
-	if asset2Err != nil {
-		return nil, types.RpcErrorInternal("AMM SLE Asset2: " + asset2Err.Error())
+	// When amm_account was the locator the request carried no asset/asset2,
+	// so populate issue1/issue2 from the SLE (matches AMMInfo.cpp:166-170).
+	// When the user supplied asset+asset2, issue1/issue2 are already set
+	// in the user's order and must NOT be overwritten — the SLE stores
+	// Asset/Asset2 in canonical (std::minmax) order, which can disagree
+	// with the user's order and would silently swap amount ↔ amount2.
+	if !hasAsset {
+		var err error
+		issue1, err = parseSLEIssue(decoded["Asset"])
+		if err != nil {
+			return nil, types.RpcErrorInternal("AMM SLE Asset: " + err.Error())
+		}
+		issue2, err = parseSLEIssue(decoded["Asset2"])
+		if err != nil {
+			return nil, types.RpcErrorInternal("AMM SLE Asset2: " + err.Error())
+		}
 	}
 	accountStr, _ := decoded["Account"].(string)
 	if accountStr == "" {
@@ -190,14 +211,17 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	// rippled passes FreezeHandling::fhIGNORE_FREEZE for pool balances
 	// (AMMInfo.cpp:193): balances reflect raw pool holdings; the freeze
 	// status is reported separately via asset[2]_frozen.
-	bal1 := readAMMHolds(view, ammAccountID, asset1)
-	bal2 := readAMMHolds(view, ammAccountID, asset2)
+	bal1 := readAMMHolds(view, ammAccountID, issue1)
+	bal2 := readAMMHolds(view, ammAccountID, issue2)
 	ammResult["amount"] = formatAmountJSON(bal1)
 	ammResult["amount2"] = formatAmountJSON(bal2)
 
 	// lp_token: when "account" is supplied, rippled returns that requester's
-	// LP balance via ammLPHolds (AMMInfo.cpp:195-197). Otherwise return the
-	// pool-wide LPTokenBalance from the SLE.
+	// LP balance via ammLPHolds (AMMInfo.cpp:195-197). Otherwise rippled
+	// emits the SLE's sfLPTokenBalance verbatim — which is a mandatory field
+	// on ltAMM, so a missing field here means the SLE is corrupted and we
+	// surface that as an internal error rather than silently omitting the
+	// key (rippled would crash on the field access).
 	lpTokenBalanceField := decoded["LPTokenBalance"]
 	if hasLPAccount {
 		lpCurrency, lpErr := lpTokenCurrencyFromSLE(lpTokenBalanceField)
@@ -206,15 +230,18 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		}
 		lpBalance := accountLPHolds(view, ammAccountID, lpAccountID, lpCurrency, accountStr)
 		ammResult["lp_token"] = formatAmountJSON(lpBalance)
-	} else if lpTokenBalanceField != nil {
+	} else {
+		if lpTokenBalanceField == nil {
+			return nil, types.RpcErrorInternal("AMM SLE missing LPTokenBalance field")
+		}
 		ammResult["lp_token"] = lpTokenBalanceField
 	}
 
-	if !asset1.IsXRP {
-		ammResult["asset_frozen"] = isAssetFrozen(view, ammAccountID, asset1)
+	if !issue1.IsXRP {
+		ammResult["asset_frozen"] = isAssetFrozen(view, ammAccountID, issue1)
 	}
-	if !asset2.IsXRP {
-		ammResult["asset2_frozen"] = isAssetFrozen(view, ammAccountID, asset2)
+	if !issue2.IsXRP {
+		ammResult["asset2_frozen"] = isAssetFrozen(view, ammAccountID, issue2)
 	}
 
 	if voteSlots, ok := decoded["VoteSlots"].([]interface{}); ok && len(voteSlots) > 0 {
@@ -392,41 +419,6 @@ func toUint32(v interface{}) uint32 {
 		}
 	}
 	return 0
-}
-
-// parseIssue parses an asset/issue from the JSON representation
-// Returns issuer (20 bytes), currency (20 bytes), and error
-func parseIssue(issue map[string]interface{}) ([20]byte, [20]byte, error) {
-	var issuer [20]byte
-	var currency [20]byte
-
-	currencyStr, ok := issue["currency"].(string)
-	if !ok {
-		return issuer, currency, fmt.Errorf("missing currency field")
-	}
-
-	// Handle XRP (native currency)
-	if currencyStr == "XRP" {
-		// For XRP, issuer is all zeros, currency is all zeros
-		return issuer, currency, nil
-	}
-
-	// Handle IOU
-	issuerStr, ok := issue["issuer"].(string)
-	if !ok {
-		return issuer, currency, fmt.Errorf("missing issuer field for non-XRP currency")
-	}
-
-	_, issuerBytes, err := addresscodec.DecodeClassicAddressToAccountID(issuerStr)
-	if err != nil {
-		return issuer, currency, fmt.Errorf("invalid issuer: %w", err)
-	}
-	copy(issuer[:], issuerBytes)
-
-	// Convert currency code to 20-byte format
-	currency = currencyToBytes(currencyStr)
-
-	return issuer, currency, nil
 }
 
 // currencyToBytes converts a currency code to its 20-byte representation

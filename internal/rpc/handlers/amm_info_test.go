@@ -465,12 +465,12 @@ func TestIsAssetFrozen_IndividualFreeze(t *testing.T) {
 
 func TestLPTokenCurrencyFromSLE(t *testing.T) {
 	cur, err := lpTokenCurrencyFromSLE(map[string]interface{}{
-		"currency": "03ABCDEF0000000000000000000000000000000000",
+		"currency": "03ABCDEF00000000000000000000000000000000",
 		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"value":    "100",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "03ABCDEF0000000000000000000000000000000000", cur)
+	assert.Equal(t, "03ABCDEF00000000000000000000000000000000", cur)
 
 	_, err = lpTokenCurrencyFromSLE(nil)
 	assert.Error(t, err)
@@ -487,7 +487,7 @@ func TestAccountLPHolds_MissingTrustLine(t *testing.T) {
 	lpAddr := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	lpID := decodeAcct(t, lpAddr)
 
-	amount := accountLPHolds(view, ammID, lpID, "03ABCDEF0000000000000000000000000000000000", ammAddr)
+	amount := accountLPHolds(view, ammID, lpID, "03ABCDEF00000000000000000000000000000000", ammAddr)
 	assert.True(t, amount.IsZero())
 	assert.Equal(t, ammAddr, amount.Issuer)
 }
@@ -497,7 +497,7 @@ func TestAccountLPHolds_LPEqualsAMM(t *testing.T) {
 	ammAddr := "rrrrrrrrrrrrrrrrrrrrBZbvji"
 	ammID := decodeAcct(t, ammAddr)
 
-	amount := accountLPHolds(view, ammID, ammID, "03ABCDEF0000000000000000000000000000000000", ammAddr)
+	amount := accountLPHolds(view, ammID, ammID, "03ABCDEF00000000000000000000000000000000", ammAddr)
 	assert.True(t, amount.IsZero(), "LP account == AMM account should return zero")
 }
 
@@ -507,7 +507,7 @@ func TestAccountLPHolds_FrozenLine(t *testing.T) {
 	ammID := decodeAcct(t, ammAddr)
 	lpAddr := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	lpID := decodeAcct(t, lpAddr)
-	cur := "03ABCDEF0000000000000000000000000000000000"
+	cur := "03ABCDEF00000000000000000000000000000000"
 
 	// AMM is the issuer; its global-freeze flag suffices to mark the LP line frozen.
 	ammRoot := &state.AccountRoot{Flags: state.LsfGlobalFreeze}
