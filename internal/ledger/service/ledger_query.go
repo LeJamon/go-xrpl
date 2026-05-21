@@ -142,9 +142,8 @@ func toRippleTime(t time.Time) int64 {
 }
 
 // parentCloseTimeRippleEpoch returns the parent ledger's close time in
-// Ripple-epoch seconds, matching the signature inbound replay already
-// uses (replay_delta.go:747). Returns 0 for a nil ledger or pre-epoch
-// time so EngineConfig.ParentCloseTime stays uint32-safe.
+// Ripple-epoch seconds. Returns 0 for a nil ledger or pre-epoch time
+// so EngineConfig.ParentCloseTime stays uint32-safe.
 func parentCloseTimeRippleEpoch(parent *ledger.Ledger) uint32 {
 	if parent == nil {
 		return 0

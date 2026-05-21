@@ -50,8 +50,8 @@ type ApplyConfig struct {
 	// Ripple-epoch seconds. Pseudo-transactions like EnableAmendment
 	// stamp this onto sfMajorities entries (Change.cpp:309-310), so
 	// leaving it at 0 forks the AmendmentsSLE at the first flag
-	// ledger that records a majority. inbound/replay_delta.go:584 sets
-	// the equivalent EngineConfig field; this struct lets the
+	// ledger that records a majority. Inbound replay sets the
+	// equivalent EngineConfig field; this struct lets the
 	// consensus-build path do the same.
 	ParentCloseTime uint32
 	Logger          xrpllog.Logger
@@ -168,8 +168,8 @@ func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte
 	// Seed the engine's txCount from the view so the TransactionIndex assigned
 	// to this tx reflects all txs already in the open view — mirrors rippled's
 	// OpenView::txCount() = baseTxCount_ + txs_.size(). Without this seed, a
-	// non-TxQ Submit path (openledger.go:402) hitting applyOneSingle twice in
-	// a row on the same view would assign TransactionIndex=0 to both txs.
+	// non-TxQ Submit path hitting applyOneSingle twice in a row on the same
+	// view would assign TransactionIndex=0 to both txs.
 	engine.SetBaseTxCount(view.TxCount())
 	bp := tx.NewBlockProcessor(engine)
 	logger := cfg.Logger

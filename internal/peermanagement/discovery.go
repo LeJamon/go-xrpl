@@ -577,10 +577,10 @@ func (d *Discovery) SyncConnectedState(actualConnected map[string]struct{}) {
 //
 // Without this, autoconnect repeatedly dials addresses we already
 // have inbound connections from. Each redial completes TLS, then the
-// remote rejects via its post-handshake isConnectedTo guard
-// (overlay.go:923-926) and closes — surfacing as
-// `failed to read header: unexpected EOF` on our side. Forever flap.
-// Root cause of the iter25 goxrpl-1 stall.
+// remote rejects via its post-handshake isConnectedTo guard and
+// closes — surfacing as `failed to read header: unexpected EOF` on
+// our side. Forever flap. Root cause of the issue #470 fixed-peer
+// soak stall.
 func (d *Discovery) SyncConnectedHosts(hosts map[string]struct{}) {
 	if len(hosts) == 0 {
 		return
