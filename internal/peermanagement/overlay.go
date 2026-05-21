@@ -1628,6 +1628,15 @@ func (o *Overlay) discoveryLoop(ctx context.Context) error {
 
 // autoconnect attempts to connect to peers if we need more.
 func (o *Overlay) autoconnect(ctx context.Context) {
+	// Reconcile discovery's Connected view with the live overlay peer
+	// set first. Without this, an event-bus race on disconnect can
+	// leave fixed peers marked Connected=true in d.peers even after
+	// their TCP connection ended — and SelectPeersToConnect filters
+	// them out forever. Observed in iter23/24 soak: a single dropped
+	// rippled connection on goxrpl-1 stranded the network sub-quorum
+	// because Autoconnect reported `candidates=0 needed=N` indefinitely.
+	o.reconcileDiscoveryConnected()
+
 	if !o.discovery.NeedsMorePeers() {
 		return
 	}
@@ -2450,4 +2459,22 @@ func (o *Overlay) outboundCount() int {
 		}
 	}
 	return count
+}
+
+// reconcileDiscoveryConnected pushes the live outbound-peer address
+// set into Discovery so its `Connected` flags reflect the actual TCP
+// state. Called from autoconnect before SelectPeersToConnect so any
+// peer whose connection ended without a corresponding MarkDisconnected
+// gets re-considered for the next outbound attempt.
+func (o *Overlay) reconcileDiscoveryConnected() {
+	o.peersMu.RLock()
+	connected := make(map[string]struct{}, len(o.peers))
+	for _, peer := range o.peers {
+		if peer.Inbound() {
+			continue
+		}
+		connected[peer.Endpoint().String()] = struct{}{}
+	}
+	o.peersMu.RUnlock()
+	o.discovery.SyncConnectedState(connected)
 }

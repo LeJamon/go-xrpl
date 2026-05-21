@@ -523,6 +523,35 @@ func (d *Discovery) MarkDisconnected(peerID PeerID) {
 	}
 }
 
+// SyncConnectedState reconciles Discovery's view of connected peers
+// against the Overlay's actual peer set. Any d.peers entry currently
+// marked Connected whose address is NOT in actualConnected is flipped
+// back to Connected=false so it becomes a candidate for reconnection.
+//
+// This guards against the PeerID-keyed MarkDisconnected path missing
+// some disconnect events (event-bus races, inbound-only peers
+// transitioning, double-disconnect dedupe in removePeer). Without
+// this, fixed peers can stay marked Connected=true in d.peers even
+// after their TCP connection drops, so SelectPeersToConnect filters
+// them out and autoconnect reports `candidates=0 needed=N` forever —
+// observed in the 5-node soak when goxrpl-1 lost a single rippled
+// connection and never re-established it (iter23/24).
+func (d *Discovery) SyncConnectedState(actualConnected map[string]struct{}) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for addr, peer := range d.peers {
+		if peer.Connected {
+			if _, stillConnected := actualConnected[addr]; !stillConnected {
+				peer.Connected = false
+				if peer.PeerID != 0 {
+					delete(d.connected, peer.PeerID)
+					peer.PeerID = 0
+				}
+			}
+		}
+	}
+}
+
 // ConnectedCount returns the number of connected peers.
 func (d *Discovery) ConnectedCount() int {
 	d.mu.RLock()
