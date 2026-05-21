@@ -84,7 +84,6 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 }
 
 // ParseAmountFromJSON parses an amount from JSON (either XRP string or IOU object).
-// Permissive parser kept for callers that don't need book-side validation.
 func ParseAmountFromJSON(data json.RawMessage) (types.Amount, error) {
 	// Try parsing as string first (XRP amount)
 	var xrpAmount string
