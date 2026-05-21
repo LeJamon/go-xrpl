@@ -166,7 +166,7 @@ func (m *mockGatewayBalancesLedgerService) GetNFTSellOffers(_ context.Context, n
 func (m *mockGatewayBalancesLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetAutofill(account string, hasTicketSequence bool, txJSON []byte) (uint32, uint64, error) {
+func (m *mockGatewayBalancesLedgerService) GetAutofill(account string, needSequence, hasTicketSequence bool, txJSON []byte) (uint32, uint64, error) {
 	return 0, 0, errors.New("not implemented")
 }
 func (m *mockGatewayBalancesLedgerService) IsAmendmentBlocked() bool { return false }

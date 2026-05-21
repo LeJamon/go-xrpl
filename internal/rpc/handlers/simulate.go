@@ -146,6 +146,12 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// signed-payload checks so rpcHIGH_FEE wins over rpcTX_SIGNED on
 	// combined inputs, matching rippled's autofillTx order (Fee → Signers
 	// → TxnSignature).
+	//
+	// needSequence is passed through so the service skips the source-account
+	// lookup when the caller already supplied Sequence — rippled only invokes
+	// getAutofillSequence in that branch (Simulate.cpp:140-146), so a
+	// Sequence-supplied/account-missing call must not surface
+	// rpcSRC_ACT_NOT_FOUND.
 	_, hasSeq := txJsonMap["Sequence"]
 	_, hasFee := txJsonMap["Fee"]
 	if !hasSeq || !hasFee {
@@ -154,7 +160,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		if marshalErr != nil {
 			return nil, types.RpcErrorInternal("Failed to marshal tx_json for autofill")
 		}
-		seq, fee, autoErr := ctx.Services.Ledger.GetAutofill(accountStr, hasTicket, probe)
+		seq, fee, autoErr := ctx.Services.Ledger.GetAutofill(accountStr, !hasSeq, hasTicket, probe)
 		if autoErr != nil {
 			switch {
 			case errors.Is(autoErr, svcerr.ErrAccountNotFound):
@@ -166,8 +172,8 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 				return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill tx: %v", autoErr))
 			}
 		}
-		// rippled writes Sequence unconditionally (Simulate.cpp:140-146); the
-		// value is 0 in the ticket case.
+		// Mirrors rippled Simulate.cpp:140-146: write Sequence only when the
+		// caller did not supply it. seq is 0 in the ticket case.
 		if !hasSeq {
 			txJsonMap["Sequence"] = seq
 		}

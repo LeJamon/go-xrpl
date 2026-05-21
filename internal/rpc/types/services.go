@@ -272,12 +272,14 @@ type TransactionSubmitter interface {
 	GetTransactionHistory(ctx context.Context, startIndex uint32) (*TxHistoryResult, error)
 
 	// GetAutofill returns Sequence and Fee read under one lock so they
-	// observe a consistent ledger snapshot. Sequence is 0 when
-	// hasTicketSequence is true. Fee includes per-tx-type adjustments
-	// (multisign, AccountDelete, AMMCreate, LedgerStateFix). Mirrors
-	// rippled Simulate.cpp getAutofillSequence + TransactionSign.cpp
-	// getCurrentNetworkFee.
-	GetAutofill(account string, hasTicketSequence bool, txJSON []byte) (sequence uint32, fee uint64, err error)
+	// observe a consistent ledger snapshot. When needSequence is false
+	// the source-account lookup is skipped and Sequence is returned as
+	// 0 — matching rippled's autofillTx, which only invokes
+	// getAutofillSequence when tx_json.Sequence is absent
+	// (Simulate.cpp:140-146). Sequence is also 0 when hasTicketSequence
+	// is true. Fee includes per-tx-type adjustments (multisign,
+	// AccountDelete, AMMCreate, LedgerStateFix).
+	GetAutofill(account string, needSequence, hasTicketSequence bool, txJSON []byte) (sequence uint32, fee uint64, err error)
 }
 
 // AccountQuerier provides account-related read operations.

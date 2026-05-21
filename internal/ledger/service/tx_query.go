@@ -195,10 +195,17 @@ func (s *Service) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint6
 	return readFeesFromLedger(s.openLedger)
 }
 
-// GetAutofill returns the Sequence (0 when hasTicketSequence is true) and
-// Fee (drops) a transaction should carry to bypass the TxQ and enter the
-// current open ledger. Both values are read under a single RLock so they
-// observe a consistent ledger snapshot.
+// GetAutofill returns the Sequence (0 when hasTicketSequence is true or
+// needSequence is false) and Fee (drops) a transaction should carry to
+// bypass the TxQ and enter the current open ledger. Both values are read
+// under a single RLock so they observe a consistent ledger snapshot.
+//
+// When needSequence is false the source-account lookup is skipped — Fee
+// computation in rippled (TransactionSign.cpp:849, getTxFee) never reads
+// the account either, so a caller that already supplies Sequence must
+// not get rpcSRC_ACT_NOT_FOUND from this path. Callers are responsible
+// for ensuring the supplied Account is well-formed; the simulate handler
+// validates it up front.
 //
 // Fee dispatch follows rippled TransactionSign.cpp getCurrentNetworkFee:
 //
@@ -211,13 +218,11 @@ func (s *Service) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint6
 // / defaultAutoFillFeeDivisor; exceeding it yields svcerr.ErrHighFee.
 // rippled applies this ceiling regardless of role.
 //
-// scaleFeeLoad (rippled load-fee tracker) has no Go equivalent today and
-// is intentionally omitted — see issue tracker. When it lands, an
-// isUnlimited parameter should be plumbed back through this signature.
-//
-// Reference: rippled Simulate.cpp getAutofillSequence +
-// TransactionSign.cpp getCurrentNetworkFee / getTxFee.
-func (s *Service) GetAutofill(account string, hasTicketSequence bool, parsedTx tx.Transaction) (sequence uint32, fee uint64, err error) {
+// scaleFeeLoad (rippled's load-fee tracker) and the isUnlimited(role)
+// exemption have no Go equivalent and are intentionally omitted: goXRPL
+// never inflates fees for cluster load, and admin/identified callers
+// are not exempt from the ceiling check.
+func (s *Service) GetAutofill(account string, needSequence, hasTicketSequence bool, parsedTx tx.Transaction) (sequence uint32, fee uint64, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -225,27 +230,29 @@ func (s *Service) GetAutofill(account string, hasTicketSequence bool, parsedTx t
 		return 0, 0, ErrNoOpenLedger
 	}
 
-	_, accountIDBytes, decodeErr := addresscodec.DecodeClassicAddressToAccountID(account)
-	if decodeErr != nil {
-		return 0, 0, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, decodeErr)
-	}
-	var accountID [20]byte
-	copy(accountID[:], accountIDBytes)
+	if needSequence {
+		_, accountIDBytes, decodeErr := addresscodec.DecodeClassicAddressToAccountID(account)
+		if decodeErr != nil {
+			return 0, 0, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, decodeErr)
+		}
+		var accountID [20]byte
+		copy(accountID[:], accountIDBytes)
 
-	data, readErr := s.openLedger.Read(keylet.Account(accountID))
-	if readErr != nil || data == nil {
-		if !hasTicketSequence {
-			return 0, 0, svcerr.ErrAccountNotFound
-		}
-	} else if !hasTicketSequence {
-		acct, parseErr := state.ParseAccountRoot(data)
-		if parseErr != nil {
-			return 0, 0, fmt.Errorf("parse account root: %w", parseErr)
-		}
-		if s.txQueue != nil {
-			sequence = s.txQueue.NextQueuableSeq(accountID, acct.Sequence)
-		} else {
-			sequence = acct.Sequence
+		data, readErr := s.openLedger.Read(keylet.Account(accountID))
+		if readErr != nil || data == nil {
+			if !hasTicketSequence {
+				return 0, 0, svcerr.ErrAccountNotFound
+			}
+		} else if !hasTicketSequence {
+			acct, parseErr := state.ParseAccountRoot(data)
+			if parseErr != nil {
+				return 0, 0, fmt.Errorf("parse account root: %w", parseErr)
+			}
+			if s.txQueue != nil {
+				sequence = s.txQueue.NextQueuableSeq(accountID, acct.Sequence)
+			} else {
+				sequence = acct.Sequence
+			}
 		}
 	}
 
@@ -288,6 +295,11 @@ func (s *Service) GetAutofill(account string, hasTicketSequence bool, parsedTx t
 // otherwise the default Transactor::calculateBaseFee applies, which charges
 // one extra baseFee per entry in sfSigners regardless of SigningPubKey
 // (rippled Transactor.cpp:229-245).
+//
+// Unlike rippled's getTxFee, which falls back to reference_fee on a
+// malformed Signers array (TransactionSign.cpp:792-815), this path
+// assumes the caller has already structurally validated Signers — the
+// simulate handler runs normalizeSigners before invoking GetAutofill.
 func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.EngineConfig) uint64 {
 	if parsedTx == nil {
 		return cfg.BaseFee

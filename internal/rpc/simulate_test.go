@@ -22,6 +22,8 @@ type mockLedgerServiceSimulate struct {
 	autofillSeq       uint32
 	autofillErr       error
 	currentNetworkFee uint64
+	lastNeedSequence  bool
+	autofillCallCount int
 }
 
 func newMockLedgerServiceSimulate() *mockLedgerServiceSimulate {
@@ -46,11 +48,13 @@ func (m *mockLedgerServiceSimulate) SimulateTransaction(txJSON []byte) (*types.S
 	return m.simulateResult, nil
 }
 
-func (m *mockLedgerServiceSimulate) GetAutofill(account string, hasTicketSequence bool, txJSON []byte) (uint32, uint64, error) {
+func (m *mockLedgerServiceSimulate) GetAutofill(account string, needSequence, hasTicketSequence bool, txJSON []byte) (uint32, uint64, error) {
+	m.lastNeedSequence = needSequence
+	m.autofillCallCount++
 	if m.autofillErr != nil {
 		return 0, 0, m.autofillErr
 	}
-	if hasTicketSequence {
+	if !needSequence || hasTicketSequence {
 		return 0, m.currentNetworkFee, nil
 	}
 	return m.autofillSeq, m.currentNetworkFee, nil
@@ -552,6 +556,56 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		assert.EqualValues(t, 7, txJSON["Sequence"])
 		assert.Equal(t, "12", txJSON["Fee"])
+	})
+
+	t.Run("Sequence supplied propagates needSequence=false to service", func(t *testing.T) {
+		// rippled only invokes getAutofillSequence when Sequence is absent
+		// (Simulate.cpp:140-146); the handler must propagate needSequence=false
+		// so the service can skip the source-account lookup that would
+		// otherwise surface rpcSRC_ACT_NOT_FOUND for callers that supplied
+		// Sequence but not Fee. The behavioural test for the skip itself
+		// lives in internal/ledger/service/tx_query_test.go.
+		mock := newMockLedgerServiceSimulate()
+		mock.currentNetworkFee = 17
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+				"Sequence":        9,
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.Nil(t, rpcErr)
+		resp := result.(map[string]interface{})
+		txJSON := resp["tx_json"].(map[string]interface{})
+
+		assert.EqualValues(t, 9, txJSON["Sequence"], "caller-supplied Sequence preserved")
+		assert.Equal(t, "17", txJSON["Fee"], "Fee still autofilled")
+		assert.Equal(t, 1, mock.autofillCallCount, "GetAutofill invoked exactly once")
+		assert.False(t, mock.lastNeedSequence,
+			"needSequence must be false when caller supplied Sequence")
+	})
+
+	t.Run("Sequence absent propagates needSequence=true to service", func(t *testing.T) {
+		mock := newMockLedgerServiceSimulate()
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.Nil(t, rpcErr)
+		assert.True(t, mock.lastNeedSequence,
+			"needSequence must be true when caller omitted Sequence")
 	})
 
 	t.Run("TicketSequence writes Sequence=0", func(t *testing.T) {
