@@ -96,41 +96,77 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		return nil, types.RpcErrorMissingField("tx.Account")
 	}
 
-	// Validate Account is a valid Base58 address up front.
-	//
-	// rippled gates this check inside getAutofillSequence (Simulate.cpp:50-55)
-	// and therefore skips it when the caller supplies Sequence. We validate
-	// unconditionally because every downstream branch (Fee dispatch through
-	// GetAutofill, structural simulate apply) needs the AccountID anyway, so
-	// deferring would only delay the same error. The wire response for the
-	// "no Sequence + bad Account" case still matches rippled
-	// (rpcSRC_ACT_MALFORMED, "Invalid field 'tx.Account'.").
+	// Validate Account string up front. rippled gates this inside
+	// getAutofillSequence (Simulate.cpp:50-55) and skips it when Sequence
+	// is supplied; we validate unconditionally because every downstream
+	// branch needs the AccountID anyway. The wire response still matches
+	// rippled (rpcSRC_ACT_MALFORMED, "Invalid field 'tx.Account'.").
 	accountStr, ok := txJsonMap["Account"].(string)
 	if !ok || !types.IsValidXRPLAddress(accountStr) {
 		return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx.Account'.")
 	}
 
-	// Reference: rippled autofillTx() — Simulate.cpp:71-156.
+	// rippled autofillTx() — Simulate.cpp:71-156. Steps run in the same
+	// order so rippled's error precedence is preserved:
+	//   1. Fee        (→ rpcHIGH_FEE)
+	//   2. SigningPubKey
+	//   3. Signers loop with inline signed-check (→ rpcTX_SIGNED)
+	//   4. TxnSignature with signed-check (→ rpcTX_SIGNED)
+	//   5. Sequence   (→ rpcSRC_ACT_NOT_FOUND)
+	//   6. NetworkID
 
+	// 1. Fee — rippled Simulate.cpp:74-89.
+	if _, hasFee := txJsonMap["Fee"]; !hasFee {
+		probe, marshalErr := json.Marshal(txJsonMap)
+		if marshalErr != nil {
+			return nil, types.RpcErrorInternal("Failed to marshal tx_json for fee autofill")
+		}
+		fee, feeErr := ctx.Services.Ledger.GetAutofillFee(probe)
+		if feeErr != nil {
+			var hfe *svcerr.HighFeeError
+			if errors.As(feeErr, &hfe) {
+				return nil, types.RpcErrorHighFee(hfe.Error())
+			}
+			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill fee: %v", feeErr))
+		}
+		txJsonMap["Fee"] = strconv.FormatUint(fee, 10)
+	}
+
+	// 2. SigningPubKey — rippled Simulate.cpp:91-95.
 	if _, ok := txJsonMap["SigningPubKey"]; !ok {
 		txJsonMap["SigningPubKey"] = ""
 	}
 
-	// Structural Signers validation + per-signer field autofill. The
-	// signed-payload check (signer.TxnSignature != "") is deferred to the
-	// post-autofill block below so rippled's error precedence is preserved:
-	// Fee autofill (→ rpcHIGH_FEE) must fire before rpcTX_SIGNED.
-	signerObjs, rpcErr := normalizeSigners(txJsonMap)
-	if rpcErr != nil {
+	// 3. Signers — rippled Simulate.cpp:97-127. Structural check, autofill,
+	// and signed-check happen per-iteration so an earlier signer's signed
+	// TxnSignature fires before a later signer's structural error.
+	if rpcErr := processSigners(txJsonMap); rpcErr != nil {
 		return nil, rpcErr
 	}
 
-	if _, ok := txJsonMap["TxnSignature"]; !ok {
+	// 4. TxnSignature — rippled Simulate.cpp:129-138.
+	if txnSig, ok := txJsonMap["TxnSignature"]; !ok {
 		txJsonMap["TxnSignature"] = ""
+	} else if sigStr, _ := txnSig.(string); sigStr != "" {
+		return nil, types.RpcErrorTxSigned()
 	}
 
-	// Autofill NetworkID (rippled Simulate.cpp:148-153). Order is functionally
-	// inert: NetworkID does not affect fee dispatch.
+	// 5. Sequence — rippled Simulate.cpp:140-146. Reads the source account
+	// only here (after Fee and signed-checks), so account-missing surfaces
+	// only when rippled would also report it.
+	if _, hasSeq := txJsonMap["Sequence"]; !hasSeq {
+		_, hasTicket := txJsonMap["TicketSequence"]
+		seq, seqErr := ctx.Services.Ledger.GetAutofillSequence(accountStr, hasTicket)
+		if seqErr != nil {
+			if errors.Is(seqErr, svcerr.ErrAccountNotFound) {
+				return nil, types.RpcErrorSrcActMissing("Source account not found.")
+			}
+			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill sequence: %v", seqErr))
+		}
+		txJsonMap["Sequence"] = seq
+	}
+
+	// 6. NetworkID — rippled Simulate.cpp:148-153.
 	if _, ok := txJsonMap["NetworkID"]; !ok {
 		serverInfo := ctx.Services.Ledger.GetServerInfo()
 		if serverInfo.NetworkID > 1024 {
@@ -138,64 +174,12 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		}
 	}
 
-	// Autofill Sequence + Fee in one service call so they observe a
-	// consistent ledger snapshot. rippled splits these (getAutofillSequence
-	// and getCurrentNetworkFee in Simulate.cpp / TransactionSign.cpp), but
-	// rippled holds one openLedger().current() reference for both reads;
-	// the unified service call is the Go analog. This runs *before* the
-	// signed-payload checks so rpcHIGH_FEE wins over rpcTX_SIGNED on
-	// combined inputs, matching rippled's autofillTx order (Fee → Signers
-	// → TxnSignature).
-	//
-	// needSequence is passed through so the service skips the source-account
-	// lookup when the caller already supplied Sequence — rippled only invokes
-	// getAutofillSequence in that branch (Simulate.cpp:140-146), so a
-	// Sequence-supplied/account-missing call must not surface
-	// rpcSRC_ACT_NOT_FOUND.
-	_, hasSeq := txJsonMap["Sequence"]
-	_, hasFee := txJsonMap["Fee"]
-	if !hasSeq || !hasFee {
-		_, hasTicket := txJsonMap["TicketSequence"]
-		probe, marshalErr := json.Marshal(txJsonMap)
-		if marshalErr != nil {
-			return nil, types.RpcErrorInternal("Failed to marshal tx_json for autofill")
-		}
-		seq, fee, autoErr := ctx.Services.Ledger.GetAutofill(accountStr, !hasSeq, hasTicket, probe)
-		if autoErr != nil {
-			switch {
-			case errors.Is(autoErr, svcerr.ErrAccountNotFound):
-				return nil, types.RpcErrorSrcActMissing("Source account not found.")
-			case errors.Is(autoErr, svcerr.ErrHighFee):
-				msg := strings.TrimPrefix(autoErr.Error(), svcerr.ErrHighFee.Error()+": ")
-				return nil, types.RpcErrorHighFee(msg)
-			default:
-				return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill tx: %v", autoErr))
-			}
-		}
-		// Mirrors rippled Simulate.cpp:140-146: write Sequence only when the
-		// caller did not supply it. seq is 0 in the ticket case.
-		if !hasSeq {
-			txJsonMap["Sequence"] = seq
-		}
-		if !hasFee {
-			txJsonMap["Fee"] = strconv.FormatUint(fee, 10)
-		}
-	}
+	// Normalize caller-supplied numeric Sequence / TicketSequence: JSON
+	// numbers unmarshal as float64 in map[string]interface{} but downstream
+	// consumers (binarycodec, simulate engine) expect an integer type.
+	normalizeSequenceFields(txJsonMap)
 
-	// Deferred signed-payload checks — must follow GetAutofill so rpcHIGH_FEE
-	// precedes rpcTX_SIGNED for clients that supply both a non-empty
-	// TxnSignature and trigger fee escalation.
-	for _, signerObj := range signerObjs {
-		if sigStr, _ := signerObj["TxnSignature"].(string); sigStr != "" {
-			return nil, types.RpcErrorTxSigned()
-		}
-	}
-	if sigStr, _ := txJsonMap["TxnSignature"].(string); sigStr != "" {
-		return nil, types.RpcErrorTxSigned()
-	}
-
-	// Reject Batch transaction type.
-	// rippled: if (stTx->getTxnType() == ttBATCH) return RPC::make_error(rpcNOT_IMPL)
+	// Reject Batch — rippled Simulate.cpp:345-348.
 	if txType, ok := txJsonMap["TransactionType"].(string); ok && txType == "Batch" {
 		return nil, types.RpcErrorNotImpl()
 	}
@@ -260,43 +244,64 @@ func (m *SimulateMethod) RequiredCondition() types.Condition {
 	return types.NeedsCurrentLedger
 }
 
-// normalizeSigners validates the structural shape of the Signers array and
-// autofills missing SigningPubKey / TxnSignature on each entry. The returned
-// slice points at the inner Signer maps inside txJsonMap so the caller can
-// run signed-payload checks against the same objects after fee autofill.
-//
-// Mirrors the structural half of rippled's autofillTx Signers loop
-// (Simulate.cpp:97-126), excluding the rpcTX_SIGNED branch.
-func normalizeSigners(txJsonMap map[string]interface{}) ([]map[string]interface{}, *types.RpcError) {
+// processSigners mirrors rippled's autofillTx Signers loop
+// (Simulate.cpp:97-127): per-iteration structural check, then autofill of
+// missing SigningPubKey / TxnSignature, then rejection of any non-empty
+// signer TxnSignature. The inline ordering is observable: a signed
+// TxnSignature on signers[0] returns rpcTX_SIGNED even when signers[2] is
+// structurally malformed.
+func processSigners(txJsonMap map[string]interface{}) *types.RpcError {
 	signersRaw, ok := txJsonMap["Signers"]
 	if !ok {
-		return nil, nil
+		return nil
 	}
 	signers, ok := signersRaw.([]interface{})
 	if !ok {
-		return nil, types.RpcErrorInvalidField("tx.Signers")
+		return types.RpcErrorInvalidField("tx.Signers")
 	}
-	out := make([]map[string]interface{}, 0, len(signers))
 	for i, entry := range signers {
 		entryObj, ok := entry.(map[string]interface{})
 		if !ok {
-			return nil, types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
+			return types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
 		}
 		signerInner, ok := entryObj["Signer"]
 		if !ok {
-			return nil, types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
+			return types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
 		}
 		signerObj, ok := signerInner.(map[string]interface{})
 		if !ok {
-			return nil, types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
+			return types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
 		}
 		if _, ok := signerObj["SigningPubKey"]; !ok {
 			signerObj["SigningPubKey"] = ""
 		}
-		if _, ok := signerObj["TxnSignature"]; !ok {
+		if txnSig, ok := signerObj["TxnSignature"]; !ok {
 			signerObj["TxnSignature"] = ""
+		} else if sigStr, _ := txnSig.(string); sigStr != "" {
+			return types.RpcErrorTxSigned()
 		}
-		out = append(out, signerObj)
 	}
-	return out, nil
+	return nil
+}
+
+// normalizeSequenceFields coerces caller-supplied Sequence and
+// TicketSequence values from float64 (JSON-number default) to uint32 so
+// the downstream binary codec and engine see a stable integer type.
+func normalizeSequenceFields(txJsonMap map[string]interface{}) {
+	for _, k := range [...]string{"Sequence", "TicketSequence"} {
+		v, ok := txJsonMap[k]
+		if !ok {
+			continue
+		}
+		switch n := v.(type) {
+		case float64:
+			txJsonMap[k] = uint32(n)
+		case int:
+			txJsonMap[k] = uint32(n)
+		case int64:
+			txJsonMap[k] = uint32(n)
+		case uint64:
+			txJsonMap[k] = uint32(n)
+		}
+	}
 }

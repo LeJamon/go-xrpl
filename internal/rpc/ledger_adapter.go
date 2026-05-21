@@ -882,12 +882,16 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 	return out, nil
 }
 
-func (a *LedgerServiceAdapter) GetAutofill(account string, needSequence, hasTicketSequence bool, txJSON []byte) (uint32, uint64, error) {
+func (a *LedgerServiceAdapter) GetAutofillFee(txJSON []byte) (uint64, error) {
 	parsedTx, err := tx.ParseJSON(txJSON)
 	if err != nil {
-		return 0, 0, fmt.Errorf("parse tx for autofill: %w", err)
+		return 0, fmt.Errorf("parse tx for fee autofill: %w", err)
 	}
-	return a.svc.GetAutofill(account, needSequence, hasTicketSequence, parsedTx)
+	return a.svc.GetAutofillFee(parsedTx)
+}
+
+func (a *LedgerServiceAdapter) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
+	return a.svc.GetAutofillSequence(account, hasTicketSequence)
 }
 
 // IsAmendmentBlocked returns true if the server is blocked by unsupported amendments

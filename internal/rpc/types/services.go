@@ -271,15 +271,23 @@ type TransactionSubmitter interface {
 	StoreTransaction(txHash [32]byte, txData []byte) error
 	GetTransactionHistory(ctx context.Context, startIndex uint32) (*TxHistoryResult, error)
 
-	// GetAutofill returns Sequence and Fee read under one lock so they
-	// observe a consistent ledger snapshot. When needSequence is false
-	// the source-account lookup is skipped and Sequence is returned as
-	// 0 — matching rippled's autofillTx, which only invokes
-	// getAutofillSequence when tx_json.Sequence is absent
-	// (Simulate.cpp:140-146). Sequence is also 0 when hasTicketSequence
-	// is true. Fee includes per-tx-type adjustments (multisign,
-	// AccountDelete, AMMCreate, LedgerStateFix).
-	GetAutofill(account string, needSequence, hasTicketSequence bool, txJSON []byte) (sequence uint32, fee uint64, err error)
+	// GetAutofillFee returns the Fee a transaction should carry to enter
+	// the open ledger. Mirrors rippled getCurrentNetworkFee
+	// (TransactionSign.cpp:839-877): max(feeDefault, escalatedFee) with a
+	// feeDefault * mult / div ceiling. On ceiling overflow handlers map
+	// to rpcINTERNAL; on exceedance the returned error is a
+	// *svcerr.HighFeeError (errors.Is(svcerr.ErrHighFee) also matches).
+	// Includes per-tx-type adjustments (multisign, AccountDelete,
+	// AMMCreate, LedgerStateFix). Never reads the source account.
+	GetAutofillFee(txJSON []byte) (fee uint64, err error)
+
+	// GetAutofillSequence returns the Sequence a transaction should
+	// carry. Mirrors rippled getAutofillSequence (Simulate.cpp:37-69):
+	// returns 0 when hasTicketSequence is true; otherwise reads the
+	// account SLE and consults TxQ.NextQueuableSeq. Returns
+	// svcerr.ErrAccountNotFound when the account is absent and no ticket
+	// supersedes the requirement.
+	GetAutofillSequence(account string, hasTicketSequence bool) (sequence uint32, err error)
 }
 
 // AccountQuerier provides account-related read operations.

@@ -38,10 +38,15 @@ func TestComputeBaseFeeForTx_Multisign(t *testing.T) {
 	})
 
 	t.Run("one signer with non-empty SigningPubKey still gets multisign fee", func(t *testing.T) {
+		// 33-byte compressed secp256k1 pubkey shape (66 hex chars). The value
+		// itself is synthetic; the dispatch under test only counts sfSigners
+		// (rippled Transactor.cpp:229-245), but a well-shaped pubkey keeps
+		// this case robust against future parser tightening.
+		const signingPubKey = "03ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB"
 		parsed, err := tx.ParseJSON([]byte(`{
 			"TransactionType":"AccountSet",
 			"Account":"rEFNJWaJN6JYW9zXxFq1KqtaqgsMcLs9wK",
-			"SigningPubKey":"03ABCDEF",
+			"SigningPubKey":"` + signingPubKey + `",
 			"Signers":[
 				{"Signer":{"Account":"rPmsLuwgD3yp6mvCXyz44itC9V2qZpDvm6","SigningPubKey":"","TxnSignature":""}}
 			]

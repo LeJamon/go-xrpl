@@ -17,13 +17,15 @@ import (
 // mockLedgerServiceSimulate extends mockLedgerService with simulate-specific behavior.
 type mockLedgerServiceSimulate struct {
 	*mockLedgerService
-	simulateResult    *types.SubmitResult
-	simulateError     error
-	autofillSeq       uint32
-	autofillErr       error
-	currentNetworkFee uint64
-	lastNeedSequence  bool
-	autofillCallCount int
+	simulateResult       *types.SubmitResult
+	simulateError        error
+	autofillSeq          uint32
+	autofillFeeErr       error
+	autofillSeqErr       error
+	currentNetworkFee    uint64
+	lastSeqHasTicket     bool
+	feeAutofillCallCount int
+	seqAutofillCallCount int
 }
 
 func newMockLedgerServiceSimulate() *mockLedgerServiceSimulate {
@@ -48,16 +50,24 @@ func (m *mockLedgerServiceSimulate) SimulateTransaction(txJSON []byte) (*types.S
 	return m.simulateResult, nil
 }
 
-func (m *mockLedgerServiceSimulate) GetAutofill(account string, needSequence, hasTicketSequence bool, txJSON []byte) (uint32, uint64, error) {
-	m.lastNeedSequence = needSequence
-	m.autofillCallCount++
-	if m.autofillErr != nil {
-		return 0, 0, m.autofillErr
+func (m *mockLedgerServiceSimulate) GetAutofillFee(txJSON []byte) (uint64, error) {
+	m.feeAutofillCallCount++
+	if m.autofillFeeErr != nil {
+		return 0, m.autofillFeeErr
 	}
-	if !needSequence || hasTicketSequence {
-		return 0, m.currentNetworkFee, nil
+	return m.currentNetworkFee, nil
+}
+
+func (m *mockLedgerServiceSimulate) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
+	m.seqAutofillCallCount++
+	m.lastSeqHasTicket = hasTicketSequence
+	if m.autofillSeqErr != nil {
+		return 0, m.autofillSeqErr
 	}
-	return m.autofillSeq, m.currentNetworkFee, nil
+	if hasTicketSequence {
+		return 0, nil
+	}
+	return m.autofillSeq, nil
 }
 
 func newSimulateTestServices(mock *mockLedgerServiceSimulate) *types.ServiceContainer {
@@ -558,12 +568,11 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		assert.Equal(t, "12", txJSON["Fee"])
 	})
 
-	t.Run("Sequence supplied propagates needSequence=false to service", func(t *testing.T) {
+	t.Run("Sequence supplied skips GetAutofillSequence", func(t *testing.T) {
 		// rippled only invokes getAutofillSequence when Sequence is absent
-		// (Simulate.cpp:140-146); the handler must propagate needSequence=false
-		// so the service can skip the source-account lookup that would
-		// otherwise surface rpcSRC_ACT_NOT_FOUND for callers that supplied
-		// Sequence but not Fee.
+		// (Simulate.cpp:140-146); when the caller supplies Sequence, the
+		// handler must not perform the source-account lookup that would
+		// otherwise surface rpcSRC_ACT_NOT_FOUND.
 		mock := newMockLedgerServiceSimulate()
 		mock.currentNetworkFee = 17
 
@@ -584,12 +593,12 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		assert.EqualValues(t, 9, txJSON["Sequence"], "caller-supplied Sequence preserved")
 		assert.Equal(t, "17", txJSON["Fee"], "Fee still autofilled")
-		assert.Equal(t, 1, mock.autofillCallCount, "GetAutofill invoked exactly once")
-		assert.False(t, mock.lastNeedSequence,
-			"needSequence must be false when caller supplied Sequence")
+		assert.Equal(t, 1, mock.feeAutofillCallCount, "GetAutofillFee invoked once")
+		assert.Equal(t, 0, mock.seqAutofillCallCount,
+			"GetAutofillSequence must not run when Sequence is supplied")
 	})
 
-	t.Run("Sequence absent propagates needSequence=true to service", func(t *testing.T) {
+	t.Run("Sequence absent invokes GetAutofillSequence", func(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 
 		params := map[string]interface{}{
@@ -603,11 +612,12 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.Nil(t, rpcErr)
-		assert.True(t, mock.lastNeedSequence,
-			"needSequence must be true when caller omitted Sequence")
+		assert.Equal(t, 1, mock.seqAutofillCallCount,
+			"GetAutofillSequence must run when Sequence is absent")
+		assert.False(t, mock.lastSeqHasTicket)
 	})
 
-	t.Run("TicketSequence writes Sequence=0", func(t *testing.T) {
+	t.Run("TicketSequence writes Sequence=0 and propagates hasTicket", func(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 		mock.autofillSeq = 99
 
@@ -628,11 +638,14 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		assert.Equal(t, uint32(0), txJSON["Sequence"],
 			"rippled Simulate.cpp:68,140-146 writes Sequence=0 when TicketSequence is set")
+		assert.True(t, mock.lastSeqHasTicket, "hasTicketSequence must propagate to the service")
+		assert.Equal(t, uint32(5), txJSON["TicketSequence"],
+			"caller-supplied TicketSequence is normalized to uint32 for downstream consumers")
 	})
 
 	t.Run("Source account not found maps to srcActMissing", func(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
-		mock.autofillErr = svcerr.ErrAccountNotFound
+		mock.autofillSeqErr = svcerr.ErrAccountNotFound
 
 		params := map[string]interface{}{
 			"tx_json": map[string]interface{}{
@@ -648,9 +661,9 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		assert.Equal(t, types.RpcSRC_ACT_NOT_FOUND, rpcErr.Code)
 	})
 
-	t.Run("ErrHighFee maps to rpcHIGH_FEE with stripped wrap prefix", func(t *testing.T) {
+	t.Run("HighFeeError maps to rpcHIGH_FEE with rippled-format message", func(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
-		mock.autofillErr = fmt.Errorf("%w: Fee of 5000 exceeds the requested tx limit of 100", svcerr.ErrHighFee)
+		mock.autofillFeeErr = &svcerr.HighFeeError{Fee: 5000, Limit: 100}
 
 		params := map[string]interface{}{
 			"tx_json": map[string]interface{}{
@@ -665,12 +678,33 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, "highFee", rpcErr.ErrorString)
 		assert.Equal(t, "Fee of 5000 exceeds the requested tx limit of 100", rpcErr.Message,
-			"rippled TransactionSign.cpp:870-873 emits the unwrapped 'Fee of X exceeds…' message")
+			"rippled TransactionSign.cpp:870-873 emits the 'Fee of X exceeds…' message verbatim")
+	})
+
+	t.Run("HighFeeError via wrapped sentinel still errors.As-extracts", func(t *testing.T) {
+		// Defence-in-depth: a service that wraps the typed error via fmt.Errorf
+		// "%w" must still be recoverable by errors.As in the handler.
+		mock := newMockLedgerServiceSimulate()
+		mock.autofillFeeErr = fmt.Errorf("autofill: %w", &svcerr.HighFeeError{Fee: 5000, Limit: 100})
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "highFee", rpcErr.ErrorString)
+		assert.Equal(t, "Fee of 5000 exceeds the requested tx limit of 100", rpcErr.Message)
 	})
 
 	t.Run("highFee precedes txSigned when both inputs conflict", func(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
-		mock.autofillErr = fmt.Errorf("%w: Fee of 5000 exceeds the requested tx limit of 100", svcerr.ErrHighFee)
+		mock.autofillFeeErr = &svcerr.HighFeeError{Fee: 5000, Limit: 100}
 
 		params := map[string]interface{}{
 			"tx_json": map[string]interface{}{
@@ -686,6 +720,63 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, "highFee", rpcErr.ErrorString,
 			"rippled autofillTx runs Fee before the TxnSignature signed-check (Simulate.cpp:74-138)")
+	})
+
+	t.Run("txSigned precedes srcActNotFound (signed-check before Sequence autofill)", func(t *testing.T) {
+		// rippled autofillTx runs the top-level TxnSignature signed-check at
+		// Simulate.cpp:129-138, BEFORE the Sequence autofill at 140-146. So a
+		// request with a non-empty TxnSignature and a missing source account
+		// must surface rpcTX_SIGNED, not rpcSRC_ACT_NOT_FOUND.
+		mock := newMockLedgerServiceSimulate()
+		mock.autofillSeqErr = svcerr.ErrAccountNotFound
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+				"TxnSignature":    "DEADBEEF",
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "transactionSigned", rpcErr.ErrorString,
+			"signed-check fires before Sequence autofill — rippled Simulate.cpp:129-146")
+		assert.Equal(t, 0, mock.seqAutofillCallCount,
+			"GetAutofillSequence must not run once the signed-check has rejected")
+	})
+
+	t.Run("Signers signed-check precedes later signer's structural error", func(t *testing.T) {
+		// rippled's autofillTx Signers loop interleaves structural and
+		// signed-checks per-iteration (Simulate.cpp:97-127), so a signed
+		// TxnSignature on signers[0] fires rpcTX_SIGNED before signers[2]'s
+		// structural error is reached.
+		mock := newMockLedgerServiceSimulate()
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+				"Signers": []interface{}{
+					map[string]interface{}{
+						"Signer": map[string]interface{}{
+							"Account":      validAccountAddress,
+							"TxnSignature": "DEADBEEF",
+						},
+					},
+					"not-an-object",
+				},
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "transactionSigned", rpcErr.ErrorString,
+			"signers[0] signed-check must fire before signers[1] structural error")
 	})
 }
 

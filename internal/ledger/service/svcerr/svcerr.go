@@ -4,7 +4,10 @@
 // dependency on internal/ledger/service.
 package svcerr
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 var (
 	// ErrAccountNotFound is returned when a queried account does not
@@ -55,8 +58,27 @@ var (
 	// marker that does not parse or does not match an existing entry.
 	ErrInvalidMarker = errors.New("invalid marker")
 
-	// ErrHighFee is returned by fee-autofill when the escalated fee exceeds
-	// the autofill ceiling (feeDefault * mult / div). Handlers map this to
-	// rpcHIGH_FEE. Mirrors rippled TransactionSign.cpp getCurrentNetworkFee.
+	// ErrHighFee is the sentinel matched by errors.Is for any high-fee
+	// failure. The fee-autofill path returns the structured HighFeeError
+	// (which Is-matches this sentinel) so handlers can extract Fee/Limit
+	// directly. Mirrors rippled TransactionSign.cpp getCurrentNetworkFee.
 	ErrHighFee = errors.New("high fee")
 )
+
+// HighFeeError carries the structured payload of a fee-autofill rejection:
+// the computed fee and the autofill ceiling that capped it. The Error()
+// body matches rippled's wire message ("Fee of X exceeds the requested tx
+// limit of Y", TransactionSign.cpp:870-873). errors.Is(err, ErrHighFee)
+// matches via the Is method below.
+type HighFeeError struct {
+	Fee   uint64
+	Limit uint64
+}
+
+func (e *HighFeeError) Error() string {
+	return fmt.Sprintf("Fee of %d exceeds the requested tx limit of %d", e.Fee, e.Limit)
+}
+
+func (e *HighFeeError) Is(target error) bool {
+	return target == ErrHighFee
+}
