@@ -1962,6 +1962,13 @@ func (e *Engine) closeLedger() {
 		e.adaptor.RequestTxSet(p.TxSet)
 	}
 
+	// Reset the round-time clock at open→establish so prevRoundTime and the
+	// roundTime consumers in phaseEstablish (shouldPause, MIN_CONSENSUS gate,
+	// abandonDeadlineExceeded, convergePercent) measure only the establish
+	// phase — mirrors rippled's result_->roundTime.reset(clock_.now()) in
+	// Consensus.h:1446. Wall-clock rationale at line 571 still applies.
+	e.roundStartTime = time.Now()
+
 	// Move to establish phase
 	e.setPhase(consensus.PhaseEstablish)
 }
