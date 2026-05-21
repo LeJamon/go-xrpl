@@ -427,6 +427,17 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, setupFun
 	if len(node.Indexes) < dirNodeMaxEntries {
 		// Has space - add item to current page
 		prevNode := *node
+		// rippled distinguishes book vs non-book at the *caller* via an
+		// explicit `preserveOrder` bool passed into ApplyView::dirAdd
+		// (ApplyView.cpp:38-91). goxrpl derives it here from the page's
+		// taker fields — book directory SLEs always carry TakerPays/Gets
+		// currency, and no other directory variant sets those fields.
+		// XRPL has no XRP/XRP books so at least one taker-currency side
+		// is always non-zero for a genuine book entry; the inversion is
+		// safe today but assumes no future directory variant sets the
+		// taker fields without being a book. If that assumption breaks,
+		// route an explicit preserveOrder flag through DirInsert callers
+		// to match rippled's surface.
 		nodeIsBookDir := node.TakerPaysCurrency != [20]byte{} || node.TakerGetsCurrency != [20]byte{}
 
 		// Reference: rippled ApplyView.cpp dirAdd() lines 68-91.

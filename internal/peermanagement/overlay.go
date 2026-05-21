@@ -2469,6 +2469,14 @@ func (o *Overlay) outboundCount() int {
 // recognized as covered (so we don't re-dial it and trigger the
 // post-handshake isConnectedTo rejection in Connect / accept).
 //
+// goxrpl-specific infrastructure: no direct rippled counterpart.
+// rippled keeps the overlay's peer set and the autoconnect decision
+// under one strand in OverlayImpl::autoConnect, so its peer view
+// is always coherent. goxrpl splits the overlay (Overlay.peers) and
+// the connect scheduler (Discovery.peers) across an event bus, so
+// the two sets can drift; this reconcile bridges them once per
+// autoconnect tick.
+//
 // Two pieces of state are reconciled:
 //  1. exactAddrs: full "host:port" strings of OUTBOUND peers. These
 //     were originally tracked by MarkConnected.

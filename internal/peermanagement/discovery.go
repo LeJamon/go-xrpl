@@ -529,6 +529,14 @@ func (d *Discovery) MarkDisconnected(peerID PeerID) {
 // is flipped back to Connected=false so it becomes a candidate for
 // reconnection.
 //
+// goxrpl-specific infrastructure: no direct rippled counterpart.
+// rippled's overlay tracks peer-add/peer-remove transitions via
+// OverlayImpl::activate / OverlayImpl::onPeerDestroy under a single
+// strand and doesn't need an out-of-band reconcile step. goxrpl's
+// Discovery sits behind an event bus that can drop or coalesce
+// transitions under load, so we reconcile against the overlay's
+// authoritative peer set here.
+//
 // This guards against the PeerID-keyed MarkDisconnected path missing
 // some disconnect events (event-bus races, inbound-only peers
 // transitioning, double-disconnect dedupe in removePeer). Without
@@ -559,6 +567,13 @@ func (d *Discovery) SyncConnectedState(actualConnected map[string]struct{}) {
 // peers for which we only have an INBOUND connection: the inbound's
 // ephemeral source port won't match the fixed-peer config's listener
 // port, but the host IP matches.
+//
+// goxrpl-specific infrastructure: no direct rippled counterpart.
+// rippled correlates inbound peers against fixed-peer configuration
+// at the OverlayImpl::checkStopped / autoConnect layer using the
+// remote endpoint's host directly; goxrpl's Discovery keys peers by
+// the full "host:port" string, so a separate host-level reconcile
+// is needed to recognise an inbound as covering a fixed entry.
 //
 // Without this, autoconnect repeatedly dials addresses we already
 // have inbound connections from. Each redial completes TLS, then the

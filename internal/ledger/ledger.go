@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"math"
 	"sync"
 	"time"
 
@@ -817,32 +816,20 @@ func decodeHashesField(jsonObj map[string]any) ([][32]byte, error) {
 	return result, nil
 }
 
+// decodeUint32Field reads a STI_UINT32 field from a binarycodec-decoded
+// SLE. binarycodec/types.UInt32.ToJSON returns uint32, so that is the
+// only type we expect; any other type is a codec-drift signal worth
+// surfacing rather than silently coercing.
 func decodeUint32Field(jsonObj map[string]any, name string) (uint32, error) {
 	raw, ok := jsonObj[name]
 	if !ok {
 		return 0, nil
 	}
-	switch v := raw.(type) {
-	case uint32:
-		return v, nil
-	case int:
-		if v < 0 || v > math.MaxUint32 {
-			return 0, fmt.Errorf("%s field %d out of uint32 range", name, v)
-		}
-		return uint32(v), nil
-	case int64:
-		if v < 0 || v > math.MaxUint32 {
-			return 0, fmt.Errorf("%s field %d out of uint32 range", name, v)
-		}
-		return uint32(v), nil
-	case uint64:
-		if v > math.MaxUint32 {
-			return 0, fmt.Errorf("%s field %d out of uint32 range", name, v)
-		}
-		return uint32(v), nil
-	default:
-		return 0, fmt.Errorf("%s field has unexpected type %T", name, raw)
+	v, ok := raw.(uint32)
+	if !ok {
+		return 0, fmt.Errorf("%s field has unexpected type %T (want uint32)", name, raw)
 	}
+	return v, nil
 }
 
 // readSkipListHashes reads and decodes the Hashes array from an existing
