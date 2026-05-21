@@ -232,8 +232,6 @@ func TestBuildAuctionSlot_TimeIntervalExpired(t *testing.T) {
 	assert.Equal(t, uint32(20), result["time_interval"], "Expired auction should return 20")
 }
 
-// parseSLEIssue Tests
-
 func TestParseSLEIssue_XRP(t *testing.T) {
 	issue, err := parseSLEIssue(map[string]interface{}{"currency": "XRP"})
 	require.NoError(t, err)
@@ -442,8 +440,6 @@ func TestIsAssetFrozen_IndividualFreeze(t *testing.T) {
 	assert.False(t, frozen, "LowFreeze (AMM-side) must not flag asset as frozen")
 }
 
-// lpTokenCurrencyFromSLE Tests
-
 func TestLPTokenCurrencyFromSLE(t *testing.T) {
 	cur, err := lpTokenCurrencyFromSLE(map[string]interface{}{
 		"currency": "03ABCDEF0000000000000000000000000000000000",
@@ -460,8 +456,6 @@ func TestLPTokenCurrencyFromSLE(t *testing.T) {
 	_, err = lpTokenCurrencyFromSLE(map[string]interface{}{"currency": ""})
 	assert.Error(t, err)
 }
-
-// accountLPHolds Tests — mirror rippled ammLPHolds (AMMUtils.cpp:113-160).
 
 func TestAccountLPHolds_MissingTrustLine(t *testing.T) {
 	view := newMemView()
