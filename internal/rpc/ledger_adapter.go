@@ -879,14 +879,10 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 	return out, nil
 }
 
-// GetAutofillSequence returns the next sequence for the account from the
-// current open ledger, consulting the TxQ when the account has queued txs.
 func (a *LedgerServiceAdapter) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
 	return a.svc.GetAutofillSequence(account, hasTicketSequence)
 }
 
-// GetCurrentNetworkFee returns the fee (in drops) needed to enter the
-// current open ledger, escalated by TxQ load.
 func (a *LedgerServiceAdapter) GetCurrentNetworkFee() uint64 {
 	return a.svc.GetCurrentNetworkFee()
 }
