@@ -1511,8 +1511,25 @@ func (e *Engine) getNetworkLedger() consensus.LedgerID {
 	// The vote set remains deduped by NodeID; and we drop peer-LCL
 	// votes whose hash ALREADY has a trusted-proposer vote so a
 	// trusted validator connected as a peer isn't counted twice.
+	//
+	// Gate: ONLY count peer-LCL votes for hashes that have at least
+	// one trusted validation already recorded. Without this gate,
+	// peers gossiping their non-validated local-build LCLs (the
+	// transient "I just built my own L34 in wrongLedger" hashes that
+	// every node in a stuck 5-node soak emits) can win the
+	// majority-vote tally and push checkLedger into handleWrongLedger
+	// for a hash no one can acquire — entrenching the wrongLedger
+	// trap rather than escaping it. Trusted-validation backing means
+	// the peer-LCL signal aligns with the chain ledgers actually being
+	// finalized, not with transient local builds. Observed as the
+	// root cause of the iter27 soak stall at L34 (all 5 nodes at L33
+	// validated, then goxrpls latched onto rippleds' local L34
+	// gossip and stayed in wrongLedger forever).
 	for i, h := range e.adaptor.PeerReportedLedgers() {
 		if _, already := proposalHashes[h]; already {
+			continue
+		}
+		if e.validationTracker != nil && e.validationTracker.GetTrustedSupport(h) == 0 {
 			continue
 		}
 		var synthKey consensus.NodeID
