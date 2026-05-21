@@ -264,7 +264,7 @@ type LedgerService interface {
 	AccountQuerier
 
 	// Book and market data
-	GetBookOffers(ctx context.Context, takerGets, takerPays Amount, taker string, ledgerIndex string, limit uint32) (*BookOffersResult, error)
+	GetBookOffers(ctx context.Context, takerGets, takerPays Amount, taker, domain string, ledgerIndex string, limit uint32) (*BookOffersResult, error)
 
 	// Gateway operations
 	GetGatewayBalances(ctx context.Context, account string, hotWallets []string, ledgerIndex string) (*GatewayBalancesResult, error)

@@ -3,13 +3,16 @@ package service
 import (
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
 // addressFromBytes produces a deterministic test classic-address from a seed byte.
@@ -59,10 +62,18 @@ func insertOffer(t *testing.T, svc *Service, ownerAddr string, sequence uint32, 
 	}
 	var id [20]byte
 	copy(id[:], idBytes)
-	// The book-base prefix (high 24 bytes) is irrelevant for book_offers RPC
-	// behaviour; only the low 64 bits — the encoded quality — drive ordering.
+
+	// Build the real book directory key so GetBookOffers can walk it.
+	payCurr := state.GetCurrencyBytes(takerPays.Currency)
+	payIssuer := state.GetIssuerBytes(takerPays.Issuer)
+	getsCurr := state.GetCurrencyBytes(takerGets.Currency)
+	getsIssuer := state.GetIssuerBytes(takerGets.Issuer)
+	bookBase := keylet.BookDir(payCurr, payIssuer, getsCurr, getsIssuer).Key
+	quality := state.CalculateQuality(takerPays, takerGets)
 	var bookDir [32]byte
-	binary.BigEndian.PutUint64(bookDir[24:], state.CalculateQuality(takerPays, takerGets))
+	copy(bookDir[:], bookBase[:])
+	binary.BigEndian.PutUint64(bookDir[24:], quality)
+
 	offer := &state.LedgerOffer{
 		Account:       ownerAddr,
 		Sequence:      sequence,
@@ -79,6 +90,20 @@ func insertOffer(t *testing.T, svc *Service, ownerAddr string, sequence uint32, 
 	if err := svc.openLedger.Insert(k, data); err != nil {
 		t.Fatalf("insert offer: %v", err)
 	}
+
+	// Insert the offer key into the book directory so the directory walk
+	// reaches it. Mirrors rippled's dirAdd from CreateOffer apply path.
+	dirKeylet := keylet.Keylet{Type: entry.TypeDirectoryNode, Key: bookDir}
+	if _, derr := state.DirInsert(svc.openLedger, dirKeylet, k.Key, func(d *state.DirectoryNode) {
+		d.TakerPaysCurrency = payCurr
+		d.TakerPaysIssuer = payIssuer
+		d.TakerGetsCurrency = getsCurr
+		d.TakerGetsIssuer = getsIssuer
+		d.ExchangeRate = quality
+	}); derr != nil {
+		t.Fatalf("dir insert: %v", derr)
+	}
+
 	return k.Key
 }
 
@@ -124,7 +149,7 @@ func TestGetBookOffers_XRP_OwnerFundsAndUnfunded(t *testing.T) {
 		tx.NewXRPAmount(10_000_000),
 	)
 
-	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "current", 10)
+	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10)
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -188,7 +213,7 @@ func TestGetBookOffers_OwnerFundsOncePerOwner(t *testing.T) {
 	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
 	xrpModel := tx.NewXRPAmount(0)
 
-	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "current", 10)
+	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10)
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -222,7 +247,7 @@ func TestGetBookOffers_IssuerOwnIOUFullyFunded(t *testing.T) {
 		state.NewIssuedAmountFromFloat64(50, "USD", issuerAddr),
 	)
 
-	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "current", 10)
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10)
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -260,7 +285,7 @@ func TestGetBookOffers_IssuerOwnIOU_AllOffersEmitOwnerFunds(t *testing.T) {
 
 	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
 	xrpModel := tx.NewXRPAmount(0)
-	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "current", 10)
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10)
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -271,5 +296,122 @@ func TestGetBookOffers_IssuerOwnIOU_AllOffersEmitOwnerFunds(t *testing.T) {
 		if o.OwnerFunds == "" {
 			t.Errorf("offer %d: own-IOU branch must emit owner_funds on every iteration", i)
 		}
+	}
+}
+
+// insertPermissionedOffer inserts a pure permissioned offer (DomainID set,
+// no hybrid) directly into a domain-scoped book directory. It mirrors the
+// rippled CreateOffer apply path for `tfHybrid == 0`: the offer lives in
+// the domain book only.
+func insertPermissionedOffer(t *testing.T, svc *Service, ownerAddr string, sequence uint32, takerPays, takerGets tx.Amount, domainID [32]byte) [32]byte {
+	t.Helper()
+	_, idBytes, err := addresscodec.DecodeClassicAddressToAccountID(ownerAddr)
+	if err != nil {
+		t.Fatalf("decode owner: %v", err)
+	}
+	var id [20]byte
+	copy(id[:], idBytes)
+
+	payCurr := state.GetCurrencyBytes(takerPays.Currency)
+	payIssuer := state.GetIssuerBytes(takerPays.Issuer)
+	getsCurr := state.GetCurrencyBytes(takerGets.Currency)
+	getsIssuer := state.GetIssuerBytes(takerGets.Issuer)
+	bookBase := keylet.BookDirWithDomain(payCurr, payIssuer, getsCurr, getsIssuer, domainID).Key
+	quality := state.CalculateQuality(takerPays, takerGets)
+	var bookDir [32]byte
+	copy(bookDir[:], bookBase[:])
+	binary.BigEndian.PutUint64(bookDir[24:], quality)
+
+	offer := &state.LedgerOffer{
+		Account:       ownerAddr,
+		Sequence:      sequence,
+		TakerPays:     takerPays,
+		TakerGets:     takerGets,
+		BookDirectory: bookDir,
+		DomainID:      domainID,
+		Flags:         0,
+	}
+	data, err := state.SerializeLedgerOffer(offer)
+	if err != nil {
+		t.Fatalf("serialize offer: %v", err)
+	}
+	k := keylet.Offer(id, sequence)
+	if err := svc.openLedger.Insert(k, data); err != nil {
+		t.Fatalf("insert offer: %v", err)
+	}
+
+	dirKeylet := keylet.Keylet{Type: entry.TypeDirectoryNode, Key: bookDir}
+	if _, derr := state.DirInsert(svc.openLedger, dirKeylet, k.Key, func(d *state.DirectoryNode) {
+		d.TakerPaysCurrency = payCurr
+		d.TakerPaysIssuer = payIssuer
+		d.TakerGetsCurrency = getsCurr
+		d.TakerGetsIssuer = getsIssuer
+		d.ExchangeRate = quality
+		d.DomainID = domainID
+	}); derr != nil {
+		t.Fatalf("dir insert: %v", derr)
+	}
+	return k.Key
+}
+
+// TestGetBookOffers_PermissionedOfferHiddenFromOpenBook verifies the
+// domain-isolation behaviour: an offer placed only in a permissioned book
+// (DomainID set, no hybrid AdditionalBookDirectory) must not surface in
+// open-book queries, and conversely an open offer must not surface in
+// a domain-scoped query. Mirrors rippled NetworkOPs.cpp:4443-4444 where
+// getBookBase() embeds the domain in the directory hash.
+func TestGetBookOffers_PermissionedOfferHiddenFromOpenBook(t *testing.T) {
+	svc := newOfferTestService(t)
+	issuerAddr, _ := addressFromBytes(t, 0x80)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+
+	openOwnerAddr, _ := addressFromBytes(t, 0x82)
+	insertAccountRoot(t, svc, openOwnerAddr, 1_000_000_000_000, 0)
+
+	domOwnerAddr, _ := addressFromBytes(t, 0x84)
+	insertAccountRoot(t, svc, domOwnerAddr, 1_000_000_000_000, 0)
+
+	// Open offer.
+	insertOffer(t, svc, openOwnerAddr, 1,
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
+		tx.NewXRPAmount(10_000_000),
+	)
+	// Pure permissioned offer in the same currency pair.
+	var domainID [32]byte
+	for i := range domainID {
+		domainID[i] = byte(0x90 + i)
+	}
+	insertPermissionedOffer(t, svc, domOwnerAddr, 2,
+		state.NewIssuedAmountFromFloat64(200, "USD", issuerAddr),
+		tx.NewXRPAmount(10_000_000),
+		domainID,
+	)
+
+	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
+	xrpModel := tx.NewXRPAmount(0)
+
+	// Open book: only the open offer.
+	openResult, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10)
+	if err != nil {
+		t.Fatalf("open GetBookOffers: %v", err)
+	}
+	if len(openResult.Offers) != 1 {
+		t.Fatalf("open book: expected 1 offer, got %d", len(openResult.Offers))
+	}
+	if openResult.Offers[0].Account != openOwnerAddr {
+		t.Errorf("open book leaked a permissioned offer: account=%s", openResult.Offers[0].Account)
+	}
+
+	// Domain book: only the permissioned offer.
+	domainHex := strings.ToUpper(hex.EncodeToString(domainID[:]))
+	domResult, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", domainHex, "current", 10)
+	if err != nil {
+		t.Fatalf("domain GetBookOffers: %v", err)
+	}
+	if len(domResult.Offers) != 1 {
+		t.Fatalf("domain book: expected 1 offer, got %d", len(domResult.Offers))
+	}
+	if domResult.Offers[0].Account != domOwnerAddr {
+		t.Errorf("domain book returned wrong offer: account=%s", domResult.Offers[0].Account)
 	}
 }

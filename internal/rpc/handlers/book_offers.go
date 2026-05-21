@@ -17,6 +17,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		TakerGets json.RawMessage `json:"taker_gets"`
 		TakerPays json.RawMessage `json:"taker_pays"`
 		Taker     string          `json:"taker,omitempty"`
+		Domain    string          `json:"domain,omitempty"`
 		types.LedgerSpecifier
 		types.PaginationParams
 	}
@@ -60,6 +61,21 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		}
 	}
 
+	// Validate domain (uint256 hex). Matches rippled BookOffers.cpp:175-189.
+	if request.Domain != "" {
+		if len(request.Domain) != 64 {
+			return nil, types.RpcErrorDomainMalformed()
+		}
+		if _, derr := hex.DecodeString(request.Domain); derr != nil {
+			return nil, types.RpcErrorDomainMalformed()
+		}
+	}
+
+	// Reject equal markets. Matches rippled BookOffers.cpp:191-195.
+	if takerPays.Currency == takerGets.Currency && takerPays.Issuer == takerGets.Issuer {
+		return nil, types.RpcErrorBadMarket()
+	}
+
 	// Determine ledger index to use
 	ledgerIndex := "current"
 	if request.LedgerIndex != "" {
@@ -69,7 +85,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	// Clamp the limit using rippled's bookOffers range {0, 60, 100}.
 	// When the user omits "limit" (zero value), ClampLimit returns the default (60).
 	limit := ClampLimit(request.Limit, LimitBookOffers, ctx.Unlimited)
-	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, request.Taker, ledgerIndex, limit)
+	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, request.Taker, request.Domain, ledgerIndex, limit)
 	if err != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
 	}

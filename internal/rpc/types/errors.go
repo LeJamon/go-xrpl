@@ -128,6 +128,10 @@ const (
 	// Simulate errors - must match rippled exactly
 	RpcTX_SIGNED         = 96 // Transaction should not be signed (rippled: rpcTX_SIGNED = 96)
 	RpcSRC_ACT_MALFORMED = 65 // Source account is malformed (rippled: rpcSRC_ACT_MALFORMED = 65)
+
+	// Book / market errors — rippled ErrorCodes.h
+	RpcBAD_MARKET       = 42 // No such market (rippled: rpcBAD_MARKET = 42)
+	RpcDOMAIN_MALFORMED = 97 // Domain is malformed (rippled: rpcDOMAIN_MALFORMED = 97)
 )
 
 // Standard error constructors
@@ -318,6 +322,21 @@ func RpcErrorSrcActMissing(message string) *RpcError {
 // (matches rippled "srcCurMalformed").
 func RpcErrorSrcCurMalformed(message string) *RpcError {
 	return NewRpcError(RpcUNKNOWN, "srcCurMalformed", "srcCurMalformed", message)
+}
+
+// RpcErrorBadMarket matches rippled rpcBAD_MARKET (code 42, token "badMarket"),
+// returned when taker_pays and taker_gets describe the same asset.
+// Reference: ErrorCodes.cpp:62 "No such market.".
+func RpcErrorBadMarket() *RpcError {
+	return NewRpcError(RpcBAD_MARKET, "badMarket", "badMarket", "No such market.")
+}
+
+// RpcErrorDomainMalformed matches rippled rpcDOMAIN_MALFORMED (code 97, token
+// "domainMalformed"), returned when a request's domain parameter does not
+// parse as a uint256 hex string.
+// Reference: ErrorCodes.cpp:120 "Domain is malformed.".
+func RpcErrorDomainMalformed() *RpcError {
+	return NewRpcError(RpcDOMAIN_MALFORMED, "domainMalformed", "domainMalformed", "Domain is malformed.")
 }
 
 // RpcErrorDstActNotFound returns an error when the destination account is not found

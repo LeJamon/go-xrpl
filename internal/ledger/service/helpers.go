@@ -59,17 +59,6 @@ func decodeAccountIDLocal(address string) ([20]byte, error) {
 	return accountID, nil
 }
 
-// amountsMatchCurrency checks if two amounts have the same currency (ignoring value)
-func amountsMatchCurrency(a, b tx.Amount) bool {
-	if a.IsNative() && b.IsNative() {
-		return true
-	}
-	if a.IsNative() != b.IsNative() {
-		return false
-	}
-	return a.Currency == b.Currency && a.Issuer == b.Issuer
-}
-
 // calculateOfferQuality calculates the quality (price) of an offer
 func calculateOfferQuality(pays, gets tx.Amount) string {
 	// Quality = TakerPays / TakerGets
