@@ -1077,9 +1077,13 @@ func TestServerInfo_DynamicMetrics_FromHooks(t *testing.T) {
 	}
 
 	method := &handlers.ServerInfoMethod{}
+	// IsAdmin=true so load_factor_fee_escalation is emitted even when
+	// loadFactorFeeEscalation == loadFactor; mirrors rippled's
+	// NetworkOPs.cpp:2902-2907 (admin || loadFactorFeeEscalation != loadFactor).
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       types.RoleGuest,
+		Role:       types.RoleAdmin,
+		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -1106,7 +1110,8 @@ func TestServerInfo_DynamicMetrics_FromHooks(t *testing.T) {
 	// human-mode load_factor is the float ratio openLedgerFeeLevel/loadBase.
 	assert.InDelta(t, 4.0, info["load_factor"].(float64), 0.0001)
 	// load_factor_fee_escalation / _queue are emitted in human mode
-	// only when they diverge from the reference level (M4).
+	// only when they diverge from the reference level, with an extra
+	// admin gate on _escalation matching rippled's predicate.
 	assert.InDelta(t, 4.0, info["load_factor_fee_escalation"].(float64), 0.0001)
 	assert.InDelta(t, 2.0, info["load_factor_fee_queue"].(float64), 0.0001)
 
@@ -1187,6 +1192,45 @@ func TestServerInfo_ValidatedLedgerAge_HighAgeThreshold(t *testing.T) {
 	age, ok := validated["age"].(float64)
 	require.True(t, ok)
 	assert.InDelta(t, 3600, age, 5, "1-hour-old ledger must surface its real age; rippled clamps only above 1,000,000s")
+}
+
+// TestServerInfo_HumanMode_LoadFactorFeeEscalation_NonAdminGate pins
+// rippled NetworkOPs.cpp:2902-2907: in human mode, non-admin callers
+// only see load_factor_fee_escalation when it actually changes the
+// overall load_factor (i.e. loadFactorFeeEscalation != loadFactor).
+// With feeEscalation > loadBase and no separate LoadFeeTrack,
+// loadFactorFeeEscalation == loadFactor, so the field is hidden.
+func TestServerInfo_HumanMode_LoadFactorFeeEscalation_NonAdminGate(t *testing.T) {
+	mock := newMockLedgerServiceServerInfo()
+	services := servicesForServerInfo(mock)
+	services.TxQMetrics = func() types.TxQServerMetrics {
+		return types.TxQServerMetrics{
+			ReferenceFeeLevel:     256,
+			MinProcessingFeeLevel: 768, // diverges -> _queue still emitted
+			OpenLedgerFeeLevel:    1024,
+		}
+	}
+
+	method := &handlers.ServerInfoMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	result, rpcErr := method.Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+	raw, _ := json.Marshal(result)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(raw, &resp))
+	info := resp["info"].(map[string]interface{})
+
+	_, hasEscalation := info["load_factor_fee_escalation"]
+	assert.False(t, hasEscalation,
+		"non-admin: field must be omitted when loadFactorFeeEscalation == loadFactor (rippled gate)")
+	// _queue has no admin gate in rippled — only the != reference check.
+	assert.InDelta(t, 3.0, info["load_factor_fee_queue"].(float64), 0.0001)
 }
 
 // TestServerInfo_ClosedLedgerAge_OmittedOnFutureCloseTime mirrors

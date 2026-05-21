@@ -18,6 +18,18 @@ import (
 // is expressed as a multiple of this base.
 const loadBase uint64 = 256
 
+// clipToUint32 mirrors rippled's trunc32 / FeeLevel::jsonClipped at
+// NetworkOPs.cpp:2862-2876: load_factor* and load_base are emitted as
+// JSON UInts, with values above uint32 max saturated rather than
+// overflowed. Pathological for realistic load, but keeps the wire type
+// matching rippled.
+func clipToUint32(v uint64) uint32 {
+	if v > uint64(^uint32(0)) {
+		return ^uint32(0)
+	}
+	return uint32(v)
+}
+
 // validatedLedgerAgeThreshold matches rippled's
 // NetworkOPsImp::getServerInfo (NetworkOPs.cpp:2951): once the
 // validated ledger is older than this the age is clamped to 0 in the
@@ -184,25 +196,31 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 	if human {
 		info["load_factor"] = float64(loadFactor) / float64(loadBase)
 		// Mirror rippled NetworkOPs.cpp:2902-2912: in human mode the
-		// escalation and queue fields are emitted only when they
-		// actually diverge from the reference level (i.e., load is
-		// active). With no LoadFeeTrack yet we can't honour the
-		// `admin || feeEscalation != loadFactor` extra gate exactly,
-		// so we emit whenever escalation/queue are above reference —
-		// the conservative subset of rippled's predicate.
-		if feeEscalation != feeReference {
+		// escalation field is gated on
+		//   openLedgerFeeLevel != referenceFeeLevel
+		//     && (admin || loadFactorFeeEscalation != loadFactor)
+		// and the queue field on
+		//   minProcessingFeeLevel != referenceFeeLevel.
+		// We have no separate LoadFeeTrack yet, so
+		// loadFactorFeeEscalation == feeEscalation (referenceFeeLevel
+		// is the rippled-invariant 256), making the inner comparison
+		// equivalent to `feeEscalation != loadFactor`.
+		if feeEscalation != feeReference && (ctx.IsAdmin || feeEscalation != loadFactor) {
 			info["load_factor_fee_escalation"] = float64(feeEscalation) / float64(feeReference)
 		}
 		if feeQueue != feeReference {
 			info["load_factor_fee_queue"] = float64(feeQueue) / float64(feeReference)
 		}
 	} else {
-		info["load_base"] = loadBase
-		info["load_factor"] = loadFactor
-		info["load_factor_server"] = loadBase
-		info["load_factor_fee_escalation"] = feeEscalation
-		info["load_factor_fee_queue"] = feeQueue
-		info["load_factor_fee_reference"] = feeReference
+		// Machine mode mirrors rippled NetworkOPs.cpp:2862-2876: load_base
+		// and load_factor* are emitted as JSON UInts; rippled clamps via
+		// trunc32() / jsonClipped() so the field type stays uint32.
+		info["load_base"] = uint32(loadBase)
+		info["load_factor"] = clipToUint32(loadFactor)
+		info["load_factor_server"] = uint32(loadBase)
+		info["load_factor_fee_escalation"] = clipToUint32(feeEscalation)
+		info["load_factor_fee_queue"] = clipToUint32(feeQueue)
+		info["load_factor_fee_reference"] = clipToUint32(feeReference)
 	}
 
 	now := time.Now()

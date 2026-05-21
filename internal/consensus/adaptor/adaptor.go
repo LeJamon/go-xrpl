@@ -1430,15 +1430,14 @@ func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
 // state_accounting + the top-level server_state_duration_us /
 // initial_sync_duration_us fields. Returns the zero value when the
 // adaptor was constructed without a tracker (legacy tests). Mirrors
-// rippled's NetworkOPsImp::StateAccounting::json.
+// rippled's NetworkOPsImp::StateAccounting::json. stateAcct is set
+// once in New() and never reassigned, so no Adaptor-level lock is
+// needed; the tracker has its own mutex.
 func (a *Adaptor) StateAccounting() StateAccountingSnapshot {
-	a.mu.Lock()
-	sa := a.stateAcct
-	a.mu.Unlock()
-	if sa == nil {
+	if a.stateAcct == nil {
 		return StateAccountingSnapshot{}
 	}
-	return sa.snapshot()
+	return a.stateAcct.snapshot()
 }
 
 // OnConsensusReached logs the close and fires the consensus-phase hook.
