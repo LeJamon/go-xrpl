@@ -18,14 +18,15 @@ import (
 // The rippled-standalone reference run produced (with master funding Alice
 // and Bob with 100 XRP each, then Alice TrustSet for 1000 USD with Bob as
 // issuer):
-//   Flags:             2162688 (0x00210000)
-//   LowNode:           0
-//   HighNode:          0
-//   LowLimit issuer:   Alice    value 1000  currency USD
-//   HighLimit issuer:  Bob      value 0     currency USD
-//   Balance:           0 USD    issuer rrrrrrrrrrrrrrrrrrrrBZbvji
-//   PreviousTxnLgrSeq: 4
-//   index:             F13264AADB615622C37E42C0195237245233E8DC6D15AE898E2D2E3A63D42F73
+//
+//	Flags:             2162688 (0x00210000)
+//	LowNode:           0
+//	HighNode:          0
+//	LowLimit issuer:   Alice    value 1000  currency USD
+//	HighLimit issuer:  Bob      value 0     currency USD
+//	Balance:           0 USD    issuer rrrrrrrrrrrrrrrrrrrrBZbvji
+//	PreviousTxnLgrSeq: 4
+//	index:             F13264AADB615622C37E42C0195237245233E8DC6D15AE898E2D2E3A63D42F73
 func TestRepro470_TrustSetSLE(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 

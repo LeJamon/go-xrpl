@@ -22,9 +22,10 @@ import (
 // producing a ghost ModifiedNode (151B vs rippled's no-emission).
 //
 // Reference for the rippled behavior:
-//   rippled/src/xrpld/ledger/detail/ApplyStateTable.cpp:156-157
-//     if ((type == &sfModifiedNode) && (*curNode == *origNode))
-//       continue;
+//
+//	rippled/src/xrpld/ledger/detail/ApplyStateTable.cpp:156-157
+//	  if ((type == &sfModifiedNode) && (*curNode == *origNode))
+//	    continue;
 //
 // The goxrpl fix (apply_state_table.go applyThreading ActionModify branch)
 // mirrors this by skipping threading when entry.Original == entry.Current.

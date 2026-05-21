@@ -53,8 +53,8 @@ type ApplyConfig struct {
 	// ledger that records a majority. inbound/replay_delta.go:584 sets
 	// the equivalent EngineConfig field; this struct lets the
 	// consensus-build path do the same.
-	ParentCloseTime  uint32
-	Logger           xrpllog.Logger
+	ParentCloseTime uint32
+	Logger          xrpllog.Logger
 	// SkipSignatureVerification forces signature checks off on every
 	// pass (mirrors AcceptLedger's standalone path where
 	// SkipSignatureVerification = s.config.Standalone). When false,

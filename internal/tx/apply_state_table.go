@@ -419,11 +419,12 @@ func (t *ApplyStateTable) applyImpl(isDryRun bool) (*Metadata, error) {
 			}
 		}
 		if owner.OldPreviousTxnID != ([32]byte{}) {
+			// OLD prev fields per rippled ApplyStateTable.cpp:570-571.
 			node := AffectedNode{
-				NodeType:         "ModifiedNode",
-				LedgerEntryType:  owner.EntryType,
-				LedgerIndex:      strings.ToUpper(hex.EncodeToString(key[:])),
-				PreviousTxnID:    strings.ToUpper(hex.EncodeToString(owner.OldPreviousTxnID[:])),
+				NodeType:          "ModifiedNode",
+				LedgerEntryType:   owner.EntryType,
+				LedgerIndex:       strings.ToUpper(hex.EncodeToString(key[:])),
+				PreviousTxnID:     strings.ToUpper(hex.EncodeToString(owner.OldPreviousTxnID[:])),
 				PreviousTxnLgrSeq: owner.OldPreviousTxnLgrSeq,
 			}
 			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
@@ -749,19 +750,36 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 		}
 		currEntry.EmitPreviousFields(origEntry, node.PreviousFields)
 		currEntry.EmitFinalFields(node.FinalFields)
-		// Detect rippled's "prevs holds an STI_NOTPRESENT entry" case:
-		// any sMD_ChangeOrig-eligible field that is present in cur but
-		// absent in orig. EmitFinalFields populates with all present
-		// non-default-meta-filtered cur fields; the same call on orig
-		// gives us orig's present-field set. The set-difference identifies
-		// absent→present fields. When non-empty, rippled emits an empty
-		// PreviousFields object (`E6 E1`) and goxrpl must match.
-		origFinalProbe := make(map[string]any)
-		origEntry.EmitFinalFields(origFinalProbe)
-		for name := range node.FinalFields {
-			if _, hadInOrig := origFinalProbe[name]; !hadInOrig {
-				node.EmitEmptyPreviousFields = true
-				break
+		// Detect rippled's "prevs holds an STI_NOTPRESENT entry" case
+		// (ApplyStateTable.cpp:209-220, with the STObject iterator
+		// surfacing template NOTPRESENT placeholders per STObject.cpp:
+		// 156-168). When orig has an absent-in-instance template field
+		// that cur has set, and the field carries sMD_ChangeOrig, rippled
+		// emplaces the NOTPRESENT obj into prevs — making prevs.empty()
+		// false (so the `if (!prevs.empty()) emplace_back(prevs)` gate
+		// fires) while serializing zero inner bytes. The wire effect is
+		// an empty `PreviousFields: {}` (`E6 E1`).
+		//
+		// Goxrpl approximation: EmitFinalFields populates the cur and
+		// orig present-field sets at sMD_Always|sMD_ChangeNew scope
+		// (the emitAll helper) — PreviousTxnID/PreviousTxnLgrSeq are
+		// excluded. For every SLE field currently in use, sMD_ChangeNew
+		// presence implies sMD_ChangeOrig presence (all data fields
+		// declare sMD_Default = sMD_ChangeOrig|sMD_ChangeNew, and Flags
+		// declares sMD_Always|sMD_ChangeOrig). A hypothetical future
+		// field with sMD_ChangeNew but no sMD_ChangeOrig would trigger
+		// spurious empty-PreviousFields here; that case requires a
+		// generated per-SLE shouldMeta(sMD_ChangeOrig) helper. Only
+		// fires when no real PreviousFields diff exists — a non-empty
+		// PreviousFields already produces the wire wrapper.
+		if len(node.PreviousFields) == 0 {
+			origFinalProbe := make(map[string]any)
+			origEntry.EmitFinalFields(origFinalProbe)
+			for name := range node.FinalFields {
+				if _, hadInOrig := origFinalProbe[name]; !hadInOrig {
+					node.EmitEmptyPreviousFields = true
+					break
+				}
 			}
 		}
 		if len(node.PreviousFields) == 0 {

@@ -158,7 +158,6 @@ func TestReproByteDiff_ModifyExistingTrustLine(t *testing.T) {
 	}
 	t.Logf("Closed ledger seq=%d hash=%x", closed.Sequence(), closed.Hash())
 
-
 	// Walk tx tree and find the target tx
 	t.Logf("Ledger TxCount() = %d", closed.TxCount())
 	err := closed.ForEachTransaction(func(txHash [32]byte, blob []byte) bool {

@@ -1525,6 +1525,19 @@ func (e *Engine) getNetworkLedger() consensus.LedgerID {
 	// root cause of the iter27 soak stall at L34 (all 5 nodes at L33
 	// validated, then goxrpls latched onto rippleds' local L34
 	// gossip and stayed in wrongLedger forever).
+	//
+	// Deliberate divergence from rippled: rippled counts peer LCLs
+	// ungated at the NetworkOPs recovery layer (NetworkOPs.cpp:
+	// 1909-1929 `peerCounts[peerLedger]++`), with trusted-validation
+	// filtering happening separately inside Validations::getPreferred.
+	// Inside the consensus state machine, RCLConsensus::Adaptor::
+	// getPrevLedger (RCLConsensus.cpp:295-314) already uses the
+	// trusted-only `getPreferred`. Goxrpl folds peer LCLs into the
+	// consensus engine itself (no NetworkOPs layer) so the
+	// trusted-validation gate has to be applied here. Functionally
+	// equivalent to rippled's two-layer design at the chain-selection
+	// boundary; behaviour differs only under partition where a peer's
+	// reported LCL would otherwise outvote validated history.
 	for i, h := range e.adaptor.PeerReportedLedgers() {
 		if _, already := proposalHashes[h]; already {
 			continue
@@ -2407,20 +2420,23 @@ func (e *Engine) checkConvergence() {
 		return
 	}
 
-	// In wrongLedger mode the node has no result_/position and rippled
-	// never reaches haveConsensus/onAccept for that round (Consensus.h
-	// haveConsensus asserts result_ != null, and result_ is only set by
-	// closeLedger which is gated on mode != wrongLedger via the
-	// shouldClose path).
+	// Rippled enforces this structurally: result_ is null in wrongLedger
+	// (only closeLedger sets it — Consensus.h:1437 asserts !result_
+	// before the emplace), handleWrongLedger resets result_ via
+	// startRoundInternal (Consensus.h:704, 713), and both
+	// phaseEstablish (Consensus.h:1371) and haveConsensus
+	// (Consensus.h:1686) XRPL_ASSERT on result_ being set. So the
+	// checkConsensus path is unreachable in wrongLedger.
 	//
-	// Mirror that here: don't accept in wrongLedger. Otherwise the
-	// observer fallback in countAgreement triggers accept on peer-peer
-	// agreement, our local prev_ledger walks past the validated tip on
-	// every empty wrongLedger build, the next round's checkLedger sees
-	// our local hash ≠ network's, re-enters wrongLedger, repeat. In a
-	// 5-node soak with quorum=4 this strands the network permanently —
-	// the wrongLedger node's full-validation contribution is lost so
-	// the remaining 3 trusted validators can't form the 4th vote.
+	// Goxrpl's engine doesn't carry the same result_-null invariant
+	// today, so without this explicit gate the observer fallback in
+	// countAgreement triggers accept on peer-peer agreement, our local
+	// prev_ledger walks past the validated tip on every empty
+	// wrongLedger build, the next round's checkLedger sees our local
+	// hash ≠ network's, re-enters wrongLedger, repeat. In a 5-node
+	// soak with quorum=4 this strands the network permanently — the
+	// wrongLedger node's full-validation contribution is lost so the
+	// remaining 3 trusted validators can't form the 4th vote.
 	// Observed as iter27 (L34) and iter28 (L38) stalls.
 	if e.mode == consensus.ModeWrongLedger {
 		return

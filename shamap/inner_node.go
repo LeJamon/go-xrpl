@@ -215,6 +215,11 @@ func (n *InnerNode) updateHashUnsafe() error {
 	return nil
 }
 
+// SerializeForWire emits the on-wire inner-node payload. Reads only
+// the cached n.hashes[] array — matches rippled's
+// SHAMapInnerNode::serializeForWire (rippled/src/xrpld/shamap/detail/
+// SHAMapInnerNode.cpp:231-254). See SerializeWithPrefix for the
+// invariant callers must maintain.
 func (n *InnerNode) SerializeForWire() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -225,34 +230,12 @@ func (n *InnerNode) SerializeForWire() ([]byte, error) {
 		return nil, ErrEmptyNonRoot
 	}
 
-	// branchHash returns the canonical hash for branch i — prefer the
-	// loaded child's live hash over n.hashes[i], because n.hashes[i]
-	// can lag child.Hash() when a freshly-inserted descendant chain is
-	// SetChild-ed up to its parent BEFORE the descendant chain is
-	// populated (see SHAMap.PutWithNodeType split path:
-	// shamap.go:517-538 builds an empty inner chain, then SetChild's
-	// leaves into deepestInner — the intermediate parents capture
-	// child.Hash()=zero into n.hashes[i] at SetChild time, but the
-	// SHAMap.Hash path uses child.Hash() via updateHashUnsafe so the
-	// returned root is correct in-memory). Without this mirror, the
-	// inner-node wire bytes differ from updateHashUnsafe's own
-	// preimage, peers reconstruct a different root, and tx-set
-	// acquisition fails the "tx set ID mismatch" gate (#470 iter4
-	// stall at seq 257).
-	branchHash := func(i int) []byte {
-		if child := n.children[i]; child != nil {
-			h := child.Hash()
-			return h[:]
-		}
-		return n.hashes[i][:]
-	}
-
 	if branchCount < 12 {
 		// Compressed: [Hash32][Position1] × N + [WireType].
 		result := make([]byte, 0, branchCount*33+1)
 		for i := 0; i < BranchFactor; i++ {
 			if n.isBranch&(1<<i) != 0 {
-				result = append(result, branchHash(i)...)
+				result = append(result, n.hashes[i][:]...)
 				result = append(result, byte(i))
 			}
 		}
@@ -265,7 +248,7 @@ func (n *InnerNode) SerializeForWire() ([]byte, error) {
 	for i := 0; i < BranchFactor; i++ {
 		off := i * 32
 		if n.isBranch&(1<<i) != 0 {
-			copy(result[off:off+32], branchHash(i))
+			copy(result[off:off+32], n.hashes[i][:])
 		}
 	}
 	result[BranchFactor*32] = protocol.WireTypeInner
@@ -273,6 +256,14 @@ func (n *InnerNode) SerializeForWire() ([]byte, error) {
 }
 
 // SerializeWithPrefix serializes with type prefix for hashing and storage.
+// Reads only the cached n.hashes[] preimage — matches rippled's
+// SHAMapInnerNode::serializeWithPrefix (rippled/src/xrpld/shamap/detail/
+// SHAMapInnerNode.cpp:256-266). Callers MUST ensure the chain invariant
+// `hashes[i] == children[i].Hash()` holds for every loaded child before
+// serialization (rippled enforces this with updateHashDeep at SHAMap.cpp:
+// 1139). In goxrpl the split path in SHAMap.putItemWithNodeTypeUnsafe
+// re-runs SetChild bottom-up after attaching leaves to restore this
+// invariant.
 func (n *InnerNode) SerializeWithPrefix() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -281,23 +272,12 @@ func (n *InnerNode) SerializeWithPrefix() ([]byte, error) {
 		return nil, ErrEmptyNonRoot
 	}
 
-	// Mirror SerializeForWire: prefer live child.Hash() over the
-	// possibly-stale n.hashes[i] for non-nil children. See the comment
-	// in SerializeForWire for the stale-hash root cause.
-	branchHash := func(i int) []byte {
-		if child := n.children[i]; child != nil {
-			h := child.Hash()
-			return h[:]
-		}
-		return n.hashes[i][:]
-	}
-
 	result := make([]byte, fullInnerSerializedSize)
 	copy(result[:4], protocol.HashPrefixInnerNode[:])
 	for i := 0; i < BranchFactor; i++ {
 		if n.isBranch&(1<<i) != 0 {
 			off := 4 + i*32
-			copy(result[off:off+32], branchHash(i))
+			copy(result[off:off+32], n.hashes[i][:])
 		}
 	}
 	return result, nil

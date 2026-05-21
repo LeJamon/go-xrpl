@@ -2470,13 +2470,13 @@ func (o *Overlay) outboundCount() int {
 // post-handshake isConnectedTo rejection in Connect / accept).
 //
 // Two pieces of state are reconciled:
-//   1. exactAddrs: full "host:port" strings of OUTBOUND peers. These
-//      were originally tracked by MarkConnected.
-//   2. hosts: the unique HOST set across all current peers (inbound
-//      AND outbound). Used so a fixed-peer entry like
-//      "goxrpl-0:51235" gets flagged as covered when there's an
-//      inbound peer whose RemoteIP matches goxrpl-0, even though the
-//      inbound's ephemeral source port doesn't match :51235.
+//  1. exactAddrs: full "host:port" strings of OUTBOUND peers. These
+//     were originally tracked by MarkConnected.
+//  2. hosts: the unique HOST set across all current peers (inbound
+//     AND outbound). Used so a fixed-peer entry like
+//     "goxrpl-0:51235" gets flagged as covered when there's an
+//     inbound peer whose RemoteIP matches goxrpl-0, even though the
+//     inbound's ephemeral source port doesn't match :51235.
 //
 // Without (2), goxrpl-1 (with an inbound from goxrpl-0) would
 // repeatedly outbound-dial goxrpl-0:51235 and have every attempt
