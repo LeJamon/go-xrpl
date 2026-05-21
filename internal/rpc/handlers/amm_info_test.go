@@ -7,6 +7,7 @@ import (
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -317,7 +318,10 @@ func TestReadAMMHolds_XRP(t *testing.T) {
 	ammAddr := "rrrrrrrrrrrrrrrrrrrrBZbvji"
 	ammID := decodeAcct(t, ammAddr)
 
-	root := &state.AccountRoot{Balance: 12_345_000_000}
+	// AMMID must be non-zero for the helper to treat the account as an
+	// AMM pseudo-account (matches rippled's sfAMMID-present branch of
+	// xrpLiquid that forces reserve to 0; View.cpp:631-633).
+	root := &state.AccountRoot{Balance: 12_345_000_000, AMMID: [32]byte{0xAA}}
 	data, err := state.SerializeAccountRoot(root)
 	require.NoError(t, err)
 	require.NoError(t, view.Insert(keylet.Account(ammID), data))
@@ -332,6 +336,25 @@ func TestReadAMMHolds_XRP_MissingAccount(t *testing.T) {
 	ammID := decodeAcct(t, "rrrrrrrrrrrrrrrrrrrrBZbvji")
 	amount := readAMMHolds(view, ammID, ammIssue{Currency: "XRP", IsXRP: true})
 	assert.Equal(t, int64(0), amount.Drops())
+}
+
+// Contract guard: a non-AMM account (no sfAMMID) must NOT trip the
+// "reserve == 0" simplification — return zero rather than the raw, un-
+// reserved balance. Mirrors xrpLiquid's branch on sfAMMID in
+// rippled/src/xrpld/ledger/detail/View.cpp:631-633.
+func TestReadAMMHolds_XRP_NonAMMAccountReturnsZero(t *testing.T) {
+	view := newMemView()
+	ammID := decodeAcct(t, "rrrrrrrrrrrrrrrrrrrrBZbvji")
+
+	root := &state.AccountRoot{Balance: 12_345_000_000} // AMMID left zero
+	data, err := state.SerializeAccountRoot(root)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Account(ammID), data))
+
+	amount := readAMMHolds(view, ammID, ammIssue{Currency: "XRP", IsXRP: true})
+	assert.True(t, amount.IsNative())
+	assert.Equal(t, int64(0), amount.Drops(),
+		"non-AMM account must not bypass the reserve subtraction")
 }
 
 func TestReadAMMHolds_IOU_MissingTrustLine(t *testing.T) {
@@ -503,4 +526,66 @@ func TestAccountLPHolds_FrozenLine(t *testing.T) {
 
 	amount := accountLPHolds(view, ammID, lpID, cur, ammAddr)
 	assert.True(t, amount.IsZero(), "frozen LP line must return zero per rippled ammLPHolds")
+}
+
+// stubReader satisfies types.LedgerReader for wire-format tests; only the
+// fields setLedgerIdentityFields reads are populated meaningfully.
+type stubReader struct {
+	seq    uint32
+	hash   [32]byte
+	closed bool
+}
+
+func (s stubReader) Sequence() uint32            { return s.seq }
+func (s stubReader) Hash() [32]byte              { return s.hash }
+func (s stubReader) ParentHash() [32]byte        { return [32]byte{} }
+func (s stubReader) IsClosed() bool              { return s.closed }
+func (s stubReader) IsValidated() bool           { return s.closed }
+func (s stubReader) TotalDrops() uint64          { return 0 }
+func (s stubReader) CloseTime() int64            { return 0 }
+func (s stubReader) CloseTimeResolution() uint32 { return 0 }
+func (s stubReader) CloseFlags() uint8           { return 0 }
+func (s stubReader) ParentCloseTime() int64      { return 0 }
+func (s stubReader) TxMapHash() [32]byte         { return [32]byte{} }
+func (s stubReader) StateMapHash() [32]byte      { return [32]byte{} }
+func (s stubReader) ForEachTransaction(func([32]byte, []byte) bool) error {
+	return nil
+}
+
+var _ types.LedgerReader = stubReader{}
+
+// Mirrors rippled RPC::lookupLedger (RPCHelpers.cpp:630-640): a closed
+// ledger emits BOTH ledger_hash AND ledger_index regardless of how the
+// request named the ledger; an open ledger emits only ledger_current_index.
+func TestSetLedgerIdentityFields_ClosedEmitsHashAndIndex(t *testing.T) {
+	hash := [32]byte{}
+	for i := range hash {
+		hash[i] = byte(i + 1)
+	}
+	reader := stubReader{seq: 12345, hash: hash, closed: true}
+
+	out := map[string]interface{}{}
+	setLedgerIdentityFields(out, reader)
+
+	assert.Equal(t, FormatLedgerHash(hash), out["ledger_hash"],
+		"closed ledger must emit ledger_hash")
+	assert.Equal(t, uint32(12345), out["ledger_index"],
+		"closed ledger must emit ledger_index")
+	_, hasCurrent := out["ledger_current_index"]
+	assert.False(t, hasCurrent,
+		"closed ledger must NOT emit ledger_current_index")
+}
+
+func TestSetLedgerIdentityFields_OpenEmitsOnlyCurrentIndex(t *testing.T) {
+	reader := stubReader{seq: 999, closed: false}
+
+	out := map[string]interface{}{}
+	setLedgerIdentityFields(out, reader)
+
+	assert.Equal(t, uint32(999), out["ledger_current_index"],
+		"open ledger must emit ledger_current_index")
+	_, hasHash := out["ledger_hash"]
+	_, hasIndex := out["ledger_index"]
+	assert.False(t, hasHash, "open ledger must NOT emit ledger_hash")
+	assert.False(t, hasIndex, "open ledger must NOT emit ledger_index")
 }

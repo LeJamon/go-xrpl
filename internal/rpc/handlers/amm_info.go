@@ -42,10 +42,8 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		return nil, err
 	}
 
-	ledgerIndexRequested := request.LedgerIndex != ""
-	ledgerHashRequested := request.LedgerHash != ""
 	ledgerIndex := "validated"
-	if ledgerIndexRequested {
+	if request.LedgerIndex != "" {
 		ledgerIndex = request.LedgerIndex.String()
 	}
 
@@ -56,22 +54,6 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	view, ledgerReader, viewErr := ctx.Services.Ledger.GetLedgerForQuery(ledgerIndex)
 	if viewErr != nil {
 		return nil, types.RpcErrorLgrNotFound("ledger not found: " + viewErr.Error())
-	}
-
-	// Validate the optional requester `account` up-front so the error ordering
-	// matches rippled's doAMMInfo (AMMInfo.cpp:141-146): account is checked
-	// before the AMM keylet read, so a bad account beats an AMM-not-found.
-	var lpAccountID [20]byte
-	hasLPAccount := request.Account != ""
-	if hasLPAccount {
-		_, lpAccBytes, accErr := addresscodec.DecodeClassicAddressToAccountID(request.Account)
-		if accErr != nil {
-			return nil, types.RpcErrorActMalformed("Invalid account: " + accErr.Error())
-		}
-		copy(lpAccountID[:], lpAccBytes)
-		if data, err := view.Read(keylet.Account(lpAccountID)); err != nil || data == nil {
-			return nil, types.RpcErrorActMalformed("account not found in ledger")
-		}
 	}
 
 	var ammKey [32]byte
@@ -118,6 +100,23 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 
 		ammKeylet := keylet.AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency)
 		ammKey = ammKeylet.Key
+	}
+
+	// Validate the optional requester `account` after the amm_account /
+	// asset dispatch so the error ordering matches rippled's doAMMInfo
+	// (AMMInfo.cpp:128-146): amm_account read first, then jss::account,
+	// then the AMM SLE read.
+	var lpAccountID [20]byte
+	hasLPAccount := request.Account != ""
+	if hasLPAccount {
+		_, lpAccBytes, accErr := addresscodec.DecodeClassicAddressToAccountID(request.Account)
+		if accErr != nil {
+			return nil, types.RpcErrorActMalformed("Invalid account: " + accErr.Error())
+		}
+		copy(lpAccountID[:], lpAccBytes)
+		if data, err := view.Read(keylet.Account(lpAccountID)); err != nil || data == nil {
+			return nil, types.RpcErrorActMalformed("account not found in ledger")
+		}
 	}
 
 	ammData, readErr := view.Read(keylet.Keylet{Key: ammKey})
@@ -224,23 +223,27 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		}
 	}
 
-	// Match rippled's lookupLedger field shape (AMMInfo.cpp:265-267):
-	// emit ledger_index/ledger_hash when the request named them, otherwise
-	// ledger_current_index for the default ("current") path.
 	response := map[string]interface{}{
 		"amm":       ammResult,
 		"validated": ledgerReader.IsValidated(),
 	}
-	switch {
-	case ledgerHashRequested:
-		response["ledger_hash"] = FormatLedgerHash(ledgerReader.Hash())
-	case ledgerIndexRequested:
-		response["ledger_index"] = ledgerReader.Sequence()
-	default:
-		response["ledger_current_index"] = ledgerReader.Sequence()
-	}
+	setLedgerIdentityFields(response, ledgerReader)
 
 	return response, nil
+}
+
+// setLedgerIdentityFields mirrors rippled's RPC::lookupLedger
+// (RPCHelpers.cpp:630-640): a *closed* ledger emits BOTH ledger_hash AND
+// ledger_index, regardless of whether the request named them or used a
+// string alias ("validated"/"closed") or a numeric seq. An *open* ledger
+// emits only ledger_current_index.
+func setLedgerIdentityFields(out map[string]interface{}, reader types.LedgerReader) {
+	if reader.IsClosed() {
+		out["ledger_hash"] = FormatLedgerHash(reader.Hash())
+		out["ledger_index"] = reader.Sequence()
+		return
+	}
+	out["ledger_current_index"] = reader.Sequence()
 }
 
 // Auction slot constants matching rippled's AMMCore.h
@@ -455,12 +458,15 @@ func parseSLEIssue(raw interface{}) (ammIssue, error) {
 	return out, nil
 }
 
-// Matches rippled accountHolds() with FreezeHandling::fhIGNORE_FREEZE. For the
-// XRP branch rippled routes through xrpLiquid (View.cpp:394-396, :615-651),
-// which subtracts the account reserve — except for AMM accounts, where the
-// sfAMMID-present path sets reserve to 0 (View.cpp:631-633). Since this helper
-// is only called with an AMM account, returning the raw sfBalance is
-// numerically equivalent to xrpLiquid without re-deriving the reserve.
+// Matches rippled accountHolds() with FreezeHandling::fhIGNORE_FREEZE.
+//
+// CONTRACT: ammAccountID must be the pseudo-account of an AMM. Rippled's
+// xrpLiquid (View.cpp:615-651) subtracts the account reserve except when
+// sfAMMID is present, in which case reserve is forced to 0 (View.cpp:631-633).
+// This helper assumes the AMM case and returns the raw sfBalance for the
+// XRP branch — the AMMID check enforces the contract: if it is ever called
+// with a non-AMM account, we return zero rather than a wrong (un-reserved)
+// balance.
 func readAMMHolds(view types.LedgerStateView, ammAccountID [20]byte, issue ammIssue) state.Amount {
 	if issue.IsXRP {
 		data, err := view.Read(keylet.Account(ammAccountID))
@@ -469,6 +475,9 @@ func readAMMHolds(view types.LedgerStateView, ammAccountID [20]byte, issue ammIs
 		}
 		account, err := state.ParseAccountRoot(data)
 		if err != nil {
+			return state.NewXRPAmountFromInt(0)
+		}
+		if account.AMMID == ([32]byte{}) {
 			return state.NewXRPAmountFromInt(0)
 		}
 		return state.NewXRPAmountFromInt(int64(account.Balance))
@@ -503,9 +512,14 @@ func readAMMHolds(view types.LedgerStateView, ammAccountID [20]byte, issue ammIs
 	return state.NewIssuedAmountFromValue(iou.Mantissa(), iou.Exponent(), issue.Currency, issue.IssuerStr)
 }
 
-// Matches rippled isFrozen() in View.cpp (issuer global freeze, or issuer-side
-// trust-line freeze).
-func isAssetFrozen(view types.LedgerStateView, ammAccountID [20]byte, issue ammIssue) bool {
+// isAssetFrozen mirrors rippled isFrozen() in View.cpp:248-268.
+//
+// `holder` is the account on whose side of the trust line we may want to
+// observe a freeze — i.e. rippled's `account` parameter, which is the AMM
+// pseudo-account when checking pool freeze status (AMMInfo.cpp:259,262) and
+// the LP account when checking ammLPHolds gating (AMMUtils.cpp:137). The
+// freeze flag itself always lives on the issuer's side of the line.
+func isAssetFrozen(view types.LedgerStateView, holder [20]byte, issue ammIssue) bool {
 	if issue.IsXRP {
 		return false
 	}
@@ -516,10 +530,10 @@ func isAssetFrozen(view types.LedgerStateView, ammAccountID [20]byte, issue ammI
 			}
 		}
 	}
-	if ammAccountID == issue.IssuerID {
+	if holder == issue.IssuerID {
 		return false
 	}
-	data, err := view.Read(keylet.Line(ammAccountID, issue.IssuerID, issue.Currency))
+	data, err := view.Read(keylet.Line(holder, issue.IssuerID, issue.Currency))
 	if err != nil || data == nil {
 		return false
 	}
@@ -527,8 +541,7 @@ func isAssetFrozen(view types.LedgerStateView, ammAccountID [20]byte, issue ammI
 	if err != nil {
 		return false
 	}
-	// The freeze flag lives on the issuer's side of the line.
-	issuerIsHigh := state.CompareAccountIDsForLine(issue.IssuerID, ammAccountID) > 0
+	issuerIsHigh := state.CompareAccountIDsForLine(issue.IssuerID, holder) > 0
 	if issuerIsHigh {
 		return rs.Flags&state.LsfHighFreeze != 0
 	}
