@@ -1,8 +1,10 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,6 +75,82 @@ func TestComputeBaseFeeForTx_Multisign(t *testing.T) {
 	t.Run("nil parsedTx falls back to baseFee", func(t *testing.T) {
 		assert.Equal(t, uint64(10), computeBaseFeeForTx(nil, nil, cfg))
 	})
+}
+
+// TestComputeBaseFeeForTx_MaxMultiSigners verifies the rippled-faithful
+// fallback to baseFee when the supplied Signers count exceeds
+// STTx::maxMultiSigners (rippled TransactionSign.cpp:795-796 +
+// STTx.h:57-63): 8 pre-ExpandedSignerList, 32 after.
+func TestComputeBaseFeeForTx_MaxMultiSigners(t *testing.T) {
+	rulesDisabled := amendment.NewRules(nil)
+	rulesEnabled := amendment.NewRules([][32]byte{amendment.FeatureExpandedSignerList})
+
+	t.Run("maxMultiSigners returns 8 when ExpandedSignerList is disabled", func(t *testing.T) {
+		assert.Equal(t, 8, maxMultiSigners(rulesDisabled))
+	})
+
+	t.Run("maxMultiSigners returns 8 when Rules is nil", func(t *testing.T) {
+		assert.Equal(t, 8, maxMultiSigners(nil))
+	})
+
+	t.Run("maxMultiSigners returns 32 when ExpandedSignerList is enabled", func(t *testing.T) {
+		assert.Equal(t, 32, maxMultiSigners(rulesEnabled))
+	})
+
+	t.Run("9 signers with ExpandedSignerList disabled falls back to baseFee", func(t *testing.T) {
+		cfg := tx.EngineConfig{BaseFee: 10, Rules: rulesDisabled}
+
+		parsed, err := tx.ParseJSON([]byte(buildSignersTxJSON(9)))
+		require.NoError(t, err)
+		assert.Equal(t, uint64(10), computeBaseFeeForTx(nil, parsed, cfg),
+			"9 signers > maxMultiSigners(8) → reference_fee fallback per rippled TransactionSign.cpp:795")
+	})
+
+	t.Run("8 signers with ExpandedSignerList disabled charges multisign fee", func(t *testing.T) {
+		cfg := tx.EngineConfig{BaseFee: 10, Rules: rulesDisabled}
+
+		parsed, err := tx.ParseJSON([]byte(buildSignersTxJSON(8)))
+		require.NoError(t, err)
+		assert.Equal(t, uint64(90), computeBaseFeeForTx(nil, parsed, cfg),
+			"baseFee * (1 + 8) = 90")
+	})
+
+	t.Run("9 signers with ExpandedSignerList enabled charges multisign fee", func(t *testing.T) {
+		cfg := tx.EngineConfig{BaseFee: 10, Rules: rulesEnabled}
+
+		parsed, err := tx.ParseJSON([]byte(buildSignersTxJSON(9)))
+		require.NoError(t, err)
+		assert.Equal(t, uint64(100), computeBaseFeeForTx(nil, parsed, cfg),
+			"9 ≤ maxMultiSigners(32) → baseFee * (1 + 9) = 100")
+	})
+}
+
+// buildSignersTxJSON returns a tx_json AccountSet with `count` synthetic
+// signer entries. The signer accounts are not unique but ParseJSON does
+// not enforce uniqueness — only structural shape matters for the
+// computeBaseFeeForTx path under test.
+func buildSignersTxJSON(count int) string {
+	signerAccounts := []string{
+		"rPmsLuwgD3yp6mvCXyz44itC9V2qZpDvm6",
+		"rN7n7otQDd6FczFgLdSqtcsAUxDkw6fzRH",
+		"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"rB5Ux4Lv2nRx6eeoAAsZmtctnBQ2LiACnk",
+		"rNK7QSVHWvUuQzM7yJjJQbqGD1FpwjsiwL",
+		"rUbPiEXkPHaPa3ECVAJBmYW6cTNkBzjJsB",
+		"rGTQRcXdiBSCDuovpsFh5AssaiVbGM3JCG",
+		"rwhMTPF8d6sLahMcjknKjHxBgrkRgaeoNS",
+		"rDg53Haik2475DJx8bjMDSDPj4VX7htaMd",
+	}
+	entries := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		acct := signerAccounts[i%len(signerAccounts)]
+		entries = append(entries, `{"Signer":{"Account":"`+acct+`","SigningPubKey":"","TxnSignature":""}}`)
+	}
+	return `{
+		"TransactionType":"AccountSet",
+		"Account":"rEFNJWaJN6JYW9zXxFq1KqtaqgsMcLs9wK",
+		"Signers":[` + strings.Join(entries, ",") + `]
+	}`
 }
 
 func TestMulDivU64(t *testing.T) {

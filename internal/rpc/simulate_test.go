@@ -541,6 +541,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		assert.Equal(t, uint32(42), txJSON["Sequence"])
 		assert.Equal(t, "15", txJSON["Fee"])
+		assert.Equal(t, 1, mock.feeAutofillCallCount, "GetAutofillFee invoked once")
+		assert.Equal(t, 1, mock.seqAutofillCallCount, "GetAutofillSequence invoked once")
 	})
 
 	t.Run("Pre-set Sequence and Fee are preserved", func(t *testing.T) {
@@ -566,6 +568,10 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		assert.EqualValues(t, 7, txJSON["Sequence"])
 		assert.Equal(t, "12", txJSON["Fee"])
+		assert.Equal(t, 0, mock.feeAutofillCallCount,
+			"GetAutofillFee must not run when Fee is supplied")
+		assert.Equal(t, 0, mock.seqAutofillCallCount,
+			"GetAutofillSequence must not run when Sequence is supplied")
 	})
 
 	t.Run("Sequence supplied skips GetAutofillSequence", func(t *testing.T) {
@@ -643,7 +649,7 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 			"caller-supplied TicketSequence is normalized to uint32 for downstream consumers")
 	})
 
-	t.Run("Source account not found maps to srcActMissing", func(t *testing.T) {
+	t.Run("Source account not found maps to srcActNotFound", func(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 		mock.autofillSeqErr = svcerr.ErrAccountNotFound
 
@@ -659,6 +665,9 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcSRC_ACT_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, "srcActNotFound", rpcErr.ErrorString,
+			"rippled ErrorCodes.cpp:109 maps rpcSRC_ACT_NOT_FOUND to token 'srcActNotFound'")
+		assert.Equal(t, "Source account not found.", rpcErr.Message)
 	})
 
 	t.Run("HighFeeError maps to rpcHIGH_FEE with rippled-format message", func(t *testing.T) {
@@ -777,6 +786,147 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, "transactionSigned", rpcErr.ErrorString,
 			"signers[0] signed-check must fire before signers[1] structural error")
+	})
+
+	t.Run("txSigned precedes srcActMalformed (Account check deferred to Sequence step)", func(t *testing.T) {
+		// rippled checks Account validity inside getAutofillSequence
+		// (Simulate.cpp:43-55), AFTER the top-level TxnSignature signed-check
+		// at 129-138. A bad Account combined with a non-empty TxnSignature
+		// must therefore surface rpcTX_SIGNED, not rpcSRC_ACT_MALFORMED.
+		mock := newMockLedgerServiceSimulate()
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         "badAccount",
+				"TxnSignature":    "DEADBEEF",
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "transactionSigned", rpcErr.ErrorString,
+			"signed-check fires before Account format check — rippled Simulate.cpp:129-138 vs 50-54")
+	})
+
+	t.Run("Sequence supplied + bad Account skips Account check", func(t *testing.T) {
+		// rippled only validates the Account string inside
+		// getAutofillSequence (Simulate.cpp:43-55), which is only reached
+		// when Sequence is absent. When the caller supplies Sequence, the
+		// handler must not reject on Account format.
+		mock := newMockLedgerServiceSimulate()
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         "badAccount",
+				"Sequence":        7,
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.Nil(t, rpcErr, "Sequence supplied — handler must not run the Account check")
+		assert.Equal(t, 0, mock.seqAutofillCallCount,
+			"GetAutofillSequence must be skipped when Sequence is supplied")
+	})
+
+	t.Run("out-of-range Sequence is rejected as invalid_field", func(t *testing.T) {
+		mock := newMockLedgerServiceSimulate()
+
+		// 2^33 — well within float64 precision, well outside uint32.
+		paramsJSON := []byte(`{"tx_json":{"TransactionType":"AccountSet","Account":"` +
+			validAccountAddress + `","Sequence":8589934592}}`)
+
+		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code,
+			"out-of-range Sequence must surface invalid_field, not silent truncation")
+		assert.Equal(t, "Invalid field 'tx.Sequence'.", rpcErr.Message)
+	})
+
+	t.Run("fractional Sequence is rejected as invalid_field", func(t *testing.T) {
+		mock := newMockLedgerServiceSimulate()
+
+		paramsJSON := []byte(`{"tx_json":{"TransactionType":"AccountSet","Account":"` +
+			validAccountAddress + `","Sequence":7.5}}`)
+
+		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "Invalid field 'tx.Sequence'.", rpcErr.Message)
+	})
+
+	t.Run("Custom NetworkID > 1024 is autofilled", func(t *testing.T) {
+		// rippled Simulate.cpp:148-153: NetworkID is autofilled only when
+		// the server's NETWORK_ID exceeds 1024.
+		mock := newMockLedgerServiceSimulate()
+		mock.serverInfo = types.LedgerServerInfo{NetworkID: 1025}
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.Nil(t, rpcErr)
+		txJSON := result.(map[string]interface{})["tx_json"].(map[string]interface{})
+		assert.EqualValues(t, 1025, txJSON["NetworkID"])
+	})
+
+	t.Run("NetworkID <= 1024 is not autofilled", func(t *testing.T) {
+		mock := newMockLedgerServiceSimulate()
+		mock.serverInfo = types.LedgerServerInfo{NetworkID: 1024}
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.Nil(t, rpcErr)
+		txJSON := result.(map[string]interface{})["tx_json"].(map[string]interface{})
+		_, has := txJSON["NetworkID"]
+		assert.False(t, has, "NetworkID must be absent when server NetworkID <= 1024")
+	})
+
+	t.Run("non-tesSUCCESS engine_result_message passes through unchanged", func(t *testing.T) {
+		// rippled only overrides the message for tesSUCCESS
+		// (Simulate.cpp:258-262); other TER messages from transResultInfo
+		// must be returned verbatim.
+		mock := newMockLedgerServiceSimulate()
+		mock.simulateResult = &types.SubmitResult{
+			EngineResult:        "temBAD_AMOUNT",
+			EngineResultCode:    -298,
+			EngineResultMessage: "Malformed: Bad amount.",
+			Applied:             false,
+			CurrentLedger:       3,
+		}
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.Nil(t, rpcErr)
+		resp := result.(map[string]interface{})
+		assert.Equal(t, "Malformed: Bad amount.", resp["engine_result_message"],
+			"non-tesSUCCESS messages must not be clobbered by the success override")
 	})
 }
 

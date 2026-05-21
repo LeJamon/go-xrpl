@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/bits"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
@@ -313,10 +314,9 @@ func (s *Service) GetAutofillSequence(account string, hasTicketSequence bool) (u
 // one extra baseFee per entry in sfSigners regardless of SigningPubKey
 // (rippled Transactor.cpp:229-245).
 //
-// Unlike rippled's getTxFee, which falls back to reference_fee on a
-// malformed Signers array (TransactionSign.cpp:792-815), this path
-// assumes the caller has already structurally validated Signers — the
-// simulate handler runs normalizeSigners before invoking GetAutofill.
+// Signer counts above STTx::maxMultiSigners (8 pre-ExpandedSignerList, 32
+// after) fall back to baseFee, mirroring rippled's reference_fee fallback
+// at TransactionSign.cpp:795-796.
 func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.EngineConfig) uint64 {
 	if parsedTx == nil {
 		return cfg.BaseFee
@@ -324,10 +324,24 @@ func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.Eng
 	if feeCalc, ok := parsedTx.(tx.CustomBaseFeeCalculator); ok {
 		return feeCalc.CalculateBaseFee(view, cfg)
 	}
-	if signerCount := len(parsedTx.GetCommon().Signers); signerCount > 0 {
-		return tx.CalculateMultiSigFee(cfg.BaseFee, signerCount)
+	signerCount := len(parsedTx.GetCommon().Signers)
+	if signerCount == 0 {
+		return cfg.BaseFee
 	}
-	return cfg.BaseFee
+	if signerCount > maxMultiSigners(cfg.Rules) {
+		return cfg.BaseFee
+	}
+	return tx.CalculateMultiSigFee(cfg.BaseFee, signerCount)
+}
+
+// maxMultiSigners mirrors rippled STTx::maxMultiSigners (STTx.h:57-63):
+// 8 when ExpandedSignerList is disabled or rules are unavailable, 32
+// when enabled.
+func maxMultiSigners(rules *amendment.Rules) int {
+	if rules == nil || !rules.ExpandedSignerListEnabled() {
+		return 8
+	}
+	return 32
 }
 
 // mulDivU64 returns (a * b) / c; ok=false on uint64 overflow or c == 0.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -96,16 +97,6 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		return nil, types.RpcErrorMissingField("tx.Account")
 	}
 
-	// Validate Account string up front. rippled gates this inside
-	// getAutofillSequence (Simulate.cpp:50-55) and skips it when Sequence
-	// is supplied; we validate unconditionally because every downstream
-	// branch needs the AccountID anyway. The wire response still matches
-	// rippled (rpcSRC_ACT_MALFORMED, "Invalid field 'tx.Account'.").
-	accountStr, ok := txJsonMap["Account"].(string)
-	if !ok || !types.IsValidXRPLAddress(accountStr) {
-		return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx.Account'.")
-	}
-
 	// rippled autofillTx() — Simulate.cpp:71-156. Steps run in the same
 	// order so rippled's error precedence is preserved:
 	//   1. Fee        (→ rpcHIGH_FEE)
@@ -151,15 +142,23 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		return nil, types.RpcErrorTxSigned()
 	}
 
-	// 5. Sequence — rippled Simulate.cpp:140-146. Reads the source account
-	// only here (after Fee and signed-checks), so account-missing surfaces
-	// only when rippled would also report it.
+	// 5. Sequence — rippled Simulate.cpp:140-146. Account format is checked
+	// here, matching rippled's getAutofillSequence (Simulate.cpp:43-55), so
+	// the txSigned and highFee precedence ahead of srcActMalformed/NotFound
+	// is preserved.
 	if _, hasSeq := txJsonMap["Sequence"]; !hasSeq {
+		accountStr, ok := txJsonMap["Account"].(string)
+		if !ok {
+			return nil, types.RpcErrorInvalidField("tx.Account")
+		}
+		if !types.IsValidXRPLAddress(accountStr) {
+			return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx.Account'.")
+		}
 		_, hasTicket := txJsonMap["TicketSequence"]
 		seq, seqErr := ctx.Services.Ledger.GetAutofillSequence(accountStr, hasTicket)
 		if seqErr != nil {
 			if errors.Is(seqErr, svcerr.ErrAccountNotFound) {
-				return nil, types.RpcErrorSrcActMissing("Source account not found.")
+				return nil, types.RpcErrorSrcActNotFound("Source account not found.")
 			}
 			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill sequence: %v", seqErr))
 		}
@@ -177,7 +176,9 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// Normalize caller-supplied numeric Sequence / TicketSequence: JSON
 	// numbers unmarshal as float64 in map[string]interface{} but downstream
 	// consumers (binarycodec, simulate engine) expect an integer type.
-	normalizeSequenceFields(txJsonMap)
+	if rpcErr := normalizeSequenceFields(txJsonMap); rpcErr != nil {
+		return nil, rpcErr
+	}
 
 	// Reject Batch — rippled Simulate.cpp:345-348.
 	if txType, ok := txJsonMap["TransactionType"].(string); ok && txType == "Batch" {
@@ -285,23 +286,46 @@ func processSigners(txJsonMap map[string]interface{}) *types.RpcError {
 }
 
 // normalizeSequenceFields coerces caller-supplied Sequence and
-// TicketSequence values from float64 (JSON-number default) to uint32 so
-// the downstream binary codec and engine see a stable integer type.
-func normalizeSequenceFields(txJsonMap map[string]interface{}) {
+// TicketSequence values to uint32 (JSON numbers unmarshal as float64 in
+// map[string]interface{}, but downstream consumers expect an integer
+// type). Values outside [0, math.MaxUint32] are rejected to mirror
+// rippled's STParsedJSONObject behaviour on UInt32 fields.
+func normalizeSequenceFields(txJsonMap map[string]interface{}) *types.RpcError {
 	for _, k := range [...]string{"Sequence", "TicketSequence"} {
 		v, ok := txJsonMap[k]
 		if !ok {
 			continue
 		}
+		var (
+			val   uint32
+			valid bool
+		)
 		switch n := v.(type) {
+		case uint32:
+			val, valid = n, true
 		case float64:
-			txJsonMap[k] = uint32(n)
+			if n >= 0 && n <= math.MaxUint32 && n == math.Trunc(n) {
+				val, valid = uint32(n), true
+			}
 		case int:
-			txJsonMap[k] = uint32(n)
+			if n >= 0 && uint64(n) <= math.MaxUint32 {
+				val, valid = uint32(n), true
+			}
 		case int64:
-			txJsonMap[k] = uint32(n)
+			if n >= 0 && uint64(n) <= math.MaxUint32 {
+				val, valid = uint32(n), true
+			}
 		case uint64:
-			txJsonMap[k] = uint32(n)
+			if n <= math.MaxUint32 {
+				val, valid = uint32(n), true
+			}
+		default:
+			continue
 		}
+		if !valid {
+			return types.RpcErrorInvalidField("tx." + k)
+		}
+		txJsonMap[k] = val
 	}
+	return nil
 }

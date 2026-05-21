@@ -314,6 +314,13 @@ func RpcErrorSrcActMissing(message string) *RpcError {
 	return NewRpcError(RpcSRC_ACT_NOT_FOUND, "srcActMissing", "srcActMissing", message)
 }
 
+// RpcErrorSrcActNotFound returns an error when the source account does not
+// exist in the ledger (matches rippled rpcSRC_ACT_NOT_FOUND, code 67, token
+// "srcActNotFound"; see rippled ErrorCodes.cpp:109).
+func RpcErrorSrcActNotFound(message string) *RpcError {
+	return NewRpcError(RpcSRC_ACT_NOT_FOUND, "srcActNotFound", "srcActNotFound", message)
+}
+
 // RpcErrorSrcCurMalformed returns an error when a source currency is malformed
 // (matches rippled "srcCurMalformed").
 func RpcErrorSrcCurMalformed(message string) *RpcError {

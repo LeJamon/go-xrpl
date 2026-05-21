@@ -883,10 +883,11 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 }
 
 func (a *LedgerServiceAdapter) GetAutofillFee(txJSON []byte) (uint64, error) {
-	parsedTx, err := tx.ParseJSON(txJSON)
-	if err != nil {
-		return 0, fmt.Errorf("parse tx for fee autofill: %w", err)
-	}
+	// rippled getTxFee falls back to reference_fee on any parse failure
+	// (TransactionSign.cpp:790-821). A nil parsedTx triggers the
+	// equivalent baseFee fallback in computeBaseFeeForTx so the later
+	// structural-check passes can surface the real error.
+	parsedTx, _ := tx.ParseJSON(txJSON)
 	return a.svc.GetAutofillFee(parsedTx)
 }
 
