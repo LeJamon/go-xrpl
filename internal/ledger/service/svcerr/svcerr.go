@@ -54,4 +54,9 @@ var (
 	// ErrInvalidMarker is returned when a paginated query supplies a
 	// marker that does not parse or does not match an existing entry.
 	ErrInvalidMarker = errors.New("invalid marker")
+
+	// ErrHighFee is returned by fee-autofill when the escalated fee exceeds
+	// the autofill ceiling (feeDefault * mult / div). Handlers map this to
+	// rpcHIGH_FEE. Mirrors rippled TransactionSign.cpp getCurrentNetworkFee.
+	ErrHighFee = errors.New("high fee")
 )

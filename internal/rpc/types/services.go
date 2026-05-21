@@ -271,15 +271,14 @@ type TransactionSubmitter interface {
 	StoreTransaction(txHash [32]byte, txData []byte) error
 	GetTransactionHistory(ctx context.Context, startIndex uint32) (*TxHistoryResult, error)
 
-	// GetAutofillSequence returns the next sequence to use for an account.
-	// When hasTicketSequence is true the account may be missing and 0 is returned.
-	// Mirrors rippled Simulate.cpp getAutofillSequence().
-	GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error)
-
-	// GetCurrentNetworkFee returns the fee in drops needed to bypass the
-	// TxQ and enter the current open ledger. Mirrors rippled
-	// TransactionSign.cpp getCurrentNetworkFee().
-	GetCurrentNetworkFee() uint64
+	// GetAutofill returns the next Sequence (0 when hasTicketSequence) and
+	// the fee in drops a transaction must carry to bypass the TxQ and
+	// enter the current open ledger. Both values are read under one lock.
+	// The fee includes per-tx-type adjustments (multisign, AccountDelete,
+	// AMMCreate, LedgerStateFix); isUnlimited skips the rpcHIGH_FEE
+	// ceiling. Mirrors rippled Simulate.cpp getAutofillSequence and
+	// TransactionSign.cpp getCurrentNetworkFee combined.
+	GetAutofill(account string, hasTicketSequence bool, txJSON []byte, isUnlimited bool) (sequence uint32, fee uint64, err error)
 }
 
 // AccountQuerier provides account-related read operations.

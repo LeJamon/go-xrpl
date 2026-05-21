@@ -163,35 +163,45 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		}
 	}
 
-	// Autofill Sequence from the open ledger.
-	// rippled: getAutofillSequence (Simulate.cpp). When TicketSequence is
-	// present, Sequence is implied by the ticket and stays absent.
-	if _, hasSeq := txJsonMap["Sequence"]; !hasSeq {
-		_, hasTicket := txJsonMap["TicketSequence"]
-		seq, seqErr := ctx.Services.Ledger.GetAutofillSequence(accountStr, hasTicket)
-		if seqErr != nil {
-			if errors.Is(seqErr, svcerr.ErrAccountNotFound) {
-				return nil, types.RpcErrorSrcActMissing("Source account not found.")
-			}
-			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill Sequence: %v", seqErr))
-		}
-		if !hasTicket {
-			txJsonMap["Sequence"] = seq
-		}
-	}
-
-	// Autofill Fee from the open ledger / TxQ.
-	// rippled: getCurrentNetworkFee (TransactionSign.cpp).
-	if _, hasFee := txJsonMap["Fee"]; !hasFee {
-		txJsonMap["Fee"] = strconv.FormatUint(ctx.Services.Ledger.GetCurrentNetworkFee(), 10)
-	}
-
-	// Autofill NetworkID if not present and network ID > 1024.
-	// Matches rippled's autofillTx() in Simulate.cpp.
+	// Autofill NetworkID first so the autofill probe sees the final tx
+	// shape. rippled autofillTx() (Simulate.cpp) fills NetworkID before
+	// Sequence; the network id only matters at parse time.
 	if _, ok := txJsonMap["NetworkID"]; !ok {
 		serverInfo := ctx.Services.Ledger.GetServerInfo()
 		if serverInfo.NetworkID > 1024 {
 			txJsonMap["NetworkID"] = serverInfo.NetworkID
+		}
+	}
+
+	// Autofill Sequence + Fee in one service call so they observe a
+	// consistent ledger snapshot. rippled splits these (getAutofillSequence
+	// and getCurrentNetworkFee in Simulate.cpp / TransactionSign.cpp), but
+	// rippled holds one openLedger().current() reference for both reads;
+	// the unified service call is the Go analog.
+	_, hasSeq := txJsonMap["Sequence"]
+	_, hasFee := txJsonMap["Fee"]
+	if !hasSeq || !hasFee {
+		_, hasTicket := txJsonMap["TicketSequence"]
+		probe, marshalErr := json.Marshal(txJsonMap)
+		if marshalErr != nil {
+			return nil, types.RpcErrorInternal("Failed to marshal tx_json for autofill")
+		}
+		seq, fee, autoErr := ctx.Services.Ledger.GetAutofill(accountStr, hasTicket, probe, ctx.Unlimited)
+		if autoErr != nil {
+			switch {
+			case errors.Is(autoErr, svcerr.ErrAccountNotFound):
+				return nil, types.RpcErrorSrcActMissing("Source account not found.")
+			case errors.Is(autoErr, svcerr.ErrHighFee):
+				return nil, types.RpcErrorHighFee(autoErr.Error())
+			default:
+				return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill tx: %v", autoErr))
+			}
+		}
+		if !hasSeq && !hasTicket {
+			txJsonMap["Sequence"] = seq
+		}
+		if !hasFee {
+			txJsonMap["Fee"] = strconv.FormatUint(fee, 10)
 		}
 	}
 
@@ -228,12 +238,11 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	}
 
 	// rippled emits "meta" (JSON) when binary=false and "meta_blob" (hex)
-	// when binary=true. Simulate.cpp:264-276.
+	// when binary=true. Always emit when Metadata is present, mirroring
+	// rippled's `if (result.metadata)` guard (Simulate.cpp:264-276).
 	if result.Metadata != nil {
 		if binaryOutput {
-			if len(result.Metadata.Blob) > 0 {
-				response["meta_blob"] = strings.ToUpper(hex.EncodeToString(result.Metadata.Blob))
-			}
+			response["meta_blob"] = strings.ToUpper(hex.EncodeToString(result.Metadata.Blob))
 		} else if result.Metadata.JSON != nil {
 			response["meta"] = result.Metadata.JSON
 		}

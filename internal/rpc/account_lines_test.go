@@ -163,11 +163,10 @@ func (m *mockAccountLinesLedgerService) GetNFTSellOffers(_ context.Context, nftI
 func (m *mockAccountLinesLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountLinesLedgerService) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
-	return 0, errors.New("not implemented")
+func (m *mockAccountLinesLedgerService) GetAutofill(account string, hasTicketSequence bool, txJSON []byte, isUnlimited bool) (uint32, uint64, error) {
+	return 0, 0, errors.New("not implemented")
 }
-func (m *mockAccountLinesLedgerService) GetCurrentNetworkFee() uint64 { return 10 }
-func (m *mockAccountLinesLedgerService) IsAmendmentBlocked() bool     { return false }
+func (m *mockAccountLinesLedgerService) IsAmendmentBlocked() bool { return false }
 func (m *mockAccountLinesLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {
 	return nil, errors.New("not implemented in mock")
 }

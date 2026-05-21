@@ -166,11 +166,10 @@ func (m *mockGatewayBalancesLedgerService) GetNFTSellOffers(_ context.Context, n
 func (m *mockGatewayBalancesLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
-	return 0, errors.New("not implemented")
+func (m *mockGatewayBalancesLedgerService) GetAutofill(account string, hasTicketSequence bool, txJSON []byte, isUnlimited bool) (uint32, uint64, error) {
+	return 0, 0, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetCurrentNetworkFee() uint64 { return 10 }
-func (m *mockGatewayBalancesLedgerService) IsAmendmentBlocked() bool     { return false }
+func (m *mockGatewayBalancesLedgerService) IsAmendmentBlocked() bool { return false }
 func (m *mockGatewayBalancesLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {
 	return nil, errors.New("not implemented in mock")
 }

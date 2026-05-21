@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/bits"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
@@ -14,6 +15,13 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/txq"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
+)
+
+// Rippled autofill ceiling defaults — Tuning.h: a tx's fee is capped at
+// feeDefault * 10 / 1 unless the role is unlimited.
+const (
+	defaultAutoFillFeeMultiplier = 10
+	defaultAutoFillFeeDivisor    = 1
 )
 
 // SubmitResult contains the result of submitting a transaction
@@ -187,75 +195,121 @@ func (s *Service) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint6
 	return readFeesFromLedger(s.openLedger)
 }
 
-// GetAutofillSequence returns the next sequence to use for an account when
-// constructing a transaction. When hasTicketSequence is true the account's
-// sequence is irrelevant (the ticket carries it) and 0 is returned; the
-// account is still allowed to be missing in that case.
+// GetAutofill returns the Sequence (0 when hasTicketSequence is true) and
+// Fee (drops) a transaction should carry to bypass the TxQ and enter the
+// current open ledger. Both values are read under a single RLock so they
+// observe a consistent ledger snapshot.
 //
-// Reference: rippled Simulate.cpp getAutofillSequence — reads the account SLE
-// from the current open ledger and asks the TxQ for the next-queueable seq.
-func (s *Service) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
+// Fee dispatch follows rippled TransactionSign.cpp getCurrentNetworkFee:
+//
+//   - feeDefault = per-tx-type base fee (multisign multiplier, AccountDelete's
+//     reserve increment, AMMCreate's increment, LedgerStateFix's increment)
+//   - escalatedFee = toDrops(openLedgerFeeLevel-1, baseFee) + 1 (TxQ load)
+//   - returned fee = max(feeDefault, escalatedFee)
+//
+// When isUnlimited is false, the returned fee is capped at feeDefault *
+// defaultAutoFillFeeMultiplier / defaultAutoFillFeeDivisor; exceeding it
+// yields svcerr.ErrHighFee. isUnlimited mirrors rippled's isUnlimited()
+// (admin / identified roles).
+//
+// scaleFeeLoad (rippled load-fee tracker) has no Go equivalent today and
+// is intentionally omitted.
+//
+// Reference: rippled Simulate.cpp getAutofillSequence +
+// TransactionSign.cpp getCurrentNetworkFee / getTxFee.
+func (s *Service) GetAutofill(account string, hasTicketSequence bool, parsedTx tx.Transaction, isUnlimited bool) (sequence uint32, fee uint64, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	if s.openLedger == nil {
-		return 0, ErrNoOpenLedger
+		return 0, 0, ErrNoOpenLedger
 	}
 
-	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
-	if err != nil {
-		return 0, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
+	_, accountIDBytes, decodeErr := addresscodec.DecodeClassicAddressToAccountID(account)
+	if decodeErr != nil {
+		return 0, 0, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, decodeErr)
 	}
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
 
 	data, readErr := s.openLedger.Read(keylet.Account(accountID))
 	if readErr != nil || data == nil {
-		if hasTicketSequence {
-			return 0, nil
+		if !hasTicketSequence {
+			return 0, 0, svcerr.ErrAccountNotFound
 		}
-		return 0, svcerr.ErrAccountNotFound
+	} else if !hasTicketSequence {
+		acct, parseErr := state.ParseAccountRoot(data)
+		if parseErr != nil {
+			return 0, 0, fmt.Errorf("parse account root: %w", parseErr)
+		}
+		if s.txQueue != nil {
+			sequence = s.txQueue.NextQueuableSeq(accountID, acct.Sequence)
+		} else {
+			sequence = acct.Sequence
+		}
 	}
 
-	if hasTicketSequence {
-		return 0, nil
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.openLedger)
+	feeCfg := tx.EngineConfig{
+		BaseFee:          baseFee,
+		ReserveBase:      reserveBase,
+		ReserveIncrement: reserveIncrement,
+		NetworkID:        s.config.NetworkID,
+		Rules:            rulesFromLedger(s.closedLedger, s.logger),
 	}
 
-	acct, parseErr := state.ParseAccountRoot(data)
-	if parseErr != nil {
-		return 0, fmt.Errorf("parse account root: %w", parseErr)
-	}
-
+	feeDefault := computeBaseFeeForTx(s.openLedger, parsedTx, feeCfg)
+	fee = feeDefault
 	if s.txQueue != nil {
-		return s.txQueue.NextQueuableSeq(accountID, acct.Sequence), nil
+		feeLevel := s.txQueue.GetRequiredFeeLevel(s.openLedger.TxCount())
+		if uint64(feeLevel) > txq.BaseLevel {
+			escalated := txq.FeeLevel(uint64(feeLevel)-1).ToDrops(baseFee) + 1
+			if escalated > fee {
+				fee = escalated
+			}
+		}
 	}
-	return acct.Sequence, nil
+
+	if !isUnlimited {
+		ceiling, ok := mulDivU64(feeDefault, defaultAutoFillFeeMultiplier, defaultAutoFillFeeDivisor)
+		if !ok {
+			return 0, 0, fmt.Errorf("%w: fee ceiling overflow", svcerr.ErrHighFee)
+		}
+		if fee > ceiling {
+			return 0, 0, fmt.Errorf("%w: Fee of %d exceeds the requested tx limit of %d", svcerr.ErrHighFee, fee, ceiling)
+		}
+	}
+
+	return sequence, fee, nil
 }
 
-// GetCurrentNetworkFee returns the fee (in drops) a transaction should pay
-// to bypass the TxQ and enter the current open ledger. Falls back to the
-// base fee when the network is uncongested or no TxQ is configured.
-//
-// Reference: rippled getCurrentNetworkFee() in TransactionSign.cpp:
-//
-//	escalatedFee = toDrops(openLedgerFeeLevel - 1, baseFee) + 1
-//
-// Per-transaction-type adjustments (multisign, AccountDelete) are not applied;
-// callers that need exact rippled parity should set Fee explicitly.
-func (s *Service) GetCurrentNetworkFee() uint64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+// computeBaseFeeForTx mirrors rippled getTxFee → calculateBaseFee dispatch:
+// CustomBaseFeeCalculator wins (AccountDelete, AMMCreate, LedgerStateFix);
+// otherwise multisign multiplier; otherwise the ledger base fee.
+func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.EngineConfig) uint64 {
+	if parsedTx == nil {
+		return cfg.BaseFee
+	}
+	if feeCalc, ok := parsedTx.(tx.CustomBaseFeeCalculator); ok {
+		return feeCalc.CalculateBaseFee(view, cfg)
+	}
+	if tx.IsMultiSigned(parsedTx) {
+		return tx.CalculateMultiSigFee(cfg.BaseFee, len(parsedTx.GetCommon().Signers))
+	}
+	return cfg.BaseFee
+}
 
-	baseFee, _, _ := readFeesFromLedger(s.openLedger)
-	if s.txQueue == nil || s.openLedger == nil {
-		return baseFee
+// mulDivU64 returns (a * b) / c with overflow detection. Returns ok=false
+// when the multiplication overflows uint64 or c is non-positive.
+func mulDivU64(a uint64, b, c int) (uint64, bool) {
+	if b < 0 || c <= 0 {
+		return 0, false
 	}
-	txInLedger := s.openLedger.TxCount()
-	feeLevel := s.txQueue.GetRequiredFeeLevel(txInLedger)
-	if uint64(feeLevel) <= txq.BaseLevel {
-		return baseFee
+	hi, lo := bits.Mul64(a, uint64(b))
+	if hi != 0 {
+		return 0, false
 	}
-	return txq.FeeLevel(uint64(feeLevel)-1).ToDrops(baseFee) + 1
+	return lo / uint64(c), true
 }
 
 // EngineConfigForReplay returns the shared (non-per-ledger) engine

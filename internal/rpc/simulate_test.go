@@ -18,7 +18,7 @@ type mockLedgerServiceSimulate struct {
 	simulateResult    *types.SubmitResult
 	simulateError     error
 	autofillSeq       uint32
-	autofillSeqErr    error
+	autofillErr       error
 	currentNetworkFee uint64
 }
 
@@ -44,18 +44,14 @@ func (m *mockLedgerServiceSimulate) SimulateTransaction(txJSON []byte) (*types.S
 	return m.simulateResult, nil
 }
 
-func (m *mockLedgerServiceSimulate) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
-	if m.autofillSeqErr != nil {
-		return 0, m.autofillSeqErr
+func (m *mockLedgerServiceSimulate) GetAutofill(account string, hasTicketSequence bool, txJSON []byte, isUnlimited bool) (uint32, uint64, error) {
+	if m.autofillErr != nil {
+		return 0, 0, m.autofillErr
 	}
 	if hasTicketSequence {
-		return 0, nil
+		return 0, m.currentNetworkFee, nil
 	}
-	return m.autofillSeq, nil
-}
-
-func (m *mockLedgerServiceSimulate) GetCurrentNetworkFee() uint64 {
-	return m.currentNetworkFee
+	return m.autofillSeq, m.currentNetworkFee, nil
 }
 
 func newSimulateTestServices(mock *mockLedgerServiceSimulate) *types.ServiceContainer {
@@ -581,7 +577,7 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 	t.Run("Source account not found maps to srcActMissing", func(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
-		mock.autofillSeqErr = svcerr.ErrAccountNotFound
+		mock.autofillErr = svcerr.ErrAccountNotFound
 
 		params := map[string]interface{}{
 			"tx_json": map[string]interface{}{

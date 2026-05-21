@@ -870,7 +870,10 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 		ValidatedLedger:     result.ValidatedLedger,
 	}
 	if result.Metadata != nil {
-		blob, _ := tx.SerializeMetadata(result.Metadata)
+		blob, serErr := tx.SerializeMetadata(result.Metadata)
+		if serErr != nil {
+			return nil, fmt.Errorf("serialize metadata: %w", serErr)
+		}
 		out.Metadata = &types.SubmitMetadata{
 			JSON: result.Metadata,
 			Blob: blob,
@@ -879,12 +882,12 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 	return out, nil
 }
 
-func (a *LedgerServiceAdapter) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
-	return a.svc.GetAutofillSequence(account, hasTicketSequence)
-}
-
-func (a *LedgerServiceAdapter) GetCurrentNetworkFee() uint64 {
-	return a.svc.GetCurrentNetworkFee()
+func (a *LedgerServiceAdapter) GetAutofill(account string, hasTicketSequence bool, txJSON []byte, isUnlimited bool) (uint32, uint64, error) {
+	parsedTx, err := tx.ParseJSON(txJSON)
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse tx for autofill: %w", err)
+	}
+	return a.svc.GetAutofill(account, hasTicketSequence, parsedTx, isUnlimited)
 }
 
 // IsAmendmentBlocked returns true if the server is blocked by unsupported amendments
