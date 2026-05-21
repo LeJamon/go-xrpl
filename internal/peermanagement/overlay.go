@@ -2461,20 +2461,44 @@ func (o *Overlay) outboundCount() int {
 	return count
 }
 
-// reconcileDiscoveryConnected pushes the live outbound-peer address
-// set into Discovery so its `Connected` flags reflect the actual TCP
+// reconcileDiscoveryConnected pushes the live peer address+host set
+// into Discovery so its `Connected` flags reflect the actual TCP
 // state. Called from autoconnect before SelectPeersToConnect so any
 // peer whose connection ended without a corresponding MarkDisconnected
-// gets re-considered for the next outbound attempt.
+// gets re-considered, AND any peer we already have inbound from is
+// recognized as covered (so we don't re-dial it and trigger the
+// post-handshake isConnectedTo rejection in Connect / accept).
+//
+// Two pieces of state are reconciled:
+//   1. exactAddrs: full "host:port" strings of OUTBOUND peers. These
+//      were originally tracked by MarkConnected.
+//   2. hosts: the unique HOST set across all current peers (inbound
+//      AND outbound). Used so a fixed-peer entry like
+//      "goxrpl-0:51235" gets flagged as covered when there's an
+//      inbound peer whose RemoteIP matches goxrpl-0, even though the
+//      inbound's ephemeral source port doesn't match :51235.
+//
+// Without (2), goxrpl-1 (with an inbound from goxrpl-0) would
+// repeatedly outbound-dial goxrpl-0:51235 and have every attempt
+// post-handshake-rejected by goxrpl-0's isConnectedTo (it already
+// has the inbound bidirectionally bookkept). Empirically the cause
+// of the iter25 stall on goxrpl-1.
 func (o *Overlay) reconcileDiscoveryConnected() {
 	o.peersMu.RLock()
-	connected := make(map[string]struct{}, len(o.peers))
+	exactAddrs := make(map[string]struct{}, len(o.peers))
+	hosts := make(map[string]struct{}, len(o.peers))
 	for _, peer := range o.peers {
-		if peer.Inbound() {
-			continue
+		if !peer.Inbound() {
+			exactAddrs[peer.Endpoint().String()] = struct{}{}
 		}
-		connected[peer.Endpoint().String()] = struct{}{}
+		if h := peer.RemoteIP(); h != "" {
+			hosts[h] = struct{}{}
+		}
+		if h := peer.Endpoint().Host; h != "" {
+			hosts[h] = struct{}{}
+		}
 	}
 	o.peersMu.RUnlock()
-	o.discovery.SyncConnectedState(connected)
+	o.discovery.SyncConnectedState(exactAddrs)
+	o.discovery.SyncConnectedHosts(hosts)
 }

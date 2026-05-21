@@ -524,9 +524,10 @@ func (d *Discovery) MarkDisconnected(peerID PeerID) {
 }
 
 // SyncConnectedState reconciles Discovery's view of connected peers
-// against the Overlay's actual peer set. Any d.peers entry currently
-// marked Connected whose address is NOT in actualConnected is flipped
-// back to Connected=false so it becomes a candidate for reconnection.
+// against the Overlay's actual outbound peer set. Any d.peers entry
+// currently marked Connected whose address is NOT in actualConnected
+// is flipped back to Connected=false so it becomes a candidate for
+// reconnection.
 //
 // This guards against the PeerID-keyed MarkDisconnected path missing
 // some disconnect events (event-bus races, inbound-only peers
@@ -548,6 +549,39 @@ func (d *Discovery) SyncConnectedState(actualConnected map[string]struct{}) {
 					peer.PeerID = 0
 				}
 			}
+		}
+	}
+}
+
+// SyncConnectedHosts marks any d.peers entry whose host is in the
+// live host set as Connected=true, even if its full address (with
+// listener port) was never seen by MarkConnected. This covers fixed
+// peers for which we only have an INBOUND connection: the inbound's
+// ephemeral source port won't match the fixed-peer config's listener
+// port, but the host IP matches.
+//
+// Without this, autoconnect repeatedly dials addresses we already
+// have inbound connections from. Each redial completes TLS, then the
+// remote rejects via its post-handshake isConnectedTo guard
+// (overlay.go:923-926) and closes — surfacing as
+// `failed to read header: unexpected EOF` on our side. Forever flap.
+// Root cause of the iter25 goxrpl-1 stall.
+func (d *Discovery) SyncConnectedHosts(hosts map[string]struct{}) {
+	if len(hosts) == 0 {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, peer := range d.peers {
+		if peer.Connected {
+			continue
+		}
+		host, _, err := net.SplitHostPort(peer.Address)
+		if err != nil {
+			continue
+		}
+		if _, covered := hosts[host]; covered {
+			peer.Connected = true
 		}
 	}
 }
