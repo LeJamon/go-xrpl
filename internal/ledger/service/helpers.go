@@ -1,13 +1,10 @@
 package service
 
 import (
-	"bytes"
 	"errors"
-	"sort"
 	"strconv"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
@@ -62,17 +59,6 @@ func decodeAccountIDLocal(address string) ([20]byte, error) {
 	return accountID, nil
 }
 
-// amountsMatchCurrency checks if two amounts have the same currency (ignoring value)
-func amountsMatchCurrency(a, b tx.Amount) bool {
-	if a.IsNative() && b.IsNative() {
-		return true
-	}
-	if a.IsNative() != b.IsNative() {
-		return false
-	}
-	return a.Currency == b.Currency && a.Issuer == b.Issuer
-}
-
 // calculateOfferQuality calculates the quality (price) of an offer
 func calculateOfferQuality(pays, gets tx.Amount) string {
 	// Quality = TakerPays / TakerGets
@@ -96,37 +82,6 @@ func parseAmountValue(amt tx.Amount) float64 {
 // formatHash formats a hash as a string
 func formatHash(hash [32]byte) string {
 	return string(hash[:])
-}
-
-// sortBookOffersByQualityWithRaw sorts by ascending BookDirectory bytes
-// (rippled's directory walk order, best-quality first), keeping raw in
-// lockstep. A float-based sort would lose precision on closely-quoted
-// offers, so we compare the raw quality bytes directly.
-func sortBookOffersByQualityWithRaw(offers []BookOffer, raw []*state.LedgerOffer) {
-	if raw == nil {
-		sort.SliceStable(offers, func(i, j int) bool {
-			qi, _ := strconv.ParseFloat(offers[i].Quality, 64)
-			qj, _ := strconv.ParseFloat(offers[j].Quality, 64)
-			return qi < qj
-		})
-		return
-	}
-	indices := make([]int, len(offers))
-	for i := range indices {
-		indices[i] = i
-	}
-	sort.SliceStable(indices, func(a, b int) bool {
-		i, j := indices[a], indices[b]
-		return bytes.Compare(raw[i].BookDirectory[:], raw[j].BookDirectory[:]) < 0
-	})
-	sortedOffers := make([]BookOffer, len(offers))
-	sortedRaw := make([]*state.LedgerOffer, len(raw))
-	for newIdx, oldIdx := range indices {
-		sortedOffers[newIdx] = offers[oldIdx]
-		sortedRaw[newIdx] = raw[oldIdx]
-	}
-	copy(offers, sortedOffers)
-	copy(raw, sortedRaw)
 }
 
 // helper function to format ledger range

@@ -130,7 +130,11 @@ const (
 	RpcSRC_ACT_MALFORMED = 65 // Source account is malformed (rippled: rpcSRC_ACT_MALFORMED = 65)
 
 	// Order book errors - must match rippled exactly
-	RpcBAD_MARKET = 42 // taker_pays and taker_gets describe the same market (rippled: rpcBAD_MARKET)
+	RpcBAD_MARKET        = 42 // taker_pays and taker_gets describe the same market (rippled: rpcBAD_MARKET)
+	RpcDST_AMT_MALFORMED = 51 // Destination amount/currency/issuer is malformed (rippled: rpcDST_AMT_MALFORMED)
+	RpcDST_ISR_MALFORMED = 53 // Destination issuer is malformed (rippled: rpcDST_ISR_MALFORMED)
+	RpcSRC_CUR_MALFORMED = 69 // Source currency is malformed (rippled: rpcSRC_CUR_MALFORMED)
+	RpcSRC_ISR_MALFORMED = 70 // Source issuer is malformed (rippled: rpcSRC_ISR_MALFORMED)
 )
 
 // Standard error constructors
@@ -324,9 +328,34 @@ func RpcErrorSrcActMissing(message string) *RpcError {
 }
 
 // RpcErrorSrcCurMalformed returns an error when a source currency is malformed
-// (matches rippled "srcCurMalformed").
+// (matches rippled rpcSRC_CUR_MALFORMED, code 69, token "srcCurMalformed").
 func RpcErrorSrcCurMalformed(message string) *RpcError {
-	return NewRpcError(RpcUNKNOWN, "srcCurMalformed", "srcCurMalformed", message)
+	return NewRpcError(RpcSRC_CUR_MALFORMED, "srcCurMalformed", "srcCurMalformed", message)
+}
+
+// RpcErrorSrcIsrMalformed matches rippled rpcSRC_ISR_MALFORMED (code 70,
+// token "srcIsrMalformed").
+func RpcErrorSrcIsrMalformed(message string) *RpcError {
+	return NewRpcError(RpcSRC_ISR_MALFORMED, "srcIsrMalformed", "srcIsrMalformed", message)
+}
+
+// RpcErrorDstAmtMalformed matches rippled rpcDST_AMT_MALFORMED (code 51,
+// token "dstAmtMalformed").
+func RpcErrorDstAmtMalformed(message string) *RpcError {
+	return NewRpcError(RpcDST_AMT_MALFORMED, "dstAmtMalformed", "dstAmtMalformed", message)
+}
+
+// RpcErrorDstIsrMalformed matches rippled rpcDST_ISR_MALFORMED (code 53,
+// token "dstIsrMalformed").
+func RpcErrorDstIsrMalformed(message string) *RpcError {
+	return NewRpcError(RpcDST_ISR_MALFORMED, "dstIsrMalformed", "dstIsrMalformed", message)
+}
+
+// RpcErrorObjectField matches rippled object_field_error: the parameter
+// must be an object (or null). Body is "Invalid field '<name>', not object.".
+func RpcErrorObjectField(field string) *RpcError {
+	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams",
+		"Invalid field '"+field+"', not object.")
 }
 
 // RpcErrorDstActNotFound returns an error when the destination account is not found

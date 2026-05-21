@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 
@@ -54,93 +55,11 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		return nil, err
 	}
 
-	// Set default limit
-	if limit == 0 || limit > 400 {
-		limit = 200
+	if limit == 0 {
+		limit = 60
 	}
 
-	// rawOffers parallels offers so the post-sort funding pass can read
-	// the original amounts + BookDirectory (mirroring rippled's directory walk).
-	var offers []BookOffer
-	var rawOffers []*state.LedgerOffer
-
-	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
-		if ctx.Err() != nil {
-			return false
-		}
-		// Check if we've reached the limit
-		if uint32(len(offers)) >= limit {
-			return false
-		}
-
-		// Check if this is an Offer entry
-		if len(data) < 3 {
-			return true
-		}
-
-		// Check LedgerEntryType field
-		if data[0] != 0x11 {
-			return true
-		}
-		entryType := uint16(data[1])<<8 | uint16(data[2])
-		if entryType != 0x006F { // Offer type
-			return true
-		}
-
-		// Parse the Offer
-		offer, err := state.ParseLedgerOfferFromBytes(data)
-		if err != nil {
-			return true
-		}
-
-		// Check if this offer matches the requested book
-		// TakerGets in offer should match our takerGets parameter
-		// TakerPays in offer should match our takerPays parameter
-		getsMatch := amountsMatchCurrency(offer.TakerGets, takerGets)
-		paysMatch := amountsMatchCurrency(offer.TakerPays, takerPays)
-
-		if !getsMatch || !paysMatch {
-			return true
-		}
-
-		// Build book offer response
-		bookOffer := BookOffer{
-			Account:         offer.Account,
-			Flags:           offer.Flags,
-			LedgerEntryType: "Offer",
-			Sequence:        offer.Sequence,
-			Index:           formatHash(key),
-			Quality:         calculateOfferQuality(offer.TakerPays, offer.TakerGets),
-		}
-
-		// Format TakerGets
-		if offer.TakerGets.IsNative() {
-			bookOffer.TakerGets = offer.TakerGets.Value()
-		} else {
-			bookOffer.TakerGets = map[string]string{
-				"currency": offer.TakerGets.Currency,
-				"issuer":   offer.TakerGets.Issuer,
-				"value":    offer.TakerGets.Value(),
-			}
-		}
-
-		// Format TakerPays
-		if offer.TakerPays.IsNative() {
-			bookOffer.TakerPays = offer.TakerPays.Value()
-		} else {
-			bookOffer.TakerPays = map[string]string{
-				"currency": offer.TakerPays.Currency,
-				"issuer":   offer.TakerPays.Issuer,
-				"value":    offer.TakerPays.Value(),
-			}
-		}
-
-		offers = append(offers, bookOffer)
-		rawOffers = append(rawOffers, offer)
-		return true
-	})
-
-	sortBookOffersByQualityWithRaw(offers, rawOffers)
+	offers, rawOffers := walkBookOffers(ctx, targetLedger, takerPays, takerGets, limit)
 	applyBookOfferFundingInfo(targetLedger, offers, rawOffers, takerGets, takerPays, taker)
 
 	return &BookOffersResult{
@@ -149,6 +68,130 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		Offers:      offers,
 		Validated:   validated,
 	}, nil
+}
+
+// walkBookOffers mirrors rippled NetworkOPs.cpp:4430-4629 directory walk:
+// step through quality buckets via Succ, then within each bucket follow
+// IndexNext page chains. Offers within a single page are emitted in their
+// stored Indexes order — matching rippled's cdirFirst / cdirNext.
+func walkBookOffers(
+	ctx context.Context,
+	l *ledger.Ledger,
+	takerPays, takerGets tx.Amount,
+	limit uint32,
+) ([]BookOffer, []*state.LedgerOffer) {
+	takerPaysCurrency := state.GetCurrencyBytes(takerPays.Currency)
+	takerPaysIssuer := state.GetIssuerBytes(takerPays.Issuer)
+	takerGetsCurrency := state.GetCurrencyBytes(takerGets.Currency)
+	takerGetsIssuer := state.GetIssuerBytes(takerGets.Issuer)
+
+	bookBase := keylet.BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer).Key
+	for i := 24; i < 32; i++ {
+		bookBase[i] = 0
+	}
+	bookPrefix := bookBase[:24]
+
+	var offers []BookOffer
+	var rawOffers []*state.LedgerOffer
+
+	searchKey := bookBase
+	for uint32(len(offers)) < limit {
+		if ctx.Err() != nil {
+			break
+		}
+		foundKey, foundData, found, err := l.Succ(searchKey)
+		if err != nil || !found {
+			break
+		}
+		if !bytes.Equal(foundKey[:24], bookPrefix) {
+			break
+		}
+
+		rootKey := foundKey
+		dir, err := state.ParseDirectoryNode(foundData)
+		if err != nil {
+			searchKey = foundKey
+			continue
+		}
+		quality := binary.BigEndian.Uint64(rootKey[24:])
+		qualityStr := encodeDirRate(quality)
+
+		for {
+			for _, idx := range dir.Indexes {
+				if uint32(len(offers)) >= limit {
+					return offers, rawOffers
+				}
+				offerData, err := l.Read(keylet.Keylet{Key: idx})
+				if err != nil || offerData == nil {
+					continue
+				}
+				offer, err := state.ParseLedgerOfferFromBytes(offerData)
+				if err != nil {
+					continue
+				}
+				offers = append(offers, makeBookOffer(idx, offer, qualityStr))
+				rawOffers = append(rawOffers, offer)
+			}
+			if dir.IndexNext == 0 {
+				break
+			}
+			nextPage := keylet.DirPage(rootKey, dir.IndexNext)
+			pageData, err := l.Read(nextPage)
+			if err != nil || pageData == nil {
+				break
+			}
+			dir, err = state.ParseDirectoryNode(pageData)
+			if err != nil {
+				break
+			}
+		}
+		searchKey = rootKey
+	}
+	return offers, rawOffers
+}
+
+// makeBookOffer renders a parsed LedgerOffer into the wire shape rippled
+// emits for book_offers entries (jss::quality from the directory rate).
+func makeBookOffer(key [32]byte, offer *state.LedgerOffer, quality string) BookOffer {
+	bookOffer := BookOffer{
+		Account:         offer.Account,
+		Flags:           offer.Flags,
+		LedgerEntryType: "Offer",
+		Sequence:        offer.Sequence,
+		Index:           formatHash(key),
+		Quality:         quality,
+	}
+	if offer.TakerGets.IsNative() {
+		bookOffer.TakerGets = offer.TakerGets.Value()
+	} else {
+		bookOffer.TakerGets = map[string]string{
+			"currency": offer.TakerGets.Currency,
+			"issuer":   offer.TakerGets.Issuer,
+			"value":    offer.TakerGets.Value(),
+		}
+	}
+	if offer.TakerPays.IsNative() {
+		bookOffer.TakerPays = offer.TakerPays.Value()
+	} else {
+		bookOffer.TakerPays = map[string]string{
+			"currency": offer.TakerPays.Currency,
+			"issuer":   offer.TakerPays.Issuer,
+			"value":    offer.TakerPays.Value(),
+		}
+	}
+	return bookOffer
+}
+
+// encodeDirRate decodes a directory's packed quality (high byte = exponent
+// + 100, low 7 bytes = mantissa) and renders it as rippled's
+// saDirRate.getText() — the canonical no-issue STAmount text form.
+func encodeDirRate(rate uint64) string {
+	if rate == 0 {
+		return "0"
+	}
+	mantissa := int64(rate & 0x00FFFFFFFFFFFFFF)
+	exponent := int(rate>>56) - 100
+	return state.NewIssuedAmountFromValue(mantissa, exponent, "", "").Value()
 }
 
 // applyBookOfferFundingInfo mirrors rippled NetworkOPs.cpp:4430-4629
