@@ -242,6 +242,19 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	ledgerAdapter := rpc.NewLedgerServiceAdapter(ledgerService)
 	services := types.NewServiceContainer(ledgerAdapter)
 
+	// TxQ metrics are available in both standalone and consensus modes,
+	// so wire the server_info hook before the !standalone branch.
+	ledgerSvcRef := ledgerService
+	services.TxQMetrics = func() types.TxQServerMetrics {
+		m := ledgerSvcRef.GetTxQMetrics()
+		return types.TxQServerMetrics{
+			JqTransOverflow:       m.JqTransOverflow,
+			ReferenceFeeLevel:     m.ReferenceFeeLevel,
+			MinProcessingFeeLevel: m.MinProcessingFeeLevel,
+			OpenLedgerFeeLevel:    m.OpenLedgerFeeLevel,
+		}
+	}
+
 	// Start consensus/networking if not in standalone mode
 	if !standalone {
 		var compErr error
@@ -325,6 +338,35 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		// from UNL ∖ negative-UNL) instead of the hardcoded "1" that
 		// the bootstrap-time field used to return — #451.
 		services.ValidationQuorum = consensusComponents.Adaptor.GetQuorum
+
+		// Peer-disconnect counters and the operating-mode state-accounting
+		// snapshot need the overlay/adaptor, so they live inside the
+		// !standalone branch. (TxQMetrics is wired above; it only needs
+		// the ledger service.)
+		overlayRef := consensusComponents.Overlay
+		services.PeerDisconnects = func() (uint64, uint64) {
+			return overlayRef.PeerDisconnects(), overlayRef.PeerDisconnectsResources()
+		}
+		acctRef := consensusComponents.Adaptor
+		services.StateAccounting = func() types.StateAccountingSnapshot {
+			snap := acctRef.StateAccounting()
+			if len(snap.Modes) == 0 {
+				return types.StateAccountingSnapshot{}
+			}
+			modes := make(map[string]types.StateAccountingEntry, len(snap.Modes))
+			for mode, entry := range snap.Modes {
+				modes[mode] = types.StateAccountingEntry{
+					Transitions: entry.Transitions,
+					DurationUs:  entry.DurationUs,
+				}
+			}
+			return types.StateAccountingSnapshot{
+				Modes:             modes,
+				CurrentDurationUs: snap.CurrentDurationUs,
+				InitialSyncUs:     snap.InitialSyncUs,
+			}
+		}
+		services.CloseTimeOffset = acctRef.CloseOffset
 		// Expose the validator-manifest cache to the `manifest` RPC.
 		// The cache is shared — the router writes inbound manifests,
 		// the engine reads for ephemeral→master translation, and this
