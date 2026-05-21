@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/binary"
 	"strconv"
 	"testing"
 
@@ -58,12 +59,17 @@ func insertOffer(t *testing.T, svc *Service, ownerAddr string, sequence uint32, 
 	}
 	var id [20]byte
 	copy(id[:], idBytes)
+	// The book-base prefix (high 24 bytes) is irrelevant for book_offers RPC
+	// behaviour; only the low 64 bits — the encoded quality — drive ordering.
+	var bookDir [32]byte
+	binary.BigEndian.PutUint64(bookDir[24:], state.CalculateQuality(takerPays, takerGets))
 	offer := &state.LedgerOffer{
-		Account:   ownerAddr,
-		Sequence:  sequence,
-		TakerPays: takerPays,
-		TakerGets: takerGets,
-		Flags:     0,
+		Account:       ownerAddr,
+		Sequence:      sequence,
+		TakerPays:     takerPays,
+		TakerGets:     takerGets,
+		BookDirectory: bookDir,
+		Flags:         0,
 	}
 	data, err := state.SerializeLedgerOffer(offer)
 	if err != nil {

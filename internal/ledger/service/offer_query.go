@@ -16,26 +16,25 @@ import (
 // rippled's SLE-derived JSON (NetworkOPsImp::getBookPage uses
 // sleOffer->getJson(JsonOptions::none)).
 type BookOffer struct {
-	Account                 string      `json:"Account"`
-	BookDirectory           string      `json:"BookDirectory"`
-	BookNode                string      `json:"BookNode"`
-	Expiration              uint32      `json:"Expiration,omitempty"`
-	Flags                   uint32      `json:"Flags"`
-	LedgerEntryType         string      `json:"LedgerEntryType"`
-	OwnerNode               string      `json:"OwnerNode"`
-	PreviousTxnID           string      `json:"PreviousTxnID"`
-	PreviousTxnLgrSeq       uint32      `json:"PreviousTxnLgrSeq"`
-	Sequence                uint32      `json:"Sequence"`
-	TakerGets               interface{} `json:"TakerGets"`
-	TakerPays               interface{} `json:"TakerPays"`
-	DomainID                string      `json:"DomainID,omitempty"`
-	AdditionalBookDirectory string      `json:"AdditionalBookDirectory,omitempty"`
-	AdditionalBookNode      string      `json:"AdditionalBookNode,omitempty"`
-	Index                   string      `json:"index"`
-	Quality                 string      `json:"quality"`
-	OwnerFunds              string      `json:"owner_funds,omitempty"`
-	TakerGetsFunded         interface{} `json:"taker_gets_funded,omitempty"`
-	TakerPaysFunded         interface{} `json:"taker_pays_funded,omitempty"`
+	Account           string        `json:"Account"`
+	BookDirectory     string        `json:"BookDirectory"`
+	BookNode          string        `json:"BookNode"`
+	Expiration        uint32        `json:"Expiration,omitempty"`
+	Flags             uint32        `json:"Flags"`
+	LedgerEntryType   string        `json:"LedgerEntryType"`
+	OwnerNode         string        `json:"OwnerNode"`
+	PreviousTxnID     string        `json:"PreviousTxnID"`
+	PreviousTxnLgrSeq uint32        `json:"PreviousTxnLgrSeq"`
+	Sequence          uint32        `json:"Sequence"`
+	TakerGets         interface{}   `json:"TakerGets"`
+	TakerPays         interface{}   `json:"TakerPays"`
+	DomainID          string        `json:"DomainID,omitempty"`
+	AdditionalBooks   []interface{} `json:"AdditionalBooks,omitempty"`
+	Index             string        `json:"index"`
+	Quality           string        `json:"quality"`
+	OwnerFunds        string        `json:"owner_funds,omitempty"`
+	TakerGetsFunded   interface{}   `json:"taker_gets_funded,omitempty"`
+	TakerPaysFunded   interface{}   `json:"taker_pays_funded,omitempty"`
 }
 
 // BookOffersResult contains the result of book_offers RPC
@@ -49,8 +48,9 @@ type BookOffersResult struct {
 // rawOffer holds a parsed Offer SLE plus its ledger key, retained between the
 // discovery pass and the funded-amount pass.
 type rawOffer struct {
-	offer *state.LedgerOffer
-	key   [32]byte
+	offer  *state.LedgerOffer
+	key    [32]byte
+	dirKey uint64 // low 64 bits of sfBookDirectory; monotonic with quality.
 }
 
 // GetBookOffers retrieves offers from an order book and computes
@@ -72,15 +72,11 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		return nil, err
 	}
 
-	if limit == 0 || limit > 400 {
-		limit = 200
-	}
-
 	// Pass 1: collect every matching offer. Funded-amount computation must
 	// happen in quality order so per-owner running balances stay consistent
 	// with rippled, so we sort before doing it. Offers with zero takerGets are
-	// invalid (rippled rejects them at creation) and are skipped to avoid
-	// division-by-zero in the sort key.
+	// invalid (rippled rejects them at creation) and would have a zero
+	// directory key; skip to keep the sort total.
 	var raws []rawOffer
 	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 		if ctx.Err() != nil {
@@ -101,20 +97,26 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 			!amountsMatchCurrency(offer.TakerPays, takerPays) {
 			return true
 		}
-		if parseAmountValue(offer.TakerGets) <= 0 {
+		dirKey := binary.BigEndian.Uint64(offer.BookDirectory[24:])
+		if dirKey == 0 {
 			return true
 		}
-		raws = append(raws, rawOffer{offer: offer, key: key})
+		raws = append(raws, rawOffer{offer: offer, key: key, dirKey: dirKey})
 		return true
 	})
 
+	// Sort by the encoded quality (low 64 bits of sfBookDirectory). The
+	// directory key is (exponent+100)<<56 | mantissa with a normalized mantissa
+	// in [10^15, 10^16-1], so uint64 ordering is monotonic with quality.
+	// rippled iterates the book directory tree directly; the sort here yields
+	// the same prefix for the given limit. Ties (same encoded quality) fall
+	// back to SHAMap-key order — see B3 in PR 487 review for the residual gap
+	// vs rippled's directory-insertion order.
 	sort.SliceStable(raws, func(i, j int) bool {
-		qi := parseAmountValue(raws[i].offer.TakerPays) / parseAmountValue(raws[i].offer.TakerGets)
-		qj := parseAmountValue(raws[j].offer.TakerPays) / parseAmountValue(raws[j].offer.TakerGets)
-		return qi < qj
+		return raws[i].dirKey < raws[j].dirKey
 	})
 
-	if uint32(len(raws)) > limit {
+	if limit > 0 && uint32(len(raws)) > limit {
 		raws = raws[:limit]
 	}
 
@@ -132,7 +134,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	// Presence in the map mirrors rippled's umBalanceEntry lookup at
 	// NetworkOPs.cpp:4530-4537 — once an owner is in the map, subsequent
 	// offers from that owner in the *default* branch suppress owner_funds.
-	balances := make(map[string]float64)
+	balances := make(map[string]tx.Amount)
 
 	offers := make([]BookOffer, 0, len(raws))
 	for _, r := range raws {
@@ -149,14 +151,24 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 			PreviousTxnLgrSeq: offer.PreviousTxnLgrSeq,
 			Sequence:          offer.Sequence,
 			Index:             hexUpper32(r.key),
-			Quality:           qualityFromBookDirectory(offer.BookDirectory),
+			Quality:           qualityFromDirKey(r.dirKey),
 		}
 		if offer.DomainID != ([32]byte{}) {
 			bookOffer.DomainID = hexUpper32(offer.DomainID)
 		}
+		// Hybrid offers (PermissionedDEX) carry a second book directory entry.
+		// rippled stores this as sfAdditionalBooks: an STArray of inner sfBook
+		// objects (see CreateOffer.cpp:562-571 / sfields.macro:380). The JSON
+		// shape is [{"Book": {"BookDirectory": ..., "BookNode": ...}}].
 		if offer.AdditionalBookDirectory != ([32]byte{}) {
-			bookOffer.AdditionalBookDirectory = hexUpper32(offer.AdditionalBookDirectory)
-			bookOffer.AdditionalBookNode = fmt.Sprintf("%x", offer.AdditionalBookNode)
+			bookOffer.AdditionalBooks = []interface{}{
+				map[string]interface{}{
+					"Book": map[string]interface{}{
+						"BookDirectory": hexUpper32(offer.AdditionalBookDirectory),
+						"BookNode":      fmt.Sprintf("%x", offer.AdditionalBookNode),
+					},
+				},
+			}
 		}
 		bookOffer.TakerGets = amountToJSON(offer.TakerGets)
 		bookOffer.TakerPays = amountToJSON(offer.TakerPays)
@@ -167,27 +179,22 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		// touch it, so they emit owner_funds on every offer.
 		firstOwnerOffer := true
 
-		var ownerFunds float64
-		var ownerFundsAmount tx.Amount
+		var ownerFunds tx.Amount
 		ownerOwnsIssue := !takerGets.IsNative() && offer.Account == getsIssuer
 
 		switch {
 		case ownerOwnsIssue:
 			// rippled NetworkOPs.cpp:4516-4521: selling issuer's own IOUs ⇒
 			// fully funded. firstOwnerOffer stays true.
-			ownerFunds = parseAmountValue(offer.TakerGets)
-			ownerFundsAmount = offer.TakerGets
+			ownerFunds = offer.TakerGets
 		case bGlobalFreeze:
 			// rippled NetworkOPs.cpp:4522-4527: global freeze ⇒ treat as
 			// unfunded. firstOwnerOffer stays true.
-			ownerFunds = 0
-			ownerFundsAmount = zeroLike(takerGets)
+			ownerFunds = zeroLike(takerGets)
 		default:
 			if prev, seen := balances[offer.Account]; seen {
 				// rippled NetworkOPs.cpp:4530-4537: running-balance hit ⇒
-				// reuse remaining balance and suppress owner_funds. The
-				// value is unused once firstOwnerOffer is false, so we
-				// skip materializing ownerFundsAmount here.
+				// reuse remaining balance and suppress owner_funds.
 				ownerFunds = prev
 				firstOwnerOffer = false
 			} else {
@@ -195,58 +202,65 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 				if decErr != nil {
 					return nil, decErr
 				}
-				// tx.AccountFunds already clamps negative balances to zero
-				// (see XRPLiquid and the IOU balance.Signum() <= 0 branch
-				// in internal/tx/utils.go), so no extra guard is needed.
-				ownerFundsAmount = tx.AccountFunds(targetLedger, accountID, takerGets, true, reserveBase, reserveIncrement)
-				ownerFunds = parseAmountValue(ownerFundsAmount)
+				ownerFunds = tx.AccountFunds(targetLedger, accountID, takerGets, true, reserveBase, reserveIncrement)
 			}
 		}
 
 		// Transfer-fee adjustment is skipped when the taker is the issuer of
-		// taker_gets, or when the offer owner is that issuer.
+		// taker_gets, or when the offer owner is that issuer. saOwnerFundsLimit
+		// = ownerFunds / (rate / parityRate), via rippled-faithful big.Int
+		// arithmetic (MulRatio).
 		offerRate := tx.TransferRateParity
 		ownerFundsLimit := ownerFunds
 		if rate != tx.TransferRateParity && !ownerOwnsIssue &&
 			(taker == "" || taker != getsIssuer) {
 			offerRate = rate
-			ownerFundsLimit = ownerFunds / (float64(rate) / float64(tx.TransferRateParity))
+			ownerFundsLimit = ownerFunds.MulRatio(tx.TransferRateParity, rate, false)
 		}
 
-		gets := parseAmountValue(offer.TakerGets)
-		pays := parseAmountValue(offer.TakerPays)
-		var takerGetsFunded float64
-		if ownerFundsLimit >= gets {
-			takerGetsFunded = gets
+		// saTakerGetsFunded = min(saTakerGets, saOwnerFundsLimit). When the
+		// offer is underfunded, also compute saTakerPaysFunded.
+		var takerGetsFunded tx.Amount
+		if ownerFundsLimit.Compare(offer.TakerGets) >= 0 {
+			takerGetsFunded = offer.TakerGets
 		} else {
 			takerGetsFunded = ownerFundsLimit
-			bookOffer.TakerGetsFunded = amountToJSON(makeAmountFromFloat(offer.TakerGets, takerGetsFunded))
-			fundedPays := pays
-			if gets > 0 {
-				fundedPays = takerGetsFunded * (pays / gets)
-				if fundedPays > pays {
-					fundedPays = pays
-				}
+			bookOffer.TakerGetsFunded = amountToJSON(takerGetsFunded)
+
+			// rippled: saTakerPaysFunded = min(saTakerPays, multiply(
+			//   saTakerGetsFunded, saDirRate, saTakerPays.issue())). The
+			//   equivalent fully-typed form is saTakerPays * (takerGetsFunded
+			//   / takerGets); the directory rate IS takerPays/takerGets by
+			//   construction. Both operands go through rippled-faithful
+			//   big.Int multiply/divide.
+			ratio := takerGetsFunded.Div(offer.TakerGets, false)
+			fundedPays := offer.TakerPays.Mul(ratio, false)
+			if fundedPays.Compare(offer.TakerPays) > 0 {
+				fundedPays = offer.TakerPays
 			}
-			bookOffer.TakerPaysFunded = amountToJSON(makeAmountFromFloat(offer.TakerPays, fundedPays))
+			bookOffer.TakerPaysFunded = amountToJSON(fundedPays)
 		}
 
 		// rippled NetworkOPs.cpp:4596-4601: umBalance updates unconditionally.
+		// saOwnerPays = saTakerGetsFunded when rate == parity, else
+		// min(saOwnerFunds, multiply(saTakerGetsFunded, offerRate)).
 		ownerPays := takerGetsFunded
 		if offerRate != tx.TransferRateParity {
-			ownerPays = takerGetsFunded * (float64(offerRate) / float64(tx.TransferRateParity))
-			if ownerPays > ownerFunds {
+			scaled := takerGetsFunded.MulRatio(offerRate, tx.TransferRateParity, false)
+			if scaled.Compare(ownerFunds) > 0 {
 				ownerPays = ownerFunds
+			} else {
+				ownerPays = scaled
 			}
 		}
-		remaining := ownerFunds - ownerPays
-		if remaining < 0 {
-			remaining = 0
+		remaining, subErr := ownerFunds.Sub(ownerPays)
+		if subErr != nil || remaining.IsNegative() {
+			remaining = zeroLike(takerGets)
 		}
 		balances[offer.Account] = remaining
 
 		if firstOwnerOffer {
-			bookOffer.OwnerFunds = ownerFundsAmount.Value()
+			bookOffer.OwnerFunds = ownerFunds.Value()
 		}
 
 		offers = append(offers, bookOffer)
@@ -280,32 +294,18 @@ func zeroLike(model tx.Amount) tx.Amount {
 	return tx.NewIssuedAmount(0, 0, model.Currency, model.Issuer)
 }
 
-// makeAmountFromFloat builds an Amount with `model`'s currency/issuer profile
-// and the given magnitude. Precision is bounded by float64 / IOU mantissa.
-func makeAmountFromFloat(model tx.Amount, v float64) tx.Amount {
-	if v < 0 {
-		v = 0
-	}
-	if model.IsNative() {
-		return tx.NewXRPAmount(int64(v))
-	}
-	return state.NewIssuedAmountFromFloat64(v, model.Currency, model.Issuer)
-}
-
 // hexUpper32 returns the uppercase hex string for a 32-byte hash, matching
 // rippled's uint256 JSON emit (STObject getJson via uint256::to_string).
 func hexUpper32(b [32]byte) string {
 	return strings.ToUpper(hex.EncodeToString(b[:]))
 }
 
-// qualityFromBookDirectory extracts the offer's directory quality from the
-// low 64 bits of its sfBookDirectory key and formats it via STAmount text,
-// mirroring rippled NetworkOPs.cpp:4493,4605 (saDirRate.getText()).
-func qualityFromBookDirectory(book [32]byte) string {
-	q := binary.BigEndian.Uint64(book[24:])
-	if q == 0 {
-		return "0"
-	}
+// qualityFromDirKey formats an offer's directory key as the STAmount text
+// rippled emits via saDirRate.getText() (NetworkOPs.cpp:4493,4605). The 64-bit
+// key encodes a 56-bit mantissa already normalized to [10^15, 10^16-1] and a
+// signed exponent biased by +100. Constructing an Amount with these values is a
+// no-op under normalize() and yields rippled's text shape.
+func qualityFromDirKey(q uint64) string {
 	mantissa := int64(q & 0x00FFFFFFFFFFFFFF)
 	exponent := int(q>>56) - 100
 	return tx.NewIssuedAmount(mantissa, exponent, "", "").Value()
