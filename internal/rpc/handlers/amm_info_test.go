@@ -394,9 +394,9 @@ func TestIsAssetFrozen_NoTrustLine(t *testing.T) {
 	assert.False(t, frozen)
 }
 
-// TestIsAssetFrozen_IndividualFreeze covers rippled isFrozen()'s second
-// branch: the issuer's side of the AMM↔issuer trust line carries the
-// freeze flag (lsfHighFreeze when issuer > amm, lsfLowFreeze otherwise).
+// Covers rippled isFrozen()'s second branch: the issuer's side of the
+// AMM↔issuer trust line carries the freeze flag (lsfHighFreeze when
+// issuer > amm, lsfLowFreeze otherwise).
 func TestIsAssetFrozen_IndividualFreeze(t *testing.T) {
 	view := newMemView()
 	// ACCOUNT_ONE = all-zero 20-byte account id, lexicographically smaller

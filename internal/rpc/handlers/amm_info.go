@@ -489,8 +489,8 @@ func readAMMHolds(view types.LedgerStateView, ammAccountID [20]byte, issue ammIs
 	return state.NewIssuedAmountFromValue(iou.Mantissa(), iou.Exponent(), issue.Currency, issue.IssuerStr)
 }
 
-// Frozen if the issuer has global freeze set, or has frozen its side of the
-// trust line. Matches rippled isFrozen() in View.cpp.
+// Matches rippled isFrozen() in View.cpp (issuer global freeze, or issuer-side
+// trust-line freeze).
 func isAssetFrozen(view types.LedgerStateView, ammAccountID [20]byte, issue ammIssue) bool {
 	if issue.IsXRP {
 		return false
