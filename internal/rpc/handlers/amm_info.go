@@ -55,7 +55,23 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	// historical SLE with current trust-line state.
 	view, ledgerReader, viewErr := ctx.Services.Ledger.GetLedgerForQuery(ledgerIndex)
 	if viewErr != nil {
-		return nil, types.RpcErrorActNotFound("ledger not found: " + viewErr.Error())
+		return nil, types.RpcErrorLgrNotFound("ledger not found: " + viewErr.Error())
+	}
+
+	// Validate the optional requester `account` up-front so the error ordering
+	// matches rippled's doAMMInfo (AMMInfo.cpp:141-146): account is checked
+	// before the AMM keylet read, so a bad account beats an AMM-not-found.
+	var lpAccountID [20]byte
+	hasLPAccount := request.Account != ""
+	if hasLPAccount {
+		_, lpAccBytes, accErr := addresscodec.DecodeClassicAddressToAccountID(request.Account)
+		if accErr != nil {
+			return nil, types.RpcErrorActMalformed("Invalid account: " + accErr.Error())
+		}
+		copy(lpAccountID[:], lpAccBytes)
+		if data, err := view.Read(keylet.Account(lpAccountID)); err != nil || data == nil {
+			return nil, types.RpcErrorActMalformed("account not found in ledger")
+		}
 	}
 
 	var ammKey [32]byte
@@ -63,7 +79,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	if hasAMMAccount {
 		_, accountID, decErr := addresscodec.DecodeClassicAddressToAccountID(request.AMMAccount)
 		if decErr != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid amm_account: " + decErr.Error())
+			return nil, types.RpcErrorActMalformed("Invalid amm_account: " + decErr.Error())
 		}
 
 		var accountIDArray [20]byte
@@ -71,10 +87,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 
 		accountData, readErr := view.Read(keylet.Account(accountIDArray))
 		if readErr != nil || accountData == nil {
-			return nil, &types.RpcError{
-				Code:    19,
-				Message: "AMM account not found",
-			}
+			return nil, types.RpcErrorActMalformed("amm_account not found in ledger")
 		}
 
 		decoded, decodeErr := binarycodec.Decode(hex.EncodeToString(accountData))
@@ -84,10 +97,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 
 		ammIDHex, ok := decoded["AMMID"].(string)
 		if !ok || ammIDHex == "" {
-			return nil, &types.RpcError{
-				Code:    19,
-				Message: "Account is not an AMM account",
-			}
+			return nil, types.RpcErrorActNotFound("Account is not an AMM account")
 		}
 
 		ammIDBytes, hexErr := hex.DecodeString(ammIDHex)
@@ -160,16 +170,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	// LP balance via ammLPHolds (AMMInfo.cpp:195-197). Otherwise return the
 	// pool-wide LPTokenBalance from the SLE.
 	lpTokenBalanceField := decoded["LPTokenBalance"]
-	if request.Account != "" {
-		_, lpAccBytes, accErr := addresscodec.DecodeClassicAddressToAccountID(request.Account)
-		if accErr != nil {
-			return nil, types.RpcErrorActMalformed("Invalid account: " + accErr.Error())
-		}
-		var lpAccountID [20]byte
-		copy(lpAccountID[:], lpAccBytes)
-		if data, err := view.Read(keylet.Account(lpAccountID)); err != nil || data == nil {
-			return nil, types.RpcErrorActMalformed("account not found in ledger")
-		}
+	if hasLPAccount {
 		lpCurrency, lpErr := lpTokenCurrencyFromSLE(lpTokenBalanceField)
 		if lpErr != nil {
 			return nil, types.RpcErrorInternal("AMM SLE LPTokenBalance: " + lpErr.Error())
