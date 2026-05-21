@@ -192,8 +192,17 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 	// fee-escalation level — the only load signal we currently track. Matches
 	// rippled's NetworkOPs.cpp:2863-2875 fallback when no other load source
 	// (cluster, admin) is active.
+	//
+	// loadFactorFeeEscalation = openLedgerFeeLevel * loadBase / referenceFeeLevel
+	// (NetworkOPs.cpp:2850-2855). When referenceFeeLevel == loadBase this reduces
+	// to feeEscalation, but compute the ratio explicitly so the algebra survives
+	// any future TxQ configuration drift.
 	feeEscalation, feeQueue, feeReference := resolveLoadFactorFees(services)
-	loadFactor := feeEscalation
+	loadFactorFeeEscalation := feeEscalation
+	if feeReference != 0 {
+		loadFactorFeeEscalation = feeEscalation * loadBase / feeReference
+	}
+	loadFactor := loadFactorFeeEscalation
 	if loadFactor < loadBase {
 		loadFactor = loadBase
 	}
@@ -228,11 +237,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 		//     && (admin || loadFactorFeeEscalation != loadFactor)
 		// and the queue field on
 		//   minProcessingFeeLevel != referenceFeeLevel.
-		// We have no separate LoadFeeTrack yet, so
-		// loadFactorFeeEscalation == feeEscalation (referenceFeeLevel
-		// is the rippled-invariant 256), making the inner comparison
-		// equivalent to `feeEscalation != loadFactor`.
-		if feeEscalation != feeReference && (ctx.IsAdmin || feeEscalation != loadFactor) {
+		if feeEscalation != feeReference && (ctx.IsAdmin || loadFactorFeeEscalation != loadFactor) {
 			info["load_factor_fee_escalation"] = float64(feeEscalation) / float64(feeReference)
 		}
 		if feeQueue != feeReference {
@@ -292,15 +297,19 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 				"seq":              ledgerSeq,
 			}
 			// rippled NetworkOPs.cpp:2946-2949: close_time_offset is
-			// emitted on the ledger object when |offset| >= 60s.
+			// emitted on the ledger object when |offset| >= 60s. Rippled
+			// casts the signed seconds count through static_cast<uint32_t>,
+			// preserving the two's-complement bit pattern — so a negative
+			// offset surfaces as a large positive number. Match that wire
+			// shape rather than emit a signed value.
 			if services != nil && services.CloseTimeOffset != nil {
 				offset := services.CloseTimeOffset()
-				if offset < 0 {
-					if -offset >= closeTimeOffsetThreshold {
-						ledger["close_time_offset"] = int32(offset / time.Second)
-					}
-				} else if offset >= closeTimeOffsetThreshold {
-					ledger["close_time_offset"] = int32(offset / time.Second)
+				abs := offset
+				if abs < 0 {
+					abs = -abs
+				}
+				if abs >= closeTimeOffsetThreshold {
+					ledger["close_time_offset"] = uint32(int32(offset / time.Second))
 				}
 			}
 			// Age handling differs by branch (NetworkOPs.cpp:2952-2969):
@@ -384,24 +393,17 @@ func resolveDisconnectCounters(services *types.ServiceContainer) (overflow, peer
 }
 
 // resolveLoadFactorFees returns (escalation, queue, reference) levels
-// for the server_info load_factor_fee_* fields. Falls back to the
-// reference level (loadBase) when the TxQ isn't wired.
+// for the server_info load_factor_fee_* fields. Falls back to (loadBase,
+// loadBase, loadBase) when the TxQ isn't wired so the load_factor_fee_*
+// gates collapse to "absent". Once the hook fires, values pass through
+// unfiltered — a zero from TxQ would be a TxQ bug, not something to
+// paper over here.
 func resolveLoadFactorFees(services *types.ServiceContainer) (escalation, queue, reference uint64) {
-	escalation, queue, reference = loadBase, loadBase, loadBase
 	if services == nil || services.TxQMetrics == nil {
-		return
+		return loadBase, loadBase, loadBase
 	}
 	m := services.TxQMetrics()
-	if m.ReferenceFeeLevel > 0 {
-		reference = m.ReferenceFeeLevel
-	}
-	if m.OpenLedgerFeeLevel > 0 {
-		escalation = m.OpenLedgerFeeLevel
-	}
-	if m.MinProcessingFeeLevel > 0 {
-		queue = m.MinProcessingFeeLevel
-	}
-	return
+	return m.OpenLedgerFeeLevel, m.MinProcessingFeeLevel, m.ReferenceFeeLevel
 }
 
 // stateAccountingResolved is the rendered shape consumed by
@@ -415,7 +417,14 @@ type stateAccountingResolved struct {
 
 // resolveStateAccounting builds the state_accounting JSON value and the
 // top-level companion durations. Prefers the adaptor's tracker when
-// wired; otherwise attributes total uptime to the current server state.
+// wired; otherwise attributes total uptime to the current server state
+// as a synthetic single-transition row.
+//
+// The synthetic fallback is intentionally non-rippled-conformant: rippled
+// always has a StateAccounting instance, so this branch only fires in
+// goxrpl-only deployments (standalone / RPC-only tests) where wiring the
+// real tracker isn't applicable. Production network nodes always take
+// the wired path above.
 func resolveStateAccounting(services *types.ServiceContainer, serverState string, uptimeUs int64) stateAccountingResolved {
 	out := make(map[string]interface{}, len(stateAccountingModes))
 	for _, m := range stateAccountingModes {

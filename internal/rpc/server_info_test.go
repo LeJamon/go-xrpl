@@ -1434,19 +1434,25 @@ func TestServerInfo_HumanMode_LoadFactorLocalNetCluster_AdminGate(t *testing.T) 
 
 // TestServerInfo_CloseTimeOffset_Threshold pins rippled
 // NetworkOPs.cpp:2946-2949: close_time_offset is surfaced on the
-// ledger object only when |offset| reaches a full minute.
+// ledger object only when |offset| reaches a full minute, and is cast
+// through static_cast<uint32_t> — preserving the two's-complement bit
+// pattern, so negative offsets surface as large positives on the wire.
 func TestServerInfo_CloseTimeOffset_Threshold(t *testing.T) {
 	method := &handlers.ServerInfoMethod{}
+	// Helper so the two's-complement reinterpretation can sit in the
+	// table literal without tripping Go's compile-time overflow check on
+	// `uint32(int32(<negative-const>))`.
+	asU32 := func(v int32) uint32 { return uint32(v) }
 	cases := []struct {
 		name      string
 		offset    time.Duration
 		wantEmit  bool
-		wantValue int32
+		wantValue uint32
 	}{
 		{"below threshold", 59 * time.Second, false, 0},
 		{"at threshold positive", 60 * time.Second, true, 60},
-		{"at threshold negative", -60 * time.Second, true, -60},
-		{"large negative", -125 * time.Second, true, -125},
+		{"at threshold negative", -60 * time.Second, true, asU32(-60)},
+		{"large negative", -125 * time.Second, true, asU32(-125)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
