@@ -146,7 +146,7 @@ func (t *Ticket) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (t *Ticket) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*Ticket)
 	if !ok || p == nil {
@@ -156,6 +156,26 @@ func (t *Ticket) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "OwnerNode", p.OwnerNode, t.OwnerNode, p.present&ticketBitOwnerNode, t.present&ticketBitOwnerNode)
 	emitIfChangedUint32(out, "TicketSequence", p.TicketSequence, t.TicketSequence, p.present&ticketBitTicketSequence, t.present&ticketBitTicketSequence)
 	emitIfChangedUint32(out, "Flags", p.Flags, t.Flags, p.present&ticketBitFlags, t.present&ticketBitFlags)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (t *Ticket) EmitChangeOrigFields(out map[string]any) {
+	if t.present&ticketBitAccount != 0 {
+		out["Account"] = t.Account
+	}
+	if t.present&ticketBitOwnerNode != 0 {
+		out["OwnerNode"] = t.OwnerNode
+	}
+	if t.present&ticketBitTicketSequence != 0 {
+		out["TicketSequence"] = t.TicketSequence
+	}
+	if t.present&ticketBitFlags != 0 {
+		out["Flags"] = t.Flags
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

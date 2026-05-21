@@ -200,7 +200,7 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Add to owner directory
 	// Reference: rippled DID.cpp addSLE → dirInsert
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	state.DirInsert(ctx.View, ownerDirKey, didKey.Key, nil)
+	state.DirInsert(ctx.View, ownerDirKey, didKey.Key, false, nil)
 
 	ctx.Account.OwnerCount++
 

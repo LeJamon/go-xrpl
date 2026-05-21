@@ -233,7 +233,7 @@ func (m *MPTokenIssuance) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (m *MPTokenIssuance) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*MPTokenIssuance)
 	if !ok || p == nil {
@@ -250,6 +250,47 @@ func (m *MPTokenIssuance) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "MPTokenMetadata", p.MPTokenMetadata, m.MPTokenMetadata, p.present&mptokenissuanceBitMPTokenMetadata, m.present&mptokenissuanceBitMPTokenMetadata)
 	emitIfChangedString(out, "DomainID", p.DomainID, m.DomainID, p.present&mptokenissuanceBitDomainID, m.present&mptokenissuanceBitDomainID)
 	emitIfChangedUint32(out, "Flags", p.Flags, m.Flags, p.present&mptokenissuanceBitFlags, m.present&mptokenissuanceBitFlags)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (m *MPTokenIssuance) EmitChangeOrigFields(out map[string]any) {
+	if m.present&mptokenissuanceBitIssuer != 0 {
+		out["Issuer"] = m.Issuer
+	}
+	if m.present&mptokenissuanceBitSequence != 0 {
+		out["Sequence"] = m.Sequence
+	}
+	if m.present&mptokenissuanceBitTransferFee != 0 {
+		out["TransferFee"] = m.TransferFee
+	}
+	if m.present&mptokenissuanceBitOwnerNode != 0 {
+		out["OwnerNode"] = m.OwnerNode
+	}
+	if m.present&mptokenissuanceBitAssetScale != 0 {
+		out["AssetScale"] = m.AssetScale
+	}
+	if m.present&mptokenissuanceBitMaximumAmount != 0 {
+		out["MaximumAmount"] = m.MaximumAmount
+	}
+	if m.present&mptokenissuanceBitOutstandingAmount != 0 {
+		out["OutstandingAmount"] = m.OutstandingAmount
+	}
+	if m.present&mptokenissuanceBitLockedAmount != 0 {
+		out["LockedAmount"] = m.LockedAmount
+	}
+	if m.present&mptokenissuanceBitMPTokenMetadata != 0 {
+		out["MPTokenMetadata"] = m.MPTokenMetadata
+	}
+	if m.present&mptokenissuanceBitDomainID != 0 {
+		out["DomainID"] = m.DomainID
+	}
+	if m.present&mptokenissuanceBitFlags != 0 {
+		out["Flags"] = m.Flags
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

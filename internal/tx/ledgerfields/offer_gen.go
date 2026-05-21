@@ -224,7 +224,7 @@ func (o *Offer) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (o *Offer) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*Offer)
 	if !ok || p == nil {
@@ -241,6 +241,47 @@ func (o *Offer) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "Flags", p.Flags, o.Flags, p.present&offerBitFlags, o.present&offerBitFlags)
 	emitIfChangedString(out, "DomainID", p.DomainID, o.DomainID, p.present&offerBitDomainID, o.present&offerBitDomainID)
 	emitIfChangedDeep(out, "AdditionalBooks", p.AdditionalBooks, o.AdditionalBooks, p.present&offerBitAdditionalBooks, o.present&offerBitAdditionalBooks)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (o *Offer) EmitChangeOrigFields(out map[string]any) {
+	if o.present&offerBitAccount != 0 {
+		out["Account"] = o.Account
+	}
+	if o.present&offerBitSequence != 0 {
+		out["Sequence"] = o.Sequence
+	}
+	if o.present&offerBitTakerPays != 0 {
+		out["TakerPays"] = o.TakerPays
+	}
+	if o.present&offerBitTakerGets != 0 {
+		out["TakerGets"] = o.TakerGets
+	}
+	if o.present&offerBitBookDirectory != 0 {
+		out["BookDirectory"] = o.BookDirectory
+	}
+	if o.present&offerBitBookNode != 0 {
+		out["BookNode"] = o.BookNode
+	}
+	if o.present&offerBitOwnerNode != 0 {
+		out["OwnerNode"] = o.OwnerNode
+	}
+	if o.present&offerBitExpiration != 0 {
+		out["Expiration"] = o.Expiration
+	}
+	if o.present&offerBitFlags != 0 {
+		out["Flags"] = o.Flags
+	}
+	if o.present&offerBitDomainID != 0 {
+		out["DomainID"] = o.DomainID
+	}
+	if o.present&offerBitAdditionalBooks != 0 {
+		out["AdditionalBooks"] = o.AdditionalBooks
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

@@ -110,7 +110,7 @@ func (l *LedgerHashes) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (l *LedgerHashes) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*LedgerHashes)
 	if !ok || p == nil {
@@ -119,6 +119,23 @@ func (l *LedgerHashes) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "FirstLedgerSequence", p.FirstLedgerSequence, l.FirstLedgerSequence, p.present&ledgerhashesBitFirstLedgerSequence, l.present&ledgerhashesBitFirstLedgerSequence)
 	emitIfChangedUint32(out, "LastLedgerSequence", p.LastLedgerSequence, l.LastLedgerSequence, p.present&ledgerhashesBitLastLedgerSequence, l.present&ledgerhashesBitLastLedgerSequence)
 	emitIfChangedStringSlice(out, "Hashes", p.Hashes, l.Hashes, p.present&ledgerhashesBitHashes, l.present&ledgerhashesBitHashes)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (l *LedgerHashes) EmitChangeOrigFields(out map[string]any) {
+	if l.present&ledgerhashesBitFirstLedgerSequence != 0 {
+		out["FirstLedgerSequence"] = l.FirstLedgerSequence
+	}
+	if l.present&ledgerhashesBitLastLedgerSequence != 0 {
+		out["LastLedgerSequence"] = l.LastLedgerSequence
+	}
+	if l.present&ledgerhashesBitHashes != 0 {
+		out["Hashes"] = l.Hashes
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

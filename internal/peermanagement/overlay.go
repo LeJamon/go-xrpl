@@ -1660,6 +1660,15 @@ func (o *Overlay) discoveryLoop(ctx context.Context) error {
 
 // autoconnect attempts to connect to peers if we need more.
 func (o *Overlay) autoconnect(ctx context.Context) {
+	// Reconcile discovery's Connected view with the live overlay peer
+	// set first. Without this, an event-bus race on disconnect can
+	// leave fixed peers marked Connected=true in d.peers even after
+	// their TCP connection ended — and SelectPeersToConnect filters
+	// them out forever. Observed in iter23/24 soak: a single dropped
+	// rippled connection on goxrpl-1 stranded the network sub-quorum
+	// because Autoconnect reported `candidates=0 needed=N` indefinitely.
+	o.reconcileDiscoveryConnected()
+
 	if !o.discovery.NeedsMorePeers() {
 		return
 	}
@@ -2482,4 +2491,54 @@ func (o *Overlay) outboundCount() int {
 		}
 	}
 	return count
+}
+
+// reconcileDiscoveryConnected pushes the live peer address+host set
+// into Discovery so its `Connected` flags reflect the actual TCP
+// state. Called from autoconnect before SelectPeersToConnect so any
+// peer whose connection ended without a corresponding MarkDisconnected
+// gets re-considered, AND any peer we already have inbound from is
+// recognized as covered (so we don't re-dial it and trigger the
+// post-handshake isConnectedTo rejection in Connect / accept).
+//
+// goxrpl-specific infrastructure: no direct rippled counterpart.
+// rippled keeps the overlay's peer set and the autoconnect decision
+// under one strand in OverlayImpl::autoConnect, so its peer view
+// is always coherent. goxrpl splits the overlay (Overlay.peers) and
+// the connect scheduler (Discovery.peers) across an event bus, so
+// the two sets can drift; this reconcile bridges them once per
+// autoconnect tick.
+//
+// Two pieces of state are reconciled:
+//  1. exactAddrs: full "host:port" strings of OUTBOUND peers. These
+//     were originally tracked by MarkConnected.
+//  2. hosts: the unique HOST set across all current peers (inbound
+//     AND outbound). Used so a fixed-peer entry like
+//     "goxrpl-0:51235" gets flagged as covered when there's an
+//     inbound peer whose RemoteIP matches goxrpl-0, even though the
+//     inbound's ephemeral source port doesn't match :51235.
+//
+// Without (2), goxrpl-1 (with an inbound from goxrpl-0) would
+// repeatedly outbound-dial goxrpl-0:51235 and have every attempt
+// post-handshake-rejected by goxrpl-0's isConnectedTo (it already
+// has the inbound bidirectionally bookkept). Empirically the cause
+// of the iter25 stall on goxrpl-1.
+func (o *Overlay) reconcileDiscoveryConnected() {
+	o.peersMu.RLock()
+	exactAddrs := make(map[string]struct{}, len(o.peers))
+	hosts := make(map[string]struct{}, len(o.peers))
+	for _, peer := range o.peers {
+		if !peer.Inbound() {
+			exactAddrs[peer.Endpoint().String()] = struct{}{}
+		}
+		if h := peer.RemoteIP(); h != "" {
+			hosts[h] = struct{}{}
+		}
+		if h := peer.Endpoint().Host; h != "" {
+			hosts[h] = struct{}{}
+		}
+	}
+	o.peersMu.RUnlock()
+	o.discovery.SyncConnectedState(exactAddrs)
+	o.discovery.SyncConnectedHosts(hosts)
 }

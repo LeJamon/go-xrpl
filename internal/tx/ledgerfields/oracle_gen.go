@@ -196,7 +196,7 @@ func (o *Oracle) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (o *Oracle) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*Oracle)
 	if !ok || p == nil {
@@ -210,6 +210,38 @@ func (o *Oracle) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "URI", p.URI, o.URI, p.present&oracleBitURI, o.present&oracleBitURI)
 	emitIfChangedString(out, "OwnerNode", p.OwnerNode, o.OwnerNode, p.present&oracleBitOwnerNode, o.present&oracleBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", p.Flags, o.Flags, p.present&oracleBitFlags, o.present&oracleBitFlags)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (o *Oracle) EmitChangeOrigFields(out map[string]any) {
+	if o.present&oracleBitOwner != 0 {
+		out["Owner"] = o.Owner
+	}
+	if o.present&oracleBitProvider != 0 {
+		out["Provider"] = o.Provider
+	}
+	if o.present&oracleBitPriceDataSeries != 0 {
+		out["PriceDataSeries"] = o.PriceDataSeries
+	}
+	if o.present&oracleBitAssetClass != 0 {
+		out["AssetClass"] = o.AssetClass
+	}
+	if o.present&oracleBitLastUpdateTime != 0 {
+		out["LastUpdateTime"] = o.LastUpdateTime
+	}
+	if o.present&oracleBitURI != 0 {
+		out["URI"] = o.URI
+	}
+	if o.present&oracleBitOwnerNode != 0 {
+		out["OwnerNode"] = o.OwnerNode
+	}
+	if o.present&oracleBitFlags != 0 {
+		out["Flags"] = o.Flags
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

@@ -513,9 +513,26 @@ func (sm *SHAMap) putItemWithNodeTypeUnsafe(item *Item, nodeType NodeType) error
 		return err
 	}
 
-	// Create inner nodes from current depth down to split depth
+	// Create inner nodes from current depth down to split depth.
+	//
+	// We build top-down and capture the chain so we can refresh hashes
+	// bottom-up after the leaves are attached: each SetChild here records
+	// the freshly-created child's hash (zero, because the child has no
+	// children yet) into the parent's hashes[branch], and the parent's
+	// own hash is computed from that zero. When the leaves are attached
+	// to deepestInner below, deepestInner's hash is recomputed correctly,
+	// but every ancestor in the chain still carries the stale zero hash.
+	// That stale chain is what makes the in-memory SHAMap report a
+	// CORRECT root via Hash() (updateHashUnsafe prefers child.Hash() over
+	// the stale n.hashes[i]), while SerializeForWire used to write the
+	// stale n.hashes[i] verbatim — producing wire bytes whose preimage
+	// disagreed with the in-memory hash and breaking peer reconstruction
+	// of the tx-set (#470 iter4 stall at seq 257). The refresh loop
+	// below re-runs SetChild bottom-up so n.hashes[i] tracks the live
+	// child.Hash(), restoring the invariant SerializeForWire relies on.
 	innerNode := NewInnerNode()
 	deepestInner := innerNode
+	chain := []*InnerNode{innerNode}
 
 	for d := currentDepth; d < splitDepth; d++ {
 		branch := getBranchAtDepth(key, d)
@@ -524,6 +541,7 @@ func (sm *SHAMap) putItemWithNodeTypeUnsafe(item *Item, nodeType NodeType) error
 			return err
 		}
 		deepestInner = child
+		chain = append(chain, child)
 	}
 
 	// Place both leaves in the deepest inner node
@@ -535,6 +553,19 @@ func (sm *SHAMap) putItemWithNodeTypeUnsafe(item *Item, nodeType NodeType) error
 	}
 	if err := deepestInner.SetChild(existingBranch, leafNode); err != nil {
 		return err
+	}
+
+	// Refresh stale chain hashes bottom-up. The chain has len(chain)
+	// inner nodes at depths currentDepth..splitDepth; for each adjacent
+	// (parent, child) pair walk SetChild again so the parent captures
+	// child.Hash() (now valid after leaves were attached) and recomputes
+	// its own hash. This is a no-op for chain[len-1] (deepestInner) —
+	// already up-to-date from the SetChild leaf calls above.
+	for i := len(chain) - 1; i > 0; i-- {
+		branch := getBranchAtDepth(key, currentDepth+i-1)
+		if err := chain[i-1].SetChild(branch, chain[i]); err != nil {
+			return err
+		}
 	}
 
 	// Dirty up from the top inner node

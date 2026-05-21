@@ -1511,8 +1511,72 @@ func (e *Engine) getNetworkLedger() consensus.LedgerID {
 	// The vote set remains deduped by NodeID; and we drop peer-LCL
 	// votes whose hash ALREADY has a trusted-proposer vote so a
 	// trusted validator connected as a peer isn't counted twice.
-	for i, h := range e.adaptor.PeerReportedLedgers() {
+	//
+	// Gate: ONLY count peer-LCL votes for hashes that have at least
+	// one trusted validation already recorded. Without this gate,
+	// peers gossiping their non-validated local-build LCLs (the
+	// transient "I just built my own L34 in wrongLedger" hashes that
+	// every node in a stuck 5-node soak emits) can win the
+	// majority-vote tally and push checkLedger into handleWrongLedger
+	// for a hash no one can acquire — entrenching the wrongLedger
+	// trap rather than escaping it. Trusted-validation backing means
+	// the peer-LCL signal aligns with the chain ledgers actually being
+	// finalized, not with transient local builds. Observed as the
+	// root cause of the iter27 soak stall at L34 (all 5 nodes at L33
+	// validated, then goxrpls latched onto rippleds' local L34
+	// gossip and stayed in wrongLedger forever).
+	//
+	// Deliberate divergence from rippled: rippled counts peer LCLs
+	// ungated at the NetworkOPs recovery layer (NetworkOPs.cpp:
+	// 1909-1929 `peerCounts[peerLedger]++`), with trusted-validation
+	// filtering happening separately inside Validations::getPreferred.
+	// Inside the consensus state machine, RCLConsensus::Adaptor::
+	// getPrevLedger (RCLConsensus.cpp:295-314) already uses the
+	// trusted-only `getPreferred`. Goxrpl folds peer LCLs into the
+	// consensus engine itself (no NetworkOPs layer) so the
+	// trusted-validation gate has to be applied here. Functionally
+	// equivalent to rippled's two-layer design at the chain-selection
+	// boundary; behaviour differs only under partition where a peer's
+	// reported LCL would otherwise outvote validated history.
+	peerLCLs := e.adaptor.PeerReportedLedgers()
+	// Diagnostic for partition-recovery soaks: if no candidate hash has
+	// reached quorum, log every gate-drop so wedged rounds surface in
+	// post-mortem logs. When some candidate is already quorum-backed the
+	// round is making progress and per-tick drops are uninteresting.
+	quorumPresent := false
+	if e.validationTracker != nil {
+		q := e.adaptor.GetQuorum()
+		if q > 0 {
+			for h := range proposalHashes {
+				if e.validationTracker.GetTrustedSupport(h) >= q {
+					quorumPresent = true
+					break
+				}
+			}
+			if !quorumPresent {
+				for _, h := range peerLCLs {
+					if e.validationTracker.GetTrustedSupport(h) >= q {
+						quorumPresent = true
+						break
+					}
+				}
+			}
+		}
+	}
+	for i, h := range peerLCLs {
 		if _, already := proposalHashes[h]; already {
+			continue
+		}
+		if e.validationTracker != nil && e.validationTracker.GetTrustedSupport(h) == 0 {
+			if !quorumPresent {
+				slog.Info("peer-LCL gate drop — no trusted backing, no quorum elsewhere",
+					"event", "peer-lcl-gate-drop",
+					"hash", h,
+					"our_lcl", ourID,
+					"peer_lcl_count", len(peerLCLs),
+					"proposal_count", len(proposalHashes),
+				)
+			}
 			continue
 		}
 		var synthKey consensus.NodeID
@@ -2395,6 +2459,28 @@ func (e *Engine) abandonDeadlineExceeded(roundTime time.Duration) bool {
 // dispute tracker.
 func (e *Engine) checkConvergence() {
 	if e.phase != consensus.PhaseEstablish {
+		return
+	}
+
+	// Rippled enforces this structurally: result_ is null in wrongLedger
+	// (only closeLedger sets it — Consensus.h:1437 asserts !result_
+	// before the emplace), handleWrongLedger resets result_ via
+	// startRoundInternal (Consensus.h:704, 713), and both
+	// phaseEstablish (Consensus.h:1371) and haveConsensus
+	// (Consensus.h:1686) XRPL_ASSERT on result_ being set. So the
+	// checkConsensus path is unreachable in wrongLedger.
+	//
+	// Goxrpl's engine doesn't carry the same result_-null invariant
+	// today, so without this explicit gate the observer fallback in
+	// countAgreement triggers accept on peer-peer agreement, our local
+	// prev_ledger walks past the validated tip on every empty
+	// wrongLedger build, the next round's checkLedger sees our local
+	// hash ≠ network's, re-enters wrongLedger, repeat. In a 5-node
+	// soak with quorum=4 this strands the network permanently — the
+	// wrongLedger node's full-validation contribution is lost so the
+	// remaining 3 trusted validators can't form the 4th vote.
+	// Observed as iter27 (L34) and iter28 (L38) stalls.
+	if e.mode == consensus.ModeWrongLedger {
 		return
 	}
 

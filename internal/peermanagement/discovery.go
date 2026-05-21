@@ -523,6 +523,84 @@ func (d *Discovery) MarkDisconnected(peerID PeerID) {
 	}
 }
 
+// SyncConnectedState reconciles Discovery's view of connected peers
+// against the Overlay's actual outbound peer set. Any d.peers entry
+// currently marked Connected whose address is NOT in actualConnected
+// is flipped back to Connected=false so it becomes a candidate for
+// reconnection.
+//
+// goxrpl-specific infrastructure: no direct rippled counterpart.
+// rippled's overlay tracks peer-add/peer-remove transitions via
+// OverlayImpl::activate / OverlayImpl::onPeerDestroy under a single
+// strand and doesn't need an out-of-band reconcile step. goxrpl's
+// Discovery sits behind an event bus that can drop or coalesce
+// transitions under load, so we reconcile against the overlay's
+// authoritative peer set here.
+//
+// This guards against the PeerID-keyed MarkDisconnected path missing
+// some disconnect events (event-bus races, inbound-only peers
+// transitioning, double-disconnect dedupe in removePeer). Without
+// this, fixed peers can stay marked Connected=true in d.peers even
+// after their TCP connection drops, so SelectPeersToConnect filters
+// them out and autoconnect reports `candidates=0 needed=N` forever —
+// observed in the 5-node soak when goxrpl-1 lost a single rippled
+// connection and never re-established it (iter23/24).
+func (d *Discovery) SyncConnectedState(actualConnected map[string]struct{}) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for addr, peer := range d.peers {
+		if peer.Connected {
+			if _, stillConnected := actualConnected[addr]; !stillConnected {
+				peer.Connected = false
+				if peer.PeerID != 0 {
+					delete(d.connected, peer.PeerID)
+					peer.PeerID = 0
+				}
+			}
+		}
+	}
+}
+
+// SyncConnectedHosts marks any d.peers entry whose host is in the
+// live host set as Connected=true, even if its full address (with
+// listener port) was never seen by MarkConnected. This covers fixed
+// peers for which we only have an INBOUND connection: the inbound's
+// ephemeral source port won't match the fixed-peer config's listener
+// port, but the host IP matches.
+//
+// goxrpl-specific infrastructure: no direct rippled counterpart.
+// rippled correlates inbound peers against fixed-peer configuration
+// at the OverlayImpl::checkStopped / autoConnect layer using the
+// remote endpoint's host directly; goxrpl's Discovery keys peers by
+// the full "host:port" string, so a separate host-level reconcile
+// is needed to recognise an inbound as covering a fixed entry.
+//
+// Without this, autoconnect repeatedly dials addresses we already
+// have inbound connections from. Each redial completes TLS, then the
+// remote rejects via its post-handshake isConnectedTo guard and
+// closes — surfacing as `failed to read header: unexpected EOF` on
+// our side. Forever flap. Root cause of the issue #470 fixed-peer
+// soak stall.
+func (d *Discovery) SyncConnectedHosts(hosts map[string]struct{}) {
+	if len(hosts) == 0 {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, peer := range d.peers {
+		if peer.Connected {
+			continue
+		}
+		host, _, err := net.SplitHostPort(peer.Address)
+		if err != nil {
+			continue
+		}
+		if _, covered := hosts[host]; covered {
+			peer.Connected = true
+		}
+	}
+}
+
 // ConnectedCount returns the number of connected peers.
 func (d *Discovery) ConnectedCount() int {
 	d.mu.RLock()

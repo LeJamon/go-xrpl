@@ -517,7 +517,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// Add trust line to LOW account's owner directory
 		lowDirKey := keylet.OwnerDir(lowAccountID)
-		lowDirResult, err := state.DirInsert(ctx.View, lowDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
+		lowDirResult, err := state.DirInsert(ctx.View, lowDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
 			dir.Owner = lowAccountID
 		})
 		if err != nil {
@@ -526,7 +526,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// Add trust line to HIGH account's owner directory
 		highDirKey := keylet.OwnerDir(highAccountID)
-		highDirResult, err := state.DirInsert(ctx.View, highDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
+		highDirResult, err := state.DirInsert(ctx.View, highDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
 			dir.Owner = highAccountID
 		})
 		if err != nil {

@@ -45,7 +45,7 @@ func (o *OfferCreate) placeRemainingOffer(
 
 	// Reference: lines 839-848
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	ownerDirResult, err := state.DirInsert(sb, ownerDirKey, offerKey.Key, func(dir *state.DirectoryNode) {
+	ownerDirResult, err := state.DirInsert(sb, ownerDirKey, offerKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
@@ -56,7 +56,7 @@ func (o *OfferCreate) placeRemainingOffer(
 	ctx.Account.OwnerCount++
 
 	// Reference: lines 884-893
-	bookDirResult, err := state.DirInsert(sb, bookDirKey, offerKey.Key, func(dir *state.DirectoryNode) {
+	bookDirResult, err := state.DirInsert(sb, bookDirKey, offerKey.Key, true, func(dir *state.DirectoryNode) {
 		dir.TakerPaysCurrency = takerPaysCurrency
 		dir.TakerPaysIssuer = takerPaysIssuer
 		dir.TakerGetsCurrency = takerGetsCurrency

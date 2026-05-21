@@ -244,7 +244,7 @@ func (e *Escrow) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (e *Escrow) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*Escrow)
 	if !ok || p == nil {
@@ -263,6 +263,53 @@ func (e *Escrow) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "TransferRate", p.TransferRate, e.TransferRate, p.present&escrowBitTransferRate, e.present&escrowBitTransferRate)
 	emitIfChangedString(out, "IssuerNode", p.IssuerNode, e.IssuerNode, p.present&escrowBitIssuerNode, e.present&escrowBitIssuerNode)
 	emitIfChangedUint32(out, "Flags", p.Flags, e.Flags, p.present&escrowBitFlags, e.present&escrowBitFlags)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (e *Escrow) EmitChangeOrigFields(out map[string]any) {
+	if e.present&escrowBitAccount != 0 {
+		out["Account"] = e.Account
+	}
+	if e.present&escrowBitDestination != 0 {
+		out["Destination"] = e.Destination
+	}
+	if e.present&escrowBitAmount != 0 {
+		out["Amount"] = e.Amount
+	}
+	if e.present&escrowBitCondition != 0 {
+		out["Condition"] = e.Condition
+	}
+	if e.present&escrowBitCancelAfter != 0 {
+		out["CancelAfter"] = e.CancelAfter
+	}
+	if e.present&escrowBitFinishAfter != 0 {
+		out["FinishAfter"] = e.FinishAfter
+	}
+	if e.present&escrowBitSourceTag != 0 {
+		out["SourceTag"] = e.SourceTag
+	}
+	if e.present&escrowBitDestinationTag != 0 {
+		out["DestinationTag"] = e.DestinationTag
+	}
+	if e.present&escrowBitOwnerNode != 0 {
+		out["OwnerNode"] = e.OwnerNode
+	}
+	if e.present&escrowBitDestinationNode != 0 {
+		out["DestinationNode"] = e.DestinationNode
+	}
+	if e.present&escrowBitTransferRate != 0 {
+		out["TransferRate"] = e.TransferRate
+	}
+	if e.present&escrowBitIssuerNode != 0 {
+		out["IssuerNode"] = e.IssuerNode
+	}
+	if e.present&escrowBitFlags != 0 {
+		out["Flags"] = e.Flags
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields
