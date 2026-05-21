@@ -563,8 +563,7 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		// (Simulate.cpp:140-146); the handler must propagate needSequence=false
 		// so the service can skip the source-account lookup that would
 		// otherwise surface rpcSRC_ACT_NOT_FOUND for callers that supplied
-		// Sequence but not Fee. The behavioural test for the skip itself
-		// lives in internal/ledger/service/tx_query_test.go.
+		// Sequence but not Fee.
 		mock := newMockLedgerServiceSimulate()
 		mock.currentNetworkFee = 17
 
