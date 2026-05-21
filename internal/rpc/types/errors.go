@@ -128,6 +128,9 @@ const (
 	// Simulate errors - must match rippled exactly
 	RpcTX_SIGNED         = 96 // Transaction should not be signed (rippled: rpcTX_SIGNED = 96)
 	RpcSRC_ACT_MALFORMED = 65 // Source account is malformed (rippled: rpcSRC_ACT_MALFORMED = 65)
+
+	// Order book errors - must match rippled exactly
+	RpcBAD_MARKET = 42 // taker_pays and taker_gets describe the same market (rippled: rpcBAD_MARKET)
 )
 
 // Standard error constructors
@@ -270,6 +273,12 @@ func RpcErrorFieldNotFoundTransaction() *RpcError {
 // RpcErrorInvalidField returns an error for invalid field value (matches rippled invalid_field_error)
 func RpcErrorInvalidField(field string) *RpcError {
 	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", "Invalid field '"+field+"'.")
+}
+
+// RpcErrorBadMarket matches rippled rpcBAD_MARKET (code 42, token "badMarket").
+// Returned when taker_pays and taker_gets describe the same market.
+func RpcErrorBadMarket() *RpcError {
+	return NewRpcError(RpcBAD_MARKET, "badMarket", "badMarket", "No such market.")
 }
 
 // RpcErrorTxSigned returns an error when a transaction is pre-signed but should not be

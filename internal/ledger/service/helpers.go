@@ -1,7 +1,9 @@
 package service
 
 import (
+	"bytes"
 	"errors"
+	"sort"
 	"strconv"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
@@ -97,23 +99,35 @@ func formatHash(hash [32]byte) string {
 }
 
 // sortBookOffersByQualityWithRaw sorts offers by quality (best first) while
-// keeping the parallel raw slice (if non-nil) in lockstep so callers can
-// post-process per-offer source data in the same order. Passing a raw
-// slice with len != len(offers) is a programming error.
+// keeping the parallel raw slice in lockstep. Ordering matches rippled's
+// directory walk: ascending BookDirectory bytes, where the low 8 bytes
+// encode quality such that smaller value = better quality. Float-based
+// comparison would lose precision on closely-quoted offers.
 func sortBookOffersByQualityWithRaw(offers []BookOffer, raw []*state.LedgerOffer) {
-	hasRaw := raw != nil
-	for i := 0; i < len(offers)-1; i++ {
-		for j := i + 1; j < len(offers); j++ {
+	if raw == nil {
+		sort.SliceStable(offers, func(i, j int) bool {
 			qi, _ := strconv.ParseFloat(offers[i].Quality, 64)
 			qj, _ := strconv.ParseFloat(offers[j].Quality, 64)
-			if qj < qi { // Lower quality is better (cheaper)
-				offers[i], offers[j] = offers[j], offers[i]
-				if hasRaw {
-					raw[i], raw[j] = raw[j], raw[i]
-				}
-			}
-		}
+			return qi < qj
+		})
+		return
 	}
+	indices := make([]int, len(offers))
+	for i := range indices {
+		indices[i] = i
+	}
+	sort.SliceStable(indices, func(a, b int) bool {
+		i, j := indices[a], indices[b]
+		return bytes.Compare(raw[i].BookDirectory[:], raw[j].BookDirectory[:]) < 0
+	})
+	sortedOffers := make([]BookOffer, len(offers))
+	sortedRaw := make([]*state.LedgerOffer, len(raw))
+	for newIdx, oldIdx := range indices {
+		sortedOffers[newIdx] = offers[oldIdx]
+		sortedRaw[newIdx] = raw[oldIdx]
+	}
+	copy(offers, sortedOffers)
+	copy(raw, sortedRaw)
 }
 
 // helper function to format ledger range

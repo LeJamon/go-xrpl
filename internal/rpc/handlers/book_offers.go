@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -50,6 +51,16 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	}
 	if rpcErr := validateCurrency(takerGets.Currency); rpcErr != nil {
 		return nil, rpcErr
+	}
+
+	if sameMarket(takerGets, takerPays) {
+		return nil, types.RpcErrorBadMarket()
+	}
+
+	if request.Taker != "" {
+		if _, _, err := addresscodec.DecodeClassicAddressToAccountID(request.Taker); err != nil {
+			return nil, types.RpcErrorInvalidField("taker")
+		}
 	}
 
 	// Determine ledger index to use
@@ -104,6 +115,20 @@ func ParseAmountFromJSON(data json.RawMessage) (types.Amount, error) {
 		Issuer:   iouAmount.Issuer,
 		Value:    iouAmount.Value,
 	}, nil
+}
+
+// sameMarket reports whether the two sides describe identical issues, in
+// which case rippled returns rpcBAD_MARKET (BookOffers.cpp:191-195).
+func sameMarket(a, b types.Amount) bool {
+	aXRP := a.Currency == "" || a.Currency == "XRP"
+	bXRP := b.Currency == "" || b.Currency == "XRP"
+	if aXRP && bXRP {
+		return true
+	}
+	if aXRP != bXRP {
+		return false
+	}
+	return a.Currency == b.Currency && a.Issuer == b.Issuer
 }
 
 // validateCurrency checks that a currency code is valid per rippled rules:

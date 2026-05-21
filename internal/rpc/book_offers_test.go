@@ -147,6 +147,47 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			expectedError: "Invalid taker_pays",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
+		{
+			// rippled BookOffers.cpp:191-195 returns rpcBAD_MARKET when
+			// taker_pays and taker_gets describe the same issue.
+			name: "Same-market both XRP",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{"currency": "XRP"},
+				"taker_gets": map[string]interface{}{"currency": "XRP"},
+			},
+			expectedError: "No such market.",
+			expectedCode:  types.RpcBAD_MARKET,
+		},
+		{
+			name: "Same-market identical IOU",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{
+					"currency": "USD",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"taker_gets": map[string]interface{}{
+					"currency": "USD",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+			},
+			expectedError: "No such market.",
+			expectedCode:  types.RpcBAD_MARKET,
+		},
+		{
+			// rippled BookOffers.cpp:170-172 returns invalid_field_error
+			// when the taker string fails parseBase58<AccountID>.
+			name: "Invalid taker - not a valid account",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{"currency": "XRP"},
+				"taker_gets": map[string]interface{}{
+					"currency": "USD",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"taker": "not-a-valid-address",
+			},
+			expectedError: "Invalid field 'taker'.",
+			expectedCode:  types.RpcINVALID_PARAMS,
+		},
 	}
 
 	for _, tc := range tests {

@@ -183,11 +183,8 @@ func applyBookOfferFundingInfo(
 		return
 	}
 
-	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(l)
-	_ = baseFee
+	_, reserveBase, reserveIncrement := readFeesFromLedger(l)
 
-	// Globally-frozen books force all third-party offers to zero funds
-	// (NetworkOPs.cpp:4457-4458).
 	globalFreeze := false
 	if !takerGets.IsNative() {
 		globalFreeze = globalFreeze || tx.IsGlobalFrozen(l, takerGets.Issuer)
@@ -196,8 +193,6 @@ func applyBookOfferFundingInfo(
 		globalFreeze = globalFreeze || tx.IsGlobalFrozen(l, takerPays.Issuer)
 	}
 
-	// Resolve the takerGets issuer's transfer rate. XRP is implicitly
-	// parity (no transfer fee).
 	rate := protocol.QualityOne
 	var issuerID [20]byte
 	haveIssuer := false
@@ -209,8 +204,6 @@ func applyBookOfferFundingInfo(
 		}
 	}
 
-	// uTakerID: when the requesting taker is the takerGets issuer, the
-	// transfer-fee deduction is suppressed (rippled NetworkOPs.cpp:4567).
 	var takerID [20]byte
 	haveTaker := false
 	if taker != "" {
@@ -221,7 +214,6 @@ func applyBookOfferFundingInfo(
 	}
 
 	umBalance := make(map[[20]byte]tx.Amount)
-	seenOwner := make(map[[20]byte]bool)
 
 	for i := range offers {
 		offer := raw[i]
@@ -234,11 +226,10 @@ func applyBookOfferFundingInfo(
 		saTakerPays := offer.TakerPays
 
 		var saOwnerFunds tx.Amount
-		firstOwnerOffer := !seenOwner[ownerID]
+		firstOwnerOffer := true
 
 		switch {
 		case haveIssuer && ownerID == issuerID:
-			// Offer is issuing its own IOUs — always fully funded.
 			saOwnerFunds = saTakerGets
 		case globalFreeze:
 			saOwnerFunds = zeroLike(saTakerGets)
@@ -270,7 +261,6 @@ func applyBookOfferFundingInfo(
 			saTakerGetsFunded = saOwnerFundsLimit
 			offers[i].TakerGetsFunded = formatAmount(saTakerGetsFunded)
 
-			// taker_pays_funded = min(saTakerPays, saTakerGetsFunded * quality)
 			paid := multiplyByQuality(saTakerGetsFunded, offer.BookDirectory, saTakerPays)
 			if paid.Compare(saTakerPays) > 0 {
 				paid = saTakerPays
@@ -278,8 +268,6 @@ func applyBookOfferFundingInfo(
 			offers[i].TakerPaysFunded = formatAmount(paid)
 		}
 
-		// Running balance: saOwnerPays = (parity) ? saTakerGetsFunded :
-		//   min(saOwnerFunds, saTakerGetsFunded * offerRate)
 		var saOwnerPays tx.Amount
 		if offerRate == protocol.QualityOne {
 			saOwnerPays = saTakerGetsFunded
@@ -300,7 +288,6 @@ func applyBookOfferFundingInfo(
 
 		if firstOwnerOffer {
 			offers[i].OwnerFunds = saOwnerFunds.Value()
-			seenOwner[ownerID] = true
 		}
 	}
 }
