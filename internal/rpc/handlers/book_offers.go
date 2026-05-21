@@ -9,7 +9,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
-// BookOffersMethod handles the book_offers RPC method
 type BookOffersMethod struct{ BaseHandler }
 
 func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
@@ -76,7 +75,6 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, types.RpcErrorBadMarket()
 	}
 
-	// Determine ledger index to use
 	ledgerIndex := "current"
 	if request.LedgerIndex != "" {
 		ledgerIndex = request.LedgerIndex.String()
@@ -107,13 +105,11 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 
 // ParseAmountFromJSON parses an amount from JSON (either XRP string or IOU object)
 func ParseAmountFromJSON(data json.RawMessage) (types.Amount, error) {
-	// Try parsing as string first (XRP amount)
 	var xrpAmount string
 	if err := json.Unmarshal(data, &xrpAmount); err == nil {
 		return types.Amount{Value: xrpAmount}, nil
 	}
 
-	// Try parsing as IOU object
 	var iouAmount struct {
 		Currency string `json:"currency"`
 		Issuer   string `json:"issuer"`

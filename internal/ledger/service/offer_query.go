@@ -40,7 +40,6 @@ type BookOffer struct {
 	TakerPaysFunded   interface{}   `json:"taker_pays_funded,omitempty"`
 }
 
-// BookOffersResult contains the result of book_offers RPC
 type BookOffersResult struct {
 	LedgerIndex uint32      `json:"ledger_index"`
 	LedgerHash  [32]byte    `json:"ledger_hash"`
@@ -325,8 +324,6 @@ func computeBookBase(takerPays, takerGets tx.Amount, domainHex string) ([32]byte
 	return keylet.BookDirWithDomain(payCurr, payIssuer, getsCurr, getsIssuer, domainID).Key, nil
 }
 
-// decodeHex32Into parses a 64-char hex string into a 32-byte array. Returns an
-// error if length or hex parsing fails.
 func decodeHex32Into(s string, out *[32]byte) error {
 	if len(s) != 64 {
 		return fmt.Errorf("expected 64 hex chars, got %d", len(s))
