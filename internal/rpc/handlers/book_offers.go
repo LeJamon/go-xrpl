@@ -74,10 +74,6 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
 	}
 
-	// Build response matching rippled's book_offers structure. owner_funds,
-	// taker_gets_funded and taker_pays_funded are populated by the service layer
-	// (mirroring rippled NetworkOPsImp::getBookPage) and omitted when they do not
-	// apply (fully-funded offers / no transfer fee).
 	response := map[string]interface{}{
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,

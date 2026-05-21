@@ -72,11 +72,10 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		return nil, err
 	}
 
-	// Pass 1: collect every matching offer. Funded-amount computation must
-	// happen in quality order so per-owner running balances stay consistent
-	// with rippled, so we sort before doing it. Offers with zero takerGets are
-	// invalid (rippled rejects them at creation) and would have a zero
-	// directory key; skip to keep the sort total.
+	// Funded-amount computation must happen in quality order so per-owner
+	// running balances stay consistent with rippled. Collect, then sort, then
+	// compute. Offers with a zero directory key are unreachable from a valid
+	// book directory; skip them so the sort key stays total.
 	var raws []rawOffer
 	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 		if ctx.Err() != nil {
@@ -105,13 +104,11 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		return true
 	})
 
-	// Sort by the encoded quality (low 64 bits of sfBookDirectory). The
-	// directory key is (exponent+100)<<56 | mantissa with a normalized mantissa
-	// in [10^15, 10^16-1], so uint64 ordering is monotonic with quality.
-	// rippled iterates the book directory tree directly; the sort here yields
-	// the same prefix for the given limit. Ties (same encoded quality) fall
-	// back to SHAMap-key order — see B3 in PR 487 review for the residual gap
-	// vs rippled's directory-insertion order.
+	// The directory key is (exponent+100)<<56 | mantissa with a normalized
+	// mantissa in [10^15, 10^16-1], so uint64 ordering is monotonic with
+	// quality. Ties fall back to SHAMap-key order; rippled iterates the
+	// directory tree in insertion order, so attribution of firstOwnerOffer
+	// across ties may diverge.
 	sort.SliceStable(raws, func(i, j int) bool {
 		return raws[i].dirKey < raws[j].dirKey
 	})
@@ -120,7 +117,6 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		raws = raws[:limit]
 	}
 
-	// Book-level state, computed once for the funded pass.
 	getsIssuer := takerGets.Issuer
 	bGlobalFreeze := tx.IsGlobalFrozen(targetLedger, takerGets.Issuer) ||
 		tx.IsGlobalFrozen(targetLedger, takerPays.Issuer)
@@ -158,8 +154,8 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		}
 		// Hybrid offers (PermissionedDEX) carry a second book directory entry.
 		// rippled stores this as sfAdditionalBooks: an STArray of inner sfBook
-		// objects (see CreateOffer.cpp:562-571 / sfields.macro:380). The JSON
-		// shape is [{"Book": {"BookDirectory": ..., "BookNode": ...}}].
+		// objects (rippled/src/xrpld/app/tx/detail/CreateOffer.cpp:562-571,
+		// rippled/include/xrpl/protocol/detail/sfields.macro:380).
 		if offer.AdditionalBookDirectory != ([32]byte{}) {
 			bookOffer.AdditionalBooks = []interface{}{
 				map[string]interface{}{
@@ -206,10 +202,9 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 			}
 		}
 
-		// Transfer-fee adjustment is skipped when the taker is the issuer of
-		// taker_gets, or when the offer owner is that issuer. saOwnerFundsLimit
-		// = ownerFunds / (rate / parityRate), via rippled-faithful big.Int
-		// arithmetic (MulRatio).
+		// Skip the transfer-fee adjustment when the taker is the issuer of
+		// taker_gets, or when the offer owner is that issuer. Otherwise
+		// saOwnerFundsLimit = ownerFunds / (rate / parityRate).
 		offerRate := tx.TransferRateParity
 		ownerFundsLimit := ownerFunds
 		if rate != tx.TransferRateParity && !ownerOwnsIssue &&
@@ -218,8 +213,6 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 			ownerFundsLimit = ownerFunds.MulRatio(tx.TransferRateParity, rate, false)
 		}
 
-		// saTakerGetsFunded = min(saTakerGets, saOwnerFundsLimit). When the
-		// offer is underfunded, also compute saTakerPaysFunded.
 		var takerGetsFunded tx.Amount
 		if ownerFundsLimit.Compare(offer.TakerGets) >= 0 {
 			takerGetsFunded = offer.TakerGets
@@ -227,12 +220,10 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 			takerGetsFunded = ownerFundsLimit
 			bookOffer.TakerGetsFunded = amountToJSON(takerGetsFunded)
 
-			// rippled: saTakerPaysFunded = min(saTakerPays, multiply(
-			//   saTakerGetsFunded, saDirRate, saTakerPays.issue())). The
-			//   equivalent fully-typed form is saTakerPays * (takerGetsFunded
-			//   / takerGets); the directory rate IS takerPays/takerGets by
-			//   construction. Both operands go through rippled-faithful
-			//   big.Int multiply/divide.
+			// rippled: saTakerPaysFunded = min(saTakerPays,
+			// multiply(saTakerGetsFunded, saDirRate, saTakerPays.issue())).
+			// saDirRate equals takerPays/takerGets by construction, so the
+			// typed equivalent is saTakerPays * (takerGetsFunded / takerGets).
 			ratio := takerGetsFunded.Div(offer.TakerGets, false)
 			fundedPays := offer.TakerPays.Mul(ratio, false)
 			if fundedPays.Compare(offer.TakerPays) > 0 {
@@ -274,8 +265,6 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	}, nil
 }
 
-// amountToJSON returns rippled's wire format for an Amount: a drops string for
-// XRP, a {currency, issuer, value} map for issued amounts.
 func amountToJSON(a tx.Amount) interface{} {
 	if a.IsNative() {
 		return a.Value()
@@ -294,17 +283,15 @@ func zeroLike(model tx.Amount) tx.Amount {
 	return tx.NewIssuedAmount(0, 0, model.Currency, model.Issuer)
 }
 
-// hexUpper32 returns the uppercase hex string for a 32-byte hash, matching
-// rippled's uint256 JSON emit (STObject getJson via uint256::to_string).
+// hexUpper32 matches rippled's uint256 JSON emit (uint256::to_string).
 func hexUpper32(b [32]byte) string {
 	return strings.ToUpper(hex.EncodeToString(b[:]))
 }
 
 // qualityFromDirKey formats an offer's directory key as the STAmount text
-// rippled emits via saDirRate.getText() (NetworkOPs.cpp:4493,4605). The 64-bit
-// key encodes a 56-bit mantissa already normalized to [10^15, 10^16-1] and a
-// signed exponent biased by +100. Constructing an Amount with these values is a
-// no-op under normalize() and yields rippled's text shape.
+// rippled emits via saDirRate.getText() (NetworkOPs.cpp:4493,4605). The mantissa
+// (low 56 bits) is already normalized to [10^15, 10^16-1] and the exponent is
+// biased by +100, so passing them through NewIOUAmountValue is a no-op.
 func qualityFromDirKey(q uint64) string {
 	mantissa := int64(q & 0x00FFFFFFFFFFFFFF)
 	exponent := int(q>>56) - 100
