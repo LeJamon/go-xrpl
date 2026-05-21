@@ -2407,6 +2407,25 @@ func (e *Engine) checkConvergence() {
 		return
 	}
 
+	// In wrongLedger mode the node has no result_/position and rippled
+	// never reaches haveConsensus/onAccept for that round (Consensus.h
+	// haveConsensus asserts result_ != null, and result_ is only set by
+	// closeLedger which is gated on mode != wrongLedger via the
+	// shouldClose path).
+	//
+	// Mirror that here: don't accept in wrongLedger. Otherwise the
+	// observer fallback in countAgreement triggers accept on peer-peer
+	// agreement, our local prev_ledger walks past the validated tip on
+	// every empty wrongLedger build, the next round's checkLedger sees
+	// our local hash ≠ network's, re-enters wrongLedger, repeat. In a
+	// 5-node soak with quorum=4 this strands the network permanently —
+	// the wrongLedger node's full-validation contribution is lost so
+	// the remaining 3 trusted validators can't form the 4th vote.
+	// Observed as iter27 (L34) and iter28 (L38) stalls.
+	if e.mode == consensus.ModeWrongLedger {
+		return
+	}
+
 	// Minimum time in establish phase before accepting consensus.
 	// Matches rippled's checkConsensus(): currentAgreeTime <= ledgerMIN_CONSENSUS.
 	if e.adaptor.Now().Sub(e.state.PhaseStart) <= e.timing.LedgerMinConsensus {
