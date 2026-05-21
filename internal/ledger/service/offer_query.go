@@ -37,10 +37,10 @@ type BookOffersResult struct {
 	Validated   bool        `json:"validated"`
 }
 
-// GetBookOffers retrieves offers from an order book.
-// taker is the optional account viewing the book; when set and equal to the
-// takerGets issuer, the transfer-fee deduction is skipped on owner funds.
-// Matches rippled NetworkOPsImp::getBookPage (NetworkOPs.cpp).
+// GetBookOffers mirrors rippled NetworkOPsImp::getBookPage
+// (NetworkOPs.cpp). taker is the optional account viewing the book —
+// when equal to the takerGets issuer it suppresses the transfer-fee
+// deduction on owner funds.
 func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amount, taker string, ledgerIndex string, limit uint32) (*BookOffersResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -59,9 +59,8 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		limit = 200
 	}
 
-	// Collect matching offers (and the parsed source data, kept in lockstep
-	// so post-sort funding computation has access to the raw amounts +
-	// book-directory needed to mirror rippled getBookPage).
+	// rawOffers parallels offers so the post-sort funding pass can read
+	// the original amounts + BookDirectory (mirroring rippled's directory walk).
 	var offers []BookOffer
 	var rawOffers []*state.LedgerOffer
 
@@ -141,12 +140,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		return true
 	})
 
-	// Sort offers by quality (best first) — keeping rawOffers in lockstep
-	// so the post-sort funding pass walks them in the same order rippled's
-	// directory iteration would (best-quality-first).
 	sortBookOffersByQualityWithRaw(offers, rawOffers)
-
-	// Compute owner_funds + taker_*_funded fields per rippled getBookPage.
 	applyBookOfferFundingInfo(targetLedger, offers, rawOffers, takerGets, takerPays, taker)
 
 	return &BookOffersResult{
@@ -157,21 +151,8 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	}, nil
 }
 
-// applyBookOfferFundingInfo populates owner_funds, taker_gets_funded, and
-// taker_pays_funded on each entry in offers. Mirrors rippled's
-// NetworkOPsImp::getBookPage (NetworkOPs.cpp:4430-4629):
-//
-//  1. Resolve saOwnerFunds per offer (issuer-owned offers are fully funded,
-//     globally-frozen books drop to zero, otherwise call accountHolds with
-//     fhZERO_IF_FROZEN).
-//  2. Apply the takerGets-issuer transfer rate to derive saOwnerFundsLimit
-//     unless the taker is the issuer or the offer owner is the issuer.
-//  3. If saOwnerFundsLimit < saTakerGets, the offer is partially funded:
-//     set taker_gets_funded = saOwnerFundsLimit, and
-//     taker_pays_funded = min(saTakerPays, saTakerGetsFunded * qualityRate).
-//  4. Track a running owner-balance map so subsequent offers from the same
-//     account see the post-deduction balance, and only the first offer per
-//     owner gets owner_funds emitted.
+// applyBookOfferFundingInfo mirrors rippled NetworkOPs.cpp:4430-4629
+// (getBookPage's per-offer funding pass).
 func applyBookOfferFundingInfo(
 	l *ledger.Ledger,
 	offers []BookOffer,
@@ -292,11 +273,9 @@ func applyBookOfferFundingInfo(
 	}
 }
 
-// getTransferRateForIssuer reads the issuer's TransferRate field directly
-// from its AccountRoot. Returns QualityOne (no fee) when the account is
-// missing or has no transfer rate set. Avoids depending on the heavier
-// payment package which would pull the entire flow machinery into the
-// service layer.
+// getTransferRateForIssuer reads the issuer's TransferRate field
+// directly so the service layer does not depend on the payment package's
+// flow machinery. Returns QualityOne (no fee) when unset or unreadable.
 func getTransferRateForIssuer(l *ledger.Ledger, issuerID [20]byte) uint32 {
 	root, err := l.Read(keylet.Account(issuerID))
 	if err != nil || root == nil {
@@ -309,9 +288,9 @@ func getTransferRateForIssuer(l *ledger.Ledger, issuerID [20]byte) uint32 {
 	return account.TransferRate
 }
 
-// multiplyByQuality returns (gets * qualityRate) coerced into the issue of
-// template. quality is decoded from the low 8 bytes of the BookDirectory
-// key — the same encoding rippled uses for getQuality(uTipIndex).
+// multiplyByQuality returns (gets * qualityRate) coerced into template's
+// issue, where qualityRate is decoded from the low 8 bytes of the
+// BookDirectory key (rippled's getQuality(uTipIndex) encoding).
 func multiplyByQuality(gets tx.Amount, bookDirectory [32]byte, template tx.Amount) tx.Amount {
 	qValue := binary.BigEndian.Uint64(bookDirectory[24:])
 	if qValue == 0 {
@@ -323,8 +302,7 @@ func multiplyByQuality(gets tx.Amount, bookDirectory [32]byte, template tx.Amoun
 
 	product := gets.Mul(qRate, false)
 
-	// Coerce the product to the template's issue (XRP vs IOU). rippled's
-	// multiply(v1, v2, issue) sets the result's issue argument directly.
+	// rippled multiply(v1, v2, issue) sets the result's issue directly; coerce here.
 	if template.IsNative() {
 		mantissa := product.Mantissa()
 		exponent := product.Exponent()
@@ -341,8 +319,6 @@ func multiplyByQuality(gets tx.Amount, bookDirectory [32]byte, template tx.Amoun
 	return state.NewIssuedAmountFromValue(product.Mantissa(), product.Exponent(), template.Currency, template.Issuer)
 }
 
-// zeroLike returns a zero amount with the same kind (XRP vs IOU) as
-// template, preserving currency/issuer for IOU.
 func zeroLike(template tx.Amount) tx.Amount {
 	if template.IsNative() {
 		return tx.NewXRPAmount(0)
@@ -350,8 +326,6 @@ func zeroLike(template tx.Amount) tx.Amount {
 	return state.NewIssuedAmountFromValue(0, -100, template.Currency, template.Issuer)
 }
 
-// formatAmount renders an Amount in the same JSON shape book_offers uses
-// for TakerGets / TakerPays: a drops string for XRP, an object for IOU.
 func formatAmount(a tx.Amount) interface{} {
 	if a.IsNative() {
 		return a.Value()

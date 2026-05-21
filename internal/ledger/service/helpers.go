@@ -98,11 +98,10 @@ func formatHash(hash [32]byte) string {
 	return string(hash[:])
 }
 
-// sortBookOffersByQualityWithRaw sorts offers by quality (best first) while
-// keeping the parallel raw slice in lockstep. Ordering matches rippled's
-// directory walk: ascending BookDirectory bytes, where the low 8 bytes
-// encode quality such that smaller value = better quality. Float-based
-// comparison would lose precision on closely-quoted offers.
+// sortBookOffersByQualityWithRaw sorts by ascending BookDirectory bytes
+// (rippled's directory walk order, best-quality first), keeping raw in
+// lockstep. A float-based sort would lose precision on closely-quoted
+// offers, so we compare the raw quality bytes directly.
 func sortBookOffersByQualityWithRaw(offers []BookOffer, raw []*state.LedgerOffer) {
 	if raw == nil {
 		sort.SliceStable(offers, func(i, j int) bool {

@@ -276,8 +276,6 @@ func TestMultiplyByQuality(t *testing.T) {
 	}
 }
 
-// --- test helpers ---
-
 func newTestLedger(t *testing.T) *ledger.Ledger {
 	t.Helper()
 	g, err := genesis.Create(genesis.DefaultConfig())
