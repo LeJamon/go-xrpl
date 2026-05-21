@@ -914,14 +914,29 @@ func (a *LedgerServiceAdapter) GetClosedLedgerView() (types.LedgerStateView, err
 	return l, nil
 }
 
-// GetLedgerViewBySequence returns a state view for the ledger at the given
-// sequence. Lets handlers read state from the same ledger snapshot a prior
-// GetLedgerEntry call resolved against, instead of a possibly newer closed
-// ledger.
-func (a *LedgerServiceAdapter) GetLedgerViewBySequence(seq uint32) (types.LedgerStateView, error) {
-	l, err := a.svc.GetLedgerBySequence(seq)
+// GetLedgerForQuery resolves a ledger_index string into a single pinned ledger,
+// returning both a state view and a reader over the same snapshot. Handlers
+// that need to read state and metadata together (e.g. amm_info reading the
+// AMM SLE, pool balances, and parentCloseTime) should use this to avoid the
+// race window inherent in resolving the ledger more than once.
+func (a *LedgerServiceAdapter) GetLedgerForQuery(ledgerIndex string) (types.LedgerStateView, types.LedgerReader, error) {
+	l, validated, err := a.svc.GetLedgerForQuery(ledgerIndex)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return l, nil
+	reader := &ledgerReaderAdapter{l: l}
+	if validated {
+		return l, &validatedReader{ledgerReaderAdapter: reader}, nil
+	}
+	return l, reader, nil
 }
+
+// validatedReader pins IsValidated() to true. Service.getLedgerForQuery returns
+// the "validated" status contextually (e.g. when the closedLedger equals the
+// validatedLedger), which can differ from what the ledger's own flag reports
+// for the named "closed" alias.
+type validatedReader struct {
+	*ledgerReaderAdapter
+}
+
+func (v *validatedReader) IsValidated() bool { return true }

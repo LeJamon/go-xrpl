@@ -154,8 +154,8 @@ func (m *mockNFTOffersLedgerService) IsAmendmentBlocked() bool { return false }
 func (m *mockNFTOffersLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {
 	return nil, errors.New("not implemented in mock")
 }
-func (m *mockNFTOffersLedgerService) GetLedgerViewBySequence(uint32) (types.LedgerStateView, error) {
-	return nil, errors.New("not implemented in mock")
+func (m *mockNFTOffersLedgerService) GetLedgerForQuery(string) (types.LedgerStateView, types.LedgerReader, error) {
+	return nil, nil, errors.New("not implemented in mock")
 }
 
 // newNFTOffersTestServices builds a per-test ServiceContainer wrapping mock.

@@ -174,8 +174,8 @@ func (m *mockDepositAuthorizedLedgerService) IsAmendmentBlocked() bool { return 
 func (m *mockDepositAuthorizedLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {
 	return nil, errors.New("not implemented in mock")
 }
-func (m *mockDepositAuthorizedLedgerService) GetLedgerViewBySequence(uint32) (types.LedgerStateView, error) {
-	return nil, errors.New("not implemented in mock")
+func (m *mockDepositAuthorizedLedgerService) GetLedgerForQuery(string) (types.LedgerStateView, types.LedgerReader, error) {
+	return nil, nil, errors.New("not implemented in mock")
 }
 
 // newDepositAuthorizedTestServices builds a per-test ServiceContainer wrapping mock.

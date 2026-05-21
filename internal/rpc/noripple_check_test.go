@@ -168,8 +168,8 @@ func (m *mockNoRippleCheckLedgerService) IsAmendmentBlocked() bool { return fals
 func (m *mockNoRippleCheckLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {
 	return nil, errors.New("not implemented in mock")
 }
-func (m *mockNoRippleCheckLedgerService) GetLedgerViewBySequence(uint32) (types.LedgerStateView, error) {
-	return nil, errors.New("not implemented in mock")
+func (m *mockNoRippleCheckLedgerService) GetLedgerForQuery(string) (types.LedgerStateView, types.LedgerReader, error) {
+	return nil, nil, errors.New("not implemented in mock")
 }
 
 // newNoRippleCheckTestServices builds a per-test ServiceContainer wrapping mock.

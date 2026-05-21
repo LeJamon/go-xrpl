@@ -34,7 +34,6 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	hasAssets := request.Asset != nil && request.Asset2 != nil
 	hasAMMAccount := request.AMMAccount != ""
 
-	// Validate parameter combinations
 	if hasAssets == hasAMMAccount {
 		return nil, types.RpcErrorInvalidParams("Must specify either (asset + asset2) or amm_account, but not both or neither")
 	}
@@ -43,17 +42,25 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		return nil, err
 	}
 
-	// Determine ledger index to use
+	ledgerIndexRequested := request.LedgerIndex != ""
+	ledgerHashRequested := request.LedgerHash != ""
 	ledgerIndex := "validated"
-	if request.LedgerIndex != "" {
+	if ledgerIndexRequested {
 		ledgerIndex = request.LedgerIndex.String()
 	}
 
+	// Pin a single ledger snapshot for the duration of this request. Rippled's
+	// doAMMInfo resolves one ReadView and passes it to both the SLE lookup and
+	// ammPoolHolds (AMMInfo.cpp:81-83, :188); we mirror that to avoid mixing a
+	// historical SLE with current trust-line state.
+	view, ledgerReader, viewErr := ctx.Services.Ledger.GetLedgerForQuery(ledgerIndex)
+	if viewErr != nil {
+		return nil, types.RpcErrorActNotFound("ledger not found: " + viewErr.Error())
+	}
+
 	var ammKey [32]byte
-	var err error
 
 	if hasAMMAccount {
-		// Look up AMM by account
 		_, accountID, decErr := addresscodec.DecodeClassicAddressToAccountID(request.AMMAccount)
 		if decErr != nil {
 			return nil, types.RpcErrorInvalidParams("Invalid amm_account: " + decErr.Error())
@@ -61,18 +68,16 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 
 		var accountIDArray [20]byte
 		copy(accountIDArray[:], accountID)
-		accountKey := keylet.Account(accountIDArray)
 
-		accountEntry, lookupErr := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, accountKey.Key, ledgerIndex)
-		if lookupErr != nil {
+		accountData, readErr := view.Read(keylet.Account(accountIDArray))
+		if readErr != nil || accountData == nil {
 			return nil, &types.RpcError{
 				Code:    19,
 				Message: "AMM account not found",
 			}
 		}
 
-		// Decode the account to get AMMID
-		decoded, decodeErr := binarycodec.Decode(hex.EncodeToString(accountEntry.Node))
+		decoded, decodeErr := binarycodec.Decode(hex.EncodeToString(accountData))
 		if decodeErr != nil {
 			return nil, types.RpcErrorInternal("Failed to decode account: " + decodeErr.Error())
 		}
@@ -91,7 +96,6 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		}
 		copy(ammKey[:], ammIDBytes)
 	} else {
-		// Look up AMM by asset pair
 		issue1Issuer, issue1Currency, err := parseIssue(request.Asset)
 		if err != nil {
 			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid asset: %v", err))
@@ -106,33 +110,25 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		ammKey = ammKeylet.Key
 	}
 
-	ammEntry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, ammKey, ledgerIndex)
-	if err != nil {
+	ammData, readErr := view.Read(keylet.Keylet{Key: ammKey})
+	if readErr != nil || ammData == nil {
 		return nil, types.RpcErrorActNotFound("AMM not found")
 	}
 
-	decoded, decodeErr := binarycodec.Decode(hex.EncodeToString(ammEntry.Node))
+	decoded, decodeErr := binarycodec.Decode(hex.EncodeToString(ammData))
 	if decodeErr != nil {
 		return nil, types.RpcErrorInternal("Failed to decode AMM: " + decodeErr.Error())
 	}
 
-	// Build the response
 	ammResult := make(map[string]interface{})
 
-	// Copy relevant fields
 	if account, ok := decoded["Account"].(string); ok {
 		ammResult["account"] = account
-	}
-	if lpToken, ok := decoded["LPTokenBalance"]; ok {
-		ammResult["lp_token"] = lpToken
 	}
 	if tradingFee, ok := decoded["TradingFee"]; ok {
 		ammResult["trading_fee"] = tradingFee
 	}
 
-	// Asset and Asset2 on the AMM SLE carry only the issue definitions; pool
-	// balances must be read from the AMM account's trust lines / XRP balance.
-	// Matches rippled ammPoolHolds() in AMMUtils.cpp.
 	asset1, asset1Err := parseSLEIssue(decoded["Asset"])
 	if asset1Err != nil {
 		return nil, types.RpcErrorInternal("AMM SLE Asset: " + asset1Err.Error())
@@ -152,21 +148,37 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	var ammAccountID [20]byte
 	copy(ammAccountID[:], accBytes)
 
-	// Read balances and freeze flags from the same ledger the AMM SLE was
-	// resolved against. Rippled's doAMMInfo passes a single ReadView to both
-	// the SLE lookup and ammPoolHolds (AMMInfo.cpp:188); using a different
-	// view here would mix a historical SLE with current trust-line state.
-	view, viewErr := ctx.Services.Ledger.GetLedgerViewBySequence(ammEntry.LedgerIndex)
-	if viewErr != nil {
-		return nil, types.RpcErrorInternal("ledger view unavailable: " + viewErr.Error())
-	}
-
-	// rippled passes FreezeHandling::fhIGNORE_FREEZE here: balances reflect
-	// raw pool holdings; the freeze status is reported separately.
+	// rippled passes FreezeHandling::fhIGNORE_FREEZE for pool balances
+	// (AMMInfo.cpp:193): balances reflect raw pool holdings; the freeze
+	// status is reported separately via asset[2]_frozen.
 	bal1 := readAMMHolds(view, ammAccountID, asset1)
 	bal2 := readAMMHolds(view, ammAccountID, asset2)
 	ammResult["amount"] = formatAmountJSON(bal1)
 	ammResult["amount2"] = formatAmountJSON(bal2)
+
+	// lp_token: when "account" is supplied, rippled returns that requester's
+	// LP balance via ammLPHolds (AMMInfo.cpp:195-197). Otherwise return the
+	// pool-wide LPTokenBalance from the SLE.
+	lpTokenBalanceField := decoded["LPTokenBalance"]
+	if request.Account != "" {
+		_, lpAccBytes, accErr := addresscodec.DecodeClassicAddressToAccountID(request.Account)
+		if accErr != nil {
+			return nil, types.RpcErrorActMalformed("Invalid account: " + accErr.Error())
+		}
+		var lpAccountID [20]byte
+		copy(lpAccountID[:], lpAccBytes)
+		if data, err := view.Read(keylet.Account(lpAccountID)); err != nil || data == nil {
+			return nil, types.RpcErrorActMalformed("account not found in ledger")
+		}
+		lpCurrency, lpErr := lpTokenCurrencyFromSLE(lpTokenBalanceField)
+		if lpErr != nil {
+			return nil, types.RpcErrorInternal("AMM SLE LPTokenBalance: " + lpErr.Error())
+		}
+		lpBalance := accountLPHolds(view, ammAccountID, lpAccountID, lpCurrency, accountStr)
+		ammResult["lp_token"] = formatAmountJSON(lpBalance)
+	} else if lpTokenBalanceField != nil {
+		ammResult["lp_token"] = lpTokenBalanceField
+	}
 
 	if !asset1.IsXRP {
 		ammResult["asset_frozen"] = isAssetFrozen(view, ammAccountID, asset1)
@@ -175,7 +187,6 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		ammResult["asset2_frozen"] = isAssetFrozen(view, ammAccountID, asset2)
 	}
 
-	// Handle vote slots
 	if voteSlots, ok := decoded["VoteSlots"].([]interface{}); ok && len(voteSlots) > 0 {
 		votes := make([]map[string]interface{}, 0, len(voteSlots))
 		for _, vs := range voteSlots {
@@ -200,19 +211,11 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		}
 	}
 
-	// Resolve parentCloseTime from the ledger for auction slot time_interval computation.
-	// rippled: ammAuctionTimeSlot(ledger->info().parentCloseTime, auctionSlot)
 	var parentCloseTime uint64
-	if ammEntry.LedgerIndex > 0 {
-		if lr, lrErr := ctx.Services.Ledger.GetLedgerBySequence(ammEntry.LedgerIndex); lrErr == nil && lr != nil {
-			pct := lr.ParentCloseTime()
-			if pct > 0 {
-				parentCloseTime = uint64(pct)
-			}
-		}
+	if pct := ledgerReader.ParentCloseTime(); pct > 0 {
+		parentCloseTime = uint64(pct)
 	}
 
-	// Handle auction slot
 	if auctionSlot, ok := decoded["AuctionSlot"].(map[string]interface{}); ok {
 		auction := buildAuctionSlot(auctionSlot, parentCloseTime)
 		if auction != nil {
@@ -220,15 +223,20 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		}
 	}
 
-	// Build final response
+	// Match rippled's lookupLedger field shape (AMMInfo.cpp:265-267):
+	// emit ledger_index/ledger_hash when the request named them, otherwise
+	// ledger_current_index for the default ("current") path.
 	response := map[string]interface{}{
-		"amm":          ammResult,
-		"ledger_index": ammEntry.LedgerIndex,
-		"validated":    ammEntry.Validated,
+		"amm":       ammResult,
+		"validated": ledgerReader.IsValidated(),
 	}
-
-	if ammEntry.LedgerHash != [32]byte{} {
-		response["ledger_hash"] = FormatLedgerHash(ammEntry.LedgerHash)
+	switch {
+	case ledgerHashRequested:
+		response["ledger_hash"] = FormatLedgerHash(ledgerReader.Hash())
+	case ledgerIndexRequested:
+		response["ledger_index"] = ledgerReader.Sequence()
+	default:
+		response["ledger_current_index"] = ledgerReader.Sequence()
 	}
 
 	return response, nil
@@ -446,7 +454,12 @@ func parseSLEIssue(raw interface{}) (ammIssue, error) {
 	return out, nil
 }
 
-// Matches rippled accountHolds() with FreezeHandling::fhIGNORE_FREEZE.
+// Matches rippled accountHolds() with FreezeHandling::fhIGNORE_FREEZE. For the
+// XRP branch rippled routes through xrpLiquid (View.cpp:394-396, :615-651),
+// which subtracts the account reserve — except for AMM accounts, where the
+// sfAMMID-present path sets reserve to 0 (View.cpp:631-633). Since this helper
+// is only called with an AMM account, returning the raw sfBalance is
+// numerically equivalent to xrpLiquid without re-deriving the reserve.
 func readAMMHolds(view types.LedgerStateView, ammAccountID [20]byte, issue ammIssue) state.Amount {
 	if issue.IsXRP {
 		data, err := view.Read(keylet.Account(ammAccountID))
@@ -519,4 +532,54 @@ func isAssetFrozen(view types.LedgerStateView, ammAccountID [20]byte, issue ammI
 		return rs.Flags&state.LsfHighFreeze != 0
 	}
 	return rs.Flags&state.LsfLowFreeze != 0
+}
+
+// lpTokenCurrencyFromSLE extracts the LP token currency code from a decoded
+// LPTokenBalance field. The binary codec emits IOU amounts as
+// {"currency": ..., "issuer": ..., "value": ...}; the LP token currency is
+// canonical (issuer = AMM account) so we only need the currency string.
+func lpTokenCurrencyFromSLE(raw interface{}) (string, error) {
+	m, ok := raw.(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("missing or non-object LPTokenBalance")
+	}
+	currency, ok := m["currency"].(string)
+	if !ok || currency == "" {
+		return "", fmt.Errorf("LPTokenBalance has no currency")
+	}
+	return currency, nil
+}
+
+// accountLPHolds mirrors rippled ammLPHolds (AMMUtils.cpp:113-160): read the
+// requester's trust line against the AMM account in the LP token currency,
+// return zero on a missing line or any freeze, otherwise return the signed
+// balance with issuer pinned to the AMM account.
+func accountLPHolds(
+	view types.LedgerStateView,
+	ammAccountID, lpAccountID [20]byte,
+	lpCurrency string,
+	ammAccountStr string,
+) state.Amount {
+	zero := state.NewIssuedAmountFromValue(0, 0, lpCurrency, ammAccountStr)
+	if ammAccountID == lpAccountID {
+		return zero
+	}
+	data, err := view.Read(keylet.Line(lpAccountID, ammAccountID, lpCurrency))
+	if err != nil || data == nil {
+		return zero
+	}
+	lpIssue := ammIssue{Currency: lpCurrency, IssuerID: ammAccountID, IssuerStr: ammAccountStr}
+	if isAssetFrozen(view, lpAccountID, lpIssue) {
+		return zero
+	}
+	rs, err := state.ParseRippleState(data)
+	if err != nil {
+		return zero
+	}
+	balance := rs.Balance
+	if state.CompareAccountIDsForLine(lpAccountID, ammAccountID) > 0 {
+		balance = balance.Negate()
+	}
+	iou := balance.IOU()
+	return state.NewIssuedAmountFromValue(iou.Mantissa(), iou.Exponent(), lpCurrency, ammAccountStr)
 }

@@ -441,3 +441,72 @@ func TestIsAssetFrozen_IndividualFreeze(t *testing.T) {
 	})
 	assert.False(t, frozen, "LowFreeze (AMM-side) must not flag asset as frozen")
 }
+
+// lpTokenCurrencyFromSLE Tests
+
+func TestLPTokenCurrencyFromSLE(t *testing.T) {
+	cur, err := lpTokenCurrencyFromSLE(map[string]interface{}{
+		"currency": "03ABCDEF0000000000000000000000000000000000",
+		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"value":    "100",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "03ABCDEF0000000000000000000000000000000000", cur)
+
+	_, err = lpTokenCurrencyFromSLE(nil)
+	assert.Error(t, err)
+	_, err = lpTokenCurrencyFromSLE(map[string]interface{}{})
+	assert.Error(t, err)
+	_, err = lpTokenCurrencyFromSLE(map[string]interface{}{"currency": ""})
+	assert.Error(t, err)
+}
+
+// accountLPHolds Tests — mirror rippled ammLPHolds (AMMUtils.cpp:113-160).
+
+func TestAccountLPHolds_MissingTrustLine(t *testing.T) {
+	view := newMemView()
+	ammAddr := "rrrrrrrrrrrrrrrrrrrrBZbvji"
+	ammID := decodeAcct(t, ammAddr)
+	lpAddr := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	lpID := decodeAcct(t, lpAddr)
+
+	amount := accountLPHolds(view, ammID, lpID, "03ABCDEF0000000000000000000000000000000000", ammAddr)
+	assert.True(t, amount.IsZero())
+	assert.Equal(t, ammAddr, amount.Issuer)
+}
+
+func TestAccountLPHolds_LPEqualsAMM(t *testing.T) {
+	view := newMemView()
+	ammAddr := "rrrrrrrrrrrrrrrrrrrrBZbvji"
+	ammID := decodeAcct(t, ammAddr)
+
+	amount := accountLPHolds(view, ammID, ammID, "03ABCDEF0000000000000000000000000000000000", ammAddr)
+	assert.True(t, amount.IsZero(), "LP account == AMM account should return zero")
+}
+
+func TestAccountLPHolds_FrozenLine(t *testing.T) {
+	view := newMemView()
+	ammAddr := "rrrrrrrrrrrrrrrrrrrrBZbvji"
+	ammID := decodeAcct(t, ammAddr)
+	lpAddr := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	lpID := decodeAcct(t, lpAddr)
+	cur := "03ABCDEF0000000000000000000000000000000000"
+
+	// AMM is the issuer; its global-freeze flag suffices to mark the LP line frozen.
+	ammRoot := &state.AccountRoot{Flags: state.LsfGlobalFreeze}
+	rootData, err := state.SerializeAccountRoot(ammRoot)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Account(ammID), rootData))
+
+	line := &state.RippleState{
+		Balance:   state.NewIssuedAmountFromValue(1_000_000, 0, cur, state.AccountOneAddress),
+		LowLimit:  state.NewIssuedAmountFromValue(0, 0, cur, ammAddr),
+		HighLimit: state.NewIssuedAmountFromValue(0, 0, cur, lpAddr),
+	}
+	lineData, err := state.SerializeRippleState(line)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Line(lpID, ammID, cur), lineData))
+
+	amount := accountLPHolds(view, ammID, lpID, cur, ammAddr)
+	assert.True(t, amount.IsZero(), "frozen LP line must return zero per rippled ammLPHolds")
+}
