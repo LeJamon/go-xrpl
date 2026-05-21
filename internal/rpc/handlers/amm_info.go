@@ -31,11 +31,22 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		return nil, err
 	}
 
-	hasAssets := request.Asset != nil && request.Asset2 != nil
+	hasAsset := request.Asset != nil
+	hasAsset2 := request.Asset2 != nil
 	hasAMMAccount := request.AMMAccount != ""
 
-	if hasAssets == hasAMMAccount {
-		return nil, types.RpcErrorInvalidParams("Must specify either (asset + asset2) or amm_account, but not both or neither")
+	// invalid(params) mirrors rippled's lambda in doAMMInfo (AMMInfo.cpp:101-106):
+	//   (asset_present != asset2_present) || (asset_present == amm_account_present)
+	isInvalidCombo := (hasAsset != hasAsset2) || (hasAsset == hasAMMAccount)
+
+	const invalidComboMsg = "Must specify either (asset + asset2) or amm_account, but not both or neither"
+
+	// Rippled gates the position of this check on apiVersion (AMMInfo.cpp:108-110, :148-150):
+	// v<3 returns invalidParams *before* parsing fields; v>=3 parses every field
+	// present first, so a malformed issue or account still surfaces its own error
+	// before the combo check fires.
+	if ctx.ApiVersion < 3 && isInvalidCombo {
+		return nil, types.RpcErrorInvalidParams(invalidComboMsg)
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
@@ -56,7 +67,27 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		return nil, types.RpcErrorLgrNotFound("ledger not found: " + viewErr.Error())
 	}
 
+	var (
+		issue1Issuer, issue1Currency [20]byte
+		issue2Issuer, issue2Currency [20]byte
+	)
+	if hasAsset {
+		var err error
+		issue1Issuer, issue1Currency, err = parseIssue(request.Asset)
+		if err != nil {
+			return nil, types.RpcErrorIssueMalformed("Invalid asset: " + err.Error())
+		}
+	}
+	if hasAsset2 {
+		var err error
+		issue2Issuer, issue2Currency, err = parseIssue(request.Asset2)
+		if err != nil {
+			return nil, types.RpcErrorIssueMalformed("Invalid asset2: " + err.Error())
+		}
+	}
+
 	var ammKey [32]byte
+	ammKeyResolved := false
 
 	if hasAMMAccount {
 		_, accountID, decErr := addresscodec.DecodeClassicAddressToAccountID(request.AMMAccount)
@@ -87,19 +118,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 			return nil, types.RpcErrorInternal("Invalid AMMID in account")
 		}
 		copy(ammKey[:], ammIDBytes)
-	} else {
-		issue1Issuer, issue1Currency, err := parseIssue(request.Asset)
-		if err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid asset: %v", err))
-		}
-
-		issue2Issuer, issue2Currency, err := parseIssue(request.Asset2)
-		if err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid asset2: %v", err))
-		}
-
-		ammKeylet := keylet.AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency)
-		ammKey = ammKeylet.Key
+		ammKeyResolved = true
 	}
 
 	// Validate the optional requester `account` after the amm_account /
@@ -117,6 +136,17 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		if data, err := view.Read(keylet.Account(lpAccountID)); err != nil || data == nil {
 			return nil, types.RpcErrorActMalformed("account not found in ledger")
 		}
+	}
+
+	// apiVersion>=3 combo check fires after every field has been validated
+	// (AMMInfo.cpp:148-150).
+	if ctx.ApiVersion >= 3 && isInvalidCombo {
+		return nil, types.RpcErrorInvalidParams(invalidComboMsg)
+	}
+
+	if !ammKeyResolved {
+		ammKeylet := keylet.AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency)
+		ammKey = ammKeylet.Key
 	}
 
 	ammData, readErr := view.Read(keylet.Keylet{Key: ammKey})
