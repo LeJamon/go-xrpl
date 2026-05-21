@@ -136,39 +136,37 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	asset1, asset1OK := parseSLEIssue(decoded["Asset"])
 	asset2, asset2OK := parseSLEIssue(decoded["Asset2"])
 	accountStr, _ := decoded["Account"].(string)
+	if !asset1OK || !asset2OK || accountStr == "" {
+		return nil, types.RpcErrorInternal("AMM SLE missing Account/Asset fields")
+	}
+	_, accBytes, decErr := addresscodec.DecodeClassicAddressToAccountID(accountStr)
+	if decErr != nil {
+		return nil, types.RpcErrorInternal("AMM SLE has invalid Account: " + decErr.Error())
+	}
 	var ammAccountID [20]byte
-	if accountStr != "" {
-		if _, accBytes, decErr := addresscodec.DecodeClassicAddressToAccountID(accountStr); decErr == nil {
-			copy(ammAccountID[:], accBytes)
-		}
+	copy(ammAccountID[:], accBytes)
+
+	// Read balances and freeze flags from the same ledger the AMM SLE was
+	// resolved against. Rippled's doAMMInfo passes a single ReadView to both
+	// the SLE lookup and ammPoolHolds (AMMInfo.cpp:188); using a different
+	// view here would mix a historical SLE with current trust-line state.
+	view, viewErr := ctx.Services.Ledger.GetLedgerViewBySequence(ammEntry.LedgerIndex)
+	if viewErr != nil {
+		return nil, types.RpcErrorInternal("ledger view unavailable: " + viewErr.Error())
 	}
 
-	if asset1OK && asset2OK && accountStr != "" {
-		view, viewErr := ctx.Services.Ledger.GetClosedLedgerView()
-		if viewErr != nil {
-			return nil, types.RpcErrorInternal("ledger view unavailable: " + viewErr.Error())
-		}
+	// rippled passes FreezeHandling::fhIGNORE_FREEZE here: balances reflect
+	// raw pool holdings; the freeze status is reported separately.
+	bal1 := readAMMHolds(view, ammAccountID, asset1)
+	bal2 := readAMMHolds(view, ammAccountID, asset2)
+	ammResult["amount"] = formatAmountJSON(bal1)
+	ammResult["amount2"] = formatAmountJSON(bal2)
 
-		// rippled passes FreezeHandling::fhIGNORE_FREEZE here: balances reflect
-		// raw pool holdings; the freeze status is reported separately.
-		bal1 := readAMMHolds(view, ammAccountID, asset1)
-		bal2 := readAMMHolds(view, ammAccountID, asset2)
-		ammResult["amount"] = formatAmountJSON(bal1)
-		ammResult["amount2"] = formatAmountJSON(bal2)
-
-		if !asset1.IsXRP {
-			ammResult["asset_frozen"] = isAssetFrozen(view, ammAccountID, asset1)
-		}
-		if !asset2.IsXRP {
-			ammResult["asset2_frozen"] = isAssetFrozen(view, ammAccountID, asset2)
-		}
-	} else {
-		if asset, ok := decoded["Asset"]; ok {
-			ammResult["amount"] = asset
-		}
-		if asset2Raw, ok := decoded["Asset2"]; ok {
-			ammResult["amount2"] = asset2Raw
-		}
+	if !asset1.IsXRP {
+		ammResult["asset_frozen"] = isAssetFrozen(view, ammAccountID, asset1)
+	}
+	if !asset2.IsXRP {
+		ammResult["asset2_frozen"] = isAssetFrozen(view, ammAccountID, asset2)
 	}
 
 	// Handle vote slots
@@ -469,13 +467,12 @@ func readAMMHolds(view types.LedgerStateView, ammAccountID [20]byte, issue ammIs
 	}
 
 	// Trust-line balance is stored from the low account's perspective; flip
-	// the sign if the AMM is the high account.
+	// the sign if the AMM is the high account. Matches rippled accountHolds()
+	// (View.cpp:448): in fhIGNORE_FREEZE mode the signed value is returned
+	// without clamping at zero.
 	balance := rs.Balance
-	if state.CompareAccountIDsForLine(ammAccountID, issue.IssuerID) >= 0 {
+	if state.CompareAccountIDsForLine(ammAccountID, issue.IssuerID) > 0 {
 		balance = balance.Negate()
-	}
-	if balance.Signum() <= 0 {
-		return zero
 	}
 	iou := balance.IOU()
 	return state.NewIssuedAmountFromValue(iou.Mantissa(), iou.Exponent(), issue.Currency, issue.IssuerStr)

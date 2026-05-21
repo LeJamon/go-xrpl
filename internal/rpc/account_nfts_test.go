@@ -169,6 +169,9 @@ func (m *mockAccountNFTsLedgerService) IsAmendmentBlocked() bool { return false 
 func (m *mockAccountNFTsLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {
 	return nil, errors.New("not implemented in mock")
 }
+func (m *mockAccountNFTsLedgerService) GetLedgerViewBySequence(uint32) (types.LedgerStateView, error) {
+	return nil, errors.New("not implemented in mock")
+}
 
 // newAccountNFTsTestServices builds a *types.ServiceContainer wrapping the mock.
 func newAccountNFTsTestServices(mock *mockAccountNFTsLedgerService) *types.ServiceContainer {

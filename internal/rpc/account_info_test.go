@@ -151,6 +151,9 @@ func (m *mockLedgerService) IsAmendmentBlocked() bool { return m.amendmentBlocke
 func (m *mockLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {
 	return nil, errors.New("not implemented in mock")
 }
+func (m *mockLedgerService) GetLedgerViewBySequence(uint32) (types.LedgerStateView, error) {
+	return nil, errors.New("not implemented in mock")
+}
 
 // newTestServices builds a *types.ServiceContainer wrapping the given LedgerService.
 // Accepts any type that implements types.LedgerService.

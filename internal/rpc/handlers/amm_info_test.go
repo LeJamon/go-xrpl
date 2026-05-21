@@ -382,3 +382,51 @@ func TestIsAssetFrozen_NoTrustLine(t *testing.T) {
 	})
 	assert.False(t, frozen)
 }
+
+// TestIsAssetFrozen_IndividualFreeze covers rippled isFrozen()'s second
+// branch: the issuer's side of the AMM↔issuer trust line carries the
+// freeze flag (lsfHighFreeze when issuer > amm, lsfLowFreeze otherwise).
+func TestIsAssetFrozen_IndividualFreeze(t *testing.T) {
+	view := newMemView()
+	// ACCOUNT_ONE = all-zero 20-byte account id, lexicographically smaller
+	// than any real address, so AMM is low and issuer is high.
+	ammID := decodeAcct(t, "rrrrrrrrrrrrrrrrrrrrBZbvji")
+	issuer := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	issuerID := decodeAcct(t, issuer)
+
+	issuerRoot, err := state.SerializeAccountRoot(&state.AccountRoot{})
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Account(issuerID), issuerRoot))
+
+	line := &state.RippleState{
+		Balance:  state.NewIssuedAmountFromValue(0, 0, "USD", state.AccountOneAddress),
+		LowLimit: state.NewIssuedAmountFromValue(0, 0, "USD", "rrrrrrrrrrrrrrrrrrrrBZbvji"),
+		HighLimit: state.NewIssuedAmountFromValue(
+			0, 0, "USD", issuer),
+		Flags: state.LsfHighFreeze,
+	}
+	lineData, err := state.SerializeRippleState(line)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Line(ammID, issuerID, "USD"), lineData))
+
+	frozen := isAssetFrozen(view, ammID, ammIssue{
+		Currency:  "USD",
+		IssuerStr: issuer,
+		IssuerID:  issuerID,
+	})
+	assert.True(t, frozen, "issuer-side HighFreeze must propagate to asset_frozen")
+
+	// Flipping the freeze flag to the wrong (low) side must NOT trip the
+	// check — rippled keys the flag on the issuer's side only.
+	line.Flags = state.LsfLowFreeze
+	lineData, err = state.SerializeRippleState(line)
+	require.NoError(t, err)
+	require.NoError(t, view.Update(keylet.Line(ammID, issuerID, "USD"), lineData))
+
+	frozen = isAssetFrozen(view, ammID, ammIssue{
+		Currency:  "USD",
+		IssuerStr: issuer,
+		IssuerID:  issuerID,
+	})
+	assert.False(t, frozen, "LowFreeze (AMM-side) must not flag asset as frozen")
+}

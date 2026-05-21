@@ -913,3 +913,15 @@ func (a *LedgerServiceAdapter) GetClosedLedgerView() (types.LedgerStateView, err
 	}
 	return l, nil
 }
+
+// GetLedgerViewBySequence returns a state view for the ledger at the given
+// sequence. Lets handlers read state from the same ledger snapshot a prior
+// GetLedgerEntry call resolved against, instead of a possibly newer closed
+// ledger.
+func (a *LedgerServiceAdapter) GetLedgerViewBySequence(seq uint32) (types.LedgerStateView, error) {
+	l, err := a.svc.GetLedgerBySequence(seq)
+	if err != nil {
+		return nil, err
+	}
+	return l, nil
+}

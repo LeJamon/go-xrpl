@@ -231,6 +231,7 @@ type LedgerAccessor interface {
 	GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerIndex string) (*LedgerEntryResult, error)
 	GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*LedgerDataResult, error)
 	GetClosedLedgerView() (LedgerStateView, error)
+	GetLedgerViewBySequence(seq uint32) (LedgerStateView, error)
 	IsAmendmentBlocked() bool
 }
 
