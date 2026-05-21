@@ -277,7 +277,7 @@ type TransactionSubmitter interface {
 	// (multisign, AccountDelete, AMMCreate, LedgerStateFix). Mirrors
 	// rippled Simulate.cpp getAutofillSequence + TransactionSign.cpp
 	// getCurrentNetworkFee.
-	GetAutofill(account string, hasTicketSequence bool, txJSON []byte, isUnlimited bool) (sequence uint32, fee uint64, err error)
+	GetAutofill(account string, hasTicketSequence bool, txJSON []byte) (sequence uint32, fee uint64, err error)
 }
 
 // AccountQuerier provides account-related read operations.

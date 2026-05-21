@@ -96,71 +96,44 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		return nil, types.RpcErrorMissingField("tx.Account")
 	}
 
-	// Validate Account is a valid Base58 address.
-	// rippled: getAutofillSequence checks parseBase58<AccountID>(accountStr) and returns
-	// rpcSRC_ACT_MALFORMED with message "Invalid field 'tx.Account'."
+	// Validate Account is a valid Base58 address up front.
+	//
+	// rippled gates this check inside getAutofillSequence (Simulate.cpp:50-55)
+	// and therefore skips it when the caller supplies Sequence. We validate
+	// unconditionally because every downstream branch (Fee dispatch through
+	// GetAutofill, structural simulate apply) needs the AccountID anyway, so
+	// deferring would only delay the same error. The wire response for the
+	// "no Sequence + bad Account" case still matches rippled
+	// (rpcSRC_ACT_MALFORMED, "Invalid field 'tx.Account'.").
 	accountStr, ok := txJsonMap["Account"].(string)
 	if !ok || !types.IsValidXRPLAddress(accountStr) {
 		return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx.Account'.")
 	}
 
-	// Reference: rippled autofillTx()
+	// Reference: rippled autofillTx() — Simulate.cpp:71-156.
 
-	// Autofill SigningPubKey: if not present, set to ""
+	// Autofill SigningPubKey: if not present, set to "".
 	if _, ok := txJsonMap["SigningPubKey"]; !ok {
 		txJsonMap["SigningPubKey"] = ""
 	}
 
-	// Validate and autofill Signers array.
-	// rippled checks Signers before TxnSignature.
-	if signersRaw, ok := txJsonMap["Signers"]; ok {
-		signers, ok := signersRaw.([]interface{})
-		if !ok {
-			return nil, types.RpcErrorInvalidField("tx.Signers")
-		}
-		for i, signerEntry := range signers {
-			entryObj, ok := signerEntry.(map[string]interface{})
-			if !ok {
-				return nil, types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
-			}
-			signerInner, ok := entryObj["Signer"]
-			if !ok {
-				return nil, types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
-			}
-			signerObj, ok := signerInner.(map[string]interface{})
-			if !ok {
-				return nil, types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
-			}
-
-			// Autofill SigningPubKey if not present
-			if _, ok := signerObj["SigningPubKey"]; !ok {
-				signerObj["SigningPubKey"] = ""
-			}
-
-			// Autofill TxnSignature if not present; reject if non-empty
-			if txnSig, ok := signerObj["TxnSignature"]; !ok {
-				signerObj["TxnSignature"] = ""
-			} else {
-				sigStr, _ := txnSig.(string)
-				if sigStr != "" {
-					return nil, types.RpcErrorTxSigned()
-				}
-			}
-		}
+	// Structural Signers validation + per-signer field autofill. The
+	// signed-payload check (signer.TxnSignature != "") is deferred to the
+	// post-autofill block below so rippled's error precedence is preserved:
+	// Fee autofill (→ rpcHIGH_FEE) must fire before rpcTX_SIGNED.
+	signerObjs, rpcErr := normalizeSigners(txJsonMap)
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
 
-	// Autofill TxnSignature: if not present, set to "". If present and non-empty, reject.
-	if txnSig, ok := txJsonMap["TxnSignature"]; !ok {
+	// Autofill TxnSignature when missing. The non-empty signed-check is
+	// deferred to after GetAutofill (see comment above).
+	if _, ok := txJsonMap["TxnSignature"]; !ok {
 		txJsonMap["TxnSignature"] = ""
-	} else {
-		sigStr, _ := txnSig.(string)
-		if sigStr != "" {
-			return nil, types.RpcErrorTxSigned()
-		}
 	}
 
-	// Autofill NetworkID (rippled Simulate.cpp:148-153). Order vs Sequence/Fee
-	// is functionally inert: NetworkID does not affect fee dispatch.
+	// Autofill NetworkID (rippled Simulate.cpp:148-153). Order is functionally
+	// inert: NetworkID does not affect fee dispatch.
 	if _, ok := txJsonMap["NetworkID"]; !ok {
 		serverInfo := ctx.Services.Ledger.GetServerInfo()
 		if serverInfo.NetworkID > 1024 {
@@ -172,7 +145,10 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// consistent ledger snapshot. rippled splits these (getAutofillSequence
 	// and getCurrentNetworkFee in Simulate.cpp / TransactionSign.cpp), but
 	// rippled holds one openLedger().current() reference for both reads;
-	// the unified service call is the Go analog.
+	// the unified service call is the Go analog. This runs *before* the
+	// signed-payload checks so rpcHIGH_FEE wins over rpcTX_SIGNED on
+	// combined inputs, matching rippled's autofillTx order (Fee → Signers
+	// → TxnSignature).
 	_, hasSeq := txJsonMap["Sequence"]
 	_, hasFee := txJsonMap["Fee"]
 	if !hasSeq || !hasFee {
@@ -181,7 +157,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		if marshalErr != nil {
 			return nil, types.RpcErrorInternal("Failed to marshal tx_json for autofill")
 		}
-		seq, fee, autoErr := ctx.Services.Ledger.GetAutofill(accountStr, hasTicket, probe, ctx.Unlimited)
+		seq, fee, autoErr := ctx.Services.Ledger.GetAutofill(accountStr, hasTicket, probe)
 		if autoErr != nil {
 			switch {
 			case errors.Is(autoErr, svcerr.ErrAccountNotFound):
@@ -201,6 +177,18 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		if !hasFee {
 			txJsonMap["Fee"] = strconv.FormatUint(fee, 10)
 		}
+	}
+
+	// Deferred signed-payload checks — must follow GetAutofill so rpcHIGH_FEE
+	// precedes rpcTX_SIGNED for clients that supply both a non-empty
+	// TxnSignature and trigger fee escalation.
+	for _, signerObj := range signerObjs {
+		if sigStr, _ := signerObj["TxnSignature"].(string); sigStr != "" {
+			return nil, types.RpcErrorTxSigned()
+		}
+	}
+	if sigStr, _ := txJsonMap["TxnSignature"].(string); sigStr != "" {
+		return nil, types.RpcErrorTxSigned()
 	}
 
 	// Reject Batch transaction type.
@@ -241,7 +229,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	if result.Metadata != nil {
 		if binaryOutput {
 			response["meta_blob"] = strings.ToUpper(hex.EncodeToString(result.Metadata.Blob))
-		} else if result.Metadata.JSON != nil {
+		} else {
 			response["meta"] = result.Metadata.JSON
 		}
 	}
@@ -267,4 +255,45 @@ func (m *SimulateMethod) SupportedApiVersions() []int {
 
 func (m *SimulateMethod) RequiredCondition() types.Condition {
 	return types.NeedsCurrentLedger
+}
+
+// normalizeSigners validates the structural shape of the Signers array and
+// autofills missing SigningPubKey / TxnSignature on each entry. The returned
+// slice points at the inner Signer maps inside txJsonMap so the caller can
+// run signed-payload checks against the same objects after fee autofill.
+//
+// Mirrors the structural half of rippled's autofillTx Signers loop
+// (Simulate.cpp:97-126), excluding the rpcTX_SIGNED branch.
+func normalizeSigners(txJsonMap map[string]interface{}) ([]map[string]interface{}, *types.RpcError) {
+	signersRaw, ok := txJsonMap["Signers"]
+	if !ok {
+		return nil, nil
+	}
+	signers, ok := signersRaw.([]interface{})
+	if !ok {
+		return nil, types.RpcErrorInvalidField("tx.Signers")
+	}
+	out := make([]map[string]interface{}, 0, len(signers))
+	for i, entry := range signers {
+		entryObj, ok := entry.(map[string]interface{})
+		if !ok {
+			return nil, types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
+		}
+		signerInner, ok := entryObj["Signer"]
+		if !ok {
+			return nil, types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
+		}
+		signerObj, ok := signerInner.(map[string]interface{})
+		if !ok {
+			return nil, types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
+		}
+		if _, ok := signerObj["SigningPubKey"]; !ok {
+			signerObj["SigningPubKey"] = ""
+		}
+		if _, ok := signerObj["TxnSignature"]; !ok {
+			signerObj["TxnSignature"] = ""
+		}
+		out = append(out, signerObj)
+	}
+	return out, nil
 }

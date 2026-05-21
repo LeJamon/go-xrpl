@@ -3,11 +3,13 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,7 +46,7 @@ func (m *mockLedgerServiceSimulate) SimulateTransaction(txJSON []byte) (*types.S
 	return m.simulateResult, nil
 }
 
-func (m *mockLedgerServiceSimulate) GetAutofill(account string, hasTicketSequence bool, txJSON []byte, isUnlimited bool) (uint32, uint64, error) {
+func (m *mockLedgerServiceSimulate) GetAutofill(account string, hasTicketSequence bool, txJSON []byte) (uint32, uint64, error) {
 	if m.autofillErr != nil {
 		return 0, 0, m.autofillErr
 	}
@@ -592,6 +594,46 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcSRC_ACT_NOT_FOUND, rpcErr.Code)
 	})
+
+	t.Run("ErrHighFee maps to rpcHIGH_FEE with stripped wrap prefix", func(t *testing.T) {
+		mock := newMockLedgerServiceSimulate()
+		mock.autofillErr = fmt.Errorf("%w: Fee of 5000 exceeds the requested tx limit of 100", svcerr.ErrHighFee)
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "highFee", rpcErr.ErrorString)
+		assert.Equal(t, "Fee of 5000 exceeds the requested tx limit of 100", rpcErr.Message,
+			"rippled TransactionSign.cpp:870-873 emits the unwrapped 'Fee of X exceeds…' message")
+	})
+
+	t.Run("highFee precedes txSigned when both inputs conflict", func(t *testing.T) {
+		mock := newMockLedgerServiceSimulate()
+		mock.autofillErr = fmt.Errorf("%w: Fee of 5000 exceeds the requested tx limit of 100", svcerr.ErrHighFee)
+
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+				"TxnSignature":    "DEADBEEF",
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "highFee", rpcErr.ErrorString,
+			"rippled autofillTx runs Fee before the TxnSignature signed-check (Simulate.cpp:74-138)")
+	})
 }
 
 func TestSimulateMethod_MetaInResponse(t *testing.T) {
@@ -637,6 +679,45 @@ func TestSimulateMethod_MetaInResponse(t *testing.T) {
 		assert.Equal(t, "The simulated transaction would have been applied.", resp["engine_result_message"])
 	})
 
+	t.Run("nil Metadata omits both meta and meta_blob", func(t *testing.T) {
+		mock := newMockLedgerServiceSimulate()
+		mock.simulateResult = &types.SubmitResult{
+			EngineResult:        "temBAD_AMOUNT",
+			EngineResultCode:    -298,
+			EngineResultMessage: "Malformed: Bad amount.",
+			Applied:             false,
+			CurrentLedger:       3,
+			Metadata:            nil,
+		}
+
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleUser,
+			ApiVersion: types.ApiVersion2,
+			Services:   newSimulateTestServices(mock),
+		}
+		for _, binary := range []bool{false, true} {
+			params := map[string]interface{}{
+				"binary": binary,
+				"tx_json": map[string]interface{}{
+					"TransactionType": "AccountSet",
+					"Account":         validAccountAddress,
+				},
+			}
+			paramsJSON, _ := json.Marshal(params)
+
+			result, rpcErr := method.Handle(ctx, paramsJSON)
+			require.Nil(t, rpcErr)
+			resp := result.(map[string]interface{})
+
+			_, hasMeta := resp["meta"]
+			_, hasBlob := resp["meta_blob"]
+			assert.False(t, hasMeta, "binary=%v: meta must be absent when Metadata is nil "+
+				"(rippled Simulate.cpp:264 gates emit on result.metadata)", binary)
+			assert.False(t, hasBlob, "binary=%v: meta_blob must be absent when Metadata is nil", binary)
+		}
+	})
+
 	t.Run("meta_blob field present when binary=true", func(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 		mock.simulateResult = &types.SubmitResult{
@@ -671,6 +752,76 @@ func TestSimulateMethod_MetaInResponse(t *testing.T) {
 		_, hasMeta := resp["meta"]
 		assert.False(t, hasMeta, "meta must not appear when binary=true")
 	})
+}
+
+// TestSimulateMethod_RealMetadataShape exercises the wire shape produced by
+// tx.Metadata.MarshalJSON when SubmitMetadata.JSON carries the real engine
+// metadata struct (as the production LedgerServiceAdapter does), not a
+// hand-rolled map. Mirrors the field-paths rippled validates in
+// Simulate_test.cpp:527-549.
+func TestSimulateMethod_RealMetadataShape(t *testing.T) {
+	method := &handlers.SimulateMethod{}
+	mock := newMockLedgerServiceSimulate()
+
+	realMeta := &tx.Metadata{
+		AffectedNodes: []tx.AffectedNode{
+			{
+				NodeType:        "ModifiedNode",
+				LedgerEntryType: "AccountRoot",
+				LedgerIndex:     "ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890",
+				FinalFields: map[string]any{
+					"Domain": "123ABC",
+				},
+			},
+		},
+		TransactionIndex:  0,
+		TransactionResult: tx.TesSUCCESS,
+	}
+	mock.simulateResult = &types.SubmitResult{
+		EngineResult:        "tesSUCCESS",
+		EngineResultCode:    0,
+		EngineResultMessage: "ignored",
+		Applied:             false,
+		CurrentLedger:       3,
+		Metadata:            &types.SubmitMetadata{JSON: realMeta, Blob: []byte{0x00}},
+	}
+
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSimulateTestServices(mock),
+	}
+	params := map[string]interface{}{
+		"tx_json": map[string]interface{}{
+			"TransactionType": "AccountSet",
+			"Account":         validAccountAddress,
+		},
+	}
+	paramsJSON, _ := json.Marshal(params)
+
+	result, rpcErr := method.Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+
+	wire, err := json.Marshal(result)
+	require.NoError(t, err)
+	var roundTrip map[string]interface{}
+	require.NoError(t, json.Unmarshal(wire, &roundTrip))
+
+	meta, ok := roundTrip["meta"].(map[string]interface{})
+	require.True(t, ok, "meta must be a JSON object on the wire")
+	assert.Equal(t, "tesSUCCESS", meta["TransactionResult"])
+	assert.EqualValues(t, 0, meta["TransactionIndex"])
+
+	nodes, ok := meta["AffectedNodes"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, nodes, 1)
+	mod, ok := nodes[0].(map[string]interface{})["ModifiedNode"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "AccountRoot", mod["LedgerEntryType"])
+	final, ok := mod["FinalFields"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "123ABC", final["Domain"])
 }
 
 func TestSimulateMethod_RequiredRole(t *testing.T) {

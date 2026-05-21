@@ -20,8 +20,8 @@ import (
 // Autofill fee ceiling: feeDefault * mult / div. Mirrors rippled
 // Tuning.h:60-61.
 const (
-	defaultAutoFillFeeMultiplier = 10
-	defaultAutoFillFeeDivisor    = 1
+	defaultAutoFillFeeMultiplier uint64 = 10
+	defaultAutoFillFeeDivisor    uint64 = 1
 )
 
 // SubmitResult contains the result of submitting a transaction
@@ -209,16 +209,15 @@ func (s *Service) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint6
 //
 // The returned fee is capped at feeDefault * defaultAutoFillFeeMultiplier
 // / defaultAutoFillFeeDivisor; exceeding it yields svcerr.ErrHighFee.
-// rippled applies this ceiling regardless of role. isUnlimited mirrors
-// rippled's isUnlimited() and is reserved for the eventual scaleFeeLoad
-// port; today it has no effect.
+// rippled applies this ceiling regardless of role.
 //
 // scaleFeeLoad (rippled load-fee tracker) has no Go equivalent today and
-// is intentionally omitted — see issue tracker.
+// is intentionally omitted — see issue tracker. When it lands, an
+// isUnlimited parameter should be plumbed back through this signature.
 //
 // Reference: rippled Simulate.cpp getAutofillSequence +
 // TransactionSign.cpp getCurrentNetworkFee / getTxFee.
-func (s *Service) GetAutofill(account string, hasTicketSequence bool, parsedTx tx.Transaction, isUnlimited bool) (sequence uint32, fee uint64, err error) {
+func (s *Service) GetAutofill(account string, hasTicketSequence bool, parsedTx tx.Transaction) (sequence uint32, fee uint64, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -272,10 +271,7 @@ func (s *Service) GetAutofill(account string, hasTicketSequence bool, parsedTx t
 	}
 
 	// Ceiling check matches rippled TransactionSign.cpp:864-874 — applied
-	// regardless of role. isUnlimited only governs scaleFeeLoad (not yet
-	// ported), so it is currently unused here; keep the parameter so the
-	// interface stays stable for the eventual load-fee implementation.
-	_ = isUnlimited
+	// regardless of role.
 	ceiling, ok := mulDivU64(feeDefault, defaultAutoFillFeeMultiplier, defaultAutoFillFeeDivisor)
 	if !ok {
 		return 0, 0, fmt.Errorf("%w: fee ceiling overflow", svcerr.ErrHighFee)
@@ -289,7 +285,9 @@ func (s *Service) GetAutofill(account string, hasTicketSequence bool, parsedTx t
 
 // computeBaseFeeForTx mirrors rippled getTxFee → calculateBaseFee dispatch:
 // CustomBaseFeeCalculator wins (AccountDelete, AMMCreate, LedgerStateFix);
-// otherwise multisign multiplier; otherwise the ledger base fee.
+// otherwise the default Transactor::calculateBaseFee applies, which charges
+// one extra baseFee per entry in sfSigners regardless of SigningPubKey
+// (rippled Transactor.cpp:229-245).
 func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.EngineConfig) uint64 {
 	if parsedTx == nil {
 		return cfg.BaseFee
@@ -297,23 +295,23 @@ func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.Eng
 	if feeCalc, ok := parsedTx.(tx.CustomBaseFeeCalculator); ok {
 		return feeCalc.CalculateBaseFee(view, cfg)
 	}
-	if tx.IsMultiSigned(parsedTx) {
-		return tx.CalculateMultiSigFee(cfg.BaseFee, len(parsedTx.GetCommon().Signers))
+	if signerCount := len(parsedTx.GetCommon().Signers); signerCount > 0 {
+		return tx.CalculateMultiSigFee(cfg.BaseFee, signerCount)
 	}
 	return cfg.BaseFee
 }
 
 // mulDivU64 returns (a * b) / c with overflow detection. Returns ok=false
-// when the multiplication overflows uint64 or c is non-positive.
-func mulDivU64(a uint64, b, c int) (uint64, bool) {
-	if b < 0 || c <= 0 {
+// when the multiplication overflows uint64 or c is zero.
+func mulDivU64(a, b, c uint64) (uint64, bool) {
+	if c == 0 {
 		return 0, false
 	}
-	hi, lo := bits.Mul64(a, uint64(b))
+	hi, lo := bits.Mul64(a, b)
 	if hi != 0 {
 		return 0, false
 	}
-	return lo / uint64(c), true
+	return lo / c, true
 }
 
 // EngineConfigForReplay returns the shared (non-per-ledger) engine
