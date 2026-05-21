@@ -90,25 +90,6 @@ func parseAmountValue(amt tx.Amount) float64 {
 	return amt.Float64()
 }
 
-// formatHash formats a hash as a string
-func formatHash(hash [32]byte) string {
-	return string(hash[:])
-}
-
-// sortBookOffersByQuality sorts book offers by quality (best first)
-func sortBookOffersByQuality(offers []BookOffer) {
-	// Simple bubble sort - could use sort.Slice for better performance
-	for i := 0; i < len(offers)-1; i++ {
-		for j := i + 1; j < len(offers); j++ {
-			qi, _ := strconv.ParseFloat(offers[i].Quality, 64)
-			qj, _ := strconv.ParseFloat(offers[j].Quality, 64)
-			if qj < qi { // Lower quality is better (cheaper)
-				offers[i], offers[j] = offers[j], offers[i]
-			}
-		}
-	}
-}
-
 // helper function to format ledger range
 func formatRange(min, max uint32) string {
 	return strconv.FormatUint(uint64(min), 10) + "-" + strconv.FormatUint(uint64(max), 10)

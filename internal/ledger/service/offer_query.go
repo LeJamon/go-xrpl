@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"sort"
@@ -15,23 +16,26 @@ import (
 // rippled's SLE-derived JSON (NetworkOPsImp::getBookPage uses
 // sleOffer->getJson(JsonOptions::none)).
 type BookOffer struct {
-	Account           string      `json:"Account"`
-	BookDirectory     string      `json:"BookDirectory"`
-	BookNode          string      `json:"BookNode"`
-	Expiration        uint32      `json:"Expiration,omitempty"`
-	Flags             uint32      `json:"Flags"`
-	LedgerEntryType   string      `json:"LedgerEntryType"`
-	OwnerNode         string      `json:"OwnerNode"`
-	PreviousTxnID     string      `json:"PreviousTxnID"`
-	PreviousTxnLgrSeq uint32      `json:"PreviousTxnLgrSeq"`
-	Sequence          uint32      `json:"Sequence"`
-	TakerGets         interface{} `json:"TakerGets"`
-	TakerPays         interface{} `json:"TakerPays"`
-	Index             string      `json:"index"`
-	Quality           string      `json:"quality"`
-	OwnerFunds        string      `json:"owner_funds,omitempty"`
-	TakerGetsFunded   interface{} `json:"taker_gets_funded,omitempty"`
-	TakerPaysFunded   interface{} `json:"taker_pays_funded,omitempty"`
+	Account                 string      `json:"Account"`
+	BookDirectory           string      `json:"BookDirectory"`
+	BookNode                string      `json:"BookNode"`
+	Expiration              uint32      `json:"Expiration,omitempty"`
+	Flags                   uint32      `json:"Flags"`
+	LedgerEntryType         string      `json:"LedgerEntryType"`
+	OwnerNode               string      `json:"OwnerNode"`
+	PreviousTxnID           string      `json:"PreviousTxnID"`
+	PreviousTxnLgrSeq       uint32      `json:"PreviousTxnLgrSeq"`
+	Sequence                uint32      `json:"Sequence"`
+	TakerGets               interface{} `json:"TakerGets"`
+	TakerPays               interface{} `json:"TakerPays"`
+	DomainID                string      `json:"DomainID,omitempty"`
+	AdditionalBookDirectory string      `json:"AdditionalBookDirectory,omitempty"`
+	AdditionalBookNode      string      `json:"AdditionalBookNode,omitempty"`
+	Index                   string      `json:"index"`
+	Quality                 string      `json:"quality"`
+	OwnerFunds              string      `json:"owner_funds,omitempty"`
+	TakerGetsFunded         interface{} `json:"taker_gets_funded,omitempty"`
+	TakerPaysFunded         interface{} `json:"taker_pays_funded,omitempty"`
 }
 
 // BookOffersResult contains the result of book_offers RPC
@@ -135,17 +139,24 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		offer := r.offer
 		bookOffer := BookOffer{
 			Account:           offer.Account,
-			BookDirectory:     strings.ToUpper(hex.EncodeToString(offer.BookDirectory[:])),
+			BookDirectory:     hexUpper32(offer.BookDirectory),
 			BookNode:          fmt.Sprintf("%x", offer.BookNode),
 			Expiration:        offer.Expiration,
 			Flags:             offer.Flags,
 			LedgerEntryType:   "Offer",
 			OwnerNode:         fmt.Sprintf("%x", offer.OwnerNode),
-			PreviousTxnID:     strings.ToUpper(hex.EncodeToString(offer.PreviousTxnID[:])),
+			PreviousTxnID:     hexUpper32(offer.PreviousTxnID),
 			PreviousTxnLgrSeq: offer.PreviousTxnLgrSeq,
 			Sequence:          offer.Sequence,
-			Index:             formatHash(r.key),
-			Quality:           calculateOfferQuality(offer.TakerPays, offer.TakerGets),
+			Index:             hexUpper32(r.key),
+			Quality:           qualityFromBookDirectory(offer.BookDirectory),
+		}
+		if offer.DomainID != ([32]byte{}) {
+			bookOffer.DomainID = hexUpper32(offer.DomainID)
+		}
+		if offer.AdditionalBookDirectory != ([32]byte{}) {
+			bookOffer.AdditionalBookDirectory = hexUpper32(offer.AdditionalBookDirectory)
+			bookOffer.AdditionalBookNode = fmt.Sprintf("%x", offer.AdditionalBookNode)
 		}
 		bookOffer.TakerGets = amountToJSON(offer.TakerGets)
 		bookOffer.TakerPays = amountToJSON(offer.TakerPays)
@@ -174,21 +185,21 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		default:
 			if prev, seen := balances[offer.Account]; seen {
 				// rippled NetworkOPs.cpp:4530-4537: running-balance hit ⇒
-				// reuse remaining balance and suppress owner_funds.
+				// reuse remaining balance and suppress owner_funds. The
+				// value is unused once firstOwnerOffer is false, so we
+				// skip materializing ownerFundsAmount here.
 				ownerFunds = prev
-				ownerFundsAmount = makeAmountFromFloat(takerGets, ownerFunds)
 				firstOwnerOffer = false
 			} else {
 				accountID, decErr := decodeAccountIDLocal(offer.Account)
 				if decErr != nil {
 					return nil, decErr
 				}
+				// tx.AccountFunds already clamps negative balances to zero
+				// (see XRPLiquid and the IOU balance.Signum() <= 0 branch
+				// in internal/tx/utils.go), so no extra guard is needed.
 				ownerFundsAmount = tx.AccountFunds(targetLedger, accountID, takerGets, true, reserveBase, reserveIncrement)
 				ownerFunds = parseAmountValue(ownerFundsAmount)
-				if ownerFunds < 0 {
-					ownerFunds = 0
-					ownerFundsAmount = zeroLike(takerGets)
-				}
 			}
 		}
 
@@ -279,4 +290,23 @@ func makeAmountFromFloat(model tx.Amount, v float64) tx.Amount {
 		return tx.NewXRPAmount(int64(v))
 	}
 	return state.NewIssuedAmountFromFloat64(v, model.Currency, model.Issuer)
+}
+
+// hexUpper32 returns the uppercase hex string for a 32-byte hash, matching
+// rippled's uint256 JSON emit (STObject getJson via uint256::to_string).
+func hexUpper32(b [32]byte) string {
+	return strings.ToUpper(hex.EncodeToString(b[:]))
+}
+
+// qualityFromBookDirectory extracts the offer's directory quality from the
+// low 64 bits of its sfBookDirectory key and formats it via STAmount text,
+// mirroring rippled NetworkOPs.cpp:4493,4605 (saDirRate.getText()).
+func qualityFromBookDirectory(book [32]byte) string {
+	q := binary.BigEndian.Uint64(book[24:])
+	if q == 0 {
+		return "0"
+	}
+	mantissa := int64(q & 0x00FFFFFFFFFFFFFF)
+	exponent := int(q>>56) - 100
+	return tx.NewIssuedAmount(mantissa, exponent, "", "").Value()
 }
