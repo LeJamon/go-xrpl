@@ -916,8 +916,7 @@ func (a *LedgerServiceAdapter) GetClosedLedgerView() (types.LedgerStateView, err
 
 // GetLedgerForQuery resolves a ledger_index string into a single pinned ledger,
 // returning both a state view and a reader over the same snapshot. Handlers
-// that need to read state and metadata together (e.g. amm_info reading the
-// AMM SLE, pool balances, and parentCloseTime) should use this to avoid the
+// that need to read state and metadata together should use this to avoid the
 // race window inherent in resolving the ledger more than once.
 func (a *LedgerServiceAdapter) GetLedgerForQuery(ledgerIndex string) (types.LedgerStateView, types.LedgerReader, error) {
 	l, validated, err := a.svc.GetLedgerForQuery(ledgerIndex)
