@@ -890,8 +890,11 @@ func TestAMMInfoMethod(t *testing.T) {
 
 	method := &handlers.AMMInfoMethod{}
 
-	t.Run("Returns AMM not found when AMM does not exist", func(t *testing.T) {
-		// The mock returns "not implemented" for GetLedgerEntry, which becomes AMM not found
+	t.Run("Returns lgrNotFound when the ledger view cannot be resolved", func(t *testing.T) {
+		// The mock returns "not implemented" for GetLedgerForQuery, so amm_info
+		// surfaces lgrNotFound (rpcLGR_NOT_FOUND = 15) before any account or
+		// AMM lookup — matches rippled's lookupLedger short-circuit at
+		// AMMInfo.cpp:81-84.
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
@@ -904,11 +907,10 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		// Returns 19 (actNotFound) when account lookup fails
-		assert.True(t, rpcErr.Code == 19 || rpcErr.Message == "AMM account not found")
+		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
 	})
 
-	t.Run("Returns AMM not found when looking up by assets", func(t *testing.T) {
+	t.Run("Returns lgrNotFound when looking up by assets without a view", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
@@ -924,8 +926,7 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		// Returns 19 (actNotFound/entryNotFound) when AMM lookup fails
-		assert.True(t, rpcErr.Code == 19 || rpcErr.Message == "AMM not found")
+		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
 	})
 
 	t.Run("Invalid parameters - neither assets nor amm_account", func(t *testing.T) {
