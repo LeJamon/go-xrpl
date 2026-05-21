@@ -83,11 +83,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		// Parse tx_json object
 		var txObj map[string]interface{}
 		if err := json.Unmarshal(rawParams["tx_json"], &txObj); err != nil {
-			// tx_json is not an object
 			return nil, types.RpcErrorExpectedField("tx_json", "object")
-		}
-		if len(txObj) == 0 {
-			// Empty tx_json — will fail TransactionType check below
 		}
 		txJsonMap = txObj
 	}
@@ -163,9 +159,8 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		}
 	}
 
-	// Autofill NetworkID first so the autofill probe sees the final tx
-	// shape. rippled autofillTx() (Simulate.cpp) fills NetworkID before
-	// Sequence; the network id only matters at parse time.
+	// Autofill NetworkID (rippled Simulate.cpp:148-153). Order vs Sequence/Fee
+	// is functionally inert: NetworkID does not affect fee dispatch.
 	if _, ok := txJsonMap["NetworkID"]; !ok {
 		serverInfo := ctx.Services.Ledger.GetServerInfo()
 		if serverInfo.NetworkID > 1024 {
@@ -192,12 +187,15 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 			case errors.Is(autoErr, svcerr.ErrAccountNotFound):
 				return nil, types.RpcErrorSrcActMissing("Source account not found.")
 			case errors.Is(autoErr, svcerr.ErrHighFee):
-				return nil, types.RpcErrorHighFee(autoErr.Error())
+				msg := strings.TrimPrefix(autoErr.Error(), svcerr.ErrHighFee.Error()+": ")
+				return nil, types.RpcErrorHighFee(msg)
 			default:
 				return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill tx: %v", autoErr))
 			}
 		}
-		if !hasSeq && !hasTicket {
+		// rippled writes Sequence unconditionally (Simulate.cpp:140-146); the
+		// value is 0 in the ticket case.
+		if !hasSeq {
 			txJsonMap["Sequence"] = seq
 		}
 		if !hasFee {

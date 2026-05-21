@@ -207,13 +207,14 @@ func (s *Service) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint6
 //   - escalatedFee = toDrops(openLedgerFeeLevel-1, baseFee) + 1 (TxQ load)
 //   - returned fee = max(feeDefault, escalatedFee)
 //
-// When isUnlimited is false, the returned fee is capped at feeDefault *
-// defaultAutoFillFeeMultiplier / defaultAutoFillFeeDivisor; exceeding it
-// yields svcerr.ErrHighFee. isUnlimited mirrors rippled's isUnlimited()
-// (admin / identified roles).
+// The returned fee is capped at feeDefault * defaultAutoFillFeeMultiplier
+// / defaultAutoFillFeeDivisor; exceeding it yields svcerr.ErrHighFee.
+// rippled applies this ceiling regardless of role. isUnlimited mirrors
+// rippled's isUnlimited() and is reserved for the eventual scaleFeeLoad
+// port; today it has no effect.
 //
 // scaleFeeLoad (rippled load-fee tracker) has no Go equivalent today and
-// is intentionally omitted.
+// is intentionally omitted — see issue tracker.
 //
 // Reference: rippled Simulate.cpp getAutofillSequence +
 // TransactionSign.cpp getCurrentNetworkFee / getTxFee.
@@ -270,14 +271,17 @@ func (s *Service) GetAutofill(account string, hasTicketSequence bool, parsedTx t
 		}
 	}
 
-	if !isUnlimited {
-		ceiling, ok := mulDivU64(feeDefault, defaultAutoFillFeeMultiplier, defaultAutoFillFeeDivisor)
-		if !ok {
-			return 0, 0, fmt.Errorf("%w: fee ceiling overflow", svcerr.ErrHighFee)
-		}
-		if fee > ceiling {
-			return 0, 0, fmt.Errorf("%w: Fee of %d exceeds the requested tx limit of %d", svcerr.ErrHighFee, fee, ceiling)
-		}
+	// Ceiling check matches rippled TransactionSign.cpp:864-874 — applied
+	// regardless of role. isUnlimited only governs scaleFeeLoad (not yet
+	// ported), so it is currently unused here; keep the parameter so the
+	// interface stays stable for the eventual load-fee implementation.
+	_ = isUnlimited
+	ceiling, ok := mulDivU64(feeDefault, defaultAutoFillFeeMultiplier, defaultAutoFillFeeDivisor)
+	if !ok {
+		return 0, 0, fmt.Errorf("%w: fee ceiling overflow", svcerr.ErrHighFee)
+	}
+	if fee > ceiling {
+		return 0, 0, fmt.Errorf("%w: Fee of %d exceeds the requested tx limit of %d", svcerr.ErrHighFee, fee, ceiling)
 	}
 
 	return sequence, fee, nil

@@ -552,7 +552,7 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		assert.Equal(t, "12", txJSON["Fee"])
 	})
 
-	t.Run("TicketSequence skips Sequence autofill", func(t *testing.T) {
+	t.Run("TicketSequence writes Sequence=0", func(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 		mock.autofillSeq = 99
 
@@ -571,8 +571,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		resp := result.(map[string]interface{})
 		txJSON := resp["tx_json"].(map[string]interface{})
 
-		_, hasSeq := txJSON["Sequence"]
-		assert.False(t, hasSeq, "Sequence must stay absent when TicketSequence is present")
+		assert.Equal(t, uint32(0), txJSON["Sequence"],
+			"rippled Simulate.cpp:68,140-146 writes Sequence=0 when TicketSequence is set")
 	})
 
 	t.Run("Source account not found maps to srcActMissing", func(t *testing.T) {
