@@ -133,11 +133,17 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	// Asset and Asset2 on the AMM SLE carry only the issue definitions; pool
 	// balances must be read from the AMM account's trust lines / XRP balance.
 	// Matches rippled ammPoolHolds() in AMMUtils.cpp.
-	asset1, asset1OK := parseSLEIssue(decoded["Asset"])
-	asset2, asset2OK := parseSLEIssue(decoded["Asset2"])
+	asset1, asset1Err := parseSLEIssue(decoded["Asset"])
+	if asset1Err != nil {
+		return nil, types.RpcErrorInternal("AMM SLE Asset: " + asset1Err.Error())
+	}
+	asset2, asset2Err := parseSLEIssue(decoded["Asset2"])
+	if asset2Err != nil {
+		return nil, types.RpcErrorInternal("AMM SLE Asset2: " + asset2Err.Error())
+	}
 	accountStr, _ := decoded["Account"].(string)
-	if !asset1OK || !asset2OK || accountStr == "" {
-		return nil, types.RpcErrorInternal("AMM SLE missing Account/Asset fields")
+	if accountStr == "" {
+		return nil, types.RpcErrorInternal("AMM SLE missing Account field")
 	}
 	_, accBytes, decErr := addresscodec.DecodeClassicAddressToAccountID(accountStr)
 	if decErr != nil {
@@ -408,31 +414,36 @@ type ammIssue struct {
 	IsXRP     bool
 }
 
-// The binary codec emits {"currency":"XRP"} for XRP and
-// {"currency":..,"issuer":..} for IOUs (see codec/binarycodec/types/issue.go).
-func parseSLEIssue(raw interface{}) (ammIssue, bool) {
+// The binary codec emits {"currency":"XRP"} for XRP, {"currency":..,"issuer":..}
+// for IOUs, and {"mpt_issuance_id":..} for MPTs (codec/binarycodec/types/issue.go).
+// AMMs only support XRP+IOU and IOU+IOU pairs today; an MPT in either slot is
+// surfaced as an explicit error rather than masquerading as a missing field.
+func parseSLEIssue(raw interface{}) (ammIssue, error) {
 	m, ok := raw.(map[string]interface{})
 	if !ok {
-		return ammIssue{}, false
+		return ammIssue{}, fmt.Errorf("not an object")
+	}
+	if _, isMPT := m["mpt_issuance_id"]; isMPT {
+		return ammIssue{}, fmt.Errorf("MPT assets are not supported in AMM pools")
 	}
 	currency, ok := m["currency"].(string)
 	if !ok {
-		return ammIssue{}, false
+		return ammIssue{}, fmt.Errorf("missing currency field")
 	}
 	if currency == "XRP" {
-		return ammIssue{Currency: "XRP", IsXRP: true}, true
+		return ammIssue{Currency: "XRP", IsXRP: true}, nil
 	}
 	issuerStr, ok := m["issuer"].(string)
 	if !ok {
-		return ammIssue{}, false
+		return ammIssue{}, fmt.Errorf("missing issuer field for non-XRP currency")
 	}
 	_, issuerBytes, err := addresscodec.DecodeClassicAddressToAccountID(issuerStr)
 	if err != nil {
-		return ammIssue{}, false
+		return ammIssue{}, fmt.Errorf("invalid issuer %q: %w", issuerStr, err)
 	}
 	out := ammIssue{Currency: currency, IssuerStr: issuerStr}
 	copy(out.IssuerID[:], issuerBytes)
-	return out, true
+	return out, nil
 }
 
 // Matches rippled accountHolds() with FreezeHandling::fhIGNORE_FREEZE.

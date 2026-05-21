@@ -235,8 +235,8 @@ func TestBuildAuctionSlot_TimeIntervalExpired(t *testing.T) {
 // parseSLEIssue Tests
 
 func TestParseSLEIssue_XRP(t *testing.T) {
-	issue, ok := parseSLEIssue(map[string]interface{}{"currency": "XRP"})
-	require.True(t, ok)
+	issue, err := parseSLEIssue(map[string]interface{}{"currency": "XRP"})
+	require.NoError(t, err)
 	assert.True(t, issue.IsXRP)
 	assert.Equal(t, "XRP", issue.Currency)
 	assert.Equal(t, [20]byte{}, issue.IssuerID)
@@ -244,20 +244,31 @@ func TestParseSLEIssue_XRP(t *testing.T) {
 
 func TestParseSLEIssue_IOU(t *testing.T) {
 	issuer := "rrrrrrrrrrrrrrrrrrrrBZbvji" // ACCOUNT_ONE
-	issue, ok := parseSLEIssue(map[string]interface{}{"currency": "USD", "issuer": issuer})
-	require.True(t, ok)
+	issue, err := parseSLEIssue(map[string]interface{}{"currency": "USD", "issuer": issuer})
+	require.NoError(t, err)
 	assert.False(t, issue.IsXRP)
 	assert.Equal(t, "USD", issue.Currency)
 	assert.Equal(t, issuer, issue.IssuerStr)
 }
 
 func TestParseSLEIssue_Invalid(t *testing.T) {
-	_, ok := parseSLEIssue(nil)
-	assert.False(t, ok)
-	_, ok = parseSLEIssue(map[string]interface{}{"currency": "USD"})
-	assert.False(t, ok)
-	_, ok = parseSLEIssue(map[string]interface{}{"currency": "USD", "issuer": "not-an-address"})
-	assert.False(t, ok)
+	_, err := parseSLEIssue(nil)
+	assert.Error(t, err)
+	_, err = parseSLEIssue(map[string]interface{}{"currency": "USD"})
+	assert.Error(t, err)
+	_, err = parseSLEIssue(map[string]interface{}{"currency": "USD", "issuer": "not-an-address"})
+	assert.Error(t, err)
+}
+
+// AMMs only support XRP+IOU / IOU+IOU pairs today, so an MPT-shaped issue
+// ({"mpt_issuance_id":..} per codec/binarycodec/types/issue.go) must surface
+// a distinct error instead of falling through "missing currency".
+func TestParseSLEIssue_MPT(t *testing.T) {
+	_, err := parseSLEIssue(map[string]interface{}{
+		"mpt_issuance_id": "00000001ABCDEF0000000000000000000000000000000000",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MPT")
 }
 
 type memView struct {
