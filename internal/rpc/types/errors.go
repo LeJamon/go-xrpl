@@ -130,8 +130,12 @@ const (
 	RpcSRC_ACT_MALFORMED = 65 // Source account is malformed (rippled: rpcSRC_ACT_MALFORMED = 65)
 
 	// Book / market errors — rippled ErrorCodes.h
-	RpcBAD_MARKET       = 42 // No such market (rippled: rpcBAD_MARKET = 42)
-	RpcDOMAIN_MALFORMED = 97 // Domain is malformed (rippled: rpcDOMAIN_MALFORMED = 97)
+	RpcBAD_MARKET        = 42 // No such market (rippled: rpcBAD_MARKET = 42)
+	RpcDOMAIN_MALFORMED  = 97 // Domain is malformed (rippled: rpcDOMAIN_MALFORMED = 97)
+	RpcDST_AMT_MALFORMED = 51 // Destination amount malformed (rippled: rpcDST_AMT_MALFORMED = 51)
+	RpcDST_ISR_MALFORMED = 53 // Destination issuer malformed (rippled: rpcDST_ISR_MALFORMED = 53)
+	RpcSRC_CUR_MALFORMED = 69 // Source currency malformed (rippled: rpcSRC_CUR_MALFORMED = 69)
+	RpcSRC_ISR_MALFORMED = 70 // Source issuer malformed (rippled: rpcSRC_ISR_MALFORMED = 70)
 )
 
 // Standard error constructors
@@ -319,9 +323,30 @@ func RpcErrorSrcActMissing(message string) *RpcError {
 }
 
 // RpcErrorSrcCurMalformed returns an error when a source currency is malformed
-// (matches rippled "srcCurMalformed").
+// (matches rippled rpcSRC_CUR_MALFORMED, code 69, token "srcCurMalformed").
 func RpcErrorSrcCurMalformed(message string) *RpcError {
-	return NewRpcError(RpcUNKNOWN, "srcCurMalformed", "srcCurMalformed", message)
+	return NewRpcError(RpcSRC_CUR_MALFORMED, "srcCurMalformed", "srcCurMalformed", message)
+}
+
+// RpcErrorDstAmtMalformed returns an error when a destination amount/currency
+// is malformed (matches rippled rpcDST_AMT_MALFORMED, code 51, token
+// "dstAmtMalformed"). Used for taker_gets.currency parse failures per
+// rippled BookOffers.cpp:90-96.
+func RpcErrorDstAmtMalformed(message string) *RpcError {
+	return NewRpcError(RpcDST_AMT_MALFORMED, "dstAmtMalformed", "dstAmtMalformed", message)
+}
+
+// RpcErrorSrcIsrMalformed returns an error when a source issuer is malformed
+// (matches rippled rpcSRC_ISR_MALFORMED, code 70, token "srcIsrMalformed").
+func RpcErrorSrcIsrMalformed(message string) *RpcError {
+	return NewRpcError(RpcSRC_ISR_MALFORMED, "srcIsrMalformed", "srcIsrMalformed", message)
+}
+
+// RpcErrorDstIsrMalformed returns an error when a destination issuer is
+// malformed (matches rippled rpcDST_ISR_MALFORMED, code 53, token
+// "dstIsrMalformed").
+func RpcErrorDstIsrMalformed(message string) *RpcError {
+	return NewRpcError(RpcDST_ISR_MALFORMED, "dstIsrMalformed", "dstIsrMalformed", message)
 }
 
 // RpcErrorBadMarket matches rippled rpcBAD_MARKET (code 42, token "badMarket"),
