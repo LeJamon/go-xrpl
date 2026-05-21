@@ -17,8 +17,11 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		TakerPays json.RawMessage `json:"taker_pays"`
 		Taker     string          `json:"taker,omitempty"`
 		Domain    string          `json:"domain,omitempty"`
+		// Limit is a pointer so we can distinguish "absent" (use default)
+		// from "explicit 0" (return zero offers), matching rippled
+		// readLimitField semantics (RPCHelpers.cpp:703-712).
+		Limit *uint32 `json:"limit,omitempty"`
 		types.LedgerSpecifier
-		types.PaginationParams
 	}
 
 	if err := ParseParams(params, &request); err != nil {
@@ -61,13 +64,19 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	}
 
 	// Validate domain (uint256 hex). Matches rippled BookOffers.cpp:175-189.
-	if request.Domain != "" {
-		if len(request.Domain) != 64 {
+	// rippled's uint256::parseHex accepts the literal "0" as the zero value
+	// in addition to the strict 64-char form (base_uint.h:228-234).
+	domain := request.Domain
+	if domain != "" && domain != "0" {
+		if len(domain) != 64 {
 			return nil, types.RpcErrorDomainMalformed()
 		}
-		if _, derr := hex.DecodeString(request.Domain); derr != nil {
+		if _, derr := hex.DecodeString(domain); derr != nil {
 			return nil, types.RpcErrorDomainMalformed()
 		}
+	}
+	if domain == "0" {
+		domain = "0000000000000000000000000000000000000000000000000000000000000000"
 	}
 
 	// Reject equal markets. Matches rippled BookOffers.cpp:191-195.
@@ -80,27 +89,34 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		ledgerIndex = request.LedgerIndex.String()
 	}
 
-	// Clamp the limit using rippled's bookOffers range {0, 60, 100}.
-	// When the user omits "limit" (zero value), ClampLimit returns the default (60).
-	limit := ClampLimit(request.Limit, LimitBookOffers, ctx.Unlimited)
-	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, request.Taker, request.Domain, ledgerIndex, limit)
+	// Limit handling mirrors rippled readLimitField (RPCHelpers.cpp:703-712):
+	// absent -> rdefault (60); present -> clamp to [rmin, rmax] = [0, 100],
+	// unless the role is unlimited (admin/identified) in which case the raw
+	// value is passed through.
+	limit := LimitBookOffers.Default
+	if request.Limit != nil {
+		limit = *request.Limit
+		if !ctx.Unlimited {
+			if limit < LimitBookOffers.Min {
+				limit = LimitBookOffers.Min
+			}
+			if limit > LimitBookOffers.Max {
+				limit = LimitBookOffers.Max
+			}
+		}
+	}
+	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, request.Taker, domain, ledgerIndex, limit)
 	if err != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
 	}
 
-	response := map[string]interface{}{
+	// rippled book_offers does not echo a "limit" field in the response.
+	return map[string]interface{}{
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
 		"offers":       result.Offers,
 		"validated":    result.Validated,
-	}
-
-	// Echo the effective (clamped) limit when the user specified one.
-	if request.Limit > 0 {
-		response["limit"] = limit
-	}
-
-	return response, nil
+	}, nil
 }
 
 // ParseAmountFromJSON parses an amount from JSON (either XRP string or IOU object)

@@ -472,22 +472,29 @@ type AccountOffersResult struct {
 	Marker      string         `json:"marker,omitempty"`
 }
 
-// BookOffer represents an offer in an order book
+// BookOffer represents an offer in an order book. The wire shape mirrors
+// rippled's sleOffer->getJson(JsonOptions::none) output plus the per-offer
+// fields (quality, owner_funds, taker_gets_funded, taker_pays_funded) that
+// NetworkOPsImp::getBookPage layers on top.
 type BookOffer struct {
-	Account         string      `json:"Account"`
-	BookDirectory   string      `json:"BookDirectory"`
-	BookNode        string      `json:"BookNode"`
-	Flags           uint32      `json:"Flags"`
-	LedgerEntryType string      `json:"LedgerEntryType"`
-	OwnerNode       string      `json:"OwnerNode"`
-	Sequence        uint32      `json:"Sequence"`
-	TakerGets       interface{} `json:"TakerGets"`
-	TakerPays       interface{} `json:"TakerPays"`
-	Index           string      `json:"index"`
-	Quality         string      `json:"quality"`
-	OwnerFunds      string      `json:"owner_funds,omitempty"`
-	TakerGetsFunded interface{} `json:"taker_gets_funded,omitempty"`
-	TakerPaysFunded interface{} `json:"taker_pays_funded,omitempty"`
+	Account           string      `json:"Account"`
+	BookDirectory     string      `json:"BookDirectory"`
+	BookNode          string      `json:"BookNode"`
+	Expiration        uint32      `json:"Expiration,omitempty"`
+	Flags             uint32      `json:"Flags"`
+	LedgerEntryType   string      `json:"LedgerEntryType"`
+	OwnerNode         string      `json:"OwnerNode"`
+	PreviousTxnID     string      `json:"PreviousTxnID"`
+	PreviousTxnLgrSeq uint32      `json:"PreviousTxnLgrSeq"`
+	Sequence          uint32      `json:"Sequence"`
+	TakerGets         interface{} `json:"TakerGets"`
+	TakerPays         interface{} `json:"TakerPays"`
+	DomainID          string      `json:"DomainID,omitempty"`
+	Index             string      `json:"index"`
+	Quality           string      `json:"quality"`
+	OwnerFunds        string      `json:"owner_funds,omitempty"`
+	TakerGetsFunded   interface{} `json:"taker_gets_funded,omitempty"`
+	TakerPaysFunded   interface{} `json:"taker_pays_funded,omitempty"`
 }
 
 // BookOffersResult contains the result of book_offers RPC

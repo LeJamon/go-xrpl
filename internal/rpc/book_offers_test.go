@@ -493,28 +493,32 @@ func TestBookOffersLimitParameter(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		limit          interface{}
-		expectedLimit  uint32
-		expectLimitKey bool
+		name          string
+		limit         interface{}
+		expectedLimit uint32
 	}{
 		{
-			name:           "Limit of 1",
-			limit:          1,
-			expectedLimit:  1,
-			expectLimitKey: true,
+			name:          "Limit of 1",
+			limit:         1,
+			expectedLimit: 1,
 		},
 		{
-			name:           "Limit of 10",
-			limit:          10,
-			expectedLimit:  10,
-			expectLimitKey: true,
+			name:          "Limit of 10",
+			limit:         10,
+			expectedLimit: 10,
 		},
 		{
-			name:           "No limit specified",
-			limit:          nil,
-			expectedLimit:  60, // ClampLimit returns default (60) when user omits limit
-			expectLimitKey: false,
+			name:          "No limit specified",
+			limit:         nil,
+			expectedLimit: 60, // rippled rdefault (60) when user omits limit
+		},
+		{
+			// rippled readLimitField (RPCHelpers.cpp:703-712) clamps to
+			// [rmin, rmax] = [0, 100] for bookOffers; explicit 0 is valid
+			// and yields zero offers.
+			name:          "Explicit limit 0",
+			limit:         0,
+			expectedLimit: 0,
 		},
 	}
 
@@ -542,18 +546,13 @@ func TestBookOffersLimitParameter(t *testing.T) {
 
 			assert.Equal(t, tc.expectedLimit, capturedLimit, "Limit passed to service should match")
 
-			// Check if limit key is present in response
+			// rippled book_offers never echoes a "limit" field in the response.
 			resultJSON, err := json.Marshal(result)
 			require.NoError(t, err)
 			var resp map[string]interface{}
 			err = json.Unmarshal(resultJSON, &resp)
 			require.NoError(t, err)
-
-			if tc.expectLimitKey {
-				assert.Contains(t, resp, "limit", "limit should be present in response when specified")
-			} else {
-				assert.NotContains(t, resp, "limit", "limit should not be present in response when not specified")
-			}
+			assert.NotContains(t, resp, "limit", "limit should never be echoed in response")
 		})
 	}
 }

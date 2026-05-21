@@ -19,25 +19,24 @@ import (
 // rippled's SLE-derived JSON (NetworkOPsImp::getBookPage uses
 // sleOffer->getJson(JsonOptions::none)).
 type BookOffer struct {
-	Account           string        `json:"Account"`
-	BookDirectory     string        `json:"BookDirectory"`
-	BookNode          string        `json:"BookNode"`
-	Expiration        uint32        `json:"Expiration,omitempty"`
-	Flags             uint32        `json:"Flags"`
-	LedgerEntryType   string        `json:"LedgerEntryType"`
-	OwnerNode         string        `json:"OwnerNode"`
-	PreviousTxnID     string        `json:"PreviousTxnID"`
-	PreviousTxnLgrSeq uint32        `json:"PreviousTxnLgrSeq"`
-	Sequence          uint32        `json:"Sequence"`
-	TakerGets         interface{}   `json:"TakerGets"`
-	TakerPays         interface{}   `json:"TakerPays"`
-	DomainID          string        `json:"DomainID,omitempty"`
-	AdditionalBooks   []interface{} `json:"AdditionalBooks,omitempty"`
-	Index             string        `json:"index"`
-	Quality           string        `json:"quality"`
-	OwnerFunds        string        `json:"owner_funds,omitempty"`
-	TakerGetsFunded   interface{}   `json:"taker_gets_funded,omitempty"`
-	TakerPaysFunded   interface{}   `json:"taker_pays_funded,omitempty"`
+	Account           string      `json:"Account"`
+	BookDirectory     string      `json:"BookDirectory"`
+	BookNode          string      `json:"BookNode"`
+	Expiration        uint32      `json:"Expiration,omitempty"`
+	Flags             uint32      `json:"Flags"`
+	LedgerEntryType   string      `json:"LedgerEntryType"`
+	OwnerNode         string      `json:"OwnerNode"`
+	PreviousTxnID     string      `json:"PreviousTxnID"`
+	PreviousTxnLgrSeq uint32      `json:"PreviousTxnLgrSeq"`
+	Sequence          uint32      `json:"Sequence"`
+	TakerGets         interface{} `json:"TakerGets"`
+	TakerPays         interface{} `json:"TakerPays"`
+	DomainID          string      `json:"DomainID,omitempty"`
+	Index             string      `json:"index"`
+	Quality           string      `json:"quality"`
+	OwnerFunds        string      `json:"owner_funds,omitempty"`
+	TakerGetsFunded   interface{} `json:"taker_gets_funded,omitempty"`
+	TakerPaysFunded   interface{} `json:"taker_pays_funded,omitempty"`
 }
 
 type BookOffersResult struct {
@@ -101,7 +100,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	offers := make([]BookOffer, 0)
 
 	uTipIndex := bookBase
-	for limit == 0 || uint32(len(offers)) < limit {
+	for uint32(len(offers)) < limit {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -127,7 +126,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 			targetLedger,
 			keylet.Keylet{Type: entry.TypeDirectoryNode, Key: nextKey},
 			func(offerKey [32]byte) error {
-				if limit > 0 && uint32(len(offers)) >= limit {
+				if uint32(len(offers)) >= limit {
 					return errStopBookWalk
 				}
 				offerData, rerr := targetLedger.Read(keylet.Keylet{Type: entry.TypeOffer, Key: offerKey})
@@ -199,20 +198,6 @@ func (s *Service) buildBookOffer(
 	}
 	if offer.DomainID != ([32]byte{}) {
 		bookOffer.DomainID = hexUpper32(offer.DomainID)
-	}
-	// Hybrid offers (PermissionedDEX) carry a second book directory entry.
-	// rippled stores this as sfAdditionalBooks: an STArray of inner sfBook
-	// objects (rippled/src/xrpld/app/tx/detail/CreateOffer.cpp:562-571,
-	// rippled/include/xrpl/protocol/detail/sfields.macro:380).
-	if offer.AdditionalBookDirectory != ([32]byte{}) {
-		bookOffer.AdditionalBooks = []interface{}{
-			map[string]interface{}{
-				"Book": map[string]interface{}{
-					"BookDirectory": hexUpper32(offer.AdditionalBookDirectory),
-					"BookNode":      fmt.Sprintf("%x", offer.AdditionalBookNode),
-				},
-			},
-		}
 	}
 	bookOffer.TakerGets = amountToJSON(offer.TakerGets)
 	bookOffer.TakerPays = amountToJSON(offer.TakerPays)
@@ -305,23 +290,32 @@ func (s *Service) buildBookOffer(
 	return bookOffer, nil
 }
 
-// computeBookBase returns the high-24-byte book directory base for the given
+// computeBookBase returns the book directory base for the given
 // taker_pays / taker_gets / optional domain, matching rippled's getBookBase
-// (Indexes.cpp). The returned key has the low 8 bytes zeroed.
+// (Indexes.cpp:114-138). rippled normalizes the low 8 bytes to zero via
+// keylet::quality({ltDIR_NODE, index}, 0); keylet.BookDir returns the raw
+// hash including its natural low-8 bytes, so we must zero them here so the
+// returned key sorts strictly below every quality tier in the book.
 func computeBookBase(takerPays, takerGets tx.Amount, domainHex string) ([32]byte, error) {
 	payCurr := state.GetCurrencyBytes(takerPays.Currency)
 	payIssuer := state.GetIssuerBytes(takerPays.Issuer)
 	getsCurr := state.GetCurrencyBytes(takerGets.Currency)
 	getsIssuer := state.GetIssuerBytes(takerGets.Issuer)
 
+	var key [32]byte
 	if domainHex == "" {
-		return keylet.BookDir(payCurr, payIssuer, getsCurr, getsIssuer).Key, nil
+		key = keylet.BookDir(payCurr, payIssuer, getsCurr, getsIssuer).Key
+	} else {
+		var domainID [32]byte
+		if err := decodeHex32Into(domainHex, &domainID); err != nil {
+			return [32]byte{}, err
+		}
+		key = keylet.BookDirWithDomain(payCurr, payIssuer, getsCurr, getsIssuer, domainID).Key
 	}
-	var domainID [32]byte
-	if err := decodeHex32Into(domainHex, &domainID); err != nil {
-		return [32]byte{}, err
+	for i := 24; i < 32; i++ {
+		key[i] = 0
 	}
-	return keylet.BookDirWithDomain(payCurr, payIssuer, getsCurr, getsIssuer, domainID).Key, nil
+	return key, nil
 }
 
 func decodeHex32Into(s string, out *[32]byte) error {

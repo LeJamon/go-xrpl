@@ -31,6 +31,11 @@ func addressFromBytes(t *testing.T, seed byte) (string, [20]byte) {
 
 func insertAccountRoot(t *testing.T, svc *Service, addr string, balanceDrops uint64, transferRate uint32) [20]byte {
 	t.Helper()
+	return insertAccountRootWithFlags(t, svc, addr, balanceDrops, transferRate, 0)
+}
+
+func insertAccountRootWithFlags(t *testing.T, svc *Service, addr string, balanceDrops uint64, transferRate, flags uint32) [20]byte {
+	t.Helper()
 	_, idBytes, err := addresscodec.DecodeClassicAddressToAccountID(addr)
 	if err != nil {
 		t.Fatalf("decode address: %v", err)
@@ -41,7 +46,7 @@ func insertAccountRoot(t *testing.T, svc *Service, addr string, balanceDrops uin
 		Account:      addr,
 		Balance:      balanceDrops,
 		Sequence:     1,
-		Flags:        0,
+		Flags:        flags,
 		TransferRate: transferRate,
 	}
 	data, err := state.SerializeAccountRoot(root)
@@ -52,6 +57,52 @@ func insertAccountRoot(t *testing.T, svc *Service, addr string, balanceDrops uin
 		t.Fatalf("insert account root: %v", err)
 	}
 	return id
+}
+
+// insertTrustLine creates a RippleState entry between owner and issuer for the
+// given currency, with `ownerBalance` available to the owner. The sign convention
+// follows rippled: Balance is positive when the LOW account holds the IOU.
+func insertTrustLine(t *testing.T, svc *Service, ownerAddr, issuerAddr, currency, ownerBalance string) {
+	t.Helper()
+	_, ownerBytes, err := addresscodec.DecodeClassicAddressToAccountID(ownerAddr)
+	if err != nil {
+		t.Fatalf("decode owner: %v", err)
+	}
+	_, issuerBytes, err := addresscodec.DecodeClassicAddressToAccountID(issuerAddr)
+	if err != nil {
+		t.Fatalf("decode issuer: %v", err)
+	}
+	var ownerID, issuerID [20]byte
+	copy(ownerID[:], ownerBytes)
+	copy(issuerID[:], issuerBytes)
+
+	ownerIsLow := state.CompareAccountIDsForLine(ownerID, issuerID) < 0
+	var lowAddr, highAddr string
+	if ownerIsLow {
+		lowAddr, highAddr = ownerAddr, issuerAddr
+	} else {
+		lowAddr, highAddr = issuerAddr, ownerAddr
+	}
+
+	// Balance issuer in RippleState is the magic ACCOUNT_ONE; the sign
+	// encodes which side owns the IOU. When ownerIsLow=true, ownerBalance>0
+	// means positive Balance; otherwise we negate.
+	balanceValue := ownerBalance
+	if !ownerIsLow {
+		balanceValue = "-" + ownerBalance
+	}
+	rs := &state.RippleState{
+		Balance:   state.NewIssuedAmountFromDecimalString(balanceValue, currency, state.AccountOneAddress),
+		LowLimit:  state.NewIssuedAmountFromDecimalString("0", currency, lowAddr),
+		HighLimit: state.NewIssuedAmountFromDecimalString("1000000000", currency, highAddr),
+	}
+	data, err := state.SerializeRippleState(rs)
+	if err != nil {
+		t.Fatalf("serialize ripple state: %v", err)
+	}
+	if err := svc.openLedger.Insert(keylet.Line(ownerID, issuerID, currency), data); err != nil {
+		t.Fatalf("insert trust line: %v", err)
+	}
 }
 
 func insertOffer(t *testing.T, svc *Service, ownerAddr string, sequence uint32, takerPays, takerGets tx.Amount) [32]byte {
@@ -413,5 +464,168 @@ func TestGetBookOffers_PermissionedOfferHiddenFromOpenBook(t *testing.T) {
 	}
 	if domResult.Offers[0].Account != domOwnerAddr {
 		t.Errorf("domain book returned wrong offer: account=%s", domResult.Offers[0].Account)
+	}
+}
+
+// TestGetBookOffers_RunningBalanceConsumesAcrossOffers pins rippled's umBalance
+// running-balance behaviour at NetworkOPs.cpp:4530-4537,4596-4601: a second
+// offer from the same owner must see saOwnerFunds reduced by the first offer's
+// saOwnerPays. The XRP-only setup lets us avoid trust lines while still
+// exercising the default `umBalance` branch.
+func TestGetBookOffers_RunningBalanceConsumesAcrossOffers(t *testing.T) {
+	svc := newOfferTestService(t)
+
+	issuerAddr, _ := addressFromBytes(t, 0x90)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+
+	ownerAddr, _ := addressFromBytes(t, 0x92)
+	// Account balance just enough to cover one offer plus reserve: 10.6 XRP
+	// after the 10 XRP base reserve leaves ~0.6 XRP liquid.
+	insertAccountRoot(t, svc, ownerAddr, 10_600_000, 0)
+
+	// Two offers from the same owner at different qualities. Each sells
+	// 0.6 XRP; total is more than the liquid balance, so the second offer
+	// must come back partially-funded.
+	insertOffer(t, svc, ownerAddr, 1,
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
+		tx.NewXRPAmount(600_000),
+	)
+	insertOffer(t, svc, ownerAddr, 2,
+		state.NewIssuedAmountFromFloat64(200, "USD", issuerAddr),
+		tx.NewXRPAmount(600_000),
+	)
+
+	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
+	xrpModel := tx.NewXRPAmount(0)
+	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10)
+	if err != nil {
+		t.Fatalf("GetBookOffers: %v", err)
+	}
+	if len(result.Offers) != 2 {
+		t.Fatalf("expected 2 offers, got %d", len(result.Offers))
+	}
+
+	first, second := result.Offers[0], result.Offers[1]
+	if first.OwnerFunds == "" {
+		t.Fatalf("first offer must carry owner_funds")
+	}
+	if second.OwnerFunds != "" {
+		t.Errorf("second offer from same owner must omit owner_funds, got %q", second.OwnerFunds)
+	}
+	// First offer fully funded (0.6 XRP <= liquid 0.6 XRP).
+	if first.TakerGetsFunded != nil || first.TakerPaysFunded != nil {
+		t.Errorf("first offer should be fully funded, got gets=%v pays=%v",
+			first.TakerGetsFunded, first.TakerPaysFunded)
+	}
+	// Second offer must emit both *_funded fields with reduced amounts.
+	if second.TakerGetsFunded == nil || second.TakerPaysFunded == nil {
+		t.Fatalf("second offer must emit both *_funded fields, got gets=%v pays=%v",
+			second.TakerGetsFunded, second.TakerPaysFunded)
+	}
+	// The second offer's taker_gets_funded should be strictly less than 0.6 XRP
+	// — running balance consumed by the first offer.
+	gets, ok := second.TakerGetsFunded.(string)
+	if !ok {
+		t.Fatalf("taker_gets_funded should be a string drop count for XRP, got %T", second.TakerGetsFunded)
+	}
+	gotDrops, perr := strconv.ParseUint(gets, 10, 64)
+	if perr != nil {
+		t.Fatalf("parse taker_gets_funded: %v", perr)
+	}
+	if gotDrops >= 600_000 {
+		t.Errorf("second offer taker_gets_funded (%d) should be < 600000 drops", gotDrops)
+	}
+}
+
+// TestGetBookOffers_GlobalFreezeMarksAllUnfunded pins rippled
+// NetworkOPs.cpp:4522-4527: when the issuer's account has the global-freeze
+// flag set, every offer in the book is reported with owner_funds = "0" and
+// both *_funded fields zeroed, AND firstOwnerOffer stays true so owner_funds
+// is emitted on every offer (not just the first one per owner).
+func TestGetBookOffers_GlobalFreezeMarksAllUnfunded(t *testing.T) {
+	svc := newOfferTestService(t)
+
+	issuerAddr, _ := addressFromBytes(t, 0xA0)
+	insertAccountRootWithFlags(t, svc, issuerAddr, 1_000_000_000_000, 0, state.LsfGlobalFreeze)
+
+	ownerAddr, _ := addressFromBytes(t, 0xA2)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+	// Owner has plenty of USD on their trust line.
+	insertTrustLine(t, svc, ownerAddr, issuerAddr, "USD", "1000")
+
+	// Two offers from the same owner. Without freeze, the second would omit
+	// owner_funds. With freeze, both must emit owner_funds = "0".
+	insertOffer(t, svc, ownerAddr, 1,
+		tx.NewXRPAmount(10_000_000),
+		state.NewIssuedAmountFromFloat64(50, "USD", issuerAddr),
+	)
+	insertOffer(t, svc, ownerAddr, 2,
+		tx.NewXRPAmount(20_000_000),
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
+	)
+
+	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
+	xrpModel := tx.NewXRPAmount(0)
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10)
+	if err != nil {
+		t.Fatalf("GetBookOffers: %v", err)
+	}
+	if len(result.Offers) != 2 {
+		t.Fatalf("expected 2 offers, got %d", len(result.Offers))
+	}
+	for i, o := range result.Offers {
+		if o.OwnerFunds != "0" {
+			t.Errorf("offer %d: global freeze must report owner_funds=\"0\", got %q", i, o.OwnerFunds)
+		}
+		if o.TakerGetsFunded == nil || o.TakerPaysFunded == nil {
+			t.Errorf("offer %d: global freeze must emit *_funded fields (zeroed)", i)
+		}
+	}
+}
+
+// TestGetBookOffers_TransferRateAdjustsFunded pins the transfer-rate adjustment
+// path in rippled NetworkOPs.cpp:4565-4575: when rate != parityRate AND the
+// taker is not the issuer AND the offer owner is not the issuer, the limit on
+// taker_gets_funded is saOwnerFunds / rate. A non-issuer owner with exactly
+// enough balance for the face value of the offer must come back partially
+// funded once the rate is applied.
+func TestGetBookOffers_TransferRateAdjustsFunded(t *testing.T) {
+	svc := newOfferTestService(t)
+
+	// Issuer with 20% transfer fee (1.2e9 = 1.2 in rippled Rate semantics).
+	issuerAddr, _ := addressFromBytes(t, 0xB0)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 1_200_000_000)
+
+	ownerAddr, _ := addressFromBytes(t, 0xB2)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+	// Owner has exactly the face value of the offer on its trust line.
+	insertTrustLine(t, svc, ownerAddr, issuerAddr, "USD", "100")
+
+	insertOffer(t, svc, ownerAddr, 1,
+		tx.NewXRPAmount(10_000_000),
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
+	)
+
+	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
+	xrpModel := tx.NewXRPAmount(0)
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10)
+	if err != nil {
+		t.Fatalf("GetBookOffers: %v", err)
+	}
+	if len(result.Offers) != 1 {
+		t.Fatalf("expected 1 offer, got %d", len(result.Offers))
+	}
+	o := result.Offers[0]
+	if o.OwnerFunds == "" {
+		t.Fatalf("owner_funds must be emitted on first offer")
+	}
+	if o.OwnerFunds != "100" {
+		t.Errorf("owner_funds should equal trustline balance (100), got %q", o.OwnerFunds)
+	}
+	// With rate=1.2, ownerFundsLimit = 100/1.2 ≈ 83.33 < TakerGets(100),
+	// so the offer must be reported partially funded.
+	if o.TakerGetsFunded == nil || o.TakerPaysFunded == nil {
+		t.Fatalf("transfer-rate adjustment must produce *_funded fields, got gets=%v pays=%v",
+			o.TakerGetsFunded, o.TakerPaysFunded)
 	}
 }

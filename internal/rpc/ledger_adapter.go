@@ -399,24 +399,27 @@ func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, tak
 		return nil, err
 	}
 
-	// Convert service types to RPC types
 	offers := make([]types.BookOffer, len(result.Offers))
 	for i, offer := range result.Offers {
 		offers[i] = types.BookOffer{
-			Account:         offer.Account,
-			BookDirectory:   offer.BookDirectory,
-			BookNode:        offer.BookNode,
-			Flags:           offer.Flags,
-			LedgerEntryType: offer.LedgerEntryType,
-			OwnerNode:       offer.OwnerNode,
-			Sequence:        offer.Sequence,
-			TakerGets:       offer.TakerGets,
-			TakerPays:       offer.TakerPays,
-			Index:           offer.Index,
-			Quality:         offer.Quality,
-			OwnerFunds:      offer.OwnerFunds,
-			TakerGetsFunded: offer.TakerGetsFunded,
-			TakerPaysFunded: offer.TakerPaysFunded,
+			Account:           offer.Account,
+			BookDirectory:     offer.BookDirectory,
+			BookNode:          offer.BookNode,
+			Expiration:        offer.Expiration,
+			Flags:             offer.Flags,
+			LedgerEntryType:   offer.LedgerEntryType,
+			OwnerNode:         offer.OwnerNode,
+			PreviousTxnID:     offer.PreviousTxnID,
+			PreviousTxnLgrSeq: offer.PreviousTxnLgrSeq,
+			Sequence:          offer.Sequence,
+			TakerGets:         offer.TakerGets,
+			TakerPays:         offer.TakerPays,
+			DomainID:          offer.DomainID,
+			Index:             offer.Index,
+			Quality:           offer.Quality,
+			OwnerFunds:        offer.OwnerFunds,
+			TakerGetsFunded:   offer.TakerGetsFunded,
+			TakerPaysFunded:   offer.TakerPaysFunded,
 		}
 	}
 
