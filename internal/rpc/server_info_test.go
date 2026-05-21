@@ -1038,9 +1038,8 @@ func TestServerInfoWithParams(t *testing.T) {
 	}
 }
 
-// TestServerInfo_DynamicMetrics_FromHooks confirms #480: server_info
-// surfaces live values from the TxQ, peer, and state-accounting hooks
-// instead of the previous hardcoded zeros / placeholders.
+// TestServerInfo_DynamicMetrics_FromHooks pins that server_info surfaces
+// live values from the TxQ, peer, and state-accounting hooks.
 func TestServerInfo_DynamicMetrics_FromHooks(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
 	// Use a recent ripple-epoch close time so the age computation is
@@ -1125,7 +1124,7 @@ func TestServerInfo_DynamicMetrics_FromHooks(t *testing.T) {
 
 // TestServerInfo_MachineMode_LoadFactorFees verifies the server_state
 // (machine) variant surfaces the load_factor_fee_* triple from TxQ
-// metrics, not the pre-#480 hardcoded 256s.
+// metrics.
 func TestServerInfo_MachineMode_LoadFactorFees(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
 	services := servicesForServerInfo(mock)
