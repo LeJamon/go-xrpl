@@ -243,7 +243,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	services := types.NewServiceContainer(ledgerAdapter)
 
 	// TxQ metrics are available in both standalone and consensus modes,
-	// so wire the server_info hook before the !standalone branch — #480.
+	// so wire the server_info hook before the !standalone branch.
 	ledgerSvcRef := ledgerService
 	services.TxQMetrics = func() types.TxQServerMetrics {
 		m := ledgerSvcRef.GetTxQMetrics()
@@ -339,10 +339,10 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		// the bootstrap-time field used to return — #451.
 		services.ValidationQuorum = consensusComponents.Adaptor.GetQuorum
 
-		// Expose peer-disconnect counters and the operating-mode
-		// state-accounting snapshot to server_info — replaces the
-		// hardcoded zeros from #480. (TxQMetrics is wired above the
-		// !standalone branch since it's available in either mode.)
+		// Peer-disconnect counters and the operating-mode state-accounting
+		// snapshot need the overlay/adaptor, so they live inside the
+		// !standalone branch. (TxQMetrics is wired above; it only needs
+		// the ledger service.)
 		overlayRef := consensusComponents.Overlay
 		services.PeerDisconnects = func() (uint64, uint64) {
 			return overlayRef.PeerDisconnects(), overlayRef.PeerDisconnectsResources()

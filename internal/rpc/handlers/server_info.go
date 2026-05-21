@@ -116,8 +116,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 		serverState = "standalone"
 	}
 
-	// Duration in microseconds for the legacy state-accounting fallback
-	// (used only when consensus hasn't wired a tracker).
+	// Fallback used only when consensus hasn't wired a state-accounting tracker.
 	uptimeUs := uptimeDuration.Microseconds()
 
 	overflow, peerDisc, peerDiscRes := resolveDisconnectCounters(services)
@@ -370,8 +369,7 @@ type stateAccountingResolved struct {
 
 // resolveStateAccounting builds the state_accounting JSON value and the
 // top-level companion durations. Prefers the adaptor's tracker when
-// wired; falls back to attributing the whole uptime to the current
-// server state (matching the pre-#480 stub shape).
+// wired; otherwise attributes total uptime to the current server state.
 func resolveStateAccounting(services *types.ServiceContainer, serverState string, uptimeUs int64) stateAccountingResolved {
 	out := make(map[string]interface{}, len(stateAccountingModes))
 	for _, m := range stateAccountingModes {
@@ -396,10 +394,7 @@ func resolveStateAccounting(services *types.ServiceContainer, serverState string
 		}
 	}
 
-	// Legacy fallback: attribute total uptime to the current state.
-	// server_state_duration_us in this branch necessarily equals
-	// uptime — there's no transition history to derive a tighter
-	// value from.
+	// No tracker wired — attribute total uptime to the current state.
 	if _, ok := out[serverState]; ok {
 		out[serverState] = map[string]interface{}{
 			"duration_us": fmt.Sprintf("%d", uptimeUs),

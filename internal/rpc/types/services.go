@@ -372,9 +372,7 @@ type LedgerServerInfo struct {
 	NetworkID                uint32
 }
 
-// TxQServerMetrics is the subset of TxQ metrics surfaced by
-// server_info. Kept in rpc/types so handlers don't reach across into
-// internal/txq.
+// TxQServerMetrics is the subset of TxQ metrics surfaced by server_info.
 type TxQServerMetrics struct {
 	JqTransOverflow       uint64
 	ReferenceFeeLevel     uint64

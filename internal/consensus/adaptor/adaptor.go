@@ -183,7 +183,7 @@ type Adaptor struct {
 	operatingMode consensus.OperatingMode
 
 	// stateAcct tracks transition counts and cumulative durations per
-	// operating mode for server_info.state_accounting (#480).
+	// operating mode for server_info.state_accounting.
 	stateAcct *stateAccounting
 
 	// Close time offset — adjusted each round toward network average.

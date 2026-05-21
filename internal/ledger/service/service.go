@@ -1350,9 +1350,8 @@ func (s *Service) GetGenesisAccount() (string, error) {
 	return address, err
 }
 
-// GetTxQMetrics returns the current TxQ metrics — used by server_info
-// for jq_trans_overflow and the load_factor_fee_* fields. Returns the
-// zero value when the queue isn't initialised.
+// GetTxQMetrics returns the current TxQ metrics, or the zero value when
+// the queue isn't initialised.
 func (s *Service) GetTxQMetrics() txq.Metrics {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

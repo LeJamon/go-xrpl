@@ -71,16 +71,12 @@ type Metrics struct {
 	JqTransOverflow       uint64
 }
 
-// JqTransOverflow returns the cumulative count of transactions rejected
-// because the TxQ was full (telCAN_NOT_QUEUE_FULL). Surfaced via
-// server_info as jq_trans_overflow; see the jqTransOverflow field doc
-// for the rippled-vs-goxrpl semantic difference.
+// JqTransOverflow returns the counter surfaced as server_info.jq_trans_overflow.
+// See the jqTransOverflow field doc for the rippled-vs-goxrpl semantic difference.
 func (q *TxQ) JqTransOverflow() uint64 {
 	return q.jqTransOverflow.Load()
 }
 
-// incJqTransOverflow bumps the overflow counter. Called on every
-// telCAN_NOT_QUEUE_FULL rejection in apply.go.
 func (q *TxQ) incJqTransOverflow() {
 	q.jqTransOverflow.Add(1)
 }

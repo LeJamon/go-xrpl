@@ -36,8 +36,7 @@ type StateAccountingSnapshot struct {
 
 // stateAccounting tracks per-OperatingMode transition counts and
 // microsecond durations. Mirrors rippled's NetworkOPsImp::StateAccounting
-// (NetworkOPs.cpp:143-200, 4808-4849) so the server_info handler can
-// surface real numbers in place of hardcoded zeros (#480).
+// at NetworkOPs.cpp:143-200, 4808-4849.
 type stateAccounting struct {
 	mu           sync.Mutex
 	now          func() time.Time
