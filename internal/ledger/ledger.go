@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -663,12 +664,17 @@ func UpdateSkipListOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [
 
 	// Operation 1: Historical skiplist (every 256th ledger).
 	// rippled appends without trimming; the historical list grows
-	// monotonically and never rolls.
+	// monotonically and never rolls. The size cap mirrors rippled's
+	// XRPL_ASSERT(hashes.size() <= 256) at Ledger.cpp:904-906 — a 64K
+	// window holds at most 65536/256 = 256 entries.
 	if (prevIndex & 0xff) == 0 {
 		histKey := keylet.LedgerHashesForSeq(prevIndex)
-		hashes, _, err := readLedgerHashesSLE(stateMap, histKey.Key)
+		hashes, lastSeq, err := readLedgerHashesSLE(stateMap, histKey.Key)
 		if err != nil {
 			return fmt.Errorf("read historical skip list: %w", err)
+		}
+		if err := assertHistoricalSkipListConsistent(hashes, lastSeq, prevIndex); err != nil {
+			return fmt.Errorf("historical LedgerHashes (key %x): %w", histKey.Key, err)
 		}
 		hashes = append(hashes, parentHash)
 		if err := writeSkipList(stateMap, histKey.Key, hashes, prevIndex); err != nil {
@@ -724,6 +730,28 @@ func assertSkipListConsistent(hashes [][32]byte, lastSeq, prevIndex uint32) erro
 	if len(hashes) != wantLen {
 		return fmt.Errorf("existing Hashes length=%d, want %d for prevIndex=%d; state was mutated by a non-chain-advance path",
 			len(hashes), wantLen, prevIndex)
+	}
+	return nil
+}
+
+// assertHistoricalSkipListConsistent validates the per-64K-window historical
+// LedgerHashes SLE before appending. Rippled's only invariant here is
+// `hashes.size() <= 256` (Ledger.cpp:904-906); we additionally require
+// LastLedgerSequence to be the most recent 256-aligned seq strictly below
+// prevIndex, which catches the same leak class as the rolling assertion
+// without crossing window boundaries (a window covers 65536 ledgers, so
+// within a single SLE lastSeq always == prevIndex - 256 after the prior
+// append).
+func assertHistoricalSkipListConsistent(hashes [][32]byte, lastSeq, prevIndex uint32) error {
+	if len(hashes) == 0 && lastSeq == 0 {
+		return nil
+	}
+	if len(hashes) > 256 {
+		return fmt.Errorf("existing Hashes length=%d exceeds 256", len(hashes))
+	}
+	if wantLastSeq := prevIndex - 256; lastSeq != wantLastSeq {
+		return fmt.Errorf("existing LastLedgerSequence=%d, want %d (prevIndex-256); state was mutated by a non-chain-advance path",
+			lastSeq, wantLastSeq)
 	}
 	return nil
 }
@@ -798,10 +826,19 @@ func decodeUint32Field(jsonObj map[string]any, name string) (uint32, error) {
 	case uint32:
 		return v, nil
 	case int:
+		if v < 0 || v > math.MaxUint32 {
+			return 0, fmt.Errorf("%s field %d out of uint32 range", name, v)
+		}
 		return uint32(v), nil
 	case int64:
+		if v < 0 || v > math.MaxUint32 {
+			return 0, fmt.Errorf("%s field %d out of uint32 range", name, v)
+		}
 		return uint32(v), nil
 	case uint64:
+		if v > math.MaxUint32 {
+			return 0, fmt.Errorf("%s field %d out of uint32 range", name, v)
+		}
 		return uint32(v), nil
 	default:
 		return 0, fmt.Errorf("%s field has unexpected type %T", name, raw)

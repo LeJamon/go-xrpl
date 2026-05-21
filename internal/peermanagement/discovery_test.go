@@ -721,3 +721,123 @@ func TestSimulatedBackoffBehavior(t *testing.T) {
 			"Expected backoff to deprioritize it", primaryAttempts)
 	}
 }
+
+func TestDiscoverySyncConnectedState_DropsStalePeers(t *testing.T) {
+	cfg := &Config{MaxPeers: 10, MaxInbound: 5, MaxOutbound: 5}
+	events := make(chan Event, 10)
+	d := NewDiscovery(cfg, events)
+
+	d.AddPeer("10.0.0.1:51235", 0, 0)
+	d.AddPeer("10.0.0.2:51235", 0, 0)
+	d.AddPeer("10.0.0.3:51235", 0, 0)
+	d.MarkConnected("10.0.0.1:51235", 101)
+	d.MarkConnected("10.0.0.2:51235", 102)
+	d.MarkConnected("10.0.0.3:51235", 103)
+
+	// Overlay reports that only 10.0.0.2 is still connected outbound.
+	live := map[string]struct{}{"10.0.0.2:51235": {}}
+	d.SyncConnectedState(live)
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	if d.peers["10.0.0.1:51235"].Connected {
+		t.Error("10.0.0.1 should be flipped to Connected=false")
+	}
+	if d.peers["10.0.0.1:51235"].PeerID != 0 {
+		t.Errorf("10.0.0.1 PeerID should be cleared, got %d", d.peers["10.0.0.1:51235"].PeerID)
+	}
+	if _, present := d.connected[101]; present {
+		t.Error("10.0.0.1 should be removed from d.connected map")
+	}
+	if !d.peers["10.0.0.2:51235"].Connected {
+		t.Error("10.0.0.2 must remain Connected=true")
+	}
+	if _, present := d.connected[102]; !present {
+		t.Error("10.0.0.2 must remain in d.connected map")
+	}
+	if d.peers["10.0.0.3:51235"].Connected {
+		t.Error("10.0.0.3 should be flipped to Connected=false")
+	}
+}
+
+func TestDiscoverySyncConnectedState_NoOpForDisconnectedPeers(t *testing.T) {
+	cfg := &Config{MaxPeers: 10, MaxInbound: 5, MaxOutbound: 5}
+	events := make(chan Event, 10)
+	d := NewDiscovery(cfg, events)
+
+	d.AddPeer("10.0.0.4:51235", 0, 0)
+	// Never MarkConnected — peer stays Connected=false.
+
+	d.SyncConnectedState(map[string]struct{}{})
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.peers["10.0.0.4:51235"].Connected {
+		t.Error("disconnected peer should remain Connected=false")
+	}
+}
+
+func TestDiscoverySyncConnectedHosts_CoversFixedInbound(t *testing.T) {
+	cfg := &Config{
+		MaxPeers:    10,
+		MaxInbound:  5,
+		MaxOutbound: 5,
+		FixedPeers:  []string{"goxrpl-0:51235"},
+	}
+	events := make(chan Event, 10)
+	d := NewDiscovery(cfg, events)
+
+	d.AddPeer("goxrpl-0:51235", 0, 0)
+
+	d.mu.RLock()
+	if d.peers["goxrpl-0:51235"].Connected {
+		d.mu.RUnlock()
+		t.Fatal("precondition: fixed peer must start disconnected")
+	}
+	d.mu.RUnlock()
+
+	// Inbound peer has the same host but a different ephemeral source port —
+	// SyncConnectedState alone would not match it.
+	hosts := map[string]struct{}{"goxrpl-0": {}}
+	d.SyncConnectedHosts(hosts)
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if !d.peers["goxrpl-0:51235"].Connected {
+		t.Error("fixed peer should be marked Connected=true based on host coverage")
+	}
+}
+
+func TestDiscoverySyncConnectedHosts_EmptyHostsIsNoOp(t *testing.T) {
+	cfg := &Config{MaxPeers: 10, MaxInbound: 5, MaxOutbound: 5}
+	events := make(chan Event, 10)
+	d := NewDiscovery(cfg, events)
+
+	d.AddPeer("10.0.0.5:51235", 0, 0)
+
+	d.SyncConnectedHosts(map[string]struct{}{})
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.peers["10.0.0.5:51235"].Connected {
+		t.Error("empty hosts map must not mutate Connected state")
+	}
+}
+
+func TestDiscoverySyncConnectedHosts_SkipsMalformedAddress(t *testing.T) {
+	cfg := &Config{MaxPeers: 10, MaxInbound: 5, MaxOutbound: 5}
+	events := make(chan Event, 10)
+	d := NewDiscovery(cfg, events)
+
+	// Address missing the port — net.SplitHostPort returns an error.
+	d.AddPeer("badly-formed-no-port", 0, 0)
+
+	d.SyncConnectedHosts(map[string]struct{}{"any": {}})
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.peers["badly-formed-no-port"].Connected {
+		t.Error("malformed address must not be marked connected")
+	}
+}

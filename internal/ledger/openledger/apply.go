@@ -165,6 +165,12 @@ func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte
 		engineConfig.ApplyFlags |= tx.TapRETRY
 	}
 	engine := tx.NewEngine(view, engineConfig)
+	// Seed the engine's txCount from the view so the TransactionIndex assigned
+	// to this tx reflects all txs already in the open view — mirrors rippled's
+	// OpenView::txCount() = baseTxCount_ + txs_.size(). Without this seed, a
+	// non-TxQ Submit path (openledger.go:402) hitting applyOneSingle twice in
+	// a row on the same view would assign TransactionIndex=0 to both txs.
+	engine.SetBaseTxCount(view.TxCount())
 	bp := tx.NewBlockProcessor(engine)
 	logger := cfg.Logger
 	if logger == nil {
