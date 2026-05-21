@@ -146,7 +146,7 @@ func (n *NegativeUNL) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (n *NegativeUNL) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*NegativeUNL)
 	if !ok || p == nil {
@@ -156,6 +156,26 @@ func (n *NegativeUNL) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedDeep(out, "DisabledValidators", p.DisabledValidators, n.DisabledValidators, p.present&negativeunlBitDisabledValidators, n.present&negativeunlBitDisabledValidators)
 	emitIfChangedString(out, "ValidatorToDisable", p.ValidatorToDisable, n.ValidatorToDisable, p.present&negativeunlBitValidatorToDisable, n.present&negativeunlBitValidatorToDisable)
 	emitIfChangedString(out, "ValidatorToReEnable", p.ValidatorToReEnable, n.ValidatorToReEnable, p.present&negativeunlBitValidatorToReEnable, n.present&negativeunlBitValidatorToReEnable)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (n *NegativeUNL) EmitChangeOrigFields(out map[string]any) {
+	if n.present&negativeunlBitFlags != 0 {
+		out["Flags"] = n.Flags
+	}
+	if n.present&negativeunlBitDisabledValidators != 0 {
+		out["DisabledValidators"] = n.DisabledValidators
+	}
+	if n.present&negativeunlBitValidatorToDisable != 0 {
+		out["ValidatorToDisable"] = n.ValidatorToDisable
+	}
+	if n.present&negativeunlBitValidatorToReEnable != 0 {
+		out["ValidatorToReEnable"] = n.ValidatorToReEnable
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

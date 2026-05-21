@@ -198,7 +198,7 @@ func (r *RippleState) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (r *RippleState) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*RippleState)
 	if !ok || p == nil {
@@ -214,6 +214,44 @@ func (r *RippleState) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "LowQualityOut", p.LowQualityOut, r.LowQualityOut, p.present&ripplestateBitLowQualityOut, r.present&ripplestateBitLowQualityOut)
 	emitIfChangedUint32(out, "HighQualityIn", p.HighQualityIn, r.HighQualityIn, p.present&ripplestateBitHighQualityIn, r.present&ripplestateBitHighQualityIn)
 	emitIfChangedUint32(out, "HighQualityOut", p.HighQualityOut, r.HighQualityOut, p.present&ripplestateBitHighQualityOut, r.present&ripplestateBitHighQualityOut)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (r *RippleState) EmitChangeOrigFields(out map[string]any) {
+	if r.present&ripplestateBitFlags != 0 {
+		out["Flags"] = r.Flags
+	}
+	if r.present&ripplestateBitBalance != 0 {
+		out["Balance"] = r.Balance
+	}
+	if r.present&ripplestateBitLowLimit != 0 {
+		out["LowLimit"] = r.LowLimit
+	}
+	if r.present&ripplestateBitHighLimit != 0 {
+		out["HighLimit"] = r.HighLimit
+	}
+	if r.present&ripplestateBitLowNode != 0 {
+		out["LowNode"] = r.LowNode
+	}
+	if r.present&ripplestateBitHighNode != 0 {
+		out["HighNode"] = r.HighNode
+	}
+	if r.present&ripplestateBitLowQualityIn != 0 {
+		out["LowQualityIn"] = r.LowQualityIn
+	}
+	if r.present&ripplestateBitLowQualityOut != 0 {
+		out["LowQualityOut"] = r.LowQualityOut
+	}
+	if r.present&ripplestateBitHighQualityIn != 0 {
+		out["HighQualityIn"] = r.HighQualityIn
+	}
+	if r.present&ripplestateBitHighQualityOut != 0 {
+		out["HighQualityOut"] = r.HighQualityOut
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

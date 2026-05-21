@@ -348,10 +348,20 @@ type DirInsertResult struct {
 // dirNodeMaxEntries is the maximum number of entries per directory page (matches rippled)
 const dirNodeMaxEntries = 32
 
-// dirInsert adds an item to a directory, creating the directory if needed.
+// DirInsert adds an item to a directory, creating the directory if needed.
 // Returns the page number where the item was inserted.
 // Follows rippled's dirAdd algorithm for multi-page directory support.
-func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, setupFunc func(*DirectoryNode)) (*DirInsertResult, error) {
+//
+// preserveOrder mirrors rippled's ApplyView::dirAppend (true, ApplyView.h:
+// 280-296 — book directories: append at end to preserve insertion order
+// across consume-oldest-first offer matching) vs ApplyView::dirInsert
+// (false, ApplyView.h:317-333 — owner/NFT/credential/etc directories:
+// keep sfIndexes sorted within a page). Callers must choose the value
+// matching the directory's semantic role; the previous implementation
+// inferred this from taker-field presence on the page, which would
+// silently flip on any future directory variant that set taker fields
+// without being a book.
+func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserveOrder bool, setupFunc func(*DirectoryNode)) (*DirInsertResult, error) {
 	result := &DirInsertResult{
 		DirKey: dirKey.Key,
 	}
@@ -361,13 +371,12 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, setupFun
 	if err != nil {
 		return nil, err
 	}
-	// Determine if this is a book directory based on setup function behavior
-	var isBookDir bool
-	testDir := &DirectoryNode{}
-	if setupFunc != nil {
-		setupFunc(testDir)
-		isBookDir = testDir.TakerPaysCurrency != [20]byte{} || testDir.TakerGetsCurrency != [20]byte{}
-	}
+	// preserveOrder implies a book directory (sfTakerPays/sfTakerGets
+	// fields). Use it as the SerializeDirectoryNode is-book hint so the
+	// page serializes with taker fields even when the setupFunc happens
+	// to set them all to zero (the same outcome as the previous taker-
+	// field heuristic, just driven by the explicit caller signal).
+	isBookDir := preserveOrder
 
 	if !exists {
 		// No root exists - create it with the item
@@ -427,30 +436,16 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, setupFun
 	if len(node.Indexes) < dirNodeMaxEntries {
 		// Has space - add item to current page
 		prevNode := *node
-		// rippled distinguishes book vs non-book at the *caller* via an
-		// explicit `preserveOrder` bool passed into ApplyView::dirAdd
-		// (ApplyView.cpp:38-91). goxrpl derives it here from the page's
-		// taker fields — book directory SLEs always carry TakerPays/Gets
-		// currency, and no other directory variant sets those fields.
-		// XRPL has no XRP/XRP books so at least one taker-currency side
-		// is always non-zero for a genuine book entry; the inversion is
-		// safe today but assumes no future directory variant sets the
-		// taker fields without being a book. If that assumption breaks,
-		// route an explicit preserveOrder flag through DirInsert callers
-		// to match rippled's surface.
-		nodeIsBookDir := node.TakerPaysCurrency != [20]byte{} || node.TakerGetsCurrency != [20]byte{}
-
 		// Reference: rippled ApplyView.cpp dirAdd() lines 68-91.
-		// Book directories (ltDIR_NODE with taker fields) preserve insertion
-		// order — offer matching consumes oldest-first within a quality level.
-		// All other directories (owner dirs, NFT offer dirs, permissioned
-		// domain dirs) keep their sfIndexes vector sorted within a page:
+		// Book directories preserve insertion order — offer matching
+		// consumes oldest-first within a quality level. All other
+		// directories keep their sfIndexes vector sorted within a page:
 		// sort the existing entries (in case a legacy page is unsorted),
-		// then std::lower_bound + insert the new key.
-		// Without this, goxrpl's directory page bytes diverge from rippled's
-		// after multiple inserts into the same page, producing different
-		// SLE serializations and consensus forks.
-		if nodeIsBookDir {
+		// then std::lower_bound + insert the new key. Without this,
+		// goxrpl's directory page bytes diverge from rippled's after
+		// multiple inserts into the same page, producing different SLE
+		// serializations and consensus forks.
+		if preserveOrder {
 			node.Indexes = append(node.Indexes, itemKey)
 		} else {
 			sortIndexes(node.Indexes)
@@ -470,7 +465,7 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, setupFun
 		result.NewState = node
 
 		// Serialize and update
-		data, err := SerializeDirectoryNode(node, nodeIsBookDir)
+		data, err := SerializeDirectoryNode(node, isBookDir)
 		if err != nil {
 			return nil, err
 		}
@@ -546,8 +541,7 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, setupFun
 	// Serialize and store all changes
 
 	// 1. Update current page (node) with new IndexNext
-	nodeIsBookDir := node.TakerPaysCurrency != [20]byte{} || node.TakerGetsCurrency != [20]byte{}
-	nodeData, err := SerializeDirectoryNode(node, nodeIsBookDir)
+	nodeData, err := SerializeDirectoryNode(node, isBookDir)
 	if err != nil {
 		return nil, err
 	}
@@ -557,8 +551,7 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, setupFun
 
 	// 2. Update root with new IndexPrevious (only if root != node)
 	if page != 0 {
-		rootIsBookDir := root.TakerPaysCurrency != [20]byte{} || root.TakerGetsCurrency != [20]byte{}
-		rootData, err := SerializeDirectoryNode(root, rootIsBookDir)
+		rootData, err := SerializeDirectoryNode(root, isBookDir)
 		if err != nil {
 			return nil, err
 		}
@@ -568,8 +561,7 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, setupFun
 	}
 
 	// 3. Insert new page
-	newPageIsBookDir := newPageNode.TakerPaysCurrency != [20]byte{} || newPageNode.TakerGetsCurrency != [20]byte{}
-	newPageData, err := SerializeDirectoryNode(newPageNode, newPageIsBookDir)
+	newPageData, err := SerializeDirectoryNode(newPageNode, isBookDir)
 	if err != nil {
 		return nil, err
 	}

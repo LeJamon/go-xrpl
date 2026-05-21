@@ -333,7 +333,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Owner directory: insert escrow into owner's directory
 	// Reference: rippled Escrow.cpp:550-558
 	ownerDirKey := keylet.OwnerDir(accountID)
-	_, err = state.DirInsert(ctx.View, ownerDirKey, escrowKey.Key, func(dir *state.DirectoryNode) {
+	_, err = state.DirInsert(ctx.View, ownerDirKey, escrowKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = accountID
 	})
 	if err != nil {
@@ -347,7 +347,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled Escrow.cpp:561-569
 	if destID != accountID {
 		destDirKey := keylet.OwnerDir(destID)
-		_, err = state.DirInsert(ctx.View, destDirKey, escrowKey.Key, func(dir *state.DirectoryNode) {
+		_, err = state.DirInsert(ctx.View, destDirKey, escrowKey.Key, false, func(dir *state.DirectoryNode) {
 			dir.Owner = destID
 		})
 		if err != nil {
@@ -363,7 +363,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		issuerID, issuerErr := state.DecodeAccountID(e.Amount.Issuer)
 		if issuerErr == nil && issuerID != accountID && issuerID != destID {
 			issuerDirKey := keylet.OwnerDir(issuerID)
-			_, err = state.DirInsert(ctx.View, issuerDirKey, escrowKey.Key, func(dir *state.DirectoryNode) {
+			_, err = state.DirInsert(ctx.View, issuerDirKey, escrowKey.Key, false, func(dir *state.DirectoryNode) {
 				dir.Owner = issuerID
 			})
 			if err != nil {

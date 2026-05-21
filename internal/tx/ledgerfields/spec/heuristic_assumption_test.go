@@ -12,23 +12,18 @@ import (
 // TestEmitFinalFieldsSubsetOfEmitPreviousFields pins the assumption the
 // empty-PreviousFields heuristic in internal/tx/apply_state_table.go relies
 // on: for every spec.Field whose Meta is MetaDefault, the generated
-// EmitFinalFields and EmitPreviousFields code paths in <entry>_gen.go MUST
-// both reference the field by name. The heuristic detects rippled's
-// STI_NOTPRESENT-in-prevs emission as "name in cur.FinalFields but not in
-// orig.FinalFields" and assumes that any such field would also have been
-// emplaced into rippled's prevs object (i.e. carries sMD_ChangeOrig).
+// emitAll, EmitPreviousFields, and EmitChangeOrigFields code paths in
+// <entry>_gen.go MUST all reference the field by name. The heuristic
+// detects rippled's STI_NOTPRESENT-in-prevs emission as "name in
+// cur.EmitChangeOrigFields but not in orig.EmitChangeOrigFields" and
+// assumes the field carries sMD_ChangeOrig.
 //
-// If a future spec entry declares a MetaDefault field that the codegen
-// drops from one of the two functions, the heuristic would either over-fire
-// (emitting an empty PreviousFields wrapper rippled does not emit) or
-// under-fire (missing the wrapper rippled does emit). Either way the
-// tx-tree leaf bytes diverge from rippled.
-//
-// MetaAlways fields (e.g. RootIndex) and MetaDeleteFinal fields (e.g.
-// PreviousTxnID, PreviousTxnLgrSeq) are excluded from the assertion —
-// rippled's prevs loop does not emit them either, and they are kept out
-// of the heuristic by the existing implementation. MetaNever fields are
-// skipped entirely.
+// MetaAlways fields (e.g. RootIndex) carry sMD_Always but NOT
+// sMD_ChangeOrig at the rippled level, so they MUST NOT appear in
+// EmitPreviousFields or EmitChangeOrigFields — even though they do appear
+// in emitAll/FinalFields. MetaDeleteFinal fields (e.g. PreviousTxnID,
+// PreviousTxnLgrSeq) are excluded from the assertion — rippled's prevs
+// loop does not emit them. MetaNever fields are skipped entirely.
 func TestEmitFinalFieldsSubsetOfEmitPreviousFields(t *testing.T) {
 	genDir, ok := findLedgerfieldsDir()
 	if !ok {
@@ -45,18 +40,38 @@ func TestEmitFinalFieldsSubsetOfEmitPreviousFields(t *testing.T) {
 
 			emitAllFields := extractEmitAllFields(string(data))
 			emitPrevFields := extractEmitPreviousFields(string(data))
+			emitChangeOrigFields := extractEmitChangeOrigFields(string(data))
 
 			for _, f := range entry.Fields {
-				if f.Meta != MetaDefault {
-					continue
-				}
-				if !emitAllFields[f.Name] {
-					t.Errorf("%s.emitAll does not write field %q — codegen drift breaks the empty-PreviousFields heuristic",
-						entry.Name, f.Name)
-				}
-				if !emitPrevFields[f.Name] {
-					t.Errorf("%s.EmitPreviousFields does not handle field %q — codegen drift breaks the empty-PreviousFields heuristic",
-						entry.Name, f.Name)
+				switch f.Meta {
+				case MetaDefault:
+					if !emitAllFields[f.Name] {
+						t.Errorf("%s.emitAll does not write field %q — codegen drift breaks the empty-PreviousFields heuristic",
+							entry.Name, f.Name)
+					}
+					if !emitPrevFields[f.Name] {
+						t.Errorf("%s.EmitPreviousFields does not handle field %q — codegen drift breaks the empty-PreviousFields heuristic",
+							entry.Name, f.Name)
+					}
+					if !emitChangeOrigFields[f.Name] {
+						t.Errorf("%s.EmitChangeOrigFields does not write field %q — heuristic would under-fire on cur-present/orig-absent",
+							entry.Name, f.Name)
+					}
+				case MetaAlways:
+					// sMD_Always lacks sMD_ChangeOrig at the rippled
+					// level. A MetaAlways field that transitions
+					// absent→present on a Modify must NOT trip the
+					// empty-PreviousFields heuristic, so it must be
+					// absent from both EmitPreviousFields and
+					// EmitChangeOrigFields.
+					if emitPrevFields[f.Name] {
+						t.Errorf("%s.EmitPreviousFields includes MetaAlways field %q — rippled's prevs loop excludes sMD_Always-only fields",
+							entry.Name, f.Name)
+					}
+					if emitChangeOrigFields[f.Name] {
+						t.Errorf("%s.EmitChangeOrigFields includes MetaAlways field %q — heuristic would spuriously emit empty PreviousFields on absent→present transitions",
+							entry.Name, f.Name)
+					}
 				}
 			}
 		})
@@ -87,6 +102,18 @@ func extractEmitPreviousFields(src string) map[string]bool {
 		return out
 	}
 	for _, m := range emitChangedLine.FindAllStringSubmatch(body, -1) {
+		out[m[1]] = true
+	}
+	return out
+}
+
+func extractEmitChangeOrigFields(src string) map[string]bool {
+	out := make(map[string]bool)
+	body, ok := functionBody(src, "EmitChangeOrigFields(out map[string]any)")
+	if !ok {
+		return out
+	}
+	for _, m := range emitAllLine.FindAllStringSubmatch(body, -1) {
 		out[m[1]] = true
 	}
 	return out

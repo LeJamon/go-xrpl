@@ -138,7 +138,7 @@ func (a *Amendments) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (a *Amendments) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*Amendments)
 	if !ok || p == nil {
@@ -147,6 +147,23 @@ func (a *Amendments) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "Flags", p.Flags, a.Flags, p.present&amendmentsBitFlags, a.present&amendmentsBitFlags)
 	emitIfChangedStringSlice(out, "Amendments", p.Amendments, a.Amendments, p.present&amendmentsBitAmendments, a.present&amendmentsBitAmendments)
 	emitIfChangedDeep(out, "Majorities", p.Majorities, a.Majorities, p.present&amendmentsBitMajorities, a.present&amendmentsBitMajorities)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (a *Amendments) EmitChangeOrigFields(out map[string]any) {
+	if a.present&amendmentsBitFlags != 0 {
+		out["Flags"] = a.Flags
+	}
+	if a.present&amendmentsBitAmendments != 0 {
+		out["Amendments"] = a.Amendments
+	}
+	if a.present&amendmentsBitMajorities != 0 {
+		out["Majorities"] = a.Majorities
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

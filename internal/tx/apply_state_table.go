@@ -760,23 +760,21 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 		// fires) while serializing zero inner bytes. The wire effect is
 		// an empty `PreviousFields: {}` (`E6 E1`).
 		//
-		// Goxrpl approximation: EmitFinalFields populates the cur and
-		// orig present-field sets at sMD_Always|sMD_ChangeNew scope
-		// (the emitAll helper) — PreviousTxnID/PreviousTxnLgrSeq are
-		// excluded. For every SLE field currently in use, sMD_ChangeNew
-		// presence implies sMD_ChangeOrig presence (all data fields
-		// declare sMD_Default = sMD_ChangeOrig|sMD_ChangeNew, and Flags
-		// declares sMD_Always|sMD_ChangeOrig). A hypothetical future
-		// field with sMD_ChangeNew but no sMD_ChangeOrig would trigger
-		// spurious empty-PreviousFields here; that case requires a
-		// generated per-SLE shouldMeta(sMD_ChangeOrig) helper. Only
-		// fires when no real PreviousFields diff exists — a non-empty
-		// PreviousFields already produces the wire wrapper.
+		// Goxrpl uses generated EmitChangeOrigFields to enumerate the
+		// MetaDefault (sMD_ChangeOrig-bearing) field set on each side.
+		// MetaAlways fields like RootIndex are excluded — they appear in
+		// FinalFields but lack sMD_ChangeOrig at the rippled level, so a
+		// future MetaAlways field that transitions absent→present on a
+		// Modify must not trip this heuristic. Only fires when no real
+		// PreviousFields diff exists — a non-empty PreviousFields already
+		// produces the wire wrapper.
 		if len(node.PreviousFields) == 0 {
-			origFinalProbe := make(map[string]any)
-			origEntry.EmitFinalFields(origFinalProbe)
-			for name := range node.FinalFields {
-				if _, hadInOrig := origFinalProbe[name]; !hadInOrig {
+			origChangeOrig := make(map[string]any)
+			origEntry.EmitChangeOrigFields(origChangeOrig)
+			curChangeOrig := make(map[string]any)
+			currEntry.EmitChangeOrigFields(curChangeOrig)
+			for name := range curChangeOrig {
+				if _, hadInOrig := origChangeOrig[name]; !hadInOrig {
 					node.EmitEmptyPreviousFields = true
 					break
 				}

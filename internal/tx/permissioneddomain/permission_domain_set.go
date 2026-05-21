@@ -204,7 +204,7 @@ func (p *PermissionedDomainSet) applyCreate(ctx *tx.ApplyContext, sorted []state
 
 	// Add to owner directory
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	result, err := state.DirInsert(ctx.View, ownerDirKey, domainKeylet.Key, nil)
+	result, err := state.DirInsert(ctx.View, ownerDirKey, domainKeylet.Key, false, nil)
 	if err != nil {
 		ctx.Log.Error("permissioned domain set: directory insert failed", "error", err)
 		return tx.TefINTERNAL

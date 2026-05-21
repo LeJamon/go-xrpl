@@ -1538,11 +1538,45 @@ func (e *Engine) getNetworkLedger() consensus.LedgerID {
 	// equivalent to rippled's two-layer design at the chain-selection
 	// boundary; behaviour differs only under partition where a peer's
 	// reported LCL would otherwise outvote validated history.
-	for i, h := range e.adaptor.PeerReportedLedgers() {
+	peerLCLs := e.adaptor.PeerReportedLedgers()
+	// Diagnostic for partition-recovery soaks: if no candidate hash has
+	// reached quorum, log every gate-drop so wedged rounds surface in
+	// post-mortem logs. When some candidate is already quorum-backed the
+	// round is making progress and per-tick drops are uninteresting.
+	quorumPresent := false
+	if e.validationTracker != nil {
+		q := e.adaptor.GetQuorum()
+		if q > 0 {
+			for h := range proposalHashes {
+				if e.validationTracker.GetTrustedSupport(h) >= q {
+					quorumPresent = true
+					break
+				}
+			}
+			if !quorumPresent {
+				for _, h := range peerLCLs {
+					if e.validationTracker.GetTrustedSupport(h) >= q {
+						quorumPresent = true
+						break
+					}
+				}
+			}
+		}
+	}
+	for i, h := range peerLCLs {
 		if _, already := proposalHashes[h]; already {
 			continue
 		}
 		if e.validationTracker != nil && e.validationTracker.GetTrustedSupport(h) == 0 {
+			if !quorumPresent {
+				slog.Info("peer-LCL gate drop — no trusted backing, no quorum elsewhere",
+					"event", "peer-lcl-gate-drop",
+					"hash", h,
+					"our_lcl", ourID,
+					"peer_lcl_count", len(peerLCLs),
+					"proposal_count", len(proposalHashes),
+				)
+			}
 			continue
 		}
 		var synthKey consensus.NodeID

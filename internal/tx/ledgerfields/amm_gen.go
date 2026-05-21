@@ -214,7 +214,7 @@ func (a *AMM) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (a *AMM) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*AMM)
 	if !ok || p == nil {
@@ -228,6 +228,38 @@ func (a *AMM) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedDeep(out, "Asset", p.Asset, a.Asset, p.present&ammBitAsset, a.present&ammBitAsset)
 	emitIfChangedDeep(out, "Asset2", p.Asset2, a.Asset2, p.present&ammBitAsset2, a.present&ammBitAsset2)
 	emitIfChangedString(out, "OwnerNode", p.OwnerNode, a.OwnerNode, p.present&ammBitOwnerNode, a.present&ammBitOwnerNode)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (a *AMM) EmitChangeOrigFields(out map[string]any) {
+	if a.present&ammBitAccount != 0 {
+		out["Account"] = a.Account
+	}
+	if a.present&ammBitTradingFee != 0 {
+		out["TradingFee"] = a.TradingFee
+	}
+	if a.present&ammBitVoteSlots != 0 {
+		out["VoteSlots"] = a.VoteSlots
+	}
+	if a.present&ammBitAuctionSlot != 0 {
+		out["AuctionSlot"] = a.AuctionSlot
+	}
+	if a.present&ammBitLPTokenBalance != 0 {
+		out["LPTokenBalance"] = a.LPTokenBalance
+	}
+	if a.present&ammBitAsset != 0 {
+		out["Asset"] = a.Asset
+	}
+	if a.present&ammBitAsset2 != 0 {
+		out["Asset2"] = a.Asset2
+	}
+	if a.present&ammBitOwnerNode != 0 {
+		out["OwnerNode"] = a.OwnerNode
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

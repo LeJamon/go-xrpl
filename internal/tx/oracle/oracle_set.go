@@ -605,7 +605,7 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 
 	// DirInsert into owner directory
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, oracleKey.Key, func(dir *state.DirectoryNode) {
+	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, oracleKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {

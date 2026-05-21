@@ -121,7 +121,7 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TefINTERNAL
 		}
 
-		_, err = state.DirInsert(ctx.View, ownerDirKey, ticketKey.Key, func(dir *state.DirectoryNode) {
+		_, err = state.DirInsert(ctx.View, ownerDirKey, ticketKey.Key, false, func(dir *state.DirectoryNode) {
 			dir.Owner = ctx.AccountID
 		})
 		if err != nil {

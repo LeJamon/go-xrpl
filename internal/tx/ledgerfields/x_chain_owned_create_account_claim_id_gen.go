@@ -176,7 +176,7 @@ func (x *XChainOwnedCreateAccountClaimID) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (x *XChainOwnedCreateAccountClaimID) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*XChainOwnedCreateAccountClaimID)
 	if !ok || p == nil {
@@ -187,6 +187,29 @@ func (x *XChainOwnedCreateAccountClaimID) EmitPreviousFields(prev Entry, out map
 	emitIfChangedString(out, "XChainAccountCreateCount", p.XChainAccountCreateCount, x.XChainAccountCreateCount, p.present&xchainownedcreateaccountclaimidBitXChainAccountCreateCount, x.present&xchainownedcreateaccountclaimidBitXChainAccountCreateCount)
 	emitIfChangedDeep(out, "XChainCreateAccountAttestations", p.XChainCreateAccountAttestations, x.XChainCreateAccountAttestations, p.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations, x.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations)
 	emitIfChangedString(out, "OwnerNode", p.OwnerNode, x.OwnerNode, p.present&xchainownedcreateaccountclaimidBitOwnerNode, x.present&xchainownedcreateaccountclaimidBitOwnerNode)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (x *XChainOwnedCreateAccountClaimID) EmitChangeOrigFields(out map[string]any) {
+	if x.present&xchainownedcreateaccountclaimidBitAccount != 0 {
+		out["Account"] = x.Account
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainBridge != 0 {
+		out["XChainBridge"] = x.XChainBridge
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainAccountCreateCount != 0 {
+		out["XChainAccountCreateCount"] = x.XChainAccountCreateCount
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations != 0 {
+		out["XChainCreateAccountAttestations"] = x.XChainCreateAccountAttestations
+	}
+	if x.present&xchainownedcreateaccountclaimidBitOwnerNode != 0 {
+		out["OwnerNode"] = x.OwnerNode
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

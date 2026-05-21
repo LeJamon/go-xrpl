@@ -201,7 +201,7 @@ func (x *XChainOwnedClaimID) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (x *XChainOwnedClaimID) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*XChainOwnedClaimID)
 	if !ok || p == nil {
@@ -214,6 +214,35 @@ func (x *XChainOwnedClaimID) EmitPreviousFields(prev Entry, out map[string]any) 
 	emitIfChangedDeep(out, "XChainClaimAttestations", p.XChainClaimAttestations, x.XChainClaimAttestations, p.present&xchainownedclaimidBitXChainClaimAttestations, x.present&xchainownedclaimidBitXChainClaimAttestations)
 	emitIfChangedAmount(out, "SignatureReward", p.SignatureReward, x.SignatureReward, p.present&xchainownedclaimidBitSignatureReward, x.present&xchainownedclaimidBitSignatureReward)
 	emitIfChangedString(out, "OwnerNode", p.OwnerNode, x.OwnerNode, p.present&xchainownedclaimidBitOwnerNode, x.present&xchainownedclaimidBitOwnerNode)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (x *XChainOwnedClaimID) EmitChangeOrigFields(out map[string]any) {
+	if x.present&xchainownedclaimidBitAccount != 0 {
+		out["Account"] = x.Account
+	}
+	if x.present&xchainownedclaimidBitXChainBridge != 0 {
+		out["XChainBridge"] = x.XChainBridge
+	}
+	if x.present&xchainownedclaimidBitXChainClaimID != 0 {
+		out["XChainClaimID"] = x.XChainClaimID
+	}
+	if x.present&xchainownedclaimidBitOtherChainSource != 0 {
+		out["OtherChainSource"] = x.OtherChainSource
+	}
+	if x.present&xchainownedclaimidBitXChainClaimAttestations != 0 {
+		out["XChainClaimAttestations"] = x.XChainClaimAttestations
+	}
+	if x.present&xchainownedclaimidBitSignatureReward != 0 {
+		out["SignatureReward"] = x.SignatureReward
+	}
+	if x.present&xchainownedclaimidBitOwnerNode != 0 {
+		out["OwnerNode"] = x.OwnerNode
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields
