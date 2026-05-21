@@ -17,8 +17,8 @@ import (
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 
-// Rippled autofill ceiling defaults — Tuning.h: a tx's fee is capped at
-// feeDefault * 10 / 1 unless the role is unlimited.
+// Autofill fee ceiling: feeDefault * mult / div. Mirrors rippled
+// Tuning.h:60-61.
 const (
 	defaultAutoFillFeeMultiplier = 10
 	defaultAutoFillFeeDivisor    = 1

@@ -271,13 +271,12 @@ type TransactionSubmitter interface {
 	StoreTransaction(txHash [32]byte, txData []byte) error
 	GetTransactionHistory(ctx context.Context, startIndex uint32) (*TxHistoryResult, error)
 
-	// GetAutofill returns the next Sequence (0 when hasTicketSequence) and
-	// the fee in drops a transaction must carry to bypass the TxQ and
-	// enter the current open ledger. Both values are read under one lock.
-	// The fee includes per-tx-type adjustments (multisign, AccountDelete,
-	// AMMCreate, LedgerStateFix); isUnlimited skips the rpcHIGH_FEE
-	// ceiling. Mirrors rippled Simulate.cpp getAutofillSequence and
-	// TransactionSign.cpp getCurrentNetworkFee combined.
+	// GetAutofill returns Sequence and Fee read under one lock so they
+	// observe a consistent ledger snapshot. Sequence is 0 when
+	// hasTicketSequence is true. Fee includes per-tx-type adjustments
+	// (multisign, AccountDelete, AMMCreate, LedgerStateFix). Mirrors
+	// rippled Simulate.cpp getAutofillSequence + TransactionSign.cpp
+	// getCurrentNetworkFee.
 	GetAutofill(account string, hasTicketSequence bool, txJSON []byte, isUnlimited bool) (sequence uint32, fee uint64, err error)
 }
 
@@ -475,21 +474,14 @@ type SubmitResult struct {
 	// ValidatedLedger is the highest validated ledger sequence
 	ValidatedLedger uint32
 
-	// Metadata holds simulation metadata when available, so the simulate
-	// handler can render it as either `meta` (JSON) or `meta_blob` (hex).
-	// Nil when the transaction produced no metadata.
+	// Metadata is nil when the transaction produced no metadata.
 	Metadata *SubmitMetadata
 }
 
-// SubmitMetadata carries simulation metadata in both JSON-ready and
-// binary-serialized forms so the simulate handler can choose between
-// `meta` and `meta_blob` based on the caller's `binary` flag.
+// SubmitMetadata carries simulation metadata in JSON and binary form
+// so the simulate handler can render either `meta` or `meta_blob`.
 type SubmitMetadata struct {
-	// JSON is a json.Marshal-able representation of the metadata
-	// (typically a map[string]any or json.RawMessage).
 	JSON any
-	// Blob is the binary-serialized metadata. The simulate handler
-	// hex-encodes it for the `meta_blob` field.
 	Blob []byte
 }
 
