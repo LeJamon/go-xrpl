@@ -112,7 +112,6 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 
 	// Reference: rippled autofillTx() — Simulate.cpp:71-156.
 
-	// Autofill SigningPubKey: if not present, set to "".
 	if _, ok := txJsonMap["SigningPubKey"]; !ok {
 		txJsonMap["SigningPubKey"] = ""
 	}
@@ -126,8 +125,6 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		return nil, rpcErr
 	}
 
-	// Autofill TxnSignature when missing. The non-empty signed-check is
-	// deferred to after GetAutofill (see comment above).
 	if _, ok := txJsonMap["TxnSignature"]; !ok {
 		txJsonMap["TxnSignature"] = ""
 	}

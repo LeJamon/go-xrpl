@@ -301,8 +301,7 @@ func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.Eng
 	return cfg.BaseFee
 }
 
-// mulDivU64 returns (a * b) / c with overflow detection. Returns ok=false
-// when the multiplication overflows uint64 or c is zero.
+// mulDivU64 returns (a * b) / c; ok=false on uint64 overflow or c == 0.
 func mulDivU64(a, b, c uint64) (uint64, bool) {
 	if c == 0 {
 		return 0, false
