@@ -242,6 +242,19 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	ledgerAdapter := rpc.NewLedgerServiceAdapter(ledgerService)
 	services := types.NewServiceContainer(ledgerAdapter)
 
+	// TxQ metrics are available in both standalone and consensus modes,
+	// so wire the server_info hook before the !standalone branch — #480.
+	ledgerSvcRef := ledgerService
+	services.TxQMetrics = func() types.TxQServerMetrics {
+		m := ledgerSvcRef.GetTxQMetrics()
+		return types.TxQServerMetrics{
+			JqTransOverflow:       m.JqTransOverflow,
+			ReferenceFeeLevel:     m.ReferenceFeeLevel,
+			MinProcessingFeeLevel: m.MinProcessingFeeLevel,
+			OpenLedgerFeeLevel:    m.OpenLedgerFeeLevel,
+		}
+	}
+
 	// Start consensus/networking if not in standalone mode
 	if !standalone {
 		var compErr error
@@ -326,19 +339,10 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		// the bootstrap-time field used to return — #451.
 		services.ValidationQuorum = consensusComponents.Adaptor.GetQuorum
 
-		// Expose live TxQ metrics, peer-disconnect counters, and the
-		// operating-mode state-accounting snapshot to server_info —
-		// replaces the hardcoded zeros from #480.
-		ledgerSvcRef := ledgerService
-		services.TxQMetrics = func() types.TxQServerMetrics {
-			m := ledgerSvcRef.GetTxQMetrics()
-			return types.TxQServerMetrics{
-				JqTransOverflow:       m.JqTransOverflow,
-				ReferenceFeeLevel:     m.ReferenceFeeLevel,
-				MinProcessingFeeLevel: m.MinProcessingFeeLevel,
-				OpenLedgerFeeLevel:    m.OpenLedgerFeeLevel,
-			}
-		}
+		// Expose peer-disconnect counters and the operating-mode
+		// state-accounting snapshot to server_info — replaces the
+		// hardcoded zeros from #480. (TxQMetrics is wired above the
+		// !standalone branch since it's available in either mode.)
 		overlayRef := consensusComponents.Overlay
 		services.PeerDisconnects = func() (uint64, uint64) {
 			return overlayRef.PeerDisconnects(), overlayRef.PeerDisconnectsResources()

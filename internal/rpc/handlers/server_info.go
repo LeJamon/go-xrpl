@@ -14,8 +14,8 @@ import (
 )
 
 // loadBase is the fee-tracker reference level. Mirrors rippled's
-// LoadFeeTrack default at LoadFeeTrack.h — every load_factor_* field
-// is expressed as a multiple of this base.
+// LoadFeeTrack::lftNormalFee at LoadFeeTrack.h:141-142 — every
+// load_factor_* field is expressed as a multiple of this base.
 const loadBase uint64 = 256
 
 // clipToUint32 mirrors rippled's trunc32 / FeeLevel::jsonClipped at

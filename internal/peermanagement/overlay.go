@@ -330,7 +330,8 @@ type Overlay struct {
 
 	// peerDisconnects counts every peer torn down for any reason.
 	// Mirrors rippled OverlayImpl::peerDisconnects_ surfaced via
-	// server_info as peer_disconnects (PeerImp::~PeerImp increments).
+	// server_info as peer_disconnects (PeerImp::close increments at
+	// PeerImp.cpp:587).
 	peerDisconnects atomic.Uint64
 
 	// Network
