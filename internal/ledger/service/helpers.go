@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
@@ -97,13 +98,24 @@ func formatHash(hash [32]byte) string {
 
 // sortBookOffersByQuality sorts book offers by quality (best first)
 func sortBookOffersByQuality(offers []BookOffer) {
-	// Simple bubble sort - could use sort.Slice for better performance
+	sortBookOffersByQualityWithRaw(offers, nil)
+}
+
+// sortBookOffersByQualityWithRaw sorts offers by quality (best first) while
+// keeping the parallel raw slice (if non-nil) in lockstep so callers can
+// post-process per-offer source data in the same order. Passing a raw
+// slice with len != len(offers) is a programming error.
+func sortBookOffersByQualityWithRaw(offers []BookOffer, raw []*state.LedgerOffer) {
+	hasRaw := raw != nil
 	for i := 0; i < len(offers)-1; i++ {
 		for j := i + 1; j < len(offers); j++ {
 			qi, _ := strconv.ParseFloat(offers[i].Quality, 64)
 			qj, _ := strconv.ParseFloat(offers[j].Quality, 64)
 			if qj < qi { // Lower quality is better (cheaper)
 				offers[i], offers[j] = offers[j], offers[i]
+				if hasRaw {
+					raw[i], raw[j] = raw[j], raw[i]
+				}
 			}
 		}
 	}
