@@ -68,6 +68,7 @@ func (m *mockLedgerServiceServerInfo) GetServerInfo() types.LedgerServerInfo {
 		OpenLedgerSeq:            m.currentLedgerIndex,
 		ClosedLedgerSeq:          m.closedLedgerIndex,
 		ClosedLedgerCloseTime:    m.serverInfo.ClosedLedgerCloseTime,
+		HaveValidated:            m.validatedLedgerIndex > 0,
 		ValidatedLedgerSeq:       m.validatedLedgerIndex,
 		ValidatedLedgerHash:      m.serverInfo.ValidatedLedgerHash,
 		ValidatedLedgerCloseTime: m.serverInfo.ValidatedLedgerCloseTime,
@@ -1238,7 +1239,11 @@ func TestServerInfo_HumanMode_LoadFactorFeeEscalation_NonAdminGate(t *testing.T)
 // closed_ledger object rather than emitted as 0.
 func TestServerInfo_ClosedLedgerAge_OmittedOnFutureCloseTime(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	mock.serverInfo.ClosedLedgerSeq = 7
+	// Force the closed-ledger branch by zeroing the validated index
+	// (drives HaveValidated=false in the mock); rippled emits exactly
+	// one of validated_ledger / closed_ledger.
+	mock.validatedLedgerIndex = 0
+	mock.closedLedgerIndex = 7
 	// 1 hour in the future
 	mock.serverInfo.ClosedLedgerCloseTime = time.Now().Unix() - protocol.RippleEpochUnix + 3600
 
@@ -1260,4 +1265,216 @@ func TestServerInfo_ClosedLedgerAge_OmittedOnFutureCloseTime(t *testing.T) {
 	closed := info["closed_ledger"].(map[string]interface{})
 	_, hasAge := closed["age"]
 	assert.False(t, hasAge, "closed_ledger.age must be omitted when close_time is in the future")
+}
+
+// TestServerInfo_SingleLedgerEmit pins rippled NetworkOPs.cpp:2915-2975:
+// exactly one of validated_ledger / closed_ledger is emitted, sourced
+// from the validated ledger when haveValidated() and otherwise from the
+// closed ledger. Suppressed entirely when neither is available.
+func TestServerInfo_SingleLedgerEmit(t *testing.T) {
+	method := &handlers.ServerInfoMethod{}
+	newCtx := func(svc *types.ServiceContainer) *types.RpcContext {
+		return &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   svc,
+		}
+	}
+	dispatch := func(ctx *types.RpcContext) map[string]interface{} {
+		result, rpcErr := method.Handle(ctx, nil)
+		require.Nil(t, rpcErr)
+		raw, _ := json.Marshal(result)
+		var resp map[string]interface{}
+		require.NoError(t, json.Unmarshal(raw, &resp))
+		return resp["info"].(map[string]interface{})
+	}
+
+	t.Run("validated present → only validated_ledger", func(t *testing.T) {
+		mock := newMockLedgerServiceServerInfo()
+		mock.validatedLedgerIndex = 42
+		mock.closedLedgerIndex = 43
+		info := dispatch(newCtx(servicesForServerInfo(mock)))
+		assert.Contains(t, info, "validated_ledger")
+		assert.NotContains(t, info, "closed_ledger")
+	})
+
+	t.Run("validated absent → only closed_ledger", func(t *testing.T) {
+		mock := newMockLedgerServiceServerInfo()
+		mock.validatedLedgerIndex = 0
+		mock.closedLedgerIndex = 7
+		info := dispatch(newCtx(servicesForServerInfo(mock)))
+		assert.NotContains(t, info, "validated_ledger")
+		assert.Contains(t, info, "closed_ledger")
+	})
+
+	t.Run("neither present → neither emitted", func(t *testing.T) {
+		mock := newMockLedgerServiceServerInfo()
+		mock.validatedLedgerIndex = 0
+		mock.closedLedgerIndex = 0
+		info := dispatch(newCtx(servicesForServerInfo(mock)))
+		assert.NotContains(t, info, "validated_ledger")
+		assert.NotContains(t, info, "closed_ledger")
+	})
+}
+
+// TestServerInfo_HumanMode_LoadFactorServer pins rippled
+// NetworkOPs.cpp:2883-2885: in human mode, load_factor_server is
+// emitted only when it differs from the overall load_factor. With no
+// LoadFeeTrack the server-side factor is loadBase, so the field fires
+// whenever fee escalation drives load_factor above 1.0.
+func TestServerInfo_HumanMode_LoadFactorServer(t *testing.T) {
+	method := &handlers.ServerInfoMethod{}
+
+	t.Run("escalation > loadBase → field present", func(t *testing.T) {
+		mock := newMockLedgerServiceServerInfo()
+		services := servicesForServerInfo(mock)
+		services.TxQMetrics = func() types.TxQServerMetrics {
+			return types.TxQServerMetrics{
+				ReferenceFeeLevel:  256,
+				OpenLedgerFeeLevel: 1024,
+			}
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+		result, rpcErr := method.Handle(ctx, nil)
+		require.Nil(t, rpcErr)
+		raw, _ := json.Marshal(result)
+		var resp map[string]interface{}
+		require.NoError(t, json.Unmarshal(raw, &resp))
+		info := resp["info"].(map[string]interface{})
+		v, ok := info["load_factor_server"]
+		require.True(t, ok, "load_factor_server must be emitted when escalation > loadBase")
+		assert.InDelta(t, 1.0, v.(float64), 0.0001)
+	})
+
+	t.Run("escalation == loadBase → field absent", func(t *testing.T) {
+		mock := newMockLedgerServiceServerInfo()
+		services := servicesForServerInfo(mock)
+		// No TxQMetrics → escalation falls back to loadBase.
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+		result, rpcErr := method.Handle(ctx, nil)
+		require.Nil(t, rpcErr)
+		raw, _ := json.Marshal(result)
+		var resp map[string]interface{}
+		require.NoError(t, json.Unmarshal(raw, &resp))
+		info := resp["info"].(map[string]interface{})
+		_, present := info["load_factor_server"]
+		assert.False(t, present, "load_factor_server must be omitted when loadFactorServer == loadFactor")
+	})
+}
+
+// TestServerInfo_HumanMode_LoadFactorLocalNetCluster_AdminGate pins
+// rippled NetworkOPs.cpp:2887-2901: admin-only emission, each field
+// gated on its fee != loadBase. Non-admin callers must never see them
+// regardless of fee divergence.
+func TestServerInfo_HumanMode_LoadFactorLocalNetCluster_AdminGate(t *testing.T) {
+	method := &handlers.ServerInfoMethod{}
+	feesHook := func() types.LoadFactorFees {
+		return types.LoadFactorFees{Local: 512, Net: 256, Cluster: 768}
+	}
+	build := func(admin bool, withHook bool) map[string]interface{} {
+		mock := newMockLedgerServiceServerInfo()
+		services := servicesForServerInfo(mock)
+		if withHook {
+			services.LoadFactorFees = feesHook
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+			IsAdmin:    admin,
+		}
+		result, rpcErr := method.Handle(ctx, nil)
+		require.Nil(t, rpcErr)
+		raw, _ := json.Marshal(result)
+		var resp map[string]interface{}
+		require.NoError(t, json.Unmarshal(raw, &resp))
+		return resp["info"].(map[string]interface{})
+	}
+
+	t.Run("admin + hook → diverging fields emitted, matching ones suppressed", func(t *testing.T) {
+		info := build(true, true)
+		v, ok := info["load_factor_local"].(float64)
+		require.True(t, ok)
+		assert.InDelta(t, 2.0, v, 0.0001)
+		_, hasNet := info["load_factor_net"] // Net == loadBase, must be absent.
+		assert.False(t, hasNet)
+		v, ok = info["load_factor_cluster"].(float64)
+		require.True(t, ok)
+		assert.InDelta(t, 3.0, v, 0.0001)
+	})
+
+	t.Run("non-admin + hook → all three suppressed", func(t *testing.T) {
+		info := build(false, true)
+		for _, k := range []string{"load_factor_local", "load_factor_net", "load_factor_cluster"} {
+			_, present := info[k]
+			assert.Falsef(t, present, "%s must be admin-only", k)
+		}
+	})
+
+	t.Run("admin without hook → all three suppressed", func(t *testing.T) {
+		info := build(true, false)
+		for _, k := range []string{"load_factor_local", "load_factor_net", "load_factor_cluster"} {
+			_, present := info[k]
+			assert.Falsef(t, present, "%s must be absent when hook is nil", k)
+		}
+	})
+}
+
+// TestServerInfo_CloseTimeOffset_Threshold pins rippled
+// NetworkOPs.cpp:2946-2949: close_time_offset is surfaced on the
+// ledger object only when |offset| reaches a full minute.
+func TestServerInfo_CloseTimeOffset_Threshold(t *testing.T) {
+	method := &handlers.ServerInfoMethod{}
+	cases := []struct {
+		name      string
+		offset    time.Duration
+		wantEmit  bool
+		wantValue int32
+	}{
+		{"below threshold", 59 * time.Second, false, 0},
+		{"at threshold positive", 60 * time.Second, true, 60},
+		{"at threshold negative", -60 * time.Second, true, -60},
+		{"large negative", -125 * time.Second, true, -125},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newMockLedgerServiceServerInfo()
+			services := servicesForServerInfo(mock)
+			offset := tc.offset
+			services.CloseTimeOffset = func() time.Duration { return offset }
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion1,
+				Services:   services,
+			}
+			result, rpcErr := method.Handle(ctx, nil)
+			require.Nil(t, rpcErr)
+			raw, _ := json.Marshal(result)
+			var resp map[string]interface{}
+			require.NoError(t, json.Unmarshal(raw, &resp))
+			info := resp["info"].(map[string]interface{})
+			validated, ok := info["validated_ledger"].(map[string]interface{})
+			require.True(t, ok, "validated_ledger must be present for the offset assertion")
+			v, present := validated["close_time_offset"]
+			if !tc.wantEmit {
+				assert.False(t, present, "close_time_offset must be omitted below threshold")
+				return
+			}
+			require.True(t, present, "close_time_offset must be emitted at/above threshold")
+			assert.EqualValues(t, tc.wantValue, v)
+		})
+	}
 }

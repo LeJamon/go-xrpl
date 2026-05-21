@@ -1342,6 +1342,13 @@ func (a *Adaptor) Now() time.Time {
 	return time.Now().Add(time.Duration(a.closeOffsetNs.Load()))
 }
 
+// CloseOffset returns the current consensus-derived close-time offset.
+// Mirrors rippled TimeKeeper::closeOffset(); surfaced via server_info
+// as close_time_offset when |offset| >= 60s (NetworkOPs.cpp:2946-2949).
+func (a *Adaptor) CloseOffset() time.Duration {
+	return time.Duration(a.closeOffsetNs.Load())
+}
+
 func (a *Adaptor) CloseTimeResolution() time.Duration {
 	l := a.ledgerService.GetClosedLedger()
 	if l != nil {

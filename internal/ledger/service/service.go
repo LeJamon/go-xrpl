@@ -1393,6 +1393,7 @@ func (s *Service) GetServerInfo() ServerInfo {
 	}
 
 	if s.validatedLedger != nil {
+		info.HaveValidated = true
 		info.ValidatedLedgerSeq = s.validatedLedger.Sequence()
 		info.ValidatedLedgerHash = s.validatedLedger.Hash()
 		info.ValidatedLedgerCloseTime = rippleEpochSeconds(s.validatedLedger.CloseTime())
@@ -1428,6 +1429,7 @@ type ServerInfo struct {
 	ClosedLedgerSeq          uint32
 	ClosedLedgerHash         [32]byte
 	ClosedLedgerCloseTime    int64 // Ripple-epoch seconds
+	HaveValidated            bool  // mirrors rippled LedgerMaster::haveValidated()
 	ValidatedLedgerSeq       uint32
 	ValidatedLedgerHash      [32]byte
 	ValidatedLedgerCloseTime int64 // Ripple-epoch seconds

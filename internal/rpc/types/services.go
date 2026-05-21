@@ -225,6 +225,18 @@ type ServiceContainer struct {
 	// plus the current-state and initial-sync durations. The Modes
 	// map is empty until consensus is wired.
 	StateAccounting func() StateAccountingSnapshot
+
+	// CloseTimeOffset returns the consensus-derived close-time offset
+	// from the adaptor. Surfaced as close_time_offset on the ledger
+	// object in human mode when |offset| >= 60s
+	// (NetworkOPs.cpp:2946-2949). Nil before consensus is wired.
+	CloseTimeOffset func() time.Duration
+
+	// LoadFactorFees returns the LoadFeeTrack local/net/cluster fees
+	// driving the admin-only human-mode load_factor_local/net/cluster
+	// emits (NetworkOPs.cpp:2887-2901). Nil until a LoadFeeTrack
+	// subsystem lands — handler suppresses the fields when nil.
+	LoadFactorFees func() LoadFactorFees
 }
 
 // LedgerNavigator provides ledger index navigation and mode queries.
@@ -359,17 +371,31 @@ type LedgerReader interface {
 
 // LedgerServerInfo contains server status information from the ledger service
 type LedgerServerInfo struct {
-	Standalone               bool
-	ServerState              string
-	OpenLedgerSeq            uint32
-	ClosedLedgerSeq          uint32
-	ClosedLedgerHash         [32]byte
-	ClosedLedgerCloseTime    int64 // Ripple-epoch seconds; 0 when unknown.
+	Standalone            bool
+	ServerState           string
+	OpenLedgerSeq         uint32
+	ClosedLedgerSeq       uint32
+	ClosedLedgerHash      [32]byte
+	ClosedLedgerCloseTime int64 // Ripple-epoch seconds; 0 when unknown.
+	// HaveValidated is true when the service has a validated ledger.
+	// Mirrors rippled LedgerMaster::haveValidated() — drives the
+	// validated_ledger vs closed_ledger emit gate at NetworkOPs.cpp:2918.
+	HaveValidated            bool
 	ValidatedLedgerSeq       uint32
 	ValidatedLedgerHash      [32]byte
 	ValidatedLedgerCloseTime int64 // Ripple-epoch seconds; 0 when unknown.
 	CompleteLedgers          string
 	NetworkID                uint32
+}
+
+// LoadFactorFees carries rippled's per-source LoadFeeTrack fees used
+// for the admin-only human-mode load_factor_local/net/cluster emits
+// at NetworkOPs.cpp:2887-2901. Each field is a fee level on the same
+// scale as loadBase; values equal to loadBase suppress emission.
+type LoadFactorFees struct {
+	Local   uint32
+	Net     uint32
+	Cluster uint32
 }
 
 // TxQServerMetrics is the subset of TxQ metrics surfaced by server_info.

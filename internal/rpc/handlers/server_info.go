@@ -37,6 +37,11 @@ func clipToUint32(v uint64) uint32 {
 // stall durations (minutes / hours / days) are still reported.
 const validatedLedgerAgeThreshold = 1_000_000 * time.Second
 
+// closeTimeOffsetThreshold mirrors rippled NetworkOPs.cpp:2946-2949:
+// close_time_offset is only surfaced when |offset| reaches a full
+// minute, suppressing transient sub-minute drift.
+const closeTimeOffsetThreshold = 60 * time.Second
+
 // stateAccountingModes is the fixed set of operating-mode keys
 // rippled emits, in OperatingMode index order to mirror
 // NetworkOPs.cpp:871-872 + 4837-4845. JSON object keys are unordered
@@ -194,6 +199,29 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 	}
 	if human {
 		info["load_factor"] = float64(loadFactor) / float64(loadBase)
+		// Mirror rippled NetworkOPs.cpp:2883-2885: emit load_factor_server
+		// when it diverges from the overall load_factor. With no
+		// LoadFeeTrack subsystem loadFactorServer == loadBase, so this
+		// fires whenever fee escalation drives load_factor above 1.0.
+		if loadBase != loadFactor {
+			info["load_factor_server"] = float64(loadBase) / float64(loadBase)
+		}
+		// Mirror rippled NetworkOPs.cpp:2887-2901: admin-only emission
+		// of load_factor_{local,net,cluster}, each gated on the fee
+		// differing from loadBase. The LoadFactorFees hook is nil until
+		// a LoadFeeTrack subsystem lands, suppressing all three.
+		if ctx.IsAdmin && services != nil && services.LoadFactorFees != nil {
+			fees := services.LoadFactorFees()
+			if uint64(fees.Local) != loadBase {
+				info["load_factor_local"] = float64(fees.Local) / float64(loadBase)
+			}
+			if uint64(fees.Net) != loadBase {
+				info["load_factor_net"] = float64(fees.Net) / float64(loadBase)
+			}
+			if uint64(fees.Cluster) != loadBase {
+				info["load_factor_cluster"] = float64(fees.Cluster) / float64(loadBase)
+			}
+		}
 		// Mirror rippled NetworkOPs.cpp:2902-2912: in human mode the
 		// escalation field is gated on
 		//   openLedgerFeeLevel != referenceFeeLevel
@@ -222,59 +250,77 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 		info["load_factor_fee_reference"] = clipToUint32(feeReference)
 	}
 
-	now := time.Now()
-	validatedAge, _ := ledgerAge(serverInfo.ValidatedLedgerCloseTime, now)
-	closedAge, closedAgeOK := ledgerAge(serverInfo.ClosedLedgerCloseTime, now)
+	// Mirror rippled NetworkOPs.cpp:2915-2975: emit exactly one of
+	// validated_ledger / closed_ledger, sourced from the validated
+	// ledger when haveValidated(), otherwise from the closed ledger.
+	// Suppress both when neither is available.
+	var (
+		ledgerSeq       uint32
+		ledgerHash      string
+		ledgerCloseTime int64
+		ledgerKey       string
+		haveLedger      bool
+	)
+	switch {
+	case serverInfo.HaveValidated:
+		ledgerSeq = serverInfo.ValidatedLedgerSeq
+		ledgerHash = validatedLedgerHash
+		ledgerCloseTime = serverInfo.ValidatedLedgerCloseTime
+		ledgerKey = "validated_ledger"
+		haveLedger = true
+	case serverInfo.ClosedLedgerSeq > 0:
+		ledgerSeq = serverInfo.ClosedLedgerSeq
+		ledgerHash = closedLedgerHash
+		ledgerCloseTime = serverInfo.ClosedLedgerCloseTime
+		ledgerKey = "closed_ledger"
+		haveLedger = true
+	}
 
-	if human {
-		baseFeeXRP := float64(baseFee) / 1_000_000.0
-		reserveBaseXRP := float64(reserveBase) / 1_000_000.0
-		reserveIncXRP := float64(reserveIncrement) / 1_000_000.0
+	if haveLedger {
+		now := time.Now()
+		age, ageOK := ledgerAge(ledgerCloseTime, now)
+		if human {
+			baseFeeXRP := float64(baseFee) / 1_000_000.0
+			reserveBaseXRP := float64(reserveBase) / 1_000_000.0
+			reserveIncXRP := float64(reserveIncrement) / 1_000_000.0
 
-		// validated_ledger always carries an `age` in rippled (the
-		// `haveValidated() == true` branch at NetworkOPs.cpp:2952-2956
-		// unconditionally writes it, possibly as 0).
-		info["validated_ledger"] = map[string]interface{}{
-			"age":              validatedAge,
-			"base_fee_xrp":     baseFeeXRP,
-			"hash":             validatedLedgerHash,
-			"reserve_base_xrp": reserveBaseXRP,
-			"reserve_inc_xrp":  reserveIncXRP,
-			"seq":              serverInfo.ValidatedLedgerSeq,
-		}
-
-		// closed_ledger in human mode. Rippled omits `age` when the
-		// close-time is in the future (clock skew, no valid answer)
-		// — NetworkOPs.cpp:2962-2969.
-		closedLedger := map[string]interface{}{
-			"base_fee_xrp":     baseFeeXRP,
-			"hash":             closedLedgerHash,
-			"reserve_base_xrp": reserveBaseXRP,
-			"reserve_inc_xrp":  reserveIncXRP,
-			"seq":              serverInfo.ClosedLedgerSeq,
-		}
-		if closedAgeOK {
-			closedLedger["age"] = closedAge
-		}
-		info["closed_ledger"] = closedLedger
-	} else {
-		info["validated_ledger"] = map[string]interface{}{
-			"base_fee":     baseFee,
-			"close_time":   serverInfo.ValidatedLedgerCloseTime,
-			"hash":         validatedLedgerHash,
-			"reserve_base": reserveBase,
-			"reserve_inc":  reserveIncrement,
-			"seq":          serverInfo.ValidatedLedgerSeq,
-		}
-
-		// closed_ledger in machine mode
-		info["closed_ledger"] = map[string]interface{}{
-			"base_fee":     baseFee,
-			"close_time":   serverInfo.ClosedLedgerCloseTime,
-			"hash":         closedLedgerHash,
-			"reserve_base": reserveBase,
-			"reserve_inc":  reserveIncrement,
-			"seq":          serverInfo.ClosedLedgerSeq,
+			ledger := map[string]interface{}{
+				"base_fee_xrp":     baseFeeXRP,
+				"hash":             ledgerHash,
+				"reserve_base_xrp": reserveBaseXRP,
+				"reserve_inc_xrp":  reserveIncXRP,
+				"seq":              ledgerSeq,
+			}
+			// rippled NetworkOPs.cpp:2946-2949: close_time_offset is
+			// emitted on the ledger object when |offset| >= 60s.
+			if services != nil && services.CloseTimeOffset != nil {
+				offset := services.CloseTimeOffset()
+				if offset < 0 {
+					if -offset >= closeTimeOffsetThreshold {
+						ledger["close_time_offset"] = int32(offset / time.Second)
+					}
+				} else if offset >= closeTimeOffsetThreshold {
+					ledger["close_time_offset"] = int32(offset / time.Second)
+				}
+			}
+			// Age handling differs by branch (NetworkOPs.cpp:2952-2969):
+			// validated → always emit (0 when unknown / too old);
+			// closed-only → omit when close-time is in the future.
+			if serverInfo.HaveValidated {
+				ledger["age"] = age
+			} else if ageOK {
+				ledger["age"] = age
+			}
+			info[ledgerKey] = ledger
+		} else {
+			info[ledgerKey] = map[string]interface{}{
+				"base_fee":     baseFee,
+				"close_time":   ledgerCloseTime,
+				"hash":         ledgerHash,
+				"reserve_base": reserveBase,
+				"reserve_inc":  reserveIncrement,
+				"seq":          ledgerSeq,
+			}
 		}
 	}
 

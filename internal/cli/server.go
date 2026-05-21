@@ -366,6 +366,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 				InitialSyncUs:     snap.InitialSyncUs,
 			}
 		}
+		services.CloseTimeOffset = acctRef.CloseOffset
 		// Expose the validator-manifest cache to the `manifest` RPC.
 		// The cache is shared — the router writes inbound manifests,
 		// the engine reads for ephemeral→master translation, and this
