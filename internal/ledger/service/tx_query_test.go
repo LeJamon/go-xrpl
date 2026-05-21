@@ -80,7 +80,9 @@ func TestComputeBaseFeeForTx_Multisign(t *testing.T) {
 // TestComputeBaseFeeForTx_MaxMultiSigners verifies the rippled-faithful
 // fallback to baseFee when the supplied Signers count exceeds
 // STTx::maxMultiSigners (rippled TransactionSign.cpp:795-796 +
-// STTx.h:57-63): 8 pre-ExpandedSignerList, 32 after.
+// STTx.h:55-63): 8 when ExpandedSignerList is supplied AND disabled,
+// 32 otherwise (including when Rules is nil — rippled's permissive
+// default).
 func TestComputeBaseFeeForTx_MaxMultiSigners(t *testing.T) {
 	rulesDisabled := amendment.NewRules(nil)
 	rulesEnabled := amendment.NewRules([][32]byte{amendment.FeatureExpandedSignerList})
@@ -89,8 +91,10 @@ func TestComputeBaseFeeForTx_MaxMultiSigners(t *testing.T) {
 		assert.Equal(t, 8, maxMultiSigners(rulesDisabled))
 	})
 
-	t.Run("maxMultiSigners returns 8 when Rules is nil", func(t *testing.T) {
-		assert.Equal(t, 8, maxMultiSigners(nil))
+	t.Run("maxMultiSigners returns 32 when Rules is nil", func(t *testing.T) {
+		// rippled STTx.h:55-56: "if rules are not supplied then the
+		// largest possible value is returned".
+		assert.Equal(t, 32, maxMultiSigners(nil))
 	})
 
 	t.Run("maxMultiSigners returns 32 when ExpandedSignerList is enabled", func(t *testing.T) {
@@ -104,6 +108,17 @@ func TestComputeBaseFeeForTx_MaxMultiSigners(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, uint64(10), computeBaseFeeForTx(nil, parsed, cfg),
 			"9 signers > maxMultiSigners(8) → reference_fee fallback per rippled TransactionSign.cpp:795")
+	})
+
+	t.Run("9 signers with nil Rules charges multisign fee", func(t *testing.T) {
+		// Permissive default: nil Rules ⇒ cap=32, so 9 signers still
+		// charge the full multisign fee (mirrors rippled STTx.h:55-56).
+		cfg := tx.EngineConfig{BaseFee: 10, Rules: nil}
+
+		parsed, err := tx.ParseJSON([]byte(buildSignersTxJSON(9)))
+		require.NoError(t, err)
+		assert.Equal(t, uint64(100), computeBaseFeeForTx(nil, parsed, cfg),
+			"nil Rules ⇒ cap=32 ⇒ baseFee * (1 + 9) = 100")
 	})
 
 	t.Run("8 signers with ExpandedSignerList disabled charges multisign fee", func(t *testing.T) {

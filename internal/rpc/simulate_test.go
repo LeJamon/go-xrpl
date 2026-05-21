@@ -811,11 +811,15 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 			"signed-check fires before Account format check — rippled Simulate.cpp:129-138 vs 50-54")
 	})
 
-	t.Run("Sequence supplied + bad Account skips Account check", func(t *testing.T) {
-		// rippled only validates the Account string inside
-		// getAutofillSequence (Simulate.cpp:43-55), which is only reached
-		// when Sequence is absent. When the caller supplies Sequence, the
-		// handler must not reject on Account format.
+	t.Run("Sequence supplied + bad Account surfaces invalid_field, not srcActMalformed", func(t *testing.T) {
+		// rippled's autofill skips the Account check inside
+		// getAutofillSequence (Simulate.cpp:43-55) when Sequence is
+		// supplied, but STParsedJSONObject at Simulate.cpp:328-330 then
+		// validates the AccountID and surfaces invalid_field on
+		// failure — distinct from the rpcSRC_ACT_MALFORMED that the
+		// Sequence-absent path returns. Go mirrors this via a
+		// post-autofill format check that fires only in the
+		// Sequence-supplied case.
 		mock := newMockLedgerServiceSimulate()
 
 		params := map[string]interface{}{
@@ -829,7 +833,10 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		require.NoError(t, err)
 
 		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
-		require.Nil(t, rpcErr, "Sequence supplied — handler must not run the Account check")
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code,
+			"bad Account on the Sequence-supplied path surfaces invalid_field, not srcActMalformed")
+		assert.Equal(t, "Invalid field 'tx.Account'.", rpcErr.Message)
 		assert.Equal(t, 0, mock.seqAutofillCallCount,
 			"GetAutofillSequence must be skipped when Sequence is supplied")
 	})

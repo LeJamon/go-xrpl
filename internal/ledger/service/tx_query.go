@@ -314,9 +314,11 @@ func (s *Service) GetAutofillSequence(account string, hasTicketSequence bool) (u
 // one extra baseFee per entry in sfSigners regardless of SigningPubKey
 // (rippled Transactor.cpp:229-245).
 //
-// Signer counts above STTx::maxMultiSigners (8 pre-ExpandedSignerList, 32
-// after) fall back to baseFee, mirroring rippled's reference_fee fallback
-// at TransactionSign.cpp:795-796.
+// Signer counts above STTx::maxMultiSigners fall back to baseFee,
+// mirroring rippled's reference_fee fallback at
+// TransactionSign.cpp:795-796. The cap is 32 by default and 8 only when
+// cfg.Rules is supplied AND ExpandedSignerList is disabled — see
+// maxMultiSigners and rippled STTx.h:55-63.
 func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.EngineConfig) uint64 {
 	if parsedTx == nil {
 		return cfg.BaseFee
@@ -334,11 +336,14 @@ func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.Eng
 	return tx.CalculateMultiSigFee(cfg.BaseFee, signerCount)
 }
 
-// maxMultiSigners mirrors rippled STTx::maxMultiSigners (STTx.h:57-63):
-// 8 when ExpandedSignerList is disabled or rules are unavailable, 32
-// when enabled.
+// maxMultiSigners mirrors rippled STTx::maxMultiSigners (STTx.h:55-63).
+// rippled's contract is: "if rules are not supplied then the largest
+// possible value is returned" — i.e. be permissive on nil so callers
+// can't accidentally reject otherwise-valid signer arrays. Only when
+// rules are supplied AND ExpandedSignerList is disabled does the cap
+// fall to 8.
 func maxMultiSigners(rules *amendment.Rules) int {
-	if rules == nil || !rules.ExpandedSignerListEnabled() {
+	if rules != nil && !rules.ExpandedSignerListEnabled() {
 		return 8
 	}
 	return 32

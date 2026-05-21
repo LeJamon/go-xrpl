@@ -180,6 +180,17 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		return nil, rpcErr
 	}
 
+	// Post-autofill Account format check — mirrors rippled
+	// STParsedJSONObject (Simulate.cpp:328-330). The Sequence-absent path
+	// already rejected malformed Accounts with rpcSRC_ACT_MALFORMED above;
+	// this catches the Sequence-supplied case where rippled's autofill
+	// skips the check and STParsedJSONObject surfaces invalid_field.
+	if accountStr, ok := txJsonMap["Account"].(string); !ok {
+		return nil, types.RpcErrorInvalidField("tx.Account")
+	} else if !types.IsValidXRPLAddress(accountStr) {
+		return nil, types.RpcErrorInvalidField("tx.Account")
+	}
+
 	// Reject Batch — rippled Simulate.cpp:345-348.
 	if txType, ok := txJsonMap["TransactionType"].(string); ok && txType == "Batch" {
 		return nil, types.RpcErrorNotImpl()
