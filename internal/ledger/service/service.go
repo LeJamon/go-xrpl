@@ -261,6 +261,13 @@ type Service struct {
 	//     ingress via the clusterFeeSink hook wired in cli/server.go
 	//     (mirrors PeerImp.cpp:1175-1193).
 	feeTrack *feetrack.LoadFeeTrack
+
+	// lastConsensusRoundTime is the wall-clock duration of the most
+	// recent consensus round, populated by the consensus adaptor via
+	// SetLastConsensusRoundTime. processClosedLedgerLocked converts
+	// it to the TxQ's timeLeap flag (RCLConsensus.cpp:805 →
+	// FeeMetrics::update). Zero in standalone or pre-startup.
+	lastConsensusRoundTime time.Duration
 }
 
 // SubmittedTxEvent carries the inputs the WebSocket transactions_proposed
@@ -526,17 +533,35 @@ func (c *closedLedgerCtx) GetTransactionFeeLevels() []txq.FeeLevel {
 }
 
 // processClosedLedgerLocked updates the TxQ's fee metrics from the
-// just-closed ledger. timeLeap mirrors rippled's slow-consensus flag —
-// always false here (we don't currently track consensus duration).
-// Caller must hold s.mu.
+// just-closed ledger. timeLeap mirrors rippled RCLConsensus.cpp:805's
+// `roundTime > 5s` flag — when consensus took longer than the
+// slow-consensus threshold the metrics window is clamped instead of
+// advanced. Caller must hold s.mu.
 func (s *Service) processClosedLedgerLocked() {
 	if s.txQueue == nil || s.closedLedger == nil {
 		return
 	}
 	baseFee, _, _ := readFeesFromLedger(s.closedLedger)
 	ctx := &closedLedgerCtx{ledger: s.closedLedger, baseFee: baseFee}
-	s.txQueue.ProcessClosedLedger(ctx, false)
+	s.txQueue.ProcessClosedLedger(ctx, s.lastConsensusRoundTime > slowConsensusThreshold)
 	s.tickLoadFeeLocked()
+}
+
+// slowConsensusThreshold matches rippled's `roundTime > 5s` predicate
+// at RCLConsensus.cpp:805 — the TxQ treats anything past it as a
+// slow-consensus round and freezes the fee-escalation window instead
+// of opening it further.
+const slowConsensusThreshold = 5 * time.Second
+
+// SetLastConsensusRoundTime is called by the consensus adaptor at the
+// end of each round to inform the service how long consensus took.
+// processClosedLedgerLocked reads the value to set the TxQ's timeLeap
+// flag. Standalone mode never calls this; the field stays zero and
+// timeLeap is always false.
+func (s *Service) SetLastConsensusRoundTime(d time.Duration) {
+	s.mu.Lock()
+	s.lastConsensusRoundTime = d
+	s.mu.Unlock()
 }
 
 // tickLoadFeeLocked drives LoadFeeTrack raise/lower decisions from the

@@ -343,14 +343,71 @@ func (b *Batch) Flatten() (map[string]any, error) {
 	return m, nil
 }
 
-// CalculateMinimumFee calculates the minimum required fee for a Batch transaction.
-// Formula: (numSigners + 2) * baseFee + baseFee * numInnerTxns
-// Reference: rippled Batch.cpp calculateBaseFee()
+// CalculateMinimumFee mirrors rippled Batch::calculateBaseFee
+// (Batch.cpp:53-150). The total fee a batch must pay is the sum of:
+//   - batchBase   = view.fees().base + Transactor::calculateBaseFee(view, tx)
+//     = baseFee + (1 + len(outer.Signers)) * baseFee
+//   - txnFees     = Σ inner-tx base fees (each multi-sign-aware)
+//   - signerFees  = effectiveSignerCount * baseFee
+//
+// effectiveSignerCount counts each BatchSigner once when it carries a
+// direct BatchTxnSignature and as len(Signers) when the entry is a
+// multi-signed batch signer (Batch.cpp:128-134). Inner transactions
+// pay (1 + signers) * baseFee per the standard multi-sign multiplier
+// (Transactor::calculateBaseFee). Inner-Batch txns are rejected by
+// preflight elsewhere; innerBaseFee mirrors rippled's defense-in-depth
+// bail-out (Batch.cpp:92-97) by returning a sentinel large fee when an
+// inner is itself ttBATCH so the outer is undercosted into rejection
+// rather than silently undercharged.
 func (b *Batch) CalculateMinimumFee(baseFee uint64) uint64 {
-	numSigners := uint64(len(b.BatchSigners))
-	numInnerTxns := uint64(len(b.RawTransactions))
-	return (numSigners+2)*baseFee + baseFee*numInnerTxns
+	outerSigners := uint64(len(b.Common.Signers))
+	batchBase := baseFee + (1+outerSigners)*baseFee
+
+	var txnFees uint64
+	for _, rt := range b.RawTransactions {
+		inner := rt.RawTransaction.InnerTx
+		if inner == nil {
+			continue
+		}
+		txnFees += innerBaseFee(inner, baseFee)
+	}
+
+	var signerCount uint64
+	for _, bs := range b.BatchSigners {
+		if bs.BatchSigner.BatchTxnSignature != "" {
+			signerCount++
+		} else if len(bs.BatchSigner.Signers) > 0 {
+			signerCount += uint64(len(bs.BatchSigner.Signers))
+		}
+	}
+
+	return batchBase + txnFees + signerCount*baseFee
 }
+
+// innerBaseFee mirrors rippled Transactor::calculateBaseFee for one
+// inner tx: (1 + signers) * baseFee. Inner ttBATCH is forbidden in
+// preflight; mirror rippled Batch.cpp:92-97 by surfacing the impossible
+// nesting as overflowFee — the outer batch's minimum-fee check will
+// reject before the inner-batch makes it through. The per-tx-type
+// overrides (AccountDelete reserve increment, AMMCreate pool increment,
+// LedgerStateFix repair increment) are intentionally not dispatched
+// here: those cases are forbidden or exceedingly rare inside a Batch,
+// and accessing the view from this interface would require a deeper
+// refactor of BatchFeeCalculator.
+func innerBaseFee(inner tx.Transaction, baseFee uint64) uint64 {
+	if inner.TxType() == tx.TypeBatch {
+		return overflowFee
+	}
+	signers := inner.GetCommon().Signers
+	return (1 + uint64(len(signers))) * baseFee
+}
+
+// overflowFee is the sentinel fee returned when fee calculation hits an
+// impossible condition (inner ttBATCH, overflow). It is larger than any
+// legitimate batch fee can ever be, ensuring the outer tx fails the
+// minimum-fee gate. Mirrors rippled Batch.cpp:66 returning INITIAL_XRP
+// (100 billion XRP) — we use a similarly impossible drops sentinel.
+const overflowFee uint64 = 100_000_000_000 * 1_000_000 // 100 billion XRP in drops
 
 // AddInnerTransaction adds an inner transaction to the batch.
 // The transaction should have Fee="0", SigningPubKey="", and tfInnerBatchTxn flag set.

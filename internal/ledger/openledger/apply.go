@@ -75,6 +75,12 @@ type ApplyConfig struct {
 	// previousLedger->rules() and threads it through; no equivalent
 	// "all-on" fallback exists there.
 	Rules *amendment.Rules
+	// ApplyFlags is the engine ApplyFlags driving this submission.
+	// Mirrors rippled NetworkOPs::apply which threads its flags into
+	// TxQ::canBeHeld (TxQ.cpp:393-399 rejects tapFAIL_HARD).
+	// Default zero — fail_hard rejection only fires when callers
+	// explicitly set the bit.
+	ApplyFlags tx.ApplyFlags
 }
 
 // ApplyTxs runs rippled's open-ledger 3-pass apply against view, which

@@ -533,7 +533,7 @@ func TestOnConsensusReached_AutoPromote(t *testing.T) {
 		a := newTestAdaptor(t)
 		a.SetOperatingMode(consensus.OpModeConnected)
 		l := stubLedger{seq: 3, closeTime: a.Now()}
-		a.OnConsensusReached(l, nil)
+		a.OnConsensusReached(l, nil, 0)
 		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode())
 	})
 
@@ -542,7 +542,7 @@ func TestOnConsensusReached_AutoPromote(t *testing.T) {
 		a.SetOperatingMode(consensus.OpModeSyncing)
 		// CloseTime far in the past — outside the 2*resolution window.
 		l := stubLedger{seq: 3, closeTime: a.Now().Add(-10 * time.Minute)}
-		a.OnConsensusReached(l, nil)
+		a.OnConsensusReached(l, nil, 0)
 		assert.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
 	})
 
@@ -550,7 +550,7 @@ func TestOnConsensusReached_AutoPromote(t *testing.T) {
 		a := newTestAdaptor(t)
 		a.SetOperatingMode(consensus.OpModeTracking)
 		l := stubLedger{seq: 3, closeTime: a.Now()}
-		a.OnConsensusReached(l, nil)
+		a.OnConsensusReached(l, nil, 0)
 		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode())
 	})
 
@@ -558,7 +558,7 @@ func TestOnConsensusReached_AutoPromote(t *testing.T) {
 		a := newTestAdaptor(t)
 		a.SetOperatingMode(consensus.OpModeDisconnected)
 		l := stubLedger{seq: 3, closeTime: a.Now()}
-		a.OnConsensusReached(l, nil)
+		a.OnConsensusReached(l, nil, 0)
 		assert.Equal(t, consensus.OpModeDisconnected, a.GetOperatingMode(),
 			"Disconnected must stay Disconnected — no peers means no consensus, "+
 				"and a stale lingering callback must not bypass the peer-count gate")
@@ -568,7 +568,7 @@ func TestOnConsensusReached_AutoPromote(t *testing.T) {
 		a := newTestAdaptor(t)
 		a.SetOperatingMode(consensus.OpModeFull)
 		l := stubLedger{seq: 3, closeTime: a.Now().Add(-10 * time.Minute)}
-		a.OnConsensusReached(l, nil)
+		a.OnConsensusReached(l, nil, 0)
 		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode(),
 			"once Full, OnConsensusReached must not demote — demotions are "+
 				"driven by wrongLedger/peer-disconnect paths, not by close-time freshness")
@@ -587,7 +587,7 @@ func TestOnConsensusReached_AutoPromote(t *testing.T) {
 		a.UpdatePeerLCL(2, theirLCL)
 		a.UpdatePeerLCL(3, ourLCL)
 		l := stubLedger{id: ourLCL, seq: 3, closeTime: a.Now()}
-		a.OnConsensusReached(l, nil)
+		a.OnConsensusReached(l, nil, 0)
 		assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode(),
 			"majority-disagreeing peer LCLs must defer promotion (proxy for rippled !ledgerChange)")
 	})
@@ -599,7 +599,7 @@ func TestOnConsensusReached_AutoPromote(t *testing.T) {
 		a := newTestAdaptor(t)
 		a.SetOperatingMode(consensus.OpModeConnected)
 		l := stubLedger{id: consensus.LedgerID{0xAA}, seq: 3, closeTime: a.Now()}
-		a.OnConsensusReached(l, nil)
+		a.OnConsensusReached(l, nil, 0)
 		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode(),
 			"with no peer LCL evidence, promotion proceeds — the genesis-bootstrap path")
 	})
@@ -614,7 +614,7 @@ func TestOnConsensusReached_AutoPromote(t *testing.T) {
 		a.UpdatePeerLCL(2, ourLCL)
 		a.UpdatePeerLCL(3, theirLCL)
 		l := stubLedger{id: ourLCL, seq: 3, closeTime: a.Now()}
-		a.OnConsensusReached(l, nil)
+		a.OnConsensusReached(l, nil, 0)
 		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode(),
 			"peer LCL majority agreement permits promotion")
 	})

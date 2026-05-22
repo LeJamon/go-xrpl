@@ -84,6 +84,12 @@ type TestEnv struct {
 	// rippled's apply() vs submit() distinction for setup operations.
 	bypassTxQ bool
 
+	// txQApplyFlags is the ApplyFlags handed to the TxQ for the next
+	// submission. Reset to zero on every Submit; tests that want to
+	// simulate rippled's tapFAIL_HARD admission rule can set it via
+	// the field before calling Submit.
+	txQApplyFlags tx.ApplyFlags
+
 	// txInLedger tracks the number of transactions applied to the current open
 	// ledger. Reset on Close(). Used by TxQ for fee escalation computation.
 	txInLedger uint32

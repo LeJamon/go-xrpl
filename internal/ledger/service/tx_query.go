@@ -56,7 +56,13 @@ type SubmitResult struct {
 // persistent OpenLedger view, the held-pool absorbs the blob unless the
 // failure is permanent (tef*/tem*/tel*), and the legacy pendingTxs slice
 // is fed for standalone close.
-func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte) (*SubmitResult, error) {
+//
+// failHard mirrors rippled tapFAIL_HARD: when set, a submission that
+// does not apply is NOT pushed into the localTxs held pool and is NOT
+// fed into the canonical pendingTxs slice. The engine's ApplyFlags
+// also carries the bit so any future TxQ admission path observes it
+// (TxQ.cpp:393-399).
+func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, failHard bool) (*SubmitResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -91,6 +97,9 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte) 
 			Logger:                    s.config.Logger,
 			Rules:                     rulesFromLedger(s.closedLedger, s.logger),
 		}
+		if failHard {
+			engineConfig.ApplyFlags |= tx.TapFAIL_HARD
+		}
 		engine := tx.NewEngine(view, engineConfig)
 		applyResult = engine.Apply(transaction)
 		return applyResult.Applied
@@ -122,7 +131,14 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte) 
 	// permanent failures; everything else (ter*/tec*/applied/queued)
 	// belongs in the held pool so it survives Submit failure and LCL
 	// transitions until it lands or ages out (5 ledgers).
-	if rawBlob != nil && s.localTxs != nil {
+	//
+	// fail_hard short-circuits the held-pool push: rippled's TxQ
+	// canBeHeld (TxQ.cpp:393-399) returns telCAN_NOT_QUEUE on
+	// tapFAIL_HARD, and NetworkOPs.cpp:1685-1689 also gates relay on
+	// !enforceFailHard. We translate that as "don't hold the blob" so
+	// the caller learns about the failure immediately and doesn't see
+	// a delayed re-application.
+	if rawBlob != nil && s.localTxs != nil && !failHard {
 		ter := applyResult.Result
 		if !ter.IsTef() && !ter.IsTem() && !ter.IsTel() && ter != tx.TefALREADY {
 			ptx := openledger.PendingTx{

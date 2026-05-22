@@ -216,6 +216,12 @@ type ServiceContainer struct {
 	// server_info falls back to baseline values.
 	TxQMetrics func() TxQServerMetrics
 
+	// TxQFeeMetrics returns the full TxQ snapshot consumed by the
+	// `fee` RPC handler. Nil until the ledger service is wired
+	// (standalone tests, pre-startup) — handler then falls back to
+	// rippled's idle-state defaults.
+	TxQFeeMetrics func() TxQFeeMetrics
+
 	// JqTransOverflow returns the cumulative inbound TMTransaction
 	// frames the overlay refused at the router-dispatch boundary
 	// because the in-flight tx ceiling was already met. This is
@@ -385,6 +391,17 @@ type LedgerAccessor interface {
 }
 
 // TransactionSubmitter handles transaction submission and retrieval.
+// FailHardSubmitter is the optional rippled-faithful surface for
+// submitting a transaction with tapFAIL_HARD semantics (TxQ.cpp:393-399,
+// NetworkOPs.cpp:1685-1689): on non-apply the blob is NOT held in the
+// localTxs pool, NOT pushed onto the canonical pendingTxs slice, and
+// NOT relayed. Production LedgerServiceAdapter implements it; test
+// mocks may omit it — submit handlers fall back to SubmitTransaction
+// when the interface is not satisfied.
+type FailHardSubmitter interface {
+	SubmitTransactionFailHard(txJSON []byte, txBlobHex string) (*SubmitResult, error)
+}
+
 type TransactionSubmitter interface {
 	SubmitTransaction(txJSON []byte, txBlobHex ...string) (*SubmitResult, error)
 	SimulateTransaction(txJSON []byte) (*SubmitResult, error)
@@ -550,6 +567,22 @@ type LoadFactorFees struct {
 type TxQServerMetrics struct {
 	ReferenceFeeLevel     uint64
 	MinProcessingFeeLevel uint64
+	OpenLedgerFeeLevel    uint64
+}
+
+// TxQFeeMetrics is the full TxQ snapshot surfaced by the `fee` RPC,
+// mirroring the fields read by rippled's TxQ::doRPC
+// (TxQ.cpp:1860-1909). It is a superset of TxQServerMetrics — the
+// `fee` handler needs txCount / txPerLedger / txInLedger / median /
+// queue-max in addition to the load_factor levels.
+type TxQFeeMetrics struct {
+	TxCount               uint32
+	TxQMaxSize            *uint32 // nil → no limit, omits max_queue_size
+	TxInLedger            uint32
+	TxPerLedger           uint32
+	ReferenceFeeLevel     uint64
+	MinProcessingFeeLevel uint64
+	MedFeeLevel           uint64
 	OpenLedgerFeeLevel    uint64
 }
 
