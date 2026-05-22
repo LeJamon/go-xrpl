@@ -17,6 +17,12 @@ import (
 type AccountTxMethod struct{ BaseHandler }
 
 func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+	// Shared rpcTOO_BUSY gate — account_tx scans the transaction store
+	// per ledger range and qualifies as expensive client work in rippled.
+	if err := RequireNotBusy(ctx); err != nil {
+		return nil, err
+	}
+
 	var request struct {
 		types.AccountParam
 		LedgerIndexMin *json.RawMessage `json:"ledger_index_min,omitempty"`

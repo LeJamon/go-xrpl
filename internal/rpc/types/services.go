@@ -2,6 +2,7 @@ package types
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -247,6 +248,78 @@ type ServiceContainer struct {
 	// emits (NetworkOPs.cpp:2887-2901). Nil until a LoadFeeTrack
 	// subsystem lands — handler suppresses the fields when nil.
 	LoadFactorFees func() LoadFactorFees
+
+	// ClientLoad is the shared in-flight client-RPC counter that drives
+	// the rpcTOO_BUSY load-shedding gate (handlers.RequireNotBusy).
+	// Mirrors rippled's `getJobCountGE(jtCLIENT) > 200` literal at
+	// BookOffers.cpp:42 / RipplePathFind.cpp:166 / LedgerHandler.cpp:76 —
+	// one shared signal across handlers and across both HTTP and
+	// WebSocket transports. HTTP and WebSocket dispatchers bracket each
+	// request with Begin()/End(); handlers consult ShouldShed() before
+	// doing expensive work. Nil in standalone / RPC-only test contexts —
+	// RequireNotBusy treats nil as "never shed".
+	ClientLoad *ClientLoadShedder
+}
+
+// DefaultClientLoadShedThreshold is the in-flight client-RPC ceiling
+// above which expensive read handlers shed load with rpcTOO_BUSY.
+// Matches rippled's BookOffers.cpp:42 literal (`> 200`).
+const DefaultClientLoadShedThreshold int64 = 200
+
+// ClientLoadShedder is the shared in-flight client-RPC counter behind
+// the rpcTOO_BUSY load-shedding gate. See ServiceContainer.ClientLoad.
+//
+// The threshold semantics match rippled's `getJobCountGE(jtCLIENT) > N`
+// check: ShouldShed() returns true when the *current* in-flight count is
+// strictly greater than the threshold. Dispatchers should call Begin()
+// before invoking the handler and End() after it returns, so the count
+// reflects active work.
+type ClientLoadShedder struct {
+	inFlight  atomic.Int64
+	threshold int64
+}
+
+// NewClientLoadShedder creates a shedder with the given strict-greater
+// threshold. A non-positive threshold collapses to "always shed"
+// (handy for tests forcing the busy path).
+func NewClientLoadShedder(threshold int64) *ClientLoadShedder {
+	return &ClientLoadShedder{threshold: threshold}
+}
+
+// Begin records the start of a client-RPC dispatch.
+func (s *ClientLoadShedder) Begin() {
+	if s == nil {
+		return
+	}
+	s.inFlight.Add(1)
+}
+
+// End records completion of a client-RPC dispatch. Safe to call from a
+// defer alongside Begin().
+func (s *ClientLoadShedder) End() {
+	if s == nil {
+		return
+	}
+	s.inFlight.Add(-1)
+}
+
+// ShouldShed reports whether the in-flight count is over the
+// configured threshold. Mirrors rippled's
+// `getJobCountGE(jtCLIENT) > 200`.
+func (s *ClientLoadShedder) ShouldShed() bool {
+	if s == nil {
+		return false
+	}
+	return s.inFlight.Load() > s.threshold
+}
+
+// InFlight returns the current in-flight count. Exposed for metrics and
+// tests; handlers should consult ShouldShed instead.
+func (s *ClientLoadShedder) InFlight() int64 {
+	if s == nil {
+		return 0
+	}
+	return s.inFlight.Load()
 }
 
 // LedgerNavigator provides ledger index navigation and mode queries.

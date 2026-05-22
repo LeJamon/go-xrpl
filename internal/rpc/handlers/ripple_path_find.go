@@ -46,6 +46,12 @@ type pathAlternativeJSON struct {
 type RipplePathFindMethod struct{}
 
 func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+	// Mirrors rippled RipplePathFind.cpp:165-166 — shed expensive client
+	// RPCs when the shared jtCLIENT in-flight ceiling is exceeded.
+	if err := RequireNotBusy(ctx); err != nil {
+		return nil, err
+	}
+
 	var request ripplePathFindRequest
 	if err := json.Unmarshal(params, &request); err != nil {
 		return nil, types.NewRpcError(types.RpcINVALID_PARAMS, "invalidParams", "invalidParams",

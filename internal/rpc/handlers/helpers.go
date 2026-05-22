@@ -20,6 +20,25 @@ func RequireLedgerService(services *types.ServiceContainer) *types.RpcError {
 	return nil
 }
 
+// RequireNotBusy is the shared load-shedding gate for expensive
+// client-RPC read handlers (book_offers, book_changes, path_find,
+// ripple_path_find, account_tx, gateway_balances, noripple_check).
+// Returns rpcTOO_BUSY (HTTP 503) when the server's in-flight
+// client-RPC count is over the shared threshold, mirroring rippled's
+// `getJobCountGE(jtCLIENT) > 200` gate at BookOffers.cpp:42 /
+// RipplePathFind.cpp:166 / LedgerHandler.cpp:76. When no shedder is
+// wired (RPC-only tests, standalone harness) this is a no-op so unit
+// tests that construct an RpcContext directly continue to pass.
+func RequireNotBusy(ctx *types.RpcContext) *types.RpcError {
+	if ctx == nil || ctx.Services == nil || ctx.Services.ClientLoad == nil {
+		return nil
+	}
+	if ctx.Services.ClientLoad.ShouldShed() {
+		return types.RpcErrorTooBusy("The server is too busy to help you now.")
+	}
+	return nil
+}
+
 // ParseParams unmarshals JSON params into dest, returning an RpcError on failure.
 // If params is nil, dest is left untouched (zero value).
 func ParseParams(params json.RawMessage, dest interface{}) *types.RpcError {

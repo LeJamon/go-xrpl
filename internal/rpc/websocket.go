@@ -109,6 +109,9 @@ type WebSocketConnection struct {
 // server so handlers reach the ledger via ctx.Services. May be nil for
 // test contexts.
 func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer) *WebSocketServer {
+	if services != nil && services.ClientLoad == nil {
+		services.ClientLoad = types.NewClientLoadShedder(types.DefaultClientLoadShedThreshold)
+	}
 	return &WebSocketServer{
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
@@ -478,6 +481,14 @@ func (ws *WebSocketServer) handlePathFind(wsConn *WebSocketConnection, ctx *type
 // handlePathFindCreate creates a new persistent pathfinding session.
 // Any existing session on this connection is replaced (matching rippled).
 func (ws *WebSocketServer) handlePathFindCreate(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+	// Shared rpcTOO_BUSY gate — path_find sessions run the pathfinding
+	// engine on every ledger close, so they share the same expensive-read
+	// load-shedding ceiling as ripple_path_find (RipplePathFind.cpp:166).
+	if rpcErr := handlers.RequireNotBusy(ctx); rpcErr != nil {
+		ws.sendError(wsConn, rpcErr, cmd.ID)
+		return
+	}
+
 	session, rpcErr := ParseAndCreateSession(cmd.Params, cmd.ID)
 	if rpcErr != nil {
 		ws.sendError(wsConn, rpcErr, cmd.ID)
@@ -626,6 +637,11 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *typ
 	if rpcErr := gateLoad(ws.loadTracker, ctx, cmd.Command, wsLog()); rpcErr != nil {
 		ws.sendError(wsConn, rpcErr, cmd.ID)
 		return
+	}
+
+	if ws.services != nil && ws.services.ClientLoad != nil {
+		ws.services.ClientLoad.Begin()
+		defer ws.services.ClientLoad.End()
 	}
 
 	result, rpcErr := handler.Handle(ctx, cmd.Params)

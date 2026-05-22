@@ -122,6 +122,10 @@ func NewServer(timeout time.Duration, services *types.ServiceContainer) *Server 
 		loadTracker: loadtrack.New(),
 	}
 
+	if services != nil && services.ClientLoad == nil {
+		services.ClientLoad = types.NewClientLoadShedder(types.DefaultClientLoadShedThreshold)
+	}
+
 	server.registerAllMethods()
 
 	return server
@@ -387,6 +391,10 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types
 	if err := gateLoad(s.loadTracker, ctx, method, rpcLog()); err != nil {
 		return nil, err
 	}
+	if s.services != nil && s.services.ClientLoad != nil {
+		s.services.ClientLoad.Begin()
+		defer s.services.ClientLoad.End()
+	}
 	result, rpcErr := handler.Handle(ctx, params)
 	finalizeLoad(s.loadTracker, ctx, method, handler, rpcErr, rpcLog())
 	return result, rpcErr
@@ -504,7 +512,17 @@ func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, method stri
 	// payloads (book_offers, ledger_data, ripple_path_find) into a []byte
 	// before w.Write; on encode error headers are already sent, so logging
 	// is the only honest signal.
-	w.WriteHeader(http.StatusOK)
+	//
+	// rpcTOO_BUSY maps to HTTP 503, matching rippled's ErrorCodes.cpp:114
+	// ErrorInfo entry (`{rpcTOO_BUSY, "tooBusy", ..., 503}`). Every other
+	// error rides on 200 OK with the error envelope in the body — XRPL
+	// clients parse `result.error`, not the HTTP status, so this is the
+	// only status we promote.
+	if rpcErr != nil && rpcErr.Code == types.RpcTOO_BUSY {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
 	enc := json.NewEncoder(&trimNewlineWriter{w: w})
 	if err := enc.Encode(response); err != nil {
 		rpcLog().Error("Failed to encode response", "err", err)
