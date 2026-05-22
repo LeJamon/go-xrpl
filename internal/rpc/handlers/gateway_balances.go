@@ -13,8 +13,6 @@ import (
 type GatewayBalancesMethod struct{ BaseHandler }
 
 func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	// Shared rpcTOO_BUSY gate — gateway_balances walks every trust line
-	// for the account and qualifies as expensive client work in rippled.
 	if err := RequireNotBusy(ctx); err != nil {
 		return nil, err
 	}

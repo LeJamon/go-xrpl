@@ -12,9 +12,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
-// TestNewServerWiresClientLoadShedder confirms NewServer attaches a default
-// shared shedder to the services container so that handlers (including those
-// reached via WebSocket later) see the same in-flight counter.
 func TestNewServerWiresClientLoadShedder(t *testing.T) {
 	services := types.NewServiceContainer(nil)
 	_ = NewServer(time.Second, services)
@@ -24,12 +21,9 @@ func TestNewServerWiresClientLoadShedder(t *testing.T) {
 	}
 }
 
-// TestRpcTooBusyReturnsHTTP503 verifies the HTTP envelope written when a
-// handler returns rpcTOO_BUSY: status code 503 (matching rippled
-// ErrorCodes.cpp:114) and `result.error = "tooBusy"` in the body.
+// 503 status mapping matches rippled ErrorCodes.cpp:114 (rpcTOO_BUSY row).
 func TestRpcTooBusyReturnsHTTP503(t *testing.T) {
 	services := types.NewServiceContainer(nil)
-	// Force the shedder into the busy state regardless of in-flight count.
 	services.ClientLoad = types.NewClientLoadShedder(-1)
 
 	srv := NewServer(time.Second, services)
@@ -62,9 +56,6 @@ func TestRpcTooBusyReturnsHTTP503(t *testing.T) {
 	}
 }
 
-// TestRequestUnderThresholdReturnsHTTP200 is the negative control: when the
-// shedder is idle, the same book_offers payload short-circuits on its normal
-// validation error (missing fields) and rides on HTTP 200 — never 503.
 func TestRequestUnderThresholdReturnsHTTP200(t *testing.T) {
 	services := types.NewServiceContainer(nil)
 	srv := NewServer(time.Second, services)
