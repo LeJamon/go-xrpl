@@ -313,16 +313,10 @@ type Overlay struct {
 	// OverlayImpl::jqTransOverflow_ (OverlayImpl.h:121), bumped at
 	// PeerImp.cpp:1353 when rippled's gate
 	// `getJobCount(jtTRANSACTION) > config().MAX_TRANSACTIONS` trips
-	// and the inbound tx job is refused. The goxrpl analog gate is
-	// applied at onMessageReceived (see the per-type ceiling check
-	// against cfg.MaxTransactions): when the messages-channel depth
-	// already meets the configured ceiling, a new TMTransaction frame
-	// is refused before the channel send and this counter increments.
-	// The hard channel-full drop branch in onMessageReceived is the
-	// defensive backstop: if the ceiling gate is disabled (cfg.MaxTransactions
-	// <= 0) or fails to fire for any reason, the channel-saturation
-	// path still records the drop. Surfaced via server_info as
-	// jq_trans_overflow.
+	// and the inbound tx job is refused. goxrpl applies the analog
+	// gate in onMessageReceived against cfg.MaxTransactions; the
+	// channel-saturation drop is the backstop when the gate is
+	// disabled. Surfaced via server_info as jq_trans_overflow.
 	droppedTransactions atomic.Uint64
 
 	// droppedLedgerResponses counts the same shape for the ledger-sync
@@ -1328,15 +1322,10 @@ func (o *Overlay) onMessageReceived(evt Event) {
 
 	slog.Debug("Message received", "t", "Overlay", "type", msgType.String(), "peer", evt.PeerID, "size", len(evt.Payload))
 
-	// Rippled-faithful per-type ingress gate. Mirrors PeerImp.cpp:1349-1355
-	// where `getJobCount(jtTRANSACTION) > config().MAX_TRANSACTIONS`
-	// causes the inbound transaction to be refused (counter incremented,
-	// info log emitted). goxrpl has no JobQueue; the closest analog is
-	// the messages-channel depth at check time. Refusing before the
-	// channel send keeps non-tx traffic flowing when the dispatch
-	// pipeline is tx-saturated — matching rippled's per-type semantics.
-	// Gate is disabled when maxTransactions <= 0; the channel-saturation
-	// branch below is the defensive backstop.
+	// Per-type ingress gate mirroring PeerImp.cpp:1349-1355: refuse
+	// before the channel send so non-tx traffic keeps flowing when
+	// the dispatch pipeline is tx-saturated. Channel-saturation
+	// branch below is the backstop when the gate is disabled.
 	if msgType == message.TypeTransaction && o.maxTransactions > 0 && len(o.messages) >= o.maxTransactions {
 		o.droppedTransactions.Add(1)
 		slog.Info("Transaction queue is full", "t", "Overlay",
@@ -1364,13 +1353,8 @@ func (o *Overlay) onMessageReceived(evt Event) {
 
 // DroppedTransactions returns the cumulative count of TMTransaction
 // frames refused at the overlay → router boundary. Surfaced via
-// server_info as jq_trans_overflow, mirroring rippled's
-// OverlayImpl::getJqTransOverflow (OverlayImpl.h:359-363) which is
-// bumped at PeerImp.cpp:1353 when
-// `getJobCount(jtTRANSACTION) > config().MAX_TRANSACTIONS`. The
-// goxrpl gate consults the messages-channel depth against
-// cfg.MaxTransactions in lieu of a JobQueue, but the operator signal
-// — "inbound transaction processing fell behind" — is the same.
+// server_info as jq_trans_overflow; see the droppedTransactions
+// field doc for the rippled-mapping rationale.
 func (o *Overlay) DroppedTransactions() uint64 {
 	return o.droppedTransactions.Load()
 }

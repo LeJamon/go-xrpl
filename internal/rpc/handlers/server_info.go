@@ -138,8 +138,6 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 		"peers":             getPeerCount(ctx),
 
 		// Overflow/disconnect counters (string in rippled).
-		// jq_trans_overflow sources from the overlay's inbound-tx
-		// refusal counter, matching rippled's PeerImp.cpp:1353 trigger.
 		"jq_trans_overflow":          fmt.Sprintf("%d", overflow),
 		"peer_disconnects":           fmt.Sprintf("%d", peerDisc),
 		"peer_disconnects_resources": fmt.Sprintf("%d", peerDiscRes),
