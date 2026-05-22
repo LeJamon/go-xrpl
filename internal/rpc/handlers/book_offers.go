@@ -203,14 +203,20 @@ func ParseAmountFromJSON(data json.RawMessage) (types.Amount, error) {
 }
 
 // isValidCurrencyCode reports whether a currency code is acceptable per
-// rippled rules: empty or "XRP" (native), exactly 3 characters (ISO), or
-// exactly 40 hex characters (issued-currency hex form).
+// rippled rules: empty or "XRP" (native), exactly 3 characters from
+// rippled's isoCharSet (UintTypes.cpp:39-43, :93-96), or exactly 40 hex
+// characters (issued-currency hex form).
 // Reference: rippled UintTypes.cpp to_currency().
 func isValidCurrencyCode(currency string) bool {
 	if currency == "" || currency == "XRP" {
 		return true
 	}
 	if len(currency) == 3 {
+		for _, c := range currency {
+			if !isIsoCurrencyChar(c) {
+				return false
+			}
+		}
 		return true
 	}
 	if len(currency) == 40 {
