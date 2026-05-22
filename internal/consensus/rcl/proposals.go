@@ -489,6 +489,74 @@ func (dt *DisputeTracker) UpdateOurVote(percentTime int, proposing bool, parms c
 	return changed
 }
 
+// AllStalled reports whether every active dispute is stalled per
+// DisputedTx.Stalled. An empty dispute set returns false — rippled
+// gates the stalled bit on disputes being non-empty (Consensus.h:1718).
+//
+// Matches rippled's std::ranges::all_of stalled check at
+// Consensus.h:1720-1728.
+func (dt *DisputeTracker) AllStalled(parms consensus.ConsensusParms, proposing bool, peersUnchanged int) bool {
+	dt.mu.RLock()
+	defer dt.mu.RUnlock()
+	if len(dt.disputes) == 0 {
+		return false
+	}
+	for _, dispute := range dt.disputes {
+		if !disputeStalled(dispute, parms, proposing, peersUnchanged) {
+			return false
+		}
+	}
+	return true
+}
+
+// disputeStalled mirrors rippled's DisputedTx::stalled (DisputedTx.h:88-149).
+// A dispute is stalled when all of the following hold:
+//   - it has reached the terminal avalanche cutoff (the next state loops
+//     back to itself) and has been there for at least MinRounds;
+//   - if we are proposing, our own vote has been stable for at least
+//     MinRounds;
+//   - either our peers have not changed votes for StalledRounds OR
+//     (we are proposing AND our own vote has been stable for
+//     StalledRounds) — i.e. at least one side has stopped moving;
+//   - the tally is >MinConsensusPct one-sided (overwhelming yes or no
+//     support), so further flipping is unlikely.
+func disputeStalled(d *consensus.DisputedTx, parms consensus.ConsensusParms, proposing bool, peersUnchanged int) bool {
+	currentCutoff := parms.AvalancheCutoffs[d.AvalancheState]
+	nextCutoff := parms.AvalancheCutoffs[currentCutoff.Next]
+
+	// Not yet at the terminal cutoff, or not there long enough.
+	if nextCutoff.ConsensusTime > currentCutoff.ConsensusTime ||
+		d.AvalancheCounter < parms.MinRounds {
+		return false
+	}
+	if proposing && d.CurrentVoteCounter < parms.MinRounds {
+		return false
+	}
+	// Both peers AND (when proposing) we ourselves are still actively
+	// updating → not stalled. If either side has been frozen for
+	// StalledRounds, we treat the dispute as stalled.
+	if peersUnchanged < parms.StalledRounds &&
+		proposing && d.CurrentVoteCounter < parms.StalledRounds {
+		return false
+	}
+
+	ownYes := 0
+	selfTotal := 0
+	if proposing {
+		selfTotal = 1
+		if d.OurVote {
+			ownYes = 1
+		}
+	}
+	support := (d.Yays + ownYes) * 100
+	total := d.Nays + d.Yays + selfTotal
+	if total == 0 {
+		return false
+	}
+	weight := support / total
+	return weight > parms.MinConsensusPct || weight < (100-parms.MinConsensusPct)
+}
+
 // GetDispute returns a disputed transaction.
 func (dt *DisputeTracker) GetDispute(txID consensus.TxID) *consensus.DisputedTx {
 	dt.mu.RLock()

@@ -61,6 +61,82 @@ func buildMockTxSet(id consensus.TxSetID, txIDs ...consensus.TxID) *mockTxSet {
 // Acceptance criterion: issue #266 — "peers propose {A,B,C} and
 // {A,B,D}; engine disputes C and D, votes both in after threshold
 // ramps."
+// TestDisputeTracker_AllStalled pins the per-dispute Stalled
+// predicate and the AllStalled aggregator against the four
+// preconditions rippled enforces in DisputedTx::stalled
+// (DisputedTx.h:88-149):
+//
+//  1. Empty dispute set → NOT stalled (Consensus.h:1718 gate).
+//  2. Dispute not yet at the terminal AvalancheStuck cutoff → false.
+//  3. Dispute at terminal cutoff but with peers still flipping votes
+//     AND our own vote still flipping → false.
+//  4. Dispute at terminal cutoff, both sides frozen, ≥80% one-sided
+//     tally → true.
+func TestDisputeTracker_AllStalled(t *testing.T) {
+	parms := consensus.DefaultConsensusParms()
+
+	t.Run("empty set is not stalled", func(t *testing.T) {
+		dt := NewDisputeTracker()
+		if dt.AllStalled(parms, true, parms.StalledRounds+1) {
+			t.Fatalf("empty dispute set must not be stalled")
+		}
+	})
+
+	t.Run("non-terminal avalanche state is not stalled", func(t *testing.T) {
+		dt := NewDisputeTracker()
+		txID := makeTxID(1)
+		dt.CreateDispute(txID, nil, true)
+		d := dt.GetDispute(txID)
+		d.AvalancheState = consensus.AvalancheMid // not stuck
+		d.AvalancheCounter = parms.MinRounds + 5
+		d.CurrentVoteCounter = parms.StalledRounds + 5
+		// Heavy yes-tally to clear the percent threshold if reached.
+		d.Yays = 9
+		d.Nays = 0
+		if dt.AllStalled(parms, true, parms.StalledRounds+5) {
+			t.Fatalf("mid state must not stall regardless of tally")
+		}
+	})
+
+	t.Run("active flipping suppresses stall", func(t *testing.T) {
+		dt := NewDisputeTracker()
+		txID := makeTxID(2)
+		dt.CreateDispute(txID, nil, true)
+		d := dt.GetDispute(txID)
+		d.AvalancheState = consensus.AvalancheStuck
+		d.AvalancheCounter = parms.MinRounds + 1
+		d.CurrentVoteCounter = parms.MinRounds + 1 // still moving
+		d.Yays = 9
+		d.Nays = 0
+		// peersUnchanged below StalledRounds AND (proposing && our
+		// counter below StalledRounds) → not stalled.
+		if dt.AllStalled(parms, true, parms.StalledRounds-1) {
+			t.Fatalf("active flipping on both sides must not stall")
+		}
+	})
+
+	t.Run("frozen + one-sided tally stalls", func(t *testing.T) {
+		dt := NewDisputeTracker()
+		txID := makeTxID(3)
+		dt.CreateDispute(txID, nil, true)
+		d := dt.GetDispute(txID)
+		d.AvalancheState = consensus.AvalancheStuck
+		d.AvalancheCounter = parms.MinRounds + 1
+		d.CurrentVoteCounter = parms.StalledRounds + 1
+		d.Yays = 9
+		d.Nays = 0
+		if !dt.AllStalled(parms, true, parms.StalledRounds+1) {
+			t.Fatalf("frozen dispute with >80%% yes support must stall")
+		}
+		// Symmetrically for the no-side.
+		d.Yays = 0
+		d.Nays = 9
+		if !dt.AllStalled(parms, true, parms.StalledRounds+1) {
+			t.Fatalf("frozen dispute with >80%% no support must stall")
+		}
+	})
+}
+
 func TestConsensus_OverlappingDisjointProposals_Converges(t *testing.T) {
 	adaptor := newMockAdaptor()
 
