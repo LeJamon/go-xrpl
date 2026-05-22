@@ -135,6 +135,9 @@ const (
 	RpcDST_ISR_MALFORMED = 53 // Destination issuer is malformed (rippled: rpcDST_ISR_MALFORMED)
 	RpcSRC_CUR_MALFORMED = 69 // Source currency is malformed (rippled: rpcSRC_CUR_MALFORMED)
 	RpcSRC_ISR_MALFORMED = 70 // Source issuer is malformed (rippled: rpcSRC_ISR_MALFORMED)
+
+	// PermissionedDEX domain errors - must match rippled exactly
+	RpcDOMAIN_MALFORMED = 97 // PermissionedDEX domain is malformed (rippled: rpcDOMAIN_MALFORMED)
 )
 
 // Standard error constructors
@@ -356,6 +359,13 @@ func RpcErrorDstIsrMalformed(message string) *RpcError {
 func RpcErrorObjectField(field string) *RpcError {
 	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams",
 		"Invalid field '"+field+"', not object.")
+}
+
+// RpcErrorDomainMalformed matches rippled rpcDOMAIN_MALFORMED (code 97,
+// token "domainMalformed"). Returned when the PermissionedDEX domain
+// parameter fails to parse as a hex uint256.
+func RpcErrorDomainMalformed(message string) *RpcError {
+	return NewRpcError(RpcDOMAIN_MALFORMED, "domainMalformed", "domainMalformed", message)
 }
 
 // RpcErrorDstActNotFound returns an error when the destination account is not found

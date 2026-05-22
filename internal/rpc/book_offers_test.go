@@ -233,7 +233,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				},
 			},
-			expectedError: "Invalid currency code.",
+			expectedError: "Invalid field 'taker_pays.currency', bad currency.",
 			expectedCode:  types.RpcSRC_CUR_MALFORMED,
 		},
 		{
@@ -247,8 +247,139 @@ func TestBookOffersErrorValidation(t *testing.T) {
 					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				},
 			},
-			expectedError: "Invalid currency code.",
+			expectedError: "Invalid field 'taker_gets.currency', bad currency.",
 			expectedCode:  types.RpcDST_AMT_MALFORMED,
+		},
+		{
+			// rippled Book_test.cpp:1398-1409: currency is a JSON number,
+			// not a string → expected_field_error("taker_pays.currency", "string").
+			name: "Non-string taker_pays.currency",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{"currency": 1},
+				"taker_gets": map[string]interface{}{},
+			},
+			expectedError: "Invalid field 'taker_pays.currency', not string.",
+			expectedCode:  types.RpcINVALID_PARAMS,
+		},
+		{
+			// rippled Book_test.cpp:1424-1435: same on the gets side.
+			name: "Non-string taker_gets.currency",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{"currency": "XRP"},
+				"taker_gets": map[string]interface{}{"currency": 1},
+			},
+			expectedError: "Invalid field 'taker_gets.currency', not string.",
+			expectedCode:  types.RpcINVALID_PARAMS,
+		},
+		{
+			// rippled Book_test.cpp:1463-1475: taker_gets.issuer is a number.
+			name: "Non-string taker_gets.issuer",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{"currency": "XRP"},
+				"taker_gets": map[string]interface{}{
+					"currency": "USD",
+					"issuer":   1,
+				},
+			},
+			expectedError: "Invalid field 'taker_gets.issuer', not string.",
+			expectedCode:  types.RpcINVALID_PARAMS,
+		},
+		{
+			// rippled Book_test.cpp:1477-1488: taker_pays.issuer is a number.
+			name: "Non-string taker_pays.issuer",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{
+					"currency": "XRP",
+					"issuer":   1,
+				},
+				"taker_gets": map[string]interface{}{"currency": "USD"},
+			},
+			expectedError: "Invalid field 'taker_pays.issuer', not string.",
+			expectedCode:  types.RpcINVALID_PARAMS,
+		},
+		{
+			// rippled Book_test.cpp:1563-1576: taker_pays.issuer = toBase58(xrpAccount()).
+			// The base58 form of the all-zero AccountID must be treated as
+			// "XRP issuer" by the currency/issuer cross-check, NOT as a
+			// distinct issuer that happens to decode to zero.
+			name: "IOU taker_pays.issuer = base58(xrpAccount)",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{
+					"currency": "USD",
+					"issuer":   "rrrrrrrrrrrrrrrrrrrhoLvTp",
+				},
+				"taker_gets": map[string]interface{}{
+					"currency": "USD",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+			},
+			expectedError: "Invalid field 'taker_pays.issuer', expected non-XRP issuer.",
+			expectedCode:  types.RpcSRC_ISR_MALFORMED,
+		},
+		{
+			// Same xrpAccount-as-issuer case on the gets side.
+			name: "IOU taker_gets.issuer = base58(xrpAccount)",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{
+					"currency": "USD",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"taker_gets": map[string]interface{}{
+					"currency": "USD",
+					"issuer":   "rrrrrrrrrrrrrrrrrrrhoLvTp",
+				},
+			},
+			expectedError: "Invalid field 'taker_gets.issuer', expected non-XRP issuer.",
+			expectedCode:  types.RpcDST_ISR_MALFORMED,
+		},
+		{
+			// rippled BookOffers.cpp:66-86: presence + isString for BOTH
+			// sides' currency runs before to_currency on either side. A
+			// request with bad taker_pays.currency AND missing
+			// taker_gets.currency must report the missing-gets error first.
+			name: "Bad pay-currency + missing get-currency ⇒ gets-missing wins",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{"currency": "US"},
+				"taker_gets": map[string]interface{}{},
+			},
+			expectedError: "Missing field 'taker_gets.currency'.",
+			expectedCode:  types.RpcINVALID_PARAMS,
+		},
+		{
+			// rippled Book_test.cpp:1666-1678: a non-hex-uint256 domain
+			// string returns rpcDOMAIN_MALFORMED.
+			name: "Malformed domain (non-hex)",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{
+					"currency": "USD",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"taker_gets": map[string]interface{}{
+					"currency": "EUR",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"domain": "badString",
+			},
+			expectedError: "Unable to parse domain.",
+			expectedCode:  types.RpcDOMAIN_MALFORMED,
+		},
+		{
+			// Domain must be 64 hex characters (uint256). A 63-char string
+			// is rejected even if every byte is hex.
+			name: "Malformed domain (wrong length)",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{
+					"currency": "USD",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"taker_gets": map[string]interface{}{
+					"currency": "EUR",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"domain": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde", // 63 chars
+			},
+			expectedError: "Unable to parse domain.",
+			expectedCode:  types.RpcDOMAIN_MALFORMED,
 		},
 		{
 			// rippled BookOffers.cpp:165-173: invalid_field_error when an

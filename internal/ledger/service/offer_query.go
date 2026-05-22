@@ -74,6 +74,12 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 // step through quality buckets via Succ, then within each bucket follow
 // IndexNext page chains. Offers within a single page are emitted in their
 // stored Indexes order — matching rippled's cdirFirst / cdirNext.
+//
+// The iteration budget mirrors rippled's `iLimit-- > 0` loop: each entry
+// visited consumes one unit regardless of whether the underlying SLE
+// parses cleanly. A book whose directory references a missing or
+// malformed Offer SLE will therefore return fewer than `limit` offers,
+// just as rippled does (NetworkOPs.cpp:4471, :4506-4612).
 func walkBookOffers(
 	ctx context.Context,
 	l *ledger.Ledger,
@@ -94,8 +100,9 @@ func walkBookOffers(
 	var offers []BookOffer
 	var rawOffers []*state.LedgerOffer
 
+	remaining := limit
 	searchKey := bookBase
-	for uint32(len(offers)) < limit {
+	for remaining > 0 {
 		if ctx.Err() != nil {
 			break
 		}
@@ -116,11 +123,13 @@ func walkBookOffers(
 		quality := binary.BigEndian.Uint64(rootKey[24:])
 		qualityStr := encodeDirRate(quality)
 
+	pageLoop:
 		for {
 			for _, idx := range dir.Indexes {
-				if uint32(len(offers)) >= limit {
-					return offers, rawOffers
+				if remaining == 0 {
+					break pageLoop
 				}
+				remaining--
 				offerData, err := l.Read(keylet.Keylet{Key: idx})
 				if err != nil || offerData == nil {
 					continue
