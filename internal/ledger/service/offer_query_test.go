@@ -631,6 +631,57 @@ func TestGetBookOffers_TransferRateAdjustsFunded(t *testing.T) {
 	}
 }
 
+// TestGetBookOffers_HashFieldsAreUppercaseHex pins the wire shape of every
+// [32]byte field emitted by book_offers: rippled's uint256::to_string returns
+// a 64-char uppercase hex string, and clients parse it that way. This guards
+// the formatHashHex consolidation done for issue #531 — a regression that
+// leaks raw bytes through any of these fields would corrupt every JSON
+// response that flows through GetBookOffers.
+func TestGetBookOffers_HashFieldsAreUppercaseHex(t *testing.T) {
+	svc := newOfferTestService(t)
+
+	issuerAddr, _ := addressFromBytes(t, 0x10)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+
+	sellerAddr, _ := addressFromBytes(t, 0x20)
+	insertAccountRoot(t, svc, sellerAddr, 1_000_000_000_000, 0)
+
+	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
+	xrpModel := tx.NewXRPAmount(0)
+
+	insertOffer(t, svc, sellerAddr, 1,
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
+		tx.NewXRPAmount(10_000_000),
+	)
+
+	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10, false)
+	if err != nil {
+		t.Fatalf("GetBookOffers: %v", err)
+	}
+	if len(result.Offers) != 1 {
+		t.Fatalf("expected 1 offer, got %d", len(result.Offers))
+	}
+
+	assertHash := func(name, v string) {
+		t.Helper()
+		if len(v) != 64 {
+			t.Errorf("%s: want 64 hex chars, got %d (%q)", name, len(v), v)
+			return
+		}
+		if _, err := hex.DecodeString(v); err != nil {
+			t.Errorf("%s: not valid hex: %v (%q)", name, err, v)
+		}
+		if v != strings.ToUpper(v) {
+			t.Errorf("%s: want uppercase hex, got %q", name, v)
+		}
+	}
+
+	o := result.Offers[0]
+	assertHash("index", o.Index)
+	assertHash("BookDirectory", o.BookDirectory)
+	assertHash("PreviousTxnID", o.PreviousTxnID)
+}
+
 // TestGetBookOffers_WithProofs_VerifiesAgainstAccountHash pins that
 // withProofs=true emits a SHAMap proof per offer that verifies against
 // the queried ledger's state-map root (account_hash).
