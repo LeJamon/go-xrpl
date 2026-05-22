@@ -55,3 +55,22 @@ incremental reviews instead of re-reading rippled from scratch.
 - Cleanup commit: 3caa79e — chore: clean ai-generated comments (2 section-label removals; rest were rippled citations / non-obvious whys, kept as load-bearing)
 - Notes: B2 (LsfAMM) had broader blast radius than the review suggested — 4 production detection sites + 2 test assertions switched to AccountRoot.IsPseudoAccount() (mirrors rippled View.cpp:1138 isPseudoAccount). LsfAMM constant removed entirely; bit 0x02000000 collides with rippled's lsfTshCollect (hooks) and lsfLowDeepFreeze (RippleState). Wire-format collision risk surfaced by the review and tracked as out-of-scope for a future gap audit.
 
+
+## 2026-05-22 — PR #515 — fix/amm-keylet-and-xrp-currency
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/515
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/515#issuecomment-4518612514
+- Files reviewed (Phase 1):
+  - internal/rpc/handlers/amm_info.go — 1 Minor (currencyToBytes duplicated, drift vs strict keylet impl), 0 blocking
+  - internal/rpc/handlers/amm_info_test.go — 0 findings (test reviewed alongside handler)
+  - keylet/keylet.go — 1 Nit (isXRP→equivalent shortcut omitted from sort), 0 blocking
+  - keylet/keylet_test.go — 0 findings (test reviewed alongside keylet)
+- Additional Minor flagged on PR body (not code): blast radius undersold — same fix unbreaks ledger_entry.go AMM lookup via shared helper
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Follow-up fix commit (Minors + Nit addressed): 2e9a9a8 — refactor(amm): consolidate currencyToBytes; literal port of Issue::operator<=> XRP shortcut
+  - Routed amm_info.go, ledger_entry.go, internal/testing/amm/helpers.go through state.GetCurrencyBytes (canonical write-path encoder)
+  - Added internal/ledger/state/directory_test.go::TestGetCurrencyBytes_XRP_AllZero pinning the contract at its canonical site
+  - Added keylet/keylet_test.go::TestAMM_SortOrder_XRPCurrencyTie_KeepsOriginalOrder pinning the literal port of std::minmax-on-equivalent semantics
+  - PR body rewritten to cover ledger_entry surface and the deliberate follow-up of tightening state.GetCurrencyBytes to match rippled's strict to_currency
+- Cleanup commit: 1051724 — chore: clean ai-generated comments (4 paraphrasers stripped; all rippled-conformance docstrings preserved)
+- Notes: Strict-vs-loose currencyToBytes consolidation deliberately chose to mirror state.GetCurrencyBytes (loose) rather than the rippled-strict version in keylet/keylet.go::currencyToBytes used by keylet.Line. Switching to strict would require tightening AMMCreate preflight to reject non-ISO 3-char input — a deliberate follow-up.
