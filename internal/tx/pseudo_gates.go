@@ -14,9 +14,33 @@ type PseudoPreclaim interface {
 
 // pseudoPreflight enforces the gates that rippled's Change::preflight runs on
 // every pseudo-transaction type before dispatching to type-specific logic.
-// Reference: rippled Change.cpp:36-80 (preflight + preflight0).
-func pseudoPreflight(tx Transaction, rules *amendment.Rules) Result {
+// It also mirrors the two preflight0 guards that fire for pseudo-tx —
+// tfInnerBatchTxn rejection (Transactor.cpp:46-51) and the NetworkID check
+// when sfNetworkID is present (Transactor.cpp:53-75).
+// Reference: rippled Change.cpp:36-80, Transactor.cpp:42-87.
+func (e *Engine) pseudoPreflight(tx Transaction, rules *amendment.Rules) Result {
 	common := tx.GetCommon()
+
+	// preflight0 inner-batch gate: a pseudo-tx with the tfInnerBatchTxn flag
+	// is structurally invalid because only the batch executor sets that flag.
+	// Reference: Transactor.cpp:46-51.
+	if common.Flags != nil && *common.Flags&TfInnerBatchTxn != 0 {
+		return TemINVALID_FLAG
+	}
+
+	// preflight0 NetworkID gate: rippled checks NetworkID for non-pseudo
+	// always, and for pseudo only when sfNetworkID is present. We are on the
+	// pseudo path, so the check fires only when the field is set; an absent
+	// NetworkID on a pseudo-tx is always legal.
+	// Reference: Transactor.cpp:53-75.
+	if common.NetworkID != nil {
+		if e.config.NetworkID <= LegacyNetworkIDThreshold {
+			return TelNETWORK_ID_MAKES_TX_NON_CANONICAL
+		}
+		if *common.NetworkID != e.config.NetworkID {
+			return TelWRONG_NETWORK
+		}
+	}
 
 	// Account must be the canonical zero address. Rippled relies on the
 	// tx-format requiring sfAccount to be present and getAccountID(sfAccount)

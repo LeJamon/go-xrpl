@@ -256,3 +256,71 @@ func TestSetFee_PreclaimRejectsUnparseableBaseFee(t *testing.T) {
 	require.False(t, result.Applied)
 	require.Equal(t, "temMALFORMED", result.Result.String())
 }
+
+// closedEngineWithNetwork mirrors closedEngine but lets the test pin
+// EngineConfig.NetworkID so the NetworkID branch of preflight0 fires.
+func closedEngineWithNetwork(t *testing.T, rules *amendment.Rules, networkID uint32) *tx.Engine {
+	t.Helper()
+	env := jtx.NewTestEnv(t)
+	cfg := tx.EngineConfig{
+		BaseFee:                   10,
+		ReserveBase:               200_000_000,
+		ReserveIncrement:          50_000_000,
+		LedgerSequence:            env.LedgerSeq(),
+		SkipSignatureVerification: true,
+		OpenLedger:                false,
+		Rules:                     rules,
+		NetworkID:                 networkID,
+	}
+	return tx.NewEngine(env.Ledger(), cfg)
+}
+
+// TestPseudoPreflight_TfInnerBatchTxnRejected rejects a pseudo-tx carrying
+// the tfInnerBatchTxn flag, matching rippled preflight0 (Transactor.cpp:46-51).
+func TestPseudoPreflight_TfInnerBatchTxnRejected(t *testing.T) {
+	engine, _ := closedEngine(t, amendment.AllSupportedRules())
+	atx := newAmendmentTx()
+	flags := tx.TfInnerBatchTxn
+	atx.Common.Flags = &flags
+	result := engine.ApplyPseudo(atx)
+	require.False(t, result.Applied)
+	require.Equal(t, "temINVALID_FLAG", result.Result.String())
+}
+
+// TestPseudoPreflight_NetworkID_LegacyForbidsField pins rippled's rule that on
+// legacy networks (NETWORK_ID <= 1024) any sfNetworkID on a pseudo-tx is
+// non-canonical. Reference: Transactor.cpp:58-64.
+func TestPseudoPreflight_NetworkID_LegacyForbidsField(t *testing.T) {
+	engine := closedEngineWithNetwork(t, amendment.AllSupportedRules(), 0)
+	atx := newAmendmentTx()
+	nid := uint32(42)
+	atx.Common.NetworkID = &nid
+	result := engine.ApplyPseudo(atx)
+	require.False(t, result.Applied)
+	require.Equal(t, "telNETWORK_ID_MAKES_TX_NON_CANONICAL", result.Result.String())
+}
+
+// TestPseudoPreflight_NetworkID_NewNetworkRequiresMatch pins rippled's rule
+// that on a new network (NETWORK_ID > 1024) a present sfNetworkID must match.
+// Reference: Transactor.cpp:65-74.
+func TestPseudoPreflight_NetworkID_NewNetworkRequiresMatch(t *testing.T) {
+	engine := closedEngineWithNetwork(t, amendment.AllSupportedRules(), 2000)
+	atx := newAmendmentTx()
+	wrong := uint32(2001)
+	atx.Common.NetworkID = &wrong
+	result := engine.ApplyPseudo(atx)
+	require.False(t, result.Applied)
+	require.Equal(t, "telWRONG_NETWORK", result.Result.String())
+}
+
+// TestPseudoPreflight_NetworkID_AbsentAllowedOnPseudo confirms that, unlike
+// normal transactions, a pseudo-tx without sfNetworkID is legal even on a
+// new network — rippled gates the check on field presence for pseudo-tx.
+// Reference: Transactor.cpp:53 ("|| ctx.tx.isFieldPresent(sfNetworkID)").
+func TestPseudoPreflight_NetworkID_AbsentAllowedOnPseudo(t *testing.T) {
+	engine := closedEngineWithNetwork(t, amendment.AllSupportedRules(), 2000)
+	atx := newAmendmentTx() // NetworkID nil
+	result := engine.ApplyPseudo(atx)
+	require.NotEqual(t, "telREQUIRES_NETWORK_ID", result.Result.String(),
+		"absent NetworkID must not trigger the new-network requirement for pseudo-tx")
+}

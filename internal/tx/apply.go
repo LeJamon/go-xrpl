@@ -193,7 +193,7 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) 
 	// type-specific switch; replicated here for all pseudo-tx types. Run before
 	// computing the transaction hash so malformed inputs surface as a typed tem*
 	// result rather than a serialization-induced tefINTERNAL.
-	if gate := pseudoPreflight(tx, rules); !gate.IsSuccess() {
+	if gate := e.pseudoPreflight(tx, rules); !gate.IsSuccess() {
 		return ApplyResult{
 			Result:   gate,
 			Applied:  false,
