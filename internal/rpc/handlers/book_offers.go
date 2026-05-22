@@ -148,10 +148,15 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		}
 	}
 
-	// proof (BookOffers.cpp:201 — `bProof = isMember(jss::proof)`). rippled
-	// treats *any* presence as truthy; a string or array still flips the
-	// flag. We match that by defaulting to true when the field is present
-	// but unparseable, and honouring an explicit boolean otherwise.
+	// proof (BookOffers.cpp:201 — `bProof = isMember(jss::proof)`). Rippled
+	// treats any presence as truthy, including `false` and `null`, because
+	// jsoncpp's isMember returns true for any present key regardless of
+	// value. We deliberately diverge: unlike rippled (which forwards bProof
+	// to getBookPage and then ignores it — see NetworkOPs.cpp:4430-4628),
+	// goxrpld actually emits a proof when the flag is on, so honouring an
+	// explicit `false`/`null` as opt-out matches what a client expects.
+	// Any non-null non-bool value still flips it on, preserving the
+	// presence-based surface for malformed inputs.
 	withProofs := false
 	if rawProof, ok := probe["proof"]; ok && !isJSONNull(rawProof) {
 		var b bool

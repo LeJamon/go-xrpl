@@ -455,9 +455,13 @@ func newDirRate(q uint64, takerPays tx.Amount) tx.Amount {
 
 // extractOfferProof returns the SHAMap proof for an offer key as a list of
 // upper-case hex strings, ordered leaf-to-root. The returned slice is nil
-// when the offer is absent from the supplied snapshot — that's only possible
-// if the snapshot was taken before the offer was inserted, in which case
-// emitting no proof is preferable to returning a hash mismatch downstream.
+// when the offer is absent from the supplied snapshot. For closed-ledger
+// requests this can't happen — snapshot and walk both read an immutable
+// ledger. The narrow case is an open-ledger request where a concurrent
+// insert lands in `targetLedger` between the snapshot capture and the book
+// walk: that one offer surfaces in the walk but not in the snapshot, so
+// its proof is omitted (per `omitempty`) rather than mis-attributed to a
+// different account_hash.
 func extractOfferProof(snap *shamap.SHAMap, key [32]byte) ([]string, error) {
 	proof, err := snap.GetProofPath(key)
 	if err != nil {

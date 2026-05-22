@@ -1267,11 +1267,14 @@ func TestBookOffersNilOffersArray(t *testing.T) {
 	assert.Contains(t, resp, "offers", "Response must contain offers key even when nil")
 }
 
-// TestBookOffersProofFlagPlumbing pins that the handler forwards the JSON
-// `proof` field through to LedgerService.GetBookOffers as the withProofs flag.
-// Rippled's BookOffers.cpp:201 treats *presence* of jss::proof as truthy; we
-// honour explicit booleans and treat any non-null malformed value as truthy
-// to match that surface.
+// TestBookOffersProofFlagPlumbing pins how the handler forwards the JSON
+// `proof` field through to LedgerService.GetBookOffers as the withProofs
+// flag. Rippled's BookOffers.cpp:201 (`isMember(jss::proof)`) treats any
+// presence — including explicit `false` and `null` — as truthy, but the
+// forwarded flag is ignored downstream (NetworkOPs.cpp:4430-4628). goxrpld
+// actually emits the proof, so we deliberately diverge on the explicit-bool
+// and null inputs: `false`/`null` opt out, any other present value flips
+// the flag on. See the comment at BookOffers handler.proof for rationale.
 func TestBookOffersProofFlagPlumbing(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
@@ -1304,10 +1307,10 @@ func TestBookOffersProofFlagPlumbing(t *testing.T) {
 		omitProof bool
 	}{
 		{name: "absent → false", omitProof: true, want: false},
-		{name: "explicit false → false", proof: false, want: false},
+		{name: "explicit false → false (diverges from rippled isMember: opt-out)", proof: false, want: false},
 		{name: "explicit true → true", proof: true, want: true},
-		{name: "non-bool present → true (rippled isMember semantics)", proof: "yes", want: true},
-		{name: "null → false (treated as absent)", proof: nil, want: false},
+		{name: "non-bool present → true (matches rippled isMember presence)", proof: "yes", want: true},
+		{name: "null → false (diverges from rippled isMember: opt-out)", proof: nil, want: false},
 	}
 
 	for _, tc := range cases {
