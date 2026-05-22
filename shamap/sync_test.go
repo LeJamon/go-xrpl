@@ -1,6 +1,8 @@
 package shamap
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"testing"
 )
@@ -381,6 +383,69 @@ func TestWalkMap_MaxMissingHonored(t *testing.T) {
 	gotP := dest.WalkMapParallel(bound, nil)
 	if len(gotP) != bound {
 		t.Errorf("WalkMapParallel(maxMissing=%d): got %d entries", bound, len(gotP))
+	}
+}
+
+// TestWalkMap_BackedLazyLoadAfterRelease pins the conformance behavior
+// against rippled's descendNoStore-based walker (SHAMap.cpp:351-357): on
+// a backed map whose in-memory children have been released after a
+// flush, both WalkMap and WalkMapParallel must reach the on-disk data
+// via lazy-load and report zero missing nodes — not the false positives
+// that a pure in-memory walker would emit.
+func TestWalkMap_BackedLazyLoadAfterRelease(t *testing.T) {
+	family := newMemoryFamily()
+	src, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatalf("NewBacked: %v", err)
+	}
+
+	// 32 keys spread across multiple first-nibble branches so the
+	// tree has at least two levels of inner nodes. Start from 1 to
+	// avoid an all-zero key (which deserializes back as an invalid
+	// account-state leaf).
+	for i := byte(1); i <= 32; i++ {
+		var key [32]byte
+		key[0] = i
+		key[31] = i
+		if err := src.Put(key, intToBytes(int(i))); err != nil {
+			t.Fatalf("Put(%d): %v", i, err)
+		}
+	}
+
+	// FlushDirty(true) writes every dirty node to family and then calls
+	// ReleaseChildren on each inner — children are nil, hashes remain.
+	batch, err := src.FlushDirty(true)
+	if err != nil {
+		t.Fatalf("FlushDirty: %v", err)
+	}
+	if err := family.StoreBatch(context.Background(), batch.Entries); err != nil {
+		t.Fatalf("StoreBatch: %v", err)
+	}
+
+	if got := src.WalkMap(0, nil); len(got) != 0 {
+		t.Errorf("WalkMap on backed map with released children: want 0 missing, got %d", len(got))
+	}
+	if got := src.WalkMapParallel(0, nil); len(got) != 0 {
+		t.Errorf("WalkMapParallel on backed map with released children: want 0 missing, got %d", len(got))
+	}
+
+	// Sanity: every original key still resolves through the lazy-load
+	// path (proves the walker didn't just skip silently).
+	for i := byte(1); i <= 32; i++ {
+		var key [32]byte
+		key[0] = i
+		key[31] = i
+		item, found, err := src.Get(key)
+		if err != nil {
+			t.Fatalf("Get(%d) after release: %v", i, err)
+		}
+		if !found {
+			t.Fatalf("Get(%d) after release: not found", i)
+		}
+		want := intToBytes(int(i))
+		if !bytes.Equal(item.Data(), want) {
+			t.Fatalf("Get(%d) after release: data drift", i)
+		}
 	}
 }
 

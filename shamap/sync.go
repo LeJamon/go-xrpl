@@ -133,12 +133,19 @@ func NewSyncState() *SyncState {
 	}
 }
 
-// missingNodeWalker is the shared BFS-over-one-subtree primitive used by
-// WalkMap, WalkMapParallel and GetMissingNodes. It walks the in-memory
-// subtree rooted at `start` (no disk loads — anything not already loaded
-// is reported as missing) and invokes report for every non-empty branch
-// whose child pointer is nil. Returns true if report signalled stop.
+// walkSubtreeForMissing is the shared BFS-over-one-subtree primitive used
+// by WalkMap, WalkMapParallel and GetMissingNodes. It walks the subtree
+// rooted at `start` and invokes report for every non-empty branch whose
+// child node is neither in memory nor recoverable from sm's NodeStore.
+// Returns true if report signalled stop.
+//
+// For backed maps (sm.backed and sm.family non-nil), a hash-only branch
+// triggers a lazy fetch via sm.descend before being declared missing —
+// mirroring rippled's descendNoStore-based walker (SHAMap.cpp:351-357).
+// For unbacked maps the function never issues store I/O; any nil child
+// pointer on a set branch is reported as missing.
 func walkSubtreeForMissing(
+	sm *SHAMap,
 	start *InnerNode,
 	startID NodeID,
 	startHash [32]byte,
@@ -181,8 +188,14 @@ func walkSubtreeForMissing(
 			}
 
 			if child == nil {
-				// Branch is referenced by hash but the child node
-				// is not in memory — that's a missing node.
+				if loaded := loadFromStore(sm, item.node, branch); loaded != nil {
+					child = loaded
+				}
+			}
+
+			if child == nil {
+				// Branch is referenced by hash but the child node is
+				// neither in memory nor in the local store.
 				if !filter.ShouldFetch(childHash) {
 					continue
 				}
@@ -216,21 +229,33 @@ func walkSubtreeForMissing(
 	return false
 }
 
-// WalkMap walks the in-memory SHAMap and returns every non-empty branch
-// whose child node is not loaded as a MissingNode entry. Returns nil
-// when the root is empty or the map is in StateInvalid.
+// loadFromStore lazy-fetches a hash-only branch from the backing store
+// and installs it on the parent via SetChildIfNil. Returns nil for
+// unbacked maps, missing-from-store, or any fetch error — callers treat
+// a nil result as a truly-missing branch. Matches rippled's
+// descendNoStore semantics (SHAMap.cpp:351-357) modulo the canonicalize
+// side effect: rippled returns the fetched node without installing it,
+// goxrpl installs via SetChildIfNil so subsequent descends are O(1).
+func loadFromStore(sm *SHAMap, parent *InnerNode, branch int) Node {
+	if sm == nil || !sm.backed || sm.family == nil {
+		return nil
+	}
+	loaded, err := sm.descend(parent, branch)
+	if err != nil {
+		return nil
+	}
+	return loaded
+}
+
+// WalkMap walks the SHAMap and returns every non-empty branch whose
+// child node is neither in memory nor recoverable from the local
+// NodeStore. Returns nil when the root is empty or the map is in
+// StateInvalid.
 //
-// Divergence from rippled's SHAMap::walkMap (SHAMapDelta.cpp:240): the
-// rippled walker calls descendNoStore, which for a backed map fetches
-// any hash-only branch from the local NodeStore before declaring it
-// missing. This Go walker performs no store fetches — a backed map
-// whose children have been released (see InnerNode.ReleaseChildren)
-// will surface those branches as missing even though their data is on
-// disk. Today's callers (sync flows in inbound and consensus/adaptor)
-// walk maps that have not yet pulled child nodes onto local disk, so
-// the divergence is latent; if a caller later walks a flushed-and-
-// evicted backed map, threading a loadFromStore policy into the walker
-// will be required.
+// Mirrors rippled's SHAMap::walkMap (SHAMapDelta.cpp:240): for backed
+// maps, hash-only branches are lazy-loaded via the family before being
+// declared missing, matching rippled's descendNoStore semantics. For
+// unbacked maps the walk is purely in-memory.
 //
 // maxMissing == 0 is unbounded; otherwise the walk stops once that many
 // entries have been collected. A nil filter behaves like DefaultSyncFilter.
@@ -248,6 +273,7 @@ func (sm *SHAMap) WalkMap(maxMissing int, filter SyncFilter) []MissingNode {
 
 	var missing []MissingNode
 	walkSubtreeForMissing(
+		sm,
 		sm.root,
 		NewRootNodeID(),
 		sm.root.Hash(),
@@ -269,16 +295,16 @@ func (sm *SHAMap) WalkMap(maxMissing int, filter SyncFilter) []MissingNode {
 // subtrees still run their stacks to completion, since the flag is
 // checked only inside the report callback.
 //
-// Modeled on rippled's SHAMap::walkMapParallel (SHAMapDelta.cpp:282),
-// with two intentional divergences:
-//
-//   - Hash-only branches at root depth 1 are reported as missing here.
-//     Rippled's walkMapParallel silently drops them (its top-children
-//     capture at SHAMapDelta.cpp:290-318 skips any nullptr child without
-//     emitting a missing entry, which makes its result disagree with
-//     rippled's own serial walkMap). This Go walker stays consistent
-//     with the serial WalkMap so the two produce the same result set.
-//   - Same no-store-fetch policy as WalkMap (see that docstring).
+// Modeled on rippled's SHAMap::walkMapParallel (SHAMapDelta.cpp:282).
+// One intentional divergence: hash-only branches at root depth 1 that
+// the local store cannot satisfy are reported as missing here. Rippled's
+// walkMapParallel silently drops them (its top-children capture at
+// SHAMapDelta.cpp:290-318 skips any nullptr child without emitting a
+// missing entry, which makes its result disagree with rippled's own
+// serial walkMap). This Go walker stays consistent with the serial
+// WalkMap so the two produce the same result set. As in WalkMap, backed
+// maps lazy-load hash-only branches from the family before declaring
+// them missing.
 //
 // On a 16-way branched tree the speedup approaches a factor of 16 for
 // cold in-memory scans; for small trees the goroutine startup overhead
@@ -337,6 +363,11 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 			continue
 		}
 		if child == nil {
+			if loaded := loadFromStore(sm, sm.root, branch); loaded != nil {
+				child = loaded
+			}
+		}
+		if child == nil {
 			if filter.ShouldFetch(childHash) {
 				if reportLocked(MissingNode{
 					Hash:       childHash,
@@ -376,6 +407,7 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 		go func() {
 			defer wg.Done()
 			walkSubtreeForMissing(
+				sm,
 				s.node,
 				s.nodeID,
 				s.nodeHash,
