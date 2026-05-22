@@ -3068,8 +3068,15 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		}
 	}
 
+	// Capture roundTime BEFORE notifying the adaptor so it sees the
+	// current round's duration, not the previous round's stale value
+	// in e.prevRoundTime (which is updated below). Mirrors rippled
+	// RCLConsensus.cpp:803-805 where roundTime is the local
+	// wall-clock measurement passed inline to processClosedLedger.
+	roundTime := time.Since(e.roundStartTime)
+
 	// Notify adaptor
-	e.adaptor.OnConsensusReached(newLedger, validations)
+	e.adaptor.OnConsensusReached(newLedger, validations, roundTime)
 
 	// Emit ledger accepted event
 	e.eventBus.Publish(&consensus.LedgerAcceptedEvent{
@@ -3111,7 +3118,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	}
 
 	// Track round time for convergePercent calculation
-	e.prevRoundTime = time.Since(e.roundStartTime)
+	e.prevRoundTime = roundTime
 
 	// Track trusted proposer count for peer pressure in next round
 	trustedCount := 0

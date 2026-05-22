@@ -256,6 +256,19 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			OpenLedgerFeeLevel:    m.OpenLedgerFeeLevel,
 		}
 	}
+	services.TxQFeeMetrics = func() types.TxQFeeMetrics {
+		m := ledgerSvcRef.GetTxQMetrics()
+		return types.TxQFeeMetrics{
+			TxCount:               m.TxCount,
+			TxQMaxSize:            m.TxQMaxSize,
+			TxInLedger:            m.TxInLedger,
+			TxPerLedger:           m.TxPerLedger,
+			ReferenceFeeLevel:     m.ReferenceFeeLevel,
+			MinProcessingFeeLevel: m.MinProcessingFeeLevel,
+			MedFeeLevel:           m.MedFeeLevel,
+			OpenLedgerFeeLevel:    m.OpenLedgerFeeLevel,
+		}
+	}
 
 	// LoadFactorFees surfaces the local/net/cluster fee factors that
 	// drive the admin-only human-mode load_factor_local / load_factor_net /

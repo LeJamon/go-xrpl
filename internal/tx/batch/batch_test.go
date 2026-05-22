@@ -365,3 +365,101 @@ func TestBatchConstants(t *testing.T) {
 	assert.Equal(t, uint32(0x00000004), BatchFlagUntilFailure)
 	assert.Equal(t, uint32(0x00000008), BatchFlagIndependent)
 }
+
+// TestCalculateMinimumFee_SingleSignBaseline pins the common case
+// (single-signed inners, no BatchSigners): the formula degenerates
+// to (numInner + 2) * baseFee.
+func TestCalculateMinimumFee_SingleSignBaseline(t *testing.T) {
+	b := NewBatch("rOuter")
+	b.AddInnerTransaction(makeTestPayment())
+	b.AddInnerTransaction(makeTestPayment())
+	require.Equal(t, uint64(40), b.CalculateMinimumFee(10), "2 inners + no signers")
+
+	b3 := NewBatch("rOuter")
+	b3.AddInnerTransaction(makeTestPayment())
+	b3.AddInnerTransaction(makeTestPayment())
+	b3.AddInnerTransaction(makeTestPayment())
+	require.Equal(t, uint64(50), b3.CalculateMinimumFee(10), "3 inners + no signers")
+}
+
+// TestCalculateMinimumFee_DirectSignedBatchSigners pins
+// Batch.cpp:130-131 — each BatchSigner with a direct BatchTxnSignature
+// adds one base fee.
+func TestCalculateMinimumFee_DirectSignedBatchSigners(t *testing.T) {
+	b := NewBatch("rOuter")
+	b.AddInnerTransaction(makeTestPayment())
+	b.AddInnerTransaction(makeTestPayment())
+	b.BatchSigners = []BatchSigner{
+		{BatchSigner: BatchSignerData{Account: "rSignerA", BatchTxnSignature: "AB"}},
+		{BatchSigner: BatchSignerData{Account: "rSignerB", BatchTxnSignature: "CD"}},
+	}
+	// batchBase=20 + txnFees=20 + signerFees=2*10 = 60
+	require.Equal(t, uint64(60), b.CalculateMinimumFee(10))
+}
+
+// TestCalculateMinimumFee_MultiSignBatchSigner pins
+// Batch.cpp:132-134 — a multi-signed BatchSigner (no direct
+// TxnSignature, populated Signers array) contributes
+// len(Signers) * baseFee, NOT just one base fee.
+func TestCalculateMinimumFee_MultiSignBatchSigner(t *testing.T) {
+	b := NewBatch("rOuter")
+	b.AddInnerTransaction(makeTestPayment())
+	b.AddInnerTransaction(makeTestPayment())
+	b.BatchSigners = []BatchSigner{{
+		BatchSigner: BatchSignerData{
+			Account: "rSignerA",
+			Signers: []tx.SignerWrapper{
+				{Signer: tx.Signer{Account: "rNested1", SigningPubKey: "01", TxnSignature: "AA"}},
+				{Signer: tx.Signer{Account: "rNested2", SigningPubKey: "02", TxnSignature: "BB"}},
+				{Signer: tx.Signer{Account: "rNested3", SigningPubKey: "03", TxnSignature: "CC"}},
+			},
+		},
+	}}
+	// batchBase=20 + txnFees=20 + signerFees=3*10 = 70
+	require.Equal(t, uint64(70), b.CalculateMinimumFee(10))
+}
+
+// TestCalculateMinimumFee_MultiSignedInner pins
+// Batch.cpp:87-100 — inner transactions count their own per-tx
+// calculateBaseFee, so a multi-signed inner pays (1+n) * baseFee
+// instead of one base fee.
+func TestCalculateMinimumFee_MultiSignedInner(t *testing.T) {
+	b := NewBatch("rOuter")
+	b.AddInnerTransaction(makeTestPayment())
+	multiInner := makeTestPayment()
+	multiInner.GetCommon().Signers = []tx.SignerWrapper{
+		{Signer: tx.Signer{Account: "rNested1", SigningPubKey: "01", TxnSignature: "AA"}},
+		{Signer: tx.Signer{Account: "rNested2", SigningPubKey: "02", TxnSignature: "BB"}},
+	}
+	b.AddInnerTransaction(multiInner)
+	// batchBase=20 + txnFees=(10 + 30) + signerFees=0 = 60
+	require.Equal(t, uint64(60), b.CalculateMinimumFee(10))
+}
+
+// TestCalculateMinimumFee_OuterMultiSign pins
+// Batch.cpp:60-70 — Transactor::calculateBaseFee charges
+// (1 + outerSigners) * baseFee for the outer Batch tx itself,
+// in addition to the view.fees().base added by the Batch wrapper.
+func TestCalculateMinimumFee_OuterMultiSign(t *testing.T) {
+	b := NewBatch("rOuter")
+	b.AddInnerTransaction(makeTestPayment())
+	b.Common.Signers = []tx.SignerWrapper{
+		{Signer: tx.Signer{Account: "rOuter1", SigningPubKey: "01", TxnSignature: "AA"}},
+		{Signer: tx.Signer{Account: "rOuter2", SigningPubKey: "02", TxnSignature: "BB"}},
+	}
+	// batchBase = 10 + (1 + 2)*10 = 40; txnFees = 10; signerFees = 0 → 50
+	require.Equal(t, uint64(50), b.CalculateMinimumFee(10))
+}
+
+// TestCalculateMinimumFee_InnerBatchSentinel pins
+// Batch.cpp:92-97 — an inner that is itself ttBATCH (forbidden) is
+// surfaced via an overflow sentinel so the outer minimum-fee gate
+// rejects, rather than silently computing a normal fee.
+func TestCalculateMinimumFee_InnerBatchSentinel(t *testing.T) {
+	outer := NewBatch("rOuter")
+	innerBatch := NewBatch("rInner")
+	outer.AddInnerTransaction(innerBatch)
+	fee := outer.CalculateMinimumFee(10)
+	// Sentinel is ≥ 100B XRP in drops; any realistic caller will reject.
+	require.Greater(t, fee, uint64(100_000_000_000), "inner ttBATCH must surface as overflow sentinel")
+}

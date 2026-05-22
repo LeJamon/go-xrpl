@@ -1223,6 +1223,14 @@ func (c *testTxQApplyContext) PreclaimTransaction(txn tx.Transaction, account [2
 	return 0
 }
 
+// GetApplyFlags returns the engine ApplyFlags currently driving the
+// test env. The test env stores the flag on TestEnv.txQApplyFlags and
+// resets it after each Submit; default is 0 so TxQ admission behaves
+// as if no flag is set.
+func (c *testTxQApplyContext) GetApplyFlags() tx.ApplyFlags {
+	return c.env.txQApplyFlags
+}
+
 // testTxQAcceptContext implements txq.AcceptContext for draining the queue.
 type testTxQAcceptContext struct {
 	env *TestEnv
