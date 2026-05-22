@@ -270,6 +270,24 @@ type TransactionSubmitter interface {
 	GetTransaction(txHash [32]byte) (*TransactionInfo, error)
 	StoreTransaction(txHash [32]byte, txData []byte) error
 	GetTransactionHistory(ctx context.Context, startIndex uint32) (*TxHistoryResult, error)
+
+	// GetAutofillFee returns the Fee a transaction should carry to enter
+	// the open ledger. Mirrors rippled getCurrentNetworkFee
+	// (TransactionSign.cpp:839-877): max(feeDefault, escalatedFee) with a
+	// feeDefault * mult / div ceiling. On ceiling overflow handlers map
+	// to rpcINTERNAL; on exceedance the returned error is a
+	// *svcerr.HighFeeError (errors.Is(svcerr.ErrHighFee) also matches).
+	// Includes per-tx-type adjustments (multisign, AccountDelete,
+	// AMMCreate, LedgerStateFix). Never reads the source account.
+	GetAutofillFee(txJSON []byte) (fee uint64, err error)
+
+	// GetAutofillSequence returns the Sequence a transaction should
+	// carry. Mirrors rippled getAutofillSequence (Simulate.cpp:37-69):
+	// returns 0 when hasTicketSequence is true; otherwise reads the
+	// account SLE and consults TxQ.NextQueuableSeq. Returns
+	// svcerr.ErrAccountNotFound when the account is absent and no ticket
+	// supersedes the requirement.
+	GetAutofillSequence(account string, hasTicketSequence bool) (sequence uint32, err error)
 }
 
 // AccountQuerier provides account-related read operations.
@@ -465,6 +483,16 @@ type SubmitResult struct {
 
 	// ValidatedLedger is the highest validated ledger sequence
 	ValidatedLedger uint32
+
+	// Metadata is nil when the transaction produced no metadata.
+	Metadata *SubmitMetadata
+}
+
+// SubmitMetadata carries simulation metadata in JSON and binary form
+// so the simulate handler can render either `meta` or `meta_blob`.
+type SubmitMetadata struct {
+	JSON any
+	Blob []byte
 }
 
 // Accepted returns true if any submission state is true, matching

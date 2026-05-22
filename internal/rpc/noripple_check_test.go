@@ -164,6 +164,12 @@ func (m *mockNoRippleCheckLedgerService) GetNFTSellOffers(_ context.Context, nft
 func (m *mockNoRippleCheckLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
+func (m *mockNoRippleCheckLedgerService) GetAutofillFee(txJSON []byte) (uint64, error) {
+	return 0, errors.New("not implemented")
+}
+func (m *mockNoRippleCheckLedgerService) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
+	return 0, errors.New("not implemented")
+}
 func (m *mockNoRippleCheckLedgerService) IsAmendmentBlocked() bool { return false }
 func (m *mockNoRippleCheckLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {
 	return nil, errors.New("not implemented in mock")
