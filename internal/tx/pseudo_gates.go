@@ -115,7 +115,6 @@ func (e *Engine) pseudoPreclaim(tx Transaction, rules *amendment.Rules) Result {
 // whitespace all count. Non-decimal input (signs, "0x" prefixes, etc.) is
 // rejected by returning false, which surfaces upstream as temBAD_FEE.
 func isZeroFee(s string) bool {
-	// Strip ASCII whitespace.
 	lo, hi := 0, len(s)
 	for lo < hi && (s[lo] == ' ' || s[lo] == '\t') {
 		lo++
