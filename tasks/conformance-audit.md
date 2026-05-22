@@ -168,3 +168,19 @@ incremental reviews instead of re-reading rippled from scratch.
 - Files cleanup-only (Phase 0 skipped Phase 1): none
 - Cleanup commit: 47f442c0 — chore: clean ai-generated comments (1 paraphrase line stripped from isZeroFee; all rippled cites and non-obvious whys preserved)
 - Notes: Zero blockers and zero minors across the incremental work — all seven prior-audit follow-ups are correctly anchored to rippled, and the new tfInnerBatchTxn + NetworkID gates byte-match Transactor.cpp:46-75. The three nits are advisory: lingering ZeroAccount literals exist only at non-pseudo-tx sites (payment.go path-element XRP detection, conformance/runner.go); isZeroFee is strictly more permissive than rippled at a Go-API boundary rippled never reaches; pseudoPreclaim's structural asymmetry between ttFEE and ttAMENDMENT/ttUNL_MODIFY would benefit from a one-line comment. None gate merge.
+
+## 2026-05-22 — PR #538 — fix/issue-527-book-offers-marker
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/538
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/538#issuecomment-4520319673
+- Files reviewed (Phase 1):
+  - internal/ledger/service/offer_query.go — 4 Minor (M1 limit=0 emits malformed all-zero marker; M2 stale-marker conflated with malformed-marker error; M3 paginated response omits `limit` echo vs rippled account_offers; M4 marker-survival-across-ledger-advancement undocumented), 0 Blocking
+  - internal/ledger/service/offer_query_test.go — covered alongside offer_query.go
+  - internal/rpc/handlers/book_offers.go — 0 new findings (error funnel handler:195-197 correctly routes svcerr.ErrInvalidMarker → invalid_field_error("marker"))
+  - internal/rpc/ledger_adapter.go — 0 findings (interface plumbing only)
+  - internal/rpc/types/services.go — 0 findings (BookOffersResult.Marker addition; `json:"marker,omitempty"` verified absent on empty result via live verify)
+  - internal/rpc/book_offers_test.go — 3 Nit (N1 comment claims rippled rebuilds umBalance, but rippled never paginates so the rationale is mis-cited; N2 firstIteration flag is redundant; N3 samePrefix24 could use bytes.Equal)
+- Wire-shape verify pass: server booted on 127.0.0.1:5005; empty-book book_offers returns marker absent (correct, omitempty); bad-marker (4 probes: non-hex, wrong length, valid-shape-not-in-ledger, numeric) all return `Invalid field 'marker'.` matching rippled's invalid_field_error. No field-name surprises. Marker round-trip with ≥2 pages not driven (would require populating offers via standalone-mode OfferCreate).
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Cleanup commit: 8da5b78a — chore(#527): clean ai-generated comments (-5 net lines; 1 self-contradictory test setup comment rewritten to capture actual load-bearing why; 1 redundant docstring stripped. All NetworkOPs.cpp cites, marker-divergence docs, and "wrong book" fixture intents preserved as conformance evidence)
+- Notes: PR adds marker pagination as a deliberate goXRPL extension — rippled's `book_offers` accepts the marker parameter (BookOffers.cpp:201-214) but its handler ignores it (NetworkOPs.cpp:4627) and rippled's own Book_test.cpp:1711 documents "a marker field is not returned for this method". Review judged the extension against the closest paginated rippled handler (account_offers) and against rippled's directory-walk invariants. Zero blockers; the four Minors are quality issues the user can address in-PR or as a follow-up — M1 (limit=0 → bad marker) is the most actionable, fix is gating marker emit on `hitLimit && len(offers) > 0`.
