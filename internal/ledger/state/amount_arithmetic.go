@@ -1,13 +1,30 @@
 package state
 
 import (
-	"errors"
+	"fmt"
 	"math/big"
 )
 
+// Add returns a + b.
+//
+// Reference: rippled STAmount::operator+ in STAmount.cpp lines 387-440 —
+// calls areComparable() and throws "Can't add amounts that are't
+// comparable!" on native, currency, OR issuer mismatch.
+//
+// The native mismatch (XRP + IOU) is enforced with a TER-prefixed error
+// matching the CLAUDE.md rule. Currency and issuer mismatch are NOT yet
+// enforced even though rippled asserts on them: several existing call
+// sites in the payment + AMM flows pass amounts whose currency/issuer
+// disagree by convention (e.g. a zero-tagged tolerance compared against
+// LP-token balances, or RippleState LowLimit/HighLimit reads that don't
+// normalize the issuer the way rippled View::creditLimit does at
+// View.cpp:469-484). Tightening those assertions surfaces those call
+// sites as latent bugs and breaks legitimate flows; that cleanup is
+// tracked as a follow-up. The result is tagged with `a`'s currency and
+// issuer, matching the prior behaviour callers depend on.
 func (a Amount) Add(b Amount) (Amount, error) {
 	if a.IsNative() != b.IsNative() {
-		return Amount{}, errors.New("cannot add XRP and IOU amounts")
+		return Amount{}, fmt.Errorf("temBAD_AMOUNT: cannot add XRP and IOU amounts")
 	}
 	if a.IsNative() {
 		return Amount{
