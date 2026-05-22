@@ -1224,12 +1224,23 @@ func (a *Adaptor) GetServerVersion() uint64 {
 // Zero stance values mean "no vote" and the serializer will omit the
 // fields.
 // GetLoadFee returns the local load_fee advertised on outbound
-// validations. Today we have no feedback loop so we always return 0
-// — the serializer treats that as "omit", matching rippled's
-// behavior on a validator with minimum load. Future work can wire
-// this to a LoadFeeTrack-equivalent.
+// validations. Sources the value from the local LoadFeeTrack — under
+// no load the tracker returns LoadBase, which the serializer treats as
+// "omit" once normalised (matches rippled NetworkOPs.cpp:1130 which
+// emits localFee on validations).
 func (a *Adaptor) GetLoadFee() uint32 {
-	return 0
+	if a.ledgerService == nil {
+		return 0
+	}
+	ft := a.ledgerService.FeeTrack()
+	if ft == nil {
+		return 0
+	}
+	fee := ft.GetLocalFee()
+	if fee == ft.GetLoadBase() {
+		return 0
+	}
+	return fee
 }
 
 func (a *Adaptor) GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, postXRPFees bool) {

@@ -187,48 +187,58 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 		}
 	}
 
-	// load_factor: human mode is float (loadFactor/loadBase), machine mode has integers.
-	// Until a full LoadFeeTrack lands, the server-wide load factor mirrors the
-	// fee-escalation level — the only load signal we currently track. Matches
-	// rippled's NetworkOPs.cpp:2863-2875 fallback when no other load source
-	// (cluster, admin) is active.
-	//
-	// loadFactorFeeEscalation = openLedgerFeeLevel * loadBase / referenceFeeLevel
-	// (NetworkOPs.cpp:2850-2855). When referenceFeeLevel == loadBase this reduces
-	// to feeEscalation, but compute the ratio explicitly so the algebra survives
-	// any future TxQ configuration drift.
+	// load_factor mixes two load sources, matching NetworkOPs.cpp:2845-2858:
+	//   loadFactorServer = max(local, remote, cluster) from LoadFeeTrack
+	//   loadFactorFeeEscalation = openLedgerFeeLevel * loadBase / referenceFeeLevel
+	//   load_factor = max(loadFactorServer, loadFactorFeeEscalation), floored at loadBase
 	feeEscalation, feeQueue, feeReference := resolveLoadFactorFees(services)
 	loadFactorFeeEscalation := feeEscalation
 	if feeReference != 0 {
 		loadFactorFeeEscalation = feeEscalation * loadBase / feeReference
 	}
+	var loadFactorFees types.LoadFactorFees
+	if services != nil && services.LoadFactorFees != nil {
+		loadFactorFees = services.LoadFactorFees()
+	} else {
+		// Tracker unwired (older test fixtures): treat as no load so
+		// loadFactorServer collapses to loadBase, matching a fresh
+		// LoadFeeTrack.
+		base32 := uint32(loadBase)
+		loadFactorFees = types.LoadFactorFees{Local: base32, Net: base32, Cluster: base32}
+	}
+	loadFactorServer := uint64(loadFactorFees.Local)
+	if uint64(loadFactorFees.Net) > loadFactorServer {
+		loadFactorServer = uint64(loadFactorFees.Net)
+	}
+	if uint64(loadFactorFees.Cluster) > loadFactorServer {
+		loadFactorServer = uint64(loadFactorFees.Cluster)
+	}
 	loadFactor := loadFactorFeeEscalation
+	if loadFactorServer > loadFactor {
+		loadFactor = loadFactorServer
+	}
 	if loadFactor < loadBase {
 		loadFactor = loadBase
 	}
 	if human {
 		info["load_factor"] = float64(loadFactor) / float64(loadBase)
 		// Mirror rippled NetworkOPs.cpp:2883-2885: emit load_factor_server
-		// when it diverges from the overall load_factor. With no
-		// LoadFeeTrack subsystem loadFactorServer == loadBase, so this
-		// fires whenever fee escalation drives load_factor above 1.0.
-		if loadBase != loadFactor {
-			info["load_factor_server"] = float64(loadBase) / float64(loadBase)
+		// when it diverges from the overall load_factor.
+		if loadFactorServer != loadFactor {
+			info["load_factor_server"] = float64(loadFactorServer) / float64(loadBase)
 		}
 		// Mirror rippled NetworkOPs.cpp:2887-2901: admin-only emission
 		// of load_factor_{local,net,cluster}, each gated on the fee
-		// differing from loadBase. The LoadFactorFees hook is nil until
-		// a LoadFeeTrack subsystem lands, suppressing all three.
-		if ctx.IsAdmin && services != nil && services.LoadFactorFees != nil {
-			fees := services.LoadFactorFees()
-			if uint64(fees.Local) != loadBase {
-				info["load_factor_local"] = float64(fees.Local) / float64(loadBase)
+		// differing from loadBase.
+		if ctx.IsAdmin {
+			if uint64(loadFactorFees.Local) != loadBase {
+				info["load_factor_local"] = float64(loadFactorFees.Local) / float64(loadBase)
 			}
-			if uint64(fees.Net) != loadBase {
-				info["load_factor_net"] = float64(fees.Net) / float64(loadBase)
+			if uint64(loadFactorFees.Net) != loadBase {
+				info["load_factor_net"] = float64(loadFactorFees.Net) / float64(loadBase)
 			}
-			if uint64(fees.Cluster) != loadBase {
-				info["load_factor_cluster"] = float64(fees.Cluster) / float64(loadBase)
+			if uint64(loadFactorFees.Cluster) != loadBase {
+				info["load_factor_cluster"] = float64(loadFactorFees.Cluster) / float64(loadBase)
 			}
 		}
 		// Mirror rippled NetworkOPs.cpp:2902-2912: in human mode the
@@ -249,7 +259,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 		// trunc32() / jsonClipped() so the field type stays uint32.
 		info["load_base"] = uint32(loadBase)
 		info["load_factor"] = clipToUint32(loadFactor)
-		info["load_factor_server"] = uint32(loadBase)
+		info["load_factor_server"] = clipToUint32(loadFactorServer)
 		info["load_factor_fee_escalation"] = clipToUint32(feeEscalation)
 		info["load_factor_fee_queue"] = clipToUint32(feeQueue)
 		info["load_factor_fee_reference"] = clipToUint32(feeReference)

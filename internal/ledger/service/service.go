@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/goXRPLd/amendment"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/drops"
+	"github.com/LeJamon/goXRPLd/internal/feetrack"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
@@ -238,6 +239,14 @@ type Service struct {
 	// app.overlay().relay for each non-inner-batch tx surviving the
 	// rebuild). Nil when overlay broadcast is unwired (tests).
 	txRelay func(blob []byte)
+
+	// feeTrack is the local LoadFeeTrack mirror. Always non-nil — New()
+	// constructs a fresh tracker so GetAutofillFee and server_info
+	// observe the same fee factors as rippled's getCurrentNetworkFee
+	// path (TransactionSign.cpp:849-862). Updated by RaiseLocalFee /
+	// LowerLocalFee under job-queue overload (loadmgr) and by
+	// SetRemoteFee / SetClusterFee from the peer + cluster handlers.
+	feeTrack *feetrack.LoadFeeTrack
 }
 
 // New creates a new LedgerService
@@ -268,6 +277,7 @@ func New(cfg Config) (*Service, error) {
 		heldAdoptions:            make(map[uint32]*pendingAdopt),
 		txQueue:                  txq.New(txqCfg),
 		localTxs:                 localtxs.New(),
+		feeTrack:                 feetrack.New(),
 	}
 
 	return s, nil

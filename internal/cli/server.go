@@ -254,6 +254,21 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		}
 	}
 
+	// LoadFactorFees surfaces the local/net/cluster fee factors that
+	// drive the admin-only human-mode load_factor_local / load_factor_net /
+	// load_factor_cluster emissions (NetworkOPs.cpp:2887-2901). Net here
+	// mirrors rippled's "remote" axis — LoadFeeTrack stores it under
+	// remoteFee_.
+	if ft := ledgerSvcRef.FeeTrack(); ft != nil {
+		services.LoadFactorFees = func() types.LoadFactorFees {
+			return types.LoadFactorFees{
+				Local:   ft.GetLocalFee(),
+				Net:     ft.GetRemoteFee(),
+				Cluster: ft.GetClusterFee(),
+			}
+		}
+	}
+
 	// Start consensus/networking if not in standalone mode
 	if !standalone {
 		var compErr error

@@ -165,7 +165,7 @@ func (m *mockAccountNFTsLedgerService) GetNFTSellOffers(_ context.Context, nftID
 func (m *mockAccountNFTsLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetAutofillFee(txJSON []byte) (uint64, error) {
+func (m *mockAccountNFTsLedgerService) GetAutofillFee(txJSON []byte, unlimited bool) (uint64, error) {
 	return 0, errors.New("not implemented")
 }
 func (m *mockAccountNFTsLedgerService) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {

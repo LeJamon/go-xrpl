@@ -61,7 +61,7 @@ func (m *mockLedgerServiceSimulate) SimulateTransaction(txJSON []byte) (*types.S
 	return m.simulateResult, nil
 }
 
-func (m *mockLedgerServiceSimulate) GetAutofillFee(txJSON []byte) (uint64, error) {
+func (m *mockLedgerServiceSimulate) GetAutofillFee(txJSON []byte, unlimited bool) (uint64, error) {
 	m.feeAutofillCallCount++
 	if m.autofillFeeErr != nil {
 		return 0, m.autofillFeeErr

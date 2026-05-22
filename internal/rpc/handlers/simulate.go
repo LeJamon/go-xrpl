@@ -108,7 +108,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		if marshalErr != nil {
 			return nil, types.RpcErrorInternal("Failed to marshal tx_json for fee autofill")
 		}
-		fee, feeErr := ctx.Services.Ledger.GetAutofillFee(probe)
+		fee, feeErr := ctx.Services.Ledger.GetAutofillFee(probe, ctx.IsAdmin)
 		if feeErr != nil {
 			var hfe *svcerr.HighFeeError
 			if errors.As(feeErr, &hfe) {
