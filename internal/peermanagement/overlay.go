@@ -313,13 +313,6 @@ type Overlay struct {
 	// `app_.config().TX_REDUCE_RELAY_ENABLE` at OverlayImpl.cpp:107.
 	openLedgerHashesProvider func() [][32]byte
 
-	// localFeeProvider returns the local node's current load fee in
-	// drops, plus the validated-ledger age. The cluster timer reads
-	// this to fill in our own ClusterNode entry — rippled does the
-	// equivalent from FeeTrack at NetworkOPs.cpp:1129-1131. nil-safe;
-	// the cluster timer falls back to a zero load fee.
-	localFeeProvider func() (loadFee uint32, validatedAge time.Duration, ok bool)
-
 	// localNodeIdentity is the raw 33-byte compressed NodePublic of
 	// THIS node. Used by the cluster timer to insert ourselves into
 	// the gossip frame so peers can correlate validator load. Filled
@@ -2321,16 +2314,6 @@ func (o *Overlay) Cluster() *cluster.Registry { return o.cluster }
 // "feature gated off" behaviour.
 func (o *Overlay) SetTxProvider(fn func(hash [32]byte) ([]byte, bool)) {
 	o.txProvider = fn
-}
-
-// SetLocalFeeProvider installs the local-load-fee reader used by the
-// periodic TMCluster gossip. Returns the local load fee in drops plus
-// the validated-ledger age — mirrors rippled's
-// `app_.getFeeTrack().getLocalFee()` conditional at
-// NetworkOPs.cpp:1129-1131 (zero out the load fee when the validated
-// ledger is stale, indicating we may have lost sync). nil-safe.
-func (o *Overlay) SetLocalFeeProvider(fn func() (loadFee uint32, validatedAge time.Duration, ok bool)) {
-	o.localFeeProvider = fn
 }
 
 // SetOpenLedgerHashesProvider installs the tx-hash snapshot reader

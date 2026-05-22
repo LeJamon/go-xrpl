@@ -13,7 +13,16 @@ import (
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
+
+// peerSendQueueDropThreshold gates inbound handlers that would
+// otherwise enqueue heavy outbound work (e.g. handleGetObjectsMessage
+// queries). Mirrors rippled Tuning::dropSendQueue=192 against its
+// deeper send queue; we scale to 75% of DefaultSendBufferSize so
+// goXRPL refuses new work before peer.Send returns
+// ErrSendBufferFull.
+const peerSendQueueDropThreshold = (DefaultSendBufferSize * 3) / 4
 
 // handleClusterMessage processes mtCLUSTER from a peer. Mirrors rippled
 // PeerImp::onMessage(TMCluster) at PeerImp.cpp:1125-1194.
@@ -65,10 +74,12 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 		identity, decErr := addresscodec.DecodeNodePublicKey(node.PublicKey)
 		if decErr != nil || len(identity) == 0 {
 			// Rippled comments at PeerImp.cpp:1145-1147 say we
-			// should drop the peer on an unparseable key; we
-			// only charge invalid-data and move on, matching the
-			// "code-as-shipped" behaviour where the drop is a TODO.
-			o.IncPeerBadData(evt.PeerID, "cluster-bad-nodepub")
+			// should drop the peer on an unparseable key but the
+			// loop body in fact silently skips — the "drop the
+			// peer" line is an unimplemented TODO. Mirror the
+			// shipped behaviour: skip without charging so a stale
+			// cluster registry doesn't slowly accumulate
+			// bad-data charge that rippled would not.
 			continue
 		}
 		reportTime := time.Unix(int64(node.ReportTime), 0)
@@ -108,6 +119,23 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 	}
 
 	if gob.Query {
+		// Back-pressure gate — mirrors rippled
+		// PeerImp.cpp:2452-2456's send_queue_.size() >=
+		// Tuning::dropSendQueue early-return. Rippled's absolute
+		// threshold is 192 against a much deeper queue; goXRPL's
+		// peer.send channel is DefaultSendBufferSize=64 deep, so we
+		// gate at 75% (peerSendQueueDropThreshold) to refuse new
+		// heavy work before the channel saturates and the next
+		// Send returns ErrSendBufferFull.
+		o.peersMu.RLock()
+		peer, peerOK := o.peers[evt.PeerID]
+		o.peersMu.RUnlock()
+		if peerOK && peer.SendQueueLen() >= peerSendQueueDropThreshold {
+			slog.Debug("TMGetObjects dropped: peer send queue saturated",
+				"t", "Overlay", "peer", evt.PeerID,
+				"sendq", peer.SendQueueLen())
+			return
+		}
 		switch gob.ObjType {
 		case message.ObjectTypeFetchPack:
 			// Rippled at PeerImp.cpp:2458-2462 forwards to
@@ -284,7 +312,7 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 		reply.Transactions = append(reply.Transactions, message.Transaction{
 			RawTransaction:   blob,
 			Status:           message.TxStatusCurrent,
-			ReceiveTimestamp: uint64(time.Now().Unix()),
+			ReceiveTimestamp: uint64(time.Now().Unix() - protocol.RippleEpochUnix),
 		})
 	}
 	if len(reply.Transactions) == 0 {
@@ -373,4 +401,3 @@ func (o *Overlay) handleTransactionsBatchMessage(evt Event) {
 		}
 	}
 }
-

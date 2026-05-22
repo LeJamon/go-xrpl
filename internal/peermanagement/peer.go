@@ -1114,6 +1114,15 @@ func (p *Peer) Send(data []byte) error {
 	}
 }
 
+// SendQueueLen returns the number of frames currently buffered for
+// transmission to this peer. Used by handlers that should refuse new
+// outbound work when the pipe is already saturated — mirrors the
+// rippled gate at PeerImp.cpp:2452 (`send_queue_.size() >=
+// Tuning::dropSendQueue`).
+func (p *Peer) SendQueueLen() int {
+	return len(p.send)
+}
+
 func (p *Peer) Close() error {
 	if p.closed.Swap(true) {
 		return nil

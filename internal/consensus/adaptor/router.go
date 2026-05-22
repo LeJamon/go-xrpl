@@ -817,13 +817,15 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 	// fires only at LCL close; that one-ledger lag is a direct
 	// contributor to memory issue-401 tx-propagation latency.
 	//
-	// Filter: ResultFailure (tef/tem/tel) means rippled would have
-	// marked HashRouter::BAD and refused to relay; mirror that. Any
-	// other classification (Success including queued, Retry) is
-	// eligible — the gossip layer's HashRouter equivalent (Overlay
-	// suppressionHash bookkeeping) handles de-dup downstream.
-	if err == nil && res != openledger.ResultFailure {
-		r.relayTransaction(msg.PeerID, blob, txMsg.Status)
+	// Gate: rippled relays only when `e.applied || e.result == terQUEUED`
+	// for the peer-relay case (e.local=false, FailHard::no collapses the
+	// middle branch). openledger.Submit folds terQUEUED into
+	// ResultSuccess (openledger.go:381-385) and tec into ResultSuccess
+	// (apply.go:128-139), so ResultSuccess is the exact superset of
+	// rippled's applied|terQUEUED. ResultRetry (non-queued ter*) and
+	// ResultFailure (tef/tem/tel) do NOT relay.
+	if err == nil && res == openledger.ResultSuccess {
+		r.relayTransaction(msg.PeerID, blob)
 	}
 }
 
@@ -833,21 +835,27 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 // NetworkOPs.cpp:1710, where toSkip is the suppression set produced by
 // HashRouter::shouldRelay — i.e. exactly the originating peer.
 //
+// The outbound wire shape mirrors rippled NetworkOPs.cpp:1700-1708:
+// status normalized to tsCURRENT (the inbound peer's claimed status
+// is informational only) and receivetimestamp freshly stamped from
+// the local Ripple clock.
+//
 // We don't (yet) consult a HashRouter equivalent for the multi-hop
 // suppression set because goXRPL's de-dup happens implicitly via
-// OpenLedger.HasTx: a duplicate arrival from another peer fails
-// ParsePendingTx-or-Submit and never reaches this call site. The
-// single-peer exclusion below is the minimum correctness boundary —
-// without it the originator would receive its own packet back and
-// either re-charge us bandwidth or, in a 2-peer cycle, oscillate
-// indefinitely.
-func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte, status message.TransactionStatus) {
+// openledger.Submit's view.TxExists pre-filter (openledger.go:362-365):
+// a duplicate arrival from another peer classifies as ResultFailure
+// and the relay gate above never fires. The single-peer exclusion
+// below is the minimum correctness boundary — without it the
+// originator would receive its own packet back and either re-charge
+// us bandwidth or, in a 2-peer cycle, oscillate indefinitely.
+func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte) {
 	if r.overlay == nil {
 		return
 	}
 	out := &message.Transaction{
-		RawTransaction: blob,
-		Status:         status,
+		RawTransaction:   blob,
+		Status:           message.TxStatusCurrent,
+		ReceiveTimestamp: uint64(time.Now().Unix() - protocol.RippleEpochUnix),
 	}
 	encoded, err := message.Encode(out)
 	if err != nil {

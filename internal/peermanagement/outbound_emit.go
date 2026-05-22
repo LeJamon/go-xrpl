@@ -32,13 +32,13 @@ import (
 const clusterBroadcastInterval = 10 * time.Second
 
 // txQueueBroadcastInterval drives the periodic tx-reduce-relay
-// outbound emission. Rippled fires sendTxQueue from
-// OverlayImpl::Timer::on_timer at 1s, but only emits when the per-peer
-// txQueue_ has at least one entry. goXRPL doesn't maintain per-peer
-// queues yet — we batch the openLedgerHashesProvider snapshot at a
-// coarser cadence to keep the implementation honest about being a
-// minimum-viable announce rather than a full reduce-relay engine.
-const txQueueBroadcastInterval = 5 * time.Second
+// outbound emission. Matches rippled's OverlayImpl::Timer::on_timer
+// at 1s (OverlayImpl.cpp:104-108). Rippled only emits when the
+// per-peer txQueue_ has at least one entry; goXRPL doesn't maintain
+// per-peer queues, so the emit body itself early-returns on an empty
+// open-ledger hashes snapshot (see sendTxQueueAnnounce) — same effect
+// for the (common) empty-mempool case.
+const txQueueBroadcastInterval = 1 * time.Second
 
 // txQueueMaxEntriesPerFrame caps a single outbound TMHaveTransactions
 // frame. Matches rippled reduce_relay::MAX_TX_QUEUE_SIZE (64). Beyond
@@ -86,17 +86,17 @@ func (o *Overlay) sendClusterUpdate() {
 		return
 	}
 
-	// Refresh our own entry. The local load fee is zeroed if the
-	// validated ledger is stale (>4min) — rippled treats that as
-	// "we may have lost sync, don't tell peers we're loaded".
+	// Refresh our own entry and gate the broadcast on the update's
+	// "this is news" return value — mirrors rippled
+	// NetworkOPs.cpp:1126-1139, where a stale reportTime returns
+	// false and the broadcast is skipped (with "Too soon to send
+	// cluster update" log). goXRPL has no FeeTrack analog yet, so the
+	// self-entry's loadFee is fixed at 0; when one lands, this is the
+	// call site to start passing a real fee.
 	if len(o.localNodeIdentity) > 0 {
-		var loadFee uint32
-		if o.localFeeProvider != nil {
-			if lf, age, ok := o.localFeeProvider(); ok && age <= 4*time.Minute {
-				loadFee = lf
-			}
+		if !o.cluster.Update(o.localNodeIdentity, "", 0, time.Now()) {
+			return
 		}
-		o.cluster.Update(o.localNodeIdentity, "", loadFee, time.Now())
 	}
 
 	clusterMsg := &message.Cluster{
@@ -209,4 +209,3 @@ func (o *Overlay) sendTxQueueAnnounce() {
 		}
 	}
 }
-
