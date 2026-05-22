@@ -133,7 +133,9 @@ func randomEd25519KeyPair() (publicKey, privateKey []byte, err error) {
 
 	// The 64-byte expanded private key carries the same secret material
 	// as the seed, so scrub it before return rather than leaving it for
-	// the GC. Mirrors rippled Seed.cpp:46-47 wiping secret buffers.
+	// the GC. Mirrors the wipe-all-secret-buffers invariant in rippled's
+	// Seed::~Seed (Seed.cpp:44-47); rippled has no equivalent buffer
+	// because its ed25519 backend doesn't materialise the expanded key.
 	fullPrivKey := ed25519.NewKeyFromSeed(seed)
 	defer SecureErase(fullPrivKey)
 	pubKey := fullPrivKey.Public().(ed25519.PublicKey)
