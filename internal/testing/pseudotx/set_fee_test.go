@@ -50,14 +50,11 @@ func newSetFeeModern() *pseudo.SetFee {
 }
 
 // Apply-success paths (legacy + modern) intentionally aren't pinned
-// here: the FeeSettings ledger-entry typed metadata decoder
-// (internal/tx/ledgerfields/fee_settings_gen.go) doesn't currently
-// accept the blob the SerializeFeeSettings encoder emits, so even
-// before the preflight/preclaim tightening landed in this issue
-// SetFee.Apply()'s happy path returned tefINTERNAL during metadata
-// generation. That decoder gap is orthogonal to the preflight/
-// preclaim work tracked here; the tests below pin every rejection
-// path that this issue actually fixes.
+// here: the FeeSettings typed metadata decoder
+// (internal/tx/ledgerfields/fee_settings_gen.go) does not accept the
+// blob SerializeFeeSettings emits, so SetFee.Apply()'s happy path
+// returns tefINTERNAL during metadata generation regardless of
+// preflight/preclaim. The tests below pin only the rejection paths.
 
 // TestSetFee_Preflight_BadAccount pins Change.cpp:43-48 — any non-zero
 // source account must reject with temBAD_SRC_ACCOUNT before mutation.

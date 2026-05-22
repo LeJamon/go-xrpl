@@ -23,12 +23,10 @@ func TestUpperBoundSeqProxy_PicksSmallestStrictlyGreater(t *testing.T) {
 	require.Equal(t, NewSeqProxySequence(11), next)
 }
 
-// TestUpperBoundSeqProxy_RejectsTicketAsNeighbour pins the bugfix:
-// when the only tx greater than the probe is a ticket, rippled's
-// `nextTxIter->first.isSeq()` check rejects the gap fill. The old
-// goxrpl scan admitted any later sequence — even one that didn't
-// neighbour the probe. The new helper returns the ticket so the
-// caller can reject it.
+// TestUpperBoundSeqProxy_RejectsTicketAsNeighbour pins
+// TxQ.cpp:440-444: when the only tx greater than the probe is a
+// ticket, rippled's `nextTxIter->first.isSeq()` check rejects the gap
+// fill. upperBoundSeqProxy returns the ticket so canBeHeld can reject.
 func TestUpperBoundSeqProxy_RejectsTicketAsNeighbour(t *testing.T) {
 	aq := NewAccountQueue([20]byte{1})
 	ticket := SeqProxy{Value: 12, IsTicket: true}

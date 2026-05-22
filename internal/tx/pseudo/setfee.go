@@ -25,30 +25,19 @@ var (
 type SetFee struct {
 	tx.BaseTx
 
-	// Legacy fields (pre-XRPFees amendment). XRPL JSON convention serializes
-	// UInt64 as a hex string; sfBaseFee is decoded as a uint64.
-	BaseFee string `json:"BaseFee,omitempty" xrpl:"BaseFee,omitempty"`
-
-	// ReferenceFeeUnits is the reference fee units (typically 10)
+	// Legacy fields (pre-XRPFees amendment). BaseFee is hex-encoded
+	// per XRPL JSON's UInt64 convention; the reserve fields are
+	// drops.
+	BaseFee           string  `json:"BaseFee,omitempty" xrpl:"BaseFee,omitempty"`
 	ReferenceFeeUnits *uint32 `json:"ReferenceFeeUnits,omitempty" xrpl:"ReferenceFeeUnits,omitempty"`
+	ReserveBase       *uint32 `json:"ReserveBase,omitempty" xrpl:"ReserveBase,omitempty"`
+	ReserveIncrement  *uint32 `json:"ReserveIncrement,omitempty" xrpl:"ReserveIncrement,omitempty"`
 
-	// ReserveBase is the account reserve in drops
-	ReserveBase *uint32 `json:"ReserveBase,omitempty" xrpl:"ReserveBase,omitempty"`
-
-	// ReserveIncrement is the owner reserve increment in drops
-	ReserveIncrement *uint32 `json:"ReserveIncrement,omitempty" xrpl:"ReserveIncrement,omitempty"`
-
-	// Modern fields (XRPFees amendment)
-	// BaseFeeDrops is the base fee in drops
-	BaseFeeDrops string `json:"BaseFeeDrops,omitempty" xrpl:"BaseFeeDrops,omitempty"`
-
-	// ReserveBaseDrops is the account reserve in drops
-	ReserveBaseDrops string `json:"ReserveBaseDrops,omitempty" xrpl:"ReserveBaseDrops,omitempty"`
-
-	// ReserveIncrementDrops is the owner reserve increment in drops
+	// Modern fields (XRPFees amendment).
+	BaseFeeDrops          string `json:"BaseFeeDrops,omitempty" xrpl:"BaseFeeDrops,omitempty"`
+	ReserveBaseDrops      string `json:"ReserveBaseDrops,omitempty" xrpl:"ReserveBaseDrops,omitempty"`
 	ReserveIncrementDrops string `json:"ReserveIncrementDrops,omitempty" xrpl:"ReserveIncrementDrops,omitempty"`
 
-	// LedgerSequence is the ledger sequence for this fee change
 	LedgerSequence *uint32 `json:"LedgerSequence,omitempty" xrpl:"LedgerSequence,omitempty"`
 }
 
@@ -88,7 +77,6 @@ func (s *SetFee) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(s)
 }
 
-// IsPseudoTransaction returns true as SetFee is a pseudo-transaction
 func (s *SetFee) IsPseudoTransaction() bool {
 	return true
 }
@@ -153,7 +141,6 @@ func (s *SetFee) preclaim(ctx *tx.ApplyContext) tx.Result {
 // Apply mirrors rippled Change::applyFee() (Change.cpp:347-385): it
 // either creates or updates the FeeSettings singleton, writing only
 // the field set corresponding to the active amendment branch.
-// Reference: rippled Change.cpp applyFee()
 func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 	if r := s.preflight(); r != tx.TesSUCCESS {
 		return r
