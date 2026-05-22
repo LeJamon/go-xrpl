@@ -110,7 +110,6 @@ func checkEscrowAmount(data []byte) *InvariantViolation {
 		}
 		return nil
 	}
-	// MPT escrow.
 	if esc.MPTAmount != nil {
 		v := *esc.MPTAmount
 		if v <= 0 {

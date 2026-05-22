@@ -293,7 +293,6 @@ func checkValidNewAccountRoot(txType string, result Result, entries []InvariantE
 		pseudo = false
 	}
 
-	// Compute expected starting sequence.
 	var startingSeq uint32
 	switch {
 	case pseudo:
