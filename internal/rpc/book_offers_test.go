@@ -550,13 +550,10 @@ func TestBookOffersXRPAmountHandling(t *testing.T) {
 	}
 }
 
-// TestBookOffersDomainForwarding pins the handler→service `domain` threading for
-// the PermissionedDEX-aware book lookup. Before issue #526, a non-zero domain
-// short-circuited to `notSupported`; rippled BookOffers.cpp:175-214 instead
-// decodes the hex uint256 and forwards it via the Book struct so getBookBase
-// picks the domain-scoped order book. The three cases mirror the acceptance
-// criteria: open-market (no domain), the literal "0" (normalized to 64 zero
-// hex per base_uint.h:228), and a non-zero 64-char domain forwarded verbatim.
+// TestBookOffersDomainForwarding pins handler→service `domain` threading for
+// PermissionedDEX-aware book lookups (issue #526). rippled
+// BookOffers.cpp:175-214 decodes the hex uint256 and forwards it via the Book
+// struct; the literal "0" normalises to 64-zero hex per base_uint.h:228.
 func TestBookOffersDomainForwarding(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
