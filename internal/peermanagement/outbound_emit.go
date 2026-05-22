@@ -88,11 +88,15 @@ func (o *Overlay) sendClusterUpdate() {
 	// "this is news" return value — mirrors rippled
 	// NetworkOPs.cpp:1126-1139, where a stale reportTime returns
 	// false and the broadcast is skipped (with "Too soon to send
-	// cluster update" log). goXRPL has no FeeTrack analog yet, so the
-	// self-entry's loadFee is fixed at 0; when one lands, this is the
-	// call site to start passing a real fee.
+	// cluster update" log). The self-entry's loadFee is sourced from
+	// localLoadFeeProvider (LoadFeeTrack.GetLocalFee); 0 when unwired,
+	// matching the pre-LoadFeeTrack behaviour.
 	if len(o.localNodeIdentity) > 0 {
-		if !o.cluster.Update(o.localNodeIdentity, "", 0, time.Now()) {
+		var selfFee uint32
+		if o.localLoadFeeProvider != nil {
+			selfFee = o.localLoadFeeProvider()
+		}
+		if !o.cluster.Update(o.localNodeIdentity, "", selfFee, time.Now()) {
 			return
 		}
 	}

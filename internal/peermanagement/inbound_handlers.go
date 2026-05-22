@@ -30,11 +30,12 @@ const peerSendQueueDropThreshold = (DefaultSendBufferSize * 3) / 4
 // same boundary via Overlay.cluster.Member(peer.RemotePublicKey()).
 //
 // Payload effect: each ClusterNode entry refreshes the registry's
-// known load/report-time for that node. The LoadSource gossip and the
-// median-cluster-fee computation that rippled performs are wired into
-// its Resource::Manager + LoadFeeTrack subsystems; goXRPL has no
-// analog yet, so we only adopt the membership state — closing the
-// peer-protocol gap without standing up two more subsystems.
+// known load/report-time for that node. After the registry-update
+// loop we recompute the cluster-fee median over members reported
+// within the last clusterFeeWindow and forward it through
+// clusterFeeSink, mirroring rippled PeerImp.cpp:1175-1193 which calls
+// getFeeTrack().setClusterFee(median). The LoadSource gossip
+// (resource-manager bytes accounting) is still unimplemented.
 func (o *Overlay) handleClusterMessage(evt Event) {
 	o.peersMu.RLock()
 	peer, exists := o.peers[evt.PeerID]
@@ -81,6 +82,20 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 		}
 		reportTime := time.Unix(int64(node.ReportTime), 0)
 		o.cluster.Update(identity, node.NodeName, node.NodeLoad, reportTime)
+	}
+
+	// Recompute the cluster-fee median and forward it through the
+	// LoadFeeTrack sink. Mirrors rippled PeerImp.cpp:1175-1193: take
+	// the median of cluster-member LoadFees reported within the last
+	// clusterFeeWindow, then setClusterFee. An empty set (no fresh
+	// reports) yields no setClusterFee call — rippled also falls
+	// through with clusterFee=0 in that case but we leave the prior
+	// value intact, mirroring the more general "no signal → no
+	// change" pattern.
+	if o.clusterFeeSink != nil {
+		if fee, ok := o.cluster.MedianFee(time.Now().Add(-clusterFeeWindow)); ok {
+			o.clusterFeeSink(fee)
+		}
 	}
 
 	// LoadSource gossip → Resource::Manager: not implemented in

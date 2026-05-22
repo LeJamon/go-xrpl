@@ -254,6 +254,25 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		}
 	}
 
+	// LoadFactorFees surfaces the local/net/cluster fee factors that
+	// drive the admin-only human-mode load_factor_local / load_factor_net /
+	// load_factor_cluster emissions (NetworkOPs.cpp:2887-2901). Net here
+	// mirrors rippled's "remote" axis — LoadFeeTrack stores it under
+	// remoteFee_. The closure re-reads on every server_info call so the
+	// hook tracks live tracker state without rewiring.
+	services.LoadFactorFees = func() types.LoadFactorFees {
+		ft := ledgerSvcRef.FeeTrack()
+		if ft == nil {
+			base := uint32(256)
+			return types.LoadFactorFees{Local: base, Net: base, Cluster: base}
+		}
+		return types.LoadFactorFees{
+			Local:   ft.GetLocalFee(),
+			Net:     ft.GetRemoteFee(),
+			Cluster: ft.GetClusterFee(),
+		}
+	}
+
 	// Start consensus/networking if not in standalone mode
 	if !standalone {
 		var compErr error
@@ -342,6 +361,15 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		// config flag doesn't require a restart-and-rewire.
 		overlay.SetTxProvider(ledgerService.OpenLedgerGetTx)
 		overlay.SetOpenLedgerHashesProvider(ledgerService.OpenLedgerTxHashes)
+
+		// LoadFeeTrack ingress + outbound self-load advertisement.
+		// Mirrors the rippled wiring split:
+		//   - PeerImp.cpp:1193 setClusterFee(median) on inbound TMCluster
+		//   - NetworkOPs.cpp:1126-1132 self-entry sources getLocalFee()
+		if ft := ledgerSvcRef.FeeTrack(); ft != nil {
+			overlay.SetClusterFeeSink(ft.SetClusterFee)
+			overlay.SetLocalLoadFeeProvider(ft.GetLocalFee)
+		}
 
 		// Expose node identity and consensus stats to RPC handlers.
 		services.NodePublicKey = consensusComponents.Overlay.Identity().EncodedPublicKey()

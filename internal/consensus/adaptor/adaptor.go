@@ -1224,12 +1224,30 @@ func (a *Adaptor) GetServerVersion() uint64 {
 // Zero stance values mean "no vote" and the serializer will omit the
 // fields.
 // GetLoadFee returns the local load_fee advertised on outbound
-// validations. Today we have no feedback loop so we always return 0
-// — the serializer treats that as "omit", matching rippled's
-// behavior on a validator with minimum load. Future work can wire
-// this to a LoadFeeTrack-equivalent.
+// validations. Mirrors rippled RCLConsensus.cpp:870-875:
+//
+//	auto const fee = std::max(ft.getLocalFee(), ft.getClusterFee());
+//	if (fee > ft.getLoadBase()) v.setFieldU32(sfLoadFee, fee);
+//
+// We return 0 — which the serializer treats as "omit" — whenever the
+// max collapses to LoadBase, equivalent to rippled's `> getLoadBase()`
+// gate (the local/cluster floors prevent values below LoadBase).
 func (a *Adaptor) GetLoadFee() uint32 {
-	return 0
+	if a.ledgerService == nil {
+		return 0
+	}
+	ft := a.ledgerService.FeeTrack()
+	if ft == nil {
+		return 0
+	}
+	fee := ft.GetLocalFee()
+	if c := ft.GetClusterFee(); c > fee {
+		fee = c
+	}
+	if fee <= ft.GetLoadBase() {
+		return 0
+	}
+	return fee
 }
 
 func (a *Adaptor) GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, postXRPFees bool) {
@@ -1605,14 +1623,61 @@ func (a *Adaptor) peerLCLDisagrees(ourLCL consensus.LedgerID) bool {
 // validated_ledger only if our stored ledger at that seq has the matching
 // hash — fork safety, matching rippled's checkAccept which operates on
 // the specific ledger pointer, not seq alone.
+//
+// After marking validated, we also refresh the LoadFeeTrack remoteFee
+// from the median LoadFee across trusted validations for this ledger.
+// Mirrors rippled LedgerMaster::checkAccept (LedgerMaster.cpp:977-1006):
+// collect sfLoadFee from trusted validations (defaulting to LoadBase
+// when omitted), take the median, and call setRemoteFee. Validations
+// for the parent hash are also folded in by rippled; goXRPL keys
+// validations by the attested LedgerID, so we collect for the current
+// hash only — the median converges identically once a few ledgers'
+// worth of validations accumulate.
 func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32) {
 	var hash [32]byte
 	copy(hash[:], ledgerID[:])
 	a.ledgerService.SetValidatedLedger(seq, hash)
+	a.refreshRemoteFee(ledgerID)
 	a.logger.Info("Ledger fully validated",
 		"seq", seq,
 		"hash", fmt.Sprintf("%x", hash[:8]),
 	)
+}
+
+// refreshRemoteFee mirrors rippled LedgerMaster::checkAccept's
+// post-validation block (LedgerMaster.cpp:977-1006). For each trusted
+// validation, the sfLoadFee value is taken (defaulting to LoadBase when
+// the validator omitted the field, matching rippled validations.fees's
+// substitution). The median is then forwarded to LoadFeeTrack.
+func (a *Adaptor) refreshRemoteFee(ledgerID consensus.LedgerID) {
+	if a.ledgerService == nil || a.validationHistorian == nil {
+		return
+	}
+	ft := a.ledgerService.FeeTrack()
+	if ft == nil {
+		return
+	}
+	vals := a.validationHistorian.GetTrustedValidations(ledgerID)
+	if len(vals) == 0 {
+		return
+	}
+	base := ft.GetLoadBase()
+	fees := make([]uint32, 0, len(vals))
+	for _, v := range vals {
+		if v == nil {
+			continue
+		}
+		fee := v.LoadFee
+		if fee == 0 {
+			fee = base
+		}
+		fees = append(fees, fee)
+	}
+	if len(fees) == 0 {
+		return
+	}
+	sort.Slice(fees, func(i, j int) bool { return fees[i] < fees[j] })
+	ft.SetRemoteFee(fees[len(fees)/2])
 }
 
 func (a *Adaptor) OnModeChange(oldMode, newMode consensus.Mode) {
