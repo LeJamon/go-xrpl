@@ -698,11 +698,9 @@ func TestGetBookOffers_MarkerPagination(t *testing.T) {
 }
 
 // TestGetBookOffers_MarkerInvalid covers markers that fail at the malformed /
-// wrong-scope tier — they map to rippled's invalid_field_error("marker"). The
-// stale-marker tier (well-formed marker whose offer was consumed between
-// pages) is exercised separately in TestGetBookOffers_MarkerStale; the two
-// must produce distinct sentinels so handlers can distinguish them
-// (AccountOffers.cpp:107-132).
+// wrong-scope tier — they must map to ErrInvalidMarker (rippled's
+// invalid_field_error("marker"), AccountOffers.cpp:107-121). The
+// stale-marker tier is exercised separately in TestGetBookOffers_MarkerStale.
 func TestGetBookOffers_MarkerInvalid(t *testing.T) {
 	svc := newOfferTestService(t)
 	issuerAddr, _ := addressFromBytes(t, 0xC0)
@@ -744,12 +742,11 @@ func TestGetBookOffers_MarkerInvalid(t *testing.T) {
 	}
 }
 
-// TestGetBookOffers_MarkerStale pins the stale-marker sentinel. A well-formed
-// 64-hex marker that does not resolve to any offer in the ledger is treated
-// as a referent-gone condition, not a malformed marker — mirrors rippled's
-// AccountOffers.cpp:128-132 "object pointed to by the marker does not exist"
-// branch, which rippled returns as rpcINVALID_PARAMS rather than
-// invalid_field_error.
+// TestGetBookOffers_MarkerStale: a well-formed 64-hex marker that does not
+// resolve to any offer in the ledger must surface as ErrStaleMarker, not
+// ErrInvalidMarker — mirrors rippled's AccountOffers.cpp:128-132 "object
+// pointed to by the marker does not exist" branch, which rippled returns
+// as rpcINVALID_PARAMS rather than invalid_field_error.
 func TestGetBookOffers_MarkerStale(t *testing.T) {
 	svc := newOfferTestService(t)
 	issuerAddr, _ := addressFromBytes(t, 0xC4)
@@ -777,11 +774,11 @@ func TestGetBookOffers_MarkerStale(t *testing.T) {
 	}
 }
 
-// TestGetBookOffers_LimitZeroEmitsNoMarker pins the M1 fix: limit=0 is a legal
-// request (rippled Tuning.h:49 declares bookOffers={0,60,100}) and must
-// return zero offers with no marker. The pre-fix code emitted a 64-zero
-// marker because hitLimit flipped true before any offer was recorded, which
-// then broke the caller's next paginated request.
+// TestGetBookOffers_LimitZeroEmitsNoMarker: limit=0 is a legal request
+// (rippled Tuning.h:49 declares bookOffers={0,60,100}) and must return
+// zero offers with no marker. Without this guard, hitLimit flips true
+// before any offer is recorded and the result carries a 64-zero marker
+// that breaks the next paginated request.
 func TestGetBookOffers_LimitZeroEmitsNoMarker(t *testing.T) {
 	svc := newOfferTestService(t)
 	issuerAddr, _ := addressFromBytes(t, 0xC8)

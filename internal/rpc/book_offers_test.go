@@ -1190,10 +1190,10 @@ func TestBookOffersMarkerPassthrough(t *testing.T) {
 	assert.False(t, hasLimit, "response must omit limit when no marker is emitted")
 }
 
-// TestBookOffersStaleMarkerMapping pins the M2 split: a well-formed marker
-// pointing at an entry that no longer exists in the ledger maps to
-// rpcINVALID_PARAMS (not invalid_field_error). Mirrors rippled's
-// AccountOffers.cpp:128-132 distinction.
+// TestBookOffersStaleMarkerMapping: a well-formed marker pointing at an entry
+// that no longer exists in the ledger must map to rpcINVALID_PARAMS (not
+// invalid_field_error). Mirrors rippled's AccountOffers.cpp:128-132
+// distinction between malformed marker and missing-referent marker.
 func TestBookOffersStaleMarkerMapping(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
