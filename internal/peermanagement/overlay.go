@@ -145,6 +145,30 @@ type Overlay struct {
 	// block.
 	onPeerConnect func(PeerID)
 
+	// txProvider returns the raw tx blob for hash if it is in the
+	// open-ledger view. Wired by the consensus adaptor at startup so
+	// the tx-reduce-relay reply path (handleGetObjectsMessage,
+	// otTRANSACTIONS branch) can answer a peer's TMGetObjectByHash
+	// query without importing internal/ledger/service into this
+	// package. nil-safe — the reply path drops without charging when
+	// the provider isn't wired (tests, or operators running the
+	// overlay without a ledger backend).
+	txProvider func(hash [32]byte) ([]byte, bool)
+
+	// openLedgerHashesProvider returns the set of tx hashes currently
+	// in the open-ledger view. Drives the periodic tx-reduce-relay
+	// TMHaveTransactions emission in sendTxQueueAnnounce. nil-safe —
+	// the emitter skips when unwired, matching the rippled gate
+	// `app_.config().TX_REDUCE_RELAY_ENABLE` at OverlayImpl.cpp:107.
+	openLedgerHashesProvider func() [][32]byte
+
+	// localNodeIdentity is the raw 33-byte compressed NodePublic of
+	// THIS node. Used by the cluster timer to insert ourselves into
+	// the gossip frame so peers can correlate validator load. Filled
+	// at Start from o.identity; nil before Start, in which case the
+	// cluster timer leaves the self-entry out.
+	localNodeIdentity []byte
+
 	// droppedMessages counts how many times the non-blocking send to
 	// the messages channel hit its default branch (downstream consumer
 	// slow). Exposed via DroppedMessages() so server_info / telemetry
@@ -574,6 +598,9 @@ func New(opts ...Option) (*Overlay, error) {
 		inboundSem:      make(chan struct{}, inboundCap),
 		outboundSem:     make(chan struct{}, outboundCap),
 		resourceManager: resource.NewManager(nil, nil),
+	}
+	if identity != nil {
+		o.localNodeIdentity = identity.PublicKey()
 	}
 
 	// Wire reduce-relay callbacks. The squelch callback constructs and
@@ -1180,6 +1207,23 @@ func (o *Overlay) onMessageReceived(evt Event) {
 	// can drive it. Mirrors rippled's PeerImp dispatching all
 	// consensus traffic through the same inbound path.
 
+	// Transport-level messages with no consensus-router impact are
+	// handled inline here and NOT forwarded to o.messages.
+	switch msgType {
+	case message.TypeCluster:
+		o.handleClusterMessage(evt)
+		return
+	case message.TypeGetObjects:
+		o.handleGetObjectsMessage(evt)
+		return
+	case message.TypeHaveTransactions:
+		o.handleHaveTransactionsMessage(evt)
+		return
+	case message.TypeTransactions:
+		o.handleTransactionsBatchMessage(evt)
+		return
+	}
+
 	slog.Debug("Message received", "t", "Overlay", "type", msgType.String(), "peer", evt.PeerID, "size", len(evt.Payload))
 
 	// Per-type ingress gate mirroring PeerImp.cpp:1349-1355: refuse
@@ -1627,6 +1671,31 @@ func (o *Overlay) maintenanceLoop(ctx context.Context) error {
 	idleSweepTicker := time.NewTicker(Idled / 2)
 	defer idleSweepTicker.Stop()
 
+	// endpointsTicker drives the periodic TMEndpoints emission that
+	// rippled does from OverlayImpl::Timer::on_timer at
+	// OverlayImpl.cpp:104-105 (sendEndpoints). rippled rate-limits the
+	// broadcast inside PeerFinder via Tuning::secondsPerMessage=151s
+	// (peerfinder/detail/Tuning.h:124). We don't run a PeerFinder
+	// state machine, so we tick at the same outer cadence and let the
+	// helper itself decide per-peer whether to actually emit.
+	endpointsTicker := time.NewTicker(endpointsBroadcastInterval)
+	defer endpointsTicker.Stop()
+
+	// clusterTicker drives the periodic TMCluster gossip. Mirrors
+	// rippled's NetworkOPsImp::setClusterTimer (NetworkOPs.cpp:1006-
+	// 1020) at the same 10s cadence. sendClusterUpdate early-returns
+	// when cluster is empty, so this is essentially free for
+	// non-cluster deployments.
+	clusterTicker := time.NewTicker(clusterBroadcastInterval)
+	defer clusterTicker.Stop()
+
+	// txQueueTicker drives the periodic TMHaveTransactions emission
+	// for tx-reduce-relay. sendTxQueueAnnounce early-returns when
+	// EnableTxReduceRelay is off, so this is free for the default
+	// configuration.
+	txQueueTicker := time.NewTicker(txQueueBroadcastInterval)
+	defer txQueueTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -1637,6 +1706,12 @@ func (o *Overlay) maintenanceLoop(ctx context.Context) error {
 			if o.relay != nil {
 				o.relay.deleteIdlePeers(now)
 			}
+		case <-endpointsTicker.C:
+			o.sendEndpoints()
+		case <-clusterTicker.C:
+			o.sendClusterUpdate()
+		case <-txQueueTicker.C:
+			o.sendTxQueueAnnounce()
 		}
 	}
 }
@@ -2072,6 +2147,25 @@ func (o *Overlay) Peers() []PeerInfo {
 // Cluster returns the registry of cluster-trusted node identities
 // loaded from [cluster_nodes]. Always non-nil post-construction.
 func (o *Overlay) Cluster() *cluster.Registry { return o.cluster }
+
+// SetTxProvider installs the tx-blob lookup used by the tx-reduce-relay
+// reply path (handleGetObjectsMessage, otTRANSACTIONS). The provider
+// receives the requested 32-byte tx hash and returns (blob, true) when
+// the tx is in the open-ledger view. Wiring is optional — when nil the
+// reply path drops without charging, matching the pre-existing
+// "feature gated off" behaviour.
+func (o *Overlay) SetTxProvider(fn func(hash [32]byte) ([]byte, bool)) {
+	o.txProvider = fn
+}
+
+// SetOpenLedgerHashesProvider installs the tx-hash snapshot reader
+// used by the periodic TMHaveTransactions emission. The provider
+// returns a (possibly empty) slice of 32-byte tx hashes currently in
+// the open-ledger view. The emitter only fires when EnableTxReduceRelay
+// is true AND this provider is wired; nil leaves the gossip dark.
+func (o *Overlay) SetOpenLedgerHashesProvider(fn func() [][32]byte) {
+	o.openLedgerHashesProvider = fn
+}
 
 // PeersJSON implements types.PeerSource for the `peers` RPC method,
 // emitting the subset of rippled PeerImp::json (PeerImp.cpp:388-503)

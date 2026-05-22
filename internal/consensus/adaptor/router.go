@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/inbound"
+	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/manifest"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
@@ -801,7 +802,7 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 
 	// Peer-relay path — the originating peer manages its own resends,
 	// so we don't pin the blob in our LocalTxs held pool.
-	r.adaptor.AddPendingTx(blob, false)
+	res, err := r.adaptor.SubmitPendingTx(blob, false)
 	r.logger.Info("inbound tx accepted into pending pool",
 		"t", "consensus",
 		"event", "tx-inbound",
@@ -809,6 +810,63 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 		"blob_size", len(blob),
 		"status", txMsg.Status,
 	)
+
+	// Mirrors rippled NetworkOPs.cpp:1685-1712 — relay immediately on
+	// the inbound job, not one ledger later via OpenLedger.Accept's
+	// once-per-LCL callback; that one-ledger lag is a direct
+	// contributor to memory issue-401 tx-propagation latency.
+	//
+	// Gate: rippled relays only when `e.applied || e.result == terQUEUED`
+	// for the peer-relay case (e.local=false, FailHard::no collapses the
+	// middle branch). openledger.Submit folds terQUEUED into
+	// ResultSuccess (openledger.go:381-385) and tec into ResultSuccess
+	// (apply.go:128-139), so ResultSuccess is the exact superset of
+	// rippled's applied|terQUEUED. ResultRetry (non-queued ter*) and
+	// ResultFailure (tef/tem/tel) do NOT relay.
+	if err == nil && res == openledger.ResultSuccess {
+		r.relayTransaction(msg.PeerID, blob)
+	}
+}
+
+// relayTransaction rebroadcasts an accepted peer-originated TMTransaction
+// to every connected peer except the origin. Mirrors rippled's
+// overlay_.relay(*stx, txID, toSkip) call in processTransaction at
+// NetworkOPs.cpp:1710, where toSkip is the suppression set produced by
+// HashRouter::shouldRelay — i.e. exactly the originating peer.
+//
+// The outbound wire shape mirrors rippled NetworkOPs.cpp:1700-1708:
+// status normalized to tsCURRENT (the inbound peer's claimed status
+// is informational only) and receivetimestamp freshly stamped from
+// the local Ripple clock.
+//
+// We don't (yet) consult a HashRouter equivalent for the multi-hop
+// suppression set because goXRPL's de-dup happens implicitly via
+// openledger.Submit's view.TxExists pre-filter (openledger.go:362-365):
+// a duplicate arrival from another peer classifies as ResultFailure
+// and the relay gate above never fires. The single-peer exclusion
+// below is the minimum correctness boundary — without it the
+// originator would receive its own packet back and either re-charge
+// us bandwidth or, in a 2-peer cycle, oscillate indefinitely.
+func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte) {
+	if r.overlay == nil {
+		return
+	}
+	out := &message.Transaction{
+		RawTransaction:   blob,
+		Status:           message.TxStatusCurrent,
+		ReceiveTimestamp: uint64(time.Now().Unix() - protocol.RippleEpochUnix),
+	}
+	encoded, err := message.Encode(out)
+	if err != nil {
+		r.logger.Warn("relay transaction encode failed", "error", err)
+		return
+	}
+	frame, err := message.BuildWireMessage(message.TypeTransaction, encoded)
+	if err != nil {
+		r.logger.Warn("relay transaction frame build failed", "error", err)
+		return
+	}
+	_ = r.overlay.BroadcastExcept(except, frame)
 }
 
 func (r *Router) handleHaveSet(msg *peermanagement.InboundMessage) {

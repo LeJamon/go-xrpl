@@ -657,6 +657,30 @@ func (s *Service) OpenLedgerTxs() [][]byte {
 	return ov.CurrentTxs()
 }
 
+// OpenLedgerTxHashes returns the tx hashes currently in the persistent
+// open view. Drives the periodic TMHaveTransactions announce in the
+// peer overlay's tx-reduce-relay outbound path. Allocates a fresh
+// slice each call so callers can hold the result past lock release.
+// Returns nil pre-Start.
+func (s *Service) OpenLedgerTxHashes() [][32]byte {
+	s.mu.RLock()
+	ov := s.openLedgerView
+	s.mu.RUnlock()
+	if ov == nil {
+		return nil
+	}
+	view := ov.Current()
+	if view == nil {
+		return nil
+	}
+	var hashes [][32]byte
+	_ = view.ForEachTransaction(func(hash [32]byte, _ []byte) bool {
+		hashes = append(hashes, hash)
+		return true
+	})
+	return hashes
+}
+
 // OpenLedgerHasTx reports whether the persistent open view contains
 // the tx hash. Used by peer-protocol HasTx replies.
 func (s *Service) OpenLedgerHasTx(hash [32]byte) bool {
