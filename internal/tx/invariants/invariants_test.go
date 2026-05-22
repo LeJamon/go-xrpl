@@ -8,22 +8,6 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-type stubTx struct {
-	typ  TxType
-	acct string
-	has  map[string]bool
-}
-
-func (t stubTx) TxType() TxType    { return t.typ }
-func (t stubTx) TxAccount() string { return t.acct }
-func (t stubTx) TxHasField(n string) bool {
-	if t.has == nil {
-		return false
-	}
-	return t.has[n]
-}
-func (t stubTx) Flatten() (map[string]any, error) { return map[string]any{}, nil }
-
 type stubView struct {
 	seq uint32
 }
