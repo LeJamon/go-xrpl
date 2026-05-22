@@ -295,6 +295,26 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			expectedCode:  types.RpcDST_AMT_MALFORMED,
 		},
 		{
+			// 3-char code with a character outside rippled's isoCharSet
+			// (UintTypes.cpp:39-43) must be rejected.
+			name: "taker_pays.currency 3-char with non-isoCharSet rune",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{"currency": "a/b"},
+				"taker_gets": map[string]interface{}{"currency": "XRP"},
+			},
+			expectedError: "Invalid field 'taker_pays.currency', bad currency.",
+			expectedCode:  types.RpcSRC_CUR_MALFORMED,
+		},
+		{
+			name: "taker_gets.currency 3-char with non-isoCharSet rune",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{"currency": "XRP"},
+				"taker_gets": map[string]interface{}{"currency": "a/b"},
+			},
+			expectedError: "Invalid field 'taker_gets.currency', bad currency.",
+			expectedCode:  types.RpcDST_AMT_MALFORMED,
+		},
+		{
 			// Book_test.cpp:1463-1475 — gets.issuer non-string.
 			name: "taker_gets.issuer not string",
 			params: map[string]interface{}{
