@@ -1008,15 +1008,16 @@ func TestEngine_PhaseTransitions(t *testing.T) {
 	adaptor.opMode = consensus.OpModeFull
 
 	config := DefaultConfig()
-	// Use very short timings for testing
+	// Short open/idle so the round closes within the sleep budget;
+	// keep MinConsensus large enough that the establish phase cannot
+	// accept and cycle back to open before the assertion runs.
 	config.Timing.LedgerMinClose = 10 * time.Millisecond
 	config.Timing.LedgerMaxClose = 100 * time.Millisecond
-	config.Timing.LedgerMinConsensus = 10 * time.Millisecond
+	config.Timing.LedgerMinConsensus = 200 * time.Millisecond
 	config.Timing.LedgerIdleInterval = 20 * time.Millisecond
 
 	engine := NewEngine(adaptor, config)
 
-	// Must call Start to initialize prevLedger
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if err := engine.Start(ctx); err != nil {
@@ -1027,15 +1028,15 @@ func TestEngine_PhaseTransitions(t *testing.T) {
 	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
 	engine.StartRound(round, true)
 
-	// Should start in Open phase
 	if engine.Phase() != consensus.PhaseOpen {
 		t.Errorf("Expected Open phase, got %v", engine.Phase())
 	}
 
-	// Wait for close timer (idle interval triggers close with no txs)
+	// Sleep past idleInterval (20ms) so the round closes, but well
+	// short of MinConsensus (200ms) so we observe the Establish phase
+	// before it accepts and cycles back to Open.
 	time.Sleep(50 * time.Millisecond)
 
-	// Should transition to Establish phase
 	if engine.Phase() != consensus.PhaseEstablish {
 		t.Errorf("Expected Establish phase, got %v", engine.Phase())
 	}
