@@ -143,3 +143,28 @@ incremental reviews instead of re-reading rippled from scratch.
 - Cleanup commit: 151f3a1 — chore: clean ai-generated comments (1 paraphrase preamble stripped from randomEd25519KeyPair; all rippled-conformance citations and non-obvious whys preserved)
 - Fix commit: 5a1e267 — test(#503): close conformance-review M1, M2; reword N1 Seed cite. Adds TestManifest_Secp256k1MasterSig_HighS_Rejected (secp256k1 master + ed25519 ephemeral; flips master sig S→N-S; asserts Verify rejects), three boundary cases in TestEd25519Canonical (S=L-1 verifies; S=L and S=L+1 reject), and a corrected Seed.cpp cite. New tests verified locally: PASS.
 - Notes: Tight conformance PR closing the four #503 audit gaps (manifest strict canonicality, ed25519 canonicality gate visibility, KeyType enum reordering, ed25519 secure_erase). Zero blockers — all four claimed fixes are correctly anchored to rippled. All review findings (M1 + M2 + N1) addressed in-PR per project rule against follow-up punts.
+
+## 2026-05-22 — PR #520 (incremental) — fix/issue-500-pseudo-tx-preflight
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/520
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/520#issuecomment-4519655917
+- Prior audit: this PR was audited earlier today (entry above); this is an incremental re-audit covering the two new commits that followed the prior cleanup.
+- Commits reviewed (over base 368aed98):
+  - ecaaac46 — fix(pseudo-tx): address conformance-review minors + nits (the seven follow-ups from the prior audit)
+  - 735319cc — fix(pseudo-tx): port preflight0 tfInnerBatchTxn + NetworkID gates (closes the prior audit's flagged out-of-scope item)
+- Files reviewed (Phase 1, incremental):
+  - amendment/rules.go — 0 findings (NegativeUNLEnabled wrapper, matches local pattern)
+  - protocol/constants.go — 0 findings (ZeroAccount lifted to single source of truth, cited rippled Change.cpp:43-48)
+  - internal/consensus/{amendmentvote,feevote,negativeunlvote}/vote.go — 0 findings (each constructor reroutes through protocol.ZeroAccount; 3-line touches)
+  - internal/ledger/state/fee_settings.go — 0 findings (XRPFeesMode flag + always-emit-active-mode serialization mirrors Change.cpp:362-379 set()/makeFieldAbsent())
+  - internal/tx/apply.go — 0 findings (pseudoPreflight + pseudoPreclaim wired before tx-hash + state-table per Change.cpp:36-140)
+  - internal/tx/pseudo/setfee.go — 0 findings (PreclaimPseudo per Change.cpp:93-133; parsedCache memoisation safe under single-threaded engine contract)
+  - internal/tx/pseudo/unl_modify.go — 0 findings (Validate is now a no-op; gating moved to engine)
+  - internal/tx/pseudo/wire.go — 0 findings (pseudo.ZeroAccount duplicate deleted)
+  - internal/tx/pseudo/register.go — 0 findings (constructors reference protocol.ZeroAccount)
+  - internal/tx/pseudo_gates.go — 3 Nit (lingering literal "rrrrrrrrrrrrrrrrrrrrrhoLvTp" at four non-pseudo sites; isZeroFee whitespace permissiveness vs rippled STAmount JSON parse; pseudoPreclaim asymmetry comment-gap), 0 Minor, 0 Blocking
+  - internal/testing/env_submission.go — 0 findings (SubmitPseudo now always closed-ledger, mirrors Change.cpp:82-91)
+  - internal/testing/pseudotx/*_test.go — 0 findings (test assertions reflect new gate behaviour: empty Account, zero-fee spellings, tfInnerBatchTxn, NetworkID legacy/wrong/absent-legal)
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Cleanup commit: 47f442c0 — chore: clean ai-generated comments (1 paraphrase line stripped from isZeroFee; all rippled cites and non-obvious whys preserved)
+- Notes: Zero blockers and zero minors across the incremental work — all seven prior-audit follow-ups are correctly anchored to rippled, and the new tfInnerBatchTxn + NetworkID gates byte-match Transactor.cpp:46-75. The three nits are advisory: lingering ZeroAccount literals exist only at non-pseudo-tx sites (payment.go path-element XRP detection, conformance/runner.go); isZeroFee is strictly more permissive than rippled at a Go-API boundary rippled never reaches; pseudoPreclaim's structural asymmetry between ttFEE and ttAMENDMENT/ttUNL_MODIFY would benefit from a one-line comment. None gate merge.
