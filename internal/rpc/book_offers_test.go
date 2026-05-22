@@ -25,10 +25,41 @@ func (m *bookOffersMock) GetBookOffers(_ context.Context, takerGets, takerPays t
 	return nil, errors.New("not implemented")
 }
 
+// GetLedgerBySequence shadows the base mock's "not implemented" so a numeric
+// ledger_index within the in-memory window resolves cleanly. Seqs above the
+// current open ledger still surface lgrNotFound, which is what the M2
+// "future ledger" pre-check coverage relies on.
+func (m *bookOffersMock) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
+	if seq == 0 || seq > m.currentLedgerIndex {
+		return nil, errors.New("ledger not found")
+	}
+	return &stubLedgerReader{seq: seq}, nil
+}
+
 func newBookOffersMock() *bookOffersMock {
 	return &bookOffersMock{
 		mockLedgerService: newMockLedgerService(),
 	}
+}
+
+// stubLedgerReader is a minimal types.LedgerReader used only to let the
+// book_offers handler's M2 lookupLedger pre-check succeed in unit tests.
+type stubLedgerReader struct{ seq uint32 }
+
+func (s *stubLedgerReader) Sequence() uint32            { return s.seq }
+func (s *stubLedgerReader) Hash() [32]byte              { return [32]byte{} }
+func (s *stubLedgerReader) ParentHash() [32]byte        { return [32]byte{} }
+func (s *stubLedgerReader) IsClosed() bool              { return true }
+func (s *stubLedgerReader) IsValidated() bool           { return true }
+func (s *stubLedgerReader) TotalDrops() uint64          { return 0 }
+func (s *stubLedgerReader) CloseTime() int64            { return 0 }
+func (s *stubLedgerReader) CloseTimeResolution() uint32 { return 0 }
+func (s *stubLedgerReader) CloseFlags() uint8           { return 0 }
+func (s *stubLedgerReader) ParentCloseTime() int64      { return 0 }
+func (s *stubLedgerReader) TxMapHash() [32]byte         { return [32]byte{} }
+func (s *stubLedgerReader) StateMapHash() [32]byte      { return [32]byte{} }
+func (s *stubLedgerReader) ForEachTransaction(func(txHash [32]byte, txData []byte) bool) error {
+	return nil
 }
 
 // newBookOffersTestServices builds a *types.ServiceContainer wrapping the mock.
@@ -94,6 +125,57 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			},
 			expectedError: "Missing field 'taker_pays'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
+		},
+		{
+			// M2: rippled BookOffers.cpp:45-49 calls RPC::lookupLedger BEFORE
+			// per-field validation. A bogus numeric ledger_index combined
+			// with missing taker_pays must surface lgrNotFound, not
+			// invalidParams (Book_test.cpp:1329-1336).
+			name: "Bogus numeric ledger_index pre-empts missing-field errors",
+			params: map[string]interface{}{
+				"ledger_index": "99999999",
+			},
+			expectedError: "ledgerNotFound",
+			expectedCode:  types.RpcLGR_NOT_FOUND,
+		},
+		{
+			// M5: rippled threads `proof` into NetworkOps::getBookPage
+			// (BookOffers.cpp:201-214). goxrpld doesn't honour it yet
+			// (#528); refuse rather than silently dropping so the caller
+			// knows the response carries no proofs.
+			name: "proof=true returns notSupported",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{
+					"currency": "USD",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"taker_gets": map[string]interface{}{
+					"currency": "EUR",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"proof": true,
+			},
+			expectedError: "Proof requests are not yet supported by book_offers.",
+			expectedCode:  75,
+		},
+		{
+			// M5: marker pagination is also rejected until GetBookOffers
+			// grows a resume-from-marker codepath (#527), so a paginated
+			// client doesn't mistake a partial page for the complete book.
+			name: "marker present returns notSupported",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{
+					"currency": "USD",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"taker_gets": map[string]interface{}{
+					"currency": "EUR",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"marker": "ABCDEF",
+			},
+			expectedError: "Marker-based pagination is not yet supported by book_offers.",
+			expectedCode:  75,
 		},
 		{
 			// Book_test.cpp:1359-1370 — taker_pays string → not object.
@@ -208,6 +290,26 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			params: map[string]interface{}{
 				"taker_pays": map[string]interface{}{"currency": "XRP"},
 				"taker_gets": map[string]interface{}{"currency": "NOT_VALID"},
+			},
+			expectedError: "Invalid field 'taker_gets.currency', bad currency.",
+			expectedCode:  types.RpcDST_AMT_MALFORMED,
+		},
+		{
+			// 3-char code with a character outside rippled's isoCharSet
+			// (UintTypes.cpp:39-43) must be rejected.
+			name: "taker_pays.currency 3-char with non-isoCharSet rune",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{"currency": "a/b"},
+				"taker_gets": map[string]interface{}{"currency": "XRP"},
+			},
+			expectedError: "Invalid field 'taker_pays.currency', bad currency.",
+			expectedCode:  types.RpcSRC_CUR_MALFORMED,
+		},
+		{
+			name: "taker_gets.currency 3-char with non-isoCharSet rune",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{"currency": "XRP"},
+				"taker_gets": map[string]interface{}{"currency": "a/b"},
 			},
 			expectedError: "Invalid field 'taker_gets.currency', bad currency.",
 			expectedCode:  types.RpcDST_AMT_MALFORMED,

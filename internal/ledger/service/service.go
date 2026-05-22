@@ -240,6 +240,13 @@ type Service struct {
 	// rebuild). Nil when overlay broadcast is unwired (tests).
 	txRelay func(blob []byte)
 
+	// submittedTxCallback fires from SubmitTransaction only when the tx
+	// applied to the open ledger. Mirrors rippled NetworkOPs::processTransaction
+	// (NetworkOPs.cpp:1535-1544) which calls pubProposedTransaction inside
+	// the applied branch, feeding the transactions_proposed /
+	// accounts_proposed WebSocket streams.
+	submittedTxCallback SubmittedTxCallback
+
 	// feeTrack is the local LoadFeeTrack mirror. Always non-nil — New()
 	// constructs a fresh tracker so GetAutofillFee and server_info
 	// observe the same fee factors as rippled's getCurrentNetworkFee
@@ -255,6 +262,32 @@ type Service struct {
 	//     (mirrors PeerImp.cpp:1175-1193).
 	feeTrack *feetrack.LoadFeeTrack
 }
+
+// SubmittedTxEvent carries the inputs the WebSocket transactions_proposed
+// publisher needs from a SubmitTransaction call.
+type SubmittedTxEvent struct {
+	RawBlob []byte
+	TxHash  [32]byte
+	// AffectedAccounts is the full mentioned-accounts set so
+	// accounts_proposed fans out to every party referenced by the tx
+	// (source, destination, regular key, signers, ...). Mirrors
+	// rippled STTx::getMentionedAccounts → pubProposedAccountTransaction
+	// at NetworkOPs.cpp:3550-3611.
+	AffectedAccounts []string
+	CurrentLedger    uint32
+	Result           Result
+}
+
+// Result is a slim mirror of tx.ApplyResult — copied here so the RPC
+// layer can consume the event without importing internal/tx.
+type Result struct {
+	Code    int
+	Name    string
+	Message string
+	Applied bool
+}
+
+type SubmittedTxCallback func(SubmittedTxEvent)
 
 // New creates a new LedgerService
 func New(cfg Config) (*Service, error) {
@@ -295,6 +328,15 @@ func (s *Service) SetEventCallback(callback EventCallback) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.eventCallback = callback
+}
+
+// SetSubmittedTxCallback registers a sink fired from SubmitTransaction
+// after every apply attempt. Pass nil to unwire. Mirrors rippled's
+// pubProposedTransaction subscription wiring (NetworkOPs.cpp:2316-2370).
+func (s *Service) SetSubmittedTxCallback(fn SubmittedTxCallback) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.submittedTxCallback = fn
 }
 
 // SetTxRelay registers the per-tx broadcast handler invoked by

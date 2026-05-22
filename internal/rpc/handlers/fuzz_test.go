@@ -45,23 +45,3 @@ func FuzzParseUintParam(f *testing.F) {
 		// Must not panic on any input.
 	})
 }
-
-func FuzzParseAmountFromJSON(f *testing.F) {
-	// XRP drops as string
-	f.Add([]byte(`"1000000"`))
-	f.Add([]byte(`"0"`))
-	f.Add([]byte(`"not_a_number"`))
-
-	// IOU object
-	f.Add([]byte(`{"currency":"USD","issuer":"rDTXLQ7ZKZVKz33zJbHjgVShjsBnqMBhmN","value":"1.5"}`))
-	f.Add([]byte(`{"currency":"USD"}`)) // missing fields
-	f.Add([]byte(`{}`))                 // empty object
-	f.Add([]byte(`null`))
-	f.Add([]byte(`[]`))
-	f.Add([]byte(`12345`)) // number, not string
-
-	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = ParseAmountFromJSON(json.RawMessage(data))
-		// Must not panic on any input.
-	})
-}

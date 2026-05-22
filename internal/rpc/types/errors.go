@@ -401,3 +401,14 @@ func RpcErrorDomainMalformed(message string) *RpcError {
 func RpcErrorDstActNotFound(message string) *RpcError {
 	return NewRpcError(RpcDST_ACT_NOT_FOUND, "dstActNotFound", "dstActNotFound", message)
 }
+
+// RpcErrorNotSupported returns rippled's rpcNOT_SUPPORTED (code 75, token
+// "notSupported"). The legacy RpcNOT_SUPPORTED constant in this file is 32
+// (incorrectly mapped to an amendment-error slot, tracked in issue #532);
+// we emit the rippled code directly so handlers like book_offers can report
+// "feature accepted by the request shape but not honoured by this server"
+// with byte-compatible output.
+// Reference: rippled ErrorCodes.h:132 + ErrorCodes.cpp:93.
+func RpcErrorNotSupported(message string) *RpcError {
+	return NewRpcError(75, "notSupported", "notSupported", message)
+}

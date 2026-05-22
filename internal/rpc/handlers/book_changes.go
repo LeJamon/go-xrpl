@@ -29,6 +29,58 @@ type bookChange struct {
 	Close     *big.Float
 }
 
+// LedgerWithTransactions is the minimal ledger surface the
+// book-changes computation needs: walk every transaction's binary blob
+// and answer basic header questions. types.LedgerEntry satisfies it.
+// Carved out so ComputeBookChanges can be called from event-source
+// wiring code (cli/server.go) without dragging in the full RPC
+// service container.
+type LedgerWithTransactions interface {
+	ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error
+	Sequence() uint32
+	Hash() [32]byte
+	CloseTime() int64
+	IsValidated() bool
+}
+
+// ComputeBookChanges walks a ledger's transaction metadata and returns
+// the per-pair OHLCV bundle rippled emits on the book_changes RPC
+// method (and the per-ledger book_changes WebSocket stream).
+// The shape of the returned map matches the JSON the RPC handler
+// emits, so subscribers can marshal it verbatim into the stream event.
+func ComputeBookChanges(l LedgerWithTransactions) map[string]interface{} {
+	if l == nil {
+		return map[string]interface{}{
+			"type":         "bookChanges",
+			"ledger_index": uint32(0),
+			"changes":      []interface{}{},
+		}
+	}
+	changes := collectBookChanges(l)
+	changesArr := make([]map[string]interface{}, 0, len(changes))
+	for _, bc := range changes {
+		changesArr = append(changesArr, map[string]interface{}{
+			"currency_a": bc.CurrencyA,
+			"currency_b": bc.CurrencyB,
+			"volume_a":   formatBigFloat(bc.VolumeA),
+			"volume_b":   formatBigFloat(bc.VolumeB),
+			"high":       formatBigFloat(bc.High),
+			"low":        formatBigFloat(bc.Low),
+			"open":       formatBigFloat(bc.Open),
+			"close":      formatBigFloat(bc.Close),
+		})
+	}
+	ledgerHash := l.Hash()
+	return map[string]interface{}{
+		"type":         "bookChanges",
+		"ledger_index": l.Sequence(),
+		"ledger_hash":  strings.ToUpper(hex.EncodeToString(ledgerHash[:])),
+		"ledger_time":  l.CloseTime(),
+		"validated":    l.IsValidated(),
+		"changes":      changesArr,
+	}
+}
+
 func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
 		types.LedgerSpecifier
@@ -75,10 +127,17 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, types.RpcErrorLgrNotFound("Ledger not found")
 	}
 
-	// Collect all offer changes from transaction metadata
+	return ComputeBookChanges(targetLedger), nil
+}
+
+// collectBookChanges scans the ledger and returns the per-pair OHLCV
+// accumulator map keyed by canonical pair string. Pulled out of the
+// RPC handler so both the handler and the book_changes WebSocket
+// publisher can call it without duplicating the metadata walk.
+func collectBookChanges(targetLedger LedgerWithTransactions) map[string]*bookChange {
 	changes := make(map[string]*bookChange)
 
-	targetLedger.ForEachTransaction(func(txHash [32]byte, txData []byte) bool {
+	_ = targetLedger.ForEachTransaction(func(txHash [32]byte, txData []byte) bool {
 		// Decode VL-encoded binary blob (or JSON fallback)
 		storedTx, err := decodeTxBlob(txData)
 		if err != nil {
@@ -245,34 +304,7 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return true
 	})
 
-	// Build response
-	changesArr := make([]map[string]interface{}, 0, len(changes))
-	for _, bc := range changes {
-		changesArr = append(changesArr, map[string]interface{}{
-			"currency_a": bc.CurrencyA,
-			"currency_b": bc.CurrencyB,
-			"volume_a":   formatBigFloat(bc.VolumeA),
-			"volume_b":   formatBigFloat(bc.VolumeB),
-			"high":       formatBigFloat(bc.High),
-			"low":        formatBigFloat(bc.Low),
-			"open":       formatBigFloat(bc.Open),
-			"close":      formatBigFloat(bc.Close),
-		})
-	}
-
-	ledgerHash := targetLedger.Hash()
-	ledgerHashStr := strings.ToUpper(hex.EncodeToString(ledgerHash[:]))
-
-	response := map[string]interface{}{
-		"type":         "bookChanges",
-		"ledger_index": targetLedger.Sequence(),
-		"ledger_hash":  ledgerHashStr,
-		"ledger_time":  targetLedger.CloseTime(),
-		"validated":    targetLedger.IsValidated(),
-		"changes":      changesArr,
-	}
-
-	return response, nil
+	return changes
 }
 
 // parsedAmount holds a parsed amount with its currency info
@@ -332,7 +364,10 @@ func formatCurrencyKey(amt *parsedAmount) string {
 	return amt.currency
 }
 
-// formatBigFloat formats a big.Float as a string, removing trailing zeros
+// formatBigFloat formats a big.Float as a string, removing trailing zeros.
+// Precision tracks IEEE 754 double (16 significant digits) so the rendered
+// IOU values match rippled's STAmount::iou() → STAmount::getText() shape
+// for typical inputs (BookChanges.h emits via to_string(STAmount::iou())).
 func formatBigFloat(f *big.Float) string {
 	if f == nil {
 		return "0"
@@ -340,5 +375,5 @@ func formatBigFloat(f *big.Float) string {
 	if f64, _ := f.Float64(); f64 == math.Trunc(f64) && !math.IsInf(f64, 0) {
 		return strconv.FormatInt(int64(f64), 10)
 	}
-	return f.Text('f', 6)
+	return f.Text('f', 16)
 }
