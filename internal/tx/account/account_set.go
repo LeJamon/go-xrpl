@@ -80,14 +80,16 @@ const (
 	// tfAllowXRP allows XRP payments
 	AccountSetTxFlagAllowXRP uint32 = 0x00200000
 
-	// tfAccountSetMask is the mask for valid AccountSet transaction flags
+	// tfAccountSetMask is the mask for valid AccountSet transaction flags.
+	// Reference: rippled TxFlags.h tfAccountSetMask — carves out tfUniversal
+	// (tfFullyCanonicalSig | tfInnerBatchTxn) as well as the AccountSet-specific flags.
 	AccountSetTxFlagMask uint32 = ^(AccountSetTxFlagRequireDestTag |
 		AccountSetTxFlagOptionalDestTag |
 		AccountSetTxFlagRequireAuth |
 		AccountSetTxFlagOptionalAuth |
 		AccountSetTxFlagDisallowXRP |
 		AccountSetTxFlagAllowXRP |
-		TxFlagFullyCanonicalSig)
+		tx.TfUniversal)
 )
 
 // Domain length limits
