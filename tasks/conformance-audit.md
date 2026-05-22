@@ -192,3 +192,14 @@ incremental reviews instead of re-reading rippled from scratch.
 - Review-fix commit: 674d9d29 — review(#502): address rippled-conformance findings on PR #523 (all 6 Blocking + 7 Minor/Nit resolved)
 - Cleanup commit: ce52450a — chore(#502): clean ai-generated comments (8 paraphrasers stripped from SubmittedTxEvent / SubmittedTxCallback; stale "fires regardless of apply success" callback comment rewritten with correct NetworkOPs.cpp:1535-1544 citation; all rippled-conformance docstrings preserved)
 - Notes: The original PR was dense with rationale-rich rippled-citing comments since it ports the entire WebSocket pubXxx fan-out fresh; cleanup pass was deliberately conservative (8 net deletions in service.go) so the parity story carried by those comments survives merge. Blast radius of the blockers cut across submission ingress (tx_query.go), event-shape structs (events.go), event-source bridges (cli/server.go), and the subscription manager (manager.go); ManifestEvent gained explicit Manifest/MasterSignature/Domain fields and a new Manifest.Signatures() helper on the cache type. Master-key resolution on pubValidation now threads the manifest Cache through rpcEventBridge. SubmittedTxEvent.AffectedAccounts replaced the single AffectedAccount string so accounts_proposed reaches destination/regular key/signers; tx_query.go reuses the same extractAffectedAccounts helper already used for the validated transactions stream.
+
+## 2026-05-22 — PR #535 — fix/issue-530-book-offers-iso-charset
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/535
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/535#issuecomment-4520266102
+- Files reviewed (Phase 1):
+  - internal/rpc/handlers/book_offers.go — 0 findings (isValidCurrencyCode 3-byte branch now applies isoCharSet per UintTypes.cpp:84-107; reuses existing isIsoCurrencyChar from get_aggregate_price.go which matches UintTypes.cpp:39-43 byte-for-byte; bytes-vs-runes equivalence holds for any 3-byte input; error codes/messages match BookOffers.cpp:80-96 verbatim)
+  - internal/rpc/book_offers_test.go — 0 findings (two new "a/b" cases assert pay-side rpcSRC_CUR_MALFORMED + gets-side rpcDST_AMT_MALFORMED; extends past rippled Book_test.cpp:1437-1461 which only tests 9-char invalid input)
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Cleanup commit: 618f1e29 — chore: clean ai-generated comments (stripped "previously admitted X by mistake" temporal reference in test; removed redundant trailing rippled cite in isValidCurrencyCode doc that duplicated the inline UintTypes.cpp:39-43, :93-96 reference)
+- Notes: Merged into main as 8dd7aba9. Tight conformance bug fix — previous len==3 branch admitted any 3-byte string (e.g. "a/b"), now correctly gated by isoCharSet to match rippled's to_currency().
