@@ -25,6 +25,9 @@ var (
 type BookOffersMethod struct{ BaseHandler }
 
 func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+	if err := RequireNotBusyBookOffers(ctx); err != nil {
+		return nil, err
+	}
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
@@ -161,6 +164,25 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		}
 	}
 
+	// proof (BookOffers.cpp:201 — `bProof = isMember(jss::proof)`). Rippled
+	// treats any presence as truthy, including `false` and `null`, because
+	// jsoncpp's isMember returns true for any present key regardless of
+	// value. We deliberately diverge: unlike rippled (which forwards bProof
+	// to getBookPage and then ignores it — see NetworkOPs.cpp:4430-4628),
+	// goxrpld actually emits a proof when the flag is on, so honouring an
+	// explicit `false`/`null` as opt-out matches what a client expects.
+	// Any non-null non-bool value still flips it on, preserving the
+	// presence-based surface for malformed inputs.
+	withProofs := false
+	if rawProof, ok := probe["proof"]; ok && !isJSONNull(rawProof) {
+		var b bool
+		if err := json.Unmarshal(rawProof, &b); err == nil {
+			withProofs = b
+		} else {
+			withProofs = true
+		}
+	}
+
 	var spec types.LedgerSpecifier
 	if rawLedgerHash, ok := probe["ledger_hash"]; ok && !isJSONNull(rawLedgerHash) {
 		if err := json.Unmarshal(rawLedgerHash, &spec.LedgerHash); err != nil {
@@ -201,7 +223,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		}
 	}
 
-	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, markerStr)
+	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, markerStr, withProofs)
 	if err != nil {
 		// Mirrors rippled AccountOffers.cpp:107-132 two-tier mapping:
 		// malformed / wrong-scope marker → invalid_field_error("marker");

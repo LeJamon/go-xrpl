@@ -49,7 +49,9 @@ const (
 	// Networking
 	RpcNOT_STANDALONE = 10
 	RpcSHUT_DOWN      = 11
-	RpcREPORTING      = 12
+
+	// Transport capability — rippled rpcNO_EVENTS = 7 (ErrorCodes.h, ErrorCodes.cpp errorInfo entry).
+	RpcNO_EVENTS = 7
 
 	// Ledger errors
 	RpcLGR_NOT_FOUND     = 15
@@ -78,9 +80,10 @@ const (
 	RpcPATH_MALFORMED   = 27
 	RpcPATH_DRY         = 28
 
-	// Amendment errors
-	RpcNOT_ENABLED   = 31
-	RpcNOT_SUPPORTED = 32
+	// Feature / amendment errors — must match rippled exactly
+	// (rippled ErrorCodes.h: rpcNOT_ENABLED = 12, rpcNOT_SUPPORTED = 75).
+	RpcNOT_ENABLED   = 12
+	RpcNOT_SUPPORTED = 75
 
 	// WebSocket specific
 	RpcCOMMAND_MISSING = 34
@@ -200,8 +203,12 @@ func RpcErrorForbidden(method string) *RpcError {
 		"You don't have permission for this command.")
 }
 
-func RpcErrorTooBusy(message string) *RpcError {
-	return NewRpcError(RpcTOO_BUSY, "tooBusy", "tooBusy", message)
+// RpcErrorTooBusy returns the canonical rpcTOO_BUSY envelope. The
+// message string is fixed to match rippled's ErrorCodes.cpp:114 INFOS
+// entry so HTTP/WS clients see a byte-identical error_message.
+func RpcErrorTooBusy() *RpcError {
+	return NewRpcError(RpcTOO_BUSY, "tooBusy", "tooBusy",
+		"The server is too busy to help you now.")
 }
 
 func RpcErrorSlowDown(message string) *RpcError {
@@ -220,8 +227,42 @@ func RpcErrorInvalidApiVersion(version string) *RpcError {
 	return NewRpcError(RpcINVALID_API_VERSION, "invalidApiVersion", "invalidApiVersion", "Invalid API version: "+version)
 }
 
-func RpcErrorNotEnabled(feature string) *RpcError {
-	return NewRpcError(RpcNOT_ENABLED, "notEnabled", "notEnabled", "Feature not enabled: "+feature)
+// RpcErrorNotEnabled returns rippled's rpcNOT_ENABLED (code 12, token
+// "notEnabled"). An empty message defaults to rippled's canonical
+// "Not enabled in configuration." string from ErrorCodes.cpp's errorInfo
+// array. Reference: rippled ErrorCodes.h (rpcNOT_ENABLED) +
+// ErrorCodes.cpp (errorInfo[rpcNOT_ENABLED]).
+func RpcErrorNotEnabled(message string) *RpcError {
+	if message == "" {
+		message = "Not enabled in configuration."
+	}
+	return NewRpcError(RpcNOT_ENABLED, "notEnabled", "notEnabled", message)
+}
+
+// RpcErrorNotSupported returns rippled's rpcNOT_SUPPORTED (code 75, token
+// "notSupported"). An empty message defaults to rippled's canonical
+// "Operation not supported." string from ErrorCodes.cpp's errorInfo array.
+// Reference: rippled ErrorCodes.h (rpcNOT_SUPPORTED) +
+// ErrorCodes.cpp (errorInfo[rpcNOT_SUPPORTED]).
+func RpcErrorNotSupported(message string) *RpcError {
+	if message == "" {
+		message = "Operation not supported."
+	}
+	return NewRpcError(RpcNOT_SUPPORTED, "notSupported", "notSupported", message)
+}
+
+// RpcErrorNoEvents returns rippled's rpcNO_EVENTS (code 7, token "noEvents"),
+// returned by handlers whose work requires a subscription-capable transport
+// (path_find, etc.) when invoked over plain JSON-RPC. An empty message
+// defaults to rippled's canonical "Current transport does not support events."
+// string. Reference: rippled ErrorCodes.h (rpcNO_EVENTS) +
+// ErrorCodes.cpp (errorInfo[rpcNO_EVENTS]) +
+// rippled handler PathFind.cpp (rpcError(rpcNO_EVENTS) on !context.infoSub).
+func RpcErrorNoEvents(message string) *RpcError {
+	if message == "" {
+		message = "Current transport does not support events."
+	}
+	return NewRpcError(RpcNO_EVENTS, "noEvents", "noEvents", message)
 }
 
 func RpcErrorAmendmentBlocked() *RpcError {
@@ -400,15 +441,4 @@ func RpcErrorDomainMalformed(message string) *RpcError {
 // (matches rippled rpcDST_ACT_NOT_FOUND, code 52, token "dstActNotFound").
 func RpcErrorDstActNotFound(message string) *RpcError {
 	return NewRpcError(RpcDST_ACT_NOT_FOUND, "dstActNotFound", "dstActNotFound", message)
-}
-
-// RpcErrorNotSupported returns rippled's rpcNOT_SUPPORTED (code 75, token
-// "notSupported"). The legacy RpcNOT_SUPPORTED constant in this file is 32
-// (incorrectly mapped to an amendment-error slot, tracked in issue #532);
-// we emit the rippled code directly so handlers like book_offers can report
-// "feature accepted by the request shape but not honoured by this server"
-// with byte-compatible output.
-// Reference: rippled ErrorCodes.h:132 + ErrorCodes.cpp:93.
-func RpcErrorNotSupported(message string) *RpcError {
-	return NewRpcError(75, "notSupported", "notSupported", message)
 }

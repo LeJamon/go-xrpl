@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
@@ -14,6 +15,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
+	"github.com/LeJamon/goXRPLd/shamap"
 )
 
 // BookOffer represents an offer in an order book. The wire shape mirrors
@@ -39,6 +41,10 @@ type BookOffer struct {
 	OwnerFunds        string                   `json:"owner_funds,omitempty"`
 	TakerGetsFunded   interface{}              `json:"taker_gets_funded,omitempty"`
 	TakerPaysFunded   interface{}              `json:"taker_pays_funded,omitempty"`
+	// Proof carries the SHAMap state-tree proof (leaf-to-root, upper-case
+	// hex) for this offer's key when GetBookOffers is called with
+	// withProofs=true. See the GetBookOffers doc for the rippled divergence.
+	Proof []string `json:"proof,omitempty"`
 }
 
 type BookOffersResult struct {
@@ -80,7 +86,17 @@ var errStopBookWalk = errors.New("stop book walk")
 // fee adjustment. The domainHex argument is the optional permissioned-domain
 // uint256 hex string; passing it walks the domain-scoped book base instead of
 // the open book.
-func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amount, taker, domainHex, ledgerIndex string, limit uint32, marker string) (*BookOffersResult, error) {
+//
+// withProofs requests per-offer SHAMap proofs (leaf-to-root, hex-encoded) on
+// each BookOffer.Proof. Rippled accepts proof=true and forwards bProof to
+// getBookPage but never emits the proof (NetworkOPs.cpp:4430-4628 declares
+// the parameter then ignores it); goxrpld emits real proofs so clients can
+// independently verify each offer against the parent ledger's account_hash.
+//
+// marker enables paginated walks: pass the empty string for an initial
+// request, then echo back the result.Marker on every follow-up call to
+// resume after the last-emitted offer.
+func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amount, taker, domainHex, ledgerIndex string, limit uint32, marker string, withProofs bool) (*BookOffersResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -128,6 +144,15 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		resumeDir = markerOffer.BookDirectory
 		skipUntil = markerKey
 		hasMarker = true
+	}
+
+	// Snapshot once so every per-offer proof verifies against the same account_hash.
+	var stateSnap *shamap.SHAMap
+	if withProofs {
+		stateSnap, err = targetLedger.StateMapSnapshot()
+		if err != nil {
+			return nil, fmt.Errorf("book_offers proof snapshot: %w", err)
+		}
 	}
 
 	getsIssuer := takerGets.Issuer
@@ -235,6 +260,13 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 				)
 				if berr != nil {
 					return berr
+				}
+				if stateSnap != nil {
+					proofHex, perr := extractOfferProof(stateSnap, offerKey)
+					if perr != nil {
+						return perr
+					}
+					bookOffer.Proof = proofHex
 				}
 				offers = append(offers, bookOffer)
 				lastOfferKey = offerKey
@@ -507,6 +539,30 @@ func newDirRate(q uint64, takerPays tx.Amount) tx.Amount {
 		return tx.NewIssuedAmount(mantissa, exponent, "", "")
 	}
 	return tx.NewIssuedAmount(mantissa, exponent, takerPays.Currency, takerPays.Issuer)
+}
+
+// extractOfferProof returns the SHAMap proof for an offer key as a list of
+// upper-case hex strings, ordered leaf-to-root. The returned slice is nil
+// when the offer is absent from the supplied snapshot. For closed-ledger
+// requests this can't happen — snapshot and walk both read an immutable
+// ledger. The narrow case is an open-ledger request where a concurrent
+// insert lands in `targetLedger` between the snapshot capture and the book
+// walk: that one offer surfaces in the walk but not in the snapshot, so
+// its proof is omitted (per `omitempty`) rather than mis-attributed to a
+// different account_hash.
+func extractOfferProof(snap *shamap.SHAMap, key [32]byte) ([]string, error) {
+	proof, err := snap.GetProofPath(key)
+	if err != nil {
+		return nil, fmt.Errorf("offer proof %s: %w", formatHashHex(key), err)
+	}
+	if proof == nil || !proof.Found {
+		return nil, nil
+	}
+	out := make([]string, len(proof.Path))
+	for i, node := range proof.Path {
+		out[i] = strings.ToUpper(hex.EncodeToString(node))
+	}
+	return out, nil
 }
 
 // multiplyByDirRate computes `multiply(getsFunded, saDirRate, takerPays.issue())`.

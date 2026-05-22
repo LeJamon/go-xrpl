@@ -109,6 +109,9 @@ type WebSocketConnection struct {
 // server so handlers reach the ledger via ctx.Services. May be nil for
 // test contexts.
 func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer) *WebSocketServer {
+	if services != nil && services.ClientLoad == nil {
+		services.ClientLoad = types.NewClientLoadShedder()
+	}
 	return &WebSocketServer{
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
@@ -521,6 +524,13 @@ func (ws *WebSocketServer) handlePathFind(wsConn *WebSocketConnection, ctx *type
 // handlePathFindCreate creates a new persistent pathfinding session.
 // Any existing session on this connection is replaced (matching rippled).
 func (ws *WebSocketServer) handlePathFindCreate(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+	release, rpcErr := handlers.AcquirePathfind(ctx)
+	if rpcErr != nil {
+		ws.sendError(wsConn, rpcErr, cmd.ID)
+		return
+	}
+	defer release()
+
 	session, rpcErr := ParseAndCreateSession(cmd.Params, cmd.ID)
 	if rpcErr != nil {
 		ws.sendError(wsConn, rpcErr, cmd.ID)
@@ -666,9 +676,19 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *typ
 		return
 	}
 
+	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
+		ws.sendError(wsConn, rpcErr, cmd.ID)
+		return
+	}
+
 	if rpcErr := gateLoad(ws.loadTracker, ctx, cmd.Command, wsLog()); rpcErr != nil {
 		ws.sendError(wsConn, rpcErr, cmd.ID)
 		return
+	}
+
+	if ws.services != nil && ws.services.ClientLoad != nil {
+		ws.services.ClientLoad.Begin()
+		defer ws.services.ClientLoad.End()
 	}
 
 	result, rpcErr := handler.Handle(ctx, cmd.Params)
@@ -828,7 +848,7 @@ func (ws *WebSocketServer) snapshotBook(ctx *types.RpcContext, takerGets, takerP
 	if ctx == nil || ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, nil
 	}
-	res, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, taker, "", "current", DefaultBookSnapshotLimit, "")
+	res, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, taker, "", "current", DefaultBookSnapshotLimit, "", false)
 	if err != nil || res == nil {
 		return nil, err
 	}

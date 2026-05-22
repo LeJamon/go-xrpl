@@ -2,6 +2,7 @@ package types
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/goXRPLd/amendment"
@@ -247,6 +248,116 @@ type ServiceContainer struct {
 	// emits (NetworkOPs.cpp:2887-2901). Nil until a LoadFeeTrack
 	// subsystem lands — handler suppresses the fields when nil.
 	LoadFactorFees func() LoadFactorFees
+
+	// ClientLoad is the shared in-flight client-RPC counter that drives
+	// the rpcTOO_BUSY load-shedding gates. Approximates rippled's
+	// jtCLIENT backpressure via in-flight RPC count: rippled measures
+	// JobQueue.getJobCountGE(jtCLIENT) (queued *waiting* jobs); goXRPL
+	// has no unified job queue and instead measures concurrent RPCs
+	// bracketed by Begin()/End() at the HTTP/WS dispatchers. The two
+	// signals are correlated but not identical — see handlers.RequireNotBusyClient
+	// and friends for the per-tier thresholds (500 generic, 200 book_offers,
+	// 50 path-find) mirroring rippled's Tuning.h constants.
+	//
+	// Nil in standalone / RPC-only test contexts — every gate treats
+	// nil as "never shed".
+	ClientLoad *ClientLoadShedder
+}
+
+// Rippled rpc::Tuning thresholds (Tuning.h:62-64).
+const (
+	// MaxJobQueueClients is the generic-RPC shedding ceiling used by
+	// rippled's fillHandler (RPCHandler.cpp:135). Strict-greater.
+	MaxJobQueueClients int64 = 500
+	// MaxBookOffersClients is the book_offers-specific ceiling
+	// (BookOffers.cpp:42). Strict-greater.
+	MaxBookOffersClients int64 = 200
+	// MaxPathfindClients is the per-attempt path-finding ceiling
+	// (LegacyPathFind.cpp:39 + Tuning.h:63 maxPathfindJobCount).
+	// Strict-greater.
+	MaxPathfindClients int64 = 50
+	// MaxPathfindsInProgress is the hard cap on concurrently-running
+	// path-finds (LegacyPathFind.cpp:47 + Tuning.h:62). Strict-less.
+	MaxPathfindsInProgress int64 = 2
+)
+
+// ClientLoadShedder is the shared in-flight RPC counter plus a
+// dedicated concurrent-path-find counter. See ServiceContainer.ClientLoad.
+//
+// Begin()/End() bracket each RPC dispatch (HTTP and WebSocket). Handlers
+// consult InFlight() against the rippled-faithful tier constants
+// (MaxJobQueueClients, MaxBookOffersClients, MaxPathfindClients).
+//
+// AcquirePathfind/ReleasePathfind manage the second counter, capped at
+// MaxPathfindsInProgress to mirror rippled's LegacyPathFind ctor
+// (LegacyPathFind.cpp:30-60).
+type ClientLoadShedder struct {
+	inFlight       atomic.Int64
+	pathfindActive atomic.Int64
+}
+
+func NewClientLoadShedder() *ClientLoadShedder {
+	return &ClientLoadShedder{}
+}
+
+// Begin records the start of a client-RPC dispatch.
+func (s *ClientLoadShedder) Begin() {
+	if s == nil {
+		return
+	}
+	s.inFlight.Add(1)
+}
+
+// End records completion of a client-RPC dispatch. Safe to call from a
+// defer alongside Begin().
+func (s *ClientLoadShedder) End() {
+	if s == nil {
+		return
+	}
+	s.inFlight.Add(-1)
+}
+
+// InFlight returns the current in-flight RPC count. Gates compare it
+// against the rippled-faithful Max* tier constants.
+func (s *ClientLoadShedder) InFlight() int64 {
+	if s == nil {
+		return 0
+	}
+	return s.inFlight.Load()
+}
+
+// AcquirePathfind attempts to enter the path-finding critical section.
+// Returns true on success (caller MUST pair with ReleasePathfind), false
+// when already at MaxPathfindsInProgress. CAS-loop matches rippled's
+// LegacyPathFind ctor at LegacyPathFind.cpp:44-58.
+func (s *ClientLoadShedder) AcquirePathfind() bool {
+	if s == nil {
+		return true
+	}
+	for {
+		prev := s.pathfindActive.Load()
+		if prev >= MaxPathfindsInProgress {
+			return false
+		}
+		if s.pathfindActive.CompareAndSwap(prev, prev+1) {
+			return true
+		}
+	}
+}
+
+func (s *ClientLoadShedder) ReleasePathfind() {
+	if s == nil {
+		return
+	}
+	s.pathfindActive.Add(-1)
+}
+
+// PathfindActive returns the current concurrent-path-find count.
+func (s *ClientLoadShedder) PathfindActive() int64 {
+	if s == nil {
+		return 0
+	}
+	return s.pathfindActive.Load()
 }
 
 // LedgerNavigator provides ledger index navigation and mode queries.
@@ -325,7 +436,7 @@ type LedgerService interface {
 	AccountQuerier
 
 	// Book and market data
-	GetBookOffers(ctx context.Context, takerGets, takerPays Amount, taker, domain string, ledgerIndex string, limit uint32, marker string) (*BookOffersResult, error)
+	GetBookOffers(ctx context.Context, takerGets, takerPays Amount, taker, domain string, ledgerIndex string, limit uint32, marker string, withProofs bool) (*BookOffersResult, error)
 
 	// Gateway operations
 	GetGatewayBalances(ctx context.Context, account string, hotWallets []string, ledgerIndex string) (*GatewayBalancesResult, error)
@@ -620,6 +731,10 @@ type BookOffer struct {
 	OwnerFunds        string                   `json:"owner_funds,omitempty"`
 	TakerGetsFunded   interface{}              `json:"taker_gets_funded,omitempty"`
 	TakerPaysFunded   interface{}              `json:"taker_pays_funded,omitempty"`
+	// Proof carries the SHAMap state-tree proof (leaf-to-root, upper-case
+	// hex) for the offer's ledger entry when the request set proof=true.
+	// Verify against ledger.account_hash with shamap.VerifyProofPath.
+	Proof []string `json:"proof,omitempty"`
 }
 
 // BookOffersResult contains the result of book_offers RPC

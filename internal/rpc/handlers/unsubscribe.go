@@ -6,17 +6,21 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
-// UnsubscribeMethod handles the unsubscribe RPC command (WebSocket only).
-// STUB over HTTP: Returns notSupported. The real implementation is in websocket.go.
+// UnsubscribeMethod handles the unsubscribe RPC command.
+// STUB over plain JSON-RPC: mirrors rippled Unsubscribe.cpp's
+// "Must be a JSON-RPC call." branch — when there is no infoSub and no `url`
+// parameter, rippled returns rpcError(rpcINVALID_PARAMS). The real
+// WebSocket-bound implementation lives in rpc/websocket.go.
 //
-// TODO [websocket]: Same as subscribe — this HTTP stub is correct.
+// TODO [websocket]: rippled also supports HTTP+url admin unsubscribes
 //
-//	The WebSocket server handles actual unsubscriptions.
+//	(Unsubscribe.cpp branch on context.params.isMember(jss::url) with
+//	Role::ADMIN). Once goxrpl wires up the RPCSub callback path that
+//	branch should be served here too.
 //	- Reference: rippled Unsubscribe.cpp
 //	- Removes subscriptions created by subscribe command
 type UnsubscribeMethod struct{ BaseHandler }
 
 func (m *UnsubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	return nil, types.NewRpcError(types.RpcNOT_SUPPORTED, "notSupported", "notSupported",
-		"unsubscribe is only available via WebSocket")
+	return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 }

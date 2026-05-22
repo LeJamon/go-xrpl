@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
+	"github.com/LeJamon/goXRPLd/shamap"
 )
 
 // addressFromBytes produces a deterministic test classic-address from a seed byte.
@@ -202,7 +203,7 @@ func TestGetBookOffers_XRP_OwnerFundsAndUnfunded(t *testing.T) {
 		tx.NewXRPAmount(10_000_000),
 	)
 
-	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10, "")
+	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10, "", false)
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -266,7 +267,7 @@ func TestGetBookOffers_OwnerFundsOncePerOwner(t *testing.T) {
 	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
 	xrpModel := tx.NewXRPAmount(0)
 
-	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10, "")
+	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10, "", false)
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -300,7 +301,7 @@ func TestGetBookOffers_IssuerOwnIOUFullyFunded(t *testing.T) {
 		state.NewIssuedAmountFromFloat64(50, "USD", issuerAddr),
 	)
 
-	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10, "")
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10, "", false)
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -338,7 +339,7 @@ func TestGetBookOffers_IssuerOwnIOU_AllOffersEmitOwnerFunds(t *testing.T) {
 
 	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
 	xrpModel := tx.NewXRPAmount(0)
-	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10, "")
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10, "", false)
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -444,7 +445,7 @@ func TestGetBookOffers_PermissionedOfferHiddenFromOpenBook(t *testing.T) {
 	xrpModel := tx.NewXRPAmount(0)
 
 	// Open book: only the open offer.
-	openResult, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10, "")
+	openResult, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10, "", false)
 	if err != nil {
 		t.Fatalf("open GetBookOffers: %v", err)
 	}
@@ -457,7 +458,7 @@ func TestGetBookOffers_PermissionedOfferHiddenFromOpenBook(t *testing.T) {
 
 	// Domain book: only the permissioned offer.
 	domainHex := strings.ToUpper(hex.EncodeToString(domainID[:]))
-	domResult, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", domainHex, "current", 10, "")
+	domResult, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", domainHex, "current", 10, "", false)
 	if err != nil {
 		t.Fatalf("domain GetBookOffers: %v", err)
 	}
@@ -499,7 +500,7 @@ func TestGetBookOffers_RunningBalanceConsumesAcrossOffers(t *testing.T) {
 
 	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
 	xrpModel := tx.NewXRPAmount(0)
-	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10, "")
+	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10, "", false)
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -568,7 +569,7 @@ func TestGetBookOffers_GlobalFreezeMarksAllUnfunded(t *testing.T) {
 
 	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
 	xrpModel := tx.NewXRPAmount(0)
-	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10, "")
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10, "", false)
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -610,7 +611,7 @@ func TestGetBookOffers_TransferRateAdjustsFunded(t *testing.T) {
 
 	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
 	xrpModel := tx.NewXRPAmount(0)
-	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10, "")
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10, "", false)
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -662,7 +663,7 @@ func TestGetBookOffers_MarkerPagination(t *testing.T) {
 	var collected []string
 	marker := ""
 	for page := 0; page < 10; page++ {
-		result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", pageSize, marker)
+		result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", pageSize, marker, false)
 		if err != nil {
 			t.Fatalf("page %d: GetBookOffers: %v", page, err)
 		}
@@ -731,7 +732,7 @@ func TestGetBookOffers_MarkerInvalid(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 5, tc.marker)
+			_, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 5, tc.marker, false)
 			if !errors.Is(err, svcerr.ErrInvalidMarker) {
 				t.Fatalf("expected ErrInvalidMarker, got %v", err)
 			}
@@ -764,7 +765,7 @@ func TestGetBookOffers_MarkerStale(t *testing.T) {
 
 	_, err := svc.GetBookOffers(
 		context.Background(), xrpModel, usd, "", "", "current", 5,
-		strings.Repeat("0", 64),
+		strings.Repeat("0", 64), false,
 	)
 	if !errors.Is(err, svcerr.ErrStaleMarker) {
 		t.Fatalf("unknown-key marker must surface as ErrStaleMarker, got %v", err)
@@ -794,7 +795,7 @@ func TestGetBookOffers_LimitZeroEmitsNoMarker(t *testing.T) {
 	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
 	xrpModel := tx.NewXRPAmount(0)
 
-	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 0, "")
+	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 0, "", false)
 	if err != nil {
 		t.Fatalf("GetBookOffers(limit=0): %v", err)
 	}
@@ -829,7 +830,7 @@ func TestGetBookOffers_HashFieldsAreUppercaseHex(t *testing.T) {
 		tx.NewXRPAmount(10_000_000),
 	)
 
-	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10, "")
+	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10, "", false)
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -880,7 +881,7 @@ func TestGetBookOffers_TransferRateSkippedWhenTakerIsIssuer(t *testing.T) {
 
 	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
 	xrpModel := tx.NewXRPAmount(0)
-	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, issuerAddr, "", "current", 10, "")
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, issuerAddr, "", "current", 10, "", false)
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -927,7 +928,7 @@ func TestGetBookOffers_TransferRateAcrossOwners(t *testing.T) {
 	xrpModel := tx.NewXRPAmount(0)
 	// Pass a third-party taker so the issuer-skip carve-out doesn't kick in.
 	thirdParty, _ := addressFromBytes(t, 0xDE)
-	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, thirdParty, "", "current", 10, "")
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, thirdParty, "", "current", 10, "", false)
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -967,7 +968,7 @@ func TestGetBookOffers_BothSidesFrozen(t *testing.T) {
 
 	usd := state.NewIssuedAmountFromFloat64(0, "USD", getsIssuerAddr)
 	eur := state.NewIssuedAmountFromFloat64(0, "EUR", paysIssuerAddr)
-	result, err := svc.GetBookOffers(context.Background(), usd, eur, "", "", "current", 10, "")
+	result, err := svc.GetBookOffers(context.Background(), usd, eur, "", "", "current", 10, "", false)
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -1006,7 +1007,7 @@ func TestGetBookOffers_FrozenIssuerDistinctFromOwner(t *testing.T) {
 
 	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
 	xrpModel := tx.NewXRPAmount(0)
-	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10, "")
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10, "", false)
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -1060,7 +1061,7 @@ func TestGetBookOffers_MultiOwnerDrainsTrustline(t *testing.T) {
 
 	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
 	xrpModel := tx.NewXRPAmount(0)
-	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10, "")
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10, "", false)
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -1104,5 +1105,88 @@ func TestGetBookOffers_MultiOwnerDrainsTrustline(t *testing.T) {
 	if bobOffers[0].TakerGetsFunded != nil {
 		t.Errorf("bob's 25 USD offer is below his 30 USD trustline; expected fully funded, got gets_funded=%v",
 			bobOffers[0].TakerGetsFunded)
+	}
+}
+
+// TestGetBookOffers_WithProofs_VerifiesAgainstAccountHash pins that
+// withProofs=true emits a SHAMap proof per offer that verifies against
+// the queried ledger's state-map root (account_hash).
+func TestGetBookOffers_WithProofs_VerifiesAgainstAccountHash(t *testing.T) {
+	svc := newOfferTestService(t)
+	issuerAddr, _ := addressFromBytes(t, 0x80)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+	ownerAddr, _ := addressFromBytes(t, 0x81)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+
+	offerKey := insertOffer(t, svc, ownerAddr, 1,
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
+		tx.NewXRPAmount(10_000_000),
+	)
+
+	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
+	xrpModel := tx.NewXRPAmount(0)
+	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10, "", true)
+	if err != nil {
+		t.Fatalf("GetBookOffers: %v", err)
+	}
+	if len(result.Offers) != 1 {
+		t.Fatalf("expected 1 offer, got %d", len(result.Offers))
+	}
+	o := result.Offers[0]
+	if len(o.Proof) == 0 {
+		t.Fatalf("withProofs=true must populate Proof, got empty slice")
+	}
+
+	snap, err := svc.openLedger.StateMapSnapshot()
+	if err != nil {
+		t.Fatalf("snapshot state map: %v", err)
+	}
+	rootHash, err := snap.Hash()
+	if err != nil {
+		t.Fatalf("state map hash: %v", err)
+	}
+
+	rawNodes := make([][]byte, len(o.Proof))
+	for i, h := range o.Proof {
+		if strings.ToUpper(h) != h {
+			t.Errorf("proof node %d not upper-case hex: %q", i, h)
+		}
+		b, derr := hex.DecodeString(h)
+		if derr != nil {
+			t.Fatalf("hex decode proof node %d: %v", i, derr)
+		}
+		rawNodes[i] = b
+	}
+	if !shamap.VerifyProofPath(rootHash, offerKey, rawNodes) {
+		t.Fatalf("proof for offer %s does not verify against account_hash %x",
+			hex.EncodeToString(offerKey[:]), rootHash)
+	}
+}
+
+// TestGetBookOffers_WithProofsFalse_OmitsProof pins that the default
+// (withProofs=false) request never sets the Proof field, so the JSON
+// response keeps `proof` omitted via the BookOffer `omitempty` tag.
+func TestGetBookOffers_WithProofsFalse_OmitsProof(t *testing.T) {
+	svc := newOfferTestService(t)
+	issuerAddr, _ := addressFromBytes(t, 0x90)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+	ownerAddr, _ := addressFromBytes(t, 0x91)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+	insertOffer(t, svc, ownerAddr, 1,
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
+		tx.NewXRPAmount(10_000_000),
+	)
+
+	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
+	xrpModel := tx.NewXRPAmount(0)
+	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10, "", false)
+	if err != nil {
+		t.Fatalf("GetBookOffers: %v", err)
+	}
+	if len(result.Offers) != 1 {
+		t.Fatalf("expected 1 offer, got %d", len(result.Offers))
+	}
+	if len(result.Offers[0].Proof) != 0 {
+		t.Fatalf("withProofs=false must omit proof, got %v", result.Offers[0].Proof)
 	}
 }
