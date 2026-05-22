@@ -21,6 +21,5 @@ import (
 type SubscribeMethod struct{ BaseHandler }
 
 func (m *SubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	return nil, types.NewRpcError(types.RpcNOT_SUPPORTED, "notSupported", "notSupported",
-		"subscribe is only available via WebSocket")
+	return nil, types.RpcErrorNotSupported("subscribe is only available via WebSocket")
 }

@@ -21,8 +21,7 @@ import (
 type PathFindMethod struct{}
 
 func (m *PathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	return nil, types.NewRpcError(types.RpcNOT_SUPPORTED, "notSupported", "notSupported",
-		"path_find is only available via WebSocket")
+	return nil, types.RpcErrorNotSupported("path_find is only available via WebSocket")
 }
 
 func (m *PathFindMethod) RequiredRole() types.Role {

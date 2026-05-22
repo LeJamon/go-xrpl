@@ -17,6 +17,5 @@ import (
 type UnsubscribeMethod struct{ BaseHandler }
 
 func (m *UnsubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	return nil, types.NewRpcError(types.RpcNOT_SUPPORTED, "notSupported", "notSupported",
-		"unsubscribe is only available via WebSocket")
+	return nil, types.RpcErrorNotSupported("unsubscribe is only available via WebSocket")
 }

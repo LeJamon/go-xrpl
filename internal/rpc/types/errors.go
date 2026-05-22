@@ -78,9 +78,10 @@ const (
 	RpcPATH_MALFORMED   = 27
 	RpcPATH_DRY         = 28
 
-	// Amendment errors
-	RpcNOT_ENABLED   = 31
-	RpcNOT_SUPPORTED = 32
+	// Feature / amendment errors — must match rippled exactly
+	// (rippled ErrorCodes.h: rpcNOT_ENABLED = 12, rpcNOT_SUPPORTED = 75).
+	RpcNOT_ENABLED   = 12
+	RpcNOT_SUPPORTED = 75
 
 	// WebSocket specific
 	RpcCOMMAND_MISSING = 34
@@ -222,6 +223,17 @@ func RpcErrorInvalidApiVersion(version string) *RpcError {
 
 func RpcErrorNotEnabled(feature string) *RpcError {
 	return NewRpcError(RpcNOT_ENABLED, "notEnabled", "notEnabled", "Feature not enabled: "+feature)
+}
+
+// RpcErrorNotSupported returns rippled's rpcNOT_SUPPORTED (code 75, token
+// "notSupported"). An empty message defaults to rippled's
+// ErrorCodes.cpp:93 string "Operation not supported.".
+// Reference: rippled ErrorCodes.h:132 + ErrorCodes.cpp:93.
+func RpcErrorNotSupported(message string) *RpcError {
+	if message == "" {
+		message = "Operation not supported."
+	}
+	return NewRpcError(RpcNOT_SUPPORTED, "notSupported", "notSupported", message)
 }
 
 func RpcErrorAmendmentBlocked() *RpcError {
