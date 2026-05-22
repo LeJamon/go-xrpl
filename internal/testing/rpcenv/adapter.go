@@ -13,15 +13,10 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-// errNotImplemented is returned by adapter methods that the canary harness
-// does not yet wire up. Integration tests that need the missing method
-// should extend the adapter rather than mock it.
 var errNotImplemented = errors.New("rpcenv: LedgerService method not implemented — extend the adapter when adding a consumer test")
 
-// ledgerAdapter is a types.LedgerService backed by a live testing.TestEnv.
-//
-// The goal mirrors rippled's jtx::Env: tests reach the same handlers that
-// production hits, against a real ledger that just had transactions
+// ledgerAdapter mirrors rippled's jtx::Env: tests reach the same handlers
+// that production hits, against a real ledger that just had transactions
 // applied. Methods not yet exercised by a consumer test return
 // errNotImplemented so the gap is obvious.
 type ledgerAdapter struct {
@@ -34,9 +29,9 @@ func newLedgerAdapter(env *testing.TestEnv) *ledgerAdapter {
 	return &ledgerAdapter{env: env}
 }
 
-// resolveLedger picks the *ledger.Ledger that matches the ledgerIndex
-// specifier ("validated"/"closed"/"current"/numeric). In standalone test
-// mode the most recent closed ledger plays the role of the validated one.
+// resolveLedger maps a ledgerIndex specifier to a ledger. In standalone
+// test mode the most recent closed ledger plays the role of the validated
+// one.
 func (a *ledgerAdapter) resolveLedger(ledgerIndex string) (*ledger.Ledger, bool, error) {
 	open := a.env.Ledger()
 	closed := a.env.LastClosedLedger()
@@ -73,8 +68,6 @@ func ledgerSeq(l *ledger.Ledger) uint32 {
 	return l.Sequence()
 }
 
-// --- LedgerNavigator ------------------------------------------------------
-
 func (a *ledgerAdapter) GetCurrentLedgerIndex() uint32 {
 	return a.env.LedgerSeq()
 }
@@ -97,8 +90,6 @@ func (a *ledgerAdapter) AcceptLedgerAt(ctx context.Context, _ time.Time) (uint32
 }
 
 func (a *ledgerAdapter) IsStandalone() bool { return true }
-
-// --- LedgerAccessor -------------------------------------------------------
 
 func (a *ledgerAdapter) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
 	closed := a.env.LastClosedLedger()
@@ -193,8 +184,6 @@ func (a *ledgerAdapter) GetClosedLedgerView() (types.LedgerStateView, error) {
 
 func (a *ledgerAdapter) IsAmendmentBlocked() bool { return false }
 
-// --- TransactionSubmitter -------------------------------------------------
-
 func (a *ledgerAdapter) SubmitTransaction(_ []byte, _ ...string) (*types.SubmitResult, error) {
 	return nil, errNotImplemented
 }
@@ -222,8 +211,6 @@ func (a *ledgerAdapter) GetAutofillFee(_ []byte) (uint64, error) {
 func (a *ledgerAdapter) GetAutofillSequence(_ string, _ bool) (uint32, error) {
 	return 0, errNotImplemented
 }
-
-// --- AccountQuerier -------------------------------------------------------
 
 func (a *ledgerAdapter) GetAccountInfo(_ context.Context, _ string, _ string) (*types.AccountInfo, error) {
 	return nil, errNotImplemented
@@ -257,8 +244,6 @@ func (a *ledgerAdapter) GetAccountNFTs(_ context.Context, _ string, _ string, _ 
 	return nil, errNotImplemented
 }
 
-// --- Remaining LedgerService surface --------------------------------------
-
 func (a *ledgerAdapter) GetBookOffers(_ context.Context, _, _ types.Amount, _ string, _ string, _ string, _ uint32) (*types.BookOffersResult, error) {
 	return nil, errNotImplemented
 }
@@ -283,18 +268,16 @@ func (a *ledgerAdapter) GetNFTSellOffers(_ context.Context, _ [32]byte, _ string
 	return nil, errNotImplemented
 }
 
-// --- LedgerReader adapter -------------------------------------------------
-
 type ledgerReaderAdapter struct {
 	l *ledger.Ledger
 }
 
-func (r *ledgerReaderAdapter) Sequence() uint32   { return r.l.Sequence() }
-func (r *ledgerReaderAdapter) Hash() [32]byte     { return r.l.Hash() }
+func (r *ledgerReaderAdapter) Sequence() uint32     { return r.l.Sequence() }
+func (r *ledgerReaderAdapter) Hash() [32]byte       { return r.l.Hash() }
 func (r *ledgerReaderAdapter) ParentHash() [32]byte { return r.l.ParentHash() }
-func (r *ledgerReaderAdapter) IsClosed() bool     { return r.l.IsClosed() }
-func (r *ledgerReaderAdapter) IsValidated() bool  { return r.l.IsClosed() }
-func (r *ledgerReaderAdapter) TotalDrops() uint64 { return r.l.TotalDrops() }
+func (r *ledgerReaderAdapter) IsClosed() bool       { return r.l.IsClosed() }
+func (r *ledgerReaderAdapter) IsValidated() bool    { return r.l.IsClosed() }
+func (r *ledgerReaderAdapter) TotalDrops() uint64   { return r.l.TotalDrops() }
 
 func (r *ledgerReaderAdapter) CloseTime() int64 {
 	t := r.l.CloseTime()

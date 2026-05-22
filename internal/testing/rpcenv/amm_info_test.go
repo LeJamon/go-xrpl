@@ -9,15 +9,6 @@ import (
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 )
 
-// TestAMMInfo_EndToEnd_ByAssetPair is the canary integration test for the
-// rpcenv harness. It builds a real XRP/USD AMM through the tx engine, then
-// asks the production amm_info handler for it via the same dispatcher the
-// HTTP server uses.
-//
-// This is exactly the bug class issue #482 exposed: amm_info passed its
-// mock-backed unit tests while shipping the wrong field shape against real
-// ledger state. With this test in place, future regressions in the
-// success path are caught in CI.
 func TestAMMInfo_EndToEnd_ByAssetPair(t *testing.T) {
 	amm.TestAMM(t, nil, 500, func(ammEnv *amm.AMMTestEnv, ammAcc *jtx.Account) {
 		env := rpcenv.Wrap(t, ammEnv.TestEnv)
@@ -65,9 +56,8 @@ func TestAMMInfo_EndToEnd_ByAssetPair(t *testing.T) {
 	})
 }
 
-// TestAMMInfo_EndToEnd_ByAccount verifies the second discovery path —
-// look up the AMM by its pseudo-account, exercising the AMMID indirection
-// in the AccountRoot SLE that bug #482 also touched.
+// TestAMMInfo_EndToEnd_ByAccount exercises lookup by AMM pseudo-account,
+// which goes through the AMMID indirection in AccountRoot.
 func TestAMMInfo_EndToEnd_ByAccount(t *testing.T) {
 	amm.TestAMM(t, nil, 250, func(ammEnv *amm.AMMTestEnv, ammAcc *jtx.Account) {
 		env := rpcenv.Wrap(t, ammEnv.TestEnv)
@@ -87,9 +77,6 @@ func TestAMMInfo_EndToEnd_ByAccount(t *testing.T) {
 	})
 }
 
-// TestAMMInfo_EndToEnd_NotFound checks that querying a non-existent asset
-// pair surfaces actNotFound instead of crashing — confirming that the
-// adapter's error mapping behaves like rippled.
 func TestAMMInfo_EndToEnd_NotFound(t *testing.T) {
 	env := rpcenv.New(t)
 	gw := jtx.NewAccount("gw")
@@ -104,4 +91,3 @@ func TestAMMInfo_EndToEnd_NotFound(t *testing.T) {
 		t.Fatalf("amm_info on missing pair: expected error, got nil")
 	}
 }
-
