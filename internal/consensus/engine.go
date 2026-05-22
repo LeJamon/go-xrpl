@@ -56,6 +56,14 @@ type Engine interface {
 
 	// GetLastCloseInfo returns the proposer count and convergence time from the last consensus round.
 	GetLastCloseInfo() (proposers int, convergeTime time.Duration)
+
+	// Subscribe registers a sink for the engine's typed event bus
+	// (RoundStarted / PhaseChanged / ValidationReceived / etc.). The
+	// engine fires events on its own goroutine; OnEvent must not block.
+	// Mirrors rippled's NetworkOPs::subxxx feed registration without
+	// the per-stream filtering — the subscriber is expected to fan
+	// events out by type itself.
+	Subscribe(sub EventSubscriber)
 }
 
 // ValidationHistorian provides historical, per-ledger trusted

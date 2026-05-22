@@ -44,43 +44,86 @@ func (e *Engine) preflight(tx Transaction) Result {
 		return parseValidationError(err)
 	}
 
+	// Reference: rippled Batch.cpp:303-312.
+	if outer, ok := tx.(BatchOuter); ok {
+		for _, inner := range outer.InnerTransactions() {
+			if inner == nil {
+				return TemINVALID_INNER_BATCH
+			}
+			if r := e.preflightInner(inner); r != TesSUCCESS {
+				return TemINVALID_INNER_BATCH
+			}
+		}
+	}
+
 	return TesSUCCESS
 }
 
-// preflightCommonFields handles the trivial common-field, amendment, and flag
-// checks that rippled performs in preflight0/early preflight1.
+// BatchOuter is implemented by transaction types whose inner transactions
+// each need to pass preflight as part of the outer's preflight pipeline.
+// Reference: rippled Batch.cpp preflight() — `ripple::preflight(..., tapBATCH)`
+// per inner STTx; any failure → temINVALID_INNER_BATCH on the outer.
+type BatchOuter interface {
+	InnerTransactions() []Transaction
+}
+
+// Reference: rippled preflight(stx, tapBATCH) invoked from Batch.cpp:303.
+// Fee/signature/multi-sign/inner-flag rejections are skipped here because
+// inner txs have Fee=0, no signature, no multi-signers, and tfInnerBatchTxn
+// set; the corresponding presence checks live in Batch.Validate().
+func (e *Engine) preflightInner(innerTx Transaction) Result {
+	if result := e.preflightCommon(innerTx, innerTx.GetCommon()); result != TesSUCCESS {
+		return result
+	}
+	if err := innerTx.Validate(); err != nil {
+		return parseValidationError(err)
+	}
+	return TesSUCCESS
+}
+
+// Reference: rippled Transactor.cpp preflight0/early preflight1, plus the
+// outer-only tfInnerBatchTxn rejection on directly-submitted transactions.
 func (e *Engine) preflightCommonFields(tx Transaction, common *Common) Result {
-	// Account is required
+	if result := e.preflightCommon(tx, common); result != TesSUCCESS {
+		return result
+	}
+
+	// tfInnerBatchTxn must never appear on a directly-submitted transaction.
+	// Reference: rippled Transactor.cpp preflight0().
+	if common.Flags != nil && *common.Flags&TfInnerBatchTxn != 0 {
+		return TemINVALID_FLAG
+	}
+
+	return TesSUCCESS
+}
+
+// Shared between outer (preflightCommonFields) and inner (preflightInner).
+// The tfInnerBatchTxn rejection lives only in the outer path because inner
+// txs are required to carry that flag.
+func (e *Engine) preflightCommon(tx Transaction, common *Common) Result {
 	if common.Account == "" {
 		return TemBAD_SRC_ACCOUNT
 	}
-
-	// TransactionType is required
 	if common.TransactionType == "" {
 		return TemINVALID
 	}
 
-	// NetworkID validation (matching rippled's preflight0)
 	if result := e.validateNetworkID(common); result != TesSUCCESS {
 		return result
 	}
 
-	// Amendment check - verify all required amendments are enabled
-	// Reference: rippled checks this in each transaction's preflight() method
 	for _, featureID := range tx.RequiredAmendments() {
 		if !e.rules().Enabled(featureID) {
 			return TemDISABLED
 		}
 	}
 
-	// TicketSequence with disabled TicketBatch feature → temMALFORMED
-	// Reference: rippled Transactor.cpp preflight1() line 92
+	// Reference: rippled Transactor.cpp preflight1() line 92.
 	if common.TicketSequence != nil && !e.rules().Enabled(amendment.FeatureTicketBatch) {
 		return TemMALFORMED
 	}
 
-	// Delegate field validation
-	// Reference: rippled Transactor.cpp preflight1() lines 101-108
+	// Reference: rippled Transactor.cpp preflight1() lines 101-108.
 	if common.Delegate != "" {
 		if !e.rules().Enabled(amendment.FeaturePermissionDelegation) {
 			return TemDISABLED
@@ -88,13 +131,6 @@ func (e *Engine) preflightCommonFields(tx Transaction, common *Common) Result {
 		if common.Delegate == common.Account {
 			return TemBAD_SIGNER
 		}
-	}
-
-	// tfInnerBatchTxn flag validation
-	// Reference: rippled Transactor.cpp preflight0() - tfInnerBatchTxn can only be set
-	// when processing inner batch transactions, never on directly submitted transactions.
-	if common.Flags != nil && *common.Flags&TfInnerBatchTxn != 0 {
-		return TemINVALID_FLAG
 	}
 
 	return TesSUCCESS

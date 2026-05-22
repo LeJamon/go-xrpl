@@ -103,25 +103,27 @@ func NewTransactionEvent(
 
 // ValidationEvent represents a validation message from a validator
 // This matches the rippled validationReceived stream message format
+// (NetworkOPs.cpp:2403-2511 pubValidation).
 type ValidationEvent struct {
 	Type                string   `json:"type"`                     // Always "validationReceived"
 	Amendments          []string `json:"amendments,omitempty"`     // Amendments this validator is voting for
 	BaseFee             uint64   `json:"base_fee,omitempty"`       // Unscaled transaction cost
 	Cookie              string   `json:"cookie,omitempty"`         // Unique cookie value (if any)
-	Data                string   `json:"data,omitempty"`           // Additional data
+	Data                string   `json:"data,omitempty"`           // Raw STValidation wire bytes, hex-encoded (NetworkOPs.cpp:2422)
 	Flags               uint32   `json:"flags"`                    // Validation flags
 	Full                bool     `json:"full"`                     // Whether this is a full validation
 	LedgerHash          string   `json:"ledger_hash"`              // Hash of proposed ledger
 	LedgerIndex         string   `json:"ledger_index"`             // Index of proposed ledger (as string)
 	LoadFee             uint32   `json:"load_fee,omitempty"`       // Local load-scaled transaction cost
-	MasterKey           string   `json:"master_key,omitempty"`     // Master public key (if different from signing)
+	MasterKey           string   `json:"master_key,omitempty"`     // Master public key — emitted only when the manifest cache resolves a master distinct from the signing key (NetworkOPs.cpp:2434-2438)
+	NetworkID           uint32   `json:"network_id,omitempty"`     // Network identifier (NetworkOPs.cpp:2423)
 	ReserveBase         uint64   `json:"reserve_base,omitempty"`   // Minimum reserve
 	ReserveInc          uint64   `json:"reserve_inc,omitempty"`    // Owner reserve increment
 	ServerVersion       string   `json:"server_version,omitempty"` // Version of rippled
 	Signature           string   `json:"signature"`                // Signature of the validation
 	SigningTime         uint32   `json:"signing_time"`             // When validation was signed
 	ValidatedHash       string   `json:"validated_hash,omitempty"` // Hash of highest validated ledger
-	ValidationPublicKey string   `json:"validation_public_key"`    // Public key used to sign validation
+	ValidationPublicKey string   `json:"validation_public_key"`    // Signing (ephemeral) public key used to sign validation
 }
 
 // NewValidationEvent creates a new ValidationEvent
@@ -147,7 +149,8 @@ func NewValidationEvent(
 }
 
 // ServerStatusEvent represents server status changes
-// This is sent to subscribers of the "server" stream
+// This is sent to subscribers of the "server" stream.
+// Mirrors rippled NetworkOPs.cpp:2308-2373 (pubServer).
 type ServerStatusEvent struct {
 	Type                    string `json:"type"`                                 // Always "serverStatus"
 	BaseFee                 uint64 `json:"base_fee,omitempty"`                   // Base fee
@@ -158,8 +161,9 @@ type ServerStatusEvent struct {
 	LoadFactorCluster       int    `json:"load_factor_cluster,omitempty"`        // Cluster load factor
 	LoadFactorFeeEscalation int    `json:"load_factor_fee_escalation,omitempty"` // Fee escalation load factor
 	LoadFactorFeeQueue      int    `json:"load_factor_fee_queue,omitempty"`      // Fee queue load factor
+	LoadFactorFeeReference  int    `json:"load_factor_fee_reference,omitempty"`  // TxQ reference fee level (NetworkOPs.cpp:2345)
 	LoadFactorServer        int    `json:"load_factor_server,omitempty"`         // Server load factor
-	ServerStatus            string `json:"server_status,omitempty"`              // Current server status
+	ServerStatus            string `json:"server_status,omitempty"`              // Operating mode (disconnected/connected/syncing/tracking/full)
 }
 
 // NewServerStatusEvent creates a new ServerStatusEvent
@@ -194,23 +198,33 @@ const (
 )
 
 // ManifestEvent represents a validator manifest update
-// This is sent to subscribers of the "manifests" stream
+// This is sent to subscribers of the "manifests" stream.
+// Field set mirrors rippled NetworkOPs.cpp:2229-2265 (pubManifest):
+// master_key + master_signature + seq are always emitted; signing_key,
+// signature, domain are optional and reflect manifest presence;
+// manifest carries the canonical serialized blob (hex).
 type ManifestEvent struct {
-	Type       string `json:"type"`        // Always "manifestReceived"
-	MasterKey  string `json:"master_key"`  // Master public key
-	Sequence   uint32 `json:"seq"`         // Manifest sequence number
-	Signature  string `json:"signature"`   // Manifest signature
-	SigningKey string `json:"signing_key"` // Ephemeral signing key
+	Type            string `json:"type"`                  // Always "manifestReceived"
+	MasterKey       string `json:"master_key"`            // Master public key (base58 NodePublic)
+	MasterSignature string `json:"master_signature"`      // Hex-encoded signature by the master key
+	Sequence        uint32 `json:"seq"`                   // Manifest sequence number
+	SigningKey      string `json:"signing_key,omitempty"` // Ephemeral signing key (base58); absent on revocations
+	Signature       string `json:"signature,omitempty"`   // Hex-encoded signature by the ephemeral key (absent on revocations)
+	Domain          string `json:"domain,omitempty"`      // Optional validator domain (UTF-8)
+	Manifest        string `json:"manifest"`              // Canonical serialized manifest, hex-encoded
 }
 
-// NewManifestEvent creates a new ManifestEvent
-func NewManifestEvent(masterKey, signingKey, signature string, sequence uint32) *ManifestEvent {
+// NewManifestEvent creates a new ManifestEvent.
+func NewManifestEvent(masterKey, signingKey, masterSignature, signature, domain, manifestHex string, sequence uint32) *ManifestEvent {
 	return &ManifestEvent{
-		Type:       "manifestReceived",
-		MasterKey:  masterKey,
-		Sequence:   sequence,
-		Signature:  signature,
-		SigningKey: signingKey,
+		Type:            "manifestReceived",
+		MasterKey:       masterKey,
+		MasterSignature: masterSignature,
+		Sequence:        sequence,
+		SigningKey:      signingKey,
+		Signature:       signature,
+		Domain:          domain,
+		Manifest:        manifestHex,
 	}
 }
 

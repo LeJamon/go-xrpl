@@ -1008,15 +1008,16 @@ func TestEngine_PhaseTransitions(t *testing.T) {
 	adaptor.opMode = consensus.OpModeFull
 
 	config := DefaultConfig()
-	// Use very short timings for testing
+	// Short open/idle so the round closes within the sleep budget;
+	// keep MinConsensus large enough that the establish phase cannot
+	// accept and cycle back to open before the assertion runs.
 	config.Timing.LedgerMinClose = 10 * time.Millisecond
 	config.Timing.LedgerMaxClose = 100 * time.Millisecond
-	config.Timing.LedgerMinConsensus = 10 * time.Millisecond
+	config.Timing.LedgerMinConsensus = 200 * time.Millisecond
 	config.Timing.LedgerIdleInterval = 20 * time.Millisecond
 
 	engine := NewEngine(adaptor, config)
 
-	// Must call Start to initialize prevLedger
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if err := engine.Start(ctx); err != nil {
@@ -1027,15 +1028,15 @@ func TestEngine_PhaseTransitions(t *testing.T) {
 	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
 	engine.StartRound(round, true)
 
-	// Should start in Open phase
 	if engine.Phase() != consensus.PhaseOpen {
 		t.Errorf("Expected Open phase, got %v", engine.Phase())
 	}
 
-	// Wait for close timer (idle interval triggers close with no txs)
+	// Sleep past idleInterval (20ms) so the round closes, but well
+	// short of MinConsensus (200ms) so we observe the Establish phase
+	// before it accepts and cycles back to Open.
 	time.Sleep(50 * time.Millisecond)
 
-	// Should transition to Establish phase
 	if engine.Phase() != consensus.PhaseEstablish {
 		t.Errorf("Expected Establish phase, got %v", engine.Phase())
 	}
@@ -2238,7 +2239,8 @@ drain:
 
 // TestConsensus_AbandonHardTimeout pins the behavior of the E3 hard
 // deadline: once a round exceeds the ledgerABANDON_CONSENSUS clamp
-// (rippled's 15s..120s clamp, ConsensusParms.h:113), the engine
+// (rippled's 15s..120s clamp, ConsensusParms.h:113) AND establishCounter
+// has cleared the per-avalanche-level minimum dwell, the engine
 // abandons the round. Per rippled Consensus.cpp:253-263 + Consensus.h:
 // 1760-1785, this means:
 //
@@ -2289,6 +2291,33 @@ func TestConsensus_AbandonHardTimeout(t *testing.T) {
 	engine.setPhase(consensus.PhaseEstablish)
 	engine.roundStartTime = time.Now().Add(-121 * time.Second)
 	engine.prevRoundTime = 60 * time.Second // factor×60s=600s, clamped down to 120s
+	// Clear the rippled-faithful retry gate (Consensus.h:1762-1779):
+	// abandon only fires once each avalanche level has had its minimum
+	// dwell. The +1 covers the increment phaseEstablish performs on
+	// entry.
+	engine.establishCounter = len(engine.parms.AvalancheCutoffs)*engine.parms.MinRounds + 1
+	// Inject disagreeing trusted peers so we don't hit the
+	// alone-too-long carve-out (which would resolve to Yes via
+	// checkConsensusReached(_, 0, ..., reachedMax=true, ...)).
+	// With OurPosition pinned to one tx set and 4 peers proposing two
+	// different alternatives, agree*100/total stays at 20% — well below
+	// the 80% gate — so the Expired arm wins.
+	ourSet := consensus.TxSetID{0xAA}
+	engine.state.OurPosition = &consensus.Proposal{
+		Round:    round,
+		Position: 1,
+		TxSet:    ourSet,
+	}
+	for i := 1; i <= 4; i++ {
+		nid := consensus.NodeID{byte(0x10 + i)}
+		adaptor.trusted[nid] = true
+		engine.proposals[nid] = &consensus.Proposal{
+			Round:    round,
+			NodeID:   nid,
+			Position: 1,
+			TxSet:    consensus.TxSetID{byte(0xB0 + i)},
+		}
+	}
 	engine.phaseEstablish()
 	phaseAfter := engine.phase
 	modeAfter := engine.mode
@@ -2347,6 +2376,265 @@ drain:
 	if sawTimeout {
 		t.Errorf("hard abandon must not emit ResultTimeout (that is the soft branch)")
 	}
+}
+
+// TestConsensus_AbandonRetryGate pins the rippled retry-gate from
+// Consensus.h:1762-1779: when checkConsensus would return Expired
+// but the round has not yet spent (len(avalancheCutoffs) * MinRounds)
+// ticks in establish, the engine keeps trying instead of abandoning.
+// This protects rounds with very long individual ticks (heavy disputes)
+// from being dropped before each avalanche level gets its minimum dwell.
+func TestConsensus_AbandonRetryGate(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	config := DefaultConfig()
+	config.Timing.LedgerMaxConsensus = 15 * time.Second
+	config.Timing.LedgerMaxClose = 15 * time.Second
+	config.Timing.LedgerAbandonConsensus = 120 * time.Second
+	config.Timing.LedgerAbandonConsensusFactor = 10
+
+	engine := NewEngine(adaptor, config)
+	subscriber := &testSubscriber{events: make(chan consensus.Event, 32)}
+	engine.Subscribe(subscriber)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	engine.mu.Lock()
+	if engine.mode != consensus.ModeProposing {
+		engine.mu.Unlock()
+		t.Fatalf("setup: expected ModeProposing after StartRound, got %v", engine.mode)
+	}
+	// Drive the round past the hard ceiling but with establishCounter
+	// well below the per-avalanche-level minimum dwell. The retry gate
+	// must suppress abandon. We inject disagreeing peers so the Expired
+	// arm of checkConsensus is reached at all (otherwise the alone-too-
+	// long carve-out at checkConsensusReached(_, 0, ..., reachedMax=true)
+	// would resolve to Yes and bypass the Expired branch entirely).
+	engine.setPhase(consensus.PhaseEstablish)
+	engine.roundStartTime = time.Now().Add(-121 * time.Second)
+	engine.prevRoundTime = 60 * time.Second
+	engine.establishCounter = 0
+	ourSet := consensus.TxSetID{0xAA}
+	engine.state.OurPosition = &consensus.Proposal{
+		Round:    round,
+		Position: 1,
+		TxSet:    ourSet,
+	}
+	for i := 1; i <= 4; i++ {
+		nid := consensus.NodeID{byte(0x20 + i)}
+		adaptor.trusted[nid] = true
+		engine.proposals[nid] = &consensus.Proposal{
+			Round:    round,
+			NodeID:   nid,
+			Position: 1,
+			TxSet:    consensus.TxSetID{byte(0xC0 + i)},
+		}
+	}
+	engine.phaseEstablish()
+	phaseAfter := engine.phase
+	modeAfter := engine.mode
+	engine.mu.Unlock()
+
+	if phaseAfter != consensus.PhaseEstablish {
+		t.Errorf("retry gate: phase should remain Establish, got %v", phaseAfter)
+	}
+	if modeAfter != consensus.ModeProposing {
+		t.Errorf("retry gate: mode should remain Proposing (no bow-out), got %v", modeAfter)
+	}
+
+	deadline := time.After(200 * time.Millisecond)
+drain:
+	for {
+		select {
+		case ev := <-subscriber.events:
+			if cre, ok := ev.(*consensus.ConsensusReachedEvent); ok {
+				t.Errorf("retry gate: no consensus event should fire, got Result=%v", cre.Result)
+			}
+		case <-deadline:
+			break drain
+		}
+	}
+}
+
+// TestConsensus_PrevProposersPause covers the 3/4 prev-proposers
+// pause arm of checkConsensus (Consensus.cpp:208-218): when fewer
+// than 3/4 of the previous round's proposers are present AND the
+// round has not yet run for prevRoundTime + ledgerMIN_CONSENSUS, the
+// engine does NOT accept even with majority agreement — slower
+// validators get an extra MIN_CONSENSUS interval to catch up.
+func TestConsensus_PrevProposersPause(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.opMode = consensus.OpModeFull
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+	engine.parms = consensus.DefaultConsensusParms()
+
+	// 8 prev proposers; only 4 visible this round → 4 < 8*3/4=6 → pause.
+	engine.prevProposers = 8
+	engine.prevRoundTime = 5 * time.Second
+	engine.haveCloseTimeConsensus = true
+
+	// roundTime past MIN_CONSENSUS but well below prevRoundTime + MIN.
+	roundTime := config.Timing.LedgerMinConsensus + 100*time.Millisecond
+	state := engine.checkConsensusState(roundTime, 4, 4)
+	if state != consensusStateNo {
+		t.Fatalf("expected consensusStateNo (3/4 pause), got %v", state)
+	}
+
+	// Once roundTime clears prevRoundTime + MIN_CONSENSUS, the gate
+	// releases and the same tally yields Yes.
+	roundTime = engine.prevRoundTime + config.Timing.LedgerMinConsensus + time.Second
+	state = engine.checkConsensusState(roundTime, 4, 4)
+	if state != consensusStateYes {
+		t.Fatalf("expected consensusStateYes once 3/4 gate clears, got %v", state)
+	}
+}
+
+// TestCheckConsensusReached covers the parity port of rippled's
+// checkConsensusReached free function (Consensus.cpp:106-174). Each
+// subtest pins one carve-out: alone-for-too-long, stalled
+// short-circuit, count-self math, and ordinary threshold.
+func TestCheckConsensusReached(t *testing.T) {
+	tests := []struct {
+		name      string
+		agreeing  int
+		total     int
+		countSelf bool
+		minPct    int
+		reachedMax,
+		stalled bool
+		want bool
+	}{
+		{"alone before max → no", 0, 0, true, 80, false, false, false},
+		{"alone past max → yes", 0, 0, true, 80, true, false, true},
+		{"stalled short-circuits", 1, 10, false, 80, false, true, true},
+		{"countSelf bumps agree+total", 7, 9, true, 80, false, false, true},
+		{"normal threshold met", 8, 10, false, 80, false, false, true},
+		{"normal threshold missed", 7, 10, false, 80, false, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := checkConsensusReached(tt.agreeing, tt.total, tt.countSelf, tt.minPct, tt.reachedMax, tt.stalled); got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCheckConsensusState walks all six priority-ordered outcomes of
+// checkConsensusState — the unified port of rippled's checkConsensus
+// (Consensus.cpp:176-269). Each subtest pins one branch:
+//
+//  1. roundTime <= LedgerMinConsensus                     → No
+//  2. currentProposers < prevProposers*3/4 AND
+//     roundTime < (prevRoundTime + LedgerMinConsensus)    → No
+//  3. agree threshold met                                 → Yes
+//  4. agree below threshold, ProposersFinished past prev  → MovedOn
+//  5. abandon deadline exceeded                           → Expired
+//  6. past min, below threshold, deadline not yet hit     → No
+func TestCheckConsensusState(t *testing.T) {
+	parms := consensus.DefaultConsensusParms()
+
+	newEngine := func() *Engine {
+		adaptor := newMockAdaptor()
+		adaptor.opMode = consensus.OpModeFull
+		config := DefaultConfig()
+		e := NewEngine(adaptor, config)
+		e.parms = parms
+		e.haveCloseTimeConsensus = true
+		return e
+	}
+
+	t.Run("1 too soon → No", func(t *testing.T) {
+		e := newEngine()
+		got := e.checkConsensusState(e.timing.LedgerMinConsensus, 10, 10)
+		if got != consensusStateNo {
+			t.Fatalf("got %v, want consensusStateNo", got)
+		}
+	})
+
+	t.Run("2 3/4 prev-proposers pause → No", func(t *testing.T) {
+		e := newEngine()
+		e.prevProposers = 8
+		e.prevRoundTime = 5 * time.Second
+		// 4 < 8*3/4=6, and roundTime < prevRoundTime+MinConsensus.
+		roundTime := e.timing.LedgerMinConsensus + 100*time.Millisecond
+		got := e.checkConsensusState(roundTime, 4, 4)
+		if got != consensusStateNo {
+			t.Fatalf("got %v, want consensusStateNo (3/4 pause)", got)
+		}
+	})
+
+	t.Run("3 majority agreement → Yes", func(t *testing.T) {
+		e := newEngine()
+		roundTime := e.timing.LedgerMinConsensus + time.Second
+		got := e.checkConsensusState(roundTime, 8, 10)
+		if got != consensusStateYes {
+			t.Fatalf("got %v, want consensusStateYes", got)
+		}
+	})
+
+	t.Run("4 peers moved on → MovedOn", func(t *testing.T) {
+		e := newEngine()
+		// Seed validationTracker with 4 trusted finished validators
+		// past prevSeq so ProposersFinished returns 4 ≥ 80% of 4.
+		prev := &mockLedger{id: consensus.LedgerID{0x10}, seq: 100}
+		e.prevLedger = prev
+		vt := NewValidationTracker(3, e.timing.ValidationFreshness)
+		for i := 0; i < 4; i++ {
+			nodeID := consensus.NodeID{byte(0xA0 + i)}
+			vt.trusted[nodeID] = true
+			vt.byNode[nodeID] = &consensus.Validation{
+				NodeID:    nodeID,
+				LedgerSeq: prev.Seq() + 1,
+				Full:      true,
+			}
+		}
+		e.validationTracker = vt
+
+		roundTime := e.timing.LedgerMinConsensus + time.Second
+		// agree*100/4 = 25% < 80% → fail Yes; finished=4*100/4=100% → MovedOn.
+		got := e.checkConsensusState(roundTime, 1, 4)
+		if got != consensusStateMovedOn {
+			t.Fatalf("got %v, want consensusStateMovedOn", got)
+		}
+	})
+
+	t.Run("5 abandon deadline exceeded → Expired", func(t *testing.T) {
+		e := newEngine()
+		e.prevRoundTime = 5 * time.Second
+		// abandonDeadlineExceeded clamps prevRoundTime*factor to
+		// [LedgerMaxConsensus, LedgerAbandonConsensus]; default factor
+		// is 10, max=15s, abandon=120s → clamp gives 50s, then min(50s,
+		// 120s)=50s. Push roundTime well past that.
+		roundTime := 200 * time.Second
+		got := e.checkConsensusState(roundTime, 1, 10)
+		if got != consensusStateExpired {
+			t.Fatalf("got %v, want consensusStateExpired", got)
+		}
+	})
+
+	t.Run("6 below threshold, deadline OK → No", func(t *testing.T) {
+		e := newEngine()
+		// No validationTracker → MovedOn arm cannot fire.
+		// roundTime past LedgerMinConsensus but well below abandon clamp.
+		roundTime := e.timing.LedgerMinConsensus + time.Second
+		got := e.checkConsensusState(roundTime, 1, 10)
+		if got != consensusStateNo {
+			t.Fatalf("got %v, want consensusStateNo (default fallthrough)", got)
+		}
+	})
 }
 
 // TestEngine_OnValidation_NoSelfDeadlockOnQuorum pins the issue

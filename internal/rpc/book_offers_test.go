@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
@@ -15,7 +16,8 @@ import (
 // bookOffersMock wraps mockLedgerService to provide custom GetBookOffers behavior
 type bookOffersMock struct {
 	*mockLedgerService
-	getBookOffersFn func(takerGets, takerPays types.Amount, taker, domain, ledgerIndex string, limit uint32) (*types.BookOffersResult, error)
+	getBookOffersFn   func(takerGets, takerPays types.Amount, taker, domain, ledgerIndex string, limit uint32) (*types.BookOffersResult, error)
+	getLedgerByHashFn func(hash [32]byte) (types.LedgerReader, error)
 }
 
 func (m *bookOffersMock) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, taker, domain, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
@@ -25,10 +27,51 @@ func (m *bookOffersMock) GetBookOffers(_ context.Context, takerGets, takerPays t
 	return nil, errors.New("not implemented")
 }
 
+// GetLedgerBySequence shadows the base mock's "not implemented" so a numeric
+// ledger_index within the in-memory window resolves cleanly. Seqs above the
+// current open ledger still surface lgrNotFound, which is what the M2
+// "future ledger" pre-check coverage relies on.
+func (m *bookOffersMock) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
+	if seq == 0 || seq > m.currentLedgerIndex {
+		return nil, errors.New("ledger not found")
+	}
+	return &stubLedgerReader{seq: seq}, nil
+}
+
+// GetLedgerByHash mirrors the rippled BookOffers.cpp:45-49 pre-resolve path.
+// Returns a stub reader when the test installs a custom `getLedgerByHashFn`,
+// otherwise reports "not found" so unmatched hashes surface lgrNotFound.
+func (m *bookOffersMock) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
+	if m.getLedgerByHashFn != nil {
+		return m.getLedgerByHashFn(hash)
+	}
+	return nil, errors.New("ledger not found")
+}
+
 func newBookOffersMock() *bookOffersMock {
 	return &bookOffersMock{
 		mockLedgerService: newMockLedgerService(),
 	}
+}
+
+// stubLedgerReader is a minimal types.LedgerReader used only to let the
+// book_offers handler's M2 lookupLedger pre-check succeed in unit tests.
+type stubLedgerReader struct{ seq uint32 }
+
+func (s *stubLedgerReader) Sequence() uint32            { return s.seq }
+func (s *stubLedgerReader) Hash() [32]byte              { return [32]byte{} }
+func (s *stubLedgerReader) ParentHash() [32]byte        { return [32]byte{} }
+func (s *stubLedgerReader) IsClosed() bool              { return true }
+func (s *stubLedgerReader) IsValidated() bool           { return true }
+func (s *stubLedgerReader) TotalDrops() uint64          { return 0 }
+func (s *stubLedgerReader) CloseTime() int64            { return 0 }
+func (s *stubLedgerReader) CloseTimeResolution() uint32 { return 0 }
+func (s *stubLedgerReader) CloseFlags() uint8           { return 0 }
+func (s *stubLedgerReader) ParentCloseTime() int64      { return 0 }
+func (s *stubLedgerReader) TxMapHash() [32]byte         { return [32]byte{} }
+func (s *stubLedgerReader) StateMapHash() [32]byte      { return [32]byte{} }
+func (s *stubLedgerReader) ForEachTransaction(func(txHash [32]byte, txData []byte) bool) error {
+	return nil
 }
 
 // newBookOffersTestServices builds a *types.ServiceContainer wrapping the mock.
@@ -94,6 +137,57 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			},
 			expectedError: "Missing field 'taker_pays'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
+		},
+		{
+			// M2: rippled BookOffers.cpp:45-49 calls RPC::lookupLedger BEFORE
+			// per-field validation. A bogus numeric ledger_index combined
+			// with missing taker_pays must surface lgrNotFound, not
+			// invalidParams (Book_test.cpp:1329-1336).
+			name: "Bogus numeric ledger_index pre-empts missing-field errors",
+			params: map[string]interface{}{
+				"ledger_index": "99999999",
+			},
+			expectedError: "ledgerNotFound",
+			expectedCode:  types.RpcLGR_NOT_FOUND,
+		},
+		{
+			// M5: rippled threads `proof` into NetworkOps::getBookPage
+			// (BookOffers.cpp:201-214). goxrpld doesn't honour it yet
+			// (#528); refuse rather than silently dropping so the caller
+			// knows the response carries no proofs.
+			name: "proof=true returns notSupported",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{
+					"currency": "USD",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"taker_gets": map[string]interface{}{
+					"currency": "EUR",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"proof": true,
+			},
+			expectedError: "Proof requests are not yet supported by book_offers.",
+			expectedCode:  75,
+		},
+		{
+			// M5: marker pagination is also rejected until GetBookOffers
+			// grows a resume-from-marker codepath (#527), so a paginated
+			// client doesn't mistake a partial page for the complete book.
+			name: "marker present returns notSupported",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{
+					"currency": "USD",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"taker_gets": map[string]interface{}{
+					"currency": "EUR",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"marker": "ABCDEF",
+			},
+			expectedError: "Marker-based pagination is not yet supported by book_offers.",
+			expectedCode:  75,
 		},
 		{
 			// Book_test.cpp:1359-1370 — taker_pays string → not object.
@@ -208,6 +302,26 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			params: map[string]interface{}{
 				"taker_pays": map[string]interface{}{"currency": "XRP"},
 				"taker_gets": map[string]interface{}{"currency": "NOT_VALID"},
+			},
+			expectedError: "Invalid field 'taker_gets.currency', bad currency.",
+			expectedCode:  types.RpcDST_AMT_MALFORMED,
+		},
+		{
+			// 3-char code with a character outside rippled's isoCharSet
+			// (UintTypes.cpp:39-43) must be rejected.
+			name: "taker_pays.currency 3-char with non-isoCharSet rune",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{"currency": "a/b"},
+				"taker_gets": map[string]interface{}{"currency": "XRP"},
+			},
+			expectedError: "Invalid field 'taker_pays.currency', bad currency.",
+			expectedCode:  types.RpcSRC_CUR_MALFORMED,
+		},
+		{
+			name: "taker_gets.currency 3-char with non-isoCharSet rune",
+			params: map[string]interface{}{
+				"taker_pays": map[string]interface{}{"currency": "XRP"},
+				"taker_gets": map[string]interface{}{"currency": "a/b"},
 			},
 			expectedError: "Invalid field 'taker_gets.currency', bad currency.",
 			expectedCode:  types.RpcDST_AMT_MALFORMED,
@@ -1265,4 +1379,295 @@ func TestBookOffersNilOffersArray(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, resp, "offers", "Response must contain offers key even when nil")
+}
+
+// TestBookOffersLimitClampingConformance pins the rippled
+// `readLimitField(rmin=0, rdefault=60, rmax=100)` semantics from
+// RPCHelpers.cpp:703-712, exercised by Book_test.cpp testBookOfferLimits.
+// Non-admin (Unlimited=false) callers see the value clamped into [0, 100];
+// admin/unlimited callers (Unlimited=true) bypass the upper bound entirely.
+// The existing TestBookOffersLimitParameter covers the lower end (0 / default
+// / small values); this case nails down the upper-bound clamp and the
+// asAdmin=true bypass — the part of testBookOfferLimits that varies behaviour
+// based on role.
+func TestBookOffersLimitClampingConformance(t *testing.T) {
+	mock := newBookOffersMock()
+	services := newBookOffersTestServices(mock)
+	method := &handlers.BookOffersMethod{}
+
+	var capturedLimit uint32
+	mock.getBookOffersFn = func(_, _ types.Amount, _, _, _ string, limit uint32) (*types.BookOffersResult, error) {
+		capturedLimit = limit
+		return &types.BookOffersResult{LedgerIndex: 2, Offers: []types.BookOffer{}, Validated: true}, nil
+	}
+
+	tests := []struct {
+		name          string
+		role          types.Role
+		unlimited     bool
+		limit         interface{}
+		expectedLimit uint32
+	}{
+		{
+			// Book_test.cpp:1713-1716 — explicit 0 stays 0 for either role.
+			name:          "limit 0 (admin)",
+			role:          types.RoleAdmin,
+			unlimited:     true,
+			limit:         0,
+			expectedLimit: 0,
+		},
+		{
+			// Book_test.cpp:1718-1723 — limit rmax+1 (101) clamps to rmax (100)
+			// for non-admin callers (asAdmin=false branch).
+			name:          "rmax+1 clamps to rmax for guest",
+			role:          types.RoleGuest,
+			unlimited:     false,
+			limit:         101,
+			expectedLimit: 100,
+		},
+		{
+			// Book_test.cpp:1718-1723 — same value passes through for admin
+			// (asAdmin=true branch).
+			name:          "rmax+1 passes through for admin",
+			role:          types.RoleAdmin,
+			unlimited:     true,
+			limit:         101,
+			expectedLimit: 101,
+		},
+		{
+			// Far-above-rmax for non-admin still clamps to rmax — the clamp
+			// is unconditional, not a "soft" hint.
+			name:          "large limit clamps to rmax for guest",
+			role:          types.RoleGuest,
+			unlimited:     false,
+			limit:         100000,
+			expectedLimit: 100,
+		},
+		{
+			// Book_test.cpp:1725-1730 — null/omitted limit yields rdefault (60)
+			// for either role.
+			name:          "omitted limit yields default for admin",
+			role:          types.RoleAdmin,
+			unlimited:     true,
+			limit:         nil,
+			expectedLimit: 60,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			capturedLimit = 0
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       tc.role,
+				Unlimited:  tc.unlimited,
+				ApiVersion: types.ApiVersion1,
+				Services:   services,
+			}
+			params := map[string]interface{}{
+				"taker_pays": map[string]interface{}{"currency": "XRP"},
+				"taker_gets": map[string]interface{}{
+					"currency": "USD",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+			}
+			if tc.limit != nil {
+				params["limit"] = tc.limit
+			}
+			paramsJSON, err := json.Marshal(params)
+			require.NoError(t, err)
+
+			result, rpcErr := method.Handle(ctx, paramsJSON)
+			require.Nil(t, rpcErr, "Expected no RPC error, got: %v", rpcErr)
+			require.NotNil(t, result)
+			assert.Equal(t, tc.expectedLimit, capturedLimit,
+				"Limit passed to service should match clamp/passthrough rule")
+		})
+	}
+}
+
+// TestBookOffersTakerXAddressRejected nails down that the `taker` field rejects
+// X-addresses. rippled BookOffers.cpp:170 calls `parseBase58<AccountID>(taker)`
+// which only accepts classic addresses (X-address parsing is a separate code
+// path it never invokes). goxrpld mirrors this via
+// DecodeClassicAddressToAccountID, which fails on the "X" / "T" prefix.
+// Pinning this behaviour with a real X-address row prevents a regression that
+// might silently accept X-addresses and resolve them to their classic form —
+// a no-op for mainnet but an information-leak for testnet/tags.
+func TestBookOffersTakerXAddressRejected(t *testing.T) {
+	mock := newBookOffersMock()
+	services := newBookOffersTestServices(mock)
+	method := &handlers.BookOffersMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	tests := []struct {
+		name  string
+		taker string
+	}{
+		// Standard mainnet X-address (no tag).
+		{name: "mainnet X-address", taker: "X7AcgcsBL6XDcUb289X4mJ8djcdyKaB5hJDWMArnXr61cqZ"},
+		// Testnet T-address.
+		{name: "testnet T-address", taker: "T7v6j4nJpDtCT6F6tWzCcdpHGiE2qLeUFG29CnFmaR7Pj1J"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			params := map[string]interface{}{
+				"taker_pays": map[string]interface{}{"currency": "XRP"},
+				"taker_gets": map[string]interface{}{
+					"currency": "USD",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"taker": tc.taker,
+			}
+			paramsJSON, err := json.Marshal(params)
+			require.NoError(t, err)
+
+			result, rpcErr := method.Handle(ctx, paramsJSON)
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code,
+				"X-address taker must surface invalidParams")
+			assert.Contains(t, rpcErr.Message, "Invalid field 'taker'",
+				"error message should match rippled BookOffers.cpp:172")
+		})
+	}
+}
+
+// TestBookOffersLedgerHashBranches exercises the three rippled
+// RPC::lookupLedger outcomes for `ledger_hash` (BookOffers.cpp:45-49 →
+// LookupLedger):
+//   - malformed (non-hex or wrong length) → invalidParams "ledgerHashMalformed"
+//   - well-formed but not found             → lgrNotFound "ledgerNotFound"
+//   - well-formed and found                 → falls through to per-field validation
+//
+// The pre-resolve happens BEFORE taker_pays/taker_gets validation, so a
+// malformed ledger_hash combined with missing taker_pays must still surface
+// the ledger_hash error first — matching the M2 path proven for ledger_index
+// elsewhere in this file.
+func TestBookOffersLedgerHashBranches(t *testing.T) {
+	mock := newBookOffersMock()
+	services := newBookOffersTestServices(mock)
+	method := &handlers.BookOffersMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	// Stub a "found" ledger only for one specific hash — every other valid hex
+	// hash falls through to the "not found" branch.
+	const foundHashHex = "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652"
+	var foundHash [32]byte
+	for i := 0; i < 32; i++ {
+		_, _ = fmt.Sscanf(foundHashHex[i*2:i*2+2], "%x", &foundHash[i])
+	}
+	mock.getLedgerByHashFn = func(hash [32]byte) (types.LedgerReader, error) {
+		if hash == foundHash {
+			return &stubLedgerReader{seq: 2}, nil
+		}
+		return nil, errors.New("ledger not found")
+	}
+	mock.getBookOffersFn = func(_, _ types.Amount, _, _, _ string, _ uint32) (*types.BookOffersResult, error) {
+		return &types.BookOffersResult{LedgerIndex: 2, Offers: []types.BookOffer{}, Validated: true}, nil
+	}
+
+	t.Run("malformed ledger_hash returns ledgerHashMalformed", func(t *testing.T) {
+		// 63 hex chars (one short) — wrong length, hex.DecodeString won't even
+		// try (we return the message early on length mismatch).
+		params := map[string]interface{}{
+			"ledger_hash": "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A65",
+			"taker_pays":  map[string]interface{}{"currency": "XRP"},
+			"taker_gets": map[string]interface{}{
+				"currency": "USD",
+				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "ledgerHashMalformed",
+			"malformed length must surface ledgerHashMalformed")
+	})
+
+	t.Run("malformed ledger_hash pre-empts missing-field errors", func(t *testing.T) {
+		// Wrong length + missing taker_pays. rippled checks lookupLedger
+		// BEFORE taker_pays validation, so the ledger error must win.
+		params := map[string]interface{}{
+			"ledger_hash": "DEADBEEF",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Contains(t, rpcErr.Message, "ledgerHashMalformed")
+	})
+
+	t.Run("non-hex ledger_hash returns ledgerHashMalformed", func(t *testing.T) {
+		// Length-64 but contains non-hex characters.
+		params := map[string]interface{}{
+			"ledger_hash": "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+			"taker_pays":  map[string]interface{}{"currency": "XRP"},
+			"taker_gets": map[string]interface{}{
+				"currency": "USD",
+				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Contains(t, rpcErr.Message, "ledgerHashMalformed")
+	})
+
+	t.Run("valid ledger_hash not found returns lgrNotFound", func(t *testing.T) {
+		// Length-64, valid hex, but not the hash the mock stubs as found.
+		params := map[string]interface{}{
+			"ledger_hash": "0000000000000000000000000000000000000000000000000000000000000001",
+			"taker_pays":  map[string]interface{}{"currency": "XRP"},
+			"taker_gets": map[string]interface{}{
+				"currency": "USD",
+				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "ledgerNotFound")
+	})
+
+	t.Run("valid ledger_hash found falls through to query", func(t *testing.T) {
+		params := map[string]interface{}{
+			"ledger_hash": foundHashHex,
+			"taker_pays":  map[string]interface{}{"currency": "XRP"},
+			"taker_gets": map[string]interface{}{
+				"currency": "USD",
+				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr, "found hash should pass pre-resolve; got %v", rpcErr)
+		require.NotNil(t, result)
+	})
 }

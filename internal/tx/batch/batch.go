@@ -2,6 +2,7 @@ package batch
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
@@ -66,16 +67,27 @@ const (
 	MaxBatchTransactions = 8
 )
 
-// Batch errors
+// Batch errors. Inner-tx errors mirror the per-inner rejections in rippled
+// Batch.cpp:249-374 (Batch::preflight inner loop).
 var (
-	ErrBatchTooFewTxns      = tx.Errorf(tx.TemARRAY_EMPTY, "batch must have at least 2 transactions")
-	ErrBatchTooManyTxns     = tx.Errorf(tx.TemARRAY_TOO_LARGE, "batch exceeds 8 transactions")
-	ErrBatchInvalidFlags    = tx.Errorf(tx.TemINVALID_FLAG, "invalid batch flags")
-	ErrBatchMustHaveOneFlag = tx.Errorf(tx.TemINVALID_FLAG, "exactly one batch mode flag required")
-	ErrBatchTooManySigners  = tx.Errorf(tx.TemARRAY_TOO_LARGE, "batch signers exceeds 8 entries")
-	ErrBatchDuplicateSigner = tx.Errorf(tx.TemREDUNDANT, "duplicate batch signer")
-	ErrBatchSignerIsOuter   = tx.Errorf(tx.TemBAD_SIGNER, "batch signer cannot be outer account")
-	ErrBatchNilInnerTx      = tx.Errorf(tx.TemMALFORMED, "inner transaction cannot be nil")
+	ErrBatchTooFewTxns            = tx.Errorf(tx.TemARRAY_EMPTY, "batch must have at least 2 transactions")
+	ErrBatchTooManyTxns           = tx.Errorf(tx.TemARRAY_TOO_LARGE, "batch exceeds 8 transactions")
+	ErrBatchInvalidFlags          = tx.Errorf(tx.TemINVALID_FLAG, "invalid batch flags")
+	ErrBatchMustHaveOneFlag       = tx.Errorf(tx.TemINVALID_FLAG, "exactly one batch mode flag required")
+	ErrBatchTooManySigners        = tx.Errorf(tx.TemARRAY_TOO_LARGE, "batch signers exceeds 8 entries")
+	ErrBatchDuplicateSigner       = tx.Errorf(tx.TemREDUNDANT, "duplicate batch signer")
+	ErrBatchSignerIsOuter         = tx.Errorf(tx.TemBAD_SIGNER, "batch signer cannot be outer account")
+	ErrBatchNilInnerTx            = tx.Errorf(tx.TemMALFORMED, "inner transaction cannot be nil")
+	ErrBatchDuplicateInnerTx      = tx.Errorf(tx.TemREDUNDANT, "duplicate inner transaction")
+	ErrBatchInnerIsBatch          = tx.Errorf(tx.TemINVALID, "inner transaction cannot itself be a Batch")
+	ErrBatchInnerMissingFlag      = tx.Errorf(tx.TemINVALID_FLAG, "inner transaction missing tfInnerBatchTxn flag")
+	ErrBatchInnerHasTxnSignature  = tx.Errorf(tx.TemBAD_SIGNATURE, "inner transaction cannot include TxnSignature")
+	ErrBatchInnerHasSigners       = tx.Errorf(tx.TemBAD_SIGNER, "inner transaction cannot include Signers")
+	ErrBatchInnerHasSigningPubKey = tx.Errorf(tx.TemBAD_REGKEY, "inner transaction SigningPubKey must be empty")
+	ErrBatchInnerBadFee           = tx.Errorf(tx.TemBAD_FEE, "inner transaction must have a fee of 0")
+	ErrBatchInnerSeqAndTicket     = tx.Errorf(tx.TemSEQ_AND_TICKET, "inner transaction must have exactly one of Sequence and TicketSequence")
+	ErrBatchInnerDupSeqOrTicket   = tx.Errorf(tx.TemREDUNDANT, "duplicate inner Sequence or TicketSequence for account")
+	ErrBatchInnerHashUncomputable = tx.Errorf(tx.TemINVALID, "failed to compute inner transaction hash")
 )
 
 // NewBatch creates a new Batch transaction
@@ -94,6 +106,112 @@ func (b *Batch) TxType() tx.Type {
 // for fee metrics in ProcessClosedLedger.
 func (b *Batch) InnerTxCount() int {
 	return len(b.RawTransactions)
+}
+
+// InnerTransactions implements tx.BatchOuter.
+// Reference: rippled Batch.cpp:303-312.
+func (b *Batch) InnerTransactions() []tx.Transaction {
+	txns := make([]tx.Transaction, len(b.RawTransactions))
+	for i, rt := range b.RawTransactions {
+		txns[i] = rt.RawTransaction.InnerTx
+	}
+	return txns
+}
+
+// Reference: rippled Batch.cpp:249-374 (per-inner checks in Batch::preflight).
+func (b *Batch) validateInnerTransactions() error {
+	flags := b.GetFlags()
+	enforceUnique := flags&(BatchFlagAllOrNothing|BatchFlagUntilFailure) != 0
+
+	uniqueHashes := make(map[[32]byte]struct{}, len(b.RawTransactions))
+	accountSeqTicket := make(map[string]map[uint32]struct{})
+
+	for _, rt := range b.RawTransactions {
+		inner := rt.RawTransaction.InnerTx
+		if inner == nil {
+			return ErrBatchNilInnerTx
+		}
+
+		hash, err := tx.ComputeTransactionHash(inner)
+		if err != nil {
+			return ErrBatchInnerHashUncomputable
+		}
+		if _, dup := uniqueHashes[hash]; dup {
+			return ErrBatchDuplicateInnerTx
+		}
+		uniqueHashes[hash] = struct{}{}
+
+		if inner.TxType() == tx.TypeBatch {
+			return ErrBatchInnerIsBatch
+		}
+
+		innerCommon := inner.GetCommon()
+
+		if innerCommon.GetFlags()&tx.TfInnerBatchTxn == 0 {
+			return ErrBatchInnerMissingFlag
+		}
+		if innerCommon.TxnSignature != "" {
+			return ErrBatchInnerHasTxnSignature
+		}
+		if len(innerCommon.Signers) > 0 {
+			return ErrBatchInnerHasSigners
+		}
+		if innerCommon.SigningPubKey != "" {
+			return ErrBatchInnerHasSigningPubKey
+		}
+		if err := validateInnerFee(innerCommon.Fee); err != nil {
+			return err
+		}
+
+		// rippled treats sfSequence absent and sfSequence==0 identically via
+		// getFieldU32; Go's *uint32 nil and *0 collapse the same way here.
+		seqVal := uint32(0)
+		if innerCommon.Sequence != nil {
+			seqVal = *innerCommon.Sequence
+		}
+		hasTicket := innerCommon.TicketSequence != nil
+		if hasTicket && seqVal != 0 {
+			return ErrBatchInnerSeqAndTicket
+		}
+		if !hasTicket && seqVal == 0 {
+			return ErrBatchInnerSeqAndTicket
+		}
+
+		if enforceUnique {
+			acct := innerCommon.Account
+			seen, ok := accountSeqTicket[acct]
+			if !ok {
+				seen = make(map[uint32]struct{})
+				accountSeqTicket[acct] = seen
+			}
+			if seqVal != 0 {
+				if _, dup := seen[seqVal]; dup {
+					return ErrBatchInnerDupSeqOrTicket
+				}
+				seen[seqVal] = struct{}{}
+			}
+			if hasTicket {
+				ticket := *innerCommon.TicketSequence
+				if _, dup := seen[ticket]; dup {
+					return ErrBatchInnerDupSeqOrTicket
+				}
+				seen[ticket] = struct{}{}
+			}
+		}
+	}
+	return nil
+}
+
+// Reference: rippled Batch.cpp:314-322 — inner fee must be present and 0.
+func validateInnerFee(fee string) error {
+	if fee == "" {
+		return ErrBatchInnerBadFee
+	}
+	feeInt, err := strconv.ParseInt(fee, 10, 64)
+	if err != nil || feeInt != 0 {
+		return ErrBatchInnerBadFee
+	}
+	return nil
 }
 
 // Reference: rippled Batch.cpp preflight()
@@ -136,11 +254,11 @@ func (b *Batch) Validate() error {
 		return ErrBatchTooManyTxns
 	}
 
-	// Validate each raw transaction has a non-nil inner transaction
-	for _, rt := range b.RawTransactions {
-		if rt.RawTransaction.InnerTx == nil {
-			return ErrBatchNilInnerTx
-		}
+	// Runs before the engine's BatchOuter loop so malformed inners surface
+	// with their specific TER instead of generic temINVALID_INNER_BATCH.
+	// Reference: rippled Batch.cpp:249-374.
+	if err := b.validateInnerTransactions(); err != nil {
+		return err
 	}
 
 	// Validate BatchSigners if present

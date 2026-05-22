@@ -90,6 +90,16 @@ type Cache struct {
 	// the manifest is still in byMaster and will be picked up the next
 	// time the cache is fully walked.
 	seq uint64
+
+	// onAccepted is invoked from ApplyManifest after a manifest has
+	// been verified and stored. nil-safe. The callback runs while
+	// applyMu is held but AFTER the c.mu write lock has been released,
+	// so subscribers may freely call any of the Cache's read methods.
+	// The callback must not block — long work belongs in a worker
+	// goroutine the subscriber owns. Mirrors rippled's pubManifest
+	// fan-out (NetworkOPs.cpp:2234-2261) which feeds the manifests
+	// WebSocket stream.
+	onAccepted func(*Manifest)
 }
 
 // NewCache returns an empty Cache.
@@ -130,32 +140,45 @@ func (c *Cache) ApplyManifest(m *Manifest) Disposition {
 		return Invalid
 	}
 
+	disp, cb := c.applyLocked(m)
+	if disp == Accepted && cb != nil {
+		cb(m)
+	}
+	return disp
+}
+
+// applyLocked performs the write-locked half of ApplyManifest and
+// returns both the resulting disposition and (for Accepted) the
+// snapshot of the onAccepted callback. The callback is fired by the
+// caller after c.mu is released so subscribers may read the cache from
+// inside the callback without recursion.
+func (c *Cache) applyLocked(m *Manifest) (Disposition, func(*Manifest)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	// Re-check Stale under the write lock against any direct map
 	// writer that bypassed applyMu.
 	if existing, ok := c.byMaster[m.MasterKey]; ok && m.Sequence <= existing.Sequence {
-		return Stale
+		return Stale, nil
 	}
 
 	// The manifest's master key must not already be recorded as
 	// another manifest's ephemeral key — otherwise a subsequent
 	// getMasterKey(m.MasterKey) would be ambiguous.
 	if other, ok := c.signingToMaster[m.MasterKey]; ok && other != m.MasterKey {
-		return BadMasterKey
+		return BadMasterKey, nil
 	}
 
 	if !m.Revoked() {
 		// The ephemeral key must not already be used as ANOTHER
 		// master's ephemeral key (rippled Manifest.cpp:459-468).
 		if other, ok := c.signingToMaster[m.SigningKey]; ok && other != m.MasterKey {
-			return BadEphemeralKey
+			return BadEphemeralKey, nil
 		}
 		// Nor may it collide with a known master key (rippled
 		// Manifest.cpp:470-477).
 		if _, ok := c.byMaster[m.SigningKey]; ok {
-			return BadEphemeralKey
+			return BadEphemeralKey, nil
 		}
 	}
 
@@ -174,7 +197,17 @@ func (c *Cache) ApplyManifest(m *Manifest) Disposition {
 	if isUpdate {
 		c.seq++
 	}
-	return Accepted
+	return Accepted, c.onAccepted
+}
+
+// SetOnAccepted installs a callback invoked from ApplyManifest after
+// every Accepted disposition. Passing nil detaches the callback. Safe
+// to call concurrently with ApplyManifest — the assignment runs under
+// c.mu so apply's snapshot read sees a coherent value.
+func (c *Cache) SetOnAccepted(fn func(*Manifest)) {
+	c.mu.Lock()
+	c.onAccepted = fn
+	c.mu.Unlock()
 }
 
 // Sequence returns the cache's "something has changed" counter.

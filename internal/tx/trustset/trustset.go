@@ -41,7 +41,9 @@ const (
 	// tfClearDeepFreeze clears the deep freeze flag
 	TrustSetFlagClearDeepFreeze uint32 = 0x00800000
 
-	// tfTrustSetMask is the mask for valid TrustSet transaction flags
+	// tfTrustSetMask is the mask for valid TrustSet transaction flags.
+	// Reference: rippled TxFlags.h tfTrustSetMask — carves out tfUniversal
+	// (tfFullyCanonicalSig | tfInnerBatchTxn) so inner Batch txs aren't rejected.
 	TrustSetFlagMask uint32 = ^(TrustSetFlagSetfAuth |
 		TrustSetFlagSetNoRipple |
 		TrustSetFlagClearNoRipple |
@@ -49,7 +51,7 @@ const (
 		TrustSetFlagClearFreeze |
 		TrustSetFlagSetDeepFreeze |
 		TrustSetFlagClearDeepFreeze |
-		tx.TfFullyCanonicalSig)
+		tx.TfUniversal)
 )
 
 // NewTrustSet creates a new TrustSet transaction
