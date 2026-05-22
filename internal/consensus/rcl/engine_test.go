@@ -535,7 +535,7 @@ func (a *mockAdaptor) CloseTimeResolution() time.Duration {
 
 func (a *mockAdaptor) AdjustCloseTime(rawCloseTimes consensus.CloseTimes) {}
 
-func (a *mockAdaptor) OnConsensusReached(ledger consensus.Ledger, validations []*consensus.Validation) {
+func (a *mockAdaptor) OnConsensusReached(ledger consensus.Ledger, validations []*consensus.Validation, roundTime time.Duration) {
 }
 
 func (a *mockAdaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32) {

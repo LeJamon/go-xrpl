@@ -626,6 +626,84 @@ func TestBookOffersXRPAmountHandling(t *testing.T) {
 	}
 }
 
+// TestBookOffersDomainForwarding pins handler→service `domain` threading for
+// PermissionedDEX-aware book lookups (issue #526). rippled
+// BookOffers.cpp:175-214 decodes the hex uint256 and forwards it via the Book
+// struct; the literal "0" normalises to 64-zero hex per base_uint.h:228.
+func TestBookOffersDomainForwarding(t *testing.T) {
+	mock := newBookOffersMock()
+	services := newBookOffersTestServices(mock)
+
+	method := &handlers.BookOffersMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	var capturedDomain string
+	mock.getBookOffersFn = func(_, _ types.Amount, _, domain, _ string, _ uint32) (*types.BookOffersResult, error) {
+		capturedDomain = domain
+		return &types.BookOffersResult{
+			LedgerIndex: 2,
+			Offers:      []types.BookOffer{},
+			Validated:   true,
+		}, nil
+	}
+
+	baseParams := func() map[string]interface{} {
+		return map[string]interface{}{
+			"taker_pays": map[string]interface{}{"currency": "XRP"},
+			"taker_gets": map[string]interface{}{
+				"currency": "USD",
+				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			},
+		}
+	}
+
+	const zeroHex = "0000000000000000000000000000000000000000000000000000000000000000"
+	const domainHex = "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789"
+
+	tests := []struct {
+		name           string
+		setParam       func(map[string]interface{})
+		expectedDomain string
+	}{
+		{
+			name:           "Absent domain - open-market book",
+			setParam:       func(p map[string]interface{}) {},
+			expectedDomain: "",
+		},
+		{
+			name:           "Literal \"0\" normalizes to 64-zero hex",
+			setParam:       func(p map[string]interface{}) { p["domain"] = "0" },
+			expectedDomain: zeroHex,
+		},
+		{
+			name:           "Valid non-zero 64-hex forwarded verbatim",
+			setParam:       func(p map[string]interface{}) { p["domain"] = domainHex },
+			expectedDomain: domainHex,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			capturedDomain = "<unset>"
+			params := baseParams()
+			tc.setParam(params)
+			paramsJSON, err := json.Marshal(params)
+			require.NoError(t, err)
+
+			result, rpcErr := method.Handle(ctx, paramsJSON)
+			require.Nil(t, rpcErr, "Expected no RPC error, got: %v", rpcErr)
+			require.NotNil(t, result, "Expected result")
+			assert.Equal(t, tc.expectedDomain, capturedDomain,
+				"domain forwarded to GetBookOffers should match the decoded uint256 hex")
+		})
+	}
+}
+
 // TestBookOffersValidRequestWithOffers tests a valid request with offers returned
 // Based on rippled Book_test.cpp testTrackOffers() book_offers call
 func TestBookOffersValidRequestWithOffers(t *testing.T) {

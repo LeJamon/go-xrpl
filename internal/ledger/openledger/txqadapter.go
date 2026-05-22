@@ -33,6 +33,14 @@ func NewTxqAdapter(view *ledger.Ledger, cfg ApplyConfig) *TxqAdapter {
 	return &TxqAdapter{view: view, cfg: cfg}
 }
 
+// GetApplyFlags returns the ApplyFlags the caller bound into the
+// per-submission ApplyConfig. Lets TxQ honour rippled's tapFAIL_HARD
+// gate (TxQ.cpp:393-399) without taking a direct dependency on
+// tx.EngineConfig from the queue.
+func (a *TxqAdapter) GetApplyFlags() tx.ApplyFlags {
+	return a.cfg.ApplyFlags
+}
+
 func (a *TxqAdapter) GetLedgerSequence() uint32 {
 	if a.view == nil {
 		return 0

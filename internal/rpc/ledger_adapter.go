@@ -181,6 +181,22 @@ func (a *ledgerReaderAdapter) ForEachTransaction(fn func(txHash [32]byte, txData
 // This is used for canonical re-ordering during AcceptLedger to ensure
 // the exact same bytes (and thus same tx hash) are used during re-application.
 func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
+	var blobHex string
+	if len(txBlobHex) > 0 {
+		blobHex = txBlobHex[0]
+	}
+	return a.submitTransaction(txJSON, blobHex, false)
+}
+
+// SubmitTransactionFailHard mirrors SubmitTransaction with rippled's
+// tapFAIL_HARD semantics: a tx that does not apply is not held in
+// localTxs, not relayed, and not pushed onto the canonical pendingTxs
+// pool. Submit handlers route here when the client sent fail_hard:true.
+func (a *LedgerServiceAdapter) SubmitTransactionFailHard(txJSON []byte, txBlobHex string) (*types.SubmitResult, error) {
+	return a.submitTransaction(txJSON, txBlobHex, true)
+}
+
+func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string, failHard bool) (*types.SubmitResult, error) {
 	// Parse the transaction from JSON
 	transaction, err := tx.ParseJSON(txJSON)
 	if err != nil {
@@ -194,8 +210,8 @@ func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte, txBlobHex ...str
 
 	// Use the original signed blob if provided, otherwise re-encode
 	var rawBlob []byte
-	if len(txBlobHex) > 0 && txBlobHex[0] != "" {
-		rawBlob, _ = hex.DecodeString(txBlobHex[0])
+	if txBlobHex != "" {
+		rawBlob, _ = hex.DecodeString(txBlobHex)
 	}
 	if rawBlob == nil {
 		if txMap, fErr := transaction.Flatten(); fErr == nil {
@@ -214,7 +230,7 @@ func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte, txBlobHex ...str
 	}
 
 	// Submit to the service with the raw blob for canonical ordering
-	result, err := a.svc.SubmitTransaction(transaction, rawBlob)
+	result, err := a.svc.SubmitTransaction(transaction, rawBlob, failHard)
 	if err != nil {
 		return &types.SubmitResult{
 			EngineResult:        "tefINTERNAL",
@@ -233,9 +249,13 @@ func (a *LedgerServiceAdapter) SubmitTransaction(txJSON []byte, txBlobHex ...str
 	// (apply.cpp:196,206). On-the-wire set: tesSUCCESS, tec*, terQUEUED.
 	// All other ter* codes are held locally (addHeldTransaction) and
 	// must NOT be relayed — peers would just re-fail with the same
-	// retry code.
+	// retry code. fail_hard suppresses relay on non-apply (matches
+	// NetworkOPs.cpp:1688 `&& !enforceFailHard`).
 	broadcast := false
 	relayable := result.Applied || result.Result == tx.TerQUEUED
+	if failHard && !result.Applied {
+		relayable = false
+	}
 	if relayable && rawBlob != nil && a.txBroadcaster != nil {
 		a.txBroadcaster(rawBlob)
 		broadcast = true
